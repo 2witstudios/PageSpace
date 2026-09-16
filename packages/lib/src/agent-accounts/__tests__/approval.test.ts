@@ -12,5 +12,6 @@ describe('decideApproval', () => {
   it.todo('given an origin outside policy.scope.origins, should return refuse(out_of_scope)');
   it.todo('given an always policy whose scope.resources names repo A and request resources naming repo B, should return refuse(out_of_scope) [0004 §8.22; PR #2637 P1]');
   it.todo('given an always policy whose scope.resources names repo A and request resources naming repo A, should return policy [0004 §8.22]');
+  it.todo('given an always policy scoped to repo A and a tool call that claims repo A while its URL targets /repos/acme/B/..., should return refuse(out_of_scope) — resources are extracted from the path, so the claim never reaches decideApproval [0004 §8.35; G1a review M8]');
   it.todo('given AlwaysAllowedByClass, should be a Record over every OperationClass (typecheck fails on an added class)');
 });

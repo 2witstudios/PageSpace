@@ -99,7 +99,7 @@ The approval UI shows one representation; the executor must run exactly that one
 | `query` | split on the first `=` per pair; each half **normalized, never decoded**: upper-case the hex of every escape, unescape only the RFC 3986 unreserved set, percent-encode anything the component may not carry verbatim, refuse a control character in either form, never read `+` as a space. Sorted by name, duplicates kept in input order |
 | `headers` | **only** the reserved-and-allowed set is projected, lowercase, sorted: `accept`, `content-type`, `content-length`, and the headers the matched registry entry declares. `authorization`, `cookie`, `host`, `proxy-*`, `x-forwarded-*`, `transfer-encoding`, `connection`, `upgrade` are **refused** if the caller supplies them (the executor sets them). A projected header whose **value** carries a control character is refused too (`malformed`) — a name-only check lets CRLF smuggle `authorization:` inside an admitted `accept`. `content-length` is **derived** from the body bytes, always: a caller-supplied value that disagrees is `malformed`, and a correct one projects identically to its absence |
 | `bodySha256` | hex SHA-256 over the exact body bytes; `''` body → hash of zero bytes, never `null` |
-| `resources` | operation-specific identifiers the policy restricts on (repo, org, recipient, webhook target, frame origin for browser ops), as a sorted `[key, value]` list |
+| `resources` | operation-specific identifiers the policy restricts on, as a sorted `[slot, value]` list — **extracted from the actual canonical path** by the matched registry entry's `pathTemplate` named slots (`/repos/{owner}/{repo}/…` binds `owner`, `repo`), never supplied by the caller; `[]` for `generic_request`. `CanonicalRequestInput` has no `resources` field, so a tool cannot claim repo A while the URL targets repo B (G1a review M8). The relay's `restrictGitOperation` (ADR 0006 §7), which builds the canonical request from a typed, validated `GitRelayRequest`, is the only other constructor |
 | `operation` | `{ class, name }` — the `op` discriminator so one digest cannot serve two operations (mcp-token-scopes precedent). **Derived, never supplied**: `lookupOperation` matches the account's `providerSlug` (from the row), the channel, the canonical method and the canonical path against the reviewed `OperationRegistry`; no match is `{ class: 'unknown', name: 'generic_request' }`. The untrusted `CanonicalRequestInput` has no `operation` and no `declaredHeaders` field (G1a review M1) |
 
 `digestRequest(canonical): RequestDigest = hash(canonicalJson(canonical))` where `canonicalJson` sorts keys recursively, keeps arrays positional, drops `undefined` (env-bridge `canonicalizeArgs`), and the hash primitive is injected. Two textual requests that differ only by header order, key order, case of the host, or `:443` produce the same digest; two that differ in one body byte do not.
@@ -237,8 +237,10 @@ export type RenderApprovalSubject = (input: { canonical: CanonicalRequest }) => 
 
 // lookup-operation.ts (G1b) — the ONLY source of an operation class
 export type LookupOperation = (input: { registry: OperationRegistry; providerSlug: string | null;
-  channel: ExecutorChannel; method: MethodFor[ExecutorChannel]; path: string }) => OperationRegistryEntry | null;
-//   keyed by provider + channel + method + path template; null ⇒ { class: 'unknown', name: 'generic_request' }
+  channel: ExecutorChannel; method: MethodFor[ExecutorChannel]; path: string })
+  => { entry: OperationRegistryEntry; resources: readonly (readonly [string, string])[] } | null;
+//   keyed by provider + channel + method + path template; slot values come from the actual path;
+//   null ⇒ { class: 'unknown', name: 'generic_request' } with resources []
 
 // decide-approval.ts (G1b)
 export type DecideApproval = (input: { operation: OperationRef; policy: AccountApprovalPolicy | null;
@@ -297,6 +299,7 @@ Adapters (I/O, G1b): `grant-repository.ts` (nonce consume, approvals, delegation
 32. Given an account whose `sessionHttpEnabled` flips from `true` to `false` (or back), its `policyVersion` is bumped and written to the plane through `rebind`; an outstanding grant with `sessionHttp: true` issued before the flip is `policy_epoch` at the verifier and `binding_mismatch` at the plane (G1a review M4).
 33. Given a grant whose `sandbox.spriteName` differs from `expected.sandbox.spriteName` with equal `instanceId` and `generation`, `generation_mismatch`; given a grant naming a sandbox and `expected.sandbox = null`, `binding_unavailable` (a member of `GrantDenyReason`), never `ok` (G1a review M6).
 34. Given `expected.previousCredentialVersion = n`, `currentCredentialVersion = n+1`, `rotatedAt = R` and a grant for version `n`: with `iat = R-1` and `now = R + ROTATION_GRACE_MS - 1`, the version check passes; with `now = R + ROTATION_GRACE_MS`, `version_mismatch`; with `iat = R` (issued at or after the rotation), `version_mismatch` at any `now`; with `previousCredentialVersion = null` (never rotated, or cleared by `revoke`), `version_mismatch` (G1a review M7).
+35. Given an `always` policy whose `scope.resources` is `[['owner','acme'],['repo','A']]` and a tool call whose intent names repo A but whose URL is `PUT https://api.github.com:443/repos/acme/B/contents/x`, `canonical.resources` is `[['owner','acme'],['repo','B']]` (extracted from the path) and `decideApproval` returns `refuse(out_of_scope)`; `CanonicalRequestInput` has no `resources` key (type-level); a request no registry entry matches has `resources = []` and is `generic_request` (G1a review M8).
 
 ## 9. Consequences
 

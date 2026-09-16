@@ -10,6 +10,7 @@ describe('adversarial: approval-request-mismatch', () => {
   it.todo('given an approval obtained for op mint-like A, should not redeem for op B with identical arguments (op discriminator in the digest)');
   it.todo('given a model-generated "the user approved" text, should carry no authority (no approval row, requirement stays concrete)');
   it.todo('given an always policy, should never cover irreversible or privilege classes');
+  it.todo('given an always policy scoped to repo A, a human-visible claim of repo A and a URL targeting repo B, should refuse out_of_scope — resources come from the actual path, never the caller [G1a review M8]');
   it.todo('given a tool layer that labels a DELETE as a read operation, should have no field to say so — the class comes from the OperationRegistry and an unmatched DELETE is unknown, so a read-only always policy does not cover it [G1a review M1]');
   it.todo('given an approval subject, should be rendered from the canonical request only (no page/summary/model text)');
   it.todo('given two requests identical except ?force=true, should render subjects that differ in query — the human sees every digest-bound part that changes what the request does [G1a review H5]');
