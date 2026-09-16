@@ -93,7 +93,7 @@ from the default `test` / `test:coverage` run (`vitest.config.ts`
 `exclude` / `coverage.exclude`). When `INFISICAL_DEV_ADMIN_TOKEN` is unset
 or the instance does not answer `/api/status`, the suite reports itself as
 **skipped** (`describe.skipIf`) rather than crashing. CI does not accept that:
-its dedicated step runs the file with `--reporter=json` and fails unless every
+its dedicated step runs the file with the default and JSON reporters and fails unless every
 test actually passed.
 
 ## What CI needs to replicate this
@@ -105,5 +105,5 @@ suite" / "Tear down local Infisical OSS" steps for the actual implementation
 
 1. `docker compose -f packages/lib/src/agent-accounts/store/infisical-dev/docker-compose.yml up -d` and wait for the backend health check — `plane-metadata.sql`'s `/docker-entrypoint-initdb.d/` mount creates the metadata table automatically, no separate step.
 2. Run the bootstrap curl above once per fresh run, capture `INFISICAL_DEV_ADMIN_TOKEN` / `INFISICAL_DEV_ORG_ID` as job env vars.
-3. Run the integration test as shown above — CI runs it with `--reporter=json` and fails the step if the suite didn't fully execute (not just if it failed), so a broken bring-up can't silently report as skipped.
+3. Run the integration test as shown above — CI runs it with the default reporter (a failure names its tests in the log) plus `--reporter=json`, and fails the step if the suite didn't fully execute as well as if it failed, so a broken bring-up can't silently report as skipped.
 4. `docker compose down -v` to tear down (frees the CI runner's disk for the next job).
