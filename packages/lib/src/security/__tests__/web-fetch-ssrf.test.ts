@@ -84,7 +84,8 @@ describe('web-fetch-ssrf — pure decision functions', () => {
 
   // Given an IPv6 address outside global unicast, or one that embeds or
   // translates to a private IPv4, in ANY textual form, isPublicIp should be
-  // false: public IPv6 is allowlisted to 2000::/3, never denylisted by prefix.
+  // false: public IPv6 is allowlisted to the IANA global unicast allocations,
+  // never denylisted by prefix.
   describe('isPublicIp — blocks IPv6 that embeds, translates or reserves', () => {
     it.each([
       ['IPv4-translated (SIIT) private, hextet', '::ffff:0:a00:1'],
@@ -102,6 +103,11 @@ describe('web-fetch-ssrf — pure decision functions', () => {
       ['documentation 2001:db8::/32', '2001:db8::1'],
       ['documentation 3fff::/20', '3fff::1'],
       ['SRv6 SIDs 5f00::/16', '5f00::1'],
+      ['retired 6bone 3ffe::/16', '3ffe::1'],
+      ['unallocated 2004::/16', '2004::1'],
+      ['unallocated 2e00::/7', '2e00::1'],
+      ['unallocated 3000::/4', '3000::1'],
+      ['unallocated beside 2610::/23', '2612::1'],
       ['unique-local, uppercase', 'FD00::1'],
       ['malformed IPv6 (fail closed)', 'not:an:ip'],
       ['too many groups (fail closed)', '1:2:3:4:5:6:7:8:9'],
@@ -116,6 +122,15 @@ describe('web-fetch-ssrf — pure decision functions', () => {
       ['6to4 embedding a public IPv4', '2002:5db8:d822::1'],
       ['IPv4-mapped public, fully expanded', '0:0:0:0:0:ffff:5db8:d822'],
       ['public IPv6 with a zone id', '2606:4700:4700::1111%eth0'],
+      ['IANA 2001::/16 (Google DNS)', '2001:4860:4860::8888'],
+      ['IANA 2003::/18', '2003:e8::1'],
+      ['IANA 2400::/12', '2400:cb00::1'],
+      ['IANA 2610::/23', '2610:a1:1018::1'],
+      ['IANA 2620::/23', '2620:fe::fe'],
+      ['IANA 2630::/12', '2630::1'],
+      ['IANA 2800::/12', '2800:3f0:4001::1'],
+      ['IANA 2a00::/12', '2a00:1450:4001::1'],
+      ['IANA 2c00::/12', '2c0f:fb50:4002::1'],
     ])('allows %s', (_label, ip) => {
       const actual = isPublicIp(ip);
       const expected = true;

@@ -55,6 +55,7 @@ describe('validateIntegrationTargetUrl', () => {
       'https://[64:ff9b::a00:1]/hook', // NAT64 embedding 10.0.0.1
       'https://[::ffff:0:a00:1]/hook', // IPv4-translated (SIIT) embedding 10.0.0.1
       'https://[2002:a00:1::1]/hook', // 6to4 embedding 10.0.0.1
+      'https://[3ffe::1]/hook', // retired 6bone
       'https://[fdaa:0:1:a7b:0:1:2:3]/hook', // Fly 6PN (ULA)
       'https://[fc00::1]/hook',
       'https://[fe80::1]/hook',
