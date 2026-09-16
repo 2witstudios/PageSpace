@@ -56,6 +56,7 @@ import {
   canActorAccessDrive,
   canActorEditPage,
   canActorViewPage,
+  canActorConsultAgent,
   getActorAccessiblePagesInDrive,
   filterDriveIdsByMcpScope,
   driveOutsideMcpScope,
@@ -64,6 +65,7 @@ import {
   hasAgentUserScopedAccess,
 } from '../actor-permissions';
 import type { ToolExecutionContext } from '../../core/types';
+import * as permissionsModule from '@pagespace/lib/permissions/permissions';
 
 const DRIVE = 'drive-1';
 const userCtx = { userId: 'user-1' } as ToolExecutionContext;
@@ -552,3 +554,68 @@ describe('hasAgentUserScopedAccess', () => {
     expect(await hasAgentUserScopedAccess('doc-page')).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// canActorConsultAgent — the ONE rule for "may this actor ask that agent",
+// shared by executeAskAgent and the channel-mention responder. Viewing the
+// agent page is sufficient; membership of the agent in the drive the actor is
+// operating in, plus the actor's own access to that drive, is the other grant
+// (guest agents: added to a drive from elsewhere so its members can talk to it).
+// ---------------------------------------------------------------------------
+describe('canActorConsultAgent', () => {
+  const AGENT = 'agent-guest';
+  const getUserAccessLevel = vi.mocked(permissionsModule.getUserAccessLevel);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockDbWhere.mockResolvedValue([]); // no chatSource row lookups needed for a user ctx
+  });
+
+  it('allows when the actor can view the agent page (membership never consulted)', async () => {
+    getUserAccessLevel.mockResolvedValue({ canView: true, canEdit: false, canShare: false, canDelete: false });
+    expect(await canActorConsultAgent(userCtx, AGENT, DRIVE)).toBe(true);
+    expect(mockHasAgentDriveMembership).not.toHaveBeenCalled();
+  });
+
+  it('allows a guest agent that is a member of the current drive when the actor can access that drive', async () => {
+    getUserAccessLevel.mockResolvedValue(null);
+    mockHasAgentDriveMembership.mockResolvedValue(true);
+    mockGetUserDriveAccess.mockResolvedValue(true);
+    expect(await canActorConsultAgent(userCtx, AGENT, DRIVE)).toBe(true);
+    expect(mockHasAgentDriveMembership).toHaveBeenCalledWith(AGENT, DRIVE);
+    expect(mockGetUserDriveAccess).toHaveBeenCalledWith('user-1', DRIVE);
+  });
+
+  it('denies a guest agent member when the actor cannot access the current drive', async () => {
+    getUserAccessLevel.mockResolvedValue(null);
+    mockHasAgentDriveMembership.mockResolvedValue(true);
+    mockGetUserDriveAccess.mockResolvedValue(false);
+    expect(await canActorConsultAgent(userCtx, AGENT, DRIVE)).toBe(false);
+  });
+
+  it('denies when the agent is not a member of the current drive', async () => {
+    getUserAccessLevel.mockResolvedValue(null);
+    mockHasAgentDriveMembership.mockResolvedValue(false);
+    mockGetUserDriveAccess.mockResolvedValue(true);
+    expect(await canActorConsultAgent(userCtx, AGENT, DRIVE)).toBe(false);
+  });
+
+  it('falls back to locationContext.currentDrive when no drive id is passed, and denies with neither', async () => {
+    getUserAccessLevel.mockResolvedValue(null);
+    mockHasAgentDriveMembership.mockResolvedValue(true);
+    mockGetUserDriveAccess.mockResolvedValue(true);
+    const located = { ...userCtx, locationContext: { currentDrive: { id: DRIVE, name: 'D', slug: 'd' } } } as ToolExecutionContext;
+    expect(await canActorConsultAgent(located, AGENT)).toBe(true);
+    expect(mockHasAgentDriveMembership).toHaveBeenCalledWith(AGENT, DRIVE);
+    expect(await canActorConsultAgent(userCtx, AGENT)).toBe(false);
+  });
+
+  it('denies a drive outside the MCP token scope even for a member agent', async () => {
+    getUserAccessLevel.mockResolvedValue(null);
+    mockHasAgentDriveMembership.mockResolvedValue(true);
+    mockGetUserDriveAccess.mockResolvedValue(true);
+    const scoped = { ...userCtx, mcpAllowedDriveIds: ['drive-other'] } as ToolExecutionContext;
+    expect(await canActorConsultAgent(scoped, AGENT, DRIVE)).toBe(false);
+  });
+});
+

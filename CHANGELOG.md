@@ -547,6 +547,24 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Sign-in emails no longer lock you out of your own account** — every email PageSpace sends to
+  the same address (a sign-in link, an invite, a notification) shared one rate-limit bucket capped
+  at 3 per hour, and a failed send still used up one of those 3 — so a couple of sign-in attempts,
+  or one flaky delivery, could leave you unable to get a new sign-in link for the rest of the hour.
+  The cap is now 10 per hour per recipient, the sign-in link's own limit goes from 3 to 5 attempts
+  per 15 minutes, and a send that fails no longer counts against the limit at all — only emails
+  that actually go out do.
+
+- **Agents you add to a drive can be @-mentioned in its channels, and they answer** — a drive
+  member can post in the drive's channels, but an agent added as a member could not: its
+  membership never granted posting rights in channels the way a person's or an app's does, so an
+  @-mentioned agent silently said nothing (or its reply was refused after the model call had
+  already been paid for). A freshly created agent with no tool restrictions was skipped as if
+  channel posting were switched off, and an agent added to a drive from another drive was neither
+  offered by the @ picker nor allowed to reply unless you could open its home page. Now a member
+  agent posts in non-private channels by default, the @ picker lists every agent that belongs to
+  the drive, and a mention gets a reply in the channel or in the thread it was made in. Agents
+  whose tool list deliberately leaves out channel posting stay silent, as before.
 - **The open-source licenses screen no longer references a private IP-sale disclosure** — the "Full
   inventory" notice at Settings → Legal → Open-source licenses said the complete dependency
   inventory was "maintained in the seller's IP disclosure and is available to recipients on
