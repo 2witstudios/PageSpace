@@ -78,17 +78,23 @@ describe('pinnedFetch', () => {
     expect(actual).toEqual(expected);
   });
 
-  it('given a caller-supplied Content-Length in any case, should send exactly that one value', async () => {
+  it('given a caller-supplied Content-Length in any case, should send that value and never replace it', async () => {
     mode = 'json';
+    // The caller's value deliberately differs from the body's byte length (7),
+    // so a computed length overriding it is observable on the wire.
     await pinnedFetch(`http://pinned-host.invalid:${port}/hook`, {
       method: 'PUT',
-      headers: { 'content-length': '7' },
+      headers: { 'content-length': '5' },
       body: '{"a":1}',
       pinnedAddress: '127.0.0.1',
     });
 
-    const actual = { contentLength: lastReceived?.contentLength, transferEncoding: lastReceived?.transferEncoding };
-    const expected = { contentLength: '7', transferEncoding: undefined };
+    const actual = {
+      contentLength: lastReceived?.contentLength,
+      transferEncoding: lastReceived?.transferEncoding,
+      body: lastReceived?.body,
+    };
+    const expected = { contentLength: '5', transferEncoding: undefined, body: '{"a":' };
     expect(actual).toEqual(expected);
   });
 

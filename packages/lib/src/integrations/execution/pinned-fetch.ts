@@ -70,6 +70,13 @@ export const pinnedFetch: PinnedFetch = (url, init) => {
   const isTls = target.protocol === 'https:';
   const request = isTls ? https.request : http.request;
   const hostnameIsIp = isIP(target.hostname.replace(/^\[|\]$/g, '')) !== 0;
+  // Node streams a written body chunked unless a length is set; fetch sent the
+  // known byte length, and some servers refuse chunked requests (411).
+  const hasContentLength = Object.keys(headers).some((name) => name.toLowerCase() === 'content-length');
+  const requestHeaders =
+    body !== undefined && !hasContentLength
+      ? { ...headers, 'Content-Length': String(Buffer.byteLength(body, 'utf8')) }
+      : headers;
 
   return new Promise<Response>((resolve, reject) => {
     const req = request({
@@ -78,7 +85,7 @@ export const pinnedFetch: PinnedFetch = (url, init) => {
       port: target.port || undefined,
       path: `${target.pathname}${target.search}`,
       method,
-      headers,
+      headers: requestHeaders,
       lookup: pinnedLookup(pinnedAddress),
       // TLS verifies the certificate against the hostname, never the pinned IP.
       ...(isTls && !hostnameIsIp ? { servername: target.hostname } : {}),
