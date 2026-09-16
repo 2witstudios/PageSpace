@@ -202,13 +202,20 @@ export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): St
       });
       if (decision.outcome !== 'commit') return decision;
 
-      await deps.metadata.commit({
-        ref,
-        version: decision.version,
-        previousVersion: observedBefore,
-        bindings,
-        rotatedAt: before === null ? null : deps.now(),
-      });
+      // The material is already at the next version in Infisical; a metadata failure here leaves
+      // the two stores diverged, which is exactly the uncertain-write outcome the contract names
+      // (Codex review PR #2646 P2) — never a throw a caller cannot tell apart from "nothing landed".
+      try {
+        await deps.metadata.commit({
+          ref,
+          version: decision.version,
+          previousVersion: observedBefore,
+          bindings,
+          rotatedAt: before === null ? null : deps.now(),
+        });
+      } catch {
+        return { outcome: 'write_unverified' as const };
+      }
       return decision;
     });
 
@@ -325,7 +332,9 @@ export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): St
 
         const secretKey = secretKeyFor(input.ref.accountId, input.ref.kind);
         const result = await deps.infisical.deleteSecret({ projectId: project.projectId, credentials, secretKey });
-        if (!result.ok) return { ok: false, reason: result.reason === 'not_found' ? 'not_found' : 'store_unavailable' };
+        // The metadata row still exists, so a primary already gone is a delete that was interrupted
+        // after this step — finish it rather than leave a permanent ghost row (Codex review PR #2646 P2).
+        if (!result.ok && result.reason !== 'not_found') return { ok: false, reason: 'store_unavailable' };
 
         await deps.metadata.remove(input.ref);
         return null;
