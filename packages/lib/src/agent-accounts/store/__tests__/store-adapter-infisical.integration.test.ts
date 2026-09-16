@@ -676,4 +676,53 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
     const expected = { metadata: 'not_found', primary: 'not_found', companion: 'not_found' };
     expect(actual).toEqual(expected);
   });
+
+  // Codex review PR #2646 (P2): a delete that crashed (or whose metadata.remove failed) after the
+  // primary Infisical secret was gone left a metadata row every retry tripped over — the primary
+  // delete returned not_found, the retry returned not_found, and describe kept a ghost forever.
+  it('given a retried delete whose primary secret is already gone, should finish removing the metadata row', async () => {
+    const adapter = makeAdapter();
+    const accountId = `acct-delete-retry-${NOW}` as AccountId;
+    const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, kind: 'api_key' };
+    const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
+
+    await adapter.put({ ref, material: { kind: 'api_key', material: { value: 'sk-synthetic', placement: { in: 'header', name: 'Authorization' } } }, expectedVersion: null, bindings, identity });
+    // The interrupted first attempt: the primary secret went, the metadata row did not.
+    const rawInfisical = createInfisicalClient({ baseUrl: INFISICAL_URL, environment: 'dev' });
+    await rawInfisical.deleteSecret({ projectId: projectAId, credentials: identityA, secretKey: `${accountId}__api_key` });
+
+    const retried = await adapter.delete({ ref, identity, upstream: 'not_attempted' });
+    const described = await adapter.describe({ ref, identity });
+    const actual = { retried, described };
+    const expected = { retried: { ok: true, removed: true, upstream: 'not_attempted' }, described: { ok: false, reason: 'not_found' } };
+    expect(actual).toEqual(expected);
+  });
+
+  // Codex review PR #2646 (P2): a metadata DB failure AFTER the verified Infisical write threw out
+  // of put/rotate, although the material may already be at the next version — the contract's
+  // uncertain-write outcome is `write_unverified`, which a caller can act on; a throw is not.
+  it('given the metadata commit fails after the Infisical write verified, should return write_unverified instead of throwing', async () => {
+    const accountId = `acct-commit-fails-${NOW}` as AccountId;
+    const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, kind: 'api_key' };
+    const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
+    const refreshIdentity = { ...identity, channel: 'refresh-worker' as const };
+    const plainAdapter = makeAdapter();
+    const failingAdapter = makeAdapter({
+      wrapMetadata: (m) => ({
+        ...m,
+        commit: async () => {
+          throw new Error('synthetic plane metadata outage');
+        },
+      }),
+    });
+
+    await plainAdapter.put({ ref, material: { kind: 'api_key', material: { value: 'sk-v1', placement: { in: 'header', name: 'Authorization' } } }, expectedVersion: null, bindings, identity });
+    const actual = await failingAdapter
+      .rotate({ ref, expectedVersion: 1 as never, next: { kind: 'api_key', material: { value: 'sk-v2', placement: { in: 'header', name: 'Authorization' } } }, bindings, identity: refreshIdentity })
+      .catch((error: unknown) => ({ threw: String(error) }));
+    const expected = { ok: false, reason: 'write_unverified' };
+    expect(actual).toEqual(expected);
+  });
 });
