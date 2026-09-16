@@ -82,6 +82,36 @@ afterAll(async () => {
 });
 
 describe('pinnedFetch', () => {
+  it('given an upstream that answers 101 Switching Protocols, should reject and close the socket instead of hanging', async () => {
+    let serverSocketClosed: Promise<void> = Promise.resolve();
+    const raw = net.createServer((socket) => {
+      socket.on('error', () => undefined); // the client may reset the connection
+      serverSocketClosed = new Promise<void>((resolve) => socket.once('close', () => resolve()));
+      socket.once('data', () => socket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: evil\r\nConnection: Upgrade\r\n\r\n'));
+    });
+    await new Promise<void>((resolve) => raw.listen(0, '127.0.0.1', resolve));
+    const rawPort = (raw.address() as AddressInfo).port;
+    try {
+      const outcome = await Promise.race([
+        pinnedFetch(`http://pinned-host.invalid:${rawPort}/hook`, { method: 'GET', pinnedAddresses: ['127.0.0.1'] }).then(
+          (response) => `resolved ${response.status}`,
+          (error: Error) => `rejected: ${error.message}`
+        ),
+        new Promise<string>((resolve) => setTimeout(() => resolve('HUNG'), 1000)),
+      ]);
+      const socketOutcome = await Promise.race([
+        serverSocketClosed.then(() => 'closed'),
+        new Promise<string>((resolve) => setTimeout(() => resolve('still open'), 1000)),
+      ]);
+
+      const actual = { outcome, socketOutcome };
+      const expected = { outcome: 'rejected: Upstream switched protocols (101); not supported', socketOutcome: 'closed' };
+      expect(actual).toEqual(expected);
+    } finally {
+      raw.close();
+    }
+  });
+
   it('given an https URL whose host is an IPv6 literal, should hand node:https the bare address so the certificate is checked against it', async () => {
     // With the brackets kept, TLS compares the certificate against "[::1]" and
     // always fails (ERR_TLS_CERT_ALTNAME_INVALID); verified against a real
