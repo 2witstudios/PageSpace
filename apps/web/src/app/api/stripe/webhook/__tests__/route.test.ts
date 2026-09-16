@@ -367,6 +367,31 @@ describe('POST /api/stripe/webhook', () => {
       expect(body.received).toBe(true);
     });
 
+    it('MON-2 replaying the same invoice.paid event (stripe_events dedupe) grants once: the duplicate is acked without re-funding', async () => {
+      const invoice = mockInvoice({ amountPaid: 1500 });
+      const event = mockStripeEvent('invoice.paid', invoice);
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+      const post = () => POST(new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest);
+
+      // First delivery: the marker insert wins → the grant is applied once.
+      const first = await post();
+      expect(first.status).toBe(200);
+      expect(mockApplyStripeFunding).toHaveBeenCalledTimes(1);
+
+      // Stripe replays the SAME event id: the marker conflicts and the prior attempt
+      // finished → duplicate-ack. Funding must not run a second time.
+      mockInsertReturning.mockResolvedValueOnce([]);
+      mockSelectLimit.mockResolvedValueOnce([{ processedAt: new Date('2026-09-15T00:00:00Z') }]);
+      const replay = await post();
+      expect(replay.status).toBe(200);
+      expect(await replay.json()).toEqual({ received: true });
+      expect(mockApplyStripeFunding).toHaveBeenCalledTimes(1);
+    });
+
     it('should return 500 (retry) for a duplicate whose prior attempt is still in flight (within lease)', async () => {
       const event = mockStripeEvent('invoice.paid', mockInvoice());
       mockStripeWebhooksConstructEvent.mockReturnValue(event);

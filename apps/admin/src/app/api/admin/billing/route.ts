@@ -111,6 +111,8 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
       topupCount: creditRevenue.topupCount,
       monthlyGrantCents: creditRevenue.monthlyGrantCents,
       monthlyGrantCount: creditRevenue.monthlyGrantCount,
+      // MON-7: outstanding grants — credit value still owed, never cash.
+      includedCreditLiabilityCents: creditRevenue.includedCreditLiabilityCents,
     };
 
     if (format === 'csv') {
@@ -155,6 +157,7 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
 
       rows.push(['revenue', 'topup_purchase', String(revenue.topupCount), '', '', '', '', '', '', '', '', '', centsToDollars(revenue.topupCents)]);
       rows.push(['revenue', 'monthly_grant', String(revenue.monthlyGrantCount), '', '', '', '', '', '', '', '', '', centsToDollars(revenue.monthlyGrantCents)]);
+      rows.push(['revenue', 'included_credit_liability', '', '', '', '', '', '', '', '', '', '', centsToDollars(revenue.includedCreditLiabilityCents)]);
       for (const r of subscriptionsByTier) {
         rows.push(['subscriptions', r.tier, String(r.count), '', '', '', '', '', '', '', '', '', '']);
       }

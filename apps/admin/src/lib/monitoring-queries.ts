@@ -891,6 +891,14 @@ export interface CreditRevenue {
   /** Plan allowance grants — NOT cash revenue. */
   monthlyGrantCents: number;
   monthlyGrantCount: number;
+  /**
+   * Included-credit liability (Spec MON-7): monthly grants still outstanding —
+   * granted credit value not yet spent, summed over every balance. Point-in-time,
+   * not range-scoped, and distinct from cash: a grant is a promise of credit value
+   * the platform still owes, never revenue. Top-up balances are cash-backed and are
+   * NOT in this figure (see CreditLiability.topupRemainingCents).
+   */
+  includedCreditLiabilityCents: number;
 }
 
 export interface SubscriptionsByTierRow {
@@ -1100,7 +1108,22 @@ export async function getCreditRevenue(
     }
   }
 
-  return { topupCents, topupCount, monthlyGrantCents, monthlyGrantCount };
+  // MON-7: outstanding monthly grants = unspent granted credit value across all
+  // balances. Read from the balances (the ledger nets grants against usage there),
+  // not from the range-scoped grant rows above, so it is a liability, not a flow.
+  const outstanding = await db
+    .select({
+      includedCreditLiabilityCents: sql<number>`COALESCE(SUM(${creditBalances.monthlyRemainingCents}), 0)::double precision`,
+    })
+    .from(creditBalances);
+
+  return {
+    topupCents,
+    topupCount,
+    monthlyGrantCents,
+    monthlyGrantCount,
+    includedCreditLiabilityCents: outstanding[0]?.includedCreditLiabilityCents ?? 0,
+  };
 }
 
 /**

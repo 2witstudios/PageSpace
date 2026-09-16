@@ -4,8 +4,18 @@
  * applyPaymentToDebt) comes from credit-core; this file only does I/O.
  *
  * Two funding paths:
- *   - monthly_refill (invoice.paid): a subscription renewal ADDS the tier allowance
+ *   - monthly_refill (invoice.paid): a subscription renewal ADDS the monthly grant
  *     to the current monthly balance (rollover) and rolls the billing window forward.
+ *     The grant is sized from what the invoice PAID: invoice.amount_paid × the tier's
+ *     included-credit ratio (Spec MON-2, via the pure invoice-grant module). The
+ *     ratio itself is what MONEY_MODEL_V2 gates (money-model.ts); off, 100% of the
+ *     paid amount is granted, which reproduces today's amounts for a full-price
+ *     invoice. Gifts and trials are funded at list price × ratio (D-OW-16a); any
+ *     other $0 invoice grants nothing. The ledger row records paidCents so the
+ *     derivation is auditable per row. A PAID invoice whose tier has no ratio is a
+ *     MISSED grant: a 'missed_grant' ledger row (amountCents 0, stripeRef = the
+ *     invoice) is written for the reconcile cron to re-grant once the tier is
+ *     repaired, and the miss is logged at error.
  *   - topup (checkout.session.completed, credit_pack): a one-time purchase ADDS to
  *     the never-expiring top-up bucket.
  *
@@ -26,10 +36,11 @@
 import { db } from '@pagespace/db/db';
 import { creditBalances, creditLedger } from '@pagespace/db/schema/credits';
 import { users } from '@pagespace/db/schema/auth';
+import { subscriptions } from '@pagespace/db/schema/subscriptions';
 import { eq, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
 import { classifyStripeEvent, computeMonthlyRefill, applyPaymentToDebt } from './credit-core';
-import { tierAllowanceCents } from './money-model';
+import { grantForInvoice } from './invoice-grant';
 import type { SubscriptionTier } from '../services/subscription-utils';
 import { loggers } from '../logging/logger-config';
 
@@ -42,6 +53,12 @@ import { loggers } from '../logging/logger-config';
 interface FundingEventObject {
   id?: string | null;
   customer?: string | { id?: string | null } | null;
+  /** Stripe invoice.amount_paid — what the invoice actually collected, in minor units. */
+  amount_paid?: number | null;
+  /** Stripe invoice.subtotal — line items before discounts; 0 on a trial-create invoice. */
+  subtotal?: number | null;
+  /** Stripe invoice.billing_reason. */
+  billing_reason?: string | null;
   mode?: string | null;
   metadata?: Record<string, string> | null;
   period_start?: number | null;
@@ -142,7 +159,61 @@ async function resolveTopupUser(obj: FundingEventObject): Promise<{ id: string }
 }
 
 /**
- * invoice.paid — add the tier allowance to the current monthly balance (rollover)
+ * Whether the user's live subscription was gifted by an admin (D-OW-16a: a gift is
+ * funded at list price × ratio, not from the $0 it paid). Gifted rows are created
+ * by admin before any invoice, so this lookup is not subject to the invoice-vs-
+ * subscription webhook race. Only eq() is used so the funding shell stays trivially
+ * mockable.
+ */
+async function isGiftedSubscriber(userId: string): Promise<boolean> {
+  const rows = await db
+    .select({ gifted: subscriptions.gifted, status: subscriptions.status })
+    .from(subscriptions)
+    .where(eq(subscriptions.userId, userId));
+  return rows.some((r) => r.gifted === true && (r.status === 'active' || r.status === 'trialing'));
+}
+
+/**
+ * A PAID invoice whose tier resolved to one with no ratio (stored tier still 'free'
+ * and no usable price on the line): fail closed — grant nothing — but leave a
+ * 'missed_grant' ledger row (amountCents 0, stripeRef = the invoice, paidCents = what
+ * was paid) so the reconcile cron (Phase 2 leaf) can re-grant once the tier is
+ * repaired, and log at error with everything needed to find it. The row shares the
+ * stripeRef unique index with the eventual monthly_grant, so the reconcile must
+ * REPLACE this row (same stripeRef) rather than insert beside it; a plain Stripe
+ * redelivery of the same event still dedupes on it.
+ */
+async function recordMissedGrant(
+  userId: string,
+  tier: SubscriptionTier,
+  paidCents: number,
+  stripeRef: string,
+  eventId: string,
+): Promise<void> {
+  loggers.api.error('credit funding: MISSED grant — paid invoice resolved to a tier with no ratio', undefined, {
+    eventId,
+    invoiceId: stripeRef,
+    userId,
+    storedTier: tier,
+    paidCents,
+  });
+  await db
+    .insert(creditLedger)
+    .values({
+      userId,
+      entryType: 'missed_grant',
+      bucket: 'monthly',
+      amountCents: 0,
+      paidCents,
+      stripeRef,
+      // Settled on insert (see applyMonthlyRefill): keeps the backfill sweep off it.
+      consumeStatus: 'applied',
+    })
+    .onConflictDoNothing(STRIPE_REF_ARBITER);
+}
+
+/**
+ * invoice.paid — add the invoice-sized grant to the current monthly balance (rollover)
  * and roll the billing window forward, recording a monthly_grant ledger row keyed
  * on the invoice id. The balance write only runs if the grant row was newly inserted.
  */
@@ -169,11 +240,35 @@ async function applyMonthlyRefill(event: FundingEvent, tierOverride?: Subscripti
   // stored tier (user.tier) may be stale ('free'); the invoice reflects what was actually
   // billed. Fall back to the stored tier only when the caller couldn't resolve one.
   const tier = tierOverride ?? user.tier;
+  // MON-2 / D-OW-16: the grant is sized from what THIS invoice paid, never from a
+  // tier table — a promo, a proration, or a price change flows through with no table
+  // edit. A gift or a trial is us fronting the plan and derives from the list price.
+  const grant = grantForInvoice({
+    amountPaidCents: obj.amount_paid,
+    subtotalCents: obj.subtotal,
+    billingReason: obj.billing_reason,
+    gifted: await isGiftedSubscriber(user.id),
+    tier,
+  });
+  const allowanceCents = grant.allowanceCents;
+  if (allowanceCents <= 0) {
+    if (grant.reason === 'no_ratio' && grant.paidCents > 0) {
+      await recordMissedGrant(user.id, tier, grant.paidCents, stripeRef, event.id);
+      return;
+    }
+    // Nothing paid and not a gift or trial (proration-only, subscription_update at
+    // $0, a 100% coupon on a non-gifted subscription): nothing to grant, nothing to
+    // record, nothing to dedupe — the next PAID invoice sizes its own grant.
+    loggers.api.info('credit funding: invoice grants nothing', {
+      userId: user.id,
+      tier,
+      paidCents: grant.paidCents,
+      stripeRef,
+      reason: grant.reason,
+    });
+    return;
+  }
   const { start, end } = invoicePeriod(obj);
-  // Grant sized from the tier's list price (MON-2 derivation). Lane A3 replaces this
-  // with allowanceCentsForPaidCents(invoice.amount_paid, tier) so a promo or a
-  // partial period flows through; the refill arithmetic below is already shaped for it.
-  const allowanceCents = tierAllowanceCents(tier);
   let carriedCents = 0;
 
   await db.transaction(async (tx) => {
@@ -184,6 +279,9 @@ async function applyMonthlyRefill(event: FundingEvent, tierOverride?: Subscripti
         entryType: 'monthly_grant',
         bucket: 'monthly',
         amountCents: allowanceCents,
+        // What the invoice actually paid — the grant above is derived from it, so the
+        // ratio is auditable row by row (MON-2).
+        paidCents: grant.paidCents,
         stripeRef,
         // Settled on insert. consumeStatus defaults to 'pending', but the backfill
         // cron sweeps EVERY pending ledger row through settlePendingLedgerRow, which
@@ -254,6 +352,9 @@ async function applyMonthlyRefill(event: FundingEvent, tierOverride?: Subscripti
     userId: user.id,
     tier,
     allowanceCents,
+    paidCents: grant.paidCents,
+    basis: grant.basis,
+    reason: grant.reason,
     carried: carriedCents,
     stripeRef,
   });

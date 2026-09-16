@@ -64,7 +64,7 @@ export const creditBalances = pgTable('credit_balances', {
 export const creditLedger = pgTable('credit_ledger', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
-  entryType: text('entryType').notNull(), // 'monthly_grant' | 'topup_purchase' | 'usage' | 'adjustment'
+  entryType: text('entryType').notNull(), // 'monthly_grant' | 'topup_purchase' | 'usage' | 'adjustment' | 'missed_grant' (a paid invoice whose tier had no ratio: amountCents 0, for the reconcile cron to re-grant)
   bucket: text('bucket').notNull(), // 'monthly' | 'topup'
   amountCents: integer('amountCents').notNull(), // signed full intended charge: grants/purchases +, usage/debt -
   appliedCents: integer('appliedCents'), // signed amount actually decremented from the balance (usage rows). |applied| <= |amount|; the gap is debt recorded as an adjustment row.
@@ -73,6 +73,7 @@ export const creditLedger = pgTable('credit_ledger', {
   realCostCents: integer('realCostCents'), // round(cost*100) pre-markup, for audit
   markupBps: integer('markupBps').default(15000).notNull(),
   stripeRef: text('stripeRef'), // invoice id / checkout session id for grants & purchases
+  paidCents: integer('paidCents'), // what the Stripe invoice actually paid (monthly_grant rows) — the grant is derived from it (MON-2), so the ratio is auditable per row
   consumeStatus: text('consumeStatus').default('pending').notNull(), // 'pending' | 'applied' | 'skipped'
   consumeError: text('consumeError'),
   // Idempotency arbiter for the async cost-reconcile cron's correction rows. The usage

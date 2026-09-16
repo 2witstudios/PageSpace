@@ -177,10 +177,13 @@ describe('getActiveSubscriptionsByTier', () => {
 
 describe('getCreditRevenue', () => {
   it('splits top-up cash from monthly grants and exposes NO combined total', async () => {
-    resetQueue([
-      { entryType: 'topup_purchase', cents: 500, count: 2 },
-      { entryType: 'monthly_grant', cents: 1500, count: 3 },
-    ]);
+    resetQueue(
+      [
+        { entryType: 'topup_purchase', cents: 500, count: 2 },
+        { entryType: 'monthly_grant', cents: 1500, count: 3 },
+      ],
+      [{ includedCreditLiabilityCents: 900 }],
+    );
 
     const result = await getCreditRevenue();
 
@@ -189,8 +192,37 @@ describe('getCreditRevenue', () => {
       topupCount: 2,
       monthlyGrantCents: 1500,
       monthlyGrantCount: 3,
+      includedCreditLiabilityCents: 900,
     });
     expect(result).not.toHaveProperty('totalCents');
+  });
+
+  it('MON-7 reports included credit liability = outstanding monthly grants, separate from cash and from the grant flow', async () => {
+    // Range flow: $15 granted this range. Balances: $9 of granted value still unspent
+    // across all users. The liability is the unspent $9, not the $15 flow and not top-up cash.
+    resetQueue(
+      [
+        { entryType: 'topup_purchase', cents: 2500, count: 1 },
+        { entryType: 'monthly_grant', cents: 1500, count: 1 },
+      ],
+      [{ includedCreditLiabilityCents: 900 }],
+    );
+
+    const result = await getCreditRevenue();
+
+    expect(result.includedCreditLiabilityCents).toBe(900);
+    expect(result.includedCreditLiabilityCents).not.toBe(result.monthlyGrantCents);
+    expect(result.includedCreditLiabilityCents).not.toBe(result.topupCents);
+    // Read from the balances table (unspent monthly remaining), never from top-up balances.
+    const balanceSelect = (mockSelect.mock.calls as unknown[][])[1]?.[0] as Record<string, unknown> | undefined;
+    expect(balanceSelect).toHaveProperty('includedCreditLiabilityCents');
+    expect(mockSql).toHaveBeenCalledWith(expect.anything(), 'CB_MONTHLY');
+  });
+
+  it('MON-7 reports zero liability when no balance rows exist', async () => {
+    resetQueue([], []);
+    const result = await getCreditRevenue();
+    expect(result.includedCreditLiabilityCents).toBe(0);
   });
 });
 
