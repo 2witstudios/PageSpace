@@ -36,6 +36,13 @@ export interface MissedGrantReconcileResult {
   /** Rows whose re-resolved tier still has no ratio — left for a later sweep. */
   stillMissing: number;
   /**
+   * Rows whose user holds an entitled subscription the price map cannot classify
+   * (unmapped price id, and the invoice amount matches no legacy price). Left
+   * missing and warned per row: a later sweep cannot resolve these on its own, so
+   * they need a human (map the price, or grant by hand).
+   */
+  indeterminate: number;
+  /**
    * Rows whose lookup or grant transaction threw — left as 'missed_grant' for a
    * later sweep, logged at error, and surfaced so the cron can fail loudly.
    */
@@ -159,7 +166,7 @@ async function grantMissedRow(row: { id: string; userId: string }, allowanceCent
  * the row is final, so it must never be sized from a tier we know may be wrong.
  */
 export async function reconcileMissedGrants(options: MissedGrantReconcileOptions): Promise<MissedGrantReconcileResult> {
-  const result: MissedGrantReconcileResult = { reconciled: 0, stillMissing: 0, failed: 0 };
+  const result: MissedGrantReconcileResult = { reconciled: 0, stillMissing: 0, indeterminate: 0, failed: 0 };
   if (!isBillingEnabled()) return result;
 
   const toEmit = new Set<string>();
@@ -206,7 +213,16 @@ export async function reconcileMissedGrants(options: MissedGrantReconcileOptions
           { id: row.id, userId: row.userId, paidCents: row.paidCents ?? 0 },
           derived.tier,
         );
-        if (derived.indeterminate || plan.action === 'still_missing') {
+        if (derived.indeterminate) {
+          result.indeterminate++;
+          loggers.api.warn('missed-grant reconcile: indeterminate tier (entitled subscription on an unmapped price) — needs a human', {
+            ledgerId: row.id,
+            userId: row.userId,
+            paidCents: row.paidCents,
+          });
+          continue;
+        }
+        if (plan.action === 'still_missing') {
           result.stillMissing++;
           continue;
         }

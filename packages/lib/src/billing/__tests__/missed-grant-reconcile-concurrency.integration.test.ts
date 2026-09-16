@@ -11,8 +11,10 @@
  *
  * Determinism: a blocker transaction holds `FOR UPDATE` on the row while both runs
  * start. Their SELECTs are not blocked, so both see the row; both then queue on the
- * row lock in their claim UPDATE. We wait until pg_stat_activity shows two backends
- * lock-waiting on that UPDATE, release the blocker, and let them race for real.
+ * row lock in their claim UPDATE. We wait until exactly two claim UPDATEs are blocked
+ * behind THE BLOCKER'S OWN pid — the first directly, the second queued behind the
+ * first's tuple lock (pg_blocking_pids, so lock waits from other suites sharing the
+ * database cannot satisfy it) — release the blocker, and let them race for real.
  *
  * Requires DATABASE_URL → a migrated Postgres. FAILS LOUDLY when none is reachable
  * (see @pagespace/db/test/require-db); ALLOW_SKIP_DB_TESTS=1 is the only opt-out.
@@ -32,12 +34,18 @@ import { allowanceCentsForPaidCents } from '../money-model';
 
 let dbAvailable = false;
 
-async function lockWaitersOnLedgerUpdate(): Promise<number> {
+async function claimUpdatesBlockedBy(blockerPid: number): Promise<number> {
   const res = await db.execute(sql`
-    select count(*)::int as n from pg_stat_activity
-    where datname = current_database()
-      and wait_event_type = 'Lock'
-      and query ilike 'update "credit_ledger"%'
+    select count(*)::int as n from pg_stat_activity a
+    where a.query ilike 'update "credit_ledger"%'
+      and (
+        ${blockerPid} = any(pg_blocking_pids(a.pid))
+        or exists (
+          select 1 from pg_stat_activity b
+          where b.pid = any(pg_blocking_pids(a.pid))
+            and ${blockerPid} = any(pg_blocking_pids(b.pid))
+        )
+      )
   `);
   return Number((res.rows[0] as { n: number }).n);
 }
@@ -93,11 +101,18 @@ describe('reconcileMissedGrants concurrency (Postgres)', () => {
       });
 
       let runs: Promise<Awaited<ReturnType<typeof reconcileMissedGrants>>[]> | undefined;
-      await db.transaction(async (blocker) => {
-        await blocker.select({ id: creditLedger.id }).from(creditLedger).where(eq(creditLedger.id, ledgerId)).for('update');
-        runs = Promise.all([reconcileMissedGrants({ priceTier }), reconcileMissedGrants({ priceTier })]);
-        await waitFor(async () => (await lockWaitersOnLedgerUpdate()) >= 2, 10_000);
-      });
+      try {
+        await db.transaction(async (blocker) => {
+          await blocker.select({ id: creditLedger.id }).from(creditLedger).where(eq(creditLedger.id, ledgerId)).for('update');
+          const pidRes = await blocker.execute(sql`select pg_backend_pid()::int as pid`);
+          const blockerPid = Number((pidRes.rows[0] as { pid: number }).pid);
+          runs = Promise.all([reconcileMissedGrants({ priceTier }), reconcileMissedGrants({ priceTier })]);
+          await waitFor(async () => (await claimUpdatesBlockedBy(blockerPid)) === 2, 10_000);
+        });
+      } finally {
+        // Never leave the runs dangling past cleanup, even when waitFor times out.
+        await runs?.catch(() => undefined);
+      }
       const results = await runs!;
 
       expect(results.reduce((n, r) => n + r.reconciled, 0)).toBe(1);

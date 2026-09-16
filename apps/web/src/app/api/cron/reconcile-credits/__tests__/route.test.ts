@@ -59,7 +59,7 @@ describe('/api/cron/reconcile-credits', () => {
     vi.clearAllMocks();
     vi.mocked(validateSignedCronRequest).mockReturnValue(null);
     mockBackfill.mockResolvedValue({ retried: 0, orphans: 0, expiredHolds: 0 });
-    mockReconcileMissedGrants.mockResolvedValue({ reconciled: 0, stillMissing: 0, failed: 0 });
+    mockReconcileMissedGrants.mockResolvedValue({ reconciled: 0, stillMissing: 0, indeterminate: 0, failed: 0 });
   });
 
   it('returns the auth error and never runs either sweep when auth fails', async () => {
@@ -132,6 +132,19 @@ describe('/api/cron/reconcile-credits', () => {
     });
     expect(mockAudit).not.toHaveBeenCalled();
     expect(mockLogError).toHaveBeenCalled();
+  });
+
+  it('MON-2 indeterminate rows are reported in the response and the audit (a 200: they need a human, not a retry)', async () => {
+    mockReconcileMissedGrants.mockResolvedValue({ reconciled: 0, stillMissing: 1, indeterminate: 2, failed: 0 });
+
+    const res = await GET(makeRequest());
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body).toMatchObject({ missedGrantsIndeterminate: 2 });
+    expect(mockAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ details: expect.objectContaining({ missedGrantsIndeterminate: 2 }) }),
+    );
   });
 
   it('MON-2 WAL-5 a clean run reports zero failures with a 200', async () => {

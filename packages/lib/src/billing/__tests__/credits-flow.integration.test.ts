@@ -588,12 +588,13 @@ describe('credits flow — grants sized from the invoice paid (MON-2, MONEY_MODE
   });
 });
 
-// Mirrors the web app's getTierFromPrice: known price ids first, then an exact
-// legacy list-amount fallback (here only 2999 → pro), else 'free'.
+// Mirrors the web app's getTierFromPrice: known price ids first, then the exact
+// legacy amount table (same values as LEGACY_PRICE_AMOUNTS), else 'free'.
+const LEGACY_AMOUNT_TIER: Record<number, 'pro' | 'business'> = { 1500: 'pro', 2999: 'pro', 5000: 'business', 10000: 'business', 19999: 'business' };
 const PRICE_TIER = (priceId: string, amountCents?: number | null) =>
   priceId === 'price_pro' ? 'pro' as const
     : priceId === 'price_business' ? 'business' as const
-      : amountCents === 2999 ? 'pro' as const : 'free' as const;
+      : (amountCents != null && LEGACY_AMOUNT_TIER[amountCents]) || 'free' as const;
 
 function seedPricedSubscription(userId: string, stripePriceId: string, status = 'active') {
   store.subscriptions.push({ id: `sub_${userId}_${stripePriceId}`, userId, status, gifted: false, stripePriceId });
@@ -620,7 +621,7 @@ describe('credits flow — missed-grant reconcile (MON-2, WAL-5)', () => {
 
     const result = await reconcileMissedGrants({ priceTier: PRICE_TIER });
 
-    expect(result).toEqual({ reconciled: 1, stillMissing: 0, failed: 0 });
+    expect(result).toEqual({ reconciled: 1, stillMissing: 0, indeterminate: 0, failed: 0 });
     // The row is now a real monthly_grant — no missed_grant rows remain.
     expect(ledgerOf('u1').filter((r) => r.entryType === 'missed_grant')).toHaveLength(0);
     const grant = ledgerOf('u1').find((r) => r.entryType === 'monthly_grant' && r.stripeRef === 'in_missed')!;
@@ -635,7 +636,7 @@ describe('credits flow — missed-grant reconcile (MON-2, WAL-5)', () => {
 
     const result = await reconcileMissedGrants({ priceTier: PRICE_TIER });
 
-    expect(result).toEqual({ reconciled: 0, stillMissing: 1, failed: 0 });
+    expect(result).toEqual({ reconciled: 0, stillMissing: 1, indeterminate: 0, failed: 0 });
     expect(ledgerOf('u1').filter((r) => r.entryType === 'missed_grant')).toHaveLength(1);
     expect(balanceOf('u1')).toBeUndefined();
   });
@@ -669,7 +670,7 @@ describe('credits flow — missed-grant reconcile (MON-2, WAL-5)', () => {
     const balanceAfterFirst = balanceOf('u1')!.monthlyRemainingCents;
     const result = await reconcileMissedGrants({ priceTier: PRICE_TIER }); // nothing left to sweep
 
-    expect(result).toEqual({ reconciled: 0, stillMissing: 0, failed: 0 });
+    expect(result).toEqual({ reconciled: 0, stillMissing: 0, indeterminate: 0, failed: 0 });
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(balanceAfterFirst);
     expect(ledgerOf('u1').filter((r) => r.entryType === 'monthly_grant')).toHaveLength(1);
   });
@@ -681,7 +682,7 @@ describe('credits flow — missed-grant reconcile (MON-2, WAL-5)', () => {
 
     const result = await reconcileMissedGrants({ priceTier: PRICE_TIER });
 
-    expect(result).toEqual({ reconciled: 0, stillMissing: 0, failed: 0 });
+    expect(result).toEqual({ reconciled: 0, stillMissing: 0, indeterminate: 0, failed: 0 });
     expect(ledgerOf('u1').filter((r) => r.entryType === 'missed_grant')).toHaveLength(1);
     H.isBillingEnabled.mockReturnValue(true);
   });
@@ -695,7 +696,7 @@ describe('credits flow — missed-grant reconcile review fixes (#2645 threads)',
 
     const result = await reconcileMissedGrants({ priceTier: PRICE_TIER });
 
-    expect(result).toEqual({ reconciled: 1, stillMissing: 0, failed: 0 });
+    expect(result).toEqual({ reconciled: 1, stillMissing: 0, indeterminate: 0, failed: 0 });
     expect(store.users.find((r) => r.id === 'u1')!.subscriptionTier).toBe('free'); // cache untouched, not consulted
     expect(ledgerOf('u1').find((r) => r.stripeRef === 'in_missed')).toMatchObject({
       entryType: 'monthly_grant',
@@ -712,22 +713,26 @@ describe('credits flow — missed-grant reconcile review fixes (#2645 threads)',
 
     const result = await reconcileMissedGrants({ priceTier: PRICE_TIER });
 
-    expect(result).toEqual({ reconciled: 0, stillMissing: 1, failed: 0 });
+    expect(result).toEqual({ reconciled: 0, stillMissing: 1, indeterminate: 0, failed: 0 });
     expect(ledgerOf('u1').filter((r) => r.entryType === 'missed_grant')).toHaveLength(1);
     expect(balanceOf('u1')).toBeUndefined();
   });
 
-  it('MON-2 missed grant: an indeterminate derivation (entitled row on an unmapped price) is left for a later sweep, never granted from a lower bound', async () => {
+  it('MON-2 missed grant: an indeterminate derivation (entitled row on an unmapped price, amount not a legacy price) is left for a human — counted as indeterminate and warned, never granted from a lower bound', async () => {
     seedUser('u1', 'cus_1', 'free');
-    await applyStripeFunding(invoicePaid('in_missed', 'cus_1', PERIOD_START, PERIOD_END, 1500));
     seedPricedSubscription('u1', 'price_pro');
     seedPricedSubscription('u1', 'price_legacy_unmapped');
+    seedMissedGrantRow('led_indet', 'u1', 1234); // e.g. a discounted/taxed total — matches no legacy amount
 
     const result = await reconcileMissedGrants({ priceTier: PRICE_TIER });
 
-    expect(result).toEqual({ reconciled: 0, stillMissing: 1, failed: 0 });
-    expect(ledgerOf('u1').filter((r) => r.entryType === 'missed_grant')).toHaveLength(1);
+    expect(result).toEqual({ reconciled: 0, stillMissing: 0, indeterminate: 1, failed: 0 });
+    expect(store.creditLedger.find((r) => r.id === 'led_indet')!.entryType).toBe('missed_grant');
     expect(balanceOf('u1')).toBeUndefined();
+    expect(H.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('indeterminate'),
+      expect.objectContaining({ ledgerId: 'led_indet', userId: 'u1' }),
+    );
   });
 
   it('MON-2 missed grant: a legacy subscription on an unmapped price id resolves through the invoice amount (the webhook\'s legacy fallback), so it is not stuck indeterminate forever', async () => {
@@ -737,7 +742,7 @@ describe('credits flow — missed-grant reconcile review fixes (#2645 threads)',
 
     const result = await reconcileMissedGrants({ priceTier: PRICE_TIER });
 
-    expect(result).toEqual({ reconciled: 1, stillMissing: 0, failed: 0 });
+    expect(result).toEqual({ reconciled: 1, stillMissing: 0, indeterminate: 0, failed: 0 });
     expect(store.creditLedger.find((r) => r.id === 'led_legacy')).toMatchObject({
       entryType: 'monthly_grant',
       amountCents: allowanceCentsForPaidCents(2999, 'pro'),
@@ -780,7 +785,7 @@ describe('credits flow — missed-grant reconcile review fixes (#2645 threads)',
     try {
       const result = await reconcileMissedGrants({ priceTier: PRICE_TIER });
 
-      expect(result).toEqual({ reconciled: 1, stillMissing: 0, failed: 1 });
+      expect(result).toEqual({ reconciled: 1, stillMissing: 0, indeterminate: 0, failed: 1 });
       expect(store.creditLedger.find((r) => r.id === 'led_m1')!.entryType).toBe('missed_grant');
       expect(balanceOf('u1')).toBeUndefined();
       expect(balanceOf('u2')!.monthlyRemainingCents).toBe(allowanceCentsForPaidCents(1500, 'pro'));
@@ -812,7 +817,7 @@ describe('credits flow — missed-grant reconcile review fixes (#2645 threads)',
     try {
       const result = await reconcileMissedGrants({ priceTier: PRICE_TIER });
 
-      expect(result).toEqual({ reconciled: 0, stillMissing: 0, failed: 2 });
+      expect(result).toEqual({ reconciled: 0, stillMissing: 0, indeterminate: 0, failed: 2 });
       expect(store.creditLedger.filter((r) => r.entryType === 'missed_grant')).toHaveLength(2);
       expect(balanceOf('u1')).toBeUndefined();
       expect(H.logger.error).toHaveBeenCalledWith(

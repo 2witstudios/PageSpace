@@ -37,6 +37,7 @@ export async function GET(request: Request) {
       ...result,
       missedGrantsReconciled: missedGrants.reconciled,
       missedGrantsStillMissing: missedGrants.stillMissing,
+      missedGrantsIndeterminate: missedGrants.indeterminate,
       missedGrantsFailed: missedGrants.failed,
     };
 
@@ -49,7 +50,7 @@ export async function GET(request: Request) {
     }
 
     console.log(
-      `[Cron] Credit reconcile: retried ${result.retried}, orphans ${result.orphans}, expiredHolds ${result.expiredHolds}, missedGrantsReconciled ${missedGrants.reconciled}, missedGrantsStillMissing ${missedGrants.stillMissing}, missedGrantsFailed ${missedGrants.failed}`,
+      `[Cron] Credit reconcile: retried ${result.retried}, orphans ${result.orphans}, expiredHolds ${result.expiredHolds}, missedGrantsReconciled ${missedGrants.reconciled}, missedGrantsStillMissing ${missedGrants.stillMissing}, missedGrantsIndeterminate ${missedGrants.indeterminate}, missedGrantsFailed ${missedGrants.failed}`,
     );
 
     audit({
@@ -62,6 +63,7 @@ export async function GET(request: Request) {
         expiredHolds: result.expiredHolds,
         missedGrantsReconciled: missedGrants.reconciled,
         missedGrantsStillMissing: missedGrants.stillMissing,
+        missedGrantsIndeterminate: missedGrants.indeterminate,
         missedGrantsFailed: missedGrants.failed,
       },
     });
