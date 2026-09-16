@@ -3,9 +3,13 @@ import { createHash } from 'node:crypto';
 import type { AccountId, AccountOwnerRef, CredentialVersion, PolicyVersion, TenantId } from '@pagespace/db/schema/agent-accounts';
 import type { CanonicalOrigin } from '../../canonical-request';
 import type { HashBytes } from '../../grant';
-import type { PlaneBindings, PolicyDigest, StoredSecretFacts, VerifiedGrant } from '../../store/store-adapter';
+import type { StoreIdentity, PlaneBindings, PolicyDigest, StoredSecretFacts, VerifiedGrant } from '../../store/store-adapter';
 import { digestBindings } from '../../store/digest-bindings';
 import { decideResolve } from '../../store/decide-resolve';
+
+/** `decideResolve` with the caller's identity on the grant's own channel (G1c R8); a case that varies the identity passes one. */
+const resolveWith = (input: Omit<Parameters<typeof decideResolve>[0], 'identity'> & { readonly identity?: StoreIdentity }) =>
+  decideResolve({ identity: { tenantId: input.ref.tenantId, identityId: 'tenant-identity', channel: input.grant.aud, blastRadius: 'tenant' }, ...input });
 import { decideResolveCaller } from '../../store/decide-resolve-caller';
 
 // Threat model A8, Λ8 (ASI03). Revocation ends live use.
@@ -38,12 +42,12 @@ function grant(overrides: Partial<VerifiedGrant> = {}): VerifiedGrant {
 }
 
 function stored(overrides: Partial<StoredSecretFacts> = {}): StoredSecretFacts {
-  return { kind: 'api_key', currentVersion: 4 as CredentialVersion, previousVersion: 3 as CredentialVersion, rotatedAt: NOW - 1_000, revokedAt: null, bindings: BINDINGS, ...overrides };
+  return { kind: 'api_key', currentVersion: 4 as CredentialVersion, previousVersion: 3 as CredentialVersion, rotatedAt: NOW - 1_000, revokedAt: null, bindings: BINDINGS, pendingWrite: null, ...overrides };
 }
 
 describe('adversarial: mid-session-revocation', () => {
   it('given revoke during an in-flight grant, should refuse the next resolve with revoked regardless of version', () => {
-    const actual = decideResolve({ grant: grant(), ref: REF, stored: stored({ revokedAt: NOW - 500 }), now: NOW, rotationGraceMs: 300_000, hash });
+    const actual = resolveWith({ grant: grant(), ref: REF, stored: stored({ revokedAt: NOW - 500 }), now: NOW, rotationGraceMs: 300_000, hash });
     expect(actual).toEqual({ ok: false, reason: 'revoked' });
   });
 

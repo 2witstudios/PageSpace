@@ -29,6 +29,9 @@ const SCOPE: PlaneScope = {
   resourceRestrictions: { github: ['org/repo-a'] },
   boundAgentPageIds: [page('page_b'), page('page_a')],
   allowedOrigins: [origin('https://b.example'), origin('https://a.example')],
+  auxiliaryOrigins: [origin('https://login.b.example'), origin('https://login.a.example')],
+  sessionHttpEnabled: false,
+  providerSlug: 'github',
 };
 
 describe('digestPlaneScope', () => {
@@ -54,7 +57,12 @@ describe('digestPlaneScope', () => {
   });
 
   it('given the injected hash, should be that hash over canonicalJson of the scope with its id and origin lists sorted — the bytes the authority derives independently', () => {
-    const sortedScope = { ...SCOPE, boundAgentPageIds: ['page_a', 'page_b'], allowedOrigins: ['https://a.example', 'https://b.example'] };
+    const sortedScope = {
+      ...SCOPE,
+      boundAgentPageIds: ['page_a', 'page_b'],
+      allowedOrigins: ['https://a.example', 'https://b.example'],
+      auxiliaryOrigins: ['https://login.a.example', 'https://login.b.example'],
+    };
     const actual = digestPlaneScope({ scope: SCOPE, hash: sha3 });
     const expected = sha3(new TextEncoder().encode(canonicalJson(sortedScope)));
     expect(actual).toEqual(expected);
@@ -66,5 +74,25 @@ describe('digestPlaneScope', () => {
     const actual = boundAgentPageIds;
     const expected = ['page_b', 'page_a'];
     expect(actual).toEqual(expected);
+  });
+});
+
+describe('digestPlaneScope — G1c R1/R7', () => {
+  it('given auxiliaryOrigins in a different order, should return the same PolicyDigest', () => {
+    const actual = digestPlaneScope({ scope: { ...SCOPE, auxiliaryOrigins: [...SCOPE.auxiliaryOrigins].reverse() }, hash: sha3 });
+    const expected = digestPlaneScope({ scope: SCOPE, hash: sha3 });
+    expect(actual).toEqual(expected);
+  });
+
+  it('given sessionHttpEnabled turned on, one more auxiliary origin, or another providerSlug, should return a different PolicyDigest for each', () => {
+    const widenings: readonly PlaneScope[] = [
+      { ...SCOPE, sessionHttpEnabled: true },
+      { ...SCOPE, auxiliaryOrigins: [...SCOPE.auxiliaryOrigins, origin('https://login.c.example')] },
+      { ...SCOPE, providerSlug: 'github-enterprise' },
+      { ...SCOPE, providerSlug: null },
+    ];
+    const base = digestPlaneScope({ scope: SCOPE, hash: sha3 });
+    const actual = widenings.map((scope) => digestPlaneScope({ scope, hash: sha3 }) === base);
+    expect(actual).toEqual([false, false, false, false]);
   });
 });

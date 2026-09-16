@@ -3,9 +3,13 @@ import { createHash } from 'node:crypto';
 import type { AccountId, AccountOwnerRef, CredentialVersion, PolicyVersion, TenantId } from '@pagespace/db/schema/agent-accounts';
 import type { CanonicalOrigin } from '../../canonical-request';
 import type { HashBytes } from '../../grant';
-import type { PlaneBindings, PolicyDigest, StoredSecretFacts, VerifiedGrant } from '../../store/store-adapter';
+import type { StoreIdentity, PlaneBindings, PolicyDigest, StoredSecretFacts, VerifiedGrant } from '../../store/store-adapter';
 import { digestBindings } from '../../store/digest-bindings';
 import { decideResolve } from '../../store/decide-resolve';
+
+/** `decideResolve` with the caller's identity on the grant's own channel (G1c R8); a case that varies the identity passes one. */
+const resolveWith = (input: Omit<Parameters<typeof decideResolve>[0], 'identity'> & { readonly identity?: StoreIdentity }) =>
+  decideResolve({ identity: { tenantId: input.ref.tenantId, identityId: 'tenant-identity', channel: input.grant.aud, blastRadius: 'tenant' }, ...input });
 
 // Threat model A9 (ASI03/ASI10). A main-DB writer who reassigns owner/origins/approval rows
 // must not broaden authority. G1b-store owns the plane-bindings-at-resolve rows below (no
@@ -32,6 +36,7 @@ function grantOverBindings(bindings: PlaneBindings, overrides: Partial<VerifiedG
     tenantId: REF.tenantId,
     accountKind: REF.kind,
     credentialVersion: 4 as CredentialVersion,
+    policyVersion: bindings.policyVersion,
     bindingDigest: digestBindings({ bindings, hash }),
     sessionHttp: false,
     ...overrides,
@@ -39,7 +44,7 @@ function grantOverBindings(bindings: PlaneBindings, overrides: Partial<VerifiedG
 }
 
 function stored(overrides: Partial<StoredSecretFacts> = {}): StoredSecretFacts {
-  return { kind: 'api_key', currentVersion: 4 as CredentialVersion, previousVersion: 3 as CredentialVersion, rotatedAt: NOW - 1_000, revokedAt: null, bindings: BINDINGS, ...overrides };
+  return { kind: 'api_key', currentVersion: 4 as CredentialVersion, previousVersion: 3 as CredentialVersion, rotatedAt: NOW - 1_000, revokedAt: null, bindings: BINDINGS, pendingWrite: null, ...overrides };
 }
 
 describe('adversarial: owner-origin-tampering', () => {
@@ -49,24 +54,24 @@ describe('adversarial: owner-origin-tampering', () => {
     // direction the tamper runs. Modelled here as the attacker's grant vs. the honest stored row.
     const tamperedBindings: PlaneBindings = { ...BINDINGS, ownerRef: { kind: 'user', userId: 'attacker' } };
     const grantSignedOverTamperedRow = grantOverBindings(tamperedBindings);
-    const actual = decideResolve({ grant: grantSignedOverTamperedRow, ref: REF, stored: stored({ bindings: BINDINGS }), now: NOW, rotationGraceMs: 300_000, hash });
+    const actual = resolveWith({ grant: grantSignedOverTamperedRow, ref: REF, stored: stored({ bindings: BINDINGS }), now: NOW, rotationGraceMs: 300_000, hash });
     expect(actual).toEqual({ ok: false, reason: 'binding_mismatch' });
   });
 
   it('given allowedOrigins widened in the main DB without step-up, should return binding_mismatch at resolve (no main-DB fact consulted by the plane)', () => {
     const honestGrant = grantOverBindings(BINDINGS);
     const widenedStoredBindings: PlaneBindings = { ...BINDINGS, allowedOrigins: [...BINDINGS.allowedOrigins, 'https://attacker.example' as CanonicalOrigin] };
-    const actual = decideResolve({ grant: honestGrant, ref: REF, stored: stored({ bindings: widenedStoredBindings }), now: NOW, rotationGraceMs: 300_000, hash });
+    const actual = resolveWith({ grant: honestGrant, ref: REF, stored: stored({ bindings: widenedStoredBindings }), now: NOW, rotationGraceMs: 300_000, hash });
     expect(actual).toEqual({ ok: false, reason: 'binding_mismatch' });
   });
 
   it.todo('given approval row outcome flipped to always in the DB, should still refuse irreversible/privilege classes (class_never_always) — I/O row, owned by G1a (approval.ts / decide-approval.ts), not the store');
 
-  it('given policyVersion bumped by an owner change, should refuse every outstanding grant (the old grant\'s bindingDigest was computed over the old policyVersion, so it now mismatches the stored row)', () => {
+  it('given policyVersion bumped by an owner change, should refuse every outstanding grant as bindings_stale (signed under an older epoch than the plane holds; G1c H2)', () => {
     const grantOverOldPolicy = grantOverBindings(BINDINGS);
     const bumpedPolicyBindings: PlaneBindings = { ...BINDINGS, policyVersion: 2 as PolicyVersion };
-    const actual = decideResolve({ grant: grantOverOldPolicy, ref: REF, stored: stored({ bindings: bumpedPolicyBindings }), now: NOW, rotationGraceMs: 300_000, hash });
-    expect(actual).toEqual({ ok: false, reason: 'binding_mismatch' });
+    const actual = resolveWith({ grant: grantOverOldPolicy, ref: REF, stored: stored({ bindings: bumpedPolicyBindings }), now: NOW, rotationGraceMs: 300_000, hash });
+    expect(actual).toEqual({ ok: false, reason: 'bindings_stale' });
   });
 
   it.todo('given approvalPolicy.scope.resources widened in the main DB with policyVersion left unchanged, should return binding_mismatch at resolve (policyDigest differs) [G1a review H1] — I/O row, owned by G1b-store (plane bindings at resolve)');

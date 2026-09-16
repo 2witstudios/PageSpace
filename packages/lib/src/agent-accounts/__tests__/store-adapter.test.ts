@@ -5,7 +5,7 @@ import path from 'node:path';
 import type { HashBytes } from '../grant';
 import type { AccountId, AccountOwnerRef, CredentialVersion, PolicyVersion, TenantId } from '@pagespace/db/schema/agent-accounts';
 import type { CanonicalOrigin } from '../canonical-request';
-import type { PlaneBindings, PolicyDigest, StoredSecretFacts, VerifiedGrant } from '../store/store-adapter';
+import type { StoreIdentity, PlaneBindings, PolicyDigest, StoredSecretFacts, VerifiedGrant } from '../store/store-adapter';
 import { deriveTenantId } from '../store/derive-tenant-id';
 import { mapTenantProject } from '../store/map-tenant-project';
 import { planStoreIdentity } from '../store/plan-store-identity';
@@ -15,6 +15,10 @@ import { decidePlaneBinding } from '../store/decide-plane-binding';
 import { decideResolveCaller } from '../store/decide-resolve-caller';
 import { decideCas } from '../store/decide-cas';
 import { decideResolve } from '../store/decide-resolve';
+
+/** `decideResolve` with the caller's identity on the grant's own channel (G1c R8); a case that varies the identity passes one. */
+const resolveWith = (input: Omit<Parameters<typeof decideResolve>[0], 'identity'> & { readonly identity?: StoreIdentity }) =>
+  decideResolve({ identity: { tenantId: input.ref.tenantId, identityId: 'tenant-identity', channel: input.grant.aud, blastRadius: 'tenant' }, ...input });
 
 // ADR 0005 §8 + §10 — G1b-store turns these it.todos into real assertions.
 // Full requirement-by-requirement coverage lives beside each module in
@@ -81,7 +85,7 @@ describe('decideResolve (ADR 0005 F1-F5, F10; §10.3-5)', () => {
   }
 
   function stored(overrides: Partial<StoredSecretFacts> = {}): StoredSecretFacts {
-    return { kind: 'api_key', currentVersion: 4 as CredentialVersion, previousVersion: 3 as CredentialVersion, rotatedAt: NOW - 1_000, revokedAt: null, bindings: BINDINGS, ...overrides };
+    return { kind: 'api_key', currentVersion: 4 as CredentialVersion, previousVersion: 3 as CredentialVersion, rotatedAt: NOW - 1_000, revokedAt: null, bindings: BINDINGS, pendingWrite: null, ...overrides };
   }
 
   it('given kind password and channel http-executor, should return kind_not_resolvable [§10.3]', () => {
@@ -99,12 +103,12 @@ describe('decideResolve (ADR 0005 F1-F5, F10; §10.3-5)', () => {
   });
 
   it('given version one behind current inside rotationGraceMs, should return ok for a grant that named the old version [§10.4]', () => {
-    const actual = decideResolve({ grant: grant({ credentialVersion: 3 as CredentialVersion, iat: NOW - 2_000 }), ref: REF, stored: stored(), now: NOW, rotationGraceMs: 300_000, hash });
+    const actual = resolveWith({ grant: grant({ credentialVersion: 3 as CredentialVersion, iat: NOW - 2_000 }), ref: REF, stored: stored(), now: NOW, rotationGraceMs: 300_000, hash });
     expect(actual).toEqual({ ok: true });
   });
 
   it('given version one behind current outside rotationGraceMs, should return version_mismatch [§10.4]', () => {
-    const actual = decideResolve({
+    const actual = resolveWith({
       grant: grant({ credentialVersion: 3 as CredentialVersion, iat: NOW - 2_000 }),
       ref: REF,
       stored: stored({ rotatedAt: NOW - 300_001 }),
@@ -115,13 +119,13 @@ describe('decideResolve (ADR 0005 F1-F5, F10; §10.3-5)', () => {
     expect(actual).toEqual({ ok: false, reason: 'version_mismatch' });
   });
 
-  it('given stored bindings whose policyVersion differs from those the grant bindingDigest was computed over, should return binding_mismatch [§10.5]', () => {
-    const actual = decideResolve({ grant: grant(), ref: REF, stored: stored({ bindings: { ...BINDINGS, policyVersion: 2 as PolicyVersion } }), now: NOW, rotationGraceMs: 300_000, hash });
-    expect(actual).toEqual({ ok: false, reason: 'binding_mismatch' });
+  it('given stored bindings at a newer policyVersion than the grant was signed under, should return bindings_stale, not binding_mismatch [§10.5, §10.30; G1c H2]', () => {
+    const actual = resolveWith({ grant: grant(), ref: REF, stored: stored({ bindings: { ...BINDINGS, policyVersion: 2 as PolicyVersion } }), now: NOW, rotationGraceMs: 300_000, hash });
+    expect(actual).toEqual({ ok: false, reason: 'bindings_stale' });
   });
 
   it('given stored bindings with a changed ownerRef or allowedOrigins versus the grant bindingDigest, should return binding_mismatch [§10.5]', () => {
-    const actual = decideResolve({ grant: grant(), ref: REF, stored: stored({ bindings: { ...BINDINGS, ownerRef: { kind: 'user', userId: 'attacker' } } }), now: NOW, rotationGraceMs: 300_000, hash });
+    const actual = resolveWith({ grant: grant(), ref: REF, stored: stored({ bindings: { ...BINDINGS, ownerRef: { kind: 'user', userId: 'attacker' } } }), now: NOW, rotationGraceMs: 300_000, hash });
     expect(actual).toEqual({ ok: false, reason: 'binding_mismatch' });
   });
 
@@ -151,15 +155,15 @@ describe('decideResolve (ADR 0005 F1-F5, F10; §10.3-5)', () => {
   });
 
   it('given stored null (wrong-tenant identity or absent), should return not_found [F5]', () => {
-    expect(decideResolve({ grant: grant(), ref: REF, stored: null, now: NOW, rotationGraceMs: 300_000, hash })).toEqual({ ok: false, reason: 'not_found' });
+    expect(resolveWith({ grant: grant(), ref: REF, stored: null, now: NOW, rotationGraceMs: 300_000, hash })).toEqual({ ok: false, reason: 'not_found' });
   });
 
   it('given revokedAt set, should return revoked regardless of version [F10]', () => {
-    expect(decideResolve({ grant: grant(), ref: REF, stored: stored({ revokedAt: NOW - 1 }), now: NOW, rotationGraceMs: 300_000, hash })).toEqual({ ok: false, reason: 'revoked' });
+    expect(resolveWith({ grant: grant(), ref: REF, stored: stored({ revokedAt: NOW - 1 }), now: NOW, rotationGraceMs: 300_000, hash })).toEqual({ ok: false, reason: 'revoked' });
   });
 
   it('given version one behind current inside rotationGraceMs but grant.iat >= rotatedAt, should return version_mismatch [§10.4; G1a review M7]', () => {
-    const actual = decideResolve({ grant: grant({ credentialVersion: 3 as CredentialVersion, iat: NOW - 1_000 }), ref: REF, stored: stored({ rotatedAt: NOW - 1_000 }), now: NOW, rotationGraceMs: 300_000, hash });
+    const actual = resolveWith({ grant: grant({ credentialVersion: 3 as CredentialVersion, iat: NOW - 1_000 }), ref: REF, stored: stored({ rotatedAt: NOW - 1_000 }), now: NOW, rotationGraceMs: 300_000, hash });
     expect(actual).toEqual({ ok: false, reason: 'version_mismatch' });
   });
   it.todo('given revoke after a rotation, should clear previousVersion and rotatedAt so the old version returns revoked, never grace [§2.2; G1a review M7] — adapter I/O row, asserted in store/__tests__/store-adapter-infisical.integration.test.ts');
