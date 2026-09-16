@@ -34,7 +34,8 @@ describe('verifyGrant deny order (ADR 0004 §6 F1→F17)', () => {
   it.todo('given headers reordered, host uppercased, or :443 omitted, should verify ok (digest identical) [0004 §8.8]');
   it.todo('given operation differing from the presented request operation, should return digest_mismatch [0004 F8]');
   it.todo('given sandbox.generation one behind the presenter binding, should return generation_mismatch (restored-sandbox case) [0004 §8.9]');
-  it.todo('given expected.sandbox null (binding unavailable), should return generation_mismatch, never ok [0006 §8.3]');
+  it.todo('given a grant naming a sandbox and expected.sandbox null (binding unavailable), should return binding_unavailable, never ok [0006 §8.3; 0004 §8.33; G1a review M6]');
+  it.todo('given grant.sandbox.spriteName differing from expected.sandbox.spriteName with equal instanceId and generation, should return generation_mismatch [0004 §8.33]');
   it.todo('given exp - iat = 15 min + 1 ms, should return ttl_too_long [0004 §8.10]');
   it.todo('given now < nbf, should return not_yet_valid [0004 §8.10]');
   it.todo('given iat > now + 30 s, should return clock_skew [0004 F10]');

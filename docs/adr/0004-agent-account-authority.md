@@ -49,7 +49,7 @@ Every field is **required**. Absence is encoded as `null` only where the field's
 | `agentPageId` | `AgentPageId \| null` | the agent page; `null` for the global assistant | the account's binding |
 | `conversationId` | `ConversationId` | the thread | — |
 | `runId` | `RunId` | the one dispatched turn / workflow run | the presenter's current run |
-| `sandbox` | `{ instanceId: SandboxInstanceId; generation: SandboxGeneration } \| null` | the sandbox a relay op executes against; `null` for HTTP/browser | `getSprite().id` + the provisioner's generation (ADR 0006) |
+| `sandbox` | `{ spriteName: SpriteName; instanceId: SandboxInstanceId; generation: SandboxGeneration } \| null` | the sandbox a relay op executes against; `null` for HTTP/browser | `getSprite().id` + the provisioner's generation (ADR 0006) |
 | `callerCeiling` | `{ allowedDriveIds: AgentDispatchPayload['allowedDriveIds']; originatingMcpTokenId: string \| null }` | the inherited credential ceiling | `isDriveWithinCredentialScope(allowedDriveIds, account.driveId)` |
 | `accountId` | `AccountId` | the account | the row |
 | `credentialVersion` | `CredentialVersion` | the store version the executor may resolve | `resolve` refuses any other version |
@@ -193,7 +193,7 @@ Provider tool catalogues (`integrations/providers/*.ts`) are reclassified to thi
 | F6 | `policyVersion` ≠ current | `policy_epoch` |
 | F7 | `delegationId` null while `human.sessionId` null; delegation expired/revoked; delegation fact whose `delegationId`, `accountId`, `agentPageId` or `delegatedBy` ≠ the grant's `delegationId`, `accountId`, `agentPageId` or `human.userId` | `no_delegation` |
 | F8 | `operation` ≠ the presented request's operation; `requestDigest` ≠ recomputed digest | `digest_mismatch` (constant-time compare) |
-| F9 | `sandbox` present and `(instanceId, generation)` ≠ the presenter's current binding | `generation_mismatch` |
+| F9 | `sandbox` present and `(spriteName, instanceId, generation)` ≠ the presenter's current observation `expected.sandbox`; or `sandbox` present and `expected.sandbox` null (unobservable) | `generation_mismatch` / `binding_unavailable` (never `ok`; G1a review M6 — ADR 0006 already named the reason, the union lacked it, and `spriteName` was signed but never compared) |
 | F10 | `exp - iat > 15 min`; `iat > now + skew`; `now < nbf`; `now > exp` | `ttl_too_long` / `clock_skew` / `not_yet_valid` / `expired` |
 | F11 | Signature invalid, undecodable, or under any key but the pinned issuer key | `bad_signature` |
 | F12 | Nonce already consumed, or the replay store is unreachable | `replayed` / `replay_store_unavailable` — never "assume fresh" |
@@ -295,6 +295,7 @@ Adapters (I/O, G1b): `grant-repository.ts` (nonce consume, approvals, delegation
 30. Given `CanonicalRequestInput`, the type has no `operation` and no `declaredHeaders` key (a type-level test). Given a registry entry `{ providerSlug: 'github', method: 'PUT', pathTemplate: '/repos/{owner}/{repo}/pulls/{number}/merge', operation: { class: 'irreversible', name: 'merge_pr' } }` and a request to `PUT /repos/a/b/pulls/7/merge`, `canonical.operation` is `merge_pr`/`irreversible` whatever the tool layer intended; a `DELETE` to a path no entry matches is `unknown`/`generic_request`, never `read`; the same request with `providerSlug: null` does not match the github entry (G1a review M1).
 31. Given a concrete approval fact consumed by this `grantId` for this digest but whose `accountId` names another account, `approval_mismatch`; whose `expiresAt` is one ms before the grant's `iat`, `approval_mismatch`; whose `expiresAt` equals `iat` and whose other fields match, the approval check passes (G1a review M3).
 32. Given an account whose `sessionHttpEnabled` flips from `true` to `false` (or back), its `policyVersion` is bumped and written to the plane through `rebind`; an outstanding grant with `sessionHttp: true` issued before the flip is `policy_epoch` at the verifier and `binding_mismatch` at the plane (G1a review M4).
+33. Given a grant whose `sandbox.spriteName` differs from `expected.sandbox.spriteName` with equal `instanceId` and `generation`, `generation_mismatch`; given a grant naming a sandbox and `expected.sandbox = null`, `binding_unavailable` (a member of `GrantDenyReason`), never `ok` (G1a review M6).
 
 ## 9. Consequences
 

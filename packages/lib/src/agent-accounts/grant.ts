@@ -187,6 +187,8 @@ export type GrantDenyReason =
   | 'no_delegation'
   | 'digest_mismatch'
   | 'generation_mismatch'
+  /** The grant names a sandbox but the presenter could not observe its current binding (`getSprite` unreachable) — never `ok` (ADR 0006 F5). */
+  | 'binding_unavailable'
   | 'ttl_too_long'
   | 'clock_skew'
   | 'not_yet_valid'
@@ -291,8 +293,14 @@ export type ExpectedBinding = {
   readonly currentCredentialVersion: CredentialVersion;
   readonly currentPolicyVersion: PolicyVersion;
   readonly delegation: DelegationFact;
-  /** The provisioner's current view; null when unavailable (→ `generation_mismatch`, never `ok`). */
-  readonly sandbox: { readonly instanceId: SandboxInstanceId; readonly generation: SandboxGeneration } | null;
+  /**
+   * The presenter's CURRENT observation of the sandbox — all three of
+   * `spriteName`, `instanceId`, `generation`, compared field by field with
+   * the signed `grant.sandbox` (any difference → `generation_mismatch`).
+   * null when unobservable: a grant that names a sandbox then gets
+   * `binding_unavailable`, never `ok` (ADR 0006 F5; G1a review M6).
+   */
+  readonly sandbox: SandboxBinding | null;
   /** `isDriveWithinCredentialScope(callerCeiling.allowedDriveIds, accountDriveId)`, computed by the adapter. */
   readonly ceilingAdmitsAccount: boolean;
 };
