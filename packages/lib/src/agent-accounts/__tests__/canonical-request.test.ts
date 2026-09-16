@@ -10,6 +10,8 @@ describe('canonicalizeRequest refusals (ADR 0004 F18)', () => {
   it.todo('given an authorization, cookie, host, proxy-* or x-forwarded-* header supplied by the caller, should refuse with reserved_header (never strip)');
   it.todo('given a path containing .. or a NUL after one percent-decode, should refuse with path_traversal / path_control_char');
   it.todo('given a method outside the channel closed set, should refuse with method_not_allowed');
+  it.todo('given an admitted header (accept, content-type or a declared header) whose VALUE carries CR, LF or another control character, should refuse with malformed (a name-only check lets CRLF smuggle authorization:) [0004 §8.26]');
+  it.todo('given a caller-supplied content-length that disagrees with the body bytes, should refuse with malformed [0004 §8.26]');
 });
 
 describe('canonicalizeRequest normalization', () => {
@@ -19,11 +21,16 @@ describe('canonicalizeRequest normalization', () => {
   it.todo('given only projected + declared headers, should drop every other header from the projection');
   it.todo('given an empty body, should record the SHA-256 of zero bytes, never null');
   it.todo('given a valid input, should round-trip: canonicalize ∘ canonicalize is the identity [0004 §8.13]');
+  it.todo('given a round-trip input built VERBATIM (never re-encoded by the test helper), should still be the identity [0004 §8.26]');
+  it.todo('given a query escape in lower-case hex or an escaped unreserved character, should upper-case the hex and unescape only the RFC 3986 unreserved set [0004 §8.26]');
+  it.todo('given a path segment carrying an encoded slash (%2F), should keep it encoded so it never becomes a segment boundary [0004 §8.26]');
+  it.todo('given a body with and without a correct explicit content-length, should project the same derived content-length [0004 §8.26]');
 });
 
 describe('digestRequest', () => {
   it.todo('given two inputs differing only by header order, key order, host case or :443, should produce the same digest');
   it.todo('given two inputs differing in one body byte, should produce different digests');
+  it.todo('given queries ?to=a+b vs ?to=a%2Bb, ?q=%2Fsafe vs ?q=/safe, and ?x=a%26b vs ?x=a&b, should produce different digests — the query is normalized, never decoded [0004 §8.26]');
   it.todo('given the same canonical request and operation {class,name} differing, should produce different digests (op discriminator)');
 });
 
