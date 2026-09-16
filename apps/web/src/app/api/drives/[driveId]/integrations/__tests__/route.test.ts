@@ -767,6 +767,21 @@ describe('POST /api/drives/[driveId]/integrations', () => {
       });
     }
 
+    it('given an http:// baseUrlOverride pointing at a PUBLIC host, should reject with 400 and write no row', async () => {
+      vi.mocked(encryptCredentials).mockResolvedValue({ apiKey: 'enc' });
+
+      const request = new Request('https://example.com/api/drives/d/integrations', {
+        method: 'POST',
+        body: JSON.stringify({ providerId: 'prov-api', name: 'Linear', credentials: { apiKey: 'k' }, baseUrlOverride: 'http://93.184.216.34/linear' }),
+      });
+      const response = await POST(request, createContext(MOCK_DRIVE_ID));
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.details.baseUrlOverride[0]).toMatch(/HTTPS/i);
+      expect(createConnection).not.toHaveBeenCalled();
+    });
+
     it('should pass null baseUrlOverride when not provided', async () => {
       vi.mocked(encryptCredentials).mockResolvedValue({ key: 'enc' });
       // @ts-expect-error - partial mock data

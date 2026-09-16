@@ -322,6 +322,23 @@ describe('executeHttpRequest target guard', () => {
     expect(result.retries).toBe(0);
   });
 
+  it('given an http:// target on a public host, should refuse before any request and never fall back to http (default validator)', async () => {
+    const { promises: dns } = await import('dns');
+    mockFetch.mockResolvedValue(createMockResponse(200, { ok: true }));
+
+    const result = await executeHttpRequest(
+      { url: 'http://93.184.216.34/hook', method: 'GET', headers: { Authorization: 'Bearer s3cret' } },
+      { maxRetries: 0 },
+      mockFetch as unknown as PinnedFetch
+    );
+
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(dns.lookup).not.toHaveBeenCalled();
+    expect(result.success).toBe(false);
+    expect(result.errorType).toBe('blocked_target');
+    expect(result.error).toMatch(/HTTPS/i);
+  });
+
   it('given a stored override resolving to a private address, should refuse before any request (default validator)', async () => {
     const { promises: dns } = await import('dns');
     vi.mocked(dns.lookup).mockResolvedValueOnce([{ address: '10.9.8.7', family: 4 }] as never);

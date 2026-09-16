@@ -16,7 +16,7 @@ vi.mock('dns', () => ({
 }));
 
 import { promises as dns } from 'dns';
-import { validateIntegrationTargetUrl, type HostnameResolver } from './validate-base-url';
+import { validateIntegrationTargetUrl, HTTPS_REQUIRED_MESSAGE, type HostnameResolver } from './validate-base-url';
 
 const PUBLIC = '93.184.216.34';
 const publicResolver: HostnameResolver = async () => [PUBLIC];
@@ -33,30 +33,30 @@ const REJECTED = { ok: false, reason: expect.stringMatching(/blocked|not allowed
 describe('validateIntegrationTargetUrl', () => {
   describe('IP literals (no DNS needed)', () => {
     const blockedLiterals = [
-      'http://127.0.0.1:8080/hook',
-      'http://127.1/hook',
-      'http://2130706433/hook',
-      'http://0.0.0.0/hook',
-      'http://10.0.0.5/hook',
-      'http://172.16.0.1/hook',
-      'http://192.168.1.1/hook',
-      'http://169.254.169.254/latest/meta-data/',
-      'http://100.64.0.1/hook', // CGNAT / Tailscale
-      'http://100.127.255.254/hook',
-      'http://224.0.0.1/hook', // multicast
-      'http://198.18.0.1/hook', // benchmarking
-      'http://192.0.2.1/hook', // TEST-NET-1
-      'http://255.255.255.255/hook',
-      'http://240.0.0.1/hook',
-      'http://[::1]/hook',
-      'http://[::]/hook',
-      'http://[::ffff:127.0.0.1]/hook',
-      'http://[::ffff:100.64.0.1]/hook',
-      'http://[64:ff9b::a00:1]/hook', // NAT64 embedding 10.0.0.1
-      'http://[fdaa:0:1:a7b:0:1:2:3]/hook', // Fly 6PN (ULA)
-      'http://[fc00::1]/hook',
-      'http://[fe80::1]/hook',
-      'http://[ff02::1]/hook', // multicast
+      'https://127.0.0.1:8080/hook',
+      'https://127.1/hook',
+      'https://2130706433/hook',
+      'https://0.0.0.0/hook',
+      'https://10.0.0.5/hook',
+      'https://172.16.0.1/hook',
+      'https://192.168.1.1/hook',
+      'https://169.254.169.254/latest/meta-data/',
+      'https://100.64.0.1/hook', // CGNAT / Tailscale
+      'https://100.127.255.254/hook',
+      'https://224.0.0.1/hook', // multicast
+      'https://198.18.0.1/hook', // benchmarking
+      'https://192.0.2.1/hook', // TEST-NET-1
+      'https://255.255.255.255/hook',
+      'https://240.0.0.1/hook',
+      'https://[::1]/hook',
+      'https://[::]/hook',
+      'https://[::ffff:127.0.0.1]/hook',
+      'https://[::ffff:100.64.0.1]/hook',
+      'https://[64:ff9b::a00:1]/hook', // NAT64 embedding 10.0.0.1
+      'https://[fdaa:0:1:a7b:0:1:2:3]/hook', // Fly 6PN (ULA)
+      'https://[fc00::1]/hook',
+      'https://[fe80::1]/hook',
+      'https://[ff02::1]/hook', // multicast
     ];
 
     for (const url of blockedLiterals) {
@@ -81,12 +81,39 @@ describe('validateIntegrationTargetUrl', () => {
     });
   });
 
+  describe('protocol', () => {
+    it('given an http:// URL with a public IP literal, should reject naming HTTPS', async () => {
+      const resolve = vi.fn(publicResolver);
+      const decision = await validateIntegrationTargetUrl(`http://${PUBLIC}/api`, { resolve });
+      expect(decision).toEqual({ ok: false, reason: expect.stringMatching(/HTTPS/i) });
+      expect(resolve).not.toHaveBeenCalled();
+    });
+
+    it('given an http:// hostname that would resolve to a public address, should reject without resolving', async () => {
+      const resolve = vi.fn(publicResolver);
+      const decision = await validateIntegrationTargetUrl('http://hooks.example.com/x', { resolve });
+      expect(decision).toEqual({ ok: false, reason: expect.stringMatching(/HTTPS/i) });
+      expect(resolve).not.toHaveBeenCalled();
+    });
+
+    it('given an http:// URL, should say the refusal reason mentions cleartext credentials', async () => {
+      const decision = await validateIntegrationTargetUrl('http://hooks.example.com/x', { resolve: publicResolver });
+      expect(decision).toEqual({ ok: false, reason: HTTPS_REQUIRED_MESSAGE });
+      expect(HTTPS_REQUIRED_MESSAGE).toMatch(/cleartext/i);
+    });
+
+    it('given an https:// URL with a public target, should accept (control)', async () => {
+      const decision = await validateIntegrationTargetUrl('https://hooks.example.com/x', { resolve: publicResolver });
+      expect(decision).toEqual({ ok: true, address: PUBLIC });
+    });
+  });
+
   describe('blocked hostnames and schemes', () => {
     const blocked = [
-      'http://localhost:3000/api',
-      'http://app.localhost/api',
-      'http://metadata.google.internal/computeMetadata/v1/',
-      'http://db.internal/api',
+      'https://localhost:3000/api',
+      'https://app.localhost/api',
+      'https://metadata.google.internal/computeMetadata/v1/',
+      'https://db.internal/api',
       'file:///etc/passwd',
       'ftp://example.com/x',
       'gopher://example.com/x',

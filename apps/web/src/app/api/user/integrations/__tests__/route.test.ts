@@ -185,6 +185,19 @@ describe('POST /api/user/integrations base URL guard', () => {
     });
   }
 
+  it('given an http:// baseUrlOverride pointing at a PUBLIC host, should reject with 400 and write no row', async () => {
+    const request = new Request('http://localhost/api/user/integrations', {
+      method: 'POST',
+      body: JSON.stringify({ providerId: 'prov-api', name: 'X', credentials: { apiKey: 'k' }, baseUrlOverride: 'http://93.184.216.34/api' }),
+    });
+    const response = await POST(request);
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.details.baseUrlOverride[0]).toMatch(/HTTPS/i);
+    expect(createConnection).not.toHaveBeenCalled();
+  });
+
   it('given a public baseUrlOverride, should still create the connection', async () => {
     const request = new Request('http://localhost/api/user/integrations', {
       method: 'POST',
