@@ -18,10 +18,12 @@
  * reads the first as `a b`) and `/safe` distinct from `%2Fsafe`. Decoding the
  * query and hashing the decoded text collapsed all three into one digest —
  * the human would approve one representation and the executor could send
- * another with `digest_mismatch` never firing. The path is different on
- * purpose: it is decoded once so dot segments and `%2e%2e` are caught, then
- * re-encoded canonically, and an encoded `/` stays encoded so it can never
- * become a segment boundary.
+ * another with `digest_mismatch` never firing. The path follows the same
+ * rule: each segment is decoded once ONLY to catch dot segments, `%2e%2e`
+ * and control characters, and the digested form is the normalized raw
+ * segment, so `foo;bar` and `foo%3Bbar` (a server that strips `;` path
+ * parameters routes them differently) stay distinct and an encoded `/` can
+ * never become a segment boundary.
  *
  * Rules, in the order they are applied (`canonical-request.ts` §3.2):
  *   - channel and operation must be in their closed unions, and the
@@ -36,9 +38,9 @@
  *     is caught by one check) are REFUSED, never stripped; one trailing dot
  *     is dropped; the port is always written. A name that RESOLVES privately
  *     is admitted here — the address check belongs at connect time, per hop;
- *   - path: dot segments resolved by the parser, each segment percent-decoded
- *     ONCE, refused if a `.`/`..` part or a control character survives that
- *     decode, then re-encoded canonically;
+ *   - path: dot segments resolved by the parser; each segment percent-decoded
+ *     ONCE on a copy, refused if a `.`/`..` part or a control character
+ *     survives that decode; the segment itself is normalized as the query is;
  *   - query: split on the first `=` per pair, each half normalized as above,
  *     sorted by name with duplicates kept in input order;
  *   - headers: a caller-supplied reserved header is a refusal, not a strip;
@@ -194,7 +196,7 @@ type NormalizeOutcome = { readonly ok: true; readonly value: string } | Refusal;
  * form. Two components that normalize alike are the same octets; two that
  * differ stay different, which is what keeps the digest honest.
  */
-function normalizeQueryComponent(raw: string): NormalizeOutcome {
+function normalizeComponent(raw: string, keep: RegExp): NormalizeOutcome {
   let out = '';
   for (let index = 0; index < raw.length; index += 1) {
     const char = raw[index]!;
@@ -209,7 +211,7 @@ function normalizeQueryComponent(raw: string): NormalizeOutcome {
       continue;
     }
     if (CONTROL_CHAR_RE.test(char)) return refuse('path_control_char');
-    out += QUERY_KEEP_RE.test(char) ? char : encodeWith(char, QUERY_KEEP_RE);
+    out += keep.test(char) ? char : encodeWith(char, keep);
   }
   return { ok: true, value: out };
 }
@@ -238,11 +240,16 @@ type PathVerdict = { readonly ok: true; readonly path: string } | Refusal;
 function canonicalizePath(pathname: string): PathVerdict {
   const segments: string[] = [];
   for (const rawSegment of pathname.split('/')) {
+    // The decoded copy is for the traversal and control-character checks
+    // only; what is digested is the NORMALIZED segment, so `;` and `%3B`
+    // stay two different requests.
     const decoded = decodeOnce(rawSegment);
     if (decoded === null) return refuse('malformed');
     if (CONTROL_CHAR_RE.test(decoded)) return refuse('path_control_char');
     if (decoded.split('/').some((part) => part === '.' || part === '..')) return refuse('path_traversal');
-    segments.push(encodeWith(decoded, PATH_KEEP_RE));
+    const normalized = normalizeComponent(rawSegment, PATH_KEEP_RE);
+    if (!normalized.ok) return normalized;
+    segments.push(normalized.value);
   }
   return { ok: true, path: segments.join('/') };
 }
@@ -259,9 +266,9 @@ function canonicalizeQuery(search: string): QueryVerdict {
     // A bare flag (`?force`) and an explicit empty value (`?force=`) both
     // project as `[name, '']`: the frozen pair shape cannot hold the
     // difference, so they are one canonical request by construction.
-    const name = normalizeQueryComponent(eq === -1 ? part : part.slice(0, eq));
+    const name = normalizeComponent(eq === -1 ? part : part.slice(0, eq), QUERY_KEEP_RE);
     if (!name.ok) return name;
-    const value = normalizeQueryComponent(eq === -1 ? '' : part.slice(eq + 1));
+    const value = normalizeComponent(eq === -1 ? '' : part.slice(eq + 1), QUERY_KEEP_RE);
     if (!value.ok) return value;
     pairs.push([name.value, value.value]);
   }
