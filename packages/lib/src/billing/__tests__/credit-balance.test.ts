@@ -42,6 +42,14 @@ vi.mock('@pagespace/db/db', () => ({
   },
 }));
 
+const { mockReadGateAccount } = vi.hoisted(() => ({
+  mockReadGateAccount: vi.fn(async (): Promise<{ accountType: 'human' | 'agent'; ownerUserId: string | null }> => ({
+    accountType: 'human',
+    ownerUserId: null,
+  })),
+}));
+vi.mock('../gate-account', () => ({ readGateAccount: mockReadGateAccount }));
+
 import { getCreditBalance, readSpendableCents, resolveTier } from '../credit-balance';
 
 const future = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
@@ -365,6 +373,53 @@ describe('readSpendableCents — the routing edge lean read', () => {
   it('clamps at zero when there is no debt', async () => {
     balanceRows = funded({ monthlyRemainingCents: 0, topupRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: future });
     expect(await readSpendableCents('u1', 'pro')).toBe(0);
+  });
+});
+
+describe('agents see no starter grant (ADR 0007 Decision 9 — display and routing agree with the gate)', () => {
+  const agent = () => mockReadGateAccount.mockResolvedValue({ accountType: 'agent', ownerUserId: null });
+  /** A bare top-up row: no period stamped, so a human's starter grant would be pending. */
+  const bare = (topup: number) => [{
+    monthlyRemainingCents: 0,
+    monthlyAllowanceCents: 0,
+    topupRemainingCents: topup,
+    debtCents: 0,
+    monthlyPeriodEnd: null,
+  }];
+
+  beforeEach(() => {
+    mockReadGateAccount.mockResolvedValue({ accountType: 'human', ownerUserId: null });
+  });
+
+  it('given an agent with no balance row, should display 0 remaining, 0 allowance and 0 spendable', async () => {
+    agent();
+    const b = await getCreditBalance('agent-1', 'free');
+    expect(b.monthly).toMatchObject({ remaining: 0, allowance: 0 });
+    expect(b.spendable).toBe(0);
+    expect(await readSpendableCents('agent-1', 'free')).toBe(0);
+  });
+
+  it('given an agent with a bare top-up row, should pre-credit nothing: spendable is the top-up alone', async () => {
+    agent();
+    balanceRows = bare(1000);
+    const b = await getCreditBalance('agent-1', 'free');
+    expect(b.monthly).toMatchObject({ remaining: 0, allowance: 0 });
+    expect(b.spendable).toBe(1000);
+    expect(await readSpendableCents('agent-1', 'free')).toBe(1000);
+  });
+
+  it('given a human with a bare top-up row, should still pre-credit the pending starter grant', async () => {
+    balanceRows = bare(1000);
+    const b = await getCreditBalance('u1', 'free');
+    expect(b.spendable).toBe(1500);
+    expect(await readSpendableCents('u1', 'free')).toBe(1500);
+  });
+
+  it('given a funded row with a stamped period, should not read the account (the routing hot path stays one read)', async () => {
+    balanceRows = [{ monthlyRemainingCents: 500, monthlyAllowanceCents: 500, topupRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: future }];
+    await readSpendableCents('u1', 'free');
+    await getCreditBalance('u1', 'free');
+    expect(mockReadGateAccount).not.toHaveBeenCalled();
   });
 });
 
