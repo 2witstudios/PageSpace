@@ -49,7 +49,12 @@ export type ReservedHeader =
   | 'connection'
   | 'upgrade';
 
-/** Headers that are always projected when present, plus the operation's declared headers. */
+/**
+ * Headers projected alongside the operation's declared headers. `accept` and
+ * `content-type` when present; `content-length` ALWAYS, derived from the body
+ * bytes (a caller value that disagrees is `malformed`). A projected value
+ * carrying a control character is `malformed` (ADR 0004 §3.2).
+ */
 export type ProjectedHeader = 'accept' | 'content-type' | 'content-length';
 
 /** What the tool layer hands the authority: untrusted, before any normalization. */
@@ -72,9 +77,13 @@ export type CanonicalRequest = {
   readonly channel: ExecutorChannel;
   readonly method: MethodFor[ExecutorChannel];
   readonly origin: CanonicalOrigin;
-  /** Percent-decoded once, re-encoded canonically, dot-segments resolved. */
+  /** Dot-segments resolved, each segment percent-decoded once, re-encoded canonically; an encoded `/` stays encoded. */
   readonly path: string;
-  /** Sorted `[name, value]` pairs; duplicates kept in input order. */
+  /**
+   * Sorted `[name, value]` pairs; duplicates kept in input order. Each half is
+   * NORMALIZED, never decoded (upper-case hex, only the RFC 3986 unreserved set
+   * unescaped), so `a+b` and `a%2Bb` stay distinct digests (ADR 0004 §3.2).
+   */
   readonly query: readonly (readonly [string, string])[];
   /** Only projected + declared headers, lowercase, sorted by name. */
   readonly headers: readonly (readonly [string, string])[];
