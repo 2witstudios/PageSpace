@@ -19,9 +19,11 @@ import { pgTable, text, timestamp, index } from 'drizzle-orm/pg-core';
  * `agent-accounts.ts` (frozen at G1a, ms timestamps there); this is the
  * table. Nothing here is secret: the nonce is random, the grant id names a
  * signed grant, and both are already on the wire. Rows are ephemeral (a
- * grant lives at most 15 minutes) and are swept past `expiresAt`
- * opportunistically — a swept nonce cannot be replayed because the grant
- * that carried it has expired first (verifier deny order F10 before F12).
+ * grant lives at most 15 minutes) and are swept opportunistically once
+ * `expiresAt` is more than the verifier's clock-skew allowance behind the
+ * sweeping replica's clock — a swept nonce cannot be replayed because the
+ * grant that carried it has expired first on EVERY replica within that skew
+ * (verifier deny order F10 before F12).
  *
  * `timestamptz` on purpose: the ledger is compared against an injected UTC
  * clock and must not depend on the session time zone.
