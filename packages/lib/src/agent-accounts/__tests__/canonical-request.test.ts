@@ -173,6 +173,22 @@ describe('canonicalizeRequest refusals (ADR 0004 F18)', () => {
     expect(actual).toBe('malformed');
   });
 
+  it.each([
+    ['null', null],
+    ['undefined', undefined],
+    ['a string', 'GET https://api.github.com/'],
+    ['an array', []],
+  ])('given a whole request that is %s, should refuse with malformed rather than throw', (_label, input) => {
+    let actual: CanonicalizeRefusal | 'ok' | 'threw';
+    try {
+      const result = canonicalizeRequest(input as unknown as CanonicalRequestInput);
+      actual = result.ok ? 'ok' : result.reason;
+    } catch {
+      actual = 'threw';
+    }
+    expect(actual).toBe('malformed');
+  });
+
   it('given a URL that does not parse, should refuse with malformed', () => {
     const actual = refusal({ url: 'https://' });
     expect(actual).toBe('malformed');
