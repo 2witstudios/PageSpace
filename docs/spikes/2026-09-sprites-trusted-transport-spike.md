@@ -74,7 +74,7 @@ So the local pilot socket is a **read-only status surface scoped to this one spr
 Interfaces: `lo`, and `spr0` at `10.0.0.1/24` with gateway `10.0.0.2` (also the DNS resolver). Probes from the guest:
 
 - `169.254.169.254/`, `169.254.169.254/latest/meta-data/`, `http://[fdaa::3]/` → **timeout**; `_api.internal` → timeout; `api.internal` → NXDOMAIN. **No cloud/Fly metadata endpoint is reachable.**
-- `10.0.0.1` TCP ports 22/80/443/8080/9000 → **all Connection refused.** *Corrected 2026-09-16 (PR #2633 round 4):* this is the guest's **own** `spr0` address, the one the org-token proxy tunnel targets (`10.0.0.1:9911`, §3.4), not the gateway. The probe shows only that nothing in the guest listens on those ports. The gateway `10.0.0.2` answered DNS but was **not port-probed**, so "no host-side service the guest can call" is **not verified**. G4 must enumerate the gateway's reachable surface from the guest before relying on it: a full TCP scan (1–65535), a UDP sweep, and the link-local and IPv6 equivalents. The conclusion is then stated **only for the ports and protocols covered**, and anything not covered is named as residual. The control-plane result below does not depend on this: a host-side service would still need to authenticate the guest, and nothing the guest holds is a credential.
+- `10.0.0.1` TCP ports 22/80/443/8080/9000 → **all Connection refused.** *Corrected 2026-09-16 (PR #2633 round 4):* this is the guest's **own** `spr0` address, the one the org-token proxy tunnel targets (`10.0.0.1:9911`, §3.4), not the gateway. The probe shows only that nothing in the guest listens on those ports. The gateway `10.0.0.2` answered DNS but was **not port-probed**, so "no host-side service the guest can call" is **not verified**. G4 must enumerate the gateway's reachable surface from the guest before relying on it: a full TCP scan (1–65535), a UDP sweep, and the link-local and IPv6 equivalents. The conclusion is then stated **only for the ports and protocols covered**, and anything not covered is named as residual. Silent or filtered results, which include every UDP port that did not return ICMP port-unreachable, count as residual, never as absence. The control-plane result below does not depend on this: a host-side service would still need to authenticate the guest, and nothing the guest holds is a credential.
 - `api.sprites.dev/v1/sprites` with no token → **401**; with a forged bearer → **401.** The guest cannot impersonate the org against the control plane.
 
 ### 3.4 The server→guest channel the provisioner *can* bind (verified)
@@ -155,9 +155,11 @@ TOK="$TOK" node -e 'import("<repo>/apps/web/node_modules/@fly/sprites/dist/index
 #    header forged; fetch httpbin + pagespace.ai; read api.ipify.org for the egress IP.
 # 4. readable phase: id; sudo -n id; env; /proc/1/environ; probe /.sprite/api.sock verbs;
 #    probe 169.254.169.254, [fdaa::3], api.internal, 10.0.0.1:{22,80,443,8080,9000} (own addr);
-#    G4 adds (gateway, not probed in this run): full TCP connect scan 10.0.0.2:1-65535, a UDP sweep
-#    (at least 53/67/68/123/161/5353 plus a full-range ICMP-unreachable scan), link-local 169.254.0.0/16
-#    and IPv6 link-local/gateway equivalents; record every port/protocol NOT covered as residual;
+#    G4 adds (gateway, not probed in this run): full TCP connect scan 10.0.0.2:1-65535; UDP with
+#    PROTOCOL-VALID requests for 53/67/68/123/161/5353 plus a full-range sweep in which only an ICMP
+#    port-unreachable counts as closed; link-local 169.254.0.0/16 and IPv6 link-local/gateway equivalents.
+#    Every unprobed port/protocol AND every silent / open|filtered / filtered result is residual,
+#    never evidence of absence (ICMP replies are rate-limited, dropped probes look like closed).
 #    hit api.sprites.dev with no/forged token.
 # 5. tunnel phase: raw WSS to api.sprites.dev/v1/sprites/{name}/proxy with org / forged / no token.
 # 6. generation phase: createCheckpoint -> restoreCheckpoint (compare .id); deleteSprite ->
