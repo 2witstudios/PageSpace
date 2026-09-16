@@ -157,8 +157,29 @@ export type StoreIdentity = {
   readonly blastRadius: 'tenant' | 'tier' | 'all';
 };
 
-/** A grant that already passed `verifyGrant` (nominal; the adapter never re-verifies). */
-export type VerifiedGrant = AgentAccountGrant & { readonly __verified: true };
+/**
+ * A grant that already passed `verifyGrant` (nominal; the adapter never
+ * re-verifies), generic in its audience. `VerifiedGrant` with no argument is
+ * the unnarrowed union — fine for pure decisions that re-check `aud` at
+ * runtime, refused by `resolve` (G1a review H6).
+ */
+export type VerifiedGrant<A extends PresenterChannel = PresenterChannel> = AgentAccountGrant & {
+  readonly aud: A;
+  readonly __verified: true;
+};
+
+type UnionToIntersection<U> = (U extends unknown ? (value: U) => void : never) extends (value: infer I) => void ? I : never;
+
+/**
+ * `unknown` when `A` is ONE literal channel; otherwise a required property of
+ * type `never`, which no argument can satisfy. Intersected into `resolve`'s
+ * input so `ResolvableBy<A>` and `MaterialForChannel<A, K>` are only ever
+ * computed from a literal audience: an unnarrowed grant would widen them to
+ * every kind and to the refresh token (G1a review H6).
+ */
+export type NarrowedAudience<A extends PresenterChannel> = [A] extends [UnionToIntersection<A>]
+  ? unknown
+  : { readonly __narrowGrantAudienceBeforeResolve: never };
 
 export type PutInput = {
   readonly ref: SecretRef;
@@ -176,7 +197,7 @@ export type PutResult =
 export type ResolveInput<C extends PresenterChannel, K extends ResolvableBy<C> = ResolvableBy<C>> = {
   readonly ref: SecretRef & { readonly kind: K };
   readonly version: CredentialVersion;
-  readonly grant: VerifiedGrant & { readonly aud: C };
+  readonly grant: VerifiedGrant<C>;
   readonly identity: StoreIdentity;
 };
 
@@ -189,7 +210,7 @@ export type ResolveInput<C extends PresenterChannel, K extends ResolvableBy<C> =
 export type SessionHttpResolveInput = {
   readonly ref: SecretRef & { readonly kind: 'session' };
   readonly version: CredentialVersion;
-  readonly grant: VerifiedGrant & { readonly aud: 'http-executor'; readonly sessionHttp: true };
+  readonly grant: VerifiedGrant<'http-executor'> & { readonly sessionHttp: true };
   readonly identity: StoreIdentity;
 };
 
@@ -296,7 +317,10 @@ export type DescribeResult =
 /** The interface (ADR 0005 §2.2). Executors are the only `resolve` callers; the web process never holds a reading identity. */
 export type StoreAdapter = {
   readonly put: (input: PutInput) => Promise<PutResult>;
-  readonly resolve: <C extends PresenterChannel, K extends ResolvableBy<C>>(input: ResolveInput<C, K>) => Promise<ResolveResult<C, K>>;
+  /** Accepts only a grant narrowed to ONE audience (`NarrowedAudience`); an unnarrowed `VerifiedGrant` does not compile. */
+  readonly resolve: <C extends PresenterChannel, K extends ResolvableBy<C>>(
+    input: ResolveInput<C, K> & NarrowedAudience<C>,
+  ) => Promise<ResolveResult<C, K>>;
   /** See `SessionHttpResolveInput`; unrepresentable without `grant.sessionHttp: true`. */
   readonly resolveSessionOverHttp: (input: SessionHttpResolveInput) => Promise<ResolveResult<'http-executor', 'session'>>;
   readonly rotate: (input: RotateInput) => Promise<RotateResult>;

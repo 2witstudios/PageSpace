@@ -162,7 +162,7 @@ Rows A1–A12 are Codex's, each with our mitigation and the gate that must show 
 |---|---|---|---|
 | C1 | Lookalike / punycode / userinfo / port-confused origins | origin normalization (exact scheme+host+port, IDNA-to-ASCII, reject userinfo, reject wildcards by default) is a pure function with a table test (ADR 0004 §3.2) | G1b |
 | C2 | DNS rebinding between authorization and connect | executor pins the validated address and repeats validation per redirect hop (reuses the `web_fetch` shell's per-hop discipline, not `web-fetch-ssrf.ts` alone) | G2 |
-| C3 | `password` kind reaches the HTTP executor | unrepresentable: `ResolvableBy<'http-executor'>` excludes `password` at the type level and the adapter refuses at runtime (ADR 0005 §4) | G1b (type + mutation pair), G6c |
+| C3 | `password` kind reaches the HTTP executor | unrepresentable: `ResolvableBy<'http-executor'>` excludes `password` at the type level, `resolve` refuses to compile for a grant whose audience is not narrowed to one literal channel (`NarrowedAudience`, ADR 0005 §4.2 amendment), and the adapter refuses at runtime (ADR 0005 §4) | G1b (type + mutation pair), G6c |
 | C4 | Credential rotated mid-grant | grant binds `credentialVersion`; resolve of a different version is `version_mismatch` | G1b |
 | C5 | Two overlapping refreshes / rotation race | per-account advisory lock + version-check-then-write; post-write verify; loser reconciles (ADR 0005 §5) | G3 |
 | C6 | Deleting a store entry believed to revoke upstream | deletion semantics separate `brokerDenied` from `upstreamRevoked`; UI states which happened (ADR 0005 §5.3) | G2, G3 |
