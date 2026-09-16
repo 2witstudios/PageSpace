@@ -208,6 +208,8 @@
         "src/agent-accounts/audit-repository.ts",
         "src/agent-accounts/audit-gate-executor.ts",
         "src/agent-accounts/denial-audit-record.ts",
+        "src/agent-accounts/lookup-operation.ts",
+        "src/agent-accounts/find-operation-registry-conflicts.ts",
         "src/agent-accounts/build-denial-record.ts",
         "src/agent-accounts/account-authority-key.ts",
         "src/agent-accounts/sign-grant.ts",

@@ -28,6 +28,11 @@ export const renderApprovalSubject: RenderApprovalSubject = ({ canonical }) => {
     headline: `${canonical.method} ${target} — ${canonical.operation.name} (${canonical.operation.class})`,
     origin: canonical.origin,
     operation: { class: canonical.operation.class, name: canonical.operation.name },
+    path: canonical.path,
+    // Everything the digest binds that changes what the request DOES — the
+    // query included — is shown; header NAMES only, never values (H5).
+    query: canonical.query.map(([name, value]) => [name, value] as const),
+    headerNames: canonical.headers.map(([name]) => name).sort(),
     resources: canonical.resources.map(([key, value]) => [key, value] as const),
     bodySha256: canonical.bodySha256,
     bodyBytes: Number.isFinite(bodyBytes) ? bodyBytes : 0,
