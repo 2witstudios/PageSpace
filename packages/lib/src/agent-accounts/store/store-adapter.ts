@@ -23,8 +23,9 @@ import type {
   SessionFormat,
   TenantId,
 } from '@pagespace/db/schema/agent-accounts';
-import type { AgentAccountGrant, BindingDigest, HashBytes, PresenterChannel } from '../grant';
+import type { AgentAccountGrant, AgentPageId, BindingDigest, Brand, Ed25519Verify, HashBytes, PresenterChannel, UserId } from '../grant';
 import type { CanonicalOrigin } from '../canonical-request';
+import type { AccountApprovalPolicy } from '../approval';
 
 /** Maps to the Infisical path `/<tenantProject>/<accountId>/<kind>`. */
 export type SecretRef = {
@@ -34,15 +35,39 @@ export type SecretRef = {
 };
 
 /**
+ * The security-relevant SCOPE of an account — everything a main-DB writer
+ * could widen without touching owner, tenant or kind: the approval policy,
+ * the per-provider resource restrictions, the agent pages bound to the
+ * account, and the allowed origins (ADR 0005 §2.4). Delegation and approval
+ * rows are deliberately NOT here: each is protected by its own fact compared
+ * against the signed grant (`DelegationFact`, `ApprovalFact`).
+ */
+export type PlaneScope = {
+  readonly approvalPolicy: AccountApprovalPolicy | null;
+  readonly resourceRestrictions: Readonly<Record<string, readonly string[]>>;
+  /** Unrevoked `agent_account_bindings` plus the owner page of an agent-page-owned account; sorted before hashing. */
+  readonly boundAgentPageIds: readonly AgentPageId[];
+  readonly allowedOrigins: readonly CanonicalOrigin[];
+};
+
+/** SHA3-256 over `canonicalJson(PlaneScope)` (ADR 0005 §2.4). */
+export type PolicyDigest = Brand<string, 'PolicyDigest'>;
+
+/**
  * The plane's INDEPENDENT copy of the authority bindings, stored beside the
  * material and compared at resolve (threat model A9: a main-DB writer who
- * reassigns owner/origins produces a grant whose bindings disagree here).
+ * reassigns the owner, widens origins, OR widens the approval policy,
+ * resource restrictions or agent-page bindings produces a grant whose
+ * bindings disagree here). `policyDigest` is what makes the last three
+ * visible to the plane: `policyVersion` is a counter a writer can leave
+ * untouched, a digest is not.
  */
 export type PlaneBindings = {
   readonly tenantId: TenantId;
   readonly ownerRef: AccountOwnerRef;
   readonly allowedOrigins: readonly CanonicalOrigin[];
   readonly policyVersion: PolicyVersion;
+  readonly policyDigest: PolicyDigest;
   readonly kind: AccountKind;
 };
 
@@ -132,8 +157,29 @@ export type StoreIdentity = {
   readonly blastRadius: 'tenant' | 'tier' | 'all';
 };
 
-/** A grant that already passed `verifyGrant` (nominal; the adapter never re-verifies). */
-export type VerifiedGrant = AgentAccountGrant & { readonly __verified: true };
+/**
+ * A grant that already passed `verifyGrant` (nominal; the adapter never
+ * re-verifies), generic in its audience. `VerifiedGrant` with no argument is
+ * the unnarrowed union — fine for pure decisions that re-check `aud` at
+ * runtime, refused by `resolve` (G1a review H6).
+ */
+export type VerifiedGrant<A extends PresenterChannel = PresenterChannel> = AgentAccountGrant & {
+  readonly aud: A;
+  readonly __verified: true;
+};
+
+type UnionToIntersection<U> = (U extends unknown ? (value: U) => void : never) extends (value: infer I) => void ? I : never;
+
+/**
+ * `unknown` when `A` is ONE literal channel; otherwise a required property of
+ * type `never`, which no argument can satisfy. Intersected into `resolve`'s
+ * input so `ResolvableBy<A>` and `MaterialForChannel<A, K>` are only ever
+ * computed from a literal audience: an unnarrowed grant would widen them to
+ * every kind and to the refresh token (G1a review H6).
+ */
+export type NarrowedAudience<A extends PresenterChannel> = [A] extends [UnionToIntersection<A>]
+  ? unknown
+  : { readonly __narrowGrantAudienceBeforeResolve: never };
 
 export type PutInput = {
   readonly ref: SecretRef;
@@ -151,7 +197,7 @@ export type PutResult =
 export type ResolveInput<C extends PresenterChannel, K extends ResolvableBy<C> = ResolvableBy<C>> = {
   readonly ref: SecretRef & { readonly kind: K };
   readonly version: CredentialVersion;
-  readonly grant: VerifiedGrant & { readonly aud: C };
+  readonly grant: VerifiedGrant<C>;
   readonly identity: StoreIdentity;
 };
 
@@ -164,7 +210,7 @@ export type ResolveInput<C extends PresenterChannel, K extends ResolvableBy<C> =
 export type SessionHttpResolveInput = {
   readonly ref: SecretRef & { readonly kind: 'session' };
   readonly version: CredentialVersion;
-  readonly grant: VerifiedGrant & { readonly aud: 'http-executor'; readonly sessionHttp: true };
+  readonly grant: VerifiedGrant<'http-executor'> & { readonly sessionHttp: true };
   readonly identity: StoreIdentity;
 };
 
@@ -190,6 +236,57 @@ export type RotateInput = {
 };
 
 export type RotateResult = PutResult;
+
+/**
+ * An authenticated owner consent to a binding change: the human who holds
+ * `grant` on the account (ADR 0004 §4.1) passed step-up
+ * (`auth/step-up-decisions.ts`) for EXACTLY these bindings. Signed by the
+ * authority's step-up consent key (distinct from the grant key) so the plane
+ * verifies it without reading the main DB; a DB writer cannot mint one.
+ */
+export type OwnerConsent = {
+  readonly consentId: string;
+  readonly consentingUserId: UserId;
+  readonly stepUpChallengeId: string;
+  /** `digestBindings` over the bindings being written — consent is to these bytes, not to "a change". */
+  readonly bindingsDigest: BindingDigest;
+  /** ms since epoch; the plane refuses a consent older than `StoreLimits['rebindConsentMaxAgeMs']`. */
+  readonly issuedAt: number;
+  /** Base64 Ed25519 over the canonical JSON of the fields above. */
+  readonly signature: string;
+};
+
+/**
+ * `rebind` — the ONE path that rewrites the plane's `PlaneBindings` without
+ * touching material: a `policyVersion` bump (membership, instructions, copy,
+ * move) or a widening (origins, policy, restrictions, agent bindings). CAS on
+ * the stored `policyVersion`. Callable only by a MANAGE-audience identity —
+ * held by the authority's management worker, never by `apps/web` — and only
+ * with a valid `OwnerConsent` for these exact bindings (G1a review H2).
+ */
+export type RebindInput = {
+  readonly ref: SecretRef;
+  /** The `policyVersion` of the bindings the caller last observed in the plane (CAS). */
+  readonly expectedVersion: PolicyVersion;
+  /** `bindings.policyVersion` must be strictly greater than `expectedVersion`; tenant and kind must be unchanged. */
+  readonly bindings: PlaneBindings;
+  readonly consent: OwnerConsent;
+  readonly identity: StoreIdentity & { readonly audience: 'manage' };
+};
+
+export type RebindResult =
+  | { readonly ok: true; readonly policyVersion: PolicyVersion }
+  | {
+      readonly ok: false;
+      readonly reason:
+        | 'version_conflict'
+        | 'consent_invalid'
+        | 'immutable_binding_changed'
+        | 'write_unverified'
+        | 'lock_unavailable'
+        | 'store_unavailable'
+        | 'not_found';
+    };
 
 export type RevokeReason = 'owner_revoked' | 'policy_revoked' | 'rotation_replay' | 'erasure' | 'admin';
 
@@ -220,10 +317,15 @@ export type DescribeResult =
 /** The interface (ADR 0005 §2.2). Executors are the only `resolve` callers; the web process never holds a reading identity. */
 export type StoreAdapter = {
   readonly put: (input: PutInput) => Promise<PutResult>;
-  readonly resolve: <C extends PresenterChannel, K extends ResolvableBy<C>>(input: ResolveInput<C, K>) => Promise<ResolveResult<C, K>>;
+  /** Accepts only a grant narrowed to ONE audience (`NarrowedAudience`); an unnarrowed `VerifiedGrant` does not compile. */
+  readonly resolve: <C extends PresenterChannel, K extends ResolvableBy<C>>(
+    input: ResolveInput<C, K> & NarrowedAudience<C>,
+  ) => Promise<ResolveResult<C, K>>;
   /** See `SessionHttpResolveInput`; unrepresentable without `grant.sessionHttp: true`. */
   readonly resolveSessionOverHttp: (input: SessionHttpResolveInput) => Promise<ResolveResult<'http-executor', 'session'>>;
   readonly rotate: (input: RotateInput) => Promise<RotateResult>;
+  /** Manage-audience identity + owner consent only; see `RebindInput`. */
+  readonly rebind: (input: RebindInput) => Promise<RebindResult>;
   readonly revoke: (input: RevokeInput) => Promise<RevokeResult>;
   readonly delete: (input: DeleteInput) => Promise<DeleteResult>;
   readonly describe: (input: DescribeInput) => Promise<DescribeResult>;
@@ -235,6 +337,8 @@ export type StoreLimits = {
   readonly rotationGraceMs: 300_000;
   /** Revoked material is retained this long so an upstream revocation can still be attempted. */
   readonly revokeRetentionMs: 604_800_000;
+  /** An `OwnerConsent` older than this is `consent_invalid` at `rebind`. */
+  readonly rebindConsentMaxAgeMs: 300_000;
 };
 
 /** `decideStoreWrite` — our CAS as data (ADR 0005 §2.3). G1b implements. */
@@ -249,6 +353,27 @@ export type DecideStoreWrite = (input: {
   | { readonly outcome: 'version_conflict' }
   | { readonly outcome: 'write_unverified' };
 
+/**
+ * `decideRebind` — pure. Refuses unless: the consent signature verifies under
+ * the pinned consent key; `consent.bindingsDigest === digestBindings(next)`;
+ * the consent is fresh; for a user-owned account the consenting user is the
+ * owner in the plane's STORED `ownerRef` (so a tampered owner cannot consent
+ * for itself); `stored.policyVersion === expectedVersion` and
+ * `next.policyVersion > expectedVersion`; `tenantId` and `kind` are unchanged.
+ * G1b implements.
+ */
+export type DecideRebind = (input: {
+  readonly stored: PlaneBindings | null;
+  readonly expectedVersion: PolicyVersion;
+  readonly next: PlaneBindings;
+  readonly consent: OwnerConsent;
+  readonly consentPublicKey: Uint8Array;
+  readonly now: number;
+  readonly maxAgeMs: StoreLimits['rebindConsentMaxAgeMs'];
+  readonly verify: Ed25519Verify;
+  readonly hash: HashBytes;
+}) => { readonly outcome: 'rebind' } | { readonly outcome: 'refuse'; readonly reason: Exclude<RebindResult, { readonly ok: true }>['reason'] };
+
 /** The facts `describe` would return plus revocation state — what `decideResolve` compares against. */
 export type StoredSecretFacts = {
   readonly kind: AccountKind;
@@ -260,6 +385,14 @@ export type StoredSecretFacts = {
 };
 
 export type ResolveDecision = { readonly ok: true } | { readonly ok: false; readonly reason: ResolveDenyReason };
+
+/**
+ * `digestPlaneScope` — SHA3-256 over `canonicalJson(scope)` with
+ * `boundAgentPageIds` and `allowedOrigins` sorted, so the authority (reading
+ * the main DB) and the plane (holding its own copy) derive the same bytes.
+ * The injected `hash` MUST be SHA3-256. G1b implements.
+ */
+export type DigestPlaneScope = (input: { readonly scope: PlaneScope; readonly hash: HashBytes }) => PolicyDigest;
 
 /** `digestBindings` — `hash(canonicalJson(bindings))`, the same bytes on the authority and the store side. G1b implements. */
 export type DigestBindings = (input: { readonly bindings: PlaneBindings; readonly hash: HashBytes }) => BindingDigest;

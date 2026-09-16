@@ -11,27 +11,32 @@ const bound: SandboxBinding = { spriteName: 'ws-abc' as SpriteName, instanceId: 
 
 describe('adversarial: restored-sandbox-generation', () => {
   it('given a grant bound to instanceId I and a sprite recreated under the same name, should return generation_mismatch (instance id changed)', () => {
-    const actual = decideSandboxBinding({ grant: bound, observed: { instanceId: 'sprite-222' as SandboxInstanceId, generation: 3 as SandboxGeneration }, aud: 'relay-runner' });
+    const actual = decideSandboxBinding({ grant: bound, observed: { spriteName: bound.spriteName, instanceId: 'sprite-222' as SandboxInstanceId, generation: 3 as SandboxGeneration }, aud: 'relay-runner' });
     expect(actual).toEqual({ ok: false, reason: 'generation_mismatch' });
   });
 
   it('given a grant bound to generation G and a checkpoint restore since issuance, should return generation_mismatch (generation G+1, same instance id)', () => {
-    const actual = decideSandboxBinding({ grant: bound, observed: { instanceId: bound.instanceId, generation: 4 as SandboxGeneration }, aud: 'relay-runner' });
+    const actual = decideSandboxBinding({ grant: bound, observed: { spriteName: bound.spriteName, instanceId: bound.instanceId, generation: 4 as SandboxGeneration }, aud: 'relay-runner' });
     expect(actual).toEqual({ ok: false, reason: 'generation_mismatch' });
   });
 
   it('given a warm resume with unchanged id and generation, should verify ok', () => {
-    const actual = decideSandboxBinding({ grant: bound, observed: { instanceId: bound.instanceId, generation: bound.generation }, aud: 'relay-runner' });
+    const actual = decideSandboxBinding({ grant: bound, observed: { spriteName: bound.spriteName, instanceId: bound.instanceId, generation: bound.generation }, aud: 'relay-runner' });
     expect(actual).toEqual({ ok: true });
   });
 
-  it('given observed binding null (getSprite unreachable), should return generation_mismatch, never ok', () => {
+  it('given observed binding null (getSprite unreachable), should return binding_unavailable, never ok [G1a review M6]', () => {
     const actual = decideSandboxBinding({ grant: bound, observed: null, aud: 'relay-runner' });
     expect(actual).toEqual({ ok: false, reason: 'binding_unavailable' });
   });
 
+  it('given a grant for sprite A presented while the runner is bound to sprite B that happens to share instanceId and generation values, should return generation_mismatch (spriteName compared) [G1a review M6]', () => {
+    const actual = decideSandboxBinding({ grant: bound, observed: { ...bound, spriteName: 'ws-other' as SpriteName }, aud: 'relay-runner' });
+    expect(actual).toEqual({ ok: false, reason: 'generation_mismatch' });
+  });
+
   it('given a generation that went BACKWARDS (an older snapshot presented as current), should still return generation_mismatch (equality, not ordering)', () => {
-    const actual = decideSandboxBinding({ grant: bound, observed: { instanceId: bound.instanceId, generation: 2 as SandboxGeneration }, aud: 'relay-runner' });
+    const actual = decideSandboxBinding({ grant: bound, observed: { spriteName: bound.spriteName, instanceId: bound.instanceId, generation: 2 as SandboxGeneration }, aud: 'relay-runner' });
     expect(actual).toEqual({ ok: false, reason: 'generation_mismatch' });
   });
 

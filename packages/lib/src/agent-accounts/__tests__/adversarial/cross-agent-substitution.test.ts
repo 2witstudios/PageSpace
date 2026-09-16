@@ -28,6 +28,7 @@ import type {
 } from '../../grant';
 import type { AccountId, CredentialVersion, PolicyVersion, TenantId } from '@pagespace/db/schema/agent-accounts';
 import type { CanonicalRequestInput } from '../../canonical-request';
+import { TEST_PROVIDER, TEST_REGISTRY } from '../operation-registry.fixture';
 
 // Threat model A3 (ASI03). Table rows over verifyGrant / decideAccountAccess
 // first; I/O cases last (Control Board §7.7). Every row here is pure.
@@ -40,23 +41,20 @@ const hash: HashBytes = (bytes) => createHash('sha256').update(bytes).digest('he
 const NOW = 1_800_000_000_000;
 const DRIVE = 'drive_1' as DriveId;
 
-function digestOf(resources: Record<string, string>): RequestDigest {
+function digestOf(repoPath: string): RequestDigest {
   const input: CanonicalRequestInput = {
     channel: 'http-executor',
     method: 'POST',
-    url: 'https://api.github.com/repos/octo/hello/issues',
+    url: `https://api.github.com${repoPath}/issues`,
     headers: {},
     body: new Uint8Array(0),
-    resources,
-    operation: { class: 'write', name: 'github.issues.create' },
-    declaredHeaders: [],
   };
-  const result = canonicalizeRequest(input);
+  const result = canonicalizeRequest({ request: input, providerSlug: TEST_PROVIDER, registry: TEST_REGISTRY });
   if (!result.ok) throw new Error(result.reason);
   return digestRequest({ canonical: result.canonical, hash });
 }
 
-const DIGEST_X = digestOf({ account: 'acct_X', repo: 'octo/hello' });
+const DIGEST_X = digestOf('/repos/octo/hello');
 
 function grantFor(overrides: Partial<AgentAccountGrant> = {}): AgentAccountGrant {
   return {
@@ -106,9 +104,12 @@ function present(grant: AgentAccountGrant, expected: Partial<ExpectedBinding> = 
       accountId: grant.accountId,
       accountKind: grant.accountKind,
       accountDriveId: DRIVE,
+      accountStatus: 'active',
       currentCredentialVersion: grant.credentialVersion,
+      previousCredentialVersion: null,
+      rotatedAt: null,
       currentPolicyVersion: grant.policyVersion,
-      delegation: grant.delegationId === null ? { kind: 'live_session' } : { kind: 'delegation', delegationId: grant.delegationId, accountId: grant.accountId, expired: false, revoked: false },
+      delegation: grant.delegationId === null ? { kind: 'live_session' } : { kind: 'delegation', delegationId: grant.delegationId, accountId: grant.accountId, agentPageId: grant.agentPageId, delegatedBy: grant.human.userId, expired: false, revoked: false },
       sandbox: null,
       ceilingAdmitsAccount: true,
       ...expected,
@@ -116,9 +117,10 @@ function present(grant: AgentAccountGrant, expected: Partial<ExpectedBinding> = 
     requestDigest,
     requestOperation: grant.operation,
     nonceState: 'fresh',
-    approval: { kind: 'concrete', approvalId: 'approval_1' as ApprovalId, requestDigest: DIGEST_X, consumedByGrantId: grant.grantId },
+    approval: { kind: 'concrete', approvalId: 'approval_1' as ApprovalId, accountId: grant.accountId, requestDigest: DIGEST_X, consumedByGrantId: grant.grantId, expiresAt: NOW + 120_000 },
     verify,
     hash,
+    rotationGraceMs: 300_000,
   });
 }
 
@@ -176,8 +178,8 @@ describe('adversarial: cross-agent-substitution', () => {
     });
   });
 
-  it('given a grant for account X and a request naming account Y in resources, should return digest_mismatch', () => {
-    const actual = present(grantFor(), {}, digestOf({ account: 'acct_Y', repo: 'octo/hello' }));
+  it('given a grant digested for repo X and a request whose path targets repo Y, should return digest_mismatch (resources come from the path)', () => {
+    const actual = present(grantFor(), {}, digestOf('/repos/octo/other'));
     expect(actual).toEqual({ ok: false, reason: 'digest_mismatch' });
   });
 
@@ -185,9 +187,18 @@ describe('adversarial: cross-agent-substitution', () => {
     const unattended = grantFor({ human: { userId: 'user_1' as UserId, sessionId: null }, delegationId: 'dlg_A' as DelegationId, agentPageId: 'page_B' as AgentPageId });
     // The presenter's current run is page_B; the only delegation on file is for another account/page pairing.
     const actual = present(unattended, {
-      delegation: { kind: 'delegation', delegationId: 'dlg_A' as DelegationId, accountId: 'acct_other' as AccountId, expired: false, revoked: false },
+      delegation: { kind: 'delegation', delegationId: 'dlg_A' as DelegationId, accountId: 'acct_other' as AccountId, agentPageId: 'page_A' as AgentPageId, delegatedBy: 'user_1' as UserId, expired: false, revoked: false },
     });
     expect(actual).toEqual({ ok: false, reason: 'no_delegation' });
+  });
+
+  it('given a delegation recorded for agent page P by user U and an unattended run of page Q, or one acting as human V, presenting a grant naming that delegationId, should return no_delegation [G1a review H3]', () => {
+    const recorded = { kind: 'delegation', delegationId: 'dlg_P' as DelegationId, accountId: 'acct_X' as AccountId, agentPageId: 'page_P' as AgentPageId, delegatedBy: 'user_U' as UserId, expired: false, revoked: false } as const;
+    const onPageQ = grantFor({ human: { userId: 'user_U' as UserId, sessionId: null }, delegationId: 'dlg_P' as DelegationId, agentPageId: 'page_Q' as AgentPageId });
+    const asHumanV = grantFor({ human: { userId: 'user_V' as UserId, sessionId: null }, delegationId: 'dlg_P' as DelegationId, agentPageId: 'page_P' as AgentPageId });
+    const asRecorded = grantFor({ human: { userId: 'user_U' as UserId, sessionId: null }, delegationId: 'dlg_P' as DelegationId, agentPageId: 'page_P' as AgentPageId });
+    const actual = [present(onPageQ, { delegation: recorded }), present(asHumanV, { delegation: recorded }), present(asRecorded, { delegation: recorded }).ok];
+    expect(actual).toEqual([{ ok: false, reason: 'no_delegation' }, { ok: false, reason: 'no_delegation' }, true]);
   });
 
   it('given a grant whose acting human is not the run human (another user driving the shared agent), should return principal_mismatch', () => {

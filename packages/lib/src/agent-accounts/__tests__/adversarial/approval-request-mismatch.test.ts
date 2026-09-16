@@ -6,6 +6,7 @@ import { canonicalizeRequest } from '../../canonicalize-request';
 import { digestRequest } from '../../digest-request';
 import { renderApprovalSubject } from '../../render-approval-subject';
 import type { CanonicalOrigin, CanonicalRequestInput } from '../../canonical-request';
+import { TEST_PROVIDER, TEST_REGISTRY } from '../operation-registry.fixture';
 import type { AccountApprovalPolicy } from '../../approval';
 import type { HashBytes, OperationRef, RequestDigest, SessionId, UserId } from '../../grant';
 
@@ -17,23 +18,25 @@ import type { HashBytes, OperationRef, RequestDigest, SessionId, UserId } from '
 const hash: HashBytes = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const NOW = 1_800_000_000_000;
 
-function canonical(overrides: Partial<CanonicalRequestInput> = {}) {
+function canonical(overrides: Partial<CanonicalRequestInput> = {}, providerSlug: string | null = TEST_PROVIDER) {
   const result = canonicalizeRequest({
+    providerSlug,
+    registry: TEST_REGISTRY,
+    request: {
     channel: 'http-executor',
     method: 'POST',
     url: 'https://api.github.com/repos/octo/hello/issues',
     headers: {},
     body: new TextEncoder().encode('{"title":"x"}'),
-    resources: { repo: 'octo/hello' },
-    operation: { class: 'write', name: 'github.issues.create' },
-    declaredHeaders: [],
     ...overrides,
+    },
   });
   if (!result.ok) throw new Error(result.reason);
   return result.canonical;
 }
 
-const digestOf = (overrides: Partial<CanonicalRequestInput> = {}): RequestDigest => digestRequest({ canonical: canonical(overrides), hash });
+const digestOf = (overrides: Partial<CanonicalRequestInput> = {}, providerSlug: string | null = TEST_PROVIDER): RequestDigest =>
+  digestRequest({ canonical: canonical(overrides, providerSlug), hash });
 const DIGEST_X = digestOf();
 const DIGEST_Y = digestOf({ body: new TextEncoder().encode('{"title":"y"}') });
 
@@ -73,9 +76,9 @@ describe('adversarial: approval-request-mismatch', () => {
     expect(actual).toEqual([]);
   });
 
-  it('given an approval obtained for op A, should not redeem for op B with identical arguments (op discriminator in the digest)', () => {
-    const forA = digestOf({ operation: { class: 'write', name: 'github.issues.create' } });
-    const forB = digestOf({ operation: { class: 'write', name: 'github.issues.close' } });
+  it('given an approval obtained for op A, should not redeem for op B with identical arguments (op discriminator in the digest; the op comes from the registry)', () => {
+    const forA = digestOf({});
+    const forB = digestOf({}, null);
     const actual = bindApproval({ decision: decision({ subjectDigest: forA }), requestDigest: forB, operation: { class: 'write', name: 'github.issues.close' }, now: NOW, ttlMs: 120_000 });
     expect({ distinct: forA !== forB, actual }).toEqual({ distinct: true, actual: { ok: false, reason: 'digest_mismatch' } });
   });
@@ -116,6 +119,61 @@ describe('adversarial: approval-request-mismatch', () => {
       underTamperedPolicy: { kind: 'refuse', reason: 'class_never_always' },
       underOrdinaryPolicy: { kind: 'concrete', stepUp: operationClass === 'privilege' },
     });
+  });
+
+  it.each([
+    ['foo%3Bbar', 'foo;bar'],
+    ['a%2Bb', 'a+b'],
+    ['u%40h', 'u@h'],
+    ['k%3Dv', 'k=v'],
+  ])('given an approval for PUT /x/%s and an executed PUT /x/%s, should return digest_mismatch — decoding path segments must never collapse them [0004 §3.2 second amendment]', (approvedSegment, executedSegment) => {
+    const approved = digestOf({ method: 'PUT', url: `https://api.github.com/x/${approvedSegment}` });
+    const executed = digestOf({ method: 'PUT', url: `https://api.github.com/x/${executedSegment}` });
+    const actual = bindApproval({ decision: decision({ subjectDigest: approved }), requestDigest: executed, operation: { class: 'unknown', name: 'generic_request' }, now: NOW, ttlMs: 120_000 });
+    expect(actual).toEqual({ ok: false, reason: 'digest_mismatch' });
+  });
+
+  it('given a tool layer that labels a DELETE as a read operation, should have no field to say so — the class comes from the registry and an unmatched DELETE is unknown, so a read-only always policy does not cover it [G1a review M1]', () => {
+    const smuggled = { channel: 'http-executor', method: 'DELETE', url: 'https://api.github.com/repos/octo/hello', headers: {}, body: new Uint8Array(0), resources: { repo: 'octo/hello' }, operation: { class: 'read', name: 'github.issues.list' } } as CanonicalRequestInput;
+    const result = canonicalizeRequest({ request: smuggled, providerSlug: TEST_PROVIDER, registry: TEST_REGISTRY });
+    if (!result.ok) throw new Error(result.reason);
+    const readOnlyAlways: AccountApprovalPolicy = {
+      ...alwaysPolicy([{ class: 'read', name: '*' }]),
+    };
+    const usage = { usesThisHour: 0, bytesOutThisHour: 0, concurrent: 0 };
+    const actual = {
+      operation: result.canonical.operation,
+      requirement: decideApproval({ operation: result.canonical.operation, policy: readOnlyAlways, requestDigest: digestRequest({ canonical: result.canonical, hash }), origin: ORIGIN, resources: [], now: NOW, usage }),
+    };
+    expect(actual).toEqual({ operation: { class: 'unknown', name: 'generic_request' }, requirement: { kind: 'concrete', stepUp: false } });
+  });
+
+  it('given an always policy scoped to repo A and a tool call that claims repo A while its URL targets /repos/acme/B/..., should return refuse(out_of_scope) — resources are extracted from the path, so the claim never reaches decideApproval [0004 §8.35; G1a review M8]', () => {
+    const claim = { channel: 'http-executor', method: 'PUT', url: 'https://api.github.com/repos/acme/B/contents/x', headers: {}, body: new TextEncoder().encode('{}'), resources: { owner: 'acme', repo: 'A' } } as CanonicalRequestInput;
+    const result = canonicalizeRequest({ request: claim, providerSlug: TEST_PROVIDER, registry: TEST_REGISTRY });
+    if (!result.ok) throw new Error(result.reason);
+    const put: OperationRef = { class: 'write', name: 'github.contents.put' };
+    const scopedToA: AccountApprovalPolicy = { ...alwaysPolicy([put]), scope: { origins: [ORIGIN], operations: [put], resources: [['owner', 'acme'], ['repo', 'A']] } };
+    const usage = { usesThisHour: 0, bytesOutThisHour: 0, concurrent: 0 };
+    const actual = {
+      resources: result.canonical.resources,
+      requirement: decideApproval({ operation: result.canonical.operation, policy: scopedToA, requestDigest: digestRequest({ canonical: result.canonical, hash }), origin: ORIGIN, resources: result.canonical.resources, now: NOW, usage }),
+    };
+    expect(actual).toEqual({
+      resources: [
+        ['owner', 'acme'],
+        ['path', 'x'],
+        ['repo', 'B'],
+      ],
+      requirement: { kind: 'refuse', reason: 'out_of_scope' },
+    });
+  });
+
+  it('given two requests identical except ?force=true, should render subjects that differ in query — the human sees every digest-bound part that changes what the request does [G1a review H5]', () => {
+    const plain = renderApprovalSubject({ canonical: canonical({ method: 'DELETE', url: 'https://api.github.com/repos/octo/hello', body: new Uint8Array(0) }) });
+    const forced = renderApprovalSubject({ canonical: canonical({ method: 'DELETE', url: 'https://api.github.com/repos/octo/hello?force=true', body: new Uint8Array(0) }) });
+    const actual = { plain: plain.query, forced: forced.query };
+    expect(actual).toEqual({ plain: [], forced: [['force', 'true']] });
   });
 
   it('given an approval subject, should be rendered from the canonical request only (no page/summary/model text)', () => {

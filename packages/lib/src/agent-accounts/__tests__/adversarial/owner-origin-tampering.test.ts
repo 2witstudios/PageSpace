@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import type { AccountId, AccountOwnerRef, CredentialVersion, PolicyVersion, TenantId } from '@pagespace/db/schema/agent-accounts';
 import type { CanonicalOrigin } from '../../canonical-request';
 import type { HashBytes } from '../../grant';
-import type { PlaneBindings, StoredSecretFacts, VerifiedGrant } from '../../store/store-adapter';
+import type { PlaneBindings, PolicyDigest, StoredSecretFacts, VerifiedGrant } from '../../store/store-adapter';
 import { digestBindings } from '../../store/digest-bindings';
 import { decideResolve } from '../../store/decide-resolve';
 
@@ -20,6 +20,7 @@ const BINDINGS: PlaneBindings = {
   ownerRef: { kind: 'user', userId: 'u1' } as AccountOwnerRef,
   allowedOrigins: ['https://example.com' as CanonicalOrigin],
   policyVersion: 1 as PolicyVersion,
+  policyDigest: 'policy-digest-fixture' as PolicyDigest,
   kind: 'api_key',
 };
 const REF = { tenantId: 'user:u1' as TenantId, accountId: 'acct_1' as AccountId, kind: 'api_key' as const };
@@ -66,10 +67,15 @@ describe('adversarial: owner-origin-tampering', () => {
     expect(actual).toEqual({ ok: false, reason: 'binding_mismatch' });
   });
 
-  it('given a widening performed through put with step-up (bindings rewritten and re-committed), a grant signed over the NEW bindings should resolve', () => {
-    const widenedBindings: PlaneBindings = { ...BINDINGS, allowedOrigins: [...BINDINGS.allowedOrigins, 'https://new-origin.example' as CanonicalOrigin] };
-    const grantOverNewBindings = grantOverBindings(widenedBindings);
-    const actual = decideResolve({ grant: grantOverNewBindings, ref: REF, stored: stored({ bindings: widenedBindings }), now: NOW, rotationGraceMs: 300_000, hash });
-    expect(actual).toEqual({ ok: true });
-  });
+  it.todo('given approvalPolicy.scope.resources widened in the main DB with policyVersion left unchanged, should return binding_mismatch at resolve (policyDigest differs) [G1a review H1] — I/O row, owned by G1b-store (plane bindings at resolve)');
+
+  it.todo('given a resourceRestrictions repo added, or an agent_account_bindings row inserted, in the main DB without a consent-gated rebind, should return binding_mismatch at resolve [G1a review H1] — I/O row, owned by G1b-store (plane bindings at resolve)');
+
+  it.todo('given a delegation or approval row inserted in the main DB, should not be caught by the plane bindings but by the verifier facts (F7 / F14) — both assertions run in this suite — I/O row, owned by G1b-store (plane bindings at resolve)');
+
+  it.todo('given a widening performed through rebind with an OwnerConsent to exactly the new bindings, should rewrite bindings and a grant signed over them should resolve [0005 §10.21; G1a review H2] — I/O row, owned by G1b-store (plane bindings at resolve)');
+
+  it.todo('given a DB writer who reassigned the owner and then produced a consent from the NEW owner, should return consent_invalid (the plane checks the STORED ownerRef) [0005 F15] — I/O row, owned by G1b-store (plane bindings at resolve)');
+
+  it.todo('given a policyVersion bump written through rebind, should refuse an outstanding grant signed over the old bindings with binding_mismatch at resolve [0005 §10.21] — I/O row, owned by G1b-store (plane bindings at resolve)');
 });

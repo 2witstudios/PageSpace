@@ -5,7 +5,7 @@ import { describe, it, expect } from 'vitest';
 import type { TenantId, AccountOwnerRef, PolicyVersion } from '@pagespace/db/schema/agent-accounts';
 import type { CanonicalOrigin } from '../../canonical-request';
 import type { BindingDigest } from '../../grant';
-import type { PlaneBindings } from '../store-adapter';
+import type { PlaneBindings, PolicyDigest } from '../store-adapter';
 import { digestBindings } from '../digest-bindings';
 import { decidePlaneBinding } from '../decide-plane-binding';
 
@@ -16,6 +16,7 @@ const bindings: PlaneBindings = {
   ownerRef: { kind: 'user', userId: 'u1' } as AccountOwnerRef,
   allowedOrigins: ['https://example.com' as CanonicalOrigin],
   policyVersion: 1 as PolicyVersion,
+  policyDigest: 'policy-digest-fixture' as PolicyDigest,
   kind: 'api_key',
 };
 

@@ -4,7 +4,7 @@
  *
  * The approval UI shows one representation of a request and the executor
  * must send exactly that one. This function turns an untrusted
- * `{ method, url, headers, body, resources, operation }` into the frozen
+ * `{ channel, method, url, headers, body, resources }` into the frozen
  * `CanonicalRequest` — a fixed field set in a fixed order, absent optionals
  * as `[]` never a missing key — or refuses with a reason that names the rule
  * (F18). Refusals are for the human and the audit; the model never sees
@@ -18,16 +18,20 @@
  * reads the first as `a b`) and `/safe` distinct from `%2Fsafe`. Decoding the
  * query and hashing the decoded text collapsed all three into one digest —
  * the human would approve one representation and the executor could send
- * another with `digest_mismatch` never firing. The path is different on
- * purpose: it is decoded once so dot segments and `%2e%2e` are caught, then
- * re-encoded canonically, and an encoded `/` stays encoded so it can never
- * become a segment boundary.
+ * another with `digest_mismatch` never firing. The path follows the same
+ * rule: each segment is decoded once ONLY to catch dot segments, `%2e%2e`
+ * and control characters, and the digested form is the normalized raw
+ * segment, so `foo;bar` and `foo%3Bbar` (a server that strips `;` path
+ * parameters routes them differently) stay distinct and an encoded `/` can
+ * never become a segment boundary.
  *
  * Rules, in the order they are applied (`canonical-request.ts` §3.2):
- *   - channel and operation must be in their closed unions, and the
- *     operation NAME must be catalogue-shaped: it is interpolated into the
- *     approval headline, so free text there lets a model author what the
- *     human reads (ASI06);
+ *   - the channel must be in its closed union. The OPERATION is never read
+ *     from the request: `lookupOperation` derives it (and the declared
+ *     headers) from the reviewed registry by the account's providerSlug, the
+ *     channel and the canonical method and path; no match is
+ *     `unknown`/`generic_request`. A tool that could name its own operation
+ *     could call a DELETE a read (G1a review M1);
  *   - method from the channel's closed set (HTTP upper-cased; relay and
  *     browser verbs are exact);
  *   - origin: `https://` only; the WHATWG parser does IDNA→ASCII and lower-
@@ -36,20 +40,22 @@
  *     is caught by one check) are REFUSED, never stripped; one trailing dot
  *     is dropped; the port is always written. A name that RESOLVES privately
  *     is admitted here — the address check belongs at connect time, per hop;
- *   - path: dot segments resolved by the parser, each segment percent-decoded
- *     ONCE, refused if a `.`/`..` part or a control character survives that
- *     decode, then re-encoded canonically;
+ *   - path: dot segments resolved by the parser; each segment percent-decoded
+ *     ONCE on a copy, refused if a `.`/`..` part or a control character
+ *     survives that decode; the segment itself is normalized as the query is;
  *   - query: split on the first `=` per pair, each half normalized as above,
  *     sorted by name with duplicates kept in input order;
  *   - headers: a caller-supplied reserved header is a refusal, not a strip;
- *     only `accept`, `content-type`, `content-length` and the operation's
+ *     only `accept`, `content-type`, `content-length` and the matched entry's
  *     declared headers are projected; a VALUE carrying a control character is
  *     refused too, because a name-only check does not stop a CRLF pair from
  *     smuggling `authorization:` into an admitted `accept`;
  *   - `content-length` is always derived from the body bytes, so a caller who
  *     supplies a correct one digests identically to one who omits it;
  *   - `bodySha256` over the exact bytes (the empty body hashes to the digest
- *     of zero bytes); `resources` sorted by key.
+ *     of zero bytes); `resources` are the matched entry's `{slot}` values
+ *     from the canonical path, sorted by slot, `[]` without a match — the
+ *     request has no resources field (G1a review M8).
  *
  * Every field is checked before it is dereferenced — the containers
  * (`headers`, `body`, `resources`, `declaredHeaders`) included — so malformed
@@ -70,9 +76,11 @@ import type {
   CanonicalizeResult,
   MethodFor,
   ProjectedHeader,
+  GenericOperation,
   ReservedHeader,
 } from './canonical-request';
-import type { ExecutorChannel, OperationClass, OperationRef } from './grant';
+import type { ExecutorChannel } from './grant';
+import { lookupOperation } from './lookup-operation';
 
 const METHODS_BY_CHANNEL: { readonly [C in ExecutorChannel]: readonly MethodFor[C][] } = {
   'http-executor': ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'],
@@ -80,15 +88,8 @@ const METHODS_BY_CHANNEL: { readonly [C in ExecutorChannel]: readonly MethodFor[
   'browser-worker': ['navigate', 'click', 'type', 'read', 'wait', 'fill'],
 };
 
-const OPERATION_CLASSES: readonly OperationClass[] = ['read', 'write', 'irreversible', 'privilege', 'unknown'];
-
-/**
- * The shape a reviewed catalogue entry has (`github.issues.create`). It is
- * deliberately narrow: this string reaches the human in the approval
- * headline, so anything that could fake a second line, a separator or a
- * class suffix is refused before it can be rendered.
- */
-const OPERATION_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
+/** What every request without exactly one registry match is: never self-declared, never `read`. */
+const GENERIC_OPERATION: GenericOperation = { class: 'unknown', name: 'generic_request' };
 
 const RESERVED_HEADERS: readonly ReservedHeader[] = [
   'authorization',
@@ -142,23 +143,8 @@ function isStringRecord(value: unknown): value is Readonly<Record<string, string
   );
 }
 
-function isStringArray(value: unknown): value is readonly string[] {
-  return Array.isArray(value) && value.every((entry) => typeof entry === 'string');
-}
-
 function isExecutorChannel(value: unknown): value is ExecutorChannel {
   return typeof value === 'string' && Object.prototype.hasOwnProperty.call(METHODS_BY_CHANNEL, value);
-}
-
-function isOperationRef(value: unknown): value is OperationRef {
-  if (value === null || typeof value !== 'object') return false;
-  const record = value as Record<string, unknown>;
-  return (
-    typeof record.class === 'string' &&
-    (OPERATION_CLASSES as readonly string[]).includes(record.class) &&
-    typeof record.name === 'string' &&
-    OPERATION_NAME_RE.test(record.name)
-  );
 }
 
 /** Percent-encode every byte of `text` outside `keep`, upper-case hex. */
@@ -194,7 +180,7 @@ type NormalizeOutcome = { readonly ok: true; readonly value: string } | Refusal;
  * form. Two components that normalize alike are the same octets; two that
  * differ stay different, which is what keeps the digest honest.
  */
-function normalizeQueryComponent(raw: string): NormalizeOutcome {
+function normalizeComponent(raw: string, keep: RegExp): NormalizeOutcome {
   let out = '';
   for (let index = 0; index < raw.length; index += 1) {
     const char = raw[index]!;
@@ -209,7 +195,7 @@ function normalizeQueryComponent(raw: string): NormalizeOutcome {
       continue;
     }
     if (CONTROL_CHAR_RE.test(char)) return refuse('path_control_char');
-    out += QUERY_KEEP_RE.test(char) ? char : encodeWith(char, QUERY_KEEP_RE);
+    out += keep.test(char) ? char : encodeWith(char, keep);
   }
   return { ok: true, value: out };
 }
@@ -238,11 +224,16 @@ type PathVerdict = { readonly ok: true; readonly path: string } | Refusal;
 function canonicalizePath(pathname: string): PathVerdict {
   const segments: string[] = [];
   for (const rawSegment of pathname.split('/')) {
+    // The decoded copy is for the traversal and control-character checks
+    // only; what is digested is the NORMALIZED segment, so `;` and `%3B`
+    // stay two different requests.
     const decoded = decodeOnce(rawSegment);
     if (decoded === null) return refuse('malformed');
     if (CONTROL_CHAR_RE.test(decoded)) return refuse('path_control_char');
     if (decoded.split('/').some((part) => part === '.' || part === '..')) return refuse('path_traversal');
-    segments.push(encodeWith(decoded, PATH_KEEP_RE));
+    const normalized = normalizeComponent(rawSegment, PATH_KEEP_RE);
+    if (!normalized.ok) return normalized;
+    segments.push(normalized.value);
   }
   return { ok: true, path: segments.join('/') };
 }
@@ -259,9 +250,9 @@ function canonicalizeQuery(search: string): QueryVerdict {
     // A bare flag (`?force`) and an explicit empty value (`?force=`) both
     // project as `[name, '']`: the frozen pair shape cannot hold the
     // difference, so they are one canonical request by construction.
-    const name = normalizeQueryComponent(eq === -1 ? part : part.slice(0, eq));
+    const name = normalizeComponent(eq === -1 ? part : part.slice(0, eq), QUERY_KEEP_RE);
     if (!name.ok) return name;
-    const value = normalizeQueryComponent(eq === -1 ? '' : part.slice(eq + 1));
+    const value = normalizeComponent(eq === -1 ? '' : part.slice(eq + 1), QUERY_KEEP_RE);
     if (!value.ok) return value;
     pairs.push([name.value, value.value]);
   }
@@ -305,13 +296,16 @@ function canonicalizeHeaders(
   return { ok: true, headers: sorted };
 }
 
-export const canonicalizeRequest: CanonicalizeRequest = (input): CanonicalizeResult => {
+export const canonicalizeRequest: CanonicalizeRequest = (call): CanonicalizeResult => {
+  if (call === null || typeof call !== 'object') return refuse('malformed');
+  const { request: input, providerSlug, registry } = call;
+  if (providerSlug !== null && typeof providerSlug !== 'string') return refuse('malformed');
+  if (!Array.isArray(registry)) return refuse('malformed');
   if (input === null || typeof input !== 'object') return refuse('malformed');
   if (!isExecutorChannel(input.channel)) return refuse('malformed');
-  if (!isOperationRef(input.operation)) return refuse('malformed');
   if (typeof input.method !== 'string' || typeof input.url !== 'string') return refuse('malformed');
-  if (!isStringRecord(input.headers) || !isStringRecord(input.resources)) return refuse('malformed');
-  if (!(input.body instanceof Uint8Array) || !isStringArray(input.declaredHeaders)) return refuse('malformed');
+  if (!isStringRecord(input.headers)) return refuse('malformed');
+  if (!(input.body instanceof Uint8Array)) return refuse('malformed');
 
   const channel = input.channel;
   const method = channel === 'http-executor' ? input.method.toUpperCase() : input.method;
@@ -329,13 +323,13 @@ export const canonicalizeRequest: CanonicalizeRequest = (input): CanonicalizeRes
   if (!path.ok) return path;
   const query = canonicalizeQuery(url.search);
   if (!query.ok) return query;
-  const headers = canonicalizeHeaders(input.headers, input.declaredHeaders, input.body.byteLength);
+  const match = lookupOperation({ registry, providerSlug, channel, method: method as CanonicalRequest['method'], path: path.path });
+  const headers = canonicalizeHeaders(input.headers, match?.entry.declaredHeaders ?? [], input.body.byteLength);
   if (!headers.ok) return headers;
 
   const bodySha256 = createHash('sha256').update(input.body).digest('hex');
-  const resources = Object.entries(input.resources)
-    .map(([key, value]) => [key, value] as const)
-    .sort((a, b) => compareStrings(a[0], b[0]) || compareStrings(a[1], b[1]));
+  // Extracted from the path by the matched entry's slots — never the caller's (M8).
+  const resources = match?.resources ?? [];
 
   return {
     ok: true,
@@ -348,7 +342,7 @@ export const canonicalizeRequest: CanonicalizeRequest = (input): CanonicalizeRes
       headers: headers.headers,
       bodySha256,
       resources,
-      operation: { class: input.operation.class, name: input.operation.name },
+      operation: match === null ? GENERIC_OPERATION : { class: match.entry.operation.class, name: match.entry.operation.name },
     },
   };
 };

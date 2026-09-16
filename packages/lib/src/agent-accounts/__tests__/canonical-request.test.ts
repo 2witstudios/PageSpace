@@ -12,7 +12,11 @@ import { createHash } from 'node:crypto';
 import { canonicalizeRequest } from '../canonicalize-request';
 import { digestRequest } from '../digest-request';
 import { renderApprovalSubject } from '../render-approval-subject';
-import type { CanonicalRequest, CanonicalRequestInput, CanonicalizeRefusal } from '../canonical-request';
+import { lookupOperation } from '../lookup-operation';
+import { findOperationRegistryConflicts } from '../find-operation-registry-conflicts';
+import { findDuplicateResourceSlots } from '../find-duplicate-resource-slots';
+import type { CanonicalRequest, CanonicalRequestInput, CanonicalizeRefusal, OperationRegistry, OperationRegistryEntry } from '../canonical-request';
+import { TEST_PROVIDER, TEST_REGISTRY } from './operation-registry.fixture';
 import type { HashBytes } from '../grant';
 
 const hash: HashBytes = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -30,21 +34,24 @@ function makeInput(overrides: Partial<CanonicalRequestInput> = {}): CanonicalReq
     url: 'https://API.GitHub.com/repos/octo/hello/issues?state=open&labels=bug',
     headers: { Accept: 'application/vnd.github+json', 'Content-Type': 'application/json', 'X-Trace-Id': 'abc' },
     body: BODY,
-    resources: { repo: 'octo/hello', org: 'octo' },
-    operation: { class: 'write', name: 'github.issues.create' },
-    declaredHeaders: [],
     ...overrides,
   };
 }
 
-function canonical(overrides: Partial<CanonicalRequestInput> = {}): CanonicalRequest {
-  const result = canonicalizeRequest(makeInput(overrides));
+type Context = { readonly providerSlug?: string | null; readonly registry?: OperationRegistry };
+
+/** The server-side half of the call: the account's providerSlug and the reviewed registry, never the request. */
+const canonicalize = (request: CanonicalRequestInput, context: Context = {}) =>
+  canonicalizeRequest({ request, providerSlug: context.providerSlug === undefined ? TEST_PROVIDER : context.providerSlug, registry: context.registry ?? TEST_REGISTRY });
+
+function canonical(overrides: Partial<CanonicalRequestInput> = {}, context: Context = {}): CanonicalRequest {
+  const result = canonicalize(makeInput(overrides), context);
   if (!result.ok) throw new Error(`expected ok, got ${result.reason}`);
   return result.canonical;
 }
 
 function refusal(overrides: Partial<CanonicalRequestInput>): CanonicalizeRefusal | 'ok' {
-  const result = canonicalizeRequest(makeInput(overrides));
+  const result = canonicalize(makeInput(overrides));
   return result.ok ? 'ok' : result.reason;
 }
 
@@ -60,9 +67,6 @@ function inputFromCanonical(c: CanonicalRequest, body: Uint8Array): CanonicalReq
     url: `${c.origin}${c.path}${query.length > 0 ? `?${query}` : ''}`,
     headers: Object.fromEntries(c.headers),
     body,
-    resources: Object.fromEntries(c.resources),
-    operation: c.operation,
-    declaredHeaders: [],
   };
 }
 
@@ -156,16 +160,11 @@ describe('canonicalizeRequest refusals (ADR 0004 F18)', () => {
     ['a header value that is not a string', { headers: { accept: 42 } }],
     ['body missing', { body: undefined }],
     ['body a string', { body: '{"title":"hello"}' }],
-    ['declaredHeaders not an array', { declaredHeaders: 'x-trace-id' }],
-    ['a declared header that is not a string', { declaredHeaders: [7] }],
-    ['resources missing', { resources: undefined }],
-    ['resources an array', { resources: ['octo/hello'] }],
-    ['a resource value that is not a string', { resources: { repo: { id: 1 } } }],
   ])('given untrusted input with %s, should refuse with malformed rather than throw', (_label, override) => {
     const input = { ...makeInput(), ...override } as unknown as CanonicalRequestInput;
     let actual: CanonicalizeRefusal | 'ok' | 'threw';
     try {
-      const result = canonicalizeRequest(input);
+      const result = canonicalize(input);
       actual = result.ok ? 'ok' : result.reason;
     } catch {
       actual = 'threw';
@@ -181,7 +180,7 @@ describe('canonicalizeRequest refusals (ADR 0004 F18)', () => {
   ])('given a whole request that is %s, should refuse with malformed rather than throw', (_label, input) => {
     let actual: CanonicalizeRefusal | 'ok' | 'threw';
     try {
-      const result = canonicalizeRequest(input as unknown as CanonicalRequestInput);
+      const result = canonicalize(input as unknown as CanonicalRequestInput);
       actual = result.ok ? 'ok' : result.reason;
     } catch {
       actual = 'threw';
@@ -203,25 +202,116 @@ describe('canonicalizeRequest refusals (ADR 0004 F18)', () => {
     const actual = refusal({ headers: { 'content-length': String(BODY.byteLength + 1) } });
     expect(actual).toBe('malformed');
   });
+});
 
-  it.each([
-    ['a newline and a fabricated second line', 'a public page\nGET https://api.github.com/user (read)'],
-    ['spaces', 'read a public page'],
-    ['an em dash that mimics the headline separator', 'x — https://api.github.com'],
-    ['a parenthesis that mimics the class suffix', 'x (read)'],
-  ])('given an operation name containing %s, should refuse with malformed (the headline is a function of validated fields only)', (_label, name) => {
-    const actual = refusal({ operation: { class: 'read', name } });
-    expect(actual).toBe('malformed');
+describe('operation is derived, never declared (ADR 0004 §3.4 amendment, §8.30; G1a review M1)', () => {
+  it('given CanonicalRequestInput, should have no operation and no declaredHeaders key (type-level test)', () => {
+    // Exhaustive by construction: a key added to the untrusted input fails typecheck here.
+    const keys: Record<keyof CanonicalRequestInput, true> = { channel: true, method: true, url: true, headers: true, body: true };
+    const actual = Object.keys(keys).filter((key) => key === 'operation' || key === 'declaredHeaders');
+    expect(actual).toEqual([]);
   });
 
-  it('given a catalogue-shaped operation name, should admit it', () => {
-    const actual = canonical({ operation: { class: 'read', name: 'github.issues.list_v2-beta' } }).operation.name;
-    expect(actual).toBe('github.issues.list_v2-beta');
+  it('given a github registry entry PUT /repos/{owner}/{repo}/pulls/{number}/merge and a request to PUT /repos/a/b/pulls/7/merge, should set canonical.operation to merge_pr / irreversible whatever the tool intended', () => {
+    const smuggled = { ...makeInput({ method: 'PUT', url: 'https://api.github.com/repos/a/b/pulls/7/merge' }), operation: { class: 'read', name: 'github.issues.list' } } as CanonicalRequestInput;
+    const result = canonicalize(smuggled);
+    const actual = result.ok ? result.canonical.operation : result;
+    expect(actual).toEqual({ class: 'irreversible', name: 'merge_pr' });
   });
 
-  it('given an operation class outside the union, should refuse with malformed', () => {
-    const actual = refusal({ operation: { class: 'admin' as unknown as 'read', name: 'x' } });
-    expect(actual).toBe('malformed');
+  it('given a DELETE to a path no registry entry matches, should set canonical.operation to unknown / generic_request, never read', () => {
+    const actual = canonical({ method: 'DELETE', url: 'https://api.github.com/repos/a/b', body: new Uint8Array(0), headers: {} }).operation;
+    expect(actual).toEqual({ class: 'unknown', name: 'generic_request' });
+  });
+
+  it('given providerSlug null (from the account row), should not match a github entry for the same method and path', () => {
+    const actual = canonical({}, { providerSlug: null }).operation;
+    expect(actual).toEqual({ class: 'unknown', name: 'generic_request' });
+  });
+
+  it('given a header declared only by a registry entry the request does not match, should drop it from the projection', () => {
+    const actual = canonical({ url: 'https://api.github.com/repos/octo/hello/hooks', headers: { accept: 'a', 'X-GitHub-Api-Version': '2022-11-28' } }).headers;
+    expect(actual).toEqual([
+      ['accept', 'a'],
+      ['content-length', String(BODY.byteLength)],
+    ]);
+  });
+
+  it('given a template placeholder, should match exactly one whole non-empty segment — never zero, never several', () => {
+    const match = (path: string) => lookupOperation({ registry: TEST_REGISTRY, providerSlug: TEST_PROVIDER, channel: 'http-executor', method: 'PUT', path })?.entry.operation.name ?? null;
+    const actual = [match('/repos/a/b/pulls/7/merge'), match('/repos/a/b/pulls//merge'), match('/repos/a/b/c/pulls/7/merge'), match('/repos/a/b/pulls/7/merge/x')];
+    expect(actual).toEqual(['merge_pr', null, null, null]);
+  });
+
+  it('given a registry with two entries matching the same provider, channel, method and path, should report the conflict at registry load, never resolve it by order', () => {
+    const shadow: OperationRegistryEntry = { ...TEST_REGISTRY[2]!, pathTemplate: '/repos/{owner}/{repo}/pulls/{number}/{action}', operation: { class: 'read', name: 'github.pulls.action' } };
+    const actual = [findOperationRegistryConflicts({ registry: TEST_REGISTRY }), findOperationRegistryConflicts({ registry: [...TEST_REGISTRY, shadow] })];
+    expect(actual).toEqual([[], [[TEST_REGISTRY[2]!.pathTemplate, shadow.pathTemplate]]]);
+  });
+
+  it('given a registry with an overlapping pair, should resolve neither at lookup (unknown, never the first by order)', () => {
+    const shadow: OperationRegistryEntry = { ...TEST_REGISTRY[2]!, pathTemplate: '/repos/{owner}/{repo}/pulls/{number}/{action}', operation: { class: 'read', name: 'github.pulls.action' } };
+    const actual = canonical({ method: 'PUT', url: 'https://api.github.com/repos/a/b/pulls/7/merge' }, { registry: [...TEST_REGISTRY, shadow] }).operation;
+    expect(actual).toEqual({ class: 'unknown', name: 'generic_request' });
+  });
+
+  it('given a registry or providerSlug of the wrong shape, should refuse with malformed rather than throw', () => {
+    const actual = [
+      canonicalizeRequest({ request: makeInput(), providerSlug: TEST_PROVIDER, registry: null as unknown as OperationRegistry }),
+      canonicalizeRequest({ request: makeInput(), providerSlug: 7 as unknown as string, registry: TEST_REGISTRY }),
+    ].map((result) => (result.ok ? 'ok' : result.reason));
+    expect(actual).toEqual(['malformed', 'malformed']);
+  });
+});
+
+describe('resources come from the path, never the caller (ADR 0004 §3.2, §8.35; G1a review M8)', () => {
+  it('given CanonicalRequestInput, should have no resources key (type-level test)', () => {
+    const keys: Record<keyof CanonicalRequestInput, true> = { channel: true, method: true, url: true, headers: true, body: true };
+    const actual = Object.keys(keys).includes('resources');
+    expect(actual).toBe(false);
+  });
+
+  it('given a registry entry /repos/{owner}/{repo}/contents/{path} and a request to /repos/acme/B/contents/x, should set canonical.resources to [[owner,acme],[path,x],[repo,B]] sorted by slot', () => {
+    const actual = canonical({ method: 'PUT', url: 'https://api.github.com/repos/acme/B/contents/x' }).resources;
+    expect(actual).toEqual([
+      ['owner', 'acme'],
+      ['path', 'x'],
+      ['repo', 'B'],
+    ]);
+  });
+
+  it('given a caller that smuggles a resources field claiming another repo, should ignore it — the projection is the path\'s', () => {
+    const smuggled = { ...makeInput({ method: 'PUT', url: 'https://api.github.com/repos/acme/B/contents/x' }), resources: { owner: 'acme', repo: 'A' } } as CanonicalRequestInput;
+    const result = canonicalize(smuggled);
+    const actual = result.ok ? result.canonical.resources : result;
+    expect(actual).toEqual([
+      ['owner', 'acme'],
+      ['path', 'x'],
+      ['repo', 'B'],
+    ]);
+  });
+
+  it('given a request no registry entry matches, should set operation generic_request and resources []', () => {
+    const actual = canonical({ method: 'DELETE', url: 'https://api.github.com/repos/acme/B', body: new Uint8Array(0), headers: {} });
+    expect({ operation: actual.operation, resources: actual.resources }).toEqual({ operation: { class: 'unknown', name: 'generic_request' }, resources: [] });
+  });
+
+  it('given a pathTemplate that uses the same slot name twice, should be refused at registry load', () => {
+    const twice: OperationRegistryEntry = { ...TEST_REGISTRY[0]!, pathTemplate: '/repos/{repo}/forks/{repo}' };
+    const actual = [findDuplicateResourceSlots({ registry: TEST_REGISTRY }), findDuplicateResourceSlots({ registry: [...TEST_REGISTRY, twice] })];
+    expect(actual).toEqual([[], ['/repos/{repo}/forks/{repo}']]);
+  });
+
+  it('given a lookup, should return the entry with the slot values it bound from the actual path', () => {
+    const actual = lookupOperation({ registry: TEST_REGISTRY, providerSlug: TEST_PROVIDER, channel: 'http-executor', method: 'PUT', path: '/repos/a/b/pulls/7/merge' });
+    expect(actual).toEqual({
+      entry: TEST_REGISTRY[2],
+      resources: [
+        ['number', '7'],
+        ['owner', 'a'],
+        ['repo', 'b'],
+      ],
+    });
   });
 });
 
@@ -312,10 +402,9 @@ describe('canonicalizeRequest normalization', () => {
     expect(actual).toBe('malformed');
   });
 
-  it('given only projected + declared headers, should drop every other header from the projection', () => {
+  it('given only projected + registry-declared headers, should drop every other header from the projection', () => {
     const actual = canonical({
       headers: { Accept: 'a', 'X-Trace-Id': 't', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'ua' },
-      declaredHeaders: ['x-github-api-version'],
     }).headers;
     expect(actual).toEqual([
       ['accept', 'a'],
@@ -360,18 +449,25 @@ describe('canonicalizeRequest normalization', () => {
     expect(actual).toBe('/a/c/~user/sp%20ace/A');
   });
 
+  it.each([
+    ['a semicolon (a path parameter to Tomcat/Spring)', 'https://api.github.com/contents/foo;bar', 'https://api.github.com/contents/foo%3Bbar'],
+    ['a plus', 'https://api.github.com/contents/a+b', 'https://api.github.com/contents/a%2Bb'],
+    ['an at sign', 'https://api.github.com/users/@octo', 'https://api.github.com/users/%40octo'],
+    ['an equals sign', 'https://api.github.com/x/k=v', 'https://api.github.com/x/k%3Dv'],
+  ])('given two paths differing by %s against its percent-encoding, should produce DIFFERENT digests (RFC 3986 §2.2: they are different URIs)', (_label, first, second) => {
+    const a = digestRequest({ canonical: canonical({ url: first }), hash });
+    const b = digestRequest({ canonical: canonical({ url: second }), hash });
+    expect(a).not.toBe(b);
+  });
+
+  it('given a path escape in lower-case hex or an escaped unreserved character, should normalize it (upper-case hex, unreserved unescaped)', () => {
+    const actual = canonical({ url: 'https://api.github.com/contents/foo%3bbar/%7Euser/%41' }).path;
+    expect(actual).toBe('/contents/foo%3Bbar/~user/A');
+  });
+
   it('given an encoded slash inside a segment, should keep it encoded (never a new segment)', () => {
     const actual = canonical({ url: 'https://api.github.com/repos/octo%2Fhello' }).path;
     expect(actual).toBe('/repos/octo%2Fhello');
-  });
-
-  it('given resources in any key order, should emit sorted pairs', () => {
-    const actual = canonical({ resources: { repo: 'octo/hello', branch: 'main', org: 'octo' } }).resources;
-    expect(actual).toEqual([
-      ['branch', 'main'],
-      ['org', 'octo'],
-      ['repo', 'octo/hello'],
-    ]);
   });
 
   it('given a valid input, should emit the fixed field set in the fixed order', () => {
@@ -381,7 +477,7 @@ describe('canonicalizeRequest normalization', () => {
 
   it('given a valid input, should round-trip: canonicalize ∘ canonicalize is the identity [0004 §8.13]', () => {
     const once = canonical({ url: 'https://API.GitHub.com/repos/octo/hello/../world/issues?zeta=%20&alpha=a%2Bb&alpha=x' });
-    const twiceResult = canonicalizeRequest(inputFromCanonical(once, BODY));
+    const twiceResult = canonicalize(inputFromCanonical(once, BODY));
     const actual = twiceResult.ok ? twiceResult.canonical : twiceResult;
     expect(actual).toEqual(once);
   });
@@ -389,7 +485,7 @@ describe('canonicalizeRequest normalization', () => {
   it.each(['https://localhost/x', 'https://internal.corp/x', 'https://metadata.google.internal/x'])(
     'given a name that RESOLVES privately (%s), should admit it here — canonicalization is not the SSRF boundary, the connect-time address check is (G2)',
     (url) => {
-      const actual = canonicalizeRequest(makeInput({ url, body: new Uint8Array(0), headers: {} }));
+      const actual = canonicalize(makeInput({ url, body: new Uint8Array(0), headers: {} }));
       expect(actual.ok).toBe(true);
     },
   );
@@ -410,7 +506,6 @@ describe('digestRequest', () => {
     const a = canonical({
       url: 'https://api.github.com:443/repos/octo/hello/issues?state=open&labels=bug',
       headers: { 'Content-Type': 'application/json', Accept: 'application/vnd.github+json' },
-      resources: { org: 'octo', repo: 'octo/hello' },
     });
     const b = canonical();
     const actual = digestRequest({ canonical: a, hash });
@@ -426,12 +521,16 @@ describe('digestRequest', () => {
     expect(actual).not.toBe(expected);
   });
 
-  it('given the same canonical request and operation {class,name} differing, should produce different digests (op discriminator)', () => {
+  it('given the same request resolving to a different operation {class,name}, should produce different digests (op discriminator)', () => {
     const base = digestRequest({ canonical: canonical(), hash });
-    const otherName = digestRequest({ canonical: canonical({ operation: { class: 'write', name: 'github.issues.update' } }), hash });
-    const otherClass = digestRequest({ canonical: canonical({ operation: { class: 'read', name: 'github.issues.create' } }), hash });
+    const renamed = TEST_REGISTRY.map((entry, index) => (index === 0 ? { ...entry, operation: { class: 'write' as const, name: 'github.issues.update' } } : entry));
+    const reclassed = TEST_REGISTRY.map((entry, index) => (index === 0 ? { ...entry, operation: { class: 'read' as const, name: 'github.issues.create' } } : entry));
+    const otherName = digestRequest({ canonical: canonical({}, { registry: renamed }), hash });
+    const otherClass = digestRequest({ canonical: canonical({}, { registry: reclassed }), hash });
+    const unmatched = digestRequest({ canonical: canonical({}, { providerSlug: null }), hash });
     expect(otherName).not.toBe(base);
     expect(otherClass).not.toBe(base);
+    expect(unmatched).not.toBe(base);
   });
 
   it('given a canonical request with keys inserted in another order, should produce the same digest (rebuilt from the typed value)', () => {
@@ -453,7 +552,7 @@ describe('digestRequest', () => {
   });
 
   it('given a canonical request, should hash the injected primitive over canonical JSON bytes (sorted keys, positional arrays)', () => {
-    const c = canonical({ body: new Uint8Array(0), headers: {}, url: 'https://a.example/p?b=1&a=2', resources: { r: '1' } });
+    const c = canonical({ body: new Uint8Array(0), headers: {}, url: 'https://a.example/p?b=1&a=2' });
     const seen: string[] = [];
     const spy: HashBytes = (bytes) => {
       seen.push(new TextDecoder().decode(bytes));
@@ -462,7 +561,7 @@ describe('digestRequest', () => {
     const actual = digestRequest({ canonical: c, hash: spy });
     expect(actual).toBe('digest');
     expect(seen).toEqual([
-      `{"bodySha256":"${SHA256_EMPTY}","channel":"http-executor","headers":[["content-length","0"]],"method":"POST","operation":{"class":"write","name":"github.issues.create"},"origin":"https://a.example:443","path":"/p","query":[["a","2"],["b","1"]],"resources":[["r","1"]]}`,
+      `{"bodySha256":"${SHA256_EMPTY}","channel":"http-executor","headers":[["content-length","0"]],"method":"POST","operation":{"class":"unknown","name":"generic_request"},"origin":"https://a.example:443","path":"/p","query":[["a","2"],["b","1"]],"resources":[]}`,
     ]);
   });
 });
@@ -475,9 +574,15 @@ describe('renderApprovalSubject (ASI06)', () => {
       headline: 'POST https://api.github.com:443/repos/octo/hello/issues?labels=bug&state=open — github.issues.create (write)',
       origin: 'https://api.github.com:443',
       operation: { class: 'write', name: 'github.issues.create' },
+      path: '/repos/octo/hello/issues',
+      query: [
+        ['labels', 'bug'],
+        ['state', 'open'],
+      ],
+      headerNames: ['accept', 'content-length', 'content-type'],
       resources: [
-        ['org', 'octo'],
-        ['repo', 'octo/hello'],
+        ['owner', 'octo'],
+        ['repo', 'hello'],
       ],
       bodySha256: c.bodySha256,
       bodyBytes: BODY.byteLength,
@@ -485,19 +590,19 @@ describe('renderApprovalSubject (ASI06)', () => {
   });
 
   it('given two requests that differ only in a query parameter, should render headlines a human can tell apart', () => {
-    const toAlice = renderApprovalSubject({ canonical: canonical({ url: 'https://bank.example/transfer?to=alice', operation: { class: 'unknown', name: 'bank.transfer' } }) });
-    const toBob = renderApprovalSubject({ canonical: canonical({ url: 'https://bank.example/transfer?to=bob', operation: { class: 'unknown', name: 'bank.transfer' } }) });
+    const toAlice = renderApprovalSubject({ canonical: canonical({ url: 'https://bank.example/transfer?to=alice' }) });
+    const toBob = renderApprovalSubject({ canonical: canonical({ url: 'https://bank.example/transfer?to=bob' }) });
     const actual = [toAlice.headline, toBob.headline];
     const expected = [
-      'POST https://bank.example:443/transfer?to=alice — bank.transfer (unknown)',
-      'POST https://bank.example:443/transfer?to=bob — bank.transfer (unknown)',
+      'POST https://bank.example:443/transfer?to=alice — generic_request (unknown)',
+      'POST https://bank.example:443/transfer?to=bob — generic_request (unknown)',
     ];
     expect(actual).toEqual(expected);
   });
 
   it('given a query, should render it in canonical (sorted, still percent-encoded) form so the headline shows what is digested', () => {
     const actual = renderApprovalSubject({ canonical: canonical({ url: 'https://a.example/p?b=x%2by&a=1&flag' }) }).headline;
-    const expected = 'POST https://a.example:443/p?a=1&b=x%2By&flag= — github.issues.create (write)';
+    const expected = 'POST https://a.example:443/p?a=1&b=x%2By&flag= — generic_request (unknown)';
     expect(actual).toBe(expected);
   });
 
@@ -508,6 +613,22 @@ describe('renderApprovalSubject (ASI06)', () => {
 
   it('given a subject, should carry only fields derivable from the canonical request (no free text slot)', () => {
     const actual = Object.keys(renderApprovalSubject({ canonical: canonical() })).sort();
-    expect(actual).toEqual(['bodyBytes', 'bodySha256', 'headline', 'operation', 'origin', 'resources']);
+    expect(actual).toEqual(['bodyBytes', 'bodySha256', 'headerNames', 'headline', 'operation', 'origin', 'path', 'query', 'resources']);
+  });
+
+  it('given a canonical request with query force=true&recursive=1 and a declared header, should render subject.query equal to canonical.query and headerNames without any header value [0004 §8.29]', () => {
+    const c = canonical({
+      url: 'https://api.github.com/repos/octo/hello/issues?recursive=1&force=true',
+      headers: { accept: 'application/vnd.secret-accept+json', 'x-github-api-version': 'v-secret-2022' },
+    });
+    const subject = renderApprovalSubject({ canonical: c });
+    const serialized = JSON.stringify(subject);
+    const actual = { query: subject.query, headerNames: subject.headerNames, leaksValue: serialized.includes('secret') };
+    const expected = {
+      query: c.query,
+      headerNames: ['accept', 'content-length', 'x-github-api-version'],
+      leaksValue: false,
+    };
+    expect(actual).toEqual(expected);
   });
 });

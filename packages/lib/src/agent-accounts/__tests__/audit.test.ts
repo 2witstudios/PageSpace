@@ -20,6 +20,7 @@ import { digestRequest } from '../digest-request';
 import { GRANT_ISSUER } from '../grant-constants';
 import type { AgentAccountAuditRecord, AuditOutcome } from '../audit';
 import type { CanonicalRequest, CanonicalRequestInput } from '../canonical-request';
+import { TEST_PROVIDER, TEST_REGISTRY } from './operation-registry.fixture';
 import type {
   AgentAccountGrant,
   AgentPageId,
@@ -51,15 +52,16 @@ const BODY_TEXT = `{"title":"ship it","token":"${SECRET}"}`;
 
 function canonical(overrides: Partial<CanonicalRequestInput> = {}): CanonicalRequest {
   const result = canonicalizeRequest({
+    providerSlug: TEST_PROVIDER,
+    registry: TEST_REGISTRY,
+    request: {
     channel: 'http-executor',
     method: 'POST',
     url: 'https://api.github.com/repos/octo/hello/issues?state=open',
     headers: { accept: 'application/json', 'content-type': 'application/json' },
     body: new TextEncoder().encode(BODY_TEXT),
-    resources: { repo: 'octo/hello' },
-    operation: { class: 'write', name: 'github.issues.create' },
-    declaredHeaders: [],
     ...overrides,
+    },
   });
   if (!result.ok) throw new Error(result.reason);
   return result.canonical;
@@ -107,37 +109,45 @@ describe('buildAuditRecord', () => {
       const bodyText = `{"note":"${randomBytes(8).toString('hex')}","token":"${secret}"}`;
       const inQuery = randomBytes(12).toString('hex');
       const inHeader = randomBytes(12).toString('hex');
+      // An undeclared slot IS a path segment now (M8): `{token}` is not a declared resource key.
       const inPath = randomBytes(12).toString('hex');
-      const inResource = randomBytes(12).toString('hex');
       const record = build(
         { kind: 'executed', upstreamStatus: 201 },
         makeGrant(),
         canonical({
           body: new TextEncoder().encode(bodyText),
-          url: `https://api.github.com/v1/tokens/${inPath}?token=${inQuery}`,
+          url: `https://api.github.com/repos/octo/hello/tokens/${inPath}?token=${inQuery}`,
           headers: { accept: `application/vnd.${inHeader}+json` },
-          resources: { reset_code: inResource },
         }),
       );
       const serialized = JSON.stringify(record);
-      for (const value of [secret, bodyText, inQuery, inHeader, inPath, inResource]) {
+      for (const value of [secret, bodyText, inQuery, inHeader, inPath]) {
         if (serialized.includes(value)) leaks.push(value);
       }
     }
     expect(leaks).toEqual([]);
   });
 
-  it('given a path containing a token-shaped segment and an undeclared resource, should contain no substring of either [0004 §8.25]', () => {
+  it('given a path containing a token-shaped segment bound to an undeclared slot, should contain no substring of it and keep only the declared resource [0004 §8.25]', () => {
     const token = 'ghp_9f3a2b7c4d1e5f6a7b8c';
-    const undeclared = 'sk_live_undeclared_5c1d9a';
-    const record = build({ kind: 'allowed' }, makeGrant(), canonical({ url: `https://api.github.com/v1/tokens/${token}`, resources: { repo: 'octo/hello', reset_code: undeclared } }));
+    const c = canonical({ url: `https://api.github.com/repos/octo/hello/tokens/${token}` });
+    const record = build({ kind: 'allowed' }, makeGrant(), c);
     const serialized = JSON.stringify(record);
     expect({
+      extracted: c.resources,
       token: serialized.includes(token),
-      undeclared: serialized.includes(undeclared),
-      undeclaredKey: serialized.includes('reset_code'),
+      undeclaredKey: serialized.includes('"token"'),
       declaredKept: record.normalizedAction.resourceIds,
-    }).toEqual({ token: false, undeclared: false, undeclaredKey: false, declaredKept: [['repo', 'octo/hello']] });
+    }).toEqual({
+      extracted: [
+        ['owner', 'octo'],
+        ['repo', 'hello'],
+        ['token', token],
+      ],
+      token: false,
+      undeclaredKey: false,
+      declaredKept: [['repo', 'hello']],
+    });
   });
 
   it('given two requests to the same path, should produce the same pathDigest; given different paths, different digests (correlation survives)', () => {
@@ -220,11 +230,13 @@ describe('buildAuditRecord', () => {
       ceiling: true,
       tenant_mismatch: true,
       principal_mismatch: true,
+      account_not_active: true,
       version_mismatch: true,
       policy_epoch: true,
       no_delegation: true,
       digest_mismatch: true,
       generation_mismatch: true,
+      binding_unavailable: true,
       ttl_too_long: true,
       clock_skew: true,
       not_yet_valid: true,

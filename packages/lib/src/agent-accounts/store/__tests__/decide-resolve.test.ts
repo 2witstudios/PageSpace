@@ -28,7 +28,7 @@ import type {
   SessionId,
   UserId,
 } from '../../grant';
-import type { PlaneBindings, StoredSecretFacts, VerifiedGrant } from '../store-adapter';
+import type { PlaneBindings, PolicyDigest, StoredSecretFacts, VerifiedGrant } from '../store-adapter';
 import { digestBindings } from '../digest-bindings';
 import { decideResolve } from '../decide-resolve';
 
@@ -43,6 +43,7 @@ const BINDINGS: PlaneBindings = {
   ownerRef: { kind: 'user', userId: 'u1' } as AccountOwnerRef,
   allowedOrigins: ['https://example.com' as CanonicalOrigin],
   policyVersion: 1 as PolicyVersion,
+  policyDigest: 'policy-digest-fixture' as PolicyDigest,
   kind: 'api_key',
 };
 

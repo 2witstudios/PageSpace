@@ -4,8 +4,9 @@
  * pure function in a FIXED deny order (ADR 0004 §6, F1→F17):
  *
  *   malformed → wrong_audience → ceiling → tenant_mismatch →
- *   principal_mismatch → version_mismatch → policy_epoch → no_delegation →
- *   digest_mismatch → generation_mismatch → ttl_too_long / clock_skew /
+ *   principal_mismatch → account_not_active → version_mismatch →
+ *   policy_epoch → no_delegation → digest_mismatch →
+ *   generation_mismatch / binding_unavailable → ttl_too_long / clock_skew /
  *   not_yet_valid / expired → bad_signature → replayed /
  *   replay_store_unavailable → approval_mismatch → kind_not_resolvable
  *
@@ -31,7 +32,7 @@
 import type { AccountKind } from '@pagespace/db/schema/agent-accounts';
 import { isDriveWithinCredentialScope } from '../agent-workspaces/credential-scope';
 import { secureCompare } from '../auth/secure-compare';
-import type { AgentAccountGrant, ApprovalFact, DelegationFact, GrantDenyReason, GrantVerdict, PresenterChannel, VerifyGrant } from './grant';
+import type { AgentAccountGrant, ApprovalFact, DelegationFact, ExpectedBinding, GrantDenyReason, GrantVerdict, PresenterChannel, VerifyGrant } from './grant';
 import { GRANT_LIMITS } from './grant-constants';
 import { parseGrant } from './parse-grant';
 import { encodeGrant } from './encode-grant';
@@ -57,9 +58,34 @@ function kindResolvable(grant: AgentAccountGrant): boolean {
   return grant.accountKind === 'session' && grant.aud === 'http-executor' && grant.sessionHttp;
 }
 
+/**
+ * F5a — the current credential version, or the plane-attested PREVIOUS one
+ * while a rotation's grace window is open and only for a grant issued before
+ * that rotation: a grant in flight across a refresh still resolves, and old
+ * material never gets a fresh grant (ADR 0004 F5a; G1a review M7).
+ */
+function credentialVersionAdmitted(grant: AgentAccountGrant, expected: ExpectedBinding, now: number, rotationGraceMs: number): boolean {
+  if (grant.credentialVersion === expected.currentCredentialVersion) return true;
+  if (expected.previousCredentialVersion === null || expected.rotatedAt === null) return false;
+  return (
+    grant.credentialVersion === expected.previousCredentialVersion &&
+    grant.iat < expected.rotatedAt &&
+    now < expected.rotatedAt + rotationGraceMs
+  );
+}
+
 function delegationHolds(grant: AgentAccountGrant, fact: DelegationFact): boolean {
   if (grant.delegationId !== null) {
-    return fact.kind === 'delegation' && fact.delegationId === grant.delegationId && fact.accountId === grant.accountId && !fact.expired && !fact.revoked;
+    // Consent from ONE human for ONE account on ONE agent page: all four ids.
+    return (
+      fact.kind === 'delegation' &&
+      fact.delegationId === grant.delegationId &&
+      fact.accountId === grant.accountId &&
+      fact.agentPageId === grant.agentPageId &&
+      fact.delegatedBy === grant.human.userId &&
+      !fact.expired &&
+      !fact.revoked
+    );
   }
   if (grant.human.sessionId === null) return false;
   return fact.kind === 'live_session';
@@ -74,6 +100,9 @@ function approvalHolds(grant: AgentAccountGrant, fact: ApprovalFact): boolean {
   return (
     fact.kind === 'concrete' &&
     fact.approvalId === grant.approvalId &&
+    fact.accountId === grant.accountId &&
+    // An approval that had expired when the grant was issued never authorized it.
+    fact.expiresAt >= grant.iat &&
     secureCompare(fact.requestDigest, grant.requestDigest) &&
     fact.consumedByGrantId === grant.grantId
   );
@@ -108,9 +137,12 @@ export const verifyGrant: VerifyGrant = (input) => {
   if (grant.agentPageId !== expected.agentPageId) return deny('principal_mismatch');
   if (grant.conversationId !== expected.conversationId || grant.runId !== expected.runId) return deny('principal_mismatch');
 
-  // F5 — the account row and its current credential version.
+  // F5 — the account is usable at all; the status goes to audit, not the caller.
+  if (expected.accountStatus !== 'active') return deny('account_not_active');
+
+  // F5a — the account row and its current credential version.
   if (grant.accountId !== expected.accountId || grant.accountKind !== expected.accountKind) return deny('version_mismatch');
-  if (grant.credentialVersion !== expected.currentCredentialVersion) return deny('version_mismatch');
+  if (!credentialVersionAdmitted(grant, expected, input.now, input.rotationGraceMs)) return deny('version_mismatch');
 
   // F6 — policy epoch.
   if (grant.policyVersion !== expected.currentPolicyVersion) return deny('policy_epoch');
@@ -122,9 +154,9 @@ export const verifyGrant: VerifyGrant = (input) => {
   if (grant.operation.class !== input.requestOperation.class || grant.operation.name !== input.requestOperation.name) return deny('digest_mismatch');
   if (!secureCompare(grant.requestDigest, input.requestDigest)) return deny('digest_mismatch');
 
-  // F9 — sandbox instance + generation (ADR 0006).
+  // F9 — sandbox name + instance + generation (ADR 0006); unobservable is its own refusal.
   const binding = decideSandboxBinding({ grant: grant.sandbox, observed: expected.sandbox, aud: grant.aud });
-  if (!binding.ok) return deny(binding.reason === 'malformed' ? 'malformed' : 'generation_mismatch');
+  if (!binding.ok) return deny(binding.reason);
 
   // F10 — the window.
   if (grant.exp - grant.iat > GRANT_LIMITS.maxTtlMs) return deny('ttl_too_long');

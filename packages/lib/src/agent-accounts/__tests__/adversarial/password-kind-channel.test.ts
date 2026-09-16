@@ -27,4 +27,6 @@ describe('adversarial: password-kind-channel', () => {
     // and reported to the channel per Control Board §7.4; this pins the mechanism exists post-restore.
     expect(decideResolveCaller({ aud: 'http-executor', kind: 'password' })).toEqual({ ok: false, reason: 'kind_not_resolvable' });
   });
+
+  it.todo('given kind password requested with a VerifiedGrant whose aud is the unnarrowed PresenterChannel union, should not compile (store-adapter.types.test.ts, tsc) [0005 §10.22; G1a review H6] — I/O row, owned by G1b-store (Infisical adapter resolve)');
 });

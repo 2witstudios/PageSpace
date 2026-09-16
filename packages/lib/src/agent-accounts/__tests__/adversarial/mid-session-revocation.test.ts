@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import type { AccountId, AccountOwnerRef, CredentialVersion, PolicyVersion, TenantId } from '@pagespace/db/schema/agent-accounts';
 import type { CanonicalOrigin } from '../../canonical-request';
 import type { HashBytes } from '../../grant';
-import type { PlaneBindings, StoredSecretFacts, VerifiedGrant } from '../../store/store-adapter';
+import type { PlaneBindings, PolicyDigest, StoredSecretFacts, VerifiedGrant } from '../../store/store-adapter';
 import { digestBindings } from '../../store/digest-bindings';
 import { decideResolve } from '../../store/decide-resolve';
 import { decideResolveCaller } from '../../store/decide-resolve-caller';
@@ -19,6 +19,7 @@ const BINDINGS: PlaneBindings = {
   ownerRef: { kind: 'user', userId: 'u1' } as AccountOwnerRef,
   allowedOrigins: ['https://example.com' as CanonicalOrigin],
   policyVersion: 1 as PolicyVersion,
+  policyDigest: 'policy-digest-fixture' as PolicyDigest,
   kind: 'api_key',
 };
 const REF = { tenantId: 'user:u1' as TenantId, accountId: 'acct_1' as AccountId, kind: 'api_key' as const };
@@ -55,4 +56,8 @@ describe('adversarial: mid-session-revocation', () => {
   it('given a session account with sessionHttpEnabled false (grant.sessionHttp false), should be unresolvable by the http-executor under any ordinary use grant (session_http default off)', () => {
     expect(decideResolveCaller({ aud: 'http-executor', kind: 'session', sessionHttp: false })).toEqual({ ok: false, reason: 'kind_not_resolvable' });
   });
+
+  it.todo('given an unexpired grant issued while the account was active and the account then marked revoked, needs_reauth or deleted, should return account_not_active at verifyGrant — before the plane is ever asked [0004 F5; G1a review H4] — the pure verifier row is grant.test.ts §8.28; the end-to-end revoke is— I/O row, owned by G1b-store (store revoke) and G6b (live pane)');
+
+  it.todo("given an unexpired grant with sessionHttp true and the account's sessionHttpEnabled then turned off, should return policy_epoch at verifyGrant and binding_mismatch at resolve — the flag change bumps policyVersion [0004 §8.32; G1a review M4] — the bump is written by the account write path (G2) through rebind (G1b-store)");
 });

@@ -26,9 +26,18 @@ import type { AccountAccessFacts, AccountAccessLevel, DecideAccountAccess } from
 
 const NONE: AccountAccessLevel = { view: false, use: false, manage: false, grant: false, session_http: false };
 
-function delegationHolds(delegation: DelegationFact, accountId: AccountAccessFacts['accountId']): boolean {
+function delegationHolds(delegation: DelegationFact, facts: AccountAccessFacts): boolean {
   if (delegation.kind === 'live_session') return true;
-  if (delegation.kind === 'delegation') return delegation.accountId === accountId && !delegation.expired && !delegation.revoked;
+  if (delegation.kind === 'delegation') {
+    // Consent from ONE human for ONE account on ONE agent page (ADR 0004 §4.4).
+    return (
+      delegation.accountId === facts.accountId &&
+      delegation.agentPageId === facts.agentPageId &&
+      delegation.delegatedBy === facts.actingHumanUserId &&
+      !delegation.expired &&
+      !delegation.revoked
+    );
+  }
   return false;
 }
 
@@ -37,7 +46,7 @@ export const decideAccountAccess: DecideAccountAccess = ({ facts }) => {
   if (!isDriveWithinCredentialScope(facts.callerCeiling.allowedDriveIds, facts.accountDriveId)) return NONE;
 
   const active = facts.status === 'active';
-  const delegated = delegationHolds(facts.delegation, facts.accountId);
+  const delegated = delegationHolds(facts.delegation, facts);
   const { owner } = facts;
 
   let view: boolean;

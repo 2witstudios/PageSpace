@@ -22,7 +22,8 @@
  * expected (Control Board §7.5).
  */
 import type { AgentDispatchPayload } from '../auth/agent-dispatch-payload';
-import type { AccountId, AccountKind, CredentialVersion, PolicyVersion, TenantId } from '@pagespace/db/schema/agent-accounts';
+import type { StoreLimits } from './store/store-adapter';
+import type { AccountId, AccountKind, AccountStatus, CredentialVersion, PolicyVersion, TenantId } from '@pagespace/db/schema/agent-accounts';
 
 // ---------------------------------------------------------------------------
 // Branded principals (threat model §3). One brand per principal; never
@@ -134,10 +135,12 @@ export type AgentAccountGrant = {
   readonly policyVersion: PolicyVersion;
   /**
    * The authority's signed digest of the plane bindings it evaluated
-   * `(tenantId, ownerRef, allowedOrigins, policyVersion, kind)`. The store
-   * compares it with the digest of ITS copy at resolve, so a main-DB writer
-   * who reassigns the owner or widens origins cannot produce a grant the
-   * plane honours (threat model A9; Codex P1 on PR #2637).
+   * `(tenantId, ownerRef, allowedOrigins, policyVersion, policyDigest, kind)`.
+   * The store compares it with the digest of ITS copy at resolve, so a
+   * main-DB writer who reassigns the owner, widens origins, or widens the
+   * approval policy / resource restrictions / agent-page bindings (all inside
+   * `policyDigest`) cannot produce a grant the plane honours (threat model A9;
+   * Codex P1 on PR #2637; G1a review H1).
    */
   readonly bindingDigest: BindingDigest;
   readonly operation: OperationRef;
@@ -178,11 +181,15 @@ export type GrantDenyReason =
   | 'ceiling'
   | 'tenant_mismatch'
   | 'principal_mismatch'
+  /** `expected.accountStatus` is anything but `active` (F5); the status itself goes to audit. */
+  | 'account_not_active'
   | 'version_mismatch'
   | 'policy_epoch'
   | 'no_delegation'
   | 'digest_mismatch'
   | 'generation_mismatch'
+  /** The grant names a sandbox but the presenter could not observe its current binding (`getSprite` unreachable) — never `ok` (ADR 0006 F5). */
+  | 'binding_unavailable'
   | 'ttl_too_long'
   | 'clock_skew'
   | 'not_yet_valid'
@@ -216,15 +223,44 @@ export type ApprovalFact =
    * verifier accepts it only when `consumedByGrantId` equals the signed
    * `grantId`: `null` means never issued against (a forged/unissued grant),
    * another id means a competing issuance won (Codex P1 on PR #2637).
+   *
+   * It also names the ACCOUNT it was given for and its expiry, so the
+   * verifier — not only issuance — refuses an approval recorded for another
+   * account or one that had expired when the grant was issued
+   * (`grant.iat > expiresAt`) (G1a review M3).
    */
-  | { readonly kind: 'concrete'; readonly approvalId: ApprovalId; readonly requestDigest: RequestDigest; readonly consumedByGrantId: GrantId | null }
+  | {
+      readonly kind: 'concrete';
+      readonly approvalId: ApprovalId;
+      readonly accountId: AccountId;
+      readonly requestDigest: RequestDigest;
+      readonly consumedByGrantId: GrantId | null;
+      /** `agent_account_approvals.expiresAt`, ms since epoch. */
+      readonly expiresAt: number;
+    }
   | { readonly kind: 'policy'; readonly policyVersion: PolicyVersion; readonly expired: boolean; readonly limitsExceeded: boolean }
   | { readonly kind: 'none' };
 
-/** The delegation row's facts (ADR 0004 §4.4). */
+/**
+ * The delegation row's facts (ADR 0004 §4.4). A delegation is consent from ONE
+ * human for ONE account on ONE agent page: the verifier compares
+ * `delegationId`, `accountId`, `agentPageId` (against `grant.agentPageId`) and
+ * `delegatedBy` (against `grant.human.userId`), so a delegation recorded for
+ * page P by user U never verifies for page Q or human V (G1a review H3).
+ */
 export type DelegationFact =
   | { readonly kind: 'live_session' }
-  | { readonly kind: 'delegation'; readonly delegationId: DelegationId; readonly accountId: AccountId; readonly expired: boolean; readonly revoked: boolean }
+  | {
+      readonly kind: 'delegation';
+      readonly delegationId: DelegationId;
+      readonly accountId: AccountId;
+      /** `agent_account_delegations.agentPageId`; null only for a delegation to the global assistant. */
+      readonly agentPageId: AgentPageId | null;
+      /** `agent_account_delegations.delegatedByUserId`. */
+      readonly delegatedBy: UserId;
+      readonly expired: boolean;
+      readonly revoked: boolean;
+    }
   | { readonly kind: 'none' };
 
 /**
@@ -247,12 +283,35 @@ export type ExpectedBinding = {
   readonly tenantId: TenantId;
   readonly accountId: AccountId;
   readonly accountKind: AccountKind;
+  /**
+   * `agent_accounts.status` as the adapter read it. Anything but `active`
+   * (`needs_reauth`, `revoked`, `deleted`) is `account_not_active` before any
+   * version is compared — the verifier, not only the plane, ends use of a
+   * revoked account (ADR 0004 F5; G1a review H4).
+   */
+  readonly accountStatus: AccountStatus;
   readonly accountDriveId: DriveId | null;
   readonly currentCredentialVersion: CredentialVersion;
+  /**
+   * PLANE-ATTESTED rotation facts (`agent_account_secret_versions`, written
+   * only by the plane's CAS). A grant naming `previousCredentialVersion` is
+   * admitted only while `now < rotatedAt + rotationGraceMs` AND
+   * `grant.iat < rotatedAt` — a grant issued after the rotation never gets the
+   * old material. Both null when there is no admissible previous version;
+   * `revoke` clears them (ADR 0004 F5a; G1a review M7).
+   */
+  readonly previousCredentialVersion: CredentialVersion | null;
+  readonly rotatedAt: number | null;
   readonly currentPolicyVersion: PolicyVersion;
   readonly delegation: DelegationFact;
-  /** The provisioner's current view; null when unavailable (→ `generation_mismatch`, never `ok`). */
-  readonly sandbox: { readonly instanceId: SandboxInstanceId; readonly generation: SandboxGeneration } | null;
+  /**
+   * The presenter's CURRENT observation of the sandbox — all three of
+   * `spriteName`, `instanceId`, `generation`, compared field by field with
+   * the signed `grant.sandbox` (any difference → `generation_mismatch`).
+   * null when unobservable: a grant that names a sandbox then gets
+   * `binding_unavailable`, never `ok` (ADR 0006 F5; G1a review M6).
+   */
+  readonly sandbox: SandboxBinding | null;
   /** `isDriveWithinCredentialScope(callerCeiling.allowedDriveIds, accountDriveId)`, computed by the adapter. */
   readonly ceilingAdmitsAccount: boolean;
 };
@@ -276,6 +335,8 @@ export type VerifyGrantInput = {
   readonly approval: ApprovalFact;
   readonly verify: Ed25519Verify;
   readonly hash: HashBytes;
+  /** The plane's frozen grace window (ADR 0005 §2.2), injected so F5a and `decideResolve` agree. */
+  readonly rotationGraceMs: StoreLimits['rotationGraceMs'];
 };
 
 /** `parseGrant` — schema + structural sanity only (F1). G1b implements. */

@@ -4,7 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import type { TenantId, AccountOwnerRef, PolicyVersion } from '@pagespace/db/schema/agent-accounts';
 import type { CanonicalOrigin } from '../../canonical-request';
-import type { PlaneBindings } from '../store-adapter';
+import type { PlaneBindings, PolicyDigest } from '../store-adapter';
 import { digestBindings } from '../digest-bindings';
 
 const fakeHash = (bytes: Uint8Array): string => Buffer.from(bytes).toString('hex');
@@ -17,6 +17,7 @@ const bindings = (overrides: Partial<PlaneBindings> = {}): PlaneBindings => ({
   ownerRef: owner,
   allowedOrigins: [origin('https://example.com')],
   policyVersion: 1 as PolicyVersion,
+  policyDigest: 'policy-digest-fixture' as PolicyDigest,
   kind: 'api_key',
   ...overrides,
 });
@@ -32,6 +33,7 @@ describe('digestBindings', () => {
     const a = digestBindings({ bindings: bindings(), hash: fakeHash });
     const reordered: PlaneBindings = {
       kind: 'api_key',
+      policyDigest: 'policy-digest-fixture' as PolicyDigest,
       policyVersion: 1 as PolicyVersion,
       allowedOrigins: [origin('https://example.com')],
       ownerRef: owner,

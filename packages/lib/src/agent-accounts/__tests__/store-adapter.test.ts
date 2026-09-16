@@ -5,7 +5,7 @@ import path from 'node:path';
 import type { HashBytes } from '../grant';
 import type { AccountId, AccountOwnerRef, CredentialVersion, PolicyVersion, TenantId } from '@pagespace/db/schema/agent-accounts';
 import type { CanonicalOrigin } from '../canonical-request';
-import type { PlaneBindings, StoredSecretFacts, VerifiedGrant } from '../store/store-adapter';
+import type { PlaneBindings, PolicyDigest, StoredSecretFacts, VerifiedGrant } from '../store/store-adapter';
 import { deriveTenantId } from '../store/derive-tenant-id';
 import { mapTenantProject } from '../store/map-tenant-project';
 import { planStoreIdentity } from '../store/plan-store-identity';
@@ -62,6 +62,7 @@ describe('decideResolve (ADR 0005 F1-F5, F10; §10.3-5)', () => {
     ownerRef: { kind: 'user', userId: 'u1' } as AccountOwnerRef,
     allowedOrigins: ['https://example.com' as CanonicalOrigin],
     policyVersion: 1 as PolicyVersion,
+    policyDigest: 'policy-digest-fixture' as PolicyDigest,
     kind: 'api_key',
   };
   const REF = { tenantId: 'user:u1' as TenantId, accountId: 'acct_1' as AccountId, kind: 'api_key' as const };
@@ -123,7 +124,7 @@ describe('decideResolve (ADR 0005 F1-F5, F10; §10.3-5)', () => {
   });
 
   it('given stored bindings differing only in key order from those digested, should compare equal (digestBindings is canonical) [§10.5]', () => {
-    const reordered: PlaneBindings = { kind: 'api_key', policyVersion: 1 as PolicyVersion, allowedOrigins: BINDINGS.allowedOrigins, ownerRef: BINDINGS.ownerRef, tenantId: BINDINGS.tenantId };
+    const reordered: PlaneBindings = { kind: 'api_key', policyVersion: 1 as PolicyVersion, policyDigest: 'policy-digest-fixture' as PolicyDigest, allowedOrigins: BINDINGS.allowedOrigins, ownerRef: BINDINGS.ownerRef, tenantId: BINDINGS.tenantId };
     const actual = decidePlaneBinding({ storedBindings: reordered, grantBindingDigest: digestBindings({ bindings: BINDINGS, hash }), hash });
     expect(actual).toEqual({ ok: true });
   });
@@ -154,6 +155,27 @@ describe('decideResolve (ADR 0005 F1-F5, F10; §10.3-5)', () => {
   it('given revokedAt set, should return revoked regardless of version [F10]', () => {
     expect(decideResolve({ grant: grant(), ref: REF, stored: stored({ revokedAt: NOW - 1 }), now: NOW, rotationGraceMs: 300_000, hash })).toEqual({ ok: false, reason: 'revoked' });
   });
+
+  it.todo('given version one behind current inside rotationGraceMs but grant.iat >= rotatedAt, should return version_mismatch [§10.4; G1a review M7]');
+  it.todo('given revoke after a rotation, should clear previousVersion and rotatedAt so the old version returns revoked, never grace [§2.2; G1a review M7]');
+  it.todo('given stored bindings whose policyDigest covers a wider approval policy scope, one more resourceRestrictions repo, or one more bound agent page than the grant bindingDigest, with policyVersion unchanged, should return binding_mismatch [§10.20; G1a review H1]');
+});
+
+describe('decideRebind (ADR 0005 §2.2, F15–F18, §10.21; G1a review H2)', () => {
+  it.todo('given a consent signed under the pinned consent key over digestBindings(next), fresh, from the stored owner, with stored policyVersion === expectedVersion < next.policyVersion, should return rebind');
+  it.todo('given a consent whose bindingsDigest covers any other bindings, should return consent_invalid');
+  it.todo('given a consent with a bad signature, or issuedAt older than rebindConsentMaxAgeMs, should return consent_invalid');
+  it.todo('given a user-owned account and a consenting user other than the STORED ownerRef owner, should return consent_invalid');
+  it.todo('given stored policyVersion !== expectedVersion, or next.policyVersion <= expectedVersion, should return version_conflict');
+  it.todo('given next bindings changing tenantId or kind, should return immutable_binding_changed');
+  it.todo('given stored null, should return not_found');
+  it.todo('given rebind called with a StoreIdentity lacking audience manage, should not compile (@ts-expect-error)');
+});
+
+describe('digestPlaneScope (ADR 0005 §2.4, §10.20)', () => {
+  it.todo('given the same scope with boundAgentPageIds and allowedOrigins in a different order, should return the same PolicyDigest');
+  it.todo('given a scope differing in approvalPolicy, resourceRestrictions, boundAgentPageIds or allowedOrigins, should return a different PolicyDigest');
+  it.todo('given the injected hash, should be SHA3-256 over canonicalJson(scope) — the authority and the plane derive identical bytes');
 });
 
 describe('decideStoreWrite — our CAS (ADR 0005 §10.6)', () => {
@@ -162,6 +184,7 @@ describe('decideStoreWrite — our CAS (ADR 0005 §10.6)', () => {
     ownerRef: { kind: 'user', userId: 'u1' } as AccountOwnerRef,
     allowedOrigins: ['https://example.com' as CanonicalOrigin],
     policyVersion: 1 as PolicyVersion,
+    policyDigest: 'policy-digest-fixture' as PolicyDigest,
     kind: 'api_key',
   };
 
@@ -262,4 +285,6 @@ describe('mutation pairs (ADR 0005 §10.15)', () => {
     expect(typeof decideCas).toBe('function');
     expect(typeof selectIdentity).toBe('function');
   });
+  it.todo('given the stored-owner check in decideRebind broken by line index, should go RED on §10.21; restored, GREEN');
+  it.todo('given the consent bindingsDigest compare broken, should go RED on §10.21; restored, GREEN');
 });

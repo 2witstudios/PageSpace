@@ -2,7 +2,8 @@
  * `decideSandboxBinding` — the ABA guard for relay operations (ADR 0006 §3,
  * §7; ADR 0004 F9).
  *
- * The instance id catches a sprite deleted and recreated under the same
+ * The sprite name, instance id and generation are all compared. The
+ * instance id catches a sprite deleted and recreated under the same
  * name; the generation catches a checkpoint restore that kept the id. Both
  * are compared for EQUALITY with what the provisioner observes now — an older
  * snapshot presented as current is as wrong as a newer one. An observation
@@ -15,13 +16,13 @@
  *
  * Pure.
  */
-import type { PresenterChannel, SandboxBinding, SandboxGeneration, SandboxInstanceId } from './grant';
+import type { PresenterChannel, SandboxBinding } from './grant';
 
 export type SandboxBindingVerdict = { readonly ok: true } | { readonly ok: false; readonly reason: 'malformed' | 'generation_mismatch' | 'binding_unavailable' };
 
 export type DecideSandboxBinding = (input: {
   readonly grant: SandboxBinding | null;
-  readonly observed: { readonly instanceId: SandboxInstanceId; readonly generation: SandboxGeneration } | null;
+  readonly observed: SandboxBinding | null;
   readonly aud: PresenterChannel;
 }) => SandboxBindingVerdict;
 
@@ -30,6 +31,8 @@ export const decideSandboxBinding: DecideSandboxBinding = ({ grant, observed, au
   if (relay !== (grant !== null)) return { ok: false, reason: 'malformed' };
   if (grant === null) return { ok: true };
   if (observed === null) return { ok: false, reason: 'binding_unavailable' };
+  // The sprite NAME too: two sprites can share id and generation values.
+  if (grant.spriteName !== observed.spriteName) return { ok: false, reason: 'generation_mismatch' };
   if (grant.instanceId !== observed.instanceId) return { ok: false, reason: 'generation_mismatch' };
   if (grant.generation !== observed.generation) return { ok: false, reason: 'generation_mismatch' };
   return { ok: true };
