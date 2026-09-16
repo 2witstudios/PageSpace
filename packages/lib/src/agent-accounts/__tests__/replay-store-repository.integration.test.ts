@@ -113,8 +113,8 @@ describe('replay store — atomic, shared across replicas, survives restart (ADR
     const replica = createReplayStoreRepository({ db });
     const expired = nonce();
     const live = nonce();
-    // Expired beyond the verifier's clock-skew allowance: nothing can still accept it.
-    await replica.consume({ nonce: expired, grantId: GRANT, expiresAt: NOW - GRANT_LIMITS.maxClockSkewMs - 1, now: NOW - 60_000 });
+    // Expired beyond TWO skew allowances (a sweeper ahead + a verifier behind): nothing can still accept it.
+    await replica.consume({ nonce: expired, grantId: GRANT, expiresAt: NOW - 2 * GRANT_LIMITS.maxClockSkewMs - 1, now: NOW - 120_000 });
     await replica.consume({ nonce: live, grantId: GRANT, expiresAt: EXP, now: NOW });
     const swept = await replica.sweepExpired({ now: NOW });
     const expiredAfter = await replica.lookup({ nonce: expired });
@@ -130,10 +130,14 @@ describe('replay store — atomic, shared across replicas, survives restart (ADR
     if (!dbAvailable) return;
     const replica = createReplayStoreRepository({ db });
     const recent = nonce();
+    // Past one skew allowance but within two: a sweeper S ahead and a verifier S behind are 2S apart.
+    const betweenSkews = nonce();
     await replica.consume({ nonce: recent, grantId: GRANT, expiresAt: NOW - 20_000, now: NOW - 60_000 });
+    await replica.consume({ nonce: betweenSkews, grantId: GRANT, expiresAt: NOW - GRANT_LIMITS.maxClockSkewMs - 15_000, now: NOW - 120_000 });
     await replica.sweepExpired({ now: NOW });
-    const actual = await replica.lookup({ nonce: recent });
-    expect(actual.ok && actual.recorded !== null).toBe(true);
+    const kept = await Promise.all([replica.lookup({ nonce: recent }), replica.lookup({ nonce: betweenSkews })]);
+    const actual = kept.map((lookup) => lookup.ok && lookup.recorded !== null);
+    expect(actual).toEqual([true, true]);
   });
 
   it('given the store unreachable, should report lookup failed and consume unavailable — never fresh, never consumed', async () => {

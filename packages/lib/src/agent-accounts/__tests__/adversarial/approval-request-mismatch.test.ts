@@ -169,6 +169,8 @@ describe('adversarial: approval-request-mismatch', () => {
     });
   });
 
+  it.todo('given a DENY approval row for a privilege operation (bound without step-up, so the deny is audited) stamped with this grant id, should return approval_mismatch — the ApprovalFact adapter must map outcome deny to { kind: none } and issuance must consume only allow_once rows; owned by G2 (approval repository / issuance)');
+
   it('given two requests identical except ?force=true, should render subjects that differ in query — the human sees every digest-bound part that changes what the request does [G1a review H5]', () => {
     const plain = renderApprovalSubject({ canonical: canonical({ method: 'DELETE', url: 'https://api.github.com/repos/octo/hello', body: new Uint8Array(0) }) });
     const forced = renderApprovalSubject({ canonical: canonical({ method: 'DELETE', url: 'https://api.github.com/repos/octo/hello?force=true', body: new Uint8Array(0) }) });

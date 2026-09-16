@@ -38,7 +38,7 @@ describe('decideRetry', () => {
     expect(actual).toEqual({ action: 'report', outcome: { kind: 'upstream_failed', upstreamStatus: 503 } });
   });
 
-  it.each([502, 504])(
+  it.each([502, 504, 520, 524])(
     'given a non-idempotent class and a gateway %i, should report unknown — a gateway lost the origin response, so the write may have landed',
     (status) => {
       const actual = (['write', 'irreversible', 'privilege', 'unknown'] as const).map((operationClass) =>
