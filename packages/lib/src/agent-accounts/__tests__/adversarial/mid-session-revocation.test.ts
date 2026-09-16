@@ -9,4 +9,5 @@ describe('adversarial: mid-session-revocation', () => {
   it.todo('given account status needs_reauth, should refuse issuance and require human re-login');
   it.todo('given an unexpired grant issued while the account was active and the account then marked revoked, needs_reauth or deleted, should return account_not_active at verifyGrant — before the plane is ever asked [0004 F5; G1a review H4]');
   it.todo('given a session account with sessionHttpEnabled false, should be unresolvable by the http-executor under any ordinary use grant (session_http default off) [PR #2637 P1]');
+  it.todo("given an unexpired grant with sessionHttp true and the account's sessionHttpEnabled then turned off, should return policy_epoch at verifyGrant and binding_mismatch at resolve — the flag change bumps policyVersion [0004 §8.32; G1a review M4]");
 });

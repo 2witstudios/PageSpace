@@ -22,6 +22,7 @@ describe('manage and grant', () => {
 });
 
 describe('session_http (default off; PR #2637 P1)', () => {
+  it.todo('given a change to sessionHttpEnabled in either direction, should be in the policyVersion bump list so outstanding sessionHttp grants die (policy-bump classifier table test) [0004 §4.4, §8.32; G1a review M4]');
   it.todo('given sessionHttpEnabled false, should return session_http false whatever else is true [0005 §10.18]');
   it.todo('given sessionHttpEnabled true and use false, should return session_http false [0005 §10.18]');
   it.todo('given sessionHttpEnabled true and use true, should return session_http true [0005 §10.18]');
