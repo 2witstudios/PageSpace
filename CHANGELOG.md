@@ -7,6 +7,11 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Multi-question prompts from the assistant have Back and Next buttons** — when the assistant
+  asks several questions at once, you could only switch between them by tapping the small
+  numbered tabs or pressing the arrow keys, which is awkward on a phone. Each question now has a
+  Back / Next row with a "2 of 3" counter under it, sized for a finger, and it works on a card you
+  have already answered too. The tabs and arrow keys still work as before.
 - **The marketing site follows your system theme, and light mode has its own hero** — the site used
   to open in dark mode for everyone, and its space hero only worked on a dark page. Light mode now
   has a white version of the same scene with dark text over it, and the site starts in whatever
