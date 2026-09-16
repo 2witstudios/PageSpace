@@ -149,6 +149,30 @@ describe('canonicalizeRequest refusals (ADR 0004 F18)', () => {
     expect(actual).toBe('malformed');
   });
 
+  it.each([
+    ['headers missing', { headers: undefined }],
+    ['headers null', { headers: null }],
+    ['headers an array', { headers: [['accept', 'x']] }],
+    ['a header value that is not a string', { headers: { accept: 42 } }],
+    ['body missing', { body: undefined }],
+    ['body a string', { body: '{"title":"hello"}' }],
+    ['declaredHeaders not an array', { declaredHeaders: 'x-trace-id' }],
+    ['a declared header that is not a string', { declaredHeaders: [7] }],
+    ['resources missing', { resources: undefined }],
+    ['resources an array', { resources: ['octo/hello'] }],
+    ['a resource value that is not a string', { resources: { repo: { id: 1 } } }],
+  ])('given untrusted input with %s, should refuse with malformed rather than throw', (_label, override) => {
+    const input = { ...makeInput(), ...override } as unknown as CanonicalRequestInput;
+    let actual: CanonicalizeRefusal | 'ok' | 'threw';
+    try {
+      const result = canonicalizeRequest(input);
+      actual = result.ok ? 'ok' : result.reason;
+    } catch {
+      actual = 'threw';
+    }
+    expect(actual).toBe('malformed');
+  });
+
   it('given a URL that does not parse, should refuse with malformed', () => {
     const actual = refusal({ url: 'https://' });
     expect(actual).toBe('malformed');
@@ -432,7 +456,7 @@ describe('renderApprovalSubject (ASI06)', () => {
     const c = canonical();
     const actual = renderApprovalSubject({ canonical: c });
     expect(actual).toEqual({
-      headline: 'POST https://api.github.com:443/repos/octo/hello/issues — github.issues.create (write)',
+      headline: 'POST https://api.github.com:443/repos/octo/hello/issues?labels=bug&state=open — github.issues.create (write)',
       origin: 'https://api.github.com:443',
       operation: { class: 'write', name: 'github.issues.create' },
       resources: [
@@ -442,6 +466,23 @@ describe('renderApprovalSubject (ASI06)', () => {
       bodySha256: c.bodySha256,
       bodyBytes: BODY.byteLength,
     });
+  });
+
+  it('given two requests that differ only in a query parameter, should render headlines a human can tell apart', () => {
+    const toAlice = renderApprovalSubject({ canonical: canonical({ url: 'https://bank.example/transfer?to=alice', operation: { class: 'unknown', name: 'bank.transfer' } }) });
+    const toBob = renderApprovalSubject({ canonical: canonical({ url: 'https://bank.example/transfer?to=bob', operation: { class: 'unknown', name: 'bank.transfer' } }) });
+    const actual = [toAlice.headline, toBob.headline];
+    const expected = [
+      'POST https://bank.example:443/transfer?to=alice — bank.transfer (unknown)',
+      'POST https://bank.example:443/transfer?to=bob — bank.transfer (unknown)',
+    ];
+    expect(actual).toEqual(expected);
+  });
+
+  it('given a query, should render it in canonical (sorted, still percent-encoded) form so the headline shows what is digested', () => {
+    const actual = renderApprovalSubject({ canonical: canonical({ url: 'https://a.example/p?b=x%2by&a=1&flag' }) }).headline;
+    const expected = 'POST https://a.example:443/p?a=1&b=x%2By&flag= — github.issues.create (write)';
+    expect(actual).toBe(expected);
   });
 
   it('given a canonical request with no body, should report zero body bytes', () => {

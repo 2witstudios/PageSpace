@@ -186,7 +186,7 @@ describe('audit acceptance before execute (ADR 0004 F13)', () => {
     });
     const rows = await rowsFor(grant.grantId);
     expect({ result, acted, types: rows.map((row) => row.eventType), linked: rows.length === 2 && rows[1]!.previousHash === rows[0]!.eventHash }).toEqual({
-      result: { ok: true, outcome: { kind: 'executed', upstreamStatus: 201 } },
+      result: { ok: true, outcome: { kind: 'executed', upstreamStatus: 201 }, outcomeRecorded: true },
       acted: [grant.grantId],
       types: ['credential.grant.allowed', 'credential.operation.executed'],
       linked: true,
@@ -227,7 +227,7 @@ describe('audit acceptance before execute (ADR 0004 F13)', () => {
     });
     const rows = await rowsFor(grant.grantId);
     expect({ result, types: rows.map((row) => row.eventType) }).toEqual({
-      result: { ok: true, outcome: { kind: 'unknown' } },
+      result: { ok: true, outcome: { kind: 'unknown' }, outcomeRecorded: true },
       types: ['credential.grant.allowed', 'credential.operation.unknown'],
     });
   });

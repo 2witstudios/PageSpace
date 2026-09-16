@@ -51,6 +51,10 @@
  *   - `bodySha256` over the exact bytes (the empty body hashes to the digest
  *     of zero bytes); `resources` sorted by key.
  *
+ * Every field is checked before it is dereferenced — the containers
+ * (`headers`, `body`, `resources`, `declaredHeaders`) included — so malformed
+ * input is a `malformed` refusal, never a throw at the authorization boundary.
+ *
  * Pure and total: same input → same output, no I/O, no clock. The SHA-256 of
  * the body is a deterministic function of the input, not an injected
  * primitive, because the frozen `CanonicalizeRequest` signature carries no
@@ -127,6 +131,20 @@ const HEX_PAIR_RE = /^[0-9A-Fa-f]{2}$/;
 
 type Refusal = { readonly ok: false; readonly reason: CanonicalizeRefusal };
 const refuse = (reason: CanonicalizeRefusal): Refusal => ({ ok: false, reason });
+
+/** A plain `{ name: string }` record — not null, not an array. The containers arrive from an untrusted tool call. */
+function isStringRecord(value: unknown): value is Readonly<Record<string, string>> {
+  return (
+    value !== null &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    Object.values(value).every((entry) => typeof entry === 'string')
+  );
+}
+
+function isStringArray(value: unknown): value is readonly string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === 'string');
+}
 
 function isExecutorChannel(value: unknown): value is ExecutorChannel {
   return typeof value === 'string' && Object.prototype.hasOwnProperty.call(METHODS_BY_CHANNEL, value);
@@ -291,6 +309,8 @@ export const canonicalizeRequest: CanonicalizeRequest = (input): CanonicalizeRes
   if (!isExecutorChannel(input.channel)) return refuse('malformed');
   if (!isOperationRef(input.operation)) return refuse('malformed');
   if (typeof input.method !== 'string' || typeof input.url !== 'string') return refuse('malformed');
+  if (!isStringRecord(input.headers) || !isStringRecord(input.resources)) return refuse('malformed');
+  if (!(input.body instanceof Uint8Array) || !isStringArray(input.declaredHeaders)) return refuse('malformed');
 
   const channel = input.channel;
   const method = channel === 'http-executor' ? input.method.toUpperCase() : input.method;

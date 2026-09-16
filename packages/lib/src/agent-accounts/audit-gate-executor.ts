@@ -9,11 +9,20 @@
  *   3. write the outcome row under the SAME `grantId`, so the pair is one
  *      linked story in the chain.
  *
- * An `act` that throws is `outcome: 'unknown'`, not a failure: the request
- * was already sent and a non-idempotent write may have landed (threat model
- * §2.4 — replay protection is not idempotency; `decideRetry` owns what the
- * caller may do next). Reporting it as failed would let a caller retry a
- * push that already happened.
+ * `act` reports its own phase. A failure it KNOWS happened before anything
+ * was sent (DNS, connect, TLS, a refused pinned address) it must catch and
+ * RETURN as `upstream_failed` with `upstreamStatus: null` — `decideRetry`'s
+ * `before_send` report — which keeps a safe retry possible. An `act` that
+ * THROWS is `outcome: 'unknown'`, not a failure: the executor cannot tell
+ * where it stopped, so it assumes the request was sent and a non-idempotent
+ * write may have landed (threat model §2.4 — replay protection is not
+ * idempotency). Reporting it as failed would let a caller retry a push that
+ * already happened.
+ *
+ * The outcome row is written AFTER the effect, so its acceptance cannot gate
+ * anything; it is reported instead. `outcomeRecorded: false` means the
+ * operation ran (or may have) and the chain holds only the `allowed` row — the
+ * caller must surface that, never read the result as a clean success.
  *
  * No decision logic lives here: the gate is `decideAuditGate`, the record is
  * `buildAuditRecord`. Integration-tested against the real chain.
@@ -26,7 +35,12 @@ import { decideAuditGate } from './decide-audit-gate';
 import type { AgentAccountAuditRepository } from './audit-repository';
 
 export type AuditedExecution =
-  | { readonly ok: true; readonly outcome: AuditOutcome }
+  | {
+      readonly ok: true;
+      readonly outcome: AuditOutcome;
+      /** Whether the chain accepted the outcome row. `false`: the effect happened but only `allowed` is durable. */
+      readonly outcomeRecorded: boolean;
+    }
   | { readonly ok: false; readonly reason: Extract<GrantDenyReason, 'audit_unavailable'> };
 
 export type AuditedExecutor = {
@@ -37,6 +51,7 @@ export type AuditedExecutor = {
     readonly now: number;
     /** The resource keys this operation's catalogue entry declares (ADR 0004 §5 amendment). */
     readonly declaredResourceKeys: readonly string[];
+    /** The effect. Return `upstream_failed` (status null) for a failure known to precede sending; a throw is recorded as `unknown`. */
     readonly act: () => Promise<AuditOutcome>;
   }) => Promise<AuditedExecution>;
   /** Record a refusal. Nothing is executed; the reason is for the audit and the human, never the caller. */
@@ -69,11 +84,13 @@ export function createAuditedExecutor({
       try {
         outcome = await act();
       } catch {
-        // The request was sent; upstream may have acted. Never "failed".
+        // Where it stopped is unknown; upstream may have acted. Never "failed".
         outcome = { kind: 'unknown' };
       }
-      await auditRepository.accept({ record: buildAuditRecord({ grant, canonical, outcome, at: now, hash, declaredResourceKeys }) });
-      return { ok: true, outcome };
+      const outcomeAcceptance = await auditRepository.accept({
+        record: buildAuditRecord({ grant, canonical, outcome, at: now, hash, declaredResourceKeys }),
+      });
+      return { ok: true, outcome, outcomeRecorded: outcomeAcceptance.kind === 'accepted' };
     },
 
     async recordDenial({ grant, canonical, reason, now, declaredResourceKeys }) {
