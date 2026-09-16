@@ -330,3 +330,18 @@ describe('buildAgentSystemPrompt — what both surfaces owe the caller', () => {
     }
   });
 });
+
+describe('buildAgentSystemPrompt — tool approvals', () => {
+  it('given toolApprovals, should carry the ACTION APPROVAL guidance on both surfaces; without it, nothing', () => {
+    expect(buildAgentSystemPrompt(globalInput({ toolApprovals: true }))).toContain('ACTION APPROVAL:');
+    expect(buildAgentSystemPrompt(globalInput())).not.toContain('ACTION APPROVAL:');
+    expect(buildAgentSystemPrompt(pageInput({ toolApprovals: true }))).toContain('ACTION APPROVAL:');
+    expect(buildAgentSystemPrompt(pageInput())).not.toContain('ACTION APPROVAL:');
+  });
+
+  it('given a custom page prompt, should STILL carry the guidance — the owner opted out of our persona, not of the gate', () => {
+    const prompt = buildAgentSystemPrompt(pageInput({ customSystemPrompt: 'You are Bob.', toolApprovals: true }));
+    expect(prompt).toContain('You are Bob.');
+    expect(prompt).toContain('ACTION APPROVAL:');
+  });
+});

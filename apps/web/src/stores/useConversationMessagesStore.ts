@@ -9,6 +9,7 @@ import { applyOlderPage } from '@/stores/conversationMessages/applyOlderPage';
 import { applyConversationEdit } from '@/stores/conversationMessages/applyConversationEdit';
 import { applyConversationDelete } from '@/stores/conversationMessages/applyConversationDelete';
 import { applyConversationAskUserAnswer } from '@/stores/conversationMessages/applyConversationAskUserAnswer';
+import { applyConversationToolApprovalResponse } from '@/stores/conversationMessages/applyConversationToolApprovalResponse';
 import { applyRemoteUserMessage } from '@/stores/conversationMessages/applyRemoteUserMessage';
 import { applyConfirmedMessage } from '@/stores/conversationMessages/applyConfirmedMessage';
 import { promoteOptimisticSends } from '@/stores/conversationMessages/promoteOptimisticSends';
@@ -18,6 +19,7 @@ import { advanceRev } from '@/stores/conversationMessages/advanceRev';
 import { seedEmpty, type ConversationCacheEntry, type ConversationMessagesById } from '@/stores/conversationMessages/seedEmpty';
 import type { MessageEditPayload } from '@/lib/ai/streams/applyMessageEdit';
 import { revertAskUserAnswer, type AskUserAnswerPayload, type AskUserAnswerRevertPayload } from '@/lib/ai/streams/applyAskUserAnswer';
+import { revertToolApprovalResponse, type ToolApprovalResponsePayload, type ToolApprovalRevertPayload } from '@/lib/ai/streams/applyToolApprovalResponse';
 
 export type { ConversationCacheEntry, ConversationMessagesById };
 
@@ -73,6 +75,10 @@ interface ConversationMessagesState {
   applyAskUserAnswer: (conversationId: string, payload: AskUserAnswerPayload) => void;
   /** Reverts an optimistic ask_user answer (the resume POST rejected) back to input-available. */
   revertAskUserAnswer: (conversationId: string, payload: AskUserAnswerRevertPayload) => void;
+  /** Optimistic tool-approval answer patch — the resume POST's own commit reconciles it once persisted. */
+  applyToolApprovalResponse: (conversationId: string, payload: ToolApprovalResponsePayload) => void;
+  /** Reverts an optimistic approval answer (the resume POST rejected) back to approval-requested. */
+  revertToolApprovalResponse: (conversationId: string, payload: ToolApprovalRevertPayload) => void;
   applyRemoteUserMessage: (conversationId: string, message: UIMessage) => void;
   /**
    * Upsert-by-id (replace if present, append if absent) — see applyConfirmedMessage's
@@ -194,6 +200,23 @@ export const useConversationMessagesStore = create<ConversationMessagesState>((s
         byConversationId: {
           ...state.byConversationId,
           [conversationId]: { ...existing, messages: revertAskUserAnswer(existing.messages, payload) },
+        },
+      };
+    });
+  },
+
+  applyToolApprovalResponse: (conversationId, payload) => {
+    set((state) => ({ byConversationId: applyConversationToolApprovalResponse(state.byConversationId, { conversationId, payload }) }));
+  },
+
+  revertToolApprovalResponse: (conversationId, payload) => {
+    set((state) => {
+      const existing = state.byConversationId[conversationId];
+      if (!existing) return state;
+      return {
+        byConversationId: {
+          ...state.byConversationId,
+          [conversationId]: { ...existing, messages: revertToolApprovalResponse(existing.messages, payload) },
         },
       };
     });
