@@ -8,8 +8,9 @@
  * hostname.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import http from 'node:http';
+import https from 'node:https';
 import zlib from 'node:zlib';
 import net, { type AddressInfo } from 'node:net';
 import { pinnedFetch, DEFAULT_USER_AGENT } from './pinned-fetch';
@@ -81,6 +82,72 @@ afterAll(async () => {
 });
 
 describe('pinnedFetch', () => {
+  it('given an https URL whose host is an IPv6 literal, should hand node:https the bare address so the certificate is checked against it', async () => {
+    // With the brackets kept, TLS compares the certificate against "[::1]" and
+    // always fails (ERR_TLS_CERT_ALTNAME_INVALID); verified against a real
+    // loopback certificate outside the suite.
+    const requestSpy = vi.spyOn(https, 'request').mockImplementation(() => {
+      throw new Error('captured');
+    });
+    try {
+      await pinnedFetch('https://[::1]:8443/hook', { method: 'GET', pinnedAddresses: ['::1'] }).catch(() => undefined);
+      const options = requestSpy.mock.calls[0]?.[0] as { hostname?: string; servername?: string } | undefined;
+
+      const actual = { hostname: options?.hostname, servername: options?.servername };
+      const expected = { hostname: '::1', servername: undefined };
+      expect(actual).toEqual(expected);
+    } finally {
+      requestSpy.mockRestore();
+    }
+  });
+
+  it.each([
+    ['a HEAD response', 'HEAD', 'HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: 1234\r\n\r\n'],
+    ['an empty GET body', 'GET', 'HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: 0\r\n\r\n'],
+  ])('given %s labelled gzip, should read as an empty body rather than a decode error (as fetch does)', async (_label, method, reply) => {
+    const raw = net.createServer((socket) => {
+      socket.on('error', () => undefined); // the client may reset the connection
+      socket.once('data', () => socket.end(reply));
+    });
+    await new Promise<void>((resolve) => raw.listen(0, '127.0.0.1', resolve));
+    const rawPort = (raw.address() as AddressInfo).port;
+    try {
+      const response = await pinnedFetch(`http://pinned-host.invalid:${rawPort}/hook`, {
+        method,
+        pinnedAddresses: ['127.0.0.1'],
+      });
+      const actual = await response.text().catch((error: Error) => `error: ${error.message}`);
+      const expected = '';
+      expect(actual).toEqual(expected);
+    } finally {
+      raw.close();
+    }
+  });
+
+  it('given a status line whose reason phrase has a control character, should still return the response (as fetch does)', async () => {
+    const raw = net.createServer((socket) => {
+      socket.on('error', () => undefined); // the client may reset the connection
+      socket.once('data', () => socket.end('HTTP/1.1 200 O\x01K\r\nContent-Length: 2\r\n\r\nok'));
+    });
+    await new Promise<void>((resolve) => raw.listen(0, '127.0.0.1', resolve));
+    const rawPort = (raw.address() as AddressInfo).port;
+    try {
+      const outcome = await pinnedFetch(`http://pinned-host.invalid:${rawPort}/hook`, {
+        method: 'GET',
+        pinnedAddresses: ['127.0.0.1'],
+      }).then(
+        async (response) => ({ status: response.status, body: await response.text() }),
+        (error: Error) => ({ error: error.message })
+      );
+
+      const actual = outcome;
+      const expected = { status: 200, body: 'ok' };
+      expect(actual).toEqual(expected);
+    } finally {
+      raw.close();
+    }
+  });
+
   it.each([['identity'], ['gzip'], ['deflate, gzip']])(
     'given a %s body that is cancelled before it ends (as the executor does on a redirect hop), should close the socket',
     async (coding) => {
