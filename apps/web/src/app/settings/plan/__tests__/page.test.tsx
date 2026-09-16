@@ -59,13 +59,16 @@ describe('PlanPage (D-OW-17: the real settings/plan regression guard)', () => {
   });
 
   it('MON-2 (independent review on #2649, D-OW-17) shows the server-supplied planCredits figure on the Pro card, not the plan module\'s own built-in number', async () => {
-    // 900 is deliberately NOT what PLANS.pro's own built-in figure resolves to
-    // today (1,500 under the current MONEY_MODEL_V2_ACTIVE=false default) — if
-    // the server-supplied override were dropped, the card would show the
-    // module's own number instead and this assertion would fail.
+    // 777 is deliberately NOT a figure PLANS.pro can resolve to in EITHER state of
+    // MONEY_MODEL_V2_ACTIVE: 1,500 while it is false, 900 once the migration commit
+    // flips it. It must never be 900 or 1,500 — either one equals the built-in
+    // number in one of the two states, and in that state a dropped override would
+    // render the same text and this guard would pass vacuously. If the
+    // server-supplied override is dropped, the card shows the module's own number
+    // instead and this assertion fails, before and after the flip.
     mockStatusResponse({
       subscriptionTier: 'free',
-      planCredits: { free: 500, pro: 900, business: 5000 },
+      planCredits: { free: 500, pro: 777, business: 7777 },
     });
 
     render(<PlanPage />);
@@ -84,7 +87,8 @@ describe('PlanPage (D-OW-17: the real settings/plan regression guard)', () => {
     const [freeCard, proCard] = screen.getAllByTestId('plan-included-credits');
     expect(freeCard).toHaveTextContent('500 credits to start');
     // The card that actually matters for this regression: the server-supplied
-    // override (900), not the plan module's own built-in number (1,500).
-    expect(proCard).toHaveTextContent('900 credits included each month');
+    // override (777), not the plan module's own built-in number (1,500 today, 900
+    // after the migration-day flip).
+    expect(proCard).toHaveTextContent('777 credits included each month');
   });
 });
