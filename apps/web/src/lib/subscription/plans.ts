@@ -8,7 +8,14 @@ import {
   type SubscriptionTier,
 } from '@pagespace/lib/billing/subscription-tiers';
 import { stripeConfig } from '../stripe-config';
-import { MONTHLY_CREDIT_CENTS, monthlyCreditsPhrase, includedCreditsPhrase, topUpRatePhrase } from './credits';
+import {
+  MONTHLY_CREDIT_CENTS,
+  monthlyCreditsPhrase,
+  monthlyCreditsPhraseForCents,
+  includedCreditsPhrase,
+  includedCreditsPhraseForCents,
+  topUpRatePhrase,
+} from './credits';
 
 export type { SubscriptionTier };
 
@@ -210,6 +217,54 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
     ],
   },
 };
+
+/**
+ * MON-2: patch a plan's credit-derived fields with a server-supplied cents value.
+ *
+ * `PLANS` is a module-level constant built once, using this module's OWN evaluation
+ * of the money model (`MONTHLY_CREDIT_CENTS`, computed via `MONEY_MODEL_V2_ACTIVE`).
+ * D-OW-17 made that constant identical in every process, including a `'use client'`
+ * browser bundle — `PLANS`'s own build-time number is now correct there too, not
+ * just on the server. This function, and the `planCredits` fetch it patches from,
+ * remain correct to keep: they are simply no longer load-bearing for a client/server
+ * asymmetry that no longer exists (see money-model.ts's module doc comment for why
+ * an env var, and then a client mirror of one, couldn't guarantee that on their own).
+ *
+ * This function patches a `PlanDefinition`'s credit-derived fields with a supplied
+ * number — `includedCredits`, `limits.monthlyCreditsCents`, and the credit line
+ * inside `features` — without touching anything else. The credit feature is matched
+ * by its CURRENT text (`monthlyCreditsPhrase(plan.id)`, exactly how `PLANS` built it
+ * above) rather than assumed to be at a fixed index, so reordering a tier's
+ * `features` array can never silently patch the wrong line.
+ */
+export function withCreditsCents(plan: PlanDefinition, cents: number): PlanDefinition {
+  const creditFeatureName = monthlyCreditsPhrase(plan.id);
+  return {
+    ...plan,
+    includedCredits: includedCreditsPhraseForCents(plan.id, cents),
+    limits: { ...plan.limits, monthlyCreditsCents: cents },
+    features: plan.features.map((feature) =>
+      feature.name === creditFeatureName ? { ...feature, name: monthlyCreditsPhraseForCents(plan.id, cents) } : feature,
+    ),
+  };
+}
+
+/**
+ * Apply `withCreditsCents` across a list of plans wherever `creditsCentsByTier` has
+ * an entry for that plan's tier; a plan with no entry is returned unchanged (the
+ * module's own build-time number, shown only for the instant before the server
+ * response with `planCredits` arrives).
+ */
+export function withCreditOverrides(
+  plans: PlanDefinition[],
+  creditsCentsByTier?: Partial<Record<SubscriptionTier, number>>,
+): PlanDefinition[] {
+  if (!creditsCentsByTier) return plans;
+  return plans.map((plan) => {
+    const cents = creditsCentsByTier[plan.id];
+    return cents === undefined ? plan : withCreditsCents(plan, cents);
+  });
+}
 
 export const PLAN_ORDER: readonly SubscriptionTier[] = CANONICAL_PLAN_ORDER;
 

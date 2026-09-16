@@ -14,7 +14,14 @@ import { EmbeddedCheckoutForm } from '@/components/billing/EmbeddedCheckoutForm'
 import { PlanChangeConfirmation } from '@/components/billing/PlanChangeConfirmation';
 import { PlanCard } from '@/components/billing/PlanCard';
 import { BillingGuard } from '@/components/billing/BillingGuard';
-import { getPersonalPlans, getPlan, getTierFromPriceId, type SubscriptionTier, type PlanDefinition } from '@/lib/subscription/plans';
+import {
+  getPersonalPlans,
+  getPlan,
+  getTierFromPriceId,
+  withCreditOverrides,
+  type SubscriptionTier,
+  type PlanDefinition,
+} from '@/lib/subscription/plans';
 import { creditsCellPhrase } from '@/lib/subscription/credits';
 import type { AppliedPromo } from '@/components/billing/PromoCodeInput';
 
@@ -22,6 +29,18 @@ interface SubscriptionData {
   subscriptionTier: SubscriptionTier;
   /** A-9: a legacy $100 personal Business subscriber kept at their price. */
   subscriptionGrandfathered?: boolean;
+  /**
+   * MON-2 / D-OW-17: the server's included-credit figure, per tier, in whole
+   * cents. Since MONEY_MODEL_V2_ACTIVE is a compile-time constant embedded
+   * identically in every process (money-model.ts), this client bundle could
+   * now derive the same number itself — there is no longer a value only the
+   * server can see. Patching it from the server response anyway keeps this
+   * page correct even if a FUTURE change ever makes the included-credit
+   * figure depend on something genuinely server-only (a per-user grant, a
+   * promo override); see withCreditOverrides in @/lib/subscription/plans.
+   * Patched onto `plans` below.
+   */
+  planCredits?: Partial<Record<SubscriptionTier, number>>;
   subscription?: {
     status: string;
     currentPeriodStart: string;
@@ -300,7 +319,14 @@ export default function PlanPage() {
 
   // SEAT-2: Business is the org plan and is not offered to a lone user; it
   // appears here only as the viewer's own (grandfathered) current plan.
-  const plans = getPersonalPlans(subscriptionData?.subscriptionTier);
+  // MON-2 / D-OW-17: patch each plan's credit-derived fields with the server's
+  // planCredits (see the SubscriptionData.planCredits doc comment above for
+  // why this still runs even though the client could now compute the same
+  // number itself under the compile-time constant).
+  const plans = withCreditOverrides(
+    getPersonalPlans(subscriptionData?.subscriptionTier),
+    subscriptionData?.planCredits,
+  );
   const currentPlan = subscriptionData ? getPlan(subscriptionData.subscriptionTier) : getPlan('free');
   const scheduledTier = subscriptionData?.subscription?.scheduledPriceId
     ? getTierFromPriceId(subscriptionData.subscription.scheduledPriceId)

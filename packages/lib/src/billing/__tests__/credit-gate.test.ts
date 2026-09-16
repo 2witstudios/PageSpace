@@ -557,7 +557,7 @@ describe('canConsumeAI', () => {
     const r = await canConsumeAI('u1', 'business');
 
     // Business tier allowance: SEAT-2 lists Business at $50/month (the org plan);
-    // tierAllowanceCents derives 100% of that with MONEY_MODEL_V2 off (5000¢).
+    // tierAllowanceCents derives 100% of that under the D-OW-17 default (5000¢).
     expect(sink.set).toMatchObject({ monthlyRemainingCents: 5000, monthlyAllowanceCents: 5000 });
     expect(sink.ledgerValues).toMatchObject({ entryType: 'monthly_grant', amountCents: 5000 });
     expect(r.allowed).toBe(true);

@@ -52,6 +52,9 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 import { GET } from '../route';
 import { requireAuth, isAuthError } from '@/lib/auth/auth-helpers';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+// Real, unmocked: money-model is pure (no IO), and mocking it would defeat the planCredits test.
+import { tierAllowanceCents } from '@pagespace/lib/billing/money-model';
+import { TIERS } from '@pagespace/lib/billing/subscription-tiers';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string): SessionAuthResult => ({
@@ -321,6 +324,26 @@ describe('GET /api/subscriptions/status', () => {
         expect.anything(),
         expect.objectContaining({ eventType: 'data.read', userId: 'user_123', resourceType: 'subscription_status', resourceId: 'self' })
       );
+    });
+  });
+
+  describe('MON-2 planCredits', () => {
+    it('returns the server-derived included-credit figure per tier, matching tierAllowanceCents\'s own default (D-OW-17: MONEY_MODEL_V2_ACTIVE = false, a code constant identical everywhere)', async () => {
+      mockSelectWhere.mockResolvedValueOnce([mockUser()]);
+
+      const request = new Request('https://example.com/api/subscriptions/status', {
+        method: 'GET',
+      }) as unknown as import('next/server').NextRequest;
+
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.planCredits).toEqual(
+        Object.fromEntries(TIERS.map((tier) => [tier, tierAllowanceCents(tier)])),
+      );
+      // Pinned: D-OW-17's constant-false default grants 100% of list price (free = starter grant).
+      expect(body.planCredits).toEqual({ free: 500, pro: 1500, business: 5000 });
     });
   });
 
