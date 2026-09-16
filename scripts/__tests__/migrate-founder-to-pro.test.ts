@@ -180,6 +180,44 @@ describe('reconcilePhasesToPro (pure)', () => {
   it('A-9 P1 refuses a schedule with no phases at all', () => {
     expect(() => reconcilePhasesToPro(sub, [], PRICE.pro)).toThrow(/no phases/);
   });
+
+  it('P2 (codex) drops a future-dated tail phase instead of backdating it — a phase starting at/after period end would otherwise get end_date <= start_date, which Stripe rejects', () => {
+    // The schedule already has a queued phase that starts AT the period end
+    // (e.g. a stale/unrelated future change) — the naive "cap the last
+    // phase's end_date" approach would set end_date === start_date on that
+    // phase, a zero-length phase Stripe refuses.
+    const result = reconcilePhasesToPro(
+      sub,
+      [
+        { items: [{ price: PRICE.founder }], start_date: PHASE_START },
+        { items: [{ price: 'price_some_other_plan' }], start_date: PERIOD_END },
+      ],
+      PRICE.pro,
+    );
+    expect(result).toEqual([
+      { items: [{ price: PRICE.founder }], start_date: PHASE_START, end_date: PERIOD_END },
+      { items: [{ price: PRICE.pro }], start_date: PERIOD_END },
+    ]);
+  });
+
+  it('P2 (codex) drops an entire future tail of multiple phases, capping the phase actually active at the boundary', () => {
+    const FAR_FUTURE = PERIOD_END + 1_000_000;
+    const result = reconcilePhasesToPro(
+      sub,
+      [
+        { items: [{ price: 'price_trial' }], start_date: 1, end_date: PHASE_START },
+        { items: [{ price: PRICE.founder }], start_date: PHASE_START, end_date: PERIOD_END + 500 },
+        { items: [{ price: 'price_stale_downgrade' }], start_date: PERIOD_END + 500, end_date: FAR_FUTURE },
+        { items: [{ price: 'price_stale_downgrade_2' }], start_date: FAR_FUTURE },
+      ],
+      PRICE.pro,
+    );
+    expect(result).toEqual([
+      { items: [{ price: 'price_trial' }], start_date: 1, end_date: PHASE_START },
+      { items: [{ price: PRICE.founder }], start_date: PHASE_START, end_date: PERIOD_END },
+      { items: [{ price: PRICE.pro }], start_date: PERIOD_END },
+    ]);
+  });
 });
 
 describe('planScheduleReconciliation (pure)', () => {

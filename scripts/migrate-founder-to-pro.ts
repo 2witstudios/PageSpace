@@ -170,10 +170,18 @@ export function scheduleTargetsPro(phases: SchedulePhase[], proPriceId: string):
 }
 
 /**
- * Rebuild an existing schedule's phases so the final one lands on Pro at
- * period end, preserving every earlier phase untouched. Used when a prior
+ * Rebuild an existing schedule's phases so Pro takes over at period end,
+ * preserving every phase before the boundary untouched. Used when a prior
  * run created the schedule but crashed before adding the Pro phase (or the
- * schedule otherwise never got one). Pure.
+ * schedule otherwise never got one).
+ *
+ * The phase to cap is the one ACTIVE at `sub.currentPeriodEnd`, never simply
+ * the last phase in the array (P2, codex): a schedule can already carry a
+ * future-dated tail — one or more phases whose `start_date` is at or after
+ * `currentPeriodEnd` (a stale or unrelated later change). Backdating such a
+ * phase's `end_date` to `currentPeriodEnd` would make it end at or before it
+ * starts, a phase Stripe rejects. That whole future tail is instead dropped
+ * and replaced by the Pro phase. Pure.
  */
 export function reconcilePhasesToPro(
   sub: StripeSubscriptionView,
@@ -183,11 +191,18 @@ export function reconcilePhasesToPro(
   if (existingPhases.length === 0) {
     throw new Error(`Schedule for subscription ${sub.id} has no phases to reconcile`);
   }
-  const earlier = existingPhases.slice(0, -1);
-  const last = existingPhases[existingPhases.length - 1];
+  const futureTailStart = existingPhases.findIndex((phase) => phase.start_date >= sub.currentPeriodEnd);
+  const activeIndex = futureTailStart === -1 ? existingPhases.length - 1 : futureTailStart - 1;
+  // A malformed schedule whose very first phase already starts at/after the
+  // boundary has no phase actually active at the boundary; fall back to
+  // capping that first phase rather than producing an empty preserved list
+  // with a dangling reference.
+  const safeIndex = activeIndex < 0 ? 0 : activeIndex;
+  const preserved = existingPhases.slice(0, safeIndex);
+  const active = existingPhases[safeIndex];
   return [
-    ...earlier,
-    { ...last, end_date: sub.currentPeriodEnd },
+    ...preserved,
+    { ...active, end_date: sub.currentPeriodEnd },
     { items: [{ price: proPriceId }], start_date: sub.currentPeriodEnd },
   ];
 }
