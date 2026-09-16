@@ -167,7 +167,8 @@ export type GrantLimits = {
 };
 
 /**
- * THE one canonical deny union (ADR 0004 §6 F1–F17, in deny order).
+ * THE one canonical deny union (every reason ADR 0004 §6 names, in deny
+ * order; `audit_unavailable` is returned by the executor, not the verifier).
  * `Record<GrantDenyReason, V>` is used wherever per-reason data exists so an
  * added variant fails typecheck everywhere it matters.
  */
@@ -264,7 +265,11 @@ export type VerifyGrantInput = {
   readonly issuerPublicKey: Uint8Array;
   readonly now: number;
   readonly expected: ExpectedBinding;
-  /** The request the presenter is about to execute; its digest is recomputed here. */
+  /**
+   * `digestRequest` over the request the presenter is about to execute,
+   * recomputed by the presenter's adapter from those bytes — never read from
+   * the grant — and compared with the signed `requestDigest` (F8).
+   */
   readonly requestDigest: RequestDigest;
   readonly requestOperation: OperationRef;
   readonly nonceState: NonceState;

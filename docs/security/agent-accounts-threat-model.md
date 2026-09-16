@@ -38,7 +38,7 @@ Ordinary software cannot keep reusable credentials secret from an operator who r
 
 ### 2.3 Memory is not zeroized
 
-Bun/JavaScript strings are garbage-collected; clearing a variable does not erase memory. The plane relies on bounded worker lifetimes, no request-body telemetry, disabled core/heap dumps and protected swap (ADR 0005 §6). We do not promise exact zeroization.
+Bun/JavaScript strings are garbage-collected; clearing a variable does not erase memory. The plane relies on bounded worker lifetimes, no request-body telemetry, disabled core/heap dumps and protected swap (ADR 0005 §7). We do not promise exact zeroization.
 
 ### 2.4 Replay protection is not idempotency
 
@@ -51,20 +51,20 @@ Every credentialed decision names all of these separately. They are **branded ty
 | Principal | Branded type | Source of truth | Why it is not another principal |
 |---|---|---|---|
 | Initiating human | `UserId` | `users.id`; carried as the *acting* user exactly as `agent-dispatch-payload.ts` carries `actingUserId` | a human viewing a conversation later is not the human who delegated (Codex: "do not reconstruct authority from whichever user happens to view the conversation") |
-| Delegation | `DelegationId` | `agent_account_delegations` row (ADR 0004 §5): who delegated, to which agent, until when | an unattended run has no live human; the delegation *is* the human's standing consent, with an expiry |
+| Delegation | `DelegationId` | `agent_account_delegations` row (ADR 0004 §4.4): who delegated, to which agent, until when | an unattended run has no live human; the delegation *is* the human's standing consent, with an expiry |
 | Tenant / security domain | `TenantId` | derived, never chosen: `user:<userId>` for user-owned accounts, `drive:<driveId>` for agent-page-owned accounts (D-16; ADR 0005 §3). A drive is not automatically a tenant; a user-owned global account sits outside every drive | keys and store identities are per tenant (D-17, Λ4); a wrong tenant is a cross-tenant read |
 | Agent page | `AgentPageId` | `pages.id` of the agent | "the agent" is standing configuration with its own RBAC (`agent-permissions.ts`); editing its instructions redirects standing authority (B0 Medium, `agent-tools.ts:60,78-84` → Λ15) |
 | Conversation / run | `ConversationId`, `RunId` | `conversations.id`; the run is one dispatched turn (`browserSessionId` of the dispatch or the workflow run id) | authority is bound to *this* run so a captured grant cannot serve another turn |
 | Sandbox instance | `SandboxInstanceId` | Sprites `sprite-<uuid>` from `createSprite`/`getSprite` (S1 §4); `agent_workspaces.spriteInstanceId` | survives checkpoint restore, changes on delete+recreate — the ABA guard (S1 verified) |
 | Sandbox generation | `SandboxGeneration` | monotonic counter the provisioner increments on every recreate/restore of the same workspace (`machine_sprite_reclaims`) | a restored-from-snapshot guest replaying a grant is the attack this exists for |
 | Caller ceiling | `CallerCeiling` (`allowedDriveIds`, `originatingMcpTokenId`) | the Sign-in epic's caller-limit model: `ServiceAuthResult.allowedDriveIds` / `AgentDispatchPayload.allowedDriveIds`, evaluated by `agent-workspaces/credential-scope.ts` `isDriveWithinCredentialScope` | a drive-scoped key is not its user (agent-sessions axiom 8); the ceiling is inherited across every hop and asked FIRST |
-| Presenter | `PresenterKeyId` + `PresenterChannel` | the *server-side* executor that presents the grant (HTTP executor, Git/CLI relay runner, browser worker), identified by its signing key | S1: no guest→server channel exists; the guest is never a presenter (ADR 0006) |
+| Presenter | `PresenterKeyId` + `PresenterChannel` | the *server-side* executor that presents the grant (HTTP executor, Git/CLI relay runner, browser worker), identified by its signing key | S1: the guest cannot originate an authenticated channel; server-opened channels are duplex but identify the sprite by the server's binding, never by anything the guest sends; the guest is never a presenter (ADR 0006, Amendment 2026-09-15) |
 | Account + credential version | `AccountId`, `CredentialVersion` | `agent_accounts.id` and the store's secret version | a grant for version *n* must not resolve version *n+1* after rotation |
 | Policy version | `PolicyVersion` | `agent_accounts.policyVersion`, bumped on every change to origins/operations/approval policy | a grant issued under an older policy is refused after the owner tightens it |
 
 ## 4. The authorization intersection
 
-An operation runs only inside the intersection; any empty factor refuses. Order is fixed (ceiling first, cheapest structural checks before crypto, replay last) and tested (ADR 0004 §8).
+An operation runs only inside the intersection; any empty factor refuses. Order is fixed (ceiling first, cheapest structural checks before crypto, the replay store consulted only after the signature verifies — ADR 0004 §6) and tested (ADR 0004 §8).
 
 ```text
 caller ceiling (allowedDriveIds admits the account's tenant)
@@ -82,7 +82,7 @@ Main-DB integrity is a stated dependency: authorization reads mutable rows (owne
 
 ## 5. Plaintext-residency inventory (our stack)
 
-"Permitted" means: any other location is a defect the adversarial harness must catch. TLS termination on every path also sees plaintext; credential ingress terminates on dedicated listeners with no body capture and is excluded from request tracing/replay (ADR 0005 §6).
+"Permitted" means: any other location is a defect the adversarial harness must catch. TLS termination on every path also sees plaintext; credential ingress terminates on dedicated listeners with no body capture and is excluded from request tracing/replay (ADR 0005 §7).
 
 | Material | Permitted plaintext locations | Lifetime | Not permitted (examples the harness asserts) |
 |---|---|---|---|
@@ -107,7 +107,7 @@ Rows A1–A12 are Codex's, each with our mitigation and the gate that must show 
 | A1 | Prompt injection → secret extraction | no raw-resolution interface; executors isolated from the model and sandbox; constrained outputs; canary secret never model-visible | G1b (no `resolve` in any tool), G2 canary, G6a/G6b/G6c browser | ASI01, ASI02 |
 | A2 | Prompt injection → data exfiltration or harmful *authorized* action | provider scopes; in-provider resource restriction (repo/org/recipient/webhook target); approval bound to the digest; mediated egress; separate approval class for privilege expansion / recovery / token creation / bulk export | G2 (HTTP), G4 (relay), G6a (browser) | ASI01, ASI02 |
 | A3 | Confused deputy across users, agents, drives | authenticated identity intersection (§4); the verifier compares the grant's `human`/`agentPageId`/`conversationId`/`runId` with the presenter's *current* run (`principal_mismatch`, ADR 0004 F4a); explicit `use` grants; immutable account binding (copies/moves/transfers invalidate bindings); live revocation | G1a/G1b define + verify; G2 enforce | ASI03 |
-| A4 | Sandbox → broker abuse | no guest→broker channel exists (S1); relay originates every credentialed op; argument-bound operations; quotas; parser limits | G4 (before any sandbox credentialed op) | ASI03, ASI07 |
+| A4 | Sandbox → broker abuse | no guest-originated channel to the broker (S1); a server-opened duplex channel carries hostile bytes with a trustworthy source, authorized per request exactly like any other (ADR 0006 A2); relay originates every credentialed op; argument-bound operations; quotas; parser limits | G4 (before any sandbox credentialed op) | ASI03, ASI07 |
 | A5 | Grant replay, incl. restored-sandbox replay | presenter binding; ≤ 15 min expiry; atomic nonce consumption in Postgres shared across replicas; `(spriteInstanceId, generation)` binding; account/policy epochs | G1b (replay store), G4 (generation case) | ASI03, ASI07 |
 | A6 | Malicious site during login | exclusive human-control mode: agent control **and observation** revoked; browser-verified frame destinations in trusted chrome; capture only approved session state; destroy login context, hydrate fresh | G6a (primitive), G6b (login) | ASI09 |
 | A7 | Browser profile / CDP theft | worker in its own Sprite, CDP over a pipe (no port), profile never on the agent Sprite, no raw CDP/storage tools, no checkpoints of the browser holder | G6a | ASI02, ASI03 |
@@ -123,9 +123,9 @@ Rows A1–A12 are Codex's, each with our mitigation and the gate that must show 
 
 | Finding | Status |
 |---|---|
-| ASI03/ASI04 `apps/web/src/app/api/integrations/providers/route.ts:105-108` admin gate never fires (any user creates a global provider) | **open — hotfix PR #2632 in flight (D-27)**; retire-by-hotfix once merged |
-| ASI02 `packages/lib/src/integrations/execution/http-executor.ts:99-104` credentialed SSRF via `baseUrlOverride`, redirects followed | **open — hotfix PR open (D-28; green locally: lib 65/65, web 45/45, 8 mutation pairs; PR number to follow)**; retire-by-hotfix once merged. The G2 `http_request` executor MUST NOT inherit this executor (row B-16) |
-| ASI02 `apps/web/src/lib/ai/tools/sandbox-git/tools/remote.ts:48-57` `git_push` `branch:"--force"` bypasses the push guard with the user's token | **open — hotfix PR #2635 open (D-28, CI pending)**; retire-by-hotfix once merged; retired structurally by the L4 relay (row A4) |
+| ASI03/ASI04 `apps/web/src/app/api/integrations/providers/route.ts:105-108` admin gate never fires (any user creates a global provider) | **retired — hotfix #2632 merged to master (D-27)** |
+| ASI02 `packages/lib/src/integrations/execution/http-executor.ts:99-104` credentialed SSRF via `baseUrlOverride`, redirects followed | **open — hotfix PR #2636 open (D-28)**; retire-by-hotfix once merged. The G2 `http_request` executor MUST NOT inherit this executor (ADR 0005 §6) |
+| ASI02 `apps/web/src/lib/ai/tools/sandbox-git/tools/remote.ts:48-57` `git_push` `branch:"--force"` bypasses the push guard with the user's token | **retired — hotfix #2635 merged to master (D-28)**; also retired structurally by the L4 relay (row A4) |
 
 **Mediums and Lows** (each becomes a harness case or a gate exit check):
 
@@ -139,7 +139,7 @@ Rows A1–A12 are Codex's, each with our mitigation and the gate that must show 
 | B-6 | Med | ASI09 | `integrations/providers/github.ts:1909-1913,1715-1719` | irreversible writes classified `'write'`, no per-call gate | operation classes `read / write / irreversible / privilege` (ADR 0004 §3.4); `irreversible` and `privilege` need concrete approval regardless of policy. Harness: "always-allow does not cover irreversible" (G1b); G3 reclassifies providers |
 | B-7 | Med | ASI08 | `integrations/execution/http-executor.ts:154-159` | uncapped `Retry-After`; NaN → hot retry | executor limits: `Retry-After` ≤ timeout, NaN = backoff (G2 executor exit check) |
 | B-8 | Med | ASI03/09 | `apps/web/src/lib/ai/tools/agent-tools.ts:60,78-84` | agent widens its own `enabledTools`/`systemPrompt`/`sandboxEnabled` → **Λ15** | editing an agent's instructions is `manage`-class on every account bound to it: bump `policyVersion` on the agent's accounts so standing grants lapse; widening behind a human step (ADR 0004 §4.4). Harness: "agent self-reconfig invalidates outstanding grants" (G2) |
-| B-9 | Med | ASI06 | `ai/core/command-processor.ts:229-248` + `command-resolver.ts:305` | agent-writable command pages injected as "Follow these instructions" → Λ15 | out of this epic's files; recorded so G2's approval UI never renders text sourced from a page body as the *approval subject* (ADR 0004 §4.2: the subject is the digest's human rendering, generated from the canonical request, never model text) |
+| B-9 | Med | ASI06 | `ai/core/command-processor.ts:229-248` + `command-resolver.ts:305` | agent-writable command pages injected as "Follow these instructions" → Λ15 | out of this epic's files; recorded so G2's approval UI never renders text sourced from a page body as the *approval subject* (ADR 0004 §3.3: the subject is the digest's human rendering, generated from the canonical request, never model text) |
 | B-10 | Med | ASI03 | `apps/web/src/lib/ai/tools/command-tools.ts:63,79,131` | drive-scoped MCP token escapes its ceiling for command CRUD | §4 asks the ceiling FIRST; the account decision consumes `isDriveWithinCredentialScope`, never a user-only helper. Harness: "scoped caller outside the account's drive reads it as nonexistent" (G1b) |
 | B-11 | Low | ASI08 | `services/sandbox/sandbox-client/sprites.ts:749-760` | host timeout is a no-op when the WS is closed; no reaper | browser Sprites are destroyed (never hibernated) at grant expiry (S3 R15) — G6a exit check |
 | B-12 | Low | ASI02 | `env-bridge/frame-codec.ts:71` + `cli/env-bridge/fs-runner.ts:260` | `fs_write` mode allows setuid bits | out of scope here; noted for the env-bridge |
@@ -150,7 +150,7 @@ Rows A1–A12 are Codex's, each with our mitigation and the gate that must show 
 | B-17 | Low | ASI03 | `ai/tools/skill-tools.ts:77-83` | user-level helpers instead of `canActor*` | same rule as B-10 |
 | B-18 | Low | ASI02 | `sandbox-git/core/command-specs/worktree.ts:22` | `git_diff base` becomes an option | flag-guard; retired by L4 relay for credentialed ops |
 | B-19 | Low | ASI02 | `ai/core/tool-filtering.ts:13-143` | `WRITE_TOOLS` incomplete | out of scope; the account executor classifies by typed operation, not by tool name (ADR 0004 §3.4) |
-| B-20 | Low | ASI08 | `ai/tools/workflow-tools.ts:84-100` + `workflows/workflow-executor.ts:640` | cron fan-out uncapped | account-use limits are part of the policy (ADR 0004 §4.1 `limits`); a cron run is an unattended run → needs a delegation with expiry (§3) |
+| B-20 | Low | ASI08 | `ai/tools/workflow-tools.ts:84-100` + `workflows/workflow-executor.ts:640` | cron fan-out uncapped | account-use limits are part of the policy (ADR 0004 §4.3 `limits`); a cron run is an unattended run → needs a delegation with expiry (§3) |
 | B-21 | Low | ASI01 | `ai/tools/web-search-tools.ts:391-396` | `web_fetch` returns bare attacker markdown | same as B-15 for the executor's responses |
 | B-22 | Low | ASI06 | `ai/core/context-assembly.ts:252-254` | compaction summary re-enters as `user` | out of scope; recorded because approval requests must never be satisfied by model text (A2, ADR 0004 §4.2) |
 | B-23 | Low | ASI04 | `ai/core/mcp-tool-converter.ts:233` + `page-chat-turn.ts:363` | unvalidated MCP tool descriptions | Λ12; out of scope |
@@ -188,7 +188,7 @@ Cross-mode: `isOnPrem()` gates the store backend choice; `isBillingEnabled()` is
 | ASI04 agentic supply chain | Infisical/Nango/browser substrate compromise (Λ12); tool-definition injection (D-27) | S2 §10 pins; per-gate review; Highs D-27 |
 | ASI05 unexpected code execution | none in the plane (no eval; argv spawns only) | B0: does not apply; the plane adds no interpreter |
 | ASI06 memory/context poisoning | model text used as approval subject or as an "approved" claim | ADR 0004 §4.2: approval subject is rendered from the canonical request; a model-reported approval has no authority |
-| ASI07 insecure inter-agent comms | grant transport between issuer, presenter, executor | Ed25519-signed grants, audience-separated keys, replay store (ADR 0004 §2); server→guest channel only (ADR 0006) |
+| ASI07 insecure inter-agent comms | grant transport between issuer, presenter, executor | Ed25519-signed grants, audience-separated keys, replay store (ADR 0004 §2); server-opened channels only; duplex once open, identity from the server's binding (ADR 0006 Amendment A1) |
 | ASI08 cascading failures | refresh storms, retry storms, uncapped fan-out | B-7, B-14, B-20; limits in policy; refresh serialization (ADR 0005 §5) |
 | ASI09 human-agent trust exploitation | fake approvals, cached approvals, login-time deception | A6, B-4, B-6; exclusive human-control mode; approval bound to digest with a human-readable rendering |
 | ASI10 rogue agents | an agent redirecting its own standing authority; unaudited use | B-8 (Λ15); audit-before-execute (C7); revocation ends live sessions |
@@ -202,7 +202,7 @@ Statuses are as of 2026-09-15; the Control Board is the ledger, this section is 
 - **Λ3 — custody of third-party passwords + TOTP** (D-20). *Accepted* → bounded: external store only, executor-only resolution, dedicated-agent-account default, explicit acknowledgment for a personal login (`agent_accounts.acknowledgment`, ADR 0005 §4), vault-rule fill in L5c, breach runbook coverage. **Copy (add-account, `password` kind):** "You are giving your agent a password. PageSpace stores it encrypted in a separate credential vault and only ever fills it into a login form inside an isolated browser, with the agent unable to watch. The site you log into will receive the password, as it would from you. We recommend a dedicated account for your agent rather than your personal login. [ ] I understand this is my personal login."
 - **Λ4 — Infisical (SaaS) is a trusted custodian.** *Accepted* (D-21) → bounded by per-tenant scoped identities (**D-29** decides the mapping; ADR 0005 §3 recommends). **Copy (security page):** "Credentials are held by Infisical, a SOC 2 Type II secrets manager, under a key unique to your workspace. Infisical's operators, and the servers that use a credential on your behalf, are trusted; a breach there is a breach of your credentials and we will notify you under our breach runbook."
 - **Λ5 — Nango's own Postgres would hold OAuth tokens.** *Open* → retired if **D-24** = A (S2 recommends drop; never provisioned). ADR 0005 §5 is parameterized on it.
-- **Λ6 — the sandbox is a hostile principal.** *Open* → bounded at L4: no guest→server channel exists (S1), grants bind instance+generation, the relay never hands Git the token.
+- **Λ6 — the sandbox is a hostile principal.** *Open* → bounded at L4: the guest cannot originate a channel and a server-opened one identifies the sprite, never a benign process (S1; ADR 0006 A1–A2), grants bind instance+generation, the relay never hands Git the token.
 - **Λ7 — browser profile/cookies reachable from the agent runtime.** Not built → bounded at L5a: worker in its own Sprite, CDP over a pipe.
 - **Λ8 — captured sessions are as powerful as passwords.** *Accepted* → bounded at L5b. **Copy (session capture):** "A saved login session lets your agent act as you on this site without your password, until you revoke it here or the site signs it out. Treat it like a password."
 - **Λ9 — recovery authority reaching an agent.** Not built → bounded at L6.
