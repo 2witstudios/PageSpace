@@ -20,8 +20,15 @@
  *      price they already pay (A-9). A flag, not a tier — their tier stays
  *      'business'. No new signups at that price.
  *
- * Idempotent: a subscription that already carries a schedule is left alone
- * (reported as `already-scheduled`), and a user already flagged is skipped.
+ * Safely re-runnable to a correct end state (P1 fix): a subscription that
+ * already carries a schedule is RECONCILED, never just skipped — the schedule
+ * is inspected and, if its final phase does not land on Pro, updated so it
+ * does; the local bookkeeping (users.subscriptionTier, the subscription row's
+ * schedule fields) is completed whenever it hasn't landed yet, independent of
+ * whether the Stripe side needed a change. This covers both retry cases: a
+ * schedule created by an earlier run that crashed before recordFounderToPro,
+ * and a schedule that exists for some other reason and never targeted Pro at
+ * all. A user already flagged grandfathered is skipped.
  *
  * Usage:
  *   bun scripts/migrate-founder-to-pro.ts --dry-run    # plan only, no writes
@@ -43,6 +50,15 @@ export interface FounderSubscriptionRow {
   userId: string;
   stripeSubscriptionId: string;
   status: string;
+  /**
+   * The user's CURRENTLY STORED tier. Read alongside the row so the runner
+   * can tell "Stripe already reflects the move" apart from "the local write
+   * also landed" — the P1 bug was skipping this row entirely instead of
+   * checking whether local bookkeeping had actually completed.
+   */
+  subscriptionTier: string;
+  /** The subscription row's CURRENTLY STORED schedule id, if any (same purpose). */
+  stripeScheduleId: string | null;
 }
 
 /** A user on the legacy $100 personal Business price. */
@@ -94,6 +110,8 @@ export interface MigrationStripe {
   retrieveSubscription(id: string): Promise<StripeSubscriptionView>;
   createScheduleFromSubscription(subscriptionId: string): Promise<StripeScheduleView>;
   updateSchedulePhases(scheduleId: string, phases: SchedulePhase[]): Promise<void>;
+  /** The phases an EXISTING schedule already carries, in order. */
+  retrieveSchedulePhases(scheduleId: string): Promise<SchedulePhase[]>;
 }
 
 export interface MigrationPriceIds {
@@ -145,11 +163,72 @@ export function planFounderAction(
   return { kind: 'schedule', userId: row.userId, stripeSubscriptionId: row.stripeSubscriptionId };
 }
 
+/** Whether an existing schedule's FINAL phase already lands on Pro. Pure. */
+export function scheduleTargetsPro(phases: SchedulePhase[], proPriceId: string): boolean {
+  const last = phases[phases.length - 1];
+  return last?.items[0]?.price === proPriceId;
+}
+
+/**
+ * Rebuild an existing schedule's phases so the final one lands on Pro at
+ * period end, preserving every earlier phase untouched. Used when a prior
+ * run created the schedule but crashed before adding the Pro phase (or the
+ * schedule otherwise never got one). Pure.
+ */
+export function reconcilePhasesToPro(
+  sub: StripeSubscriptionView,
+  existingPhases: SchedulePhase[],
+  proPriceId: string,
+): SchedulePhase[] {
+  if (existingPhases.length === 0) {
+    throw new Error(`Schedule for subscription ${sub.id} has no phases to reconcile`);
+  }
+  const earlier = existingPhases.slice(0, -1);
+  const last = existingPhases[existingPhases.length - 1];
+  return [
+    ...earlier,
+    { ...last, end_date: sub.currentPeriodEnd },
+    { items: [{ price: proPriceId }], start_date: sub.currentPeriodEnd },
+  ];
+}
+
+export type ScheduleReconciliation =
+  /** Stripe already ends on Pro AND the local write already landed — true no-op. */
+  | { kind: 'complete' }
+  /** Stripe already ends on Pro but the local write never landed (the retry-after-partial-failure case). */
+  | { kind: 'db-only' }
+  /** Stripe does not yet end on Pro — fix the schedule, then complete the local write. */
+  | { kind: 'fix-schedule'; phases: SchedulePhase[] };
+
+/**
+ * P1 fix: what to do about a Founder subscription that ALREADY carries a
+ * schedule, instead of unconditionally skipping it. Pure given the schedule's
+ * already-fetched phases.
+ */
+export function planScheduleReconciliation(
+  row: FounderSubscriptionRow,
+  live: StripeSubscriptionView,
+  scheduleId: string,
+  schedulePhases: SchedulePhase[],
+  proPriceId: string,
+): ScheduleReconciliation {
+  const targetsPro = scheduleTargetsPro(schedulePhases, proPriceId);
+  const localComplete = row.subscriptionTier === 'pro' && row.stripeScheduleId === scheduleId;
+  if (targetsPro && localComplete) return { kind: 'complete' };
+  if (targetsPro) return { kind: 'db-only' };
+  return { kind: 'fix-schedule', phases: reconcilePhasesToPro(live, schedulePhases, proPriceId) };
+}
+
 export interface MigrationSummary {
   dryRun: boolean;
   founderRows: number;
   scheduled: number;
-  alreadyScheduled: number;
+  /** Existing schedule already ended on Pro; the local write also already existed. */
+  alreadyComplete: number;
+  /** Existing schedule already ended on Pro; the local write was missing and is now completed. */
+  dbCompleted: number;
+  /** Existing schedule did NOT end on Pro; fixed, and the local write completed. */
+  reconciled: number;
   skippedNotOnFounderPrice: number;
   legacyBusinessRows: number;
   grandfathered: number;
@@ -164,7 +243,9 @@ export async function runFounderMigration(deps: MigrationDeps, opts: { dryRun: b
     dryRun: opts.dryRun,
     founderRows: 0,
     scheduled: 0,
-    alreadyScheduled: 0,
+    alreadyComplete: 0,
+    dbCompleted: 0,
+    reconciled: 0,
     skippedNotOnFounderPrice: 0,
     legacyBusinessRows: 0,
     grandfathered: 0,
@@ -185,10 +266,39 @@ export async function runFounderMigration(deps: MigrationDeps, opts: { dryRun: b
         summary.skippedNotOnFounderPrice++;
         log(`${mode}  ${row.userId}: ${row.stripeSubscriptionId} is on ${action.currentPriceId}, not the Founder price — skipped`);
         break;
-      case 'already-scheduled':
-        summary.alreadyScheduled++;
-        log(`${mode}  ${row.userId}: ${row.stripeSubscriptionId} already carries schedule ${action.scheduleId} — skipped`);
+      case 'already-scheduled': {
+        const scheduleId = action.scheduleId;
+        const phases = await stripe.retrieveSchedulePhases(scheduleId);
+        const recon = planScheduleReconciliation(row, live, scheduleId, phases, priceIds.pro);
+        const recordThisRow = () =>
+          store.recordFounderToPro({
+            userId: row.userId,
+            stripeSubscriptionId: row.stripeSubscriptionId,
+            stripeScheduleId: scheduleId,
+            scheduledPriceId: priceIds.pro,
+            scheduledChangeDate: new Date(live.currentPeriodEnd * 1000),
+          });
+        switch (recon.kind) {
+          case 'complete':
+            summary.alreadyComplete++;
+            log(`${mode}  ${row.userId}: ${scheduleId} already ends on Pro and the local write already landed — nothing to do`);
+            break;
+          case 'db-only':
+            summary.dbCompleted++;
+            log(`${mode}  ${row.userId}: ${scheduleId} already ends on Pro; completing the local write (a prior run's retry target)`);
+            if (!opts.dryRun) await recordThisRow();
+            break;
+          case 'fix-schedule':
+            summary.reconciled++;
+            log(`${mode}  ${row.userId}: ${scheduleId} does not end on Pro — updating its phases and completing the local write`);
+            if (!opts.dryRun) {
+              await stripe.updateSchedulePhases(scheduleId, recon.phases);
+              await recordThisRow();
+            }
+            break;
+        }
         break;
+      }
       case 'schedule': {
         const changeDate = new Date(live.currentPeriodEnd * 1000);
         log(`${mode}  ${row.userId}: schedule ${row.stripeSubscriptionId} → Pro (${priceIds.pro}) at ${changeDate.toISOString()}; users.subscriptionTier → pro now`);
@@ -224,7 +334,8 @@ export async function runFounderMigration(deps: MigrationDeps, opts: { dryRun: b
   }
 
   log(
-    `${mode}Summary: founder rows ${summary.founderRows} (scheduled ${summary.scheduled}, already scheduled ${summary.alreadyScheduled}, ` +
+    `${mode}Summary: founder rows ${summary.founderRows} (scheduled ${summary.scheduled}, already complete ${summary.alreadyComplete}, ` +
+      `db-completed on retry ${summary.dbCompleted}, schedule reconciled ${summary.reconciled}, ` +
       `not on founder price ${summary.skippedNotOnFounderPrice}); legacy business rows ${summary.legacyBusinessRows} ` +
       `(grandfathered ${summary.grandfathered}, already ${summary.alreadyGrandfathered})`,
   );
@@ -245,8 +356,11 @@ export function createDrizzleStore(db: MigrationDb, priceIds: { founder: string;
           userId: subscriptions.userId,
           stripeSubscriptionId: subscriptions.stripeSubscriptionId,
           status: subscriptions.status,
+          subscriptionTier: users.subscriptionTier,
+          stripeScheduleId: subscriptions.stripeScheduleId,
         })
         .from(subscriptions)
+        .innerJoin(users, eq(users.id, subscriptions.userId))
         .where(and(eq(subscriptions.stripePriceId, priceIds.founder), inArray(subscriptions.status, entitled)));
       return rows;
     },
@@ -299,6 +413,14 @@ export function createStripeAdapter(stripe: import('stripe').Stripe): MigrationS
     },
     async updateSchedulePhases(scheduleId, phases) {
       await stripe.subscriptionSchedules.update(scheduleId, { phases });
+    },
+    async retrieveSchedulePhases(scheduleId) {
+      const schedule = await stripe.subscriptionSchedules.retrieve(scheduleId);
+      return schedule.phases.map((phase) => ({
+        items: phase.items.map((item) => ({ price: typeof item.price === 'string' ? item.price : item.price.id })),
+        start_date: phase.start_date,
+        end_date: phase.end_date ?? undefined,
+      }));
     },
   };
 }
