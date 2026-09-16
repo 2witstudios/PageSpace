@@ -104,6 +104,13 @@ describe('isScopeNarrowing (G1c R13)', () => {
     expect(actual).toEqual([false, false]);
   });
 
+  it('given a stored wildcard over the unknown class, should not count it as covering a named unknown operation (a wildcard never reaches unknown)', () => {
+    const wildUnknown = withPolicy({ scope: { ...POLICY.scope, operations: [{ class: 'unknown', name: '*' }] } });
+    const namedUnknown = withPolicy({ scope: { ...POLICY.scope, operations: [{ class: 'unknown', name: 'generic_request' }] } });
+    const actual = isScopeNarrowing({ stored: wildUnknown, next: namedUnknown });
+    expect(actual).toBe(false);
+  });
+
   it('given a stored policy with an open-ended duration, should treat any bounded end as narrowing', () => {
     const openEnded = withPolicy({ duration: null });
     const actual = isScopeNarrowing({ stored: openEnded, next: withPolicy({ duration: { until: 5 } }) });
