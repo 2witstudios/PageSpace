@@ -45,6 +45,8 @@ describe('verifyGrant deny order (ADR 0004 §6 F1→F17)', () => {
   it.todo('given a concrete approval fact with consumedByGrantId null, should return approval_mismatch [0004 §8.21; PR #2637 P1]');
   it.todo('given a concrete approval fact consumed by another grantId, should return approval_mismatch [0004 §8.21]');
   it.todo('given a concrete approval fact whose consumedByGrantId equals this grantId, should verify ok [0004 §8.21]');
+  it.todo('given a concrete approval fact for this digest and grant whose accountId names another account, should return approval_mismatch [0004 §8.31; G1a review M3]');
+  it.todo('given a concrete approval fact whose expiresAt is one ms before grant.iat, should return approval_mismatch; at exactly iat, should pass the approval check [0004 §8.31]');
   it.todo('given approvalId naming an approval bound to a different digest, should return approval_mismatch [0004 F14]');
   it.todo('given operation class irreversible or privilege with approvalId policy, should return approval_mismatch [0004 §8.12]');
   it.todo('given kind password with aud other than browser-worker, should return kind_not_resolvable [0004 F17]');

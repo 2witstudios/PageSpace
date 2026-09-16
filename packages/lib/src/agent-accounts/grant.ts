@@ -220,8 +220,21 @@ export type ApprovalFact =
    * verifier accepts it only when `consumedByGrantId` equals the signed
    * `grantId`: `null` means never issued against (a forged/unissued grant),
    * another id means a competing issuance won (Codex P1 on PR #2637).
+   *
+   * It also names the ACCOUNT it was given for and its expiry, so the
+   * verifier — not only issuance — refuses an approval recorded for another
+   * account or one that had expired when the grant was issued
+   * (`grant.iat > expiresAt`) (G1a review M3).
    */
-  | { readonly kind: 'concrete'; readonly approvalId: ApprovalId; readonly requestDigest: RequestDigest; readonly consumedByGrantId: GrantId | null }
+  | {
+      readonly kind: 'concrete';
+      readonly approvalId: ApprovalId;
+      readonly accountId: AccountId;
+      readonly requestDigest: RequestDigest;
+      readonly consumedByGrantId: GrantId | null;
+      /** `agent_account_approvals.expiresAt`, ms since epoch. */
+      readonly expiresAt: number;
+    }
   | { readonly kind: 'policy'; readonly policyVersion: PolicyVersion; readonly expired: boolean; readonly limitsExceeded: boolean }
   | { readonly kind: 'none' };
 

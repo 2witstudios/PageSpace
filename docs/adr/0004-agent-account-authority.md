@@ -198,7 +198,7 @@ Provider tool catalogues (`integrations/providers/*.ts`) are reclassified to thi
 | F11 | Signature invalid, undecodable, or under any key but the pinned issuer key | `bad_signature` |
 | F12 | Nonce already consumed, or the replay store is unreachable | `replayed` / `replay_store_unavailable` — never "assume fresh" |
 | F13 | Audit record cannot be durably accepted before execution | `audit_unavailable`; the executor does not act |
-| F14 | `approvalId` names an approval whose `consumedByGrantId` ≠ this `grantId` (null or another grant), bound to a different digest, or `'policy'` while the policy is expired/exceeded | `approval_mismatch` |
+| F14 | `approvalId` names an approval whose `consumedByGrantId` ≠ this `grantId` (null or another grant), whose `accountId` ≠ the grant's, whose `expiresAt` < the grant's `iat` (expired before issuance), bound to a different digest, or `'policy'` while the policy is expired/exceeded | `approval_mismatch` |
 | F15 | Operation class `irreversible`/`privilege` with `approvalId = 'policy'` | `approval_mismatch` (always-allow never covers these classes) |
 | F16 | Any deny toward an untrusted caller (the model, the sandbox) | one constant-shape refusal; the reason goes to audit only |
 | F17 | `password` kind requested by `aud ≠ 'browser-worker'`; `session` kind requested by `aud = 'http-executor'` without `sessionHttp: true` | `kind_not_resolvable` (also unrepresentable by type, ADR 0005 §4) |
@@ -293,6 +293,7 @@ Adapters (I/O, G1b): `grant-repository.ts` (nonce consume, approvals, delegation
 28. Given `expected.accountStatus` of `needs_reauth`, `revoked` or `deleted` and an otherwise valid grant, `account_not_active`, returned before `version_mismatch` (a table test over the three statuses × a current and a stale `credentialVersion`); given `active`, the status check passes. `ExpectedBinding` requires `accountStatus` (a binding without it does not compile) (G1a review H4).
 29. Given a canonical request with query `[['force','true'],['recursive','1']]` and an `x-github-api-version` declared header, `renderApprovalSubject` returns `query` equal to `canonical.query` and `headerNames` containing `x-github-api-version`, and `JSON.stringify(subject)` contains no header value (G1a review H5).
 30. Given `CanonicalRequestInput`, the type has no `operation` and no `declaredHeaders` key (a type-level test). Given a registry entry `{ providerSlug: 'github', method: 'PUT', pathTemplate: '/repos/{owner}/{repo}/pulls/{number}/merge', operation: { class: 'irreversible', name: 'merge_pr' } }` and a request to `PUT /repos/a/b/pulls/7/merge`, `canonical.operation` is `merge_pr`/`irreversible` whatever the tool layer intended; a `DELETE` to a path no entry matches is `unknown`/`generic_request`, never `read`; the same request with `providerSlug: null` does not match the github entry (G1a review M1).
+31. Given a concrete approval fact consumed by this `grantId` for this digest but whose `accountId` names another account, `approval_mismatch`; whose `expiresAt` is one ms before the grant's `iat`, `approval_mismatch`; whose `expiresAt` equals `iat` and whose other fields match, the approval check passes (G1a review M3).
 
 ## 9. Consequences
 

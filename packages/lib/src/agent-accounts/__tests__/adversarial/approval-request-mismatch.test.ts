@@ -5,6 +5,7 @@ import { describe, it } from 'vitest';
 describe('adversarial: approval-request-mismatch', () => {
   it.todo('given an approval bound to digest X and a grant request for digest Y, should return approval_mismatch');
   it.todo('given an approval consumed once, should refuse a second issuance against it');
+  it.todo('given an approval row recorded for account X (e.g. inserted by a DB writer) and a grant for account Y with the same digest, should return approval_mismatch at verifyGrant [G1a review M3]');
   it.todo('given an approval obtained for op mint-like A, should not redeem for op B with identical arguments (op discriminator in the digest)');
   it.todo('given a model-generated "the user approved" text, should carry no authority (no approval row, requirement stays concrete)');
   it.todo('given an always policy, should never cover irreversible or privilege classes');
