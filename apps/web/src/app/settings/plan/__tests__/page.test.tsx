@@ -70,10 +70,21 @@ describe('PlanPage (D-OW-17: the real settings/plan regression guard)', () => {
 
     render(<PlanPage />);
 
+    // Scoped to the plan-included-credits testid on the CARDS specifically —
+    // the Feature Comparison table's "Credits" row renders the identical
+    // string via creditsCellPhrase for the free tier ("500 credits to start"),
+    // so an unscoped getByText('500 credits to start') matches two elements
+    // and throws (caught in review: this test was red as first committed).
+    // getPersonalPlans('free') orders plans ['free', 'pro'], and the card grid
+    // maps that array in order, so index 0 is the Free card and index 1 is Pro.
     await waitFor(() => {
-      expect(screen.getByText('900 credits included each month')).toBeInTheDocument();
+      const cards = screen.getAllByTestId('plan-included-credits');
+      expect(cards).toHaveLength(2);
     });
-    // The free tier's own card is unaffected by the pro override.
-    expect(screen.getByText('500 credits to start')).toBeInTheDocument();
+    const [freeCard, proCard] = screen.getAllByTestId('plan-included-credits');
+    expect(freeCard).toHaveTextContent('500 credits to start');
+    // The card that actually matters for this regression: the server-supplied
+    // override (900), not the plan module's own built-in number (1,500).
+    expect(proCard).toHaveTextContent('900 credits included each month');
   });
 });

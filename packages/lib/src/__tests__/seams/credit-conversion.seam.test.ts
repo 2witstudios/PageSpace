@@ -79,12 +79,16 @@ describe('X-6 seam: a credit is converted in one module (the Spec second-convers
  * anywhere, including inside money-model.ts itself.
  *
  * The pattern matches the bare `process.env.MONEY_MODEL_V2` accessor AND the
- * string literal `'MONEY_MODEL_V2'` / `"MONEY_MODEL_V2"` wherever it appears —
- * not just as a `process.env` property, but as an argument to ANY accessor
- * (`envBool('MONEY_MODEL_V2', …)`, `envInt(...)`, a config-lookup helper, etc).
- * A first version of this guard only matched `process.env.MONEY_MODEL_V2` and
- * missed `envBool('MONEY_MODEL_V2', false)` — the exact form D-OW-17 deleted —
- * because that call site never writes `process.env` at all.
+ * string literal `'MONEY_MODEL_V2'` / `"MONEY_MODEL_V2"` / `` `MONEY_MODEL_V2` ``
+ * (all three quote characters — single, double, and template-literal
+ * backtick) wherever it appears — not just as a `process.env` property, but
+ * as an argument to ANY accessor (`envBool('MONEY_MODEL_V2', …)`,
+ * `envInt(...)`, a config-lookup helper, etc). A first version of this guard
+ * only matched `process.env.MONEY_MODEL_V2` and missed
+ * `envBool('MONEY_MODEL_V2', false)` — the exact form D-OW-17 deleted —
+ * because that call site never writes `process.env` at all. A second version
+ * added the string-literal form but only for `'` and `"`, missing the
+ * backtick template-literal form (`` envBool(`MONEY_MODEL_V2`, false) ``).
  *
  * The allowlist is intentionally EMPTY: after this refactor no production file
  * reads this var. (money-model.test.ts itself briefly SETS `process.env.MONEY_MODEL_V2`,
@@ -95,7 +99,7 @@ describe('X-6 seam: a credit is converted in one module (the Spec second-convers
  * before matching — no allowlist entry is needed for it either.)
  */
 export const MONEY_MODEL_ENV_READ =
-  /process\.env(?:\.MONEY_MODEL_V2\b|\[['"]MONEY_MODEL_V2['"]\])|(['"])MONEY_MODEL_V2\1/;
+  /process\.env(?:\.MONEY_MODEL_V2\b|\[['"`]MONEY_MODEL_V2['"`]\])|(['"`])MONEY_MODEL_V2\1/;
 
 export const MONEY_MODEL_ENV_ALLOWLIST: Readonly<Record<string, string>> = {};
 
@@ -135,11 +139,17 @@ describe('D-OW-17 seam: the money-model ratio flag is a code constant, never a r
     expect(MONEY_MODEL_ENV_READ.test("envBool('MONEY_MODEL_V2', false)")).toBe(true);
     expect(MONEY_MODEL_ENV_READ.test('envBool("MONEY_MODEL_V2", false)')).toBe(true);
     expect(MONEY_MODEL_ENV_READ.test("getFlag('MONEY_MODEL_V2')")).toBe(true);
+    // Point-guard's second false-negative: a backtick template-literal string
+    // argument (no interpolation, just a plain backtick string) was invisible
+    // to the ['"] quote class.
+    expect(MONEY_MODEL_ENV_READ.test('envBool(`MONEY_MODEL_V2`, false)')).toBe(true);
     // A quote must close immediately after V2 — MONEY_MODEL_V2_ACTIVE, quoted or
     // not, never matches.
     expect(MONEY_MODEL_ENV_READ.test("envBool('MONEY_MODEL_V2_ACTIVE', false)")).toBe(false);
+    expect(MONEY_MODEL_ENV_READ.test('envBool(`MONEY_MODEL_V2_ACTIVE`, false)')).toBe(false);
     expect(MONEY_MODEL_ENV_READ.test('const flag = MONEY_MODEL_V2_ACTIVE;')).toBe(false);
     // Mismatched quote characters never match — not a real string literal.
     expect(MONEY_MODEL_ENV_READ.test("envBool('MONEY_MODEL_V2\", false)")).toBe(false);
+    expect(MONEY_MODEL_ENV_READ.test('envBool(`MONEY_MODEL_V2\', false)')).toBe(false);
   });
 });
