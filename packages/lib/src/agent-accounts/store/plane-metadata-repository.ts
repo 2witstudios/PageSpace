@@ -68,12 +68,15 @@ export function createPlaneMetadataRepository({ pool }: { readonly pool: PlaneMe
       };
     },
 
+    // `revoked_at` is written only on INSERT (as NULL) and never by the upsert: revocation is
+    // permanent (ADR 0005 §2.2), and `revoke` does not share the writers' advisory lock, so a
+    // write that checked "not revoked" before a concurrent revoke must not clear it on commit.
     async commit({ ref, version, previousVersion, bindings, rotatedAt }) {
       await pool.query(
         `INSERT INTO agent_account_secret_versions (tenant_id, account_id, kind, current_version, previous_version, bindings, rotated_at, revoked_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, NULL)
          ON CONFLICT (tenant_id, account_id, kind)
-         DO UPDATE SET current_version = $4, previous_version = $5, bindings = $6, rotated_at = $7, revoked_at = NULL`,
+         DO UPDATE SET current_version = $4, previous_version = $5, bindings = $6, rotated_at = $7`,
         [ref.tenantId, ref.accountId, ref.kind, version, previousVersion, JSON.stringify(bindings), rotatedAt === null ? null : new Date(rotatedAt)],
       );
     },

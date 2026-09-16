@@ -299,12 +299,19 @@ export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): St
     },
 
     async delete(input: DeleteInput): Promise<DeleteResult> {
+      if (input.ref.tenantId !== input.identity.tenantId) return { ok: false, reason: 'not_found' };
       const project = await deps.resolveProject(input.ref.tenantId);
       const credentials = await deps.resolveCredentials({ tenantId: input.ref.tenantId, identityId: input.identity.identityId });
       if (project === null || credentials === null) return { ok: false, reason: 'store_unavailable' };
 
       const stored = await deps.metadata.read(input.ref);
       if (stored === null) return { ok: false, reason: 'not_found' };
+
+      // The grace companion holds the material `rotate` replaced; erasing the account must erase
+      // it too. Deleted FIRST: absent (never rotated) is fine, any other failure stops before the
+      // primary secret or the metadata row go, so a retried delete still finds both and resumes.
+      const previous = await deps.infisical.deleteSecret({ projectId: project.projectId, credentials, secretKey: previousSecretKeyFor(input.ref.accountId, input.ref.kind) });
+      if (!previous.ok && previous.reason !== 'not_found') return { ok: false, reason: 'store_unavailable' };
 
       const secretKey = secretKeyFor(input.ref.accountId, input.ref.kind);
       const result = await deps.infisical.deleteSecret({ projectId: project.projectId, credentials, secretKey });
