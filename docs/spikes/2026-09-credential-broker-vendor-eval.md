@@ -614,8 +614,15 @@ services:
       EXECUTOR_APP_DATABASE_URL: ${EXECUTOR_APP_DATABASE_URL:?EXECUTOR_* missing from .env - see infrastructure/UPGRADE.md (credential plane)}
       # admin DB - INSERT-only on the tamper-evident audit tables: durable audit acceptance before execute (§2.4, §6)
       EXECUTOR_AUDIT_DATABASE_URL: ${EXECUTOR_AUDIT_DATABASE_URL:?EXECUTOR_* missing from .env - see infrastructure/UPGRADE.md (credential plane)}
-      # all outbound provider traffic goes through the non-credentialed allowlisting egress proxy
+      # all outbound provider traffic goes through the non-credentialed allowlisting egress proxy.
+      # Node's global fetch ignores these vars unless proxy support is enabled explicitly: the executor
+      # runs `node --use-env-proxy` (Node >= 24; present in `node --help` on v24.16.0), or installs an
+      # undici ProxyAgent as the global dispatcher. It has no egress-capable network of its own, so a
+      # fetch that bypasses the proxy fails closed rather than leaking.
+      NODE_OPTIONS: --use-env-proxy
       HTTPS_PROXY: http://executor-egress:4750
+      HTTP_PROXY: http://executor-egress:4750      # approved http: destinations also traverse the proxy
+      NO_PROXY: infisical,postgres,postgres-admin  # plane / DB hosts are reached directly on their networks
     read_only: true
     security_opt: ["no-new-privileges:true"]
     deploy: { resources: { limits: { memory: 256M } } }
