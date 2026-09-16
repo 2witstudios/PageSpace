@@ -9,6 +9,7 @@ import { accountRepository } from '@pagespace/lib/repositories/account-repositor
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { isValidEmail } from '@pagespace/lib/validators/email';
+import { notAgentReservedEmail } from '@pagespace/lib/auth/agent/reserved-email';
 import { getActorInfo, logUserActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { planDriveDisposition } from '@pagespace/lib/compliance/erasure/drive-disposition';
 import { dataSubjectRequestRepository } from '@pagespace/lib/repositories/data-subject-request-repository';
@@ -78,7 +79,8 @@ export async function PATCH(req: Request) {
 
     const { name, email } = parsed.data;
 
-    if (email !== undefined && !isValidEmail(email)) {
+    // An agent's synthetic address (ADR 0007 §4) fails exactly like a malformed one.
+    if (email !== undefined && (!isValidEmail(email) || !notAgentReservedEmail(email))) {
       return Response.json({ error: 'Invalid email format' }, { status: 400 });
     }
 

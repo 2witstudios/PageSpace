@@ -9,9 +9,11 @@ import {
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security/distributed-rate-limit';
 import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
+import { notAgentReservedEmail } from '@pagespace/lib/auth/agent/reserved-email';
 
 const optionsSchema = z.object({
-  email: z.email(),
+  // An agent's synthetic address (ADR 0007 §4) fails exactly like a malformed one.
+  email: z.email().refine(notAgentReservedEmail, { message: 'Invalid email address' }),
   name: z.string().min(1).max(255),
   csrfToken: z.string().min(1),
 });

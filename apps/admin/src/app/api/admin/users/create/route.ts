@@ -10,10 +10,12 @@ import { userEmailMatch, prepareUserWrite } from '@pagespace/lib/auth/user-repos
 import { withAdminAuth } from '@/lib/auth/auth';
 import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { notAgentReservedEmail } from '@pagespace/lib/auth/agent/reserved-email';
 
 const createUserSchema = z.object({
   name: z.string().min(1, 'Name is required'),
-  email: z.email(),
+  // An agent's synthetic address (ADR 0007 §4) fails exactly like a malformed one.
+  email: z.email().refine(notAgentReservedEmail, { message: 'Invalid email address' }),
   role: z.enum(['user', 'admin']).default('user'),
 });
 

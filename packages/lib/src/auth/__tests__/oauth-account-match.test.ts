@@ -37,12 +37,29 @@ describe('resolveOAuthMatch', () => {
   it.each(cases)(
     'sub=$providerSubMatch email=$emailMatch verified=$emailVerified -> $expected ($why)',
     ({ providerSubMatch, emailMatch, emailVerified, expected }) => {
-      expect(resolveOAuthMatch({ providerSubMatch, emailMatch, emailVerified })).toBe(expected);
+      expect(resolveOAuthMatch({ providerSubMatch, emailMatch, emailVerified, email: 'user@example.com' })).toBe(expected);
     },
   );
 
   it('never links by email when the email is unverified and there is no sub match', () => {
     // Property: the only takeover path (unverified email-only) is always refused.
-    expect(resolveOAuthMatch({ providerSubMatch: false, emailMatch: true, emailVerified: false })).not.toBe('use-email');
+    expect(resolveOAuthMatch({ providerSubMatch: false, emailMatch: true, emailVerified: false, email: 'user@example.com' })).not.toBe('use-email');
   });
+
+  // ADR 0007 §4 site 3: an agent's synthetic address can never enter a human
+  // OAuth flow — not to link, not to sign in, not to create a look-alike row.
+  // `reject` is the ordinary OAuth denial every route already maps.
+  const bools = [true, false];
+  const reservedCases = bools.flatMap((providerSubMatch) =>
+    bools.flatMap((emailMatch) => bools.map((emailVerified) => ({ providerSubMatch, emailMatch, emailVerified }))),
+  );
+
+  it.each(reservedCases)(
+    'given a reserved agent address (sub=$providerSubMatch email=$emailMatch verified=$emailVerified), should reject',
+    ({ providerSubMatch, emailMatch, emailVerified }) => {
+      expect(
+        resolveOAuthMatch({ providerSubMatch, emailMatch, emailVerified, email: 'Agent-x@AGENTS.pagespace.invalid' }),
+      ).toBe('reject');
+    },
+  );
 });
