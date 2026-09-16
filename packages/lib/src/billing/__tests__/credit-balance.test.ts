@@ -415,6 +415,19 @@ describe('agents see no starter grant (ADR 0007 Decision 9 — display and routi
     expect(await readSpendableCents('u1', 'free')).toBe(1500);
   });
 
+  it('given an agent whose zero-allowance row has a stamped period, should display 0 allowance, not the tier allowance', async () => {
+    agent();
+    balanceRows = [{ monthlyRemainingCents: 0, monthlyAllowanceCents: 0, topupRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: future }];
+    const b = await getCreditBalance('agent-1', 'free');
+    expect(b.monthly.allowance).toBe(0);
+  });
+
+  it('given a human whose stamped row stores 0 allowance, should keep the historical tier-allowance display', async () => {
+    balanceRows = [{ monthlyRemainingCents: 0, monthlyAllowanceCents: 0, topupRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: future }];
+    const b = await getCreditBalance('u1', 'free');
+    expect(b.monthly.allowance).toBe(500);
+  });
+
   it('given a funded row with a stamped period, should not read the account (the routing hot path stays one read)', async () => {
     balanceRows = [{ monthlyRemainingCents: 500, monthlyAllowanceCents: 500, topupRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: future }];
     await readSpendableCents('u1', 'free');

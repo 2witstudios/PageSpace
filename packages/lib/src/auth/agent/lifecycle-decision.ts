@@ -1,5 +1,5 @@
 /**
- * Agent lifecycle (ADR 0007 Decision 13, [D-28]): an unclaimed agent that
+ * Agent lifecycle (ADR 0007 Decision 13, [D-30]): an unclaimed agent that
  * never authenticated after signup is an abandoned signup, not an entity —
  * delete it after 30 days. An agent that ever signed in, or that has an
  * owner, is kept with no TTL. The cron (Phase 5) fetches candidate rows and

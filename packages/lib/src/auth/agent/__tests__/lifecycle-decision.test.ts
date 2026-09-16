@@ -1,5 +1,5 @@
 /**
- * ADR 0007 Decision 13 / [D-28] — an unclaimed agent that never authenticated
+ * ADR 0007 Decision 13 / [D-30] — an unclaimed agent that never authenticated
  * after signup is deleted after 30 days; anything else is kept.
  */
 import { describe, it, expect } from 'vitest';

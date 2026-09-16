@@ -33,7 +33,7 @@ import { creditBalances, creditHolds } from '@pagespace/db/schema/credits';
 import { users } from '@pagespace/db/schema/auth';
 import { and, eq, gt, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
-import { TIER_MONTHLY_ALLOWANCE_CENTS, allowanceRefills, isOneTimeAllowanceTier, starterGrantCents } from './credit-pricing';
+import { allowanceRefills, isOneTimeAllowanceTier, starterGrantCents } from './credit-pricing';
 import { readGateAccount } from './gate-account';
 import type { SubscriptionTier } from '../services/subscription-utils';
 
@@ -79,10 +79,6 @@ export interface CreditBalanceSummary {
    * for an optional in-flight indicator; NOT subtracted from `spendable`.
    */
   reserved: number;
-}
-
-function allowanceFor(tier: SubscriptionTier): number {
-  return TIER_MONTHLY_ALLOWANCE_CENTS[tier] ?? TIER_MONTHLY_ALLOWANCE_CENTS.free;
 }
 
 /** The unlimited/hidden summary used when prepaid billing is disabled. */
@@ -227,7 +223,11 @@ export async function getCreditBalance(
 
   const reserved = Number(holdAgg[0]?.reserved ?? 0);
   const row = rows[0] ?? null;
-  const starterGrant = needsStarterGrant(row, tier) ? await upcomingStarterGrantCents(userId, tier) : 0;
+  // A stored 0 allowance also falls back to what the account WOULD be granted —
+  // the tier allowance for a human, 0 for an agent.
+  const starterGrant = needsStarterGrant(row, tier) || row?.monthlyAllowanceCents === 0
+    ? await upcomingStarterGrantCents(userId, tier)
+    : 0;
 
   // No row yet: the gate will lazy-init with the starter grant on the first call,
   // so present that as the spendable monthly balance.
@@ -243,8 +243,7 @@ export async function getCreditBalance(
     };
   }
 
-  // A pending bare row shows the grant that is actually coming (0 for an agent).
-  const allowance = row.monthlyAllowanceCents || (pendingStarterGrant(row, tier) ? starterGrant : allowanceFor(tier));
+  const allowance = row.monthlyAllowanceCents || starterGrant;
   const periodEnd = row.monthlyPeriodEnd;
   const expired = periodEnd === null || periodEnd < now;
   // For display: never show a past renewal date. Project addOneMonth from the last known
