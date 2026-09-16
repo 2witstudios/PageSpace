@@ -71,7 +71,8 @@ export const users = pgTable('users', {
   // A-9: an existing $100-a-month PERSONAL Business subscriber, kept on
   // Business entitlements at their current Stripe price after Business became
   // the $50 organization plan. A flag, not a tier: subscriptionTier still says
-  // 'business'. Set once by scripts/migrate-founder-to-pro.ts; no new signups.
+  // 'business'. Set once by scripts/migrate-founder-to-pro.ts (database-only,
+  // [D-OW-19]); no new signups.
   subscriptionGrandfathered: boolean('subscriptionGrandfathered').default(false).notNull(),
   tosAcceptedAt: timestamp('tosAcceptedAt', { mode: 'date' }),
   // Account lockout fields

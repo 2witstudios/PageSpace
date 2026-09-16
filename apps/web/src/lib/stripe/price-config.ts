@@ -12,8 +12,8 @@ export const STRIPE_PRICE_TO_TIER: Record<string, SubscriptionTier> = {
   [stripeConfig.priceIds.business]: 'business',
   // Grandfathered prices (A-9): no longer sold, still resolve for the
   // subscribers on them. The removed Founder tier maps to its migration
-  // target, Pro; the subscription itself moves at period end via
-  // scripts/migrate-founder-to-pro.ts.
+  // target, Pro; the subscription itself moves at period end by a manual
+  // Stripe dashboard step ([D-OW-19]).
   [stripeConfig.grandfatheredPriceIds.founder]: 'pro',
 };
 

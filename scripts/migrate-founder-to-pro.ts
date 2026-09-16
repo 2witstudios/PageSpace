@@ -1,48 +1,64 @@
 #!/usr/bin/env bun
 /**
  * One-shot migration for A-9 (Organizations & Wallets, SEAT-2): the Founder
- * tier is removed from the vocabulary.
+ * tier is removed from the vocabulary. DATABASE-ONLY — see [D-OW-19].
  *
- *   1. Every subscription still on the retired Founder price is moved to Pro
- *      AT PERIOD END — a Stripe subscription schedule (current phase on the
- *      Founder price until `current_period_end`, next phase on the Pro price),
- *      never an immediate price swap, so nothing is prorated mid-period.
- *      `users.subscriptionTier` is written to 'pro' NOW, not when the phase
- *      lands: 'founder' is outside the vocabulary from this deploy on, and an
- *      out-of-vocabulary value coerces to 'free' at every read site
- *      (toSubscriptionTier) — leaving it in place would strip the subscriber
- *      to Free entitlements for the rest of the period. The Stripe webhook
- *      (customer.subscription.updated) writes 'pro' again when the schedule's
- *      second phase starts, through the same price→tier map, so the column
- *      and Stripe agree at both moments.
- *   2. Every subscriber on the legacy $100 personal Business price is marked
+ * Moving the Founder subscription to the Pro price is a MANUAL Stripe
+ * dashboard step on migration day (schedule the switch at period end), not
+ * code: five review rounds kept finding real P1s in an automated schedule
+ * write for what is a single subscription. It is safe to leave to the
+ * dashboard because price-config maps the grandfathered Founder price to
+ * 'pro', and the webhook re-derives the tier with getTierFromPrice on
+ * customer.subscription.updated when the schedule switches the price.
+ *
+ * This script:
+ *   1. REPORTS every subscription on the Founder price — user, status,
+ *      current period end, schedule presence — read from Stripe, so the
+ *      dashboard step is checked against real data. It never writes Stripe.
+ *   2. NORMALIZES a stored `users.subscriptionTier = 'founder'` to the tier
+ *      its subscriptions derive (deriveTierFromSubscriptions + getTierFromPrice
+ *      → 'pro'), the webhook's own rule: only an active/trialing row counts,
+ *      and only a determinate paid tier is written. Anyone else (canceled,
+ *      past_due, unmapped price, no subscription) is left for review — they
+ *      already read as Free, since toSubscriptionTier coerces 'founder' to it.
+ *   3. MARKS every subscriber on the legacy $100 personal Business price
  *      `users.subscriptionGrandfathered = true`: Business entitlements at the
- *      price they already pay (A-9). A flag, not a tier — their tier stays
- *      'business'. No new signups at that price.
+ *      price they already pay. A flag, not a tier.
  *
- * Idempotent: a subscription that already carries a schedule is left alone
- * (reported as `already-scheduled`), and a user already flagged is skipped.
+ * Idempotent: a normalized tier is no longer 'founder' and a flagged user is
+ * skipped, so a second run writes nothing.
  *
  * Usage:
- *   bun scripts/migrate-founder-to-pro.ts --dry-run    # plan only, no writes
- *   bun scripts/migrate-founder-to-pro.ts              # execute
+ *   bun scripts/migrate-founder-to-pro.ts            # dry run (default), no writes
+ *   bun scripts/migrate-founder-to-pro.ts --apply    # write steps 2 and 3
  *
- * Runs on the migration day chosen at Standup 4 (Sequence Spec), not before.
  * Env: DATABASE_URL, STRIPE_SECRET_KEY (live or test to match stripe-config).
  */
 import { pathToFileURL } from 'node:url';
-import { and, eq, inArray } from '@pagespace/db/operators';
+import type { SubscriptionTier as SubscriptionTierName } from '@pagespace/lib/billing/subscription-tiers';
+import { and, asc, desc, eq, or } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { subscriptions } from '@pagespace/db/schema/subscriptions';
-import { ENTITLED_SUBSCRIPTION_STATUSES } from '@pagespace/lib/billing/subscription-tier-sync';
+import {
+  ENTITLED_SUBSCRIPTION_STATUSES,
+  deriveTierFromSubscriptions,
+  type PriceTierResolver,
+  type SubscriptionRowLike,
+} from '@pagespace/lib/billing/subscription-tier-sync';
 
 // ─── Seams ───────────────────────────────────────────────────────────────────
 
-/** A subscription row that must move from Founder to Pro. */
-export interface FounderSubscriptionRow {
+/** A subscription row on the retired Founder price. */
+export interface FounderPriceSubscriptionRow {
   userId: string;
   stripeSubscriptionId: string;
   status: string;
+}
+
+/** A user whose stored tier is still the removed 'founder', with every subscription row they have. */
+export interface FounderTierUserRow {
+  userId: string;
+  subscriptions: SubscriptionRowLike[];
 }
 
 /** A user on the legacy $100 personal Business price. */
@@ -51,164 +67,220 @@ export interface LegacyBusinessRow {
   subscriptionGrandfathered: boolean;
 }
 
+/**
+ * One user ⟕ subscription row as the store reads it, before any selection
+ * rule applies (subscription fields are null for a user with none).
+ */
+export interface SubscribedUserCandidate {
+  userId: string;
+  subscriptionTier: string;
+  subscriptionGrandfathered: boolean;
+  stripeSubscriptionId: string | null;
+  stripePriceId: string | null;
+  status: string | null;
+  updatedAt: Date | null;
+}
+
 /** What the script reads and writes in Postgres. */
 export interface MigrationStore {
-  listFounderSubscriptions(): Promise<FounderSubscriptionRow[]>;
+  listFounderPriceSubscriptions(): Promise<FounderPriceSubscriptionRow[]>;
+  listFounderTierUsers(): Promise<FounderTierUserRow[]>;
+  /** Set the tier only while it still reads 'founder'. */
+  normalizeFounderTier(userId: string, tier: Exclude<SubscriptionTierName, 'free'>): Promise<void>;
   listLegacyBusinessSubscribers(): Promise<LegacyBusinessRow[]>;
-  /** Write the Pro tier now and record the pending schedule on the subscription row. */
-  recordFounderToPro(input: {
-    userId: string;
-    stripeSubscriptionId: string;
-    stripeScheduleId: string;
-    scheduledPriceId: string;
-    scheduledChangeDate: Date;
-  }): Promise<void>;
   markGrandfathered(userId: string): Promise<void>;
 }
 
-/** The subset of a Stripe subscription the plan needs. */
-export interface StripeSubscriptionView {
-  id: string;
-  /** Existing schedule id, if the subscription already carries one. */
-  scheduleId: string | null;
-  /** Price id of the first item — the one the plan must keep until period end. */
-  currentPriceId: string;
+/** The live Stripe facts the report shows. */
+export interface StripeSubscriptionFacts {
+  status: string;
   /** Unix seconds; item-level period end (API 2025-08-27+). */
   currentPeriodEnd: number;
+  scheduleId: string | null;
 }
 
-export interface StripeScheduleView {
-  id: string;
-  /** Unix seconds start of the schedule's first phase. */
-  firstPhaseStart: number;
-}
-
-export interface SchedulePhase {
-  items: { price: string }[];
-  start_date: number;
-  end_date?: number;
-}
-
-/** What the script asks of Stripe. */
-export interface MigrationStripe {
-  retrieveSubscription(id: string): Promise<StripeSubscriptionView>;
-  createScheduleFromSubscription(subscriptionId: string): Promise<StripeScheduleView>;
-  updateSchedulePhases(scheduleId: string, phases: SchedulePhase[]): Promise<void>;
-}
-
-export interface MigrationPriceIds {
-  founder: string;
-  pro: string;
+/** Read-only: the only thing the script asks of Stripe. */
+export interface StripeSubscriptionReader {
+  retrieveSubscription(id: string): Promise<StripeSubscriptionFacts>;
 }
 
 export interface MigrationDeps {
   store: MigrationStore;
-  stripe: MigrationStripe;
-  priceIds: MigrationPriceIds;
+  stripe: StripeSubscriptionReader;
+  /** getTierFromPrice from apps/web/src/lib/stripe/price-config.ts. */
+  deriveTier: PriceTierResolver;
   log: (line: string) => void;
 }
 
-// ─── Pure planning ───────────────────────────────────────────────────────────
-
-/**
- * The two phases that move a Founder subscription to Pro at period end:
- * keep the current price until `currentPeriodEnd`, then Pro. Pure.
- */
-export function founderToProPhases(
-  sub: StripeSubscriptionView,
-  schedule: StripeScheduleView,
-  proPriceId: string,
-): SchedulePhase[] {
-  return [
-    { items: [{ price: sub.currentPriceId }], start_date: schedule.firstPhaseStart, end_date: sub.currentPeriodEnd },
-    { items: [{ price: proPriceId }], start_date: sub.currentPeriodEnd },
-  ];
-}
-
-export type FounderAction =
-  | { kind: 'schedule'; userId: string; stripeSubscriptionId: string }
-  | { kind: 'already-scheduled'; userId: string; stripeSubscriptionId: string; scheduleId: string }
-  | { kind: 'not-on-founder-price'; userId: string; stripeSubscriptionId: string; currentPriceId: string };
-
-/** Decide what to do with one Founder row given its live Stripe state. Pure. */
-export function planFounderAction(
-  row: FounderSubscriptionRow,
-  live: StripeSubscriptionView,
-  priceIds: MigrationPriceIds,
-): FounderAction {
-  if (live.currentPriceId !== priceIds.founder) {
-    return { kind: 'not-on-founder-price', userId: row.userId, stripeSubscriptionId: row.stripeSubscriptionId, currentPriceId: live.currentPriceId };
-  }
-  if (live.scheduleId) {
-    return { kind: 'already-scheduled', userId: row.userId, stripeSubscriptionId: row.stripeSubscriptionId, scheduleId: live.scheduleId };
-  }
-  return { kind: 'schedule', userId: row.userId, stripeSubscriptionId: row.stripeSubscriptionId };
+export interface FounderReportEntry {
+  userId: string;
+  stripeSubscriptionId: string;
+  status: string;
+  currentPeriodEnd: string;
+  scheduleId: string | null;
 }
 
 export interface MigrationSummary {
-  dryRun: boolean;
-  founderRows: number;
-  scheduled: number;
-  alreadyScheduled: number;
-  skippedNotOnFounderPrice: number;
+  apply: boolean;
+  report: FounderReportEntry[];
+  reportFailed: number;
+  normalized: number;
+  founderTierUnresolved: number;
   legacyBusinessRows: number;
   grandfathered: number;
   alreadyGrandfathered: number;
 }
 
+/** Dry run unless `--apply`; both flags together is ambiguous and refused. */
+export function parseMode(argv: readonly string[]): { apply: boolean } {
+  const apply = argv.includes('--apply');
+  if (apply && argv.includes('--dry-run')) throw new Error('Pass either --apply or --dry-run, not both');
+  return { apply };
+}
+
+/**
+ * The price ids the script selects on. The legacy $100 personal Business id
+ * is read from `grandfatheredPriceIds`, never `priceIds.business`: that one is
+ * whatever Business sells today, and becomes the $50 org price in Wave C.
+ */
+export function migrationPriceIds(config: {
+  grandfatheredPriceIds: { founder: string; legacyBusiness: string };
+}): { founder: string; legacyBusiness: string } {
+  return { founder: config.grandfatheredPriceIds.founder, legacyBusiness: config.grandfatheredPriceIds.legacyBusiness };
+}
+
+// ─── Pure row selection ──────────────────────────────────────────────────────
+
+/**
+ * Statuses that keep a legacy $100 Business subscriber's grandfathering: the
+ * webhook's entitled statuses plus past_due, so a failed card retry does not
+ * cost them the price they already pay. Tier derivation does NOT use this —
+ * it uses deriveTierFromSubscriptions (webhook parity).
+ */
+const GRANDFATHER_STATUSES: readonly string[] = [...ENTITLED_SUBSCRIPTION_STATUSES, 'past_due'];
+
+/** Input order: by user, most recently updated subscription first, then subscription id. */
+function byUserThenRecency(a: SubscribedUserCandidate, b: SubscribedUserCandidate): number {
+  if (a.userId !== b.userId) return a.userId < b.userId ? -1 : 1;
+  const diff = (b.updatedAt?.getTime() ?? 0) - (a.updatedAt?.getTime() ?? 0);
+  if (diff !== 0) return diff;
+  return (a.stripeSubscriptionId ?? '').localeCompare(b.stripeSubscriptionId ?? '');
+}
+
+function sorted(rows: readonly SubscribedUserCandidate[]): SubscribedUserCandidate[] {
+  return [...rows].sort(byUserThenRecency);
+}
+
+/** Every subscription on the Founder price, whatever its status (the report shows it). */
+export function selectFounderPriceSubscriptions(
+  rows: readonly SubscribedUserCandidate[],
+  founderPriceId: string,
+): FounderPriceSubscriptionRow[] {
+  return sorted(rows).flatMap((row) =>
+    row.stripePriceId === founderPriceId && row.stripeSubscriptionId !== null && row.status !== null
+      ? [{ userId: row.userId, stripeSubscriptionId: row.stripeSubscriptionId, status: row.status }]
+      : [],
+  );
+}
+
+/** Users whose stored tier is 'founder', each with ALL their subscription rows (any status). */
+export function selectFounderTierUsers(rows: readonly SubscribedUserCandidate[]): FounderTierUserRow[] {
+  const byUser = new Map<string, SubscriptionRowLike[]>();
+  for (const row of sorted(rows)) {
+    if (row.subscriptionTier !== 'founder') continue;
+    const subs = byUser.get(row.userId) ?? [];
+    if (row.stripePriceId !== null && row.status !== null) subs.push({ status: row.status, stripePriceId: row.stripePriceId });
+    byUser.set(row.userId, subs);
+  }
+  return [...byUser.entries()].map(([userId, subs]) => ({ userId, subscriptions: subs }));
+}
+
+/**
+ * The tier to write for a 'founder' user, or null to leave them for a human.
+ * The same rule the webhook and reconciler use (deriveTierFromSubscriptions):
+ * only an active/trialing row counts. A write happens only for a determinate,
+ * PAID tier — a canceled or past_due Founder subscriber already reads as Free
+ * and must not be promoted, and an unmapped price is not a tier.
+ */
+export function founderTierToWrite(
+  subscriptions: readonly SubscriptionRowLike[],
+  priceTier: PriceTierResolver,
+): Exclude<SubscriptionTierName, 'free'> | null {
+  const derived = deriveTierFromSubscriptions(subscriptions, priceTier);
+  return derived.tier === 'free' || derived.indeterminate ? null : derived.tier;
+}
+
+/** Users with an entitled subscription on the legacy $100 personal Business price, once each. */
+export function selectLegacyBusinessSubscribers(
+  rows: readonly SubscribedUserCandidate[],
+  legacyBusinessPriceId: string,
+): LegacyBusinessRow[] {
+  const byUser = new Map<string, LegacyBusinessRow>();
+  for (const row of sorted(rows)) {
+    const keepsGrandfathering = row.status !== null && GRANDFATHER_STATUSES.includes(row.status);
+    if (row.stripePriceId !== legacyBusinessPriceId || !keepsGrandfathering || byUser.has(row.userId)) continue;
+    byUser.set(row.userId, { userId: row.userId, subscriptionGrandfathered: row.subscriptionGrandfathered });
+  }
+  return [...byUser.values()];
+}
+
 // ─── Runner ──────────────────────────────────────────────────────────────────
 
-export async function runFounderMigration(deps: MigrationDeps, opts: { dryRun: boolean }): Promise<MigrationSummary> {
-  const { store, stripe, priceIds, log } = deps;
+export async function runFounderMigration(deps: MigrationDeps, opts: { apply: boolean }): Promise<MigrationSummary> {
+  const { store, stripe, deriveTier, log } = deps;
   const summary: MigrationSummary = {
-    dryRun: opts.dryRun,
-    founderRows: 0,
-    scheduled: 0,
-    alreadyScheduled: 0,
-    skippedNotOnFounderPrice: 0,
+    apply: opts.apply,
+    report: [],
+    reportFailed: 0,
+    normalized: 0,
+    founderTierUnresolved: 0,
     legacyBusinessRows: 0,
     grandfathered: 0,
     alreadyGrandfathered: 0,
   };
-  const mode = opts.dryRun ? '[dry-run] ' : '';
+  const mode = opts.apply ? '' : '[dry-run] ';
 
-  // 1. Founder → Pro at period end.
-  const founderRows = await store.listFounderSubscriptions();
-  summary.founderRows = founderRows.length;
-  log(`${mode}${founderRows.length} subscription(s) on the Founder price`);
-
-  for (const row of founderRows) {
-    const live = await stripe.retrieveSubscription(row.stripeSubscriptionId);
-    const action = planFounderAction(row, live, priceIds);
-    switch (action.kind) {
-      case 'not-on-founder-price':
-        summary.skippedNotOnFounderPrice++;
-        log(`${mode}  ${row.userId}: ${row.stripeSubscriptionId} is on ${action.currentPriceId}, not the Founder price — skipped`);
-        break;
-      case 'already-scheduled':
-        summary.alreadyScheduled++;
-        log(`${mode}  ${row.userId}: ${row.stripeSubscriptionId} already carries schedule ${action.scheduleId} — skipped`);
-        break;
-      case 'schedule': {
-        const changeDate = new Date(live.currentPeriodEnd * 1000);
-        log(`${mode}  ${row.userId}: schedule ${row.stripeSubscriptionId} → Pro (${priceIds.pro}) at ${changeDate.toISOString()}; users.subscriptionTier → pro now`);
-        summary.scheduled++;
-        if (opts.dryRun) break;
-        const schedule = await stripe.createScheduleFromSubscription(live.id);
-        await stripe.updateSchedulePhases(schedule.id, founderToProPhases(live, schedule, priceIds.pro));
-        await store.recordFounderToPro({
-          userId: row.userId,
-          stripeSubscriptionId: row.stripeSubscriptionId,
-          stripeScheduleId: schedule.id,
-          scheduledPriceId: priceIds.pro,
-          scheduledChangeDate: changeDate,
-        });
-        break;
-      }
+  // 1. Read-only report of the Founder-price subscriptions.
+  const founderSubs = await store.listFounderPriceSubscriptions();
+  log(`${mode}${founderSubs.length} subscription(s) on the Founder price (move each to Pro in the Stripe dashboard):`);
+  for (const row of founderSubs) {
+    try {
+      const live = await stripe.retrieveSubscription(row.stripeSubscriptionId);
+      const entry: FounderReportEntry = {
+        userId: row.userId,
+        stripeSubscriptionId: row.stripeSubscriptionId,
+        status: live.status,
+        currentPeriodEnd: new Date(live.currentPeriodEnd * 1000).toISOString(),
+        scheduleId: live.scheduleId,
+      };
+      summary.report.push(entry);
+      log(
+        `${mode}  ${entry.userId}: ${entry.stripeSubscriptionId} status ${entry.status}, period ends ${entry.currentPeriodEnd}, ` +
+          (entry.scheduleId ? `schedule ${entry.scheduleId}` : 'no schedule'),
+      );
+    } catch (err) {
+      summary.reportFailed++;
+      log(`${mode}  ${row.userId}: ${row.stripeSubscriptionId} Stripe read FAILED (db status ${row.status}): ${String(err)}`);
     }
   }
 
-  // 2. Grandfather the legacy $100 personal Business subscribers.
+  // 2. Normalize a stored 'founder' tier to its derived tier.
+  const founderTierUsers = await store.listFounderTierUsers();
+  log(`${mode}${founderTierUsers.length} user(s) with subscriptionTier 'founder'`);
+  for (const row of founderTierUsers) {
+    const tier = founderTierToWrite(row.subscriptions, deriveTier);
+    const statuses = row.subscriptions.map((sub) => `${sub.stripePriceId}:${sub.status}`).join(', ') || 'no subscriptions';
+    if (tier === null) {
+      summary.founderTierUnresolved++;
+      log(`${mode}  ${row.userId}: no active/trialing subscription on a mapped paid price (${statuses}) — left for review`);
+      continue;
+    }
+    summary.normalized++;
+    log(`${mode}  ${row.userId}: users.subscriptionTier founder → ${tier} (${statuses})`);
+    if (opts.apply) await store.normalizeFounderTier(row.userId, tier);
+  }
+
+  // 3. Grandfather the legacy $100 personal Business subscribers.
   const legacyRows = await store.listLegacyBusinessSubscribers();
   summary.legacyBusinessRows = legacyRows.length;
   log(`${mode}${legacyRows.length} subscriber(s) on the legacy $100 personal Business price`);
@@ -220,13 +292,13 @@ export async function runFounderMigration(deps: MigrationDeps, opts: { dryRun: b
     }
     summary.grandfathered++;
     log(`${mode}  ${row.userId}: users.subscriptionGrandfathered → true`);
-    if (!opts.dryRun) await store.markGrandfathered(row.userId);
+    if (opts.apply) await store.markGrandfathered(row.userId);
   }
 
   log(
-    `${mode}Summary: founder rows ${summary.founderRows} (scheduled ${summary.scheduled}, already scheduled ${summary.alreadyScheduled}, ` +
-      `not on founder price ${summary.skippedNotOnFounderPrice}); legacy business rows ${summary.legacyBusinessRows} ` +
-      `(grandfathered ${summary.grandfathered}, already ${summary.alreadyGrandfathered})`,
+    `${mode}Summary: founder-price subscriptions ${founderSubs.length} (reported ${summary.report.length}, read failed ${summary.reportFailed}); ` +
+      `founder tiers normalized ${summary.normalized} (unresolved ${summary.founderTierUnresolved}); ` +
+      `legacy business rows ${summary.legacyBusinessRows} (grandfathered ${summary.grandfathered}, already ${summary.alreadyGrandfathered})`,
   );
   return summary;
 }
@@ -237,39 +309,44 @@ export async function runFounderMigration(deps: MigrationDeps, opts: { dryRun: b
 type MigrationDb = typeof import('@pagespace/db/db').db;
 
 export function createDrizzleStore(db: MigrationDb, priceIds: { founder: string; legacyBusiness: string }): MigrationStore {
-  const entitled = [...ENTITLED_SUBSCRIPTION_STATUSES, 'past_due'];
+  // SQL only narrows to candidate rows; every selection and status rule is the
+  // pure select* functions above, so the tests exercise the same rules.
+  const candidates = (): Promise<SubscribedUserCandidate[]> =>
+    db
+      .select({
+        userId: users.id,
+        subscriptionTier: users.subscriptionTier,
+        subscriptionGrandfathered: users.subscriptionGrandfathered,
+        stripeSubscriptionId: subscriptions.stripeSubscriptionId,
+        stripePriceId: subscriptions.stripePriceId,
+        status: subscriptions.status,
+        updatedAt: subscriptions.updatedAt,
+      })
+      .from(users)
+      .leftJoin(subscriptions, eq(subscriptions.userId, users.id))
+      .where(
+        or(
+          eq(users.subscriptionTier, 'founder'),
+          eq(subscriptions.stripePriceId, priceIds.founder),
+          eq(subscriptions.stripePriceId, priceIds.legacyBusiness),
+        ),
+      )
+      .orderBy(asc(users.id), desc(subscriptions.updatedAt), asc(subscriptions.stripeSubscriptionId));
   return {
-    async listFounderSubscriptions() {
-      const rows = await db
-        .select({
-          userId: subscriptions.userId,
-          stripeSubscriptionId: subscriptions.stripeSubscriptionId,
-          status: subscriptions.status,
-        })
-        .from(subscriptions)
-        .where(and(eq(subscriptions.stripePriceId, priceIds.founder), inArray(subscriptions.status, entitled)));
-      return rows;
+    async listFounderPriceSubscriptions() {
+      return selectFounderPriceSubscriptions(await candidates(), priceIds.founder);
+    },
+    async listFounderTierUsers() {
+      return selectFounderTierUsers(await candidates());
+    },
+    async normalizeFounderTier(userId, tier) {
+      await db
+        .update(users)
+        .set({ subscriptionTier: tier })
+        .where(and(eq(users.id, userId), eq(users.subscriptionTier, 'founder')));
     },
     async listLegacyBusinessSubscribers() {
-      const rows = await db
-        .select({ userId: users.id, subscriptionGrandfathered: users.subscriptionGrandfathered })
-        .from(subscriptions)
-        .innerJoin(users, eq(users.id, subscriptions.userId))
-        .where(and(eq(subscriptions.stripePriceId, priceIds.legacyBusiness), inArray(subscriptions.status, entitled)));
-      return rows;
-    },
-    async recordFounderToPro(input) {
-      await db.transaction(async (tx) => {
-        await tx.update(users).set({ subscriptionTier: 'pro' }).where(eq(users.id, input.userId));
-        await tx
-          .update(subscriptions)
-          .set({
-            stripeScheduleId: input.stripeScheduleId,
-            scheduledPriceId: input.scheduledPriceId,
-            scheduledChangeDate: input.scheduledChangeDate,
-          })
-          .where(eq(subscriptions.stripeSubscriptionId, input.stripeSubscriptionId));
-      });
+      return selectLegacyBusinessSubscribers(await candidates(), priceIds.legacyBusiness);
     },
     async markGrandfathered(userId) {
       await db.update(users).set({ subscriptionGrandfathered: true }).where(eq(users.id, userId));
@@ -277,7 +354,8 @@ export function createDrizzleStore(db: MigrationDb, priceIds: { founder: string;
   };
 }
 
-export function createStripeAdapter(stripe: import('stripe').Stripe): MigrationStripe {
+/** Read-only Stripe adapter: `subscriptions.retrieve` and nothing else. */
+export function createStripeReader(stripe: import('stripe').Stripe): StripeSubscriptionReader {
   return {
     async retrieveSubscription(id) {
       const sub = await stripe.subscriptions.retrieve(id);
@@ -287,48 +365,40 @@ export function createStripeAdapter(stripe: import('stripe').Stripe): MigrationS
       const item = firstItem as typeof firstItem & { current_period_end?: number };
       if (typeof item.current_period_end !== 'number') throw new Error(`Subscription ${id}: item has no current_period_end`);
       return {
-        id: sub.id,
-        scheduleId: sub.schedule == null ? null : typeof sub.schedule === 'string' ? sub.schedule : sub.schedule.id,
-        currentPriceId: firstItem.price.id,
+        status: sub.status,
         currentPeriodEnd: item.current_period_end,
+        scheduleId: sub.schedule == null ? null : typeof sub.schedule === 'string' ? sub.schedule : sub.schedule.id,
       };
-    },
-    async createScheduleFromSubscription(subscriptionId) {
-      const schedule = await stripe.subscriptionSchedules.create({ from_subscription: subscriptionId });
-      return { id: schedule.id, firstPhaseStart: schedule.phases[0].start_date };
-    },
-    async updateSchedulePhases(scheduleId, phases) {
-      await stripe.subscriptionSchedules.update(scheduleId, { phases });
     },
   };
 }
 
 async function main(): Promise<void> {
-  const dryRun = process.argv.includes('--dry-run');
+  const { apply } = parseMode(process.argv.slice(2));
   // Price ids come from the web app's hardcoded Stripe config (test vs live
   // follows NODE_ENV / NEXT_PUBLIC_STRIPE_MODE exactly as the app does).
   const { stripeConfig, stripeMode } = await import('../apps/web/src/lib/stripe-config');
   const { stripe } = await import('../apps/web/src/lib/stripe/client');
+  const { getTierFromPrice } = await import('../apps/web/src/lib/stripe/price-config');
   const { getMigrationDb } = await import('@pagespace/db/db');
-  if (!dryRun && !process.env.STRIPE_SECRET_KEY) {
-    throw new Error('STRIPE_SECRET_KEY is required (or pass --dry-run)');
+  if (!process.env.STRIPE_SECRET_KEY) {
+    throw new Error('STRIPE_SECRET_KEY is required to read the Founder-price subscriptions (read-only)');
   }
-  console.log(`Stripe mode: ${stripeMode}${dryRun ? ' (dry run — no writes)' : ''}`);
-  const store = createDrizzleStore(getMigrationDb(), {
-    founder: stripeConfig.grandfatheredPriceIds.founder,
-    legacyBusiness: stripeConfig.priceIds.business,
-  });
+  console.log(`Stripe mode: ${stripeMode}${apply ? ' (--apply: database writes)' : ' (dry run — no writes; pass --apply to write)'}`);
   const summary = await runFounderMigration(
     {
-      store,
-      stripe: createStripeAdapter(stripe),
-      priceIds: { founder: stripeConfig.grandfatheredPriceIds.founder, pro: stripeConfig.priceIds.pro },
+      store: createDrizzleStore(getMigrationDb(), migrationPriceIds(stripeConfig)),
+      stripe: createStripeReader(stripe),
+      deriveTier: (priceId) => getTierFromPrice(priceId),
       log: (line) => console.log(line),
     },
-    { dryRun },
+    { apply },
   );
-  if (summary.founderRows > 1) {
-    console.warn(`Expected a single Founder subscriber (A-9) but found ${summary.founderRows}; review the rows above.`);
+  if (summary.report.length + summary.reportFailed > 1) {
+    console.warn(`Expected a single Founder subscriber (A-9) but found ${summary.report.length + summary.reportFailed}; review the rows above.`);
+  }
+  if (summary.reportFailed > 0 || summary.founderTierUnresolved > 0) {
+    console.warn('Some rows need review — see the FAILED / "left for review" lines above.');
   }
 }
 
