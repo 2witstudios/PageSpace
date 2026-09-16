@@ -32,7 +32,7 @@
 import type { AccountKind } from '@pagespace/db/schema/agent-accounts';
 import { isDriveWithinCredentialScope } from '../agent-workspaces/credential-scope';
 import { secureCompare } from '../auth/secure-compare';
-import type { AgentAccountGrant, ApprovalFact, DelegationFact, GrantDenyReason, GrantVerdict, PresenterChannel, VerifyGrant } from './grant';
+import type { AgentAccountGrant, ApprovalFact, DelegationFact, ExpectedBinding, GrantDenyReason, GrantVerdict, PresenterChannel, VerifyGrant } from './grant';
 import { GRANT_LIMITS } from './grant-constants';
 import { parseGrant } from './parse-grant';
 import { encodeGrant } from './encode-grant';
@@ -56,6 +56,22 @@ const RESOLVABLE: Readonly<Record<PresenterChannel, Readonly<Record<AccountKind,
 function kindResolvable(grant: AgentAccountGrant): boolean {
   if (RESOLVABLE[grant.aud][grant.accountKind]) return true;
   return grant.accountKind === 'session' && grant.aud === 'http-executor' && grant.sessionHttp;
+}
+
+/**
+ * F5a — the current credential version, or the plane-attested PREVIOUS one
+ * while a rotation's grace window is open and only for a grant issued before
+ * that rotation: a grant in flight across a refresh still resolves, and old
+ * material never gets a fresh grant (ADR 0004 F5a; G1a review M7).
+ */
+function credentialVersionAdmitted(grant: AgentAccountGrant, expected: ExpectedBinding, now: number, rotationGraceMs: number): boolean {
+  if (grant.credentialVersion === expected.currentCredentialVersion) return true;
+  if (expected.previousCredentialVersion === null || expected.rotatedAt === null) return false;
+  return (
+    grant.credentialVersion === expected.previousCredentialVersion &&
+    grant.iat < expected.rotatedAt &&
+    now < expected.rotatedAt + rotationGraceMs
+  );
 }
 
 function delegationHolds(grant: AgentAccountGrant, fact: DelegationFact): boolean {
@@ -126,7 +142,7 @@ export const verifyGrant: VerifyGrant = (input) => {
 
   // F5a — the account row and its current credential version.
   if (grant.accountId !== expected.accountId || grant.accountKind !== expected.accountKind) return deny('version_mismatch');
-  if (grant.credentialVersion !== expected.currentCredentialVersion) return deny('version_mismatch');
+  if (!credentialVersionAdmitted(grant, expected, input.now, input.rotationGraceMs)) return deny('version_mismatch');
 
   // F6 — policy epoch.
   if (grant.policyVersion !== expected.currentPolicyVersion) return deny('policy_epoch');
