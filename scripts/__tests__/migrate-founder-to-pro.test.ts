@@ -118,6 +118,34 @@ describe('planFounderAction (pure)', () => {
     expect(planFounderAction(row, { id: 'sub', scheduleId: null, currentPriceId: PRICE.pro, currentPeriodEnd: PERIOD_END }, PRICE))
       .toEqual({ kind: 'not-on-founder-price', userId: 'u', stripeSubscriptionId: 'sub', currentPriceId: PRICE.pro });
   });
+
+  it('P1 (independent review) REFUSES a Founder subscription set to cancel at period end — never bill one more Pro period to someone leaving', () => {
+    const action = planFounderAction(
+      row,
+      { id: 'sub', scheduleId: null, currentPriceId: PRICE.founder, currentPeriodEnd: PERIOD_END, cancelAtPeriodEnd: true },
+      PRICE,
+    );
+    expect(action.kind).toBe('refuse');
+    expect((action as { reason: string }).reason).toMatch(/cancel/i);
+  });
+
+  it('P1 (independent review) REFUSES a Founder subscription with a cancelAt timestamp set, even if cancelAtPeriodEnd is false', () => {
+    const action = planFounderAction(
+      row,
+      { id: 'sub', scheduleId: null, currentPriceId: PRICE.founder, currentPeriodEnd: PERIOD_END, cancelAtPeriodEnd: false, cancelAt: PERIOD_END + 100 },
+      PRICE,
+    );
+    expect(action.kind).toBe('refuse');
+  });
+
+  it('P1 (independent review) REFUSES a cancelling subscription even if it already carries a schedule', () => {
+    const action = planFounderAction(
+      row,
+      { id: 'sub', scheduleId: 'sched_1', currentPriceId: PRICE.founder, currentPeriodEnd: PERIOD_END, cancelAtPeriodEnd: true },
+      PRICE,
+    );
+    expect(action.kind).toBe('refuse');
+  });
 });
 
 describe('founderToProPhases (pure)', () => {
@@ -161,6 +189,35 @@ describe('scheduleTargetsPro (pure)', () => {
         { items: [{ price: PRICE.founder }], start_date: PHASE_START, end_date: PERIOD_END },
         { items: [{ price: PRICE.legacyBusiness }], start_date: PERIOD_END, end_date: X },
         { items: [{ price: PRICE.pro }], start_date: X },
+      ],
+      PERIOD_END,
+      PRICE.pro,
+    )).toBe(false);
+  });
+
+  it('P2 (independent review, round 2) is false when Pro sits exactly AT the boundary but something non-Pro is queued after it — not durably on Pro', () => {
+    // [founder -> cpe, pro cpe -> X, other X -> ]: Pro is at the boundary,
+    // but the schedule does not STAY on Pro.
+    const X = PERIOD_END + 500;
+    expect(scheduleTargetsPro(
+      [
+        { items: [{ price: PRICE.founder }], start_date: PHASE_START, end_date: PERIOD_END },
+        { items: [{ price: PRICE.pro }], start_date: PERIOD_END, end_date: X },
+        { items: [{ price: PRICE.legacyBusiness }], start_date: X },
+      ],
+      PERIOD_END,
+      PRICE.pro,
+    )).toBe(false);
+  });
+
+  it('P2 (independent review, round 2) is false when the phase active at the boundary EXTENDS PAST it — one more Founder period would still be billed', () => {
+    // [founder PS -> cpe+P, pro cpe+P -> ]: the active phase at cpe is
+    // Founder, and it does not end until cpe+P.
+    const laterEnd = PERIOD_END + 500;
+    expect(scheduleTargetsPro(
+      [
+        { items: [{ price: PRICE.founder }], start_date: PHASE_START, end_date: laterEnd },
+        { items: [{ price: PRICE.pro }], start_date: laterEnd },
       ],
       PERIOD_END,
       PRICE.pro,
@@ -255,6 +312,19 @@ describe('reconcilePhasesToPro (pure)', () => {
     );
     expect(result).toEqual([
       { items: [{ price: PRICE.founder, quantity: 2 }], start_date: PHASE_START, end_date: PERIOD_END, discounts: [{ coupon: 'promo_50off' }] },
+      { items: [{ price: PRICE.pro }], start_date: PERIOD_END },
+    ]);
+  });
+
+  it('P2 (independent review, round 2) truncates an active phase that extends past period end, rather than leaving it to bill one more period', () => {
+    const laterEnd = PERIOD_END + 500;
+    const result = reconcilePhasesToPro(
+      sub,
+      [{ items: [{ price: PRICE.founder }], start_date: PHASE_START, end_date: laterEnd }],
+      PRICE.pro,
+    );
+    expect(result).toEqual([
+      { items: [{ price: PRICE.founder }], start_date: PHASE_START, end_date: PERIOD_END },
       { items: [{ price: PRICE.pro }], start_date: PERIOD_END },
     ]);
   });
@@ -363,6 +433,27 @@ describe('planScheduleReconciliation (pure)', () => {
     const result = planScheduleReconciliation(row, live, 'sched_1', proLastButNotAtBoundary, PRICE.pro);
     expect(result.kind).toBe('fix-schedule');
   });
+
+  it('P2 (independent review, round 2) Pro AT the boundary with a non-Pro tail after it is fix-schedule — the schedule does not durably stay on Pro', () => {
+    const X = PERIOD_END + 500;
+    const proAtBoundaryWithTail: SchedulePhase[] = [
+      { items: [{ price: PRICE.founder }], start_date: PHASE_START, end_date: PERIOD_END },
+      { items: [{ price: PRICE.pro }], start_date: PERIOD_END, end_date: X },
+      { items: [{ price: 'price_business_100' }], start_date: X },
+    ];
+    const result = planScheduleReconciliation(row, live, 'sched_1', proAtBoundaryWithTail, PRICE.pro);
+    expect(result.kind).toBe('fix-schedule');
+  });
+
+  it('P2 (independent review, round 2) a Founder phase extending past period end is fix-schedule — one more Founder period would otherwise be billed', () => {
+    const laterEnd = PERIOD_END + 500;
+    const founderExtendsPastBoundary: SchedulePhase[] = [
+      { items: [{ price: PRICE.founder }], start_date: PHASE_START, end_date: laterEnd },
+      { items: [{ price: PRICE.pro }], start_date: laterEnd },
+    ];
+    const result = planScheduleReconciliation(row, live, 'sched_1', founderExtendsPastBoundary, PRICE.pro);
+    expect(result.kind).toBe('fix-schedule');
+  });
 });
 
 describe('runFounderMigration against a seeded Founder row', () => {
@@ -378,6 +469,7 @@ describe('runFounderMigration against a seeded Founder row', () => {
       dbCompleted: 0,
       reconciled: 0,
       failed: 0,
+      refused: 0,
       skippedNotOnFounderPrice: 0,
       legacyBusinessRows: 2,
       grandfathered: 1,
@@ -548,12 +640,14 @@ describe('runFounderMigration against a seeded Founder row', () => {
     expect(writes.recordFounderToPro).toEqual([]);
   });
 
-  it('P2 (independent review) a per-row failure (a malformed schedule reconcilePhasesToPro refuses) does not abort the run — it is skipped and counted, and grandfathering still completes', async () => {
+  it('P2 (independent review) a malformed schedule (no phase active at the boundary) is REFUSED, not guessed at — and does not abort the run', async () => {
     // The schedule's only phase already starts AT the period end — there is
-    // no phase active at the boundary to cap, so reconcilePhasesToPro throws
-    // rather than building an invalid phase. Before the P2 fix this threw
-    // out of the whole for-loop, leaving every later founder row AND step 2
-    // (grandfathering) unprocessed.
+    // no phase active at the boundary to cap. planScheduleReconciliation
+    // (round 2) now detects this itself and returns 'refuse' rather than
+    // calling reconcilePhasesToPro and catching its throw — a typed refusal,
+    // not an error. Before the original P2 fix this threw out of the whole
+    // for-loop, leaving every later founder row AND step 2 (grandfathering)
+    // unprocessed.
     const seed = founderSeed(
       { scheduleId: 'sched_malformed' },
       { subscriptionTier: 'founder', stripeScheduleId: null },
@@ -565,14 +659,29 @@ describe('runFounderMigration against a seeded Founder row', () => {
     });
     const summary = await runFounderMigration(deps, { dryRun: false });
 
-    expect(summary.failed).toBe(1);
+    expect(summary.refused).toBe(1);
+    expect(summary.failed).toBe(0);
     expect(summary.reconciled).toBe(0);
     expect(summary.dbCompleted).toBe(0);
     expect(writes.scheduleUpdates).toEqual([]);
     expect(writes.recordFounderToPro).toEqual([]);
-    expect(lines.some((l) => l.includes('user_jono') && l.includes('FAILED'))).toBe(true);
-    // Step 2 still ran despite the step-1 failure.
+    expect(lines.some((l) => l.includes('user_jono') && l.includes('REFUSED'))).toBe(true);
+    // Step 2 still ran despite the step-1 refusal.
     expect(writes.markGrandfathered).toEqual(['user_biz100']);
     expect(summary.grandfathered).toBe(1);
+  });
+
+  it('P1 (independent review) a cancelling Founder subscription is refused end-to-end — zero Stripe writes, zero DB writes', async () => {
+    const seed = founderSeed({ cancelAtPeriodEnd: true });
+    const { deps, writes, lines } = seededDeps(seed);
+    const summary = await runFounderMigration(deps, { dryRun: false });
+
+    expect(summary.refused).toBe(1);
+    expect(summary.scheduled).toBe(0);
+    expect(writes.schedulesCreated).toEqual([]);
+    expect(writes.scheduleUpdates).toEqual([]);
+    expect(writes.schedulePhaseReads).toEqual([]);
+    expect(writes.recordFounderToPro).toEqual([]);
+    expect(lines.some((l) => l.includes('user_jono') && l.includes('REFUSED') && l.toLowerCase().includes('cancel'))).toBe(true);
   });
 });

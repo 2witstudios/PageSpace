@@ -91,6 +91,19 @@ export interface StripeSubscriptionView {
   currentPriceId: string;
   /** Unix seconds; item-level period end (API 2025-08-27+). */
   currentPeriodEnd: number;
+  /**
+   * Whether the subscription is set to cancel — at period end, or at a
+   * specific future time (`cancelAt`). Either one means the person is
+   * leaving; the planner must REFUSE to reschedule them onto a billed Pro
+   * phase (P1, independent review — treated as P1 severity because it bills
+   * someone who already cancelled). Optional so the many existing test
+   * fixtures that predate this field need no change: undefined/null both
+   * mean "not cancelling", the less-restrictive reading, so omitting it
+   * never silently skips the refuse check for a real subscription — the
+   * real adapter always sets it explicitly from Stripe's response.
+   */
+  cancelAtPeriodEnd?: boolean;
+  cancelAt?: number | null;
 }
 
 export interface StripeScheduleView {
@@ -173,7 +186,14 @@ export function founderToProPhases(
 export type FounderAction =
   | { kind: 'schedule'; userId: string; stripeSubscriptionId: string }
   | { kind: 'already-scheduled'; userId: string; stripeSubscriptionId: string; scheduleId: string }
-  | { kind: 'not-on-founder-price'; userId: string; stripeSubscriptionId: string; currentPriceId: string };
+  | { kind: 'not-on-founder-price'; userId: string; stripeSubscriptionId: string; currentPriceId: string }
+  /**
+   * Fail closed (Vision principle 6): a shape this planner does not
+   * positively recognize as safe — currently only a cancelling
+   * subscription — gets no Stripe or local write, ever. `reason` is
+   * logged and counted so a human reviews it; the migration never guesses.
+   */
+  | { kind: 'refuse'; userId: string; stripeSubscriptionId: string; reason: string };
 
 /** Decide what to do with one Founder row given its live Stripe state. Pure. */
 export function planFounderAction(
@@ -184,6 +204,19 @@ export function planFounderAction(
   if (live.currentPriceId !== priceIds.founder) {
     return { kind: 'not-on-founder-price', userId: row.userId, stripeSubscriptionId: row.stripeSubscriptionId, currentPriceId: live.currentPriceId };
   }
+  // P1 (independent review, treated as P1 per point-guard): a subscription
+  // set to cancel — at period end or at a specific time — must never be
+  // rescheduled onto a billed Pro phase. Checked before the schedule-id
+  // branch: a cancelling subscription is refused regardless of whether it
+  // already carries a schedule.
+  if (live.cancelAtPeriodEnd || live.cancelAt != null) {
+    return {
+      kind: 'refuse',
+      userId: row.userId,
+      stripeSubscriptionId: row.stripeSubscriptionId,
+      reason: `subscription is set to cancel (cancelAtPeriodEnd=${live.cancelAtPeriodEnd ?? false}, cancelAt=${live.cancelAt ?? 'null'}) — refusing to append a billed Pro phase to a cancelling subscription`,
+    };
+  }
   if (live.scheduleId) {
     return { kind: 'already-scheduled', userId: row.userId, stripeSubscriptionId: row.stripeSubscriptionId, scheduleId: live.scheduleId };
   }
@@ -191,19 +224,42 @@ export function planFounderAction(
 }
 
 /**
- * Whether the phase actually ACTIVE at `currentPeriodEnd` — the first phase
- * whose `start_date >= currentPeriodEnd`, or the last phase if none does —
- * is Pro. Pure.
+ * Index of the phase ACTIVE at `currentPeriodEnd` — the last phase whose
+ * `start_date` is before it. -1 when no phase starts before the boundary (a
+ * malformed schedule with nothing active there).
  *
- * P2 (independent review): this used to check only `phases[length-1]`. A
- * schedule that reaches Pro through an intermediate non-Pro phase — e.g.
- * `[founder → cpe, business cpe → X, pro X → ]`, the future-tail shape from
- * the codex P2 fix, except the tail happens to end on Pro — has Pro as its
- * LAST phase but Business as the phase actually active at the boundary.
- * Checking only the last phase called that schedule "already correct" and
- * left it untouched: at `cpe`, Stripe bills Business until X while the local
- * row already says the move to Pro landed, and the next webhook re-derives
- * the tier as 'business', silently undoing the migration.
+ * P2 (independent review, round 2): `scheduleTargetsPro` and
+ * `reconcilePhasesToPro` used to compute this independently and disagreed —
+ * `scheduleTargetsPro` checked the first phase starting AT OR AFTER the
+ * boundary, `reconcilePhasesToPro` capped the phase BEFORE that one. Two
+ * shapes fell through both: a Pro phase sitting exactly at the boundary with
+ * a non-Pro phase queued after it, and a Founder phase whose `end_date`
+ * extends past the boundary. Both functions now derive the boundary from
+ * this one helper so they cannot drift apart again.
+ */
+function activePhaseIndex(phases: SchedulePhase[], currentPeriodEnd: number): number {
+  const futureTailStart = phases.findIndex((phase) => phase.start_date >= currentPeriodEnd);
+  return futureTailStart === -1 ? phases.length - 1 : futureTailStart - 1;
+}
+
+/**
+ * Whether a schedule is ALREADY correct: the phase active at
+ * `currentPeriodEnd` ends exactly there, and every phase from that boundary
+ * onward is Pro. Pure.
+ *
+ * P2 (independent review, round 2): checking only the boundary phase's price
+ * (as this used to) accepts two unsafe shapes. (1) `[founder → cpe, pro
+ * cpe → X, other X → ]`: Pro sits exactly at the boundary, but something
+ * non-Pro is queued after it — the schedule is not durably on Pro. (2)
+ * `[founder → cpe+P, pro cpe+P → ]`: the phase active at the boundary is
+ * Founder, extending PAST `currentPeriodEnd` — Stripe would bill one more
+ * Founder period before Pro starts. Requiring the active phase's `end_date`
+ * to equal the boundary exactly, and every later phase to be Pro, refuses
+ * both: `db-only`/`complete` no longer fire, so `planScheduleReconciliation`
+ * routes them to `fix-schedule`, whose rebuild (below) truncates an
+ * over-running phase and drops a non-Pro tail — both correct fixes given
+ * this migration's one job is enforcing "Founder until period end, then
+ * Pro, nothing else."
  */
 export function scheduleTargetsPro(
   phases: SchedulePhase[],
@@ -211,24 +267,30 @@ export function scheduleTargetsPro(
   proPriceId: string,
 ): boolean {
   if (phases.length === 0) return false;
-  const futureTailStart = phases.findIndex((phase) => phase.start_date >= currentPeriodEnd);
-  const boundaryPhase = futureTailStart === -1 ? phases[phases.length - 1] : phases[futureTailStart];
-  return boundaryPhase?.items[0]?.price === proPriceId;
+  const activeIndex = activePhaseIndex(phases, currentPeriodEnd);
+  if (activeIndex < 0) return false;
+  const activePhase = phases[activeIndex];
+  if (activePhase.end_date !== currentPeriodEnd) return false;
+  const tail = phases.slice(activeIndex + 1);
+  return tail.length > 0 && tail.every((phase) => phase.items[0]?.price === proPriceId);
 }
 
 /**
  * Rebuild an existing schedule's phases so Pro takes over at period end,
  * preserving every phase before the boundary untouched. Used when a prior
  * run created the schedule but crashed before adding the Pro phase (or the
- * schedule otherwise never got one).
+ * schedule otherwise never got one) — or when `scheduleTargetsPro` refuses
+ * an over-running or non-Pro-tailed schedule (P2, round 2).
  *
- * The phase to cap is the one ACTIVE at `sub.currentPeriodEnd`, never simply
- * the last phase in the array (P2, codex): a schedule can already carry a
- * future-dated tail — one or more phases whose `start_date` is at or after
- * `currentPeriodEnd` (a stale or unrelated later change). Backdating such a
- * phase's `end_date` to `currentPeriodEnd` would make it end at or before it
- * starts, a phase Stripe rejects. That whole future tail is instead dropped
- * and replaced by the Pro phase. Pure.
+ * The phase to cap is the one ACTIVE at `sub.currentPeriodEnd` (via the
+ * shared `activePhaseIndex`), never simply the last phase in the array (P2,
+ * codex): a schedule can already carry a future-dated tail — one or more
+ * phases whose `start_date` is at or after `currentPeriodEnd` (a stale or
+ * unrelated later change) — or the active phase can extend past the
+ * boundary. Both are truncated/dropped and replaced by the Pro phase: this
+ * migration's one job is enforcing the current price until period end, then
+ * Pro, so cutting an over-running phase short or dropping a stale tail is
+ * the correct fix, not a guess. Pure.
  */
 export function reconcilePhasesToPro(
   sub: StripeSubscriptionView,
@@ -238,16 +300,16 @@ export function reconcilePhasesToPro(
   if (existingPhases.length === 0) {
     throw new Error(`Schedule for subscription ${sub.id} has no phases to reconcile`);
   }
-  const futureTailStart = existingPhases.findIndex((phase) => phase.start_date >= sub.currentPeriodEnd);
-  const activeIndex = futureTailStart === -1 ? existingPhases.length - 1 : futureTailStart - 1;
+  const activeIndex = activePhaseIndex(existingPhases, sub.currentPeriodEnd);
   // P2 (independent review): a malformed schedule whose very first phase
   // already starts at/after the boundary has NO phase active at the
   // boundary to preserve. The old fallback (`safeIndex = 0`) capped that
   // first phase anyway, setting `end_date = currentPeriodEnd <= start_date`
   // — exactly the invalid, Stripe-rejected phase this function exists to
-  // avoid producing. Refuse it with a descriptive error instead; the caller
-  // (runFounderMigration) catches this per-row so one malformed schedule
-  // cannot abort the rest of the migration.
+  // avoid producing. Refuse it with a descriptive error instead;
+  // `planScheduleReconciliation` checks for this case itself and never
+  // calls this function when it applies, but this throw stays as a direct
+  // defense for any other caller.
   if (activeIndex < 0) {
     throw new Error(
       `Schedule for subscription ${sub.id} has no phase active at period end ` +
@@ -271,7 +333,14 @@ export type ScheduleReconciliation =
   /** Stripe already ends on Pro but the local write never landed (the retry-after-partial-failure case). */
   | { kind: 'db-only' }
   /** Stripe does not yet end on Pro — fix the schedule, then complete the local write. */
-  | { kind: 'fix-schedule'; phases: SchedulePhase[] };
+  | { kind: 'fix-schedule'; phases: SchedulePhase[] }
+  /**
+   * Fail closed (Vision principle 6): the schedule has no phase this
+   * planner can positively identify as active at period end (every phase
+   * already starts at or after it) — refuse rather than guess. No Stripe or
+   * local write.
+   */
+  | { kind: 'refuse'; reason: string };
 
 /**
  * P1 fix: what to do about a Founder subscription that ALREADY carries a
@@ -285,6 +354,17 @@ export function planScheduleReconciliation(
   schedulePhases: SchedulePhase[],
   proPriceId: string,
 ): ScheduleReconciliation {
+  if (schedulePhases.length === 0) {
+    return { kind: 'refuse', reason: `Schedule ${scheduleId} has no phases to reconcile` };
+  }
+  if (activePhaseIndex(schedulePhases, live.currentPeriodEnd) < 0) {
+    return {
+      kind: 'refuse',
+      reason:
+        `Schedule ${scheduleId} has no phase active at period end (${live.currentPeriodEnd}) ` +
+        `— every phase already starts at or after it; refusing rather than guessing`,
+    };
+  }
   const targetsPro = scheduleTargetsPro(schedulePhases, live.currentPeriodEnd, proPriceId);
   const localComplete = row.subscriptionTier === 'pro' && row.stripeScheduleId === scheduleId;
   if (targetsPro && localComplete) return { kind: 'complete' };
@@ -309,6 +389,14 @@ export interface MigrationSummary {
    * later row plus step 2 (grandfathering) still runs.
    */
   failed: number;
+  /**
+   * Fail closed (Vision principle 6): a row this planner refused to touch —
+   * a cancelling subscription, or a schedule shape it could not positively
+   * classify (P2, round 2, independent review) — rather than guess. Zero
+   * writes. Distinct from `failed`: a refuse is an intentional, expected
+   * outcome for a shape the planner recognizes as unsafe, not an error.
+   */
+  refused: number;
   skippedNotOnFounderPrice: number;
   legacyBusinessRows: number;
   grandfathered: number;
@@ -327,6 +415,7 @@ export async function runFounderMigration(deps: MigrationDeps, opts: { dryRun: b
     dbCompleted: 0,
     reconciled: 0,
     failed: 0,
+    refused: 0,
     skippedNotOnFounderPrice: 0,
     legacyBusinessRows: 0,
     grandfathered: 0,
@@ -384,6 +473,10 @@ export async function runFounderMigration(deps: MigrationDeps, opts: { dryRun: b
                 await recordThisRow();
               }
               break;
+            case 'refuse':
+              summary.refused++;
+              log(`${mode}  ${row.userId}: ${scheduleId} REFUSED — ${recon.reason} — no writes, needs a human`);
+              break;
           }
           break;
         }
@@ -403,6 +496,10 @@ export async function runFounderMigration(deps: MigrationDeps, opts: { dryRun: b
           });
           break;
         }
+        case 'refuse':
+          summary.refused++;
+          log(`${mode}  ${row.userId}: ${row.stripeSubscriptionId} REFUSED — ${action.reason} — no writes, needs a human`);
+          break;
       }
     } catch (err) {
       summary.failed++;
@@ -429,7 +526,7 @@ export async function runFounderMigration(deps: MigrationDeps, opts: { dryRun: b
   log(
     `${mode}Summary: founder rows ${summary.founderRows} (scheduled ${summary.scheduled}, already complete ${summary.alreadyComplete}, ` +
       `db-completed on retry ${summary.dbCompleted}, schedule reconciled ${summary.reconciled}, ` +
-      `failed ${summary.failed}, not on founder price ${summary.skippedNotOnFounderPrice}); legacy business rows ${summary.legacyBusinessRows} ` +
+      `failed ${summary.failed}, refused ${summary.refused}, not on founder price ${summary.skippedNotOnFounderPrice}); legacy business rows ${summary.legacyBusinessRows} ` +
       `(grandfathered ${summary.grandfathered}, already ${summary.alreadyGrandfathered})`,
   );
   return summary;
@@ -498,6 +595,10 @@ export function createStripeAdapter(stripe: import('stripe').Stripe): MigrationS
         scheduleId: sub.schedule == null ? null : typeof sub.schedule === 'string' ? sub.schedule : sub.schedule.id,
         currentPriceId: firstItem.price.id,
         currentPeriodEnd: item.current_period_end,
+        // P1 (independent review): a cancelling subscription must never be
+        // rescheduled onto a billed Pro phase — see planFounderAction.
+        cancelAtPeriodEnd: sub.cancel_at_period_end,
+        cancelAt: sub.cancel_at ?? null,
       };
     },
     async createScheduleFromSubscription(subscriptionId) {
@@ -564,6 +665,9 @@ async function main(): Promise<void> {
   }
   if (summary.failed > 0) {
     console.warn(`${summary.failed} row(s) failed and were skipped — review the FAILED lines above and re-run once fixed.`);
+  }
+  if (summary.refused > 0) {
+    console.warn(`${summary.refused} row(s) were REFUSED (a shape not positively recognized as safe) — review the REFUSED lines above; a human must decide.`);
   }
 }
 
