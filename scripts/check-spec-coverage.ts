@@ -11,14 +11,18 @@
  *      credential, so CI always reads the snapshot; the orchestrator refreshes it).
  *   2. Extract every requirement ID.
  *   3. Scan every `*.test.ts(x)` / `*.spec.ts(x)` under `packages/` and `apps/` and collect the
- *      test NAMES: the string literal passed to `it` / `test` / `describe` (and playwright's
- *      `test.describe` / `test.step`), plus the `given:` / `should:` strings that are themselves
- *      arguments to the repo's riteway-style `assert({ given, should, … })` helper. None of this
- *      counts unless it EXECUTES: a declaration under `.skip` / `.todo` / `.fixme`, one nested
- *      inside a `describe.skip(...)` / `describe.skipIf(...)(...)` block (however the inner call
- *      is itself spelled), a `RegExp.test('MON-2 …')` method call, or a plain object that merely
- *      has `given`/`should` keys without being passed to `assert(...)` — none of these run a
- *      test, so none of them count.
+ *      test NAMES via a real TypeScript parse (the `typescript` compiler API — NOT regex/text
+ *      scanning, which cannot tell an executable declaration from a look-alike): the string
+ *      literal argument to a `CallExpression` rooted at `it` / `test` / `describe` (and
+ *      Playwright's `test.describe` / `test.step`), plus the `given:` / `should:` strings that
+ *      are themselves arguments to the repo's riteway-style `assert({ given, should, … })`
+ *      helper. None of this counts unless it EXECUTES: a declaration under `.skip` / `.todo` /
+ *      `.fixme`, one nested at any depth inside a `describe.skip(...)` / `describe.skipIf(...)
+ *      (...)` / `describe.runIf(...)(...)` block (however the wrapping condition or callback are
+ *      themselves spelled — the callback is taken from the AST argument list, never by scanning
+ *      for the next `{`), a `RegExp.test('MON-2 …')` method call (its callee resolves to a
+ *      property access on some `pattern`, not to the `it`/`test`/`describe` identifier), or a
+ *      plain object that merely has `given`/`should` keys without being passed to `assert(...)`.
  *   4. Print a table ID → files, and exit non-zero listing every ID that no test names.
  *
  * The allowlist (`scripts/spec-coverage-allowlist.txt`) holds IDs not yet in scope. EVERY ID
@@ -39,6 +43,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import ts from 'typescript';
 
 export const SPEC_PAGE_ID = 'drc7x34unhc0ty1dc0u1j3gy';
 export const DEFAULT_SNAPSHOT = 'docs/specs/organizations-wallets.md';
@@ -105,161 +110,150 @@ export function stripLineNumberPrefixes(text: string): string {
     .join('\n');
 }
 
-/**
- * Remove comments so a commented-out `// it('MON-2 …')` cannot count as coverage.
- * Block comments are removed wholesale; line comments only when the whole line is one, so a
- * test name containing `//` (a URL) is left intact.
- */
-export function stripComments(source: string): string {
-  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+const TEST_BASE_NAMES = new Set(['it', 'test', 'describe']);
+/** Modifiers that mean "this declaration never runs", unconditionally. */
+const SKIP_MODIFIERS = new Set(['skip', 'todo', 'fixme']);
+/** Modifiers that curry a runtime condition: `.skipIf(cond)(...)` / `.runIf(cond)(...)`. */
+const CONDITIONAL_MODIFIERS = new Set(['skipIf', 'runIf']);
+/** Every modifier this scanner understands. An unrecognized one (e.g. `.each`) means "don't guess". */
+const KNOWN_MODIFIERS = new Set(['only', 'concurrent', 'sequential', 'serial', 'describe', 'step', ...SKIP_MODIFIERS]);
+
+interface PropertyChain {
+  root: ts.Expression;
+  /** Dotted names between the root and the call, in source order (e.g. `test.describe.only` → `['describe', 'only']`). */
+  modifiers: string[];
 }
 
-// `(?<![.\w])` (not `\b`) in front of the declaration name is load-bearing: `\b` only blocks a
-// preceding WORD character, so `someRegex.test('MON-2 ...')` — a RegExp method call, not a test
-// declaration — still starts with a word boundary (`.` to `t`) and would otherwise match. The
-// lookbehind blocks both a preceding identifier character AND a preceding `.` (member access).
-const DECLARATION =
-  /(?<![.\w])((?:it|test|describe)(?:\.(?:only|concurrent|sequential|serial|describe|step))*(?:\.(?:skipIf|runIf)\([^)]*\))?)\s*\(\s*(['"`])((?:\\.|(?!\2)[\s\S])*?)\2/g;
-/** A `describe`/`test.describe` head using `.skipIf`/`.runIf` — the suite's OWN name may never run. */
-const DESCRIBE_CONDITIONAL_SKIP = /^(?:test\.describe|describe)(?:\.[a-zA-Z]+)*\.(?:skipIf|runIf)\(/;
-const RITEWAY_FIELD = /\b(?:given|should)\s*:\s*(['"`])((?:\\.|(?!\1)[\s\S])*?)\1/g;
-const SKIP_BLOCK_TRIGGER = /(?<![.\w])(?:test\.describe|describe)\.(?:skip|skipIf)\b/g;
-const ASSERT_CALL = /(?<![.\w])assert\s*\(/g;
-
-/** Index of the character matching the opening quote/backtick at `start` (which must be one). */
-function skipStringLiteral(source: string, start: number): number {
-  const quote = source[start];
-  let i = start + 1;
-  while (i < source.length) {
-    if (source[i] === '\\') {
-      i += 2;
-      continue;
-    }
-    if (source[i] === quote) return i;
-    i++;
+/** Walks a `describe`/`describe.skip`/`test.describe.only`-shaped callee back to its root identifier. */
+function resolvePropertyChain(expr: ts.Expression): PropertyChain {
+  const modifiers: string[] = [];
+  let current: ts.Expression = expr;
+  while (ts.isPropertyAccessExpression(current)) {
+    modifiers.unshift(current.name.text);
+    current = current.expression;
   }
-  return source.length - 1;
+  return { root: current, modifiers };
 }
 
-/** First unquoted occurrence of `target` at or after `from`, skipping over string/template literals. */
-function findNextUnquoted(source: string, from: number, target: string): number {
-  let i = from;
-  while (i < source.length) {
-    const ch = source[i];
-    if (ch === '"' || ch === "'" || ch === '`') {
-      i = skipStringLiteral(source, i) + 1;
-      continue;
-    }
-    if (ch === target) return i;
-    i++;
-  }
-  return -1;
+interface ResolvedTestCall {
+  /** `it` / `test` / `describe`. */
+  base: string;
+  /** Modifiers other than a trailing conditional one, e.g. `['only']` for `it.only.skipIf(cond)`. */
+  modifiers: string[];
+  isDescribeFamily: boolean;
+  /** True for the curried `.skipIf(cond)(...)` / `.runIf(cond)(...)` form. */
+  isConditional: boolean;
+  conditionExpr: ts.Expression | undefined;
+  nameArg: ts.Expression | undefined;
+  callbackArg: ts.Expression | undefined;
+  extraArgs: ts.Expression[];
+}
+
+function isStringLiteralLike(expr: ts.Expression | undefined): expr is ts.StringLiteralLike {
+  return expr !== undefined && (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr));
 }
 
 /**
- * Index of the bracket matching the one at `openIndex` (`source[openIndex]` must be `openChar`),
- * skipping over string/template literals so a brace or paren inside a description string is
- * never mistaken for a real one.
+ * Resolves a `CallExpression` to a `describe`/`it`/`test` declaration shape, taking the name and
+ * callback from the ARGUMENT LIST — never by scanning source text for the next brace — so a skip
+ * condition containing its own object literal, function call, or anything else can never be
+ * mistaken for the suite's callback. Returns `undefined` for anything this scanner does not
+ * recognize (including `.each`, and any base identifier that is not literally `it`/`test`/
+ * `describe`), so an unfamiliar shape is silently NOT counted rather than guessed at.
  */
-function findMatchingBracket(source: string, openIndex: number, openChar: string, closeChar: string): number {
-  let depth = 0;
-  for (let i = openIndex; i < source.length; i++) {
-    const ch = source[i];
-    if (ch === '"' || ch === "'" || ch === '`') {
-      i = skipStringLiteral(source, i);
-      continue;
-    }
-    if (ch === openChar) depth++;
-    else if (ch === closeChar) {
-      depth--;
-      if (depth === 0) return i;
-    }
+function resolveTestCall(call: ts.CallExpression): ResolvedTestCall | undefined {
+  let chain: PropertyChain;
+  let isConditional = false;
+  let conditionExpr: ts.Expression | undefined;
+
+  if (ts.isCallExpression(call.expression)) {
+    // Curried form: `it.skipIf(cond)(name, fn)` — `call.expression` is the `it.skipIf(cond)` call.
+    const inner = call.expression;
+    const innerChain = resolvePropertyChain(inner.expression);
+    const lastModifier = innerChain.modifiers.at(-1);
+    if (lastModifier === undefined || !CONDITIONAL_MODIFIERS.has(lastModifier)) return undefined;
+    isConditional = true;
+    conditionExpr = inner.arguments[0];
+    chain = { root: innerChain.root, modifiers: innerChain.modifiers.slice(0, -1) };
+  } else {
+    chain = resolvePropertyChain(call.expression);
   }
-  return -1;
+
+  if (!ts.isIdentifier(chain.root) || !TEST_BASE_NAMES.has(chain.root.text)) return undefined;
+  for (const modifier of chain.modifiers) if (!KNOWN_MODIFIERS.has(modifier)) return undefined;
+
+  const [nameArg, callbackArg, ...extraArgs] = call.arguments;
+  return {
+    base: chain.root.text,
+    modifiers: chain.modifiers,
+    isDescribeFamily: chain.root.text === 'describe' || chain.modifiers.includes('describe'),
+    isConditional,
+    conditionExpr,
+    nameArg,
+    callbackArg,
+    extraArgs,
+  };
 }
 
-/** True when `index` falls strictly inside one of `regions` (each an inclusive `[start, end]`). */
-function isWithinRegion(index: number, regions: readonly (readonly [number, number])[]): boolean {
-  return regions.some(([start, end]) => index > start && index < end);
-}
-
-/** The `(...)` immediately at or after `from`, or `null` if there is no unquoted `(` there. */
-function findCallParens(source: string, from: number): [number, number] | null {
-  const open = findNextUnquoted(source, from, '(');
-  if (open === -1) return null;
-  const close = findMatchingBracket(source, open, '(', ')');
-  return close === -1 ? null : [open, close];
+/** A bare call to `assert(...)` (the repo's riteway-style helper) — not `foo.assert(...)`. */
+function isAssertCall(call: ts.CallExpression): boolean {
+  return ts.isIdentifier(call.expression) && call.expression.text === 'assert';
 }
 
 /**
- * Byte ranges of every `describe.skip(...)` / `describe.skipIf(...)(...)` (and Playwright's
- * `test.describe.skip`/`test.describe.skipIf`) block body. A nested `it`/`test` inside one of
- * these does not run when the wrapping suite is skipped, however the inner call itself is
- * spelled — so it must not count as live coverage on its own.
- *
- * The `{` search is bounded to the triggering call's OWN argument list (the condition call's
- * parens for `.skipIf`/`.runIf`, then the real call after it). Searching unbounded from the
- * trigger forward — as an earlier version of this function did — means `describe.skip('name',
- * namedCallbackRef)` (a named reference, no inline block) has no `{` in its own call, so the
- * search would run on into whatever comes textually next in the file and could swallow a later,
- * completely unrelated `it()`'s own callback body as a "skip region".
+ * Test names declared LIVE in a source file: `it`/`test`/`describe` string (or template-literal-
+ * without-substitutions) arguments, plus riteway `given:`/`should:` strings that are themselves
+ * arguments to an `assert(...)` call. A real TypeScript parse — not text/regex scanning — decides
+ * what counts, so:
+ *   - a declaration under `.skip`/`.todo`/`.fixme`, or nested (at any depth) inside a
+ *     `describe.skip(...)`/`describe.skipIf(...)(...)`/`describe.runIf(...)(...)` block, never
+ *     counts, regardless of how the wrapping suite's condition expression or callback are spelled;
+ *   - `someRegex.test('MON-2 …')` is a property-access call on `pattern`, not a call rooted at the
+ *     `it`/`test`/`describe` identifier, so it is never resolved as a declaration;
+ *   - `{ given: 'WAL-1 …' }` only counts when it is literally `assert(...)`'s first argument, never
+ *     an arbitrary object literal that happens to have those keys.
  */
-function findSkipRegions(source: string): Array<[number, number]> {
-  const regions: Array<[number, number]> = [];
-  for (const m of source.matchAll(SKIP_BLOCK_TRIGGER)) {
-    const isConditional = /(?:skipIf|runIf)$/.test(m[0]);
-    const firstCall = findCallParens(source, m.index + m[0].length);
-    if (!firstCall) continue;
-    // `.skipIf(cond)(...)`/`.runIf(cond)(...)` are curried: `firstCall` is the condition's own
-    // parens, and the real call — the one that can carry an inline block — is the next one.
-    const callSpan = isConditional ? findCallParens(source, firstCall[1] + 1) : firstCall;
-    if (!callSpan) continue;
-    const [callOpen, callClose] = callSpan;
-    const braceIndex = findNextUnquoted(source, callOpen, '{');
-    if (braceIndex === -1 || braceIndex > callClose) continue;
-    const closeIndex = findMatchingBracket(source, braceIndex, '{', '}');
-    if (closeIndex === -1) continue;
-    regions.push([braceIndex, closeIndex]);
-  }
-  return regions;
-}
-
-/** Byte ranges of every `assert(...)` call's argument list (the repo's riteway-style helper). */
-function findAssertRegions(source: string): Array<[number, number]> {
-  const regions: Array<[number, number]> = [];
-  for (const m of source.matchAll(ASSERT_CALL)) {
-    const openParen = m.index + m[0].length - 1;
-    const closeParen = findMatchingBracket(source, openParen, '(', ')');
-    if (closeParen === -1) continue;
-    regions.push([openParen, closeParen]);
-  }
-  return regions;
-}
-
-/**
- * Test names declared LIVE in a source file: `it`/`test`/`describe` string arguments (no
- * `.skip`/`.todo`/`.fixme` in the chain, and not nested inside a `describe.skip`/`describe.skipIf`
- * block) plus riteway `given:`/`should:` strings that are themselves arguments to an `assert(...)`
- * call (not any object literal that merely happens to have those keys).
- */
-export function extractTestNames(source: string): string[] {
-  const clean = stripComments(source);
-  const skipRegions = findSkipRegions(clean);
-  const assertRegions = findAssertRegions(clean);
+export function extractTestNames(source: string, fileName = 'source.test.tsx'): string[] {
+  const sourceFile = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const names: string[] = [];
-  for (const m of clean.matchAll(DECLARATION)) {
-    if (isWithinRegion(m.index, skipRegions)) continue;
-    // `describe.skipIf(cond)('name', …)` is curried like `it.skipIf`, so the modifier group
-    // above matches it — but unlike `it.skipIf`, a describe-level conditional skip means the
-    // SUITE's own declared name (not just its children) may never execute.
-    if (DESCRIBE_CONDITIONAL_SKIP.test(m[1])) continue;
-    names.push(m[3]);
-  }
-  for (const m of clean.matchAll(RITEWAY_FIELD)) {
-    if (!isWithinRegion(m.index, assertRegions)) continue;
-    if (isWithinRegion(m.index, skipRegions)) continue;
-    names.push(m[2]);
-  }
+
+  const visit = (node: ts.Node, skipDepth: number): void => {
+    if (ts.isCallExpression(node)) {
+      const resolved = resolveTestCall(node);
+      if (resolved) {
+        const isUnconditionalSkip = resolved.modifiers.some((m) => SKIP_MODIFIERS.has(m));
+        // A describe-level `.skipIf`/`.runIf` means the SUITE's own declared name — not only its
+        // children — may never run. An individual `it.skipIf`/`test.skipIf` is a single test
+        // whose own execution is conditional, which this scanner still counts (it may well run).
+        const treatAsSkip = isUnconditionalSkip || (resolved.isDescribeFamily && resolved.isConditional);
+        if (!treatAsSkip && skipDepth === 0 && isStringLiteralLike(resolved.nameArg)) {
+          names.push(resolved.nameArg.text);
+        }
+        if (resolved.conditionExpr) visit(resolved.conditionExpr, skipDepth);
+        if (resolved.callbackArg) visit(resolved.callbackArg, skipDepth + (treatAsSkip ? 1 : 0));
+        for (const extra of resolved.extraArgs) visit(extra, skipDepth);
+        return;
+      }
+      if (isAssertCall(node) && skipDepth === 0) {
+        const arg = node.arguments[0];
+        if (arg && ts.isObjectLiteralExpression(arg)) {
+          for (const prop of arg.properties) {
+            if (
+              ts.isPropertyAssignment(prop) &&
+              (ts.isIdentifier(prop.name) || ts.isStringLiteral(prop.name)) &&
+              (prop.name.text === 'given' || prop.name.text === 'should') &&
+              isStringLiteralLike(prop.initializer)
+            ) {
+              names.push(prop.initializer.text);
+            }
+          }
+        }
+      }
+    }
+    ts.forEachChild(node, (child) => visit(child, skipDepth));
+  };
+
+  visit(sourceFile, 0);
   return names;
 }
 
@@ -366,7 +360,7 @@ export function scanTestFiles(root: string, files: readonly string[], ids: reado
   const hits = new Map<string, Set<string>>();
   for (const file of files) {
     const source = fs.readFileSync(path.join(root, file), 'utf8');
-    hits.set(file, idsNamedBy(extractTestNames(source), ids));
+    hits.set(file, idsNamedBy(extractTestNames(source, file), ids));
   }
   return hits;
 }

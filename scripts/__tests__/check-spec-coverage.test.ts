@@ -71,6 +71,25 @@ describe('X-6 spec ID-coverage gate: test-name extraction', () => {
     expect(extractTestNames(src)).toEqual(['MON-7 live']);
   });
 
+  it('X-6 rejects an it() nested inside describe.runIf(false)(...) — runIf is conditional skip too, same as skipIf', () => {
+    const src = `
+      describe.runIf(false)('MON-8 runIf-gated suite', () => {
+        it('MON-8 never runs when the flag is false', () => {});
+      });
+    `;
+    expect(extractTestNames(src)).toEqual([]);
+  });
+
+  it('X-6 finds the suite callback (not an object literal in the skip condition) via the argument list, not brace-scanning', () => {
+    const src = `
+      describe.skipIf(check({ org: true }))('WAL-9 suite gated on an object-literal condition', () => {
+        it('WAL-9 nested test, must not falsely count as live', () => {});
+      });
+      it('WAL-9 sibling declared after, must still count', () => {});
+    `;
+    expect(extractTestNames(src)).toEqual(['WAL-9 sibling declared after, must still count']);
+  });
+
   it('X-6 still counts it.only, test.describe, test.step, and skipIf(false) declarations', () => {
     const src = `
       it.only('SEC-1 only', () => {});
