@@ -41,7 +41,7 @@ import type {
 import type { PlaneBindings, VerifiedGrant } from '../store-adapter';
 import { digestBindings } from '../digest-bindings';
 import { createInfisicalClient } from '../infisical-client';
-import { createPlaneMetadataRepository } from '../plane-metadata-repository';
+import { createPlaneMetadataRepository, type PlaneMetadataRepository } from '../plane-metadata-repository';
 import { createInfisicalStoreAdapter } from '../store-adapter-infisical';
 
 const INFISICAL_URL = process.env.INFISICAL_DEV_URL ?? 'http://localhost:8080';
@@ -150,9 +150,10 @@ afterAll(async () => {
   if (pool) await pool.end();
 });
 
-function makeAdapter() {
+function makeAdapter({ wrapMetadata = (m: PlaneMetadataRepository) => m }: { readonly wrapMetadata?: (m: PlaneMetadataRepository) => PlaneMetadataRepository } = {}) {
   const infisical = createInfisicalClient({ baseUrl: INFISICAL_URL, environment: 'dev' });
-  const metadata = createPlaneMetadataRepository({ pool: pool as never });
+  const realMetadata = createPlaneMetadataRepository({ pool: pool as never });
+  const metadata = { ...wrapMetadata(realMetadata), advisoryLockPool: realMetadata.advisoryLockPool };
   const projects: Record<string, string> = { [TENANT_A]: projectAId, [TENANT_B]: projectBId };
   const identities: Record<string, { clientId: string; clientSecret: string }> = {
     [identityA?.identityId]: identityA,
@@ -543,5 +544,78 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
     const result = await adapter.resolve({ ref, version: 1 as never, grant, identity });
     expect(result.ok).toBe(false);
     expect(JSON.stringify(result)).not.toContain('sk-v2-impersonating-v1');
+  });
+
+  // Own review, PR #2646 round 2: `revoke` takes no advisory lock and `metadata.commit`'s upsert
+  // reset `revoked_at = NULL`, so a write that passed writeSecret's revoked check BEFORE a
+  // concurrent revoke landed would reactivate the credential when it committed. Interleaved
+  // deterministically: the revoke runs against the real metadata DB at the moment the rotate
+  // is about to commit.
+  it('given a revoke that lands while a rotate is mid-write, should leave the credential revoked', async () => {
+    const accountId = `acct-revoke-race-${NOW}` as AccountId;
+    const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, kind: 'api_key' };
+    const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
+    const refreshIdentity = { ...identity, channel: 'refresh-worker' as const };
+    const plainAdapter = makeAdapter();
+    const racingAdapter = makeAdapter({
+      wrapMetadata: (m) => ({
+        ...m,
+        commit: async (input) => {
+          await plainAdapter.revoke({ ref, reason: 'owner_revoked', identity });
+          await m.commit(input);
+        },
+      }),
+    });
+
+    await plainAdapter.put({ ref, material: { kind: 'api_key', material: { value: 'sk-v1', placement: { in: 'header', name: 'Authorization' } } }, expectedVersion: null, bindings, identity });
+    await racingAdapter.rotate({ ref, expectedVersion: 1 as never, next: { kind: 'api_key', material: { value: 'sk-v2', placement: { in: 'header', name: 'Authorization' } } }, bindings, identity: refreshIdentity });
+
+    const described = await plainAdapter.describe({ ref, identity });
+    const actual = described.ok && described.revokedAt !== null;
+    const expected = true;
+    expect(actual).toEqual(expected);
+  });
+
+  // Own review, PR #2646 round 2: `delete` was the one destructive operation left without the
+  // ref.tenantId === identity.tenantId check resolve/describe/revoke/writeSecret all make.
+  it('given delete with a wrong-tenant identity, should return not_found and leave the credential in place', async () => {
+    const adapter = makeAdapter();
+    const accountId = `acct-delete-cross-tenant-${NOW}` as AccountId;
+    const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, kind: 'api_key' };
+    const identityForTenantA = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
+    const wrongTenantIdentity = { tenantId: TENANT_B, identityId: identityBWrongTenant.identityId, blastRadius: 'tenant' as const };
+
+    await adapter.put({ ref, material: { kind: 'api_key', material: { value: 'sk-synthetic', placement: { in: 'header', name: 'Authorization' } } }, expectedVersion: null, bindings, identity: identityForTenantA });
+
+    const deleteResult = await adapter.delete({ ref, identity: wrongTenantIdentity, upstream: 'not_attempted' });
+    expect(deleteResult).toEqual({ ok: false, reason: 'not_found' });
+
+    const described = await adapter.describe({ ref, identity: identityForTenantA });
+    expect(described.ok).toEqual(true);
+  });
+
+  // Own review, PR #2646 round 2: `rotate` snapshots the replaced material into the grace
+  // companion (`<accountId>__<kind>__previous`), but `delete` removed only the primary secret —
+  // so rotated-out credential material outlived an erasure in Infisical.
+  it('given delete after a rotation, should remove the grace companion copy of the old material too', async () => {
+    const adapter = makeAdapter();
+    const accountId = `acct-delete-companion-${NOW}` as AccountId;
+    const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, kind: 'api_key' };
+    const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
+    const refreshIdentity = { ...identity, channel: 'refresh-worker' as const };
+
+    await adapter.put({ ref, material: { kind: 'api_key', material: { value: 'sk-v1', placement: { in: 'header', name: 'Authorization' } } }, expectedVersion: null, bindings, identity });
+    await adapter.rotate({ ref, expectedVersion: 1 as never, next: { kind: 'api_key', material: { value: 'sk-v2', placement: { in: 'header', name: 'Authorization' } } }, bindings, identity: refreshIdentity });
+    const deleteResult = await adapter.delete({ ref, identity, upstream: 'unsupported' });
+    expect(deleteResult).toEqual({ ok: true, removed: true, upstream: 'unsupported' });
+
+    const rawInfisical = createInfisicalClient({ baseUrl: INFISICAL_URL, environment: 'dev' });
+    const companion = await rawInfisical.getSecret({ projectId: projectAId, credentials: identityA, secretKey: `${accountId}__api_key__previous` });
+    const actual = companion.ok ? 'present' : companion.reason;
+    const expected = 'not_found';
+    expect(actual).toEqual(expected);
   });
 });
