@@ -29,6 +29,19 @@ function perTier<T>(f: (tier: SubscriptionTier) => T): Record<SubscriptionTier, 
 /**
  * Included credit value per tier, in whole cents, sized from the list price (MON-2).
  * The free row is the one-time starter grant (MON-8), not a monthly amount.
+ *
+ * D-OW-17: correct EVERYWHERE, unconditionally — a build-time prerender, a
+ * per-request server render, and a "use client" browser bundle all compile this
+ * module from the same source at the same commit, so they all embed the same
+ * `MONEY_MODEL_V2_ACTIVE` literal. There is no env var to read differently per
+ * process and no client/server asymmetry left to patch around; see money-model.ts's
+ * module doc comment for why earlier revisions of this fix (a server env var, then a
+ * `NEXT_PUBLIC_` mirror, then a server-computed patch) each failed to guarantee that.
+ *
+ * `apps/web/src/lib/subscription/plans.ts`'s `withCreditOverrides` (and the
+ * `*ForCents` functions below it calls) still exist and are still correct to use —
+ * they are simply no longer load-bearing for THIS defect now that the constant is
+ * identical everywhere by construction.
  */
 export const MONTHLY_CREDIT_CENTS: Record<SubscriptionTier, number> = perTier(tierAllowanceCents);
 
@@ -41,13 +54,23 @@ export const MONTHLY_CREDITS: Record<SubscriptionTier, string> = perTier((tier) 
 export const FREE_STARTER_CREDITS_DISPLAY: string = formatCreditCount(centsFromCredits(FREE_STARTER_CREDITS));
 
 /**
+ * Allowance phrase for an explicit cents value: "900 credits/month" for refilling
+ * paid tiers, "500 credits to start" for a one-time grant. The seam
+ * `withCreditOverrides` (apps/web/src/lib/subscription/plans.ts) uses to rebuild a
+ * plan's copy from a server-supplied number, without re-deriving the ratio itself.
+ */
+export function monthlyCreditsPhraseForCents(tier: SubscriptionTier, cents: number): string {
+  return TIER_ALLOWANCE_REFILLS[tier]
+    ? `${formatCreditCount(cents)} credits/month`
+    : `${formatCreditCount(cents)} credits to start`;
+}
+
+/**
  * Allowance phrase for a tier: "900 credits/month" for refilling paid tiers,
  * "500 credits to start" for the free tier's one-time starter grant.
  */
 export function monthlyCreditsPhrase(tier: SubscriptionTier): string {
-  return TIER_ALLOWANCE_REFILLS[tier]
-    ? `${MONTHLY_CREDITS[tier]} credits/month`
-    : `${MONTHLY_CREDITS[tier]} credits to start`;
+  return monthlyCreditsPhraseForCents(tier, MONTHLY_CREDIT_CENTS[tier]);
 }
 
 /** Short table-cell form: "900 credits/mo" or "500 credits to start". */
@@ -66,15 +89,24 @@ export function creditsPhrase(tier: SubscriptionTier): string {
 }
 
 /**
+ * Same fact as {@link includedCreditsPhrase}, for an explicit cents value. The seam
+ * `withCreditOverrides` uses to rebuild a plan card's copy from a server-supplied
+ * number without re-deriving the ratio.
+ */
+export function includedCreditsPhraseForCents(tier: SubscriptionTier, cents: number): string {
+  return TIER_ALLOWANCE_REFILLS[tier]
+    ? `${formatCreditCount(cents)} credits included each month`
+    : `${formatCreditCount(cents)} credits to start`;
+}
+
+/**
  * MON-6: the plan card's "included credits" fact — an integer credit COUNT, never a
- * dollar figure. "1,500 credits included each month" for refilling paid tiers, "500
- * credits to start" for the free tier's one-time grant. Sized by money-model, so the
- * MONEY_MODEL_V2 ratio flips this copy with a rebuild, not a code change.
+ * dollar figure. "900 credits included each month" for refilling paid tiers, "500
+ * credits to start" for the free tier's one-time grant. Sized by money-model, so
+ * flipping `MONEY_MODEL_V2_ACTIVE` (a commit, D-OW-17) flips this copy everywhere.
  */
 export function includedCreditsPhrase(tier: SubscriptionTier): string {
-  return TIER_ALLOWANCE_REFILLS[tier]
-    ? `${MONTHLY_CREDITS[tier]} credits included each month`
-    : `${MONTHLY_CREDITS[tier]} credits to start`;
+  return includedCreditsPhraseForCents(tier, MONTHLY_CREDIT_CENTS[tier]);
 }
 
 /** Buyable top-up packs, sorted by ascending credit count. */

@@ -19,8 +19,10 @@ export {
 export {
   MONTHLY_CREDIT_CENTS,
   monthlyCreditsPhrase,
+  monthlyCreditsPhraseForCents,
   creditsCellPhrase,
   CREDIT_PACK_LIST,
   includedCreditsPhrase,
+  includedCreditsPhraseForCents,
   topUpRatePhrase,
 } from '@pagespace/lib/billing/credit-copy';
