@@ -89,7 +89,7 @@ The approval UI shows one representation; the executor must run exactly that one
 
 ### 3.2 Canonical projection (frozen; `canonical-request.ts`)
 
-`canonicalizeRequest(input: CanonicalRequestInput): CanonicalizeResult` (`{ ok: true; canonical } | { ok: false; reason: CanonicalizeRefusal }`) is pure and total. Fixed field set, fixed order; absent optionals are `null`/`[]`/`{}` never missing (env-bridge `grant-args.ts` rule).
+`canonicalizeRequest({ request: CanonicalRequestInput; providerSlug; registry: OperationRegistry }): CanonicalizeResult` (`{ ok: true; canonical } | { ok: false; reason: CanonicalizeRefusal }`) is pure and total. Fixed field set, fixed order; absent optionals are `null`/`[]`/`{}` never missing (env-bridge `grant-args.ts` rule).
 
 | Field | Rule |
 |---|---|
@@ -97,10 +97,10 @@ The approval UI shows one representation; the executor must run exactly that one
 | `origin` | `https://` only; host IDNA→ASCII lowercase; explicit port always present (`:443` is written); **userinfo → refuse**; **wildcards → refuse**; IP literals → refuse (private ranges are never an origin; public IP literals need a hostname) |
 | `path` | dot-segments resolved; each segment percent-decoded **once**, refused if a `.`/`..` part or any control character survives that decode, then re-encoded canonically (upper-case hex). An encoded `/` (`%2F`) stays encoded, so it can never become a segment boundary |
 | `query` | split on the first `=` per pair; each half **normalized, never decoded**: upper-case the hex of every escape, unescape only the RFC 3986 unreserved set, percent-encode anything the component may not carry verbatim, refuse a control character in either form, never read `+` as a space. Sorted by name, duplicates kept in input order |
-| `headers` | **only** the reserved-and-allowed set is projected, lowercase, sorted: `accept`, `content-type`, `content-length`, and the operation's declared headers. `authorization`, `cookie`, `host`, `proxy-*`, `x-forwarded-*`, `transfer-encoding`, `connection`, `upgrade` are **refused** if the caller supplies them (the executor sets them). A projected header whose **value** carries a control character is refused too (`malformed`) — a name-only check lets CRLF smuggle `authorization:` inside an admitted `accept`. `content-length` is **derived** from the body bytes, always: a caller-supplied value that disagrees is `malformed`, and a correct one projects identically to its absence |
+| `headers` | **only** the reserved-and-allowed set is projected, lowercase, sorted: `accept`, `content-type`, `content-length`, and the headers the matched registry entry declares. `authorization`, `cookie`, `host`, `proxy-*`, `x-forwarded-*`, `transfer-encoding`, `connection`, `upgrade` are **refused** if the caller supplies them (the executor sets them). A projected header whose **value** carries a control character is refused too (`malformed`) — a name-only check lets CRLF smuggle `authorization:` inside an admitted `accept`. `content-length` is **derived** from the body bytes, always: a caller-supplied value that disagrees is `malformed`, and a correct one projects identically to its absence |
 | `bodySha256` | hex SHA-256 over the exact body bytes; `''` body → hash of zero bytes, never `null` |
 | `resources` | operation-specific identifiers the policy restricts on (repo, org, recipient, webhook target, frame origin for browser ops), as a sorted `[key, value]` list |
-| `operation` | `{ class, name }` — the `op` discriminator so one digest cannot serve two operations (mcp-token-scopes precedent) |
+| `operation` | `{ class, name }` — the `op` discriminator so one digest cannot serve two operations (mcp-token-scopes precedent). **Derived, never supplied**: `lookupOperation` matches the account's `providerSlug` (from the row), the channel, the canonical method and the canonical path against the reviewed `OperationRegistry`; no match is `{ class: 'unknown', name: 'generic_request' }`. The untrusted `CanonicalRequestInput` has no `operation` and no `declaredHeaders` field (G1a review M1) |
 
 `digestRequest(canonical): RequestDigest = hash(canonicalJson(canonical))` where `canonicalJson` sorts keys recursively, keeps arrays positional, drops `undefined` (env-bridge `canonicalizeArgs`), and the hash primitive is injected. Two textual requests that differ only by header order, key order, case of the host, or `:443` produce the same digest; two that differ in one body byte do not.
 
@@ -123,6 +123,8 @@ The authority freezes the canonical request **before** it asks for approval and 
 | `unknown` | any generic `http_request` whose operation schema is not reviewed | concrete approval per digest unless the human explicitly accepted "generic requests to this origin" as a bounded capability with limits |
 
 Provider tool catalogues (`integrations/providers/*.ts`) are reclassified to this union in G3 (B0 B-6).
+
+**Amendment 2026-09-16 (G1a review M1).** The class is decided by the server, not declared by the tool. The first `CanonicalRequestInput` — documented as untrusted — carried `operation` and `declaredHeaders`, so the tool layer could label a `DELETE` a `read` and have an always-allow policy cover it. Both fields are gone from the input; the class, name and declared headers come from `lookupOperation` over the typed `OperationRegistry` (`canonical-request.ts`), keyed by the account's `providerSlug` + channel + canonical method + canonical path template. A request with no match is `unknown` and takes the `unknown` row above.
 
 ## 4. Decision D3 — account permission semantics (`packages/lib/src/permissions/account-permissions.ts`)
 
@@ -226,15 +228,17 @@ export type VerifyGrant = (input: VerifyGrantInput) => GrantVerdict;
 //   for the audit/UI mapping so an added reason fails typecheck everywhere it matters.
 
 // canonical-request.ts
-export type CanonicalizeRequest = (input: CanonicalRequestInput) => CanonicalizeResult;
+export type CanonicalizeRequest = (input: { request: CanonicalRequestInput; providerSlug: string | null;
+  registry: OperationRegistry }) => CanonicalizeResult;   // operation + declared headers come from the registry, never the input
 //   { ok: true; canonical: CanonicalRequest } | { ok: false; reason: CanonicalizeRefusal }
 export type DigestRequest = (input: { canonical: CanonicalRequest; hash: HashBytes }) => RequestDigest;
 export type RenderApprovalSubject = (input: { canonical: CanonicalRequest }) => ApprovalSubject;
 //   the human-readable rendering the approval UI shows — derived from the canonical request only
 
-// classify-operation.ts (G1b)
-export type ClassifyOperation = (input: { channel: PresenterChannel; canonical: CanonicalRequest;
-  catalogue: OperationCatalogue }) => OperationRef;   // unknown ⇒ class 'unknown'
+// lookup-operation.ts (G1b) — the ONLY source of an operation class
+export type LookupOperation = (input: { registry: OperationRegistry; providerSlug: string | null;
+  channel: ExecutorChannel; method: MethodFor[ExecutorChannel]; path: string }) => OperationRegistryEntry | null;
+//   keyed by provider + channel + method + path template; null ⇒ { class: 'unknown', name: 'generic_request' }
 
 // decide-approval.ts (G1b)
 export type DecideApproval = (input: { operation: OperationRef; policy: AccountApprovalPolicy | null;
@@ -288,6 +292,7 @@ Adapters (I/O, G1b): `grant-repository.ts` (nonce consume, approvals, delegation
 27. Given `human.sessionId = null` and a live, unexpired delegation fact for this account whose `agentPageId` names another agent page, `no_delegation`; whose `delegatedBy` names another user than `grant.human.userId`, `no_delegation`; whose four ids all match, the delegation check passes (G1a review H3).
 28. Given `expected.accountStatus` of `needs_reauth`, `revoked` or `deleted` and an otherwise valid grant, `account_not_active`, returned before `version_mismatch` (a table test over the three statuses × a current and a stale `credentialVersion`); given `active`, the status check passes. `ExpectedBinding` requires `accountStatus` (a binding without it does not compile) (G1a review H4).
 29. Given a canonical request with query `[['force','true'],['recursive','1']]` and an `x-github-api-version` declared header, `renderApprovalSubject` returns `query` equal to `canonical.query` and `headerNames` containing `x-github-api-version`, and `JSON.stringify(subject)` contains no header value (G1a review H5).
+30. Given `CanonicalRequestInput`, the type has no `operation` and no `declaredHeaders` key (a type-level test). Given a registry entry `{ providerSlug: 'github', method: 'PUT', pathTemplate: '/repos/{owner}/{repo}/pulls/{number}/merge', operation: { class: 'irreversible', name: 'merge_pr' } }` and a request to `PUT /repos/a/b/pulls/7/merge`, `canonical.operation` is `merge_pr`/`irreversible` whatever the tool layer intended; a `DELETE` to a path no entry matches is `unknown`/`generic_request`, never `read`; the same request with `providerSlug: null` does not match the github entry (G1a review M1).
 
 ## 9. Consequences
 

@@ -14,11 +14,20 @@ describe('canonicalizeRequest refusals (ADR 0004 F18)', () => {
   it.todo('given a caller-supplied content-length that disagrees with the body bytes, should refuse with malformed [0004 §8.26]');
 });
 
+describe('operation is derived, never declared (ADR 0004 §3.4 amendment, §8.30; G1a review M1)', () => {
+  it.todo('given CanonicalRequestInput, should have no operation and no declaredHeaders key (type-level test)');
+  it.todo('given a github registry entry PUT /repos/{owner}/{repo}/pulls/{number}/merge → irreversible merge_pr and a request to PUT /repos/a/b/pulls/7/merge, should set canonical.operation to merge_pr / irreversible');
+  it.todo('given a DELETE to a path no registry entry matches, should set canonical.operation to unknown / generic_request, never read');
+  it.todo('given providerSlug null (from the account row), should not match a github entry for the same method and path');
+  it.todo('given a header declared only by a registry entry the request does not match, should drop it from the projection');
+  it.todo('given a registry with two entries matching the same provider, channel, method and path, should be refused at registry load, never resolved by order');
+});
+
 describe('canonicalizeRequest normalization', () => {
   it.todo('given a mixed-case IDNA host, should lowercase and IDNA→ASCII it');
   it.todo('given an https URL without a port, should write :443 explicitly');
   it.todo('given query and header maps in any order, should emit sorted pairs');
-  it.todo('given only projected + declared headers, should drop every other header from the projection');
+  it.todo('given only projected + registry-declared headers, should drop every other header from the projection');
   it.todo('given an empty body, should record the SHA-256 of zero bytes, never null');
   it.todo('given a valid input, should round-trip: canonicalize ∘ canonicalize is the identity [0004 §8.13]');
   it.todo('given a round-trip input built VERBATIM (never re-encoded by the test helper), should still be the identity [0004 §8.26]');
