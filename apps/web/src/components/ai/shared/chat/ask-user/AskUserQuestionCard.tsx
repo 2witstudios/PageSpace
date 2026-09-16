@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { HelpCircle, Check } from 'lucide-react';
+import { HelpCircle, Check, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
@@ -192,6 +192,16 @@ export const AskUserQuestionCard: React.FC<AskUserQuestionCardProps> = ({ part }
     tabRefs.current[index]?.focus();
   };
 
+  // Back / Next step the active question without needing the tab badges or
+  // arrow keys — the badges are small and dense on a phone, and a touch
+  // device has no arrow keys. Clamped (no wrap) so the disabled end button
+  // also tells the user where they are. Unlike `focusTab` this does not move
+  // focus: on touch there is nothing to focus, and on desktop yanking focus
+  // off the button the user just pressed is jarring.
+  const stepQuestion = (delta: 1 | -1) => {
+    setActiveIndex((prev) => Math.min(Math.max(prev + delta, 0), questionCount - 1));
+  };
+
   const onTabKeyDown = (e: React.KeyboardEvent, index: number) => {
     if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
       e.preventDefault();
@@ -314,6 +324,36 @@ export const AskUserQuestionCard: React.FC<AskUserQuestionCardProps> = ({ part }
               rows={2}
             />
           )}
+        </div>
+      )}
+
+      {questionCount > 1 && (
+        <div className="flex items-center justify-between gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => stepQuestion(-1)}
+            disabled={activeIndex === 0}
+            aria-label="Previous question"
+          >
+            <ChevronLeft className="h-4 w-4" />
+            Back
+          </Button>
+          <span className="text-xs tabular-nums text-muted-foreground" aria-live="polite">
+            {activeIndex + 1} of {questionCount}
+          </span>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => stepQuestion(1)}
+            disabled={activeIndex === questionCount - 1}
+            aria-label="Next question"
+          >
+            Next
+            <ChevronRight className="h-4 w-4" />
+          </Button>
         </div>
       )}
 

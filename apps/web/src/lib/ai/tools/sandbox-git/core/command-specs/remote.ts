@@ -12,7 +12,8 @@ export interface FetchArgsInput {
 }
 
 export function buildFetchArgs({ remote, branch }: FetchArgsInput): string[] {
-  return ['fetch', remote ?? 'origin', ...(branch ? [branch] : [])];
+  // "--" ends options so remote/branch can never be parsed as fetch flags.
+  return ['fetch', '--', remote ?? 'origin', ...(branch ? [branch] : [])];
 }
 
 export interface PullArgsInput {
@@ -22,7 +23,7 @@ export interface PullArgsInput {
 }
 
 export function buildPullArgs({ remote, branch, rebase }: PullArgsInput): string[] {
-  return ['pull', ...optFlag('--rebase', rebase), remote ?? 'origin', ...(branch ? [branch] : [])];
+  return ['pull', ...optFlag('--rebase', rebase), '--', remote ?? 'origin', ...(branch ? [branch] : [])];
 }
 
 export interface PushArgsInput {
@@ -38,6 +39,10 @@ export function buildPushArgs({ remote, branch, force, set_upstream }: PushArgsI
     ...optFlag('--force-with-lease', force),
     // set_upstream defaults to true — only an explicit `false` omits -u.
     ...(set_upstream !== false ? ['-u'] : []),
+    // End of options: everything after this is a positional (remote, refspec),
+    // so a flag-shaped value can never be parsed as a push option even if it
+    // somehow reached argv. The row validator rejects it earlier (defense-in-depth).
+    '--',
     remote ?? 'origin',
     ...(branch ? [branch] : []),
   ];

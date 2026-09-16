@@ -329,6 +329,34 @@ describe('git_push', () => {
     expect(calls[0].args).not.toContain('--force');
   });
 
+  // branch/remote are bare positionals: a flag-shaped value would be parsed as a
+  // push OPTION (`--force` force-pushes the CURRENT branch, bypassing the guard).
+  it('rejects a flag-shaped branch (--force) before any git call is made', async () => {
+    const deps = makeDeps();
+    const { git_push } = createSandboxGitTools(deps);
+    const result = await git_push.execute!({ branch: '--force' }, {} as never);
+    expect(result).toMatchObject({ success: false, error: expect.stringContaining('branch') });
+    expect(deps.gitRunDeps.acquireSandbox).not.toHaveBeenCalled();
+    expect(getRunCalls(deps)).toHaveLength(0);
+  });
+
+  it('rejects a flag-shaped remote (--mirror) before any git call is made', async () => {
+    const deps = makeDeps();
+    const { git_push } = createSandboxGitTools(deps);
+    const result = await git_push.execute!({ remote: '--mirror', branch: 'feature' }, {} as never);
+    expect(result).toMatchObject({ success: false, error: expect.stringContaining('remote') });
+    expect(deps.gitRunDeps.acquireSandbox).not.toHaveBeenCalled();
+    expect(getRunCalls(deps)).toHaveLength(0);
+  });
+
+  it('emits "--" before the remote/refspec positionals', async () => {
+    const deps = makeDeps();
+    const { git_push } = createSandboxGitTools(deps);
+    await git_push.execute!({ branch: 'feature' }, {} as never);
+    const calls = getRunCalls(deps);
+    expect(calls[0].args).toEqual(['push', '-u', '--', 'origin', 'feature']);
+  });
+
   it('rejects force-push to main without opening a sandbox', async () => {
     const deps = makeDeps();
     const { git_push } = createSandboxGitTools(deps);
@@ -457,12 +485,21 @@ describe('git_push', () => {
 // ── git_fetch ──────────────────────────────────────────────────────────────
 
 describe('git_fetch', () => {
-  it('defaults to ["fetch", "origin"]', async () => {
+  it('defaults to ["fetch", "--", "origin"]', async () => {
     const deps = makeDeps();
     const { git_fetch } = createSandboxGitTools(deps);
     await git_fetch.execute!({}, {} as never);
     const calls = getRunCalls(deps);
-    expect(calls[0].args).toEqual(['fetch', 'origin']);
+    expect(calls[0].args).toEqual(['fetch', '--', 'origin']);
+  });
+
+  it('rejects a flag-shaped branch without opening a sandbox', async () => {
+    const deps = makeDeps();
+    const { git_fetch } = createSandboxGitTools(deps);
+    const result = await git_fetch.execute!({ branch: '--upload-pack=x' }, {} as never);
+    expect(result).toMatchObject({ success: false });
+    expect(deps.gitRunDeps.acquireSandbox).not.toHaveBeenCalled();
+    expect(getRunCalls(deps)).toHaveLength(0);
   });
 
   it('returns no-connection error without opening sandbox when token is null', async () => {
