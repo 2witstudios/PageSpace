@@ -31,10 +31,16 @@ function perTier<T>(f: (tier: SubscriptionTier) => T): Record<SubscriptionTier, 
  * The free row is the one-time starter grant (MON-8), not a monthly amount.
  *
  * SERVER-authoritative: computed once at module load from the real MONEY_MODEL_V2.
- * A server render (marketing SSG, an API route, admin) always sees the correct
- * number. A "use client" component (settings/plan) does NOT — Next.js never inlines
- * a bare, non-NEXT_PUBLIC_ env var into the browser bundle — so it must not read this
- * constant as the final word; it patches its plan data with the server-supplied
+ * A server render that runs PER REQUEST (an API route, admin, or a marketing page
+ * that opts out of static generation via `revalidate`/`dynamic`) always sees the
+ * correct number — but a build-time prerender does NOT: `next build` evaluates this
+ * module once, using whatever env the Docker builder stage happened to have, and
+ * bakes the result into static HTML that a later runtime env flip never reaches
+ * (apps/marketing/src/app/pricing/page.tsx sets `revalidate` for exactly this
+ * reason — see its own comment). A "use client" component (settings/plan) has the
+ * same problem for a different reason — Next.js never inlines a bare, non-
+ * NEXT_PUBLIC_ env var into the browser bundle — so it must not read this constant
+ * as the final word either; it patches its plan data with the server-supplied
  * number from `/api/subscriptions/status`'s `planCredits` instead (see
  * `apps/web/src/lib/subscription/plans.ts`'s `withCreditOverrides`, and the
  * `*ForCents` functions below it calls to rebuild the phrases from that number).

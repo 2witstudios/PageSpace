@@ -272,7 +272,15 @@ describe('MON-2 no client-visible mirror of the flag (single source of truth)', 
     expect(mod.tierAllowanceCentsForDisplay).toBeUndefined();
   });
 
-  it('documents why: in a browser, a bare (non-NEXT_PUBLIC_) env var is invisible, so isMoneyModelV2Enabled() must never run client-side', async () => {
+  // DOCUMENTATION, not regression coverage (independent-review finding on #2649):
+  // this only asserts the plain flag-off default the MON-2 tests above already
+  // cover — it can't fail for any change this PR makes, and it doesn't simulate
+  // Next's client-bundle inlining. The real regression guard for #2643 (a "use
+  // client" component reading this module's numbers as the final word) lives at
+  // apps/web/src/components/billing/__tests__/PlanCard.test.tsx's "a server-supplied
+  // planCredits override actually reaches the rendered card" — a DOM-level assertion
+  // that fails if settings/plan stops applying withCreditOverrides before rendering.
+  it('why isMoneyModelV2Enabled() must never run client-side (see PlanCard.test.tsx for the actual regression guard)', async () => {
     // Next.js does not inline MONEY_MODEL_V2 into the browser bundle (only a
     // NEXT_PUBLIC_-prefixed literal access gets that treatment). Simulating the
     // browser condition — MONEY_MODEL_V2 simply absent, as it always is there —

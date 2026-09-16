@@ -223,8 +223,10 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
  *
  * `PLANS` is a module-level constant built once, using this module's OWN evaluation
  * of the money model (`MONTHLY_CREDIT_CENTS`, computed via the real MONEY_MODEL_V2).
- * That is correct wherever this module runs on the server (marketing SSG, an API
- * route, admin). It is NOT reliably correct in the browser: `settings/plan` is a
+ * That is correct wherever this module runs on the server — this file is apps/web-
+ * only (marketing has its own copy in apps/marketing/src/lib/credits.ts, with its
+ * own static-prerendering caveat documented on apps/marketing/src/app/pricing/
+ * page.tsx). It is NOT reliably correct in the browser: `settings/plan` is a
  * `'use client'` component, and Next.js does not inline a bare (non-`NEXT_PUBLIC_`)
  * env var into the client bundle — reading the flag there, or mirroring it through a
  * second `NEXT_PUBLIC_` var that must be kept in lockstep with the first, both drift.

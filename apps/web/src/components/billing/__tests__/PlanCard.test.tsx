@@ -2,7 +2,7 @@ import React from 'react';
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { PlanCard } from '../PlanCard';
-import { PLANS } from '@/lib/subscription/plans';
+import { PLANS, withCreditsCents } from '@/lib/subscription/plans';
 
 describe('PlanCard (MON-6, SEAT-2, A-9)', () => {
   it('MON-6 shows price, included credits, and the top-up rate as three separate facts, credits as a count with no dollar sign', () => {
@@ -37,5 +37,19 @@ describe('PlanCard (MON-6, SEAT-2, A-9)', () => {
   it('A-9 the grandfathered flag changes nothing on a card that is not the current org plan', () => {
     render(<PlanCard plan={PLANS.pro} currentTier="business" grandfathered />);
     expect(screen.getByTestId('plan-price').textContent).toBe('$15');
+  });
+
+  it('MON-2 (independent review on #2649) a server-supplied planCredits override actually reaches the rendered card, not just the plain object', () => {
+    // This is the render-level proof the #2643 thread needs: withCreditsCents is a
+    // pure function tested in isolation elsewhere (plans.test.ts), but the DOM is
+    // what a person actually sees. If the settings/plan page stopped calling
+    // withCreditOverrides before rendering, PLANS.pro's own build-time number would
+    // show here instead of the server-supplied one.
+    const patched = withCreditsCents(PLANS.pro, 900);
+    render(<PlanCard plan={patched} currentTier="free" />);
+    expect(screen.getByTestId('plan-included-credits').textContent).toBe('900 credits included each month');
+    // And an untouched plan is provably unaffected by the same call.
+    render(<PlanCard plan={PLANS.free} currentTier="free" />);
+    expect(screen.getAllByTestId('plan-included-credits')[1].textContent).toMatch(/^[0-9,]+ credits to start$/);
   });
 });

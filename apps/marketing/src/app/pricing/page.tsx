@@ -15,6 +15,18 @@ import { isSandboxTierEligible } from "@pagespace/lib/billing/sandbox-eligibilit
 
 export const metadata = pageMetadata.pricing;
 
+/**
+ * MON-2: this page has no dynamic API usage, so Next.js would otherwise
+ * prerender it once at `next build` time (inside the Docker builder stage,
+ * where MONEY_MODEL_V2 is never set) and serve that static HTML forever — the
+ * flag flipping at runtime would never reach this page's `creditsPhrase` /
+ * `includedCreditsPhrase` copy, the exact promise-vs-grant mismatch the
+ * #2643 thread reported, now on the public pricing page. Revalidating hourly
+ * means a migration-day flag flip reaches this page within an hour, without
+ * paying full request-time render cost on every anonymous visit.
+ */
+export const revalidate = 3600;
+
 interface Plan {
   name: string;
   price: string;
