@@ -96,7 +96,9 @@ export type AgentAccountRow = {
    * Default false. When true (set only through `manage`), the account's
    * `session` material may be resolved by the HTTP executor under the
    * `session_http` permission (ADR 0005 §4.2). Meaningful only for kind
-   * `session`; G2 adds a CHECK that it is false for every other kind.
+   * `session`; G2 adds a CHECK that it is false for every other kind. Any
+   * change bumps `policyVersion` (ADR 0004 §4.4), so turning it off ends
+   * outstanding `sessionHttp: true` grants at once (G1a review M4).
    */
   readonly sessionHttpEnabled: boolean;
   readonly status: AccountStatus;

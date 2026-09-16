@@ -64,7 +64,7 @@ Only a Sprites primitive that (a) lets the **server** inject a per-connection se
 | F2 | `getSprite(name).id ≠ grant.sandbox.instanceId` at presentation | `generation_mismatch` |
 | F3 | Provisioner generation ≠ `grant.sandbox.generation` (restore or recreate since issuance) | `generation_mismatch` |
 | F4 | A request carrying any guest-authored identity claim (`X-Sprite-*`, `Sprite-Client-Ip`, source IP) | ignored entirely; never an input to any decision (a test proves the verifier's input type has no such field) |
-| F5 | `getSprite` unreachable at presentation | refuse; never trust the issuance-time id alone |
+| F5 | `getSprite` unreachable at presentation | `binding_unavailable` (a `GrantDenyReason`); never trust the issuance-time id alone |
 | F6 | A git operation whose `remote`/`branch`/refspec starts with `-`, contains a NUL, or names a repo/branch outside `resources` | `restrictGitOperation` refuses before any grant is requested |
 | F7 | Runner asked to place a credential into the guest by any path | not representable: the runner's guest-side API is `{ exec(argv, env ⊆ allowlist), readObjects, writeObjects }` with the env allowlist frozen empty for credentialed ops |
 | F8 | The exec/session channel drops mid-operation | the upstream action is already done or not; the runner reports `outcome: 'unknown'` (threat-model §2.4), never retries a non-idempotent push |
@@ -88,7 +88,7 @@ export type PlanRelayTransfer = (input: { operation: GitRelayOperation; guestSta
 ## 8. Testable assertions (each becomes a RED test in G1b (1–4) or G4 (5–9))
 
 1. Given `decideSandboxBinding` with `aud: 'relay-runner'` and `grant: null`, returns `malformed`; with `sandbox` set and `aud: 'http-executor'`, `malformed`.
-2. Given an observed `instanceId` that differs from the grant's, `generation_mismatch`; given the same id but `generation + 1`, `generation_mismatch` (the restore case).
+2. Given an observed `instanceId` that differs from the grant's, `generation_mismatch`; given the same id but `generation + 1`, `generation_mismatch` (the restore case); given the same id and generation but a different `spriteName`, `generation_mismatch` (all three fields are compared; `ExpectedBinding.sandbox` is a full `SandboxBinding`).
 3. Given `observed: null` (store/API unreachable), `binding_unavailable` — never `ok`.
 4. Given the verifier's input type, no field can carry a guest-supplied header or IP (a type-level test: `VerifyGrantInput` has no key matching `/header|ip|forwarded|sprite/i` except `sandbox`).
 5. Given `restrictGitOperation` with `branch: '--force'`, `remote: '--mirror'`, `branch: '--upload-pack=x'`, `base: '--output=/x'`, each returns `flag_injection` (the B0 High and B-3/B-18 rows as a table).
