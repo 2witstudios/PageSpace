@@ -59,6 +59,13 @@ export const DEFAULT_SNAPSHOT = 'docs/specs/organizations-wallets.md';
 export const DEFAULT_ALLOWLIST = 'scripts/spec-coverage-allowlist.txt';
 /** Roots walked for `test-results/*.json` — every place a JSON test reporter can write in this repo. */
 export const RESULT_SCAN_ROOTS = ['packages', 'apps', 'scripts', 'infrastructure'];
+/**
+ * Result files read from the repo ROOT, where CI's `actions/download-artifact` extracts them. An
+ * artifact uploaded from a single file path (the e2e job's
+ * `apps/e2e/test-results/playwright-results.json`) is rooted at that file's own directory, so it
+ * extracts as `./playwright-results.json` — not under any `test-results/` dir the walk above sees.
+ */
+const ROOT_RESULT_FILES = ['playwright-results.json'];
 
 /** One requirement ID as it appears in the Spec, e.g. "MON-2". */
 export const REQUIREMENT_ID_PATTERN = /\b(ORG|DRV|SEAT|WAL|MON|SPEND|POL|SEC|AUD|UI|X)-\d+\b/g;
@@ -284,7 +291,7 @@ function toRepoRelative(root: string, file: string): string {
   return path.isAbsolute(file) ? path.relative(root, file) : file;
 }
 
-/** Every `test-results/*.json` file under the result-scan roots, repo-relative, sorted. */
+/** Every `test-results/*.json` file under the result-scan roots, plus any root-level CI artifact file, repo-relative, sorted. */
 export function findResultFiles(root: string, roots: readonly string[] = RESULT_SCAN_ROOTS): string[] {
   const found: string[] = [];
   const walk = (dir: string): void => {
@@ -303,6 +310,9 @@ export function findResultFiles(root: string, roots: readonly string[] = RESULT_
     }
   };
   for (const r of roots) walk(path.join(root, r));
+  for (const name of ROOT_RESULT_FILES) {
+    if (fs.statSync(path.join(root, name), { throwIfNoEntry: false })?.isFile()) found.push(name);
+  }
   return found.sort();
 }
 
