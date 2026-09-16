@@ -629,8 +629,10 @@ configs:
       map $$http_upgrade $$connection_upgrade { default upgrade; '' close; }
       server {
         listen 80;
+        resolver 127.0.0.11 valid=10s ipv6=off;   # Docker embedded DNS: re-resolve so a recreated infisical is found
         location / {
-          proxy_pass http://infisical:8080;
+          set $$vault_upstream http://infisical:8080;   # a variable forces per-request resolution via `resolver`
+          proxy_pass $$vault_upstream;
           proxy_http_version 1.1;
           proxy_set_header Upgrade $$http_upgrade;
           proxy_set_header Connection $$connection_upgrade;
