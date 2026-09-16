@@ -49,6 +49,9 @@ import type {
 import type { AccountId, AccountKind, CredentialVersion, PolicyVersion, TenantId } from '@pagespace/db/schema/agent-accounts';
 import type { CanonicalRequestInput } from '../canonical-request';
 import { TEST_PROVIDER, TEST_REGISTRY } from './operation-registry.fixture';
+import { VERIFIED_GRANT } from '../verified-grant-brand';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { join, relative } from 'node:path';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -147,7 +150,16 @@ function expectedFor(grant: AgentAccountGrant, overrides: Partial<ExpectedBindin
     delegation:
       grant.delegationId === null
         ? { kind: 'live_session' }
-        : { kind: 'delegation', delegationId: grant.delegationId, accountId: grant.accountId, agentPageId: grant.agentPageId, delegatedBy: grant.human.userId, expired: false, revoked: false },
+        : {
+            kind: 'delegation',
+            delegationId: grant.delegationId,
+            accountId: grant.accountId,
+            agentPageId: grant.agentPageId,
+            delegatedBy: grant.human.userId,
+            scope: { origins: [], operations: [], resources: [] },
+            expired: false,
+            revoked: false,
+          },
     // Optional chaining on purpose: the field-absent table feeds grants with fields removed.
     sandbox: grant.sandbox == null ? null : { spriteName: grant.sandbox.spriteName, instanceId: grant.sandbox.instanceId, generation: grant.sandbox.generation },
     ceilingAdmitsAccount: ceilingAdmits(grant.callerCeiling?.allowedDriveIds ?? [], DRIVE),
@@ -967,3 +979,56 @@ describe('mutation pairs (Control Board §7.4; ADR 0004 §8.19)', () => {
 // Keep the AccountKind import live for the fixtures' narrowing.
 const _kinds: readonly AccountKind[] = ['api_key', 'bearer', 'oauth2', 'session', 'password'];
 void _kinds;
+
+describe('verifyGrant brands its own output (ADR 0004 §7, §8.43; G1c R9)', () => {
+  it('given a grant that verifies, should return it branded with the unique symbol set to the expected audience', () => {
+    const grant = makeGrant({ aud: 'browser-worker', accountKind: 'password' });
+    const verdict = run(grant);
+    const actual = verdict.ok ? { brand: verdict.grant[VERIFIED_GRANT], aud: verdict.grant.aud, grantId: verdict.grant.grantId } : verdict;
+    expect(actual).toEqual({ brand: 'browser-worker', aud: 'browser-worker', grantId: grant.grantId });
+  });
+
+  it('given a grant that fails any check, should return no grant at all — nothing unverified carries the brand', () => {
+    const verdict = run(makeGrant(), { nonceState: 'consumed' });
+    const actual = { ok: verdict.ok, hasGrant: 'grant' in verdict };
+    expect(actual).toEqual({ ok: false, hasGrant: false });
+  });
+
+  it('given the production sources, should find exactly one module that imports the brand as a value: verify-grant.ts', () => {
+    const root = join(__dirname, '..', '..');
+    const walk = (dir: string): string[] =>
+      readdirSync(dir).flatMap((name) => {
+        const full = join(dir, name);
+        if (statSync(full).isDirectory()) return name === 'node_modules' || name === '__tests__' || name.startsWith('__wt') ? [] : walk(full);
+        return full.endsWith('.ts') && !full.endsWith('.test.ts') ? [full] : [];
+      });
+    const valueImport = /^import\s+(?!type\b)[^;]*from\s+'[^']*verified-grant-brand'/m;
+    const actual = walk(root)
+      .filter((file) => valueImport.test(readFileSync(file, 'utf8')))
+      .map((file) => relative(root, file));
+    expect(actual).toEqual(['agent-accounts/verify-grant.ts']);
+  });
+});
+
+describe('an unknown account is representable (ADR 0004 F5a, §8.44; G1c R15)', () => {
+  const unknown = {
+    accountId: null,
+    accountKind: null,
+    accountStatus: null,
+    accountDriveId: null,
+    currentCredentialVersion: null,
+    previousCredentialVersion: null,
+    rotatedAt: null,
+    currentPolicyVersion: null,
+  } as const;
+
+  it('given an UnknownAccountBinding, should return version_mismatch — never account_not_active, never ok', () => {
+    const actual = [run(makeGrant(), { expected: unknown }), run(makeGrant({ approvalId: 'policy' }), { expected: unknown, approval: { kind: 'policy', policyVersion: 7 as PolicyVersion, expired: false, limitsExceeded: false } })];
+    expect(actual).toEqual([deny('version_mismatch'), deny('version_mismatch')]);
+  });
+
+  it('given an unknown account and a principal mismatch, should still answer the earlier principal_mismatch (deny order unchanged)', () => {
+    const actual = run(makeGrant(), { expected: { ...unknown, runId: 'run_other' as RunId } });
+    expect(actual).toEqual(deny('principal_mismatch'));
+  });
+});
