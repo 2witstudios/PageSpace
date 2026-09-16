@@ -262,6 +262,7 @@
         "src/billing/credit-gate.ts",
         "src/billing/credit-pricing.ts",
         "src/billing/invoice-grant.ts",
+        "src/billing/missed-grant-reconcile.ts",
         "src/billing/money-model.ts",
         "src/billing/sandbox-payer.ts",
         "src/canvas/cert-action.ts",

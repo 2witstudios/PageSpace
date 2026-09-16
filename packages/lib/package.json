@@ -438,6 +438,11 @@
       "import": "./dist/billing/invoice-grant.js",
       "require": "./dist/billing/invoice-grant.js"
     },
+    "./billing/missed-grant-reconcile": {
+      "types": "./dist/billing/missed-grant-reconcile.d.ts",
+      "import": "./dist/billing/missed-grant-reconcile.js",
+      "require": "./dist/billing/missed-grant-reconcile.js"
+    },
     "./billing/cost-reconcile": {
       "types": "./dist/billing/cost-reconcile.d.ts",
       "import": "./dist/billing/cost-reconcile.js",
@@ -2430,6 +2435,9 @@
       ],
       "billing/invoice-grant": [
         "./dist/billing/invoice-grant.d.ts"
+      ],
+      "billing/missed-grant-reconcile": [
+        "./dist/billing/missed-grant-reconcile.d.ts"
       ],
       "billing/live-concurrency-query": [
         "./dist/billing/live-concurrency-query.d.ts"
