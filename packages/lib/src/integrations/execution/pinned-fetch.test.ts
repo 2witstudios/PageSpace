@@ -13,7 +13,15 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { pinnedFetch } from './pinned-fetch';
 
-type Received = { host?: string; url?: string; method?: string; authorization?: string; body: string };
+type Received = {
+  host?: string;
+  url?: string;
+  method?: string;
+  authorization?: string;
+  contentLength?: string;
+  transferEncoding?: string;
+  body: string;
+};
 
 let server: http.Server;
 let port: number;
@@ -30,6 +38,8 @@ beforeAll(async () => {
         url: req.url,
         method: req.method,
         authorization: req.headers.authorization,
+        contentLength: req.headers['content-length'],
+        transferEncoding: req.headers['transfer-encoding'],
         body,
       };
       if (mode === 'hang') return;
@@ -49,6 +59,39 @@ afterAll(async () => {
 });
 
 describe('pinnedFetch', () => {
+  it('given a buffered body and no Content-Length, should send its UTF-8 byte length rather than a chunked body', async () => {
+    mode = 'json';
+    const body = '{"name":"café ☕"}';
+    await pinnedFetch(`http://pinned-host.invalid:${port}/hook`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+      pinnedAddress: '127.0.0.1',
+    });
+
+    const actual = {
+      contentLength: lastReceived?.contentLength,
+      transferEncoding: lastReceived?.transferEncoding,
+      body: lastReceived?.body,
+    };
+    const expected = { contentLength: String(Buffer.byteLength(body, 'utf8')), transferEncoding: undefined, body };
+    expect(actual).toEqual(expected);
+  });
+
+  it('given a caller-supplied Content-Length in any case, should send exactly that one value', async () => {
+    mode = 'json';
+    await pinnedFetch(`http://pinned-host.invalid:${port}/hook`, {
+      method: 'PUT',
+      headers: { 'content-length': '7' },
+      body: '{"a":1}',
+      pinnedAddress: '127.0.0.1',
+    });
+
+    const actual = { contentLength: lastReceived?.contentLength, transferEncoding: lastReceived?.transferEncoding };
+    const expected = { contentLength: '7', transferEncoding: undefined };
+    expect(actual).toEqual(expected);
+  });
+
   it('given an unresolvable hostname and a pinned address, should connect to the address and keep the hostname in Host', async () => {
     mode = 'json';
     const response = await pinnedFetch(`http://pinned-host.invalid:${port}/hook?x=1`, {
