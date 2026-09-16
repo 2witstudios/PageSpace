@@ -9,6 +9,7 @@ import {
   canDowngrade,
   getAllPlans,
   getPersonalPlans,
+  isOrgPlanPriceId,
   type SubscriptionTier,
 } from '../plans';
 
@@ -200,6 +201,20 @@ describe('Subscription Plans', () => {
 
     it('A-9 a grandfathered Business subscriber still sees their own plan', () => {
       expect(getPersonalPlans('business').map((p) => p.id)).toEqual(['free', 'pro', 'business']);
+    });
+  });
+
+  describe('isOrgPlanPriceId()', () => {
+    it('SEAT-2 P1 is true for the Business (org-plan) price id, the server-side backstop behind getPersonalPlans', () => {
+      expect(isOrgPlanPriceId(PLANS.business.stripePriceId!)).toBe(true);
+    });
+
+    it('is false for the Pro price id', () => {
+      expect(isOrgPlanPriceId(PLANS.pro.stripePriceId!)).toBe(false);
+    });
+
+    it('is false for an unrecognized price id', () => {
+      expect(isOrgPlanPriceId('price_not_a_real_plan')).toBe(false);
     });
   });
 });

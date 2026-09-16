@@ -130,6 +130,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 import { POST } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { stripeConfig } from '@/lib/stripe-config';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string): SessionAuthResult => ({
@@ -493,5 +494,20 @@ describe('POST /api/stripe/update-subscription', () => {
 
       expect(response.status).toBe(200);
     });
+  });
+
+  it('SEAT-2 P1 rejects a plan change targeting the Business (org-plan) price id — the UI hides it, but the server must too', async () => {
+    const request = createMockRequest('https://example.com/api/stripe/update-subscription', {
+      method: 'POST',
+      body: JSON.stringify({ priceId: stripeConfig.priceIds.business, isDowngrade: false }),
+    });
+
+    const response = await POST(request);
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.error).toMatch(/organization/i);
+    expect(mockStripeSubscriptionsUpdate).not.toHaveBeenCalled();
+    expect(mockStripeSubscriptionSchedulesCreate).not.toHaveBeenCalled();
   });
 });

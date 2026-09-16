@@ -7,6 +7,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { stripe, Stripe } from '@/lib/stripe';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { isOrgPlanPriceId } from '@/lib/subscription/plans';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -29,6 +30,17 @@ export async function POST(request: NextRequest) {
     if (!priceId) {
       return NextResponse.json(
         { error: 'Price ID is required' },
+        { status: 400 }
+      );
+    }
+
+    // SEAT-2 P1: Business is the organization plan — buying it creates an
+    // org, so a lone-user plan change can never target it. getPersonalPlans()
+    // already hides it from the plan UI; this is the server-side backstop
+    // against a direct POST of the org-plan price id.
+    if (isOrgPlanPriceId(priceId)) {
+      return NextResponse.json(
+        { error: 'This plan is for an organization and cannot be purchased individually.' },
         { status: 400 }
       );
     }

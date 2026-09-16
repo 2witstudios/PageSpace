@@ -80,6 +80,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 import { POST } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { stripeConfig } from '@/lib/stripe-config';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string): SessionAuthResult => ({
@@ -318,6 +319,20 @@ describe('POST /api/stripe/create-subscription', () => {
       expand: ['latest_invoice.confirmation_secret'],
       metadata: { userId: mockUserId },
     });
+  });
+
+  it('SEAT-2 P1 rejects a lone user checking out with the Business (org-plan) price id — the UI hides it, but the server must too', async () => {
+    const request = createMockRequest('https://example.com/api/stripe/create-subscription', {
+      method: 'POST',
+      body: JSON.stringify({ priceId: stripeConfig.priceIds.business }),
+    });
+
+    const response = await POST(request);
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.error).toMatch(/organization/i);
+    expect(mockStripeSubscriptionsCreate).not.toHaveBeenCalled();
   });
 
 });

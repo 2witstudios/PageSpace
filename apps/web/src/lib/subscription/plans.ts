@@ -5,6 +5,7 @@ import {
   TIER_PLAN_LIMITS,
   formatTierBytes,
   personalTiers,
+  isOrgPlanTier,
   type SubscriptionTier,
 } from '@pagespace/lib/billing/subscription-tiers';
 import { stripeConfig } from '../stripe-config';
@@ -272,4 +273,18 @@ export function getTierFromPriceId(priceId: string): SubscriptionTier | null {
 export function getPlanFromPriceId(priceId: string): PlanDefinition | null {
   const tier = getTierFromPriceId(priceId);
   return tier ? PLANS[tier] : null;
+}
+
+/**
+ * SEAT-2 P1 fix: whether `priceId` is the price of an organization plan
+ * (Business). getPersonalPlans() only hides the org plan from the UI —
+ * without this check a lone user could POST the Business price id straight
+ * to /api/stripe/create-subscription or /update-subscription and be charged
+ * the org price with no org behind it. An unrecognized price id is NOT an
+ * org-plan price (it is rejected elsewhere, by Stripe or the tier lookup);
+ * this guard only refuses a price id this app KNOWS is an org plan's.
+ */
+export function isOrgPlanPriceId(priceId: string): boolean {
+  const tier = getTierFromPriceId(priceId);
+  return tier !== null && isOrgPlanTier(tier);
 }
