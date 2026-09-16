@@ -77,7 +77,7 @@ export type RestrictGitOperation = (input: { request: GitRelayRequest; restricti
   { ok: true; canonical: CanonicalRequest } | { ok: false; reason: 'flag_injection' | 'repo_not_allowed' | 'branch_not_allowed' | 'operation_not_supported' | 'malformed' };
 
 // packages/lib/src/agent-accounts/relay/decide-sandbox-binding.ts (G1b — it is part of verifyGrant's expected-binding fact)
-export type DecideSandboxBinding = (input: { grant: SandboxBinding | null; observed: { instanceId: SandboxInstanceId; generation: SandboxGeneration } | null;
+export type DecideSandboxBinding = (input: { grant: SandboxBinding | null; observed: SandboxBinding | null;   // all three fields compared (ADR 0004 F9)
   aud: PresenterChannel }) => { ok: true } | { ok: false; reason: 'malformed' | 'generation_mismatch' | 'binding_unavailable' };
 
 // packages/lib/src/agent-accounts/relay/plan-relay-transfer.ts (G4)

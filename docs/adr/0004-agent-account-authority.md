@@ -216,12 +216,14 @@ export type ParseGrant = (input: { readonly grant: unknown }) => ParseGrantVerdi
 export type VerifyGrant = (input: VerifyGrantInput) => GrantVerdict;
 //   VerifyGrantInput: { grant: unknown; signature: string; issuerPublicKey: Uint8Array;
 //     now: number; expected: ExpectedBinding;   // aud, presenter, CURRENT human/agentPageId/conversationId/runId,
-//                                                // tenant, account row facts, current credential/policy versions,
+//                                                // tenant, account row facts incl. accountStatus, current credential/policy
+//                                                // versions + previousCredentialVersion/rotatedAt,
 //                                                // delegation fact, sandbox binding, callerCeiling fact (drive admitted?)
 //     requestDigest: RequestDigest;   // digestRequest over the request the presenter is about to send,
 //                                     // recomputed by the presenter's adapter — never taken from the grant
 //     requestOperation: OperationRef; nonceState: 'fresh' | 'consumed' | 'unknown';
-//     approval: ApprovalFact; verify: Ed25519Verify; hash: HashBytes }
+//     approval: ApprovalFact; verify: Ed25519Verify; hash: HashBytes;
+//     rotationGraceMs: StoreLimits['rotationGraceMs'] }   // F5a grace window, same value decideResolve uses
 //   GrantVerdict: { ok: true; grant } | { ok: false; reason: GrantDenyReason }
 //   GrantDenyReason is the one canonical union of every reason §6 names (F1–F17, incl. F4a and
 //   F13 `audit_unavailable`, which the executor rather than the verifier returns); Record<GrantDenyReason, …> is used
