@@ -136,8 +136,6 @@ function resolvePropertyChain(expr: ts.Expression): PropertyChain {
 }
 
 interface ResolvedTestCall {
-  /** `it` / `test` / `describe`. */
-  base: string;
   /** Modifiers other than a trailing conditional one, e.g. `['only']` for `it.only.skipIf(cond)`. */
   modifiers: string[];
   isDescribeFamily: boolean;
@@ -184,7 +182,6 @@ function resolveTestCall(call: ts.CallExpression): ResolvedTestCall | undefined 
 
   const [nameArg, callbackArg, ...extraArgs] = call.arguments;
   return {
-    base: chain.root.text,
     modifiers: chain.modifiers,
     isDescribeFamily: chain.root.text === 'describe' || chain.modifiers.includes('describe'),
     isConditional,
