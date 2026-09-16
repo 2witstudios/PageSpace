@@ -23,7 +23,6 @@ const OK: ResolveDecision = { ok: true };
 
 export const decideResolve: DecideResolve = ({ grant, ref, stored, now, rotationGraceMs, hash }) => {
   if (stored === null) return NOT_FOUND;
-  if (stored.revokedAt !== null) return REVOKED;
 
   // `PlaneBindings` and its digest carry no `accountId` (the digest covers owner/origins/policy,
   // not which account this is), so two accounts in the same tenant with identical bindings/kind/
@@ -31,7 +30,10 @@ export const decideResolve: DecideResolve = ({ grant, ref, stored, now, rotation
   // `accountId` — already a required field, signed by the authority — must name the SAME account
   // as `ref` (Codex review PR #2646 P1). Reported as `not_found`, consistent with the other
   // identity-mismatch case (F5: a tenant-scoped identity resolving a ref in a different tenant).
-  if (grant.accountId !== ref.accountId) return NOT_FOUND;
+  // Tenant and kind too (ADR 0005 §2.2: the grant's identity must equal the ref's), and all three
+  // BEFORE the revoked check, so a grant for account A cannot learn whether account B is revoked.
+  if (grant.accountId !== ref.accountId || grant.tenantId !== ref.tenantId || grant.accountKind !== ref.kind) return NOT_FOUND;
+  if (stored.revokedAt !== null) return REVOKED;
 
   const caller = decideResolveCaller({ aud: grant.aud, kind: ref.kind, sessionHttp: grant.sessionHttp });
   if (!caller.ok) return KIND_NOT_RESOLVABLE;

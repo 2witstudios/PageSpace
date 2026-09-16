@@ -36,8 +36,9 @@ export type PlaneMetadataRepository = {
     readonly previousVersion: number | null;
     readonly bindings: PlaneBindings;
     readonly rotatedAt: number | null;
-  }) => Promise<void>;
-  readonly markRevoked: (input: { readonly ref: SecretRef; readonly revokedAt: number; readonly reason: RevokeReason }) => Promise<void>;
+  }) => Promise<boolean>;
+  /** `false` when no row was marked: the ref is gone, or a revocation is already recorded. */
+  readonly markRevoked: (input: { readonly ref: SecretRef; readonly revokedAt: number; readonly reason: RevokeReason }) => Promise<boolean>;
   readonly remove: (ref: SecretRef) => Promise<void>;
   /** CAS on the stored `bindings.policyVersion`; `false` when another writer moved it first. */
   readonly updateBindings: (input: { readonly ref: SecretRef; readonly expectedPolicyVersion: PolicyVersion; readonly bindings: PlaneBindings }) => Promise<boolean>;
@@ -74,14 +75,19 @@ export function createPlaneMetadataRepository({ pool }: { readonly pool: PlaneMe
     // `revoked_at` is written only on INSERT (as NULL) and never by the upsert: revocation is
     // permanent (ADR 0005 §2.2), and `revoke` does not share the writers' advisory lock, so a
     // write that checked "not revoked" before a concurrent revoke must not clear it on commit.
+    // The update also requires `revoked_at IS NULL`: a write that passed its revoked check before a
+    // lockless revoke landed must not re-open grace fields on the now-revoked row (ADR 0005 F3). A
+    // commit that matches no row returns `false`, and the adapter reports it as write_unverified.
     async commit({ ref, version, previousVersion, bindings, rotatedAt }) {
-      await pool.query(
+      const result = await pool.query(
         `INSERT INTO agent_account_secret_versions (tenant_id, account_id, kind, current_version, previous_version, bindings, rotated_at, revoked_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, NULL)
          ON CONFLICT (tenant_id, account_id, kind)
-         DO UPDATE SET current_version = $4, previous_version = $5, bindings = $6, rotated_at = $7`,
+         DO UPDATE SET current_version = $4, previous_version = $5, bindings = $6, rotated_at = $7
+         WHERE agent_account_secret_versions.revoked_at IS NULL`,
         [ref.tenantId, ref.accountId, ref.kind, version, previousVersion, JSON.stringify(bindings), rotatedAt === null ? null : new Date(rotatedAt)],
       );
+      return result.rowCount === 1;
     },
 
     // Only the FIRST revocation is written: its time is what REVOKE_RETENTION_MS counts from and its
@@ -89,10 +95,11 @@ export function createPlaneMetadataRepository({ pool }: { readonly pool: PlaneMe
     // from a later admin revoke). A repeat revoke matches no row and changes nothing. It also clears
     // previous_version and rotated_at: no rotation grace survives a revocation (G1a review M7).
     async markRevoked({ ref, revokedAt, reason }) {
-      await pool.query(
+      const result = await pool.query(
         'UPDATE agent_account_secret_versions SET revoked_at = $4, revoke_reason = $5, previous_version = NULL, rotated_at = NULL WHERE tenant_id = $1 AND account_id = $2 AND kind = $3 AND revoked_at IS NULL',
         [ref.tenantId, ref.accountId, ref.kind, new Date(revokedAt), reason],
       );
+      return result.rowCount === 1;
     },
 
     async updateBindings({ ref, expectedPolicyVersion, bindings }) {

@@ -582,7 +582,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
         ...m,
         commit: async (input) => {
           await plainAdapter.revoke({ ref, reason: 'owner_revoked', identity });
-          await m.commit(input);
+          return m.commit(input);
         },
       }),
     });
@@ -678,7 +678,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
         commit: async (input) => {
           pendingDelete = plainAdapter.delete({ ref, identity, upstream: 'not_attempted' });
           await new Promise((resolve) => setTimeout(resolve, 400));
-          await m.commit(input);
+          return m.commit(input);
         },
       }),
     });
@@ -983,7 +983,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
         ...m,
         commit: async (input) => {
           await plainAdapter.revoke({ ref, reason: 'owner_revoked', identity });
-          await m.commit(input);
+          return m.commit(input);
         },
       }),
     });
@@ -1096,7 +1096,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
         ...m,
         markRevoked: async (input) => {
           await plainAdapter.delete({ ref, identity, upstream: 'not_attempted' });
-          await m.markRevoked(input);
+          return m.markRevoked(input);
         },
       }),
     });

@@ -29,6 +29,8 @@ function grantOverBindings(bindings: PlaneBindings, overrides: Partial<VerifiedG
   return {
     aud: 'http-executor',
     accountId: REF.accountId,
+    tenantId: REF.tenantId,
+    accountKind: REF.kind,
     credentialVersion: 4 as CredentialVersion,
     bindingDigest: digestBindings({ bindings, hash }),
     sessionHttp: false,

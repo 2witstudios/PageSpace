@@ -28,6 +28,8 @@ function grant(overrides: Partial<VerifiedGrant> = {}): VerifiedGrant {
   return {
     aud: 'http-executor',
     accountId: REF.accountId,
+    tenantId: REF.tenantId,
+    accountKind: REF.kind,
     credentialVersion: 4 as CredentialVersion,
     bindingDigest: digestBindings({ bindings: BINDINGS, hash }),
     sessionHttp: false,

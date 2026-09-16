@@ -46,6 +46,7 @@ import type {
 import type { InfisicalClient, InfisicalCredentials } from './infisical-client';
 import type { PlaneMetadataRepository } from './plane-metadata-repository';
 import { lockKeyFor } from './plane-metadata-repository';
+import { canonicalJson } from '../canonical-json';
 import { decideCas } from './decide-cas';
 import { decideRebind } from './decide-rebind';
 import { decideWriteBindings } from './decide-write-bindings';
@@ -80,7 +81,9 @@ const REBIND_CONSENT_MAX_AGE_MS: StoreLimits['rebindConsentMaxAgeMs'] = 300_000;
  * exactly one `commit` and one genuine `version_conflict` (ADR 0005 §10.8),
  * never a spurious `lock_unavailable`.
  */
-const LOCK_RETRY_ATTEMPTS = 40;
+// ~5s: a winning write makes several Infisical calls, each with its own Universal Auth login, so a
+// ~1s budget turned an honest serialization into a spurious lock_unavailable under load.
+const LOCK_RETRY_ATTEMPTS = 200;
 const LOCK_RETRY_DELAY_MS = 25;
 
 function sleep(ms: number): Promise<void> {
@@ -124,6 +127,10 @@ async function metadataCall<T>(call: () => Promise<T>): Promise<T | typeof METAD
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
 function stripRefreshToken<K extends AccountKind>(kind: K, material: SecretMaterial['material'], aud: PresenterChannel): unknown {
   if (kind !== 'oauth2' || aud === 'refresh-worker') return material;
   const { refreshToken: _refreshToken, ...rest } = material as SecretMaterialByKind['oauth2'];
@@ -144,6 +151,20 @@ export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): St
     return lockResult;
   }
 
+  /**
+   * The injected provisioning lookups (project, Universal Auth credentials) are I/O this adapter does
+   * not own; a lookup that throws is a store outage, reported as `null` like a missing project.
+   */
+  async function lookupStore(tenantId: TenantId, identityId: string): Promise<{ readonly projectId: string; readonly credentials: InfisicalCredentials } | null> {
+    try {
+      const project = await deps.resolveProject(tenantId);
+      const credentials = await deps.resolveCredentials({ tenantId, identityId });
+      return project === null || credentials === null ? null : { projectId: project.projectId, credentials };
+    } catch {
+      return null;
+    }
+  }
+
   async function writeSecret(input: {
     readonly ref: PutInput['ref'];
     readonly material: SecretMaterial;
@@ -159,10 +180,14 @@ export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): St
     // could otherwise submit e.g. password material under an api_key ref (Codex review PR #2646
     // P2). Reject before any I/O.
     if (ref.kind !== material.kind) return { ok: false, reason: 'kind_mismatch' };
+    // The bindings written must describe the ref they are written under.
+    if (bindings.kind !== ref.kind) return { ok: false, reason: 'kind_mismatch' };
+    if (bindings.tenantId !== ref.tenantId) return { ok: false, reason: 'store_unavailable' };
 
-    const project = await deps.resolveProject(ref.tenantId);
-    const credentials = await deps.resolveCredentials({ tenantId: ref.tenantId, identityId: identity.identityId });
-    if (project === null || credentials === null) return { ok: false, reason: 'store_unavailable' };
+    const store = await lookupStore(ref.tenantId, identity.identityId);
+    if (store === null) return { ok: false, reason: 'store_unavailable' };
+    const project = { projectId: store.projectId };
+    const credentials = store.credentials;
 
     const lockResult = await withSecretLock(ref, async () => {
       const before = await metadataCall(() => deps.metadata.read(ref));
@@ -233,7 +258,7 @@ export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): St
       // the two stores diverged, which is exactly the uncertain-write outcome the contract names
       // (Codex review PR #2646 P2) — never a throw a caller cannot tell apart from "nothing landed".
       try {
-        await deps.metadata.commit({
+        const committed = await deps.metadata.commit({
           ref,
           version: decision.version,
           // Only `rotate` snapshots the grace companion, so only `rotate` opens a grace window; a `put`
@@ -242,6 +267,8 @@ export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): St
           bindings,
           rotatedAt: snapshotPreviousOnRotate && before !== null ? deps.now() : null,
         });
+        // No row updated: a revoke landed after this write's revoked check.
+        if (!committed) return { outcome: 'write_unverified' as const };
       } catch {
         return { outcome: 'write_unverified' as const };
       }
@@ -270,9 +297,10 @@ export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): St
     const decision = decideResolve({ grant, ref, stored, now: deps.now(), rotationGraceMs, hash: deps.hash });
     if (!decision.ok) return decision;
 
-    const project = await deps.resolveProject(ref.tenantId);
-    const credentials = await deps.resolveCredentials({ tenantId: ref.tenantId, identityId: identity.identityId });
-    if (project === null || credentials === null) return { ok: false, reason: 'store_unavailable' };
+    const store = await lookupStore(ref.tenantId, identity.identityId);
+    if (store === null) return { ok: false, reason: 'store_unavailable' };
+    const project = { projectId: store.projectId };
+    const credentials = store.credentials;
 
     // decideResolve already confirmed grant.credentialVersion is EITHER stored.currentVersion or
     // (within grace) stored.previousVersion; fetch the matching Infisical copy and return the
@@ -294,7 +322,7 @@ export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): St
       } catch {
         return { ok: false, reason: 'store_unavailable' };
       }
-      if (previousComment.__version !== stored!.previousVersion) return { ok: false, reason: 'store_unavailable' };
+      if (!isRecord(previousComment) || previousComment.__version !== stored!.previousVersion) return { ok: false, reason: 'store_unavailable' };
     }
 
     let parsed: { readonly kind: AccountKind; readonly material: unknown };
@@ -303,6 +331,7 @@ export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): St
     } catch {
       return { ok: false, reason: 'store_unavailable' };
     }
+    if (!isRecord(parsed)) return { ok: false, reason: 'store_unavailable' };
 
     const material = stripRefreshToken(parsed.kind, parsed.material as never, grant.aud);
     return { ok: true, kind: parsed.kind, material, version: grant.credentialVersion as CredentialVersion };
@@ -356,6 +385,10 @@ export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): St
         const updated = await metadataCall(() => deps.metadata.updateBindings({ ref: input.ref, expectedPolicyVersion: input.expectedVersion, bindings: input.bindings }));
         if (updated === METADATA_UNAVAILABLE) return { ok: false, reason: 'store_unavailable' };
         if (!updated) return { ok: false, reason: 'version_conflict' };
+
+        // Post-write verify (ADR 0005 §2.2): the plane must now hold exactly the consented bindings.
+        const after = await metadataCall(() => deps.metadata.read(input.ref));
+        if (after === METADATA_UNAVAILABLE || after === null || canonicalJson(after.bindings) !== canonicalJson(input.bindings)) return { ok: false, reason: 'write_unverified' };
         return { ok: true, policyVersion: input.bindings.policyVersion };
       });
 
@@ -371,17 +404,25 @@ export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): St
       if (stored === null) return { ok: false, reason: 'not_found' };
       // The FIRST revocation is the one REVOKE_RETENTION_MS counts from; a repeated revoke must not
       // restart that clock.
-      const revokedAt = stored.revokedAt ?? deps.now();
+      if (stored.revokedAt !== null) return { ok: true, revokedAt: stored.revokedAt };
+      const revokedAt = deps.now();
       const marked = await metadataCall(() => deps.metadata.markRevoked({ ref: input.ref, revokedAt, reason: input.reason }));
       if (marked === METADATA_UNAVAILABLE) return { ok: false, reason: 'store_unavailable' };
-      return { ok: true, revokedAt };
+      if (marked) return { ok: true, revokedAt };
+
+      // Nothing marked: a delete removed the row, or another revoke recorded first. Report what is there.
+      const after = await metadataCall(() => deps.metadata.read(input.ref));
+      if (after === METADATA_UNAVAILABLE) return { ok: false, reason: 'store_unavailable' };
+      if (after === null) return { ok: false, reason: 'not_found' };
+      return after.revokedAt === null ? { ok: false, reason: 'store_unavailable' } : { ok: true, revokedAt: after.revokedAt };
     },
 
     async delete(input: DeleteInput): Promise<DeleteResult> {
       if (input.ref.tenantId !== input.identity.tenantId) return { ok: false, reason: 'not_found' };
-      const project = await deps.resolveProject(input.ref.tenantId);
-      const credentials = await deps.resolveCredentials({ tenantId: input.ref.tenantId, identityId: input.identity.identityId });
-      if (project === null || credentials === null) return { ok: false, reason: 'store_unavailable' };
+      const store = await lookupStore(input.ref.tenantId, input.identity.identityId);
+      if (store === null) return { ok: false, reason: 'store_unavailable' };
+      const project = { projectId: store.projectId };
+      const credentials = store.credentials;
 
       // Under the writers' lock: a rotate already past its read would otherwise commit AFTER this
       // delete and re-insert the metadata row (or re-write the grace companion) — an erasure that
@@ -389,7 +430,6 @@ export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): St
       const lockResult = await withSecretLock(input.ref, async (): Promise<DeleteResult | null> => {
         const stored = await metadataCall(() => deps.metadata.read(input.ref));
         if (stored === METADATA_UNAVAILABLE) return { ok: false, reason: 'store_unavailable' };
-        if (stored === null) return { ok: false, reason: 'not_found' };
 
         // The grace companion holds the material `rotate` replaced; erasing the account must erase
         // it too. Deleted FIRST: absent (never rotated) is fine, any other failure stops before the
@@ -402,6 +442,11 @@ export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): St
         // The metadata row still exists, so a primary already gone is a delete that was interrupted
         // after this step — finish it rather than leave a permanent ghost row (Codex review PR #2646 P2).
         if (!result.ok && result.reason !== 'not_found') return { ok: false, reason: 'store_unavailable' };
+
+        // No metadata row: nothing to remove there, but Infisical is still searched — a first put whose
+        // commit failed leaves material with no row, and an erasure must not miss it. Nothing anywhere
+        // is not_found.
+        if (stored === null) return previous.ok || result.ok ? null : { ok: false, reason: 'not_found' };
 
         const removed = await metadataCall(() => deps.metadata.remove(input.ref));
         if (removed === METADATA_UNAVAILABLE) return { ok: false, reason: 'store_unavailable' };
