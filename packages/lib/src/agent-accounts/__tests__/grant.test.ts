@@ -75,7 +75,6 @@ const REQUEST_INPUT: CanonicalRequestInput = {
   url: 'https://api.github.com/repos/octo/hello/issues',
   headers: { accept: 'application/json' },
   body: new TextEncoder().encode('{"title":"hello"}'),
-  resources: { repo: 'octo/hello' },
 };
 
 function digestOf(input: CanonicalRequestInput): RequestDigest {

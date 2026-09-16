@@ -61,7 +61,6 @@ function canonical(): CanonicalRequest {
     url: 'https://api.github.com/repos/octo/hello/issues',
     headers: { accept: 'application/json' },
     body: new TextEncoder().encode(BODY),
-    resources: { repo: 'octo/hello' },
     },
   });
   if (!result.ok) throw new Error(result.reason);

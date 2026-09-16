@@ -41,21 +41,20 @@ const hash: HashBytes = (bytes) => createHash('sha256').update(bytes).digest('he
 const NOW = 1_800_000_000_000;
 const DRIVE = 'drive_1' as DriveId;
 
-function digestOf(resources: Record<string, string>): RequestDigest {
+function digestOf(repoPath: string): RequestDigest {
   const input: CanonicalRequestInput = {
     channel: 'http-executor',
     method: 'POST',
-    url: 'https://api.github.com/repos/octo/hello/issues',
+    url: `https://api.github.com${repoPath}/issues`,
     headers: {},
     body: new Uint8Array(0),
-    resources,
   };
   const result = canonicalizeRequest({ request: input, providerSlug: TEST_PROVIDER, registry: TEST_REGISTRY });
   if (!result.ok) throw new Error(result.reason);
   return digestRequest({ canonical: result.canonical, hash });
 }
 
-const DIGEST_X = digestOf({ account: 'acct_X', repo: 'octo/hello' });
+const DIGEST_X = digestOf('/repos/octo/hello');
 
 function grantFor(overrides: Partial<AgentAccountGrant> = {}): AgentAccountGrant {
   return {
@@ -179,8 +178,8 @@ describe('adversarial: cross-agent-substitution', () => {
     });
   });
 
-  it('given a grant for account X and a request naming account Y in resources, should return digest_mismatch', () => {
-    const actual = present(grantFor(), {}, digestOf({ account: 'acct_Y', repo: 'octo/hello' }));
+  it('given a grant digested for repo X and a request whose path targets repo Y, should return digest_mismatch (resources come from the path)', () => {
+    const actual = present(grantFor(), {}, digestOf('/repos/octo/other'));
     expect(actual).toEqual({ ok: false, reason: 'digest_mismatch' });
   });
 

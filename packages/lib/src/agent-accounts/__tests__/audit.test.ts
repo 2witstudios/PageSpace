@@ -60,7 +60,6 @@ function canonical(overrides: Partial<CanonicalRequestInput> = {}): CanonicalReq
     url: 'https://api.github.com/repos/octo/hello/issues?state=open',
     headers: { accept: 'application/json', 'content-type': 'application/json' },
     body: new TextEncoder().encode(BODY_TEXT),
-    resources: { repo: 'octo/hello' },
     ...overrides,
     },
   });
@@ -110,37 +109,45 @@ describe('buildAuditRecord', () => {
       const bodyText = `{"note":"${randomBytes(8).toString('hex')}","token":"${secret}"}`;
       const inQuery = randomBytes(12).toString('hex');
       const inHeader = randomBytes(12).toString('hex');
+      // An undeclared slot IS a path segment now (M8): `{token}` is not a declared resource key.
       const inPath = randomBytes(12).toString('hex');
-      const inResource = randomBytes(12).toString('hex');
       const record = build(
         { kind: 'executed', upstreamStatus: 201 },
         makeGrant(),
         canonical({
           body: new TextEncoder().encode(bodyText),
-          url: `https://api.github.com/v1/tokens/${inPath}?token=${inQuery}`,
+          url: `https://api.github.com/repos/octo/hello/tokens/${inPath}?token=${inQuery}`,
           headers: { accept: `application/vnd.${inHeader}+json` },
-          resources: { reset_code: inResource },
         }),
       );
       const serialized = JSON.stringify(record);
-      for (const value of [secret, bodyText, inQuery, inHeader, inPath, inResource]) {
+      for (const value of [secret, bodyText, inQuery, inHeader, inPath]) {
         if (serialized.includes(value)) leaks.push(value);
       }
     }
     expect(leaks).toEqual([]);
   });
 
-  it('given a path containing a token-shaped segment and an undeclared resource, should contain no substring of either [0004 §8.25]', () => {
+  it('given a path containing a token-shaped segment bound to an undeclared slot, should contain no substring of it and keep only the declared resource [0004 §8.25]', () => {
     const token = 'ghp_9f3a2b7c4d1e5f6a7b8c';
-    const undeclared = 'sk_live_undeclared_5c1d9a';
-    const record = build({ kind: 'allowed' }, makeGrant(), canonical({ url: `https://api.github.com/v1/tokens/${token}`, resources: { repo: 'octo/hello', reset_code: undeclared } }));
+    const c = canonical({ url: `https://api.github.com/repos/octo/hello/tokens/${token}` });
+    const record = build({ kind: 'allowed' }, makeGrant(), c);
     const serialized = JSON.stringify(record);
     expect({
+      extracted: c.resources,
       token: serialized.includes(token),
-      undeclared: serialized.includes(undeclared),
-      undeclaredKey: serialized.includes('reset_code'),
+      undeclaredKey: serialized.includes('"token"'),
       declaredKept: record.normalizedAction.resourceIds,
-    }).toEqual({ token: false, undeclared: false, undeclaredKey: false, declaredKept: [['repo', 'octo/hello']] });
+    }).toEqual({
+      extracted: [
+        ['owner', 'octo'],
+        ['repo', 'hello'],
+        ['token', token],
+      ],
+      token: false,
+      undeclaredKey: false,
+      declaredKept: [['repo', 'hello']],
+    });
   });
 
   it('given two requests to the same path, should produce the same pathDigest; given different paths, different digests (correlation survives)', () => {

@@ -28,7 +28,6 @@ function canonical(overrides: Partial<CanonicalRequestInput> = {}, providerSlug:
     url: 'https://api.github.com/repos/octo/hello/issues',
     headers: {},
     body: new TextEncoder().encode('{"title":"x"}'),
-    resources: { repo: 'octo/hello' },
     ...overrides,
     },
   });
@@ -147,6 +146,27 @@ describe('adversarial: approval-request-mismatch', () => {
       requirement: decideApproval({ operation: result.canonical.operation, policy: readOnlyAlways, requestDigest: digestRequest({ canonical: result.canonical, hash }), origin: ORIGIN, resources: [], now: NOW, usage }),
     };
     expect(actual).toEqual({ operation: { class: 'unknown', name: 'generic_request' }, requirement: { kind: 'concrete', stepUp: false } });
+  });
+
+  it('given an always policy scoped to repo A and a tool call that claims repo A while its URL targets /repos/acme/B/..., should return refuse(out_of_scope) — resources are extracted from the path, so the claim never reaches decideApproval [0004 §8.35; G1a review M8]', () => {
+    const claim = { channel: 'http-executor', method: 'PUT', url: 'https://api.github.com/repos/acme/B/contents/x', headers: {}, body: new TextEncoder().encode('{}'), resources: { owner: 'acme', repo: 'A' } } as CanonicalRequestInput;
+    const result = canonicalizeRequest({ request: claim, providerSlug: TEST_PROVIDER, registry: TEST_REGISTRY });
+    if (!result.ok) throw new Error(result.reason);
+    const put: OperationRef = { class: 'write', name: 'github.contents.put' };
+    const scopedToA: AccountApprovalPolicy = { ...alwaysPolicy([put]), scope: { origins: [ORIGIN], operations: [put], resources: [['owner', 'acme'], ['repo', 'A']] } };
+    const usage = { usesThisHour: 0, bytesOutThisHour: 0, concurrent: 0 };
+    const actual = {
+      resources: result.canonical.resources,
+      requirement: decideApproval({ operation: result.canonical.operation, policy: scopedToA, requestDigest: digestRequest({ canonical: result.canonical, hash }), origin: ORIGIN, resources: result.canonical.resources, now: NOW, usage }),
+    };
+    expect(actual).toEqual({
+      resources: [
+        ['owner', 'acme'],
+        ['path', 'x'],
+        ['repo', 'B'],
+      ],
+      requirement: { kind: 'refuse', reason: 'out_of_scope' },
+    });
   });
 
   it('given two requests identical except ?force=true, should render subjects that differ in query — the human sees every digest-bound part that changes what the request does [G1a review H5]', () => {

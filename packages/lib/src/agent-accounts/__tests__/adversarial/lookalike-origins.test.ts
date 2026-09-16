@@ -9,7 +9,7 @@ import type { CanonicalRequestInput } from '../../canonical-request';
 
 function originOf(url: string): string {
   const result = canonicalizeRequest({
-    request: { channel: 'http-executor', method: 'GET', url, headers: {}, body: new Uint8Array(0), resources: {} },
+    request: { channel: 'http-executor', method: 'GET', url, headers: {}, body: new Uint8Array(0) },
     providerSlug: null,
     registry: [],
   });
@@ -71,7 +71,6 @@ describe('adversarial: lookalike-origins', () => {
       url: 'https://api.github.com/',
       headers: {},
       body: new Uint8Array(0),
-      resources: {},
     };
     // @ts-expect-error — a raw string is not a CanonicalOrigin
     const raw: import('../../canonical-request').CanonicalOrigin = input.url;

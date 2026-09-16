@@ -3,6 +3,7 @@
  * amendment M1). Production registries live with the provider catalogues
  * (G3); tests use this one so the operation a digest carries comes from a
  * registry match, exactly as it will in production — never from the request.
+ * The `{slot}` names are the resource keys; their values come from the path.
  */
 import type { OperationRegistry } from '../canonical-request';
 
@@ -16,7 +17,6 @@ export const TEST_REGISTRY: OperationRegistry = [
     pathTemplate: '/repos/{owner}/{repo}/issues',
     operation: { class: 'write', name: 'github.issues.create' },
     declaredHeaders: ['x-github-api-version'],
-    resourceKeys: ['repo', 'org'],
   },
   {
     providerSlug: TEST_PROVIDER,
@@ -25,7 +25,6 @@ export const TEST_REGISTRY: OperationRegistry = [
     pathTemplate: '/repos/{owner}/{repo}/issues',
     operation: { class: 'read', name: 'github.issues.list' },
     declaredHeaders: [],
-    resourceKeys: ['repo', 'org'],
   },
   {
     providerSlug: TEST_PROVIDER,
@@ -34,6 +33,21 @@ export const TEST_REGISTRY: OperationRegistry = [
     pathTemplate: '/repos/{owner}/{repo}/pulls/{number}/merge',
     operation: { class: 'irreversible', name: 'merge_pr' },
     declaredHeaders: [],
-    resourceKeys: ['repo'],
+  },
+  {
+    providerSlug: TEST_PROVIDER,
+    channel: 'http-executor',
+    method: 'PUT',
+    pathTemplate: '/repos/{owner}/{repo}/contents/{path}',
+    operation: { class: 'write', name: 'github.contents.put' },
+    declaredHeaders: [],
+  },
+  {
+    providerSlug: TEST_PROVIDER,
+    channel: 'http-executor',
+    method: 'POST',
+    pathTemplate: '/repos/{owner}/{repo}/tokens/{token}',
+    operation: { class: 'privilege', name: 'github.tokens.use' },
+    declaredHeaders: [],
   },
 ];
