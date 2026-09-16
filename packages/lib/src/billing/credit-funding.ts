@@ -6,11 +6,17 @@
  * Two funding paths:
  *   - monthly_refill (invoice.paid): a subscription renewal ADDS the monthly grant
  *     to the current monthly balance (rollover) and rolls the billing window forward.
- *     The grant is sized from what the invoice PAID: invoice.amount_paid × the tier's
- *     included-credit ratio (Spec MON-2, via the pure invoice-grant module). The
- *     ratio itself is what MONEY_MODEL_V2 gates (money-model.ts); off, 100% of the
- *     paid amount is granted, which reproduces today's amounts for a full-price
- *     invoice. Gifts and trials are funded at list price × ratio (D-OW-16a); any
+ *     Only a REAL subscription invoice (billing_reason subscription_cycle or
+ *     subscription_create) can grant at all — a manual, parentless, or otherwise
+ *     account-plan-classified invoice grants nothing regardless of amount_paid
+ *     (invoice-grant.ts). The grant is sized from what the invoice PAID:
+ *     invoice.amount_paid × the tier's included-credit ratio (Spec MON-2, via the
+ *     pure invoice-grant module). The ratio itself is what MONEY_MODEL_V2 gates
+ *     (money-model.ts); off, 100% of the paid amount is granted, which reproduces
+ *     today's amounts for a full-price invoice. Gifts and trials are funded at
+ *     list price × ratio (D-OW-16a) — gifted status is read from the invoice's
+ *     own subscription-metadata snapshot first, so it cannot race the
+ *     subscription webhook, with the live subscriptions row as a fallback. Any
  *     other $0 invoice grants nothing. The ledger row records paidCents so the
  *     derivation is auditable per row. A PAID invoice whose tier has no ratio is a
  *     MISSED grant: a 'missed_grant' ledger row (amountCents 0, stripeRef = the
@@ -59,6 +65,26 @@ interface FundingEventObject {
   subtotal?: number | null;
   /** Stripe invoice.billing_reason. */
   billing_reason?: string | null;
+  /**
+   * `invoice.parent.subscription_details.metadata` — an immutable copy of the
+   * subscription's metadata Stripe snapshots onto the invoice at finalization
+   * (populated for invoices created on or after 2023-06-29). Read here so gifted
+   * detection needs no DB round trip and cannot race the subscription webhook —
+   * see {@link isGiftInvoice}.
+   */
+  parent?: {
+    subscription_details?: {
+      metadata?: Record<string, string> | null;
+      /**
+       * The subscription this invoice was generated FOR — a string id, or an
+       * expanded object with one, or absent/null for a manual/one-off invoice.
+       * Presence is the SECURITY gate {@link invoiceHasSubscriptionParent} reads
+       * (Codex P1 ruling: discriminate by subscription-parent absence, not by
+       * billing_reason).
+       */
+      subscription?: string | { id?: string | null } | null;
+    } | null;
+  } | null;
   mode?: string | null;
   metadata?: Record<string, string> | null;
   period_start?: number | null;
@@ -173,6 +199,47 @@ async function isGiftedSubscriber(userId: string): Promise<boolean> {
   return rows.some((r) => r.gifted === true && (r.status === 'active' || r.status === 'trialing'));
 }
 
+/** Metadata the admin gift-subscription route stamps on the Stripe subscription
+ * it creates (`apps/admin/.../gift-subscription/route.ts`). */
+const GIFT_SUBSCRIPTION_METADATA_TYPE = 'gift_subscription';
+
+/**
+ * Whether THIS invoice is for a gifted subscription, read straight off the
+ * invoice's own subscription-metadata snapshot — no DB lookup, no ordering
+ * dependency on the subscription webhook.
+ *
+ * `isGiftedSubscriber` (the DB row) can be wrong for the gift's OWN FIRST invoice:
+ * invoice.paid can arrive before customer.subscription.created writes the local
+ * `subscriptions` row, so that lookup finds nothing and reports not-gifted — the
+ * recipient of a gift would get zero credits until some later invoice (Codex P1,
+ * "Derive gifted status from the invoice"). The metadata snapshot on THIS event
+ * has no such race: Stripe writes it onto the invoice at finalization, in the
+ * same payload the webhook is already processing, so it can never lag behind.
+ */
+function isGiftInvoice(obj: FundingEventObject): boolean {
+  return obj.parent?.subscription_details?.metadata?.type === GIFT_SUBSCRIPTION_METADATA_TYPE;
+}
+
+/**
+ * Whether this invoice was generated FOR an actual subscription (Codex P1 ruling:
+ * discriminate a manual/parentless invoice by the ABSENCE of a subscription
+ * parent, not by billing_reason — an enumerated billing_reason allowlist first
+ * excluded, then had to special-case back in, a legitimate PAID subscription_update
+ * invoice from a mid-cycle upgrade; subscription-parent presence is the structural
+ * fact that actually distinguishes "a real subscription invoice" and needs no
+ * per-billing_reason maintenance). Mirrors dedicated-routing.ts's
+ * `invoiceSubscriptionId` (kept local: that file lives in apps/web and uses the
+ * real Stripe.Invoice type; packages/lib stays Stripe-SDK-free).
+ */
+function invoiceHasSubscriptionParent(obj: FundingEventObject): boolean {
+  const subscription = obj.parent?.subscription_details?.subscription;
+  if (typeof subscription === 'string') return subscription.length > 0;
+  if (subscription && typeof subscription === 'object' && typeof subscription.id === 'string') {
+    return subscription.id.length > 0;
+  }
+  return false;
+}
+
 /**
  * A PAID invoice whose tier resolved to one with no ratio (stored tier still 'free'
  * and no usable price on the line): fail closed — grant nothing — but leave a
@@ -243,11 +310,17 @@ async function applyMonthlyRefill(event: FundingEvent, tierOverride?: Subscripti
   // MON-2 / D-OW-16: the grant is sized from what THIS invoice paid, never from a
   // tier table — a promo, a proration, or a price change flows through with no table
   // edit. A gift or a trial is us fronting the plan and derives from the list price.
+  // Gifted status is read from the invoice's OWN metadata snapshot first — no DB
+  // round trip, no race against the subscription webhook (Codex P1) — with the live
+  // subscriptions row as a secondary OR (still correct when it resolves, and covers
+  // an admin flipping the flag on an existing, already-processed subscription).
+  const gifted = isGiftInvoice(obj) || (await isGiftedSubscriber(user.id));
   const grant = grantForInvoice({
     amountPaidCents: obj.amount_paid,
     subtotalCents: obj.subtotal,
     billingReason: obj.billing_reason,
-    gifted: await isGiftedSubscriber(user.id),
+    hasSubscriptionParent: invoiceHasSubscriptionParent(obj),
+    gifted,
     tier,
   });
   const allowanceCents = grant.allowanceCents;
