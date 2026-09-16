@@ -588,88 +588,6 @@ describe('credits flow — grants sized from the invoice paid (MON-2, MONEY_MODE
   });
 });
 
-describe('credits flow — missed-grant reconcile (MON-2, WAL-5)', () => {
-  it('MON-2 missed grant: re-resolves the tier from the LIVE subscription and grants amount_paid × ratio once the tier repaired', async () => {
-    seedUser('u1', 'cus_1', 'free'); // at funding time: stale stored tier, invoice grants nothing
-    await applyStripeFunding(invoicePaid('in_missed', 'cus_1', PERIOD_START, PERIOD_END, 1500));
-    expect(ledgerOf('u1').filter((r) => r.entryType === 'missed_grant')).toHaveLength(1);
-    expect(balanceOf('u1')).toBeUndefined();
-
-    // The tier gets repaired (e.g. the subscription webhook catches up).
-    const user = store.users.find((r) => r.id === 'u1')!;
-    user.subscriptionTier = 'pro';
-
-    const result = await reconcileMissedGrants();
-
-    expect(result).toEqual({ reconciled: 1, stillMissing: 0 });
-    // The row is now a real monthly_grant — no missed_grant rows remain.
-    expect(ledgerOf('u1').filter((r) => r.entryType === 'missed_grant')).toHaveLength(0);
-    const grant = ledgerOf('u1').find((r) => r.entryType === 'monthly_grant' && r.stripeRef === 'in_missed')!;
-    expect(grant.amountCents).toBe(allowanceCentsForPaidCents(1500, 'pro'));
-    expect(grant.paidCents).toBe(1500); // unchanged — what was actually paid
-    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(allowanceCentsForPaidCents(1500, 'pro'));
-  });
-
-  it('MON-2 missed grant: a row whose tier is STILL free is left untouched (not dropped, not double-counted)', async () => {
-    seedUser('u1', 'cus_1', 'free');
-    await applyStripeFunding(invoicePaid('in_missed', 'cus_1', PERIOD_START, PERIOD_END, 1500));
-
-    const result = await reconcileMissedGrants();
-
-    expect(result).toEqual({ reconciled: 0, stillMissing: 1 });
-    expect(ledgerOf('u1').filter((r) => r.entryType === 'missed_grant')).toHaveLength(1);
-    expect(balanceOf('u1')).toBeUndefined();
-  });
-
-  it('MON-2 missed grant: rolls over onto whatever balance already exists (netted with debt, same arithmetic as a normal renewal)', async () => {
-    seedUser('u1', 'cus_1', 'pro');
-    // A normal grant lands first, leaving a carried balance and some debt.
-    await applyStripeFunding(invoicePaid('in_normal', 'cus_1', PERIOD_START, PERIOD_END, 1500));
-    store.creditBalances.find((r) => r.userId === 'u1')!.debtCents = 100;
-
-    // Then a SEPARATE missed invoice (different tier resolution failure) lands.
-    seedUser('u2', 'cus_2', 'free');
-    await applyStripeFunding(invoicePaid('in_missed2', 'cus_2', PERIOD_START, PERIOD_END, 1500));
-    const u2 = store.users.find((r) => r.id === 'u2')!;
-    u2.subscriptionTier = 'pro';
-
-    const before = balanceOf('u1')!.monthlyRemainingCents;
-    const result = await reconcileMissedGrants();
-
-    expect(result.reconciled).toBe(1);
-    // u1's normal grant is untouched — reconcile only acts on missed_grant rows.
-    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(before);
-    expect(balanceOf('u2')!.monthlyRemainingCents).toBe(allowanceCentsForPaidCents(1500, 'pro'));
-  });
-
-  it('MON-2 missed grant: running the sweep twice reconciles once — the row conversion is itself the dedupe', async () => {
-    seedUser('u1', 'cus_1', 'free');
-    await applyStripeFunding(invoicePaid('in_missed', 'cus_1', PERIOD_START, PERIOD_END, 1500));
-    const user = store.users.find((r) => r.id === 'u1')!;
-    user.subscriptionTier = 'pro';
-
-    await reconcileMissedGrants();
-    const balanceAfterFirst = balanceOf('u1')!.monthlyRemainingCents;
-    const result = await reconcileMissedGrants(); // nothing left to sweep
-
-    expect(result).toEqual({ reconciled: 0, stillMissing: 0 });
-    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(balanceAfterFirst);
-    expect(ledgerOf('u1').filter((r) => r.entryType === 'monthly_grant')).toHaveLength(1);
-  });
-
-  it('WAL-5 billing disabled (tenant/onprem): the sweep is a no-op and leaves missed_grant rows untouched', async () => {
-    seedUser('u1', 'cus_1', 'free');
-    await applyStripeFunding(invoicePaid('in_missed', 'cus_1', PERIOD_START, PERIOD_END, 1500));
-    H.isBillingEnabled.mockReturnValue(false);
-
-    const result = await reconcileMissedGrants();
-
-    expect(result).toEqual({ reconciled: 0, stillMissing: 0 });
-    expect(ledgerOf('u1').filter((r) => r.entryType === 'missed_grant')).toHaveLength(1);
-    H.isBillingEnabled.mockReturnValue(true);
-  });
-});
-
 // The live price → tier map the web app injects (getTierFromPrice); unmapped → 'free'.
 const PRICE_TIER = (priceId: string) =>
   priceId === 'price_pro' ? 'pro' as const : priceId === 'price_business' ? 'business' as const : 'free' as const;
@@ -686,6 +604,85 @@ function seedMissedGrantRow(id: string, userId: string, paidCents = 1500) {
     aiUsageLogId: null, realCostCents: null, markupBps: 15000, reconcileGenerationKey: null, createdAt: new Date(),
   });
 }
+
+describe('credits flow — missed-grant reconcile (MON-2, WAL-5)', () => {
+  it('MON-2 missed grant: re-resolves the tier from the LIVE subscription and grants amount_paid × ratio once the tier repaired', async () => {
+    seedUser('u1', 'cus_1', 'free'); // at funding time: stale stored tier, invoice grants nothing
+    await applyStripeFunding(invoicePaid('in_missed', 'cus_1', PERIOD_START, PERIOD_END, 1500));
+    expect(ledgerOf('u1').filter((r) => r.entryType === 'missed_grant')).toHaveLength(1);
+    expect(balanceOf('u1')).toBeUndefined();
+
+    // The tier gets repaired: the subscription row now says Pro.
+    seedPricedSubscription('u1', 'price_pro');
+
+    const result = await reconcileMissedGrants({ priceTier: PRICE_TIER });
+
+    expect(result).toEqual({ reconciled: 1, stillMissing: 0, failed: 0 });
+    // The row is now a real monthly_grant — no missed_grant rows remain.
+    expect(ledgerOf('u1').filter((r) => r.entryType === 'missed_grant')).toHaveLength(0);
+    const grant = ledgerOf('u1').find((r) => r.entryType === 'monthly_grant' && r.stripeRef === 'in_missed')!;
+    expect(grant.amountCents).toBe(allowanceCentsForPaidCents(1500, 'pro'));
+    expect(grant.paidCents).toBe(1500); // unchanged — what was actually paid
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(allowanceCentsForPaidCents(1500, 'pro'));
+  });
+
+  it('MON-2 missed grant: a row whose tier is STILL free is left untouched (not dropped, not double-counted)', async () => {
+    seedUser('u1', 'cus_1', 'free');
+    await applyStripeFunding(invoicePaid('in_missed', 'cus_1', PERIOD_START, PERIOD_END, 1500));
+
+    const result = await reconcileMissedGrants({ priceTier: PRICE_TIER });
+
+    expect(result).toEqual({ reconciled: 0, stillMissing: 1, failed: 0 });
+    expect(ledgerOf('u1').filter((r) => r.entryType === 'missed_grant')).toHaveLength(1);
+    expect(balanceOf('u1')).toBeUndefined();
+  });
+
+  it('MON-2 missed grant: rolls over onto whatever balance already exists (netted with debt, same arithmetic as a normal renewal)', async () => {
+    seedUser('u1', 'cus_1', 'pro');
+    // A normal grant lands first, leaving a carried balance and some debt.
+    await applyStripeFunding(invoicePaid('in_normal', 'cus_1', PERIOD_START, PERIOD_END, 1500));
+    store.creditBalances.find((r) => r.userId === 'u1')!.debtCents = 100;
+
+    // Then a SEPARATE missed invoice (different tier resolution failure) lands.
+    seedUser('u2', 'cus_2', 'free');
+    await applyStripeFunding(invoicePaid('in_missed2', 'cus_2', PERIOD_START, PERIOD_END, 1500));
+    seedPricedSubscription('u2', 'price_pro');
+
+    const before = balanceOf('u1')!.monthlyRemainingCents;
+    const result = await reconcileMissedGrants({ priceTier: PRICE_TIER });
+
+    expect(result.reconciled).toBe(1);
+    // u1's normal grant is untouched — reconcile only acts on missed_grant rows.
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(before);
+    expect(balanceOf('u2')!.monthlyRemainingCents).toBe(allowanceCentsForPaidCents(1500, 'pro'));
+  });
+
+  it('MON-2 missed grant: running the sweep twice reconciles once — the row conversion is itself the dedupe', async () => {
+    seedUser('u1', 'cus_1', 'free');
+    await applyStripeFunding(invoicePaid('in_missed', 'cus_1', PERIOD_START, PERIOD_END, 1500));
+    seedPricedSubscription('u1', 'price_pro');
+
+    await reconcileMissedGrants({ priceTier: PRICE_TIER });
+    const balanceAfterFirst = balanceOf('u1')!.monthlyRemainingCents;
+    const result = await reconcileMissedGrants({ priceTier: PRICE_TIER }); // nothing left to sweep
+
+    expect(result).toEqual({ reconciled: 0, stillMissing: 0, failed: 0 });
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(balanceAfterFirst);
+    expect(ledgerOf('u1').filter((r) => r.entryType === 'monthly_grant')).toHaveLength(1);
+  });
+
+  it('WAL-5 billing disabled (tenant/onprem): the sweep is a no-op and leaves missed_grant rows untouched', async () => {
+    seedUser('u1', 'cus_1', 'free');
+    await applyStripeFunding(invoicePaid('in_missed', 'cus_1', PERIOD_START, PERIOD_END, 1500));
+    H.isBillingEnabled.mockReturnValue(false);
+
+    const result = await reconcileMissedGrants({ priceTier: PRICE_TIER });
+
+    expect(result).toEqual({ reconciled: 0, stillMissing: 0, failed: 0 });
+    expect(ledgerOf('u1').filter((r) => r.entryType === 'missed_grant')).toHaveLength(1);
+    H.isBillingEnabled.mockReturnValue(true);
+  });
+});
 
 describe('credits flow — missed-grant reconcile review fixes (#2645 threads)', () => {
   it('MON-2 missed grant: the tier is derived from the subscriptions rows, NOT the stale users.subscriptionTier cache', async () => {

@@ -20,7 +20,7 @@
 
 import { describe, it, expect, beforeAll } from 'vitest';
 import { db } from '@pagespace/db/db';
-import { and, eq, sql } from '@pagespace/db/operators';
+import { eq, sql } from '@pagespace/db/operators';
 import { creditBalances, creditLedger } from '@pagespace/db/schema/credits';
 import { subscriptions } from '@pagespace/db/schema/subscriptions';
 import { users } from '@pagespace/db/schema/auth';
@@ -109,7 +109,7 @@ describe('reconcileMissedGrants concurrency (Postgres)', () => {
       const [row] = await db.select().from(creditLedger).where(eq(creditLedger.id, ledgerId));
       expect(row).toMatchObject({ entryType: 'monthly_grant', amountCents: allowance });
     } finally {
-      await db.delete(creditLedger).where(and(eq(creditLedger.userId, user.id)));
+      await db.delete(creditLedger).where(eq(creditLedger.userId, user.id));
       await db.delete(creditBalances).where(eq(creditBalances.userId, user.id));
       await db.delete(subscriptions).where(eq(subscriptions.userId, user.id));
       await db.delete(users).where(eq(users.id, user.id));

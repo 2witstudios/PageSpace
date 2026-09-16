@@ -5,8 +5,9 @@
  * A paid invoice whose tier resolved to one with no ratio (a stale stored tier, or
  * an invoice-derived tier the webhook could not resolve) writes a 'missed_grant'
  * ledger row instead of guessing: amountCents 0, paidCents = what was actually
- * paid, stripeRef = the invoice. This module re-resolves the tier from the LIVE
- * subscription at reconcile time, grants amount_paid × ratio exactly once if a
+ * paid, stripeRef = the invoice. This module re-resolves the tier from the user's
+ * subscriptions rows at reconcile time (never the users.subscriptionTier cache —
+ * a stale cache is the very failure this repairs), grants amount_paid × ratio exactly once if a
  * ratio now exists, and marks the row consumed by converting it in place into the
  * 'monthly_grant' it should always have been. A row whose tier still has no ratio
  * is left untouched for the next sweep — never dropped, never double-granted
@@ -16,12 +17,17 @@
 
 import { db } from '@pagespace/db/db';
 import { creditBalances, creditLedger } from '@pagespace/db/schema/credits';
-import { users } from '@pagespace/db/schema/auth';
-import { eq } from '@pagespace/db/operators';
+import { subscriptions } from '@pagespace/db/schema/subscriptions';
+import { and, eq, gt, inArray } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
 import { computeMonthlyRefill } from './credit-core';
 import { allowanceCentsForPaidCents } from './money-model';
 import { toSubscriptionTier, type SubscriptionTier } from './subscription-tiers';
+import {
+  deriveTierFromSubscriptions,
+  type PriceTierResolver,
+  type SubscriptionRowLike,
+} from './subscription-tier-sync';
 import { emitCreditsUpdated } from './credit-emit';
 import { loggers } from '../logging/logger-config';
 
@@ -32,6 +38,16 @@ export interface MissedGrantReconcileResult {
   reconciled: number;
   /** Rows whose re-resolved tier still has no ratio — left for a later sweep. */
   stillMissing: number;
+  /**
+   * Rows whose lookup or grant transaction threw — left as 'missed_grant' for a
+   * later sweep, logged at error, and surfaced so the cron can fail loudly.
+   */
+  failed: number;
+}
+
+interface MissedGrantReconcileOptions {
+  /** Maps a Stripe price id to its tier (the web app injects getTierFromPrice). */
+  priceTier: PriceTierResolver;
 }
 
 // ---------------------------------------------------------------------------
@@ -75,103 +91,140 @@ export function planMissedGrantReconcile(row: MissedGrantRow, resolvedTier: stri
 // Imperative shell
 // ---------------------------------------------------------------------------
 
+type ClaimOutcome = 'granted' | 'already_claimed';
+
 /**
- * Sweep 'missed_grant' ledger rows, re-resolve each user's live tier, and convert
- * any row whose tier now has a ratio into the monthly_grant it should have been —
- * added to the current balance (rollover), same arithmetic as a normal renewal.
- * The row itself becomes the grant record: entryType flips to 'monthly_grant' and
- * amountCents becomes the derived allowance, so a re-run of this sweep never sees
- * it again (WAL-5: reconciliation is keyed on the ledger, not a side table).
+ * Convert one row and roll its allowance into the balance, atomically. The claim
+ * UPDATE is guarded on entryType = 'missed_grant', not just the (immutable) id: an
+ * overlapping run that SELECTed the same row blocks on this row lock, then
+ * re-evaluates the predicate against the committed version and matches nothing —
+ * so the balance is only ever touched by the run whose claim affected a row.
  */
-export async function reconcileMissedGrants(): Promise<MissedGrantReconcileResult> {
-  if (!isBillingEnabled()) return { reconciled: 0, stillMissing: 0 };
+async function grantMissedRow(row: { id: string; userId: string }, allowanceCents: number): Promise<ClaimOutcome> {
+  return db.transaction(async (tx) => {
+    const claimed = await tx
+      .update(creditLedger)
+      .set({ entryType: 'monthly_grant', amountCents: allowanceCents })
+      .where(and(eq(creditLedger.id, row.id), eq(creditLedger.entryType, 'missed_grant')))
+      .returning({ id: creditLedger.id });
+    if (claimed.length === 0) return 'already_claimed';
 
-  const rows = await db
-    .select({ id: creditLedger.id, userId: creditLedger.userId, paidCents: creditLedger.paidCents })
-    .from(creditLedger)
-    .where(eq(creditLedger.entryType, 'missed_grant'))
-    .limit(BATCH);
+    await tx
+      .insert(creditBalances)
+      .values({ userId: row.userId })
+      .onConflictDoNothing({ target: creditBalances.userId });
 
-  let reconciled = 0;
-  let stillMissing = 0;
+    const [balanceRow] = await tx
+      .select({ monthlyRemainingCents: creditBalances.monthlyRemainingCents, debtCents: creditBalances.debtCents })
+      .from(creditBalances)
+      .where(eq(creditBalances.userId, row.userId))
+      .for('update')
+      .limit(1);
+
+    const refill = computeMonthlyRefill(
+      allowanceCents,
+      balanceRow?.monthlyRemainingCents ?? 0,
+      balanceRow?.debtCents ?? 0,
+    );
+
+    await tx
+      .update(creditBalances)
+      .set({
+        monthlyRemainingCents: refill.monthlyRemainingCents,
+        monthlyAllowanceCents: refill.monthlyAllowanceCents,
+        debtCents: refill.debtCents,
+      })
+      .where(eq(creditBalances.userId, row.userId));
+
+    return 'granted';
+  });
+}
+
+/**
+ * Sweep 'missed_grant' ledger rows, re-derive each user's tier from their
+ * subscriptions rows, and convert any row whose tier now has a ratio into the
+ * monthly_grant it should have been — added to the current balance (rollover),
+ * same arithmetic as a normal renewal. The row itself becomes the grant record:
+ * entryType flips to 'monthly_grant' and amountCents becomes the derived
+ * allowance, so a re-run of this sweep never sees it again (WAL-5: reconciliation
+ * is keyed on the ledger, not a side table).
+ *
+ * The sweep pages through ALL candidates by keyset on id, so rows that stay
+ * unresolved can never monopolize a fixed-size batch and starve later repairable
+ * rows. An indeterminate derivation (an entitled subscription on an unmapped
+ * price) is left missing rather than granted from a lower-bound tier: converting
+ * the row is final, so it must never be sized from a tier we know may be wrong.
+ */
+export async function reconcileMissedGrants(options: MissedGrantReconcileOptions): Promise<MissedGrantReconcileResult> {
+  const result: MissedGrantReconcileResult = { reconciled: 0, stillMissing: 0, failed: 0 };
+  if (!isBillingEnabled()) return result;
+
   const toEmit = new Set<string>();
+  let cursor = '';
 
-  for (const row of rows) {
+  for (;;) {
+    const page = await db
+      .select({ id: creditLedger.id, userId: creditLedger.userId, paidCents: creditLedger.paidCents })
+      .from(creditLedger)
+      .where(and(eq(creditLedger.entryType, 'missed_grant'), gt(creditLedger.id, cursor)))
+      .orderBy(creditLedger.id)
+      .limit(BATCH);
+    if (page.length === 0) break;
+    cursor = page[page.length - 1].id;
+
+    let rowsByUser: Map<string, SubscriptionRowLike[]>;
     try {
-      const userRows = await db
-        .select({ subscriptionTier: users.subscriptionTier })
-        .from(users)
-        .where(eq(users.id, row.userId))
-        .limit(1);
-      if (!userRows.length) {
-        // The user no longer exists (account deleted since the miss): nothing to
-        // reconcile it against. Leave the row — it is inert, not actionable.
-        stillMissing++;
-        continue;
+      const subRows = await db
+        .select({ userId: subscriptions.userId, status: subscriptions.status, stripePriceId: subscriptions.stripePriceId })
+        .from(subscriptions)
+        .where(inArray(subscriptions.userId, [...new Set(page.map((r) => r.userId))]));
+      rowsByUser = new Map();
+      for (const sub of subRows) {
+        const list = rowsByUser.get(sub.userId) ?? [];
+        list.push(sub);
+        rowsByUser.set(sub.userId, list);
       }
-
-      const plan = planMissedGrantReconcile(
-        { id: row.id, userId: row.userId, paidCents: row.paidCents ?? 0 },
-        userRows[0].subscriptionTier,
-      );
-
-      if (plan.action === 'still_missing') {
-        stillMissing++;
-        continue;
-      }
-
-      await db.transaction(async (tx) => {
-        // Convert the row in place: it stops being a 'missed_grant' the moment
-        // this commits, which is what removes it from the next sweep's SELECT —
-        // the update IS the "mark consumed" step, not a separate flag.
-        const updated = await tx
-          .update(creditLedger)
-          .set({ entryType: 'monthly_grant', amountCents: plan.allowanceCents })
-          .where(eq(creditLedger.id, row.id))
-          .returning({ id: creditLedger.id });
-        // A concurrent reconcile run (or the row having already been converted)
-        // updated 0 rows: another pass already handled it. Do not double-grant.
-        if (updated.length === 0) return;
-
-        await tx
-          .insert(creditBalances)
-          .values({ userId: row.userId })
-          .onConflictDoNothing({ target: creditBalances.userId });
-
-        const [balanceRow] = await tx
-          .select({ monthlyRemainingCents: creditBalances.monthlyRemainingCents, debtCents: creditBalances.debtCents })
-          .from(creditBalances)
-          .where(eq(creditBalances.userId, row.userId))
-          .for('update')
-          .limit(1);
-
-        const refill = computeMonthlyRefill(
-          plan.allowanceCents,
-          balanceRow?.monthlyRemainingCents ?? 0,
-          balanceRow?.debtCents ?? 0,
-        );
-
-        await tx
-          .update(creditBalances)
-          .set({
-            monthlyRemainingCents: refill.monthlyRemainingCents,
-            monthlyAllowanceCents: refill.monthlyAllowanceCents,
-            debtCents: refill.debtCents,
-          })
-          .where(eq(creditBalances.userId, row.userId));
-      });
-
-      reconciled++;
-      toEmit.add(row.userId);
     } catch (error) {
-      loggers.ai.debug('missed-grant reconcile failed for one row', {
-        error: (error as Error).message,
-        ledgerId: row.id,
+      result.failed += page.length;
+      loggers.api.error('missed-grant reconcile: subscription lookup failed for a page', error as Error, {
+        firstLedgerId: page[0].id,
+        rows: page.length,
       });
+      if (page.length < BATCH) break;
+      continue;
     }
+
+    for (const row of page) {
+      try {
+        const derived = deriveTierFromSubscriptions(rowsByUser.get(row.userId) ?? [], options.priceTier);
+        const plan = planMissedGrantReconcile(
+          { id: row.id, userId: row.userId, paidCents: row.paidCents ?? 0 },
+          derived.tier,
+        );
+        if (derived.indeterminate || plan.action === 'still_missing') {
+          result.stillMissing++;
+          continue;
+        }
+
+        const outcome = await grantMissedRow(row, plan.allowanceCents);
+        // 'already_claimed': an overlapping run converted it first — it granted, not us.
+        if (outcome === 'granted') {
+          result.reconciled++;
+          toEmit.add(row.userId);
+        }
+      } catch (error) {
+        result.failed++;
+        loggers.api.error('missed-grant reconcile failed for one row', error as Error, {
+          ledgerId: row.id,
+          userId: row.userId,
+        });
+      }
+    }
+
+    if (page.length < BATCH) break;
   }
 
   for (const userId of toEmit) void emitCreditsUpdated(userId);
 
-  return { reconciled, stillMissing };
+  return result;
 }
