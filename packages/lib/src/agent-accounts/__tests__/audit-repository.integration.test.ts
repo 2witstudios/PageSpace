@@ -267,5 +267,4 @@ describe('audit acceptance before execute (ADR 0004 F13)', () => {
       await db.delete(securityAuditLog).where(eq(securityAuditLog.resourceId, claimDigest));
     }
   });
-  });
 });

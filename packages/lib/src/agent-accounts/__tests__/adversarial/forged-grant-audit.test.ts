@@ -75,7 +75,7 @@ const forged: AgentAccountGrant = {
   nbf: NOW - 1_000,
   exp: NOW + 60_000,
   nonce: 'nonce_framed' as Nonce,
-  presenter: { keyId: 'pk_framed' as PresenterKeyId, channel: 'http-executor' },
+  presenter: { keyId: 'pk_transport_authenticated' as PresenterKeyId, channel: 'http-executor' },
 };
 
 function recordingRepository() {
@@ -106,7 +106,9 @@ describe('forged grant → denial audit row (ASI03)', () => {
       now: NOW,
       expected: {
         aud: 'http-executor',
-        presenter: { keyId: 'pk_authenticated' as PresenterKeyId, channel: 'http-executor' },
+        // The attacker presents the key the transport authenticated, so F2 passes
+        // and the refusal is the signature itself.
+        presenter: forged.presenter,
         human: forged.human,
         agentPageId: forged.agentPageId,
         conversationId: forged.conversationId,
@@ -124,7 +126,7 @@ describe('forged grant → denial audit row (ASI03)', () => {
       requestDigest: DIGEST,
       requestOperation: forged.operation,
       nonceState: 'fresh',
-      approval: { kind: 'concrete', approvalId: forged.approvalId, requestDigest: DIGEST, consumedByGrantId: forged.grantId },
+      approval: { kind: 'concrete', approvalId: 'approval_framed' as ApprovalId, requestDigest: DIGEST, consumedByGrantId: forged.grantId },
       verify,
       hash: sha256,
     });
@@ -134,7 +136,7 @@ describe('forged grant → denial audit row (ASI03)', () => {
     const executor = createAuditedExecutor({ auditRepository: repository, hash: sha3 });
     const claim = new TextEncoder().encode(JSON.stringify({ grant: forged, signature }));
     await executor.recordDenial({
-      caller: { channel: 'http-executor', presenterKeyId: 'pk_authenticated' as PresenterKeyId },
+      caller: { channel: 'http-executor', presenterKeyId: 'pk_transport_authenticated' as PresenterKeyId },
       claim,
       reason: verdict.reason,
       now: NOW,

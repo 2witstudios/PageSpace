@@ -298,6 +298,16 @@
       "import": "./dist/agent-accounts/audit-repository.js",
       "require": "./dist/agent-accounts/audit-repository.js"
     },
+    "./agent-accounts/denial-audit-record": {
+      "types": "./dist/agent-accounts/denial-audit-record.d.ts",
+      "import": "./dist/agent-accounts/denial-audit-record.js",
+      "require": "./dist/agent-accounts/denial-audit-record.js"
+    },
+    "./agent-accounts/build-denial-record": {
+      "types": "./dist/agent-accounts/build-denial-record.d.ts",
+      "import": "./dist/agent-accounts/build-denial-record.js",
+      "require": "./dist/agent-accounts/build-denial-record.js"
+    },
     "./agent-accounts/audit-gate-executor": {
       "types": "./dist/agent-accounts/audit-gate-executor.d.ts",
       "import": "./dist/agent-accounts/audit-gate-executor.js",
