@@ -670,11 +670,16 @@ configs:
   # and `default` is `enforce` with an explicit allowlist: an unlisted public host is refused
   # even though it is not a private address. The list is GENERATED per tenant (G2), empty-means-deny, from
   # ALL enabled providers, which includes user-created custom/OpenAPI providers: `listEnabledProviders`
-  # returns system + custom (provider-repository.ts:42-52). For each: config.baseUrl, tokenUrl and
-  # revokeUrl (refresh must not fail closed). Plus EVERY connection's effective destination:
-  # execute-tool.ts:206 uses `connection.baseUrlOverride || providerConfig.baseUrl`, so every
-  # non-empty baseUrlOverride on any provider (not only generic-webhook) is added. Regenerated on
-  # provider or connection create/update/delete. An ACL change is applied by regenerating the
+  # returns system + custom (provider-repository.ts:42-52). Each row is resolved through
+  # `resolveProviderConfig` (builtin-providers.ts:33), because builtin rows refresh lazily and the
+  # runtime uses the in-memory definition. The ACL is taken from that resolved config.baseUrl, tokenUrl
+  # and revokeUrl, so a release that moves a builtin host cannot leave the ACL stale (refresh must not
+  # fail closed). Connection destinations (execute-tool.ts:206: `baseUrlOverride || baseUrl`) are added
+  # ONLY AFTER APPROVAL. Today any authenticated user can submit an arbitrary `baseUrlOverride`
+  # (apps/web/src/app/api/user/integrations/route.ts:23), so an override starts PENDING: refused by
+  # the proxy and not executed, until a tenant owner/admin approves the origin. Only approved origins
+  # enter the tenant ACL; rejection or delete removes them. Custom providers created by non-admins follow
+  # the same pending rule. Regenerated on every approval, provider change or connection change. An ACL change is applied by regenerating the
   # config and restarting executor-egress (hot reload unverified at G2); until then that webhook is refused. Schema per smokescreen's egress ACL docs; verify at G2.
   # Residual: a host allowlist bounds destinations, not accounts. A compromised executor can still send
   # data to an attacker-owned account on an allowed shared host (e.g. api.github.com). Per-account origin
@@ -696,7 +701,7 @@ configs:
           - oauth2.googleapis.com       # Google token refresh endpoint
           - api.zoom.us                 # Zoom API
           - zoom.us                     # zoom token-refresh.ts (/oauth/token)
-          # + generated: every enabled custom provider baseUrl and every connection baseUrlOverride
+          # + generated: approved custom-provider baseUrls and approved connection baseUrlOverride origins
   vault_ingress_nginx:                  # inline `content` needs Docker Compose >= 2.23.1
     content: |
       map $$http_upgrade $$connection_upgrade { default upgrade; '' close; }
