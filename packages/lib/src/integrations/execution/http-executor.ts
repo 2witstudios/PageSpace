@@ -212,9 +212,8 @@ export const executeHttpRequest = async (
       try {
         const outcome = await fetchGuarded(request, controller.signal, fetchFn, validateTarget);
 
-        clearTimeout(timeoutId);
-
         if (outcome.kind === 'refused') {
+          clearTimeout(timeoutId);
           return {
             success: false,
             error: outcome.error,
@@ -235,8 +234,13 @@ export const executeHttpRequest = async (
           } else {
             body = await response.text();
           }
-        } catch {
+        } catch (error) {
+          // The timeout also bounds the body read: a body that stalls past it
+          // is a timeout, not a successful empty response.
+          if (controller.signal.aborted) throw error;
           body = null;
+        } finally {
+          clearTimeout(timeoutId);
         }
 
         // Convert Headers to plain object (forEach is available in both DOM and Node.js)

@@ -140,7 +140,10 @@ export const pinnedFetch: PinnedFetch = (url, init) => {
       ...(isTls && !hostnameIsIp ? { servername: target.hostname } : {}),
     });
 
+    let activeResponse: http.IncomingMessage | null = null;
     const onAbort = () => {
+      // After headers, destroy the response too so its body read fails with an AbortError.
+      activeResponse?.destroy(abortError());
       req.destroy(abortError());
     };
     signal?.addEventListener('abort', onAbort, { once: true });
@@ -152,7 +155,10 @@ export const pinnedFetch: PinnedFetch = (url, init) => {
     });
 
     req.on('response', (res) => {
-      cleanup();
+      // Keep the abort listener until the body is done: an abort mid-body
+      // destroys the socket and fails the body read with an AbortError.
+      res.once('close', cleanup);
+      activeResponse = res;
       const status = res.statusCode ?? 0;
       const responseHeaders = new Headers();
       for (const [name, value] of Object.entries(res.headers)) {
