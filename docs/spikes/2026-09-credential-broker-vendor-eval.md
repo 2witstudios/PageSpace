@@ -675,7 +675,9 @@ configs:
   # ALL enabled providers, which includes user-created custom/OpenAPI providers: `listEnabledProviders`
   # returns system + custom (provider-repository.ts:42-52). Each row is resolved through
   # `resolveProviderConfig` (builtin-providers.ts:33), because builtin rows refresh lazily and the
-  # runtime uses the in-memory definition. The ACL is taken from that resolved config.baseUrl, tokenUrl
+  # runtime uses the in-memory definition. The generator ALWAYS unions `builtinProviderList` itself, because on a
+  # fresh tenant migrations create no builtin rows (`seedBuiltinProviders` runs lazily from web's providers
+  # GET), so a DB-only render at `up` step 3 would drop every shipped provider. The ACL is taken from that resolved config.baseUrl, tokenUrl
   # and revokeUrl, so a release that moves a builtin host cannot leave the ACL stale (refresh must not
   # fail closed). Connection destinations (execute-tool.ts:206: `baseUrlOverride || baseUrl`) are added
   # ONLY AFTER APPROVAL. Today any authenticated user can submit an arbitrary `baseUrlOverride`
