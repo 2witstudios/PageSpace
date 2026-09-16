@@ -93,42 +93,69 @@ function isPublicIpv4(n: number): boolean {
 }
 
 /**
- * Extract an embedded IPv4 value (as a 32-bit int) from an IPv6 string when it
- * is an IPv4-mapped/compatible address. Handles both dotted (`::ffff:1.2.3.4`)
- * and hextet (`::ffff:a9fe:a9fe`, the WHATWG-normalized form) representations.
- * Returns null when there is no embedded IPv4.
+ * Parse an IPv6 address in any textual form (compressed `::`, fully expanded,
+ * leading zeros, trailing dotted IPv4, any case) into its eight 16-bit groups.
+ * The zone id (`%eth0`) must already be stripped. Returns null when the string
+ * is not a valid IPv6 address.
  */
-function extractEmbeddedIpv4(h: string): number | null {
-  // ::ffff:1.2.3.4  or  ::1.2.3.4 (deprecated IPv4-compatible)
-  const dotted = h.match(/^::(?:ffff:)?(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
-  if (dotted) return parseIpv4(dotted[1]);
-
-  // ::ffff:a9fe:a9fe  (WHATWG normalizes ::ffff:169.254.169.254 to this)
-  const hextets = h.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
-  if (hextets) {
-    const hi = parseInt(hextets[1], 16);
-    const lo = parseInt(hextets[2], 16);
-    return (((hi << 16) >>> 0) + lo) >>> 0;
+function parseIpv6(h: string): number[] | null {
+  let text = h;
+  const tail: number[] = [];
+  const dotted = text.match(/^(.*:)(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+  if (dotted) {
+    const octets = dotted[2].split('.').map(Number);
+    if (octets.some((o) => o > 255)) return null;
+    tail.push((octets[0] << 8) | octets[1], (octets[2] << 8) | octets[3]);
+    text = dotted[1].endsWith('::') ? dotted[1] : dotted[1].slice(0, -1);
   }
-  return null;
+
+  const halves = text.split('::');
+  if (halves.length > 2) return null;
+  const toGroups = (part: string): number[] | null => {
+    if (part === '') return [];
+    const groups = part.split(':');
+    if (groups.some((g) => !/^[0-9a-f]{1,4}$/.test(g))) return null;
+    return groups.map((g) => parseInt(g, 16));
+  };
+  const head = toGroups(halves[0]);
+  const rest = halves.length === 2 ? toGroups(halves[1]) : [];
+  if (head === null || rest === null) return null;
+
+  const explicit = head.length + rest.length + tail.length;
+  if (halves.length === 1) {
+    return explicit === 8 ? [...head, ...tail] : null;
+  }
+  if (explicit > 7) return null;
+  return [...head, ...new Array<number>(8 - explicit).fill(0), ...rest, ...tail];
 }
 
-/** True only when the IPv6 address is globally routable (not loopback/private/reserved). */
+const ipv4From = (hi: number, lo: number): number => ((hi << 16) >>> 0) + lo;
+
+/**
+ * True only when the IPv6 address is globally routable. Allowlist, not
+ * denylist: only global unicast 2000::/3 can be public, so every other range
+ * (loopback, unspecified, IPv4-compatible, SIIT-translated ::ffff:0:0:0/96,
+ * NAT64 64:ff9b::/96 and 64:ff9b:1::/48, discard 100::/64, ULA, link-local,
+ * site-local, multicast) is refused by construction. IPv4-mapped
+ * (::ffff:0:0/96) and 6to4 (2002::/16) are judged by the IPv4 they embed.
+ * Unparseable input is refused (fail closed).
+ */
 function isPublicIpv6(host: string): boolean {
-  let h = host.toLowerCase();
-  const zone = h.indexOf('%');
-  if (zone !== -1) h = h.slice(0, zone);
+  const zone = host.indexOf('%');
+  const groups = parseIpv6((zone === -1 ? host : host.slice(0, zone)).toLowerCase());
+  if (groups === null) return false;
+  const [g0, g1, g2, g3, g4, g5, g6, g7] = groups;
 
-  if (h === '::' || h === '::1') return false;            // unspecified / loopback
-  if (h.startsWith('64:ff9b:')) return false;             // NAT64 — embeds arbitrary (possibly private) IPv4
-
-  const embedded = extractEmbeddedIpv4(h);
-  if (embedded !== null) return isPublicIpv4(embedded);
-
-  if (h.startsWith('fc') || h.startsWith('fd')) return false;   // fc00::/7 unique-local
-  if (/^fe[89ab]/.test(h)) return false;                        // fe80::/10 link-local
-  if (/^fe[cdef]/.test(h)) return false;                        // fec0::/10 site-local (deprecated)
-  if (h.startsWith('ff')) return false;                         // ff00::/8 multicast
+  // ::ffff:a.b.c.d — IPv4-mapped: the socket really connects to that IPv4.
+  if (g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0xffff) {
+    return isPublicIpv4(ipv4From(g6, g7));
+  }
+  if ((g0 & 0xe000) !== 0x2000) return false;             // outside 2000::/3 global unicast
+  if (g0 === 0x2001 && g1 < 0x0200) return false;         // 2001::/23 IETF protocol assignments (incl. Teredo 2001::/32)
+  if (g0 === 0x2001 && g1 === 0x0db8) return false;       // 2001:db8::/32 documentation
+  if (g0 === 0x2002) return isPublicIpv4(ipv4From(g1, g2)); // 2002::/16 6to4 embeds an IPv4
+  if (g0 === 0x3fff && g1 < 0x1000) return false;         // 3fff::/20 documentation
+  if (g0 === 0x5f00) return false;                        // 5f00::/16 SRv6 SIDs
   return true;
 }
 

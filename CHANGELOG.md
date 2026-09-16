@@ -1158,7 +1158,8 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   connects to exactly the address that was checked, so a name that changes its answer between the
   check and the connection gains nothing, and a check that stalls is cut off by the same time
   limit as the request. The check covers every non-public range, not just the common private
-  ones (carrier-grade NAT, multicast, reserved and IPv6-mapped ranges included). A base URL must
+  ones (carrier-grade NAT, multicast, reserved ranges, and any IPv6 address that maps,
+  translates or tunnels to a private IPv4, however it is written). A base URL must
   also use `https://` now: an `http://` base URL put the connection's credentials on the wire in
   the clear for anyone on the network path to read, so it is refused when you save it and again
   before every request, with a message saying so. Every built-in provider already used `https://`,
