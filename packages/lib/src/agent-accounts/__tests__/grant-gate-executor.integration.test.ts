@@ -93,6 +93,8 @@ const expectedFor = (grant: AgentAccountGrant): ExpectedBinding => ({
   accountDriveId: 'd1' as DriveId,
   accountStatus: 'active',
   currentCredentialVersion: grant.credentialVersion,
+  previousCredentialVersion: null,
+  rotatedAt: null,
   currentPolicyVersion: grant.policyVersion,
   delegation: { kind: 'live_session' },
   sandbox: null,
@@ -113,6 +115,7 @@ function presentation(grant: AgentAccountGrant, signature = sign(grant)) {
     approval: { kind: 'policy' as const, policyVersion: grant.policyVersion, expired: false, limitsExceeded: false },
     verify,
     hash,
+    rotationGraceMs: 300_000,
   };
 }
 

@@ -113,6 +113,8 @@ const expectedFor = (grant: AgentAccountGrant): ExpectedBinding => ({
   accountDriveId: 'd1' as DriveId,
   accountStatus: 'active',
   currentCredentialVersion: grant.credentialVersion,
+  previousCredentialVersion: null,
+  rotatedAt: null,
   currentPolicyVersion: grant.policyVersion,
   delegation: { kind: 'live_session' },
   sandbox: null,
@@ -201,6 +203,7 @@ describe('signGrant (ADR 0004 §2.2)', () => {
       approval: { kind: 'concrete', approvalId: grant.approvalId as ApprovalId, accountId: grant.accountId, requestDigest: grant.requestDigest, consumedByGrantId: grant.grantId, expiresAt: grant.exp },
       verify,
       hash,
+      rotationGraceMs: 300_000,
     });
     expect(actual).toEqual({ ok: true, grant });
   });
@@ -222,6 +225,7 @@ describe('signGrant (ADR 0004 §2.2)', () => {
       approval: { kind: 'concrete', approvalId: grant.approvalId as ApprovalId, accountId: grant.accountId, requestDigest: grant.requestDigest, consumedByGrantId: grant.grantId, expiresAt: grant.exp },
       verify,
       hash,
+      rotationGraceMs: 300_000,
     });
     expect(actual).toEqual({ ok: false, reason: 'bad_signature' });
   });
@@ -249,6 +253,7 @@ describe('the two authorities are separate (ADR 0004 §9)', () => {
       request: { op: 'exec', args: { cmd: 'ls', args: [], cwd: null, env: {}, timeoutMs: null, maxBytes: null } },
       verify,
       hash,
+      rotationGraceMs: 300_000,
     });
     expect(actual).toEqual({ ok: false, reason: 'malformed' });
   });
@@ -277,6 +282,7 @@ describe('the two authorities are separate (ADR 0004 §9)', () => {
       approval: { kind: 'none' },
       verify,
       hash,
+      rotationGraceMs: 300_000,
     });
     expect(actual).toEqual({ ok: false, reason: 'malformed' });
   });

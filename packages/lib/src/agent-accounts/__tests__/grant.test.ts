@@ -142,6 +142,8 @@ function expectedFor(grant: AgentAccountGrant, overrides: Partial<ExpectedBindin
     accountStatus: 'active',
     accountDriveId: DRIVE,
     currentCredentialVersion: grant.credentialVersion,
+    previousCredentialVersion: null,
+    rotatedAt: null,
     currentPolicyVersion: grant.policyVersion,
     delegation:
       grant.delegationId === null
@@ -185,6 +187,7 @@ function run(grant: unknown, opts: RunOpts = {}) {
     approval: opts.approval ?? approvalFor(typed),
     verify: opts.verify ?? verify,
     hash,
+    rotationGraceMs: 300_000,
   });
 }
 
@@ -361,6 +364,7 @@ describe('verifyGrant deny order (ADR 0004 §6 F1→F17)', () => {
         approval: approvalFor(altered as AgentAccountGrant),
         verify,
         hash,
+        rotationGraceMs: 300_000,
       });
       expect(actual).toEqual(deny('bad_signature'));
     },
@@ -495,6 +499,51 @@ describe('verifyGrant deny order (ADR 0004 §6 F1→F17)', () => {
       run(grant, { expected: { human: grant.human, delegation: { kind: 'none' } } }),
     ];
     expect(actual).toEqual([deny('no_delegation'), deny('no_delegation'), deny('no_delegation')]);
+  });
+
+  describe('rotation grace (ADR 0004 F5a, §8.34; G1a review M7)', () => {
+    const GRACE_MS = 300_000;
+    const R = NOW - 60_000;
+    /** A rotation from version n to n+1 at R, attested by the plane; the grant names n. */
+    const rotated = (grant: AgentAccountGrant): Partial<ExpectedBinding> => ({
+      previousCredentialVersion: grant.credentialVersion,
+      currentCredentialVersion: (grant.credentialVersion + 1) as CredentialVersion,
+      rotatedAt: R,
+    });
+
+    it('given a grant for the previous version issued before the rotation, inside the grace window, should pass the version check', () => {
+      const grant = makeGrant({ iat: R - 1, nbf: R - 1, exp: R + 600_000 });
+      const actual = run(grant, { now: R + GRACE_MS - 1, expected: rotated(grant) });
+      expect(actual).toEqual({ ok: true, grant });
+    });
+
+    it('given the same grant at now = rotatedAt + rotationGraceMs, should return version_mismatch', () => {
+      const grant = makeGrant({ iat: R - 1, nbf: R - 1, exp: R + 600_000 });
+      const actual = run(grant, { now: R + GRACE_MS, expected: rotated(grant) });
+      expect(actual).toEqual(deny('version_mismatch'));
+    });
+
+    it('given a grant for the previous version with iat at or after rotatedAt, should return version_mismatch at any now — old material never gets a fresh grant', () => {
+      const atRotation = makeGrant({ iat: R, nbf: R, exp: R + 600_000 });
+      const afterRotation = makeGrant({ iat: R + 1, nbf: R + 1, exp: R + 600_000 });
+      const actual = [
+        run(atRotation, { now: R + 1, expected: rotated(atRotation) }),
+        run(afterRotation, { now: R + 2, expected: rotated(afterRotation) }),
+      ];
+      expect(actual).toEqual([deny('version_mismatch'), deny('version_mismatch')]);
+    });
+
+    it('given previousCredentialVersion null (never rotated, or cleared by revoke), should return version_mismatch for any non-current version', () => {
+      const grant = makeGrant({ iat: R - 1, nbf: R - 1, exp: R + 600_000 });
+      const actual = run(grant, { now: R + 1, expected: { ...rotated(grant), previousCredentialVersion: null, rotatedAt: null } });
+      expect(actual).toEqual(deny('version_mismatch'));
+    });
+
+    it('given an attested previous version that is not the one the grant names, should return version_mismatch — grace covers exactly the attested version', () => {
+      const grant = makeGrant({ iat: R - 1, nbf: R - 1, exp: R + 600_000 });
+      const actual = run(grant, { now: R + 1, expected: { ...rotated(grant), previousCredentialVersion: (grant.credentialVersion + 5) as CredentialVersion } });
+      expect(actual).toEqual(deny('version_mismatch'));
+    });
   });
 
   it.each(['needs_reauth', 'revoked', 'deleted'] as const)(
@@ -876,6 +925,7 @@ describe('verifyGrant input type (ADR 0006 §8.4)', () => {
       approval: true,
       verify: true,
       hash: true,
+      rotationGraceMs: true,
     };
     const expectedKeys: Record<keyof ExpectedBinding, true> = {
       aud: true,
@@ -890,6 +940,8 @@ describe('verifyGrant input type (ADR 0006 §8.4)', () => {
       accountStatus: true,
       accountDriveId: true,
       currentCredentialVersion: true,
+      previousCredentialVersion: true,
+      rotatedAt: true,
       currentPolicyVersion: true,
       delegation: true,
       sandbox: true,

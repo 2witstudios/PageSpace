@@ -107,6 +107,8 @@ function present(grant: AgentAccountGrant, expected: Partial<ExpectedBinding> = 
       accountDriveId: DRIVE,
       accountStatus: 'active',
       currentCredentialVersion: grant.credentialVersion,
+      previousCredentialVersion: null,
+      rotatedAt: null,
       currentPolicyVersion: grant.policyVersion,
       delegation: grant.delegationId === null ? { kind: 'live_session' } : { kind: 'delegation', delegationId: grant.delegationId, accountId: grant.accountId, agentPageId: grant.agentPageId, delegatedBy: grant.human.userId, expired: false, revoked: false },
       sandbox: null,
@@ -119,6 +121,7 @@ function present(grant: AgentAccountGrant, expected: Partial<ExpectedBinding> = 
     approval: { kind: 'concrete', approvalId: 'approval_1' as ApprovalId, accountId: grant.accountId, requestDigest: DIGEST_X, consumedByGrantId: grant.grantId, expiresAt: NOW + 120_000 },
     verify,
     hash,
+    rotationGraceMs: 300_000,
   });
 }
 
