@@ -8,7 +8,7 @@ import { getOrCreateStripeCustomer } from '@/lib/stripe-customer';
 import { getUserFriendlyStripeError } from '@/lib/stripe-errors';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { isOrgPlanPriceId } from '@/lib/subscription/plans';
+import { isPersonalPlanPriceId } from '@/lib/subscription/plans';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -34,13 +34,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // SEAT-2 P1: Business is the organization plan — buying it creates an
-    // org, so a lone-user checkout can never sell it. getPersonalPlans()
-    // already hides it from the plan UI; this is the server-side backstop
-    // against a direct POST of the org-plan price id.
-    if (isOrgPlanPriceId(priceId)) {
+    // SEAT-2 P1 (independent review, allowlist inversion): only a price id
+    // this app recognizes as a PERSONAL plan's current price may be checked
+    // out here. This is deny-by-default — it rejects Business, the
+    // grandfathered Founder price, and any unrecognized price id, not just
+    // the one price id it happens to know is the org plan's.
+    if (!isPersonalPlanPriceId(priceId)) {
       return NextResponse.json(
-        { error: 'This plan is for an organization and cannot be purchased individually.' },
+        { error: 'This plan cannot be purchased individually.' },
         { status: 400 }
       );
     }

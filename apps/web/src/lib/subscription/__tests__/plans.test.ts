@@ -9,9 +9,10 @@ import {
   canDowngrade,
   getAllPlans,
   getPersonalPlans,
-  isOrgPlanPriceId,
+  isPersonalPlanPriceId,
   type SubscriptionTier,
 } from '../plans';
+import { stripeConfig } from '../../stripe-config';
 
 describe('Subscription Plans', () => {
   describe('PLANS constant', () => {
@@ -204,17 +205,21 @@ describe('Subscription Plans', () => {
     });
   });
 
-  describe('isOrgPlanPriceId()', () => {
-    it('SEAT-2 P1 is true for the Business (org-plan) price id, the server-side backstop behind getPersonalPlans', () => {
-      expect(isOrgPlanPriceId(PLANS.business.stripePriceId!)).toBe(true);
+  describe('isPersonalPlanPriceId()', () => {
+    it('SEAT-2 P1 (independent review) is true for the Pro price id — the one price a lone user may buy today', () => {
+      expect(isPersonalPlanPriceId(PLANS.pro.stripePriceId!)).toBe(true);
     });
 
-    it('is false for the Pro price id', () => {
-      expect(isOrgPlanPriceId(PLANS.pro.stripePriceId!)).toBe(false);
+    it('is false for the Business (org-plan) price id', () => {
+      expect(isPersonalPlanPriceId(PLANS.business.stripePriceId!)).toBe(false);
     });
 
-    it('is false for an unrecognized price id', () => {
-      expect(isOrgPlanPriceId('price_not_a_real_plan')).toBe(false);
+    it('is false for the grandfathered Founder price id — a removed tier is never re-purchasable', () => {
+      expect(isPersonalPlanPriceId(stripeConfig.grandfatheredPriceIds.founder)).toBe(false);
+    });
+
+    it('is false for an unrecognized price id — allowlist denies by default, it does not fall through', () => {
+      expect(isPersonalPlanPriceId('price_not_a_real_plan')).toBe(false);
     });
   });
 });
