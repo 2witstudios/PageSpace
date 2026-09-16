@@ -627,6 +627,10 @@ services:
   # therefore cannot dial arbitrary destinations.
   executor-egress:
     image: ghcr.io/stripe/smokescreen:0.0.0      # e.g. smokescreen (denies private ranges by default); pin by digest at G2
+    command: ["--listen-port=4750", "--egress-acl-file=/etc/smokescreen/acl.yaml"]   # flag names to verify against the pinned version at G2
+    configs:
+      - source: executor_egress_acl
+        target: /etc/smokescreen/acl.yaml
     restart: unless-stopped
     expose: ["4750"]
     read_only: true
@@ -662,6 +666,27 @@ networks:
     internal: true                      # credential-executor <-> executor-egress only
 
 configs:
+  # FAIL-CLOSED provider ACL. No mTLS role is presented, so every request falls to `default`,
+  # and `default` is `enforce` with an explicit allowlist: an unlisted public host is refused
+  # even though it is not a private address. The list is generated from the enabled providers'
+  # API hosts (G2) and is empty-means-deny. Schema per smokescreen's egress ACL docs; verify at G2.
+  # Residual: a host allowlist bounds destinations, not accounts. A compromised executor can still send
+  # data to an attacker-owned account on an allowed shared host (e.g. api.github.com). Per-account origin
+  # and operation binding is the executor's grant check, and the proxy does not replace it.
+  executor_egress_acl:
+    content: |
+      version: v1
+      services: []
+      default:
+        name: credential-executor
+        project: pagespace
+        action: enforce
+        allowed_domains:
+          - api.github.com
+          - api.notion.com
+          - slack.com
+          - www.googleapis.com
+          - api.zoom.us
   vault_ingress_nginx:                  # inline `content` needs Docker Compose >= 2.23.1
     content: |
       map $$http_upgrade $$connection_upgrade { default upgrade; '' close; }
