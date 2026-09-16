@@ -18,7 +18,8 @@
 import http from 'node:http';
 import https from 'node:https';
 import { isIP, type LookupFunction } from 'node:net';
-import { Readable } from 'node:stream';
+import { Readable, type Transform } from 'node:stream';
+import zlib from 'node:zlib';
 
 /**
  * Sent when the caller sets no User-Agent. Global fetch always sent one, and
@@ -46,6 +47,33 @@ export interface PinnedRequestInit {
 export type PinnedFetch = (url: string, init: PinnedRequestInit) => Promise<Response>;
 
 const NULL_BODY_STATUSES = new Set([101, 103, 204, 205, 304]);
+
+/** Decoders for the content codings global fetch decoded. */
+const DECODERS: Record<string, () => Transform> = {
+  gzip: () => zlib.createGunzip(),
+  'x-gzip': () => zlib.createGunzip(),
+  // Some servers send raw deflate instead of zlib-wrapped; unzip detects both.
+  deflate: () => zlib.createUnzip(),
+  br: () => zlib.createBrotliDecompress(),
+};
+
+/**
+ * Undo `Content-Encoding` (codings apply in listed order, so decode in reverse).
+ * If any coding is unknown the body passes through undecoded, as fetch does.
+ */
+const decodeBody = (source: Readable, contentEncoding: string | undefined): Readable => {
+  const codings = (contentEncoding ?? '')
+    .split(',')
+    .map((coding) => coding.trim().toLowerCase())
+    .filter((coding) => coding !== '' && coding !== 'identity')
+    .reverse();
+  if (codings.some((coding) => !(coding in DECODERS))) return source;
+  return codings.reduce<Readable>((stream, coding) => {
+    const decoder = DECODERS[coding]();
+    stream.on('error', (error) => decoder.destroy(error));
+    return stream.pipe(decoder);
+  }, source);
+};
 
 const abortError = (): Error => {
   const error = new Error('The operation was aborted');
@@ -136,7 +164,7 @@ export const pinnedFetch: PinnedFetch = (url, init) => {
       if (NULL_BODY_STATUSES.has(status)) {
         res.resume();
       } else {
-        responseBody = Readable.toWeb(res) as ReadableStream;
+        responseBody = Readable.toWeb(decodeBody(res, res.headers['content-encoding'])) as ReadableStream;
       }
 
       resolve(new Response(responseBody, { status, statusText: res.statusMessage ?? '', headers: responseHeaders }));
