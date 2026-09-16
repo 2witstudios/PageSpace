@@ -7,6 +7,11 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Multi-question prompts from the assistant have Back and Next buttons** — when the assistant
+  asks several questions at once, you could only switch between them by tapping the small
+  numbered tabs or pressing the arrow keys, which is awkward on a phone. Each question now has a
+  Back / Next row with a "2 of 3" counter under it, sized for a finger, and it works on a card you
+  have already answered too. The tabs and arrow keys still work as before.
 - **The marketing site follows your system theme, and light mode has its own hero** — the site used
   to open in dark mode for everyone, and its space hero only worked on a dark page. Light mode now
   has a white version of the same scene with dark text over it, and the site starts in whatever
@@ -1127,6 +1132,22 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Security
 
+- **Only administrators can add a custom integration provider** — the admin check on the
+  provider-creation endpoint compared the wrong thing, so any signed-in account could add a
+  global custom integration provider, and a browser session that failed the cross-site request
+  check was let through as well. Non-admins and failed cross-site checks are now refused, and
+  nothing is created. Installing a built-in provider was already checked correctly and is
+  unaffected.
+- **The AI's sandbox git tools can no longer be tricked into force-pushing your current branch** —
+  the `git_push` tool took its remote and branch names as free text and placed them straight
+  after `-u origin` on the command line. A branch value of `--force` (or a remote of `--mirror`)
+  was therefore read by git as an option rather than a name, which force-pushed whatever branch
+  the sandbox was on, including `main`, with your connected GitHub token and without tripping the
+  guard that refuses force-pushes to the default branch. The tool now refuses any remote or
+  branch that starts with a dash before it builds the command, then runs the default-branch guard
+  on the real destination, and the command itself carries an end-of-options marker so a name can
+  never be read as a flag. The same audit found and closed the same gap in `git_fetch`, `git_pull`
+  (remote and branch), `git_config` (key), and `git_diff` (base and head refs).
 - **Integration base URLs can no longer point inside the platform** — a custom base URL on an
   integration connection (the field that lets a webhook or self-hosted API be reached) was only
   checked for being a well-formed URL. It could name the server's own loopback address, a private
