@@ -81,6 +81,40 @@ afterAll(async () => {
 });
 
 describe('pinnedFetch', () => {
+  it('given a signal that aborts while the body is still arriving, should fail the body read and close the socket', async () => {
+    let serverSocketClosed: Promise<void> = Promise.resolve();
+    const raw = net.createServer((socket) => {
+      serverSocketClosed = new Promise<void>((resolve) => socket.once('close', () => resolve()));
+      socket.once('data', () => socket.write('HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nok'));
+    });
+    await new Promise<void>((resolve) => raw.listen(0, '127.0.0.1', resolve));
+    const rawPort = (raw.address() as AddressInfo).port;
+    const controller = new AbortController();
+    try {
+      const response = await pinnedFetch(`http://pinned-host.invalid:${rawPort}/hook`, {
+        method: 'GET',
+        pinnedAddresses: ['127.0.0.1'],
+        signal: controller.signal,
+      });
+      setTimeout(() => controller.abort(), 20);
+
+      const bodyOutcome = await Promise.race([
+        response.text().then(() => 'resolved', (error: Error) => error.name),
+        new Promise<string>((resolve) => setTimeout(() => resolve('HUNG'), 1000)),
+      ]);
+      const socketOutcome = await Promise.race([
+        serverSocketClosed.then(() => 'closed'),
+        new Promise<string>((resolve) => setTimeout(() => resolve('still open'), 1000)),
+      ]);
+
+      const actual = { bodyOutcome, socketOutcome };
+      const expected = { bodyOutcome: 'AbortError', socketOutcome: 'closed' };
+      expect(actual).toEqual(expected);
+    } finally {
+      raw.close();
+    }
+  });
+
   it('given an unrepresentable status from an upstream that never ends the body, should close the socket rather than leave it open', async () => {
     let serverSocketClosed: Promise<void> = Promise.resolve();
     const raw = net.createServer((socket) => {

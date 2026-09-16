@@ -592,4 +592,35 @@ describe('executeHttpRequest connection pinning and validation deadline', () => 
     expect(outcome).toMatchObject({ success: false, errorType: 'timeout' });
     expect(mockFetch).not.toHaveBeenCalled();
   });
+
+  it('given headers that arrive but a body that stalls, should return timeout within timeoutMs instead of hanging', async () => {
+    // The body stream only ends when the request signal aborts, like pinnedFetch's.
+    const stalledFetch = vi.fn(async (_url: string, init: { signal?: AbortSignal }) => {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"partial":'));
+          init.signal?.addEventListener('abort', () => {
+            const error = new Error('The operation was aborted');
+            error.name = 'AbortError';
+            controller.error(error);
+          });
+        },
+      });
+      return new Response(body, { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+
+    const outcome = await Promise.race([
+      executeHttpRequest(
+        { url: 'https://stalling.example/data', method: 'GET' },
+        { maxRetries: 0, timeoutMs: 50 },
+        stalledFetch as unknown as PinnedFetch,
+        allowAll
+      ),
+      new Promise<'HUNG'>((resolve) => setTimeout(() => resolve('HUNG'), 500)),
+    ]);
+
+    const actual = outcome === 'HUNG' ? outcome : { success: outcome.success, errorType: outcome.errorType };
+    const expected = { success: false, errorType: 'timeout' };
+    expect(actual).toEqual(expected);
+  });
 });
