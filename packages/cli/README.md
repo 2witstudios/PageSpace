@@ -211,6 +211,9 @@ activity  <driveId>
 
 channels  send <channelId> <message>
 
+workspaces list [--drive <driveId>]                # your agent workspaces; each has one sandbox
+           exec <workspaceId> [--cwd <dir>] [--timeout-ms <ms>] -- <command…>   # exits with the command's own status
+
 keys      (no args: guided wizard) · create · use · list · describe · revoke
 
 env       enroll <enrollmentId> <code>   # bind THIS machine to a local environment (one-time code)

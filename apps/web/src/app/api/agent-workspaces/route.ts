@@ -48,6 +48,7 @@ import { listShellsBulk, spawnShell } from '@/lib/agent-workspaces/workspace-she
 import { findWorkspaceOfConversation, checkSessionAccess } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { readWorkspaceNodesBulk } from '@/lib/agent-workspaces/workspace-node-runtime';
 import { sessionQuotaExceeded } from '@/lib/agent-workspaces/quota-response';
+import { isWorkspaceInCredentialScope } from '@/lib/agent-workspaces/credential-scope';
 import {
   MAX_SESSION_NAME_LENGTH,
   nextUniqueSessionName,
@@ -92,7 +93,9 @@ async function denyIfCannotViewAgent(
   return NextResponse.json({ error: 'Insufficient permissions to use this agent' }, { status: 403 });
 }
 
-const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
+// The listing is token-readable so the CLI/SDK can find a workspace to exec in;
+// a token only ever sees the workspaces inside its own drive scope (below).
+const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
 export async function GET(request: Request) {
@@ -110,7 +113,9 @@ export async function GET(request: Request) {
       : { ownerId: auth.userId };
 
   try {
-    const sessions = await listSessions(filter);
+    const sessions = (await listSessions(filter)).filter((session) =>
+      isWorkspaceInCredentialScope(auth, session.driveId),
+    );
     // Children in THREE bulk queries, however many sessions listed — this is
     // polled by every open sidebar, and the per-session shape was 1+2N
     // queries per poll (review M4).

@@ -2,6 +2,19 @@
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- **`workspaces.list` and `workspaces.exec` — shell access to agent workspace sandboxes.**
+  `list({ driveId? })` returns your workspaces (a drive-scoped token only sees the ones inside its
+  drives); `exec({ workspaceId, command, cwd?, timeoutMs? })` runs a command in the workspace's
+  sandbox, starting it on first use, and returns `{ stdout, stderr, exitCode, truncated }`. A
+  non-zero `exitCode` is a normal result, not a thrown error — only a refusal throws (not found,
+  plan, quota). It goes through the same gate, command policy, billing and audit as the in-app
+  agent's `bash` tool. The operation's own timeout (260s) outlasts the server's 200s run ceiling,
+  and it is never retried automatically.
+
 ## [2.4.0] — 2026-09-12
 
 ### Added

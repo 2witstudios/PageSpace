@@ -61,8 +61,8 @@ export { createNullActiveKeyStore, defaultActiveKeysPath, FileActiveKeyStore, pa
 export type { ActiveKeyStore, FileActiveKeyStoreOptions } from './credentials/active-key.js';
 
 // Fixed exit code contract.
-export { EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR } from './exit-codes.js';
-export type { ExitCode } from './exit-codes.js';
+export { EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR, remoteExitCode } from './exit-codes.js';
+export type { ExitCode, RemoteExitCode } from './exit-codes.js';
 
 // Built-in commands.
 export { createHelpHandler, groupHelpCommands } from './commands/help.js';
@@ -461,3 +461,12 @@ export { buildPagespaceMcpArgv, runPagespaceMcpBin } from './pagespace-mcp-bin.j
 // Composition root.
 export { isLongRunningCommand, run } from './run.js';
 export type { RunDependencies } from './run.js';
+
+// Workspace shell verbs — thin projections over the workspaces.* SDK operations.
+export {
+  extractExecArgs,
+  renderWorkspacesList,
+  workspacesExecHandler,
+  workspacesListHandler,
+} from './commands/workspaces.js';
+export type { ExtractExecArgsResult } from './commands/workspaces.js';

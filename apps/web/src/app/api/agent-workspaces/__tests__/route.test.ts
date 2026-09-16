@@ -49,6 +49,8 @@ vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: (...args: unknown[]) => mockAuthenticateRequest(...args),
   isAuthError: (result: unknown) => result != null && typeof result === 'object' && 'error' in result,
   canPrincipalViewPage: (...args: unknown[]) => mockCanPrincipalViewPage(...args),
+  isManageKeysOnly: (auth: { manageKeysOnly?: boolean }) => auth.manageKeysOnly === true,
+  getAllowedDriveIds: (auth: { allowedDriveIds?: string[] }) => auth.allowedDriveIds ?? [],
 }));
 vi.mock('@/lib/repositories/conversation-repository', () => ({
   conversationRepository: {
@@ -133,6 +135,36 @@ beforeEach(() => {
 });
 
 describe('GET /api/agent-workspaces', () => {
+  it('should accept session AND mcp credentials', async () => {
+    await GET(new Request('http://localhost/api/agent-workspaces'));
+    expect(mockAuthenticateRequest).toHaveBeenCalledWith(expect.anything(), {
+      allow: ['session', 'mcp'],
+      requireCSRF: false,
+    });
+  });
+
+  it('given a drive-scoped token, should list ONLY workspaces inside its drives — never another drive or a driveless one', async () => {
+    mockAuthenticateRequest.mockResolvedValue({ userId: 'user-1', tokenType: 'mcp', allowedDriveIds: ['drive-1'] });
+    mockListSessions.mockResolvedValue([
+      SESSION_DTO,
+      { ...SESSION_DTO, workspaceId: 'ses-other', driveId: 'drive-2' },
+      { ...SESSION_DTO, workspaceId: 'ses-global', driveId: null },
+    ]);
+    const response = await GET(new Request('http://localhost/api/agent-workspaces'));
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.sessions.map((s: { workspaceId: string }) => s.workspaceId)).toEqual(['ses-1']);
+    expect(mockListShellsBulk).toHaveBeenCalledWith(['ses-1']);
+  });
+
+  it('given an unscoped token, should list every one of the owner\'s workspaces, driveless included', async () => {
+    mockAuthenticateRequest.mockResolvedValue({ userId: 'user-1', tokenType: 'mcp', allowedDriveIds: [] });
+    mockListSessions.mockResolvedValue([SESSION_DTO, { ...SESSION_DTO, workspaceId: 'ses-global', driveId: null }]);
+    const response = await GET(new Request('http://localhost/api/agent-workspaces'));
+    const body = await response.json();
+    expect(body.sessions.map((s: { workspaceId: string }) => s.workspaceId)).toEqual(['ses-1', 'ses-global']);
+  });
+
   it('given an admin with no filter, should list THEIR sessions with shells AND conversations attached', async () => {
     const response = await GET(new Request('http://localhost/api/agent-workspaces'));
     expect(response.status).toBe(200);

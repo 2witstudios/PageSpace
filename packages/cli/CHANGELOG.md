@@ -2,6 +2,25 @@
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- **`pagespace workspaces list` and `pagespace workspaces exec` — a shell in an agent workspace's
+  sandbox.** Running a command in a workspace sandbox used to be possible only through an agent in
+  chat. `workspaces list [--drive <id>]` shows your workspaces, and `workspaces exec <workspaceId>
+  -- <command…>` runs a command there: stdout and stderr go to your terminal's stdout and stderr,
+  and **the CLI exits with the command's own exit status**, so `exec … -- test -f build/ok && …`
+  composes like a local shell. `--cwd <dir>` (relative to the sandbox root) and `--timeout-ms <ms>`
+  (up to 200000) are optional, and `--json` prints the raw result instead. A cold workspace starts
+  its sandbox on the first exec. The run is gated, metered and audited exactly like the agent's
+  own `bash` tool: it needs a plan that includes code execution, and a key scoped to other drives
+  cannot see or reach the workspace. Quote a pipeline as one argument (`-- 'ls | wc -l'`) so your
+  local shell does not run half of it.
+- **`--` ends option parsing for every command.** Everything after it is passed to the command
+  verbatim, so a flag like `--json` after `--` belongs to the remote command, not to the CLI.
+- **`pagespace mcp` exposes `workspaces.list` and `workspaces.exec` as tools.**
+
 ## [1.10.0] — 2026-09-12
 
 ### Added

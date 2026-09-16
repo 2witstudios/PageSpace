@@ -90,6 +90,8 @@ import {
   updateDriveRole,
   updateTask,
   updateWorkflow,
+  execInWorkspace,
+  listWorkspaces,
   createRegistry,
   getOperation,
   listOperations,
@@ -203,6 +205,8 @@ const ALL_OPERATIONS: readonly Operation[] = [
   updateDriveRole,
   updateTask,
   updateWorkflow,
+  execInWorkspace,
+  listWorkspaces,
 ];
 
 /** Pure: assembles the full operation registry. Rejects duplicate names at construction (`createRegistry`). */
