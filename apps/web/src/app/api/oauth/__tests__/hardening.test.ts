@@ -65,6 +65,24 @@ describe('OAuth hardening sweep', () => {
     expect(violations.map((v) => v.path)).toEqual([]);
   });
 
+  it('every route that mints from a client_id enforces allowedGrantTypes through the shared clientAllowsGrant guard (ADR 0005: pagespace-agent must be refused at device_authorization)', () => {
+    // The registry now holds a client (pagespace-agent) whose allowedGrantTypes
+    // exclude the device-code grant. A door that resolves a client but never
+    // consults its grant list mints codes that can only ever fail at /token —
+    // and would mint a device code for the agent client. Every minting door
+    // must call the ONE pure guard, not re-derive `includes` inline.
+    const GUARD_CALL = /clientAllowsGrant\(/;
+    const GUARD_IMPORT = /clientAllowsGrant[^;]*from ['"]@pagespace\/lib\/auth\/oauth\/clients['"]/s;
+    const MINTING_DOORS = ['device_authorization', 'token'];
+
+    const violations = routes
+      .filter((r) => MINTING_DOORS.includes(r.path))
+      .filter((r) => !GUARD_CALL.test(r.content) || !GUARD_IMPORT.test(r.content));
+
+    expect(routes.filter((r) => MINTING_DOORS.includes(r.path)).length).toBe(MINTING_DOORS.length);
+    expect(violations.map((v) => v.path)).toEqual([]);
+  });
+
   it('never logs raw token, code, or user-code material inside an audit call\'s details', () => {
     // A crude but effective guard: the `details` object literal passed to
     // auditRequest must never reference the route's raw secret-holding

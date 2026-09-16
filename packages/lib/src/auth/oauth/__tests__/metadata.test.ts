@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildServerMetadata } from '../metadata';
+import { buildServerMetadata, AGENT_ASSERTION_GRANT_TYPE, AGENT_CLAIM_GRANT_TYPE } from '../metadata';
 
 describe('buildServerMetadata', () => {
   const config = { issuer: 'https://pagespace.ai' };
@@ -9,6 +9,7 @@ describe('buildServerMetadata', () => {
 
     expect(Object.keys(metadata).sort()).toEqual(
       [
+        'agent_auth',
         'authorization_endpoint',
         'code_challenge_methods_supported',
         'device_authorization_endpoint',
@@ -49,10 +50,10 @@ describe('buildServerMetadata', () => {
     expect(metadata.authorization_endpoint).toBe('http://onprem.internal:3000/api/oauth/authorize');
   });
 
-  it('advertises exactly the three grant types this phase ships, in RFC 8628 form for device code', () => {
+  it('advertises the three original grant types first, in RFC 8628 form for device code (agent URNs follow, see below)', () => {
     const metadata = buildServerMetadata(config);
 
-    expect(metadata.grant_types_supported).toEqual([
+    expect(metadata.grant_types_supported.slice(0, 3)).toEqual([
       'authorization_code',
       'refresh_token',
       'urn:ietf:params:oauth:grant-type:device_code',
@@ -103,5 +104,53 @@ describe('buildServerMetadata', () => {
 
     expect(metadata.issuer).toBe('https://pagespace.ai');
     expect(elapsedMs).toBeLessThan(500);
+  });
+});
+
+describe('buildServerMetadata — agent_auth (ADR 0005 Decisions 5, 12)', () => {
+  const config = { issuer: 'https://pagespace.ai' };
+
+  it('advertises the auth.md agent_auth block with every URL derived from the issuer only', () => {
+    const { agent_auth } = buildServerMetadata(config);
+
+    expect(agent_auth).toEqual({
+      skill: 'https://pagespace.ai/auth.md',
+      identity_endpoint: 'https://pagespace.ai/api/agent/identity',
+      claim_endpoint: 'https://pagespace.ai/api/agent/claim',
+      challenge_endpoint: 'https://pagespace.ai/api/agent/challenge',
+      identity_types_supported: ['anonymous'],
+      assertion_grant_type: AGENT_ASSERTION_GRANT_TYPE,
+      claim_grant_type: AGENT_CLAIM_GRANT_TYPE,
+    });
+  });
+
+  it('every URL in agent_auth is absolute and under the issuer — never a request Host', () => {
+    const { agent_auth } = buildServerMetadata({ issuer: 'http://onprem.internal:3000/' });
+    const urls = [agent_auth.skill, agent_auth.identity_endpoint, agent_auth.claim_endpoint, agent_auth.challenge_endpoint];
+    for (const url of urls) {
+      expect(url.startsWith('http://onprem.internal:3000/')).toBe(true);
+      // no doubled slash after the scheme (the trailing-slash issuer was trimmed)
+      expect(url.slice('http://'.length)).not.toContain('//');
+    }
+  });
+
+  it('names the RFC 7523 jwt-bearer URN as the assertion grant and a pagespace URN as the claim grant', () => {
+    expect(AGENT_ASSERTION_GRANT_TYPE).toBe('urn:ietf:params:oauth:grant-type:jwt-bearer');
+    expect(AGENT_CLAIM_GRANT_TYPE).toBe('urn:pagespace:agent-auth:grant-type:claim');
+  });
+
+  it('adds both grant URNs to grant_types_supported without dropping the existing three', () => {
+    const { grant_types_supported } = buildServerMetadata(config);
+    expect(grant_types_supported).toEqual([
+      'authorization_code',
+      'refresh_token',
+      'urn:ietf:params:oauth:grant-type:device_code',
+      'urn:ietf:params:oauth:grant-type:jwt-bearer',
+      'urn:pagespace:agent-auth:grant-type:claim',
+    ]);
+  });
+
+  it('supports only the anonymous identity type (no vendor-verifiable agent identity exists)', () => {
+    expect(buildServerMetadata(config).agent_auth.identity_types_supported).toEqual(['anonymous']);
   });
 });

@@ -4,7 +4,7 @@
  * DB `oauth_clients` table exists only for future dynamic registration.
  */
 import { describe, it, expect } from 'vitest';
-import { getRegisteredClient, validateRedirectUri, PAGESPACE_CLI_CLIENT_ID } from '../clients';
+import { getRegisteredClient, validateRedirectUri, clientAllowsGrant, PAGESPACE_CLI_CLIENT_ID, PAGESPACE_AGENT_CLIENT_ID } from '../clients';
 
 describe('getRegisteredClient', () => {
   it('returns the pagespace-cli client for its client_id', () => {
@@ -98,5 +98,79 @@ describe('validateRedirectUri', () => {
 
   it('zero-trust audit: an encoded dot-segment (literal %2e%2e, never decoded into a path separator) is rejected as an unregistered path', () => {
     expect(validateRedirectUri(client, 'http://127.0.0.1:5000/callback%2e%2e/evil')).toBe(false);
+  });
+});
+
+describe('getRegisteredClient — pagespace-agent (ADR 0005 Decision 5)', () => {
+  it('returns a public client with exactly jwt-bearer, claim and refresh_token grants', () => {
+    const client = getRegisteredClient(PAGESPACE_AGENT_CLIENT_ID);
+    expect(client).not.toBeNull();
+    expect(client?.clientId).toBe('pagespace-agent');
+    expect(client?.type).toBe('public');
+    expect(client?.allowedGrantTypes).toEqual([
+      'urn:ietf:params:oauth:grant-type:jwt-bearer',
+      'urn:pagespace:agent-auth:grant-type:claim',
+      'refresh_token',
+    ]);
+  });
+
+  it('is NOT first-party — firstParty unlocks applyKeyGrant and the loopback redirect wildcard, neither of which this client may reach (least privilege)', () => {
+    expect(getRegisteredClient(PAGESPACE_AGENT_CLIENT_ID)?.firstParty).toBe(false);
+  });
+
+  it('has no redirect URIs — nothing browser-shaped can ever be authorized for it', () => {
+    const client = getRegisteredClient(PAGESPACE_AGENT_CLIENT_ID)!;
+    expect(client.redirectUris).toEqual([]);
+    expect(validateRedirectUri(client, 'http://127.0.0.1:51234/callback')).toBe(false);
+  });
+
+  it('cannot use the CLI’s grants (authorization_code, device_code)', () => {
+    const client = getRegisteredClient(PAGESPACE_AGENT_CLIENT_ID)!;
+    expect(client.allowedGrantTypes).not.toContain('authorization_code');
+    expect(client.allowedGrantTypes).not.toContain('urn:ietf:params:oauth:grant-type:device_code');
+  });
+
+  it('leaves pagespace-cli byte-for-byte unchanged', () => {
+    const cli = getRegisteredClient(PAGESPACE_CLI_CLIENT_ID);
+    expect(cli).toEqual({
+      clientId: 'pagespace-cli',
+      name: 'PageSpace CLI',
+      type: 'public',
+      redirectUris: ['http://127.0.0.1/callback', 'http://[::1]/callback'],
+      allowedGrantTypes: ['authorization_code', 'urn:ietf:params:oauth:grant-type:device_code', 'refresh_token'],
+      firstParty: true,
+    });
+    expect(cli?.allowedGrantTypes).not.toContain('urn:ietf:params:oauth:grant-type:jwt-bearer');
+  });
+});
+
+describe('clientAllowsGrant — the ONE allowedGrantTypes guard every grant door shares', () => {
+  const cli = getRegisteredClient(PAGESPACE_CLI_CLIENT_ID)!;
+  const agent = getRegisteredClient(PAGESPACE_AGENT_CLIENT_ID)!;
+
+  it('allows exactly the grants in allowedGrantTypes', () => {
+    expect(clientAllowsGrant(cli, 'authorization_code')).toBe(true);
+    expect(clientAllowsGrant(cli, 'urn:ietf:params:oauth:grant-type:device_code')).toBe(true);
+    expect(clientAllowsGrant(cli, 'refresh_token')).toBe(true);
+    expect(clientAllowsGrant(agent, 'urn:ietf:params:oauth:grant-type:jwt-bearer')).toBe(true);
+    expect(clientAllowsGrant(agent, 'urn:pagespace:agent-auth:grant-type:claim')).toBe(true);
+    expect(clientAllowsGrant(agent, 'refresh_token')).toBe(true);
+  });
+
+  it('refuses the device-code grant for pagespace-agent (the device_authorization door must fail closed)', () => {
+    expect(clientAllowsGrant(agent, 'urn:ietf:params:oauth:grant-type:device_code')).toBe(false);
+    expect(clientAllowsGrant(agent, 'authorization_code')).toBe(false);
+  });
+
+  it('refuses the agent grants for pagespace-cli', () => {
+    expect(clientAllowsGrant(cli, 'urn:ietf:params:oauth:grant-type:jwt-bearer')).toBe(false);
+    expect(clientAllowsGrant(cli, 'urn:pagespace:agent-auth:grant-type:claim')).toBe(false);
+  });
+
+  it('is an exact match — no prefix, case or whitespace leniency', () => {
+    expect(clientAllowsGrant(cli, 'refresh_token ')).toBe(false);
+    expect(clientAllowsGrant(cli, 'Refresh_Token')).toBe(false);
+    expect(clientAllowsGrant(cli, 'refresh')).toBe(false);
+    expect(clientAllowsGrant(cli, '')).toBe(false);
   });
 });

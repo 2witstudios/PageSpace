@@ -21,7 +21,8 @@
       "entry": [
         "src/app/**/page.tsx",
         "src/app/**/layout.tsx",
-        "src/app/**/route.ts"
+        "src/app/**/route.ts",
+        "src/lib/agent-auth/auth-md.ts"
       ],
       "project": [
         "src/**/*.{ts,tsx}",
@@ -209,6 +210,15 @@
         "src/audit/security-audit-chain-verifier.ts",
         "src/audit/security-audit.ts",
         "src/auth/account-lockout.ts",
+        "src/auth/agent/account-type.ts",
+        "src/auth/agent/claim-decision.ts",
+        "src/auth/agent/enabled.ts",
+        "src/auth/agent/lifecycle-decision.ts",
+        "src/auth/agent/pow.ts",
+        "src/auth/agent/reserved-email.ts",
+        "src/auth/agent/secret.ts",
+        "src/auth/agent/signin-decision.ts",
+        "src/auth/agent/signup-decision.ts",
         "src/auth/broadcast-auth.ts",
         "src/auth/constants.ts",
         "src/auth/csrf-utils.ts",
@@ -250,6 +260,7 @@
         "src/auth/token-utils.ts",
         "src/auth/user-repository.ts",
         "src/auth/verification-utils.ts",
+        "src/billing/agent-payer.ts",
         "src/billing/automation-preferences.ts",
         "src/billing/cost-reconcile.ts",
         "src/billing/credit-backfill.ts",
