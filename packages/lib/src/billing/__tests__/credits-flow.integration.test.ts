@@ -469,11 +469,29 @@ function chargeMc(costDollars: number): number {
 }
 
 // A Pro renewal at list price unless `amountPaid` says otherwise: the grant is sized
-// from what the invoice PAID (MON-2), so every fixture states it.
+// from what the invoice PAID (MON-2), so every fixture states it. billing_reason
+// defaults to subscription_cycle — an ordinary renewal, the only kind of invoice
+// this helper is meant to represent (the SECURITY tests build their own literals
+// for every other billing_reason).
+// A real subscription parent, present by default — every fixture built with this
+// helper represents an ordinary renewal; the SECURITY tests build their own
+// literals for a manual/parentless invoice (parent simply absent).
+const REAL_SUBSCRIPTION_PARENT = { subscription_details: { subscription: 'sub_test_1' } };
+
 const invoicePaid = (id: string, customer: string, periodStart: number, periodEnd: number, amountPaid = 1500) => ({
   id: `evt_${id}`,
   type: 'invoice.paid',
-  data: { object: { id, customer, amount_paid: amountPaid, period_start: periodStart, period_end: periodEnd } },
+  data: {
+    object: {
+      id,
+      customer,
+      amount_paid: amountPaid,
+      billing_reason: 'subscription_cycle',
+      parent: REAL_SUBSCRIPTION_PARENT,
+      period_start: periodStart,
+      period_end: periodEnd,
+    },
+  },
 });
 
 const creditPackCheckout = (id: string, customer: string, packCents: number) => ({
@@ -579,6 +597,70 @@ describe('credits flow — grants sized from the invoice paid (MON-2, MONEY_MODE
     expect(missed).toHaveLength(1);
     expect(missed[0]).toMatchObject({ amountCents: 0, paidCents: 1500, stripeRef: 'in_missed', consumeStatus: 'applied' });
     expect(balanceOf('u1')).toBeUndefined();
+  });
+});
+
+describe('SECURITY (Codex P1): grants only fire for real subscription invoices, and gifted detection is race-free against subscription webhook ordering', () => {
+  it('a manual invoice on an existing paid Business subscriber does not mint credit from amount_paid — reproduces the exact live-path defect (routeInvoice classifies a parentless invoice as account_plan; the webhook still called applyStripeFunding on it)', async () => {
+    seedUser('u1', 'cus_1', 'business');
+    seedLiveSubscription('u1', 'active');
+    const manualInvoice = {
+      id: 'evt_manual',
+      type: 'invoice.paid',
+      data: { object: { id: 'in_manual', customer: 'cus_1', amount_paid: 100_000, billing_reason: 'manual' } },
+    };
+
+    await applyStripeFunding(manualInvoice);
+
+    expect(ledgerOf('u1')).toHaveLength(0);
+    expect(balanceOf('u1')).toBeUndefined();
+  });
+
+  it('a gifted subscription grants correctly even when invoice.paid arrives BEFORE the local subscriptions row exists — reproduces the exact webhook-ordering race Codex named (isGiftedSubscriber cannot see a row that has not been written yet)', async () => {
+    seedUser('u1', 'cus_1', 'pro');
+    // Deliberately NO seedLiveSubscription('u1', ...) call: the local subscriptions
+    // row for this gift does not exist yet, exactly as when invoice.paid outraces
+    // customer.subscription.created. The admin gift route stamps the subscription's
+    // OWN metadata with type: 'gift_subscription', which Stripe snapshots onto the
+    // invoice at finalization — readable from THIS SAME event, with no DB round trip.
+    const giftInvoice = {
+      id: 'evt_gift',
+      type: 'invoice.paid',
+      data: {
+        object: {
+          id: 'in_gift',
+          customer: 'cus_1',
+          amount_paid: 0,
+          subtotal: 1500,
+          billing_reason: 'subscription_create',
+          parent: { subscription_details: { subscription: 'sub_gift_1', metadata: { type: 'gift_subscription' } } },
+        },
+      },
+    };
+
+    await applyStripeFunding(giftInvoice);
+
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(allowanceCentsForPaidCents(1500, 'pro'));
+    expect(ledgerOf('u1').find((r) => r.stripeRef === 'in_gift')).toMatchObject({ entryType: 'monthly_grant', paidCents: 0 });
+  });
+
+  it('CORRECTION (Codex P1, "Allow paid subscription-update invoices to grant credits"): a paid mid-cycle upgrade (subscription_update, proration_behavior always_invoice) grants proportional credits through the real webhook path', async () => {
+    seedUser('u1', 'cus_1', 'business');
+    seedLiveSubscription('u1', 'active');
+    const upgradeInvoice = {
+      id: 'evt_upgrade',
+      type: 'invoice.paid',
+      data: {
+        object: { id: 'in_upgrade', customer: 'cus_1', amount_paid: 2000, billing_reason: 'subscription_update', parent: REAL_SUBSCRIPTION_PARENT },
+      },
+    };
+
+    await applyStripeFunding(upgradeInvoice);
+
+    const grant = ledgerOf('u1').find((r) => r.stripeRef === 'in_upgrade')!;
+    expect(grant).toMatchObject({ entryType: 'monthly_grant', paidCents: 2000 });
+    expect(grant.amountCents).toBeGreaterThan(0);
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(grant.amountCents);
   });
 });
 

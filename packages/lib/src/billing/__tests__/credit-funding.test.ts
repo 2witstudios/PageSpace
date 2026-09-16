@@ -136,11 +136,27 @@ function missedGrantInsert(cap: Captured) {
 
 const PRO_USER = [{ id: 'u1', subscriptionTier: 'pro' }];
 
+// billing_reason defaults to 'subscription_cycle' — an ordinary renewal — since
+// that is what nearly every fixture in this file represents; the SECURITY tests
+// below override it explicitly to exercise every other reason.
+// A real subscription parent, present by default — every fixture here represents
+// an ordinary renewal unless a test explicitly overrides `parent` (the manual/
+// parentless-invoice SECURITY tests set `parent: undefined`).
+const REAL_SUBSCRIPTION_PARENT = { subscription_details: { subscription: 'sub_test_1' } };
+
 const invoiceEvent = {
   id: 'evt_inv',
   type: 'invoice.paid',
   data: {
-    object: { id: 'in_123', customer: 'cus_1', amount_paid: 1500, period_start: 1_700_000_000, period_end: 1_702_592_000 },
+    object: {
+      id: 'in_123',
+      customer: 'cus_1',
+      amount_paid: 1500,
+      billing_reason: 'subscription_cycle',
+      parent: REAL_SUBSCRIPTION_PARENT,
+      period_start: 1_700_000_000,
+      period_end: 1_702_592_000,
+    },
   },
 };
 
@@ -150,7 +166,16 @@ function paidInvoiceEvent(amountPaid: number | undefined, extra: Record<string, 
     id: 'evt_inv',
     type: 'invoice.paid',
     data: {
-      object: { id: 'in_123', customer: 'cus_1', amount_paid: amountPaid, period_start: 1_700_000_000, period_end: 1_702_592_000, ...extra },
+      object: {
+        id: 'in_123',
+        customer: 'cus_1',
+        amount_paid: amountPaid,
+        billing_reason: 'subscription_cycle',
+        parent: REAL_SUBSCRIPTION_PARENT,
+        period_start: 1_700_000_000,
+        period_end: 1_702_592_000,
+        ...extra,
+      },
     },
   };
 }
@@ -247,6 +272,8 @@ describe('applyStripeFunding', () => {
           id: 'in_renewal',
           customer: 'cus_1',
           amount_paid: 1500,
+          billing_reason: 'subscription_cycle',
+          parent: REAL_SUBSCRIPTION_PARENT,
           period_start: OLD_START,
           period_end: OLD_END,
           lines: { data: [{ period: { start: NEW_START, end: NEW_END } }] },
@@ -278,6 +305,8 @@ describe('applyStripeFunding', () => {
           id: 'in_change',
           customer: 'cus_1',
           amount_paid: 1500,
+          billing_reason: 'subscription_cycle',
+          parent: REAL_SUBSCRIPTION_PARENT,
           period_start: 1_697_000_000,
           period_end: 1_700_000_000,
           lines: { data: [prorationLine, newPlanLine] },
@@ -653,7 +682,7 @@ describe('applyStripeFunding', () => {
         );
       });
 
-      it('MON-2 (b) a proration-only / subscription_update invoice that paid $0 grants nothing', async () => {
+      it('MON-2 (b) a proration-only / subscription_update invoice that paid $0 grants nothing (subscription_update is grant-eligible as a KIND; $0 paid is $0 granted)', async () => {
         process.env.MONEY_MODEL_V2 = 'true';
         const cap: Captured = {};
         refill(cap);
@@ -666,6 +695,21 @@ describe('applyStripeFunding', () => {
           'credit funding: invoice grants nothing',
           expect.objectContaining({ reason: 'zero_amount' }),
         );
+      });
+
+      it('CORRECTION (Codex P1, "Allow paid subscription-update invoices to grant credits"): a PAID subscription_update invoice (a mid-cycle upgrade proration) grants proportional credits, unlike a manual invoice', async () => {
+        process.env.MONEY_MODEL_V2 = 'true';
+        const cap: Captured = {};
+        refill(cap);
+
+        await applyStripeFunding(paidInvoiceEvent(1000, { subtotal: 1000, billing_reason: 'subscription_update' }), { tier: 'business' });
+
+        expect(cap.ledgerValues).toMatchObject({
+          entryType: 'monthly_grant',
+          paidCents: 1000,
+          amountCents: allowanceCentsForPaidCents(1000, 'business'),
+        });
+        expect(cap.ledgerValues!.amountCents).toBeGreaterThan(0);
       });
 
       it('MON-2 (c) a partial discount grants from amount_paid: 20% off Pro → 1200 × ratio', async () => {
