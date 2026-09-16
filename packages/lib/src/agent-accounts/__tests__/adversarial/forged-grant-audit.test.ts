@@ -117,6 +117,7 @@ describe('forged grant → denial audit row (ASI03)', () => {
         accountId: forged.accountId,
         accountKind: forged.accountKind,
         accountDriveId: null,
+        accountStatus: 'active',
         currentCredentialVersion: forged.credentialVersion,
         currentPolicyVersion: forged.policyVersion,
         delegation: { kind: 'live_session' },
@@ -126,7 +127,7 @@ describe('forged grant → denial audit row (ASI03)', () => {
       requestDigest: DIGEST,
       requestOperation: forged.operation,
       nonceState: 'fresh',
-      approval: { kind: 'concrete', approvalId: 'approval_framed' as ApprovalId, requestDigest: DIGEST, consumedByGrantId: forged.grantId },
+      approval: { kind: 'concrete', approvalId: 'approval_framed' as ApprovalId, accountId: forged.accountId, requestDigest: DIGEST, consumedByGrantId: forged.grantId, expiresAt: NOW + 120_000 },
       verify,
       hash: sha256,
     });

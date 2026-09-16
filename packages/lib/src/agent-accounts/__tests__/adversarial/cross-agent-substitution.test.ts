@@ -106,9 +106,10 @@ function present(grant: AgentAccountGrant, expected: Partial<ExpectedBinding> = 
       accountId: grant.accountId,
       accountKind: grant.accountKind,
       accountDriveId: DRIVE,
+      accountStatus: 'active',
       currentCredentialVersion: grant.credentialVersion,
       currentPolicyVersion: grant.policyVersion,
-      delegation: grant.delegationId === null ? { kind: 'live_session' } : { kind: 'delegation', delegationId: grant.delegationId, accountId: grant.accountId, expired: false, revoked: false },
+      delegation: grant.delegationId === null ? { kind: 'live_session' } : { kind: 'delegation', delegationId: grant.delegationId, accountId: grant.accountId, agentPageId: grant.agentPageId, delegatedBy: grant.human.userId, expired: false, revoked: false },
       sandbox: null,
       ceilingAdmitsAccount: true,
       ...expected,
@@ -116,7 +117,7 @@ function present(grant: AgentAccountGrant, expected: Partial<ExpectedBinding> = 
     requestDigest,
     requestOperation: grant.operation,
     nonceState: 'fresh',
-    approval: { kind: 'concrete', approvalId: 'approval_1' as ApprovalId, requestDigest: DIGEST_X, consumedByGrantId: grant.grantId },
+    approval: { kind: 'concrete', approvalId: 'approval_1' as ApprovalId, accountId: grant.accountId, requestDigest: DIGEST_X, consumedByGrantId: grant.grantId, expiresAt: NOW + 120_000 },
     verify,
     hash,
   });
@@ -185,9 +186,18 @@ describe('adversarial: cross-agent-substitution', () => {
     const unattended = grantFor({ human: { userId: 'user_1' as UserId, sessionId: null }, delegationId: 'dlg_A' as DelegationId, agentPageId: 'page_B' as AgentPageId });
     // The presenter's current run is page_B; the only delegation on file is for another account/page pairing.
     const actual = present(unattended, {
-      delegation: { kind: 'delegation', delegationId: 'dlg_A' as DelegationId, accountId: 'acct_other' as AccountId, expired: false, revoked: false },
+      delegation: { kind: 'delegation', delegationId: 'dlg_A' as DelegationId, accountId: 'acct_other' as AccountId, agentPageId: 'page_A' as AgentPageId, delegatedBy: 'user_1' as UserId, expired: false, revoked: false },
     });
     expect(actual).toEqual({ ok: false, reason: 'no_delegation' });
+  });
+
+  it('given a delegation recorded for agent page P by user U and an unattended run of page Q, or one acting as human V, presenting a grant naming that delegationId, should return no_delegation [G1a review H3]', () => {
+    const recorded = { kind: 'delegation', delegationId: 'dlg_P' as DelegationId, accountId: 'acct_X' as AccountId, agentPageId: 'page_P' as AgentPageId, delegatedBy: 'user_U' as UserId, expired: false, revoked: false } as const;
+    const onPageQ = grantFor({ human: { userId: 'user_U' as UserId, sessionId: null }, delegationId: 'dlg_P' as DelegationId, agentPageId: 'page_Q' as AgentPageId });
+    const asHumanV = grantFor({ human: { userId: 'user_V' as UserId, sessionId: null }, delegationId: 'dlg_P' as DelegationId, agentPageId: 'page_P' as AgentPageId });
+    const asRecorded = grantFor({ human: { userId: 'user_U' as UserId, sessionId: null }, delegationId: 'dlg_P' as DelegationId, agentPageId: 'page_P' as AgentPageId });
+    const actual = [present(onPageQ, { delegation: recorded }), present(asHumanV, { delegation: recorded }), present(asRecorded, { delegation: recorded }).ok];
+    expect(actual).toEqual([{ ok: false, reason: 'no_delegation' }, { ok: false, reason: 'no_delegation' }, true]);
   });
 
   it('given a grant whose acting human is not the run human (another user driving the shared agent), should return principal_mismatch', () => {

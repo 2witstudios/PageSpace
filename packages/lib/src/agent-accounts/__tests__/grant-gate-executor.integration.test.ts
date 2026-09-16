@@ -91,6 +91,7 @@ const expectedFor = (grant: AgentAccountGrant): ExpectedBinding => ({
   accountId: grant.accountId,
   accountKind: grant.accountKind,
   accountDriveId: 'd1' as DriveId,
+  accountStatus: 'active',
   currentCredentialVersion: grant.credentialVersion,
   currentPolicyVersion: grant.policyVersion,
   delegation: { kind: 'live_session' },

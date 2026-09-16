@@ -111,6 +111,7 @@ const expectedFor = (grant: AgentAccountGrant): ExpectedBinding => ({
   accountId: grant.accountId,
   accountKind: grant.accountKind,
   accountDriveId: 'd1' as DriveId,
+  accountStatus: 'active',
   currentCredentialVersion: grant.credentialVersion,
   currentPolicyVersion: grant.policyVersion,
   delegation: { kind: 'live_session' },
@@ -197,7 +198,7 @@ describe('signGrant (ADR 0004 §2.2)', () => {
       requestDigest: grant.requestDigest,
       requestOperation: grant.operation,
       nonceState: 'fresh',
-      approval: { kind: 'concrete', approvalId: grant.approvalId as ApprovalId, requestDigest: grant.requestDigest, consumedByGrantId: grant.grantId },
+      approval: { kind: 'concrete', approvalId: grant.approvalId as ApprovalId, accountId: grant.accountId, requestDigest: grant.requestDigest, consumedByGrantId: grant.grantId, expiresAt: grant.exp },
       verify,
       hash,
     });
@@ -218,7 +219,7 @@ describe('signGrant (ADR 0004 §2.2)', () => {
       requestDigest: grant.requestDigest,
       requestOperation: grant.operation,
       nonceState: 'fresh',
-      approval: { kind: 'concrete', approvalId: grant.approvalId as ApprovalId, requestDigest: grant.requestDigest, consumedByGrantId: grant.grantId },
+      approval: { kind: 'concrete', approvalId: grant.approvalId as ApprovalId, accountId: grant.accountId, requestDigest: grant.requestDigest, consumedByGrantId: grant.grantId, expiresAt: grant.exp },
       verify,
       hash,
     });
