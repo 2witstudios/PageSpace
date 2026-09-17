@@ -160,8 +160,8 @@ export async function executeWorkflow(input: WorkflowExecutionInput): Promise<Wo
     } else if (scoped.agentPageId) {
       // Legacy single-AI-prompt path, byte-for-byte pre-steps behavior.
       result = await runExecution(scoped, startTime, {
-        prompt: input.eventContext?.promptOverride ?? input.prompt,
-        agentPageId: input.agentPageId,
+        prompt: scoped.eventContext?.promptOverride ?? scoped.prompt,
+        agentPageId: scoped.agentPageId,
       });
     } else {
       result = {
