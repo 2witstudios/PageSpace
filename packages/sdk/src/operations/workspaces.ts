@@ -18,7 +18,10 @@ import { defineOperation } from '../registry/define.js';
 /** Mirrors the web tool's `bashInputSchema` limit (`MAX_PATH_LENGTH`). */
 const MAX_PATH_LENGTH = 1024;
 
-/** The fields a shell client needs; the route sends more (shells, conversations, nodes), passed through untouched. */
+/**
+ * The fields a shell client needs. The route may send more (shells, conversations, nodes — empty for a
+ * drive-scoped key, which never receives its owner's children), passed through untouched.
+ */
 const workspaceSchema = z.looseObject({
   workspaceId: z.string(),
   driveId: z.string().nullable(),
