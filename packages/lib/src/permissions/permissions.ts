@@ -5,7 +5,7 @@ import { driveMembers, pagePermissions, driveRoles } from '@pagespace/db/schema/
 import { users } from '@pagespace/db/schema/auth';
 import { loggers } from '../logging/logger-config';
 import { parseUserId, parsePageId } from '../validators/id-validators';
-import { fetchCustomRolePermissions, resolveCustomRolePermissions, type CustomRolePerms, type PagePerm } from './membership-queries';
+import { fetchCustomRolePermissions, resolveCustomRolePermissions, resolveDriveWideCanEdit, type CustomRolePerms, type PagePerm } from './membership-queries';
 import { resolveRolePermissions } from './resolve-role-permissions';
 
 /**
@@ -151,7 +151,7 @@ export async function getUserAccessLevel(
         return { canView: true, canEdit: true, canShare: true, canDelete: true };
       }
 
-      const membership = await db.select({ role: driveMembers.role })
+      const membership = await db.select({ role: driveMembers.role, customRoleId: driveMembers.customRoleId })
         .from(driveMembers)
         .where(and(
           eq(driveMembers.driveId, drive[0].id),
@@ -162,9 +162,15 @@ export async function getUserAccessLevel(
 
       if (membership.length > 0) {
         const isAdmin = membership[0].role === 'ADMIN';
+        // The single drive-wide canEdit rule (#2627): a custom role bounds a
+        // MEMBER to what its driveWidePermissions grant; an unresolvable or
+        // foreign-drive role fails closed.
+        const canEditMap = await resolveDriveWideCanEdit([
+          { driveId: drive[0].id, role: isAdmin ? 'ADMIN' : 'MEMBER', customRoleId: membership[0].customRoleId },
+        ]);
         return {
           canView: true,
-          canEdit: true,
+          canEdit: canEditMap.get(drive[0].id) === true,
           canShare: isAdmin,
           canDelete: isAdmin,
         };

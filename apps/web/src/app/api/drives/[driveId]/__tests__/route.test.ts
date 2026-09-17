@@ -130,6 +130,7 @@ const createDriveWithAccessFixture = (
   drivePrompt: overrides.drivePrompt ?? null,
   isOwned: overrides.isOwned ?? true,
   role: overrides.role ?? 'OWNER',
+  canCreatePages: overrides.canCreatePages ?? true,
   lastAccessedAt: overrides.lastAccessedAt ?? null,
   homePageId: overrides.homePageId ?? null,
   isMember: (overrides as { isMember?: boolean }).isMember ?? false,
@@ -141,6 +142,7 @@ const createAccessFixture = (overrides: Partial<DriveAccessInfo> = {}): DriveAcc
   isAdmin: overrides.isAdmin ?? false,
   isMember: overrides.isMember ?? false,
   role: overrides.role ?? null,
+  customRoleId: overrides.customRoleId ?? null,
 });
 
 // Create mock context with async params (Next.js 15 pattern)

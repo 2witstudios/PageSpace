@@ -81,6 +81,10 @@ import type {
 } from './canonical-request';
 import type { ExecutorChannel } from './grant';
 import { lookupOperation } from './lookup-operation';
+import { findRegistryEntryDefects } from './find-registry-entry-defects';
+import { extractBodyResources } from './extract-body-resources';
+import { deriveGitResources } from './derive-git-resources';
+import { sortResourcePairs } from './sort-resource-pairs';
 
 const METHODS_BY_CHANNEL: { readonly [C in ExecutorChannel]: readonly MethodFor[C][] } = {
   'http-executor': ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'],
@@ -296,6 +300,15 @@ function canonicalizeHeaders(
   return { ok: true, headers: sorted };
 }
 
+/** A query name for comparison only (never digested): decoded when it decodes, else as written. */
+function decodeURIComponentSafe(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 export const canonicalizeRequest: CanonicalizeRequest = (call): CanonicalizeResult => {
   if (call === null || typeof call !== 'object') return refuse('malformed');
   const { request: input, providerSlug, registry } = call;
@@ -323,13 +336,39 @@ export const canonicalizeRequest: CanonicalizeRequest = (call): CanonicalizeResu
   if (!path.ok) return path;
   const query = canonicalizeQuery(url.search);
   if (!query.ok) return query;
-  const match = lookupOperation({ registry, providerSlug, channel, method: method as CanonicalRequest['method'], path: path.path });
+  const match = lookupOperation({ registry, providerSlug, origin: origin.origin, channel, method: method as CanonicalRequest['method'], path: path.path });
   const headers = canonicalizeHeaders(input.headers, match?.entry.declaredHeaders ?? [], input.body.byteLength);
   if (!headers.ok) return headers;
 
   const bodySha256 = createHash('sha256').update(input.body).digest('hex');
-  // Extracted from the path by the matched entry's slots — never the caller's (M8).
-  const resources = match?.resources ?? [];
+  // Bound by the matched entry from the ACTUAL request — its path slots (M8), its typed body slots
+  // (G1c R5) and, for a relay push, the refs in the git command list (G1c R11) — never the caller's.
+  let resources: readonly (readonly [string, string])[] = [];
+  if (match !== null) {
+    // The registry-load checks also hold at runtime: a defective entry (shared restriction key,
+    // undeclared audit or restriction slot, malformed template) never projects resources or reaches
+    // the audit allowlist, whether or not a loader ran (CodeRabbit on #2660).
+    if (findRegistryEntryDefects({ registry: [match.entry] }).length > 0) return refuse('malformed');
+    // A body-slot operation is read as JSON by exactly one route: a JSON content type, and no query
+    // argument that shadows a body slot (a provider that also reads query arguments would act on it).
+    if (match.entry.bodySlots.length > 0) {
+      const contentType = headers.headers.find(([name]) => name === 'content-type')?.[1] ?? '';
+      if (!/^application\/json\s*(;|$)/i.test(contentType)) return refuse('malformed');
+      const shadowed = new Set(match.entry.bodySlots.map(({ pointer }) => (pointer[0] ?? '').toLowerCase()));
+      if (query.query.some(([name]) => shadowed.has(decodeURIComponentSafe(name).toLowerCase()))) return refuse('malformed');
+    }
+    const body = extractBodyResources({ slots: match.entry.bodySlots, body: input.body });
+    if (!body.ok) return refuse(body.reason);
+    // Derived resources are relay-only (a registry defect elsewhere); `channel` already fixed `method` to a relay verb.
+    const derived =
+      channel === 'relay-runner'
+        ? deriveGitResources({ method: method as MethodFor['relay-runner'], rules: match.entry.derivedResources, body: input.body })
+        : ({ ok: true, resources: [] } as const);
+    if (!derived.ok) return refuse(derived.reason);
+    const keys = match.entry.restrictionKeys;
+    const keyed = [...body.resources, ...derived.resources].map(([slot, value]) => [Object.prototype.hasOwnProperty.call(keys, slot) ? keys[slot]! : slot, value] as const);
+    resources = sortResourcePairs([...match.resources, ...keyed]);
+  }
 
   return {
     ok: true,

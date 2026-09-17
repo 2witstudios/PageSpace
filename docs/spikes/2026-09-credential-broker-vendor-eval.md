@@ -3,13 +3,14 @@
 > **Date:** 2026-09-14 · **Epic:** Agent Accounts & Credential Broker (`j471yhv7p3abea7mlxrchdu1`) · **Gate:** L0 (S2) · **Feeds:** D-24 (Nango vs the custody rule), Λ4, Λ5, Λ12
 > **Type:** Document only. No product code, no sign-ups, nothing provisioned or paid. Public docs and OSS repos only.
 > **Method:** every vendor claim is a verbatim quote with its URL, fetched 2026-09-14. Anything not quoted is marked *inference*. Where a doc and the source disagree, the source is cited. Two numbers in the cost section rest on stated assumptions, not on vendor quotes.
+> **Superseded context (added 2026-09-16, PR #2633 round 4):** D-21 was revised on 2026-09-15 after this spike. The store is now **self-hosted Infisical OSS on its own Fly app (own Postgres + Redis), with no paid vendor**. D-24 dropped Nango, D-29 chose one identity per tenant, and D-18 made v1 relay-only. The cloud-hosted scorecard cells (§0.1), the cloud cost model (§8.1) and "Onprem (deprioritized)" (§9) record the evidence as it stood on 2026-09-14. They are not the current plan, so the Control Board decision register wins where they differ.
 > **Reads:** Control Board §0 liability register, §6 conventions, §7 rules; Codex review `km6yrydf0sc08g6ikoikno7f` ("My store recommendation…"); `infrastructure/docker-compose.tenant.yml`, `env.tenant.template`, `scripts/tenant-stack.sh`, `traefik/tenant-labels.yml`, `UPGRADE.md`; `packages/lib/src/deployment-mode.ts`, `config/env-validation.ts`; `services/fly/flaps-client.ts`; `services/sandbox/{egress,containment,sandbox-env,git-tool-runners}.ts`; `docs/sprites/services-adoption-design.md`.
 
 ## 0. TL;DR — the two recommendations
 
 **D-24 (Nango): drop it.** Self-hosted Nango cannot externalize its token store — the only hook is wrapping its single data-encryption key under AWS or GCP KMS, and the tokens themselves stay in Nango's own Postgres (§1.3). It also cannot meet the plane bar's "per-tenant scoped identity for every reader": its API keys are per *environment*, and `GET /connections/{id}` hands the plaintext access token (and, on request, the refresh token) to any holder of that key (§1.4, §1.6). Isolating it costs a second plane's worth of infrastructure (own Postgres, Redis, network, KMS-wrapped key, one Nango environment or instance per tenant) for a free tier that is "Auth and Proxy" only under ELv2, with unsigned images and no key rotation (§1.7–1.10, §8). What Nango uniquely buys — the authorization-code flow and quirks for 1,000+ providers — is not on this epic's critical path: today's integrations are a handful of providers with an OAuth handler already in the repo, and G3 already scopes the refresh lifecycle as "ours otherwise". **Runner-up: isolate Nango as a second plane** on its own Fly custom private network with Managed Postgres, Upstash Redis and a KMS-wrapped DEK (§8.2, ≈ $70/month flat plus an unpublished Enterprise fee if syncs/webhooks are ever wanted). It lost because the reader-scoping gap is structural, not configurable: the boundary between "the web process may proxy" and "the web process may read every tenant's refresh token" would be a *policy on our side*, which is exactly what the custody rule forbids counting.
 
-**Egress broker: Infisical Agent Proxy (the platform feature), not the standalone Agent Vault binary, behind our own authority.** D-22 says "Infisical Agent Vault"; Infisical ships two different things under adjacent names (§3.0), and only the platform Agent Proxy keeps the credential in the Infisical project under the per-project key hierarchy D-17/Λ4 depend on. The standalone Agent Vault is a research-preview MITM proxy with its own SQLite/Postgres store and its own DEK — a *third* credential plane — unless run in Infisical-backed mode, where it still caches "the encrypted snapshot locally" (§3.2). Both are TLS-intercepting forward proxies that need `HTTPS_PROXY` plus a trusted CA inside the agent runtime, and both identify the caller by a bearer the guest holds (§3.3) — the identity shape S1/D-18 says to avoid. Neither does caller-bound grants, a canonical request digest, approval binding or audit-before-execute; those stay ours (§6). agentgateway is a Rust MCP/A2A/LLM data plane, Apache-2.0 under the Linux Foundation, that holds no credentials at rest at all — the brief's "STS with KEK/DEK + KMS" does not exist in its public docs; it exchanges an inbound JWT for a downstream token at an external IdP (RFC 8693/7523) and caches in memory (§4). It overlaps the L4 relay only for MCP-shaped traffic and is not a candidate for L2/L3.
+**Egress broker: Infisical Agent Proxy (the platform feature), not the standalone Agent Vault binary, behind our own authority.** D-22 says "Infisical Agent Vault"; Infisical ships two different things under adjacent names (§3.0), and only the platform Agent Proxy keeps the credential in the Infisical project under the per-project key hierarchy D-17/Λ4 depend on. The standalone Agent Vault is a research-preview MITM proxy with its own SQLite/Postgres store and its own DEK — a *third* credential plane — unless run in Infisical-backed mode, where it still caches "the encrypted snapshot locally" (§3.2). Both are TLS-intercepting forward proxies that need `HTTPS_PROXY` plus a trusted CA inside the agent runtime, and both identify the caller by a bearer the guest holds (§3.3) — the identity shape S1/D-18 says to avoid. Neither does caller-bound grants, a canonical request digest, approval binding or audit-before-execute; those stay ours (§6). agentgateway is a Rust MCP/A2A/LLM data plane, Apache-2.0 under the Linux Foundation, that holds no credentials at rest at all — the brief's "STS with KEK/DEK + KMS" does not exist in its public docs; it exchanges an inbound JWT for a downstream token at an external IdP (RFC 8693/7523) and caches in memory (§4). It overlaps the L4 relay only for MCP-shaped traffic and is not a candidate for L2/L3. *Amended 2026-09-16 (round 4):* the recommendation is **conditional**. Agent Proxy resolves plaintext inside the proxy, so the executor's resolve-time drift check cannot bind to the value the proxy injects (§7.2). Until G2 verifies that the proxy can pin an expected secret version on the same fetch, every updatable credential goes through the direct store adapter.
 
 The orchestrator may want a [D-n] on the D-22 wording (Agent Proxy vs Agent Vault); this spike does not decide it, it only shows the two products are not interchangeable.
 
@@ -25,7 +26,7 @@ The plane bar (Control Board intro): own store · own key hierarchy · own netwo
 | Per-tenant scoped reader identity | **no** — API key = one environment, reads all connections in it | yes — machine identity per project + path conditions (custom roles: Advanced/Enterprise) | one machine identity per proxy instance; scoping = that identity's project role | agent session token per agent context | caller JWT `iss`/`aud`/`sub` + CEL; no stored per-tenant credential to scope |
 | Audit before use | free tier: "Auth + proxy only" observability | audit logs Pro+, streaming Enterprise; **not** acceptance-before-execute | request logs; not acceptance-before-execute | request logs, 168h/10k rows default | access logs / OTel; not acceptance-before-execute |
 | Plaintext to our web process? | **yes, on demand** via `GET /connections/{id}` (any env key) | yes for whoever holds a reading identity — the executor only, by our design | **no** — swapped at the proxy; agent holds a placeholder | **no** — same; "never returned in an API response" | no — inbound token stripped, exchanged token goes proxy → backend only |
-| Plaintext to the sandbox? | only if we call GET and inject | never, by design | no; sandbox holds placeholder + proxy bearer + CA | same | no |
+| Plaintext to the sandbox? | only if we call GET and inject | never, by design | no; *vendor default shape:* sandbox holds placeholder + proxy bearer + CA (v1 relay-only: the sandbox holds none of these, D-18) | same | no |
 | OAuth authorization-code flow | yes, 1,000+ providers | no (App Connections serve Infisical's own features) | no | no (paste existing tokens; refreshes them) | no |
 | OAuth refresh lifecycle | yes: ≥24h cycle, 15-min margin, Redis lock, backoff, exhaustion | no | not found | yes (5-min margin, refresh at proxy time) | no |
 | Licence | ELv2 (+ paid Enterprise self-host) | MIT + `ee/` Enterprise licence | part of Infisical (Free tier: static secrets) | MIT + `ee/` | Apache-2.0, LF/AAIF |
@@ -191,6 +192,8 @@ https://www.nango.dev/pricing: Free "$0 /mo", 10 connections, "Hard-capped limit
 
 > "The root encryption key is a 256-bit AES key provided by the operator as an environment variable." … "never leaves the server's memory during operation." … "The root encryption key can alternatively be sourced from an external Hardware Security Module (HSM) such as Thales Luna HSM or AWS CloudHSM." — same
 
+*Format by deployment mode* (docs/self-hosting/configuration/envars): the standard image (`infisical/infisical`, the `v0.165.10` pin in §9/§10) takes `ENCRYPTION_KEY` as a **16-byte hex string** (`openssl rand -hex 16`); only FIPS-enabled deployments (`infisical/infisical-fips`) take a **256-bit base64** key (`openssl rand -base64 32`). The 256-bit statement above is the security-internals description; the env-var contract for our non-FIPS pin is the 16-byte hex form, and §9's template uses that.
+
 > "The Internal KMS Root Key is automatically generated when an Infisical instance starts for the first time." … "encrypts all organization and project data keys" … "encrypted at rest using the Root Encryption Key and stored in the database." — same
 
 > "Each organization and each project has its own dedicated data key, providing cryptographic isolation between tenants." — same
@@ -269,7 +272,7 @@ Licence text:
 > Rotation: dual-phase Active / Inactive / Revoked; "The one user you can't name is the one your app connection authenticates with" — https://infisical.com/docs/documentation/platform/secret-rotation/overview (built-in rotations are for databases/cloud creds, not arbitrary OAuth providers)
 > Dynamic secrets: "generated on-demand upon access" … "unique to every identity using them" … "available under Infisical's Advanced plan." — https://infisical.com/docs/documentation/platform/dynamic-secrets/overview
 
-**Consequence for G1b/G3 (store adapter "versioned CAS"):** Infisical has read-side versions but no write-side compare-and-swap. The OAuth refresh worker must serialize on *our* side (a Postgres advisory lock or row lock in the plane's own metadata, keyed by account + credential version), read `secret.version` before refreshing, and treat a version mismatch after the write as a lost race to reconcile — Infisical will not refuse the overlapping write for us. Same shape as the Nango `lock:refresh:` key (§1.5), built once, tested first (§7 rules).
+**Consequence for G1b/G3 (store adapter "versioned CAS"):** Infisical has read-side versions but no write-side compare-and-swap. The OAuth refresh worker must serialize on *our* side (a Postgres advisory lock or row lock in the plane's own metadata, keyed by account + credential version), read `secret.version` before refreshing, and treat a version mismatch after the write as a lost race to reconcile (the full lease-and-fencing protocol and its stated residual are in §7.2) — Infisical will not refuse the overlapping write for us. Same shape as the Nango `lock:refresh:` key (§1.5), built once, tested first (§7 rules).
 
 ### 2.5 Audit
 
@@ -322,7 +325,7 @@ Placeholder substitution mechanics:
 What it does with TLS:
 > "Root CA (in Infisical, per org)" — "its private key never leaves the server"; "Intermediate CA (in Agent Proxy memory)" — "short-lived intermediate certificate (7 days, re-signed automatically before expiry)"; "Leaf certificates (one per hostname)" — "valid 24 hours, cached in memory". The connect wrapper "downloads the root CA to `~/.infisical/agent-proxy/mitm-ca.pem`" and points "standard trust environment variables (`SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`, `DENO_CERT`) at it." … "sets `HTTPS_PROXY` and `HTTP_PROXY` point at the Agent Proxy. `NO_PROXY` always includes `localhost,127.0.0.1`." … "the agent has no access at all to the process holding the real credentials." … "Run multiple Agent Proxy instances with the same machine identity behind a TCP load balancer." — https://infisical.com/docs/documentation/platform/agent-proxy/standalone-agent-proxy
 
-**Answer (requirement 1):** plaintext never returns to the sandbox; the sandbox holds a placeholder, the proxy address and a CA. It never returns to our web process either — the proxy process resolves it, under a machine identity that is *the proxy's*, not the web app's.
+**Answer (requirement 1):** plaintext never returns to the sandbox. In the vendor's default shape the sandbox holds a placeholder, the proxy address, a CA and a `connect` bearer (§3.3). In v1 relay-only (D-18) the sandbox holds none of these, because only the server-side runner calls the proxy. It never returns to our web process either — the proxy process resolves it, under a machine identity that is *the proxy's*, not the web app's.
 
 ### 3.2 Agent Vault (standalone)
 
@@ -346,9 +349,9 @@ OAuth refresh:
 
 Both need three things inside the agent runtime: `HTTPS_PROXY` set, the MITM CA trusted, and a bearer (Agent Proxy: the `connect` command takes `--client-id` / `--client-secret` or `INFISICAL_UNIVERSAL_AUTH_CLIENT_ID` / `_SECRET` on the *agent* side, plus `--projectId`, `--env`, `--path` — https://infisical.com/docs/documentation/platform/agent-proxy/standalone-agent-proxy; Agent Vault: `AGENT_VAULT_TOKEN` in the proxy URL, "authenticates requests via a session token during the CONNECT handshake so that every request is scoped to a specific agent context" — https://infisical.com/blog/agent-vault-the-open-source-credential-proxy-and-vault-for-agents).
 
-Against a hostile guest (Λ6), the env vars are advisory: root in the Sprite unsets `HTTPS_PROXY` and dials the provider directly. The enforcement is the Sprite's deny-by-default L3 policy (`packages/lib/src/services/sandbox/egress.ts`): the allowlist must name **only** the proxy host, and the Sprites platform must keep blocking direct dials — "Raw IP connections are blocked unless the IP was resolved from an allowed domain." and "Private IPs are always blocked, so a Sprite can't reach into private network ranges," (quoted in `egress.ts` from docs.sprites.dev/concepts/networking). Two consequences for L4, recorded here so G4 does not rediscover them:
-1. The proxy must be reachable by a public DNS name (Sprites block private ranges), which means the proxy's own front door is public and its authentication is load-bearing.
-2. Both brokers put a guest-held bearer in the sandbox — Agent Vault's session token, Agent Proxy's Universal Auth client secret on the `connect` side — the shape S1/D-18 exists to replace. A machine-identity secret inside a hostile guest is extractable and is a standing Infisical credential, so if Agent Proxy is used, `connect`'s identity must be a per-sandbox, per-generation identity with a max-uses/TTL-bounded client secret (§2.2 Universal Auth knobs) minted by our provisioner, or our authority must sit in front of the proxy and the sandbox must never hold one. Either way the broker does not solve the identity problem; S1's answer does.
+Against a hostile guest (Λ6), the env vars are advisory: root in the Sprite unsets `HTTPS_PROXY` and dials the provider directly. The only in-guest-bypass-proof control would be the Sprite egress policy (`packages/lib/src/services/sandbox/egress.ts`). That policy is a **DNS-name allowlist, not an L3 boundary**: "Sprites egress policy is DNS-name-only and cannot match IP-literal/6PN egress", and today "Both agent sandboxes and human terminals run **full (open) egress**" (`packages/lib/src/services/sandbox/FULL-EGRESS-ENABLEMENT.md`). Forcing a sandbox through a proxy therefore needs a policy change that has not been made, plus the platform continuing to block direct dials: the allowlist would have to name **only** the proxy host — "Raw IP connections are blocked unless the IP was resolved from an allowed domain." and "Private IPs are always blocked, so a Sprite can't reach into private network ranges," (quoted in `egress.ts` from docs.sprites.dev/concepts/networking). Two consequences for L4, recorded here so G4 does not rediscover them:
+1. *Only for the G4-deferred sandbox-originated path:* the proxy must be reachable by a public DNS name (Sprites block private ranges), so its front door is public and its authentication is load-bearing. Under v1 relay-only (D-18) only the server-side runner calls the proxy, which can stay on a private network.
+2. Both brokers put a guest-held bearer in the sandbox — Agent Vault's session token, Agent Proxy's Universal Auth client secret on the `connect` side — the shape S1/D-18 exists to replace. A machine-identity secret inside a hostile guest is extractable and is a standing Infisical credential, so if Agent Proxy is used, `connect`'s identity must be a per-sandbox, per-generation identity with a max-uses/TTL-bounded client secret (§2.2 Universal Auth knobs) minted by our provisioner, or our authority must sit in front of the proxy and the sandbox must never hold one. Either way the broker does not solve the identity problem; S1's answer does. **v1 (D-18, answered): relay-only** — the server-side tool runner originates every credentialed operation and is the only `connect`-side caller; the sandbox holds no bearer, no Universal Auth secret and no presenter key. If Agent Proxy is later enabled, the relay-side runner will need its own `connect` identity. It is unspecified here (§9, "Relay-side `connect` identity"). v1 does not use `connect`: it uses the direct store adapter through the `credential-executor` service (§7.2, §9). How a *sandbox-originated* request would authenticate to the proxy (the per-generation identity above, or the server-opened bound duplex channel from S1 §3.4 / ADR 0006 amendment) is **unresolved here and deferred to G4**; this spike does not specify it.
 
 ## 4. agentgateway (Solo.io / CNCF)
 
@@ -416,7 +419,7 @@ Audit: access logs to stdout per request, Prometheus on :15020, OTLP traces; `mc
 |---|---|---|---|
 | Nango | Yes on demand: `GET /connections/{id}` returns `credentials.access_token`; `refresh_token=true` adds the refresh token; any environment API key | Only if we forward it | §1.4 quotes (docs + `getConnection.ts`) |
 | Infisical store | To whichever identity resolves — by our design only the executor's identity; the web app holds no reading identity (Codex #2) | Never | §2.2 identity scoping; §2.4 `GET /api/v4/secrets/{name}` returns `secretValue` to an authorized identity |
-| Agent Proxy | No — substituted in the proxy process | No — placeholder + CA + proxy address | §3.1 "the agent has no access at all to the process holding the real credentials." |
+| Agent Proxy | No — substituted in the proxy process | No — vendor default: placeholder + CA + proxy address + `connect` bearer (§3.3); v1 relay-only: nothing in the sandbox | §3.1 "the agent has no access at all to the process holding the real credentials." |
 | Agent Vault | No — "No credential value stored in the vault is ever returned in an API response or written to a log." | No | §3.2 |
 | agentgateway | No — the inbound token is stripped after validation; the exchanged/static outbound credential flows only to the backend | No | §4.2 jwt-authn quote; oauth-token-exchange.md |
 
@@ -436,7 +439,11 @@ The design (epic "Security review… what it changed", items 2, 4, 5, 12; Contro
 | OAuth refresh lifecycle (RFC 9700 rotation, CAS, crash recovery, revocation) | yes, minus CAS on rotation and minus a documented rotation guarantee | no | Agent Vault yes (refresh at proxy time); Agent Proxy not found | no |
 | OAuth authorization-code flow, provider catalogue | yes (1,000+) | no | no | no |
 
-So the build list is the same under every choice: `grant.ts`, `canonical-request.ts`, the approval binding, `audit.ts` with acceptance-before-execute, the replay store, the store adapter with our own CAS (§2.4), the OAuth refresh worker (unless Nango), and the L4 channel binding (S1). The vendors remove: the encrypted store and key hierarchy (Infisical), the substitution-at-egress mechanics (Agent Proxy), and — only with Nango — the provider catalogue and auth-code flow. RFC 9700 on rotation, for the worker we build: "Refresh tokens for public clients MUST be sender-constrained or use refresh token rotation" — https://www.rfc-editor.org/rfc/rfc9700.html §2.2.2 (replay of a rotated refresh token → revoke the whole grant).
+So the build list is the same under every choice: `grant.ts`, `canonical-request.ts`, the approval binding, `audit.ts` with acceptance-before-execute, the replay store, the store adapter with our own CAS (§2.4), the OAuth refresh worker (unless Nango), and the L4 channel binding (S1).
+
+**Onprem follow-up for L2·G2 (from PR #2633 round 3; the §9 compose path is BLOCKED on it):** `infrastructure/scripts/tenant-stack.sh` must gain the two Docker network operations the §9 `vault-ingress` design assumes, because today `up` and `down` (lines 86–105) run only `docker compose up -d` and `docker compose down`. Concretely: on `up`, after `compose up -d`, run `docker network connect vault_ingress_${TENANT_SLUG} "$TRAEFIK_ID"`, where `TRAEFIK_ID=$(docker compose -f "${SCRIPT_DIR}/docker-compose.traefik.yml" ps -q traefik)` (`SCRIPT_DIR` is the script's absolute `infrastructure/` dir, line 4). This assumes Traefik was started from that file under its default project name; if `TRAEFIK_ID` is empty the script must fail loudly, not connect nothing. The Traefik service sets no `container_name`, so the literal name `traefik` does not exist; compose names it `<project>-traefik-1`. Guard the connect to be idempotent on re-runs: skip when `docker network inspect vault_ingress_${TENANT_SLUG} --format '{{range $id, $c := .Containers}}{{$id}} {{end}}'` already lists that id. On `down`, before `compose down`, run `docker network disconnect vault_ingress_${TENANT_SLUG} "$TRAEFIK_ID"`, tolerating the already-disconnected case so cleanup still completes after a failed `up`. The `down` ordering matters: compose cannot remove `vault_ingress_${TENANT_SLUG}` while the foreign Traefik endpoint is still attached. Acceptance: `tenant-stack.sh up` twice in a row succeeds, `docker network inspect vault_ingress_${TENANT_SLUG}` lists exactly two containers, the Traefik container (by id) and this project's `vault-ingress` container (`<project>-vault-ingress-1`), `vault-${TENANT_SLUG}.<apex>` answers through Traefik, and `tenant-stack.sh down` removes the network. Until this lands the vault-ingress deployment path in §9 is PROPOSED, not deployable.
+
+The vendors remove: the encrypted store and key hierarchy (Infisical), the substitution-at-egress mechanics (Agent Proxy), and — only with Nango — the provider catalogue and auth-code flow. RFC 9700 on rotation, for the worker we build: "Refresh tokens for public clients MUST be sender-constrained or use refresh token rotation" — https://www.rfc-editor.org/rfc/rfc9700.html §2.2.2 (replay of a rotated refresh token → revoke the whole grant).
 
 ## 7. D-24 ruling — evidence, options, recommendation
 
@@ -448,7 +455,13 @@ Meets the bar only with all of: own Fly custom private network (`fly apps create
 
 ### 7.2 Option B — drop Nango; refresh lifecycle in our restricted worker on Infisical (the recommendation)
 
-What we give up: the provider catalogue and hosted auth-code flow. What we already have: `packages/lib/src/integrations/oauth/oauth-handler.ts` (with `refreshOAuthToken`, zero callers today) for the providers we ship (GitHub, Google Calendar, Zoom) and the `integration_connections` model G3 migrates. What we add: one worker (Control Board §7 shapes) that serializes per account, rotates with our own CAS over `secret.version` (§2.4), recovers from crash mid-refresh (write-then-swap), revokes, honours RFC 9700, and is the only holder of a refresh-capable identity. G3 already words this as "ours otherwise".
+What we give up: the provider catalogue and hosted auth-code flow. What we already have: `packages/lib/src/integrations/oauth/oauth-handler.ts` (with `refreshOAuthToken`, zero callers today) for the OAuth2 providers we ship (GitHub, Notion and Slack under `packages/lib/src/integrations/providers/`; Google Calendar and Zoom under `apps/web`) and the `integration_connections` model G3 migrates. What we add: one worker (Control Board §7 shapes) that serializes per account, rotates under a **single-writer protocol with a lease and fencing**. Infisical `PATCH` has no write-side condition, so the store cannot reject a stale writer, and post-write verification can detect an overwrite but not undo one. The protocol:
+1. Keep a plane metadata row per secret: `(secretRef, version, writerEpoch, valueDigest)`. `valueDigest` is a SHA3-256 of the committed value, never the value itself.
+2. The writer takes `SELECT … FOR UPDATE` on that row inside **one Postgres transaction that spans the whole check → Infisical write → commit** (`lock_timeout` bounds acquiring the row. While the external `PATCH` runs, the transaction is idle, not executing a statement, so `statement_timeout` does not apply. The hold is bounded instead by `idle_in_transaction_session_timeout` plus an application deadline that aborts the `PATCH` sooner and rolls back, so a hung Infisical call releases the row instead of blocking every later refresh for that secret). It checks the expected `version`, bumps `writerEpoch`, performs the Infisical write, re-reads `secret.version` from the store, and commits `version+1` and the new `valueDigest` in the same transaction. Only one writer can hold the row, so two live writers never interleave.
+3. If the transaction dies after the Infisical write but before commit (crash, lease timeout), the next writer finds `version` unchanged. It re-reads the store's current value and version, reconciles, and does not blindly overwrite.
+4. **Late stale writes are detected on every resolve, not by a one-time check.** Writer A's `PATCH` may still be in flight after its transaction rolled back, and may land **after** writer B has written, verified and committed, so B's own verification saw no drift. **Every resolve**, plus a periodic reconciler, therefore compares the store's current version and value digest with the committed row. On mismatch the executor **fails closed**: it does not use the credential and marks the account `drifted`. Repair re-runs the refresh under this protocol if the provider still accepts the refresh token, and otherwise requires the human to reconnect. **Residual, stated plainly:** the late stale write itself is not prevented, because Infisical has no store-side conditional write. What is guaranteed is that a drifted value is never *used* and is surfaced for repair. That guarantee needs the check to cover the **exact value used**. On the direct store-adapter path, the executor resolves once, verifies version and digest on that same fetch, and executes with that value. On the **Agent Proxy path** it does not hold: plaintext is resolved inside the proxy (§3.1, §5) and never returned to the executor, so a separate executor-side read leaves a TOCTOU window. Writer A's late write can land after the check but before the proxy fetches or refreshes its cache. Until G2 verifies that Agent Proxy can pin the injected secret to an expected version on the same fetch (**not verified**), **every credential that can be updated is used only through the direct adapter path**. That covers the OAuth tokens this worker rotates and also API keys, bearers and passwords that a human can replace or reconnect, because each replacement is an Infisical `PATCH` writer racing readers. "Static" does not mean immutable. In practice Agent Proxy injects nothing in v1 until same-fetch version pinning is verified, and the D-22 egress-broker recommendation is **conditional on that G2 verification**. Every writer must go through the row; out-of-band writers to the Infisical path are outside the write guarantee but are caught by the same resolve-time check.
+
+G1b-store (PR #2646, Control Board §1: "version-check-then-write under a per-secret lock") owns the exact schema and transaction boundaries; this spike states only the required properties and the residual. The worker also recovers from a crash mid-refresh (write-then-swap; a rolled-back transaction leaves the row unchanged, and the next resolve or refresh reconciles through the version and digest check above), revokes, honours RFC 9700, and is the only holder of a refresh-capable identity. G3 already words this as "ours otherwise".
 
 ### 7.3 Why B wins, why A lost
 
@@ -482,16 +495,24 @@ Self-hosted second plane (option A), flat regardless of credential count: `nango
 
 ## 9. Onprem (deprioritized, D-21): compose join and gated env vars (requirement 2)
 
-Documented so the path exists; it does not drive the recommendation. The snippet joins `infrastructure/docker-compose.tenant.yml` (`networks: internal` is `internal: true`; `traefik` is external; Traefik labels use `${TENANT_SLUG}`). It adds a **third network, `credential_plane`**, and the store, its Postgres and its Redis have an interface on **that network only**: `web`, `processor` and `realtime` never join it, and `agent-proxy` is the sole bridge — the plane's "own network segment". *Amended 2026-09-15 (PR #2633 review)*: the first draft attached `infisical` to the external `traefik` network to carry its ingress labels. That broke the boundary it claimed — `web` and `realtime` already join `traefik` (`docker-compose.tenant.yml`), and so does every other tenant project on the host, so Infisical's port would have been reachable laterally from the app containers of this and other tenants. The corrected snippet keeps `infisical` off `traefik` and exposes the UI through a **`vault-ingress` sidecar**: a reverse proxy that carries the Traefik labels, joins `credential_plane` + `traefik`, and forwards only HTTP to `infisical:8080`. Say plainly what that gives: the store container, its DB and its Redis have no interface any app container can reach; what is reachable laterally via the sidecar is exactly the authenticated HTTP surface that `vault-${TENANT_SLUG}.pagespace.ai` already publishes to the internet — no wider — and the sidecar can narrow it further (IP allowlist, forward-auth, or a path allowlist for the UI/login routes). The stricter variant, if the operator can afford a provisioner step, is a **dedicated per-tenant ingress network** (`vault_ingress_${TENANT_SLUG}`, non-internal bridge) that only the shared Traefik container is connected to (`docker network connect` in `tenant-stack.sh`); then nothing on `traefik` reaches even the sidecar. Either way the resolving machine identity lives only in `agent-proxy`. The Infisical UI is exposed on its own host, not under the tenant's app host, so a tenant's app session can never be a vault session.
+> **PROPOSED SKETCH, not a specification.** G2 (page `r17kt880rmgn4urtgpaicn5q`) owns the executor/egress/ACL design and must re-derive it. *(Orchestrator ruling, PR #2633, 2026-09-16: onprem is deprioritized per D-21. The text below is kept so earlier review fixes stay visible, but it is non-normative.)*
+
+Documented so the path exists; it does not drive the recommendation. The snippet joins `infrastructure/docker-compose.tenant.yml` (`networks: internal` is `internal: true`; `traefik` is external; Traefik labels use `${TENANT_SLUG}`). It adds a **third network, `credential_plane`**. Infisical's Postgres and Redis have an interface on **that network only**. `infisical` itself is dual-homed, on `credential_plane` plus `vault_front`, an internal network shared only with the `vault-ingress` sidecar (round 4). `web`, `processor` and `realtime` never join `credential_plane`, and `credential-executor` is the only bridge between `internal` and the plane in v1 (a future `agent-proxy` would be a second, added by override). `vault_front` is the only other route in, and it reaches just Infisical's HTTP port. Together these form the plane's "own network segment". *Amended 2026-09-15 (PR #2633 review)*: the first draft attached `infisical` to the external `traefik` network to carry its ingress labels. That broke the boundary it claimed — `web` and `realtime` already join `traefik` (`docker-compose.tenant.yml`), and so does every other tenant project on the host, so Infisical's port would have been reachable laterally from the app containers of this and other tenants. The corrected snippet keeps `infisical` off `traefik` and exposes the UI through a **`vault-ingress` sidecar**: a reverse proxy that carries the Traefik labels and forwards only HTTP to `infisical:8080`. *Amended again 2026-09-15 (round 2)*: the sidecar itself must **not** join `traefik` either — every tenant project on the host joins that network, so a sidecar on it hands a compromised app container of any tenant a route to Infisical's HTTP surface, and authentication on that surface does not restore the network isolation the plane is supposed to have. The sidecar therefore joins a **dedicated per-tenant ingress network, `vault_ingress_${TENANT_SLUG}`**, plus `vault_front`, an internal network it shares only with `infisical`. *Amended 2026-09-16 (round 4):* it is not on `credential_plane`, so a compromised Internet-facing sidecar reaches only Infisical's HTTP port, never its Postgres, its Redis or `credential-executor`. The dedicated ingress network is `internal: true` and named explicitly so the compose project prefix does not rename it; to it **only the shared Traefik container is connected**. **Status: PROPOSED / BLOCKED (PR #2633 round 3).** That connection does not exist today: `infrastructure/scripts/tenant-stack.sh` (lines 86–105) runs only `docker compose up -d` on `up` and `docker compose down` on `down`, so as written the Traefik container has no interface on `vault_ingress_${TENANT_SLUG}`, `vault-${TENANT_SLUG}.<apex>` is unreachable, and this deployment path must not be enabled. Unblocking it is a two-line change to the script, listed as an L2·G2 follow-up in §6: after `compose up -d`, connect the Traefik container **by id**, resolved with `docker compose -f "${SCRIPT_DIR}/docker-compose.traefik.yml" ps -q traefik` (the service has no `container_name`, so there is no container literally named `traefik`), guarded so a re-run is idempotent by matching that id in `docker network inspect`; before `compose down`, disconnect the same id (tolerating "not connected" so a partial `up` still tears down, and ordered before `down` because compose cannot remove a network that still has a foreign endpoint). This PR is docs-only and does not change the script. The sidecar carries `traefik.docker.network=vault_ingress_${TENANT_SLUG}` because `traefik.yml`'s docker provider defaults to `network: traefik` for backend addresses. The isolation claim is exactly this. **Apart from the shared Traefik container, which is connected to `vault_ingress_${TENANT_SLUG}` on purpose, and `credential-executor`, which bridges `internal`, no container of this tenant or any other has an interface on `vault_ingress_${TENANT_SLUG}` or `credential_plane`.** No app container therefore has a *direct network route* to the store, its DB, its Redis or the sidecar. That is not the same as "cannot reach": `web`, `processor`, `realtime` and `cron` sit on `internal` next to `credential-executor`. In v1 that reach is gated by the executor's **signed-grant verification** on every request, not by the network. The executor is not a forward proxy: it performs only grant-authorized operations and never dials a caller-chosen destination, so it cannot be used to reach `infisical-postgres`, `infisical-redis` or `vault-ingress`. *Future Agent Proxy path only:* if it is enabled, its reach would be gated by `connect` authentication, and it must refuse the plane hosts as destinations. Whether it can express that denylist is not verified. The sidecar can still narrow the public surface further (IP allowlist, forward-auth, or a path allowlist for the UI/login routes). In v1 the only resolving identity is the executor's per-tenant read identity, held only in `credential-executor`. (A future `agent-proxy` would add its own `start` identity, and a `connect` identity for the runner; see "Relay-side `connect` identity" below.) The Infisical UI is exposed on its own host, not under the tenant's app host, so a tenant's app session can never be a vault session.
 
 ```yaml
 # --- credential plane (Agent Accounts epic; onprem path, D-21 deprioritized) ---
 # Joins docker-compose.tenant.yml. web/processor/realtime stay on `internal` (+ `traefik`
-# for web/realtime) and never join `credential_plane`; only the agent-proxy bridges
-# `internal` and `credential_plane`. infisical / its postgres / its redis are on
-# `credential_plane` ONLY — never on the shared external `traefik` network, which
+# for web/realtime) and never join `credential_plane`; only credential-executor bridges
+# `internal` and `credential_plane`. infisical-postgres / infisical-redis are on
+# `credential_plane` ONLY; infisical is on `credential_plane` + `vault_front` (shared only
+# with vault-ingress). None of them is on the shared external `traefik` network, which
 # web, realtime and every other tenant project on the host also join. The UI reaches
 # Traefik through the `vault-ingress` sidecar below.
+#
+# NOT DEPLOYABLE AS WRITTEN (spike illustration): images are pinned by TAG and
+# `infisical/cli:0.0.0` is a placeholder. §10's ASI04 rule applies before this joins
+# the tenant compose — every image below must be pinned by `@sha256:` digest, and that
+# digest pinning is a prerequisite for closing G1b (store) and G2 (credential-executor).
 services:
   infisical-postgres:
     image: postgres:17.5-alpine            # same pin as the app DB
@@ -529,7 +550,7 @@ services:
     environment:
       ENCRYPTION_KEY: ${INFISICAL_ENCRYPTION_KEY:?INFISICAL_* missing from .env - see infrastructure/UPGRADE.md (credential plane)}
       AUTH_SECRET: ${INFISICAL_AUTH_SECRET:?INFISICAL_* missing from .env - see infrastructure/UPGRADE.md (credential plane)}
-      DB_CONNECTION_URI: postgres://infisical:${INFISICAL_POSTGRES_PASSWORD}@infisical-postgres:5432/infisical
+      DB_CONNECTION_URI: postgres://infisical:${INFISICAL_POSTGRES_PASSWORD}@infisical-postgres:5432/infisical   # password is interpolated UNENCODED: it MUST come from a URI-safe alphabet (see env template note)
       REDIS_URL: redis://infisical-redis:6379
       SITE_URL: https://vault-${TENANT_SLUG}.pagespace.ai
       LICENSE_KEY: ${INFISICAL_LICENSE_KEY:-}     # offline key accepted in the same var (docs/self-hosting/ee)
@@ -539,15 +560,22 @@ services:
     tmpfs: ["/tmp:noexec,nosuid,size=100m"]
     security_opt: ["no-new-privileges:true"]
     logging: { driver: json-file, options: { max-size: "10m", max-file: "3" } }
-    networks: [credential_plane]             # ONLY here — no interface on `traefik` or `internal`
+    networks: [credential_plane, vault_front]   # never `traefik` or `internal`; vault_front is shared ONLY with vault-ingress
 
-  # UI/API ingress for the vault host. The only thing on the shared `traefik` network that
-  # can reach Infisical, and it forwards HTTP to infisical:8080 and nothing else. Lateral
-  # reach to this container == the authenticated surface already public on the vault host.
-  # Stricter variant: replace `traefik` here with a per-tenant `vault_ingress` network that
-  # only the shared Traefik container is connected to (docker network connect, tenant-stack.sh).
+  # UI/API ingress for the vault host. Forwards HTTP to infisical:8080 and nothing else.
+  # It is NOT on the shared `traefik` network (every tenant project joins that one): it sits
+  # on the per-tenant `vault_ingress_${TENANT_SLUG}` network, which only the shared Traefik
+  # container joins. PROPOSED / BLOCKED: tenant-stack.sh does NOT do this yet (it only runs
+  # `compose up -d` / `compose down`, lines 86–105); L2·G2 adds
+  # `docker network connect vault_ingress_${TENANT_SLUG} <traefik container id>` after `up` and
+  # the matching disconnect before `down` (id via `compose -f docker-compose.traefik.yml ps -q traefik`; §6, §9).
+  # Until then Traefik cannot reach this sidecar. No app container of this or any other
+  # tenant has a route to this sidecar, to infisical, or to its DB/Redis.
   vault-ingress:
-    image: nginx:1.28.0-alpine               # pin the real tag at G1b; config = one `location / { proxy_pass http://infisical:8080; }` with websocket upgrade headers
+    image: nginx:1.28.0-alpine               # pin the real tag at G1b
+    configs:
+      - source: vault_ingress_nginx
+        target: /etc/nginx/conf.d/default.conf   # replaces the stock welcome-site config
     restart: unless-stopped
     depends_on:
       infisical: { condition: service_started }
@@ -563,42 +591,186 @@ services:
       - "traefik.http.routers.${TENANT_SLUG}-vault.entrypoints=websecure"
       - "traefik.http.routers.${TENANT_SLUG}-vault.tls.certresolver=le"
       - "traefik.http.services.${TENANT_SLUG}-vault.loadbalancer.server.port=80"
-    networks: [credential_plane, traefik]
+      - "traefik.docker.network=vault_ingress_${TENANT_SLUG}"   # provider default is `traefik` (traefik.yml); the sidecar is not on it
+    networks: [vault_front, vault_ingress]   # never `traefik`, never `credential_plane` (no route to its DB/Redis or to credential-executor)
 
-  # The egress broker. Bridges `internal` (so the executor / sandbox path can reach
-  # it) and `credential_plane` (so it can reach Infisical). Holds the ONLY machine
-  # identity in this stack that can resolve secrets.
-  agent-proxy:
-    image: infisical/cli:0.0.0               # "The CLI ships as the `infisical/cli` image."; pin the real tag at G4 (docs use :latest)
-    command: ["secrets", "agent-proxy", "start", "--domain", "http://infisical:8080"]
+  # v1 credential reader (direct store adapter, §7.2). A separate container, not a process inside
+  # `web`, so compromise of `web` does not yield the read identity. `web` reaches it on
+  # `internal` with a signed grant; it reaches Infisical on `credential_plane`. No `traefik`.
+  credential-executor:
+    image: pagespace/credential-executor:0.0.0   # placeholder; built at G2, pinned by digest (§10)
+    configs:
+      - source: executor_egress_acl              # the SAME generated ACL executor-egress enforces, mounted
+        target: /etc/credential-executor/egress-acl.yaml   # read-only for the startup canonical-destinations hash guard
     restart: unless-stopped
     depends_on:
       infisical: { condition: service_started }
-    expose: ["17322"]                        # default listen port per the standalone-agent-proxy docs
+    expose: ["3010"]
     environment:
-      INFISICAL_UNIVERSAL_AUTH_CLIENT_ID: ${AGENT_PROXY_CLIENT_ID:?AGENT_PROXY_* missing from .env - see infrastructure/UPGRADE.md (credential plane)}
-      INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET: ${AGENT_PROXY_CLIENT_SECRET:?AGENT_PROXY_* missing from .env - see infrastructure/UPGRADE.md (credential plane)}
-    deploy: { resources: { limits: { memory: 256M } } }
+      INFISICAL_URL: http://infisical:8080
+      EXECUTOR_CLIENT_ID: ${EXECUTOR_CLIENT_ID:?EXECUTOR_* missing from .env - see infrastructure/UPGRADE.md (credential plane)}
+      EXECUTOR_CLIENT_SECRET: ${EXECUTOR_CLIENT_SECRET:?EXECUTOR_* missing from .env - see infrastructure/UPGRADE.md (credential plane)}
+      # Two restricted roles, matching the repo's two trust planes (docker-compose.tenant.yml has
+      # `postgres` and `postgres-admin`, both reachable on `internal`):
+      # app DB  - plane metadata (§7.2 version/digest row) + replay/nonce state ONLY
+      EXECUTOR_APP_DATABASE_URL: ${EXECUTOR_APP_DATABASE_URL:?EXECUTOR_* missing from .env - see infrastructure/UPGRADE.md (credential plane)}
+      # admin DB - INSERT-only on the tamper-evident audit tables: durable audit acceptance before execute (§2.4, §6)
+      EXECUTOR_AUDIT_DATABASE_URL: ${EXECUTOR_AUDIT_DATABASE_URL:?EXECUTOR_* missing from .env - see infrastructure/UPGRADE.md (credential plane)}
+      # all outbound provider traffic goes through the non-credentialed allowlisting egress proxy.
+      # NOT env-var proxying: NO_PROXY is process-wide, so a provider redirect to http://infisical:8080 would be
+      # re-routed DIRECTLY over credential_plane (SSRF into the store). The executor uses two explicit undici
+      # dispatchers instead: a PROXIED dispatcher (ProxyAgent -> executor-egress) for every provider call,
+      # with NO bypass list, and a separate DIRECT client used only by the store adapter and the DB drivers,
+      # pinned to their fixed hosts. Provider fetches set `redirect: 'manual'`, and each hop is re-validated
+      # against the grant's origin and re-sent through the proxied dispatcher. A redirect is never
+      # followed onto the direct path.
+      EXECUTOR_EGRESS_PROXY_URL: http://executor-egress:4750
+    read_only: true
     security_opt: ["no-new-privileges:true"]
+    deploy: { resources: { limits: { memory: 256M } } }
     logging: { driver: json-file, options: { max-size: "10m", max-file: "3" } }
-    networks: [internal, credential_plane]
+    networks: [internal, credential_plane, executor_egress]   # NOT on plane_egress: no direct route off-host
+
+  # v1 egress control for the executor. Holds NO credential and NO store identity; it only
+  # enforces a provider-destination allowlist and denies the Docker host, host-published ports,
+  # RFC1918, link-local and the plane hosts. A two-network boundary: executor_egress (internal,
+  # shared with credential-executor) and plane_egress (the only egress-capable network; this
+  # proxy is its only member). An executor compromise or an SSRF in its provider client
+  # therefore cannot dial arbitrary destinations.
+  executor-egress:
+    image: ghcr.io/stripe/smokescreen:0.0.0      # e.g. smokescreen (denies private ranges by default); pin by digest at G2
+    command: ["--listen-port=4750", "--egress-acl-file=/etc/smokescreen/acl.yaml"]   # flag names to verify against the pinned version at G2
+    configs:
+      - source: executor_egress_acl
+        target: /etc/smokescreen/acl.yaml
+    restart: unless-stopped
+    expose: ["4750"]
+    read_only: true
+    security_opt: ["no-new-privileges:true"]
+    deploy: { resources: { limits: { memory: 128M } } }
+    logging: { driver: json-file, options: { max-size: "10m", max-file: "3" } }
+    networks: [executor_egress, plane_egress]
+
+  # agent-proxy is NOT part of the v1 stack (§7.2: it injects nothing until same-fetch version
+  # pinning is verified). When G2 enables it, it is added by a separate override file
+  # (docker-compose.credential-proxy.yml) with its own AGENT_PROXY_* identity, so a plain
+  # `tenant-stack.sh up` never starts it or demands its credentials.
 
 networks:
   credential_plane:
     driver: bridge
     internal: true
+  vault_front:                          # infisical <-> vault-ingress ONLY: a compromised Internet-facing sidecar
+    driver: bridge                      # reaches the Infisical HTTP port and nothing else (not its postgres,
+    internal: true                      # its redis, or credential-executor, which stay on credential_plane)
+  vault_ingress:
+    name: vault_ingress_${TENANT_SLUG}   # explicit: `-p ${PROJECT}` would otherwise prefix it; the L2·G2 tenant-stack.sh change (§6) connects the Traefik container by this name — not implemented yet
+    driver: bridge
+    internal: true                      # Traefik reaches the sidecar over it; the sidecar needs no egress
+  plane_egress:
+    driver: bridge                      # NOT internal: `internal` and `credential_plane` are both `internal: true`, so without
+                                        # this network no v1 component could reach GitHub or any other provider.
+                                        # executor-egress is its only member: the plane's single outbound path.
+                                        # The network itself is unrestricted, so the allowlist and the private /
+                                        # host denies are enforced by executor-egress, never by this network.
+  executor_egress:
+    driver: bridge
+    internal: true                      # credential-executor <-> executor-egress only
+
+configs:
+  # FAIL-CLOSED provider ACL. No mTLS role is presented, so every request falls to `default`,
+  # and `default` is `enforce` with an explicit allowlist: an unlisted public host is refused
+  # even though it is not a private address. The list is GENERATED per tenant (G2), empty-means-deny, from
+  # ALL enabled providers, which includes user-created custom/OpenAPI providers: `listEnabledProviders`
+  # returns system + custom (provider-repository.ts:42-52). Each row is resolved through
+  # `resolveProviderConfig` (builtin-providers.ts:33), because builtin rows refresh lazily and the
+  # runtime uses the in-memory definition. The generator ALWAYS unions `builtinProviderList` itself, because on a
+  # fresh tenant migrations create no builtin rows (`seedBuiltinProviders` runs lazily from web's providers
+  # GET), so a DB-only render at `up` step 3 would drop every shipped provider. It also unions a STATIC list for the
+  # shipped integrations OUTSIDE the provider registry: Google Calendar and Zoom live in their own apps/web
+  # tables and handlers and never appear in `listEnabledProviders` or `builtinProviderList`. G3 moves their
+  # hosts (www.googleapis.com, oauth2.googleapis.com, api.zoom.us, zoom.us, and the `*.zoom.us` suffix that
+  # zoom-api-client.ts `isTrustedZoomHost` accepts for regional transcript downloads such as us02web.zoom.us)
+  # into a canonical destination definition beside builtinProviderList. The ACL is taken from that resolved config.baseUrl, tokenUrl
+  # and revokeUrl, so a release that moves a builtin host cannot leave the ACL stale (refresh must not
+  # fail closed). Connection destinations (execute-tool.ts:206: `baseUrlOverride || baseUrl`) are added
+  # ONLY AFTER APPROVAL. Today any authenticated user can submit an arbitrary `baseUrlOverride`
+  # (apps/web/src/app/api/user/integrations/route.ts:23), so an override starts PENDING: refused by
+  # the proxy and not executed, until a tenant owner/admin approves the origin. Only approved origins
+  # enter the tenant ACL; rejection or delete removes them. Custom providers created by non-admins follow
+  # the same pending rule. Regenerated and executor-egress restarted on every approval, provider change or
+  # connection change, AND on every application rollout. `tenant-stack.sh up` regenerates the ACL before
+  # starting executor-egress, and the executor refuses to start if the mounted ACL's canonical-destinations
+  # hash differs from its own: a SHA3-256 over BOTH builtinProviderList destinations AND the external-
+  # integration list (Google Calendar, Zoom), so a moved host in either collection cannot run stale.
+  # The generator writes that hash as a header line (`# canonical-destinations-sha3-256: <hex>`) into this one
+  # config, which is mounted into BOTH executor-egress (enforced) and credential-executor (verified). An ACL change is applied by regenerating the
+  # config and restarting executor-egress (hot reload unverified at G2); until then that webhook is refused. Schema per smokescreen's egress ACL docs; verify at G2.
+  # Residual: a host allowlist bounds destinations, not accounts. A compromised executor can still send
+  # data to an attacker-owned account on an allowed shared host (e.g. api.github.com). Per-account origin
+  # and operation binding is the executor's grant check, and the proxy does not replace it.
+  executor_egress_acl:
+    # A GENERATED per-tenant artifact, not inline content. `tenant-stack.sh up` renders it from the
+    # sources above, then both services mount it. The sources live in the tenant Postgres, so `up` is staged:
+    #   1. if the file is missing, write a DENY-ALL seed (empty allowed_domains, hash header of the current
+    #      canonical destinations: builtinProviderList + external-integration list), so the config is valid;
+    #   2. `compose up -d postgres postgres-admin migrate` and wait for migrations;
+    #   3. render the real ACL from the database (a one-shot generator run on `internal`);
+    #   4. `compose up -d` the rest, which starts executor-egress and credential-executor on the real file.
+    # A failure at step 3 leaves the deny-all seed in place: fail closed, never open. Illustrative rendering:
+  #   # canonical-destinations-sha3-256: <hex>
+  #   version: v1
+  #   services: []
+  #   default:
+  #     name: credential-executor
+  #     project: pagespace
+  #     action: enforce
+  #     allowed_domains:
+  #       - api.github.com              # github.ts baseUrl
+  #       - github.com                  # github.ts tokenUrl (/login/oauth/access_token)
+  #       - api.notion.com              # notion.ts baseUrl + tokenUrl
+  #       - slack.com                   # slack.ts baseUrl + tokenUrl + revokeUrl
+  #       - www.googleapis.com          # Google Calendar API
+  #       - oauth2.googleapis.com       # Google token refresh endpoint
+  #       - api.zoom.us                 # Zoom API
+  #       - zoom.us                     # zoom token-refresh.ts (/oauth/token)
+  #       - "*.zoom.us"                 # regional transcript hosts, e.g. us02web.zoom.us (isTrustedZoomHost suffix; wildcard syntax to verify at G2)
+  #       # + generated: approved custom-provider baseUrls and approved connection baseUrlOverride origins
+    file: ./generated/executor-egress-acl.${TENANT_SLUG}.yaml
+  vault_ingress_nginx:                  # inline `content` needs Docker Compose >= 2.23.1
+    content: |
+      map $$http_upgrade $$connection_upgrade { default upgrade; '' close; }
+      server {
+        listen 80;
+        resolver 127.0.0.11 valid=10s ipv6=off;   # Docker embedded DNS: re-resolve so a recreated infisical is found
+        location / {
+          set $$vault_upstream http://infisical:8080;   # a variable forces per-request resolution via `resolver`
+          proxy_pass $$vault_upstream;
+          proxy_http_version 1.1;
+          proxy_set_header Upgrade $$http_upgrade;
+          proxy_set_header Connection $$connection_upgrade;
+          proxy_set_header Host $$host;
+          proxy_set_header X-Forwarded-Proto https;
+          proxy_set_header X-Forwarded-For $$proxy_add_x_forwarded_for;
+        }
+      }
 
 volumes:
   infisical_postgres_data:
 ```
 
-`web` gets one addition only: `AGENT_PROXY_URL: http://agent-proxy:17322` (an address, no secret). No store URL and no machine identity go into `web`'s environment — the web process holds no store identity (Codex #2); the resolving identity lives with the proxy container.
+`web` gets one addition only: `CREDENTIAL_EXECUTOR_URL: http://credential-executor:3010` (an address, no secret). No store URL and no machine identity go into `web`'s environment — the web process holds no store identity (Codex #2). **v1 direct-adapter path (round 4):** the `credential-executor` service is the only reader. It sits on `internal`, reached by `web` with the authority's signed grant, on `credential_plane`, its route to `infisical:8080`, and on `executor_egress`. That last network is its only way off-host, and it leads only to `executor-egress`, a non-credentialed allowlisting forward proxy. Only that proxy sits on the egress-capable `plane_egress`, and it enforces the provider allowlist and denies the Docker host, host-published ports, RFC1918, link-local and the plane hosts. It uses two restricted database roles: app DB for metadata and replay, and Admin Postgres INSERT-only for audit. It holds the **per-tenant Universal Auth read identity** (`EXECUTOR_CLIENT_ID`/`_SECRET`, D-29 B, scoped to that tenant's project), and it runs the §7.2 drift check on each resolve. This is option (a) of the executor threat boundary below. `agent-proxy` is not in the v1 stack; enabling it later adds an override file with its own identity and an `AGENT_PROXY_URL` for the executor.
 
-**Env vars to append to `env.tenant.template` (all server-side, none `NEXT_PUBLIC_`):** `INFISICAL_POSTGRES_PASSWORD=__GENERATE__`, `INFISICAL_ENCRYPTION_KEY=__GENERATE__` ("Must be a random 16-byte hex string." — https://infisical.com/docs/self-hosting/configuration/envars), `INFISICAL_AUTH_SECRET=__GENERATE__` ("Must be a random 32-byte base64 string."), `INFISICAL_LICENSE_KEY=` (optional; offline key), `AGENT_PROXY_CLIENT_ID=__SET_BY_PROVISIONER__`, `AGENT_PROXY_CLIENT_SECRET=__SET_BY_PROVISIONER__`. `UPGRADE.md` gets a "credential plane" section because the stack refuses to start without them (the `:?` form above), exactly as the Phase 1/2 admin DB vars do — and the same warning applies: regenerating `INFISICAL_ENCRYPTION_KEY` makes the vault permanently unreadable.
+**Relay-side `connect` identity: UNSPECIFIED, and G2 must close it before any credentialed operation *that goes through Agent Proxy* (PR #2633 round 4).** In v1 that is none: every updatable credential uses the direct store adapter until same-fetch version pinning is verified (§7.2), and the direct path does not use `connect`. This block is the prerequisite for turning Agent Proxy on, not for v1. Agent Proxy authenticates **both** ends (§3.0: `start` on the proxy **and** `connect --client-id/--client-secret` on the caller side). *Once Agent Proxy is enabled* (not v1), the server-side runner becomes a `connect` client, and nothing above gives it an identity for that: the compose credentials belong to the `agent-proxy` process. This is a gap in the future Agent Proxy path, not in v1 and not a change to D-18. The shape G2 must pick and record:
+- **Where the identity lives:** in the credential executor (the Control Board's sole caller of resolve), never in the general `web` environment. **Threat boundary, stated explicitly (round 4):** a process boundary inside the `web` container does **not** survive compromise of that container, because code execution in `web` can read the sibling executor's memory, environment or injected credential. Two options follow. **(a)** If container compromise of `web` is in scope, and the recommendation is that it is, the executor runs as a **separate container** with its own identity, reached over `internal` through the authority's signed grant. **(b)** Otherwise custody is recorded as **per-process only**, with container isolation deferred as a named liability on the register. "`web` holds no store identity" is then true of every non-executor code path but **not** of a compromised `web` container. G2 picks (a) or (b) and records it.
+- **What it may do:** one per-tenant Universal Auth identity (D-29 B), scoped to that tenant's project, with a TTL- and max-uses-bounded Universal Auth client secret (§2.2). That is the only `connect` auth the upstream docs show (`--client-id/--client-secret` or `INFISICAL_UNIVERSAL_AUTH_CLIENT_ID`/`_SECRET`, §3.3). OIDC machine-identity auth (§2.2) is **not** a documented `connect` option. It becomes one only if G2 verifies that `connect` accepts an OIDC-obtained access token, and documents the exchange step it needs. **Not verified:** whether Infisical requires the `connect` identity to hold secret-read permission on the proxied path. If it does, that identity can resolve plaintext, so it counts as a resolving identity under the custody rule and the executor is its only holder. If it does not, it is a non-resolving session identity. G2 verifies this against a sandbox project before binding.
+- **Alternative:** if Agent Proxy cannot take a non-resolving caller, the executor resolves through the store adapter directly (G1b-store) and Agent Proxy is not used for the server-originated path.
 
-**What `infrastructure/scripts/__tests__/env-var-audit.test.ts` gates:** that test's three cases assert that client-side `.tsx`/`.ts` files never read `NEXT_PUBLIC_APP_URL` without a `WEB_APP_URL` guard. It does not enumerate server env vars. The vars above pass it trivially because none is `NEXT_PUBLIC_*`; the gate that would actually bite is `packages/lib/src/config/env-validation.ts` (`serverEnvSchema`), where `AGENT_PROXY_URL` should be added as an optional URL with the `.or(z.literal(''))` blank-means-unset convention the file already uses, so a blank value disables the feature rather than failing boot.
+**Env vars to append to `env.tenant.template` (all server-side, none `NEXT_PUBLIC_`):** `INFISICAL_POSTGRES_PASSWORD=__GENERATE__` — **URI-safe alphabet only**: it is interpolated unencoded into `DB_CONNECTION_URI`, so a reserved character (`@`, `/`, `#`, `:`, `?`) would re-parse the authority or truncate the password; `generate-tenant-env.sh` must emit it with `alnum_secret 32` (`[a-zA-Z0-9]`, the same helper the app's `POSTGRES_PASSWORD` already uses at `:64`), never `hex_secret`'s peer `openssl rand -base64`; `INFISICAL_ENCRYPTION_KEY=__GENERATE__` ("Must be a random 16-byte hex string. Can be generated with `openssl rand -hex 16`." — https://infisical.com/docs/self-hosting/configuration/envars; the standard `infisical/infisical:v0.165.10` image pinned above. **FIPS mode differs:** "For FIPS-enabled deployments, `ENCRYPTION_KEY` must be a 256-bit base64-encoded key instead" (`openssl rand -base64 32`, `infisical/infisical-fips` image) — same page), `INFISICAL_AUTH_SECRET=__GENERATE__` ("Must be a random 32-byte base64 string."), `INFISICAL_LICENSE_KEY=` (optional; offline key), `EXECUTOR_CLIENT_ID=__SET_BY_PROVISIONER__`, `EXECUTOR_CLIENT_SECRET=__SET_BY_PROVISIONER__` (v1 reader), `EXECUTOR_APP_DATABASE_URL=__SET_BY_PROVISIONER__` (a restricted app-DB role limited to plane metadata and replay/nonce state) and `EXECUTOR_AUDIT_DATABASE_URL=__SET_BY_PROVISIONER__` (an INSERT-only role on the Admin Postgres audit tables, keeping the audit trust-plane boundary). The `AGENT_PROXY_*` variables belong to the future override file only. `UPGRADE.md` gets a "credential plane" section because the stack refuses to start without them (the `:?` form above), exactly as the Phase 1/2 admin DB vars do — and the same warning applies: regenerating `INFISICAL_ENCRYPTION_KEY` makes the vault permanently unreadable.
 
-Onprem non-guarantee (Λ11) still holds: the operator who runs `infisical`, `agent-proxy` and the host can read everything; §2.3's licence-lapse behaviour is the other onprem-only hazard.
+**What `infrastructure/scripts/__tests__/env-var-audit.test.ts` gates:** that test's three cases assert that client-side `.tsx`/`.ts` files never read `NEXT_PUBLIC_APP_URL` without a `WEB_APP_URL` guard. It does not enumerate server env vars. The vars above pass it trivially because none is `NEXT_PUBLIC_*`; the gate that would actually bite is `packages/lib/src/config/env-validation.ts` (`serverEnvSchema`), where `CREDENTIAL_EXECUTOR_URL` should be added as an optional URL with the `.or(z.literal(''))` blank-means-unset convention the file already uses, so a blank value disables the feature rather than failing boot.
+
+Onprem non-guarantee (Λ11) still holds: the operator who runs `infisical`, `credential-executor` and the host can read everything; §2.3's licence-lapse behaviour is the other onprem-only hazard.
 
 ## 10. Λ12 — pinned versions, cadence, provenance
 
@@ -614,11 +786,11 @@ ASI04 review rule for every gate that binds a vendor: pin by digest, not tag; De
 
 ## 11. Open items for the orchestrator (not decided here)
 
-1. **D-22 wording**: "Infisical Agent Vault" names the standalone binary; the platform Agent Proxy is the one that keeps custody inside the D-21 store. This spike recommends Agent Proxy; the orchestrator decides whether that is a clarification or a new [D-n].
-2. **Identity-per-tenant pricing** (§8.1): list pricing makes per-tenant machine identities cost $20–40/tenant/month. Enterprise quote or a shard mapping — a founder-level fork.
-3. **Custom roles tier**: RBAC doc says Enterprise, pricing page says Advanced (§2.2). G1b's identity scoping depends on which.
-4. **Proxy front door is public** (§3.3): Sprites block private ranges, so the egress proxy needs a public hostname and load-bearing auth; interacts with S1's channel-binding answer.
-5. **Store CAS is ours** (§2.4): the adapter interface G1b freezes should not promise a CAS the backend lacks; name it "versioned write with post-write verification" or implement CAS in the plane's own metadata table.
+1. **D-22 wording**: "Infisical Agent Vault" names the standalone binary; the platform Agent Proxy is the one that keeps custody inside the D-21 store. This spike recommends Agent Proxy **conditionally**. Until G2 verifies same-fetch version pinning, v1 uses the direct store adapter for every updatable credential, and Agent Proxy injects nothing (§7.2). The orchestrator decides whether that is a clarification or a new [D-n].
+2. **Identity-per-tenant pricing** (§8.1) — *answered by D-29 (B: one identity per tenant, all tiers, free on self-host) and the D-21 revision; kept as the 2026-09-14 record:* list pricing makes per-tenant machine identities cost $20–40/tenant/month. Enterprise quote or a shard mapping — a founder-level fork.
+3. **Custom roles tier** — *moot for self-hosted OSS under the D-21 revision unless G1b needs an EE-licensed feature; G1b confirms:* RBAC doc says Enterprise, pricing page says Advanced (§2.2). G1b's identity scoping depends on which.
+4. **Proxy front door is public, but only if G4 adopts sandbox-originated requests** (§3.3): Sprites block private ranges, so a sandbox-called proxy needs a public hostname and load-bearing auth. Under v1 relay-only (D-18) the proxy is called only server-side and can stay private.
+5. **Store CAS is ours** (§2.4): the adapter interface G1b freezes should not promise a CAS the backend lacks; name it "versioned write with post-write verification" or implement CAS in the plane's own metadata table. §7.2 gives the required single-writer lease protocol and its residual: a late stale write is not prevented. It is detected on every resolve by a version and value-digest check, the credential fails closed, and the account is repaired or reconnected.
 
 ## 12. Sources (all fetched 2026-09-14)
 

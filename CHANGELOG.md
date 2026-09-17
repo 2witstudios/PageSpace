@@ -15,6 +15,14 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   person (the report goes to the PageSpace team with what happened) or block them, and Connections
   has a Block action plus a Blocked list to unblock. A block stops direct messages in both
   directions, including in a conversation that already exists.
+- **The + button in a drive now matches what you can actually do** — a plain member of a drive,
+  who could always create pages through the command palette or the API, saw a lock on the +
+  button and could not click it. The button now reflects the server's effective create permission:
+  enabled for members and members whose custom role grants drive-wide edit, locked for view-only
+  custom roles and page-collaborator-only access. The same rule now also gates the API check that
+  backs it, so a view-only custom role is refused at the server too instead of silently
+  over-granted on the session path.
+
 - **Run shell commands in an agent workspace from the CLI and SDK** — a workspace's sandbox was
   only reachable through an agent in chat. `pagespace workspaces exec <workspaceId> -- <command>`
   (and `workspaces.exec` in the SDK and over `pagespace mcp`) now runs a command there with an
