@@ -498,7 +498,8 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   iOS app cannot sell. They now say the feature is available on paid plans; on the web the upgrade
   links are unchanged. Out-of-credits and paid-model messages no longer tell you to buy or upgrade in
   their text (the web still shows its Buy credits button beside them), and the Privacy & Cookies
-  settings entry is hidden in the native app, matching the cookie banner.
+  settings entry is hidden in the native app, matching the cookie banner. The native app also no
+  longer sends usage analytics, even if analytics consent was saved in an earlier version.
 - **The header now says "Home", and the drive name next to it opens a proper drive picker** —
   the way back out of a drive used to be a small house icon followed by a `/`, and nothing on
   screen said where it went, so it was easy to miss entirely. It now reads **Home** in words, next

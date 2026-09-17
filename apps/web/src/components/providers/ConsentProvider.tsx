@@ -24,7 +24,7 @@ function ConsentProvider() {
   if (!hydrated || !showBanner) return null;
 
   // Native apps never show the banner: App Review reads a cookie prompt as tracking.
-  // Consent stays at the default (necessary only), so analytics never fires there.
+  // Analytics is refused there at the tracker's own gate, whatever consent is stored.
   if (isCapacitorApp()) return null;
 
   return <CookieBanner />;
