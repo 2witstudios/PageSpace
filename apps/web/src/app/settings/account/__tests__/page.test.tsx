@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   del: vi.fn(),
   toastError: vi.fn(),
   toastSuccess: vi.fn(),
+  deleteDialogProps: vi.fn(),
 }));
 
 vi.mock('@/hooks/useAuth', () => ({
@@ -27,6 +28,8 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
   patch: mocks.patch,
   post: mocks.post,
   del: mocks.del,
+  clearCSRFToken: vi.fn(),
+  clearSessionCache: vi.fn(),
 }));
 
 vi.mock('swr', () => ({
@@ -61,7 +64,10 @@ vi.mock('@/components/oauth-grants/ConnectedAppsList', () => ({
 }));
 
 vi.mock('@/components/dialogs/DeleteAccountDialog', () => ({
-  DeleteAccountDialog: () => null,
+  DeleteAccountDialog: (props: unknown) => {
+    mocks.deleteDialogProps(props);
+    return null;
+  },
 }));
 
 vi.mock('@/components/dialogs/DriveOwnershipDialog', () => ({
@@ -184,5 +190,62 @@ describe('AccountPage', () => {
       email: 'test@example.com',
     });
     expect(mutate).toHaveBeenCalled();
+  });
+
+  describe('account deletion and Sign in with Apple (Guideline 5.1.1(v))', () => {
+    type DialogProps = { isOpen: boolean; appleSignInRevocation?: string; onConfirm: (email: string) => void };
+    const lastDialogProps = (): DialogProps => mocks.deleteDialogProps.mock.calls.at(-1)?.[0] as DialogProps;
+
+    const jsonResponse = (body: unknown) => ({ ok: true, json: () => Promise.resolve(body) });
+
+    beforeEach(() => {
+      mocks.fetchWithAuth.mockImplementation(async (url: string) => {
+        if (url === '/api/account/drives-status') return jsonResponse({ soloDrives: [], multiMemberDrives: [] });
+        if (url === '/api/account/apple-sign-in') return jsonResponse({ linked: true, revocation: 'manual' });
+        return jsonResponse({});
+      });
+    });
+
+    it('given an Apple user starting deletion, should hand the dialog their Sign in with Apple status', async () => {
+      const user = userEvent.setup();
+      render(<AccountPage />);
+
+      await user.click(screen.getByRole('button', { name: /^Delete Account$/i }));
+
+      await waitFor(() => {
+        expect(lastDialogProps()).toEqual(expect.objectContaining({ isOpen: true, appleSignInRevocation: 'manual' }));
+      });
+      expect(mocks.fetchWithAuth).toHaveBeenCalledWith('/api/account/apple-sign-in');
+    });
+
+    it('given the Apple status request fails, should still open the delete dialog without an Apple notice', async () => {
+      mocks.fetchWithAuth.mockImplementation(async (url: string) => {
+        if (url === '/api/account/drives-status') return jsonResponse({ soloDrives: [], multiMemberDrives: [] });
+        throw new Error('network down');
+      });
+      const user = userEvent.setup();
+      render(<AccountPage />);
+
+      await user.click(screen.getByRole('button', { name: /^Delete Account$/i }));
+
+      await waitFor(() => {
+        expect(lastDialogProps()).toEqual(expect.objectContaining({ isOpen: true, appleSignInRevocation: undefined }));
+      });
+    });
+
+    it('given deletion reports manual Apple steps, should land the user on the page that shows them', async () => {
+      const location = { href: 'https://example.com/settings/account' };
+      vi.stubGlobal('location', location);
+      Object.defineProperty(window, 'location', { configurable: true, value: location });
+      mocks.del.mockResolvedValue({ message: 'Account erasure queued', appleSignIn: 'manual' });
+      const user = userEvent.setup();
+      render(<AccountPage />);
+      await user.click(screen.getByRole('button', { name: /^Delete Account$/i }));
+      await waitFor(() => expect(lastDialogProps()?.isOpen).toBe(true));
+
+      lastDialogProps().onConfirm('test@example.com');
+
+      await waitFor(() => expect(location.href).toBe('/auth/account-deleted?appleSignIn=manual'), { timeout: 3000 });
+    });
   });
 });

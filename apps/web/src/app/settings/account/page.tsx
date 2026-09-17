@@ -16,6 +16,8 @@ import { Badge } from "@/components/ui/badge";
 import { patch, post, del, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useAuthStore } from "@/stores/useAuthStore";
 import { DeleteAccountDialog } from "@/components/dialogs/DeleteAccountDialog";
+import type { AppleSignInRevocation } from "@/components/account/SignInWithAppleDeletionNotice";
+import { postDeletionDestination } from "@/lib/account/post-deletion-destination";
 import { DriveOwnershipDialog } from "@/components/dialogs/DriveOwnershipDialog";
 import { ImageCropperDialog } from "@/components/dialogs/ImageCropperDialog";
 import { DeviceList } from "@/components/devices/DeviceList";
@@ -78,6 +80,7 @@ export default function AccountPage() {
   const [isOwnershipDialogOpen, setIsOwnershipDialogOpen] = useState(false);
   const [multiMemberDrives, setMultiMemberDrives] = useState<MultiMemberDrive[]>([]);
   const [soloDrivesCount, setSoloDrivesCount] = useState(0);
+  const [appleSignInRevocation, setAppleSignInRevocation] = useState<AppleSignInRevocation | undefined>(undefined);
 
   // Data export state
   const [isExporting, setIsExporting] = useState(false);
@@ -303,6 +306,16 @@ export default function AccountPage() {
   };
 
   const handleInitiateAccountDeletion = async () => {
+    // Sign in with Apple status for the dialog's notice (Guideline 5.1.1(v)).
+    // Best-effort: it must never stand in the way of deleting the account.
+    void fetchWithAuth("/api/account/apple-sign-in")
+      .then(async (response) => {
+        if (!response.ok) return;
+        const status = (await response.json()) as { revocation?: AppleSignInRevocation };
+        setAppleSignInRevocation(status.revocation);
+      })
+      .catch(() => setAppleSignInRevocation(undefined));
+
     try {
       // Fetch drives status
       const response = await fetchWithAuth("/api/account/drives-status");
@@ -336,7 +349,7 @@ export default function AccountPage() {
   const handleDeleteAccount = async (emailConfirmation: string) => {
     setIsDeletingAccount(true);
     try {
-      await del("/api/account", { emailConfirmation });
+      const result = await del<{ appleSignIn?: string }>("/api/account", { emailConfirmation });
 
       // Tear down the session before leaving: the account is gone, so the persisted
       // auth store and the token-refresh poller must not survive the navigation.
@@ -348,8 +361,10 @@ export default function AccountPage() {
       // payload for it through middleware, find no session (we just deleted it) and
       // bounce the user to /auth/signin instead of home. The iOS shell handles this
       // one correctly: pagespace.ai is in server.allowNavigation, so it loads in-app.
+      // An Apple user PageSpace could not disconnect lands on a page with the
+      // "Stop Using Sign in with Apple" steps instead (TN3194).
       setTimeout(() => {
-        window.location.href = "/";
+        window.location.href = postDeletionDestination(result?.appleSignIn);
       }, 1000);
     } catch (error) {
       console.error("Account deletion error:", error);
@@ -764,6 +779,7 @@ export default function AccountPage() {
         userEmail={user.email || ""}
         isDeleting={isDeletingAccount}
         soloDrivesCount={soloDrivesCount}
+        appleSignInRevocation={appleSignInRevocation}
       />
 
       {/* Revoke All Devices Dialog */}
