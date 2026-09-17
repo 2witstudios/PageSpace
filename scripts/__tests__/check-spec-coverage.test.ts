@@ -75,7 +75,7 @@ describe('coverage gate: the (partial) marker', () => {
     expect(nameCarriesPartialId('MON-3 sums base and extra-seat lines', 'MON-3')).toBe(false);
   });
 
-  it('the marker binds to the ID right before it: "MON-2/MON-3 (partial)" claims MON-2 and is partial for MON-3 only', () => {
+  it('the marker binds only to the ID right before it: in "<A>/<B> (partial)" the first ID is still claimed', () => {
     expect(nameCarriesId('MON-2/MON-3 (partial) the org seam', 'MON-2')).toBe(true);
     expect(nameCarriesPartialId('MON-2/MON-3 (partial) the org seam', 'MON-2')).toBe(false);
     expect(nameCarriesId('MON-2/MON-3 (partial) the org seam', 'MON-3')).toBe(false);
