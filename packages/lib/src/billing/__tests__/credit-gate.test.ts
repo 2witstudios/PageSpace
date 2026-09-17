@@ -50,6 +50,7 @@ const mockReadGateAccount = vi.hoisted(() =>
 vi.mock('../gate-account', () => ({ readGateAccount: mockReadGateAccount }));
 
 import { canConsumeAI, addOneMonth } from '../credit-gate';
+import { GateAccountNotFoundError } from '../gate-account-not-found';
 
 // Default pricing (unmocked credit-pricing): RESERVE_FLOOR_CENTS = 25,
 // CREDIT_HOLD_ESTIMATE_CENTS = 25 (defaults to the floor), MAX_FREE_INFLIGHT = 2.
@@ -906,6 +907,47 @@ describe('canConsumeAI — agents get no starter grant (ADR 0007 Decision 9)', (
     mockTransaction({ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
 
     expect(await canConsumeAI('agent-1', 'free')).toMatchObject({ allowed: false, reason: 'out_of_credits' });
+  });
+
+  it('given an agent on a comped refilling tier with an expired window, should roll the window with a 0 allowance, net only its debt, and write no grant row', async () => {
+    mockReadGateAccount.mockResolvedValue({ accountType: 'agent', ownerUserId: null });
+    mockDb.select
+      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 300, topupRemainingCents: 0, monthlyPeriodEnd: PAST }]))
+      .mockReturnValueOnce(selectReturning([])) // no renewal-capable subscription
+      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 200, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
+    const sink: { set?: Record<string, unknown>; ledgerValues?: Record<string, unknown> } = {};
+    mockResetTransaction(sink, { monthlyRemainingCents: 300, debtCents: 100, monthlyPeriodEnd: PAST });
+    mockTransaction({ monthlyRemainingCents: 200, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
+
+    await canConsumeAI('agent-1', 'business');
+
+    expect(sink.set).toMatchObject({ monthlyRemainingCents: 200, monthlyAllowanceCents: 0, debtCents: 0 });
+    expect(sink.set?.monthlyPeriodEnd).toBeInstanceOf(Date);
+    expect(sink.ledgerValues).toBeUndefined();
+  });
+
+  it('given no users row (billing on), should fail closed with a refusal and never create a balance row', async () => {
+    mockReadGateAccount.mockRejectedValue(new GateAccountNotFoundError('ghost'));
+    mockDb.select.mockReturnValueOnce(selectReturning([]));
+
+    const r = await canConsumeAI('ghost', 'free');
+
+    expect(r).toEqual({ allowed: false, reason: 'needs_init' });
+    expect(mockDb.transaction).not.toHaveBeenCalled();
+  });
+
+  it('given no users row (billing off), should fail closed instead of the unlimited fast path', async () => {
+    mockIsBillingEnabled.mockReturnValue(false);
+    mockReadGateAccount.mockRejectedValue(new GateAccountNotFoundError('ghost'));
+
+    expect(await canConsumeAI('ghost', 'free')).toEqual({ allowed: false, reason: 'needs_init' });
+  });
+
+  it('given any other account-read failure, should rethrow (not a silent refusal)', async () => {
+    mockReadGateAccount.mockRejectedValue(new Error('db down'));
+    mockDb.select.mockReturnValueOnce(selectReturning([]));
+
+    await expect(canConsumeAI('u1', 'free')).rejects.toThrow('db down');
   });
 
   it('given a funded row that allows, should never read the account (hot path stays one balance read)', async () => {

@@ -100,6 +100,8 @@ export default defineConfig({
         // Agents get no free AI in billing-off deployments (ADR 0007 Decision 9):
         // a pure security decision, pinned so an untested branch cannot land.
         'src/billing/billing-off-agent-gate.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
+        // Agents never hold their own Stripe customer (ADR 0007 Decision 8, Phase 1b).
+        'src/billing/stripe-customer-eligibility.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
         'src/sheets/conditional-ops.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
         'src/sheets/palette.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
         'src/sheets/regions.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },

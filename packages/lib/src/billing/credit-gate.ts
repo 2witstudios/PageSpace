@@ -15,7 +15,7 @@
  * (TIER_ALLOWANCE_REFILLS): the free tier does NOT — its allowance is a single grant,
  * so an expired free window is simply left alone. This is the imperative shell, so
  * it owns the real clock; the period math stays trivial and the rollover itself
- * comes from the pure computeMonthlyRefill.
+ * comes from the pure computeRefill over allowanceGrantCents (0 for an agent).
  */
 
 import { db } from '@pagespace/db/db';
@@ -27,7 +27,7 @@ import { isBillingEnabled } from '../deployment-mode';
 import {
   evaluateGate,
   evaluateDailyCap,
-  computeMonthlyRefill,
+  computeRefill,
   reservationCents,
   holdExpiresAt,
   refineGateReason,
@@ -43,8 +43,10 @@ import {
   MAX_FREE_INFLIGHT,
   dailyExposureCapForTier,
   starterGrantCents,
+  allowanceGrantCents,
 } from './credit-pricing';
 import { readGateAccount, type GateAccount } from './gate-account';
+import { GateAccountNotFoundError } from './gate-account-not-found';
 import { billingOffAgentGate } from './billing-off-agent-gate';
 import { readSpendableCents } from './credit-balance';
 import type { SubscriptionTier } from '../services/subscription-utils';
@@ -188,6 +190,21 @@ export async function canConsumeAI(
   tier: SubscriptionTier = 'free',
   opts: GateOptions = {},
 ): Promise<GateResult> {
+  try {
+    return await decideAndReserve(userId, tier, opts);
+  } catch (error) {
+    // Fail closed on a principal with no users row (Phase 1b). Every account read
+    // happens before a hold is reserved, so a refusal here leaks no hold.
+    if (error instanceof GateAccountNotFoundError) return { allowed: false, reason: 'needs_init' };
+    throw error;
+  }
+}
+
+async function decideAndReserve(
+  userId: string,
+  tier: SubscriptionTier,
+  opts: GateOptions,
+): Promise<GateResult> {
   if (!isBillingEnabled()) {
     // Agents get no free AI here either (ADR 0007 Decision 9): with billing off
     // the deployment's customer pays for every call, so an unclaimed agent is
@@ -306,6 +323,11 @@ export async function canConsumeAI(
     !(await hasRenewalCapableSubscription(db, userId))
   ) {
     const newEnd = addOneMonth(now);
+    const resetAllowance = allowanceGrantCents({
+      tier,
+      accountType: (await getAccount()).accountType,
+      kind: 'refill',
+    });
     await db.transaction(async (tx) => {
       // Lock the balance row and RE-READ the current monthly/debt values inside the
       // transaction. The lock serialises concurrent resets for this user and forces
@@ -341,10 +363,10 @@ export async function canConsumeAI(
 
       // Compute the refill from the LOCKED, current balance so unspent credits roll
       // over and outstanding debt is netted against the up-to-date carry (matching the
-      // paid invoice.paid path), not against the stale pre-transaction snapshot.
-      const refill = computeMonthlyRefill(
-        tier,
-        TIER_MONTHLY_ALLOWANCE_CENTS,
+      // paid invoice.paid path), not against the stale pre-transaction snapshot. The
+      // allowance comes from the one allowance function: 0 for an agent.
+      const refill = computeRefill(
+        resetAllowance,
         locked.monthlyRemainingCents ?? 0,
         locked.debtCents ?? 0,
       );
@@ -365,6 +387,8 @@ export async function canConsumeAI(
       // Record the grant. We only reach here holding the lock with a confirmed-expired
       // window, so this call owns the reset; onConflictDoNothing on the period-keyed
       // stripeRef is a belt-and-suspenders guard against a same-instant duplicate key.
+      // An agent's allowance is 0: the window still rolls, but no grant row is written.
+      if (refill.monthlyAllowanceCents === 0) return;
       await tx
         .insert(creditLedger)
         .values({
@@ -661,7 +685,19 @@ export async function hasSpendableBalance(
   userId: string,
   tier: SubscriptionTier = 'free',
 ): Promise<boolean> {
-  if (!isBillingEnabled()) return true;
+  if (!isBillingEnabled()) {
+    // Parity with canConsumeAI's billing-off path (Phase 1b): an unclaimed agent
+    // is refused exactly as billingOffAgentGate refuses it, and a missing users
+    // row fails closed.
+    let account: GateAccount;
+    try {
+      account = await readGateAccount(userId);
+    } catch (error) {
+      if (error instanceof GateAccountNotFoundError) return false;
+      throw error;
+    }
+    return billingOffAgentGate({ accountType: account.accountType, hasOwner: account.ownerUserId !== null }) === 'allow';
+  }
   const spendable = await readSpendableCents(userId, tier);
   return spendable > RESERVE_FLOOR_CENTS;
 }

@@ -25,6 +25,10 @@ const mockDb = vi.hoisted(() => ({
 vi.mock('@pagespace/db/db', () => ({ db: mockDb }));
 vi.mock('../../deployment-mode', () => ({ isBillingEnabled: mockIsBillingEnabled }));
 vi.mock('../credit-balance', () => ({ readSpendableCents: mockReadSpendableCents }));
+const mockReadGateAccount = vi.hoisted(() =>
+  vi.fn(async (): Promise<{ accountType: 'human' | 'agent'; ownerUserId: string | null }> => ({ accountType: 'human', ownerUserId: null })),
+);
+vi.mock('../gate-account', () => ({ readGateAccount: mockReadGateAccount }));
 vi.mock('@pagespace/db/schema/credits', () => ({
   creditBalances: { userId: 'cb.userId' },
   creditHolds: { id: 'ch.id', userId: 'ch.userId', estCents: 'ch.est', expiresAt: 'ch.exp' },
@@ -53,6 +57,7 @@ vi.mock('@pagespace/db/operators', () => ({
 }));
 
 import { hasSpendableBalance } from '../credit-gate';
+import { GateAccountNotFoundError } from '../gate-account-not-found';
 import { RESERVE_FLOOR_CENTS } from '../credit-pricing';
 
 /** The lean read returns the spendable figure itself. */
@@ -63,6 +68,7 @@ function balance(spendable: number) {
 beforeEach(() => {
   vi.clearAllMocks();
   mockIsBillingEnabled.mockReturnValue(true);
+  mockReadGateAccount.mockReset().mockResolvedValue({ accountType: 'human', ownerUserId: null });
 });
 
 describe('hasSpendableBalance — the same floor the gate applies', () => {
@@ -93,10 +99,35 @@ describe('hasSpendableBalance — the same floor the gate applies', () => {
 });
 
 describe('hasSpendableBalance — deployments without billing are unlimited', () => {
-  it('given billing is disabled, should allow without reading the ledger at all', async () => {
+  it('given billing is disabled, should allow a human without reading the ledger at all', async () => {
     mockIsBillingEnabled.mockReturnValue(false);
     expect(await hasSpendableBalance('user_1', 'pro')).toBe(true);
     expect(mockReadSpendableCents).not.toHaveBeenCalled();
+  });
+
+  it('given billing is disabled and an unclaimed agent, should refuse exactly as billingOffAgentGate does', async () => {
+    mockIsBillingEnabled.mockReturnValue(false);
+    mockReadGateAccount.mockResolvedValue({ accountType: 'agent', ownerUserId: null });
+    expect(await hasSpendableBalance('agent_1', 'free')).toBe(false);
+    expect(mockReadSpendableCents).not.toHaveBeenCalled();
+  });
+
+  it('given billing is disabled and a claimed agent, should allow like its owner', async () => {
+    mockIsBillingEnabled.mockReturnValue(false);
+    mockReadGateAccount.mockResolvedValue({ accountType: 'agent', ownerUserId: 'owner_1' });
+    expect(await hasSpendableBalance('agent_1', 'free')).toBe(true);
+  });
+
+  it('given billing is disabled and no users row, should fail closed', async () => {
+    mockIsBillingEnabled.mockReturnValue(false);
+    mockReadGateAccount.mockRejectedValue(new GateAccountNotFoundError('ghost'));
+    expect(await hasSpendableBalance('ghost', 'free')).toBe(false);
+  });
+
+  it('given billing is disabled and any other account-read failure, should rethrow', async () => {
+    mockIsBillingEnabled.mockReturnValue(false);
+    mockReadGateAccount.mockRejectedValue(new Error('db down'));
+    await expect(hasSpendableBalance('user_1', 'free')).rejects.toThrow('db down');
   });
 });
 

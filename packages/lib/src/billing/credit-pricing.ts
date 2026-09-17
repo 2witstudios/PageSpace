@@ -119,6 +119,28 @@ export function isOneTimeAllowanceTier(tier: string): boolean {
  * be bypassed by the order in which a top-up and a first call race.
  */
 export function starterGrantCents(input: { tier: string; accountType: AccountType }): number {
+  return allowanceGrantCents({ ...input, kind: 'starter' });
+}
+
+export type AllowanceGrantKind = 'starter' | 'refill';
+
+/**
+ * The ONE allowance function every grant uses (Agent Signup Phase 1b): the
+ * one-time starter grant (both lazy-init branches of the gate, via
+ * starterGrantCents), the gate-side period reset for comped paid accounts, and
+ * the invoice.paid refill in credit-funding. Agents get 0 from every one of them
+ * — no free AI credits, ever (ADR 0007 Decision 9). Humans get their tier's
+ * allowance, falling back to the free allowance for an unknown/legacy tier
+ * (prototype keys are not tiers).
+ *
+ * Both kinds resolve the same amount today; the caller names which grant it is
+ * so a future divergence has exactly one home.
+ */
+export function allowanceGrantCents(input: {
+  tier: string;
+  accountType: AccountType;
+  kind: AllowanceGrantKind;
+}): number {
   if (input.accountType === 'agent') return 0;
   const known = Object.prototype.hasOwnProperty.call(TIER_MONTHLY_ALLOWANCE_CENTS, input.tier);
   return known ? TIER_MONTHLY_ALLOWANCE_CENTS[input.tier as SubscriptionTier] : TIER_MONTHLY_ALLOWANCE_CENTS.free;
