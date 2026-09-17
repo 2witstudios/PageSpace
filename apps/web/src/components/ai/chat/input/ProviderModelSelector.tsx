@@ -232,6 +232,18 @@ export function ProviderModelSelector({
     [subscriptionTier]
   );
 
+  // Whether the current tier can use a provider at all. Providers whose entire
+  // static catalog is paid are hidden rather than selectable-and-failing.
+  const hasAccessibleModel = useCallback(
+    (providerId: string) => {
+      if (LOCAL_PROVIDERS[providerId]) return true;
+      const config = AI_PROVIDERS[providerId as keyof typeof AI_PROVIDERS];
+      if (!config) return false;
+      return Object.keys(config.models).some((modelId) => isModelAccessible(providerId, modelId));
+    },
+    [isModelAccessible]
+  );
+
   // Get models for current provider
   const availableModels = useMemo(() => {
     if (!provider) return [];
@@ -347,7 +359,7 @@ export function ProviderModelSelector({
                 .map((group) => ({
                   ...group,
                   providers: group.providers.filter((p) =>
-                    isProviderAvailable(p.id) && (!ADMIN_ONLY_PROVIDERS.has(p.id) || isAdmin)
+                    isProviderAvailable(p.id) && (!ADMIN_ONLY_PROVIDERS.has(p.id) || isAdmin) && hasAccessibleModel(p.id)
                   ),
                 }))
                 .filter((group) => group.providers.length > 0)
