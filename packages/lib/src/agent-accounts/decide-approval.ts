@@ -86,9 +86,13 @@ export const decideApproval: DecideApproval = ({ operation, restrictions, delega
 
   if (!policy.scope.origins.includes(origin)) return refuse('out_of_scope');
   if (!resourcesWithin(policy.scope.resources, resources)) return refuse('out_of_scope');
-  if (ASKS_UNDER_TRIGGER[policy.trigger][operation.class]) return concrete(operation);
+  // A policy row whose trigger or limits are not their declared types cannot grant anything by
+  // policy — it asks the human instead of throwing or comparing against NaN (G1c review of #2660).
+  const asks = Object.prototype.hasOwnProperty.call(ASKS_UNDER_TRIGGER, policy.trigger) ? ASKS_UNDER_TRIGGER[policy.trigger][operation.class] : true;
+  if (asks) return concrete(operation);
 
   const { limits } = policy;
+  if (![limits.maxUsesPerHour, limits.maxBytesOut, limits.maxConcurrent].every((limit) => typeof limit === 'number' && Number.isFinite(limit))) return concrete(operation);
   if (usage.usesThisHour >= limits.maxUsesPerHour || usage.concurrent >= limits.maxConcurrent || usage.bytesOutThisHour >= limits.maxBytesOut) {
     return refuse('limits_exceeded');
   }

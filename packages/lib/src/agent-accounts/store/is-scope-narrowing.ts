@@ -25,6 +25,7 @@
 import type { AccountApprovalPolicy, ApprovalTrigger } from '../approval';
 import type { OperationRef } from '../grant';
 import type { IsScopeNarrowing } from './store-adapter';
+import { isPlaneScopeWellFormed } from './is-plane-scope-well-formed';
 
 /** How many operation classes a trigger still asks for: more asks is narrower. */
 const TRIGGER_STRICTNESS: Readonly<Record<ApprovalTrigger, number>> = {
@@ -67,6 +68,9 @@ function policyNarrowing(next: AccountApprovalPolicy | null, stored: AccountAppr
 }
 
 export const isScopeNarrowing: IsScopeNarrowing = ({ stored, next }) =>
+  // A malformed value compares false every way, so it could never be proven narrower (G1c review).
+  isPlaneScopeWellFormed({ scope: stored }) &&
+  isPlaneScopeWellFormed({ scope: next }) &&
   subset(next.allowedOrigins, stored.allowedOrigins) &&
   subset(next.auxiliaryOrigins, stored.auxiliaryOrigins) &&
   subset(next.boundAgentPageIds, stored.boundAgentPageIds) &&
