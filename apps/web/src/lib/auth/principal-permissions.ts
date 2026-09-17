@@ -84,54 +84,10 @@ export function isScopedOAuthAuth(auth: AuthResult): auth is OAuthAuthResult {
   return isOAuthAuthResult(auth) && !auth.scopes.account;
 }
 
-/**
- * Collapse a dispatched worker's SERVICE credential back onto the credential the
- * chain actually started from.
- *
- * A worker turn arrives as `ServiceAuthResult`. That is a fourth `AuthResult`
- * variant, and every branch in this file was written against the first three —
- * so without this, a service turn fell through every `isScopedMCPAuth` check to
- * the plain-user path and executed with the OWNING USER's full permissions,
- * discarding the ceiling the signed dispatch went to the trouble of carrying
- * (PR review, three independent P1 findings). A VIEWER-scoped token could clear
- * the page-chat edit gate through its owner's broader access.
- *
- * The fix is normalization rather than thirteen extra branches, deliberately:
- * the failure mode was a NEW VARIANT SILENTLY FALLING THROUGH, and thirteen
- * branches would leave the fourteenth to be forgotten the same way. Rewriting
- * the principal at the door means every check here — and every check added
- * later — sees a credential shape it already knows how to refuse.
- *
- * It is a re-labelling, not an escalation: a dispatch under an MCP token IS that
- * token acting, so it gets exactly that token's `tokenId` and `allowedDriveIds`
- * and therefore exactly its `mcp_token_drives` role. A chain that started from a
- * session or an UNSCOPED token has no `originatingMcpTokenId`, stays a service
- * result, and correctly resolves as the user (an unscoped token is its owner).
- */
-function resolveDispatchedPrincipal(auth: AuthResult): AuthResult {
-  // The DISCRIMINANT directly, not the `isServiceAuthResult` guard from
-  // `./index`. `auth` is already a success result here, so the tag is all the
-  // narrowing needed — and this module is partially mocked by several route
-  // suites that delegate to the real dispatch, so every symbol imported from
-  // `./index` is one more thing those mocks must remember to provide or fail
-  // with an opaque 500 (caught by `mcp/documents/route.security.test.ts`).
-  if (auth.tokenType !== 'service' || !auth.originatingMcpTokenId) return auth;
-  return {
-    tokenType: 'mcp',
-    tokenId: auth.originatingMcpTokenId,
-    allowedDriveIds: auth.allowedDriveIds,
-    userId: auth.userId,
-    role: auth.role,
-    tokenVersion: auth.tokenVersion,
-    adminRoleVersion: auth.adminRoleVersion,
-  };
-}
-
 export async function getPrincipalAccessLevel(
   auth: AuthResult,
   pageId: string,
 ): Promise<PermissionLevel | null> {
-  auth = resolveDispatchedPrincipal(auth);
   if (isManageKeysOnly(auth)) return null;
   const ceiling = getCredentialCeiling(auth);
   if (ceiling) return getCeilingAccessLevel(ceiling, auth.userId, pageId);
@@ -139,7 +95,6 @@ export async function getPrincipalAccessLevel(
 }
 
 export async function canPrincipalViewPage(auth: AuthResult, pageId: string): Promise<boolean> {
-  auth = resolveDispatchedPrincipal(auth);
   if (isManageKeysOnly(auth)) return false;
   const ceiling = getCredentialCeiling(auth);
   if (ceiling) {
@@ -150,7 +105,6 @@ export async function canPrincipalViewPage(auth: AuthResult, pageId: string): Pr
 }
 
 export async function canPrincipalEditPage(auth: AuthResult, pageId: string): Promise<boolean> {
-  auth = resolveDispatchedPrincipal(auth);
   if (isManageKeysOnly(auth)) return false;
   const ceiling = getCredentialCeiling(auth);
   if (ceiling) {
@@ -161,7 +115,6 @@ export async function canPrincipalEditPage(auth: AuthResult, pageId: string): Pr
 }
 
 export async function canPrincipalDeletePage(auth: AuthResult, pageId: string): Promise<boolean> {
-  auth = resolveDispatchedPrincipal(auth);
   if (isManageKeysOnly(auth)) return false;
   const ceiling = getCredentialCeiling(auth);
   if (ceiling) {
@@ -172,7 +125,6 @@ export async function canPrincipalDeletePage(auth: AuthResult, pageId: string): 
 }
 
 export async function canPrincipalSharePage(auth: AuthResult, pageId: string): Promise<boolean> {
-  auth = resolveDispatchedPrincipal(auth);
   if (isManageKeysOnly(auth)) return false;
   const ceiling = getCredentialCeiling(auth);
   if (ceiling) {
@@ -183,7 +135,6 @@ export async function canPrincipalSharePage(auth: AuthResult, pageId: string): P
 }
 
 export async function isPrincipalDriveMember(auth: AuthResult, driveId: string): Promise<boolean> {
-  auth = resolveDispatchedPrincipal(auth);
   if (isManageKeysOnly(auth)) return false;
   const ceiling = getCredentialCeiling(auth);
   if (ceiling) return hasCeilingDriveMembership(ceiling, auth.userId, driveId);
@@ -191,7 +142,6 @@ export async function isPrincipalDriveMember(auth: AuthResult, driveId: string):
 }
 
 export async function getPrincipalDriveAccess(auth: AuthResult, driveId: string): Promise<boolean> {
-  auth = resolveDispatchedPrincipal(auth);
   if (isManageKeysOnly(auth)) return false;
   const ceiling = getCredentialCeiling(auth);
   if (ceiling) return hasCeilingDriveMembership(ceiling, auth.userId, driveId);
@@ -199,7 +149,6 @@ export async function getPrincipalDriveAccess(auth: AuthResult, driveId: string)
 }
 
 export async function isPrincipalDriveOwnerOrAdmin(auth: AuthResult, driveId: string): Promise<boolean> {
-  auth = resolveDispatchedPrincipal(auth);
   if (isManageKeysOnly(auth)) return false;
   const ceiling = getCredentialCeiling(auth);
   if (ceiling) {
@@ -222,9 +171,8 @@ export async function isPrincipalDriveOwnerOrAdmin(auth: AuthResult, driveId: st
  * unsupervised.
  */
 export async function canManagePageWebhooks(auth: AuthResult, pageId: string): Promise<boolean> {
-  auth = resolveDispatchedPrincipal(auth);
   if (isManageKeysOnly(auth)) return false;
-  if (isScopedMCPAuth(auth) || isScopedOAuthAuth(auth)) return false;
+  if (getCredentialCeiling(auth)) return false;
 
   const page = await db.query.pages.findFirst({
     where: eq(pages.id, pageId),
@@ -251,7 +199,6 @@ export async function getPrincipalDriveAccessLevel(
   auth: AuthResult,
   driveId: string,
 ): Promise<PermissionLevel | null> {
-  auth = resolveDispatchedPrincipal(auth);
   if (isManageKeysOnly(auth)) return null;
   const ceiling = getCredentialCeiling(auth);
   if (ceiling) return getCeilingDriveAccessLevel(ceiling, auth.userId, driveId);
@@ -277,7 +224,6 @@ export async function getPrincipalDriveMembership(
   auth: AuthResult,
   driveId: string,
 ): Promise<PrincipalDriveMembership | null> {
-  auth = resolveDispatchedPrincipal(auth);
   if (isManageKeysOnly(auth)) return null;
   const ceiling = getCredentialCeiling(auth);
   if (ceiling) return getCeilingDriveMembership(ceiling, auth.userId, driveId);
@@ -297,12 +243,12 @@ export async function getPrincipalDriveMembership(
  * (NOT intersected with the owning user's drives), otherwise the user's drives.
  */
 export async function getPrincipalDriveIds(auth: AuthResult): Promise<string[]> {
-  auth = resolveDispatchedPrincipal(auth);
   if (isManageKeysOnly(auth)) return [];
-  if (isScopedMCPAuth(auth)) {
-    return auth.allowedDriveIds;
+  const ceiling = getCredentialCeiling(auth);
+  if (ceiling?.kind === 'mcp') {
+    return getAllowedDriveIds(auth);
   }
-  if (isScopedOAuthAuth(auth)) {
+  if (ceiling?.kind === 'oauth') {
     // The drive ROWS, not `allowedDriveIds`: a profile-only principal carries a
     // no-drive sentinel there (see `validateOAuthAccessToken`), which must
     // never surface as a drive id in a caller's query. And only the rows that
@@ -310,8 +256,8 @@ export async function getPrincipalDriveIds(auth: AuthResult): Promise<string[]> 
     // since left — by removal, leaving, or a rolled-back membership — drops out
     // (ADR 0002 D2; the same live-membership rule the scope resolvers apply).
     const live = await Promise.all(
-      auth.driveScopes.map(async (scope) =>
-        (await hasCeilingDriveMembership({ kind: 'oauth', driveScopes: auth.driveScopes }, auth.userId, scope.driveId)) ? scope.driveId : null,
+      ceiling.driveScopes.map(async (scope) =>
+        (await hasCeilingDriveMembership(ceiling, auth.userId, scope.driveId)) ? scope.driveId : null,
       ),
     );
     return live.filter((driveId): driveId is string => driveId !== null);
@@ -324,7 +270,6 @@ export async function getPrincipalAccessiblePagesInDrive(
   auth: AuthResult,
   driveId: string,
 ): Promise<PageWithPermissions[]> {
-  auth = resolveDispatchedPrincipal(auth);
   if (isManageKeysOnly(auth)) return [];
   const ceiling = getCredentialCeiling(auth);
   if (ceiling) return getCeilingAccessiblePagesInDrive(ceiling, auth.userId, driveId);
@@ -340,7 +285,6 @@ export async function getPrincipalBatchPagePermissions(
   auth: AuthResult,
   pageIds: string[],
 ): Promise<Map<string, PermissionLevel>> {
-  auth = resolveDispatchedPrincipal(auth);
   const deny: PermissionLevel = { canView: false, canEdit: false, canShare: false, canDelete: false };
 
   if (isManageKeysOnly(auth)) {

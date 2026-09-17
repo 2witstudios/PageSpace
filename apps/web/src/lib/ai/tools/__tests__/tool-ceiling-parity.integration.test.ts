@@ -68,6 +68,10 @@ vi.mock('@pagespace/lib/services/page-version-service', async (importOriginal) =
 });
 
 import { authenticateRequestWithOptions, isAuthError, validateOAuthAccessToken } from '@/lib/auth';
+import { loadServicePrincipal } from '@/lib/auth';
+import { parseSignedAgentDispatch, AGENT_DISPATCH_SIGNATURE_HEADER } from '@pagespace/lib/auth/agent-dispatch-payload';
+import { dispatchThroughChatPipeline } from '../session-tools-runtime';
+import { readDispatchScope } from '../session-tools';
 import { toolCredentialScope } from '@/lib/ai/core/tool-credential-scope';
 import type { ToolExecutionContext } from '@/lib/ai/core/types';
 // Through the registry, as the chat routes load tools (the tool modules import
@@ -296,4 +300,66 @@ describe('a profile-only OAuth token (no drive scope)', () => {
       expect(result.outcome, `${tc.name}: ${result.detail}`).toBe('denied');
     }
   }, 60_000);
+});
+
+describe('the agent-dispatch hop carries the ROLE ceiling, not just the drive list', () => {
+  /**
+   * spawn_session/send_session hand a worker turn to /api/internal/agent-dispatch
+   * as a signed payload; the worker runs under SERVICE auth built from it. This
+   * drives the real chain end to end — the caller's context → the scope the
+   * session tools sign → the exact bytes on the wire → signature verification →
+   * the live service principal → the worker's tool context — and runs the tools
+   * there. The route's own hand-off of the payload fields is pinned in its suite.
+   */
+  const HOP_TOOLS = ['read private page', 'edit page', 'share/permissions — create drive role', 'drive manage — rename drive'];
+
+  it.each(['mcp_ key', 'OAuth grant'] as const)('a worker dispatched from a MEMBER %s keeps MEMBER caps', async (kind) => {
+    vi.stubEnv('WEB_APP_URL', 'http://localhost:3000');
+    vi.stubEnv('REALTIME_BROADCAST_SECRET', 'test-realtime-broadcast-secret-32-chars-minimum-length');
+    const userId = (await factories.createUser()).id;
+    const f = await fixture(userId);
+    const row = rowFor('MEMBER', f);
+    const token = kind === 'mcp_ key' ? await mintMcp(userId, f.driveId, row) : await mintOAuth(userId, [row.scope]);
+    const callerCtx = await contextFor(token, userId);
+
+    const fetchMock = vi.fn(async () => new Response('ok', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      const outcome = await dispatchThroughChatPipeline({
+        conversationId: createId(), agentPageId: createId(), input: 'hi', userId, depth: 1, wait: false,
+        scope: readDispatchScope(callerCtx),
+      });
+      expect(outcome).toEqual({ ok: true, waited: false });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    const init = (fetchMock.mock.calls[0] as unknown as [string, { headers: Record<string, string>; body: string }])[1];
+    const parsed = parseSignedAgentDispatch(init.headers[AGENT_DISPATCH_SIGNATURE_HEADER], init.body);
+    if (!parsed.ok) throw new Error(`dispatch did not verify: ${parsed.reason}`);
+
+    const worker = await loadServicePrincipal({
+      userId: parsed.payload.actingUserId,
+      service: 'agent-dispatch',
+      allowedDriveIds: parsed.payload.allowedDriveIds,
+      originatingCeiling: parsed.payload.originatingCeiling,
+      originatingMcpTokenId: parsed.payload.originatingMcpTokenId,
+    });
+    if (!worker) throw new Error('worker principal did not load');
+    const workerCtx = { userId: worker.userId, ...toolCredentialScope(worker) } as ToolExecutionContext;
+
+    for (const tc of TOOLS.filter((t) => HOP_TOOLS.includes(t.name))) {
+      const result = await outcomeOf(tc, workerCtx, f);
+      expect(result.outcome, `${kind} worker — ${tc.name}: ${result.detail}`).toBe('denied');
+    }
+    // Control: what the worker IS allowed still works across the hop.
+    const read = await outcomeOf(TOOLS[0], workerCtx, f);
+    expect(read.outcome, read.detail).toBe('ok');
+  }, 60_000);
+
+  it('a dispatch signed by an older sender (legacy originatingMcpTokenId only) keeps its key\'s ceiling instead of widening', async () => {
+    const userId = (await factories.createUser()).id;
+    const worker = await loadServicePrincipal({ userId, service: 'agent-dispatch', allowedDriveIds: ['drive-a'], originatingMcpTokenId: 'mcp-token-legacy' });
+    expect(worker?.originatingCeiling).toEqual({ kind: 'mcp', tokenId: 'mcp-token-legacy' });
+    expect(toolCredentialScope(worker!).credentialCeiling).toEqual({ kind: 'mcp', tokenId: 'mcp-token-legacy' });
+  });
 });

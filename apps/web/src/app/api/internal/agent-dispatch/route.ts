@@ -106,7 +106,7 @@ export async function POST(request: Request) {
   //
   // The global strategy has no drive-scope machinery at all — no
   // `filterToolsForMcpScope`, and an `experimental_context` that carries neither
-  // `mcpAllowedDriveIds` nor `mcpTokenId` — because until this route existed no
+  // `mcpAllowedDriveIds` nor `credentialCeiling` — because until this route existed no
   // scoped credential could reach it (`handle-chat-turn` refuses MCP tokens on
   // the public global path, and the global URL is session-only). Letting a
   // scoped dispatch through here would have silently handed the worker the
@@ -135,6 +135,7 @@ export async function POST(request: Request) {
     userId: payload.actingUserId,
     service: 'agent-dispatch',
     allowedDriveIds: payload.allowedDriveIds,
+    originatingCeiling: payload.originatingCeiling,
     originatingMcpTokenId: payload.originatingMcpTokenId,
   });
   if (!auth) {

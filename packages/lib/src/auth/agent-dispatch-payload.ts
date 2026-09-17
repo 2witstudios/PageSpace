@@ -40,6 +40,7 @@
  */
 
 import { z } from 'zod';
+import { credentialCeilingSchema } from '../permissions/credential-ceiling';
 import {
   formatSignatureHeader,
   generateBroadcastSignature,
@@ -66,7 +67,17 @@ export const agentDispatchPayloadSchema = z.object({
   depth: z.number().int().min(0),
   /** The originating credential's drive ceiling; `[]` = no ceiling. See `getAllowedDriveIds`. */
   allowedDriveIds: z.array(z.string()),
-  /** Present when the chain started at a scoped MCP token, so its RBAC ceiling survives the hop. */
+  /**
+   * Present when the chain started at a drive-scoped credential — an `mcp_` key
+   * or an OAuth grant — so its ROLE ceiling survives the hop, not just the drive
+   * list. `allowedDriveIds` alone does not imply the role.
+   */
+  originatingCeiling: credentialCeilingSchema.optional(),
+  /**
+   * LEGACY (pre-`originatingCeiling` senders): an `mcp_` key's id. Still read, so
+   * a dispatch signed by an older instance mid-deploy keeps its key's ceiling
+   * instead of silently widening; never written.
+   */
   originatingMcpTokenId: z.string().optional(),
   /** The synthetic `agent-dispatch-<cuid>` id; identifies this dispatch, not a browser tab. */
   browserSessionId: z.string().min(1),

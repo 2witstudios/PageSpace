@@ -44,6 +44,11 @@ export type { CredentialCeiling } from '@pagespace/lib/permissions/credential-ce
  * code path, never by per-kind branches at each call site. A profile-only OAuth
  * principal carries a ceiling with NO drive rows, which grants nothing.
  *
+ * An exhaustive `switch` with no default, deliberately: a fifth `AuthResult`
+ * variant fails to compile here instead of silently falling through to "acts as
+ * the user" — the failure mode that once let a dispatched worker run with its
+ * owner's full permissions.
+ *
  * Reads DISCRIMINANTS only, never guards imported from `./index`: route suites
  * mock `@/lib/auth` wholesale, and a helper that needed that mock to provide
  * `isScopedMCPAuth` would 500 every one of them. The predicates are the same
@@ -56,7 +61,11 @@ export function getCredentialCeiling(auth: AuthResult): CredentialCeiling | unde
     case 'oauth':
       return auth.scopes.account ? undefined : { kind: 'oauth', driveScopes: auth.driveScopes };
     case 'service':
-      return auth.originatingMcpTokenId ? { kind: 'mcp', tokenId: auth.originatingMcpTokenId } : undefined;
+      // A dispatched worker IS the credential that started its chain: a chain
+      // from a session or an unscoped credential carries none and acts as the
+      // user; one from a drive-scoped key or grant keeps that ceiling, role and
+      // all, across the hop.
+      return auth.originatingCeiling;
     case 'session':
       return undefined;
   }

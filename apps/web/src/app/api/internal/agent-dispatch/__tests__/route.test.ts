@@ -33,7 +33,7 @@ const PAYLOAD: AgentDispatchPayload = {
   chatId: 'agent-page-1',
   depth: 2,
   allowedDriveIds: ['drive-a'],
-  originatingMcpTokenId: 'mcp-token-1',
+  originatingCeiling: { kind: 'oauth', driveScopes: [{ driveId: 'drive-a', role: 'MEMBER', customRoleId: null }] },
   browserSessionId: 'agent-dispatch-abc',
   messageId: 'message-1',
   text: 'hello',
@@ -47,7 +47,7 @@ const PRINCIPAL = {
   tokenVersion: 1,
   adminRoleVersion: 1,
   allowedDriveIds: ['drive-a'],
-  originatingMcpTokenId: 'mcp-token-1',
+  originatingCeiling: { kind: 'oauth' as const, driveScopes: [{ driveId: 'drive-a', role: 'MEMBER' as const, customRoleId: null }] },
 };
 
 function request(body: string, signatureHeader?: string): Request {
@@ -131,7 +131,9 @@ describe('POST /api/internal/agent-dispatch', () => {
       userId: 'user-1',
       service: 'agent-dispatch',
       allowedDriveIds: ['drive-a'],
-      originatingMcpTokenId: 'mcp-token-1',
+      // The ROLE ceiling rides the hop, not just the drive list.
+      originatingCeiling: { kind: 'oauth', driveScopes: [{ driveId: 'drive-a', role: 'MEMBER', customRoleId: null }] },
+      originatingMcpTokenId: undefined,
     });
     const turn = dispatchChatTurnMock.mock.calls[0][0];
     expect(turn.auth).toBe(PRINCIPAL);
@@ -164,7 +166,7 @@ describe('POST /api/internal/agent-dispatch', () => {
     // null would fall through to the page strategy's "chatId is required" 400.
     // Unscoped, because a DRIVE-SCOPED credential is refused on this path — see
     // the test below.
-    await POST(signed({ ...PAYLOAD, chatId: null, allowedDriveIds: [], originatingMcpTokenId: undefined }));
+    await POST(signed({ ...PAYLOAD, chatId: null, allowedDriveIds: [], originatingCeiling: undefined }));
 
     const turn = dispatchChatTurnMock.mock.calls[0][0];
     expect(turn.body).not.toHaveProperty('chatId');

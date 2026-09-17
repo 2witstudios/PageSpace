@@ -32,6 +32,7 @@
  */
 
 import { createId } from '@paralleldrive/cuid2';
+import type { CredentialCeiling } from '@pagespace/lib/permissions/credential-ceiling';
 import { db } from '@pagespace/db/db';
 import { and, eq, inArray, isNotNull, ne, desc } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
@@ -209,7 +210,7 @@ export async function dispatchThroughChatPipeline(input: {
   userId: string;
   depth: number;
   wait: boolean;
-  scope: { allowedDriveIds: string[]; mcpTokenId?: string };
+  scope: { allowedDriveIds: string[]; ceiling?: CredentialCeiling };
 }): Promise<DispatchOutcome> {
   const base = resolveSelfBaseUrl();
   if (!base) {
@@ -237,7 +238,7 @@ export async function dispatchThroughChatPipeline(input: {
     chatId: input.agentPageId,
     depth: input.depth,
     allowedDriveIds: input.scope.allowedDriveIds,
-    ...(input.scope.mcpTokenId ? { originatingMcpTokenId: input.scope.mcpTokenId } : {}),
+    ...(input.scope.ceiling ? { originatingCeiling: input.scope.ceiling } : {}),
     // A synthetic id marks a server-side dispatch — it identifies this dispatch,
     // not a browser tab.
     browserSessionId: `agent-dispatch-${createId()}`,

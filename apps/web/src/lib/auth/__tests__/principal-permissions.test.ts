@@ -558,7 +558,7 @@ describe('a dispatched worker is authorized as the credential that STARTED the c
     tokenType: 'service',
     service: 'agent-dispatch',
     allowedDriveIds: [DRIVE_ID],
-    originatingMcpTokenId: TOKEN_ID,
+    originatingCeiling: { kind: 'mcp', tokenId: TOKEN_ID },
   };
 
   const serviceFromSession: AuthResult = {
@@ -618,6 +618,36 @@ describe('a dispatched worker is authorized as the credential that STARTED the c
 
     expect(await canManagePageWebhooks(serviceFromScopedToken, PAGE_ID)).toBe(false);
     expect(isDriveOwnerOrAdmin).not.toHaveBeenCalled();
+  });
+
+  describe('a chain that started at a drive-scoped OAuth GRANT keeps the grant\'s role ceiling across the hop', () => {
+    const serviceFromGrant: AuthResult = {
+      ...base,
+      userId: USER_ID,
+      tokenType: 'service',
+      service: 'agent-dispatch',
+      allowedDriveIds: [DRIVE_ID],
+      originatingCeiling: { kind: 'oauth', driveScopes: DRIVE_SCOPES },
+    };
+
+    it('resolves page access through the grant\'s rows, never the owning user', async () => {
+      vi.mocked(getScopedAccessLevel).mockResolvedValue(VIEW_ONLY);
+      vi.mocked(canUserEditPage).mockResolvedValue(true);
+
+      expect(await canPrincipalEditPage(serviceFromGrant, PAGE_ID)).toBe(false);
+      expect(getScopedAccessLevel).toHaveBeenCalledWith(DRIVE_SCOPES, USER_ID, PAGE_ID);
+      expect(canUserEditPage).not.toHaveBeenCalled();
+    });
+
+    it('enumerates only the grant\'s live drives, and refuses webhook management', async () => {
+      vi.mocked(hasScopedDriveMembership).mockResolvedValue(true);
+      mockPagesFindFirst.mockResolvedValue({ driveId: DRIVE_ID });
+
+      expect(await getPrincipalDriveIds(serviceFromGrant)).toEqual(DRIVE_SCOPES.map((row) => row.driveId));
+      expect(getDriveIdsForUser).not.toHaveBeenCalled();
+      expect(await canManagePageWebhooks(serviceFromGrant, PAGE_ID)).toBe(false);
+      expect(isDriveOwnerOrAdmin).not.toHaveBeenCalled();
+    });
   });
 });
 
