@@ -7,14 +7,11 @@
  */
 import { describe, it, expect, afterAll } from 'vitest';
 import { factories } from '@pagespace/db/test/factories';
-import { db, pool } from '@pagespace/db/db';
+import { db } from '@pagespace/db/db';
 import { eq, inArray } from '@pagespace/db/operators';
 import { users, appleSignInTokens } from '@pagespace/db/schema/auth';
 import { appleTokenStore } from '../apple-token-store';
 
-// Integration files share one Postgres and each isolated file gets its own pool
-// (10 connections, 10-minute idle timeout) — release ours when done, or later
-// suites hit `too many clients already`.
 const createdUserIds: string[] = [];
 const createUser = async () => {
   const user = await factories.createUser();
@@ -24,7 +21,6 @@ const createUser = async () => {
 
 afterAll(async () => {
   if (createdUserIds.length) await db.delete(users).where(inArray(users.id, createdUserIds));
-  await pool.end();
 });
 
 describe('appleTokenStore (integration)', () => {
