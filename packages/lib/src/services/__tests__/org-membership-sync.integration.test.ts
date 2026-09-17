@@ -171,6 +171,49 @@ describe('org membership sync (integration)', () => {
     expect(await rowsOf(research.id)).toEqual([]);
   });
 
+  it('D-OW-10 keep-as-invited never makes access permanent while the drive is still in the org', async () => {
+    const { priya, marcus, org, product } = await northwind();
+    const { ports } = recordingPorts();
+    await syncOrgMembership(org.id, { ports });
+
+    await db.update(drives).set({ orgVisibility: 'PRIVATE' }).where(eq(drives.id, product.id));
+    await syncDriveOrgMembership(product.id, { ports, removedOrgRows: 'keepAsInvite' });
+
+    const rows = await rowsOf(product.id);
+    expect(rows.some((r) => r.userId === priya.id || r.userId === marcus.id)).toBe(false);
+  });
+
+  it('DRV-5 (partial) a full sync moves org rows to a changed default role and adopts an org member\'s pending invite', async () => {
+    const { priya, marcus, chris, org, product } = await northwind();
+    const [oldRole] = await db.insert(driveRoles).values({ driveId: product.id, name: 'Viewer', isDefault: true, permissions: {} }).returning();
+    const [editorRole] = await db.insert(driveRoles).values({ driveId: product.id, name: 'Editor', isDefault: false, permissions: {} }).returning();
+    const { ports } = recordingPorts();
+    await syncOrgMembership(org.id, { ports });
+
+    // Marcus's row becomes a legacy pending invite; Chris (a guest) holds another.
+    await db.update(driveMembers).set({ source: 'invite', acceptedAt: null, role: 'ADMIN', customRoleId: editorRole.id })
+      .where(and(eq(driveMembers.driveId, product.id), eq(driveMembers.userId, marcus.id)));
+    await db.update(driveMembers).set({ acceptedAt: null })
+      .where(and(eq(driveMembers.driveId, product.id), eq(driveMembers.userId, chris.id)));
+    await db.update(driveRoles).set({ isDefault: false }).where(eq(driveRoles.id, oldRole.id));
+    await db.update(driveRoles).set({ isDefault: true }).where(eq(driveRoles.id, editorRole.id));
+
+    const result = await syncOrgMembership(org.id, { ports });
+    const rows = await rowsOf(product.id);
+
+    const priyaRow = rows.find((r) => r.userId === priya.id);
+    expect(priyaRow).toMatchObject({ source: 'org', customRoleId: editorRole.id });
+    expect(rows.find((r) => r.userId === marcus.id)).toMatchObject({ source: 'org', role: 'MEMBER', customRoleId: editorRole.id });
+    expect(rows.find((r) => r.userId === marcus.id)?.acceptedAt).not.toBeNull();
+    expect(rows.find((r) => r.userId === chris.id)).toMatchObject({ source: 'invite', acceptedAt: null });
+    expect(result.affectedUsers.map((u) => [u.userId, u.operation]).sort()).toEqual(
+      [[priya.id, 'member_role_changed'], [marcus.id, 'member_added']].sort(),
+    );
+
+    const again = await syncOrgMembership(org.id, { ports });
+    expect(again.affectedUsers).toEqual([]);
+  });
+
   it('D-OW-6 within a caller transaction writes with the transaction and defers events to publish after commit', async () => {
     const { org, product } = await northwind();
     const { ports, broadcasts } = recordingPorts();

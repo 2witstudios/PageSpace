@@ -18,11 +18,19 @@ const openDrive = (overrides: Partial<OrgSyncDrive> = {}): OrgSyncDrive => ({
   ...overrides,
 });
 
-const row = (userId: string, source: ExistingDriveMemberRow['source'], driveId = 'drive-product'): ExistingDriveMemberRow => ({
+const row = (
+  userId: string,
+  source: ExistingDriveMemberRow['source'],
+  driveId = 'drive-product',
+  overrides: Partial<ExistingDriveMemberRow> = {},
+): ExistingDriveMemberRow => ({
   id: `row-${driveId}-${userId}`,
   driveId,
   userId,
   source,
+  customRoleId: null,
+  accepted: true,
+  ...overrides,
 });
 
 const emptyPlan = (driveId = 'drive-product'): DriveOrgMembershipPlan => ({
@@ -30,6 +38,8 @@ const emptyPlan = (driveId = 'drive-product'): DriveOrgMembershipPlan => ({
   inserts: [],
   deletes: [],
   conversions: [],
+  repairs: [],
+  adoptions: [],
 });
 
 describe('planDriveOrgMembership', () => {
@@ -139,9 +149,78 @@ describe('planDriveOrgMembership', () => {
 
     for (const input of transitions) {
       const plan = planDriveOrgMembership(input);
-      const touched = [...plan.inserts, ...plan.deletes, ...plan.conversions].map((c) => c.userId);
+      const touched = [...plan.inserts, ...plan.deletes, ...plan.conversions, ...plan.repairs, ...plan.adoptions].map((c) => c.userId);
       expect(touched).not.toContain('user-chris');
     }
+  });
+
+  it.each([
+    ['a Private drive still in the org', { orgVisibility: 'PRIVATE' as const }, ['user-priya', 'user-lena']],
+    ['a leave from an Open drive', {}, ['user-priya']],
+  ])('D-OW-10 keep-as-invited applies only to a drive moved out of its org, never to %s', (_label, driveOverrides, members) => {
+    const plan = planDriveOrgMembership({
+      drive: openDrive(driveOverrides),
+      orgMemberUserIds: members.filter((m) => m !== 'user-lena'),
+      existingRows: [row('user-lena', 'org')],
+      removedOrgRows: 'keepAsInvite',
+    });
+
+    expect(plan.conversions).toEqual([]);
+    expect(plan.deletes.map((d) => d.userId)).toEqual(['user-lena']);
+  });
+
+  it('DRV-5 (partial) resets an org row to the drive default role when the default changed, leaving invited rows on their own role', () => {
+    const plan = planDriveOrgMembership({
+      drive: openDrive({ defaultCustomRoleId: 'role-new' }),
+      orgMemberUserIds: ['user-priya', 'user-marcus', 'user-dana'],
+      existingRows: [
+        row('user-priya', 'org', 'drive-product', { customRoleId: 'role-old' }),
+        row('user-marcus', 'org', 'drive-product', { customRoleId: 'role-new' }),
+        row('user-dana', 'invite', 'drive-product', { customRoleId: 'role-editor' }),
+      ],
+    });
+
+    expect(plan.repairs).toEqual([
+      { rowId: 'row-drive-product-user-priya', driveId: 'drive-product', userId: 'user-priya', customRoleId: 'role-new' },
+    ]);
+    expect(plan.inserts).toEqual([]);
+    expect(plan.adoptions).toEqual([]);
+  });
+
+  it('DRV-5 (partial) repairs an org row that is not accepted', () => {
+    const plan = planDriveOrgMembership({
+      drive: openDrive(),
+      orgMemberUserIds: ['user-priya'],
+      existingRows: [row('user-priya', 'org', 'drive-product', { accepted: false })],
+    });
+
+    expect(plan.repairs.map((r) => r.userId)).toEqual(['user-priya']);
+  });
+
+  it('DRV-5 (partial) adopts an org member\'s pending invite row as an accepted org row on an Open drive', () => {
+    const plan = planDriveOrgMembership({
+      drive: openDrive({ defaultCustomRoleId: 'role-default' }),
+      orgMemberUserIds: ['user-priya'],
+      existingRows: [
+        row('user-priya', 'invite', 'drive-product', { accepted: false, customRoleId: 'role-editor' }),
+        row('user-chris', 'invite', 'drive-product', { accepted: false }),
+      ],
+    });
+
+    expect(plan.adoptions).toEqual([
+      { rowId: 'row-drive-product-user-priya', driveId: 'drive-product', userId: 'user-priya', customRoleId: 'role-default' },
+    ]);
+    expect(plan.inserts).toEqual([]);
+  });
+
+  it('DRV-8 (partial) leaves pending invite rows alone on a drive that does not materialize', () => {
+    const plan = planDriveOrgMembership({
+      drive: openDrive({ orgVisibility: 'PRIVATE' }),
+      orgMemberUserIds: ['user-priya'],
+      existingRows: [row('user-priya', 'invite', 'drive-product', { accepted: false })],
+    });
+
+    expect(plan).toEqual(emptyPlan());
   });
 
   it('D-OW-6 limits a per-user sync (join or leave) to the scoped users', () => {
@@ -186,12 +265,16 @@ describe('summarizeAffectedUsers', () => {
         inserts: [{ driveId: 'drive-product', userId: 'user-priya', customRoleId: null }],
         deletes: [{ rowId: 'r1', driveId: 'drive-product', userId: 'user-lena' }],
         conversions: [],
+        repairs: [],
+        adoptions: [],
       },
       {
         driveId: 'drive-design',
         inserts: [{ driveId: 'drive-design', userId: 'user-priya', customRoleId: null }],
         deletes: [],
         conversions: [{ rowId: 'r2', driveId: 'drive-design', userId: 'user-tomas' }],
+        repairs: [],
+        adoptions: [],
       },
       emptyPlan('drive-engineering'),
     ];
@@ -210,17 +293,36 @@ describe('summarizeAffectedUsers', () => {
         inserts: [{ driveId: 'drive-a', userId: 'user-priya', customRoleId: null }],
         deletes: [],
         conversions: [],
+        repairs: [],
+        adoptions: [],
       },
       {
         driveId: 'drive-b',
         inserts: [],
         deletes: [{ rowId: 'r1', driveId: 'drive-b', userId: 'user-priya' }],
         conversions: [],
+        repairs: [],
+        adoptions: [],
       },
     ];
 
     expect(summarizeAffectedUsers(plans)).toEqual([
       { userId: 'user-priya', operation: 'member_removed', driveIds: ['drive-a', 'drive-b'] },
+    ]);
+  });
+
+  it('X-4 (partial) reports an adoption as added and a role repair as role changed', () => {
+    const plans: DriveOrgMembershipPlan[] = [
+      {
+        ...emptyPlan('drive-a'),
+        adoptions: [{ rowId: 'r1', driveId: 'drive-a', userId: 'user-priya', customRoleId: null }],
+        repairs: [{ rowId: 'r2', driveId: 'drive-a', userId: 'user-marcus', customRoleId: 'role-new' }],
+      },
+    ];
+
+    expect(summarizeAffectedUsers(plans)).toEqual([
+      { userId: 'user-priya', operation: 'member_added', driveIds: ['drive-a'] },
+      { userId: 'user-marcus', operation: 'member_role_changed', driveIds: ['drive-a'] },
     ]);
   });
 

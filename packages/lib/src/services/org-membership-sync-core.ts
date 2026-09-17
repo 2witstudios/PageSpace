@@ -8,9 +8,16 @@
  * org-membership-sync.ts does the reads, the writes and the events.
  *
  * Invariants:
- * - Only rows with source 'org' are ever removed or converted. A row with source 'invite' — a guest
- *   (DRV-8) or an org member invited directly — is never touched, and it satisfies the org row an
- *   org member would otherwise get (no duplicate, no downgrade).
+ * - Only rows with source 'org' are ever removed, converted or repaired. An accepted row with source
+ *   'invite' — a guest (DRV-8) or an org member invited directly — is never touched, and it satisfies
+ *   the org row an org member would otherwise get (no duplicate, no downgrade).
+ * - The one exception is a PENDING invite row (not accepted) held by an org member on an Open drive:
+ *   it grants no access, and the unique (driveId, userId) key leaves no room for an org row beside
+ *   it, so it is adopted as an accepted org row with the default role — exactly the implicit access
+ *   DRV-5 grants, revoked again on leave. A guest's pending row is never adopted.
+ * - An org row always carries the drive's current default role and is accepted; drift is repaired.
+ * - Keep-as-invited (D-OW-10) applies only once the drive has left its org. On a leave or a
+ *   visibility change the row is always deleted, so access is revoked rather than made permanent.
  * - The drive lead never gets a row: ownership lives on drives.ownerId, never in drive_members.
  * - A drive in step plans nothing, so repeated syncs are no-ops.
  */
@@ -33,12 +40,15 @@ export interface ExistingDriveMemberRow {
   driveId: string;
   userId: string;
   source: DriveMemberSource;
+  customRoleId: string | null;
+  /** acceptedAt IS NOT NULL: only accepted rows grant access. */
+  accepted: boolean;
 }
 
 /**
- * What happens to an org-sourced row that should no longer exist. 'delete' on leave and on a
- * visibility change away from Open; a move out of the org offers either (D-OW-10), where
- * 'keepAsInvite' turns the implicit members into ordinary invited members.
+ * What happens to an org-sourced row that should no longer exist once its drive has moved out of the
+ * org (D-OW-10): 'keepAsInvite' turns the implicit members into ordinary invited members. Ignored
+ * while the drive is still in an org, where a stale row is always deleted.
  */
 export type RemovedOrgRowsMode = 'delete' | 'keepAsInvite';
 
@@ -65,11 +75,20 @@ export interface OrgRowChange {
   userId: string;
 }
 
+export interface OrgRowUpdate extends OrgRowChange {
+  customRoleId: string | null;
+}
+
 export interface DriveOrgMembershipPlan {
   driveId: string;
   inserts: OrgRowInsert[];
   deletes: OrgRowChange[];
+  /** Org rows turned into invited rows (D-OW-10 keep-as-invited). */
   conversions: OrgRowChange[];
+  /** Org rows set back to the default role and accepted. */
+  repairs: OrgRowUpdate[];
+  /** An org member's pending invite rows, made accepted org rows with the default role. */
+  adoptions: OrgRowUpdate[];
 }
 
 export function planDriveOrgMembership({
@@ -89,20 +108,37 @@ export function planDriveOrgMembership({
 
   const rows = existingRows.filter((r) => r.driveId === drive.id && inScope(r.userId));
   const usersWithRow = new Set(rows.map((r) => r.userId));
+  const withDefaultRole = (r: ExistingDriveMemberRow): OrgRowUpdate => ({
+    rowId: r.id,
+    driveId: drive.id,
+    userId: r.userId,
+    customRoleId: drive.defaultCustomRoleId,
+  });
 
   const inserts = [...desired]
     .filter((userId) => !usersWithRow.has(userId))
     .map((userId) => ({ driveId: drive.id, userId, customRoleId: drive.defaultCustomRoleId }));
 
-  const stale = rows
-    .filter((r) => r.source === 'org' && !desired.has(r.userId))
+  const orgRows = rows.filter((r) => r.source === 'org');
+  const stale = orgRows
+    .filter((r) => !desired.has(r.userId))
     .map((r) => ({ rowId: r.id, driveId: drive.id, userId: r.userId }));
+  const keepStale = removedOrgRows === 'keepAsInvite' && drive.orgId === null;
+
+  const repairs = orgRows
+    .filter((r) => desired.has(r.userId) && (!r.accepted || r.customRoleId !== drive.defaultCustomRoleId))
+    .map(withDefaultRole);
+  const adoptions = rows
+    .filter((r) => r.source === 'invite' && !r.accepted && desired.has(r.userId))
+    .map(withDefaultRole);
 
   return {
     driveId: drive.id,
     inserts,
-    deletes: removedOrgRows === 'delete' ? stale : [],
-    conversions: removedOrgRows === 'keepAsInvite' ? stale : [],
+    deletes: keepStale ? [] : stale,
+    conversions: keepStale ? stale : [],
+    repairs,
+    adoptions,
   };
 }
 
@@ -137,8 +173,10 @@ export function summarizeAffectedUsers(plans: readonly DriveOrgMembershipPlan[])
 
   for (const plan of plans) {
     plan.inserts.forEach((i) => note(i.userId, i.driveId, 'member_added'));
+    plan.adoptions.forEach((a) => note(a.userId, a.driveId, 'member_added'));
     plan.deletes.forEach((d) => note(d.userId, d.driveId, 'member_removed'));
     plan.conversions.forEach((c) => note(c.userId, c.driveId, 'member_role_changed'));
+    plan.repairs.forEach((r) => note(r.userId, r.driveId, 'member_role_changed'));
   }
   return [...byUser.values()];
 }

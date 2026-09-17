@@ -23,7 +23,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, asc, eq, inArray } from '@pagespace/db/operators';
+import { and, asc, eq, inArray, isNull, sql } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { driveMembers, driveRoles } from '@pagespace/db/schema/members';
 import { orgMembers } from '@pagespace/db/schema/organizations';
@@ -39,6 +39,7 @@ import {
   type DriveOrgMembershipPlan,
   type ExistingDriveMemberRow,
   type OrgRowChange,
+  type OrgRowUpdate,
   type OrgSyncDrive,
   type RemovedOrgRowsMode,
 } from './org-membership-sync-core';
@@ -59,9 +60,15 @@ export interface OrgMembershipSyncPorts {
 export interface OrgMembershipSyncOptions {
   /** Run inside the caller's transaction; events are then left to publishOrgMembershipSyncEvents. */
   tx?: Tx;
-  /** What happens to org rows that should no longer exist (D-OW-10). Defaults to 'delete'. */
-  removedOrgRows?: RemovedOrgRowsMode;
   ports?: OrgMembershipSyncPorts;
+}
+
+export interface DriveOrgMembershipSyncOptions extends OrgMembershipSyncOptions {
+  /**
+   * After a move out of the org, what happens to its org rows (D-OW-10). Defaults to 'delete'.
+   * Ignored while the drive is still in an org: a leave or a visibility change always revokes.
+   */
+  removedOrgRows?: RemovedOrgRowsMode;
 }
 
 export interface OrgMembershipSyncResult {
@@ -159,9 +166,17 @@ async function loadExistingRows(tx: Tx, driveIds: string[], userId?: string): Pr
   for (const ids of chunk(driveIds, WRITE_CHUNK)) {
     rows.push(
       ...(await tx
-        .select({ id: driveMembers.id, driveId: driveMembers.driveId, userId: driveMembers.userId, source: driveMembers.source })
+        .select({
+          id: driveMembers.id,
+          driveId: driveMembers.driveId,
+          userId: driveMembers.userId,
+          source: driveMembers.source,
+          customRoleId: driveMembers.customRoleId,
+          acceptedAt: driveMembers.acceptedAt,
+        })
         .from(driveMembers)
-        .where(userId ? and(inArray(driveMembers.driveId, ids), eq(driveMembers.userId, userId)) : inArray(driveMembers.driveId, ids))),
+        .where(userId ? and(inArray(driveMembers.driveId, ids), eq(driveMembers.userId, userId)) : inArray(driveMembers.driveId, ids))
+      ).map(({ acceptedAt, ...row }) => ({ ...row, accepted: acceptedAt !== null })),
     );
   }
   return rows;
@@ -184,6 +199,22 @@ async function applyPlans(tx: Tx, plans: DriveOrgMembershipPlan[]): Promise<void
   }
   for (const ids of chunk(conversions, WRITE_CHUNK)) {
     await tx.update(driveMembers).set({ source: 'invite' }).where(and(inArray(driveMembers.id, ids), eq(driveMembers.source, 'org')));
+  }
+  // One statement per row, since each carries its own drive's default role. Repairs and adoptions
+  // are drift, not bulk traffic.
+  for (const repair of plans.flatMap((p): OrgRowUpdate[] => p.repairs)) {
+    await tx
+      .update(driveMembers)
+      .set({ customRoleId: repair.customRoleId, acceptedAt: sql`coalesce(${driveMembers.acceptedAt}, (now() at time zone 'utc'))` })
+      .where(and(eq(driveMembers.id, repair.rowId), eq(driveMembers.source, 'org')));
+  }
+  // A pending invite grants nothing; adopting it grants exactly the implicit access (MEMBER with the
+  // default role), never the role the unaccepted invite named.
+  for (const adoption of plans.flatMap((p): OrgRowUpdate[] => p.adoptions)) {
+    await tx
+      .update(driveMembers)
+      .set({ source: 'org', role: 'MEMBER', customRoleId: adoption.customRoleId, acceptedAt })
+      .where(and(eq(driveMembers.id, adoption.rowId), eq(driveMembers.source, 'invite'), isNull(driveMembers.acceptedAt)));
   }
 }
 
@@ -216,7 +247,7 @@ export function syncOrgMembership(orgId: string, options: OrgMembershipSyncOptio
     const memberIds = await loadOrgMemberIds(tx, orgId);
     const existingRows = await loadExistingRows(tx, orgDrives.map((d) => d.id));
     return orgDrives.map((drive) =>
-      planDriveOrgMembership({ drive, orgMemberUserIds: memberIds, existingRows, removedOrgRows: options.removedOrgRows }),
+      planDriveOrgMembership({ drive, orgMemberUserIds: memberIds, existingRows }),
     );
   });
 }
@@ -238,7 +269,6 @@ export function syncOrgMemberAccess(
         orgMemberUserIds: memberIds,
         existingRows,
         userScope: [userId],
-        removedOrgRows: options.removedOrgRows,
       }),
     );
   });
@@ -249,7 +279,7 @@ export function syncOrgMemberAccess(
  * After a move out (orgId now null) every org row goes; pass removedOrgRows 'keepAsInvite' to
  * keep those people as invited members instead (D-OW-10).
  */
-export function syncDriveOrgMembership(driveId: string, options: OrgMembershipSyncOptions = {}): Promise<OrgMembershipSyncResult> {
+export function syncDriveOrgMembership(driveId: string, options: DriveOrgMembershipSyncOptions = {}): Promise<OrgMembershipSyncResult> {
   return runSync(options, async (tx) => {
     const [drive] = await lockDrives(tx, { kind: 'drive', driveId });
     if (!drive) return [];
