@@ -88,7 +88,7 @@ vi.mock('@pagespace/lib/auth/invite-token', () => ({
 }));
 
 vi.mock('@pagespace/lib/services/notification-email-service', () => ({
-  sendPendingDriveInvitationEmail: vi.fn().mockResolvedValue(undefined),
+  sendPendingDriveInvitationEmail: vi.fn().mockResolvedValue({ status: 'sent' }),
 }));
 
 vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
@@ -244,6 +244,17 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
         createContext(mockDriveId)
       );
       expect(response.status).toBe(400);
+    });
+
+    it('given an address under the agent reserved domain, should refuse with the ordinary 400 validation error and create nothing', async () => {
+      const response = await POST(
+        buildPost(mockDriveId, { email: 'Agent-x@AGENTS.pagespace.invalid', role: 'MEMBER', permissions: [] }),
+        createContext(mockDriveId)
+      );
+      expect(response.status).toBe(400);
+      expect((await response.json()).error).toBe('Invalid request body');
+      expect(driveInviteRepository.createPendingInvite).not.toHaveBeenCalled();
+      expect(sendPendingDriveInvitationEmail).not.toHaveBeenCalled();
     });
 
     it('rejects empty body with 400', async () => {
@@ -686,6 +697,22 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
 
       expect(response.status).toBe(502);
       expect(driveInviteRepository.deletePendingInvite).toHaveBeenCalledWith('inv_pending_rollback');
+    });
+
+    it('given the invitation email is suppressed (not delivered), should undo the pending invite exactly as a send failure does', async () => {
+      vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue(null as never);
+      vi.mocked(driveInviteRepository.createPendingInvite).mockResolvedValue({
+        id: 'inv_pending_suppressed',
+      } as never);
+      vi.mocked(sendPendingDriveInvitationEmail).mockResolvedValueOnce({ status: 'suppressed' });
+
+      const response = await POST(
+        buildPost(mockDriveId, { email: 'suppressed@example.com', role: 'MEMBER', permissions: [] }),
+        createContext(mockDriveId)
+      );
+
+      expect(response.status).toBe(502);
+      expect(driveInviteRepository.deletePendingInvite).toHaveBeenCalledWith('inv_pending_suppressed');
     });
 
     it('preserves the source email in the audit record when fall-through occurs', async () => {

@@ -59,7 +59,7 @@ vi.mock('@pagespace/lib/auth/invite-token', () => ({
 }));
 
 vi.mock('@pagespace/lib/services/notification-email-service', () => ({
-  sendPendingPageShareInvitationEmail: vi.fn().mockResolvedValue(undefined),
+  sendPendingPageShareInvitationEmail: vi.fn().mockResolvedValue({ status: 'sent' }),
 }));
 
 vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
@@ -154,7 +154,7 @@ describe('POST /api/pages/[pageId]/share-invite', () => {
       tokenHash: 'hash_xyz',
       expiresAt: new Date('2026-05-10T12:00:00.000Z'),
     });
-    vi.mocked(sendPendingPageShareInvitationEmail).mockResolvedValue(undefined);
+    vi.mocked(sendPendingPageShareInvitationEmail).mockResolvedValue({ status: 'sent' });
     // Default: page's drive is standard (not Home)
     vi.mocked(getDriveById).mockResolvedValue({
       id: 'drive_xyz',
@@ -238,6 +238,16 @@ describe('POST /api/pages/[pageId]/share-invite', () => {
         createContext(mockPageId),
       );
       expect(response.status).toBe(400);
+    });
+
+    it('given an address under the agent reserved domain, should refuse with the ordinary 400 validation error and create nothing', async () => {
+      const response = await POST(
+        buildPost(mockPageId, { email: 'agent-x@agents.pagespace.invalid', permissions: ['VIEW'] }),
+        createContext(mockPageId),
+      );
+      expect(response.status).toBe(400);
+      expect(pageInviteRepository.createPendingInvite).not.toHaveBeenCalled();
+      expect(sendPendingPageShareInvitationEmail).not.toHaveBeenCalled();
     });
 
     it('returns 400 when permissions contains DELETE (R5)', async () => {
@@ -426,6 +436,15 @@ describe('POST /api/pages/[pageId]/share-invite', () => {
 
       expect(response.status).toBe(502);
       expect(json.error).toMatch(/invitation email/i);
+      expect(pageInviteRepository.deletePendingInvite).toHaveBeenCalledWith('inv_pending');
+    });
+
+    it('given the invitation email is suppressed (not delivered), should delete the pending row and answer 502', async () => {
+      vi.mocked(sendPendingPageShareInvitationEmail).mockResolvedValue({ status: 'suppressed' });
+
+      const response = await POST(buildPost(mockPageId, validBody), createContext(mockPageId));
+
+      expect(response.status).toBe(502);
       expect(pageInviteRepository.deletePendingInvite).toHaveBeenCalledWith('inv_pending');
     });
 

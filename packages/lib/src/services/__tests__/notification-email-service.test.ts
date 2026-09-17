@@ -302,6 +302,19 @@ describe('sendPendingDriveInvitationEmail', () => {
     vi.clearAllMocks();
   });
 
+  it('given sendEmail suppresses the recipient, should hand the suppressed outcome back so the invite route can undo', async () => {
+    vi.mocked(sendEmail).mockResolvedValueOnce({ status: 'suppressed' });
+
+    await expect(
+      sendPendingDriveInvitationEmail({
+        recipientEmail: 'agent-x@agents.pagespace.invalid',
+        inviterName: 'Alice',
+        driveName: 'Test Drive',
+        inviteUrl: 'https://app.example.com/invite/ps_invite_xyz',
+      }),
+    ).resolves.toEqual({ status: 'suppressed' });
+  });
+
   it('renders subject from inviterName, driveName and recipient address', async () => {
     await sendPendingDriveInvitationEmail({
       recipientEmail: 'invitee@example.com',

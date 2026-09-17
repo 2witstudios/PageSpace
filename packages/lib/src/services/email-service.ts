@@ -82,17 +82,27 @@ export interface SendEmailOptions {
   idempotencyKey?: string;
 }
 
-export async function sendEmail(options: SendEmailOptions): Promise<void> {
+/**
+ * What happened to a send. `sent`: Resend accepted it. `disabled`: this
+ * deployment sends no email (on-prem) — unchanged from the historical silent
+ * return. `suppressed`: the recipient is an agent's reserved address (ADR 0007
+ * §4) and nothing was delivered — a caller whose correctness depends on the
+ * recipient receiving the mail (an invite token) must treat it as not sent.
+ * Provider failures and rate limits still throw.
+ */
+export type SendEmailOutcome = { status: 'sent' } | { status: 'disabled' } | { status: 'suppressed' };
+
+export async function sendEmail(options: SendEmailOptions): Promise<SendEmailOutcome> {
   if (isOnPrem()) {
     console.warn('[email-service] Email sending is disabled in on-premise deployment mode');
-    return;
+    return { status: 'disabled' };
   }
 
   // An agent's synthetic address (ADR 0007 §4) is an RFC 2606 `.invalid`
   // domain: it can never receive mail, and a send would only earn a bounce.
   if (isAgentReservedEmail(options.to)) {
     console.warn('[email-service] Email suppressed: recipient is an agent account');
-    return;
+    return { status: 'suppressed' };
   }
 
   const config = getResendConfig();
@@ -129,7 +139,7 @@ export async function sendEmail(options: SendEmailOptions): Promise<void> {
   try {
     // Only pass the request-options argument when there is something to put in it,
     // so the common single-argument call stays exactly as it was.
-    const { data, error } = options.idempotencyKey
+    const { error } = options.idempotencyKey
       ? await resend.emails.send(payload, { idempotencyKey: options.idempotencyKey })
       : await resend.emails.send(payload);
 
@@ -137,7 +147,7 @@ export async function sendEmail(options: SendEmailOptions): Promise<void> {
       throw new Error(`Failed to send email: ${error.message}`);
     }
 
-    return data as unknown as void;
+    return { status: 'sent' };
   } catch (err) {
     if (!options.skipRateLimit) {
       await refundDistributedRateLimitAttempt(rateLimitKey, EMAIL_RATE_LIMIT_WINDOW_MS);
