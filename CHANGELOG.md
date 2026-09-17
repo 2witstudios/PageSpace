@@ -567,6 +567,12 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   revoke page permissions, and any invitee saw every channel in the drive with its latest message
   in their messages list. All four now require an accepted membership, like the rest of the app.
 
+- **A custom role's drive-wide access no longer opens private pages in search, badges and
+  notifications** — opening a private page already required a per-page entry, but the batch check
+  behind search, the inbox, sidebar badges and channel notifications let a role's drive-wide
+  default stand in for one, so a member with that role could see a private page's title and
+  unread counts and receive its channel events. It now applies the same rule as everywhere else.
+
 - **Sign-in emails no longer lock you out of your own account** — every email PageSpace sends to
   the same address (a sign-in link, an invite, a notification) shared one rate-limit bucket capped
   at 3 per hour, and a failed send still used up one of those 3 — so a couple of sign-in attempts,
