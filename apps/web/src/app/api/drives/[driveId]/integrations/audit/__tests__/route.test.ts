@@ -130,7 +130,7 @@ describe('GET /api/drives/[driveId]/integrations/audit', () => {
   describe('authorization', () => {
     it('should return 403 when user is not owner or admin', async () => {
       vi.mocked(getDriveAccess).mockResolvedValue({
-        isOwner: false, isAdmin: false, isMember: true, role: 'MEMBER',
+        isOwner: false, isAdmin: false, isMember: true, role: 'MEMBER', customRoleId: null,
       });
 
       const request = new Request('https://example.com/api/drives/d/integrations/audit');
@@ -143,7 +143,7 @@ describe('GET /api/drives/[driveId]/integrations/audit', () => {
 
     it('should allow owner access', async () => {
       vi.mocked(getDriveAccess).mockResolvedValue({
-        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER',
+        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER', customRoleId: null,
       });
       vi.mocked(parseAuditListParams).mockReturnValue({
         ok: true,
@@ -163,7 +163,7 @@ describe('GET /api/drives/[driveId]/integrations/audit', () => {
 
     it('should allow admin access', async () => {
       vi.mocked(getDriveAccess).mockResolvedValue({
-        isOwner: false, isAdmin: true, isMember: true, role: 'ADMIN',
+        isOwner: false, isAdmin: true, isMember: true, role: 'ADMIN', customRoleId: null,
       });
       vi.mocked(parseAuditListParams).mockReturnValue({
         ok: true,
@@ -185,7 +185,7 @@ describe('GET /api/drives/[driveId]/integrations/audit', () => {
   describe('query param validation', () => {
     beforeEach(() => {
       vi.mocked(getDriveAccess).mockResolvedValue({
-        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER',
+        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER', customRoleId: null,
       });
     });
 
@@ -207,7 +207,7 @@ describe('GET /api/drives/[driveId]/integrations/audit', () => {
   describe('response contract', () => {
     beforeEach(() => {
       vi.mocked(getDriveAccess).mockResolvedValue({
-        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER',
+        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER', customRoleId: null,
       });
       vi.mocked(parseAuditListParams).mockReturnValue({
         ok: true,
@@ -290,7 +290,7 @@ describe('GET /api/drives/[driveId]/integrations/audit', () => {
   describe('error handling', () => {
     it('should return 500 and log when db throws', async () => {
       vi.mocked(getDriveAccess).mockResolvedValue({
-        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER',
+        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER', customRoleId: null,
       });
       vi.mocked(parseAuditListParams).mockReturnValue({
         ok: true,
