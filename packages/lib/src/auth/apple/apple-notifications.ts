@@ -31,10 +31,8 @@ export type AppleNotificationVerification =
   | { ok: true; event: AppleNotificationEvent }
   | { ok: false; reason: string };
 
-interface AppleClientEnv {
-  APPLE_CLIENT_ID?: string;
-  APPLE_SERVICE_ID?: string;
-}
+/** Deliberately loose: `process.env` is passed straight in. */
+type AppleClientEnv = Readonly<Record<string, string | undefined>>;
 
 /** Apple's docs say `account-deleted`; apple-signin-auth's types say `account-delete`. Honour both. */
 const SESSION_ENDING_EVENTS = new Set(['consent-revoked', 'account-delete', 'account-deleted']);

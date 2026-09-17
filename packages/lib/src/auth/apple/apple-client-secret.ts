@@ -16,11 +16,8 @@ export interface AppleSigningConfig {
   privateKey: string;
 }
 
-export interface AppleSigningEnv {
-  APPLE_TEAM_ID?: string;
-  APPLE_SIGN_IN_KEY_ID?: string;
-  APPLE_SIGN_IN_PRIVATE_KEY?: string;
-}
+/** Deliberately loose: `process.env` is passed straight in. */
+export type AppleSigningEnv = Readonly<Record<string, string | undefined>>;
 
 const APPLE_AUDIENCE = 'https://appleid.apple.com';
 
