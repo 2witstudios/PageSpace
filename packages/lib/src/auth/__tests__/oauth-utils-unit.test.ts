@@ -164,6 +164,19 @@ describe('oauth-utils', () => {
       expect(result.userInfo?.provider).toBe(OAuthProvider.APPLE);
     });
 
+    it('given a verified token, should return the audience it was issued for so its code is exchanged with that client', async () => {
+      vi.mocked(appleSignIn.verifyIdToken).mockResolvedValue({
+        sub: 'apple-123',
+        aud: 'apple-service-id',
+        email: 'user@icloud.com',
+        email_verified: 'true',
+      } as never);
+
+      const result = await verifyAppleIdToken('valid-token');
+
+      expect(result.audience).toBe('apple-service-id');
+    });
+
     it('should handle boolean email_verified', async () => {
       vi.mocked(appleSignIn.verifyIdToken).mockResolvedValue({
         sub: 'apple-123',

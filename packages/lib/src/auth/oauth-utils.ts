@@ -139,6 +139,10 @@ export async function verifyAppleIdToken(idToken: string): Promise<OAuthVerifica
     return {
       success: true,
       userInfo,
+      // Single audience: `verifyIdToken` only accepted the token because `aud`
+      // is one of validClientIds. Apple's /auth/token and /auth/revoke must be
+      // called with this same client.
+      audience: typeof payload.aud === 'string' ? payload.aud : undefined,
     };
   } catch (error) {
     // SECURITY: Never log token values - only log error type

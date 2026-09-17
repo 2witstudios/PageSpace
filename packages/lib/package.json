@@ -2138,6 +2138,36 @@
       "import": "./dist/auth/oauth-utils.js",
       "require": "./dist/auth/oauth-utils.js"
     },
+    "./auth/apple/apple-client-secret": {
+      "types": "./dist/auth/apple/apple-client-secret.d.ts",
+      "import": "./dist/auth/apple/apple-client-secret.js",
+      "require": "./dist/auth/apple/apple-client-secret.js"
+    },
+    "./auth/apple/apple-token-api": {
+      "types": "./dist/auth/apple/apple-token-api.d.ts",
+      "import": "./dist/auth/apple/apple-token-api.js",
+      "require": "./dist/auth/apple/apple-token-api.js"
+    },
+    "./auth/apple/apple-token-store": {
+      "types": "./dist/auth/apple/apple-token-store.d.ts",
+      "import": "./dist/auth/apple/apple-token-store.js",
+      "require": "./dist/auth/apple/apple-token-store.js"
+    },
+    "./auth/apple/apple-notifications": {
+      "types": "./dist/auth/apple/apple-notifications.d.ts",
+      "import": "./dist/auth/apple/apple-notifications.js",
+      "require": "./dist/auth/apple/apple-notifications.js"
+    },
+    "./auth/apple/capture-apple-refresh-token": {
+      "types": "./dist/auth/apple/capture-apple-refresh-token.d.ts",
+      "import": "./dist/auth/apple/capture-apple-refresh-token.js",
+      "require": "./dist/auth/apple/capture-apple-refresh-token.js"
+    },
+    "./auth/apple/revoke-apple-tokens": {
+      "types": "./dist/auth/apple/revoke-apple-tokens.d.ts",
+      "import": "./dist/auth/apple/revoke-apple-tokens.js",
+      "require": "./dist/auth/apple/revoke-apple-tokens.js"
+    },
     "./auth/opaque-tokens": {
       "types": "./dist/auth/opaque-tokens.d.ts",
       "import": "./dist/auth/opaque-tokens.js",
