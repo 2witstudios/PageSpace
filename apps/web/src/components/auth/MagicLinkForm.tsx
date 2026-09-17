@@ -276,7 +276,8 @@ export function MagicLinkForm({ nextPath, inviteToken }: MagicLinkFormProps = {}
           <MarketingLink href="/privacy" className="underline hover:text-foreground">
             Privacy Policy
           </MarketingLink>
-          , and I&apos;m at least 16 years old.
+          , and I&apos;m at least 16 years old. AI features send the content you use them with to
+          third-party AI providers (Anthropic, OpenAI, Google, xAI).
         </Label>
       </div>
 

@@ -10,8 +10,6 @@ import { ChannelInputFooter } from './ChannelInputFooter';
 import { useAttachmentUpload, type FileAttachment } from '@/hooks/useAttachmentUpload';
 import { formatFileSize } from '@/lib/attachment-utils';
 import { useEditingSession } from '@/stores/useEditingSession';
-import { useAiDisclosureGate } from '@/hooks/useAiDisclosureGate';
-import { mayReachAiAgent } from '@/lib/ai/ai-disclosure';
 import { MentionFormatter } from '@/lib/mentions/mentionConfig';
 import type { MentionSuggestion } from '@/types/mentions';
 
@@ -161,26 +159,16 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
       restoreAttachments,
     }));
 
-    const { requestAiConsent, aiDisclosureDialog } = useAiDisclosureGate();
-
     const handleSend = () => {
       if ((value.trim() || attachments.length > 0) && !disabled && !isUploading) {
-        const send = () => {
-          const toSend = attachments.length > 0 ? attachments : undefined;
-          if (parentId) {
-            onSend(toSend, { alsoSendToParent });
-          } else {
-            onSend(toSend);
-          }
-          clearAttachment();
-          if (parentId) setAlsoSendToParent(false);
-        };
-        // A mentioned agent receives the message, so it is third-party AI sharing.
-        if (mayReachAiAgent(value)) {
-          requestAiConsent(send);
+        const toSend = attachments.length > 0 ? attachments : undefined;
+        if (parentId) {
+          onSend(toSend, { alsoSendToParent });
         } else {
-          send();
+          onSend(toSend);
         }
+        clearAttachment();
+        if (parentId) setAlsoSendToParent(false);
       }
     };
 
@@ -433,7 +421,6 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
             onAlsoSendToParentChange={setAlsoSendToParent}
           />
         </InputCard>
-        {aiDisclosureDialog}
       </div>
     );
   }
