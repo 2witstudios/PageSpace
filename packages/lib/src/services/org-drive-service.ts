@@ -118,7 +118,8 @@ const ORG_SLUG_ATTEMPTS = 5;
 
 /** Drizzle rethrows driver errors with the pg error on `.cause`. */
 function isOrgSlugConflict(error: unknown): boolean {
-  const cause = error instanceof Error ? (error.cause as { code?: string; constraint?: string } | undefined) : undefined;
+  if (error === null || typeof error !== 'object') return false;
+  const cause = (error as { cause?: { code?: unknown; constraint?: unknown } }).cause;
   return cause?.code === '23505' && cause.constraint === ORG_SLUG_CONSTRAINT;
 }
 

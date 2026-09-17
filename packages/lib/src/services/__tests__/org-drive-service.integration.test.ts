@@ -10,7 +10,7 @@
  *     DATABASE_URL=... bun run --filter '@pagespace/lib' test -- src/services/__tests__/org-drive-service.integration.test.ts
  */
 
-import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
 import { db, pool } from '@pagespace/db/db';
 import { and, eq, inArray, or } from '@pagespace/db/operators';
@@ -27,6 +27,8 @@ import {
   type OrgMembershipSyncCall,
 } from '../org-drive-service';
 import { STORAGE_REATTRIBUTION_LEAF_ID } from '../../organizations/org-drive-ownership';
+import { orgDriveServiceDeps } from '../org-drive-service-deps';
+import { accountRepository } from '../../repositories/account-repository';
 
 // Northwind Labs fixture names (Sequence Spec Part 2), with per-run ids.
 const run = createId().slice(0, 8);
@@ -349,5 +351,66 @@ describe('createOrgDrive', () => {
     const slugs = results.map((r) => (r.ok ? r.drive.slug : r.code)).sort();
     const base = slugs[0];
     expect(slugs).toEqual([base, `${base}-2`, `${base}-3`]);
+  });
+});
+
+describe('with the production wiring (requireOrgRole, syncDriveOrgMembership, deleteUser)', () => {
+  // The sync publishes realtime events and room kicks after commit. This file asserts rows, not
+  // events (the sync's own suite covers those), so no realtime server is reached: with the URL
+  // unset both publishers return early instead of waiting on whatever listens on the default port.
+  const realtimeUrl = process.env.INTERNAL_REALTIME_URL;
+  beforeAll(() => {
+    delete process.env.INTERNAL_REALTIME_URL;
+  });
+  afterAll(() => {
+    process.env.INTERNAL_REALTIME_URL = realtimeUrl;
+  });
+
+  async function productInNorthwind() {
+    const driveId = await seedPersonalDrive();
+    // Chris Rowe is a guest: an invited member who is not in the org (DRV-8).
+    await db.insert(driveMembers).values({ driveId, userId: chris, role: 'MEMBER', acceptedAt: new Date() });
+    const moved = await moveDriveToOrg(marcus, driveId, { orgId: northwind }, orgDriveServiceDeps);
+    expect(moved).toMatchObject({ ok: true });
+    return driveId;
+  }
+
+  const rowsOf = async (driveId: string) =>
+    (await db.select().from(driveMembers).where(eq(driveMembers.driveId, driveId)))
+      .map((m) => [m.userId, m.source])
+      .sort();
+
+  it('O-10 (partial) moving out with "keep" leaves org members on the drive as invited members, guest untouched', async () => {
+    const driveId = await productInNorthwind();
+    expect(await rowsOf(driveId)).toContainEqual([lena, 'org']);
+
+    const result = await moveDriveOutOfOrg(priya, driveId, { implicitMembers: 'keep' }, orgDriveServiceDeps);
+
+    expect(result).toMatchObject({ ok: true });
+    const rows = await rowsOf(driveId);
+    expect(rows).toContainEqual([lena, 'invite']);
+    expect(rows).toContainEqual([chris, 'invite']);
+    expect(rows.filter(([, source]) => source === 'org')).toEqual([]);
+  });
+
+  it('O-10 (partial) moving out with "remove" revokes the org members and keeps the guest', async () => {
+    const driveId = await productInNorthwind();
+
+    const result = await moveDriveOutOfOrg(jono, driveId, { implicitMembers: 'remove' }, orgDriveServiceDeps);
+
+    expect(result).toMatchObject({ ok: true });
+    expect(await rowsOf(driveId)).toEqual([[chris, 'invite']]);
+  });
+
+  it('O-7 (partial) deleting the lead\'s account does not cascade the org drive: the org Owner becomes its lead', async () => {
+    const driveId = await productInNorthwind();
+
+    await accountRepository.deleteUser(marcus);
+
+    const after = await readDrive(driveId);
+    expect(after).toBeDefined();
+    expect(after.orgId).toBe(northwind);
+    expect(after.ownerId).toBe(jono);
+    expect(await db.select().from(pages).where(eq(pages.driveId, driveId))).toEqual([]);
   });
 });
