@@ -5,10 +5,10 @@
  * Run via:
  *   bun run --filter '@pagespace/lib' test:integration -- src/services/__tests__/org-membership-sync.integration.test.ts
  */
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterAll, afterEach } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
 import { factories } from '@pagespace/db/test/factories';
-import { db } from '@pagespace/db/db';
+import { db, pool } from '@pagespace/db/db';
 import { and, eq, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
@@ -92,6 +92,12 @@ describe('org membership sync (integration)', () => {
       await db.delete(users).where(inArray(users.id, userIds.slice(i, i + 1_000)));
     }
   }, 120_000);
+
+  // The lib integration run shares one process across files, each with its own pool. Release this
+  // suite's connections so later suites do not hit max_connections ("too many clients already").
+  afterAll(async () => {
+    await pool.end();
+  });
 
   it('DRV-5 (partial) materializes accepted org rows with the drive default role for every member of an Open drive, and is idempotent when called twice', async () => {
     const { jono, priya, marcus, chris, org, product, finance } = await northwind();
