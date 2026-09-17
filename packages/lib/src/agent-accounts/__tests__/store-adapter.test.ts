@@ -246,8 +246,8 @@ describe('planStoreIdentity (ADR 0005 §10.10; parameterized on D-29)', () => {
   });
 
   it('given D-29 = B (self-hosted, every tier), selectIdentity should pin blastRadius tenant and key identityId by tenant', () => {
-    const a = selectIdentity({ tenantId: 'user:u1' as TenantId });
-    const b = selectIdentity({ tenantId: 'user:u2' as TenantId });
+    const a = selectIdentity({ tenantId: 'user:u1' as TenantId, channel: 'manage' });
+    const b = selectIdentity({ tenantId: 'user:u2' as TenantId, channel: 'manage' });
     expect(a.blastRadius).toBe('tenant');
     expect(a.identityId).not.toBe(b.identityId);
   });
