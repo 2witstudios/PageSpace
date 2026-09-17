@@ -1116,12 +1116,13 @@ describe('canConsumeAI — dailyCapCeilingCents with billing disabled (tenant/on
     mockIsBillingEnabled.mockReturnValue(false);
   });
 
-  it('stays a pure fast path (no queries) when no ceiling is passed', async () => {
+  it('stays the unlimited fast path (no ledger, hold or metering query; one account read) when no ceiling is passed', async () => {
     const r = await canConsumeAI('u1', 'pro');
 
     expect(r).toEqual({ allowed: true, reason: 'unlimited' });
     expect(mockDb.select).not.toHaveBeenCalled();
     expect(mockDb.transaction).not.toHaveBeenCalled();
+    expect(mockReadGateAccount).toHaveBeenCalledTimes(1);
   });
 
   it('denies when the day metered cost (aiUsageLogs) has reached the ceiling, without reserving a hold', async () => {

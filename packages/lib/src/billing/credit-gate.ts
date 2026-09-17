@@ -208,8 +208,8 @@ export async function canConsumeAI(
     // concurrent decisions the way the billed path's balance row lock does
     // (there is no balance row to lock in this mode). The caller releases the
     // hold after the run (releaseHold deletes in every mode); an abandoned hold
-    // expires via its TTL. Without a ceiling this stays the query-free
-    // unlimited fast path.
+    // expires via its TTL. Without a ceiling this stays the unlimited fast
+    // path: no ledger, hold or metering query (only the account read above).
     const ceiling = callerCeilingCents(opts);
     if (ceiling === null) return { allowed: true, reason: 'unlimited' };
     const now = new Date();
