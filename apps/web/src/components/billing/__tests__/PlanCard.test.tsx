@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { PlanCard } from '../PlanCard';
 import { PLANS, withCreditsCents } from '@/lib/subscription/plans';
 
-describe('PlanCard (MON-6, SEAT-2, A-9)', () => {
+describe('PlanCard (MON-6, SEAT-2 (partial), A-9)', () => {
   it('MON-6 shows price, included credits, and the top-up rate as three separate facts, credits as a count with no dollar sign', () => {
     render(<PlanCard plan={PLANS.pro} currentTier="free" />);
 
@@ -21,7 +21,7 @@ describe('PlanCard (MON-6, SEAT-2, A-9)', () => {
     expect(screen.getByTestId('plan-included-credits').textContent).toMatch(/^[0-9,]+ credits to start$/);
   });
 
-  it('SEAT-2 the Business card states the org terms: $50 a month, 5 seats included, $10 per extra seat', () => {
+  it('SEAT-2 (partial) the Business card states the org terms: $50 a month, 5 seats included, $10 per extra seat', () => {
     render(<PlanCard plan={PLANS.business} currentTier="pro" />);
     expect(screen.getByTestId('plan-price').textContent).toBe('$50');
     expect(screen.getByTestId('plan-seats').textContent).toBe('per organization · 5 seats included · $10 per extra seat');

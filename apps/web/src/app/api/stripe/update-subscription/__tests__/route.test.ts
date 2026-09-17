@@ -500,7 +500,7 @@ describe('POST /api/stripe/update-subscription', () => {
     });
   });
 
-  it('SEAT-2 P1 rejects a plan change targeting the Business (org-plan) price id — the UI hides it, but the server must too', async () => {
+  it('SEAT-2 (partial) P1 rejects a plan change targeting the Business (org-plan) price id — the UI hides it, but the server must too', async () => {
     const request = createMockRequest('https://example.com/api/stripe/update-subscription', {
       method: 'POST',
       body: JSON.stringify({ priceId: stripeConfig.priceIds.business, isDowngrade: false }),
@@ -515,7 +515,7 @@ describe('POST /api/stripe/update-subscription', () => {
     expect(mockStripeSubscriptionSchedulesCreate).not.toHaveBeenCalled();
   });
 
-  it('SEAT-2 P1 (independent review) rejects the grandfathered Founder price id — a removed tier is never re-purchasable', async () => {
+  it('SEAT-2 (partial) P1 (independent review) rejects the grandfathered Founder price id — a removed tier is never re-purchasable', async () => {
     const request = createMockRequest('https://example.com/api/stripe/update-subscription', {
       method: 'POST',
       body: JSON.stringify({ priceId: stripeConfig.grandfatheredPriceIds.founder, isDowngrade: false }),
@@ -530,7 +530,7 @@ describe('POST /api/stripe/update-subscription', () => {
     expect(mockStripeSubscriptionSchedulesCreate).not.toHaveBeenCalled();
   });
 
-  it('SEAT-2 P1 (independent review) rejects an unrecognized price id — the allowlist denies by default rather than falling through', async () => {
+  it('SEAT-2 (partial) P1 (independent review) rejects an unrecognized price id — the allowlist denies by default rather than falling through', async () => {
     const request = createMockRequest('https://example.com/api/stripe/update-subscription', {
       method: 'POST',
       body: JSON.stringify({ priceId: 'price_not_a_real_plan', isDowngrade: false }),
@@ -545,7 +545,7 @@ describe('POST /api/stripe/update-subscription', () => {
     expect(mockStripeSubscriptionSchedulesCreate).not.toHaveBeenCalled();
   });
 
-  it('SEAT-2 P1 (independent review) accepts the Pro price id', async () => {
+  it('SEAT-2 (partial) P1 (independent review) accepts the Pro price id', async () => {
     const request = createMockRequest('https://example.com/api/stripe/update-subscription', {
       method: 'POST',
       body: JSON.stringify({ priceId: stripeConfig.priceIds.pro, isDowngrade: false }),

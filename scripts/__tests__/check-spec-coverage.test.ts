@@ -15,6 +15,7 @@ import {
   loadTestOutcomes,
   securityOnlyWarnings,
   nameCarriesId,
+  nameCarriesPartialId,
   parseAllowlist,
   parseArgs,
   parsePlaywrightJsonReport,
@@ -67,6 +68,30 @@ describe('coverage gate: ID matching', () => {
 // `if (false)` that never registers at all, and a real passing test: the skip reported
 // `status: "skipped"`, the if(false) test did not appear in `assertionResults` at all, and only
 // the real test reported `status: "passed"`).
+describe('coverage gate: the (partial) marker', () => {
+  it('a title naming an ID only as "<ID> (partial)" does not claim it, but is recognized as a partial hit', () => {
+    expect(nameCarriesId('MON-3 (partial) sums base and extra-seat lines', 'MON-3')).toBe(false);
+    expect(nameCarriesPartialId('MON-3 (partial) sums base and extra-seat lines', 'MON-3')).toBe(true);
+    expect(nameCarriesPartialId('MON-3 sums base and extra-seat lines', 'MON-3')).toBe(false);
+  });
+
+  it('the marker binds to the ID right before it: "MON-2/MON-3 (partial)" claims MON-2 and is partial for MON-3 only', () => {
+    expect(nameCarriesId('MON-2/MON-3 (partial) the org seam', 'MON-2')).toBe(true);
+    expect(nameCarriesPartialId('MON-2/MON-3 (partial) the org seam', 'MON-2')).toBe(false);
+    expect(nameCarriesId('MON-2/MON-3 (partial) the org seam', 'MON-3')).toBe(false);
+  });
+
+  it('a second, unmarked mention of the same ID is still a claim', () => {
+    expect(nameCarriesId('MON-3 (partial) seam; MON-3 the refill itself', 'MON-3')).toBe(true);
+  });
+
+  it('only the exact marker counts: another parenthetical, or no space, is still a claim', () => {
+    expect(nameCarriesId('SEAT-2 (independent review) accepts the Pro price', 'SEAT-2')).toBe(true);
+    expect(nameCarriesId('SEAT-2(partial) no space', 'SEAT-2')).toBe(true);
+    expect(nameCarriesPartialId('SEAT-2(partial) no space', 'SEAT-2')).toBe(false);
+  });
+});
+
 describe('coverage gate: parsing Vitest\'s JSON reporter', () => {
   const vitestReport = {
     numTotalTestSuites: 1,
@@ -186,6 +211,19 @@ describe('coverage gate: hitsFromTestOutcomes', () => {
     expect([...(hits.get('a.test.ts') ?? [])]).toEqual(['MON-2']);
   });
 
+  it('a passing partial-only test is not a hit, but the partial matcher collects it (own title and describe) for traceability', () => {
+    const tests = [
+      t('a.test.ts', 'MON-3 (partial) sums base and extra-seat lines', [], true),
+      t('b.test.tsx', 'renders the Business terms', ['PlanCard (MON-6, SEAT-2 (partial), A-9)'], true),
+    ];
+    const full = hitsFromTestOutcomes(tests, ['MON-3', 'MON-6', 'SEAT-2']);
+    expect(full.has('a.test.ts')).toBe(false);
+    expect([...(full.get('b.test.tsx') ?? [])]).toEqual(['MON-6']);
+    const partial = hitsFromTestOutcomes(tests, ['MON-3', 'MON-6', 'SEAT-2'], nameCarriesPartialId);
+    expect([...(partial.get('a.test.ts') ?? [])]).toEqual(['MON-3']);
+    expect([...(partial.get('b.test.tsx') ?? [])]).toEqual(['SEAT-2']);
+  });
+
   it('a passing test that names the ID in its own title still counts even if a describe sibling was skipped', () => {
     const hits = hitsFromTestOutcomes(
       [t('a.test.ts', 'MON-2 the real check', ['MON-2 suite'], true), t('a.test.ts', 'a skipped extra', ['MON-2 suite'], false)],
@@ -248,6 +286,32 @@ describe('coverage gate: report and allowlist ratchet', () => {
     const report = buildReport({ ids, hitsByFile: hits, allowlist: ['MON-2'] });
     expect(report.staleAllowlist).toEqual(['MON-2']);
     expect(reportPasses(report)).toBe(false);
+  });
+
+  it('a partial-only ID is NOT covered: allowlisted it stays allowlisted-missing (not stale), and it still lists the partial files', () => {
+    const partialHitsByFile = new Map([['packages/lib/src/seam.test.ts', new Set(['MON-1'])]]);
+    const report = buildReport({ ids, hitsByFile: hits, partialHitsByFile, allowlist: ['MON-1'] });
+    expect(report.staleAllowlist).toEqual([]);
+    expect(report.allowlistedMissing).toEqual(['MON-1']);
+    expect(report.rows.find((r) => r.id === 'MON-1')?.partialFiles).toEqual(['packages/lib/src/seam.test.ts']);
+    expect(reportPasses(report)).toBe(true);
+    expect(formatTable(report)).toContain('MON-1  allowlisted  partial: packages/lib/src/seam.test.ts');
+  });
+
+  it('a partial-only ID that is not allowlisted is MISSING', () => {
+    const partialHitsByFile = new Map([['packages/lib/src/seam.test.ts', new Set(['MON-1'])]]);
+    const report = buildReport({ ids, hitsByFile: hits, partialHitsByFile, allowlist: [] });
+    expect(report.missing).toEqual(['MON-1']);
+    expect(reportPasses(report)).toBe(false);
+  });
+
+  it('partial + a full passing hit is covered (and an allowlist entry for it is stale)', () => {
+    const partialHitsByFile = new Map([['packages/lib/src/seam.test.ts', new Set(['MON-2'])]]);
+    const covered = buildReport({ ids, hitsByFile: hits, partialHitsByFile, allowlist: ['MON-1'] });
+    expect(covered.rows.find((r) => r.id === 'MON-2')).toMatchObject({ files: ['apps/web/src/b.test.tsx', 'packages/lib/src/a.test.ts'], partialFiles: ['packages/lib/src/seam.test.ts'] });
+    expect(reportPasses(covered)).toBe(true);
+    const stale = buildReport({ ids, hitsByFile: hits, partialHitsByFile, allowlist: ['MON-1', 'MON-2'] });
+    expect(stale.staleAllowlist).toEqual(['MON-2']);
   });
 
   it('fails on an allowlist token that is not a Spec ID', () => {
@@ -411,6 +475,20 @@ describe('coverage gate: end to end over a temp repo', () => {
     expect(run(root, opts, (l) => failing.push(l))).toBe(1);
     expect(failing.join('\n')).toContain('WARNING: no Playwright JSON results found');
     expect(failing.join('\n')).toContain('FAIL: no passing test names these IDs: X-6');
+  });
+
+  it('end to end: a passing "(partial)" result does not cover an allowlisted ID, is not STALE-ALLOW, and is listed in the table', () => {
+    const root = makeRepo();
+    const resultsPath = path.join(root, 'packages/lib/test-results/vitest-results.json');
+    const results = JSON.parse(fs.readFileSync(resultsPath, 'utf8')) as { testResults: { assertionResults: unknown[] }[] };
+    results.testResults[0].assertionResults.push({ ancestorTitles: [], title: 'MON-1 (partial) the price seam only', fullName: 'MON-1 (partial) the price seam only', status: 'passed' });
+    fs.writeFileSync(resultsPath, JSON.stringify(results));
+    const lines: string[] = [];
+    expect(run(root, parseArgs(['--offline']), (l) => lines.push(l))).toBe(0);
+    const out = lines.join('\n');
+    expect(out).toContain('MON-1   allowlisted  partial: packages/lib/src/__tests__/money.test.ts');
+    expect(out).not.toContain('STALE-ALLOW');
+    expect(lines.at(-1)).toBe('spec-coverage: OK');
   });
 
   it('--json emits the report with the spec origin and source flags', () => {

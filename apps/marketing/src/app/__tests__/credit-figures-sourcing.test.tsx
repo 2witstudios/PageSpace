@@ -39,6 +39,32 @@ const HARDCODED_CREDIT_FIGURE = /\d[\d,]*["'`}]{0,2}\s+(?:[A-Za-z]+\s+)?credits\
 
 const source = (relative: string) => fs.readFileSync(path.join(__dirname, '..', relative), 'utf8');
 
+// No Spec ID in this title on purpose: it proves the scan, not the requirement.
+describe('hardcoded-credit-figure source scan self-test', () => {
+  // Every shape review 5230424182 planted in faq/page.tsx, plus the plain forms. Each renders the
+  // same text as the module reference it replaces, so only this scan can catch it.
+  it.each([
+    ['same line', '1,500 credits a month'],
+    ['no thousands separator', '1500 credits a month'],
+    ['JSX text wrapped before "credits"', 'allowance — 1,500\n        credits a\n        month'],
+    ['JSX expression holding a quoted literal', '{"1,500"} credits a month'],
+    ['template literal holding a quoted literal', 'and ${"500"} credits to get started'],
+    ['a bare number in braces', '{1500} credits'],
+    ['one word between', '1,500 AI credits'],
+  ])('catches a hardcoded figure: %s', (_shape, text) => {
+    expect(text).toMatch(HARDCODED_CREDIT_FIGURE);
+  });
+
+  it.each([
+    ['a JSX module reference', '{MONTHLY_CREDITS.pro} credits a\n        month'],
+    ['a template module reference', '${FREE_STARTER_CREDITS_DISPLAY} credits to get started'],
+    ['a phrase function', 'top-up packs come in ${creditPacksPhrase()}'],
+    ['storage, not credits', 'includes 500 MB of storage'],
+  ])('does not flag module-sourced copy: %s', (_shape, text) => {
+    expect(text).not.toMatch(HARDCODED_CREDIT_FIGURE);
+  });
+});
+
 describe('UI-12 credit figures on public pages come from the money-model module', () => {
   it('UI-12 the FAQ sources credit figures from the money-model module', async () => {
     const { default: FAQPage } = await import('../faq/page');

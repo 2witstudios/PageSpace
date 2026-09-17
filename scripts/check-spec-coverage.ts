@@ -29,6 +29,8 @@
  * is a RUNTIME question in general, not a static one. No static walk closes that gap; only the
  * test runner itself can say what ran. So coverage is never decided from test SOURCE: an ID
  * counts only when a test named with it reports `passed` in a real CI run.
+ * A title that names an ID only as `<ID> (partial)` (see `PARTIAL_MARKER`) is listed for
+ * traceability but never counts: the test proves part of the requirement, not all of it.
  * See `loadTestOutcomes` / `parseVitestJsonReport` / `parsePlaywrightJsonReport`.
  *
  * If no Playwright results are found (the e2e job did not run, was skipped, or failed before
@@ -80,6 +82,11 @@ export interface CoverageRow {
   id: string;
   /** Repo-relative test files with a PASSING test whose name carries the ID. */
   files: string[];
+  /**
+   * Repo-relative test files with a PASSING test that names the ID only as `<ID> (partial)`.
+   * Listed for traceability; they never cover the ID and never make an allowlist entry stale.
+   */
+  partialFiles: string[];
   allowlisted: boolean;
 }
 
@@ -127,16 +134,39 @@ export function stripLineNumberPrefixes(text: string): string {
     .join('\n');
 }
 
-/** True when `name` carries `id` as a whole token ("MON-2" does not match "MON-20"). */
+/**
+ * The marker a title puts IMMEDIATELY after an ID when its test proves only part of that
+ * requirement: "MON-3 (partial) sums base and extra-seat lines before the ratio". Such a name is
+ * traceability, not a coverage claim (Review 5230424182 on #2657).
+ */
+export const PARTIAL_MARKER = ' (partial)';
+
+const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** Whole-token ID: "MON-2" does not match inside "MON-20" or "XMON-2". */
+const idTokenSource = (id: string): string => `(?<![A-Z0-9-])${escapeRegExp(id)}(?![0-9])`;
+
+const escapedPartialMarker = escapeRegExp(PARTIAL_MARKER);
+
+/**
+ * True when `name` CLAIMS `id`: the ID appears as a whole token ("MON-2" does not match "MON-20")
+ * at least once without the partial marker right after it.
+ */
 export function nameCarriesId(name: string, id: string): boolean {
-  const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`(?<![A-Z0-9-])${escaped}(?![0-9])`).test(name);
+  return new RegExp(`${idTokenSource(id)}(?!${escapedPartialMarker})`).test(name);
 }
 
-export function idsNamedBy(names: string[], ids: readonly string[]): Set<string> {
+/** True when `name` names `id` as a whole token immediately followed by the partial marker. */
+export function nameCarriesPartialId(name: string, id: string): boolean {
+  return new RegExp(`${idTokenSource(id)}${escapedPartialMarker}`).test(name);
+}
+
+export type IdMatcher = (name: string, id: string) => boolean;
+
+export function idsNamedBy(names: string[], ids: readonly string[], matches: IdMatcher = nameCarriesId): Set<string> {
   const hit = new Set<string>();
   for (const id of ids) {
-    if (names.some((n) => nameCarriesId(n, id))) hit.add(id);
+    if (names.some((n) => matches(n, id))) hit.add(id);
   }
   return hit;
 }
@@ -155,12 +185,14 @@ export interface BuildReportInput {
   ids: readonly string[];
   /** Repo-relative test file → the IDs a passing test in it names. */
   hitsByFile: ReadonlyMap<string, ReadonlySet<string>>;
+  /** Repo-relative test file → the IDs a passing test in it names only as `<ID> (partial)`. */
+  partialHitsByFile?: ReadonlyMap<string, ReadonlySet<string>>;
   allowlist: readonly string[];
   /** Optional `--ids` filter; when set only these IDs are reported. */
   onlyIds?: readonly string[];
 }
 
-export function buildReport({ ids, hitsByFile, allowlist, onlyIds }: BuildReportInput): CoverageReport {
+export function buildReport({ ids, hitsByFile, partialHitsByFile = new Map(), allowlist, onlyIds }: BuildReportInput): CoverageReport {
   const specIds = new Set(ids);
   const allow = new Set(allowlist);
   const unknownAllowlist = allowlist.filter((id) => !specIds.has(id)).sort(compareIds);
@@ -170,7 +202,10 @@ export function buildReport({ ids, hitsByFile, allowlist, onlyIds }: BuildReport
     const files: string[] = [];
     for (const [file, hits] of hitsByFile) if (hits.has(id)) files.push(file);
     files.sort();
-    return { id, files, allowlisted: allow.has(id) };
+    const partialFiles: string[] = [];
+    for (const [file, hits] of partialHitsByFile) if (hits.has(id)) partialFiles.push(file);
+    partialFiles.sort();
+    return { id, files, partialFiles, allowlisted: allow.has(id) };
   });
 
   return {
@@ -196,7 +231,8 @@ export function formatTable(report: CoverageReport): string {
   const lines = [`${'ID'.padEnd(width)}  STATUS       FILES`];
   for (const r of report.rows) {
     const status = r.files.length > 0 ? (r.allowlisted ? 'STALE-ALLOW' : 'covered') : r.allowlisted ? 'allowlisted' : 'MISSING';
-    lines.push(`${r.id.padEnd(width)}  ${status.padEnd(11)}  ${r.files.length > 0 ? r.files.join(', ') : '-'}`);
+    const listed = [...r.files, ...(r.partialFiles.length > 0 ? [`partial: ${r.partialFiles.join(', ')}`] : [])];
+    lines.push(`${r.id.padEnd(width)}  ${status.padEnd(11)}  ${listed.length > 0 ? listed.join(', ') : '-'}`);
   }
   return lines.join('\n');
 }
@@ -370,8 +406,14 @@ export function loadTestOutcomes(root: string): LoadedResults {
  * The second rule exists because a describe title is shared by every test under it: without it,
  * `describe('MON-2 …')` with a skipped real check and a passing trivial sibling would count MON-2
  * as covered by a test that never ran.
+ * "Names" means `matches` (default `nameCarriesId`, which ignores `<ID> (partial)`); pass
+ * `nameCarriesPartialId` to collect the partial-only traceability hits under the same rules.
  */
-export function hitsFromTestOutcomes(tests: readonly TestOutcome[], ids: readonly string[]): Map<string, Set<string>> {
+export function hitsFromTestOutcomes(
+  tests: readonly TestOutcome[],
+  ids: readonly string[],
+  matches: IdMatcher = nameCarriesId,
+): Map<string, Set<string>> {
   const hits = new Map<string, Set<string>>();
   const add = (file: string, id: string): void => {
     const existing = hits.get(file) ?? new Set<string>();
@@ -381,8 +423,8 @@ export function hitsFromTestOutcomes(tests: readonly TestOutcome[], ids: readonl
   // `${file}\0${id}` → whether every test under a describe naming that id passed.
   const describeGroups = new Map<string, { file: string; id: string; allPassed: boolean }>();
   for (const t of tests) {
-    if (t.passed) for (const id of idsNamedBy([t.title], ids)) add(t.file, id);
-    for (const id of idsNamedBy(t.ancestors, ids)) {
+    if (t.passed) for (const id of idsNamedBy([t.title], ids, matches)) add(t.file, id);
+    for (const id of idsNamedBy(t.ancestors, ids, matches)) {
       const key = `${t.file}\0${id}`;
       const group = describeGroups.get(key) ?? { file: t.file, id, allPassed: true };
       group.allPassed &&= t.passed;
@@ -537,7 +579,8 @@ export function run(root: string, opts: CliOptions, log: (line: string) => void 
   }
 
   const hitsByFile = hitsFromTestOutcomes(tests, ids);
-  const report = buildReport({ ids, hitsByFile, allowlist, onlyIds: opts.ids });
+  const partialHitsByFile = hitsFromTestOutcomes(tests, ids, nameCarriesPartialId);
+  const report = buildReport({ ids, hitsByFile, partialHitsByFile, allowlist, onlyIds: opts.ids });
   const failsFiles = failsModifierFiles(root, hitsByFile, tests);
   const securityWarnings = securityOnlyWarnings(root, tests, [...report.missing, ...report.allowlistedMissing]);
   const ok = reportPasses(report) && failsFiles.length === 0;

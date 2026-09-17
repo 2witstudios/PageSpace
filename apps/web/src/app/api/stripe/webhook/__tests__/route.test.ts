@@ -516,7 +516,7 @@ describe('POST /api/stripe/webhook', () => {
       );
     });
 
-    it('SEAT-2 should handle subscription.updated and update tier to business ($50 org plan)', async () => {
+    it('SEAT-2 (partial) should handle subscription.updated and update tier to business ($50 org plan)', async () => {
       const subscription = mockSubscription({ priceAmount: 5000 }); // $50 = Business
       const event = mockStripeEvent('customer.subscription.updated', subscription);
       mockStripeWebhooksConstructEvent.mockReturnValue(event);
@@ -633,7 +633,7 @@ describe('POST /api/stripe/webhook', () => {
     const tierPriceTests = [
       { priceAmount: 1500, expectedTier: 'pro', description: '$15 = Pro (new)' },
       { priceAmount: 2999, expectedTier: 'pro', description: '$29.99 = Pro (legacy)' },
-      { priceAmount: 5000, expectedTier: 'business', description: '$50 = Business, the org plan (SEAT-2)' },
+      { priceAmount: 5000, expectedTier: 'business', description: '$50 = Business, the org plan (SEAT-2 (partial))' },
       { priceAmount: 10000, expectedTier: 'business', description: '$100 = legacy personal Business (grandfathered, A-9)' },
       { priceAmount: 19999, expectedTier: 'business', description: '$199.99 = Business (legacy)' },
       { priceAmount: 999, expectedTier: 'pro', description: 'Fallback to pro for unknown price' },
