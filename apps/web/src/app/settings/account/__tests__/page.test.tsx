@@ -253,6 +253,26 @@ describe('AccountPage', () => {
       await waitFor(() => expect(lastDialogProps()?.appleSignInRevocation).toBeUndefined());
     });
 
+    it('given the dialog is reopened while the Apple status is still loading, should not show the previous notice', async () => {
+      let call = 0;
+      mocks.fetchWithAuth.mockImplementation(async (url: string) => {
+        if (url === '/api/account/drives-status') return jsonResponse({ soloDrives: [], multiMemberDrives: [] });
+        if (url === '/api/account/apple-sign-in') {
+          call += 1;
+          return call === 1 ? jsonResponse({ linked: true, revocation: 'manual' }) : new Promise(() => {});
+        }
+        return jsonResponse({});
+      });
+      const user = userEvent.setup();
+      render(<AccountPage />);
+      await user.click(screen.getByRole('button', { name: /^Delete Account$/i }));
+      await waitFor(() => expect(lastDialogProps()?.appleSignInRevocation).toBe('manual'));
+
+      await user.click(screen.getByRole('button', { name: /^Delete Account$/i }));
+
+      await waitFor(() => expect(lastDialogProps()?.appleSignInRevocation).toBeUndefined());
+    });
+
     it('given deletion reports manual Apple steps, should land the user on the page that shows them', async () => {
       const location = { href: 'https://example.com/settings/account' };
       Object.defineProperty(window, 'location', { configurable: true, value: location });

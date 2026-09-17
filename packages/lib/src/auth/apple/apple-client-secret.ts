@@ -22,6 +22,9 @@ export type AppleSigningEnv = Readonly<Record<string, string | undefined>>;
 
 const APPLE_AUDIENCE = 'https://appleid.apple.com';
 
+/** Keys already reported unusable — the config is read on every Apple sign-in. */
+const reportedUnusableKeys = new Set<string>();
+
 /** Apple allows up to six months; a per-call secret only needs to outlive one request. */
 const CLIENT_SECRET_TTL_SECONDS = 300;
 
@@ -40,6 +43,8 @@ export function getAppleSigningConfig(env: AppleSigningEnv = process.env): Apple
   // A set-but-unusable key must not fail silently: every Apple deletion would
   // quietly fall back to the manual steps.
   const invalid = (reason: string): null => {
+    if (reportedUnusableKeys.has(privateKey)) return null;
+    reportedUnusableKeys.add(privateKey);
     loggers.auth.warn('APPLE_SIGN_IN_PRIVATE_KEY is set but unusable; Sign in with Apple token revocation is disabled', { reason });
     return null;
   };

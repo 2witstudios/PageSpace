@@ -47,6 +47,14 @@ describe('getAppleSigningConfig', () => {
     expect(loggers.auth.warn).toHaveBeenCalledWith(expect.stringContaining('APPLE_SIGN_IN_PRIVATE_KEY'), expect.anything());
   });
 
+  it('given the same unusable key is read on every sign-in, should warn only once', () => {
+    const badKey = 'still not a key';
+    getAppleSigningConfig({ ...fullEnv, APPLE_SIGN_IN_PRIVATE_KEY: badKey });
+    getAppleSigningConfig({ ...fullEnv, APPLE_SIGN_IN_PRIVATE_KEY: badKey });
+
+    expect(loggers.auth.warn).toHaveBeenCalledTimes(1);
+  });
+
   it('given an EC key on a curve other than P-256, should return null (ES256 requires P-256)', () => {
     const p384 = generateKeyPairSync('ec', { namedCurve: 'secp384r1' }).privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
 

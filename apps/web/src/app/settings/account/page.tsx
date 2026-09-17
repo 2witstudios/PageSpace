@@ -308,6 +308,8 @@ export default function AccountPage() {
   const handleInitiateAccountDeletion = async () => {
     // Sign in with Apple status for the dialog's notice (Guideline 5.1.1(v)).
     // Best-effort: it must never stand in the way of deleting the account.
+    // Cleared first so a reopened dialog never shows the previous answer.
+    setAppleSignInRevocation(undefined);
     void fetchWithAuth("/api/account/apple-sign-in")
       .then(async (response) => {
         if (!response.ok) {
