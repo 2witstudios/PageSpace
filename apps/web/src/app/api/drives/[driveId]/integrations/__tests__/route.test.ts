@@ -110,7 +110,7 @@ describe('GET /api/drives/[driveId]/integrations', () => {
   describe('authorization', () => {
     it('should return 403 when user is not a member', async () => {
       vi.mocked(getDriveAccess).mockResolvedValue({
-        isOwner: false, isAdmin: false, isMember: false, role: null,
+        isOwner: false, isAdmin: false, isMember: false, role: null, customRoleId: null,
       });
 
       const request = new Request('https://example.com/api/drives/d/integrations');
@@ -125,7 +125,7 @@ describe('GET /api/drives/[driveId]/integrations', () => {
   describe('response contract', () => {
     it('should return connections list with safe fields', async () => {
       vi.mocked(getDriveAccess).mockResolvedValue({
-        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER',
+        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER', customRoleId: null,
       });
       vi.mocked(listDriveConnections).mockResolvedValue([
         {
@@ -182,7 +182,7 @@ describe('GET /api/drives/[driveId]/integrations', () => {
 
     it('should handle connections with null provider', async () => {
       vi.mocked(getDriveAccess).mockResolvedValue({
-        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER',
+        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER', customRoleId: null,
       });
       vi.mocked(listDriveConnections).mockResolvedValue([
         // @ts-expect-error - partial mock data
@@ -216,7 +216,7 @@ describe('GET /api/drives/[driveId]/integrations', () => {
   describe('error handling', () => {
     it('should return 500 and log when service throws', async () => {
       vi.mocked(getDriveAccess).mockResolvedValue({
-        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER',
+        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER', customRoleId: null,
       });
       const error = new Error('DB failed');
       vi.mocked(listDriveConnections).mockRejectedValueOnce(error);
@@ -272,7 +272,7 @@ describe('POST /api/drives/[driveId]/integrations', () => {
   describe('authorization', () => {
     it('should return 403 when user is not owner or admin', async () => {
       vi.mocked(getDriveAccess).mockResolvedValue({
-        isOwner: false, isAdmin: false, isMember: true, role: 'MEMBER',
+        isOwner: false, isAdmin: false, isMember: true, role: 'MEMBER', customRoleId: null,
       });
 
       const request = new Request('https://example.com/api/drives/d/integrations', {
@@ -288,7 +288,7 @@ describe('POST /api/drives/[driveId]/integrations', () => {
 
     it('should allow admin access', async () => {
       vi.mocked(getDriveAccess).mockResolvedValue({
-        isOwner: false, isAdmin: true, isMember: true, role: 'ADMIN',
+        isOwner: false, isAdmin: true, isMember: true, role: 'ADMIN', customRoleId: null,
       });
       // @ts-expect-error - partial mock data
       vi.mocked(getProviderById).mockResolvedValue({
@@ -319,7 +319,7 @@ describe('POST /api/drives/[driveId]/integrations', () => {
   describe('validation', () => {
     beforeEach(() => {
       vi.mocked(getDriveAccess).mockResolvedValue({
-        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER',
+        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER', customRoleId: null,
       });
     });
 
@@ -350,7 +350,7 @@ describe('POST /api/drives/[driveId]/integrations', () => {
   describe('provider validation', () => {
     beforeEach(() => {
       vi.mocked(getDriveAccess).mockResolvedValue({
-        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER',
+        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER', customRoleId: null,
       });
     });
 
@@ -472,7 +472,7 @@ describe('POST /api/drives/[driveId]/integrations', () => {
 
     beforeEach(() => {
       vi.mocked(getDriveAccess).mockResolvedValue({
-        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER',
+        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER', customRoleId: null,
       });
       vi.mocked(getProviderById).mockResolvedValue(oauthProvider as never);
       vi.mocked(findDriveConnection).mockResolvedValue(null);
@@ -660,7 +660,7 @@ describe('POST /api/drives/[driveId]/integrations', () => {
   describe('non-OAuth flow', () => {
     beforeEach(() => {
       vi.mocked(getDriveAccess).mockResolvedValue({
-        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER',
+        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER', customRoleId: null,
       });
       // @ts-expect-error - partial mock data
       vi.mocked(getProviderById).mockResolvedValue({
@@ -769,7 +769,7 @@ describe('POST /api/drives/[driveId]/integrations', () => {
   describe('error handling', () => {
     it('should return 500 and log when service throws', async () => {
       vi.mocked(getDriveAccess).mockResolvedValue({
-        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER',
+        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER', customRoleId: null,
       });
       const error = new Error('Unexpected error');
       vi.mocked(getProviderById).mockRejectedValueOnce(error);

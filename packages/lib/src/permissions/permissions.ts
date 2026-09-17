@@ -151,7 +151,7 @@ export async function getUserAccessLevel(
         return { canView: true, canEdit: true, canShare: true, canDelete: true };
       }
 
-      const membership = await db.select({ role: driveMembers.role })
+      const membership = await db.select({ role: driveMembers.role, customRoleId: driveMembers.customRoleId })
         .from(driveMembers)
         .where(and(
           eq(driveMembers.driveId, drive[0].id),
@@ -162,9 +162,19 @@ export async function getUserAccessLevel(
 
       if (membership.length > 0) {
         const isAdmin = membership[0].role === 'ADMIN';
+        // A custom role bounds a MEMBER's drive-wide edit to what the role's
+        // driveWidePermissions explicitly grant (#2627) — the same rule as
+        // getUserDrivePermissions and the token resolvers
+        // (getAppAccessLevel / getScopedAccessLevel). An unresolvable role
+        // fails closed rather than degrading to plain-member edit.
+        let canEdit = true;
+        if (!isAdmin && membership[0].customRoleId) {
+          const customRole = await fetchCustomRolePermissions(membership[0].customRoleId, drive[0].id);
+          canEdit = customRole?.driveWidePermissions?.canEdit === true;
+        }
         return {
           canView: true,
-          canEdit: true,
+          canEdit,
           canShare: isAdmin,
           canDelete: isAdmin,
         };

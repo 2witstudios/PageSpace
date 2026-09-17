@@ -7,6 +7,14 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **The + button in a drive now matches what you can actually do** — a plain member of a drive,
+  who could always create pages through the command palette or the API, saw a lock on the +
+  button and could not click it. The button now reflects the server's effective create permission:
+  enabled for members and members whose custom role grants drive-wide edit, locked for view-only
+  custom roles and page-collaborator-only access. The same rule now also gates the API check that
+  backs it, so a view-only custom role is refused at the server too instead of silently
+  over-granted on the session path.
+
 - **Multi-question prompts from the assistant have Back and Next buttons** — when the assistant
   asks several questions at once, you could only switch between them by tapping the small
   numbered tabs or pressing the arrow keys, which is awkward on a phone. Each question now has a

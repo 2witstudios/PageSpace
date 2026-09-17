@@ -1,5 +1,5 @@
 import { db } from '@pagespace/db/db';
-import { eq, and, isNotNull } from '@pagespace/db/operators';
+import { eq, and, isNotNull, inArray } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { driveRoles, driveMembers } from '@pagespace/db/schema/members';
 
@@ -67,4 +67,59 @@ export async function customRoleBelongsToDrive(customRoleId: string, driveId: st
     .where(and(eq(driveRoles.id, customRoleId), eq(driveRoles.driveId, driveId)))
     .limit(1);
   return result.length > 0;
+}
+
+export interface DriveWideEditEntry {
+  driveId: string;
+  role: 'OWNER' | 'ADMIN' | 'MEMBER';
+  customRoleId?: string | null;
+}
+
+/**
+ * The single drive-wide canEdit rule (#2627).
+ *
+ * OWNER, ADMIN and a plain MEMBER (no custom role) can edit drive-wide — and
+ * therefore create root-level pages, which the API authorizes as edit on the
+ * drive-as-root. A custom role bounds a MEMBER to what the role's
+ * driveWidePermissions explicitly grant; an unresolvable role or a null
+ * driveWidePermissions fails closed. This mirrors getUserDrivePermissions and
+ * the token resolvers (getAppAccessLevel / getScopedAccessLevel) so the drives
+ * DTO flag, the session check and the token checks can never disagree.
+ *
+ * Callers pass ONE entry per drive the user actually owns or holds a
+ * membership in. Page-collaborator-only drives are NOT memberships and must
+ * not be passed — they fail closed at the call site.
+ *
+ * Batched: one query regardless of how many custom roles are involved.
+ */
+export async function resolveDriveWideCanEdit(
+  entries: DriveWideEditEntry[],
+): Promise<Map<string, boolean>> {
+  const customRoleIds = [
+    ...new Set(entries.filter((entry) => entry.customRoleId).map((entry) => entry.customRoleId as string)),
+  ];
+
+  const roleDriveWide = new Map<string, PagePerm | null>();
+  if (customRoleIds.length > 0) {
+    const rows = await db
+      .select({ id: driveRoles.id, driveWidePermissions: driveRoles.driveWidePermissions })
+      .from(driveRoles)
+      .where(inArray(driveRoles.id, customRoleIds))
+      .limit(customRoleIds.length);
+    for (const row of rows) {
+      roleDriveWide.set(row.id, (row.driveWidePermissions as PagePerm | null) ?? null);
+    }
+  }
+
+  const result = new Map<string, boolean>();
+  for (const entry of entries) {
+    if (entry.role === 'OWNER' || entry.role === 'ADMIN' || !entry.customRoleId) {
+      result.set(entry.driveId, true);
+      continue;
+    }
+    // Fail closed: an unresolvable custom role or a role without explicit
+    // drive-wide edit grants nothing at the drive root.
+    result.set(entry.driveId, roleDriveWide.get(entry.customRoleId)?.canEdit === true);
+  }
+  return result;
 }
