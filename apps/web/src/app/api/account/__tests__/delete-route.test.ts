@@ -148,7 +148,7 @@ describe('DELETE /api/account (async erasure)', () => {
       expect(lodgeAndEnqueueErasure).not.toHaveBeenCalled();
     });
 
-    it('ORG-6 (partial) given the user owns an organization, should block with 400 and NOT queue', async () => {
+    it('ORG-6 an Owner cannot delete their account while owning an org', async () => {
       mockAccountRepo.getOwnedOrganizationNames.mockResolvedValue(['Northwind Labs']);
       const res = await DELETE(deleteReq(mockUserEmail));
       const body = await res.json();
