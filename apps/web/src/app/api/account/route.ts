@@ -14,7 +14,6 @@ import { planDriveDisposition } from '@pagespace/lib/compliance/erasure/drive-di
 import { dataSubjectRequestRepository } from '@pagespace/lib/repositories/data-subject-request-repository';
 import { sendVerificationEmail } from '@/lib/auth/send-verification-email';
 import { lodgeAndEnqueueErasure } from '@/lib/erasure/request-erasure';
-import { findOrganizationsOwnedBy } from '@pagespace/lib/organizations/repository';
 
 const patchBodySchema = z
   .object({
@@ -217,9 +216,8 @@ export async function DELETE(req: Request) {
       );
     }
 
-    // ORG-6: an Owner cannot delete their account while owning an org. The FK is
-    // RESTRICT too, but the erasure runs async; refuse here, before anything queues.
-    const ownedOrganizations = await findOrganizationsOwnedBy(userId);
+    // An org Owner cannot delete their account (ORG-6); refuse before queueing anything.
+    const ownedOrganizations = await accountRepository.getOwnedOrganizationNames(userId);
     if (ownedOrganizations.length > 0) {
       return Response.json(
         {

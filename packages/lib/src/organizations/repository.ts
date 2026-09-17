@@ -73,16 +73,6 @@ export async function listOrganizationsForUser(userId: string): Promise<OrgSumma
     .limit(500);
 }
 
-/** Orgs the user owns — the ORG-6 account-deletion guard reads this. */
-export async function findOrganizationsOwnedBy(userId: string): Promise<Array<{ id: string; name: string; slug: string }>> {
-  return db
-    .select({ id: organizations.id, name: organizations.name, slug: organizations.slug })
-    .from(organizations)
-    .where(eq(organizations.ownerId, userId))
-    .orderBy(asc(organizations.name))
-    .limit(500);
-}
-
 export interface OrgMemberDetail {
   userId: string;
   role: OrgRole;

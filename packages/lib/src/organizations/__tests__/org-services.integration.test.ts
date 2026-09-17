@@ -21,7 +21,6 @@ import { organizations, orgInvitations, orgMembers } from '@pagespace/db/schema/
 import {
   countOrgSeats,
   createOrganization,
-  findOrganizationsOwnedBy,
   listOrganizationsForUser,
 } from '../repository';
 import { changeMemberRole, removeMember, transferOwnership } from '../membership';
@@ -173,11 +172,6 @@ describe('org services (real Postgres)', () => {
       const owners = await ownerRows(org.id);
       expect(owners).toHaveLength(1);
       expect(owners[0].userId).toBe(await orgOwnerId(org.id));
-    });
-
-    it('ORG-6 (partial) findOrganizationsOwnedBy lists the orgs that block the Owner account delete', async () => {
-      const { jono, org } = await seedNorthwind();
-      expect((await findOrganizationsOwnedBy(jono.id)).map((o) => o.id)).toEqual([org.id]);
     });
   });
 

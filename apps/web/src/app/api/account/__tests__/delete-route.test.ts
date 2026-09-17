@@ -10,6 +10,7 @@ vi.mock('@pagespace/lib/repositories/account-repository', () => ({
   accountRepository: {
     findById: vi.fn(),
     getOwnedDrives: vi.fn(),
+    getOwnedOrganizationNames: vi.fn(),
     getDriveMemberCount: vi.fn(),
   },
 }));
@@ -23,8 +24,6 @@ vi.mock('@pagespace/lib/repositories/data-subject-request-repository', () => ({
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ audit: vi.fn(), auditRequest: vi.fn() }));
 
 vi.mock('@/lib/erasure/request-erasure', () => ({ lodgeAndEnqueueErasure: vi.fn() }));
-
-vi.mock('@pagespace/lib/organizations/repository', () => ({ findOrganizationsOwnedBy: vi.fn() }));
 
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
@@ -41,7 +40,6 @@ import { accountRepository } from '@pagespace/lib/repositories/account-repositor
 import { dataSubjectRequestRepository } from '@pagespace/lib/repositories/data-subject-request-repository';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { lodgeAndEnqueueErasure } from '@/lib/erasure/request-erasure';
-import { findOrganizationsOwnedBy } from '@pagespace/lib/organizations/repository';
 
 const mockAccountRepo = vi.mocked(accountRepository);
 const mockDsrRepo = vi.mocked(dataSubjectRequestRepository);
@@ -80,7 +78,7 @@ describe('DELETE /api/account (async erasure)', () => {
       stripeCustomerId: null,
     });
     mockAccountRepo.getOwnedDrives.mockResolvedValue([]);
-    vi.mocked(findOrganizationsOwnedBy).mockResolvedValue([]);
+    mockAccountRepo.getOwnedOrganizationNames.mockResolvedValue([]);
     mockDsrRepo.findActiveErasureForUser.mockResolvedValue(null);
     vi.mocked(lodgeAndEnqueueErasure).mockResolvedValue({
       requestId: 'dsr_1',
@@ -140,19 +138,6 @@ describe('DELETE /api/account (async erasure)', () => {
       expect(lodgeAndEnqueueErasure).toHaveBeenCalled();
     });
 
-    it('ORG-6 an Owner cannot delete their account while owning an org', async () => {
-      vi.mocked(findOrganizationsOwnedBy).mockResolvedValue([
-        { id: 'org_northwind', name: 'Northwind Labs', slug: 'northwind' },
-      ]);
-      const res = await DELETE(deleteReq(mockUserEmail));
-      const body = await res.json();
-      expect(res.status).toBe(400);
-      expect(body.error).toBe('Transfer ownership of your organizations or delete them before deleting your account');
-      expect(body.ownedOrganizations).toEqual([{ id: 'org_northwind', name: 'Northwind Labs', slug: 'northwind' }]);
-      expect(findOrganizationsOwnedBy).toHaveBeenCalledWith(mockUserId);
-      expect(lodgeAndEnqueueErasure).not.toHaveBeenCalled();
-    });
-
     it('given multi-member drives, should block with 400 and NOT queue', async () => {
       mockAccountRepo.getOwnedDrives.mockResolvedValue([{ id: 'd1', name: 'Team Drive' }]);
       mockAccountRepo.getDriveMemberCount.mockResolvedValue(3);
@@ -160,6 +145,16 @@ describe('DELETE /api/account (async erasure)', () => {
       const body = await res.json();
       expect(res.status).toBe(400);
       expect(body.multiMemberDrives).toContain('Team Drive');
+      expect(lodgeAndEnqueueErasure).not.toHaveBeenCalled();
+    });
+
+    it('ORG-6 (partial) given the user owns an organization, should block with 400 and NOT queue', async () => {
+      mockAccountRepo.getOwnedOrganizationNames.mockResolvedValue(['Northwind Labs']);
+      const res = await DELETE(deleteReq(mockUserEmail));
+      const body = await res.json();
+      expect(res.status).toBe(400);
+      expect(body.error).toBe('Transfer ownership of your organizations or delete them before deleting your account');
+      expect(body.ownedOrganizations).toEqual(['Northwind Labs']);
       expect(lodgeAndEnqueueErasure).not.toHaveBeenCalled();
     });
 

@@ -9,7 +9,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { auth: { info: vi.fn(), error: vi.fn() } },
 }));
 vi.mock('@pagespace/lib/repositories/account-repository', () => ({
-  accountRepository: { findById: vi.fn() },
+  accountRepository: { findById: vi.fn(), getOwnedOrganizationNames: vi.fn() },
 }));
 vi.mock('@pagespace/lib/repositories/data-subject-request-repository', () => ({
   dataSubjectRequestRepository: {
@@ -55,10 +55,21 @@ describe('POST /api/admin/gdpr/erasure (force-delete escalation)', () => {
     vi.mocked(accountRepository.findById).mockResolvedValue({
       id: 'u1', email: 'a@b.com', image: null, stripeCustomerId: null,
     });
+    vi.mocked(accountRepository.getOwnedOrganizationNames).mockResolvedValue([]);
     vi.mocked(dataSubjectRequestRepository.findActiveErasureForUser).mockResolvedValue(null);
     vi.mocked(lodgeAndEnqueueErasure).mockResolvedValue({
       requestId: 'dsr_1', jobId: 'job_1', slaDeadline: new Date('2026-03-01T00:00:00Z'),
     });
+  });
+
+  it('ORG-6 (partial) given the subject owns an organization, should refuse with 400 and queue nothing, even with force', async () => {
+    vi.mocked(accountRepository.getOwnedOrganizationNames).mockResolvedValue(['Northwind Labs']);
+    const res = await post(erasurePost, { userId: 'u1', confirmation: 'ERASE u1' });
+    const body = await res.json();
+    expect(res.status).toBe(400);
+    expect(body.ownedOrganizations).toEqual(['Northwind Labs']);
+    expect(lodgeAndEnqueueErasure).not.toHaveBeenCalled();
+    expect(enqueueAccountErasure).not.toHaveBeenCalled();
   });
 
   it('given the wrong confirmation phrase, should refuse with 400', async () => {

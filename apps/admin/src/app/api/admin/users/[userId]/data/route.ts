@@ -52,6 +52,18 @@ export const DELETE = withAdminAuth<DataRouteContext>(
         return Response.json({ error: 'User not found' }, { status: 404 });
       }
 
+      // An org Owner cannot be erased (ORG-6); refuse before deleting anything.
+      const ownedOrganizations = await accountRepository.getOwnedOrganizationNames(userId);
+      if (ownedOrganizations.length > 0) {
+        return Response.json(
+          {
+            error: 'User owns organizations. Transfer organization ownership first.',
+            ownedOrganizations,
+          },
+          { status: 400 }
+        );
+      }
+
       // Atomically check for multi-member drives and delete solo ones
       const { multiMemberDriveNames } = await accountRepository.checkAndDeleteSoloDrives(userId);
       if (multiMemberDriveNames.length > 0) {
