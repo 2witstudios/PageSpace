@@ -164,6 +164,20 @@ describe('GET /api/account/drives-status', () => {
     expect(body.multiMemberDrives).toEqual([]);
   });
 
+  it('O-7 (partial) an org drive the person leads needs no action before account deletion and is not listed', async () => {
+    vi.mocked(db.query.drives.findMany).mockResolvedValue([
+      { ...mockDrive({ id: 'drive_product', name: 'Product' }), orgId: 'org-northwind' },
+    ]);
+    setupSelectMocks(9);
+
+    const response = await GET(new Request('https://example.com/api/account/drives-status'));
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.soloDrives).toEqual([]);
+    expect(body.multiMemberDrives).toEqual([]);
+  });
+
   it('should categorize multi-member drive correctly', async () => {
     vi.mocked(db.query.drives.findMany).mockResolvedValue([
       mockDrive({ id: 'drive_team', name: 'Team Drive' }),

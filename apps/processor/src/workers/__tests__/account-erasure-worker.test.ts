@@ -130,3 +130,28 @@ describe('runAccountErasureJob — resourceTitle PII scrub wiring (#541)', () =>
     expect(callOrder).toEqual(['logActivity', 'anonymizeForUser']);
   });
 });
+
+describe('runAccountErasureJob — org drives the person leads', () => {
+  beforeEach(() => {
+    callOrder.length = 0;
+    vi.clearAllMocks();
+  });
+
+  it('O-7 (partial) a forced erasure deletes the person\'s own drives and never an org drive they lead', async () => {
+    const { accountRepository } = await import('@pagespace/lib/repositories/account-repository');
+    const { dataSubjectRequestRepository } = await import('@pagespace/lib/repositories/data-subject-request-repository');
+    vi.mocked(dataSubjectRequestRepository.findById).mockResolvedValueOnce(
+      { status: 'pending', attempts: 0, forceDelete: true } as never
+    );
+    vi.mocked(accountRepository.getOwnedDrives).mockResolvedValueOnce([
+      { id: 'product', name: 'Product', orgId: 'org-northwind' },
+      { id: 'notes', name: 'Notes', orgId: null },
+    ]);
+    vi.mocked(accountRepository.getDriveMemberCount).mockResolvedValue(9);
+
+    await runAccountErasureJob({ requestId: 'dsr-2', userId: 'user-1' });
+
+    expect(accountRepository.deleteDrive).toHaveBeenCalledWith('notes');
+    expect(accountRepository.deleteDrive).not.toHaveBeenCalledWith('product');
+  });
+});

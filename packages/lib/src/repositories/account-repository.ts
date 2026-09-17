@@ -23,6 +23,8 @@ export interface UserAccount {
 export interface OwnedDrive {
   id: string;
   name: string;
+  /** Set for an org-owned drive the user leads; erasure keeps it (O-7). */
+  orgId: string | null;
 }
 
 export interface DriveMemberCount {
@@ -58,6 +60,7 @@ export const accountRepository = {
       columns: {
         id: true,
         name: true,
+        orgId: true,
       },
     });
   },

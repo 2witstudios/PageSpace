@@ -12,6 +12,13 @@ export interface OwnedDriveWithMembers {
   name: string;
   /** Total members on the drive, owner included. */
   memberCount: number;
+  /**
+   * Set when an org owns the drive and the departing person only leads it (Spec DRV-1).
+   * Such a drive is the org's, not theirs: it is never deleted and never blocks erasure;
+   * its lead is reassigned to the org Owner before the user row goes (O-7). Required, not
+   * optional: a caller that forgot it would silently plan an org drive for deletion.
+   */
+  orgId: string | null;
 }
 
 export interface DriveDispositionPlan {
@@ -24,6 +31,8 @@ export interface DriveDispositionPlan {
   forcedDriveIds: string[];
   /** True when multi-member drives exist and no force escalation was granted. */
   blocked: boolean;
+  /** Org drives the person leads: kept, and handed to the org Owner (O-7). */
+  orgDriveIds: string[];
 }
 
 export interface DriveDispositionOptions {
@@ -36,8 +45,10 @@ export function planDriveDisposition(
   drives: OwnedDriveWithMembers[],
   options: DriveDispositionOptions
 ): DriveDispositionPlan {
-  const solo = drives.filter(isSolo);
-  const multi = drives.filter((d) => !isSolo(d));
+  const personal = drives.filter((d) => !d.orgId);
+  const orgDriveIds = drives.filter((d) => !!d.orgId).map((d) => d.id);
+  const solo = personal.filter(isSolo);
+  const multi = personal.filter((d) => !isSolo(d));
 
   const soloDriveIds = solo.map((d) => d.id);
   const multiMemberDriveIds = multi.map((d) => d.id);
@@ -52,6 +63,7 @@ export function planDriveDisposition(
       drivesToDelete: [],
       forcedDriveIds: [],
       blocked: true,
+      orgDriveIds,
     };
   }
 
@@ -63,5 +75,6 @@ export function planDriveDisposition(
     drivesToDelete: [...soloDriveIds, ...multiMemberDriveIds],
     forcedDriveIds: options.forceDelete ? multiMemberDriveIds : [],
     blocked: false,
+    orgDriveIds,
   };
 }

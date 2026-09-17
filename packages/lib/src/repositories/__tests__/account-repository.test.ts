@@ -95,11 +95,20 @@ describe('accountRepository.getOwnedDrives', () => {
   beforeEach(() => { vi.clearAllMocks(); });
 
   it('returns owned drives', async () => {
-    const drives = [{ id: 'drive-1', name: 'My Drive' }];
+    const drives = [{ id: 'drive-1', name: 'My Drive', orgId: null }];
     vi.mocked(db.query.drives.findMany).mockResolvedValue(drives as never);
 
     const result = await accountRepository.getOwnedDrives('user-1');
     expect(result).toEqual(drives);
+  });
+
+  it('O-7 (partial) selects orgId so erasure can tell an org drive the user leads from their own', async () => {
+    vi.mocked(db.query.drives.findMany).mockResolvedValue([] as never);
+
+    await accountRepository.getOwnedDrives('user-1');
+    expect(vi.mocked(db.query.drives.findMany).mock.calls[0][0]).toMatchObject({
+      columns: { id: true, name: true, orgId: true },
+    });
   });
 
   it('returns empty array when no owned drives', async () => {

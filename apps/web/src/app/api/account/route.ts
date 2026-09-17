@@ -223,6 +223,7 @@ export async function DELETE(req: Request) {
       ownedDrives.map(async (drive) => ({
         id: drive.id,
         name: drive.name,
+        orgId: drive.orgId,
         memberCount: await accountRepository.getDriveMemberCount(drive.id),
       }))
     );

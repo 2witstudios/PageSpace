@@ -57,7 +57,7 @@ describe('isHomeDrive', () => {
 
 describe('homeDriveActionError', () => {
   const homeDrive = { kind: 'HOME' };
-  const actions: HomeDriveAction[] = ['rename', 'trash', 'restore', 'invite', 'share', 'publish', 'transfer'];
+  const actions: HomeDriveAction[] = ['rename', 'trash', 'restore', 'invite', 'share', 'publish', 'transfer', 'org-move'];
 
   const expectedMessages: Record<HomeDriveAction, string> = {
     rename: 'Your Home drive cannot be renamed.',
@@ -67,6 +67,7 @@ describe('homeDriveActionError', () => {
     share: 'Your Home drive is private and cannot be shared.',
     publish: 'Pages in your Home drive cannot be published.',
     transfer: 'Your Home drive cannot be transferred to another user.',
+    'org-move': 'Your Home drive is your own space and cannot be moved into an organization.',
   };
 
   it.each(actions)('returns the canonical message for %s on a Home drive', (action) => {
