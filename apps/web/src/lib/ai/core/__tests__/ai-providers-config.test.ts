@@ -14,6 +14,7 @@ import {
   isValidModel,
   getBackendProvider,
   getDefaultModel,
+  getDefaultModelForTier,
   getModelDisplayName,
   getUserFacingModelName,
   getVisibleProviders,
@@ -237,6 +238,44 @@ describe('ai-providers-config', () => {
 
     it('returns DEFAULT_MODEL for an unknown provider', () => {
       expect(getDefaultModel('unknown-provider')).toBe(DEFAULT_MODEL);
+    });
+  });
+
+  describe('getDefaultModelForTier', () => {
+    it('returns the first tier-accessible model for free users when the catalog default is paid', () => {
+      const defaultModel = getDefaultModel('openai');
+      expect(isModelAllowedForTier(defaultModel, 'free')).toBe(false);
+      const tierDefault = getDefaultModelForTier('openai', 'free');
+      expect(isModelAllowedForTier(tierDefault, 'free')).toBe(true);
+      expect(AI_PROVIDERS.openai.models).toHaveProperty(tierDefault);
+    });
+
+    it('returns the catalog default for paid tiers', () => {
+      expect(getDefaultModelForTier('openai', 'pro')).toBe(getDefaultModel('openai'));
+      expect(getDefaultModelForTier('openai', 'founder')).toBe(getDefaultModel('openai'));
+      expect(getDefaultModelForTier('openai', 'business')).toBe(getDefaultModel('openai'));
+    });
+
+    it('treats an unset tier like free (same semantics as isModelAllowedForTier)', () => {
+      expect(getDefaultModelForTier('openai', undefined)).toBe(getDefaultModelForTier('openai', 'free'));
+    });
+
+    it("returns '' for dynamic-catalog providers so callers skip sending a model", () => {
+      expect(getDefaultModelForTier('ollama', 'free')).toBe('');
+      expect(getDefaultModelForTier('lmstudio', 'pro')).toBe('');
+      expect(getDefaultModelForTier('azure_openai', undefined)).toBe('');
+    });
+
+    it('returns a catalog model of the requested provider for free users', () => {
+      for (const provider of Object.keys(AI_PROVIDERS)) {
+        const model = getDefaultModelForTier(provider, 'free');
+        if (!model) continue; // dynamic-catalog providers
+        expect(isValidModel(provider, model)).toBe(true);
+      }
+    });
+
+    it('falls back to DEFAULT_MODEL for an unknown provider', () => {
+      expect(getDefaultModelForTier('unknown-provider', 'free')).toBe(DEFAULT_MODEL);
     });
   });
 
