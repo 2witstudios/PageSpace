@@ -7,12 +7,15 @@ import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth';
 import { stripe, Stripe } from '@/lib/stripe';
+import { assertMayHoldStripeCustomer } from '@pagespace/lib/billing/stripe-customer-eligibility';
+import type { AccountType } from '@pagespace/lib/auth/agent/account-type';
 
 interface UserForCustomer {
   id: string;
   email: string;
   name: string | null;
   stripeCustomerId: string | null;
+  accountType: AccountType;
 }
 
 /**
@@ -21,8 +24,14 @@ interface UserForCustomer {
  *
  * If the stored stripeCustomerId is invalid (customer was deleted or doesn't exist),
  * this function will create a new customer and update the database.
+ *
+ * Throws AgentStripeCustomerRefusedError for an agent account before any Stripe
+ * call (ADR 0007 Decision 8) — every subscription, top-up, dedicated-hosting and
+ * gift path is built on this helper, so each one refuses an agent here.
  */
 export async function getOrCreateStripeCustomer(user: UserForCustomer): Promise<string> {
+  assertMayHoldStripeCustomer(user);
+
   let customerId = user.stripeCustomerId;
 
   // Verify existing customer still exists in Stripe

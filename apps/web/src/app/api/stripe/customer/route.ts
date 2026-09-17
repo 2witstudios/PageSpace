@@ -6,6 +6,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { stripe } from '@/lib/stripe';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { AGENT_STRIPE_CUSTOMER_REFUSAL } from '@pagespace/lib/billing/stripe-customer-eligibility';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -85,7 +86,7 @@ export async function POST(request: NextRequest) {
     // could never receive an invoice.
     if (user.accountType === 'agent') {
       return NextResponse.json(
-        { error: 'Agent accounts are billed through their owner' },
+        { error: AGENT_STRIPE_CUSTOMER_REFUSAL },
         { status: 403 }
       );
     }

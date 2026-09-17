@@ -382,6 +382,37 @@ describe('Billing Address API', () => {
       expect(body.error).toBe('User not found');
     });
 
+    it('given an agent account with no Stripe customer, should refuse 403 and never create one', async () => {
+      mockSelectWhere.mockResolvedValue([{ ...mockUser({ stripeCustomerId: null }), accountType: 'agent' }]);
+
+      const request = new Request('https://example.com/api/stripe/billing-address', {
+        method: 'PUT',
+        body: JSON.stringify(validAddressBody),
+      }) as unknown as import('next/server').NextRequest;
+
+      const response = await PUT(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.error).toBe('Agent accounts are billed through their owner');
+      expect(mockStripeCustomersCreate).not.toHaveBeenCalled();
+      expect(mockStripeCustomersUpdate).not.toHaveBeenCalled();
+    });
+
+    it('given an agent account that somehow holds a customer id, should refuse 403 and never update it', async () => {
+      mockSelectWhere.mockResolvedValue([{ ...mockUser(), accountType: 'agent' }]);
+
+      const request = new Request('https://example.com/api/stripe/billing-address', {
+        method: 'PUT',
+        body: JSON.stringify(validAddressBody),
+      }) as unknown as import('next/server').NextRequest;
+
+      const response = await PUT(request);
+
+      expect(response.status).toBe(403);
+      expect(mockStripeCustomersUpdate).not.toHaveBeenCalled();
+    });
+
     it('should create Stripe customer when user has none', async () => {
       mockSelectWhere.mockResolvedValue([mockUser({ stripeCustomerId: null })]);
       mockStripeCustomersCreate.mockResolvedValue(mockCustomer({

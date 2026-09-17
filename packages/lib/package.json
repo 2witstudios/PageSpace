@@ -618,6 +618,11 @@
       "import": "./dist/billing/credit-core.js",
       "require": "./dist/billing/credit-core.js"
     },
+    "./billing/stripe-customer-eligibility": {
+      "types": "./dist/billing/stripe-customer-eligibility.d.ts",
+      "import": "./dist/billing/stripe-customer-eligibility.js",
+      "require": "./dist/billing/stripe-customer-eligibility.js"
+    },
     "./billing/credit-consume": {
       "types": "./dist/billing/credit-consume.d.ts",
       "import": "./dist/billing/credit-consume.js",
