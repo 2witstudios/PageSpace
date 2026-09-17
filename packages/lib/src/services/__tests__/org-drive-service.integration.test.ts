@@ -126,6 +126,7 @@ describe('moveDriveToOrg', () => {
 
     expect(result).toMatchObject({
       ok: true,
+      orgId: northwind,
       storageReattribution: { status: 'deferred', leafId: STORAGE_REATTRIBUTION_LEAF_ID },
     });
     const after = await readDrive(driveId);
@@ -228,6 +229,7 @@ describe('moveDriveOutOfOrg', () => {
 
     expect(result).toMatchObject({
       ok: true,
+      orgId: northwind,
       storageReattribution: { status: 'deferred', leafId: STORAGE_REATTRIBUTION_LEAF_ID },
     });
     const after = await readDrive(driveId);

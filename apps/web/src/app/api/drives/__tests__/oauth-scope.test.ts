@@ -21,6 +21,15 @@ vi.mock('@pagespace/lib/services/drive-service', () => ({
   listAccessibleDrives: vi.fn(),
   createDrive: vi.fn(),
 }));
+vi.mock('@pagespace/lib/services/org-drive-service', () => ({
+  createOrgDrive: vi.fn(),
+}));
+vi.mock('@pagespace/lib/services/org-drive-service-deps', () => ({
+  orgDriveServiceDeps: {},
+}));
+vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({
+  ORGS_ENABLED: false,
+}));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: vi.fn(),
   auditRequest: vi.fn(),

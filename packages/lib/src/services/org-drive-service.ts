@@ -68,7 +68,8 @@ type DriveRow = typeof drives.$inferSelect;
 export type DriveNotFound = { ok: false; code: 'DRIVE_NOT_FOUND'; status: 404; message: string };
 
 export type MoveDriveResult =
-  | { ok: true; drive: DriveRow; storageReattribution: StorageReattribution }
+  /** `orgId` is the org the drive moved into, or out of. */
+  | { ok: true; drive: DriveRow; orgId: string; storageReattribution: StorageReattribution }
   | OrgDriveRefusal
   | DriveNotFound;
 
@@ -157,7 +158,7 @@ export async function moveDriveToOrg(
   if (!outcome.ok) return outcome;
   const { publish, ...moved } = outcome;
   await publish();
-  return { ...moved, storageReattribution: deferStorageReattribution(driveId, 'into-org', input.orgId) };
+  return { ...moved, orgId: input.orgId, storageReattribution: deferStorageReattribution(driveId, 'into-org', input.orgId) };
 }
 
 export async function moveDriveOutOfOrg(
