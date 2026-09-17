@@ -7,6 +7,10 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Report and block people** — a direct message conversation now has a menu to report the other
+  person (the report goes to the PageSpace team with what happened) or block them, and Connections
+  has a Block action plus a Blocked list to unblock. A block stops direct messages in both
+  directions, including in a conversation that already exists.
 - **Run shell commands in an agent workspace from the CLI and SDK** — a workspace's sandbox was
   only reachable through an agent in chat. `pagespace workspaces exec <workspaceId> -- <command>`
   (and `workspaces.exec` in the SDK and over `pagespace mcp`) now runs a command there with an

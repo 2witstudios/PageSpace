@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useRef, useCallback, Fragment } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
 import { useDraft } from '@/hooks/useDraft';
 import { buildDraftKey } from '@/lib/draft/draft';
@@ -42,6 +42,7 @@ import { formatDistanceToNow } from 'date-fns';
 import { isFirstInGroup, formatMessageDate } from '@/lib/messages/grouping';
 import { MessageDateSeparator } from '@/components/messages/MessageDateSeparator';
 import { cn } from '@/lib/utils';
+import { UserSafetyMenu } from '@/components/moderation/UserSafetyMenu';
 
 interface MessageAttachmentBearing {
   conversationId?: string;
@@ -120,6 +121,7 @@ interface DmConversation {
 
 export default function InboxDMPage() {
   const params = useParams();
+  const router = useRouter();
   const conversationId = params.conversationId as string;
   const { user } = useAuth();
   const [messages, setMessages] = useState<Message[]>([]);
@@ -613,12 +615,18 @@ export default function InboxDMPage() {
             <AvatarImage src={otherUser.image || otherUser.avatarUrl || ''} />
             <AvatarFallback>{displayName.charAt(0).toUpperCase()}</AvatarFallback>
           </Avatar>
-          <div>
+          <div className="min-w-0 flex-1">
             <h2 className="font-semibold">{displayName}</h2>
             {otherUser.username && (
               <p className="text-sm text-muted-foreground">@{otherUser.username}</p>
             )}
           </div>
+          <UserSafetyMenu
+            userId={otherUser.id}
+            displayName={displayName}
+            conversationId={conversationId}
+            onBlocked={() => router.push('/dashboard/dms')}
+          />
         </div>
       </div>
 
