@@ -204,7 +204,7 @@ export default function PrivacyPolicy() {
           <section className="mb-8">
             <h2 className="text-2xl font-semibold mb-4">12. Children&#39;s Privacy</h2>
             <p className="mb-4">
-              PageSpace is not intended for children under 13. We do not knowingly collect personal information from children under 13. If you believe a child has provided personal information, please contact us.
+              PageSpace is not intended for anyone under 16, and you must be at least 16 to create an account. We do not knowingly collect personal information from anyone under 16. If you believe someone under 16 has provided personal information, please contact us and we will delete it.
             </p>
           </section>
 

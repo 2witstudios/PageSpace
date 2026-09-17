@@ -48,11 +48,13 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>PageSpace uses your camera when you attach a photo or scan a document.</string>
+	<string>PageSpace uses your camera only when you choose to take a photo to attach — for example, snapping a whiteboard to add it to a page or send it in an AI chat message.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>PageSpace uses your microphone for speech-to-text in AI chat.</string>
+	<string>PageSpace uses your microphone for speech-to-text — for example, dictating a message to the AI assistant instead of typing it.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>PageSpace uses speech recognition to turn your voice into text — for example, dictating a message to the AI assistant instead of typing it.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>PageSpace needs access to your photos to upload images.</string>
+	<string>PageSpace uses your photo library only to upload images you select — for example, adding a screenshot to a document or an AI chat message.</string>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>

@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useConsentStore } from '@/stores/useConsentStore';
 import { CookieBanner } from '@/components/consent/CookieBanner';
+import { isCapacitorApp } from '@/lib/capacitor-bridge';
 
 /**
  * Hydrates the consent store from the cookie on mount and renders the cookie banner
@@ -21,6 +22,10 @@ function ConsentProvider() {
 
   // Avoid a hydration-mismatch flash: only decide visibility after reading the cookie.
   if (!hydrated || !showBanner) return null;
+
+  // Native apps never show the banner: App Review reads a cookie prompt as tracking.
+  // Analytics is refused there at the tracker's own gate, whatever consent is stored.
+  if (isCapacitorApp()) return null;
 
   return <CookieBanner />;
 }
