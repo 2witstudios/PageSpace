@@ -16,6 +16,8 @@ import { Badge } from "@/components/ui/badge";
 import { patch, post, del, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useAuthStore } from "@/stores/useAuthStore";
 import { DeleteAccountDialog } from "@/components/dialogs/DeleteAccountDialog";
+import type { AppleSignInRevocation } from "@/components/account/SignInWithAppleDeletionNotice";
+import { postDeletionDestination } from "@/lib/account/post-deletion-destination";
 import { DriveOwnershipDialog } from "@/components/dialogs/DriveOwnershipDialog";
 import { ImageCropperDialog } from "@/components/dialogs/ImageCropperDialog";
 import { DeviceList } from "@/components/devices/DeviceList";
@@ -78,6 +80,7 @@ export default function AccountPage() {
   const [isOwnershipDialogOpen, setIsOwnershipDialogOpen] = useState(false);
   const [multiMemberDrives, setMultiMemberDrives] = useState<MultiMemberDrive[]>([]);
   const [soloDrivesCount, setSoloDrivesCount] = useState(0);
+  const [appleSignInRevocation, setAppleSignInRevocation] = useState<AppleSignInRevocation | undefined>(undefined);
 
   // Data export state
   const [isExporting, setIsExporting] = useState(false);
@@ -303,6 +306,21 @@ export default function AccountPage() {
   };
 
   const handleInitiateAccountDeletion = async () => {
+    // Sign in with Apple status for the dialog's notice (Guideline 5.1.1(v)).
+    // Best-effort: it must never stand in the way of deleting the account.
+    // Cleared first so a reopened dialog never shows the previous answer.
+    setAppleSignInRevocation(undefined);
+    void fetchWithAuth("/api/account/apple-sign-in")
+      .then(async (response) => {
+        if (!response.ok) {
+          setAppleSignInRevocation(undefined);
+          return;
+        }
+        const status = (await response.json()) as { revocation?: AppleSignInRevocation };
+        setAppleSignInRevocation(status.revocation);
+      })
+      .catch(() => setAppleSignInRevocation(undefined));
+
     try {
       // Fetch drives status
       const response = await fetchWithAuth("/api/account/drives-status");
@@ -336,20 +354,20 @@ export default function AccountPage() {
   const handleDeleteAccount = async (emailConfirmation: string) => {
     setIsDeletingAccount(true);
     try {
-      await del("/api/account", { emailConfirmation });
+      const result = await del<{ appleSignIn?: string }>("/api/account", { emailConfirmation });
 
       // Tear down the session before leaving: the account is gone, so the persisted
       // auth store and the token-refresh poller must not survive the navigation.
       useAuthStore.getState().endSession();
 
-      // Deliberately a HARD navigation, unlike the other in-app navs this branch
-      // converted to the router. `/` is not a route of this app at all — it is the
-      // marketing app behind the proxy — so router.replace('/') would fetch an RSC
-      // payload for it through middleware, find no session (we just deleted it) and
-      // bounce the user to /auth/signin instead of home. The iOS shell handles this
-      // one correctly: pagespace.ai is in server.allowNavigation, so it loads in-app.
+      // Deliberately a HARD navigation, so nothing from the ended session (stores,
+      // SWR caches, the refresh poller) survives into the next page. The target is
+      // the public in-app /auth/account-deleted page, never `/`: that is the
+      // marketing site, which inside the iOS shell would put its pricing nav on the
+      // path App Review walks (Guideline 3.1.1). An Apple user PageSpace could not
+      // disconnect also sees the "Stop Using Sign in with Apple" steps there (TN3194).
       setTimeout(() => {
-        window.location.href = "/";
+        window.location.href = postDeletionDestination(result?.appleSignIn);
       }, 1000);
     } catch (error) {
       console.error("Account deletion error:", error);
@@ -764,6 +782,7 @@ export default function AccountPage() {
         userEmail={user.email || ""}
         isDeleting={isDeletingAccount}
         soloDrivesCount={soloDrivesCount}
+        appleSignInRevocation={appleSignInRevocation}
       />
 
       {/* Revoke All Devices Dialog */}

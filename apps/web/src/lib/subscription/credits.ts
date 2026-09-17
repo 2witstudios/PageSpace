@@ -123,3 +123,42 @@ export function creditsCellPhrase(tier: SubscriptionTier, cents: number): string
 export const CREDIT_PACK_LIST: CreditPack[] = Object.values(CREDIT_PACKS).sort(
   (a, b) => a.cents - b.cents,
 );
+
+/**
+ * Credit-balance explanations for the Usage card and the header tooltip.
+ *
+ * Where billing is hidden (the iOS app, Guideline 3.1.1) the copy states the
+ * balance and when it renews, never how to buy more: no top-up, no upgrade.
+ */
+export function creditBalanceCopy({ isFree, showBilling }: { isFree: boolean; showBilling: boolean }): {
+  description: string;
+  inDebt: string;
+  overage: string;
+} {
+  if (!showBilling) {
+    return isFree
+      ? {
+          description: 'Credits power AI features. Your starter credits are a one-time grant.',
+          inDebt: 'Your balance is below zero, so AI features are paused.',
+          overage: 'Your balance is below zero.',
+        }
+      : {
+          description: 'Credits power AI features. Your monthly allowance renews each billing period.',
+          inDebt: 'Your balance is below zero until your next renewal.',
+          overage: 'Overage clears at your next renewal.',
+        };
+  }
+  return isFree
+    ? {
+        description:
+          'Credits power AI features. Your starter credits are a one-time grant; buy top-up credits (they never expire) or upgrade for a monthly allowance.',
+        inDebt: 'In the red — add credits to keep using AI.',
+        overage: 'Overage clears with a top-up',
+      }
+    : {
+        description:
+          'Credits power AI features. Your monthly allowance renews each billing period; purchased top-up credits never expire.',
+        inDebt: 'In the red — add credits to keep using AI (or it clears at your next renewal).',
+        overage: 'Overage clears at your next renewal or with a top-up',
+      };
+}

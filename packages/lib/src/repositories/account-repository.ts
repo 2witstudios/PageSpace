@@ -18,6 +18,8 @@ export interface UserAccount {
   email: string;
   image: string | null;
   stripeCustomerId: string | null;
+  /** Set when the account has ever signed in with Apple. */
+  appleId: string | null;
 }
 
 export interface OwnedDrive {
@@ -42,6 +44,7 @@ export const accountRepository = {
         email: true,
         image: true,
         stripeCustomerId: true,
+        appleId: true,
       },
     });
 

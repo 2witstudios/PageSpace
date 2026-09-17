@@ -2066,6 +2066,13 @@
       "when": 1789443229156,
       "tag": "0294_agent_account_grant_nonces",
       "breakpoints": true
+    },
+    {
+      "idx": 295,
+      "version": "7",
+      "when": 1789647482376,
+      "tag": "0295_apple_sign_in_tokens",
+      "breakpoints": true
     }
   ]
 }

@@ -2,6 +2,7 @@ import { sessionService } from '@pagespace/lib/auth/session-service';
 import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
 import { SESSION_DURATION_MS } from '@pagespace/lib/auth/constants';
 import { verifyAppleIdToken } from '@pagespace/lib/auth/oauth-utils';
+import { captureAppleRefreshToken } from '@pagespace/lib/auth/apple/capture-apple-refresh-token';
 import { createId } from '@paralleldrive/cuid2';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -27,6 +28,9 @@ import {
 
 const nativeAuthSchema = z.object({
   idToken: z.string().min(1, 'ID token is required'),
+  // Apple's one-time authorization code (TN3194), exchanged server-side for a
+  // revocable refresh token. Optional: older clients send only the id token.
+  authorizationCode: z.string().min(1).max(2048).optional(),
   platform: z.enum(['ios', 'android']),
   deviceId: z.string().min(1, 'Device ID is required'),
   deviceName: z.string().optional(),
@@ -76,7 +80,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const { idToken, platform, deviceId, deviceName, givenName, familyName, inviteToken, returnUrl: rawReturnUrl } = validation.data;
+    const { idToken, authorizationCode, platform, deviceId, deviceName, givenName, familyName, inviteToken, returnUrl: rawReturnUrl } = validation.data;
     const returnUrl = rawReturnUrl && isSafeReturnUrl(rawReturnUrl) ? rawReturnUrl : undefined;
 
     // Validate required environment variables
@@ -267,7 +271,7 @@ export async function POST(req: Request) {
     const headers = new Headers();
     appendSessionCookie(headers, sessionToken);
 
-    return Response.json({
+    const response = Response.json({
       sessionToken,
       csrfToken,
       deviceToken,
@@ -293,6 +297,29 @@ export async function POST(req: Request) {
         'Set-Cookie': headers.get('Set-Cookie') || '',
       },
     });
+
+    // TN3194: keep a revocable refresh token so account deletion can revoke the
+    // Apple authorization. Deliberately NOT awaited — sign-in latency must never
+    // depend on Apple, and a failed exchange must never fail a sign-in.
+    // iOS only: Android has no native Sign in with Apple — its code comes from
+    // Apple's web flow and can only be exchanged with that flow's redirect_uri,
+    // which this route does not have. Android users get the manual steps.
+    const appleClientId = verificationResult.audience;
+    if (platform === 'ios' && authorizationCode && appleClientId) {
+      void captureAppleRefreshToken({
+        userId: user.id,
+        code: authorizationCode,
+        clientId: appleClientId,
+        expectedSub: appleId,
+      }).catch((error: unknown) => {
+        loggers.auth.warn('Apple refresh token capture threw', {
+          userId: user.id,
+          reason: error instanceof Error ? error.name : 'unknown_error',
+        });
+      });
+    }
+
+    return response;
   } catch (error) {
     loggers.auth.error('Native Apple auth error', error as Error, { clientIP });
     auditRequest(req, {

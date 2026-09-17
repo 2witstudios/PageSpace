@@ -7,6 +7,21 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Deleting your account disconnects Sign in with Apple** — if you sign in with Apple, PageSpace
+  now keeps a revocable Apple token and revokes it when you delete your account, so PageSpace no
+  longer stays listed under your Apple Account's Sign in with Apple apps. If PageSpace has no token
+  for you (you last signed in before this change, or Apple could not be reached), the delete dialog
+  and the page after deletion show how to stop using Sign in with Apple for PageSpace yourself.
+  Stopping Sign in with Apple for PageSpace from your Apple Account now also signs you out of
+  PageSpace everywhere.
+- **The iOS app asks before AI features share your content** — the first time you send an AI
+  message or start a voice call in the app, it explains that your message, attachments and the page
+  content you include go to the third-party AI provider for your model, and only sends once you
+  agree. It asks once per device.
+- **Report and block people** — a direct message conversation now has a menu to report the other
+  person (the report goes to the PageSpace team with what happened) or block them, and Connections
+  has a Block action plus a Blocked list to unblock. A block stops direct messages in both
+  directions, including in a conversation that already exists.
 - **The + button in a drive now matches what you can actually do** — a plain member of a drive,
   who could always create pages through the command palette or the API, saw a lock on the +
   button and could not click it. The button now reflects the server's effective create permission:
@@ -501,6 +516,24 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Changed
 
+- **Paid-feature prompts in the iOS app no longer send you to a purchase page** — the locked Memory
+  automation, automatic backups and custom subdomain settings linked to the plan page, which the
+  iOS app cannot sell. They now say the feature is available on paid plans; on the web the upgrade
+  links are unchanged. Out-of-credits and paid-model messages no longer tell you to buy or upgrade in
+  their text (the web still shows its Buy credits button beside them), and the Privacy & Cookies
+  settings entry is hidden in the native app, matching the cookie banner. The native app also no
+  longer sends usage analytics, even if analytics consent was saved in an earlier version.
+- **iOS app: legal pages, integrations and privacy tightened for App Review** — Settings now has
+  Privacy Policy and Terms of Service entries on every platform, and in the iOS app those pages (and
+  the Terms/Privacy links on sign-in and invite screens) open in a browser sheet instead of loading
+  the marketing site inside the app. Connecting Google Calendar or another integration from the iOS
+  app opens the sign-in screen in a browser sheet, where it can finish, instead of an error page
+  with no way back. The iOS app no longer shows buy, top-up or upgrade wording on credit balances,
+  storage and domain limits, or the image generator, and never offers the published-app always-on
+  checkout. The iOS app records no session replays. The Terms now set a minimum age of 16 (matching
+  sign-up) and an acceptable-use policy with zero tolerance for objectionable content and abusive
+  users; the privacy policy uses the same minimum age, and the subprocessors page discloses web
+  session replay.
 - **The header now says "Home", and the drive name next to it opens a proper drive picker** —
   the way back out of a drive used to be a small house icon followed by a `/`, and nothing on
   screen said where it went, so it was easy to miss entirely. It now reads **Home** in words, next

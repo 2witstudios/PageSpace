@@ -5,9 +5,12 @@ import { useRouter } from "next/navigation";
 import { useMCP } from "@/hooks/useMCP";
 import { useAuth } from "@/hooks/useAuth";
 import { useBillingVisibility } from "@/hooks/useBillingVisibility";
+import { useCapacitor } from "@/hooks/useCapacitor";
 import { Button } from "@/components/ui/button";
-import { User, Plug2, Key, ArrowLeft, CreditCard, Bell, Shield, Keyboard, Sparkles, Eye, Cable, Calendar, Scale, HardDrive, SlashSquare, Coins, Cookie } from "lucide-react";
+import { User, Plug2, Key, ArrowLeft, CreditCard, Bell, Shield, Keyboard, Sparkles, Eye, Cable, Calendar, Scale, HardDrive, SlashSquare, Coins, Cookie, FileText, Lock } from "lucide-react";
 import { SettingsRow, type SettingsItem } from "./SettingsRow";
+import { MarketingLink } from "@/components/ui/MarketingLink";
+import { filterSettingsItems } from "./settings-visibility";
 
 const ADMIN_APP_URL = process.env.NEXT_PUBLIC_ADMIN_APP_URL || 'http://localhost:3005';
 
@@ -20,15 +23,14 @@ export default function SettingsPage() {
   const router = useRouter();
   const mcp = useMCP();
   const { user } = useAuth();
-  const { hideBilling } = useBillingVisibility();
+  const { showBilling } = useBillingVisibility();
   const isDesktop = mcp.isDesktop;
   const isAdmin = user?.role === 'admin';
 
-  const filterItems = (items: SettingsItem[]) => items.filter((item) => {
-    if (item.desktopOnly && !isDesktop) return false;
-    if (item.mobileHidden && hideBilling) return false;
-    return true;
-  });
+  const { isNative } = useCapacitor();
+
+  const filterItems = (items: SettingsItem[]) =>
+    filterSettingsItems(items, { isDesktop, showBilling, isNative });
 
   const settingsSections: SettingsSection[] = [
     {
@@ -150,11 +152,29 @@ export default function SettingsPage() {
       title: "Legal",
       items: filterItems([
         {
+          title: "Privacy Policy",
+          description: "How PageSpace collects and uses your data",
+          icon: Lock,
+          href: "/privacy",
+          available: true,
+          marketing: true,
+        },
+        {
+          title: "Terms of Service",
+          description: "The terms that govern your use of PageSpace",
+          icon: FileText,
+          href: "/terms",
+          available: true,
+          marketing: true,
+        },
+        {
           title: "Privacy & Cookies",
           description: "Review or withdraw cookie consent",
           icon: Cookie,
           href: "/settings/privacy",
           available: true,
+          // Same reason the cookie banner is hidden there: App Review reads a cookie prompt as tracking.
+          nativeHidden: true,
         },
         {
           title: "Open-source licenses",
@@ -204,7 +224,11 @@ export default function SettingsPage() {
             <div className="rounded-lg border bg-card overflow-hidden">
               {section.items.map((item, index) =>
                 item.available ? (
-                  item.href.startsWith('http') ? (
+                  item.marketing ? (
+                    <MarketingLink key={item.href} href={item.href}>
+                      <SettingsRow item={item} index={index} />
+                    </MarketingLink>
+                  ) : item.href.startsWith('http') ? (
                     <a key={item.href} href={item.href} target="_blank" rel="noopener noreferrer">
                       <SettingsRow item={item} index={index} />
                     </a>

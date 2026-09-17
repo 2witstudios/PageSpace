@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { MarketingLink } from '@/components/ui/MarketingLink';
 import { AuthShell } from '@/components/auth/AuthShell';
 import { Button } from '@/components/ui/button';
 import { resolveInviteContext } from '@/lib/auth/invite-resolver';
@@ -66,9 +67,9 @@ export default async function InvitePage({ params }: InvitePageProps) {
           <div className="rounded-lg border border-gray-200 bg-white/60 p-4 text-sm text-gray-700 dark:border-gray-700 dark:bg-gray-800/40 dark:text-gray-300">
             <p>
               By continuing, you agree to PageSpace&apos;s{' '}
-              <Link href="/terms" className="underline hover:text-foreground">Terms</Link>
+              <MarketingLink href="/terms" className="underline hover:text-foreground">Terms</MarketingLink>
               {' '}and{' '}
-              <Link href="/privacy" className="underline hover:text-foreground">Privacy Policy</Link>.
+              <MarketingLink href="/privacy" className="underline hover:text-foreground">Privacy Policy</MarketingLink>.
             </p>
           </div>
 
@@ -113,9 +114,9 @@ export default async function InvitePage({ params }: InvitePageProps) {
           <div className="rounded-lg border border-gray-200 bg-white/60 p-4 text-sm text-gray-700 dark:border-gray-700 dark:bg-gray-800/40 dark:text-gray-300">
             <p>
               By continuing, you agree to PageSpace&apos;s{' '}
-              <Link href="/terms" className="underline hover:text-foreground">Terms</Link>
+              <MarketingLink href="/terms" className="underline hover:text-foreground">Terms</MarketingLink>
               {' '}and{' '}
-              <Link href="/privacy" className="underline hover:text-foreground">Privacy Policy</Link>.
+              <MarketingLink href="/privacy" className="underline hover:text-foreground">Privacy Policy</MarketingLink>.
             </p>
           </div>
 
@@ -156,9 +157,9 @@ export default async function InvitePage({ params }: InvitePageProps) {
         <div className="rounded-lg border border-gray-200 bg-white/60 p-4 text-sm text-gray-700 dark:border-gray-700 dark:bg-gray-800/40 dark:text-gray-300">
           <p>
             By continuing, you agree to PageSpace&apos;s{' '}
-            <Link href="/terms" className="underline hover:text-foreground">Terms</Link>
+            <MarketingLink href="/terms" className="underline hover:text-foreground">Terms</MarketingLink>
             {' '}and{' '}
-            <Link href="/privacy" className="underline hover:text-foreground">Privacy Policy</Link>.
+            <MarketingLink href="/privacy" className="underline hover:text-foreground">Privacy Policy</MarketingLink>.
           </p>
         </div>
 

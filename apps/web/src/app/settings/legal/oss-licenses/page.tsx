@@ -16,7 +16,7 @@ const MPL_ATTRIBUTIONS: Attribution[] = [
   {
     name: "@capgo/capacitor-social-login",
     license: "MPL-2.0",
-    note: "Direct production dependency used in the iOS and Android builds to provide Apple and Google sign-in. Shipped unmodified.",
+    note: "Direct production dependency used in the mobile app builds to provide Apple and Google sign-in. Shipped unmodified.",
     upstream: {
       label: "github.com/Cap-go/capacitor-social-login",
       href: "https://github.com/Cap-go/capacitor-social-login",

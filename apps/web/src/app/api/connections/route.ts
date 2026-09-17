@@ -38,6 +38,7 @@ export async function GET(request: Request) {
         user1Id: connections.user1Id,
         user2Id: connections.user2Id,
         requestedBy: connections.requestedBy,
+        blockedBy: connections.blockedBy,
       })
       .from(connections)
       .where(
