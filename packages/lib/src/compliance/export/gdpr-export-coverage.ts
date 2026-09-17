@@ -412,6 +412,16 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     'Binding rows between mirrored calendar events and drives — meaningless without the mirrored events, which are excluded above.',
   event_attendees:
     'Attendee list of a mirrored calendar event: it is a list of OTHER PEOPLE, which Art 15(4) puts outside the subject\'s access right.',
+  // Organizations & Wallets (Wave B1 schema). `organizations` and `org_members` are
+  // TEMPORARY exclusions under Spec X-2: the Phase 6 GDPR/backups leaf
+  // (yfmlkdchehmberwthwu6g7vt) replaces them with collectors before Wave F.
+  // `org_invitations` is a permanent exclusion on the Art 15(4) boundary.
+  organizations:
+    'Temporary under Spec X-2: removed by the Phase 6 GDPR/backups leaf yfmlkdchehmberwthwu6g7vt before Wave F, which adds the collector for organizations the subject owns; the lane that introduces the ORGS_ENABLED code constant adds a test that fails while this exclusion exists.',
+  org_members:
+    'Temporary under Spec X-2: removed by the Phase 6 GDPR/backups leaf yfmlkdchehmberwthwu6g7vt before Wave F, which adds the collector for the subject\'s own org memberships; the lane that introduces the ORGS_ENABLED code constant adds a test that fails while this exclusion exists.',
+  org_invitations:
+    'An org invitation naming the inviter and the invited address; the counterparty is another person, which is the same Art 15(4) boundary that excludes pending_invites. The invitation carries no content of the subject\'s own beyond an address and a role offered to it.',
 };
 
 /** Every table the registry has a decision for. */

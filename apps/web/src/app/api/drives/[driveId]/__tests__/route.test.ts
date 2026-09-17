@@ -112,6 +112,8 @@ const createRawDriveFixture = (overrides: { id: string; name: string; ownerId?: 
   publishDefaultOgImageUrl: null,
   notFoundPageId: null,
   publishFaviconUrl: null,
+  orgId: null,
+  orgVisibility: 'OPEN' as const,
 });
 
 // Drive with access info fixture

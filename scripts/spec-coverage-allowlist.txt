@@ -24,13 +24,21 @@
 AUD-1
 AUD-2
 AUD-3
+# DRV-1 (org-owned drives; Home drives never can; the human drive lead keeps the Owner role) re-added
+# per reviews 5230157358 and 5230240628 on #2659: the B1 tests prove orgId, the Home CHECK and
+# RESTRICT on org delete, so they are titled "DRV-1 (partial)"; the lead keeping the Owner role
+# through move-in and account deletion is unproven until B5/B6.
 DRV-1
 DRV-2
 DRV-3
-DRV-4
 DRV-5
 DRV-6
 DRV-7
+# DRV-8 (a guest is a drive member not in the org; guests hold no seat, see only the drives they were
+# invited to, and are labeled as guests) re-added per reviews 5230157358 and 5230240628 on #2659:
+# the B1 tests prove only that drive_members.source distinguishes invited rows from org-materialized
+# rows, so they are titled "DRV-8 (partial)"; seat exclusion, visibility and labeling are unproven
+# until B4/B7, Wave C and Wave F.
 DRV-8
 DRV-9
 # MON-3 (the org pool refill: (Business base + extra-seat items) paid × ratio) re-added per review
@@ -38,6 +46,13 @@ DRV-9
 # seam has no production caller and no org pool exists, so nothing is refilled yet. Those tests
 # are titled "MON-3 (partial)"; Phase 3 D1 proves the refill.
 MON-3
+# ORG-1 (name, slug, avatar, one human Owner; ownership is transferable), ORG-2 (Owner/Admin/Member;
+# many orgs per user; a user in no org sees no org UI) and ORG-3 (email invites with expiry, resend,
+# revoke, acceptance for new and existing accounts; a pending invite counts as a seat) re-added per
+# reviews 5230157358 and 5230240628 on #2659: the B1 schema tests prove only the storage shape
+# (fields, the one-OWNER-row cap, unique membership, one open case-insensitive invite), so they are
+# titled "(partial)". Unproven: Owner membership matching ownerId and transfer (B3), the no-org-UI
+# rule (Wave F), and the invite lifecycle plus seat counting (B3, Wave C).
 ORG-1
 ORG-2
 ORG-3

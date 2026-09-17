@@ -104,6 +104,8 @@ const mockDrive = (overrides: { id: string; name: string; ownerId?: string }) =>
   publishDefaultOgImageUrl: null,
   notFoundPageId: null,
   publishFaviconUrl: null,
+  orgId: null,
+  orgVisibility: 'OPEN' as const,
 });
 
 // Helper to create mock drive member
@@ -118,6 +120,7 @@ const mockDriveMember = (overrides: {
   driveId: overrides.driveId,
   role: overrides.role,
   customRoleId: null,
+  source: 'invite' as const,
   invitedBy: null,
   invitedAt: new Date(),
   acceptedAt: new Date(),

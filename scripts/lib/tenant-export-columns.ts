@@ -120,10 +120,14 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
 
   drives: {
     columns: [
-      'id', 'name', 'slug', 'ownerId', 'kind', 'isTrashed', 'trashedAt',
+      'id', 'name', 'slug', 'ownerId', 'kind', 'orgVisibility', 'isTrashed', 'trashedAt',
       'createdAt', 'updatedAt', 'drivePrompt', 'publishSubdomain',
       'publish_default_og_image_url', 'publish_favicon_url',
     ],
+    excluded: {
+      orgId:
+        'References `organizations`, which the bundle does not carry, so a carried value would violate the FK on import. Temporary under Spec X-3: removed by the Phase 6 GDPR/backups leaf yfmlkdchehmberwthwu6g7vt before Wave F, which carries organizations and orgId so a migrated org drive does not arrive as a personal drive; the lane that introduces the ORGS_ENABLED code constant adds a test that fails while this exclusion exists.',
+    },
     /**
      * Both point at `pages`, which is inserted AFTER `drives` (pages.driveId
      * points back the other way, so the two tables are mutually referential
@@ -142,7 +146,7 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
 
   drive_members: {
     columns: [
-      'id', 'driveId', 'userId', 'role', 'customRoleId', 'invitedBy',
+      'id', 'driveId', 'userId', 'role', 'customRoleId', 'source', 'invitedBy',
       'invitedAt', 'acceptedAt', 'lastAccessedAt',
     ],
   },
