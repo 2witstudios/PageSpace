@@ -81,6 +81,7 @@ import type {
 } from './canonical-request';
 import type { ExecutorChannel } from './grant';
 import { lookupOperation } from './lookup-operation';
+import { findRegistryEntryDefects } from './find-registry-entry-defects';
 import { extractBodyResources } from './extract-body-resources';
 import { deriveGitResources } from './derive-git-resources';
 import { sortResourcePairs } from './sort-resource-pairs';
@@ -344,6 +345,10 @@ export const canonicalizeRequest: CanonicalizeRequest = (call): CanonicalizeResu
   // (G1c R5) and, for a relay push, the refs in the git command list (G1c R11) — never the caller's.
   let resources: readonly (readonly [string, string])[] = [];
   if (match !== null) {
+    // The registry-load checks also hold at runtime: a defective entry (shared restriction key,
+    // undeclared audit or restriction slot, malformed template) never projects resources or reaches
+    // the audit allowlist, whether or not a loader ran (CodeRabbit on #2660).
+    if (findRegistryEntryDefects({ registry: [match.entry] }).length > 0) return refuse('malformed');
     // A body-slot operation is read as JSON by exactly one route: a JSON content type, and no query
     // argument that shadows a body slot (a provider that also reads query arguments would act on it).
     if (match.entry.bodySlots.length > 0) {
