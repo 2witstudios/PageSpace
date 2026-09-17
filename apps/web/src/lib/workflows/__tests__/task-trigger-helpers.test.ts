@@ -241,6 +241,7 @@ describe('task-trigger-helpers', () => {
       contextPageIds: [],
       instructionPageId: null,
       timezone: 'UTC',
+      credentialCeiling: null,
     };
 
     it('given a matching completion trigger, should claim it atomically and execute the linked workflow', async () => {
@@ -376,6 +377,7 @@ describe('task-trigger-helpers', () => {
       },
       dueDate: new Date('2026-05-01T00:00:00Z'),
       timezone: 'UTC',
+      credentialCeiling: null,
     };
 
     beforeEach(() => {

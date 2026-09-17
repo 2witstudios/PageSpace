@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { getCredentialCeiling } from '@/lib/auth/credential-ceiling';
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db'
 import { eq, and, desc, asc, inArray, count, isNotNull, ilike } from '@pagespace/db/operators'
@@ -22,7 +23,6 @@ import { isNaiveISODatetime, parseDatetimeInTimezone } from '@/lib/ai/core/times
 import { decryptTaskUserRelations, decryptTaskUserRelationsOne } from '@/lib/tasks/decrypt-task-relations';
 import { escapeLikePattern } from '@pagespace/lib/db/like-pattern';
 import { parseTaskQuerySpec } from './query-spec';
-import { refuseOAuthAgentTrigger } from '@/lib/auth/oauth-agent-trigger-hold';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
@@ -370,10 +370,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     agentTrigger,
   } = body;
 
-  // Agent triggers are held from OAuth applications (pending Phase 2b / [D-15]).
-  const triggerHold = refuseOAuthAgentTrigger(auth, { writesTrigger: agentTrigger !== undefined, firesTrigger: false });
-  if (triggerHold) return triggerHold;
-
   if (!title || typeof title !== 'string' || title.trim().length === 0) {
     return NextResponse.json({ error: 'Title is required' }, { status: 400 });
   }
@@ -595,6 +591,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
         agentTrigger,
         dueDate: parsedDueDate,
         timezone: resolvedTimezone,
+        credentialCeiling: getCredentialCeiling(auth) ?? null,
       });
     }
 

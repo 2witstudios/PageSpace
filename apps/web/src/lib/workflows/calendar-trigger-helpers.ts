@@ -5,6 +5,7 @@ import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers';
 import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
 import { expandOccurrences, type RecurrenceRule } from './recurrence-utils';
 import { validateAgentTrigger, type AgentTriggerPayload } from './agent-trigger-shared';
+import type { CredentialCeiling } from '@pagespace/lib/permissions/credential-ceiling';
 
 const TRIGGER_HORIZON_DAYS = 180;
 
@@ -22,6 +23,13 @@ export interface CreateCalendarTriggerWorkflowParams {
   occurrenceDate?: Date;
   timezone: string;
   agentTrigger: CalendarAgentTriggerInput;
+  /**
+   * The ceiling of the credential writing this trigger (`getCredentialCeiling(auth)`
+   * at a route, `context.credentialCeiling` in a tool), or null for the user
+   * acting as themself. Persisted on the workflow row and re-applied to every
+   * run it fires (see workflow-executor). Required, so no caller can forget it.
+   */
+  credentialCeiling: CredentialCeiling | null;
 }
 
 /**
@@ -34,7 +42,7 @@ export interface CreateCalendarTriggerWorkflowParams {
 export async function createCalendarTriggerWorkflow(
   params: CreateCalendarTriggerWorkflowParams,
 ): Promise<{ workflowId: string; triggerId: string }> {
-  const { tx, driveId, scheduledById, calendarEventId, triggerAt, occurrenceDate, timezone, agentTrigger } = params;
+  const { tx, driveId, scheduledById, calendarEventId, triggerAt, occurrenceDate, timezone, agentTrigger, credentialCeiling } = params;
   const triggerPrompt = agentTrigger.prompt || 'Execute instructions from linked page.';
 
   const [createdWorkflow] = await tx.insert(workflows).values({
@@ -48,6 +56,7 @@ export async function createCalendarTriggerWorkflow(
     triggerType: 'cron',
     timezone,
     isEnabled: true,
+    credentialCeiling,
   }).returning({ id: workflows.id });
 
   const [createdTrigger] = await tx.insert(calendarTriggers).values({
@@ -143,6 +152,13 @@ export interface UpsertCalendarTriggerWorkflowParams {
   triggerAt: Date;
   timezone: string;
   agentTrigger: CalendarAgentTriggerInput;
+  /**
+   * The ceiling of the credential writing this trigger (`getCredentialCeiling(auth)`
+   * at a route, `context.credentialCeiling` in a tool), or null for the user
+   * acting as themself. Persisted on the workflow row and re-applied to every
+   * run it fires (see workflow-executor). Required, so no caller can forget it.
+   */
+  credentialCeiling: CredentialCeiling | null;
   recurrenceRule?: RecurrenceRule | null;
   recurrenceExceptions?: string[];
 }
@@ -183,6 +199,7 @@ export async function upsertCalendarTriggerWorkflowInTx(
       contextPageIds,
       timezone: params.timezone,
       isEnabled: true,
+      credentialCeiling: params.credentialCeiling,
     }).where(eq(workflows.id, workflowId));
   } else {
     const [created] = await tx.insert(workflows).values({
@@ -196,6 +213,7 @@ export async function upsertCalendarTriggerWorkflowInTx(
       triggerType: 'cron',
       timezone: params.timezone,
       isEnabled: true,
+      credentialCeiling: params.credentialCeiling,
     }).returning({ id: workflows.id });
     workflowId = created.id;
   }
@@ -306,19 +324,6 @@ export async function upsertCalendarTriggerWorkflow(
   });
 
   return database.transaction((tx) => upsertCalendarTriggerWorkflowInTx(tx, params));
-}
-
-/** Whether an agent trigger is attached to this calendar event (any occurrence). */
-export async function calendarEventHasAgentTrigger(
-  database: Pick<typeof DbType, 'select'>,
-  calendarEventId: string,
-): Promise<boolean> {
-  const rows = await database
-    .select({ id: calendarTriggers.id })
-    .from(calendarTriggers)
-    .where(eq(calendarTriggers.calendarEventId, calendarEventId))
-    .limit(1);
-  return rows.length > 0;
 }
 
 /**

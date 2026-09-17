@@ -118,6 +118,7 @@ Either way, returns the calendarEventId so you can pass it to delete_calendar_tr
             agentTrigger,
             recurrenceRule: event.recurrenceRule,
             recurrenceExceptions: event.recurrenceExceptions ?? [],
+            credentialCeiling: ctx.credentialCeiling ?? null,
           });
         } catch (err) {
           return { success: false, error: err instanceof Error ? err.message : 'Failed to save trigger' };
@@ -188,6 +189,7 @@ Either way, returns the calendarEventId so you can pass it to delete_calendar_tr
           agentTrigger,
           recurrenceRule: null,
           recurrenceExceptions: [],
+          credentialCeiling: ctx.credentialCeiling ?? null,
         });
 
         await tx.update(calendarEvents).set({
@@ -309,6 +311,7 @@ Calling again with the same taskId + triggerType replaces the existing trigger (
           agentTrigger: { agentPageId, prompt, instructionPageId: instructionPageId ?? undefined, contextPageIds: contextPageIds ?? [], triggerType },
           dueDate: task.dueDate,
           timezone: ctx.timezone ?? 'UTC',
+          credentialCeiling: ctx.credentialCeiling ?? null,
         });
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : 'Failed to save trigger' };

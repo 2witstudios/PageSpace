@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { getCredentialCeiling } from '@/lib/auth/credential-ceiling';
 import { z } from 'zod';
 import { db } from '@pagespace/db/db';
 import { eq, and, desc } from '@pagespace/db/operators';
@@ -7,6 +8,7 @@ import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers';
 import { workflows } from '@pagespace/db/schema/workflows';
 import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrincipalDriveOwnerOrAdmin, type AuthResult } from '@/lib/auth';
+import { isPersonalEventOutOfScope, eventOutOfScopeResponse } from '../../personal-event-scope';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import {
   removeCalendarTrigger,
@@ -14,8 +16,8 @@ import {
 } from '@/lib/workflows/calendar-trigger-helpers';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 
-const SESSION_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
-const SESSION_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const SESSION_READ = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: false };
+const SESSION_WRITE = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
 
 // Same auth shape as PATCH /api/calendar/events/[eventId]: creator OR drive
 // owner/admin. Personal events (no driveId) are creator-only by construction.
@@ -70,6 +72,9 @@ export async function GET(request: Request, context: { params: Promise<{ eventId
   if (!event) {
     return NextResponse.json({ error: 'Event not found' }, { status: 404 });
   }
+
+  // A personal (driveless) event is outside an OAuth application's scope.
+  if (isPersonalEventOutOfScope(auth, event)) return eventOutOfScopeResponse();
 
   if (event.driveId) {
     const scopeError = checkMCPDriveScope(auth, event.driveId);
@@ -158,6 +163,9 @@ export async function PUT(request: Request, context: { params: Promise<{ eventId
     return NextResponse.json({ error: 'Event not found' }, { status: 404 });
   }
 
+  // A personal (driveless) event is outside an OAuth application's scope.
+  if (isPersonalEventOutOfScope(auth, event)) return eventOutOfScopeResponse();
+
   if (event.driveId) {
     const scopeError = checkMCPDriveScope(auth, event.driveId);
     if (scopeError) return scopeError;
@@ -188,6 +196,7 @@ export async function PUT(request: Request, context: { params: Promise<{ eventId
       agentTrigger: parsed.data,
       recurrenceRule: event.recurrenceRule,
       recurrenceExceptions: event.recurrenceExceptions ?? [],
+      credentialCeiling: getCredentialCeiling(auth) ?? null,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to save trigger';
@@ -229,6 +238,9 @@ export async function DELETE(request: Request, context: { params: Promise<{ even
   if (!event) {
     return NextResponse.json({ error: 'Event not found' }, { status: 404 });
   }
+
+  // A personal (driveless) event is outside an OAuth application's scope.
+  if (isPersonalEventOutOfScope(auth, event)) return eventOutOfScopeResponse();
 
   if (event.driveId) {
     const scopeError = checkMCPDriveScope(auth, event.driveId);

@@ -359,7 +359,7 @@ describe('Task triggers API', () => {
       expect(res.status).toBe(403);
     });
 
-    it('requests mcp-compatible auth options, matching the sibling PUT/GET route', async () => {
+    it('requests the same bearer-compatible auth options as the sibling PUT/GET route', async () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId } as never);
       vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({
         id: taskId,
@@ -375,7 +375,7 @@ describe('Task triggers API', () => {
 
       expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
         request,
-        { allow: ['session', 'mcp'], requireCSRF: true },
+        { allow: ['session', 'mcp', 'oauth'], requireCSRF: true },
       );
     });
   });

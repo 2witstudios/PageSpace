@@ -10,7 +10,7 @@ import { taskTriggers } from '@pagespace/db/schema/task-triggers';
 import { recomputeTaskTriggerMetadata } from '@/lib/workflows/task-trigger-helpers';
 import { broadcastTaskEvent } from '@/lib/websocket';
 
-const SESSION_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const SESSION_WRITE = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
 
 const triggerTypeParam = z.enum(['due_date', 'completion']);
 

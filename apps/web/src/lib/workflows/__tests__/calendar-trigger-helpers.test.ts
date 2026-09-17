@@ -101,6 +101,7 @@ describe('createCalendarTriggerWorkflow', () => {
     calendarEventId: 'evt-1',
     triggerAt: new Date('2026-05-01T09:00:00Z'),
     timezone: 'UTC',
+    credentialCeiling: null,
     agentTrigger: {
       agentPageId: 'agent-1',
       prompt: 'Run check',
@@ -138,6 +139,19 @@ describe('createCalendarTriggerWorkflow', () => {
     // calendar_triggers no longer carries a per-fire status column — that
     // state lives on workflow_runs and gets written by the executor.
     expect(trgValues.status).toBeUndefined();
+  });
+
+  it('persists the writing credential\'s ceiling on the workflow row, so its runs re-apply it', async () => {
+    const captured = makeTxMock();
+    const credentialCeiling = { kind: 'oauth' as const, driveScopes: [{ driveId: 'drive-1', role: 'MEMBER' as const, customRoleId: null }], familyId: 'fam-1' };
+
+    await createCalendarTriggerWorkflow({
+      ...baseParams,
+      credentialCeiling,
+      tx: captured.tx as unknown as Parameters<typeof createCalendarTriggerWorkflow>[0]['tx'],
+    });
+
+    expect((captured.insertCalls[0].values as Record<string, unknown>).credentialCeiling).toEqual(credentialCeiling);
   });
 
   it('falls back to a stock prompt when the caller passes none', async () => {
@@ -330,6 +344,7 @@ describe('upsertCalendarTriggerWorkflow', () => {
     calendarEventId: 'evt-1',
     triggerAt: new Date('2026-05-01T09:00:00Z'),
     timezone: 'UTC',
+    credentialCeiling: null,
     agentTrigger: {
       agentPageId: 'agent-1',
       prompt: 'Run check',
