@@ -23,7 +23,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, asc, eq, inArray, isNull, sql } from '@pagespace/db/operators';
+import { and, asc, eq, inArray, sql } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { driveMembers, driveRoles } from '@pagespace/db/schema/members';
 import { orgMembers } from '@pagespace/db/schema/organizations';
@@ -200,21 +200,13 @@ async function applyPlans(tx: Tx, plans: DriveOrgMembershipPlan[]): Promise<void
   for (const ids of chunk(conversions, WRITE_CHUNK)) {
     await tx.update(driveMembers).set({ source: 'invite' }).where(and(inArray(driveMembers.id, ids), eq(driveMembers.source, 'org')));
   }
-  // One statement per row, since each carries its own drive's default role. Repairs and adoptions
-  // are drift, not bulk traffic.
+  // One statement per row, since each carries its own drive's default role. Repairs are drift, not
+  // bulk traffic.
   for (const repair of plans.flatMap((p): OrgRowUpdate[] => p.repairs)) {
     await tx
       .update(driveMembers)
       .set({ customRoleId: repair.customRoleId, acceptedAt: sql`coalesce(${driveMembers.acceptedAt}, (now() at time zone 'utc'))` })
       .where(and(eq(driveMembers.id, repair.rowId), eq(driveMembers.source, 'org')));
-  }
-  // A pending invite grants nothing; adopting it grants exactly the implicit access (MEMBER with the
-  // default role), never the role the unaccepted invite named.
-  for (const adoption of plans.flatMap((p): OrgRowUpdate[] => p.adoptions)) {
-    await tx
-      .update(driveMembers)
-      .set({ source: 'org', role: 'MEMBER', customRoleId: adoption.customRoleId, acceptedAt })
-      .where(and(eq(driveMembers.id, adoption.rowId), eq(driveMembers.source, 'invite'), isNull(driveMembers.acceptedAt)));
   }
 }
 

@@ -39,7 +39,6 @@ const emptyPlan = (driveId = 'drive-product'): DriveOrgMembershipPlan => ({
   deletes: [],
   conversions: [],
   repairs: [],
-  adoptions: [],
 });
 
 describe('planDriveOrgMembership', () => {
@@ -149,7 +148,7 @@ describe('planDriveOrgMembership', () => {
 
     for (const input of transitions) {
       const plan = planDriveOrgMembership(input);
-      const touched = [...plan.inserts, ...plan.deletes, ...plan.conversions, ...plan.repairs, ...plan.adoptions].map((c) => c.userId);
+      const touched = [...plan.inserts, ...plan.deletes, ...plan.conversions, ...plan.repairs].map((c) => c.userId);
       expect(touched).not.toContain('user-chris');
     }
   });
@@ -184,7 +183,6 @@ describe('planDriveOrgMembership', () => {
       { rowId: 'row-drive-product-user-priya', driveId: 'drive-product', userId: 'user-priya', customRoleId: 'role-new' },
     ]);
     expect(plan.inserts).toEqual([]);
-    expect(plan.adoptions).toEqual([]);
   });
 
   it('DRV-5 (partial) repairs an org row that is not accepted', () => {
@@ -197,7 +195,7 @@ describe('planDriveOrgMembership', () => {
     expect(plan.repairs.map((r) => r.userId)).toEqual(['user-priya']);
   });
 
-  it('DRV-5 (partial) adopts an org member\'s pending invite row as an accepted org row on an Open drive', () => {
+  it('DRV-8 (partial) never accepts or rewrites a pending invite row, even an org member\'s on an Open drive', () => {
     const plan = planDriveOrgMembership({
       drive: openDrive({ defaultCustomRoleId: 'role-default' }),
       orgMemberUserIds: ['user-priya'],
@@ -207,10 +205,7 @@ describe('planDriveOrgMembership', () => {
       ],
     });
 
-    expect(plan.adoptions).toEqual([
-      { rowId: 'row-drive-product-user-priya', driveId: 'drive-product', userId: 'user-priya', customRoleId: 'role-default' },
-    ]);
-    expect(plan.inserts).toEqual([]);
+    expect(plan).toEqual(emptyPlan());
   });
 
   it('DRV-8 (partial) leaves pending invite rows alone on a drive that does not materialize', () => {
@@ -266,7 +261,6 @@ describe('summarizeAffectedUsers', () => {
         deletes: [{ rowId: 'r1', driveId: 'drive-product', userId: 'user-lena' }],
         conversions: [],
         repairs: [],
-        adoptions: [],
       },
       {
         driveId: 'drive-design',
@@ -274,7 +268,6 @@ describe('summarizeAffectedUsers', () => {
         deletes: [],
         conversions: [{ rowId: 'r2', driveId: 'drive-design', userId: 'user-tomas' }],
         repairs: [],
-        adoptions: [],
       },
       emptyPlan('drive-engineering'),
     ];
@@ -294,7 +287,6 @@ describe('summarizeAffectedUsers', () => {
         deletes: [],
         conversions: [],
         repairs: [],
-        adoptions: [],
       },
       {
         driveId: 'drive-b',
@@ -302,7 +294,6 @@ describe('summarizeAffectedUsers', () => {
         deletes: [{ rowId: 'r1', driveId: 'drive-b', userId: 'user-priya' }],
         conversions: [],
         repairs: [],
-        adoptions: [],
       },
     ];
 
@@ -311,17 +302,12 @@ describe('summarizeAffectedUsers', () => {
     ]);
   });
 
-  it('X-4 (partial) reports an adoption as added and a role repair as role changed', () => {
+  it('X-4 (partial) reports a role repair as role changed', () => {
     const plans: DriveOrgMembershipPlan[] = [
-      {
-        ...emptyPlan('drive-a'),
-        adoptions: [{ rowId: 'r1', driveId: 'drive-a', userId: 'user-priya', customRoleId: null }],
-        repairs: [{ rowId: 'r2', driveId: 'drive-a', userId: 'user-marcus', customRoleId: 'role-new' }],
-      },
+      { ...emptyPlan('drive-a'), repairs: [{ rowId: 'r2', driveId: 'drive-a', userId: 'user-marcus', customRoleId: 'role-new' }] },
     ];
 
     expect(summarizeAffectedUsers(plans)).toEqual([
-      { userId: 'user-priya', operation: 'member_added', driveIds: ['drive-a'] },
       { userId: 'user-marcus', operation: 'member_role_changed', driveIds: ['drive-a'] },
     ]);
   });

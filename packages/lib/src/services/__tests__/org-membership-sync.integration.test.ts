@@ -93,22 +93,32 @@ describe('org membership sync (integration)', () => {
     expect(broadcasts.map((b) => b.userId).sort()).toEqual([priya.id, marcus.id].sort());
   });
 
-  it('DRV-8 (partial) never touches a guest row through join, leave, visibility change and move-out', async () => {
-    const { chris, priya, org, product } = await northwind();
+  it.each([
+    ['an accepted', new Date()],
+    ['a pending', null],
+  ] as const)('DRV-8 (partial) never touches %s guest invite row when the guest joins the org, leaves it, the drive turns Private and moves out', async (_label, acceptedAt) => {
+    const { chris, org, product } = await northwind();
+    await db.update(driveMembers).set({ role: 'ADMIN', acceptedAt })
+      .where(and(eq(driveMembers.driveId, product.id), eq(driveMembers.userId, chris.id)));
     const { ports } = recordingPorts();
-    const guestBefore = await db.select().from(driveMembers).where(and(eq(driveMembers.driveId, product.id), eq(driveMembers.userId, chris.id)));
+    const guestRow = () => db.select().from(driveMembers).where(and(eq(driveMembers.driveId, product.id), eq(driveMembers.userId, chris.id)));
+    const guestBefore = await guestRow();
 
     await syncOrgMembership(org.id, { ports });
+    await db.insert(orgMembers).values({ orgId: org.id, userId: chris.id });
+    const joined = await syncOrgMemberAccess(org.id, chris.id, { ports });
+    expect(await guestRow()).toEqual(guestBefore);
+    expect(joined.affectedUsers).toEqual([]);
+
+    await db.delete(orgMembers).where(and(eq(orgMembers.orgId, org.id), eq(orgMembers.userId, chris.id)));
     await syncOrgMemberAccess(org.id, chris.id, { ports });
-    await db.delete(orgMembers).where(eq(orgMembers.userId, priya.id));
-    await syncOrgMemberAccess(org.id, priya.id, { ports });
+    expect(await guestRow()).toEqual(guestBefore);
+
     await db.update(drives).set({ orgVisibility: 'PRIVATE' }).where(eq(drives.id, product.id));
     await syncDriveOrgMembership(product.id, { ports });
     await db.update(drives).set({ orgId: null, orgVisibility: 'OPEN' }).where(eq(drives.id, product.id));
     await syncDriveOrgMembership(product.id, { ports, removedOrgRows: 'keepAsInvite' });
-
-    const guestAfter = await db.select().from(driveMembers).where(and(eq(driveMembers.driveId, product.id), eq(driveMembers.userId, chris.id)));
-    expect(guestAfter).toEqual(guestBefore);
+    expect(await guestRow()).toEqual(guestBefore);
   });
 
   it('D-OW-6 adds a joining member to every Open org drive and removes a leaving member, one event per user', async () => {
@@ -183,7 +193,7 @@ describe('org membership sync (integration)', () => {
     expect(rows.some((r) => r.userId === priya.id || r.userId === marcus.id)).toBe(false);
   });
 
-  it('DRV-5 (partial) a full sync moves org rows to a changed default role and adopts an org member\'s pending invite', async () => {
+  it('DRV-5 (partial) a full sync moves org rows to a changed default role and never rewrites an invite row', async () => {
     const { priya, marcus, chris, org, product } = await northwind();
     const [oldRole] = await db.insert(driveRoles).values({ driveId: product.id, name: 'Viewer', isDefault: true, permissions: {} }).returning();
     const [editorRole] = await db.insert(driveRoles).values({ driveId: product.id, name: 'Editor', isDefault: false, permissions: {} }).returning();
@@ -191,7 +201,7 @@ describe('org membership sync (integration)', () => {
     await syncOrgMembership(org.id, { ports });
 
     // Marcus's row becomes a legacy pending invite; Chris (a guest) holds another.
-    await db.update(driveMembers).set({ source: 'invite', acceptedAt: null, role: 'ADMIN', customRoleId: editorRole.id })
+    await db.update(driveMembers).set({ source: 'invite', acceptedAt: null, role: 'ADMIN', customRoleId: oldRole.id })
       .where(and(eq(driveMembers.driveId, product.id), eq(driveMembers.userId, marcus.id)));
     await db.update(driveMembers).set({ acceptedAt: null })
       .where(and(eq(driveMembers.driveId, product.id), eq(driveMembers.userId, chris.id)));
@@ -201,14 +211,10 @@ describe('org membership sync (integration)', () => {
     const result = await syncOrgMembership(org.id, { ports });
     const rows = await rowsOf(product.id);
 
-    const priyaRow = rows.find((r) => r.userId === priya.id);
-    expect(priyaRow).toMatchObject({ source: 'org', customRoleId: editorRole.id });
-    expect(rows.find((r) => r.userId === marcus.id)).toMatchObject({ source: 'org', role: 'MEMBER', customRoleId: editorRole.id });
-    expect(rows.find((r) => r.userId === marcus.id)?.acceptedAt).not.toBeNull();
+    expect(rows.find((r) => r.userId === priya.id)).toMatchObject({ source: 'org', customRoleId: editorRole.id });
+    expect(rows.find((r) => r.userId === marcus.id)).toMatchObject({ source: 'invite', role: 'ADMIN', customRoleId: oldRole.id, acceptedAt: null });
     expect(rows.find((r) => r.userId === chris.id)).toMatchObject({ source: 'invite', acceptedAt: null });
-    expect(result.affectedUsers.map((u) => [u.userId, u.operation]).sort()).toEqual(
-      [[priya.id, 'member_role_changed'], [marcus.id, 'member_added']].sort(),
-    );
+    expect(result.affectedUsers.map((u) => [u.userId, u.operation])).toEqual([[priya.id, 'member_role_changed']]);
 
     const again = await syncOrgMembership(org.id, { ports });
     expect(again.affectedUsers).toEqual([]);
@@ -230,23 +236,24 @@ describe('org membership sync (integration)', () => {
     expect(broadcasts).toHaveLength(2);
   });
 
-  it('D-OW-6 chunks inserts past the bind-parameter limit (1,200 members)', async () => {
+  it('D-OW-6 chunks inserts past the Postgres bind-parameter limit (10,000 members in one statement would bind 70,000 parameters)', async () => {
     const { org, product } = await northwind();
-    const many = await db
-      .insert(users)
-      .values(Array.from({ length: 1200 }, (_, i) => {
-        const id = createId();
-        return { id, name: `Member ${i}`, email: `member-${id}@example.test`, provider: 'email' as const, tokenVersion: 0, role: 'user' as const, updatedAt: new Date() };
-      }))
-      .returning({ id: users.id });
-    for (let i = 0; i < many.length; i += 500) {
-      await db.insert(orgMembers).values(many.slice(i, i + 500).map((u) => ({ orgId: org.id, userId: u.id })));
+    const MEMBERS = 10_000;
+    for (let offset = 0; offset < MEMBERS; offset += 1_000) {
+      const batch = await db
+        .insert(users)
+        .values(Array.from({ length: Math.min(1_000, MEMBERS - offset) }, (_, i) => {
+          const id = createId();
+          return { id, name: `Member ${offset + i}`, email: `member-${id}@example.test`, provider: 'email' as const, tokenVersion: 0, role: 'user' as const, updatedAt: new Date() };
+        }))
+        .returning({ id: users.id });
+      await db.insert(orgMembers).values(batch.map((u) => ({ orgId: org.id, userId: u.id })));
     }
     const { ports } = recordingPorts();
 
     const result = await syncDriveOrgMembership(product.id, { ports });
 
-    expect((await rowsOf(product.id)).filter((r) => r.source === 'org')).toHaveLength(1202);
-    expect(result.affectedUsers).toHaveLength(1202);
-  });
+    expect((await rowsOf(product.id)).filter((r) => r.source === 'org')).toHaveLength(MEMBERS + 2);
+    expect(result.affectedUsers).toHaveLength(MEMBERS + 2);
+  }, 120_000);
 });
