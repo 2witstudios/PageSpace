@@ -6,6 +6,12 @@ import { createId } from '@paralleldrive/cuid2';
 
 // Drive member roles
 export const memberRole = pgEnum('MemberRole', ['OWNER', 'ADMIN', 'MEMBER']);
+// How a drive_members row came to exist (D-OW-6): 'invite' is a person added to the drive
+// directly (including guests, DRV-8); 'org' is a row materialized from org membership and
+// maintained by the org membership sync. Existing rows are all invites.
+export const DRIVE_MEMBER_SOURCES = ['invite', 'org'] as const;
+export const driveMemberSource = pgEnum('DriveMemberSource', DRIVE_MEMBER_SOURCES);
+export type DriveMemberSource = (typeof DRIVE_MEMBER_SOURCES)[number];
 
 // Custom roles for permission templates
 export const driveRoles = pgTable('drive_roles', {
@@ -55,6 +61,7 @@ export const driveMembers = pgTable('drive_members', {
   userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
   role: memberRole('role').default('MEMBER').notNull(),
   customRoleId: text('customRoleId').references(() => driveRoles.id, { onDelete: 'set null' }),
+  source: driveMemberSource('source').default('invite').notNull(),
   invitedBy: text('invitedBy').references(() => users.id, { onDelete: 'set null' }),
   invitedAt: timestamp('invitedAt', { mode: 'date' }).defaultNow().notNull(),
   acceptedAt: timestamp('acceptedAt', { mode: 'date' }),
