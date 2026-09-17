@@ -113,6 +113,30 @@ async function lockOrg(tx: OrgDriveTx, orgId: string): Promise<boolean> {
   return row !== undefined;
 }
 
+const ORG_SLUG_CONSTRAINT = 'drives_org_slug_unique';
+const ORG_SLUG_ATTEMPTS = 5;
+
+/** Drizzle rethrows driver errors with the pg error on `.cause`. */
+function isOrgSlugConflict(error: unknown): boolean {
+  const cause = error instanceof Error ? (error.cause as { code?: string; constraint?: string } | undefined) : undefined;
+  return cause?.code === '23505' && cause.constraint === ORG_SLUG_CONSTRAINT;
+}
+
+/**
+ * Two writers can pick the same free slug inside one org at once; the per-org unique index
+ * admits one and aborts the other's transaction. Re-run the whole transaction, which then
+ * sees the winner's slug and takes the next suffix.
+ */
+async function retryOnOrgSlugConflict<T>(run: () => Promise<T>): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await run();
+    } catch (error) {
+      if (attempt >= ORG_SLUG_ATTEMPTS || !isOrgSlugConflict(error)) throw error;
+    }
+  }
+}
+
 /** A slug free inside the org: org drive slugs are unique per org (D-OW-15). */
 async function freeOrgSlug(tx: OrgDriveTx, orgId: string, base: string): Promise<string> {
   const rows = await tx
@@ -128,7 +152,7 @@ export async function moveDriveToOrg(
   input: { orgId: string; orgVisibility?: OrgDriveVisibility },
   deps: OrgDriveServiceDeps
 ): Promise<MoveDriveResult> {
-  const outcome = await db.transaction(async (tx) => {
+  const outcome = await retryOnOrgSlugConflict(() => db.transaction(async (tx) => {
     const drive = await lockDrive(tx, driveId);
     if (!drive) return driveNotFound();
 
@@ -153,7 +177,7 @@ export async function moveDriveToOrg(
 
     const publish = await deps.syncOrgMembership(tx, { kind: 'move-in', driveId, orgId: input.orgId });
     return { ok: true as const, drive: moved, publish };
-  });
+  }));
 
   if (!outcome.ok) return outcome;
   const { publish, ...moved } = outcome;
@@ -206,7 +230,7 @@ export async function createOrgDrive(
   input: { name: string; orgId: string; orgVisibility?: OrgDriveVisibility },
   deps: OrgDriveServiceDeps
 ): Promise<CreateOrgDriveResult> {
-  const outcome = await db.transaction(async (tx) => {
+  const outcome = await retryOnOrgSlugConflict(() => db.transaction(async (tx) => {
     const orgExists = await lockOrg(tx, input.orgId);
     const actorOrgRole = orgExists ? await deps.getOrgRole(tx, input.orgId, actorId) : null;
     const creationPolicy = orgExists ? await deps.getOrgDriveCreationPolicy(tx, input.orgId) : 'members';
@@ -229,7 +253,7 @@ export async function createOrgDrive(
 
     const publish = await deps.syncOrgMembership(tx, { kind: 'create', driveId: created.id, orgId: input.orgId });
     return { ok: true as const, drive: { ...created, publishSubdomain }, publish };
-  });
+  }));
 
   if (!outcome.ok) return outcome;
   const { publish, ...created } = outcome;

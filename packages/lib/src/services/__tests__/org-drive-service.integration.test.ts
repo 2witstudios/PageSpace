@@ -324,4 +324,17 @@ describe('createOrgDrive', () => {
     if (!first.ok || !second.ok) return;
     expect(second.drive.slug).toBe(`${first.drive.slug}-2`);
   });
+
+  it('DRV-3 (partial) concurrent creates of the same name in one org all succeed with distinct slugs', async () => {
+    const name = `Marketing Site ${run}`;
+    const results = await Promise.all([
+      createOrgDrive(marcus, { name, orgId: northwind }, deps),
+      createOrgDrive(lena, { name, orgId: northwind }, deps),
+      createOrgDrive(priya, { name, orgId: northwind }, deps),
+    ]);
+
+    const slugs = results.map((r) => (r.ok ? r.drive.slug : r.code)).sort();
+    const base = slugs[0];
+    expect(slugs).toEqual([base, `${base}-2`, `${base}-3`]);
+  });
 });
