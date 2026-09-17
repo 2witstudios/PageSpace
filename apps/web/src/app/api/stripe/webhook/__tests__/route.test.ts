@@ -940,7 +940,12 @@ describe('POST /api/stripe/webhook', () => {
 
       const linkIndex = mockUpdateSet.mock.calls.findIndex((c) => (c[0] as { stripeCustomerId?: string }).stripeCustomerId === 'cus_new123');
       expect(linkIndex).toBeGreaterThanOrEqual(0);
-      expect(JSON.stringify(mockUpdateWhere.mock.calls[linkIndex][0])).toContain('"field":"users.accountType","value":"human"');
+      // Structural match only: in CI userEmailMatch is lib dist and returns a real
+      // (circular) drizzle SQL, so the WHERE must never be serialized.
+      expect(mockUpdateWhere.mock.calls[linkIndex][0]).toEqual(expect.objectContaining({
+        type: 'and',
+        conds: expect.arrayContaining([{ field: 'users.accountType', value: 'human', type: 'eq' }]),
+      }));
     });
 
     it('masks customer email in "Linked Stripe customer to user" log', async () => {
