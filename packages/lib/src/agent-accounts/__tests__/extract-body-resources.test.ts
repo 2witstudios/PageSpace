@@ -68,3 +68,26 @@ describe('extractBodyResources (G1c R5)', () => {
     expect(actual).toEqual({ ok: false, reason: 'malformed' });
   });
 });
+
+describe('extractBodyResources — one reading of the body (G1c review MED)', () => {
+  it('given a duplicate key anywhere in the body, should refuse malformed — first-wins and last-wins parsers disagree about it', () => {
+    const bodies = ['{"channel":"C_EVIL","channel":"C_OK"}', '{"channel":"C_OK","meta":{"x":1,"x":2}}', '{"message":{"to":["a@x"],"to":["b@x"]}}'];
+    const actual = bodies.map((body) => extractBodyResources({ slots: [CHANNEL], body: utf8(body) }));
+    expect(actual).toEqual(bodies.map(() => ({ ok: false, reason: 'malformed' })));
+  });
+
+  it('given keys that differ only in case, should refuse malformed — case-insensitive decoders pick either', () => {
+    const actual = extractBodyResources({ slots: [CHANNEL], body: utf8('{"channel":"C_OK","Channel":"C_EVIL"}') });
+    expect(actual).toEqual({ ok: false, reason: 'malformed' });
+  });
+
+  it('given keys that only look alike once unescaped, should compare them unescaped', () => {
+    const actual = extractBodyResources({ slots: [CHANNEL], body: utf8('{"channel":"C_OK","\\u0063hannel":"C_EVIL"}') });
+    expect(actual).toEqual({ ok: false, reason: 'malformed' });
+  });
+
+  it('given distinct keys in different objects, and strings that contain braces, quotes or colons, should still bind normally', () => {
+    const actual = extractBodyResources({ slots: [CHANNEL], body: utf8('{"channel":"C1","text":"a \\"{x}\\": y","blocks":[{"type":"a"},{"type":"b"}]}') });
+    expect(actual).toEqual({ ok: true, resources: [['channel', 'C1']] });
+  });
+});

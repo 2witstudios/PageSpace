@@ -361,6 +361,32 @@ describe('resources from typed body slots and the git protocol request (ADR 0004
     expect(actual).toEqual([['slack.channel', 'C1']]);
   });
 
+  it('given a body-slot operation whose query string names the same argument, should refuse malformed — a provider that reads query arguments would act on the other value (G1c review)', () => {
+    const actual = canonicalize(
+      { channel: 'http-executor', method: 'POST', url: 'https://slack.com/api/chat.postMessage?Channel=C_EVIL', headers: { 'content-type': 'application/json' }, body: utf8('{"channel":"C1"}') },
+      { providerSlug: 'slack', registry: [slack] },
+    );
+    expect(actual).toEqual({ ok: false, reason: 'malformed' });
+  });
+
+  it('given a body-slot operation sent without a JSON content type, should refuse malformed — the provider would not read the body as JSON (G1c review)', () => {
+    const actual = ['text/plain', 'application/x-www-form-urlencoded', null].map((contentType) =>
+      canonicalize(
+        { channel: 'http-executor', method: 'POST', url: 'https://slack.com/api/chat.postMessage', headers: contentType === null ? {} : { 'content-type': contentType }, body: utf8('{"channel":"C1"}') },
+        { providerSlug: 'slack', registry: [slack] },
+      ),
+    );
+    expect(actual).toEqual([{ ok: false, reason: 'malformed' }, { ok: false, reason: 'malformed' }, { ok: false, reason: 'malformed' }]);
+  });
+
+  it('given a body-slot operation with a JSON content type carrying parameters, should bind the channel', () => {
+    const result = canonicalize(
+      { channel: 'http-executor', method: 'POST', url: 'https://slack.com/api/chat.postMessage', headers: { 'content-type': 'application/json; charset=utf-8' }, body: utf8('{"channel":"C1"}') },
+      { providerSlug: 'slack', registry: [slack] },
+    );
+    expect(result.ok ? result.canonical.resources : result).toEqual([['slack.channel', 'C1']]);
+  });
+
   it('given a chat.postMessage body without a channel, should refuse malformed — a declared resource is never silently absent', () => {
     const actual = slackRequest('{"text":"hi"}');
     expect(actual).toEqual({ ok: false, reason: 'malformed' });

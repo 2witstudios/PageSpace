@@ -28,7 +28,7 @@ const REF_NAMES: DerivedResourceRule = { slot: 'ref', source: 'receive_pack_ref_
 const BRANCHES: DerivedResourceRule = { slot: 'branch', source: 'receive_pack_branches' };
 
 describe('deriveGitResources (G1c R11)', () => {
-  it('given a receive-pack updating a branch and a tag, should derive every ref name and only the branch names, rule by rule', () => {
+  it('given a receive-pack updating a branch and a tag, should derive every ref name, and for branches the short name of a branch and the FULL name of anything else — so a branch allowlist can never admit the tag (G1c review)', () => {
     const body = receivePack([`${OID_A} ${OID_B} refs/heads/main`, `${ZERO} ${OID_A} refs/tags/v1`]);
     const actual = deriveGitResources({ method: 'git-receive-pack', rules: [REF_NAMES, BRANCHES], body });
     expect(actual).toEqual({
@@ -37,6 +37,20 @@ describe('deriveGitResources (G1c R11)', () => {
         ['ref', 'refs/heads/main'],
         ['ref', 'refs/tags/v1'],
         ['branch', 'main'],
+        ['branch', 'refs/tags/v1'],
+      ],
+    });
+  });
+
+  it('given a push to HEAD or refs/meta/config alongside an allowed branch, should still derive a branch value for each (never skip a ref)', () => {
+    const body = receivePack([`${OID_A} ${OID_B} refs/heads/feature-x`, `${OID_A} ${OID_B} HEAD`, `${OID_A} ${OID_B} refs/meta/config`]);
+    const actual = deriveGitResources({ method: 'git-receive-pack', rules: [BRANCHES], body });
+    expect(actual).toEqual({
+      ok: true,
+      resources: [
+        ['branch', 'feature-x'],
+        ['branch', 'HEAD'],
+        ['branch', 'refs/meta/config'],
       ],
     });
   });
