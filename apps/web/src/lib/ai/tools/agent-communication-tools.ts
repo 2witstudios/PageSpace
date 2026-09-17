@@ -10,7 +10,7 @@ import { conversations as conversationsTable, messages as unifiedMessages } from
 import { users } from '@pagespace/db/schema/auth';
 import { prepareHistoryForModel, finishModelRequest } from '@/lib/ai/core/context-assembly';
 import { runCompaction } from '@/lib/ai/core/compaction/compaction-service';
-import { canActorViewPage, canActorAccessDrive, filterDriveIdsByAppTokenScope, filterDriveIdsByMcpScope, isMcpScoped, resolveActingAgentId } from './actor-permissions';
+import { canActorViewPage, canActorAccessDrive, canActorConsultAgent, filterDriveIdsByAppTokenScope, filterDriveIdsByMcpScope, isMcpScoped, resolveActingAgentId } from './actor-permissions';
 import { listAgentDrives, getAgentContextDrives } from '@pagespace/lib/services/drive-agent-service';
 import { listAccessibleDrives } from '@pagespace/lib/services/drive-service';
 import { filterToolsForMcpScope, filterToolsForSandboxEnablement } from '@/lib/ai/core/tool-filtering';
@@ -510,9 +510,13 @@ export async function executeAskAgent(
           throw new Error(`AI agent with ID "${agentId}" not found or is not an AI chat agent`);
         }
         
-        // 2. Check actor permissions
-        const canView = await canActorViewPage(executionContext, agentId);
-        if (!canView) {
+        // 2. Check actor permissions — the shared consult rule (view the agent
+        // page, OR the agent is a member of the drive the actor is operating in
+        // and the actor can access that drive), so a guest agent @-mentioned
+        // in a channel of a drive it belongs to is not refused here after the
+        // responder already admitted it.
+        const canConsult = await canActorConsultAgent(executionContext, agentId);
+        if (!canConsult) {
           await logAgentInteraction({
             requestingUserId: userId,
             requestingAgent: executionContext?.locationContext?.currentPage?.id,

@@ -38,7 +38,7 @@ function buildEntries(
  * a Resend failure must not affect the submission that already succeeded
  * (the row is already appended) or force the public route to return an error.
  *
- * Skips sendEmail's default 3/hr-per-recipient rate limit: the caller (the
+ * Skips sendEmail's default 10/hr-per-recipient rate limit: the caller (the
  * submit route) already applies a per-form-target cap on this dispatch, and
  * a busy legitimate form can exceed 3 submissions/hr on its own.
  */

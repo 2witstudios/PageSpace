@@ -171,8 +171,23 @@ async function resolveOrProvisionSession(
   return { ok: false, attempted: true, reason: ensured.reason };
 }
 
+/**
+ * How a run finds the session its sandbox belongs to. The chat tools resolve it
+ * from the conversation (`resolveOrProvisionSession`); a caller that already
+ * holds the session row (the workspace exec route) injects a constant. ONE
+ * resolver feeds both `acquireSandbox` and `resolveBillingSession`, so billing
+ * and execution can never disagree about which session they act on.
+ */
+type ResolveRunSession = (conversationId: string, userId: string) => Promise<ResolveOrProvisionResult>;
+
+interface BuildRealSandboxRunDepsOptions {
+  resolveSession?: ResolveRunSession;
+}
+
 /** Wire the real lib deps for the runners (session-anchored acquire + real Sprites driver). */
-export function buildRealSandboxRunDeps(): SandboxRunDeps {
+export function buildRealSandboxRunDeps({
+  resolveSession = resolveOrProvisionSession,
+}: BuildRealSandboxRunDepsOptions = {}): SandboxRunDeps {
   return {
     isEnabled: isCodeExecutionEnabled,
     // The session-anchored acquisition: resolve the conversation's SESSION row,
@@ -198,7 +213,7 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
       // as a blanket invariant the auto-provisioning below it visibly
       // contradicts, which is exactly the kind of drift that gets the new
       // behavior "fixed" back out by a future reader trusting the comment).
-      const resolved = await resolveOrProvisionSession(conversationId, input.userId);
+      const resolved = await resolveSession(conversationId, input.userId);
       if (!resolved.ok) {
         if (!resolved.attempted) return { ok: false, reason: 'no_session' };
         return { ok: false, reason: 'provision_failed', cause: resolved.reason };
@@ -368,7 +383,7 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
     // through unmetered first, then spawn_failed did too).
     resolveBillingSession: async (ctx) => {
       if (!ctx.conversationId) return null;
-      const resolved = await resolveOrProvisionSession(ctx.conversationId, ctx.userId);
+      const resolved = await resolveSession(ctx.conversationId, ctx.userId);
       if (resolved.ok) {
         const row = resolved.session;
         return { workspaceId: row.id, driveId: row.driveId, ownerId: row.ownerId };

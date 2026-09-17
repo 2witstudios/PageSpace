@@ -772,6 +772,65 @@ describe('buildRealSandboxRunDeps.resolveBillingSession', () => {
   });
 });
 
+describe('buildRealSandboxRunDeps({ resolveSession }) — a caller that already holds the session (workspace exec)', () => {
+  const now = new Date('2026-06-01T00:00:00Z');
+  const heldSession: AgentSessionRecord = {
+    id: 'ws-held',
+    ownerId: 'held-owner',
+    driveId: 'held-drive',
+    name: null,
+    envId: null,
+    spriteKey: null,
+    sandboxId: null,
+    spriteInstanceId: null,
+    egressPolicyToken: null,
+    teardownRequestedAt: null,
+    spriteTornDownAt: null,
+    storageLastBilledAt: now,
+    storageMeasuredBytes: null,
+    storageMeasuredAt: null,
+    lastActiveAt: null,
+    endedAt: null,
+    createdAt: now,
+    updatedAt: now,
+  };
+  const resolveSession = vi.fn(async () => ({ ok: true as const, session: heldSession }));
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockCheckSessionRuntimeGuardrail.mockReturnValue({ allowed: true });
+    mockProvisionSessionSandbox.mockResolvedValue({ ok: true, sandboxId: 'sbx-held', resumed: true });
+  });
+
+  it('should BILL the injected session — an exec scope key resolves no conversation, and falling back to one would run unmetered', async () => {
+    const deps = buildRealSandboxRunDeps({ resolveSession });
+    const result = await deps.resolveBillingSession?.({
+      userId: 'caller',
+      tenantId: 'held-owner',
+      conversationId: 'workspace-exec:ws-held',
+      actorEmail: 'caller@example.com',
+      tier: 'pro',
+    });
+    expect(result).toEqual({ workspaceId: 'ws-held', driveId: 'held-drive', ownerId: 'held-owner' });
+    expect(resolveSession).toHaveBeenCalledWith('workspace-exec:ws-held', 'caller');
+    expect(mockFindSessionForConversation).not.toHaveBeenCalled();
+  });
+
+  it('should ACQUIRE the injected session\'s sandbox through the shared guardrail + provision path', async () => {
+    const deps = buildRealSandboxRunDeps({ resolveSession });
+    const result = await deps.acquireSandbox({
+      tenantId: 'held-owner',
+      driveId: 'held-drive',
+      userId: 'caller',
+      conversationId: 'workspace-exec:ws-held',
+    });
+    expect(result).toMatchObject({ ok: true, sandboxId: 'sbx-held', workspaceId: 'ws-held' });
+    expect(mockProvisionSessionSandbox).toHaveBeenCalledWith(heldSession, 'caller');
+    expect(mockCheckSessionRuntimeGuardrail).toHaveBeenCalledWith({ workspaceId: 'ws-held', now: expect.any(Number) });
+    expect(mockFindSessionForConversation).not.toHaveBeenCalled();
+  });
+});
+
 describe('buildSandboxTools', () => {
   it('should return exactly the four session tools', () => {
     expect(Object.keys(buildSandboxTools()).sort()).toEqual(['bash', 'editFile', 'readFile', 'writeFile']);

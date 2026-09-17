@@ -324,3 +324,17 @@ describe('parseArgv — --timeout', () => {
     expect(parsed.kind).toBe('usage-error');
   });
 });
+
+describe('parseArgv — `--` ends option parsing', () => {
+  it('passes -- and every later token to the command verbatim, global flags included', () => {
+    const parsed = parseArgv(['workspaces', 'exec', 'ws1', '--json', '--', 'ls', '--json', '--timeout', '5']);
+    expectCommand(parsed);
+    expect(parsed.flags.json).toBe(true);
+    expect(parsed.flags.timeoutMs).toBeUndefined();
+    expect(parsed.args).toEqual(['workspaces', 'exec', 'ws1', '--', 'ls', '--json', '--timeout', '5']);
+  });
+
+  it('still refuses a bare -- before any command', () => {
+    expect(parseArgv(['--']).kind).toBe('usage-error');
+  });
+});
