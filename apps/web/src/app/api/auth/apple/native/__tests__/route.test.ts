@@ -137,7 +137,12 @@ vi.mock('@/lib/auth/native-invite-acceptance', () => ({
   }),
 }));
 
+vi.mock('@pagespace/lib/auth/apple/capture-apple-refresh-token', () => ({
+  captureAppleRefreshToken: vi.fn().mockResolvedValue('stored'),
+}));
+
 import { POST } from '../route';
+import { captureAppleRefreshToken } from '@pagespace/lib/auth/apple/capture-apple-refresh-token';
 import { consumeAnyInviteIfPresent } from '@/lib/auth/native-invite-acceptance';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { sessionService } from '@pagespace/lib/auth/session-service';
@@ -820,4 +825,83 @@ describe('POST /api/auth/apple/native', () => {
     });
   });
 
+
+  describe('Apple refresh token capture (TN3194)', () => {
+    const verifiedWithAudience = () =>
+      vi.mocked(verifyAppleIdToken).mockResolvedValue({
+        success: true,
+        // @ts-expect-error - partial mock data
+        userInfo: { providerId: 'apple-sub-123', email: 'test@example.com', emailVerified: true },
+        audience: 'ai.pagespace.ios',
+      });
+
+    it('given an authorization code, should capture the refresh token for the verified user and client', async () => {
+      verifiedWithAudience();
+
+      const response = await POST(createNativeRequest({ ...validPayload, authorizationCode: 'apple-code-1' }));
+
+      expect(response.status).toBe(200);
+      expect(captureAppleRefreshToken).toHaveBeenCalledWith({
+        userId: 'new-user-id',
+        code: 'apple-code-1',
+        clientId: 'ai.pagespace.ios',
+        expectedSub: 'apple-sub-123',
+      });
+    });
+
+    it('given a slow Apple exchange, should return the session without waiting for it', async () => {
+      verifiedWithAudience();
+      let finishExchange: (outcome: 'stored') => void = () => {};
+      vi.mocked(captureAppleRefreshToken).mockReturnValue(
+        new Promise((resolve) => {
+          finishExchange = resolve;
+        }),
+      );
+
+      const response = await POST(createNativeRequest({ ...validPayload, authorizationCode: 'apple-code-1' }));
+      const body = await response.json();
+
+      // The capture is still pending: the response did not wait on Apple.
+      expect(captureAppleRefreshToken).toHaveBeenCalledTimes(1);
+      expect(response.status).toBe(200);
+      expect(body.sessionToken).toBe('ps_sess_mock_token');
+      finishExchange('stored');
+    });
+
+    it('given the capture rejects, should still sign the user in and log the failure', async () => {
+      verifiedWithAudience();
+      vi.mocked(captureAppleRefreshToken).mockRejectedValue(new Error('boom'));
+
+      const response = await POST(createNativeRequest({ ...validPayload, authorizationCode: 'apple-code-1' }));
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(response.status).toBe(200);
+      expect(loggers.auth.warn).toHaveBeenCalledWith(
+        'Apple refresh token capture threw',
+        expect.objectContaining({ userId: 'new-user-id' }),
+      );
+    });
+
+    it('given no authorization code (an older client), should sign in without attempting a capture', async () => {
+      verifiedWithAudience();
+
+      const response = await POST(createNativeRequest(validPayload));
+
+      expect(response.status).toBe(200);
+      expect(captureAppleRefreshToken).not.toHaveBeenCalled();
+    });
+
+    it('given a verified token without an audience, should not attempt a capture', async () => {
+      const response = await POST(createNativeRequest({ ...validPayload, authorizationCode: 'apple-code-1' }));
+
+      expect(response.status).toBe(200);
+      expect(captureAppleRefreshToken).not.toHaveBeenCalled();
+    });
+
+    it('given an oversized authorization code, should reject the request', async () => {
+      const response = await POST(createNativeRequest({ ...validPayload, authorizationCode: 'x'.repeat(5000) }));
+
+      expect(response.status).toBe(400);
+    });
+  });
 });
