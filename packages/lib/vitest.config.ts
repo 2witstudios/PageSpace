@@ -31,6 +31,7 @@ export default defineConfig({
       'src/agent-accounts/store/__tests__/store-adapter-infisical.integration.test.ts',
       'src/services/__tests__/agent-identities.integration.test.ts',
       'src/billing/__tests__/agent-starter-grant.integration.test.ts',
+      'src/compliance/export/__tests__/agent-identity-export.integration.test.ts',
     ],
     setupFiles: ['./src/test/setup.ts'],
     // Run test files sequentially to avoid database race conditions
@@ -83,6 +84,7 @@ export default defineConfig({
       'src/agent-accounts/store/__tests__/store-adapter-infisical.integration.test.ts',
       'src/services/__tests__/agent-identities.integration.test.ts',
       'src/billing/__tests__/agent-starter-grant.integration.test.ts',
+      'src/compliance/export/__tests__/agent-identity-export.integration.test.ts',
       ],
       thresholds: {
         lines: 85,
@@ -95,6 +97,9 @@ export default defineConfig({
         // share one definition of what rule edits are allowed, and a shared
         // definition tested less than its old home is a downgrade wearing a
         // refactor's clothes.
+        // Agents get no free AI in billing-off deployments (ADR 0007 Decision 9):
+        // a pure security decision, pinned so an untested branch cannot land.
+        'src/billing/billing-off-agent-gate.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
         'src/sheets/conditional-ops.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
         'src/sheets/palette.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
         'src/sheets/regions.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },

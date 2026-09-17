@@ -45,6 +45,7 @@ import {
   starterGrantCents,
 } from './credit-pricing';
 import { readGateAccount, type GateAccount } from './gate-account';
+import { billingOffAgentGate } from './billing-off-agent-gate';
 import { readSpendableCents } from './credit-balance';
 import type { SubscriptionTier } from '../services/subscription-utils';
 
@@ -188,6 +189,14 @@ export async function canConsumeAI(
   opts: GateOptions = {},
 ): Promise<GateResult> {
   if (!isBillingEnabled()) {
+    // Agents get no free AI here either (ADR 0007 Decision 9): with billing off
+    // the deployment's customer pays for every call, so an unclaimed agent is
+    // refused before the unlimited fast path. The account is read only on this
+    // billing-off path; the billed path keeps its own lazy read below.
+    const offAccount = await readGateAccount(userId);
+    if (billingOffAgentGate({ accountType: offAccount.accountType, hasOwner: offAccount.ownerUserId !== null }) === 'requires_funding') {
+      return { allowed: false, reason: 'requires_funding' };
+    }
     // Billing-off deployments (tenant/onprem) have no credit ledger, but a
     // caller-supplied daily ceiling must still bind: a metered provider (e.g.
     // Azure OpenAI on-prem) spends real money, and the ceiling exists precisely
@@ -199,8 +208,8 @@ export async function canConsumeAI(
     // concurrent decisions the way the billed path's balance row lock does
     // (there is no balance row to lock in this mode). The caller releases the
     // hold after the run (releaseHold deletes in every mode); an abandoned hold
-    // expires via its TTL. Without a ceiling this stays the query-free
-    // unlimited fast path.
+    // expires via its TTL. Without a ceiling this stays the unlimited fast
+    // path: no ledger, hold or metering query (only the account read above).
     const ceiling = callerCeilingCents(opts);
     if (ceiling === null) return { allowed: true, reason: 'unlimited' };
     const now = new Date();

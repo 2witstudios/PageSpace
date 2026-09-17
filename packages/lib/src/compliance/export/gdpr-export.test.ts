@@ -21,6 +21,7 @@ const { mockTable } = vi.hoisted(() => {
     timezone: `${name}.timezone`,
     createdAt: `${name}.createdAt`,
     updatedAt: `${name}.updatedAt`,
+    accountType: `${name}.accountType`,
     slug: `${name}.slug`,
     ownerId: `${name}.ownerId`,
     role: `${name}.role`,
@@ -100,6 +101,7 @@ vi.mock('@pagespace/db/schema/auth', () => ({ users: mockTable('users') }));
 // other schema module so the real declarations never load under the mocked drizzle-orm.
 vi.mock('@pagespace/db/schema/drive-envs', () => ({ driveEnvs: mockTable('driveEnvs') }));
 vi.mock('@pagespace/db/schema/drive-env-local', () => ({ driveEnvLocal: mockTable('driveEnvLocal') }));
+vi.mock('@pagespace/db/schema/agent-identities', () => ({ agentIdentities: mockTable('agentIdentities') }));
 vi.mock('@pagespace/db/schema/core', () => ({
   drives: mockTable('drives'),
   pages: mockTable('pages'),
@@ -229,6 +231,14 @@ describe('collectUserProfile', () => {
     const result = await collectUserProfile(db as never, 'user-1');
 
     expect(result).toEqual(profile);
+  });
+
+  it('given any account, should select accountType into the profile (ADR 0007 Decision 1)', async () => {
+    const db = createLimitDb([{ id: 'agent-1', accountType: 'agent' }]);
+
+    await collectUserProfile(db as never, 'agent-1');
+
+    expect(db.select).toHaveBeenCalledWith(expect.objectContaining({ accountType: 'users.accountType' }));
   });
 
   it('given_userDoesNotExist_returnsNull', async () => {
@@ -972,6 +982,8 @@ describe('collectAllUserData', () => {
     // Same rule again for the content-tags category: a collector that
     // `collectAllUserData` never calls reaches nobody's export.
     expect(Array.isArray(result!.contentTags)).toBe(true);
+    // An agent account's own identity row (ADR 0007), secrets withheld.
+    expect(Array.isArray(result!.agentIdentity)).toBe(true);
     expect(result!.personalization).toBeNull();
   });
 });

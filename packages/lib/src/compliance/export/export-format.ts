@@ -21,8 +21,12 @@ import type { AllUserData } from './gdpr-export';
  * consumer written against 1.0.0 keeps working — but one keyed on the version
  * can now tell a bundle that carries the subject's tags from one predating the
  * category, which is the whole point of the field being in the manifest.
+ *
+ * 1.2.0 adds `profile.accountType` (native and portable) and
+ * `agent-identity.json` with its `agentIdentity` portable property (ADR 0007).
+ * Additive in the same way: every 1.1.0 file and field is unchanged.
  */
-export const EXPORT_SCHEMA_VERSION = '1.1.0';
+export const EXPORT_SCHEMA_VERSION = '1.2.0';
 
 export type ExportFormat = 'native' | 'portable';
 
@@ -87,6 +91,7 @@ export function buildNativeExportFiles(data: AllUserData): ExportFile[] {
     // checkpointed `parts` are content nothing else in this bundle carries.
     { name: 'sheets.json', description: 'Your spreadsheets — every tab, with each cell as you wrote it and as it evaluated', recordCount: data.sheets.length, data: data.sheets },
     { name: 'agent-workspaces.json', description: 'Agent workspaces (working contexts) and the shells you opened in them', recordCount: data.agentWorkspaces.length, data: data.agentWorkspaces },
+    { name: 'agent-identity.json', description: 'If this is an AI agent account: its owner, when it was claimed, its self-reported source, last sign-in and revocation (secrets are never included)', recordCount: data.agentIdentity.length, data: data.agentIdentity },
     { name: 'local-environments.json', description: 'Machines you enrolled as local environments: their labels, public keys and fingerprints, and when they connected', recordCount: data.localEnvironments.length, data: data.localEnvironments },
     { name: 'stream-state.json', description: 'Checkpointed AI generation state, including content from generations that were interrupted', recordCount: data.streamState.length, data: data.streamState },
     // Inferences the memory cron drew about the subject, with the quotes of
@@ -151,6 +156,8 @@ export function toPortableExport(data: AllUserData): Record<string, unknown> {
     // Native field kept (no schema.org equivalent) so the portable export is
     // field-for-field complete with the native export (GDPR Art 20).
     timezone: data.profile.timezone ?? null,
+    // `human` or `agent` (ADR 0007) — no schema.org slot, kept for the same reason.
+    accountType: data.profile.accountType,
     dateCreated: toIso(data.profile.createdAt),
     dateModified: toIso(data.profile.updatedAt),
     owns: data.drives.map((d) => ({
@@ -214,6 +221,7 @@ export function toPortableExport(data: AllUserData): Record<string, unknown> {
       { '@type': 'PropertyValue', name: 'streamState', value: data.streamState },
       { '@type': 'PropertyValue', name: 'contentTags', value: data.contentTags },
       { '@type': 'PropertyValue', name: 'localEnvironments', value: data.localEnvironments },
+      { '@type': 'PropertyValue', name: 'agentIdentity', value: data.agentIdentity },
     ],
   };
 }

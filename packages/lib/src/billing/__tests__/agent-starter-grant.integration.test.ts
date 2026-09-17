@@ -12,7 +12,7 @@
  * Excluded from the unit run (vitest.config.ts); CI's lib integration step
  * picks it up by glob.
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import { db } from '@pagespace/db/db';
 import { eq, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
@@ -133,6 +133,42 @@ describe('canConsumeAI — bare-row starter-grant branch', () => {
     expect(result.allowed).toBe(true);
     expect(await starterGrantRows(human.id)).toHaveLength(1);
     expect((await balance(human.id))?.monthlyRemainingCents).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.free);
+  });
+});
+
+describe('canConsumeAI — billing-off deployment (DEPLOYMENT_MODE=tenant)', () => {
+  const originalMode = process.env.DEPLOYMENT_MODE;
+  afterEach(() => {
+    if (originalMode === undefined) delete process.env.DEPLOYMENT_MODE;
+    else process.env.DEPLOYMENT_MODE = originalMode;
+  });
+
+  it('given an unclaimed agent in tenant mode, should refuse with requires_funding and create no balance row', async () => {
+    if (!dbAvailable) return;
+    const agent = await seedUser('agent');
+    process.env.DEPLOYMENT_MODE = 'tenant';
+
+    const result = await canConsumeAI(agent.id, 'free');
+
+    expect(result).toEqual({ allowed: false, reason: 'requires_funding' });
+    expect(await balance(agent.id)).toBeUndefined();
+  });
+
+  it('given a claimed agent in tenant mode, should be unlimited like its owner', async () => {
+    if (!dbAvailable) return;
+    const owner = await seedUser('human');
+    const agent = await seedUser('agent', owner.id);
+    process.env.DEPLOYMENT_MODE = 'tenant';
+
+    expect(await canConsumeAI(agent.id, 'free')).toEqual({ allowed: true, reason: 'unlimited' });
+  });
+
+  it('given a human in tenant mode, should stay unlimited', async () => {
+    if (!dbAvailable) return;
+    const human = await seedUser('human');
+    process.env.DEPLOYMENT_MODE = 'tenant';
+
+    expect(await canConsumeAI(human.id, 'free')).toEqual({ allowed: true, reason: 'unlimited' });
   });
 });
 

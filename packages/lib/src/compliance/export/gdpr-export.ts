@@ -4,6 +4,7 @@ import { users } from '@pagespace/db/schema/auth';
 import { agentWorkspaces, agentWorkspaceShells } from '@pagespace/db/schema/agent-workspaces';
 import { driveEnvs } from '@pagespace/db/schema/drive-envs';
 import { driveEnvLocal, type DriveEnvLocalCapabilities } from '@pagespace/db/schema/drive-env-local';
+import { agentIdentities } from '@pagespace/db/schema/agent-identities';
 import { agentWorkspaceNodes } from '@pagespace/db/schema/agent-workspace-nodes';
 import { aiStreamSessions, aiStreamFrames } from '@pagespace/db/schema/ai-streams';
 import { drives, pages, tags } from '@pagespace/db/schema/core';
@@ -51,6 +52,8 @@ export interface UserProfileExport {
   email: string;
   image: string | null;
   timezone: string | null;
+  /** `human` or `agent` (ADR 0007 Decision 1) — which kind of account this export describes. */
+  accountType: 'human' | 'agent';
   createdAt: Date;
   updatedAt: Date;
 }
@@ -495,6 +498,8 @@ export interface AllUserData {
   contentTags: UserContentTagExport[];
   /** Machines the subject enrolled as local environments — their own devices. */
   localEnvironments: UserLocalEnvironmentExport[];
+  /** The subject's own agent-account row (ADR 0007), secrets withheld; empty for a human. */
+  agentIdentity: UserAgentIdentityExport[];
 }
 
 export async function collectUserProfile(database: DB, userId: string): Promise<UserProfileExport | null> {
@@ -505,6 +510,7 @@ export async function collectUserProfile(database: DB, userId: string): Promise<
       email: users.email,
       image: users.image,
       timezone: users.timezone,
+      accountType: users.accountType,
       createdAt: users.createdAt,
       updatedAt: users.updatedAt,
     })
@@ -1655,6 +1661,40 @@ export async function collectUserLocalEnvironments(database: DB, userId: string)
     .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
 }
 
+/**
+ * An agent account's own identity facts (ADR 0007). The column set is
+ * `AGENT_IDENTITY_EXPORTED_COLUMNS` in gdpr-export-coverage.ts; the secret and
+ * claim-token hashes and prefixes are never selected.
+ */
+export interface UserAgentIdentityExport {
+  userId: string;
+  ownerUserId: string | null;
+  claimedAt: Date | null;
+  source: string | null;
+  lastAuthAt: Date | null;
+  createdAt: Date;
+  revokedAt: Date | null;
+  secretVersion: number;
+  createdByIp: string | null;
+}
+
+export async function collectUserAgentIdentity(database: DB, userId: string): Promise<UserAgentIdentityExport[]> {
+  return database
+    .select({
+      userId: agentIdentities.userId,
+      ownerUserId: agentIdentities.ownerUserId,
+      claimedAt: agentIdentities.claimedAt,
+      source: agentIdentities.source,
+      lastAuthAt: agentIdentities.lastAuthAt,
+      createdAt: agentIdentities.createdAt,
+      revokedAt: agentIdentities.revokedAt,
+      secretVersion: agentIdentities.secretVersion,
+      createdByIp: agentIdentities.createdByIp,
+    })
+    .from(agentIdentities)
+    .where(eq(agentIdentities.userId, userId));
+}
+
 export async function collectAllUserData(database: DB, userId: string): Promise<AllUserData | null> {
   const profile = await collectUserProfile(database, userId);
   if (!profile) return null;
@@ -1665,7 +1705,7 @@ export async function collectAllUserData(database: DB, userId: string): Promise<
   // Positional: this destructuring order must exactly match the Promise.all array
   // order below (each collector returns a differently-shaped array, so TypeScript
   // cannot catch a reorder/insert mismatch here).
-  const [userPages, userSheets, userMessages, userFiles, activity, userSystemLogs, userApiMetrics, userErrorLogs, aiUsage, tasks, userSessions, userNotifications, userDisplayPreferences, userSettings, userPersonalizationData, userPersonalizationCandidates, userAgentWorkspaces, userStreamState, userContentTags, userLocalEnvironments] = await Promise.all([
+  const [userPages, userSheets, userMessages, userFiles, activity, userSystemLogs, userApiMetrics, userErrorLogs, aiUsage, tasks, userSessions, userNotifications, userDisplayPreferences, userSettings, userPersonalizationData, userPersonalizationCandidates, userAgentWorkspaces, userStreamState, userContentTags, userLocalEnvironments, userAgentIdentity] = await Promise.all([
     collectUserPages(database, userId, driveIds),
     collectUserSheets(database, userId, driveIds),
     collectUserMessages(database, userId),
@@ -1686,6 +1726,7 @@ export async function collectAllUserData(database: DB, userId: string): Promise<
     collectUserStreamState(database, userId),
     collectUserContentTags(database, userId, driveIds),
     collectUserLocalEnvironments(database, userId),
+    collectUserAgentIdentity(database, userId),
   ]);
 
   return {
@@ -1711,5 +1752,6 @@ export async function collectAllUserData(database: DB, userId: string): Promise<
     streamState: userStreamState,
     contentTags: userContentTags,
     localEnvironments: userLocalEnvironments,
+    agentIdentity: userAgentIdentity,
   };
 }
