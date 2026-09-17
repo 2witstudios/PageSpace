@@ -5,16 +5,31 @@
  *
  *   bun run --filter '@pagespace/lib' test:integration -- src/auth/apple/__tests__/apple-token-store.integration.test.ts
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterAll } from 'vitest';
 import { factories } from '@pagespace/db/test/factories';
-import { db } from '@pagespace/db/db';
-import { eq } from '@pagespace/db/operators';
+import { db, pool } from '@pagespace/db/db';
+import { eq, inArray } from '@pagespace/db/operators';
 import { users, appleSignInTokens } from '@pagespace/db/schema/auth';
 import { appleTokenStore } from '../apple-token-store';
 
+// Integration files share one Postgres and each isolated file gets its own pool
+// (10 connections, 10-minute idle timeout) — release ours when done, or later
+// suites hit `too many clients already`.
+const createdUserIds: string[] = [];
+const createUser = async () => {
+  const user = await factories.createUser();
+  createdUserIds.push(user.id);
+  return user;
+};
+
+afterAll(async () => {
+  if (createdUserIds.length) await db.delete(users).where(inArray(users.id, createdUserIds));
+  await pool.end();
+});
+
 describe('appleTokenStore (integration)', () => {
   it('given a second sign-in with the same Apple client, should replace the stored token rather than add one', async () => {
-    const user = await factories.createUser();
+    const user = await createUser();
 
     await appleTokenStore.upsert({ userId: user.id, clientId: 'ai.pagespace.ios', encryptedRefreshToken: 'cipher-1' });
     await appleTokenStore.upsert({ userId: user.id, clientId: 'ai.pagespace.ios', encryptedRefreshToken: 'cipher-2' });
@@ -23,7 +38,7 @@ describe('appleTokenStore (integration)', () => {
   });
 
   it('given sign-ins from the native app and the web, should keep one token per client', async () => {
-    const user = await factories.createUser();
+    const user = await createUser();
 
     await appleTokenStore.upsert({ userId: user.id, clientId: 'ai.pagespace.ios', encryptedRefreshToken: 'native' });
     await appleTokenStore.upsert({ userId: user.id, clientId: 'ai.pagespace.web', encryptedRefreshToken: 'web' });
@@ -34,8 +49,8 @@ describe('appleTokenStore (integration)', () => {
   });
 
   it('given deleteForUser, should remove only that user\'s tokens', async () => {
-    const subject = await factories.createUser();
-    const bystander = await factories.createUser();
+    const subject = await createUser();
+    const bystander = await createUser();
     await appleTokenStore.upsert({ userId: subject.id, clientId: 'ai.pagespace.ios', encryptedRefreshToken: 's' });
     await appleTokenStore.upsert({ userId: bystander.id, clientId: 'ai.pagespace.ios', encryptedRefreshToken: 'b' });
 
@@ -46,7 +61,7 @@ describe('appleTokenStore (integration)', () => {
   });
 
   it('given the user row is deleted, should cascade the stored tokens away', async () => {
-    const user = await factories.createUser();
+    const user = await createUser();
     await appleTokenStore.upsert({ userId: user.id, clientId: 'ai.pagespace.ios', encryptedRefreshToken: 'c' });
 
     await db.delete(users).where(eq(users.id, user.id));
