@@ -147,3 +147,49 @@ describe('workflow run gate guards', () => {
     expect(offenders).toEqual([]);
   });
 });
+
+/**
+ * Every place that resolves an AI provider spends money. Each must gate credit
+ * in the same file, or be on this list with the reason its spend is gated
+ * upstream. A new provider call fails here until someone decides which.
+ */
+describe('AI provider resolution is credit-gated', () => {
+  const SRC_DIR = join(process.cwd(), 'src');
+  const GATE_CALLS = ['canConsumeAI(', 'acquireWorkflowCredit(', 'withZoomAiCredit('];
+  const GATED_UPSTREAM: Record<string, string> = {
+    'lib/ai/core/provider-factory.ts': 'defines createAIProvider',
+    'lib/ai/core/compaction/compaction-service.ts': 'runs after a gated chat turn, on that turn’s conversation',
+    'lib/ai/tools/agent-communication-tools.ts': 'ask_agent runs inside an already-gated parent request',
+    'lib/memory/compaction-service.ts': 'memory cron: paying tiers only (MEMORY_PAYING_TIERS)',
+    'lib/memory/discovery-service.ts': 'memory cron: paying tiers only (MEMORY_PAYING_TIERS)',
+    'lib/memory/integration-service.ts': 'memory cron: paying tiers only (MEMORY_PAYING_TIERS)',
+  };
+
+  const sourceFiles = (dir: string): string[] => {
+    const out: string[] = [];
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name !== '__tests__' && entry.name !== 'node_modules') out.push(...sourceFiles(full));
+      } else if (/\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) {
+        out.push(full);
+      }
+    }
+    return out;
+  };
+
+  it('every createAIProvider caller gates credit in-file or is listed with its upstream gate', () => {
+    const offenders = sourceFiles(SRC_DIR)
+      .map((file) => ({ rel: relative(SRC_DIR, file).split(sep).join('/'), src: readFileSync(file, 'utf8') }))
+      .filter(({ src }) => src.includes('createAIProvider('))
+      .filter(({ rel, src }) => !(rel in GATED_UPSTREAM) && !GATE_CALLS.some((call) => src.includes(call)))
+      .map(({ rel }) => rel);
+    expect(offenders).toEqual([]);
+  });
+
+  it('the Zoom transcript enrichments gate through withZoomAiCredit', () => {
+    for (const rel of ['lib/integrations/zoom/generate-summary.ts', 'lib/integrations/zoom/extract-action-items.ts']) {
+      expect(readFileSync(join(SRC_DIR, rel), 'utf8')).toMatch(/withZoomAiCredit\(/);
+    }
+  });
+});
