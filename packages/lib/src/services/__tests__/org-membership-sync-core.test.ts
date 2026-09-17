@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   planDriveOrgMembership,
   chunk,
+  settleInBatches,
   summarizeAffectedUsers,
   type OrgSyncDrive,
   type ExistingDriveMemberRow,
@@ -236,5 +237,26 @@ describe('chunk', () => {
 
   it('D-OW-6 refuses a non-positive chunk size instead of looping forever', () => {
     expect(() => chunk([1], 0)).toThrow();
+  });
+});
+
+describe('settleInBatches', () => {
+  it('X-4 (partial) never runs more than the batch size of event sends at once, and settles every one', async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const tasks = Array.from({ length: 45 }, (_, i) => async () => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      inFlight -= 1;
+      if (i === 7) throw new Error('boom');
+      return i;
+    });
+
+    const settled = await settleInBatches(tasks, 10);
+
+    expect(peak).toBe(10);
+    expect(settled).toHaveLength(45);
+    expect(settled.filter((s) => s.status === 'rejected')).toHaveLength(1);
   });
 });

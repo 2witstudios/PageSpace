@@ -12,6 +12,9 @@
  * reads membership and rows under that lock, so concurrent syncs serialize per drive and the
  * last one to run sees the latest visibility and org membership. Writes re-check source = 'org'
  * in SQL, so a stale plan can never remove or convert an invited row.
+ * A caller passing `tx` that already holds a lock on one of those drives (it just updated
+ * orgVisibility or orgId) is safe: Postgres re-grants its own row lock. Two such callers locking
+ * different drives first can deadlock; Postgres aborts one and the caller retries.
  *
  * Events: one `drive:<operation>` broadcast per affected user on `user:<id>:drives` (X-4), plus a
  * realtime room kick for each removed row. Without `tx` the sync commits its own transaction and
@@ -30,6 +33,7 @@ import { kickForDriveMembershipRevocation } from '../permissions/revocation-kick
 import {
   chunk,
   planDriveOrgMembership,
+  settleInBatches,
   summarizeAffectedUsers,
   type AffectedUser,
   type DriveOrgMembershipPlan,
@@ -43,6 +47,9 @@ type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 /** Rows per bulk statement: 500 × 8 columns stays far under Postgres's 65,535 bind parameters. */
 const WRITE_CHUNK = 500;
+
+/** Broadcasts and room kicks in flight at once after a sync. */
+const EVENT_CONCURRENCY = 20;
 
 export interface OrgMembershipSyncPorts {
   broadcast: (user: AffectedUser) => Promise<void>;
@@ -94,14 +101,19 @@ export async function publishOrgMembershipSyncEvents(
   result: OrgMembershipSyncResult,
   ports: OrgMembershipSyncPorts = defaultPorts,
 ): Promise<void> {
-  const settled = await Promise.allSettled([
-    ...result.affectedUsers.map((user) => ports.broadcast(user)),
-    ...result.removedRows.map(({ userId, driveId }) => ports.kick({ userId, driveId })),
-  ]);
-  const failures = settled.filter((s) => s.status === 'rejected').length;
-  if (failures > 0) {
+  const settled = await settleInBatches(
+    [
+      ...result.affectedUsers.map((user) => () => ports.broadcast(user)),
+      ...result.removedRows.map(({ userId, driveId }) => () => ports.kick({ userId, driveId })),
+    ],
+    EVENT_CONCURRENCY,
+  );
+  const failures = settled.filter((s): s is PromiseRejectedResult => s.status === 'rejected');
+  if (failures.length > 0) {
+    const first: unknown = failures[0].reason;
     loggers.realtime.warn('Org membership sync: some realtime events failed', {
-      failures,
+      failures: failures.length,
+      firstError: first instanceof Error ? first.message : String(first),
       affectedUsers: result.affectedUsers.length,
       removedRows: result.removedRows.length,
     });

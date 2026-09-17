@@ -151,3 +151,19 @@ export function chunk<T>(items: readonly T[], size: number): T[][] {
   for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
   return out;
 }
+
+/**
+ * Run tasks batch by batch, at most `size` at once, settling every one. A large sync removes
+ * hundreds of rows, and each removal's room kick enumerates the drive's pages; firing them all at
+ * once would exhaust the connection pool.
+ */
+export async function settleInBatches<T>(
+  tasks: ReadonlyArray<() => Promise<T>>,
+  size: number,
+): Promise<PromiseSettledResult<T>[]> {
+  const settled: PromiseSettledResult<T>[] = [];
+  for (const batch of chunk(tasks, size)) {
+    settled.push(...(await Promise.allSettled(batch.map((task) => task()))));
+  }
+  return settled;
+}
