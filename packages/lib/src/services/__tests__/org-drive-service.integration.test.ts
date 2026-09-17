@@ -29,6 +29,7 @@ import {
 import { STORAGE_REATTRIBUTION_LEAF_ID } from '../../organizations/org-drive-ownership';
 import { orgDriveServiceDeps } from '../org-drive-service-deps';
 import { accountRepository } from '../../repositories/account-repository';
+import { removeMember } from '../../organizations/membership';
 
 // Northwind Labs fixture names (Sequence Spec Part 2), with per-run ids.
 const run = createId().slice(0, 8);
@@ -400,6 +401,20 @@ describe('with the production wiring (requireOrgRole, syncDriveOrgMembership, de
 
     expect(result).toMatchObject({ ok: true });
     expect(await rowsOf(driveId)).toEqual([[chris, 'invite']]);
+  });
+
+  it('D-OW-7 an org Admin removing the lead from the org makes the org Owner the lead and keeps the drive', async () => {
+    const driveId = await productInNorthwind();
+
+    expect(await removeMember({ orgId: northwind, actorId: priya, targetId: marcus })).toEqual({ ok: true });
+
+    const after = await readDrive(driveId);
+    expect(after.orgId).toBe(northwind);
+    expect(after.ownerId).toBe(jono);
+    expect(
+      await db.select().from(orgMembers).where(and(eq(orgMembers.orgId, northwind), eq(orgMembers.userId, marcus)))
+    ).toEqual([]);
+    expect(await rowsOf(driveId)).not.toContainEqual([marcus, 'org']);
   });
 
   it('D-OW-7 deleting the lead\'s account does not cascade the org drive: the org Owner becomes its lead', async () => {
