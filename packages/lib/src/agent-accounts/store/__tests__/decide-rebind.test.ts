@@ -85,6 +85,7 @@ function decide(overrides: Partial<Parameters<typeof decideRebind>[0]> = {}) {
   return decideRebind({
     ref: REF,
     stored: STORED,
+    storedRevoked: false,
     expectedVersion: 3 as PolicyVersion,
     next,
     consent: consentFor(next),
@@ -260,5 +261,12 @@ describe('decideRebind — narrowing needs no consent (G1c R13)', () => {
     const corrupt: PlaneBindingsRecord = { ...STORED, scope: WIDER.scope };
     const actual = decide({ stored: corrupt, next: SAME_SCOPE_BUMP, consent: null });
     expect(actual).toEqual(refuse('store_unavailable'));
+  });
+});
+
+describe('decideRebind — a revoked account (G1c review LOW)', () => {
+  it('given a revoked ref, should refuse revoked before verifying or naming any consent to consume, with or without one', () => {
+    const actual = [decide({ storedRevoked: true }), decide({ storedRevoked: true, next: SAME_SCOPE_BUMP, consent: null })];
+    expect(actual).toEqual([refuse('revoked'), refuse('revoked')]);
   });
 });

@@ -1490,4 +1490,74 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
       replacedValue: 'sk-g1c-v2',
     });
   });
+
+  it('given put, rotate or delete called with an identity on the wrong role, should refuse identity_refused and change nothing (G1c review MED; ADR 0005 §2.1)', async () => {
+    const raw = makeRawAdapter();
+    const adapter = withDefaults(raw);
+    const accountId = `acct-g1c-write-roles-${NOW}` as AccountId;
+    const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
+    const executor = { ...baseIdentity(), channel: 'http-executor' as const };
+
+    await adapter.put({ ref, material: API_KEY_V1, expectedVersion: null, bindings: plainBindings(), identity: baseIdentity() });
+    const actual = {
+      put: await raw.put({ ref, material: API_KEY_V2, expectedVersion: 1 as never, bindings: plainBindings(), scope: EXAMPLE_SCOPE, consenters: OWNER_CONSENTERS, identity: executor }),
+      rotate: await raw.rotate({ ref, expectedVersion: 1 as never, next: API_KEY_V2, bindings: plainBindings(), identity: executor as never }),
+      delete: await raw.delete({ ref, identity: executor, upstream: 'not_attempted' }),
+      still: await adapter.describe({ ref, identity: baseIdentity() }).then((d) => (d.ok ? d.version : d)),
+    };
+    expect(actual).toEqual({
+      put: { ok: false, reason: 'identity_refused' },
+      rotate: { ok: false, reason: 'identity_refused' },
+      delete: { ok: false, reason: 'identity_refused' },
+      still: 1,
+    });
+  });
+
+  it('given a revoked account, rebind should refuse revoked and leave the consent unspent (G1c review LOW)', async () => {
+    const ledger = memoryConsentLedger();
+    const adapter = makeAdapter({ consentLedger: ledger });
+    const accountId = `acct-g1c-rebind-revoked-${NOW}` as AccountId;
+    const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
+    const identity = baseIdentity();
+    const v2 = recordOver({ ...plainBindings(), policyVersion: 2 as PolicyVersion }, WIDE_SCOPE);
+    const consent = ownerConsentTo(v2.bindings, OWNER_A, { ref });
+
+    await adapter.put({ ref, material: API_KEY_V1, expectedVersion: null, bindings: plainBindings(), identity });
+    await adapter.revoke({ ref, reason: 'owner_revoked', identity });
+    const actual = {
+      rebind: await adapter.rebind({ ref, expectedVersion: 1 as PolicyVersion, bindings: v2.bindings, scope: v2.scope, consent, identity }),
+      consentStillFresh: await ledger.consume({ consentId: consent.consentId, expiresAt: Date.now() + 1, now: Date.now() }),
+    };
+    expect(actual).toEqual({ rebind: { ok: false, reason: 'revoked' }, consentStillFresh: 'consumed' });
+  });
+
+  it('given Infisical already ahead of the plane when a rotate snapshots the grace copy, should refuse write_unverified rather than label newer material as the old version (G1c review LOW)', async () => {
+    const adapter = makeAdapter();
+    const accountId = `acct-g1c-snapshot-drift-${NOW}` as AccountId;
+    const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
+    const identity = baseIdentity();
+    const client = createInfisicalClient({ baseUrl: INFISICAL_URL, environment: 'dev' });
+
+    await adapter.put({ ref, material: API_KEY_V1, expectedVersion: null, bindings: plainBindings(), identity });
+    await client.updateSecret({ projectId: projectAId, credentials: identityA, secretKey: `${accountId}__api_key`, secretValue: JSON.stringify({ kind: 'api_key', material: API_KEY_V2.material }), secretComment: JSON.stringify(plainBindings()) });
+    const actual = await adapter.rotate({ ref, expectedVersion: 1 as never, next: API_KEY_V2, bindings: plainBindings(), identity });
+    expect(actual).toEqual({ ok: false, reason: 'write_unverified' });
+  });
+
+  it('given a stored payload whose kind is not the ref kind, resolve should refuse store_unavailable rather than strip by the stored kind (G1c review LOW)', async () => {
+    const adapter = makeAdapter();
+    const accountId = `acct-g1c-kind-drift-${NOW}` as AccountId;
+    const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
+    const identity = baseIdentity();
+    const client = createInfisicalClient({ baseUrl: INFISICAL_URL, environment: 'dev' });
+    const grant = makeGrant({ accountId, credentialVersion: 2 as never, bindingDigest: digestBindings({ bindings: plainBindings(), hash }) });
+
+    await adapter.put({ ref, material: API_KEY_V1, expectedVersion: null, bindings: plainBindings(), identity });
+    await adapter.put({ ref, material: API_KEY_V2, expectedVersion: 1 as never, bindings: plainBindings(), identity });
+    // A corrupted store: Infisical's third write holds an oauth2 payload under the api_key ref, and the plane's committed version is moved to it by hand.
+    await client.updateSecret({ projectId: projectAId, credentials: identityA, secretKey: `${accountId}__api_key`, secretValue: JSON.stringify({ kind: 'oauth2', material: { accessToken: 'at', refreshToken: 'rt-must-not-leak' } }), secretComment: JSON.stringify(plainBindings()) });
+    await pool.query('UPDATE agent_account_secret_versions SET current_version = 3 WHERE tenant_id = $1 AND account_id = $2', [TENANT_A, accountId]);
+    const actual = await adapter.resolve({ ref, version: 3 as never, grant: makeGrant({ ...grant, credentialVersion: 3 as never }), identity });
+    expect(actual).toEqual({ ok: false, reason: 'store_unavailable' });
+  });
 });
