@@ -16,7 +16,12 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
   workers: 1,
-  reporter: process.env.CI ? [['list'], ['html', { open: 'never' }]] : 'list',
+  // The 'json' reporter is read back by scripts/check-spec-coverage.ts (via the
+  // spec-coverage CI job) to derive requirement-ID coverage from what actually PASSED, rather
+  // than from a static read of test source — see that script's module comment for why.
+  reporter: process.env.CI
+    ? [['list'], ['html', { open: 'never' }], ['json', { outputFile: 'test-results/playwright-results.json' }]]
+    : 'list',
   use: {
     baseURL,
     trace: 'on-first-retry',

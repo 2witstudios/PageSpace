@@ -4,7 +4,9 @@
 # Rules (enforced by scripts/check-spec-coverage.ts):
 #   - Every ID started allowlisted when the gate was introduced (Wave A, lane A4).
 #   - A lane REMOVES its IDs from this file in the same PR that lands the tests naming them
-#     ("MON-2 …" in an it/test/describe name or a riteway given/should). Leaving an ID here
+#     ("MON-2 …" in an it/test title, or a describe title whose tests ALL pass — never only in a
+#     riteway given/should, which no reporter sees). Only test runs in .github/workflows/ci.yml
+#     count: a suite only security.yml runs never reaches the gate. Leaving an ID here
 #     after a test names it FAILS the gate (STALE-ALLOW), so this file can only shrink.
 #   - A token here that is not a Spec ID FAILS the gate (typo guard).
 #   - Never add an ID back. If a test is deleted, the gate goes red; that is the point.
@@ -84,3 +86,11 @@ X-2
 X-3
 X-4
 X-5
+# X-6 (Negative tests: non-member sees no other org's Open drive; a guest sees exactly one
+# drive; a disabled policy refuses; an empty chosen wallet charges nothing; an automation never
+# charges a person) needs org/wallet resolution logic that does not exist until Wave B/C lands.
+# The seam guards and the Northwind fixture shape check in this lane are real tests but they
+# check code STRUCTURE, not these five authorization/spend behaviors — they do not prove X-6 and
+# their names no longer claim it (PR #2642 review thread PRRT_kwDOPhnPxc6ioz-F). Only remove this
+# line once a test exercises one of the five behaviors above against real resolution logic.
+X-6
