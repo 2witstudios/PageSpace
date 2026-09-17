@@ -9,18 +9,20 @@
  * a shell. A non-zero `exitCode` is a 200 — the command ran; only a refusal is
  * an error status, answered as `{ error, reason, retryAfter? }`.
  *
- * Unreachable, denied, out of the credential's drive scope, and ended all
+ * Unreachable, denied, out of the credential's drive scope, below the drive
+ * edit bar for the credential's own role (a scoped key), and ended all
  * answer the SAME 404 — this family never tells a caller a workspace exists.
  */
 
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, isDriveScopedPrincipal } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import type { SandboxToolDenialReason } from '@pagespace/lib/services/sandbox/tool-runners';
 import { bashInputSchema } from '@/lib/ai/tools/sandbox-tools';
 import { checkSessionAccess, findSessionRecord } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { auditSessionAccessDenial } from '@/lib/agent-workspaces/workspace-unavailable-response';
 import { isWorkspaceInCredentialScope } from '@/lib/agent-workspaces/credential-scope';
+import { canPrincipalRunCodeInDrive } from '@/lib/agent-workspaces/principal-code-exec-access';
 import { execInWorkspace, resolveWorkspaceExecActorContext } from '@/lib/agent-workspaces/workspace-exec-runtime';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -94,6 +96,18 @@ export async function POST(request: Request, context: RouteContext) {
   if (!session || session.endedAt !== null) return notFound();
   if (!isWorkspaceInCredentialScope(auth, session.driveId)) {
     auditSessionAccessDenial(request, auth.userId, workspaceId, 'credential_out_of_scope', ROUTE);
+    return notFound();
+  }
+  // The gates below authorize the OWNING USER. A drive-scoped key can carry a
+  // weaker explicit role than its owner, so the credential itself must clear
+  // the same drive edit bar first. (A driveless workspace is already out of
+  // every drive scope, above.)
+  if (
+    session.driveId !== null &&
+    isDriveScopedPrincipal(auth) &&
+    !(await canPrincipalRunCodeInDrive(auth, session.driveId))
+  ) {
+    auditSessionAccessDenial(request, auth.userId, workspaceId, 'credential_insufficient_role', ROUTE);
     return notFound();
   }
 

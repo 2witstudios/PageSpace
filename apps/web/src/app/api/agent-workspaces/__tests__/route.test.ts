@@ -22,6 +22,7 @@ const {
   mockClaimConversationInSession,
   mockFindWorkspaceOfConversation,
   mockCheckSessionAccess,
+  mockGetPrincipalDriveAccessLevel,
 } = vi.hoisted(() => ({
   mockAuthenticateRequest: vi.fn(),
   mockAuditRequest: vi.fn(),
@@ -43,6 +44,7 @@ const {
   mockClaimConversationInSession: vi.fn(),
   mockFindWorkspaceOfConversation: vi.fn(),
   mockCheckSessionAccess: vi.fn(),
+  mockGetPrincipalDriveAccessLevel: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -51,6 +53,8 @@ vi.mock('@/lib/auth', () => ({
   canPrincipalViewPage: (...args: unknown[]) => mockCanPrincipalViewPage(...args),
   isManageKeysOnly: (auth: { manageKeysOnly?: boolean }) => auth.manageKeysOnly === true,
   getAllowedDriveIds: (auth: { allowedDriveIds?: string[] }) => auth.allowedDriveIds ?? [],
+  isDriveScopedPrincipal: (auth: { allowedDriveIds?: string[] }) => (auth.allowedDriveIds ?? []).length > 0,
+  getPrincipalDriveAccessLevel: (...args: unknown[]) => mockGetPrincipalDriveAccessLevel(...args),
 }));
 vi.mock('@/lib/repositories/conversation-repository', () => ({
   conversationRepository: {
@@ -132,6 +136,7 @@ beforeEach(() => {
   // Default: the caller CAN open whatever workspace a claim conflict names.
   // The tests that care about the denial path say so explicitly.
   mockCheckSessionAccess.mockResolvedValue({ allowed: true });
+  mockGetPrincipalDriveAccessLevel.mockResolvedValue({ canView: true, canEdit: true, canShare: false, canDelete: false });
 });
 
 describe('GET /api/agent-workspaces', () => {
@@ -154,7 +159,62 @@ describe('GET /api/agent-workspaces', () => {
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body.sessions.map((s: { workspaceId: string }) => s.workspaceId)).toEqual(['ses-1']);
-    expect(mockListShellsBulk).toHaveBeenCalledWith(['ses-1']);
+  });
+
+  describe('a drive-scoped credential is filtered by ITS OWN permissions, never resolved as its owner (PR #2653 review P1)', () => {
+    const SCOPED_KEY = { userId: 'user-1', tokenType: 'mcp', tokenId: 'tok-1', allowedDriveIds: ['drive-1', 'drive-2'] };
+
+    beforeEach(() => {
+      mockAuthenticateRequest.mockResolvedValue(SCOPED_KEY);
+    });
+
+    it('given a scoped key, should answer the session DTOs with EMPTY children and never run the owner-resolved child reads', async () => {
+      const response = await GET(new Request('http://localhost/api/agent-workspaces'));
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        sessions: [{ ...SESSION_DTO, shells: [], conversations: [], rev: 0, nodes: [], targets: [] }],
+      });
+      expect(mockListShellsBulk).not.toHaveBeenCalled();
+      expect(mockListSessionConversationsBulk).not.toHaveBeenCalled();
+      expect(mockReadWorkspaceNodesBulk).not.toHaveBeenCalled();
+    });
+
+    it('given a drive in scope the key cannot view, should drop its sessions', async () => {
+      mockListSessions.mockResolvedValue([
+        SESSION_DTO,
+        { ...SESSION_DTO, workspaceId: 'ses-2', driveId: 'drive-2' },
+      ]);
+      mockGetPrincipalDriveAccessLevel.mockImplementation(async (_auth: unknown, driveId: string) =>
+        driveId === 'drive-1' ? { canView: true, canEdit: false, canShare: false, canDelete: false } : null,
+      );
+      const body = await (await GET(new Request('http://localhost/api/agent-workspaces'))).json();
+      expect(body.sessions.map((s: { workspaceId: string }) => s.workspaceId)).toEqual(['ses-1']);
+      expect(mockGetPrincipalDriveAccessLevel).toHaveBeenCalledWith(SCOPED_KEY, 'drive-2');
+    });
+
+    it('given a view:false answer, should drop the sessions too', async () => {
+      mockGetPrincipalDriveAccessLevel.mockResolvedValue({ canView: false, canEdit: false, canShare: false, canDelete: false });
+      const body = await (await GET(new Request('http://localhost/api/agent-workspaces'))).json();
+      expect(body.sessions).toEqual([]);
+    });
+
+    it('given many sessions in one drive, should ask the principal layer ONCE per distinct drive', async () => {
+      mockListSessions.mockResolvedValue([
+        SESSION_DTO,
+        { ...SESSION_DTO, workspaceId: 'ses-1b' },
+        { ...SESSION_DTO, workspaceId: 'ses-2', driveId: 'drive-2' },
+      ]);
+      await GET(new Request('http://localhost/api/agent-workspaces'));
+      expect(mockGetPrincipalDriveAccessLevel).toHaveBeenCalledTimes(2);
+    });
+
+    it('given a cookie session, should not consult the principal layer and should attach children as before', async () => {
+      mockAuthenticateRequest.mockResolvedValue(AUTH_ADMIN);
+      const body = await (await GET(new Request('http://localhost/api/agent-workspaces'))).json();
+      expect(mockGetPrincipalDriveAccessLevel).not.toHaveBeenCalled();
+      expect(body.sessions[0].shells).toEqual([SHELL_DTO]);
+      expect(mockReadWorkspaceNodesBulk).toHaveBeenCalledWith(['ses-1'], 'user-1');
+    });
   });
 
   it('given an unscoped token, should list every one of the owner\'s workspaces, driveless included', async () => {

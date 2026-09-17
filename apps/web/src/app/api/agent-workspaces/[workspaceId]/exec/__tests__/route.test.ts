@@ -8,6 +8,9 @@ const {
   mockFindSessionRecord,
   mockResolveActorContext,
   mockExecInWorkspace,
+  mockGetPrincipalDriveMembership,
+  mockGetUserDrivePermissions,
+  mockFetchCustomRolePermissions,
 } = vi.hoisted(() => ({
   mockAuthenticateRequest: vi.fn(),
   mockAuditSessionAccessDenial: vi.fn(),
@@ -15,6 +18,9 @@ const {
   mockFindSessionRecord: vi.fn(),
   mockResolveActorContext: vi.fn(),
   mockExecInWorkspace: vi.fn(),
+  mockGetPrincipalDriveMembership: vi.fn(),
+  mockGetUserDrivePermissions: vi.fn(),
+  mockFetchCustomRolePermissions: vi.fn(),
 }));
 
 // The REAL credential-scope helper runs against these: getAllowedDriveIds is
@@ -24,6 +30,15 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: (result: unknown) => result != null && typeof result === 'object' && 'error' in result,
   isManageKeysOnly: (auth: { manageKeysOnly?: boolean }) => auth.manageKeysOnly === true,
   getAllowedDriveIds: (auth: { allowedDriveIds?: string[] }) => auth.allowedDriveIds ?? [],
+  isDriveScopedPrincipal: (auth: { allowedDriveIds?: string[] }) => (auth.allowedDriveIds ?? []).length > 0,
+  getPrincipalDriveMembership: (...args: unknown[]) => mockGetPrincipalDriveMembership(...args),
+}));
+// The REAL principal code-exec helper runs too; only its permission reads are faked.
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  getUserDrivePermissions: (...args: unknown[]) => mockGetUserDrivePermissions(...args),
+}));
+vi.mock('@pagespace/lib/permissions/membership-queries', () => ({
+  fetchCustomRolePermissions: (...args: unknown[]) => mockFetchCustomRolePermissions(...args),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { api: { error: vi.fn(), warn: vi.fn() } },
@@ -64,6 +79,9 @@ beforeEach(() => {
   mockFindSessionRecord.mockResolvedValue(ROW);
   mockResolveActorContext.mockResolvedValue(CTX);
   mockExecInWorkspace.mockResolvedValue({ success: true, stdout: 'hi\n', stderr: '', exitCode: 3, truncated: false });
+  mockGetPrincipalDriveMembership.mockResolvedValue({ role: null, customRoleId: null });
+  mockGetUserDrivePermissions.mockResolvedValue({ hasAccess: true, isOwner: true, isAdmin: false, isMember: false, canEdit: true });
+  mockFetchCustomRolePermissions.mockResolvedValue(null);
 });
 
 describe('POST /api/agent-workspaces/[workspaceId]/exec', () => {
@@ -153,6 +171,71 @@ describe('POST /api/agent-workspaces/[workspaceId]/exec', () => {
     const response = await post({ command: 'true' });
     expect(response.status).toBe(200);
     expect(mockExecInWorkspace).toHaveBeenCalled();
+  });
+
+  describe('the CREDENTIAL must clear the drive edit bar, not only its owning user (PR #2653 review P1)', () => {
+    const SCOPED_KEY = { userId: 'user-1', tokenType: 'mcp', tokenId: 'tok-1', allowedDriveIds: ['drive-1'] };
+    const VIEW_ONLY_ROLE = { permissions: {}, driveWidePermissions: { canView: true, canEdit: false, canShare: false } };
+    const EDIT_ROLE = { permissions: {}, driveWidePermissions: { canView: true, canEdit: true, canShare: false } };
+
+    beforeEach(() => {
+      mockAuthenticateRequest.mockResolvedValue(SCOPED_KEY);
+    });
+
+    it('given a drive-owner\'s key downgraded to a view-only custom role, should answer the family 404, audit it, and never run', async () => {
+      mockGetPrincipalDriveMembership.mockResolvedValue({ role: 'MEMBER', customRoleId: 'role-view' });
+      mockFetchCustomRolePermissions.mockResolvedValue(VIEW_ONLY_ROLE);
+      const response = await post({ command: 'true' });
+      expect(response.status).toBe(404);
+      expect(mockGetPrincipalDriveMembership).toHaveBeenCalledWith(SCOPED_KEY, 'drive-1');
+      expect(mockFetchCustomRolePermissions).toHaveBeenCalledWith('role-view', 'drive-1');
+      expect(mockAuditSessionAccessDenial).toHaveBeenCalledWith(
+        expect.anything(), 'user-1', WORKSPACE_ID, 'credential_insufficient_role', expect.any(String),
+      );
+      expect(mockResolveActorContext).not.toHaveBeenCalled();
+      expect(mockExecInWorkspace).not.toHaveBeenCalled();
+    });
+
+    it('given a key whose custom role no longer resolves, should fail closed with the 404', async () => {
+      mockGetPrincipalDriveMembership.mockResolvedValue({ role: 'MEMBER', customRoleId: 'role-gone' });
+      mockFetchCustomRolePermissions.mockResolvedValue(null);
+      expect((await post({ command: 'true' })).status).toBe(404);
+      expect(mockExecInWorkspace).not.toHaveBeenCalled();
+    });
+
+    it('given a key with no membership in the workspace drive, should 404 and never run', async () => {
+      mockGetPrincipalDriveMembership.mockResolvedValue(null);
+      expect((await post({ command: 'true' })).status).toBe(404);
+      expect(mockExecInWorkspace).not.toHaveBeenCalled();
+    });
+
+    it('given an INHERIT key whose owner cannot edit the drive, should 404 and never run', async () => {
+      mockGetUserDrivePermissions.mockResolvedValue({ hasAccess: true, isOwner: false, isAdmin: false, isMember: true, canEdit: false });
+      expect((await post({ command: 'true' })).status).toBe(404);
+      expect(mockGetUserDrivePermissions).toHaveBeenCalledWith('user-1', 'drive-1');
+      expect(mockExecInWorkspace).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['an inherit key whose owner can edit', { role: null, customRoleId: null }, null],
+      ['an explicit ADMIN key', { role: 'ADMIN', customRoleId: null }, null],
+      ['a plain MEMBER key', { role: 'MEMBER', customRoleId: null }, null],
+      ['a custom role granting drive-wide edit', { role: 'MEMBER', customRoleId: 'role-edit' }, EDIT_ROLE],
+    ])('given %s, should run', async (_label, membership, customRole) => {
+      mockGetPrincipalDriveMembership.mockResolvedValue(membership);
+      mockFetchCustomRolePermissions.mockResolvedValue(customRole);
+      const response = await post({ command: 'true' });
+      expect(response.status).toBe(200);
+      expect(mockExecInWorkspace).toHaveBeenCalled();
+    });
+
+    it('given a cookie session, should not consult the principal layer — the user gate alone applies', async () => {
+      mockAuthenticateRequest.mockResolvedValue({ userId: 'user-1', tokenType: 'session' });
+      const response = await post({ command: 'true' });
+      expect(response.status).toBe(200);
+      expect(mockGetPrincipalDriveMembership).not.toHaveBeenCalled();
+      expect(mockExecInWorkspace).toHaveBeenCalled();
+    });
   });
 
   it.each([

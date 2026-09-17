@@ -12,7 +12,14 @@
  * epic's rename fixes.
  *
  * GET ?driveId=<id> | (none = mine)
- *   → { sessions: [{ …AgentSessionDTO, shells: ShellDTO[], conversations }] }
+ *   → { sessions: [{ …AgentSessionDTO, shells: ShellDTO[], conversations, rev, nodes, targets }] }
+ *
+ * A DRIVE-SCOPED credential (a scoped MCP key / OAuth token) gets a narrower
+ * answer: only sessions in drives its OWN principal permissions can view, and
+ * the session DTOs alone — `shells`/`conversations`/`nodes`/`targets` empty at
+ * `rev: 0`. The child reads resolve as the owning user, and a key restricted by
+ * an explicit role must not receive its owner's conversation titles or tree
+ * targets (PR #2653 review P1). The CLI/SDK need only the DTO fields.
  * POST { driveId, agentPageId, name?, firstThing? }
  *   → 201 { session, conversationId } | { session, shellId, shellName } — spawn (see below)
  *
@@ -24,7 +31,13 @@
  */
 
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError, canPrincipalViewPage } from '@/lib/auth';
+import {
+  authenticateRequestWithOptions,
+  isAuthError,
+  canPrincipalViewPage,
+  getPrincipalDriveAccessLevel,
+  isDriveScopedPrincipal,
+} from '@/lib/auth';
 import { conversationRepository, type AiAgent } from '@/lib/repositories/conversation-repository';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -113,9 +126,27 @@ export async function GET(request: Request) {
       : { ownerId: auth.userId };
 
   try {
-    const sessions = (await listSessions(filter)).filter((session) =>
+    const inScope = (await listSessions(filter)).filter((session) =>
       isWorkspaceInCredentialScope(auth, session.driveId),
     );
+
+    if (isDriveScopedPrincipal(auth)) {
+      // Every in-scope session has a drive (a driveless one is out of every
+      // drive scope). One principal read per DISTINCT drive, not per session.
+      const driveIds = [...new Set(inScope.flatMap((session) => (session.driveId ? [session.driveId] : [])))];
+      const viewable = new Set<string>();
+      await Promise.all(
+        driveIds.map(async (id) => {
+          if ((await getPrincipalDriveAccessLevel(auth, id))?.canView) viewable.add(id);
+        }),
+      );
+      const sessions = inScope
+        .filter((session) => session.driveId !== null && viewable.has(session.driveId))
+        .map((session) => ({ ...session, shells: [], conversations: [], rev: 0, nodes: [], targets: [] }));
+      return NextResponse.json({ sessions });
+    }
+
+    const sessions = inScope;
     // Children in THREE bulk queries, however many sessions listed — this is
     // polled by every open sidebar, and the per-session shape was 1+2N
     // queries per poll (review M4).

@@ -14,6 +14,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   plan, quota). It goes through the same gate, command policy, billing and audit as the in-app
   agent's `bash` tool. The operation's own timeout (260s) outlasts the server's 200s run ceiling,
   and it is never retried automatically.
+- **A drive-scoped key is authorized as itself, not as its owner.** `exec` requires the key's own
+  drive grant to allow drive-wide edit, so an owner's key downgraded to a view-only role cannot run
+  commands (it gets the same not-found). For such a key, `list` returns only workspaces in drives
+  the key can view, with `shells`, `conversations`, `nodes` and `targets` empty — those are resolved
+  as the owning user and are only returned to a session or an unscoped key.
 
 ## [2.4.0] — 2026-09-12
 
