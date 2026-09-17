@@ -21,8 +21,12 @@ import type { AllUserData } from './gdpr-export';
  * consumer written against 1.0.0 keeps working — but one keyed on the version
  * can now tell a bundle that carries the subject's tags from one predating the
  * category, which is the whole point of the field being in the manifest.
+ *
+ * 1.2.0 adds `profile.accountType` (native and portable) and
+ * `agent-identity.json` with its `agentIdentity` portable property (ADR 0007).
+ * Additive in the same way: every 1.1.0 file and field is unchanged.
  */
-export const EXPORT_SCHEMA_VERSION = '1.1.0';
+export const EXPORT_SCHEMA_VERSION = '1.2.0';
 
 export type ExportFormat = 'native' | 'portable';
 
@@ -152,6 +156,8 @@ export function toPortableExport(data: AllUserData): Record<string, unknown> {
     // Native field kept (no schema.org equivalent) so the portable export is
     // field-for-field complete with the native export (GDPR Art 20).
     timezone: data.profile.timezone ?? null,
+    // `human` or `agent` (ADR 0007) — no schema.org slot, kept for the same reason.
+    accountType: data.profile.accountType,
     dateCreated: toIso(data.profile.createdAt),
     dateModified: toIso(data.profile.updatedAt),
     owns: data.drives.map((d) => ({

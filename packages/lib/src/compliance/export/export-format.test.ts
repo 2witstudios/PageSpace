@@ -20,6 +20,7 @@ function makeData(overrides: Partial<AllUserData> = {}): AllUserData {
       email: 'ada@example.com',
       image: null,
       timezone: 'UTC',
+      accountType: 'human',
       createdAt: D1,
       updatedAt: D2,
     },
@@ -122,6 +123,22 @@ describe('buildNativeExportFiles', () => {
   });
 });
 
+describe('export schema version (agent identity additions)', () => {
+  it('given profile.accountType and agent-identity.json were added, should be bumped past 1.1.0 to 1.2.0', () => {
+    expect(EXPORT_SCHEMA_VERSION).toBe('1.2.0');
+  });
+
+  it('given an agent export, should ship agent-identity.json and carry accountType agent in the portable Person', () => {
+    const data = makeData({
+      profile: { id: 'a1', name: 'Agent', email: 'agent-a1@agents.pagespace.invalid', image: null, timezone: null, accountType: 'agent', createdAt: D1, updatedAt: D2 },
+      agentIdentity: [{ userId: 'a1', ownerUserId: null, claimedAt: null, source: 'claude-code', lastAuthAt: null, createdAt: D1, revokedAt: null, secretVersion: 1, createdByIp: null }],
+    });
+
+    expect(buildNativeExportFiles(data).find((f) => f.name === 'agent-identity.json')?.recordCount).toBe(1);
+    expect(toPortableExport(data).accountType).toBe('agent');
+  });
+});
+
 describe('buildExportManifest', () => {
   it('given_filesAndDate_returnsVersionedManifestWithInventory', () => {
     const files = buildNativeExportFiles(makeData());
@@ -207,6 +224,8 @@ describe('toPortableExport', () => {
 
     // profile.timezone and drive.slug have no schema.org equivalent but must survive
     expect(portable.timezone).toBe('UTC');
+    // …and so must profile.accountType (ADR 0007): the native profile.json carries it.
+    expect(portable.accountType).toBe('human');
     const owns = portable.owns as Array<Record<string, unknown>>;
     expect(owns[0].slug).toBe('drive-one');
 
