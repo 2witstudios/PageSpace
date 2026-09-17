@@ -10,7 +10,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
 import { db, pool } from '@pagespace/db/db';
-import { and, eq, inArray } from '@pagespace/db/operators';
+import { and, eq, inArray, isNotNull } from '@pagespace/db/operators';
 import { users, mcpTokens } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { driveMembers, driveAgentMembers, mcpTokenDrives } from '@pagespace/db/schema/members';
@@ -22,6 +22,7 @@ import { requireDb } from '@pagespace/db/test/require-db';
 import { leaveOrganization, reassignLedOrgDrives, LeaveOrganizationRefusedError } from '../leave';
 import { accountRepository } from '../../repositories/account-repository';
 import { getUserDriveAccess } from '../../permissions/permissions';
+import { updateDriveLastAccessed } from '../../services/drive-service';
 
 let dbAvailable = false;
 const createdUserIds: string[] = [];
@@ -77,6 +78,15 @@ async function artifactsPresent(a: Awaited<ReturnType<typeof seedArtifacts>>) {
     pageShareLink: pl.length === 1,
     mcpTokenDriveRow: td.length === 1,
   };
+}
+
+/** The former-lead data check: OWNER self-heal rows on org drives, for the given users. */
+async function ownerRowsOnOrgDrives(userIds: string[]) {
+  return db
+    .select({ driveId: driveMembers.driveId, userId: driveMembers.userId })
+    .from(driveMembers)
+    .innerJoin(drives, eq(drives.id, driveMembers.driveId))
+    .where(and(eq(driveMembers.role, 'OWNER'), isNotNull(drives.orgId), inArray(driveMembers.userId, userIds)));
 }
 
 const allPresent = { agentMembership: true, driveShareLink: true, pageShareLink: true, mcpTokenDriveRow: true };
@@ -276,6 +286,87 @@ describe('leave and delete cascades (Postgres)', () => {
 
     expect(await db.select().from(drives).where(eq(drives.id, soloOrgDrive.id))).toHaveLength(1);
     expect(await db.select().from(drives).where(eq(drives.id, soloPersonal.id))).toEqual([]);
+  });
+
+  it('ORG-6 (partial) a lead who leaves the org keeps no OWNER row on its drives', async () => {
+    if (!dbAvailable) return;
+    const owner = await user();
+    const lead = await user();
+    const otherOwner = await user();
+    const org = await orgWith(owner.id, [lead.id]);
+    const otherOrg = await orgWith(otherOwner.id, [lead.id]);
+    // The drive they lead now, with the self-heal row updateDriveLastAccessed used to write for it.
+    const led = await factories.createDrive(lead.id, { orgId: org.id });
+    const [ledRow] = await db.insert(driveMembers)
+      .values({ driveId: led.id, userId: lead.id, role: 'OWNER', acceptedAt: new Date() }).returning();
+    // A drive of this org they led before (its lead already moved to the Owner), row left behind.
+    const formerlyLed = await factories.createDrive(owner.id, { orgId: org.id });
+    await db.insert(driveMembers).values({ driveId: formerlyLed.id, userId: lead.id, role: 'OWNER', acceptedAt: new Date() });
+    // Their own personal drive and another org's drive keep their rows: leaving this org is not those.
+    const personal = await factories.createDrive(lead.id);
+    const [personalRow] = await db.insert(driveMembers)
+      .values({ driveId: personal.id, userId: lead.id, role: 'OWNER', acceptedAt: new Date() }).returning();
+    const otherOrgDrive = await factories.createDrive(otherOwner.id, { orgId: otherOrg.id });
+    const [otherOrgRow] = await db.insert(driveMembers)
+      .values({ driveId: otherOrgDrive.id, userId: lead.id, role: 'OWNER', acceptedAt: new Date() }).returning();
+
+    const result = await leaveOrganization(lead.id, org.id);
+
+    expect(result).toMatchObject({ ok: true, revoked: { formerLeadOwnerRows: 2 }, reassigned: [{ driveId: led.id }] });
+    expect(await db.select().from(driveMembers).where(eq(driveMembers.id, ledRow.id))).toEqual([]);
+    expect(await ownerRowsOnOrgDrives([lead.id])).toEqual([{ driveId: otherOrgDrive.id, userId: lead.id }]);
+    expect(await db.select().from(driveMembers).where(inArray(driveMembers.id, [personalRow.id, otherOrgRow.id]))).toHaveLength(2);
+  });
+
+  it('ORG-6 (partial) reassigning a lead\'s org drives (account deletion) removes their OWNER row on each drive it reassigns, in the same transaction', async () => {
+    if (!dbAvailable) return;
+    const ownerA = await user();
+    const ownerB = await user();
+    const lead = await user();
+    const orgA = await orgWith(ownerA.id, [lead.id]);
+    const orgB = await orgWith(ownerB.id, [lead.id]);
+    const driveA = await factories.createDrive(lead.id, { orgId: orgA.id });
+    const driveB = await factories.createDrive(lead.id, { orgId: orgB.id });
+    const personal = await factories.createDrive(lead.id);
+    for (const d of [driveA, driveB, personal]) {
+      await db.insert(driveMembers).values({ driveId: d.id, userId: lead.id, role: 'OWNER', acceptedAt: new Date() });
+    }
+
+    // A transaction that rolls back after the reassignment takes the row removal with it.
+    await expect(db.transaction(async (tx) => {
+      await reassignLedOrgDrives(lead.id, tx);
+      throw new Error('rollback');
+    })).rejects.toThrow('rollback');
+    expect(await ownerRowsOnOrgDrives([lead.id])).toHaveLength(2);
+
+    await db.transaction((tx) => reassignLedOrgDrives(lead.id, tx, { reason: 'account_deleted' }));
+
+    expect(await ownerRowsOnOrgDrives([lead.id])).toEqual([]);
+    expect(await db.select().from(driveMembers)
+      .where(and(eq(driveMembers.driveId, personal.id), eq(driveMembers.userId, lead.id)))).toHaveLength(1);
+  });
+
+  it('ORG-6 (partial) updateDriveLastAccessed never writes an OWNER self-heal row for an org drive, and still does for a personal drive', async () => {
+    if (!dbAvailable) return;
+    const owner = await user();
+    const lead = await user();
+    const org = await orgWith(owner.id, [lead.id]);
+    const orgDrive = await factories.createDrive(lead.id, { orgId: org.id });
+    const personal = await factories.createDrive(lead.id);
+
+    await updateDriveLastAccessed(lead.id, orgDrive.id);
+    await updateDriveLastAccessed(lead.id, personal.id);
+
+    expect(await ownerRowsOnOrgDrives([lead.id])).toEqual([]);
+    expect(await db.select({ role: driveMembers.role }).from(driveMembers)
+      .where(and(eq(driveMembers.driveId, personal.id), eq(driveMembers.userId, lead.id)))).toEqual([{ role: 'OWNER' }]);
+
+    // A member's own row on the org drive still records the visit.
+    const [memberRow] = await db.insert(driveMembers)
+      .values({ driveId: orgDrive.id, userId: owner.id, role: 'MEMBER', source: 'org', acceptedAt: new Date() }).returning();
+    await updateDriveLastAccessed(owner.id, orgDrive.id);
+    const [visited] = await db.select({ lastAccessedAt: driveMembers.lastAccessedAt }).from(driveMembers).where(eq(driveMembers.id, memberRow.id));
+    expect(visited.lastAccessedAt).not.toBeNull();
   });
 
   it('O-7 reassignLedOrgDrives with no org given reassigns led drives across every org, each to its own Owner', async () => {

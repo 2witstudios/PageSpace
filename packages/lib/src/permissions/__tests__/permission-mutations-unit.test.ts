@@ -375,7 +375,7 @@ describe('grantPagePermission', () => {
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
-            limit: vi.fn().mockResolvedValue([{ id: 'admin-membership-id' }]),
+            limit: vi.fn().mockResolvedValue([{ role: 'ADMIN', customRoleId: null, source: 'invite' }]),
           }),
         }),
       } as unknown as ReturnType<typeof db.select>);

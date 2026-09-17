@@ -6,7 +6,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { eq, ne, and, not, inArray, isNotNull, isNull, like, sql } from '@pagespace/db/operators';
+import { eq, ne, and, not, or, gt, inArray, isNotNull, isNull, like, sql } from '@pagespace/db/operators';
 import { normalizeSubdomain } from '../validators/subdomain';
 import { drives, pages, type OrgDriveVisibility } from '@pagespace/db/schema/core';
 import { allocateUniqueSubdomainWithRetry } from './subdomain-allocation';
@@ -113,7 +113,12 @@ export async function listAccessibleDrives(
         .selectDistinct({ driveId: pages.driveId })
         .from(pagePermissions)
         .leftJoin(pages, eq(pagePermissions.pageId, pages.id))
-        .where(and(eq(pagePermissions.userId, userId), eq(pagePermissions.canView, true)));
+        .where(and(
+          eq(pagePermissions.userId, userId),
+          eq(pagePermissions.canView, true),
+          // An expired share lists nothing, as it opens nothing (getUserAccessLevel, getDriveIdsForUser).
+          or(isNull(pagePermissions.expiresAt), gt(pagePermissions.expiresAt, new Date())),
+        ));
 
   // 4. Build role map and lastAccessedAt map (membership role takes precedence)
   const driveRoles = new Map<string, 'OWNER' | 'ADMIN' | 'MEMBER'>();
@@ -205,7 +210,12 @@ async function listAccessibleDrivesWithOrgs(
         .selectDistinct({ driveId: pages.driveId })
         .from(pagePermissions)
         .leftJoin(pages, eq(pagePermissions.pageId, pages.id))
-        .where(and(eq(pagePermissions.userId, userId), eq(pagePermissions.canView, true)));
+        .where(and(
+          eq(pagePermissions.userId, userId),
+          eq(pagePermissions.canView, true),
+          // An expired share lists nothing, as it opens nothing (getUserAccessLevel, getDriveIdsForUser).
+          or(isNull(pagePermissions.expiresAt), gt(pagePermissions.expiresAt, new Date())),
+        ));
 
   const orgRoles = await loadOrgRolesForUser(userId);
   const openOrgDrives = orgRoles.size > 0
@@ -646,12 +656,14 @@ export async function restoreDrive(driveId: string): Promise<typeof drives.$infe
 export async function updateDriveLastAccessed(userId: string, driveId: string): Promise<void> {
   const now = new Date();
 
-  const [drive] = await db.select({ ownerId: drives.ownerId })
+  const [drive] = await db.select({ ownerId: drives.ownerId, orgId: drives.orgId })
     .from(drives)
     .where(eq(drives.id, driveId))
     .limit(1);
 
-  if (drive?.ownerId === userId) {
+  // Never on an org drive: its lead reaches it through drives.ownerId, the org Owner and Admins
+  // through the org, and an OWNER row there would outlive a lead reassignment (B7b).
+  if (drive?.ownerId === userId && drive.orgId === null) {
     await db.insert(driveMembers)
       .values({
         driveId,

@@ -16,14 +16,16 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, eq, inArray } from '@pagespace/db/operators';
+import { and, eq, inArray, isNull } from '@pagespace/db/operators';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { driveMembers, mcpTokenDrives } from '@pagespace/db/schema/members';
 import { mcpTokens } from '@pagespace/db/schema/auth';
+import { oauthAccessTokens, oauthRefreshTokens } from '@pagespace/db/schema/oauth';
 import { driveShareLinks, pageShareLinks } from '@pagespace/db/schema/share-links';
 import { orgMembers, organizations, type OrgRole } from '@pagespace/db/schema/organizations';
 import { revokeAgentMembershipsGrantedBy } from '../services/drive-agent-service';
 import { getActorInfo, logActivityWithTx } from '../monitoring/activity-logger';
+import { parseScopeList } from '../auth/oauth/scopes';
 
 /** A Drizzle transaction handle. */
 export type LeaveTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -83,7 +85,8 @@ export interface ReassignLedOrgDrivesOptions {
 
 /**
  * Reassign every org drive `userId` leads (trashed ones included) to that org's Owner, writing
- * an `ownership_transfer` activity event per drive in the same transaction. Rows are locked
+ * an `ownership_transfer` activity event per drive in the same transaction, and removing the
+ * former lead's OWNER self-heal row on each (it was never an invitation). Rows are locked
  * FOR UPDATE, drive and org together, so a concurrent ownership transfer cannot leave a drive
  * with the previous Owner as its lead.
  */
@@ -110,6 +113,11 @@ export async function reassignLedOrgDrives(
 
   for (const r of plan) {
     await tx.update(drives).set({ ownerId: r.toUserId }).where(eq(drives.id, r.driveId));
+    await tx.delete(driveMembers).where(and(
+      eq(driveMembers.driveId, r.driveId),
+      eq(driveMembers.userId, r.fromUserId),
+      eq(driveMembers.role, 'OWNER'),
+    ));
     await logActivityWithTx(
       {
         userId,
@@ -130,12 +138,97 @@ export async function reassignLedOrgDrives(
   return plan;
 }
 
-export interface LeaveCascadeCounts {
-  orgMembershipRows: number;
+/** What a person's org membership let them hand out in some org drives, revoked. */
+export interface OrgDriveGrantCounts {
   agentMemberships: number;
   driveShareLinks: number;
   pageShareLinks: number;
   mcpTokenDriveRows: number;
+  /** OAuth token families (every access and refresh token in each) whose scopes name one of the drives. */
+  oauthTokenFamilies: number;
+}
+
+/**
+ * Revoke, inside `tx`, everything `userId` handed out in `driveIds`: agent memberships they granted,
+ * drive and page share links they created, their MCP keys' drive rows, and every OAuth grant of
+ * theirs that names one of the drives. An OAuth drive scope has no row to delete (it lives in the
+ * token's scope list, and an explicit role in it is never re-checked), so its whole token family is
+ * revoked: the client re-authorizes for what the person can still grant. Shared by leave, removal
+ * (which is a leave) and demotion.
+ */
+export async function revokeOrgDriveGrants(tx: LeaveTx, userId: string, driveIds: string[]): Promise<OrgDriveGrantCounts> {
+  const counts: OrgDriveGrantCounts = { agentMemberships: 0, driveShareLinks: 0, pageShareLinks: 0, mcpTokenDriveRows: 0, oauthTokenFamilies: 0 };
+  if (driveIds.length === 0) return counts;
+
+  // revokeAgentMembershipsGrantedBy is per drive and already spares the agent's home drive.
+  for (const id of driveIds) {
+    counts.agentMemberships += (await revokeAgentMembershipsGrantedBy(tx, id, userId)).length;
+  }
+
+  counts.driveShareLinks = (await tx
+    .delete(driveShareLinks)
+    .where(and(eq(driveShareLinks.createdBy, userId), inArray(driveShareLinks.driveId, driveIds)))
+    .returning({ id: driveShareLinks.id })).length;
+
+  counts.pageShareLinks = (await tx
+    .delete(pageShareLinks)
+    .where(and(
+      eq(pageShareLinks.createdBy, userId),
+      inArray(pageShareLinks.pageId, tx.select({ id: pages.id }).from(pages).where(inArray(pages.driveId, driveIds))),
+    ))
+    .returning({ id: pageShareLinks.id })).length;
+
+  counts.mcpTokenDriveRows = (await tx
+    .delete(mcpTokenDrives)
+    .where(and(
+      inArray(mcpTokenDrives.driveId, driveIds),
+      inArray(mcpTokenDrives.tokenId, tx.select({ id: mcpTokens.id }).from(mcpTokens).where(eq(mcpTokens.userId, userId))),
+    ))
+    .returning({ id: mcpTokenDrives.id })).length;
+
+  counts.oauthTokenFamilies = await revokeOAuthFamiliesNamingDrives(tx, userId, new Set(driveIds));
+  return counts;
+}
+
+/** The OAuth token families of `userId` with a live token whose scopes name a drive in `driveIds`. */
+async function revokeOAuthFamiliesNamingDrives(tx: LeaveTx, userId: string, driveIds: ReadonlySet<string>): Promise<number> {
+  // One connection holds a transaction: read sequentially.
+  const accessTokens = await tx.select({ familyId: oauthAccessTokens.familyId, scopes: oauthAccessTokens.scopes })
+    .from(oauthAccessTokens)
+    .where(and(eq(oauthAccessTokens.userId, userId), isNull(oauthAccessTokens.revokedAt)));
+  const refreshTokens = await tx.select({ familyId: oauthRefreshTokens.familyId, scopes: oauthRefreshTokens.scopes })
+    .from(oauthRefreshTokens)
+    .where(and(eq(oauthRefreshTokens.userId, userId), isNull(oauthRefreshTokens.revokedAt)));
+  const families = new Set(
+    [...accessTokens, ...refreshTokens]
+      .filter((t) => scopesNameDrive(t.scopes, driveIds))
+      .map((t) => t.familyId),
+  );
+  if (families.size === 0) return 0;
+
+  const now = new Date();
+  const familyIds = [...families];
+  await tx.update(oauthRefreshTokens)
+    .set({ revokedAt: now, revokedReason: ORG_ACCESS_REVOKED })
+    .where(and(inArray(oauthRefreshTokens.familyId, familyIds), isNull(oauthRefreshTokens.revokedAt)));
+  await tx.update(oauthAccessTokens)
+    .set({ revokedAt: now, revokedReason: ORG_ACCESS_REVOKED })
+    .where(and(inArray(oauthAccessTokens.familyId, familyIds), isNull(oauthAccessTokens.revokedAt)));
+  return families.size;
+}
+
+const ORG_ACCESS_REVOKED = 'org_access_revoked';
+
+/** Whether a stored scope list grants a drive scope on one of `driveIds`. Unparseable lists never resolve, so they name nothing. */
+export function scopesNameDrive(scopes: string[], driveIds: ReadonlySet<string>): boolean {
+  const parsed = parseScopeList(scopes.join(' '));
+  return parsed.ok && [...parsed.scopes.drives.keys()].some((id) => driveIds.has(id));
+}
+
+export interface LeaveCascadeCounts extends OrgDriveGrantCounts {
+  orgMembershipRows: number;
+  /** OWNER self-heal rows on the org's drives, left by drives the leaver leads or once led. */
+  formerLeadOwnerRows: number;
 }
 
 export type LeaveOrganizationResult =
@@ -180,36 +273,19 @@ export async function leaveOrganization(
     ))
     .returning({ id: driveMembers.id });
 
-  // revokeAgentMembershipsGrantedBy is per drive and already spares the agent's home drive.
-  let agentMemberships = 0;
   const driveRows = await tx.select({ id: drives.id }).from(drives).where(eq(drives.orgId, orgId));
-  for (const { id } of driveRows) {
-    agentMemberships += (await revokeAgentMembershipsGrantedBy(tx, id, userId)).length;
-  }
+  const grants = await revokeOrgDriveGrants(tx, userId, driveRows.map((d) => d.id));
 
-  const driveLinks = await tx
-    .delete(driveShareLinks)
-    .where(and(eq(driveShareLinks.createdBy, userId), inArray(driveShareLinks.driveId, orgDriveIds)))
-    .returning({ id: driveShareLinks.id });
-
-  const pageLinks = await tx
-    .delete(pageShareLinks)
+  // A lead's OWNER self-heal row is not a membership: on an org drive it outlives the lead, so
+  // it goes with them, whether they lead the drive now (reassigned below) or led it once.
+  const ownerRows = await tx
+    .delete(driveMembers)
     .where(and(
-      eq(pageShareLinks.createdBy, userId),
-      inArray(
-        pageShareLinks.pageId,
-        tx.select({ id: pages.id }).from(pages).where(inArray(pages.driveId, orgDriveIds)),
-      ),
+      eq(driveMembers.userId, userId),
+      eq(driveMembers.role, 'OWNER'),
+      inArray(driveMembers.driveId, orgDriveIds),
     ))
-    .returning({ id: pageShareLinks.id });
-
-  const tokenRows = await tx
-    .delete(mcpTokenDrives)
-    .where(and(
-      inArray(mcpTokenDrives.driveId, orgDriveIds),
-      inArray(mcpTokenDrives.tokenId, tx.select({ id: mcpTokens.id }).from(mcpTokens).where(eq(mcpTokens.userId, userId))),
-    ))
-    .returning({ id: mcpTokenDrives.id });
+    .returning({ id: driveMembers.id });
 
   const reassigned = await reassignLedOrgDrives(userId, tx, {
     orgId,
@@ -223,10 +299,8 @@ export async function leaveOrganization(
     ok: true,
     revoked: {
       orgMembershipRows: memberRows.length,
-      agentMemberships,
-      driveShareLinks: driveLinks.length,
-      pageShareLinks: pageLinks.length,
-      mcpTokenDriveRows: tokenRows.length,
+      ...grants,
+      formerLeadOwnerRows: ownerRows.length,
     },
     reassigned,
   };

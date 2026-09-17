@@ -22,6 +22,8 @@ export default defineConfig({
       'src/services/__tests__/page-payload-service.integration.test.ts',
       'src/services/__tests__/org-membership-sync.integration.test.ts',
       'src/permissions/__tests__/org-drive-resolvers.integration.test.ts',
+      'src/permissions/__tests__/org-drive-sibling-resolvers.integration.test.ts',
+      'src/permissions/__tests__/org-admin-access-audit.integration.test.ts',
       'src/services/broadcast/__tests__/claim-recipient.integration.test.ts',
       'src/services/agent-workspaces/__tests__/agent-sessions-store.integration.test.ts',
       'src/services/app-hosting/__tests__/provisioner-claim.integration.test.ts',
@@ -32,6 +34,7 @@ export default defineConfig({
       'src/agent-accounts/__tests__/audit-repository.integration.test.ts',
       'src/agent-accounts/store/__tests__/store-adapter-infisical.integration.test.ts',
       'src/organizations/__tests__/org-services.integration.test.ts',
+      'src/organizations/__tests__/org-member-revocation.integration.test.ts',
     ],
     setupFiles: ['./src/test/setup.ts'],
     // Run test files sequentially to avoid database race conditions
@@ -75,6 +78,8 @@ export default defineConfig({
         'src/services/__tests__/page-payload-service.integration.test.ts',
         'src/services/__tests__/org-membership-sync.integration.test.ts',
         'src/permissions/__tests__/org-drive-resolvers.integration.test.ts',
+      'src/permissions/__tests__/org-drive-sibling-resolvers.integration.test.ts',
+      'src/permissions/__tests__/org-admin-access-audit.integration.test.ts',
         'src/services/broadcast/__tests__/claim-recipient.integration.test.ts',
         'src/services/agent-workspaces/__tests__/agent-sessions-store.integration.test.ts',
         'src/services/app-hosting/__tests__/provisioner-claim.integration.test.ts',
@@ -85,6 +90,7 @@ export default defineConfig({
       'src/agent-accounts/__tests__/audit-repository.integration.test.ts',
       'src/agent-accounts/store/__tests__/store-adapter-infisical.integration.test.ts',
       'src/organizations/__tests__/org-services.integration.test.ts',
+      'src/organizations/__tests__/org-member-revocation.integration.test.ts',
       ],
       thresholds: {
         lines: 85,

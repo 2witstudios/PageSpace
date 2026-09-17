@@ -34,6 +34,10 @@ vi.mock('@pagespace/db/db', () => ({
     transaction: vi.fn(),
   },
 }));
+const mockLoadMembership = vi.hoisted(() => vi.fn());
+vi.mock('../../permissions/org-drive-membership', () => ({
+  loadEffectiveDriveMembership: mockLoadMembership,
+}));
 vi.mock('@pagespace/db/schema/core', () => ({
   drives: { id: 'drives.id', name: 'drives.name', slug: 'drives.slug', ownerId: 'drives.ownerId' },
 }));
@@ -185,7 +189,7 @@ describe('drive-role-service', () => {
           }),
         }),
       });
-      mockDb.query.driveMembers.findFirst.mockResolvedValueOnce({ role: 'ADMIN' });
+      mockLoadMembership.mockResolvedValueOnce({ role: 'ADMIN', customRoleId: null, source: 'invite' });
 
       const result = await checkDriveAccessForRoles('drive-1', 'user-1');
       expect(result.isAdmin).toBe(true);
@@ -201,7 +205,7 @@ describe('drive-role-service', () => {
           }),
         }),
       });
-      mockDb.query.driveMembers.findFirst.mockResolvedValueOnce({ role: 'MEMBER' });
+      mockLoadMembership.mockResolvedValueOnce({ role: 'MEMBER', customRoleId: null, source: 'invite' });
 
       const result = await checkDriveAccessForRoles('drive-1', 'user-1');
       expect(result.isAdmin).toBe(false);
@@ -217,9 +221,11 @@ describe('drive-role-service', () => {
           }),
         }),
       });
-      mockDb.query.driveMembers.findFirst.mockResolvedValueOnce(null);
+      // The shared loader reads accepted rows only, so a pending ADMIN invitation lands here too.
+      mockLoadMembership.mockResolvedValueOnce(null);
 
       const result = await checkDriveAccessForRoles('drive-1', 'user-1');
+      expect(mockLoadMembership).toHaveBeenCalledWith('user-1', drive);
       expect(result.isMember).toBe(false);
       expect(result.drive).not.toBeNull();
     });
