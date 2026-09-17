@@ -14,6 +14,10 @@ describe('releaseAppPool', () => {
     expect(pool.end).toHaveBeenCalledTimes(1);
   });
 
+  it('given a suite that mocks @pagespace/db/db without a pool, should do nothing', async () => {
+    await expect(releaseAppPool(undefined)).resolves.toBeUndefined();
+  });
+
   it('given a pool the suite already ended itself, should not end it twice', async () => {
     const pool = fakePool(true);
 

@@ -5,10 +5,11 @@ interface EndablePool {
 }
 
 /**
- * End an integration file's `@pagespace/db` pool unless the suite already did.
+ * End an integration file's `@pagespace/db` pool unless the suite already did,
+ * or mocked the module without one.
  * pg throws if `end()` is called twice.
  */
-export async function releaseAppPool(pool: EndablePool): Promise<void> {
-  if (pool.ending) return;
+export async function releaseAppPool(pool: EndablePool | undefined): Promise<void> {
+  if (!pool || pool.ending) return;
   await pool.end();
 }

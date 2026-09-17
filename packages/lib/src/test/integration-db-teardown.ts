@@ -8,9 +8,17 @@
  * clients already". Release the pool when each file finishes.
  */
 import { afterAll } from 'vitest';
-import { pool } from '@pagespace/db/db';
+import * as appDb from '@pagespace/db/db';
 import { releaseAppPool } from './release-app-pool';
 
 afterAll(async () => {
+  // A suite may vi.mock('@pagespace/db/db') with only `db`; reading a missing
+  // export off a vitest mock throws, so look it up defensively.
+  let pool: typeof appDb.pool | undefined;
+  try {
+    pool = appDb.pool;
+  } catch {
+    pool = undefined;
+  }
   await releaseAppPool(pool);
 });
