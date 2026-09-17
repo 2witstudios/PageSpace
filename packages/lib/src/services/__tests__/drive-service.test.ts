@@ -41,6 +41,7 @@ vi.mock('@pagespace/db/operators', () => ({
   ne: vi.fn((a, b) => ({ op: 'ne', a, b })),
   and: vi.fn((...args) => ({ op: 'and', args })),
   not: vi.fn((a) => ({ op: 'not', a })),
+  or: vi.fn((...args) => ({ op: 'or', args })),
   inArray: vi.fn((a, b) => ({ op: 'inArray', a, b })),
   isNotNull: vi.fn((a) => ({ op: 'isNotNull', a })),
   isNull: vi.fn((a) => ({ op: 'isNull', a })),

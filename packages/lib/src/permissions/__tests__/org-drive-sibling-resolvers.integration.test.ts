@@ -14,7 +14,7 @@ import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest
 import { createId } from '@paralleldrive/cuid2';
 import { factories } from '@pagespace/db/test/factories';
 import { db, pool } from '@pagespace/db/db';
-import { and, eq, inArray } from '@pagespace/db/operators';
+import { and, eq, gt, inArray, isNull, or } from '@pagespace/db/operators';
 import { mcpTokens } from '@pagespace/db/schema/auth';
 import { pages } from '@pagespace/db/schema/core';
 import { driveAgentMembers, driveRoles, mcpTokenDrives, pagePermissions } from '@pagespace/db/schema/members';
@@ -88,6 +88,8 @@ async function matrixFixture() {
   await db.insert(orgMembers).values({ orgId: f.org.id, userId: tomas.id, role: 'MEMBER' });
   await factories.createDriveMember(f.drives.finance.id, tomas.id, { source: 'invite', role: 'ADMIN', acceptedAt: null });
   await factories.createDriveMember(f.drives.personal.id, tomas.id, { source: 'invite', acceptedAt: null });
+  // Lu's only link to Marcus's personal drive is a page share that has EXPIRED: it opens nothing and lists nothing.
+  await factories.createPagePermission(f.pages.personalPage.id, f.people.lu.id, { expiresAt: new Date(Date.now() - 60_000) });
 
   const people = { ...f.people, tomas };
   const tokens = new Map<string, string>();
@@ -133,7 +135,12 @@ async function hasPageShareIn(userId: string, driveId: string) {
     .select({ id: pagePermissions.id })
     .from(pagePermissions)
     .innerJoin(pages, eq(pages.id, pagePermissions.pageId))
-    .where(and(eq(pagePermissions.userId, userId), eq(pages.driveId, driveId), eq(pagePermissions.canView, true)));
+    .where(and(
+      eq(pagePermissions.userId, userId),
+      eq(pages.driveId, driveId),
+      eq(pagePermissions.canView, true),
+      or(isNull(pagePermissions.expiresAt), gt(pagePermissions.expiresAt, new Date())),
+    ));
   return rows.length > 0;
 }
 
@@ -334,7 +341,21 @@ describe('B7b: every human drive resolver answers with one org-aware membership 
     expect(await getDriveAccess(m.drives.product.id, kai.id)).toMatchObject({ isMember: true });
     expect(await getDriveAccess(m.drives.product.id, chris.id)).toMatchObject({ isMember: true });
     expect(await getDriveAccess(m.drives.finance.id, tomas.id)).toMatchObject({ isMember: false });
+    expect(await getUserAccessLevel(m.people.lu.id, m.pages.personalPage.id)).toBeNull();
   }, 180_000);
+
+  it('an expired page share lists no drive, dark or enabled: listAccessibleDrives and getDriveIdsForUser agree', async () => {
+    const m = await matrixFixture();
+    const { lu } = m.people;
+    for (const enabled of [false, true]) {
+      flags.orgsEnabled = enabled;
+      for (const options of [{}, { includeTrash: true }]) {
+        expect((await listAccessibleDrives(lu.id, options)).map((d) => d.id), `orgs ${enabled}`).not.toContain(m.drives.personal.id);
+      }
+      expect(await getDriveIdsForUser(lu.id)).not.toContain(m.drives.personal.id);
+      expect(await getUserDriveAccess(lu.id, m.drives.personal.id)).toBe(false);
+    }
+  });
 
   it('DRV-5 (partial) an implicit Open member holds the drive default role in every custom-role reader, and an org Admin holds none', async () => {
     const m = await matrixFixture();

@@ -8,7 +8,9 @@
  */
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
-import { pool } from '@pagespace/db/db';
+import { db, pool } from '@pagespace/db/db';
+import { and, eq } from '@pagespace/db/operators';
+import { rateLimitBuckets } from '@pagespace/db/schema/rate-limit-buckets';
 import { resetAuditDbBindingForTests } from '../../audit/audit-db-binding';
 import { resetDefaultSecurityAuditForTests, securityAudit } from '../../audit/security-audit';
 import { canUserViewPage, getBatchPagePermissions, getUserAccessLevel, getUserDriveAccess, getUsersWhoCanViewPage } from '../permissions';
@@ -30,6 +32,11 @@ async function accessRows(userId: string, driveId: string) {
   return rows.filter((r) => r.userId === userId);
 }
 
+async function claimRow({ key, windowStart }: { key: string; windowStart: Date }) {
+  return db.select({ key: rateLimitBuckets.key }).from(rateLimitBuckets)
+    .where(and(eq(rateLimitBuckets.key, key), eq(rateLimitBuckets.windowStart, windowStart)));
+}
+
 /** Every audit write is fire-and-forget: let them all land before counting, then count once. */
 async function settledCount(userId: string, driveId: string, atLeast: number) {
   await vi.waitFor(async () => {
@@ -39,7 +46,7 @@ async function settledCount(userId: string, driveId: string, atLeast: number) {
   return (await accessRows(userId, driveId)).length;
 }
 
-describe('ORG-4 audit dedupe (integration)', () => {
+describe('ORG-4 (partial) audit dedupe (integration)', () => {
   const AUDIT_ENV = ['ADMIN_DATABASE_URL', 'ADMIN_DB_BREAK_GLASS', 'AUDIT_TRUST_PLANE_REQUIRED'] as const;
   const savedAuditEnv = new Map<string, string | undefined>();
   const resetAuditBinding = () => {
@@ -132,6 +139,31 @@ describe('ORG-4 audit dedupe (integration)', () => {
     await getUserAccessLevel(f.people.omar.id, salaries);
     expect(await accessRows(priya.id, f.drives.product.id)).toEqual([]);
     expect(await accessRows(f.people.omar.id, finance)).toEqual([]);
+  }, 60_000);
+
+  it('ORG-4 (partial) a failed audit write releases the window, so the next access in the same window still writes the record', async () => {
+    const f = await northwind();
+    const { priya } = f.people;
+    const finance = f.drives.finance.id;
+    const salaries = f.pages.financePrivatePage.id;
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2031-03-05T09:01:00.000Z'));
+    const failOnce = vi.spyOn(securityAudit, 'logEvent').mockRejectedValueOnce(new Error('audit store down'));
+    try {
+      expect(await getUserAccessLevel(priya.id, salaries)).toMatchObject({ canView: true });
+      // The write is fire-and-forget from the resolver: wait until the failed write has released the claim.
+      const claim = orgAdminAuditClaim({ userId: priya.id, driveId: finance, orgId: f.org.id, orgRole: 'ADMIN' }, new Date());
+      await vi.waitFor(async () => {
+        expect(failOnce).toHaveBeenCalledTimes(1);
+        expect(await claimRow(claim)).toEqual([]);
+      }, { timeout: 10_000, interval: 100 });
+      expect(await accessRows(priya.id, finance)).toEqual([]);
+
+      await getUserAccessLevel(priya.id, salaries);
+      expect(await settledCount(priya.id, finance, 1)).toBe(1);
+    } finally {
+      failOnce.mockRestore();
+    }
   }, 60_000);
 
   it('ORG-4 (partial) the claim is a unique key in Postgres, not process memory: a second process loses the same window and wins the next', async () => {

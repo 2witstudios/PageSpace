@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 
 vi.mock('@pagespace/db/db', () => ({ db: {} }));
-vi.mock('../../audit/audit-log', () => ({ audit: vi.fn() }));
+vi.mock('../../audit/security-audit', () => ({ securityAudit: { logEvent: vi.fn() } }));
 
 import {
   ORG_ADMIN_AUDIT_WINDOW_MS,
@@ -21,7 +21,10 @@ function memoryClaimStore() {
     taken.add(id);
     return true;
   });
-  return { claim, taken };
+  const release = vi.fn(async ({ key, windowStart }: { key: string; windowStart: Date }) => {
+    taken.delete(`${key}|${windowStart.toISOString()}`);
+  });
+  return { claim, release, taken };
 }
 
 describe('orgAdminAuditClaim', () => {
@@ -48,9 +51,9 @@ describe('orgAdminAuditClaim', () => {
 describe('createOrgAdminAccessAuditor', () => {
   it('ORG-4 (partial) five accesses in one window write one audit event; an access in the next window writes a second', async () => {
     const store = memoryClaimStore();
-    const write = vi.fn();
+    const write = vi.fn(async () => undefined);
     let now = new Date('2026-09-17T09:01:00.000Z');
-    const auditor = createOrgAdminAccessAuditor({ claim: store.claim, write, now: () => now });
+    const auditor = createOrgAdminAccessAuditor({ claim: store.claim, release: store.release, write, now: () => now });
 
     for (let i = 0; i < 5; i += 1) await auditor.record(priyaOnFinance);
     expect(write).toHaveBeenCalledTimes(1);
@@ -64,10 +67,10 @@ describe('createOrgAdminAccessAuditor', () => {
   it('ORG-4 (partial) a second process that loses the claim writes nothing, and a different user or drive is its own access', async () => {
     const store = memoryClaimStore();
     const now = () => new Date('2026-09-17T09:01:00.000Z');
-    const writeA = vi.fn();
-    const writeB = vi.fn();
-    const processA = createOrgAdminAccessAuditor({ claim: store.claim, write: writeA, now });
-    const processB = createOrgAdminAccessAuditor({ claim: store.claim, write: writeB, now });
+    const writeA = vi.fn(async () => undefined);
+    const writeB = vi.fn(async () => undefined);
+    const processA = createOrgAdminAccessAuditor({ claim: store.claim, release: store.release, write: writeA, now });
+    const processB = createOrgAdminAccessAuditor({ claim: store.claim, release: store.release, write: writeB, now });
 
     await Promise.all([processA.record(priyaOnFinance), processB.record(priyaOnFinance)]);
     expect(writeA.mock.calls.length + writeB.mock.calls.length).toBe(1);
@@ -79,18 +82,33 @@ describe('createOrgAdminAccessAuditor', () => {
 
   it('ORG-4 (partial) the in-process memo skips the claim store for a repeat inside the window', async () => {
     const store = memoryClaimStore();
-    const auditor = createOrgAdminAccessAuditor({ claim: store.claim, write: vi.fn(), now: () => new Date('2026-09-17T09:01:00.000Z') });
+    const auditor = createOrgAdminAccessAuditor({ claim: store.claim, release: store.release, write: vi.fn(async () => undefined), now: () => new Date('2026-09-17T09:01:00.000Z') });
 
     for (let i = 0; i < 5; i += 1) await auditor.record(priyaOnFinance);
     expect(store.claim).toHaveBeenCalledTimes(1);
+  });
+
+  it('ORG-4 (partial) a failed audit write releases the claim, so the next access in the same window writes the record', async () => {
+    const store = memoryClaimStore();
+    const write = vi.fn(async () => undefined).mockRejectedValueOnce(new Error('audit store down'));
+    const auditor = createOrgAdminAccessAuditor({ claim: store.claim, release: store.release, write, now: () => new Date('2026-09-17T09:01:00.000Z') });
+
+    await expect(auditor.record(priyaOnFinance)).resolves.toBeUndefined();
+    expect(store.release).toHaveBeenCalledTimes(1);
+    expect(store.taken.size).toBe(0);
+
+    await auditor.record(priyaOnFinance);
+    await auditor.record(priyaOnFinance);
+    expect(write).toHaveBeenCalledTimes(2);
+    expect(store.taken.size).toBe(1);
   });
 
   it('ORG-4 (partial) an unreachable claim store fails open: every access is audited rather than none', async () => {
     const claim = vi.fn(async () => {
       throw new Error('connection refused');
     });
-    const write = vi.fn();
-    const auditor = createOrgAdminAccessAuditor({ claim, write, now: () => new Date('2026-09-17T09:01:00.000Z') });
+    const write = vi.fn(async () => undefined);
+    const auditor = createOrgAdminAccessAuditor({ claim, release: vi.fn(async () => undefined), write, now: () => new Date('2026-09-17T09:01:00.000Z') });
 
     await auditor.record(priyaOnFinance);
     await auditor.record(priyaOnFinance);

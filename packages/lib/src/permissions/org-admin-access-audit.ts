@@ -1,7 +1,8 @@
 import { db } from '@pagespace/db/db';
+import { and, eq } from '@pagespace/db/operators';
 import { rateLimitBuckets } from '@pagespace/db/schema/rate-limit-buckets';
 import type { OrgRole } from '@pagespace/db/schema/organizations';
-import { audit } from '../audit/audit-log';
+import { securityAudit, type AuditEvent } from '../audit/security-audit';
 import { loggers } from '../logging/logger-config';
 
 /**
@@ -21,7 +22,9 @@ import { loggers } from '../logging/logger-config';
  * Claim rows expire with their window and are swept with the other buckets.
  *
  * Fails open: if the claim store is unreachable the event is written anyway. Over-auditing a
- * PRIVATE drive is acceptable; losing the record of an access is not.
+ * PRIVATE drive is acceptable; losing the record of an access is not. For the same reason the
+ * write is awaited, and a failed write releases the claim, so the next access in the window
+ * writes the record instead of finding the window already taken.
  */
 
 export const ORG_ADMIN_AUDIT_WINDOW_MS = 15 * 60 * 1000;
@@ -52,7 +55,10 @@ export function orgAdminAuditClaim(access: OrgAdminAccess, now: Date): OrgAdminA
 export interface OrgAdminAccessAuditorDeps {
   /** Inserts the claim; true when this caller's insert landed, false when the key was taken. */
   claim: (claim: OrgAdminAuditClaim) => Promise<boolean>;
-  write: (access: OrgAdminAccess) => void;
+  /** Releases a claim whose audit write failed, so a later access in the window writes the record. */
+  release: (claim: OrgAdminAuditClaim) => Promise<void>;
+  /** Writes the audit event; rejects when the audit store did not accept it. */
+  write: (access: OrgAdminAccess) => Promise<void>;
   now: () => Date;
 }
 
@@ -63,13 +69,26 @@ export interface OrgAdminAccessAuditor {
 /** Bound on the in-process memo; it is only a fast path in front of the claim store. */
 const MEMO_LIMIT = 10_000;
 
-export function createOrgAdminAccessAuditor({ claim, write, now }: OrgAdminAccessAuditorDeps): OrgAdminAccessAuditor {
+export function createOrgAdminAccessAuditor({ claim, release, write, now }: OrgAdminAccessAuditorDeps): OrgAdminAccessAuditor {
   // Claims this process already settled (won or lost) in the current window: a realtime socket
   // re-resolving per event must not reach Postgres on every event.
   const settled = new Set<string>();
   let memoWindow = 0;
 
+  const writeOrWarn = async (access: OrgAdminAccess): Promise<boolean> => {
+    try {
+      await write(access);
+      return true;
+    } catch (error) {
+      loggers.security.warn('[ORG-4] audit write failed', {
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
+      return false;
+    }
+  };
+
   return {
+    // Never rejects: resolvers call it without awaiting.
     async record(access) {
       const current = orgAdminAuditClaim(access, now());
       const windowMs = current.windowStart.getTime();
@@ -86,11 +105,20 @@ export function createOrgAdminAccessAuditor({ claim, write, now }: OrgAdminAcces
         loggers.security.warn('[ORG-4] audit window claim failed; writing the access event without dedupe', {
           error: error instanceof Error ? error : new Error(String(error)),
         });
-        write(access);
+        await writeOrWarn(access);
         return;
       }
       if (memoWindow === windowMs) settled.add(current.key);
-      if (won) write(access);
+      if (!won || await writeOrWarn(access)) return;
+
+      settled.delete(current.key);
+      try {
+        await release(current);
+      } catch (error) {
+        loggers.security.warn('[ORG-4] audit window claim release failed; this window has no record of the access', {
+          error: error instanceof Error ? error : new Error(String(error)),
+        });
+      }
     },
   };
 }
@@ -105,18 +133,31 @@ export async function claimOrgAdminAuditWindow({ key, windowStart, expiresAt }: 
   return inserted.length > 0;
 }
 
-function writeOrgAdminAccessEvent({ userId, driveId, orgId, orgRole }: OrgAdminAccess): void {
-  audit({
+export async function releaseOrgAdminAuditWindow({ key, windowStart }: OrgAdminAuditClaim): Promise<void> {
+  await db
+    .delete(rateLimitBuckets)
+    .where(and(eq(rateLimitBuckets.key, key), eq(rateLimitBuckets.windowStart, windowStart)));
+}
+
+/**
+ * The same dual write as audit() (structured log, then the audit chain), but awaited so a failed
+ * append is seen. The details carry ids only, so audit()'s PII sanitizing has nothing to strip.
+ */
+async function writeOrgAdminAccessEvent({ userId, driveId, orgId, orgRole }: OrgAdminAccess): Promise<void> {
+  const event: AuditEvent = {
     eventType: 'authz.access.granted',
     userId,
     resourceType: 'drive',
     resourceId: driveId,
     details: { via: 'org_admin', orgId, orgRole, orgVisibility: 'PRIVATE' },
-  });
+  };
+  loggers.security.info(`[Audit] ${event.eventType}`, { ...event });
+  await securityAudit.logEvent(event);
 }
 
 const defaultAuditor = createOrgAdminAccessAuditor({
   claim: claimOrgAdminAuditWindow,
+  release: releaseOrgAdminAuditWindow,
   write: writeOrgAdminAccessEvent,
   now: () => new Date(),
 });
