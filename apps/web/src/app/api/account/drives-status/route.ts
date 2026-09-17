@@ -19,13 +19,17 @@ export async function GET(req: Request) {
   try {
     // Get all drives owned by the user
     // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
-    const ownedDrives = await db.query.drives.findMany({
+    const ownedAndLedDrives = await db.query.drives.findMany({
       where: eq(drives.ownerId, userId),
       columns: {
         id: true,
         name: true,
+        orgId: true,
       },
     });
+    // An org drive the user leads needs no action: account deletion hands its lead to the
+    // org Owner (Spec O-7), so it is neither a solo drive to delete nor one to transfer.
+    const ownedDrives = ownedAndLedDrives.filter((drive) => !drive.orgId);
 
     if (ownedDrives.length === 0) {
       return Response.json({

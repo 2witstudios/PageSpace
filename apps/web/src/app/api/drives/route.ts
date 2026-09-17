@@ -5,7 +5,10 @@ import { isReservedDriveName } from '@pagespace/lib/services/drive-guards';
 import { getAppDriveMembership, getScopedDriveMembership, hasAppDriveMembership, hasScopedDriveMembership } from '@pagespace/lib/permissions/app-permissions';
 import { db } from '@pagespace/db/db';
 import { and, eq, inArray } from '@pagespace/db/operators';
-import { drives as drivesTable } from '@pagespace/db/schema/core';
+import { drives as drivesTable, ORG_DRIVE_VISIBILITIES } from '@pagespace/db/schema/core';
+import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
+import { createOrgDrive } from '@pagespace/lib/services/org-drive-service';
+import { orgDriveServiceDeps } from '@pagespace/lib/services/org-drive-service-deps';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -28,6 +31,9 @@ const createDriveSchema = z.object({
     (v) => (typeof v === 'string' ? v : ''),
     z.string().min(1, 'Missing name')
   ),
+  // Create the drive in an org context (DRV-3). Visibility defaults to Open unless chosen (DRV-4).
+  orgId: z.string().min(1).optional(),
+  orgVisibility: z.enum(ORG_DRIVE_VISIBILITIES).optional(),
 });
 
 async function listScopedDrivesWithMembership({
@@ -146,14 +152,34 @@ export async function POST(request: Request) {
     return parsed.response;
   }
 
-  const { name } = parsed.data;
+  const { name, orgId, orgVisibility } = parsed.data;
+
+  if (orgId !== undefined && !ORGS_ENABLED) {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  }
+  // Creating in an org is session-only, like the org move routes; CLI and MCP parity is Wave G.
+  if (orgId !== undefined && auth.tokenType !== 'session') {
+    return NextResponse.json(
+      { error: 'Creating a drive in an organization requires a signed-in session; tokens cannot do this yet.' },
+      { status: 403 }
+    );
+  }
 
   try {
     if (isReservedDriveName(name)) {
       return NextResponse.json({ error: 'Cannot create a drive with that name.' }, { status: 400 });
     }
 
-    const newDrive = await createDrive(userId, { name });
+    let newDrive: DriveWithAccess;
+    if (orgId !== undefined) {
+      const created = await createOrgDrive(userId, { name, orgId, orgVisibility }, orgDriveServiceDeps);
+      if (!created.ok) {
+        return NextResponse.json({ error: created.message, code: created.code }, { status: created.status });
+      }
+      newDrive = { ...created.drive, isOwned: true, role: 'OWNER', lastAccessedAt: null };
+    } else {
+      newDrive = await createDrive(userId, { name });
+    }
 
     await broadcastDriveEvent(
       createDriveEventPayload(newDrive.id, 'created', {

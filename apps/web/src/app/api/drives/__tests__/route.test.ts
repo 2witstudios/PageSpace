@@ -17,6 +17,18 @@ vi.mock('@pagespace/lib/services/drive-service', () => ({
     listAccessibleDrives: vi.fn(),
     createDrive: vi.fn(),
 }));
+const { orgsFlag } = vi.hoisted(() => ({ orgsFlag: { enabled: false } }));
+vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({
+  get ORGS_ENABLED() {
+    return orgsFlag.enabled;
+  },
+}));
+vi.mock('@pagespace/lib/services/org-drive-service', () => ({
+  createOrgDrive: vi.fn(),
+}));
+vi.mock('@pagespace/lib/services/org-drive-service-deps', () => ({
+  orgDriveServiceDeps: { marker: 'production-deps' },
+}));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
     audit: vi.fn(),
     auditRequest: vi.fn(),
@@ -66,6 +78,8 @@ vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
 }));
 
 import { listAccessibleDrives, createDrive } from '@pagespace/lib/services/drive-service'
+import { createOrgDrive } from '@pagespace/lib/services/org-drive-service';
+import { orgDriveServiceDeps } from '@pagespace/lib/services/org-drive-service-deps';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
@@ -270,6 +284,7 @@ describe('POST /api/drives', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    orgsFlag.enabled = false;
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
   });
@@ -399,6 +414,113 @@ describe('POST /api/drives', () => {
       const response = await POST(request);
 
       expect(response.status).toBe(400);
+    });
+  });
+
+  describe('create in an org', () => {
+    const orgDriveRow = {
+      id: 'drive_eng',
+      name: 'Engineering',
+      slug: 'engineering',
+      ownerId: mockUserId,
+      kind: 'STANDARD' as const,
+      orgId: 'org-northwind',
+      orgVisibility: 'OPEN' as const,
+      isTrashed: false,
+      trashedAt: null,
+      drivePrompt: null,
+      createdAt: new Date('2026-09-17T00:00:00.000Z'),
+      updatedAt: new Date('2026-09-17T00:00:00.000Z'),
+      publishSubdomain: 'engineering',
+      homePageId: null,
+      publishDefaultOgImageUrl: null,
+      notFoundPageId: null,
+      publishFaviconUrl: null,
+    };
+
+    const post = (body: unknown) =>
+      POST(new Request('https://example.com/api/drives', { method: 'POST', body: JSON.stringify(body) }));
+
+    beforeEach(() => {
+      orgsFlag.enabled = true;
+    });
+
+    it('DRV-3 (partial) a drive created with an orgId goes through createOrgDrive with the production deps and answers 201 as its owner', async () => {
+      vi.mocked(createOrgDrive).mockResolvedValue({ ok: true, drive: orgDriveRow });
+
+      const response = await post({ name: 'Engineering', orgId: 'org-northwind' });
+
+      expect(response.status).toBe(201);
+      expect(createOrgDrive).toHaveBeenCalledWith(
+        mockUserId,
+        { name: 'Engineering', orgId: 'org-northwind', orgVisibility: undefined },
+        orgDriveServiceDeps
+      );
+      expect(createDrive).not.toHaveBeenCalled();
+      expect(await response.json()).toMatchObject({ id: 'drive_eng', orgId: 'org-northwind', isOwned: true, role: 'OWNER' });
+    });
+
+    it('DRV-3 (partial) a refused org create returns the verdict and creates nothing', async () => {
+      vi.mocked(createOrgDrive).mockResolvedValue({
+        ok: false,
+        code: 'NOT_ORG_MEMBER',
+        status: 403,
+        message: 'You must be a member of the organization to create a drive in it.',
+      });
+
+      const response = await post({ name: 'Engineering', orgId: 'org-northwind' });
+
+      expect(response.status).toBe(403);
+      expect((await response.json()).code).toBe('NOT_ORG_MEMBER');
+      expect(createDrive).not.toHaveBeenCalled();
+    });
+
+    it('DRV-4 (partial) a chosen visibility is passed through and an unknown one is a 400', async () => {
+      vi.mocked(createOrgDrive).mockResolvedValue({ ok: true, drive: { ...orgDriveRow, orgVisibility: 'PRIVATE' } });
+
+      await post({ name: 'Finance', orgId: 'org-northwind', orgVisibility: 'PRIVATE' });
+      expect(createOrgDrive).toHaveBeenCalledWith(
+        mockUserId,
+        { name: 'Finance', orgId: 'org-northwind', orgVisibility: 'PRIVATE' },
+        orgDriveServiceDeps
+      );
+
+      expect((await post({ name: 'Finance', orgId: 'org-northwind', orgVisibility: 'SECRET' })).status).toBe(400);
+    });
+
+    it('DRV-3 (partial) a bearer-token request cannot create a drive in an org until CLI and MCP parity in Wave G', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
+        ...mockWebAuth(mockUserId),
+        tokenType: 'mcp',
+      } as unknown as SessionAuthResult);
+
+      const response = await post({ name: 'Engineering', orgId: 'org-northwind' });
+
+      expect(response.status).toBe(403);
+      expect((await response.json()).error).toBe(
+        'Creating a drive in an organization requires a signed-in session; tokens cannot do this yet.'
+      );
+      expect(createOrgDrive).not.toHaveBeenCalled();
+      expect(createDrive).not.toHaveBeenCalled();
+    });
+
+    it('an orgId answers 404 and creates nothing while ORGS_ENABLED is false', async () => {
+      orgsFlag.enabled = false;
+
+      const response = await post({ name: 'Engineering', orgId: 'org-northwind' });
+
+      expect(response.status).toBe(404);
+      expect(createOrgDrive).not.toHaveBeenCalled();
+      expect(createDrive).not.toHaveBeenCalled();
+    });
+
+    it('a drive created without an orgId stays personal', async () => {
+      vi.mocked(createDrive).mockResolvedValue(createDriveFixture({ id: 'drive_personal', name: 'Notes' }));
+
+      await post({ name: 'Notes' });
+
+      expect(createDrive).toHaveBeenCalledWith(mockUserId, { name: 'Notes' });
+      expect(createOrgDrive).not.toHaveBeenCalled();
     });
   });
 
