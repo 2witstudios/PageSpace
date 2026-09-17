@@ -124,16 +124,19 @@ describe('workflow run gate guards', () => {
     expect(callers).toEqual(KNOWN_ENTRY_POINTS);
   });
 
-  it('executeWorkflow gates credit before dispatching any model call and releases the hold in finally', () => {
+  it('executeWorkflow gates credit before claiming the run or dispatching any model call, and releases the hold in finally', () => {
     const src = readFileSync(join(SRC_DIR, EXECUTOR), 'utf8');
-    const body = src.slice(src.indexOf('export async function executeWorkflow('));
+    const start = src.indexOf('export async function executeWorkflow(');
+    const body = src.slice(start, src.indexOf('\nasync function recordRefusal(', start));
     const gate = body.indexOf('await acquireWorkflowCredit(input)');
     expect(gate).toBeGreaterThan(-1);
+    // Before the claim: a transient refusal must leave no workflow_runs row.
+    expect(gate).toBeLessThan(body.indexOf('.insert(workflowRuns)'));
     expect(gate).toBeLessThan(body.indexOf('runStepChain('));
     expect(gate).toBeLessThan(body.indexOf('runExecution('));
-    const fin = body.indexOf('} finally {');
+    const fin = body.lastIndexOf('} finally {');
     expect(fin).toBeGreaterThan(gate);
-    expect(body.slice(fin, body.indexOf('finalizeRun(')).includes('await releaseHold(holdId)')).toBe(true);
+    expect(body.slice(fin).includes('await releaseHold(holdId)')).toBe(true);
   });
 
   it('no entry point takes its own credit gate or hold (the executor holds once for the whole run)', () => {

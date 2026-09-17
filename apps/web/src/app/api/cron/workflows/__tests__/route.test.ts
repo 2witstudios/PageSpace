@@ -197,6 +197,43 @@ describe('POST /api/cron/workflows', () => {
     expect(getNextRunDate).not.toHaveBeenCalled();
   });
 
+  it('given a transient credit refusal inside its retry window, should keep the slot (no nextRunAt advance) so the next tick retries, and not report an error', async () => {
+    mockSelectWhere.mockResolvedValue([MOCK_WORKFLOW]);
+    vi.mocked(executeWorkflow).mockResolvedValue({
+      success: false,
+      durationMs: 0,
+      error: 'AI credit gate denied: daily_cap_exceeded',
+      refusal: { reason: 'daily_cap_exceeded', kind: 'transient', retry: true },
+    });
+
+    const response = await POST(new Request('https://example.com/api/cron/workflows', { method: 'POST' }));
+    const body = await response.json();
+
+    expect(getNextRunDate).not.toHaveBeenCalled();
+    expect(body).toMatchObject({ executed: 0, deferred: 1 });
+    expect(body.errors).toBeUndefined();
+  });
+
+  it('given a terminal credit refusal, should record it as an error and advance to the next slot (the workflow stays enabled)', async () => {
+    mockSelectWhere.mockResolvedValue([MOCK_WORKFLOW]);
+    vi.mocked(executeWorkflow).mockResolvedValue({
+      success: false,
+      durationMs: 0,
+      runId: 'run_refused',
+      error: 'AI credit gate denied: out_of_credits',
+      refusal: { reason: 'out_of_credits', kind: 'terminal', retry: false },
+    });
+    vi.mocked(getNextRunDate).mockReturnValue(new Date('2025-01-02T09:00:00Z'));
+
+    const response = await POST(new Request('https://example.com/api/cron/workflows', { method: 'POST' }));
+    const body = await response.json();
+
+    expect(getNextRunDate).toHaveBeenCalledTimes(1);
+    expect(mockUpdateSet).toHaveBeenCalledWith({ nextRunAt: new Date('2025-01-02T09:00:00Z') });
+    expect(mockUpdateSet).not.toHaveBeenCalledWith(expect.objectContaining({ isEnabled: false }));
+    expect(body.errors).toEqual([`${MOCK_WORKFLOW.name}: AI credit gate denied: out_of_credits`]);
+  });
+
   it('should handle workflow execution errors gracefully', async () => {
     mockSelectWhere.mockResolvedValue([MOCK_WORKFLOW]);
     vi.mocked(executeWorkflow).mockResolvedValue({
@@ -230,7 +267,7 @@ describe('POST /api/cron/workflows', () => {
     await POST(request);
 
     expect(mockAudit).toHaveBeenCalledWith(
-      expect.objectContaining({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'workflows', details: { executed: 1, failed: 0 } })
+      expect.objectContaining({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'workflows', details: { executed: 1, deferred: 0, failed: 0 } })
     );
     expect(mockAudit).not.toHaveBeenCalledWith(expect.objectContaining({ userId: expect.anything() }));
   });

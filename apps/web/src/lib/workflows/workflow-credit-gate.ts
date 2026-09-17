@@ -4,13 +4,14 @@ import { users } from '@pagespace/db/schema/auth';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { CREDIT_HOLD_ESTIMATE_CENTS, MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
+import type { DeniedGateReason } from '@pagespace/lib/billing/classify-gate-refusal';
 import type { WorkflowStep } from '@pagespace/db/schema/workflows';
 import { resolveSteps, countAiSteps } from './core/step-plan';
 import { workflowGateOptions, type WorkflowGatePolicy } from './core/workflow-gate-options';
 
 type WorkflowCreditDecision =
   | { allowed: true; holdId?: string }
-  | { allowed: false; error: string };
+  | { allowed: false; reason: DeniedGateReason };
 
 export interface WorkflowCreditInput {
   createdBy: string;
@@ -52,6 +53,6 @@ export async function acquireWorkflowCredit(input: WorkflowCreditInput): Promise
     (owner?.subscriptionTier ?? 'free') as SubscriptionTier,
     opts,
   );
-  if (!gate.allowed) return { allowed: false, error: `AI credit gate denied: ${gate.reason}` };
+  if (!gate.allowed) return { allowed: false, reason: gate.reason as DeniedGateReason };
   return { allowed: true, holdId: gate.holdId };
 }

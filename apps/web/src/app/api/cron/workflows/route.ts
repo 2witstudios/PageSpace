@@ -89,6 +89,7 @@ export async function POST(req: Request) {
     };
 
     let executed = 0;
+    let deferred = 0;
     let totalAttempted = 0;
     const errors: string[] = [];
 
@@ -102,8 +103,12 @@ export async function POST(req: Request) {
           // workflow, claimConflict comes back true — we leave nextRunAt
           // alone so the running fire's natural completion governs the
           // next schedule advance.
+          // A transient credit refusal (retry) wrote no run either: keep the
+          // past-due slot so the next tick fires it again (bounded to 24h by
+          // the executor). A terminal refusal is recorded and advances like
+          // any failure, leaving the workflow enabled for its next slot.
           const result = await executeWorkflow(toExecutionInput(workflow));
-          if (!result.claimConflict) {
+          if (!result.claimConflict && !result.refusal?.retry) {
             await advanceNextRunAt(workflow);
           }
           return { workflow, result };
@@ -117,6 +122,8 @@ export async function POST(req: Request) {
           totalAttempted++;
           if (settled.value.result.success) {
             executed++;
+          } else if (settled.value.result.refusal?.retry) {
+            deferred++;
           } else {
             errors.push(`${settled.value.workflow.name}: ${settled.value.result.error}`);
           }
@@ -144,11 +151,12 @@ export async function POST(req: Request) {
 
     loggers.api.info(`Workflow cron: Complete. Executed ${executed}/${totalAttempted}`);
 
-    audit({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'workflows', details: { executed, failed: errors.length } });
+    audit({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'workflows', details: { executed, deferred, failed: errors.length } });
 
     return NextResponse.json({
       message: 'Workflow cron complete',
       executed,
+      deferred,
       total: totalAttempted,
       errors: errors.length > 0 ? errors : undefined,
     });

@@ -39,10 +39,7 @@ describe('acquireWorkflowCredit', () => {
   it('given an unclaimed agent the gate refuses, should refuse with requires_funding', async () => {
     mockCanConsumeAI.mockResolvedValue({ allowed: false, reason: 'requires_funding' });
 
-    expect(await acquireWorkflowCredit(input())).toEqual({
-      allowed: false,
-      error: 'AI credit gate denied: requires_funding',
-    });
+    expect(await acquireWorkflowCredit(input())).toEqual({ allowed: false, reason: 'requires_funding' });
   });
 
   it('given a legacy scheduled run, should gate createdBy at their tier with a one-step hold', async () => {

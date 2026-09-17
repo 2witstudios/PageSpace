@@ -36,6 +36,12 @@ import { capStepToolPayloads } from '@/lib/ai/core/cap-step-tool-payloads';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { acquireWorkflowCredit } from './workflow-credit-gate';
 import type { WorkflowGatePolicy } from './core/workflow-gate-options';
+import {
+  classifyGateRefusal,
+  type DeniedGateReason,
+  type GateRefusalKind,
+} from '@pagespace/lib/billing/classify-gate-refusal';
+import { shouldRetryRefusal } from './core/refusal-retry';
 
 export type WorkflowRunSource =
   | { table: 'cron'; id: null; triggerAt: Date | null }
@@ -63,6 +69,15 @@ export interface WorkflowExecutionResult {
    * should surface this so persisted state divergence is observable.
    */
   finalizeError?: string;
+  /**
+   * Set when the credit gate refused the run before anything executed.
+   * `retry: true` means no workflow_runs row was written, so the scheduled
+   * source (calendar occurrence, task trigger, cron slot) must be left eligible
+   * for its next tick; `retry: false` means the refusal was recorded as an
+   * error run (`runId`) and the source should settle as it does for any
+   * failure.
+   */
+  refusal?: { reason: DeniedGateReason; kind: GateRefusalKind; retry: boolean };
 }
 
 /**
@@ -112,78 +127,136 @@ export interface WorkflowExecutionInput {
 export async function executeWorkflow(input: WorkflowExecutionInput): Promise<WorkflowExecutionResult> {
   const startTime = Date.now();
 
-  // 0. Atomic claim via workflow_runs partial unique index. The
-  //    workflow_runs_running_claim_idx ensures only one row with
-  //    status='running' exists per workflowId; ON CONFLICT DO NOTHING
-  //    means a concurrent caller losing the race gets zero rows back.
-  const [runRow] = await db
-    .insert(workflowRuns)
-    .values({
-      workflowId: input.workflowId,
-      sourceTable: input.source.table,
-      sourceId: input.source.id,
-      triggerAt: input.source.triggerAt,
-      status: 'running',
-    })
-    .onConflictDoNothing()
-    .returning({ id: workflowRuns.id });
-
-  if (!runRow) {
+  // 0. Credit gate on the billed user, for EVERY entry point, BEFORE the run is
+  //    claimed. A refusal (out of credits, an unclaimed agent's
+  //    requires_funding, a transient concurrency/daily cap) never resolves a
+  //    model. Gating first is what keeps a transient refusal retryable: the
+  //    calendar cron only re-discovers occurrences with NO workflow_runs row,
+  //    so claiming first would turn a busy minute into a lost meeting run. The
+  //    claim below stays the one atomic "single running" guarantee; a gate
+  //    winner that then loses the claim just releases its hold.
+  let holdId: string | undefined;
+  try {
+    const credit = await acquireWorkflowCredit(input);
+    if (!credit.allowed) return await recordRefusal(input, credit.reason, startTime);
+    holdId = credit.holdId;
+  } catch (error) {
+    // No row was claimed, so the source stays eligible for its next tick.
     return {
       success: false,
       durationMs: Date.now() - startTime,
-      error: 'Workflow already running',
-      claimConflict: true,
+      error: error instanceof Error ? error.message : String(error),
     };
   }
 
-  const runId = runRow.id;
-  let result: WorkflowExecutionResult;
-  let holdId: string | undefined;
-
   try {
-    // 1. Credit gate on the billed user, for EVERY entry point. A refusal
-    //    (out of credits, an unclaimed agent's requires_funding) fails the
-    //    run before any model is resolved; the hold covers every ai step and
-    //    is released in `finally` whatever the run's outcome.
-    const credit = await acquireWorkflowCredit(input);
-    if (credit.allowed) holdId = credit.holdId;
-    const explicitSteps = input.steps && input.steps.length > 0 ? input.steps : null;
-    if (!credit.allowed) {
-      result = { success: false, durationMs: Date.now() - startTime, error: credit.error };
-    } else if (explicitSteps) {
-      result = await runStepChain(input, explicitSteps, runId, startTime);
-    } else if (input.agentPageId) {
-      // Legacy single-AI-prompt path, byte-for-byte pre-steps behavior.
-      result = await runExecution(input, startTime, {
-        prompt: input.eventContext?.promptOverride ?? input.prompt,
-        agentPageId: input.agentPageId,
-      });
-    } else {
+    // 1. Atomic claim via workflow_runs partial unique index. The
+    //    workflow_runs_running_claim_idx ensures only one row with
+    //    status='running' exists per workflowId; ON CONFLICT DO NOTHING
+    //    means a concurrent caller losing the race gets zero rows back.
+    const [runRow] = await db
+      .insert(workflowRuns)
+      .values({
+        workflowId: input.workflowId,
+        sourceTable: input.source.table,
+        sourceId: input.source.id,
+        triggerAt: input.source.triggerAt,
+        status: 'running',
+      })
+      .onConflictDoNothing()
+      .returning({ id: workflowRuns.id });
+
+    if (!runRow) {
+      return {
+        success: false,
+        durationMs: Date.now() - startTime,
+        error: 'Workflow already running',
+        claimConflict: true,
+      };
+    }
+
+    const runId = runRow.id;
+    let result: WorkflowExecutionResult;
+
+    try {
+      const explicitSteps = input.steps && input.steps.length > 0 ? input.steps : null;
+      if (explicitSteps) {
+        result = await runStepChain(input, explicitSteps, runId, startTime);
+      } else if (input.agentPageId) {
+        // Legacy single-AI-prompt path, byte-for-byte pre-steps behavior.
+        result = await runExecution(input, startTime, {
+          prompt: input.eventContext?.promptOverride ?? input.prompt,
+          agentPageId: input.agentPageId,
+        });
+      } else {
+        result = {
+          success: false,
+          durationMs: Date.now() - startTime,
+          error: 'workflow has no steps and no agentPageId',
+        };
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       result = {
         success: false,
         durationMs: Date.now() - startTime,
-        error: 'workflow has no steps and no agentPageId',
+        error: errorMessage,
       };
     }
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    result = {
-      success: false,
-      durationMs: Date.now() - startTime,
-      error: errorMessage,
-    };
+
+    const finalizeError = await finalizeRun(runId, result);
+
+    return finalizeError
+      ? { ...result, runId, finalizeError }
+      : { ...result, runId };
   } finally {
     // Awaited so a follow-up gate never counts this run's hold as in flight;
     // releaseHold swallows its own errors, so cleanup cannot fail the run.
     if (holdId) await releaseHold(holdId);
   }
+}
 
-  const finalizeError = await finalizeRun(runId, result);
+/**
+ * A credit-gate refusal, before any claim. A transient refusal whose occurrence
+ * is still inside the retry window writes NOTHING, so the scheduled source
+ * fires again next tick. Every other refusal is recorded once as an error run
+ * carrying the reason, so it is visible in the run history.
+ */
+async function recordRefusal(
+  input: WorkflowExecutionInput,
+  reason: DeniedGateReason,
+  startTime: number,
+): Promise<WorkflowExecutionResult> {
+  const kind = classifyGateRefusal(reason);
+  const retry = shouldRetryRefusal({ kind, occurrenceAt: input.source.triggerAt, now: new Date() });
+  const refused: WorkflowExecutionResult = {
+    success: false,
+    durationMs: Date.now() - startTime,
+    error: `AI credit gate denied: ${reason}`,
+    refusal: { reason, kind, retry },
+  };
+  if (retry) return refused;
 
-  return finalizeError
-    ? { ...result, runId, finalizeError }
-    : { ...result, runId };
+  try {
+    const [row] = await db
+      .insert(workflowRuns)
+      .values({
+        workflowId: input.workflowId,
+        sourceTable: input.source.table,
+        sourceId: input.source.id,
+        triggerAt: input.source.triggerAt,
+        status: 'error',
+        endedAt: new Date(),
+        durationMs: refused.durationMs,
+        error: refused.error ?? null,
+      })
+      .returning({ id: workflowRuns.id });
+    return { ...refused, runId: row?.id };
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    loggers.api.error('Failed to record refused workflow_run', { workflowId: input.workflowId, error: errorMessage });
+    return { ...refused, finalizeError: errorMessage };
+  }
 }
 
 /**

@@ -264,6 +264,27 @@ describe('task-trigger-helpers', () => {
       }));
     });
 
+    it('given a credit refusal, should pass no occurrence time (no tick retries a completion fire) and end the trigger with the reason recorded', async () => {
+      mockFrom
+        .mockImplementationOnce(() => ({ where: vi.fn().mockResolvedValueOnce([mockTrigger]) }))
+        .mockImplementationOnce(() => ({ where: vi.fn().mockResolvedValueOnce([mockWorkflow]) }));
+      mockReturning.mockResolvedValueOnce([mockTrigger]);
+      vi.mocked(executeWorkflow).mockResolvedValueOnce({
+        success: false,
+        durationMs: 1,
+        runId: 'run_refused',
+        error: 'AI credit gate denied: too_many_in_flight',
+        refusal: { reason: 'too_many_in_flight', kind: 'transient', retry: false },
+      });
+
+      await fireCompletionTrigger('task-1');
+      await vi.waitFor(() => {
+        expect(mockSet).toHaveBeenCalledWith({ lastFireError: 'AI credit gate denied: too_many_in_flight', isEnabled: false });
+      });
+
+      expect(vi.mocked(executeWorkflow).mock.calls[0][0].source).toEqual({ table: 'taskTriggers', id: 'trg-1', triggerAt: null });
+    });
+
     it('given the claim UPDATE, should gate on lastFiredAt IS NULL so concurrent callers cannot double-fire', async () => {
       // SELECT(taskTriggers) → trigger row, then claim UPDATE, then SELECT(workflows)
       mockFrom

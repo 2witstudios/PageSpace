@@ -40,13 +40,15 @@ const {
 const creditGate = vi.hoisted(() => ({
   decision: { allowed: true, holdId: 'hold_1' } as
     | { allowed: true; holdId?: string }
-    | { allowed: false; error: string },
+    | { allowed: false; reason: 'too_many_in_flight' | 'daily_cap_exceeded' | 'out_of_credits' | 'requires_funding' | 'needs_init' },
   calls: [] as unknown[],
   released: [] as string[],
+  throws: null as Error | null,
 }));
 vi.mock('../workflow-credit-gate', () => ({
   acquireWorkflowCredit: async (input: unknown) => {
     creditGate.calls.push(input);
+    if (creditGate.throws) throw creditGate.throws;
     return creditGate.decision;
   },
 }));
@@ -990,6 +992,7 @@ describe('executeWorkflow — credit gate inside the executor', () => {
     creditGate.decision = { allowed: true, holdId: 'hold_1' };
     creditGate.calls = [];
     creditGate.released = [];
+    creditGate.throws = null;
     mockSpawnSession.mockResolvedValue({ ok: false, reason: 'spawn_failed' });
     mockCreateConversationInSession.mockResolvedValue(undefined);
     mockEndSession.mockResolvedValue({ ok: true });
@@ -1011,19 +1014,67 @@ describe('executeWorkflow — credit gate inside the executor', () => {
     mockUpdateWhere.mockResolvedValue(undefined);
   });
 
-  test('given a refused gate (an unclaimed agent), should fail the run with the gate reason and never resolve a model or call generateText', async () => {
-    creditGate.decision = { allowed: false, error: 'AI credit gate denied: requires_funding' };
-    setupSelectChain([mockAgent], [mockDrive]);
+  test('given a terminal refusal (an unclaimed agent), should record ONE error run with the reason and never resolve a model', async () => {
+    creditGate.decision = { allowed: false, reason: 'requires_funding' };
+    mockInsertValues.mockReturnValue({ returning: mockInsertReturning, onConflictDoNothing: mockOnConflictDoNothing });
+    mockInsertReturning.mockResolvedValue([{ id: 'run_refused' }]);
 
-    const result = await executeWorkflow(createInputFixture({ source: { table: 'cron', id: null, triggerAt: null } }));
+    const result = await executeWorkflow(createInputFixture({ source: { table: 'cron', id: null, triggerAt: new Date() } }));
 
-    expect(result).toMatchObject({ success: false, error: 'AI credit gate denied: requires_funding', runId: 'run_1' });
-    expect(createAIProvider).not.toHaveBeenCalled();
-    expect(generateText).not.toHaveBeenCalled();
-    expect(mockUpdateSet).toHaveBeenCalledWith(
+    expect(result).toMatchObject({
+      success: false,
+      error: 'AI credit gate denied: requires_funding',
+      runId: 'run_refused',
+      refusal: { reason: 'requires_funding', kind: 'terminal', retry: false },
+    });
+    expect(mockInsertValues).toHaveBeenCalledTimes(1);
+    expect(mockInsertValues).toHaveBeenCalledWith(
       expect.objectContaining({ status: 'error', error: 'AI credit gate denied: requires_funding' }),
     );
-    expect(creditGate.released).toEqual([]);
+    expect(mockOnConflictDoNothing).not.toHaveBeenCalled(); // not a running claim
+    expect(createAIProvider).not.toHaveBeenCalled();
+    expect(generateText).not.toHaveBeenCalled();
+  });
+
+  test('given a transient refusal for a fresh occurrence, should write NO run row so the next tick retries it', async () => {
+    creditGate.decision = { allowed: false, reason: 'too_many_in_flight' };
+
+    const result = await executeWorkflow(
+      createInputFixture({ source: { table: 'calendarTriggers', id: 'ct_1', triggerAt: new Date(Date.now() - 60_000) } }),
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      error: 'AI credit gate denied: too_many_in_flight',
+      refusal: { reason: 'too_many_in_flight', kind: 'transient', retry: true },
+    });
+    expect(result.runId).toBeUndefined();
+    expect(mockInsert).not.toHaveBeenCalled();
+    expect(generateText).not.toHaveBeenCalled();
+  });
+
+  test('given a transient refusal for an occurrence older than 24h, should stop retrying and record the error run', async () => {
+    creditGate.decision = { allowed: false, reason: 'daily_cap_exceeded' };
+    mockInsertValues.mockReturnValue({ returning: mockInsertReturning, onConflictDoNothing: mockOnConflictDoNothing });
+    mockInsertReturning.mockResolvedValue([{ id: 'run_expired' }]);
+
+    const result = await executeWorkflow(
+      createInputFixture({ source: { table: 'taskTriggers', id: 'tt_1', triggerAt: new Date(Date.now() - 25 * 60 * 60 * 1000) } }),
+    );
+
+    expect(result).toMatchObject({ runId: 'run_expired', refusal: { kind: 'transient', retry: false } });
+    expect(mockInsertValues).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'error', error: 'AI credit gate denied: daily_cap_exceeded' }),
+    );
+  });
+
+  test('given the gate itself throws, should fail without claiming a run row (retryable, never a stuck claim)', async () => {
+    creditGate.throws = new Error('db down');
+
+    const result = await executeWorkflow(createInputFixture());
+
+    expect(result).toMatchObject({ success: false, error: 'db down' });
+    expect(mockInsert).not.toHaveBeenCalled();
   });
 
   test('given a manual run, should gate the input it was handed (billed to createdBy)', async () => {
@@ -1056,12 +1107,13 @@ describe('executeWorkflow — credit gate inside the executor', () => {
     expect(creditGate.released).toEqual(['hold_1']);
   });
 
-  test('given a claim conflict, should neither gate nor hold', async () => {
+  test('given the gate passes but the run claim conflicts, should release the hold it took', async () => {
     mockInsertReturning.mockResolvedValue([]);
 
     const result = await executeWorkflow(createInputFixture());
 
     expect(result.claimConflict).toBe(true);
-    expect(creditGate.calls).toEqual([]);
+    expect(creditGate.released).toEqual(['hold_1']);
+    expect(generateText).not.toHaveBeenCalled();
   });
 });

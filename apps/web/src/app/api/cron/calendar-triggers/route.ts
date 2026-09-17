@@ -89,6 +89,7 @@ export async function POST(req: Request) {
     logger.info(`Calendar trigger cron: Found ${dueTriggers.length} due triggers`);
 
     let executed = 0;
+    let deferred = 0;
     let totalAttempted = 0;
     const errors: string[] = [];
 
@@ -139,6 +140,11 @@ export async function POST(req: Request) {
           totalAttempted++;
           if (settled.value.result.success) {
             executed++;
+          } else if (settled.value.result.refusal?.retry) {
+            // Transient credit refusal: the executor wrote no workflow_runs
+            // row, so discovery returns this occurrence next tick (bounded to
+            // 24h, after which the executor records the refusal as an error).
+            deferred++;
           } else if (!settled.value.result.claimConflict) {
             errors.push(`trigger-${settled.value.trigger.id}: ${settled.value.result.error}`);
           }
@@ -163,11 +169,12 @@ export async function POST(req: Request) {
     //    call every tick without duplicates.
     await refillRecurringTriggers(now);
 
-    audit({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'calendar_triggers', details: { executed, failed: errors.length } });
+    audit({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'calendar_triggers', details: { executed, deferred, failed: errors.length } });
 
     return NextResponse.json({
       message: 'Calendar trigger cron complete',
       executed,
+      deferred,
       total: totalAttempted,
       errors: errors.length > 0 ? errors : undefined,
     });

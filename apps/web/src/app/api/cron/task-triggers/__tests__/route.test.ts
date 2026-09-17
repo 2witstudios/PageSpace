@@ -317,4 +317,45 @@ describe('POST /api/cron/task-triggers', () => {
     );
     expect(disablingCall).toBeDefined();
   });
+
+  describe('credit-gate refusals', () => {
+    const fire = async (result: Record<string, unknown>) => {
+      pushDiscoveryRows([MOCK_TRIGGER]);
+      mockReturning.mockResolvedValueOnce([MOCK_TRIGGER]);
+      pushLookupRows([MOCK_WORKFLOW]);
+      pushLookupRows([MOCK_TASK]);
+      vi.mocked(executeWorkflow).mockResolvedValue(result as never);
+      const response = await POST(new Request('https://example.com/api/cron/task-triggers', { method: 'POST' }));
+      return { body: await response.json(), sets: mockUpdateSet.mock.calls.map((c) => c[0] as Record<string, unknown>) };
+    };
+
+    it('given a transient refusal still inside its retry window, should release the claim (lastFiredAt null) and keep the trigger enabled so the next tick retries', async () => {
+      const { body, sets } = await fire({
+        success: false,
+        durationMs: 1,
+        error: 'AI credit gate denied: too_many_in_flight',
+        refusal: { reason: 'too_many_in_flight', kind: 'transient', retry: true },
+      });
+
+      expect(sets).toContainEqual({ lastFiredAt: null, lastFireError: 'AI credit gate denied: too_many_in_flight' });
+      expect(sets.some((set) => set.isEnabled === false)).toBe(false);
+      expect(body).toMatchObject({ executed: 0, deferred: 1 });
+      expect(body.errors).toBeUndefined();
+    });
+
+    it('given a terminal refusal (or a transient one past its window), should end the one-shot trigger with the reason recorded', async () => {
+      const { body, sets } = await fire({
+        success: false,
+        durationMs: 1,
+        runId: 'run_refused',
+        error: 'AI credit gate denied: requires_funding',
+        refusal: { reason: 'requires_funding', kind: 'terminal', retry: false },
+      });
+
+      expect(sets).toContainEqual({ isEnabled: false, lastFireError: 'AI credit gate denied: requires_funding' });
+      expect(sets.some((set) => 'lastFiredAt' in set && set.lastFiredAt === null)).toBe(false);
+      expect(body.errors).toEqual([`task-trigger-${MOCK_TRIGGER.id}: AI credit gate denied: requires_funding`]);
+    });
+  });
+
 });

@@ -311,6 +311,50 @@ describe('POST /api/cron/calendar-triggers', () => {
     expect(body.errors).toBeUndefined();
   });
 
+  describe('credit-gate refusals', () => {
+    const fire = async (result: Record<string, unknown>) => {
+      let selectCallCount = 0;
+      mockSelect.mockImplementation(() => {
+        selectCallCount++;
+        return { from: mockSelectFrom };
+      });
+      mockSelectFrom.mockImplementation(() => {
+        if (selectCallCount === 1) return { where: mockSelectWhere };
+        return { where: vi.fn().mockResolvedValue([MOCK_EVENT]) };
+      });
+      mockSelectLimit.mockResolvedValue([MOCK_TRIGGER]);
+      mockExecuteCalendarTrigger.mockResolvedValue(result);
+      const response = await POST(new Request('https://example.com/api/cron/calendar-triggers', { method: 'POST' }));
+      return response.json();
+    };
+
+    it('given a transient refusal inside its retry window, should report it deferred (not an error) and write no run row, so the occurrence is re-discovered next tick', async () => {
+      const body = await fire({
+        success: false,
+        durationMs: 0,
+        error: 'AI credit gate denied: too_many_in_flight',
+        refusal: { reason: 'too_many_in_flight', kind: 'transient', retry: true },
+      });
+
+      expect(body).toMatchObject({ executed: 0, deferred: 1 });
+      expect(body.errors).toBeUndefined();
+      expect(mockInsert).not.toHaveBeenCalled();
+    });
+
+    it('given a terminal refusal (recorded once by the executor), should report the occurrence as an error', async () => {
+      const body = await fire({
+        success: false,
+        durationMs: 0,
+        runId: 'run_refused',
+        error: 'AI credit gate denied: requires_funding',
+        refusal: { reason: 'requires_funding', kind: 'terminal', retry: false },
+      });
+
+      expect(body.errors).toEqual([`trigger-${MOCK_TRIGGER.id}: AI credit gate denied: requires_funding`]);
+      expect(body.deferred).toBe(0);
+    });
+  });
+
   it('handles thrown exceptions during trigger execution', async () => {
     let selectCallCount = 0;
     mockSelect.mockImplementation(() => {
@@ -353,7 +397,7 @@ describe('POST /api/cron/calendar-triggers', () => {
     await POST(request);
 
     expect(mockAudit).toHaveBeenCalledWith(
-      expect.objectContaining({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'calendar_triggers', details: { executed: 1, failed: 0 } })
+      expect.objectContaining({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'calendar_triggers', details: { executed: 1, deferred: 0, failed: 0 } })
     );
   });
 

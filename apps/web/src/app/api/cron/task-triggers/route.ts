@@ -51,6 +51,7 @@ export async function POST(req: Request) {
     logger.info(`Task trigger cron: Found ${dueTriggers.length} due triggers`);
 
     let executed = 0;
+    let deferred = 0;
     let totalClaimed = 0;
     const errors: string[] = [];
 
@@ -142,6 +143,17 @@ export async function POST(req: Request) {
 
           const result = await executeWorkflow(input);
 
+          if (result.refusal?.retry) {
+            // A transient credit refusal wrote no run: release this tick's claim
+            // so the next tick fires the trigger again (bounded to 24h by the
+            // executor), and show why it is waiting.
+            await db.update(taskTriggers).set({
+              lastFiredAt: null,
+              lastFireError: result.error ?? null,
+            }).where(eq(taskTriggers.id, trigger.id));
+            return { trigger, result };
+          }
+
           await db.update(taskTriggers).set({
             isEnabled: false,
             lastFireError: result.error || null,
@@ -156,6 +168,8 @@ export async function POST(req: Request) {
         if (settled.status === 'fulfilled') {
           if (settled.value.result.success) {
             executed++;
+          } else if (settled.value.result.refusal?.retry) {
+            deferred++;
           } else {
             errors.push(`task-trigger-${settled.value.trigger.id}: ${settled.value.result.error}`);
           }
@@ -178,11 +192,12 @@ export async function POST(req: Request) {
 
     logger.info(`Task trigger cron: Complete. Executed ${executed}/${totalClaimed}`);
 
-    audit({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'task_triggers', details: { executed, failed: errors.length } });
+    audit({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'task_triggers', details: { executed, deferred, failed: errors.length } });
 
     return NextResponse.json({
       message: 'Task trigger cron complete',
       executed,
+      deferred,
       total: totalClaimed,
       errors: errors.length > 0 ? errors : undefined,
     });
