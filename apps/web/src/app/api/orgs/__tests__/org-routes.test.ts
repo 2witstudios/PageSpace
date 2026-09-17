@@ -137,9 +137,25 @@ function setServiceDefaults() {
   vi.mocked(membership.changeMemberRole).mockResolvedValue({ ok: true });
   vi.mocked(membership.removeMember).mockResolvedValue({ ok: true });
   vi.mocked(membership.transferOwnership).mockResolvedValue({ ok: true });
-  vi.mocked(invitations.createOrRotateInvitation).mockResolvedValue({ ok: true, invitation, token: 'ps_orginv_t', rotated: false });
+  // The fakes call the route's delivery the way the service does, and report a failed
+  // delivery the way the service does after undoing its write.
+  vi.mocked(invitations.createOrRotateInvitation).mockImplementation(async ({ deliver }) => {
+    try {
+      await deliver(invitation, 'ps_orginv_t');
+    } catch (cause) {
+      return { ok: false, status: 502, reason: 'delivery_failed', cause };
+    }
+    return { ok: true, invitation, token: 'ps_orginv_t', rotated: false };
+  });
   vi.mocked(invitations.listOpenInvitations).mockResolvedValue([invitation]);
-  vi.mocked(invitations.resendInvitation).mockResolvedValue({ ok: true, invitation, token: 'ps_orginv_t2' });
+  vi.mocked(invitations.resendInvitation).mockImplementation(async ({ deliver }) => {
+    try {
+      await deliver(invitation, 'ps_orginv_t2');
+    } catch (cause) {
+      return { ok: false, status: 502, reason: 'delivery_failed', cause };
+    }
+    return { ok: true, invitation, token: 'ps_orginv_t2' };
+  });
   vi.mocked(invitations.revokeInvitation).mockResolvedValue(true);
   vi.mocked(invitations.acceptInvitation).mockResolvedValue({ ok: true, orgId: ORG_ID, role: 'MEMBER', joined: true });
   vi.mocked(deleteOrganization).mockResolvedValue({ ok: true, steps: [] });
@@ -338,6 +354,14 @@ describe('org route behaviour', () => {
     }
   });
 
+  it('ORG-6 (partial) DELETE /api/orgs/[orgId] passes the caller so the service can re-check ownership, and maps its refusal', async () => {
+    asRole('OWNER');
+    vi.mocked(deleteOrganization).mockResolvedValue({ ok: false, status: 403, reason: 'not_owner' });
+    const res = await orgRoute.DELETE(req('DELETE', { drives: [] }), params({ orgId: ORG_ID }));
+    expect(res.status).toBe(403);
+    expect(deleteOrganization).toHaveBeenCalledWith(expect.objectContaining({ actorId: CALLER, orgId: ORG_ID }));
+  });
+
   it('ORG-6 (partial) DELETE /api/orgs/[orgId] reports the drives that block the delete', async () => {
     asRole('OWNER');
     vi.mocked(deleteOrganization).mockResolvedValue({ ok: false, status: 400, reason: 'transfer_target_not_member', driveIds: ['d_product'] });
@@ -362,12 +386,13 @@ describe('org route behaviour', () => {
     expect(JSON.stringify(await res.json())).not.toContain('ps_orginv_t');
   });
 
-  it('ORG-3 (partial) an invite that could not be emailed is revoked so it holds no seat', async () => {
+  it('ORG-3 (partial) an invite or resend that could not be emailed answers 502 and the service undoes it', async () => {
     asRole('ADMIN');
     vi.mocked(deliverOrgInvite).mockRejectedValue(new Error('smtp down'));
-    const res = await invitationsRoute.POST(req('POST', { email: 'marcus@northwind.test' }), params({ orgId: ORG_ID }));
-    expect(res.status).toBe(502);
-    expect(invitations.revokeInvitation).toHaveBeenCalledWith({ orgId: ORG_ID, invitationId: 'inv_1' });
+    expect((await invitationsRoute.POST(req('POST', { email: 'marcus@northwind.test' }), params({ orgId: ORG_ID }))).status).toBe(502);
+    expect((await resendRoute.POST(req('POST'), params({ orgId: ORG_ID, invitationId: 'inv_1' }))).status).toBe(502);
+    // Compensation lives in the service (proven against Postgres), never a second route write.
+    expect(invitations.revokeInvitation).not.toHaveBeenCalled();
   });
 
   it('ORG-3 (partial) inviting refuses an existing member, an unverified inviter, and an OWNER role', async () => {
@@ -381,7 +406,10 @@ describe('org route behaviour', () => {
 
   it('ORG-3 (partial) re-inviting after expiry rotates the open invite (route answers 200 and emails the new link)', async () => {
     asRole('ADMIN');
-    vi.mocked(invitations.createOrRotateInvitation).mockResolvedValue({ ok: true, invitation, token: 'ps_orginv_rotated', rotated: true });
+    vi.mocked(invitations.createOrRotateInvitation).mockImplementation(async ({ deliver }) => {
+      await deliver(invitation, 'ps_orginv_rotated');
+      return { ok: true, invitation, token: 'ps_orginv_rotated', rotated: true };
+    });
     const res = await invitationsRoute.POST(req('POST', { email: 'marcus@northwind.test' }), params({ orgId: ORG_ID }));
     expect(res.status).toBe(200);
     expect(deliverOrgInvite).toHaveBeenCalledWith(expect.objectContaining({ token: 'ps_orginv_rotated' }));

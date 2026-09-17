@@ -138,12 +138,12 @@ describe('invitation decisions', () => {
 
 describe('membership decisions', () => {
   it('ORG-2 (partial) an Admin can make a Member an Admin and back', () => {
-    expect(decideRoleChange({ actorId: 'priya', targetId: 'marcus', targetRole: 'MEMBER', newRole: 'ADMIN' })).toEqual({ ok: true });
-    expect(decideRoleChange({ actorId: 'priya', targetId: 'dana', targetRole: 'ADMIN', newRole: 'MEMBER' })).toEqual({ ok: true });
+    expect(decideRoleChange({ actorId: 'priya', actorRole: 'ADMIN', targetId: 'marcus', targetRole: 'MEMBER', newRole: 'ADMIN' })).toEqual({ ok: true });
+    expect(decideRoleChange({ actorId: 'priya', actorRole: 'ADMIN', targetId: 'dana', targetRole: 'ADMIN', newRole: 'MEMBER' })).toEqual({ ok: true });
   });
 
   it('ORG-2 (partial) a role change on a non-member is not found', () => {
-    expect(decideRoleChange({ actorId: 'priya', targetId: 'chris', targetRole: null, newRole: 'ADMIN' })).toEqual({
+    expect(decideRoleChange({ actorId: 'priya', actorRole: 'ADMIN', targetId: 'chris', targetRole: null, newRole: 'ADMIN' })).toEqual({
       ok: false,
       status: 404,
       reason: 'target_not_member',
@@ -151,12 +151,12 @@ describe('membership decisions', () => {
   });
 
   it('ORG-1 (partial) the Owner role is never granted or removed by a role change, only by transfer', () => {
-    expect(decideRoleChange({ actorId: 'priya', targetId: 'marcus', targetRole: 'MEMBER', newRole: 'OWNER' })).toEqual({
+    expect(decideRoleChange({ actorId: 'priya', actorRole: 'ADMIN', targetId: 'marcus', targetRole: 'MEMBER', newRole: 'OWNER' })).toEqual({
       ok: false,
       status: 400,
       reason: 'use_ownership_transfer',
     });
-    expect(decideRoleChange({ actorId: 'priya', targetId: 'jono', targetRole: 'OWNER', newRole: 'MEMBER' })).toEqual({
+    expect(decideRoleChange({ actorId: 'priya', actorRole: 'ADMIN', targetId: 'jono', targetRole: 'OWNER', newRole: 'MEMBER' })).toEqual({
       ok: false,
       status: 400,
       reason: 'use_ownership_transfer',
@@ -164,22 +164,35 @@ describe('membership decisions', () => {
   });
 
   it('ORG-2 (partial) removing the Owner is refused and removing yourself is leaving', () => {
-    expect(decideMemberRemoval({ actorId: 'priya', targetId: 'jono', targetRole: 'OWNER' })).toEqual({
+    expect(decideMemberRemoval({ actorId: 'priya', actorRole: 'ADMIN', targetId: 'jono', targetRole: 'OWNER' })).toEqual({
       ok: false,
       status: 400,
       reason: 'use_ownership_transfer',
     });
-    expect(decideMemberRemoval({ actorId: 'priya', targetId: 'priya', targetRole: 'ADMIN' })).toEqual({
+    expect(decideMemberRemoval({ actorId: 'priya', actorRole: 'ADMIN', targetId: 'priya', targetRole: 'ADMIN' })).toEqual({
       ok: false,
       status: 400,
       reason: 'use_leave',
     });
-    expect(decideMemberRemoval({ actorId: 'priya', targetId: 'chris', targetRole: null })).toEqual({
+    expect(decideMemberRemoval({ actorId: 'priya', actorRole: 'ADMIN', targetId: 'chris', targetRole: null })).toEqual({
       ok: false,
       status: 404,
       reason: 'target_not_member',
     });
-    expect(decideMemberRemoval({ actorId: 'priya', targetId: 'marcus', targetRole: 'MEMBER' })).toEqual({ ok: true });
+    expect(decideMemberRemoval({ actorId: 'priya', actorRole: 'ADMIN', targetId: 'marcus', targetRole: 'MEMBER' })).toEqual({ ok: true });
+  });
+
+  it('ORG-5 (partial) a role change or removal re-checks the actor, who may have lost the Admin role since the route authorized', () => {
+    expect(decideRoleChange({ actorId: 'priya', actorRole: 'MEMBER', targetId: 'marcus', targetRole: 'MEMBER', newRole: 'ADMIN' })).toEqual({
+      ok: false,
+      status: 403,
+      reason: 'insufficient_role',
+    });
+    expect(decideMemberRemoval({ actorId: 'priya', actorRole: null, targetId: 'marcus', targetRole: 'MEMBER' })).toEqual({
+      ok: false,
+      status: 404,
+      reason: 'not_member',
+    });
   });
 
   it('ORG-1 (partial) ownership transfers only from the current Owner to another member', () => {
@@ -204,6 +217,7 @@ describe('membership decisions', () => {
 
 describe('planOrgDeletion', () => {
   const base = {
+    actorId: 'jono',
     ownerId: 'jono',
     memberIds: ['jono', 'priya', 'marcus'],
   };
@@ -265,6 +279,14 @@ describe('planOrgDeletion', () => {
     expect(
       planOrgDeletion({ ...base, drives: [oldSite], choices: [{ driveId: 'd-old', action: 'transfer', toUserId: 'priya' }] }),
     ).toEqual({ ok: false, reason: 'drive_already_trashed', driveIds: ['d-old'] });
+  });
+
+  it('ORG-6 (partial) a caller who is not the Owner at the time of the write is refused', () => {
+    expect(planOrgDeletion({ ...base, actorId: 'priya', drives: [product], choices: [{ driveId: 'd-product', action: 'trash' }] })).toEqual({
+      ok: false,
+      reason: 'not_owner',
+      driveIds: [],
+    });
   });
 
   it('ORG-6 (partial) two choices for one drive are refused', () => {

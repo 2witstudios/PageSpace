@@ -76,14 +76,15 @@ export async function DELETE(request: Request, context: Context) {
     if (!parsed.success) {
       return NextResponse.json({ error: 'Invalid request body', issues: parsed.error.issues }, { status: 400 });
     }
-    const result = await deleteOrganization({ orgId, choices: parsed.data.drives, now: new Date() });
+    // The service re-checks the caller is still the Owner under the org row lock.
+    const result = await deleteOrganization({ actorId: gate.userId, orgId, choices: parsed.data.drives, now: new Date() });
     if (!result.ok) {
-      return result.status === 404
-        ? NextResponse.json({ error: 'Organization not found' }, { status: 404 })
-        : NextResponse.json(
-            { error: 'Every organization drive needs a valid destination', reason: result.reason, driveIds: result.driveIds },
-            { status: 400 },
-          );
+      if (result.status === 404) return NextResponse.json({ error: 'Organization not found' }, { status: 404 });
+      if (result.status === 403) return NextResponse.json({ error: 'Only the Owner can delete this organization' }, { status: 403 });
+      return NextResponse.json(
+        { error: 'Every organization drive needs a valid destination', reason: result.reason, driveIds: result.driveIds },
+        { status: 400 },
+      );
     }
     for (const step of result.steps) {
       auditRequest(request, {

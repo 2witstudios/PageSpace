@@ -8,12 +8,22 @@
  * can never disagree. Leaving an org (and its cascades) is leave.ts (B6), not here.
  */
 import { db } from '@pagespace/db/db';
-import { and, eq } from '@pagespace/db/operators';
+import { and, asc, eq, inArray } from '@pagespace/db/operators';
 import { organizations, orgMembers, type OrgRole } from '@pagespace/db/schema/organizations';
+import { decideOrgRole } from './authorize';
 
 export type MembershipDecision =
   | { ok: true }
   | { ok: false; status: 400 | 403 | 404; reason: MembershipRefusal };
+
+/**
+ * The route authorized the actor before the write; the actor's role is read again
+ * under the row lock, so an Admin demoted or removed in between is refused.
+ */
+const recheckActor = (actorRole: OrgRole | null): MembershipDecision | null => {
+  const actor = decideOrgRole({ membershipRole: actorRole, minRole: 'ADMIN' });
+  return actor.ok ? null : actor;
+};
 
 export type MembershipRefusal =
   | 'target_not_member'
@@ -21,17 +31,23 @@ export type MembershipRefusal =
   | 'use_leave'
   | 'already_owner'
   | 'not_owner'
-  | 'not_found';
+  | 'not_found'
+  | 'not_member'
+  | 'insufficient_role';
 
 export const decideRoleChange = ({
+  actorRole,
   targetRole,
   newRole,
 }: {
   actorId: string;
+  actorRole: OrgRole | null;
   targetId: string;
   targetRole: OrgRole | null;
   newRole: OrgRole;
 }): MembershipDecision => {
+  const actorRefusal = recheckActor(actorRole);
+  if (actorRefusal) return actorRefusal;
   if (targetRole === null) return { ok: false, status: 404, reason: 'target_not_member' };
   if (newRole === 'OWNER' || targetRole === 'OWNER') {
     return { ok: false, status: 400, reason: 'use_ownership_transfer' };
@@ -41,13 +57,17 @@ export const decideRoleChange = ({
 
 export const decideMemberRemoval = ({
   actorId,
+  actorRole,
   targetId,
   targetRole,
 }: {
   actorId: string;
+  actorRole: OrgRole | null;
   targetId: string;
   targetRole: OrgRole | null;
 }): MembershipDecision => {
+  const actorRefusal = recheckActor(actorRole);
+  if (actorRefusal) return actorRefusal;
   if (targetRole === null) return { ok: false, status: 404, reason: 'target_not_member' };
   if (targetRole === 'OWNER') return { ok: false, status: 400, reason: 'use_ownership_transfer' };
   if (actorId === targetId) return { ok: false, status: 400, reason: 'use_leave' };
@@ -71,8 +91,27 @@ export const decideOwnershipTransfer = ({
   return { ok: true };
 };
 
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/** Locks the actor's and target's membership rows in id order (no deadlock) and returns both roles. */
+async function lockActorAndTargetRoles(
+  tx: Tx,
+  orgId: string,
+  actorId: string,
+  targetId: string,
+): Promise<{ actorRole: OrgRole | null; targetRole: OrgRole | null }> {
+  const rows = await tx
+    .select({ userId: orgMembers.userId, role: orgMembers.role })
+    .from(orgMembers)
+    .where(and(eq(orgMembers.orgId, orgId), inArray(orgMembers.userId, [actorId, targetId])))
+    .orderBy(asc(orgMembers.userId))
+    .for('update');
+  const roleOf = (userId: string) => rows.find((row) => row.userId === userId)?.role ?? null;
+  return { actorRole: roleOf(actorId), targetRole: roleOf(targetId) };
+}
+
 async function lockTargetRole(
-  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+  tx: Tx,
   orgId: string,
   userId: string,
 ): Promise<OrgRole | null> {
@@ -91,8 +130,8 @@ export async function changeMemberRole(input: {
   newRole: OrgRole;
 }): Promise<MembershipDecision> {
   return db.transaction(async (tx) => {
-    const targetRole = await lockTargetRole(tx, input.orgId, input.targetId);
-    const decision = decideRoleChange({ ...input, targetRole });
+    const roles = await lockActorAndTargetRoles(tx, input.orgId, input.actorId, input.targetId);
+    const decision = decideRoleChange({ ...input, ...roles });
     if (!decision.ok) return decision;
     await tx
       .update(orgMembers)
@@ -112,8 +151,8 @@ export async function removeMember(input: {
   targetId: string;
 }): Promise<MembershipDecision> {
   return db.transaction(async (tx) => {
-    const targetRole = await lockTargetRole(tx, input.orgId, input.targetId);
-    const decision = decideMemberRemoval({ ...input, targetRole });
+    const roles = await lockActorAndTargetRoles(tx, input.orgId, input.actorId, input.targetId);
+    const decision = decideMemberRemoval({ ...input, ...roles });
     if (!decision.ok) return decision;
     await tx
       .delete(orgMembers)

@@ -3,11 +3,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
-import {
-  createOrRotateInvitation,
-  listOpenInvitations,
-  revokeInvitation,
-} from '@pagespace/lib/organizations/invitations';
+import { createOrRotateInvitation, listOpenInvitations } from '@pagespace/lib/organizations/invitations';
 import { authorizeOrgRequest, ORG_READ_AUTH, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 import { inviteCreateSchema } from '@/lib/orgs/org-schemas';
 import { deliverOrgInvite } from '@/lib/orgs/org-invite-delivery';
@@ -65,23 +61,25 @@ export async function POST(request: Request, context: Context) {
       );
     }
 
-    const result = await createOrRotateInvitation({ orgId, email, role, invitedBy: gate.userId, now: new Date() });
+    const result = await createOrRotateInvitation({
+      orgId,
+      email,
+      role,
+      invitedBy: gate.userId,
+      now: new Date(),
+      deliver: (_invitation, token) => deliverOrgInvite({ orgId, inviterId: gate.userId, email, role, token }),
+    });
     if (!result.ok) {
+      if (result.reason === 'delivery_failed') {
+        // The service has already undone the invite, so it holds no seat.
+        loggers.api.error('Failed to send organization invitation email', result.cause as Error, { orgId });
+        return NextResponse.json({ error: 'Failed to send the invitation email' }, { status: 502 });
+      }
       const error =
         result.reason === 'already_member'
           ? 'That person is already a member of this organization'
           : 'That address already has a pending invitation; resend it instead';
       return NextResponse.json({ error, reason: result.reason }, { status: 409 });
-    }
-
-    try {
-      await deliverOrgInvite({ orgId, inviterId: gate.userId, email, role, token: result.token });
-    } catch (sendError) {
-      loggers.api.error('Failed to send organization invitation email', sendError as Error, { orgId });
-      // A brand-new invite that was never delivered must not hold a seat; a rotated
-      // one was already dead, so revoking it loses nothing either.
-      await revokeInvitation({ orgId, invitationId: result.invitation.id });
-      return NextResponse.json({ error: 'Failed to send the invitation email' }, { status: 502 });
     }
 
     auditRequest(request, {

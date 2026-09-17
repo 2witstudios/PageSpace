@@ -8,7 +8,8 @@ import { deliverOrgInvite } from '@/lib/orgs/org-invite-delivery';
 
 /**
  * POST /api/orgs/[orgId]/invitations/[invitationId]/resend — Owner and Admins
- * (ORG-3). Issues a new link and a fresh expiry; the previous link stops working.
+ * (ORG-3). Issues a new link and a fresh expiry; the previous link stops working once
+ * the new one is delivered.
  */
 export async function POST(
   request: Request,
@@ -29,15 +30,26 @@ export async function POST(
       );
     }
 
-    const result = await resendInvitation({ orgId, invitationId, now: new Date() });
-    if (!result.ok) return NextResponse.json({ error: 'Invitation not found' }, { status: 404 });
-
-    const role = result.invitation.role === 'ADMIN' ? 'ADMIN' : 'MEMBER';
-    try {
-      await deliverOrgInvite({ orgId, inviterId: gate.userId, email: result.invitation.email, role, token: result.token });
-    } catch (sendError) {
-      loggers.api.error('Failed to resend organization invitation email', sendError as Error, { orgId });
-      return NextResponse.json({ error: 'Failed to send the invitation email' }, { status: 502 });
+    const result = await resendInvitation({
+      orgId,
+      invitationId,
+      now: new Date(),
+      deliver: (invitation, token) =>
+        deliverOrgInvite({
+          orgId,
+          inviterId: gate.userId,
+          email: invitation.email,
+          role: invitation.role === 'ADMIN' ? 'ADMIN' : 'MEMBER',
+          token,
+        }),
+    });
+    if (!result.ok) {
+      if (result.reason === 'delivery_failed') {
+        // The service restored the previous link, which keeps working.
+        loggers.api.error('Failed to resend organization invitation email', result.cause as Error, { orgId });
+        return NextResponse.json({ error: 'Failed to send the invitation email' }, { status: 502 });
+      }
+      return NextResponse.json({ error: 'Invitation not found' }, { status: 404 });
     }
 
     auditRequest(request, {

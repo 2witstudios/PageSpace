@@ -14,6 +14,8 @@ const REFUSAL_MESSAGES: Record<MembershipRefusal, string> = {
   already_owner: 'That person already owns this organization',
   not_owner: 'Only the Owner can do that',
   not_found: 'Organization not found',
+  not_member: 'You are no longer a member of this organization',
+  insufficient_role: 'You are no longer an Admin of this organization',
 };
 
 /** PATCH /api/orgs/[orgId]/members/[userId] — Owner and Admins change a role (ORG-2). */

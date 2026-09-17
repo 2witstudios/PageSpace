@@ -36,6 +36,7 @@ export interface OrgDeletionStep {
 }
 
 export type OrgDeletionRefusal =
+  | 'not_owner'
   | 'missing_choice'
   | 'unknown_drive'
   | 'duplicate_choice'
@@ -47,11 +48,14 @@ export type OrgDeletionPlan =
   | { ok: false; reason: OrgDeletionRefusal; driveIds: string[] };
 
 export const planOrgDeletion = ({
+  actorId,
   ownerId,
   memberIds,
   drives: orgDrives,
   choices,
 }: {
+  /** The caller, re-checked against the Owner read under the org row lock. */
+  actorId: string;
   ownerId: string;
   memberIds: readonly string[];
   drives: readonly OrgDriveForDeletion[];
@@ -59,6 +63,7 @@ export const planOrgDeletion = ({
 }): OrgDeletionPlan => {
   const byId = new Map(orgDrives.map((drive) => [drive.id, drive]));
   const refuse = (reason: OrgDeletionRefusal, driveIds: string[]): OrgDeletionPlan => ({ ok: false, reason, driveIds });
+  if (actorId !== ownerId) return refuse('not_owner', []);
 
   const unknown = choices.filter((choice) => !byId.has(choice.driveId)).map((choice) => choice.driveId);
   if (unknown.length > 0) return refuse('unknown_drive', unknown);
@@ -93,9 +98,11 @@ export const planOrgDeletion = ({
 export type DeleteOrganizationResult =
   | { ok: true; steps: OrgDeletionStep[] }
   | { ok: false; status: 404; reason: 'not_found' }
-  | { ok: false; status: 400; reason: OrgDeletionRefusal; driveIds: string[] };
+  | { ok: false; status: 403; reason: 'not_owner' }
+  | { ok: false; status: 400; reason: Exclude<OrgDeletionRefusal, 'not_owner'>; driveIds: string[] };
 
 export async function deleteOrganization(input: {
+  actorId: string;
   orgId: string;
   choices: readonly DriveDeletionChoice[];
   now: Date;
@@ -119,12 +126,17 @@ export async function deleteOrganization(input: {
       .where(eq(orgMembers.orgId, input.orgId));
 
     const plan = planOrgDeletion({
+      actorId: input.actorId,
       ownerId: org.ownerId,
       memberIds: members.map((member) => member.userId),
       drives: orgDrives,
       choices: input.choices,
     });
-    if (!plan.ok) return { ok: false, status: 400, reason: plan.reason, driveIds: plan.driveIds } as const;
+    if (!plan.ok) {
+      return plan.reason === 'not_owner'
+        ? ({ ok: false, status: 403, reason: 'not_owner' } as const)
+        : ({ ok: false, status: 400, reason: plan.reason, driveIds: plan.driveIds } as const);
+    }
 
     for (const step of plan.steps) {
       const alreadyTrashed = orgDrives.find((drive) => drive.id === step.driveId)?.isTrashed === true;

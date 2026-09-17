@@ -111,8 +111,12 @@ export async function listOrgMembers(orgId: string): Promise<OrgMemberDetail[]> 
 }
 
 /** Whether a user holding this email address is already a member of the org. */
-export async function isEmailAMember(orgId: string, email: string): Promise<boolean> {
-  const [row] = await db
+export async function isEmailAMember(
+  orgId: string,
+  email: string,
+  executor: Pick<typeof db, 'select'> = db,
+): Promise<boolean> {
+  const [row] = await executor
     .select({ userId: orgMembers.userId })
     .from(orgMembers)
     .innerJoin(users, eq(users.id, orgMembers.userId))
