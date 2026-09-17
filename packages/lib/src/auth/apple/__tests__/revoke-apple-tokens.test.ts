@@ -43,6 +43,20 @@ describe('revokeAndDiscardAppleTokens', () => {
     expect(summary).toEqual({ hadTokens: true, revoked: 2, failed: 0, unconfigured: false });
   });
 
+  it('given tokens for both clients, should revoke them concurrently so a slow Apple does not stack timeouts on the deletion request', async () => {
+    vi.mocked(appleTokenStore.listForUser).mockResolvedValue(await storedRows());
+    const pending: Array<() => void> = [];
+    vi.mocked(revokeAppleRefreshToken).mockImplementation(
+      () => new Promise((resolve) => pending.push(() => resolve({ ok: true }))),
+    );
+
+    const summaryPromise = revokeAndDiscardAppleTokens('user-1', config);
+    await vi.waitFor(() => expect(revokeAppleRefreshToken).toHaveBeenCalledTimes(2));
+    pending.forEach((release) => release());
+
+    expect(await summaryPromise).toEqual({ hadTokens: true, revoked: 2, failed: 0, unconfigured: false });
+  });
+
   it('given Apple fails to revoke one token, should still delete every stored token and count the failure', async () => {
     vi.mocked(appleTokenStore.listForUser).mockResolvedValue(await storedRows());
     vi.mocked(revokeAppleRefreshToken)

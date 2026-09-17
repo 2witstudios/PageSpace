@@ -12,7 +12,9 @@ import { createAppleClientSecret, type AppleSigningConfig } from './apple-client
 
 const APPLE_TOKEN_URL = 'https://appleid.apple.com/auth/token';
 const APPLE_REVOKE_URL = 'https://appleid.apple.com/auth/revoke';
-const APPLE_REQUEST_TIMEOUT_MS = 10_000;
+const APPLE_TOKEN_TIMEOUT_MS = 10_000;
+/** Revocation runs inside the account-deletion request, so it gives up sooner. */
+const APPLE_REVOKE_TIMEOUT_MS = 5_000;
 
 export type AppleTokenExchangeResult =
   | { ok: true; refreshToken: string; idToken: string | null }
@@ -27,12 +29,12 @@ async function readAppleError(response: Response): Promise<string> {
   return typeof body?.error === 'string' ? body.error : `http_${response.status}`;
 }
 
-function postForm(url: string, form: URLSearchParams): Promise<Response> {
+function postForm(url: string, form: URLSearchParams, timeoutMs: number): Promise<Response> {
   return fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: form.toString(),
-    signal: AbortSignal.timeout(APPLE_REQUEST_TIMEOUT_MS),
+    signal: AbortSignal.timeout(timeoutMs),
   });
 }
 
@@ -56,7 +58,7 @@ export async function exchangeAppleAuthorizationCode(args: {
     });
     if (args.redirectUri) form.set('redirect_uri', args.redirectUri);
 
-    const response = await postForm(APPLE_TOKEN_URL, form);
+    const response = await postForm(APPLE_TOKEN_URL, form, APPLE_TOKEN_TIMEOUT_MS);
     if (!response.ok) return { ok: false, reason: await readAppleError(response) };
 
     const body = (await response.json()) as { refresh_token?: unknown; id_token?: unknown };
@@ -86,7 +88,7 @@ export async function revokeAppleRefreshToken(args: {
       token: args.refreshToken,
       token_type_hint: 'refresh_token',
     });
-    const response = await postForm(APPLE_REVOKE_URL, form);
+    const response = await postForm(APPLE_REVOKE_URL, form, APPLE_REVOKE_TIMEOUT_MS);
     if (!response.ok) return { ok: false, reason: await readAppleError(response) };
     return { ok: true };
   } catch (error) {

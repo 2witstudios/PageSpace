@@ -54,7 +54,8 @@ vi.mock('@pagespace/lib/compliance/erasure/revoke-integration-tokens', () => ({
   revokeUserIntegrationTokens: vi.fn().mockResolvedValue({ revoked: 0, failed: 0 }),
 }));
 
-vi.mock('@pagespace/lib/auth/apple/revoke-apple-tokens', () => ({
+vi.mock('@pagespace/lib/auth/apple/revoke-apple-tokens', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@pagespace/lib/auth/apple/revoke-apple-tokens')>()),
   revokeAndDiscardAppleTokens: vi.fn().mockResolvedValue({ hadTokens: false, revoked: 0, failed: 0, unconfigured: false }),
 }));
 
@@ -428,6 +429,16 @@ describe('/api/admin/users/[userId]/data', () => {
 
       expect(revokeAndDiscardAppleTokens).toHaveBeenCalledWith('user-1');
       expect(callOrder).toEqual(['revokeApple', 'deleteUser']);
+    });
+
+    it('given_appleTokensNotRevoked_shouldTellTheAdminTheUserMustStopUsingSignInWithApple', async () => {
+      vi.mocked(revokeAndDiscardAppleTokens).mockResolvedValue({ hadTokens: true, revoked: 0, failed: 0, unconfigured: true });
+
+      const response = await DELETE(deleteRequest(), { params: Promise.resolve({ userId: 'user-1' }) });
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.appleSignIn).toBe('manual');
     });
 
     it('given_appleRevocationThrows_shouldLogErrorButNotBlockDeletion', async () => {

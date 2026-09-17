@@ -100,6 +100,16 @@ describe('revokeAppleRefreshToken', () => {
     expect(form.get('client_secret')?.split('.')).toHaveLength(3);
   });
 
+  it('given it runs inside the account deletion request, should give up after 5 seconds rather than hold the user', async () => {
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+    vi.mocked(fetch).mockResolvedValue(new Response(null, { status: 200 }));
+
+    await revokeAppleRefreshToken({ refreshToken: 'rt', clientId: 'ai.pagespace.ios', config });
+
+    expect(timeout).toHaveBeenCalledWith(5_000);
+    timeout.mockRestore();
+  });
+
   it('given Apple answers with an error, should return the error code without throwing', async () => {
     vi.mocked(fetch).mockResolvedValue(jsonResponse(400, { error: 'invalid_client' }));
 

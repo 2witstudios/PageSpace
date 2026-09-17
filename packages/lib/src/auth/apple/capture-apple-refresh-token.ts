@@ -12,6 +12,7 @@ import { encryptField } from '../../encryption/field-crypto';
 import { getAppleSigningConfig, type AppleSigningConfig } from './apple-client-secret';
 import { exchangeAppleAuthorizationCode } from './apple-token-api';
 import { appleTokenStore } from './apple-token-store';
+import { dataSubjectRequestRepository } from '../../repositories/data-subject-request-repository';
 
 export type AppleTokenCaptureOutcome = 'stored' | 'skipped' | 'failed';
 
@@ -59,6 +60,14 @@ export async function captureAppleRefreshToken(
     // returns for it must name the same Apple user we just authenticated.
     if (!exchange.idToken || readSub(exchange.idToken) !== args.expectedSub) {
       return fail('subject_mismatch');
+    }
+
+    // Account deletion revokes and discards tokens when it is requested. A token
+    // arriving after that would be deleted by the erasure's cascade WITHOUT being
+    // revoked, so never store one while an erasure is active.
+    if (await dataSubjectRequestRepository.findActiveErasureForUser(args.userId)) {
+      loggers.auth.info('Apple refresh token not stored: account erasure in progress', { userId: args.userId });
+      return 'skipped';
     }
 
     await appleTokenStore.upsert({

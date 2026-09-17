@@ -77,6 +77,13 @@ describe('verifyAppleServerNotification', () => {
     expect((await verifyAppleServerNotification(payload, env)).ok).toBe(false);
   });
 
+  it('given a notification with no expiry claim, should reject it so a captured one cannot be replayed forever', async () => {
+    const claims: Record<string, unknown> = validClaims({ type: 'consent-revoked', sub: 's' });
+    delete claims.exp;
+
+    expect(await verifyAppleServerNotification(signNotification(claims), env)).toEqual({ ok: false, reason: 'missing_exp' });
+  });
+
   it('given an unsigned (alg none) token, should reject it', async () => {
     const header = Buffer.from(JSON.stringify({ alg: 'none', kid: KID })).toString('base64url');
     const body = Buffer.from(JSON.stringify(validClaims({ type: 'consent-revoked', sub: 's' }))).toString('base64url');

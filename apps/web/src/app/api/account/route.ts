@@ -211,6 +211,9 @@ export async function DELETE(req: Request) {
           requestId: existing.id,
           status: existing.status,
           slaDeadline: existing.slaDeadline,
+          // The first request's revocation outcome isn't re-derivable here; the
+          // manual steps are harmless if it did revoke, and required if not.
+          appleSignIn: user.appleId !== null ? 'manual' : 'none',
         },
         { status: 202 }
       );

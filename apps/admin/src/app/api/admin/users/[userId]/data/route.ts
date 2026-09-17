@@ -4,7 +4,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { accountRepository } from '@pagespace/lib/repositories/account-repository';
 import { activityLogRepository } from '@pagespace/lib/repositories/activity-log-repository';
 import { revokeUserIntegrationTokens } from '@pagespace/lib/compliance/erasure/revoke-integration-tokens';
-import { revokeAndDiscardAppleTokens } from '@pagespace/lib/auth/apple/revoke-apple-tokens';
+import { revokeAndDiscardAppleTokens, appleSignInDeletionOutcome, type AppleRevocationSummary } from '@pagespace/lib/auth/apple/revoke-apple-tokens';
 import { deleteAiUsageLogsForUser } from '@pagespace/lib/logging/ai-usage-purge';
 import { deleteMonitoringDataForUser } from '@pagespace/lib/logging/monitoring-purge';
 import { isCloud } from '@pagespace/lib/deployment-mode';
@@ -97,8 +97,10 @@ export const DELETE = withAdminAuth<DataRouteContext>(
       // TN3194). Best-effort: without the Apple signing key configured on this
       // app the tokens are discarded unrevoked, and the users cascade removes any
       // row left behind either way.
+      let appleSummary: AppleRevocationSummary | null = null;
       try {
         const apple = await revokeAndDiscardAppleTokens(userId);
+        appleSummary = apple;
         loggers.api.info(
           `Admin DSAR: Apple token revocation for ${userId}: revoked=${apple.revoked}, failed=${apple.failed}, unconfigured=${apple.unconfigured}`
         );
@@ -127,7 +129,10 @@ export const DELETE = withAdminAuth<DataRouteContext>(
         reason,
       } });
 
-      return Response.json({ message: 'User data deleted and anonymized' });
+      // 'manual': tell the user to stop using Sign in with Apple for PageSpace
+      // themselves (not revoked — no token, no signing key here, or Apple failed).
+      const appleSignIn = appleSignInDeletionOutcome({ appleLinked: user.appleId !== null, summary: appleSummary });
+      return Response.json({ message: 'User data deleted and anonymized', appleSignIn });
     } catch (error) {
       loggers.api.error('Admin DSAR deletion error:', error as Error);
       return Response.json({ error: 'Failed to delete user data' }, { status: 500 });

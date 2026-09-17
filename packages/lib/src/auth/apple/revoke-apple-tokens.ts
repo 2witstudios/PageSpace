@@ -32,25 +32,28 @@ export async function revokeAndDiscardAppleTokens(
   let failed = 0;
 
   if (config) {
-    for (const token of stored) {
-      try {
-        const refreshToken = await decryptField(token.refreshToken);
-        const result = await revokeAppleRefreshToken({ refreshToken, clientId: token.clientId, config });
-        if (result.ok) {
-          revoked++;
-        } else {
-          failed++;
+    // Concurrent: this runs inside the deletion request, so a slow Apple must
+    // cost one timeout, not one per stored client.
+    const outcomes = await Promise.all(
+      stored.map(async (token): Promise<boolean> => {
+        try {
+          const refreshToken = await decryptField(token.refreshToken);
+          const result = await revokeAppleRefreshToken({ refreshToken, clientId: token.clientId, config });
+          if (result.ok) return true;
           loggers.auth.warn('Apple token revocation failed', { userId, clientId: token.clientId, reason: result.reason });
+          return false;
+        } catch (error) {
+          loggers.auth.warn('Apple token revocation failed', {
+            userId,
+            clientId: token.clientId,
+            reason: error instanceof Error ? error.name : 'unknown_error',
+          });
+          return false;
         }
-      } catch (error) {
-        failed++;
-        loggers.auth.warn('Apple token revocation failed', {
-          userId,
-          clientId: token.clientId,
-          reason: error instanceof Error ? error.name : 'unknown_error',
-        });
-      }
-    }
+      }),
+    );
+    revoked = outcomes.filter(Boolean).length;
+    failed = outcomes.length - revoked;
   } else if (stored.length > 0) {
     loggers.auth.warn('Apple tokens discarded without revocation: signing key not configured', { userId, count: stored.length });
   }

@@ -310,7 +310,10 @@ export default function AccountPage() {
     // Best-effort: it must never stand in the way of deleting the account.
     void fetchWithAuth("/api/account/apple-sign-in")
       .then(async (response) => {
-        if (!response.ok) return;
+        if (!response.ok) {
+          setAppleSignInRevocation(undefined);
+          return;
+        }
         const status = (await response.json()) as { revocation?: AppleSignInRevocation };
         setAppleSignInRevocation(status.revocation);
       })

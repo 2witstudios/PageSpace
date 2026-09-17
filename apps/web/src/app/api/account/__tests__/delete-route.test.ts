@@ -111,6 +111,26 @@ describe('DELETE /api/account (async erasure)', () => {
       expect(body.appleSignIn).toBe('manual');
     });
 
+    it('given a retry while the erasure is already in flight, should still tell an Apple user the manual steps', async () => {
+      mockAccountRepo.findById.mockResolvedValue({
+        id: mockUserId,
+        email: mockUserEmail,
+        image: null,
+        stripeCustomerId: null,
+        appleId: 'apple-sub-1',
+      });
+      mockDsrRepo.findActiveErasureForUser.mockResolvedValue({
+        id: 'dsr_existing',
+        status: 'queued',
+        slaDeadline: new Date('2026-03-01T00:00:00.000Z'),
+      } as never);
+
+      const body = await (await DELETE(deleteReq(mockUserEmail))).json();
+
+      expect(body.requestId).toBe('dsr_existing');
+      expect(body.appleSignIn).toBe('manual');
+    });
+
     it('given a user who never used Sign in with Apple, should report none', async () => {
       const res = await DELETE(deleteReq(mockUserEmail));
       const body = await res.json();

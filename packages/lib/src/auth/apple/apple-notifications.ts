@@ -60,7 +60,7 @@ export async function verifyAppleServerNotification(
   const audience = [env.APPLE_CLIENT_ID, env.APPLE_SERVICE_ID].filter((id): id is string => Boolean(id));
   if (audience.length === 0) return { ok: false, reason: 'apple_not_configured' };
 
-  let claims: { events?: unknown };
+  let claims: { events?: unknown; exp?: unknown };
   try {
     // verifyIdToken is the library's plain RS256 + Apple-issuer JWT check; unlike
     // verifyWebhookToken it does not assume `events` is a JSON string.
@@ -68,10 +68,14 @@ export async function verifyAppleServerNotification(
       audience,
       algorithms: ['RS256'],
       ignoreExpiration: false,
-    })) as unknown as { events?: unknown };
+    })) as unknown as { events?: unknown; exp?: unknown };
   } catch (error) {
     return { ok: false, reason: error instanceof Error ? error.name : 'verification_failed' };
   }
+
+  // jsonwebtoken only enforces `exp` when the claim is present; without it a
+  // captured notification would stay valid forever.
+  if (typeof claims.exp !== 'number') return { ok: false, reason: 'missing_exp' };
 
   const event = parseEvents(claims.events);
   return event ? { ok: true, event } : { ok: false, reason: 'invalid_events' };

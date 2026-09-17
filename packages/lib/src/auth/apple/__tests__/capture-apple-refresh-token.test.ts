@@ -6,6 +6,9 @@ vi.mock('../apple-token-api', () => ({
 vi.mock('../apple-token-store', () => ({
   appleTokenStore: { upsert: vi.fn() },
 }));
+vi.mock('../../../repositories/data-subject-request-repository', () => ({
+  dataSubjectRequestRepository: { findActiveErasureForUser: vi.fn() },
+}));
 vi.mock('../../../logging/logger-config', () => ({
   loggers: { auth: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } },
 }));
@@ -14,6 +17,7 @@ import { captureAppleRefreshToken } from '../capture-apple-refresh-token';
 import { exchangeAppleAuthorizationCode } from '../apple-token-api';
 import { appleTokenStore } from '../apple-token-store';
 import { loggers } from '../../../logging/logger-config';
+import { dataSubjectRequestRepository } from '../../../repositories/data-subject-request-repository';
 import { decryptField, looksEncrypted } from '../../../encryption/field-crypto';
 import type { AppleSigningConfig } from '../apple-client-secret';
 
@@ -28,6 +32,7 @@ const baseArgs = { userId: 'user-1', code: 'code-1', clientId: 'ai.pagespace.ios
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(dataSubjectRequestRepository.findActiveErasureForUser).mockResolvedValue(null);
 });
 
 describe('captureAppleRefreshToken', () => {
@@ -57,6 +62,14 @@ describe('captureAppleRefreshToken', () => {
     expect(stored.encryptedRefreshToken).not.toContain('rt-plain');
     expect(looksEncrypted(stored.encryptedRefreshToken)).toBe(true);
     expect(await decryptField(stored.encryptedRefreshToken)).toBe('rt-plain');
+  });
+
+  it('given the user requested account deletion while the exchange was in flight, should not store a token the erasure already revoked for', async () => {
+    vi.mocked(exchangeAppleAuthorizationCode).mockResolvedValue({ ok: true, refreshToken: 'rt', idToken: idTokenFor('apple-sub-1') });
+    vi.mocked(dataSubjectRequestRepository.findActiveErasureForUser).mockResolvedValue({ id: 'dsr-1' } as never);
+
+    expect(await captureAppleRefreshToken(baseArgs, config)).toBe('skipped');
+    expect(appleTokenStore.upsert).not.toHaveBeenCalled();
   });
 
   it('given the exchanged token belongs to a different Apple user, should refuse to store it', async () => {

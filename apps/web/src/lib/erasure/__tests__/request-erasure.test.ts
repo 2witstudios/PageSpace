@@ -194,14 +194,27 @@ describe('lodgeAndEnqueueErasure', () => {
       expect(result.appleSignIn).toBe('manual');
     });
 
-    it('given stored tokens but no signing key, should record skipped as unconfigured and ask for the manual steps', async () => {
+    it('given revocation succeeded but recording the step throws, should not record a contradictory failed step and still report revoked', async () => {
+      vi.mocked(revokeAndDiscardAppleTokens).mockResolvedValue({ hadTokens: true, revoked: 1, failed: 0, unconfigured: false });
+      repo.appendStepResult.mockImplementation(async (_id, result) => {
+        if (result.step === 'revoke-apple-tokens') throw new Error('db blip');
+      });
+
+      const result = await lodgeAndEnqueueErasure({ ...baseInput, subjectAppleLinked: true });
+
+      const appleSteps = repo.appendStepResult.mock.calls.filter(([, r]) => r.step === 'revoke-apple-tokens');
+      expect(appleSteps).toHaveLength(1);
+      expect(result.appleSignIn).toBe('revoked');
+    });
+
+    it('given stored tokens but no signing key, should record the step failed (the Apple authorization is still live) and ask for the manual steps', async () => {
       vi.mocked(revokeAndDiscardAppleTokens).mockResolvedValue({ hadTokens: true, revoked: 0, failed: 0, unconfigured: true });
 
       const result = await lodgeAndEnqueueErasure({ ...baseInput, subjectAppleLinked: true });
 
       expect(repo.appendStepResult).toHaveBeenCalledWith(
         'dsr_1',
-        expect.objectContaining({ step: 'revoke-apple-tokens', status: 'skipped', detail: expect.stringContaining('not configured') }),
+        expect.objectContaining({ step: 'revoke-apple-tokens', status: 'failed', detail: expect.stringContaining('not configured') }),
       );
       expect(result.appleSignIn).toBe('manual');
     });

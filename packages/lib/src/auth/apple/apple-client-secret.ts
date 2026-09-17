@@ -9,6 +9,7 @@
  * sign-in keeps working on the id_token alone.
  */
 import { createPrivateKey, sign } from 'crypto';
+import { loggers } from '../../logging/logger-config';
 
 export interface AppleSigningConfig {
   teamId: string;
@@ -36,11 +37,20 @@ export function getAppleSigningConfig(env: AppleSigningEnv = process.env): Apple
   const privateKey = env.APPLE_SIGN_IN_PRIVATE_KEY?.replace(/\\n/g, '\n').trim();
   if (!teamId || !keyId || !privateKey) return null;
 
+  // A set-but-unusable key must not fail silently: every Apple deletion would
+  // quietly fall back to the manual steps.
+  const invalid = (reason: string): null => {
+    loggers.auth.warn('APPLE_SIGN_IN_PRIVATE_KEY is set but unusable; Sign in with Apple token revocation is disabled', { reason });
+    return null;
+  };
   try {
     const key = createPrivateKey(privateKey);
-    if (key.asymmetricKeyType !== 'ec') return null;
+    // ES256 is ECDSA over P-256; Apple's .p8 keys are always this curve.
+    if (key.asymmetricKeyType !== 'ec' || key.asymmetricKeyDetails?.namedCurve !== 'prime256v1') {
+      return invalid('not_p256_ec_key');
+    }
   } catch {
-    return null;
+    return invalid('unparseable_key');
   }
 
   return { teamId, keyId, privateKey };
