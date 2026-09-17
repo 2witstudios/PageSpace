@@ -358,4 +358,48 @@ describe('POST /api/cron/task-triggers', () => {
     });
   });
 
+
+  describe('completion trigger retried after a transient refusal', () => {
+    const RETRY_TRIGGER = {
+      ...MOCK_TRIGGER,
+      id: 'trg_completion',
+      triggerType: 'completion' as const,
+      nextRunAt: new Date(Date.now() - 5 * 60 * 1000),
+      lastFireError: 'AI credit gate denied: too_many_in_flight',
+    };
+
+    const tick = async (result: Record<string, unknown>) => {
+      pushDiscoveryRows([RETRY_TRIGGER]);
+      mockReturning.mockResolvedValueOnce([RETRY_TRIGGER]);
+      pushLookupRows([MOCK_WORKFLOW]);
+      pushLookupRows([MOCK_TASK]);
+      vi.mocked(executeWorkflow).mockResolvedValue(result as never);
+      const response = await POST(new Request('https://example.com/api/cron/task-triggers', { method: 'POST' }));
+      return { body: await response.json(), sets: mockUpdateSet.mock.calls.map((c) => c[0] as Record<string, unknown>) };
+    };
+
+    it('given a pending completion retry, should run it with its completion task context and the original occurrence time (the 24h bound), and a success disables it exactly like a first-time success', async () => {
+      const { body, sets } = await tick({ success: true, durationMs: 10 });
+
+      expect(executeWorkflow).toHaveBeenCalledWith(expect.objectContaining({
+        taskContext: { taskItemId: RETRY_TRIGGER.taskItemId, triggerType: 'completion' },
+        source: { table: 'taskTriggers', id: 'trg_completion', triggerAt: RETRY_TRIGGER.nextRunAt },
+      }));
+      expect(sets).toContainEqual({ isEnabled: false, lastFireError: null });
+      expect(body.executed).toBe(1);
+    });
+
+    it('given the retry is refused again after its 24h window (retry false), should disable it with the reason', async () => {
+      const { sets } = await tick({
+        success: false,
+        durationMs: 1,
+        runId: 'run_expired',
+        error: 'AI credit gate denied: too_many_in_flight',
+        refusal: { reason: 'too_many_in_flight', kind: 'transient', retry: false },
+      });
+
+      expect(sets).toContainEqual({ isEnabled: false, lastFireError: 'AI credit gate denied: too_many_in_flight' });
+    });
+  });
+
 });

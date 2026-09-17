@@ -259,6 +259,9 @@ export async function fireCompletionTrigger(taskId: string): Promise<void> {
       return;
     }
 
+    // The completion instant is this fire's occurrence time: it bounds a
+    // transient credit refusal's retries to 24h, here and in the cron.
+    const firedAt = new Date();
     const input: WorkflowExecutionInput = {
       workflowId: workflow.id,
       workflowName: workflow.name,
@@ -269,16 +272,28 @@ export async function fireCompletionTrigger(taskId: string): Promise<void> {
       contextPageIds: (workflow.contextPageIds as string[] | null) ?? [],
       instructionPageId: workflow.instructionPageId,
       timezone: workflow.timezone,
-      source: { table: 'taskTriggers', id: completionTrigger.id, triggerAt: null },
+      source: { table: 'taskTriggers', id: completionTrigger.id, triggerAt: firedAt },
       taskContext: { taskItemId: taskId, triggerType: 'completion' },
     };
 
     void executeWorkflow(input).then(async (result) => {
       try {
-        await db.update(taskTriggers).set({
-          lastFireError: result.error || null,
-          isEnabled: false,
-        }).where(eq(taskTriggers.id, completionTrigger.id));
+        if (result.refusal?.retry) {
+          // A transient credit refusal ran nothing and nothing in-process will
+          // fire this again: hand it to the task-triggers cron (isEnabled,
+          // nextRunAt <= now, lastFiredAt IS NULL), which retries it with the
+          // same completion task context under the same 24h bound.
+          await db.update(taskTriggers).set({
+            lastFiredAt: null,
+            nextRunAt: firedAt,
+            lastFireError: result.error ?? null,
+          }).where(eq(taskTriggers.id, completionTrigger.id));
+        } else {
+          await db.update(taskTriggers).set({
+            lastFireError: result.error || null,
+            isEnabled: false,
+          }).where(eq(taskTriggers.id, completionTrigger.id));
+        }
       } catch (dbErr) {
         logger.error('Failed to update task_trigger after execution', {
           triggerId: completionTrigger.id,
