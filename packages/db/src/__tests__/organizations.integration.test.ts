@@ -73,19 +73,19 @@ describe('organizations schema (real Postgres)', () => {
     if (userIds.length) await db.delete(users).where(inArray(users.id, userIds)).catch(() => {});
   });
 
-  it('ORG-1 creates an org with an empty policy object and no Stripe customer by default', async () => {
+  it('ORG-1 (partial) creates an org with an empty policy object and no Stripe customer by default', async () => {
     const { org, owner } = await seedNorthwind();
     expect(org.ownerId).toBe(owner.id);
     expect(org.policies).toEqual({});
     expect(org.stripeCustomerId).toBeNull();
   });
 
-  it('ORG-1 refuses deleting a user who owns an org (ORG-6)', async () => {
+  it('ORG-1 (partial) refuses deleting a user who owns an org — ORG-6 (partial)', async () => {
     const { owner } = await seedNorthwind();
     expect(await sqlstateOf(() => db.delete(users).where(eq(users.id, owner.id)))).toBe(FK_VIOLATION);
   });
 
-  it('ORG-2 lets one user join many orgs, but only once per org', async () => {
+  it('ORG-2 (partial) lets one user join many orgs, but only once per org', async () => {
     const { org: northwind, owner } = await seedNorthwind();
     const { org: other } = await seedNorthwind();
     await db.insert(orgMembers).values({ orgId: northwind.id, userId: owner.id, role: 'OWNER' });
@@ -95,7 +95,7 @@ describe('organizations schema (real Postgres)', () => {
     ).toBe(UNIQUE_VIOLATION);
   });
 
-  it('ORG-1 an org has exactly one Owner membership row', async () => {
+  it('ORG-1 (partial) an org has exactly one Owner membership row', async () => {
     const { org, owner } = await seedNorthwind();
     const priya = await factories.createUser({ name: 'Priya Nair' });
     createdUsers.push(priya.id);
@@ -113,7 +113,7 @@ describe('organizations schema (real Postgres)', () => {
     ).toBe(UNIQUE_VIOLATION);
   });
 
-  it('ORG-3 an open invite for A@X and a@x in one org cannot coexist', async () => {
+  it('ORG-3 (partial) an open invite for A@X and a@x in one org cannot coexist', async () => {
     const { org } = await seedNorthwind();
     const invite = (email: string) => ({
       orgId: org.id,
@@ -127,7 +127,7 @@ describe('organizations schema (real Postgres)', () => {
     );
   });
 
-  it('ORG-3 allows one open invite per org and email, and a new one once the old is accepted', async () => {
+  it('ORG-3 (partial) allows one open invite per org and email, and a new one once the old is accepted', async () => {
     const { org } = await seedNorthwind();
     const invite = (tokenHash: string) => ({
       orgId: org.id,
@@ -142,7 +142,7 @@ describe('organizations schema (real Postgres)', () => {
     await db.insert(orgInvitations).values(invite(createId()));
   });
 
-  it('DRV-1 refuses giving a Home drive an orgId (CHECK drives_home_never_org_check)', async () => {
+  it('DRV-1 (partial) refuses giving a Home drive an orgId (CHECK drives_home_never_org_check)', async () => {
     const { org, owner } = await seedNorthwind();
     expect(await sqlstateOf(() => seedDrive(owner.id, { kind: 'HOME', orgId: org.id }))).toBe(CHECK_VIOLATION);
     const home = await seedDrive(owner.id, { kind: 'HOME' });
@@ -151,13 +151,13 @@ describe('organizations schema (real Postgres)', () => {
     ).toBe(CHECK_VIOLATION);
   });
 
-  it('DRV-1 refuses deleting an org that still owns drives, rather than orphaning them (ORG-6)', async () => {
+  it('DRV-1 (partial) refuses deleting an org that still owns drives, rather than orphaning them — ORG-6 (partial)', async () => {
     const { org, owner } = await seedNorthwind();
     await seedDrive(owner.id, { name: 'Product', slug: 'product', orgId: org.id });
     expect(await sqlstateOf(() => db.delete(organizations).where(eq(organizations.id, org.id)))).toBe(FK_VIOLATION);
   });
 
-  it('DRV-1 keeps drive slugs unique within an org while personal drives may share a slug', async () => {
+  it('DRV-1 (partial) keeps drive slugs unique within an org while personal drives may share a slug', async () => {
     const { org, owner } = await seedNorthwind();
     await seedDrive(owner.id, { name: 'Product', slug: 'product', orgId: org.id });
     expect(await sqlstateOf(() => seedDrive(owner.id, { name: 'Product', slug: 'product', orgId: org.id }))).toBe(
@@ -175,7 +175,7 @@ describe('organizations schema (real Postgres)', () => {
     expect(finance.orgVisibility).toBe('PRIVATE');
   });
 
-  it("DRV-8 records a directly added member (a guest) with source 'invite' by default", async () => {
+  it("DRV-8 (partial) records a directly added member (a guest) with source 'invite' by default", async () => {
     const { org, owner } = await seedNorthwind();
     const product = await seedDrive(owner.id, { name: 'Product', slug: 'product', orgId: org.id });
     const guest = await factories.createUser({ name: 'Chris Rowe' });

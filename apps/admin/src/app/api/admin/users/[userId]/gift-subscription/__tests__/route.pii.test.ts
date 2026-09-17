@@ -320,7 +320,7 @@ describe('Gift subscription PII handling', () => {
     });
   });
 
-  describe('SEAT-2 P2 org-plan exclusion', () => {
+  describe('SEAT-2 (partial) P2 org-plan exclusion', () => {
     it('rejects gifting Business (the organization plan) to an ordinary user — no org gifting exists yet', async () => {
       const res = await POST(postRequest({ tier: 'business', reason: 'thanks' }), ctx);
       const body = await res.json();

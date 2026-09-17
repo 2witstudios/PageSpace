@@ -12,7 +12,7 @@ import {
 } from '../subscription-tiers';
 
 describe('TIERS', () => {
-  it('SEAT-2 lists Free, Pro, Business in ascending plan order (also the upgrade/downgrade ordering)', () => {
+  it('SEAT-2 (partial) lists Free, Pro, Business in ascending plan order (also the upgrade/downgrade ordering)', () => {
     expect(TIERS).toEqual(['free', 'pro', 'business']);
   });
 
@@ -87,7 +87,7 @@ describe('TIER_PLAN_LIMITS', () => {
     });
   });
 
-  it('SEAT-2 Business is the org plan: $50 a month, 5 seats included, $10 per extra seat', () => {
+  it('SEAT-2 (partial) Business is the org plan: $50 a month, 5 seats included, $10 per extra seat', () => {
     expect(TIER_PLAN_LIMITS.business).toMatchObject({
       priceMonthlyUsd: 50, isOrgPlan: true, includedSeats: 5, extraSeatUsd: 10,
     });
@@ -96,7 +96,7 @@ describe('TIER_PLAN_LIMITS', () => {
     expect(isOrgPlanTier('free')).toBe(false);
   });
 
-  it('SEAT-2 an org plan is not offered to a lone user; a grandfathered Business user still sees their own plan', () => {
+  it('SEAT-2 (partial) an org plan is not offered to a lone user; a grandfathered Business user still sees their own plan', () => {
     expect(personalTiers()).toEqual(['free', 'pro']);
     expect(personalTiers('free')).toEqual(['free', 'pro']);
     expect(personalTiers('business')).toEqual(['free', 'pro', 'business']);
