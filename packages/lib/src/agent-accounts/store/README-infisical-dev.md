@@ -52,8 +52,10 @@ service's volume is initialized. To confirm it landed:
 docker exec -i infisical-dev-metadata psql -U plane_metadata -d plane_metadata -c '\d agent_account_secret_versions'
 ```
 
-If you ever need to re-run the DDL by hand (e.g. against a volume that
-predates this file), it is plain SQL — `psql ... < plane-metadata.sql`.
+The DDL runs only when the metadata volume is first initialized, and it uses
+`CREATE TABLE IF NOT EXISTS`, so re-running it against an older volume does
+NOT add new columns or tables. After any change to `plane-metadata.sql`, reset
+the disposable dev volume: `docker compose down -v && docker compose up -d`.
 
 ## Admin bootstrap (once per fresh instance)
 

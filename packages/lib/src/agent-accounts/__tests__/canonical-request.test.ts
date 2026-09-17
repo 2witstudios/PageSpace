@@ -15,8 +15,8 @@ import { renderApprovalSubject } from '../render-approval-subject';
 import { lookupOperation } from '../lookup-operation';
 import { findOperationRegistryConflicts } from '../find-operation-registry-conflicts';
 import { findDuplicateResourceSlots } from '../find-duplicate-resource-slots';
-import type { CanonicalRequest, CanonicalRequestInput, CanonicalizeRefusal, OperationRegistry, OperationRegistryEntry } from '../canonical-request';
-import { TEST_PROVIDER, TEST_REGISTRY } from './operation-registry.fixture';
+import type { CanonicalOrigin, CanonicalRequest, CanonicalRequestInput, CanonicalizeRefusal, OperationRegistry, OperationRegistryEntry } from '../canonical-request';
+import { ENTRY_DEFAULTS, TEST_ORIGIN, TEST_PROVIDER, TEST_REGISTRY } from './operation-registry.fixture';
 import type { HashBytes } from '../grant';
 
 const hash: HashBytes = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -238,19 +238,19 @@ describe('operation is derived, never declared (ADR 0004 §3.4 amendment, §8.30
   });
 
   it('given a template placeholder, should match exactly one whole non-empty segment — never zero, never several', () => {
-    const match = (path: string) => lookupOperation({ registry: TEST_REGISTRY, providerSlug: TEST_PROVIDER, channel: 'http-executor', method: 'PUT', path })?.entry.operation.name ?? null;
+    const match = (path: string) => lookupOperation({ registry: TEST_REGISTRY, providerSlug: TEST_PROVIDER, origin: TEST_ORIGIN, channel: 'http-executor', method: 'PUT', path })?.entry.operation.name ?? null;
     const actual = [match('/repos/a/b/pulls/7/merge'), match('/repos/a/b/pulls//merge'), match('/repos/a/b/c/pulls/7/merge'), match('/repos/a/b/pulls/7/merge/x'), match('/repos/a/b/pulls/7/merge/')];
     expect(actual).toEqual(['merge_pr', null, null, null, null]);
   });
 
-  it('given a registry with two entries matching the same provider, channel, method and path, should report the conflict at registry load, never resolve it by order', () => {
-    const shadow: OperationRegistryEntry = { ...TEST_REGISTRY[2]!, pathTemplate: '/repos/{owner}/{repo}/pulls/{number}/{action}', operation: { class: 'read', name: 'github.pulls.action' } };
+  it('given a registry with two equally specific entries matching the same provider, origin, channel, method and path, should report the conflict at registry load, never resolve it by order', () => {
+    const shadow: OperationRegistryEntry = { ...TEST_REGISTRY[2]!, pathTemplate: '/repos/{org}/{name}/pulls/{id}/merge', operation: { class: 'read', name: 'github.pulls.action' } };
     const actual = [findOperationRegistryConflicts({ registry: TEST_REGISTRY }), findOperationRegistryConflicts({ registry: [...TEST_REGISTRY, shadow] })];
     expect(actual).toEqual([[], [[TEST_REGISTRY[2]!.pathTemplate, shadow.pathTemplate]]]);
   });
 
-  it('given a registry with an overlapping pair, should resolve neither at lookup (unknown, never the first by order)', () => {
-    const shadow: OperationRegistryEntry = { ...TEST_REGISTRY[2]!, pathTemplate: '/repos/{owner}/{repo}/pulls/{number}/{action}', operation: { class: 'read', name: 'github.pulls.action' } };
+  it('given a registry with an equally specific overlapping pair, should resolve neither at lookup (unknown, never the first by order)', () => {
+    const shadow: OperationRegistryEntry = { ...TEST_REGISTRY[2]!, pathTemplate: '/repos/{org}/{name}/pulls/{id}/merge', operation: { class: 'read', name: 'github.pulls.action' } };
     const actual = canonical({ method: 'PUT', url: 'https://api.github.com/repos/a/b/pulls/7/merge' }, { registry: [...TEST_REGISTRY, shadow] }).operation;
     expect(actual).toEqual({ class: 'unknown', name: 'generic_request' });
   });
@@ -303,7 +303,7 @@ describe('resources come from the path, never the caller (ADR 0004 §3.2, §8.35
   });
 
   it('given a lookup, should return the entry with the slot values it bound from the actual path', () => {
-    const actual = lookupOperation({ registry: TEST_REGISTRY, providerSlug: TEST_PROVIDER, channel: 'http-executor', method: 'PUT', path: '/repos/a/b/pulls/7/merge' });
+    const actual = lookupOperation({ registry: TEST_REGISTRY, providerSlug: TEST_PROVIDER, origin: TEST_ORIGIN, channel: 'http-executor', method: 'PUT', path: '/repos/a/b/pulls/7/merge' });
     expect(actual).toEqual({
       entry: TEST_REGISTRY[2],
       resources: [
@@ -312,6 +312,105 @@ describe('resources come from the path, never the caller (ADR 0004 §3.2, §8.35
         ['repo', 'b'],
       ],
     });
+  });
+});
+
+describe('resources from typed body slots and the git protocol request (ADR 0004 §3.2, §8.38, §8.42; G1c R5, R11)', () => {
+  const SLACK_ORIGIN = 'https://slack.com:443' as CanonicalOrigin;
+  const slack: OperationRegistryEntry = {
+    ...ENTRY_DEFAULTS,
+    providerSlug: 'slack',
+    origin: SLACK_ORIGIN,
+    channel: 'http-executor',
+    method: 'POST',
+    pathTemplate: '/api/chat.postMessage',
+    bodySlots: [{ slot: 'channel', pointer: ['channel'], shape: 'string' }],
+    restrictionKeys: { channel: 'slack.channel' },
+    operation: { class: 'write', name: 'slack.chat.postMessage' },
+    declaredHeaders: [],
+  };
+  const GITHUB_GIT_ORIGIN = 'https://github.com:443' as CanonicalOrigin;
+  const push: OperationRegistryEntry = {
+    ...ENTRY_DEFAULTS,
+    providerSlug: TEST_PROVIDER,
+    origin: GITHUB_GIT_ORIGIN,
+    channel: 'relay-runner',
+    method: 'git-receive-pack',
+    pathTemplate: '/{owner}/{repo}/git-receive-pack',
+    derivedResources: [{ slot: 'branch', source: 'receive_pack_branches' }],
+    restrictionKeys: { repo: 'github.repo' },
+    operation: { class: 'write', name: 'git.push' },
+    declaredHeaders: [],
+  };
+  const NUL = String.fromCharCode(0);
+  const pushBody = (ref: string): Uint8Array => {
+    const line = `${'a'.repeat(40)} ${'b'.repeat(40)} ${ref}${NUL}report-status\n`;
+    return utf8((utf8(line).byteLength + 4).toString(16).padStart(4, '0') + line + '0000PACK');
+  };
+  const slackRequest = (body: string) =>
+    canonicalize(
+      { channel: 'http-executor', method: 'POST', url: 'https://slack.com/api/chat.postMessage', headers: { 'content-type': 'application/json' }, body: utf8(body) },
+      { providerSlug: 'slack', registry: [slack] },
+    );
+  const pushRequest = (ref: string) =>
+    canonicalize({ channel: 'relay-runner', method: 'git-receive-pack', url: 'https://github.com/acme/app.git/git-receive-pack', headers: {}, body: pushBody(ref) }, { registry: [push] });
+
+  it('given a chat.postMessage body naming a channel, should bind it under its restriction key', () => {
+    const result = slackRequest('{"channel":"C1","text":"hi"}');
+    const actual = result.ok ? result.canonical.resources : result;
+    expect(actual).toEqual([['slack.channel', 'C1']]);
+  });
+
+  it('given a body-slot operation whose query string names the same argument, should refuse malformed — a provider that reads query arguments would act on the other value (G1c review)', () => {
+    const actual = canonicalize(
+      { channel: 'http-executor', method: 'POST', url: 'https://slack.com/api/chat.postMessage?Channel=C_EVIL', headers: { 'content-type': 'application/json' }, body: utf8('{"channel":"C1"}') },
+      { providerSlug: 'slack', registry: [slack] },
+    );
+    expect(actual).toEqual({ ok: false, reason: 'malformed' });
+  });
+
+  it('given a body-slot operation sent without a JSON content type, should refuse malformed — the provider would not read the body as JSON (G1c review)', () => {
+    const actual = ['text/plain', 'application/x-www-form-urlencoded', null].map((contentType) =>
+      canonicalize(
+        { channel: 'http-executor', method: 'POST', url: 'https://slack.com/api/chat.postMessage', headers: contentType === null ? {} : { 'content-type': contentType }, body: utf8('{"channel":"C1"}') },
+        { providerSlug: 'slack', registry: [slack] },
+      ),
+    );
+    expect(actual).toEqual([{ ok: false, reason: 'malformed' }, { ok: false, reason: 'malformed' }, { ok: false, reason: 'malformed' }]);
+  });
+
+  it('given a body-slot operation with a JSON content type carrying parameters, should bind the channel', () => {
+    const result = canonicalize(
+      { channel: 'http-executor', method: 'POST', url: 'https://slack.com/api/chat.postMessage', headers: { 'content-type': 'application/json; charset=utf-8' }, body: utf8('{"channel":"C1"}') },
+      { providerSlug: 'slack', registry: [slack] },
+    );
+    expect(result.ok ? result.canonical.resources : result).toEqual([['slack.channel', 'C1']]);
+  });
+
+  it('given a chat.postMessage body without a channel, should refuse malformed — a declared resource is never silently absent', () => {
+    const actual = slackRequest('{"text":"hi"}');
+    expect(actual).toEqual({ ok: false, reason: 'malformed' });
+  });
+
+  it('given a git-receive-pack relay request, should bind path slots and the pushed branch, sorted by key', () => {
+    const result = pushRequest('refs/heads/main');
+    const actual = result.ok ? result.canonical.resources : result;
+    expect(actual).toEqual([
+      ['branch', 'main'],
+      ['github.repo', 'app.git'],
+      ['owner', 'acme'],
+    ]);
+  });
+
+  it('given two pushes that differ only in the pushed ref, should produce different resources and different digests', () => {
+    const [main, other] = [pushRequest('refs/heads/main'), pushRequest('refs/heads/release')];
+    const actual = main.ok && other.ok ? [main.canonical.resources[0], other.canonical.resources[0], digestRequest({ canonical: main.canonical, hash }) === digestRequest({ canonical: other.canonical, hash })] : [main, other];
+    expect(actual).toEqual([['branch', 'main'], ['branch', 'release'], false]);
+  });
+
+  it('given a push whose ref starts with -, should refuse flag_injection before any grant exists', () => {
+    const actual = pushRequest('refs/heads/--force');
+    expect(actual).toEqual({ ok: false, reason: 'flag_injection' });
   });
 });
 

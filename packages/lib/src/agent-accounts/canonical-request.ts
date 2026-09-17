@@ -75,24 +75,96 @@ export type CanonicalRequestInput = {
 };
 
 /**
- * One reviewed operation: keyed by provider + channel + method + path
- * template, never by anything the tool layer says about itself. Lives in
- * code (the provider catalogues, G3), reviewed like code.
+ * The account's in-provider resource allowlists: restriction key → allowed
+ * values (`agent_accounts.resourceRestrictions`; ADR 0004 §3.2 `resources`).
+ * A key the matched operation does not bind is `out_of_scope` — an operation
+ * that cannot show which repo or recipient it touches cannot be proven inside
+ * the list (G1c R5, R11).
+ */
+export type ResourceRestrictions = Readonly<Record<string, readonly string[]>>;
+
+/**
+ * A typed resource slot read from the CANONICAL BODY (G1c R5) — the Slack
+ * channel of `chat.postMessage`, the recipients of a mail send — so a
+ * restriction or policy can bind what a path-only template cannot. The body
+ * is parsed as JSON; `pointer` walks object keys from the root. `string`
+ * yields one value; `string_array` yields one value per element (duplicates
+ * kept, input order). A missing field, a value of another shape, or a body
+ * that is not a JSON object is `malformed`: a declared resource the request
+ * does not carry is never silently empty.
+ */
+export type BodyResourceSlot = {
+  readonly slot: string;
+  readonly pointer: readonly string[];
+  readonly shape: 'string' | 'string_array';
+};
+
+/**
+ * Where a relay operation's resources come from when they are not in the URL
+ * (G1c R11): the git smart-HTTP request itself. `receive_pack_ref_names`
+ * yields every ref name a `git-receive-pack` command list updates
+ * (`refs/heads/main`); `receive_pack_branches` yields the branch names of the
+ * `refs/heads/*` updates (`main`). Parsed from the pkt-line command section of
+ * the canonical body, so the digest — which covers the body — is recomputed
+ * over exactly the refs that are pushed. A ref name that starts with `-` or
+ * carries a NUL or control character is `flag_injection`.
+ */
+export type DerivedResourceRule = {
+  readonly slot: string;
+  readonly source: 'receive_pack_ref_names' | 'receive_pack_branches';
+};
+
+/**
+ * One reviewed operation: keyed by provider + ORIGIN + channel + method + path
+ * template, never by anything the tool layer says about itself. Lives in code
+ * (the provider catalogues, G3; the relay catalogue, G4), reviewed like code.
+ *
+ * AMENDED 2026-09-16 (G1c R7, R5, R6, R11, R17). The entry is keyed by origin
+ * as well as provider, and its provider is never null: the first shape let a
+ * null-provider entry match every origin. Resources may now come from typed
+ * body slots and from the git protocol request, every slot maps to the
+ * restriction key it is compared and emitted under, and the audit chain
+ * receives only the slots the entry explicitly allows.
  */
 export type OperationRegistryEntry = {
-  /** `agent_accounts.providerSlug`; null = the generic-origin entries. */
-  readonly providerSlug: string | null;
+  /** `agent_accounts.providerSlug`. An account whose `providerSlug` is null matches NO entry (generic origin). */
+  readonly providerSlug: string;
+  /** The canonical origin this entry describes; a request to any other origin does not match it. */
+  readonly origin: CanonicalOrigin;
   readonly channel: ExecutorChannel;
   readonly method: MethodFor[ExecutorChannel];
   /**
-   * Canonical path with `{name}` placeholders for whole segments, e.g.
-   * `/repos/{owner}/{repo}/pulls/{number}/merge`. Each placeholder is a NAMED
-   * RESOURCE SLOT: its value is the matching segment of the actual canonical
-   * path, so `canonical.resources` is extracted from the URL being sent and
-   * the placeholder names are the operation's declared resource keys (audit
-   * projection, ADR 0004 §5). A placeholder name used twice is a registry defect.
+   * Canonical path template (ADR 0004 §3.2, slot matching fully specified in
+   * G1c R17). Starts with `/`; `/`-separated segments, none empty. Each
+   * segment is a literal, a `{name}` slot matching exactly ONE non-empty
+   * segment, or — as the LAST segment only — a `{name+}` slot matching one or
+   * more non-empty segments, bound as those segments joined by `/`
+   * (`/repos/{owner}/{repo}/contents/{path+}`). Matching is over the whole
+   * canonical path (no prefix match); a path with an empty segment matches no
+   * template. When several entries match one request the most specific wins,
+   * compared segment by segment from the left: literal beats `{name}` beats
+   * `{name+}`; two entries equally specific at every segment are a registry
+   * conflict, refused at load and resolved to no match at lookup. A slot name
+   * used twice across the path, body and derived slots is a registry defect.
    */
   readonly pathTemplate: string;
+  /** Resource slots read from the JSON body (R5). */
+  readonly bodySlots: readonly BodyResourceSlot[];
+  /** Resource slots derived from the git protocol request; relay-runner entries only (R11). */
+  readonly derivedResources: readonly DerivedResourceRule[];
+  /**
+   * Slot name → the `ResourceRestrictions` key its values are compared and
+   * emitted under in `CanonicalRequest.resources` (R17). A slot absent from
+   * the map is emitted under its own name.
+   */
+  readonly restrictionKeys: Readonly<Record<string, string>>;
+  /**
+   * The slot names whose values may enter the tamper-evident, non-erasable
+   * audit chain (R6). An explicit allowlist, EMPTY by default: a slot that can
+   * carry a secret (`/v1/tokens/{token}`, `/reset/{code}`) is simply never
+   * listed. Naming a slot the entry does not declare is a registry defect.
+   */
+  readonly auditResourceSlots: readonly string[];
   readonly operation: OperationRef;
   /** Extra headers this operation may carry, lowercase; projected into the digest. */
   readonly declaredHeaders: readonly string[];
@@ -127,8 +199,10 @@ export type CanonicalRequest = {
   /** Hex SHA-256 of the exact body bytes; the empty body hashes to the digest of zero bytes. */
   readonly bodySha256: string;
   /**
-   * Sorted `[slot, segment]` pairs extracted from `path` by the matched
-   * registry entry's `pathTemplate` — never supplied by the caller. `[]` for a
+   * `[restrictionKey, value]` pairs, sorted by key (values in extraction
+   * order), bound by the matched entry from the ACTUAL request — path slots,
+   * body slots (R5) and git-derived resources (R11), each under its
+   * `restrictionKeys` name — never supplied by the caller. `[]` for a
    * `generic_request` (no match) (G1a review M8).
    */
   readonly resources: readonly (readonly [string, string])[];
@@ -146,6 +220,8 @@ export type CanonicalizeRefusal =
   | 'path_traversal'
   | 'path_control_char'
   | 'reserved_header'
+  /** A git-derived ref name that starts with `-` or carries NUL/control characters (R11; ADR 0006 F6). */
+  | 'flag_injection'
   | 'malformed';
 
 export type CanonicalizeResult =
@@ -175,25 +251,51 @@ export type ApprovalSubject = {
 };
 
 /**
- * `lookupOperation` — pure. The entry whose provider, channel, method and
- * path template match the CANONICAL method and path, with the slot values it
- * bound; `null` when none does (the caller then uses `GenericOperation`, no
- * declared headers and no resources). More
- * than one match is a registry defect, refused at registry load, never
- * resolved by order. G1b implements.
+ * `lookupOperation` — pure. The most specific entry (R17) whose provider,
+ * origin, channel, method and path template match the CANONICAL origin,
+ * method and path, with the PATH slot values it bound under their restriction
+ * keys; `null` when none does, when `providerSlug` is null, or when the best
+ * matches tie (the caller then uses `GenericOperation`, no declared headers
+ * and no resources). A tie is a registry defect refused at load, never
+ * resolved by order.
  */
 export type LookupOperation = (input: {
   readonly registry: OperationRegistry;
   readonly providerSlug: string | null;
+  readonly origin: CanonicalOrigin;
   readonly channel: ExecutorChannel;
   readonly method: MethodFor[ExecutorChannel];
   readonly path: string;
 }) => { readonly entry: OperationRegistryEntry; readonly resources: readonly (readonly [string, string])[] } | null;
 
 /**
+ * `extractBodyResources` — pure (R5). The matched entry's body slots read from
+ * the canonical body bytes; `malformed` when any slot cannot be read.
+ */
+export type ExtractBodyResources = (input: {
+  readonly slots: readonly BodyResourceSlot[];
+  readonly body: Uint8Array;
+}) => { readonly ok: true; readonly resources: readonly (readonly [string, string])[] } | { readonly ok: false; readonly reason: 'malformed' };
+
+/**
+ * `deriveGitResources` — pure (R11). The matched relay entry's derived
+ * resources parsed from a `git-receive-pack` request body's pkt-line command
+ * list; `malformed` for any other method or an unparseable command list,
+ * `flag_injection` for a ref name `restrictGitOperation` would refuse.
+ */
+export type DeriveGitResources = (input: {
+  readonly method: RelayMethod;
+  readonly rules: readonly DerivedResourceRule[];
+  readonly body: Uint8Array;
+}) =>
+  | { readonly ok: true; readonly resources: readonly (readonly [string, string])[] }
+  | { readonly ok: false; readonly reason: 'malformed' | 'flag_injection' };
+
+/**
  * `canonicalizeRequest` — pure, total. `providerSlug` comes from the account
- * row the authority read, never from the tool layer; `operation` and the
- * declared headers come from `lookupOperation` over `registry`. G1b implements.
+ * row the authority read, never from the tool layer; `operation`, the
+ * declared headers and every resource come from the matched registry entry
+ * over the ACTUAL origin, path, body and (relay) git request (R5, R7, R11).
  */
 export type CanonicalizeRequest = (input: {
   readonly request: CanonicalRequestInput;

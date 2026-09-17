@@ -8,8 +8,10 @@
  * `write_unverified` is a refusal to REPORT success, not a rollback: the
  * material may have landed but the post-write read disagreed (an
  * overlapping writer that slipped past the lock, or bindings that were not
- * echoed back correctly) — reconciliation is a later gate's job, not this
- * function's.
+ * echoed back correctly). What happens next is not deferred: the adapter
+ * records the attempted write as pending before it writes, so a ref whose
+ * write could not be committed is reconcile-required and the next locked call
+ * commits it forward or fails closed (`decideReconcile`, ADR 0005 §2.3, G1c E1).
  */
 import type { CredentialVersion } from '@pagespace/db/schema/agent-accounts';
 import { canonicalJson } from '../canonical-json';
