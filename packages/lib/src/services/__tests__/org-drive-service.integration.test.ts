@@ -10,15 +10,15 @@
  *     DATABASE_URL=... bun run --filter '@pagespace/lib' test -- src/services/__tests__/org-drive-service.integration.test.ts
  */
 
-import { describe, it, expect, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
-import { db } from '@pagespace/db/db';
-import { and, eq, inArray } from '@pagespace/db/operators';
+import { db, pool } from '@pagespace/db/db';
+import { and, eq, inArray, or } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { driveMembers, driveRoles } from '@pagespace/db/schema/members';
 import { driveEnvs } from '@pagespace/db/schema/drive-envs';
-import { organizations, orgMembers, type OrgRole } from '@pagespace/db/schema/organizations';
+import { organizations, orgMembers, orgInvitations, type OrgRole } from '@pagespace/db/schema/organizations';
 import {
   moveDriveToOrg,
   moveDriveOutOfOrg,
@@ -81,12 +81,24 @@ async function readDrive(id: string) {
   return row;
 }
 
+/**
+ * organizations.ownerId and drives.orgId are ON DELETE RESTRICT, and CI shares one database
+ * across suites: leftovers here would make a later suite's user cleanup fail. Delete in
+ * dependency order — org drives (and this run's personal drives), invitations, members, the
+ * org — before any user.
+ */
+async function cleanup() {
+  await db.delete(drives).where(or(eq(drives.orgId, northwind), inArray(drives.ownerId, userIds)));
+  await db.delete(orgInvitations).where(eq(orgInvitations.orgId, northwind));
+  await db.delete(orgMembers).where(eq(orgMembers.orgId, northwind));
+  await db.delete(organizations).where(eq(organizations.id, northwind));
+  await db.delete(users).where(inArray(users.id, userIds));
+}
+
 beforeEach(async () => {
   syncCalls.length = 0;
   published.length = 0;
-  await db.delete(drives).where(inArray(drives.ownerId, userIds));
-  await db.delete(organizations).where(eq(organizations.id, northwind));
-  await db.delete(users).where(inArray(users.id, userIds));
+  await cleanup();
 
   await db.insert(users).values([
     { id: jono, email: `jono-${run}@northwind.test`, name: 'Jono', updatedAt: new Date() },
@@ -104,10 +116,11 @@ beforeEach(async () => {
   ]);
 });
 
+afterEach(cleanup);
+
 afterAll(async () => {
-  await db.delete(drives).where(inArray(drives.ownerId, userIds));
-  await db.delete(organizations).where(eq(organizations.id, northwind));
-  await db.delete(users).where(inArray(users.id, userIds));
+  await cleanup();
+  await pool.end();
 });
 
 describe('moveDriveToOrg', () => {
