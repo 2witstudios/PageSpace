@@ -96,3 +96,17 @@ describe('digestPlaneScope — G1c R1/R7', () => {
     expect(actual).toEqual([false, false, false, false]);
   });
 });
+
+describe('digestPlaneScope — restriction values are a set (CodeRabbit #2660)', () => {
+  it('given resourceRestrictions values in another order, should return the same PolicyDigest', () => {
+    const one: PlaneScope = { ...SCOPE, resourceRestrictions: { github: ['org/repo-a', 'org/repo-b'], slack: ['C1', 'C2'] } };
+    const other: PlaneScope = { ...SCOPE, resourceRestrictions: { slack: ['C2', 'C1'], github: ['org/repo-b', 'org/repo-a'] } };
+    expect(digestPlaneScope({ scope: one, hash: sha3 })).toEqual(digestPlaneScope({ scope: other, hash: sha3 }));
+  });
+
+  it('given the caller-supplied restriction arrays, should not reorder them in place', () => {
+    const values = ['b', 'a'];
+    digestPlaneScope({ scope: { ...SCOPE, resourceRestrictions: { github: values } }, hash: sha3 });
+    expect(values).toEqual(['b', 'a']);
+  });
+});

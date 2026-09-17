@@ -192,6 +192,27 @@ describe('findRegistryEntryDefects — templates and slots refused at load (G1c 
     ]);
   });
 
+  it('given two declared slots that map to the same restriction key, or a slot named like another slot\'s restriction key, should report restriction_key_shared — an audited slot must never carry a non-audited slot\'s values into the chain (CodeRabbit #2660)', () => {
+    const registry = [
+      entry('/repos/{owner}/{token}', 'two.slots.one.key', { restrictionKeys: { owner: 'github.id', token: 'github.id' }, auditResourceSlots: ['owner'] }),
+      entry('/repos/{owner}/{repo}', 'slot.named.like.key', { restrictionKeys: { owner: 'repo' } }),
+      entry('/repos/{owner}/{repo}', 'distinct.keys', { restrictionKeys: { owner: 'github.owner', repo: 'github.repo' } }),
+    ];
+    const actual = findRegistryEntryDefects({ registry }).map(({ operationName, defect }) => [operationName, defect]);
+    expect(actual).toEqual([
+      ['two.slots.one.key', 'restriction_key_shared'],
+      ['slot.named.like.key', 'restriction_key_shared'],
+    ]);
+  });
+
+  it('given derived resources on a relay entry whose method is not git-receive-pack, should report derived_resources_off_relay (CodeRabbit #2660)', () => {
+    const registry = (['git-upload-pack', 'lfs-batch', 'lfs-upload'] as const).map((method) =>
+      entry('/{owner}/{repo}/x', `relay.${method}`, { channel: 'relay-runner', method, derivedResources: [{ slot: 'branch', source: 'receive_pack_branches' }] }),
+    );
+    const actual = findRegistryEntryDefects({ registry }).map(({ defect }) => defect);
+    expect(actual).toEqual(['derived_resources_off_relay', 'derived_resources_off_relay', 'derived_resources_off_relay']);
+  });
+
   it('given a derived-resource rule on a non-relay entry, should report it', () => {
     const registry = [entry('/x', 'derived.off.relay', { derivedResources: [{ slot: 'branch', source: 'receive_pack_branches' }] })];
     const actual = findRegistryEntryDefects({ registry }).map(({ defect }) => defect);
