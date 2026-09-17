@@ -146,7 +146,12 @@ vi.mock('@/lib/auth/native-invite-acceptance', () => ({
   }),
 }));
 
+vi.mock('@pagespace/lib/auth/apple/capture-apple-refresh-token', () => ({
+  captureAppleRefreshToken: vi.fn().mockResolvedValue('stored'),
+}));
+
 import { POST } from '../route';
+import { captureAppleRefreshToken } from '@pagespace/lib/auth/apple/capture-apple-refresh-token';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { verifyAppleIdToken } from '@pagespace/lib/auth/oauth-utils';
@@ -1422,4 +1427,105 @@ describe('POST /api/auth/apple/callback', () => {
     });
   });
 
+  describe('Apple refresh token capture (TN3194)', () => {
+    beforeEach(() => {
+      process.env.APPLE_REDIRECT_URI = 'https://example.com/api/auth/apple/callback';
+      vi.mocked(captureAppleRefreshToken).mockResolvedValue('stored');
+      vi.mocked(verifyAppleIdToken).mockResolvedValue({
+        success: true,
+        // @ts-expect-error - partial mock data
+        userInfo: { providerId: 'apple-sub-123', email: 'test@example.com', emailVerified: true },
+        audience: 'ai.pagespace.web',
+      });
+    });
+
+    const webRequest = (fields: Record<string, string> = {}) =>
+      createCallbackRequest({
+        id_token: 'valid-token',
+        state: createSignedState({ returnUrl: '/dashboard', platform: 'web' }),
+        ...fields,
+      });
+
+    it('given Apple posts a code, should capture the refresh token with the verified client and the flow\'s redirect_uri', async () => {
+      const response = await POST(webRequest({ code: 'apple-web-code' }));
+
+      expect(response.status).toBe(307);
+      expect(response.headers.get('location')).toContain('auth=success');
+      expect(captureAppleRefreshToken).toHaveBeenCalledWith({
+        userId: 'new-user-id',
+        code: 'apple-web-code',
+        clientId: 'ai.pagespace.web',
+        expectedSub: 'apple-sub-123',
+        redirectUri: 'https://example.com/api/auth/apple/callback',
+      });
+    });
+
+    it('given a slow Apple exchange, should redirect the signed-in user without waiting for it', async () => {
+      let finishExchange: (outcome: 'stored') => void = () => {};
+      vi.mocked(captureAppleRefreshToken).mockReturnValue(
+        new Promise((resolve) => {
+          finishExchange = resolve;
+        }),
+      );
+
+      const response = await POST(webRequest({ code: 'apple-web-code' }));
+
+      expect(captureAppleRefreshToken).toHaveBeenCalledTimes(1);
+      expect(response.headers.get('location')).toContain('auth=success');
+      finishExchange('stored');
+    });
+
+    it('given the capture rejects, should still complete the sign-in', async () => {
+      vi.mocked(captureAppleRefreshToken).mockRejectedValue(new Error('boom'));
+
+      const response = await POST(webRequest({ code: 'apple-web-code' }));
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(response.headers.get('location')).toContain('auth=success');
+      expect(loggers.auth.warn).toHaveBeenCalledWith(
+        'Apple refresh token capture threw',
+        expect.objectContaining({ userId: 'new-user-id' }),
+      );
+    });
+
+    it('given the desktop flow, should also capture the refresh token', async () => {
+      const response = await POST(
+        createCallbackRequest({
+          id_token: 'valid-token',
+          code: 'apple-desktop-code',
+          state: createSignedState({ returnUrl: '/dashboard', platform: 'desktop', deviceId: 'desktop-dev-1' }),
+        }),
+      );
+
+      expect(response.status).toBe(200);
+      expect(captureAppleRefreshToken).toHaveBeenCalledWith(expect.objectContaining({ code: 'apple-desktop-code' }));
+    });
+
+    it('given the iOS web flow, should also capture the refresh token', async () => {
+      await POST(
+        createCallbackRequest({
+          id_token: 'valid-token',
+          code: 'apple-ios-code',
+          state: createSignedState({ returnUrl: '/dashboard', platform: 'ios', deviceId: 'ios-dev-1' }),
+        }),
+      );
+
+      expect(captureAppleRefreshToken).toHaveBeenCalledWith(expect.objectContaining({ code: 'apple-ios-code' }));
+    });
+
+    it('given no code in the post, should sign in without attempting a capture', async () => {
+      const response = await POST(webRequest());
+
+      expect(response.headers.get('location')).toContain('auth=success');
+      expect(captureAppleRefreshToken).not.toHaveBeenCalled();
+    });
+
+    it('given the sign-in fails verification, should never attempt a capture', async () => {
+      vi.mocked(verifyAppleIdToken).mockResolvedValue({ success: false, error: 'bad token' });
+
+      await POST(webRequest({ code: 'apple-web-code' }));
+
+      expect(captureAppleRefreshToken).not.toHaveBeenCalled();
+    });
+  });
 });

@@ -111,6 +111,28 @@ The server picks the APNs host by `NODE_ENV` (`production` → `api.push.apple.c
 Because the app entitlement is `production`, the production server **must** run with
 `NODE_ENV=production` or production-token pushes will be rejected by the sandbox host.
 
+### Sign in with Apple token revocation (production `pagespace-web`)
+
+App Store Guideline 5.1.1(v) and Apple TN3194 require revoking a user's Sign in with Apple tokens
+when they delete their account. Sign-in exchanges Apple's authorization code for a refresh token
+(stored encrypted in `apple_sign_in_tokens`), account deletion revokes it via `/auth/revoke`, and
+Apple's server-to-server notifications end sessions when a user stops using Sign in with Apple.
+Everything is skipped until the key below is configured; deletion then shows the manual steps.
+
+1. developer.apple.com → Certificates, Identifiers & Profiles → **Keys** → + → name it
+   "PageSpace Sign in with Apple" → tick **Sign in with Apple** → Configure → Primary App ID
+   **ai.pagespace.ios** → Save → Continue → Register → **Download `AuthKey_<KEYID>.p8`** (it can only be
+   downloaded once — store it in the password manager) and note the **Key ID**.
+2. Identifiers → **ai.pagespace.ios** → Sign in with Apple → Edit → **Server-to-Server Notification
+   Endpoint** = `https://pagespace.ai/api/auth/apple/notifications` → Save.
+3. Set the secrets on the Fly web app (`APPLE_TEAM_ID=M96WTV3CKX` is already set):
+   `flyctl secrets set -a pagespace-web APPLE_SIGN_IN_KEY_ID=<KEYID> APPLE_SIGN_IN_PRIVATE_KEY="$(cat AuthKey_<KEYID>.p8)"`.
+   Optionally set the same two plus `APPLE_TEAM_ID`, `APPLE_CLIENT_ID`, `APPLE_SERVICE_ID` on
+   `pagespace-admin` so the admin app's DSAR delete revokes too. Add the names to PageSpace-Deploy
+   `fly/SECRETS.md`.
+4. After deploy: `curl -s -o /dev/null -w '%{http_code}' -X POST https://pagespace.ai/api/auth/apple/notifications -d '{}'`
+   returns `400` (not `404`).
+
 ## Building locally
 
 Prereqs: Xcode + CLI tools, `bun` at the repo root.
@@ -207,6 +229,11 @@ bundle exec fastlane release   # deliver: push metadata + submit the App Store v
 - [ ] Reviewer notes emphasize native features — push, Sign in with Apple, native Google sign-in,
       keychain session persistence, app-icon badge, universal links — plus a working demo account
       with seeded content
+- [ ] Sign in with Apple revocation live (Guideline 5.1.1(v)): key + notification endpoint set up as
+      in "Sign in with Apple token revocation" above; sign in with Apple on a test Apple Account in
+      the app, delete the account from Settings → Account, and confirm PageSpace is gone from
+      Settings → your name → Sign-In & Security → Sign in with Apple, and that signing in again asks
+      for name and email
 - [ ] Submit for review
 
 ## The Facebook SDK that ships but never runs
