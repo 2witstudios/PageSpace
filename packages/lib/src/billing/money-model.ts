@@ -157,14 +157,22 @@ export function tierAllowanceCents(tier: string, active: boolean = MONEY_MODEL_V
   return centsFromCredits(FREE_STARTER_CREDITS);
 }
 
-/** Cents of credit value → credit count. */
+/**
+ * Cents of credit value → credit count. Multiplies before dividing: every whole-cent
+ * input is then an exact integer product, and dividing it by an exact divisor is exact
+ * too. Divide-then-multiply drifts ((7 / 100) * 100 is 7.000000000000001).
+ */
 export function creditsFromCents(cents: number): number {
-  return (cents / CENTS_PER_DOLLAR) * CREDITS_PER_DOLLAR;
+  return (cents * CREDITS_PER_DOLLAR) / CENTS_PER_DOLLAR;
 }
 
-/** Credit count → cents of credit value. */
+/**
+ * Credit count → cents of credit value. Multiplies before dividing, so a whole credit
+ * count gives exact integer cents — the figure goes to Stripe as `unit_amount`, which
+ * rejects a non-integer.
+ */
 export function centsFromCredits(credits: number): number {
-  return (credits / CREDITS_PER_DOLLAR) * CENTS_PER_DOLLAR;
+  return (credits * CENTS_PER_DOLLAR) / CREDITS_PER_DOLLAR;
 }
 
 /** Whole cents → dollars (real money, for prices, invoices, and top-up purchases). */

@@ -182,6 +182,28 @@ describe('MON-5 one definition of a credit', () => {
     }
   });
 
+  it('MON-5 centsFromCredits returns an exact integer for every whole credit count 0..10,000', () => {
+    // Divide-then-multiply drifts: (7 / 100) * 100 is 7.000000000000001. Stripe rejects
+    // a non-integer amount, and integer cents columns and equality checks break on it.
+    for (let credits = 0; credits <= 10_000; credits++) {
+      const cents = centsFromCredits(credits);
+      if (!Number.isInteger(cents) || cents !== (credits * 100) / CREDITS_PER_DOLLAR) {
+        expect.fail(`centsFromCredits(${credits}) returned ${cents}`);
+      }
+    }
+    expect(centsFromCredits(7)).toBe(7);
+  });
+
+  it('MON-5 creditsFromCents returns an exact integer for every whole cent amount 0..10,000', () => {
+    for (let cents = 0; cents <= 10_000; cents++) {
+      const credits = creditsFromCents(cents);
+      if (!Number.isInteger(credits) || credits !== (cents * CREDITS_PER_DOLLAR) / 100) {
+        expect.fail(`creditsFromCents(${cents}) returned ${credits}`);
+      }
+    }
+    expect(creditsFromCents(7)).toBe(7);
+  });
+
   it('A-11 a $10 top-up pack is 1,000 credits at the full rate, no ratio applied', () => {
     expect(creditsFromCents(1000)).toBe(1000);
     expect(formatCreditCount(1000)).toBe('1,000');
