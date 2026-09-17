@@ -8,7 +8,8 @@ const orgSlug = z
   .trim()
   .toLowerCase()
   .regex(/^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$/, 'Use 1-48 lowercase letters, digits or hyphens');
-const avatarUrl = z.url().max(2048).nullable();
+// https only: the avatar is rendered as an image source, so no javascript:, data: or plain http.
+const avatarUrl = z.url({ protocol: /^https$/, hostname: z.regexes.domain }).max(2048).nullable();
 
 export const orgCreateSchema = z.object({
   name: orgName,

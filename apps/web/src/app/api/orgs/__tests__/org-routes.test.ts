@@ -278,6 +278,16 @@ describe('org route behaviour', () => {
     expect((await orgsRoute.POST(req('POST', { name: 'N', slug: 'northwind' }))).status).toBe(409);
   });
 
+  it('ORG-1 (partial) an org avatar must be an https URL, never a script or data URI', async () => {
+    for (const avatarUrl of ['javascript:alert(1)', 'data:image/png;base64,AAAA', 'http://example.test/n.png']) {
+      expect((await orgsRoute.POST(req('POST', { name: 'N', slug: 'northwind', avatarUrl }))).status).toBe(400);
+    }
+    asRole('ADMIN');
+    expect((await orgRoute.PATCH(req('PATCH', { avatarUrl: 'javascript:alert(1)' }), params({ orgId: ORG_ID }))).status).toBe(400);
+    expect(repository.createOrganization).not.toHaveBeenCalled();
+    expect(repository.updateOrganization).not.toHaveBeenCalled();
+  });
+
   it('ORG-1 (partial) the Owner role cannot be granted through a role change', async () => {
     asRole('OWNER');
     const res = await memberRoute.PATCH(req('PATCH', { role: 'OWNER' }), params({ orgId: ORG_ID, userId: 'user_marcus' }));
