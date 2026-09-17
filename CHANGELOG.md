@@ -7,6 +7,12 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Run shell commands in an agent workspace from the CLI and SDK** — a workspace's sandbox was
+  only reachable through an agent in chat. `pagespace workspaces exec <workspaceId> -- <command>`
+  (and `workspaces.exec` in the SDK and over `pagespace mcp`) now runs a command there with an
+  access key and exits with the command's own status; `pagespace workspaces list` finds the id. It
+  is held to the same rules as the agent's own `bash` tool — plan, quota, command policy, billing
+  and audit — and a key scoped to other drives cannot see or reach the workspace.
 - **Multi-question prompts from the assistant have Back and Next buttons** — when the assistant
   asks several questions at once, you could only switch between them by tapping the small
   numbered tabs or pressing the arrow keys, which is awkward on a phone. Each question now has a

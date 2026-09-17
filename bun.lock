@@ -455,7 +455,7 @@
     },
     "packages/cli": {
       "name": "@pagespace/cli",
-      "version": "1.10.0",
+      "version": "1.11.0",
       "bin": {
         "pagespace": "./dist/bin.js",
         "pagespace-mcp": "./dist/bin-pagespace-mcp.js",
@@ -566,7 +566,7 @@
     },
     "packages/sdk": {
       "name": "@pagespace/sdk",
-      "version": "2.4.0",
+      "version": "2.5.0",
       "dependencies": {
         "zod": "^4.1.8",
       },
