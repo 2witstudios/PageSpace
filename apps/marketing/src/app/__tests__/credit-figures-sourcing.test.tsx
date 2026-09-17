@@ -28,8 +28,14 @@ vi.mock('@/components/SiteFooter', () => ({ SiteFooter: () => null }));
 const visibleText = (html: string) =>
   html.replace(/<!-- -->/g, '').replace(/<[^>]+>/g, ' ').replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/\s+/g, ' ');
 
-/** A credit figure stated as a literal, e.g. "1,500 credits" or "500 credits". */
-const HARDCODED_CREDIT_FIGURE = /\b\d{1,3}(,\d{3})* credits\b/;
+/**
+ * A credit figure stated as a literal in page source: "1,500 credits", "1500 credits", a figure
+ * wrapped onto the next line before "credits" (JSX collapses the newline, so it renders the same),
+ * a quoted or braced figure (`{"1,500"} credits`, `${"500"} credits`), or one word between
+ * ("1,500 AI credits"). A module reference such as `{MONTHLY_CREDITS.pro} credits` has no digit
+ * before the brace and does not match.
+ */
+const HARDCODED_CREDIT_FIGURE = /\d[\d,]*["'`}]{0,2}\s+(?:[A-Za-z]+\s+)?credits\b/;
 
 const source = (relative: string) => fs.readFileSync(path.join(__dirname, '..', relative), 'utf8');
 
