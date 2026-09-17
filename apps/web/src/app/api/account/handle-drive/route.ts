@@ -43,6 +43,7 @@ export async function POST(req: Request) {
         ownerId: true,
         name: true,
         kind: true,
+        orgId: true,
       },
     });
 
@@ -52,6 +53,15 @@ export async function POST(req: Request) {
 
     if (drive.ownerId !== userId) {
       return Response.json({ error: 'You are not the owner of this drive' }, { status: 403 });
+    }
+
+    // An org drive is the org's, not the lead's: it is neither deleted nor handed to a drive
+    // admin here. Account deletion reassigns its lead to the org Owner (Spec O-7).
+    if (drive.orgId) {
+      return Response.json(
+        { error: 'This drive belongs to an organization. When you delete your account, the organization Owner becomes its lead.' },
+        { status: 409 }
+      );
     }
 
     // Home stays bound to its owner. Deleting it here is allowed: this route is

@@ -11,6 +11,8 @@ import { db } from '@pagespace/db/db';
 import { and, asc, eq, inArray } from '@pagespace/db/operators';
 import { organizations, orgMembers, type OrgRole } from '@pagespace/db/schema/organizations';
 import { decideOrgRole } from './authorize';
+import { leaveOrganization } from './leave';
+import { getActorInfo } from '../monitoring/activity-logger';
 
 export type MembershipDecision =
   | { ok: true }
@@ -154,9 +156,13 @@ export async function removeMember(input: {
     const roles = await lockActorAndTargetRoles(tx, input.orgId, input.actorId, input.targetId);
     const decision = decideMemberRemoval({ ...input, ...roles });
     if (!decision.ok) return decision;
-    await tx
-      .delete(orgMembers)
-      .where(and(eq(orgMembers.orgId, input.orgId), eq(orgMembers.userId, input.targetId)));
+    // Removal is a leave the member did not choose: the same cascade runs in this transaction,
+    // so org drives the member leads pass to the org Owner (D-OW-7) and what their membership
+    // handed out is revoked (D-OW-8). The audit actor is the Admin who removed them.
+    const left = await leaveOrganization(input.targetId, input.orgId, tx, {
+      actor: await getActorInfo(input.actorId),
+    });
+    if (!left.ok) return { ok: false, status: 404, reason: 'target_not_member' };
     return decision;
   });
 }

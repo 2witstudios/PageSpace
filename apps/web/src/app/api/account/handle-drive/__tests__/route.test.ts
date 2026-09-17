@@ -342,6 +342,33 @@ describe('POST /api/account/handle-drive', () => {
       expect(updateMock).not.toHaveBeenCalled();
     });
 
+    it.each(['delete', 'transfer'] as const)(
+      'D-OW-7 refuses to %s an org drive the person leads: it passes to the org Owner instead',
+      async (action) => {
+        const updateMock = setupUpdateMock();
+        const deleteMock = setupDeleteMock();
+        vi.mocked(db.query.drives.findFirst).mockResolvedValue({
+          ...mockDrive({ id: mockDriveId, name: 'Product', ownerId: mockUserId }),
+          orgId: 'org-northwind',
+        });
+
+        const request = new Request('https://example.com/api/account/handle-drive', {
+          method: 'POST',
+          body: JSON.stringify({ driveId: mockDriveId, action, newOwnerId: mockNewOwnerId }),
+        });
+
+        const response = await POST(request);
+        const body = await response.json();
+
+        expect(response.status).toBe(409);
+        expect(body.error).toBe(
+          'This drive belongs to an organization. When you delete your account, the organization Owner becomes its lead.'
+        );
+        expect(updateMock).not.toHaveBeenCalled();
+        expect(deleteMock).not.toHaveBeenCalled();
+      }
+    );
+
     it('still allows DELETE of a Home drive (account-deletion prep; cascade would remove it anyway)', async () => {
       const deleteMock = setupDeleteMock();
       vi.mocked(db.query.drives.findFirst).mockResolvedValue({

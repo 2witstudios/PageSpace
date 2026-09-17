@@ -1408,6 +1408,21 @@
       "import": "./dist/services/subdomain-allocation.js",
       "require": "./dist/services/subdomain-allocation.js"
     },
+    "./services/org-drive-service": {
+      "types": "./dist/services/org-drive-service.d.ts",
+      "import": "./dist/services/org-drive-service.js",
+      "require": "./dist/services/org-drive-service.js"
+    },
+    "./services/org-drive-service-deps": {
+      "types": "./dist/services/org-drive-service-deps.d.ts",
+      "import": "./dist/services/org-drive-service-deps.js",
+      "require": "./dist/services/org-drive-service-deps.js"
+    },
+    "./organizations/org-drive-ownership": {
+      "types": "./dist/organizations/org-drive-ownership.d.ts",
+      "import": "./dist/organizations/org-drive-ownership.js",
+      "require": "./dist/organizations/org-drive-ownership.js"
+    },
     "./services/drive-guards": {
       "types": "./dist/services/drive-guards.d.ts",
       "import": "./dist/services/drive-guards.js",
