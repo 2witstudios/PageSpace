@@ -594,7 +594,7 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
-- **An unaccepted drive invitation no longer grants anything** — a person invited to a drive but
+- **An unaccepted drive invitation no longer grants drive access** — a person invited to a drive but
   who had not yet accepted could already, in four places, act as if they had joined: an invited
   admin could view and edit the drive's custom roles, reorder and move its pages, and grant or
   revoke page permissions, and any invitee saw every channel in the drive with its latest message

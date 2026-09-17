@@ -95,18 +95,22 @@ describe('getUsersWhoCanViewPage — custom role drive-wide grant on a private p
     await expect(getUsersWhoCanViewPage('page_private', ['per_page_entry'])).resolves.toEqual(new Set(['per_page_entry']));
   });
 
-  it('still includes the owner, and a drive-wide member of a NON-private page', async () => {
+  it('still includes the owner of the private page', async () => {
+    stubRows([viewerRow('owner')]);
+
+    await expect(getUsersWhoCanViewPage('page_private', ['owner'])).resolves.toEqual(new Set(['owner']));
+  });
+
+  it('still includes a drive-wide member of a NON-private page', async () => {
     stubRows([
-      viewerRow('owner'),
       viewerRow('drive_wide_public', {
+        pageId: 'page_public',
         isPrivate: false,
         customRolePerms: {},
         customRoleDriveWidePerms: { canView: true, canEdit: false, canShare: false },
       }),
     ]);
 
-    await expect(getUsersWhoCanViewPage('page_private', ['owner', 'drive_wide_public'])).resolves.toEqual(
-      new Set(['owner', 'drive_wide_public']),
-    );
+    await expect(getUsersWhoCanViewPage('page_public', ['drive_wide_public'])).resolves.toEqual(new Set(['drive_wide_public']));
   });
 });

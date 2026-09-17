@@ -1,20 +1,23 @@
 /**
- * Drive Member acceptedAt Gate — Route Coverage
+ * Drive Member acceptedAt Gate — Query Coverage
  *
- * Locks in the Epic 1 authz hardening: any API route that reads
- * `driveMembers` for an authorization decision MUST filter on
+ * Locks in the Epic 1 authz hardening: every query that reads `driveMembers`
+ * for an authorization decision MUST filter on
  * `isNotNull(driveMembers.acceptedAt)` so pending invitation rows
  * (acceptedAt IS NULL) cannot exercise authority.
  *
- * Routes that intentionally surface pending rows (e.g., the member-detail
- * view used to render "Invitation pending" in the UI) or that perform
- * non-authz reads/writes (e.g., DELETE by composite key, count helpers)
- * are explicitly allow-listed below with a justification.
+ * The check is per QUERY, not per file. A file-level check let one gated query
+ * hide an ungated one beside it, and the original sweep only covered
+ * apps/web/src/app/api/** and apps/web/src/lib/** — four ungated authz reads
+ * survived outside it (drive-role-service, page-reorder-service,
+ * permission-management-service, and the raw-SQL channel list in
+ * messages/threads).
  *
- * Regression caught: a new authz route is added under apps/web/src/app/api/**
- * that reads `driveMembers` without the gate and without an allow-list entry —
- * the test fails and forces the author to either gate the query or document
- * why the gate is intentionally skipped.
+ * Reads that are legitimately ungated (writers' pre-update reads, displays
+ * behind a gated owner/admin check, candidate filters a canonical resolver
+ * decides afterwards) are allow-listed below with the EXACT number of ungated
+ * queries and a reason. A new ungated query in an allow-listed file changes
+ * the count and fails the test just as it would anywhere else.
  */
 
 // @vitest-environment node
@@ -22,346 +25,240 @@ import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync, statSync } from 'fs';
 import { join } from 'path';
 
-const API_DIR = join(__dirname, '..');
-// Lib-level call sites also read driveMembers for authz decisions (AI tools,
-// memory discovery). Review C2 found four such sites the original API-only
-// scan could not see; this directory is now part of the regression sweep.
-const LIB_DIR = join(__dirname, '..', '..', '..', 'lib');
-
-/** Files that read `driveMembers` but are intentionally exempt from the gate. */
-const ACCEPTED_AT_GATE_EXEMPT = new Map<string, string>([
-  [
-    'drives/[driveId]/members/[userId]',
-    'GET intentionally surfaces pending rows for the member-detail UI ("Invitation pending"); DELETE/PATCH operate by composite (driveId, userId) key and do not branch on acceptedAt.',
-  ],
-  [
-    'account/drives-status',
-    'Followup #4: admin lookup for drive-transfer UI should gate on acceptedAt — tracked in followup-4 (invite UX/audit hardening).',
-  ],
-  [
-    'admin/global-prompt',
-    'Followup #4: admin drive picker should hide pending invitations — tracked in followup-4.',
-  ],
-  [
-    'channels/[pageId]/messages',
-    'The unfiltered drive_members read only builds a CANDIDATE recipient set; recipients are then filtered through getUsersWhoCanViewPage, which requires an accepted membership, so a pending admin receives no broadcast.',
-  ],
-  [
-    'drives/[driveId]/backups/[backupId]/restore',
-    'Reads driveMembers to enumerate ALL current members (including pending) for full-replacement during restore. The gate is intentionally absent here: the goal is to delete all rows so the backup state is faithfully restored — filtering on acceptedAt would silently leave pending-invite rows behind.',
-  ],
-  [
-    'users/messageable',
-    'DM-eligibility surfacing intentionally drops the gate so co-members whose driveMembers.acceptedAt is NULL (legacy rows missed by migrate-pending-invites, or transient invite states) still appear in the New Conversation picker. DM eligibility is softer than drive access; the gate is preserved everywhere a NULL row could exercise authority (page reads, member listings, broadcasts).',
-  ],
-]);
-
-/**
- * Lib-level files that read `driveMembers` but are intentionally exempt.
- * The repository file is the canonical seam; all reads through it carry
- * their own gate logic specific to the operation (e.g. findActivePendingMember
- * deliberately filters acceptedAt IS NULL to surface pending rows for the
- * pending-list UI).
- */
-const LIB_ACCEPTED_AT_GATE_EXEMPT = new Map<string, string>([
-  [
-    'repositories/drive-invite-repository.ts',
-    'Repository seam — each query carries its own gate (findAdminMembership filters IS NOT NULL; findActivePendingMemberByEmail intentionally filters IS NULL to surface pending rows; createDriveMember/findExistingMember/updateDriveMemberRole operate by composite key or memberId and do not branch on acceptedAt).',
-  ],
-  [
-    'auth/revoke-adapters.ts',
-    'findActorMembership returns raw {role, acceptedAt} so the strict "accepted OWNER/ADMIN" gate lives once in validateRevokeRequest (pure-core). Filtering acceptedAt at the SQL layer would silently NOT_FOUND a request that should FORBIDDEN, masking a wrong-role attempt.',
-  ],
-  [
-    'repositories/page-invite-repository.ts',
-    'Page-invite acceptance writes a driveMembers row (does not read for authz). Existing-member lookup gates on (driveId, userId) composite to keep the page-grant idempotent — a pending-invite row would be a different (driveId, userId) and is irrelevant here.',
-  ],
-]);
-
-/**
- * apps/web/src/services/** and packages/lib/src/** were outside the original
- * sweep, and that is exactly where four ungated authz reads survived: the
- * drive-role access check (roles routes), page reorder, permission management,
- * plus the raw-SQL channel list in messages/threads. Keys are paths relative to
- * the repo root.
- */
-const SERVICE_ACCEPTED_AT_GATE_EXEMPT = new Map<string, string>([
-  [
-    'apps/web/src/services/api/restore-permissions-service.ts',
-    'Writer: deletes and inserts drive_members rows to restore a backup; it makes no access decision.',
-  ],
-  [
-    'apps/web/src/services/api/rollback/rollback-executors.ts',
-    'Writer: executes member/role rollback plans. The customRoleId read collects every holder of a role being deleted so each can be revalidated — including pending rows is the fail-safe direction.',
-  ],
-  [
-    'apps/web/src/services/api/rollback/redo-executors.ts',
-    'Writer: executes member/role redo plans. The customRoleId read collects every holder of a role being deleted so each can be revalidated — including pending rows is the fail-safe direction.',
-  ],
-  [
-    'apps/web/src/services/api/rollback/preview.ts',
-    'Conflict preview: reads the target member row (pending or not) by composite key to show its current values before a rollback; the caller is authorized separately.',
-  ],
-  [
-    'packages/lib/src/types.ts',
-    'Type declaration only (AppShell.driveMembers); no query.',
-  ],
-  [
-    'packages/lib/src/repositories/account-repository.ts',
-    'Account deletion counts every drive_members row to decide whether a drive is solo; counting pending rows makes deletion MORE conservative, never grants access.',
-  ],
-  [
-    'packages/lib/src/permissions/share-link-service.ts',
-    'Writer only: share-link redemption upserts an accepted drive_members row; it never reads one for a decision.',
-  ],
-  [
-    'packages/lib/src/compliance/export/gdpr-export.ts',
-    "GDPR subject-access export of the user's OWN membership rows; pending invitations are the subject's personal data and belong in the export.",
-  ],
-]);
-
-/**
- * Raw SQL escapes the `isNotNull(driveMembers.acceptedAt)` scan entirely. A
- * file that joins drive_members in SQL must either gate on "acceptedAt" in that
- * SQL or pass the candidates through getBatchPagePermissions (which gates).
- */
-const RAW_SQL_DRIVE_MEMBERS = /\b(?:JOIN|FROM)\s+drive_members\b/;
-const RAW_SQL_GATE = /"acceptedAt"|getBatchPagePermissions/;
-
-const DRIVE_MEMBERS_REFERENCE = /\bdriveMembers\b/;
-const ACCEPTED_AT_GATE = /isNotNull\s*\(\s*driveMembers\.acceptedAt\s*\)/;
-// findActivePendingMemberByEmail intentionally filters IS NULL — that file is
-// allow-listed via LIB_ACCEPTED_AT_GATE_EXEMPT, so this constant is unused
-// today but documents the inverse case for future reviewers.
-
-function collectRouteFiles(dir: string): string[] {
-  const results: string[] = [];
-  for (const entry of readdirSync(dir)) {
-    const full = join(dir, entry);
-    if (entry === 'node_modules' || entry === '.next' || entry === '__tests__') continue;
-    if (statSync(full).isDirectory()) {
-      results.push(...collectRouteFiles(full));
-    } else if (entry === 'route.ts') {
-      results.push(full);
-    }
-  }
-  return results;
-}
-
-function collectLibFiles(dir: string): string[] {
-  const results: string[] = [];
-  for (const entry of readdirSync(dir)) {
-    const full = join(dir, entry);
-    if (entry === 'node_modules' || entry === '__tests__') continue;
-    if (entry.endsWith('.test.ts') || entry.endsWith('.test.tsx')) continue;
-    if (statSync(full).isDirectory()) {
-      results.push(...collectLibFiles(full));
-    } else if (entry.endsWith('.ts') || entry.endsWith('.tsx')) {
-      results.push(full);
-    }
-  }
-  return results;
-}
-
 const REPO_ROOT = join(__dirname, '..', '..', '..', '..', '..', '..');
-const SERVICE_DIRS = [
+const SCAN_DIRS = [
+  join(REPO_ROOT, 'apps', 'web', 'src', 'app', 'api'),
+  join(REPO_ROOT, 'apps', 'web', 'src', 'lib'),
   join(REPO_ROOT, 'apps', 'web', 'src', 'services'),
   join(REPO_ROOT, 'packages', 'lib', 'src'),
 ];
 
-function toRepoPath(absolutePath: string): string {
-  return absolutePath.replace(REPO_ROOT + '/', '');
+/** An ORM read of driveMembers: `.from(driveMembers)`, a join on it, or `db.query.driveMembers.find*`. */
+const ORM_READ_SITE = /(?:\.from|\.(?:left|inner|right|full)Join)\(\s*driveMembers\b|\bquery\.driveMembers\.find(?:First|Many)\(/g;
+const ORM_GATE = /isNotNull\s*\(\s*driveMembers\.acceptedAt\s*\)/;
+/** A raw-SQL read of drive_members. */
+const SQL_READ_SITE = /\b(?:JOIN|FROM)\s+drive_members\b/g;
+const SQL_GATE = /"acceptedAt"/;
+
+/**
+ * Counts ORM reads of driveMembers whose own query carries no acceptedAt gate.
+ * A query spans from its read site to the end of its statement, cut short at
+ * the next read site so one gated query cannot vouch for a neighbour.
+ */
+function countUngatedOrmReads(source: string): number {
+  const sites = [...source.matchAll(ORM_READ_SITE)].map((m) => m.index ?? 0);
+  return sites.filter((start, i) => {
+    const semicolon = source.indexOf(';', start);
+    const end = Math.min(semicolon === -1 ? source.length : semicolon, sites[i + 1] ?? source.length);
+    return !ORM_GATE.test(source.slice(start, end));
+  }).length;
 }
 
-function toLogicalPath(absolutePath: string): string {
-  const relative = absolutePath.replace(API_DIR + '/', '');
-  return relative.replace(/\/route\.ts$/, '');
+/** Counts raw-SQL joins/selects on drive_members whose enclosing sql`` template has no "acceptedAt". */
+function countUngatedSqlReads(source: string): number {
+  return [...source.matchAll(SQL_READ_SITE)].filter((match) => {
+    const index = match.index ?? 0;
+    const open = source.lastIndexOf('sql`', index);
+    const close = source.indexOf('`', index);
+    return !SQL_GATE.test(source.slice(open === -1 ? 0 : open, close === -1 ? source.length : close));
+  }).length;
 }
 
-function toLibLogicalPath(absolutePath: string): string {
-  return absolutePath.replace(LIB_DIR + '/', '');
+type Exemption = { ormReads?: number; sqlReads?: number; reason: string };
+
+/** Repo-relative path → the exact ungated query counts that file is allowed, and why. */
+const EXEMPT = new Map<string, Exemption>([
+  // ── apps/web/src/app/api ────────────────────────────────────────────────
+  ['apps/web/src/app/api/account/drives-status/route.ts', {
+    ormReads: 2,
+    reason: 'Account-deletion UI: counting pending rows keeps a drive "multi-member" (the conservative direction), and the admin transfer list is display only — handle-drive refuses a pending admin as the new owner. Followup #4 tracks hiding pending admins from the list.',
+  }],
+  ['apps/web/src/app/api/admin/global-prompt/route.ts', {
+    ormReads: 1,
+    reason: 'Platform-admin debug tool that already reads any drive\'s pages with no membership check; the drive picker read grants nothing. Followup #4 tracks hiding pending invitations from the picker.',
+  }],
+  ['apps/web/src/app/api/channels/[pageId]/messages/route.ts', {
+    ormReads: 1,
+    reason: 'Builds a CANDIDATE recipient set only; recipients are filtered through getUsersWhoCanViewPage, which requires an accepted membership, so a pending admin receives no broadcast.',
+  }],
+  ['apps/web/src/app/api/drives/[driveId]/backups/[backupId]/restore/route.ts', {
+    ormReads: 1,
+    reason: 'Enumerates ALL current members (including pending) for full replacement during restore; filtering on acceptedAt would silently leave pending-invite rows behind.',
+  }],
+  ['apps/web/src/app/api/users/messageable/route.ts', {
+    ormReads: 2,
+    reason: 'DM eligibility intentionally drops the gate (documented in the route and in usersShareDrive) so co-members with a NULL acceptedAt still appear in the New Conversation picker. It grants no drive or page access.',
+  }],
+  ['apps/web/src/app/api/inbox/route.ts', {
+    sqlReads: 2,
+    reason: 'Both channel queries are candidate filters; getBatchPagePermissions (accepted members only) decides which channels are returned.',
+  }],
+  ['apps/web/src/app/api/messages/threads/route.ts', {
+    sqlReads: 1,
+    reason: 'Candidate filter; getBatchPagePermissions (accepted members only) decides which channels are returned.',
+  }],
+  ['apps/web/src/app/api/sidebar/badges/route.ts', {
+    sqlReads: 1,
+    reason: 'Candidate filter; getBatchPagePermissions (accepted members only) decides which channels are counted.',
+  }],
+  // ── apps/web/src/lib ────────────────────────────────────────────────────
+  ['apps/web/src/lib/auth/revoke-adapters.ts', {
+    ormReads: 1,
+    reason: 'findActorMembership returns raw {role, acceptedAt} so the strict "accepted OWNER/ADMIN" gate lives once in validateRevokeRequest. Filtering in SQL would NOT_FOUND a request that should be FORBIDDEN.',
+  }],
+  ['apps/web/src/lib/repositories/drive-invite-repository.ts', {
+    ormReads: 2,
+    reason: 'Invite management: findExistingMember looks up a row by composite key to avoid duplicate invites, and findActivePendingMemberByEmail filters acceptedAt IS NULL on purpose to list pending rows.',
+  }],
+  ['apps/web/src/lib/repositories/page-invite-repository.ts', {
+    ormReads: 1,
+    reason: 'Page-invite acceptance reads the (driveId, userId) row to write it: it inserts a missing row or sets acceptedAt on a pending one.',
+  }],
+  // ── apps/web/src/services ───────────────────────────────────────────────
+  ['apps/web/src/services/api/drive-backup-service.ts', {
+    ormReads: 1,
+    reason: 'Backup snapshot copies every drive_members row, pending included, so a restore reproduces the drive faithfully.',
+  }],
+  ['apps/web/src/services/api/rollback/preview.ts', {
+    ormReads: 1,
+    reason: 'Conflict preview shows the target member row\'s current values (pending or not) before a rollback; the caller is authorized separately.',
+  }],
+  ['apps/web/src/services/api/rollback/rollback-executors.ts', {
+    ormReads: 1,
+    reason: 'Collects every holder of a role being deleted so each can be revalidated — including pending rows is the fail-safe direction.',
+  }],
+  ['apps/web/src/services/api/rollback/redo-executors.ts', {
+    ormReads: 1,
+    reason: 'Collects every holder of a role being deleted so each can be revalidated — including pending rows is the fail-safe direction.',
+  }],
+  // ── packages/lib/src ────────────────────────────────────────────────────
+  ['packages/lib/src/compliance/export/gdpr-export.ts', {
+    ormReads: 1,
+    reason: 'GDPR subject-access export of the user\'s OWN membership rows; pending invitations are the subject\'s personal data.',
+  }],
+  ['packages/lib/src/permissions/permissions.ts', {
+    ormReads: 2,
+    reason: 'usersShareDrive (DM eligibility) intentionally skips the gate, as documented on the function; every page/drive access resolver in the file is gated.',
+  }],
+  ['packages/lib/src/repositories/account-repository.ts', {
+    ormReads: 2,
+    reason: 'Account deletion counts every row to decide whether a drive is solo; counting pending rows makes deletion MORE conservative.',
+  }],
+  ['packages/lib/src/services/app-shell-service.ts', {
+    ormReads: 2,
+    reason: 'Both reads are scoped to the drive set resolved by the gated owned/accepted-member query: the caller\'s role/lastAccessedAt per drive, and the member list (which returns acceptedAt so the UI can show pending invitations).',
+  }],
+  ['packages/lib/src/services/drive-member-service.ts', {
+    ormReads: 3,
+    reason: 'listDriveMembers and getDriveMemberDetails surface pending rows ("Invitation pending") behind the gated checkDriveAccess owner/admin check; updateMemberRole reads the old role before writing it.',
+  }],
+]);
+
+function collectSourceFiles(dir: string): string[] {
+  const results: string[] = [];
+  for (const entry of readdirSync(dir)) {
+    const full = join(dir, entry);
+    if (entry === 'node_modules' || entry === '.next' || entry === '__tests__') continue;
+    if (/\.test\.tsx?$/.test(entry)) continue;
+    if (statSync(full).isDirectory()) {
+      results.push(...collectSourceFiles(full));
+    } else if (/\.tsx?$/.test(entry)) {
+      results.push(full);
+    }
+  }
+  return results;
 }
+
+const toRepoPath = (absolutePath: string) => absolutePath.replace(REPO_ROOT + '/', '');
 
 describe('Drive Member acceptedAt Gate Coverage', () => {
-  const routeFiles = collectRouteFiles(API_DIR);
-  const routes = routeFiles.map((f) => ({ path: toLogicalPath(f), file: f }));
+  describe('query scanner', () => {
+    it('given one gated and one ungated query in the same file, should count the ungated one', () => {
+      const source = `
+        const gated = await db.select().from(driveMembers)
+          .where(and(eq(driveMembers.userId, userId), isNotNull(driveMembers.acceptedAt)));
+        const ungated = await db.select().from(driveMembers)
+          .where(eq(driveMembers.userId, userId));
+      `;
+      expect(countUngatedOrmReads(source)).toBe(1);
+    });
 
-  it('given any route that reads driveMembers, should compose isNotNull(driveMembers.acceptedAt) or be explicitly allow-listed', () => {
-    const violations: string[] = [];
+    it('given a gated query followed immediately by another read in the same statement, should not let the first vouch for the second', () => {
+      const source = `
+        const [a, b] = await Promise.all([
+          db.query.driveMembers.findFirst({ where: and(eq(driveMembers.userId, u), isNotNull(driveMembers.acceptedAt)) }),
+          db.query.driveMembers.findMany({ where: eq(driveMembers.driveId, d) }),
+        ]);
+      `;
+      expect(countUngatedOrmReads(source)).toBe(1);
+    });
 
-    for (const route of routes) {
-      const content = readFileSync(route.file, 'utf-8');
-      if (!DRIVE_MEMBERS_REFERENCE.test(content)) continue;
-      if (ACCEPTED_AT_GATE.test(content)) continue;
-      if (ACCEPTED_AT_GATE_EXEMPT.has(route.path)) continue;
-      violations.push(route.path);
-    }
+    it('given gated reads, joins and findFirst calls, should count nothing', () => {
+      const source = `
+        await db.query.driveMembers.findFirst({ where: and(eq(driveMembers.driveId, d), isNotNull(driveMembers.acceptedAt)) });
+        await db.select().from(pages).leftJoin(driveMembers, and(eq(driveMembers.driveId, pages.driveId), isNotNull(driveMembers.acceptedAt)));
+        await tx.delete(driveMembers).where(eq(driveMembers.driveId, d));
+      `;
+      expect(countUngatedOrmReads(source)).toBe(0);
+    });
 
-    expect(violations).toEqual([]);
-    if (violations.length > 0) {
-      console.error(
-        `\nDrive member authz gate missing for ${violations.length} route(s):\n` +
-          violations.map((v) => `  - ${v}`).join('\n') +
-          `\n\nFix: Add isNotNull(driveMembers.acceptedAt) to the WHERE clause` +
-          `\n     of every authz read of driveMembers, OR add the route to` +
-          `\n     ACCEPTED_AT_GATE_EXEMPT with a one-line justification.\n`
-      );
-    }
+    it('given one gated and one ungated sql template, should count the ungated one', () => {
+      const source = [
+        'await db.execute(sql`SELECT 1 FROM pages p LEFT JOIN drive_members dm ON dm."driveId" = p."driveId" AND dm."acceptedAt" IS NOT NULL`);',
+        'await db.execute(sql`SELECT 1 FROM pages p LEFT JOIN drive_members dm ON dm."driveId" = p."driveId"`);',
+      ].join('\n');
+      expect(countUngatedSqlReads(source)).toBe(1);
+    });
   });
 
-  it('allow-list should not contain stale entries for routes that no longer reference driveMembers', () => {
-    const stale: string[] = [];
+  describe('repository sweep', () => {
+    const files = SCAN_DIRS.flatMap(collectSourceFiles);
+    const repoPaths = new Set(files.map(toRepoPath));
 
-    for (const [pattern] of ACCEPTED_AT_GATE_EXEMPT) {
-      const route = routes.find((r) => r.path === pattern);
-      if (!route) {
-        stale.push(`${pattern} (route file not found)`);
-        continue;
-      }
-      const content = readFileSync(route.file, 'utf-8');
-      if (!DRIVE_MEMBERS_REFERENCE.test(content)) {
-        stale.push(`${pattern} (no longer references driveMembers)`);
-      }
-    }
-
-    expect(stale).toEqual([]);
-    if (stale.length > 0) {
-      console.error(
-        `\nStale ACCEPTED_AT_GATE_EXEMPT entries:\n` +
-          stale.map((s) => `  - ${s}`).join('\n') +
-          `\n\nRemove these entries from the allow-list.\n`
-      );
-    }
-  });
-
-  it('allow-list entries should each carry a justification (no empty reasons)', () => {
-    const empty: string[] = [];
-    for (const [pattern, reason] of ACCEPTED_AT_GATE_EXEMPT) {
-      if (!reason || reason.trim().length < 10) {
-        empty.push(pattern);
-      }
-    }
-    expect(empty).toEqual([]);
-  });
-
-  it('coverage scan should discover a non-trivial number of routes (sanity check)', () => {
-    expect(routes.length).toBeGreaterThanOrEqual(50);
-  });
-
-  // Review C2: the scan now extends into apps/web/src/lib/** so AI tools and
-  // memory discovery cannot silently bypass the gate. Without this sweep, four
-  // lib-level read sites used to live as invisible escape hatches.
-  describe('lib/** coverage (Review C2: lib-level call-site sweep)', () => {
-    const libFiles = collectLibFiles(LIB_DIR);
-
-    it('given any lib file that reads driveMembers, should compose isNotNull(driveMembers.acceptedAt) or be explicitly allow-listed', () => {
-      const violations: string[] = [];
-
-      for (const file of libFiles) {
-        const content = readFileSync(file, 'utf-8');
-        if (!DRIVE_MEMBERS_REFERENCE.test(content)) continue;
-        if (ACCEPTED_AT_GATE.test(content)) continue;
-        const logical = toLibLogicalPath(file);
-        if (LIB_ACCEPTED_AT_GATE_EXEMPT.has(logical)) continue;
-        violations.push(logical);
+    it('given any file that reads drive members, should gate every query or match its allow-listed count exactly', () => {
+      const mismatches: string[] = [];
+      for (const file of files) {
+        const source = readFileSync(file, 'utf-8');
+        const actual = { ormReads: countUngatedOrmReads(source), sqlReads: countUngatedSqlReads(source) };
+        const path = toRepoPath(file);
+        const exemption = EXEMPT.get(path);
+        const allowed = { ormReads: exemption?.ormReads ?? 0, sqlReads: exemption?.sqlReads ?? 0 };
+        if (actual.ormReads !== allowed.ormReads || actual.sqlReads !== allowed.sqlReads) {
+          mismatches.push(`${path}: ungated ${JSON.stringify(actual)}, allowed ${JSON.stringify(allowed)}`);
+        }
       }
 
-      expect(violations).toEqual([]);
-      if (violations.length > 0) {
+      expect(mismatches).toEqual([]);
+      if (mismatches.length > 0) {
         console.error(
-          `\nDrive member authz gate missing for ${violations.length} lib file(s):\n` +
-            violations.map((v) => `  - ${v}`).join('\n') +
-            `\n\nFix: Add isNotNull(driveMembers.acceptedAt) to the WHERE clause` +
-            `\n     of every authz read of driveMembers in apps/web/src/lib/**, OR` +
-            `\n     add the file to LIB_ACCEPTED_AT_GATE_EXEMPT with a one-line` +
-            `\n     justification.\n`
+          `\nDrive member acceptedAt gate mismatch:\n` +
+            mismatches.map((m) => `  - ${m}`).join('\n') +
+            `\n\nFix: add isNotNull(driveMembers.acceptedAt) (or "acceptedAt" in raw SQL)` +
+            `\n     to the query, route the decision through a canonical permission` +
+            `\n     function, or — only for a legitimately ungated read — update the` +
+            `\n     EXEMPT count and reason.\n`
         );
       }
     });
 
-    it('lib coverage scan should discover a non-trivial number of files (sanity check)', () => {
-      expect(libFiles.length).toBeGreaterThanOrEqual(50);
+    it('allow-list should not name files that no longer exist', () => {
+      expect([...EXEMPT.keys()].filter((path) => !repoPaths.has(path))).toEqual([]);
     });
 
-    it('lib allow-list should not contain stale entries for files that no longer reference driveMembers', () => {
-      const stale: string[] = [];
+    it('allow-list entries should each carry a justification (no empty reasons)', () => {
+      expect([...EXEMPT].filter(([, { reason }]) => reason.trim().length < 10).map(([path]) => path)).toEqual([]);
+    });
 
-      for (const [pattern] of LIB_ACCEPTED_AT_GATE_EXEMPT) {
-        const file = libFiles.find((f) => toLibLogicalPath(f) === pattern);
-        if (!file) {
-          stale.push(`${pattern} (lib file not found)`);
-          continue;
-        }
-        const content = readFileSync(file, 'utf-8');
-        if (!DRIVE_MEMBERS_REFERENCE.test(content)) {
-          stale.push(`${pattern} (no longer references driveMembers)`);
-        }
+    it('sweep should cover routes, web lib, web services and the lib package (sanity check)', () => {
+      expect(files.length).toBeGreaterThanOrEqual(500);
+      for (const path of [
+        'apps/web/src/app/api/pages/tree/route.ts',
+        'apps/web/src/lib/users/visibility.ts',
+        'apps/web/src/services/api/page-reorder-service.ts',
+        'packages/lib/src/services/drive-role-service.ts',
+      ]) {
+        expect(repoPaths.has(path)).toBe(true);
       }
-
-      expect(stale).toEqual([]);
-    });
-
-    it('lib allow-list entries should each carry a justification (no empty reasons)', () => {
-      const empty: string[] = [];
-      for (const [pattern, reason] of LIB_ACCEPTED_AT_GATE_EXEMPT) {
-        if (!reason || reason.trim().length < 10) {
-          empty.push(pattern);
-        }
-      }
-      expect(empty).toEqual([]);
-    });
-  });
-
-  describe('services/** and packages/lib/src/** coverage', () => {
-    const serviceFiles = SERVICE_DIRS.flatMap((dir) => collectLibFiles(dir));
-
-    it('given any service or lib-package file that reads driveMembers, should compose isNotNull(driveMembers.acceptedAt) or be explicitly allow-listed', () => {
-      const violations = serviceFiles
-        .filter((file) => {
-          const content = readFileSync(file, 'utf-8');
-          return DRIVE_MEMBERS_REFERENCE.test(content) && !ACCEPTED_AT_GATE.test(content);
-        })
-        .map(toRepoPath)
-        .filter((path) => !SERVICE_ACCEPTED_AT_GATE_EXEMPT.has(path));
-
-      expect(violations).toEqual([]);
-    });
-
-    it('service scan should discover both directories (sanity check)', () => {
-      const repoPaths = serviceFiles.map(toRepoPath);
-      expect(repoPaths.some((p) => p === 'apps/web/src/services/api/page-reorder-service.ts')).toBe(true);
-      expect(repoPaths.some((p) => p === 'packages/lib/src/services/drive-role-service.ts')).toBe(true);
-    });
-
-    it('service allow-list should not contain stale entries', () => {
-      const stale = [...SERVICE_ACCEPTED_AT_GATE_EXEMPT.keys()].filter((path) => {
-        const file = serviceFiles.find((f) => toRepoPath(f) === path);
-        return !file || !DRIVE_MEMBERS_REFERENCE.test(readFileSync(file, 'utf-8'));
-      });
-
-      expect(stale).toEqual([]);
-    });
-  });
-
-  describe('raw SQL drive_members joins', () => {
-    const sqlFiles = [...routeFiles, ...collectLibFiles(LIB_DIR), ...SERVICE_DIRS.flatMap((dir) => collectLibFiles(dir))];
-
-    it('given a file that joins drive_members in raw SQL, should gate on "acceptedAt" or filter through getBatchPagePermissions', () => {
-      const violations = sqlFiles
-        .filter((file) => {
-          const content = readFileSync(file, 'utf-8');
-          return RAW_SQL_DRIVE_MEMBERS.test(content) && !RAW_SQL_GATE.test(content);
-        })
-        .map(toRepoPath);
-
-      expect(violations).toEqual([]);
-    });
-
-    it('raw SQL scan should see the known candidate-filter routes (sanity check)', () => {
-      const joined = sqlFiles
-        .filter((file) => RAW_SQL_DRIVE_MEMBERS.test(readFileSync(file, 'utf-8')))
-        .map(toRepoPath);
-      expect(joined).toContain('apps/web/src/app/api/messages/threads/route.ts');
     });
   });
 });
