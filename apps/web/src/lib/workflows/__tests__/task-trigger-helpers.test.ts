@@ -316,7 +316,8 @@ describe('task-trigger-helpers', () => {
       await vi.waitFor(() => {
         expect(mockSet).toHaveBeenCalledWith({ lastFireError: 'AI credit gate denied: requires_funding', isEnabled: false });
       });
-      expect(mockSet.mock.calls.filter((c) => (c[0] as { isEnabled?: boolean }).isEnabled === false)).toHaveLength(1);
+      const setPayloads = mockSet.mock.calls as unknown as Array<[{ isEnabled?: boolean }]>;
+      expect(setPayloads.filter(([payload]) => payload.isEnabled === false)).toHaveLength(1);
       expect(mockSet).not.toHaveBeenCalledWith(expect.objectContaining({ nextRunAt: expect.anything() }));
     });
 
