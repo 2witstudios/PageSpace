@@ -39,10 +39,10 @@
  *
  *  | Concern                | page-agent turn                              | global-assistant turn                       |
  *  |------------------------|----------------------------------------------|---------------------------------------------|
- *  | auth types             | `session` + `mcp`                            | `session` only                              |
+ *  | auth types             | `session` + `mcp` + `oauth`                  | `session` only                              |
  *  | authorization subject  | the AGENT PAGE (`canPrincipalView/EditPage`) | the CONVERSATION (owner-only)               |
  *  | MCP scoping            | `checkMCPPageScope`, `getAllowedDriveIds`,   | n/a — MCP cannot reach this strategy        |
- *  |                        | `isScopedMCPAuth`, tool-set drive ceiling    |                                             |
+ *  |                        | `isDriveScopedPrincipal`, tool-set ceiling   |                                             |
  *  | conversation minting   | caller-supplied id, cuid/legacy-owner/shared | `resolveOrCreateConversation` (lazy create, |
  *  |                        | /page-match rules, eager `createConversation`| owner + `type='global'` + isActive)         |
  *  | tool set               | per-agent `enabledTools` allowlist, sandbox  | always search-mode (`tool_search` +         |
@@ -118,6 +118,7 @@ import {
   authenticateRequestWithOptions,
   isAuthError,
   isMCPAuthResult,
+  isOAuthAuthResult,
   type AuthResult,
 } from '@/lib/auth';
 import { validateBrowserSessionIdHeader } from '@/lib/ai/core/browser-session-id-validation';
@@ -137,7 +138,7 @@ import { runGlobalChatTurn } from './global-chat-turn';
 export type ChatTurnSurface = 'page-chat' | 'global-messages';
 
 /** `POST /api/ai/chat` has always accepted MCP tokens; that is unchanged. */
-const PAGE_CHAT_AUTH = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const PAGE_CHAT_AUTH = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
 /** `POST /api/ai/global/[id]/messages` has always been session-only; unchanged. */
 const GLOBAL_AUTH = { allow: ['session'] as const, requireCSRF: true };
 
@@ -321,12 +322,13 @@ export async function dispatchChatTurn({
       // across "forbidden" and "does not exist" everywhere else it decides
       // anything (`authorize-pane-scope.ts`), and the row is already in hand.
       if (conversation && conversation.type === 'global' && conversation.userId === auth.userId) {
-        // An MCP token has never been able to drive the global assistant, and
-        // this entry must not become the door that lets it. Re-running the
+        // A bearer credential (an MCP token, or an OAuth app acting for the
+        // user) has never been able to drive the global assistant, and this
+        // entry must not become the door that lets it. Re-running the
         // session-only options produces the SAME refusal the global URL would
         // have produced, and costs nothing: the bearer prefix is recognised
         // before any I/O.
-        if (isMCPAuthResult(auth)) {
+        if (isMCPAuthResult(auth) || isOAuthAuthResult(auth)) {
           const sessionOnly = await authenticateRequestWithOptions(request, GLOBAL_AUTH);
           if (isAuthError(sessionOnly)) {
             auditRequest(request, {
@@ -334,7 +336,7 @@ export async function dispatchChatTurn({
               userId: auth.userId,
               resourceType: 'global_chat_message',
               resourceId: 'send',
-              details: { reason: 'mcp_token_not_permitted', method: 'POST' },
+              details: { reason: isMCPAuthResult(auth) ? 'mcp_token_not_permitted' : 'oauth_token_not_permitted', method: 'POST' },
               riskScore: 0.5,
             });
             return sessionOnly.error;

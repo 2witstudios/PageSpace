@@ -3,10 +3,10 @@ import { convertToModelMessages, generateText, stepCountIs, hasToolCall } from '
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { filterToolsForMcpScope, filterToolsForImageGen, filterToolsForSandboxEnablement } from '@/lib/ai/core/tool-filtering';
-import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, isScopedMCPAuth, canPrincipalViewPage } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, isDriveScopedPrincipal, canPrincipalViewPage } from '@/lib/auth';
 import { AIMonitoring, discardUsageOutcome } from '@pagespace/lib/monitoring/ai-monitoring';
 
-const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
 
 /** The repository-wide id contract: what `createId()` (cuid2) produces. */
 const CUID2_PATTERN = /^[a-z][a-z0-9]{1,31}$/;
@@ -536,11 +536,11 @@ export async function POST(request: Request) {
       ...toolCredentialScope(auth),
     };
 
-    // Hide account-level-only tools (e.g. create_drive) from a drive-scoped MCP token's tool list.
+    // Hide account-level-only tools (e.g. create_drive) from a drive-scoped credential's tool list.
     // Image generation is in an ADMIN-ONLY rollout and is exposed solely through the
     // chat/global routes' explicit toggle — never through agent-to-agent consult.
     const scopedPageSpaceTools = filterToolsForImageGen(
-      filterToolsForMcpScope(pageSpaceTools, isScopedMCPAuth(auth)),
+      filterToolsForMcpScope(pageSpaceTools, isDriveScopedPrincipal(auth)),
       false,
     );
 

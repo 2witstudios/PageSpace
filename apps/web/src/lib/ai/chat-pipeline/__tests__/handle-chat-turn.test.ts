@@ -38,6 +38,9 @@ vi.mock('@/lib/auth', () => ({
   isMCPAuthResult: (r: unknown) =>
     !!r && typeof r === 'object' && !('error' in (r as object)) &&
     (r as { tokenType?: string }).tokenType === 'mcp',
+  isOAuthAuthResult: (r: unknown) =>
+    !!r && typeof r === 'object' && !('error' in (r as object)) &&
+    (r as { tokenType?: string }).tokenType === 'oauth',
 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
@@ -50,6 +53,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => {
 
 const SESSION_AUTH = { userId: 'user-1', role: 'user', tokenType: 'session' };
 const MCP_AUTH = { userId: 'user-1', role: 'user', tokenType: 'mcp', tokenId: 't1', allowedDriveIds: [] };
+const OAUTH_ACCOUNT_AUTH = { userId: 'user-1', role: 'user', tokenType: 'oauth', tokenId: 'o1', scopes: { account: true }, driveScopes: [], allowedDriveIds: [] };
 
 function post(body: unknown, headers: Record<string, string> = {}): Request {
   return new Request('http://localhost/api/ai/chat', {
@@ -109,10 +113,13 @@ describe('handleChatTurn — one entry, conversation-keyed strategy', () => {
     expect(runGlobalChatTurn.mock.calls[0][0]).toMatchObject({ urlConversationId: undefined });
   });
 
-  it('refuses an MCP token that reaches for a global conversation through /api/ai/chat', async () => {
+  it.each([
+    ['an MCP token', MCP_AUTH],
+    ['an OAuth app (even an account-scoped one)', OAUTH_ACCOUNT_AUTH],
+  ])('refuses %s that reaches for a global conversation through /api/ai/chat', async (_label, bearer) => {
     getConversation.mockResolvedValue({ id: 'conv-1', type: 'global', userId: 'user-1' });
     authenticateRequestWithOptions
-      .mockResolvedValueOnce(MCP_AUTH) // the page surface admits MCP...
+      .mockResolvedValueOnce(bearer) // the page surface admits bearer credentials...
       .mockResolvedValueOnce({ error: new Response('nope', { status: 401 }) }); // ...the global strategy does not
 
     const res = await handle(post({ messages: [], conversationId: 'conv-1' }), { surface: 'page-chat' });
@@ -191,7 +198,7 @@ describe('handleChatTurn — one entry, conversation-keyed strategy', () => {
   it('authenticates each surface with the options that surface has always used', async () => {
     await handle(post({ messages: [], chatId: 'page-1' }), { surface: 'page-chat' });
     expect(authenticateRequestWithOptions.mock.calls[0][1]).toEqual({
-      allow: ['session', 'mcp'],
+      allow: ['session', 'mcp', 'oauth'],
       requireCSRF: true,
     });
 

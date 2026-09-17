@@ -14,7 +14,7 @@ import { resolveGenerationAdmission } from '@/lib/ai/core/generation-admission';
 import { ALL_PROVIDER_NAMES } from '@/lib/ai/core/ai-utils';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
-import { authenticateRequestWithOptions, isAuthError, canPrincipalEditPage } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, canPrincipalEditPage, canPrincipalViewPage } from '@/lib/auth';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { buildProviderAvailabilityMap } from '@/lib/ai/core/ai-utils';
 
@@ -26,8 +26,8 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
 
-const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
-const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS_READ = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
 
 /**
  * GET handler to check multi-provider configuration status and current settings
@@ -52,7 +52,10 @@ export async function getAiChatSettings(request: Request) {
     let currentProvider = user?.currentAiProvider || DEFAULT_PROVIDER;
     let currentModel = user?.currentAiModel || DEFAULT_MODEL;
     
-    if (pageId) {
+    // A page's own settings only for a page the principal may view: a
+    // drive-scoped credential naming a page outside its scope (or its role)
+    // gets the user-level answer, never that page's provider/model.
+    if (pageId && (await canPrincipalViewPage(auth, pageId))) {
       const [page] = await db.select().from(pages).where(eq(pages.id, pageId));
       if (page) {
         // Use page-specific settings if they exist, otherwise fallback to user settings
