@@ -5,11 +5,11 @@
  * Run via:
  *   bun run --filter '@pagespace/lib' test:integration -- src/services/__tests__/org-membership-sync.integration.test.ts
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
 import { factories } from '@pagespace/db/test/factories';
 import { db } from '@pagespace/db/db';
-import { and, eq } from '@pagespace/db/operators';
+import { and, eq, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { driveMembers, driveRoles } from '@pagespace/db/schema/members';
@@ -45,12 +45,15 @@ async function rowsOf(driveId: string) {
   return rows.sort((a, b) => a.userId.localeCompare(b.userId));
 }
 
+const createdOrgIds: string[] = [];
+
 async function northwind() {
   const jono = await factories.createUser({ name: 'Jono' });
   const priya = await factories.createUser({ name: 'Priya Nair' });
   const marcus = await factories.createUser({ name: 'Marcus Oyelaran' });
   const chris = await factories.createUser({ name: 'Chris Rowe' });
   const [org] = await db.insert(organizations).values({ name: 'Northwind Labs', slug: `northwind-${jono.id}`, ownerId: jono.id }).returning();
+  createdOrgIds.push(org.id);
   await db.insert(orgMembers).values([
     { orgId: org.id, userId: jono.id, role: 'OWNER' },
     { orgId: org.id, userId: priya.id, role: 'ADMIN' },
@@ -66,6 +69,15 @@ async function northwind() {
 describe('org membership sync (integration)', () => {
   // No global deletes: users and drives are shared across suites in CI, so every fixture is
   // unique by construction and every assertion is scoped to the drives and org it created.
+  // Orgs ARE removed: organizations.ownerId and drives.orgId RESTRICT, so a leftover org makes a
+  // later suite's `delete from users` fail. Org drives go first (drives.orgId), then the org
+  // (its org_members cascade).
+  afterEach(async () => {
+    const orgIds = createdOrgIds.splice(0);
+    if (orgIds.length === 0) return;
+    await db.delete(drives).where(inArray(drives.orgId, orgIds));
+    await db.delete(organizations).where(inArray(organizations.id, orgIds));
+  });
 
   it('DRV-5 (partial) materializes accepted org rows with the drive default role for every member of an Open drive, and is idempotent when called twice', async () => {
     const { jono, priya, marcus, chris, org, product, finance } = await northwind();
