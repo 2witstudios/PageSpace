@@ -2599,6 +2599,9 @@
       "validators/custom-domain": [
         "./dist/validators/custom-domain.d.ts"
       ],
+      "auth/agent/reserved-email": [
+        "./dist/auth/agent/reserved-email.d.ts"
+      ],
       "client-safe": [
         "./dist/client-safe.d.ts"
       ],
