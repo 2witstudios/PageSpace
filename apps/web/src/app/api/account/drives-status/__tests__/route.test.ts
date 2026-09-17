@@ -164,7 +164,7 @@ describe('GET /api/account/drives-status', () => {
     expect(body.multiMemberDrives).toEqual([]);
   });
 
-  it('O-7 (partial) an org drive the person leads needs no action before account deletion and is not listed', async () => {
+  it('D-OW-7 an org drive the person leads needs no action before account deletion and is not listed', async () => {
     vi.mocked(db.query.drives.findMany).mockResolvedValue([
       { ...mockDrive({ id: 'drive_product', name: 'Product' }), orgId: 'org-northwind' },
     ]);

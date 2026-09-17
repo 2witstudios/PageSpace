@@ -189,7 +189,7 @@ describe('/api/drives/[driveId]/org', () => {
 
   describe('DELETE (move out)', () => {
     it.each(['keep', 'remove'] as const)(
-      'O-10 (partial) passes the "%s" choice to the service and audits the org the drive left',
+      'D-OW-10 passes the "%s" choice to the service and audits the org the drive left',
       async (implicitMembers) => {
         vi.mocked(authenticateRequestWithOptions).mockResolvedValue(session(PRIYA));
         vi.mocked(moveDriveOutOfOrg).mockResolvedValue({
@@ -210,7 +210,7 @@ describe('/api/drives/[driveId]/org', () => {
       }
     );
 
-    it('O-10 (partial) a move-out without the keep-or-remove choice is a 400 and never reaches the service', async () => {
+    it('D-OW-10 a move-out without the keep-or-remove choice is a 400 and never reaches the service', async () => {
       const response = await DELETE(request('DELETE', {}), context);
 
       expect(response.status).toBe(400);

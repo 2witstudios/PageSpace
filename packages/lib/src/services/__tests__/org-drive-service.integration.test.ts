@@ -178,7 +178,7 @@ describe('moveDriveToOrg', () => {
     expect((await readDrive(driveId)).orgId).toBeNull();
   });
 
-  it('O-7 (partial) a drive owner outside the org cannot move their drive in', async () => {
+  it('D-OW-7 a drive owner outside the org cannot move their drive in', async () => {
     const driveId = await seedPersonalDrive({ ownerId: chris });
 
     const result = await moveDriveToOrg(chris, driveId, { orgId: northwind }, deps);
@@ -256,7 +256,7 @@ describe('moveDriveOutOfOrg', () => {
   });
 
   it.each(['keep', 'remove'] as const)(
-    'O-10 (partial) move-out hands the "%s" choice to membership sync inside the move',
+    'D-OW-10 move-out hands the "%s" choice to membership sync inside the move',
     async (implicitMembers) => {
       const driveId = await seedOrgDrive();
 
@@ -380,7 +380,7 @@ describe('with the production wiring (requireOrgRole, syncDriveOrgMembership, de
       .map((m) => [m.userId, m.source])
       .sort();
 
-  it('O-10 (partial) moving out with "keep" leaves org members on the drive as invited members, guest untouched', async () => {
+  it('D-OW-10 moving out with "keep" leaves org members on the drive as invited members, guest untouched', async () => {
     const driveId = await productInNorthwind();
     expect(await rowsOf(driveId)).toContainEqual([lena, 'org']);
 
@@ -393,7 +393,7 @@ describe('with the production wiring (requireOrgRole, syncDriveOrgMembership, de
     expect(rows.filter(([, source]) => source === 'org')).toEqual([]);
   });
 
-  it('O-10 (partial) moving out with "remove" revokes the org members and keeps the guest', async () => {
+  it('D-OW-10 moving out with "remove" revokes the org members and keeps the guest', async () => {
     const driveId = await productInNorthwind();
 
     const result = await moveDriveOutOfOrg(jono, driveId, { implicitMembers: 'remove' }, orgDriveServiceDeps);
@@ -402,7 +402,7 @@ describe('with the production wiring (requireOrgRole, syncDriveOrgMembership, de
     expect(await rowsOf(driveId)).toEqual([[chris, 'invite']]);
   });
 
-  it('O-7 (partial) deleting the lead\'s account does not cascade the org drive: the org Owner becomes its lead', async () => {
+  it('D-OW-7 deleting the lead\'s account does not cascade the org drive: the org Owner becomes its lead', async () => {
     const driveId = await productInNorthwind();
 
     await accountRepository.deleteUser(marcus);

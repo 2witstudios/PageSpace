@@ -7,6 +7,9 @@ import {
   orgDriveVisibilityForInsert,
   STORAGE_REATTRIBUTION_LEAF_ID,
   ORG_DRIVE_CREATION_POLICY_LEAF_ID,
+  ORG_DRIVE_SLUG_CONSTRAINT,
+  ORG_SLUG_ATTEMPTS,
+  retryOnOrgSlugConflict,
   type MoveInDrive,
 } from '../org-drive-ownership';
 
@@ -54,7 +57,7 @@ describe('decideMoveDriveIntoOrg', () => {
     expect(verdict).toMatchObject({ ok: false, code: 'NOT_DRIVE_OWNER', status: 403 });
   });
 
-  it('O-7 (partial) a drive owner outside the org cannot move in, because the lead must be an org member', () => {
+  it('D-OW-7 a drive owner outside the org cannot move in, because the lead must be an org member', () => {
     const verdict = decideMoveDriveIntoOrg({
       drive: personalProduct(),
       actorId: MARCUS,
@@ -124,7 +127,7 @@ describe('decideMoveDriveOutOfOrg', () => {
     ).toMatchObject({ ok: false, code: 'NOT_ORG_ADMIN', status: 403 });
   });
 
-  it('O-10 (partial) move-out carries the keep-or-remove choice through, and refuses when none was made', () => {
+  it('D-OW-10 move-out carries the keep-or-remove choice through, and refuses when none was made', () => {
     expect(
       decideMoveDriveOutOfOrg({ drive: orgProduct, actorOrgRole: 'ADMIN', implicitMembers: 'remove' })
     ).toEqual({ ok: true, implicitMembers: 'remove' });
@@ -161,7 +164,7 @@ describe('decideCreateDriveInOrg', () => {
 });
 
 describe('canLeadOrgDrive', () => {
-  it('O-7 (partial) only an org member of any role can lead an org drive', () => {
+  it('D-OW-7 only an org member of any role can lead an org drive', () => {
     expect(canLeadOrgDrive('OWNER')).toBe(true);
     expect(canLeadOrgDrive('ADMIN')).toBe(true);
     expect(canLeadOrgDrive('MEMBER')).toBe(true);
@@ -183,5 +186,63 @@ describe('named follow-up leaves', () => {
   it('points storage re-attribution and the creation policy at their board leaves', () => {
     expect(STORAGE_REATTRIBUTION_LEAF_ID).toBe('t1759m6mfxrj5hyaleu1mdqs');
     expect(ORG_DRIVE_CREATION_POLICY_LEAF_ID).toBe('lyt8275djmdcwlwm8wvk2xa5');
+  });
+});
+
+describe('retryOnOrgSlugConflict', () => {
+  // Drizzle 0.45 rethrows driver errors as DrizzleQueryError with the pg error on `.cause`.
+  const drizzleError = (cause: { code: string; constraint?: string }) =>
+    Object.assign(new Error('Failed query: insert into "drives"'), { cause });
+  const orgSlugConflict = () => drizzleError({ code: '23505', constraint: ORG_DRIVE_SLUG_CONSTRAINT });
+
+  it('DRV-3 (partial) re-runs the work after a per-org slug conflict and returns its result', async () => {
+    let calls = 0;
+    const result = await retryOnOrgSlugConflict(async () => {
+      calls += 1;
+      if (calls === 1) throw orgSlugConflict();
+      return 'engineering-2';
+    });
+    expect(result).toBe('engineering-2');
+    expect(calls).toBe(2);
+  });
+
+  it('DRV-3 (partial) never retries a unique violation on any other constraint', async () => {
+    let calls = 0;
+    const other = drizzleError({ code: '23505', constraint: 'drives_publishSubdomain_unique' });
+    await expect(
+      retryOnOrgSlugConflict(async () => {
+        calls += 1;
+        throw other;
+      })
+    ).rejects.toBe(other);
+    expect(calls).toBe(1);
+  });
+
+  it('DRV-3 (partial) never retries an error that is not a unique violation, including a bare 23505 without the constraint', async () => {
+    for (const error of [new Error('boom'), drizzleError({ code: '40P01' }), drizzleError({ code: '23505' })]) {
+      let calls = 0;
+      await expect(
+        retryOnOrgSlugConflict(async () => {
+          calls += 1;
+          throw error;
+        })
+      ).rejects.toBe(error);
+      expect(calls).toBe(1);
+    }
+  });
+
+  it('DRV-3 (partial) stops after ORG_SLUG_ATTEMPTS attempts of a persistent conflict and rethrows it', async () => {
+    let calls = 0;
+    const conflict = orgSlugConflict();
+    await expect(
+      retryOnOrgSlugConflict(async () => {
+        calls += 1;
+        // Runaway guard: an unbounded retry resolves here instead of hanging the suite.
+        if (calls > 50) return 'runaway';
+        throw conflict;
+      })
+    ).rejects.toBe(conflict);
+    expect(calls).toBe(ORG_SLUG_ATTEMPTS);
+    expect(ORG_SLUG_ATTEMPTS).toBe(5);
   });
 });

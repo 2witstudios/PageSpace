@@ -155,3 +155,33 @@ export function orgDriveVisibilityForInsert(
 ): { orgVisibility?: OrgDriveVisibility } {
   return chosen === undefined ? {} : { orgVisibility: chosen };
 }
+
+/** The per-org slug index on drives (D-OW-15). */
+export const ORG_DRIVE_SLUG_CONSTRAINT = 'drives_org_slug_unique';
+/** How many times a create or move-in re-runs after losing the per-org slug race. */
+export const ORG_SLUG_ATTEMPTS = 5;
+
+/**
+ * True only for a unique violation on the per-org slug index. Drizzle rethrows driver errors
+ * with the pg error on `.cause`; any other constraint, or a 23505 without one, is not a slug race.
+ */
+function isOrgSlugConflict(error: unknown): boolean {
+  if (error === null || typeof error !== 'object') return false;
+  const cause = (error as { cause?: { code?: unknown; constraint?: unknown } }).cause;
+  return cause?.code === '23505' && cause.constraint === ORG_DRIVE_SLUG_CONSTRAINT;
+}
+
+/**
+ * Two writers can pick the same free slug inside one org at once; the per-org unique index
+ * admits one and aborts the other's transaction. `run` must be a whole transaction: re-running it
+ * sees the winner's slug and takes the next suffix. Bounded, and never retries any other error.
+ */
+export async function retryOnOrgSlugConflict<T>(run: () => Promise<T>): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await run();
+    } catch (error) {
+      if (attempt >= ORG_SLUG_ATTEMPTS || !isOrgSlugConflict(error)) throw error;
+    }
+  }
+}

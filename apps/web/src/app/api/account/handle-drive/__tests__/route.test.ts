@@ -343,7 +343,7 @@ describe('POST /api/account/handle-drive', () => {
     });
 
     it.each(['delete', 'transfer'] as const)(
-      'O-7 (partial) refuses to %s an org drive the person leads: it passes to the org Owner instead',
+      'D-OW-7 refuses to %s an org drive the person leads: it passes to the org Owner instead',
       async (action) => {
         const updateMock = setupUpdateMock();
         const deleteMock = setupDeleteMock();
