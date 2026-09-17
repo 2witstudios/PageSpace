@@ -6,6 +6,11 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { stripe, Stripe } from '@/lib/stripe';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import {
+  assertMayHoldStripeCustomer,
+  AgentStripeCustomerRefusedError,
+  AGENT_STRIPE_CUSTOMER_REFUSAL,
+} from '@pagespace/lib/billing/stripe-customer-eligibility';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -25,6 +30,12 @@ export async function GET(request: NextRequest) {
     const [user] = await db.select().from(users).where(eq(users.id, userId));
     if (!user) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
+    }
+
+    // An agent never holds its own Stripe customer (ADR 0007 Decision 8), so a
+    // stale customer id on an agent row is never read back from Stripe.
+    if (user.accountType === 'agent') {
+      return NextResponse.json({ error: AGENT_STRIPE_CUSTOMER_REFUSAL }, { status: 403 });
     }
 
     if (!user.stripeCustomerId) {
@@ -84,6 +95,10 @@ export async function PUT(request: NextRequest) {
     if (!user) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
+
+    // An agent never holds its own Stripe customer (ADR 0007 Decision 8) —
+    // refused before any Stripe call, whether or not a customer id exists.
+    assertMayHoldStripeCustomer(user);
 
     // Get or create customer with rollback on failure
     let customerId = user.stripeCustomerId;
@@ -145,6 +160,10 @@ export async function PUT(request: NextRequest) {
 
   } catch (error) {
     loggers.api.error('Error updating billing address', error instanceof Error ? error : undefined);
+
+    if (error instanceof AgentStripeCustomerRefusedError) {
+      return NextResponse.json({ error: error.message }, { status: 403 });
+    }
 
     if (error instanceof Stripe.errors.StripeError) {
       return NextResponse.json(

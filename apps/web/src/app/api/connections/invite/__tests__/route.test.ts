@@ -33,7 +33,7 @@ vi.mock('@pagespace/lib/auth/invite-token', () => ({
 }));
 
 vi.mock('@pagespace/lib/services/notification-email-service', () => ({
-  sendPendingConnectionInvitationEmail: vi.fn().mockResolvedValue(undefined),
+  sendPendingConnectionInvitationEmail: vi.fn().mockResolvedValue({ status: 'sent' }),
 }));
 
 vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
@@ -295,6 +295,25 @@ describe('POST /api/connections/invite', () => {
       const res = await POST(makeRequest({ email: TARGET_EMAIL }));
 
       expect(res.status).toBe(429);
+    });
+  });
+
+  describe('reserved agent domain (ADR 0007 §4)', () => {
+    it('given an address under the agent reserved domain, should refuse with the ordinary 400 validation error and create nothing', async () => {
+      const res = await POST(makeRequest({ email: 'agent-x@agents.pagespace.invalid' }));
+
+      expect(res.status).toBe(400);
+      expect(connectionInviteRepository.createPendingInvite).not.toHaveBeenCalled();
+      expect(sendPendingConnectionInvitationEmail).not.toHaveBeenCalled();
+    });
+
+    it('given the invitation email is suppressed (not delivered), should delete the pending row and answer 502', async () => {
+      vi.mocked(sendPendingConnectionInvitationEmail).mockResolvedValueOnce({ status: 'suppressed' });
+
+      const res = await POST(makeRequest({ email: TARGET_EMAIL }));
+
+      expect(res.status).toBe(502);
+      expect(connectionInviteRepository.deletePendingInvite).toHaveBeenCalledWith('invite_123');
     });
   });
 

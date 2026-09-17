@@ -1,4 +1,5 @@
 import { isValidEmail } from '@pagespace/lib/validators/email'
+import { notAgentReservedEmail } from '@pagespace/lib/auth/agent/reserved-email'
 
 export type ValidationResult = {
   valid: boolean
@@ -38,7 +39,9 @@ export const validateEmail = (email: string): ValidationResult => {
     return { valid: false, error: 'Email is required' }
   }
 
-  if (!isValidEmail(email)) {
+  // An agent's reserved address can never receive a Stripe invoice (ADR 0007
+  // Decision 8), so it is refused exactly like a malformed address.
+  if (!isValidEmail(email) || !notAgentReservedEmail(email)) {
     return { valid: false, error: 'Invalid email format' }
   }
 

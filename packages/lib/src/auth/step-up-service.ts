@@ -60,7 +60,9 @@ export type StepUpError =
   | { readonly code: 'NO_PASSKEY' }
   | { readonly code: 'USER_NOT_FOUND' }
   | { readonly code: 'STEP_UP_INVALID' }
-  | { readonly code: 'STEP_UP_REQUIRED' };
+  | { readonly code: 'STEP_UP_REQUIRED' }
+  /** The confirmation email could not be delivered (an agent's reserved address). */
+  | { readonly code: 'EMAIL_UNDELIVERABLE' };
 
 export type BeginWebauthnStepUpResult =
   | { readonly ok: true; readonly data: { readonly options: AuthenticationOptionsWithHints; readonly challengeId: string } }
@@ -308,11 +310,15 @@ export async function requestMagicLinkStepUp(input: unknown): Promise<RequestMag
   });
 
   const confirmUrl = `${resolveAppUrl()}/api/auth/step-up/magic-link/verify?token=${encodeURIComponent(token)}`;
-  await sendEmail({
+  const outcome = await sendEmail({
     to: await decryptField(user.email),
     subject: 'Confirm this action in PageSpace',
     react: React.createElement(StepUpConfirmationEmail, { confirmUrl }),
   });
+  // A suppressed send delivered nothing, so no one can follow the link: report
+  // it instead of claiming a confirmation email is on its way. The unreachable
+  // token expires on its own (STEP_UP_MAGIC_LINK_EXPIRY_MINUTES).
+  if (outcome.status === 'suppressed') return { ok: false, error: { code: 'EMAIL_UNDELIVERABLE' } };
 
   return { ok: true };
 }

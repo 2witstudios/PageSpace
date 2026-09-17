@@ -172,6 +172,20 @@ describe('Customer API', () => {
       expect(body.error).toBe('User not found');
     });
 
+    it('given an agent account holding a stale customer id, should refuse 403 and never read the customer from Stripe', async () => {
+      mockSelectWhere.mockResolvedValue([mockUser({ accountType: 'agent', email: 'agent-user_123@agents.pagespace.invalid' })]);
+
+      const request = new Request('https://example.com/api/stripe/customer', {
+        method: 'GET',
+      }) as unknown as import('next/server').NextRequest;
+
+      const response = await GET(request);
+
+      expect(response.status).toBe(403);
+      expect(await response.json()).toEqual({ error: 'Agent accounts are billed through their owner' });
+      expect(mockStripeCustomersRetrieve).not.toHaveBeenCalled();
+    });
+
     it('should return null customer when user has no Stripe customer', async () => {
       mockSelectWhere.mockResolvedValue([mockUser({ stripeCustomerId: null })]);
 

@@ -72,6 +72,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
 import { executeWorkflow } from '@/lib/workflows/workflow-executor';
 import { getNextRunDate } from '@/lib/workflows/cron-utils';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 // ============================================================================
 // Fixtures
@@ -200,6 +201,44 @@ describe('POST /api/workflows/[workflowId]/run', () => {
     const response = await POST(request, createContext('wf_1'));
 
     expect(response.status).toBe(403);
+  });
+
+  describe('credit-gate refusals', () => {
+    test('given an unclaimed agent refused with requires_funding, should answer 402 with the claim payload, not advance the schedule, and not audit a run', async () => {
+      vi.mocked(executeWorkflow).mockResolvedValue({
+        success: false,
+        durationMs: 0,
+        runId: 'run_refused',
+        error: 'AI credit gate denied: requires_funding',
+        refusal: { reason: 'requires_funding', kind: 'terminal', retry: false },
+      });
+
+      const response = await POST(new Request('https://example.com/api/workflows/wf_1/run', { method: 'POST' }), createContext('wf_1'));
+      const body = await response.json();
+
+      expect(response.status).toBe(402);
+      expect(body.error).toBe('requires_funding');
+      expect(body.claim_url).toEqual(expect.any(String));
+      expect(getNextRunDate).not.toHaveBeenCalled();
+      expect(mockUpdateSet).not.toHaveBeenCalled();
+      expect(auditRequest).not.toHaveBeenCalled();
+    });
+
+    test('given a concurrency refusal, should answer 429 too_many_in_flight', async () => {
+      vi.mocked(executeWorkflow).mockResolvedValue({
+        success: false,
+        durationMs: 0,
+        runId: 'run_refused',
+        error: 'AI credit gate denied: too_many_in_flight',
+        refusal: { reason: 'too_many_in_flight', kind: 'transient', retry: false },
+      });
+
+      const response = await POST(new Request('https://example.com/api/workflows/wf_1/run', { method: 'POST' }), createContext('wf_1'));
+
+      expect(response.status).toBe(429);
+      expect((await response.json()).error).toBe('too_many_in_flight');
+      expect(getNextRunDate).not.toHaveBeenCalled();
+    });
   });
 
   test('returns 409 when executor reports a claim conflict', async () => {

@@ -34,6 +34,33 @@ const {
   mockResolveSandboxToolEligibility: vi.fn(),
 }));
 
+// The credit gate executeWorkflow runs on EVERY entry point (Phase 1b / D-33).
+// Plain recorders, not vi.fn(), so resetAllMocks in each suite cannot wipe the
+// default "allowed" decision the pre-existing tests rely on.
+const creditGate = vi.hoisted(() => ({
+  decision: { allowed: true, holdId: 'hold_1' } as
+    | { allowed: true; holdId?: string }
+    | { allowed: false; reason: 'too_many_in_flight' | 'daily_cap_exceeded' | 'out_of_credits' | 'requires_funding' | 'needs_init' },
+  calls: [] as unknown[],
+  released: [] as string[],
+  throws: null as Error | null,
+}));
+vi.mock('../workflow-credit-gate', () => ({
+  acquireWorkflowCredit: async (input: unknown) => {
+    creditGate.calls.push(input);
+    if (creditGate.throws) throw creditGate.throws;
+    return creditGate.decision;
+  },
+}));
+vi.mock('@pagespace/lib/billing/credit-consume', () => ({
+  // Records only after a macrotask, so a `released` assertion made when
+  // executeWorkflow resolves proves the release was AWAITED, not fired off.
+  releaseHold: async (holdId: string) => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    creditGate.released.push(holdId);
+  },
+}));
+
 vi.mock('@/lib/ai/core/sandbox-tool-eligibility', () => ({
   resolveSandboxToolEligibility: (...args: unknown[]) => mockResolveSandboxToolEligibility(...args),
 }));
@@ -87,12 +114,14 @@ vi.mock('@/lib/ai/core/deterministic-tools', async () => {
     }),
   };
 });
-vi.mock('@pagespace/db/operators', () => ({
+vi.mock('@pagespace/db/operators', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   eq: vi.fn(),
   and: vi.fn(),
   inArray: vi.fn(),
 }));
-vi.mock('@pagespace/db/schema/auth', () => ({
+vi.mock('@pagespace/db/schema/auth', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   users: { id: 'id', name: 'name' },
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
@@ -953,6 +982,171 @@ describe('executeWorkflow — explicit step chains', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('no steps and no agentPageId');
+    expect(generateText).not.toHaveBeenCalled();
+  });
+});
+
+describe('executeWorkflow — credit gate inside the executor', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    creditGate.decision = { allowed: true, holdId: 'hold_1' };
+    creditGate.calls = [];
+    creditGate.released = [];
+    creditGate.throws = null;
+    mockSpawnSession.mockResolvedValue({ ok: false, reason: 'spawn_failed' });
+    mockCreateConversationInSession.mockResolvedValue(undefined);
+    mockEndSession.mockResolvedValue({ ok: true });
+    vi.mocked(isProviderError).mockReturnValue(false);
+    vi.mocked(createAIProvider).mockResolvedValue(mockProviderResult as never);
+    mockResolvePageAgentIntegrationTools.mockResolvedValue({});
+    mockResolveSandboxToolEligibility.mockResolvedValue(true);
+    vi.mocked(generateText).mockResolvedValue({
+      text: 'Report complete',
+      steps: [{ text: 'Report complete', toolCalls: [] }],
+      usage: { inputTokens: 1, outputTokens: 1 },
+    } as never);
+    mockInsert.mockReturnValue({ values: mockInsertValues });
+    mockInsertValues.mockReturnValue({ onConflictDoNothing: mockOnConflictDoNothing });
+    mockOnConflictDoNothing.mockReturnValue({ returning: mockInsertReturning });
+    mockInsertReturning.mockResolvedValue([{ id: 'run_1' }]);
+    mockUpdate.mockReturnValue({ set: mockUpdateSet });
+    mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
+    mockUpdateWhere.mockResolvedValue(undefined);
+  });
+
+  test('given a terminal refusal (an unclaimed agent), should record ONE error run with the reason and never resolve a model', async () => {
+    creditGate.decision = { allowed: false, reason: 'requires_funding' };
+    mockInsertValues.mockReturnValue({ returning: mockInsertReturning, onConflictDoNothing: mockOnConflictDoNothing });
+    mockInsertReturning.mockResolvedValue([{ id: 'run_refused' }]);
+
+    const result = await executeWorkflow(createInputFixture({ source: { table: 'cron', id: null, triggerAt: new Date() } }));
+
+    expect(result).toMatchObject({
+      success: false,
+      error: 'AI credit gate denied: requires_funding',
+      runId: 'run_refused',
+      refusal: { reason: 'requires_funding', kind: 'terminal', retry: false },
+    });
+    expect(mockInsertValues).toHaveBeenCalledTimes(1);
+    expect(mockInsertValues).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'error', error: 'AI credit gate denied: requires_funding' }),
+    );
+    expect(mockOnConflictDoNothing).not.toHaveBeenCalled(); // not a running claim
+    expect(createAIProvider).not.toHaveBeenCalled();
+    expect(generateText).not.toHaveBeenCalled();
+  });
+
+  test('given a transient refusal for a fresh occurrence, should write NO run row so the next tick retries it', async () => {
+    creditGate.decision = { allowed: false, reason: 'too_many_in_flight' };
+
+    const result = await executeWorkflow(
+      createInputFixture({ source: { table: 'calendarTriggers', id: 'ct_1', triggerAt: new Date(Date.now() - 60_000) } }),
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      error: 'AI credit gate denied: too_many_in_flight',
+      refusal: { reason: 'too_many_in_flight', kind: 'transient', retry: true },
+    });
+    expect(result.runId).toBeUndefined();
+    expect(mockInsert).not.toHaveBeenCalled();
+    expect(generateText).not.toHaveBeenCalled();
+  });
+
+  test('given a transient refusal for an occurrence older than 24h, should stop retrying and record the error run', async () => {
+    creditGate.decision = { allowed: false, reason: 'daily_cap_exceeded' };
+    mockInsertValues.mockReturnValue({ returning: mockInsertReturning, onConflictDoNothing: mockOnConflictDoNothing });
+    mockInsertReturning.mockResolvedValue([{ id: 'run_expired' }]);
+
+    const result = await executeWorkflow(
+      createInputFixture({ source: { table: 'taskTriggers', id: 'tt_1', triggerAt: new Date(Date.now() - 25 * 60 * 60 * 1000) } }),
+    );
+
+    expect(result).toMatchObject({ runId: 'run_expired', refusal: { kind: 'transient', retry: false } });
+    expect(mockInsertValues).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'error', error: 'AI credit gate denied: daily_cap_exceeded' }),
+    );
+  });
+
+  test('given the gate itself throws for a fresh scheduled occurrence, should fail without any run row so the next tick retries it', async () => {
+    creditGate.throws = new Error('db down');
+
+    const result = await executeWorkflow(
+      createInputFixture({ source: { table: 'calendarTriggers', id: 'ct_1', triggerAt: new Date(Date.now() - 60_000) } }),
+    );
+
+    expect(result).toMatchObject({ success: false, error: 'db down' });
+    expect(result.refusal).toBeUndefined();
+    expect(mockInsert).not.toHaveBeenCalled();
+  });
+
+  test('given the gate keeps throwing past the 24h window, should record ONE error run so the occurrence stops being re-discovered', async () => {
+    creditGate.throws = new Error('db down');
+    mockInsertValues.mockReturnValue({ returning: mockInsertReturning, onConflictDoNothing: mockOnConflictDoNothing });
+    mockInsertReturning.mockResolvedValue([{ id: 'run_gate_error' }]);
+
+    const result = await executeWorkflow(
+      createInputFixture({ source: { table: 'calendarTriggers', id: 'ct_1', triggerAt: new Date(Date.now() - 25 * 60 * 60 * 1000) } }),
+    );
+
+    expect(result).toMatchObject({ success: false, error: 'db down', runId: 'run_gate_error' });
+    expect(mockInsertValues).toHaveBeenCalledWith(expect.objectContaining({ status: 'error', error: 'db down' }));
+    expect(mockOnConflictDoNothing).not.toHaveBeenCalled();
+  });
+
+  test('given a transient refusal on a webhook fire (nothing re-fires it), should record the error run instead of dropping the event', async () => {
+    creditGate.decision = { allowed: false, reason: 'daily_cap_exceeded' };
+    mockInsertValues.mockReturnValue({ returning: mockInsertReturning, onConflictDoNothing: mockOnConflictDoNothing });
+    mockInsertReturning.mockResolvedValue([{ id: 'run_webhook_refused' }]);
+
+    const result = await executeWorkflow(
+      createInputFixture({ source: { table: 'webhookTriggers', id: 'wt_1', triggerAt: new Date() } }),
+    );
+
+    expect(result).toMatchObject({
+      runId: 'run_webhook_refused',
+      refusal: { reason: 'daily_cap_exceeded', kind: 'transient', retry: false },
+    });
+    expect(mockInsertValues).toHaveBeenCalledWith(expect.objectContaining({ status: 'error' }));
+  });
+
+  test('given a manual run, should gate the input it was handed (billed to createdBy)', async () => {
+    setupSelectChain([mockAgent], [mockDrive]);
+    const input = createInputFixture({ source: { table: 'manual', id: null, triggerAt: null } });
+
+    await executeWorkflow(input);
+
+    expect(creditGate.calls).toEqual([input]);
+  });
+
+  test('given an allowed gate, should run and release the hold once the run ends', async () => {
+    setupSelectChain([mockAgent], [mockDrive]);
+
+    const result = await executeWorkflow(createInputFixture());
+
+    expect(result.success).toBe(true);
+    expect(generateText).toHaveBeenCalledTimes(1);
+    expect(creditGate.released).toEqual(['hold_1']);
+  });
+
+  test('given a run that throws, should still release the hold', async () => {
+    mockSelect.mockImplementation(() => {
+      throw new Error('db down');
+    });
+
+    const result = await executeWorkflow(createInputFixture({ steps: [{ kind: 'ai', prompt: 'p' }] }));
+
+    expect(result.success).toBe(false);
+    expect(creditGate.released).toEqual(['hold_1']);
+  });
+
+  test('given the gate passes but the run claim conflicts, should release the hold it took', async () => {
+    mockInsertReturning.mockResolvedValue([]);
+
+    const result = await executeWorkflow(createInputFixture());
+
+    expect(result.claimConflict).toBe(true);
+    expect(creditGate.released).toEqual(['hold_1']);
     expect(generateText).not.toHaveBeenCalled();
   });
 });

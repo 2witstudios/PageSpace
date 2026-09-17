@@ -49,6 +49,7 @@ const { mockReadGateAccount } = vi.hoisted(() => ({
   })),
 }));
 vi.mock('../gate-account', () => ({ readGateAccount: mockReadGateAccount }));
+import { GateAccountNotFoundError } from '../gate-account-not-found';
 
 import { getCreditBalance, readSpendableCents, resolveTier } from '../credit-balance';
 
@@ -426,6 +427,18 @@ describe('agents see no starter grant (ADR 0007 Decision 9 — display and routi
     balanceRows = [{ monthlyRemainingCents: 0, monthlyAllowanceCents: 0, topupRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: future }];
     const b = await getCreditBalance('u1', 'free');
     expect(b.monthly.allowance).toBe(500);
+  });
+
+  it('given no users row, should pre-credit nothing (fail closed) rather than the human starter grant', async () => {
+    mockReadGateAccount.mockRejectedValue(new GateAccountNotFoundError('ghost'));
+    expect(await readSpendableCents('ghost', 'free')).toBe(0);
+    const b = await getCreditBalance('ghost', 'free');
+    expect(b.spendable).toBe(0);
+  });
+
+  it('given any other account-read failure, should rethrow', async () => {
+    mockReadGateAccount.mockRejectedValue(new Error('db down'));
+    await expect(readSpendableCents('u1', 'free')).rejects.toThrow('db down');
   });
 
   it('given a funded row with a stamped period, should not read the account (the routing hot path stays one read)', async () => {

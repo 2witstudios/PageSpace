@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { AgentStripeCustomerRefusedError } from '@pagespace/lib/billing/stripe-customer-eligibility';
 import { NextRequest, NextResponse } from 'next/server';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
@@ -172,6 +173,21 @@ describe('POST /api/stripe/create-subscription', () => {
         name: 'Test User',
       })
     );
+  });
+
+  it('given an agent account, should refuse 403 when getOrCreateStripeCustomer refuses and never create a subscription', async () => {
+    mockGetOrCreateStripeCustomer.mockRejectedValue(new AgentStripeCustomerRefusedError(mockUserId));
+
+    const request = createMockRequest('https://example.com/api/stripe/create-subscription', {
+      method: 'POST',
+      body: JSON.stringify({ priceId: mockPriceId }),
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ error: 'Agent accounts are billed through their owner' });
+    expect(mockStripeSubscriptionsCreate).not.toHaveBeenCalled();
   });
 
   it('should use customer ID from getOrCreateStripeCustomer', async () => {

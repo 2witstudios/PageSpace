@@ -6,8 +6,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const {
   mockExecuteWorkflow,
-  mockCanConsumeAI,
-  mockReleaseHold,
   mockSelect,
   mockSelectFrom,
   mockSelectWhere,
@@ -27,8 +25,6 @@ const {
   });
   return {
     mockExecuteWorkflow: vi.fn(),
-    mockCanConsumeAI: vi.fn(),
-    mockReleaseHold: vi.fn(),
     mockSelect: vi.fn(),
     mockSelectFrom: vi.fn(),
     mockSelectWhere: vi.fn(),
@@ -89,14 +85,6 @@ vi.mock('@pagespace/db/schema/workflows', () => ({
 
 vi.mock('@/lib/workflows/workflow-executor', () => ({
   executeWorkflow: mockExecuteWorkflow,
-}));
-
-vi.mock('@pagespace/lib/billing/credit-gate', () => ({
-  canConsumeAI: mockCanConsumeAI,
-}));
-
-vi.mock('@pagespace/lib/billing/credit-consume', () => ({
-  releaseHold: mockReleaseHold,
 }));
 
 vi.mock('@/lib/logging/mask', () => ({
@@ -193,11 +181,9 @@ describe('executeCalendarTrigger', () => {
     vi.clearAllMocks();
 
     mockIsUserDriveMember.mockResolvedValue(true);
-    mockCanConsumeAI.mockResolvedValue({ allowed: true, holdId: 'hold-1', reason: 'ok' });
-    mockReleaseHold.mockResolvedValue(undefined);
 
     // Default select chain.
-    // Call order in executor: 1=workflow load, 2=agent preflight, 3=user tier, 4=attendees
+    // Call order in executor: 1=workflow load, 2=agent preflight, 3=attendees
     mockSelect.mockReturnValue({ from: mockSelectFrom });
     mockSelectFrom.mockReturnValue({
       innerJoin: mockInnerJoin,
@@ -207,7 +193,6 @@ describe('executeCalendarTrigger', () => {
     mockSelectWhere
       .mockResolvedValueOnce([createWorkflowRow()])                    // workflow load
       .mockResolvedValueOnce([{ id: 'agent-1', isTrashed: false }])    // agent preflight
-      .mockResolvedValueOnce([{ subscriptionTier: 'free' }])           // user tier for credit gate
       .mockResolvedValue([]);                                           // attendees + anything else
 
     mockUpdate.mockReturnValue({ set: mockUpdateSet });
@@ -234,7 +219,6 @@ describe('executeCalendarTrigger', () => {
     mockSelectWhere
       .mockResolvedValueOnce([workflow])
       .mockResolvedValueOnce([{ id: 'agent-9', isTrashed: false }])
-      .mockResolvedValueOnce([{ subscriptionTier: 'free' }])           // user tier
       .mockResolvedValue([]);
     const trigger = createTrigger();
     const event = createEvent({ timezone: 'America/New_York' });
@@ -273,7 +257,6 @@ describe('executeCalendarTrigger', () => {
     mockSelectWhere
       .mockResolvedValueOnce([createWorkflowRow()])
       .mockResolvedValueOnce([{ id: 'agent-1', isTrashed: false }])
-      .mockResolvedValueOnce([{ subscriptionTier: 'free' }])           // user tier
       .mockResolvedValueOnce([                                          // attendees
         { name: 'Alice', email: 'alice@test.com' },
         { name: null, email: 'bob@test.com' },
@@ -365,13 +348,21 @@ describe('executeCalendarTrigger', () => {
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 
-  it('skips execution and returns failure when credit gate denies', async () => {
-    mockCanConsumeAI.mockResolvedValue({ allowed: false, reason: 'out_of_credits' });
+  it('delegates the credit gate to executeWorkflow, billed to the scheduling user without the daily cap', async () => {
+    const trigger = createTrigger();
+
+    await executeCalendarTrigger(trigger, createEvent());
+
+    const input = mockExecuteWorkflow.mock.calls[0][0];
+    expect(input.createdBy).toBe(trigger.scheduledById);
+    expect(input.creditGate).toEqual({ skipDailyCap: true });
+  });
+
+  it('surfaces the executor\'s credit-gate refusal as the trigger result', async () => {
+    mockExecuteWorkflow.mockResolvedValue({ success: false, durationMs: 1, error: 'AI credit gate denied: requires_funding' });
 
     const result = await executeCalendarTrigger(createTrigger(), createEvent());
 
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('credit gate denied');
-    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ success: false, error: 'AI credit gate denied: requires_funding' });
   });
 });

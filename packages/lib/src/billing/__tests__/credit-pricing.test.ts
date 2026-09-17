@@ -201,3 +201,35 @@ describe('starterGrantCents (ADR 0007 Decision 9 — no starter grant for agents
     expect(starterGrantCents({ tier: 'toString', accountType: 'human' })).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.free);
   });
 });
+
+describe('allowanceGrantCents (Phase 1b — ONE allowance function for every grant)', () => {
+  it('given an agent, should grant 0 for both a starter grant and a refill, on every tier', async () => {
+    const { allowanceGrantCents, TIER_MONTHLY_ALLOWANCE_CENTS } = await import('../credit-pricing');
+    for (const kind of ['starter', 'refill'] as const) {
+      for (const tier of [...Object.keys(TIER_MONTHLY_ALLOWANCE_CENTS), 'legacy-tier']) {
+        expect(allowanceGrantCents({ tier, accountType: 'agent', kind })).toBe(0);
+      }
+    }
+  });
+
+  it('given a human refill on a known tier, should grant that tier allowance', async () => {
+    const { allowanceGrantCents, TIER_MONTHLY_ALLOWANCE_CENTS } = await import('../credit-pricing');
+    expect(allowanceGrantCents({ tier: 'pro', accountType: 'human', kind: 'refill' })).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.pro);
+    expect(allowanceGrantCents({ tier: 'founder', accountType: 'human', kind: 'refill' })).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.founder);
+  });
+
+  it('given a human on an unknown or prototype-key tier, should fall back to the free allowance (both kinds)', async () => {
+    const { allowanceGrantCents, TIER_MONTHLY_ALLOWANCE_CENTS } = await import('../credit-pricing');
+    expect(allowanceGrantCents({ tier: 'legacy-tier', accountType: 'human', kind: 'refill' })).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.free);
+    expect(allowanceGrantCents({ tier: 'toString', accountType: 'human', kind: 'starter' })).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.free);
+  });
+
+  it('given any input, starterGrantCents should equal the starter kind (it delegates)', async () => {
+    const { allowanceGrantCents, starterGrantCents } = await import('../credit-pricing');
+    for (const accountType of ['human', 'agent'] as const) {
+      for (const tier of ['free', 'pro', 'business', 'legacy-tier']) {
+        expect(starterGrantCents({ tier, accountType })).toBe(allowanceGrantCents({ tier, accountType, kind: 'starter' }));
+      }
+    }
+  });
+});

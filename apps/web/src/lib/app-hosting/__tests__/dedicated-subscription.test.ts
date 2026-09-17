@@ -53,7 +53,7 @@ vi.mock('@pagespace/lib/services/app-hosting/dedicated-tier-service', () => ({
 import { startDedicatedSubscription, cancelDedicatedSubscription } from '../dedicated-subscription';
 
 const NOW = Math.floor(Date.now() / 1000);
-const user = { id: 'user_1', email: 'a@b.c', name: 'A', stripeCustomerId: 'cus_1' };
+const user = { id: 'user_1', email: 'a@b.c', name: 'A', stripeCustomerId: 'cus_1', accountType: 'human' as const };
 
 function buy() {
   return startDedicatedSubscription({

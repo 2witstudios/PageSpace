@@ -52,6 +52,11 @@ export async function POST(req: NextRequest) {
   const result = await requestMagicLinkStepUp({ userId: auth.userId, actionBinding: body.actionBinding, next });
 
   if (!result.ok) {
+    if (result.error.code === 'EMAIL_UNDELIVERABLE') {
+      // The account's address receives no mail (an agent): the client must use
+      // another step-up method rather than wait for a link that never arrives.
+      return NextResponse.json({ error: 'step_up_email_undeliverable' }, { status: 422 });
+    }
     return NextResponse.json({ error: 'step_up_failed' }, { status: 500 });
   }
 

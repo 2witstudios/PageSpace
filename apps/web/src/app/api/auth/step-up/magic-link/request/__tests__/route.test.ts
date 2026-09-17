@@ -112,6 +112,15 @@ describe('POST /api/auth/step-up/magic-link/request', () => {
     expect(res.status).toBe(500);
   });
 
+  it('given the confirmation email is undeliverable (an agent account), should answer 422 so the client offers another step-up method, and audit no challenge', async () => {
+    requestMagicLinkStepUp.mockResolvedValue({ ok: false, error: { code: 'EMAIL_UNDELIVERABLE' } });
+
+    const res = await POST(requestReq({ actionBinding: { clientId: 'cli-1' } }) as never);
+
+    expect(res.status).toBe(422);
+    expect((await res.json()).error).toBe('step_up_email_undeliverable');
+  });
+
   it('returns 400 on a malformed body', async () => {
     const res = await POST(requestReq({}) as never);
     expect(res.status).toBe(400);

@@ -9,6 +9,7 @@ import { driveInviteRepository } from '@/lib/repositories/drive-invite-repositor
 import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { createInviteToken } from '@pagespace/lib/auth/invite-token';
 import { sendPendingDriveInvitationEmail } from '@pagespace/lib/services/notification-email-service';
+import { notAgentReservedEmail } from '@pagespace/lib/auth/agent/reserved-email';
 import {
   checkDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
@@ -39,7 +40,7 @@ const inviteBodySchema = z.union([
     permissions: z.array(permissionEntrySchema).default([]),
   }),
   z.object({
-    email: z.string().trim().toLowerCase().pipe(z.string().email().max(254)),
+    email: z.string().trim().toLowerCase().pipe(z.string().email().max(254).refine(notAgentReservedEmail, { message: 'Invalid email address' })),
     role: z.enum(['MEMBER', 'ADMIN']).default('MEMBER'),
     customRoleId: z.string().nullable().optional(),
     permissions: z.array(permissionEntrySchema).default([]),
@@ -487,12 +488,17 @@ async function handleEmailPath(args: {
   // (the partial unique index covers consumedAt IS NULL regardless of
   // expiresAt).
   try {
-    await sendPendingDriveInvitationEmail({
+    const outcome = await sendPendingDriveInvitationEmail({
       recipientEmail: email,
       inviterName: inviter?.name ?? 'A teammate',
       driveName: drive.name,
       inviteUrl,
     });
+    // A suppressed send (reserved agent recipient) delivered nothing: treat it
+    // exactly like a failed send so the pending row is undone.
+    if (outcome.status === 'suppressed') {
+      throw new Error('Invitation email suppressed: recipient cannot receive mail');
+    }
   } catch (emailError) {
     loggers.api.error(
       'Failed to send pending drive invitation email; rolling back pending invite row',

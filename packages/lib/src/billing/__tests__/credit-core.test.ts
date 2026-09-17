@@ -883,3 +883,21 @@ describe('refineGateReason (ADR 0007 Decision 9 — requires_funding for an uncl
     expect(denied).toEqual({ allowed: false, reason: 'out_of_credits' });
   });
 });
+
+describe('computeRefill (allowance resolved by allowanceGrantCents)', () => {
+  it('given a zero allowance (an agent), should only net debt against the carry', async () => {
+    const { computeRefill } = await import('../credit-core');
+    expect(computeRefill(0, 300, 100)).toEqual({ monthlyRemainingCents: 200, monthlyAllowanceCents: 0, debtCents: 0 });
+  });
+
+  it('given debt beyond carry plus allowance, should clamp at 0', async () => {
+    const { computeRefill } = await import('../credit-core');
+    expect(computeRefill(0, 0, 50)).toEqual({ monthlyRemainingCents: 0, monthlyAllowanceCents: 0, debtCents: 0 });
+  });
+
+  it('given a tier allowance, should match computeMonthlyRefill for that tier', async () => {
+    const { computeRefill, computeMonthlyRefill } = await import('../credit-core');
+    const table = { free: 500, pro: 1500, founder: 5000, business: 10000 };
+    expect(computeRefill(1500, 40, 10)).toEqual(computeMonthlyRefill('pro', table, 40, 10));
+  });
+});

@@ -296,6 +296,7 @@ describe('POST /api/cron/task-triggers', () => {
       agentPageId: MOCK_WORKFLOW.agentPageId,
       prompt: MOCK_WORKFLOW.prompt,
       taskContext: { taskItemId: MOCK_TRIGGER.taskItemId, triggerType: MOCK_TRIGGER.triggerType },
+      creditGate: { skipDailyCap: true },
     }));
   });
 
@@ -316,4 +317,101 @@ describe('POST /api/cron/task-triggers', () => {
     );
     expect(disablingCall).toBeDefined();
   });
+
+  describe('credit-gate refusals', () => {
+    const fire = async (result: Record<string, unknown>) => {
+      pushDiscoveryRows([MOCK_TRIGGER]);
+      mockReturning.mockResolvedValueOnce([MOCK_TRIGGER]);
+      pushLookupRows([MOCK_WORKFLOW]);
+      pushLookupRows([MOCK_TASK]);
+      vi.mocked(executeWorkflow).mockResolvedValue(result as never);
+      const response = await POST(new Request('https://example.com/api/cron/task-triggers', { method: 'POST' }));
+      return { body: await response.json(), sets: mockUpdateSet.mock.calls.map((c) => c[0] as Record<string, unknown>) };
+    };
+
+    it('given a transient refusal still inside its retry window, should release the claim (lastFiredAt null) and keep the trigger enabled so the next tick retries', async () => {
+      const { body, sets } = await fire({
+        success: false,
+        durationMs: 1,
+        error: 'AI credit gate denied: too_many_in_flight',
+        refusal: { reason: 'too_many_in_flight', kind: 'transient', retry: true },
+      });
+
+      expect(sets).toContainEqual({ lastFiredAt: null, lastFireError: 'AI credit gate denied: too_many_in_flight' });
+      expect(sets.some((set) => set.isEnabled === false)).toBe(false);
+      expect(body).toMatchObject({ executed: 0, deferred: 1 });
+      expect(body.errors).toBeUndefined();
+    });
+
+    it('given a terminal refusal (or a transient one past its window), should end the one-shot trigger with the reason recorded', async () => {
+      const { body, sets } = await fire({
+        success: false,
+        durationMs: 1,
+        runId: 'run_refused',
+        error: 'AI credit gate denied: requires_funding',
+        refusal: { reason: 'requires_funding', kind: 'terminal', retry: false },
+      });
+
+      expect(sets).toContainEqual({ isEnabled: false, lastFireError: 'AI credit gate denied: requires_funding' });
+      expect(sets.some((set) => 'lastFiredAt' in set && set.lastFiredAt === null)).toBe(false);
+      expect(body.errors).toEqual([`task-trigger-${MOCK_TRIGGER.id}: AI credit gate denied: requires_funding`]);
+    });
+  });
+
+
+  describe('completion trigger retried after a transient refusal', () => {
+    const RETRY_TRIGGER = {
+      ...MOCK_TRIGGER,
+      id: 'trg_completion',
+      triggerType: 'completion' as const,
+      nextRunAt: new Date(Date.now() - 5 * 60 * 1000),
+      lastFireError: 'AI credit gate denied: too_many_in_flight',
+    };
+
+    const tick = async (result: Record<string, unknown>) => {
+      pushDiscoveryRows([RETRY_TRIGGER]);
+      mockReturning.mockResolvedValueOnce([RETRY_TRIGGER]);
+      pushLookupRows([MOCK_WORKFLOW]);
+      pushLookupRows([{ ...MOCK_TASK, completedAt: new Date('2025-01-01T08:00:00Z') }]);
+      vi.mocked(executeWorkflow).mockResolvedValue(result as never);
+      const response = await POST(new Request('https://example.com/api/cron/task-triggers', { method: 'POST' }));
+      return { body: await response.json(), sets: mockUpdateSet.mock.calls.map((c) => c[0] as Record<string, unknown>) };
+    };
+
+    it('given a pending completion retry, should run it with its completion task context and the original occurrence time (the 24h bound), and a success disables it exactly like a first-time success', async () => {
+      const { body, sets } = await tick({ success: true, durationMs: 10 });
+
+      expect(executeWorkflow).toHaveBeenCalledWith(expect.objectContaining({
+        taskContext: { taskItemId: RETRY_TRIGGER.taskItemId, triggerType: 'completion' },
+        source: { table: 'taskTriggers', id: 'trg_completion', triggerAt: RETRY_TRIGGER.nextRunAt },
+      }));
+      expect(sets).toContainEqual({ isEnabled: false, lastFireError: null });
+      expect(body.executed).toBe(1);
+    });
+
+    it('given the task was reopened before the retry tick, should not run the completion workflow and should end the trigger with the skip reason', async () => {
+      pushDiscoveryRows([RETRY_TRIGGER]);
+      mockReturning.mockResolvedValueOnce([RETRY_TRIGGER]);
+      pushLookupRows([MOCK_WORKFLOW]);
+      pushLookupRows([{ ...MOCK_TASK, completedAt: null }]);
+
+      await POST(new Request('https://example.com/api/cron/task-triggers', { method: 'POST' }));
+
+      expect(executeWorkflow).not.toHaveBeenCalled();
+      expect(mockUpdateSet.mock.calls.map((c) => c[0])).toContainEqual({ isEnabled: false, lastFireError: 'Task no longer completed' });
+    });
+
+    it('given the retry is refused again after its 24h window (retry false), should disable it with the reason', async () => {
+      const { sets } = await tick({
+        success: false,
+        durationMs: 1,
+        runId: 'run_expired',
+        error: 'AI credit gate denied: too_many_in_flight',
+        refusal: { reason: 'too_many_in_flight', kind: 'transient', retry: false },
+      });
+
+      expect(sets).toContainEqual({ isEnabled: false, lastFireError: 'AI credit gate denied: too_many_in_flight' });
+    });
+  });
+
 });

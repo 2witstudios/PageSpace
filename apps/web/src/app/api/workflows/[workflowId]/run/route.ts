@@ -7,6 +7,7 @@ import { eq } from '@pagespace/db/operators'
 import { workflows } from '@pagespace/db/schema/workflows';
 import { executeWorkflow, type WorkflowExecutionInput } from '@/lib/workflows/workflow-executor';
 import { getNextRunDate } from '@/lib/workflows/cron-utils';
+import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 const MANAGEABLE_TRIGGER_TYPE = 'cron' as const;
@@ -62,6 +63,13 @@ export async function POST(
 
   if (result.claimConflict) {
     return NextResponse.json({ error: 'Workflow is already running' }, { status: 409 });
+  }
+
+  // A credit refusal ran nothing: answer with the same status and body every
+  // AI route uses (402 requires_funding + claim_url, 429 caps, 402 out of
+  // credits), and leave the schedule and the run audit untouched.
+  if (result.refusal) {
+    return creditGateErrorResponse(result.refusal.reason);
   }
 
   // Advance the schedule so the next cron tick doesn't re-fire immediately.

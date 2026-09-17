@@ -8,6 +8,7 @@ import { MagicLinkEmail } from '@pagespace/lib/email-templates/MagicLinkEmail';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 import { getClientIP } from '@pagespace/lib/auth/device-fingerprint-utils';
+import { notAgentReservedEmail } from '@pagespace/lib/auth/agent/reserved-email';
 
 function getAdminUrl(): string {
   if (!process.env.ADMIN_URL) {
@@ -18,7 +19,9 @@ function getAdminUrl(): string {
 }
 
 const schema = z.object({
-  email: z.email({ message: 'Please enter a valid email address' }),
+  email: z
+    .email({ message: 'Please enter a valid email address' })
+    .refine(notAgentReservedEmail, { message: 'Please enter a valid email address' }),
   next: z.string().optional(),
 });
 

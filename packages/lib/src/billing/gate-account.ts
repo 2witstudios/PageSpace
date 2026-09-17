@@ -14,6 +14,7 @@ import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { agentIdentities } from '@pagespace/db/schema/agent-identities';
 import type { AccountType } from '../auth/agent/account-type';
+import { GateAccountNotFoundError } from './gate-account-not-found';
 
 export interface GateAccount {
   accountType: AccountType;
@@ -28,7 +29,8 @@ export async function readGateAccount(userId: string): Promise<GateAccount> {
     .leftJoin(agentIdentities, eq(agentIdentities.userId, users.id))
     .where(eq(users.id, userId))
     .limit(1);
-  // No users row: the gate has never been reachable without one (every caller
-  // authenticated a user), and `human` is the column default.
-  return { accountType: row?.accountType ?? 'human', ownerUserId: row?.ownerUserId ?? null };
+  // No users row: fail CLOSED (Phase 1b). Defaulting to `human` would hand a
+  // missing principal the human starter grant and the billing-off unlimited path.
+  if (!row) throw new GateAccountNotFoundError(userId);
+  return { accountType: row.accountType, ownerUserId: row.ownerUserId ?? null };
 }
