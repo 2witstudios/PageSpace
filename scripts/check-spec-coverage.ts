@@ -40,7 +40,8 @@
  * The allowlist (`scripts/spec-coverage-allowlist.txt`) holds IDs not yet in scope. EVERY ID
  * starts allowlisted; a lane removes its IDs from the file in the same PR that lands the tests.
  * The gate is a ratchet in both directions: an allowlisted ID that a test now names FAILS with
- * "remove it from the allowlist", so the file can only shrink as work lands, and an allowlisted
+ * "remove it from the allowlist", so the file shrinks as work lands (an ID goes back only when a
+ * review shows its covering test does not prove it; see the allowlist header), and an allowlisted
  * token that is not a Spec ID FAILS as a typo.
  *
  * Usage:  bun run scripts/check-spec-coverage.ts [--ids MON-2,X-6] [--allowlist <path>]

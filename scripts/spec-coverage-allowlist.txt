@@ -7,7 +7,7 @@
 #     ("MON-2 …" in an it/test title, or a describe title whose tests ALL pass — never only in a
 #     riteway given/should, which no reporter sees). Only test runs in .github/workflows/ci.yml
 #     count: a suite only security.yml runs never reaches the gate. Leaving an ID here
-#     after a test names it FAILS the gate (STALE-ALLOW), so this file can only shrink.
+#     after a test names it FAILS the gate (STALE-ALLOW), so this file shrinks as work lands.
 #   - A token here that is not a Spec ID FAILS the gate (typo guard).
 #   - Re-adding an ID is allowed ONLY when a review shows the test(s) covering it do not prove
 #     the requirement (an over-claimed title). That PR removes the ID from those titles, re-adds
