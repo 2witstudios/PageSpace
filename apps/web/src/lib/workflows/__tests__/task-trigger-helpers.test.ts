@@ -285,6 +285,12 @@ describe('task-trigger-helpers', () => {
       expect((source.triggerAt as Date).getTime()).toBeGreaterThanOrEqual(before);
     });
 
+    it('given any fire, should skip the daily cap exactly like the task-triggers cron that retries it (one policy for both paths)', async () => {
+      await fireWith({ success: true, durationMs: 1 });
+
+      expect(vi.mocked(executeWorkflow).mock.calls[0][0].creditGate).toEqual({ skipDailyCap: true });
+    });
+
     it('given a transient refusal, should keep the trigger enabled, release its claim and schedule it for the task-triggers cron (nextRunAt = the completion instant) with the reason recorded', async () => {
       await fireWith({
         success: false,

@@ -274,6 +274,9 @@ export async function fireCompletionTrigger(taskId: string): Promise<void> {
       timezone: workflow.timezone,
       source: { table: 'taskTriggers', id: completionTrigger.id, triggerAt: firedAt },
       taskContext: { taskItemId: taskId, triggerType: 'completion' },
+      // Same credit policy as the task-triggers cron that retries this fire,
+      // so a refusal here is never one the retry would ignore.
+      creditGate: { skipDailyCap: true },
     };
 
     void executeWorkflow(input).then(async (result) => {

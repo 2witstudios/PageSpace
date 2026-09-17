@@ -372,7 +372,7 @@ describe('POST /api/cron/task-triggers', () => {
       pushDiscoveryRows([RETRY_TRIGGER]);
       mockReturning.mockResolvedValueOnce([RETRY_TRIGGER]);
       pushLookupRows([MOCK_WORKFLOW]);
-      pushLookupRows([MOCK_TASK]);
+      pushLookupRows([{ ...MOCK_TASK, completedAt: new Date('2025-01-01T08:00:00Z') }]);
       vi.mocked(executeWorkflow).mockResolvedValue(result as never);
       const response = await POST(new Request('https://example.com/api/cron/task-triggers', { method: 'POST' }));
       return { body: await response.json(), sets: mockUpdateSet.mock.calls.map((c) => c[0] as Record<string, unknown>) };
@@ -387,6 +387,18 @@ describe('POST /api/cron/task-triggers', () => {
       }));
       expect(sets).toContainEqual({ isEnabled: false, lastFireError: null });
       expect(body.executed).toBe(1);
+    });
+
+    it('given the task was reopened before the retry tick, should not run the completion workflow and should end the trigger with the skip reason', async () => {
+      pushDiscoveryRows([RETRY_TRIGGER]);
+      mockReturning.mockResolvedValueOnce([RETRY_TRIGGER]);
+      pushLookupRows([MOCK_WORKFLOW]);
+      pushLookupRows([{ ...MOCK_TASK, completedAt: null }]);
+
+      await POST(new Request('https://example.com/api/cron/task-triggers', { method: 'POST' }));
+
+      expect(executeWorkflow).not.toHaveBeenCalled();
+      expect(mockUpdateSet.mock.calls.map((c) => c[0])).toContainEqual({ isEnabled: false, lastFireError: 'Task no longer completed' });
     });
 
     it('given the retry is refused again after its 24h window (retry false), should disable it with the reason', async () => {

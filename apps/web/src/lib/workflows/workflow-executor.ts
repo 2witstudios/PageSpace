@@ -141,12 +141,17 @@ export async function executeWorkflow(input: WorkflowExecutionInput): Promise<Wo
     if (!credit.allowed) return await recordRefusal(input, credit.reason, startTime);
     holdId = credit.holdId;
   } catch (error) {
-    // No row was claimed, so the source stays eligible for its next tick.
-    return {
+    // The gate itself failed (e.g. its database read). Treated like a
+    // transient refusal: a rescheduled source inside the 24h window keeps no
+    // row and retries next tick; anything else is recorded once, so a calendar
+    // occurrence can never be re-discovered forever.
+    const failed: WorkflowExecutionResult = {
       success: false,
       durationMs: Date.now() - startTime,
       error: error instanceof Error ? error.message : String(error),
     };
+    if (shouldRetryRefusal({ kind: 'transient', source: input.source, now: new Date() })) return failed;
+    return recordUnstartedRun(input, failed);
   }
 
   try {
@@ -228,15 +233,25 @@ async function recordRefusal(
   startTime: number,
 ): Promise<WorkflowExecutionResult> {
   const kind = classifyGateRefusal(reason);
-  const retry = shouldRetryRefusal({ kind, occurrenceAt: input.source.triggerAt, now: new Date() });
+  const retry = shouldRetryRefusal({ kind, source: input.source, now: new Date() });
   const refused: WorkflowExecutionResult = {
     success: false,
     durationMs: Date.now() - startTime,
     error: `AI credit gate denied: ${reason}`,
     refusal: { reason, kind, retry },
   };
-  if (retry) return refused;
+  return retry ? refused : recordUnstartedRun(input, refused);
+}
 
+/**
+ * Record a run that never started (refused or failed before the claim) as ONE
+ * error row carrying its reason, so it is visible in the run history and a
+ * scheduled source stops re-discovering it.
+ */
+async function recordUnstartedRun(
+  input: WorkflowExecutionInput,
+  result: WorkflowExecutionResult,
+): Promise<WorkflowExecutionResult> {
   try {
     const [row] = await db
       .insert(workflowRuns)
@@ -247,15 +262,15 @@ async function recordRefusal(
         triggerAt: input.source.triggerAt,
         status: 'error',
         endedAt: new Date(),
-        durationMs: refused.durationMs,
-        error: refused.error ?? null,
+        durationMs: result.durationMs,
+        error: result.error ?? null,
       })
       .returning({ id: workflowRuns.id });
-    return { ...refused, runId: row?.id };
+    return { ...result, runId: row?.id };
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
-    loggers.api.error('Failed to record refused workflow_run', { workflowId: input.workflowId, error: errorMessage });
-    return { ...refused, finalizeError: errorMessage };
+    loggers.api.error('Failed to record unstarted workflow_run', { workflowId: input.workflowId, error: errorMessage });
+    return { ...result, finalizeError: errorMessage };
   }
 }
 

@@ -104,6 +104,22 @@ export async function POST(req: Request) {
             return { trigger, result: skippedResult };
           }
 
+          // A completion trigger reaches the cron only as a retry after a
+          // transient credit refusal; if the task was reopened meanwhile, the
+          // "on completion" workflow no longer applies.
+          if (trigger.triggerType === 'completion') {
+            const task = taskMap.get(trigger.taskItemId);
+            const skipReason = !task ? 'Task not found' : !task.completedAt ? 'Task no longer completed' : null;
+            if (skipReason) {
+              await db.update(taskTriggers).set({
+                isEnabled: false,
+                lastFireError: skipReason,
+              }).where(eq(taskTriggers.id, trigger.id));
+              const skippedResult: WorkflowExecutionResult = { success: false, durationMs: 0, error: skipReason };
+              return { trigger, result: skippedResult };
+            }
+          }
+
           // Pre-execution skip for due_date triggers whose task became ineligible
           if (trigger.triggerType === 'due_date') {
             const task = taskMap.get(trigger.taskItemId);

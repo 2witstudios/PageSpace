@@ -1068,13 +1068,46 @@ describe('executeWorkflow — credit gate inside the executor', () => {
     );
   });
 
-  test('given the gate itself throws, should fail without claiming a run row (retryable, never a stuck claim)', async () => {
+  test('given the gate itself throws for a fresh scheduled occurrence, should fail without any run row so the next tick retries it', async () => {
     creditGate.throws = new Error('db down');
 
-    const result = await executeWorkflow(createInputFixture());
+    const result = await executeWorkflow(
+      createInputFixture({ source: { table: 'calendarTriggers', id: 'ct_1', triggerAt: new Date(Date.now() - 60_000) } }),
+    );
 
     expect(result).toMatchObject({ success: false, error: 'db down' });
+    expect(result.refusal).toBeUndefined();
     expect(mockInsert).not.toHaveBeenCalled();
+  });
+
+  test('given the gate keeps throwing past the 24h window, should record ONE error run so the occurrence stops being re-discovered', async () => {
+    creditGate.throws = new Error('db down');
+    mockInsertValues.mockReturnValue({ returning: mockInsertReturning, onConflictDoNothing: mockOnConflictDoNothing });
+    mockInsertReturning.mockResolvedValue([{ id: 'run_gate_error' }]);
+
+    const result = await executeWorkflow(
+      createInputFixture({ source: { table: 'calendarTriggers', id: 'ct_1', triggerAt: new Date(Date.now() - 25 * 60 * 60 * 1000) } }),
+    );
+
+    expect(result).toMatchObject({ success: false, error: 'db down', runId: 'run_gate_error' });
+    expect(mockInsertValues).toHaveBeenCalledWith(expect.objectContaining({ status: 'error', error: 'db down' }));
+    expect(mockOnConflictDoNothing).not.toHaveBeenCalled();
+  });
+
+  test('given a transient refusal on a webhook fire (nothing re-fires it), should record the error run instead of dropping the event', async () => {
+    creditGate.decision = { allowed: false, reason: 'daily_cap_exceeded' };
+    mockInsertValues.mockReturnValue({ returning: mockInsertReturning, onConflictDoNothing: mockOnConflictDoNothing });
+    mockInsertReturning.mockResolvedValue([{ id: 'run_webhook_refused' }]);
+
+    const result = await executeWorkflow(
+      createInputFixture({ source: { table: 'webhookTriggers', id: 'wt_1', triggerAt: new Date() } }),
+    );
+
+    expect(result).toMatchObject({
+      runId: 'run_webhook_refused',
+      refusal: { reason: 'daily_cap_exceeded', kind: 'transient', retry: false },
+    });
+    expect(mockInsertValues).toHaveBeenCalledWith(expect.objectContaining({ status: 'error' }));
   });
 
   test('given a manual run, should gate the input it was handed (billed to createdBy)', async () => {
