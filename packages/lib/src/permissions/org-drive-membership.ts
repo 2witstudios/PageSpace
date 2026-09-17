@@ -6,10 +6,13 @@ import { orgMembers, type OrgRole } from '@pagespace/db/schema/organizations';
 import { audit } from '../audit/audit-log';
 import { ORGS_ENABLED } from '../organizations/orgs-enabled';
 import type { DriveMemberRole, DriveRoleGrant, OrgDriveMembership } from './org-access';
+import { drives } from '@pagespace/db/schema/core';
 import {
+  explicitScopeAuthorityRow,
   resolveEffectiveDriveMembership,
   validOrgDriveRow,
   type EffectiveDriveMembership,
+  type ExplicitScopeAuthority,
 } from './org-drive-resolution';
 
 /**
@@ -44,10 +47,7 @@ export async function loadEffectiveDriveMembership(
     ))
     .limit(1);
 
-  const found = rows[0];
-  const row: OrgDriveMembership | null = found
-    ? { role: found.role as DriveMemberRole, customRoleId: found.customRoleId ?? null, source: found.source }
-    : null;
+  const row = toMembership(rows[0]);
 
   const orgId = drive.orgId ?? null;
   if (!ORGS_ENABLED || orgId === null) {
@@ -83,6 +83,41 @@ export async function loadEffectiveDriveMembership(
   }
 
   return effective;
+}
+
+function toMembership(
+  found: { role: string; customRoleId: string | null; source: OrgDriveMembership['source'] } | undefined,
+): OrgDriveMembership | null {
+  return found
+    ? { role: found.role as DriveMemberRole, customRoleId: found.customRoleId ?? null, source: found.source }
+    : null;
+}
+
+/**
+ * The membership that may back an explicit-role token scope on a drive the user does not own
+ * (explicitScopeAuthorityRow). Reads nothing while ORGS_ENABLED is false.
+ */
+export async function loadExplicitScopeAuthority(userId: string, driveId: string): Promise<ExplicitScopeAuthority> {
+  if (!ORGS_ENABLED) return { orgDrive: false };
+
+  const [drive] = await db
+    .select({ orgId: drives.orgId, orgVisibility: drives.orgVisibility })
+    .from(drives)
+    .where(eq(drives.id, driveId))
+    .limit(1);
+  if (!drive || drive.orgId === null) return { orgDrive: false };
+
+  const rows = await db
+    .select({ role: driveMembers.role, customRoleId: driveMembers.customRoleId, source: driveMembers.source })
+    .from(driveMembers)
+    .where(and(
+      eq(driveMembers.driveId, driveId),
+      eq(driveMembers.userId, userId),
+      isNotNull(driveMembers.acceptedAt),
+    ))
+    .limit(1);
+
+  return explicitScopeAuthorityRow({ orgsEnabled: true, drive, row: toMembership(rows[0]) });
 }
 
 /** The user's role in each org they belong to (for listing many drives at once). */

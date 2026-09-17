@@ -13,7 +13,7 @@ import { allocateUniqueSubdomainWithRetry } from './subdomain-allocation';
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 import { slugify } from '../utils/utils';
 import { customRoleBelongsToDrive, getMemberCustomRoleId } from '../permissions/membership-queries';
-import { loadEffectiveDriveMembership, loadOrgRolesForUser } from '../permissions/org-drive-membership';
+import { loadEffectiveDriveMembership, loadExplicitScopeAuthority, loadOrgRolesForUser } from '../permissions/org-drive-membership';
 import { decideListedDriveRole } from '../permissions/org-drive-resolution';
 import type { DriveMemberRole } from '../permissions/org-access';
 import { ORGS_ENABLED } from '../organizations/orgs-enabled';
@@ -348,6 +348,12 @@ export interface DriveScopeValidationResult {
   unauthorizedRoles: string[];
   invalidCustomRoles: string[];
   unauthorizedCustomRoles: string[];
+  /**
+   * Org drives where an explicit role was asked for but the caller reaches the drive only through
+   * the org (org Owner/Admin power, implicit Open membership, an org-materialized row). An explicit
+   * role is never re-checked, so it must rest on a direct membership; these need an inheriting scope.
+   */
+  explicitRoleWithoutMembership: string[];
 }
 
 /**
@@ -365,6 +371,7 @@ export async function validateDriveScopeAccess(
   const unauthorizedRoles: string[] = [];
   const invalidCustomRoles: string[] = [];
   const unauthorizedCustomRoles: string[] = [];
+  const explicitRoleWithoutMembership: string[] = [];
 
   for (const scope of scopes) {
     const access = await getDriveAccess(scope.id, userId);
@@ -372,8 +379,20 @@ export async function validateDriveScopeAccess(
       invalidDriveIds.push(scope.id);
       continue;
     }
+    // An explicit role on an org drive rests only on a direct membership row, and is capped to it.
+    let isAdmin = access.isAdmin;
+    if ((scope.role === 'ADMIN' || scope.role === 'MEMBER') && !access.isOwner) {
+      const authority = await loadExplicitScopeAuthority(userId, scope.id);
+      if (authority.orgDrive) {
+        if (authority.row === null) {
+          explicitRoleWithoutMembership.push(scope.id);
+          continue;
+        }
+        isAdmin = authority.row.role === 'ADMIN';
+      }
+    }
     // A MEMBER cannot grant ADMIN — cap to caller's actual authority
-    if (scope.role === 'ADMIN' && !access.isAdmin) {
+    if (scope.role === 'ADMIN' && !isAdmin) {
       unauthorizedRoles.push(scope.id);
     }
     // Prevent using a custom role that belongs to a different drive
@@ -382,7 +401,7 @@ export async function validateDriveScopeAccess(
       continue;
     }
     // Non-admins can only use their own assigned custom role
-    if (scope.customRoleId && !access.isAdmin && !access.isOwner) {
+    if (scope.customRoleId && !isAdmin && !access.isOwner) {
       const callerCustomRoleId = await getMemberCustomRoleId(scope.id, userId);
       if (scope.customRoleId !== callerCustomRoleId) {
         unauthorizedCustomRoles.push(scope.id);
@@ -390,7 +409,7 @@ export async function validateDriveScopeAccess(
     }
   }
 
-  return { invalidDriveIds, unauthorizedRoles, invalidCustomRoles, unauthorizedCustomRoles };
+  return { invalidDriveIds, unauthorizedRoles, invalidCustomRoles, unauthorizedCustomRoles, explicitRoleWithoutMembership };
 }
 
 export interface DriveAccessWithDrive {

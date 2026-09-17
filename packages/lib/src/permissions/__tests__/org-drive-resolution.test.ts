@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   resolveEffectiveDriveMembership,
   decideListedDriveRole,
+  explicitScopeAuthorityRow,
   type OrgDriveFacts,
 } from '../org-drive-resolution';
 import type { DriveRoleGrant, OrgDriveMembership } from '../org-access';
@@ -179,5 +180,25 @@ describe('decideListedDriveRole', () => {
     it('DRV-8 (partial) lists the drive a guest was invited to, with their row role', () => {
       expect(decideListedDriveRole({ ...on, drive: PRIVATE, orgRole: null, row: inviteMember })).toBe('MEMBER');
     });
+  });
+});
+
+describe('explicitScopeAuthorityRow', () => {
+  const staleOwnerRow: OrgDriveMembership = { role: 'OWNER', customRoleId: null, source: 'invite' };
+
+  it('while ORGS_ENABLED is false, or on a personal drive, answers "not an org drive" so today\'s check stands', () => {
+    for (const drive of [PERSONAL, OPEN, PRIVATE]) {
+      expect(explicitScopeAuthorityRow({ orgsEnabled: false, drive, row: orgRow })).toEqual({ orgDrive: false });
+    }
+    expect(explicitScopeAuthorityRow({ orgsEnabled: true, drive: PERSONAL, row: null })).toEqual({ orgDrive: false });
+  });
+
+  it('ORG-4 (partial) on an org drive only a direct invited row grants an explicit-role token scope: never org power, an org-materialized row, or a leftover OWNER row', () => {
+    for (const drive of [OPEN, RESTRICTED, PRIVATE]) {
+      expect(explicitScopeAuthorityRow({ orgsEnabled: true, drive, row: null })).toEqual({ orgDrive: true, row: null });
+      expect(explicitScopeAuthorityRow({ orgsEnabled: true, drive, row: orgRow })).toEqual({ orgDrive: true, row: null });
+      expect(explicitScopeAuthorityRow({ orgsEnabled: true, drive, row: staleOwnerRow })).toEqual({ orgDrive: true, row: null });
+      expect(explicitScopeAuthorityRow({ orgsEnabled: true, drive, row: inviteAdmin })).toEqual({ orgDrive: true, row: inviteAdmin });
+    }
   });
 });

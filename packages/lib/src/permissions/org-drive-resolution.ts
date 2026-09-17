@@ -139,3 +139,35 @@ export function decideListedDriveRole({
   });
   return access ? access.role : null;
 }
+
+export interface ExplicitScopeAuthorityInput {
+  orgsEnabled: boolean;
+  drive: OrgDriveFacts;
+  /** The user's ACCEPTED drive_members row for this drive, if any. */
+  row: OrgDriveMembership | null;
+}
+
+export type ExplicitScopeAuthority =
+  | { orgDrive: false }
+  | { orgDrive: true; row: OrgDriveMembership | null };
+
+/**
+ * Which membership may back an EXPLICIT-role token scope (mcp_token_drives role ADMIN or MEMBER) on
+ * a drive the user does not own. An explicit role is stored on the token and never re-checked
+ * against its owner, so on an org drive it must rest on something that outlives no org role: a
+ * direct (invited or approved) row. Org power, implicit OPEN membership, an org-materialized row
+ * and a former lead's OWNER row all come from, or outlived, an org relationship, so they back only
+ * an INHERITING scope, which re-resolves the owner on every use.
+ *
+ * `orgDrive: false` means the org rule does not apply (dark, or a personal drive): the caller's
+ * existing check stands unchanged.
+ */
+export function explicitScopeAuthorityRow({
+  orgsEnabled,
+  drive,
+  row,
+}: ExplicitScopeAuthorityInput): ExplicitScopeAuthority {
+  if (!orgsEnabled || drive.orgId === null) return { orgDrive: false };
+  // With no org role, validOrgDriveRow drops every org-materialized row as well as an OWNER row.
+  return { orgDrive: true, row: validOrgDriveRow(row, drive, null) };
+}

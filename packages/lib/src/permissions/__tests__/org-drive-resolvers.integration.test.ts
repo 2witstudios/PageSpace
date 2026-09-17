@@ -14,7 +14,7 @@ import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest
 import { createId } from '@paralleldrive/cuid2';
 import { factories } from '@pagespace/db/test/factories';
 import { db, pool } from '@pagespace/db/db';
-import { inArray } from '@pagespace/db/operators';
+import { and, eq, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { driveRoles } from '@pagespace/db/schema/members';
@@ -22,10 +22,12 @@ import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
 import { resetAuditDbBindingForTests } from '../../audit/audit-db-binding';
 import { resetDefaultSecurityAuditForTests, securityAudit } from '../../audit/security-audit';
 import { getUserAccessLevel } from '../permissions';
+import { getScopedDriveAccessLevel } from '../app-permissions';
 import {
   getDriveAccess,
   getDriveAccessWithDrive,
   listAccessibleDrives,
+  validateDriveScopeAccess,
   type ListDrivesOptions,
 } from '../../services/drive-service';
 import {
@@ -74,6 +76,7 @@ async function northwind() {
   const dana = await createUser('Dana Whit');
   const fred = await createUser('Fred Olsen');
   const kai = await createUser('Kai Moreno');
+  const lu = await createUser('Lu Chen');
 
   const org = await createOrg('Northwind Labs', jono.id);
   await db.insert(orgMembers).values([
@@ -131,6 +134,8 @@ async function northwind() {
   await factories.createDriveMember(product.id, kai.id, { source: 'invite', role: 'OWNER' });
   // Jono (org Owner) holds a leftover OWNER row on Finance: org power, not the row, must open it.
   await factories.createDriveMember(finance.id, jono.id, { source: 'invite', role: 'OWNER' });
+  // Jono also joined Research as a plain invited MEMBER: org power must not lift that row's authority.
+  await factories.createDriveMember(research.id, jono.id, { source: 'invite', role: 'MEMBER' });
 
   // Dana is not in Northwind. She left it (a stale org row on Product the sync has not removed),
   // belongs to Acme, and is invited to Marcus's personal drive.
@@ -139,6 +144,25 @@ async function northwind() {
   await db.insert(orgMembers).values({ orgId: acme.id, userId: dana.id, role: 'OWNER' });
   const acmeWiki = await factories.createDrive(dana.id, { name: 'Acme Wiki', slug: `acme-wiki-${createId()}`, orgId: acme.id, orgVisibility: 'OPEN' });
 
+  // Southwind: an OPEN drive whose default role denies viewing (POL-6). Lu is a plain member with no
+  // row; Kai also holds a former lead's OWNER row there. Both must resolve through the default role.
+  const southwind = await createOrg('Southwind', jono.id);
+  await db.insert(orgMembers).values([
+    { orgId: southwind.id, userId: jono.id, role: 'OWNER' },
+    { orgId: southwind.id, userId: lu.id, role: 'MEMBER' },
+    { orgId: southwind.id, userId: kai.id, role: 'MEMBER' },
+  ]);
+  const handbook = await factories.createDrive(jono.id, { name: 'Handbook', slug: `handbook-${createId()}`, orgId: southwind.id, orgVisibility: 'OPEN' });
+  const handbookPage = await factories.createPage(handbook.id, { title: 'Policies' });
+  await db.insert(driveRoles).values({
+    driveId: handbook.id,
+    name: 'No access',
+    isDefault: true,
+    permissions: {},
+    driveWidePermissions: { canView: false, canEdit: false, canShare: false },
+  });
+  await factories.createDriveMember(handbook.id, kai.id, { source: 'invite', role: 'OWNER' });
+
   const personal = await factories.createDrive(marcus.id, { name: 'Marcus Notes', slug: `notes-${createId()}` });
   const personalPage = await factories.createPage(personal.id, { title: 'Scratch' });
   const personalPrivatePage = await factories.createPage(personal.id, { title: 'Diary', isPrivate: true });
@@ -146,10 +170,10 @@ async function northwind() {
   await factories.createDriveMember(personal.id, nina.id, { source: 'invite', role: 'ADMIN' });
 
   return {
-    people: { jono, priya, omar, lena, marcus, nina, eve, chris, dana, fred, kai },
-    org, acme,
-    drives: { product, research, finance, acmeWiki, personal },
-    pages: { productPage, productPrivatePage, researchPage, financePage, financePrivatePage, personalPage, personalPrivatePage },
+    people: { jono, priya, omar, lena, marcus, nina, eve, chris, dana, fred, kai, lu },
+    org, acme, southwind,
+    drives: { product, research, finance, acmeWiki, handbook, personal },
+    pages: { productPage, productPrivatePage, researchPage, financePage, financePrivatePage, handbookPage, personalPage, personalPrivatePage },
   };
 }
 
@@ -241,7 +265,7 @@ describe('org access in the human drive resolvers (integration)', () => {
     flags.orgsEnabled = false;
 
     const compared = await expectResolversMatchLegacy(everyone(f), Object.values(f.drives).map((d) => d.id), Object.values(f.pages).map((p) => p.id));
-    expect(compared).toBe(11 * (5 + 7) + 11 * 5 * 2 + 11 * LIST_OPTIONS.length);
+    expect(compared).toBe(12 * (6 + 8) + 12 * 6 * 2 + 12 * LIST_OPTIONS.length);
 
     // Not vacuous: the fixture holds rows that org rules treat differently once enabled.
     expect(await getUserAccessLevel(f.people.marcus.id, f.drives.finance.id)).not.toBeNull();
@@ -323,6 +347,11 @@ describe('org access in the human drive resolvers (integration)', () => {
     expect(listed.find((d) => d.id === f.drives.personal.id)).toMatchObject({ role: 'ADMIN', orgId: null });
     expect(await listedIds(nina.id, { tokenScopable: true })).toEqual([f.drives.product.id, f.drives.personal.id].sort());
 
+    // Through the real loader: a default role that denies viewing closes an OPEN drive's pages to a
+    // row-less member, and a former lead's leftover OWNER row does not reopen them.
+    expect(await getUserAccessLevel(f.people.lu.id, f.pages.handbookPage.id)).toBeNull();
+    expect(await getUserAccessLevel(f.people.kai.id, f.pages.handbookPage.id)).toBeNull();
+
     // A leftover OWNER row is stale: Kai resolves through the default role exactly like Nina.
     expect(await getUserAccessLevel(f.people.kai.id, f.pages.productPage.id)).toEqual({ canView: true, canEdit: true, canShare: false, canDelete: false });
     expect(await getDriveAccess(f.drives.product.id, f.people.kai.id)).toEqual({ isOwner: false, isAdmin: false, isMember: true, role: 'MEMBER' });
@@ -380,4 +409,40 @@ describe('org access in the human drive resolvers (integration)', () => {
     expect(await getUserAccessLevel(chris.id, f.pages.productPrivatePage.id)).toBeNull();
     expect(await getDriveAccess(f.drives.product.id, chris.id)).toEqual({ isOwner: false, isAdmin: false, isMember: true, role: 'MEMBER' });
   });
+
+  it('ORG-4 (partial) org power never mints an explicit-role token scope: an org Admin with no row must use an inheriting scope, which stops resolving once they are demoted', async () => {
+    const f = await northwind();
+    flags.orgsEnabled = true;
+    const { priya, omar, nina, marcus, eve } = f.people;
+    const full = { canView: true, canEdit: true, canShare: true, canDelete: true };
+    const refused = (driveId: string) => ({ invalidDriveIds: [], unauthorizedRoles: [], invalidCustomRoles: [], unauthorizedCustomRoles: [], explicitRoleWithoutMembership: [driveId] });
+    const accepted = { invalidDriveIds: [], unauthorizedRoles: [], invalidCustomRoles: [], unauthorizedCustomRoles: [], explicitRoleWithoutMembership: [] };
+
+    // The reviewer's repro, step 1: an explicit ADMIN (or MEMBER) scope on PRIVATE Finance from org power alone is refused.
+    expect(await validateDriveScopeAccess([{ id: f.drives.finance.id, role: 'ADMIN' }], priya.id)).toEqual(refused(f.drives.finance.id));
+    expect(await validateDriveScopeAccess([{ id: f.drives.finance.id, role: 'MEMBER' }], priya.id)).toEqual(refused(f.drives.finance.id));
+    // Implicit OPEN membership and an org-materialized row are org-derived too.
+    expect(await validateDriveScopeAccess([{ id: f.drives.product.id, role: 'MEMBER' }], nina.id)).toEqual(refused(f.drives.product.id));
+    expect(await validateDriveScopeAccess([{ id: f.drives.product.id, role: 'MEMBER' }], marcus.id)).toEqual(refused(f.drives.product.id));
+    // A real invited row still grants explicit scopes, capped to that row: Omar's ADMIN row, Eve's MEMBER row.
+    expect(await validateDriveScopeAccess([{ id: f.drives.finance.id, role: 'ADMIN' }], omar.id)).toEqual(accepted);
+    expect(await validateDriveScopeAccess([{ id: f.drives.research.id, role: 'MEMBER' }], eve.id)).toEqual(accepted);
+    expect(await validateDriveScopeAccess([{ id: f.drives.research.id, role: 'ADMIN' }], eve.id))
+      .toEqual({ ...accepted, unauthorizedRoles: [f.drives.research.id] });
+    // The org Owner's real row on Research is MEMBER: an explicit scope is capped to it, not to org power.
+    expect(await validateDriveScopeAccess([{ id: f.drives.research.id, role: 'MEMBER' }], f.people.jono.id)).toEqual(accepted);
+    expect(await validateDriveScopeAccess([{ id: f.drives.research.id, role: 'ADMIN' }], f.people.jono.id))
+      .toEqual({ ...accepted, unauthorizedRoles: [f.drives.research.id] });
+
+    // The inheriting scope is accepted and re-resolves on every use.
+    expect(await validateDriveScopeAccess([{ id: f.drives.finance.id, role: null }], priya.id)).toEqual(accepted);
+    const inherit = [{ driveId: f.drives.finance.id, role: null, customRoleId: null }];
+    expect(await getScopedDriveAccessLevel(inherit, priya.id, f.drives.finance.id)).toEqual(full);
+
+    // Step 2: demote Priya. Step 3: neither she nor her inheriting scope reaches Finance any more.
+    await db.update(orgMembers).set({ role: 'MEMBER' }).where(and(eq(orgMembers.orgId, f.org.id), eq(orgMembers.userId, priya.id)));
+    expect(await getUserAccessLevel(priya.id, f.drives.finance.id)).toBeNull();
+    expect(await getScopedDriveAccessLevel(inherit, priya.id, f.drives.finance.id)).toBeNull();
+  });
 });
+

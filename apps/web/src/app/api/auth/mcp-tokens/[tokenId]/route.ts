@@ -108,12 +108,18 @@ export async function PATCH(
 
     // Validate drive access for each scope (same logic as POST /create)
     if (driveScopes.length > 0) {
-      const { invalidDriveIds, unauthorizedRoles, invalidCustomRoles, unauthorizedCustomRoles } =
+      const { invalidDriveIds, unauthorizedRoles, invalidCustomRoles, unauthorizedCustomRoles, explicitRoleWithoutMembership } =
         await validateDriveScopeAccess(driveScopes, userId);
 
       if (invalidDriveIds.length > 0) {
         return NextResponse.json(
           { error: 'You do not have access to these drives: ' + invalidDriveIds.join(', ') },
+          { status: 403 }
+        );
+      }
+      if (explicitRoleWithoutMembership.length > 0) {
+        return NextResponse.json(
+          { error: 'You reach these organization drives through your organization role, so a key can only inherit your access there (leave the role unset): ' + explicitRoleWithoutMembership.join(', ') },
           { status: 403 }
         );
       }

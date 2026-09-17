@@ -148,6 +148,12 @@ describe('permissions/org-drive-membership.ts', () => {
     expect(body).toMatch(/\.from\(driveMembers\)/);
     expect(body).toMatch(GATE);
   });
+
+  it('loadExplicitScopeAuthority gates pending rows (regression: a pending invited row on an org drive would back an explicit-role token scope)', () => {
+    const body = extractFunctionBody(source, 'loadExplicitScopeAuthority');
+    expect(body).toMatch(/\.from\(driveMembers\)/);
+    expect(body).toMatch(GATE);
+  });
 });
 
 describe('permissions/permission-mutations.ts', () => {

@@ -436,6 +436,7 @@ describe('validateDriveScopeAccess', () => {
       unauthorizedRoles: [],
       invalidCustomRoles: [],
       unauthorizedCustomRoles: [],
+      explicitRoleWithoutMembership: [],
     });
   });
 

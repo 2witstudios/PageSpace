@@ -33,6 +33,9 @@ vi.mock('@pagespace/db/schema/members', () => ({
   driveMembers: { __table: 'drive_members', driveId: 'driveId', userId: 'userId', role: 'role', customRoleId: 'customRoleId', source: 'source', acceptedAt: 'acceptedAt' },
   driveRoles: { __table: 'drive_roles', id: 'id', driveId: 'driveId', isDefault: 'isDefault' },
 }));
+vi.mock('@pagespace/db/schema/core', () => ({
+  drives: { __table: 'drives', orgId: 'orgId', orgVisibility: 'orgVisibility', id: 'id' },
+}));
 vi.mock('@pagespace/db/schema/organizations', () => ({
   orgMembers: { __table: 'org_members', orgId: 'orgId', userId: 'userId', role: 'role' },
 }));
@@ -44,7 +47,7 @@ vi.mock('@pagespace/db/operators', () => ({
 vi.mock('../../audit/audit-log', () => ({ audit: vi.fn() }));
 
 import { audit } from '../../audit/audit-log';
-import { loadEffectiveDriveMembership } from '../org-drive-membership';
+import { loadEffectiveDriveMembership, loadExplicitScopeAuthority } from '../org-drive-membership';
 
 const PRIVATE_ORG_DRIVE = { id: 'drive_finance', orgId: 'org_northwind', orgVisibility: 'PRIVATE' as const };
 const OPEN_ORG_DRIVE = { id: 'drive_product', orgId: 'org_northwind', orgVisibility: 'OPEN' as const };
@@ -113,4 +116,18 @@ describe('loadEffectiveDriveMembership', () => {
 
     expect(audit).not.toHaveBeenCalled();
   });
+
+  it('while ORGS_ENABLED is false loadExplicitScopeAuthority reads nothing and leaves today\'s scope check standing', async () => {
+    expect(await loadExplicitScopeAuthority('user_priya', 'drive_finance')).toEqual({ orgDrive: false });
+    expect(selects.tables).toEqual([]);
+  });
+
+  it('ORG-4 (partial) loadExplicitScopeAuthority on an org drive reads the drive then the row, and org rows do not count', async () => {
+    flags.orgsEnabled = true;
+    selects.results = [[{ orgId: 'org_northwind', orgVisibility: 'OPEN' }], [{ role: 'MEMBER', customRoleId: null, source: 'org' }]];
+
+    expect(await loadExplicitScopeAuthority('user_marcus', 'drive_product')).toEqual({ orgDrive: true, row: null });
+    expect(selects.tables).toEqual(['drives', 'drive_members']);
+  });
 });
+
