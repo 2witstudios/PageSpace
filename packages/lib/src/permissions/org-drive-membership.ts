@@ -177,6 +177,29 @@ export async function loadExplicitScopeAuthority(userId: string, driveId: string
   return explicitScopeAuthorityRow({ orgsEnabled: true, drive, row: toMembership(rows[0]) });
 }
 
+/**
+ * One user's ACCEPTED drive_members rows in `driveIds`, keyed by drive, read through `executor` (an
+ * org demotion reads them inside the role change's transaction).
+ */
+export async function loadAcceptedRowsInDrives(
+  executor: Pick<typeof db, 'select'>,
+  userId: string,
+  driveIds: string[],
+): Promise<Map<string, OrgDriveMembership>> {
+  const rows = new Map<string, OrgDriveMembership>();
+  for (const ids of chunks(driveIds)) {
+    const found = await executor
+      .select({ driveId: driveMembers.driveId, role: driveMembers.role, customRoleId: driveMembers.customRoleId, source: driveMembers.source })
+      .from(driveMembers)
+      .where(and(eq(driveMembers.userId, userId), isNotNull(driveMembers.acceptedAt), inArray(driveMembers.driveId, ids)));
+    for (const r of found) {
+      const row = toMembership(r);
+      if (row) rows.set(r.driveId, row);
+    }
+  }
+  return rows;
+}
+
 /** The user's role in each org they belong to (for listing many drives at once). */
 export async function loadOrgRolesForUser(userId: string): Promise<Map<string, OrgRole>> {
   const rows = await db

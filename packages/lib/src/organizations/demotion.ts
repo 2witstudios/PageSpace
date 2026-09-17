@@ -13,14 +13,15 @@
  * - otherwise (a row still backs the access, a drive they lead, Owner to Admin): nothing.
  */
 
-import { and, eq, gt, inArray, isNotNull, isNull, or } from '@pagespace/db/operators';
+import { and, eq, gt, inArray, isNull, or } from '@pagespace/db/operators';
 import { drives, pages } from '@pagespace/db/schema/core';
-import { driveMembers, driveRoles, pagePermissions } from '@pagespace/db/schema/members';
+import { driveRoles, pagePermissions } from '@pagespace/db/schema/members';
 import { driveShareLinks, pageShareLinks } from '@pagespace/db/schema/share-links';
 import type { OrgDriveVisibility } from '@pagespace/db/schema/core';
 import type { OrgRole } from '@pagespace/db/schema/organizations';
 import { resolveEffectiveDriveMembership } from '../permissions/org-drive-resolution';
-import type { DriveMemberRole, OrgDriveMembership } from '../permissions/org-access';
+import type { OrgDriveMembership } from '../permissions/org-access';
+import { loadAcceptedRowsInDrives } from '../permissions/org-drive-membership';
 import { resolveCustomRolePermissions, type CustomRolePerms, type PagePerm } from '../permissions/membership-queries';
 import { recapAgentMembershipsGrantedBy } from '../services/drive-agent-service';
 import { revokeOrgDriveGrants, type LeaveTx, type OrgDriveGrantCounts } from './leave';
@@ -125,27 +126,22 @@ export async function revokeForDemotion(
     .where(eq(drives.orgId, orgId));
   const driveIds = orgDrives.map((d) => d.driveId);
 
-  const rows = driveIds.length === 0 ? [] : await tx
-    .select({ driveId: driveMembers.driveId, role: driveMembers.role, customRoleId: driveMembers.customRoleId, source: driveMembers.source })
-    .from(driveMembers)
-    .where(and(eq(driveMembers.userId, userId), isNotNull(driveMembers.acceptedAt), inArray(driveMembers.driveId, driveIds)));
+  const rowByDrive = await loadAcceptedRowsInDrives(tx, userId, driveIds);
   const defaults = driveIds.length === 0 ? [] : await tx
     .select({ driveId: driveRoles.driveId, id: driveRoles.id })
     .from(driveRoles)
     .where(and(inArray(driveRoles.driveId, driveIds), eq(driveRoles.isDefault, true)));
 
-  const rowByDrive = new Map(rows.map((r) => [r.driveId, r]));
   const defaultByDrive = new Map(defaults.map((r) => [r.driveId, r.id]));
   const plan = planDemotionRevocation({
     userId,
     fromRole: input.fromRole,
     toRole: input.toRole,
     drives: orgDrives.map((d) => {
-      const row = rowByDrive.get(d.driveId);
       return {
         ...d,
         orgId,
-        row: row ? { role: row.role as DriveMemberRole, customRoleId: row.customRoleId, source: row.source } : null,
+        row: rowByDrive.get(d.driveId) ?? null,
         defaultCustomRoleId: defaultByDrive.get(d.driveId) ?? null,
       };
     }),
