@@ -83,7 +83,8 @@ export interface ReassignLedOrgDrivesOptions {
 
 /**
  * Reassign every org drive `userId` leads (trashed ones included) to that org's Owner, writing
- * an `ownership_transfer` activity event per drive in the same transaction. Rows are locked
+ * an `ownership_transfer` activity event per drive in the same transaction, and removing the
+ * former lead's OWNER self-heal row on each (it was never an invitation). Rows are locked
  * FOR UPDATE, drive and org together, so a concurrent ownership transfer cannot leave a drive
  * with the previous Owner as its lead.
  */
@@ -110,6 +111,11 @@ export async function reassignLedOrgDrives(
 
   for (const r of plan) {
     await tx.update(drives).set({ ownerId: r.toUserId }).where(eq(drives.id, r.driveId));
+    await tx.delete(driveMembers).where(and(
+      eq(driveMembers.driveId, r.driveId),
+      eq(driveMembers.userId, r.fromUserId),
+      eq(driveMembers.role, 'OWNER'),
+    ));
     await logActivityWithTx(
       {
         userId,
@@ -136,6 +142,8 @@ export interface LeaveCascadeCounts {
   driveShareLinks: number;
   pageShareLinks: number;
   mcpTokenDriveRows: number;
+  /** OWNER self-heal rows on the org's drives, left by drives the leaver leads or once led. */
+  formerLeadOwnerRows: number;
 }
 
 export type LeaveOrganizationResult =
@@ -211,6 +219,17 @@ export async function leaveOrganization(
     ))
     .returning({ id: mcpTokenDrives.id });
 
+  // A lead's OWNER self-heal row is not a membership: on an org drive it outlives the lead, so
+  // it goes with them, whether they lead the drive now (reassigned below) or led it once.
+  const ownerRows = await tx
+    .delete(driveMembers)
+    .where(and(
+      eq(driveMembers.userId, userId),
+      eq(driveMembers.role, 'OWNER'),
+      inArray(driveMembers.driveId, orgDriveIds),
+    ))
+    .returning({ id: driveMembers.id });
+
   const reassigned = await reassignLedOrgDrives(userId, tx, {
     orgId,
     reason: options.reason,
@@ -227,6 +246,7 @@ export async function leaveOrganization(
       driveShareLinks: driveLinks.length,
       pageShareLinks: pageLinks.length,
       mcpTokenDriveRows: tokenRows.length,
+      formerLeadOwnerRows: ownerRows.length,
     },
     reassigned,
   };

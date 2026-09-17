@@ -646,12 +646,14 @@ export async function restoreDrive(driveId: string): Promise<typeof drives.$infe
 export async function updateDriveLastAccessed(userId: string, driveId: string): Promise<void> {
   const now = new Date();
 
-  const [drive] = await db.select({ ownerId: drives.ownerId })
+  const [drive] = await db.select({ ownerId: drives.ownerId, orgId: drives.orgId })
     .from(drives)
     .where(eq(drives.id, driveId))
     .limit(1);
 
-  if (drive?.ownerId === userId) {
+  // Never on an org drive: its lead reaches it through drives.ownerId, the org Owner and Admins
+  // through the org, and an OWNER row there would outlive a lead reassignment (B7b).
+  if (drive?.ownerId === userId && drive.orgId === null) {
     await db.insert(driveMembers)
       .values({
         driveId,
