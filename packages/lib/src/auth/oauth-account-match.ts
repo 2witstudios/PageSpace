@@ -13,6 +13,8 @@
  * so the rule cannot drift between flows.
  */
 
+import { notAgentReservedEmail } from './agent/reserved-email';
+
 export type OAuthMatchDecision = 'use-sub' | 'use-email' | 'create-new' | 'reject';
 
 export interface ResolveOAuthMatchInput {
@@ -25,6 +27,8 @@ export interface ResolveOAuthMatchInput {
    * (Google `email_verified` / Apple `email_verified`).
    */
   emailVerified: boolean;
+  /** The token's raw email address. */
+  email: string;
 }
 
 /**
@@ -42,7 +46,16 @@ export function resolveOAuthMatch({
   providerSubMatch,
   emailMatch,
   emailVerified,
+  email,
 }: ResolveOAuthMatchInput): OAuthMatchDecision {
+  // An agent's synthetic address (ADR 0007 §4) can never enter a human OAuth
+  // flow — not to sign in, link, or create a look-alike row. A provider cannot
+  // legitimately assert a `.invalid` address, so this is always an attack or a
+  // bug, and `reject` is the ordinary denial every route already maps.
+  if (!notAgentReservedEmail(email)) {
+    return 'reject';
+  }
+
   // Strong identity: a provider-subject match authenticates that account
   // regardless of the email_verified claim. The subject id is bound to the
   // signed token and cannot be spoofed onto a victim's account.

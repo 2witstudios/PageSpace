@@ -14,9 +14,14 @@ import { secureCompare } from '@pagespace/lib/auth/secure-compare';
 import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
 import { isSafeNextPath, SIGNIN_NEXT_ALLOWED_PREFIXES } from '@/lib/auth/auth-helpers';
 import { INVITE_TOKEN_MAX_LENGTH } from '@/lib/auth/oauth-state';
+import { notAgentReservedEmail } from '@pagespace/lib/auth/agent/reserved-email';
 
 const sendMagicLinkSchema = z.object({
-  email: z.email({ message: 'Please enter a valid email address' }),
+  // An agent's synthetic address (ADR 0007 §4) is refused with the SAME
+  // message as a malformed one — no oracle.
+  email: z
+    .email({ message: 'Please enter a valid email address' })
+    .refine(notAgentReservedEmail, { message: 'Please enter a valid email address' }),
   // A shell that redeems on a specific device (desktop, or the iOS / Android
   // app via a universal link) binds the link to that device; a browser sends
   // no platform and gets a cookie session.

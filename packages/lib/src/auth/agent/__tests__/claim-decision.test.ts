@@ -1,5 +1,5 @@
 /**
- * ADR 0005 Decisions 3/7/8 — the claim ceremony decisions, in the shape of
+ * ADR 0007 Decisions 3/7/8 — the claim ceremony decisions, in the shape of
  * decideDevicePoll / decideDeviceApproval (code-lifecycle.ts). A claim mints
  * for the AGENT; approval links a HUMAN owner. The human-only rule and
  * already_claimed are mutation-checked.

@@ -9,6 +9,7 @@ import { accountRepository } from '@pagespace/lib/repositories/account-repositor
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { isValidEmail } from '@pagespace/lib/validators/email';
+import { notAgentReservedEmail } from '@pagespace/lib/auth/agent/reserved-email';
 import { getActorInfo, logUserActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { planDriveDisposition } from '@pagespace/lib/compliance/erasure/drive-disposition';
 import { dataSubjectRequestRepository } from '@pagespace/lib/repositories/data-subject-request-repository';
@@ -78,7 +79,8 @@ export async function PATCH(req: Request) {
 
     const { name, email } = parsed.data;
 
-    if (email !== undefined && !isValidEmail(email)) {
+    // An agent's synthetic address (ADR 0007 §4) fails exactly like a malformed one.
+    if (email !== undefined && (!isValidEmail(email) || !notAgentReservedEmail(email))) {
       return Response.json({ error: 'Invalid email format' }, { status: 400 });
     }
 
@@ -92,8 +94,14 @@ export async function PATCH(req: Request) {
       // user's own row and spuriously de-verify them on a no-op resubmit.
       const current = await db.query.users.findFirst({
         where: eq(users.id, userId),
-        columns: { email: true },
+        columns: { email: true, accountType: true },
       });
+      // An agent keeps its synthetic address (ADR 0007 Decision 2). A real,
+      // verifiable inbox would lift the isEmailVerified gates D-31 option A
+      // relies on and let a magic link to that inbox sign in AS the agent.
+      if (current?.accountType === 'agent') {
+        return Response.json({ error: 'Agent accounts cannot change their email address' }, { status: 403 });
+      }
       // Decrypt the stored email before the case-insensitive comparison so a
       // ciphertext value is compared as plaintext (legacy plaintext passes through).
       const currentEmailPlain = current ? await decryptField(current.email) : '';

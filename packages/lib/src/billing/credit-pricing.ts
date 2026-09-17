@@ -110,7 +110,7 @@ export function isOneTimeAllowanceTier(tier: string): boolean {
 }
 
 /**
- * The one-time starter grant a brand-new balance row is seeded with (ADR 0005
+ * The one-time starter grant a brand-new balance row is seeded with (ADR 0007
  * Decision 9). Agents get NOTHING — no free AI credits, ever; a human may claim
  * an agent later and from then on its spend bills the owner. Humans get their
  * tier's allowance, falling back to the free allowance for an unknown/legacy

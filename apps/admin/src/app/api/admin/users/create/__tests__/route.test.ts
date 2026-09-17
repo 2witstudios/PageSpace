@@ -94,6 +94,17 @@ describe('POST /api/admin/users/create', () => {
     expect(mockUserEmailMatch).toHaveBeenCalledWith('jane@example.com');
   });
 
+  it('given an address under the agent reserved domain, should return the ordinary validation 400 without looking up or inserting', async () => {
+    // ADR 0007 §4 site 4: an admin cannot mint a human row squatting an agent's address.
+    const malformed = await (await POST(makeRequest({ name: 'Jane Doe', email: 'not-an-email' }))).json();
+    const res = await POST(makeRequest({ name: 'Jane Doe', email: 'agent-abc@agents.pagespace.invalid' }));
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual(malformed);
+    expect(mockDbFindFirst).not.toHaveBeenCalled();
+    expect(mockDbInsertValues).not.toHaveBeenCalled();
+  });
+
   it('returns 409 without inserting when a user with that email already exists', async () => {
     mockDbFindFirst.mockResolvedValueOnce({ id: 'existing-1' });
 

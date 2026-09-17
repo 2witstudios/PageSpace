@@ -1,6 +1,6 @@
 # Agent Signup — Threat Model
 
-- **Scope:** the two agent signup doors (API/auth.md and browser), the agent secret, the claim ceremony, and the billing link to a human owner. Contract: ADR 0005 (`docs/adr/0005-agent-accounts.md`).
+- **Scope:** the two agent signup doors (API/auth.md and browser), the agent secret, the claim ceremony, and the billing link to a human owner. Contract: ADR 0007 (`docs/adr/0007-agent-identities.md`).
 - **Date:** 2026-09-14 (Phase 0). Revised when [D-31] is answered (§6).
 - **Posture:** zero trust as everywhere else in this repo — fail closed, opaque tokens hashed at rest, constant-shape errors, rate-limit every new endpoint, a control must reach where the effect lives.
 
@@ -19,7 +19,7 @@
 1. The agent secret (`ps_agent_*`) — full control of the agent account.
 2. The claim token — the right to *start* a claim for that agent.
 3. The user code — the right to *finish* a claim, for 15 minutes, by a signed-in human.
-4. The owner link (`agent_accounts.ownerUserId`) — routes AI spend to a human's balance.
+4. The owner link (`agent_identities.ownerUserId`) — routes AI spend to a human's balance.
 5. The human's credit balance once linked.
 6. Rows and storage (the only thing an unfunded agent can consume).
 7. Humans' attention: DMs, invites, uploads from an entity nobody vouched for.
@@ -39,7 +39,7 @@ At rest the server stores `hashToken(secret)` (SHA3-256) and a 12-character pref
 2. **Proof-of-work shapes rate; it does not identify.** A 20-bit SHA3-256 puzzle costs a well-provisioned attacker fractions of a second. PoW exists to make bulk account creation cost CPU rather than nothing, and to let the per-IP limits (`AGENT_CHALLENGE`, `AGENT_SIGNUP`, `AGENT_SIGNUP_DAILY`) be the real ceiling. It says nothing about *who* or *what* is signing up, and nothing here depends on it doing so.
 3. **A leaked claim link lets a stranger start a claim but not finish one.** Finishing requires the user code (short-lived, hashed at rest, single-use), inside the 15-minute expiry, from a browser session signed in as a `human` account. The worst outcome of a leaked claim link is that a stranger *claims the agent and becomes its payer* — which costs the stranger money, not the agent or the original holder. A leaked link cannot read the agent's data, cannot obtain its secret, and cannot mint its tokens.
 4. **No free credits means no free spend — but not no cost.** An unfunded agent can still create rows and upload within the free-tier storage quota. Rate limits and the 30-day lifecycle for never-authenticated signups ([D-30]) bound this; they do not eliminate it.
-5. **The reserved domain is a convention enforced in code, not a network property.** `agents.pagespace.invalid` cannot resolve (RFC 2606), but its safety inside PageSpace depends on the five inbound denylist sites and the one outbound suppression point staying in place. Those are mutation-checked and enumerated by a test (ADR 0005 §4).
+5. **The reserved domain is a convention enforced in code, not a network property.** `agents.pagespace.invalid` cannot resolve (RFC 2606), but its safety inside PageSpace depends on the five inbound denylist sites and the one outbound suppression point staying in place. Those are mutation-checked and enumerated by a test (ADR 0007 §4).
 
 ## 5. Threats and controls
 

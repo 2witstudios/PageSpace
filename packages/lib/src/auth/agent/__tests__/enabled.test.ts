@@ -1,5 +1,5 @@
 /**
- * ADR 0005 Decision 11 — cloud + tenant enabled; onprem only when the operator
+ * ADR 0007 Decision 11 — cloud + tenant enabled; onprem only when the operator
  * sets AGENT_SIGNUP_ENABLED to exactly 'true'. Pure function of injected values.
  */
 import { describe, it, expect } from 'vitest';

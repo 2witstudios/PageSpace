@@ -1,5 +1,5 @@
 /**
- * ADR 0005 — the browser-door sign-in decision. Typed internally so the route
+ * ADR 0007 — the browser-door sign-in decision. Typed internally so the route
  * can audit the real reason; collapsed to ONE constant shape on the wire so
  * an unknown secret, a revoked agent, a suspended agent and a locked agent
  * are indistinguishable to the caller.

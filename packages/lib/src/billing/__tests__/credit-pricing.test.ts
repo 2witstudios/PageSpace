@@ -165,7 +165,7 @@ describe('allowanceRefills / isOneTimeAllowanceTier', () => {
   });
 });
 
-describe('starterGrantCents (ADR 0005 Decision 9 — no starter grant for agents)', () => {
+describe('starterGrantCents (ADR 0007 Decision 9 — no starter grant for agents)', () => {
   it('is 0 for an agent on the free tier', async () => {
     const { starterGrantCents } = await import('../credit-pricing');
     expect(starterGrantCents({ tier: 'free', accountType: 'agent' })).toBe(0);

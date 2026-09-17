@@ -3,6 +3,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { isExternalHttpUrl } from '@/lib/auth/google-avatar';
 import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+import { getAgentIdentitySummary } from '@pagespace/lib/services/agent-identities';
 
 // Session (browser) and OAuth (CLI `pagespace login` identity confirmation,
 // ADR 0003) both resolve identity the same way; `mcp_*` tokens are scoped
@@ -38,7 +39,7 @@ export async function GET(req: Request) {
 
   const safeImage = isExternalHttpUrl(user.image) ? null : user.image;
 
-  return Response.json({
+  const profile = {
     id: user.id,
     name: user.name,
     email: user.email,
@@ -49,5 +50,22 @@ export async function GET(req: Request) {
     // DB column) so every client consumer gets a value `isSandboxAvailable`
     // and friends can trust directly, same as every server-side tier read.
     subscriptionTier: toSubscriptionTier(user.subscriptionTier),
+    // ADR 0007 Decision 1 — additive: every existing field above is unchanged,
+    // and the CLI's `confirm-identity` parser ignores keys it does not declare.
+    accountType: user.accountType,
+  };
+
+  if (user.accountType !== 'agent') {
+    return Response.json(profile);
+  }
+
+  const identity = await getAgentIdentitySummary(user.id);
+  return Response.json({
+    ...profile,
+    agent: {
+      ownerUserId: identity?.ownerUserId ?? null,
+      claimedAt: identity?.claimedAt ?? null,
+      source: identity?.source ?? null,
+    },
   });
 }

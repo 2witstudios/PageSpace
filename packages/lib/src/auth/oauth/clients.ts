@@ -34,7 +34,7 @@ const PAGESPACE_CLI_CLIENT: RegisteredClient = {
 export const PAGESPACE_AGENT_CLIENT_ID = 'pagespace-agent';
 
 /**
- * ADR 0005 Decision 5 — the client agents present on the token endpoint. A
+ * ADR 0007 Decision 5 — the client agents present on the token endpoint. A
  * separate id keeps agent grants out of the CLI's allowed set (and vice
  * versa) and separates audit/rate-limit keys. No redirect URIs: nothing
  * browser-shaped is ever authorized for it. NOT first-party: that flag

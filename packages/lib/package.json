@@ -133,6 +133,11 @@
       "import": "./dist/drive-envs/plan-env-delete.js",
       "require": "./dist/drive-envs/plan-env-delete.js"
     },
+    "./services/agent-identities": {
+      "types": "./dist/services/agent-identities.d.ts",
+      "import": "./dist/services/agent-identities.js",
+      "require": "./dist/services/agent-identities.js"
+    },
     "./services/drive-envs/local-env-revoke": {
       "types": "./dist/services/drive-envs/local-env-revoke.d.ts",
       "import": "./dist/services/drive-envs/local-env-revoke.js",

@@ -1,5 +1,5 @@
 /**
- * The agent secret (ADR 0005 Decision 4).
+ * The agent secret (ADR 0007 Decision 4).
  *
  * The auth.md `identity_assertion` IS this opaque secret — Neon's durable-
  * secret model, no JWT. It is minted through the house `generateToken` so it

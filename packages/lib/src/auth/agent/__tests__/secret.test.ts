@@ -1,5 +1,5 @@
 /**
- * ADR 0005 Decision 4 — the identity_assertion IS the opaque `ps_agent_*`
+ * ADR 0007 Decision 4 — the identity_assertion IS the opaque `ps_agent_*`
  * secret, minted through the house `generateToken` and SHA3-256 hashed at rest.
  */
 import { describe, it, expect } from 'vitest';

@@ -1,5 +1,5 @@
 /**
- * Is the agent signup door open for this deployment? (ADR 0005 Decision 11)
+ * Is the agent signup door open for this deployment? (ADR 0007 Decision 11)
  *
  * Cloud and tenant: always (tenant is a cloud topology with billing via the
  * control plane, not an on-prem install). Onprem: only when the operator has

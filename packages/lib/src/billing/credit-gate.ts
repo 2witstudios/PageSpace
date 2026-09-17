@@ -30,6 +30,7 @@ import {
   computeMonthlyRefill,
   reservationCents,
   holdExpiresAt,
+  refineGateReason,
   type GateResult,
 } from './credit-core';
 import {
@@ -41,7 +42,9 @@ import {
   CREDIT_HOLD_TTL_SECONDS,
   MAX_FREE_INFLIGHT,
   dailyExposureCapForTier,
+  starterGrantCents,
 } from './credit-pricing';
+import { readGateAccount, type GateAccount } from './gate-account';
 import { readSpendableCents } from './credit-balance';
 import type { SubscriptionTier } from '../services/subscription-utils';
 
@@ -234,6 +237,10 @@ export async function canConsumeAI(
 
   const now = new Date();
 
+  // Read at most once per call, and only where a decision needs it.
+  let account: GateAccount | null = null;
+  const getAccount = async (): Promise<GateAccount> => (account ??= await readGateAccount(userId));
+
   const readBalance = async (): Promise<BalanceRow | null> => {
     const rows = await db
       .select({
@@ -374,8 +381,12 @@ export async function canConsumeAI(
   // never reset). onConflictDoNothing tolerates a concurrent init — the transaction
   // judges the REAL persisted balance under a row lock, never our assumed allowance,
   // so we can't allow when a racing request already drew the row down.
+  //
+  // An agent's starter grant is 0 (ADR 0007 Decision 9): the row is still
+  // created — the hold transaction below locks it — but no ledger grant is
+  // written, so no `free-init-<agentId>` row can ever exist.
   if (!row) {
-    const monthly = TIER_MONTHLY_ALLOWANCE_CENTS[tier] ?? TIER_MONTHLY_ALLOWANCE_CENTS.free;
+    const monthly = starterGrantCents({ tier, accountType: (await getAccount()).accountType });
     await db.transaction(async (tx) => {
       const balanceInserted = await tx
         .insert(creditBalances)
@@ -394,7 +405,7 @@ export async function canConsumeAI(
       // readBalance() and here, balanceInserted is empty and we skip the ledger
       // write — that path writes its own grant/purchase entry, and a phantom
       // monthly_grant here would overstate the user's credits in the drift formula.
-      if (balanceInserted.length > 0) {
+      if (balanceInserted.length > 0 && monthly > 0) {
         await tx
           .insert(creditLedger)
           .values(starterGrantLedgerRow(userId, monthly))
@@ -415,8 +426,15 @@ export async function canConsumeAI(
   // concurrent init, or a grant already recorded under the old monthly scheme, can
   // never double-fund. The increment is one relative UPDATE, atomic against a
   // concurrent top-up's own locked write to the same row.
-  if (row && row.monthlyPeriodEnd === null && isOneTimeAllowanceTier(tier)) {
-    const monthly = TIER_MONTHLY_ALLOWANCE_CENTS[tier];
+  //
+  // Same exclusion as the no-row branch: an agent's grant is 0, so neither the
+  // ledger key nor the balance is touched and the row stays bare.
+  const bareRowGrant =
+    row && row.monthlyPeriodEnd === null && isOneTimeAllowanceTier(tier)
+      ? starterGrantCents({ tier, accountType: (await getAccount()).accountType })
+      : 0;
+  if (bareRowGrant > 0) {
+    const monthly = bareRowGrant;
     await db.transaction(async (tx) => {
       const granted = await tx
         .insert(creditLedger)
@@ -582,6 +600,14 @@ export async function canConsumeAI(
   // and pop back up at settle — the "more → less → more" flicker. An abandoned/crashed
   // call leaves a dangling hold for the reconcile sweep (credit-backfill) to expire; it
   // no longer affects the displayed balance, so no gate-time push is needed.
+
+  // An unclaimed agent that is out of credits has exactly one way to get any: a
+  // human claiming it. Refine the reason so the HTTP layer can say so (402
+  // requires_funding + claim_url) instead of the human "add credits" copy.
+  if (!result.allowed && result.reason === 'out_of_credits') {
+    const { accountType, ownerUserId } = await getAccount();
+    return { ...result, reason: refineGateReason({ reason: result.reason, accountType, hasOwner: ownerUserId !== null }) };
+  }
 
   return result;
 }

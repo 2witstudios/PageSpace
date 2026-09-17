@@ -41,6 +41,22 @@ describe('email-service', () => {
     process.env.FROM_EMAIL = origFromEmail;
   });
 
+  it('given a recipient under the agent reserved domain, should return before any rate-limit or provider call and warn', async () => {
+    // ADR 0007 §4 outbound choke point: an agent's synthetic address can never
+    // receive mail. Same shape as the on-prem early return — resolves, sends nothing.
+    delete process.env.RESEND_API_KEY;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    await expect(
+      sendEmail({ to: 'Agent-x@AGENTS.pagespace.invalid', subject: 'Test', react: null })
+    ).resolves.toBeUndefined();
+
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(checkDistributedRateLimit).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
   it('given cloud mode + missing api key, should throw', async () => {
     delete process.env.RESEND_API_KEY;
     await expect(

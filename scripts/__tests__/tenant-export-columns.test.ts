@@ -265,6 +265,12 @@ describe('tenant export table registry', () => {
     }
   });
 
+  it('records the agent identity tables as not carried, with the D-32 reason (the exporter refuses agent users)', () => {
+    for (const table of ['agent_identities', 'agent_claims', 'agent_signup_challenges']) {
+      expect(TENANT_EXPORT_EXCLUDED_TABLES[table], table).toContain('D-32');
+    }
+  });
+
   it('carries the session tables whose loss motivated this guard', () => {
     // The named half of the decision, pinned so a future edit that quietly
     // drops the table fails with the table, not just a set difference.

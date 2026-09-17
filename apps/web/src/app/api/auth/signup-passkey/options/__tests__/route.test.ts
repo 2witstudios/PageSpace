@@ -136,6 +136,17 @@ describe('POST /api/auth/signup-passkey/options', () => {
       expect(body.error).toBe('Invalid request body');
     });
 
+    it('given an address under the agent reserved domain, should return the ordinary invalid-email 400 and generate no options', async () => {
+      // ADR 0007 §4 site 2: no distinct oracle — byte-identical to a malformed address.
+      const malformed = await (await POST(createRequest({ email: 'not-email', name: 'Test', csrfToken: 'valid' }))).json();
+      const response = await POST(createRequest({ email: 'agent-abc@agents.pagespace.invalid', name: 'Test', csrfToken: 'valid' }));
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body).toEqual(malformed);
+      expect(generateRegistrationOptionsForSignup).not.toHaveBeenCalled();
+    });
+
     it('returns 400 for missing name', async () => {
       const response = await POST(createRequest({ email: 'user@example.com', csrfToken: 'valid' }));
       const body = await response.json();

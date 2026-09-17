@@ -21,6 +21,11 @@ vi.mock('@/lib/repositories/auth-repository', () => ({
   },
 }));
 
+// Mock the agent-identity read (boundary)
+vi.mock('@pagespace/lib/services/agent-identities', () => ({
+  getAgentIdentitySummary: vi.fn(),
+}));
+
 // Mock auth (boundary)
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
@@ -29,6 +34,7 @@ vi.mock('@/lib/auth', () => ({
 
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { getAgentIdentitySummary } from '@pagespace/lib/services/agent-identities';
 
 // Test fixtures
 const mockVerifiedDate = new Date('2024-01-15T10:00:00Z');
@@ -40,6 +46,7 @@ const mockUser: User = {
   image: 'https://example.com/avatar.png',
   role: 'user',
   provider: 'email',
+  accountType: 'human',
   googleId: null,
   appleId: null,
   emailVerified: mockVerifiedDate,
@@ -128,6 +135,60 @@ describe('GET /api/auth/me', () => {
       const body = await response.json();
 
       expect(body.role).toBe('admin');
+    });
+  });
+
+  describe('account type (ADR 0007)', () => {
+    it('given a human session, should return exactly today\'s fields plus accountType human and no agent block', async () => {
+      const response = await GET(createRequest());
+      const body = await response.json();
+
+      expect(Object.keys(body)).toEqual([
+        'id', 'name', 'email', 'image', 'role', 'emailVerified', 'subscriptionTier', 'accountType',
+      ]);
+      expect(body.accountType).toBe('human');
+      expect(getAgentIdentitySummary).not.toHaveBeenCalled();
+    });
+
+    it('given an agent authenticated with a ps_at_ token, should add accountType agent and its ownership block', async () => {
+      const claimedAt = new Date('2026-09-16T12:00:00Z');
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
+        userId: 'agent-user-id',
+        role: 'user',
+        tokenVersion: 1,
+        adminRoleVersion: 0,
+        tokenType: 'oauth',
+        tokenId: 'oauth-token-id',
+        scopes: { account: true, offlineAccess: true, drives: new Map() },
+        driveScopes: [],
+        allowedDriveIds: [],
+      } as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValue({
+        ...mockUser,
+        id: 'agent-user-id',
+        email: 'agent-agent-user-id@agents.pagespace.invalid',
+        emailVerified: null,
+        accountType: 'agent',
+      });
+      vi.mocked(getAgentIdentitySummary).mockResolvedValue({ ownerUserId: 'owner-1', claimedAt, source: 'claude-code' });
+
+      const response = await GET(createRequest());
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.accountType).toBe('agent');
+      expect(body.agent).toEqual({ ownerUserId: 'owner-1', claimedAt: claimedAt.toISOString(), source: 'claude-code' });
+      expect(body.email).toBe('agent-agent-user-id@agents.pagespace.invalid');
+      expect(getAgentIdentitySummary).toHaveBeenCalledWith('agent-user-id');
+    });
+
+    it('given an unclaimed agent, should report a null owner and claim time', async () => {
+      vi.mocked(authRepository.findUserById).mockResolvedValue({ ...mockUser, accountType: 'agent', emailVerified: null });
+      vi.mocked(getAgentIdentitySummary).mockResolvedValue({ ownerUserId: null, claimedAt: null, source: null });
+
+      const body = await (await GET(createRequest())).json();
+
+      expect(body.agent).toEqual({ ownerUserId: null, claimedAt: null, source: null });
     });
   });
 

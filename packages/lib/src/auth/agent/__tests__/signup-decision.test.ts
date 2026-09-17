@@ -1,5 +1,5 @@
 /**
- * ADR 0005 Decisions 10/11 — the signup door decision. Precedence is fixed:
+ * ADR 0007 Decisions 10/11 — the signup door decision. Precedence is fixed:
  * disabled | challenge_invalid | pow_invalid | tos_required, so a disabled
  * deployment never reveals challenge state and a bad challenge never reveals
  * whether the PoW would have passed.

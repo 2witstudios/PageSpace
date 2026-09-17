@@ -94,8 +94,12 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
       'stripeCustomerId', 'subscriptionTier', 'tosAcceptedAt',
       'failedLoginAttempts', 'lockedUntil', 'suspendedAt', 'suspendedReason',
       'timezone', 'createdAt', 'updatedAt', 'starterSkillsInstalledAt',
-      'onboardingCompletedAt',
+      'onboardingCompletedAt', 'accountType',
     ],
+    // `accountType` MUST travel: a tenant arriving with it defaulted would turn
+    // every agent into a `human` — eligible for the starter grant and for
+    // claiming other agents (ADR 0007 Decisions 1, 9).
+    //
     // `onboardingCompletedAt` MUST travel for the same reason: a tenant arriving
     // with it cleared would show the first-run walkthrough to every migrated
     // user on their next login, as if the whole workspace were brand new.
@@ -368,6 +372,16 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
  * importing cleanly.
  */
 export const TENANT_EXPORT_EXCLUDED_TABLES: Readonly<Record<string, string>> = {
+  /**
+   * An agent's own login (ADR 0007). `users.accountType` IS carried, and that is
+   * what makes these safe to leave: `tenant-export.ts` refuses any scope that
+   * contains an agent user, so a bundle can never hold an agent whose identity
+   * row did not travel. Carrying the secret/claim hashes is founder decision D-32.
+   */
+  agent_identities: 'agent credentials do not cross deployments; export refuses agent users — D-32',
+  agent_claims: 'agent credentials do not cross deployments; export refuses agent users — D-32',
+  agent_signup_challenges: 'agent credentials do not cross deployments; export refuses agent users — D-32',
+
   /**
    * The Art 15 export DOES carry this table (`stream-state.json`), and that is
    * not an inconsistency: "every byte about you that exists" and "the state a

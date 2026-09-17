@@ -66,6 +66,7 @@ export * from './schema/drive-env-local';
 export * from './schema/dev-preview-services';
 export * from './schema/dev-preview-grants';
 export * from './schema/agent-account-grant-nonces';
+export * from './schema/agent-identities';
 
 import * as auth from './schema/auth';
 import * as sessions from './schema/sessions';
@@ -134,6 +135,7 @@ import * as driveEnvLocal from './schema/drive-env-local';
 import * as devPreviewServices from './schema/dev-preview-services';
 import * as devPreviewGrants from './schema/dev-preview-grants';
 import * as agentAccountGrantNonces from './schema/agent-account-grant-nonces';
+import * as agentIdentities from './schema/agent-identities';
 
 export const schema = {
   ...auth,
@@ -203,4 +205,5 @@ export const schema = {
   ...devPreviewServices,
   ...devPreviewGrants,
   ...agentAccountGrantNonces,
+  ...agentIdentities,
 };

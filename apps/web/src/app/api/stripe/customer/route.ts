@@ -80,6 +80,16 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
 
+    // An agent never gets its own Stripe customer (ADR 0007 Decision 8): its AI
+    // spend bills its owner once claimed, and its synthetic `.invalid` address
+    // could never receive an invoice.
+    if (user.accountType === 'agent') {
+      return NextResponse.json(
+        { error: 'Agent accounts are billed through their owner' },
+        { status: 403 }
+      );
+    }
+
     // If customer already exists, return it
     if (user.stripeCustomerId) {
       try {

@@ -63,6 +63,10 @@
       "types": "./dist/schema/agent-account-grant-nonces.d.ts",
       "default": "./dist/schema/agent-account-grant-nonces.js"
     },
+    "./schema/agent-identities": {
+      "types": "./dist/schema/agent-identities.d.ts",
+      "default": "./dist/schema/agent-identities.js"
+    },
     "./schema/agent-workspace-nodes": {
       "types": "./dist/schema/agent-workspace-nodes.d.ts",
       "default": "./dist/schema/agent-workspace-nodes.js"

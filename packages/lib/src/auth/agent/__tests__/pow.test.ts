@@ -1,5 +1,5 @@
 /**
- * ADR 0005 Decision 10 — proof-of-work on both signup doors. SHA3-256 over
+ * ADR 0007 Decision 10 — proof-of-work on both signup doors. SHA3-256 over
  * `${challenge}:${nonce}` must carry ≥ difficultyBits leading zero bits.
  * Total: bad inputs are `false`, never a throw. Boundary + mutation-checked.
  */

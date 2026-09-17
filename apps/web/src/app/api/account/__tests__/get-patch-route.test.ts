@@ -320,6 +320,42 @@ describe('PATCH /api/account', () => {
     expect(body.error).toBe('Invalid email format');
   });
 
+  it('given an agent account changing its email to a real address, should refuse with 403 and write nothing', async () => {
+    // D-31 option A (ADR 0007 Decision 2): an unclaimed agent must not reach
+    // humans. Swapping the synthetic address for a real, verifiable one would
+    // stamp emailVerified (lifting the isEmailVerified gates) and let a human
+    // auth flow (magic link to that inbox) sign in AS the agent.
+    vi.mocked(db.query.users.findFirst).mockResolvedValue({
+      email: 'agent-user-123@agents.pagespace.invalid',
+      accountType: 'agent',
+    } as never);
+    const request = new Request('https://example.com/api/account', {
+      method: 'PATCH',
+      body: JSON.stringify({ email: 'real-inbox@example.com' }),
+    });
+
+    const response = await PATCH(request);
+    const body = await response.json();
+
+    expect(response.status).toBe(403);
+    expect(typeof body.error).toBe('string');
+    expect(db.update).not.toHaveBeenCalled();
+  });
+
+  it('given a new email under the agent reserved domain, should return the ordinary invalid-email 400', async () => {
+    // ADR 0007 §4 site 5: an account can never move INTO an agent's address space.
+    const request = new Request('https://example.com/api/account', {
+      method: 'PATCH',
+      body: JSON.stringify({ name: 'Test User', email: 'agent-abc@agents.pagespace.invalid' }),
+    });
+
+    const response = await PATCH(request);
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.error).toBe('Invalid email format');
+  });
+
   it('should return 400 when email is already in use by another user', async () => {
     // Arrange — 1st lookup (by id) is the caller's current address; 2nd lookup
     // (by email) is the conflicting owner of the requested address.

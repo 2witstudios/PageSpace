@@ -4,6 +4,7 @@ import {
   refundDistributedRateLimitAttempt,
 } from '../security/distributed-rate-limit';
 import { isOnPrem } from '../deployment-mode';
+import { isAgentReservedEmail } from '../auth/agent/reserved-email';
 import type * as React from 'react';
 
 // Must match the windowMs passed to checkDistributedRateLimit below, so a
@@ -84,6 +85,13 @@ export interface SendEmailOptions {
 export async function sendEmail(options: SendEmailOptions): Promise<void> {
   if (isOnPrem()) {
     console.warn('[email-service] Email sending is disabled in on-premise deployment mode');
+    return;
+  }
+
+  // An agent's synthetic address (ADR 0007 §4) is an RFC 2606 `.invalid`
+  // domain: it can never receive mail, and a send would only earn a bounce.
+  if (isAgentReservedEmail(options.to)) {
+    console.warn('[email-service] Email suppressed: recipient is an agent account');
     return;
   }
 

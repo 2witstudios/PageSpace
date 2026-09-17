@@ -207,6 +207,7 @@ export async function createOrLinkOAuthUser(userInfo: OAuthUserInfo): Promise<OA
     providerSubMatch: !!subMatch,
     emailMatch: !!emailMatch,
     emailVerified: emailVerified === true,
+    email,
   });
 
   if (decision === 'reject') {

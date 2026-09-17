@@ -1,5 +1,5 @@
 /**
- * Pure claim-ceremony decisions (ADR 0005 Decisions 3, 7, 8) in the shape of
+ * Pure claim-ceremony decisions (ADR 0007 Decisions 3, 7, 8) in the shape of
  * `decideDevicePoll` / `decideDeviceApproval` (`auth/oauth/code-lifecycle.ts`).
  *
  * A claim record binds a HUMAN owner to an AGENT: the agent polls the claim
@@ -27,7 +27,7 @@ export const CLAIM_POLL_INTERVAL_SECONDS = 5;
 
 interface ClaimCommon {
   agentUserId: string;
-  /** The agent's CURRENT owner from `agent_accounts.ownerUserId` — null while unclaimed. */
+  /** The agent's CURRENT owner from `agent_identities.ownerUserId` — null while unclaimed. */
   agentOwnerUserId: string | null;
   expiresAt: Date;
   /** Null on the very first poll — no throttle to apply yet. */
