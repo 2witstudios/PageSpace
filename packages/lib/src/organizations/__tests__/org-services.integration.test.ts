@@ -8,9 +8,9 @@
  *   DATABASE_URL=postgresql://user:password@localhost:5433/pagespace_test \
  *   bun run --filter '@pagespace/lib' test:integration -- org-services
  */
-import { describe, it, expect, afterEach, beforeAll } from 'vitest';
+import { describe, it, expect, afterAll, afterEach, beforeAll } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
-import { db } from '@pagespace/db/db';
+import { db, pool } from '@pagespace/db/db';
 import { and, eq, inArray } from '@pagespace/db/operators';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
@@ -63,6 +63,13 @@ describe('org services (real Postgres)', () => {
     }
     const userIds = createdUsers.splice(0);
     if (userIds.length) await db.delete(users).where(inArray(users.id, userIds)).catch(() => {});
+  });
+
+  // The lib integration run shares one process across files, each with its own pool; this
+  // suite holds several connections at once (lock holders, concurrent transfers), so it
+  // releases them rather than leaving later suites to hit max_connections.
+  afterAll(async () => {
+    await pool.end();
   });
 
   async function person(name: string) {
