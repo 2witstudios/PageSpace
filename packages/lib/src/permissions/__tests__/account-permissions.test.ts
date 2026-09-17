@@ -111,7 +111,7 @@ describe('use', () => {
   });
 
   it('given an unattended run with a live delegation for this account, should return use true; expired, revoked or foreign, false', () => {
-    const live = { kind: 'delegation' as const, delegationId: 'dlg' as never, accountId: 'acct_1' as AccountId, agentPageId: PAGE, delegatedBy: OWNER, expired: false, revoked: false };
+    const live = { kind: 'delegation' as const, delegationId: 'dlg' as never, accountId: 'acct_1' as AccountId, agentPageId: PAGE, delegatedBy: OWNER, scope: { origins: [], operations: [], resources: [] }, expired: false, revoked: false };
     const actual = [
       decide(userOwned({ delegation: live })).use,
       decide(userOwned({ delegation: { ...live, expired: true } })).use,
@@ -122,7 +122,7 @@ describe('use', () => {
   });
 
   it('given an unattended run with a live delegation for this account made for another agent page or by another human, should return use false [0004 §8.27]', () => {
-    const live = { kind: 'delegation' as const, delegationId: 'dlg' as never, accountId: 'acct_1' as AccountId, agentPageId: PAGE, delegatedBy: OWNER, expired: false, revoked: false };
+    const live = { kind: 'delegation' as const, delegationId: 'dlg' as never, accountId: 'acct_1' as AccountId, agentPageId: PAGE, delegatedBy: OWNER, scope: { origins: [], operations: [], resources: [] }, expired: false, revoked: false };
     const actual = [
       decide(userOwned({ delegation: { ...live, agentPageId: 'page_other' as AgentPageId } })).use,
       decide(userOwned({ delegation: { ...live, delegatedBy: OTHER } })).use,

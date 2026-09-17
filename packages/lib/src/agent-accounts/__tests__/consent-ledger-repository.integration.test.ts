@@ -28,7 +28,8 @@ beforeAll(async () => {
     await db.execute(sql`SELECT 1`);
     dbAvailable = true;
   } catch (error) {
-    requireDb('consent-ledger-repository.integration.test.ts', error);
+    // Drizzle wraps the driver error; the cause is what says why the query failed.
+    requireDb('consent-ledger-repository.integration.test.ts', (error as { readonly cause?: unknown }).cause ?? error);
   }
   if (dbAvailable) await clearRows();
 });
