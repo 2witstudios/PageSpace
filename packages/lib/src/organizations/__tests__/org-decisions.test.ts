@@ -83,7 +83,7 @@ describe('invitation decisions', () => {
     });
   });
 
-  it('ORG-3 re-inviting after expiry rotates the open invite', () => {
+  it('ORG-3 (partial) re-inviting after expiry rotates the open invite', () => {
     const openInvite = { id: 'inv-1', acceptedAt: null, expiresAt: new Date(NOW.getTime() - HOUR) };
     expect(decideInviteCreation({ isExistingMember: false, openInvite, now: NOW })).toEqual({
       action: 'rotate',

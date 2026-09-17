@@ -194,7 +194,7 @@ describe('org services (real Postgres)', () => {
   });
 
   describe('invitations', () => {
-    it('ORG-3 re-inviting after expiry rotates the open invite', async () => {
+    it('ORG-3 (partial) re-inviting after expiry rotates the open invite', async () => {
       const { jono, org } = await seedNorthwind();
       const email = `lena-${createId()}@northwind.test`;
       const first = await createOrRotateInvitation({ orgId: org.id, email, role: 'MEMBER', invitedBy: jono.id, now: new Date() });

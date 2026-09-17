@@ -14,6 +14,7 @@ import { planDriveDisposition } from '@pagespace/lib/compliance/erasure/drive-di
 import { dataSubjectRequestRepository } from '@pagespace/lib/repositories/data-subject-request-repository';
 import { sendVerificationEmail } from '@/lib/auth/send-verification-email';
 import { lodgeAndEnqueueErasure } from '@/lib/erasure/request-erasure';
+import { findOrganizationsOwnedBy } from '@pagespace/lib/organizations/repository';
 
 const patchBodySchema = z
   .object({
@@ -213,6 +214,19 @@ export async function DELETE(req: Request) {
           slaDeadline: existing.slaDeadline,
         },
         { status: 202 }
+      );
+    }
+
+    // ORG-6: an Owner cannot delete their account while owning an org. The FK is
+    // RESTRICT too, but the erasure runs async; refuse here, before anything queues.
+    const ownedOrganizations = await findOrganizationsOwnedBy(userId);
+    if (ownedOrganizations.length > 0) {
+      return Response.json(
+        {
+          error: 'Transfer ownership of your organizations or delete them before deleting your account',
+          ownedOrganizations,
+        },
+        { status: 400 }
       );
     }
 
