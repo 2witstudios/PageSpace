@@ -171,6 +171,22 @@ describe('POST /api/stripe/create-credit-topup', () => {
     );
   });
 
+  it.each([502, 803, 1003, 32_766])(
+    'MON-5 a custom top-up of %i credits sends Stripe an exact integer amount',
+    async (credits) => {
+      // These counts drift under divide-then-multiply ((502 / 100) * 100 !== 502) and sit
+      // inside the default custom top-up bounds, so they reach checkout.
+      const response = await POST(req({ credits }));
+      expect(response.status).toBe(200);
+
+      const arg = mockCheckoutCreate.mock.calls[0][0];
+      const unitAmount = arg.line_items[0].price_data.unit_amount;
+      expect(Number.isInteger(unitAmount)).toBe(true);
+      expect(unitAmount).toBe(credits);
+      expect(arg.metadata.packCents).toBe(String(credits));
+    },
+  );
+
   it('MON-4 returns 400 for a custom credit count below the minimum', async () => {
     const response = await POST(req({ credits: CREDIT_TOPUP_MIN_CREDITS - 1 }));
     expect(response.status).toBe(400);

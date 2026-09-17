@@ -133,6 +133,36 @@
       "import": "./dist/drive-envs/plan-env-delete.js",
       "require": "./dist/drive-envs/plan-env-delete.js"
     },
+    "./organizations/authorize": {
+      "types": "./dist/organizations/authorize.d.ts",
+      "import": "./dist/organizations/authorize.js",
+      "require": "./dist/organizations/authorize.js"
+    },
+    "./organizations/deletion": {
+      "types": "./dist/organizations/deletion.d.ts",
+      "import": "./dist/organizations/deletion.js",
+      "require": "./dist/organizations/deletion.js"
+    },
+    "./organizations/invitations": {
+      "types": "./dist/organizations/invitations.d.ts",
+      "import": "./dist/organizations/invitations.js",
+      "require": "./dist/organizations/invitations.js"
+    },
+    "./organizations/membership": {
+      "types": "./dist/organizations/membership.d.ts",
+      "import": "./dist/organizations/membership.js",
+      "require": "./dist/organizations/membership.js"
+    },
+    "./organizations/orgs-enabled": {
+      "types": "./dist/organizations/orgs-enabled.d.ts",
+      "import": "./dist/organizations/orgs-enabled.js",
+      "require": "./dist/organizations/orgs-enabled.js"
+    },
+    "./organizations/repository": {
+      "types": "./dist/organizations/repository.d.ts",
+      "import": "./dist/organizations/repository.js",
+      "require": "./dist/organizations/repository.js"
+    },
     "./services/drive-envs/local-env-revoke": {
       "types": "./dist/services/drive-envs/local-env-revoke.d.ts",
       "import": "./dist/services/drive-envs/local-env-revoke.js",
@@ -667,6 +697,11 @@
       "types": "./dist/billing/live-concurrency-query.d.ts",
       "import": "./dist/billing/live-concurrency-query.js",
       "require": "./dist/billing/live-concurrency-query.js"
+    },
+    "./billing/wallet-core": {
+      "types": "./dist/billing/wallet-core.d.ts",
+      "import": "./dist/billing/wallet-core.js",
+      "require": "./dist/billing/wallet-core.js"
     },
     "./logging/siem-error-hook": {
       "types": "./dist/logging/siem-error-hook.d.ts",
@@ -1398,6 +1433,16 @@
       "import": "./dist/services/drive-member-service.js",
       "require": "./dist/services/drive-member-service.js"
     },
+    "./services/org-membership-sync": {
+      "types": "./dist/services/org-membership-sync.d.ts",
+      "import": "./dist/services/org-membership-sync.js",
+      "require": "./dist/services/org-membership-sync.js"
+    },
+    "./services/org-membership-sync-core": {
+      "types": "./dist/services/org-membership-sync-core.d.ts",
+      "import": "./dist/services/org-membership-sync-core.js",
+      "require": "./dist/services/org-membership-sync-core.js"
+    },
     "./services/calendar-event-drive-service": {
       "types": "./dist/services/calendar-event-drive-service.d.ts",
       "import": "./dist/services/calendar-event-drive-service.js",
@@ -1822,6 +1867,11 @@
       "types": "./dist/publish/render-sheet-page.d.ts",
       "import": "./dist/publish/render-sheet-page.js",
       "require": "./dist/publish/render-sheet-page.js"
+    },
+    "./organizations/leave": {
+      "types": "./dist/organizations/leave.d.ts",
+      "import": "./dist/organizations/leave.js",
+      "require": "./dist/organizations/leave.js"
     },
     "./notifications/types": {
       "types": "./dist/notifications/types.d.ts",
@@ -2353,6 +2403,11 @@
       "import": "./dist/permissions/resolve-role-permissions.js",
       "require": "./dist/permissions/resolve-role-permissions.js"
     },
+    "./permissions/org-access": {
+      "types": "./dist/permissions/org-access.d.ts",
+      "import": "./dist/permissions/org-access.js",
+      "require": "./dist/permissions/org-access.js"
+    },
     "./compliance/retention/retention-engine": {
       "types": "./dist/compliance/retention/retention-engine.d.ts",
       "import": "./dist/compliance/retention/retention-engine.js",
@@ -2646,6 +2701,9 @@
       ],
       "billing/live-concurrency-query": [
         "./dist/billing/live-concurrency-query.d.ts"
+      ],
+      "billing/wallet-core": [
+        "./dist/billing/wallet-core.d.ts"
       ],
       "logging/siem-error-hook": [
         "./dist/logging/siem-error-hook.d.ts"
@@ -3066,6 +3124,9 @@
       ],
       "publish/render-sheet-page": [
         "./dist/publish/render-sheet-page.d.ts"
+      ],
+      "organizations/leave": [
+        "./dist/organizations/leave.d.ts"
       ],
       "notifications/types": [
         "./dist/notifications/types.d.ts"
