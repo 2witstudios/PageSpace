@@ -882,7 +882,7 @@ function readDispatchScope(
 ): { allowedDriveIds: string[]; mcpTokenId?: string } {
   return {
     allowedDriveIds: context?.mcpAllowedDriveIds ?? [],
-    ...(context?.mcpTokenId ? { mcpTokenId: context.mcpTokenId } : {}),
+    ...(context?.credentialCeiling?.kind === 'mcp' ? { mcpTokenId: context.credentialCeiling.tokenId } : {}),
   };
 }
 

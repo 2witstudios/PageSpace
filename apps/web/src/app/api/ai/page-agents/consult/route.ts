@@ -3,7 +3,7 @@ import { convertToModelMessages, generateText, stepCountIs, hasToolCall } from '
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { filterToolsForMcpScope, filterToolsForImageGen, filterToolsForSandboxEnablement } from '@/lib/ai/core/tool-filtering';
-import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope, getAllowedDriveIds, isScopedMCPAuth, canPrincipalViewPage } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, isScopedMCPAuth, canPrincipalViewPage } from '@/lib/auth';
 import { AIMonitoring, discardUsageOutcome } from '@pagespace/lib/monitoring/ai-monitoring';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -26,6 +26,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { messageRepository } from '@/lib/repositories/message-repository';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
+import { toolCredentialScope } from '@/lib/ai/core/tool-credential-scope';
 import { authorizePageConversation, type PageConversationAccess } from '@/lib/ai/core/authorize-page-conversation';
 import { createId } from '@paralleldrive/cuid2';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
@@ -532,8 +533,7 @@ export async function POST(request: Request) {
       // Bind tool execution to the MCP token's drive scope and RBAC role so a
       // scoped token cannot reach drives outside its scope — or exceed its own
       // membership role — via the agent's broader ACL.
-      mcpAllowedDriveIds: getAllowedDriveIds(auth),
-      mcpTokenId: isMCPAuthResult(auth) ? auth.tokenId : undefined,
+      ...toolCredentialScope(auth),
     };
 
     // Hide account-level-only tools (e.g. create_drive) from a drive-scoped MCP token's tool list.

@@ -5,6 +5,7 @@
 
 import { ModelCapabilities } from './model-capabilities';
 import type { CommandExecutionData } from './command-processor';
+import type { CredentialCeiling } from '@pagespace/lib/permissions/credential-ceiling';
 
 export interface ToolExecutionContext {
   userId: string;
@@ -55,10 +56,12 @@ export interface ToolExecutionContext {
   // agent whose own ACL spans drives outside the token scope.
   mcpAllowedDriveIds?: string[];
 
-  // The MCP token id, set alongside mcpAllowedDriveIds. For scoped tokens this
-  // enables the app-member RBAC ceiling in actor-permissions: the token's own
-  // drive-membership role caps what tools may do, on top of the drive scope.
-  mcpTokenId?: string;
+  // The drive-scoped credential's ceiling (an mcp_ key or an OAuth grant, in
+  // one principal-neutral shape), set alongside mcpAllowedDriveIds. It enables
+  // the app-member RBAC ceiling in actor-permissions: the credential's own
+  // per-drive role caps what tools may do, on top of the drive scope. Built
+  // only by toolCredentialScope(auth); undefined = acts as the user.
+  credentialCeiling?: CredentialCeiling;
 
   // Chat source identification - determines sender identity for channel messages
   chatSource?: {

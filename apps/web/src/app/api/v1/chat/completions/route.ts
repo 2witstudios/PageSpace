@@ -11,9 +11,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
   authenticateRequestWithOptions,
   isAuthError,
-  isMCPAuthResult,
   checkMCPPageScope,
-  getAllowedDriveIds,
   isScopedMCPAuth,
   canPrincipalViewPage,
   canPrincipalEditPage,
@@ -51,6 +49,7 @@ import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { prepareHistoryForModel, finishModelRequest } from '@/lib/ai/core/context-assembly';
 import { capStepToolPayloads } from '@/lib/ai/core/cap-step-tool-payloads';
+import { toolCredentialScope } from '@/lib/ai/core/tool-credential-scope';
 
 export const maxDuration = 300;
 
@@ -634,8 +633,7 @@ export async function POST(request: Request): Promise<Response> {
         // Bind tool execution to the MCP token's drive scope and RBAC role so a
         // scoped token cannot reach drives outside its scope — or exceed its own
         // membership role — via the agent's broader ACL.
-        mcpAllowedDriveIds: getAllowedDriveIds(authResult),
-        mcpTokenId: isMCPAuthResult(authResult) ? authResult.tokenId : undefined,
+        ...toolCredentialScope(authResult),
       },
       maxRetries: 20,
     });

@@ -10,6 +10,10 @@ const {
   mockGetAppDriveMembership,
   mockGetAppDriveAccessLevel,
   mockGetAppAccessiblePagesInDrive,
+  mockGetScopedAccessLevel,
+  mockGetScopedDriveMembership,
+  mockGetScopedAccessiblePagesInDrive,
+  mockHasScopedDriveMembership,
 } = vi.hoisted(() => ({
   mockHasAgentDriveMembership: vi.fn(),
   mockCheckDriveAccess: vi.fn(),
@@ -20,6 +24,10 @@ const {
   mockGetAppDriveMembership: vi.fn(),
   mockGetAppDriveAccessLevel: vi.fn(),
   mockGetAppAccessiblePagesInDrive: vi.fn(),
+  mockGetScopedAccessLevel: vi.fn(),
+  mockGetScopedDriveMembership: vi.fn(),
+  mockGetScopedAccessiblePagesInDrive: vi.fn(),
+  mockHasScopedDriveMembership: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
@@ -39,6 +47,10 @@ vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
   getAppDriveMembership: mockGetAppDriveMembership,
   getAppDriveAccessLevel: mockGetAppDriveAccessLevel,
   getAppAccessiblePagesInDrive: mockGetAppAccessiblePagesInDrive,
+  getScopedAccessLevel: mockGetScopedAccessLevel,
+  getScopedDriveMembership: mockGetScopedDriveMembership,
+  getScopedAccessiblePagesInDrive: mockGetScopedAccessiblePagesInDrive,
+  hasScopedDriveMembership: mockHasScopedDriveMembership,
 }));
 vi.mock('@pagespace/lib/services/drive-member-service', () => ({
   checkDriveAccess: mockCheckDriveAccess,
@@ -185,7 +197,7 @@ describe('MCP drive-scope enforcement', () => {
   });
 });
 
-describe('app-member RBAC ceiling (mcpTokenId set)', () => {
+describe('app-member RBAC ceiling (mcp_ key ceiling set)', () => {
   beforeEach(() => vi.clearAllMocks());
 
   const VIEW_ONLY = { canView: true, canEdit: false, canShare: false, canDelete: false };
@@ -196,14 +208,14 @@ describe('app-member RBAC ceiling (mcpTokenId set)', () => {
     userId: 'user-1',
     chatSource: { type: 'page', agentPageId: 'agent-1' },
     mcpAllowedDriveIds: ['drive-A'],
-    mcpTokenId: 'token-1',
+    credentialCeiling: { kind: 'mcp', tokenId: 'token-1' },
   } as ToolExecutionContext;
 
   // Scoped token acting directly as the user (global assistant via MCP).
   const tokenUserCtx = {
     userId: 'user-1',
     mcpAllowedDriveIds: ['drive-A'],
-    mcpTokenId: 'token-1',
+    credentialCeiling: { kind: 'mcp', tokenId: 'token-1' },
   } as ToolExecutionContext;
 
   it('canActorEditPage: explicit MEMBER token (view-only page) is denied even when the agent ACL allows edit', async () => {
@@ -247,7 +259,7 @@ describe('app-member RBAC ceiling (mcpTokenId set)', () => {
     expect(await canActorViewPage(tokenUserCtx, 'page-x')).toBe(false);
   });
 
-  it('contexts without mcpTokenId keep the scope-only behavior (no app-permission lookups)', async () => {
+  it('contexts without a credential ceiling keep the scope-only behavior (no app-permission lookups)', async () => {
     const legacyScopedCtx = {
       userId: 'user-1',
       chatSource: { type: 'page', agentPageId: 'agent-1' },
@@ -314,7 +326,7 @@ describe('app-member RBAC ceiling (mcpTokenId set)', () => {
     const ctx = {
       userId: 'user-1',
       mcpAllowedDriveIds: ['drive-A', 'drive-B'],
-      mcpTokenId: 'token-1',
+      credentialCeiling: { kind: 'mcp', tokenId: 'token-1' },
     } as ToolExecutionContext;
     // drive-A: explicit membership (kept); drive-B: dangling row (dropped).
     mockGetAppDriveMembership.mockImplementation(async (_t: string, driveId: string) =>
@@ -328,6 +340,76 @@ describe('app-member RBAC ceiling (mcpTokenId set)', () => {
     const unscoped = { userId: 'u' } as ToolExecutionContext;
     expect(await filterDriveIdsByAppTokenScope(unscoped, ['a', 'b'])).toEqual(['a', 'b']);
     expect(mockGetAppDriveAccessLevel).not.toHaveBeenCalled();
+  });
+});
+
+describe('app-member RBAC ceiling (OAuth grant ceiling set) — the same caps, resolved through the grant\'s rows', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const VIEW_ONLY = { canView: true, canEdit: false, canShare: false, canDelete: false };
+  const FULL = { canView: true, canEdit: true, canShare: true, canDelete: true };
+  const ROWS = [{ driveId: 'drive-A', role: 'MEMBER' as const, customRoleId: null }];
+
+  const grantAgentCtx = {
+    userId: 'user-1',
+    chatSource: { type: 'page', agentPageId: 'agent-1' },
+    mcpAllowedDriveIds: ['drive-A'],
+    credentialCeiling: { kind: 'oauth', driveScopes: ROWS },
+  } as ToolExecutionContext;
+  const grantUserCtx = {
+    userId: 'user-1',
+    mcpAllowedDriveIds: ['drive-A'],
+    credentialCeiling: { kind: 'oauth', driveScopes: ROWS },
+  } as ToolExecutionContext;
+
+  it('canActorEditPage: an explicit MEMBER grant is denied edit even when the agent ACL allows it, resolved by getScopedAccessLevel for the grant\'s user', async () => {
+    mockDbWhere.mockResolvedValue([{ ...AGENT_PAGE_ROW, driveId: 'drive-A' }]);
+    mockGetScopedDriveMembership.mockResolvedValue({ role: 'MEMBER', customRoleId: null });
+    mockGetScopedAccessLevel.mockResolvedValue(VIEW_ONLY);
+    mockGetAgentAccessLevel.mockResolvedValue(FULL);
+
+    expect(await canActorEditPage(grantAgentCtx, 'page-x')).toBe(false);
+    expect(mockGetScopedAccessLevel).toHaveBeenCalledWith(ROWS, 'user-1', 'page-x');
+    expect(mockGetAppAccessLevel).not.toHaveBeenCalled();
+    expect(mockGetAgentAccessLevel).not.toHaveBeenCalled();
+  });
+
+  it('canActorManageDrive: a MEMBER grant is denied manage even when its user owns the drive', async () => {
+    mockGetScopedDriveMembership.mockResolvedValue({ role: 'MEMBER', customRoleId: null });
+    mockCheckDriveAccess.mockResolvedValue({ isOwner: true, isAdmin: true, isMember: true });
+
+    expect(await canActorManageDrive(grantUserCtx, 'drive-A')).toBe(false);
+    expect(mockCheckDriveAccess).not.toHaveBeenCalled();
+  });
+
+  it('canActorAccessDrive: a grant whose row no longer grants is denied though the user has access', async () => {
+    mockHasScopedDriveMembership.mockResolvedValue(false);
+    mockGetUserDriveAccess.mockResolvedValue(true);
+
+    expect(await canActorAccessDrive(grantUserCtx, 'drive-A')).toBe(false);
+    expect(mockHasScopedDriveMembership).toHaveBeenCalledWith(ROWS, 'user-1', 'drive-A');
+  });
+
+  it('getActorAccessiblePagesInDrive: intersects with the grant\'s accessible set', async () => {
+    mockGetScopedDriveMembership.mockResolvedValue({ role: 'MEMBER', customRoleId: null });
+    const { getUserAccessiblePagesInDriveWithDetails } = await import('@pagespace/lib/permissions/permissions');
+    vi.mocked(getUserAccessiblePagesInDriveWithDetails).mockResolvedValue([
+      { id: 'p1', title: 'A', type: 'DOCUMENT', parentId: null, position: 0, isTrashed: false, permissions: { ...FULL } },
+      { id: 'p2', title: 'B', type: 'DOCUMENT', parentId: null, position: 1, isTrashed: false, permissions: { ...FULL } },
+    ]);
+    mockGetScopedAccessiblePagesInDrive.mockResolvedValue([
+      { id: 'p1', title: 'A', type: 'DOCUMENT', parentId: null, position: 0, isTrashed: false, permissions: { ...VIEW_ONLY } },
+    ]);
+
+    const result = await getActorAccessiblePagesInDrive(grantUserCtx, 'drive-A');
+    expect(result.map((p) => [p.id, p.permissions])).toEqual([['p1', VIEW_ONLY]]);
+  });
+
+  it('driveDeniedByAppToken: manage is denied for a MEMBER grant, allowed for an ADMIN grant', async () => {
+    mockGetScopedDriveMembership.mockResolvedValue({ role: 'MEMBER', customRoleId: null });
+    expect(await driveDeniedByAppToken(grantUserCtx, 'drive-A', 'manage')).toBe(true);
+    mockGetScopedDriveMembership.mockResolvedValue({ role: 'ADMIN', customRoleId: null });
+    expect(await driveDeniedByAppToken(grantUserCtx, 'drive-A', 'manage')).toBe(false);
   });
 });
 

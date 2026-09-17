@@ -40,17 +40,13 @@ import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import {
-  getAppAccessLevel,
-  getAppDriveAccessLevel,
-  getAppDriveMembership,
-  getAppAccessiblePagesInDrive,
-  hasAppDriveMembership,
-  getScopedAccessLevel,
-  getScopedDriveAccessLevel,
-  getScopedDriveMembership,
-  getScopedAccessiblePagesInDrive,
-  hasScopedDriveMembership,
-} from '@pagespace/lib/permissions/app-permissions';
+  getCeilingAccessLevel,
+  getCeilingDriveAccessLevel,
+  getCeilingDriveMembership,
+  getCeilingAccessiblePagesInDrive,
+  hasCeilingDriveMembership,
+  getCredentialCeiling,
+} from './credential-ceiling';
 import { getAllowedDriveIds, isMCPAuthResult, isOAuthAuthResult, isManageKeysOnly, type AuthResult, type MCPAuthResult, type OAuthAuthResult } from './index';
 
 /**
@@ -137,24 +133,17 @@ export async function getPrincipalAccessLevel(
 ): Promise<PermissionLevel | null> {
   auth = resolveDispatchedPrincipal(auth);
   if (isManageKeysOnly(auth)) return null;
-  if (isScopedMCPAuth(auth)) {
-    return getAppAccessLevel(auth.tokenId, pageId);
-  }
-  if (isScopedOAuthAuth(auth)) {
-    return getScopedAccessLevel(auth.driveScopes, auth.userId, pageId);
-  }
+  const ceiling = getCredentialCeiling(auth);
+  if (ceiling) return getCeilingAccessLevel(ceiling, auth.userId, pageId);
   return getUserAccessLevel(auth.userId, pageId);
 }
 
 export async function canPrincipalViewPage(auth: AuthResult, pageId: string): Promise<boolean> {
   auth = resolveDispatchedPrincipal(auth);
   if (isManageKeysOnly(auth)) return false;
-  if (isScopedMCPAuth(auth)) {
-    const level = await getAppAccessLevel(auth.tokenId, pageId);
-    return level?.canView ?? false;
-  }
-  if (isScopedOAuthAuth(auth)) {
-    const level = await getScopedAccessLevel(auth.driveScopes, auth.userId, pageId);
+  const ceiling = getCredentialCeiling(auth);
+  if (ceiling) {
+    const level = await getCeilingAccessLevel(ceiling, auth.userId, pageId);
     return level?.canView ?? false;
   }
   return canUserViewPage(auth.userId, pageId);
@@ -163,12 +152,9 @@ export async function canPrincipalViewPage(auth: AuthResult, pageId: string): Pr
 export async function canPrincipalEditPage(auth: AuthResult, pageId: string): Promise<boolean> {
   auth = resolveDispatchedPrincipal(auth);
   if (isManageKeysOnly(auth)) return false;
-  if (isScopedMCPAuth(auth)) {
-    const level = await getAppAccessLevel(auth.tokenId, pageId);
-    return level?.canEdit ?? false;
-  }
-  if (isScopedOAuthAuth(auth)) {
-    const level = await getScopedAccessLevel(auth.driveScopes, auth.userId, pageId);
+  const ceiling = getCredentialCeiling(auth);
+  if (ceiling) {
+    const level = await getCeilingAccessLevel(ceiling, auth.userId, pageId);
     return level?.canEdit ?? false;
   }
   return canUserEditPage(auth.userId, pageId);
@@ -177,12 +163,9 @@ export async function canPrincipalEditPage(auth: AuthResult, pageId: string): Pr
 export async function canPrincipalDeletePage(auth: AuthResult, pageId: string): Promise<boolean> {
   auth = resolveDispatchedPrincipal(auth);
   if (isManageKeysOnly(auth)) return false;
-  if (isScopedMCPAuth(auth)) {
-    const level = await getAppAccessLevel(auth.tokenId, pageId);
-    return level?.canDelete ?? false;
-  }
-  if (isScopedOAuthAuth(auth)) {
-    const level = await getScopedAccessLevel(auth.driveScopes, auth.userId, pageId);
+  const ceiling = getCredentialCeiling(auth);
+  if (ceiling) {
+    const level = await getCeilingAccessLevel(ceiling, auth.userId, pageId);
     return level?.canDelete ?? false;
   }
   return canUserDeletePage(auth.userId, pageId);
@@ -191,12 +174,9 @@ export async function canPrincipalDeletePage(auth: AuthResult, pageId: string): 
 export async function canPrincipalSharePage(auth: AuthResult, pageId: string): Promise<boolean> {
   auth = resolveDispatchedPrincipal(auth);
   if (isManageKeysOnly(auth)) return false;
-  if (isScopedMCPAuth(auth)) {
-    const level = await getAppAccessLevel(auth.tokenId, pageId);
-    return level?.canShare ?? false;
-  }
-  if (isScopedOAuthAuth(auth)) {
-    const level = await getScopedAccessLevel(auth.driveScopes, auth.userId, pageId);
+  const ceiling = getCredentialCeiling(auth);
+  if (ceiling) {
+    const level = await getCeilingAccessLevel(ceiling, auth.userId, pageId);
     return level?.canShare ?? false;
   }
   return canUserSharePage(auth.userId, pageId);
@@ -205,42 +185,29 @@ export async function canPrincipalSharePage(auth: AuthResult, pageId: string): P
 export async function isPrincipalDriveMember(auth: AuthResult, driveId: string): Promise<boolean> {
   auth = resolveDispatchedPrincipal(auth);
   if (isManageKeysOnly(auth)) return false;
-  if (isScopedMCPAuth(auth)) {
-    return hasAppDriveMembership(auth.tokenId, driveId);
-  }
-  if (isScopedOAuthAuth(auth)) {
-    return hasScopedDriveMembership(auth.driveScopes, auth.userId, driveId);
-  }
+  const ceiling = getCredentialCeiling(auth);
+  if (ceiling) return hasCeilingDriveMembership(ceiling, auth.userId, driveId);
   return isUserDriveMember(auth.userId, driveId);
 }
 
 export async function getPrincipalDriveAccess(auth: AuthResult, driveId: string): Promise<boolean> {
   auth = resolveDispatchedPrincipal(auth);
   if (isManageKeysOnly(auth)) return false;
-  if (isScopedMCPAuth(auth)) {
-    return hasAppDriveMembership(auth.tokenId, driveId);
-  }
-  if (isScopedOAuthAuth(auth)) {
-    return hasScopedDriveMembership(auth.driveScopes, auth.userId, driveId);
-  }
+  const ceiling = getCredentialCeiling(auth);
+  if (ceiling) return hasCeilingDriveMembership(ceiling, auth.userId, driveId);
   return getUserDriveAccess(auth.userId, driveId);
 }
 
 export async function isPrincipalDriveOwnerOrAdmin(auth: AuthResult, driveId: string): Promise<boolean> {
   auth = resolveDispatchedPrincipal(auth);
   if (isManageKeysOnly(auth)) return false;
-  if (isScopedMCPAuth(auth)) {
-    const membership = await getAppDriveMembership(auth.tokenId, driveId);
+  const ceiling = getCredentialCeiling(auth);
+  if (ceiling) {
+    const membership = await getCeilingDriveMembership(ceiling, auth.userId, driveId);
     if (!membership) return false;
-    // Inherit: the key is its owner — the owner's own authority decides.
+    // Inherit: the credential is its user — the user's own authority decides.
     if (membership.role === null) return isDriveOwnerOrAdmin(auth.userId, driveId);
     return membership.role === 'OWNER' || membership.role === 'ADMIN';
-  }
-  if (isScopedOAuthAuth(auth)) {
-    const membership = await getScopedDriveMembership(auth.driveScopes, auth.userId, driveId);
-    if (!membership) return false;
-    if (membership.role === null) return isDriveOwnerOrAdmin(auth.userId, driveId);
-    return membership.role === 'ADMIN';
   }
   return isDriveOwnerOrAdmin(auth.userId, driveId);
 }
@@ -286,12 +253,8 @@ export async function getPrincipalDriveAccessLevel(
 ): Promise<PermissionLevel | null> {
   auth = resolveDispatchedPrincipal(auth);
   if (isManageKeysOnly(auth)) return null;
-  if (isScopedMCPAuth(auth)) {
-    return getAppDriveAccessLevel(auth.tokenId, driveId);
-  }
-  if (isScopedOAuthAuth(auth)) {
-    return getScopedDriveAccessLevel(auth.driveScopes, auth.userId, driveId);
-  }
+  const ceiling = getCredentialCeiling(auth);
+  if (ceiling) return getCeilingDriveAccessLevel(ceiling, auth.userId, driveId);
   return getUserAccessLevel(auth.userId, driveId);
 }
 
@@ -316,14 +279,8 @@ export async function getPrincipalDriveMembership(
 ): Promise<PrincipalDriveMembership | null> {
   auth = resolveDispatchedPrincipal(auth);
   if (isManageKeysOnly(auth)) return null;
-  if (isScopedMCPAuth(auth)) {
-    const membership = await getAppDriveMembership(auth.tokenId, driveId);
-    return membership && { role: membership.role, customRoleId: membership.customRoleId };
-  }
-  if (isScopedOAuthAuth(auth)) {
-    const membership = await getScopedDriveMembership(auth.driveScopes, auth.userId, driveId);
-    return membership && { role: membership.role, customRoleId: membership.customRoleId };
-  }
+  const ceiling = getCredentialCeiling(auth);
+  if (ceiling) return getCeilingDriveMembership(ceiling, auth.userId, driveId);
 
   // User principal: the system role lives on `drive_members.role` (or on the
   // drive's `ownerId`), which is what getUserDrivePermissions reads. Its result
@@ -354,7 +311,7 @@ export async function getPrincipalDriveIds(auth: AuthResult): Promise<string[]> 
     // (ADR 0002 D2; the same live-membership rule the scope resolvers apply).
     const live = await Promise.all(
       auth.driveScopes.map(async (scope) =>
-        (await hasScopedDriveMembership(auth.driveScopes, auth.userId, scope.driveId)) ? scope.driveId : null,
+        (await hasCeilingDriveMembership({ kind: 'oauth', driveScopes: auth.driveScopes }, auth.userId, scope.driveId)) ? scope.driveId : null,
       ),
     );
     return live.filter((driveId): driveId is string => driveId !== null);
@@ -369,12 +326,8 @@ export async function getPrincipalAccessiblePagesInDrive(
 ): Promise<PageWithPermissions[]> {
   auth = resolveDispatchedPrincipal(auth);
   if (isManageKeysOnly(auth)) return [];
-  if (isScopedMCPAuth(auth)) {
-    return getAppAccessiblePagesInDrive(auth.tokenId, driveId);
-  }
-  if (isScopedOAuthAuth(auth)) {
-    return getScopedAccessiblePagesInDrive(auth.driveScopes, auth.userId, driveId);
-  }
+  const ceiling = getCredentialCeiling(auth);
+  if (ceiling) return getCeilingAccessiblePagesInDrive(ceiling, auth.userId, driveId);
   return getUserAccessiblePagesInDriveWithDetails(auth.userId, driveId);
 }
 
@@ -398,7 +351,8 @@ export async function getPrincipalBatchPagePermissions(
     return results;
   }
 
-  if (!isScopedMCPAuth(auth) && !isScopedOAuthAuth(auth)) {
+  const ceiling = getCredentialCeiling(auth);
+  if (!ceiling) {
     return getBatchPagePermissions(auth.userId, pageIds);
   }
 
@@ -412,10 +366,8 @@ export async function getPrincipalBatchPagePermissions(
   // drive once, then pick out the requested ids. Pages outside the token's
   // drives stay denied.
   const requested = new Set(pageIds);
-  for (const driveId of auth.allowedDriveIds) {
-    const accessible = isScopedMCPAuth(auth)
-      ? await getAppAccessiblePagesInDrive(auth.tokenId, driveId)
-      : await getScopedAccessiblePagesInDrive((auth as OAuthAuthResult).driveScopes, auth.userId, driveId);
+  for (const driveId of getAllowedDriveIds(auth)) {
+    const accessible = await getCeilingAccessiblePagesInDrive(ceiling, auth.userId, driveId);
     for (const page of accessible) {
       if (requested.has(page.id)) {
         results.set(page.id, { ...page.permissions });
