@@ -6,6 +6,9 @@ vi.mock('../apple-token-api', () => ({
 vi.mock('../apple-token-store', () => ({
   appleTokenStore: { upsert: vi.fn() },
 }));
+vi.mock('../revoke-apple-tokens', () => ({
+  revokeAndDiscardAppleTokens: vi.fn(),
+}));
 vi.mock('../../../repositories/data-subject-request-repository', () => ({
   dataSubjectRequestRepository: { findActiveErasureForUser: vi.fn() },
 }));
@@ -16,6 +19,7 @@ vi.mock('../../../logging/logger-config', () => ({
 import { captureAppleRefreshToken } from '../capture-apple-refresh-token';
 import { exchangeAppleAuthorizationCode } from '../apple-token-api';
 import { appleTokenStore } from '../apple-token-store';
+import { revokeAndDiscardAppleTokens } from '../revoke-apple-tokens';
 import { loggers } from '../../../logging/logger-config';
 import { dataSubjectRequestRepository } from '../../../repositories/data-subject-request-repository';
 import { decryptField, looksEncrypted } from '../../../encryption/field-crypto';
@@ -70,6 +74,33 @@ describe('captureAppleRefreshToken', () => {
 
     expect(await captureAppleRefreshToken(baseArgs, config)).toBe('skipped');
     expect(appleTokenStore.upsert).not.toHaveBeenCalled();
+  });
+
+  it('given account deletion is lodged between the erasure check and the upsert, should revoke and discard the token it just stored', async () => {
+    const order: string[] = [];
+    vi.mocked(exchangeAppleAuthorizationCode).mockResolvedValue({ ok: true, refreshToken: 'rt', idToken: idTokenFor('apple-sub-1') });
+    vi.mocked(dataSubjectRequestRepository.findActiveErasureForUser)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: 'dsr-1' } as never);
+    vi.mocked(appleTokenStore.upsert).mockImplementation(async () => {
+      order.push('upsert');
+    });
+    vi.mocked(revokeAndDiscardAppleTokens).mockImplementation(async () => {
+      order.push('revoke');
+      return { hadTokens: true, revoked: 1, failed: 0, unconfigured: false };
+    });
+
+    expect(await captureAppleRefreshToken(baseArgs, config)).toBe('skipped');
+    expect(revokeAndDiscardAppleTokens).toHaveBeenCalledWith('user-1', config);
+    expect(order).toEqual(['upsert', 'revoke']);
+  });
+
+  it('given no erasure before or after the upsert, should keep the token without revoking', async () => {
+    vi.mocked(exchangeAppleAuthorizationCode).mockResolvedValue({ ok: true, refreshToken: 'rt', idToken: idTokenFor('apple-sub-1') });
+
+    expect(await captureAppleRefreshToken(baseArgs, config)).toBe('stored');
+    expect(dataSubjectRequestRepository.findActiveErasureForUser).toHaveBeenCalledTimes(2);
+    expect(revokeAndDiscardAppleTokens).not.toHaveBeenCalled();
   });
 
   it('given the exchanged token belongs to a different Apple user, should refuse to store it', async () => {

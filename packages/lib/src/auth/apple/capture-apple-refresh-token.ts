@@ -12,6 +12,7 @@ import { encryptField } from '../../encryption/field-crypto';
 import { getAppleSigningConfig, type AppleSigningConfig } from './apple-client-secret';
 import { exchangeAppleAuthorizationCode } from './apple-token-api';
 import { appleTokenStore } from './apple-token-store';
+import { revokeAndDiscardAppleTokens } from './revoke-apple-tokens';
 import { dataSubjectRequestRepository } from '../../repositories/data-subject-request-repository';
 
 export type AppleTokenCaptureOutcome = 'stored' | 'skipped' | 'failed';
@@ -75,6 +76,15 @@ export async function captureAppleRefreshToken(
       clientId: args.clientId,
       encryptedRefreshToken: await encryptField(exchange.refreshToken),
     });
+
+    // Close the check-then-write race: a deletion lodged between the check above
+    // and this upsert listed no tokens to revoke, so revoke what we just stored.
+    if (await dataSubjectRequestRepository.findActiveErasureForUser(args.userId)) {
+      loggers.auth.info('Account erasure began during Apple token capture; revoking the new token', { userId: args.userId });
+      await revokeAndDiscardAppleTokens(args.userId, config);
+      return 'skipped';
+    }
+
     loggers.auth.info('Apple refresh token stored', { userId: args.userId, clientId: args.clientId });
     return 'stored';
   } catch (error) {
