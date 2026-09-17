@@ -8,6 +8,7 @@ import { ORGS_ENABLED } from '../organizations/orgs-enabled';
 import type { DriveMemberRole, DriveRoleGrant, OrgDriveMembership } from './org-access';
 import {
   resolveEffectiveDriveMembership,
+  validOrgDriveRow,
   type EffectiveDriveMembership,
 } from './org-drive-resolution';
 
@@ -61,7 +62,10 @@ export async function loadEffectiveDriveMembership(
 
   const orgVisibility = drive.orgVisibility ?? 'OPEN';
   const orgRole = await findOrgRole(orgId, userId);
-  const needsDefaultRole = orgRole === 'MEMBER' && orgVisibility === 'OPEN' && row === null;
+  // A stale row (a misplaced org row, a former lead's OWNER row) counts as no row here too, or the
+  // member would resolve the implicit OPEN membership without the drive's default role.
+  const hasValidRow = validOrgDriveRow(row, { orgId, orgVisibility }, orgRole) !== null;
+  const needsDefaultRole = orgRole === 'MEMBER' && orgVisibility === 'OPEN' && !hasValidRow;
   const driveDefaultRole = needsDefaultRole
     ? { role: 'MEMBER' as const, customRoleId: await findDefaultCustomRoleId(drive.id) }
     : NO_DEFAULT_ROLE;

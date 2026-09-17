@@ -73,6 +73,7 @@ async function northwind() {
   const chris = await createUser('Chris Rowe');
   const dana = await createUser('Dana Whit');
   const fred = await createUser('Fred Olsen');
+  const kai = await createUser('Kai Moreno');
 
   const org = await createOrg('Northwind Labs', jono.id);
   await db.insert(orgMembers).values([
@@ -83,6 +84,7 @@ async function northwind() {
     { orgId: org.id, userId: marcus.id, role: 'MEMBER' },
     { orgId: org.id, userId: nina.id, role: 'MEMBER' },
     { orgId: org.id, userId: eve.id, role: 'MEMBER' },
+    { orgId: org.id, userId: kai.id, role: 'MEMBER' },
   ]);
 
   const product = await factories.createDrive(lena.id, { name: 'Product', slug: `product-${createId()}`, orgId: org.id, orgVisibility: 'OPEN' });
@@ -124,6 +126,11 @@ async function northwind() {
   // Fred led Research, then left Northwind: the lead moved to Lena, but his owner self-heal row
   // (role OWNER, source invite) was never an invitation and must open nothing.
   await factories.createDriveMember(research.id, fred.id, { source: 'invite', role: 'OWNER' });
+  // Kai (org MEMBER) once led Product and still holds that OWNER row: it is stale, so Kai must
+  // resolve Product exactly like any row-less member, through Product's default role.
+  await factories.createDriveMember(product.id, kai.id, { source: 'invite', role: 'OWNER' });
+  // Jono (org Owner) holds a leftover OWNER row on Finance: org power, not the row, must open it.
+  await factories.createDriveMember(finance.id, jono.id, { source: 'invite', role: 'OWNER' });
 
   // Dana is not in Northwind. She left it (a stale org row on Product the sync has not removed),
   // belongs to Acme, and is invited to Marcus's personal drive.
@@ -139,7 +146,7 @@ async function northwind() {
   await factories.createDriveMember(personal.id, nina.id, { source: 'invite', role: 'ADMIN' });
 
   return {
-    people: { jono, priya, omar, lena, marcus, nina, eve, chris, dana, fred },
+    people: { jono, priya, omar, lena, marcus, nina, eve, chris, dana, fred, kai },
     org, acme,
     drives: { product, research, finance, acmeWiki, personal },
     pages: { productPage, productPrivatePage, researchPage, financePage, financePrivatePage, personalPage, personalPrivatePage },
@@ -234,11 +241,11 @@ describe('org access in the human drive resolvers (integration)', () => {
     flags.orgsEnabled = false;
 
     const compared = await expectResolversMatchLegacy(everyone(f), Object.values(f.drives).map((d) => d.id), Object.values(f.pages).map((p) => p.id));
-    expect(compared).toBe(10 * (5 + 7) + 10 * 5 * 2 + 10 * LIST_OPTIONS.length);
+    expect(compared).toBe(11 * (5 + 7) + 11 * 5 * 2 + 11 * LIST_OPTIONS.length);
 
     // Not vacuous: the fixture holds rows that org rules treat differently once enabled.
     expect(await getUserAccessLevel(f.people.marcus.id, f.drives.finance.id)).not.toBeNull();
-    expect(await getUserAccessLevel(f.people.jono.id, f.drives.finance.id)).toBeNull();
+    expect(await getUserAccessLevel(f.people.eve.id, f.drives.finance.id)).toBeNull();
     expect(await listedIds(f.people.nina.id)).toEqual([f.drives.personal.id]);
     expect(await listedIds(f.people.fred.id)).toEqual([f.drives.research.id]);
 
@@ -315,6 +322,10 @@ describe('org access in the human drive resolvers (integration)', () => {
     expect(product).toMatchObject({ isOwned: false, role: 'MEMBER', orgId: f.org.id, orgVisibility: 'OPEN' });
     expect(listed.find((d) => d.id === f.drives.personal.id)).toMatchObject({ role: 'ADMIN', orgId: null });
     expect(await listedIds(nina.id, { tokenScopable: true })).toEqual([f.drives.product.id, f.drives.personal.id].sort());
+
+    // A leftover OWNER row is stale: Kai resolves through the default role exactly like Nina.
+    expect(await getUserAccessLevel(f.people.kai.id, f.pages.productPage.id)).toEqual({ canView: true, canEdit: true, canShare: false, canDelete: false });
+    expect(await getDriveAccess(f.drives.product.id, f.people.kai.id)).toEqual({ isOwner: false, isAdmin: false, isMember: true, role: 'MEMBER' });
   });
 
   it('DRV-6 (partial) an org member sees no RESTRICTED or PRIVATE drive without a joined row, and a stale source org row opens and lists nothing', async () => {

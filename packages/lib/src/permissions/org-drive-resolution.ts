@@ -48,8 +48,11 @@ export interface EffectiveDriveMembership extends OrgDriveAccess {
  * - An OWNER row is stale on any org drive. The resolvers ask only about users who do not own the
  *   drive (drives.ownerId), so an OWNER row here is a former lead's leftover (the owner self-heal
  *   row outlives a lead reassignment), never an invitation.
+ *
+ * Exported so the IO edge decides "does this user have a row" (and so whether to fetch the drive's
+ * default role) with the same rule the decision applies.
  */
-function validRow(
+export function validOrgDriveRow(
   row: OrgDriveMembership | null,
   drive: OrgDriveFacts,
   orgRole: OrgRole | null,
@@ -72,14 +75,14 @@ export function resolveEffectiveDriveMembership({
 
   if (orgRole === null) {
     // A guest (DRV-8) resolves through their own invited row; the org path never widens them.
-    const guestRow = validRow(row, drive, orgRole);
+    const guestRow = validOrgDriveRow(row, drive, orgRole);
     return guestRow ? { ...guestRow, auditOrgAdminPrivateAccess: false } : null;
   }
 
   const access = resolveOrgDriveAccess({
     orgRole,
     driveVisibility: drive.orgVisibility,
-    driveMembership: validRow(row, drive, orgRole),
+    driveMembership: validOrgDriveRow(row, drive, orgRole),
     driveDefaultRole,
   });
   if (access === null) return null;
@@ -121,7 +124,7 @@ export function decideListedDriveRole({
     return viaPagePermission ? 'MEMBER' : null;
   }
 
-  const joined = validRow(row, drive, orgRole);
+  const joined = validOrgDriveRow(row, drive, orgRole);
   const implicit = orgRole !== null && drive.orgVisibility === 'OPEN';
   if (!joined && !implicit) return null;
 
