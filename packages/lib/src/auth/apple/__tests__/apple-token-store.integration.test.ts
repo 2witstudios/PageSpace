@@ -56,6 +56,21 @@ describe('appleTokenStore (integration)', () => {
     expect(await appleTokenStore.hasForUser(bystander.id)).toBe(true);
   });
 
+  it('given tokens captured at different times, should report the newest capture so stale Apple notifications can be ignored', async () => {
+    const user = await createUser();
+    expect(await appleTokenStore.latestCaptureAt(user.id)).toBeNull();
+
+    await appleTokenStore.upsert({ userId: user.id, clientId: 'ai.pagespace.ios', encryptedRefreshToken: 'n' });
+    const first = await appleTokenStore.latestCaptureAt(user.id);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await appleTokenStore.upsert({ userId: user.id, clientId: 'ai.pagespace.web', encryptedRefreshToken: 'w' });
+    const latest = await appleTokenStore.latestCaptureAt(user.id);
+
+    expect(first).toBeInstanceOf(Date);
+    expect(latest!.getTime()).toBeGreaterThan(first!.getTime());
+    expect(Math.abs(latest!.getTime() - Date.now())).toBeLessThan(60_000);
+  });
+
   it('given the user row is deleted, should cascade the stored tokens away', async () => {
     const user = await createUser();
     await appleTokenStore.upsert({ userId: user.id, clientId: 'ai.pagespace.ios', encryptedRefreshToken: 'c' });

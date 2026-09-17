@@ -2143,6 +2143,16 @@
       "import": "./dist/auth/apple/apple-client-secret.js",
       "require": "./dist/auth/apple/apple-client-secret.js"
     },
+    "./auth/apple/apple-jwks": {
+      "types": "./dist/auth/apple/apple-jwks.d.ts",
+      "import": "./dist/auth/apple/apple-jwks.js",
+      "require": "./dist/auth/apple/apple-jwks.js"
+    },
+    "./auth/apple/apple-jwt": {
+      "types": "./dist/auth/apple/apple-jwt.d.ts",
+      "import": "./dist/auth/apple/apple-jwt.js",
+      "require": "./dist/auth/apple/apple-jwt.js"
+    },
     "./auth/apple/apple-token-api": {
       "types": "./dist/auth/apple/apple-token-api.d.ts",
       "import": "./dist/auth/apple/apple-token-api.js",
@@ -3358,7 +3368,6 @@
     "@paralleldrive/cuid2": "^2.2.2",
     "@react-email/components": "^0.5.5",
     "@simplewebauthn/server": "^13.2.2",
-    "apple-signin-auth": "^2.0.0",
     "diff-match-patch": "^1.0.5",
     "drizzle-orm": "^0.45.2",
     "google-auth-library": "^10.3.0",

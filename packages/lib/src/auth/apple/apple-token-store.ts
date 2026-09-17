@@ -5,7 +5,7 @@
  * holds a plaintext token.
  */
 import { db } from '@pagespace/db/db';
-import { eq } from '@pagespace/db/operators';
+import { desc, eq } from '@pagespace/db/operators';
 import { appleSignInTokens } from '@pagespace/db/schema/auth';
 
 export interface StoredAppleToken {
@@ -47,6 +47,17 @@ export const appleTokenStore = {
       columns: { id: true },
     });
     return row !== undefined;
+  },
+
+  /** When the user's most recently captured Apple token was stored, or null. */
+  async latestCaptureAt(userId: string): Promise<Date | null> {
+    const [row] = await db
+      .select({ updatedAt: appleSignInTokens.updatedAt })
+      .from(appleSignInTokens)
+      .where(eq(appleSignInTokens.userId, userId))
+      .orderBy(desc(appleSignInTokens.updatedAt))
+      .limit(1);
+    return row?.updatedAt ?? null;
   },
 
   /** Delete every stored token for the user; returns how many rows went. */

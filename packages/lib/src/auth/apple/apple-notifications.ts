@@ -13,7 +13,8 @@
  * account itself is kept (founder decision): the user may still reach it
  * another way, and deleting it is their call.
  */
-import appleSignIn from 'apple-signin-auth';
+import { verifyAppleJwt } from './apple-jwt';
+import type { AppleKeyProvider } from './apple-jwks';
 import { db } from '@pagespace/db/db';
 import { eq, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
@@ -25,7 +26,12 @@ import { appleTokenStore } from './apple-token-store';
 export interface AppleNotificationEvent {
   type: string;
   sub: string;
+  /** When the change happened, in ms. Absent when Apple omits `event_time`. */
+  eventTimeMs?: number;
 }
+
+/** Apple's docs show `event_time` in seconds; real payloads carry milliseconds. */
+const toMilliseconds = (value: number): number => (value < 1e12 ? value * 1000 : value);
 
 export type AppleNotificationVerification =
   | { ok: true; event: AppleNotificationEvent }
@@ -34,7 +40,7 @@ export type AppleNotificationVerification =
 /** Deliberately loose: `process.env` is passed straight in. */
 type AppleClientEnv = Readonly<Record<string, string | undefined>>;
 
-/** Apple's docs say `account-deleted`; apple-signin-auth's types say `account-delete`. Honour both. */
+/** Apple's docs say `account-deleted`; some payloads (and older docs) say `account-delete`. Honour both. */
 const SESSION_ENDING_EVENTS = new Set(['consent-revoked', 'account-delete', 'account-deleted']);
 
 function parseEvents(events: unknown): AppleNotificationEvent | null {
@@ -47,37 +53,30 @@ function parseEvents(events: unknown): AppleNotificationEvent | null {
     }
   }
   if (typeof value !== 'object' || value === null) return null;
-  const { type, sub } = value as { type?: unknown; sub?: unknown };
+  const { type, sub, event_time: eventTime } = value as { type?: unknown; sub?: unknown; event_time?: unknown };
   if (typeof type !== 'string' || typeof sub !== 'string' || sub.length === 0) return null;
-  return { type, sub };
+  return typeof eventTime === 'number' && Number.isFinite(eventTime)
+    ? { type, sub, eventTimeMs: toMilliseconds(eventTime) }
+    : { type, sub };
 }
 
 /** Verify signature (Apple JWKS), issuer, audience and expiry, then extract the event. */
 export async function verifyAppleServerNotification(
   payload: string,
   env: AppleClientEnv = process.env,
+  keys?: AppleKeyProvider,
 ): Promise<AppleNotificationVerification> {
   const audience = [env.APPLE_CLIENT_ID, env.APPLE_SERVICE_ID].filter((id): id is string => Boolean(id));
   if (audience.length === 0) return { ok: false, reason: 'apple_not_configured' };
 
-  let claims: { events?: unknown; exp?: unknown };
-  try {
-    // verifyIdToken is the library's plain RS256 + Apple-issuer JWT check; unlike
-    // verifyWebhookToken it does not assume `events` is a JSON string.
-    claims = (await appleSignIn.verifyIdToken(payload, {
-      audience,
-      algorithms: ['RS256'],
-      ignoreExpiration: false,
-    })) as unknown as { events?: unknown; exp?: unknown };
-  } catch (error) {
-    return { ok: false, reason: error instanceof Error ? error.name : 'verification_failed' };
-  }
+  // RS256 against the shared PageSpace-owned JWKS cache, Apple issuer, our
+  // audience, and a required `exp` (a notification without one would never
+  // expire). This endpoint is unauthenticated, so key lookups for unknown kids
+  // are throttled by the cache rather than fetched per request.
+  const verification = await verifyAppleJwt(payload, { audience, keys });
+  if (!verification.ok) return verification;
 
-  // jsonwebtoken only enforces `exp` when the claim is present; without it a
-  // captured notification would stay valid forever.
-  if (typeof claims.exp !== 'number') return { ok: false, reason: 'missing_exp' };
-
-  const event = parseEvents(claims.events);
+  const event = parseEvents(verification.claims.events);
   return event ? { ok: true, event } : { ok: false, reason: 'invalid_events' };
 }
 
@@ -85,10 +84,13 @@ export interface AppleNotificationDeps {
   findUserIdByAppleId: (appleId: string) => Promise<string | null>;
   discardAppleTokens: (userId: string) => Promise<unknown>;
   endAllSessions: (userId: string) => Promise<unknown>;
+  /** When the user's newest Apple refresh token was captured, if any. */
+  latestAppleTokenCaptureAt: (userId: string) => Promise<Date | null>;
 }
 
 export type AppleNotificationAction =
   | { action: 'sessions_ended'; userId: string }
+  | { action: 'stale_event'; userId: string }
   | { action: 'unknown_user' }
   | { action: 'ignored' };
 
@@ -98,6 +100,7 @@ const defaultDeps: AppleNotificationDeps = {
     return row?.id ?? null;
   },
   discardAppleTokens: (userId) => appleTokenStore.deleteForUser(userId),
+  latestAppleTokenCaptureAt: (userId) => appleTokenStore.latestCaptureAt(userId),
   async endAllSessions(userId) {
     // Same three levers as a full sign-out: live sessions, device tokens (which
     // would otherwise mint new sessions), and tokenVersion for anything derived.
@@ -121,6 +124,17 @@ export async function handleAppleServerNotification(
 
   const userId = await deps.findUserIdByAppleId(event.sub);
   if (!userId) return { action: 'unknown_user' };
+
+  // Apple is known to resend old notifications. A revocation from before the
+  // user's latest Sign in with Apple (which re-granted consent) is stale and
+  // must not log them out again.
+  if (event.eventTimeMs !== undefined) {
+    const latestCapture = await deps.latestAppleTokenCaptureAt(userId);
+    if (latestCapture && event.eventTimeMs < latestCapture.getTime()) {
+      loggers.auth.info('Ignored stale Apple consent notification', { userId, eventType: event.type });
+      return { action: 'stale_event', userId };
+    }
+  }
 
   await deps.discardAppleTokens(userId);
   await deps.endAllSessions(userId);

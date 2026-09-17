@@ -6,7 +6,7 @@
  */
 
 import { OAuth2Client } from 'google-auth-library';
-import appleSignIn from 'apple-signin-auth';
+import { verifyAppleJwt } from './apple/apple-jwt';
 import { users } from '@pagespace/db/schema/auth';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
@@ -108,14 +108,16 @@ export async function verifyAppleIdToken(idToken: string): Promise<OAuthVerifica
       };
     }
 
-    // Verify the ID token with Apple's public keys
-    // The library fetches Apple's public keys and validates the JWT
-    const payload = await appleSignIn.verifyIdToken(idToken, {
-      audience: validClientIds, // Accept tokens from both iOS app and web
-      ignoreExpiration: false,
-    });
+    // Verify the ID token against Apple's published keys (PageSpace-owned JWKS
+    // cache: timeout, single-flight, throttled refresh, never emptied).
+    const verification = await verifyAppleJwt(idToken, { audience: validClientIds });
+    if (!verification.ok) {
+      loggers.auth.warn('Apple ID token verification failed', { reason: verification.reason });
+      return { success: false, error: verification.reason };
+    }
+    const payload = verification.claims;
 
-    if (!payload || !payload.email) {
+    if (typeof payload.sub !== 'string' || typeof payload.email !== 'string' || !payload.email) {
       return {
         success: false,
         error: 'Invalid ID token: missing required claims',
