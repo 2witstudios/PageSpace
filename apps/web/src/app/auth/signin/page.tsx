@@ -3,6 +3,7 @@
 import { useSearchParams } from "next/navigation";
 import { useState, useEffect, Suspense } from "react";
 import Link from "next/link";
+import { MarketingLink } from '@/components/ui/MarketingLink';
 import { toast } from "sonner";
 import { motion } from "motion/react";
 import { Mail } from "lucide-react";
@@ -323,13 +324,13 @@ function SignInForm() {
         transition={{ delay: 0.6, duration: 0.3 }}
       >
         By signing in, you agree to our{" "}
-        <Link href="/terms" className="underline hover:text-muted-foreground">
+        <MarketingLink href="/terms" className="underline hover:text-muted-foreground">
           Terms
-        </Link>{" "}
+        </MarketingLink>{" "}
         and{" "}
-        <Link href="/privacy" className="underline hover:text-muted-foreground">
+        <MarketingLink href="/privacy" className="underline hover:text-muted-foreground">
           Privacy Policy
-        </Link>
+        </MarketingLink>
       </motion.p>
     </AuthShell>
   );

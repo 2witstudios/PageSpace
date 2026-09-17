@@ -12,6 +12,8 @@ export interface SettingsItem {
   mobileHidden?: boolean;
   /** Hidden inside the native (Capacitor) apps. */
   nativeHidden?: boolean;
+  /** A page served by the marketing site (opened outside the native web view). */
+  marketing?: boolean;
 }
 
 export function SettingsRow({ item, index }: { item: SettingsItem; index: number }) {
