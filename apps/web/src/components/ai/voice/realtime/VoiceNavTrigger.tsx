@@ -14,6 +14,7 @@ import { resolveLocationContext } from '@/lib/ai/shared/resolveLocationContext';
 import { toVoiceLocationContext } from '@/lib/ai/realtime/voice-location';
 import { describeCall, isCallLive } from '@/lib/ai/realtime/call-chrome';
 import type { VoiceSurface } from '@/lib/ai/realtime/voice-binding';
+import { useAiDisclosureGate } from '@/hooks/useAiDisclosureGate';
 
 export interface VoiceNavTriggerProps {
   /**
@@ -61,6 +62,7 @@ export function VoiceNavTrigger({ onReveal, className }: VoiceNavTriggerProps) {
   const binding = useVoiceBinding();
 
   const [isStarting, setIsStarting] = useState(false);
+  const { requestAiConsent, aiDisclosureDialog } = useAiDisclosureGate();
 
   const chrome = describeCall({ status, error, failure, attached, bound: target !== null });
   const live = isCallLive(chrome.state);
@@ -157,51 +159,54 @@ export function VoiceNavTrigger({ onReveal, className }: VoiceNavTriggerProps) {
   const disabled = !live && (binding.kind !== 'ready' || isStarting);
 
   return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon"
-      onClick={() => void handlePress()}
-      disabled={disabled}
-      aria-label={chrome.label}
-      aria-live="polite"
-      data-testid="voice-nav-trigger"
-      data-voice-state={chrome.state}
-      data-voice-surface={binding.surface}
-      className={cn('relative', className)}
-    >
-      {busy ? (
-        <Loader2 className="h-5 w-5 animate-spin" />
-      ) : chrome.state === 'error' ? (
-        <MicOff className="h-5 w-5 text-destructive" />
-      ) : (
-        <Mic
-          className={cn(
-            'h-5 w-5',
-            chrome.state === 'live' && 'text-primary',
-            // Amber, not red: a call with no transcript is degraded, not broken,
-            // and colouring it as a failure would tell the user to hang up a
-            // call that is working.
-            chrome.state === 'degraded' && 'text-amber-500',
-          )}
-        />
-      )}
+    <>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        onClick={() => requestAiConsent(() => void handlePress())}
+        disabled={disabled}
+        aria-label={chrome.label}
+        aria-live="polite"
+        data-testid="voice-nav-trigger"
+        data-voice-state={chrome.state}
+        data-voice-surface={binding.surface}
+        className={cn('relative', className)}
+      >
+        {busy ? (
+          <Loader2 className="h-5 w-5 animate-spin" />
+        ) : chrome.state === 'error' ? (
+          <MicOff className="h-5 w-5 text-destructive" />
+        ) : (
+          <Mic
+            className={cn(
+              'h-5 w-5',
+              chrome.state === 'live' && 'text-primary',
+              // Amber, not red: a call with no transcript is degraded, not broken,
+              // and colouring it as a failure would tell the user to hang up a
+              // call that is working.
+              chrome.state === 'degraded' && 'text-amber-500',
+            )}
+          />
+        )}
 
-      {/*
-        The live dot. Present for `live` AND `degraded` because both are calls
-        in progress — whether the transcript is being written is what the colour
-        says, not whether the microphone is open.
-      */}
-      {(chrome.state === 'live' || chrome.state === 'degraded') && (
-        <span
-          data-testid="voice-live-dot"
-          className={cn(
-            'absolute right-1 top-1 h-2 w-2 rounded-full',
-            chrome.state === 'degraded' ? 'bg-amber-500' : 'bg-primary',
-            userSpeaking && 'animate-pulse',
-          )}
-        />
-      )}
-    </Button>
+        {/*
+          The live dot. Present for `live` AND `degraded` because both are calls
+          in progress — whether the transcript is being written is what the colour
+          says, not whether the microphone is open.
+        */}
+        {(chrome.state === 'live' || chrome.state === 'degraded') && (
+          <span
+            data-testid="voice-live-dot"
+            className={cn(
+              'absolute right-1 top-1 h-2 w-2 rounded-full',
+              chrome.state === 'degraded' ? 'bg-amber-500' : 'bg-primary',
+              userSpeaking && 'animate-pulse',
+            )}
+          />
+        )}
+      </Button>
+      {aiDisclosureDialog}
+    </>
   );
 }

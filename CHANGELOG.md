@@ -7,6 +7,10 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **The iOS app asks before AI features share your content** — the first time you send an AI
+  message or start a voice call in the app, it explains that your message, attachments and the page
+  content you include go to the third-party AI provider for your model, and only sends once you
+  agree. It asks once per device.
 - **Report and block people** — a direct message conversation now has a menu to report the other
   person (the report goes to the PageSpace team with what happened) or block them, and Connections
   has a Block action plus a Blocked list to unblock. A block stops direct messages in both
