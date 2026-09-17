@@ -132,3 +132,25 @@ describe('buildDeniedOutcome (G1c R14)', () => {
     ]);
   });
 });
+
+describe('a defective registry entry never reaches the audit projection at runtime (CodeRabbit #2660)', () => {
+  it('given a matched entry whose slots share a restriction key, canonicalizeRequest should refuse malformed — no loader has to have run first', () => {
+    const shared = tokenEntry({ restrictionKeys: { repo: 'github.id', token: 'github.id' }, auditResourceSlots: ['repo'] });
+    const actual = canonicalizeRequest({
+      request: { channel: 'http-executor', method: 'GET', url: 'https://api.github.com/repos/octo/hello/tokens/ghp_canary_shared', headers: {}, body: new Uint8Array(0) },
+      providerSlug: TEST_PROVIDER,
+      registry: [shared],
+    });
+    expect(actual).toEqual({ ok: false, reason: 'malformed' });
+  });
+
+  it('given a matched entry with an audit slot it does not declare, canonicalizeRequest should refuse malformed', () => {
+    const undeclared = tokenEntry({ auditResourceSlots: ['secret'] });
+    const actual = canonicalizeRequest({
+      request: { channel: 'http-executor', method: 'GET', url: 'https://api.github.com/repos/octo/hello/tokens/x', headers: {}, body: new Uint8Array(0) },
+      providerSlug: TEST_PROVIDER,
+      registry: [undeclared],
+    });
+    expect(actual).toEqual({ ok: false, reason: 'malformed' });
+  });
+});
