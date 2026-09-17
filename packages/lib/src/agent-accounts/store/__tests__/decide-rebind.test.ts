@@ -250,6 +250,12 @@ describe('decideRebind — narrowing needs no consent (G1c R13)', () => {
     expect(actual).toEqual([refuse('version_conflict'), refuse('version_conflict')]);
   });
 
+  it('given a next scope whose policy limits are not numbers (a widening dressed as narrowing), should refuse version_conflict even with no consent (G1c review HIGH)', () => {
+    const bogus = record({ scope: { ...SCOPE, approvalPolicy: { scope: { origins: [API], operations: [], resources: [] }, trigger: 'every_use', duration: null, limits: { maxUsesPerHour: 'x' as unknown as number, maxBytesOut: 1, maxConcurrent: 1 }, approver: 'owner' as UserId } }, policyVersion: 4 });
+    const actual = [decide({ next: bogus, consent: null }), decide({ next: bogus, consent: consentFor(bogus) })];
+    expect(actual).toEqual([refuse('version_conflict'), refuse('version_conflict')]);
+  });
+
   it('given a stored scope that does not match the stored policyDigest (plane corruption), should fail closed with store_unavailable', () => {
     const corrupt: PlaneBindingsRecord = { ...STORED, scope: WIDER.scope };
     const actual = decide({ stored: corrupt, next: SAME_SCOPE_BUMP, consent: null });

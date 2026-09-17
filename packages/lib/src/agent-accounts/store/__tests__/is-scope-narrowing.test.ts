@@ -111,6 +111,16 @@ describe('isScopeNarrowing (G1c R13)', () => {
     expect(actual).toBe(false);
   });
 
+  it('given a next policy whose limits, deadline or trigger are not well formed, should NOT be narrowing — NaN comparisons never prove narrower (G1c review HIGH)', () => {
+    const variants = [
+      withPolicy({ limits: { ...POLICY.limits, maxUsesPerHour: 'x' as unknown as number } }),
+      withPolicy({ duration: { until: 'x' as unknown as number } }),
+      withPolicy({ trigger: 'never_ask' as unknown as AccountApprovalPolicy['trigger'] }),
+    ];
+    const actual = variants.map((next) => isScopeNarrowing({ stored: STORED, next }));
+    expect(actual).toEqual([false, false, false]);
+  });
+
   it('given a stored policy with an open-ended duration, should treat any bounded end as narrowing', () => {
     const openEnded = withPolicy({ duration: null });
     const actual = isScopeNarrowing({ stored: openEnded, next: withPolicy({ duration: { until: 5 } }) });

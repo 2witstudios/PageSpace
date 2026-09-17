@@ -234,3 +234,16 @@ describe('decideApproval — the delegation scope of an unattended run (ADR 0004
     expect(actual).toEqual({ kind: 'refuse', reason: 'out_of_scope' });
   });
 });
+
+describe('decideApproval — a policy row of the wrong shape (G1c review HIGH)', () => {
+  it('given an unknown trigger or non-numeric limits, should ask a human (concrete) rather than throw or allow by policy', () => {
+    const actual = [
+      decide(READ, policy({ trigger: 'never_ask' as unknown as AccountApprovalPolicy['trigger'] })),
+      decide(READ, policy({ limits: { maxUsesPerHour: 'x' as unknown as number, maxBytesOut: 1_000_000, maxConcurrent: 2 } })),
+    ];
+    expect(actual).toEqual([
+      { kind: 'concrete', stepUp: false },
+      { kind: 'concrete', stepUp: false },
+    ]);
+  });
+});

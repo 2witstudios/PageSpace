@@ -62,3 +62,12 @@ describe('decideWriteRecord (G1c R2, R4)', () => {
     expect(actual).toEqual([{ ok: true }, { ok: false, reason: 'version_conflict' }, { ok: false, reason: 'version_conflict' }]);
   });
 });
+
+describe('decideWriteRecord — scope values validated at put (G1c review HIGH)', () => {
+  it('given a first put whose scope carries a non-numeric limit, should refuse version_conflict and pin nothing', () => {
+    const scope = { ...SCOPE, approvalPolicy: { scope: { origins: [API], operations: [], resources: [] }, trigger: 'every_use', duration: null, limits: { maxUsesPerHour: 'x', maxBytesOut: 1, maxConcurrent: 1 }, approver: 'u1' } } as unknown as PlaneScope;
+    const written: PlaneBindingsRecord = { ...USER_RECORD, scope, bindings: { ...USER_RECORD.bindings, policyDigest: digestPlaneScope({ scope, hash: sha3 }) } };
+    const actual = decideWriteRecord({ stored: null, written, hash: sha3 });
+    expect(actual).toEqual({ ok: false, reason: 'version_conflict' });
+  });
+});
