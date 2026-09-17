@@ -90,6 +90,10 @@ export interface DriveWideEditEntry {
  * membership in. Page-collaborator-only drives are NOT memberships and must
  * not be passed — they fail closed at the call site.
  *
+ * A custom role only counts for the drive it belongs to — the same binding
+ * fetchCustomRolePermissions enforces — so a membership pointing at another
+ * drive's role fails closed.
+ *
  * Batched: one query regardless of how many custom roles are involved.
  */
 export async function resolveDriveWideCanEdit(
@@ -99,15 +103,18 @@ export async function resolveDriveWideCanEdit(
     ...new Set(entries.filter((entry) => entry.customRoleId).map((entry) => entry.customRoleId as string)),
   ];
 
-  const roleDriveWide = new Map<string, PagePerm | null>();
+  const roles = new Map<string, { driveId: string; driveWidePermissions: PagePerm | null }>();
   if (customRoleIds.length > 0) {
     const rows = await db
-      .select({ id: driveRoles.id, driveWidePermissions: driveRoles.driveWidePermissions })
+      .select({ id: driveRoles.id, driveId: driveRoles.driveId, driveWidePermissions: driveRoles.driveWidePermissions })
       .from(driveRoles)
       .where(inArray(driveRoles.id, customRoleIds))
       .limit(customRoleIds.length);
     for (const row of rows) {
-      roleDriveWide.set(row.id, (row.driveWidePermissions as PagePerm | null) ?? null);
+      roles.set(row.id, {
+        driveId: row.driveId,
+        driveWidePermissions: (row.driveWidePermissions as PagePerm | null) ?? null,
+      });
     }
   }
 
@@ -117,9 +124,14 @@ export async function resolveDriveWideCanEdit(
       result.set(entry.driveId, true);
       continue;
     }
-    // Fail closed: an unresolvable custom role or a role without explicit
-    // drive-wide edit grants nothing at the drive root.
-    result.set(entry.driveId, roleDriveWide.get(entry.customRoleId)?.canEdit === true);
+    // Fail closed: an unresolvable custom role, a role bound to another
+    // drive, or a role without explicit drive-wide edit grants nothing at the
+    // drive root.
+    const role = roles.get(entry.customRoleId);
+    result.set(
+      entry.driveId,
+      role?.driveId === entry.driveId && role.driveWidePermissions?.canEdit === true,
+    );
   }
   return result;
 }

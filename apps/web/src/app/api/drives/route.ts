@@ -4,6 +4,7 @@ import { listAccessibleDrives, createDrive, type DriveWithAccess } from '@pagesp
 import { isReservedDriveName } from '@pagespace/lib/services/drive-guards';
 import { getAppDriveMembership, getScopedDriveMembership, hasAppDriveMembership, hasScopedDriveMembership } from '@pagespace/lib/permissions/app-permissions';
 import { resolveDriveWideCanEdit } from '@pagespace/lib/permissions/membership-queries';
+import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db';
 import { and, eq, inArray } from '@pagespace/db/operators';
 import { drives as drivesTable } from '@pagespace/db/schema/core';
@@ -72,13 +73,24 @@ async function listScopedDrivesWithMembership({
     })),
   );
 
-  return valid.map(({ drive, membership, role }) => ({
-    ...drive,
-    isOwned: membership.role === null && drive.ownerId === userId,
-    role,
-    canCreatePages: canCreatePagesMap.get(drive.id) ?? false,
-    lastAccessedAt: null,
-  }));
+  return Promise.all(
+    valid.map(async ({ drive, membership, role }) => {
+      // An inherited scope (role: null) carries the owner's ACTUAL permissions,
+      // which the token resolvers read through getUserAccessLevel — the scope
+      // row's synthesized MEMBER knows nothing of the owner's custom role.
+      const inheritsNonOwner = membership.role === null && drive.ownerId !== userId;
+      const canCreatePages = inheritsNonOwner
+        ? (await getUserAccessLevel(userId, drive.id))?.canEdit === true
+        : (canCreatePagesMap.get(drive.id) ?? false);
+      return {
+        ...drive,
+        isOwned: membership.role === null && drive.ownerId === userId,
+        role,
+        canCreatePages,
+        lastAccessedAt: null,
+      };
+    }),
+  );
 }
 
 export async function GET(req: Request) {

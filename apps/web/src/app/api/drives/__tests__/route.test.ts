@@ -67,6 +67,9 @@ vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
 vi.mock('@pagespace/lib/permissions/membership-queries', () => ({
   resolveDriveWideCanEdit: vi.fn(),
 }));
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  getUserAccessLevel: vi.fn(),
+}));
 vi.mock('@pagespace/db/db', () => ({
   db: { query: { drives: { findMany: vi.fn() } } },
 }));
@@ -78,6 +81,7 @@ import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope, isScopedMCPAuth } from '@/lib/auth';
 import { getAppDriveMembership, hasAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
 import { resolveDriveWideCanEdit } from '@pagespace/lib/permissions/membership-queries';
+import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db';
 
 // ============================================================================
@@ -636,5 +640,17 @@ describe('GET /api/drives — scoped MCP canCreatePages', () => {
     expect(resolveDriveWideCanEdit).toHaveBeenCalledWith([
       { driveId: 'drive_scoped', role: 'MEMBER', customRoleId: 'role_view' },
     ]);
+  });
+
+  it('given an inherited scope whose owner cannot edit the drive root, should resolve through the owner permissions and fail closed', async () => {
+    vi.mocked(getAppDriveMembership).mockResolvedValue({ role: null, customRoleId: null, ownerUserId: 'user_123' });
+    vi.mocked(getUserAccessLevel).mockResolvedValue({ canView: true, canEdit: false, canShare: false, canDelete: false });
+
+    const response = await GET(new Request('https://example.com/api/drives'));
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body[0]).toMatchObject({ id: 'drive_scoped', canCreatePages: false });
+    expect(getUserAccessLevel).toHaveBeenCalledWith('user_123', 'drive_scoped');
   });
 });

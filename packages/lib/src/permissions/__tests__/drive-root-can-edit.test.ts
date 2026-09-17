@@ -122,7 +122,7 @@ describe('getUserAccessLevel — drive-as-root custom-role bounding (#2627)', ()
   it('given a MEMBER with a view-only custom role, should deny drive-wide edit', async () => {
     driveAsRoot(
       { role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID },
-      [{ permissions: {}, driveWidePermissions: { canView: true, canEdit: false, canShare: false } }],
+      [{ id: CUSTOM_ROLE_ID, driveId: VALID_DRIVE, permissions: {}, driveWidePermissions: { canView: true, canEdit: false, canShare: false } }],
     );
     const result = await getUserAccessLevel(VALID_USER, VALID_DRIVE);
     expect(result).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
@@ -131,10 +131,19 @@ describe('getUserAccessLevel — drive-as-root custom-role bounding (#2627)', ()
   it('given a MEMBER whose custom role grants drive-wide edit, should grant edit', async () => {
     driveAsRoot(
       { role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID },
-      [{ permissions: {}, driveWidePermissions: { canView: true, canEdit: true, canShare: false } }],
+      [{ id: CUSTOM_ROLE_ID, driveId: VALID_DRIVE, permissions: {}, driveWidePermissions: { canView: true, canEdit: true, canShare: false } }],
     );
     const result = await getUserAccessLevel(VALID_USER, VALID_DRIVE);
     expect(result).toEqual({ canView: true, canEdit: true, canShare: false, canDelete: false });
+  });
+
+  it('given a MEMBER whose custom role belongs to another drive, should deny drive-wide edit', async () => {
+    driveAsRoot(
+      { role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID },
+      [{ id: CUSTOM_ROLE_ID, driveId: 'clotherdrivexxxxxxxxxxxxx', permissions: {}, driveWidePermissions: { canView: true, canEdit: true, canShare: false } }],
+    );
+    const result = await getUserAccessLevel(VALID_USER, VALID_DRIVE);
+    expect(result).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
   });
 
   it('given a MEMBER with an unresolvable custom role, should fail closed (deny edit)', async () => {

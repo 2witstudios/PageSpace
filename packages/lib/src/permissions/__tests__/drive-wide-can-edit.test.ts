@@ -60,19 +60,29 @@ describe('resolveDriveWideCanEdit', () => {
   it('given custom-role members, should batch-resolve all roles in one query', async () => {
     vi.mocked(db.select).mockReturnValue(
       chain([
-        { id: 'role_edit', driveWidePermissions: { canView: true, canEdit: true, canShare: false } },
-        { id: 'role_view', driveWidePermissions: { canView: true, canEdit: false, canShare: false } },
+        { id: 'role_edit', driveId: 'd_edit', driveWidePermissions: { canView: true, canEdit: true, canShare: false } },
+        { id: 'role_view', driveId: 'd_view', driveWidePermissions: { canView: true, canEdit: false, canShare: false } },
       ]),
     );
     const map = await resolveDriveWideCanEdit([
       { driveId: 'd_edit', role: 'MEMBER', customRoleId: 'role_edit' },
       { driveId: 'd_view', role: 'MEMBER', customRoleId: 'role_view' },
-      { driveId: 'd_shared_role', role: 'MEMBER', customRoleId: 'role_edit' },
     ]);
     expect(map.get('d_edit')).toBe(true);
     expect(map.get('d_view')).toBe(false);
-    expect(map.get('d_shared_role')).toBe(true);
     expect(db.select).toHaveBeenCalledTimes(1);
+  });
+
+  it('given a custom role that belongs to a different drive, should fail closed', async () => {
+    vi.mocked(db.select).mockReturnValue(
+      chain([{ id: 'role_foreign', driveId: 'd_other', driveWidePermissions: { canView: true, canEdit: true, canShare: false } }]),
+    );
+    const map = await resolveDriveWideCanEdit([
+      { driveId: 'd_bound', role: 'MEMBER', customRoleId: 'role_foreign' },
+      { driveId: 'd_other', role: 'MEMBER', customRoleId: 'role_foreign' },
+    ]);
+    expect(map.get('d_bound')).toBe(false);
+    expect(map.get('d_other')).toBe(true);
   });
 
   it('given an unresolvable custom role, should fail closed', async () => {
@@ -84,7 +94,7 @@ describe('resolveDriveWideCanEdit', () => {
   });
 
   it('given a custom role with null driveWidePermissions, should fail closed', async () => {
-    vi.mocked(db.select).mockReturnValue(chain([{ id: 'role_null', driveWidePermissions: null }]));
+    vi.mocked(db.select).mockReturnValue(chain([{ id: 'role_null', driveId: 'd_null', driveWidePermissions: null }]));
     const map = await resolveDriveWideCanEdit([
       { driveId: 'd_null', role: 'MEMBER', customRoleId: 'role_null' },
     ]);
