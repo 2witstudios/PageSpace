@@ -19,6 +19,7 @@ import type { SubscriptionTier } from '@pagespace/lib/services/subscription-util
 import { reconcileCustomDomainCert } from '@/lib/canvas/reconcile-cert';
 import { mirrorDriveToCustomHost } from '@/lib/canvas/custom-domain-mirror';
 import { renderDomainNotFoundOverride } from '@/lib/canvas/publish-page';
+import { CUSTOM_DOMAINS_UNAVAILABLE_MESSAGE } from '@/lib/subscription/plan-refusal-copy';
 
 /** Statuses whose cert is still advancing — worth a lazy reconcile on read. */
 const CERT_NON_TERMINAL = new Set(['verified', 'provisioning']);
@@ -181,7 +182,7 @@ export async function POST(
 
       if (maxAllowed === 0) {
         return NextResponse.json(
-          { error: 'Custom domains are not available on your current plan. Upgrade to add a custom domain.' },
+          { error: CUSTOM_DOMAINS_UNAVAILABLE_MESSAGE },
           { status: 403 },
         );
       }

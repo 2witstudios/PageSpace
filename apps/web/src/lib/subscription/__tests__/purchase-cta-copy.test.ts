@@ -7,6 +7,7 @@ import { describe, it, expect } from 'vitest';
 import { creditGatePayload } from '../credit-gate-response';
 import { createSubscriptionRequiredResponse } from '../rate-limit-middleware';
 import { DEFAULT_ERROR_MESSAGES } from '@/lib/ai/shared/toErrorCause';
+import { CUSTOM_DOMAINS_UNAVAILABLE_MESSAGE, CUSTOM_SUBDOMAIN_UNAVAILABLE_MESSAGE } from '../plan-refusal-copy';
 
 const PURCHASE_CTA = /\b(buy|purchase|upgrade|add credits)\b/i;
 
@@ -22,6 +23,14 @@ describe('refusal copy carries no purchase call to action', () => {
   it('given a paid-only model, should not tell the user to upgrade', async () => {
     const body = await createSubscriptionRequiredResponse().json();
     expect(body.message).not.toMatch(PURCHASE_CTA);
+  });
+
+  it('given a plan without custom domains, should not tell the user to upgrade', () => {
+    expect(CUSTOM_DOMAINS_UNAVAILABLE_MESSAGE).not.toMatch(PURCHASE_CTA);
+  });
+
+  it('given a plan without custom subdomains, should not tell the user to upgrade', () => {
+    expect(CUSTOM_SUBDOMAIN_UNAVAILABLE_MESSAGE).not.toMatch(PURCHASE_CTA);
   });
 
   it('given the client default for out_of_credits, should not tell the user to buy', () => {

@@ -23,14 +23,18 @@ const titles = (list: SettingsItem[]) => list.map((i) => i.title);
 
 describe('filterSettingsItems', () => {
   it('given the native app, should hide native-hidden entries like Privacy & Cookies', () => {
-    expect(titles(filterSettingsItems(items, { isDesktop: false, hideBilling: true, isNative: true }))).toEqual(['account']);
+    expect(titles(filterSettingsItems(items, { isDesktop: false, showBilling: false, isNative: true }))).toEqual(['account']);
   });
 
   it('given the web on a deployment without billing, should still show Privacy & Cookies', () => {
-    expect(titles(filterSettingsItems(items, { isDesktop: false, hideBilling: true, isNative: false }))).toEqual(['privacy', 'account']);
+    expect(titles(filterSettingsItems(items, { isDesktop: false, showBilling: false, isNative: false }))).toEqual(['privacy', 'account']);
   });
 
   it('given the desktop app with billing, should show everything but native-hidden-only exclusions', () => {
-    expect(titles(filterSettingsItems(items, { isDesktop: true, hideBilling: false, isNative: false }))).toEqual(['privacy', 'billing', 'mcp', 'account']);
+    expect(titles(filterSettingsItems(items, { isDesktop: true, showBilling: true, isNative: false }))).toEqual(['privacy', 'billing', 'mcp', 'account']);
+  });
+
+  it('given platform detection has not finished, should not show the Billing entry for a frame', () => {
+    expect(titles(filterSettingsItems(items, { isDesktop: true, showBilling: false, isNative: false }))).not.toContain('billing');
   });
 });

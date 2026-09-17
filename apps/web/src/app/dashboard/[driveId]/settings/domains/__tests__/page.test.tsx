@@ -168,4 +168,17 @@ describe('DomainsSettingsPage — locked custom subdomain', () => {
     expect(await screen.findByText(/Pro feature/)).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /upgrade/i })).not.toBeInTheDocument();
   });
+
+  it('given a drive at its custom domain limit, should not tell the user to upgrade', async () => {
+    mockFetchWithAuth.mockImplementation((url: string) =>
+      Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve(url.includes('/subdomain') ? { subdomain: null } : { ...domainsPayload(null), limit: 1 }),
+      }),
+    );
+    renderPage();
+    const note = await screen.findByText(/Domain limit reached/);
+    expect(note.textContent).not.toMatch(/upgrad/i);
+  });
 });

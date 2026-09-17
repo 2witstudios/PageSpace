@@ -917,7 +917,7 @@ function CustomDomainsCard({ driveId, domains, limit, apps, newDomain, onNewDoma
 
         {atCap && !notAvailable && (
           <p className="text-xs text-muted-foreground">
-            Domain limit reached ({domains.length} / {limit}). Remove a domain to add another, or upgrade your plan.
+            Domain limit reached ({domains.length} / {limit}). Remove a domain to add another.
           </p>
         )}
 

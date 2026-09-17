@@ -23,14 +23,14 @@ export default function SettingsPage() {
   const router = useRouter();
   const mcp = useMCP();
   const { user } = useAuth();
-  const { hideBilling } = useBillingVisibility();
+  const { showBilling } = useBillingVisibility();
   const isDesktop = mcp.isDesktop;
   const isAdmin = user?.role === 'admin';
 
   const { isNative } = useCapacitor();
 
   const filterItems = (items: SettingsItem[]) =>
-    filterSettingsItems(items, { isDesktop, hideBilling, isNative });
+    filterSettingsItems(items, { isDesktop, showBilling, isNative });
 
   const settingsSections: SettingsSection[] = [
     {
