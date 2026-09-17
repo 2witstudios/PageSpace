@@ -44,7 +44,7 @@ const ACCEPTED_AT_GATE_EXEMPT = new Map<string, string>([
   ],
   [
     'channels/[pageId]/messages',
-    'Followup #4: pending admins should not receive @mention broadcast — tracked in followup-4.',
+    'The unfiltered drive_members read only builds a CANDIDATE recipient set; recipients are then filtered through getUsersWhoCanViewPage, which requires an accepted membership, so a pending admin receives no broadcast.',
   ],
   [
     'drives/[driveId]/backups/[backupId]/restore',
@@ -77,6 +77,56 @@ const LIB_ACCEPTED_AT_GATE_EXEMPT = new Map<string, string>([
     'Page-invite acceptance writes a driveMembers row (does not read for authz). Existing-member lookup gates on (driveId, userId) composite to keep the page-grant idempotent — a pending-invite row would be a different (driveId, userId) and is irrelevant here.',
   ],
 ]);
+
+/**
+ * apps/web/src/services/** and packages/lib/src/** were outside the original
+ * sweep, and that is exactly where four ungated authz reads survived: the
+ * drive-role access check (roles routes), page reorder, permission management,
+ * plus the raw-SQL channel list in messages/threads. Keys are paths relative to
+ * the repo root.
+ */
+const SERVICE_ACCEPTED_AT_GATE_EXEMPT = new Map<string, string>([
+  [
+    'apps/web/src/services/api/restore-permissions-service.ts',
+    'Writer: deletes and inserts drive_members rows to restore a backup; it makes no access decision.',
+  ],
+  [
+    'apps/web/src/services/api/rollback/rollback-executors.ts',
+    'Writer: executes member/role rollback plans. The customRoleId read collects every holder of a role being deleted so each can be revalidated — including pending rows is the fail-safe direction.',
+  ],
+  [
+    'apps/web/src/services/api/rollback/redo-executors.ts',
+    'Writer: executes member/role redo plans. The customRoleId read collects every holder of a role being deleted so each can be revalidated — including pending rows is the fail-safe direction.',
+  ],
+  [
+    'apps/web/src/services/api/rollback/preview.ts',
+    'Conflict preview: reads the target member row (pending or not) by composite key to show its current values before a rollback; the caller is authorized separately.',
+  ],
+  [
+    'packages/lib/src/types.ts',
+    'Type declaration only (AppShell.driveMembers); no query.',
+  ],
+  [
+    'packages/lib/src/repositories/account-repository.ts',
+    'Account deletion counts every drive_members row to decide whether a drive is solo; counting pending rows makes deletion MORE conservative, never grants access.',
+  ],
+  [
+    'packages/lib/src/permissions/share-link-service.ts',
+    'Writer only: share-link redemption upserts an accepted drive_members row; it never reads one for a decision.',
+  ],
+  [
+    'packages/lib/src/compliance/export/gdpr-export.ts',
+    "GDPR subject-access export of the user's OWN membership rows; pending invitations are the subject's personal data and belong in the export.",
+  ],
+]);
+
+/**
+ * Raw SQL escapes the `isNotNull(driveMembers.acceptedAt)` scan entirely. A
+ * file that joins drive_members in SQL must either gate on "acceptedAt" in that
+ * SQL or pass the candidates through getBatchPagePermissions (which gates).
+ */
+const RAW_SQL_DRIVE_MEMBERS = /\b(?:JOIN|FROM)\s+drive_members\b/;
+const RAW_SQL_GATE = /"acceptedAt"|getBatchPagePermissions/;
 
 const DRIVE_MEMBERS_REFERENCE = /\bdriveMembers\b/;
 const ACCEPTED_AT_GATE = /isNotNull\s*\(\s*driveMembers\.acceptedAt\s*\)/;
@@ -111,6 +161,16 @@ function collectLibFiles(dir: string): string[] {
     }
   }
   return results;
+}
+
+const REPO_ROOT = join(__dirname, '..', '..', '..', '..', '..', '..');
+const SERVICE_DIRS = [
+  join(REPO_ROOT, 'apps', 'web', 'src', 'services'),
+  join(REPO_ROOT, 'packages', 'lib', 'src'),
+];
+
+function toRepoPath(absolutePath: string): string {
+  return absolutePath.replace(REPO_ROOT + '/', '');
 }
 
 function toLogicalPath(absolutePath: string): string {
@@ -249,6 +309,59 @@ describe('Drive Member acceptedAt Gate Coverage', () => {
         }
       }
       expect(empty).toEqual([]);
+    });
+  });
+
+  describe('services/** and packages/lib/src/** coverage', () => {
+    const serviceFiles = SERVICE_DIRS.flatMap((dir) => collectLibFiles(dir));
+
+    it('given any service or lib-package file that reads driveMembers, should compose isNotNull(driveMembers.acceptedAt) or be explicitly allow-listed', () => {
+      const violations = serviceFiles
+        .filter((file) => {
+          const content = readFileSync(file, 'utf-8');
+          return DRIVE_MEMBERS_REFERENCE.test(content) && !ACCEPTED_AT_GATE.test(content);
+        })
+        .map(toRepoPath)
+        .filter((path) => !SERVICE_ACCEPTED_AT_GATE_EXEMPT.has(path));
+
+      expect(violations).toEqual([]);
+    });
+
+    it('service scan should discover both directories (sanity check)', () => {
+      const repoPaths = serviceFiles.map(toRepoPath);
+      expect(repoPaths.some((p) => p === 'apps/web/src/services/api/page-reorder-service.ts')).toBe(true);
+      expect(repoPaths.some((p) => p === 'packages/lib/src/services/drive-role-service.ts')).toBe(true);
+    });
+
+    it('service allow-list should not contain stale entries', () => {
+      const stale = [...SERVICE_ACCEPTED_AT_GATE_EXEMPT.keys()].filter((path) => {
+        const file = serviceFiles.find((f) => toRepoPath(f) === path);
+        return !file || !DRIVE_MEMBERS_REFERENCE.test(readFileSync(file, 'utf-8'));
+      });
+
+      expect(stale).toEqual([]);
+    });
+  });
+
+  describe('raw SQL drive_members joins', () => {
+    const sqlFiles = [...routeFiles, ...collectLibFiles(LIB_DIR), ...SERVICE_DIRS.flatMap((dir) => collectLibFiles(dir))];
+
+    it('given a file that joins drive_members in raw SQL, should gate on "acceptedAt" or filter through getBatchPagePermissions', () => {
+      const violations = sqlFiles
+        .filter((file) => {
+          const content = readFileSync(file, 'utf-8');
+          return RAW_SQL_DRIVE_MEMBERS.test(content) && !RAW_SQL_GATE.test(content);
+        })
+        .map(toRepoPath);
+
+      expect(violations).toEqual([]);
+    });
+
+    it('raw SQL scan should see the known candidate-filter routes (sanity check)', () => {
+      const joined = sqlFiles
+        .filter((file) => RAW_SQL_DRIVE_MEMBERS.test(readFileSync(file, 'utf-8')))
+        .map(toRepoPath);
+      expect(joined).toContain('apps/web/src/app/api/messages/threads/route.ts');
     });
   });
 });

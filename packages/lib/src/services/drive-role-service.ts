@@ -6,7 +6,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { eq, and, asc } from '@pagespace/db/operators';
+import { eq, and, asc, isNotNull } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { driveRoles, driveMembers } from '@pagespace/db/schema/members';
 import type { PagePerm } from '../permissions/membership-queries';
@@ -116,11 +116,13 @@ export async function checkDriveAccessForRoles(
     };
   }
 
-  // Check membership
+  // Check membership. A pending invite (acceptedAt IS NULL) grants nothing —
+  // the same gate every resolver in permissions/permissions.ts applies.
   const membership = await db.query.driveMembers.findFirst({
     where: and(
       eq(driveMembers.driveId, driveId),
-      eq(driveMembers.userId, userId)
+      eq(driveMembers.userId, userId),
+      isNotNull(driveMembers.acceptedAt)
     ),
   });
 
