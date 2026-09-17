@@ -21,6 +21,7 @@ import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { leaveOrganization, reassignLedOrgDrives, LeaveOrganizationRefusedError } from '../leave';
 import { accountRepository } from '../../repositories/account-repository';
+import { getUserDriveAccess } from '../../permissions/permissions';
 
 let dbAvailable = false;
 const createdUserIds: string[] = [];
@@ -154,6 +155,21 @@ describe('leave and delete cascades (Postgres)', () => {
     expect(await db.select().from(driveMembers).where(eq(driveMembers.id, invite.id))).toHaveLength(1);
   });
 
+  it('O-8 a leaver\'s invite-sourced membership in an org drive survives leave, so they keep access as a guest', async () => {
+    if (!dbAvailable) return;
+    const owner = await user();
+    const leaver = await user();
+    const org = await orgWith(owner.id, [leaver.id]);
+    const privateOrgDrive = await factories.createDrive(owner.id, { orgId: org.id, orgVisibility: 'PRIVATE' });
+    const invite = await factories.createDriveMember(privateOrgDrive.id, leaver.id, { source: 'invite' });
+
+    const result = await leaveOrganization(leaver.id, org.id);
+
+    expect(result).toMatchObject({ ok: true, revoked: { orgMembershipRows: 0 } });
+    expect(await db.select().from(driveMembers).where(eq(driveMembers.id, invite.id))).toHaveLength(1);
+    expect(await getUserDriveAccess(leaver.id, privateOrgDrive.id)).toBe(true);
+  });
+
   it('O-7 leaving an org reassigns the drives the leaver leads to the org Owner with an audit event', async () => {
     if (!dbAvailable) return;
     const owner = await user();
@@ -209,17 +225,42 @@ describe('leave and delete cascades (Postgres)', () => {
     expect(events[0].actorEmail).not.toBe(lead.email);
   });
 
-  it('ORG-6 (partial) an org Owner\'s account deletion is refused and changes nothing', async () => {
+  it('ORG-6 (partial) deleteUser refuses an org Owner and rolls back the orgs it had already left', async () => {
     if (!dbAvailable) return;
-    const owner = await user();
-    const org = await orgWith(owner.id, []);
-    const drive = await factories.createDrive(owner.id, { orgId: org.id });
+    const ownerX = await user();
+    const person = await user();
+    const home = await factories.createDrive(person.id);
+    // X: person is a MEMBER leading a drive, joined first so X is left before Y refuses.
+    const orgX = await orgWith(ownerX.id, []);
+    await db.insert(orgMembers).values({
+      orgId: orgX.id, userId: person.id, role: 'MEMBER', joinedAt: new Date('2026-01-01T00:00:00Z'),
+    });
+    const led = await factories.createDrive(person.id, { orgId: orgX.id });
+    const otherX = await factories.createDrive(ownerX.id, { orgId: orgX.id });
+    const [orgRow] = await db.insert(driveMembers)
+      .values({ driveId: otherX.id, userId: person.id, source: 'org', acceptedAt: new Date() }).returning();
+    const seeded = await seedArtifacts(otherX.id, person.id, home.id);
+    // Y: person is the OWNER, joined later.
+    const [orgY] = await db.insert(organizations).values({
+      name: 'Owned Org', slug: `owned-${createId()}`, ownerId: person.id,
+    }).returning();
+    createdOrgIds.push(orgY.id);
+    await db.insert(orgMembers).values({
+      orgId: orgY.id, userId: person.id, role: 'OWNER', joinedAt: new Date('2026-02-01T00:00:00Z'),
+    });
 
-    expect(await accountRepository.getOwnedOrganizationNames(owner.id)).toEqual([org.name]);
-    await expect(accountRepository.deleteUser(owner.id)).rejects.toBeInstanceOf(LeaveOrganizationRefusedError);
+    expect(await accountRepository.getOwnedOrganizationNames(person.id)).toEqual([orgY.name]);
+    await expect(accountRepository.deleteUser(person.id)).rejects.toBeInstanceOf(LeaveOrganizationRefusedError);
 
-    expect(await db.select().from(users).where(eq(users.id, owner.id))).toHaveLength(1);
-    expect(await db.select().from(drives).where(eq(drives.id, drive.id))).toHaveLength(1);
+    expect(await db.select().from(users).where(eq(users.id, person.id))).toHaveLength(1);
+    expect(await db.select().from(orgMembers)
+      .where(and(eq(orgMembers.orgId, orgX.id), eq(orgMembers.userId, person.id)))).toHaveLength(1);
+    const [ledAfter] = await db.select({ ownerId: drives.ownerId }).from(drives).where(eq(drives.id, led.id));
+    expect(ledAfter.ownerId).toBe(person.id);
+    expect(await db.select().from(driveMembers).where(eq(driveMembers.id, orgRow.id))).toHaveLength(1);
+    expect(await artifactsPresent(seeded)).toEqual(allPresent);
+    expect(await db.select().from(activityLogs)
+      .where(and(eq(activityLogs.resourceId, led.id), eq(activityLogs.operation, 'ownership_transfer')))).toEqual([]);
   });
 
   it('ORG-6 (partial) erasure drive disposition never counts or deletes an org drive the user leads', async () => {

@@ -10,6 +10,7 @@
  */
 
 import { accountRepository } from '@pagespace/lib/repositories/account-repository';
+import { LeaveOrganizationRefusedError } from '@pagespace/lib/organizations/leave';
 import { activityLogRepository } from '@pagespace/lib/repositories/activity-log-repository';
 import { dataSubjectRequestRepository } from '@pagespace/lib/repositories/data-subject-request-repository';
 import { planDriveDisposition } from '@pagespace/lib/compliance/erasure/drive-disposition';
@@ -195,7 +196,15 @@ export async function runAccountErasureJob(data: AccountErasureJobData): Promise
     },
 
     'delete-user': async () => {
-      await accountRepository.deleteUser(userId);
+      try {
+        await accountRepository.deleteUser(userId);
+      } catch (error) {
+        // Became an org Owner after drive-disposition passed: terminal, not a retry.
+        if (error instanceof LeaveOrganizationRefusedError) {
+          throw new Error(`${ERASURE_BLOCKED_PREFIX}: ${error.message}`);
+        }
+        throw error;
+      }
       return ok();
     },
   };

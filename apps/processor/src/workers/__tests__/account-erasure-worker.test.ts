@@ -47,6 +47,10 @@ vi.mock('@pagespace/lib/repositories/account-repository', () => ({
   },
 }));
 
+vi.mock('@pagespace/lib/organizations/leave', () => ({
+  LeaveOrganizationRefusedError: class LeaveOrganizationRefusedError extends Error {},
+}));
+
 vi.mock('@pagespace/lib/repositories/data-subject-request-repository', () => ({
   dataSubjectRequestRepository: {
     findById: vi.fn().mockResolvedValue({ status: 'pending', attempts: 0, forceDelete: false }),
@@ -106,6 +110,7 @@ import { runAccountErasureJob } from '../account-erasure-worker';
 import { accountRepository } from '@pagespace/lib/repositories/account-repository';
 import { dataSubjectRequestRepository } from '@pagespace/lib/repositories/data-subject-request-repository';
 import { deleteUserAvatars } from '../../api/avatar';
+import { LeaveOrganizationRefusedError } from '@pagespace/lib/organizations/leave';
 
 describe('runAccountErasureJob — resourceTitle PII scrub wiring (#541)', () => {
   beforeEach(() => {
@@ -152,5 +157,17 @@ describe('runAccountErasureJob — org Owner refusal', () => {
     expect(deleteUserAvatars).not.toHaveBeenCalled();
     expect(mockAnonymizeForUser).not.toHaveBeenCalled();
     expect(accountRepository.deleteUser).not.toHaveBeenCalled();
+  });
+
+  it('ORG-6 (partial) a late org-Owner refusal at delete-user blocks the request instead of retrying it', async () => {
+    vi.mocked(accountRepository.deleteUser).mockRejectedValueOnce(
+      new LeaveOrganizationRefusedError('Cannot leave organization org-1: OWNER_MUST_TRANSFER'),
+    );
+
+    await expect(runAccountErasureJob({ requestId: 'dsr-1', userId: 'user-1' })).resolves.toBeUndefined();
+
+    expect(dataSubjectRequestRepository.updateStatus).toHaveBeenCalledWith(
+      'dsr-1', 'blocked', expect.objectContaining({ blockedReason: expect.stringContaining('OWNER_MUST_TRANSFER') }),
+    );
   });
 });

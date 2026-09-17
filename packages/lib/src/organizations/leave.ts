@@ -252,7 +252,10 @@ export async function leaveAllOrganizations(
   const memberships = await tx
     .select({ orgId: orgMembers.orgId })
     .from(orgMembers)
-    .where(eq(orgMembers.userId, userId));
+    .where(eq(orgMembers.userId, userId))
+    // Deterministic order, so a refusal part-way through is reproducible (the caller's
+    // transaction rolls back whatever earlier orgs already applied).
+    .orderBy(orgMembers.joinedAt, orgMembers.id);
 
   const reassigned: LeadReassignment[] = [];
   for (const { orgId } of memberships) {
