@@ -119,6 +119,22 @@ describe('resolvePagePermissionRow', () => {
       expect(resolved?.canDelete).toBe(false);
     });
 
+    // Same rule as getUserAccessLevel: a role entry that does not grant view
+    // grants nothing, so a stored {canView:false, canEdit:true} cannot surface
+    // as editable to a batch caller that reads canEdit without canView.
+    it('grants nothing when the custom role entry denies view, whatever else it sets', () => {
+      expect(
+        resolvePagePermissionRow(
+          row({
+            memberRole: 'MEMBER',
+            pageType: 'DOCUMENT',
+            customRolePerms: { page_1: { canView: false, canEdit: true, canShare: true } },
+          }),
+          USER
+        )
+      ).toBeNull();
+    });
+
     it('falls back to the custom role drive-wide grant when a NON-private page has no entry', () => {
       // resolveCustomRolePermissions takes two inputs — the per-page entry and
       // the drive-wide default. Only the former is exercised above, and the

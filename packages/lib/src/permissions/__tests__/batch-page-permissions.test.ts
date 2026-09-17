@@ -440,6 +440,21 @@ describe('getBatchPagePermissions', () => {
     expect(result.get('p1')).toEqual({ canView: false, canEdit: false, canShare: false, canDelete: false });
   });
 
+  it('given MEMBER with custom role entry {canView:false, canEdit:true}, should grant nothing (no edit without view)', async () => {
+    stubQueryRows([
+      makeRow({
+        pageId: 'p1',
+        memberRole: 'MEMBER',
+        pageType: 'DOCUMENT',
+        customRolePerms: { p1: { canView: false, canEdit: true, canShare: true } },
+      }),
+    ]);
+
+    const result = await getBatchPagePermissions(USER, ['p1']);
+
+    expect(result.get('p1')).toEqual(NONE);
+  });
+
   it('given a DB failure, should return the pre-seeded deny map (fail-closed) and log', async () => {
     const where = vi.fn().mockRejectedValue(new Error('DB down'));
     const leftJoin4 = vi.fn().mockReturnValue({ where });
