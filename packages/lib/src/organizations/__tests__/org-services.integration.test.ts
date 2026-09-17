@@ -53,16 +53,26 @@ describe('org services (real Postgres)', () => {
     }
   });
 
+  // Cleanup runs in dependency order and never swallows an error: organizations.ownerId and
+  // drives.orgId are ON DELETE RESTRICT, so a leftover org here would make every later
+  // suite's user cleanup fail in the shared CI database. Orgs are also swept by owner, so
+  // one created by a service call this file did not track still goes.
   afterEach(async () => {
     const driveIds = createdDrives.splice(0);
-    if (driveIds.length) await db.delete(drives).where(inArray(drives.id, driveIds)).catch(() => {});
-    const orgIds = createdOrgs.splice(0);
-    if (orgIds.length) {
-      await db.update(drives).set({ orgId: null }).where(inArray(drives.orgId, orgIds)).catch(() => {});
-      await db.delete(organizations).where(inArray(organizations.id, orgIds)).catch(() => {});
-    }
     const userIds = createdUsers.splice(0);
-    if (userIds.length) await db.delete(users).where(inArray(users.id, userIds)).catch(() => {});
+    const trackedOrgIds = createdOrgs.splice(0);
+    const ownedOrgs = userIds.length
+      ? await db.select({ id: organizations.id }).from(organizations).where(inArray(organizations.ownerId, userIds))
+      : [];
+    const orgIds = [...new Set([...trackedOrgIds, ...ownedOrgs.map((org) => org.id)])];
+
+    if (driveIds.length) await db.delete(drives).where(inArray(drives.id, driveIds));
+    if (orgIds.length) {
+      await db.update(drives).set({ orgId: null }).where(inArray(drives.orgId, orgIds));
+      // org_members and org_invitations cascade with the organization row.
+      await db.delete(organizations).where(inArray(organizations.id, orgIds));
+    }
+    if (userIds.length) await db.delete(users).where(inArray(users.id, userIds));
   });
 
   // The lib integration run shares one process across files, each with its own pool; this
