@@ -4,13 +4,29 @@
  * (D-OW-6, D-OW-10), and the "who can create org drives" policy seam (POL-5).
  */
 
+import { and, eq } from '@pagespace/db/operators';
+import { orgMembers } from '@pagespace/db/schema/organizations';
 import { requireOrgRole } from '../organizations/authorize';
 import { publishOrgMembershipSyncEvents, syncDriveOrgMembership } from './org-membership-sync';
 import type { OrgDriveServiceDeps } from './org-drive-service';
 
 export const orgDriveServiceDeps: OrgDriveServiceDeps = {
-  getOrgRole: async (_tx, orgId, userId) => {
-    const authorization = await requireOrgRole(userId, orgId, 'MEMBER');
+  // The decision stays requireOrgRole's (ORG-5); only the membership read is bound to the move's
+  // transaction. FOR SHARE on the org_members row makes a concurrent leave or account deletion
+  // (which deletes that row) wait for the move, or the move wait for it, so the service never
+  // commits an org drive whose lead has already left (D-OW-7). Read outside the transaction, an
+  // uncommitted deletion is invisible and its users cascade later deletes the new org drive.
+  getOrgRole: async (tx, orgId, userId) => {
+    const authorization = await requireOrgRole(userId, orgId, 'MEMBER', {
+      findMembershipRole: async (memberOrgId, memberUserId) => {
+        const [row] = await tx
+          .select({ role: orgMembers.role })
+          .from(orgMembers)
+          .where(and(eq(orgMembers.orgId, memberOrgId), eq(orgMembers.userId, memberUserId)))
+          .for('share');
+        return row?.role ?? null;
+      },
+    });
     return authorization.ok ? authorization.role : null;
   },
 

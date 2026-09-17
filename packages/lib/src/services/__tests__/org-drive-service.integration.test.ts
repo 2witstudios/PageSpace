@@ -414,3 +414,93 @@ describe('with the production wiring (requireOrgRole, syncDriveOrgMembership, de
     expect(await db.select().from(pages).where(eq(pages.driveId, driveId))).toEqual([]);
   });
 });
+
+describe('with the production wiring: authorization', () => {
+  const realtimeUrl = process.env.INTERNAL_REALTIME_URL;
+  beforeAll(() => {
+    delete process.env.INTERNAL_REALTIME_URL;
+  });
+  afterAll(() => {
+    process.env.INTERNAL_REALTIME_URL = realtimeUrl;
+  });
+
+  it('D-OW-7 a drive owner outside the org cannot move their drive in (real requireOrgRole)', async () => {
+    const driveId = await seedPersonalDrive({ ownerId: chris });
+
+    const result = await moveDriveToOrg(chris, driveId, { orgId: northwind }, orgDriveServiceDeps);
+
+    expect(result).toMatchObject({ ok: false, code: 'NOT_ORG_MEMBER' });
+    expect((await readDrive(driveId)).orgId).toBeNull();
+  });
+
+  it('DRV-3 (partial) a user outside the org cannot create a drive in it, and nothing is inserted (real requireOrgRole)', async () => {
+    const result = await createOrgDrive(chris, { name: `Outsider ${run}`, orgId: northwind }, orgDriveServiceDeps);
+
+    expect(result).toMatchObject({ ok: false, code: 'NOT_ORG_MEMBER' });
+    expect(await db.select().from(drives).where(eq(drives.orgId, northwind))).toEqual([]);
+  });
+
+  it('DRV-2 (partial) an org Member cannot move a drive out, even when they lead it (real requireOrgRole)', async () => {
+    const driveId = await seedPersonalDrive();
+    expect(await moveDriveToOrg(marcus, driveId, { orgId: northwind }, orgDriveServiceDeps)).toMatchObject({ ok: true });
+
+    const result = await moveDriveOutOfOrg(marcus, driveId, { implicitMembers: 'remove' }, orgDriveServiceDeps);
+
+    expect(result).toMatchObject({ ok: false, code: 'NOT_ORG_ADMIN' });
+    expect((await readDrive(driveId)).orgId).toBe(northwind);
+  });
+
+  /**
+   * The race from review 5235664932 (P1 #1). Session B is account deletion for the lead, as
+   * accountRepository.deleteUser runs it: leave the org (delete the org_members row), reassign
+   * the org drives the user leads (none yet: the drive is still personal), delete the user.
+   * B holds its membership delete uncommitted while the move or create starts. If the service
+   * read the role outside its own transaction it would see MEMBER, commit an org drive led by
+   * the user, and B's users cascade would then hard-delete that org drive.
+   */
+  it.each(['move-in', 'create'] as const)(
+    'D-OW-7 a %s overlapping the lead\'s account deletion never leaves a committed org drive deleted',
+    async (operation) => {
+      const personalId = operation === 'move-in' ? await seedPersonalDrive() : null;
+      const b = await pool.connect();
+      try {
+        await b.query('BEGIN');
+        await b.query('DELETE FROM org_members WHERE "orgId" = $1 AND "userId" = $2', [northwind, marcus]);
+        const led = await b.query(
+          'SELECT d.id FROM drives d JOIN organizations o ON d."orgId" = o.id WHERE d."ownerId" = $1 FOR UPDATE',
+          [marcus]
+        );
+        expect(led.rows).toEqual([]);
+
+        const pending = (
+          operation === 'move-in' && personalId
+            ? moveDriveToOrg(marcus, personalId, { orgId: northwind }, orgDriveServiceDeps)
+            : createOrgDrive(marcus, { name: `Race ${run}`, orgId: northwind }, orgDriveServiceDeps)
+        ).then(
+          (result) => ({ result }),
+          (error: unknown) => ({ error })
+        );
+        await new Promise((resolve) => setTimeout(resolve, 400));
+
+        try {
+          await b.query('DELETE FROM users WHERE id = $1', [marcus]);
+          await b.query('COMMIT');
+        } catch {
+          // Postgres may pick B as the deadlock victim; that fails closed.
+          await b.query('ROLLBACK');
+        }
+
+        const outcome = await pending;
+        const committedDriveId =
+          'result' in outcome && outcome.result.ok ? outcome.result.drive.id : null;
+        if (committedDriveId !== null) {
+          const [row] = await db.select().from(drives).where(eq(drives.id, committedDriveId));
+          expect(row).toBeDefined();
+          expect(row.orgId).toBe(northwind);
+        }
+      } finally {
+        b.release();
+      }
+    }
+  );
+});

@@ -101,9 +101,10 @@ async function lockDrive(tx: OrgDriveTx, driveId: string): Promise<DriveRow | nu
 }
 
 /**
- * Share-lock the org row so the actor's membership and the org's ownership cannot change
- * under the decision (leaving an org and transferring ownership lock it FOR UPDATE).
- * Returns false when the org does not exist.
+ * Share-lock the org row so the org cannot be deleted or change Owner under the decision
+ * (org deletion and ownership transfer lock it FOR UPDATE). The actor's membership is guarded
+ * separately: deps.getOrgRole locks their org_members row, which leave and account deletion
+ * delete. Returns false when the org does not exist.
  */
 async function lockOrg(tx: OrgDriveTx, orgId: string): Promise<boolean> {
   const [row] = await tx
