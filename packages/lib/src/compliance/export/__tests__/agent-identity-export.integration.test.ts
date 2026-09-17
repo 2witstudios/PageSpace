@@ -6,7 +6,12 @@
  * time, self-reported source, last sign-in, revocation, secret version, creating
  * IP) are subject data and are exported under `agentIdentity`. The secret and
  * claim-token hashes and prefixes are credentials and must never reach the
- * bundle — this test serialises the WHOLE export and looks for them.
+ * bundle — this test serialises both bundle formats and looks for them.
+ *
+ * It deliberately does NOT call `collectAllUserData`: that fans out ~20
+ * concurrent queries and, beside the other integration suites, exhausted CI's
+ * Postgres connections (53300). That the aggregate calls this collector is
+ * pinned by the unit test in `gdpr-export.test.ts`.
  */
 import { describe, it, expect, afterAll } from 'vitest';
 import { inArray } from 'drizzle-orm';
@@ -14,7 +19,8 @@ import { db } from '@pagespace/db/db';
 import { users } from '@pagespace/db/schema/auth';
 import { agentIdentities } from '@pagespace/db/schema/agent-identities';
 import { factories } from '@pagespace/db/test/factories';
-import { collectUserAgentIdentity, collectAllUserData } from '../gdpr-export';
+import { collectUserAgentIdentity, collectUserProfile, type AllUserData } from '../gdpr-export';
+import { buildNativeExportFiles, toPortableExport } from '../export-format';
 import { AGENT_IDENTITY_EXPORTED_COLUMNS } from '../gdpr-export-coverage';
 
 const createdUsers: string[] = [];
@@ -71,13 +77,24 @@ describe('collectUserAgentIdentity (real Postgres)', () => {
     expect(await collectUserAgentIdentity(db, human.id)).toEqual([]);
   });
 
-  it('given the full export of an agent, should land under agentIdentity and contain no secret or claim-token hash or prefix anywhere', async () => {
+  it('given an agent\'s native and portable bundles, should carry agent-identity.json and no secret or claim-token hash or prefix anywhere', async () => {
     const { agent, secretHash, claimTokenHash } = await seedAgent(null);
+    const profile = await collectUserProfile(db, agent.id);
+    const agentIdentity = await collectUserAgentIdentity(db, agent.id);
+    if (!profile) throw new Error('profile missing');
+    const data = {
+      profile, drives: [], pages: [], sheets: [], messages: [], files: [], activity: [], systemLogs: [],
+      apiMetrics: [], errorLogs: [], aiUsage: [], tasks: [], sessions: [], notifications: [],
+      displayPreferences: [], settings: { hotkeys: [], automation: null, toastNotifications: null, emailNotifications: [] },
+      personalization: null, personalizationCandidates: [], agentWorkspaces: [], streamState: [], contentTags: [],
+      localEnvironments: [], agentIdentity,
+    } satisfies AllUserData;
 
-    const all = await collectAllUserData(db, agent.id);
-    const serialized = JSON.stringify(all);
+    const native = buildNativeExportFiles(data);
+    const serialized = JSON.stringify(native) + JSON.stringify(toPortableExport(data));
 
-    expect(all?.agentIdentity.map((r) => r.userId)).toEqual([agent.id]);
+    expect(profile.accountType).toBe('agent');
+    expect(native.find((f) => f.name === 'agent-identity.json')?.recordCount).toBe(1);
     for (const needle of [secretHash, claimTokenHash, 'ps_agent_pfx', 'ps_claim_pfx', 'secretHash', 'secretPrefix', 'claimTokenHash', 'claimTokenPrefix']) {
       expect(serialized, needle).not.toContain(needle);
     }
