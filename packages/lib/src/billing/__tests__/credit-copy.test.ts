@@ -15,7 +15,7 @@ import {
   creditPacksPhrase,
   topUpRatePhrase,
 } from '../credit-copy';
-import { tierAllowanceCents, formatCreditCount, FREE_STARTER_CREDITS } from '../money-model';
+import { tierAllowanceCents, formatCreditCount, FREE_STARTER_CREDITS, MONEY_MODEL_V2_ACTIVE } from '../money-model';
 
 // D-OW-17: MONTHLY_CREDIT_CENTS is `perTier(tierAllowanceCents)` — no `active`
 // argument passed — so it is hardwired to MONEY_MODEL_V2_ACTIVE (false in this PR)
@@ -68,11 +68,14 @@ describe('MON-5 the web formatter, the marketing mirror, and admin consume one c
   });
 });
 
-describe('MON-6 plan-card facts (SEAT-2 lane A2)', () => {
+describe('MON-6 plan-card facts (lane A2)', () => {
   it('MON-6 includedCreditsPhrase is an integer credit count with no dollar sign, per tier', () => {
-    expect(includedCreditsPhrase('free')).toBe(`${MONTHLY_CREDITS.free} credits to start`);
-    expect(includedCreditsPhrase('pro')).toBe(`${MONTHLY_CREDITS.pro} credits included each month`);
-    expect(includedCreditsPhrase('business')).toBe(`${MONTHLY_CREDITS.business} credits included each month`);
+    // Literal committed-default copy (MONEY_MODEL_V2_ACTIVE = false), not rebuilt from
+    // MONTHLY_CREDITS: an expectation derived from the module under test cannot fail.
+    expect(MONEY_MODEL_V2_ACTIVE).toBe(false);
+    expect(includedCreditsPhrase('free')).toBe('500 credits to start');
+    expect(includedCreditsPhrase('pro')).toBe('1,500 credits included each month');
+    expect(includedCreditsPhrase('business')).toBe('5,000 credits included each month');
     for (const tier of TIERS) {
       expect(includedCreditsPhrase(tier), tier).not.toContain('$');
       expect(includedCreditsPhrase(tier), tier).toMatch(/^\d/);

@@ -11,8 +11,8 @@ import { getTierFromPrice } from '@/lib/stripe/price-config';
  *
  * Re-settles ledger rows stuck 'pending' and consumes any usage rows that never
  * decremented the balance, so every billable AI call is charged exactly once
- * even across crashes/deploys. Also sweeps 'missed_grant' rows (Spec MON-2,
- * WAL-5): a paid invoice whose tier had no ratio at funding time fails closed and
+ * even across crashes/deploys. Also sweeps 'missed_grant' rows (Spec MON-2):
+ * a paid invoice whose tier had no ratio at funding time fails closed and
  * leaves one of these; here we re-resolve the tier from the user's subscriptions rows
  * (via the Stripe price map) and grant amount_paid × ratio once it has one. Any row
  * that FAILS to reconcile makes the run a 500 and is not audited as a success, so a

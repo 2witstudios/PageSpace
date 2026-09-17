@@ -70,7 +70,7 @@ describe('reconcileMissedGrants concurrency (Postgres)', () => {
     }
   });
 
-  it('MON-2 WAL-5 two overlapping reconcile runs on the same missed_grant row grant it exactly once', async () => {
+  it('MON-2 two overlapping reconcile runs on the same missed_grant row grant it exactly once', async () => {
     if (!dbAvailable) return;
     const user = await factories.createUser({ subscriptionTier: 'pro' });
     const priceId = `price_mgr_pro_${createId()}`;
