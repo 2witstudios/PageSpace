@@ -442,6 +442,13 @@ export interface CapUsage {
   dailySpentCents: number;
   /** Charged spend since {@link utcMonthStartMs}. */
   monthlySpentCents: number;
+  /**
+   * This consumer's outstanding holds on the leg placed in today's / this month's window
+   * (calls still in flight, not yet settled). Counted like spend, so overlapping calls
+   * cannot each pass the cap on the same settled total.
+   */
+  dailyReservedCents: number;
+  monthlyReservedCents: number;
 }
 
 export interface CapsResult extends CapRemaining {
@@ -453,20 +460,25 @@ function capRemaining(capCents: number | null, spentCents: number): number | nul
   return capCents === null ? null : Math.max(0, wholeNonNegative(capCents) - wholeNonNegative(spentCents));
 }
 
-/** Both UTC caps against this call's reservation; the daily cap is reported first. */
+/**
+ * Both UTC caps against this call's reservation, counting settled spend plus
+ * outstanding holds; the daily cap is reported first.
+ */
 export function evaluateCaps(input: { caps: ConsumerCaps; usage: CapUsage; reservationCents: number }): CapsResult {
+  const dailyUsed = wholeNonNegative(input.usage.dailySpentCents) + wholeNonNegative(input.usage.dailyReservedCents);
+  const monthlyUsed = wholeNonNegative(input.usage.monthlySpentCents) + wholeNonNegative(input.usage.monthlyReservedCents);
   const remaining: CapRemaining = {
-    dailyRemainingCents: capRemaining(input.caps.dailyCents, input.usage.dailySpentCents),
-    monthlyRemainingCents: capRemaining(input.caps.monthlyCents, input.usage.monthlySpentCents),
+    dailyRemainingCents: capRemaining(input.caps.dailyCents, dailyUsed),
+    monthlyRemainingCents: capRemaining(input.caps.monthlyCents, monthlyUsed),
   };
   const daily = evaluateDailyCap({
-    dailyChargedCents: input.usage.dailySpentCents,
+    dailyChargedCents: dailyUsed,
     estCostCents: input.reservationCents,
     capCents: input.caps.dailyCents,
   });
   if (!daily.allowed) return { allowed: false, reason: 'daily_cap_exceeded', ...remaining };
   const monthly = evaluateDailyCap({
-    dailyChargedCents: input.usage.monthlySpentCents,
+    dailyChargedCents: monthlyUsed,
     estCostCents: input.reservationCents,
     capCents: input.caps.monthlyCents,
   });

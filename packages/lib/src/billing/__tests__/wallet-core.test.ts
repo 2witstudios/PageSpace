@@ -313,12 +313,31 @@ describe('effectiveSpendPolicy', () => {
     ['no drive override inherits the org policy', null, org],
     ['a lower drive seat allowance applies', { seatAllowanceCents: c(40) }, { ...org, seatAllowanceCents: c(40) }],
     ['a higher drive seat allowance is clamped to the org amount', { seatAllowanceCents: c(400) }, org],
-    ['a drive may refuse where the org falls back', { fallback: 'refuse' }, { ...org, fallback: 'refuse' }],
-    ['a drive restating the org rule keeps it', { fallback: 'seat_allowance' }, org],
-    ['a drive cannot swap to a different fallback; it resolves to refuse', { fallback: 'own_credits' }, { ...org, fallback: 'refuse' }],
   ] as const)('POL-7 (partial) %s', (_label, drive, expected) => {
     expect(effectiveSpendPolicy(org, drive)).toEqual(expected);
   });
+
+  it.each([
+    ['seat_allowance', 'seat_allowance'],
+    ['own_credits', 'own_credits'],
+    ['refuse', 'refuse'],
+  ] as const)('POL-7 (partial) a drive rule equal to the org rule applies (%s)', (orgRule, driveRule) => {
+    expect(effectiveSpendPolicy({ ...org, fallback: orgRule }, { fallback: driveRule }).fallback).toBe(orgRule);
+  });
+
+  it.each(['seat_allowance', 'own_credits'] as const)('POL-7 (partial) a drive rule of refuse applies (org %s)', (orgRule) => {
+    expect(effectiveSpendPolicy({ ...org, fallback: orgRule }, { fallback: 'refuse' }).fallback).toBe('refuse');
+  });
+
+  it.each([
+    ['seat_allowance', 'own_credits'],
+    ['own_credits', 'seat_allowance'],
+  ] as const)(
+    'POL-7 (partial) a drive rule that swaps seat allowance and own credits resolves to refuse (org %s, drive %s)',
+    (orgRule, driveRule) => {
+      expect(effectiveSpendPolicy({ ...org, fallback: orgRule }, { fallback: driveRule }).fallback).toBe('refuse');
+    },
+  );
 
   it('POL-7 (partial) a drive cannot loosen an org that refuses', () => {
     expect(effectiveSpendPolicy({ seatAllowanceCents: null, fallback: 'refuse' }, { fallback: 'own_credits' })).toEqual({
@@ -511,18 +530,27 @@ describe('evaluateCaps', () => {
   });
 
   it.each([
-    ['unset caps are unlimited within the wallet', { dailyCents: null, monthlyCents: null }, { dailySpentCents: c(9999), monthlySpentCents: c(99999) }, c(5),
+    ['unset caps are unlimited within the wallet', { dailyCents: null, monthlyCents: null }, { dailySpentCents: c(9999), monthlySpentCents: c(99999), dailyReservedCents: 0, monthlyReservedCents: 0 }, c(5),
       { allowed: true, reason: 'ok', dailyRemainingCents: null, monthlyRemainingCents: null }],
-    ['within both caps', DEFAULT_CONSUMER_CAPS, { dailySpentCents: c(4), monthlySpentCents: c(50) }, c(5),
+    ['within both caps', DEFAULT_CONSUMER_CAPS, { dailySpentCents: c(4), monthlySpentCents: c(50), dailyReservedCents: 0, monthlyReservedCents: 0 }, c(5),
       { allowed: true, reason: 'ok', dailyRemainingCents: c(6), monthlyRemainingCents: c(50) }],
-    ['exactly reaching the daily cap is allowed', DEFAULT_CONSUMER_CAPS, { dailySpentCents: c(5), monthlySpentCents: c(5) }, c(5),
+    ['exactly reaching the daily cap is allowed', DEFAULT_CONSUMER_CAPS, { dailySpentCents: c(5), monthlySpentCents: c(5), dailyReservedCents: 0, monthlyReservedCents: 0 }, c(5),
       { allowed: true, reason: 'ok', dailyRemainingCents: c(5), monthlyRemainingCents: c(95) }],
-    ['past the daily cap', DEFAULT_CONSUMER_CAPS, { dailySpentCents: c(6), monthlySpentCents: c(6) }, c(5),
+    ['past the daily cap', DEFAULT_CONSUMER_CAPS, { dailySpentCents: c(6), monthlySpentCents: c(6), dailyReservedCents: 0, monthlyReservedCents: 0 }, c(5),
       { allowed: false, reason: 'daily_cap_exceeded', dailyRemainingCents: c(4), monthlyRemainingCents: c(94) }],
-    ['past the monthly cap with room today', DEFAULT_CONSUMER_CAPS, { dailySpentCents: 0, monthlySpentCents: c(98) }, c(5),
+    ['past the monthly cap with room today', DEFAULT_CONSUMER_CAPS, { dailySpentCents: 0, monthlySpentCents: c(98), dailyReservedCents: 0, monthlyReservedCents: 0 }, c(5),
       { allowed: false, reason: 'monthly_cap_exceeded', dailyRemainingCents: c(10), monthlyRemainingCents: c(2) }],
-    ['over both reports the daily cap first', DEFAULT_CONSUMER_CAPS, { dailySpentCents: c(12), monthlySpentCents: c(120) }, c(5),
+    ['over both reports the daily cap first', DEFAULT_CONSUMER_CAPS, { dailySpentCents: c(12), monthlySpentCents: c(120), dailyReservedCents: 0, monthlyReservedCents: 0 }, c(5),
       { allowed: false, reason: 'daily_cap_exceeded', dailyRemainingCents: 0, monthlyRemainingCents: 0 }],
+    ['an in-flight reservation counts against the daily cap', DEFAULT_CONSUMER_CAPS,
+      { dailySpentCents: c(4), monthlySpentCents: c(4), dailyReservedCents: c(5), monthlyReservedCents: c(5) }, c(5),
+      { allowed: false, reason: 'daily_cap_exceeded', dailyRemainingCents: c(1), monthlyRemainingCents: c(91) }],
+    ['an in-flight reservation counts against the monthly cap', { dailyCents: null, monthlyCents: c(100) },
+      { dailySpentCents: 0, monthlySpentCents: c(90), dailyReservedCents: 0, monthlyReservedCents: c(8) }, c(5),
+      { allowed: false, reason: 'monthly_cap_exceeded', dailyRemainingCents: null, monthlyRemainingCents: c(2) }],
+    ['reservations that still fit are allowed', DEFAULT_CONSUMER_CAPS,
+      { dailySpentCents: c(2), monthlySpentCents: c(2), dailyReservedCents: c(3), monthlyReservedCents: c(3) }, c(5),
+      { allowed: true, reason: 'ok', dailyRemainingCents: c(5), monthlyRemainingCents: c(95) }],
   ] as const)('WAL-7 (partial) %s', (_label, caps, usage, reservationCents, expected) => {
     expect(evaluateCaps({ caps, usage, reservationCents })).toEqual(expected);
   });
