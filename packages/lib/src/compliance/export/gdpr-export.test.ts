@@ -101,6 +101,7 @@ vi.mock('@pagespace/db/schema/auth', () => ({ users: mockTable('users') }));
 // other schema module so the real declarations never load under the mocked drizzle-orm.
 vi.mock('@pagespace/db/schema/drive-envs', () => ({ driveEnvs: mockTable('driveEnvs') }));
 vi.mock('@pagespace/db/schema/drive-env-local', () => ({ driveEnvLocal: mockTable('driveEnvLocal') }));
+vi.mock('@pagespace/db/schema/agent-identities', () => ({ agentIdentities: mockTable('agentIdentities') }));
 vi.mock('@pagespace/db/schema/core', () => ({
   drives: mockTable('drives'),
   pages: mockTable('pages'),
@@ -981,6 +982,8 @@ describe('collectAllUserData', () => {
     // Same rule again for the content-tags category: a collector that
     // `collectAllUserData` never calls reaches nobody's export.
     expect(Array.isArray(result!.contentTags)).toBe(true);
+    // An agent account's own identity row (ADR 0007), secrets withheld.
+    expect(Array.isArray(result!.agentIdentity)).toBe(true);
     expect(result!.personalization).toBeNull();
   });
 });

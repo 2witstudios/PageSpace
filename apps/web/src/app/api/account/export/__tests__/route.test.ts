@@ -107,6 +107,8 @@ const mockUserData = {
   streamState: [{ messageId: 'sm-1', conversationId: 'c-1', status: 'complete', parts: [] }],
   contentTags: [{ tagName: 'risk', pageId: 'p-1', pageTitle: 'Page', targetKind: 'page', anchor: null, anchorStatus: null, channelMessageId: null, aiMessageId: null, source: 'user', confidence: null }],
   localEnvironments: [{ envId: 'env-1', driveId: 'd-1', envName: 'my-mac', label: 'jono-macstudio', machinePublicKey: 'pk', machineKeyFingerprint: 'sha256:abc', serverKeyId: 'k1', bindPolicy: 'owner', capabilities: null, enrolledAt: null, lastSeenAt: null, revokedAt: null, createdAt: new Date('2026-09-04T00:00:00.000Z'), updatedAt: new Date('2026-09-04T00:00:00.000Z') }],
+  // An agent account's own identity row (ADR 0007), secrets withheld.
+  agentIdentity: [{ userId: 'user-1', ownerUserId: null, claimedAt: null, source: 'claude-code', lastAuthAt: null, createdAt: new Date('2026-09-16T00:00:00.000Z'), revokedAt: null, secretVersion: 1, createdByIp: null }],
 };
 
 describe('GET /api/account/export', () => {
@@ -242,6 +244,8 @@ describe('GET /api/account/export', () => {
       expect(names).toContain('stream-state.json');
       // The machines the subject enrolled as local environments are a first-class category.
       expect(names).toContain('local-environments.json');
+      // An agent account's own identity facts (ADR 0007), secrets withheld.
+      expect(names).toContain('agent-identity.json');
     });
 
     it('manifest.json documents the schema version and file inventory', async () => {

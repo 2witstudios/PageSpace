@@ -38,7 +38,15 @@ import { describe, it, expect } from 'vitest';
 import { getTableName, is } from 'drizzle-orm';
 import { PgTable } from 'drizzle-orm/pg-core';
 import * as dbSchema from '@pagespace/db/schema';
-import { EXPORTED_TABLES, EXCLUDED_TABLES, registeredTables } from './gdpr-export-coverage';
+import { getTableColumns } from 'drizzle-orm';
+import { agentIdentities } from '@pagespace/db/schema/agent-identities';
+import {
+  EXPORTED_TABLES,
+  EXCLUDED_TABLES,
+  registeredTables,
+  AGENT_IDENTITY_EXPORTED_COLUMNS,
+  AGENT_IDENTITY_WITHHELD_COLUMNS,
+} from './gdpr-export-coverage';
 import { buildNativeExportFiles } from './export-format';
 import type { AllUserData } from './gdpr-export';
 
@@ -82,6 +90,7 @@ const EMPTY: AllUserData = {
   streamState: [],
   contentTags: [],
   localEnvironments: [],
+  agentIdentity: [],
 };
 
 describe('GDPR export table coverage', () => {
@@ -167,6 +176,7 @@ describe('GDPR export table coverage', () => {
       agentWorkspaces: 'agent-workspaces.json',
       streamState: 'stream-state.json',
       localEnvironments: 'local-environments.json',
+      agentIdentity: 'agent-identity.json',
       contentTags: 'content-tags.json',
     };
 
@@ -180,6 +190,27 @@ describe('GDPR export table coverage', () => {
       `${unshipped.join(', ')}: a collector fills these AllUserData categories but ` +
       'buildNativeExportFiles never writes them into the archive, so they reach nobody.',
     ).toEqual([]);
+  });
+
+  it('exports agent_identities under agentIdentity, deciding every column: carried, or withheld with a reason', () => {
+    expect(EXPORTED_TABLES['agent_identities']).toBe('agentIdentity');
+    expect(EXCLUDED_TABLES['agent_identities']).toBeUndefined();
+
+    const schemaColumns = Object.keys(getTableColumns(agentIdentities)).sort();
+    const carried = [...AGENT_IDENTITY_EXPORTED_COLUMNS];
+    const withheld = Object.keys(AGENT_IDENTITY_WITHHELD_COLUMNS);
+    expect(carried.filter((c) => withheld.includes(c)), 'a column cannot be both carried and withheld').toEqual([]);
+    expect([...carried, ...withheld].sort(), 'every agent_identities column needs a decision').toEqual(schemaColumns);
+    for (const [column, reason] of Object.entries(AGENT_IDENTITY_WITHHELD_COLUMNS)) {
+      expect(reason.trim().length, `${column} withheld with no real reason`).toBeGreaterThan(40);
+    }
+  });
+
+  it('never carries the agent secret or claim-token hash/prefix columns', () => {
+    for (const column of ['secretHash', 'secretPrefix', 'claimTokenHash', 'claimTokenPrefix']) {
+      expect(AGENT_IDENTITY_EXPORTED_COLUMNS, column).not.toContain(column);
+      expect(Object.keys(AGENT_IDENTITY_WITHHELD_COLUMNS), column).toContain(column);
+    }
   });
 
   it('carries the agent-session tables whose loss motivated this guard', () => {
