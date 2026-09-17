@@ -1813,6 +1813,11 @@
       "import": "./dist/publish/render-sheet-page.js",
       "require": "./dist/publish/render-sheet-page.js"
     },
+    "./organizations/leave": {
+      "types": "./dist/organizations/leave.d.ts",
+      "import": "./dist/organizations/leave.js",
+      "require": "./dist/organizations/leave.js"
+    },
     "./notifications/types": {
       "types": "./dist/notifications/types.d.ts",
       "import": "./dist/notifications/types.js",
@@ -3064,6 +3069,9 @@
       ],
       "publish/render-sheet-page": [
         "./dist/publish/render-sheet-page.d.ts"
+      ],
+      "organizations/leave": [
+        "./dist/organizations/leave.d.ts"
       ],
       "notifications/types": [
         "./dist/notifications/types.d.ts"

@@ -46,6 +46,16 @@ export const POST = withAdminAuth(async (admin, request) => {
     return Response.json({ error: 'Target user not found' }, { status: 404 });
   }
 
+  // Force-delete cannot erase an org Owner (ORG-6): organization ownership transfers first. The
+  // worker would block the job anyway; refusing here says why instead of queueing a dead request.
+  const ownedOrganizations = await accountRepository.getOwnedOrganizationNames(userId);
+  if (ownedOrganizations.length > 0) {
+    return Response.json(
+      { error: 'User owns organizations. Transfer organization ownership first.', ownedOrganizations },
+      { status: 400 }
+    );
+  }
+
   const existing = await dataSubjectRequestRepository.findActiveErasureForUser(userId);
   if (existing) {
     // A request that the worker BLOCKED on multi-member drives is exactly what

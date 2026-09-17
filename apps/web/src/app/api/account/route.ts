@@ -216,6 +216,18 @@ export async function DELETE(req: Request) {
       );
     }
 
+    // An org Owner cannot delete their account (ORG-6); refuse before queueing anything.
+    const ownedOrganizations = await accountRepository.getOwnedOrganizationNames(userId);
+    if (ownedOrganizations.length > 0) {
+      return Response.json(
+        {
+          error: 'You must transfer ownership of your organizations before deleting your account',
+          ownedOrganizations,
+        },
+        { status: 400 }
+      );
+    }
+
     // Self-service cannot orphan co-owned drives. Multi-member ownership blocks
     // with guidance; the admin force-delete route is the escalation path (#908).
     const ownedDrives = await accountRepository.getOwnedDrives(userId);
