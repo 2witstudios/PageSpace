@@ -301,8 +301,11 @@ export async function POST(req: Request) {
     // TN3194: keep a revocable refresh token so account deletion can revoke the
     // Apple authorization. Deliberately NOT awaited — sign-in latency must never
     // depend on Apple, and a failed exchange must never fail a sign-in.
+    // iOS only: Android has no native Sign in with Apple — its code comes from
+    // Apple's web flow and can only be exchanged with that flow's redirect_uri,
+    // which this route does not have. Android users get the manual steps.
     const appleClientId = verificationResult.audience;
-    if (authorizationCode && appleClientId) {
+    if (platform === 'ios' && authorizationCode && appleClientId) {
       void captureAppleRefreshToken({
         userId: user.id,
         code: authorizationCode,

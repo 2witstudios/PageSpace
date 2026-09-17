@@ -882,6 +882,15 @@ describe('POST /api/auth/apple/native', () => {
       );
     });
 
+    it('given Android, whose Apple sign-in is Apple\'s web flow, should not exchange a code without its redirect_uri', async () => {
+      verifiedWithAudience();
+
+      const response = await POST(createNativeRequest({ ...validPayload, platform: 'android', authorizationCode: 'apple-code-1' }));
+
+      expect(response.status).toBe(200);
+      expect(captureAppleRefreshToken).not.toHaveBeenCalled();
+    });
+
     it('given no authorization code (an older client), should sign in without attempting a capture', async () => {
       verifiedWithAudience();
 
