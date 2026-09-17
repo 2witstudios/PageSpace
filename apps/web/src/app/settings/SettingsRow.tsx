@@ -10,6 +10,8 @@ export interface SettingsItem {
   available: boolean;
   desktopOnly?: boolean;
   mobileHidden?: boolean;
+  /** Hidden inside the native (Capacitor) apps. */
+  nativeHidden?: boolean;
 }
 
 export function SettingsRow({ item, index }: { item: SettingsItem; index: number }) {

@@ -493,6 +493,12 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Changed
 
+- **Paid-feature prompts in the iOS app no longer send you to a purchase page** — the locked Memory
+  automation, automatic backups and custom subdomain settings linked to the plan page, which the
+  iOS app cannot sell. They now say the feature is available on paid plans; on the web the upgrade
+  links are unchanged. Out-of-credits and paid-model messages no longer tell you to buy or upgrade in
+  their text (the web still shows its Buy credits button beside them), and the Privacy & Cookies
+  settings entry is hidden in the native app, matching the cookie banner.
 - **The header now says "Home", and the drive name next to it opens a proper drive picker** —
   the way back out of a drive used to be a small house icon followed by a `/`, and nothing on
   screen said where it went, so it was easy to miss entirely. It now reads **Home** in words, next

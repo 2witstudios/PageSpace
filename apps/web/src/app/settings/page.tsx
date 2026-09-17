@@ -5,9 +5,11 @@ import { useRouter } from "next/navigation";
 import { useMCP } from "@/hooks/useMCP";
 import { useAuth } from "@/hooks/useAuth";
 import { useBillingVisibility } from "@/hooks/useBillingVisibility";
+import { useCapacitor } from "@/hooks/useCapacitor";
 import { Button } from "@/components/ui/button";
 import { User, Plug2, Key, ArrowLeft, CreditCard, Bell, Shield, Keyboard, Sparkles, Eye, Cable, Calendar, Scale, HardDrive, SlashSquare, Coins, Cookie } from "lucide-react";
 import { SettingsRow, type SettingsItem } from "./SettingsRow";
+import { filterSettingsItems } from "./settings-visibility";
 
 const ADMIN_APP_URL = process.env.NEXT_PUBLIC_ADMIN_APP_URL || 'http://localhost:3005';
 
@@ -24,11 +26,10 @@ export default function SettingsPage() {
   const isDesktop = mcp.isDesktop;
   const isAdmin = user?.role === 'admin';
 
-  const filterItems = (items: SettingsItem[]) => items.filter((item) => {
-    if (item.desktopOnly && !isDesktop) return false;
-    if (item.mobileHidden && hideBilling) return false;
-    return true;
-  });
+  const { isNative } = useCapacitor();
+
+  const filterItems = (items: SettingsItem[]) =>
+    filterSettingsItems(items, { isDesktop, hideBilling, isNative });
 
   const settingsSections: SettingsSection[] = [
     {
@@ -155,6 +156,8 @@ export default function SettingsPage() {
           icon: Cookie,
           href: "/settings/privacy",
           available: true,
+          // Same reason the cookie banner is hidden there: App Review reads a cookie prompt as tracking.
+          nativeHidden: true,
         },
         {
           title: "Open-source licenses",
