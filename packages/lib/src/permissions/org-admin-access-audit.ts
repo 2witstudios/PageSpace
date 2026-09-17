@@ -95,7 +95,8 @@ export function createOrgAdminAccessAuditor({ claim, write, now }: OrgAdminAcces
   };
 }
 
-async function claimInRateLimitBuckets({ key, windowStart, expiresAt }: OrgAdminAuditClaim): Promise<boolean> {
+/** The guarded insert: true only for the caller whose claim row landed first in its window. */
+export async function claimOrgAdminAuditWindow({ key, windowStart, expiresAt }: OrgAdminAuditClaim): Promise<boolean> {
   const inserted = await db
     .insert(rateLimitBuckets)
     .values({ key, windowStart, count: 1, expiresAt })
@@ -115,7 +116,7 @@ function writeOrgAdminAccessEvent({ userId, driveId, orgId, orgRole }: OrgAdminA
 }
 
 const defaultAuditor = createOrgAdminAccessAuditor({
-  claim: claimInRateLimitBuckets,
+  claim: claimOrgAdminAuditWindow,
   write: writeOrgAdminAccessEvent,
   now: () => new Date(),
 });
