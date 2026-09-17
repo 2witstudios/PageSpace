@@ -11,6 +11,7 @@ import { users } from '@pagespace/db/schema/auth';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { driveMembers, userProfiles, driveRoles, pagePermissions } from '@pagespace/db/schema/members';
 import { decryptUserRow, decryptUsersByIdOnce } from '../auth/user-repository';
+import { loadEffectiveDriveMembership } from '../permissions/org-drive-membership';
 
 // ============================================================================
 // Types
@@ -90,24 +91,17 @@ export async function checkDriveAccess(
     return { isOwner: true, isAdmin: true, isMember: true, drive };
   }
 
-  const membership = await db
-    .select({ role: driveMembers.role })
-    .from(driveMembers)
-    .where(and(
-      eq(driveMembers.driveId, driveId),
-      eq(driveMembers.userId, userId),
-      isNotNull(driveMembers.acceptedAt),
-    ))
-    .limit(1);
+  // The shared org-aware membership: accepted rows only, org Owner/Admin power, implicit Open
+  // membership, and stale org or former-lead OWNER rows counting for nothing.
+  const membership = await loadEffectiveDriveMembership(userId, drive);
 
-  if (membership.length === 0) {
+  if (!membership) {
     return { isOwner: false, isAdmin: false, isMember: false, drive };
   }
 
-  const role = membership[0].role;
   return {
     isOwner: false,
-    isAdmin: role === 'ADMIN',
+    isAdmin: membership.role === 'ADMIN',
     isMember: true,
     drive,
   };

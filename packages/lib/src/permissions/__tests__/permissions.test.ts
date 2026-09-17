@@ -696,7 +696,7 @@ describe('isDriveOwnerOrAdmin', () => {
       } as unknown as ReturnType<typeof db.select>)
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ id: 'member-id' }]) }),
+          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ role: 'ADMIN', customRoleId: null, source: 'invite' }]) }),
         }),
       } as unknown as ReturnType<typeof db.select>);
 
@@ -721,13 +721,8 @@ describe('isDriveOwnerOrAdmin', () => {
     expect(result).toBe(false);
   });
 
-  it('returns false when drive not found', async () => {
+  it('returns false when drive not found, without reading membership', async () => {
     vi.mocked(db.select)
-      .mockReturnValueOnce({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
-        }),
-      } as unknown as ReturnType<typeof db.select>)
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
@@ -735,6 +730,7 @@ describe('isDriveOwnerOrAdmin', () => {
       } as unknown as ReturnType<typeof db.select>);
 
     const result = await isDriveOwnerOrAdmin(VALID_USER, VALID_DRIVE);
+    expect(db.select).toHaveBeenCalledTimes(1);
     expect(result).toBe(false);
   });
 });
@@ -765,7 +761,7 @@ describe('isUserDriveMember', () => {
       } as unknown as ReturnType<typeof db.select>)
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ id: 'member-row' }]) }),
+          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ role: 'MEMBER', customRoleId: null, source: 'invite' }]) }),
         }),
       } as unknown as ReturnType<typeof db.select>);
 
@@ -824,10 +820,10 @@ describe('getUserAccessiblePagesInDrive', () => {
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ ownerId: 'other-user' }]) }),
         }),
       } as unknown as ReturnType<typeof db.select>)
-      // admin check
+      // effective membership: ADMIN
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ id: 'admin-member' }]) }),
+          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ role: 'ADMIN', customRoleId: null, source: 'invite' }]) }),
         }),
       } as unknown as ReturnType<typeof db.select>)
       // all pages
@@ -849,16 +845,10 @@ describe('getUserAccessiblePagesInDrive', () => {
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ ownerId: 'other-user' }]) }),
         }),
       } as unknown as ReturnType<typeof db.select>)
-      // admin check (not admin)
+      // effective membership → a member (no custom role)
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
-        }),
-      } as unknown as ReturnType<typeof db.select>)
-      // member check → is a member (no custom role)
-      .mockReturnValueOnce({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ id: 'member-row', customRoleId: null }]) }),
+          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ role: 'MEMBER', customRoleId: null, source: 'invite' }]) }),
         }),
       } as unknown as ReturnType<typeof db.select>)
       // non-private pages visible to all members
@@ -888,13 +878,7 @@ describe('getUserAccessiblePagesInDrive', () => {
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ ownerId: 'other-user' }]) }),
         }),
       } as unknown as ReturnType<typeof db.select>)
-      // admin check (not admin)
-      .mockReturnValueOnce({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
-        }),
-      } as unknown as ReturnType<typeof db.select>)
-      // member check → not a member
+      // effective membership → none
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
@@ -965,16 +949,10 @@ describe('getUserAccessiblePagesInDriveWithDetails', () => {
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ ownerId: 'other-user' }]) }),
         }),
       } as unknown as ReturnType<typeof db.select>)
-      // admin check → not admin
+      // effective membership → a member (no custom role)
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
-        }),
-      } as unknown as ReturnType<typeof db.select>)
-      // member check → is a member (no custom role)
-      .mockReturnValueOnce({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ id: 'member-row', customRoleId: null }]) }),
+          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ role: 'MEMBER', customRoleId: null, source: 'invite' }]) }),
         }),
       } as unknown as ReturnType<typeof db.select>)
       // non-private pages (MEMBER default read)
@@ -1035,7 +1013,7 @@ describe('getUserDriveAccess', () => {
       } as unknown as ReturnType<typeof db.select>)
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ id: 'member-row' }]) }),
+          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ role: 'MEMBER', customRoleId: null, source: 'invite' }]) }),
         }),
       } as unknown as ReturnType<typeof db.select>);
 
@@ -1128,7 +1106,7 @@ describe('getUserDriveAccess', () => {
       } as unknown as ReturnType<typeof db.select>)
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ id: 'member-row' }]) }),
+          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ role: 'MEMBER', customRoleId: null, source: 'invite' }]) }),
         }),
       } as unknown as ReturnType<typeof db.select>);
 

@@ -5,6 +5,7 @@ import { drives } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
 import { isDriveOwnerOrAdmin, isUserDriveMember } from '../permissions/permissions';
 import { getDriveRecipientUserIds } from './drive-member-service';
+import { ORGS_ENABLED } from '../organizations/orgs-enabled';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -284,6 +285,19 @@ export async function isUserMemberOfAnyEventDrive(
   event: { id: string; driveId: string | null },
 ): Promise<boolean> {
   if (!event.driveId) return false;
+
+  if (ORGS_ENABLED) {
+    // The shared org-aware membership, drive by drive (an event is shared into a handful at most).
+    if (await isUserDriveMember(userId, event.driveId)) return true;
+    const shared = await db
+      .select({ driveId: calendarEventDrives.driveId })
+      .from(calendarEventDrives)
+      .where(eq(calendarEventDrives.eventId, event.id));
+    for (const { driveId } of shared) {
+      if (await isUserDriveMember(userId, driveId)) return true;
+    }
+    return false;
+  }
 
   // getDriveRecipientUserIds includes the drive owner + all accepted members.
   const homeRecipients = new Set(await getDriveRecipientUserIds(event.driveId));

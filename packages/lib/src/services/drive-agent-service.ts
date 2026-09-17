@@ -14,6 +14,7 @@ import { eq, and, ne, isNotNull, inArray } from '@pagespace/db/operators';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { driveAgentMembers, driveMembers } from '@pagespace/db/schema/members';
 import { canUserEditPage, getUserDriveAccess, isDriveOwnerOrAdmin } from '../permissions/permissions';
+import { loadEffectiveDriveMembership } from '../permissions/org-drive-membership';
 import { customRoleBelongsToDrive, fetchCustomRolePermissions } from '../permissions/membership-queries';
 import type { CustomRolePerms } from '../permissions/membership-queries';
 import { isHomeDrive, homeDriveActionError } from './drive-guards';
@@ -58,7 +59,7 @@ async function resolveGranterAccess(
   driveId: string,
 ): Promise<{ canGrant: boolean; maxRole: AgentDriveRole; customRoleId: string | null; driveKind: string | null }> {
   const [drive] = await db
-    .select({ ownerId: drives.ownerId, kind: drives.kind })
+    .select({ ownerId: drives.ownerId, kind: drives.kind, orgId: drives.orgId, orgVisibility: drives.orgVisibility })
     .from(drives)
     .where(eq(drives.id, driveId))
     .limit(1);
@@ -67,15 +68,9 @@ async function resolveGranterAccess(
   const driveKind = drive.kind ?? null;
   if (drive.ownerId === userId) return { canGrant: true, maxRole: 'ADMIN', customRoleId: null, driveKind };
 
-  const [membership] = await db
-    .select({ role: driveMembers.role, customRoleId: driveMembers.customRoleId })
-    .from(driveMembers)
-    .where(and(
-      eq(driveMembers.driveId, driveId),
-      eq(driveMembers.userId, userId),
-      isNotNull(driveMembers.acceptedAt),
-    ))
-    .limit(1);
+  // The shared org-aware membership (an org Owner/Admin grants as ADMIN; an implicit Open member
+  // is capped to MEMBER with the drive's default role).
+  const membership = await loadEffectiveDriveMembership(userId, { id: driveId, ...drive });
 
   if (membership) {
     return {
