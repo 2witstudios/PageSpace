@@ -49,8 +49,8 @@ export async function GET(
     // array (never undefined) so client-side SWR cache shape stays stable as
     // a viewer's role changes — avoids "field present for some users, missing
     // for others" type ambiguity in the UI.
-    // Owner/admin needs the user as they stand now AND the credential's own role.
-    const canSeePending = (access.isOwner || access.isAdmin) && (await isPrincipalDriveOwnerOrAdmin(auth, driveId));
+    // The resolver caps a credential at its user as they stand now.
+    const canSeePending = await isPrincipalDriveOwnerOrAdmin(auth, driveId);
     const pendingInvites = canSeePending
       ? await driveInviteRepository.findUnconsumedInvitesByDrive(driveId)
       : [];

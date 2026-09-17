@@ -25,6 +25,7 @@ vi.mock('@/lib/auth', () => ({
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
   canPrincipalViewPage: vi.fn().mockResolvedValue(true),
   canPrincipalEditPage: vi.fn().mockResolvedValue(true),
+  getAllowedDriveIds: vi.fn(() => []),
 }));
 
 // --- Permissions ---------------------------------------------------------------
@@ -850,6 +851,22 @@ describe('POST /api/channels/[pageId]/messages (top-level — mention notificati
     );
   });
 
+  it('hands the mention responder the POSTER\'s credential ceiling, so the mentioned agent cannot exceed a scoped grant', async () => {
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
+    userId: USER_ID, role: 'user', tokenVersion: 0, adminRoleVersion: 0, tokenType: 'oauth', tokenId: 'at-1',
+    scopes: { account: false } as never, driveScopes: [{ driveId: 'drive-1', role: 'MEMBER', customRoleId: null }], allowedDriveIds: ['drive-1'], clientFirstParty: false,
+  });
+    const { triggerMentionedAgentResponses } = await import('@/lib/channels/agent-mention-responder');
+
+    const res = await callPost({ content: 'hey @[Helper](agent-1:page)' });
+
+    expect(res.status).toBe(201);
+    await vi.waitFor(() => expect(triggerMentionedAgentResponses).toHaveBeenCalled());
+    expect(vi.mocked(triggerMentionedAgentResponses).mock.calls[0][0].credentialScope).toEqual(
+      expect.objectContaining({ credentialCeiling: { kind: 'oauth', driveScopes: [{ driveId: 'drive-1', role: 'MEMBER', customRoleId: null }] } }),
+    );
+  });
+
   it('returns 201 even when notifyMentionedUsers rejects', async () => {
     mockNotifyMentionedUsers.mockRejectedValue(new Error('notification service down'));
 
@@ -915,6 +932,23 @@ describe('POST /api/channels/[pageId]/messages (thread reply — mention notific
     } else {
       process.env.INTERNAL_REALTIME_URL = originalRealtimeUrl;
     }
+  });
+
+  it('hands the thread-reply mention responder the POSTER\'s credential ceiling', async () => {
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
+    userId: USER_ID, role: 'user', tokenVersion: 0, adminRoleVersion: 0, tokenType: 'oauth', tokenId: 'at-1',
+    scopes: { account: false } as never, driveScopes: [{ driveId: 'drive-1', role: 'MEMBER', customRoleId: null }], allowedDriveIds: ['drive-1'], clientFirstParty: false,
+  });
+    makeThreadReplyScenario('hey @[Helper](agent-1:page)');
+    const { triggerMentionedAgentResponses } = await import('@/lib/channels/agent-mention-responder');
+
+    const res = await callPost({ content: 'hey @[Helper](agent-1:page)', parentId: PARENT_ID });
+
+    expect(res.status).toBe(201);
+    await vi.waitFor(() => expect(triggerMentionedAgentResponses).toHaveBeenCalled());
+    expect(vi.mocked(triggerMentionedAgentResponses).mock.calls[0][0].credentialScope?.credentialCeiling).toEqual(
+      { kind: 'oauth', driveScopes: [{ driveId: 'drive-1', role: 'MEMBER', customRoleId: null }] },
+    );
   });
 
   it('fires createMentionNotification for a @mentioned non-follower who can view the channel', async () => {

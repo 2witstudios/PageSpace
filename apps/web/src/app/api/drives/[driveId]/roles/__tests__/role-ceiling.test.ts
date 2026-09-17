@@ -4,7 +4,8 @@
  * deleting a drive role asked only whether the USER is owner/admin, so a
  * MEMBER-role mcp_ key held by an admin could redefine what roles grant — and
  * with it mint admin-level authority for someone else. Owner/admin authority
- * now requires BOTH the credential's role and the user's current role.
+ * is the credential's role capped at the user's current role — enforced once,
+ * in the ceiling resolver (isCeilingDriveOwnerOrAdmin), not per route.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
@@ -42,6 +43,7 @@ import { PATCH, DELETE } from '../[roleId]/route';
 import { authenticateRequestWithOptions, type AuthResult } from '@/lib/auth';
 import { checkDriveAccessForRoles, createDriveRole, updateDriveRole, deleteDriveRole } from '@pagespace/lib/services/drive-role-service';
 import { getAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
+import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { PARITY_USER_ID, mcpDriveKey } from '@/lib/auth/__tests__/oauth-principal-fixture';
 
 const DRIVE = 'drivex';
@@ -57,8 +59,10 @@ const keyWithRole = (role: 'MEMBER' | 'ADMIN') => {
   vi.mocked(getAppDriveMembership).mockResolvedValue({ role, customRoleId: null, ownerUserId: PARITY_USER_ID });
   return mcpDriveKey(DRIVE);
 };
-const userIs = (admin: boolean) =>
+const userIs = (admin: boolean) => {
   vi.mocked(checkDriveAccessForRoles).mockResolvedValue({ isOwner: false, isAdmin: admin, isMember: true, drive: { id: DRIVE, ownerId: 'owner' } } as never);
+  vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(admin);
+};
 
 beforeEach(() => vi.clearAllMocks());
 

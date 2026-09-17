@@ -1,4 +1,5 @@
 import { NextResponse, after } from 'next/server';
+import { getCredentialCeiling } from '@/lib/auth/credential-ceiling';
 import { z } from 'zod';
 import { db } from '@pagespace/db/db'
 import { eq, and, or, gte, lte, inArray, isNull, isNotNull, asc } from '@pagespace/db/operators'
@@ -20,7 +21,6 @@ import { resolveTimezone } from '@/lib/ai/core/personalization-utils';
 import { absoluteInstant } from '@/lib/validation/date-params';
 import { expandRecurringEvents } from '@/lib/workflows/recurrence-utils';
 import { CronExpressionParser } from 'cron-parser';
-import { refuseOAuthAgentTrigger } from '@/lib/auth/oauth-agent-trigger-hold';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
@@ -536,10 +536,6 @@ export async function POST(request: Request) {
 
     const data = parseResult.data;
 
-    // Agent triggers are held from OAuth applications (pending Phase 2b / [D-15]).
-    const triggerHold = refuseOAuthAgentTrigger(auth, { writesTrigger: data.agentTrigger !== undefined, firesTrigger: false });
-    if (triggerHold) return triggerHold;
-
     // A personal (driveless) event is outside an OAuth application's scope.
     if (isPersonalEventOutOfScope(auth, { driveId: data.driveId ?? null })) return eventOutOfScopeResponse();
 
@@ -711,6 +707,7 @@ export async function POST(request: Request) {
           },
           recurrenceRule: data.recurrenceRule ?? null,
           recurrenceExceptions: [],
+          credentialCeiling: getCredentialCeiling(auth) ?? null,
         });
       }
 

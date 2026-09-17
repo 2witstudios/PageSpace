@@ -1,4 +1,5 @@
 import { NextResponse, after } from 'next/server';
+import { getCredentialCeiling } from '@/lib/auth/credential-ceiling';
 import { z } from 'zod';
 import { db } from '@pagespace/db/db'
 import { eq, and } from '@pagespace/db/operators'
@@ -17,9 +18,7 @@ import {
   resyncCalendarTriggerTimings,
   upsertCalendarTriggerWorkflowInTx,
   validateCalendarAgentTrigger,
-  calendarEventHasAgentTrigger,
 } from '@/lib/workflows/calendar-trigger-helpers';
-import { appliesAgentTriggerHold, calendarPatchTriggerIntent, refuseOAuthAgentTrigger } from '@/lib/auth/oauth-agent-trigger-hold';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
@@ -240,20 +239,6 @@ export async function PATCH(
 
     const data = parseResult.data;
 
-    // Agent triggers are held from OAuth applications (pending Phase 2b / [D-15]):
-    // setting or clearing one, or re-timing an event that carries one (which
-    // re-aims its pending runs), is refused before any write.
-    const timingChanged = data.startAt !== undefined || data.recurrenceRule !== undefined;
-    const triggerHold = refuseOAuthAgentTrigger(
-      auth,
-      calendarPatchTriggerIntent({
-        agentTriggerPresent: data.agentTrigger !== undefined,
-        timingChanged,
-        eventHasTrigger: timingChanged && appliesAgentTriggerHold(auth) && (await calendarEventHasAgentTrigger(db, eventId)),
-      }),
-    );
-    if (triggerHold) return triggerHold;
-
     // Apply timezone-aware parsing for naive ISO datetimes: the provided
     // timezone, else the event's own stored timezone, else the caller's profile
     // (resolveTimezone), else UTC.
@@ -358,6 +343,7 @@ export async function PATCH(
           agentTrigger: data.agentTrigger,
           recurrenceRule: effectiveRecurrenceRule,
           recurrenceExceptions: event.recurrenceExceptions ?? [],
+          credentialCeiling: getCredentialCeiling(auth) ?? null,
         });
       } else if (data.agentTrigger === undefined && (adjustedStartAt || data.recurrenceRule !== undefined)) {
         // Caller didn't touch agentTrigger but timing/recurrence changed.

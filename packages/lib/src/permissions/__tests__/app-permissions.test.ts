@@ -47,6 +47,7 @@ import {
   getScopedDriveMembership,
   getScopedDriveAccessLevel,
   getScopedAccessiblePagesInDrive,
+  intersectPermissionLevels,
 } from '../app-permissions';
 import type { DriveScopeRow } from '../../auth/oauth/scopes';
 import { db } from '@pagespace/db/db';
@@ -91,8 +92,26 @@ function stubSelectJoin(rows: unknown[]) {
   } as unknown as ReturnType<typeof db.select>;
 }
 
+// Every page the stubs enumerate, so the user-side listing can default to "the
+// user owns the drive and sees all of it" (see ownerSeesEverything).
+let enumeratedPages: Array<{ id: string; title: string; type: string; parentId: string | null; position: number; isTrashed: boolean }> = [];
+
+/**
+ * The explicit-role resolvers intersect with the USER's live access. Tests about
+ * what a ROLE grants default that user to the drive's owner — full access to
+ * every enumerated page — so the role's own answer is what they observe.
+ */
+function ownerSeesEverything() {
+  enumeratedPages = [];
+  vi.mocked(getUserAccessLevel).mockResolvedValue(FULL);
+  vi.mocked(getUserAccessiblePagesInDriveWithDetails).mockImplementation(async () =>
+    enumeratedPages.map((page) => ({ ...page, permissions: FULL })),
+  );
+}
+
 // select().from().where() → rows  (page enumeration)
 function stubSelectList(rows: unknown[]) {
+  enumeratedPages.push(...(rows as typeof enumeratedPages));
   return {
     from: vi.fn().mockReturnValue({
       where: vi.fn().mockResolvedValue(rows),
@@ -190,7 +209,10 @@ describe('resolveExplicitAppRoleAccess (pure user-parity table)', () => {
 // ---------------------------------------------------------------------------
 
 describe('getAppAccessLevel', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    ownerSeesEverything();
+  });
 
   it('returns null when token has no membership in the drive', async () => {
     vi.mocked(db.select)
@@ -215,9 +237,11 @@ describe('getAppAccessLevel', () => {
     vi.mocked(db.select)
       .mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID, isPrivate: false, type: 'CHANNEL' }]))
       .mockReturnValueOnce(stubSelectJoin([membershipRow('MEMBER')]));
+    // The user owns the drive: the intersection leaves the role's answer as is.
+    vi.mocked(getUserAccessLevel).mockResolvedValue(FULL);
 
     expect(await getAppAccessLevel(TOKEN_ID, PAGE_ID)).toEqual({ ...VIEW_ONLY, canEdit: true });
-    expect(getUserAccessLevel).not.toHaveBeenCalled();
+    expect(getUserAccessLevel).toHaveBeenCalledWith(OWNER_ID, PAGE_ID);
   });
 
   it('explicit MEMBER on a private page → null', async () => {
@@ -304,7 +328,10 @@ describe('getAppDriveMembership', () => {
 });
 
 describe('getAppDriveAccessLevel', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    ownerSeesEverything();
+  });
 
   it('null when token has no membership', async () => {
     vi.mocked(db.select).mockReturnValueOnce(stubSelectJoin([]));
@@ -336,7 +363,10 @@ describe('getAppDriveAccessLevel', () => {
 // ---------------------------------------------------------------------------
 
 describe('getAppAccessiblePagesInDrive', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    ownerSeesEverything();
+  });
 
   it('returns [] when the token has no membership', async () => {
     vi.mocked(db.select).mockReturnValueOnce(stubSelectJoin([]));
@@ -361,6 +391,12 @@ describe('getAppAccessiblePagesInDrive', () => {
         { id: 'doc', title: 'Doc', type: 'DOCUMENT', parentId: null, position: 0, isTrashed: false },
         { id: 'chan', title: 'General', type: 'CHANNEL', parentId: null, position: 1, isTrashed: false },
       ]));
+    // The user owns the drive and sees both pages with full access.
+    vi.mocked(getUserAccessiblePagesInDriveWithDetails).mockResolvedValue([
+      { id: 'doc', title: 'Doc', type: 'DOCUMENT', parentId: null, position: 0, isTrashed: false, permissions: FULL },
+      { id: 'chan', title: 'General', type: 'CHANNEL', parentId: null, position: 1, isTrashed: false, permissions: FULL },
+    ]);
+    vi.mocked(getUserAccessLevel).mockResolvedValue(FULL);
 
     const result = await getAppAccessiblePagesInDrive(TOKEN_ID, DRIVE_ID);
     expect(result.find((p) => p.id === 'doc')?.permissions).toEqual(VIEW_ONLY);
@@ -419,6 +455,7 @@ const scopeRow = (driveId: string, role: 'ADMIN' | 'MEMBER' | null, customRoleId
 describe('getScopedAccessLevel', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    ownerSeesEverything();
     // The token's user is still a member unless a case says otherwise.
     vi.mocked(isUserDriveMember).mockResolvedValue(true);
   });
@@ -441,8 +478,10 @@ describe('getScopedAccessLevel', () => {
   it('explicit MEMBER on a CHANNEL → canEdit true, identical to the MCP-token resolver', async () => {
     vi.mocked(db.select).mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID, isPrivate: false, type: 'CHANNEL' }]));
 
+    vi.mocked(getUserAccessLevel).mockResolvedValue(FULL);
+
     expect(await getScopedAccessLevel([scopeRow(DRIVE_ID, 'MEMBER')], OWNER_ID, PAGE_ID)).toEqual({ ...VIEW_ONLY, canEdit: true });
-    expect(getUserAccessLevel).not.toHaveBeenCalled();
+    expect(getUserAccessLevel).toHaveBeenCalledWith(OWNER_ID, PAGE_ID);
   });
 
   it('explicit ADMIN on a private page → full (parity with a scoped MCP ADMIN token)', async () => {
@@ -543,6 +582,7 @@ describe('explicit-role OAuth scope rows end with the user\'s drive membership',
 describe('getScopedDriveAccessLevel', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    ownerSeesEverything();
     // The token's user is still a member unless a case says otherwise.
     vi.mocked(isUserDriveMember).mockResolvedValue(true);
   });
@@ -571,6 +611,7 @@ describe('getScopedDriveAccessLevel', () => {
 describe('getScopedAccessiblePagesInDrive', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    ownerSeesEverything();
     // The token's user is still a member unless a case says otherwise.
     vi.mocked(isUserDriveMember).mockResolvedValue(true);
   });
@@ -595,6 +636,12 @@ describe('getScopedAccessiblePagesInDrive', () => {
       { id: 'doc', title: 'Doc', type: 'DOCUMENT', parentId: null, position: 0, isTrashed: false },
       { id: 'chan', title: 'General', type: 'CHANNEL', parentId: null, position: 1, isTrashed: false },
     ]));
+    // The user owns the drive and sees both pages with full access.
+    vi.mocked(getUserAccessiblePagesInDriveWithDetails).mockResolvedValue([
+      { id: 'doc', title: 'Doc', type: 'DOCUMENT', parentId: null, position: 0, isTrashed: false, permissions: FULL },
+      { id: 'chan', title: 'General', type: 'CHANNEL', parentId: null, position: 1, isTrashed: false, permissions: FULL },
+    ]);
+    vi.mocked(getUserAccessLevel).mockResolvedValue(FULL);
 
     const result = await getScopedAccessiblePagesInDrive([scopeRow(DRIVE_ID, 'MEMBER')], OWNER_ID, DRIVE_ID);
     expect(result.find((p) => p.id === 'doc')?.permissions).toEqual(VIEW_ONLY);
@@ -609,5 +656,65 @@ describe('getScopedAccessiblePagesInDrive', () => {
     const result = await getScopedAccessiblePagesInDrive([scopeRow(DRIVE_ID, 'ADMIN')], OWNER_ID, DRIVE_ID);
     expect(result).toHaveLength(1);
     expect(result[0].permissions).toEqual(FULL);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The ceiling definition: an explicit-role credential never exceeds its user.
+// ---------------------------------------------------------------------------
+
+describe('a credential never exceeds its user — explicit role ∩ live user access', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('intersectPermissionLevels ANDs every flag, and no access on either side is no access', () => {
+    expect(intersectPermissionLevels(FULL, VIEW_ONLY)).toEqual(VIEW_ONLY);
+    expect(intersectPermissionLevels({ ...VIEW_ONLY, canEdit: true }, { ...VIEW_ONLY, canShare: true })).toEqual(VIEW_ONLY);
+    expect(intersectPermissionLevels(FULL, null)).toBeNull();
+    expect(intersectPermissionLevels(null, FULL)).toBeNull();
+    expect(intersectPermissionLevels(FULL, NONE)).toEqual(NONE);
+  });
+
+  it('an explicit ADMIN key of a user who is now only a viewer of the page is capped at view (demotion)', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID, isPrivate: false, type: 'DOCUMENT' }]))
+      .mockReturnValueOnce(stubSelectJoin([membershipRow('ADMIN')]));
+    vi.mocked(getUserAccessLevel).mockResolvedValue(VIEW_ONLY);
+
+    expect(await getAppAccessLevel(TOKEN_ID, PAGE_ID)).toEqual(VIEW_ONLY);
+    expect(getUserAccessLevel).toHaveBeenCalledWith(OWNER_ID, PAGE_ID);
+  });
+
+  it('an explicit ADMIN OAuth grant on a private page its user can no longer see resolves to nothing', async () => {
+    vi.mocked(isUserDriveMember).mockResolvedValue(true);
+    vi.mocked(db.select).mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID, isPrivate: true, type: 'DOCUMENT' }]));
+    vi.mocked(getUserAccessLevel).mockResolvedValue(null);
+
+    expect(await getScopedAccessLevel([scopeRow(DRIVE_ID, 'ADMIN')], OWNER_ID, PAGE_ID)).toBeNull();
+  });
+
+  it('drive level: an ADMIN key or grant of a plain-member user loses share/delete on the drive', async () => {
+    const memberRoot = { canView: true, canEdit: true, canShare: false, canDelete: false };
+    vi.mocked(db.select).mockReturnValueOnce(stubSelectJoin([membershipRow('ADMIN')]));
+    vi.mocked(getUserAccessLevel).mockResolvedValue(memberRoot);
+    expect(await getAppDriveAccessLevel(TOKEN_ID, DRIVE_ID)).toEqual(memberRoot);
+    expect(getUserAccessLevel).toHaveBeenCalledWith(OWNER_ID, DRIVE_ID);
+
+    vi.mocked(isUserDriveMember).mockResolvedValue(true);
+    expect(await getScopedDriveAccessLevel([scopeRow(DRIVE_ID, 'ADMIN')], OWNER_ID, DRIVE_ID)).toEqual(memberRoot);
+  });
+
+  it('listing: an explicit ADMIN key sees only what its user sees, at the user\'s flags', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelectJoin([membershipRow('ADMIN')]))
+      .mockReturnValueOnce(stubSelectList([
+        { id: 'open', title: 'Open', type: 'DOCUMENT', parentId: null, position: 0, isTrashed: false },
+        { id: 'secret', title: 'Secret', type: 'DOCUMENT', parentId: null, position: 1, isTrashed: false },
+      ]));
+    vi.mocked(getUserAccessiblePagesInDriveWithDetails).mockResolvedValue([
+      { id: 'open', title: 'Open', type: 'DOCUMENT', parentId: null, position: 0, isTrashed: false, permissions: VIEW_ONLY },
+    ]);
+
+    const result = await getAppAccessiblePagesInDrive(TOKEN_ID, DRIVE_ID);
+    expect(result.map((p) => [p.id, p.permissions])).toEqual([['open', VIEW_ONLY]]);
   });
 });

@@ -92,9 +92,10 @@ export async function PATCH(
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     }
 
-    // Owner/admin authority needs BOTH the user (above) and the credential's own
-    // role: a MEMBER-role key held by an admin must not redefine drive roles.
-    if (!access.isOwner && !access.isAdmin || !(await isPrincipalDriveOwnerOrAdmin(auth, driveId))) {
+    // Owner/admin authority is the credential's own role capped at its user as
+    // they stand now (isPrincipalDriveOwnerOrAdmin): a MEMBER-role key held by an
+    // admin, or an ADMIN key of a demoted user, must not redefine drive roles.
+    if (!(await isPrincipalDriveOwnerOrAdmin(auth, driveId))) {
       return NextResponse.json({ error: 'Only owners and admins can update roles' }, { status: 403 });
     }
 
@@ -204,9 +205,10 @@ export async function DELETE(
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     }
 
-    // Owner/admin authority needs BOTH the user (above) and the credential's own
-    // role: a MEMBER-role key held by an admin must not redefine drive roles.
-    if (!access.isOwner && !access.isAdmin || !(await isPrincipalDriveOwnerOrAdmin(auth, driveId))) {
+    // Owner/admin authority is the credential's own role capped at its user as
+    // they stand now (isPrincipalDriveOwnerOrAdmin): a MEMBER-role key held by an
+    // admin, or an ADMIN key of a demoted user, must not redefine drive roles.
+    if (!(await isPrincipalDriveOwnerOrAdmin(auth, driveId))) {
       return NextResponse.json({ error: 'Only owners and admins can delete roles' }, { status: 403 });
     }
 

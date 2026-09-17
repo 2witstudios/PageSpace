@@ -6,6 +6,7 @@ import { taskTriggers } from '@pagespace/db/schema/task-triggers';
 import { executeWorkflow, type WorkflowExecutionInput } from './workflow-executor';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { validateAgentTrigger, type AgentTriggerPayload } from './agent-trigger-shared';
+import type { CredentialCeiling } from '@pagespace/lib/permissions/credential-ceiling';
 
 export interface AgentTriggerInput extends AgentTriggerPayload {
   triggerType: 'due_date' | 'completion';
@@ -20,6 +21,13 @@ export interface CreateTaskTriggerWorkflowParams {
   agentTrigger: AgentTriggerInput;
   dueDate: Date | null;
   timezone: string;
+  /**
+   * The ceiling of the credential writing this trigger (`getCredentialCeiling(auth)`
+   * at a route, `context.credentialCeiling` in a tool), or null for the user
+   * acting as themself. Persisted on the workflow row and re-applied to every
+   * run it fires (see workflow-executor). Required, so no caller can forget it.
+   */
+  credentialCeiling: CredentialCeiling | null;
 }
 
 export interface TaskTriggerWorkflowResult {
@@ -74,7 +82,7 @@ export async function recomputeTaskTriggerMetadata(
  * targets a known id rather than a returned excluded.workflowId.
  */
 export async function createTaskTriggerWorkflow(params: CreateTaskTriggerWorkflowParams): Promise<TaskTriggerWorkflowResult> {
-  const { database, driveId, userId, taskId, taskMetadata, agentTrigger, dueDate, timezone } = params;
+  const { database, driveId, userId, taskId, taskMetadata, agentTrigger, dueDate, timezone, credentialCeiling } = params;
   const triggerType = agentTrigger.triggerType;
 
   if (triggerType === 'due_date' && !dueDate) {
@@ -109,6 +117,7 @@ export async function createTaskTriggerWorkflow(params: CreateTaskTriggerWorkflo
         contextPageIds,
         timezone,
         isEnabled: true,
+        credentialCeiling,
       }).where(eq(workflows.id, workflowId));
 
       await tx.update(taskTriggers).set({
@@ -134,6 +143,7 @@ export async function createTaskTriggerWorkflow(params: CreateTaskTriggerWorkflo
         triggerType: 'cron',
         timezone,
         isEnabled: true,
+        credentialCeiling,
       }).returning({ id: workflows.id });
 
       const [createdTrigger] = await tx.insert(taskTriggers).values({
@@ -215,25 +225,6 @@ export async function cancelTaskDueDateTrigger(taskId: string, reason: string): 
  * Atomically claims the matching task_triggers row (lastFiredAt IS NULL guard) so
  * one fire ever happens per row, then loads the linked workflow and executes it.
  */
-/**
- * The task's ARMED agent triggers by type: enabled and not yet fired — the rows
- * `fireCompletionTrigger` would claim, and `syncTaskDueDateTrigger` /
- * `cancelTaskDueDateTrigger` would re-aim or disable.
- */
-export async function getArmedTaskTriggerTypes(taskId: string): Promise<ReadonlySet<'due_date' | 'completion'>> {
-  const rows = await db
-    .select({ triggerType: taskTriggers.triggerType })
-    .from(taskTriggers)
-    .where(
-      and(
-        eq(taskTriggers.taskItemId, taskId),
-        eq(taskTriggers.isEnabled, true),
-        isNull(taskTriggers.lastFiredAt),
-      ),
-    );
-  return new Set(rows.map((row) => row.triggerType));
-}
-
 export async function fireCompletionTrigger(taskId: string): Promise<void> {
   try {
     const [completionTrigger] = await db

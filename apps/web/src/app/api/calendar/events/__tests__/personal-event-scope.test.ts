@@ -50,6 +50,7 @@ describe('personal-event-scope', () => {
       { route: '[eventId]', usesRule: true },
       { route: '[eventId]/attendees', usesRule: true },
       { route: '[eventId]/drives', usesRule: true },
+      { route: '[eventId]/triggers', usesRule: true },
     ]);
   });
 });

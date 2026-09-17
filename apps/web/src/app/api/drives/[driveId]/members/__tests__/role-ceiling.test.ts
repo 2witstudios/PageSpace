@@ -20,6 +20,10 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
   logSecurityEvent: vi.fn(),
 }));
+vi.mock('@pagespace/lib/permissions/permissions', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@pagespace/lib/permissions/permissions')>()),
+  isDriveOwnerOrAdmin: vi.fn(),
+}));
 vi.mock('@pagespace/lib/permissions/app-permissions', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@pagespace/lib/permissions/app-permissions')>()),
   getAppDriveMembership: vi.fn(),
@@ -33,11 +37,14 @@ import { GET } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
 import { getAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
+import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { PARITY_USER_ID, mcpDriveKey } from '@/lib/auth/__tests__/oauth-principal-fixture';
 
 const list = () => GET(new Request('https://example.com/api/drives/drivex/members'), { params: Promise.resolve({ driveId: 'drivex' }) });
-const userIs = (admin: boolean) =>
+const userIs = (admin: boolean) => {
   vi.mocked(checkDriveAccess).mockResolvedValue({ isOwner: false, isAdmin: admin, isMember: true, drive: { id: 'drivex' } } as never);
+  vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(admin);
+};
 
 beforeEach(() => vi.clearAllMocks());
 

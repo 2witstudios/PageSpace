@@ -333,6 +333,7 @@ export const calendarWriteTools = {
               },
               recurrenceRule: recurrence ?? null,
               recurrenceExceptions: [],
+              credentialCeiling: (ctx as ToolExecutionContext)?.credentialCeiling ?? null,
             });
 
             await tx
@@ -603,6 +604,7 @@ export const calendarWriteTools = {
               agentTrigger,
               recurrenceRule: effectiveRecurrenceRule,
               recurrenceExceptions: event.recurrenceExceptions ?? [],
+              credentialCeiling: (ctx as ToolExecutionContext)?.credentialCeiling ?? null,
             });
           }
 

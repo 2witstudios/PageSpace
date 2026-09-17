@@ -4,6 +4,7 @@ import { eq } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { driveMembers } from '@pagespace/db/schema/members'
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalViewPage, canPrincipalEditPage } from '@/lib/auth';
+import { toolCredentialScope } from '@/lib/ai/core/tool-credential-scope';
 // canUserViewPage below is only used for mention RECIPIENTS (other users), not
 // the requesting principal — those checks are keyed to arbitrary user ids and
 // must stay user-level.
@@ -93,8 +94,8 @@ async function fanOutChannelInboxUpdate(
 // Local alias kept so the existing call sites in this file stay terse.
 const buildPreview = buildThreadPreview;
 
-const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
-const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS_READ = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
 
 export async function GET(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
   const { pageId } = await params;
@@ -535,6 +536,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
               driveId: channel?.driveId || null,
               driveName: channel?.drive?.name || null,
               driveSlug: channel?.drive?.slug || null,
+              credentialScope: toolCredentialScope(auth),
             })
           )
           .catch((error) => {
@@ -647,6 +649,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
             driveId: channel?.driveId || null,
             driveName: channel?.drive?.name || null,
             driveSlug: channel?.drive?.slug || null,
+            credentialScope: toolCredentialScope(auth),
           })
         )
         .catch((error) => {

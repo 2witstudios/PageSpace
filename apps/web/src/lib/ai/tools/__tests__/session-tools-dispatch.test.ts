@@ -136,12 +136,28 @@ describe('dispatchThroughChatPipeline', () => {
 
     await dispatchThroughChatPipeline({
       ...DISPATCH_INPUT,
-      scope: { allowedDriveIds: ['drive-a', 'drive-b'], mcpTokenId: 'mcp-token-1' },
+      scope: { allowedDriveIds: ['drive-a', 'drive-b'], ceiling: { kind: 'mcp', tokenId: 'mcp-token-1' } },
     });
 
     const payload = sentPayload(fetchMock);
     expect(payload.allowedDriveIds).toEqual(['drive-a', 'drive-b']);
-    expect(payload.originatingMcpTokenId).toBe('mcp-token-1');
+    expect(payload.originatingCeiling).toEqual({ kind: 'mcp', tokenId: 'mcp-token-1' });
+    expect(payload.originatingMcpTokenId).toBeUndefined();
+  });
+
+  it('carries an OAuth grant\'s ROLE ceiling across the hop, not just its drive list', async () => {
+    // The drive list alone does not imply the role: a `drive:X:member` grant
+    // held by X's owner whose worker kept only `allowedDriveIds` would run the
+    // worker's tools with OWNER rights in X.
+    const fetchMock = fetchAdmitted();
+    const driveScopes = [{ driveId: 'drive-a', role: 'MEMBER' as const, customRoleId: null }];
+
+    await dispatchThroughChatPipeline({
+      ...DISPATCH_INPUT,
+      scope: { allowedDriveIds: ['drive-a'], ceiling: { kind: 'oauth', driveScopes } },
+    });
+
+    expect(sentPayload(fetchMock).originatingCeiling).toEqual({ kind: 'oauth', driveScopes });
   });
 
   it('signs the depth rather than leaving it on a forgeable header', async () => {

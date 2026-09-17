@@ -563,6 +563,7 @@ export async function createTask(
         agentTrigger,
         dueDate: parsedDueDate,
         timezone: taskTimezone,
+        credentialCeiling: context.credentialCeiling ?? null,
       });
     }
 

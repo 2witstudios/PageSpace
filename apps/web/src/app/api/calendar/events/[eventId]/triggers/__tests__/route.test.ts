@@ -40,6 +40,7 @@ vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((r: unknown) => typeof r === 'object' && r !== null && 'error' in r),
   checkMCPDriveScope: vi.fn(() => null),
+  isScopedOAuthAuth: vi.fn((auth: { tokenType?: string; scopes?: { account?: boolean } }) => auth.tokenType === 'oauth' && !auth.scopes?.account),
   isPrincipalDriveOwnerOrAdmin: vi.fn(async (auth: { userId: string }, driveId: string) => {
     const { isDriveOwnerOrAdmin } = await import('@pagespace/lib/permissions/permissions');
     return isDriveOwnerOrAdmin(auth.userId, driveId);

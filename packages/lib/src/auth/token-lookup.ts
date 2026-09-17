@@ -84,6 +84,8 @@ export async function findMCPTokenByValue(
  */
 export interface OAuthAccessTokenRecord {
   id: string;
+  /** The refresh family this access token was issued from. */
+  familyId: string;
   userId: string;
   scopes: string[];
   tokenVersion: number;

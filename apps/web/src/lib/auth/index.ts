@@ -9,6 +9,7 @@ import { findOAuthAccessTokenByValue } from '@pagespace/lib/auth/token-lookup';
 import { parseScopeList, scopeSetToDriveScopes, type ScopeSet, type DriveScopeRow } from '@pagespace/lib/auth/oauth/scopes';
 import { getRegisteredClient } from '@pagespace/lib/auth/oauth/clients';
 import { EnforcedAuthContext } from '@pagespace/lib/permissions/enforced-context';
+import type { CredentialCeiling } from '@pagespace/lib/permissions/credential-ceiling';
 import { logSecurityEvent } from '@pagespace/lib/logging/logger-config';
 import { getSessionFromCookies } from './cookie-config';
 
@@ -51,6 +52,8 @@ export interface SessionAuthResult extends BaseAuthDetails {
 
 interface OAuthAuthDetails extends BaseAuthDetails {
   tokenId: string;
+  /** The token's refresh family — what a deferred run re-checks for revocation. */
+  familyId?: string;
   scopes: ScopeSet;
   // Bridge to the mcp_token_drives-shaped capability model (ADR 0002 Decision 2).
   driveScopes: DriveScopeRow[];
@@ -90,8 +93,12 @@ export interface ServiceAuthResult extends BaseAuthDetails {
   service: 'agent-dispatch';
   /** Inherited drive ceiling; `[]` = no ceiling. */
   allowedDriveIds: string[];
-  /** Set when the chain STARTED at a scoped MCP token, so its RBAC ceiling survives the hop. */
-  originatingMcpTokenId?: string;
+  /**
+   * Set when the chain STARTED at a drive-scoped credential (an `mcp_` key or an
+   * OAuth grant), so its ROLE ceiling survives the hop — read through
+   * `getCredentialCeiling`, like any other principal's.
+   */
+  originatingCeiling?: CredentialCeiling;
 }
 
 export type AuthResult = MCPAuthResult | SessionAuthResult | OAuthAuthResult | ServiceAuthResult;
@@ -171,9 +178,13 @@ export async function loadServicePrincipal(input: {
   userId: string;
   service: 'agent-dispatch';
   allowedDriveIds: string[];
+  originatingCeiling?: CredentialCeiling;
+  /** Legacy payload field — see `agentDispatchPayloadSchema`. Mapped to an mcp ceiling. */
   originatingMcpTokenId?: string;
 }): Promise<ServiceAuthResult | null> {
   if (!input.userId) return null;
+  const originatingCeiling: CredentialCeiling | undefined = input.originatingCeiling
+    ?? (input.originatingMcpTokenId ? { kind: 'mcp', tokenId: input.originatingMcpTokenId } : undefined);
 
   const user = await db.query.users.findFirst({
     where: eq(users.id, input.userId),
@@ -205,7 +216,7 @@ export async function loadServicePrincipal(input: {
     tokenVersion: user.tokenVersion,
     adminRoleVersion: user.adminRoleVersion,
     allowedDriveIds: input.allowedDriveIds,
-    ...(input.originatingMcpTokenId ? { originatingMcpTokenId: input.originatingMcpTokenId } : {}),
+    ...(originatingCeiling ? { originatingCeiling } : {}),
   };
 }
 
@@ -404,6 +415,7 @@ export async function validateOAuthAccessToken(token: string): Promise<OAuthAuth
       tokenVersion: user.tokenVersion,
       adminRoleVersion: user.adminRoleVersion,
       tokenId: record.id,
+      familyId: record.familyId,
       scopes: parsed.scopes,
       driveScopes,
       allowedDriveIds,

@@ -11,10 +11,8 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
   authenticateRequestWithOptions,
   isAuthError,
-  isMCPAuthResult,
   checkMCPPageScope,
-  getAllowedDriveIds,
-  isScopedMCPAuth,
+  isDriveScopedPrincipal,
   canPrincipalViewPage,
   canPrincipalEditPage,
 } from '@/lib/auth';
@@ -51,10 +49,11 @@ import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { prepareHistoryForModel, finishModelRequest } from '@/lib/ai/core/context-assembly';
 import { capStepToolPayloads } from '@/lib/ai/core/cap-step-tool-payloads';
+import { toolCredentialScope } from '@/lib/ai/core/tool-credential-scope';
 
 export const maxDuration = 300;
 
-const AUTH_OPTIONS = { allow: ['mcp'] as const, requireCSRF: false };
+const AUTH_OPTIONS = { allow: ['mcp', 'oauth'] as const, requireCSRF: false };
 
 // Runtime-toggled tools that must stay directly callable even in search mode.
 const ALWAYS_UPFRONT_TOOLS = new Set(['web_search']);
@@ -287,8 +286,8 @@ export async function POST(request: Request): Promise<Response> {
       ? [hasToolCall(FINISH_TOOL_NAME), stepCountIs(100)]
       : [stepCountIs(100)];
 
-    // Hide account-level-only tools (e.g. create_drive) from a drive-scoped MCP token's tool list.
-    const isMcpScopedRequest = isScopedMCPAuth(authResult);
+    // Hide account-level-only tools (e.g. create_drive) from a drive-scoped credential's tool list.
+    const isMcpScopedRequest = isDriveScopedPrincipal(authResult);
 
     if (inServerOnlyMode) {
       // server-only: existing pipeline unchanged
@@ -634,8 +633,7 @@ export async function POST(request: Request): Promise<Response> {
         // Bind tool execution to the MCP token's drive scope and RBAC role so a
         // scoped token cannot reach drives outside its scope — or exceed its own
         // membership role — via the agent's broader ACL.
-        mcpAllowedDriveIds: getAllowedDriveIds(authResult),
-        mcpTokenId: isMCPAuthResult(authResult) ? authResult.tokenId : undefined,
+        ...toolCredentialScope(authResult),
       },
       maxRetries: 20,
     });

@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { getCredentialCeiling } from '@/lib/auth/credential-ceiling';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError, canPrincipalEditPage } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -15,8 +16,8 @@ import { resolveTimezone } from '@/lib/ai/core/personalization-utils';
 
 const logger = loggers.api.child({ module: 'task-triggers-api' });
 
-const SESSION_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
-const SESSION_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const SESSION_READ = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: false };
+const SESSION_WRITE = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
 
 const upsertTriggerSchema = z.object({
   triggerType: z.enum(['due_date', 'completion']),
@@ -177,6 +178,7 @@ export async function PUT(request: Request, context: { params: Promise<{ taskId:
       },
       dueDate: ctx.task.dueDate,
       timezone,
+      credentialCeiling: getCredentialCeiling(auth) ?? null,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to save trigger';

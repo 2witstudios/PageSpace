@@ -205,7 +205,7 @@ describe('MCP Scope Enforcement', () => {
         tokenVersion: 1,
         adminRoleVersion: 1,
         allowedDriveIds: ['drive-1', 'drive-2'],
-        originatingMcpTokenId: 'mcp-token-1',
+        originatingCeiling: { kind: 'mcp', tokenId: 'mcp-token-1' },
       });
 
       expect(result).toEqual(['drive-1', 'drive-2']);

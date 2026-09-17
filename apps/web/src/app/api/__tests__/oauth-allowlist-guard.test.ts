@@ -79,42 +79,11 @@ export const OAUTH_ALLOWLIST_DENY: ReadonlyArray<{
   { route: 'drives/[driveId]/domains/*', forbidOAuth: true, d14Interim: 'compute-billing-public-exposure', reason: '[D-14 interim] compute, billing, public exposure: custom domains, verification and certificate refresh.' },
   { route: 'drives/[driveId]/publish-home', forbidOAuth: true, d14Interim: 'compute-billing-public-exposure', reason: "[D-14 interim] compute, billing, public exposure: publishes the drive's public home." },
   { route: 'pages/[pageId]/publish', forbidOAuth: true, d14Interim: 'compute-billing-public-exposure', reason: '[D-14 interim] compute, billing, public exposure: publishes a page to the public web.' },
+  { route: 'agent-workspaces/*', forbidOAuth: true, d14Interim: 'compute-billing-public-exposure', reason: '[D-14 interim] compute, billing, public exposure: agent workspace sandboxes — listing them and executing shell commands in them (arrived from master #2653 admitting mcp; held under the same category rather than widened).' },
 
   // [D-14 interim] (3) who can access the drive
   { route: 'drives/[driveId]/members', forbidOAuth: true, d14Interim: 'drive-access-control', reason: '[D-14 interim] who can access the drive: drive membership.' },
   { route: 'drives/[driveId]/roles/*', forbidOAuth: true, d14Interim: 'drive-access-control', reason: '[D-14 interim] who can access the drive: drive roles and their permissions.' },
-];
-
-/**
- * TEMPORARY exclusion — Phase 2b's first act is to empty this list.
- *
- * Routes that EXECUTE AGENT TOOLS under a `ToolExecutionContext`. Their `oauth`
- * widening is held (point-guard ruling, 2026-09-14) because widening them now
- * would let an OAuth token exceed a same-role `mcp_` key: the tool layer's
- * per-drive role ceiling keys only on `mcpTokenId`. Not a deny — the intent is
- * to widen these once Phase 2b generalizes that ceiling. Handoff notes live on
- * the Phase 2 page (ykd6o6kam220qrw2zgysxdzc) under "Handoff to Phase 2b".
- */
-const TOOL_CEILING_REASON =
-  "Executes agent tools; the per-drive ROLE ceiling in lib/ai/tools/actor-permissions.ts (hasAppTokenCeiling / driveDeniedByAppToken / getActorAccessiblePagesInDrive) keys only on context.mcpTokenId, so an OAuth drive:X:member token would run tools with the owning user's full role in X.";
-
-const MENTION_RESPONDER_REASON =
-  "Posting a message runs every @-mentioned agent through lib/channels/agent-mention-responder.ts, whose ToolExecutionContext carries only userId — no drive ceiling and no role ceiling for ANY credential — so the agent acts with the owning user's full reach.";
-const DEFERRED_RUN_REASON =
-  "Authors deferred agent runs that lib/workflows/workflow-executor.ts executes as the creating user with a ToolExecutionContext carrying no drive ceiling and no role ceiling for ANY credential.";
-
-export const PENDING_PHASE_2B: ReadonlyArray<{ readonly route: string; readonly file: string; readonly reason: string }> = [
-  { route: 'ai/page-agents/consult', file: 'apps/web/src/app/api/ai/page-agents/consult/route.ts', reason: TOOL_CEILING_REASON },
-  { route: 'v1/chat/completions', file: 'apps/web/src/app/api/v1/chat/completions/route.ts', reason: TOOL_CEILING_REASON },
-  { route: 'channels/[pageId]/messages', file: 'apps/web/src/app/api/channels/[pageId]/messages/route.ts', reason: MENTION_RESPONDER_REASON },
-  { route: 'channels/[pageId]/messages/[messageId]', file: 'apps/web/src/app/api/channels/[pageId]/messages/[messageId]/route.ts', reason: MENTION_RESPONDER_REASON },
-  { route: 'workflows', file: 'apps/web/src/app/api/workflows/route.ts', reason: DEFERRED_RUN_REASON },
-  { route: 'workflows/[workflowId]', file: 'apps/web/src/app/api/workflows/[workflowId]/route.ts', reason: DEFERRED_RUN_REASON },
-  { route: 'tasks/[taskId]/triggers', file: 'apps/web/src/app/api/tasks/[taskId]/triggers/route.ts', reason: DEFERRED_RUN_REASON },
-  { route: 'tasks/[taskId]/triggers/[triggerType]', file: 'apps/web/src/app/api/tasks/[taskId]/triggers/[triggerType]/route.ts', reason: DEFERRED_RUN_REASON },
-  { route: 'calendar/events/[eventId]/triggers', file: 'apps/web/src/app/api/calendar/events/[eventId]/triggers/route.ts', reason: DEFERRED_RUN_REASON },
-  { route: 'ai/chat', file: 'apps/web/src/app/api/ai/chat/route.ts', reason: `${TOOL_CEILING_REASON} Page chat runs through lib/ai/chat-pipeline/handle-chat-turn.ts (PAGE_CHAT_AUTH); its settings handlers share the route.` },
-  { route: 'ai/global/[id]/messages', file: 'apps/web/src/app/api/ai/global/[id]/messages/route.ts', reason: `${TOOL_CEILING_REASON} Shares lib/ai/chat-pipeline/handle-chat-turn.ts with page chat (the global assistant itself is session-only there).` },
 ];
 
 /**
@@ -139,6 +108,18 @@ export const MCP_ONLY_DECISION_EXEMPT: ReadonlyMap<string, string> = new Map([
   [
     'auth/key',
     "Reports the presented credential itself: for an mcp_ key it looks up that key's own row by tokenId; every other type returns the base shape. No content access is decided.",
+  ],
+]);
+
+/**
+ * Forbid-oauth routes whose only `oauth`-admitting list is INHERITED from a
+ * helper module they import for something other than its auth door — each with
+ * the door the route actually uses.
+ */
+export const INHERITED_DOOR_NOT_USED: ReadonlyMap<string, string> = new Map([
+  [
+    'internal/agent-dispatch',
+    "Imports dispatchChatTurn from lib/ai/chat-pipeline/handle-chat-turn.ts, which runs strategy selection AFTER authentication; the helper's PAGE_CHAT_AUTH door is never called here. The route authenticates by HMAC over the raw body (parseSignedAgentDispatch) and builds service auth — no bearer credential is admitted.",
   ],
 ]);
 
@@ -226,7 +207,7 @@ export function parseAllowLists(source: string): string[][] {
  * An allow list does not have to be written in the route file: a handler module
  * or shared constant it imports (`commands/command-route-helpers.ts`,
  * `lib/ai/chat-pipeline/handle-chat-turn.ts`) decides too. Each route therefore
- * carries the lists — and the source, for (b) and (c) — of every local module
+ * carries the lists — and the source, for (b) and (d) — of every local module
  * it imports that itself declares an auth door.
  */
 const authHelperFiles = new Set<string>();
@@ -248,7 +229,6 @@ const helperFilesAdmittingMcp = [join(API_DIR), join(WEB_SRC, 'lib'), join(WEB_S
   .filter((file) => parseAllowLists(readFileSync(file, 'utf8')).some((list) => list.includes('mcp')));
 
 const isDenied = (key: string) => OAUTH_ALLOWLIST_DENY.some((d) => matchesRoute(key, d.route));
-const isPendingPhase2b = (key: string) => PENDING_PHASE_2B.some((p) => matchesRoute(key, p.route));
 
 describe('oauth allow-list guard', () => {
   it('reaches every allow list written outside a route file through the routes that import it', () => {
@@ -265,9 +245,9 @@ describe('oauth allow-list guard', () => {
     expect(routes.length).toBeGreaterThan(100);
   });
 
-  it('(a) every allow list admitting mcp also admits oauth, outside the deny list and the TEMPORARY PENDING_PHASE_2B exclusion', () => {
+  it('(a) every allow list admitting mcp also admits oauth, outside the deny list', () => {
     const offenders = routes
-      .filter((r) => !isDenied(r.key) && !isPendingPhase2b(r.key))
+      .filter((r) => !isDenied(r.key))
       .filter((r) => r.lists.some((list) => list.includes('mcp') && !list.includes('oauth')))
       .map((r) => r.key)
       .sort();
@@ -281,13 +261,14 @@ describe('oauth allow-list guard', () => {
   it('(a) deny-list surfaces a third-party app must never reach do not admit oauth', () => {
     const offenders = routes
       .filter((r) => OAUTH_ALLOWLIST_DENY.some((d) => d.forbidOAuth && matchesRoute(r.key, d.route)))
+      .filter((r) => !INHERITED_DOOR_NOT_USED.has(r.key))
       .filter((r) => r.lists.some((list) => list.includes('oauth')))
       .map((r) => r.key);
     expect(offenders).toEqual([]);
   });
 
   // Swept-to routes count too: every route that admits `mcp` outside the deny
-  // list and the Phase 2b exclusion is required by (a) to admit `oauth`, so it
+  // list is required by (a) to admit `oauth`, so it
   // must already decide principal-neutrally — the fix lands BEFORE the widening.
   it('[D-14 interim] denies are listed by category — one line per category to change when D-14 is answered', () => {
     const byCategory: Record<string, string[]> = {};
@@ -306,6 +287,7 @@ describe('oauth allow-list guard', () => {
         'drives/[driveId]/domains/*',
         'drives/[driveId]/publish-home',
         'pages/[pageId]/publish',
+        'agent-workspaces/*',
       ],
       'drive-access-control': ['drives/[driveId]/members', 'drives/[driveId]/roles/*'],
     });
@@ -321,7 +303,7 @@ describe('oauth allow-list guard', () => {
       .filter(
         (r) =>
           r.lists.some((list) => list.includes('oauth')) ||
-          (!isDenied(r.key) && !isPendingPhase2b(r.key) && r.lists.some((list) => list.includes('mcp'))),
+          (!isDenied(r.key) && r.lists.some((list) => list.includes('mcp'))),
       )
       .filter((r) => !MCP_ONLY_DECISION_EXEMPT.has(r.key))
       .flatMap((r) => {
@@ -335,26 +317,6 @@ describe('oauth allow-list guard', () => {
     expect(
       offenders,
       'A drive-scoped or profile-only OAuth token is not an MCP result and falls into the else branch of these checks (= full user access). Decide through isDriveScopedPrincipal / getAllowedDriveIds / check*Scope / *Principal* instead.',
-    ).toEqual([]);
-  });
-
-  // Point-guard hold pending Phase 2b / [D-15]: an agent trigger schedules or
-  // starts an agent run executed as the owning user with no ceiling, so a route
-  // admitting `oauth` that handles agent-trigger input must refuse it from an
-  // OAuth principal through the shared refusal — never widen first, hold later.
-  it('(c) every route admitting oauth that handles agent-trigger input applies the shared OAuth trigger refusal', () => {
-    const TRIGGER_INPUT = /\bagentTrigger\b|\btriggerType\b|\bcreateTaskTriggerWorkflow\b|\bupsertCalendarTriggerWorkflow\w*\b|\bfireCompletionTrigger\b|\bsyncTaskDueDateTrigger\b|\bcancelTaskDueDateTrigger\b|\bresyncCalendarTriggerTimings\b|\bremoveCalendarTrigger\b/;
-    const offenders = routes
-      .filter((r) => r.lists.some((list) => list.includes('oauth')))
-      .filter((r) => {
-        const code = stripComments(r.source);
-        return TRIGGER_INPUT.test(code) && !/\brefuseOAuthAgentTrigger\(/.test(code);
-      })
-      .map((r) => r.key)
-      .sort();
-    expect(
-      offenders,
-      'These routes admit OAuth and take agent-trigger input without refuseOAuthAgentTrigger (apps/web/src/lib/auth/oauth-agent-trigger-hold.ts).',
     ).toEqual([]);
   });
 
@@ -410,9 +372,6 @@ describe('oauth allow-list guard', () => {
     for (const key of MCP_ONLY_DECISION_EXEMPT.keys()) expect(keys).toContain(key);
     for (const key of OAUTH_WITHOUT_MCP_ROUTES.keys()) expect(keys).toContain(key);
     for (const key of ADMIT_NO_CONTENT_OAUTH_ROUTES.keys()) expect(keys).toContain(key);
-    for (const { route, file } of PENDING_PHASE_2B) {
-      expect(keys).toContain(route);
-      expect(file).toBe(`apps/web/src/app/api/${route}/route.ts`);
-    }
+    for (const key of INHERITED_DOOR_NOT_USED.keys()) expect(keys).toContain(key);
   });
 });

@@ -52,7 +52,8 @@ import { startChatGeneration } from './start-chat-generation';
 import { takeOverConversationStreams } from '@/lib/ai/core/stream-takeover';
 import { startGenerationExclusive } from '@/lib/ai/core/start-generation-exclusive';
 import { resolveMessageId } from '@/lib/ai/streams/resolveMessageId';
-import { isMCPAuthResult, isServiceAuthResult, checkMCPPageScope, getAllowedDriveIds, isDriveScopedPrincipal, canPrincipalViewPage, canPrincipalEditPage, type AuthResult } from '@/lib/auth';
+import { checkMCPPageScope, getAllowedDriveIds, isDriveScopedPrincipal, canPrincipalViewPage, canPrincipalEditPage, type AuthResult } from '@/lib/auth';
+import { toolCredentialScope } from '@/lib/ai/core/tool-credential-scope';
 
 /**
  * Thrown when the conversation was still active at the ownership check far
@@ -1874,17 +1875,13 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
                 // Bind tool execution to the MCP token's drive scope and RBAC role
                 // so a scoped token cannot reach drives outside its scope — or
                 // exceed its own membership role — via the agent's broader ACL.
-                mcpAllowedDriveIds: getAllowedDriveIds(authResult),
                 // Also carried across an agent-dispatch hop: a worker turn
-                // arrives under service auth, whose `originatingMcpTokenId` is
-                // the token that started the chain. Dropping it there would drop
-                // the app-member RBAC ceiling `actor-permissions` applies on top
-                // of the drive scope — the scope alone does not imply the role.
-                mcpTokenId: isMCPAuthResult(authResult)
-                  ? authResult.tokenId
-                  : isServiceAuthResult(authResult)
-                    ? authResult.originatingMcpTokenId
-                    : undefined,
+                // arrives under service auth carrying the ceiling of the
+                // credential that started the chain. Dropping it there would
+                // drop the app-member RBAC ceiling `actor-permissions` applies
+                // on top of the drive scope — the scope alone does not imply
+                // the role.
+                ...toolCredentialScope(authResult),
                 // How deep in an agent-dispatch chain this turn already runs —
                 // 0 for a direct user request, N for a worker turn dispatched
                 // by spawn_session/send_session (the X-Agent-Dispatch-Depth

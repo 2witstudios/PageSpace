@@ -67,6 +67,7 @@
  */
 
 import { tool, type Tool } from 'ai';
+import type { CredentialCeiling } from '@pagespace/lib/permissions/credential-ceiling';
 import { z } from 'zod';
 import {
   MAX_AGENT_DEPTH,
@@ -675,7 +676,7 @@ export interface SessionToolsDeps {
      * that token's drives, so this rides the dispatch instead of being lost at
      * the process boundary and silently re-widening to full access.
      */
-    scope: { allowedDriveIds: string[]; mcpTokenId?: string };
+    scope: { allowedDriveIds: string[]; ceiling?: CredentialCeiling };
   }) => Promise<DispatchOutcome>;
   /** The worker's transcript tail, oldest first, already limited. */
   readTranscript: (input: {
@@ -867,7 +868,7 @@ function withinCredentialScope(
 }
 
 /**
- * The drive ceiling the CALLING credential is already under, to be carried
+ * The drive AND role ceiling the CALLING credential is already under, to be carried
  * across the dispatch hop.
  *
  * A dispatched worker runs in a fresh request that has no memory of the token
@@ -877,12 +878,12 @@ function withinCredentialScope(
  * site rather than inside the runtime keeps the ceiling flowing through the
  * same seam the rest of the tool family's authorization does.
  */
-function readDispatchScope(
+export function readDispatchScope(
   context: ToolExecutionContext | undefined,
-): { allowedDriveIds: string[]; mcpTokenId?: string } {
+): { allowedDriveIds: string[]; ceiling?: CredentialCeiling } {
   return {
     allowedDriveIds: context?.mcpAllowedDriveIds ?? [],
-    ...(context?.mcpTokenId ? { mcpTokenId: context.mcpTokenId } : {}),
+    ...(context?.credentialCeiling ? { ceiling: context.credentialCeiling } : {}),
   };
 }
 

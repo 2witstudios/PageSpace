@@ -2318,6 +2318,11 @@
       "import": "./dist/permissions/app-permissions.js",
       "require": "./dist/permissions/app-permissions.js"
     },
+    "./permissions/credential-ceiling": {
+      "types": "./dist/permissions/credential-ceiling.d.ts",
+      "import": "./dist/permissions/credential-ceiling.js",
+      "require": "./dist/permissions/credential-ceiling.js"
+    },
     "./permissions/membership-queries": {
       "types": "./dist/permissions/membership-queries.d.ts",
       "import": "./dist/permissions/membership-queries.js",

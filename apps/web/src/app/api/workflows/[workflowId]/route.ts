@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { getCredentialCeiling } from '@/lib/auth/credential-ceiling';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrincipalDriveOwnerOrAdmin, type AuthResult } from '@/lib/auth';
 import { checkDriveAccess, getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
@@ -13,8 +14,8 @@ import { validateCronExpression, validateTimezone, getNextRunDate } from '@/lib/
 import { resolveTimezone } from '@/lib/ai/core/personalization-utils';
 import { workflowStepsSchema, validateStepsForApi } from '@/lib/workflows/steps-api-validation';
 
-const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
-const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS_READ = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
 const MANAGEABLE_TRIGGER_TYPE = 'cron' as const;
 
 const updateWorkflowSchema = z.object({
@@ -177,6 +178,9 @@ export async function PATCH(
       // Absent stays undefined, which Drizzle reads as "no change".
       timezone: data.timezone === undefined ? undefined : effectiveTimezone,
       nextRunAt,
+      // Whoever last authored the workflow sets the ceiling its runs execute
+      // under: a scoped credential's edit narrows it, the user's own restores it.
+      credentialCeiling: getCredentialCeiling(auth) ?? null,
       updatedAt: new Date(),
     })
     .where(eq(workflows.id, workflowId))

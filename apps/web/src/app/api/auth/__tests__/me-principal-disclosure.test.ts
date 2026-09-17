@@ -31,7 +31,7 @@ const principals: Record<string, AuthResult> = {
   'an unscoped mcp_ key': { ...mcpDriveKey('drivex'), allowedDriveIds: [] },
   'a drive-scoped mcp_ key': mcpDriveKey('drivex'),
   'a service result': { ...base, tokenType: 'service', service: 'agent-dispatch', allowedDriveIds: [] },
-  'a service result carrying an originating mcp token': { ...base, tokenType: 'service', service: 'agent-dispatch', allowedDriveIds: ['drivex'], originatingMcpTokenId: 'mcp-token-row' },
+  'a service result carrying an originating mcp token': { ...base, tokenType: 'service', service: 'agent-dispatch', allowedDriveIds: ['drivex'], originatingCeiling: { kind: 'mcp', tokenId: 'mcp-token-row' } },
 };
 
 beforeEach(() => {

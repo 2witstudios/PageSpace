@@ -96,6 +96,7 @@ The cron expression must not fire more often than every 5 minutes (the polling c
           triggerType: 'cron',
           isEnabled: true,
           nextRunAt,
+          credentialCeiling: ctx.credentialCeiling ?? null,
         })
         .returning({ id: workflows.id });
 
@@ -250,7 +251,9 @@ The cron expression must not fire more often than every 5 minutes (the polling c
         };
       }
 
-      await db.update(workflows).set(updates).where(eq(workflows.id, workflowId));
+      // The acting credential re-authors the workflow: its runs execute under
+      // this call's ceiling from now on (workflow-executor).
+      await db.update(workflows).set({ ...updates, credentialCeiling: ctx.credentialCeiling ?? null }).where(eq(workflows.id, workflowId));
 
       logger.info('Updated cron workflow', { workflowId, fields: Object.keys(updates) });
       void broadcastWorkflowChange(workflow.driveId);

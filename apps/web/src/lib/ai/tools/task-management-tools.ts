@@ -324,6 +324,7 @@ Agent Triggers:
             agentTrigger,
             dueDate: resultTask.dueDate,
             timezone: taskTimezone,
+            credentialCeiling: (context as ToolExecutionContext).credentialCeiling ?? null,
           });
         }
 

@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { getCredentialCeiling } from '@/lib/auth/credential-ceiling';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrincipalDriveOwnerOrAdmin } from '@/lib/auth';
 import { checkDriveAccess, getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
@@ -14,8 +15,8 @@ import { validateCronExpression, validateTimezone, getNextRunDate } from '@/lib/
 import { resolveTimezone } from '@/lib/ai/core/personalization-utils';
 import { workflowStepsSchema, validateStepsForApi } from '@/lib/workflows/steps-api-validation';
 
-const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
-const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS_READ = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: true };
 const MANAGEABLE_TRIGGER_TYPE = 'cron' as const;
 
 // Matches agentTriggerBaseSchema's fallback (create_workflow / update_workflow
@@ -241,6 +242,8 @@ export async function POST(request: Request) {
     watchedFolderIds: null,
     eventDebounceSecs: null,
     nextRunAt,
+    // The run re-applies the authoring credential's ceiling (workflow-executor).
+    credentialCeiling: getCredentialCeiling(auth) ?? null,
     updatedAt: new Date(),
   }).returning();
 

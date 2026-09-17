@@ -32,6 +32,12 @@ vi.mock('@/services/api', () => ({
     reorderPage: vi.fn().mockResolvedValue({ success: true, driveId: 'drivex', pageTitle: 'P' }),
   },
 }));
+// The user owns the drives here, so their live owner/admin standing — which
+// caps any explicit-role credential — is always true.
+vi.mock('@pagespace/lib/permissions/permissions', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@pagespace/lib/permissions/permissions')>()),
+  isDriveOwnerOrAdmin: vi.fn(async () => true),
+}));
 vi.mock('@pagespace/lib/permissions/app-permissions', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@pagespace/lib/permissions/app-permissions')>();
   return {

@@ -18,6 +18,7 @@ const {
   mockUpdateWhere,
   mockToolExecute,
   mockResolveSandboxToolEligibility,
+  mockResolveWorkflowAuthoringScope,
 } = vi.hoisted(() => ({
   mockSelectWhere: vi.fn(),
   mockSelectFrom: vi.fn(),
@@ -32,6 +33,14 @@ const {
   mockUpdateWhere: vi.fn(),
   mockToolExecute: vi.fn(),
   mockResolveSandboxToolEligibility: vi.fn(),
+  mockResolveWorkflowAuthoringScope: vi.fn(),
+}));
+
+// The authoring-credential resolver reads its own rows; its decision is pinned
+// in authoring-credential.test.ts and end to end on Postgres. Here it is the
+// seam whose answer the executor must apply to every tool context.
+vi.mock('../authoring-credential', () => ({
+  resolveWorkflowAuthoringScope: (...args: unknown[]) => mockResolveWorkflowAuthoringScope(...args),
 }));
 
 vi.mock('@/lib/ai/core/sandbox-tool-eligibility', () => ({
@@ -229,6 +238,8 @@ describe('executeWorkflow', () => {
     // (spawn refused ⇒ the executor degrades to running without sandbox tools).
     mockSpawnSession.mockResolvedValue({ ok: false, reason: 'spawn_failed' });
     mockCreateConversationInSession.mockResolvedValue(undefined);
+    // A workflow authored by the user themself: no ceiling, the run proceeds.
+    mockResolveWorkflowAuthoringScope.mockResolvedValue({ ok: true, scope: {} });
     mockEndSession.mockResolvedValue({ ok: true });
     vi.mocked(isProviderError).mockReturnValue(false);
     vi.mocked(createAIProvider).mockResolvedValue(mockProviderResult as never);
@@ -797,6 +808,8 @@ describe('executeWorkflow — explicit step chains', () => {
     // (spawn refused ⇒ the executor degrades to running without sandbox tools).
     mockSpawnSession.mockResolvedValue({ ok: false, reason: 'spawn_failed' });
     mockCreateConversationInSession.mockResolvedValue(undefined);
+    // A workflow authored by the user themself: no ceiling, the run proceeds.
+    mockResolveWorkflowAuthoringScope.mockResolvedValue({ ok: true, scope: {} });
     mockEndSession.mockResolvedValue({ ok: true });
     vi.mocked(isProviderError).mockReturnValue(false);
     vi.mocked(createAIProvider).mockResolvedValue(mockProviderResult as never);
@@ -819,6 +832,21 @@ describe('executeWorkflow — explicit step chains', () => {
     toolName: 'insert_content',
     args: { pageId: 'page_1', anchor: '## Log', content: 'hello', position: 'after' as const },
   };
+
+  test('the authoring credential\'s scope reaches the tool context; a refused author never runs a step', async () => {
+    const scope = { mcpAllowedDriveIds: ['drive_1'], credentialCeiling: { kind: 'mcp' as const, tokenId: 'tok_1' } };
+    mockResolveWorkflowAuthoringScope.mockResolvedValueOnce({ ok: true, scope });
+    const ok = await executeWorkflow(createInputFixture({ agentPageId: null, prompt: '', steps: [toolStep] }));
+    expect(ok.success).toBe(true);
+    expect(mockResolveWorkflowAuthoringScope).toHaveBeenCalledWith(expect.any(String), 'user_123');
+    expect((mockToolExecute.mock.calls[0][1] as { experimental_context: unknown }).experimental_context).toMatchObject(scope);
+
+    mockToolExecute.mockClear();
+    mockResolveWorkflowAuthoringScope.mockResolvedValueOnce({ ok: false, reason: 'author revoked' });
+    const refused = await executeWorkflow(createInputFixture({ agentPageId: null, prompt: '', steps: [toolStep] }));
+    expect(refused).toMatchObject({ success: false, error: 'author revoked' });
+    expect(mockToolExecute).not.toHaveBeenCalled();
+  });
 
   test('deterministic-only chain: tool runs, no AI provider, no generateText, no chat messages', async () => {
     const result = await executeWorkflow(

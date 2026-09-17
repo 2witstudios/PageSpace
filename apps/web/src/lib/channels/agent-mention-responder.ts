@@ -84,6 +84,14 @@ export interface TriggerMentionedAgentResponsesParams {
   driveId?: string | null;
   driveName?: string | null;
   driveSlug?: string | null;
+  /**
+   * The ceiling of the credential that POSTED the mention — its drive scope and
+   * per-drive role, from `toolCredentialScope(auth)`. Every context this
+   * responder builds carries it, so a drive-scoped `mcp_` key or OAuth grant
+   * cannot reach past its own role through the agent it @-mentions. Absent for
+   * a session (the user acting as themself).
+   */
+  credentialScope?: Pick<ToolExecutionContext, 'mcpAllowedDriveIds' | 'credentialCeiling'>;
 }
 
 interface AskAgentResult {
@@ -424,6 +432,7 @@ function buildMentionerContext(
     locationContext,
     requestOrigin: 'user',
     agentCallDepth: 0,
+    ...params.credentialScope,
   } as ToolExecutionContext;
 }
 
@@ -453,6 +462,7 @@ function buildAgentActorContext(
       agentTitle: agent.title,
     },
     ...(commandExecution && { commandExecution }),
+    ...params.credentialScope,
   } as ToolExecutionContext;
 }
 
