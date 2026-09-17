@@ -2338,6 +2338,11 @@
       "import": "./dist/permissions/resolve-role-permissions.js",
       "require": "./dist/permissions/resolve-role-permissions.js"
     },
+    "./permissions/org-access": {
+      "types": "./dist/permissions/org-access.d.ts",
+      "import": "./dist/permissions/org-access.js",
+      "require": "./dist/permissions/org-access.js"
+    },
     "./compliance/retention/retention-engine": {
       "types": "./dist/compliance/retention/retention-engine.d.ts",
       "import": "./dist/compliance/retention/retention-engine.js",
