@@ -141,7 +141,11 @@ const WRITES: ReadonlyArray<{ name: string; run: (token: string, w: World) => Pr
   },
   {
     name: 'PATCH /api/workflows/[workflowId]',
-    run: (t, w) => workflowPATCH(req('PATCH', `/workflows/${w.workflowId}`, t, { prompt: 'summarize again' }), params({ workflowId: w.workflowId })),
+    run: async (t, w) => {
+      const res = await workflowPATCH(req('PATCH', `/workflows/${w.workflowId}`, t, { prompt: 'summarize again' }), params({ workflowId: w.workflowId }));
+      if (!res) throw new Error('PATCH returned no response');
+      return res;
+    },
   },
   {
     name: 'POST /api/pages/[pageId]/tasks (agentTrigger)',
