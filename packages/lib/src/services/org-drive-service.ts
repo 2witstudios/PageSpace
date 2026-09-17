@@ -198,7 +198,7 @@ export async function moveDriveOutOfOrg(
   if (!outcome.ok) return outcome;
   const { orgId, publish, ...rest } = outcome;
   await publish();
-  return { ...rest, storageReattribution: deferStorageReattribution(driveId, 'out-of-org', orgId) };
+  return { ...rest, orgId, storageReattribution: deferStorageReattribution(driveId, 'out-of-org', orgId) };
 }
 
 export async function createOrgDrive(
