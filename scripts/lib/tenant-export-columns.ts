@@ -120,10 +120,14 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
 
   drives: {
     columns: [
-      'id', 'name', 'slug', 'ownerId', 'kind', 'isTrashed', 'trashedAt',
+      'id', 'name', 'slug', 'ownerId', 'kind', 'orgVisibility', 'isTrashed', 'trashedAt',
       'createdAt', 'updatedAt', 'drivePrompt', 'publishSubdomain',
       'publish_default_og_image_url', 'publish_favicon_url',
     ],
+    excluded: {
+      orgId:
+        'References `organizations`, which the bundle does not carry, so a carried value would violate the FK on import. Nothing writes it yet: org drives ship dark behind ORGS_ENABLED and no service sets orgId until Organizations & Wallets Wave B. Carrying organizations and orgId in a tenant bundle is Spec X-3 (lane G2) and must land before ORGS_ENABLED turns on, or a migrated org drive arrives as a personal drive.',
+    },
     /**
      * Both point at `pages`, which is inserted AFTER `drives` (pages.driveId
      * points back the other way, so the two tables are mutually referential
@@ -142,7 +146,7 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
 
   drive_members: {
     columns: [
-      'id', 'driveId', 'userId', 'role', 'customRoleId', 'invitedBy',
+      'id', 'driveId', 'userId', 'role', 'customRoleId', 'source', 'invitedBy',
       'invitedAt', 'acceptedAt', 'lastAccessedAt',
     ],
   },

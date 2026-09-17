@@ -95,6 +95,38 @@ describe('organizations schema (real Postgres)', () => {
     ).toBe(UNIQUE_VIOLATION);
   });
 
+  it('ORG-1 an org has exactly one Owner membership row', async () => {
+    const { org, owner } = await seedNorthwind();
+    const priya = await factories.createUser({ name: 'Priya Nair' });
+    createdUsers.push(priya.id);
+    await db.insert(orgMembers).values({ orgId: org.id, userId: owner.id, role: 'OWNER' });
+    await db.insert(orgMembers).values({ orgId: org.id, userId: priya.id, role: 'ADMIN' });
+    expect(
+      await sqlstateOf(() =>
+        db.update(orgMembers).set({ role: 'OWNER' }).where(eq(orgMembers.userId, priya.id)),
+      ),
+    ).toBe(UNIQUE_VIOLATION);
+    const dana = await factories.createUser({ name: 'Dana Kim' });
+    createdUsers.push(dana.id);
+    expect(
+      await sqlstateOf(() => db.insert(orgMembers).values({ orgId: org.id, userId: dana.id, role: 'OWNER' })),
+    ).toBe(UNIQUE_VIOLATION);
+  });
+
+  it('ORG-3 an open invite for A@X and a@x in one org cannot coexist', async () => {
+    const { org } = await seedNorthwind();
+    const invite = (email: string) => ({
+      orgId: org.id,
+      email,
+      tokenHash: createId(),
+      expiresAt: new Date(Date.now() + 86_400_000),
+    });
+    await db.insert(orgInvitations).values(invite('marcus.oyelaran@northwind.test'));
+    expect(await sqlstateOf(() => db.insert(orgInvitations).values(invite('Marcus.Oyelaran@Northwind.TEST')))).toBe(
+      UNIQUE_VIOLATION,
+    );
+  });
+
   it('ORG-3 allows one open invite per org and email, and a new one once the old is accepted', async () => {
     const { org } = await seedNorthwind();
     const invite = (tokenHash: string) => ({

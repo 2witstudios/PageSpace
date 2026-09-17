@@ -1,5 +1,5 @@
 {
-  "id": "50b9335c-28d7-46a8-bbb6-90596b1d11dc",
+  "id": "64976fc8-afe0-48f5-960e-2365c537d4cd",
   "prevId": "1066097e-46cf-4a8a-b6ff-a5dacb39f6ea",
   "version": "7",
   "dialect": "postgresql",
@@ -24074,9 +24074,9 @@
           "name": "org_invitations_email_idx",
           "columns": [
             {
-              "expression": "email",
-              "isExpression": false,
+              "expression": "lower(\"email\")",
               "asc": true,
+              "isExpression": true,
               "nulls": "last"
             }
           ],
@@ -24095,9 +24095,9 @@
               "nulls": "last"
             },
             {
-              "expression": "email",
-              "isExpression": false,
+              "expression": "lower(\"email\")",
               "asc": true,
+              "isExpression": true,
               "nulls": "last"
             }
           ],
@@ -24195,6 +24195,22 @@
         }
       },
       "indexes": {
+        "org_members_one_owner_key": {
+          "name": "org_members_one_owner_key",
+          "columns": [
+            {
+              "expression": "orgId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"org_members\".\"role\" = 'OWNER'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "org_members_user_id_idx": {
           "name": "org_members_user_id_idx",
           "columns": [

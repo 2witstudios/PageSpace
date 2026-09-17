@@ -412,6 +412,15 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     'Binding rows between mirrored calendar events and drives — meaningless without the mirrored events, which are excluded above.',
   event_attendees:
     'Attendee list of a mirrored calendar event: it is a list of OTHER PEOPLE, which Art 15(4) puts outside the subject\'s access right.',
+  // Organizations & Wallets (Wave B1 schema). NOT a permanent decision for the first two:
+  // Spec X-2 (lane G2) owns the org collectors and must land them — moving these to
+  // EXPORTED_TABLES — before ORGS_ENABLED turns on. Until then no code path writes a row.
+  organizations:
+    'No row exists to disclose: organizations ship dark behind ORGS_ENABLED and no service writes this table yet. The collector for orgs the subject owns is Spec X-2 (Organizations & Wallets lane G2), which must land before the flag turns on.',
+  org_members:
+    'No row exists to disclose: org membership ships dark behind ORGS_ENABLED and no service writes this table yet. The collector for the subject\'s own memberships is Spec X-2 (Organizations & Wallets lane G2), which must land before the flag turns on.',
+  org_invitations:
+    'An org invitation naming the inviter and the invited address; the counterparty is another person — the same Art 15(4) boundary as pending_invites — and an accepted invitation becomes the org membership row, disclosed through the org_members collector (Spec X-2).',
 };
 
 /** Every table the registry has a decision for. */

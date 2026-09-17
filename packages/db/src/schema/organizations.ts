@@ -54,6 +54,10 @@ export const orgMembers = pgTable('org_members', {
 }, (table) => ({
   // Also serves orgId lookups (leading column), so no separate orgId index.
   orgUserKey: unique('org_members_org_user_key').on(table.orgId, table.userId),
+  // ORG-1: an org has exactly one human Owner. At most one OWNER row per org; ownership
+  // transfer demotes the old row and promotes the new one in one transaction, keeping it
+  // equal to organizations.ownerId.
+  oneOwnerKey: uniqueIndex('org_members_one_owner_key').on(table.orgId).where(sql`${table.role} = 'OWNER'`),
   userIdx: index('org_members_user_id_idx').on(table.userId),
 }));
 
@@ -69,11 +73,15 @@ export const orgInvitations = pgTable('org_invitations', {
   acceptedAt: timestamp('acceptedAt', { mode: 'date' }),
   createdAt: timestamp('createdAt', { mode: 'date' }).default(utcNow).notNull(),
 }, (table) => ({
-  emailIdx: index('org_invitations_email_idx').on(table.email),
-  // One open invite per (org, email). Resend rotates the open row; revoke deletes it.
-  // Callers normalize email before writing, as pending_invites does.
+  // Email is matched case-insensitively everywhere, so lookups query lower(email).
+  emailIdx: index('org_invitations_email_idx').on(sql`lower(${table.email})`),
+  // One open invite per (org, email), case-insensitive: A@X and a@x are one inbox and one
+  // pending seat (SEAT-3). An expression key rather than a CHECK email = lower(email): the
+  // database dedupes whatever a caller writes instead of refusing an un-normalized write,
+  // and the address keeps the casing the inviter typed. Resend rotates the open row;
+  // revoke deletes it.
   openOrgEmailKey: uniqueIndex('org_invitations_open_org_email_key')
-    .on(table.orgId, table.email)
+    .on(table.orgId, sql`lower(${table.email})`)
     .where(sql`${table.acceptedAt} IS NULL`),
 }));
 

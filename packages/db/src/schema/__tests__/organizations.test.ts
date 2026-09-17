@@ -32,7 +32,7 @@ function indexNamed(table: PgTable, name: string) {
   if (!found) throw new Error(`no index named ${name}`);
   return {
     unique: found.config.unique,
-    columns: found.config.columns.map((c) => ('name' in c ? c.name : '')),
+    columns: found.config.columns.map((c) => ('name' in c ? c.name : dialect.sqlToQuery(c).sql)),
     where: found.config.where ? dialect.sqlToQuery(found.config.where).sql : undefined,
   };
 }
@@ -94,6 +94,14 @@ describe('org_members', () => {
     expect(indexNamed(orgMembers, 'org_members_user_id_idx').columns).toEqual(['userId']);
   });
 
+  it('ORG-1 an org has exactly one Owner membership row', () => {
+    expect(indexNamed(orgMembers, 'org_members_one_owner_key')).toEqual({
+      unique: true,
+      columns: ['orgId'],
+      where: `"org_members"."role" = 'OWNER'`,
+    });
+  });
+
   it('ORG-2 cascades membership rows with the org and with the user', () => {
     expect(foreignKeyOn(orgMembers, 'orgId')).toEqual({ onDelete: 'cascade', target: 'organizations' });
     expect(foreignKeyOn(orgMembers, 'userId')).toEqual({ onDelete: 'cascade', target: 'users' });
@@ -113,10 +121,10 @@ describe('org_invitations', () => {
     expect(columns.acceptedAt.notNull).toBe(false);
   });
 
-  it('ORG-3 allows one open (unaccepted) invite per org and email', () => {
+  it('ORG-3 allows one open (unaccepted) invite per org and case-insensitive email', () => {
     expect(indexNamed(orgInvitations, 'org_invitations_open_org_email_key')).toEqual({
       unique: true,
-      columns: ['orgId', 'email'],
+      columns: ['orgId', 'lower("org_invitations"."email")'],
       where: '"org_invitations"."acceptedAt" IS NULL',
     });
   });

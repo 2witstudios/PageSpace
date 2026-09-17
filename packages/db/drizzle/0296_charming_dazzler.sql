@@ -48,8 +48,9 @@ ALTER TABLE "org_members" ADD CONSTRAINT "org_members_orgId_organizations_id_fk"
 ALTER TABLE "org_members" ADD CONSTRAINT "org_members_userId_users_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "org_members" ADD CONSTRAINT "org_members_invitedBy_users_id_fk" FOREIGN KEY ("invitedBy") REFERENCES "public"."users"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "organizations" ADD CONSTRAINT "organizations_ownerId_users_id_fk" FOREIGN KEY ("ownerId") REFERENCES "public"."users"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
-CREATE INDEX "org_invitations_email_idx" ON "org_invitations" USING btree ("email");--> statement-breakpoint
-CREATE UNIQUE INDEX "org_invitations_open_org_email_key" ON "org_invitations" USING btree ("orgId","email") WHERE "org_invitations"."acceptedAt" IS NULL;--> statement-breakpoint
+CREATE INDEX "org_invitations_email_idx" ON "org_invitations" USING btree (lower("email"));--> statement-breakpoint
+CREATE UNIQUE INDEX "org_invitations_open_org_email_key" ON "org_invitations" USING btree ("orgId",lower("email")) WHERE "org_invitations"."acceptedAt" IS NULL;--> statement-breakpoint
+CREATE UNIQUE INDEX "org_members_one_owner_key" ON "org_members" USING btree ("orgId") WHERE "org_members"."role" = 'OWNER';--> statement-breakpoint
 CREATE INDEX "org_members_user_id_idx" ON "org_members" USING btree ("userId");--> statement-breakpoint
 CREATE INDEX "organizations_owner_id_idx" ON "organizations" USING btree ("ownerId");--> statement-breakpoint
 ALTER TABLE "drives" ADD CONSTRAINT "drives_orgId_organizations_id_fk" FOREIGN KEY ("orgId") REFERENCES "public"."organizations"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
