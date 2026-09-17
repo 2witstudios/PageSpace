@@ -515,6 +515,12 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Changed
 
+- **The privacy policy now describes AI routing as it actually works** — every cloud AI request
+  goes through OpenRouter to the provider of the model you picked, including Anthropic, OpenAI,
+  Google and xAI models. The policy previously described those four as direct and said OpenRouter
+  models were optional extras you had to select. The subprocessors page says the same, and both now
+  point to OpenRouter's per-model retention and training policies rather than implying one rule for
+  every model.
 - **Paid-feature prompts in the iOS app no longer send you to a purchase page** — the locked Memory
   automation, automatic backups and custom subdomain settings linked to the plan page, which the
   iOS app cannot sell. They now say the feature is available on paid plans; on the web the upgrade
