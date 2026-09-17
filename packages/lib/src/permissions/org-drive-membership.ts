@@ -86,8 +86,7 @@ export async function loadOrgRolesForUser(userId: string): Promise<Map<string, O
   const rows = await db
     .select({ orgId: orgMembers.orgId, role: orgMembers.role })
     .from(orgMembers)
-    .where(eq(orgMembers.userId, userId))
-    .limit(500);
+    .where(eq(orgMembers.userId, userId));
   return new Map(rows.map((r) => [r.orgId, r.role]));
 }
 

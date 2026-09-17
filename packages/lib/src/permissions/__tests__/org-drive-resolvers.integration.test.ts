@@ -72,6 +72,7 @@ async function northwind() {
   const eve = await createUser('Eve Santos');
   const chris = await createUser('Chris Rowe');
   const dana = await createUser('Dana Whit');
+  const fred = await createUser('Fred Olsen');
 
   const org = await createOrg('Northwind Labs', jono.id);
   await db.insert(orgMembers).values([
@@ -118,6 +119,11 @@ async function northwind() {
   // Chris is a guest on Product (DRV-8), and holds a page share inside Finance.
   await factories.createDriveMember(product.id, chris.id, { source: 'invite' });
   await factories.createPagePermission(financePage.id, chris.id);
+  // Priya also holds a stale org row on Finance: org power, not the row, must still open it.
+  await factories.createDriveMember(finance.id, priya.id, { source: 'org' });
+  // Fred led Research, then left Northwind: the lead moved to Lena, but his owner self-heal row
+  // (role OWNER, source invite) was never an invitation and must open nothing.
+  await factories.createDriveMember(research.id, fred.id, { source: 'invite', role: 'OWNER' });
 
   // Dana is not in Northwind. She left it (a stale org row on Product the sync has not removed),
   // belongs to Acme, and is invited to Marcus's personal drive.
@@ -133,7 +139,7 @@ async function northwind() {
   await factories.createDriveMember(personal.id, nina.id, { source: 'invite', role: 'ADMIN' });
 
   return {
-    people: { jono, priya, omar, lena, marcus, nina, eve, chris, dana },
+    people: { jono, priya, omar, lena, marcus, nina, eve, chris, dana, fred },
     org, acme,
     drives: { product, research, finance, acmeWiki, personal },
     pages: { productPage, productPrivatePage, researchPage, financePage, financePrivatePage, personalPage, personalPrivatePage },
@@ -228,12 +234,13 @@ describe('org access in the human drive resolvers (integration)', () => {
     flags.orgsEnabled = false;
 
     const compared = await expectResolversMatchLegacy(everyone(f), Object.values(f.drives).map((d) => d.id), Object.values(f.pages).map((p) => p.id));
-    expect(compared).toBe(9 * (5 + 7) + 9 * 5 * 2 + 9 * LIST_OPTIONS.length);
+    expect(compared).toBe(10 * (5 + 7) + 10 * 5 * 2 + 10 * LIST_OPTIONS.length);
 
     // Not vacuous: the fixture holds rows that org rules treat differently once enabled.
     expect(await getUserAccessLevel(f.people.marcus.id, f.drives.finance.id)).not.toBeNull();
-    expect(await getUserAccessLevel(f.people.priya.id, f.drives.finance.id)).toBeNull();
+    expect(await getUserAccessLevel(f.people.jono.id, f.drives.finance.id)).toBeNull();
     expect(await listedIds(f.people.nina.id)).toEqual([f.drives.personal.id]);
+    expect(await listedIds(f.people.fred.id)).toEqual([f.drives.research.id]);
 
     expect(await auditRowsFor([f.drives.product.id, f.drives.research.id, f.drives.finance.id])).toEqual([]);
   });
@@ -296,9 +303,10 @@ describe('org access in the human drive resolvers (integration)', () => {
     flags.orgsEnabled = true;
     const { nina } = f.people;
 
-    // The default role's drive-wide canEdit is what grants edit: a plain member would read only.
+    // The default role's drive-wide canEdit is what grants edit on a page: a plain member would read only.
     expect(await getUserAccessLevel(nina.id, f.pages.productPage.id)).toEqual({ canView: true, canEdit: true, canShare: false, canDelete: false });
     expect(await getUserAccessLevel(nina.id, f.pages.productPrivatePage.id)).toBeNull();
+    // The drive root grants any member view and edit (the pre-org drive-as-page rule); the role does not change it.
     expect(await getUserAccessLevel(nina.id, f.drives.product.id)).toEqual({ canView: true, canEdit: true, canShare: false, canDelete: false });
     expect(await getDriveAccess(f.drives.product.id, nina.id)).toEqual({ isOwner: false, isAdmin: false, isMember: true, role: 'MEMBER' });
 
@@ -335,10 +343,16 @@ describe('org access in the human drive resolvers (integration)', () => {
     expect(await listedIds(f.people.omar.id)).toEqual([f.drives.product.id, f.drives.finance.id].sort());
   });
 
-  it('X-6 (partial) a non-member sees no Northwind drive, not even the OPEN one through a stale org row, and a guest sees exactly the one drive they were invited to', async () => {
+  it('X-6 (partial) a non-member sees no Northwind drive, not through a stale org row nor a former lead\'s leftover OWNER row, and a guest sees exactly the one drive they were invited to', async () => {
     const f = await northwind();
     flags.orgsEnabled = true;
-    const { dana, chris } = f.people;
+    const { dana, chris, fred } = f.people;
+
+    // A former lead's leftover OWNER row opens and lists nothing.
+    expect(await getUserAccessLevel(fred.id, f.drives.research.id)).toBeNull();
+    expect(await getUserAccessLevel(fred.id, f.pages.researchPage.id)).toBeNull();
+    expect((await getDriveAccess(f.drives.research.id, fred.id)).isMember).toBe(false);
+    expect(await listedIds(fred.id)).toEqual([]);
 
     for (const target of [f.drives.product.id, f.pages.productPage.id, f.drives.research.id, f.drives.finance.id]) {
       expect(await getUserAccessLevel(dana.id, target)).toBeNull();

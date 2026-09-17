@@ -88,6 +88,30 @@ describe('resolveEffectiveDriveMembership', () => {
       }
     });
 
+    it('X-6 (partial) a leftover OWNER row of a former drive lead opens no org drive: ownership lives on drives.ownerId, and the resolvers call this only for non-owners', () => {
+      const staleOwnerRow: OrgDriveMembership = { role: 'OWNER', customRoleId: null, source: 'invite' };
+      for (const drive of [OPEN, RESTRICTED, PRIVATE]) {
+        expect(resolveEffectiveDriveMembership({ ...on, drive, orgRole: null, row: staleOwnerRow })).toBeNull();
+      }
+      // An org MEMBER with the leftover row resolves as if they had no row.
+      expect(resolveEffectiveDriveMembership({ ...on, drive: PRIVATE, orgRole: 'MEMBER', row: staleOwnerRow })).toBeNull();
+      expect(resolveEffectiveDriveMembership({ ...on, drive: OPEN, orgRole: 'MEMBER', row: staleOwnerRow }))
+        .toEqual({ role: 'MEMBER', customRoleId: 'role_default', source: 'org', auditOrgAdminPrivateAccess: false });
+    });
+
+    it('ORG-4 (partial) an org Admin with a leftover OWNER row, or a stale source org row, on a PRIVATE drive still resolves through org power and owes the audit', () => {
+      const staleOwnerRow: OrgDriveMembership = { role: 'OWNER', customRoleId: null, source: 'invite' };
+      for (const row of [staleOwnerRow, orgRow]) {
+        expect(resolveEffectiveDriveMembership({ ...on, drive: PRIVATE, orgRole: 'ADMIN', row }))
+          .toEqual({ role: 'ADMIN', customRoleId: null, source: 'org-admin', auditOrgAdminPrivateAccess: true });
+      }
+    });
+
+    it('DRV-7 (partial) an org MEMBER invited to a PRIVATE drive resolves exactly their row', () => {
+      expect(resolveEffectiveDriveMembership({ ...on, drive: PRIVATE, orgRole: 'MEMBER', row: inviteMember }))
+        .toEqual({ ...inviteMember, auditOrgAdminPrivateAccess: false });
+    });
+
     it('DRV-8 (partial) a guest (not in the org) keeps exactly their invited row on any visibility', () => {
       for (const drive of [OPEN, RESTRICTED, PRIVATE]) {
         expect(resolveEffectiveDriveMembership({ ...on, drive, orgRole: null, row: inviteMember }))
@@ -143,6 +167,13 @@ describe('decideListedDriveRole', () => {
         expect(decideListedDriveRole({ ...on, drive, orgRole: null, row: orgRow })).toBeNull();
         expect(decideListedDriveRole({ orgsEnabled: true, drive, orgRole: null, row: null, viaPagePermission: true })).toBeNull();
       }
+    });
+
+    it('X-6 (partial) never lists an org drive through a leftover OWNER row of a former drive lead', () => {
+      const staleOwnerRow: OrgDriveMembership = { role: 'OWNER', customRoleId: null, source: 'invite' };
+      expect(decideListedDriveRole({ ...on, drive: RESTRICTED, orgRole: null, row: staleOwnerRow })).toBeNull();
+      expect(decideListedDriveRole({ ...on, drive: PRIVATE, orgRole: 'ADMIN', row: staleOwnerRow })).toBeNull();
+      expect(decideListedDriveRole({ ...on, drive: OPEN, orgRole: 'ADMIN', row: staleOwnerRow })).toBe('ADMIN');
     });
 
     it('DRV-8 (partial) lists the drive a guest was invited to, with their row role', () => {

@@ -42,8 +42,12 @@ export interface EffectiveDriveMembership extends OrgDriveAccess {
 }
 
 /**
- * A `source: 'org'` row is materialized only for org members on OPEN drives. Anywhere else it is
- * stale (a visibility change or a leave the sync has not reached yet) and grants nothing.
+ * Which accepted row still means something on an org drive:
+ * - A `source: 'org'` row is materialized only for org members on OPEN drives. Anywhere else it is
+ *   stale (a visibility change or a leave the sync has not reached yet) and grants nothing.
+ * - An OWNER row is stale on any org drive. The resolvers ask only about users who do not own the
+ *   drive (drives.ownerId), so an OWNER row here is a former lead's leftover (the owner self-heal
+ *   row outlives a lead reassignment), never an invitation.
  */
 function validRow(
   row: OrgDriveMembership | null,
@@ -51,6 +55,7 @@ function validRow(
   orgRole: OrgRole | null,
 ): OrgDriveMembership | null {
   if (row?.source === 'org' && (orgRole === null || drive.orgVisibility !== 'OPEN')) return null;
+  if (row?.role === 'OWNER') return null;
   return row;
 }
 
@@ -74,7 +79,7 @@ export function resolveEffectiveDriveMembership({
   const access = resolveOrgDriveAccess({
     orgRole,
     driveVisibility: drive.orgVisibility,
-    driveMembership: row,
+    driveMembership: validRow(row, drive, orgRole),
     driveDefaultRole,
   });
   if (access === null) return null;
@@ -126,7 +131,7 @@ export function decideListedDriveRole({
   const access = resolveOrgDriveAccess({
     orgRole,
     driveVisibility: drive.orgVisibility,
-    driveMembership: row,
+    driveMembership: joined,
     driveDefaultRole: { role: 'MEMBER', customRoleId: null },
   });
   return access ? access.role : null;
