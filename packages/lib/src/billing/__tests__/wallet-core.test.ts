@@ -29,7 +29,8 @@ import {
 
 // Northwind Labs fixture (Sequence Spec Part 2): Product's wallet holds 1,200 credits,
 // Engineering's 900 is over, the pool holds 9,000. Marcus is a member, Chris Rowe a guest.
-const c = centsFromCredits;
+// Whole cents, as every wallet-core output is.
+const c = (credits: number): number => Math.round(centsFromCredits(credits));
 const RESERVE = c(5);
 
 const productWallet = (spendable: number, status: SpendLeg['status'] = 'active'): SpendLeg => ({
@@ -382,6 +383,7 @@ describe('allocation math', () => {
       c(1325),
     ],
     ['wallet debt nets from what is spendable', productFunds({ allocationSpentCents: c(1200), debtCents: c(40) }), c(9000), 0],
+    ['a non-finite parent balance covers nothing from the allocation', productFunds(), Number.NaN, 0],
   ])('WAL-3 (partial) childSpendableCents: %s', (_label, funds, parentAvailable, expected) => {
     expect(childSpendableCents(funds, parentAvailable)).toBe(expected);
   });
@@ -526,7 +528,7 @@ describe('settleOvershoot', () => {
 
 describe('evaluateCaps', () => {
   it('WAL-7 (partial) defaults on enable are 10 credits a day and 100 a month, from the one credit definition', () => {
-    expect(DEFAULT_CONSUMER_CAPS).toEqual({ dailyCents: centsFromCredits(10), monthlyCents: centsFromCredits(100) });
+    expect(DEFAULT_CONSUMER_CAPS).toEqual({ dailyCents: Math.round(centsFromCredits(10)), monthlyCents: Math.round(centsFromCredits(100)) });
   });
 
   it.each([
@@ -553,6 +555,22 @@ describe('evaluateCaps', () => {
       { allowed: true, reason: 'ok', dailyRemainingCents: c(5), monthlyRemainingCents: c(95) }],
   ] as const)('WAL-7 (partial) %s', (_label, caps, usage, reservationCents, expected) => {
     expect(evaluateCaps({ caps, usage, reservationCents })).toEqual(expected);
+  });
+
+  it.each([
+    ['a non-finite reservation', DEFAULT_CONSUMER_CAPS, Number.NaN, 'daily_cap_exceeded'],
+    ['a non-finite reservation under a monthly cap only', { dailyCents: null, monthlyCents: c(100) }, Number.NaN, 'monthly_cap_exceeded'],
+    ['a non-finite daily cap', { dailyCents: Number.NaN, monthlyCents: null }, c(5), 'daily_cap_exceeded'],
+    ['a non-finite monthly cap', { dailyCents: null, monthlyCents: Number.POSITIVE_INFINITY }, c(5), 'monthly_cap_exceeded'],
+  ] as const)('WAL-7 (partial) evaluateCaps fails closed on %s', (_label, caps, reservationCents, reason) => {
+    const usage = { dailySpentCents: c(1), monthlySpentCents: c(1), dailyReservedCents: 0, monthlyReservedCents: 0 };
+    expect(evaluateCaps({ caps, usage, reservationCents })).toMatchObject({ allowed: false, reason });
+  });
+
+  it('WAL-7 (partial) unset caps do not refuse a non-finite reservation (the wallet coverage check does)', () => {
+    const usage = { dailySpentCents: 0, monthlySpentCents: 0, dailyReservedCents: 0, monthlyReservedCents: 0 };
+    expect(evaluateCaps({ caps: { dailyCents: null, monthlyCents: null }, usage, reservationCents: Number.NaN }).allowed).toBe(true);
+    expect(resolveSpendSource(base({ reservationCents: Number.NaN }))).toMatchObject({ kind: 'refuse', chargeCents: 0 });
   });
 
   it.each([

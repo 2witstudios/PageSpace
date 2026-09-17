@@ -277,7 +277,7 @@ function balanceAvailableCents(balance: Balance): number {
  * can cover), plus its funding legs, less its debt. Never negative.
  */
 export function childSpendableCents(wallet: WalletFunds, parentAvailableCents: number): number {
-  const fromAllocation = Math.min(allocationRemainingCents(wallet), Math.max(0, parentAvailableCents));
+  const fromAllocation = Math.min(allocationRemainingCents(wallet), wholeNonNegative(parentAvailableCents));
   const fromLegs = wallet.topupLegs.reduce((sum, leg) => sum + wholeNonNegative(leg.remainingCents), 0);
   return Math.max(0, fromAllocation + fromLegs - wholeNonNegative(wallet.debtCents));
 }
@@ -289,9 +289,9 @@ export interface CapRemaining {
 
 /** A consumer's spendable on one wallet leg: the wallet's spendable, bounded by their caps (WAL-7). */
 export function legSpendableCents(walletSpendableCents: number, caps: CapRemaining): number {
-  let spendable = Math.max(0, walletSpendableCents);
-  if (caps.dailyRemainingCents !== null) spendable = Math.min(spendable, Math.max(0, caps.dailyRemainingCents));
-  if (caps.monthlyRemainingCents !== null) spendable = Math.min(spendable, Math.max(0, caps.monthlyRemainingCents));
+  let spendable = wholeNonNegative(walletSpendableCents);
+  if (caps.dailyRemainingCents !== null) spendable = Math.min(spendable, wholeNonNegative(caps.dailyRemainingCents));
+  if (caps.monthlyRemainingCents !== null) spendable = Math.min(spendable, wholeNonNegative(caps.monthlyRemainingCents));
   return spendable;
 }
 
@@ -322,7 +322,7 @@ export interface WalletSpendResult {
  */
 export function allocateWalletSpend(input: WalletSpendInput): WalletSpendResult {
   const amount = wholeNonNegative(input.amountCents);
-  const allocationDraw = Math.min(amount, allocationRemainingCents(input.wallet), Math.max(0, balanceAvailableCents(input.parent)));
+  const allocationDraw = Math.min(amount, allocationRemainingCents(input.wallet), wholeNonNegative(balanceAvailableCents(input.parent)));
   const parentDraw = allocateSpend(input.parent, allocationDraw);
 
   let remaining = amount - parentDraw.appliedCents;
@@ -378,7 +378,8 @@ export type OvershootLanding =
 /**
  * Where actual-cost overshoot beyond a covered reservation lands (WAL-6b/c). It lands on
  * the consumer only when they spent their own credits; a seat's overshoot lands on the
- * pool; a drive wallet's lands where its funder chose.
+ * pool; a drive wallet's lands where its funder chose. A drive wallet with no parent
+ * has nothing to absorb into, so its overshoot is wallet debt whatever the choice.
  */
 export function settleOvershoot(input: SettleOvershootInput): OvershootLanding {
   const cents = wholeNonNegative(input.overshootCents);
@@ -433,8 +434,8 @@ export interface ConsumerCaps {
 
 /** Defaults on enable: 10 credits a day, 100 a month (D20.5 restated in credits). */
 export const DEFAULT_CONSUMER_CAPS: ConsumerCaps = {
-  dailyCents: centsFromCredits(10),
-  monthlyCents: centsFromCredits(100),
+  dailyCents: Math.round(centsFromCredits(10)),
+  monthlyCents: Math.round(centsFromCredits(100)),
 };
 
 export interface CapUsage {
@@ -456,31 +457,45 @@ export interface CapsResult extends CapRemaining {
   reason: 'ok' | 'daily_cap_exceeded' | 'monthly_cap_exceeded';
 }
 
-function capRemaining(capCents: number | null, spentCents: number): number | null {
-  return capCents === null ? null : Math.max(0, wholeNonNegative(capCents) - wholeNonNegative(spentCents));
+/** A set cap as whole cents. A non-finite cap is 0, so a corrupt value fails closed. */
+function sanitizeCap(capCents: number | null): number | null {
+  return capCents === null ? null : wholeNonNegative(capCents);
+}
+
+function capRemaining(capCents: number | null, usedCents: number): number | null {
+  return capCents === null ? null : Math.max(0, capCents - usedCents);
 }
 
 /**
  * Both UTC caps against this call's reservation, counting settled spend plus
- * outstanding holds; the daily cap is reported first.
+ * outstanding holds; the daily cap is reported first. Inputs are sanitized so a
+ * non-finite cap or reservation denies instead of slipping through a NaN comparison.
  */
 export function evaluateCaps(input: { caps: ConsumerCaps; usage: CapUsage; reservationCents: number }): CapsResult {
   const dailyUsed = wholeNonNegative(input.usage.dailySpentCents) + wholeNonNegative(input.usage.dailyReservedCents);
   const monthlyUsed = wholeNonNegative(input.usage.monthlySpentCents) + wholeNonNegative(input.usage.monthlyReservedCents);
+  const dailyCap = sanitizeCap(input.caps.dailyCents);
+  const monthlyCap = sanitizeCap(input.caps.monthlyCents);
+  // A non-finite reservation is unknowable cost: deny rather than estimate it as zero.
+  const reservation = Number.isFinite(input.reservationCents) ? wholeNonNegative(input.reservationCents) : null;
   const remaining: CapRemaining = {
-    dailyRemainingCents: capRemaining(input.caps.dailyCents, dailyUsed),
-    monthlyRemainingCents: capRemaining(input.caps.monthlyCents, monthlyUsed),
+    dailyRemainingCents: capRemaining(dailyCap, dailyUsed),
+    monthlyRemainingCents: capRemaining(monthlyCap, monthlyUsed),
   };
+  if (reservation === null) {
+    if (dailyCap !== null) return { allowed: false, reason: 'daily_cap_exceeded', ...remaining };
+    if (monthlyCap !== null) return { allowed: false, reason: 'monthly_cap_exceeded', ...remaining };
+  }
   const daily = evaluateDailyCap({
     dailyChargedCents: dailyUsed,
-    estCostCents: input.reservationCents,
-    capCents: input.caps.dailyCents,
+    estCostCents: reservation ?? 0,
+    capCents: dailyCap,
   });
   if (!daily.allowed) return { allowed: false, reason: 'daily_cap_exceeded', ...remaining };
   const monthly = evaluateDailyCap({
     dailyChargedCents: monthlyUsed,
-    estCostCents: input.reservationCents,
-    capCents: input.caps.monthlyCents,
+    estCostCents: reservation ?? 0,
+    capCents: monthlyCap,
   });
   if (!monthly.allowed) return { allowed: false, reason: 'monthly_cap_exceeded', ...remaining };
   return { allowed: true, reason: 'ok', ...remaining };
