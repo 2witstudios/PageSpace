@@ -179,38 +179,40 @@ interface RouteCase {
   minRole: OrgRole | null;
   call: () => Promise<Response>;
   successStatus: number;
+  /** Reads authenticate without CSRF; every mutation must require it. */
+  csrf: boolean;
   /** The service the route must not reach when authorization refuses. */
   service: () => unknown;
 }
 
 const ROUTES: RouteCase[] = [
-  { name: 'GET /api/orgs', minRole: null, successStatus: 200, service: () => repository.listOrganizationsForUser,
+  { name: 'GET /api/orgs', csrf: false, minRole: null, successStatus: 200, service: () => repository.listOrganizationsForUser,
     call: () => orgsRoute.GET(req('GET')) },
-  { name: 'POST /api/orgs', minRole: null, successStatus: 201, service: () => repository.createOrganization,
+  { name: 'POST /api/orgs', csrf: true, minRole: null, successStatus: 201, service: () => repository.createOrganization,
     call: () => orgsRoute.POST(req('POST', { name: 'Northwind Labs', slug: 'northwind' })) },
-  { name: 'GET /api/orgs/[orgId]', minRole: 'MEMBER', successStatus: 200, service: () => repository.findOrganizationById,
+  { name: 'GET /api/orgs/[orgId]', csrf: false, minRole: 'MEMBER', successStatus: 200, service: () => repository.findOrganizationById,
     call: () => orgRoute.GET(req('GET'), params({ orgId: ORG_ID })) },
-  { name: 'PATCH /api/orgs/[orgId]', minRole: 'ADMIN', successStatus: 200, service: () => repository.updateOrganization,
+  { name: 'PATCH /api/orgs/[orgId]', csrf: true, minRole: 'ADMIN', successStatus: 200, service: () => repository.updateOrganization,
     call: () => orgRoute.PATCH(req('PATCH', { name: 'Northwind' }), params({ orgId: ORG_ID })) },
-  { name: 'DELETE /api/orgs/[orgId]', minRole: 'OWNER', successStatus: 200, service: () => deleteOrganization,
+  { name: 'DELETE /api/orgs/[orgId]', csrf: true, minRole: 'OWNER', successStatus: 200, service: () => deleteOrganization,
     call: () => orgRoute.DELETE(req('DELETE', { drives: [] }), params({ orgId: ORG_ID })) },
-  { name: 'GET /api/orgs/[orgId]/members', minRole: 'MEMBER', successStatus: 200, service: () => repository.listOrgMembers,
+  { name: 'GET /api/orgs/[orgId]/members', csrf: false, minRole: 'MEMBER', successStatus: 200, service: () => repository.listOrgMembers,
     call: () => membersRoute.GET(req('GET'), params({ orgId: ORG_ID })) },
-  { name: 'PATCH /api/orgs/[orgId]/members/[userId]', minRole: 'ADMIN', successStatus: 200, service: () => membership.changeMemberRole,
+  { name: 'PATCH /api/orgs/[orgId]/members/[userId]', csrf: true, minRole: 'ADMIN', successStatus: 200, service: () => membership.changeMemberRole,
     call: () => memberRoute.PATCH(req('PATCH', { role: 'ADMIN' }), params({ orgId: ORG_ID, userId: 'user_marcus' })) },
-  { name: 'DELETE /api/orgs/[orgId]/members/[userId]', minRole: 'ADMIN', successStatus: 200, service: () => membership.removeMember,
+  { name: 'DELETE /api/orgs/[orgId]/members/[userId]', csrf: true, minRole: 'ADMIN', successStatus: 200, service: () => membership.removeMember,
     call: () => memberRoute.DELETE(req('DELETE'), params({ orgId: ORG_ID, userId: 'user_marcus' })) },
-  { name: 'POST /api/orgs/[orgId]/transfer-ownership', minRole: 'OWNER', successStatus: 200, service: () => membership.transferOwnership,
+  { name: 'POST /api/orgs/[orgId]/transfer-ownership', csrf: true, minRole: 'OWNER', successStatus: 200, service: () => membership.transferOwnership,
     call: () => transferRoute.POST(req('POST', { toUserId: 'user_priya' }), params({ orgId: ORG_ID })) },
-  { name: 'GET /api/orgs/[orgId]/invitations', minRole: 'ADMIN', successStatus: 200, service: () => invitations.listOpenInvitations,
+  { name: 'GET /api/orgs/[orgId]/invitations', csrf: false, minRole: 'ADMIN', successStatus: 200, service: () => invitations.listOpenInvitations,
     call: () => invitationsRoute.GET(req('GET'), params({ orgId: ORG_ID })) },
-  { name: 'POST /api/orgs/[orgId]/invitations', minRole: 'ADMIN', successStatus: 201, service: () => invitations.createOrRotateInvitation,
+  { name: 'POST /api/orgs/[orgId]/invitations', csrf: true, minRole: 'ADMIN', successStatus: 201, service: () => invitations.createOrRotateInvitation,
     call: () => invitationsRoute.POST(req('POST', { email: 'marcus@northwind.test' }), params({ orgId: ORG_ID })) },
-  { name: 'DELETE /api/orgs/[orgId]/invitations/[invitationId]', minRole: 'ADMIN', successStatus: 200, service: () => invitations.revokeInvitation,
+  { name: 'DELETE /api/orgs/[orgId]/invitations/[invitationId]', csrf: true, minRole: 'ADMIN', successStatus: 200, service: () => invitations.revokeInvitation,
     call: () => invitationRoute.DELETE(req('DELETE'), params({ orgId: ORG_ID, invitationId: 'inv_1' })) },
-  { name: 'POST /api/orgs/[orgId]/invitations/[invitationId]/resend', minRole: 'ADMIN', successStatus: 200, service: () => invitations.resendInvitation,
+  { name: 'POST /api/orgs/[orgId]/invitations/[invitationId]/resend', csrf: true, minRole: 'ADMIN', successStatus: 200, service: () => invitations.resendInvitation,
     call: () => resendRoute.POST(req('POST'), params({ orgId: ORG_ID, invitationId: 'inv_1' })) },
-  { name: 'POST /api/orgs/invitations/accept', minRole: null, successStatus: 200, service: () => invitations.acceptInvitation,
+  { name: 'POST /api/orgs/invitations/accept', csrf: true, minRole: null, successStatus: 200, service: () => invitations.acceptInvitation,
     call: () => acceptRoute.POST(req('POST', { token: 'ps_orginv_t' })) },
 ];
 
@@ -257,6 +259,15 @@ describe('org route role matrix', () => {
         expect(res.status).toBe(404);
         expect(authenticateRequestWithOptions).not.toHaveBeenCalled();
         expect(route.service()).not.toHaveBeenCalled();
+      });
+
+      it(`${route.name} authenticates a session ${route.csrf ? 'with' : 'without'} CSRF`, async () => {
+        vi.mocked(repository.findMembershipRole).mockResolvedValue('OWNER');
+        await route.call();
+        expect(authenticateRequestWithOptions).toHaveBeenCalledWith(expect.any(Request), {
+          allow: ['session'],
+          requireCSRF: route.csrf,
+        });
       });
 
       it(`${route.name} requires a session`, async () => {
