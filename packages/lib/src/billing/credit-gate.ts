@@ -45,6 +45,7 @@ import {
   starterGrantCents,
 } from './credit-pricing';
 import { readGateAccount, type GateAccount } from './gate-account';
+import { billingOffAgentGate } from './billing-off-agent-gate';
 import { readSpendableCents } from './credit-balance';
 import type { SubscriptionTier } from '../services/subscription-utils';
 
@@ -188,6 +189,14 @@ export async function canConsumeAI(
   opts: GateOptions = {},
 ): Promise<GateResult> {
   if (!isBillingEnabled()) {
+    // Agents get no free AI here either (ADR 0007 Decision 9): with billing off
+    // the deployment's customer pays for every call, so an unclaimed agent is
+    // refused before the unlimited fast path. The account is read only on this
+    // billing-off path; the billed path keeps its own lazy read below.
+    const offAccount = await readGateAccount(userId);
+    if (billingOffAgentGate({ accountType: offAccount.accountType, hasOwner: offAccount.ownerUserId !== null }) === 'requires_funding') {
+      return { allowed: false, reason: 'requires_funding' };
+    }
     // Billing-off deployments (tenant/onprem) have no credit ledger, but a
     // caller-supplied daily ceiling must still bind: a metered provider (e.g.
     // Azure OpenAI on-prem) spends real money, and the ceiling exists precisely

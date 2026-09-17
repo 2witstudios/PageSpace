@@ -283,6 +283,7 @@ const FUTURE = new Date(Date.now() + 60 * 60 * 1000);
 describe('canConsumeAI', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockReadGateAccount.mockReset().mockResolvedValue({ accountType: 'human', ownerUserId: null });
     mockIsBillingEnabled.mockReturnValue(true);
     mockDb.insert.mockReturnValue(insertChain());
   });
@@ -293,6 +294,33 @@ describe('canConsumeAI', () => {
     expect(r).toEqual({ allowed: true, reason: 'unlimited' });
     expect(mockDb.select).not.toHaveBeenCalled();
     expect(mockDb.transaction).not.toHaveBeenCalled();
+  });
+
+  it('given billing off and an unclaimed agent, should refuse with requires_funding before the unlimited fast path (no hold, no metering)', async () => {
+    mockIsBillingEnabled.mockReturnValue(false);
+    mockReadGateAccount.mockResolvedValueOnce({ accountType: 'agent', ownerUserId: null });
+
+    const r = await canConsumeAI('agent-1', 'free');
+
+    expect(r).toEqual({ allowed: false, reason: 'requires_funding' });
+    expect(mockDb.select).not.toHaveBeenCalled();
+    expect(mockDb.transaction).not.toHaveBeenCalled();
+  });
+
+  it('given billing off and a claimed agent, should stay unlimited like its owner', async () => {
+    mockIsBillingEnabled.mockReturnValue(false);
+    mockReadGateAccount.mockResolvedValueOnce({ accountType: 'agent', ownerUserId: 'owner-1' });
+
+    expect(await canConsumeAI('agent-1', 'free')).toEqual({ allowed: true, reason: 'unlimited' });
+  });
+
+  it('given billing on, should not read the account up front (the billing-off gate reads it only when billing is off)', async () => {
+    mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 100, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
+    mockTransaction({ monthlyRemainingCents: 100, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
+
+    await canConsumeAI('u1', 'pro');
+
+    expect(mockReadGateAccount).not.toHaveBeenCalled();
   });
 
   it('allows a user with spendable credits and returns a holdId', async () => {
