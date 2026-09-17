@@ -9,7 +9,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
-import { db } from '@pagespace/db/db';
+import { db, pool } from '@pagespace/db/db';
 import { and, eq, inArray } from '@pagespace/db/operators';
 import { users, mcpTokens } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
@@ -92,13 +92,19 @@ describe('leave and delete cascades (Postgres)', () => {
   });
 
   afterAll(async () => {
-    if (!dbAvailable) return;
-    // drives.orgId and organizations.ownerId both RESTRICT: drives, then orgs, then users.
-    if (createdOrgIds.length > 0) {
-      await db.delete(drives).where(inArray(drives.orgId, createdOrgIds));
-      await db.delete(organizations).where(inArray(organizations.id, createdOrgIds));
+    try {
+      if (!dbAvailable) return;
+      // drives.orgId and organizations.ownerId both RESTRICT: drives, then orgs, then users.
+      if (createdOrgIds.length > 0) {
+        await db.delete(drives).where(inArray(drives.orgId, createdOrgIds));
+        await db.delete(organizations).where(inArray(organizations.id, createdOrgIds));
+      }
+      if (createdUserIds.length > 0) await db.delete(users).where(inArray(users.id, createdUserIds));
+    } finally {
+      // The integration run imports db once per file in one fork; an unclosed pool per file
+      // exhausts Postgres max_connections for the suites that run after this one.
+      await pool.end();
     }
-    if (createdUserIds.length > 0) await db.delete(users).where(inArray(users.id, createdUserIds));
   });
 
   it('O-8 leaving an org revokes all four artifact types the leaver handed out in its drives', async () => {
