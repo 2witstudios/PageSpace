@@ -943,7 +943,8 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
     const rebound = await adapter.rebind({ ref, expectedVersion: 1 as PolicyVersion, bindings: next, scope: nextRecord.scope, consent: ownerConsentTo(next, OWNER_A, { ref }), identity: manageIdentity });
     const described = await adapter.describe({ ref, identity });
     const oldGrant = makeGrant({ accountId, bindingDigest: digestBindings({ bindings, hash }) });
-    const newGrant = makeGrant({ accountId, bindingDigest: digestBindings({ bindings: next, hash }) });
+    // Signed at the rebound epoch: a grant under the old policyVersion is bindings_stale by design (G1c H2).
+    const newGrant = makeGrant({ accountId, policyVersion: next.policyVersion, bindingDigest: digestBindings({ bindings: next, hash }) });
 
     const actual = {
       rebound,
