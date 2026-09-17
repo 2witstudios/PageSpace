@@ -72,4 +72,35 @@ describe('Stripe customer creation guard', () => {
     });
     expect(offenders.map(([rel]) => rel)).toEqual([]);
   });
+
+  /**
+   * Linking an existing customer id to a users row is the other way an agent
+   * could end up holding a Stripe customer (the checkout webhook once linked by
+   * email alone). Every non-null stripeCustomerId write must sit in a listed
+   * site, after that site's agent refusal. Clearing it to null is always fine.
+   */
+  const WRITE_SITES: Record<string, string> = {
+    ...GUARDED_SITES,
+    // The human-only WHERE (eq(users.accountType, 'human')) follows the set; the route test pins it.
+    'apps/web/src/app/api/stripe/webhook/route.ts': '!isAgentReservedEmail(customerEmail)',
+  };
+  const NON_NULL_WRITE = /\.(?:set|values)\(\s*\{[^()]*?\bstripeCustomerId\s*:\s*(?!\s|null\b)/g;
+  const writeOffsets = (src: string): number[] => [...src.matchAll(NON_NULL_WRITE)].map((m) => m.index ?? 0);
+
+  it('no file writes a non-null stripeCustomerId outside the listed agent-refusing sites', () => {
+    const writers = ROOTS.flatMap(sourceFiles)
+      .filter((file) => writeOffsets(readFileSync(file, 'utf8')).length > 0)
+      .map(repoRel)
+      .sort();
+    expect(writers).toEqual(Object.keys(WRITE_SITES).sort());
+  });
+
+  it('every listed site refuses an agent before EACH non-null stripeCustomerId write', () => {
+    const offenders = Object.entries(WRITE_SITES).filter(([rel, refusal]) => {
+      const src = readFileSync(join(REPO, rel), 'utf8');
+      const refusalAt = src.indexOf(refusal);
+      return refusalAt === -1 || writeOffsets(src).some((at) => at < refusalAt);
+    });
+    expect(offenders.map(([rel]) => rel)).toEqual([]);
+  });
 });

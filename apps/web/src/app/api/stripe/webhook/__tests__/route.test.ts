@@ -90,14 +90,15 @@ vi.mock('@pagespace/db/db', () => {
     },
   };
 });
-vi.mock('@pagespace/db/operators', () => ({
+vi.mock('@pagespace/db/operators', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
   and: vi.fn((...conds: unknown[]) => ({ type: 'and', conds })),
   isNull: vi.fn((field: unknown) => ({ field, type: 'isNull' })),
   lte: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'lte' })),
 }));
 vi.mock('@pagespace/db/schema/auth', () => ({
-  users: {},
+  users: { accountType: 'users.accountType' },
 }));
 vi.mock('@pagespace/db/schema/subscriptions', () => ({
   subscriptions: {},
@@ -901,6 +902,45 @@ describe('POST /api/stripe/webhook', () => {
           stripeCustomerId: 'cus_new123',
         })
       );
+    });
+
+    it('given a customer email under the agent reserved domain, should not link the customer to any user', async () => {
+      const session = mockCheckoutSession({
+        mode: 'subscription',
+        customer: 'cus_agent',
+        customerEmail: 'agent-x@agents.pagespace.invalid',
+      });
+      const event = mockStripeEvent('checkout.session.completed', session);
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+
+      const response = await POST(new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest);
+
+      expect(response.status).toBe(200);
+      expect(mockUpdateSet).not.toHaveBeenCalledWith(expect.objectContaining({ stripeCustomerId: 'cus_agent' }));
+    });
+
+    it('given a customer email, should link only a HUMAN account with that email (never an agent row)', async () => {
+      const session = mockCheckoutSession({
+        mode: 'subscription',
+        customer: 'cus_new123',
+        customerEmail: 'test@example.com',
+      });
+      const event = mockStripeEvent('checkout.session.completed', session);
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+
+      await POST(new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest);
+
+      const linkIndex = mockUpdateSet.mock.calls.findIndex((c) => (c[0] as { stripeCustomerId?: string }).stripeCustomerId === 'cus_new123');
+      expect(linkIndex).toBeGreaterThanOrEqual(0);
+      expect(JSON.stringify(mockUpdateWhere.mock.calls[linkIndex][0])).toContain('"field":"users.accountType","value":"human"');
     });
 
     it('masks customer email in "Linked Stripe customer to user" log', async () => {

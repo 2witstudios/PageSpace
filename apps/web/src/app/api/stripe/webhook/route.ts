@@ -10,6 +10,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { resolveWebhookMetadataTierForControlPlane } from './control-plane-tier';
 import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import { userEmailMatch } from '@pagespace/lib/auth/user-repository';
+import { isAgentReservedEmail } from '@pagespace/lib/auth/agent/reserved-email';
 import { applyStripeFunding } from '@pagespace/lib/billing/credit-funding';
 import { getCreditPack } from '@pagespace/lib/billing/credit-pricing';
 import { emitCreditsUpdated } from '@/lib/subscription/credit-balance';
@@ -579,14 +580,16 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
     const customerId = session.customer as string;
     const customerEmail = session.customer_details?.email;
 
-    if (customerEmail) {
+    // An agent never holds a Stripe customer (ADR 0007 Decision 8): never link
+    // one by a reserved agent address, and only ever to a human row.
+    if (customerEmail && !isAgentReservedEmail(customerEmail)) {
       // Update user with stripe customer ID
       await db.update(users)
         .set({
           stripeCustomerId: customerId,
           updatedAt: new Date(),
         })
-        .where(userEmailMatch(customerEmail));
+        .where(and(userEmailMatch(customerEmail), eq(users.accountType, 'human')));
 
       loggers.api.info('Linked Stripe customer to user', { customerId, email: maskEmail(customerEmail) });
     }
