@@ -4,6 +4,7 @@ import { users, emailUnsubscribeTokens } from '@pagespace/db/schema/auth';
 import { emailNotificationPreferences, emailNotificationLog } from '@pagespace/db/schema/email-notifications';
 import { sendEmail, resolveAppUrl } from './email-service';
 import { DriveInvitationEmail } from '../email-templates/DriveInvitationEmail';
+import { OrgInvitationEmail } from '../email-templates/OrgInvitationEmail';
 import { ConnectionInvitationEmail } from '../email-templates/ConnectionInvitationEmail';
 import { PageShareInvitationEmail } from '../email-templates/PageShareInvitationEmail';
 import { DirectMessageEmail } from '../email-templates/DirectMessageEmail';
@@ -306,6 +307,36 @@ export async function sendPendingDriveInvitationEmail(input: {
       userName: input.recipientEmail,
       inviterName: safeInviterName,
       driveName: safeDriveName,
+      acceptUrl: input.inviteUrl,
+    }),
+  });
+}
+
+/**
+ * Send an organization invitation (Spec ORG-3). Transactional: it goes to an
+ * address the inviter typed, which may have no account yet. Errors propagate so
+ * the route can report a failed send; the invite row stays and can be resent.
+ */
+export async function sendOrgInvitationEmail(input: {
+  recipientEmail: string;
+  inviterName: string;
+  orgName: string;
+  role: 'ADMIN' | 'MEMBER';
+  expiresInDays: number;
+  inviteUrl: string;
+}): Promise<void> {
+  const safeInviterName = stripHeaderControls(input.inviterName) || 'Someone';
+  const safeOrgName = stripHeaderControls(input.orgName) || 'an organization';
+
+  await sendEmail({
+    to: input.recipientEmail,
+    subject: `${safeInviterName} invited you to join ${safeOrgName} on PageSpace`,
+    react: OrgInvitationEmail({
+      userName: input.recipientEmail,
+      inviterName: safeInviterName,
+      orgName: safeOrgName,
+      roleLabel: input.role === 'ADMIN' ? 'an Admin' : 'a Member',
+      expiresInDays: input.expiresInDays,
       acceptUrl: input.inviteUrl,
     }),
   });

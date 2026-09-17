@@ -55,14 +55,20 @@ MON-3
 # revoke, acceptance for new and existing accounts; a pending invite counts as a seat) re-added per
 # reviews 5230157358 and 5230240628 on #2659: the B1 schema tests prove only the storage shape
 # (fields, the one-OWNER-row cap, unique membership, one open case-insensitive invite), so they are
-# titled "(partial)". Unproven: Owner membership matching ownerId and transfer (B3), the no-org-UI
-# rule (Wave F), and the invite lifecycle plus seat counting (B3, Wave C).
+# titled "(partial)". B3 (org services and routes) then proved Owner membership matching ownerId
+# through creation and transfer, roles and membership across many orgs, and the invite lifecycle
+# (expiry, rotation after expiry, resend, revoke, acceptance by a new or an existing account, live-
+# invite seat counting), still titled "(partial)" because each test proves one clause. Still
+# unproven: ORG-1 "human" Owner (agent accounts), ORG-2 the no-org-UI rule (Wave F), ORG-3 invite
+# acceptance wired into every sign-up flow (Wave F accept page) and a pending invite counting in
+# the Stripe seat quantity (Wave C, SEAT-3).
 ORG-1
 ORG-2
 ORG-3
 ORG-4
+# ORG-5 (one shared org permission function used by web routes, CLI, and MCP): B3 routes all go
+# through requireOrgRole, titled "ORG-5 (partial)"; CLI and MCP use it in Wave G (X-1).
 ORG-5
-ORG-6
 POL-1
 POL-2
 POL-3
@@ -82,6 +88,8 @@ SEAT-1
 # 5230424182 on #2657: the tier table, prices and lone-user refusal are proven, so those tests are
 # titled "SEAT-2 (partial)"; "buying it creates the org" is unproven until Wave C creates orgs.
 SEAT-2
+# SEAT-3: B3's countOrgSeats counts accepted members plus live invites only ("SEAT-3 (partial)");
+# the Stripe quantity is Wave C.
 SEAT-3
 SEAT-4
 SEAT-5
@@ -143,6 +151,8 @@ WAL-7
 WAL-8
 WAL-9
 X-1
+# X-2: B3's "X-2 (partial)" test blocks ORGS_ENABLED while org tables are excluded from the GDPR
+# export; the export and account-deletion handling itself is the Phase 6 leaf yfmlkdchehmberwthwu6g7vt.
 X-2
 X-3
 # X-4 (realtime events for membership, visibility and wallet state): B4 proves one drive-member event
