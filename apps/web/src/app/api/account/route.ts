@@ -247,19 +247,22 @@ export async function DELETE(req: Request) {
       details: { operation: 'erasure_request', requestedByType: 'self' },
     });
 
-    const { requestId, slaDeadline } = await lodgeAndEnqueueErasure({
+    const { requestId, slaDeadline, appleSignIn } = await lodgeAndEnqueueErasure({
       subjectUserId: userId,
       subjectEmail: user.email,
       stripeCustomerId: user.stripeCustomerId,
       callerUserId: userId,
       requestedByType: 'self',
       forceDelete: false,
+      subjectAppleLinked: user.appleId !== null,
     });
 
     loggers.auth.info(`Account erasure queued for user ${userId} (request ${requestId})`);
 
     return Response.json(
-      { message: 'Account erasure queued', requestId, status: 'queued', slaDeadline },
+      // appleSignIn: 'manual' means the client must show the "Stop Using Sign in
+      // with Apple" steps (TN3194) — no token on file, or revocation failed.
+      { message: 'Account erasure queued', requestId, status: 'queued', slaDeadline, appleSignIn },
       { status: 202 }
     );
   } catch (error) {

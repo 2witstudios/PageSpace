@@ -4,6 +4,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { accountRepository } from '@pagespace/lib/repositories/account-repository';
 import { activityLogRepository } from '@pagespace/lib/repositories/activity-log-repository';
 import { revokeUserIntegrationTokens } from '@pagespace/lib/compliance/erasure/revoke-integration-tokens';
+import { revokeAndDiscardAppleTokens } from '@pagespace/lib/auth/apple/revoke-apple-tokens';
 import { deleteAiUsageLogsForUser } from '@pagespace/lib/logging/ai-usage-purge';
 import { deleteMonitoringDataForUser } from '@pagespace/lib/logging/monitoring-purge';
 import { isCloud } from '@pagespace/lib/deployment-mode';
@@ -90,6 +91,19 @@ export const DELETE = withAdminAuth<DataRouteContext>(
         loggers.api.info(`Admin DSAR: OAuth token revocation for ${userId}: revoked=${revoked}, failed=${failed}`);
       } catch (error) {
         loggers.api.error('Admin DSAR: Could not revoke OAuth tokens:', error as Error);
+      }
+
+      // Revoke Sign in with Apple tokens BEFORE user deletion (Guideline 5.1.1(v),
+      // TN3194). Best-effort: without the Apple signing key configured on this
+      // app the tokens are discarded unrevoked, and the users cascade removes any
+      // row left behind either way.
+      try {
+        const apple = await revokeAndDiscardAppleTokens(userId);
+        loggers.api.info(
+          `Admin DSAR: Apple token revocation for ${userId}: revoked=${apple.revoked}, failed=${apple.failed}, unconfigured=${apple.unconfigured}`
+        );
+      } catch (error) {
+        loggers.api.error('Admin DSAR: Could not revoke Apple tokens:', error as Error);
       }
 
       // Delete user record

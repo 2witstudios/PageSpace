@@ -75,6 +75,7 @@ describe('DELETE /api/account (async erasure)', () => {
       email: mockUserEmail,
       image: null,
       stripeCustomerId: null,
+      appleId: null,
     });
     mockAccountRepo.getOwnedDrives.mockResolvedValue([]);
     mockDsrRepo.findActiveErasureForUser.mockResolvedValue(null);
@@ -82,6 +83,40 @@ describe('DELETE /api/account (async erasure)', () => {
       requestId: 'dsr_1',
       jobId: 'job_1',
       slaDeadline: new Date('2026-03-01T00:00:00.000Z'),
+      appleSignIn: 'none',
+    });
+  });
+
+  describe('Sign in with Apple (Guideline 5.1.1(v))', () => {
+    it('given a user who signed in with Apple, should tell the erasure so and return its Apple outcome', async () => {
+      mockAccountRepo.findById.mockResolvedValue({
+        id: mockUserId,
+        email: mockUserEmail,
+        image: null,
+        stripeCustomerId: null,
+        appleId: 'apple-sub-1',
+      });
+      vi.mocked(lodgeAndEnqueueErasure).mockResolvedValue({
+        requestId: 'dsr_1',
+        jobId: 'job_1',
+        slaDeadline: new Date('2026-03-01T00:00:00.000Z'),
+        appleSignIn: 'manual',
+      });
+
+      const res = await DELETE(deleteReq(mockUserEmail));
+      const body = await res.json();
+
+      expect(res.status).toBe(202);
+      expect(lodgeAndEnqueueErasure).toHaveBeenCalledWith(expect.objectContaining({ subjectAppleLinked: true }));
+      expect(body.appleSignIn).toBe('manual');
+    });
+
+    it('given a user who never used Sign in with Apple, should report none', async () => {
+      const res = await DELETE(deleteReq(mockUserEmail));
+      const body = await res.json();
+
+      expect(lodgeAndEnqueueErasure).toHaveBeenCalledWith(expect.objectContaining({ subjectAppleLinked: false }));
+      expect(body.appleSignIn).toBe('none');
     });
   });
 

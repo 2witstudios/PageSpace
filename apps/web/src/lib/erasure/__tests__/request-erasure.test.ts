@@ -20,6 +20,10 @@ vi.mock('@pagespace/lib/repositories/data-subject-request-repository', () => ({
 }));
 vi.mock('@/lib/stripe/client', () => ({ stripe: { customers: { del: vi.fn() } } }));
 vi.mock('../enqueue', () => ({ enqueueAccountErasure: vi.fn() }));
+vi.mock('@pagespace/lib/auth/apple/revoke-apple-tokens', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@pagespace/lib/auth/apple/revoke-apple-tokens')>();
+  return { ...actual, revokeAndDiscardAppleTokens: vi.fn() };
+});
 
 import { lodgeAndEnqueueErasure } from '../request-erasure';
 import { db } from '@pagespace/db/db';
@@ -27,6 +31,7 @@ import { isCloud } from '@pagespace/lib/deployment-mode';
 import { dataSubjectRequestRepository } from '@pagespace/lib/repositories/data-subject-request-repository';
 import { stripe } from '@/lib/stripe/client';
 import { enqueueAccountErasure } from '../enqueue';
+import { revokeAndDiscardAppleTokens } from '@pagespace/lib/auth/apple/revoke-apple-tokens';
 
 const repo = vi.mocked(dataSubjectRequestRepository);
 
@@ -44,6 +49,7 @@ beforeEach(() => {
   vi.mocked(db.update).mockReturnValue({ set: setFn } as never);
   vi.mocked(enqueueAccountErasure).mockResolvedValue('job_1');
   vi.mocked(isCloud).mockReturnValue(false);
+  vi.mocked(revokeAndDiscardAppleTokens).mockResolvedValue({ hadTokens: false, revoked: 0, failed: 0, unconfigured: false });
 });
 
 const baseInput = {
@@ -53,6 +59,7 @@ const baseInput = {
   callerUserId: 'u1',
   requestedByType: 'self' as const,
   forceDelete: false,
+  subjectAppleLinked: false,
 };
 
 describe('lodgeAndEnqueueErasure', () => {
@@ -70,6 +77,7 @@ describe('lodgeAndEnqueueErasure', () => {
       requestId: 'dsr_1',
       jobId: 'job_1',
       slaDeadline: new Date('2026-03-01T00:00:00.000Z'),
+      appleSignIn: 'none',
     });
   });
 
@@ -123,5 +131,79 @@ describe('lodgeAndEnqueueErasure', () => {
     vi.mocked(enqueueAccountErasure).mockRejectedValue(new Error('processor down'));
     await expect(lodgeAndEnqueueErasure(baseInput)).rejects.toThrow('processor down');
     expect(db.update).not.toHaveBeenCalled();
+  });
+
+  describe('Sign in with Apple revocation (Guideline 5.1.1(v), TN3194)', () => {
+    it('given stored Apple tokens, should revoke and discard them BEFORE the job is queued, and record the step', async () => {
+      const order: string[] = [];
+      vi.mocked(revokeAndDiscardAppleTokens).mockImplementation(async () => {
+        order.push('revoke');
+        return { hadTokens: true, revoked: 1, failed: 0, unconfigured: false };
+      });
+      vi.mocked(enqueueAccountErasure).mockImplementation(async () => {
+        order.push('enqueue');
+        return 'job_1';
+      });
+
+      const result = await lodgeAndEnqueueErasure({ ...baseInput, subjectAppleLinked: true });
+
+      expect(revokeAndDiscardAppleTokens).toHaveBeenCalledWith('u1');
+      // The worker's delete-user cascades the token rows away; revoking first
+      // means the rows are still there to read.
+      expect(order).toEqual(['revoke', 'enqueue']);
+      expect(repo.appendStepResult).toHaveBeenCalledWith(
+        'dsr_1',
+        expect.objectContaining({ step: 'revoke-apple-tokens', status: 'ok', detail: 'revoked=1 failed=0' }),
+      );
+      expect(result.appleSignIn).toBe('revoked');
+    });
+
+    it('given Apple fails to revoke, should record the failure, still queue the erasure and tell the user to finish manually', async () => {
+      vi.mocked(revokeAndDiscardAppleTokens).mockResolvedValue({ hadTokens: true, revoked: 0, failed: 1, unconfigured: false });
+
+      const result = await lodgeAndEnqueueErasure({ ...baseInput, subjectAppleLinked: true });
+
+      expect(repo.appendStepResult).toHaveBeenCalledWith(
+        'dsr_1',
+        expect.objectContaining({ step: 'revoke-apple-tokens', status: 'failed', detail: 'revoked=0 failed=1' }),
+      );
+      expect(result.jobId).toBe('job_1');
+      expect(result.appleSignIn).toBe('manual');
+    });
+
+    it('given the revoke step throws, should record it failed and still queue the erasure', async () => {
+      vi.mocked(revokeAndDiscardAppleTokens).mockRejectedValue(new Error('db down'));
+
+      const result = await lodgeAndEnqueueErasure({ ...baseInput, subjectAppleLinked: true });
+
+      expect(repo.appendStepResult).toHaveBeenCalledWith(
+        'dsr_1',
+        expect.objectContaining({ step: 'revoke-apple-tokens', status: 'failed', detail: 'db down' }),
+      );
+      expect(enqueueAccountErasure).toHaveBeenCalled();
+      expect(result.appleSignIn).toBe('manual');
+    });
+
+    it('given an Apple-linked user with no stored token, should record skipped and ask for the manual steps', async () => {
+      const result = await lodgeAndEnqueueErasure({ ...baseInput, subjectAppleLinked: true });
+
+      expect(repo.appendStepResult).toHaveBeenCalledWith(
+        'dsr_1',
+        expect.objectContaining({ step: 'revoke-apple-tokens', status: 'skipped' }),
+      );
+      expect(result.appleSignIn).toBe('manual');
+    });
+
+    it('given stored tokens but no signing key, should record skipped as unconfigured and ask for the manual steps', async () => {
+      vi.mocked(revokeAndDiscardAppleTokens).mockResolvedValue({ hadTokens: true, revoked: 0, failed: 0, unconfigured: true });
+
+      const result = await lodgeAndEnqueueErasure({ ...baseInput, subjectAppleLinked: true });
+
+      expect(repo.appendStepResult).toHaveBeenCalledWith(
+        'dsr_1',
+        expect.objectContaining({ step: 'revoke-apple-tokens', status: 'skipped', detail: expect.stringContaining('not configured') }),
+      );
+      expect(result.appleSignIn).toBe('manual');
+    });
   });
 });
