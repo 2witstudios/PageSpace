@@ -13,55 +13,81 @@ const VISIBILITIES = ['OPEN', 'RESTRICTED', 'PRIVATE'] as const;
 
 const DEFAULT_ROLE: DriveRoleGrant = { role: 'MEMBER', customRoleId: 'role_viewer' };
 
-const MEMBERSHIPS: ReadonlyArray<{ label: string; membership: OrgDriveMembership | null }> = [
-  { label: 'no membership row', membership: null },
-  { label: 'an invited MEMBER row', membership: { role: 'MEMBER', customRoleId: null, source: 'invite' } },
-  { label: 'an org-materialized MEMBER row', membership: { role: 'MEMBER', customRoleId: 'role_editor', source: 'org' } },
-  { label: 'an invited ADMIN row', membership: { role: 'ADMIN', customRoleId: null, source: 'invite' } },
-  { label: 'the drive lead OWNER row', membership: { role: 'OWNER', customRoleId: null, source: 'invite' } },
-];
+type MembershipKey = 'none' | 'inviteMember' | 'orgMember' | 'inviteAdmin' | 'leadOwner';
 
-type Expected = ReturnType<typeof resolveOrgDriveAccess>;
+const MEMBERSHIPS: Record<MembershipKey, OrgDriveMembership | null> = {
+  none: null,
+  inviteMember: { role: 'MEMBER', customRoleId: null, source: 'invite' },
+  orgMember: { role: 'MEMBER', customRoleId: 'role_editor', source: 'org' },
+  inviteAdmin: { role: 'ADMIN', customRoleId: null, source: 'invite' },
+  leadOwner: { role: 'OWNER', customRoleId: null, source: 'invite' },
+};
 
-/** The requirement, stated once as a table oracle independent of the implementation's branch order. */
-function expected(input: OrgDriveAccessInput): Expected {
-  const { orgRole, driveVisibility, driveMembership, driveDefaultRole } = input;
-  if (orgRole === null) return null;
-  if (orgRole === 'OWNER' || orgRole === 'ADMIN') {
-    if (driveMembership?.role === 'OWNER') {
-      return { role: 'OWNER', customRoleId: null, source: driveMembership.source };
-    }
-    return { role: 'ADMIN', customRoleId: null, source: 'org-admin' };
+/**
+ * Outcome codes, written out by hand per the leaf, so the table is not a second copy of the
+ * implementation's branches: ORG_ADMIN = { ADMIN, org-admin }; ROW = the membership row as-is;
+ * DEFAULT = the drive default role with source org; NULL = no org access.
+ */
+type Outcome = 'ORG_ADMIN' | 'ROW' | 'DEFAULT' | 'NULL';
+type Visibility = (typeof VISIBILITIES)[number];
+type OrgRoleKey = 'OWNER' | 'ADMIN' | 'MEMBER' | 'none';
+
+const OWNER_OR_ADMIN_TABLE: Record<Visibility, Record<MembershipKey, Outcome>> = {
+  OPEN:       { none: 'ORG_ADMIN', inviteMember: 'ORG_ADMIN', orgMember: 'ORG_ADMIN', inviteAdmin: 'ROW', leadOwner: 'ROW' },
+  RESTRICTED: { none: 'ORG_ADMIN', inviteMember: 'ORG_ADMIN', orgMember: 'ORG_ADMIN', inviteAdmin: 'ROW', leadOwner: 'ROW' },
+  PRIVATE:    { none: 'ORG_ADMIN', inviteMember: 'ORG_ADMIN', orgMember: 'ORG_ADMIN', inviteAdmin: 'ROW', leadOwner: 'ROW' },
+};
+
+const TABLE: Record<OrgRoleKey, Record<Visibility, Record<MembershipKey, Outcome>>> = {
+  OWNER: OWNER_OR_ADMIN_TABLE,
+  ADMIN: OWNER_OR_ADMIN_TABLE,
+  MEMBER: {
+    OPEN:       { none: 'DEFAULT', inviteMember: 'ROW', orgMember: 'ROW', inviteAdmin: 'ROW', leadOwner: 'ROW' },
+    RESTRICTED: { none: 'NULL',    inviteMember: 'ROW', orgMember: 'ROW', inviteAdmin: 'ROW', leadOwner: 'ROW' },
+    PRIVATE:    { none: 'NULL',    inviteMember: 'ROW', orgMember: 'ROW', inviteAdmin: 'ROW', leadOwner: 'ROW' },
+  },
+  none: {
+    OPEN:       { none: 'NULL', inviteMember: 'NULL', orgMember: 'NULL', inviteAdmin: 'NULL', leadOwner: 'NULL' },
+    RESTRICTED: { none: 'NULL', inviteMember: 'NULL', orgMember: 'NULL', inviteAdmin: 'NULL', leadOwner: 'NULL' },
+    PRIVATE:    { none: 'NULL', inviteMember: 'NULL', orgMember: 'NULL', inviteAdmin: 'NULL', leadOwner: 'NULL' },
+  },
+};
+
+function outcomeValue(outcome: Outcome, membership: OrgDriveMembership | null) {
+  switch (outcome) {
+    case 'ORG_ADMIN':
+      return { role: 'ADMIN', customRoleId: null, source: 'org-admin' };
+    case 'ROW':
+      return membership;
+    case 'DEFAULT':
+      return { ...DEFAULT_ROLE, source: 'org' };
+    case 'NULL':
+      return null;
   }
-  if (driveMembership) {
-    return { role: driveMembership.role, customRoleId: driveMembership.customRoleId, source: driveMembership.source };
-  }
-  if (driveVisibility === 'OPEN') {
-    return { role: driveDefaultRole.role, customRoleId: driveDefaultRole.customRoleId, source: 'org' };
-  }
-  return null;
 }
+
+const MEMBERSHIP_KEYS = Object.keys(MEMBERSHIPS) as MembershipKey[];
 
 const CASES = ORG_ROLES.flatMap((orgRole) =>
   VISIBILITIES.flatMap((driveVisibility) =>
-    MEMBERSHIPS.map(({ label, membership }) => ({
-      orgRole,
-      driveVisibility,
-      label,
-      input: { orgRole, driveVisibility, driveMembership: membership, driveDefaultRole: DEFAULT_ROLE },
-    })),
+    MEMBERSHIP_KEYS.map((membershipKey) => {
+      const outcome = TABLE[orgRole ?? 'none'][driveVisibility][membershipKey];
+      const membership = MEMBERSHIPS[membershipKey];
+      const input: OrgDriveAccessInput = { orgRole, driveVisibility, driveMembership: membership, driveDefaultRole: DEFAULT_ROLE };
+      return { orgRole, driveVisibility, membershipKey, outcome, input, want: outcomeValue(outcome, membership) };
+    }),
   ),
 );
 
 describe('resolveOrgDriveAccess', () => {
   it('the table covers every (orgRole incl. none, visibility, membership) combination', () => {
-    expect(CASES).toHaveLength(ORG_ROLES.length * VISIBILITIES.length * MEMBERSHIPS.length);
+    expect(CASES).toHaveLength(ORG_ROLES.length * VISIBILITIES.length * MEMBERSHIP_KEYS.length);
     expect(CASES).toHaveLength(60);
   });
 
-  describe.each(CASES)('orgRole $orgRole, $driveVisibility drive, $label', ({ input }) => {
-    it('resolves per the org access table', () => {
-      expect(resolveOrgDriveAccess(input)).toEqual(expected(input));
+  describe.each(CASES)('orgRole $orgRole, $driveVisibility drive, membership $membershipKey', ({ input, outcome, want }) => {
+    it(`resolves ${outcome}`, () => {
+      expect(resolveOrgDriveAccess(input)).toEqual(want);
     });
   });
 
@@ -82,6 +108,13 @@ describe('resolveOrgDriveAccess', () => {
         driveDefaultRole: DEFAULT_ROLE,
       });
       expect(access).toEqual({ role: 'ADMIN', customRoleId: null, source: 'org-admin' });
+    });
+
+    it.each(VISIBILITIES)('ORG-4 (partial) an org Admin already holding a drive ADMIN row on a %s drive resolves by the row, not org-admin, so no org-power audit is raised', (driveVisibility) => {
+      const row: OrgDriveMembership = { role: 'ADMIN', customRoleId: null, source: 'invite' };
+      expect(
+        resolveOrgDriveAccess({ orgRole: 'ADMIN', driveVisibility, driveMembership: row, driveDefaultRole: DEFAULT_ROLE }),
+      ).toEqual({ role: 'ADMIN', customRoleId: null, source: 'invite' });
     });
 
     it('ORG-4 (partial) the org branch never downgrades the drive lead OWNER row', () => {
@@ -123,7 +156,7 @@ describe('resolveOrgDriveAccess', () => {
 
   describe('X-6 (partial) negatives', () => {
     it.each(VISIBILITIES)('X-6 (partial) a non-member of the org never resolves a %s drive, even with a row', (driveVisibility) => {
-      for (const { membership } of MEMBERSHIPS) {
+      for (const membership of Object.values(MEMBERSHIPS)) {
         expect(
           resolveOrgDriveAccess({ orgRole: null, driveVisibility, driveMembership: membership, driveDefaultRole: DEFAULT_ROLE }),
         ).toBeNull();

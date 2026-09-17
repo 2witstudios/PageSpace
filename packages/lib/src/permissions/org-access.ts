@@ -12,8 +12,9 @@ import type { DriveMemberSource } from '@pagespace/db/schema/members';
  *   membership row: a guest's row (DRV-8) is resolved by the existing drive-member path, never
  *   by the org path, so the org path cannot widen a guest (X-6).
  * - Org OWNER/ADMIN resolve ADMIN-equivalent on every org drive with source `org-admin`, so the
- *   caller can write the audit event when that access opens a PRIVATE drive (ORG-4, AUD-1). A
- *   drive lead's OWNER row is never downgraded.
+ *   caller can write the audit event when that access opens a PRIVATE drive (ORG-4, AUD-1). When
+ *   their own row already grants ADMIN or OWNER, the row is returned instead: org power was not
+ *   used, and a drive lead's OWNER row is never downgraded.
  * - Org MEMBER: an existing membership row resolves as that row. Without one, only an OPEN drive
  *   resolves, to the drive's default role with source `org` (DRV-5, POL-6); RESTRICTED and
  *   PRIVATE resolve `null` (DRV-6, DRV-7).
@@ -62,7 +63,9 @@ export function resolveOrgDriveAccess({
   if (orgRole === null) return null;
 
   if (orgRole === 'OWNER' || orgRole === 'ADMIN') {
-    if (driveMembership?.role === 'OWNER') return fromMembership(driveMembership);
+    // A row that already grants ADMIN or OWNER is used as-is: org power is not what opened the
+    // drive, so no org-admin audit is owed, and the drive lead's OWNER row is never downgraded.
+    if (driveMembership?.role === 'OWNER' || driveMembership?.role === 'ADMIN') return fromMembership(driveMembership);
     return { role: 'ADMIN', customRoleId: null, source: 'org-admin' };
   }
 
