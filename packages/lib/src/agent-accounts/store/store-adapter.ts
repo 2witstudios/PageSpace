@@ -242,14 +242,15 @@ export type PutInput = {
   readonly scope: PlaneScope;
   /** `owner` iff `bindings.ownerRef.kind === 'user'`; a non-empty `pinned` set iff `agent_page`. Pinned on the first put; must equal the stored set afterwards. */
   readonly consenters: PlaneConsenters;
-  readonly identity: StoreIdentity;
+  /** The write-only credential-ingress identity (ADR 0005 §2.1); any other channel is `identity_refused` at runtime (G1c review). */
+  readonly identity: StoreIdentity & { readonly channel: 'ingress' };
 };
 
 export type PutResult =
   | { readonly ok: true; readonly version: CredentialVersion }
   | {
       readonly ok: false;
-      readonly reason: 'version_conflict' | 'write_unverified' | 'lock_unavailable' | 'store_unavailable' | 'kind_mismatch' | 'consenters_invalid';
+      readonly reason: 'version_conflict' | 'write_unverified' | 'lock_unavailable' | 'store_unavailable' | 'kind_mismatch' | 'consenters_invalid' | 'identity_refused';
     };
 
 export type ResolveInput<C extends PresenterChannel, K extends ResolvableBy<C> = ResolvableBy<C>> = {
@@ -375,6 +376,8 @@ export type RebindResult =
         | 'version_conflict'
         | 'consent_required'
         | 'consent_invalid'
+        /** The ref is revoked: its bindings are never rewritten and no consent is spent on it (G1c review). */
+        | 'revoked'
         | 'immutable_binding_changed'
         | 'identity_refused'
         | 'write_unverified'
@@ -393,10 +396,10 @@ export type RevokeResult =
 /** What happened at the PROVIDER when we tried to revoke there. Reported, never inferred. */
 export type UpstreamRevocation = 'revoked' | 'unsupported' | 'failed' | 'not_attempted';
 
-export type DeleteInput = { readonly ref: SecretRef; readonly identity: StoreIdentity; readonly upstream: UpstreamRevocation };
+export type DeleteInput = { readonly ref: SecretRef; readonly identity: StoreIdentity & { readonly channel: 'manage' }; readonly upstream: UpstreamRevocation };
 export type DeleteResult =
   | { readonly ok: true; readonly removed: true; readonly upstream: UpstreamRevocation }
-  | { readonly ok: false; readonly reason: 'not_found' | 'store_unavailable' };
+  | { readonly ok: false; readonly reason: 'not_found' | 'identity_refused' | 'store_unavailable' };
 
 export type DescribeInput = { readonly ref: SecretRef; readonly identity: StoreIdentity & { readonly channel: 'manage' } };
 /**
@@ -478,6 +481,8 @@ export type DecideStoreWrite = (input: {
 export type DecideRebind = (input: {
   readonly ref: SecretRef;
   readonly stored: PlaneBindingsRecord | null;
+  /** Whether the plane records a revocation for the ref; a revoked ref is refused before anything else is checked. */
+  readonly storedRevoked: boolean;
   readonly expectedVersion: PolicyVersion;
   readonly next: PlaneBindingsRecord;
   readonly consent: OwnerConsent | null;

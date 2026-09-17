@@ -1500,9 +1500,9 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
 
     await adapter.put({ ref, material: API_KEY_V1, expectedVersion: null, bindings: plainBindings(), identity: baseIdentity() });
     const actual = {
-      put: await raw.put({ ref, material: API_KEY_V2, expectedVersion: 1 as never, bindings: plainBindings(), scope: EXAMPLE_SCOPE, consenters: OWNER_CONSENTERS, identity: executor }),
+      put: await raw.put({ ref, material: API_KEY_V2, expectedVersion: 1 as never, bindings: plainBindings(), scope: EXAMPLE_SCOPE, consenters: OWNER_CONSENTERS, identity: executor as never }),
       rotate: await raw.rotate({ ref, expectedVersion: 1 as never, next: API_KEY_V2, bindings: plainBindings(), identity: executor as never }),
-      delete: await raw.delete({ ref, identity: executor, upstream: 'not_attempted' }),
+      delete: await raw.delete({ ref, identity: executor as never, upstream: 'not_attempted' }),
       still: await adapter.describe({ ref, identity: baseIdentity() }).then((d) => (d.ok ? d.version : d)),
     };
     expect(actual).toEqual({

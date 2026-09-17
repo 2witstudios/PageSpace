@@ -244,6 +244,8 @@ export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): St
   }): Promise<PutResult> {
     const { ref, material, expectedVersion, bindings, identity, rotation } = input;
     if (ref.tenantId !== identity.tenantId) return { ok: false, reason: 'store_unavailable' };
+    // G1c review: the role is checked at runtime here too — ingress puts, only the refresh worker rotates.
+    if (!decideStoreCaller({ identity, ref, required: rotation ? 'refresh-worker' : 'ingress' }).ok) return { ok: false, reason: 'identity_refused' };
     // PutInput does not type-correlate ref.kind with SecretMaterial's discriminant — a caller
     // could otherwise submit e.g. password material under an api_key ref (Codex review PR #2646
     // P2). Reject before any I/O.
@@ -297,7 +299,8 @@ export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): St
         // `rotationGraceMs` (ADR 0005 §2.2; Codex review PR #2646 P1).
         if (rotation) {
           const current = await deps.infisical.getSecret({ projectId, credentials, secretKey });
-          if (!current.ok) return { ok: false, reason: 'write_unverified' };
+          // The copy is labelled with the plane's version, so it must BE that version in Infisical (G1c review).
+          if (!current.ok || current.secret.version !== observedBefore) return { ok: false, reason: 'write_unverified' };
           const previousKey = previousSecretKeyFor(ref.accountId, ref.kind);
           const previousComment: PreviousSnapshotComment = { __version: observedBefore as number };
           const previousWrite = await deps.infisical.getSecret({ projectId, credentials, secretKey: previousKey });
@@ -419,10 +422,11 @@ export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): St
     } catch {
       return { ok: false, reason: 'store_unavailable' };
     }
-    if (!isRecord(parsed)) return { ok: false, reason: 'store_unavailable' };
+    // The payload must be the ref's kind; stripping is decided by the ref, never by what the store says it holds (G1c review).
+    if (!isRecord(parsed) || parsed.kind !== ref.kind) return { ok: false, reason: 'store_unavailable' };
 
-    const material = stripRefreshToken(parsed.kind, parsed.material as never, grant.aud);
-    return { ok: true, kind: parsed.kind, material, version: grant.credentialVersion as CredentialVersion };
+    const material = stripRefreshToken(ref.kind, parsed.material as never, grant.aud);
+    return { ok: true, kind: ref.kind, material, version: grant.credentialVersion as CredentialVersion };
   }
 
   return {
@@ -464,6 +468,7 @@ export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): St
         const decision = decideRebind({
           ref: input.ref,
           stored: stored === null ? null : recordOf(stored),
+          storedRevoked: stored !== null && stored.revokedAt !== null,
           expectedVersion: input.expectedVersion,
           next,
           consent: input.consent,
@@ -523,7 +528,8 @@ export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): St
     },
 
     async delete(input: DeleteInput): Promise<DeleteResult> {
-      if (input.ref.tenantId !== input.identity.tenantId) return { ok: false, reason: 'not_found' };
+      const caller = decideStoreCaller({ identity: input.identity, ref: input.ref, required: 'manage' });
+      if (!caller.ok) return caller;
       const store = await lookupStore(input.ref.tenantId, input.identity.identityId);
       if (store === null) return { ok: false, reason: 'store_unavailable' };
       const { projectId, credentials } = store;

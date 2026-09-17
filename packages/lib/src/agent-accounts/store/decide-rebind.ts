@@ -5,7 +5,7 @@
  * named consent single-use, and writes only on `rebind`.
  *
  * Refusal order:
- *   1. nothing stored — `not_found`;
+ *   1. nothing stored — `not_found`; a revoked ref — `revoked` (its consent is never spent);
  *   2. a stored scope that does not hash to the stored `policyDigest` — the
  *      plane's own record is inconsistent, so fail closed (`store_unavailable`);
  *   3. a next scope that does not hash to the next `policyDigest`, or whose
@@ -43,6 +43,7 @@ import { isRecordSelfConsistent } from './is-record-self-consistent';
 import { isScopeNarrowing } from './is-scope-narrowing';
 
 const NOT_FOUND = { outcome: 'refuse', reason: 'not_found' } as const;
+const REVOKED = { outcome: 'refuse', reason: 'revoked' } as const;
 const STORE_UNAVAILABLE = { outcome: 'refuse', reason: 'store_unavailable' } as const;
 const CONSENT_REQUIRED = { outcome: 'refuse', reason: 'consent_required' } as const;
 const CONSENT_INVALID = { outcome: 'refuse', reason: 'consent_invalid' } as const;
@@ -59,8 +60,10 @@ function isStoredConsenter(stored: PlaneBindingsRecord, consentingUserId: UserId
   return stored.consenters.kind === 'pinned' && stored.consenters.userIds.includes(consentingUserId);
 }
 
-export const decideRebind: DecideRebind = ({ ref, stored, expectedVersion, next, consent, consentPublicKey, now, maxAgeMs, verify, hash }) => {
+export const decideRebind: DecideRebind = ({ ref, stored, storedRevoked, expectedVersion, next, consent, consentPublicKey, now, maxAgeMs, verify, hash }) => {
   if (stored === null) return NOT_FOUND;
+  // A revoked account's bindings are never rewritten, and nothing about the consent is looked at (G1c review).
+  if (storedRevoked) return REVOKED;
   if (!isRecordSelfConsistent({ record: stored, hash })) return STORE_UNAVAILABLE;
   if (!isRecordSelfConsistent({ record: next, hash })) return VERSION_CONFLICT;
 
