@@ -157,6 +157,13 @@ export async function POST(request: Request) {
   if (orgId !== undefined && !ORGS_ENABLED) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
+  // Creating in an org is session-only, like the org move routes; CLI and MCP parity is Wave G.
+  if (orgId !== undefined && auth.tokenType !== 'session') {
+    return NextResponse.json(
+      { error: 'Creating a drive in an organization requires a signed-in session; tokens cannot do this yet.' },
+      { status: 403 }
+    );
+  }
 
   try {
     if (isReservedDriveName(name)) {

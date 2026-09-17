@@ -486,6 +486,22 @@ describe('POST /api/drives', () => {
       expect((await post({ name: 'Finance', orgId: 'org-northwind', orgVisibility: 'SECRET' })).status).toBe(400);
     });
 
+    it('DRV-3 (partial) a bearer-token request cannot create a drive in an org until CLI and MCP parity in Wave G', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
+        ...mockWebAuth(mockUserId),
+        tokenType: 'mcp',
+      } as unknown as SessionAuthResult);
+
+      const response = await post({ name: 'Engineering', orgId: 'org-northwind' });
+
+      expect(response.status).toBe(403);
+      expect((await response.json()).error).toBe(
+        'Creating a drive in an organization requires a signed-in session; tokens cannot do this yet.'
+      );
+      expect(createOrgDrive).not.toHaveBeenCalled();
+      expect(createDrive).not.toHaveBeenCalled();
+    });
+
     it('an orgId answers 404 and creates nothing while ORGS_ENABLED is false', async () => {
       orgsFlag.enabled = false;
 
