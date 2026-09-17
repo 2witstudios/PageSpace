@@ -158,9 +158,10 @@ export function tierAllowanceCents(tier: string, active: boolean = MONEY_MODEL_V
 }
 
 /**
- * Cents of credit value → credit count. Multiplies before dividing: every whole-cent
- * input is then an exact integer product, and dividing it by an exact divisor is exact
- * too. Divide-then-multiply drifts ((7 / 100) * 100 is 7.000000000000001).
+ * Cents of credit value → credit count. Multiplies before dividing: a whole-cent input
+ * gives an exact integer product, and while CENTS_PER_DOLLAR divides that product
+ * evenly (true while it equals CREDITS_PER_DOLLAR) the quotient is exact too.
+ * Divide-then-multiply drifts ((7 / 100) * 100 is 7.000000000000001).
  */
 export function creditsFromCents(cents: number): number {
   return (cents * CREDITS_PER_DOLLAR) / CENTS_PER_DOLLAR;
@@ -168,8 +169,10 @@ export function creditsFromCents(cents: number): number {
 
 /**
  * Credit count → cents of credit value. Multiplies before dividing, so a whole credit
- * count gives exact integer cents — the figure goes to Stripe as `unit_amount`, which
- * rejects a non-integer.
+ * count gives exact integer cents while CREDITS_PER_DOLLAR divides the product evenly
+ * (true while it equals CENTS_PER_DOLLAR) — the figure goes to Stripe as
+ * `unit_amount`, which rejects a non-integer. A rate that does not divide evenly makes
+ * a credit a fraction of a cent, and the MON-5 exact-integer test fails on purpose.
  */
 export function centsFromCredits(credits: number): number {
   return (credits * CENTS_PER_DOLLAR) / CREDITS_PER_DOLLAR;
