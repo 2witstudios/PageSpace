@@ -90,14 +90,18 @@ describe('drive-service.ts', () => {
     expect(body).toMatch(GATE);
   });
 
+  // Both resolve membership through loadEffectiveDriveMembership (org access, Wave B7), whose own
+  // drive_members lookup carries the gate: pinned in the permissions/org-drive-membership.ts block.
   it('getDriveAccess non-owner branch gates pending rows (regression: pending row would return isMember=true through the bare access lookup)', () => {
     const body = extractFunctionBody(source, 'getDriveAccess');
-    expect(body).toMatch(GATE);
+    expect(body).toMatch(/loadEffectiveDriveMembership\(/);
+    expect(body).not.toMatch(/\.from\(driveMembers\)/);
   });
 
   it('getDriveAccessWithDrive non-owner branch gates pending rows (regression: bundled lookup would surface pending row as a member)', () => {
     const body = extractFunctionBody(source, 'getDriveAccessWithDrive');
-    expect(body).toMatch(GATE);
+    expect(body).toMatch(/loadEffectiveDriveMembership\(/);
+    expect(body).not.toMatch(/\.from\(driveMembers\)/);
   });
 
   describe('updateDriveLastAccessed (Slice 1.3 owner self-heal)', () => {
@@ -132,6 +136,16 @@ describe('permissions/permissions.ts', () => {
 
   it('getDriveIdsForUser memberDrives query gates pending rows (regression: pending member drives would appear in the access-list used by callers like search and pulse)', () => {
     const body = extractFunctionBody(source, 'getDriveIdsForUser');
+    expect(body).toMatch(GATE);
+  });
+});
+
+describe('permissions/org-drive-membership.ts', () => {
+  const source = read('permissions/org-drive-membership.ts');
+
+  it('loadEffectiveDriveMembership gates pending rows (regression: getUserAccessLevel, getDriveAccess and getDriveAccessWithDrive all read membership through it, so a pending row would open the drive)', () => {
+    const body = extractFunctionBody(source, 'loadEffectiveDriveMembership');
+    expect(body).toMatch(/\.from\(driveMembers\)/);
     expect(body).toMatch(GATE);
   });
 });
