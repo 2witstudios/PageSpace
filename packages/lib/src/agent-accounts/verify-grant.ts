@@ -32,14 +32,25 @@
 import type { AccountKind } from '@pagespace/db/schema/agent-accounts';
 import { isDriveWithinCredentialScope } from '../agent-workspaces/credential-scope';
 import { secureCompare } from '../auth/secure-compare';
-import type { AgentAccountGrant, ApprovalFact, DelegationFact, ExpectedBinding, GrantDenyReason, GrantVerdict, PresenterChannel, VerifyGrant } from './grant';
+import type {
+  AgentAccountGrant,
+  ApprovalFact,
+  DelegationFact,
+  GrantDenyReason,
+  GrantVerdict,
+  KnownAccountBinding,
+  PresenterChannel,
+  VerifyGrant,
+  VerifyGrantInput,
+} from './grant';
+import { VERIFIED_GRANT } from './verified-grant-brand';
 import { GRANT_LIMITS } from './grant-constants';
 import { parseGrant } from './parse-grant';
 import { encodeGrant } from './encode-grant';
 import { decodeBase64 } from './decode-base64';
 import { decideSandboxBinding } from './decide-sandbox-binding';
 
-const deny = (reason: GrantDenyReason): GrantVerdict => ({ ok: false, reason });
+const deny = (reason: GrantDenyReason): Extract<GrantVerdict, { readonly ok: false }> => ({ ok: false, reason });
 
 /**
  * Which kinds each channel may resolve (ADR 0005 §4.2, `ResolvableBy`), as
@@ -64,7 +75,7 @@ function kindResolvable(grant: AgentAccountGrant): boolean {
  * that rotation: a grant in flight across a refresh still resolves, and old
  * material never gets a fresh grant (ADR 0004 F5a; G1a review M7).
  */
-function credentialVersionAdmitted(grant: AgentAccountGrant, expected: ExpectedBinding, now: number, rotationGraceMs: number): boolean {
+function credentialVersionAdmitted(grant: AgentAccountGrant, expected: KnownAccountBinding, now: number, rotationGraceMs: number): boolean {
   if (grant.credentialVersion === expected.currentCredentialVersion) return true;
   if (expected.previousCredentialVersion === null || expected.rotatedAt === null) return false;
   return (
@@ -108,7 +119,7 @@ function approvalHolds(grant: AgentAccountGrant, fact: ApprovalFact): boolean {
   );
 }
 
-export const verifyGrant: VerifyGrant = (input) => {
+export const verifyGrant: VerifyGrant = <A extends PresenterChannel>(input: VerifyGrantInput<A>): GrantVerdict<A> => {
   // F1 — structure. Nothing else is evaluated for a malformed grant.
   const parsed = parseGrant({ grant: input.grant });
   if (!parsed.ok) return deny('malformed');
@@ -136,6 +147,10 @@ export const verifyGrant: VerifyGrant = (input) => {
   if (grant.human.userId !== expected.human.userId || grant.human.sessionId !== expected.human.sessionId) return deny('principal_mismatch');
   if (grant.agentPageId !== expected.agentPageId) return deny('principal_mismatch');
   if (grant.conversationId !== expected.conversationId || grant.runId !== expected.runId) return deny('principal_mismatch');
+
+  // F5a (first half) — no account row: every account fact is null (G1c R15). Answered like a
+  // stale version so the refusal is not an existence oracle.
+  if (expected.accountId === null) return deny('version_mismatch');
 
   // F5 — the account is usable at all; the status goes to audit, not the caller.
   if (expected.accountStatus !== 'active') return deny('account_not_active');
@@ -185,5 +200,7 @@ export const verifyGrant: VerifyGrant = (input) => {
   // F17 — may this channel resolve this kind at all.
   if (!kindResolvable(grant)) return deny('kind_not_resolvable');
 
-  return { ok: true, grant };
+  // Branded HERE, with the audience the presenter expected (equal to `grant.aud` by F2), so a
+  // `VerifiedGrant<A>` exists only as this function's output — no caller casts (G1c R9).
+  return { ok: true, grant: { ...grant, aud: expected.aud, [VERIFIED_GRANT]: expected.aud } };
 };

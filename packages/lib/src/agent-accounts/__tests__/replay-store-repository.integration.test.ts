@@ -20,7 +20,8 @@ import { agentAccountGrantNonces } from '@pagespace/db/schema/agent-account-gran
 import { requireDb } from '@pagespace/db/test/require-db';
 import { createReplayStoreRepository } from '../replay-store-repository';
 import { GRANT_LIMITS } from '../grant-constants';
-import type { Nonce, GrantId } from '../grant';
+import type { ConsentId, Nonce, GrantId } from '../grant';
+import { createConsentLedgerRepository } from '../store/consent-ledger-repository';
 
 const PREFIX = 'itest-replay-';
 let dbAvailable = false;
@@ -149,5 +150,31 @@ describe('replay store — atomic, shared across replicas, survives restart (ADR
     const consume = await dead.consume({ nonce: n, grantId: GRANT, expiresAt: EXP, now: NOW });
     await deadPool.end();
     expect({ lookup, consume }).toEqual({ lookup: { ok: false }, consume: 'unavailable' });
+  });
+});
+
+// G1c E2 (ADR 0005 §2.2 rebind): owner consents are single-use through this same shared ledger,
+// in their own `consent:` namespace. Kept in this file so it shares its connection budget.
+describe('consent ledger over the replay store (G1c E2)', () => {
+  it('given one consent presented to two replicas, should be consumed by exactly one and replayed for the other', async () => {
+    const replicaA = createConsentLedgerRepository({ replayStore: createReplayStoreRepository({ db }) });
+    const replicaB = createConsentLedgerRepository({ replayStore: createReplayStoreRepository({ db }) });
+    const consentId = `${PREFIX}consent-once-${Date.now()}` as ConsentId;
+    const now = Date.now();
+    const outcomes = await Promise.all([replicaA.consume({ consentId, expiresAt: now + 300_000, now }), replicaB.consume({ consentId, expiresAt: now + 300_000, now })]);
+    const actual = [...outcomes].sort();
+    await db.delete(agentAccountGrantNonces).where(sql`${agentAccountGrantNonces.nonce} = ${`consent:${consentId}`}`);
+    expect(actual).toEqual(['consumed', 'replayed']);
+  });
+
+  it('given a grant nonce spelled like a consent id, should not collide — consents live in their own namespace', async () => {
+    const replayStore = createReplayStoreRepository({ db });
+    const ledger = createConsentLedgerRepository({ replayStore });
+    const shared = nonce();
+    const now = Date.now();
+    const grantNonce = await replayStore.consume({ nonce: shared, grantId: GRANT, expiresAt: now + 60_000, now });
+    const consent = await ledger.consume({ consentId: shared as unknown as ConsentId, expiresAt: now + 300_000, now });
+    await db.delete(agentAccountGrantNonces).where(sql`${agentAccountGrantNonces.nonce} = ${`consent:${shared}`}`);
+    expect({ grantNonce, consent }).toEqual({ grantNonce: 'consumed', consent: 'consumed' });
   });
 });

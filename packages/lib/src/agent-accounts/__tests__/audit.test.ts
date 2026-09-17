@@ -44,7 +44,7 @@ import type { AccountId, CredentialVersion, PolicyVersion, TenantId } from '@pag
 const hash: HashBytes = (bytes) => createHash('sha256').update(bytes).digest('hex');
 /** The amended record digests the path with SHA3-256 — the repo's hash for secret-adjacent values. */
 const sha3: HashBytes = (bytes) => createHash('sha3-256').update(bytes).digest('hex');
-const DECLARED_RESOURCE_KEYS = ['repo', 'org'] as const;
+const AUDIT_RESOURCE_KEYS = ['repo', 'org'] as const;
 const AT = 1_800_000_000_000;
 
 const SECRET = 'ghp_canary_9f3a2b7c4d1e';
@@ -99,7 +99,7 @@ function makeGrant(overrides: Partial<AgentAccountGrant> = {}): AgentAccountGran
 }
 
 const build = (outcome: AuditOutcome, grant = makeGrant(), c = canonical()): AgentAccountAuditRecord =>
-  buildAuditRecord({ grant, canonical: c, outcome, at: AT, hash: sha3, declaredResourceKeys: [...DECLARED_RESOURCE_KEYS] });
+  buildAuditRecord({ grant, canonical: c, outcome, at: AT, hash: sha3, auditResourceKeys: [...AUDIT_RESOURCE_KEYS] });
 
 describe('buildAuditRecord', () => {
   it('given a canonical request with a body and a resolved credential in scope, should produce a record containing neither (property test over random bodies, query strings, header values, path segments and undeclared resources) [0004 §8.18]', () => {
@@ -248,8 +248,8 @@ describe('buildAuditRecord', () => {
       approval_mismatch: true,
       kind_not_resolvable: true,
     };
-    const actual = (Object.keys(reasons) as GrantDenyReason[]).map((reason) => build({ kind: 'denied', reason }).outcome);
-    expect(actual).toEqual((Object.keys(reasons) as GrantDenyReason[]).map((reason) => ({ kind: 'denied', reason })));
+    const actual = (Object.keys(reasons) as GrantDenyReason[]).map((reason) => build({ kind: 'denied', reason, accountStatus: null }).outcome);
+    expect(actual).toEqual((Object.keys(reasons) as GrantDenyReason[]).map((reason) => ({ kind: 'denied', reason, accountStatus: null })));
   });
 
   it('given a record, should carry only the frozen field set (nothing that could hold a body or a value)', () => {
@@ -364,7 +364,7 @@ describe('audited executor — the outcome row is part of the answer (ADR 0004 F
       grant: makeGrant(),
       canonical: canonical(),
       now: AT,
-      declaredResourceKeys: [...DECLARED_RESOURCE_KEYS],
+      auditResourceKeys: [...AUDIT_RESOURCE_KEYS],
       act: async () => ({ kind: 'executed', upstreamStatus: 201 }),
     });
     const expected = { ok: true, outcome: { kind: 'executed', upstreamStatus: 201 }, outcomeRecorded: false };
@@ -378,7 +378,7 @@ describe('audited executor — the outcome row is part of the answer (ADR 0004 F
       grant: makeGrant(),
       canonical: canonical(),
       now: AT,
-      declaredResourceKeys: [...DECLARED_RESOURCE_KEYS],
+      auditResourceKeys: [...AUDIT_RESOURCE_KEYS],
       act: async () => ({ kind: 'executed', upstreamStatus: 201 }),
     });
     const actual = { result, offered };
@@ -393,7 +393,7 @@ describe('audited executor — the outcome row is part of the answer (ADR 0004 F
       grant: makeGrant(),
       canonical: canonical(),
       now: AT,
-      declaredResourceKeys: [...DECLARED_RESOURCE_KEYS],
+      auditResourceKeys: [...AUDIT_RESOURCE_KEYS],
       // A connect/DNS/TLS failure is caught by the operation and RETURNED; only a throw means "may have been sent".
       act: async () => ({ kind: 'upstream_failed', upstreamStatus: null }),
     });
@@ -410,7 +410,7 @@ describe('audited executor — the outcome row is part of the answer (ADR 0004 F
       grant: makeGrant(),
       canonical: canonical(),
       now: AT,
-      declaredResourceKeys: [...DECLARED_RESOURCE_KEYS],
+      auditResourceKeys: [...AUDIT_RESOURCE_KEYS],
       act: async () => misreported,
     });
     const actual = { outcome: result.ok ? result.outcome : null, offered };

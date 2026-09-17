@@ -23,6 +23,8 @@
  */
 import type { AgentDispatchPayload } from '../auth/agent-dispatch-payload';
 import type { StoreLimits } from './store/store-adapter';
+import type { ApprovalScope } from './approval';
+import type { VERIFIED_GRANT } from './verified-grant-brand';
 import type { AccountId, AccountKind, AccountStatus, CredentialVersion, PolicyVersion, TenantId } from '@pagespace/db/schema/agent-accounts';
 
 // ---------------------------------------------------------------------------
@@ -50,6 +52,8 @@ export type PresenterKeyId = Brand<string, 'PresenterKeyId'>;
 export type RequestDigest = Brand<string, 'RequestDigest'>;
 /** `hash(canonicalJson(PlaneBindings))` — the authority's signed copy of the plane bindings (ADR 0005 §2.4). */
 export type BindingDigest = Brand<string, 'BindingDigest'>;
+/** One step-up owner consent to a rebind; consumed single-use through the replay store (ADR 0005 §2.2; G1c E2). */
+export type ConsentId = Brand<string, 'ConsentId'>;
 
 /** The issuer constant. A grant with any other `iss` is `wrong_audience`. */
 export type GrantIssuer = 'pagespace-account-authority';
@@ -201,8 +205,23 @@ export type GrantDenyReason =
   | 'approval_mismatch'
   | 'kind_not_resolvable';
 
-export type GrantVerdict =
-  | { readonly ok: true; readonly grant: AgentAccountGrant }
+/**
+ * A grant that passed `verifyGrant`, narrowed to the audience the presenter
+ * expected (G1c R9). The brand is a `unique symbol` whose runtime value lives
+ * in `verified-grant-brand.ts` and is imported ONLY by `verify-grant.ts`, so
+ * nothing but the verifier produces one without a visible cast; a plain
+ * property (the first shape's `__verified: true`) was satisfiable by any
+ * object literal. `VerifiedGrant` with no argument is the unnarrowed union —
+ * fine for pure decisions that re-check `aud` at runtime, refused by
+ * `resolve` (G1a review H6).
+ */
+export type VerifiedGrant<A extends PresenterChannel = PresenterChannel> = AgentAccountGrant & {
+  readonly aud: A;
+  readonly [VERIFIED_GRANT]: A;
+};
+
+export type GrantVerdict<A extends PresenterChannel = PresenterChannel> =
+  | { readonly ok: true; readonly grant: VerifiedGrant<A> }
   | { readonly ok: false; readonly reason: GrantDenyReason };
 
 export type ParseGrantVerdict =
@@ -258,29 +277,53 @@ export type DelegationFact =
       readonly agentPageId: AgentPageId | null;
       /** `agent_account_delegations.delegatedByUserId`. */
       readonly delegatedBy: UserId;
+      /**
+       * `agent_account_delegations.scope` — what the human delegated, not merely
+       * to whom. An unattended run passes it to `decideApproval`, so a delegation
+       * scoped to read-only repo A never authorizes what the account policy
+       * alone would allow (G1c R12).
+       */
+      readonly scope: ApprovalScope;
       readonly expired: boolean;
       readonly revoked: boolean;
     }
   | { readonly kind: 'none' };
 
 /**
- * Everything the verifier compares the grant against — all FACTS the adapter
- * fetched, never handles. Deliberately no field can carry a guest-supplied
- * header or IP (ADR 0006 §8 assertion 4).
+ * The CURRENT execution principals the verifier compares the grant against —
+ * all FACTS the adapter fetched, never handles. Deliberately no field can
+ * carry a guest-supplied header or IP (ADR 0006 §8 assertion 4).
  *
- * The CURRENT execution principals (`human`, `agentPageId`, `conversationId`,
- * `runId`) come from the presenter's own run context, never from the grant,
- * so a valid unused grant issued for another agent page, thread or run that
- * reaches the same presenter is `principal_mismatch` (Codex P1 on PR #2637).
+ * `human`, `agentPageId`, `conversationId` and `runId` come from the
+ * presenter's own run context, never from the grant, so a valid unused grant
+ * issued for another agent page, thread or run that reaches the same
+ * presenter is `principal_mismatch` (Codex P1 on PR #2637). Generic in the
+ * audience the presenter expects, so a verdict is `VerifiedGrant<A>` for that
+ * literal channel without a cast (G1c R9).
  */
-export type ExpectedBinding = {
-  readonly aud: PresenterChannel;
+export type ExpectedRunBinding<A extends PresenterChannel = PresenterChannel> = {
+  readonly aud: A;
   readonly presenter: GrantPresenter;
   readonly human: GrantHuman;
   readonly agentPageId: AgentPageId | null;
   readonly conversationId: ConversationId;
   readonly runId: RunId;
   readonly tenantId: TenantId;
+  readonly delegation: DelegationFact;
+  /**
+   * The presenter's CURRENT observation of the sandbox — all three of
+   * `spriteName`, `instanceId`, `generation`, compared field by field with
+   * the signed `grant.sandbox` (any difference → `generation_mismatch`).
+   * null when unobservable: a grant that names a sandbox then gets
+   * `binding_unavailable`, never `ok` (ADR 0006 F5; G1a review M6).
+   */
+  readonly sandbox: SandboxBinding | null;
+  /** `isDriveWithinCredentialScope(callerCeiling.allowedDriveIds, accountDriveId)`, computed by the adapter (`accountDriveId` null when the account is unknown). */
+  readonly ceilingAdmitsAccount: boolean;
+};
+
+/** The account row the adapter found for `grant.accountId`, and the plane's attested version facts. */
+export type KnownAccountBinding = {
   readonly accountId: AccountId;
   readonly accountKind: AccountKind;
   /**
@@ -293,37 +336,50 @@ export type ExpectedBinding = {
   readonly accountDriveId: DriveId | null;
   readonly currentCredentialVersion: CredentialVersion;
   /**
-   * PLANE-ATTESTED rotation facts (`agent_account_secret_versions`, written
-   * only by the plane's CAS). A grant naming `previousCredentialVersion` is
-   * admitted only while `now < rotatedAt + rotationGraceMs` AND
-   * `grant.iat < rotatedAt` — a grant issued after the rotation never gets the
-   * old material. Both null when there is no admissible previous version;
-   * `revoke` clears them (ADR 0004 F5a; G1a review M7).
+   * PLANE-ATTESTED rotation facts: `DescribeResult.previousVersion` and
+   * `DescribeResult.rotatedAt`, read from the plane's own metadata store
+   * (`agent_account_secret_versions` lives there, never in the main DB — a
+   * main-DB writer could otherwise un-revoke or reopen grace; G1c R3). A
+   * grant naming `previousCredentialVersion` is admitted only while
+   * `now < rotatedAt + rotationGraceMs` AND `grant.iat < rotatedAt` — a grant
+   * issued after the rotation never gets the old material. Both null when
+   * there is no admissible previous version; `revoke` clears them (ADR 0004
+   * F5a; G1a review M7).
    */
   readonly previousCredentialVersion: CredentialVersion | null;
   readonly rotatedAt: number | null;
   readonly currentPolicyVersion: PolicyVersion;
-  readonly delegation: DelegationFact;
-  /**
-   * The presenter's CURRENT observation of the sandbox — all three of
-   * `spriteName`, `instanceId`, `generation`, compared field by field with
-   * the signed `grant.sandbox` (any difference → `generation_mismatch`).
-   * null when unobservable: a grant that names a sandbox then gets
-   * `binding_unavailable`, never `ok` (ADR 0006 F5; G1a review M6).
-   */
-  readonly sandbox: SandboxBinding | null;
-  /** `isDriveWithinCredentialScope(callerCeiling.allowedDriveIds, accountDriveId)`, computed by the adapter. */
-  readonly ceilingAdmitsAccount: boolean;
 };
 
-export type VerifyGrantInput = {
+/**
+ * No account row exists for `grant.accountId` (ADR 0004 F5a "accountId
+ * unknown"; G1c R15). Every account fact is null, so a binding cannot claim an
+ * unknown account is active or at some version; the verifier answers
+ * `version_mismatch`, the same answer as a stale version, so the refusal is
+ * not an existence oracle.
+ */
+export type UnknownAccountBinding = {
+  readonly accountId: null;
+  readonly accountKind: null;
+  readonly accountStatus: null;
+  readonly accountDriveId: null;
+  readonly currentCredentialVersion: null;
+  readonly previousCredentialVersion: null;
+  readonly rotatedAt: null;
+  readonly currentPolicyVersion: null;
+};
+
+export type ExpectedBinding<A extends PresenterChannel = PresenterChannel> = ExpectedRunBinding<A> &
+  (KnownAccountBinding | UnknownAccountBinding);
+
+export type VerifyGrantInput<A extends PresenterChannel = PresenterChannel> = {
   /** Untrusted: whatever arrived on the wire. */
   readonly grant: unknown;
   /** Base64 Ed25519 signature over `encodeGrant(grant)`. */
   readonly signature: string;
   readonly issuerPublicKey: Uint8Array;
   readonly now: number;
-  readonly expected: ExpectedBinding;
+  readonly expected: ExpectedBinding<A>;
   /**
    * `digestRequest` over the request the presenter is about to execute,
    * recomputed by the presenter's adapter from those bytes — never read from
@@ -342,5 +398,10 @@ export type VerifyGrantInput = {
 /** `parseGrant` — schema + structural sanity only (F1). G1b implements. */
 export type ParseGrant = (input: { readonly grant: unknown }) => ParseGrantVerdict;
 
-/** `verifyGrant` — the whole intersection as a pure function in fixed deny order (F1→F17). G1b implements. */
-export type VerifyGrant = (input: VerifyGrantInput) => GrantVerdict;
+/**
+ * `verifyGrant` — the whole intersection as a pure function in fixed deny
+ * order (F1→F17). Generic on `expected.aud`: an `ok` verdict is
+ * `VerifiedGrant<A>` for the audience the presenter expected, branded by the
+ * verifier itself, so no caller casts (G1c R9).
+ */
+export type VerifyGrant = <A extends PresenterChannel>(input: VerifyGrantInput<A>) => GrantVerdict<A>;
