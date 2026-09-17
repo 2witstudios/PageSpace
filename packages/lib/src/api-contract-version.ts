@@ -17,5 +17,11 @@
  * stays at 1.0.0 for the same reason 1.1.0 did: a client built against 1.2.0
  * still works against an older server for every other operation, it simply
  * cannot format a sheet there.
+ *
+ * 1.3.0 — two workspace operations for SDK, CLI and MCP callers:
+ * `GET /api/agent-workspaces` accepts access keys (filtered to the key's drive
+ * scope), and `POST /api/agent-workspaces/[workspaceId]/exec` runs a shell
+ * command in the workspace's sandbox. Additive, so MINOR; `MIN_SERVER_API_VERSION`
+ * stays at 1.0.0 — against an older server only these two calls are missing.
  */
-export const API_CONTRACT_VERSION = '1.2.0';
+export const API_CONTRACT_VERSION = '1.3.0';
