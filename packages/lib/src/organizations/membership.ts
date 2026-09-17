@@ -12,6 +12,7 @@ import { and, asc, eq, inArray } from '@pagespace/db/operators';
 import { organizations, orgMembers, type OrgRole } from '@pagespace/db/schema/organizations';
 import { decideOrgRole } from './authorize';
 import { leaveOrganization } from './leave';
+import { revokeForDemotion } from './demotion';
 import { getActorInfo } from '../monitoring/activity-logger';
 
 export type MembershipDecision =
@@ -125,6 +126,10 @@ async function lockTargetRole(
   return row?.role ?? null;
 }
 
+/**
+ * Change a member's role. A demotion (Admin to Member) revokes, in the same transaction, what only
+ * the higher role could have handed out in the org's drives (revokeForDemotion).
+ */
 export async function changeMemberRole(input: {
   orgId: string;
   actorId: string;
@@ -139,13 +144,22 @@ export async function changeMemberRole(input: {
       .update(orgMembers)
       .set({ role: input.newRole })
       .where(and(eq(orgMembers.orgId, input.orgId), eq(orgMembers.userId, input.targetId)));
+    if (roles.targetRole !== null && roles.targetRole !== input.newRole) {
+      await revokeForDemotion(tx, {
+        orgId: input.orgId,
+        userId: input.targetId,
+        fromRole: roles.targetRole,
+        toRole: input.newRole,
+      });
+    }
     return decision;
   });
 }
 
 /**
- * Removes the membership row only. The O-8 cascades (agent memberships, share
- * links, MCP token drive rows, org-sourced drive rows) belong to leave.ts (B6).
+ * Removes a member: the same cascade as leaving (leave.ts), in this transaction, so everything the
+ * membership handed out in the org's drives is revoked (org-sourced drive rows, agent memberships,
+ * share links, MCP key drive rows, OAuth grants naming the drives, former-lead OWNER rows).
  */
 export async function removeMember(input: {
   orgId: string;

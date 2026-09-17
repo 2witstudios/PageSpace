@@ -34,6 +34,7 @@ export default defineConfig({
       'src/agent-accounts/__tests__/audit-repository.integration.test.ts',
       'src/agent-accounts/store/__tests__/store-adapter-infisical.integration.test.ts',
       'src/organizations/__tests__/org-services.integration.test.ts',
+      'src/organizations/__tests__/org-member-revocation.integration.test.ts',
     ],
     setupFiles: ['./src/test/setup.ts'],
     // Run test files sequentially to avoid database race conditions
@@ -89,6 +90,7 @@ export default defineConfig({
       'src/agent-accounts/__tests__/audit-repository.integration.test.ts',
       'src/agent-accounts/store/__tests__/store-adapter-infisical.integration.test.ts',
       'src/organizations/__tests__/org-services.integration.test.ts',
+      'src/organizations/__tests__/org-member-revocation.integration.test.ts',
       ],
       thresholds: {
         lines: 85,

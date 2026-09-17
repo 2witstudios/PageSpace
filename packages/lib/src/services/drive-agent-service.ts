@@ -370,14 +370,21 @@ async function memberGrantWithinCap(
 export async function recapAgentMembershipsGrantedBy(
   driveId: string,
   userId: string,
+  options: {
+    /** Run inside this transaction (an org demotion recaps in the role change's transaction). */
+    executor?: Tx;
+    /** The granter's cap, when the caller already knows it; resolved from the database otherwise. */
+    granter?: { maxRole: AgentDriveRole; customRoleId: string | null };
+  } = {},
 ): Promise<string[]> {
-  const granter = await resolveGranterAccess(userId, driveId);
+  const executor = options.executor ?? db;
+  const granter = options.granter ?? await resolveGranterAccess(userId, driveId);
   // Still able to grant ADMIN ⇒ nothing to cap down (we only ever cap downward).
   if (granter.maxRole === 'ADMIN') return [];
 
   const capCustomRoleId = granter.customRoleId ?? null;
 
-  const rows = await db
+  const rows = await executor
     .select({
       id: driveAgentMembers.id,
       agentPageId: driveAgentMembers.agentPageId,
@@ -400,19 +407,20 @@ export async function recapAgentMembershipsGrantedBy(
   );
   const withinCap = await Promise.all(
     memberMismatch.map((r) =>
+      // Custom roles are not written by the caller's transaction: reading them outside it is safe.
       memberGrantWithinCap(r.customRoleId ?? null, capCustomRoleId, driveId),
     ),
   );
   const toRevoke = memberMismatch.filter((_, i) => !withinCap[i]);
 
   if (toReduce.length > 0) {
-    await db
+    await executor
       .update(driveAgentMembers)
       .set({ role: 'MEMBER', customRoleId: capCustomRoleId })
       .where(inArray(driveAgentMembers.id, toReduce.map((r) => r.id)));
   }
   if (toRevoke.length > 0) {
-    await db
+    await executor
       .delete(driveAgentMembers)
       .where(inArray(driveAgentMembers.id, toRevoke.map((r) => r.id)));
   }
