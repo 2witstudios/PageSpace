@@ -303,6 +303,7 @@
         "src/billing/missed-grant-reconcile.ts",
         "src/billing/money-model.ts",
         "src/billing/sandbox-payer.ts",
+        "src/billing/wallet-core.ts",
         "src/canvas/cert-action.ts",
         "src/canvas/csp.ts",
         "src/canvas/custom-domain-mirror.ts",
