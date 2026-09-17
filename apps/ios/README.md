@@ -187,9 +187,13 @@ bundle exec fastlane release   # deliver: push metadata + submit the App Store v
       that one on a Mac — the first is spent, so reusing it only proves `magic_link_used` — and
       confirm the browser is signed in by cookie with no tokens handed out
 - [ ] Build uploaded and finished **Processing** in App Store Connect
-- [ ] App privacy answers match `ios/App/PrivacyInfo.xcprivacy` (Email + User ID linked / App
-      Functionality; Device ID / Analytics and Crash + Performance Data, not linked; Product
-      Interaction linked / Analytics for Sentry Session Replay; Tracking = No)
+- [ ] App privacy answers match `ios/App/PrivacyInfo.xcprivacy` exactly — every type there is
+      **linked**, none is used for tracking (Tracking = No): Name, Email, User ID (App
+      Functionality + Developer's Advertising or Marketing — product-update emails); Photos or
+      Videos, Audio Data (voice calls), Customer Support, Other User Content, Device ID (App
+      Functionality); Product Interaction, Other Usage Data, Crash Data, Performance Data (App
+      Functionality + Analytics). The native app sends no analytics and records no Sentry Session
+      Replay (both refused inside Capacitor), but keep them declared — the labels cover the service
 - [ ] Screenshots uploaded for 6.9" iPhone **and** 13" iPad (`TARGETED_DEVICE_FAMILY = "1,2"`
       claims iPad, so iPad shots are required). Generated from real simulator captures — see
       `apps/marketing/public/screenshots/ios/README.md`
