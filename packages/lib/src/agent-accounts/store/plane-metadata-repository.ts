@@ -195,10 +195,12 @@ export function createPlaneMetadataRepository({ pool }: { readonly pool: PlaneMe
     // Only the FIRST revocation is written: its time is what REVOKE_RETENTION_MS counts from and its
     // reason is what reconciliation and forensics read (a rotation_replay must stay distinguishable
     // from a later admin revoke). A repeat revoke matches no row and changes nothing. It also clears
-    // previous_version and rotated_at: no rotation grace survives a revocation (G1a review M7).
+    // previous_version and rotated_at: no rotation grace survives a revocation (G1a review M7). And it
+    // clears a pending write: a revoked ref is never served or written again, so there is nothing left
+    // to reconcile, and describe must still report the revocation (G1c E1).
     async markRevoked({ ref, revokedAt, reason }) {
       const result = await pool.query(
-        'UPDATE agent_account_secret_versions SET revoked_at = $4, revoke_reason = $5, previous_version = NULL, rotated_at = NULL WHERE tenant_id = $1 AND account_id = $2 AND kind = $3 AND revoked_at IS NULL',
+        'UPDATE agent_account_secret_versions SET revoked_at = $4, revoke_reason = $5, previous_version = NULL, rotated_at = NULL, pending_version = NULL, pending_digest = NULL, pending_rotation = NULL WHERE tenant_id = $1 AND account_id = $2 AND kind = $3 AND revoked_at IS NULL',
         [...key(ref), new Date(revokedAt), reason],
       );
       return result.rowCount === 1;

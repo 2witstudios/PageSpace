@@ -99,6 +99,8 @@ function ownerConsentTo(
 const NOW = Date.now();
 const TENANT_A = `user:itest-${NOW}-a` as TenantId;
 const TENANT_B = `user:itest-${NOW}-b` as TenantId;
+/** Tenant A's user owner: a user-owned account's tenant is derived from its owner, so bindings and consents name this user (ADR 0005 §3.1). */
+const OWNER_A = `itest-${NOW}-a`;
 /** An agent-page-owned tenant (`drive:<driveId>`), served by tenant A's fixture project. */
 const PAGE_DRIVE_ID = `itest-${NOW}-page`;
 const TENANT_PAGE = `drive:${PAGE_DRIVE_ID}` as TenantId;
@@ -331,7 +333,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
     const adapter = makeAdapter();
     const accountId = `acct-put-describe-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
-    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: OWNER_A }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
     const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
 
     const putResult = await adapter.put({
@@ -356,7 +358,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
     const adapter = makeAdapter();
     const accountId = `acct-wrong-tenant-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
-    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: OWNER_A }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
     const identityForTenantA = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
 
     await adapter.put({ ref, material: { kind: 'api_key', material: { value: 'sk-synthetic', placement: { in: 'header', name: 'Authorization' } } }, expectedVersion: null, bindings, identity: identityForTenantA });
@@ -372,7 +374,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
     const adapter = makeAdapter();
     const accountId = `acct-revoke-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
-    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: OWNER_A }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
     const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
 
     await adapter.put({ ref, material: { kind: 'api_key', material: { value: 'sk-synthetic', placement: { in: 'header', name: 'Authorization' } } }, expectedVersion: null, bindings, identity });
@@ -390,7 +392,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
     const adapter = makeAdapter();
     const accountId = `acct-revoke-cross-tenant-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
-    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: OWNER_A }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
     const identityForTenantA = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
     const wrongTenantIdentity = { tenantId: TENANT_B, identityId: identityBWrongTenant.identityId, blastRadius: 'tenant' as const };
 
@@ -408,7 +410,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
     const adapter = makeAdapter();
     const accountId = `acct-delete-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
-    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: OWNER_A }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
     const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
 
     await adapter.put({ ref, material: { kind: 'api_key', material: { value: 'sk-synthetic', placement: { in: 'header', name: 'Authorization' } } }, expectedVersion: null, bindings, identity });
@@ -423,7 +425,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
     const adapter = makeAdapter();
     const accountId = `acct-upstream-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
-    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: OWNER_A }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
     const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
 
     await adapter.put({ ref, material: { kind: 'api_key', material: { value: 'sk-synthetic', placement: { in: 'header', name: 'Authorization' } } }, expectedVersion: null, bindings, identity });
@@ -435,7 +437,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
     const adapter = makeAdapter();
     const accountId = `acct-concurrent-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
-    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: OWNER_A }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
     const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
     const refreshIdentity = { ...identity, channel: 'refresh-worker' as const };
 
@@ -458,7 +460,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
     const adapter = makeAdapter();
     const accountId = `acct-payload-shape-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
-    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: OWNER_A }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
     const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
     const perKindPayload = { value: 'sk-shape-check', placement: { in: 'header' as const, name: 'Authorization' } };
 
@@ -477,7 +479,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
     const adapter = makeAdapter();
     const accountId = `acct-oauth2-strip-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'oauth2' as const };
-    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'oauth2' };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: OWNER_A }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'oauth2' };
     const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
     const oauth2Payload = {
       accessToken: 'access-synthetic',
@@ -506,7 +508,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
     const adapter = makeAdapter();
     const accountId = `acct-revoke-then-rotate-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
-    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: OWNER_A }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
     const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
     const refreshIdentity = { ...identity, channel: 'refresh-worker' as const };
 
@@ -538,7 +540,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
     const adapter = makeAdapter();
     const accountId = `acct-kind-mismatch-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
-    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: OWNER_A }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
     const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
 
     const putResult = await adapter.put({
@@ -563,7 +565,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
     const adapter = makeAdapter();
     const accountId = `acct-race-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
-    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: OWNER_A }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
     const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
 
     await adapter.put({ ref, material: { kind: 'api_key', material: { value: 'sk-v1', placement: { in: 'header', name: 'Authorization' } } }, expectedVersion: null, bindings, identity });
@@ -596,7 +598,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
     const adapter = makeAdapter();
     const accountId = `acct-grace-content-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
-    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: OWNER_A }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
     const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
     const refreshIdentity = { ...identity, channel: 'refresh-worker' as const };
 
@@ -642,7 +644,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
     const adapter = makeAdapter();
     const accountId = `acct-grace-stale-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
-    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: OWNER_A }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
     const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
     const refreshIdentity = { ...identity, channel: 'refresh-worker' as const };
 
@@ -675,7 +677,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
   it('given a revoke that lands while a rotate is mid-write, should leave the credential revoked', async () => {
     const accountId = `acct-revoke-race-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
-    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: OWNER_A }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
     const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
     const refreshIdentity = { ...identity, channel: 'refresh-worker' as const };
     const plainAdapter = makeAdapter();
@@ -704,7 +706,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
     const adapter = makeAdapter();
     const accountId = `acct-delete-cross-tenant-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
-    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: OWNER_A }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
     const identityForTenantA = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
     const wrongTenantIdentity = { tenantId: TENANT_B, identityId: identityBWrongTenant.identityId, blastRadius: 'tenant' as const };
 
@@ -724,7 +726,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
     const adapter = makeAdapter();
     const accountId = `acct-delete-companion-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
-    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: OWNER_A }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
     const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
     const refreshIdentity = { ...identity, channel: 'refresh-worker' as const };
 
@@ -747,7 +749,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
     const adapter = makeAdapter();
     const accountId = `acct-revoke-twice-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
-    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: OWNER_A }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
     const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
 
     await adapter.put({ ref, material: { kind: 'api_key', material: { value: 'sk-synthetic', placement: { in: 'header', name: 'Authorization' } } }, expectedVersion: null, bindings, identity });
@@ -769,7 +771,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
   it('given a delete issued while a rotate is mid-write, should leave nothing behind once both finish', async () => {
     const accountId = `acct-delete-race-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
-    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: OWNER_A }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
     const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
     const refreshIdentity = { ...identity, channel: 'refresh-worker' as const };
     const plainAdapter = makeAdapter();
@@ -805,7 +807,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
     const adapter = makeAdapter();
     const accountId = `acct-delete-retry-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
-    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: OWNER_A }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
     const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
 
     await adapter.put({ ref, material: { kind: 'api_key', material: { value: 'sk-synthetic', placement: { in: 'header', name: 'Authorization' } } }, expectedVersion: null, bindings, identity });
@@ -826,7 +828,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
   it('given the metadata commit fails after the Infisical write verified, should return write_unverified instead of throwing', async () => {
     const accountId = `acct-commit-fails-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
-    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: OWNER_A }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
     const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
     const refreshIdentity = { ...identity, channel: 'refresh-worker' as const };
     const plainAdapter = makeAdapter();
@@ -853,7 +855,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
   it('given the plane metadata DB is unavailable, should return store_unavailable from every operation rather than throwing', async () => {
     const accountId = `acct-metadata-down-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
-    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: OWNER_A }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
     const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
     const refreshIdentity = { ...identity, channel: 'refresh-worker' as const };
     const outage = async (): Promise<never> => {
@@ -891,7 +893,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
     const adapter = makeAdapter();
     const accountId = `acct-put-replace-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
-    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: OWNER_A }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
     const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
 
     await adapter.put({ ref, material: { kind: 'api_key', material: { value: 'sk-v1', placement: { in: 'header', name: 'Authorization' } } }, expectedVersion: null, bindings, identity });
@@ -911,7 +913,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
     const adapter = makeAdapter();
     const accountId = `acct-revoke-reason-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
-    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: OWNER_A }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
     const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
 
     await adapter.put({ ref, material: { kind: 'api_key', material: { value: 'sk-synthetic', placement: { in: 'header', name: 'Authorization' } } }, expectedVersion: null, bindings, identity });
@@ -931,14 +933,14 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
     const adapter = makeAdapter();
     const accountId = `acct-rebind-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
-    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: OWNER_A }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
     const nextRecord = recordOver({ ...bindings, policyVersion: 2 as PolicyVersion }, WIDE_SCOPE);
     const next = nextRecord.bindings;
     const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
     const manageIdentity = { ...identity, channel: 'manage' as const };
 
     await adapter.put({ ref, material: { kind: 'api_key', material: { value: 'sk-synthetic', placement: { in: 'header', name: 'Authorization' } } }, expectedVersion: null, bindings, identity });
-    const rebound = await adapter.rebind({ ref, expectedVersion: 1 as PolicyVersion, bindings: next, scope: nextRecord.scope, consent: ownerConsentTo(next, 'u1', { ref }), identity: manageIdentity });
+    const rebound = await adapter.rebind({ ref, expectedVersion: 1 as PolicyVersion, bindings: next, scope: nextRecord.scope, consent: ownerConsentTo(next, OWNER_A, { ref }), identity: manageIdentity });
     const described = await adapter.describe({ ref, identity });
     const oldGrant = makeGrant({ accountId, bindingDigest: digestBindings({ bindings, hash }) });
     const newGrant = makeGrant({ accountId, bindingDigest: digestBindings({ bindings: next, hash }) });
@@ -957,7 +959,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
     const adapter = makeAdapter();
     const accountId = `acct-rebind-refusals-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
-    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: OWNER_A }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
     const nextRecord = recordOver({ ...bindings, policyVersion: 2 as PolicyVersion }, WIDE_SCOPE);
     const next = nextRecord.bindings;
     const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
@@ -966,10 +968,10 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
 
     await adapter.put({ ref, material: { kind: 'api_key', material: { value: 'sk-synthetic', placement: { in: 'header', name: 'Authorization' } } }, expectedVersion: null, bindings, identity });
     const actual = {
-      wrongTenant: await adapter.rebind({ ref, expectedVersion: 1 as PolicyVersion, bindings: next, scope: nextRecord.scope, consent: ownerConsentTo(next, 'u1', { ref }), identity: wrongTenantManage }),
-      absent: await adapter.rebind({ ref: { ...ref, accountId: `acct-rebind-absent-${NOW}` as AccountId }, expectedVersion: 1 as PolicyVersion, bindings: next, scope: nextRecord.scope, consent: ownerConsentTo(next, 'u1', { ref }), identity: manageIdentity }),
+      wrongTenant: await adapter.rebind({ ref, expectedVersion: 1 as PolicyVersion, bindings: next, scope: nextRecord.scope, consent: ownerConsentTo(next, OWNER_A, { ref }), identity: wrongTenantManage }),
+      absent: await adapter.rebind({ ref: { ...ref, accountId: `acct-rebind-absent-${NOW}` as AccountId }, expectedVersion: 1 as PolicyVersion, bindings: next, scope: nextRecord.scope, consent: ownerConsentTo(next, OWNER_A, { ref }), identity: manageIdentity }),
       notOwner: await adapter.rebind({ ref, expectedVersion: 1 as PolicyVersion, bindings: next, scope: nextRecord.scope, consent: ownerConsentTo(next, 'attacker', { ref }), identity: manageIdentity }),
-      stale: await adapter.rebind({ ref, expectedVersion: 7 as PolicyVersion, bindings: next, scope: nextRecord.scope, consent: ownerConsentTo(next, 'u1', { ref }), identity: manageIdentity }),
+      stale: await adapter.rebind({ ref, expectedVersion: 7 as PolicyVersion, bindings: next, scope: nextRecord.scope, consent: ownerConsentTo(next, OWNER_A, { ref }), identity: manageIdentity }),
       bindingsAfter: await adapter.describe({ ref, identity }).then((described) => (described.ok ? described.bindings : null)),
     };
     const expected = {
@@ -986,7 +988,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
     const adapter = makeAdapter();
     const accountId = `acct-rebind-race-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
-    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: OWNER_A }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
     const nextARecord = recordOver({ ...bindings, policyVersion: 2 as PolicyVersion }, EXAMPLE_SCOPE);
     const nextBRecord = recordOver({ ...bindings, policyVersion: 2 as PolicyVersion }, WIDE_SCOPE);
     const nextA = nextARecord.bindings;
@@ -996,8 +998,8 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
 
     await adapter.put({ ref, material: { kind: 'api_key', material: { value: 'sk-synthetic', placement: { in: 'header', name: 'Authorization' } } }, expectedVersion: null, bindings, identity });
     const results = await Promise.all([
-      adapter.rebind({ ref, expectedVersion: 1 as PolicyVersion, bindings: nextA, scope: nextARecord.scope, consent: ownerConsentTo(nextA, 'u1', { ref }), identity: manageIdentity }),
-      adapter.rebind({ ref, expectedVersion: 1 as PolicyVersion, bindings: nextB, scope: nextBRecord.scope, consent: ownerConsentTo(nextB, 'u1', { ref }), identity: manageIdentity }),
+      adapter.rebind({ ref, expectedVersion: 1 as PolicyVersion, bindings: nextA, scope: nextARecord.scope, consent: ownerConsentTo(nextA, OWNER_A, { ref }), identity: manageIdentity }),
+      adapter.rebind({ ref, expectedVersion: 1 as PolicyVersion, bindings: nextB, scope: nextBRecord.scope, consent: ownerConsentTo(nextB, OWNER_A, { ref }), identity: manageIdentity }),
     ]);
     const actual = results.map((result) => (result.ok ? 'rebind' : result.reason)).sort();
     const expected = ['rebind', 'version_conflict'];
@@ -1010,12 +1012,12 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
     };
     const adapter = makeAdapter({ wrapMetadata: (m) => ({ ...m, read: outage }) });
     const ref = { tenantId: TENANT_A, accountId: `acct-rebind-outage-${NOW}` as AccountId, kind: 'api_key' as const };
-    const nextRecord = recordOver({ tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: [], policyVersion: 2 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' }, EXAMPLE_SCOPE);
+    const nextRecord = recordOver({ tenantId: TENANT_A, ownerRef: { kind: 'user', userId: OWNER_A }, allowedOrigins: [], policyVersion: 2 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' }, EXAMPLE_SCOPE);
     const next = nextRecord.bindings;
     const manageIdentity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const, channel: 'manage' as const };
 
     const actual = await adapter
-      .rebind({ ref, expectedVersion: 1 as PolicyVersion, bindings: next, scope: nextRecord.scope, consent: ownerConsentTo(next, 'u1', { ref }), identity: manageIdentity })
+      .rebind({ ref, expectedVersion: 1 as PolicyVersion, bindings: next, scope: nextRecord.scope, consent: ownerConsentTo(next, OWNER_A, { ref }), identity: manageIdentity })
       .catch((error: unknown) => ({ threw: String(error) }));
     const expected = { ok: false, reason: 'store_unavailable' };
     expect(actual).toEqual(expected);
@@ -1027,7 +1029,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
     const adapter = makeAdapter();
     const accountId = `acct-revoke-clears-grace-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
-    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: OWNER_A }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
     const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
     const refreshIdentity = { ...identity, channel: 'refresh-worker' as const };
 
@@ -1049,7 +1051,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
     const adapter = makeAdapter();
     const accountId = `acct-rotate-stale-bindings-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
-    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: OWNER_A }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
     const nextRecord = recordOver({ ...bindings, policyVersion: 2 as PolicyVersion }, EXAMPLE_SCOPE);
     const next = nextRecord.bindings;
     const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
@@ -1058,7 +1060,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
     const material = { kind: 'api_key' as const, material: { value: 'sk-v2', placement: { in: 'header' as const, name: 'Authorization' } } };
 
     await adapter.put({ ref, material: { kind: 'api_key', material: { value: 'sk-v1', placement: { in: 'header', name: 'Authorization' } } }, expectedVersion: null, bindings, identity });
-    await adapter.rebind({ ref, expectedVersion: 1 as PolicyVersion, bindings: next, scope: nextRecord.scope, consent: ownerConsentTo(next, 'u1', { ref }), identity: manageIdentity });
+    await adapter.rebind({ ref, expectedVersion: 1 as PolicyVersion, bindings: next, scope: nextRecord.scope, consent: ownerConsentTo(next, OWNER_A, { ref }), identity: manageIdentity });
 
     const actual = {
       staleRotate: await adapter.rotate({ ref, expectedVersion: 1 as never, next: material, bindings, identity: refreshIdentity }),
@@ -1082,7 +1084,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
   it('given a revoke that lands while a rotate is mid-write, should refuse the rotate and leave no grace fields', async () => {
     const accountId = `acct-revoke-race-grace-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
-    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: OWNER_A }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
     const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
     const refreshIdentity = { ...identity, channel: 'refresh-worker' as const };
     const plainAdapter = makeAdapter();
@@ -1130,7 +1132,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
     const adapter = makeAdapter();
     const accountId = `acct-put-foreign-bindings-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
-    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: OWNER_A }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
     const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
     const material = { kind: 'api_key' as const, material: { value: 'sk-synthetic', placement: { in: 'header' as const, name: 'Authorization' } } };
 
@@ -1152,7 +1154,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
   it('given a provisioning lookup that throws, or a stored payload of JSON null, should return store_unavailable rather than throwing', async () => {
     const accountId = `acct-lookup-throws-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
-    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: OWNER_A }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
     const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
     const material = { kind: 'api_key' as const, material: { value: 'sk-v1', placement: { in: 'header' as const, name: 'Authorization' } } };
     const plainAdapter = makeAdapter();
@@ -1197,7 +1199,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
   it('given a delete that lands between revoke reading the row and marking it, should report not_found', async () => {
     const accountId = `acct-revoke-vs-delete-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
-    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: OWNER_A }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
     const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
     const plainAdapter = makeAdapter();
     const racingAdapter = makeAdapter({
@@ -1221,7 +1223,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
   it('given rebind whose post-write read does not return the bindings it wrote, should return write_unverified', async () => {
     const accountId = `acct-rebind-unverified-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
-    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
+    const bindings: PlaneBindings = { tenantId: TENANT_A, ownerRef: { kind: 'user', userId: OWNER_A }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' };
     const nextRecord = recordOver({ ...bindings, policyVersion: 2 as PolicyVersion }, EXAMPLE_SCOPE);
     const next = nextRecord.bindings;
     const identity = { tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' as const };
@@ -1240,7 +1242,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
     });
 
     await plainAdapter.put({ ref, material: { kind: 'api_key', material: { value: 'sk-v1', placement: { in: 'header', name: 'Authorization' } } }, expectedVersion: null, bindings, identity });
-    const actual = await staleReadAdapter.rebind({ ref, expectedVersion: 1 as PolicyVersion, bindings: next, scope: nextRecord.scope, consent: ownerConsentTo(next, 'u1', { ref }), identity: manageIdentity });
+    const actual = await staleReadAdapter.rebind({ ref, expectedVersion: 1 as PolicyVersion, bindings: next, scope: nextRecord.scope, consent: ownerConsentTo(next, OWNER_A, { ref }), identity: manageIdentity });
     const expected = { ok: false, reason: 'write_unverified' };
     expect(actual).toEqual(expected);
   });
@@ -1252,7 +1254,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
 
   const API_KEY_V1 = { kind: 'api_key' as const, material: { value: 'sk-g1c-v1', placement: { in: 'header' as const, name: 'Authorization' } } };
   const API_KEY_V2 = { kind: 'api_key' as const, material: { value: 'sk-g1c-v2', placement: { in: 'header' as const, name: 'Authorization' } } };
-  const plainBindings = (): PlaneBindings => ({ tenantId: TENANT_A, ownerRef: { kind: 'user', userId: 'u1' }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' });
+  const plainBindings = (): PlaneBindings => ({ tenantId: TENANT_A, ownerRef: { kind: 'user', userId: OWNER_A }, allowedOrigins: ['https://example.com' as CanonicalOrigin], policyVersion: 1 as PolicyVersion, policyDigest: EXAMPLE_DIGEST, kind: 'api_key' });
   const baseIdentity = (): Omit<StoreIdentity, 'channel'> => ({ tenantId: TENANT_A, identityId: identityA.identityId, blastRadius: 'tenant' });
   const secretVersionRow = async (accountId: AccountId) =>
     (await pool.query('SELECT current_version, previous_version, pending_version FROM agent_account_secret_versions WHERE tenant_id = $1 AND account_id = $2 AND kind = $3', [TENANT_A, accountId, 'api_key'])).rows;
@@ -1289,7 +1291,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
 
     await adapter.put({ ref, material: API_KEY_V1, expectedVersion: null, bindings: plainBindings(), identity });
     const before = { infisical: await infisicalVersion(accountId), described: await adapter.describe({ ref, identity }) };
-    const rebound = await adapter.rebind({ ref, expectedVersion: 1 as PolicyVersion, bindings: nextRecord.bindings, scope: nextRecord.scope, consent: ownerConsentTo(nextRecord.bindings, 'u1', { ref }), identity });
+    const rebound = await adapter.rebind({ ref, expectedVersion: 1 as PolicyVersion, bindings: nextRecord.bindings, scope: nextRecord.scope, consent: ownerConsentTo(nextRecord.bindings, OWNER_A, { ref }), identity });
     const after = { infisical: await infisicalVersion(accountId), described: await adapter.describe({ ref, identity }) };
 
     const actual = {
@@ -1346,7 +1348,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
     const identity = baseIdentity();
     const v2 = recordOver({ ...plainBindings(), policyVersion: 2 as PolicyVersion }, WIDE_SCOPE);
-    const consent = ownerConsentTo(v2.bindings, 'u1', { ref });
+    const consent = ownerConsentTo(v2.bindings, OWNER_A, { ref });
 
     await adapter.put({ ref, material: API_KEY_V1, expectedVersion: null, bindings: plainBindings(), identity });
     const first = await adapter.rebind({ ref, expectedVersion: 1 as PolicyVersion, bindings: v2.bindings, scope: v2.scope, consent, identity });
