@@ -12,8 +12,13 @@
  *   not declare — the allowlist must describe this operation (R6).
  * - `restriction_key_for_undeclared_slot`: `restrictionKeys` maps a slot the
  *   entry does not declare.
- * - `derived_resources_off_relay`: git-derived resources on an entry whose
- *   channel is not `relay-runner` (R11).
+ * - `restriction_key_shared`: two declared slots resolve to the same
+ *   restriction key (by mapping, or a slot named like another slot's key).
+ *   The audit projection filters by key, so an audited slot would carry a
+ *   non-audited slot's values into the non-erasable chain (CodeRabbit #2660).
+ * - `derived_resources_off_relay`: git-derived resources on an entry that is
+ *   not a `relay-runner` `git-receive-pack` operation (R11) — the only request
+ *   they can be derived from.
  *
  * Entries are reported in registry order, one defect per entry (the first
  * that applies, in the order above). Pure.
@@ -28,6 +33,7 @@ export type RegistryEntryDefect =
   | 'duplicate_slot'
   | 'audit_slot_undeclared'
   | 'restriction_key_for_undeclared_slot'
+  | 'restriction_key_shared'
   | 'derived_resources_off_relay';
 
 export function findRegistryEntryDefects({
@@ -55,6 +61,8 @@ function defectOf(entry: OperationRegistry[number]): RegistryEntryDefect | null 
   if (declared.size !== slots.length) return 'duplicate_slot';
   if (entry.auditResourceSlots.some((slot) => !declared.has(slot))) return 'audit_slot_undeclared';
   if (Object.keys(entry.restrictionKeys).some((slot) => !declared.has(slot))) return 'restriction_key_for_undeclared_slot';
-  if (entry.derivedResources.length > 0 && entry.channel !== 'relay-runner') return 'derived_resources_off_relay';
+  const keys = slots.map((slot) => (Object.prototype.hasOwnProperty.call(entry.restrictionKeys, slot) ? entry.restrictionKeys[slot]! : slot));
+  if (new Set(keys).size !== keys.length) return 'restriction_key_shared';
+  if (entry.derivedResources.length > 0 && (entry.channel !== 'relay-runner' || entry.method !== 'git-receive-pack')) return 'derived_resources_off_relay';
   return null;
 }

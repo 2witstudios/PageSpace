@@ -14,6 +14,8 @@ import type { DigestPlaneScope, PolicyDigest } from './store-adapter';
 export const digestPlaneScope: DigestPlaneScope = ({ scope, hash }) => {
   const canonical = {
     ...scope,
+    // Restriction values are sets: order never changes what they allow (CodeRabbit #2660).
+    resourceRestrictions: Object.fromEntries(Object.entries(scope.resourceRestrictions).map(([key, values]) => [key, [...values].sort()])),
     boundAgentPageIds: [...scope.boundAgentPageIds].sort(),
     allowedOrigins: [...scope.allowedOrigins].sort(),
     auxiliaryOrigins: [...scope.auxiliaryOrigins].sort(),
