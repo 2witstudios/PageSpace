@@ -95,14 +95,10 @@ export const OAUTH_ALLOWLIST_DENY: ReadonlyArray<{
  * ceiling became principal-neutral (`credentialCeiling`). Handoff notes live on
  * the Phase 2 page (ykd6o6kam220qrw2zgysxdzc) under "Handoff to Phase 2b".
  */
-const MENTION_RESPONDER_REASON =
-  "Posting a message runs every @-mentioned agent through lib/channels/agent-mention-responder.ts, whose ToolExecutionContext carries only userId — no drive ceiling and no role ceiling for ANY credential — so the agent acts with the owning user's full reach.";
 const DEFERRED_RUN_REASON =
   "Authors deferred agent runs that lib/workflows/workflow-executor.ts executes as the creating user with a ToolExecutionContext carrying no drive ceiling and no role ceiling for ANY credential.";
 
 export const PENDING_PHASE_2B: ReadonlyArray<{ readonly route: string; readonly file: string; readonly reason: string }> = [
-  { route: 'channels/[pageId]/messages', file: 'apps/web/src/app/api/channels/[pageId]/messages/route.ts', reason: MENTION_RESPONDER_REASON },
-  { route: 'channels/[pageId]/messages/[messageId]', file: 'apps/web/src/app/api/channels/[pageId]/messages/[messageId]/route.ts', reason: MENTION_RESPONDER_REASON },
   { route: 'workflows', file: 'apps/web/src/app/api/workflows/route.ts', reason: DEFERRED_RUN_REASON },
   { route: 'workflows/[workflowId]', file: 'apps/web/src/app/api/workflows/[workflowId]/route.ts', reason: DEFERRED_RUN_REASON },
   { route: 'tasks/[taskId]/triggers', file: 'apps/web/src/app/api/tasks/[taskId]/triggers/route.ts', reason: DEFERRED_RUN_REASON },
