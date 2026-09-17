@@ -134,6 +134,8 @@ const createDriveWithAccessFixture = (
   role: overrides.role ?? 'OWNER',
   lastAccessedAt: overrides.lastAccessedAt ?? null,
   homePageId: overrides.homePageId ?? null,
+  orgId: overrides.orgId ?? null,
+  orgVisibility: overrides.orgVisibility ?? 'OPEN',
   isMember: (overrides as { isMember?: boolean }).isMember ?? false,
 });
 

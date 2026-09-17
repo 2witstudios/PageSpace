@@ -7,6 +7,7 @@ import { loggers } from '../logging/logger-config';
 import { parseUserId, parsePageId } from '../validators/id-validators';
 import { fetchCustomRolePermissions, resolveCustomRolePermissions, type CustomRolePerms, type PagePerm } from './membership-queries';
 import { resolveRolePermissions } from './resolve-role-permissions';
+import { loadEffectiveDriveMembership } from './org-drive-membership';
 
 /**
  * Permission level for a single page.
@@ -125,6 +126,8 @@ export async function getUserAccessLevel(
       id: pages.id,
       driveId: pages.driveId,
       driveOwnerId: drives.ownerId,
+      driveOrgId: drives.orgId,
+      driveOrgVisibility: drives.orgVisibility,
       isPrivate: pages.isPrivate,
       type: pages.type,
     })
@@ -135,7 +138,12 @@ export async function getUserAccessLevel(
 
     if (page.length === 0) {
       // Fall back to treating the ID as a drive (drive-as-root-node model)
-      const drive = await db.select({ id: drives.id, ownerId: drives.ownerId })
+      const drive = await db.select({
+        id: drives.id,
+        ownerId: drives.ownerId,
+        orgId: drives.orgId,
+        orgVisibility: drives.orgVisibility,
+      })
         .from(drives)
         .where(eq(drives.id, validPageId))
         .limit(1);
@@ -151,17 +159,11 @@ export async function getUserAccessLevel(
         return { canView: true, canEdit: true, canShare: true, canDelete: true };
       }
 
-      const membership = await db.select({ role: driveMembers.role })
-        .from(driveMembers)
-        .where(and(
-          eq(driveMembers.driveId, drive[0].id),
-          eq(driveMembers.userId, validUserId),
-          isNotNull(driveMembers.acceptedAt),
-        ))
-        .limit(1);
+      // Org Owner/Admin and implicit Open-drive membership resolve here too (ORG-4, DRV-5).
+      const membership = await loadEffectiveDriveMembership(validUserId, drive[0]);
 
-      if (membership.length > 0) {
-        const isAdmin = membership[0].role === 'ADMIN';
+      if (membership) {
+        const isAdmin = membership.role === 'ADMIN';
         return {
           canView: true,
           canEdit: true,
@@ -195,18 +197,16 @@ export async function getUserAccessLevel(
     let memberCustomRoleId: string | null = null;
 
     if (pageData.driveId) {
-      const memberRow = await db.select({ role: driveMembers.role, customRoleId: driveMembers.customRoleId })
-        .from(driveMembers)
-        .where(and(
-          eq(driveMembers.driveId, pageData.driveId),
-          eq(driveMembers.userId, validUserId),
-          isNotNull(driveMembers.acceptedAt)
-        ))
-        .limit(1);
+      // Beside the drive-admin branch: an org Owner/Admin resolves ADMIN on an org drive (ORG-4).
+      const memberRow = await loadEffectiveDriveMembership(validUserId, {
+        id: pageData.driveId,
+        orgId: pageData.driveOrgId,
+        orgVisibility: pageData.driveOrgVisibility,
+      });
 
-      if (memberRow.length > 0) {
-        memberRole = memberRow[0].role;
-        memberCustomRoleId = memberRow[0].customRoleId;
+      if (memberRow) {
+        memberRole = memberRow.role;
+        memberCustomRoleId = memberRow.customRoleId;
 
         if (memberRole === 'ADMIN') {
           if (!silent) {

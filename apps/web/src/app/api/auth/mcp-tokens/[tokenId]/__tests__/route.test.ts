@@ -261,6 +261,7 @@ describe('PATCH /api/auth/mcp-tokens/[tokenId]', () => {
       unauthorizedRoles: [],
       invalidCustomRoles: [],
       unauthorizedCustomRoles: [],
+      explicitRoleWithoutMembership: [],
     });
   });
 
@@ -341,6 +342,7 @@ describe('PATCH /api/auth/mcp-tokens/[tokenId]', () => {
       unauthorizedRoles: [],
       invalidCustomRoles: [],
       unauthorizedCustomRoles: [],
+      explicitRoleWithoutMembership: [],
     });
 
     const request = new NextRequest('http://localhost/api/auth/mcp-tokens/token-123', {
@@ -356,12 +358,38 @@ describe('PATCH /api/auth/mcp-tokens/[tokenId]', () => {
     expect(response.status).toBe(403);
   });
 
+  it('ORG-4 (partial) returns 403 and re-scopes nothing when an explicit role is asked on an org drive reached only through the org', async () => {
+    vi.mocked(validateDriveScopeAccess).mockResolvedValueOnce({
+      invalidDriveIds: [],
+      unauthorizedRoles: [],
+      invalidCustomRoles: [],
+      unauthorizedCustomRoles: [],
+      explicitRoleWithoutMembership: ['drive-finance'],
+    });
+
+    const request = new NextRequest('http://localhost/api/auth/mcp-tokens/token-123', {
+      method: 'PATCH',
+      headers: {
+        Cookie: 'ps_session=valid-token',
+        'X-CSRF-Token': 'valid-csrf-token',
+      },
+      body: JSON.stringify({ drives: [{ id: 'drive-finance', role: 'MEMBER' }], stepUpToken: 'ps_stepup_test' }),
+    });
+
+    const response = await PATCH(request, createContext());
+    const body = await response.json();
+    expect(response.status).toBe(403);
+    expect(body.error).toContain('drive-finance');
+    expect(sessionRepository.updateMcpTokenDriveScopes).not.toHaveBeenCalled();
+  });
+
   it('returns 403 when member tries to grant ADMIN', async () => {
     vi.mocked(validateDriveScopeAccess).mockResolvedValueOnce({
       invalidDriveIds: [],
       unauthorizedRoles: ['drive-1'],
       invalidCustomRoles: [],
       unauthorizedCustomRoles: [],
+      explicitRoleWithoutMembership: [],
     });
 
     const request = new NextRequest('http://localhost/api/auth/mcp-tokens/token-123', {

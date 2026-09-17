@@ -102,6 +102,10 @@ export interface Drive {
   // Drive-wide favicon override for published pages lacking their own <link rel="icon">.
   // Optional: predates the field on zustand-persisted Drive objects.
   publishFaviconUrl?: string | null;
+  // The owning org, null for a personal drive (picker grouping, DRV-9). Optional: predates the
+  // field on zustand-persisted Drive objects; consumers treat undefined as personal.
+  orgId?: string | null;
+  orgVisibility?: 'OPEN' | 'RESTRICTED' | 'PRIVATE';
 }
 
 // Inbox types for unified DM/Channel inbox

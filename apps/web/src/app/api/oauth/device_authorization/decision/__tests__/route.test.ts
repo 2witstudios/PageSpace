@@ -36,8 +36,10 @@ vi.mock('@pagespace/lib/auth/step-up-service', () => ({
 }));
 
 const getDriveAccess = vi.fn();
+const getExplicitScopeAuthority = vi.fn();
 vi.mock('@pagespace/lib/services/drive-service', () => ({
   getDriveAccess: (...args: unknown[]) => getDriveAccess(...args),
+  getExplicitScopeAuthority: (...args: unknown[]) => getExplicitScopeAuthority(...args),
 }));
 
 const getMemberCustomRoleId = vi.fn();
@@ -71,6 +73,7 @@ const ALLOWED = { allowed: true, attemptsRemaining: 9 };
 
 beforeEach(() => {
   vi.clearAllMocks();
+  getExplicitScopeAuthority.mockResolvedValue({ orgDrive: false });
   vi.mocked(authenticateRequestWithOptions).mockResolvedValue(AUTHENTICATED as never);
   checkDistributedRateLimit.mockResolvedValue(ALLOWED);
   // Default: the presented user code isn't found by the read-only scope
@@ -201,6 +204,18 @@ describe('POST /api/oauth/device_authorization/decision — P1b: grant-authority
   it('rejects approving a scope the user cannot grant (e.g. drive:admin without admin/owner authority), never recording approval', async () => {
     verifyDeviceUserCode.mockResolvedValue({ outcome: 'ok', clientId: 'pagespace-cli', scopes: ['drive:abc12345:admin'] });
     getDriveAccess.mockResolvedValue({ isOwner: false, isAdmin: false, isMember: true, role: 'MEMBER' });
+
+    const res = await POST(decisionRequest({ userCode: 'ABCD-EFGH', action: 'approve' }) as never);
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid_scope' });
+    expect(recordDeviceApproval).not.toHaveBeenCalled();
+  });
+
+  it('ORG-4 (partial) rejects approving an explicit drive scope on an org drive the user reaches only through org power, never recording approval', async () => {
+    verifyDeviceUserCode.mockResolvedValue({ outcome: 'ok', clientId: 'pagespace-cli', scopes: ['drive:abc12345:member'] });
+    getDriveAccess.mockResolvedValue({ isOwner: false, isAdmin: true, isMember: true, role: 'ADMIN' });
+    getExplicitScopeAuthority.mockResolvedValue({ orgDrive: true, row: null });
 
     const res = await POST(decisionRequest({ userCode: 'ABCD-EFGH', action: 'approve' }) as never);
 

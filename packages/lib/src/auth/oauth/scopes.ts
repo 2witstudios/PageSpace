@@ -9,6 +9,8 @@
  * @module @pagespace/lib/auth/oauth/scopes
  */
 
+import { decideExplicitDriveScope, type ExplicitScopeAuthority } from '../../permissions/org-drive-resolution';
+
 const RESOURCE_ID_RE = /^[a-z0-9]{1,32}$/;
 const NAME_CONTROL_CHAR_RE = /[\x00-\x1F\x7F]/;
 
@@ -109,12 +111,22 @@ export type GrantAuthority = ReadonlyMap<
     isAdmin: boolean;
     ownCustomRoleId: string | null;
     roleBelongsToDrive: (roleId: string) => boolean;
+    /**
+     * The direct membership that may back an explicit scope (getExplicitScopeAuthority), kept apart
+     * from the effective, possibly org-derived, isAdmin/isMember above. Resolved only for explicit
+     * scopes on drives the user does not own; absent means `{ orgDrive: false }`.
+     */
+    explicitScope?: ExplicitScopeAuthority;
   }
 >;
 
 export type GrantAuthorityResult =
   | { ok: true }
-  | { ok: false; reason: 'no_access' | 'admin_not_grantable' | 'foreign_custom_role' | 'custom_role_not_in_drive'; driveId: string };
+  | {
+      ok: false;
+      reason: 'no_access' | 'admin_not_grantable' | 'foreign_custom_role' | 'custom_role_not_in_drive' | 'org_derived_explicit_role';
+      driveId: string;
+    };
 
 function parseDriveScope(token: string): (ParsedScope & { kind: 'drive' }) | null {
   const parts = token.split(':');
@@ -537,7 +549,19 @@ export function checkGrantAuthority(scopes: ScopeSet, authority: GrantAuthority)
       return { ok: false, reason: 'no_access', driveId };
     }
 
-    if (scope.role.kind === 'admin' && !auth.isOwner && !auth.isAdmin) {
+    // The same rule as MCP key scopes: an explicit scope on an org drive rests on the direct row.
+    const scopeDecision = decideExplicitDriveScope({
+      explicit: scope.role.kind !== 'inherit',
+      isOwner: auth.isOwner,
+      isAdmin: auth.isAdmin,
+      authority: auth.explicitScope ?? { orgDrive: false },
+    });
+    if (!scopeDecision.ok) {
+      return { ok: false, reason: scopeDecision.reason, driveId };
+    }
+    const { isAdmin } = scopeDecision;
+
+    if (scope.role.kind === 'admin' && !auth.isOwner && !isAdmin) {
       return { ok: false, reason: 'admin_not_grantable', driveId };
     }
 
@@ -545,7 +569,7 @@ export function checkGrantAuthority(scopes: ScopeSet, authority: GrantAuthority)
       if (!auth.roleBelongsToDrive(scope.role.customRoleId)) {
         return { ok: false, reason: 'custom_role_not_in_drive', driveId };
       }
-      if (!auth.isOwner && !auth.isAdmin && auth.ownCustomRoleId !== scope.role.customRoleId) {
+      if (!auth.isOwner && !isAdmin && auth.ownCustomRoleId !== scope.role.customRoleId) {
         return { ok: false, reason: 'foreign_custom_role', driveId };
       }
     }
