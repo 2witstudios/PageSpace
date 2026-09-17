@@ -132,6 +132,25 @@ export const DELETE = withAdminAuth<DataRouteContext>(
       // 'manual': tell the user to stop using Sign in with Apple for PageSpace
       // themselves (not revoked — no token, no signing key here, or Apple failed).
       const appleSignIn = appleSignInDeletionOutcome({ appleLinked: user.appleId !== null, summary: appleSummary });
+      if (appleSignIn === 'manual') {
+        // Durable record: the user's Sign in with Apple authorization was NOT
+        // revoked (no token, no signing key on this app, or Apple failed), so
+        // someone must tell them to stop using Sign in with Apple for PageSpace.
+        loggers.api.warn(`Admin DSAR: Sign in with Apple needs manual follow-up for ${userId}`);
+        auditRequest(request, {
+          eventType: 'data.delete',
+          userId: adminUser.id,
+          resourceType: 'user',
+          resourceId: userId,
+          details: {
+            operation: 'apple_sign_in_manual_followup',
+            subjectUserId: userId,
+            revoked: appleSummary?.revoked ?? 0,
+            failed: appleSummary?.failed ?? 0,
+            unconfigured: appleSummary?.unconfigured ?? false,
+          },
+        });
+      }
       return Response.json({ message: 'User data deleted and anonymized', appleSignIn });
     } catch (error) {
       loggers.api.error('Admin DSAR deletion error:', error as Error);

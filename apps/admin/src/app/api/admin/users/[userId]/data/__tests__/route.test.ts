@@ -441,6 +441,33 @@ describe('/api/admin/users/[userId]/data', () => {
       expect(body.appleSignIn).toBe('manual');
     });
 
+    it('given_appleTokensNotRevoked_shouldRecordTheManualFollowupInTheAuditLog', async () => {
+      vi.mocked(revokeAndDiscardAppleTokens).mockResolvedValue({ hadTokens: true, revoked: 0, failed: 1, unconfigured: false });
+
+      await DELETE(deleteRequest(), { params: Promise.resolve({ userId: 'user-1' }) });
+
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'data.delete',
+          resourceType: 'user',
+          resourceId: 'user-1',
+          details: expect.objectContaining({ operation: 'apple_sign_in_manual_followup', subjectUserId: 'user-1' }),
+        }),
+      );
+    });
+
+    it('given_appleTokensRevoked_shouldNotRecordAManualFollowup', async () => {
+      vi.mocked(revokeAndDiscardAppleTokens).mockResolvedValue({ hadTokens: true, revoked: 1, failed: 0, unconfigured: false });
+
+      await DELETE(deleteRequest(), { params: Promise.resolve({ userId: 'user-1' }) });
+
+      const followups = vi.mocked(auditRequest).mock.calls.filter(
+        ([, event]) => (event.details as { operation?: string } | undefined)?.operation === 'apple_sign_in_manual_followup',
+      );
+      expect(followups).toHaveLength(0);
+    });
+
     it('given_appleRevocationThrows_shouldLogErrorButNotBlockDeletion', async () => {
       vi.mocked(revokeAndDiscardAppleTokens).mockRejectedValue(new Error('DB connection lost'));
 
