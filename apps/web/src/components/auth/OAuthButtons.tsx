@@ -92,8 +92,8 @@ export function OAuthButtons({
         <MarketingLink href="/privacy" className="underline hover:text-foreground">
           Privacy Policy
         </MarketingLink>
-        . AI features send the content you use them with to third-party AI providers (Anthropic,
-        OpenAI, Google, xAI).
+        . AI features send the content you use them with
+        to OpenRouter and the model provider you choose.
       </p>
     </div>
   );

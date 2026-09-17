@@ -17,9 +17,13 @@ const CONSENT_SURFACES = [
 
 describe('signup consent names third-party AI', () => {
   for (const file of CONSENT_SURFACES) {
-    it(`given ${file}, should say AI features send content to third-party AI providers`, () => {
+    it(`given ${file}, should name OpenRouter and the chosen model provider as where AI content goes`, () => {
       const source = readFileSync(join(SRC, file), 'utf8');
-      expect(source).toMatch(/third-party AI providers/);
+      expect(source).toMatch(/OpenRouter/);
+      expect(source).toMatch(/model provider you choose/);
+      // Every cloud model is routed through OpenRouter (ai-providers-config.ts), so a
+      // fixed vendor list would misname the recipients of a default-model chat.
+      expect(source).not.toMatch(/\(Anthropic, OpenAI, Google, xAI\)/);
     });
   }
 

@@ -269,7 +269,7 @@ export function PasskeySignupButton({
                   Privacy Policy
                 </MarketingLink>
                 , and I&apos;m at least 16 years old. AI features send the content you use them with to
-          third-party AI providers (Anthropic, OpenAI, Google, xAI).
+          OpenRouter and the model provider you choose.
               </Label>
             </div>
             <div className="flex gap-2">

@@ -7,9 +7,9 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
-- **Sign-up says where AI content goes** — the consent line on every sign-up screen now names the
-  third-party AI providers (Anthropic, OpenAI, Google, xAI) that AI features send your content to,
-  alongside the Terms and Privacy Policy.
+- **Sign-up says where AI content goes** — the consent line on every sign-up screen now says AI
+  features send your content to OpenRouter and the model provider you choose, alongside the Terms
+  and Privacy Policy.
 - **Deleting your account disconnects Sign in with Apple** — if you sign in with Apple, PageSpace
   now keeps a revocable Apple token and revokes it when you delete your account, so PageSpace no
   longer stays listed under your Apple Account's Sign in with Apple apps. If PageSpace has no token
