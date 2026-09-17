@@ -25,6 +25,12 @@ const nextConfig: NextConfig = {
   async headers() {
     return [
       {
+        // Prebuilt hero variants (scripts/encode-hero.ts). The names are not
+        // content-hashed, so not immutable: an hour, then revalidate by ETag.
+        source: '/_marketing/hero/:path*',
+        headers: [{ key: 'Cache-Control', value: 'public, max-age=3600, must-revalidate' }],
+      },
+      {
         source: '/.well-known/apple-app-site-association',
         headers: [{ key: 'Content-Type', value: 'application/json' }],
       },

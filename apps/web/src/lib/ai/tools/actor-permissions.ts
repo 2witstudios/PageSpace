@@ -256,6 +256,34 @@ export async function canActorViewPage(
   return perms?.canView ?? false;
 }
 
+/**
+ * Whether the actor may CONSULT (ask) an agent — the one rule shared by the
+ * invoke-an-agent engine (executeAskAgent) and the channel-mention responder,
+ * so the responder's preliminary gate and the engine's own gate can never
+ * disagree.
+ *
+ * Viewing the agent's page is sufficient. It is not necessary: an agent that
+ * is a MEMBER of the drive the actor is operating in was added there (by an
+ * owner/admin/member, see drive-agent-service) precisely so that drive's
+ * members can talk to it, and the drive's agent-members list already shows it
+ * to every member. A guest agent — homed in a drive the actor cannot see —
+ * is exactly this case. So the second grant is: the agent is a member of
+ * `currentDriveId` (falling back to the actor's locationContext drive) AND
+ * the actor can access that drive under its own ceiling (canActorAccessDrive:
+ * MCP scope, app-token ceiling, agent membership or user access).
+ */
+export async function canActorConsultAgent(
+  context: ToolExecutionContext,
+  agentPageId: string,
+  currentDriveId?: string | null,
+): Promise<boolean> {
+  if (await canActorViewPage(context, agentPageId)) return true;
+  const driveId = currentDriveId ?? context.locationContext?.currentDrive?.id ?? null;
+  if (!driveId) return false;
+  if (!(await hasAgentDriveMembership(agentPageId, driveId))) return false;
+  return canActorAccessDrive(context, driveId);
+}
+
 export async function canActorAccessDrive(
   context: ToolExecutionContext,
   driveId: string,

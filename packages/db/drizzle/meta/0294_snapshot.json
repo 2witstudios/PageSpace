@@ -1,5 +1,5 @@
 {
-  "id": "fb2e39c5-5238-4159-bdd4-41cdca4cd97a",
+  "id": "ff5650fa-cac0-4687-8d81-3b3b01b4dbce",
   "prevId": "bacd1577-68d6-471d-8c5e-21eecd837d36",
   "version": "7",
   "dialect": "postgresql",
@@ -20054,51 +20054,6 @@
           "primaryKey": false,
           "notNull": true
         },
-        "allowedGrantTypes": {
-          "name": "allowedGrantTypes",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'[]'::jsonb"
-        },
-        "allowedScopes": {
-          "name": "allowedScopes",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'[]'::jsonb"
-        },
-        "ownerUserId": {
-          "name": "ownerUserId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "logoUrl": {
-          "name": "logoUrl",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "homepageUrl": {
-          "name": "homepageUrl",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "description": {
-          "name": "description",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "verified": {
-          "name": "verified",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
         "isFirstParty": {
           "name": "isFirstParty",
           "type": "boolean",
@@ -20108,13 +20063,6 @@
         },
         "createdAt": {
           "name": "createdAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updatedAt": {
-          "name": "updatedAt",
           "type": "timestamp",
           "primaryKey": false,
           "notNull": true,
@@ -20142,38 +20090,9 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
-        },
-        "oauth_clients_owner_user_id_idx": {
-          "name": "oauth_clients_owner_user_id_idx",
-          "columns": [
-            {
-              "expression": "ownerUserId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
         }
       },
-      "foreignKeys": {
-        "oauth_clients_ownerUserId_users_id_fk": {
-          "name": "oauth_clients_ownerUserId_users_id_fk",
-          "tableFrom": "oauth_clients",
-          "tableTo": "users",
-          "columnsFrom": [
-            "ownerUserId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        }
-      },
+      "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
         "oauth_clients_clientId_unique": {
@@ -23958,6 +23877,59 @@
           "value": "\"dev_preview_grants\".\"holderKind\" IN ('workspace', 'env')"
         }
       },
+      "isRLSEnabled": false
+    },
+    "public.agent_account_grant_nonces": {
+      "name": "agent_account_grant_nonces",
+      "schema": "",
+      "columns": {
+        "nonce": {
+          "name": "nonce",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "grantId": {
+          "name": "grantId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "expiresAt": {
+          "name": "expiresAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "consumedAt": {
+          "name": "consumedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "agent_account_grant_nonces_expires_at_idx": {
+          "name": "agent_account_grant_nonces_expires_at_idx",
+          "columns": [
+            {
+              "expression": "expiresAt",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
       "isRLSEnabled": false
     }
   },

@@ -178,6 +178,186 @@
       "import": "./dist/env-bridge/grant.js",
       "require": "./dist/env-bridge/grant.js"
     },
+    "./agent-accounts/grant": {
+      "types": "./dist/agent-accounts/grant.d.ts",
+      "import": "./dist/agent-accounts/grant.js",
+      "require": "./dist/agent-accounts/grant.js"
+    },
+    "./agent-accounts/canonical-request": {
+      "types": "./dist/agent-accounts/canonical-request.d.ts",
+      "import": "./dist/agent-accounts/canonical-request.js",
+      "require": "./dist/agent-accounts/canonical-request.js"
+    },
+    "./agent-accounts/approval": {
+      "types": "./dist/agent-accounts/approval.d.ts",
+      "import": "./dist/agent-accounts/approval.js",
+      "require": "./dist/agent-accounts/approval.js"
+    },
+    "./agent-accounts/audit": {
+      "types": "./dist/agent-accounts/audit.d.ts",
+      "import": "./dist/agent-accounts/audit.js",
+      "require": "./dist/agent-accounts/audit.js"
+    },
+    "./agent-accounts/store/store-adapter": {
+      "types": "./dist/agent-accounts/store/store-adapter.d.ts",
+      "import": "./dist/agent-accounts/store/store-adapter.js",
+      "require": "./dist/agent-accounts/store/store-adapter.js"
+    },
+    "./agent-accounts/canonicalize-request": {
+      "types": "./dist/agent-accounts/canonicalize-request.d.ts",
+      "import": "./dist/agent-accounts/canonicalize-request.js",
+      "require": "./dist/agent-accounts/canonicalize-request.js"
+    },
+    "./agent-accounts/digest-request": {
+      "types": "./dist/agent-accounts/digest-request.d.ts",
+      "import": "./dist/agent-accounts/digest-request.js",
+      "require": "./dist/agent-accounts/digest-request.js"
+    },
+    "./agent-accounts/render-approval-subject": {
+      "types": "./dist/agent-accounts/render-approval-subject.d.ts",
+      "import": "./dist/agent-accounts/render-approval-subject.js",
+      "require": "./dist/agent-accounts/render-approval-subject.js"
+    },
+    "./agent-accounts/decide-replay": {
+      "types": "./dist/agent-accounts/decide-replay.d.ts",
+      "import": "./dist/agent-accounts/decide-replay.js",
+      "require": "./dist/agent-accounts/decide-replay.js"
+    },
+    "./agent-accounts/decide-retry": {
+      "types": "./dist/agent-accounts/decide-retry.d.ts",
+      "import": "./dist/agent-accounts/decide-retry.js",
+      "require": "./dist/agent-accounts/decide-retry.js"
+    },
+    "./agent-accounts/replay-store-repository": {
+      "types": "./dist/agent-accounts/replay-store-repository.d.ts",
+      "import": "./dist/agent-accounts/replay-store-repository.js",
+      "require": "./dist/agent-accounts/replay-store-repository.js"
+    },
+    "./agent-accounts/grant-constants": {
+      "types": "./dist/agent-accounts/grant-constants.d.ts",
+      "import": "./dist/agent-accounts/grant-constants.js",
+      "require": "./dist/agent-accounts/grant-constants.js"
+    },
+    "./agent-accounts/encode-grant": {
+      "types": "./dist/agent-accounts/encode-grant.d.ts",
+      "import": "./dist/agent-accounts/encode-grant.js",
+      "require": "./dist/agent-accounts/encode-grant.js"
+    },
+    "./agent-accounts/parse-grant": {
+      "types": "./dist/agent-accounts/parse-grant.d.ts",
+      "import": "./dist/agent-accounts/parse-grant.js",
+      "require": "./dist/agent-accounts/parse-grant.js"
+    },
+    "./agent-accounts/verify-grant": {
+      "types": "./dist/agent-accounts/verify-grant.d.ts",
+      "import": "./dist/agent-accounts/verify-grant.js",
+      "require": "./dist/agent-accounts/verify-grant.js"
+    },
+    "./agent-accounts/decide-sandbox-binding": {
+      "types": "./dist/agent-accounts/decide-sandbox-binding.d.ts",
+      "import": "./dist/agent-accounts/decide-sandbox-binding.js",
+      "require": "./dist/agent-accounts/decide-sandbox-binding.js"
+    },
+    "./agent-accounts/collapse-verdict": {
+      "types": "./dist/agent-accounts/collapse-verdict.d.ts",
+      "import": "./dist/agent-accounts/collapse-verdict.js",
+      "require": "./dist/agent-accounts/collapse-verdict.js"
+    },
+    "./agent-accounts/grant-gate-executor": {
+      "types": "./dist/agent-accounts/grant-gate-executor.d.ts",
+      "import": "./dist/agent-accounts/grant-gate-executor.js",
+      "require": "./dist/agent-accounts/grant-gate-executor.js"
+    },
+    "./agent-accounts/decide-approval": {
+      "types": "./dist/agent-accounts/decide-approval.d.ts",
+      "import": "./dist/agent-accounts/decide-approval.js",
+      "require": "./dist/agent-accounts/decide-approval.js"
+    },
+    "./agent-accounts/bind-approval": {
+      "types": "./dist/agent-accounts/bind-approval.d.ts",
+      "import": "./dist/agent-accounts/bind-approval.js",
+      "require": "./dist/agent-accounts/bind-approval.js"
+    },
+    "./agent-accounts/build-audit-record": {
+      "types": "./dist/agent-accounts/build-audit-record.d.ts",
+      "import": "./dist/agent-accounts/build-audit-record.js",
+      "require": "./dist/agent-accounts/build-audit-record.js"
+    },
+    "./agent-accounts/decide-audit-gate": {
+      "types": "./dist/agent-accounts/decide-audit-gate.d.ts",
+      "import": "./dist/agent-accounts/decide-audit-gate.js",
+      "require": "./dist/agent-accounts/decide-audit-gate.js"
+    },
+    "./agent-accounts/redact-known-values": {
+      "types": "./dist/agent-accounts/redact-known-values.d.ts",
+      "import": "./dist/agent-accounts/redact-known-values.js",
+      "require": "./dist/agent-accounts/redact-known-values.js"
+    },
+    "./agent-accounts/audit-repository": {
+      "types": "./dist/agent-accounts/audit-repository.d.ts",
+      "import": "./dist/agent-accounts/audit-repository.js",
+      "require": "./dist/agent-accounts/audit-repository.js"
+    },
+    "./agent-accounts/lookup-operation": {
+      "types": "./dist/agent-accounts/lookup-operation.d.ts",
+      "import": "./dist/agent-accounts/lookup-operation.js",
+      "require": "./dist/agent-accounts/lookup-operation.js"
+    },
+    "./agent-accounts/find-operation-registry-conflicts": {
+      "types": "./dist/agent-accounts/find-operation-registry-conflicts.d.ts",
+      "import": "./dist/agent-accounts/find-operation-registry-conflicts.js",
+      "require": "./dist/agent-accounts/find-operation-registry-conflicts.js"
+    },
+    "./agent-accounts/find-duplicate-resource-slots": {
+      "types": "./dist/agent-accounts/find-duplicate-resource-slots.d.ts",
+      "import": "./dist/agent-accounts/find-duplicate-resource-slots.js",
+      "require": "./dist/agent-accounts/find-duplicate-resource-slots.js"
+    },
+    "./agent-accounts/denial-audit-record": {
+      "types": "./dist/agent-accounts/denial-audit-record.d.ts",
+      "import": "./dist/agent-accounts/denial-audit-record.js",
+      "require": "./dist/agent-accounts/denial-audit-record.js"
+    },
+    "./agent-accounts/build-denial-record": {
+      "types": "./dist/agent-accounts/build-denial-record.d.ts",
+      "import": "./dist/agent-accounts/build-denial-record.js",
+      "require": "./dist/agent-accounts/build-denial-record.js"
+    },
+    "./agent-accounts/audit-gate-executor": {
+      "types": "./dist/agent-accounts/audit-gate-executor.d.ts",
+      "import": "./dist/agent-accounts/audit-gate-executor.js",
+      "require": "./dist/agent-accounts/audit-gate-executor.js"
+    },
+    "./agent-accounts/account-authority-key": {
+      "types": "./dist/agent-accounts/account-authority-key.d.ts",
+      "import": "./dist/agent-accounts/account-authority-key.js",
+      "require": "./dist/agent-accounts/account-authority-key.js"
+    },
+    "./agent-accounts/sign-grant": {
+      "types": "./dist/agent-accounts/sign-grant.d.ts",
+      "import": "./dist/agent-accounts/sign-grant.js",
+      "require": "./dist/agent-accounts/sign-grant.js"
+    },
+    "./auth/account-authority-signing-key": {
+      "types": "./dist/auth/account-authority-signing-key.d.ts",
+      "import": "./dist/auth/account-authority-signing-key.js",
+      "require": "./dist/auth/account-authority-signing-key.js"
+    },
+    "./agent-accounts/always-allowed-by-class": {
+      "types": "./dist/agent-accounts/always-allowed-by-class.d.ts",
+      "import": "./dist/agent-accounts/always-allowed-by-class.js",
+      "require": "./dist/agent-accounts/always-allowed-by-class.js"
+    },
+    "./permissions/decide-account-access": {
+      "types": "./dist/permissions/decide-account-access.d.ts",
+      "import": "./dist/permissions/decide-account-access.js",
+      "require": "./dist/permissions/decide-account-access.js"
+    },
+    "./permissions/account-permissions": {
+      "types": "./dist/permissions/account-permissions.d.ts",
+      "import": "./dist/permissions/account-permissions.js",
+      "require": "./dist/permissions/account-permissions.js"
+    },
     "./env-bridge/policy-types": {
       "types": "./dist/env-bridge/policy-types.d.ts",
       "import": "./dist/env-bridge/policy-types.js",
@@ -1783,6 +1963,11 @@
       "import": "./dist/integrations/converter/ai-sdk.js",
       "require": "./dist/integrations/converter/ai-sdk.js"
     },
+    "./integrations/validation/validate-base-url": {
+      "types": "./dist/integrations/validation/validate-base-url.d.ts",
+      "import": "./dist/integrations/validation/validate-base-url.js",
+      "require": "./dist/integrations/validation/validate-base-url.js"
+    },
     "./integrations/saga/execute-tool": {
       "types": "./dist/integrations/saga/execute-tool.d.ts",
       "import": "./dist/integrations/saga/execute-tool.js",
@@ -1847,6 +2032,11 @@
       "types": "./dist/security/auth-handoff-sweep.d.ts",
       "import": "./dist/security/auth-handoff-sweep.js",
       "require": "./dist/security/auth-handoff-sweep.js"
+    },
+    "./security/web-fetch-ssrf": {
+      "types": "./dist/security/web-fetch-ssrf.d.ts",
+      "import": "./dist/security/web-fetch-ssrf.js",
+      "require": "./dist/security/web-fetch-ssrf.js"
     },
     "./security/url-validator": {
       "types": "./dist/security/url-validator.d.ts",

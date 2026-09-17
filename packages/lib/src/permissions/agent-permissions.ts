@@ -17,21 +17,21 @@ async function fetchAgentMembership(agentPageId: string, driveId: string) {
 
 async function fetchPageDriveAndPrivacy(
   targetPageId: string,
-): Promise<{ driveId: string; isPrivate: boolean }> {
+): Promise<{ driveId: string; isPrivate: boolean; type: string | null }> {
   const rows = await db
-    .select({ driveId: pages.driveId, isPrivate: pages.isPrivate })
+    .select({ driveId: pages.driveId, isPrivate: pages.isPrivate, type: pages.type })
     .from(pages)
     .where(eq(pages.id, targetPageId))
     .limit(1);
   // No page row ⇒ treat targetPageId as a drive id (drive-as-root-node pattern).
-  return rows[0] ?? { driveId: targetPageId, isPrivate: false };
+  return rows[0] ?? { driveId: targetPageId, isPrivate: false, type: null };
 }
 
 export async function getAgentAccessLevel(
   agentPageId: string,
   targetPageId: string,
 ): Promise<PermissionLevel | null> {
-  const { driveId, isPrivate } = await fetchPageDriveAndPrivacy(targetPageId);
+  const { driveId, isPrivate, type: pageType } = await fetchPageDriveAndPrivacy(targetPageId);
   const membership = await fetchAgentMembership(agentPageId, driveId);
   if (!membership) return null;
 
@@ -58,7 +58,7 @@ export async function getAgentAccessLevel(
     return { canView: false, canEdit: false, canShare: false, canDelete: false };
   }
 
-  return resolveRolePermissions(membership.role, role?.permissions ?? null, targetPageId);
+  return resolveRolePermissions(membership.role, role?.permissions ?? null, targetPageId, pageType);
 }
 
 export async function hasAgentDriveMembership(agentPageId: string, driveId: string): Promise<boolean> {
@@ -190,9 +190,10 @@ export async function getAgentAccessiblePagesInDrive(
     return [];
   }
 
-  // Plain MEMBER (no custom role): view-only over the drive's non-private pages —
-  // the same set a plain MEMBER *user* sees, consistent with getAgentAccessLevel
-  // denying a plain member access to private pages.
+  // Plain MEMBER (no custom role): view-only over the drive's non-private pages
+  // (channels editable, so the agent can post) — the same set a plain MEMBER
+  // *user* sees, consistent with getAgentAccessLevel denying a plain member
+  // access to private pages.
   const memberPages = await db
     .select({
       id: pages.id,
@@ -207,6 +208,6 @@ export async function getAgentAccessiblePagesInDrive(
 
   return memberPages.map((p) => ({
     ...p,
-    permissions: resolveRolePermissions('MEMBER', null, p.id),
+    permissions: resolveRolePermissions('MEMBER', null, p.id, p.type),
   }));
 }

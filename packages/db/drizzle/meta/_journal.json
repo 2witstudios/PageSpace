@@ -2063,8 +2063,15 @@
     {
       "idx": 294,
       "version": "7",
-      "when": 1789339739846,
-      "tag": "0294_overjoyed_salo",
+      "when": 1789443229156,
+      "tag": "0294_agent_account_grant_nonces",
+      "breakpoints": true
+    },
+    {
+      "idx": 295,
+      "version": "7",
+      "when": 1789606320009,
+      "tag": "0295_spotty_doctor_octopus",
       "breakpoints": true
     }
   ]

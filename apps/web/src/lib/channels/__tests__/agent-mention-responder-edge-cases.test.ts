@@ -23,7 +23,10 @@ vi.mock('@pagespace/db/db', () => ({
 }));
 // Structured operator mocks so tests can inspect WHERE clauses (e.g. prove
 // the agent lookup filters by the mention id, never the command id).
-vi.mock('@pagespace/db/operators', () => ({
+vi.mock('@pagespace/db/operators', async (importOriginal) => ({
+  // Keep the real re-exports so transitively imported lib modules that use
+  // `sql` still load (e.g. sheets/search-sql via services/preview).
+  ...(await importOriginal<typeof import('@pagespace/db/operators')>()),
   and: vi.fn((...args: unknown[]) => ({ op: 'and', args })),
   eq: vi.fn((field: unknown, value: unknown) => ({ op: 'eq', field, value })),
   inArray: vi.fn((field: unknown, values: unknown) => ({ op: 'inArray', field, values })),
@@ -44,6 +47,17 @@ vi.mock('@pagespace/db/schema/chat', () => ({
 }));
 vi.mock('@pagespace/db/schema/commands', () => ({
   commands: { id: 'id' },
+}));
+// The two gates added for member agents (see agent-mention-responder.ts):
+// membership in the channel's drive is the grant when the mentioner cannot
+// view the agent's home page, and the agent must be able to post in the
+// channel BEFORE any model call is spent on it.
+vi.mock('@pagespace/lib/permissions/agent-permissions', () => ({
+  hasAgentDriveMembership: vi.fn().mockResolvedValue(false),
+}));
+vi.mock('@/lib/ai/tools/actor-permissions', () => ({
+  canActorEditPage: vi.fn().mockResolvedValue(true),
+  canActorConsultAgent: vi.fn().mockResolvedValue(true),
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
   canUserViewPage: vi.fn(),
