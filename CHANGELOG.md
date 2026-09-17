@@ -500,6 +500,17 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   their text (the web still shows its Buy credits button beside them), and the Privacy & Cookies
   settings entry is hidden in the native app, matching the cookie banner. The native app also no
   longer sends usage analytics, even if analytics consent was saved in an earlier version.
+- **iOS app: legal pages, integrations and privacy tightened for App Review** — Settings now has
+  Privacy Policy and Terms of Service entries on every platform, and in the iOS app those pages (and
+  the Terms/Privacy links on sign-in and invite screens) open in a browser sheet instead of loading
+  the marketing site inside the app. Connecting Google Calendar or another integration from the iOS
+  app opens the sign-in screen in a browser sheet, where it can finish, instead of an error page
+  with no way back. The iOS app no longer shows buy, top-up or upgrade wording on credit balances,
+  storage and domain limits, or the image generator, and never offers the published-app always-on
+  checkout. The iOS app records no session replays. The Terms now set a minimum age of 16 (matching
+  sign-up) and an acceptable-use policy with zero tolerance for objectionable content and abusive
+  users; the privacy policy uses the same minimum age, and the subprocessors page discloses web
+  session replay.
 - **The header now says "Home", and the drive name next to it opens a proper drive picker** —
   the way back out of a drive used to be a small house icon followed by a `/`, and nothing on
   screen said where it went, so it was easy to miss entirely. It now reads **Home** in words, next

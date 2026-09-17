@@ -78,8 +78,8 @@ const operations: SubprocessorRow[] = [
   },
   {
     vendor: "Functional Software, Inc. (Sentry)",
-    purpose: "Error and crash reporting",
-    dataCategories: "Error stack traces, request metadata, and the user ID associated with an error. Personally identifying request data (sendDefaultPii) is disabled",
+    purpose: "Error and crash reporting, and session replay in the web app",
+    dataCategories: "Error stack traces, request metadata, and the user ID associated with an error. Personally identifying request data (sendDefaultPii) is disabled. In the web app (not the iOS app), a sample of sessions and sessions that hit an error are recorded as session replays of page interactions",
     location: "United States",
     transferMechanism: SCC_MODULE_2,
     dpa: { label: "Sentry Data Processing Addendum", href: "https://sentry.io/legal/dpa/" },
