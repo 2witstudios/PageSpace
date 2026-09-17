@@ -133,6 +133,36 @@
       "import": "./dist/drive-envs/plan-env-delete.js",
       "require": "./dist/drive-envs/plan-env-delete.js"
     },
+    "./organizations/authorize": {
+      "types": "./dist/organizations/authorize.d.ts",
+      "import": "./dist/organizations/authorize.js",
+      "require": "./dist/organizations/authorize.js"
+    },
+    "./organizations/deletion": {
+      "types": "./dist/organizations/deletion.d.ts",
+      "import": "./dist/organizations/deletion.js",
+      "require": "./dist/organizations/deletion.js"
+    },
+    "./organizations/invitations": {
+      "types": "./dist/organizations/invitations.d.ts",
+      "import": "./dist/organizations/invitations.js",
+      "require": "./dist/organizations/invitations.js"
+    },
+    "./organizations/membership": {
+      "types": "./dist/organizations/membership.d.ts",
+      "import": "./dist/organizations/membership.js",
+      "require": "./dist/organizations/membership.js"
+    },
+    "./organizations/orgs-enabled": {
+      "types": "./dist/organizations/orgs-enabled.d.ts",
+      "import": "./dist/organizations/orgs-enabled.js",
+      "require": "./dist/organizations/orgs-enabled.js"
+    },
+    "./organizations/repository": {
+      "types": "./dist/organizations/repository.d.ts",
+      "import": "./dist/organizations/repository.js",
+      "require": "./dist/organizations/repository.js"
+    },
     "./services/drive-envs/local-env-revoke": {
       "types": "./dist/services/drive-envs/local-env-revoke.d.ts",
       "import": "./dist/services/drive-envs/local-env-revoke.js",
