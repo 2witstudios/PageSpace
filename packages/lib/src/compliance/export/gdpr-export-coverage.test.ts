@@ -60,7 +60,7 @@ const SCHEMA_TABLES = schemaTableNames();
  * the bundle test below rather than passing silently.
  */
 const EMPTY: AllUserData = {
-  profile: { id: 'u', name: 'n', email: 'e', image: null, timezone: null, createdAt: new Date(0), updatedAt: new Date(0) },
+  profile: { id: 'u', name: 'n', email: 'e', image: null, timezone: null, accountType: 'human', createdAt: new Date(0), updatedAt: new Date(0) },
   drives: [],
   pages: [],
   sheets: [],

@@ -51,6 +51,8 @@ export interface UserProfileExport {
   email: string;
   image: string | null;
   timezone: string | null;
+  /** `human` or `agent` (ADR 0007 Decision 1) — which kind of account this export describes. */
+  accountType: 'human' | 'agent';
   createdAt: Date;
   updatedAt: Date;
 }
@@ -505,6 +507,7 @@ export async function collectUserProfile(database: DB, userId: string): Promise<
       email: users.email,
       image: users.image,
       timezone: users.timezone,
+      accountType: users.accountType,
       createdAt: users.createdAt,
       updatedAt: users.updatedAt,
     })

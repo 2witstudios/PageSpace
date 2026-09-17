@@ -21,6 +21,7 @@ const { mockTable } = vi.hoisted(() => {
     timezone: `${name}.timezone`,
     createdAt: `${name}.createdAt`,
     updatedAt: `${name}.updatedAt`,
+    accountType: `${name}.accountType`,
     slug: `${name}.slug`,
     ownerId: `${name}.ownerId`,
     role: `${name}.role`,
@@ -229,6 +230,14 @@ describe('collectUserProfile', () => {
     const result = await collectUserProfile(db as never, 'user-1');
 
     expect(result).toEqual(profile);
+  });
+
+  it('given any account, should select accountType into the profile (ADR 0007 Decision 1)', async () => {
+    const db = createLimitDb([{ id: 'agent-1', accountType: 'agent' }]);
+
+    await collectUserProfile(db as never, 'agent-1');
+
+    expect(db.select).toHaveBeenCalledWith(expect.objectContaining({ accountType: 'users.accountType' }));
   });
 
   it('given_userDoesNotExist_returnsNull', async () => {
