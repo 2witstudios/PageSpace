@@ -6,12 +6,14 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { eq, sql } from '@pagespace/db/operators';
+import { and, eq, isNull, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
 import { deleteConversationsForDrive } from './conversation-cleanup';
 import { decryptUserRow } from '../auth/user-repository';
+import { leaveAllOrganizations, reassignLedOrgDrives } from '../organizations/leave';
+import { createAnonymizedActorEmail } from '../compliance/anonymize';
 
 export interface UserAccount {
   id: string;
@@ -50,11 +52,12 @@ export const accountRepository = {
   },
 
   /**
-   * Get all drives owned by a user
+   * Get the personal drives owned by a user. Org drives the user leads are not theirs to
+   * dispose of: deleteUser reassigns them to the org Owner (Spec O-7).
    */
   getOwnedDrives: async (userId: string): Promise<OwnedDrive[]> => {
     return db.query.drives.findMany({
-      where: eq(drives.ownerId, userId),
+      where: and(eq(drives.ownerId, userId), isNull(drives.orgId)),
       columns: {
         id: true,
         name: true,
@@ -90,10 +93,25 @@ export const accountRepository = {
   },
 
   /**
-   * Delete a user by ID
+   * Delete a user by ID.
+   *
+   * drives.ownerId cascades, so the user first leaves every org and any org drive they still
+   * lead is reassigned to its org Owner, in the same transaction as the delete (Spec O-7, O-8).
+   * An org Owner is refused (LeaveOrganizationRefusedError) and nothing changes: ownership
+   * transfers first (ORG-6). The audit actor is the anonymized address, since this runs after
+   * the erasure has anonymized the user's activity.
    */
   deleteUser: async (userId: string): Promise<void> => {
-    await db.delete(users).where(eq(users.id, userId));
+    await db.transaction(async (tx) => {
+      const options = {
+        reason: 'account_deleted' as const,
+        actor: { actorEmail: createAnonymizedActorEmail(userId), actorDisplayName: 'Deleted User' },
+      };
+      await leaveAllOrganizations(userId, tx, options);
+      // A lead who is somehow no longer a member of the drive's org still must not take it.
+      await reassignLedOrgDrives(userId, tx, options);
+      await tx.delete(users).where(eq(users.id, userId));
+    });
   },
 
   /**
@@ -103,7 +121,7 @@ export const accountRepository = {
   checkAndDeleteSoloDrives: async (userId: string): Promise<{ multiMemberDriveNames: string[] }> => {
     return db.transaction(async (tx) => {
       const ownedDrives = await tx.query.drives.findMany({
-        where: eq(drives.ownerId, userId),
+        where: and(eq(drives.ownerId, userId), isNull(drives.orgId)),
         columns: { id: true, name: true },
       });
 
