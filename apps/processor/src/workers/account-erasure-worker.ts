@@ -83,6 +83,12 @@ export async function runAccountErasureJob(data: AccountErasureJobData): Promise
   // Concrete step implementations keyed by the plan's step ids.
   const impls: Partial<Record<ErasureStepId, () => Promise<{ status: 'ok' | 'skipped'; detail?: string }>>> = {
     'drive-disposition': async () => {
+      // First destructive step: an org Owner cannot be erased (ORG-6), even by force. Refuse here,
+      // not at delete-user, or everything before it is already gone.
+      const ownedOrganizations = await accountRepository.getOwnedOrganizationNames(userId);
+      if (ownedOrganizations.length > 0) {
+        throw new Error(`${ERASURE_BLOCKED_PREFIX}: owns organizations ${ownedOrganizations.join(', ')}`);
+      }
       const owned = await accountRepository.getOwnedDrives(userId);
       const withCounts = await Promise.all(
         owned.map(async (d) => ({

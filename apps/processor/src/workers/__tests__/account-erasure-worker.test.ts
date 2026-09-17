@@ -40,6 +40,7 @@ vi.mock('@pagespace/lib/repositories/account-repository', () => ({
   accountRepository: {
     findById: vi.fn().mockResolvedValue({ id: 'user-1', email: 'user@leaked.example', image: null }),
     getOwnedDrives: vi.fn().mockResolvedValue([]),
+    getOwnedOrganizationNames: vi.fn().mockResolvedValue([]),
     getDriveMemberCount: vi.fn().mockResolvedValue(0),
     deleteDrive: vi.fn().mockResolvedValue(undefined),
     deleteUser: vi.fn().mockResolvedValue(undefined),
@@ -102,6 +103,9 @@ vi.mock('../../api/avatar', () => ({
 // ---------------------------------------------------------------------------
 
 import { runAccountErasureJob } from '../account-erasure-worker';
+import { accountRepository } from '@pagespace/lib/repositories/account-repository';
+import { dataSubjectRequestRepository } from '@pagespace/lib/repositories/data-subject-request-repository';
+import { deleteUserAvatars } from '../../api/avatar';
 
 describe('runAccountErasureJob — resourceTitle PII scrub wiring (#541)', () => {
   beforeEach(() => {
@@ -128,5 +132,25 @@ describe('runAccountErasureJob — resourceTitle PII scrub wiring (#541)', () =>
     // The anonymize step must run AFTER the write step, or its WHERE userId
     // clause can't reach the row the write step just created (#541's root cause).
     expect(callOrder).toEqual(['logActivity', 'anonymizeForUser']);
+  });
+});
+
+describe('runAccountErasureJob — org Owner refusal', () => {
+  beforeEach(() => {
+    callOrder.length = 0;
+    vi.clearAllMocks();
+  });
+
+  it('ORG-6 (partial) an org Owner is blocked at the first step and nothing is destroyed', async () => {
+    vi.mocked(accountRepository.getOwnedOrganizationNames).mockResolvedValueOnce(['Northwind Labs']);
+
+    await runAccountErasureJob({ requestId: 'dsr-1', userId: 'user-1' }).catch(() => undefined);
+
+    expect(dataSubjectRequestRepository.updateStatus).toHaveBeenCalledWith('dsr-1', 'blocked', expect.anything());
+    expect(accountRepository.getOwnedDrives).not.toHaveBeenCalled();
+    expect(accountRepository.deleteDrive).not.toHaveBeenCalled();
+    expect(deleteUserAvatars).not.toHaveBeenCalled();
+    expect(mockAnonymizeForUser).not.toHaveBeenCalled();
+    expect(accountRepository.deleteUser).not.toHaveBeenCalled();
   });
 });

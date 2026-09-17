@@ -209,6 +209,7 @@ describe('leave and delete cascades (Postgres)', () => {
     const org = await orgWith(owner.id, []);
     const drive = await factories.createDrive(owner.id, { orgId: org.id });
 
+    expect(await accountRepository.getOwnedOrganizationNames(owner.id)).toEqual([org.name]);
     await expect(accountRepository.deleteUser(owner.id)).rejects.toBeInstanceOf(LeaveOrganizationRefusedError);
 
     expect(await db.select().from(users).where(eq(users.id, owner.id))).toHaveLength(1);

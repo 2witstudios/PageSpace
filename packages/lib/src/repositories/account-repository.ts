@@ -10,6 +10,7 @@ import { and, eq, isNull, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
+import { organizations } from '@pagespace/db/schema/organizations';
 import { deleteConversationsForDrive } from './conversation-cleanup';
 import { decryptUserRow } from '../auth/user-repository';
 import { leaveAllOrganizations, reassignLedOrgDrives } from '../organizations/leave';
@@ -63,6 +64,19 @@ export const accountRepository = {
         name: true,
       },
     });
+  },
+
+  /**
+   * Names of the organizations the user owns. An org Owner cannot delete their account (ORG-6):
+   * every erasure entry point refuses on a non-empty list BEFORE destroying anything, since
+   * deleteUser would otherwise refuse only at the very end, after the rest was erased.
+   */
+  getOwnedOrganizationNames: async (userId: string): Promise<string[]> => {
+    const rows = await db
+      .select({ name: organizations.name })
+      .from(organizations)
+      .where(eq(organizations.ownerId, userId));
+    return rows.map((r) => r.name);
   },
 
   /**

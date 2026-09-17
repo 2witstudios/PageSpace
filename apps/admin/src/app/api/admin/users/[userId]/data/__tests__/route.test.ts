@@ -34,6 +34,7 @@ vi.mock('@pagespace/lib/repositories/account-repository', () => ({
   accountRepository: {
     findById: vi.fn(),
     getOwnedDrives: vi.fn().mockResolvedValue([]),
+    getOwnedOrganizationNames: vi.fn().mockResolvedValue([]),
     getDriveMemberCount: vi.fn().mockResolvedValue(0),
     deleteDrive: vi.fn(),
     deleteUser: vi.fn(),
@@ -126,6 +127,7 @@ describe('/api/admin/users/[userId]/data', () => {
     vi.mocked(revokeUserIntegrationTokens).mockResolvedValue({ revoked: 0, failed: 0 });
     vi.mocked(stripe.customers.del).mockResolvedValue({} as never);
     vi.mocked(accountRepository.checkAndDeleteSoloDrives).mockResolvedValue({ multiMemberDriveNames: [] });
+    vi.mocked(accountRepository.getOwnedOrganizationNames).mockResolvedValue([]);
   });
 
   it('DELETE_withValidAdmin_anonymizesAndDeletesUserData', async () => {
@@ -300,6 +302,31 @@ describe('/api/admin/users/[userId]/data', () => {
         }),
       })
     );
+  });
+
+  it('ORG-6 (partial) DELETE of an org Owner returns 400 before deleting any drive or data', async () => {
+    mockAdminAuth();
+    mockFindById.mockResolvedValue({
+      id: 'user-1',
+      email: 'target@example.com',
+      image: null,
+      stripeCustomerId: null,
+    });
+    vi.mocked(accountRepository.getOwnedOrganizationNames).mockResolvedValue(['Northwind Labs']);
+
+    const request = new Request('http://localhost/api/admin/users/user-1/data', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json', cookie: FAKE_COOKIE },
+      body: JSON.stringify({ reason: 'Test' }),
+    });
+
+    const response = await DELETE(request, { params: Promise.resolve({ userId: 'user-1' }) });
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.ownedOrganizations).toEqual(['Northwind Labs']);
+    expect(accountRepository.checkAndDeleteSoloDrives).not.toHaveBeenCalled();
+    expect(accountRepository.deleteUser).not.toHaveBeenCalled();
   });
 
   it('DELETE_withMultiMemberDrives_returns400', async () => {

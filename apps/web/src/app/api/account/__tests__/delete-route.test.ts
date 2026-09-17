@@ -10,6 +10,7 @@ vi.mock('@pagespace/lib/repositories/account-repository', () => ({
   accountRepository: {
     findById: vi.fn(),
     getOwnedDrives: vi.fn(),
+    getOwnedOrganizationNames: vi.fn(),
     getDriveMemberCount: vi.fn(),
   },
 }));
@@ -77,6 +78,7 @@ describe('DELETE /api/account (async erasure)', () => {
       stripeCustomerId: null,
     });
     mockAccountRepo.getOwnedDrives.mockResolvedValue([]);
+    mockAccountRepo.getOwnedOrganizationNames.mockResolvedValue([]);
     mockDsrRepo.findActiveErasureForUser.mockResolvedValue(null);
     vi.mocked(lodgeAndEnqueueErasure).mockResolvedValue({
       requestId: 'dsr_1',
@@ -143,6 +145,15 @@ describe('DELETE /api/account (async erasure)', () => {
       const body = await res.json();
       expect(res.status).toBe(400);
       expect(body.multiMemberDrives).toContain('Team Drive');
+      expect(lodgeAndEnqueueErasure).not.toHaveBeenCalled();
+    });
+
+    it('ORG-6 (partial) given the user owns an organization, should block with 400 and NOT queue', async () => {
+      mockAccountRepo.getOwnedOrganizationNames.mockResolvedValue(['Northwind Labs']);
+      const res = await DELETE(deleteReq(mockUserEmail));
+      const body = await res.json();
+      expect(res.status).toBe(400);
+      expect(body.ownedOrganizations).toEqual(['Northwind Labs']);
       expect(lodgeAndEnqueueErasure).not.toHaveBeenCalled();
     });
 
