@@ -12,7 +12,6 @@ import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import { isImageGenerationAllowed } from '@/lib/ai/core/image-gen-access';
 import { useSpeechRecognition } from '@/hooks/useSpeechRecognition';
 import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
-import { useAiDisclosureGate } from '@/hooks/useAiDisclosureGate';
 import type { ImageAttachment } from '@/lib/ai/shared/hooks/useImageAttachments';
 
 export interface ChatInputProps {
@@ -197,14 +196,12 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
       clear: () => textareaRef.current?.clear(),
     }));
 
-    const { requestAiConsent, aiDisclosureDialog } = useAiDisclosureGate();
-
     const handleSend = () => {
       const hasText = value.trim().length > 0;
       const hasImages = (attachments?.length ?? 0) > 0;
       if ((hasText || hasImages) && !effectiveDisabled && !isStreaming) {
         keyboard.dismiss();
-        requestAiConsent(onSend);
+        onSend();
       }
     };
 
@@ -319,7 +316,6 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
           hideModelSelector={hideModelSelector}
           disabled={isStreaming || effectiveDisabled}
         />
-        {aiDisclosureDialog}
       </div>
     );
   }

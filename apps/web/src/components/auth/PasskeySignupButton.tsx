@@ -268,7 +268,8 @@ export function PasskeySignupButton({
                 <MarketingLink href="/privacy" className="underline hover:text-foreground">
                   Privacy Policy
                 </MarketingLink>
-                , and I&apos;m at least 16 years old.
+                , and I&apos;m at least 16 years old. AI features send the content you use them with to
+          OpenRouter and the model provider you choose.
               </Label>
             </div>
             <div className="flex gap-2">

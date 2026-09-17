@@ -45,18 +45,6 @@ vi.mock('motion/react', () => {
   };
 });
 
-const { isCapacitorApp } = vi.hoisted(() => ({ isCapacitorApp: vi.fn(() => false) }));
-vi.mock('@/lib/capacitor-bridge', () => ({ isCapacitorApp }));
-vi.mock('@/components/ui/alert-dialog', () => {
-  type P = { children?: React.ReactNode; open?: boolean; onClick?: () => void };
-  const Pass = ({ children }: P) => <div>{children}</div>;
-  return {
-    AlertDialog: ({ open, children }: P) => (open ? <div role="alertdialog">{children}</div> : null),
-    AlertDialogContent: Pass, AlertDialogHeader: Pass, AlertDialogTitle: Pass, AlertDialogDescription: Pass, AlertDialogFooter: Pass,
-    AlertDialogCancel: ({ children, onClick }: P) => <button type="button" onClick={onClick}>{children}</button>,
-  };
-});
-
 // Mock ChatTextarea so we can drive paste/keyboard without booting the suggestion stack.
 // Captures the props it received so tests can assert on `onPasteFiles`, `driveId`, etc.
 // `vi.hoisted` lets the value be referenced from `vi.mock` factories (which are hoisted).
@@ -253,34 +241,6 @@ describe('ChannelInput — DM upload mode (conversationId)', () => {
     renderInput({ conversationId: undefined, channelId: undefined });
 
     expect(uploadHookCalls[uploadHookCalls.length - 1].uploadUrl).toBeNull();
-  });
-
-  // Guideline 5.1.2(i): an @-mentioned agent sends the message to a third-party AI.
-  it('given the native app and a message mentioning a page, should ask before sending, then send once agreed', async () => {
-    window.localStorage.removeItem('ps_ai_disclosure_ack_v1');
-    isCapacitorApp.mockReturnValue(true);
-    const user = userEvent.setup();
-    const { onSend } = renderInput({ value: 'hey @[Research Agent](page_1:page) summarise this' });
-
-    await user.type(screen.getByTestId('chat-textarea'), '{enter}');
-    expect(onSend).not.toHaveBeenCalled();
-    expect(screen.getByRole('alertdialog').textContent).toMatch(/third-party AI provider/i);
-
-    await user.click(screen.getByRole('button', { name: 'Agree and continue' }));
-    expect(onSend).toHaveBeenCalledWith(undefined);
-    isCapacitorApp.mockReturnValue(false);
-  });
-
-  it('given the native app and a message without page mentions, should send without asking', async () => {
-    window.localStorage.removeItem('ps_ai_disclosure_ack_v1');
-    isCapacitorApp.mockReturnValue(true);
-    const user = userEvent.setup();
-    const { onSend } = renderInput({ value: 'hello @[Sam](user_1:user)' });
-
-    await user.type(screen.getByTestId('chat-textarea'), '{enter}');
-    expect(onSend).toHaveBeenCalledWith(undefined);
-    expect(screen.queryByRole('alertdialog')).toBeNull();
-    isCapacitorApp.mockReturnValue(false);
   });
 
   it('textOnly_send_callsOnSendWithoutAttachment', async () => {

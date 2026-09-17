@@ -137,7 +137,7 @@ const aiProviders: SubprocessorRow[] = [
   },
   {
     vendor: "OpenRouter, Inc.",
-    purpose: "Routing to additional third-party models on paid plans, only when you select one of those models",
+    purpose: "Routing every cloud AI request to the provider of the model you selected",
     dataCategories: "Prompts and the workspace context you include in an AI request; forwarded to the upstream model provider you selected",
     location: "United States (upstream providers vary by model)",
     transferMechanism: "OpenRouter Terms of Service and per-provider data-retention policies published by OpenRouter",
@@ -250,13 +250,15 @@ export default function Subprocessors() {
             <p className="mb-4">
               AI model providers receive your prompts and the context you include on a per-request
               basis, only when you use an AI feature — see the Third-Party AI Services section of our{" "}
-              <a href="/privacy" className="text-primary hover:underline">Privacy Policy</a>. We use
-              each provider&#39;s API/business offering, under which Anthropic, OpenAI, Google, and xAI do
-              not use your inputs to train their models. Models reached through OpenRouter are
-              optional, only used when you explicitly select one, and are subject to the retention
-              policy of the upstream provider, which OpenRouter publishes per model. PageSpace also
-              supports Ollama as a fully on-premises/local model option that does not send data to any
-              third party.
+              <a href="/privacy" className="text-primary hover:underline">Privacy Policy</a>. Every
+              cloud model is reached through OpenRouter, which forwards the request to the provider of
+              the model you selected; the models below are the ones named in this table, and the full
+              catalogue (Z.ai, DeepSeek, Mistral, Meta, Qwen, Moonshot AI, Cohere and others) is
+              reached the same way. Anthropic, OpenAI, Google and xAI state that inputs sent through
+              their APIs are not used to train their models; for every model, retention and training
+              follow the upstream provider&#39;s policy, which OpenRouter publishes per model. PageSpace
+              also supports Ollama as a fully on-premises/local model option that does not send data to
+              any third party.
             </p>
             <SubprocessorTable rows={aiProviders} />
           </section>

@@ -7,6 +7,9 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Sign-up says where AI content goes** — the consent line on every sign-up screen now says AI
+  features send your content to OpenRouter and the model provider you choose, alongside the Terms
+  and Privacy Policy.
 - **Deleting your account disconnects Sign in with Apple** — if you sign in with Apple, PageSpace
   now keeps a revocable Apple token and revokes it when you delete your account, so PageSpace no
   longer stays listed under your Apple Account's Sign in with Apple apps. If PageSpace has no token
@@ -14,10 +17,6 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   and the page after deletion show how to stop using Sign in with Apple for PageSpace yourself.
   Stopping Sign in with Apple for PageSpace from your Apple Account now also signs you out of
   PageSpace everywhere.
-- **The iOS app asks before AI features share your content** — the first time you send an AI
-  message or start a voice call in the app, it explains that your message, attachments and the page
-  content you include go to the third-party AI provider for your model, and only sends once you
-  agree. It asks once per device.
 - **Report and block people** — a direct message conversation now has a menu to report the other
   person (the report goes to the PageSpace team with what happened) or block them, and Connections
   has a Block action plus a Blocked list to unblock. A block stops direct messages in both
@@ -516,6 +515,12 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Changed
 
+- **The privacy policy now describes AI routing as it actually works** — every cloud AI request
+  goes through OpenRouter to the provider of the model you picked, including Anthropic, OpenAI,
+  Google and xAI models. The policy previously described those four as direct and said OpenRouter
+  models were optional extras you had to select. The subprocessors page says the same, and both now
+  point to OpenRouter's per-model retention and training policies rather than implying one rule for
+  every model.
 - **Paid-feature prompts in the iOS app no longer send you to a purchase page** — the locked Memory
   automation, automatic backups and custom subdomain settings linked to the plan page, which the
   iOS app cannot sell. They now say the feature is available on paid plans; on the web the upgrade
