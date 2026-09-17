@@ -133,7 +133,7 @@ describe('workflow run gate guards', () => {
     expect(gate).toBeLessThan(body.indexOf('runExecution('));
     const fin = body.indexOf('} finally {');
     expect(fin).toBeGreaterThan(gate);
-    expect(body.slice(fin, body.indexOf('finalizeRun(')).includes('releaseHold(holdId)')).toBe(true);
+    expect(body.slice(fin, body.indexOf('finalizeRun(')).includes('await releaseHold(holdId)')).toBe(true);
   });
 
   it('no entry point takes its own credit gate or hold (the executor holds once for the whole run)', () => {

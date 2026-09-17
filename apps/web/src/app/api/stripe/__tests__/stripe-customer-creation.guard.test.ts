@@ -58,11 +58,17 @@ describe('Stripe customer creation guard', () => {
     expect(creators).toEqual(Object.keys(GUARDED_SITES).sort());
   });
 
-  it('every enumerated site refuses an agent before its customers.create call', () => {
+  it('every enumerated site refuses an agent before EACH of its customers.create calls', () => {
     const offenders = Object.entries(GUARDED_SITES).filter(([rel, refusal]) => {
       const src = readFileSync(join(REPO, rel), 'utf8');
       const refusalAt = src.indexOf(refusal);
-      return refusalAt === -1 || refusalAt > src.indexOf('customers.create(');
+      if (refusalAt === -1) return true;
+      // Every create call, not just the first: a second, later call added below an
+      // early refusal is still preceded by it, but one added ABOVE it is not.
+      for (let at = src.indexOf('customers.create('); at !== -1; at = src.indexOf('customers.create(', at + 1)) {
+        if (at < refusalAt) return true;
+      }
+      return false;
     });
     expect(offenders.map(([rel]) => rel)).toEqual([]);
   });

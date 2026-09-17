@@ -6,7 +6,11 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { stripe, Stripe } from '@/lib/stripe';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { assertMayHoldStripeCustomer, AgentStripeCustomerRefusedError } from '@pagespace/lib/billing/stripe-customer-eligibility';
+import {
+  assertMayHoldStripeCustomer,
+  AgentStripeCustomerRefusedError,
+  AGENT_STRIPE_CUSTOMER_REFUSAL,
+} from '@pagespace/lib/billing/stripe-customer-eligibility';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -26,6 +30,12 @@ export async function GET(request: NextRequest) {
     const [user] = await db.select().from(users).where(eq(users.id, userId));
     if (!user) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
+    }
+
+    // An agent never holds its own Stripe customer (ADR 0007 Decision 8), so a
+    // stale customer id on an agent row is never read back from Stripe.
+    if (user.accountType === 'agent') {
+      return NextResponse.json({ error: AGENT_STRIPE_CUSTOMER_REFUSAL }, { status: 403 });
     }
 
     if (!user.stripeCustomerId) {

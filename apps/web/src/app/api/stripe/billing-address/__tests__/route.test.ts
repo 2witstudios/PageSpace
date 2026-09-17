@@ -184,6 +184,19 @@ describe('Billing Address API', () => {
       expect(response.status).toBe(401);
     });
 
+    it('given an agent account holding a stale customer id, should refuse 403 and never read the customer from Stripe', async () => {
+      mockSelectWhere.mockResolvedValue([{ ...mockUser(), accountType: 'agent' }]);
+
+      const request = new Request('https://example.com/api/stripe/billing-address', {
+        method: 'GET',
+      }) as unknown as import('next/server').NextRequest;
+
+      const response = await GET(request);
+
+      expect(response.status).toBe(403);
+      expect(mockStripeCustomersRetrieve).not.toHaveBeenCalled();
+    });
+
     it('should return 404 when user not found', async () => {
       mockSelectWhere.mockResolvedValue([]);
 

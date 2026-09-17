@@ -51,7 +51,10 @@ vi.mock('../workflow-credit-gate', () => ({
   },
 }));
 vi.mock('@pagespace/lib/billing/credit-consume', () => ({
+  // Records only after a macrotask, so a `released` assertion made when
+  // executeWorkflow resolves proves the release was AWAITED, not fired off.
   releaseHold: async (holdId: string) => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
     creditGate.released.push(holdId);
   },
 }));

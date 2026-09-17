@@ -174,7 +174,9 @@ export async function executeWorkflow(input: WorkflowExecutionInput): Promise<Wo
       error: errorMessage,
     };
   } finally {
-    if (holdId) void releaseHold(holdId).catch(() => {});
+    // Awaited so a follow-up gate never counts this run's hold as in flight;
+    // releaseHold swallows its own errors, so cleanup cannot fail the run.
+    if (holdId) await releaseHold(holdId);
   }
 
   const finalizeError = await finalizeRun(runId, result);
