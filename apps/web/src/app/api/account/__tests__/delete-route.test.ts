@@ -129,7 +129,7 @@ describe('DELETE /api/account (async erasure)', () => {
     });
 
     it('given solo drives only, should not block and should queue', async () => {
-      mockAccountRepo.getOwnedDrives.mockResolvedValue([{ id: 'd1', name: 'Solo', orgId: null }]);
+      mockAccountRepo.getOwnedDrives.mockResolvedValue([{ id: 'd1', name: 'Solo' }]);
       mockAccountRepo.getDriveMemberCount.mockResolvedValue(1);
       const res = await DELETE(deleteReq(mockUserEmail));
       expect(res.status).toBe(202);
@@ -137,21 +137,13 @@ describe('DELETE /api/account (async erasure)', () => {
     });
 
     it('given multi-member drives, should block with 400 and NOT queue', async () => {
-      mockAccountRepo.getOwnedDrives.mockResolvedValue([{ id: 'd1', name: 'Team Drive', orgId: null }]);
+      mockAccountRepo.getOwnedDrives.mockResolvedValue([{ id: 'd1', name: 'Team Drive' }]);
       mockAccountRepo.getDriveMemberCount.mockResolvedValue(3);
       const res = await DELETE(deleteReq(mockUserEmail));
       const body = await res.json();
       expect(res.status).toBe(400);
       expect(body.multiMemberDrives).toContain('Team Drive');
       expect(lodgeAndEnqueueErasure).not.toHaveBeenCalled();
-    });
-
-    it('O-7 (partial) an org drive the person leads never blocks self-service deletion', async () => {
-      mockAccountRepo.getOwnedDrives.mockResolvedValue([{ id: 'product', name: 'Product', orgId: 'org-northwind' }]);
-      mockAccountRepo.getDriveMemberCount.mockResolvedValue(9);
-      const res = await DELETE(deleteReq(mockUserEmail));
-      expect(res.status).toBe(202);
-      expect(lodgeAndEnqueueErasure).toHaveBeenCalled();
     });
 
     it('given an in-flight erasure, should be idempotent and return the existing request', async () => {

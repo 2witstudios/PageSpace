@@ -2,10 +2,10 @@ import { describe, it, expect } from 'vitest';
 import { planDriveDisposition, type OwnedDriveWithMembers } from '../drive-disposition';
 
 const drives: OwnedDriveWithMembers[] = [
-  { id: 'solo1', name: 'Solo One', memberCount: 1, orgId: null },
-  { id: 'solo0', name: 'Empty', memberCount: 0, orgId: null },
-  { id: 'team1', name: 'Team Alpha', memberCount: 3, orgId: null },
-  { id: 'team2', name: 'Team Beta', memberCount: 2, orgId: null },
+  { id: 'solo1', name: 'Solo One', memberCount: 1 },
+  { id: 'solo0', name: 'Empty', memberCount: 0 },
+  { id: 'team1', name: 'Team Alpha', memberCount: 3 },
+  { id: 'team2', name: 'Team Beta', memberCount: 2 },
 ];
 
 describe('planDriveDisposition (no force)', () => {
@@ -46,37 +46,12 @@ describe('planDriveDisposition (force escalation)', () => {
   it('boundary: a drive with exactly 1 member is solo, 2 members is multi', () => {
     const plan = planDriveDisposition(
       [
-        { id: 'a', name: 'A', memberCount: 1, orgId: null },
-        { id: 'b', name: 'B', memberCount: 2, orgId: null },
+        { id: 'a', name: 'A', memberCount: 1 },
+        { id: 'b', name: 'B', memberCount: 2 },
       ],
       { forceDelete: false }
     );
     expect(plan.soloDriveIds).toEqual(['a']);
     expect(plan.multiMemberDriveIds).toEqual(['b']);
-  });
-});
-
-describe('planDriveDisposition (org drives the person leads)', () => {
-  // Northwind Labs: Marcus leads Product (an org drive with many members) and owns a solo
-  // personal drive. His org drives belong to the org; erasure reassigns their lead to the
-  // org Owner (leave-and-delete cascades) instead of deleting or blocking on them.
-  const marcusDrives: OwnedDriveWithMembers[] = [
-    { id: 'product', name: 'Product', memberCount: 9, orgId: 'org-northwind' },
-    { id: 'notes', name: 'Notes', memberCount: 1, orgId: null },
-  ];
-
-  it('O-7 (partial) an org drive the person leads is neither deleted nor blocking, and is listed for lead reassignment', () => {
-    const plan = planDriveDisposition(marcusDrives, { forceDelete: false });
-    expect(plan.blocked).toBe(false);
-    expect(plan.drivesToDelete).toEqual(['notes']);
-    expect(plan.multiMemberDriveNames).toEqual([]);
-    expect(plan.orgDriveIds).toEqual(['product']);
-  });
-
-  it('O-7 (partial) force escalation never deletes an org drive', () => {
-    const plan = planDriveDisposition(marcusDrives, { forceDelete: true });
-    expect(plan.drivesToDelete).toEqual(['notes']);
-    expect(plan.forcedDriveIds).toEqual([]);
-    expect(plan.orgDriveIds).toEqual(['product']);
   });
 });

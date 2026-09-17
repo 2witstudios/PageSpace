@@ -88,7 +88,6 @@ export async function runAccountErasureJob(data: AccountErasureJobData): Promise
         owned.map(async (d) => ({
           id: d.id,
           name: d.name,
-          orgId: d.orgId,
           memberCount: await accountRepository.getDriveMemberCount(d.id),
         }))
       );
