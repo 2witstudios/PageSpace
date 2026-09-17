@@ -88,6 +88,8 @@ const mockDrive = (overrides: { id: string; name: string }) => ({
   publishDefaultOgImageUrl: null,
   notFoundPageId: null,
   publishFaviconUrl: null,
+  orgId: null,
+  orgVisibility: 'OPEN' as const,
 });
 
 describe('GET /api/account/drives-status', () => {

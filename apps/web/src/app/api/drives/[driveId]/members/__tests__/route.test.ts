@@ -85,6 +85,8 @@ const createDriveFixture = (overrides: {
   publishDefaultOgImageUrl: null,
   notFoundPageId: null,
   publishFaviconUrl: null,
+  orgId: null,
+  orgVisibility: 'OPEN' as const,
 });
 
 const createAccessFixture = (overrides: Partial<DriveAccessResult>): DriveAccessResult => ({
