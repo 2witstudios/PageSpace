@@ -48,6 +48,7 @@ import { PUT, DELETE } from '../route';
 import { moveDriveToOrg, moveDriveOutOfOrg } from '@pagespace/lib/services/org-drive-service';
 import { orgDriveServiceDeps } from '@pagespace/lib/services/org-drive-service-deps';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { broadcastDriveEvent } from '@/lib/websocket';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
@@ -112,6 +113,22 @@ describe('/api/drives/[driveId]/org', () => {
         expect.objectContaining({ driveId: DRIVE, operation: 'updated' }),
         ['user-marcus', 'user-lena']
       );
+    });
+
+    it('DRV-2 (partial) a committed move still answers 200 when the post-commit recipient lookup fails', async () => {
+      vi.mocked(moveDriveToOrg).mockResolvedValue({
+        ok: true,
+        drive: { ...product, orgId: NORTHWIND } as never,
+        orgId: NORTHWIND,
+        storageReattribution: deferred,
+      });
+      vi.mocked(getDriveRecipientUserIds).mockRejectedValueOnce(new Error('connection reset'));
+
+      const response = await PUT(request('PUT', { orgId: NORTHWIND }), context);
+
+      expect(response.status).toBe(200);
+      expect(auditRequest).toHaveBeenCalled();
+      expect(broadcastDriveEvent).not.toHaveBeenCalled();
     });
 
     it('DRV-1 (partial) a refusal from the service returns its status, message and code, and nothing is audited', async () => {

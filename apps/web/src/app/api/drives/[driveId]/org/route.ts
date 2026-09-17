@@ -53,11 +53,19 @@ async function respond(
     details: { operation, orgId: result.orgId, storageReattribution: result.storageReattribution.status },
   });
 
-  const recipients = await getDriveRecipientUserIds(driveId);
-  await broadcastDriveEvent(
-    createDriveEventPayload(driveId, 'updated', { name: result.drive.name, slug: result.drive.slug }),
-    recipients
-  );
+  // The move has committed: notifying the sidebar is best-effort and never turns it into a 500.
+  try {
+    const recipients = await getDriveRecipientUserIds(driveId);
+    await broadcastDriveEvent(
+      createDriveEventPayload(driveId, 'updated', { name: result.drive.name, slug: result.drive.slug }),
+      recipients
+    );
+  } catch (error) {
+    loggers.api.warn('Org drive move committed but the drive update broadcast failed', {
+      driveId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 
   return NextResponse.json({ drive: result.drive, storageReattribution: result.storageReattribution });
 }
