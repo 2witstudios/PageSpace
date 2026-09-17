@@ -235,7 +235,6 @@ describe('AccountPage', () => {
 
     it('given deletion reports manual Apple steps, should land the user on the page that shows them', async () => {
       const location = { href: 'https://example.com/settings/account' };
-      vi.stubGlobal('location', location);
       Object.defineProperty(window, 'location', { configurable: true, value: location });
       mocks.del.mockResolvedValue({ message: 'Account erasure queued', appleSignIn: 'manual' });
       const user = userEvent.setup();
@@ -246,6 +245,20 @@ describe('AccountPage', () => {
       lastDialogProps().onConfirm('test@example.com');
 
       await waitFor(() => expect(location.href).toBe('/auth/account-deleted?appleSignIn=manual'), { timeout: 3000 });
+    });
+
+    it('given deletion needs no Apple steps, should still land on the in-app page, never the marketing home', async () => {
+      const location = { href: 'https://example.com/settings/account' };
+      Object.defineProperty(window, 'location', { configurable: true, value: location });
+      mocks.del.mockResolvedValue({ message: 'Account erasure queued', appleSignIn: 'revoked' });
+      const user = userEvent.setup();
+      render(<AccountPage />);
+      await user.click(screen.getByRole('button', { name: /^Delete Account$/i }));
+      await waitFor(() => expect(lastDialogProps()?.isOpen).toBe(true));
+
+      lastDialogProps().onConfirm('test@example.com');
+
+      await waitFor(() => expect(location.href).toBe('/auth/account-deleted'), { timeout: 3000 });
     });
   });
 });

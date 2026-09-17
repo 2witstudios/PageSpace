@@ -4,9 +4,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { StopUsingSignInWithAppleSteps } from "@/components/account/SignInWithAppleDeletionNotice";
 
 /**
- * Post-deletion landing page. Shown when PageSpace could not disconnect itself
- * from the user's Sign in with Apple (Guideline 5.1.1(v), Apple TN3194), so the
- * user can finish that step; the deletion itself is already queued.
+ * Post-deletion landing page for every account deletion (the deletion itself is
+ * already queued). When PageSpace could not disconnect itself from the user's
+ * Sign in with Apple (Guideline 5.1.1(v), Apple TN3194) it also shows how to
+ * finish that step.
  */
 export function AccountDeletedView({ showAppleSignInSteps }: { showAppleSignInSteps: boolean }) {
   return (
@@ -25,8 +26,9 @@ export function AccountDeletedView({ showAppleSignInSteps }: { showAppleSignInSt
               <StopUsingSignInWithAppleSteps />
             </div>
           )}
+          {/* Stays in the app: `/` is the marketing site, which the iOS shell must not land on. */}
           <Button asChild variant="outline" className="w-full">
-            <Link href="/">Done</Link>
+            <Link href="/auth/signin">Back to sign in</Link>
           </Button>
         </CardContent>
       </Card>

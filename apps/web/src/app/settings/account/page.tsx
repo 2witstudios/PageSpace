@@ -355,14 +355,12 @@ export default function AccountPage() {
       // auth store and the token-refresh poller must not survive the navigation.
       useAuthStore.getState().endSession();
 
-      // Deliberately a HARD navigation, unlike the other in-app navs this branch
-      // converted to the router. `/` is not a route of this app at all — it is the
-      // marketing app behind the proxy — so router.replace('/') would fetch an RSC
-      // payload for it through middleware, find no session (we just deleted it) and
-      // bounce the user to /auth/signin instead of home. The iOS shell handles this
-      // one correctly: pagespace.ai is in server.allowNavigation, so it loads in-app.
-      // An Apple user PageSpace could not disconnect lands on a page with the
-      // "Stop Using Sign in with Apple" steps instead (TN3194).
+      // Deliberately a HARD navigation, so nothing from the ended session (stores,
+      // SWR caches, the refresh poller) survives into the next page. The target is
+      // the public in-app /auth/account-deleted page, never `/`: that is the
+      // marketing site, which inside the iOS shell would put its pricing nav on the
+      // path App Review walks (Guideline 3.1.1). An Apple user PageSpace could not
+      // disconnect also sees the "Stop Using Sign in with Apple" steps there (TN3194).
       setTimeout(() => {
         window.location.href = postDeletionDestination(result?.appleSignIn);
       }, 1000);

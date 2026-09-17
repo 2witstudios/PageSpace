@@ -17,4 +17,11 @@ describe('AccountDeletedView', () => {
     expect(screen.getByText(/your account is being deleted/i)).toBeInTheDocument();
     expect(screen.queryByText(/Sign in with Apple/i)).not.toBeInTheDocument();
   });
+
+  it('should offer a way back to sign in that stays in the app, not the marketing home', () => {
+    render(<AccountDeletedView showAppleSignInSteps={false} />);
+
+    expect(screen.getByRole('link', { name: /sign in/i })).toHaveAttribute('href', '/auth/signin');
+    expect(screen.queryByRole('link', { name: /done/i })).not.toBeInTheDocument();
+  });
 });
