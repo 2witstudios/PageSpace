@@ -40,16 +40,22 @@ vi.mock('@/lib/app-hosting/dedicated-subscription', () => ({
 import { POST } from '../route';
 import { AgentStripeCustomerRefusedError } from '@pagespace/lib/billing/stripe-customer-eligibility';
 
+async function post(): Promise<Response> {
+  const response = await POST(
+    new Request('https://example.com/api/app-hosting/apps/app_1/dedicated', { method: 'POST' }) as unknown as NextRequest,
+    { params: Promise.resolve({ appId: 'app_1' }) },
+  );
+  if (!response) throw new Error('route returned no response');
+  return response;
+}
+
 describe('POST /api/app-hosting/apps/[appId]/dedicated — agent owner', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('given the Stripe customer helper refuses an agent owner, should answer 403 with the refusal', async () => {
     mockStart.mockRejectedValue(new AgentStripeCustomerRefusedError('agent_1'));
 
-    const response = await POST(
-      new Request('https://example.com/api/app-hosting/apps/app_1/dedicated', { method: 'POST' }) as unknown as NextRequest,
-      { params: Promise.resolve({ appId: 'app_1' }) },
-    );
+    const response = await post();
 
     expect(response.status).toBe(403);
     expect(await response.json()).toEqual({ error: 'Agent accounts are billed through their owner' });
@@ -58,10 +64,7 @@ describe('POST /api/app-hosting/apps/[appId]/dedicated — agent owner', () => {
   it('given any other failure (control), should stay a 500', async () => {
     mockStart.mockRejectedValue(new Error('stripe down'));
 
-    const response = await POST(
-      new Request('https://example.com/api/app-hosting/apps/app_1/dedicated', { method: 'POST' }) as unknown as NextRequest,
-      { params: Promise.resolve({ appId: 'app_1' }) },
-    );
+    const response = await post();
 
     expect(response.status).toBe(500);
   });
