@@ -1418,6 +1418,16 @@
       "import": "./dist/services/drive-member-service.js",
       "require": "./dist/services/drive-member-service.js"
     },
+    "./services/org-membership-sync": {
+      "types": "./dist/services/org-membership-sync.d.ts",
+      "import": "./dist/services/org-membership-sync.js",
+      "require": "./dist/services/org-membership-sync.js"
+    },
+    "./services/org-membership-sync-core": {
+      "types": "./dist/services/org-membership-sync-core.d.ts",
+      "import": "./dist/services/org-membership-sync-core.js",
+      "require": "./dist/services/org-membership-sync-core.js"
+    },
     "./services/calendar-event-drive-service": {
       "types": "./dist/services/calendar-event-drive-service.d.ts",
       "import": "./dist/services/calendar-event-drive-service.js",
