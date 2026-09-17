@@ -81,13 +81,13 @@ describe('decideMoveDriveIntoOrg', () => {
     expect(verdict).toMatchObject({ ok: false, code: 'DRIVE_TRASHED', status: 409 });
   });
 
-  it('DRV-1 (partial) Home is refused before any other rule, even for a non-owner outside the org', () => {
+  it('DRV-1 (partial) a non-owner learns nothing about the drive: someone else\'s Home drive answers NOT_DRIVE_OWNER, not HOME_DRIVE', () => {
     const verdict = decideMoveDriveIntoOrg({
       drive: personalProduct({ kind: 'HOME', orgId: null }),
       actorId: JONO,
-      actorOrgRole: null,
+      actorOrgRole: 'OWNER',
     });
-    expect(verdict).toMatchObject({ ok: false, code: 'HOME_DRIVE' });
+    expect(verdict).toMatchObject({ ok: false, code: 'NOT_DRIVE_OWNER' });
   });
 });
 
@@ -116,6 +116,12 @@ describe('decideMoveDriveOutOfOrg', () => {
     expect(
       decideMoveDriveOutOfOrg({ drive: { orgId: null }, actorOrgRole: 'OWNER', implicitMembers: 'keep' })
     ).toMatchObject({ ok: false, code: 'NOT_IN_ORG', status: 409 });
+  });
+
+  it('DRV-2 (partial) a caller who is not an org admin learns nothing about whether the drive is in an org', () => {
+    expect(
+      decideMoveDriveOutOfOrg({ drive: { orgId: null }, actorOrgRole: null, implicitMembers: 'keep' })
+    ).toMatchObject({ ok: false, code: 'NOT_ORG_ADMIN', status: 403 });
   });
 
   it('O-10 (partial) move-out carries the keep-or-remove choice through, and refuses when none was made', () => {

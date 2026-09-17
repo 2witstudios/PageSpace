@@ -7,13 +7,15 @@ import { homeDriveActionError, isHomeDrive } from '../services/drive-guards';
  * in an org, and who may lead one (Spec DRV-1..DRV-4, O-7, O-10).
  *
  * Pure decisions over facts the service fetches (the drive row and the actor's org
- * role). No IO. The service in drive-service.ts runs them inside the transaction that
+ * role). No IO. The service in org-drive-service.ts runs them inside the transaction that
  * writes drives.orgId.
  *
- * - Move in: the drive's owner only, who must be a member of the target org (the lead
- *   of an org drive is always an org member, O-7). Home never moves (drive-guards).
+ * - Move in: the drive's owner only, who must be a member of the target org (the lead of an
+ *   org drive is always an org member, O-7). Home never moves (drive-guards).
  * - Move out: an org Owner or Admin, with an explicit keep-or-remove choice for the
  *   org-sourced members (D-OW-10). No default: the choice must be visible.
+ * - Refusal order discloses nothing to an outsider: ownership (move in) and org authority
+ *   (move out) are checked before any fact about the drive itself.
  * - Create in org: an org member, subject to the "who can create org drives" policy
  *   (POL-5), which Wave E owns; the service passes the policy through a seam.
  */
@@ -80,11 +82,13 @@ export function decideMoveDriveIntoOrg({
   /** The actor's role in the TARGET org; null when not a member. */
   actorOrgRole: OrgRole | null;
 }): { ok: true } | OrgDriveRefusal {
-  if (isHomeDrive(drive)) {
-    return refuse('HOME_DRIVE', 403, homeDriveActionError(drive, 'org-move') ?? '');
-  }
+  // Ownership first: a caller who does not own the drive learns nothing more about it (not
+  // that it is a Home drive, nor whether it already belongs to an org).
   if (drive.ownerId !== actorId) {
     return refuse('NOT_DRIVE_OWNER', 403, 'Only the drive owner can move a drive into an organization.');
+  }
+  if (isHomeDrive(drive)) {
+    return refuse('HOME_DRIVE', 403, homeDriveActionError(drive, 'org-move') ?? '');
   }
   if (!canLeadOrgDrive(actorOrgRole)) {
     return refuse('NOT_ORG_MEMBER', 403, 'You must be a member of the organization to move a drive into it.');
@@ -108,11 +112,13 @@ export function decideMoveDriveOutOfOrg({
   actorOrgRole: OrgRole | null;
   implicitMembers: ImplicitMembersChoice | null;
 }): { ok: true; implicitMembers: ImplicitMembersChoice } | OrgDriveRefusal {
-  if (drive.orgId === null) {
-    return refuse('NOT_IN_ORG', 409, 'This drive does not belong to an organization.');
-  }
+  // Authority first: a caller who is not an admin of the drive's org learns nothing about
+  // whether the drive belongs to an org.
   if (!isOrgAdmin(actorOrgRole)) {
     return refuse('NOT_ORG_ADMIN', 403, 'Only an organization Owner or Admin can move a drive out.');
+  }
+  if (drive.orgId === null) {
+    return refuse('NOT_IN_ORG', 409, 'This drive does not belong to an organization.');
   }
   if (implicitMembers === null) {
     return refuse(
