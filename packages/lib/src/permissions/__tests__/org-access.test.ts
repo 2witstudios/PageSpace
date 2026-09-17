@@ -13,13 +13,14 @@ const VISIBILITIES = ['OPEN', 'RESTRICTED', 'PRIVATE'] as const;
 
 const DEFAULT_ROLE: DriveRoleGrant = { role: 'MEMBER', customRoleId: 'role_viewer' };
 
-type MembershipKey = 'none' | 'inviteMember' | 'orgMember' | 'inviteAdmin' | 'leadOwner';
+type MembershipKey = 'none' | 'inviteMember' | 'orgMember' | 'inviteAdmin' | 'orgAdmin' | 'leadOwner';
 
 const MEMBERSHIPS: Record<MembershipKey, OrgDriveMembership | null> = {
   none: null,
   inviteMember: { role: 'MEMBER', customRoleId: null, source: 'invite' },
   orgMember: { role: 'MEMBER', customRoleId: 'role_editor', source: 'org' },
   inviteAdmin: { role: 'ADMIN', customRoleId: null, source: 'invite' },
+  orgAdmin: { role: 'ADMIN', customRoleId: null, source: 'org' },
   leadOwner: { role: 'OWNER', customRoleId: null, source: 'invite' },
 };
 
@@ -32,24 +33,26 @@ type Outcome = 'ORG_ADMIN' | 'ROW' | 'DEFAULT' | 'NULL';
 type Visibility = (typeof VISIBILITIES)[number];
 type OrgRoleKey = 'OWNER' | 'ADMIN' | 'MEMBER' | 'none';
 
+// An org-materialized row (source 'org') exists only because of an OPEN drive; on RESTRICTED or
+// PRIVATE it is stale (e.g. the drive changed visibility before the sync ran) and counts as no row.
 const OWNER_OR_ADMIN_TABLE: Record<Visibility, Record<MembershipKey, Outcome>> = {
-  OPEN:       { none: 'ORG_ADMIN', inviteMember: 'ORG_ADMIN', orgMember: 'ORG_ADMIN', inviteAdmin: 'ROW', leadOwner: 'ROW' },
-  RESTRICTED: { none: 'ORG_ADMIN', inviteMember: 'ORG_ADMIN', orgMember: 'ORG_ADMIN', inviteAdmin: 'ROW', leadOwner: 'ROW' },
-  PRIVATE:    { none: 'ORG_ADMIN', inviteMember: 'ORG_ADMIN', orgMember: 'ORG_ADMIN', inviteAdmin: 'ROW', leadOwner: 'ROW' },
+  OPEN:       { none: 'ORG_ADMIN', inviteMember: 'ORG_ADMIN', orgMember: 'ORG_ADMIN', inviteAdmin: 'ROW', orgAdmin: 'ROW',       leadOwner: 'ROW' },
+  RESTRICTED: { none: 'ORG_ADMIN', inviteMember: 'ORG_ADMIN', orgMember: 'ORG_ADMIN', inviteAdmin: 'ROW', orgAdmin: 'ORG_ADMIN', leadOwner: 'ROW' },
+  PRIVATE:    { none: 'ORG_ADMIN', inviteMember: 'ORG_ADMIN', orgMember: 'ORG_ADMIN', inviteAdmin: 'ROW', orgAdmin: 'ORG_ADMIN', leadOwner: 'ROW' },
 };
 
 const TABLE: Record<OrgRoleKey, Record<Visibility, Record<MembershipKey, Outcome>>> = {
   OWNER: OWNER_OR_ADMIN_TABLE,
   ADMIN: OWNER_OR_ADMIN_TABLE,
   MEMBER: {
-    OPEN:       { none: 'DEFAULT', inviteMember: 'ROW', orgMember: 'ROW', inviteAdmin: 'ROW', leadOwner: 'ROW' },
-    RESTRICTED: { none: 'NULL',    inviteMember: 'ROW', orgMember: 'ROW', inviteAdmin: 'ROW', leadOwner: 'ROW' },
-    PRIVATE:    { none: 'NULL',    inviteMember: 'ROW', orgMember: 'ROW', inviteAdmin: 'ROW', leadOwner: 'ROW' },
+    OPEN:       { none: 'DEFAULT', inviteMember: 'ROW', orgMember: 'ROW',     inviteAdmin: 'ROW', orgAdmin: 'ROW',     leadOwner: 'ROW' },
+    RESTRICTED: { none: 'NULL',    inviteMember: 'ROW', orgMember: 'NULL',    inviteAdmin: 'ROW', orgAdmin: 'NULL',    leadOwner: 'ROW' },
+    PRIVATE:    { none: 'NULL',    inviteMember: 'ROW', orgMember: 'NULL',    inviteAdmin: 'ROW', orgAdmin: 'NULL',    leadOwner: 'ROW' },
   },
   none: {
-    OPEN:       { none: 'NULL', inviteMember: 'NULL', orgMember: 'NULL', inviteAdmin: 'NULL', leadOwner: 'NULL' },
-    RESTRICTED: { none: 'NULL', inviteMember: 'NULL', orgMember: 'NULL', inviteAdmin: 'NULL', leadOwner: 'NULL' },
-    PRIVATE:    { none: 'NULL', inviteMember: 'NULL', orgMember: 'NULL', inviteAdmin: 'NULL', leadOwner: 'NULL' },
+    OPEN:       { none: 'NULL', inviteMember: 'NULL', orgMember: 'NULL', inviteAdmin: 'NULL', orgAdmin: 'NULL', leadOwner: 'NULL' },
+    RESTRICTED: { none: 'NULL', inviteMember: 'NULL', orgMember: 'NULL', inviteAdmin: 'NULL', orgAdmin: 'NULL', leadOwner: 'NULL' },
+    PRIVATE:    { none: 'NULL', inviteMember: 'NULL', orgMember: 'NULL', inviteAdmin: 'NULL', orgAdmin: 'NULL', leadOwner: 'NULL' },
   },
 };
 
@@ -82,7 +85,7 @@ const CASES = ORG_ROLES.flatMap((orgRole) =>
 describe('resolveOrgDriveAccess', () => {
   it('the table covers every (orgRole incl. none, visibility, membership) combination', () => {
     expect(CASES).toHaveLength(ORG_ROLES.length * VISIBILITIES.length * MEMBERSHIP_KEYS.length);
-    expect(CASES).toHaveLength(60);
+    expect(CASES).toHaveLength(72);
   });
 
   describe.each(CASES)('orgRole $orgRole, $driveVisibility drive, membership $membershipKey', ({ input, outcome, want }) => {
@@ -173,6 +176,28 @@ describe('resolveOrgDriveAccess', () => {
       expect(
         resolveOrgDriveAccess({ orgRole: 'MEMBER', driveVisibility: 'PRIVATE', driveMembership: null, driveDefaultRole: DEFAULT_ROLE }),
       ).toBeNull();
+    });
+
+    it.each(['RESTRICTED', 'PRIVATE'] as const)('DRV-6 (partial) DRV-7 (partial) a stale org-materialized row never opens a %s drive to an org MEMBER', (driveVisibility) => {
+      expect(
+        resolveOrgDriveAccess({
+          orgRole: 'MEMBER',
+          driveVisibility,
+          driveMembership: { role: 'MEMBER', customRoleId: 'role_editor', source: 'org' },
+          driveDefaultRole: DEFAULT_ROLE,
+        }),
+      ).toBeNull();
+    });
+
+    it('ORG-4 (partial) a stale org-materialized ADMIN row on a Private drive still reports org-admin for an org Admin, so the audit is not skipped', () => {
+      expect(
+        resolveOrgDriveAccess({
+          orgRole: 'ADMIN',
+          driveVisibility: 'PRIVATE',
+          driveMembership: { role: 'ADMIN', customRoleId: null, source: 'org' },
+          driveDefaultRole: DEFAULT_ROLE,
+        }),
+      ).toEqual({ role: 'ADMIN', customRoleId: null, source: 'org-admin' });
     });
 
     it('DRV-6 (partial) a joined org MEMBER resolves a Restricted drive by the row role, never the default role', () => {

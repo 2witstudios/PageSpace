@@ -18,6 +18,9 @@ import type { DriveMemberSource } from '@pagespace/db/schema/members';
  * - Org MEMBER: an existing membership row resolves as that row. Without one, only an OPEN drive
  *   resolves, to the drive's default role with source `org` (DRV-5, POL-6); RESTRICTED and
  *   PRIVATE resolve `null` (DRV-6, DRV-7).
+ * - A `source: 'org'` row counts only on an OPEN drive. On RESTRICTED or PRIVATE only a direct
+ *   (`invite`) row, i.e. an invitation or an approved join, grants access; a leftover
+ *   materialized row after a visibility change never does (DRV-6, DRV-7).
  *
  * Pure.
  */
@@ -62,14 +65,18 @@ export function resolveOrgDriveAccess({
 }: OrgDriveAccessInput): OrgDriveAccess | null {
   if (orgRole === null) return null;
 
+  // An org-materialized row exists only because the drive is OPEN. On RESTRICTED or PRIVATE it is
+  // stale (the visibility changed before the membership sync ran) and grants nothing.
+  const row = driveMembership?.source === 'org' && driveVisibility !== 'OPEN' ? null : driveMembership;
+
   if (orgRole === 'OWNER' || orgRole === 'ADMIN') {
     // A row that already grants ADMIN or OWNER is used as-is: org power is not what opened the
     // drive, so no org-admin audit is owed, and the drive lead's OWNER row is never downgraded.
-    if (driveMembership?.role === 'OWNER' || driveMembership?.role === 'ADMIN') return fromMembership(driveMembership);
+    if (row?.role === 'OWNER' || row?.role === 'ADMIN') return fromMembership(row);
     return { role: 'ADMIN', customRoleId: null, source: 'org-admin' };
   }
 
-  if (driveMembership) return fromMembership(driveMembership);
+  if (row) return fromMembership(row);
 
   if (driveVisibility === 'OPEN') {
     return { role: driveDefaultRole.role, customRoleId: driveDefaultRole.customRoleId, source: 'org' };
