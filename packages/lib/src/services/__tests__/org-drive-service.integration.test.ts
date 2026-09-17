@@ -39,6 +39,8 @@ const northwind = createId();
 const userIds = [jono, priya, marcus, lena, chris];
 
 const syncCalls: OrgMembershipSyncCall[] = [];
+/** Records the order of commit-visible effects: a publish must run after the move committed. */
+const published: Array<{ call: OrgMembershipSyncCall; orgIdAtPublish: string | null }> = [];
 
 const deps: OrgDriveServiceDeps = {
   // Test double for the org role lookup; production wires the org repository.
@@ -51,6 +53,11 @@ const deps: OrgDriveServiceDeps = {
   },
   syncOrgMembership: async (_tx, call) => {
     syncCalls.push(call);
+    return async () => {
+      // Read through the root pool, outside the move's transaction: only committed state is visible.
+      const [row] = await db.select({ orgId: drives.orgId }).from(drives).where(eq(drives.id, call.driveId));
+      published.push({ call, orgIdAtPublish: row?.orgId ?? null });
+    };
   },
   getOrgDriveCreationPolicy: async () => 'members',
 };
@@ -76,6 +83,7 @@ async function readDrive(id: string) {
 
 beforeEach(async () => {
   syncCalls.length = 0;
+  published.length = 0;
   await db.delete(drives).where(inArray(drives.ownerId, userIds));
   await db.delete(organizations).where(eq(organizations.id, northwind));
   await db.delete(users).where(inArray(users.id, userIds));
@@ -132,6 +140,7 @@ describe('moveDriveToOrg', () => {
     expect(await db.select().from(pages).where(eq(pages.driveId, driveId))).toHaveLength(1);
     expect(await db.select().from(driveEnvs).where(eq(driveEnvs.driveId, driveId))).toHaveLength(1);
     expect(syncCalls).toEqual([{ kind: 'move-in', driveId, orgId: northwind }]);
+    expect(published).toEqual([{ call: syncCalls[0], orgIdAtPublish: northwind }]);
   });
 
   it('DRV-1 (partial) a Home drive is refused and nothing is written', async () => {
@@ -205,6 +214,7 @@ describe('moveDriveOutOfOrg', () => {
     const driveId = await seedPersonalDrive();
     await moveDriveToOrg(marcus, driveId, { orgId: northwind }, deps);
     syncCalls.length = 0;
+    published.length = 0;
     return driveId;
   }
 
@@ -236,6 +246,7 @@ describe('moveDriveOutOfOrg', () => {
       await moveDriveOutOfOrg(jono, driveId, { implicitMembers }, deps);
 
       expect(syncCalls).toEqual([{ kind: 'move-out', driveId, orgId: northwind, implicitMembers }]);
+      expect(published).toEqual([{ call: syncCalls[0], orgIdAtPublish: null }]);
     }
   );
 
@@ -260,6 +271,7 @@ describe('moveDriveOutOfOrg', () => {
 
     await expect(moveDriveOutOfOrg(priya, driveId, { implicitMembers: 'keep' }, failing)).rejects.toThrow('sync failed');
     expect((await readDrive(driveId)).orgId).toBe(northwind);
+    expect(published).toEqual([]);
   });
 });
 
@@ -275,6 +287,7 @@ describe('createOrgDrive', () => {
     expect(row.ownerId).toBe(marcus);
     expect(row.publishSubdomain).not.toBeNull();
     expect(syncCalls).toEqual([{ kind: 'create', driveId: result.drive.id, orgId: northwind }]);
+    expect(published).toEqual([{ call: syncCalls[0], orgIdAtPublish: northwind }]);
   });
 
   it('DRV-3 (partial) a drive created in an org keeps a chosen visibility', async () => {

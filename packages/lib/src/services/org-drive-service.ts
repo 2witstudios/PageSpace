@@ -39,11 +39,17 @@ export type OrgMembershipSyncCall =
   | { kind: 'create'; driveId: string; orgId: string }
   | { kind: 'move-out'; driveId: string; orgId: string; implicitMembers: ImplicitMembersChoice };
 
+/** Best-effort realtime publish, run only after the membership change has committed. */
+export type PublishAfterCommit = () => Promise<void>;
+
 export interface OrgDriveServiceDeps {
   /** The user's role in the org, or null when not a member. */
   getOrgRole(tx: OrgDriveTx, orgId: string, userId: string): Promise<OrgRole | null>;
-  /** Materialize or retire org-sourced drive_members rows, inside the move's transaction. */
-  syncOrgMembership(tx: OrgDriveTx, call: OrgMembershipSyncCall): Promise<void>;
+  /**
+   * Materialize or retire org-sourced drive_members rows inside the move's transaction.
+   * Returns the realtime publish to run once the transaction has committed.
+   */
+  syncOrgMembership(tx: OrgDriveTx, call: OrgMembershipSyncCall): Promise<PublishAfterCommit>;
   /** "Who can create org drives" (POL-5). */
   getOrgDriveCreationPolicy(tx: OrgDriveTx, orgId: string): Promise<OrgDriveCreationPolicy>;
 }
@@ -144,12 +150,14 @@ export async function moveDriveToOrg(
       .where(eq(drives.id, driveId))
       .returning();
 
-    await deps.syncOrgMembership(tx, { kind: 'move-in', driveId, orgId: input.orgId });
-    return { ok: true as const, drive: moved };
+    const publish = await deps.syncOrgMembership(tx, { kind: 'move-in', driveId, orgId: input.orgId });
+    return { ok: true as const, drive: moved, publish };
   });
 
   if (!outcome.ok) return outcome;
-  return { ...outcome, storageReattribution: deferStorageReattribution(driveId, 'into-org', input.orgId) };
+  const { publish, ...moved } = outcome;
+  await publish();
+  return { ...moved, storageReattribution: deferStorageReattribution(driveId, 'into-org', input.orgId) };
 }
 
 export async function moveDriveOutOfOrg(
@@ -177,17 +185,18 @@ export async function moveDriveOutOfOrg(
       .where(eq(drives.id, driveId))
       .returning();
 
-    await deps.syncOrgMembership(tx, {
+    const publish = await deps.syncOrgMembership(tx, {
       kind: 'move-out',
       driveId,
       orgId,
       implicitMembers: verdict.implicitMembers,
     });
-    return { ok: true as const, drive: moved, orgId };
+    return { ok: true as const, drive: moved, orgId, publish };
   });
 
   if (!outcome.ok) return outcome;
-  const { orgId, ...rest } = outcome;
+  const { orgId, publish, ...rest } = outcome;
+  await publish();
   return { ...rest, storageReattribution: deferStorageReattribution(driveId, 'out-of-org', orgId) };
 }
 
@@ -196,7 +205,7 @@ export async function createOrgDrive(
   input: { name: string; orgId: string; orgVisibility?: OrgDriveVisibility },
   deps: OrgDriveServiceDeps
 ): Promise<CreateOrgDriveResult> {
-  return db.transaction(async (tx) => {
+  const outcome = await db.transaction(async (tx) => {
     const orgExists = await lockOrg(tx, input.orgId);
     const actorOrgRole = orgExists ? await deps.getOrgRole(tx, input.orgId, actorId) : null;
     const creationPolicy = orgExists ? await deps.getOrgDriveCreationPolicy(tx, input.orgId) : 'members';
@@ -217,7 +226,12 @@ export async function createOrgDrive(
       .returning();
     const publishSubdomain = await allocatePublishSubdomain(created.id, slug, tx);
 
-    await deps.syncOrgMembership(tx, { kind: 'create', driveId: created.id, orgId: input.orgId });
-    return { ok: true as const, drive: { ...created, publishSubdomain } };
+    const publish = await deps.syncOrgMembership(tx, { kind: 'create', driveId: created.id, orgId: input.orgId });
+    return { ok: true as const, drive: { ...created, publishSubdomain }, publish };
   });
+
+  if (!outcome.ok) return outcome;
+  const { publish, ...created } = outcome;
+  await publish();
+  return created;
 }
