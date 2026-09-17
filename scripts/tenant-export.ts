@@ -155,6 +155,24 @@ function unbindOutOfBundleTargets(
   }
 }
 
+/**
+ * Agent users cannot travel (ADR 0007; D-32). An agent's only credential is its
+ * `agent_identities` row, and agent credentials do not cross deployments — so a
+ * migrated agent could never sign in again, and it has no inbox to recover
+ * through. Skipping it instead would silently drop the drives and pages it owns,
+ * so the export refuses, before writing anything, and names the agents.
+ */
+class AgentUsersNotExportableError extends Error {
+  override name = 'AgentUsersNotExportableError';
+
+  constructor(agentUserIds: readonly string[]) {
+    super(
+      `Tenant export refused: the scope contains agent users (${agentUserIds.join(', ')}). ` +
+      'Agent credentials do not cross deployments, and skipping them would drop the content they own — D-32.',
+    );
+  }
+}
+
 export interface ExportResult {
   manifest: ExportManifest;
   sqlStatements: string;
@@ -275,6 +293,11 @@ export async function exportData(
       `SELECT * FROM users WHERE id IN (${toSqlInList(additionalUserIds)})`,
     ));
     usersData.push(...additionalUsers);
+  }
+
+  const agentUserIds = usersData.filter((u) => u.accountType === 'agent').map((u) => u.id as string);
+  if (agentUserIds.length > 0) {
+    throw new AgentUsersNotExportableError(agentUserIds);
   }
 
   // Strip suspension flags — these may be set as a migration read-only lock

@@ -370,6 +370,74 @@ describe('exportData', () => {
   });
 
   /**
+   * Agent users (ADR 0007; D-32). An agent's only credential is its
+   * `agent_identities` row, and agent credentials do not cross deployments, so
+   * a bundle containing an agent would import a principal that can never sign
+   * in again. SKIPPING the agent would be worse: the drives and pages it owns
+   * would be silently dropped. The export refuses instead, before writing.
+   */
+  describe('agent users', () => {
+    const markAgent = async (userId: string) => {
+      const { sql: sqlFn } = await import('drizzle-orm');
+      await db.execute(sqlFn.raw(`UPDATE users SET "accountType" = 'agent' WHERE id = '${userId}'`));
+    };
+
+    it('given a requested user who is an agent, should refuse with AgentUsersNotExportableError naming it and write nothing', async () => {
+      await markAgent(FIXTURES.users.member.id);
+      const outputDir = path.join(tmpDir, 'bundle-agent');
+
+      const error = await exportData(db as unknown as DbClient, {
+        userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
+        outputDir,
+        fileStoragePath,
+        databaseUrl: getTestDatabaseUrl(),
+        dryRun: false,
+      }).then(() => null, (e: unknown) => e);
+
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).name).toBe('AgentUsersNotExportableError');
+      expect((error as Error).message).toContain(FIXTURES.users.member.id);
+      expect((error as Error).message).toContain('D-32');
+      expect(existsSync(outputDir)).toBe(false);
+    });
+
+    it('given an agent pulled into scope as a discovered user (a conversation owner), should refuse and write nothing', async () => {
+      const { sql: sqlFn } = await import('drizzle-orm');
+      await markAgent(FIXTURES.users.outsider.id);
+      await db.execute(sqlFn.raw(
+        `INSERT INTO conversations (id, "userId", title, type, "contextId", "createdAt", "updatedAt")
+         VALUES ('test_convo_agent_001', '${FIXTURES.users.outsider.id}', 'Agent thread', 'page', '${FIXTURES.pages.grandchild.id}', NOW(), NOW())`,
+      ));
+      const outputDir = path.join(tmpDir, 'bundle-agent-discovered');
+
+      await expect(exportData(db as unknown as DbClient, {
+        userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
+        outputDir,
+        fileStoragePath,
+        databaseUrl: getTestDatabaseUrl(),
+        dryRun: false,
+      })).rejects.toMatchObject({ name: 'AgentUsersNotExportableError' });
+      expect(existsSync(outputDir)).toBe(false);
+    });
+
+    it('given only human users, should export normally and carry accountType human', async () => {
+      const outputDir = path.join(tmpDir, 'bundle-humans');
+
+      const result = await exportData(db as unknown as DbClient, {
+        userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
+        outputDir,
+        fileStoragePath,
+        databaseUrl: getTestDatabaseUrl(),
+        dryRun: false,
+      });
+
+      expect(result.manifest.tableCounts.users).toBe(2);
+      expect(await readFile(path.join(outputDir, 'data.sql'), 'utf-8')).toBe(result.sqlStatements);
+      expect(result.sqlStatements).toContain("'human'");
+    });
+  });
+
+  /**
    * The bundle replays as ONE transaction, so its INSERT order has to be FK
    * order. `messages.conversationId` FKs `conversations.id`, and the two sets
    * are gathered along different axes — conversations by OWNER, pages by
