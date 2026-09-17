@@ -122,7 +122,7 @@ export function starterGrantCents(input: { tier: string; accountType: AccountTyp
   return allowanceGrantCents({ ...input, kind: 'starter' });
 }
 
-export type AllowanceGrantKind = 'starter' | 'refill';
+type AllowanceGrantKind = 'starter' | 'refill';
 
 /**
  * The ONE allowance function every grant uses (Agent Signup Phase 1b): the
