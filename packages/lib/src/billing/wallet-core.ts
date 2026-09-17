@@ -358,6 +358,14 @@ export function allocateWalletSpend(input: WalletSpendInput): WalletSpendResult 
 export type OvershootFunderChoice = 'absorb_to_parent' | 'wallet_debt';
 export const DEFAULT_OVERSHOOT_CHOICE: OvershootFunderChoice = 'absorb_to_parent';
 
+/** The source a consumer CHOSE, before a drive rule moved the call (resolveSpendSource `fallbackFrom`). */
+export interface ChosenSourceCharge {
+  source: SpendSourceKind;
+  walletId: string;
+  parentWalletId: string | null;
+  funderChoice: OvershootFunderChoice;
+}
+
 export interface SettleOvershootInput {
   source: SpendSourceKind;
   overshootCents: number;
@@ -366,6 +374,11 @@ export interface SettleOvershootInput {
   /** Its parent; null for a root wallet (a personal wallet or an org pool). */
   parentWalletId: string | null;
   funderChoice: OvershootFunderChoice;
+  /**
+   * The chosen source when a drive rule fell back (`fallbackApplied`), else null. Required
+   * so a caller cannot drop it: a fallback onto own credits is not the consumer's choice.
+   */
+  fallbackFrom: ChosenSourceCharge | null;
 }
 
 export type OvershootLanding =
@@ -380,10 +393,24 @@ export type OvershootLanding =
  * the consumer only when they spent their own credits; a seat's overshoot lands on the
  * pool; a drive wallet's lands where its funder chose. A drive wallet with no parent
  * has nothing to absorb into, so its overshoot is wallet debt whatever the choice.
+ *
+ * A drive-rule fallback onto own credits is not the consumer choosing them (WAL-6b), so
+ * that overshoot lands where the CHOSEN source would have put it.
  */
 export function settleOvershoot(input: SettleOvershootInput): OvershootLanding {
   const cents = wholeNonNegative(input.overshootCents);
   if (cents === 0) return { kind: 'none', cents: 0 };
+  if (input.source === 'own_credits' && input.fallbackFrom !== null && input.fallbackFrom.source !== 'own_credits') {
+    const chosen = input.fallbackFrom;
+    return settleOvershoot({
+      source: chosen.source,
+      overshootCents: cents,
+      chargedWalletId: chosen.walletId,
+      parentWalletId: chosen.parentWalletId,
+      funderChoice: chosen.funderChoice,
+      fallbackFrom: null,
+    });
+  }
   if (input.source !== 'drive_wallet') return { kind: 'root_debt', walletId: input.chargedWalletId, cents };
   if (input.funderChoice === 'absorb_to_parent' && input.parentWalletId !== null) {
     return { kind: 'parent_debt', walletId: input.parentWalletId, cents };

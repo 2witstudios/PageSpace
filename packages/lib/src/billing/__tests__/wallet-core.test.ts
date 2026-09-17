@@ -259,19 +259,23 @@ describe('resolveSpendSource — guests (D-OW-4)', () => {
     ).toMatchObject({ kind: 'refuse', source: 'own_credits', reason: 'source_empty', chargeCents: 0 });
   });
 
-  it('D-OW-4 a guest with the switch off never falls back onto the drive wallet', () => {
-    expect(
-      resolveSpendSource(
-        base({
-          actor: chris,
-          chosen: 'own_credits',
-          personal: { walletId: 'w-chris', status: 'active', spendableCents: 0 },
-          seatAllowance: null,
-          driveRule: { fallback: 'own_credits', guestsMaySpendDriveWallet: false },
-        }),
-      ),
-    ).toMatchObject({ kind: 'refuse', chargeCents: 0 });
-  });
+  it.each(['refuse', 'seat_allowance', 'own_credits'] as const)(
+    'D-OW-4 a guest with the switch off and empty own credits is never offered a funded drive wallet (fallback %s)',
+    (fallback) => {
+      expect(
+        resolveSpendSource(
+          base({
+            actor: chris,
+            chosen: 'own_credits',
+            driveWallet: productWallet(c(1200)),
+            personal: { walletId: 'w-chris', status: 'active', spendableCents: 0 },
+            seatAllowance: null,
+            driveRule: { fallback, guestsMaySpendDriveWallet: false },
+          }),
+        ),
+      ).toEqual({ kind: 'refuse', source: 'own_credits', reason: 'source_empty', options: [], chargeCents: 0 });
+    },
+  );
 });
 
 describe('resolveSpendSource — automations', () => {
@@ -474,8 +478,41 @@ describe('settleOvershoot', () => {
       { kind: 'root_debt', walletId: 'w-marcus', cents: c(3) },
     ],
   ] as const)('WAL-6 (partial) overshoot lands per funder choice: %s', (_label, input, expected) => {
-    expect(settleOvershoot({ ...input, overshootCents: c(3) })).toEqual(expected);
+    expect(settleOvershoot({ ...input, overshootCents: c(3), fallbackFrom: null })).toEqual(expected);
   });
+
+  const ownCreditsFallback = {
+    source: 'own_credits',
+    chargedWalletId: 'w-marcus',
+    parentWalletId: null,
+    funderChoice: 'absorb_to_parent',
+    overshootCents: c(3),
+  } as const;
+
+  it.each([
+    [
+      'from the drive wallet, funder absorbs into the parent',
+      { source: 'drive_wallet', walletId: 'w-product', parentWalletId: 'w-northwind-pool', funderChoice: 'absorb_to_parent' },
+      { kind: 'parent_debt', walletId: 'w-northwind-pool', cents: c(3) },
+    ],
+    [
+      'from the drive wallet, funder chose wallet debt',
+      { source: 'drive_wallet', walletId: 'w-product', parentWalletId: 'w-northwind-pool', funderChoice: 'wallet_debt' },
+      { kind: 'wallet_debt', walletId: 'w-product', cents: c(3) },
+    ],
+    [
+      'from the seat allowance',
+      { source: 'seat_allowance', walletId: 'w-northwind-pool', parentWalletId: null, funderChoice: 'wallet_debt' },
+      { kind: 'root_debt', walletId: 'w-northwind-pool', cents: c(3) },
+    ],
+  ] as const)(
+    'WAL-6 (partial) after a drive-rule fallback onto own credits, overshoot lands where the chosen source would put it, never on the consumer: %s',
+    (_label, fallbackFrom, expected) => {
+      const landing = settleOvershoot({ ...ownCreditsFallback, fallbackFrom });
+      expect(landing).toEqual(expected);
+      expect(landing.kind === 'none' ? null : landing.walletId).not.toBe('w-marcus');
+    },
+  );
 
   it('WAL-6 (partial) a drive-wallet overshoot never lands on the consumer, whatever the funder chose', () => {
     for (const funderChoice of ['absorb_to_parent', 'wallet_debt'] as const) {
@@ -485,6 +522,7 @@ describe('settleOvershoot', () => {
         parentWalletId: 'w-northwind-pool',
         funderChoice,
         overshootCents: c(9),
+        fallbackFrom: null,
       });
       expect(landing.kind === 'none' ? null : landing.walletId).not.toBe('w-marcus');
       expect(landing.kind).not.toBe('root_debt');
@@ -493,7 +531,7 @@ describe('settleOvershoot', () => {
 
   it.each([0, -5, Number.NaN])('WAL-6 (partial) no overshoot (%s) lands nothing', (overshootCents) => {
     expect(
-      settleOvershoot({ source: 'drive_wallet', chargedWalletId: 'w-product', parentWalletId: 'p', funderChoice: 'wallet_debt', overshootCents }),
+      settleOvershoot({ source: 'drive_wallet', chargedWalletId: 'w-product', parentWalletId: 'p', funderChoice: 'wallet_debt', overshootCents, fallbackFrom: null }),
     ).toEqual({ kind: 'none', cents: 0 });
   });
 
