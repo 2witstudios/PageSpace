@@ -8,6 +8,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
 import { requireOrgRole } from '@pagespace/lib/organizations/authorize';
+import { findMembershipRole } from '@pagespace/lib/organizations/repository';
 import type { OrgRole } from '@pagespace/db/schema/organizations';
 
 // Session only: CLI and MCP parity is Wave G (Spec X-1).
@@ -39,7 +40,10 @@ export async function authorizeOrgRequest(
 ): Promise<OrgGate> {
   const gate = await authenticateOrgRequest(request, options);
   if (!gate.ok) return gate;
-  const decision = await requireOrgRole(gate.userId, orgId, minRole);
+  // The lookup is passed explicitly rather than left to requireOrgRole's default, so the
+  // gate's IO is visible at this seam (and a test fakes it by its package specifier; the
+  // built lib's internal relative import could never be intercepted).
+  const decision = await requireOrgRole(gate.userId, orgId, minRole, { findMembershipRole });
   if (!decision.ok) {
     const error = decision.status === 404 ? 'Organization not found' : 'Insufficient organization role';
     auditRequest(request, {
