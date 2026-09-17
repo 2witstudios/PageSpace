@@ -126,7 +126,7 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
     ],
     excluded: {
       orgId:
-        'References `organizations`, which the bundle does not carry, so a carried value would violate the FK on import. Nothing writes it yet: org drives ship dark behind ORGS_ENABLED and no service sets orgId until Organizations & Wallets Wave B. Carrying organizations and orgId in a tenant bundle is Spec X-3 (lane G2) and must land before ORGS_ENABLED turns on, or a migrated org drive arrives as a personal drive.',
+        'References `organizations`, which the bundle does not carry, so a carried value would violate the FK on import. Temporary under Spec X-3: removed by the Phase 6 GDPR/backups leaf yfmlkdchehmberwthwu6g7vt before Wave F, which carries organizations and orgId so a migrated org drive does not arrive as a personal drive; the lane that introduces the ORGS_ENABLED code constant adds a test that fails while this exclusion exists.',
     },
     /**
      * Both point at `pages`, which is inserted AFTER `drives` (pages.driveId

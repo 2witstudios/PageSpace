@@ -7,7 +7,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { getTableConfig, PgDialect, type PgTable } from 'drizzle-orm/pg-core';
-import { getTableColumns } from 'drizzle-orm';
+import { getTableColumns, is, SQL } from 'drizzle-orm';
 import * as schemaModule from '../../schema';
 import {
   organizations,
@@ -32,7 +32,7 @@ function indexNamed(table: PgTable, name: string) {
   if (!found) throw new Error(`no index named ${name}`);
   return {
     unique: found.config.unique,
-    columns: found.config.columns.map((c) => ('name' in c ? c.name : dialect.sqlToQuery(c).sql)),
+    columns: found.config.columns.map((c) => (is(c, SQL) ? dialect.sqlToQuery(c).sql : 'name' in c ? c.name : undefined)),
     where: found.config.where ? dialect.sqlToQuery(found.config.where).sql : undefined,
   };
 }

@@ -412,15 +412,16 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     'Binding rows between mirrored calendar events and drives — meaningless without the mirrored events, which are excluded above.',
   event_attendees:
     'Attendee list of a mirrored calendar event: it is a list of OTHER PEOPLE, which Art 15(4) puts outside the subject\'s access right.',
-  // Organizations & Wallets (Wave B1 schema). NOT a permanent decision for the first two:
-  // Spec X-2 (lane G2) owns the org collectors and must land them — moving these to
-  // EXPORTED_TABLES — before ORGS_ENABLED turns on. Until then no code path writes a row.
+  // Organizations & Wallets (Wave B1 schema). `organizations` and `org_members` are
+  // TEMPORARY exclusions under Spec X-2: the Phase 6 GDPR/backups leaf
+  // (yfmlkdchehmberwthwu6g7vt) replaces them with collectors before Wave F.
+  // `org_invitations` is a permanent exclusion on the Art 15(4) boundary.
   organizations:
-    'No row exists to disclose: organizations ship dark behind ORGS_ENABLED and no service writes this table yet. The collector for orgs the subject owns is Spec X-2 (Organizations & Wallets lane G2), which must land before the flag turns on.',
+    'Temporary under Spec X-2: removed by the Phase 6 GDPR/backups leaf yfmlkdchehmberwthwu6g7vt before Wave F, which adds the collector for organizations the subject owns; the lane that introduces the ORGS_ENABLED code constant adds a test that fails while this exclusion exists.',
   org_members:
-    'No row exists to disclose: org membership ships dark behind ORGS_ENABLED and no service writes this table yet. The collector for the subject\'s own memberships is Spec X-2 (Organizations & Wallets lane G2), which must land before the flag turns on.',
+    'Temporary under Spec X-2: removed by the Phase 6 GDPR/backups leaf yfmlkdchehmberwthwu6g7vt before Wave F, which adds the collector for the subject\'s own org memberships; the lane that introduces the ORGS_ENABLED code constant adds a test that fails while this exclusion exists.',
   org_invitations:
-    'An org invitation naming the inviter and the invited address; the counterparty is another person — the same Art 15(4) boundary as pending_invites — and an accepted invitation becomes the org membership row, disclosed through the org_members collector (Spec X-2).',
+    'An org invitation naming the inviter and the invited address; the counterparty is another person, which is the same Art 15(4) boundary that excludes pending_invites. The invitation carries no content of the subject\'s own beyond an address and a role offered to it.',
 };
 
 /** Every table the registry has a decision for. */
