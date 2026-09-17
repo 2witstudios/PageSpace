@@ -52,6 +52,8 @@ export interface SessionAuthResult extends BaseAuthDetails {
 
 interface OAuthAuthDetails extends BaseAuthDetails {
   tokenId: string;
+  /** The token's refresh family — what a deferred run re-checks for revocation. */
+  familyId?: string;
   scopes: ScopeSet;
   // Bridge to the mcp_token_drives-shaped capability model (ADR 0002 Decision 2).
   driveScopes: DriveScopeRow[];
@@ -413,6 +415,7 @@ export async function validateOAuthAccessToken(token: string): Promise<OAuthAuth
       tokenVersion: user.tokenVersion,
       adminRoleVersion: user.adminRoleVersion,
       tokenId: record.id,
+      familyId: record.familyId,
       scopes: parsed.scopes,
       driveScopes,
       allowedDriveIds,

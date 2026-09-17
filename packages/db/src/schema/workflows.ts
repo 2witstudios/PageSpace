@@ -32,6 +32,15 @@ export type WorkflowAiStep = {
 
 export type WorkflowStep = WorkflowToolStep | WorkflowAiStep;
 
+/**
+ * Mirrors `CredentialCeiling` (@pagespace/lib/permissions/credential-ceiling),
+ * which parses it back with `credentialCeilingSchema` before any use — the db
+ * package cannot import lib, so the column is typed structurally here.
+ */
+export type StoredCredentialCeiling =
+  | { kind: 'mcp'; tokenId: string }
+  | { kind: 'oauth'; driveScopes: Array<{ driveId: string; role: 'ADMIN' | 'MEMBER' | null; customRoleId: string | null }>; familyId?: string };
+
 export const workflows = pgTable('workflows', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   driveId: text('driveId').notNull().references(() => drives.id, { onDelete: 'cascade' }),
@@ -55,6 +64,14 @@ export const workflows = pgTable('workflows', {
   eventDebounceSecs: integer('eventDebounceSecs').default(30),
 
   instructionPageId: text('instructionPageId').references(() => pages.id, { onDelete: 'set null' }),
+
+  // The ceiling of the drive-scoped credential that last authored this workflow
+  // (an mcp_ key by id, or an OAuth grant's drive rows + family) — the same
+  // CredentialCeiling a live request carries. The executor re-applies it to
+  // every run and refuses the run once that credential no longer works. NULL =
+  // authored by the user acting as themself (a session or unscoped credential),
+  // and for every row that predates the column.
+  credentialCeiling: jsonb('credentialCeiling').$type<StoredCredentialCeiling>(),
 
   isEnabled: boolean('isEnabled').default(true).notNull(),
   nextRunAt: timestamp('nextRunAt', { mode: 'date' }),

@@ -4,7 +4,8 @@ import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { createId } from '@paralleldrive/cuid2';
 import { createAIProvider, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
-import { filterToolsForEphemeralWorkspace, filterToolsForImageGen, filterToolsForSandboxEnablement, filterToolsForSandboxTier, SANDBOX_COMPUTE_TOOL_NAMES } from '@/lib/ai/core/tool-filtering';
+import { filterToolsForEphemeralWorkspace, filterToolsForImageGen, filterToolsForMcpScope, filterToolsForSandboxEnablement, filterToolsForSandboxTier, SANDBOX_COMPUTE_TOOL_NAMES } from '@/lib/ai/core/tool-filtering';
+import { resolveWorkflowAuthoringScope, type AuthoringScope } from './authoring-credential';
 import { resolveSandboxToolEligibility } from '@/lib/ai/core/sandbox-tool-eligibility';
 import { spawnSession, createConversationInSession, endSession } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
@@ -101,6 +102,14 @@ export interface WorkflowExecutionInput {
   eventContext?: { promptOverride?: string; payload?: unknown };
 }
 
+/**
+ * The input every run helper below works from: the caller's input plus the
+ * AUTHORING credential's scope, resolved once per run by executeWorkflow. The
+ * helpers take this type, not WorkflowExecutionInput, so a tool context cannot
+ * be built from an input that skipped the resolution.
+ */
+type ScopedExecutionInput = WorkflowExecutionInput & { readonly authoringScope: AuthoringScope };
+
 export async function executeWorkflow(input: WorkflowExecutionInput): Promise<WorkflowExecutionResult> {
   const startTime = Date.now();
 
@@ -133,12 +142,24 @@ export async function executeWorkflow(input: WorkflowExecutionInput): Promise<Wo
   let result: WorkflowExecutionResult;
 
   try {
-    const explicitSteps = input.steps && input.steps.length > 0 ? input.steps : null;
+    // The run executes under the ceiling of the credential that AUTHORED the
+    // workflow — re-applied here, the one function every cron, manual, task,
+    // calendar and webhook run passes through — and is refused outright once
+    // that credential no longer works.
+    const authoring = await resolveWorkflowAuthoringScope(input.workflowId, input.createdBy);
+    if (!authoring.ok) {
+      result = { success: false, durationMs: Date.now() - startTime, error: authoring.reason };
+      const refusedFinalizeError = await finalizeRun(runId, result);
+      return refusedFinalizeError ? { ...result, runId, finalizeError: refusedFinalizeError } : { ...result, runId };
+    }
+    const scoped: ScopedExecutionInput = { ...input, authoringScope: authoring.scope };
+
+    const explicitSteps = scoped.steps && scoped.steps.length > 0 ? scoped.steps : null;
     if (explicitSteps) {
-      result = await runStepChain(input, explicitSteps, runId, startTime);
-    } else if (input.agentPageId) {
+      result = await runStepChain(scoped, explicitSteps, runId, startTime);
+    } else if (scoped.agentPageId) {
       // Legacy single-AI-prompt path, byte-for-byte pre-steps behavior.
-      result = await runExecution(input, startTime, {
+      result = await runExecution(scoped, startTime, {
         prompt: input.eventContext?.promptOverride ?? input.prompt,
         agentPageId: input.agentPageId,
       });
@@ -202,7 +223,7 @@ async function finalizeRun(runId: string, result: WorkflowExecutionResult): Prom
  * the legacy execution body with the step's own prompt/agent.
  */
 async function runStepChain(
-  input: WorkflowExecutionInput,
+  input: ScopedExecutionInput,
   steps: WorkflowStep[],
   runId: string,
   startTime: number
@@ -334,7 +355,7 @@ type ToolStepResult = { ok: true } | { ok: false; error: string };
 async function runToolStep(
   step: WorkflowToolStep,
   index: number,
-  input: WorkflowExecutionInput
+  input: ScopedExecutionInput
 ): Promise<ToolStepResult> {
   if (!(DETERMINISTIC_TOOL_ALLOWLIST as readonly string[]).includes(step.toolName)) {
     return { ok: false, error: `tool "${step.toolName}" is not deterministically invocable` };
@@ -363,6 +384,7 @@ async function runToolStep(
   const executionContext: ToolExecutionContext = {
     userId: input.createdBy,
     timezone: input.timezone,
+    ...input.authoringScope,
   };
 
   try {
@@ -435,7 +457,7 @@ async function releaseWorkflowSession(workspaceId: string, workflowId: string): 
 }
 
 async function runExecution(
-  input: WorkflowExecutionInput,
+  input: ScopedExecutionInput,
   startTime: number,
   exec: { prompt: string; agentPageId: string }
 ): Promise<WorkflowExecutionResult> {
@@ -551,7 +573,12 @@ async function runExecution(
     const enabledTools = (agent.enabledTools as string[] | null) ?? [];
     // Image generation is in an ADMIN-ONLY rollout and is exposed solely through the
     // chat/global routes' explicit toggle — never through scheduled workflows.
-    const workflowTools = filterToolsForImageGen(pageSpaceTools, false);
+    // A drive-scoped author never hands its run the account-level-only tools
+    // (create_drive…), exactly as the request-time routes hide them.
+    const workflowTools = filterToolsForMcpScope(
+      filterToolsForImageGen(pageSpaceTools, false),
+      (input.authoringScope.mcpAllowedDriveIds?.length ?? 0) > 0,
+    );
     let availableTools: ToolSet = enabledTools.length > 0
       ? Object.fromEntries(
           Object.entries(workflowTools).filter(([toolName]) =>
@@ -688,6 +715,7 @@ async function runExecution(
     const executionContext: ToolExecutionContext = {
       userId: input.createdBy,
       timezone: input.timezone,
+      ...input.authoringScope,
       aiProvider: agent.aiProvider ?? undefined,
       aiModel: agent.aiModel ?? undefined,
       conversationId,

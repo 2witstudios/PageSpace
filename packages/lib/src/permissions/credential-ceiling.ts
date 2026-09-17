@@ -21,7 +21,16 @@ import type { DriveScopeRow } from '../auth/oauth/scopes';
  */
 export type CredentialCeiling =
   | { readonly kind: 'mcp'; readonly tokenId: string }
-  | { readonly kind: 'oauth'; readonly driveScopes: DriveScopeRow[] };
+  | {
+      readonly kind: 'oauth';
+      readonly driveScopes: DriveScopeRow[];
+      /**
+       * The grant's token family. Not an authority input — the rows are — but
+       * the handle a DEFERRED run (a persisted workflow) re-checks, so a
+       * revoked grant's automation stops instead of outliving it.
+       */
+      readonly familyId?: string;
+    };
 
 const driveScopeRowSchema = z
   .object({
@@ -33,5 +42,5 @@ const driveScopeRowSchema = z
 
 export const credentialCeilingSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('mcp'), tokenId: z.string().min(1) }).strict(),
-  z.object({ kind: z.literal('oauth'), driveScopes: z.array(driveScopeRowSchema) }).strict(),
+  z.object({ kind: z.literal('oauth'), driveScopes: z.array(driveScopeRowSchema), familyId: z.string().min(1).optional() }).strict(),
 ]);

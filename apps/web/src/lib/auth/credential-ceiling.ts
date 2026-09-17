@@ -59,7 +59,9 @@ export function getCredentialCeiling(auth: AuthResult): CredentialCeiling | unde
     case 'mcp':
       return auth.allowedDriveIds.length > 0 ? { kind: 'mcp', tokenId: auth.tokenId } : undefined;
     case 'oauth':
-      return auth.scopes.account ? undefined : { kind: 'oauth', driveScopes: auth.driveScopes };
+      return auth.scopes.account
+        ? undefined
+        : { kind: 'oauth', driveScopes: auth.driveScopes, ...(auth.familyId ? { familyId: auth.familyId } : {}) };
     case 'service':
       // A dispatched worker IS the credential that started its chain: a chain
       // from a session or an unscoped credential carries none and acts as the
