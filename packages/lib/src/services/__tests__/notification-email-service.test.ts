@@ -54,7 +54,7 @@ vi.mock('../../auth/token-utils', () => ({
 import { db } from '@pagespace/db/db';
 import { sendEmail } from '../email-service';
 import { DirectMessageEmail } from '../../email-templates/DirectMessageEmail';
-import { sendNotificationEmail, sendPendingDriveInvitationEmail } from '../notification-email-service';
+import { sendNotificationEmail, sendOrgInvitationEmail, sendPendingDriveInvitationEmail } from '../notification-email-service';
 
 type MockFn = ReturnType<typeof vi.fn>;
 type MockDb = {
@@ -382,5 +382,40 @@ describe('sendPendingDriveInvitationEmail', () => {
     expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({
       to: 'invitee@example.com',
     }));
+  });
+});
+
+describe('sendOrgInvitationEmail', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('ORG-3 (partial) sends the invite link to the invited address with the org and inviter in the subject', async () => {
+    await sendOrgInvitationEmail({
+      recipientEmail: 'marcus@northwind.test',
+      inviterName: 'Priya Nair',
+      orgName: 'Northwind Labs',
+      role: 'MEMBER',
+      expiresInDays: 7,
+      inviteUrl: 'https://app.example.com/orgs/invite?token=ps_orginv_xyz',
+    });
+
+    const call = vi.mocked(sendEmail).mock.calls[0][0];
+    expect(call.to).toBe('marcus@northwind.test');
+    expect(call.subject).toBe('Priya Nair invited you to join Northwind Labs on PageSpace');
+  });
+
+  it('strips CR/LF from the org and inviter names before interpolating into subject', async () => {
+    await sendOrgInvitationEmail({
+      recipientEmail: 'marcus@northwind.test',
+      inviterName: 'Eve\r\nBcc: attacker@evil.com',
+      orgName: 'Org\nX-Header: pwn',
+      role: 'ADMIN',
+      expiresInDays: 7,
+      inviteUrl: 'https://app.example.com/orgs/invite?token=ps_orginv_xyz',
+    });
+
+    const call = vi.mocked(sendEmail).mock.calls[0][0];
+    expect(call.subject).not.toMatch(/[\r\n]/);
   });
 });

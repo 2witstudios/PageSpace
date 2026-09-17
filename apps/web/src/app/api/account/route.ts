@@ -221,7 +221,7 @@ export async function DELETE(req: Request) {
     if (ownedOrganizations.length > 0) {
       return Response.json(
         {
-          error: 'You must transfer ownership of your organizations before deleting your account',
+          error: 'Transfer ownership of your organizations or delete them before deleting your account',
           ownedOrganizations,
         },
         { status: 400 }
