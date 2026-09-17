@@ -46,12 +46,19 @@ async function rowsOf(driveId: string) {
 }
 
 const createdOrgIds: string[] = [];
+const createdUserIds: string[] = [];
+
+async function createUser(name: string) {
+  const user = await factories.createUser({ name });
+  createdUserIds.push(user.id);
+  return user;
+}
 
 async function northwind() {
-  const jono = await factories.createUser({ name: 'Jono' });
-  const priya = await factories.createUser({ name: 'Priya Nair' });
-  const marcus = await factories.createUser({ name: 'Marcus Oyelaran' });
-  const chris = await factories.createUser({ name: 'Chris Rowe' });
+  const jono = await createUser('Jono');
+  const priya = await createUser('Priya Nair');
+  const marcus = await createUser('Marcus Oyelaran');
+  const chris = await createUser('Chris Rowe');
   const [org] = await db.insert(organizations).values({ name: 'Northwind Labs', slug: `northwind-${jono.id}`, ownerId: jono.id }).returning();
   createdOrgIds.push(org.id);
   await db.insert(orgMembers).values([
@@ -69,15 +76,22 @@ async function northwind() {
 describe('org membership sync (integration)', () => {
   // No global deletes: users and drives are shared across suites in CI, so every fixture is
   // unique by construction and every assertion is scoped to the drives and org it created.
-  // Orgs ARE removed: organizations.ownerId and drives.orgId RESTRICT, so a leftover org makes a
-  // later suite's `delete from users` fail. Org drives go first (drives.orgId), then the org
-  // (its org_members cascade).
+  // What this suite creates it removes, because later suites in the same database run a global
+  // `delete from users`: a leftover org RESTRICTs it (organizations.ownerId), and thousands of
+  // leftover users make it outlast their hook timeout and hold locks into the next suite.
+  // Org drives go first (drives.orgId RESTRICT), then the orgs, then the users (cascading their
+  // own drives and rows).
   afterEach(async () => {
     const orgIds = createdOrgIds.splice(0);
-    if (orgIds.length === 0) return;
-    await db.delete(drives).where(inArray(drives.orgId, orgIds));
-    await db.delete(organizations).where(inArray(organizations.id, orgIds));
-  });
+    if (orgIds.length > 0) {
+      await db.delete(drives).where(inArray(drives.orgId, orgIds));
+      await db.delete(organizations).where(inArray(organizations.id, orgIds));
+    }
+    const userIds = createdUserIds.splice(0);
+    for (let i = 0; i < userIds.length; i += 1_000) {
+      await db.delete(users).where(inArray(users.id, userIds.slice(i, i + 1_000)));
+    }
+  }, 120_000);
 
   it('DRV-5 (partial) materializes accepted org rows with the drive default role for every member of an Open drive, and is idempotent when called twice', async () => {
     const { jono, priya, marcus, chris, org, product, finance } = await northwind();
@@ -136,7 +150,7 @@ describe('org membership sync (integration)', () => {
   it('D-OW-6 adds a joining member to every Open org drive and removes a leaving member, one event per user', async () => {
     const { jono, org, product, finance } = await northwind();
     const design = await factories.createDrive(jono.id, { name: 'Design System', slug: `design-system-${createId()}`, orgId: org.id, orgVisibility: 'OPEN' });
-    const lena = await factories.createUser({ name: 'Lena Schulz' });
+    const lena = await createUser('Lena Schulz');
     const { ports, broadcasts, kicks } = recordingPorts();
 
     await db.insert(orgMembers).values({ orgId: org.id, userId: lena.id });
@@ -259,6 +273,7 @@ describe('org membership sync (integration)', () => {
           return { id, name: `Member ${offset + i}`, email: `member-${id}@example.test`, provider: 'email' as const, tokenVersion: 0, role: 'user' as const, updatedAt: new Date() };
         }))
         .returning({ id: users.id });
+      createdUserIds.push(...batch.map((u) => u.id));
       await db.insert(orgMembers).values(batch.map((u) => ({ orgId: org.id, userId: u.id })));
     }
     const { ports } = recordingPorts();
