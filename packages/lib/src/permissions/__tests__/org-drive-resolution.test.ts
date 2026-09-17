@@ -50,7 +50,7 @@ describe('resolveEffectiveDriveMembership', () => {
         .toEqual({ ...orgRow, auditOrgAdminPrivateAccess: false });
     });
 
-    it('ORG-4 org Owner and Admin resolve ADMIN on every visibility, and only PRIVATE asks for the audit event', () => {
+    it('ORG-4 (partial) org Owner and Admin resolve ADMIN on every visibility, and only PRIVATE asks for the audit event', () => {
       for (const orgRole of ['OWNER', 'ADMIN'] as const) {
         expect(resolveEffectiveDriveMembership({ ...on, drive: OPEN, orgRole, row: null }))
           .toEqual({ role: 'ADMIN', customRoleId: null, source: 'org-admin', auditOrgAdminPrivateAccess: false });
@@ -61,7 +61,7 @@ describe('resolveEffectiveDriveMembership', () => {
       }
     });
 
-    it('ORG-4 an org Admin whose own invited ADMIN row opens a PRIVATE drive owes no org-admin audit', () => {
+    it('ORG-4 (partial) an org Admin whose own invited ADMIN row opens a PRIVATE drive owes no org-admin audit', () => {
       expect(resolveEffectiveDriveMembership({ ...on, drive: PRIVATE, orgRole: 'ADMIN', row: inviteAdmin }))
         .toEqual({ ...inviteAdmin, auditOrgAdminPrivateAccess: false });
     });
