@@ -1,6 +1,6 @@
 /**
  * missed-grant-reconcile — the Phase 2 reconcile cron picks up 'missed_grant' rows
- * (Spec MON-2, WAL-5; follow-up from ow-a3's D-OW-16 fail-closed path).
+ * (Spec MON-2; follow-up from ow-a3's D-OW-16 fail-closed path).
  *
  * A paid invoice whose tier resolved to one with no ratio (a stale stored tier, or
  * an invoice-derived tier the webhook could not resolve) writes a 'missed_grant'
@@ -162,8 +162,8 @@ async function grantMissedRow(row: { id: string; userId: string }, allowanceCent
  * monthly_grant it should have been — added to the current balance (rollover),
  * same arithmetic as a normal renewal. The row itself becomes the grant record:
  * entryType flips to 'monthly_grant' and amountCents becomes the derived
- * allowance, so a re-run of this sweep never sees it again (WAL-5: reconciliation
- * is keyed on the ledger, not a side table).
+ * allowance, so a re-run of this sweep never sees it again (reconciliation is keyed
+ * on the ledger, not a side table; wallet keying is WAL-5, not built yet).
  *
  * The sweep pages through ALL candidates by keyset on id, so rows that stay
  * unresolved can never monopolize a fixed-size batch and starve later repairable

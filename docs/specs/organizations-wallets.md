@@ -134,7 +134,9 @@ Each line must be true for the epic to be complete. IDs are stable for task list
 - UI-9 Drive Settings › Wallet page: allocation, top-up, donate, who spends, fallback, spend this month.
 - UI-10 Settings › Usage › Wallets: everything I spend from, everything I fund, my default.
 - UI-11 Every surface degrades correctly for a plain Member, who sees no org settings beyond leaving the org.
-- UI-12 Credit amounts never carry a currency symbol anywhere in the product: they render as counts through the existing credit formatter ("148.2 credits", "6.4 credits left"). The dollar sign appears only on plan prices, seat prices, invoices, and top-up purchases, which are real money.
+- UI-12 Credit amounts never carry a currency symbol anywhere in the product: they render as integer counts with thousands separators through the one formatter in the money-model module ("1,482 credits", "192 credits left"). The dollar sign appears only on plan prices, seat prices, invoices, and top-up purchase prices, which are real money. The rate (100 credits per dollar) and the formatter are unconditional. The included-credit ratio is selected by a CODE CONSTANT in the money-model module, flipped by one migration commit deployed to every app together — never by a runtime environment variable (D-OW-17). Legal text such as the Terms of Service states no credit figure and refers to the pricing page (D-OW-18); the FAQ and pricing page source figures from the module.
+
+
 
 
 ### X — Cross-cutting
@@ -142,7 +144,8 @@ Each line must be true for the epic to be complete. IDs are stable for task list
 - X-2 GDPR export and account deletion account for org membership, wallets, and donations.
 - X-3 Backups and restore preserve orgId, visibility, and wallet rows.
 - X-4 Realtime events for membership, visibility, and wallet state so sidebar, picker, and chip update without refresh.
-- X-5 Migration: the existing credit_balances row becomes the personal root wallet; ledger and holds gain walletId with a backfill.
+- X-5 Migration: credit_balances BECOMES the wallets table — each existing per-user balance row is migrated in place into that user's personal root wallet in one backfill (decided by Jono at Standup 0, 2026-09-16). There is never a second balance store and no dual-read aliasing; ledger and holds gain walletId in the same migration. The backfill is idempotent, has a dry-run, and is verified by a row-count equality test plus a sum-of-balances equality test before and after.
+
 - X-6 Negative tests: a non-member cannot see an Open drive of another org; a guest cannot see a second drive; a policy set to off refuses; an empty chosen wallet charges nothing; an automation never charges a person.
 
 ## Decisions

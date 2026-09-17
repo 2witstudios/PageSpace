@@ -136,7 +136,7 @@ describe('SECURITY (Codex P1, thread "Restrict derived grants to account-plan in
 });
 
 describe('grantForInvoiceLines (org subscriptions seam, Phase 3)', () => {
-  it('MON-3 sums the Business base and extra-seat line items before applying the ratio', () => {
+  it('MON-3 (partial) sums the Business base and extra-seat line items before applying the ratio', () => {
     // Northwind Labs: Business base ($50) + 10 extra seats at $10 = $150 paid.
     const lines = [{ amount: 5000 }, { amount: 10 * 1000 }];
     const grant = grantForInvoiceLines(lines, 'business', true);
@@ -146,7 +146,7 @@ describe('grantForInvoiceLines (org subscriptions seam, Phase 3)', () => {
     expect(grant.allowanceCents).toBeGreaterThan(grantForInvoiceLines([{ amount: 5000 }], 'business', true).allowanceCents);
   });
 
-  it('MON-3 proration lines sum correctly: a negative unused-time credit nets against the new charge', () => {
+  it('MON-3 (partial) proration lines sum correctly: a negative unused-time credit nets against the new charge', () => {
     // Mid-period seat add: +$30 remaining-time charge for 3 seats, −$10 credit for unused time.
     const lines = [{ amount: 3000 }, { amount: -1000 }];
     expect(grantForInvoiceLines(lines, 'business', true)).toMatchObject({
@@ -156,17 +156,17 @@ describe('grantForInvoiceLines (org subscriptions seam, Phase 3)', () => {
     });
   });
 
-  it('MON-3 a net-negative or empty line set grants nothing and never goes below zero', () => {
+  it('MON-3 (partial) a net-negative or empty line set grants nothing and never goes below zero', () => {
     expect(grantForInvoiceLines([{ amount: -500 }], 'business', true)).toMatchObject({ paidCents: 0, allowanceCents: 0, basis: 'none' });
     expect(grantForInvoiceLines([], 'business', true)).toMatchObject({ paidCents: 0, allowanceCents: 0, basis: 'none' });
   });
 
-  it('MON-3 ignores lines with a missing or non-numeric amount instead of poisoning the sum', () => {
+  it('MON-3 (partial) ignores lines with a missing or non-numeric amount instead of poisoning the sum', () => {
     const lines = [{ amount: 5000 }, { amount: null }, undefined, { amount: Number.NaN }];
     expect(grantForInvoiceLines(lines, 'business', true).paidCents).toBe(5000);
   });
 
-  it('MON-2/MON-3 the org seam and the personal path apply the SAME ratio to the same paid amount', () => {
+  it('MON-2/MON-3 (partial) the org seam and the personal path apply the SAME ratio to the same paid amount', () => {
     expect(grantForInvoiceLines([{ amount: 1500 }], 'pro', true)).toEqual(grantForInvoice({ amountPaidCents: 1500, billingReason: 'subscription_cycle', hasSubscriptionParent: true, tier: 'pro' }, true));
   });
 });

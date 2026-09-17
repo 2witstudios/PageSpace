@@ -705,7 +705,7 @@ function seedMissedGrantRow(id: string, userId: string, paidCents = 1500) {
   });
 }
 
-describe('credits flow — missed-grant reconcile (MON-2, WAL-5)', () => {
+describe('credits flow — missed-grant reconcile (MON-2)', () => {
   it('MON-2 missed grant: re-resolves the tier from the LIVE subscription and grants amount_paid × ratio once the tier repaired', async () => {
     seedUser('u1', 'cus_1', 'free'); // at funding time: stale stored tier, invoice grants nothing
     await applyStripeFunding(invoicePaid('in_missed', 'cus_1', PERIOD_START, PERIOD_END, 1500));
@@ -771,7 +771,7 @@ describe('credits flow — missed-grant reconcile (MON-2, WAL-5)', () => {
     expect(ledgerOf('u1').filter((r) => r.entryType === 'monthly_grant')).toHaveLength(1);
   });
 
-  it('WAL-5 billing disabled (tenant/onprem): the sweep is a no-op and leaves missed_grant rows untouched', async () => {
+  it('billing disabled (tenant/onprem): the missed-grant sweep is a no-op and leaves missed_grant rows untouched', async () => {
     seedUser('u1', 'cus_1', 'free');
     await applyStripeFunding(invoicePaid('in_missed', 'cus_1', PERIOD_START, PERIOD_END, 1500));
     H.isBillingEnabled.mockReturnValue(false);
@@ -858,7 +858,7 @@ describe('credits flow — missed-grant reconcile review fixes (#2645 threads)',
     });
   });
 
-  it('WAL-5 bounded sweep: 250 unresolved rows ahead of a repairable one cannot starve it — it is granted within a bounded number of runs', async () => {
+  it('MON-2 bounded sweep: 250 unresolved rows ahead of a repairable one cannot starve it — it is granted within a bounded number of runs', async () => {
     for (let i = 0; i < 250; i++) {
       const userId = `stuck_${String(i).padStart(3, '0')}`;
       seedUser(userId, `cus_${userId}`, 'free');

@@ -1,6 +1,6 @@
 /**
  * Contract tests for /api/cron/reconcile-credits: HMAC gating, and that the
- * missed-grant sweep (MON-2, WAL-5) runs alongside the existing backfill and
+ * missed-grant sweep (MON-2) runs alongside the existing backfill and
  * surfaces its counts in the response and the audit event.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -73,7 +73,7 @@ describe('/api/cron/reconcile-credits', () => {
     expect(mockReconcileMissedGrants).not.toHaveBeenCalled();
   });
 
-  it('MON-2 WAL-5 runs the missed-grant sweep alongside the backfill and reports its counts', async () => {
+  it('MON-2 runs the missed-grant sweep alongside the backfill and reports its counts', async () => {
     mockBackfill.mockResolvedValue({ retried: 3, orphans: 1, expiredHolds: 2 });
     mockReconcileMissedGrants.mockResolvedValue({ reconciled: 4, stillMissing: 1 });
 
@@ -92,7 +92,7 @@ describe('/api/cron/reconcile-credits', () => {
     });
   });
 
-  it('MON-2 WAL-5 the missed-grant counts are recorded on the audit event', async () => {
+  it('MON-2 the missed-grant counts are recorded on the audit event', async () => {
     mockReconcileMissedGrants.mockResolvedValue({ reconciled: 2, stillMissing: 0 });
 
     await GET(makeRequest());
@@ -116,7 +116,7 @@ describe('/api/cron/reconcile-credits', () => {
     expect(mockLogError).toHaveBeenCalled();
   });
 
-  it('MON-2 WAL-5 per-row missed-grant failures make the run non-2xx, are reported, and are NOT audited as a success', async () => {
+  it('MON-2 per-row missed-grant failures make the run non-2xx, are reported, and are NOT audited as a success', async () => {
     mockBackfill.mockResolvedValue({ retried: 1, orphans: 0, expiredHolds: 0 });
     mockReconcileMissedGrants.mockResolvedValue({ reconciled: 1, stillMissing: 2, failed: 3 });
 
@@ -155,7 +155,7 @@ describe('/api/cron/reconcile-credits', () => {
     );
   });
 
-  it('MON-2 WAL-5 a clean run reports zero failures with a 200', async () => {
+  it('MON-2 a clean run reports zero failures with a 200', async () => {
     mockReconcileMissedGrants.mockResolvedValue({
       reconciled: 1, stillMissing: 0, indeterminate: 0, indeterminateLedgerIds: [], failed: 0,
     });

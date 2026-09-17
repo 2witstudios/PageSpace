@@ -7,9 +7,19 @@
 #     ("MON-2 …" in an it/test title, or a describe title whose tests ALL pass — never only in a
 #     riteway given/should, which no reporter sees). Only test runs in .github/workflows/ci.yml
 #     count: a suite only security.yml runs never reaches the gate. Leaving an ID here
-#     after a test names it FAILS the gate (STALE-ALLOW), so this file can only shrink.
+#     after a test names it FAILS the gate (STALE-ALLOW), so this file shrinks as work lands.
 #   - A token here that is not a Spec ID FAILS the gate (typo guard).
-#   - Never add an ID back. If a test is deleted, the gate goes red; that is the point.
+#   - Re-adding an ID is allowed ONLY when a review shows the test(s) covering it do not prove
+#     the requirement (an over-claimed title). That PR removes the ID from those titles, re-adds
+#     it here with a comment saying why, and its PR body cites the review. Never re-add an ID to
+#     silence a gap: if a test that genuinely proved a requirement is deleted, the gate goes red,
+#     and that is the point. The STALE-ALLOW failure above is unchanged.
+#   - A test that proves only PART of a requirement titles it "<ID> (partial) …" (the marker
+#     immediately after the ID, e.g. "MON-3 (partial) grantForInvoiceLines sums base and
+#     extra-seat lines before the ratio"; review 5230424182 on #2657). The gate lists such tests
+#     under the ID for traceability but never counts them: an ID is covered only when some passing
+#     test names it WITHOUT the marker, and only those hits make an entry here STALE-ALLOW. So a
+#     partially proven ID stays on this list, with a comment naming what is still unproven.
 # One ID per line; `#` starts a comment.
 AUD-1
 AUD-2
@@ -23,6 +33,11 @@ DRV-6
 DRV-7
 DRV-8
 DRV-9
+# MON-3 (the org pool refill: (Business base + extra-seat items) paid × ratio) re-added per review
+# 5230424182 on #2657: invoice-grant.test.ts proves the grantForInvoiceLines arithmetic, but that
+# seam has no production caller and no org pool exists, so nothing is refilled yet. Those tests
+# are titled "MON-3 (partial)"; Phase 3 D1 proves the refill.
+MON-3
 ORG-1
 ORG-2
 ORG-3
@@ -41,6 +56,11 @@ POL-9
 POL-10
 POL-11
 SEAT-1
+# SEAT-2 (tier table: Free, Pro, Business $50 with 5 seats + $10/extra seat; Business is the org
+# plan — buying it creates the org — and is not sold to a lone user) re-added per review
+# 5230424182 on #2657: the tier table, prices and lone-user refusal are proven, so those tests are
+# titled "SEAT-2 (partial)"; "buying it creates the org" is unproven until Wave C creates orgs.
+SEAT-2
 SEAT-3
 SEAT-4
 SEAT-5
@@ -77,6 +97,12 @@ WAL-1
 WAL-2
 WAL-3
 WAL-4
+# WAL-5 (every AI usage row records the wallet charged; holds per wallet; ledger, reconciliation
+# and monthly reset keyed on wallet) re-added by lane ow-r0-fixups per Review 0b (page
+# wiv716vr39v9wbx2z40aoio1, Follow-up 2): no wallet exists yet, and the tests that named it
+# prove user-keyed missed-grant reconciliation (MON-2), not wallet keying. Their titles no
+# longer claim it. Remove this line once a test exercises wallet-keyed rows.
+WAL-5
 WAL-6
 WAL-7
 WAL-8

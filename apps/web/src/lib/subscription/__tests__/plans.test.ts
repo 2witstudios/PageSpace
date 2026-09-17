@@ -18,7 +18,7 @@ import { stripeConfig } from '../../stripe-config';
 
 describe('Subscription Plans', () => {
   describe('PLANS constant', () => {
-    it('SEAT-2 defines exactly the three subscription tiers: Free, Pro, Business', () => {
+    it('SEAT-2 (partial) defines exactly the three subscription tiers: Free, Pro, Business', () => {
       expect(Object.keys(PLANS)).toEqual(['free', 'pro', 'business']);
     });
 
@@ -26,13 +26,13 @@ describe('Subscription Plans', () => {
       expect('founder' in PLANS).toBe(false);
     });
 
-    it('SEAT-2 prices are $0 / $15 / $50 a month', () => {
+    it('SEAT-2 (partial) prices are $0 / $15 / $50 a month', () => {
       expect(PLANS.free.price.monthly).toBe(0);
       expect(PLANS.pro.price.monthly).toBe(15);
       expect(PLANS.business.price.monthly).toBe(50);
     });
 
-    it('SEAT-2 Business is the org plan with 5 seats included at $10 per extra seat; Free and Pro are personal', () => {
+    it('SEAT-2 (partial) Business is the org plan with 5 seats included at $10 per extra seat; Free and Pro are personal', () => {
       expect(PLANS.business).toMatchObject({ isOrgPlan: true, includedSeats: 5, extraSeatUsd: 10 });
       expect(PLANS.pro).toMatchObject({ isOrgPlan: false, includedSeats: 0, extraSeatUsd: 0 });
       expect(PLANS.free).toMatchObject({ isOrgPlan: false, includedSeats: 0, extraSeatUsd: 0 });
@@ -88,7 +88,7 @@ describe('Subscription Plans', () => {
   });
 
   describe('PLAN_ORDER constant', () => {
-    it('SEAT-2 defines tier order from lowest to highest', () => {
+    it('SEAT-2 (partial) defines tier order from lowest to highest', () => {
       expect(PLAN_ORDER).toEqual(['free', 'pro', 'business']);
     });
   });
@@ -196,7 +196,7 @@ describe('Subscription Plans', () => {
   });
 
   describe('getPersonalPlans()', () => {
-    it('SEAT-2 never offers the org plan (Business) to a lone user', () => {
+    it('SEAT-2 (partial) never offers the org plan (Business) to a lone user', () => {
       expect(getPersonalPlans().map((p) => p.id)).toEqual(['free', 'pro']);
       expect(getPersonalPlans('free').map((p) => p.id)).toEqual(['free', 'pro']);
       expect(getPersonalPlans('pro').map((p) => p.id)).toEqual(['free', 'pro']);
@@ -208,7 +208,7 @@ describe('Subscription Plans', () => {
   });
 
   describe('isPersonalPlanPriceId()', () => {
-    it('SEAT-2 P1 (independent review) is true for the Pro price id — the one price a lone user may buy today', () => {
+    it('SEAT-2 (partial) P1 (independent review) is true for the Pro price id — the one price a lone user may buy today', () => {
       expect(isPersonalPlanPriceId(PLANS.pro.stripePriceId!)).toBe(true);
     });
 
