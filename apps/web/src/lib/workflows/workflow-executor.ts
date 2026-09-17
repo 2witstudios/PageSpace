@@ -33,6 +33,9 @@ import { frameWebhookPayloadPrompt } from '@/lib/webhooks/webhook-payload-framin
 import { DETERMINISTIC_TOOL_ALLOWLIST, getDeterministicTools } from '@/lib/ai/core/deterministic-tools';
 import type { z } from 'zod';
 import { capStepToolPayloads } from '@/lib/ai/core/cap-step-tool-payloads';
+import { releaseHold } from '@pagespace/lib/billing/credit-consume';
+import { acquireWorkflowCredit } from './workflow-credit-gate';
+import type { WorkflowGatePolicy } from './core/workflow-gate-options';
 
 export type WorkflowRunSource =
   | { table: 'cron'; id: null; triggerAt: Date | null }
@@ -99,6 +102,11 @@ export interface WorkflowExecutionInput {
    * references; absent for cron/manual runs (refs then strict-fail).
    */
   eventContext?: { promptOverride?: string; payload?: unknown };
+  /**
+   * Caller-specific daily-cap policy for the credit gate executeWorkflow runs
+   * on `createdBy`. It can only tune the cap — never skip the gate itself.
+   */
+  creditGate?: WorkflowGatePolicy;
 }
 
 export async function executeWorkflow(input: WorkflowExecutionInput): Promise<WorkflowExecutionResult> {
@@ -131,10 +139,19 @@ export async function executeWorkflow(input: WorkflowExecutionInput): Promise<Wo
 
   const runId = runRow.id;
   let result: WorkflowExecutionResult;
+  let holdId: string | undefined;
 
   try {
+    // 1. Credit gate on the billed user, for EVERY entry point. A refusal
+    //    (out of credits, an unclaimed agent's requires_funding) fails the
+    //    run before any model is resolved; the hold covers every ai step and
+    //    is released in `finally` whatever the run's outcome.
+    const credit = await acquireWorkflowCredit(input);
+    if (credit.allowed) holdId = credit.holdId;
     const explicitSteps = input.steps && input.steps.length > 0 ? input.steps : null;
-    if (explicitSteps) {
+    if (!credit.allowed) {
+      result = { success: false, durationMs: Date.now() - startTime, error: credit.error };
+    } else if (explicitSteps) {
       result = await runStepChain(input, explicitSteps, runId, startTime);
     } else if (input.agentPageId) {
       // Legacy single-AI-prompt path, byte-for-byte pre-steps behavior.
@@ -156,6 +173,8 @@ export async function executeWorkflow(input: WorkflowExecutionInput): Promise<Wo
       durationMs: Date.now() - startTime,
       error: errorMessage,
     };
+  } finally {
+    if (holdId) void releaseHold(holdId).catch(() => {});
   }
 
   const finalizeError = await finalizeRun(runId, result);

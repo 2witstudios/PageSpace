@@ -296,6 +296,7 @@ describe('POST /api/cron/task-triggers', () => {
       agentPageId: MOCK_WORKFLOW.agentPageId,
       prompt: MOCK_WORKFLOW.prompt,
       taskContext: { taskItemId: MOCK_TRIGGER.taskItemId, triggerType: MOCK_TRIGGER.triggerType },
+      creditGate: { skipDailyCap: true },
     }));
   });
 

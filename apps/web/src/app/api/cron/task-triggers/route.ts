@@ -136,6 +136,8 @@ export async function POST(req: Request) {
             timezone: workflow.timezone,
             source: { table: 'taskTriggers', id: trigger.id, triggerAt: trigger.nextRunAt },
             taskContext: { taskItemId: trigger.taskItemId, triggerType: trigger.triggerType },
+            // executeWorkflow gates credit on createdBy; server-scheduled fire.
+            creditGate: { skipDailyCap: true },
           };
 
           const result = await executeWorkflow(input);

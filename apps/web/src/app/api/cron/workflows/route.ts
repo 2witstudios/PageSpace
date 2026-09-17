@@ -73,6 +73,9 @@ export async function POST(req: Request) {
       instructionPageId: workflow.instructionPageId,
       timezone: workflow.timezone,
       source: { table: 'cron', id: null, triggerAt: workflow.nextRunAt },
+      // executeWorkflow gates credit on createdBy; a server-scheduled fire is
+      // not interactive fan-out, so the per-user daily backstop is skipped.
+      creditGate: { skipDailyCap: true },
     });
 
     // advanceNextRunAt throws on failure so the surrounding Promise.allSettled

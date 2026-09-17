@@ -77,3 +77,70 @@ describe('AI gate call-site guards', () => {
     expect(offenders).toEqual([]);
   });
 });
+
+/**
+ * Workflow runs are gated INSIDE executeWorkflow (Agent Signup Phase 1b / D-33):
+ * the manual run route and both crons once called it with no credit gate, so a
+ * zero-balance account — and any unclaimed agent — could schedule free AI. The
+ * gate now lives in the executor; these guards keep it there and make every new
+ * entry point a conscious, reviewed addition.
+ */
+describe('workflow run gate guards', () => {
+  const SRC_DIR = join(process.cwd(), 'src');
+  const EXECUTOR = 'lib/workflows/workflow-executor.ts';
+
+  const allSourceFiles = (dir: string): string[] => {
+    const out: string[] = [];
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === '__tests__' || entry.name === 'node_modules') continue;
+        out.push(...allSourceFiles(full));
+      } else if (/\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) {
+        out.push(full);
+      }
+    }
+    return out;
+  };
+  const srcRel = (file: string) => relative(SRC_DIR, file).split(sep).join('/');
+  const SOURCE_FILES = allSourceFiles(SRC_DIR);
+
+  // Every caller of executeWorkflow. Adding one means reading the gate policy
+  // in lib/workflows/core/workflow-gate-options.ts and listing it here.
+  const KNOWN_ENTRY_POINTS = [
+    'app/api/cron/task-triggers/route.ts',
+    'app/api/cron/workflows/route.ts',
+    'app/api/workflows/[workflowId]/run/route.ts',
+    'lib/integrations/zoom/webhook-trigger-executor.ts',
+    'lib/webhooks/page-webhook-trigger-executor.ts',
+    'lib/workflows/calendar-trigger-executor.ts',
+    'lib/workflows/task-trigger-helpers.ts',
+  ];
+
+  it('every executeWorkflow entry point is enumerated', () => {
+    const callers = SOURCE_FILES.filter(
+      (f) => srcRel(f) !== EXECUTOR && readFileSync(f, 'utf8').includes('executeWorkflow('),
+    ).map(srcRel).sort();
+    expect(callers).toEqual(KNOWN_ENTRY_POINTS);
+  });
+
+  it('executeWorkflow gates credit before dispatching any model call and releases the hold in finally', () => {
+    const src = readFileSync(join(SRC_DIR, EXECUTOR), 'utf8');
+    const body = src.slice(src.indexOf('export async function executeWorkflow('));
+    const gate = body.indexOf('await acquireWorkflowCredit(input)');
+    expect(gate).toBeGreaterThan(-1);
+    expect(gate).toBeLessThan(body.indexOf('runStepChain('));
+    expect(gate).toBeLessThan(body.indexOf('runExecution('));
+    const fin = body.indexOf('} finally {');
+    expect(fin).toBeGreaterThan(gate);
+    expect(body.slice(fin, body.indexOf('finalizeRun(')).includes('releaseHold(holdId)')).toBe(true);
+  });
+
+  it('no entry point takes its own credit gate or hold (the executor holds once for the whole run)', () => {
+    const offenders = KNOWN_ENTRY_POINTS.filter((rel) => {
+      const src = readFileSync(join(SRC_DIR, rel), 'utf8');
+      return src.includes('canConsumeAI(') || src.includes('releaseHold(');
+    });
+    expect(offenders).toEqual([]);
+  });
+});

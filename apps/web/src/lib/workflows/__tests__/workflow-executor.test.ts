@@ -34,6 +34,28 @@ const {
   mockResolveSandboxToolEligibility: vi.fn(),
 }));
 
+// The credit gate executeWorkflow runs on EVERY entry point (Phase 1b / D-33).
+// Plain recorders, not vi.fn(), so resetAllMocks in each suite cannot wipe the
+// default "allowed" decision the pre-existing tests rely on.
+const creditGate = vi.hoisted(() => ({
+  decision: { allowed: true, holdId: 'hold_1' } as
+    | { allowed: true; holdId?: string }
+    | { allowed: false; error: string },
+  calls: [] as unknown[],
+  released: [] as string[],
+}));
+vi.mock('../workflow-credit-gate', () => ({
+  acquireWorkflowCredit: async (input: unknown) => {
+    creditGate.calls.push(input);
+    return creditGate.decision;
+  },
+}));
+vi.mock('@pagespace/lib/billing/credit-consume', () => ({
+  releaseHold: async (holdId: string) => {
+    creditGate.released.push(holdId);
+  },
+}));
+
 vi.mock('@/lib/ai/core/sandbox-tool-eligibility', () => ({
   resolveSandboxToolEligibility: (...args: unknown[]) => mockResolveSandboxToolEligibility(...args),
 }));
@@ -87,12 +109,14 @@ vi.mock('@/lib/ai/core/deterministic-tools', async () => {
     }),
   };
 });
-vi.mock('@pagespace/db/operators', () => ({
+vi.mock('@pagespace/db/operators', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   eq: vi.fn(),
   and: vi.fn(),
   inArray: vi.fn(),
 }));
-vi.mock('@pagespace/db/schema/auth', () => ({
+vi.mock('@pagespace/db/schema/auth', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   users: { id: 'id', name: 'name' },
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
@@ -954,5 +978,87 @@ describe('executeWorkflow — explicit step chains', () => {
     expect(result.success).toBe(false);
     expect(result.error).toContain('no steps and no agentPageId');
     expect(generateText).not.toHaveBeenCalled();
+  });
+});
+
+describe('executeWorkflow — credit gate inside the executor', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    creditGate.decision = { allowed: true, holdId: 'hold_1' };
+    creditGate.calls = [];
+    creditGate.released = [];
+    mockSpawnSession.mockResolvedValue({ ok: false, reason: 'spawn_failed' });
+    mockCreateConversationInSession.mockResolvedValue(undefined);
+    mockEndSession.mockResolvedValue({ ok: true });
+    vi.mocked(isProviderError).mockReturnValue(false);
+    vi.mocked(createAIProvider).mockResolvedValue(mockProviderResult as never);
+    mockResolvePageAgentIntegrationTools.mockResolvedValue({});
+    mockResolveSandboxToolEligibility.mockResolvedValue(true);
+    vi.mocked(generateText).mockResolvedValue({
+      text: 'Report complete',
+      steps: [{ text: 'Report complete', toolCalls: [] }],
+      usage: { inputTokens: 1, outputTokens: 1 },
+    } as never);
+    mockInsert.mockReturnValue({ values: mockInsertValues });
+    mockInsertValues.mockReturnValue({ onConflictDoNothing: mockOnConflictDoNothing });
+    mockOnConflictDoNothing.mockReturnValue({ returning: mockInsertReturning });
+    mockInsertReturning.mockResolvedValue([{ id: 'run_1' }]);
+    mockUpdate.mockReturnValue({ set: mockUpdateSet });
+    mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
+    mockUpdateWhere.mockResolvedValue(undefined);
+  });
+
+  test('given a refused gate (an unclaimed agent), should fail the run with the gate reason and never resolve a model or call generateText', async () => {
+    creditGate.decision = { allowed: false, error: 'AI credit gate denied: requires_funding' };
+    setupSelectChain([mockAgent], [mockDrive]);
+
+    const result = await executeWorkflow(createInputFixture({ source: { table: 'cron', id: null, triggerAt: null } }));
+
+    expect(result).toMatchObject({ success: false, error: 'AI credit gate denied: requires_funding', runId: 'run_1' });
+    expect(createAIProvider).not.toHaveBeenCalled();
+    expect(generateText).not.toHaveBeenCalled();
+    expect(mockUpdateSet).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'error', error: 'AI credit gate denied: requires_funding' }),
+    );
+    expect(creditGate.released).toEqual([]);
+  });
+
+  test('given a manual run, should gate the input it was handed (billed to createdBy)', async () => {
+    setupSelectChain([mockAgent], [mockDrive]);
+    const input = createInputFixture({ source: { table: 'manual', id: null, triggerAt: null } });
+
+    await executeWorkflow(input);
+
+    expect(creditGate.calls).toEqual([input]);
+  });
+
+  test('given an allowed gate, should run and release the hold once the run ends', async () => {
+    setupSelectChain([mockAgent], [mockDrive]);
+
+    const result = await executeWorkflow(createInputFixture());
+
+    expect(result.success).toBe(true);
+    expect(generateText).toHaveBeenCalledTimes(1);
+    expect(creditGate.released).toEqual(['hold_1']);
+  });
+
+  test('given a run that throws, should still release the hold', async () => {
+    mockSelect.mockImplementation(() => {
+      throw new Error('db down');
+    });
+
+    const result = await executeWorkflow(createInputFixture({ steps: [{ kind: 'ai', prompt: 'p' }] }));
+
+    expect(result.success).toBe(false);
+    expect(creditGate.released).toEqual(['hold_1']);
+  });
+
+  test('given a claim conflict, should neither gate nor hold', async () => {
+    mockInsertReturning.mockResolvedValue([]);
+
+    const result = await executeWorkflow(createInputFixture());
+
+    expect(result.claimConflict).toBe(true);
+    expect(creditGate.calls).toEqual([]);
   });
 });

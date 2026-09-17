@@ -173,6 +173,7 @@ describe('POST /api/cron/workflows', () => {
       prompt: MOCK_WORKFLOW.prompt,
       timezone: MOCK_WORKFLOW.timezone,
       source: { table: 'cron', id: null, triggerAt: MOCK_WORKFLOW.nextRunAt },
+      creditGate: { skipDailyCap: true },
     }));
   });
 

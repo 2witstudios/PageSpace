@@ -1,6 +1,5 @@
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
-import { users } from '@pagespace/db/schema/auth';
 import { pages } from '@pagespace/db/schema/core';
 import { workflows } from '@pagespace/db/schema/workflows';
 import { pageWebhooks } from '@pagespace/db/schema/page-webhooks';
@@ -11,12 +10,9 @@ import {
   type WorkflowExecutionInput,
 } from '@/lib/workflows/workflow-executor';
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
-import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
-import { WEBHOOK_DAILY_EXPOSURE_CAP_CENTS, CREDIT_HOLD_ESTIMATE_CENTS } from '@pagespace/lib/billing/credit-pricing';
-import { releaseHold } from '@pagespace/lib/billing/credit-consume';
-import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
+import { WEBHOOK_DAILY_EXPOSURE_CAP_CENTS } from '@pagespace/lib/billing/credit-pricing';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { resolveSteps, hasAiStep, countAiSteps } from '@/lib/workflows/core/step-plan';
+import { resolveSteps, hasAiStep } from '@/lib/workflows/core/step-plan';
 import { frameWebhookPayloadPrompt } from './webhook-payload-framing';
 
 const logger = loggers.api.child({ module: 'page-webhook-trigger-executor' });
@@ -27,8 +23,9 @@ const logger = loggers.api.child({ module: 'page-webhook-trigger-executor' });
  * The page-anchored counterpart to Zoom's executeWebhookTrigger: the
  * webhook_triggers row holds only the (pageWebhook → workflow) wiring, so we
  * load the linked workflows row for the execution payload, preflight
- * access/agent-page, gate credit, and delegate to the shared executor
- * UNMODIFIED. Two things differ from the Zoom path:
+ * access/agent-page, and delegate to the shared executor UNMODIFIED (which
+ * gates credit on createdBy for every entry point). Two things differ from
+ * the Zoom path:
  *  - Billing resolves to `workflow.createdBy` (there is no OAuth connection
  *    owner); membership + credit gate + the released hold all key off them.
  *  - A page can be bulk-moved to a different drive AFTER a trigger is bound
@@ -105,7 +102,7 @@ export async function executePageWebhookTrigger(
     }
 
     // 3. Billing resolves to workflow.createdBy — verify they still belong to
-    //    the workflow's drive before spending their credit.
+    //    the workflow's drive before executeWorkflow spends their credit.
     const hasDriveAccess = await isUserDriveMember(workflow.createdBy, workflow.driveId);
     if (!hasDriveAccess) {
       return {
@@ -115,9 +112,9 @@ export async function executePageWebhookTrigger(
       };
     }
 
-    // 4. Resolve the step mix. AI resources (agent preflight, credit gate)
-    //    are claimed only when an ai step exists; deterministic-only chains
-    //    skip them entirely — no model is ever invoked.
+    // 4. Resolve the step mix. The agent preflight runs only when an ai
+    //    step exists; deterministic-only chains skip it — no model is ever
+    //    invoked.
     const steps = resolveSteps({
       steps: workflow.steps,
       prompt: workflow.prompt,
@@ -174,52 +171,7 @@ export async function executePageWebhookTrigger(
       }
     }
 
-    // 6. Credit gate on the billed user (ai steps only) — blocks
-    //    out-of-credits users before the model is invoked. Unlike the Zoom
-    //    path (whose trigger source is an authenticated OAuth account), this
-    //    run is forced by whoever holds the webhook secret — a bearer
-    //    credential handed to external systems. The daily exposure cap
-    //    therefore MUST apply, and because the env tier caps default to
-    //    DISABLED, the webhook-specific ceiling (default-on) is what
-    //    guarantees a hard per-day monetary bound on a leaked secret even on
-    //    unconfigured deployments. Deterministic-only chains take no hold:
-    //    their blast radius is bounded by the deterministic budget in the
-    //    fan-out plus each tool's own permission checks.
-    //
-    //    A single gate call/hold covers the WHOLE run, not one AI call —
-    //    runStepChain bills provider usage once per ai step (up to
-    //    MAX_WORKFLOW_STEPS), so the reservation must be sized by the
-    //    chain's ai-step count or a multi-step chain blows straight through
-    //    the daily exposure ceiling this gate exists to enforce.
-    let holdId: string | undefined;
-    if (needsAi) {
-      const [owner] = await db
-        .select({ subscriptionTier: users.subscriptionTier })
-        .from(users)
-        .where(eq(users.id, workflow.createdBy));
-      const gate = await canConsumeAI(
-        workflow.createdBy,
-        (owner?.subscriptionTier ?? 'free') as SubscriptionTier,
-        {
-          dailyCapCeilingCents: WEBHOOK_DAILY_EXPOSURE_CAP_CENTS,
-          estCostCents: CREDIT_HOLD_ESTIMATE_CENTS * countAiSteps(steps),
-        },
-      );
-      if (!gate.allowed) {
-        logger.info('Page webhook trigger: skipped (credit gate denied)', {
-          triggerId: trigger.id,
-          reason: gate.reason,
-        });
-        return {
-          success: false,
-          durationMs: Date.now() - startTime,
-          error: `AI credit gate denied: ${gate.reason}`,
-        };
-      }
-      holdId = gate.holdId;
-    }
-
-    // 7. Compose execution input — executeWorkflow writes workflow_runs and
+    // 6. Compose execution input — executeWorkflow writes workflow_runs and
     //    owns the single-running claim. Legacy workflows get the F2-framed
     //    promptOverride (prompt first, nonce-fenced envelope last); explicit
     //    step chains get the raw parsed payload instead — deterministic steps
@@ -241,17 +193,18 @@ export async function executePageWebhookTrigger(
         workflow.steps && workflow.steps.length > 0
           ? { payload: envelope }
           : { promptOverride: frameWebhookPayloadPrompt(workflow.prompt, envelope) },
+      // executeWorkflow gates credit on createdBy with a hold sized by the
+      // chain's ai-step count. Unlike the Zoom path (whose trigger source is an
+      // authenticated OAuth account), this run is forced by whoever holds the
+      // webhook secret — a bearer credential handed to external systems. The
+      // daily exposure cap therefore MUST apply (no skipDailyCap), and because
+      // the env tier caps default to DISABLED, the webhook-specific ceiling
+      // (default-on) guarantees a hard per-day monetary bound on a leaked
+      // secret even on unconfigured deployments.
+      creditGate: { dailyCapCeilingCents: WEBHOOK_DAILY_EXPOSURE_CAP_CENTS },
     };
 
-    // executeWorkflow calls AIMonitoring.trackUsage → consumeCredits internally.
-    // Release the hold here so the user's spendable balance is accurate after
-    // execution, whether it succeeds, fails, or throws.
-    let result: WorkflowExecutionResult;
-    try {
-      result = await executeWorkflow(input);
-    } finally {
-      if (holdId) void releaseHold(holdId).catch(() => {});
-    }
+    const result = await executeWorkflow(input);
 
     logger.info('Page webhook trigger executed', {
       triggerId: trigger.id,
