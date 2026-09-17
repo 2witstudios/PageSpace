@@ -15,8 +15,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (up to 200000) are optional, and `--json` prints the raw result instead. A cold workspace starts
   its sandbox on the first exec. The run is gated, metered and audited exactly like the agent's
   own `bash` tool: it needs a plan that includes code execution, and a key scoped to other drives
-  cannot see or reach the workspace. Quote a pipeline as one argument (`-- 'ls | wc -l'`) so your
-  local shell does not run half of it.
+  cannot see or reach the workspace. One argument after `--` runs as a shell command line, so
+  quote a pipeline as one argument (`-- 'ls | wc -l'`) and your local shell does not run half of
+  it. Several arguments are passed as separate words with their quoting preserved, so
+  `-- sh -c 'echo hi; exit 3'` hands `sh` the whole script as one word.
 - **`--` ends option parsing for every command.** Everything after it is passed to the command
   verbatim, so a flag like `--json` after `--` belongs to the remote command, not to the CLI.
 - **`pagespace mcp` exposes `workspaces.list` and `workspaces.exec` as tools.**

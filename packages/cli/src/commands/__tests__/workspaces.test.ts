@@ -5,6 +5,7 @@ import {
   EXIT_USAGE_ERROR,
   extractExecArgs,
   parseArgv,
+  quoteShellArgs,
   remoteExitCode,
   renderWorkspacesList,
   workspacesExecHandler,
@@ -58,6 +59,46 @@ describe('extractExecArgs', () => {
   });
 });
 
+describe('quoteShellArgs', () => {
+  it('leaves safe words unquoted', () => {
+    expect(quoteShellArgs(['ls', '-la', '--json', 'a/b.c', 'k=v:x@y%z+w,q'])).toBe('ls -la --json a/b.c k=v:x@y%z+w,q');
+  });
+
+  it('single-quotes a word with spaces, ;, or $', () => {
+    expect(quoteShellArgs(['sh', '-c', 'echo hi; exit 3'])).toBe("sh -c 'echo hi; exit 3'");
+    expect(quoteShellArgs(['echo', '$HOME'])).toBe("echo '$HOME'");
+    expect(quoteShellArgs(['echo', 'a b'])).toBe("echo 'a b'");
+  });
+
+  it("escapes an embedded single quote as '\\'' and quotes an empty word as ''", () => {
+    expect(quoteShellArgs(['echo', "it's"])).toBe("echo 'it'\\''s'");
+    expect(quoteShellArgs(['printf', ''])).toBe("printf ''");
+  });
+});
+
+describe('extractExecArgs argument boundaries', () => {
+  it('preserves each word after -- as a separate shell word', () => {
+    expect(extractExecArgs(['ws_1', '--', 'sh', '-c', 'echo hi; exit 3'])).toEqual({
+      ok: true,
+      workspaceId: 'ws_1',
+      command: "sh -c 'echo hi; exit 3'",
+    });
+    expect(extractExecArgs(['ws_1', '--', 'echo', "it's $HOME", ''])).toEqual({
+      ok: true,
+      workspaceId: 'ws_1',
+      command: "echo 'it'\\''s $HOME' ''",
+    });
+  });
+
+  it('sends exactly one argument after -- verbatim as a command line', () => {
+    expect(extractExecArgs(['ws_1', '--', 'ls | wc -l; echo $HOME'])).toEqual({
+      ok: true,
+      workspaceId: 'ws_1',
+      command: 'ls | wc -l; echo $HOME',
+    });
+  });
+});
+
 describe('remoteExitCode', () => {
   it('passes 0..255 through and maps anything else to a runtime error', () => {
     expect(remoteExitCode(0)).toBe(0);
@@ -75,7 +116,7 @@ describe('pagespace workspaces exec', () => {
     const stderr = createRecordingSink();
     const ctx = createFakeContext({ sdk: fakeSdk({ workspaces: { exec } }), stdout, stderr });
 
-    const code = await workspacesExecHandler(ctx, commandIntent(['ws_1', '--', 'sh', '-c', "'echo hi; exit 3'"]));
+    const code = await workspacesExecHandler(ctx, commandIntent(['ws_1', '--', 'sh', '-c', 'echo hi; exit 3']));
 
     expect(code).toBe(3);
     expect(exec).toHaveBeenCalledWith({ workspaceId: 'ws_1', command: "sh -c 'echo hi; exit 3'", cwd: undefined, timeoutMs: undefined });

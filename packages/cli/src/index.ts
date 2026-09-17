@@ -465,6 +465,7 @@ export type { RunDependencies } from './run.js';
 // Workspace shell verbs — thin projections over the workspaces.* SDK operations.
 export {
   extractExecArgs,
+  quoteShellArgs,
   renderWorkspacesList,
   workspacesExecHandler,
   workspacesListHandler,

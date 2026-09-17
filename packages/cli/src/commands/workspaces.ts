@@ -54,11 +54,25 @@ export type ExtractExecArgsResult =
 
 const EXEC_USAGE = 'Usage: pagespace workspaces exec <workspaceId> [--cwd <dir>] [--timeout-ms <ms>] -- <command…>';
 
+const SAFE_SHELL_WORD = /^[A-Za-z0-9_\-./=:@%+,]+$/;
+
 /**
- * Pure: `<workspaceId> [--cwd d] [--timeout-ms n] -- <command…>`. Everything
- * after `--` is the command, joined with spaces and run by the sandbox's shell —
- * quote a pipeline as one argument to keep it away from the LOCAL shell. A
- * single command argument without `--` works too.
+ * Pure: rebuild a command line from argv words so the remote POSIX shell sees
+ * the same word boundaries the local shell delivered. Safe words stay bare;
+ * anything else is single-quoted, with an embedded `'` written as `'\''`.
+ */
+export function quoteShellArgs(words: readonly string[]): string {
+  return words
+    .map((word) => (SAFE_SHELL_WORD.test(word) ? word : `'${word.replace(/'/g, "'\\''")}'`))
+    .join(' ');
+}
+
+/**
+ * Pure: `<workspaceId> [--cwd d] [--timeout-ms n] -- <command…>`. Exactly one
+ * command argument (after `--` or without it) is sent verbatim as a shell
+ * command line, so `-- 'ls | wc -l'` runs a pipeline remotely. Several
+ * arguments after `--` are separate words: each is shell-quoted as needed so
+ * `-- sh -c 'echo hi; exit 3'` keeps its script as one word.
  */
 export function extractExecArgs(args: readonly string[]): ExtractExecArgsResult {
   const separator = args.indexOf('--');
@@ -102,7 +116,7 @@ export function extractExecArgs(args: readonly string[]): ExtractExecArgsResult 
   if (separator === -1 && commandParts.length > 1) {
     return { ok: false, message: `Put the command after --, or quote it as one argument.\n${EXEC_USAGE}` };
   }
-  const command = commandParts.join(' ');
+  const command = commandParts.length === 1 ? commandParts[0] : quoteShellArgs(commandParts);
   if (command.trim().length === 0) return { ok: false, message: EXEC_USAGE };
 
   return {

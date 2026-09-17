@@ -213,6 +213,8 @@ channels  send <channelId> <message>
 
 workspaces list [--drive <driveId>]                # your agent workspaces; each has one sandbox
            exec <workspaceId> [--cwd <dir>] [--timeout-ms <ms>] -- <command…>   # exits with the command's own status
+                # one argument runs as a shell command line (-- 'ls | wc -l');
+                # several are separate words, quoting preserved (-- sh -c 'echo hi; exit 3')
 
 keys      (no args: guided wizard) · create · use · list · describe · revoke
 
