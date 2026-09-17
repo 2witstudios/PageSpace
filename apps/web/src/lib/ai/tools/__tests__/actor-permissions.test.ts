@@ -31,6 +31,9 @@ const {
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  // The ceiling's owner/admin bar asks the user's live standing too; the
+  // fixtures' users are owners unless a test says otherwise.
+  isDriveOwnerOrAdmin: vi.fn(async () => true),
   getUserAccessLevel: vi.fn(),
   getUserDriveAccess: mockGetUserDriveAccess,
   canUserEditPage: vi.fn(),

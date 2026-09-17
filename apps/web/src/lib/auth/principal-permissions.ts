@@ -45,6 +45,7 @@ import {
   getCeilingDriveMembership,
   getCeilingAccessiblePagesInDrive,
   hasCeilingDriveMembership,
+  isCeilingDriveOwnerOrAdmin,
   getCredentialCeiling,
 } from './credential-ceiling';
 import { getAllowedDriveIds, isMCPAuthResult, isOAuthAuthResult, isManageKeysOnly, type AuthResult, type MCPAuthResult, type OAuthAuthResult } from './index';
@@ -151,13 +152,7 @@ export async function getPrincipalDriveAccess(auth: AuthResult, driveId: string)
 export async function isPrincipalDriveOwnerOrAdmin(auth: AuthResult, driveId: string): Promise<boolean> {
   if (isManageKeysOnly(auth)) return false;
   const ceiling = getCredentialCeiling(auth);
-  if (ceiling) {
-    const membership = await getCeilingDriveMembership(ceiling, auth.userId, driveId);
-    if (!membership) return false;
-    // Inherit: the credential is its user — the user's own authority decides.
-    if (membership.role === null) return isDriveOwnerOrAdmin(auth.userId, driveId);
-    return membership.role === 'OWNER' || membership.role === 'ADMIN';
-  }
+  if (ceiling) return isCeilingDriveOwnerOrAdmin(ceiling, auth.userId, driveId);
   return isDriveOwnerOrAdmin(auth.userId, driveId);
 }
 

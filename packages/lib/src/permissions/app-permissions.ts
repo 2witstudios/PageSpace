@@ -22,6 +22,11 @@ import type { DriveScopeRow } from '../auth/oauth/scopes';
  *  - explicit role  → means EXACTLY what the same role means for a human
  *    drive member (parity oracle: getUserAccessLevel) — channels editable by
  *    members, drive-root creation for members, admin sees private pages, etc.
+ *    — and never MORE than the token's user can do right now: every explicit
+ *    answer is intersected with the user's live access (see
+ *    {@link intersectPermissionLevels}). A demoted user's ADMIN key is capped at
+ *    what the user now is; a revoked private-page grant or a removed custom
+ *    role reaches every credential the user holds on the next request.
  */
 
 export type AppMemberRole = 'OWNER' | 'ADMIN' | 'MEMBER';
@@ -128,6 +133,24 @@ export function resolveExplicitAppRoleAccess(input: {
   return { canView: true, canEdit: pageType === 'CHANNEL', canShare: false, canDelete: false };
 }
 
+/**
+ * A credential never exceeds its user: the flag-wise AND of what an explicit
+ * role grants and what the user can do right now. `null` from either side (no
+ * access at all) is `null`. Pure.
+ */
+export function intersectPermissionLevels(
+  granted: PermissionLevel | null,
+  userLive: PermissionLevel | null,
+): PermissionLevel | null {
+  if (!granted || !userLive) return null;
+  return {
+    canView: granted.canView && userLive.canView,
+    canEdit: granted.canEdit && userLive.canEdit,
+    canShare: granted.canShare && userLive.canShare,
+    canDelete: granted.canDelete && userLive.canDelete,
+  };
+}
+
 export async function getAppAccessLevel(
   tokenId: string,
   targetPageId: string,
@@ -145,7 +168,7 @@ export async function getAppAccessLevel(
     ? await fetchCustomRolePermissions(membership.customRoleId, target.driveId)
     : null;
 
-  return resolveExplicitAppRoleAccess({
+  const granted = resolveExplicitAppRoleAccess({
     role: membership.role,
     customRole,
     customRoleUnresolved: !!membership.customRoleId && !customRole,
@@ -154,6 +177,7 @@ export async function getAppAccessLevel(
     isPrivate: target.isPrivate,
     isDriveRoot: target.isDriveRoot,
   });
+  return intersectPermissionLevels(granted, await getUserAccessLevel(membership.ownerUserId, targetPageId));
 }
 
 /**
@@ -207,7 +231,10 @@ export async function getAppDriveAccessLevel(
   }
 
   const isAdminLike = membership.role === 'ADMIN' || membership.role === 'OWNER';
-  return { canView: true, canEdit: true, canShare: isAdminLike, canDelete: isAdminLike };
+  return intersectPermissionLevels(
+    { canView: true, canEdit: true, canShare: isAdminLike, canDelete: isAdminLike },
+    await getUserAccessLevel(membership.ownerUserId, driveId),
+  );
 }
 
 /**
@@ -242,7 +269,42 @@ async function resolveAccessiblePagesForMembership(
   if (membership.role === null) {
     return getUserAccessiblePagesInDriveWithDetails(membership.ownerUserId, driveId);
   }
+  const granted = await resolveExplicitRolePagesInDrive({ ...membership, role: membership.role }, driveId);
+  if (granted.length === 0) return granted;
+  return intersectWithUserPages(granted, membership.ownerUserId, driveId);
+}
 
+/**
+ * The listing side of {@link intersectPermissionLevels}: keep only the pages the
+ * user can see right now, AND-ing each flag with the user's own. The user
+ * LISTING under-reports a member's channel canEdit (see
+ * getAppAccessiblePagesInDrive), so channel pages take the user's access LEVEL —
+ * the semantics that gate actions — instead of the listing row.
+ */
+async function intersectWithUserPages(
+  granted: PageWithPermissions[],
+  ownerUserId: string,
+  driveId: string,
+): Promise<PageWithPermissions[]> {
+  const userPages = new Map(
+    (await getUserAccessiblePagesInDriveWithDetails(ownerUserId, driveId)).map((p) => [p.id, p.permissions]),
+  );
+  const result: PageWithPermissions[] = [];
+  for (const page of granted) {
+    const userLive = page.type === 'CHANNEL'
+      ? await getUserAccessLevel(ownerUserId, page.id)
+      : userPages.get(page.id) ?? null;
+    const level = intersectPermissionLevels(page.permissions, userLive);
+    if (level?.canView) result.push({ ...page, permissions: level });
+  }
+  return result;
+}
+
+/** What an explicit role grants in the drive, before the user intersection. */
+async function resolveExplicitRolePagesInDrive(
+  membership: AppMembershipContext & { role: AppMemberRole },
+  driveId: string,
+): Promise<PageWithPermissions[]> {
   const { role, customRoleId } = membership;
 
   if (role === 'ADMIN' || role === 'OWNER') {
@@ -421,7 +483,7 @@ export async function getScopedAccessLevel(
     ? await fetchCustomRolePermissions(row.customRoleId, target.driveId)
     : null;
 
-  return resolveExplicitAppRoleAccess({
+  const granted = resolveExplicitAppRoleAccess({
     role: row.role,
     customRole,
     customRoleUnresolved: !!row.customRoleId && !customRole,
@@ -430,6 +492,7 @@ export async function getScopedAccessLevel(
     isPrivate: target.isPrivate,
     isDriveRoot: target.isDriveRoot,
   });
+  return intersectPermissionLevels(granted, await getUserAccessLevel(ownerUserId, targetPageId));
 }
 
 /**
@@ -481,7 +544,10 @@ export async function getScopedDriveAccessLevel(
   }
 
   const isAdminLike = row.role === 'ADMIN';
-  return { canView: true, canEdit: true, canShare: isAdminLike, canDelete: isAdminLike };
+  return intersectPermissionLevels(
+    { canView: true, canEdit: true, canShare: isAdminLike, canDelete: isAdminLike },
+    await getUserAccessLevel(ownerUserId, driveId),
+  );
 }
 
 /**

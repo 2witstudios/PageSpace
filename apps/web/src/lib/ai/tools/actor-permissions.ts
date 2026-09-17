@@ -19,6 +19,7 @@ import {
   getCeilingDriveAccessLevel,
   getCeilingAccessiblePagesInDrive,
   hasCeilingDriveMembership,
+  isCeilingDriveOwnerOrAdmin,
 } from '@/lib/auth/credential-ceiling';
 import type { CredentialCeiling } from '@pagespace/lib/permissions/credential-ceiling';
 import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
@@ -420,7 +421,8 @@ export async function driveDeniedByAppToken(
   // Inherit: no tool-layer ceiling — the key acts as its owner.
   if (membership.role === null) return false;
   if (need === 'manage') {
-    return membership.role !== 'OWNER' && membership.role !== 'ADMIN';
+    // Explicit ADMIN/OWNER, and only while the USER is still owner/admin.
+    return !(await isCeilingDriveOwnerOrAdmin(ceiling, context.userId, driveId));
   }
   const level = await getCeilingDriveAccessLevel(ceiling, context.userId, driveId);
   if (!level) return true;

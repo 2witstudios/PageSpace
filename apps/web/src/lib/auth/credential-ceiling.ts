@@ -26,7 +26,7 @@ import {
   getScopedAccessiblePagesInDrive,
   hasScopedDriveMembership,
 } from '@pagespace/lib/permissions/app-permissions';
-import type { PermissionLevel, PageWithPermissions } from '@pagespace/lib/permissions/permissions';
+import { isDriveOwnerOrAdmin, type PermissionLevel, type PageWithPermissions } from '@pagespace/lib/permissions/permissions';
 import type { CredentialCeiling } from '@pagespace/lib/permissions/credential-ceiling';
 import type { AuthResult } from './index';
 
@@ -108,6 +108,25 @@ export async function getCeilingDriveMembership(
     ? await getAppDriveMembership(ceiling.tokenId, driveId)
     : await getScopedDriveMembership(ceiling.driveScopes, userId, driveId);
   return membership && { role: membership.role, customRoleId: membership.customRoleId ?? null };
+}
+
+/**
+ * Whether the credential may act as a drive owner/admin — the bar for managing
+ * workflows, roles, commands and the drive itself. An explicit ADMIN/OWNER row
+ * counts only while its USER is still the drive's owner or an admin (a
+ * credential never exceeds its user: a demoted user's admin key or grant stops
+ * clearing this bar on the next request); an inherit row is exactly the user's
+ * own authority.
+ */
+export async function isCeilingDriveOwnerOrAdmin(
+  ceiling: CredentialCeiling,
+  userId: string,
+  driveId: string,
+): Promise<boolean> {
+  const membership = await getCeilingDriveMembership(ceiling, userId, driveId);
+  if (!membership) return false;
+  if (membership.role !== null && membership.role !== 'OWNER' && membership.role !== 'ADMIN') return false;
+  return isDriveOwnerOrAdmin(userId, driveId);
 }
 
 export async function hasCeilingDriveMembership(

@@ -29,8 +29,13 @@ vi.mock('@pagespace/lib/services/drive-role-service', async () => {
 });
 
 vi.mock('@/lib/auth', () => ({
-  // Session fixtures: the credential's own role is the user's; the user-side access mock decides.
-  isPrincipalDriveOwnerOrAdmin: async () => true,
+  // Session fixtures: a session's owner/admin authority is its user's, so the
+  // user-side access mock decides.
+  isPrincipalDriveOwnerOrAdmin: async (auth: { userId: string }, driveId: string) => {
+    const { checkDriveAccessForRoles } = await import('@pagespace/lib/services/drive-role-service');
+    const access = await checkDriveAccessForRoles(driveId, auth.userId);
+    return access.isOwner || access.isAdmin;
+  },
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
   checkMCPDriveScope: vi.fn(),
