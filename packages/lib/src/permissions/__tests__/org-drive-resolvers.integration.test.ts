@@ -26,10 +26,12 @@ import { getScopedDriveAccessLevel } from '../app-permissions';
 import {
   getDriveAccess,
   getDriveAccessWithDrive,
+  getExplicitScopeAuthority,
   listAccessibleDrives,
   validateDriveScopeAccess,
   type ListDrivesOptions,
 } from '../../services/drive-service';
+import { checkGrantAuthority, parseScopeList, scopeSetToDriveScopes, type GrantAuthority } from '../../auth/oauth/scopes';
 import {
   legacyGetDriveAccess,
   legacyGetDriveAccessWithDrive,
@@ -410,7 +412,7 @@ describe('org access in the human drive resolvers (integration)', () => {
     expect(await getDriveAccess(f.drives.product.id, chris.id)).toEqual({ isOwner: false, isAdmin: false, isMember: true, role: 'MEMBER' });
   });
 
-  it('ORG-4 (partial) org power never mints an explicit-role token scope: an org Admin with no row must use an inheriting scope, which stops resolving once they are demoted', async () => {
+  it('ORG-4 (partial) org power never mints an explicit-role MCP key scope: an org Admin with no row must use an inheriting scope, which stops resolving once they are demoted', async () => {
     const f = await northwind();
     flags.orgsEnabled = true;
     const { priya, omar, nina, marcus, eve } = f.people;
@@ -439,10 +441,53 @@ describe('org access in the human drive resolvers (integration)', () => {
     const inherit = [{ driveId: f.drives.finance.id, role: null, customRoleId: null }];
     expect(await getScopedDriveAccessLevel(inherit, priya.id, f.drives.finance.id)).toEqual(full);
 
-    // Step 2: demote Priya. Step 3: neither she nor her inheriting scope reaches Finance any more.
+    // Step 2: demote Priya. Step 3: neither she nor her inheriting scopes reach Finance any more.
     await db.update(orgMembers).set({ role: 'MEMBER' }).where(and(eq(orgMembers.orgId, f.org.id), eq(orgMembers.userId, priya.id)));
     expect(await getUserAccessLevel(priya.id, f.drives.finance.id)).toBeNull();
     expect(await getScopedDriveAccessLevel(inherit, priya.id, f.drives.finance.id)).toBeNull();
   });
-});
 
+  it('ORG-4 (partial) org power never mints an explicit-role OAuth drive scope (authorize and device flow share checkGrantAuthority): an org Admin with no row must consent to an inheriting scope, which stops resolving once they are demoted', async () => {
+    const f = await northwind();
+    flags.orgsEnabled = true;
+    const { priya, omar, nina } = f.people;
+    const full = { canView: true, canEdit: true, canShare: true, canDelete: true };
+
+    // The same rule through OAuth consent: authority built exactly as apps/web resolveGrantAuthority builds it.
+    const consentAuthority = async (scopeText: string, userId: string) => {
+      const parsed = parseScopeList(scopeText);
+      if (!parsed.ok) throw new Error(`bad scope ${scopeText}`);
+      const entries = await Promise.all(Array.from(parsed.scopes.drives, async ([driveId, scope]) => {
+        const access = await getDriveAccess(driveId, userId);
+        const explicitScope = scope.role.kind !== 'inherit' && !access.isOwner
+          ? await getExplicitScopeAuthority(driveId, userId)
+          : undefined;
+        return [driveId, {
+          isOwner: access.isOwner,
+          isMember: access.isMember,
+          isAdmin: access.isAdmin,
+          ownCustomRoleId: null,
+          roleBelongsToDrive: () => true,
+          ...(explicitScope ? { explicitScope } : {}),
+        }] as const;
+      }));
+      return { scopes: parsed.scopes, result: checkGrantAuthority(parsed.scopes, new Map(entries) as GrantAuthority) };
+    };
+    expect((await consentAuthority(`drive:${f.drives.finance.id}:admin`, priya.id)).result)
+      .toEqual({ ok: false, reason: 'org_derived_explicit_role', driveId: f.drives.finance.id });
+    expect((await consentAuthority(`drive:${f.drives.product.id}:member`, nina.id)).result)
+      .toEqual({ ok: false, reason: 'org_derived_explicit_role', driveId: f.drives.product.id });
+    expect((await consentAuthority(`drive:${f.drives.finance.id}:admin`, omar.id)).result).toEqual({ ok: true });
+    expect((await consentAuthority(`drive:${f.drives.research.id}:admin`, f.people.jono.id)).result)
+      .toEqual({ ok: false, reason: 'admin_not_grantable', driveId: f.drives.research.id });
+    const inheritConsent = await consentAuthority(`drive:${f.drives.finance.id}`, priya.id);
+    expect(inheritConsent.result).toEqual({ ok: true });
+    const oauthInherit = scopeSetToDriveScopes(inheritConsent.scopes);
+    expect(await getScopedDriveAccessLevel(oauthInherit, priya.id, f.drives.finance.id)).toEqual(full);
+
+    expect((await consentAuthority(`drive:${f.drives.personal.id}:admin`, nina.id)).result).toEqual({ ok: true });
+
+    await db.update(orgMembers).set({ role: 'MEMBER' }).where(and(eq(orgMembers.orgId, f.org.id), eq(orgMembers.userId, priya.id)));
+    expect(await getScopedDriveAccessLevel(oauthInherit, priya.id, f.drives.finance.id)).toBeNull();
+  });
+});

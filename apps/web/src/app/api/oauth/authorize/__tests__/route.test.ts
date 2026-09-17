@@ -27,6 +27,7 @@ vi.mock('@/lib/repositories/oauth-repository', () => ({
 
 vi.mock('@pagespace/lib/services/drive-service', () => ({
   getDriveAccess: vi.fn().mockResolvedValue({ isOwner: true, isAdmin: true, isMember: true, role: 'OWNER' }),
+  getExplicitScopeAuthority: vi.fn().mockResolvedValue({ orgDrive: false }),
 }));
 
 vi.mock('@pagespace/lib/permissions/membership-queries', () => ({
@@ -54,7 +55,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { createAuthorizationCode } from '@/lib/repositories/oauth-repository';
 import { sessionRepository } from '@/lib/repositories/session-repository';
 import { consumeStepUpGrant } from '@pagespace/lib/auth/step-up-service';
-import { getDriveAccess } from '@pagespace/lib/services/drive-service';
+import { getDriveAccess, getExplicitScopeAuthority } from '@pagespace/lib/services/drive-service';
 import { nextConfig } from '../../../../../../next.config';
 
 const REDIRECT_URI = 'http://127.0.0.1:51234/callback';
@@ -529,6 +530,19 @@ describe('POST /api/oauth/authorize — step-up gate (Phase 8: bearer-OAuth mint
 
     expect(res.status).toBe(200);
     expect(consumeStepUpGrant).not.toHaveBeenCalled();
+  });
+
+  it('ORG-4 (partial) refuses consent to an explicit drive:<id>:admin scope on an org drive the user reaches only through org power, issuing no code', async () => {
+    vi.mocked(getDriveAccess).mockResolvedValueOnce({ isOwner: false, isAdmin: true, isMember: true, role: 'ADMIN' });
+    vi.mocked(getExplicitScopeAuthority).mockResolvedValueOnce({ orgDrive: true, row: null });
+
+    const res = await POST(postRequest({ ...approvalBody, scope: 'drive:testdrive1:admin name:ci' }) as never);
+
+    expect(res.status).toBe(200);
+    const location = new URL((await res.json()).redirectUri);
+    expect(location.searchParams.get('error')).toBe('invalid_scope');
+    expect(vi.mocked(createAuthorizationCode)).not.toHaveBeenCalled();
+    expect(getExplicitScopeAuthority).toHaveBeenCalledWith('testdrive1', expect.any(String));
   });
 
   it('rejects a scope-cap failure before burning the step-up grant, so a corrected retry with the same token still succeeds', async () => {

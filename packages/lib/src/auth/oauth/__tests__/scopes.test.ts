@@ -12,6 +12,7 @@ import {
   hasNewKeyName,
   type ScopeSet,
 } from '../scopes';
+import type { ExplicitScopeAuthority } from '../../../permissions/org-drive-resolution';
 
 function drives(...entries: Array<[string, ScopeSet['drives'] extends ReadonlyMap<string, infer V> ? V : never]>): ScopeSet['drives'] {
   return new Map(entries);
@@ -771,6 +772,7 @@ describe('checkGrantAuthority (consent-time authority cap, Decision 2 / F4)', ()
           isAdmin?: boolean;
           ownCustomRoleId?: string | null;
           roleBelongsToDrive?: (roleId: string) => boolean;
+          explicitScope?: ExplicitScopeAuthority;
         },
       ]
     >,
@@ -784,10 +786,45 @@ describe('checkGrantAuthority (consent-time authority cap, Decision 2 / F4)', ()
           isAdmin: a.isAdmin ?? false,
           ownCustomRoleId: a.ownCustomRoleId ?? null,
           roleBelongsToDrive: a.roleBelongsToDrive ?? (() => true),
+          ...(a.explicitScope !== undefined ? { explicitScope: a.explicitScope } : {}),
         },
       ]),
     );
   }
+
+  describe('explicit roles on an org drive (explicitScope present)', () => {
+    const noRow: ExplicitScopeAuthority = { orgDrive: true, row: null };
+    const memberRow: ExplicitScopeAuthority = { orgDrive: true, row: { role: 'MEMBER', customRoleId: 'r_own', source: 'invite' } };
+    const adminRow: ExplicitScopeAuthority = { orgDrive: true, row: { role: 'ADMIN', customRoleId: null, source: 'invite' } };
+    const drive = (role: { kind: 'admin' } | { kind: 'member' } | { kind: 'custom'; customRoleId: string } | { kind: 'inherit' }) =>
+      emptySet({ drives: drives(['x', { kind: 'drive', driveId: 'x', role }]) });
+
+    it('ORG-4 (partial) refuses admin, member and custom scopes reached only through the org (no direct row), and still allows an inheriting scope', () => {
+      const orgDerived = authorityMap([['x', { isMember: true, isAdmin: true, ownCustomRoleId: null, explicitScope: noRow }]]);
+      for (const role of [{ kind: 'admin' as const }, { kind: 'member' as const }, { kind: 'custom' as const, customRoleId: 'r1' }]) {
+        expect(checkGrantAuthority(drive(role), orgDerived)).toEqual({ ok: false, reason: 'org_derived_explicit_role', driveId: 'x' });
+      }
+      expect(checkGrantAuthority(drive({ kind: 'inherit' }), orgDerived)).toEqual({ ok: true });
+    });
+
+    it('ORG-4 (partial) caps an explicit scope to the direct row, not to org power', () => {
+      const memberRowOrgAdmin = authorityMap([['x', { isMember: true, isAdmin: true, ownCustomRoleId: 'r_own', explicitScope: memberRow }]]);
+      expect(checkGrantAuthority(drive({ kind: 'admin' }), memberRowOrgAdmin)).toEqual({ ok: false, reason: 'admin_not_grantable', driveId: 'x' });
+      expect(checkGrantAuthority(drive({ kind: 'member' }), memberRowOrgAdmin)).toEqual({ ok: true });
+      expect(checkGrantAuthority(drive({ kind: 'custom', customRoleId: 'r_other' }), memberRowOrgAdmin)).toEqual({ ok: false, reason: 'foreign_custom_role', driveId: 'x' });
+      expect(checkGrantAuthority(drive({ kind: 'custom', customRoleId: 'r_own' }), memberRowOrgAdmin)).toEqual({ ok: true });
+
+      const adminRowAuthority = authorityMap([['x', { isMember: true, isAdmin: true, explicitScope: adminRow }]]);
+      expect(checkGrantAuthority(drive({ kind: 'admin' }), adminRowAuthority)).toEqual({ ok: true });
+    });
+
+    it('lets the drive owner grant any explicit scope regardless of explicitScope, and a personal drive keeps the existing caps', () => {
+      const owner = authorityMap([['x', { isOwner: true, isMember: true, isAdmin: true, explicitScope: noRow }]]);
+      expect(checkGrantAuthority(drive({ kind: 'admin' }), owner)).toEqual({ ok: true });
+      const personal = authorityMap([['x', { isMember: true, isAdmin: true, explicitScope: { orgDrive: false } }]]);
+      expect(checkGrantAuthority(drive({ kind: 'admin' }), personal)).toEqual({ ok: true });
+    });
+  });
 
   it('allows an account-only request unconditionally (no drives to check)', () => {
     const result = checkGrantAuthority(emptySet({ account: true }), authorityMap([]));

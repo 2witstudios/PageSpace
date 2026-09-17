@@ -3,6 +3,7 @@ import {
   resolveEffectiveDriveMembership,
   decideListedDriveRole,
   explicitScopeAuthorityRow,
+  decideExplicitDriveScope,
   type OrgDriveFacts,
 } from '../org-drive-resolution';
 import type { DriveRoleGrant, OrgDriveMembership } from '../org-access';
@@ -200,5 +201,28 @@ describe('explicitScopeAuthorityRow', () => {
       expect(explicitScopeAuthorityRow({ orgsEnabled: true, drive, row: staleOwnerRow })).toEqual({ orgDrive: true, row: null });
       expect(explicitScopeAuthorityRow({ orgsEnabled: true, drive, row: inviteAdmin })).toEqual({ orgDrive: true, row: inviteAdmin });
     }
+  });
+});
+
+describe('decideExplicitDriveScope (the one rule for MCP key and OAuth drive scopes)', () => {
+  const noRow = { orgDrive: true as const, row: null };
+  const memberRow = { orgDrive: true as const, row: inviteMember };
+  const adminRow = { orgDrive: true as const, row: inviteAdmin };
+
+  it('ORG-4 (partial) refuses an explicit role on an org drive with no direct row, even for org-derived admin', () => {
+    expect(decideExplicitDriveScope({ explicit: true, isOwner: false, isAdmin: true, authority: noRow }))
+      .toEqual({ ok: false, reason: 'org_derived_explicit_role' });
+  });
+
+  it('ORG-4 (partial) caps an explicit role on an org drive to the direct row, not to org power', () => {
+    expect(decideExplicitDriveScope({ explicit: true, isOwner: false, isAdmin: true, authority: memberRow })).toEqual({ ok: true, isAdmin: false });
+    expect(decideExplicitDriveScope({ explicit: true, isOwner: false, isAdmin: false, authority: adminRow })).toEqual({ ok: true, isAdmin: true });
+  });
+
+  it('keeps today\'s authority for inheriting scopes, drive owners and non-org drives', () => {
+    expect(decideExplicitDriveScope({ explicit: false, isOwner: false, isAdmin: true, authority: noRow })).toEqual({ ok: true, isAdmin: true });
+    expect(decideExplicitDriveScope({ explicit: true, isOwner: true, isAdmin: true, authority: noRow })).toEqual({ ok: true, isAdmin: true });
+    expect(decideExplicitDriveScope({ explicit: true, isOwner: false, isAdmin: true, authority: { orgDrive: false } })).toEqual({ ok: true, isAdmin: true });
+    expect(decideExplicitDriveScope({ explicit: true, isOwner: false, isAdmin: false, authority: { orgDrive: false } })).toEqual({ ok: true, isAdmin: false });
   });
 });

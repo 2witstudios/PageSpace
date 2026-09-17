@@ -8,7 +8,7 @@
  * the result straight to the pure `checkGrantAuthority`.
  */
 import type { ScopeSet, GrantAuthority } from '@pagespace/lib/auth/oauth/scopes';
-import { getDriveAccess } from '@pagespace/lib/services/drive-service';
+import { getDriveAccess, getExplicitScopeAuthority } from '@pagespace/lib/services/drive-service';
 import { customRoleBelongsToDrive, getMemberCustomRoleId } from '@pagespace/lib/permissions/membership-queries';
 
 export async function resolveGrantAuthority(scopes: ScopeSet, userId: string): Promise<GrantAuthority> {
@@ -19,6 +19,11 @@ export async function resolveGrantAuthority(scopes: ScopeSet, userId: string): P
         getMemberCustomRoleId(driveId, userId),
         scope.role.kind === 'custom' ? customRoleBelongsToDrive(scope.role.customRoleId, driveId) : Promise.resolve(true),
       ]);
+      // The direct membership an explicit scope may rest on, kept apart from the effective access
+      // above; checkGrantAuthority applies the shared rule (decideExplicitDriveScope) to it.
+      const explicitScope = scope.role.kind !== 'inherit' && !access.isOwner
+        ? await getExplicitScopeAuthority(driveId, userId)
+        : undefined;
 
       return [
         driveId,
@@ -28,6 +33,7 @@ export async function resolveGrantAuthority(scopes: ScopeSet, userId: string): P
           isAdmin: access.isAdmin,
           ownCustomRoleId,
           roleBelongsToDrive: () => customRoleOk,
+          ...(explicitScope ? { explicitScope } : {}),
         },
       ] as const;
     }),

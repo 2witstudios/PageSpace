@@ -171,3 +171,37 @@ export function explicitScopeAuthorityRow({
   // With no org role, validOrgDriveRow drops every org-materialized row as well as an OWNER row.
   return { orgDrive: true, row: validOrgDriveRow(row, drive, null) };
 }
+
+export interface ExplicitDriveScopeInput {
+  /** The scope asks for an explicit role (ADMIN, MEMBER or a custom role), not inherit. */
+  explicit: boolean;
+  /** The user owns the drive (drives.ownerId). */
+  isOwner: boolean;
+  /** Admin authority from the user's effective (possibly org-derived) access. */
+  isAdmin: boolean;
+  authority: ExplicitScopeAuthority;
+}
+
+export type ExplicitDriveScopeDecision =
+  | { ok: true; isAdmin: boolean }
+  | { ok: false; reason: 'org_derived_explicit_role' };
+
+/**
+ * THE rule for every credential that stores an explicit drive role: an MCP key scope
+ * (validateDriveScopeAccess) and an OAuth drive scope (checkGrantAuthority, for both the authorize
+ * and the device flow). Neither is re-checked against its owner after it is minted, so on an org
+ * drive an explicit role rests only on a direct drive_members row and is capped to that row's
+ * admin authority. Reached only through the org, the credential may carry an inheriting scope,
+ * which re-resolves on every use. Owners, inheriting scopes and non-org drives keep `isAdmin`.
+ */
+export function decideExplicitDriveScope({
+  explicit,
+  isOwner,
+  isAdmin,
+  authority,
+}: ExplicitDriveScopeInput): ExplicitDriveScopeDecision {
+  if (!explicit || isOwner || !authority.orgDrive) return { ok: true, isAdmin };
+  if (authority.row === null) return { ok: false, reason: 'org_derived_explicit_role' };
+  return { ok: true, isAdmin: authority.row.role === 'ADMIN' };
+}
+
