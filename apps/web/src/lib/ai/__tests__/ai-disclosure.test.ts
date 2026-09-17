@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { needsAiDisclosure, hasAcknowledgedAiDisclosure, acknowledgeAiDisclosure, AI_DISCLOSURE_STORAGE_KEY } from '../ai-disclosure';
+import { mayReachAiAgent, needsAiDisclosure, hasAcknowledgedAiDisclosure, acknowledgeAiDisclosure, AI_DISCLOSURE_STORAGE_KEY } from '../ai-disclosure';
 
 describe('AI data-sharing disclosure', () => {
   beforeEach(() => {
@@ -34,5 +34,14 @@ describe('AI data-sharing disclosure', () => {
     } finally {
       if (original) Object.defineProperty(window, 'localStorage', original);
     }
+  });
+
+  it('given a message mentioning a page (which may be an AI agent), should treat it as possibly reaching AI', () => {
+    expect(mayReachAiAgent('ask @[Research Agent](page_1:page) to help')).toBe(true);
+  });
+
+  it('given a message that only mentions people or nothing, should not treat it as reaching AI', () => {
+    expect(mayReachAiAgent('hi @[Sam](user_1:user)')).toBe(false);
+    expect(mayReachAiAgent('plain text')).toBe(false);
   });
 });

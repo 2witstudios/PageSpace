@@ -25,3 +25,11 @@ export function acknowledgeAiDisclosure(): void {
     // Unavailable storage: the notice is simply shown again next time.
   }
 }
+
+/**
+ * Whether a channel or DM message could reach an AI agent. Agents are pages, and
+ * a page mention (`@[Label](id:page)`) looks the same whatever the page type, so
+ * any page mention counts — the disclosure is asked at most once per device.
+ */
+export const mayReachAiAgent = (content: string): boolean =>
+  /@\[[^\]]{1,500}\]\([^:)]{1,200}:page\)/.test(content);
