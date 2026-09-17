@@ -33,6 +33,8 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
+    // auditRequest (lib/audit/audit-log) logs through loggers.security.
+    security: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
     api: {
       info: vi.fn(),
       error: vi.fn(),
@@ -53,6 +55,14 @@ vi.mock('@pagespace/lib/services/drive-member-service', () => ({
   getDriveRecipientUserIds: vi.fn(),
 }));
 
+// Guest agent members (agents that belong to the drive via drive_agent_members
+// but whose page lives in another drive). The finder hits the DB, so it is
+// mocked; the pure helpers stay real.
+vi.mock('@/lib/mentions/guest-agent-members', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/mentions/guest-agent-members')>()),
+  findGuestAgentMembers: vi.fn(),
+}));
+
 vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn().mockReturnThis(),
@@ -68,6 +78,7 @@ import { GET } from '../route';
 import { getUserAccessLevel, getUserDriveAccess, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
+import { findGuestAgentMembers } from '@/lib/mentions/guest-agent-members';
 import { db } from '@pagespace/db/db';
 import * as dbOperators from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
@@ -102,6 +113,7 @@ describe('GET /api/mentions/search', () => {
     vi.resetAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
+    vi.mocked(findGuestAgentMembers).mockResolvedValue([]);
 
     // Default mock for db.select chain
     const selectChain = {
@@ -400,6 +412,121 @@ describe('GET /api/mentions/search', () => {
   // — the same module the route imports it from — rather than asserting on a
   // response shape the mock can't meaningfully vary.
   // ==========================================================================
+  // ==========================================================================
+  // Guest agent members: an agent added to the drive through
+  // drive_agent_members whose AI_CHAT page lives in ANOTHER drive. The
+  // in-drive page query can never return it (pages.driveId is elsewhere), and
+  // the requester usually cannot view its home page — membership in the
+  // channel's drive is the grant, the same rule the drive's agent-members
+  // list already applies to every drive member.
+  // ==========================================================================
+  describe('guest agent members', () => {
+    const guestAgentId = 'agent_guest_aaaaaaaaaaaaa';
+    const guestRow = { id: guestAgentId, title: 'Guest Agent', memberDriveId: mockDriveId, homeDriveId: 'drive_home' };
+
+    // `.where()` resolves to `rows` when awaited directly (the drives/users
+    // lookups) AND still chains `.orderBy()/.limit()` (the page query).
+    function stubPages(rows: Array<{ id: string; title: string; type: string; driveId: string; mimeType: null }>) {
+      const tail = { orderBy: vi.fn().mockReturnThis(), limit: vi.fn().mockResolvedValue(rows) };
+      const selectChain = {
+        from: vi.fn().mockReturnThis(),
+        where: vi.fn().mockImplementation(() => Object.assign(Promise.resolve(rows), tail)),
+      };
+      vi.mocked(db.select).mockReturnValue(selectChain as unknown as ReturnType<typeof db.select>);
+    }
+
+    beforeEach(() => {
+      vi.mocked(getUserDriveAccess).mockResolvedValue(true);
+      vi.mocked(getUserAccessLevel).mockResolvedValue({ canView: true, canEdit: false, canShare: false, canDelete: false });
+      vi.mocked(getDriveRecipientUserIds).mockResolvedValue([mockUserId, 'user_other']);
+      stubPages([{ id: 'doc-1', title: 'Roadmap', type: 'DOCUMENT', driveId: mockDriveId, mimeType: null }]);
+    });
+
+    it('offers a guest agent member to a drive member as a page mention in the channel drive', async () => {
+      vi.mocked(findGuestAgentMembers).mockResolvedValue([guestRow]);
+
+      const request = new Request(`https://example.com/api/mentions/search?driveId=${mockDriveId}&types=page`);
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(findGuestAgentMembers).toHaveBeenCalledWith(
+        expect.objectContaining({ memberDriveIds: [mockDriveId] })
+      );
+      const guest = body.find((s: { id: string }) => s.id === guestAgentId);
+      expect(guest).toEqual({
+        id: guestAgentId,
+        label: 'Guest Agent',
+        type: 'page',
+        data: { pageType: 'AI_CHAT', driveId: mockDriveId, mimeType: null },
+        description: `agent · ${guestAgentId.slice(0, 6)}`,
+      });
+      // Membership is the grant: the requester's ACL on the agent's HOME page
+      // is never consulted (it would deny — the home drive is not theirs).
+      expect(getUserAccessLevel).not.toHaveBeenCalledWith(mockUserId, guestAgentId);
+    });
+
+    it('does not offer guest agents to a requester who is not a drive member (page-permission access only)', async () => {
+      vi.mocked(getDriveRecipientUserIds).mockResolvedValue(['user_owner', 'user_other']);
+      vi.mocked(findGuestAgentMembers).mockResolvedValue([guestRow]);
+
+      const request = new Request(`https://example.com/api/mentions/search?driveId=${mockDriveId}&types=page`);
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(findGuestAgentMembers).not.toHaveBeenCalled();
+      expect(body.some((s: { id: string }) => s.id === guestAgentId)).toBe(false);
+    });
+
+    it('does not look for guest agents when the caller excludes AI_CHAT', async () => {
+      const request = new Request(
+        `https://example.com/api/mentions/search?driveId=${mockDriveId}&types=page&excludePageTypes=FOLDER,AI_CHAT`
+      );
+      const response = await GET(request);
+
+      expect(response.status).toBe(200);
+      expect(findGuestAgentMembers).not.toHaveBeenCalled();
+    });
+
+    it('does not look for guest agents when pages are not requested', async () => {
+      stubPages([]);
+      const request = new Request(`https://example.com/api/mentions/search?driveId=${mockDriveId}&types=user`);
+      const response = await GET(request);
+
+      expect(response.status).toBe(200);
+      expect(findGuestAgentMembers).not.toHaveBeenCalled();
+    });
+
+    it('never lists the same agent twice when it is also an in-drive page result', async () => {
+      stubPages([{ id: guestAgentId, title: 'Guest Agent', type: 'AI_CHAT', driveId: mockDriveId, mimeType: null }]);
+      vi.mocked(findGuestAgentMembers).mockResolvedValue([guestRow]);
+
+      const request = new Request(`https://example.com/api/mentions/search?driveId=${mockDriveId}&types=page`);
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(body.filter((s: { id: string }) => s.id === guestAgentId)).toHaveLength(1);
+    });
+
+    it('in a cross-drive search, only drives where the requester is a member are consulted', async () => {
+      vi.mocked(getDriveIdsForUser).mockResolvedValue([mockDriveId, mockOtherDriveId]);
+      vi.mocked(getDriveRecipientUserIds).mockImplementation(async (id: string) =>
+        id === mockDriveId ? [mockUserId] : ['user_owner']
+      );
+      vi.mocked(findGuestAgentMembers).mockResolvedValue([]);
+      stubPages([]);
+
+      const request = new Request('https://example.com/api/mentions/search?crossDrive=true&types=page');
+      const response = await GET(request);
+
+      expect(response.status).toBe(200);
+      expect(findGuestAgentMembers).toHaveBeenCalledWith(
+        expect.objectContaining({ memberDriveIds: [mockDriveId] })
+      );
+    });
+  });
+
   describe('excludePageTypes filter', () => {
     beforeEach(() => {
       vi.mocked(getUserDriveAccess).mockResolvedValue(true);

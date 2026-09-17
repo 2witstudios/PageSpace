@@ -275,6 +275,15 @@ All write paths are owner/admin-gated server-side; role permission maps are `Rec
 | `delete_channel_message` (tools.js:1530) | `pageId*`, `messageId*` | DELETE `/api/channels/{pageId}/messages/{messageId}` (conversation.js:195) | `channels/[pageId]/messages/[messageId]/route.ts:86` | `{success:true}` (`:142`). Author-only (`:105`) + edit permission (`:93–96`). |
 | `get_activity` (tools.js:1549) | `driveId?`, `pageId?`, `limit?`, `types?[]` | **POST** `/api/activities` JSON body (conversation.js:214–223) | `activities/route.ts:39` — **GET only** | `{activities, pagination{total,limit,offset,hasMore}}` (`:235–243`). **DISCREPANCY (method + params):** the route exports **no POST** → the tool 405s on every call. The GET contract is query params `{context ('user' default), driveId, pageId, startDate, endDate, actorId, operation, resourceType, limit, offset}` (`:53–67`); there is **no `types` filter** — nearest equivalents are `operation` + `resourceType`. Resolution: SDK op = GET with the route's real query schema; drop `types`. |
 
+### 2.17 Workspace shell (2 SDK operations — no v5.2.7 tool)
+
+New surface, not a port: the in-app `bash` AI tool had no token-reachable route.
+
+| Operation | Input | Route | Response (route truth) |
+|---|---|---|---|
+| `workspaces.list` | `driveId?` | GET `agent-workspaces/route.ts` (`allow: session, mcp`) | `{sessions: [AgentSessionDTO + shells, conversations, rev, nodes, targets]}` — owner-only, then filtered to the credential's drive scope (`credential-scope.ts`; a driveless workspace only for an unscoped credential). A drive-scoped credential additionally keeps only drives its own principal permissions can view (`getPrincipalDriveAccessLevel`) and gets the session DTOs with `shells`/`conversations`/`nodes`/`targets` empty at `rev: 0` — the child reads resolve as the owning user, so they are never run for a key. |
+| `workspaces.exec` | `workspaceId*`, `command*`, `cwd?`, `timeoutMs?` | POST `agent-workspaces/[workspaceId]/exec/route.ts` (`allow: session, mcp`) | `200 {stdout, stderr, exitCode, truncated}` for any command that ran (non-zero exit included). Body = the `bash` tool's `bashInputSchema`. Denied / not found / out of scope / ended → the same `404`; so is a drive-scoped key whose OWN grant fails the drive-wide edit bar (`principal-code-exec-access.ts`: inherit → owner's `canEdit`, OWNER/ADMIN/plain MEMBER → yes, custom role → its `driveWidePermissions.canEdit`), checked before the owning user's `canRunCode` gate. Gate/runner refusals → `{error, reason, retryAfter?}` with `DENIAL_STATUS` (403 plan/access, 402 credits, 429 quota, 400 policy, 503 provisioning). |
+
 ---
 
 ## 3. MCP-only routes — the SDK's content-edit surface (documented fully)

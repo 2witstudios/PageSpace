@@ -697,6 +697,45 @@ export async function resetDistributedRateLimit(identifier: string): Promise<voi
 }
 
 /**
+ * Refund a single attempt previously counted by `checkDistributedRateLimit`
+ * for `identifier`, e.g. when the action the check gated (an email send, an
+ * API call) subsequently failed and should not count against the caller's
+ * budget. Unlike `resetDistributedRateLimit` (which clears the whole key and
+ * is only correct for maxAttempts === 1 budgets like EXPORT_DATA), this
+ * decrements just the current window's bucket by 1, floored at 0, so other
+ * successful attempts in the same window are preserved.
+ *
+ * Deliberately NOT gated by the circuit breaker, mirroring
+ * `resetDistributedRateLimit`: a refund is a low-volume cold path (only runs
+ * after a failure) that cannot stampede a stalled pool, and skipping it while
+ * the circuit is open would leave the bucket over-counted for the rest of the
+ * window once Postgres recovers. Best-effort — swallows DB errors, since a
+ * missed refund only makes the limit slightly stricter, never bypasses it.
+ */
+export async function refundDistributedRateLimitAttempt(
+  identifier: string,
+  windowMs: number,
+): Promise<void> {
+  const now = Date.now();
+  const windowStart = currentWindowStart(windowMs, now);
+  const admittedEpoch = pgCircuitEpoch;
+  try {
+    await db
+      .update(rateLimitBuckets)
+      .set({ count: sql`GREATEST(${rateLimitBuckets.count} - 1, 0)` })
+      .where(
+        sql`${rateLimitBuckets.key} = ${identifier} AND ${rateLimitBuckets.windowStart} = ${windowStart}`
+      );
+    closePgCircuitIfCurrent(admittedEpoch);
+  } catch (error) {
+    loggers.api.debug('Postgres rate limit refund failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    recordPgFailure(error, Date.now());
+  }
+}
+
+/**
  * Get rate limit status without incrementing.
  * In production, when the DB is unavailable this reports the same conservative
  * per-instance in-memory state the check path enforces during the outage, so
@@ -930,7 +969,7 @@ export const DISTRIBUTED_RATE_LIMITS = {
   // token (10/min), but a script rotating IPs against the same public token
   // could otherwise still ride that limit indefinitely and mail-bomb the
   // owner's inbox once per accepted submission, since sendEmail's own
-  // recipient-wide 3/hr cap is intentionally skipped for this dispatch (see
+  // recipient-wide 10/hr cap is intentionally skipped for this dispatch (see
   // send-form-notification.ts).
   FORM_SUBMISSION_NOTIFICATION: {
     maxAttempts: 20,
@@ -963,7 +1002,7 @@ export const DISTRIBUTED_RATE_LIMITS = {
     progressiveDelay: false,
   },
   MAGIC_LINK: {
-    maxAttempts: 3,
+    maxAttempts: 5,
     windowMs: 15 * 60 * 1000,
     blockDurationMs: 15 * 60 * 1000,
     progressiveDelay: true,

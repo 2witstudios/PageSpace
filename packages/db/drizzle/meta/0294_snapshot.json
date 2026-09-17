@@ -1,5 +1,5 @@
 {
-  "id": "ce2e25b9-0e33-473d-a19a-112044dfc240",
+  "id": "ff5650fa-cac0-4687-8d81-3b3b01b4dbce",
   "prevId": "bacd1577-68d6-471d-8c5e-21eecd837d36",
   "version": "7",
   "dialect": "postgresql",
@@ -18278,12 +18278,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "paidCents": {
-          "name": "paidCents",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
         "consumeStatus": {
           "name": "consumeStatus",
           "type": "text",
@@ -23883,6 +23877,59 @@
           "value": "\"dev_preview_grants\".\"holderKind\" IN ('workspace', 'env')"
         }
       },
+      "isRLSEnabled": false
+    },
+    "public.agent_account_grant_nonces": {
+      "name": "agent_account_grant_nonces",
+      "schema": "",
+      "columns": {
+        "nonce": {
+          "name": "nonce",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "grantId": {
+          "name": "grantId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "expiresAt": {
+          "name": "expiresAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "consumedAt": {
+          "name": "consumedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "agent_account_grant_nonces_expires_at_idx": {
+          "name": "agent_account_grant_nonces_expires_at_idx",
+          "columns": [
+            {
+              "expression": "expiresAt",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
       "isRLSEnabled": false
     }
   },

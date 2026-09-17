@@ -103,6 +103,7 @@ import { describeSelfKey, listMcpTokens, revokeMcpToken } from './operations/mcp
 import { globSearch, multiDriveSearch, regexSearch } from './operations/search.js';
 import { cancelUpload, completeUpload, presignUpload } from './operations/uploads.js';
 import { createWorkflow, deleteWorkflow, listWorkflows, updateWorkflow } from './operations/workflows.js';
+import { execInWorkspace, listWorkspaces } from './operations/workspaces.js';
 import type { Operation } from './registry/define.js';
 import { createRegistry, type OperationRegistry } from './registry/registry.js';
 import { buildRequest } from './transport/build-request.js';
@@ -253,6 +254,11 @@ const DEFAULT_OPERATIONS_MAP = {
     presign: presignUpload,
     complete: completeUpload,
     cancel: cancelUpload,
+  },
+  /** Agent workspaces as a shell target: find one, then run commands in its sandbox. */
+  workspaces: {
+    list: listWorkspaces,
+    exec: execInWorkspace,
   },
 } as const;
 

@@ -7,6 +7,17 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Run shell commands in an agent workspace from the CLI and SDK** — a workspace's sandbox was
+  only reachable through an agent in chat. `pagespace workspaces exec <workspaceId> -- <command>`
+  (and `workspaces.exec` in the SDK and over `pagespace mcp`) now runs a command there with an
+  access key and exits with the command's own status; `pagespace workspaces list` finds the id. It
+  is held to the same rules as the agent's own `bash` tool — plan, quota, command policy, billing
+  and audit — and a key scoped to other drives cannot see or reach the workspace.
+- **Multi-question prompts from the assistant have Back and Next buttons** — when the assistant
+  asks several questions at once, you could only switch between them by tapping the small
+  numbered tabs or pressing the arrow keys, which is awkward on a phone. Each question now has a
+  Back / Next row with a "2 of 3" counter under it, sized for a finger, and it works on a card you
+  have already answered too. The tabs and arrow keys still work as before.
 - **The marketing site follows your system theme, and light mode has its own hero** — the site used
   to open in dark mode for everyone, and its space hero only worked on a dark page. Light mode now
   has a white version of the same scene with dark text over it, and the site starts in whatever
@@ -556,6 +567,24 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Sign-in emails no longer lock you out of your own account** — every email PageSpace sends to
+  the same address (a sign-in link, an invite, a notification) shared one rate-limit bucket capped
+  at 3 per hour, and a failed send still used up one of those 3 — so a couple of sign-in attempts,
+  or one flaky delivery, could leave you unable to get a new sign-in link for the rest of the hour.
+  The cap is now 10 per hour per recipient, the sign-in link's own limit goes from 3 to 5 attempts
+  per 15 minutes, and a send that fails no longer counts against the limit at all — only emails
+  that actually go out do.
+
+- **Agents you add to a drive can be @-mentioned in its channels, and they answer** — a drive
+  member can post in the drive's channels, but an agent added as a member could not: its
+  membership never granted posting rights in channels the way a person's or an app's does, so an
+  @-mentioned agent silently said nothing (or its reply was refused after the model call had
+  already been paid for). A freshly created agent with no tool restrictions was skipped as if
+  channel posting were switched off, and an agent added to a drive from another drive was neither
+  offered by the @ picker nor allowed to reply unless you could open its home page. Now a member
+  agent posts in non-private channels by default, the @ picker lists every agent that belongs to
+  the drive, and a mention gets a reply in the channel or in the thread it was made in. Agents
+  whose tool list deliberately leaves out channel posting stay silent, as before.
 - **The open-source licenses screen no longer references a private IP-sale disclosure** — the "Full
   inventory" notice at Settings → Legal → Open-source licenses said the complete dependency
   inventory was "maintained in the seller's IP disclosure and is available to recipients on
@@ -1138,6 +1167,47 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   drawn about you, including ones that were rejected or are still pending, along with the quote
   from your own messages each was based on. Those quotes are removed 90 days after an observation
   is settled.
+
+### Security
+
+- **Only administrators can add a custom integration provider** — the admin check on the
+  provider-creation endpoint compared the wrong thing, so any signed-in account could add a
+  global custom integration provider, and a browser session that failed the cross-site request
+  check was let through as well. Non-admins and failed cross-site checks are now refused, and
+  nothing is created. Installing a built-in provider was already checked correctly and is
+  unaffected.
+- **The AI's sandbox git tools can no longer be tricked into force-pushing your current branch** —
+  the `git_push` tool took its remote and branch names as free text and placed them straight
+  after `-u origin` on the command line. A branch value of `--force` (or a remote of `--mirror`)
+  was therefore read by git as an option rather than a name, which force-pushed whatever branch
+  the sandbox was on, including `main`, with your connected GitHub token and without tripping the
+  guard that refuses force-pushes to the default branch. The tool now refuses any remote or
+  branch that starts with a dash before it builds the command, then runs the default-branch guard
+  on the real destination, and the command itself carries an end-of-options marker so a name can
+  never be read as a flag. The same audit found and closed the same gap in `git_fetch`, `git_pull`
+  (remote and branch), `git_config` (key), and `git_diff` (base and head refs).
+- **Integration base URLs can no longer point inside the platform** — a custom base URL on an
+  integration connection (the field that lets a webhook or self-hosted API be reached) was only
+  checked for being a well-formed URL. It could name the server's own loopback address, a private
+  network range, or a cloud metadata address, and a tool call would then send the connection's
+  credentials there and hand the reply to the assistant. A base URL is now refused when it is
+  saved if it points at any of those, including a hostname that resolves there, and it is checked
+  again, with a fresh DNS lookup, immediately before every request is sent; the request then
+  connects to exactly the address that was checked, so a name that changes its answer between the
+  check and the connection gains nothing, and a check that stalls is cut off by the same time
+  limit as the request. The check covers every non-public range, not just the common private
+  ones (carrier-grade NAT, multicast, reserved ranges, and any IPv6 address that maps,
+  translates or tunnels to a private IPv4, however it is written). An IPv6 address is only
+  treated as public when it sits in a block the internet registries have actually handed out
+  (as published by IANA on 2025-10-10); a block allocated after that date cannot be fetched by
+  web fetch or by integrations until PageSpace is updated to include it. A base URL must
+  also use `https://` now: an `http://` base URL put the connection's credentials on the wire in
+  the clear for anyone on the network path to read, so it is refused when you save it and again
+  before every request, with a message saying so. Every built-in provider already used `https://`,
+  so only a hand-entered `http://` base URL is affected — change it to `https://`. Upstream
+  redirects are no longer followed automatically: a redirect to a different site is refused
+  outright, so a connection's credentials never travel to a site the integration was not set up
+  for.
 
 ## [1.7.1] — 2026-08-10
 
