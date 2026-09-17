@@ -13,6 +13,7 @@ import {
   isPlaywrightJsonReport,
   isVitestJsonReport,
   loadTestOutcomes,
+  malformedPartialMarkers,
   securityOnlyWarnings,
   nameCarriesId,
   nameCarriesPartialId,
@@ -68,14 +69,16 @@ describe('coverage gate: ID matching', () => {
 // `if (false)` that never registers at all, and a real passing test: the skip reported
 // `status: "skipped"`, the if(false) test did not appear in `assertionResults` at all, and only
 // the real test reported `status: "passed"`).
-describe('coverage gate: the (partial) marker', () => {
-  it('a title naming an ID only as "<ID> (partial)" does not claim it, but is recognized as a partial hit', () => {
+// Titles in this file must name no real Spec ID and carry no literal partial marker: the gate reads
+// this file's own CI results too (see the last describe block, which enforces the first rule).
+describe('coverage gate: the partial marker', () => {
+  it('a title naming an ID only with the partial marker does not claim it, but is recognized as a partial hit', () => {
     expect(nameCarriesId('MON-3 (partial) sums base and extra-seat lines', 'MON-3')).toBe(false);
     expect(nameCarriesPartialId('MON-3 (partial) sums base and extra-seat lines', 'MON-3')).toBe(true);
     expect(nameCarriesPartialId('MON-3 sums base and extra-seat lines', 'MON-3')).toBe(false);
   });
 
-  it('the marker binds only to the ID right before it: in "<A>/<B> (partial)" the first ID is still claimed', () => {
+  it('the marker binds only to the ID right before it: in "<A>/<B> + marker" the first ID is still claimed', () => {
     expect(nameCarriesId('MON-2/MON-3 (partial) the org seam', 'MON-2')).toBe(true);
     expect(nameCarriesPartialId('MON-2/MON-3 (partial) the org seam', 'MON-2')).toBe(false);
     expect(nameCarriesId('MON-2/MON-3 (partial) the org seam', 'MON-3')).toBe(false);
@@ -89,6 +92,52 @@ describe('coverage gate: the (partial) marker', () => {
     expect(nameCarriesId('SEAT-2 (independent review) accepts the Pro price', 'SEAT-2')).toBe(true);
     expect(nameCarriesId('SEAT-2(partial) no space', 'SEAT-2')).toBe(true);
     expect(nameCarriesPartialId('SEAT-2(partial) no space', 'SEAT-2')).toBe(false);
+  });
+});
+
+describe('coverage gate: malformed partial markers fail loudly', () => {
+  const t = (title: string, ancestors: string[] = []) => ({ runner: 'vitest' as const, file: 'a.test.ts', title, ancestors, passed: true });
+
+  it('flags every near-miss marker shape (fake IDs), naming the file and the title', () => {
+    const nearMisses = [
+      'MON-90 (Partial) capitalized',
+      'MON-91  (partial) two spaces',
+      'MON-92\u00a0(partial) non-breaking space',
+      'MON-93 (partial ) inner space',
+      'MON-94 ( partial) inner space',
+      'MON-95 (PARTIAL) upper case',
+      'MON-96(partial) no space',
+      '(partial) no ID before it',
+      'mentions MON-97 then (partial) away from it',
+    ];
+    for (const title of nearMisses) {
+      expect(malformedPartialMarkers([t(title)]), title).toEqual([{ file: 'a.test.ts', name: title }]);
+    }
+    expect(malformedPartialMarkers([t('ordinary title', ['SEAT-91 (Partial) suite'])])).toEqual([{ file: 'a.test.ts', name: 'SEAT-91 (Partial) suite' }]);
+  });
+
+  it('accepts the exact marker after any ID family, and titles with no marker at all', () => {
+    expect(malformedPartialMarkers([t('MON-90 (partial) seam'), t('x', ['SEAT-91 (partial) suite']), t('MON-92/X-93 (partial) both'), t('plain title MON-94')])).toEqual([]);
+  });
+
+  it('fails the gate end to end on a malformed marker, even when the ID is otherwise allowlisted', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'spec-coverage-malformed-'));
+    try {
+      fs.mkdirSync(path.join(root, 'docs/specs'), { recursive: true });
+      fs.mkdirSync(path.join(root, 'packages/lib/test-results'), { recursive: true });
+      fs.mkdirSync(path.join(root, 'scripts'), { recursive: true });
+      fs.writeFileSync(path.join(root, 'docs/specs/organizations-wallets.md'), '- MON-90 A fake requirement.\n');
+      fs.writeFileSync(path.join(root, 'scripts/spec-coverage-allowlist.txt'), 'MON-90\n');
+      fs.writeFileSync(
+        path.join(root, 'packages/lib/test-results/vitest-results.json'),
+        JSON.stringify({ testResults: [{ name: path.join(root, 'packages/lib/src/seam.test.ts'), assertionResults: [{ ancestorTitles: [], title: 'MON-90 (Partial) the seam', fullName: 'MON-90 (Partial) the seam', status: 'skipped' }] }] }),
+      );
+      const lines: string[] = [];
+      expect(run(root, parseArgs(['--offline']), (l) => lines.push(l))).toBe(1);
+      expect(lines.join('\n')).toContain('FAIL: malformed partial marker in packages/lib/src/seam.test.ts: "MON-90 (Partial) the seam"');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 
@@ -477,7 +526,7 @@ describe('coverage gate: end to end over a temp repo', () => {
     expect(failing.join('\n')).toContain('FAIL: no passing test names these IDs: X-6');
   });
 
-  it('end to end: a passing "(partial)" result does not cover an allowlisted ID, is not STALE-ALLOW, and is listed in the table', () => {
+  it('end to end: a passing partial-marked result does not cover an allowlisted ID, is not STALE-ALLOW, and is listed in the table', () => {
     const root = makeRepo();
     const resultsPath = path.join(root, 'packages/lib/test-results/vitest-results.json');
     const results = JSON.parse(fs.readFileSync(resultsPath, 'utf8')) as { testResults: { assertionResults: unknown[] }[] };
@@ -520,5 +569,18 @@ describe('coverage gate: end to end over a temp repo', () => {
     const root = makeRepo();
     fs.writeFileSync(path.join(root, 'packages/lib/test-results/mystery.json'), JSON.stringify({ nope: true }));
     expect(() => run(root, parseArgs(['--offline']), () => {})).toThrow(/is neither a Vitest nor a Playwright JSON reporter file/);
+  });
+});
+
+describe('coverage gate: this self-test file claims nothing', () => {
+  it('no it/test/describe title in this file names a real Spec ID or carries a partial marker (the gate reads these results too)', () => {
+    const repoRoot = path.resolve(__dirname, '..', '..');
+    const specIds = new Set(extractRequirementIds(fs.readFileSync(path.join(repoRoot, 'docs/specs/organizations-wallets.md'), 'utf8')));
+    expect(specIds.size).toBeGreaterThan(0);
+    const source = fs.readFileSync(__filename, 'utf8');
+    const titles = [...source.matchAll(/^\s*(?:it|test|describe)(?:\.\w+)?\(\s*(['"`])((?:\\.|(?!\1).)*)\1/gm)].map((m) => m[2]);
+    expect(titles.length).toBeGreaterThan(40);
+    const offenders = titles.filter((title) => extractRequirementIds(title).some((id) => specIds.has(id)) || /\(\s*partial\s*\)/i.test(title));
+    expect(offenders).toEqual([]);
   });
 });

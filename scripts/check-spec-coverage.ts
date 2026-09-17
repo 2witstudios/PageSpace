@@ -435,6 +435,35 @@ export function hitsFromTestOutcomes(
   return hits;
 }
 
+/** Anything that looks like the partial marker: any case, any inner or surrounding whitespace. */
+const PARTIAL_MARKER_LIKE = /\(\s*partial\s*\)/gi;
+/** What must come right before a well-formed marker: a whole Spec-ID token and ONE ASCII space. */
+const ID_THEN_ONE_SPACE = new RegExp(`(?<![A-Z0-9-])(?:${REQUIREMENT_ID_PATTERN.source}) $`);
+
+export interface MalformedPartialMarker {
+  file: string;
+  name: string;
+}
+
+/**
+ * Every test or describe title carrying something marker-like that is NOT exactly `<ID> (partial)`
+ * — "(Partial)", "(partial )", two spaces or a non-breaking space before it, or no ID at all. A
+ * near-miss is not recognized as a marker, so the ID beside it would silently count as covered;
+ * the gate fails on it instead (review 5230683594 on #2657).
+ */
+export function malformedPartialMarkers(tests: readonly TestOutcome[]): MalformedPartialMarker[] {
+  const found = new Map<string, MalformedPartialMarker>();
+  for (const t of tests) {
+    for (const name of [t.title, ...t.ancestors]) {
+      for (const m of name.matchAll(PARTIAL_MARKER_LIKE)) {
+        const wellFormed = m[0] === '(partial)' && ID_THEN_ONE_SPACE.test(name.slice(0, m.index));
+        if (!wellFormed) found.set(`${t.file}\0${name}`, { file: t.file, name });
+      }
+    }
+  }
+  return [...found.values()].sort((a, b) => a.file.localeCompare(b.file) || a.name.localeCompare(b.name));
+}
+
 /**
  * Vitest reports `it.fails(...)` as `passed` exactly when its body FAILS, and its JSON reporter
  * carries no flag saying so. So any Vitest file that contributes an ID must not use `.fails` at
@@ -583,10 +612,11 @@ export function run(root: string, opts: CliOptions, log: (line: string) => void 
   const report = buildReport({ ids, hitsByFile, partialHitsByFile, allowlist, onlyIds: opts.ids });
   const failsFiles = failsModifierFiles(root, hitsByFile, tests);
   const securityWarnings = securityOnlyWarnings(root, tests, [...report.missing, ...report.allowlistedMissing]);
-  const ok = reportPasses(report) && failsFiles.length === 0;
+  const malformedMarkers = malformedPartialMarkers(tests);
+  const ok = reportPasses(report) && failsFiles.length === 0 && malformedMarkers.length === 0;
 
   if (opts.json) {
-    log(JSON.stringify({ origin: spec.origin, ok, sawVitest, sawPlaywright, resultFiles: resultFiles.length, failsFiles, securityWarnings, ...report, rows: report.rows }, null, 2));
+    log(JSON.stringify({ origin: spec.origin, ok, sawVitest, sawPlaywright, resultFiles: resultFiles.length, failsFiles, malformedMarkers, securityWarnings, ...report, rows: report.rows }, null, 2));
     return ok ? 0 : 1;
   }
 
@@ -616,6 +646,9 @@ export function run(root: string, opts: CliOptions, log: (line: string) => void 
   }
   if (report.missing.length > 0) {
     log(`FAIL: no passing test names these IDs: ${report.missing.join(', ')}`);
+  }
+  for (const m of malformedMarkers) {
+    log(`FAIL: malformed partial marker in ${m.file}: "${m.name}" — write exactly "<ID> (partial)" (one ASCII space, lowercase, no inner spaces)`);
   }
   if (failsFiles.length > 0) {
     log(`FAIL: these files contribute Spec IDs but use \`.fails\` (Vitest reports it as passed when its body fails): ${failsFiles.join(', ')}`);
