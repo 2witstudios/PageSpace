@@ -65,6 +65,8 @@ POL-3
 POL-4
 POL-5
 POL-6
+# POL-7 (partial, lane ow-c2 wallet-core): effectiveSpendPolicy proves "a drive may only be stricter" as pure
+# math; the stored policy and the credit gate reading it are unproven until E1/C3.
 POL-7
 POL-8
 POL-9
@@ -87,11 +89,19 @@ SEC-1
 SEC-2
 SEC-3
 SEC-4
+# SPEND-1 (partial, ow-c2): resolveSpendSource picks exactly one source; that every AI call in a drive
+# goes through it before the call is unproven until C3.
 SPEND-1
 SPEND-2
 SPEND-3
+# SPEND-4 (partial, ow-c2): empty chosen source refuses, names it, offers the rest, charges zero, and
+# falls back only by drive rule, as pure logic; the chip and strip showing the new source are unproven (UI-8).
 SPEND-4
+# SPEND-5 (partial, ow-c2): both override switches are absolute in resolveSpendSource; storing them per
+# drive and globally is unproven.
 SPEND-5
+# SPEND-6 (partial, ow-c2): automations resolve to the drive wallet or skip, never a person; wiring every
+# automation kind and logging the skip are unproven until C4.
 SPEND-6
 SPEND-7
 SPEND-8
@@ -110,6 +120,8 @@ UI-10
 UI-11
 WAL-1
 WAL-2
+# WAL-3 (partial, ow-c2): allocation draws against the parent as spend happens and legs last until spent,
+# as pure math; persisted wallets and ledger rows are unproven until C1/C3.
 WAL-3
 WAL-4
 # WAL-5 (every AI usage row records the wallet charged; holds per wallet; ledger, reconciliation
@@ -118,7 +130,11 @@ WAL-4
 # prove user-keyed missed-grant reconciliation (MON-2), not wallet keying. Their titles no
 # longer claim it. Remove this line once a test exercises wallet-keyed rows.
 WAL-5
+# WAL-6 (partial, ow-c2): overshoot landing by funder choice, over state, once-per-period notice and
+# debt netting are pure logic; the hold/settle path, forgiveness at renewal and the notification are unproven.
 WAL-6
+# WAL-7 (partial, ow-c2): UTC caps, defaults and 80/100% thresholds are pure logic; caps on stored legs,
+# alert delivery and the kill switch control are unproven until C3/C6.
 WAL-7
 WAL-8
 WAL-9
