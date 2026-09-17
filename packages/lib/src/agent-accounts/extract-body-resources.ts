@@ -11,13 +11,15 @@
  * Strict by design: the body must be UTF-8 JSON with an object at the root;
  * every pointer key must be an OWN key of an object; a `string` slot must be a
  * string and a `string_array` slot an array of strings. Anything else is
- * `malformed` — a declared resource the request does not carry is never read
+ * `malformed`, as is any duplicate or case-colliding key (two JSON readers
+ * could see different values) — a declared resource the request does not carry is never read
  * as "no resource", which a restriction would otherwise treat as nothing to
  * check. With no slots the body is never parsed.
  *
  * Pure.
  */
 import type { ExtractBodyResources } from './canonical-request';
+import { hasCollidingJsonKeys } from './has-colliding-json-keys';
 
 const refuse = { ok: false, reason: 'malformed' } as const;
 
@@ -27,8 +29,10 @@ function isObject(value: unknown): value is Record<string, unknown> {
 
 function parseObject(body: Uint8Array): Record<string, unknown> | null {
   try {
-    const parsed: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(body));
-    return isObject(parsed) ? parsed : null;
+    const text = new TextDecoder('utf-8', { fatal: true }).decode(body);
+    const parsed: unknown = JSON.parse(text);
+    // One reading only: duplicate or case-colliding keys let two parsers see different values (G1c review).
+    return isObject(parsed) && !hasCollidingJsonKeys({ text }) ? parsed : null;
   } catch {
     return null;
   }

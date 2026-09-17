@@ -81,7 +81,10 @@ export const deriveGitResources: DeriveGitResources = ({ method, rules, body }) 
   for (const { slot, source } of rules) {
     for (const ref of parsed.refs) {
       if (source === 'receive_pack_ref_names') resources.push([slot, ref]);
-      else if (ref.startsWith(BRANCH_PREFIX)) resources.push([slot, ref.slice(BRANCH_PREFIX.length)]);
+      // Every ref gets a branch value: a branch its short name, anything else (a tag, HEAD, refs/meta/*)
+      // its full name, which no branch allowlist of short names contains — a push can never update a
+      // ref the restriction did not see (G1c review of #2660).
+      else resources.push([slot, ref.startsWith(BRANCH_PREFIX) ? ref.slice(BRANCH_PREFIX.length) : ref]);
     }
   }
   return { ok: true, resources };

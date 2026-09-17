@@ -299,6 +299,15 @@ function canonicalizeHeaders(
   return { ok: true, headers: sorted };
 }
 
+/** A query name for comparison only (never digested): decoded when it decodes, else as written. */
+function decodeURIComponentSafe(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 export const canonicalizeRequest: CanonicalizeRequest = (call): CanonicalizeResult => {
   if (call === null || typeof call !== 'object') return refuse('malformed');
   const { request: input, providerSlug, registry } = call;
@@ -335,6 +344,14 @@ export const canonicalizeRequest: CanonicalizeRequest = (call): CanonicalizeResu
   // (G1c R5) and, for a relay push, the refs in the git command list (G1c R11) — never the caller's.
   let resources: readonly (readonly [string, string])[] = [];
   if (match !== null) {
+    // A body-slot operation is read as JSON by exactly one route: a JSON content type, and no query
+    // argument that shadows a body slot (a provider that also reads query arguments would act on it).
+    if (match.entry.bodySlots.length > 0) {
+      const contentType = headers.headers.find(([name]) => name === 'content-type')?.[1] ?? '';
+      if (!/^application\/json\s*(;|$)/i.test(contentType)) return refuse('malformed');
+      const shadowed = new Set(match.entry.bodySlots.map(({ pointer }) => (pointer[0] ?? '').toLowerCase()));
+      if (query.query.some(([name]) => shadowed.has(decodeURIComponentSafe(name).toLowerCase()))) return refuse('malformed');
+    }
     const body = extractBodyResources({ slots: match.entry.bodySlots, body: input.body });
     if (!body.ok) return refuse(body.reason);
     // Derived resources are relay-only (a registry defect elsewhere); `channel` already fixed `method` to a relay verb.
