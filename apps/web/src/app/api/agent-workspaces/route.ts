@@ -12,7 +12,14 @@
  * epic's rename fixes.
  *
  * GET ?driveId=<id> | (none = mine)
- *   → { sessions: [{ …AgentSessionDTO, shells: ShellDTO[], conversations }] }
+ *   → { sessions: [{ …AgentSessionDTO, shells: ShellDTO[], conversations, rev, nodes, targets }] }
+ *
+ * A DRIVE-SCOPED credential (a scoped MCP key / OAuth token) gets a narrower
+ * answer: only sessions in drives its OWN principal permissions can view, and
+ * the session DTOs alone — `shells`/`conversations`/`nodes`/`targets` empty at
+ * `rev: 0`. The child reads resolve as the owning user, and a key restricted by
+ * an explicit role must not receive its owner's conversation titles or tree
+ * targets (PR #2653 review P1). The CLI/SDK need only the DTO fields.
  * POST { driveId, agentPageId, name?, firstThing? }
  *   → 201 { session, conversationId } | { session, shellId, shellName } — spawn (see below)
  *
@@ -24,7 +31,13 @@
  */
 
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError, canPrincipalViewPage } from '@/lib/auth';
+import {
+  authenticateRequestWithOptions,
+  isAuthError,
+  canPrincipalViewPage,
+  getPrincipalDriveAccessLevel,
+  isDriveScopedPrincipal,
+} from '@/lib/auth';
 import { conversationRepository, type AiAgent } from '@/lib/repositories/conversation-repository';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -48,6 +61,7 @@ import { listShellsBulk, spawnShell } from '@/lib/agent-workspaces/workspace-she
 import { findWorkspaceOfConversation, checkSessionAccess } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { readWorkspaceNodesBulk } from '@/lib/agent-workspaces/workspace-node-runtime';
 import { sessionQuotaExceeded } from '@/lib/agent-workspaces/quota-response';
+import { isWorkspaceInCredentialScope } from '@/lib/agent-workspaces/credential-scope';
 import {
   MAX_SESSION_NAME_LENGTH,
   nextUniqueSessionName,
@@ -92,7 +106,9 @@ async function denyIfCannotViewAgent(
   return NextResponse.json({ error: 'Insufficient permissions to use this agent' }, { status: 403 });
 }
 
-const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
+// The listing is token-readable so the CLI/SDK can find a workspace to exec in;
+// a token only ever sees the workspaces inside its own drive scope (below).
+const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
 export async function GET(request: Request) {
@@ -110,7 +126,27 @@ export async function GET(request: Request) {
       : { ownerId: auth.userId };
 
   try {
-    const sessions = await listSessions(filter);
+    const inScope = (await listSessions(filter)).filter((session) =>
+      isWorkspaceInCredentialScope(auth, session.driveId),
+    );
+
+    if (isDriveScopedPrincipal(auth)) {
+      // Every in-scope session has a drive (a driveless one is out of every
+      // drive scope). One principal read per DISTINCT drive, not per session.
+      const driveIds = [...new Set(inScope.flatMap((session) => (session.driveId ? [session.driveId] : [])))];
+      const viewable = new Set<string>();
+      await Promise.all(
+        driveIds.map(async (id) => {
+          if ((await getPrincipalDriveAccessLevel(auth, id))?.canView) viewable.add(id);
+        }),
+      );
+      const sessions = inScope
+        .filter((session) => session.driveId !== null && viewable.has(session.driveId))
+        .map((session) => ({ ...session, shells: [], conversations: [], rev: 0, nodes: [], targets: [] }));
+      return NextResponse.json({ sessions });
+    }
+
+    const sessions = inScope;
     // Children in THREE bulk queries, however many sessions listed — this is
     // polled by every open sidebar, and the per-session shape was 1+2N
     // queries per poll (review M4).

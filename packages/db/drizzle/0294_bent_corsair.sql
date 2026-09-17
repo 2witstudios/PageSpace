@@ -1,1 +1,0 @@
-ALTER TABLE "credit_ledger" ADD COLUMN "paidCents" integer;

@@ -203,6 +203,7 @@ export type { TaskCompletionGatedError } from './operations/tasks.js';
 
 // Workflows (Phase 3 task 8).
 export { createWorkflow, deleteWorkflow, listWorkflows, updateWorkflow } from './operations/workflows.js';
+export { execInWorkspace, listWorkspaces } from './operations/workspaces.js';
 
 // Uploads — the two API legs of a direct-to-storage upload, plus the slot release.
 export { cancelUpload, completeUpload, needsUpload, presignUpload } from './operations/uploads.js';

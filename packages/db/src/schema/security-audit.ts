@@ -83,7 +83,19 @@ export type SecurityEventType =
   | 'security.brute.force.detected'
   | 'security.suspicious.activity'
   // Personal-data breach / security incident recorded (#979, Art 33/34).
-  | 'security.incident.created';
+  | 'security.incident.created'
+  // Agent-account credential brokering (L1·G1b, ADR 0004 §5). The `allowed`
+  // row is written and durably accepted BEFORE the operation runs, and the
+  // outcome row is keyed by the same grant id, so the chain carries both
+  // halves of every credentialed action. One type per AuditOutcome kind so a
+  // forensic query can separate "authorized" from "actually happened" —
+  // recording one type for both would let this log assert an execution that
+  // never occurred. `unknown` is a post-send timeout: upstream may have acted.
+  | 'credential.grant.allowed'
+  | 'credential.grant.denied'
+  | 'credential.operation.executed'
+  | 'credential.operation.failed'
+  | 'credential.operation.unknown';
 
 /**
  * Single source of truth for the security_audit_log table shape (#890 Phase 1).

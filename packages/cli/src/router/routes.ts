@@ -81,6 +81,7 @@ import {
   tasksUpdateHandler,
 } from '../commands/tasks.js';
 import { trashListHandler } from '../commands/trash.js';
+import { workspacesExecHandler, workspacesListHandler } from '../commands/workspaces.js';
 import { whoamiHandler } from '../commands/whoami.js';
 import { tokensCreateHandler } from '../commands/keys/create.js';
 import { keysDescribeHandler } from '../commands/keys/describe.js';
@@ -192,6 +193,8 @@ const OTHER_ROUTES: readonly RouteEntry[] = [
   { path: ['conversations', 'read'], handler: conversationsReadHandler, summary: 'Read a conversation\'s messages' },
   { path: ['activity'], handler: activityHandler, summary: 'Show recent activity' },
   { path: ['channels', 'send'], handler: channelsSendHandler, summary: 'Send a channel message' },
+  { path: ['workspaces', 'list'], handler: workspacesListHandler, summary: 'List your agent workspaces (each has one sandbox)' },
+  { path: ['workspaces', 'exec'], handler: workspacesExecHandler, summary: "Run a shell command in a workspace's sandbox" },
 ];
 
 const HELP_DESCRIPTOR = { path: ['help'], summary: 'Show this help message' };

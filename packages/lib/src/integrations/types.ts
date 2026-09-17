@@ -258,7 +258,8 @@ export type ToolCallErrorType =
   | 'http'
   | 'internal'
   | 'timeout'
-  | 'network';
+  | 'network'
+  | 'blocked_target';
 
 export interface ToolCallResult {
   success: boolean;
