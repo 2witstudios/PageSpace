@@ -305,6 +305,7 @@ describe('Security Audit Route Coverage', () => {
   const AI_ROUTES_REQUIRING_DENIAL_AUDIT: string[] = [
     // Chat subset
     'ai/abort',
+    'ai/btw',
     'ai/chat',
     'ai/chat/messages',
     'ai/chat/messages/[messageId]',

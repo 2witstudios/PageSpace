@@ -23,6 +23,8 @@ export interface ChatInputProps {
   onSend: () => void;
   /** Stop streaming handler */
   onStop: () => void;
+  /** Detached /btw handler. Unlike ordinary sends, this remains available during a local stream. */
+  onSideQuestion?: () => void;
   /** Whether AI is currently streaming */
   isStreaming: boolean;
   /** A Stop has been requested and has not resolved yet — see InputActions. */
@@ -111,6 +113,7 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
       onChange,
       onSend,
       onStop,
+      onSideQuestion,
       isStreaming,
       isStopping = false,
       disabled = false,
@@ -199,9 +202,10 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
     const handleSend = () => {
       const hasText = value.trim().length > 0;
       const hasImages = (attachments?.length ?? 0) > 0;
-      if ((hasText || hasImages) && !effectiveDisabled && !isStreaming) {
+      const isSideQuestion = /^\/btw\s+\S/.test(value.trim());
+      if ((hasText || hasImages) && !effectiveDisabled && (!isStreaming || (isSideQuestion && onSideQuestion))) {
         keyboard.dismiss();
-        onSend();
+        if (isSideQuestion && onSideQuestion) onSideQuestion(); else onSend();
       }
     };
 

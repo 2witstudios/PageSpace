@@ -7,6 +7,8 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Ask a detached side question with `/btw`** — while an agent is working, type `/btw` followed by a question to get a separate, temporary answer from the completed conversation context. It never interrupts the active run or becomes part of the chat history.
+
 - **Sign-up says where AI content goes** — the consent line on every sign-up screen now says AI
   features send your content to OpenRouter and the model provider you choose, alongside the Terms
   and Privacy Policy.
