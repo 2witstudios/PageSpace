@@ -76,9 +76,12 @@ export function InputPositioner({
       }}
       initial={false}
       animate={{
-        // For centered: move up by ~40% of container height
+        // For centered: move up to the vertical center of the nearest SIZE
+        // container (`container-type: size`), not the viewport — so the same
+        // layer centers inside a resizable pane as at dashboard full height.
+        // With no size-container ancestor, cqh falls back to the viewport.
         // For docked: stay at bottom (y: 0)
-        y: isCentered ? 'calc(-50vh + 100px)' : 0,
+        y: isCentered ? 'calc(-50cqh + 100px)' : 0,
       }}
       transition={transition}
     >

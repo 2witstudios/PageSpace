@@ -18,6 +18,14 @@
  * ASSISTANT (`AssistantSessionChat`, whose state comes from the other chat
  * pipeline via `useAssistantSessionChat`) renders the identical surface — one
  * view, two state hooks, per the "one chat surface" rule.
+ *
+ * The composer is the SHARED floating layer (`FloatingInputLayer` — the same
+ * chrome the dashboard assistant uses): a new/empty conversation renders the
+ * welcome headline with the input card centered in the pane, and the first
+ * send springs it down to the dock. Context-dependent chrome only: `'page'`
+ * keeps the floating card when docked (aligned with the messages column, as
+ * on the dashboard), while `'console'` — a narrow-sidebar surface — returns
+ * to its compact border-t footer once the conversation starts.
  */
 import React, { useCallback, useState } from 'react';
 import { Loader2 } from 'lucide-react';
@@ -27,9 +35,15 @@ import { UndoAiChangesDialog } from '@/components/ai/shared/chat';
 import { AskUserAnswerProvider } from '@/components/ai/shared/chat/ask-user/AskUserAnswerContext';
 import { ChatErrorBanner } from '@/components/ai/shared/chat/ChatErrorBanner';
 import { ChatMessagesArea } from '@/components/ai/shared/chat/ChatMessagesArea';
+import { WelcomeContent } from '@/components/ai/chat/layouts/WelcomeContent';
 import { Conversation, ConversationScrollButton } from '@/components/ai/ui/conversation';
+import {
+  FloatingInputLayer,
+  WELCOME_OFFSET_PANE,
+} from '@/components/ui/floating-input/FloatingInputLayer';
 import { SidebarMessagesContent } from '@/components/layout/right-sidebar/ai-assistant/SidebarChatTab';
 import { hasVisionCapability } from '@/lib/ai/core/vision-models';
+import { useInputPosition } from '@/lib/ai/streams/useInputPosition';
 import { useOpenPagePane } from '@/lib/ai/shared/hooks/useOpenPagePane';
 import { useSideQuestion } from '@/components/ai/btw/useSideQuestion';
 import { SideQuestionCard } from '@/components/ai/btw/SideQuestionCard';
@@ -153,6 +167,50 @@ export function SessionChatView({
   const showLoading =
     chat.isMessagesLoading && chat.messages.length === 0 && chat.remoteStreams.length === 0;
 
+  // Centered welcome (new/empty conversation) vs docked composer — the same
+  // latched decision the dashboard assistant makes. `isBusy` covers the send
+  // handoff window so the FIRST send springs the card down immediately, even
+  // before the optimistic stream/message has surfaced.
+  const inputPosition = useInputPosition({
+    conversationId,
+    isLoading: chat.isMessagesLoading,
+    hasMessages: chat.messages.length > 0,
+    hasRemoteStreams: chat.remoteStreams.length > 0,
+    isBusy: chat.displayIsStreaming,
+  });
+  const isCentered = inputPosition === 'centered';
+
+  const errorBanner = (
+    <ChatErrorBanner
+      cause={chat.errorCause}
+      show={showError}
+      onClearError={() => {
+        setShowError(false);
+        chat.dismissError();
+      }}
+    />
+  );
+
+  const chatInput = (popupPlacement: 'top' | 'bottom') => (
+    <ChatInput
+      value={input}
+      onChange={setInput}
+      onSend={() => void handleSendClick()}
+      onSideQuestion={handleSideQuestion}
+      onStop={() => void chat.handleStop()}
+      isStreaming={chat.displayIsStreaming}
+      isStopping={chat.isStopping}
+      disabled={isReadOnly}
+      placeholder={isReadOnly ? 'View only' : `Message ${name}...`}
+      hideModelSelector
+      variant={context === 'console' ? 'sidebar' : 'main'}
+      hasVision={hasVisionCapability(visionModel)}
+      commandDriveId={commandDriveId ?? undefined}
+      remoteStreamingUser={remoteStreamingUser}
+      popupPlacement={popupPlacement}
+    />
+  );
+
   return (
     // isReadOnly viewers get no answer plumbing at all — same as rendering
     // outside a chat surface entirely — so AskUserQuestionCard's options and
@@ -176,12 +234,12 @@ export function SessionChatView({
         </div>
       )}
 
-      <div className="min-h-0 min-w-0 flex-1 overflow-hidden flex flex-col">
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden [container-type:size]">
         {showLoading ? (
           <div data-testid="session-chat-loading" className="flex h-full items-center justify-center">
             <Loader2 className="size-4 animate-spin text-muted-foreground" />
           </div>
-        ) : context === 'page' ? (
+        ) : isCentered ? null : context === 'page' ? (
           <ChatMessagesArea
             messages={chat.messages}
             isLoading={chat.isMessagesLoading}
@@ -218,34 +276,45 @@ export function SessionChatView({
             <ConversationScrollButton className="bottom-6 z-10" />
           </Conversation>
         )}
-      </div>
 
-      <div className="shrink-0 space-y-1.5 border-t border-border p-2">
-        {sideQuestion.state && <SideQuestionCard state={sideQuestion.state} onDismiss={sideQuestion.dismiss} />}
-        <ChatErrorBanner
-          cause={chat.errorCause}
-          show={showError}
-          onClearError={() => {
-            setShowError(false);
-            chat.dismissError();
-          }}
-        />
-        <ChatInput
-          value={input}
-          onChange={setInput}
-          onSend={() => void handleSendClick()}
-          onSideQuestion={handleSideQuestion}
-          onStop={() => void chat.handleStop()}
-          isStreaming={chat.displayIsStreaming}
-          isStopping={chat.isStopping}
-          disabled={isReadOnly}
-          placeholder={isReadOnly ? 'View only' : `Message ${name}...`}
-          hideModelSelector
-          variant={context === 'console' ? 'sidebar' : 'main'}
-          hasVision={hasVisionCapability(visionModel)}
-          commandDriveId={commandDriveId ?? undefined}
-          remoteStreamingUser={remoteStreamingUser}
-        />
+        {isCentered ? (
+          // New conversation: the shared centered welcome + floating card.
+          <FloatingInputLayer
+            position={inputPosition}
+            welcomeOffsetClassName={WELCOME_OFFSET_PANE}
+            welcomeContent={<WelcomeContent title={name} showIcon={false} />}
+            errorSlot={
+              <>
+                {sideQuestion.state && <SideQuestionCard state={sideQuestion.state} onDismiss={sideQuestion.dismiss} />}
+                {errorBanner}
+              </>
+            }
+          >
+            {chatInput('bottom')}
+          </FloatingInputLayer>
+        ) : context === 'page' ? (
+          // Docked over the messages column — the dashboard's floating card,
+          // capped at the messages column width instead of a full-bleed bar.
+          <FloatingInputLayer
+            position={inputPosition}
+            errorSlot={
+              <>
+                {sideQuestion.state && <SideQuestionCard state={sideQuestion.state} onDismiss={sideQuestion.dismiss} />}
+                {errorBanner}
+              </>
+            }
+          >
+            {chatInput('top')}
+          </FloatingInputLayer>
+        ) : (
+          // Compact sidebar surface keeps its own docked chrome once the
+          // conversation starts.
+          <div className="shrink-0 space-y-1.5 border-t border-border p-2">
+            {sideQuestion.state && <SideQuestionCard state={sideQuestion.state} onDismiss={sideQuestion.dismiss} />}
+            {errorBanner}
+            {chatInput('top')}
+          </div>
+        )}
       </div>
 
       {/* Only the console path renders this itself — ChatMessagesArea (page

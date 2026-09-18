@@ -3,15 +3,15 @@
 import React, { useRef } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import { UIMessage } from 'ai';
-import { InputPositioner, type InputPosition } from '@/components/ui/floating-input/InputPositioner';
-import { InputCard } from '@/components/ui/floating-input/InputCard';
+import type { InputPosition } from '@/components/ui/floating-input/InputPositioner';
+import { FloatingInputLayer } from '@/components/ui/floating-input/FloatingInputLayer';
 import { ChatErrorBanner } from '@/components/ai/shared/chat/ChatErrorBanner';
 import type { AIErrorCause } from '@/lib/ai/shared/aiErrorCause';
 import { ChatMessagesArea, ChatMessagesAreaRef } from '@/components/ai/shared/chat/ChatMessagesArea';
 import { WelcomeContent } from './WelcomeContent';
 import { useEnterToSend } from '@/hooks/useEnterToSend';
 import type { PendingStream } from '@/stores/usePendingStreamsStore';
-import { resolveInputPosition, type InputPositionLatch } from '@/lib/ai/streams/resolveInputPosition';
+import { useInputPosition } from '@/lib/ai/streams/useInputPosition';
 
 export interface ChatLayoutProps {
   /** Conversation identity — latches the docked input position per conversation so a
@@ -195,21 +195,15 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
       scrollToBottom: () => messagesRef.current?.scrollToBottom(),
     }));
 
-    // Determine position based on message state. The latch survives renders in a ref
-    // (not state) — it only ever gates a derived value computed fresh every render,
-    // never itself triggers one.
+    // Determine position based on message state — see `useInputPosition`.
     const hasMessages = messages.length > 0;
     const hasRemoteStreams = remoteStreams.length > 0;
-    const latchRef = useRef<InputPositionLatch>({ conversationId: null, docked: false });
-    const { position: inputPosition, latch } = resolveInputPosition({
+    const inputPosition = useInputPosition({
       conversationId,
       isLoading,
       hasMessages,
       hasRemoteStreams,
-      latch: latchRef.current,
     });
-    latchRef.current = latch;
-    const isCentered = inputPosition === 'centered';
     const showMessagesPanel = inputPosition === 'docked';
 
     // Default input renderer (placeholder - will be replaced with ChatInput in Phase 3)
@@ -274,7 +268,9 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
       : defaultInputContent;
 
     return (
-      <div className="relative flex flex-col h-full overflow-hidden">
+      // The size container is what makes the floating layer's centered
+      // position container-relative (cqh) rather than viewport-relative.
+      <div className="relative flex flex-col h-full overflow-hidden [container-type:size]">
         {/* Messages area - only visible when docked. Keyed by conversationId (not a
             static string) so a conversation switch is a clean remount rather than the
             same instance silently swapping its content out from under an in-flight
@@ -313,41 +309,26 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
           )}
         </AnimatePresence>
 
-        {/* Welcome content - only visible when centered */}
-        <AnimatePresence>
-          {isCentered && !isLoading && (
-            <motion.div
-              key="welcome"
-              initial={shouldReduceMotion ? { opacity: 1 } : { opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={shouldReduceMotion ? { opacity: 0 } : { opacity: 0 }}
-              transition={{ duration: 0.2 }}
-              className="absolute inset-0 flex items-center justify-center pointer-events-none z-20"
-            >
-              <div className="w-full max-w-[600px] px-6 -translate-y-48">
-                {welcomeContent ?? (
-                  <WelcomeContent
-                    title={welcomeTitle}
-                    subtitle={welcomeSubtitle}
-                    icon={welcomeIcon}
-                    showIcon={false}
-                  />
-                )}
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* Floating input */}
-        <InputPositioner position={inputPosition}>
-          <InputCard
-            errorSlot={
-              <ChatErrorBanner cause={cause} show={showError} onClearError={onClearError} />
-            }
-          >
-            {inputContent}
-          </InputCard>
-        </InputPositioner>
+        {/* Welcome + floating input — the shared layer */}
+        <FloatingInputLayer
+          position={inputPosition}
+          isLoading={isLoading}
+          welcomeContent={
+            welcomeContent ?? (
+              <WelcomeContent
+                title={welcomeTitle}
+                subtitle={welcomeSubtitle}
+                icon={welcomeIcon}
+                showIcon={false}
+              />
+            )
+          }
+          errorSlot={
+            <ChatErrorBanner cause={cause} show={showError} onClearError={onClearError} />
+          }
+        >
+          {inputContent}
+        </FloatingInputLayer>
       </div>
     );
   }
