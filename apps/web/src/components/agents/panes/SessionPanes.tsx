@@ -27,7 +27,7 @@ import { usePanelRef } from 'react-resizable-panels';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
-import { useMobile } from '@/hooks/useMobile';
+import { useBreakpoint } from '@/hooks/useBreakpoint';
 import {
   childrenOf,
   rootOf,
@@ -66,7 +66,13 @@ export default function SessionPanes({
   renderPane,
   paneLabel,
 }: SessionPanesProps) {
-  const isMobile = useMobile();
+  // The collapse is a VIEWPORT decision, not a device one. Gating on device
+  // identity here put every iPad on the phone layout — even a 13" Pro in
+  // landscape, where a split is exactly what the screen is for. The query alone
+  // answers every case: an iPad at full width renders the grid, and an iPad
+  // squeezed by Split View or Slide Over still collapses, because the window
+  // really is too narrow.
+  const isNarrowViewport = useBreakpoint('(max-width: 767px)');
   const root = useMemo(() => rootOf(nodes), [nodes]);
   const panes = useMemo(() => gridPanesOf(nodes), [nodes]);
 
@@ -91,7 +97,7 @@ export default function SessionPanes({
   // refit on re-show is a no-op and the pane stays blank for good.
   // visibility:hidden also keeps `offsetParent` and `clientWidth` truthy, which
   // is exactly what the terminal's own visibility gate checks before it fits.
-  if (isMobile) {
+  if (isNarrowViewport) {
     if (panes.length === 0) return <EmptyGrid />;
     // The store always points `activeNodeId` at a live pane; fall back anyway
     // rather than render a grid where nothing is visible.
