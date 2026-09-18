@@ -314,6 +314,34 @@ export const agentWorkspaces = pgTable('agent_workspaces', {
     sql`${table.kind} IN ('agent', 'dashboard')`,
   ),
 
+  /**
+   * A dashboard is STRUCTURALLY not a working context, stated where it can be
+   * violated rather than enforced by writer discipline:
+   *
+   *  - **user-scoped** — `driveId` NULL. A drive-scoped dashboard has no
+   *    access answer: `decideAgentSessionAccess`'s global branch (owner-only)
+   *    is the only rule that fits it, and that branch keys on the null. A
+   *    future caller that binds a dashboard to a drive would route the user's
+   *    home layout through a drive's membership — refused here instead.
+   *  - **never owns compute or an environment** — no `envId`, no Sprite
+   *    identity trio. The dashboard borrows NO filesystem and provisions NO
+   *    VM, ever: its panes that want compute bind shells/terminals belonging
+   *    to agent sessions, exactly as a chat pane binds a conversation. Without
+   *    this check, the orphan reconciler, the storage-billing cron, and the
+   *    end planner would all eventually have to learn what a dashboard Sprite
+   *    means — the answer is "nothing", and the CHECK is what makes that
+   *    permanent rather than a promise in this docblock.
+   *
+   * Both halves are vacuously true of every shipped row (kind defaults to
+   * 'agent', and only the dashboard provisioning runtime writes 'dashboard' —
+   * the spawn path has no field for it), so the check ships enforced
+   * immediately with no staged VALIDATE.
+   */
+  dashboardShapeCheck: check(
+    'agent_workspaces_dashboard_shape_check',
+    sql`${table.kind} <> 'dashboard' OR (${table.driveId} IS NULL AND ${table.envId} IS NULL AND ${table.sandboxId} IS NULL AND ${table.spriteKey} IS NULL AND ${table.spriteInstanceId} IS NULL)`,
+  ),
+
   // One dashboard per owner WHILE IT IS OPEN. An ended dashboard workspace
   // keeps its row as history (the same rule every session follows) and no
   // longer holds the slot, so the next dashboard visit provisions a fresh

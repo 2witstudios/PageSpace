@@ -1,3 +1,0 @@
-ALTER TABLE "agent_workspaces" ADD COLUMN "kind" text DEFAULT 'agent' NOT NULL;--> statement-breakpoint
-CREATE UNIQUE INDEX "agent_workspaces_one_open_dashboard_idx" ON "agent_workspaces" USING btree ("ownerId") WHERE "agent_workspaces"."kind" = 'dashboard' AND "agent_workspaces"."endedAt" IS NULL;--> statement-breakpoint
-ALTER TABLE "agent_workspaces" ADD CONSTRAINT "agent_workspaces_kind_values_check" CHECK ("agent_workspaces"."kind" IN ('agent', 'dashboard'));
