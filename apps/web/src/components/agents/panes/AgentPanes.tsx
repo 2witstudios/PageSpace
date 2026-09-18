@@ -150,6 +150,22 @@ export interface AgentPanesProps {
    */
   chatContext?: 'page' | 'console';
   /**
+   * Fired whenever the FOCUSED pane's chat conversation identity changes —
+   * including to null, when focus moves to a non-chat pane (or no pane).
+   * `agentPageId` is null for a global-assistant thread.
+   *
+   * The dashboard grid rides this to keep the app-wide assistant identity
+   * (the GlobalChatContext cookie) in step with what the tree is showing, so
+   * the sidebar and voice can never disagree with the pane on screen. Only
+   * the dashboard passes it: the Agents console and agent pages own their
+   * selection through other stores, and for them the focused pane IS the
+   * selection rather than a fact to report.
+   */
+  onActiveConversationChanged?: (conversation: {
+    conversationId: string;
+    agentPageId: string | null;
+  } | null) => void;
+  /**
    * The conversation the HOSTING AI_CHAT page resolved, when this is that
    * page's own embedded grid. The one pane bound to exactly this conversation
    * is the page's own agent, which it cannot be switched away from — so that
@@ -234,6 +250,7 @@ export default function AgentPanes({
   onConversationClosed,
   chatContext = 'console',
   hostConversationId,
+  onActiveConversationChanged,
   isReadOnly = false,
 }: AgentPanesProps) {
   // THE workspace object, selected whole. Never a filter inlined into the
@@ -260,6 +277,31 @@ export default function AgentPanes({
 
   const nodes = useMemo(() => tree?.nodes ?? [], [tree]);
   const targetIndex = useMemo(() => indexTargets(tree?.targets ?? []), [tree]);
+
+  // The focused pane's chat identity — WHAT the grid is showing, derived from
+  // the same tree the panes render. `activeNodeId` is the user's focus (the
+  // client-local overlay); when it points at a chat pane, this is the
+  // conversation on screen, and the resolved target's `agentPageId` says
+  // whether it is a global-assistant thread (null) or an agent's.
+  const activeChatConversation = useMemo(() => {
+    const activeId = tree?.activeNodeId ?? null;
+    const node = activeId !== null ? findNode(nodes, activeId) : undefined;
+    if (node === undefined || node.nodeType !== 'pane' || node.target?.kind !== 'chat') {
+      return null;
+    }
+    return {
+      conversationId: node.target.id,
+      agentPageId: lookupTarget(targetIndex, node)?.agentPageId ?? null,
+    };
+  }, [tree, nodes, targetIndex]);
+
+  // Read through a ref so the effect keys on the IDENTITY change alone — a
+  // caller whose callback closure is unstable must not re-fire it.
+  const onActiveConversationChangedRef = useRef(onActiveConversationChanged);
+  onActiveConversationChangedRef.current = onActiveConversationChanged;
+  useEffect(() => {
+    onActiveConversationChangedRef.current?.(activeChatConversation);
+  }, [activeChatConversation]);
 
   // Whether THIS workspace's payer (not the viewing user) is sandbox-eligible —
   // server-resolved (the client only knows its own tier, the wrong axis for a

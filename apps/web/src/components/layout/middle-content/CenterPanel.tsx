@@ -20,7 +20,7 @@ import { PullToRefresh } from '@/components/ui/pull-to-refresh';
 import { getPageTypeComponent } from '@pagespace/lib/content/page-types.config';
 import MCPSettingsView from './page-views/settings/mcp/MCPSettingsView';
 import CanvasPageView from './page-views/canvas/CanvasPageView';
-import GlobalAssistantView from './page-views/dashboard/GlobalAssistantView';
+import DashboardWorkspaceView from './page-views/dashboard/DashboardWorkspaceView';
 import { memo, useState, useEffect, useRef, useCallback } from 'react';
 import { cn } from '@/lib/utils';
 import { usePageStore } from '@/hooks/usePage';
@@ -323,7 +323,7 @@ export default function CenterPanel() {
   // Initialize global drive socket listener for real-time updates
   useGlobalDriveSocket();
 
-  // Track if GlobalAssistantView has ever been rendered (lazy mount, then persist)
+  // Track if the dashboard surface has ever been rendered (lazy mount, then persist)
   // This ensures we don't mount it until the user visits dashboard, but once mounted it stays
   const [hasRenderedGlobalAssistant, setHasRenderedGlobalAssistant] = useState(false);
 
@@ -335,7 +335,11 @@ export default function CenterPanel() {
 
   return (
     <div className="h-full flex flex-col relative">
-      {/* GlobalAssistantView - mount once on first dashboard visit, never unmount */}
+      {/* DashboardWorkspaceView - mount once on first dashboard visit, never unmount.
+          THE DASHBOARD AS A SPLITTABLE PANE GRID: the user's dashboard workspace
+          (`agent_workspaces.kind = 'dashboard'`) rendered through the same pane grid
+          every other surface uses. GlobalAssistantView survives inside it only as the
+          provisioning fallback. */}
       {hasRenderedGlobalAssistant && (
         <div
           className={cn(
@@ -344,7 +348,7 @@ export default function CenterPanel() {
           )}
           aria-hidden={!showGlobalAssistant}
         >
-          <GlobalAssistantView />
+          <DashboardWorkspaceView />
         </div>
       )}
 

@@ -19,6 +19,8 @@ import { useChannelStreamSocket } from '@/hooks/useChannelStreamSocket';
 import type { ChatGlobalConversationAddedPayload } from '@/lib/websocket/socket-utils';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
+import { post } from '@/lib/auth/auth-fetch';
+import { getRegisteredDashboardWorkspaceId } from '@/lib/agent-workspaces/dashboard-workspace-registry';
 import { loadGlobalConversationMessages, refreshConversationSnapshot } from '@/hooks/conversationMessagesLoaders';
 import { buildConversationCacheHandlers } from '@/hooks/conversationCacheSocketHandlers';
 import { useConversationSubscription } from '@/hooks/useConversationSubscription';
@@ -110,6 +112,21 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
   const isInitialized = !isResolving(identity) && identity.status !== 'idle';
   const [latestGlobalConversationAdded, setLatestGlobalConversationAdded] = useState<ChatGlobalConversationAddedPayload | null>(null);
 
+  /**
+   * Adopt a freshly minted conversation as THE identity — identity, cookie,
+   * URL, and cache state in one place. A just-created conversation has no
+   * server messages — seed the cache loaded-empty so nothing fetches for it
+   * and no loading state shows.
+   */
+  const adoptNewConversation = useCallback((conversationId: string) => {
+    dispatchIdentity({ type: 'IDENTITY_SET', conversationId });
+    conversationMessagesActions.seedConversation(conversationId);
+    conversationState.setActiveConversationId(conversationId);
+    if (!getAgentId()) {
+      setConversationId(conversationId, 'push');
+    }
+  }, [dispatchIdentity]);
+
 
   // The id is already known — adopt it synchronously, before the messages
   // fetch even starts, so a send fired right after switching can't race.
@@ -125,23 +142,40 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
 
   const createNewConversation = useCallback(async () => {
     try {
+      // ONE CREATION PATH: when the user's dashboard workspace exists, a new
+      // assistant thread is minted INTO it (born bound — contract invariant 1),
+      // so the dashboard grid, the sidebar, and this identity all land on the
+      // same conversation. Falls back to the client-minted lazy identity when
+      // no workspace is registered (never provisioned this session) or the
+      // mint fails — the fallback creates no row, exactly as before.
+      const dashboardWorkspaceId = getRegisteredDashboardWorkspaceId();
+      if (dashboardWorkspaceId) {
+        try {
+          // `post` throws ApiRequestError on any non-2xx, so a refused or
+          // missing mint lands in the catch below and the lazy path runs.
+          const minted = await post<{ conversationId?: string }>(
+            `/api/agent-workspaces/${encodeURIComponent(dashboardWorkspaceId)}/conversations`,
+            { agentPageId: null },
+          );
+          if (minted.conversationId) {
+            adoptNewConversation(minted.conversationId);
+            return;
+          }
+        } catch {
+          // Fall through to the client-minted lazy path rather than failing
+          // the user's "New".
+        }
+      }
       const newConversation = await conversationState.createAndSetActiveConversation({
         type: 'global',
       });
       if (newConversation && newConversation.id) {
-        dispatchIdentity({ type: 'IDENTITY_SET', conversationId: newConversation.id });
-        // A just-created conversation has no server rows — mark it loaded-empty
-        // in the cache so nothing fetches for it and no loading state shows.
-        conversationMessagesActions.seedConversation(newConversation.id);
-        conversationState.setActiveConversationId(newConversation.id);
-        if (!getAgentId()) {
-          setConversationId(newConversation.id, 'push');
-        }
+        adoptNewConversation(newConversation.id);
       }
     } catch (error) {
       console.error('Failed to create new conversation:', error);
     }
-  }, [dispatchIdentity]);
+  }, [adoptNewConversation]);
 
   useEffect(() => {
     const initializeGlobalChat = async () => {
