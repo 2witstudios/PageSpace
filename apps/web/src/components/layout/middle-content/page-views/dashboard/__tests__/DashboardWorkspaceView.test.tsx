@@ -1,15 +1,18 @@
 /**
- * DashboardWorkspaceView — the fallback contract.
+ * DashboardWorkspaceView — the fallback contract + identity sync.
  *
  * The dashboard must never blank out: until the workspace is provisioned (or
- * if provisioning fails) the OLD assistant surface shows. Once the GET answers
- * with a workspace id, the pane grid owns the surface and the fallback is
- * gone. The provision request fires exactly once — the tree is the layout's
- * source of truth now, so a conversation-identity change afterwards must not
- * re-provision.
+ * if provisioning gives up after its retries) the OLD assistant surface
+ * shows. Once the POST answers with a workspace id, the pane grid owns the
+ * surface and the fallback is gone. Provisioning is keyed ONCE at mount — the
+ * tree is the layout's source of truth, so a later cookie-identity change
+ * must not re-provision — and the registration is USER-KEYED: a stale entry
+ * from a previous account can never route another user's "New" into it.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, act } from '@testing-library/react';
+import React from 'react';
+import { SWRConfig } from 'swr';
 import DashboardWorkspaceView from '../DashboardWorkspaceView';
 import {
   getRegisteredDashboardWorkspaceId,
@@ -34,11 +37,15 @@ vi.mock('@/contexts/GlobalChatContext', () => ({
   }),
 }));
 
-const fetchState = vi.hoisted(() => ({
-  fetchJson: vi.fn(),
+vi.mock('@/hooks/useAuth', () => ({
+  useAuth: () => ({ user: { id: 'u1' }, isAuthenticated: true }),
+}));
+
+const postState = vi.hoisted(() => ({
+  post: vi.fn(),
 }));
 vi.mock('@/lib/auth/auth-fetch', () => ({
-  fetchWithAuth: (...args: unknown[]) => fetchState.fetchJson(...args),
+  post: (...args: unknown[]) => postState.post(...args),
 }));
 
 const agentPanesProps = vi.hoisted(() => ({
@@ -70,33 +77,37 @@ vi.mock('@/stores/agent-workspace/useWorkspaceLayoutSync', () => ({
   useWorkspaceLayoutSync: vi.fn(),
 }));
 
+function renderView() {
+  return render(
+    <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+      <DashboardWorkspaceView />
+    </SWRConfig>,
+  );
+}
+
 describe('DashboardWorkspaceView', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // clearAllMocks does NOT clear once-implementations: test 1's
+    // mockResolvedValueOnce would leak into every later test.
+    postState.post.mockReset();
     agentPanesProps.current = null;
     resetDashboardWorkspaceRegistry();
     chatState.currentConversationId = 'conv-active';
   });
 
   it('shows the assistant surface while provisioning, then hands the surface to the grid', async () => {
-    fetchState.fetchJson.mockResolvedValueOnce(
-      new Response(JSON.stringify({ workspaceId: 'ws-dash', created: true }), { status: 200 }),
-    );
-    const { rerender } = render(<DashboardWorkspaceView />);
+    postState.post.mockResolvedValueOnce({ workspaceId: 'ws-dash', created: true });
+    renderView();
     expect(screen.getByTestId('global-assistant-fallback')).toBeInTheDocument();
 
     await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
     expect(screen.queryByTestId('global-assistant-fallback')).not.toBeInTheDocument();
-
-    rerender(<DashboardWorkspaceView />);
-    expect(screen.getByTestId('agent-panes')).toBeInTheDocument();
   });
 
-  it('seeds the grid with the active global conversation as the initial pane', async () => {
-    fetchState.fetchJson.mockResolvedValueOnce(
-      new Response(JSON.stringify({ workspaceId: 'ws-dash' }), { status: 200 }),
-    );
-    render(<DashboardWorkspaceView />);
+  it('seeds the grid with the mount-time conversation as the initial pane, POSTing the provision', async () => {
+    postState.post.mockResolvedValueOnce({ workspaceId: 'ws-dash' });
+    renderView();
 
     const grid = await screen.findByTestId('agent-panes');
     expect(grid.getAttribute('data-session-id')).toBe('ws-dash');
@@ -106,42 +117,47 @@ describe('DashboardWorkspaceView', () => {
       agentPageId: null,
       name: 'Global Assistant',
     });
-    // The seed binding rides the provision call.
-    expect(fetchState.fetchJson).toHaveBeenCalledWith(
-      '/api/agent-workspaces/dashboard?conversationId=conv-active',
-    );
+    expect(postState.post).toHaveBeenCalledWith('/api/agent-workspaces/dashboard', {
+      conversationId: 'conv-active',
+    });
   });
 
-  it('keeps the fallback on provisioning failure instead of blanking the dashboard', async () => {
-    fetchState.fetchJson.mockRejectedValueOnce(new Error('network down'));
-    render(<DashboardWorkspaceView />);
-    await waitFor(() => expect(fetchState.fetchJson).toHaveBeenCalled());
+  it('keeps the fallback when provisioning gives up instead of blanking the dashboard', async () => {
+    postState.post.mockRejectedValue(new Error('network down'));
+    renderView();
+    // SWR retries 3x before surfacing the error — the fallback owns the
+    // surface throughout, and the grid never mounts.
+    await waitFor(
+      () => expect(screen.queryByTestId('agent-panes')).not.toBeInTheDocument(),
+      { timeout: 3000 },
+    );
     expect(screen.getByTestId('global-assistant-fallback')).toBeInTheDocument();
-    expect(screen.queryByTestId('agent-panes')).not.toBeInTheDocument();
   });
 });
 
 describe('DashboardWorkspaceView — identity sync', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // clearAllMocks does NOT clear once-implementations: test 1's
+    // mockResolvedValueOnce would leak into every later test.
+    postState.post.mockReset();
+    agentPanesProps.current = null;
+    resetDashboardWorkspaceRegistry();
     chatState.currentConversationId = 'conv-active';
   });
 
   // The dashboard pane is what is ON SCREEN: when the focused pane changes to
   // a GLOBAL thread, the app-wide identity follows it (sidebar + voice agree
   // with the grid). Agent threads in the grid must NOT touch the identity.
-  it('follows the focused pane when it is a global thread, and registers the workspace', async () => {
-    fetchState.fetchJson.mockResolvedValueOnce(
-      new Response(JSON.stringify({ workspaceId: 'ws-dash' }), { status: 200 }),
-    );
-    render(<DashboardWorkspaceView />);
-    const grid = await screen.findByTestId('agent-panes');
+  it('follows the focused pane when it is a global thread, and registers the workspace for the signed-in user', async () => {
+    postState.post.mockResolvedValueOnce({ workspaceId: 'ws-dash' });
+    renderView();
+    await screen.findByTestId('agent-panes');
 
-    // Grid registered its workspace for the sidebar's "New" mint path.
-    expect(getRegisteredDashboardWorkspaceId()).toBe('ws-dash');
+    // Grid registered its workspace AGAINST THE USER — the sidebar's "New"
+    // mint path reads it user-keyed.
+    expect(getRegisteredDashboardWorkspaceId('u1')).toBe('ws-dash');
 
-    // Fire the callback the way AgentPanes does when focus lands on the
-    // seeded global thread but with a DIFFERENT id than the cookie.
     act(() => {
       gridHandler()?.({ conversationId: 'conv-2', agentPageId: null });
     });
@@ -149,11 +165,9 @@ describe('DashboardWorkspaceView — identity sync', () => {
   });
 
   it('does NOT touch the identity when the focused pane is an agent thread', async () => {
-    fetchState.fetchJson.mockResolvedValueOnce(
-      new Response(JSON.stringify({ workspaceId: 'ws-dash' }), { status: 200 }),
-    );
-    render(<DashboardWorkspaceView />);
-    const grid = await screen.findByTestId('agent-panes');
+    postState.post.mockResolvedValueOnce({ workspaceId: 'ws-dash' });
+    renderView();
+    await screen.findByTestId('agent-panes');
 
     act(() => {
       gridHandler()?.({ conversationId: 'conv-agent', agentPageId: 'agent-9' });

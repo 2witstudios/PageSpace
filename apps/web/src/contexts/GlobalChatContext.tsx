@@ -140,15 +140,20 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     await loadGlobalConversationMessages(conversationId);
   }, [dispatchIdentity]);
 
+  const { user } = useAuth();
+  const userId = user?.id ?? null;
+
   const createNewConversation = useCallback(async () => {
     try {
       // ONE CREATION PATH: when the user's dashboard workspace exists, a new
       // assistant thread is minted INTO it (born bound — contract invariant 1),
       // so the dashboard grid, the sidebar, and this identity all land on the
-      // same conversation. Falls back to the client-minted lazy identity when
-      // no workspace is registered (never provisioned this session) or the
-      // mint fails — the fallback creates no row, exactly as before.
-      const dashboardWorkspaceId = getRegisteredDashboardWorkspaceId();
+      // same conversation. The registry read is USER-KEYED — an entry left by
+      // a previous account's session cannot mint this user's thread into it.
+      // Falls back to the client-minted lazy identity when no workspace is
+      // registered (never provisioned this session) or the mint fails — the
+      // fallback creates no row, exactly as before.
+      const dashboardWorkspaceId = userId ? getRegisteredDashboardWorkspaceId(userId) : null;
       if (dashboardWorkspaceId) {
         try {
           // `post` throws ApiRequestError on any non-2xx, so a refused or
@@ -175,7 +180,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       console.error('Failed to create new conversation:', error);
     }
-  }, [adoptNewConversation]);
+  }, [adoptNewConversation, userId]);
 
   useEffect(() => {
     const initializeGlobalChat = async () => {
@@ -265,8 +270,8 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
   // ============================================
   // GLOBAL CHANNEL STREAM SOCKET
   // ============================================
-  const { user } = useAuth();
-  const userId = user?.id ?? null;
+  // (`user`/`userId` are extracted up top — createNewConversation reads the
+  // user-keyed dashboard-workspace registry.)
   const channelId = userId ? globalChannelId(userId) : null;
 
   // THE STREAM PLANE ONLY (Agent-Session SSoT epic, Phase 2 / plan PR 3). This

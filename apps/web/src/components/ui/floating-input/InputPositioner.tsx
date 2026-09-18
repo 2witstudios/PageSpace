@@ -12,6 +12,14 @@ export interface InputPositionerProps {
   position: InputPosition;
   /** Content to render inside the container */
   children: React.ReactNode;
+  /**
+   * Content rendered directly ABOVE the card when centered — the welcome
+   * headline/suggestions. It anchors to the card's top edge inside the SAME
+   * transformed wrapper, so card and welcome move as one unit: there is
+   * exactly ONE geometry constant in this file (the `y` spring target) and
+   * nothing to coordinate across files. Hidden when docked.
+   */
+  centeredHeader?: React.ReactNode;
   /** Additional class names */
   className?: string;
   /** Max width when centered (default: 600px) */
@@ -40,6 +48,7 @@ const springTransition = {
 export function InputPositioner({
   position,
   children,
+  centeredHeader,
   className,
   centeredMaxWidth = '600px',
   dockedInnerMaxWidth = '56rem',
@@ -85,13 +94,27 @@ export function InputPositioner({
       }}
       transition={transition}
     >
-      {/* Inner wrapper handles max-width constraints */}
+      {/* Inner wrapper handles max-width constraints. `relative` so the
+          centeredHeader can anchor to the card's top edge — the welcome and
+          the card share one transform, one width, one geometry. */}
       <div
-        className="mx-auto w-full"
+        className="relative mx-auto w-full"
         style={{
           maxWidth: isCentered ? centeredMaxWidth : dockedInnerMaxWidth,
         }}
       >
+        {centeredHeader !== undefined && (
+          <div
+            aria-hidden={!isCentered}
+            className={cn(
+              'pointer-events-none absolute bottom-full left-0 right-0 pb-7',
+              'transition-opacity duration-200',
+              isCentered ? 'opacity-100' : 'opacity-0',
+            )}
+          >
+            {centeredHeader}
+          </div>
+        )}
         {children}
       </div>
       {/* Background fill behind safe area - extends UI behind iPad keyboard toolbar */}

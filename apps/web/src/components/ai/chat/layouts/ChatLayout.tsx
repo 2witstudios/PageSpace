@@ -5,6 +5,7 @@ import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import { UIMessage } from 'ai';
 import type { InputPosition } from '@/components/ui/floating-input/InputPositioner';
 import { FloatingInputLayer } from '@/components/ui/floating-input/FloatingInputLayer';
+import { FloatingInputRegion } from '@/components/ui/floating-input/FloatingInputRegion';
 import { ChatErrorBanner } from '@/components/ai/shared/chat/ChatErrorBanner';
 import type { AIErrorCause } from '@/lib/ai/shared/aiErrorCause';
 import { ChatMessagesArea, ChatMessagesAreaRef } from '@/components/ai/shared/chat/ChatMessagesArea';
@@ -268,9 +269,9 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
       : defaultInputContent;
 
     return (
-      // The size container is what makes the floating layer's centered
-      // position container-relative (cqh) rather than viewport-relative.
-      <div className="relative flex flex-col h-full overflow-hidden [container-type:size]">
+      // The region is the size container the floating layer's centered
+      // position resolves against — the ONLY sanctioned mount point for it.
+      <FloatingInputRegion className="flex h-full flex-col">
         {/* Messages area - only visible when docked. Keyed by conversationId (not a
             static string) so a conversation switch is a clean remount rather than the
             same instance silently swapping its content out from under an in-flight
@@ -329,7 +330,7 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
         >
           {inputContent}
         </FloatingInputLayer>
-      </div>
+      </FloatingInputRegion>
     );
   }
 );

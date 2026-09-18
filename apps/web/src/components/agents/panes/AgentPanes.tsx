@@ -4,6 +4,22 @@
  * AgentPanes — the container that turns the pure pane pieces into a working
  * grid for ONE workspace.
  *
+ * § DECOMPOSITION PLAN — read before adding anything here. This is the most
+ * churned file in the app, and its prop surface is how debt arrives: each new
+ * capability arrives as "just one more optional prop". The seams to extract
+ * BEFORE the next capability, not after:
+ *
+ *  1. `useWorkspaceMint(sessionId)` — the pendingMints lifecycle (begin/end/
+ *     still-minting/orphan cleanup), which is self-contained state + guards.
+ *  2. `useActivePaneConversation(nodes, targets, activeNodeId)` — the focused
+ *     pane's chat identity (`onActiveConversationChanged`'s derivation), which
+ *     is pure tree math and belongs beside `workspace-tree-view.ts`.
+ *  3. Pane-bar assembly (`ChatPane`'s identity/actions/tab wiring) — the
+ *     largest single block, already half-extracted into PaneBar's shared
+ *     pieces.
+ * The rule the plan enforces: when the next feature needs a 9th prop, extract
+ * the seam it belongs to instead.
+ *
  * Composition per pane, via `resolvePaneSurface`:
  *
  * ```

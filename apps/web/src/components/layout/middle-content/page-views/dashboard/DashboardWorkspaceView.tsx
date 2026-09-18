@@ -13,69 +13,75 @@
  * in the node tree, so it survives reloads, navigation, and devices.
  *
  * GlobalAssistantView remains ONLY as the fallback while the workspace is
- * being provisioned (first visit pays one GET) or if provisioning fails —
+ * being provisioned (first visit pays one POST) or if provisioning fails —
  * the dashboard must never blank out. Once the workspace id is in hand the
  * grid owns the surface; its state lives in the workspace store + the server
  * tree, not in component state, so navigation away and back costs a store
  * read rather than a remount of anything that matters.
+ *
+ * Provisioning rides SWR (the app's data convention) rather than a bespoke
+ * effect: bounded retries, cache isolation per provider, and a one-shot key —
+ * the request must not re-fire when the cookie identity changes later, so the
+ * key is captured once at mount and the conversation it seeds is the one
+ * active at first paint.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import useSWR from 'swr';
 import AgentPanes from '@/components/agents/panes/AgentPanes';
 import GlobalAssistantView from '@/components/layout/middle-content/page-views/dashboard/GlobalAssistantView';
 import { useWorkspaceLayoutSync } from '@/stores/agent-workspace/useWorkspaceLayoutSync';
 import { useGlobalChatConversation } from '@/contexts/GlobalChatContext';
-import { fetchWithAuth } from '@/lib/auth/auth-fetch';
-import {
-  registerDashboardWorkspace,
-} from '@/lib/agent-workspaces/dashboard-workspace-registry';
+import { useAuth } from '@/hooks/useAuth';
+import { post } from '@/lib/auth/auth-fetch';
+import { registerDashboardWorkspace } from '@/lib/agent-workspaces/dashboard-workspace-registry';
 
-type ProvisionState =
-  | { status: 'loading' }
-  | { status: 'ready'; workspaceId: string }
-  | { status: 'error' };
+interface ProvisionResponse {
+  workspaceId: string;
+}
+
+const PROVISION_KEY = 'dashboard-workspace';
 
 export default function DashboardWorkspaceView() {
-  // The dashboard's conversation identity (cookie). Read through a ref: the
-  // provision request fires ONCE — the conversation it seeds is the one active
-  // at first paint, and a later identity change must not re-provision (the
-  // tree, not the cookie, is the layout's source of truth now).
-  const { currentConversationId } = useGlobalChatConversation();
-  const conversationIdRef = useRef(currentConversationId);
-  conversationIdRef.current = currentConversationId;
+  const { user } = useAuth();
+  const userId = user?.id ?? null;
+  // The dashboard's conversation identity (cookie) at MOUNT time. Captured
+  // once — the tree, not the cookie, is the layout's source of truth now, so
+  // a later identity change must not re-provision.
+  const currentConversationId = useGlobalChatConversation().currentConversationId;
+  const [conversationId] = useState(currentConversationId);
 
-  const [state, setState] = useState<ProvisionState>({ status: 'loading' });
+  const provision = useCallback(async () => {
+    return post<ProvisionResponse>('/api/agent-workspaces/dashboard', {
+      conversationId,
+    });
+  }, [conversationId]);
 
-  // Registered for the rest of the tab session (never unregistered): the
+  const { data, error } = useSWR(PROVISION_KEY, provision, {
+    revalidateIfStale: false,
+    revalidateOnFocus: false,
+    revalidateOnReconnect: false,
+    // A failed provision retried a few times, then the fallback owns the
+    // surface — no infinite hammering on a broken backend.
+    shouldRetryOnError: true,
+    errorRetryCount: 3,
+  });
+
+  // Registered against the SIGNED-IN USER for the rest of the session: the
   // sidebar's and voice's "new conversation" mint INTO this workspace, so
   // there is one creation path and the grid follows the app identity.
   useEffect(() => {
-    if (state.status === 'ready') {
-      registerDashboardWorkspace(state.workspaceId);
+    if (userId !== null && data?.workspaceId) {
+      registerDashboardWorkspace(userId, data.workspaceId);
     }
-  }, [state]);
+  }, [userId, data?.workspaceId]);
 
-  useEffect(() => {
-    let cancelled = false;
-    const conversationId = conversationIdRef.current;
-    const qs = conversationId ? `?conversationId=${encodeURIComponent(conversationId)}` : '';
-    fetchWithAuthJson<{ workspaceId: string }>(`/api/agent-workspaces/dashboard${qs}`)
-      .then((body) => {
-        if (!cancelled && body?.workspaceId) {
-          setState({ status: 'ready', workspaceId: body.workspaceId });
-        } else if (!cancelled) {
-          setState({ status: 'error' });
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setState({ status: 'error' });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  // Readiness comes from the SWR DATA, not from the registry — the
+  // registration is a side effect for modules outside this tree, and module
+  // state never triggers a re-render.
+  const workspaceId = userId !== null ? data?.workspaceId ?? null : null;
 
-  if (state.status !== 'ready') {
+  if (error || !workspaceId) {
     // Provisioning (first visit) or failed: the assistant surface as it was
     // before the grid, so the dashboard is never blank.
     return <GlobalAssistantView />;
@@ -83,8 +89,8 @@ export default function DashboardWorkspaceView() {
 
   return (
     <DashboardGrid
-      workspaceId={state.workspaceId}
-      conversationId={conversationIdRef.current}
+      workspaceId={workspaceId}
+      conversationId={conversationId}
     />
   );
 }
@@ -100,10 +106,14 @@ function DashboardGrid({
   useWorkspaceLayoutSync(workspaceId);
   const { loadConversation, currentConversationId } = useGlobalChatConversation();
 
-  // GRID → IDENTITY: when the focused pane changes, a GLOBAL thread becomes
-  // the app-wide assistant identity (cookie + sidebar + voice follow the
-  // grid). Agent threads in the grid deliberately do NOT touch the identity —
-  // the sidebar shows the assistant, not whichever agent pane has focus.
+  // GRID → IDENTITY. A deliberate product decision, stated: the dashboard
+  // tree IS the layout, so when the focused pane changes to a GLOBAL thread,
+  // that thread becomes the app-wide identity — the sidebar and voice follow
+  // what is on screen, not the other way round. The cost is accepted: a draft
+  // typed against a different global conversation in the sidebar stops being
+  // the active one the moment the dashboard mounts. Agent threads in the grid
+  // deliberately do NOT touch the identity — the sidebar shows the assistant,
+  // not whichever agent pane has focus.
   const currentConversationIdRef = useRef(currentConversationId);
   currentConversationIdRef.current = currentConversationId;
   const handleActiveConversationChanged = useCallback(
@@ -132,10 +142,4 @@ function DashboardGrid({
       onActiveConversationChanged={handleActiveConversationChanged}
     />
   );
-}
-
-async function fetchWithAuthJson<T>(url: string): Promise<T | null> {
-  const response = await fetchWithAuth(url);
-  if (!response.ok) return null;
-  return (await response.json()) as T;
 }

@@ -39,8 +39,8 @@ import { WelcomeContent } from '@/components/ai/chat/layouts/WelcomeContent';
 import { Conversation, ConversationScrollButton } from '@/components/ai/ui/conversation';
 import {
   FloatingInputLayer,
-  WELCOME_OFFSET_PANE,
 } from '@/components/ui/floating-input/FloatingInputLayer';
+import { FloatingInputRegion } from '@/components/ui/floating-input/FloatingInputRegion';
 import { SidebarMessagesContent } from '@/components/layout/right-sidebar/ai-assistant/SidebarChatTab';
 import { hasVisionCapability } from '@/lib/ai/core/vision-models';
 import { useInputPosition } from '@/lib/ai/streams/useInputPosition';
@@ -191,6 +191,17 @@ export function SessionChatView({
     />
   );
 
+  // ONE slot composition for everything that rides above the composer — the
+  // centered card, the page-docked card, and the console footer all render
+  // this. A new slot is added HERE or nowhere; the /btw merge conflict was
+  // this composition existing in three copies.
+  const aboveComposer = (
+    <>
+      {sideQuestion.state && <SideQuestionCard state={sideQuestion.state} onDismiss={sideQuestion.dismiss} />}
+      {errorBanner}
+    </>
+  );
+
   const chatInput = (popupPlacement: 'top' | 'bottom') => (
     <ChatInput
       value={input}
@@ -234,7 +245,7 @@ export function SessionChatView({
         </div>
       )}
 
-      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden [container-type:size]">
+      <FloatingInputRegion className="flex min-h-0 min-w-0 flex-1 flex-col">
         {showLoading ? (
           <div data-testid="session-chat-loading" className="flex h-full items-center justify-center">
             <Loader2 className="size-4 animate-spin text-muted-foreground" />
@@ -281,41 +292,26 @@ export function SessionChatView({
           // New conversation: the shared centered welcome + floating card.
           <FloatingInputLayer
             position={inputPosition}
-            welcomeOffsetClassName={WELCOME_OFFSET_PANE}
             welcomeContent={<WelcomeContent title={name} showIcon={false} />}
-            errorSlot={
-              <>
-                {sideQuestion.state && <SideQuestionCard state={sideQuestion.state} onDismiss={sideQuestion.dismiss} />}
-                {errorBanner}
-              </>
-            }
+            errorSlot={aboveComposer}
           >
             {chatInput('bottom')}
           </FloatingInputLayer>
         ) : context === 'page' ? (
           // Docked over the messages column — the dashboard's floating card,
           // capped at the messages column width instead of a full-bleed bar.
-          <FloatingInputLayer
-            position={inputPosition}
-            errorSlot={
-              <>
-                {sideQuestion.state && <SideQuestionCard state={sideQuestion.state} onDismiss={sideQuestion.dismiss} />}
-                {errorBanner}
-              </>
-            }
-          >
+          <FloatingInputLayer position={inputPosition} errorSlot={aboveComposer}>
             {chatInput('top')}
           </FloatingInputLayer>
         ) : (
           // Compact sidebar surface keeps its own docked chrome once the
           // conversation starts.
           <div className="shrink-0 space-y-1.5 border-t border-border p-2">
-            {sideQuestion.state && <SideQuestionCard state={sideQuestion.state} onDismiss={sideQuestion.dismiss} />}
-            {errorBanner}
+            {aboveComposer}
             {chatInput('top')}
           </div>
         )}
-      </div>
+      </FloatingInputRegion>
 
       {/* Only the console path renders this itself — ChatMessagesArea (page
           context) already owns its own UndoAiChangesDialog internally. */}

@@ -10,15 +10,21 @@ describe('dashboard-workspace-registry', () => {
     resetDashboardWorkspaceRegistry();
   });
 
-  it('reads back the registered workspace id', () => {
-    expect(getRegisteredDashboardWorkspaceId()).toBeNull();
-    registerDashboardWorkspace('ws-dash');
-    expect(getRegisteredDashboardWorkspaceId()).toBe('ws-dash');
+  it('reads back the registered workspace id for the SAME user', () => {
+    expect(getRegisteredDashboardWorkspaceId('u1')).toBeNull();
+    registerDashboardWorkspace('u1', 'ws-dash');
+    expect(getRegisteredDashboardWorkspaceId('u1')).toBe('ws-dash');
+  });
+
+  it('self-invalidates for a DIFFERENT user — a stale entry after an account switch cannot mint into the previous user\'s workspace', () => {
+    registerDashboardWorkspace('u1', 'ws-dash');
+    expect(getRegisteredDashboardWorkspaceId('u2')).toBeNull();
+    expect(getRegisteredDashboardWorkspaceId('u1')).toBe('ws-dash');
   });
 
   it('keeps the LAST registration — a fresh dashboard workspace wins', () => {
-    registerDashboardWorkspace('ws-old');
-    registerDashboardWorkspace('ws-new');
-    expect(getRegisteredDashboardWorkspaceId()).toBe('ws-new');
+    registerDashboardWorkspace('u1', 'ws-old');
+    registerDashboardWorkspace('u1', 'ws-new');
+    expect(getRegisteredDashboardWorkspaceId('u1')).toBe('ws-new');
   });
 });

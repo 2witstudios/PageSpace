@@ -325,13 +325,13 @@ export default function CenterPanel() {
 
   // Track if the dashboard surface has ever been rendered (lazy mount, then persist)
   // This ensures we don't mount it until the user visits dashboard, but once mounted it stays
-  const [hasRenderedGlobalAssistant, setHasRenderedGlobalAssistant] = useState(false);
+  const [hasRenderedDashboardSurface, setHasRenderedGlobalAssistant] = useState(false);
 
   useEffect(() => {
-    if (showGlobalAssistant && !hasRenderedGlobalAssistant) {
+    if (showGlobalAssistant && !hasRenderedDashboardSurface) {
       setHasRenderedGlobalAssistant(true);
     }
-  }, [showGlobalAssistant, hasRenderedGlobalAssistant]);
+  }, [showGlobalAssistant, hasRenderedDashboardSurface]);
 
   return (
     <div className="h-full flex flex-col relative">
@@ -340,7 +340,7 @@ export default function CenterPanel() {
           (`agent_workspaces.kind = 'dashboard'`) rendered through the same pane grid
           every other surface uses. GlobalAssistantView survives inside it only as the
           provisioning fallback. */}
-      {hasRenderedGlobalAssistant && (
+      {hasRenderedDashboardSurface && (
         <div
           className={cn(
             "absolute inset-0 z-10",

@@ -446,7 +446,7 @@ describe('GlobalChatProvider — conversation identity race guards', () => {
   // assistant thread INTO that workspace (born bound, so the grid follows the
   // app identity) instead of minting a lazy row-less id the grid will never show.
   it('given a dashboard workspace is registered, createNewConversation mints into it and adopts the minted id', async () => {
-    registerDashboardWorkspace('ws-dash');
+    registerDashboardWorkspace(USER_ID, 'ws-dash');
     mockFetchWithAuth.mockImplementation(() => new Promise(() => {})); // init hangs forever
 
     const { conversationState } = await import('@/lib/ai/core/conversation-state');
@@ -467,7 +467,7 @@ describe('GlobalChatProvider — conversation identity race guards', () => {
   });
 
   it('given the workspace mint fails, createNewConversation falls back to the lazy client-mint path', async () => {
-    registerDashboardWorkspace('ws-dash');
+    registerDashboardWorkspace(USER_ID, 'ws-dash');
     mockFetchWithAuth.mockImplementation(() => new Promise(() => {})); // init hangs forever
 
     const { conversationState } = await import('@/lib/ai/core/conversation-state');

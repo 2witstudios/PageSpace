@@ -2,24 +2,25 @@
  * The DASHBOARD WORKSPACE endpoint — the dashboard surface's layout tree,
  * get-or-create in one call.
  *
- *   GET 200 { workspaceId, created, rev, nodes, targets }
+ *   POST { conversationId? } → 200 { workspaceId, created, rev, nodes, targets }
  *
  * Idempotent by design: the first dashboard visit provisions the workspace
  * (row + rev + a single chat pane seeded with the caller's active global
  * conversation, when legal — see `getOrCreateDashboardWorkspace`), every later
- * visit reads the same tree. The response nests the node snapshot with the
+ * call reads the same tree. The response nests the node snapshot with the
  * SAME shape `GET /api/agent-workspaces/[workspaceId]/nodes` answers, so a
  * client seats a provisioned tree and a returned one through one code path.
  *
- * This is a GET with create side effects, deliberately — the same lazy
- * provisioning pattern the Home drive uses. Creation is bounded by the
- * `agent_workspaces_one_open_dashboard_idx` partial unique index (one OPEN
- * dashboard per owner), which is also the concurrency arbiter: two tabs
- * racing the first visit both get 200 and one tree.
+ * **This is a POST even though the read-after-first-write is GET-shaped** —
+ * it creates rows, and every row-creating route in this family enforces CSRF;
+ * a lazily-provisioning GET would be the one endpoint a cross-site request
+ * could drive without a token. The `requireCSRF` here is the convention kept,
+ * not extra paranoia.
  *
- * `?conversationId=` seeds the first pane's binding. Never trusted: ownership
- * is checked against the caller, and a conversation already bound to a node
- * anywhere leaves the pane unbound (membership moves by fork, never rebind).
+ * `conversationId` in the body seeds the first pane's binding. Never trusted:
+ * ownership is checked against the caller, and a conversation already bound
+ * to a node anywhere leaves the pane unbound (membership moves by fork, never
+ * rebind).
  *
  * Access: owner-only by construction — a dashboard workspace has no drive
  * (`driveId` NULL), so `decideAgentSessionAccess`'s global branch applies to
@@ -32,18 +33,23 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getOrCreateDashboardWorkspace } from '@/lib/agent-workspaces/dashboard-workspace-runtime';
 
-const AUTH_OPTIONS_READ = { allow: ['session'] as const };
+const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
 const ROUTE = 'agent-workspaces/dashboard';
 
-export async function GET(request: Request) {
-  const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
+export async function POST(request: Request) {
+  const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) return auth.error;
 
-  const url = new URL(request.url);
-  const rawConversationId = url.searchParams.get('conversationId');
+  let body: { conversationId?: unknown } = {};
+  try {
+    body = await request.json();
+  } catch {
+    // An empty body is a valid request — the tree seeds with an unbound pane.
+  }
+  const rawConversationId = body.conversationId;
   const conversationId =
-    rawConversationId !== null && rawConversationId.length > 0 ? rawConversationId : null;
+    typeof rawConversationId === 'string' && rawConversationId.length > 0 ? rawConversationId : null;
 
   try {
     const result = await getOrCreateDashboardWorkspace(auth.userId, conversationId);
