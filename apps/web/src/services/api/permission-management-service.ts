@@ -2,9 +2,9 @@ import { db } from '@pagespace/db/db'
 import { eq, and } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { pages } from '@pagespace/db/schema/core'
-import { pagePermissions, driveMembers } from '@pagespace/db/schema/members';
+import { pagePermissions } from '@pagespace/db/schema/members';
 import { decryptUserRow } from '@pagespace/lib/auth/user-repository';
-import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
+import { getUserAccessLevel, isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { listDriveRoles, getRoleById, updateDriveRole } from '@pagespace/lib/services/drive-role-service';
 import { createId } from '@paralleldrive/cuid2';
 
@@ -114,20 +114,8 @@ export const permissionManagementService = {
 
     if (!page?.drive) return false;
 
-    // Owner check
-    if (page.drive.ownerId === userId) return true;
-
-    // Admin check
-    const adminMembership = await db.select()
-      .from(driveMembers)
-      .where(and(
-        eq(driveMembers.driveId, page.drive.id),
-        eq(driveMembers.userId, userId),
-        eq(driveMembers.role, 'ADMIN')
-      ))
-      .limit(1);
-
-    return adminMembership.length > 0;
+    // Owner or ACCEPTED admin — a pending ADMIN invite grants nothing.
+    return isDriveOwnerOrAdmin(userId, page.drive.id);
   },
 
   /**

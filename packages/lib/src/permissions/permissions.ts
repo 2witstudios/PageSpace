@@ -1039,7 +1039,9 @@ export function resolvePagePermissionRow(
       row.pageId,
     );
     if (resolved !== null) {
-      return { ...resolved, canDelete: false };
+      // driveWidePermissions fallback must not grant access to private pages
+      if (row.isPrivate && row.customRolePerms[row.pageId] === undefined) return null;
+      return resolved.canView ? { ...resolved, canDelete: false } : null;
     }
   }
 

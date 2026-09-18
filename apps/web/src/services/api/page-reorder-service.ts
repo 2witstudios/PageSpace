@@ -1,7 +1,7 @@
 import { db } from '@pagespace/db/db'
-import { eq, and } from '@pagespace/db/operators'
+import { eq } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core'
-import { driveMembers } from '@pagespace/db/schema/members';
+import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation } from './page-mutation-service';
@@ -81,25 +81,11 @@ export const pageReorderService = {
         return { success: false, error: 'Drive not found for page.', status: 404 };
       }
 
-      // Check authorization: user must be owner or admin
-      const isOwner = pageInfo.ownerId === userId;
-      let isAdmin = false;
+      // Check authorization: user must be owner or ACCEPTED admin — a pending
+      // ADMIN invite grants nothing.
+      const isOwnerOrAdmin = await isDriveOwnerOrAdmin(userId, driveId);
 
-      if (!isOwner && driveId) {
-        const adminMembership = await db
-          .select()
-          .from(driveMembers)
-          .where(and(
-            eq(driveMembers.driveId, driveId),
-            eq(driveMembers.userId, userId),
-            eq(driveMembers.role, 'ADMIN')
-          ))
-          .limit(1);
-
-        isAdmin = adminMembership.length > 0;
-      }
-
-      if (!isOwner && !isAdmin) {
+      if (!isOwnerOrAdmin) {
         return { success: false, error: 'Only drive owners and admins can reorder pages.', status: 403 };
       }
 

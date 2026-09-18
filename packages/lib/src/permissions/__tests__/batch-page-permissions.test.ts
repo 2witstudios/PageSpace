@@ -84,6 +84,7 @@ interface Row {
   explicitCanShare: boolean | null;
   explicitCanDelete: boolean | null;
   customRolePerms: Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }> | null;
+  customRoleDriveWidePerms: { canView: boolean; canEdit: boolean; canShare: boolean } | null;
 }
 
 const FULL = { canView: true, canEdit: true, canShare: true, canDelete: true };
@@ -102,6 +103,7 @@ function makeRow(overrides: Partial<Row> & { pageId: string }): Row {
     explicitCanShare: null,
     explicitCanDelete: null,
     customRolePerms: null,
+    customRoleDriveWidePerms: null,
     ...overrides,
   };
 }
@@ -391,6 +393,38 @@ describe('getBatchPagePermissions', () => {
     expect(result.get('p1')).toEqual({ canView: false, canEdit: false, canShare: false, canDelete: false });
   });
 
+  it('given MEMBER whose custom role has drive-wide canView but NO entry for a PRIVATE page, should deny access', async () => {
+    stubQueryRows([
+      makeRow({
+        pageId: 'p1',
+        memberRole: 'MEMBER',
+        isPrivate: true,
+        customRolePerms: {},
+        customRoleDriveWidePerms: { canView: true, canEdit: true, canShare: true },
+      }),
+    ]);
+
+    const result = await getBatchPagePermissions(USER, ['p1']);
+
+    expect(result.get('p1')).toEqual(NONE);
+  });
+
+  it('given MEMBER whose custom role has drive-wide canView AND a per-page entry for a PRIVATE page, should grant the entry', async () => {
+    stubQueryRows([
+      makeRow({
+        pageId: 'p1',
+        memberRole: 'MEMBER',
+        isPrivate: true,
+        customRolePerms: { p1: { canView: true, canEdit: false, canShare: false } },
+        customRoleDriveWidePerms: { canView: true, canEdit: true, canShare: true },
+      }),
+    ]);
+
+    const result = await getBatchPagePermissions(USER, ['p1']);
+
+    expect(result.get('p1')).toEqual(READ_ONLY);
+  });
+
   it('given MEMBER with custom role entry {canView:false} on a non-private page, should deny access (explicit deny beats Rule 4)', async () => {
     stubQueryRows([
       makeRow({
@@ -404,6 +438,21 @@ describe('getBatchPagePermissions', () => {
     const result = await getBatchPagePermissions(USER, ['p1']);
 
     expect(result.get('p1')).toEqual({ canView: false, canEdit: false, canShare: false, canDelete: false });
+  });
+
+  it('given MEMBER with custom role entry {canView:false, canEdit:true}, should grant nothing (no edit without view)', async () => {
+    stubQueryRows([
+      makeRow({
+        pageId: 'p1',
+        memberRole: 'MEMBER',
+        pageType: 'DOCUMENT',
+        customRolePerms: { p1: { canView: false, canEdit: true, canShare: true } },
+      }),
+    ]);
+
+    const result = await getBatchPagePermissions(USER, ['p1']);
+
+    expect(result.get('p1')).toEqual(NONE);
   });
 
   it('given a DB failure, should return the pre-seeded deny map (fail-closed) and log', async () => {
