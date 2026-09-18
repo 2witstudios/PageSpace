@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ auth: vi.fn(), access: vi.fn(), messages: vi.fn(), plan: vi.fn(), provider: vi.fn(), stream: vi.fn() }));
+const mocks = vi.hoisted(() => ({ auth: vi.fn(), access: vi.fn(), messages: vi.fn(), plan: vi.fn(), provider: vi.fn(), stream: vi.fn(), audit: vi.fn() }));
 vi.mock('@/lib/auth', () => ({ authenticateRequestWithOptions: mocks.auth, isAuthError: (value: unknown) => Boolean((value as { error?: unknown })?.error) }));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: mocks.audit }));
 vi.mock('@pagespace/db/db', () => ({ db: { select: () => ({ from: () => ({ where: () => ({ limit: mocks.messages }) }) }) } }));
 vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn() }));
 vi.mock('@pagespace/db/schema/conversations', () => ({ conversations: { id: 'id', userId: 'userId', isShared: 'isShared', type: 'type', contextId: 'contextId' } }));
@@ -24,5 +25,12 @@ describe('POST /api/ai/btw', () => {
   it('rejects oversize questions before provider or stream work', async () => {
     const response = await POST(new Request('http://test/api/ai/btw', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ conversationId: 'c1', question: 'x'.repeat(2001) }) }));
     expect(response.status).toBe(400); expect(mocks.provider).not.toHaveBeenCalled(); expect(mocks.stream).not.toHaveBeenCalled();
+  });
+  it('emits authz.access.denied when the conversation is missing or inaccessible', async () => {
+    mocks.access.mockResolvedValue(false);
+    const response = await POST(new Request('http://test/api/ai/btw', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ conversationId: 'c1', question: 'What changed?' }) }));
+    expect(response.status).toBe(404);
+    expect(mocks.audit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'authz.access.denied', resourceType: 'ai_btw', resourceId: 'c1' }));
+    expect(mocks.provider).not.toHaveBeenCalled(); expect(mocks.stream).not.toHaveBeenCalled();
   });
 });
