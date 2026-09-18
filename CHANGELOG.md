@@ -599,6 +599,15 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Agents can write to their own memory pages again** — every agent is instructed to keep notes
+  on an "Agent Memory" child page of its own, but the permission check behind the write tools
+  looked only at the agent's drive membership, which grants edit on no ordinary page — so every
+  create or edit of that page was refused with "Insufficient permissions to edit this document",
+  and scheduled workflow runs that journal to their memory failed at the write. An agent can now
+  always edit its own page and the pages under it; deleting them is still refused, and everything
+  beyond its own subtree stays governed by its membership exactly as before, including any API
+  token's drive scope.
+
 - **An unaccepted drive invitation no longer grants drive access** — a person invited to a drive but
   who had not yet accepted could already, in four places, act as if they had joined: an invited
   admin could view and edit the drive's custom roles, reorder and move its pages, and grant or
