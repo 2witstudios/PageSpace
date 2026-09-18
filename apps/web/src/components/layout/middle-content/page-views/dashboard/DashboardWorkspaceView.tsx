@@ -30,7 +30,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import useSWR from 'swr';
 import AgentPanes from '@/components/agents/panes/AgentPanes';
 import GlobalAssistantView from '@/components/layout/middle-content/page-views/dashboard/GlobalAssistantView';
-import { useWorkspaceLayoutSync } from '@/stores/agent-workspace/useWorkspaceLayoutSync';
 import { useGlobalChatConversation } from '@/contexts/GlobalChatContext';
 import { useAuth } from '@/hooks/useAuth';
 import { post } from '@/lib/auth/auth-fetch';
@@ -102,8 +101,9 @@ function DashboardGrid({
   workspaceId: string;
   conversationId: string | null;
 }) {
-  // AgentPanes mounts its own layout sync (GET + socket room) off this id.
-  useWorkspaceLayoutSync(workspaceId);
+  // Layout sync is NOT mounted here — `AgentPanes` does that itself for its
+  // own workspace id; a second mount would double the snapshot fetch and the
+  // socket room join for zero new information.
   const { loadConversation, currentConversationId } = useGlobalChatConversation();
 
   // GRID → IDENTITY. A deliberate product decision, stated: the dashboard

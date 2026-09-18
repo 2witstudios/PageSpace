@@ -43,8 +43,16 @@ export const resolveInputPosition = ({
   const latchedDocked = latch.conversationId === conversationId && latch.docked;
   const docked = latchedDocked || hasMessages || isLoading || hasRemoteStreams;
 
+  // The latch records only CONTENT-earned docking. A transient frame —
+  // mid-refetch, or a send whose stream hasn't surfaced yet (`isBusy`,
+  // folded into isLoading by `useInputPosition`) — docks the VIEW for the
+  // frame, but must not pin an actually-EMPTY conversation to the dock
+  // forever: a brand-new conversation whose first (empty) fetch flashes
+  // isLoading would otherwise latch docked and never show its welcome.
+  const earnedDocked = latchedDocked || hasMessages || hasRemoteStreams;
+
   return {
     position: docked ? 'docked' : 'centered',
-    latch: { conversationId, docked },
+    latch: { conversationId, docked: earnedDocked },
   };
 };

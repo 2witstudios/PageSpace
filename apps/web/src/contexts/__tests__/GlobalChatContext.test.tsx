@@ -143,6 +143,14 @@ const mockPost = vi.fn();
 vi.mock('@/lib/auth/auth-fetch', () => ({
   fetchWithAuth: (...args: unknown[]) => mockFetchWithAuth(...args),
   post: (...args: unknown[]) => mockPost(...args),
+  ApiRequestError: class ApiRequestError extends Error {
+    readonly status: number;
+    constructor(message: string, status: number) {
+      super(message);
+      this.name = 'ApiRequestError';
+      this.status = status;
+    }
+  },
 }));
 
 vi.mock('@/lib/ai/core/conversation-state', () => ({
@@ -466,7 +474,29 @@ describe('GlobalChatProvider — conversation identity race guards', () => {
     expect(conversationState.createAndSetActiveConversation).not.toHaveBeenCalled();
   });
 
-  it('given the workspace mint fails, createNewConversation falls back to the lazy client-mint path', async () => {
+  it('given the workspace mint fails AMBIGUOUSLY (network), createNewConversation does NOT double-mint', async () => {
+    // A timeout may hide a COMMITTED mint. Falling back to the lazy path here
+    // would create a second conversation beside the first; instead the error
+    // is surfaced and, if the mint did land, the tree broadcast + the grid's
+    // identity sync adopt the minted thread.
+    registerDashboardWorkspace(USER_ID, 'ws-dash');
+    mockFetchWithAuth.mockImplementation(() => new Promise(() => {})); // init hangs forever
+
+    const { conversationState } = await import('@/lib/ai/core/conversation-state');
+
+    const { result } = renderProvider();
+
+    await act(async () => {
+      mockPost.mockRejectedValueOnce(new Error('network down'));
+      await result.current.createNewConversation();
+    });
+
+    expect(result.current.currentConversationId).toBeNull();
+    expect(conversationState.createAndSetActiveConversation).not.toHaveBeenCalled();
+  });
+
+  it('given the workspace mint refuses deterministically (4xx), createNewConversation falls back to the lazy path', async () => {
+    // 4xx proves nothing was committed server-side — the fallback is safe.
     registerDashboardWorkspace(USER_ID, 'ws-dash');
     mockFetchWithAuth.mockImplementation(() => new Promise(() => {})); // init hangs forever
 
@@ -482,7 +512,9 @@ describe('GlobalChatProvider — conversation identity race guards', () => {
     const { result } = renderProvider();
 
     await act(async () => {
-      mockPost.mockRejectedValueOnce(new Error('network down'));
+      mockPost.mockRejectedValueOnce(
+        new (await import('@/lib/auth/auth-fetch')).ApiRequestError('session full', 409),
+      );
       await result.current.createNewConversation();
     });
 

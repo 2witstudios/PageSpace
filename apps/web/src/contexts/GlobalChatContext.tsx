@@ -19,7 +19,7 @@ import { useChannelStreamSocket } from '@/hooks/useChannelStreamSocket';
 import type { ChatGlobalConversationAddedPayload } from '@/lib/websocket/socket-utils';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
-import { post } from '@/lib/auth/auth-fetch';
+import { ApiRequestError, post } from '@/lib/auth/auth-fetch';
 import { getRegisteredDashboardWorkspaceId } from '@/lib/agent-workspaces/dashboard-workspace-registry';
 import { loadGlobalConversationMessages, refreshConversationSnapshot } from '@/hooks/conversationMessagesLoaders';
 import { buildConversationCacheHandlers } from '@/hooks/conversationCacheSocketHandlers';
@@ -166,9 +166,18 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
             adoptNewConversation(minted.conversationId);
             return;
           }
-        } catch {
-          // Fall through to the client-minted lazy path rather than failing
-          // the user's "New".
+        } catch (error) {
+          // A DETERMINISTIC refusal (4xx) means nothing was committed
+          // server-side, so falling through to the lazy path is safe. Anything
+          // else — a timeout on a mint that may have COMMITTED — must not
+          // silently mint a second conversation beside the first: rethrow into
+          // the outer catch. If the mint did land, the tree broadcast shows
+          // the pane and the grid→identity sync adopts it; if it truly failed,
+          // the user's "New" is a no-op they can retry.
+          const status = error instanceof ApiRequestError ? error.status : undefined;
+          if (status === undefined || status < 400 || status >= 500) {
+            throw error;
+          }
         }
       }
       const newConversation = await conversationState.createAndSetActiveConversation({

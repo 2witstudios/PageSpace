@@ -76,15 +76,6 @@ export async function getOrCreateDashboardWorkspace(
     };
   }
 
-  // Resolve the bind BEFORE the transaction so the conversation lookups (which
-  // may create a lazy row) never run inside the insert path — a slow read must
-  // not hold the workspace insert's lock open. Never fails: an unbindable
-  // conversation seeds an unbound pane (see the resolver's docblock).
-  const bind =
-    conversationId !== null && conversationId.length > 0
-      ? await resolveBindableConversation(userId, conversationId)
-      : { conversationId: null };
-
   const workspaceId = createId();
 
   try {
@@ -98,13 +89,27 @@ export async function getOrCreateDashboardWorkspace(
         name: 'Dashboard',
       });
       await tx.insert(agentWorkspaceNodeRevs).values({ rootId: workspaceId, rev: 0 });
-      await tx.insert(agentWorkspaceNodes).values(dashboardSeedNodeRows(workspaceId, bind.conversationId));
+      // The bind resolves INSIDE the transaction: the conversation-row insert,
+      // the ownership re-read, and the bind-clash check all see — and are
+      // serialized against — the same committed state the seed write lands
+      // on, closing the check-then-act windows the pre-transaction version
+      // had (a rival claim between check and write now fails the whole
+      // transaction atomically rather than half-landing).
+      const bind =
+        conversationId !== null && conversationId.length > 0
+          ? await resolveBindableConversation(tx, userId, conversationId)
+          : null;
+      await tx.insert(agentWorkspaceNodes).values(dashboardSeedNodeRows(workspaceId, bind));
     });
   } catch (error) {
-    // The unique index is the arbiter: a concurrent provision (a second tab,
-    // a double render) already created the dashboard. Lose the race, read the
-    // winner — never surface the insert failure to the caller.
-    if (isUniqueViolation(error)) {
+    // THE one unique violation that means "someone else provisioned first":
+    // a concurrent provision (a second tab, a double render) won the
+    // one-open-dashboard index. Lose the race, read the winner — never
+    // surface the insert failure to the caller. Every OTHER unique violation
+    // (the chat-binding index above, a PK collision) is a different fact and
+    // propagates: the client's bounded SWR retries re-provision cleanly
+    // against the state that refused us.
+    if (isUniqueViolation(error, 'agent_workspaces_one_open_dashboard_idx')) {
       const winner = await findOpenDashboardWorkspace(userId);
       if (winner) {
         return {
@@ -157,29 +162,39 @@ async function findOpenDashboardWorkspace(userId: string) {
  * because there is nothing for it to act on.
  */
 async function resolveBindableConversation(
+  tx: DashboardTx,
   userId: string,
   conversationId: string,
-): Promise<{ conversationId: string | null }> {
-  const [row] = await db
+): Promise<string | null> {
+  let [row] = await tx
     .select({ userId: conversations.userId })
     .from(conversations)
     .where(eq(conversations.id, conversationId))
     .limit(1);
 
   if (!row) {
-    await db
+    await tx
       .insert(conversations)
       .values({ id: conversationId, userId, type: 'global' })
       .onConflictDoNothing();
-  } else if (row.userId !== userId) {
-    return { conversationId: null };
+    // `onConflictDoNothing` is not ownership: the conflict could BE someone
+    // else's row (an id space collision is vanishingly rare, but the check
+    // is the invariant). Re-read, and only bind what the caller owns.
+    [row] = await tx
+      .select({ userId: conversations.userId })
+      .from(conversations)
+      .where(eq(conversations.id, conversationId))
+      .limit(1);
+  }
+  if (!row || row.userId !== userId) {
+    return null;
   }
 
   // Membership moves by fork, never rebind: a conversation already bound to a
   // node anywhere (another workspace, or a previous dashboard that still holds
   // it in its tree) cannot be seeded into this one. The unique index would
   // refuse the whole transaction; an explicit check refuses only the BIND.
-  const [clash] = await db
+  const [clash] = await tx
     .select({ id: agentWorkspaceNodes.id })
     .from(agentWorkspaceNodes)
     .where(
@@ -190,18 +205,23 @@ async function resolveBindableConversation(
     )
     .limit(1);
   if (clash) {
-    return { conversationId: null };
+    return null;
   }
 
-  return { conversationId };
+  return conversationId;
 }
 
-function isUniqueViolation(error: unknown): boolean {
+/** The transaction handle drizzle hands the callback — typed, not `any`. */
+type DashboardTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+function isUniqueViolation(error: unknown, constraint: string): boolean {
   return (
     typeof error === 'object' &&
     error !== null &&
     'code' in error &&
-    (error as { code?: unknown }).code === '23505'
+    (error as { code?: unknown }).code === '23505' &&
+    'constraint' in error &&
+    (error as { constraint?: unknown }).constraint === constraint
   );
 }
 

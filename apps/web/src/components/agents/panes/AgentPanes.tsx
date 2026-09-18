@@ -305,9 +305,18 @@ export default function AgentPanes({
     if (node === undefined || node.nodeType !== 'pane' || node.target?.kind !== 'chat') {
       return null;
     }
+    const target = lookupTarget(targetIndex, node);
+    // An UNRESOLVED target — a thread this viewer cannot read, or a frame
+    // where the tree read ran ahead of the target read — must not be
+    // reported as `agentPageId: null`: null means GLOBAL-ASSISTANT THREAD to
+    // the identity sync, and promoting an unknown thread to the app identity
+    // is exactly the misclassification a race would produce. Refuse instead.
+    if (!target) {
+      return null;
+    }
     return {
       conversationId: node.target.id,
-      agentPageId: lookupTarget(targetIndex, node)?.agentPageId ?? null,
+      agentPageId: target.agentPageId,
     };
   }, [tree, nodes, targetIndex]);
 

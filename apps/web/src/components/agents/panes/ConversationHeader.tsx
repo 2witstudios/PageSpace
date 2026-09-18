@@ -85,5 +85,3 @@ export function ConversationHeader({
     </div>
   );
 }
-
-export default ConversationHeader;

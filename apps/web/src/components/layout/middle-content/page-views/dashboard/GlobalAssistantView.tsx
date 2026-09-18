@@ -45,7 +45,7 @@ import { usePathname } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Activity, Plus, History } from 'lucide-react';
 import { AiUsageMonitor, AISelector, TasksDropdown, PlanChip } from '@/components/ai/shared';
-import ConversationHeader from '@/components/agents/panes/ConversationHeader';
+import { ConversationHeader } from '@/components/agents/panes/ConversationHeader';
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useDriveStore } from '@/hooks/useDrive';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
