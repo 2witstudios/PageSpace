@@ -56,6 +56,7 @@ export default function PaneBar({
   isActive,
   identity,
   actions,
+  className,
 }: {
   /** The bar tint is the pane's focus indicator — no separate accent line. */
   isActive: boolean;
@@ -63,6 +64,7 @@ export default function PaneBar({
   identity: ReactNode;
   /** Right side: the pane's controls, dimmed until hover/focus. */
   actions?: ReactNode;
+  className?: string;
 }) {
   return (
     <div
@@ -71,6 +73,7 @@ export default function PaneBar({
       className={cn(
         'flex h-[30px] min-w-0 shrink-0 items-center gap-1 border-b border-border/60 pl-2 pr-1 transition-colors',
         isActive && 'border-primary/40 bg-primary/10',
+        className,
       )}
     >
       <div
