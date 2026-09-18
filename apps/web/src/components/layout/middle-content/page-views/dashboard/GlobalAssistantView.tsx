@@ -58,7 +58,6 @@ import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
 import { useHomeSignals } from '@/hooks/useHomeSignals';
 import { HomeLine } from '@/components/ai/chat/layouts/HomeLine';
 import { HomeSuggestions } from '@/components/ai/chat/layouts/HomeSuggestions';
-import { HomeStrip } from '@/components/ai/chat/layouts/HomeStrip';
 import DriveSwitcher from '@/components/layout/navbar/DriveSwitcher';
 
 // Shared hooks and components
@@ -975,10 +974,6 @@ const GlobalAssistantView: React.FC = () => {
           </Button>
         </div>
       </div>
-
-      {isGlobalMode && plainMessages.length > 0 && (
-        <HomeStrip line={homeLine} />
-      )}
 
       {/*
         Voice as a MODE on this surface — same conversation, same message list,
