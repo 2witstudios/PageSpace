@@ -83,6 +83,28 @@ export const agentWorkspaces = pgTable('agent_workspaces', {
   name: text('name'),
 
   /**
+   * WHAT the workspace's tree IS — the one structural fork in the model:
+   *
+   *  - `'agent'` — a working context spawned from the Agents surface (or the
+   *    pre-column corpus, which is why the default exists). Everything the
+   *    docblocks above describe.
+   *  - `'dashboard'` — the per-user DASHBOARD workspace: the pane tree behind
+   *    the dashboard surface itself. Same node model (`agent_workspace_nodes`,
+   *    targets `chat`/`page`/`terminal`/`ports`), same store, same pane grid —
+   *    but the tree IS the user's dashboard layout, so it is user-scoped
+   *    (`driveId` NULL like a global-assistant session), never counts against
+   *    the spawn ceiling (provisioned lazily, one per owner while un-ended —
+   *    see the partial unique index), never provisions a sandbox of its own,
+   *    and is excluded from session LISTINGS (`AgentSessionStore.list`) because
+   *    it is not a console surface.
+   *
+   * Deliberately a column, not a convention (a magic name, a flag table): the
+   * whole point of the node model is that layout and membership are one fact —
+   * which workspace a tree belongs to must be readable off the row, not inferred.
+   */
+  kind: text('kind').notNull().default('agent'),
+
+  /**
    * The persistent ENVIRONMENT this session runs inside, or NULL for the
    * default ephemeral session that owns its own Sprite. An env-bound session
    * has no Sprite of its own — it borrows the env's, sharing that filesystem
@@ -286,6 +308,19 @@ export const agentWorkspaces = pgTable('agent_workspaces', {
     'agent_workspaces_env_needs_drive_check',
     sql`${table.envId} IS NULL OR ${table.driveId} IS NOT NULL`,
   ),
+
+  kindValuesCheck: check(
+    'agent_workspaces_kind_values_check',
+    sql`${table.kind} IN ('agent', 'dashboard')`,
+  ),
+
+  // One dashboard per owner WHILE IT IS OPEN. An ended dashboard workspace
+  // keeps its row as history (the same rule every session follows) and no
+  // longer holds the slot, so the next dashboard visit provisions a fresh
+  // tree instead of resurrecting a layout the user explicitly ended.
+  oneOpenDashboardPerOwner: uniqueIndex('agent_workspaces_one_open_dashboard_idx')
+    .on(table.ownerId)
+    .where(sql`${table.kind} = 'dashboard' AND ${table.endedAt} IS NULL`),
 }));
 
 /**

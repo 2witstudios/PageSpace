@@ -597,6 +597,12 @@ export async function createDbAgentSessionStore(now: () => Date = () => new Date
         throw new Error('listAgentSessions requires at least one filter');
       }
       conditions.push(isNull(agentWorkspaces.endedAt));
+      // DASHBOARD WORKSPACES ARE NOT CONSOLE SURFACES. Their tree backs the
+      // user's dashboard layout, so listing them as "sessions" (sidebar,
+      // Agents console) would show a phantom entry no one can open from
+      // there. Every other surface — access, nodes, conversations, shells —
+      // treats them exactly like any other workspace.
+      conditions.push(sql`${agentWorkspaces.kind} <> 'dashboard'`);
       // LEFT JOIN, not a second query and not a per-row lookup: an env-bound
       // session's own Sprite columns are CHECK-forbidden to be anything but
       // null, so "does this session have a live sandbox" is a fact about the
@@ -631,7 +637,16 @@ export async function createDbAgentSessionStore(now: () => Date = () => new Date
       const [row] = await db
         .select({ n: count() })
         .from(agentWorkspaces)
-        .where(and(eq(agentWorkspaces.ownerId, ownerId), isNull(agentWorkspaces.endedAt)));
+        .where(
+          and(
+            eq(agentWorkspaces.ownerId, ownerId),
+            isNull(agentWorkspaces.endedAt),
+            // The spawn ceiling bounds CONSOLES the user chose to spawn — the
+            // dashboard workspace is provisioned lazily for everyone and
+            // would otherwise silently consume one slot from every user.
+            sql`${agentWorkspaces.kind} <> 'dashboard'`,
+          ),
+        );
       return row?.n ?? 0;
     },
 

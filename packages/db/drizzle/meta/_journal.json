@@ -2073,6 +2073,13 @@
       "when": 1789647482376,
       "tag": "0295_apple_sign_in_tokens",
       "breakpoints": true
+    },
+    {
+      "idx": 296,
+      "version": "7",
+      "when": 1789753842384,
+      "tag": "0296_goofy_thing",
+      "breakpoints": true
     }
   ]
 }
