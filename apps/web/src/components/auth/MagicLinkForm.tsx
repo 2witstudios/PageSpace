@@ -145,6 +145,31 @@ export function MagicLinkForm({ nextPath, inviteToken }: MagicLinkFormProps = {}
         return;
       }
 
+      // Desktop shell only: mark an auth flow in progress (finding L9) BEFORE
+      // showing confirmation. The emailed link opens in the user's browser,
+      // outside this shell, so the pagespace:// deep link it fires cannot
+      // carry the flow state back — the main process accepts it via the
+      // in-progress-flow gate instead. A rejected bridge call or a null state
+      // (untrusted sender — the main process never records a flow) would leave
+      // that gate closed: the later deep link would be rejected and the
+      // desktop app would stay signed out. Surface a retryable error instead
+      // of a confirmation that promises a sign-in that cannot complete.
+      const beginExchange = window.electron?.auth?.beginExchange;
+      if (beginExchange) {
+        try {
+          const state = await beginExchange();
+          if (!state) {
+            throw new Error('Desktop auth bridge returned no flow state');
+          }
+        } catch {
+          setFormState('error');
+          setError(
+            'Your sign-in link was emailed, but the desktop app failed to prepare for sign-in. Please try again.'
+          );
+          return;
+        }
+      }
+
       // Success - show confirmation
       setFormState('sent');
       setCooldownSeconds(60); // 60 second cooldown before allowing resend
