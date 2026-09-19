@@ -26,11 +26,20 @@ interface HealthResponse {
   error?: string;
 }
 
+// Fly's health check has no failure-count threshold of its own — a single failed
+// probe right after the grace period elapses is enough to fail a rolling deploy.
+// Require this many CONSECUTIVE failures before reporting unhealthy over HTTP, so
+// one transient blip (e.g. a slow DB reconnect) doesn't flip the check.
+const CONSECUTIVE_FAILURE_THRESHOLD = 3;
+let consecutiveDbFailures = 0;
+
 const checkDatabase = async (): Promise<boolean> => {
   try {
     await db.execute(sql`SELECT 1`);
+    consecutiveDbFailures = 0;
     return true;
   } catch {
+    consecutiveDbFailures += 1;
     return false;
   }
 };
@@ -87,14 +96,20 @@ export async function GET(_request: Request): Promise<Response> {
       });
     }
 
+    // Only fail the HTTP status on a sustained DB outage, not monitoring
+    // misconfiguration — the latter is a config warning, not a traffic-serving
+    // failure, and shouldn't cause Fly to cycle machines over it.
+    const dbSustainedFailure = consecutiveDbFailures >= CONSECUTIVE_FAILURE_THRESHOLD;
+
     return Response.json(response, {
-      status: 200,
+      status: dbSustainedFailure ? 503 : 200,
       headers: {
         'Cache-Control': 'no-store, no-cache, must-revalidate',
       },
     });
   } catch (error) {
     loggers.api.error('Health check failed', error as Error);
+    consecutiveDbFailures += 1;
 
     const response: HealthResponse = {
       status: 'degraded',
@@ -115,7 +130,7 @@ export async function GET(_request: Request): Promise<Response> {
     };
 
     return Response.json(response, {
-      status: 200,
+      status: consecutiveDbFailures >= CONSECUTIVE_FAILURE_THRESHOLD ? 503 : 200,
       headers: {
         'Cache-Control': 'no-store, no-cache, must-revalidate',
       },
