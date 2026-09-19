@@ -209,8 +209,15 @@ describe('MagicLinkForm', () => {
       delete (window as unknown as { electron?: ElectronBridge }).electron;
     });
 
-    it('marks a desktop auth flow in progress after a successful send, so the browser-fired deep link is accepted (L9)', async () => {
+    it('shows success only after the desktop flow has begun, so the browser-fired deep link is accepted (L9)', async () => {
       setupFetchMock();
+      // Deferred: the flow is "recording" until we resolve the promise.
+      let resolveBegin: (state: string) => void = () => {};
+      beginExchangeMock.mockReturnValue(
+        new Promise<string>((resolve) => {
+          resolveBegin = resolve;
+        }),
+      );
       (window as unknown as { electron: ElectronBridge }).electron = {
         isDesktop: true,
         auth: { beginExchange: beginExchangeMock },
@@ -220,8 +227,36 @@ describe('MagicLinkForm', () => {
       await submitForm();
 
       await waitFor(() => expect(beginExchangeMock).toHaveBeenCalledTimes(1));
-      // Sent confirmation is still shown — the exchange begin is fire-and-forget.
+      // The bridge call is still pending — no confirmation may be promised yet.
+      expect(screen.queryByText(/check your email/i)).not.toBeInTheDocument();
+
+      await act(async () => {
+        resolveBegin('flow-state');
+      });
+
+      // Only once the flow is recorded does the confirmation appear.
       expect(screen.getByText(/check your email/i)).toBeInTheDocument();
+    });
+
+    it.each([
+      ['rejects', () => Promise.reject(new Error('ipc failure'))],
+      ['resolves null (untrusted sender — no flow recorded)', () => Promise.resolve(null)],
+    ])('treats a bridge call that %s as a retryable desktop error instead of success', async (_name, begin) => {
+      setupFetchMock();
+      beginExchangeMock.mockImplementation(begin);
+      (window as unknown as { electron: ElectronBridge }).electron = {
+        isDesktop: true,
+        auth: { beginExchange: beginExchangeMock },
+      };
+      render(<MagicLinkForm />);
+
+      await submitForm();
+
+      // Back on the input form with a retryable error — not a confirmation
+      // that would send the user to an email link the desktop will reject.
+      expect(screen.queryByText(/check your email/i)).not.toBeInTheDocument();
+      expect(screen.getByText(/failed to prepare for sign-in/i)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /sign-in link/i })).toBeEnabled();
     });
 
     it('does not mark a flow when the send fails', async () => {
