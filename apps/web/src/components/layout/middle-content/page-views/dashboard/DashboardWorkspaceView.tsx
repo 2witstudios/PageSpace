@@ -20,10 +20,10 @@
  * read rather than a remount of anything that matters.
  *
  * Provisioning rides SWR (the app's data convention) rather than a bespoke
- * effect: bounded retries, cache isolation per provider, and a one-shot key —
- * the request must not re-fire when the cookie identity changes later, so the
- * key is captured once at mount and the conversation it seeds is the one
- * active at first paint.
+ * effect: bounded retries, cache isolation per provider, and a USER-SCOPED
+ * key — the module-level SWR cache outlives account switches, so the key
+ * carries the signed-in user's id and the seed conversation is re-captured
+ * when that user changes.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -44,11 +44,23 @@ const PROVISION_KEY = 'dashboard-workspace';
 export default function DashboardWorkspaceView() {
   const { user } = useAuth();
   const userId = user?.id ?? null;
-  // The dashboard's conversation identity (cookie) at MOUNT time. Captured
-  // once — the tree, not the cookie, is the layout's source of truth now, so
-  // a later identity change must not re-provision.
   const currentConversationId = useGlobalChatConversation().currentConversationId;
-  const [conversationId] = useState(currentConversationId);
+  // The dashboard's conversation identity (cookie) — captured per SIGNED-IN
+  // USER, not per mount: the view survives account switches (CenterPanel
+  // never unmounts it), and the next user must provision THEIR workspace
+  // seeded with THEIR active conversation, not inherit a warm cache entry.
+  const [conversationId, setConversationId] = useState(currentConversationId);
+  useEffect(() => {
+    setConversationId(currentConversationId);
+    // Re-seed only when the signed-in user changes; a same-user cookie
+    // change must not re-provision (the tree is the layout's truth now).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
+
+  // The provision key is USER-SCOPED: the module-level SWR cache is shared
+  // across the whole app and outlives this component, so a bare string key
+  // could hand the next account the previous user's cached workspaceId.
+  const provisionKey = userId ? ([PROVISION_KEY, userId] as const) : null;
 
   const provision = useCallback(async () => {
     return post<ProvisionResponse>('/api/agent-workspaces/dashboard', {
@@ -56,7 +68,7 @@ export default function DashboardWorkspaceView() {
     });
   }, [conversationId]);
 
-  const { data, error } = useSWR(PROVISION_KEY, provision, {
+  const { data, error } = useSWR(provisionKey, provision, {
     revalidateIfStale: false,
     revalidateOnFocus: false,
     revalidateOnReconnect: false,

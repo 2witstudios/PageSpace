@@ -48,6 +48,12 @@ export interface DashboardWorkspace {
   workspaceId: string;
   /** Whether this call CREATED the workspace (vs reading the existing one). */
   created: boolean;
+  /**
+   * The conversation ACTUALLY bound to the seed pane on creation — null when
+   * the request's id was refused (foreign, already bound, or absent). This is
+   * the audit truth, deliberately distinct from what the caller ASKED to bind.
+   */
+  seededConversationId: string | null;
   snapshot: WorkspaceNodeSnapshotResponse;
 }
 
@@ -71,12 +77,14 @@ export async function getOrCreateDashboardWorkspace(
       workspace: {
         workspaceId: existing.id,
         created: false,
+        seededConversationId: null,
         snapshot: await readWorkspaceNodes(existing.id, userId),
       },
     };
   }
 
   const workspaceId = createId();
+  let seededConversationId: string | null = null;
 
   try {
     await db.transaction(async (tx) => {
@@ -99,6 +107,7 @@ export async function getOrCreateDashboardWorkspace(
         conversationId !== null && conversationId.length > 0
           ? await resolveBindableConversation(tx, userId, conversationId)
           : null;
+      seededConversationId = bind;
       await tx.insert(agentWorkspaceNodes).values(dashboardSeedNodeRows(workspaceId, bind));
     });
   } catch (error) {
@@ -117,6 +126,7 @@ export async function getOrCreateDashboardWorkspace(
           workspace: {
             workspaceId: winner.id,
             created: false,
+            seededConversationId: null,
             snapshot: await readWorkspaceNodes(winner.id, userId),
           },
         };
@@ -130,6 +140,7 @@ export async function getOrCreateDashboardWorkspace(
     workspace: {
       workspaceId,
       created: true,
+      seededConversationId,
       snapshot: await readWorkspaceNodes(workspaceId, userId),
     },
   };

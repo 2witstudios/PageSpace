@@ -43,7 +43,13 @@ export async function POST(request: Request) {
 
   let body: { conversationId?: unknown } = {};
   try {
-    body = await request.json();
+    // A syntactically valid body can still be `null` or a scalar — treat
+    // every non-object payload as "no conversation offered" rather than
+    // letting the read below throw into a 500.
+    const parsed: unknown = await request.json();
+    if (parsed !== null && typeof parsed === 'object') {
+      body = parsed as { conversationId?: unknown };
+    }
   } catch {
     // An empty body is a valid request — the tree seeds with an unbound pane.
   }
@@ -65,7 +71,10 @@ export async function POST(request: Request) {
         resourceId: result.workspace.workspaceId,
         details: {
           op: 'dashboard_workspace_provision',
-          seededConversationId: conversationId,
+          // The ACTUAL binding, not the request: a foreign or already-bound
+          // id leaves the pane unbound, and the audit must not record a
+          // binding that never happened.
+          seededConversationId: result.workspace.seededConversationId,
         },
       });
     }

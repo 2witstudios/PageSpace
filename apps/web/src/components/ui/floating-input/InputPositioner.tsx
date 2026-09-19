@@ -106,10 +106,15 @@ export function InputPositioner({
         {centeredHeader !== undefined && (
           <div
             aria-hidden={!isCentered}
+            // `inert` (+ visibility) takes the hidden header's focusable
+            // children — HomeSuggestions' buttons ride in here — out of the
+            // tab order when docked; opacity/aria-hidden alone leave them
+            // tabbable-invisible.
+            inert={!isCentered}
             className={cn(
               'pointer-events-none absolute bottom-full left-0 right-0 pb-7',
               'transition-opacity duration-200',
-              isCentered ? 'opacity-100' : 'opacity-0',
+              isCentered ? 'opacity-100' : 'invisible opacity-0',
             )}
           >
             {centeredHeader}

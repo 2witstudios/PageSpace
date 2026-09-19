@@ -334,8 +334,10 @@ export const agentWorkspaces = pgTable('agent_workspaces', {
    *
    * Both halves are vacuously true of every shipped row (kind defaults to
    * 'agent', and only the dashboard provisioning runtime writes 'dashboard' —
-   * the spawn path has no field for it), so the check ships enforced
-   * immediately with no staged VALIDATE.
+   * the spawn path has no field for it). They ship NOT VALID per the repo's
+   * two-stage rule for checks on populated tables (0249/0250 → 0251):
+   * enforced for every new row immediately, VALIDATE staged for a later
+   * release because both stages cannot ship in one invocation.
    */
   dashboardShapeCheck: check(
     'agent_workspaces_dashboard_shape_check',
