@@ -149,6 +149,17 @@ export function MagicLinkForm({ nextPath, inviteToken }: MagicLinkFormProps = {}
       setFormState('sent');
       setCooldownSeconds(60); // 60 second cooldown before allowing resend
       toast.success('Check your email for a sign-in link');
+
+      // Desktop shell only: mark an auth flow in progress (finding L9). The
+      // emailed link opens in the user's browser, outside this shell, so the
+      // pagespace:// deep link it fires cannot carry the flow state back —
+      // the main process accepts it via the in-progress-flow gate instead.
+      // Begun only after a successful send so a failed attempt never leaves
+      // an acceptance window open. Fire-and-forget: the state is unused here.
+      const beginExchange = window.electron?.auth?.beginExchange;
+      if (beginExchange) {
+        void beginExchange().catch(() => {});
+      }
     } catch (err) {
       console.error('Magic link error:', err);
       setFormState('error');
