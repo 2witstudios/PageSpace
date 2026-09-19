@@ -2,17 +2,28 @@
 
 import React, { forwardRef, useRef, useImperativeHandle, useEffect, useCallback } from 'react';
 import { Lock } from 'lucide-react';
+import type { UIMessage } from 'ai';
 import { cn } from '@/lib/utils';
 import { ChatTextarea, type ChatTextareaRef } from './ChatTextarea';
 import { InputActions } from './InputActions';
 import { AttachButton } from './AttachButton';
 import { AttachmentPreviewStrip } from './AttachmentPreviewStrip';
+import { QueueTray } from './QueueTray';
 import { InputFooter } from '@/components/ui/floating-input';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import { isImageGenerationAllowed } from '@/lib/ai/core/image-gen-access';
 import { useSpeechRecognition } from '@/hooks/useSpeechRecognition';
 import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
 import type { ImageAttachment } from '@/lib/ai/shared/hooks/useImageAttachments';
+
+/**
+ * Two ESC presses inside this window are a STRONGER interrupt (issue #2676):
+ * the first stops the stream (the abort's terminal event then drains the
+ * queue), the second clears the queue AND cancels that pending drain — the
+ * double-press convention command-line harnesses use. A timestamp comparison,
+ * not a timer: nothing is scheduled, the window simply expires.
+ */
+const DOUBLE_ESC_INTERRUPT_MS = 1000;
 
 export interface ChatInputProps {
   /** Current input value */
@@ -85,6 +96,26 @@ export interface ChatInputProps {
    * shows a banner naming the active streamer. The Stop button is gated separately
    * on `isStreaming` so observers never see a Stop button. */
   remoteStreamingUser?: { userId: string; displayName: string } | null;
+  /**
+   * The conversation's queued messages (issue #2676), in dispatch order — the
+   * tray above the composer renders this list. Absent = the queue is not
+   * wired on this surface and Enter during a stream stays inert, as before.
+   */
+  queuedMessages?: UIMessage[];
+  /**
+   * Queue the composer's text while streaming. Presence is what lets
+   * `handleSend`/`canSend` through during a stream; the surface clears the
+   * composer text when enqueueing succeeds.
+   */
+  onEnqueue?: () => void;
+  /** Remove one queued message (tray row button). */
+  onRemoveQueued?: (messageId: string) => void;
+  /** Remove every queued message (tray clear-all). */
+  onClearQueued?: () => void;
+  /** Double-ESC interrupt: clear the queue and cancel the pending drain. */
+  onCancelQueue?: () => void;
+  /** The queue is at its cap — surfaced in the tray and the queue-send button. */
+  isQueueFull?: boolean;
 }
 
 export interface ChatInputRef {
@@ -140,6 +171,12 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
       onRemoveFile,
       hasVision = false,
       remoteStreamingUser = null,
+      queuedMessages,
+      onEnqueue,
+      onRemoveQueued,
+      onClearQueued,
+      onCancelQueue,
+      isQueueFull = false,
     },
     ref
   ) => {
@@ -199,17 +236,62 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
       clear: () => textareaRef.current?.clear(),
     }));
 
+    const hasText = value.trim().length > 0;
+    const hasImages = (attachments?.length ?? 0) > 0;
+    const isSideQuestion = /^\/btw\s+\S/.test(value.trim());
+    const queueWired = onEnqueue !== undefined;
+
+    // Issue #2676: during a stream the send verb is QUEUE, so the gate is no
+    // longer `!isStreaming` — only the observer lock (`effectiveDisabled`)
+    // blocks, exactly as before. Attachments still never send mid-stream.
+    const canSend = (hasText || hasImages) && !effectiveDisabled && (!isStreaming || queueWired);
+    // Queued = text-only v1: images keep their existing disabled-during-stream rule.
+    const canQueue = queueWired && hasText && !hasImages && !effectiveDisabled && !isQueueFull;
+
     const handleSend = () => {
-      const hasText = value.trim().length > 0;
-      const hasImages = (attachments?.length ?? 0) > 0;
-      const isSideQuestion = /^\/btw\s+\S/.test(value.trim());
-      if ((hasText || hasImages) && !effectiveDisabled && (!isStreaming || (isSideQuestion && onSideQuestion))) {
+      if (effectiveDisabled) return;
+      if (!hasText && !hasImages) return;
+
+      if (!isStreaming) {
         keyboard.dismiss();
         if (isSideQuestion && onSideQuestion) onSideQuestion(); else onSend();
+        return;
       }
+
+      // Streaming: a detached /btw stays a side question; anything else is
+      // QUEUED — never a second POST while the turn is live. The surface
+      // clears the composer when enqueueing succeeds.
+      if (isSideQuestion && onSideQuestion) {
+        keyboard.dismiss();
+        onSideQuestion();
+        return;
+      }
+      if (!canQueue) return;
+      keyboard.dismiss();
+      onEnqueue();
     };
 
-    const canSend = (value.trim().length > 0 || (attachments?.length ?? 0) > 0) && !effectiveDisabled && !isStreaming;
+    // ESC during a stream = Stop (useStopStream -> /api/ai/abort); the abort's
+    // terminal event then drains the queue automatically. A second ESC within
+    // the window — or while the stop is still resolving — is the stronger
+    // interrupt: clear the queue and cancel that pending drain. Not
+    // streaming, the key keeps whatever behavior it had (suggestion pickers).
+    // Suggestion/mention pickers consume Escape with stopPropagation upstream,
+    // so a picker close never stops a stream.
+    const lastEscapeAtRef = useRef(0);
+    const handleComposerKeyDown = (e: React.KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      if (!isStreaming) return;
+      e.preventDefault();
+      const now = Date.now();
+      if (isStopping || now - lastEscapeAtRef.current < DOUBLE_ESC_INTERRUPT_MS) {
+        lastEscapeAtRef.current = 0;
+        onCancelQueue?.();
+        return;
+      }
+      lastEscapeAtRef.current = now;
+      onStop();
+    };
 
     // Drag-and-drop handler for images
     const handleDragOver = useCallback((e: React.DragEvent) => {
@@ -234,6 +316,7 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
         className={cn('flex flex-col relative min-w-0')}
         onDragOver={handleDragOver}
         onDrop={handleDrop}
+        onKeyDown={handleComposerKeyDown}
       >
         {/* Attachment preview strip (shown when images are attached) */}
         {attachments && attachments.length > 0 && onRemoveFile && (
@@ -254,6 +337,18 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
               {remoteStreamingUser.displayName} is chatting with the AI…
             </span>
           </div>
+        )}
+
+        {/* Send queue (issue #2676): visible, ordered, editable — a queued send
+            must never feel like a swallowed one. */}
+        {queueWired && (
+          <QueueTray
+            messages={queuedMessages ?? []}
+            onRemove={onRemoveQueued ?? (() => {})}
+            onClear={onClearQueued ?? (() => {})}
+            isQueueFull={isQueueFull}
+            className="mx-3 mb-1"
+          />
         )}
 
         {/* Input row */}
@@ -287,6 +382,10 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
             onSend={handleSend}
             onStop={onStop}
             disabled={!canSend}
+            onQueueSend={queueWired ? handleSend : undefined}
+            canQueue={canQueue}
+            queuedCount={queuedMessages?.length ?? 0}
+            isQueueFull={isQueueFull}
           />
         </div>
 

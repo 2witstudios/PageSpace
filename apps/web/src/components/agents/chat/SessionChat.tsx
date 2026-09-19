@@ -141,6 +141,13 @@ export function SessionChatView({
     void sideQuestion.ask(question);
   }, [input, sideQuestion]);
 
+  // Queue-send (issue #2676): the composer enqueues during a stream; the
+  // composer text clears only when the enqueue succeeded (full queue, empty
+  // text → nothing to clear). Read-only surfaces never offer it.
+  const handleEnqueue = useCallback(() => {
+    if (chat.enqueueQueuedSend(input)) setInput('');
+  }, [input, chat]);
+
   const handleUndoSuccess = useCallback(async () => {
     setUndoMessageId(null);
     await chat.reloadConversation();
@@ -245,6 +252,12 @@ export function SessionChatView({
           hasVision={hasVisionCapability(visionModel)}
           commandDriveId={commandDriveId ?? undefined}
           remoteStreamingUser={remoteStreamingUser}
+          queuedMessages={chat.queuedSends}
+          onEnqueue={isReadOnly ? undefined : handleEnqueue}
+          onRemoveQueued={chat.removeQueuedSend}
+          onClearQueued={chat.clearQueuedSends}
+          onCancelQueue={chat.cancelQueuedDrain}
+          isQueueFull={chat.isQueueFull}
         />
       </div>
 

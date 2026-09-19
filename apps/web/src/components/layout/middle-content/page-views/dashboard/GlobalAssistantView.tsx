@@ -67,6 +67,7 @@ import {
   useProviderSettings,
   useChatSession,
   useSendHandoff,
+  useQueuedSends,
   useResumeBootstrap,
   useAnswerAskUser,
   useChatErrorCause,
@@ -750,6 +751,42 @@ const GlobalAssistantView: React.FC = () => {
   ]);
 
   /**
+   * The one text send path, shared by the composer and the DRAIN (issue
+   * #2676): optimistic write first, then the wrapped dispatch with rollback —
+   * the drain hook re-invokes it with each queued message. Text-only: queued
+   * messages never carry the composer's image attachments.
+   */
+  const dispatchUserMessage = useCallback((message: UIMessage) => {
+    if (!currentConversationId) return;
+    conversationMessagesActions.addOptimisticSend(currentConversationId, message);
+    return rollbackOptimisticSendOnFailure(
+      () => wrapSend(() => sendMessage(message, currentConversationId, { body: buildRequestBody() })),
+      currentConversationId,
+      message.id,
+    );
+  }, [currentConversationId, wrapSend, sendMessage, buildRequestBody]);
+
+  // Send queue (issue #2676): drains one queued message per observed stream
+  // end, FIFO; manual sends/retries take precedence via the status guard.
+  const {
+    queuedSends,
+    queueCount,
+    isQueueFull,
+    enqueue: enqueueQueuedSend,
+    remove: removeQueuedSend,
+    clear: clearQueuedSends,
+    cancelPendingDrain: cancelQueuedDrain,
+  } = useQueuedSends({
+    conversationId: currentConversationId,
+    status,
+    dispatch: dispatchUserMessage,
+  });
+
+  const handleEnqueueFromComposer = useCallback(() => {
+    if (enqueueQueuedSend(input)) setInput('');
+  }, [enqueueQueuedSend, input]);
+
+  /**
    * Send `text` as the user's message.
    *
    * Split out from `handleSendMessage` so a caller that did not come from the
@@ -1106,6 +1143,12 @@ const GlobalAssistantView: React.FC = () => {
                 (selectedAgent ? agentSelectedModel : currentModel) || ''
               )}
               remoteStreamingUser={remoteStreamingUser}
+              queuedMessages={queuedSends}
+              onEnqueue={handleEnqueueFromComposer}
+              onRemoveQueued={removeQueuedSend}
+              onClearQueued={clearQueuedSends}
+              onCancelQueue={cancelQueuedDrain}
+              isQueueFull={isQueueFull}
             />
           </>
         )}
