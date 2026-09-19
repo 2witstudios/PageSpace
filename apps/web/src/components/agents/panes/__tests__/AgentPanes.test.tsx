@@ -1701,3 +1701,52 @@ describe('AgentPanes — keyboard activation', () => {
     await waitFor(() => expect(useAgentWorkspaceStore.getState().workspaces[WS]?.activeNodeId).toBe('n1'));
   });
 });
+
+describe('AgentPanes — focused conversation reporting', () => {
+  // The dashboard rides `onActiveConversationChanged` to keep the app-wide
+  // assistant identity (the GlobalChatContext cookie) in step with the tree:
+  // the FOCUSED pane's conversation, with `agentPageId: null` marking a
+  // global-assistant thread. Focus is client-local, so the report must follow
+  // `selectNode` alone — no server write, no listing read.
+  it('fires with the focused chat pane identity, then null for a non-chat pane', async () => {
+    const onActiveConversationChanged = vi.fn();
+    seat(
+      [
+        rootNode,
+        chatNode('pane-1', WS, 0, 'conv-1'),
+        chatNode('pane-2', WS, 1, 'conv-2'),
+        paneNode('pane-3', WS, 2, { kind: 'terminal', id: 'shell-1' }),
+      ],
+      [
+        CONV_1_TARGET,
+        { id: 'conv-2', kind: 'chat', title: 'Global thread', lastMessageAt: null, agentPageId: null },
+      ],
+    );
+    renderPanes({
+      onActiveConversationChanged,
+      initialConversation: { conversationId: 'conv-1', agentPageId: 'agent-1', name: 'First' },
+    });
+
+    await waitFor(() =>
+      expect(onActiveConversationChanged).toHaveBeenCalledWith({
+        conversationId: 'conv-1',
+        agentPageId: 'agent-1',
+      }),
+    );
+
+    act(() => {
+      useAgentWorkspaceStore.getState().selectNode(WS, 'pane-2');
+    });
+    await waitFor(() =>
+      expect(onActiveConversationChanged).toHaveBeenLastCalledWith({
+        conversationId: 'conv-2',
+        agentPageId: null,
+      }),
+    );
+
+    act(() => {
+      useAgentWorkspaceStore.getState().selectNode(WS, 'pane-3');
+    });
+    await waitFor(() => expect(onActiveConversationChanged).toHaveBeenLastCalledWith(null));
+  });
+});

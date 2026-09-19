@@ -9,6 +9,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import type { UIMessage } from 'ai';
 import type { AgentInfo } from '@/types/agent';
 import { useAskUserAnswerContext } from '@/components/ai/shared/chat/ask-user/AskUserAnswerContext';
 
@@ -105,6 +106,10 @@ function agentFixture(): AgentInfo {
   };
 }
 
+function messageFixture(): UIMessage {
+  return { id: 'm1', role: 'user', parts: [{ type: 'text', text: 'hello' }] };
+}
+
 function baseChatState(overrides: Record<string, unknown> = {}) {
   return {
     messages: [],
@@ -152,16 +157,42 @@ describe('SessionChat', () => {
     );
   });
 
+  it("renders the centered welcome (no messages area) for a new conversation in 'page' context", () => {
+    render(<SessionChat agent={agentFixture()} conversationId="conv-1" context="page" />);
+    // New/empty conversation → the shared floating layer's centered welcome,
+    // headline = the agent's name; the messages area is not mounted at all.
+    expect(screen.getByRole('heading', { name: 'My Agent' })).toBeInTheDocument();
+    expect(screen.queryByTestId('chat-messages-area')).not.toBeInTheDocument();
+    expect(screen.getByTestId('chat-input')).toBeInTheDocument();
+  });
+
+  it("docks to the messages area once messages exist in 'page' context", () => {
+    chatState.current = baseChatState({ messages: [messageFixture()] });
+    render(<SessionChat agent={agentFixture()} conversationId="conv-1" context="page" />);
+    expect(screen.getByTestId('chat-messages-area')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'My Agent' })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('sidebar-messages-content')).not.toBeInTheDocument();
+  });
+
   it("renders the full messages area (ChatMessagesArea) in 'page' context", () => {
+    chatState.current = baseChatState({ messages: [messageFixture()] });
     render(<SessionChat agent={agentFixture()} conversationId="conv-1" context="page" />);
     expect(screen.getByTestId('chat-messages-area')).toBeInTheDocument();
     expect(screen.queryByTestId('sidebar-messages-content')).not.toBeInTheDocument();
   });
 
   it("renders the compact messages area (SidebarMessagesContent) in 'console' context", () => {
+    chatState.current = baseChatState({ messages: [messageFixture()] });
     render(<SessionChat agent={agentFixture()} conversationId="conv-1" context="console" />);
     expect(screen.getByTestId('sidebar-messages-content')).toBeInTheDocument();
     expect(screen.queryByTestId('chat-messages-area')).not.toBeInTheDocument();
+  });
+
+  it("shows the centered welcome in 'console' context for a new conversation too", () => {
+    render(<SessionChat agent={agentFixture()} conversationId="conv-1" context="console" />);
+    expect(screen.getByRole('heading', { name: 'My Agent' })).toBeInTheDocument();
+    expect(screen.queryByTestId('sidebar-messages-content')).not.toBeInTheDocument();
+    expect(screen.getByTestId('chat-input')).toBeInTheDocument();
   });
 
   it('shows a loading spinner when messages are loading and nothing is cached yet', () => {
@@ -214,6 +245,7 @@ describe('SessionChat', () => {
   });
 
   it('provides ask_user answering context to the message renderer when not read-only', () => {
+    chatState.current = baseChatState({ messages: [messageFixture()] });
     render(<SessionChat agent={agentFixture()} conversationId="conv-1" context="page" />);
     expect(screen.getByTestId('chat-messages-area')).toHaveAttribute('data-ask-user-ctx', 'present');
   });
@@ -223,6 +255,7 @@ describe('SessionChat', () => {
   // options/Submit that would 403 (or actually resume a global-assistant pane) despite
   // the surface showing "View only".
   it('withholds ask_user answering context from the message renderer in read-only mode', () => {
+    chatState.current = baseChatState({ messages: [messageFixture()] });
     render(
       <SessionChat agent={agentFixture()} conversationId="conv-1" context="page" isReadOnly />,
     );

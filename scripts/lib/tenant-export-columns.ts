@@ -214,7 +214,7 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
   // its own spec below, and the note above `TENANT_EXPORT_EXCLUDED_TABLES`.
   agent_workspaces: {
     columns: [
-      'id', 'driveId', 'ownerId', 'name',
+      'id', 'driveId', 'ownerId', 'name', 'kind',
       'lastActiveAt', 'endedAt', 'createdAt', 'updatedAt',
     ],
     excluded: {

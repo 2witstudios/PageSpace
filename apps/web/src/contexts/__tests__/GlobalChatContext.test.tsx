@@ -139,8 +139,18 @@ vi.mock('@/lib/ai/streams/bootstrapConsumerGuard', () => ({
 }));
 
 const mockFetchWithAuth = vi.fn();
+const mockPost = vi.fn();
 vi.mock('@/lib/auth/auth-fetch', () => ({
   fetchWithAuth: (...args: unknown[]) => mockFetchWithAuth(...args),
+  post: (...args: unknown[]) => mockPost(...args),
+  ApiRequestError: class ApiRequestError extends Error {
+    readonly status: number;
+    constructor(message: string, status: number) {
+      super(message);
+      this.name = 'ApiRequestError';
+      this.status = status;
+    }
+  },
 }));
 
 vi.mock('@/lib/ai/core/conversation-state', () => ({
@@ -165,6 +175,10 @@ vi.mock('@/lib/ai/shared', async (importOriginal) => ({
 
 import { GlobalChatProvider, useGlobalChatConversation } from '../GlobalChatContext';
 import { useStreamingRegistration } from '@/lib/ai/shared';
+import {
+  registerDashboardWorkspace,
+  resetDashboardWorkspaceRegistry,
+} from '@/lib/agent-workspaces/dashboard-workspace-registry';
 // REAL conversation cache (PR 5B): loads and remote events commit here, and what
 // lands in the cache is the behavior under test — refreshSignal is gone.
 import { useConversationMessagesStore } from '@/stores/useConversationMessagesStore';
@@ -358,6 +372,9 @@ describe('GlobalChatProvider — conversation identity race guards', () => {
     mockStreams.clear();
     // Module state — a real reload clears it; a test file must too.
     useConversationMessagesStore.setState({ byConversationId: {} });
+    // The dashboard-workspace registry is module state too: one test's
+    // registration must not route another test's "New" through the mint path.
+    resetDashboardWorkspaceRegistry();
     mockUseSocketStore.mockImplementation((selector: (s: { connectionStatus: string }) => unknown) =>
       selector({ connectionStatus: 'disconnected' })
     );
@@ -431,6 +448,78 @@ describe('GlobalChatProvider — conversation identity race guards', () => {
     // Seeded loaded-empty in the cache: nothing to fetch for a just-created id.
     expect(cacheEntry('brand-new-conv').loadStatus).toBe('loaded');
     expect(cacheEntry('brand-new-conv').messages).toEqual([]);
+  });
+
+  // ONE CREATION PATH: with a dashboard workspace registered, "New" mints the
+  // assistant thread INTO that workspace (born bound, so the grid follows the
+  // app identity) instead of minting a lazy row-less id the grid will never show.
+  it('given a dashboard workspace is registered, createNewConversation mints into it and adopts the minted id', async () => {
+    registerDashboardWorkspace(USER_ID, 'ws-dash');
+    mockFetchWithAuth.mockImplementation(() => new Promise(() => {})); // init hangs forever
+
+    const { conversationState } = await import('@/lib/ai/core/conversation-state');
+    const { result } = renderProvider();
+
+    await act(async () => {
+      mockPost.mockResolvedValueOnce({ conversationId: 'minted-into-dash' });
+      await result.current.createNewConversation();
+    });
+
+    expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces/ws-dash/conversations', {
+      agentPageId: null,
+    });
+    expect(result.current.currentConversationId).toBe('minted-into-dash');
+    expect(cacheEntry('minted-into-dash').loadStatus).toBe('loaded');
+    // The lazy client-mint path never ran: no second identity was minted.
+    expect(conversationState.createAndSetActiveConversation).not.toHaveBeenCalled();
+  });
+
+  it('given the workspace mint fails AMBIGUOUSLY (network), createNewConversation does NOT double-mint', async () => {
+    // A timeout may hide a COMMITTED mint. Falling back to the lazy path here
+    // would create a second conversation beside the first; instead the error
+    // is surfaced and, if the mint did land, the tree broadcast + the grid's
+    // identity sync adopt the minted thread.
+    registerDashboardWorkspace(USER_ID, 'ws-dash');
+    mockFetchWithAuth.mockImplementation(() => new Promise(() => {})); // init hangs forever
+
+    const { conversationState } = await import('@/lib/ai/core/conversation-state');
+
+    const { result } = renderProvider();
+
+    await act(async () => {
+      mockPost.mockRejectedValueOnce(new Error('network down'));
+      await result.current.createNewConversation();
+    });
+
+    expect(result.current.currentConversationId).toBeNull();
+    expect(conversationState.createAndSetActiveConversation).not.toHaveBeenCalled();
+  });
+
+  it('given the workspace mint refuses deterministically (4xx), createNewConversation falls back to the lazy path', async () => {
+    // 4xx proves nothing was committed server-side — the fallback is safe.
+    registerDashboardWorkspace(USER_ID, 'ws-dash');
+    mockFetchWithAuth.mockImplementation(() => new Promise(() => {})); // init hangs forever
+
+    const { conversationState } = await import('@/lib/ai/core/conversation-state');
+    vi.mocked(conversationState.createAndSetActiveConversation).mockResolvedValue({
+      id: 'fallback-conv',
+      type: 'global',
+      title: null,
+      lastMessageAt: null,
+      createdAt: new Date().toISOString(),
+    });
+
+    const { result } = renderProvider();
+
+    await act(async () => {
+      mockPost.mockRejectedValueOnce(
+        new (await import('@/lib/auth/auth-fetch')).ApiRequestError('session full', 409),
+      );
+      await result.current.createNewConversation();
+    });
+
+    expect(result.current.currentConversationId).toBe('fallback-conv');
+    expect(cacheEntry('fallback-conv').loadStatus).toBe('loaded');
   });
 
   // CR2 (CodeRabbit round 2): the init bootstrap's /active response resolving AFTER

@@ -53,6 +53,42 @@ lives inside it.
 > later as a `published_apps.envId` hosting row pointing AT an env — it never puts Fly
 > pointers on the env row.
 
+### 1a. The dashboard workspace (`agent_workspaces.kind`)
+
+There IS a workspace kind — but it is a fork in what the row's TREE *is*, not in how the
+row behaves. `kind` is `'agent'` (the default; every pre-column row) or `'dashboard'`:
+
+- **`'dashboard'` is the pane tree behind the dashboard surface itself.** The dashboard
+  used to be the one chat surface with no workspace, which is exactly why it could not
+  be split: the node tree is the layout, and no tree meant no layout. A lazily
+  provisioned, per-user dashboard workspace (`driveId` NULL like a global-assistant
+  session) gives the dashboard the same property every other surface has — the tree IS
+  the layout, persisted server-side in `agent_workspace_nodes`, so the dashboard
+  survives reloads, navigation, and devices, and "split the assistant" is an ordinary
+  `splitPane`.
+- **Everything else treats it like any other workspace.** Access is the one decision
+  (`decideAgentSessionAccess`'s global branch: owner-only, no drive to share through).
+  Panes bind chat threads, pages, terminals — the whole target vocabulary. The chat
+  pane renders the one shared chat surface, so the dashboard's assistant pane looks and
+  behaves like every pane everywhere.
+- **The two places it is NOT an ordinary session are about surfacing, not semantics:**
+  the store's `list` excludes it (it must not appear in the Agents console or sidebar
+  as a phantom session nobody opened) and `countActive` excludes it (it is provisioned
+  for everyone lazily and must never consume one of the spawn ceiling's slots). One per
+  owner while open — `agent_workspaces_one_open_dashboard_idx`, a partial unique index
+  that is both the invariant and the provisioning race arbiter; an ended dashboard
+  keeps its row as history and frees the slot.
+- **Identity: the cookie and the tree move together.** The dashboard's conversation
+  identity used to be ONLY the `GlobalChatContext` cookie; the grid now reports the
+  focused pane's chat conversation up (`AgentPanes`' `onActiveConversationChanged`), and
+  a global-assistant pane focus becomes the app identity — sidebar and voice follow
+  what is on screen. The other direction runs through one creation path: a "new
+  conversation" minted anywhere (sidebar, voice) is born INTO the dashboard workspace
+  when one is registered (`dashboard-workspace-registry.ts`), so the grid follows the
+  app instead of drifting from it. Agent threads shown in a dashboard pane deliberately
+  do NOT touch the identity — the sidebar shows the assistant, not whichever agent pane
+  has focus.
+
 Shipped invariants (source: `packages/db/src/schema/agent-workspaces.ts`,
 `packages/db/src/schema/conversations.ts`):
 

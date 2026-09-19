@@ -38,6 +38,21 @@ describe('resolveInputPosition', () => {
     expect(position).toBe('docked');
   });
 
+  // Transient states dock the VIEW for the frame but must not EARN the latch:
+  // a brand-new conversation whose first (empty) fetch flashes isLoading would
+  // otherwise pin itself docked forever and never show its welcome.
+  it('given a loading frame over an actually-empty conversation, the latch must NOT record docked', () => {
+    const { position, latch } = resolveInputPosition({
+      conversationId: 'conv-1',
+      isLoading: true,
+      hasMessages: false,
+      hasRemoteStreams: false,
+      latch: NO_LATCH,
+    });
+    expect(position).toBe('docked');
+    expect(latch).toEqual({ conversationId: 'conv-1', docked: false });
+  });
+
   it('given a remote stream already live for this conversation, should return docked', () => {
     const { position } = resolveInputPosition({
       conversationId: 'conv-1',

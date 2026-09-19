@@ -45,6 +45,7 @@ import { usePathname } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Activity, Plus, History } from 'lucide-react';
 import { AiUsageMonitor, AISelector, TasksDropdown, PlanChip } from '@/components/ai/shared';
+import { ConversationHeader } from '@/components/agents/panes/ConversationHeader';
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useDriveStore } from '@/hooks/useDrive';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
@@ -910,70 +911,79 @@ const GlobalAssistantView: React.FC = () => {
   return (
     <AskUserAnswerProvider value={askUserAnswering}>
     <div data-testid="global-assistant-view" className="flex flex-col h-full">
-      {/* Header */}
-      <div className="flex items-center justify-between gap-2 p-4 border-[var(--separator)]">
-        <div className="flex min-w-0 items-center space-x-2">
-          <AISelector
-            // `shrink` overrides the shared button variant's own `shrink-0`
-            // (twMerge, later class wins), and `min-w-0` lets it fall below
-            // its intrinsic width. Without both, a long agent title keeps the
-            // button at full width and pushes the actions off the row — the
-            // truncate on the label inside can only act once the button
-            // itself is allowed to narrow.
-            className="min-w-0 shrink"
-            selectedAgent={selectedAgent}
-            onSelectAgent={handleSelectAgentForVoice}
-            // The CONVERSATION's own liveness, not a raw chat status. Switching agent while
-            // something generates is a view change, not a send — and the underlying status no
-            // longer reports "streaming" at all, because this client does not read a body.
-            disabled={effectiveIsStreaming}
-          />
-          {/* When the left sidebar (and its drive switcher) is collapsed, the
-              scope the assistant can see would otherwise be invisible.
+      {/* Header — the shared ConversationHeader at dashboard density. One slot
+          contract panes also wear (PaneBar at compact density), so the day this
+          surface hosts itself as a pane in a splittable dashboard grid, the
+          chrome migrates by swapping density and passing paneControls. */}
+      <ConversationHeader
+        density="comfortable"
+        identity={
+          <>
+            <AISelector
+              // `shrink` overrides the shared button variant's own `shrink-0`
+              // (twMerge, later class wins), and `min-w-0` lets it fall below
+              // its intrinsic width. Without both, a long agent title keeps the
+              // button at full width and pushes the actions off the row — the
+              // truncate on the label inside can only act once the button
+              // itself is allowed to narrow.
+              className="min-w-0 shrink"
+              selectedAgent={selectedAgent}
+              onSelectAgent={handleSelectAgentForVoice}
+              // The CONVERSATION's own liveness, not a raw chat status. Switching agent while
+              // something generates is a view change, not a send — and the underlying status no
+              // longer reports "streaming" at all, because this client does not read a body.
+              disabled={effectiveIsStreaming}
+            />
+            {/* When the left sidebar (and its drive switcher) is collapsed, the
+                scope the assistant can see would otherwise be invisible.
 
-              Desktop only (lg+), the same gate as DashboardCrumb's drive
-              crumb: below lg the sidebar is a sheet whatever `leftSidebarOpen`
-              says, its DriveSwitcher opens this same picker, and a phone
-              header row has no room for a second wordy control — it pushed
-              the New button off the right edge. */}
-          {!leftSidebarOpen && isGlobalMode && (
-            <div className="hidden rounded-lg bg-primary-soft lg:block">
-              <DriveSwitcher />
-            </div>
-          )}
-        </div>
-        <div className="flex shrink-0 items-center space-x-2">
-          <PlanChip conversationId={currentConversationId} messages={plainMessages} />
-          <TasksDropdown messages={plainMessages} driveId={selectedAgent?.driveId || locationContext?.currentDrive?.id} />
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={handleOpenHistory}
-            className="h-8 w-8"
-            title="View History"
-          >
-            <History className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={handleOpenActivity}
-            className="h-8 w-8"
-            title="Open Activity"
-          >
-            <Activity className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleNewConversation}
-            className="flex items-center gap-2"
-          >
-            <Plus className="h-4 w-4" />
-            <span className="hidden sm:inline">New</span>
-          </Button>
-        </div>
-      </div>
+                Desktop only (lg+), the same gate as DashboardCrumb's drive
+                crumb: below lg the sidebar is a sheet whatever `leftSidebarOpen`
+                says, its DriveSwitcher opens this same picker, and a phone
+                header row has no room for a second wordy control — it pushed
+                the New button off the right edge. */}
+            {!leftSidebarOpen && isGlobalMode && (
+              <div className="hidden rounded-lg bg-primary-soft lg:block">
+                <DriveSwitcher />
+              </div>
+            )}
+          </>
+        }
+        actions={
+          <>
+            <PlanChip conversationId={currentConversationId} messages={plainMessages} />
+            <TasksDropdown messages={plainMessages} driveId={selectedAgent?.driveId || locationContext?.currentDrive?.id} />
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={handleOpenHistory}
+              className="h-8 w-8"
+              title="View History"
+            >
+              <History className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={handleOpenActivity}
+              className="h-8 w-8"
+              title="Open Activity"
+            >
+              <Activity className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleNewConversation}
+              className="flex items-center gap-2"
+            >
+              <Plus className="h-4 w-4" />
+              <span className="hidden sm:inline">New</span>
+            </Button>
+          </>
+        }
+      />
+
 
       {/*
         Voice as a MODE on this surface — same conversation, same message list,
