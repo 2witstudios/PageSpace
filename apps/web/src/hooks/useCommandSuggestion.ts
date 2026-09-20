@@ -13,6 +13,7 @@ import {
   filterAndRankCommands,
   resolveSelectionTarget,
   commandInsertsPlainText,
+  isLeadingSlashTrigger,
   type CommandSuggestionItem,
 } from '@/lib/commands/command-picker-core';
 import { resolvePickerKeyAction } from '@/lib/commands/picker-keyboard';
@@ -40,6 +41,14 @@ export interface UseCommandSuggestionProps {
   onValueChange: (value: string) => void;
   /** Registers the inserted chip with the token tracker (call order mirrors mentions). */
   onTokenInserted: (token: TrackedToken) => void;
+  /**
+   * Surface capability gate (default false): when false, fetched suggestions
+   * with `clientHandled: true` (e.g. /btw) are filtered out. Those commands
+   * fire via the composer's pre-send interception, so a surface that doesn't
+   * own that interception (e.g. ChannelInput) must never offer them —
+   * selecting one would post the literal `/trigger …` text instead.
+   */
+  allowClientHandledCommands?: boolean;
 }
 
 export interface UseCommandSuggestionResult {
@@ -98,6 +107,7 @@ export function useCommandSuggestion({
   enterSelects,
   onValueChange,
   onTokenInserted,
+  allowClientHandledCommands = false,
 }: UseCommandSuggestionProps): UseCommandSuggestionResult {
   const [isOpen, setIsOpen] = useState(false);
   const [position, setPosition] = useState<Position | null>(null);
@@ -107,6 +117,10 @@ export function useCommandSuggestion({
   // query) and debounced 200ms while typing (spec §1.4).
   const [filterQuery, setFilterQuery] = useState('');
   const [allItems, setAllItems] = useState<CommandSuggestionItem[]>([]);
+  // Whether the active trigger is LEADING (only whitespace before it). Client-
+  // handled commands are offered/selectable only at a leading trigger — see
+  // isLeadingSlashTrigger. Recomputed on open and on every open-state update.
+  const [triggerIsLeading, setTriggerIsLeading] = useState(true);
   const [loading, setLoading] = useState(false);
   const [loadFailed, setLoadFailed] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -130,6 +144,7 @@ export function useCommandSuggestion({
     setQuery('');
     setFilterQuery('');
     setSelectedIndex(0);
+    setTriggerIsLeading(true);
     // Drop the fetched list: a later reopen must not expose this trigger's
     // items (even invisibly behind the loading row) to Enter/Tab selection.
     // Bumping the request counter also invalidates any in-flight fetch so it
@@ -160,7 +175,15 @@ export function useCommandSuggestion({
       if (!response.ok) throw new Error(`suggest fetch failed: ${response.status}`);
       const data: { suggestions?: CommandSuggestionItem[] } = await response.json();
       if (fetchRequestRef.current === requestId) {
-        setAllItems(Array.isArray(data?.suggestions) ? data.suggestions : []);
+        const suggestions = Array.isArray(data?.suggestions) ? data.suggestions : [];
+        // Surface capability gate: without composer-side interception a
+        // client-handled command can only go out as its literal text, so the
+        // picker must never offer it on such surfaces.
+        setAllItems(
+          allowClientHandledCommands
+            ? suggestions
+            : suggestions.filter((item) => !commandInsertsPlainText(item))
+        );
       }
     } catch (error) {
       logger.error('Failed to fetch command suggestions', { error, driveId });
@@ -171,7 +194,7 @@ export function useCommandSuggestion({
     } finally {
       if (fetchRequestRef.current === requestId) setLoading(false);
     }
-  }, [driveId]);
+  }, [driveId, allowClientHandledCommands]);
 
   const open = useCallback(
     (triggerIndex: number, initialQuery: string) => {
@@ -185,6 +208,7 @@ export function useCommandSuggestion({
       });
 
       triggerIndexRef.current = triggerIndex;
+      setTriggerIsLeading(isLeadingSlashTrigger(element.value, triggerIndex));
       setQuery(initialQuery);
       setFilterQuery(initialQuery);
       setSelectedIndex(0);
@@ -227,6 +251,7 @@ export function useCommandSuggestion({
           break;
         case 'update':
           triggerIndexRef.current = result.triggerIndex;
+          setTriggerIsLeading(isLeadingSlashTrigger(value, result.triggerIndex));
           updateQuery(result.query);
           break;
         case 'close':
@@ -284,8 +309,14 @@ export function useCommandSuggestion({
   );
 
   const items = useMemo(
-    () => filterAndRankCommands(allItems, filterQuery),
-    [allItems, filterQuery]
+    () =>
+      filterAndRankCommands(allItems, filterQuery).filter(
+        // Client-handled commands (plain-text insertion) are only meaningful
+        // at a leading trigger: mid-text the composer's interception never
+        // fires, so they must not be offered there.
+        (item) => !commandInsertsPlainText(item) || triggerIsLeading
+      ),
+    [allItems, filterQuery, triggerIsLeading]
   );
 
   // Keep the highlighted row valid as the filtered list changes.
@@ -308,6 +339,14 @@ export function useCommandSuggestion({
         const hit = findSlashTrigger(value, cursorPos, getTokens());
         if (!hit) return;
         triggerIndex = hit.triggerIndex;
+      }
+
+      // Backstop for the items filter (e.g. a stale list raced the value):
+      // a client-handled command must never insert at a non-leading trigger —
+      // the interception would not fire on the resulting mid-text plain text.
+      if (commandInsertsPlainText(target) && !isLeadingSlashTrigger(value, triggerIndex)) {
+        closeInternal();
+        return;
       }
 
       const insertion = buildCommandInsertion(value, triggerIndex, cursorPos, target.trigger);

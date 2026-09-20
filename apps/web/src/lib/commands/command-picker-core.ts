@@ -35,6 +35,19 @@ export function commandInsertsPlainText(item: CommandSuggestionItem): boolean {
 }
 
 /**
+ * Whether the `/` at `triggerIndex` is LEADING: everything before it is
+ * whitespace (so a trigger after a newline still counts — the composer's
+ * pre-send gate tests the trimmed value, meaning the first non-whitespace
+ * character decides). Client-handled commands are only offered/selectable at
+ * a leading trigger: inserted mid-text they stay plain text, the composer's
+ * interception never matches, and the message would go out as an ordinary
+ * primary-chat message instead of firing the command.
+ */
+export function isLeadingSlashTrigger(value: string, triggerIndex: number): boolean {
+  return value.slice(0, triggerIndex).trim().length === 0;
+}
+
+/**
  * Filter + rank per spec §1.4: empty query lists everything ordered
  * builtin → personal → drive, alphabetical within scope. With a query,
  * trigger-prefix matches rank first, then trigger substring, then description

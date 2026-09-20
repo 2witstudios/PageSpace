@@ -1,6 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, cleanup } from '@testing-library/react';
 import React from 'react';
+
+// Records the props ChatInput forwards to ChatTextarea so tests can assert
+// the client-handled-command capability gate wiring.
+const chatTextareaProps = vi.hoisted(() => ({ last: null as Record<string, unknown> | null }));
 
 vi.mock('@/stores/useAssistantSettingsStore', () => ({
   useAssistantSettingsStore: (selector: (s: unknown) => unknown) =>
@@ -36,25 +40,25 @@ vi.mock('@/hooks/useMobileKeyboard', () => ({
 }));
 
 vi.mock('../ChatTextarea', () => ({
-  ChatTextarea: ({
-    value,
-    onSend,
-    disabled,
-  }: {
-    value: string;
-    onSend: () => void;
-    disabled?: boolean;
-  }) => (
-    <textarea
-      data-testid="chat-textarea"
-      value={value}
-      disabled={disabled}
-      readOnly
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' && !e.shiftKey) onSend();
-      }}
-    />
-  ),
+  ChatTextarea: (props: Record<string, unknown>) => {
+    chatTextareaProps.last = props;
+    const { value, onSend, disabled } = props as {
+      value: string;
+      onSend: () => void;
+      disabled?: boolean;
+    };
+    return (
+      <textarea
+        data-testid="chat-textarea"
+        value={value}
+        disabled={disabled}
+        readOnly
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && !e.shiftKey) onSend();
+        }}
+      />
+    );
+  },
 }));
 
 vi.mock('../InputActions', () => ({
@@ -152,5 +156,16 @@ describe('ChatInput /btw interception', () => {
   it('keeps the send button disabled while streaming — Enter is the /btw path', () => {
     setup({ value: '/btw what changed?', isStreaming: true, onSideQuestion: vi.fn() });
     expect((screen.getByTestId('input-send') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('enables client-handled command suggestions only when the side-question handler is wired', () => {
+    // ChatInput owns the interception gate, so it must open the picker's /btw
+    // offer exactly when onSideQuestion is present; ChannelInput-style
+    // surfaces (no handler) never see the command in the picker.
+    setup({ value: '', isStreaming: false, onSideQuestion: vi.fn() });
+    expect(chatTextareaProps.last?.allowClientHandledCommands).toBe(true);
+    cleanup();
+    setup({ value: '', isStreaming: false });
+    expect(chatTextareaProps.last?.allowClientHandledCommands).toBe(false);
   });
 });
