@@ -99,7 +99,13 @@ const CLAIM_FANOUT_WINDOW_MS = 5;
  * The queue survives reloads (streams do — the queue must too). Every
  * mutation persists via the facade; on mount the persisted entries are
  * restored with the ids they were minted with, so the post-reload dispatch is
- * idempotent against the server's upsert-by-id.
+ * idempotent against the server's upsert-by-id. The restore then RECONCILES:
+ * an end that fired before this subscription — inside the reload window, or
+ * while the surface was unmounted — is never replayed by the registry, so the
+ * mount itself synthesizes the one drain trigger the restored queue has been
+ * owed. The usual guards still gate it: a stream still live for the
+ * conversation and a manual send's TTFB window each defer to their own end
+ * event, which is a trigger this hook observes like any other.
  */
 export function useQueuedSends({
   conversationId,
@@ -146,7 +152,7 @@ export function useQueuedSends({
   // releases it; a co-mounted instance's mount must not.
   const tookClaimTokenRef = useRef<number | null>(null);
 
-  const tryDrain = useCallback((endedConversationId: string, endedMessageId: string): void => {
+  const tryDrain = useCallback((endedConversationId: string, endedMessageId?: string): void => {
     // 1. Suppression (double-ESC): the pending drain is CANCELLED — consume
     //    the latch, release any claim (the ended stream is over regardless)
     //    and dispatch nothing.
@@ -208,11 +214,18 @@ export function useQueuedSends({
     });
   }, [conversationId, tryDrain]);
 
-  // Restore on mount / conversation change, preserving persisted ids.
+  // Restore on mount / conversation change, preserving persisted ids — then
+  // reconcile. The registry never replays an end that fired BEFORE this
+  // subscription (the stream ended inside the reload window, or while this
+  // surface was unmounted), so a restored queue with nothing live and no
+  // manual turn in flight would otherwise wait for a trigger that may never
+  // come. Draining here is the same trigger, synthesized once at mount: the
+  // claim, live-stream and `submitted` guards all still apply.
   useEffect(() => {
     if (!conversationId) return;
     conversationMessagesActions.setQueuedSends(conversationId, readPersistedQueuedSends(conversationId));
-  }, [conversationId]);
+    tryDrain(conversationId);
+  }, [conversationId, tryDrain]);
 
   // Unmount: release only the claim THIS instance took, so a remount starts
   // clean and a surface gone mid-turn cannot leave the drain wedged.
@@ -292,8 +305,11 @@ const drainSuppressions = new Set<string>();
  * Whether ANY other stream — own or remote — is still live for the
  * conversation, excluding the one that just ended. Read fresh from the store
  * at listener time; see the docblock for why a render mirror is wrong here.
+ *
+ * Called without an `endedMessageId` by the mount reconciliation, where there
+ * is no ended session to exempt — ANY live stream for the conversation blocks.
  */
-const hasOtherLiveStream = (conversationId: string, endedMessageId: string): boolean => {
+const hasOtherLiveStream = (conversationId: string, endedMessageId?: string): boolean => {
   for (const stream of usePendingStreamsStore.getState().streams.values()) {
     if (stream.conversationId !== conversationId) continue;
     if (stream.messageId === endedMessageId) continue;

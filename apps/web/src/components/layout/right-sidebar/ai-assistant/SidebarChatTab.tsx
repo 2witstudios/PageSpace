@@ -687,7 +687,6 @@ const SidebarChatTab: React.FC = () => {
   // end, FIFO; manual sends/retries take precedence via the status guard.
   const {
     queuedSends,
-    queueCount,
     isQueueFull,
     enqueue: enqueueQueuedSend,
     remove: removeQueuedSend,

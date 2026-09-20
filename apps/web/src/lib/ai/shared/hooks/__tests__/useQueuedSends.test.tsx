@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import type { UIMessage } from 'ai';
 import { useQueuedSends } from '../useQueuedSends';
@@ -71,7 +71,7 @@ describe('useQueuedSends', () => {
     resetStreamSessionRegistry();
   });
 
-  const mount = (options?: { status?: ChatSessionStatus; dispatch?: (m: UIMessage) => unknown }) => {
+  const mount = (options?: { status?: ChatSessionStatus; dispatch?: Mock }) => {
     const dispatch = options?.dispatch ?? vi.fn();
     let status = options?.status ?? 'ready';
     const hook = renderHook(
@@ -132,7 +132,7 @@ describe('useQueuedSends', () => {
     expect(hook.result.current.queueCount).toBe(0);
   });
 
-  it('restore on mount preserves the persisted ids (idempotent re-dispatch)', () => {
+  it('restore on mount preserves the persisted ids (idempotent re-dispatch)', async () => {
     persistQueuedSends(CONV, [
       { id: 'persisted-1', role: 'user', parts: [{ type: 'text', text: 'first' }] },
       { id: 'persisted-2', role: 'user', parts: [{ type: 'text', text: 'second' }] },
@@ -140,12 +140,58 @@ describe('useQueuedSends', () => {
 
     const { hook, dispatch } = mount();
 
-    expect(hook.result.current.queuedSends.map((m) => m.id)).toEqual(['persisted-1', 'persisted-2']);
-
-    // And the drained dispatch carries the SAME ids — the idempotency backbone.
-    fireEnd('turn-1', CONV);
+    // The registry never replays an end that fired before this subscription,
+    // so the restored queue drains AT MOUNT, oldest first, with the id it was
+    // persisted with — the idempotency backbone (the server upserts by id).
     expect(dispatch).toHaveBeenCalledTimes(1);
     expect((dispatch.mock.calls[0][0] as UIMessage).id).toBe('persisted-1');
+    expect(hook.result.current.queuedSends.map((m) => m.id)).toEqual(['persisted-2']);
+
+    // And the drained turn's own terminal releases the claim and drains the
+    // next entry, still with its persisted id.
+    await new Promise((r) => setTimeout(r, 10));
+    fireEnd('turn-2', CONV);
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    expect((dispatch.mock.calls[1][0] as UIMessage).id).toBe('persisted-2');
+  });
+
+  it('a restored queue dispatches at mount without any later end event', () => {
+    persistQueuedSends(CONV, [
+      { id: 'persisted-1', role: 'user', parts: [{ type: 'text', text: 'owed a drain' }] },
+    ] as UIMessage[]);
+
+    const { hook, dispatch } = mount();
+
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(msgText(dispatch.mock.calls[0][0] as UIMessage)).toBe('owed a drain');
+    expect(hook.result.current.queueCount).toBe(0);
+  });
+
+  it('mount reconciliation still waits behind a live stream', () => {
+    persistQueuedSends(CONV, [
+      { id: 'persisted-1', role: 'user', parts: [{ type: 'text', text: 'waiting' }] },
+    ] as UIMessage[]);
+    addLiveStream('still-live', CONV);
+
+    const { dispatch } = mount();
+    expect(dispatch).not.toHaveBeenCalled();
+
+    // The live stream's own terminal is the trigger that drains it.
+    fireEnd('still-live', CONV);
+    expect(dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('mount reconciliation still waits out a manual send TTFB window', () => {
+    persistQueuedSends(CONV, [
+      { id: 'persisted-1', role: 'user', parts: [{ type: 'text', text: 'waiting' }] },
+    ] as UIMessage[]);
+
+    const { dispatch, setStatus } = mount({ status: 'submitted' });
+    expect(dispatch).not.toHaveBeenCalled();
+
+    setStatus('ready');
+    fireEnd('turn-1', CONV);
+    expect(dispatch).toHaveBeenCalledTimes(1);
   });
 
   it('never dispatches while another stream is live — the queued dispatch waits', () => {
