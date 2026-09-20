@@ -12,6 +12,7 @@ import {
 import {
   filterAndRankCommands,
   resolveSelectionTarget,
+  commandInsertsPlainText,
   type CommandSuggestionItem,
 } from '@/lib/commands/command-picker-core';
 import { resolvePickerKeyAction } from '@/lib/commands/picker-keyboard';
@@ -312,14 +313,20 @@ export function useCommandSuggestion({
       const insertion = buildCommandInsertion(value, triggerIndex, cursorPos, target.trigger);
 
       // Mirror the mention insertion order: register the token, then propagate
-      // the value, then restore caret + focus (spec §2.1).
-      onTokenInserted({
-        start: insertion.token.start,
-        end: insertion.token.end,
-        label: target.trigger,
-        id: target.id,
-        type: COMMAND_TOKEN_TYPE,
-      });
+      // the value, then restore caret + focus (spec §2.1) — except for
+      // client-handled commands (/btw): the composer intercepts the literal
+      // `/trigger ` text before send, and a tracked chip would serialize to
+      // `/[trigger](id:command)` on send and never match that interception.
+      // Plain text keeps the exact behavior typing /btw by hand produces.
+      if (!commandInsertsPlainText(target)) {
+        onTokenInserted({
+          start: insertion.token.start,
+          end: insertion.token.end,
+          label: target.trigger,
+          id: target.id,
+          type: COMMAND_TOKEN_TYPE,
+        });
+      }
       onValueChange(insertion.newValue);
       prevValueRef.current = insertion.newValue;
       element.setSelectionRange(insertion.newCursorPos, insertion.newCursorPos);

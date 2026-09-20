@@ -22,6 +22,8 @@ interface CommandSuggestion {
   shadows?: CommandScope;
   /** Set on a shadowed (losing) command: the scope of the command that wins. */
   shadowedBy?: CommandScope;
+  /** The composer handles this command client-side — insert plain text, not a chip. */
+  clientHandled?: boolean;
 }
 
 // GET /api/commands/suggest?q=&driveId= - precedence-resolved merged command
@@ -93,6 +95,7 @@ export async function GET(request: Request) {
         description: winner.description,
         scope: winner.scope,
         ...(winner.shadows !== undefined ? { shadows: winner.shadows } : {}),
+        ...(winner.clientHandled ? { clientHandled: true } : {}),
       })),
       ...shadowedRanked.map((command) => ({
         id: command.id,

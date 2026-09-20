@@ -18,9 +18,21 @@ export interface CommandSuggestionItem {
   shadows?: CommandScope;
   /** Set on a shadowed (losing) command: the scope of the command that wins. */
   shadowedBy?: CommandScope;
+  /** Composer-handled command (e.g. /btw): selection inserts plain text, not a chip. */
+  clientHandled?: boolean;
 }
 
 const SCOPE_ORDER: Record<CommandScope, number> = { builtin: 0, user: 1, drive: 2 };
+
+/**
+ * A client-handled command (e.g. /btw) must insert as PLAIN TEXT: the
+ * composer's pre-send interception matches the literal `/trigger ` — a
+ * tracked command chip would serialize to `/[trigger](id:command)` and never
+ * fire. Selection skips token registration for exactly these items.
+ */
+export function commandInsertsPlainText(item: CommandSuggestionItem): boolean {
+  return item.clientHandled === true;
+}
 
 /**
  * Filter + rank per spec §1.4: empty query lists everything ordered

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   filterAndRankCommands,
+  commandInsertsPlainText,
   resolveSelectionTarget,
   scopeBadgeLabel,
   scopeAnnouncement,
@@ -139,5 +140,30 @@ describe('copy helpers', () => {
     expect(NO_COMMANDS_EMPTY_STATE).toBe(
       'No commands yet. Create one in Settings → AI Settings → Commands.'
     );
+  });
+});
+
+describe('client-handled commands (/btw)', () => {
+  const btwItem: CommandSuggestionItem = item({
+    id: 'builtin:btw',
+    trigger: 'btw',
+    scope: 'builtin',
+    description: 'Ask a side question without interrupting the run',
+    clientHandled: true,
+  });
+
+  it('inserts plain text only for clientHandled suggestions', () => {
+    expect(commandInsertsPlainText(btwItem)).toBe(true);
+    expect(commandInsertsPlainText(item({ trigger: 'help', scope: 'builtin' }))).toBe(false);
+  });
+
+  it('surfaces /btw for the b-prefix query ahead of drive commands', () => {
+    const result = filterAndRankCommands([...list, btwItem], 'b');
+    expect(result.map((i) => i.trigger)).toContain('btw');
+    expect(result[0]?.trigger).toBe('btw');
+  });
+
+  it('resolves a /btw selection to itself', () => {
+    expect(resolveSelectionTarget([...list, btwItem], btwItem)).toBe(btwItem);
   });
 });
