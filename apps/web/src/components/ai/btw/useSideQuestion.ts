@@ -4,6 +4,17 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useStreamingRegistration } from '@/lib/ai/shared';
 
+/**
+ * Extract the question from a `/btw question` composer line, or null when the
+ * value is not a side question (no trigger, a bare `/btw` with no question,
+ * or text before the trigger). The single parse for every wired surface —
+ * ChatInput's send gate already requires `/^\/btw\s+\S/`, so this and the
+ * gate cannot drift if surfaces share this function.
+ */
+export function parseSideQuestionInput(value: string): string | null {
+  return /^\/btw\s+(\S.*)$/.exec(value.trim())?.[1] ?? null;
+}
+
 export interface SideQuestionRequest {
   requestId: string;
   controller: AbortController;

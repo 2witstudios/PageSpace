@@ -31,7 +31,7 @@ import { Conversation, ConversationScrollButton } from '@/components/ai/ui/conve
 import { SidebarMessagesContent } from '@/components/layout/right-sidebar/ai-assistant/SidebarChatTab';
 import { hasVisionCapability } from '@/lib/ai/core/vision-models';
 import { useOpenPagePane } from '@/lib/ai/shared/hooks/useOpenPagePane';
-import { useSideQuestion } from '@/components/ai/btw/useSideQuestion';
+import { useSideQuestion, parseSideQuestionInput } from '@/components/ai/btw/useSideQuestion';
 import { SideQuestionCard } from '@/components/ai/btw/SideQuestionCard';
 import type { AgentInfo } from '@/types/agent';
 import { useAgentSessionChat, type UseAgentSessionChatReturn } from './useAgentSessionChat';
@@ -135,7 +135,7 @@ export function SessionChatView({
   }, [input, chat]);
 
   const handleSideQuestion = useCallback(() => {
-    const question = input.trim().replace(/^\/btw\s+/, '');
+    const question = parseSideQuestionInput(input) ?? '';
     if (!question) return;
     setInput('');
     void sideQuestion.ask(question);

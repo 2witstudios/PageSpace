@@ -87,6 +87,8 @@ import {
   type ChatLayoutRef,
 } from '@/components/ai/chat/layouts';
 import { ChatInput, type ChatInputRef } from '@/components/ai/chat/input';
+import { useSideQuestion, parseSideQuestionInput } from '@/components/ai/btw/useSideQuestion';
+import { SideQuestionCard } from '@/components/ai/btw/SideQuestionCard';
 import { useImageAttachments } from '@/lib/ai/shared/hooks/useImageAttachments';
 import { hasVisionCapability } from '@/lib/ai/core/vision-models';
 import { DEFAULT_PROVIDER } from '@/lib/ai/core/ai-providers-config';
@@ -187,6 +189,16 @@ const GlobalAssistantView: React.FC = () => {
   // SHARED HOOKS
   // ============================================
   const currentConversationId = selectedAgent ? agentConversationId : globalConversationId;
+
+  // Detached /btw side question (#2678 contract): independent of the primary
+  // useChat lifecycle and activeStreamId; no persistence, ephemeral card.
+  const sideQuestion = useSideQuestion(currentConversationId ?? '');
+  const handleSideQuestion = useCallback(() => {
+    const question = parseSideQuestionInput(input);
+    if (!question || !currentConversationId) return;
+    setInput('');
+    void sideQuestion.ask(question);
+  }, [input, currentConversationId, sideQuestion]);
 
   // The switcher is the voice switcher — see the twin of this comment in
   // SidebarChatTab. Records an intent on the explicit act; navigation records
@@ -1078,11 +1090,15 @@ const GlobalAssistantView: React.FC = () => {
         remoteStreams={remoteStreams}
         renderInput={(props) => (
           <>
+            {sideQuestion.state && (
+              <SideQuestionCard state={sideQuestion.state} onDismiss={sideQuestion.dismiss} />
+            )}
             <ChatInput
               ref={inputRef}
               value={props.value}
               onChange={props.onChange}
               onSend={props.onSend}
+              onSideQuestion={handleSideQuestion}
               onStop={props.onStop}
               isStreaming={props.isStreaming}
               isStopping={props.isStopping}
