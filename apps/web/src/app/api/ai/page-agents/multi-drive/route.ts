@@ -3,15 +3,16 @@ import { authenticateRequestWithOptions, isAuthError, getAllowedDriveIds, getPri
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
 import { db } from '@pagespace/db/db'
-import { eq, and, inArray, isNotNull } from '@pagespace/db/operators'
+import { eq, and, inArray } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
-import { driveMembers, driveRoles } from '@pagespace/db/schema/members';
+import { driveRoles } from '@pagespace/db/schema/members';
 import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
 import { isLocalEnvsEnabled } from '@pagespace/lib/services/drive-envs/local-envs-enabled';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { computeSandboxEligibilityByDrive, resolveEditableDriveIds } from './sandbox-eligibility-by-drive';
+import { computeSandboxEligibilityByDrive, membershipRowsOf, resolveEditableDriveIds } from './sandbox-eligibility-by-drive';
+import { loadDriveRelationships } from '@pagespace/lib/permissions/drive-relationship-loader';
 
 interface AgentSummary {
   id: string;
@@ -55,7 +56,7 @@ export async function GET(request: Request) {
 
     // Get all drives
     const allDrives = await db
-      .select({ id: drives.id, name: drives.name, slug: drives.slug, ownerId: drives.ownerId })
+      .select({ id: drives.id, name: drives.name, slug: drives.slug, ownerId: drives.ownerId, orgId: drives.orgId, orgVisibility: drives.orgVisibility })
       .from(drives)
       .where(eq(drives.isTrashed, false));
 
@@ -87,13 +88,8 @@ export async function GET(request: Request) {
     // unresolvable role fails closed, and ADMINs bypass custom roles —
     // otherwise a view-only custom-role member sees an enabled Shell item
     // that provisioning then rejects with insufficient_role.
-    const accessibleDriveIds = accessibleDrives.map((d) => d.id);
-    const membershipRows = accessibleDriveIds.length
-      ? await db
-          .select({ driveId: driveMembers.driveId, role: driveMembers.role, customRoleId: driveMembers.customRoleId })
-          .from(driveMembers)
-          .where(and(eq(driveMembers.userId, userId), inArray(driveMembers.driveId, accessibleDriveIds), isNotNull(driveMembers.acceptedAt)))
-      : [];
+    // The org-aware memberships, batched (one rows query plus the shared resolver's org queries).
+    const membershipRows = membershipRowsOf(await loadDriveRelationships(userId, accessibleDrives));
     const customRoleIds = Array.from(
       new Set(membershipRows.filter((row) => row.role !== 'ADMIN' && row.customRoleId).map((row) => row.customRoleId as string)),
     );
