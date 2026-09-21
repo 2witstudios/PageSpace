@@ -16,7 +16,7 @@ import { z } from 'zod';
 import { streamText, stepCountIs, type ModelMessage, type Tool, type UIMessageChunk, type UIMessageStreamWriter } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
 import { assert } from './riteway';
-import { runAgentWithRetry } from '../run-agent-with-retry';
+import { runAgentWithRetry, type AgentStreamResult } from '../run-agent-with-retry';
 
 type DoStream = MockLanguageModelV3['doStream'];
 type StreamPart =
@@ -256,6 +256,51 @@ describe('runAgentWithRetry — abort mid-step (real ai@6 stream)', () => {
         abortedStep: result.abortedStep,
       },
       expected: { inputTokens: 800, outputTokens: 30, abortedStep: undefined },
+    });
+  });
+});
+
+describe('runAgentWithRetry — abort racing a step\'s finish', () => {
+  it('does not estimate a step the SDK already recorded with provider usage', async () => {
+    // The abort landed after ai@6 recorded the step (so `steps` carries its usage) but
+    // before its finish-step chunk reached the UI stream — a real, narrow window.
+    const stop = new AbortController();
+    stop.abort();
+    const chunks: UIMessageChunk[] = [];
+    const writer = { write: (c: UIMessageChunk) => chunks.push(c) } as unknown as UIMessageStreamWriter;
+    const recordedUsage = { inputTokens: 1000, outputTokens: 50, totalTokens: 1050 };
+    const result = await runAgentWithRetry({
+      writer,
+      abortSignal: stop.signal,
+      baseMessages,
+      buildStreamText: () =>
+        ({
+          toUIMessageStream: () =>
+            (async function* () {
+              yield { type: 'start-step' } as UIMessageChunk;
+              yield { type: 'text-delta', id: 't', delta: 'the whole answer' } as UIMessageChunk;
+            })(),
+          finishReason: Promise.resolve('stop'),
+          response: Promise.resolve({ messages: [] }),
+          steps: Promise.resolve([{ usage: recordedUsage }]),
+          totalUsage: Promise.resolve({}),
+        }) as unknown as AgentStreamResult,
+      finishToolName: 'finish',
+      maxSteps: 5,
+      startTimeMs: Date.now(),
+      backoffMs: () => 0,
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    assert({
+      given: 'an aborted run whose open step is already in `steps` with provider usage',
+      should: 'bill that usage once and estimate nothing on top',
+      actual: {
+        inputTokens: result.accumulatedUsage?.inputTokens,
+        outputTokens: result.accumulatedUsage?.outputTokens,
+        abortedStep: result.abortedStep,
+      },
+      expected: { inputTokens: 1000, outputTokens: 50, abortedStep: undefined },
     });
   });
 });

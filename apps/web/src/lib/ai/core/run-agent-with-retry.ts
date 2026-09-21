@@ -223,6 +223,7 @@ export async function runAgentWithRetry(
     // Which step is streaming, and what it has produced so far — read only if an abort
     // lands mid-step (see AbortedStepEstimate).
     let stepOpen = false;
+    let finishedStepChunks = 0;
     let inFlightOutput = '';
     const streamedToolInputs = new Set<string>();
     // We only ever retry attempts that streamed NO content (see classifyAttempt:
@@ -251,6 +252,7 @@ export async function runAgentWithRetry(
               break;
             case 'finish-step':
               stepOpen = false;
+              finishedStepChunks++;
               break;
             case 'text-delta':
             case 'reasoning-delta':
@@ -301,7 +303,10 @@ export async function runAgentWithRetry(
     accumulatedSteps.push(...steps);
     accumulatedUsage = mergeUsage(accumulatedUsage, attemptUsage);
 
-    if (abortSignal.aborted && stepOpen) {
+    // The SDK records a step before its `finish-step` chunk reaches us, so an abort
+    // landing in between leaves the step "open" here while `steps` already bills it
+    // from provider usage. Estimate only a step the SDK has not recorded.
+    if (abortSignal.aborted && stepOpen && steps.length <= finishedStepChunks) {
       const priorStepUsage = (steps.at(-1) as { usage?: LanguageModelUsage } | undefined)?.usage;
       abortedStep = {
         promptText: messagesText(baseMessages),
