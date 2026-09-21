@@ -9,6 +9,12 @@ import { assert } from './riteway';
  * can stage them for corroboration.
  */
 
+const mockGetMemberDriveIds = vi.fn(async (_userId: string, _options: { includeTrashed: boolean }) => ['drive-1']);
+// The one member-drive set (org-aware; owned drives plus accepted rows while dark).
+vi.mock('@pagespace/lib/permissions/member-drives', () => ({
+  getMemberDriveIds: (userId: string, options: { includeTrashed: boolean }) => mockGetMemberDriveIds(userId, options),
+}));
+
 const mockDbSelect = vi.fn();
 vi.mock('@pagespace/db/db', () => ({
   db: { select: (...args: unknown[]) => mockDbSelect(...args) },
@@ -137,6 +143,24 @@ describe('runDiscoveryPasses', () => {
       should: 'return no claims and not call the model at all',
       actual: { claims: result.claims, modelCalls: mockGenerateObject.mock.calls.length },
       expected: { claims: [], modelCalls: 0 },
+    });
+  });
+
+  it('DRV-5 (partial) X-6 (partial) scopes page-agent messages and activity to the org-aware member-drive set, never a drive_members read of its own', async () => {
+    setupDb(messages(10));
+    mockGenerateObject.mockResolvedValue({
+      object: { claims: [] },
+      usage: { inputTokens: 10, outputTokens: 5 },
+    });
+
+    const { runDiscoveryPasses } = await import('../discovery-service');
+    await runDiscoveryPasses('user-org-member');
+
+    assert({
+      given: 'a user whose member drives come from the permissions layer',
+      should: 'ask getMemberDriveIds (trash included, as before) for both the message and the activity scope',
+      actual: mockGetMemberDriveIds.mock.calls,
+      expected: [['user-org-member', { includeTrashed: true }], ['user-org-member', { includeTrashed: true }]],
     });
   });
 

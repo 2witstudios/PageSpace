@@ -10,10 +10,10 @@
 
 import { generateObject } from 'ai';
 import { db } from '@pagespace/db/db';
-import { and, desc, eq, gte, inArray, isNotNull, ne } from '@pagespace/db/operators';
+import { and, desc, eq, gte, inArray, ne } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { activityLogs } from '@pagespace/db/schema/monitoring';
-import { driveMembers } from '@pagespace/db/schema/members';
+import { getMemberDriveIds } from '@pagespace/lib/permissions/member-drives';
 import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
 import { BACKGROUND_HEAVY_PROVIDER, BACKGROUND_HEAVY_MODEL } from '@/lib/ai/core/ai-providers-config';
@@ -213,11 +213,8 @@ async function gatherRecentConversations(
   );
 
   // Page agent conversations via drive membership.
-  const userDrives = await db
-    .select({ driveId: driveMembers.driveId })
-    .from(driveMembers)
-    .where(and(eq(driveMembers.userId, userId), isNotNull(driveMembers.acceptedAt)));
-  const driveIds = userDrives.map((d) => d.driveId);
+  // The drives the user is a member of, owned or joined (org-aware).
+  const driveIds = await getMemberDriveIds(userId, { includeTrashed: true });
 
   if (driveIds.length > 0) {
     const pageMessages = await db
@@ -265,11 +262,8 @@ async function gatherRecentActivity(
   const lookbackDate = new Date();
   lookbackDate.setDate(lookbackDate.getDate() - lookbackDays);
 
-  const userDrives = await db
-    .select({ driveId: driveMembers.driveId })
-    .from(driveMembers)
-    .where(and(eq(driveMembers.userId, userId), isNotNull(driveMembers.acceptedAt)));
-  const driveIds = userDrives.map((d) => d.driveId);
+  // The drives the user is a member of, owned or joined (org-aware).
+  const driveIds = await getMemberDriveIds(userId, { includeTrashed: true });
 
   if (driveIds.length === 0) return [];
 
