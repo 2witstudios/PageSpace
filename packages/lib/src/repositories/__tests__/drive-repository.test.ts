@@ -4,6 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Mocks
 // ---------------------------------------------------------------------------
 
+vi.mock('../../permissions/drive-relationship-loader', () => ({ loadDriveLeadAuthority: vi.fn() }));
 vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
@@ -26,6 +27,7 @@ vi.mock('@pagespace/db/operators', () => ({
 // ---------------------------------------------------------------------------
 
 import { driveRepository } from '../drive-repository';
+import { loadDriveLeadAuthority } from '../../permissions/drive-relationship-loader';
 import { db } from '@pagespace/db/db';
 
 // ---------------------------------------------------------------------------
@@ -103,29 +105,27 @@ describe('driveRepository.findByIdBasic', () => {
 });
 
 // ---------------------------------------------------------------------------
-// findByIdAndOwner
+// findByIdForLeadAction
 // ---------------------------------------------------------------------------
-describe('driveRepository.findByIdAndOwner', () => {
+describe('driveRepository.findByIdForLeadAction', () => {
   beforeEach(() => { vi.clearAllMocks(); });
 
-  it('returns drive when found for given owner', async () => {
+  it('returns the drive when loadDriveLeadAuthority allows the action', async () => {
     vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRecord as never);
+    vi.mocked(loadDriveLeadAuthority).mockResolvedValueOnce({ allowed: true, via: 'org-admin', orgId: 'org-1' });
 
-    const result = await driveRepository.findByIdAndOwner('drive-1', 'user-1');
-    expect(result).toEqual(driveRecord);
+    expect(await driveRepository.findByIdForLeadAction('drive-1', 'priya', 'restore')).toEqual(driveRecord);
+    expect(loadDriveLeadAuthority).toHaveBeenCalledWith('priya', driveRecord, 'restore');
   });
 
-  it('returns null/undefined when drive not found', async () => {
-    vi.mocked(db.query.drives.findFirst).mockResolvedValue(undefined as never);
+  it('returns null when the drive is missing or the authority refuses', async () => {
+    vi.mocked(db.query.drives.findFirst).mockResolvedValueOnce(undefined as never);
+    expect(await driveRepository.findByIdForLeadAction('drive-1', 'u', 'restore')).toBeNull();
+    expect(loadDriveLeadAuthority).not.toHaveBeenCalled();
 
-    const result = await driveRepository.findByIdAndOwner('drive-1', 'wrong-user');
-    expect(result).toBeFalsy();
-  });
-
-  it('returns null for anyone but the drive\'s lead (isDriveLead), an org Owner or Admin included', async () => {
-    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRecord as never);
-
-    expect(await driveRepository.findByIdAndOwner('drive-1', 'someone-else')).toBeNull();
+    vi.mocked(db.query.drives.findFirst).mockResolvedValueOnce(driveRecord as never);
+    vi.mocked(loadDriveLeadAuthority).mockResolvedValueOnce({ allowed: false });
+    expect(await driveRepository.findByIdForLeadAction('drive-1', 'nina', 'restore')).toBeNull();
   });
 });
 

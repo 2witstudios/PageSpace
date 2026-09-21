@@ -9,7 +9,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { deleteConversationsForDrive } from '@pagespace/lib/repositories/conversation-cleanup';
-import { isDriveLead } from '@pagespace/lib/permissions/drive-relationship';
+import { loadDriveLeadAuthority } from '@pagespace/lib/permissions/drive-relationship-loader';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -28,11 +28,11 @@ export async function DELETE(
     if (isAuthError(auth)) return auth.error;
     const userId = auth.userId;
 
-    // Find the drive and verify ownership: permanent deletion is lead-only (drives.ownerId)
+    // Permanent deletion takes lead authority: the lead, or on an org drive an org Owner/Admin (audited)
     const found = await db.query.drives.findFirst({
       where: eq(drives.id, driveId),
     });
-    const drive = found && isDriveLead(userId, found) ? found : undefined;
+    const drive = found && (await loadDriveLeadAuthority(userId, found, 'permanent_delete')).allowed ? found : undefined;
 
     if (!drive) {
       return NextResponse.json({ error: 'Drive not found or access denied' }, { status: 404 });

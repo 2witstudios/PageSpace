@@ -1,3 +1,4 @@
+import { recordOrgPowerDriveAction } from '@pagespace/lib/permissions/drive-relationship-loader';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getDriveById, getDriveWithAccess, updateDrive, trashDrive, isValidDriveHomePage, isValidDriveNotFoundPage } from '@pagespace/lib/services/drive-service';
@@ -163,6 +164,11 @@ export async function PATCH(
         { error: 'Only drive owners and admins can update drive settings' },
         { status: 403 }
       );
+    }
+
+    // A rename taken through org Owner/Admin power (an org drive the actor does not lead) is audited.
+    if (validatedBody.name !== undefined) {
+      await recordOrgPowerDriveAction(userId, drive, 'rename');
     }
 
     // A home page must be a non-trashed page belonging to this drive
@@ -350,6 +356,9 @@ export async function DELETE(
         { status: 403 }
       );
     }
+
+    // Trashing through org Owner/Admin power (an org drive the actor does not lead) is audited.
+    await recordOrgPowerDriveAction(userId, drive, 'trash');
 
     // Get recipients BEFORE trashing (ensures we have valid member list)
     const recipientUserIds = await getDriveRecipientUserIds(driveId);

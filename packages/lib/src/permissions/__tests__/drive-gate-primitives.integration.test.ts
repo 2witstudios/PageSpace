@@ -16,7 +16,7 @@
  * Run via:
  *   bun run --filter '@pagespace/lib' test:integration -- src/permissions/__tests__/drive-gate-primitives.integration.test.ts
  */
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, afterAll, beforeAll, vi } from 'vitest';
 import { factories } from '@pagespace/db/test/factories';
 import { db, pool } from '@pagespace/db/db';
 import { and, eq, inArray, isNotNull } from '@pagespace/db/operators';
@@ -26,7 +26,9 @@ import { driveMembers } from '@pagespace/db/schema/members';
 import { orgMembers } from '@pagespace/db/schema/organizations';
 import { getDriveAccess, listAccessibleDrives } from '../../services/drive-service';
 import { canAdministerDrive, driveRoleOf, isDriveLead, type RelationshipDrive } from '../drive-relationship';
-import { loadDriveRelationship, loadDriveRelationships } from '../drive-relationship-loader';
+import { loadDriveLeadAuthority, loadDriveRelationship, loadDriveRelationships } from '../drive-relationship-loader';
+import { resetAuditDbBindingForTests } from '../../audit/audit-db-binding';
+import { resetDefaultSecurityAuditForTests, securityAudit } from '../../audit/security-audit';
 import { getMemberDriveIds, listMemberDrives, memberOfAnyDriveCondition, sharesMemberDrive } from '../member-drives';
 import { listDriveAudiences } from '../drive-audience';
 import { cleanupNorthwind, createUser, northwind } from './fixtures/northwind-org-drives';
@@ -186,6 +188,11 @@ describe('B7c: the gate primitives agree with the canonical resolvers (integrati
     await cleanupNorthwind();
   }, 120_000);
 
+  // Each integration file gets its own pool; release it so the suite does not exhaust max_connections.
+  afterAll(async () => {
+    await pool.end();
+  });
+
   it('ORG-4 (partial) DRV-5 (partial) X-6 (partial) loadDriveRelationship(s) answer every person and drive exactly as getDriveAccess: org power, implicit Open members, stale org rows, former-lead OWNER rows, guests and pending invitations', async () => {
     flags.orgsEnabled = true;
     const f = await gateFixture();
@@ -320,5 +327,58 @@ describe('B7c: the gate primitives agree with the canonical resolvers (integrati
     const allAudiences = await countQueries(() => listDriveAudiences(f.allDrives.map((d) => d.id)));
     expect(allAudiences).toBe(oneAudience);
     expect((await getMemberDriveIds(priya, { includeTrashed: true })).length).toBe(13);
+  });
+
+  describe('lead actions (rename, trash, restore, permanent delete) on org drives', () => {
+    const AUDIT_ENV = ['ADMIN_DATABASE_URL', 'ADMIN_DB_BREAK_GLASS', 'AUDIT_TRUST_PLANE_REQUIRED'] as const;
+    const saved = new Map<string, string | undefined>();
+    const resetAudit = () => { resetAuditDbBindingForTests(); resetDefaultSecurityAuditForTests(); };
+    beforeAll(() => { for (const k of AUDIT_ENV) { saved.set(k, process.env[k]); delete process.env[k]; } resetAudit(); });
+    afterAll(() => { for (const [k, v] of saved) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } resetAudit(); });
+
+    const actionRows = async (userId: string, driveId: string, action: string) =>
+      (await securityAudit.queryEvents({ eventType: 'authz.access.granted', resourceId: driveId }))
+        .filter((r) => r.userId === userId && (r.details as { action?: string } | null)?.action === action);
+
+    it('ORG-4 (partial) the lead, an org Owner and an org Admin may take each lead-only action on every org drive, each org-power action writing its own audit row; an org MEMBER and a non-member are refused; a personal drive stays owner-only', async () => {
+      flags.orgsEnabled = true;
+      const f = await gateFixture();
+      const rel = (d: { id: string }) => f.allDrives.find((x) => x.id === d.id) as RelationshipDrive;
+      const orgDrives = [f.drives.product, f.drives.research, f.drives.finance];
+
+      for (const action of ['rename', 'trash', 'restore', 'permanent_delete'] as const) {
+        for (const drive of orgDrives) {
+          expect(await loadDriveLeadAuthority(f.people.lena.id, rel(drive), action)).toEqual({ allowed: true, via: 'lead' });
+          expect(await loadDriveLeadAuthority(f.people.jono.id, rel(drive), action)).toEqual({ allowed: true, via: 'org-owner', orgId: f.org.id });
+          expect(await loadDriveLeadAuthority(f.people.priya.id, rel(drive), action)).toEqual({ allowed: true, via: 'org-admin', orgId: f.org.id });
+          // An org MEMBER (even one holding an invited ADMIN row) and a non-member with a stale org row.
+          expect(await loadDriveLeadAuthority(f.people.nina.id, rel(drive), action)).toEqual({ allowed: false });
+          expect(await loadDriveLeadAuthority(f.people.dana.id, rel(drive), action)).toEqual({ allowed: false });
+        }
+        expect(await loadDriveLeadAuthority(f.people.marcus.id, rel(f.drives.personal), action)).toEqual({ allowed: true, via: 'lead' });
+        expect(await loadDriveLeadAuthority(f.people.priya.id, rel(f.drives.personal), action)).toEqual({ allowed: false });
+        expect(await loadDriveLeadAuthority(f.people.nina.id, rel(f.drives.personal), action)).toEqual({ allowed: false }); // invited ADMIN on a personal drive
+      }
+
+      // One row per org-power action, on every visibility; none for the lead or for a refusal.
+      for (const drive of orgDrives) {
+        for (const action of ['rename', 'trash', 'restore', 'permanent_delete']) {
+          expect(await actionRows(f.people.jono.id, drive.id, action)).toHaveLength(1);
+          expect(await actionRows(f.people.priya.id, drive.id, action)).toHaveLength(1);
+          expect(await actionRows(f.people.lena.id, drive.id, action)).toHaveLength(0);
+          expect(await actionRows(f.people.nina.id, drive.id, action)).toHaveLength(0);
+        }
+      }
+      const [row] = await actionRows(f.people.priya.id, f.drives.finance.id, 'rename');
+      expect(row.details).toEqual(expect.objectContaining({ via: 'org_admin', orgId: f.org.id, orgVisibility: 'PRIVATE' }));
+    });
+
+    it('while ORGS_ENABLED is false only the drive lead may take a lead-only action', async () => {
+      const f = await gateFixture();
+      const finance = f.allDrives.find((d) => d.id === f.drives.finance.id) as RelationshipDrive;
+      expect(await loadDriveLeadAuthority(f.people.lena.id, finance, 'rename')).toEqual({ allowed: true, via: 'lead' });
+      expect(await loadDriveLeadAuthority(f.people.jono.id, finance, 'rename')).toEqual({ allowed: false });
+      expect(await loadDriveLeadAuthority(f.people.priya.id, finance, 'rename')).toEqual({ allowed: false });
+    });
   });
 });

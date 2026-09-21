@@ -87,6 +87,7 @@ vi.mock('../actor-permissions', async (importOriginal) => {
   };
 });
 
+vi.mock('@pagespace/lib/permissions/drive-relationship-loader', () => import('@/lib/auth/__tests__/lead-authority-fake'));
 vi.mock('@/lib/canvas/publish-page', () => ({
   syncPublishedHomeRoot: vi.fn().mockResolvedValue(undefined),
 }));
@@ -98,6 +99,7 @@ import { getDriveById, isValidDriveHomePage, updateDrive, listAccessibleDrives }
 import { syncPublishedHomeRoot } from '@/lib/canvas/publish-page';
 import { resolveActingAgentId } from '../actor-permissions';
 import type { ToolExecutionContext } from '../../core/types';
+import { LEAD_ACTION_CASES, LEAD_ACTION_DRIVES, leadAuthority } from '@/lib/auth/__tests__/lead-authority-fake';
 
 const mockDb = vi.mocked(db);
 
@@ -446,5 +448,30 @@ describe('rename_drive — Home drive guard', () => {
         )
       ).rejects.toThrow();
     }
+  });
+});
+
+describe('rename_drive: lead authority (point-guard ruling on #2689)', () => {
+  const update = vi.fn(() => ({
+    set: () => ({ where: () => ({ returning: async () => [{ id: 'drive-1', name: 'Renamed', slug: 'renamed' }] }) }),
+  }));
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    leadAuthority.reset();
+    (mockDb as unknown as { update: typeof update }).update = update;
+  });
+
+  it.each(LEAD_ACTION_CASES)('ORG-4 (partial) $who: allowed=$allowed, audited=$audited', async ({ userId, orgRole, drive, allowed, audited }) => {
+    if (orgRole) leadAuthority.orgRoles.set(userId, orgRole);
+    mockDb.query.drives.findFirst = vi.fn().mockResolvedValue({ id: 'drive-1', name: 'Finance', slug: 'finance', kind: 'STANDARD', isTrashed: false, ...LEAD_ACTION_DRIVES[drive] });
+    const context = { toolCallId: '1', messages: [], experimental_context: { userId } as ToolExecutionContext };
+
+    const run = driveTools.rename_drive.execute!({ currentName: 'Finance', driveId: 'drive-1', name: 'Renamed' }, context);
+
+    if (allowed) await expect(run).resolves.toBeTruthy();
+    else await expect(run).rejects.toThrow('Drive not found or you do not have permission to rename it');
+    expect(update.mock.calls.length > 0).toBe(allowed);
+    expect(leadAuthority.audited).toEqual(audited ? [expect.objectContaining({ userId, driveId: 'drive-1', action: 'rename' })] : []);
   });
 });

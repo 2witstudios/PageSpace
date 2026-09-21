@@ -51,3 +51,30 @@ export function canAdministerDrive(relationship: DriveRelationship): boolean {
 export function isDriveMemberRelationship(relationship: DriveRelationship): boolean {
   return relationship.isOwner || relationship.membership !== null;
 }
+
+export type DriveLeadAuthority =
+  | { allowed: false }
+  | { allowed: true; via: 'lead' }
+  | { allowed: true; via: 'org-owner' | 'org-admin'; orgId: string };
+
+export interface DriveLeadAuthorityInput {
+  orgsEnabled: boolean;
+  userId: string;
+  drive: { ownerId: string | null | undefined; orgId: string | null };
+  /** The user's role in drive.orgId; null when not a member or the drive has no org. */
+  orgRole: 'OWNER' | 'ADMIN' | 'MEMBER' | null;
+}
+
+/**
+ * Who may take a lead-only action on a drive (rename, restore, permanent deletion). On a personal
+ * drive: its owner only. On an org-owned drive: its lead, and also an org Owner or Admin (ORG-4:
+ * full access on every org-owned drive; DRV-1: the human lead keeps the Owner role). The org-power
+ * answers name themselves so the caller writes the audit event.
+ */
+export function decideDriveLeadAuthority({ orgsEnabled, userId, drive, orgRole }: DriveLeadAuthorityInput): DriveLeadAuthority {
+  if (isDriveLead(userId, drive)) return { allowed: true, via: 'lead' };
+  if (!orgsEnabled || drive.orgId === null) return { allowed: false };
+  if (orgRole === 'OWNER') return { allowed: true, via: 'org-owner', orgId: drive.orgId };
+  if (orgRole === 'ADMIN') return { allowed: true, via: 'org-admin', orgId: drive.orgId };
+  return { allowed: false };
+}

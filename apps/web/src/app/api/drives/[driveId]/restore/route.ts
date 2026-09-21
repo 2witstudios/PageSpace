@@ -10,7 +10,7 @@ import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-s
 import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPDriveScope, isScopedMCPAuth } from '@/lib/auth';
 import { getAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
-import { isDriveLead } from '@pagespace/lib/permissions/drive-relationship';
+import { loadDriveLeadAuthority } from '@pagespace/lib/permissions/drive-relationship-loader';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -45,11 +45,14 @@ export async function POST(
     }
 
     const requireUserOwnership = !isScopedMCPAuth(auth) || scopedExplicitRole === null;
-    // Restoring a drive is lead-only (drives.ownerId), unless an explicit OWNER-role key acts.
+    // Restoring a drive takes lead authority (the lead, or on an org drive an org Owner/Admin,
+    // audited), unless an explicit OWNER-role key acts.
     const found = await db.query.drives.findFirst({
       where: eq(drives.id, driveId),
     });
-    const drive = found && (!requireUserOwnership || isDriveLead(auth.userId, found)) ? found : undefined;
+    const drive = found && (!requireUserOwnership || (await loadDriveLeadAuthority(auth.userId, found, 'restore')).allowed)
+      ? found
+      : undefined;
 
     if (!drive) {
       return NextResponse.json({ error: 'Drive not found or access denied' }, { status: 404 });

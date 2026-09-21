@@ -4,6 +4,7 @@ import {
   driveRoleOf,
   isDriveLead,
   isDriveMemberRelationship,
+  decideDriveLeadAuthority,
   type DriveRelationship,
 } from '../drive-relationship';
 
@@ -42,5 +43,36 @@ describe('drive relationship decisions', () => {
     expect(isDriveMemberRelationship(lead)).toBe(true);
     expect(isDriveMemberRelationship(member('MEMBER'))).toBe(true);
     expect(isDriveMemberRelationship(stranger)).toBe(false);
+  });
+});
+
+describe('decideDriveLeadAuthority (lead-only actions: rename, restore, permanent delete)', () => {
+  const orgDrive = { ownerId: 'lena', orgId: 'org-1' };
+  const personal = { ownerId: 'marcus', orgId: null };
+  const decide = (userId: string, drive: { ownerId: string; orgId: string | null }, orgRole: 'OWNER' | 'ADMIN' | 'MEMBER' | null, orgsEnabled = true) =>
+    decideDriveLeadAuthority({ orgsEnabled, userId, drive, orgRole });
+
+  it('the drive lead acts as lead on any drive, dark or enabled', () => {
+    expect(decide('lena', orgDrive, 'MEMBER')).toEqual({ allowed: true, via: 'lead' });
+    expect(decide('marcus', personal, null, false)).toEqual({ allowed: true, via: 'lead' });
+  });
+
+  it('ORG-4 (partial) an org Owner or Admin acts as lead on an org-owned drive, and the answer names the org power so it is audited', () => {
+    expect(decide('jono', orgDrive, 'OWNER')).toEqual({ allowed: true, via: 'org-owner', orgId: 'org-1' });
+    expect(decide('priya', orgDrive, 'ADMIN')).toEqual({ allowed: true, via: 'org-admin', orgId: 'org-1' });
+  });
+
+  it('an org MEMBER and a non-member are refused on an org drive', () => {
+    expect(decide('nina', orgDrive, 'MEMBER')).toEqual({ allowed: false });
+    expect(decide('dana', orgDrive, null)).toEqual({ allowed: false });
+  });
+
+  it('a personal drive is unchanged: only its owner, whatever org role the caller holds elsewhere', () => {
+    expect(decide('priya', personal, 'ADMIN')).toEqual({ allowed: false });
+    expect(decide('nina', personal, null)).toEqual({ allowed: false });
+  });
+
+  it('while ORGS_ENABLED is false org power acts as nothing', () => {
+    expect(decide('priya', orgDrive, 'ADMIN', false)).toEqual({ allowed: false });
   });
 });

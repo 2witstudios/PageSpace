@@ -1,3 +1,4 @@
+import { recordOrgPowerDriveAction } from '@pagespace/lib/permissions/drive-relationship-loader';
 import { tool } from 'ai';
 import { z } from 'zod';
 import { canActorEditPage, canActorDeletePage, canActorManageDrive, canActorAdministerDrive, driveDeniedByAppToken, driveOutsideMcpScope } from './actor-permissions';
@@ -370,6 +371,9 @@ async function trashDrive(
     throw new Error('Drive not found or you do not have permission to delete it');
   }
 
+  // Trashing through org Owner/Admin power (an org drive the actor does not lead) is audited.
+  await recordOrgPowerDriveAction(context.userId, drive, 'trash');
+
   if (isHomeDrive(drive)) {
     throw new Error(homeDriveActionError(drive, 'trash')!);
   }
@@ -442,8 +446,9 @@ async function restoreDrive(
   userId: string,
   driveId: string
 ): Promise<{ id: string; name: string; slug: string }> {
-  // Use repository seam for drive lookup
-  const drive = await driveRepository.findByIdAndOwner(driveId, userId);
+  // Use repository seam for drive lookup: lead authority (the lead, or on an org drive an org
+  // Owner/Admin, audited)
+  const drive = await driveRepository.findByIdForLeadAction(driveId, userId, 'restore');
 
   if (!drive) {
     throw new Error('Drive not found or you do not have permission to restore it');
