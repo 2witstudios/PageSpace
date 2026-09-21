@@ -118,11 +118,20 @@ describe('DELETE /api/trash/drives/[driveId]', () => {
   });
 
   it('given the drive is not in the trash, should reject with 400 and never delete', async () => {
-    mockFindDrive.mockResolvedValue({ id: 'drive-1', isTrashed: false });
+    mockFindDrive.mockResolvedValue({ id: 'drive-1', isTrashed: false, ownerId: 'user-1' });
 
     const response = await DELETE(makeRequest(), context);
 
     expect(response.status).toBe(400);
+    expect(mockDeleteWhere).not.toHaveBeenCalled();
+  });
+
+  it('permanent deletion stays lead-only: anyone but drives.ownerId (an org Owner or Admin included) gets 404 and nothing is deleted', async () => {
+    mockFindDrive.mockResolvedValue({ id: 'drive-1', name: 'Finance', slug: 'finance', isTrashed: true, ownerId: 'lena', orgId: 'org-1', orgVisibility: 'PRIVATE' });
+
+    const response = await DELETE(makeRequest(), context);
+
+    expect(response.status).toBe(404);
     expect(mockDeleteWhere).not.toHaveBeenCalled();
   });
 });
