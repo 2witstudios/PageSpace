@@ -15,7 +15,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, eq, gt, isNull, sql } from '@pagespace/db/operators';
+import { and, eq, gt, inArray, isNull, lt, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { agentIdentities, agentSignupChallenges } from '@pagespace/db/schema/agent-identities';
 import { createId } from '@paralleldrive/cuid2';
@@ -39,10 +39,19 @@ export interface IssuedAgentSignupChallenge {
   expiresAt: Date;
 }
 
+/** How many expired challenges one issuance deletes. */
+const CHALLENGE_PRUNE_BATCH = 100;
+
 /**
  * Persist a single-use proof-of-work challenge (ADR 0007 Decision 10, threat
  * model T2). The difficulty is stored on the row so a later change to
  * `AGENT_SIGNUP_POW_BITS` never re-grades a challenge already handed out.
+ *
+ * Each issuance first deletes up to CHALLENGE_PRUNE_BATCH expired challenges.
+ * Every row is written by an issuance and each issuance can delete more than
+ * one, so expired rows (and the caller IPs on them) cannot accumulate without
+ * a cron. An expired row is worthless: the lookup treats it exactly like an
+ * unknown challenge. A prune failure never blocks issuing.
  */
 export async function issueAgentSignupChallenge(input: {
   difficultyBits: number;
@@ -50,6 +59,17 @@ export async function issueAgentSignupChallenge(input: {
   issuedToIp: string | null;
   now: Date;
 }): Promise<IssuedAgentSignupChallenge> {
+  try {
+    const expired = db
+      .select({ id: agentSignupChallenges.id })
+      .from(agentSignupChallenges)
+      .where(lt(agentSignupChallenges.expiresAt, input.now))
+      .limit(CHALLENGE_PRUNE_BATCH);
+    await db.delete(agentSignupChallenges).where(inArray(agentSignupChallenges.id, expired));
+  } catch (error) {
+    loggers.auth.warn('Failed to prune expired agent signup challenges', { error: (error as Error).message });
+  }
+
   const generated = generateToken(AGENT_POW_CHALLENGE_PREFIX);
   const expiresAt = new Date(input.now.getTime() + input.ttlMs);
   await db.insert(agentSignupChallenges).values({
