@@ -12,6 +12,7 @@ const REFUSAL_MESSAGES: Record<MembershipRefusal, string> = {
   use_ownership_transfer: 'The Owner role changes only by transferring ownership',
   use_leave: 'Use leave organization to remove yourself',
   already_owner: 'That person already owns this organization',
+  owner_not_human: 'Only a person can own an organization',
   not_owner: 'Only the Owner can do that',
   not_found: 'Organization not found',
   not_member: 'You are no longer a member of this organization',

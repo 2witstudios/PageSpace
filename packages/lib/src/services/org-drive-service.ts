@@ -31,6 +31,7 @@ import {
   type OrgDriveCreationPolicy,
   type OrgDriveRefusal,
 } from '../organizations/org-drive-ownership';
+import { retryOnDeadlock } from '../organizations/repository';
 
 export type OrgDriveTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -130,11 +131,13 @@ export async function moveDriveToOrg(
   input: { orgId: string; orgVisibility?: OrgDriveVisibility },
   deps: OrgDriveServiceDeps
 ): Promise<MoveDriveResult> {
-  const outcome = await retryOnOrgSlugConflict(() => db.transaction(async (tx) => {
+  // Org row before drive row, as every org-drive path locks (org deletion, joins, move-out); a
+  // leave that reassigns a led drive locks both in one statement, so a deadlock retries whole.
+  const outcome = await retryOnOrgSlugConflict(() => retryOnDeadlock(() => db.transaction(async (tx) => {
+    const orgExists = await lockOrg(tx, input.orgId);
     const drive = await lockDrive(tx, driveId);
     if (!drive) return driveNotFound();
 
-    const orgExists = await lockOrg(tx, input.orgId);
     const actorOrgRole = orgExists ? await deps.getOrgRole(tx, input.orgId, actorId) : null;
     const verdict = decideMoveDriveIntoOrg({ drive, actorId, actorOrgRole });
     if (!verdict.ok) return verdict;
@@ -155,7 +158,7 @@ export async function moveDriveToOrg(
 
     const publish = await deps.syncOrgMembership(tx, { kind: 'move-in', driveId, orgId: input.orgId });
     return { ok: true as const, drive: moved, publish };
-  }));
+  })));
 
   if (!outcome.ok) return outcome;
   const { publish, ...moved } = outcome;
@@ -169,13 +172,19 @@ export async function moveDriveOutOfOrg(
   input: { implicitMembers: ImplicitMembersChoice | null },
   deps: OrgDriveServiceDeps
 ): Promise<MoveDriveResult> {
-  const outcome = await db.transaction(async (tx) => {
+  const outcome = await retryOnDeadlock(() => db.transaction(async (tx) => {
+    // The org row before the drive row: org deletion and joining an org lock in that order, and
+    // taking the drive first would close a lock cycle with either.
+    const [current] = await tx.select({ orgId: drives.orgId }).from(drives).where(eq(drives.id, driveId));
+    if (!current) return driveNotFound();
+    const orgLocked = current.orgId !== null && (await lockOrg(tx, current.orgId));
     const drive = await lockDrive(tx, driveId);
     if (!drive) return driveNotFound();
 
     const { orgId } = drive;
+    // A drive that changed org between the read and the lock is judged as outside the org locked.
     const actorOrgRole =
-      orgId !== null && (await lockOrg(tx, orgId)) ? await deps.getOrgRole(tx, orgId, actorId) : null;
+      orgId !== null && orgId === current.orgId && orgLocked ? await deps.getOrgRole(tx, orgId, actorId) : null;
     const verdict = decideMoveDriveOutOfOrg({ drive, actorOrgRole, implicitMembers: input.implicitMembers });
     if (!verdict.ok) return verdict;
     if (orgId === null) throw new Error('Unreachable: move-out admitted a drive with no org');
@@ -195,7 +204,7 @@ export async function moveDriveOutOfOrg(
       implicitMembers: verdict.implicitMembers,
     });
     return { ok: true as const, drive: moved, orgId, publish };
-  });
+  }));
 
   if (!outcome.ok) return outcome;
   const { orgId, publish, ...rest } = outcome;

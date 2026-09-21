@@ -104,25 +104,37 @@ const defaultPorts: OrgMembershipSyncPorts = {
 };
 
 /** Publish a sync's events. Best-effort: never throws, since the membership change has committed. */
-export async function publishOrgMembershipSyncEvents(
+export function publishOrgMembershipSyncEvents(
   result: OrgMembershipSyncResult,
+  ports: OrgMembershipSyncPorts = defaultPorts,
+): Promise<void> {
+  return publishDriveAccessEvents({ affectedUsers: result.affectedUsers, revoked: result.removedRows }, ports);
+}
+
+/**
+ * The drive-list event for each affected user plus a room kick for each (person, drive) whose access
+ * ended, at most EVENT_CONCURRENCY at a time. Also used where access ends with no row to delete (org
+ * deletion ends rowless org Owner/Admin and implicit Open-drive access). Best-effort: never throws.
+ */
+export async function publishDriveAccessEvents(
+  events: { affectedUsers: readonly AffectedUser[]; revoked: ReadonlyArray<{ userId: string; driveId: string }> },
   ports: OrgMembershipSyncPorts = defaultPorts,
 ): Promise<void> {
   const settled = await settleInBatches(
     [
-      ...result.affectedUsers.map((user) => () => ports.broadcast(user)),
-      ...result.removedRows.map(({ userId, driveId }) => () => ports.kick({ userId, driveId })),
+      ...events.affectedUsers.map((user) => () => ports.broadcast(user)),
+      ...events.revoked.map(({ userId, driveId }) => () => ports.kick({ userId, driveId })),
     ],
     EVENT_CONCURRENCY,
   );
   const failures = settled.filter((s): s is PromiseRejectedResult => s.status === 'rejected');
   if (failures.length > 0) {
     const first: unknown = failures[0].reason;
-    loggers.realtime.warn('Org membership sync: some realtime events failed', {
+    loggers.realtime.warn('Drive access events: some realtime events failed', {
       failures: failures.length,
       firstError: first instanceof Error ? first.message : String(first),
-      affectedUsers: result.affectedUsers.length,
-      removedRows: result.removedRows.length,
+      affectedUsers: events.affectedUsers.length,
+      revoked: events.revoked.length,
     });
   }
 }

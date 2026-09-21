@@ -7,6 +7,15 @@
  *   cleared, ownerId = that person) or trash.
  * - A trashed-by-choice drive, and every drive already in trash, becomes a trashed
  *   drive owned by the org Owner (orgId cleared, still in trash, restorable).
+ * - The former lead of a drive that changes hands loses their OWNER row with it.
+ * - Deleting the org is every member leaving it: what each minted on a drive they do
+ *   not end up owning (explicit key scopes, OAuth grants, share links, agent
+ *   memberships) is revoked with it, as leaveOrganization revokes a leaver's.
+ * - Everyone whose access the delete ends gets a member_removed drive-list event and is
+ *   kicked from the drive's realtime rooms after commit: the former lead, every org-materialized member, every org Owner or
+ *   Admin who reached it through their org role alone, and every member who reached an
+ *   Open drive implicitly. The drive's new owner, and
+ *   anyone still invited to it, never is.
  * - Nothing moves silently: a live drive without a choice refuses the whole delete,
  *   and the returned steps name every drive's destination for the confirmation and
  *   for the per-drive audit event the caller writes.
@@ -16,6 +25,10 @@ import { and, eq, inArray } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
 import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
+import { loadAcceptedDriveMemberPairs } from '../permissions/org-drive-membership';
+import { revokeOrgDriveGrantsForMembers } from './leave';
+import { publishDriveAccessEvents, type OrgMembershipSyncPorts } from '../services/org-membership-sync';
+import type { AffectedUser } from '../services/org-membership-sync-core';
 
 export type DriveDeletionChoice =
   | { driveId: string; action: 'transfer'; toUserId: string }
@@ -101,13 +114,28 @@ export type DeleteOrganizationResult =
   | { ok: false; status: 403; reason: 'not_owner' }
   | { ok: false; status: 400; reason: Exclude<OrgDeletionRefusal, 'not_owner'>; driveIds: string[] };
 
-export async function deleteOrganization(input: {
-  actorId: string;
-  orgId: string;
-  choices: readonly DriveDeletionChoice[];
-  now: Date;
-}): Promise<DeleteOrganizationResult> {
-  return db.transaction(async (tx) => {
+export interface DeleteOrganizationDeps {
+  /** Realtime ports for the post-commit events; defaults to the org-membership publisher's. */
+  ports?: OrgMembershipSyncPorts;
+}
+
+type RevokedRow = { userId: string; driveId: string };
+
+const pairKey = (row: RevokedRow) => `${row.driveId}:${row.userId}`;
+
+
+
+export async function deleteOrganization(
+  input: {
+    actorId: string;
+    orgId: string;
+    choices: readonly DriveDeletionChoice[];
+    now: Date;
+  },
+  deps: DeleteOrganizationDeps = {},
+): Promise<DeleteOrganizationResult> {
+  const toKick: RevokedRow[] = [];
+  const result = await db.transaction(async (tx): Promise<DeleteOrganizationResult> => {
     const [org] = await tx
       .select({ ownerId: organizations.ownerId })
       .from(organizations)
@@ -116,12 +144,12 @@ export async function deleteOrganization(input: {
     if (!org) return { ok: false, status: 404, reason: 'not_found' } as const;
 
     const orgDrives = await tx
-      .select({ id: drives.id, name: drives.name, isTrashed: drives.isTrashed })
+      .select({ id: drives.id, name: drives.name, isTrashed: drives.isTrashed, ownerId: drives.ownerId, orgVisibility: drives.orgVisibility })
       .from(drives)
       .where(eq(drives.orgId, input.orgId))
       .for('update');
     const members = await tx
-      .select({ userId: orgMembers.userId })
+      .select({ userId: orgMembers.userId, role: orgMembers.role })
       .from(orgMembers)
       .where(eq(orgMembers.orgId, input.orgId));
 
@@ -139,7 +167,8 @@ export async function deleteOrganization(input: {
     }
 
     for (const step of plan.steps) {
-      const alreadyTrashed = orgDrives.find((drive) => drive.id === step.driveId)?.isTrashed === true;
+      const before = orgDrives.find((drive) => drive.id === step.driveId);
+      const alreadyTrashed = before?.isTrashed === true;
       await tx
         .update(drives)
         .set({
@@ -148,18 +177,65 @@ export async function deleteOrganization(input: {
           ...(step.trashed && !alreadyTrashed ? { isTrashed: true, trashedAt: input.now } : {}),
         })
         .where(eq(drives.id, step.driveId));
+      // The former lead's OWNER row would keep them inside a drive that is no longer theirs, and
+      // come back with it on restore; drop it as reassignLedOrgDrives does.
+      if (before && before.ownerId !== step.ownerId) {
+        toKick.push(...(await tx.delete(driveMembers).where(and(
+          eq(driveMembers.driveId, step.driveId),
+          eq(driveMembers.userId, before.ownerId),
+          eq(driveMembers.role, 'OWNER'),
+        )).returning({ userId: driveMembers.userId, driveId: driveMembers.driveId })));
+      }
     }
+
+    // An explicit key scope or OAuth drive grant is never re-checked against its holder, so
+    // it would outlive the org power that let them mint it (revokeOrgDriveGrants).
+    await revokeOrgDriveGrantsForMembers(tx, {
+      userIds: members.map((member) => member.userId),
+      driveIds: plan.steps.map((step) => step.driveId),
+      keep: plan.steps.map((step) => ({ userId: step.ownerId, driveId: step.driveId })),
+    });
 
     const driveIds = plan.steps.map((step) => step.driveId);
     if (driveIds.length > 0) {
       // Org-materialized access means nothing once the drive has left the org;
       // leaving those rows would keep former org members inside a personal drive.
-      await tx
+      const orgRows = await tx
         .delete(driveMembers)
-        .where(and(inArray(driveMembers.driveId, driveIds), eq(driveMembers.source, 'org')));
+        .where(and(inArray(driveMembers.driveId, driveIds), eq(driveMembers.source, 'org')))
+        .returning({ userId: driveMembers.userId, driveId: driveMembers.driveId });
+      // A drive's new owner keeps it through drives.ownerId, so their live connection stays.
+      const newOwner = new Map(plan.steps.map((step) => [step.driveId, step.ownerId]));
+      toKick.push(...orgRows.filter((row) => newOwner.get(row.driveId) !== row.userId));
+
+      // Org access needs no row: an org Owner or Admin reaches every org drive, and every member
+      // reaches an Open one (a member whose direct invite is still pending has no org row there).
+      // All of it ends with the org.
+      const openDrives = new Set(orgDrives.filter((drive) => drive.orgVisibility === 'OPEN').map((drive) => drive.id));
+      const candidates = new Map<string, RevokedRow>();
+      for (const row of toKick) candidates.set(pairKey(row), row);
+      for (const step of plan.steps) {
+        for (const { userId, role } of members) {
+          const reached = role !== 'MEMBER' || openDrives.has(step.driveId);
+          if (reached && userId !== step.ownerId) candidates.set(pairKey({ userId, driveId: step.driveId }), { userId, driveId: step.driveId });
+        }
+      }
+      // Someone still invited to the drive keeps it, and their connection with it.
+      const candidateUsers = [...new Set([...candidates.values()].map((row) => row.userId))];
+      for (const row of await loadAcceptedDriveMemberPairs(tx, candidateUsers, driveIds)) candidates.delete(pairKey(row));
+      toKick.splice(0, toKick.length, ...candidates.values());
     }
 
     await tx.delete(organizations).where(eq(organizations.id, input.orgId));
     return { ok: true, steps: plan.steps };
   });
+  // Once committed, and best effort: each person gets one member_removed event naming the drives
+  // they lost (the sidebar and picker refresh on it) and a room kick per drive, 20 at a time.
+  if (result.ok && toKick.length > 0) {
+    const lost = new Map<string, string[]>();
+    for (const { userId, driveId } of toKick) lost.set(userId, [...(lost.get(userId) ?? []), driveId]);
+    const affectedUsers = [...lost].map(([userId, driveIds]): AffectedUser => ({ userId, operation: 'member_removed', driveIds }));
+    await publishDriveAccessEvents({ affectedUsers, revoked: toKick }, deps.ports);
+  }
+  return result;
 }

@@ -13,7 +13,7 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
 import { db, pool } from '@pagespace/db/db';
-import { and, eq, inArray, or } from '@pagespace/db/operators';
+import { and, eq, inArray, or, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { driveMembers, driveRoles } from '@pagespace/db/schema/members';
@@ -30,6 +30,7 @@ import { STORAGE_REATTRIBUTION_LEAF_ID } from '../../organizations/org-drive-own
 import { orgDriveServiceDeps } from '../org-drive-service-deps';
 import { accountRepository } from '../../repositories/account-repository';
 import { removeMember } from '../../organizations/membership';
+import { getDriveAccess } from '../drive-service';
 
 // Northwind Labs fixture names (Sequence Spec Part 2), with per-run ids.
 const run = createId().slice(0, 8);
@@ -127,7 +128,7 @@ afterAll(async () => {
 });
 
 describe('moveDriveToOrg', () => {
-  it('DRV-2 (partial) moving a drive in keeps its members, roles, pages, envs and publishSubdomain', async () => {
+  it('DRV-2 moving a drive in keeps its members, roles, pages, envs and publishSubdomain', async () => {
     const driveId = await seedPersonalDrive();
     const [role] = await db.insert(driveRoles).values({ driveId, name: 'Editors', permissions: {} }).returning();
     await db.insert(driveMembers).values([
@@ -158,6 +159,25 @@ describe('moveDriveToOrg', () => {
     expect(await db.select().from(driveEnvs).where(eq(driveEnvs.driveId, driveId))).toHaveLength(1);
     expect(syncCalls).toEqual([{ kind: 'move-in', driveId, orgId: northwind }]);
     expect(published).toEqual([{ call: syncCalls[0], orgIdAtPublish: northwind }]);
+  });
+
+  it('DRV-1 an org owns a drive moved in while its human lead keeps the Owner role, a Home drive never joins an org, and the lead\'s account deletion hands the Owner role to the org Owner', async () => {
+    const driveId = await seedPersonalDrive();
+    const homeId = await seedPersonalDrive({ kind: 'HOME', name: 'Home' });
+
+    expect(await moveDriveToOrg(marcus, driveId, { orgId: northwind }, deps)).toMatchObject({ ok: true, orgId: northwind });
+    expect(await readDrive(driveId)).toMatchObject({ orgId: northwind, ownerId: marcus });
+    expect(await getDriveAccess(driveId, marcus)).toEqual({ isOwner: true, isAdmin: true, isMember: true, role: 'OWNER' });
+
+    // A Home drive is refused by the service and, beneath it, by the drives_home_never_org_check CHECK.
+    expect(await moveDriveToOrg(marcus, homeId, { orgId: northwind }, deps)).toMatchObject({ ok: false, code: 'HOME_DRIVE' });
+    await expect(db.update(drives).set({ orgId: northwind }).where(eq(drives.id, homeId))).rejects.toThrow();
+    expect((await readDrive(homeId)).orgId).toBeNull();
+
+    // The Owner role stays with a person: when the lead's account goes, the org Owner leads the drive.
+    await accountRepository.deleteUser(marcus);
+    expect(await readDrive(driveId)).toMatchObject({ orgId: northwind, ownerId: jono });
+    expect(await getDriveAccess(driveId, jono)).toEqual({ isOwner: true, isAdmin: true, isMember: true, role: 'OWNER' });
   });
 
   it('DRV-1 (partial) a Home drive is refused and nothing is written', async () => {
@@ -235,10 +255,15 @@ describe('moveDriveOutOfOrg', () => {
     return driveId;
   }
 
-  it('DRV-2 (partial) an org Admin moves a drive out: it becomes its lead\'s personal drive with members, pages and publishSubdomain intact', async () => {
+  it('DRV-2 an org Admin moves a drive out: it becomes its lead\'s personal drive with members, roles, pages, envs and publishSubdomain intact', async () => {
     const driveId = await seedOrgDrive();
-    await db.insert(driveMembers).values({ driveId, userId: chris, role: 'MEMBER', acceptedAt: new Date() });
+    const [role] = await db.insert(driveRoles).values({ driveId, name: 'Editors', permissions: {} }).returning();
+    await db.insert(driveMembers).values([
+      { driveId, userId: chris, role: 'MEMBER', acceptedAt: new Date() },
+      { driveId, userId: lena, role: 'ADMIN', customRoleId: role.id, acceptedAt: new Date() },
+    ]);
     await db.insert(pages).values({ driveId, title: 'Roadmap', type: 'DOCUMENT', position: 1, updatedAt: new Date() });
+    await db.insert(driveEnvs).values({ driveId, name: 'prod', createdBy: marcus, updatedAt: new Date() });
     const before = await readDrive(driveId);
 
     const result = await moveDriveOutOfOrg(priya, driveId, { implicitMembers: 'keep' }, deps);
@@ -252,8 +277,90 @@ describe('moveDriveOutOfOrg', () => {
     expect(after.orgId).toBeNull();
     expect(after.ownerId).toBe(marcus);
     expect(after.publishSubdomain).toBe(before.publishSubdomain);
-    expect(await db.select().from(driveMembers).where(eq(driveMembers.driveId, driveId))).toHaveLength(1);
+    expect(after.slug).toBe(before.slug);
+    const members = await db.select().from(driveMembers).where(eq(driveMembers.driveId, driveId));
+    expect(members.map((m) => [m.userId, m.role, m.customRoleId, m.source]).sort()).toEqual(
+      [[chris, 'MEMBER', null, 'invite'], [lena, 'ADMIN', role.id, 'invite']].sort()
+    );
+    expect(await db.select().from(driveRoles).where(eq(driveRoles.driveId, driveId))).toHaveLength(1);
     expect(await db.select().from(pages).where(eq(pages.driveId, driveId))).toHaveLength(1);
+    expect(await db.select().from(driveEnvs).where(eq(driveEnvs.driveId, driveId))).toHaveLength(1);
+  });
+
+  async function holdOrgRow() {
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let locked: () => void = () => {};
+    const orgLocked = new Promise<void>((resolve) => { locked = resolve; });
+    const holder = db.transaction(async (tx) => {
+      await tx.select({ id: organizations.id }).from(organizations).where(eq(organizations.id, northwind)).for('update');
+      locked();
+      await held;
+    });
+    await orgLocked;
+    return async () => { release(); await holder; };
+  }
+
+  /** Whether another transaction could lock the drive row right now (NOWAIT fails if it is held). */
+  async function driveRowFree(driveId: string) {
+    return db.transaction(async (tx) => {
+      try {
+        await tx.execute(sql`select id from drives where id = ${driveId} for update nowait`);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+  }
+
+  it('DRV-2 (partial) a move-in waiting on a held org row does not already hold the drive row, even for a drive already in that org', async () => {
+    const driveId = await seedOrgDrive();
+    const release = await holdOrgRow();
+
+    const moving = moveDriveToOrg(marcus, driveId, { orgId: northwind }, deps);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const free = await driveRowFree(driveId);
+
+    await release();
+    expect(free).toBe(true);
+    expect(await moving).toMatchObject({ ok: false });
+  });
+
+  it.each(['in', 'out'] as const)('DRV-2 (partial) a move %s that loses a deadlock is retried whole and completes', async (direction) => {
+    const driveId = direction === 'in' ? await seedPersonalDrive() : await seedOrgDrive();
+    let calls = 0;
+    const flaky: OrgDriveServiceDeps = {
+      ...deps,
+      getOrgRole: async (tx, orgId, userId) => {
+        calls += 1;
+        // Postgres chose this transaction as the deadlock victim on the first attempt.
+        if (calls === 1) throw Object.assign(new Error('deadlock detected'), { code: '40P01' });
+        return deps.getOrgRole(tx, orgId, userId);
+      },
+    };
+
+    const result = direction === 'in'
+      ? await moveDriveToOrg(marcus, driveId, { orgId: northwind }, flaky)
+      : await moveDriveOutOfOrg(priya, driveId, { implicitMembers: 'keep' }, flaky);
+
+    expect(result).toMatchObject({ ok: true });
+    expect(calls).toBe(2);
+    expect((await readDrive(driveId)).orgId).toBe(direction === 'in' ? northwind : null);
+  });
+
+  it('DRV-2 (partial) moving a drive out takes the org row before the drive row, the order org deletion and joins lock in', async () => {
+    const driveId = await seedOrgDrive();
+    const release = await holdOrgRow();
+
+    const moving = moveDriveOutOfOrg(priya, driveId, { implicitMembers: 'keep' }, deps);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    // The waiting move-out must not already hold the drive row: that would be a lock cycle.
+    const free = await driveRowFree(driveId);
+
+    await release();
+    expect(free).toBe(true);
+    expect(await moving).toMatchObject({ ok: true });
+    expect((await readDrive(driveId)).orgId).toBeNull();
   });
 
   it.each(['keep', 'remove'] as const)(

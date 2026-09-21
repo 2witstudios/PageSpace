@@ -18,6 +18,7 @@ import {
   type OrgRole,
 } from '@pagespace/db/schema/organizations';
 import { decryptUserRows, userEmailMatch } from '../auth/user-repository';
+import { decideOrgOwnerCandidate, loadOrgPrincipalKind } from './owner-candidate';
 
 const UNIQUE_VIOLATION = '23505';
 
@@ -33,6 +34,22 @@ export function pgErrorCode(error: unknown): string | undefined {
 }
 
 export const isUniqueViolation = (error: unknown): boolean => pgErrorCode(error) === UNIQUE_VIOLATION;
+
+const DEADLOCK_DETECTED = '40P01';
+
+/**
+ * Run a whole transaction again when Postgres picks it as a deadlock victim. Only for work that
+ * rolls back completely and may simply be run again; any other error is rethrown at once.
+ */
+export async function retryOnDeadlock<T>(work: () => Promise<T>, attempts = 3): Promise<T> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await work();
+    } catch (error) {
+      if (attempt >= attempts || pgErrorCode(error) !== DEADLOCK_DETECTED) throw error;
+    }
+  }
+}
 
 export async function findMembershipRole(orgId: string, userId: string): Promise<OrgRole | null> {
   const [row] = await db
@@ -137,9 +154,12 @@ export async function countOrgSeats(orgId: string): Promise<number> {
 
 export type CreateOrganizationResult =
   | { ok: true; organization: Organization }
-  | { ok: false; reason: 'slug_taken' };
+  | { ok: false; reason: 'slug_taken' | 'owner_not_human' | 'owner_not_found' };
 
-/** ORG-1: the org row and its OWNER membership are written together or not at all. */
+/**
+ * ORG-1: the org row and its OWNER membership are written together or not at all,
+ * and only for a person (an agent never becomes an Owner).
+ */
 export async function createOrganization(input: {
   name: string;
   slug: string;
@@ -147,15 +167,17 @@ export async function createOrganization(input: {
   ownerId: string;
 }): Promise<CreateOrganizationResult> {
   try {
-    const organization = await db.transaction(async (tx) => {
+    const result = await db.transaction(async (tx): Promise<CreateOrganizationResult> => {
+      const candidate = decideOrgOwnerCandidate(await loadOrgPrincipalKind(tx, input.ownerId));
+      if (!candidate.ok) return { ok: false, reason: candidate.reason };
       const [org] = await tx
         .insert(organizations)
         .values({ name: input.name, slug: input.slug, avatarUrl: input.avatarUrl ?? null, ownerId: input.ownerId })
         .returning();
       await tx.insert(orgMembers).values({ orgId: org.id, userId: input.ownerId, role: 'OWNER' });
-      return org;
+      return { ok: true, organization: org };
     });
-    return { ok: true, organization };
+    return result;
   } catch (error) {
     if (isUniqueViolation(error)) return { ok: false, reason: 'slug_taken' };
     throw error;
