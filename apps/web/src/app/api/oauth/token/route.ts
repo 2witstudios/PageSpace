@@ -515,6 +515,7 @@ async function handleAgentAssertionGrant(req: NextRequest, form: URLSearchParams
   const assertion = form.get('assertion');
   const clientId = form.get('client_id');
   if (!assertion || !clientId) {
+    auditRequest(req, { eventType: 'authz.access.denied', details: { oauthEvent: 'agent_assertion_invalid_request' } });
     return noStoreJson(INVALID_REQUEST, 400);
   }
 
@@ -528,7 +529,11 @@ async function handleAgentAssertionGrant(req: NextRequest, form: URLSearchParams
   }
 
   const resolved = await resolveClient(form, clientId, AGENT_ASSERTION_GRANT_TYPE);
-  if ('rejection' in resolved) return resolved.rejection;
+  if ('rejection' in resolved) {
+    // Unknown client, or a client_secret on the public agent client.
+    auditRequest(req, { eventType: 'authz.access.denied', details: { oauthEvent: 'agent_assertion_client_rejected' } });
+    return resolved.rejection;
+  }
   const { client, clientDbId } = resolved;
 
   const scope = resolveAgentAssertionScopes(form.get('scope'));

@@ -1124,8 +1124,9 @@ export const DISTRIBUTED_RATE_LIMITS = {
     blockDurationMs: 24 * 60 * 60 * 1000,
     progressiveDelay: false,
   },
-  // Presenting an agent secret (browser sign-in door, jwt-bearer exchange):
-  // guessing a secret is credential stuffing, so it gets LOGIN's shape.
+  // Presenting an agent secret at the BROWSER sign-in door (Phase 3): guessing
+  // a secret is credential stuffing, so it gets LOGIN's shape. The jwt-bearer
+  // exchange does NOT use this — it is AGENT_TOKEN_IP + AGENT_TOKEN_CREDENTIAL.
   AGENT_SIGNIN: {
     maxAttempts: 5,
     windowMs: 15 * 60 * 1000,
@@ -1152,8 +1153,8 @@ export const DISTRIBUTED_RATE_LIMITS = {
     blockDurationMs: 5 * 60 * 1000,
     progressiveDelay: false,
   },
-  // POST /api/agent/claim — starting a claim mints a user code, like
-  // OAUTH_DEVICE_INIT.
+  // POST /api/agent/claim (Phase 4) — starting a claim mints a user code,
+  // like OAUTH_DEVICE_INIT.
   AGENT_CLAIM_INIT: {
     maxAttempts: 10,
     windowMs: 5 * 60 * 1000,

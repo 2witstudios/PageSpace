@@ -117,6 +117,7 @@ describe('POST /api/oauth/token — jwt-bearer (agent assertion) grant', () => {
       expect(response.status).toBe(400);
       expect(await response.json()).toEqual(INVALID_GRANT);
       expect(mocks.exchangeAgentAssertion).not.toHaveBeenCalled();
+      expect(mocks.audit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'authz.access.denied', details: { oauthEvent: 'agent_assertion_client_rejected' } }));
     });
 
     it.each([
@@ -164,6 +165,7 @@ describe('POST /api/oauth/token — jwt-bearer (agent assertion) grant', () => {
       expect(response.status).toBe(400);
       expect(await response.json()).toEqual({ error: 'invalid_request' });
       expect(mocks.exchangeAgentAssertion).not.toHaveBeenCalled();
+      expect(mocks.audit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'authz.access.denied', details: { oauthEvent: 'agent_assertion_invalid_request' } }));
     });
   });
 
