@@ -253,8 +253,9 @@ describe('runAgentWithRetry — abort mid-step (real ai@6 stream)', () => {
       actual: {
         inputTokens: result.accumulatedUsage?.inputTokens,
         outputTokens: result.accumulatedUsage?.outputTokens,
+        abortedStep: result.abortedStep,
       },
-      expected: { inputTokens: 800, outputTokens: 30 },
+      expected: { inputTokens: 800, outputTokens: 30, abortedStep: undefined },
     });
   });
 });
