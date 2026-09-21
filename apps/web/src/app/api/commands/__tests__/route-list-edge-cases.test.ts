@@ -88,13 +88,6 @@ const webAuth = (): SessionAuthResult => ({
   adminRoleVersion: 0,
 });
 
-const selectChain = (rows: unknown[]) => ({
-  from: vi.fn(() => ({
-    where: vi.fn().mockResolvedValue(rows),
-    innerJoin: vi.fn(() => ({ where: vi.fn().mockResolvedValue(rows) })),
-  })),
-});
-
 const getRequest = () => new Request('http://localhost/api/commands');
 
 const storedCommand = {

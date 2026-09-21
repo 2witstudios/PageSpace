@@ -123,25 +123,6 @@ const mockDrive = (overrides: { id: string; name: string; ownerId?: string }) =>
   orgVisibility: 'OPEN' as const,
 });
 
-// Helper to create mock drive member
-const mockDriveMember = (overrides: {
-  id: string;
-  userId: string;
-  driveId: string;
-  role: 'OWNER' | 'ADMIN' | 'MEMBER';
-}) => ({
-  id: overrides.id,
-  userId: overrides.userId,
-  driveId: overrides.driveId,
-  role: overrides.role,
-  customRoleId: null,
-  source: 'invite' as const,
-  invitedBy: null,
-  invitedAt: new Date(),
-  acceptedAt: new Date(),
-  lastAccessedAt: null,
-});
-
 describe('POST /api/account/handle-drive', () => {
   const mockUserId = 'user_123';
   const mockDriveId = 'drive_abc';
