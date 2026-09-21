@@ -49,6 +49,8 @@ vi.mock('../orgs-enabled', () => ({
 }));
 
 const HOUR = 60 * 60 * 1000;
+/** A delete that revokes rows would otherwise call the realtime service over HTTP; tests of the kick pass their own. */
+const noKick = { kick: async () => {} };
 /** Delivery that succeeds; tests of a failed delivery pass their own. */
 const deliver = async () => {};
 
@@ -436,7 +438,7 @@ describe('org services (real Postgres)', () => {
     const product = await seedDrive(jono.id, org.id, { name: 'Product' });
     expect(await transferOwnership({ orgId: org.id, actorId: jono.id, targetId: priya.id })).toEqual({ ok: true });
 
-    const result = await deleteOrganization({ actorId: jono.id, orgId: org.id, choices: [{ driveId: product.id, action: 'trash' }], now: new Date() });
+    const result = await deleteOrganization({ actorId: jono.id, orgId: org.id, choices: [{ driveId: product.id, action: 'trash' }], now: new Date() }, noKick);
     expect(result).toEqual({ ok: false, status: 403, reason: 'not_owner' });
     const [drive] = await db.select().from(drives).where(eq(drives.id, product.id));
     expect(drive).toMatchObject({ orgId: org.id, isTrashed: false });
@@ -450,7 +452,7 @@ describe('org services (real Postgres)', () => {
       const trashedAt = new Date(Date.now() - 24 * HOUR);
       const oldSite = await seedDrive(priya.id, org.id, { name: 'Old Marketing Site', isTrashed: true, trashedAt });
 
-      const result = await deleteOrganization({ actorId: jono.id, orgId: org.id, choices: [], now: new Date() });
+      const result = await deleteOrganization({ actorId: jono.id, orgId: org.id, choices: [], now: new Date() }, noKick);
       expect(result).toEqual({
         ok: true,
         steps: [{ driveId: oldSite.id, driveName: 'Old Marketing Site', destination: 'owner_trash', ownerId: jono.id, trashed: true }],
@@ -482,7 +484,7 @@ describe('org services (real Postgres)', () => {
           { driveId: finance.id, action: 'trash' },
         ],
         now: new Date(),
-      });
+      }, noKick);
       expect(result.ok).toBe(true);
 
       const after = await db.select().from(drives).where(inArray(drives.id, [product.id, finance.id, research.id]));
@@ -507,7 +509,7 @@ describe('org services (real Postgres)', () => {
         orgId: org.id,
         choices: [{ driveId: product.id, action: 'transfer', toUserId: chris.id }],
         now: new Date(),
-      });
+      }, noKick);
       expect(result).toEqual({ ok: false, status: 400, reason: 'transfer_target_not_member', driveIds: [product.id] });
       const [drive] = await db.select().from(drives).where(eq(drives.id, product.id));
       expect(drive).toMatchObject({ orgId: org.id, ownerId: jono.id, isTrashed: false });
@@ -584,9 +586,12 @@ describe('org services (real Postgres)', () => {
       const tomas = await person('Tomás Alvarez');
       const invite = await createOrRotateInvitation({ orgId: org.id, email: tomas.email, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver });
       if (!invite.ok) throw new Error('invite failed');
-      expect(await acceptInvitation({ token: invite.token, userId: tomas.id, now: new Date() })).toMatchObject({ ok: true, joined: true });
-
       const publishSyncEvents = vi.fn(async () => {});
+      expect(
+        await acceptInvitation({ token: invite.token, userId: tomas.id, now: new Date() }, { syncMemberAccess: syncOrgMemberAccess, publishSyncEvents }),
+      ).toMatchObject({ ok: true, joined: true });
+      expect(publishSyncEvents).toHaveBeenCalledTimes(1);
+      publishSyncEvents.mockClear();
       expect(
         await acceptInvitation({ token: invite.token, userId: tomas.id, now: new Date() }, { syncMemberAccess: syncOrgMemberAccess, publishSyncEvents }),
       ).toMatchObject({ ok: false, reason: 'already_accepted' });
@@ -684,7 +689,7 @@ describe('org services (real Postgres)', () => {
           { driveId: wiki.id, action: 'trash' },
         ],
         now: new Date(),
-      });
+      }, noKick);
       expect(result.ok).toBe(true);
 
       expect(
@@ -710,7 +715,7 @@ describe('org services (real Postgres)', () => {
       }
     });
 
-    it('ORG-6 the former lead is kicked from each drive\'s realtime rooms only after the delete commits, and a refused delete kicks no one', async () => {
+    it('ORG-6 everyone whose drive row the delete revokes is kicked from that drive\'s realtime rooms only after it commits, never the new owner, and a refused delete kicks no one', async () => {
       const { jono, org } = await seedNorthwind();
       const priya = await person('Priya Nair');
       const marcus = await person('Marcus Oyelaran');
@@ -722,6 +727,11 @@ describe('org services (real Postgres)', () => {
       await ownerRow(product.id, priya.id);
       await ownerRow(finance.id, priya.id);
       await ownerRow(wiki.id, jono.id);
+      // Marcus holds org-materialized rows on Product (which he is about to own) and Finance.
+      await db.insert(driveMembers).values([
+        { driveId: product.id, userId: marcus.id, role: 'MEMBER', source: 'org', acceptedAt: new Date() },
+        { driveId: finance.id, userId: marcus.id, role: 'MEMBER', source: 'org', acceptedAt: new Date() },
+      ]);
 
       const kicked: { userId: string; driveId: string; rowsAtKick: number }[] = [];
       const kick = async (target: { userId: string; driveId: string }) => {
@@ -751,11 +761,14 @@ describe('org services (real Postgres)', () => {
         { kick },
       );
       expect(result.ok).toBe(true);
-      expect(kicked.sort((a, b) => a.driveId.localeCompare(b.driveId))).toEqual(
+      const byKey = (a: { userId: string; driveId: string }, b: { userId: string; driveId: string }) =>
+        `${a.driveId}:${a.userId}`.localeCompare(`${b.driveId}:${b.userId}`);
+      expect(kicked.sort(byKey)).toEqual(
         [
           { userId: priya.id, driveId: product.id, rowsAtKick: 0 },
           { userId: priya.id, driveId: finance.id, rowsAtKick: 0 },
-        ].sort((a, b) => a.driveId.localeCompare(b.driveId)),
+          { userId: marcus.id, driveId: finance.id, rowsAtKick: 0 },
+        ].sort(byKey),
       );
     });
 
@@ -771,7 +784,7 @@ describe('org services (real Postgres)', () => {
         orgId: org.id,
         choices: [{ driveId: product.id, action: 'trash' }],
         now: new Date(),
-      });
+      }, noKick);
       expect(result).toEqual({ ok: false, status: 400, reason: 'missing_choice', driveIds: [finance.id] });
       const after = await db.select().from(drives).where(inArray(drives.id, [product.id, finance.id]));
       const byId = new Map(after.map((d) => [d.id, d]));

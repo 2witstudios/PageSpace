@@ -8,6 +8,9 @@
  * - A trashed-by-choice drive, and every drive already in trash, becomes a trashed
  *   drive owned by the org Owner (orgId cleared, still in trash, restorable).
  * - The former lead of a drive that changes hands loses their OWNER row with it.
+ * - Everyone whose drive row the delete revokes (that former lead, and every
+ *   org-materialized member) is kicked from the drive's realtime rooms after commit;
+ *   the drive's new owner never is.
  * - Nothing moves silently: a live drive without a choice refuses the whole delete,
  *   and the returned steps name every drive's destination for the confirmation and
  *   for the per-drive audit event the caller writes.
@@ -104,7 +107,7 @@ export type DeleteOrganizationResult =
   | { ok: false; status: 400; reason: Exclude<OrgDeletionRefusal, 'not_owner'>; driveIds: string[] };
 
 export interface DeleteOrganizationDeps {
-  /** Drops a former lead's live realtime connection from a drive's rooms; runs only after commit. */
+  /** Drops a revoked person's live realtime connection from a drive's rooms; runs only after commit. */
   kick: (target: { userId: string; driveId: string }) => Promise<void>;
 }
 
@@ -112,7 +115,7 @@ const deleteOrganizationDeps: DeleteOrganizationDeps = {
   kick: ({ userId, driveId }) => kickForDriveMembershipRevocation({ userId, driveId, reason: 'member_removed' }),
 };
 
-type RevokedLeadRow = { userId: string; driveId: string };
+type RevokedRow = { userId: string; driveId: string };
 
 export async function deleteOrganization(
   input: {
@@ -123,7 +126,7 @@ export async function deleteOrganization(
   },
   deps: DeleteOrganizationDeps = deleteOrganizationDeps,
 ): Promise<DeleteOrganizationResult> {
-  const revokedLeads: RevokedLeadRow[] = [];
+  const revoked: RevokedRow[] = [];
   const result = await db.transaction(async (tx): Promise<DeleteOrganizationResult> => {
     const [org] = await tx
       .select({ ownerId: organizations.ownerId })
@@ -169,7 +172,7 @@ export async function deleteOrganization(
       // The former lead's OWNER row would keep them inside a drive that is no longer theirs, and
       // come back with it on restore; drop it as reassignLedOrgDrives does.
       if (before && before.ownerId !== step.ownerId) {
-        revokedLeads.push(...(await tx.delete(driveMembers).where(and(
+        revoked.push(...(await tx.delete(driveMembers).where(and(
           eq(driveMembers.driveId, step.driveId),
           eq(driveMembers.userId, before.ownerId),
           eq(driveMembers.role, 'OWNER'),
@@ -181,15 +184,19 @@ export async function deleteOrganization(
     if (driveIds.length > 0) {
       // Org-materialized access means nothing once the drive has left the org;
       // leaving those rows would keep former org members inside a personal drive.
-      await tx
+      const orgRows = await tx
         .delete(driveMembers)
-        .where(and(inArray(driveMembers.driveId, driveIds), eq(driveMembers.source, 'org')));
+        .where(and(inArray(driveMembers.driveId, driveIds), eq(driveMembers.source, 'org')))
+        .returning({ userId: driveMembers.userId, driveId: driveMembers.driveId });
+      // A drive's new owner keeps it through drives.ownerId, so their live connection stays.
+      const newOwner = new Map(plan.steps.map((step) => [step.driveId, step.ownerId]));
+      revoked.push(...orgRows.filter((row) => newOwner.get(row.driveId) !== row.userId));
     }
 
     await tx.delete(organizations).where(eq(organizations.id, input.orgId));
     return { ok: true, steps: plan.steps };
   });
   // Best effort once committed: a failed kick must not report a completed delete as failed.
-  if (result.ok) await Promise.allSettled(revokedLeads.map((row) => deps.kick(row)));
+  if (result.ok) await Promise.allSettled(revoked.map((row) => deps.kick(row)));
   return result;
 }
