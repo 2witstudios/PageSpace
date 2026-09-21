@@ -13,7 +13,7 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: (value: unknown) => Boolean((value as { error?: unknown })?.error),
 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: mocks.audit }));
-vi.mock('@/lib/repositories/oauth-repository', () => ({ findAccessTokenClientId: mocks.tokenClient }));
+vi.mock('@/lib/repositories/oauth-repository', () => ({ findAccessTokenIssuance: mocks.tokenClient }));
 vi.mock('@pagespace/lib/services/agent-identities', () => ({
   getAgentIdentitySummary: mocks.summary,
   rotateAgentSecret: mocks.rotate,
@@ -35,7 +35,7 @@ describe('POST /api/agent/secret/rotate', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.auth.mockResolvedValue({ userId: 'agent-1', tokenType: 'oauth', tokenId: 'at-1', scopes: { account: true } });
-    mocks.tokenClient.mockResolvedValue('pagespace-agent');
+    mocks.tokenClient.mockResolvedValue({ clientId: 'pagespace-agent', accountType: 'agent' });
     mocks.summary.mockImplementation(async (userId: string) => (userId === 'agent-1' ? { ownerUserId: 'human-1', claimedAt: new Date(), source: 'codex' } : null));
     mocks.rotate.mockResolvedValue({ ok: true, data: { secret: NEW_SECRET, secretPrefix: NEW_SECRET.slice(0, 12), secretVersion: 2 } });
   });
@@ -100,7 +100,7 @@ describe('POST /api/agent/secret/rotate', () => {
     });
 
     it("given the agent's account-scoped token issued to ANOTHER client, should answer 404 (only the jwt-bearer grant's token manages the secret)", async () => {
-      mocks.tokenClient.mockResolvedValue('pagespace-cli');
+      mocks.tokenClient.mockResolvedValue({ clientId: 'pagespace-cli', accountType: 'agent' });
       const response = await POST(rotateRequest({}));
       expect(response.status).toBe(404);
       expect(mocks.rotate).not.toHaveBeenCalled();

@@ -981,19 +981,27 @@ export async function exchangeAgentAssertion(input: ExchangeAgentAssertionInput)
   });
 }
 
+export interface AccessTokenIssuance {
+  /** The registry client id (`pagespace-agent`, `pagespace-cli`, …) the token was minted for. */
+  clientId: string;
+  /** The token principal's `users.accountType`. */
+  accountType: 'human' | 'agent';
+}
+
 /**
- * The registry client id (`pagespace-agent`, `pagespace-cli`, …) an access
- * token was minted for, by the token's row id (`OAuthAuthResult.tokenId`).
- * `null` when the row is gone.
+ * Who an access token was minted for and by whom, by the token's row id
+ * (`OAuthAuthResult.tokenId`) — one query. `null` when the row is gone.
+ * Feeds `classifyCallerCredential` (agent key management).
  */
-export async function findAccessTokenClientId(accessTokenId: string): Promise<string | null> {
+export async function findAccessTokenIssuance(accessTokenId: string): Promise<AccessTokenIssuance | null> {
   const [row] = await db
-    .select({ clientId: oauthClients.clientId })
+    .select({ clientId: oauthClients.clientId, accountType: users.accountType })
     .from(oauthAccessTokens)
     .innerJoin(oauthClients, eq(oauthClients.id, oauthAccessTokens.clientId))
+    .innerJoin(users, eq(users.id, oauthAccessTokens.userId))
     .where(eq(oauthAccessTokens.id, accessTokenId))
     .limit(1);
-  return row?.clientId ?? null;
+  return row ?? null;
 }
 
 // ---------------------------------------------------------------------------

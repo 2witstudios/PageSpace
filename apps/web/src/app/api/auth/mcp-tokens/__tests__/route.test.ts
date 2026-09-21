@@ -157,7 +157,7 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
 
   describe('POST /api/auth/mcp-tokens', () => {
     describe('authentication', () => {
-      it('no longer accepts OAuth bearer tokens — write requires a session, not just a token', async () => {
+      it('admits OAuth at the auth layer only so the agent path can classify it — every non-agent bearer is refused (agent-mint.test.ts)', async () => {
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -168,7 +168,7 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
 
         expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
           request,
-          { allow: ['session'], requireCSRF: true },
+          { allow: ['session', 'oauth'], requireCSRF: true },
         );
       });
 

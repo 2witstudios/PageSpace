@@ -24,6 +24,10 @@ describe('buildAuthMd', () => {
     }
   });
 
+  it('names the key-mint endpoint a headless agent uses with its own access token (ADR 0007 D6, assertion 25)', () => {
+    expect(md).toContain(`POST ${ISSUER}/api/auth/mcp-tokens\nAuthorization: Bearer <access_token>`);
+  });
+
   it('contains the token and revocation endpoints and the metadata URL itself', () => {
     expect(md).toContain(metadata.token_endpoint);
     expect(md).toContain(metadata.revocation_endpoint);

@@ -47,6 +47,8 @@ let identityPOST: Handler;
 let tokenPOST: Handler;
 let meGET: Handler;
 let rotatePOST: Handler;
+let mintPOST: Handler;
+let drivesPOST: Handler;
 
 const json = (url: string, body: unknown, headers: Record<string, string> = {}) =>
   new Request(`https://pagespace.test${url}`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-forwarded-for': IP, ...headers }, body: JSON.stringify(body) });
@@ -80,6 +82,8 @@ beforeAll(async () => {
   tokenPOST = (await import('../../oauth/token/route')).POST as unknown as Handler;
   meGET = (await import('../../auth/me/route')).GET;
   rotatePOST = (await import('../secret/rotate/route')).POST;
+  mintPOST = (await import('../../auth/mcp-tokens/route')).POST as unknown as Handler;
+  drivesPOST = (await import('../../drives/route')).POST;
 });
 
 afterAll(async () => {
@@ -132,6 +136,18 @@ describe('agent API door — real Postgres', () => {
     const me = await meGET(bearer('/api/auth/me', pair.access_token));
     expect(me.status).toBe(200);
     expect(await me.json()).toMatchObject({ id: identity.agent_id, accountType: 'agent', emailVerified: null, agent: { ownerUserId: null, source: 'integration-test' } });
+
+    // ADR 0007 D6: mint its own mcp_ key with its own grant's token, then use
+    // that key for a content write the ps_at_ itself may not make.
+    const minted = await mintPOST(bearer('/api/auth/mcp-tokens', pair.access_token, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'flow key' }) }));
+    expect(minted.status).toBe(200);
+    const { token: mcpKey } = await minted.json() as { token: string };
+    expect(mcpKey.startsWith('mcp_')).toBe(true);
+    const viaAccessToken = await drivesPOST(bearer('/api/drives', pair.access_token, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Not via ps_at_' }) }));
+    expect(viaAccessToken.status).toBe(401);
+    const created = await drivesPOST(bearer('/api/drives', mcpKey, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Agent Drive' }) }));
+    expect(created.status).toBe(201);
+    expect(await created.json()).toMatchObject({ name: 'Agent Drive', ownerId: identity.agent_id });
 
     // Refresh through the existing rotation, unchanged.
     const refreshed = await tokenPOST(form({ grant_type: 'refresh_token', refresh_token: pair.refresh_token, client_id: 'pagespace-agent' }));

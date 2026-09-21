@@ -3,7 +3,8 @@
  * Decision 14). Pure.
  *
  * Rotation is a key-management action: whoever holds the new secret IS the
- * agent. So:
+ * agent. Which bearer speaks for an agent is `classifyCallerCredential`
+ * (shared with key minting). So:
  *  - the OWNER may rotate only from a session (browser cookie, or the desktop
  *    and mobile apps' own session bearer — full human sessions). An OAuth access token
  *    an owner holds may be a narrowly scoped grant to some other client; the
@@ -19,22 +20,18 @@
  * exactly like one who does not own the agent, so the endpoint is no oracle
  * for which ids are agents or who owns them.
  */
+import { mayManageKeysWithCredential, type CallerCredential } from './caller-credential';
+
 export type AgentSecretActor = 'self' | 'owner';
 
-/**
- * How the caller authenticated: a session; the account-scoped access
- * token minted by the agent's own jwt-bearer grant; or any other token.
- */
-export type AgentSecretCallerCredential = 'session' | 'agent_grant_token' | 'other_token';
-
 export function agentSecretActor(input: {
-  caller: { id: string; credential: AgentSecretCallerCredential };
+  caller: { id: string; credential: CallerCredential };
   agentUserId: string;
   identity: { ownerUserId: string | null } | null;
 }): AgentSecretActor | null {
   const { caller, identity } = input;
   if (identity === null) return null;
-  if (caller.id === input.agentUserId) return caller.credential === 'other_token' ? null : 'self';
+  if (caller.id === input.agentUserId) return mayManageKeysWithCredential(caller.credential) ? 'self' : null;
   if (identity.ownerUserId === caller.id && caller.credential === 'session') return 'owner';
   return null;
 }

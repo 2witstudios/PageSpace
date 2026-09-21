@@ -1153,6 +1153,15 @@ export const DISTRIBUTED_RATE_LIMITS = {
     blockDurationMs: 5 * 60 * 1000,
     progressiveDelay: false,
   },
+  // POST /api/auth/mcp-tokens by an AI agent's own bearer token (ADR 0007 D6),
+  // keyed per agent. The session path is unchanged and unlimited here; a
+  // bearer that can mint content credentials in a loop is not.
+  AGENT_KEY_MINT: {
+    maxAttempts: 10,
+    windowMs: 60 * 60 * 1000,
+    blockDurationMs: 60 * 60 * 1000,
+    progressiveDelay: false,
+  },
   // POST /api/agent/claim (Phase 4) — starting a claim mints a user code,
   // like OAUTH_DEVICE_INIT.
   AGENT_CLAIM_INIT: {

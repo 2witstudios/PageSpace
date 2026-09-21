@@ -13,9 +13,8 @@
 import { z } from 'zod/v4';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { agentNoStoreJson, agentNotFound } from '@/lib/agent-auth/door';
-import { agentSecretActor, type AgentSecretCallerCredential } from '@/lib/agent-auth/secret-authority';
-import { findAccessTokenClientId } from '@/lib/repositories/oauth-repository';
-import { PAGESPACE_AGENT_CLIENT_ID } from '@pagespace/lib/auth/oauth/clients';
+import { agentSecretActor } from '@/lib/agent-auth/secret-authority';
+import { resolveCallerCredential } from '@/lib/agent-auth/caller-credential';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getAgentIdentitySummary, rotateAgentSecret } from '@pagespace/lib/services/agent-identities';
 
@@ -50,11 +49,7 @@ export async function POST(request: Request) {
 
   const agentUserId = parsed.data.agentId ?? auth.userId;
   const revokeTokens = parsed.data.revokeExistingTokens ?? false;
-  const credential: AgentSecretCallerCredential = auth.tokenType === 'session'
-    ? 'session'
-    : auth.tokenType === 'oauth' && auth.scopes.account && (await findAccessTokenClientId(auth.tokenId)) === PAGESPACE_AGENT_CLIENT_ID
-      ? 'agent_grant_token'
-      : 'other_token';
+  const credential = await resolveCallerCredential(auth);
   const actor = agentSecretActor({ caller: { id: auth.userId, credential }, agentUserId, identity: await getAgentIdentitySummary(agentUserId) });
   const refuse = (reason: string) => {
     auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'agent_identity', resourceId: agentUserId, details: { reason, agentAuthEvent: 'secret_rotate_refused' }, riskScore: 0.5 });
