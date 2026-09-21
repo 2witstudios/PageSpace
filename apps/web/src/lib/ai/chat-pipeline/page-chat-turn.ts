@@ -22,6 +22,7 @@ import {
   stepCountIs,
   hasToolCall,
   createUIMessageStream,
+  type ModelMessage,
   type TextUIPart,
   type ToolSet,
 } from 'ai';
@@ -1787,6 +1788,21 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
           promptOverheadTokens = () =>
             estimateSystemPromptTokens(systemPrompt) +
             estimateToolDefinitionTokens(filteredTools as Record<string, unknown>);
+          // Volatile per-turn data (timestamp/location/mention/command) is appended to the
+          // last user message so the system prefix stays byte-stable and provider prefix
+          // caches survive. One definition, so the abort-billing prompt estimate prices
+          // exactly what the provider was sent.
+          const toSentMessages = (messages: ModelMessage[]): ModelMessage[] =>
+            appendTurnContextToLastUserMessage(
+              messages,
+              buildVolatileTurnContext({
+                timestampPrompt: timestampSystemPrompt,
+                locationPrompt,
+                mentionPrompt: mentionSystemPrompt,
+                commandCatalogPrompt: userCommandCatalog.catalogPrompt,
+                commandPrompt: commandSystemPrompt,
+              }),
+            );
           // Server-side, in-request retry: if an attempt drops mid-loop (OpenRouter
           // disconnect) or ends mid-tool without the finish tool, transparently
           // re-drive the loop under one message envelope. The loop lives inside
@@ -1807,20 +1823,9 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
             maxSteps: AGENT_MAX_STEPS,
             startTimeMs: startTime,
             logger: loggers.ai,
+            toSentMessages,
             buildStreamText: (messages) => {
-              // Volatile per-turn data (timestamp/location/mention/command) is
-              // appended to the last user message so the system prefix stays
-              // byte-stable and provider prefix caches (Anthropic/OpenAI/Gemini)
-              // are not invalidated on every turn — including turns where only
-              // the user's current page/drive changed.
-              const turnContext = buildVolatileTurnContext({
-                timestampPrompt: timestampSystemPrompt,
-                locationPrompt,
-                mentionPrompt: mentionSystemPrompt,
-                commandCatalogPrompt: userCommandCatalog.catalogPrompt,
-                commandPrompt: commandSystemPrompt,
-              });
-              const messagesWithContext = appendTurnContextToLastUserMessage(messages, turnContext);
+              const messagesWithContext = toSentMessages(messages);
               // Apply cache breakpoints:
               //   A) last message — covers system+tools+history every step after step 1.
               //   B) stableBoundaryIndex — the first tail message after the compaction

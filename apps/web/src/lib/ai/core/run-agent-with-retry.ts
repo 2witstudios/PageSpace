@@ -43,6 +43,12 @@ export interface RunAgentWithRetryParams {
    * multicast, onAbort, maxRetries). The shell only swaps `messages` per attempt.
    */
   buildStreamText: (messages: ModelMessage[]) => AgentStreamResult;
+  /**
+   * The rewrite `buildStreamText` applies to the messages before the provider sees
+   * them (e.g. appending the volatile turn context). Used to price the prompt of a
+   * step interrupted by an abort; defaults to the messages as given.
+   */
+  toSentMessages?: (messages: ModelMessage[]) => ModelMessage[];
   /** The finish-tool name (FINISH_TOOL_NAME). */
   finishToolName: string;
   /** Execute-less tools that pause the turn awaiting user input (e.g. ask_user). */
@@ -74,7 +80,7 @@ export interface RunAgentWithRetryParams {
  * `agentRunBillingFields` (agent-run-billing.ts).
  */
 export interface AbortedStepEstimate {
-  /** Text of the messages the aborted attempt ran on (system prompt and tools excluded). */
+  /** Text of the messages the aborted attempt sent (system prompt and tools excluded). */
   promptText: string;
   /**
    * Provider-reported input + output tokens of the aborted attempt's last FINISHED
@@ -187,6 +193,7 @@ export async function runAgentWithRetry(
     abortSignal,
     baseMessages,
     buildStreamText,
+    toSentMessages = (messages) => messages,
     finishToolName,
     pauseToolNames,
     maxSteps,
@@ -309,7 +316,7 @@ export async function runAgentWithRetry(
     if (abortSignal.aborted && stepOpen && steps.length <= finishedStepChunks) {
       const priorStepUsage = (steps.at(-1) as { usage?: LanguageModelUsage } | undefined)?.usage;
       abortedStep = {
-        promptText: messagesText(baseMessages),
+        promptText: messagesText(toSentMessages(baseMessages)),
         priorStepContextTokens: hasTokenCounts(priorStepUsage)
           ? (priorStepUsage?.inputTokens ?? 0) + (priorStepUsage?.outputTokens ?? 0)
           : undefined,

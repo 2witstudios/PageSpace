@@ -13,7 +13,7 @@
  */
 
 import { NextResponse } from 'next/server';
-import { streamText, stepCountIs, hasToolCall, UIMessage, createUIMessageStream, type ToolSet } from 'ai';
+import { streamText, stepCountIs, hasToolCall, UIMessage, createUIMessageStream, type ModelMessage, type ToolSet } from 'ai';
 import type { convertToModelMessages } from 'ai';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { askUserTools, ASK_USER_TOOL_NAME } from '@/lib/ai/tools/ask-user-tools';
@@ -1301,6 +1301,21 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
         });
         // Resolve once outside the per-attempt factory (the factory is synchronous).
         const modelCapabilitiesForTools = await getModelCapabilities(currentModel, currentProvider);
+        // Volatile per-turn data (timestamp/location/mention/command) is appended to the
+        // last user message so the system prefix stays byte-stable and provider prefix
+        // caches survive. One definition, so the abort-billing prompt estimate prices
+        // exactly what the provider was sent.
+        const toSentMessages = (messages: ModelMessage[]): ModelMessage[] =>
+          appendTurnContextToLastUserMessage(
+            messages,
+            buildVolatileTurnContext({
+              timestampPrompt: timestampSystemPrompt,
+              locationPrompt,
+              mentionPrompt: mentionSystemPrompt,
+              commandCatalogPrompt: userCommandCatalog.catalogPrompt,
+              commandPrompt: commandSystemPrompt,
+            }),
+          );
         // Server-side, in-request retry: transparently re-drive the loop under one
         // message envelope when an attempt drops mid-loop or ends without finishing.
         // The loop lives inside execute(), so onFinish still fires exactly once below.
@@ -1316,19 +1331,9 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
           maxSteps: AGENT_MAX_STEPS,
           startTimeMs: startTime,
           logger: loggers.api,
+          toSentMessages,
           buildStreamText: (messages) => {
-            // Volatile per-turn data (timestamp/location/mention/command) is
-            // appended to the last user message so the stable system prefix
-            // stays byte-identical across turns and provider prefix caches
-            // survive — including turns where only the user's page changed.
-            const turnContext = buildVolatileTurnContext({
-              timestampPrompt: timestampSystemPrompt,
-              locationPrompt,
-              mentionPrompt: mentionSystemPrompt,
-              commandCatalogPrompt: userCommandCatalog.catalogPrompt,
-              commandPrompt: commandSystemPrompt,
-            });
-            const messagesWithContext = appendTurnContextToLastUserMessage(messages, turnContext);
+            const messagesWithContext = toSentMessages(messages);
             // Apply cache breakpoints: A) last message, B) summary/elision boundary.
             const cachedMessages = withCacheBreakpoints(messagesWithContext, stableBoundaryIndex);
             return streamText({

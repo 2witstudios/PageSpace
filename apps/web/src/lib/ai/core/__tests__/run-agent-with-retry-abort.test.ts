@@ -84,6 +84,7 @@ const drive = async (options: {
   signal: AbortSignal;
   tools?: Record<string, Tool>;
   onStepFinish?: () => void;
+  toSentMessages?: (messages: ModelMessage[]) => ModelMessage[];
 }) => {
   const chunks: UIMessageChunk[] = [];
   const writer = { write: (c: UIMessageChunk) => chunks.push(c) } as unknown as UIMessageStreamWriter;
@@ -91,10 +92,11 @@ const drive = async (options: {
     writer,
     abortSignal: options.signal,
     baseMessages,
+    toSentMessages: options.toSentMessages,
     buildStreamText: (messages) =>
       streamText({
         model: options.model,
-        messages,
+        messages: options.toSentMessages ? options.toSentMessages(messages) : messages,
         tools: options.tools,
         stopWhen: stepCountIs(5),
         abortSignal: options.signal,
@@ -147,6 +149,32 @@ describe('runAgentWithRetry — abort mid-step (real ai@6 stream)', () => {
         promptText: 'summarise the quarterly report',
         priorStepContextTokens: undefined,
       },
+    });
+  });
+
+  it('prices the prompt the provider was SENT, including the injected turn context', async () => {
+    const stop = new AbortController();
+    const model = new MockLanguageModelV3({
+      doStream: async ({ abortSignal }) => ({
+        stream: providerStream(textStep(20, [finish(1000, 50)]), abortSignal, (i) => {
+          if (i === 6) stop.abort();
+        }),
+      }),
+    });
+    // What the routes do: append the volatile turn context (timestamp, location,
+    // mentions, command catalog) to the last user message before streamText sees it.
+    const withTurnContext = (messages: ModelMessage[]): ModelMessage[] => [
+      ...messages,
+      { role: 'user', content: '<turn-context>it is Monday; you are on page Q3</turn-context>' },
+    ];
+
+    const { result } = await drive({ model, signal: stop.signal, toSentMessages: withTurnContext });
+
+    assert({
+      given: 'a stopped first step whose request carried an injected turn context',
+      should: 'estimate the prompt from the sent messages, not the bare history',
+      actual: result.abortedStep?.promptText,
+      expected: 'summarise the quarterly report\n<turn-context>it is Monday; you are on page Q3</turn-context>',
     });
   });
 
