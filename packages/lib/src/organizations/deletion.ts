@@ -21,13 +21,14 @@
  *   for the per-drive audit event the caller writes.
  */
 import { db } from '@pagespace/db/db';
-import { and, eq, inArray, isNotNull } from '@pagespace/db/operators';
+import { and, eq, inArray } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
 import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
 import { kickForDriveMembershipRevocation } from '../permissions/revocation-kick';
+import { loadAcceptedDriveMemberPairs } from '../permissions/org-drive-membership';
 import { revokeOrgDriveGrantsForMembers } from './leave';
-import { chunk, settleInBatches } from '../services/org-membership-sync-core';
+import { settleInBatches } from '../services/org-membership-sync-core';
 
 export type DriveDeletionChoice =
   | { driveId: string; action: 'transfer'; toUserId: string }
@@ -126,8 +127,6 @@ type RevokedRow = { userId: string; driveId: string };
 
 const pairKey = (row: RevokedRow) => `${row.driveId}:${row.userId}`;
 
-/** Ids per statement when reading who is still invited, far under Postgres's bind limit. */
-const STILL_INVITED_CHUNK = 500;
 
 /** Kicks in flight at once; each enumerates pages and conversations, as the org-membership publisher bounds its events. */
 const KICK_CONCURRENCY = 20;
@@ -229,13 +228,7 @@ export async function deleteOrganization(
       }
       // Someone still invited to the drive keeps it, and their connection with it.
       const candidateUsers = [...new Set([...candidates.values()].map((row) => row.userId))];
-      for (const ids of chunk(driveIds, STILL_INVITED_CHUNK)) {
-        const stillIn = candidateUsers.length === 0 ? [] : await tx
-          .select({ userId: driveMembers.userId, driveId: driveMembers.driveId })
-          .from(driveMembers)
-          .where(and(inArray(driveMembers.driveId, ids), inArray(driveMembers.userId, candidateUsers), isNotNull(driveMembers.acceptedAt)));
-        for (const row of stillIn) candidates.delete(pairKey(row));
-      }
+      for (const row of await loadAcceptedDriveMemberPairs(tx, candidateUsers, driveIds)) candidates.delete(pairKey(row));
       toKick.splice(0, toKick.length, ...candidates.values());
     }
 

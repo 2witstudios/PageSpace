@@ -200,6 +200,28 @@ export async function loadAcceptedRowsInDrives(
   return rows;
 }
 
+/**
+ * Which of `userIds` hold an ACCEPTED drive_members row on which of `driveIds`, read through
+ * `executor` (org deletion reads them inside its transaction, after its own row deletes).
+ */
+export async function loadAcceptedDriveMemberPairs(
+  executor: Pick<typeof db, 'select'>,
+  userIds: string[],
+  driveIds: string[],
+): Promise<Array<{ userId: string; driveId: string }>> {
+  const pairs: Array<{ userId: string; driveId: string }> = [];
+  if (userIds.length === 0) return pairs;
+  for (const users of chunks(userIds)) {
+    for (const ids of chunks(driveIds)) {
+      pairs.push(...(await executor
+        .select({ userId: driveMembers.userId, driveId: driveMembers.driveId })
+        .from(driveMembers)
+        .where(and(inArray(driveMembers.userId, users), inArray(driveMembers.driveId, ids), isNotNull(driveMembers.acceptedAt)))));
+    }
+  }
+  return pairs;
+}
+
 /** The user's role in each org they belong to (for listing many drives at once). */
 export async function loadOrgRolesForUser(userId: string): Promise<Map<string, OrgRole>> {
   const rows = await db
