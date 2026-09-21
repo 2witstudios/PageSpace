@@ -123,6 +123,12 @@ describe('applyQueuedSends (pure functions)', () => {
     expect(requeued.c1[1].id).toBe('q0');
     expect(applyRequeueQueuedSend(requeued, { conversationId: 'c1', message: msg('rejected') })).toBe(requeued);
   });
+
+  it('requeue into a conversation with no queue entry yet starts one holding just that message', () => {
+    // A reload or conversation switch can clear the in-memory entry while the
+    // dispatch is in flight; the rejection must still land.
+    expect(applyRequeueQueuedSend({}, { conversationId: 'c1', message: msg('rejected') })).toEqual({ c1: [msg('rejected')] });
+  });
 });
 
 describe('queuedSendsPersistence', () => {

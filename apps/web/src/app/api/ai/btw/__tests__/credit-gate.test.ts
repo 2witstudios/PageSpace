@@ -32,6 +32,8 @@ const mocks = vi.hoisted(() => ({
   releaseHold: vi.fn(),
   trackUsage: vi.fn(),
   streamText: vi.fn(),
+  calculateCost: vi.fn(),
+  requiresPro: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -64,14 +66,17 @@ vi.mock('@/lib/ai/core/ai-providers-config', () => ({
 }));
 vi.mock('@/lib/subscription/rate-limit-middleware', () => ({
   createAdminRestrictedResponse: () => new Response(JSON.stringify({ error: 'admin_only' }), { status: 403 }),
+  createSubscriptionRequiredResponse: () => new Response(JSON.stringify({ error: 'Subscription required' }), { status: 403 }),
+  requiresProSubscription: mocks.requiresPro,
 }));
 vi.mock('@pagespace/lib/billing/credit-gate', () => ({ canConsumeAI: mocks.gate }));
 vi.mock('@pagespace/lib/billing/credit-consume', () => ({ releaseHold: mocks.releaseHold }));
-vi.mock('@pagespace/lib/billing/credit-pricing', () => ({ MAX_CHAT_INFLIGHT: 8 }));
+vi.mock('@pagespace/lib/billing/credit-pricing', () => ({ MAX_CHAT_INFLIGHT: 8, MARKUP_BPS: 15000 }));
 vi.mock('@pagespace/lib/ai/model-defaults', () => ({ isMeteringExempt: (provider: string) => provider === 'glm' }));
 vi.mock('@pagespace/lib/monitoring/chat-pricing', () => ({ estimateChatHoldCentsForModel: () => 7 }));
 vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
   AIMonitoring: { trackUsage: mocks.trackUsage },
+  calculateCost: mocks.calculateCost,
   estimateTokens: (text: string) => Math.ceil(text.length / 4),
   extractOpenRouterCostDollars: (steps: Array<{ providerMetadata?: { openrouter?: { usage?: { cost?: number } } } }> | undefined) =>
     steps?.reduce<number | undefined>((sum, step) => {
@@ -108,6 +113,8 @@ describe('POST /api/ai/btw credit gate', () => {
     mocks.releaseHold.mockResolvedValue(undefined);
     mocks.trackUsage.mockResolvedValue({ status: 'recorded' });
     mocks.streamText.mockReturnValue({ toTextStreamResponse: () => new Response('side') });
+    mocks.calculateCost.mockReturnValue(0.002);
+    mocks.requiresPro.mockReturnValue(false);
   });
 
   it('refuses an out-of-credit user with the shared 402 shape and never builds or calls the model', async () => {
@@ -163,21 +170,14 @@ describe('POST /api/ai/btw credit gate', () => {
     expect(mocks.releaseHold).not.toHaveBeenCalled();
   });
 
-  it('settles an aborted stream exactly once, billing the completed steps, without leaking the hold', async () => {
-    await post();
-    const options = streamOptions();
-    await options.onAbort?.({ steps: [billedStep] });
-    await options.onFinish?.({ totalUsage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, steps: [] });
-
-    expect(mocks.trackUsage).toHaveBeenCalledTimes(1);
-    expect(mocks.trackUsage).toHaveBeenCalledWith(expect.objectContaining({
-      holdId: 'hold_1',
-      success: false,
-      inputTokens: 900,
-      outputTokens: 100,
-      providerCostDollars: 0.0042,
-    }));
-    expect(mocks.releaseHold).not.toHaveBeenCalled();
+  it('refuses a paid-tier model for a user whose tier does not include it, before the gate (chat admission)', async () => {
+    mocks.requiresPro.mockReturnValue(true);
+    const response = await post();
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ error: 'Subscription required' });
+    expect(mocks.requiresPro).toHaveBeenCalledWith('openrouter', 'openai/gpt-5.4-nano', 'free', false);
+    expect(mocks.gate).not.toHaveBeenCalled();
+    expect(mocks.streamText).not.toHaveBeenCalled();
   });
 
   it('an in-stream error still bills the real usage the SDK reports at finish, once, as a failure', async () => {
@@ -193,16 +193,40 @@ describe('POST /api/ai/btw credit gate', () => {
     }));
   });
 
-  it('an abort before any step completes bills an estimate of what streamed, flagged as estimated', async () => {
+  // The real SDK hands onAbort `steps: []` for this one-step stream (pinned in
+  // side-question.real-sdk.test.ts), so that is the only abort shape tested here.
+  it('an abort bills the interrupted step as an estimate — prompt plus streamed output at catalog rate — once, off the reconcile', async () => {
     await post();
     const options = streamOptions();
     await options.onChunk?.({ chunk: { type: 'text-delta', text: 'x'.repeat(400) } });
     await options.onAbort?.({ steps: [] });
+    await options.onFinish?.({ totalUsage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, steps: [] });
 
     expect(mocks.trackUsage).toHaveBeenCalledTimes(1);
-    const [row] = mocks.trackUsage.mock.calls[0] as [{ inputTokens: number; outputTokens: number; success: boolean; holdId: string; metadata: Record<string, unknown> }];
-    expect(row).toMatchObject({ holdId: 'hold_1', success: false, outputTokens: 100, metadata: { usageEstimated: true, outcome: 'aborted' } });
+    const [row] = mocks.trackUsage.mock.calls[0] as [Record<string, unknown> & { inputTokens: number; metadata: { abortedStep: Record<string, unknown> } }];
+    expect(row).toMatchObject({
+      holdId: 'hold_1',
+      success: false,
+      outputTokens: 100,
+      providerCostDollars: 0.002,
+      openrouterGenerationIds: [],
+      costSource: 'estimate',
+      metadata: { outcome: 'aborted', abortedStep: { outputTokens: 100, costDollars: 0.002, capped: false } },
+    });
     expect(row.inputTokens).toBeGreaterThan(0);
+    expect(mocks.calculateCost).toHaveBeenCalledWith('openai/gpt-5.4-nano', row.inputTokens, 100);
+    expect(mocks.releaseHold).not.toHaveBeenCalled();
+  });
+
+  it('caps the interrupted step at the hold reserved for the call (converted back through the markup)', async () => {
+    mocks.calculateCost.mockReturnValue(5);
+    await post();
+    await streamOptions().onAbort?.({ steps: [] });
+    // hold 7¢ at a 1.5x markup -> at most $0.0467 of real cost
+    expect(mocks.trackUsage).toHaveBeenCalledWith(expect.objectContaining({
+      providerCostDollars: 0.07 / 1.5,
+      metadata: expect.objectContaining({ abortedStep: expect.objectContaining({ capped: true, costDollars: 0.07 / 1.5 }) }),
+    }));
   });
 
   it('a run that completes no step (no onFinish, no onAbort) still settles the hold once', async () => {

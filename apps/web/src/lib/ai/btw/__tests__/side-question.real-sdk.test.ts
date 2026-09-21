@@ -8,7 +8,8 @@ import { createSideQuestionStream, type SideQuestionSettlement } from '../side-q
 // in-stream `error` part fires onError BEFORE the flush fires onFinish, an
 // abort during the first step reports `steps: []`, and a run that produced no
 // step fires neither onFinish nor onAbort (it rejects `result.steps` instead).
-// Each case must bill exactly once and never at $0 when the provider did work.
+// Each case must settle exactly once; an abort must carry the interrupted step
+// (prompt + streamed output) so the route can bill it rather than $0.
 // ============================================================================
 
 type DoStream = MockLanguageModelV3['doStream'];
@@ -57,7 +58,6 @@ async function run(doStream: DoStream, { abortAfterMs }: { abortAfterMs?: number
     question: 'What changed?',
     snapshot: 'safe context',
     abortSignal: controller.signal,
-    estimateTokens: (text: string) => Math.ceil(text.length / 4),
     onSettle: async (settlement) => { settlements.push(settlement); },
   });
   if (abortAfterMs !== undefined) setTimeout(() => controller.abort(), abortAfterMs);
@@ -72,7 +72,8 @@ describe('side-question settlement against the real ai SDK', () => {
   it('a clean run settles once, finished, with the provider usage and cost metadata', async () => {
     const settlements = await run(provider([...head, { type: 'text-end', id: 't1' }, finish]));
     expect(settlements).toHaveLength(1);
-    expect(settlements[0]).toMatchObject({ outcome: 'finished', estimated: false, usage: { inputTokens: 900, outputTokens: 100 } });
+    expect(settlements[0]).toMatchObject({ outcome: 'finished', usage: { inputTokens: 900, outputTokens: 100 } });
+    expect(settlements[0].interruptedStep).toBeUndefined();
     expect(settlements[0].steps).toHaveLength(1);
   });
 
@@ -84,35 +85,39 @@ describe('side-question settlement against the real ai SDK', () => {
       finish,
     ]));
     expect(settlements).toHaveLength(1);
-    expect(settlements[0]).toMatchObject({ outcome: 'errored', estimated: false, usage: { inputTokens: 900, outputTokens: 100 } });
+    expect(settlements[0]).toMatchObject({ outcome: 'errored', usage: { inputTokens: 900, outputTokens: 100 } });
+    expect(settlements[0].interruptedStep).toBeUndefined();
     expect(settlements[0].error).toBeInstanceOf(Error);
     expect(settlements[0].steps).toHaveLength(1);
   });
 
-  it('an abort after output streamed bills an estimate of the prompt and the streamed text, never $0', async () => {
+  it('an abort mid-answer reports no provider usage (steps: []) and carries the interrupted step: the prompt and exactly what streamed', async () => {
     const settlements = await run(provider(head, { hang: true }), { abortAfterMs: 30 });
     expect(settlements).toHaveLength(1);
     const [settlement] = settlements;
-    expect(settlement.outcome).toBe('aborted');
-    expect(settlement.estimated).toBe(true);
-    expect(settlement.usage.outputTokens).toBe(Math.ceil('partial answer that streamed before the end'.length / 4));
-    expect(settlement.usage.inputTokens).toBeGreaterThan(Math.ceil('safe context'.length / 4));
+    expect(settlement).toMatchObject({ outcome: 'aborted', usage: {}, steps: [] });
+    expect(settlement.interruptedStep?.outputText).toBe('partial answer that streamed before the end');
+    expect(settlement.interruptedStep?.promptText).toContain('<conversation_snapshot>\nsafe context\n</conversation_snapshot>');
+    expect(settlement.interruptedStep?.promptText).toContain('detached side question');
   });
 
-  it('an abort before any output bills nothing (no evidence the provider ran it)', async () => {
+  it('an abort before any output still carries the interrupted step (the provider read the prompt)', async () => {
     const settlements = await run(provider(head.slice(0, 2), { hang: true }), { abortAfterMs: 30 });
     expect(settlements).toHaveLength(1);
-    expect(settlements[0]).toMatchObject({ outcome: 'aborted', estimated: false, usage: {} });
+    expect(settlements[0]).toMatchObject({ outcome: 'aborted', usage: {}, interruptedStep: { outputText: '' } });
   });
 
   it('a provider failure with no step (onFinish never fires) still settles once, so the hold is released', async () => {
     const settlements = await run(async () => { throw new Error('provider 500'); });
     expect(settlements).toHaveLength(1);
-    expect(settlements[0]).toMatchObject({ outcome: 'errored', estimated: false, usage: {} });
+    expect(settlements[0]).toMatchObject({ outcome: 'errored', usage: {} });
+    expect(settlements[0].interruptedStep).toBeUndefined();
     expect(settlements[0].error).toBeDefined();
   });
 
-  it('a stream that dies after output with no step bills the estimate and settles once', async () => {
+  // Not an abort, so not the interrupted-step policy: like the chat route, a
+  // provider-side failure bills what the provider reported (here, nothing).
+  it('a stream that dies after output with no step settles once, as an error with no interrupted step', async () => {
     const dying: DoStream = async () => ({
       stream: new ReadableStream<StreamPart>({
         start(controller) {
@@ -124,7 +129,7 @@ describe('side-question settlement against the real ai SDK', () => {
     });
     const settlements = await run(dying);
     expect(settlements).toHaveLength(1);
-    expect(settlements[0]).toMatchObject({ outcome: 'errored', estimated: true });
-    expect(settlements[0].usage.outputTokens).toBeGreaterThan(0);
+    expect(settlements[0]).toMatchObject({ outcome: 'errored', usage: {} });
+    expect(settlements[0].interruptedStep).toBeUndefined();
   });
 });

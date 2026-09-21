@@ -1,4 +1,4 @@
-import { streamText, type LanguageModel, type LanguageModelUsage, type StepResult, type ToolSet } from 'ai';
+import { streamText, type LanguageModel, type StepResult, type ToolSet } from 'ai';
 
 const MAX_SNAPSHOT_CHARS = 24_000;
 const MAX_MESSAGE_CHARS = 4_000;
@@ -68,27 +68,22 @@ const SIDE_QUESTION_SYSTEM =
 
 /**
  * How a side-question stream ended, handed to the caller exactly once so it can
- * record usage and settle the credit hold. `steps` are the steps that completed
- * (they carry the provider's per-request cost metadata). `usage` is the SDK's
- * total when the run reached its finish, the sum of the completed steps when it
- * was cut off after one, and otherwise an ESTIMATE (`estimated: true`) of the
- * prompt plus whatever output had streamed.
+ * record usage and settle the credit hold.
+ *
+ * `usage` and `steps` are the provider's own numbers (steps carry the per-request
+ * cost metadata). They are empty for an abort: a side question is one tool-free
+ * step, and ai@6 reports no usage for a step that was cut off (onAbort gets
+ * `steps: []`). The provider has still charged for that step, so an abort also
+ * carries `interruptedStep` — the prompt that was sent and the output streamed
+ * before the abort — for the caller to price (the same policy as the chat route's
+ * interrupted step).
  */
 export interface SideQuestionSettlement {
   outcome: 'finished' | 'aborted' | 'errored';
   usage: { inputTokens?: number; outputTokens?: number; totalTokens?: number };
-  estimated: boolean;
   steps: ReadonlyArray<StepResult<ToolSet>>;
+  interruptedStep?: { promptText: string; outputText: string };
   error?: unknown;
-}
-
-function sumStepUsage(steps: ReadonlyArray<{ usage?: Partial<LanguageModelUsage> }>): SideQuestionSettlement['usage'] {
-  const add = (a: number | undefined, b: number | undefined) => (b === undefined ? a : (a ?? 0) + b);
-  return steps.reduce<SideQuestionSettlement['usage']>((sum, step) => ({
-    inputTokens: add(sum.inputTokens, step.usage?.inputTokens),
-    outputTokens: add(sum.outputTokens, step.usage?.outputTokens),
-    totalTokens: add(sum.totalTokens, step.usage?.totalTokens),
-  }), {});
 }
 
 export function createSideQuestionStream({
@@ -97,7 +92,6 @@ export function createSideQuestionStream({
   snapshot,
   abortSignal,
   onSettle,
-  estimateTokens,
   streamText: stream = streamText,
 }: {
   model: LanguageModel;
@@ -109,42 +103,32 @@ export function createSideQuestionStream({
    * spends real model tokens, so every caller must bill them.
    */
   onSettle: (settlement: SideQuestionSettlement) => Promise<void>;
-  /** Token estimator for a run cut off before any step completed (see `unfinishedUsage`). */
-  estimateTokens: (text: string) => number;
   streamText?: typeof streamText;
 }): Response {
   const prompt = `<conversation_snapshot>\n${snapshot}\n</conversation_snapshot>\n\n<side_question>\n${question}\n</side_question>`;
 
-  // The SDK's terminal callbacks, in the order it fires them (ai@6):
+  // The SDK's terminal callbacks, in the order it fires them (ai@6, pinned in
+  // side-question.real-sdk.test.ts):
   //  - an in-stream `error` part fires onError INLINE, and the flush still fires
   //    onFinish with the real usage afterwards — so onError only records;
-  //  - an abort fires onAbort with the steps completed so far, which is `[]`
-  //    when the one step was cut off mid-stream;
-  //  - a run that completed no step fires NEITHER onFinish nor onAbort: the
-  //    flush rejects `result.steps` instead, and that rejection is the settle.
+  //  - an abort fires onAbort (with `steps: []` for this one-step stream);
+  //  - a run that completed no step fires NEITHER: the flush rejects
+  //    `result.steps` instead, and that rejection is the settle.
   // Billing twice would double-charge; billing never would leak the hold.
   let settled = false;
   let lastError: unknown;
   let streamedOutput = '';
-  const completedSteps: Array<StepResult<ToolSet>> = [];
   const settle = async (settlement: SideQuestionSettlement) => {
     if (settled) return;
     settled = true;
     await onSettle(settlement);
   };
-
-  // Usage for a run cut off before it finished. Completed steps are billed as
-  // reported. With none, a cut-off step still cost the provider its input and
-  // the output it had streamed — and billing it at $0 would make aborting just
-  // before the end a free answer — so bill an estimate of both. Nothing
-  // streamed means no evidence the provider ran it, so nothing is billed.
-  const unfinishedUsage = (steps: ReadonlyArray<StepResult<ToolSet>>): Pick<SideQuestionSettlement, 'usage' | 'estimated'> => {
-    if (steps.length > 0) return { usage: sumStepUsage(steps), estimated: false };
-    if (!streamedOutput) return { usage: {}, estimated: false };
-    const inputTokens = estimateTokens(SIDE_QUESTION_SYSTEM) + estimateTokens(prompt);
-    const outputTokens = estimateTokens(streamedOutput);
-    return { usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens }, estimated: true };
-  };
+  const aborted = (steps: ReadonlyArray<StepResult<ToolSet>>): SideQuestionSettlement => ({
+    outcome: 'aborted',
+    usage: {},
+    steps,
+    interruptedStep: { promptText: `${SIDE_QUESTION_SYSTEM}\n${prompt}`, outputText: streamedOutput },
+  });
 
   const result = stream({
     model,
@@ -159,24 +143,19 @@ export function createSideQuestionStream({
     onChunk: ({ chunk }) => {
       if (chunk.type === 'text-delta' || chunk.type === 'reasoning-delta') streamedOutput += chunk.text;
     },
-    onStepFinish: (step) => { completedSteps.push(step); },
     onError: ({ error }) => { lastError = error; },
     onFinish: ({ totalUsage, steps }) => settle({
       outcome: lastError === undefined ? 'finished' : 'errored',
       usage: totalUsage,
-      estimated: false,
       steps,
       ...(lastError === undefined ? {} : { error: lastError }),
     }),
-    onAbort: ({ steps }) => settle({ outcome: 'aborted', ...unfinishedUsage(steps), steps }),
+    onAbort: ({ steps }) => settle(aborted(steps)),
   });
   // The no-step end (see above). On any other end this either resolves or loses
   // the race to the callback that already settled.
-  void Promise.resolve(result.steps).catch((error: unknown) => settle({
-    outcome: abortSignal.aborted ? 'aborted' : 'errored',
-    ...unfinishedUsage(completedSteps),
-    steps: completedSteps,
-    error: lastError ?? error,
-  }));
+  void Promise.resolve(result.steps).catch((error: unknown) => settle(
+    abortSignal.aborted ? aborted([]) : { outcome: 'errored', usage: {}, steps: [], error: lastError ?? error },
+  ));
   return result.toTextStreamResponse();
 }

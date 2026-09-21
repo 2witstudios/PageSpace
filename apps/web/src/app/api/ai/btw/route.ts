@@ -17,8 +17,10 @@ import type { SubscriptionTier } from '@pagespace/lib/services/subscription-util
 import { messageRepository } from '@/lib/repositories/message-repository';
 import { getActivePlan } from '@/lib/ai/core/plan-binding';
 import { createAIProvider } from '@/lib/ai/core/provider-factory';
-import { ADMIN_ONLY_PROVIDERS, resolveProviderModel } from '@/lib/ai/core/ai-providers-config';
-import { createAdminRestrictedResponse } from '@/lib/subscription/rate-limit-middleware';
+import { resolveProviderModel } from '@/lib/ai/core/ai-providers-config';
+import { resolveGenerationAdmission } from '@/lib/ai/core/generation-admission';
+import { priceInterruptedStep } from '@/lib/ai/core/interrupted-step-cost';
+import { createAdminRestrictedResponse, createSubscriptionRequiredResponse, requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
 import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
 import { buildSideQuestionSnapshot, createSideQuestionStream } from '@/lib/ai/btw/side-question';
 
@@ -58,16 +60,29 @@ export async function POST(request: Request) {
     // (resolveProviderModel is what createAIProvider resolves too).
     const [user] = await db.select({ subscriptionTier: users.subscriptionTier, role: users.role, currentAiProvider: users.currentAiProvider, currentAiModel: users.currentAiModel }).from(users).where(eq(users.id, userId)).limit(1);
     const { provider: effectiveProvider, model: effectiveModel } = resolveProviderModel(undefined, undefined, user?.currentAiProvider, user?.currentAiModel);
-    if (ADMIN_ONLY_PROVIDERS.has(effectiveProvider) && user?.role !== 'admin') {
-      auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'ai_btw', resourceId: conversationId, details: { reason: 'admin_only_provider', provider: effectiveProvider, method: 'POST' }, riskScore: 0.5 });
-      return createAdminRestrictedResponse();
+    // Entitlement exactly as a chat turn decides it: an admin-only provider is a
+    // role block, a paid-tier model is a tier block (a downgraded user's stored
+    // model must not keep running here).
+    const admission = resolveGenerationAdmission({
+      provider: effectiveProvider,
+      model: effectiveModel,
+      subscriptionTier: user?.subscriptionTier,
+      isAdmin: user?.role === 'admin',
+      requiresProSubscription,
+    });
+    if (!admission.allowed) {
+      auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'ai_btw', resourceId: conversationId, details: { reason: admission.reason, provider: effectiveProvider, method: 'POST' }, riskScore: 0.5 });
+      return admission.reason === 'provider_admin_only' ? createAdminRestrictedResponse() : createSubscriptionRequiredResponse();
     }
+    // The reservation for this call. Also the ceiling on what an aborted run's
+    // estimate may charge (see priceInterruptedStep).
+    const holdCents = estimateChatHoldCentsForModel(effectiveModel, { inputTokens: estimateTokens(snapshot) + estimateTokens(trimmedQuestion) });
     // Prepaid credit gate BEFORE the provider is built: out_of_credits -> 402, the
     // in-flight cap -> 429. Metering-exempt providers bill on a flat external plan,
     // so they skip the gate (no hold) exactly as the chat pipeline does.
     if (!isMeteringExempt(effectiveProvider)) {
       const gate = await canConsumeAI(userId, (user?.subscriptionTier ?? 'free') as SubscriptionTier, {
-        estCostCents: estimateChatHoldCentsForModel(effectiveModel, { inputTokens: estimateTokens(snapshot) + estimateTokens(trimmedQuestion) }),
+        estCostCents: holdCents,
         maxInFlight: MAX_CHAT_INFLIGHT,
       });
       if (!gate.allowed) {
@@ -87,25 +102,48 @@ export async function POST(request: Request) {
       question: trimmedQuestion,
       snapshot,
       abortSignal: request.signal,
-      estimateTokens,
-      onSettle: async ({ outcome, usage, estimated, steps, error }) => {
+      onSettle: async ({ outcome, usage, steps, interruptedStep, error }) => {
+        // An abort cut the one step off before the provider reported usage: bill
+        // the interrupted step by the shared policy, as an estimate. Its row is
+        // kept off the OpenRouter cost reconcile, which would see no generation
+        // for it and refund the charge.
         try {
+          const interrupted = interruptedStep && (() => {
+            const inputTokens = estimateTokens(interruptedStep.promptText);
+            const outputTokens = estimateTokens(interruptedStep.outputText);
+            return { inputTokens, outputTokens, ...priceInterruptedStep({ model: provider.modelName, inputTokens, outputTokens, holdCents }) };
+          })();
           await AIMonitoring.trackUsage({
             userId,
             provider: provider.provider,
             model: provider.modelName,
             source: 'chat',
-            inputTokens: usage.inputTokens,
-            outputTokens: usage.outputTokens,
-            totalTokens: usage.totalTokens ?? ((usage.inputTokens ?? 0) + (usage.outputTokens ?? 0) || undefined),
-            providerCostDollars: extractOpenRouterCostDollars(steps),
-            openrouterGenerationIds: extractOpenRouterGenerationIds(steps),
+            ...(interrupted
+              ? {
+                inputTokens: interrupted.inputTokens,
+                outputTokens: interrupted.outputTokens,
+                totalTokens: interrupted.inputTokens + interrupted.outputTokens,
+                providerCostDollars: interrupted.costDollars,
+                openrouterGenerationIds: [],
+                costSource: 'estimate' as const,
+              }
+              : {
+                inputTokens: usage.inputTokens,
+                outputTokens: usage.outputTokens,
+                totalTokens: usage.totalTokens ?? ((usage.inputTokens ?? 0) + (usage.outputTokens ?? 0) || undefined),
+                providerCostDollars: extractOpenRouterCostDollars(steps),
+                openrouterGenerationIds: extractOpenRouterGenerationIds(steps),
+              }),
             duration: Date.now() - startTime,
             conversationId,
             success: outcome === 'finished',
             holdId: settledHoldId,
             error: outcome === 'errored' ? (error instanceof Error ? error.message : String(error)) : undefined,
-            metadata: { feature: 'side_question', outcome, usageEstimated: estimated },
+            metadata: {
+              feature: 'side_question',
+              outcome,
+              ...(interrupted ? { abortedStep: { inputTokens: interrupted.inputTokens, outputTokens: interrupted.outputTokens, costDollars: interrupted.costDollars, capped: interrupted.capped } } : {}),
+            },
           });
         } catch (trackError) {
           // trackUsage releases the hold on its own failure paths; this only keeps a

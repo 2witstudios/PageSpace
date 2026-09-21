@@ -13,7 +13,7 @@ vi.mock('@pagespace/lib/ai/model-defaults', () => ({ isMeteringExempt: () => fal
 vi.mock('@pagespace/lib/monitoring/chat-pricing', () => ({ estimateChatHoldCentsForModel: () => 7 }));
 vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({ AIMonitoring: { trackUsage: vi.fn() }, estimateTokens: () => 1, extractOpenRouterCostDollars: () => undefined, extractOpenRouterGenerationIds: () => [] }));
 vi.mock('@/lib/ai/core/ai-providers-config', () => ({ ADMIN_ONLY_PROVIDERS: new Set<string>(), resolveProviderModel: () => ({ provider: 'openrouter', model: 'm' }) }));
-vi.mock('@/lib/subscription/rate-limit-middleware', () => ({ createAdminRestrictedResponse: vi.fn() }));
+vi.mock('@/lib/subscription/rate-limit-middleware', () => ({ createAdminRestrictedResponse: vi.fn(), createSubscriptionRequiredResponse: vi.fn(), requiresProSubscription: () => false }));
 vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn() }));
 vi.mock('@pagespace/db/schema/conversations', () => ({ conversations: { __table: 'conversations', id: 'id', userId: 'userId', isShared: 'isShared', type: 'type', contextId: 'contextId' } }));
 vi.mock('@pagespace/lib/permissions/conversation-access', () => ({ canAccessConversation: mocks.access }));

@@ -41,7 +41,6 @@ describe('detached side questions', () => {
       snapshot: 'safe context',
       abortSignal: controller.signal,
       onSettle: vi.fn().mockResolvedValue(undefined),
-      estimateTokens: () => 1,
       streamText,
     });
     expect(await response.text()).toBe('answer');
@@ -52,20 +51,5 @@ describe('detached side questions', () => {
       prompt: expect.stringContaining('<conversation_snapshot>\nsafe context\n</conversation_snapshot>'),
     }));
     expect(streamText.mock.calls[0][0].prompt).toContain('<side_question>\nWhat changed?\n</side_question>');
-  });
-
-  // Callback ORDER is pinned against the real SDK in side-question.real-sdk.test.ts;
-  // this covers the one branch a single tool-free step cannot reach there.
-  it('an abort after completed steps bills their summed usage, and later callbacks never bill again', async () => {
-    const streamText = vi.fn().mockReturnValue({ toTextStreamResponse: () => new Response('answer'), steps: new Promise(() => {}) });
-    const onSettle = vi.fn().mockResolvedValue(undefined);
-    createSideQuestionStream({ model: {} as never, question: 'q', snapshot: 's', abortSignal: new AbortController().signal, onSettle, estimateTokens: () => 1, streamText });
-    const options = streamText.mock.calls[0][0];
-    const step = { usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 } };
-
-    await options.onAbort({ steps: [step, step] });
-    await options.onFinish({ totalUsage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, steps: [] });
-    expect(onSettle).toHaveBeenCalledTimes(1);
-    expect(onSettle).toHaveBeenCalledWith({ outcome: 'aborted', usage: { inputTokens: 20, outputTokens: 10, totalTokens: 30 }, estimated: false, steps: [step, step] });
   });
 });
