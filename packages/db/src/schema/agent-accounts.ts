@@ -174,20 +174,14 @@ export type AgentAccountGrantNonceRow = {
 };
 
 // ---------------------------------------------------------------------------
-// agent_account_secret_versions — the plane's own view of the store version
-// for CAS (ADR 0005 §2.3). Advisory-lock key = hash(tenantId, accountId, kind).
+// agent_account_secret_versions is NOT a main-DB table (G1c R3). ADR 0005
+// §2.5 first listed it here, but `previousVersion`, `rotatedAt` and
+// `revokedAt` are the PLANE-ATTESTED facts the verifier and `decideResolve`
+// trust: a main-DB writer who owned those rows could un-revoke a credential or
+// reopen a rotation grace. The row, the plane's bindings row and their DDL
+// live in the plane's own metadata store
+// (`packages/lib/src/agent-accounts/store/infisical-dev/plane-metadata.sql`).
 // ---------------------------------------------------------------------------
-
-export type AgentAccountSecretVersionRow = {
-  readonly tenantId: TenantId;
-  readonly accountId: AccountId;
-  readonly kind: AccountKind;
-  readonly currentVersion: CredentialVersion;
-  readonly previousVersion: CredentialVersion | null;
-  readonly rotatedAt: number | null;
-  readonly revokedAt: number | null;
-  readonly revokeReason: string | null;
-};
 
 /** The tables G2 creates, in one place so the migration and the knip entry agree. */
 export type AgentAccountsTables = {
@@ -196,5 +190,4 @@ export type AgentAccountsTables = {
   readonly agent_account_delegations: AgentAccountDelegationRow;
   readonly agent_account_approvals: AgentAccountApprovalRow;
   readonly agent_account_grant_nonces: AgentAccountGrantNonceRow;
-  readonly agent_account_secret_versions: AgentAccountSecretVersionRow;
 };

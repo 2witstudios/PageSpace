@@ -16,9 +16,18 @@
  * an `irreversible`/`privilege` operation (`class_never_always`: a tampered
  * row broadens nothing, ADR threat model A9).
  *
+ * Two refusals come BEFORE any of that (G1c R5, R12). The account's own
+ * `restrictions`: every restricted key must be bound by the request with
+ * every value in its list — a key the operation does not bind cannot be
+ * proven inside the list, so it is `out_of_scope`, never "unrestricted". And
+ * for an unattended run, the `delegationScope` the human delegated: a request
+ * outside its origins, operations or resources is `out_of_scope` whatever the
+ * account policy would allow.
+ *
  * "Ask on write" is decided by the typed class, never by HTTP method. Pure.
  */
-import type { AccountApprovalPolicy, ApprovalRequirement, ApprovalTrigger, DecideApproval } from './approval';
+import type { AccountApprovalPolicy, ApprovalRequirement, ApprovalScope, ApprovalTrigger, DecideApproval } from './approval';
+import type { CanonicalOrigin, ResourceRestrictions } from './canonical-request';
 import type { OperationClass, OperationRef } from './grant';
 import { ALWAYS_ALLOWED_BY_CLASS } from './always-allowed-by-class';
 
@@ -52,7 +61,22 @@ function resourcesWithin(scope: AccountApprovalPolicy['scope']['resources'], req
   return true;
 }
 
-export const decideApproval: DecideApproval = ({ operation, policy, origin, resources, now, usage }) => {
+/** Every restricted key bound by the request, every bound value allowed. An empty list allows nothing. */
+function withinRestrictions(restrictions: ResourceRestrictions, request: readonly (readonly [string, string])[]): boolean {
+  return Object.keys(restrictions).every((key) => {
+    const requested = request.filter(([requestKey]) => requestKey === key).map(([, value]) => value);
+    return requested.length > 0 && requested.every((value) => restrictions[key]!.includes(value));
+  });
+}
+
+/** What a delegation scope admits: its origin, a named operation, and its resources. */
+function withinScope(scope: ApprovalScope, operation: OperationRef, origin: CanonicalOrigin, resources: readonly (readonly [string, string])[]): boolean {
+  return scope.origins.includes(origin) && policyNames(scope.operations, operation) && resourcesWithin(scope.resources, resources);
+}
+
+export const decideApproval: DecideApproval = ({ operation, restrictions, delegationScope, policy, origin, resources, now, usage }) => {
+  if (!withinRestrictions(restrictions, resources)) return refuse('out_of_scope');
+  if (delegationScope !== null && !withinScope(delegationScope, operation, origin, resources)) return refuse('out_of_scope');
   if (policy === null) return concrete(operation);
 
   const named = policyNames(policy.scope.operations, operation);
@@ -62,9 +86,13 @@ export const decideApproval: DecideApproval = ({ operation, policy, origin, reso
 
   if (!policy.scope.origins.includes(origin)) return refuse('out_of_scope');
   if (!resourcesWithin(policy.scope.resources, resources)) return refuse('out_of_scope');
-  if (ASKS_UNDER_TRIGGER[policy.trigger][operation.class]) return concrete(operation);
+  // A policy row whose trigger or limits are not their declared types cannot grant anything by
+  // policy — it asks the human instead of throwing or comparing against NaN (G1c review of #2660).
+  const asks = Object.prototype.hasOwnProperty.call(ASKS_UNDER_TRIGGER, policy.trigger) ? ASKS_UNDER_TRIGGER[policy.trigger][operation.class] : true;
+  if (asks) return concrete(operation);
 
   const { limits } = policy;
+  if (![limits.maxUsesPerHour, limits.maxBytesOut, limits.maxConcurrent].every((limit) => typeof limit === 'number' && Number.isFinite(limit))) return concrete(operation);
   if (usage.usesThisHour >= limits.maxUsesPerHour || usage.concurrent >= limits.maxConcurrent || usage.bytesOutThisHour >= limits.maxBytesOut) {
     return refuse('limits_exceeded');
   }

@@ -550,7 +550,7 @@ describe('POST /api/oauth/authorize — step-up gate (Phase 8: bearer-OAuth mint
     // once so this particular request has no access to the requested drive,
     // driving checkGrantAuthority's 'no_access' branch (a real scope-cap
     // rejection, not a request-syntax one — the scope itself is well-formed).
-    vi.mocked(getDriveAccess).mockResolvedValueOnce({ isOwner: false, isAdmin: false, isMember: false, role: null });
+    vi.mocked(getDriveAccess).mockResolvedValueOnce({ isOwner: false, isAdmin: false, isMember: false, role: null, customRoleId: null });
 
     const overPrivilegedBody = { ...approvalBody, scope: 'drive:testdrive1 name:ci' };
     const res = await POST(postRequest(overPrivilegedBody) as never);

@@ -5,7 +5,7 @@ import { driveMembers, pagePermissions, driveRoles } from '@pagespace/db/schema/
 import { users } from '@pagespace/db/schema/auth';
 import { loggers } from '../logging/logger-config';
 import { parseUserId, parsePageId } from '../validators/id-validators';
-import { fetchCustomRolePermissions, resolveCustomRolePermissions, type CustomRolePerms, type PagePerm } from './membership-queries';
+import { fetchCustomRolePermissions, resolveCustomRolePermissions, resolveDriveWideCanEdit, type CustomRolePerms, type PagePerm } from './membership-queries';
 import { resolveRolePermissions } from './resolve-role-permissions';
 import {
   loadEffectiveDriveMembership,
@@ -245,13 +245,20 @@ export async function getUserAccessLevel(
       }
 
       // Org Owner/Admin and implicit Open-drive membership resolve here too (ORG-4, DRV-5).
+      // loadEffectiveDriveMembership reads only ACCEPTED drive_members rows (#2672).
       const membership = await loadEffectiveDriveMembership(validUserId, drive[0]);
 
       if (membership) {
         const isAdmin = membership.role === 'ADMIN';
+        // The single drive-wide canEdit rule (#2627): a custom role bounds a
+        // MEMBER to what its driveWidePermissions grant; an unresolvable or
+        // foreign-drive role fails closed.
+        const canEditMap = await resolveDriveWideCanEdit([
+          { driveId: drive[0].id, role: isAdmin ? 'ADMIN' : 'MEMBER', customRoleId: membership.customRoleId },
+        ]);
         return {
           canView: true,
-          canEdit: true,
+          canEdit: canEditMap.get(drive[0].id) === true,
           canShare: isAdmin,
           canDelete: isAdmin,
         };
@@ -907,14 +914,11 @@ export async function getUserDrivePermissions(
 
 /**
  * Check whether two users share at least one drive, where "share" means each
- * is either the drive owner (`drives.ownerId`) or has a `drive_members` row
- * for that drive. Unlike `getUserDriveAccess` and `isUserDriveMember`, the
- * `acceptedAt IS NOT NULL` gate is *not* applied here — DM eligibility is a
- * softer permission than drive access, and surfacing co-members whose
- * acceptance state is in flux (or whose row predates the post-rebuild
- * `migrate-pending-invites` cleanup) is preferable to silently hiding them
- * from the picker. Page-level collaborators (page_permissions only) still
- * do NOT count.
+ * is either the drive owner (`drives.ownerId`) or has an ACCEPTED
+ * `drive_members` row for that drive. A pending, unaccepted invitation is not
+ * an established shared context (see apps/web/src/lib/users/visibility.ts), so
+ * it lets neither the invitee DM the drive's people nor them DM the invitee.
+ * Page-level collaborators (page_permissions only) do NOT count either.
  *
  * Used to gate DM eligibility: drive co-members can DM each other without
  * needing a connections-level relationship.
@@ -939,7 +943,7 @@ export async function usersShareDrive(
     const aMember = await db
       .select({ driveId: driveMembers.driveId })
       .from(driveMembers)
-      .where(eq(driveMembers.userId, userIdA));
+      .where(and(eq(driveMembers.userId, userIdA), isNotNull(driveMembers.acceptedAt)));
     for (const m of aMember) aDriveIds.add(m.driveId);
 
     if (aDriveIds.size === 0) return false;
@@ -958,7 +962,8 @@ export async function usersShareDrive(
       .where(
         and(
           inArray(driveMembers.driveId, aIds),
-          eq(driveMembers.userId, userIdB)
+          eq(driveMembers.userId, userIdB),
+          isNotNull(driveMembers.acceptedAt)
         )
       )
       .limit(1);

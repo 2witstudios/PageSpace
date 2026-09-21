@@ -171,3 +171,21 @@ describe('runAccountErasureJob — org Owner refusal', () => {
     );
   });
 });
+
+describe('runAccountErasureJob — web-recorded steps', () => {
+  beforeEach(() => {
+    callOrder.length = 0;
+    vi.clearAllMocks();
+  });
+
+  it('given the web already revoked Apple tokens at lodge time, should not run or re-record revoke-apple-tokens', async () => {
+    const { dataSubjectRequestRepository } = await import('@pagespace/lib/repositories/data-subject-request-repository');
+
+    await runAccountErasureJob({ requestId: 'dsr-1', userId: 'user-1' });
+
+    const recordedSteps = vi.mocked(dataSubjectRequestRepository.appendStepResult).mock.calls.map(([, result]) => result.step);
+    expect(recordedSteps).toContain('delete-user');
+    expect(recordedSteps).not.toContain('revoke-apple-tokens');
+    expect(recordedSteps).not.toContain('stripe-customer');
+  });
+});

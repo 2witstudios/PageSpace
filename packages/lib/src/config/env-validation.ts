@@ -132,6 +132,11 @@ export const serverEnvSchema = z
     // Optional OAuth state
     OAUTH_STATE_SECRET: z.string().min(32).optional(),
     APPLE_SERVICE_ID: z.string().min(1).optional(),
+    // Sign in with Apple token revocation (TN3194) — all optional; absent means the
+    // token exchange is skipped and deletion falls back to manual instructions.
+    APPLE_TEAM_ID: z.string().min(1).optional(),
+    APPLE_SIGN_IN_KEY_ID: z.string().min(1).optional(),
+    APPLE_SIGN_IN_PRIVATE_KEY: z.string().min(1).optional(),
 
     // Optional Stripe
     STRIPE_SECRET_KEY: z.string().min(1).optional(),

@@ -172,12 +172,10 @@ describe('getUsersWhoCanViewPage (integration)', () => {
     const drive = await factories.createDrive(owner.id);
     const channel = await factories.createPage(drive.id, { type: 'CHANNEL', isPrivate: false });
 
-    const members: string[] = [];
-    for (let i = 0; i < 205; i++) {
-      const u = await factories.createUser();
-      await factories.createDriveMember(drive.id, u.id);
-      members.push(u.id);
-    }
+    // Seeded in bulk: 410 single-row inserts against CI's shared Postgres ran
+    // this test into vitest's 5000ms timeout on master and on branches.
+    const members = (await factories.createUsers(205)).map((u) => u.id);
+    await factories.createDriveMembers(drive.id, members);
 
     const viewers = await getUsersWhoCanViewPage(channel.id, members);
 

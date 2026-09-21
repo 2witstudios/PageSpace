@@ -3,6 +3,7 @@ import { useConversationMessagesStore } from '@/stores/useConversationMessagesSt
 import type { ConversationCacheEntry } from '@/stores/conversationMessages/seedEmpty';
 import type { MessageEditPayload } from '@/lib/ai/streams/applyMessageEdit';
 import type { AskUserAnswerPayload, AskUserAnswerRevertPayload } from '@/lib/ai/streams/applyAskUserAnswer';
+import { persistQueuedSends } from '@/stores/conversationMessages/queuedSendsPersistence';
 
 /**
  * Facade — the sanctioned way for a component to WRITE to
@@ -112,4 +113,40 @@ export const conversationMessagesActions = {
   /** Mark a freshly-minted conversation loaded-empty (nothing to fetch for it). */
   seedConversation: (conversationId: string): void =>
     useConversationMessagesStore.getState().seedConversation(conversationId),
+
+  // ── SEND QUEUE (issue #2676) ─────────────────────────────────────────────
+  // Every mutation re-persists the queue, so localStorage can never disagree
+  // with the in-memory state a reload would restore from. The queue is the
+  // only client-held state whose loss silently breaks a promise (a queued
+  // message was never sent anywhere), which is why it alone persists — see
+  // queuedSendsPersistence.
+
+  /** The conversation's queued messages, in dispatch order. */
+  getQueuedSends: (conversationId: string): UIMessage[] =>
+    useConversationMessagesStore.getState().queuedSendsByConversationId[conversationId] ?? [],
+  /** Appends in FIFO order; false when the queue is full (`MAX_QUEUED_SENDS`). */
+  enqueueQueuedSend: (conversationId: string, message: UIMessage): boolean => {
+    const enqueued = useConversationMessagesStore.getState().enqueueQueuedSend(conversationId, message);
+    if (enqueued) persistQueuedSends(conversationId, conversationMessagesActions.getQueuedSends(conversationId));
+    return enqueued;
+  },
+  removeQueuedSend: (conversationId: string, messageId: string): void => {
+    useConversationMessagesStore.getState().removeQueuedSend(conversationId, messageId);
+    persistQueuedSends(conversationId, conversationMessagesActions.getQueuedSends(conversationId));
+  },
+  /** Removes and returns the oldest entry (the drain dispatches it), or null when empty. */
+  shiftQueuedSend: (conversationId: string): UIMessage | null => {
+    const head = useConversationMessagesStore.getState().shiftQueuedSend(conversationId);
+    if (head) persistQueuedSends(conversationId, conversationMessagesActions.getQueuedSends(conversationId));
+    return head;
+  },
+  clearQueuedSends: (conversationId: string): void => {
+    useConversationMessagesStore.getState().clearQueuedSends(conversationId);
+    persistQueuedSends(conversationId, conversationMessagesActions.getQueuedSends(conversationId));
+  },
+  /** Restore-on-mount: entries arrive exactly as persisted, ids intact. */
+  setQueuedSends: (conversationId: string, messages: UIMessage[]): void => {
+    useConversationMessagesStore.getState().setQueuedSends(conversationId, messages);
+    persistQueuedSends(conversationId, conversationMessagesActions.getQueuedSends(conversationId));
+  },
 };

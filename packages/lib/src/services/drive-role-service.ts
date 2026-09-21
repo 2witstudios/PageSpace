@@ -118,8 +118,8 @@ export async function checkDriveAccessForRoles(
     };
   }
 
-  // The shared org-aware membership. It reads ACCEPTED rows only: a pending ADMIN invitation
-  // manages no roles.
+  // The shared org-aware membership. It reads ACCEPTED rows only: a pending invite (acceptedAt IS
+  // NULL) grants nothing, and a pending ADMIN invitation manages no roles (#2672).
   const membership = await loadEffectiveDriveMembership(userId, drive);
 
   if (!membership) {

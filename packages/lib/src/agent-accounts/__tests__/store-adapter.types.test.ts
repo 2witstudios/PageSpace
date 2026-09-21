@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { CredentialVersion } from '@pagespace/db/schema/agent-accounts';
+import type { PresenterChannel } from '../grant';
 import type { SecretRef, StoreAdapter, StoreIdentity, VerifiedGrant } from '../store/store-adapter';
 
 // ADR 0005 §10.22 (G1a review H6) — TYPE-LEVEL. The assertions are the
@@ -9,11 +10,13 @@ import type { SecretRef, StoreAdapter, StoreIdentity, VerifiedGrant } from '../s
 
 const resolveCallSites = (
   adapter: StoreAdapter,
-  identity: StoreIdentity,
+  identity: StoreIdentity & { readonly channel: PresenterChannel },
+  httpIdentity: StoreIdentity & { readonly channel: 'http-executor' },
+  browserIdentity: StoreIdentity & { readonly channel: 'browser-worker' },
   version: CredentialVersion,
   unnarrowed: VerifiedGrant,
-  httpGrant: VerifiedGrant & { readonly aud: 'http-executor' },
-  browserGrant: VerifiedGrant & { readonly aud: 'browser-worker' },
+  httpGrant: VerifiedGrant<'http-executor'>,
+  browserGrant: VerifiedGrant<'browser-worker'>,
   passwordRef: SecretRef & { readonly kind: 'password' },
   oauthRef: SecretRef & { readonly kind: 'oauth2' },
 ) => [
@@ -25,11 +28,14 @@ const resolveCallSites = (
   adapter.resolve({ ref: oauthRef, version, grant: unnarrowed, identity }),
   // given an http-executor grant, should not compile for password
   // @ts-expect-error — ResolvableBy<'http-executor'> excludes password
-  adapter.resolve({ ref: passwordRef, version, grant: httpGrant, identity }),
+  adapter.resolve({ ref: passwordRef, version, grant: httpGrant, identity: httpIdentity }),
   // given a browser-worker grant, should compile for password
-  adapter.resolve({ ref: passwordRef, version, grant: browserGrant, identity }),
+  adapter.resolve({ ref: passwordRef, version, grant: browserGrant, identity: browserIdentity }),
+  // given a browser-worker grant presented with an http-executor identity, should not compile (G1c R8)
+  // @ts-expect-error — the identity's channel must be the grant's audience
+  adapter.resolve({ ref: passwordRef, version, grant: browserGrant, identity: httpIdentity }),
   // given an http-executor grant, should compile for oauth2 and the material should carry no refreshToken
-  adapter.resolve({ ref: oauthRef, version, grant: httpGrant, identity }).then((result) =>
+  adapter.resolve({ ref: oauthRef, version, grant: httpGrant, identity: httpIdentity }).then((result) =>
     // @ts-expect-error — OAuth2AccessMaterial omits refreshToken
     result.ok ? result.material.refreshToken : null,
   ),

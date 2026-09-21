@@ -1,10 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 
-vi.mock('@/lib/desktop-auth', () => ({
-  isDesktopPlatform: vi.fn(),
-}));
-
-import { isDesktopPlatform } from '@/lib/desktop-auth';
 import {
   buildDesktopExchangeDeepLink,
   extractDesktopExchangeCode,
@@ -32,27 +27,19 @@ describe('buildDesktopExchangeDeepLink', () => {
 });
 
 describe('extractDesktopExchangeCode', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it('returns exchange code on desktop when param is present', () => {
-    vi.mocked(isDesktopPlatform).mockReturnValue(true);
+  it('returns the exchange code on desktop when param is present', () => {
     expect(extractDesktopExchangeCode('?auth=success&desktopExchange=abc123')).toBe('abc123');
   });
 
+  it('returns the exchange code in a plain browser too (the emailed link never opens in the shell)', () => {
+    expect(extractDesktopExchangeCode('?desktopExchange=abc123')).toBe('abc123');
+  });
+
   it('returns null when no desktopExchange param', () => {
-    vi.mocked(isDesktopPlatform).mockReturnValue(true);
     expect(extractDesktopExchangeCode('?auth=success')).toBeNull();
   });
 
-  it('returns null on web even with desktopExchange param', () => {
-    vi.mocked(isDesktopPlatform).mockReturnValue(false);
-    expect(extractDesktopExchangeCode('?desktopExchange=abc123')).toBeNull();
-  });
-
   it('returns null for empty search', () => {
-    vi.mocked(isDesktopPlatform).mockReturnValue(true);
     expect(extractDesktopExchangeCode('')).toBeNull();
   });
 });

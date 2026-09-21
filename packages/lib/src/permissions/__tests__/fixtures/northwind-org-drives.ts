@@ -122,13 +122,13 @@ export async function northwind() {
   ]);
   const handbook = await factories.createDrive(jono.id, { name: 'Handbook', slug: `handbook-${createId()}`, orgId: southwind.id, orgVisibility: 'OPEN' });
   const handbookPage = await factories.createPage(handbook.id, { title: 'Policies' });
-  await db.insert(driveRoles).values({
+  const [handbookDefaultRole] = await db.insert(driveRoles).values({
     driveId: handbook.id,
     name: 'No access',
     isDefault: true,
     permissions: {},
     driveWidePermissions: { canView: false, canEdit: false, canShare: false },
-  });
+  }).returning();
   await factories.createDriveMember(handbook.id, kai.id, { source: 'invite', role: 'OWNER' });
 
   const personal = await factories.createDrive(marcus.id, { name: 'Marcus Notes', slug: `notes-${createId()}` });
@@ -140,6 +140,7 @@ export async function northwind() {
   return {
     people: { jono, priya, omar, lena, marcus, nina, eve, chris, dana, fred, kai, lu },
     org, acme, southwind,
+    roles: { productDefault: defaultRole, handbookDefault: handbookDefaultRole },
     drives: { product, research, finance, acmeWiki, handbook, personal },
     pages: { productPage, productPrivatePage, researchPage, financePage, financePrivatePage, handbookPage, personalPage, personalPrivatePage },
   };

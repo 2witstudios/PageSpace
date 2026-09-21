@@ -152,7 +152,7 @@ describe('org access in the human drive resolvers (integration)', () => {
     const f = await northwind();
     flags.orgsEnabled = true;
     const full = { canView: true, canEdit: true, canShare: true, canDelete: true };
-    const admin = { isOwner: false, isAdmin: true, isMember: true, role: 'ADMIN' };
+    const admin = { isOwner: false, isAdmin: true, isMember: true, role: 'ADMIN', customRoleId: null };
 
     // Omar's own ADMIN row opens Finance: org power is not used, no audit owed.
     expect(await getUserAccessLevel(f.people.omar.id, f.pages.financePrivatePage.id)).toEqual(full);
@@ -192,13 +192,14 @@ describe('org access in the human drive resolvers (integration)', () => {
     // The default role's drive-wide canEdit is what grants edit on a page: a plain member would read only.
     expect(await getUserAccessLevel(nina.id, f.pages.productPage.id)).toEqual({ canView: true, canEdit: true, canShare: false, canDelete: false });
     expect(await getUserAccessLevel(nina.id, f.pages.productPrivatePage.id)).toBeNull();
-    // The drive root grants any member view and edit (the pre-org drive-as-page rule); the role does not change it.
+    // The drive root grants any member view; edit there follows the drive-wide canEdit rule (#2627), so the
+    // default role's drive-wide canEdit is what lets Nina edit it and create root pages.
     expect(await getUserAccessLevel(nina.id, f.drives.product.id)).toEqual({ canView: true, canEdit: true, canShare: false, canDelete: false });
-    expect(await getDriveAccess(f.drives.product.id, nina.id)).toEqual({ isOwner: false, isAdmin: false, isMember: true, role: 'MEMBER' });
+    expect(await getDriveAccess(f.drives.product.id, nina.id)).toEqual({ isOwner: false, isAdmin: false, isMember: true, role: 'MEMBER', customRoleId: f.roles.productDefault.id });
 
     const listed = await listAccessibleDrives(nina.id);
     const product = listed.find((d) => d.id === f.drives.product.id);
-    expect(product).toMatchObject({ isOwned: false, role: 'MEMBER', orgId: f.org.id, orgVisibility: 'OPEN' });
+    expect(product).toMatchObject({ isOwned: false, role: 'MEMBER', orgId: f.org.id, orgVisibility: 'OPEN', canCreatePages: true });
     expect(listed.find((d) => d.id === f.drives.personal.id)).toMatchObject({ role: 'ADMIN', orgId: null });
     expect(await listedIds(nina.id, { tokenScopable: true })).toEqual([f.drives.product.id, f.drives.personal.id].sort());
 
@@ -207,15 +208,22 @@ describe('org access in the human drive resolvers (integration)', () => {
     expect(await getUserAccessLevel(f.people.lu.id, f.pages.handbookPage.id)).toBeNull();
     expect(await getUserAccessLevel(f.people.kai.id, f.pages.handbookPage.id)).toBeNull();
 
+    // #2627 through the org path: the drive root still opens for view, but a default role without
+    // drive-wide edit grants no edit there, and the listing's canCreatePages agrees with that answer.
+    for (const member of [f.people.lu, f.people.kai]) {
+      expect(await getUserAccessLevel(member.id, f.drives.handbook.id)).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
+      expect((await listAccessibleDrives(member.id)).find((d) => d.id === f.drives.handbook.id)).toMatchObject({ role: 'MEMBER', canCreatePages: false });
+    }
+
     // A leftover OWNER row is stale: Kai resolves through the default role exactly like Nina.
     expect(await getUserAccessLevel(f.people.kai.id, f.pages.productPage.id)).toEqual({ canView: true, canEdit: true, canShare: false, canDelete: false });
-    expect(await getDriveAccess(f.drives.product.id, f.people.kai.id)).toEqual({ isOwner: false, isAdmin: false, isMember: true, role: 'MEMBER' });
+    expect(await getDriveAccess(f.drives.product.id, f.people.kai.id)).toEqual({ isOwner: false, isAdmin: false, isMember: true, role: 'MEMBER', customRoleId: f.roles.productDefault.id });
   });
 
   it('DRV-6 (partial) an org member sees no RESTRICTED or PRIVATE drive without a joined row, and a stale source org row opens and lists nothing', async () => {
     const f = await northwind();
     flags.orgsEnabled = true;
-    const none = { isOwner: false, isAdmin: false, isMember: false, role: null };
+    const none = { isOwner: false, isAdmin: false, isMember: false, role: null, customRoleId: null };
 
     for (const member of [f.people.marcus, f.people.nina]) {
       for (const target of [f.drives.research.id, f.pages.researchPage.id, f.drives.finance.id, f.pages.financePage.id, f.pages.financePrivatePage.id]) {
@@ -262,7 +270,7 @@ describe('org access in the human drive resolvers (integration)', () => {
     expect(await getUserAccessLevel(chris.id, f.drives.research.id)).toBeNull();
     expect(await getUserAccessLevel(chris.id, f.drives.finance.id)).toBeNull();
     expect(await getUserAccessLevel(chris.id, f.pages.productPrivatePage.id)).toBeNull();
-    expect(await getDriveAccess(f.drives.product.id, chris.id)).toEqual({ isOwner: false, isAdmin: false, isMember: true, role: 'MEMBER' });
+    expect(await getDriveAccess(f.drives.product.id, chris.id)).toEqual({ isOwner: false, isAdmin: false, isMember: true, role: 'MEMBER', customRoleId: null });
   });
 
   it('ORG-4 (partial) org power never mints an explicit-role MCP key scope: an org Admin with no row must use an inheriting scope, which stops resolving once they are demoted', async () => {

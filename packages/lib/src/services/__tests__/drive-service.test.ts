@@ -52,11 +52,12 @@ vi.mock('@pagespace/db/operators', () => ({
 vi.mock('../../permissions/membership-queries', () => ({
   customRoleBelongsToDrive: vi.fn().mockResolvedValue(true),
   getMemberCustomRoleId: vi.fn().mockResolvedValue(null),
+  resolveDriveWideCanEdit: vi.fn(),
 }));
 
 import { db } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
-import { customRoleBelongsToDrive, getMemberCustomRoleId } from '../../permissions/membership-queries';
+import { customRoleBelongsToDrive, getMemberCustomRoleId, resolveDriveWideCanEdit } from '../../permissions/membership-queries';
 
 // Drizzle transaction callback receives a tx whose type is the inner parameter of db.transaction.
 type MockTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -105,6 +106,8 @@ const createMockDrive = (overrides: { id: string; name: string; ownerId?: string
 describe('listAccessibleDrives', () => {
   beforeEach(() => {
     vi.resetAllMocks(); // Reset mock implementations including mockResolvedValueOnce queue
+    // resolveDriveWideCanEdit drives canCreatePages; default to fail-closed.
+    vi.mocked(resolveDriveWideCanEdit).mockResolvedValue(new Map());
   });
 
   const setupMocks = (
@@ -230,6 +233,8 @@ describe('listAccessibleDrives', () => {
 describe('createDrive', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    // resolveDriveWideCanEdit drives canCreatePages; default to fail-closed.
+    vi.mocked(resolveDriveWideCanEdit).mockResolvedValue(new Map());
   });
 
   it('should create drive with generated slug', async () => {
@@ -276,6 +281,8 @@ describe('createDrive', () => {
 describe('getDriveById', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    // resolveDriveWideCanEdit drives canCreatePages; default to fail-closed.
+    vi.mocked(resolveDriveWideCanEdit).mockResolvedValue(new Map());
   });
 
   it('should return drive when found', async () => {
@@ -303,6 +310,8 @@ describe('getDriveById', () => {
 describe('getDriveAccess', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    // resolveDriveWideCanEdit drives canCreatePages; default to fail-closed.
+    vi.mocked(resolveDriveWideCanEdit).mockResolvedValue(new Map());
   });
 
   it('should return owner access when user is drive owner', async () => {
@@ -316,6 +325,7 @@ describe('getDriveAccess', () => {
       isAdmin: true,
       isMember: true,
       role: 'OWNER',
+      customRoleId: null,
     });
   });
 
@@ -335,6 +345,7 @@ describe('getDriveAccess', () => {
       isAdmin: true,
       isMember: true,
       role: 'ADMIN',
+      customRoleId: null,
     });
   });
 
@@ -354,6 +365,7 @@ describe('getDriveAccess', () => {
       isAdmin: false,
       isMember: true,
       role: 'MEMBER',
+      customRoleId: null,
     });
   });
 
@@ -373,6 +385,7 @@ describe('getDriveAccess', () => {
       isAdmin: false,
       isMember: false,
       role: null,
+      customRoleId: null,
     });
   });
 
@@ -386,6 +399,7 @@ describe('getDriveAccess', () => {
       isAdmin: false,
       isMember: false,
       role: null,
+      customRoleId: null,
     });
   });
 });
@@ -513,6 +527,8 @@ describe('validateDriveScopeAccess', () => {
 describe('getDriveAccessWithDrive', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    // resolveDriveWideCanEdit drives canCreatePages; default to fail-closed.
+    vi.mocked(resolveDriveWideCanEdit).mockResolvedValue(new Map());
   });
 
   it('should return drive and owner access when user is drive owner', async () => {
@@ -528,6 +544,7 @@ describe('getDriveAccessWithDrive', () => {
       isAdmin: true,
       isMember: true,
       role: 'OWNER',
+      customRoleId: null,
     });
   });
 
@@ -549,6 +566,7 @@ describe('getDriveAccessWithDrive', () => {
       isAdmin: true,
       isMember: true,
       role: 'ADMIN',
+      customRoleId: null,
     });
   });
 
@@ -570,6 +588,7 @@ describe('getDriveAccessWithDrive', () => {
       isAdmin: false,
       isMember: true,
       role: 'MEMBER',
+      customRoleId: null,
     });
   });
 
@@ -591,6 +610,7 @@ describe('getDriveAccessWithDrive', () => {
       isAdmin: false,
       isMember: false,
       role: null,
+      customRoleId: null,
     });
   });
 
@@ -610,6 +630,8 @@ describe('getDriveAccessWithDrive', () => {
 describe('getDriveWithAccess', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    // resolveDriveWideCanEdit drives canCreatePages; default to fail-closed.
+    vi.mocked(resolveDriveWideCanEdit).mockResolvedValue(new Map());
   });
 
   it('should return drive with access info for owner', async () => {
@@ -657,6 +679,8 @@ describe('getDriveWithAccess', () => {
 describe('updateDrive', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    // resolveDriveWideCanEdit drives canCreatePages; default to fail-closed.
+    vi.mocked(resolveDriveWideCanEdit).mockResolvedValue(new Map());
   });
 
   it('should update drive name and regenerate slug', async () => {
@@ -794,6 +818,8 @@ describe('isValidDriveHomePage', () => {
 describe('trashDrive', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    // resolveDriveWideCanEdit drives canCreatePages; default to fail-closed.
+    vi.mocked(resolveDriveWideCanEdit).mockResolvedValue(new Map());
   });
 
   it('should set isTrashed=true and trashedAt', async () => {
@@ -819,6 +845,8 @@ describe('trashDrive', () => {
 describe('restoreDrive', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    // resolveDriveWideCanEdit drives canCreatePages; default to fail-closed.
+    vi.mocked(resolveDriveWideCanEdit).mockResolvedValue(new Map());
   });
 
   it('should set isTrashed=false and trashedAt=null', async () => {
@@ -835,5 +863,95 @@ describe('restoreDrive', () => {
       trashedAt: null,
     }));
     expect(result?.isTrashed).toBe(false);
+  });
+});
+
+
+// ============================================================================
+// listAccessibleDrives — canCreatePages (#2627)
+// ============================================================================
+
+describe('listAccessibleDrives — canCreatePages', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    // resolveDriveWideCanEdit drives canCreatePages; default to fail-closed.
+    vi.mocked(resolveDriveWideCanEdit).mockResolvedValue(new Map());
+  });
+
+  const setup = (
+    owned: ReturnType<typeof createMockDrive>[],
+    member: Array<{ driveId: string; role: string; customRoleId?: string | null }>,
+    permOnly: Array<{ driveId: string | null }>,
+    shared: ReturnType<typeof createMockDrive>[],
+  ) => {
+    vi.mocked(db.query.drives.findMany)
+      .mockResolvedValueOnce(owned)
+      .mockResolvedValueOnce(shared);
+    vi.mocked(db.selectDistinct).mockImplementation(() => ({
+      from: vi.fn().mockReturnValue({
+        where: vi.fn().mockResolvedValue(member),
+        leftJoin: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue(permOnly),
+        }),
+      }),
+    } as unknown as ReturnType<typeof db.selectDistinct>));
+  };
+
+  it('given an owned drive, should set canCreatePages true with an OWNER entry through the rule', async () => {
+    setup([createMockDrive({ id: 'drive_own', name: 'Mine', ownerId: 'user_123' })], [], [], []);
+    vi.mocked(resolveDriveWideCanEdit).mockResolvedValue(new Map([['drive_own', true]]));
+
+    const result = await listAccessibleDrives('user_123');
+
+    expect(result[0].canCreatePages).toBe(true);
+    expect(resolveDriveWideCanEdit).toHaveBeenCalledWith([
+      { driveId: 'drive_own', role: 'OWNER', customRoleId: null },
+    ]);
+  });
+
+  it('given a shared plain-member drive, should resolve canCreatePages through the drive-wide rule', async () => {
+    setup(
+      [],
+      [{ driveId: 'drive_shared', role: 'MEMBER', customRoleId: null }],
+      [],
+      [createMockDrive({ id: 'drive_shared', name: 'Shared', ownerId: 'other_user' })],
+    );
+    vi.mocked(resolveDriveWideCanEdit).mockResolvedValue(new Map([['drive_shared', true]]));
+
+    const result = await listAccessibleDrives('user_123');
+
+    expect(result[0].canCreatePages).toBe(true);
+    expect(resolveDriveWideCanEdit).toHaveBeenCalledWith([
+      { driveId: 'drive_shared', role: 'MEMBER', customRoleId: null },
+    ]);
+  });
+
+  it('given a view-only custom-role member, should set canCreatePages false', async () => {
+    setup(
+      [],
+      [{ driveId: 'drive_shared', role: 'MEMBER', customRoleId: 'role_view' }],
+      [],
+      [createMockDrive({ id: 'drive_shared', name: 'Shared', ownerId: 'other_user' })],
+    );
+    vi.mocked(resolveDriveWideCanEdit).mockResolvedValue(new Map([['drive_shared', false]]));
+
+    const result = await listAccessibleDrives('user_123');
+
+    expect(result[0].canCreatePages).toBe(false);
+  });
+
+  it('given a page-collaborator-only drive (no membership), should fail closed with canCreatePages false', async () => {
+    setup(
+      [],
+      [],
+      [{ driveId: 'drive_perm' }],
+      [createMockDrive({ id: 'drive_perm', name: 'Perm', ownerId: 'other_user' })],
+    );
+    vi.mocked(resolveDriveWideCanEdit).mockResolvedValue(new Map());
+
+    const result = await listAccessibleDrives('user_123');
+
+    expect(result[0].canCreatePages).toBe(false);
+    expect(resolveDriveWideCanEdit).toHaveBeenCalledWith([]);
   });
 });

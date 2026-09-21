@@ -3,7 +3,7 @@
  * extraction to replace select().from().where() and update/insert chains
  * with a mockable repository interface.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('@pagespace/db/db', () => ({
   db: {
@@ -43,13 +43,14 @@ vi.mock('@pagespace/db/schema/core', () => ({
 }));
 vi.mock('@pagespace/db/schema/members', () => ({
   driveRoles: { id: 'dr.id', driveId: 'dr.driveId', name: 'dr.name', description: 'dr.description', color: 'dr.color', isDefault: 'dr.isDefault', permissions: 'dr.permissions', position: 'dr.position', updatedAt: 'dr.updatedAt' },
-  driveMembers: { driveId: 'dm.driveId', userId: 'dm.userId', role: 'dm.role' },
+  driveMembers: { driveId: 'dm.driveId', userId: 'dm.userId', role: 'dm.role', acceptedAt: 'dm.acceptedAt' },
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ({ op: 'eq', a, b })),
   and: vi.fn((...args: unknown[]) => ({ op: 'and', args })),
   asc: vi.fn((a) => ({ op: 'asc', a })),
   inArray: vi.fn((a, b) => ({ op: 'inArray', a, b })),
+  isNotNull: vi.fn((a) => ({ op: 'isNotNull', a })),
   sql: Object.assign(
     vi.fn((strings: unknown, ...values: unknown[]) => ({ strings, values })),
     {
@@ -60,6 +61,7 @@ vi.mock('@pagespace/db/operators', () => ({
 }));
 
 import { db } from '@pagespace/db/db';
+import { driveMembers } from '@pagespace/db/schema/members';
 import {
   checkDriveAccessForRoles,
   listDriveRoles,
@@ -210,6 +212,84 @@ describe('drive-role-service', () => {
       const result = await checkDriveAccessForRoles('drive-1', 'user-1');
       expect(result.isAdmin).toBe(false);
       expect(result.isMember).toBe(true);
+    });
+
+    // A drive_members row grants nothing until it is accepted — every canonical
+    // resolver in permissions.ts gates on acceptedAt IS NOT NULL. The fake table
+    // below evaluates the WHERE clause the service actually builds, so a pending
+    // row reaches the result only if the service forgets the gate.
+    describe('pending invites (acceptedAt IS NULL)', () => {
+      type Predicate =
+        | { op: 'eq'; a: string; b: unknown }
+        | { op: 'isNotNull'; a: string }
+        | { op: 'and'; args: Predicate[] };
+      type MemberRow = { driveId: string; userId: string; role: string; acceptedAt: Date | null };
+
+      const column = (ref: string) => ref.replace(/^dm\./, '') as keyof MemberRow;
+      const matches = (row: MemberRow, p: Predicate): boolean => {
+        switch (p.op) {
+          case 'and': return p.args.every((arg) => matches(row, arg));
+          case 'eq': return row[column(p.a)] === p.b;
+          case 'isNotNull': return row[column(p.a)] !== null;
+          default: throw new Error(`fake table cannot evaluate ${JSON.stringify(p)}`);
+        }
+      };
+      // The service reads membership through the shared org-aware loader, so the REAL
+      // loadEffectiveDriveMembership runs here, and its drive_members select is answered by
+      // the fake table evaluating the WHERE the loader builds.
+      const seedMembers = (rows: MemberRow[]) => {
+        mockDb.select.mockImplementation(() => ({
+          from: vi.fn((table: unknown) => ({
+            where: vi.fn((where: Predicate) => ({
+              limit: vi.fn(async () => table === driveMembers
+                ? rows.filter((row) => matches(row, where)).slice(0, 1)
+                : [{ id: 'drive-1', name: 'My Drive', slug: 'my-drive', ownerId: 'owner-1' }]),
+            })),
+          })),
+        }));
+        mockLoadMembership.mockImplementation(async (userId: string, drive: { id: string }) => {
+          const actual = await vi.importActual<typeof import('../../permissions/org-drive-membership')>(
+            '../../permissions/org-drive-membership',
+          );
+          return actual.loadEffectiveDriveMembership(userId, drive);
+        });
+      };
+      afterEach(() => mockLoadMembership.mockReset());
+
+      it.each(['ADMIN', 'MEMBER'])('refuses a user whose %s invite is still pending', async (role) => {
+        seedMembers([{ driveId: 'drive-1', userId: 'user-1', role, acceptedAt: null }]);
+
+        const result = await checkDriveAccessForRoles('drive-1', 'user-1');
+
+        expect(result).toMatchObject({ isOwner: false, isAdmin: false, isMember: false });
+      });
+
+      it('grants ADMIN once the same invite is accepted', async () => {
+        seedMembers([{ driveId: 'drive-1', userId: 'user-1', role: 'ADMIN', acceptedAt: new Date('2026-09-01') }]);
+
+        const result = await checkDriveAccessForRoles('drive-1', 'user-1');
+
+        expect(result).toMatchObject({ isOwner: false, isAdmin: true, isMember: true });
+      });
+
+      it('grants MEMBER (not admin) once the same invite is accepted', async () => {
+        seedMembers([{ driveId: 'drive-1', userId: 'user-1', role: 'MEMBER', acceptedAt: new Date('2026-09-01') }]);
+
+        const result = await checkDriveAccessForRoles('drive-1', 'user-1');
+
+        expect(result).toMatchObject({ isOwner: false, isAdmin: false, isMember: true });
+      });
+
+      it('does not let another user\'s accepted row stand in for a pending one', async () => {
+        seedMembers([
+          { driveId: 'drive-1', userId: 'user-1', role: 'ADMIN', acceptedAt: null },
+          { driveId: 'drive-1', userId: 'user-2', role: 'ADMIN', acceptedAt: new Date('2026-09-01') },
+        ]);
+
+        const result = await checkDriveAccessForRoles('drive-1', 'user-1');
+
+        expect(result.isMember).toBe(false);
+      });
     });
 
     it('should return non-member when no membership', async () => {

@@ -41,6 +41,7 @@ import { useAppLogs } from '@/hooks/drive-envs/useAppLogs';
 import { useAppHostingCapability } from '@/hooks/drive-envs/useAppHostingCapability';
 import { useEditingSession } from '@/stores/useEditingSession';
 import { StripeProvider } from '@/components/billing/StripeProvider';
+import { useBillingVisibility } from '@/hooks/useBillingVisibility';
 import { PaymentElement, useElements, useStripe } from '@stripe/react-stripe-js';
 
 const STATUS_COPY: Record<PublishedAppStatus, { label: string; tone: 'default' | 'secondary' | 'destructive' | 'outline' }> = {
@@ -62,6 +63,16 @@ const STATUS_COPY: Record<PublishedAppStatus, { label: string; tone: 'default' |
  */
 export function statusCopyFor(status: PublishedAppStatus): { label: string; tone: 'default' | 'secondary' | 'destructive' | 'outline' } {
   return STATUS_COPY[status] ?? { label: status, tone: 'outline' };
+}
+
+/**
+ * Why a parked app stopped. Where billing is hidden (the iOS app, Guideline
+ * 3.1.1) it says what happened without pointing at a purchase.
+ */
+export function parkedNoticeFor(showBilling: boolean): string {
+  return showBilling
+    ? 'Paused — this app ran out of credits or hit its daily limit. Top up credits or switch to the always-on plan below, then resume it.'
+    : 'Paused — this app ran out of credits or hit its daily limit.';
 }
 
 function appPath(driveId: string, envId: string): string {
@@ -251,6 +262,7 @@ function AppPaneBody({
   driveId: string;
   envId: string;
 }) {
+  const { showBilling } = useBillingVisibility();
   const lines = useAppLogs(logsOpen ? envId : null, logsOpen ? app.flyAppName : null);
 
   return (
@@ -269,8 +281,7 @@ function AppPaneBody({
 
       {app.status === 'parked' && (
         <div className="rounded-md border border-destructive/30 bg-destructive/5 p-2 text-destructive">
-          Paused — this app ran out of credits or hit its daily limit. Top up credits or switch to the
-          always-on plan below, then resume it.
+          {parkedNoticeFor(showBilling)}
         </div>
       )}
 
@@ -351,7 +362,7 @@ async function dunningFetcher(url: string): Promise<{ subscription: DunningState
  * `/dedicated` route's own owner-direct check (it deliberately does not use
  * `isPrincipalDriveOwnerOrAdmin`).
  */
-function DedicatedTierSection({
+export function DedicatedTierSection({
   app,
   isOwner,
   driveId,
@@ -362,6 +373,7 @@ function DedicatedTierSection({
   driveId: string;
   envId: string;
 }) {
+  const { showBilling } = useBillingVisibility();
   const [starting, setStarting] = useState(false);
   const [clientSecret, setClientSecret] = useState<string | null>(null);
 
@@ -369,7 +381,7 @@ function DedicatedTierSection({
   // metered case needs `purchasable` too, to decide whether the "Buy
   // always-on" button should even render.
   const { data } = useSWR<{ subscription: DunningState | null; purchasable: boolean }>(
-    isOwner ? `/api/drives/${encodeURIComponent(driveId)}/envs/${encodeURIComponent(envId)}/app/dunning` : null,
+    isOwner && showBilling ? `/api/drives/${encodeURIComponent(driveId)}/envs/${encodeURIComponent(envId)}/app/dunning` : null,
     dunningFetcher,
     { revalidateOnFocus: false, shouldRetryOnError: false },
   );
@@ -407,7 +419,8 @@ function DedicatedTierSection({
     componentName: 'DriveEnvAppPane.dedicatedCheckout',
   });
 
-  if (!isOwner) return null;
+  // The whole section is purchase and billing management — none of it in the iOS app.
+  if (!isOwner || !showBilling) return null;
   // `undefined` (still loading) renders nothing rather than a button that
   // might immediately need to disappear — same "don't flash a dead control"
   // reasoning as the pane-level capability gate.

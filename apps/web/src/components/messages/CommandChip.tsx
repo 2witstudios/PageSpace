@@ -3,7 +3,6 @@
 import { MouseEvent, KeyboardEvent } from 'react';
 import useSWR from 'swr';
 import { useRouter } from 'next/navigation';
-import { SlashSquare } from 'lucide-react';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { cn } from '@/lib/utils';
@@ -65,7 +64,7 @@ export function CommandChip({ commandId, label, inertNoAI }: CommandChipProps) {
       role={vm.navigable ? undefined : 'note'}
       aria-label={vm.tooltip.join('. ')}
       className={cn(
-        'inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-sm font-medium mx-1 no-underline',
+        'inline-flex items-center px-2 py-0.5 rounded-md text-sm font-medium mx-1 no-underline',
         vm.muted
           ? 'bg-muted text-muted-foreground'
           : 'bg-primary/20 text-primary dark:bg-primary/30 dark:text-primary',
@@ -74,7 +73,6 @@ export function CommandChip({ commandId, label, inertNoAI }: CommandChipProps) {
           : 'cursor-default'
       )}
     >
-      <SlashSquare size={13} aria-hidden="true" className="shrink-0" />
       {vm.text}
     </a>
   );

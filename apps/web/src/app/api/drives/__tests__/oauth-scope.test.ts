@@ -121,7 +121,7 @@ describe('GET /api/drives — OAuth credentials', () => {
     const drives = [
       driveFixture({ id: 'drive-a', name: 'Drive A', ownerId: 'user-manage-keys' }),
       driveFixture({ id: 'drive-b', name: 'Drive B', ownerId: 'someone-else' }),
-    ].map((drive) => ({ ...drive, isOwned: true, role: 'OWNER' as const, lastAccessedAt: null })) satisfies DriveWithAccess[];
+    ].map((drive) => ({ ...drive, isOwned: true, role: 'OWNER' as const, canCreatePages: true, lastAccessedAt: null })) satisfies DriveWithAccess[];
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(manageKeysScopedAuthResult());
     vi.mocked(listAccessibleDrives).mockResolvedValue(drives);
 
@@ -138,7 +138,7 @@ describe('GET /api/drives — OAuth credentials', () => {
   it('gives an account-scoped OAuth credential the full listAccessibleDrives result', async () => {
     const drives = [
       driveFixture({ id: 'drive-account', name: 'Account Drive', ownerId: 'user-account' }),
-    ].map((drive) => ({ ...drive, isOwned: true, role: 'OWNER' as const, lastAccessedAt: null })) satisfies DriveWithAccess[];
+    ].map((drive) => ({ ...drive, isOwned: true, role: 'OWNER' as const, canCreatePages: true, lastAccessedAt: null })) satisfies DriveWithAccess[];
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(
       manageKeysScopedAuthResult({
         userId: 'user-account',
@@ -183,7 +183,7 @@ describe('GET /api/drives — OAuth credentials', () => {
       }),
     );
     vi.mocked(listAccessibleDrives).mockResolvedValue([
-      { ...driveFixture({ id: 'drive-leak', name: 'Should Not Leak' }), isOwned: true, role: 'OWNER' as const, lastAccessedAt: null },
+      { ...driveFixture({ id: 'drive-leak', name: 'Should Not Leak' }), isOwned: true, role: 'OWNER' as const, canCreatePages: true, lastAccessedAt: null },
     ]);
 
     const request = new Request('https://example.com/api/drives');

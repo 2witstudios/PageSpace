@@ -643,6 +643,26 @@ export function getDefaultModel(provider: string): string {
 }
 
 /**
+ * Get the default model for a provider that the given subscription tier may
+ * actually select. Free users land on the first free-tier model in the
+ * provider's catalog instead of the first model overall (which is typically a
+ * paid flagship and would be rejected by the tier gate on save). Paid tiers
+ * behave exactly like getDefaultModel. An unset/unknown tier follows the same
+ * semantics as isModelAllowedForTier (treated as free). Dynamic-catalog
+ * providers (Ollama, LM Studio, Azure) have no static models and return '' so
+ * callers skip sending a model, matching getDefaultModel.
+ */
+export function getDefaultModelForTier(provider: string, tier: string | undefined): string {
+  const providerConfig = AI_PROVIDERS[provider as keyof typeof AI_PROVIDERS];
+  if (!providerConfig) return DEFAULT_MODEL;
+  const models = Object.keys(providerConfig.models);
+  const fallback = models[0] ?? '';
+  if (!fallback) return '';
+  if (isModelAllowedForTier(fallback, tier)) return fallback;
+  return models.find((model) => isModelAllowedForTier(model, tier)) ?? fallback;
+}
+
+/**
  * Check if a model is valid for a provider.
  */
 export function isValidModel(provider: string, model: string): boolean {
