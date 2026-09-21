@@ -199,12 +199,16 @@ export const DRIVE_ACCESS_GATE_ALLOWLIST: AccessGateAllowlist = {
   },
   'packages/lib/src/organizations/deletion.ts': {
     refuse: { ownerCompares: 1, reason: NOT_A_DRIVE("ownerId is the organization's Owner (org deletion, ORG-6)") },
+    deleteOrganization: {
+      ownerCompares: 2,
+      reason: "writer: one comparison (the scanner counts both sides) of a drive's former lead with the owner the deletion hands it to, to drop the former lead's OWNER row when the drive changes hands, as reassignLedOrgDrives does; who loses access is decided by resolveOrgDeletionAccessLoss in the permissions layer",
+    },
   },
   'packages/lib/src/organizations/membership.ts': {
     decideOwnershipTransfer: { ownerCompares: 2, reason: NOT_A_DRIVE("currentOwnerId is the organization's Owner (org ownership transfer, ORG-1)") },
   },
   'packages/lib/src/organizations/leave.ts': {
-    reassignLedOrgDrives: { ownerCompares: 1, reason: 'writer: selects the org drives a leaving member LEADS so their lead can be reassigned to the org Owner (ORG-6)' },
+    reassignLedOrgDrives: { ownerCompares: 2, reason: 'writer: selects the org drives a leaving member LEADS so their lead can be reassigned to the org Owner (ORG-6): their org ids first, then the drive rows FOR UPDATE, in the lock order org deletion uses' },
     planLeadReassignments: { ownerCompares: 1, reason: NOT_A_DRIVE("orgOwnerId is the organization's Owner, excluded as a reassignment source") },
   },
   'packages/lib/src/repositories/account-repository.ts': {

@@ -25,7 +25,7 @@ import { and, eq, inArray } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
 import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
-import { loadAcceptedDriveMemberPairs } from '../permissions/org-drive-membership';
+import { resolveOrgDeletionAccessLoss } from '../permissions/org-deletion-access';
 import { revokeOrgDriveGrantsForMembers } from './leave';
 import { publishDriveAccessEvents, type OrgMembershipSyncPorts } from '../services/org-membership-sync';
 import type { AffectedUser } from '../services/org-membership-sync-core';
@@ -121,10 +121,6 @@ export interface DeleteOrganizationDeps {
 
 type RevokedRow = { userId: string; driveId: string };
 
-const pairKey = (row: RevokedRow) => `${row.driveId}:${row.userId}`;
-
-
-
 export async function deleteOrganization(
   input: {
     actorId: string;
@@ -204,26 +200,16 @@ export async function deleteOrganization(
         .delete(driveMembers)
         .where(and(inArray(driveMembers.driveId, driveIds), eq(driveMembers.source, 'org')))
         .returning({ userId: driveMembers.userId, driveId: driveMembers.driveId });
-      // A drive's new owner keeps it through drives.ownerId, so their live connection stays.
-      const newOwner = new Map(plan.steps.map((step) => [step.driveId, step.ownerId]));
-      toKick.push(...orgRows.filter((row) => newOwner.get(row.driveId) !== row.userId));
-
       // Org access needs no row: an org Owner or Admin reaches every org drive, and every member
-      // reaches an Open one (a member whose direct invite is still pending has no org row there).
-      // All of it ends with the org.
+      // reaches an Open one. All of it ends with the org, except for a drive's new owner and anyone
+      // still invited to it; who that leaves is the permissions layer's decision.
       const openDrives = new Set(orgDrives.filter((drive) => drive.orgVisibility === 'OPEN').map((drive) => drive.id));
-      const candidates = new Map<string, RevokedRow>();
-      for (const row of toKick) candidates.set(pairKey(row), row);
-      for (const step of plan.steps) {
-        for (const { userId, role } of members) {
-          const reached = role !== 'MEMBER' || openDrives.has(step.driveId);
-          if (reached && userId !== step.ownerId) candidates.set(pairKey({ userId, driveId: step.driveId }), { userId, driveId: step.driveId });
-        }
-      }
-      // Someone still invited to the drive keeps it, and their connection with it.
-      const candidateUsers = [...new Set([...candidates.values()].map((row) => row.userId))];
-      for (const row of await loadAcceptedDriveMemberPairs(tx, candidateUsers, driveIds)) candidates.delete(pairKey(row));
-      toKick.splice(0, toKick.length, ...candidates.values());
+      const lost = await resolveOrgDeletionAccessLoss(tx, {
+        outcomes: plan.steps.map((step) => ({ driveId: step.driveId, newOwnerId: step.ownerId, open: openDrives.has(step.driveId) })),
+        members,
+        removedRows: [...toKick, ...orgRows],
+      });
+      toKick.splice(0, toKick.length, ...lost);
     }
 
     await tx.delete(organizations).where(eq(organizations.id, input.orgId));
