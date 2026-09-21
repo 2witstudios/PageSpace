@@ -1,0 +1,185 @@
+/**
+ * POST /api/oauth/token — the jwt-bearer grant (Agent Signup Phase 2 leaf 4;
+ * ADR 0007 Decisions 5-6, threat model T3/T4). The real static client
+ * registry and the real scope resolver are used, so a client or scope check
+ * that is mis-wired fails here.
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+vi.mock('server-only', () => ({}));
+
+const mocks = vi.hoisted(() => ({
+  ensureOAuthClientRow: vi.fn(),
+  exchangeAgentAssertion: vi.fn(),
+  refreshTokenGrant: vi.fn(),
+  rateLimit: vi.fn(),
+  audit: vi.fn(),
+  doorOpen: vi.fn(),
+}));
+
+vi.mock('@/lib/repositories/oauth-repository', () => ({
+  ensureOAuthClientRow: mocks.ensureOAuthClientRow,
+  exchangeAuthorizationCode: vi.fn(),
+  refreshTokenGrant: mocks.refreshTokenGrant,
+  pollDeviceToken: vi.fn(),
+  exchangeAgentAssertion: mocks.exchangeAgentAssertion,
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: mocks.audit }));
+vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({ getActorInfo: vi.fn(), logTokenActivity: vi.fn() }));
+vi.mock('@/lib/auth', () => ({ getClientIP: () => '203.0.113.21' }));
+vi.mock('@/lib/agent-auth/door', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/agent-auth/door')>()),
+  isAgentDoorOpen: () => mocks.doorOpen(),
+}));
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
+  checkDistributedRateLimit: mocks.rateLimit,
+  DISTRIBUTED_RATE_LIMITS: {
+    OAUTH_TOKEN_EXCHANGE: { maxAttempts: 10, windowMs: 300_000, progressiveDelay: true },
+    OAUTH_DEVICE_POLL: { maxAttempts: 100, windowMs: 300_000 },
+  },
+}));
+
+import { POST } from '../route';
+
+const GRANT = 'urn:ietf:params:oauth:grant-type:jwt-bearer';
+const SECRET = 'ps_agent_abcdefghijklmnopqrstuvwxyz012345';
+const INVALID_GRANT = { error: 'invalid_grant' };
+
+const tokens = {
+  accessToken: 'ps_at_' + 'a'.repeat(43),
+  refreshToken: 'ps_rt_' + 'b'.repeat(43),
+  familyId: 'family-1',
+};
+
+function tokenRequest(fields: Record<string, string | undefined>): Request {
+  const body = new URLSearchParams();
+  for (const [key, value] of Object.entries(fields)) if (value !== undefined) body.set(key, value);
+  return new Request('http://web.local/api/oauth/token', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: body.toString(),
+  });
+}
+
+const fields = (overrides: Record<string, string | undefined> = {}) => ({
+  grant_type: GRANT, assertion: SECRET, client_id: 'pagespace-agent', ...overrides,
+});
+
+describe('POST /api/oauth/token — jwt-bearer (agent assertion) grant', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.doorOpen.mockReturnValue(true);
+    mocks.rateLimit.mockResolvedValue({ allowed: true });
+    mocks.ensureOAuthClientRow.mockResolvedValue('client-db-agent');
+    mocks.exchangeAgentAssertion.mockResolvedValue({ outcome: 'ok', userId: 'agent-1', scopes: ['account', 'offline_access'], tokens });
+  });
+
+  describe('given a live agent secret presented by pagespace-agent', () => {
+    it('should answer the standard token response with the default account offline_access scope', async () => {
+      const response = await POST(tokenRequest(fields()) as never);
+      expect(response.status).toBe(200);
+      expect(response.headers.get('Cache-Control')).toBe('no-store');
+      expect(await response.json()).toEqual({
+        access_token: tokens.accessToken, token_type: 'Bearer', expires_in: expect.any(Number), refresh_token: tokens.refreshToken, scope: 'account offline_access',
+      });
+      expect(mocks.exchangeAgentAssertion).toHaveBeenCalledWith({ assertion: SECRET, clientDbId: 'client-db-agent', scopes: ['account', 'offline_access'], now: expect.any(Date) });
+    });
+
+    it('should audit the exchange for the agent without the secret', async () => {
+      await POST(tokenRequest(fields()) as never);
+      expect(mocks.audit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'auth.token.created', userId: 'agent-1', details: expect.objectContaining({ clientId: 'pagespace-agent', oauthEvent: 'agent_assertion_exchanged' }) }));
+      expect(JSON.stringify(mocks.audit.mock.calls)).not.toContain(SECRET);
+    });
+
+    it('should apply the token-exchange rate limit before the secret is looked up', async () => {
+      mocks.rateLimit.mockResolvedValue({ allowed: false, retryAfter: 30 });
+      const response = await POST(tokenRequest(fields()) as never);
+      expect(response.status).toBe(429);
+      expect(mocks.exchangeAgentAssertion).not.toHaveBeenCalled();
+      expect(mocks.rateLimit).toHaveBeenCalledWith('oauth-token:exchange:ip:203.0.113.21', expect.anything());
+    });
+  });
+
+  describe('every failure is the same invalid_grant body', () => {
+    it.each([['not_found'], ['revoked'], ['suspended'], ['locked']])('given a %s secret, should answer invalid_grant', async (outcome) => {
+      mocks.exchangeAgentAssertion.mockResolvedValue({ outcome, userId: outcome === 'not_found' ? null : 'agent-1' });
+      const response = await POST(tokenRequest(fields()) as never);
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual(INVALID_GRANT);
+      expect(mocks.audit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'authz.access.denied', details: expect.objectContaining({ oauthEvent: 'agent_assertion_rejected', outcome }) }));
+    });
+
+    it('given an unknown client_id, should answer invalid_grant without looking the secret up', async () => {
+      const response = await POST(tokenRequest(fields({ client_id: 'not-a-client' })) as never);
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual(INVALID_GRANT);
+      expect(mocks.exchangeAgentAssertion).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['a drive scope', 'drive:abc123'],
+      ['all_drives', 'all_drives'],
+      ['manage_keys', 'manage_keys'],
+      ['a key-shaped scope', 'drive:abc123 name:k'],
+      ['activate_key', 'activate_key:abc123'],
+      ['a malformed scope', 'account nonsense'],
+    ])('given %s, should answer invalid_grant and never exchange the secret', async (_label, scope) => {
+      const response = await POST(tokenRequest(fields({ scope })) as never);
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual(INVALID_GRANT);
+      expect(mocks.exchangeAgentAssertion).not.toHaveBeenCalled();
+      expect(mocks.audit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'authz.access.denied', details: expect.objectContaining({ oauthEvent: 'agent_assertion_scope_refused' }) }));
+    });
+
+    it('given scope=account, should exchange for account only', async () => {
+      mocks.exchangeAgentAssertion.mockResolvedValue({ outcome: 'ok', userId: 'agent-1', scopes: ['account'], tokens: { ...tokens, refreshToken: undefined } });
+      const response = await POST(tokenRequest(fields({ scope: 'account' })) as never);
+      expect(response.status).toBe(200);
+      expect(mocks.exchangeAgentAssertion).toHaveBeenCalledWith(expect.objectContaining({ scopes: ['account'] }));
+      expect(await response.json()).not.toHaveProperty('refresh_token');
+    });
+  });
+
+  describe('client binding (the grant belongs to pagespace-agent only)', () => {
+    it('given pagespace-cli presents an agent secret, should answer unauthorized_client and never look the secret up', async () => {
+      const response = await POST(tokenRequest(fields({ client_id: 'pagespace-cli' })) as never);
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: 'unauthorized_client' });
+      expect(mocks.exchangeAgentAssertion).not.toHaveBeenCalled();
+      expect(mocks.audit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'authz.access.denied', details: expect.objectContaining({ clientId: 'pagespace-cli', oauthEvent: 'agent_assertion_unauthorized_client' }) }));
+    });
+
+    it('given a client_secret alongside the public agent client, should answer invalid_request', async () => {
+      const response = await POST(tokenRequest(fields({ client_secret: 'nope' })) as never);
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: 'invalid_request' });
+      expect(mocks.exchangeAgentAssertion).not.toHaveBeenCalled();
+    });
+
+    it.each([['assertion'], ['client_id']])('given no %s, should answer invalid_request', async (missing) => {
+      const response = await POST(tokenRequest(fields({ [missing]: undefined })) as never);
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: 'invalid_request' });
+      expect(mocks.exchangeAgentAssertion).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('given the agent door is closed on this deployment', () => {
+    it('should answer unsupported_grant_type and never look the secret up', async () => {
+      mocks.doorOpen.mockReturnValue(false);
+      const response = await POST(tokenRequest(fields()) as never);
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: 'unsupported_grant_type' });
+      expect(mocks.exchangeAgentAssertion).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('the refresh token from this grant', () => {
+    it('should rotate through the existing refresh_token grant for pagespace-agent unchanged', async () => {
+      mocks.refreshTokenGrant.mockResolvedValue({ outcome: 'ok', userId: 'agent-1', scopes: ['account', 'offline_access'], tokens });
+      const response = await POST(tokenRequest({ grant_type: 'refresh_token', refresh_token: tokens.refreshToken, client_id: 'pagespace-agent' }) as never);
+      expect(response.status).toBe(200);
+      expect(mocks.refreshTokenGrant).toHaveBeenCalledWith(expect.objectContaining({ refreshToken: tokens.refreshToken, clientDbId: 'client-db-agent' }));
+    });
+  });
+});

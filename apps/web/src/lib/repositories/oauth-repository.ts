@@ -23,6 +23,9 @@ import {
 import { issueInitialTokenPair, issueRotatedTokenPair, type IssuedTokenPair } from '@pagespace/lib/auth/oauth/issue-tokens';
 import { decideRefreshRotation } from '@pagespace/lib/auth/oauth/refresh-rotation';
 import { parseScopeList, isScopeSubset, formatScopeSet, isAllDrivesGrant, isKeyActivationGrant, isKeyUpdateGrant, isPureDriveGrant, hasNewKeyName, scopeSetToDriveScopes } from '@pagespace/lib/auth/oauth/scopes';
+import { agentIdentities } from '@pagespace/db/schema/agent-identities';
+import { isAgentSecretShape } from '@pagespace/lib/auth/agent/secret';
+import { decideAgentSignin, type AgentSigninDecision } from '@pagespace/lib/auth/agent/signin-decision';
 import { sessionRepository } from './session-repository';
 
 /**
@@ -880,6 +883,101 @@ export async function pollDeviceToken(input: PollDeviceTokenInput): Promise<Poll
     });
 
     return { outcome: 'ok', userId: decision.grant.userId, scopes: decision.grant.scopes, tokens };
+  });
+}
+
+export interface ExchangeAgentAssertionInput {
+  /** Raw `ps_agent_*` secret from the `assertion` form field; hashed before any lookup. */
+  assertion: string;
+  /** Resolved `oauth_clients.id` of `pagespace-agent`. */
+  clientDbId: string;
+  /** Already narrowed to `account` (+ `offline_access`) by `resolveAgentAssertionScopes`. */
+  scopes: string[];
+  now: Date;
+}
+
+export type ExchangeAgentAssertionResult =
+  | { outcome: 'ok'; userId: string; scopes: string[]; tokens: IssuedTokenPair }
+  /** Typed for the audit row only — the route collapses every one of these to `invalid_grant`. */
+  | { outcome: Exclude<AgentSigninDecision['status'], 'ok'>; userId: string | null };
+
+/**
+ * The jwt-bearer grant (RFC 7523 URN, ADR 0007 Decision 5): exchange an agent's
+ * opaque `ps_agent_*` secret for a `ps_at_`/`ps_rt_` pair minted for the AGENT.
+ *
+ * Mirrors `pollDeviceToken`'s token-pair inserts. The lookup, the frozen
+ * `decideAgentSignin`, the `lastAuthAt` stamp and the inserts share ONE
+ * transaction with the identity row locked FOR UPDATE, so a concurrent
+ * rotation or revocation (which update that row) either commits first — and
+ * the old secret matches nothing, or the bumped `tokenVersion` is what gets
+ * stamped — or waits until these tokens exist and then kills them. A
+ * malformed secret never reaches the database.
+ */
+export async function exchangeAgentAssertion(input: ExchangeAgentAssertionInput): Promise<ExchangeAgentAssertionResult> {
+  if (!isAgentSecretShape(input.assertion)) {
+    return { outcome: 'not_found', userId: null };
+  }
+  const secretHash = hashToken(input.assertion);
+
+  return db.transaction(async (tx) => {
+    const rows = await tx
+      .select({
+        userId: agentIdentities.userId,
+        revokedAt: agentIdentities.revokedAt,
+        suspendedAt: users.suspendedAt,
+        lockedUntil: users.lockedUntil,
+        tokenVersion: users.tokenVersion,
+      })
+      .from(agentIdentities)
+      .innerJoin(users, eq(users.id, agentIdentities.userId))
+      .where(eq(agentIdentities.secretHash, secretHash))
+      .limit(1)
+      .for('update');
+    const row = rows[0];
+
+    const decision = decideAgentSignin({
+      account: row
+        ? { found: true, revokedAt: row.revokedAt, suspendedAt: row.suspendedAt, lockedUntil: row.lockedUntil }
+        : { found: false },
+      now: input.now,
+    });
+    if (!row || decision.status !== 'ok') {
+      return { outcome: decision.status === 'ok' ? 'not_found' : decision.status, userId: row?.userId ?? null };
+    }
+
+    // The lifecycle decision (ADR 0007 Decision 13) keys on this: an agent that
+    // ever exchanged its secret is a real agent, never swept as abandoned.
+    await tx.update(agentIdentities).set({ lastAuthAt: input.now }).where(eq(agentIdentities.userId, row.userId));
+
+    // F1 (ADR 0003): access-only unless offline_access was granted.
+    const tokens = issueInitialTokenPair(input.now, input.scopes.includes('offline_access'));
+
+    if (tokens.refreshToken !== undefined) {
+      await tx.insert(oauthRefreshTokens).values({
+        tokenHash: tokens.refreshTokenHash,
+        tokenPrefix: tokens.refreshTokenPrefix,
+        familyId: tokens.familyId,
+        clientId: input.clientDbId,
+        userId: row.userId,
+        scopes: input.scopes,
+        tokenVersion: row.tokenVersion,
+        expiresAt: tokens.refreshExpiresAt,
+        familyExpiresAt: tokens.familyExpiresAt,
+      });
+    }
+
+    await tx.insert(oauthAccessTokens).values({
+      tokenHash: tokens.accessTokenHash,
+      tokenPrefix: tokens.accessTokenPrefix,
+      familyId: tokens.familyId,
+      clientId: input.clientDbId,
+      userId: row.userId,
+      scopes: input.scopes,
+      tokenVersion: row.tokenVersion,
+      expiresAt: tokens.accessExpiresAt,
+    });
+
+    return { outcome: 'ok', userId: row.userId, scopes: input.scopes, tokens };
   });
 }
 
