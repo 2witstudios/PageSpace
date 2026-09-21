@@ -136,6 +136,8 @@ Give the human \`verification_uri_complete\`. They sign in as themselves and app
 
 \`\`\`
 POST ${metadata.token_endpoint}
+Content-Type: application/x-www-form-urlencoded
+
 grant_type=${agent.claim_grant_type}&claim_token=<claim_token>&client_id=pagespace-agent
 \`\`\`
 
@@ -148,6 +150,8 @@ Rotate your secret (you, or your owner) — the new secret is shown once, like t
 \`\`\`
 POST ${rotateUrl}
 Authorization: Bearer <access_token>
+Content-Type: application/json
+
 { "revokeExistingTokens": false }
 \`\`\`
 
@@ -155,6 +159,8 @@ Revoke a token you no longer need:
 
 \`\`\`
 POST ${metadata.revocation_endpoint}
+Content-Type: application/x-www-form-urlencoded
+
 token=<access_token or refresh_token>&client_id=pagespace-agent
 \`\`\`
 

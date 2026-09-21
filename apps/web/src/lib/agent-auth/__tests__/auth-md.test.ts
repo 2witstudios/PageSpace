@@ -24,6 +24,14 @@ describe('buildAuthMd', () => {
     }
   });
 
+  it('gives every POST in the recipe a Content-Type, so a request built from it literally is accepted', () => {
+    const blocks = md.split('```').filter((_, i) => i % 2 === 1).filter((block) => block.trimStart().startsWith('POST '));
+    expect(blocks.length).toBeGreaterThanOrEqual(5);
+    for (const block of blocks) {
+      expect(block).toMatch(/\nContent-Type: (application\/json|application\/x-www-form-urlencoded)\n/);
+    }
+  });
+
   it('names the key-mint endpoint a headless agent uses with its own access token (ADR 0007 D6, assertion 25)', () => {
     expect(md).toContain(`POST ${ISSUER}/api/auth/mcp-tokens\nAuthorization: Bearer <access_token>`);
   });
