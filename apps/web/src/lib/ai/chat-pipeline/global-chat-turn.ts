@@ -88,7 +88,7 @@ import { maskIdentifier } from '@/lib/logging/mask';
 import type { MCPTool } from '@/types/mcp';
 import type { LocationContext } from '@/lib/ai/shared/chat-types';
 import type { ContextRef } from '@/lib/ai/shared/buildContextRef';
-import { AIMonitoring, extractOpenRouterCostDollars, extractOpenRouterGenerationIds } from '@pagespace/lib/monitoring/ai-monitoring';
+import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { calculateTotalContextSize } from '@pagespace/lib/monitoring/ai-context-calculator';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import {
@@ -97,6 +97,7 @@ import {
   removeStream,
 } from '@/lib/ai/core/stream-abort-registry';
 import { runAgentWithRetry, AGENT_MAX_STEPS, isRunAborted, type RunAgentWithRetryResult } from '@/lib/ai/core/run-agent-with-retry';
+import { agentRunBillingFields } from '@/lib/ai/core/agent-run-billing';
 import { resolveGenerationAdmission } from '@/lib/ai/core/generation-admission';
 import { makeOnStepFinishHandler } from '@/lib/ai/core/step-finish-handler';
 import { resolveRequestContext } from '@/lib/ai/core/resolve-request-context';
@@ -1498,22 +1499,21 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
         // so the orphan-sweep can recover/bill it. Missing tokens mean a $0 cost
         // row, not a skipped one (which would silently front the spend).
         try {
-          const usage = agentRun?.accumulatedUsage;
-          const steps = agentRun?.accumulatedSteps;
           const duration = Date.now() - startTime;
+          // Provider usage + cost, plus the step an abort interrupted (which the
+          // provider charged for but reports no usage on) — see agentRunBillingFields.
+          const { abortedStep, ...billing } = agentRunBillingFields({
+            agentRun,
+            model: currentModel,
+            promptOverheadTokens: () => contextCalculation.systemPromptTokens + contextCalculation.toolDefinitionTokens,
+          });
 
           await AIMonitoring.trackUsage({
             userId: userId!,
             provider: currentProvider,
             model: currentModel,
             source: 'chat',
-            inputTokens: usage?.inputTokens,
-            outputTokens: usage?.outputTokens,
-            totalTokens: usage?.totalTokens,
-            cachedInputTokens: usage?.cachedInputTokens,
-            reasoningTokens: usage?.reasoningTokens,
-            providerCostDollars: extractOpenRouterCostDollars(steps),
-            openrouterGenerationIds: extractOpenRouterGenerationIds(steps),
+            ...billing,
             duration,
             conversationId,
             messageId,
@@ -1533,6 +1533,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
               toolCallsCount: extractedToolCalls.length,
               toolResultsCount: extractedToolResults.length,
               isReadOnly: readOnlyMode,
+              ...(abortedStep ? { abortedStep } : {}),
               retryAttempts: agentRun?.attempts,
               retryOutcome: agentRun?.finalOutcome,
               retryTerminalReason: agentRun?.terminalReason,

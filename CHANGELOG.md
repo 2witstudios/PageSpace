@@ -603,6 +603,11 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **A stopped AI reply is charged for what it used** — pressing Stop, or running out of credits,
+  while the assistant was still answering used to charge nothing for the unfinished part of the reply,
+  and in a multi-step reply sometimes nothing for the finished steps either. Stopped replies are now
+  charged for the finished steps plus the part of the reply you already saw. The unfinished part is
+  never charged more than the amount set aside when the reply started.
 - **The workflow editor fits the screen again** — a workflow with a long AI prompt pushed the
   Edit Workflow dialog's fields past its right edge and pushed Save below the fold. The dialog is
   now wider on desktop, its fields scroll between a fixed header and a fixed Cancel/Save footer, and

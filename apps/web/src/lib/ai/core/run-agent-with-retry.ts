@@ -65,6 +65,27 @@ export interface RunAgentWithRetryParams {
   logger: Logger;
 }
 
+/**
+ * What the retry shell saw of the step that was still streaming when the run was
+ * aborted (user Stop or the credit ceiling). ai@6 reports no usage for that step:
+ * `steps`/`totalUsage` only cover finished steps, and a stop during the only step
+ * rejects both — so without this the interrupted step settles at $0 although the
+ * provider already read its prompt and produced its output. Priced at settle by
+ * `agentRunBillingFields` (agent-run-billing.ts).
+ */
+export interface AbortedStepEstimate {
+  /** Text of the messages the aborted attempt ran on (system prompt and tools excluded). */
+  promptText: string;
+  /**
+   * Provider-reported input + output tokens of the aborted attempt's last FINISHED
+   * step. The interrupted step re-sends that whole context, so it is a floor for its
+   * prompt. Absent when no step finished before the abort.
+   */
+  priorStepContextTokens?: number;
+  /** Text, reasoning and tool input streamed for the interrupted step before the abort. */
+  outputText: string;
+}
+
 export interface RunAgentWithRetryResult {
   /** Concatenation of every attempt's steps — feed to extractOpenRouterCostDollars. */
   accumulatedSteps: ProviderMetadataCarrier[];
@@ -73,6 +94,8 @@ export interface RunAgentWithRetryResult {
   attempts: number;
   finalOutcome: 'clean' | 'terminal' | 'exhausted';
   terminalReason?: string;
+  /** Set only when an abort landed while a step was still streaming. */
+  abortedStep?: AbortedStepEstimate;
 }
 
 /**
@@ -120,6 +143,29 @@ const mergeUsage = (
   };
 };
 
+const hasTokenCounts = (usage: LanguageModelUsage | undefined): boolean =>
+  usage?.inputTokens !== undefined || usage?.outputTokens !== undefined;
+
+/**
+ * The text a model reads from these messages. Image and file data are skipped: their
+ * token cost is not proportional to their encoded length.
+ */
+const messagesText = (messages: ModelMessage[]): string => {
+  const out: string[] = [];
+  for (const message of messages) {
+    if (typeof message.content === 'string') {
+      out.push(message.content);
+      continue;
+    }
+    for (const part of message.content) {
+      if (part.type === 'text' || part.type === 'reasoning') out.push(part.text);
+      else if (part.type === 'tool-call') out.push(JSON.stringify(part.input ?? null));
+      else if (part.type === 'tool-result') out.push(JSON.stringify(part.output ?? null));
+    }
+  }
+  return out.join('\n');
+};
+
 /**
  * Run the agent loop with conservative, server-side, in-request retries.
  *
@@ -164,6 +210,7 @@ export async function runAgentWithRetry(
   let attempts = 0;
   let finalOutcome: RunAgentWithRetryResult['finalOutcome'] = 'clean';
   let terminalReason: string | undefined;
+  let abortedStep: AbortedStepEstimate | undefined;
 
   // One envelope around all attempts; inner start/finish are suppressed below.
   safeWrite({ type: 'start' });
@@ -173,6 +220,11 @@ export async function runAgentWithRetry(
 
     let caughtError: unknown;
     let emittedContent = false;
+    // Which step is streaming, and what it has produced so far — read only if an abort
+    // lands mid-step (see AbortedStepEstimate).
+    let stepOpen = false;
+    let inFlightOutput = '';
+    const streamedToolInputs = new Set<string>();
     // We only ever retry attempts that streamed NO content (see classifyAttempt:
     // emittedContent), which means no tool ran and nothing was committed — so each
     // attempt safely re-runs from the original baseMessages with no re-feed needed.
@@ -189,6 +241,32 @@ export async function runAgentWithRetry(
         // correctly classified as unrecoverable (no from-scratch retry → no duplication).
         onContent: () => {
           emittedContent = true;
+        },
+        onChunk: (chunk) => {
+          switch (chunk.type) {
+            case 'start-step':
+              stepOpen = true;
+              inFlightOutput = '';
+              streamedToolInputs.clear();
+              break;
+            case 'finish-step':
+              stepOpen = false;
+              break;
+            case 'text-delta':
+            case 'reasoning-delta':
+              inFlightOutput += chunk.delta;
+              break;
+            case 'tool-input-delta':
+              streamedToolInputs.add(chunk.toolCallId);
+              inFlightOutput += chunk.inputTextDelta;
+              break;
+            case 'tool-input-available':
+              // Providers that do not stream tool input deliver it whole here.
+              if (!streamedToolInputs.has(chunk.toolCallId)) {
+                inFlightOutput += JSON.stringify(chunk.input ?? null);
+              }
+              break;
+          }
         },
       });
     } catch (error) {
@@ -210,8 +288,29 @@ export async function runAgentWithRetry(
       : [];
     const usage = aiResult ? await Promise.resolve(aiResult.totalUsage).catch(() => undefined) : undefined;
 
+    // An abort after a step finished resolves `totalUsage` with no token counts (ai@6
+    // only fills it from the final `finish` part, which an aborted run never gets), yet
+    // each finished step still carries its own usage — sum those instead.
+    const stepsUsage = (): LanguageModelUsage | undefined =>
+      steps.reduce<LanguageModelUsage | undefined>(
+        (acc, step) => mergeUsage(acc, (step as { usage?: LanguageModelUsage }).usage),
+        undefined,
+      );
+    const attemptUsage = abortSignal.aborted && !hasTokenCounts(usage) ? stepsUsage() : usage;
+
     accumulatedSteps.push(...steps);
-    accumulatedUsage = mergeUsage(accumulatedUsage, usage);
+    accumulatedUsage = mergeUsage(accumulatedUsage, attemptUsage);
+
+    if (abortSignal.aborted && stepOpen) {
+      const priorStepUsage = (steps.at(-1) as { usage?: LanguageModelUsage } | undefined)?.usage;
+      abortedStep = {
+        promptText: messagesText(baseMessages),
+        priorStepContextTokens: hasTokenCounts(priorStepUsage)
+          ? (priorStepUsage?.inputTokens ?? 0) + (priorStepUsage?.outputTokens ?? 0)
+          : undefined,
+        outputText: inFlightOutput,
+      };
+    }
 
     const outcome = classifyAttempt({
       finishReason,
@@ -296,5 +395,5 @@ export async function runAgentWithRetry(
 
   safeWrite({ type: 'finish' });
 
-  return { accumulatedSteps, accumulatedUsage, attempts, finalOutcome, terminalReason };
+  return { accumulatedSteps, accumulatedUsage, attempts, finalOutcome, terminalReason, abortedStep };
 }
