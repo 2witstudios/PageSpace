@@ -135,29 +135,6 @@ describe('driveInviteRepository.findDriveById', () => {
   });
 });
 
-describe('driveInviteRepository.findAdminMembership', () => {
-  it('applies the acceptedAt-IS-NOT-NULL gate so pending ADMINs are excluded', async () => {
-    const member = { id: 'mem_1', role: 'ADMIN', acceptedAt: new Date('2025-01-01') };
-    const { where } = setupSelectLimit([member]);
-
-    const result = await driveInviteRepository.findAdminMembership('drive_1', 'user_1');
-
-    expect(result).toEqual(member);
-    expect(isNotNull).toHaveBeenCalledWith('driveMembers.acceptedAt');
-    const args = where.mock.calls[0]?.[0] as { conditions?: unknown[] };
-    expect(args?.conditions).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ kind: 'isNotNull', field: 'driveMembers.acceptedAt' }),
-      ])
-    );
-  });
-
-  it('returns null when no accepted ADMIN row matches (pending or non-ADMIN)', async () => {
-    setupSelectLimit([]);
-    expect(await driveInviteRepository.findAdminMembership('drive_1', 'user_1')).toBeNull();
-  });
-});
-
 describe('driveInviteRepository.findExistingMember', () => {
   it('returns any matching membership without filtering on acceptedAt', async () => {
     const pending = { id: 'mem_pending', role: 'MEMBER', acceptedAt: null };

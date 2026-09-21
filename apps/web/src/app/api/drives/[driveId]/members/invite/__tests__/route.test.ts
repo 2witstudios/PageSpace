@@ -13,7 +13,6 @@ import type { SessionAuthResult, AuthError } from '@/lib/auth';
 vi.mock('@/lib/repositories/drive-invite-repository', () => ({
   driveInviteRepository: {
     findDriveById: vi.fn(),
-    findAdminMembership: vi.fn(),
     findExistingMember: vi.fn(),
     findUserIdByEmail: vi.fn(),
     findUserVerificationStatusById: vi.fn(),
@@ -30,6 +29,11 @@ vi.mock('@/lib/repositories/drive-invite-repository', () => ({
     updatePagePermission: vi.fn(),
     findUserEmail: vi.fn(),
   },
+}));
+
+// The org-aware relationship is the gate (its pure role decisions stay real).
+vi.mock('@pagespace/lib/permissions/drive-relationship-loader', () => ({
+  loadDriveRelationship: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -113,6 +117,14 @@ import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker'
 import { createInviteToken } from '@pagespace/lib/auth/invite-token';
 import { sendPendingDriveInvitationEmail } from '@pagespace/lib/services/notification-email-service';
 import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
+import type { DriveRelationship } from '@pagespace/lib/permissions/drive-relationship';
+import { loadDriveRelationship } from '@pagespace/lib/permissions/drive-relationship-loader';
+
+const NONE: DriveRelationship = { isOwner: false, membership: null };
+const asMember = (role: 'ADMIN' | 'MEMBER', source: 'invite' | 'org' = 'invite'): DriveRelationship => ({
+  isOwner: false,
+  membership: { role, customRoleId: null, source, auditOrgAdminPrivateAccess: false },
+});
 
 const mockWebAuth = (userId: string): SessionAuthResult => ({
   userId,
@@ -173,7 +185,8 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
     vi.mocked(isEmailVerified).mockResolvedValue(true);
 
     vi.mocked(driveInviteRepository.findDriveById).mockResolvedValue(mockDrive as never);
-    vi.mocked(driveInviteRepository.findAdminMembership).mockResolvedValue(null as never);
+    vi.mocked(loadDriveRelationship).mockImplementation(async (userId, drive) =>
+      drive.ownerId === userId ? { isOwner: true, membership: null } : NONE);
     vi.mocked(driveInviteRepository.findExistingMember).mockResolvedValue(null as never);
     vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue(null as never);
     vi.mocked(driveInviteRepository.findActivePendingInviteByDriveAndEmail).mockResolvedValue(null as never);
@@ -288,20 +301,52 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
         ...mockDrive,
         ownerId: 'someone_else',
       } as never);
-      vi.mocked(driveInviteRepository.findAdminMembership).mockResolvedValue(null as never);
 
       const response = await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
       expect(response.status).toBe(403);
     });
 
     it('returns 403 when inviter is a pending admin (acceptedAt IS NULL)', async () => {
-      // Epic 1 already filters acceptedAt IS NOT NULL inside findAdminMembership,
-      // so the seam returns null for a pending admin. Exercising that contract.
+      // The org-aware relationship reads ACCEPTED rows only, so a pending ADMIN invitation is no
+      // membership (proven against Postgres in drive-gate-primitives.integration.test.ts).
       vi.mocked(driveInviteRepository.findDriveById).mockResolvedValue({
         ...mockDrive,
         ownerId: 'someone_else',
       } as never);
-      vi.mocked(driveInviteRepository.findAdminMembership).mockResolvedValue(null as never);
+
+      const response = await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
+      expect(response.status).toBe(403);
+    });
+
+    it('lets an accepted drive ADMIN invite', async () => {
+      vi.mocked(driveInviteRepository.findDriveById).mockResolvedValue({ ...mockDrive, ownerId: 'someone_else' } as never);
+      vi.mocked(loadDriveRelationship).mockResolvedValue(asMember('ADMIN'));
+
+      const response = await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
+      expect(response.status).not.toBe(403);
+      expect(loadDriveRelationship).toHaveBeenCalledWith(mockUserId, expect.objectContaining({ id: mockDriveId, ownerId: 'someone_else' }));
+    });
+
+    it('ORG-4 (partial) an org Admin with no drive_members row invites to an org drive', async () => {
+      vi.mocked(driveInviteRepository.findDriveById).mockResolvedValue({ ...mockDrive, ownerId: 'someone_else', orgId: 'org_1', orgVisibility: 'PRIVATE' } as never);
+      vi.mocked(loadDriveRelationship).mockResolvedValue(asMember('ADMIN'));
+
+      const response = await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
+      expect(response.status).not.toBe(403);
+      expect(loadDriveRelationship).toHaveBeenCalledWith(mockUserId, expect.objectContaining({ orgId: 'org_1', orgVisibility: 'PRIVATE' }));
+    });
+
+    it('X-6 (partial) a stale source=org ADMIN row invites nobody: the relationship refuses', async () => {
+      vi.mocked(driveInviteRepository.findDriveById).mockResolvedValue({ ...mockDrive, ownerId: 'someone_else', orgId: 'org_1', orgVisibility: 'OPEN' } as never);
+      vi.mocked(loadDriveRelationship).mockResolvedValue(NONE);
+
+      const response = await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
+      expect(response.status).toBe(403);
+    });
+
+    it('a plain member cannot invite', async () => {
+      vi.mocked(driveInviteRepository.findDriveById).mockResolvedValue({ ...mockDrive, ownerId: 'someone_else' } as never);
+      vi.mocked(loadDriveRelationship).mockResolvedValue(asMember('MEMBER', 'org'));
 
       const response = await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
       expect(response.status).toBe(403);
