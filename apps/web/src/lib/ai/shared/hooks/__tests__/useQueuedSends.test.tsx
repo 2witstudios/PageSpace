@@ -16,8 +16,8 @@ import type { ChatSessionStatus } from '../useChatSession';
  * reload). `consumeStreamJoin` resolving with no `resumeFromSeq` and having
  * delivered nothing is exactly the "stream was already over" join.
  */
-const toastError = vi.hoisted(() => vi.fn());
-vi.mock('sonner', () => ({ toast: { error: toastError } }));
+const toastInfo = vi.hoisted(() => vi.fn());
+vi.mock('sonner', () => ({ toast: { info: toastInfo } }));
 
 vi.mock('@/lib/ai/core/stream-join-client', () => ({
   consumeStreamJoin: vi.fn(() => Promise.resolve({})),
@@ -65,7 +65,7 @@ const msgText = (message: UIMessage): string =>
 
 describe('useQueuedSends', () => {
   beforeEach(() => {
-    toastError.mockClear();
+    toastInfo.mockClear();
     window.localStorage.clear();
     clearLiveStreams();
     useConversationMessagesStore.setState({ queuedSendsByConversationId: {} });
@@ -364,7 +364,7 @@ describe('useQueuedSends', () => {
     expect(hook.result.current.queuedSends.map(msgText)).toEqual(['first', 'second']);
     expect(hook.result.current.queuedSends[0].id).toBe(firstId);
     expect(JSON.parse(window.localStorage.getItem(`pagespace:queued-sends:${CONV}`) ?? '[]').map((m: UIMessage) => m.id)[0]).toBe(firstId);
-    expect(toastError).toHaveBeenCalledTimes(1);
+    expect(toastInfo).toHaveBeenCalledTimes(1);
 
     // Not wedged: the next terminal drains again, and it is the SAME prompt.
     await new Promise((r) => setTimeout(r, 10));
@@ -384,7 +384,7 @@ describe('useQueuedSends', () => {
     fireEnd('turn-1', CONV);
     expect(dispatch).toHaveBeenCalledTimes(1);
     expect(hook.result.current.queuedSends.map(msgText)).toEqual(['only']);
-    expect(toastError).toHaveBeenCalledTimes(1);
+    expect(toastInfo).toHaveBeenCalledTimes(1);
 
     await new Promise((r) => setTimeout(r, 10));
     fireEnd('turn-2', CONV);

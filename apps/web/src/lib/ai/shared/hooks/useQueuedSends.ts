@@ -189,12 +189,14 @@ export function useQueuedSends({
     // A failed admission (network error, the 402 credit gate) started no turn.
     // The entry was shifted out BEFORE dispatch, so put it back at the head —
     // same id, so the retry is idempotent against the server's upsert-by-id —
-    // and say so: the prompt must never vanish silently. Then release OUR claim
+    // and say so: the prompt must never vanish silently. The send path's own
+    // `wrapSend` already toasts the failure's cause (e.g. out of credits), so this
+    // toast only says where the prompt went. Then release OUR claim
     // (a newer dispatch's is not ours) so the next terminal event drains it
     // again instead of the queue wedging behind a terminal that will never come.
     const onRejected = () => {
       conversationMessagesActions.requeueQueuedSend(endedConversationId, next);
-      toast.error('Your queued message could not be sent. It is still in the queue and will retry after the next response.');
+      toast.info('Your queued message is still in the queue. It will be sent after the next response.');
       if (drainClaims.get(endedConversationId)?.token === token) {
         drainClaims.delete(endedConversationId);
       }
