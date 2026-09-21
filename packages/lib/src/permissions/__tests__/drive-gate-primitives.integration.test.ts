@@ -188,8 +188,19 @@ describe('B7c: the gate primitives agree with the canonical resolvers (integrati
     await cleanupNorthwind();
   }, 120_000);
 
-  // Each integration file gets its own pool; release it so the suite does not exhaust max_connections.
+  // Every ORG-4 audit this file writes (org power opening a PRIVATE drive, lead actions) goes through
+  // the main pool: with ADMIN_DATABASE_URL set (as in CI) it would open a dedicated admin pool nobody
+  // ends. Release the pool after the file so later files in the shared fork keep their connections.
+  const AUDIT_ENV = ['ADMIN_DATABASE_URL', 'ADMIN_DB_BREAK_GLASS', 'AUDIT_TRUST_PLANE_REQUIRED'] as const;
+  const savedAuditEnv = new Map<string, string | undefined>();
+  const resetAudit = () => { resetAuditDbBindingForTests(); resetDefaultSecurityAuditForTests(); };
+  beforeAll(() => {
+    for (const k of AUDIT_ENV) { savedAuditEnv.set(k, process.env[k]); delete process.env[k]; }
+    resetAudit();
+  });
   afterAll(async () => {
+    for (const [k, v] of savedAuditEnv) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    resetAudit();
     await pool.end();
   });
 
@@ -371,12 +382,6 @@ describe('B7c: the gate primitives agree with the canonical resolvers (integrati
   });
 
   describe('lead actions (rename, trash, restore, permanent delete) on org drives', () => {
-    const AUDIT_ENV = ['ADMIN_DATABASE_URL', 'ADMIN_DB_BREAK_GLASS', 'AUDIT_TRUST_PLANE_REQUIRED'] as const;
-    const saved = new Map<string, string | undefined>();
-    const resetAudit = () => { resetAuditDbBindingForTests(); resetDefaultSecurityAuditForTests(); };
-    beforeAll(() => { for (const k of AUDIT_ENV) { saved.set(k, process.env[k]); delete process.env[k]; } resetAudit(); });
-    afterAll(() => { for (const [k, v] of saved) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } resetAudit(); });
-
     const actionRows = async (userId: string, driveId: string, action: string) =>
       (await securityAudit.queryEvents({ eventType: 'authz.access.granted', resourceId: driveId }))
         .filter((r) => r.userId === userId && (r.details as { action?: string } | null)?.action === action);

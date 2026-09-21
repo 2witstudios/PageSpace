@@ -6,9 +6,9 @@
  *   ./scripts/test-with-db.sh
  *   bun run --filter '@pagespace/lib' test -- src/services/__tests__/app-shell-service.integration.test.ts
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { factories } from '@pagespace/db/test/factories';
-import { db } from '@pagespace/db/db';
+import { db, pool } from '@pagespace/db/db';
 import { users } from '@pagespace/db/schema/auth';
 import { channelMessages } from '@pagespace/db/schema/chat';
 import { drives, pages } from '@pagespace/db/schema/core';
@@ -25,6 +25,12 @@ vi.mock('../../organizations/orgs-enabled', () => ({
 }));
 
 describe('loadAppShell (integration)', () => {
+  // Each integration file gets its own pool in the shared fork; release it so later files keep
+  // their connections (lib test:integration runs every file in one fork).
+  afterAll(async () => {
+    await pool.end();
+  });
+
   beforeEach(async () => {
     // FK-order delete to avoid cascade contention.
     await db.delete(channelMessages);
