@@ -287,10 +287,7 @@ describe('moveDriveOutOfOrg', () => {
     expect(await db.select().from(driveEnvs).where(eq(driveEnvs.driveId, driveId))).toHaveLength(1);
   });
 
-  it('DRV-2 (partial) moving a drive out takes the org row before the drive row, the order org deletion and joins lock in', async () => {
-    const driveId = await seedOrgDrive();
-
-    // Hold the org row the way deleteOrganization and acceptInvitation do.
+  async function holdOrgRow() {
     let release: () => void = () => {};
     const held = new Promise<void>((resolve) => { release = resolve; });
     let locked: () => void = () => {};
@@ -301,11 +298,12 @@ describe('moveDriveOutOfOrg', () => {
       await held;
     });
     await orgLocked;
+    return async () => { release(); await holder; };
+  }
 
-    const moving = moveDriveOutOfOrg(priya, driveId, { implicitMembers: 'keep' }, deps);
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    // The waiting move-out must not already hold the drive row: that would be a lock cycle.
-    const driveRowFree = await db.transaction(async (tx) => {
+  /** Whether another transaction could lock the drive row right now (NOWAIT fails if it is held). */
+  async function driveRowFree(driveId: string) {
+    return db.transaction(async (tx) => {
       try {
         await tx.execute(sql`select id from drives where id = ${driveId} for update nowait`);
         return true;
@@ -313,10 +311,54 @@ describe('moveDriveOutOfOrg', () => {
         return false;
       }
     });
+  }
 
-    release();
-    await holder;
-    expect(driveRowFree).toBe(true);
+  it('DRV-2 (partial) a move-in waiting on a held org row does not already hold the drive row, even for a drive already in that org', async () => {
+    const driveId = await seedOrgDrive();
+    const release = await holdOrgRow();
+
+    const moving = moveDriveToOrg(marcus, driveId, { orgId: northwind }, deps);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const free = await driveRowFree(driveId);
+
+    await release();
+    expect(free).toBe(true);
+    expect(await moving).toMatchObject({ ok: false });
+  });
+
+  it.each(['in', 'out'] as const)('DRV-2 (partial) a move %s that loses a deadlock is retried whole and completes', async (direction) => {
+    const driveId = direction === 'in' ? await seedPersonalDrive() : await seedOrgDrive();
+    let calls = 0;
+    const flaky: OrgDriveServiceDeps = {
+      ...deps,
+      getOrgRole: async (tx, orgId, userId) => {
+        calls += 1;
+        // Postgres chose this transaction as the deadlock victim on the first attempt.
+        if (calls === 1) throw Object.assign(new Error('deadlock detected'), { code: '40P01' });
+        return deps.getOrgRole(tx, orgId, userId);
+      },
+    };
+
+    const result = direction === 'in'
+      ? await moveDriveToOrg(marcus, driveId, { orgId: northwind }, flaky)
+      : await moveDriveOutOfOrg(priya, driveId, { implicitMembers: 'keep' }, flaky);
+
+    expect(result).toMatchObject({ ok: true });
+    expect(calls).toBe(2);
+    expect((await readDrive(driveId)).orgId).toBe(direction === 'in' ? northwind : null);
+  });
+
+  it('DRV-2 (partial) moving a drive out takes the org row before the drive row, the order org deletion and joins lock in', async () => {
+    const driveId = await seedOrgDrive();
+    const release = await holdOrgRow();
+
+    const moving = moveDriveOutOfOrg(priya, driveId, { implicitMembers: 'keep' }, deps);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    // The waiting move-out must not already hold the drive row: that would be a lock cycle.
+    const free = await driveRowFree(driveId);
+
+    await release();
+    expect(free).toBe(true);
     expect(await moving).toMatchObject({ ok: true });
     expect((await readDrive(driveId)).orgId).toBeNull();
   });
