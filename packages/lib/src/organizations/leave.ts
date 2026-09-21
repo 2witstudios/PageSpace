@@ -16,7 +16,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, eq, inArray, isNull, ne, not, or } from '@pagespace/db/operators';
+import { and, asc, eq, inArray, isNotNull, isNull, ne, not, or } from '@pagespace/db/operators';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { driveAgentMembers, driveMembers, mcpTokenDrives } from '@pagespace/db/schema/members';
 import { mcpTokens } from '@pagespace/db/schema/auth';
@@ -94,15 +94,33 @@ export async function reassignLedOrgDrives(
   tx: LeaveTx,
   options: ReassignLedOrgDrivesOptions = {},
 ): Promise<LeadReassignment[]> {
+  // Org rows before drive rows, the order joins, moves and org deletion lock in (a joined
+  // FOR UPDATE takes them in whatever order the plan reads them). The org rows are share-locked,
+  // which still keeps their Owner fixed while drives are reassigned to them.
+  const ledOrgs = await tx
+    .selectDistinct({ orgId: drives.orgId })
+    .from(drives)
+    .where(and(
+      eq(drives.ownerId, userId),
+      isNotNull(drives.orgId),
+      options.orgId ? eq(drives.orgId, options.orgId) : undefined,
+    ));
+  const orgIds = ledOrgs.flatMap((row) => (row.orgId === null ? [] : [row.orgId]));
+  if (orgIds.length === 0) return [];
+  await tx
+    .select({ id: organizations.id })
+    .from(organizations)
+    .where(inArray(organizations.id, orgIds))
+    .orderBy(asc(organizations.id))
+    .for('share');
+
   const led = await tx
     .select({ driveId: drives.id, orgId: organizations.id, orgOwnerId: organizations.ownerId })
     .from(drives)
     .innerJoin(organizations, eq(drives.orgId, organizations.id))
-    .where(and(
-      eq(drives.ownerId, userId),
-      options.orgId ? eq(drives.orgId, options.orgId) : undefined,
-    ))
-    .for('update');
+    .where(and(eq(drives.ownerId, userId), inArray(drives.orgId, orgIds)))
+    .orderBy(asc(drives.id))
+    .for('update', { of: drives });
 
   const plan = planLeadReassignments(userId, led);
   if (plan.length === 0) return [];

@@ -10,7 +10,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
 import { db, pool } from '@pagespace/db/db';
-import { and, eq, inArray, isNotNull } from '@pagespace/db/operators';
+import { and, eq, inArray, isNotNull, sql } from '@pagespace/db/operators';
 import { users, mcpTokens } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { driveMembers, driveAgentMembers, mcpTokenDrives } from '@pagespace/db/schema/members';
@@ -367,6 +367,79 @@ describe('leave and delete cascades (Postgres)', () => {
     await updateDriveLastAccessed(owner.id, orgDrive.id);
     const [visited] = await db.select({ lastAccessedAt: driveMembers.lastAccessedAt }).from(driveMembers).where(eq(driveMembers.id, memberRow.id));
     expect(visited.lastAccessedAt).not.toBeNull();
+  });
+
+  it('O-7 a leaving lead waiting on a held org row does not already hold the drive it leads, the org-before-drive order joins and moves use', async () => {
+    if (!dbAvailable) return;
+    const owner = await user();
+    const lead = await user();
+    const org = await orgWith(owner.id, [lead.id]);
+    const led = await factories.createDrive(lead.id, { orgId: org.id });
+
+    // Hold the org row the way acceptInvitation and deleteOrganization do.
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let locked: () => void = () => {};
+    const orgLocked = new Promise<void>((resolve) => { locked = resolve; });
+    const holder = db.transaction(async (tx) => {
+      await tx.select({ id: organizations.id }).from(organizations).where(eq(organizations.id, org.id)).for('update');
+      locked();
+      await held;
+    });
+    await orgLocked;
+
+    const leaving = leaveOrganization(lead.id, org.id);
+    let leaveSettled = false;
+    void leaving.finally(() => { leaveSettled = true; }).catch(() => {});
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    // It waits on the org row (its Owner must not change under the reassignment)…
+    const waitedOnOrg = !leaveSettled;
+    // …without already holding the drive row, which would close a lock cycle.
+    const driveRowFree = await db.transaction(async (tx) => {
+      try {
+        await tx.execute(sql`select id from drives where id = ${led.id} for update nowait`);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+
+    release();
+    await holder;
+    expect(waitedOnOrg).toBe(true);
+    expect(driveRowFree).toBe(true);
+    expect(await leaving).toMatchObject({ ok: true, reassigned: [{ driveId: led.id, toUserId: owner.id }] });
+  });
+
+  it('O-7 a leaving lead needs the org row only shared: a concurrent move or drive creation holding it shared does not block the reassignment', async () => {
+    if (!dbAvailable) return;
+    const owner = await user();
+    const lead = await user();
+    const org = await orgWith(owner.id, [lead.id]);
+    const led = await factories.createDrive(lead.id, { orgId: org.id });
+
+    // Share the org row the way createOrgDrive, moveDriveToOrg and moveDriveOutOfOrg do.
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let locked: () => void = () => {};
+    const orgShared = new Promise<void>((resolve) => { locked = resolve; });
+    const holder = db.transaction(async (tx) => {
+      await tx.select({ id: organizations.id }).from(organizations).where(eq(organizations.id, org.id)).for('share');
+      locked();
+      await held;
+    });
+    await orgShared;
+
+    const leaving = leaveOrganization(lead.id, org.id);
+    let leaveSettled = false;
+    void leaving.finally(() => { leaveSettled = true; }).catch(() => {});
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const finishedWhileShared = leaveSettled;
+
+    release();
+    await holder;
+    expect(finishedWhileShared).toBe(true);
+    expect(await leaving).toMatchObject({ ok: true, reassigned: [{ driveId: led.id, toUserId: owner.id }] });
   });
 
   it('O-7 reassignLedOrgDrives with no org given reassigns led drives across every org, each to its own Owner', async () => {
