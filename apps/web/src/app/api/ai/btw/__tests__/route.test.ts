@@ -4,7 +4,7 @@ const mocks = vi.hoisted(() => ({
   auth: vi.fn(), access: vi.fn(), conversation: vi.fn(), userRow: vi.fn(), messages: vi.fn(), plan: vi.fn(),
   provider: vi.fn(), stream: vi.fn(), audit: vi.fn(), gate: vi.fn(), release: vi.fn(), track: vi.fn(), exempt: vi.fn(),
 }));
-const usersTable = vi.hoisted(() => ({ id: 'users.id', subscriptionTier: 'subscriptionTier', currentAiProvider: 'currentAiProvider', currentAiModel: 'currentAiModel' }));
+const usersTable = vi.hoisted(() => ({ id: 'users.id', role: 'role', subscriptionTier: 'subscriptionTier', currentAiProvider: 'currentAiProvider', currentAiModel: 'currentAiModel' }));
 vi.mock('@/lib/auth', () => ({ authenticateRequestWithOptions: mocks.auth, isAuthError: (value: unknown) => Boolean((value as { error?: unknown })?.error) }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: mocks.audit }));
 vi.mock('@pagespace/db/db', () => ({
@@ -17,7 +17,8 @@ vi.mock('@pagespace/lib/permissions/conversation-access', () => ({ canAccessConv
 vi.mock('@/lib/repositories/message-repository', () => ({ messageRepository: { getMessagesByConversationId: mocks.messages } }));
 vi.mock('@/lib/ai/core/plan-binding', () => ({ getActivePlan: mocks.plan }));
 vi.mock('@/lib/ai/core/provider-factory', () => ({ createAIProvider: mocks.provider }));
-vi.mock('@/lib/ai/core/ai-providers-config', () => ({ resolveProviderModel: (_p: unknown, _m: unknown, provider: string, model: string) => ({ provider, model }) }));
+vi.mock('@/lib/ai/core/ai-providers-config', () => ({ ADMIN_ONLY_PROVIDERS: new Set(['glm']), resolveProviderModel: (_p: unknown, _m: unknown, provider: string, model: string) => ({ provider, model }) }));
+vi.mock('@/lib/subscription/rate-limit-middleware', () => ({ createAdminRestrictedResponse: () => new Response(JSON.stringify({ error: 'admin_only' }), { status: 403 }) }));
 vi.mock('@/lib/ai/btw/side-question', () => ({ buildSideQuestionSnapshot: vi.fn().mockResolvedValue('snapshot'), createSideQuestionStream: mocks.stream }));
 vi.mock('@pagespace/lib/billing/credit-gate', () => ({ canConsumeAI: mocks.gate }));
 vi.mock('@pagespace/lib/billing/credit-consume', () => ({ releaseHold: mocks.release }));
@@ -45,7 +46,7 @@ describe('POST /api/ai/btw', () => {
     vi.clearAllMocks();
     mocks.auth.mockResolvedValue({ userId: 'u1' });
     mocks.conversation.mockResolvedValue([{ userId: 'u1', isShared: false, type: 'page', contextId: 'p1' }]);
-    mocks.userRow.mockResolvedValue([{ subscriptionTier: 'free', currentAiProvider: 'openrouter', currentAiModel: 'm1' }]);
+    mocks.userRow.mockResolvedValue([{ role: 'user', subscriptionTier: 'free', currentAiProvider: 'openrouter', currentAiModel: 'm1' }]);
     mocks.messages.mockResolvedValue([]);
     mocks.access.mockResolvedValue(true);
     mocks.exempt.mockReturnValue(false);
@@ -113,6 +114,36 @@ describe('POST /api/ai/btw', () => {
     });
   });
 
+  describe('admin-only providers (mirrors consult and v1)', () => {
+    it('given a non-admin whose stored provider is admin-only, should refuse 403 before any gate, hold or provider', async () => {
+      mocks.userRow.mockResolvedValue([{ role: 'user', subscriptionTier: 'free', currentAiProvider: 'glm', currentAiModel: 'glm-x' }]);
+      mocks.exempt.mockReturnValue(true);
+      const response = await ask();
+      expect(response.status).toBe(403);
+      expect(mocks.gate).not.toHaveBeenCalled();
+      expect(mocks.provider).not.toHaveBeenCalled();
+      expect(mocks.stream).not.toHaveBeenCalled();
+      expect(mocks.audit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'authz.access.denied', details: expect.objectContaining({ reason: 'admin_only_provider' }) }));
+    });
+
+    it('given an admin on the admin-only provider, should stream (metering-exempt, no hold)', async () => {
+      mocks.userRow.mockResolvedValue([{ role: 'admin', subscriptionTier: 'free', currentAiProvider: 'glm', currentAiModel: 'glm-x' }]);
+      mocks.exempt.mockReturnValue(true);
+      expect((await ask()).status).toBe(200);
+      expect(mocks.gate).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('client disconnect is not a free answer', () => {
+    it("should NOT hand the client's request signal to the model — a server-side timeout bounds it instead", async () => {
+      const request = new Request('http://test/api/ai/btw', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ conversationId: 'c1', question: 'q' }) });
+      await POST(request);
+      const { abortSignal } = mocks.stream.mock.calls[0][0] as { abortSignal: AbortSignal };
+      expect(abortSignal).toBeInstanceOf(AbortSignal);
+      expect(abortSignal).not.toBe(request.signal);
+    });
+  });
+
   describe('metering and hold release', () => {
     it('should settle the hold through trackUsage (ai_usage_logs + consumeCredits) when the stream ends', async () => {
       await ask();
@@ -134,9 +165,12 @@ describe('POST /api/ai/btw', () => {
       expect(mocks.track).toHaveBeenCalledWith(expect.objectContaining({ success: false, holdId: 'hold-1', inputTokens: undefined }));
     });
 
-    it('given a provider error after the gate, should release the hold in finally', async () => {
+    it('given a provider error after the gate, should release the hold in finally and AWAIT it before answering', async () => {
       mocks.provider.mockResolvedValue({ error: 'not configured', status: 503 });
+      let released = false;
+      mocks.release.mockImplementation(async () => { await new Promise((r) => setTimeout(r, 5)); released = true; });
       const response = await ask();
+      expect(released).toBe(true);
       expect(response.status).toBe(503);
       expect(mocks.release).toHaveBeenCalledWith('hold-1');
       expect(mocks.stream).not.toHaveBeenCalled();

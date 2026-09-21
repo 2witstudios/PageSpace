@@ -89,14 +89,21 @@ describe('detached side questions', () => {
 
     // Against the REAL streamText (mock provider only), so the callback-ordering
     // claim in createSideQuestionStream is tested, not assumed.
-    const realModel = (emit: 'text' | 'throw') => new MockLanguageModelV3({
+    const realModel = (emit: 'text' | 'throw' | 'slow') => new MockLanguageModelV3({
       doStream: async () => {
         if (emit === 'throw') throw new Error('provider down');
         return {
           stream: new ReadableStream({
-            start(controller) {
+            async start(controller) {
               controller.enqueue({ type: 'stream-start', warnings: [] });
               controller.enqueue({ type: 'text-start', id: 't' });
+              if (emit === 'slow') {
+                // The provider is still generating (and charging) after the client has gone.
+                for (let i = 0; i < 5; i += 1) {
+                  await new Promise((r) => setTimeout(r, 20));
+                  controller.enqueue({ type: 'text-delta', id: 't', delta: `part${i} ` });
+                }
+              }
               controller.enqueue({ type: 'text-delta', id: 't', delta: 'answer' });
               controller.enqueue({ type: 'text-end', id: 't' });
               controller.enqueue({
@@ -115,6 +122,14 @@ describe('detached side questions', () => {
       const onSettle = vi.fn().mockResolvedValue(undefined);
       const response = createSideQuestionStream({ model: realModel('text'), question: 'q', snapshot: 's', abortSignal: new AbortController().signal, onSettle });
       expect(await response.text()).toBe('answer');
+      await vi.waitFor(() => expect(onSettle).toHaveBeenCalledTimes(1));
+      expect(onSettle.mock.calls[0][0]).toMatchObject({ success: true, usage: { inputTokens: 11, outputTokens: 4 } });
+    });
+
+    it('given the client disconnects before reading anything, should still run the answer to completion and bill it (no free abort)', async () => {
+      const onSettle = vi.fn().mockResolvedValue(undefined);
+      const response = createSideQuestionStream({ model: realModel('slow'), question: 'q', snapshot: 's', abortSignal: new AbortController().signal, onSettle });
+      await response.body?.cancel();
       await vi.waitFor(() => expect(onSettle).toHaveBeenCalledTimes(1));
       expect(onSettle.mock.calls[0][0]).toMatchObject({ success: true, usage: { inputTokens: 11, outputTokens: 4 } });
     });

@@ -10,7 +10,8 @@ import { messageRepository } from '@/lib/repositories/message-repository';
 import { getActivePlan } from '@/lib/ai/core/plan-binding';
 import { createAIProvider } from '@/lib/ai/core/provider-factory';
 import { buildSideQuestionSnapshot, createSideQuestionStream } from '@/lib/ai/btw/side-question';
-import { resolveProviderModel } from '@/lib/ai/core/ai-providers-config';
+import { ADMIN_ONLY_PROVIDERS, resolveProviderModel } from '@/lib/ai/core/ai-providers-config';
+import { createAdminRestrictedResponse } from '@/lib/subscription/rate-limit-middleware';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
@@ -23,6 +24,11 @@ import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response
 
 export const maxDuration = 60;
 const MAX_QUESTION_CHARS = 2_000;
+// The model call is bounded by the server, not by the client's connection:
+// a client that disconnects mid-answer must not end the generation it is being
+// billed for (an abort before the first finished step reports no usage, so
+// forwarding request.signal made every abandoned answer free).
+const SIDE_QUESTION_TIMEOUT_MS = 55_000;
 
 export async function POST(request: Request) {
   const auth = await authenticateRequestWithOptions(request, { allow: ['session'] as const, requireCSRF: true });
@@ -47,8 +53,15 @@ export async function POST(request: Request) {
   // is refused here and never streams. Metering-exempt providers skip the hold,
   // exactly as the chat turn does (see isMeteringExempt in trackAIUsage).
   const userId = auth.userId;
-  const [gateUser] = await db.select({ subscriptionTier: users.subscriptionTier, currentAiProvider: users.currentAiProvider, currentAiModel: users.currentAiModel }).from(users).where(eq(users.id, userId)).limit(1);
+  const [gateUser] = await db.select({ role: users.role, subscriptionTier: users.subscriptionTier, currentAiProvider: users.currentAiProvider, currentAiModel: users.currentAiModel }).from(users).where(eq(users.id, userId)).limit(1);
   const { provider: gateProvider, model: gateModel } = resolveProviderModel(undefined, undefined, gateUser?.currentAiProvider, gateUser?.currentAiModel);
+  // Admin-only providers (the unmetered Z.ai Coder Plan) are refused to non-admins,
+  // as the consult and v1 routes do — otherwise a stored `glm` selection would be
+  // an unmetered side channel onto the admin subscription.
+  if (ADMIN_ONLY_PROVIDERS.has(gateProvider) && gateUser?.role !== 'admin') {
+    auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'ai_btw', resourceId: conversationId, details: { reason: 'admin_only_provider', provider: gateProvider, method: 'POST' }, riskScore: 0.5 });
+    return createAdminRestrictedResponse();
+  }
   let holdId: string | undefined;
   // Becomes true once the stream owns the hold (its settle callback releases it via
   // trackUsage). Until then, every exit below must release it in `finally`.
@@ -73,7 +86,7 @@ export async function POST(request: Request) {
       model: provider.model,
       question: question.trim(),
       snapshot,
-      abortSignal: request.signal,
+      abortSignal: AbortSignal.timeout(SIDE_QUESTION_TIMEOUT_MS),
       // The chat turn's settle path: trackUsage writes ai_usage_logs and settles the
       // hold through consumeCredits (or releases it on a failed write). It always
       // logs a row, even with no usage, so the orphan sweep can recover the spend.
@@ -107,6 +120,7 @@ export async function POST(request: Request) {
   } finally {
     // The stream never took ownership (gate refused, provider error, snapshot or
     // stream construction threw) — free the reservation.
-    if (holdId && !holdHandedOff) void releaseHold(holdId).catch(() => {});
+    // Awaited: the reservation must be gone before the response is sent.
+    if (holdId && !holdHandedOff) await releaseHold(holdId).catch(() => {});
   }
 }
