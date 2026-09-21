@@ -130,6 +130,10 @@ describe('validateSlug', () => {
 })
 
 describe('validateEmail', () => {
+  test('given an address under the agent reserved domain, should refuse it as an invalid email', () => {
+    expect(validateEmail('Agent-x@AGENTS.pagespace.invalid')).toEqual({ valid: false, error: 'Invalid email format' })
+  })
+
   test('given a valid email, should return valid', () => {
     const result = validateEmail('user@example.com')
     expect(result.valid).toBe(true)

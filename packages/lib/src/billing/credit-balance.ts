@@ -35,6 +35,7 @@ import { and, eq, gt, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
 import { allowanceRefills, isOneTimeAllowanceTier, starterGrantCents } from './credit-pricing';
 import { readGateAccount } from './gate-account';
+import { GateAccountNotFoundError } from './gate-account-not-found';
 import type { SubscriptionTier } from '../services/subscription-utils';
 
 // Mirror of addOneMonth in credit-gate (same logic, kept local to avoid pulling
@@ -130,8 +131,15 @@ function pendingStarterGrant(row: FundedBalanceRow, tier: SubscriptionTier): boo
  * those two row states, so a funded row stays a single indexed read.
  */
 async function upcomingStarterGrantCents(userId: string, tier: SubscriptionTier): Promise<number> {
-  const { accountType } = await readGateAccount(userId);
-  return starterGrantCents({ tier, accountType });
+  try {
+    const { accountType } = await readGateAccount(userId);
+    return starterGrantCents({ tier, accountType });
+  } catch (error) {
+    // No users row: pre-credit nothing (fail closed) — the gate refuses such a
+    // principal, so neither the display nor the routing read may promise a grant.
+    if (error instanceof GateAccountNotFoundError) return 0;
+    throw error;
+  }
 }
 
 function needsStarterGrant(row: FundedBalanceRow | null, tier: SubscriptionTier): boolean {

@@ -56,7 +56,7 @@ vi.mock('../token-utils', () => ({
   })),
 }));
 
-const mockSendEmail = vi.fn().mockResolvedValue(undefined);
+const mockSendEmail = vi.fn().mockResolvedValue({ status: 'sent' });
 vi.mock('../../services/email-service', () => ({
   sendEmail: (...args: unknown[]) => mockSendEmail(...args),
   resolveAppUrl: () => 'https://app.pagespace.ai',
@@ -404,6 +404,24 @@ describe('step-up-service', () => {
 
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error.code).toBe('USER_NOT_FOUND');
+    });
+
+    it('given the send is suppressed (an agent\'s reserved address can receive no mail), should fail with EMAIL_UNDELIVERABLE instead of reporting a sent link', async () => {
+      mockDb.query.users.findFirst.mockResolvedValue({ id: 'agent-1', email: 'agent-agent-1@agents.pagespace.invalid' });
+      mockSendEmail.mockResolvedValueOnce({ status: 'suppressed' });
+
+      const result = await requestMagicLinkStepUp({ userId: 'agent-1', actionBinding: { clientId: 'cli-1' } });
+
+      expect(result).toEqual({ ok: false, error: { code: 'EMAIL_UNDELIVERABLE' } });
+    });
+
+    it('given email sending is disabled (on-prem), should fail with EMAIL_UNDELIVERABLE rather than report a link that was never sent', async () => {
+      mockDb.query.users.findFirst.mockResolvedValue({ id: 'user-1', email: 'user@example.com' });
+      mockSendEmail.mockResolvedValueOnce({ status: 'disabled' });
+
+      const result = await requestMagicLinkStepUp({ userId: 'user-1', actionBinding: { clientId: 'cli-1' } });
+
+      expect(result).toEqual({ ok: false, error: { code: 'EMAIL_UNDELIVERABLE' } });
     });
 
     it('sends a step-up confirmation email to the user\'s own registered address', async () => {

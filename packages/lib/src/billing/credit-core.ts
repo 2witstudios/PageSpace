@@ -324,11 +324,24 @@ export function computeMonthlyRefill(
   currentRemainingCents: number = 0,
   currentDebtCents: number = 0,
 ): MonthlyRefill {
-  const allowance = allowanceTable[tier] ?? allowanceTable.free;
+  return computeRefill(allowanceTable[tier] ?? allowanceTable.free, currentRemainingCents, currentDebtCents);
+}
+
+/**
+ * The rollover arithmetic for an allowance already resolved by the caller
+ * (`allowanceGrantCents`, which is 0 for an agent): net outstanding debt against
+ * the carried balance, then add the allowance. The gate-side reset and the
+ * invoice.paid refill both use this, so an agent's refill only nets its debt.
+ */
+export function computeRefill(
+  allowanceCents: number,
+  currentRemainingCents: number = 0,
+  currentDebtCents: number = 0,
+): MonthlyRefill {
   const netCarried = currentRemainingCents - Math.max(0, currentDebtCents);
   // Clamp to 0: the DB schema enforces monthlyRemainingCents >= 0. Excess debt beyond
   // (remaining + allowance) is absorbed here rather than written as a negative balance.
-  return { monthlyRemainingCents: Math.max(0, netCarried + allowance), monthlyAllowanceCents: allowance, debtCents: 0 };
+  return { monthlyRemainingCents: Math.max(0, netCarried + allowanceCents), monthlyAllowanceCents: allowanceCents, debtCents: 0 };
 }
 
 export interface PaymentToDebtResult {

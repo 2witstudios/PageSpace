@@ -5,6 +5,7 @@ import { users } from '@pagespace/db/schema/auth';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { stripe, Stripe } from '@/lib/stripe';
 import { getOrCreateStripeCustomer } from '@/lib/stripe-customer';
+import { AgentStripeCustomerRefusedError } from '@pagespace/lib/billing/stripe-customer-eligibility';
 import { getUserFriendlyStripeError } from '@/lib/stripe-errors';
 import { getCreditPack, CREDIT_TOPUP_MIN_CENTS, CREDIT_TOPUP_MAX_CENTS } from '@pagespace/lib/billing/credit-pricing';
 import { validateTopupAmountCents } from '@pagespace/lib/billing/credit-core';
@@ -138,6 +139,12 @@ export async function POST(request: NextRequest) {
       error instanceof Error ? error : undefined,
       { error },
     );
+
+    // An agent never holds its own Stripe customer (ADR 0007 Decision 8);
+    // getOrCreateStripeCustomer refuses it before any Stripe call.
+    if (error instanceof AgentStripeCustomerRefusedError) {
+      return NextResponse.json({ error: error.message }, { status: 403 });
+    }
 
     if (error instanceof Stripe.errors.StripeError) {
       return NextResponse.json({ error: getUserFriendlyStripeError(error) }, { status: 400 });

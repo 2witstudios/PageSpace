@@ -40,7 +40,7 @@ vi.mock('@pagespace/db/operators', () => ({
   isNull: vi.fn(),
 }));
 vi.mock('@pagespace/db/schema/auth', () => ({
-  users: { id: 'id', subscriptionTier: 'subscriptionTier' },
+  users: { id: 'id', subscriptionTier: 'subscriptionTier', accountType: 'accountType' },
 }));
 vi.mock('@pagespace/db/schema/sessions', () => ({
   sessions: { userId: 'userId', type: 'type', revokedAt: 'revokedAt', lastUsedAt: 'lastUsedAt' },
@@ -247,6 +247,27 @@ describe('memory cron route', () => {
         should: 'return 200 with processed: 0',
         actual: data.processed,
         expected: 0,
+      });
+    });
+
+    it('should select human accounts only, so an agent row given a paying tier out-of-band never gets memory AI', async () => {
+      const operators = await import('@pagespace/db/operators');
+      vi.mocked(operators.eq).mockImplementation(((column: unknown, value: unknown) => ({ eq: [column, value] })) as never);
+      vi.mocked(operators.and).mockImplementation(((...conditions: unknown[]) => ({ and: conditions })) as never);
+      const payingUsersWhere = vi.fn().mockReturnValue({ groupBy: vi.fn().mockResolvedValue([]) });
+      mockDbSelect.mockReturnValue({
+        from: vi.fn().mockReturnValue({ innerJoin: vi.fn().mockReturnValue({ where: payingUsersWhere }) }),
+      });
+
+      const { POST } = await import('../route');
+      await POST(createSignedCronRequest());
+
+      const [condition] = payingUsersWhere.mock.calls[0] as [{ and: unknown[] }];
+      assert({
+        given: 'the paying-users query',
+        should: 'require accountType = human alongside the paying-tier filter',
+        actual: condition.and.some((c) => JSON.stringify(c) === JSON.stringify({ eq: ['accountType', 'human'] })),
+        expected: true,
       });
     });
 

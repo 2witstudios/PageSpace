@@ -51,6 +51,7 @@ export async function POST(req: Request) {
     logger.info(`Task trigger cron: Found ${dueTriggers.length} due triggers`);
 
     let executed = 0;
+    let deferred = 0;
     let totalClaimed = 0;
     const errors: string[] = [];
 
@@ -103,6 +104,22 @@ export async function POST(req: Request) {
             return { trigger, result: skippedResult };
           }
 
+          // A completion trigger reaches the cron only as a retry after a
+          // transient credit refusal; if the task was reopened meanwhile, the
+          // "on completion" workflow no longer applies.
+          if (trigger.triggerType === 'completion') {
+            const task = taskMap.get(trigger.taskItemId);
+            const skipReason = !task ? 'Task not found' : !task.completedAt ? 'Task no longer completed' : null;
+            if (skipReason) {
+              await db.update(taskTriggers).set({
+                isEnabled: false,
+                lastFireError: skipReason,
+              }).where(eq(taskTriggers.id, trigger.id));
+              const skippedResult: WorkflowExecutionResult = { success: false, durationMs: 0, error: skipReason };
+              return { trigger, result: skippedResult };
+            }
+          }
+
           // Pre-execution skip for due_date triggers whose task became ineligible
           if (trigger.triggerType === 'due_date') {
             const task = taskMap.get(trigger.taskItemId);
@@ -136,9 +153,25 @@ export async function POST(req: Request) {
             timezone: workflow.timezone,
             source: { table: 'taskTriggers', id: trigger.id, triggerAt: trigger.nextRunAt },
             taskContext: { taskItemId: trigger.taskItemId, triggerType: trigger.triggerType },
+            // executeWorkflow gates credit on createdBy. A due-date fire is
+            // bounded by its schedule, so it skips the daily cap; a completion
+            // retry keeps it, the same policy as its first fire (user-paced).
+            creditGate: trigger.triggerType === 'due_date' ? { skipDailyCap: true } : {},
           };
 
           const result = await executeWorkflow(input);
+
+          if (result.retryable) {
+            // A retryable unstarted run (transient refusal, or the gate threw)
+            // wrote no run: release this tick's claim
+            // so the next tick fires the trigger again (bounded to 24h by the
+            // executor), and show why it is waiting.
+            await db.update(taskTriggers).set({
+              lastFiredAt: null,
+              lastFireError: result.error ?? null,
+            }).where(eq(taskTriggers.id, trigger.id));
+            return { trigger, result };
+          }
 
           await db.update(taskTriggers).set({
             isEnabled: false,
@@ -154,6 +187,8 @@ export async function POST(req: Request) {
         if (settled.status === 'fulfilled') {
           if (settled.value.result.success) {
             executed++;
+          } else if (settled.value.result.retryable) {
+            deferred++;
           } else {
             errors.push(`task-trigger-${settled.value.trigger.id}: ${settled.value.result.error}`);
           }
@@ -176,11 +211,12 @@ export async function POST(req: Request) {
 
     logger.info(`Task trigger cron: Complete. Executed ${executed}/${totalClaimed}`);
 
-    audit({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'task_triggers', details: { executed, failed: errors.length } });
+    audit({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'task_triggers', details: { executed, deferred, failed: errors.length } });
 
     return NextResponse.json({
       message: 'Task trigger cron complete',
       executed,
+      deferred,
       total: totalClaimed,
       errors: errors.length > 0 ? errors : undefined,
     });

@@ -41,15 +41,16 @@ describe('email-service', () => {
     process.env.FROM_EMAIL = origFromEmail;
   });
 
-  it('given a recipient under the agent reserved domain, should return before any rate-limit or provider call and warn', async () => {
+  it('given a recipient under the agent reserved domain, should return a suppressed outcome before any rate-limit or provider call and warn', async () => {
     // ADR 0007 §4 outbound choke point: an agent's synthetic address can never
-    // receive mail. Same shape as the on-prem early return — resolves, sends nothing.
+    // receive mail. The caller must be able to tell this apart from a delivery
+    // (Phase 1b) — a silent success let the member-invite undo never run.
     delete process.env.RESEND_API_KEY;
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
     await expect(
       sendEmail({ to: 'Agent-x@AGENTS.pagespace.invalid', subject: 'Test', react: null })
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ status: 'suppressed' });
 
     expect(mockSend).not.toHaveBeenCalled();
     expect(checkDistributedRateLimit).not.toHaveBeenCalled();
@@ -71,10 +72,19 @@ describe('email-service', () => {
     ).rejects.toThrow('Too many emails sent to user@test.com');
   });
 
-  it('given cloud mode, should send email via Resend', async () => {
+  it('given on-prem mode, should return a disabled outcome (distinct from a reserved-recipient suppression)', async () => {
+    mockIsOnPrem.mockReturnValue(true);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    await expect(sendEmail({ to: 'user@test.com', subject: 'Test', react: null })).resolves.toEqual({ status: 'disabled' });
+    expect(mockSend).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('given cloud mode, should send email via Resend and report it sent', async () => {
     mockSend.mockResolvedValue({ data: { id: 'email-1' }, error: null });
 
-    await sendEmail({ to: 'user@test.com', subject: 'Test', react: null });
+    await expect(sendEmail({ to: 'user@test.com', subject: 'Test', react: null })).resolves.toEqual({ status: 'sent' });
     expect(mockSend).toHaveBeenCalledWith(
       expect.objectContaining({
         to: 'user@test.com',
@@ -202,7 +212,7 @@ describe('email-service', () => {
     mockIsOnPrem.mockReturnValue(true);
     await expect(
       sendEmail({ to: 'user@test.com', subject: 'Test', react: null })
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ status: 'disabled' });
   });
 });
 

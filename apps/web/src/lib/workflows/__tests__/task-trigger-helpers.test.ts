@@ -110,6 +110,7 @@ import {
   recomputeTaskTriggerMetadata,
 } from '../task-trigger-helpers';
 import { executeWorkflow } from '../workflow-executor';
+import { workflowGateOptions } from '../core/workflow-gate-options';
 import { db } from '@pagespace/db/db';
 import { isNull } from '@pagespace/db/operators';
 
@@ -262,6 +263,97 @@ describe('task-trigger-helpers', () => {
         agentPageId: 'agent-1',
         taskContext: { taskItemId: 'task-1', triggerType: 'completion' },
       }));
+    });
+
+    const fireWith = async (result: Record<string, unknown>) => {
+      mockFrom
+        .mockImplementationOnce(() => ({ where: vi.fn().mockResolvedValueOnce([mockTrigger]) }))
+        .mockImplementationOnce(() => ({ where: vi.fn().mockResolvedValueOnce([mockWorkflow]) }));
+      mockReturning.mockResolvedValueOnce([mockTrigger]);
+      vi.mocked(executeWorkflow).mockResolvedValueOnce(result as never);
+      const before = Date.now();
+      await fireCompletionTrigger('task-1');
+      return before;
+    };
+
+    it('given any fire, should pass the completion instant as the occurrence time so a transient refusal is retryable under the 24h bound', async () => {
+      const before = await fireWith({ success: true, durationMs: 1 });
+
+      const source = vi.mocked(executeWorkflow).mock.calls[0][0].source;
+      expect(source.table).toBe('taskTriggers');
+      expect(source.id).toBe('trg-1');
+      expect(source.triggerAt).toBeInstanceOf(Date);
+      expect((source.triggerAt as Date).getTime()).toBeGreaterThanOrEqual(before);
+    });
+
+    it('given any fire, should keep the tier daily cap on: a completion is user-paced (500 completions = 500 runs), not bounded by a schedule', async () => {
+      await fireWith({ success: true, durationMs: 1 });
+
+      const policy = vi.mocked(executeWorkflow).mock.calls[0][0].creditGate;
+      expect(policy?.skipDailyCap).toBeUndefined();
+      expect(workflowGateOptions({
+        sourceTable: 'taskTriggers',
+        aiStepCount: 1,
+        policy,
+        holdEstimateCents: 25,
+        maxInteractiveInFlight: 2,
+      })).not.toHaveProperty('skipDailyCap');
+    });
+
+    it('given a transient refusal, should keep the trigger enabled, release its claim and schedule it for the task-triggers cron (nextRunAt = the completion instant) with the reason recorded', async () => {
+      await fireWith({
+        success: false,
+        durationMs: 1,
+        error: 'AI credit gate denied: too_many_in_flight',
+        retryable: true,
+        refusal: { reason: 'too_many_in_flight', kind: 'transient' },
+      });
+
+      const firedAt = vi.mocked(executeWorkflow).mock.calls[0][0].source.triggerAt;
+      await vi.waitFor(() => {
+        expect(mockSet).toHaveBeenCalledWith({
+          lastFiredAt: null,
+          nextRunAt: firedAt,
+          lastFireError: 'AI credit gate denied: too_many_in_flight',
+        });
+      });
+      expect(mockSet).not.toHaveBeenCalledWith(expect.objectContaining({ isEnabled: false }));
+    });
+
+    it('given the credit gate itself THREW inside the retry window (retryable, no refusal), should hand the fire to the task-triggers cron instead of disabling it', async () => {
+      await fireWith({
+        success: false,
+        durationMs: 1,
+        error: 'connection terminated unexpectedly',
+        retryable: true,
+      });
+
+      const firedAt = vi.mocked(executeWorkflow).mock.calls[0][0].source.triggerAt;
+      await vi.waitFor(() => {
+        expect(mockSet).toHaveBeenCalledWith({
+          lastFiredAt: null,
+          nextRunAt: firedAt,
+          lastFireError: 'connection terminated unexpectedly',
+        });
+      });
+      expect(mockSet).not.toHaveBeenCalledWith(expect.objectContaining({ isEnabled: false }));
+    });
+
+    it('given a terminal refusal (or a transient one past its window), should disable the trigger once with the reason', async () => {
+      await fireWith({
+        success: false,
+        durationMs: 1,
+        runId: 'run_refused',
+        error: 'AI credit gate denied: requires_funding',
+        refusal: { reason: 'requires_funding', kind: 'terminal' },
+      });
+
+      await vi.waitFor(() => {
+        expect(mockSet).toHaveBeenCalledWith({ lastFireError: 'AI credit gate denied: requires_funding', isEnabled: false });
+      });
+      const setPayloads = mockSet.mock.calls as unknown as Array<[{ isEnabled?: boolean }]>;
+      expect(setPayloads.filter(([payload]) => payload.isEnabled === false)).toHaveLength(1);
+      expect(mockSet).not.toHaveBeenCalledWith(expect.objectContaining({ nextRunAt: expect.anything() }));
     });
 
     it('given the claim UPDATE, should gate on lastFiredAt IS NULL so concurrent callers cannot double-fire', async () => {

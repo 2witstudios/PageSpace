@@ -1,6 +1,6 @@
 /**
  * credit-funding — imperative shell that turns a paid Stripe event into spendable
- * prepaid credit. Pure routing/arithmetic (classifyStripeEvent, computeMonthlyRefill,
+ * prepaid credit. Pure routing/arithmetic (classifyStripeEvent, computeRefill,
  * applyPaymentToDebt) comes from credit-core; this file only does I/O.
  *
  * Two funding paths:
@@ -28,8 +28,9 @@ import { creditBalances, creditLedger } from '@pagespace/db/schema/credits';
 import { users } from '@pagespace/db/schema/auth';
 import { eq, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
-import { classifyStripeEvent, computeMonthlyRefill, applyPaymentToDebt } from './credit-core';
-import { TIER_MONTHLY_ALLOWANCE_CENTS } from './credit-pricing';
+import { classifyStripeEvent, computeRefill, applyPaymentToDebt } from './credit-core';
+import { allowanceGrantCents } from './credit-pricing';
+import type { AccountType } from '../auth/agent/account-type';
 import type { SubscriptionTier } from '../services/subscription-utils';
 import { loggers } from '../logging/logger-config';
 
@@ -105,14 +106,14 @@ function invoicePeriod(obj: FundingEventObject): { start: Date | null; end: Date
 
 async function resolveUser(
   customerId: string,
-): Promise<{ id: string; tier: SubscriptionTier } | null> {
+): Promise<{ id: string; tier: SubscriptionTier; accountType: AccountType } | null> {
   const rows = await db
-    .select({ id: users.id, subscriptionTier: users.subscriptionTier })
+    .select({ id: users.id, subscriptionTier: users.subscriptionTier, accountType: users.accountType })
     .from(users)
     .where(eq(users.stripeCustomerId, customerId))
     .limit(1);
   if (!rows.length) return null;
-  return { id: rows[0].id, tier: rows[0].subscriptionTier as SubscriptionTier };
+  return { id: rows[0].id, tier: rows[0].subscriptionTier as SubscriptionTier, accountType: rows[0].accountType };
 }
 
 /**
@@ -169,6 +170,15 @@ async function applyMonthlyRefill(event: FundingEvent, tierOverride?: Subscripti
   // stored tier (user.tier) may be stale ('free'); the invoice reflects what was actually
   // billed. Fall back to the stored tier only when the caller couldn't resolve one.
   const tier = tierOverride ?? user.tier;
+  // The one allowance function (Phase 1b): 0 for an agent. An agent cannot hold a
+  // Stripe customer (stripe-customer-eligibility), so this is defence in depth —
+  // an agent's zero grant writes nothing rather than a monthly_grant row. (A human
+  // on a tier configured to a 0 allowance still rolls the window as before.)
+  const allowanceCents = allowanceGrantCents({ tier, accountType: user.accountType, kind: 'refill' });
+  if (allowanceCents === 0 && user.accountType === 'agent') {
+    loggers.api.warn('credit funding skipped: agent accounts receive no allowance', { eventId: event.id, userId: user.id });
+    return;
+  }
   const { start, end } = invoicePeriod(obj);
   let carriedCents = 0;
 
@@ -179,7 +189,7 @@ async function applyMonthlyRefill(event: FundingEvent, tierOverride?: Subscripti
         userId: user.id,
         entryType: 'monthly_grant',
         bucket: 'monthly',
-        amountCents: (TIER_MONTHLY_ALLOWANCE_CENTS[tier] ?? TIER_MONTHLY_ALLOWANCE_CENTS.free),
+        amountCents: allowanceCents,
         stripeRef,
         // Settled on insert. consumeStatus defaults to 'pending', but the backfill
         // cron sweeps EVERY pending ledger row through settlePendingLedgerRow, which
@@ -220,7 +230,7 @@ async function applyMonthlyRefill(event: FundingEvent, tierOverride?: Subscripti
       .for('update')
       .limit(1);
     carriedCents = currentRow?.monthlyRemainingCents ?? 0;
-    const refill = computeMonthlyRefill(tier, TIER_MONTHLY_ALLOWANCE_CENTS, carriedCents, currentRow?.debtCents ?? 0);
+    const refill = computeRefill(allowanceCents, carriedCents, currentRow?.debtCents ?? 0);
 
     await tx
       .insert(creditBalances)
@@ -249,7 +259,7 @@ async function applyMonthlyRefill(event: FundingEvent, tierOverride?: Subscripti
   loggers.api.info('credit funding: monthly refill applied', {
     userId: user.id,
     tier,
-    allowanceCents: TIER_MONTHLY_ALLOWANCE_CENTS[tier] ?? TIER_MONTHLY_ALLOWANCE_CENTS.free,
+    allowanceCents,
     carried: carriedCents,
     stripeRef,
   });

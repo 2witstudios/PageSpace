@@ -8,6 +8,7 @@ import { pageInviteRepository } from '@/lib/repositories/page-invite-repository'
 import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { createInviteToken } from '@pagespace/lib/auth/invite-token';
 import { sendPendingPageShareInvitationEmail } from '@pagespace/lib/services/notification-email-service';
+import { notAgentReservedEmail } from '@pagespace/lib/auth/agent/reserved-email';
 import {
   checkDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
@@ -21,7 +22,7 @@ const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
 const shareInviteBodySchema = z
   .object({
-    email: z.string().trim().toLowerCase().pipe(z.string().email().max(254)),
+    email: z.string().trim().toLowerCase().pipe(z.string().email().max(254).refine(notAgentReservedEmail, { message: 'Invalid email address' })),
     permissions: z
       .array(z.enum(['VIEW', 'EDIT', 'SHARE']))
       .min(1, 'At least VIEW permission is required'),
@@ -243,7 +244,7 @@ export async function POST(
 
     // R6: SMTP failure → compensating delete so the partial unique index stays clean
     try {
-      await sendPendingPageShareInvitationEmail({
+      const outcome = await sendPendingPageShareInvitationEmail({
         recipientEmail: email,
         inviterName: inviter?.name ?? 'A teammate',
         pageTitle: page.title,
@@ -251,6 +252,11 @@ export async function POST(
         permissions: permissions.map((p) => p.toLowerCase()),
         inviteUrl,
       });
+      // A suppressed send (reserved agent recipient) delivered nothing: undo it
+      // exactly like a failed send.
+      if (outcome.status === 'suppressed') {
+        throw new Error('Invitation email suppressed: recipient cannot receive mail');
+      }
     } catch (emailError) {
       loggers.api.error(
         'Failed to send pending page share invitation email; rolling back pending invite row',

@@ -618,6 +618,16 @@
       "import": "./dist/billing/credit-core.js",
       "require": "./dist/billing/credit-core.js"
     },
+    "./billing/classify-gate-refusal": {
+      "types": "./dist/billing/classify-gate-refusal.d.ts",
+      "import": "./dist/billing/classify-gate-refusal.js",
+      "require": "./dist/billing/classify-gate-refusal.js"
+    },
+    "./billing/stripe-customer-eligibility": {
+      "types": "./dist/billing/stripe-customer-eligibility.d.ts",
+      "import": "./dist/billing/stripe-customer-eligibility.js",
+      "require": "./dist/billing/stripe-customer-eligibility.js"
+    },
     "./billing/credit-consume": {
       "types": "./dist/billing/credit-consume.d.ts",
       "import": "./dist/billing/credit-consume.js",
@@ -2588,6 +2598,15 @@
     "*": {
       "validators/custom-domain": [
         "./dist/validators/custom-domain.d.ts"
+      ],
+      "auth/agent/reserved-email": [
+        "./dist/auth/agent/reserved-email.d.ts"
+      ],
+      "billing/classify-gate-refusal": [
+        "./dist/billing/classify-gate-refusal.d.ts"
+      ],
+      "billing/stripe-customer-eligibility": [
+        "./dist/billing/stripe-customer-eligibility.d.ts"
       ],
       "client-safe": [
         "./dist/client-safe.d.ts"

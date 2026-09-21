@@ -5,6 +5,7 @@ import { users } from '@pagespace/db/schema/auth';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { stripe, Stripe } from '@/lib/stripe';
 import { getOrCreateStripeCustomer } from '@/lib/stripe-customer';
+import { AgentStripeCustomerRefusedError } from '@pagespace/lib/billing/stripe-customer-eligibility';
 import { getUserFriendlyStripeError } from '@/lib/stripe-errors';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -91,6 +92,12 @@ export async function POST(request: NextRequest) {
 
   } catch (error) {
     loggers.api.error('Error creating subscription', error instanceof Error ? error : undefined, { error });
+
+    // An agent never holds its own Stripe customer (ADR 0007 Decision 8);
+    // getOrCreateStripeCustomer refuses it before any Stripe call.
+    if (error instanceof AgentStripeCustomerRefusedError) {
+      return NextResponse.json({ error: error.message }, { status: 403 });
+    }
 
     if (error instanceof Stripe.errors.StripeError) {
       return NextResponse.json(

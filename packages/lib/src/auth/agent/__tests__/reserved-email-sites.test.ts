@@ -1,6 +1,7 @@
 /**
- * ADR 0007 §4 — the reserved agent domain is sealed at exactly five inbound
- * sites and one outbound choke point. The domain's safety is a convention
+ * ADR 0007 §4 — the reserved agent domain is sealed at exactly nine inbound
+ * sites (the ADR's five, plus the four invite/admin sign-in sites Agent Signup
+ * Phase 1b sealed) and one outbound choke point. The domain's safety is a convention
  * enforced in code (threat model §4.5), so this test enumerates the sites and
  * fails when one of them stops applying the shared predicate. Pattern of
  * `apps/web/src/app/api/__tests__/security-audit-coverage.test.ts`: read the
@@ -8,7 +9,7 @@
  *
  * Each site's BEHAVIOUR (a reserved address gets the site's ordinary
  * validation error) is pinned beside the site in its own test file; this file
- * is the inventory that keeps a sixth refactor from silently dropping one.
+ * is the inventory that keeps a later refactor from silently dropping one.
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
@@ -16,13 +17,17 @@ import { join } from 'path';
 
 const REPO_ROOT = join(__dirname, '../../../../../..');
 
-/** The five inbound sites (ADR 0007 §4, numbered as there). */
+/** The inbound sites: ADR 0007 §4's five (numbered as there), then Phase 1b's four. */
 const INBOUND_SITES = [
   'apps/web/src/app/api/auth/magic-link/send/route.ts',
   'apps/web/src/app/api/auth/signup-passkey/options/route.ts',
   'packages/lib/src/auth/oauth-account-match.ts',
   'apps/admin/src/app/api/admin/users/create/route.ts',
   'apps/web/src/app/api/account/route.ts',
+  'apps/web/src/app/api/drives/[driveId]/members/invite/route.ts',
+  'apps/web/src/app/api/pages/[pageId]/share-invite/route.ts',
+  'apps/web/src/app/api/connections/invite/route.ts',
+  'apps/admin/src/app/api/auth/magic-link/send/route.ts',
 ] as const;
 
 const OUTBOUND_SITE = 'packages/lib/src/services/email-service.ts';
@@ -37,8 +42,8 @@ function code(relativePath: string): string {
 const IMPORTS_RESERVED_EMAIL = /import\s*\{[^}]*\bnotAgentReservedEmail\b[^}]*\}\s*from\s*'[^']*\bagent\/reserved-email'/;
 
 describe('reserved agent domain — inbound sites', () => {
-  it('given the inventory, should name exactly five sites', () => {
-    expect(new Set(INBOUND_SITES).size).toBe(5);
+  it('given the inventory, should name exactly nine sites', () => {
+    expect(new Set(INBOUND_SITES).size).toBe(9);
   });
 
   it.each(INBOUND_SITES)('given %s, should import notAgentReservedEmail from the shared module and apply it', (site) => {

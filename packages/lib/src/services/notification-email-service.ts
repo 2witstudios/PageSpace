@@ -2,7 +2,7 @@ import { db } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
 import { users, emailUnsubscribeTokens } from '@pagespace/db/schema/auth';
 import { emailNotificationPreferences, emailNotificationLog } from '@pagespace/db/schema/email-notifications';
-import { sendEmail, resolveAppUrl } from './email-service';
+import { sendEmail, resolveAppUrl, type SendEmailOutcome } from './email-service';
 import { DriveInvitationEmail } from '../email-templates/DriveInvitationEmail';
 import { ConnectionInvitationEmail } from '../email-templates/ConnectionInvitationEmail';
 import { PageShareInvitationEmail } from '../email-templates/PageShareInvitationEmail';
@@ -295,11 +295,11 @@ export async function sendPendingDriveInvitationEmail(input: {
   inviterName: string;
   driveName: string;
   inviteUrl: string;
-}): Promise<void> {
+}): Promise<SendEmailOutcome> {
   const safeInviterName = stripHeaderControls(input.inviterName) || 'Someone';
   const safeDriveName = stripHeaderControls(input.driveName) || 'a workspace';
 
-  await sendEmail({
+  return sendEmail({
     to: input.recipientEmail,
     subject: `${safeInviterName} invited you to ${safeDriveName} on PageSpace`,
     react: DriveInvitationEmail({
@@ -321,10 +321,10 @@ export async function sendPendingConnectionInvitationEmail(input: {
   inviterName: string;
   message?: string;
   inviteUrl: string;
-}): Promise<void> {
+}): Promise<SendEmailOutcome> {
   const safeInviterName = stripHeaderControls(input.inviterName) || 'Someone';
 
-  await sendEmail({
+  return sendEmail({
     to: input.recipientEmail,
     subject: `${safeInviterName} wants to connect on PageSpace`,
     react: ConnectionInvitationEmail({
@@ -348,12 +348,12 @@ export async function sendPendingPageShareInvitationEmail(input: {
   driveName: string;
   permissions: string[];
   inviteUrl: string;
-}): Promise<void> {
+}): Promise<SendEmailOutcome> {
   const safeInviterName = stripHeaderControls(input.inviterName) || 'Someone';
   const safePageTitle = stripHeaderControls(input.pageTitle) || 'a document';
   const safeDriveName = stripHeaderControls(input.driveName) || 'a workspace';
 
-  await sendEmail({
+  return sendEmail({
     to: input.recipientEmail,
     subject: `${safeInviterName} shared "${safePageTitle}" with you on PageSpace`,
     react: PageShareInvitationEmail({
