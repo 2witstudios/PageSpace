@@ -7,7 +7,6 @@ import { ORGS_ENABLED } from '../organizations/orgs-enabled';
 import { decideDriveAudience, type DriveAudienceMember, type DriveAudienceRow } from './org-drive-resolution';
 import type { DriveMemberRole } from './org-access';
 
-export type { DriveAudienceMember } from './org-drive-resolution';
 
 /** Chunk size for id IN lists (Postgres bind parameter limit). */
 const IN_LIST_CHUNK = 500;
