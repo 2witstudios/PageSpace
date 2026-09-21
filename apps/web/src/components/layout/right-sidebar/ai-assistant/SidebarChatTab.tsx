@@ -3,6 +3,8 @@ import type { UIMessage } from 'ai';
 import { usePathname } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { ChatInput, type ChatInputRef } from '@/components/ai/chat/input';
+import { useSideQuestion, parseSideQuestionInput } from '@/components/ai/btw/useSideQuestion';
+import { SideQuestionCard } from '@/components/ai/btw/SideQuestionCard';
 import { useImageAttachments } from '@/lib/ai/shared/hooks/useImageAttachments';
 import { hasVisionCapability } from '@/lib/ai/core/vision-models';
 import { Loader2, Plus } from 'lucide-react';
@@ -499,6 +501,16 @@ const SidebarChatTab: React.FC = () => {
   // Refs
   const chatInputRef = useRef<ChatInputRef>(null);
 
+  // Detached /btw side question (#2678 contract): independent of the primary
+  // chat lifecycle and activeStreamId; no persistence, ephemeral card.
+  const sideQuestion = useSideQuestion(currentConversationId ?? '');
+  const handleSideQuestion = useCallback(() => {
+    const question = parseSideQuestionInput(input);
+    if (!question || !currentConversationId) return;
+    setInput('');
+    void sideQuestion.ask(question);
+  }, [input, currentConversationId, sideQuestion]);
+
   // ============================================
   // Effects: Drive Loading
   // ============================================
@@ -962,6 +974,9 @@ const SidebarChatTab: React.FC = () => {
           paddingBottom: isKeyboardOpen ? `calc(0.75rem + ${keyboardHeight}px)` : undefined,
         }}
       >
+        {sideQuestion.state && (
+          <SideQuestionCard state={sideQuestion.state} onDismiss={sideQuestion.dismiss} />
+        )}
         <ChatErrorBanner
           cause={errorCause}
           show={showError}
@@ -985,6 +1000,7 @@ const SidebarChatTab: React.FC = () => {
           value={input}
           onChange={setInput}
           onSend={handleSendMessage}
+          onSideQuestion={handleSideQuestion}
           onStop={handleStop}
           isStreaming={displayIsStreaming}
           isStopping={isStopping}

@@ -4,6 +4,19 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useStreamingRegistration } from '@/lib/ai/shared';
 
+/**
+ * Extract the question from a `/btw question` composer line, or null when the
+ * value is not a side question (no trigger, a bare `/btw` with no question,
+ * or text before the trigger). The single parse for every wired surface —
+ * ChatInput's send gate already requires `/^\/btw\s+\S/`, so this and the
+ * gate cannot drift if surfaces share this function. Multi-line questions are
+ * captured whole (`[\s\S]` spans newlines, where `.` would stop at the first
+ * one and silently drop the message); leading/trailing whitespace is trimmed.
+ */
+export function parseSideQuestionInput(value: string): string | null {
+  return /^\/btw\s+(\S[\s\S]*)$/.exec(value.trim())?.[1] ?? null;
+}
+
 export interface SideQuestionRequest {
   requestId: string;
   controller: AbortController;
@@ -47,10 +60,19 @@ export function useSideQuestion(conversationId: string) {
   );
 
   // Leaving the surface (unmount, or the conversation switching underneath us)
-  // must stop consuming the response — and abort propagates through the
-  // request signal to cancel the server stream too.
+  // must stop consuming the response — abort propagates through the request
+  // signal to cancel the server stream too — and drop the card entirely: the
+  // question and any partial answer belong to the conversation they were asked
+  // in, so neither a completed card from the previous conversation nor an
+  // aborted one stuck on "Thinking…" may survive into the next one. This is
+  // dismiss()'s teardown run automatically; unmount is covered too (setState
+  // after unmount is a no-op in React 18).
   useEffect(() => {
-    return () => abortSideQuestion(controller.current);
+    return () => {
+      abortSideQuestion(controller.current);
+      controller.current = null;
+      setState(null);
+    };
   }, [conversationId]);
 
   const dismiss = useCallback(() => {

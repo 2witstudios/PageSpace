@@ -274,6 +274,12 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
             placeholder={placeholder}
             driveId={driveId}
             commandDriveId={commandDriveId}
+            // ChatInput owns the /btw interception gate (handleSend), so it —
+            // and only it among the composer surfaces — may offer client-
+            // handled commands, and only while that handler is wired.
+            // ChannelInput and other bare ChatTextarea consumers stay gated
+            // off and are never offered /btw.
+            allowClientHandledCommands={Boolean(onSideQuestion)}
             crossDrive={crossDrive}
             disabled={effectiveDisabled}
             variant={variant}
