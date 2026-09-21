@@ -17,6 +17,7 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope, isSco
 import { jsonResponse } from '@pagespace/lib/utils/api-utils';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { safeParseBody } from '@/lib/validation/parse-body';
+import { isDriveLead } from '@pagespace/lib/permissions/drive-relationship';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -59,10 +60,10 @@ async function listScopedDrivesWithMembership({
       const membership = await getMembership(drive.id);
       if (!membership) return null;
       const role = membership.role
-        ?? (drive.ownerId === userId ? ('OWNER' as const) : ('MEMBER' as const));
+        ?? (isDriveLead(userId, drive) ? ('OWNER' as const) : ('MEMBER' as const));
       return {
         ...drive,
-        isOwned: membership.role === null && drive.ownerId === userId,
+        isOwned: membership.role === null && isDriveLead(userId, drive),
         role,
         lastAccessedAt: null,
       };

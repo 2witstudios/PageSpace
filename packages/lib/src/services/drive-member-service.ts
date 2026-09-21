@@ -12,6 +12,8 @@ import { drives, pages } from '@pagespace/db/schema/core';
 import { driveMembers, userProfiles, driveRoles, pagePermissions } from '@pagespace/db/schema/members';
 import { decryptUserRow, decryptUsersByIdOnce } from '../auth/user-repository';
 import { loadEffectiveDriveMembership } from '../permissions/org-drive-membership';
+import { isDriveLead } from '../permissions/drive-relationship';
+import { listDriveAudience } from '../permissions/drive-audience';
 
 // ============================================================================
 // Types
@@ -85,7 +87,7 @@ export async function checkDriveAccess(
     return { isOwner: false, isAdmin: false, isMember: false, drive: null };
   }
 
-  const isOwner = drive.ownerId === userId;
+  const isOwner = isDriveLead(userId, drive);
 
   if (isOwner) {
     return { isOwner: true, isAdmin: true, isMember: true, drive };
@@ -108,92 +110,46 @@ export async function checkDriveAccess(
 }
 
 /**
- * Get all user IDs that are members of a drive
- * Efficient query for authorization checks
+ * Get all user IDs that are members of a drive: the drive's lead and everyone the org-aware
+ * membership admits (listDriveAudience). Pending invitations and stale org rows are no members.
  */
 export async function getDriveMemberUserIds(driveId: string): Promise<string[]> {
-  const members = await db
-    .select({ userId: driveMembers.userId })
-    .from(driveMembers)
-    .where(and(
-      eq(driveMembers.driveId, driveId),
-      isNotNull(driveMembers.acceptedAt),
-    ));
-
-  return members.map((m) => m.userId);
+  return (await listDriveAudience(driveId)).map((m) => m.userId);
 }
 
 /**
- * Get all user IDs who should receive broadcast events for a drive.
- * Returns owner + all drive members.
- *
- * Migration note: When org layer is added, this can be replaced with
- * org-scoped room membership or org member queries.
+ * Get all user IDs who should receive broadcast events for a drive: the lead plus every
+ * effective member (org Owner/Admins and implicit Open members included, stale org rows and
+ * pending invitations excluded).
  */
 export async function getDriveRecipientUserIds(driveId: string): Promise<string[]> {
-  const drive = await db.query.drives.findFirst({
-    where: eq(drives.id, driveId),
-    columns: { ownerId: true },
-  });
-  if (!drive) return [];
-
-  const members = await db
-    .select({ userId: driveMembers.userId })
-    .from(driveMembers)
-    .where(and(
-      eq(driveMembers.driveId, driveId),
-      isNotNull(driveMembers.acceptedAt),
-    ));
-
-  const userIds = new Set([drive.ownerId, ...members.map((m) => m.userId)]);
-  return Array.from(userIds);
+  return (await listDriveAudience(driveId)).map((m) => m.userId);
 }
 
 /**
- * Get user IDs of drive members with a specific standard role.
- * OWNER is stored in drives.ownerId, not in the driveMembers table.
+ * Get user IDs of drive members with a specific standard role (the effective role: an org
+ * Owner/Admin is ADMIN). OWNER is the drive's lead (drives.ownerId).
  */
 export async function getDriveMemberUserIdsByStandardRole(
   driveId: string,
   role: 'OWNER' | 'ADMIN' | 'MEMBER',
 ): Promise<string[]> {
-  if (role === 'OWNER') {
-    const drive = await db.query.drives.findFirst({
-      where: eq(drives.id, driveId),
-      columns: { ownerId: true },
-    });
-    return drive ? [drive.ownerId] : [];
-  }
-
-  const members = await db
-    .select({ userId: driveMembers.userId })
-    .from(driveMembers)
-    .where(and(
-      eq(driveMembers.driveId, driveId),
-      eq(driveMembers.role, role),
-      isNotNull(driveMembers.acceptedAt),
-    ));
-
-  return members.map((m) => m.userId);
+  return (await listDriveAudience(driveId))
+    .filter((m) => (role === 'OWNER' ? m.isOwner : !m.isOwner && m.role === role))
+    .map((m) => m.userId);
 }
 
 /**
- * Get user IDs of drive members assigned a specific custom role.
+ * Get user IDs of drive members assigned a specific custom role (an implicit Open member holds
+ * the drive's default role).
  */
 export async function getDriveMemberUserIdsByCustomRole(
   driveId: string,
   customRoleId: string,
 ): Promise<string[]> {
-  const members = await db
-    .select({ userId: driveMembers.userId })
-    .from(driveMembers)
-    .where(and(
-      eq(driveMembers.driveId, driveId),
-      eq(driveMembers.customRoleId, customRoleId),
-      isNotNull(driveMembers.acceptedAt),
-    ));
-
-  return members.map((m) => m.userId);
+  return (await listDriveAudience(driveId))
+    .filter((m) => !m.isOwner && m.customRoleId === customRoleId)
+    .map((m) => m.userId);
 }
 
 /**
@@ -312,20 +268,10 @@ export async function getDriveOwnerAsMember(driveId: string): Promise<MemberWith
 }
 
 /**
- * Check if a user is already a member of a drive
+ * Check if a user is a member of a drive: its lead or an effective member (listDriveAudience).
  */
 export async function isMemberOfDrive(driveId: string, userId: string): Promise<boolean> {
-  const existing = await db
-    .select({ id: driveMembers.id })
-    .from(driveMembers)
-    .where(and(
-      eq(driveMembers.driveId, driveId),
-      eq(driveMembers.userId, userId),
-      isNotNull(driveMembers.acceptedAt),
-    ))
-    .limit(1);
-
-  return existing.length > 0;
+  return (await listDriveAudience(driveId)).some((m) => m.userId === userId);
 }
 
 /**

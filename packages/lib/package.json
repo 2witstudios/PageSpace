@@ -2308,6 +2308,21 @@
       "import": "./dist/permissions/permissions.js",
       "require": "./dist/permissions/permissions.js"
     },
+    "./permissions/drive-relationship": {
+      "types": "./dist/permissions/drive-relationship.d.ts",
+      "import": "./dist/permissions/drive-relationship.js",
+      "require": "./dist/permissions/drive-relationship.js"
+    },
+    "./permissions/drive-relationship-loader": {
+      "types": "./dist/permissions/drive-relationship-loader.d.ts",
+      "import": "./dist/permissions/drive-relationship-loader.js",
+      "require": "./dist/permissions/drive-relationship-loader.js"
+    },
+    "./permissions/member-drives": {
+      "types": "./dist/permissions/member-drives.d.ts",
+      "import": "./dist/permissions/member-drives.js",
+      "require": "./dist/permissions/member-drives.js"
+    },
     "./permissions/rollback-permissions": {
       "types": "./dist/permissions/rollback-permissions.d.ts",
       "import": "./dist/permissions/rollback-permissions.js",
@@ -3340,6 +3355,15 @@
       ],
       "permissions/file-access": [
         "./dist/permissions/file-access.d.ts"
+      ],
+      "permissions/drive-relationship": [
+        "./dist/permissions/drive-relationship.d.ts"
+      ],
+      "permissions/drive-relationship-loader": [
+        "./dist/permissions/drive-relationship-loader.d.ts"
+      ],
+      "permissions/member-drives": [
+        "./dist/permissions/member-drives.d.ts"
       ],
       "permissions/permission-mutations": [
         "./dist/permissions/permission-mutations.d.ts"

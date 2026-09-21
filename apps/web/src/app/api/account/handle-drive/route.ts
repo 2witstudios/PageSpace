@@ -1,7 +1,8 @@
 import { db } from '@pagespace/db/db'
-import { eq, and, isNotNull } from '@pagespace/db/operators'
+import { eq } from '@pagespace/db/operators'
 import { drives } from '@pagespace/db/schema/core'
-import { driveMembers } from '@pagespace/db/schema/members';
+import { isDriveLead } from '@pagespace/lib/permissions/drive-relationship';
+import { loadDriveRelationship } from '@pagespace/lib/permissions/drive-relationship-loader';
 import { isHomeDrive, homeDriveActionError } from '@pagespace/lib/services/drive-guards';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -44,6 +45,7 @@ export async function POST(req: Request) {
         name: true,
         kind: true,
         orgId: true,
+        orgVisibility: true,
       },
     });
 
@@ -51,7 +53,7 @@ export async function POST(req: Request) {
       return Response.json({ error: 'Drive not found' }, { status: 404 });
     }
 
-    if (drive.ownerId !== userId) {
+    if (!isDriveLead(userId, drive)) {
       return Response.json({ error: 'You are not the owner of this drive' }, { status: 403 });
     }
 
@@ -74,16 +76,10 @@ export async function POST(req: Request) {
       // Verify the new owner is an *accepted* admin in the drive. A pending
       // admin (acceptedAt IS NULL) must not receive ownership — they have
       // never authenticated to the drive and cannot consent. Closes Review C2.
-      const newOwnerMembership = await db.query.driveMembers.findFirst({
-        where: and(
-          eq(driveMembers.driveId, driveId),
-          eq(driveMembers.userId, newOwnerId),
-          eq(driveMembers.role, 'ADMIN'),
-          isNotNull(driveMembers.acceptedAt)
-        ),
-      });
+      // The org-aware membership reads ACCEPTED rows only; only an effective ADMIN qualifies.
+      const newOwner = await loadDriveRelationship(newOwnerId, drive);
 
-      if (!newOwnerMembership) {
+      if (newOwner.membership?.role !== 'ADMIN') {
         return Response.json(
           { error: 'The new owner must be an admin of the drive' },
           { status: 400 }

@@ -12,6 +12,7 @@ import { driveRoles, driveMembers } from '@pagespace/db/schema/members';
 import type { PagePerm } from '../permissions/membership-queries';
 import { computeReorderPlan, lockedBatchReorder } from './reorder';
 import { loadEffectiveDriveMembership } from '../permissions/org-drive-membership';
+import { isDriveLead } from '../permissions/drive-relationship';
 
 // Re-export canonical type so callers can import from one place
 export type { PagePerm };
@@ -101,7 +102,7 @@ export async function checkDriveAccessForRoles(
   }
 
   const drive = driveResult[0];
-  const isOwner = drive.ownerId === userId;
+  const isOwner = isDriveLead(userId, drive);
 
   if (isOwner) {
     return {

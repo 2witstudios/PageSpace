@@ -1,5 +1,6 @@
 import { isSandboxAvailable } from '@pagespace/lib/billing/sandbox-eligibility';
 import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+import { isDriveLead, type DriveRelationship } from '@pagespace/lib/permissions/drive-relationship';
 
 /**
  * Per-drive sandbox availability for THE REQUESTER: the payer's tier (the
@@ -28,7 +29,7 @@ export function computeSandboxEligibilityByDrive(
       drive.id,
       actor.codeExecutionEnabled &&
         isSandboxAvailable(tierByOwnerId.get(drive.ownerId) ?? 'free') &&
-        (drive.ownerId === actor.userId || actor.editableDriveIds.has(drive.id)),
+        (isDriveLead(actor.userId, drive) || actor.editableDriveIds.has(drive.id)),
     ]),
   );
 }
@@ -58,5 +59,19 @@ export function resolveEditableDriveIds(
         return driveWideEditByRole.get(`${row.customRoleId}:${row.driveId}`) === true;
       })
       .map((row) => row.driveId),
+  );
+}
+
+/**
+ * The requester's effective memberships (loadDriveRelationships: accepted rows only, org
+ * Owner/Admin power as ADMIN, an implicit Open member with the drive's default role, stale org
+ * rows counting for nothing) as the rows resolveEditableDriveIds reads. The lead has no row: its
+ * edit access is the ownership check in computeSandboxEligibilityByDrive.
+ */
+export function membershipRowsOf(
+  relationships: ReadonlyMap<string, DriveRelationship>,
+): { driveId: string; role: string; customRoleId: string | null }[] {
+  return [...relationships].flatMap(([driveId, { membership }]) =>
+    membership ? [{ driveId, role: membership.role, customRoleId: membership.customRoleId }] : [],
   );
 }

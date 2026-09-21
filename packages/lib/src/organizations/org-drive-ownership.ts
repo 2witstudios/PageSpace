@@ -1,6 +1,7 @@
 import type { OrgRole } from '@pagespace/db/schema/organizations';
 import type { OrgDriveVisibility } from '@pagespace/db/schema/core';
 import { homeDriveActionError, isHomeDrive } from '../services/drive-guards';
+import { isDriveLead } from '../permissions/drive-relationship';
 
 /**
  * Org-owned drives: who may move a drive into or out of an org, who may create one
@@ -84,7 +85,7 @@ export function decideMoveDriveIntoOrg({
 }): { ok: true } | OrgDriveRefusal {
   // Ownership first: a caller who does not own the drive learns nothing more about it (not
   // that it is a Home drive, nor whether it already belongs to an org).
-  if (drive.ownerId !== actorId) {
+  if (!isDriveLead(actorId, drive)) {
     return refuse('NOT_DRIVE_OWNER', 403, 'Only the drive owner can move a drive into an organization.');
   }
   if (isHomeDrive(drive)) {

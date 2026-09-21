@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db/db'
-import { eq, and, or, lt, gte, ne, sql, count, isNotNull, isNull } from '@pagespace/db/operators'
-import { pages, drives } from '@pagespace/db/schema/core'
-import { driveMembers } from '@pagespace/db/schema/members'
+import { eq, and, or, lt, gte, ne, sql, count, isNull } from '@pagespace/db/operators'
+import { pages } from '@pagespace/db/schema/core'
+import { accessiblePageIds } from '@pagespace/lib/permissions/accessible-page-ids';
 import { taskItems } from '@pagespace/db/schema/tasks'
 import { directMessages, dmConversations } from '@pagespace/db/schema/social';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -125,50 +125,26 @@ export async function GET(req: Request) {
       unreadCount = unreadResult?.count ?? 0;
     }
 
-    // Get pages updated count (pages in drives user has access to)
-    // First get drives user has access to (both owned and member drives)
-    const [ownedDrives, memberDrives] = await Promise.all([
-      db.select({ driveId: drives.id }).from(drives).where(eq(drives.ownerId, userId)),
-      db.select({ driveId: driveMembers.driveId }).from(driveMembers).where(and(
-        eq(driveMembers.userId, userId),
-        isNotNull(driveMembers.acceptedAt)
-      )),
-    ]);
-
-    // Combine and deduplicate drive IDs
-    const driveIdSet = new Set([
-      ...ownedDrives.map(d => d.driveId),
-      ...memberDrives.map(d => d.driveId),
-    ]);
-    const userDrives = Array.from(driveIdSet).map(driveId => ({ driveId }));
+    // Pages updated today / this week, counted over the pages the user can view (the canonical
+    // accessiblePageIds set pulse scopes to): a private page, a page a custom role hides, or a page of
+    // a drive the user does not belong to is never counted. Trashed pages are not in the set.
+    const visiblePageIds = await accessiblePageIds(userId);
 
     let pagesUpdatedToday = 0;
     let pagesUpdatedThisWeek = 0;
 
-    if (userDrives.length > 0) {
-      const driveIds = userDrives.map(d => d.driveId);
+    if (visiblePageIds.length > 0) {
+      const visible = sql`${pages.id} = ANY(${sql.param(visiblePageIds)}::text[])`;
 
       const [pagesUpdatedTodayResult] = await db
         .select({ count: count() })
         .from(pages)
-        .where(
-          and(
-            sql`${pages.driveId} IN (${sql.join(driveIds.map(id => sql`${id}`), sql`, `)})`,
-            eq(pages.isTrashed, false),
-            gte(pages.updatedAt, startOfToday)
-          )
-        );
+        .where(and(visible, eq(pages.isTrashed, false), gte(pages.updatedAt, startOfToday)));
 
       const [pagesUpdatedThisWeekResult] = await db
         .select({ count: count() })
         .from(pages)
-        .where(
-          and(
-            sql`${pages.driveId} IN (${sql.join(driveIds.map(id => sql`${id}`), sql`, `)})`,
-            eq(pages.isTrashed, false),
-            gte(pages.updatedAt, startOfWeek)
-          )
-        );
+        .where(and(visible, eq(pages.isTrashed, false), gte(pages.updatedAt, startOfWeek)));
 
       pagesUpdatedToday = pagesUpdatedTodayResult?.count ?? 0;
       pagesUpdatedThisWeek = pagesUpdatedThisWeekResult?.count ?? 0;

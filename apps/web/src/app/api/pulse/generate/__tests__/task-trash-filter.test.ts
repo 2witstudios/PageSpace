@@ -72,6 +72,11 @@ vi.mock('../../calendar-context', () => ({
   }),
 }));
 
+// The one member-drive set (org-aware; owned drives plus accepted rows while dark).
+vi.mock('@pagespace/lib/permissions/member-drives', () => ({
+  getMemberDriveIds: vi.fn(async () => []),
+}));
+
 vi.mock('@pagespace/lib/permissions/accessible-page-ids', () => ({
   accessiblePageIds: vi.fn(() => Promise.resolve(h.accessiblePageIds)),
 }));

@@ -16,11 +16,17 @@ vi.mock('@pagespace/db/db', () => ({
 
 vi.mock('@pagespace/db/operators', () => {
   // Capture the literal text chunks so tests can identify which CTE ran.
-  const sql = (strings: TemplateStringsArray, ..._values: unknown[]) => ({
-    __sqlText: strings.join('?'),
-  });
+  const sql = Object.assign(
+    (strings: TemplateStringsArray, ...values: unknown[]) => ({ __sqlText: strings.join('?'), __values: values }),
+    { param: (value: unknown) => ({ __param: value }) },
+  );
   return { sql };
 });
+
+// The one member-drive set (org-aware; owned drives plus accepted rows while dark).
+vi.mock('@pagespace/lib/permissions/member-drives', () => ({
+  getMemberDriveIds: vi.fn(async () => ['drive_member']),
+}));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
@@ -50,6 +56,7 @@ vi.mock('@pagespace/lib/encryption/field-crypto', async (importOriginal) => {
 });
 
 import { GET } from '../route';
+import { getMemberDriveIds } from '@pagespace/lib/permissions/member-drives';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { getBatchPagePermissions } from '@pagespace/lib/permissions/permissions';
@@ -358,5 +365,31 @@ describe('GET /api/inbox PII decryption dedup', () => {
     expect(vi.mocked(decryptFieldValuesOnce)).toHaveBeenCalledTimes(1);
     const batched = vi.mocked(decryptFieldValuesOnce).mock.calls[0][0];
     expect(batched).toEqual([survivingSender]);
+  });
+});
+
+describe('GET /api/inbox channel candidates (B7c)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAuth();
+    setupDb();
+  });
+
+  const channelSql = () =>
+    vi.mocked(db.execute).mock.calls.map(([arg]) => arg as unknown as { __sqlText: string; __values: unknown[] })
+      .find((arg) => isChannelQuery(arg)) as { __sqlText: string; __values: unknown[] };
+
+  it.each([
+    ['every drive', 'http://localhost/api/inbox?type=channel'],
+    ['one drive', 'http://localhost/api/inbox?driveId=drv_1'],
+  ])('DRV-5 (partial) X-6 (partial) %s: candidates come from the org-aware member-drive set; the SQL reads neither drive_members nor drives.ownerId', async (_label, url) => {
+    const res = await GET(new Request(url));
+
+    expect(res.status).toBe(200);
+    expect(getMemberDriveIds).toHaveBeenCalledWith(mockUserId, { includeTrashed: true });
+    const { __sqlText, __values } = channelSql();
+    expect(__sqlText).not.toMatch(/drive_members/);
+    expect(__sqlText).not.toMatch(/"ownerId"/);
+    expect(__values).toContainEqual({ __param: ['drive_member'] });
   });
 });

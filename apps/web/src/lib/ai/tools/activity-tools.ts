@@ -1,15 +1,14 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { db } from '@pagespace/db/db'
-import { eq, and, or, desc, gte, lt, ne, isNull, isNotNull, inArray } from '@pagespace/db/operators'
+import { eq, and, or, desc, gte, lt, ne, isNull, inArray } from '@pagespace/db/operators'
 import { sessions } from '@pagespace/db/schema/sessions'
-import { drives } from '@pagespace/db/schema/core'
 import { users } from '@pagespace/db/schema/auth'
 import { activityLogs } from '@pagespace/db/schema/monitoring'
-import { driveMembers } from '@pagespace/db/schema/members';
 import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import { decryptUserRow } from '@pagespace/lib/auth/user-repository';
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
+import { getMemberDriveIds } from '@pagespace/lib/permissions/member-drives';
 import {
   groupActivitiesForDiff,
   type ActivityForDiff,
@@ -457,39 +456,9 @@ When summarizing multiple changes, group them thematically and describe the over
             });
           }
         } else {
-          // Single query to get all accessible drive IDs:
-          // 1. Drives user is a member of (via driveMembers, accepted only)
-          // 2. Drives user owns (via drives.ownerId)
-          // Pending invitees (acceptedAt IS NULL) must not surface drives they
-          // have not joined.
-          const [memberDrives, ownedDrives] = await Promise.all([
-            db
-              .select({ driveId: driveMembers.driveId })
-              .from(driveMembers)
-              .innerJoin(drives, eq(driveMembers.driveId, drives.id))
-              .where(
-                and(
-                  eq(driveMembers.userId, userId),
-                  isNotNull(driveMembers.acceptedAt),
-                  eq(drives.isTrashed, false)
-                )
-              ),
-            db
-              .select({ id: drives.id })
-              .from(drives)
-              .where(
-                and(
-                  eq(drives.ownerId, userId),
-                  eq(drives.isTrashed, false)
-                )
-              ),
-          ]);
-
-          // Combine and deduplicate drive IDs
-          const driveIdSet = new Set<string>();
-          for (const d of memberDrives) driveIdSet.add(d.driveId);
-          for (const d of ownedDrives) driveIdSet.add(d.id);
-          targetDriveIds = Array.from(driveIdSet);
+          // The drives the user is a member of, owned or joined (org-aware: an implicit Open
+          // member's drive is in it, a stale org row's or a pending invitation's is not).
+          targetDriveIds = await getMemberDriveIds(userId, { includeTrashed: false });
         }
 
         // Ceiling a scoped MCP token to its allowed drives (no-op otherwise).

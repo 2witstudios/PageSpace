@@ -32,6 +32,7 @@ import {
 } from '@pagespace/lib/content/diff-generator';
 import { readPageContent } from '@pagespace/lib/services/page-content-store';
 import { accessiblePageIds } from '@pagespace/lib/permissions/accessible-page-ids';
+import { getMemberDriveIds } from '@pagespace/lib/permissions/member-drives';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { AIMonitoring, discardUsageOutcome, extractOpenRouterCostDollars, extractOpenRouterGenerationIds } from '@pagespace/lib/monitoring/ai-monitoring';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
@@ -128,16 +129,11 @@ export async function POST(req: Request) {
     // on first drive access) and explicit page-level grants with no drive
     // membership at all, and excludes trashed pages and pages in trashed drives.
     const [userDrives, accessiblePagesList] = await Promise.all([
-      db
-        .select({ driveId: driveMembers.driveId })
-        .from(driveMembers)
-        .where(and(
-          eq(driveMembers.userId, userId),
-          isNotNull(driveMembers.acceptedAt)
-        )),
+      // Owned or joined (org-aware; page-level access does not count)
+      getMemberDriveIds(userId, { includeTrashed: true }),
       accessiblePageIds(userId),
     ]);
-    const driveIds = userDrives.map(d => d.driveId);
+    const driveIds = userDrives;
     const accessiblePages = new Set(accessiblePagesList);
 
     // ========================================

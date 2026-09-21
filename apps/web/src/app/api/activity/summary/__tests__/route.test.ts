@@ -25,6 +25,11 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
+// The canonical page set the user can view (the same primitive pulse scopes to).
+vi.mock('@pagespace/lib/permissions/accessible-page-ids', () => ({
+  accessiblePageIds: vi.fn(async () => []),
+}));
+
 vi.mock('@pagespace/db/db', () => {
   const mockWhere = vi.fn().mockResolvedValue([{ count: 0 }]);
   const mockFrom = vi.fn().mockReturnValue({ where: mockWhere });
@@ -40,7 +45,7 @@ vi.mock('@pagespace/db/operators', () => ({
   lt: vi.fn(),
   gte: vi.fn(),
   ne: vi.fn(),
-  sql: Object.assign(vi.fn(), { join: vi.fn() }),
+  sql: Object.assign(vi.fn(), { join: vi.fn(), param: vi.fn((v: unknown) => ({ param: v })) }),
   count: vi.fn(),
   isNotNull: vi.fn(),
   isNull: vi.fn(),
@@ -62,6 +67,7 @@ vi.mock('@pagespace/db/schema/social', () => ({
 
 import { GET } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { accessiblePageIds } from '@pagespace/lib/permissions/accessible-page-ids';
 
 const mockWebAuth = (userId: string): SessionAuthResult => ({
   userId,
@@ -105,6 +111,38 @@ describe('GET /api/activity/summary', () => {
     await GET(request);
 
     expect(mockAuditRequest).not.toHaveBeenCalled();
+  });
+
+  it('X-6 (partial) counts only pages the user can view (accessiblePageIds): no private page, no page a custom role hides, no page of a drive reached through a stale row, and no drive_members read of its own', async () => {
+    const { db } = await import('@pagespace/db/db');
+    const { sql } = await import('@pagespace/db/operators');
+    vi.mocked(accessiblePageIds).mockResolvedValueOnce(['page_visible_1', 'page_visible_2']);
+    vi.mocked(db.select).mockReturnValue({
+      from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([{ count: 0 }]) }),
+    } as never);
+
+    const response = await GET(new Request('https://example.com/api/activity/summary'));
+
+    expect(response.status).toBe(200);
+    expect(accessiblePageIds).toHaveBeenCalledWith('user_1');
+    const { driveMembers } = await import('@pagespace/db/schema/members');
+    const fromCalls = vi.mocked(db.select).mock.results.flatMap((r) => (r.value as { from: ReturnType<typeof vi.fn> }).from.mock.calls.map((c) => c[0]));
+    expect(fromCalls).not.toContain(driveMembers);
+    // The page-count conditions are built over the visible page ids, not a drive list.
+    const paramArgs = vi.mocked(sql.param as unknown as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+    expect(paramArgs).toContainEqual(['page_visible_1', 'page_visible_2']);
+  });
+
+  it('runs no page count when the user can view no page', async () => {
+    const { db } = await import('@pagespace/db/db');
+    vi.mocked(accessiblePageIds).mockResolvedValueOnce([]);
+    vi.mocked(db.select).mockReturnValue({
+      from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([{ count: 0 }]) }),
+    } as never);
+
+    const body = await (await GET(new Request('https://example.com/api/activity/summary'))).json();
+
+    expect(body.pages).toEqual(expect.objectContaining({ updatedToday: 0, updatedThisWeek: 0 }));
   });
 
   it('does not log audit event when auth fails', async () => {

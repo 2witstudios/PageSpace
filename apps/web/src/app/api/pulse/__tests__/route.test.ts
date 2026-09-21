@@ -61,6 +61,11 @@ vi.mock('@pagespace/db/operators', async () => {
   return fixtureOperators;
 });
 
+// The one member-drive set (org-aware; owned drives plus accepted rows while dark).
+vi.mock('@pagespace/lib/permissions/member-drives', () => ({
+  getMemberDriveIds: vi.fn(async () => []),
+}));
+
 vi.mock('@pagespace/lib/permissions/accessible-page-ids', () => ({
   accessiblePageIds: vi.fn(() => Promise.resolve(h.accessiblePageIds)),
 }));
@@ -123,6 +128,7 @@ import { driveMembers } from '@pagespace/db/schema/members';
 import { taskItems } from '@pagespace/db/schema/tasks';
 import { pulseSummaries } from '@pagespace/db/schema/dashboard';
 import { dmConversations } from '@pagespace/db/schema/social';
+import { getMemberDriveIds } from '@pagespace/lib/permissions/member-drives';
 
 const USER_ID = 'user-1';
 const PAGE_ID = 'page-1';
@@ -159,6 +165,25 @@ function setupTables(taskRows: Record<string, unknown>[], accessiblePageIds: str
   // Every other table (calendarEvents, eventAttendees, pages) defaults to [] via
   // `tableRows.get(table) ?? []` in the fixture builder — no entry needed.
 }
+
+describe('GET /api/pulse — the drives it scopes to (B7c)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuth());
+  });
+
+  it('DRV-5 (partial) X-6 (partial) scopes to the org-aware member-drive set, not a drive_members read of its own: a stale org row in the table widens nothing', async () => {
+    setupTables([], []);
+    // A stale source='org' row the old inline read would have counted.
+    h.tableRows.set(driveMembers, [{ driveId: 'drive-stale', userId: USER_ID, acceptedAt: new Date('2024-01-01'), source: 'org' }]);
+    vi.mocked(getMemberDriveIds).mockResolvedValueOnce(['drive-open-org']);
+
+    const response = await GET(new Request('https://example.com/api/pulse'));
+
+    expect(response.status).toBe(200);
+    expect(getMemberDriveIds).toHaveBeenCalledWith(USER_ID, { includeTrashed: true });
+  });
+});
 
 describe('GET /api/pulse — task counts scoped to accessible pages', () => {
   beforeEach(() => {

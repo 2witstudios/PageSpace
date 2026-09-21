@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { computeSandboxEligibilityByDrive, resolveEditableDriveIds } from '../sandbox-eligibility-by-drive';
+import { computeSandboxEligibilityByDrive, membershipRowsOf, resolveEditableDriveIds } from '../sandbox-eligibility-by-drive';
+import type { DriveRelationship } from '@pagespace/lib/permissions/drive-relationship';
 
 /** An actor who can edit everywhere it matters — the default for payer-tier-focused cases. */
 function editorOf(...driveIds: string[]) {
@@ -162,5 +163,32 @@ describe('resolveEditableDriveIds', () => {
     const roles = [{ id: 'r-no', driveId: 'd1', driveWidePermissions: { canEdit: false } }];
     const result = resolveEditableDriveIds([member('d1', 'ADMIN', 'r-no')], roles);
     expect(result).toEqual(new Set(['d1']));
+  });
+});
+
+describe('membershipRowsOf (B7c)', () => {
+  const rel = (role: 'OWNER' | 'ADMIN' | 'MEMBER', customRoleId: string | null = null, source: 'invite' | 'org' = 'invite'): DriveRelationship => ({
+    isOwner: false,
+    membership: { role, customRoleId, source, auditOrgAdminPrivateAccess: false },
+  });
+
+  it('ORG-4 (partial) DRV-5 (partial) X-6 (partial) turns the org-aware relationships into the membership rows the edit rule reads: an org Admin is ADMIN, an implicit Open member carries the default role, a stale org row and the lead yield no row', () => {
+    const relationships = new Map<string, DriveRelationship>([
+      ['finance', rel('ADMIN', null, 'org')],
+      ['product', rel('MEMBER', 'default-role', 'org')],
+      ['research', { isOwner: false, membership: null }],
+      ['led', { isOwner: true, membership: null }],
+    ]);
+
+    expect(membershipRowsOf(relationships)).toEqual([
+      { driveId: 'finance', role: 'ADMIN', customRoleId: null },
+      { driveId: 'product', role: 'MEMBER', customRoleId: 'default-role' },
+    ]);
+  });
+
+  it('the implicit member\'s default role then bounds drive-wide edit exactly like an explicit custom role', () => {
+    const rows = membershipRowsOf(new Map([['product', rel('MEMBER', 'viewer', 'org')]]));
+    const editable = resolveEditableDriveIds(rows, [{ id: 'viewer', driveId: 'product', driveWidePermissions: { canEdit: false } }]);
+    expect(editable).toEqual(new Set());
   });
 });

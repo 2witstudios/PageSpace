@@ -3,14 +3,17 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 // ============================================================================
 // callerCanViewUser — relationship scoping for /api/users/find (L1).
 //
-// Mocked at the DB seam: each db.select() consumes the next queued result set,
-// in the order the route issues them:
-//   1. accepted-connection check
-//   2. caller's owned drives          (getUserDriveIds)
-//   3. caller's member drives         (getUserDriveIds)
-//   4. target shared-membership check
-//   5. target shared-ownership check
+// Mocked at the DB seam for the connection check (the only db.select() this
+// module still issues for it); drive co-membership is the permissions layer's
+// sharesMemberDrive (org-aware, accepted rows only), mocked here.
 // ============================================================================
+
+// The one member-drive set (org-aware; owned drives plus accepted rows while dark).
+vi.mock('@pagespace/lib/permissions/member-drives', () => ({
+  getMemberDriveIds: vi.fn(async () => []),
+  sharesMemberDrive: vi.fn(async () => false),
+  memberOfAnyDriveCondition: vi.fn(() => ({ __memberOfAnyDrive: true })),
+}));
 
 vi.mock('@pagespace/db/db', () => ({ db: { select: vi.fn() } }));
 vi.mock('@pagespace/db/operators', () => ({
@@ -53,6 +56,7 @@ vi.mock('@pagespace/db/schema/social', () => ({
 import { callerCanViewUser, searchRelatedProfilesByName } from '../visibility';
 import { db } from '@pagespace/db/db';
 import { eq, ne, isNotNull, ilike, exists } from '@pagespace/db/operators';
+import { getMemberDriveIds, memberOfAnyDriveCondition, sharesMemberDrive } from '@pagespace/lib/permissions/member-drives';
 
 function queueSelectResults(results: unknown[][]) {
   let i = 0;
@@ -82,68 +86,33 @@ describe('callerCanViewUser', () => {
     queueSelectResults([]);
     expect(await callerCanViewUser('u1', 'u1')).toBe(true);
     expect(db.select).not.toHaveBeenCalled();
+    expect(sharesMemberDrive).not.toHaveBeenCalled();
   });
 
-  it('returns true when an accepted connection exists', async () => {
+  it('returns true when an accepted connection exists, without asking about drives', async () => {
     queueSelectResults([[{ status: 'ACCEPTED' }]]);
     expect(await callerCanViewUser('u1', 'u2')).toBe(true);
+    expect(sharesMemberDrive).not.toHaveBeenCalled();
   });
 
-  it('returns true when both share drive membership', async () => {
-    queueSelectResults([
-      [], // no connection
-      [{ id: 'drive_a' }], // caller owns drive_a
-      [], // caller member of none
-      [{ driveId: 'drive_a' }], // target is a member of drive_a
-    ]);
+  it('returns true when the two share a member drive (owned or joined)', async () => {
+    queueSelectResults([[]]);
+    vi.mocked(sharesMemberDrive).mockResolvedValueOnce(true);
     expect(await callerCanViewUser('u1', 'u2')).toBe(true);
+    expect(sharesMemberDrive).toHaveBeenCalledWith('u1', 'u2');
   });
 
-  it('returns true when the target owns a drive the caller belongs to', async () => {
-    queueSelectResults([
-      [], // no connection
-      [], // caller owns none
-      [{ driveId: 'drive_b' }], // caller is a member of drive_b
-      [], // target is a member of nothing shared
-      [{ id: 'drive_b' }], // target owns drive_b
-    ]);
-    expect(await callerCanViewUser('u1', 'u2')).toBe(true);
-  });
-
-  it('returns false when there is no connection and no shared drive', async () => {
-    queueSelectResults([
-      [], // no connection
-      [{ id: 'drive_a' }], // caller owns drive_a
-      [], // caller member of none
-      [], // target not a member of caller's drives
-      [], // target owns none of caller's drives
-    ]);
+  it('returns false when there is no connection and no shared member drive', async () => {
+    queueSelectResults([[]]);
     expect(await callerCanViewUser('u1', 'u2')).toBe(false);
   });
 
-  it('returns false (short-circuits drive checks) when the caller has no drives', async () => {
-    queueSelectResults([
-      [], // no connection
-      [], // owns none
-      [], // member of none
-    ]);
+  it('DRV-5 (partial) X-6 (partial) co-membership is the permissions layer\'s answer (accepted rows, implicit Open members, stale org rows counting for nothing), never a drive_members read here', async () => {
+    queueSelectResults([[]]);
+    vi.mocked(sharesMemberDrive).mockResolvedValueOnce(false);
     expect(await callerCanViewUser('u1', 'u2')).toBe(false);
-    // 1 connection select + 2 drive-id selects; the shared-drive checks are skipped.
-    expect(db.select).toHaveBeenCalledTimes(3);
-  });
-
-  it('gates driveMembers reads on isNotNull(acceptedAt) so pending invitations do not grant visibility (P1)', async () => {
-    queueSelectResults([
-      [], // no connection
-      [{ id: 'drive_a' }], // caller owns drive_a
-      [], // caller member of none (accepted)
-      [], // target not an accepted member of caller's drives
-      [], // target owns none of caller's drives
-    ]);
-    await callerCanViewUser('u1', 'u2');
-    // Both the caller's member-drive lookup and the target shared-membership
-    // lookup must compose the acceptedAt gate.
-    expect(isNotNull).toHaveBeenCalledWith('driveMembers.acceptedAt');
+    // Only the connection check touched the database.
+    expect(db.select).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -151,13 +120,10 @@ describe('callerCanViewUser', () => {
 // searchRelatedProfilesByName — name-matches private-or-public profiles the
 // caller already shares context with, used by /api/users/search so a private
 // friend/collaborator is findable by name. The relationship is expressed as
-// correlated EXISTS subqueries, so db.select() is issued in this order:
-//   1. caller's owned drives          (getUserDriveIds)
-//   2. caller's member drives         (getUserDriveIds)
-//   3. connectedToCaller EXISTS subquery (always built)
-//   4. co-member EXISTS subquery      (only when the caller has drives)
-//   5. owner EXISTS subquery          (only when the caller has drives)
-//   6. the main userProfiles query    (its result is what's returned)
+// correlated EXISTS subqueries plus the permissions layer's
+// memberOfAnyDriveCondition, so db.select() is issued in this order:
+//   1. connectedToCaller EXISTS subquery (always built)
+//   2. the main userProfiles query    (its result is what's returned)
 // ============================================================================
 describe('searchRelatedProfilesByName', () => {
   beforeEach(() => {
@@ -168,12 +134,9 @@ describe('searchRelatedProfilesByName', () => {
   const friend = { userId: 'friend', username: 'bobby', displayName: 'Bob', bio: null, avatarUrl: null };
 
   it('returns the profiles matched by the bounded relationship query', async () => {
+    vi.mocked(getMemberDriveIds).mockResolvedValueOnce(['drive_a']);
     queueSelectResults([
-      [{ id: 'drive_a' }], // owned
-      [], // member
       [], // connectedToCaller EXISTS subquery
-      [], // co-member EXISTS subquery
-      [], // owner EXISTS subquery
       [friend], // main query
     ]);
     const rows = await searchRelatedProfilesByName('u1', PATTERN, 10);
@@ -181,33 +144,32 @@ describe('searchRelatedProfilesByName', () => {
   });
 
   it('composes the relationship, name, and safety gates', async () => {
-    queueSelectResults([[{ id: 'drive_a' }], [], [], [], [], []]);
+    vi.mocked(getMemberDriveIds).mockResolvedValueOnce(['drive_a']);
+    queueSelectResults([[], []]);
     await searchRelatedProfilesByName('u1', PATTERN, 10);
-    // Accepted connections only; drive co-membership gated on acceptedAt.
+    // Accepted connections only.
     expect(eq).toHaveBeenCalledWith('connections.status', 'ACCEPTED');
-    expect(isNotNull).toHaveBeenCalledWith('driveMembers.acceptedAt');
+    // Co-membership of the caller's member drives, decided by the permissions layer.
+    expect(getMemberDriveIds).toHaveBeenCalledWith('u1', { includeTrashed: true });
+    expect(memberOfAnyDriveCondition).toHaveBeenCalledWith('userProfiles.userId', ['drive_a']);
     // Temp/magic-link accounts excluded; caller never matches themselves.
     expect(isNotNull).toHaveBeenCalledWith('users.emailVerified');
     expect(ne).toHaveBeenCalledWith('userProfiles.userId', 'u1');
     // Name predicate applied on both username and display name.
     expect(ilike).toHaveBeenCalledWith('userProfiles.username', PATTERN);
     expect(ilike).toHaveBeenCalledWith('userProfiles.displayName', PATTERN);
-    // connection + co-member + owner relationship subqueries.
-    expect(exists).toHaveBeenCalledTimes(3);
+    // Only the connection subquery is built here.
+    expect(exists).toHaveBeenCalledTimes(1);
   });
 
-  it('uses only the connection relationship when the caller has no drives', async () => {
+  it('uses only the connection relationship when the caller has no member drives', async () => {
     queueSelectResults([
-      [], // owned — none
-      [], // member — none
       [], // connectedToCaller EXISTS subquery
       [friend], // main query
     ]);
     const rows = await searchRelatedProfilesByName('u1', PATTERN, 10);
     expect(rows).toEqual([friend]);
-    // No drive-based EXISTS subqueries are built.
-    expect(exists).toHaveBeenCalledTimes(1);
-    // owned + member + connection subquery + main.
-    expect(db.select).toHaveBeenCalledTimes(4);
+    expect(memberOfAnyDriveCondition).not.toHaveBeenCalled();
+    expect(db.select).toHaveBeenCalledTimes(2);
   });
 });

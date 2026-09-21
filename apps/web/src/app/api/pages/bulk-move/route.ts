@@ -4,9 +4,10 @@ import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { db } from '@pagespace/db/db'
-import { and, eq, isNotNull } from '@pagespace/db/operators'
+import { eq } from '@pagespace/db/operators'
 import { drives } from '@pagespace/db/schema/core'
-import { driveMembers } from '@pagespace/db/schema/members';
+import { driveRoleOf } from '@pagespace/lib/permissions/drive-relationship';
+import { loadDriveRelationship } from '@pagespace/lib/permissions/drive-relationship-loader';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, getAllowedDriveIds, isMCPAuthResult, isScopedMCPAuth, canPrincipalEditPage } from '@/lib/auth';
 import { getAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
 import { movePagesToDrive } from '@/services/api/page-cross-drive-move-service';
@@ -67,7 +68,7 @@ export async function POST(request: Request) {
         canAdministerDrive: async (driveId) => {
           const targetDrive = await db.query.drives.findFirst({
             where: eq(drives.id, driveId),
-            columns: { ownerId: true },
+            columns: { id: true, ownerId: true, orgId: true, orgVisibility: true },
           });
 
           const tokenMembership = isScopedMCPAuth(auth)
@@ -79,19 +80,12 @@ export async function POST(request: Request) {
             return tokenMembership?.role === 'OWNER' || tokenMembership?.role === 'ADMIN';
           }
 
-          if (targetDrive?.ownerId === userId) return true;
+          if (!targetDrive) return false;
 
-          // Authz read: a pending invitee (acceptedAt IS NULL) with role ADMIN
-          // would otherwise pass the role check and be allowed to write into a
-          // drive they have not accepted into. Closes Review C2.
-          const membership = await db.query.driveMembers.findFirst({
-            where: and(
-              eq(driveMembers.driveId, driveId),
-              eq(driveMembers.userId, userId),
-              isNotNull(driveMembers.acceptedAt)
-            ),
-          });
-          return membership?.role === 'OWNER' || membership?.role === 'ADMIN';
+          // The drive's lead or an effective OWNER/ADMIN (the org-aware membership reads ACCEPTED
+          // rows only, so a pending ADMIN invitee cannot write into a drive they have not joined).
+          const role = driveRoleOf(await loadDriveRelationship(userId, targetDrive));
+          return role === 'OWNER' || role === 'ADMIN';
         },
 
         canEditPage: (pageId) => canPrincipalEditPage(auth, pageId),

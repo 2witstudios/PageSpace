@@ -53,6 +53,11 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
   isDriveOwnerOrAdmin: vi.fn(),
   isUserDriveMember: vi.fn(),
 }));
+// The one member-drive set (org-aware; owned drives plus accepted rows while dark).
+vi.mock('@pagespace/lib/permissions/member-drives', () => ({
+  getMemberDriveIds: vi.fn(),
+}));
+
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(
@@ -63,6 +68,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 import { GET } from '../route';
+import { getMemberDriveIds } from '@pagespace/lib/permissions/member-drives';
 import { db } from '@pagespace/db/db';
 import { authenticateRequestWithOptions, canPrincipalViewPage, filterDrivesByMCPScope } from '@/lib/auth';
 
@@ -80,13 +86,6 @@ const webAuth = (): SessionAuthResult => ({
   sessionId: 'sess_1',
   role: 'user',
   adminRoleVersion: 0,
-});
-
-const selectChain = (rows: unknown[]) => ({
-  from: vi.fn(() => ({
-    where: vi.fn().mockResolvedValue(rows),
-    innerJoin: vi.fn(() => ({ where: vi.fn().mockResolvedValue(rows) })),
-  })),
 });
 
 const getRequest = () => new Request('http://localhost/api/commands');
@@ -120,9 +119,7 @@ beforeEach(() => {
   mockedDb.query.pages.findMany.mockResolvedValue([entryPage] as never);
   mockedDb.query.users.findMany.mockResolvedValue([] as never);
   mockedCanView.mockResolvedValue(true);
-  mockedDb.select
-    .mockReturnValueOnce(selectChain([]) as never)
-    .mockReturnValueOnce(selectChain([]) as never);
+  vi.mocked(getMemberDriveIds).mockResolvedValue([]);
 });
 
 describe('GET /api/commands — entry page degradation in the settings list', () => {

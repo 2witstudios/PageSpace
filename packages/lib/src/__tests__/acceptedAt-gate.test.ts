@@ -65,24 +65,20 @@ describe('drive-member-service.ts', () => {
     expect(body).toMatch(/role\s*===\s*'ADMIN'/);
   });
 
-  it('getDriveMemberUserIds gates pending rows out of authz member lists (regression: pending row would surface in authz allow-lists)', () => {
-    const body = extractFunctionBody(source, 'getDriveMemberUserIds');
-    expect(body).toMatch(GATE);
-  });
-
-  it('getDriveRecipientUserIds gates pending rows out of broadcast recipient sets (regression: pending member would receive realtime events for a drive they have not accepted)', () => {
-    const body = extractFunctionBody(source, 'getDriveRecipientUserIds');
-    expect(body).toMatch(GATE);
-  });
-
-  it('isMemberOfDrive returns false for pending rows (regression: pending row would pass membership check)', () => {
-    const body = extractFunctionBody(source, 'isMemberOfDrive');
-    expect(body).toMatch(GATE);
-  });
+  // The member enumerations read through the one org-aware enumeration (listDriveAudience), whose
+  // drive_members lookup carries the gate: pinned in the drive-audience.ts block below.
+  it.each(['getDriveMemberUserIds', 'getDriveRecipientUserIds', 'getDriveMemberUserIdsByStandardRole', 'getDriveMemberUserIdsByCustomRole', 'isMemberOfDrive'])(
+    '%s gates pending rows out through listDriveAudience and reads no drive_members row of its own (regression: a pending member would surface in member lists, broadcasts and mentions)',
+    (fnName) => {
+      const body = extractFunctionBody(source, fnName);
+      expect(body).toMatch(/listDriveAudience\(/);
+      expect(body).not.toMatch(/\.from\(driveMembers\)/);
+    },
+  );
 
   it('owners (drive.ownerId) bypass membership lookup so the gate cannot lock them out (regression: gate must not affect drive owners)', () => {
     const body = extractFunctionBody(source, 'checkDriveAccess');
-    expect(body).toMatch(/drive\.ownerId\s*===\s*userId/);
+    expect(body).toMatch(/isDriveLead\(userId, drive\)/);
     expect(body).toMatch(/isOwner: true, isAdmin: true, isMember: true/);
   });
 });
@@ -180,6 +176,15 @@ describe('permissions/org-drive-membership.ts', () => {
   it('loadExplicitScopeAuthority gates pending rows (regression: a pending invited row on an org drive would back an explicit-role token scope)', () => {
     const body = extractFunctionBody(source, 'loadExplicitScopeAuthority');
     expect(body).toMatch(/\.from\(driveMembers\)/);
+    expect(body).toMatch(GATE);
+  });
+});
+
+describe('permissions/drive-audience.ts', () => {
+  const source = read('permissions/drive-audience.ts');
+
+  it('listDriveAudiences gates pending rows (regression: drive broadcasts, group mentions and event attendee lists all enumerate members through it, so a pending row would receive them)', () => {
+    const body = extractFunctionBody(source, 'listDriveAudiences');
     expect(body).toMatch(GATE);
   });
 });

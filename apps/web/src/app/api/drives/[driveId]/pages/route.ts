@@ -3,7 +3,9 @@ import { buildTree } from '@pagespace/lib/content/tree-utils';
 import { db } from '@pagespace/db/db'
 import { and, eq, inArray, asc, sql, isNotNull } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core'
-import { pagePermissions, driveMembers } from '@pagespace/db/schema/members'
+import { getUserAccessiblePagesInDrive } from '@pagespace/lib/permissions/permissions';
+import { canAdministerDrive } from '@pagespace/lib/permissions/drive-relationship';
+import { loadDriveRelationship } from '@pagespace/lib/permissions/drive-relationship-loader';
 import { taskItems } from '@pagespace/db/schema/tasks';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -18,45 +20,9 @@ const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const UNREAD_INDICATOR_CUTOFF_DATE = new Date('2026-02-03T00:00:00.000Z');
 
 async function getPermittedPages(driveId: string, userId: string) {
-  // Rule 4: any accepted drive member can read non-private pages
-  const memberCheck = await db.select({ id: driveMembers.id })
-    .from(driveMembers)
-    .where(and(
-      eq(driveMembers.driveId, driveId),
-      eq(driveMembers.userId, userId),
-      isNotNull(driveMembers.acceptedAt)
-    ))
-    .limit(1);
-
-  const isMember = memberCheck.length > 0;
-
-  const permittedPageIdSet = new Set<string>();
-
-  if (isMember) {
-    // MEMBER gets implicit read on all non-private pages in the drive
-    const nonPrivatePages = await db.selectDistinct({ id: pages.id })
-      .from(pages)
-      .where(and(
-        eq(pages.driveId, driveId),
-        eq(pages.isTrashed, false),
-        eq(pages.isPrivate, false)
-      ));
-    for (const p of nonPrivatePages) permittedPageIdSet.add(p.id);
-  }
-
-  // Also include pages with explicit canView grants
-  const explicitPages = await db.selectDistinct({ id: pages.id })
-    .from(pages)
-    .leftJoin(pagePermissions, eq(pages.id, pagePermissions.pageId))
-    .where(and(
-      eq(pages.driveId, driveId),
-      eq(pages.isTrashed, false),
-      eq(pagePermissions.userId, userId),
-      eq(pagePermissions.canView, true)
-    ));
-  for (const p of explicitPages) permittedPageIdSet.add(p.id);
-
-  const permittedPageIds = Array.from(permittedPageIdSet);
+  // The canonical page set: the org-aware membership (with its custom or default role), private
+  // pages, and live explicit grants. Never a drive_members read of this route's own.
+  const permittedPageIds = await getUserAccessiblePagesInDrive(userId, driveId);
 
   if (permittedPageIds.length === 0) {
     return [];
@@ -67,7 +33,7 @@ async function getPermittedPages(driveId: string, userId: string) {
     WITH RECURSIVE ancestors AS (
       SELECT id, "parentId"
       FROM pages
-      WHERE id IN ${permittedPageIds}
+      WHERE id IN ${permittedPageIds} AND "isTrashed" = false
       UNION ALL
       SELECT p.id, p."parentId"
       FROM pages p
@@ -139,27 +105,8 @@ export async function GET(
       });
       pageResults = allPages.filter(p => accessibleIds.has(p.id));
     } else {
-      // Check if user is owner
-      const isOwner = drive.ownerId === userId;
-
-      // Check if user is admin
-      let isAdmin = false;
-      if (!isOwner) {
-        const adminMembership = await db.select()
-          .from(driveMembers)
-          .where(and(
-            eq(driveMembers.driveId, drive.id),
-            eq(driveMembers.userId, userId),
-            eq(driveMembers.role, 'ADMIN'),
-            isNotNull(driveMembers.acceptedAt)
-          ))
-          .limit(1);
-
-        isAdmin = adminMembership.length > 0;
-      }
-
-      // If user owns the drive or is an admin, fetch all pages
-      if (isOwner || isAdmin) {
+      // The drive's lead or an effective ADMIN (the org-aware membership) gets every page
+      if (canAdministerDrive(await loadDriveRelationship(userId, drive))) {
         // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
         pageResults = await db.query.pages.findMany({
           where: and(

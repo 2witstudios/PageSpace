@@ -9,6 +9,11 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { manageKeysScopedAuthResult } from '@/lib/auth/__tests__/manage-keys-fixture';
 
 const mockPageFindFirst = vi.fn().mockResolvedValue(null);
+// The drive's members, from the one org-aware enumeration (the lead included).
+vi.mock('@pagespace/lib/services/drive-member-service', () => ({
+  getDriveRecipientUserIds: vi.fn(async () => ['owner-1']),
+}));
+
 vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {

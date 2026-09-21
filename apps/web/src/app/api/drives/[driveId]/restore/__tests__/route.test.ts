@@ -52,6 +52,8 @@ vi.mock('@pagespace/lib/services/drive-member-service', () => ({
   getDriveRecipientUserIds: vi.fn().mockResolvedValue(['user-123', 'user-456']),
 }));
 
+vi.mock('@pagespace/lib/permissions/drive-relationship-loader', () => import('@/lib/auth/__tests__/lead-authority-fake'));
+
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
@@ -76,6 +78,7 @@ import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPDriveScope } from '@/lib/auth';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { LEAD_ACTION_CASES, LEAD_ACTION_DRIVES, leadAuthority } from '@/lib/auth/__tests__/lead-authority-fake';
 
 // ============================================================================
 // Test Helpers
@@ -340,5 +343,30 @@ describe('POST /api/drives/[driveId]/restore', () => {
 
       expect(loggers.api.error).toHaveBeenCalledWith('Error restoring drive:', error);
     });
+  });
+});
+
+describe('POST /api/drives/[driveId]/restore: lead authority (point-guard ruling on #2689)', () => {
+  const mockSetFn = vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    leadAuthority.reset();
+    vi.mocked(isAuthError).mockReturnValue(false);
+    vi.mocked(checkMCPDriveScope).mockReturnValue(null);
+    vi.mocked(isMCPAuthResult).mockReturnValue(false);
+    vi.mocked(db.update).mockReturnValue({ set: mockSetFn } as never);
+  });
+
+  it.each(LEAD_ACTION_CASES)('ORG-4 (partial) $who: allowed=$allowed, audited=$audited', async ({ userId, orgRole, drive, allowed, audited }) => {
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(userId));
+    if (orgRole) leadAuthority.orgRoles.set(userId, orgRole);
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue({ ...createDriveFixture({ id: 'drive_abc', name: 'Finance' }), ...LEAD_ACTION_DRIVES[drive] });
+
+    const response = await POST(new Request('https://example.com/api/drives/drive_abc/restore', { method: 'POST' }), createContext('drive_abc'));
+
+    expect(response.status).toBe(allowed ? 200 : 404);
+    expect(vi.mocked(db.update).mock.calls.length > 0).toBe(allowed);
+    expect(leadAuthority.audited).toEqual(audited ? [expect.objectContaining({ userId, driveId: 'drive_abc', action: 'restore' })] : []);
   });
 });

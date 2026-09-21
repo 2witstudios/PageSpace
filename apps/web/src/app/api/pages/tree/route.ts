@@ -2,9 +2,10 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { buildTree } from '@pagespace/lib/content/tree-utils';
 import { db } from '@pagespace/db/db'
-import { and, eq, asc, isNotNull } from '@pagespace/db/operators'
+import { and, eq, asc } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core'
-import { driveMembers } from '@pagespace/db/schema/members';
+import { isDriveMemberRelationship } from '@pagespace/lib/permissions/drive-relationship';
+import { loadDriveRelationship } from '@pagespace/lib/permissions/drive-relationship-loader';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isScopedMCPAuth, getPrincipalAccessiblePagesInDrive } from '@/lib/auth';
@@ -52,7 +53,7 @@ export async function POST(request: Request) {
 
     // Check authorization. A scoped MCP token is its own drive member — gate on
     // the TOKEN's membership, not the owning user's.
-    const isOwner = drive.ownerId === userId;
+    const relationship = isScopedMCPAuth(auth) ? null : await loadDriveRelationship(userId, drive);
     if (isScopedMCPAuth(auth)) {
       // Membership gate only — the tree below is filtered to the TOKEN's
       // per-page view set, so per-page custom-role grants still work.
@@ -60,22 +61,9 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: 'Access denied' }, { status: 403 });
       }
     } else {
-      let hasAccess = isOwner;
-
-      if (!isOwner) {
-        // Authz read: pending invitee (acceptedAt IS NULL) must not read the
-        // page tree of a drive they have not joined. Closes Review C2.
-        const membership = await db.query.driveMembers.findFirst({
-          where: and(
-            eq(driveMembers.driveId, driveId),
-            eq(driveMembers.userId, userId),
-            isNotNull(driveMembers.acceptedAt)
-          ),
-        });
-        hasAccess = !!membership;
-      }
-
-      if (!hasAccess) {
+      // The drive's lead or an effective member (the org-aware membership reads ACCEPTED rows
+      // only, so a pending invitee does not read the page tree of a drive they have not joined).
+      if (!relationship || !isDriveMemberRelationship(relationship)) {
         return NextResponse.json({ error: 'Access denied' }, { status: 403 });
       }
     }
@@ -98,7 +86,7 @@ export async function POST(request: Request) {
       const accessible = await getPrincipalAccessiblePagesInDrive(auth, driveId);
       const accessibleIds = new Set(accessible.map(page => page.id));
       visiblePages = pageResults.filter(page => accessibleIds.has(page.id));
-    } else if (!isOwner) {
+    } else if (!relationship?.isOwner) {
       const accessibleIds = new Set(await getUserAccessiblePagesInDrive(userId, driveId));
       visiblePages = pageResults.filter(page => accessibleIds.has(page.id));
     }

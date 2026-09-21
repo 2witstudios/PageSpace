@@ -1,7 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { db } from '@pagespace/db/db'
-import { eq, and } from '@pagespace/db/operators'
+import { eq } from '@pagespace/db/operators'
 import { drives } from '@pagespace/db/schema/core'
 import { slugify } from '@pagespace/lib/utils/utils';
 import { isReservedDriveName, isHomeDrive, homeDriveActionError } from '@pagespace/lib/services/drive-guards';
@@ -13,6 +13,7 @@ import { listAgentDrives } from '@pagespace/lib/services/drive-agent-service';
 import type { ToolExecutionContext } from '../core/types';
 import { resolveActingAgentId, filterDriveIdsByAppTokenScope, driveDeniedByAppToken, isMcpScoped, canActorManageDrive } from './actor-permissions';
 import { syncPublishedHomeRoot } from '@/lib/canvas/publish-page';
+import { loadDriveLeadAuthority } from '@pagespace/lib/permissions/drive-relationship-loader';
 
 // Helper: Extract AI attribution context with actor info for activity logging
 async function getAiContextWithActor(context: ToolExecutionContext) {
@@ -279,13 +280,11 @@ export const driveTools = {
           throw new Error(`Cannot rename a drive to "${name.trim()}"`);
         }
 
-        // Find the drive and verify ownership
-        const drive = await db.query.drives.findFirst({
-          where: and(
-            eq(drives.id, driveId),
-            eq(drives.ownerId, userId)
-          ),
+        // Renaming takes lead authority: the lead, or on an org drive an org Owner/Admin (audited)
+        const found = await db.query.drives.findFirst({
+          where: eq(drives.id, driveId),
         });
+        const drive = found && (await loadDriveLeadAuthority(userId, found, 'rename')).allowed ? found : undefined;
 
         if (!drive) {
           throw new Error('Drive not found or you do not have permission to rename it');

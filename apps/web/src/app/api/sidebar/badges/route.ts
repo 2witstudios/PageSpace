@@ -8,6 +8,7 @@ import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getBatchPagePermissions } from '@pagespace/lib/permissions/permissions';
+import { getMemberDriveIds } from '@pagespace/lib/permissions/member-drives';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
@@ -46,7 +47,8 @@ const PERMISSION_BATCH_SIZE = 200;
  * N-member drive schedules N of these.
  *
  * `user_channels` is a cheap candidate filter, not the access decision — that
- * stays with getBatchPagePermissions below. Its join and predicate are shared
+ * stays with getBatchPagePermissions below. Its member drives come from getMemberDriveIds
+ * (owned or joined, org-aware), never a drive_members read here. Its predicate is shared
  * verbatim with both channel queries in apps/web/src/app/api/inbox/route.ts,
  * which is what makes this badge and those pills agree about which channels
  * exist; change one and change all three. It must therefore be no NARROWER
@@ -67,12 +69,12 @@ const PERMISSION_BATCH_SIZE = 200;
  * `user_channels` — nothing else here needs to change for it.
  */
 async function countChannelUnread(userId: string): Promise<number> {
+  const memberDriveIds = await getMemberDriveIds(userId, { includeTrashed: true });
   const result = await db.execute<ChannelUnreadRow>(sql`
     WITH user_channels AS (
       SELECT p.id
       FROM pages p
       INNER JOIN drives d ON d.id = p."driveId"
-      LEFT JOIN drive_members dm ON dm."driveId" = d.id AND dm."userId" = ${userId}
       LEFT JOIN page_permissions pp
         ON pp."pageId" = p.id
         AND pp."userId" = ${userId}
@@ -81,8 +83,7 @@ async function countChannelUnread(userId: string): Promise<number> {
       WHERE p.type = 'CHANNEL'
         AND p."isTrashed" = false
         AND (
-          d."ownerId" = ${userId}
-          OR dm."userId" IS NOT NULL
+          p."driveId" = ANY(${sql.param(memberDriveIds)}::text[])
           OR pp."userId" IS NOT NULL
         )
     )

@@ -25,6 +25,7 @@ import { driveMembers } from '@pagespace/db/schema/members';
 import { canRunCode } from '../sandbox/can-run-code';
 import { loadEffectiveDriveMembership } from '../../permissions/org-drive-membership';
 import type { DriveMembership } from '../../agent-workspaces/decide-workspace-access';
+import { isDriveLead } from '../../permissions/drive-relationship';
 
 export type ResolveSessionTenantIdResult =
   | { ok: true; tenantId: string }
@@ -63,7 +64,7 @@ export async function resolveDriveMembership({
     columns: { ownerId: true, orgId: true, orgVisibility: true },
   });
   if (!drive) return 'none';
-  if (drive.ownerId === userId) return 'owner';
+  if (isDriveLead(userId, drive)) return 'owner';
   // The shared org-aware membership (accepted rows, org Owner/Admin power, implicit Open membership).
   const membership = await loadEffectiveDriveMembership(userId, { id: driveId, ...drive });
   if (!membership) return 'none';

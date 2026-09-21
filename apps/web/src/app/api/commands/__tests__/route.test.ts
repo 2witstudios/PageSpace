@@ -48,6 +48,11 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
   isDriveOwnerOrAdmin: vi.fn(),
   isUserDriveMember: vi.fn(),
 }));
+// The one member-drive set (org-aware; owned drives plus accepted rows while dark).
+vi.mock('@pagespace/lib/permissions/member-drives', () => ({
+  getMemberDriveIds: vi.fn(),
+}));
+
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(
@@ -71,6 +76,7 @@ vi.mock('@pagespace/lib/auth/user-repository', async (importOriginal) => {
 });
 
 import { GET, POST } from '../route';
+import { getMemberDriveIds } from '@pagespace/lib/permissions/member-drives';
 import { db } from '@pagespace/db/db';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
@@ -95,14 +101,6 @@ const webAuth = (userId = USER_ID): SessionAuthResult => ({
 
 const authError = (): AuthError => ({
   error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
-});
-
-// Supports both .from().where() and .from().innerJoin().where()
-const selectChain = (rows: unknown[]) => ({
-  from: vi.fn(() => ({
-    where: vi.fn().mockResolvedValue(rows),
-    innerJoin: vi.fn(() => ({ where: vi.fn().mockResolvedValue(rows) })),
-  })),
 });
 
 const insertChain = (row: unknown) => ({
@@ -156,12 +154,25 @@ beforeEach(() => {
   mockedCanView.mockResolvedValue(true);
   mockedIsOwnerOrAdmin.mockResolvedValue(true);
   mockedDb.insert.mockReturnValue(insertChain(storedCommand) as never);
-  mockedDb.select
-    .mockReturnValueOnce(selectChain([]) as never)
-    .mockReturnValueOnce(selectChain([]) as never);
+  vi.mocked(getMemberDriveIds).mockResolvedValue([]);
 });
 
 describe('GET /api/commands', () => {
+  it('DRV-5 (partial) X-6 (partial) scopes drive commands to the org-aware member-drive set (non-trashed), never a drive_members read of its own', async () => {
+    // An implicit Open member's drive is in the set with no row; a stale org row's drive is not.
+    vi.mocked(getMemberDriveIds).mockResolvedValue(['drive_open_org']);
+    mockedDb.query.commands.findMany.mockResolvedValue([
+      { ...storedCommand, id: 'cmd_org', userId: null, driveId: 'drive_open_org', trigger: 'org-faq' },
+    ] as never);
+
+    const response = await GET(getRequest());
+
+    expect(response.status).toBe(200);
+    expect(getMemberDriveIds).toHaveBeenCalledWith(USER_ID, { includeTrashed: false });
+    expect(mockedDb.select).not.toHaveBeenCalled();
+    expect((await response.json()).commands[0]).toMatchObject({ scope: 'drive', driveId: 'drive_open_org' });
+  });
+
   it('returns 401 when authentication fails', async () => {
     mockedAuth.mockResolvedValue(authError() as never);
     const response = await GET(getRequest());
@@ -169,10 +180,7 @@ describe('GET /api/commands', () => {
   });
 
   it('lists personal commands plus commands of drives the user belongs to', async () => {
-    mockedDb.select.mockReset();
-    mockedDb.select
-      .mockReturnValueOnce(selectChain([{ id: 'drive_owned' }]) as never)
-      .mockReturnValueOnce(selectChain([{ driveId: 'drive_member' }]) as never);
+    vi.mocked(getMemberDriveIds).mockResolvedValue(['drive_owned', 'drive_member']);
     mockedDb.query.commands.findMany.mockResolvedValue([
       storedCommand,
       { ...storedCommand, id: 'cmd_2', userId: null, driveId: 'drive_member', trigger: 'team-faq' },
@@ -187,10 +195,7 @@ describe('GET /api/commands', () => {
   });
 
   it('enriches each command with entry page title, availability, and author name', async () => {
-    mockedDb.select.mockReset();
-    mockedDb.select
-      .mockReturnValueOnce(selectChain([{ id: 'drive_member' }]) as never)
-      .mockReturnValueOnce(selectChain([]) as never);
+    vi.mocked(getMemberDriveIds).mockResolvedValue(['drive_member']);
     mockedDb.query.commands.findMany.mockResolvedValue([
       storedCommand,
       {
@@ -230,10 +235,7 @@ describe('GET /api/commands', () => {
 
   it('decrypts ciphertext author names before responding', async () => {
     const encryptedName = await encryptField('Real Author');
-    mockedDb.select.mockReset();
-    mockedDb.select
-      .mockReturnValueOnce(selectChain([]) as never)
-      .mockReturnValueOnce(selectChain([]) as never);
+    vi.mocked(getMemberDriveIds).mockResolvedValue([]);
     mockedDb.query.commands.findMany.mockResolvedValue([storedCommand] as never);
     mockedDb.query.users.findMany.mockResolvedValue([
       { id: USER_ID, name: encryptedName },
@@ -246,10 +248,7 @@ describe('GET /api/commands', () => {
 
   it('decrypts one author shared across many commands only once (dedup)', async () => {
     const encryptedName = await encryptField('Shared Author');
-    mockedDb.select.mockReset();
-    mockedDb.select
-      .mockReturnValueOnce(selectChain([]) as never)
-      .mockReturnValueOnce(selectChain([]) as never);
+    vi.mocked(getMemberDriveIds).mockResolvedValue([]);
     const manyCommands = Array.from({ length: 20 }, (_, i) => ({
       ...storedCommand,
       id: `cmd_${i}`,
@@ -272,10 +271,7 @@ describe('GET /api/commands', () => {
   });
 
   it('marks the entry page unavailable when it no longer exists', async () => {
-    mockedDb.select.mockReset();
-    mockedDb.select
-      .mockReturnValueOnce(selectChain([]) as never)
-      .mockReturnValueOnce(selectChain([]) as never);
+    vi.mocked(getMemberDriveIds).mockResolvedValue([]);
     mockedDb.query.commands.findMany.mockResolvedValue([storedCommand] as never);
     mockedDb.query.pages.findMany.mockResolvedValue([] as never);
 
@@ -288,10 +284,7 @@ describe('GET /api/commands', () => {
   });
 
   it('checks per-page permission for every entry page (membership does not imply access)', async () => {
-    mockedDb.select.mockReset();
-    mockedDb.select
-      .mockReturnValueOnce(selectChain([{ id: 'drive_member' }]) as never)
-      .mockReturnValueOnce(selectChain([]) as never);
+    vi.mocked(getMemberDriveIds).mockResolvedValue(['drive_member']);
     mockedDb.query.commands.findMany.mockResolvedValue([storedCommand] as never);
     mockedDb.query.pages.findMany.mockResolvedValue([
       { id: 'page_1', title: 'Secret Page', driveId: 'drive_member', isTrashed: false },
@@ -305,10 +298,7 @@ describe('GET /api/commands', () => {
   });
 
   it('suppresses entry-page metadata the caller cannot view (no private-title leak)', async () => {
-    mockedDb.select.mockReset();
-    mockedDb.select
-      .mockReturnValueOnce(selectChain([{ id: 'drive_member' }]) as never)
-      .mockReturnValueOnce(selectChain([]) as never);
+    vi.mocked(getMemberDriveIds).mockResolvedValue(['drive_member']);
     mockedDb.query.commands.findMany.mockResolvedValue([
       { ...storedCommand, userId: null, driveId: 'drive_member' },
     ] as never);

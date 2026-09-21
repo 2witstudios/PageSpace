@@ -6,6 +6,8 @@ import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
+import { canAdministerDrive } from '@pagespace/lib/permissions/drive-relationship';
+import { loadDriveRelationship } from '@pagespace/lib/permissions/drive-relationship-loader';
 import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { createInviteToken } from '@pagespace/lib/auth/invite-token';
 import { sendPendingDriveInvitationEmail } from '@pagespace/lib/services/notification-email-service';
@@ -100,15 +102,9 @@ export async function POST(
       return NextResponse.json({ error: homeDriveActionError(drive, 'invite') }, { status: 403 });
     }
 
-    const isOwner = drive.ownerId === inviterUserId;
-    let isAcceptedAdmin = false;
-    if (!isOwner) {
-      // findAdminMembership filters acceptedAt IS NOT NULL — Epic 1's gate.
-      // A pending admin (not yet accepted) cannot exercise admin powers.
-      const adminMembership = await driveInviteRepository.findAdminMembership(driveId, inviterUserId);
-      isAcceptedAdmin = adminMembership !== null;
-    }
-    if (!isOwner && !isAcceptedAdmin) {
+    // The drive's lead or an effective ADMIN. The org-aware membership reads ACCEPTED rows only, so
+    // a pending admin cannot exercise admin powers; an org Owner/Admin invites as ADMIN.
+    if (!canAdministerDrive(await loadDriveRelationship(inviterUserId, drive))) {
       return NextResponse.json(
         { error: 'Only drive owners and admins can add members' },
         { status: 403 }

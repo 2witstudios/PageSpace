@@ -75,6 +75,10 @@ vi.mock('@pagespace/db/schema/members', () => ({
   driveMembers: { driveId: 'driveId', userId: 'userId', acceptedAt: 'acceptedAt' },
 }));
 
+// The one member-drive set (org-aware; owned drives plus accepted rows while dark).
+vi.mock('@pagespace/lib/permissions/member-drives', () => ({
+  getMemberDriveIds: vi.fn(async () => []),
+}));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
   canUserViewPage: vi.fn(),
   isDriveOwnerOrAdmin: vi.fn(),
@@ -98,6 +102,7 @@ vi.mock('@/lib/logging/mask', () => ({
 }));
 
 import { commandTools } from '../command-tools';
+import { getMemberDriveIds } from '@pagespace/lib/permissions/member-drives';
 import { canUserViewPage, isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 
 const mockCanUserViewPage = vi.mocked(canUserViewPage);
@@ -390,14 +395,8 @@ describe('command-tools', () => {
     });
 
     it('filters to a specific drive when caller is a member', async () => {
-      // Simulate user owning 'drive-1' via the owned-drives select query
-      (mockSelect as Mock).mockReturnValueOnce({
-        from: vi.fn(() => ({
-          where: vi.fn().mockResolvedValue([{ id: 'drive-1' }]),
-          innerJoin: vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) })),
-        })),
-      });
-      // second select call (memberships) uses the default mock returning []
+      // 'drive-1' is in the caller's member-drive set
+      vi.mocked(getMemberDriveIds).mockResolvedValueOnce(['drive-1']);
       mockCommandsFindMany.mockResolvedValue([
         {
           id: 'cmd-2',
@@ -418,6 +417,16 @@ describe('command-tools', () => {
       expect(result.total).toBe(1);
       expect(result.commands[0].trigger).toBe('drive-cmd');
       expect(result.commands[0].scope).toBe('drive');
+    });
+
+    it('DRV-5 (partial) X-6 (partial) asks the org-aware member-drive set (non-trashed) and reads no drive_members row of its own', async () => {
+      vi.mocked(getMemberDriveIds).mockResolvedValueOnce(['drive-open-org']);
+      mockCommandsFindMany.mockResolvedValue([]);
+
+      await run('list_commands', { driveId: 'drive-open-org' });
+
+      expect(getMemberDriveIds).toHaveBeenCalledWith('user-1', { includeTrashed: false });
+      expect(mockSelect).not.toHaveBeenCalled();
     });
   });
 });

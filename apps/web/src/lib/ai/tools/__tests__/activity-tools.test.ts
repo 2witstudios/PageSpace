@@ -7,6 +7,11 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
     isUserDriveMember: vi.fn(),
 }));
 
+// The one member-drive set (org-aware; owned drives plus accepted rows while dark).
+vi.mock('@pagespace/lib/permissions/member-drives', () => ({
+    getMemberDriveIds: vi.fn(async () => []),
+}));
+
 vi.mock('@pagespace/lib/content/activity-diff-utils', () => ({
     groupActivitiesForDiff: vi.fn(),
     generateStackedDiff: vi.fn(),
@@ -19,6 +24,7 @@ vi.mock('@pagespace/lib/services/page-content-store', () => ({
 
 import { activityTools, filterAccessibleActivities, shouldContinuePaging } from '../activity-tools';
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
+import { getMemberDriveIds } from '@pagespace/lib/permissions/member-drives';
 import type { ToolExecutionContext } from '../../core/types';
 
 const mockIsUserDriveMember = vi.mocked(isUserDriveMember);
@@ -88,6 +94,20 @@ describe('activity-tools', () => {
       await expect(
         activityTools.get_activity.execute!(createTestInput({ driveIds: ['drive-1'] }), context)
       ).rejects.toThrow('No access to any of the specified drives');
+    });
+
+    it('DRV-5 (partial) X-6 (partial) with no driveIds, scopes to the org-aware member-drive set (non-trashed), never a drive_members read of its own', async () => {
+      vi.mocked(getMemberDriveIds).mockResolvedValueOnce([]);
+      const context = {
+        toolCallId: '1',
+        messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      const result = await activityTools.get_activity.execute!(createTestInput(), context);
+
+      expect(getMemberDriveIds).toHaveBeenCalledWith('user-123', { includeTrashed: false });
+      expect(result).toMatchObject({ ok: true, drives: [] });
     });
 
     it('has expected input schema shape', () => {

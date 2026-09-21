@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db/db'
-import { eq, and } from '@pagespace/db/operators'
+import { eq } from '@pagespace/db/operators'
 import { drives } from '@pagespace/db/schema/core';
 import { isHomeDrive, homeDriveActionError } from '@pagespace/lib/services/drive-guards';
 import { loggers } from '@pagespace/lib/logging/logger-config'
@@ -9,6 +9,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { deleteConversationsForDrive } from '@pagespace/lib/repositories/conversation-cleanup';
+import { loadDriveLeadAuthority } from '@pagespace/lib/permissions/drive-relationship-loader';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -27,13 +28,11 @@ export async function DELETE(
     if (isAuthError(auth)) return auth.error;
     const userId = auth.userId;
 
-    // Find the drive and verify ownership
-    const drive = await db.query.drives.findFirst({
-      where: and(
-        eq(drives.id, driveId),
-        eq(drives.ownerId, userId)
-      ),
+    // Permanent deletion takes lead authority: the lead, or on an org drive an org Owner/Admin (audited)
+    const found = await db.query.drives.findFirst({
+      where: eq(drives.id, driveId),
     });
+    const drive = found && (await loadDriveLeadAuthority(userId, found, 'permanent_delete')).allowed ? found : undefined;
 
     if (!drive) {
       return NextResponse.json({ error: 'Drive not found or access denied' }, { status: 404 });

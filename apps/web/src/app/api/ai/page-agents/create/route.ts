@@ -18,6 +18,7 @@ import { pageAgentRepository, type AgentData } from '@/lib/repositories/page-age
 import { db } from '@pagespace/db/db';
 import { pages } from '@pagespace/db/schema/core';
 import { driveAgentMembers } from '@pagespace/db/schema/members';
+import { isDriveLead } from '@pagespace/lib/permissions/drive-relationship';
 
 /**
  * POST /api/ai/page-agents/create
@@ -96,7 +97,7 @@ export async function POST(request: Request) {
           );
         }
       }
-      if (drive.ownerId !== userId) {
+      if (!isDriveLead(userId, drive)) {
         auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'page_agent', resourceId: 'create', details: { reason: 'not_drive_owner', driveId, method: 'POST' }, riskScore: 0.5 });
         return NextResponse.json(
           { error: 'Only drive owners can create agents at the root level' },

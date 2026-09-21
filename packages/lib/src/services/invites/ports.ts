@@ -29,7 +29,7 @@ export type ConsumeMembershipResult =
 //
 // Pre-commit ports (loadInvite, findExistingMembership,
 // consumeInviteAndCreateMember, loadUserByEmail, createTokenAndPersist,
-// sendMagicLinkEmail, loadPendingInviteForDrive, findActorMembership,
+// sendMagicLinkEmail, loadPendingInviteForDrive, findActorDriveRole,
 // deletePendingInviteForDrive) MAY throw — the pipe needs the route to
 // surface a 5xx so the user can retry. Routes that wrap pipes are expected
 // to catch.
@@ -93,10 +93,14 @@ export interface RevokePorts {
     inviteId: string;
     driveId: string;
   }) => Promise<{ id: string; email: string; role: Role; driveId: string } | null>;
-  findActorMembership: (input: {
+  /**
+   * The actor's effective role on the drive: OWNER for its lead, else the org-aware membership's
+   * role (ACCEPTED rows only, so a pending invitation is null), else null.
+   */
+  findActorDriveRole: (input: {
     driveId: string;
     actorId: string;
-  }) => Promise<{ role: Role; acceptedAt: Date | null } | null>;
+  }) => Promise<Role | null>;
   deletePendingInviteForDrive: (input: {
     inviteId: string;
     driveId: string;

@@ -121,12 +121,12 @@ export const acceptInviteForExistingUser =
 export const revokePendingInvite =
   (ports: RevokePorts) =>
   async (input: RevokePendingInviteInput): Promise<RevokePendingInviteResult> => {
-    const [invite, actorMembership] = await Promise.all([
+    const [invite, actorRole] = await Promise.all([
       ports.loadPendingInviteForDrive({
         inviteId: input.inviteId,
         driveId: input.driveId,
       }),
-      ports.findActorMembership({
+      ports.findActorDriveRole({
         driveId: input.driveId,
         actorId: input.actorId,
       }),
@@ -135,7 +135,7 @@ export const revokePendingInvite =
     const validated = validateRevokeRequest({
       invite,
       requestedDriveId: input.driveId,
-      actorMembership,
+      actorRole,
     });
     if (!validated.ok) return validated;
 

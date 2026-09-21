@@ -59,11 +59,20 @@ vi.mock('@pagespace/db/operators', () => {
   };
 });
 
+// The one org-aware membership enumeration (its decision is tested in drive-audience-decision.test.ts
+// and against Postgres in drive-gate-primitives.integration.test.ts).
+vi.mock('../../permissions/drive-audience', () => ({
+  listDriveAudience: vi.fn(async () => []),
+}));
+
 import { db } from '@pagespace/db/db';
+import { listDriveAudience } from '../../permissions/drive-audience';
 import {
   checkDriveAccess,
   getDriveMemberUserIds,
   getDriveRecipientUserIds,
+  getDriveMemberUserIdsByStandardRole,
+  getDriveMemberUserIdsByCustomRole,
   isMemberOfDrive,
   addDriveMember,
   getDriveMemberDetails,
@@ -167,65 +176,55 @@ describe('drive-member-service', () => {
     });
   });
 
-  describe('getDriveMemberUserIds', () => {
-    it('should return array of user IDs', async () => {
-      mockDb.select.mockReturnValue({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockResolvedValue([{ userId: 'u1' }, { userId: 'u2' }]),
-        }),
-      });
+  const audience = (...members: Array<[string, 'OWNER' | 'ADMIN' | 'MEMBER', string | null, boolean?]>) =>
+    vi.mocked(listDriveAudience).mockResolvedValueOnce(
+      members.map(([userId, role, customRoleId, isOwner]) => ({ userId, role, customRoleId, isOwner: isOwner ?? false })),
+    );
 
-      const result = await getDriveMemberUserIds('drive-1');
-      expect(result).toEqual(['u1', 'u2']);
+  describe('getDriveMemberUserIds', () => {
+    it('returns every member of the drive, the lead included', async () => {
+      audience(['owner-1', 'OWNER', null, true], ['u1', 'MEMBER', null], ['u2', 'ADMIN', null]);
+      expect(await getDriveMemberUserIds('drive-1')).toEqual(['owner-1', 'u1', 'u2']);
+      expect(listDriveAudience).toHaveBeenCalledWith('drive-1');
     });
   });
 
   describe('getDriveRecipientUserIds', () => {
-    it('should return empty when drive not found', async () => {
-      mockDb.query.drives.findFirst.mockResolvedValueOnce(null);
-
-      const result = await getDriveRecipientUserIds('drive-1');
-      expect(result).toEqual([]);
+    it('returns empty when the drive has no audience (not found)', async () => {
+      audience();
+      expect(await getDriveRecipientUserIds('drive-1')).toEqual([]);
     });
 
-    it('should include owner and members', async () => {
-      mockDb.query.drives.findFirst.mockResolvedValueOnce({ ownerId: 'owner-1' });
-      mockDb.select.mockReturnValue({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockResolvedValue([{ userId: 'member-1' }, { userId: 'owner-1' }]),
-        }),
-      });
+    it('ORG-4 (partial) DRV-5 (partial) X-6 (partial) broadcasts to the lead and every effective member (an org Admin and an implicit Open member included, a stale org row not, as listDriveAudience decides)', async () => {
+      audience(['owner-1', 'OWNER', null, true], ['org-admin', 'ADMIN', null], ['implicit', 'MEMBER', 'default-role']);
+      expect(await getDriveRecipientUserIds('drive-1')).toEqual(['owner-1', 'org-admin', 'implicit']);
+    });
+  });
 
-      const result = await getDriveRecipientUserIds('drive-1');
-      expect(result).toContain('owner-1');
-      expect(result).toContain('member-1');
-      // Deduplicated
-      expect(result).toHaveLength(2);
+  describe('getDriveMemberUserIdsByStandardRole / ByCustomRole', () => {
+    it('OWNER is the lead; ADMIN and MEMBER are the effective roles of everyone else', async () => {
+      const members: Array<[string, 'OWNER' | 'ADMIN' | 'MEMBER', string | null, boolean?]> = [
+        ['owner-1', 'OWNER', null, true], ['former-owner-row', 'OWNER', null], ['a1', 'ADMIN', null], ['m1', 'MEMBER', 'r1'],
+      ];
+      audience(...members);
+      expect(await getDriveMemberUserIdsByStandardRole('drive-1', 'OWNER')).toEqual(['owner-1']);
+      audience(...members);
+      expect(await getDriveMemberUserIdsByStandardRole('drive-1', 'ADMIN')).toEqual(['a1']);
+      audience(...members);
+      expect(await getDriveMemberUserIdsByStandardRole('drive-1', 'MEMBER')).toEqual(['m1']);
+      audience(...members);
+      expect(await getDriveMemberUserIdsByCustomRole('drive-1', 'r1')).toEqual(['m1']);
     });
   });
 
   describe('isMemberOfDrive', () => {
-    it('should return true when member exists', async () => {
-      mockDb.select.mockReturnValue({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            limit: vi.fn().mockResolvedValue([{ id: 'dm-1' }]),
-          }),
-        }),
-      });
-
+    it('should return true when the user is in the audience', async () => {
+      audience(['owner-1', 'OWNER', null, true], ['user-1', 'MEMBER', null]);
       expect(await isMemberOfDrive('drive-1', 'user-1')).toBe(true);
     });
 
     it('should return false when not a member', async () => {
-      mockDb.select.mockReturnValue({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            limit: vi.fn().mockResolvedValue([]),
-          }),
-        }),
-      });
-
+      audience(['owner-1', 'OWNER', null, true]);
       expect(await isMemberOfDrive('drive-1', 'user-1')).toBe(false);
     });
   });

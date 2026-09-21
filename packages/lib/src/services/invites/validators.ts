@@ -85,20 +85,17 @@ const isRevokeRole = (role: Role): boolean => role === 'OWNER' || role === 'ADMI
 export const validateRevokeRequest = ({
   invite,
   requestedDriveId,
-  actorMembership,
+  actorRole,
 }: {
   invite: RevokeAuthorizedInvite | null;
   requestedDriveId: string;
-  actorMembership: { role: Role; acceptedAt: Date | null } | null;
+  /** The actor's effective drive role (a pending invitation is null). */
+  actorRole: Role | null;
 }): Result<RevokeAuthorizedInvite, RevokeErrorCode> => {
   if (invite === null || invite.driveId !== requestedDriveId) {
     return { ok: false, error: 'NOT_FOUND' };
   }
-  if (
-    actorMembership === null ||
-    actorMembership.acceptedAt === null ||
-    !isRevokeRole(actorMembership.role)
-  ) {
+  if (actorRole === null || !isRevokeRole(actorRole)) {
     return { ok: false, error: 'FORBIDDEN' };
   }
   return { ok: true, data: invite };

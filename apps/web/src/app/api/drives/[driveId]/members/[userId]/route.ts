@@ -29,6 +29,7 @@ import { mcpTokenDrives } from '@pagespace/db/schema/members'
 import { mcpTokens } from '@pagespace/db/schema/auth'
 import { pages } from '@pagespace/db/schema/core'
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
+import { isDriveLead } from '@pagespace/lib/permissions/drive-relationship';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -239,7 +240,7 @@ export async function DELETE(
     }
 
     // Cannot remove the drive owner
-    if (targetUserId === access.drive.ownerId) {
+    if (isDriveLead(targetUserId, access.drive)) {
       return NextResponse.json({ error: 'Cannot remove the drive owner' }, { status: 400 });
     }
 

@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
-import { driveMembers } from '@pagespace/db/schema/members'
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalViewPage, canPrincipalEditPage } from '@/lib/auth';
 // canUserViewPage below is only used for mention RECIPIENTS (other users), not
 // the requesting principal — those checks are keyed to arbitrary user ids and
@@ -24,7 +24,6 @@ import { MAX_MESSAGE_ATTACHMENTS, parseMessageAttachments } from '@pagespace/lib
 interface ChannelInboxFanoutInput {
   pageId: string;
   driveId: string;
-  driveOwnerId: string | null | undefined;
   senderUserId: string;
   lastMessageAt: string;
   lastMessagePreview: string;
@@ -43,21 +42,11 @@ interface ChannelInboxFanoutInput {
 async function fanOutChannelInboxUpdate(
   input: ChannelInboxFanoutInput
 ): Promise<Set<string>> {
-  const { pageId, driveId, driveOwnerId, senderUserId } = input;
+  const { pageId, driveId, senderUserId } = input;
 
-  // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
-  const driveMembersRows = await db.query.driveMembers.findMany({
-    where: eq(driveMembers.driveId, driveId),
-    columns: { userId: true },
-  });
-
-  // Build a local member set so we never mutate the ORM-returned array.
-  // Drive owner is always a recipient even if they have no explicit row.
-  const memberUserIds = new Set(driveMembersRows.map((m) => m.userId));
-  if (driveOwnerId) {
-    memberUserIds.add(driveOwnerId);
-  }
-  const otherMemberIds = [...memberUserIds].filter((id) => id !== senderUserId);
+  // Candidates: the drive's members, lead included, from the one org-aware enumeration.
+  const memberUserIds = await getDriveRecipientUserIds(driveId);
+  const otherMemberIds = memberUserIds.filter((id) => id !== senderUserId);
 
   if (otherMemberIds.length === 0) {
     return new Set<string>();
@@ -506,7 +495,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
         await fanOutChannelInboxUpdate({
           pageId,
           driveId: channel.driveId,
-          driveOwnerId: channel.drive?.ownerId ?? null,
           senderUserId: userId,
           lastMessageAt: mirrorWithRelations.createdAt
             ? new Date(mirrorWithRelations.createdAt).toISOString()
@@ -659,7 +647,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       await fanOutChannelInboxUpdate({
         pageId,
         driveId: channel.driveId,
-        driveOwnerId: channel.drive?.ownerId ?? null,
         senderUserId: userId,
         lastMessageAt: newMessage?.createdAt?.toISOString() || new Date().toISOString(),
         lastMessagePreview: messagePreview,
