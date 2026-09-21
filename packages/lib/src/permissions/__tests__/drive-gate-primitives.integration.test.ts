@@ -28,6 +28,7 @@ import { getDriveAccess, listAccessibleDrives } from '../../services/drive-servi
 import { canAdministerDrive, driveRoleOf, isDriveLead, type RelationshipDrive } from '../drive-relationship';
 import { loadDriveRelationship, loadDriveRelationships } from '../drive-relationship-loader';
 import { getMemberDriveIds, listMemberDrives, memberOfAnyDriveCondition, sharesMemberDrive } from '../member-drives';
+import { listDriveAudiences } from '../drive-audience';
 import { cleanupNorthwind, createUser, northwind } from './fixtures/northwind-org-drives';
 
 const flags = vi.hoisted(() => ({ orgsEnabled: false }));
@@ -254,6 +255,47 @@ describe('B7c: the gate primitives agree with the canonical resolvers (integrati
     expect(await sharesMemberDrive(f.people.dana.id, f.people.lena.id)).toBe(true);
   });
 
+  it('ORG-4 (partial) DRV-5 (partial) X-6 (partial) listDriveAudiences names exactly the people getDriveAccess makes members of each drive, with that role: org Owner and Admins on every org drive, implicit Open members, never a stale org row or a pending invitation', async () => {
+    flags.orgsEnabled = true;
+    const f = await gateFixture();
+    const audiences = await listDriveAudiences(f.allDrives.map((d) => d.id));
+
+    const out: string[] = [];
+    for (const drive of f.allDrives) {
+      const expected: string[] = [];
+      for (const [name, person] of Object.entries(f.people)) {
+        const access = await getDriveAccess(drive.id, person.id);
+        if (access.isOwner || access.isMember) expected.push(`${name}:${access.role}`);
+      }
+      const nameOf = new Map(Object.entries(f.people).map(([name, p]) => [p.id, name]));
+      const actual = (audiences.get(drive.id) ?? []).map((m) => `${nameOf.get(m.userId) ?? m.userId}:${m.role}`);
+      if (JSON.stringify(actual.sort()) !== JSON.stringify(expected.sort())) {
+        out.push(`listDriveAudiences: ${f.nameOf.get(drive.id)} answered ${JSON.stringify(actual)}, canonical ${JSON.stringify(expected)}`);
+      }
+      if (audiences.get(drive.id)?.[0]?.userId !== drive.ownerId) out.push(`listDriveAudiences: ${f.nameOf.get(drive.id)} does not list its lead first`);
+    }
+    expect(out).toEqual([]);
+
+    // Non-vacuity: org power and implicit membership are in, the stale rows are out.
+    const product = (audiences.get(f.drives.product.id) ?? []).map((m) => m.userId);
+    expect(product).toEqual(expect.arrayContaining([f.people.jono.id, f.people.priya.id, f.people.nina.id]));
+    expect(product).not.toContain(f.people.dana.id);
+    expect((audiences.get(f.drives.finance.id) ?? []).map((m) => m.userId)).not.toContain(f.people.marcus.id);
+  });
+
+  it('while ORGS_ENABLED is false listDriveAudiences is the lead plus every accepted row, with the row role', async () => {
+    const f = await gateFixture();
+    const audiences = await listDriveAudiences(f.allDrives.map((d) => d.id));
+    for (const drive of f.allDrives) {
+      const rows = await db.select({ userId: driveMembers.userId, role: driveMembers.role }).from(driveMembers)
+        .where(and(eq(driveMembers.driveId, drive.id), isNotNull(driveMembers.acceptedAt)));
+      const expected = [`${drive.ownerId}:OWNER`, ...rows.filter((r) => r.userId !== drive.ownerId).map((r) => `${r.userId}:${r.role}`)].sort();
+      expect((audiences.get(drive.id) ?? []).map((m) => `${m.userId}:${m.role}`).sort(), f.nameOf.get(drive.id)).toEqual(expected);
+    }
+    // Non-vacuity: dark, Marcus's stale Finance org row still counts (the pre-org answer).
+    expect((audiences.get(f.drives.finance.id) ?? []).map((m) => m.userId)).toContain(f.people.marcus.id);
+  });
+
   it('batch and listing paths run a constant number of queries, however many drives (no N+1)', async () => {
     flags.orgsEnabled = true;
     const f = await gateFixture();
@@ -273,6 +315,10 @@ describe('B7c: the gate primitives agree with the canonical resolvers (integrati
     }
     const listAfter = await countQueries(() => listMemberDrives(priya, { includeTrashed: true }));
     expect(listAfter).toBe(listBefore);
+
+    const oneAudience = await countQueries(() => listDriveAudiences([f.drives.product.id]));
+    const allAudiences = await countQueries(() => listDriveAudiences(f.allDrives.map((d) => d.id)));
+    expect(allAudiences).toBe(oneAudience);
     expect((await getMemberDriveIds(priya, { includeTrashed: true })).length).toBe(13);
   });
 });

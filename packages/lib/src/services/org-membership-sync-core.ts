@@ -23,6 +23,7 @@
 
 import type { DriveMemberSource } from '@pagespace/db/schema/members';
 import type { OrgDriveVisibility } from '@pagespace/db/schema/core';
+import { isDriveLead } from '../permissions/drive-relationship';
 
 export interface OrgSyncDrive {
   id: string;
@@ -100,7 +101,7 @@ export function planDriveOrgMembership({
 
   const materializes = drive.orgId !== null && drive.orgVisibility === 'OPEN';
   const desired = new Set(
-    materializes ? orgMemberUserIds.filter((userId) => userId !== drive.ownerId && inScope(userId)) : [],
+    materializes ? orgMemberUserIds.filter((userId) => !isDriveLead(userId, drive) && inScope(userId)) : [],
   );
 
   const rows = existingRows.filter((r) => r.driveId === drive.id && inScope(r.userId));

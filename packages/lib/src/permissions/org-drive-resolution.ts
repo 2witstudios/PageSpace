@@ -205,3 +205,62 @@ export function decideExplicitDriveScope({
   return { ok: true, isAdmin: authority.row.role === 'ADMIN' };
 }
 
+
+export interface DriveAudienceRow extends OrgDriveMembership {
+  userId: string;
+}
+
+export interface DriveAudienceInput {
+  orgsEnabled: boolean;
+  drive: OrgDriveFacts & { ownerId: string };
+  /** The drive's ACCEPTED drive_members rows. */
+  rows: DriveAudienceRow[];
+  /** Each org member's role in drive.orgId (empty for a personal drive). */
+  orgRoles: ReadonlyMap<string, OrgRole>;
+  /** The role an org member holds implicitly on an OPEN drive (DRV-5, POL-6). */
+  driveDefaultRole: DriveRoleGrant;
+}
+
+export interface DriveAudienceMember {
+  userId: string;
+  /** The drive's lead (drives.ownerId). */
+  isOwner: boolean;
+  role: DriveMemberRole;
+  customRoleId: string | null;
+}
+
+/**
+ * Everyone who is a member of a drive, each with their effective role: the lead, then every person
+ * resolveEffectiveDriveMembership admits, among the row holders and (while enabled, on an org drive)
+ * the org's members. The one membership enumeration behind drive broadcasts, group mentions and
+ * event attendee lists: a stale org row or a pending invitation is no member, an implicit Open
+ * member and an org Owner/Admin are.
+ */
+export function decideDriveAudience({
+  orgsEnabled,
+  drive,
+  rows,
+  orgRoles,
+  driveDefaultRole,
+}: DriveAudienceInput): DriveAudienceMember[] {
+  const members = new Map<string, DriveAudienceMember>();
+  members.set(drive.ownerId, { userId: drive.ownerId, isOwner: true, role: 'OWNER', customRoleId: null });
+
+  const rowByUser = new Map(rows.map((row) => [row.userId, row]));
+  const orgCandidates = orgsEnabled && drive.orgId !== null ? [...orgRoles.keys()] : [];
+  for (const userId of [...rowByUser.keys(), ...orgCandidates]) {
+    if (members.has(userId)) continue;
+    const row = rowByUser.get(userId);
+    const effective = resolveEffectiveDriveMembership({
+      orgsEnabled,
+      drive,
+      orgRole: drive.orgId !== null ? orgRoles.get(userId) ?? null : null,
+      row: row ? { role: row.role, customRoleId: row.customRoleId, source: row.source } : null,
+      driveDefaultRole,
+    });
+    if (effective) {
+      members.set(userId, { userId, isOwner: false, role: effective.role, customRoleId: effective.customRoleId });
+    }
+  }
+  return [...members.values()];
+}

@@ -18,6 +18,7 @@ import { loadEffectiveDriveMembership } from '../permissions/org-drive-membershi
 import { customRoleBelongsToDrive, fetchCustomRolePermissions } from '../permissions/membership-queries';
 import type { CustomRolePerms } from '../permissions/membership-queries';
 import { isHomeDrive, homeDriveActionError } from './drive-guards';
+import { isDriveLead } from '../permissions/drive-relationship';
 
 export type AgentDriveRole = 'MEMBER' | 'ADMIN';
 
@@ -66,7 +67,7 @@ async function resolveGranterAccess(
 
   if (!drive) return { canGrant: false, maxRole: 'MEMBER', customRoleId: null, driveKind: null };
   const driveKind = drive.kind ?? null;
-  if (drive.ownerId === userId) return { canGrant: true, maxRole: 'ADMIN', customRoleId: null, driveKind };
+  if (isDriveLead(userId, drive)) return { canGrant: true, maxRole: 'ADMIN', customRoleId: null, driveKind };
 
   // The shared org-aware membership (an org Owner/Admin grants as ADMIN; an implicit Open member
   // is capped to MEMBER with the drive's default role).

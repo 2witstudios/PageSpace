@@ -17,6 +17,7 @@ import { loadEffectiveDriveMembership, loadExplicitScopeAuthority, loadOrgRolesF
 import { decideExplicitDriveScope, decideListedDriveRole, type ExplicitScopeAuthority } from '../permissions/org-drive-resolution';
 import type { DriveMemberRole } from '../permissions/org-access';
 import { ORGS_ENABLED } from '../organizations/orgs-enabled';
+import { isDriveLead } from '../permissions/drive-relationship';
 
 // ============================================================================
 // Types
@@ -325,7 +326,7 @@ export async function getDriveAccess(
     return { isOwner: false, isAdmin: false, isMember: false, role: null };
   }
 
-  const isOwner = drive.ownerId === userId;
+  const isOwner = isDriveLead(userId, drive);
 
   if (isOwner) {
     return { isOwner: true, isAdmin: true, isMember: true, role: 'OWNER' };
@@ -450,7 +451,7 @@ export async function getDriveAccessWithDrive(
     return null;
   }
 
-  const isOwner = drive.ownerId === userId;
+  const isOwner = isDriveLead(userId, drive);
 
   if (isOwner) {
     return {
@@ -663,7 +664,7 @@ export async function updateDriveLastAccessed(userId: string, driveId: string): 
 
   // Never on an org drive: its lead reaches it through drives.ownerId, the org Owner and Admins
   // through the org, and an OWNER row there would outlive a lead reassignment (B7b).
-  if (drive?.ownerId === userId && drive.orgId === null) {
+  if (drive && isDriveLead(userId, drive) && drive.orgId === null) {
     await db.insert(driveMembers)
       .values({
         driveId,
