@@ -91,6 +91,15 @@ vi.mock('@pagespace/db/db', () => ({
     query: { taskItems: { findFirst: vi.fn() }, taskLists: { findFirst: vi.fn() } },
   },
 }));
+// The one-row-per-occurrence guard is proven against real Postgres in
+// record-unstarted-run.integration.test.ts; here it forwards to the insert mock
+// so these tests can read the error row the executor asked for.
+vi.mock('../record-unstarted-run', () => ({
+  recordUnstartedRunOnce: async (row: Record<string, unknown>) => {
+    const [inserted] = await mockInsert().values({ ...row, status: 'error', endedAt: new Date() }).returning();
+    return inserted?.id;
+  },
+}));
 vi.mock('@pagespace/db/schema/workflow-runs', () => ({
   workflowRuns: { id: 'id', workflowId: 'workflowId', status: 'status' },
 }));

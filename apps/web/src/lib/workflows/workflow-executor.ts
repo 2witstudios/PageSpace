@@ -42,6 +42,7 @@ import {
   type GateRefusalKind,
 } from '@pagespace/lib/billing/classify-gate-refusal';
 import { shouldRetryRefusal } from './core/refusal-retry';
+import { recordUnstartedRunOnce } from './record-unstarted-run';
 
 export type WorkflowRunSource =
   | { table: 'cron'; id: null; triggerAt: Date | null }
@@ -254,27 +255,23 @@ async function recordRefusal(
 /**
  * Record a run that never started (refused or failed before the claim) as ONE
  * error row carrying its reason, so it is visible in the run history and a
- * scheduled source stops re-discovering it.
+ * scheduled source stops re-discovering it. Overlapping ticks that refuse the
+ * same occurrence share that one row (recordUnstartedRunOnce).
  */
 async function recordUnstartedRun(
   input: WorkflowExecutionInput,
   result: WorkflowExecutionResult,
 ): Promise<WorkflowExecutionResult> {
   try {
-    const [row] = await db
-      .insert(workflowRuns)
-      .values({
-        workflowId: input.workflowId,
-        sourceTable: input.source.table,
-        sourceId: input.source.id,
-        triggerAt: input.source.triggerAt,
-        status: 'error',
-        endedAt: new Date(),
-        durationMs: result.durationMs,
-        error: result.error ?? null,
-      })
-      .returning({ id: workflowRuns.id });
-    return { ...result, runId: row?.id };
+    const runId = await recordUnstartedRunOnce({
+      workflowId: input.workflowId,
+      sourceTable: input.source.table,
+      sourceId: input.source.id,
+      triggerAt: input.source.triggerAt,
+      durationMs: result.durationMs,
+      error: result.error ?? null,
+    });
+    return { ...result, runId };
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
     loggers.api.error('Failed to record unstarted workflow_run', { workflowId: input.workflowId, error: errorMessage });
