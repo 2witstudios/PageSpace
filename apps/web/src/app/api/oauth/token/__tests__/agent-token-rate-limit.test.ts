@@ -27,6 +27,8 @@ vi.mock('@/lib/repositories/oauth-repository', () => ({
   exchangeAgentAssertion: mocks.exchangeAgentAssertion,
 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
+vi.mock('@pagespace/lib/onboarding/home-drive', () => ({ provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'home', created: false }) }));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({ loggers: { auth: { error: vi.fn(), info: vi.fn(), warn: vi.fn() } } }));
 vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({ getActorInfo: vi.fn(), logTokenActivity: vi.fn() }));
 vi.mock('@/lib/auth', () => ({ getClientIP: (req: Request) => req.headers.get('x-test-ip') ?? 'unknown' }));
 vi.mock('@/lib/agent-auth/door', async (importOriginal) => ({

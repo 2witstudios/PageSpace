@@ -41,6 +41,8 @@ import {
 import { AGENT_ASSERTION_GRANT_TYPE } from '@pagespace/lib/auth/oauth/metadata';
 import { resolveAgentAssertionScopes } from '@/lib/agent-auth/assertion-scope';
 import { isAgentDoorOpen } from '@/lib/agent-auth/door';
+import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { PAGESPACE_AGENT_CLIENT_ID } from '@pagespace/lib/auth/oauth/clients';
 import { agentTokenIpRateLimitKey, agentTokenCredentialRateLimitKey } from '@pagespace/lib/auth/agent/token-rate-limit-keys';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -558,6 +560,16 @@ async function handleAgentAssertionGrant(req: NextRequest, form: URLSearchParams
     userId: result.userId,
     details: { clientId: client.clientId, oauthEvent: 'agent_assertion_exchanged' },
   });
+
+  // The API door's sign-in. createAgentAccount returns the one-time secret even
+  // if Home-drive provisioning failed after its commit, relying on a later
+  // sign-in to retry — this is that retry (idempotent; a no-op once the drive
+  // exists), exactly as the magic-link sign-in does. Never blocks the tokens.
+  try {
+    await provisionHomeDriveIfNeeded(result.userId);
+  } catch (error) {
+    loggers.auth.error('Failed to provision Home drive on agent sign-in', error as Error, { userId: result.userId });
+  }
 
   return noStoreJson(tokenSuccessBody(result.tokens, result.scopes), 200);
 }

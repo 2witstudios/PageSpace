@@ -28,7 +28,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn(), audit:
 
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
-import { eq, inArray } from '@pagespace/db/operators';
+import { and, eq, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { agentIdentities } from '@pagespace/db/schema/agent-identities';
@@ -193,15 +193,20 @@ describe('agent API door — real Postgres', () => {
     expect([a.status, b.status].sort()).toEqual([200, 400]);
   });
 
-  it('refuses a caller naming an id that is not an agent it is or owns, with the same 404 (no oracle)', async () => {
+  it('restores a Home drive missing since signup on sign-in, and refuses a caller naming an id that is not an agent it is or owns with the same 404', async () => {
     if (!dbAvailable) return;
     // A second agent rotating the first agent's secret is "anyone else".
     const pow = await solvedChallenge();
     const reg = await identityPOST(json('/api/agent/identity', registerBody(pow)));
     const other = await reg.json() as { identity_assertion: string; agent_id: string };
     createdUserIds.push(other.agent_id);
+    // Simulate a Home-drive provisioning failure at signup: the exchange (the
+    // API door's sign-in) must restore it.
+    await db.delete(drives).where(and(eq(drives.ownerId, other.agent_id), eq(drives.kind, 'HOME')));
     const tokenRes = await tokenPOST(form({ grant_type: JWT, assertion: other.identity_assertion, client_id: 'pagespace-agent' }));
     const { access_token } = await tokenRes.json() as { access_token: string };
+    const homes = await db.select({ id: drives.id }).from(drives).where(and(eq(drives.ownerId, other.agent_id), eq(drives.kind, 'HOME')));
+    expect(homes).toHaveLength(1);
     const res = await rotatePOST(bearer('/api/agent/secret/rotate', access_token, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ agentId: createId() }) }));
     expect(res.status).toBe(404);
     expect(await res.json()).toEqual({ error: 'not_found' });

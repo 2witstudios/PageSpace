@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
   rateLimit: vi.fn(),
   audit: vi.fn(),
   doorOpen: vi.fn(),
+  provision: vi.fn(),
+  logError: vi.fn(),
 }));
 
 vi.mock('@/lib/repositories/oauth-repository', () => ({
@@ -25,6 +27,8 @@ vi.mock('@/lib/repositories/oauth-repository', () => ({
   exchangeAgentAssertion: mocks.exchangeAgentAssertion,
 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: mocks.audit }));
+vi.mock('@pagespace/lib/onboarding/home-drive', () => ({ provisionHomeDriveIfNeeded: mocks.provision }));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({ loggers: { auth: { error: mocks.logError, info: vi.fn(), warn: vi.fn() }, api: { error: vi.fn(), info: vi.fn(), warn: vi.fn() }, security: { warn: vi.fn(), info: vi.fn(), error: vi.fn() } } }));
 vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({ getActorInfo: vi.fn(), logTokenActivity: vi.fn() }));
 vi.mock('@/lib/auth', () => ({ getClientIP: () => '203.0.113.21' }));
 vi.mock('@/lib/agent-auth/door', async (importOriginal) => ({
@@ -74,6 +78,7 @@ describe('POST /api/oauth/token — jwt-bearer (agent assertion) grant', () => {
     mocks.rateLimit.mockResolvedValue({ allowed: true });
     mocks.ensureOAuthClientRow.mockResolvedValue('client-db-agent');
     mocks.exchangeAgentAssertion.mockResolvedValue({ outcome: 'ok', userId: 'agent-1', scopes: ['account', 'offline_access'], tokens });
+    mocks.provision.mockResolvedValue({ driveId: 'home-1', created: false });
   });
 
   describe('given a live agent secret presented by pagespace-agent', () => {
@@ -100,6 +105,26 @@ describe('POST /api/oauth/token — jwt-bearer (agent assertion) grant', () => {
       expect(mocks.exchangeAgentAssertion).not.toHaveBeenCalled();
       expect(mocks.rateLimit).toHaveBeenCalledWith('agent-token:ip:203.0.113.21', { maxAttempts: 60, windowMs: 300_000 });
       expect(mocks.rateLimit).toHaveBeenCalledWith(expect.stringMatching(/^agent-token:credential:[0-9a-f]{64}$/), { maxAttempts: 10, windowMs: 300_000 });
+    });
+  });
+
+  describe('Home drive recovery (the sign-in retry createAgentAccount relies on)', () => {
+    it('given a successful exchange, should re-run the idempotent Home-drive provisioning for the agent', async () => {
+      await POST(tokenRequest(fields()) as never);
+      expect(mocks.provision).toHaveBeenCalledWith('agent-1');
+    });
+
+    it('given provisioning fails, should still issue the tokens and log the failure', async () => {
+      mocks.provision.mockRejectedValue(new Error('db blip'));
+      const response = await POST(tokenRequest(fields()) as never);
+      expect(response.status).toBe(200);
+      expect(mocks.logError).toHaveBeenCalled();
+    });
+
+    it('given a refused secret, should not provision anything', async () => {
+      mocks.exchangeAgentAssertion.mockResolvedValue({ outcome: 'revoked', userId: 'agent-1' });
+      await POST(tokenRequest(fields()) as never);
+      expect(mocks.provision).not.toHaveBeenCalled();
     });
   });
 
