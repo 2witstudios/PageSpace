@@ -9,33 +9,12 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { eq, ne, and, or, inArray, isNotNull, ilike, exists, sql } from '@pagespace/db/operators';
-import { drives } from '@pagespace/db/schema/core';
-import { driveMembers, userProfiles } from '@pagespace/db/schema/members';
+import { eq, ne, and, or, isNotNull, ilike, exists, sql } from '@pagespace/db/operators';
+import { userProfiles } from '@pagespace/db/schema/members';
+import { getMemberDriveIds, memberOfAnyDriveCondition, sharesMemberDrive } from '@pagespace/lib/permissions/member-drives';
 import { users } from '@pagespace/db/schema/auth';
 import { connections } from '@pagespace/db/schema/social';
 import type { PublicProfileRow } from './enumeration-safe';
-
-/**
- * Drive ids the user owns or is an ACCEPTED member of.
- *
- * `driveMembers` reads used for an authorization decision must gate on
- * `isNotNull(acceptedAt)` (repo convention — see drive-member-gate-coverage):
- * a pending, unaccepted invitation is not an established shared context, so it
- * must not let the invitee resolve other members' identities (nor vice versa).
- */
-async function getUserDriveIds(userId: string): Promise<string[]> {
-  const [owned, member] = await Promise.all([
-    db.select({ id: drives.id }).from(drives).where(eq(drives.ownerId, userId)),
-    db
-      .select({ driveId: driveMembers.driveId })
-      .from(driveMembers)
-      .where(and(eq(driveMembers.userId, userId), isNotNull(driveMembers.acceptedAt))),
-  ]);
-  return Array.from(
-    new Set<string>([...owned.map((d) => d.id), ...member.map((m) => m.driveId)]),
-  );
-}
 
 /**
  * True when the caller already shares context with the target: themselves, an
@@ -62,28 +41,9 @@ export async function callerCanViewUser(
     .limit(1);
   if (acceptedConnection.length > 0) return true;
 
-  const callerDriveIds = await getUserDriveIds(callerId);
-  if (callerDriveIds.length === 0) return false;
-
-  const sharedMembership = await db
-    .select({ driveId: driveMembers.driveId })
-    .from(driveMembers)
-    .where(
-      and(
-        eq(driveMembers.userId, targetId),
-        inArray(driveMembers.driveId, callerDriveIds),
-        isNotNull(driveMembers.acceptedAt),
-      ),
-    )
-    .limit(1);
-  if (sharedMembership.length > 0) return true;
-
-  const sharedOwnership = await db
-    .select({ id: drives.id })
-    .from(drives)
-    .where(and(eq(drives.ownerId, targetId), inArray(drives.id, callerDriveIds)))
-    .limit(1);
-  return sharedOwnership.length > 0;
+  // Co-membership of any drive, owned or joined (org-aware; a pending invitation, a page share
+  // or a stale org row is not an established shared context).
+  return sharesMemberDrive(callerId, targetId);
 }
 
 /**
@@ -112,7 +72,7 @@ export async function searchRelatedProfilesByName(
   usernamePattern: string,
   limit: number,
 ): Promise<PublicProfileRow[]> {
-  const callerDriveIds = await getUserDriveIds(callerId);
+  const callerDriveIds = await getMemberDriveIds(callerId, { includeTrashed: true });
 
   // Accepted connection with the caller, either direction.
   const connectedToCaller = exists(
@@ -132,30 +92,8 @@ export async function searchRelatedProfilesByName(
 
   const relationshipPredicates = [connectedToCaller];
   if (callerDriveIds.length > 0) {
-    // Accepted member of one of the caller's drives.
-    relationshipPredicates.push(
-      exists(
-        db
-          .select({ one: sql`1` })
-          .from(driveMembers)
-          .where(
-            and(
-              eq(driveMembers.userId, userProfiles.userId),
-              isNotNull(driveMembers.acceptedAt),
-              inArray(driveMembers.driveId, callerDriveIds),
-            ),
-          ),
-      ),
-    );
-    // Owner of one of the caller's drives.
-    relationshipPredicates.push(
-      exists(
-        db
-          .select({ one: sql`1` })
-          .from(drives)
-          .where(and(eq(drives.ownerId, userProfiles.userId), inArray(drives.id, callerDriveIds))),
-      ),
-    );
+    // A member (owned or joined, org-aware) of one of the caller's member drives.
+    relationshipPredicates.push(memberOfAnyDriveCondition(userProfiles.userId, callerDriveIds));
   }
 
   return db
