@@ -69,12 +69,25 @@ vi.mock('@pagespace/db/schema/members', () => ({
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
   getUserAccessiblePagesInDrive: vi.fn(),
 }));
+// The org-aware relationship is the gate (its pure role decisions stay real).
+vi.mock('@pagespace/lib/permissions/drive-relationship-loader', () => ({
+  loadDriveRelationship: vi.fn(),
+}));
 
 import { POST } from '../route';
 import { authenticateRequestWithOptions, checkMCPDriveScope } from '@/lib/auth';
 import { buildTree } from '@pagespace/lib/content/tree-utils';
 import { db } from '@pagespace/db/db';
 import { getUserAccessiblePagesInDrive } from '@pagespace/lib/permissions/permissions';
+import type { DriveRelationship } from '@pagespace/lib/permissions/drive-relationship';
+import { loadDriveRelationship } from '@pagespace/lib/permissions/drive-relationship-loader';
+
+const LEAD: DriveRelationship = { isOwner: true, membership: null };
+const NONE: DriveRelationship = { isOwner: false, membership: null };
+const asMember = (role: 'ADMIN' | 'MEMBER', source: 'invite' | 'org' = 'invite'): DriveRelationship => ({
+  isOwner: false,
+  membership: { role, customRoleId: null, source, auditOrgAdminPrivateAccess: false },
+});
 
 // Test helpers
 const mockUserId = 'user_123';
@@ -117,6 +130,8 @@ describe('POST /api/pages/tree', () => {
     vi.mocked(buildTree).mockReturnValue([{ id: 'page_1', children: [] }] as never);
     // Default: all pages accessible (used for non-owner path)
     vi.mocked(getUserAccessiblePagesInDrive).mockResolvedValue(['page_1']);
+    // Default: the caller leads the drive
+    vi.mocked(loadDriveRelationship).mockResolvedValue(LEAD);
   });
 
   describe('authentication', () => {
@@ -180,7 +195,7 @@ describe('POST /api/pages/tree', () => {
       const response = await POST(createRequest({ driveId: mockDriveId }));
 
       expect(response.status).toBe(200);
-      // Should NOT check membership when user is owner
+      // The route never reads drive_members itself
       expect(db.query.driveMembers.findFirst).not.toHaveBeenCalled();
     });
 
@@ -190,15 +205,37 @@ describe('POST /api/pages/tree', () => {
         id: mockDriveId,
         ownerId: 'other_user',
       });
-      // @ts-expect-error - partial mock data
-      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue({
-        driveId: mockDriveId,
-        userId: mockUserId,
-      });
+      vi.mocked(loadDriveRelationship).mockResolvedValue(asMember('MEMBER'));
 
       const response = await POST(createRequest({ driveId: mockDriveId }));
 
       expect(response.status).toBe(200);
+      expect(loadDriveRelationship).toHaveBeenCalledWith(mockUserId, expect.objectContaining({ id: mockDriveId, ownerId: 'other_user' }));
+    });
+
+    it('DRV-5 (partial) an implicit Open member with no drive_members row reads the tree, filtered to the canonical page set', async () => {
+      // @ts-expect-error - partial mock data
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue({ id: mockDriveId, ownerId: 'other_user', orgId: 'org_1', orgVisibility: 'OPEN' });
+      vi.mocked(loadDriveRelationship).mockResolvedValue(asMember('MEMBER', 'org'));
+
+      const response = await POST(createRequest({ driveId: mockDriveId }));
+
+      expect(response.status).toBe(200);
+      expect(getUserAccessiblePagesInDrive).toHaveBeenCalledWith(mockUserId, mockDriveId);
+      expect(db.query.driveMembers.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('X-6 (partial) a stale source=org row opens nothing: the relationship refuses and the row is never read', async () => {
+      // @ts-expect-error - partial mock data
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue({ id: mockDriveId, ownerId: 'other_user', orgId: 'org_1', orgVisibility: 'OPEN' });
+      // @ts-expect-error - partial mock data: the row the old inline gate would have honoured
+      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue({ driveId: mockDriveId, userId: mockUserId, source: 'org' });
+      vi.mocked(loadDriveRelationship).mockResolvedValue(NONE);
+
+      const response = await POST(createRequest({ driveId: mockDriveId }));
+
+      expect(response.status).toBe(403);
+      expect(db.query.driveMembers.findFirst).not.toHaveBeenCalled();
     });
 
     it('returns 403 when user is neither owner nor member', async () => {
@@ -207,7 +244,7 @@ describe('POST /api/pages/tree', () => {
         id: mockDriveId,
         ownerId: 'other_user',
       });
-      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue(undefined);
+      vi.mocked(loadDriveRelationship).mockResolvedValue(NONE);
 
       const response = await POST(createRequest({ driveId: mockDriveId }));
       const body = await response.json();
@@ -225,14 +262,13 @@ describe('POST /api/pages/tree', () => {
         id: mockDriveId,
         ownerId: 'other_user',
       });
-      // Post-fix the gate filters this row out and findFirst returns undefined.
-      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue(undefined);
+      // The org-aware relationship reads ACCEPTED rows only, so a pending invitation resolves to no membership.
+      vi.mocked(loadDriveRelationship).mockResolvedValue(NONE);
 
       const response = await POST(createRequest({ driveId: mockDriveId }));
 
       expect(response.status).toBe(403);
-      const { isNotNull } = await import('@pagespace/db/operators');
-      expect(isNotNull).toHaveBeenCalledWith('driveMembers.acceptedAt');
+      expect(db.query.driveMembers.findFirst).not.toHaveBeenCalled();
     });
   });
 
@@ -277,11 +313,7 @@ describe('POST /api/pages/tree', () => {
         id: mockDriveId,
         ownerId: otherOwnerId,
       });
-      // @ts-expect-error - partial mock data
-      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue({
-        driveId: mockDriveId,
-        userId: mockUserId,
-      });
+      vi.mocked(loadDriveRelationship).mockResolvedValue(asMember('MEMBER'));
     });
 
     it('filters out pages not in the accessible set for non-owners', async () => {

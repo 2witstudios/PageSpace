@@ -88,6 +88,10 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
   getUserAccessLevel: vi.fn(),
 }));
+// The org-aware relationship is the gate (its pure role decisions stay real).
+vi.mock('@pagespace/lib/permissions/drive-relationship-loader', () => ({
+  loadDriveRelationship: vi.fn(),
+}));
 
 // ---------- imports (after mocks) ----------
 
@@ -95,6 +99,15 @@ import { GET } from '../route';
 import { verifyAuth } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
+import type { DriveRelationship } from '@pagespace/lib/permissions/drive-relationship';
+import { loadDriveRelationship } from '@pagespace/lib/permissions/drive-relationship-loader';
+
+const LEAD: DriveRelationship = { isOwner: true, membership: null };
+const NONE: DriveRelationship = { isOwner: false, membership: null };
+const asMember = (role: 'ADMIN' | 'MEMBER'): DriveRelationship => ({
+  isOwner: false,
+  membership: { role, customRoleId: null, source: 'invite', auditOrgAdminPrivateAccess: false },
+});
 
 // ---------- helpers ----------
 
@@ -153,6 +166,9 @@ describe('GET /api/drives/[driveId]/permissions-tree', () => {
 
     // Default: getUserAccessLevel returns null (overridden in specific tests)
     vi.mocked(getUserAccessLevel).mockResolvedValue(null);
+
+    // Default: the caller leads the drive
+    vi.mocked(loadDriveRelationship).mockResolvedValue(LEAD);
   });
 
   // ---------- Authentication ----------
@@ -195,7 +211,7 @@ describe('GET /api/drives/[driveId]/permissions-tree', () => {
   describe('authorization', () => {
     it('should return 403 when user is not owner and not admin', async () => {
       mockDriveResults.value = [{ ...mockDrive, ownerId: 'other_user' }];
-      mockAdminResults.value = [];
+      vi.mocked(loadDriveRelationship).mockResolvedValue(NONE);
 
       const response = await GET(createRequest(), createContext(mockDriveId));
       const body = await response.json();
@@ -214,11 +230,41 @@ describe('GET /api/drives/[driveId]/permissions-tree', () => {
 
     it('should allow access when user is admin (not owner)', async () => {
       mockDriveResults.value = [{ ...mockDrive, ownerId: 'other_user' }];
-      mockAdminResults.value = [{ id: 'membership_1' }];
+      vi.mocked(loadDriveRelationship).mockResolvedValue(asMember('ADMIN'));
 
       const response = await GET(createRequest(), createContext(mockDriveId));
 
       expect(response.status).toBe(200);
+      expect(loadDriveRelationship).toHaveBeenCalledWith(mockUserId, expect.objectContaining({ id: mockDriveId, ownerId: 'other_user' }));
+    });
+
+    it('ORG-4 (partial) an org Admin with no drive_members row sees the permission tree of an org drive', async () => {
+      mockDriveResults.value = [{ ...mockDrive, ownerId: 'other_user', orgId: 'org_1', orgVisibility: 'PRIVATE' }];
+      vi.mocked(loadDriveRelationship).mockResolvedValue(asMember('ADMIN'));
+
+      const response = await GET(createRequest(), createContext(mockDriveId));
+
+      expect(response.status).toBe(200);
+      expect(loadDriveRelationship).toHaveBeenCalledWith(mockUserId, expect.objectContaining({ orgId: 'org_1', orgVisibility: 'PRIVATE' }));
+    });
+
+    it('X-6 (partial) a stale source=org ADMIN row opens nothing: the relationship refuses and the row is never read', async () => {
+      mockDriveResults.value = [{ ...mockDrive, ownerId: 'other_user', orgId: 'org_1', orgVisibility: 'RESTRICTED' }];
+      mockAdminResults.value = [{ id: 'membership_1', role: 'ADMIN', source: 'org' }];
+      vi.mocked(loadDriveRelationship).mockResolvedValue(NONE);
+
+      const response = await GET(createRequest(), createContext(mockDriveId));
+
+      expect(response.status).toBe(403);
+    });
+
+    it('a plain member cannot view the permission tree', async () => {
+      mockDriveResults.value = [{ ...mockDrive, ownerId: 'other_user' }];
+      vi.mocked(loadDriveRelationship).mockResolvedValue(asMember('MEMBER'));
+
+      const response = await GET(createRequest(), createContext(mockDriveId));
+
+      expect(response.status).toBe(403);
     });
   });
 

@@ -4,12 +4,13 @@ import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { db } from '@pagespace/db/db'
-import { and, eq, inArray, desc, isNull, isNotNull } from '@pagespace/db/operators'
+import { and, eq, inArray, desc, isNull } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core'
 import { isSheetType } from '@pagespace/lib/sheets/sheet';
 import { copySheetRows } from '@pagespace/lib/sheets/store';
 import { PageType } from '@pagespace/lib/utils/enums';
-import { driveMembers } from '@pagespace/db/schema/members';
+import { driveRoleOf } from '@pagespace/lib/permissions/drive-relationship';
+import { loadDriveRelationship } from '@pagespace/lib/permissions/drive-relationship-loader';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, getAllowedDriveIds, isMCPAuthResult, isScopedMCPAuth, canPrincipalViewPage } from '@/lib/auth';
 import { getAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
 import { createId } from '@paralleldrive/cuid2';
@@ -72,22 +73,10 @@ export async function POST(request: Request) {
       // through to the owner's own authority below.
       canEditDrive = tokenMembership?.role === 'OWNER' || tokenMembership?.role === 'ADMIN';
     } else {
-      const isOwner = targetDrive.ownerId === userId;
-      canEditDrive = isOwner;
-
-      if (!isOwner) {
-        // Authz read: a pending invitee (acceptedAt IS NULL) with role ADMIN
-        // would otherwise pass the role check and be allowed to write into a
-        // drive they have not accepted into. Closes Review C2.
-        const membership = await db.query.driveMembers.findFirst({
-          where: and(
-            eq(driveMembers.driveId, targetDriveId),
-            eq(driveMembers.userId, userId),
-            isNotNull(driveMembers.acceptedAt)
-          ),
-        });
-        canEditDrive = membership?.role === 'OWNER' || membership?.role === 'ADMIN';
-      }
+      // The drive's lead or an effective OWNER/ADMIN (the org-aware membership reads ACCEPTED rows
+      // only, so a pending ADMIN invitee cannot write into a drive they have not joined).
+      const role = driveRoleOf(await loadDriveRelationship(userId, targetDrive));
+      canEditDrive = role === 'OWNER' || role === 'ADMIN';
     }
 
     if (!canEditDrive) {

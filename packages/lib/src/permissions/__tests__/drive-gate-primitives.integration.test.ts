@@ -25,14 +25,8 @@ import { drives } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
 import { orgMembers } from '@pagespace/db/schema/organizations';
 import { getDriveAccess, listAccessibleDrives } from '../../services/drive-service';
-import {
-  canAdministerDrive,
-  driveRoleOf,
-  isDriveLead,
-  loadDriveRelationship,
-  loadDriveRelationships,
-  type RelationshipDrive,
-} from '../drive-relationship';
+import { canAdministerDrive, driveRoleOf, isDriveLead, type RelationshipDrive } from '../drive-relationship';
+import { loadDriveRelationship, loadDriveRelationships } from '../drive-relationship-loader';
 import { getMemberDriveIds, listMemberDrives, memberOfAnyDriveCondition, sharesMemberDrive } from '../member-drives';
 import { cleanupNorthwind, createUser, northwind } from './fixtures/northwind-org-drives';
 

@@ -1,11 +1,4 @@
-import { db } from '@pagespace/db/db';
 import type { OrgDriveVisibility } from '@pagespace/db/schema/core';
-import {
-  loadAcceptedRowsInDrives,
-  loadEffectiveDriveMembership,
-  resolveEffectiveDriveMemberships,
-  type ResolveMembershipsOptions,
-} from './org-drive-membership';
 import type { EffectiveDriveMembership } from './org-drive-resolution';
 import type { DriveMemberRole } from './org-access';
 
@@ -57,34 +50,4 @@ export function canAdministerDrive(relationship: DriveRelationship): boolean {
 /** The lead or any effective member: the isUserDriveMember answer. */
 export function isDriveMemberRelationship(relationship: DriveRelationship): boolean {
   return relationship.isOwner || relationship.membership !== null;
-}
-
-const LEAD: DriveRelationship = { isOwner: true, membership: null };
-
-export async function loadDriveRelationship(userId: string, drive: RelationshipDrive): Promise<DriveRelationship> {
-  if (isDriveLead(userId, drive)) return LEAD;
-  return { isOwner: false, membership: await loadEffectiveDriveMembership(userId, drive) };
-}
-
-/**
- * loadDriveRelationship for many drives at once, keyed by drive id: one accepted-rows query plus the
- * shared resolver's (at most two) org queries, however many drives.
- */
-export async function loadDriveRelationships(
-  userId: string,
-  driveList: RelationshipDrive[],
-  options: ResolveMembershipsOptions = { audit: true },
-): Promise<Map<string, DriveRelationship>> {
-  const out = new Map<string, DriveRelationship>();
-  const notLed = driveList.filter((drive) => !isDriveLead(userId, drive));
-  for (const drive of driveList) if (isDriveLead(userId, drive)) out.set(drive.id, LEAD);
-  if (notLed.length === 0) return out;
-
-  const rows = await loadAcceptedRowsInDrives(db, userId, notLed.map((drive) => drive.id));
-  const effective = await resolveEffectiveDriveMemberships(
-    notLed.map((drive) => ({ userId, drive, row: rows.get(drive.id) ?? null })),
-    options,
-  );
-  notLed.forEach((drive, i) => out.set(drive.id, { isOwner: false, membership: effective[i] }));
-  return out;
 }

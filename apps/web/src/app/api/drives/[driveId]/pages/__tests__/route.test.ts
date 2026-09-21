@@ -104,14 +104,32 @@ vi.mock('@/lib/auth', () => ({
   getPrincipalAccessiblePagesInDrive: vi.fn(),
 }));
 
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  getUserAccessiblePagesInDrive: vi.fn(),
+}));
+// The org-aware relationship is the gate (its pure role decisions stay real).
+vi.mock('@pagespace/lib/permissions/drive-relationship-loader', () => ({
+  loadDriveRelationship: vi.fn(),
+}));
+
 // ---------- imports (after mocks) ----------
 
 import { GET } from '../route';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { buildTree } from '@pagespace/lib/content/tree-utils'
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { getUserAccessiblePagesInDrive } from '@pagespace/lib/permissions/permissions';
+import type { DriveRelationship } from '@pagespace/lib/permissions/drive-relationship';
+import { loadDriveRelationship } from '@pagespace/lib/permissions/drive-relationship-loader';
 
 // ---------- helpers ----------
+
+const LEAD: DriveRelationship = { isOwner: true, membership: null };
+const NONE: DriveRelationship = { isOwner: false, membership: null };
+const asMember = (role: 'ADMIN' | 'MEMBER', source: 'invite' | 'org' = 'invite'): DriveRelationship => ({
+  isOwner: false,
+  membership: { role, customRoleId: null, source, auditOrgAdminPrivateAccess: false },
+});
 
 const mockWebAuth = (userId: string): SessionAuthResult => ({
   userId,
@@ -171,6 +189,10 @@ describe('GET /api/drives/[driveId]/pages', () => {
 
     // buildTree pass-through
     vi.mocked(buildTree).mockImplementation((items: unknown[]) => items as ReturnType<typeof buildTree>);
+
+    // Default: the caller leads the drive; a non-admin sees no pages
+    vi.mocked(loadDriveRelationship).mockResolvedValue(LEAD);
+    vi.mocked(getUserAccessiblePagesInDrive).mockResolvedValue([]);
   });
 
   // ---------- Authentication ----------
@@ -261,8 +283,8 @@ describe('GET /api/drives/[driveId]/pages', () => {
       // User is NOT owner
       mockFindFirst.mockResolvedValue({ id: mockDriveId, ownerId: 'other_owner', name: 'Test' });
 
-      // User IS admin - admin check returns a membership record
-      mockSelectLimit.mockResolvedValue([{ id: 'membership_1' }]);
+      // User IS admin
+      vi.mocked(loadDriveRelationship).mockResolvedValue(asMember('ADMIN'));
 
       mockFindMany.mockResolvedValue([{ id: 'page_1', parentId: null, position: 0 }]);
 
@@ -273,6 +295,19 @@ describe('GET /api/drives/[driveId]/pages', () => {
         where: { type: 'and' },
         orderBy: [{ type: 'asc' }],
       });
+      expect(getUserAccessiblePagesInDrive).not.toHaveBeenCalled();
+    });
+
+    it('ORG-4 (partial) an org Admin with no drive_members row gets every page of an org drive', async () => {
+      mockFindFirst.mockResolvedValue({ id: mockDriveId, ownerId: 'other_owner', name: 'Finance', orgId: 'org_1', orgVisibility: 'PRIVATE' });
+      vi.mocked(loadDriveRelationship).mockResolvedValue(asMember('ADMIN'));
+      mockFindMany.mockResolvedValue([{ id: 'page_1', parentId: null, position: 0 }]);
+
+      const response = await GET(createRequest() as never, createContext(mockDriveId));
+
+      expect(response.status).toBe(200);
+      expect(loadDriveRelationship).toHaveBeenCalledWith(mockUserId, expect.objectContaining({ orgId: 'org_1', orgVisibility: 'PRIVATE' }));
+      expect(getUserAccessiblePagesInDrive).not.toHaveBeenCalled();
     });
   });
 
@@ -283,7 +318,7 @@ describe('GET /api/drives/[driveId]/pages', () => {
       // Not owner
       mockFindFirst.mockResolvedValue({ id: mockDriveId, ownerId: 'other_owner', name: 'Test' });
       // Not admin
-      mockSelectLimit.mockResolvedValue([]);
+      vi.mocked(loadDriveRelationship).mockResolvedValue(asMember('MEMBER'));
     });
 
     it('should return empty tree when member has no page permissions', async () => {
@@ -298,11 +333,8 @@ describe('GET /api/drives/[driveId]/pages', () => {
     });
 
     it('should fetch permitted pages and ancestors when member has some permissions', async () => {
-      // First selectDistinct call: permitted page IDs
-      // Second selectDistinct call: task-linked pages
-      mockSelectDistinctWhere
-        .mockResolvedValueOnce([{ id: 'page_2' }])  // permitted pages
-        .mockResolvedValueOnce([]);                    // task-linked pages
+      // The canonical page set (membership, custom or default role, live explicit grants)
+      vi.mocked(getUserAccessiblePagesInDrive).mockResolvedValue(['page_2']);
 
       // execute: first for ancestor query, second for unread activity
       mockExecute
@@ -324,6 +356,37 @@ describe('GET /api/drives/[driveId]/pages', () => {
       });
       const executeArgs = mockExecute.mock.calls[0];
       expect(executeArgs[0]).toHaveProperty('type', 'sql');
+      expect(getUserAccessiblePagesInDrive).toHaveBeenCalledWith(mockUserId, mockDriveId);
+    });
+
+    it('DRV-5 (partial) an implicit Open member with no row sees exactly the pages the canonical resolver gives their drive default role', async () => {
+      mockFindFirst.mockResolvedValue({ id: mockDriveId, ownerId: 'other_owner', name: 'Product', orgId: 'org_1', orgVisibility: 'OPEN' });
+      vi.mocked(getUserAccessiblePagesInDrive).mockResolvedValue(['page_1']);
+      mockExecute
+        .mockResolvedValueOnce({ rows: [{ id: 'page_1' }] })
+        .mockResolvedValueOnce({ rows: [] });
+      mockFindMany.mockResolvedValue([{ id: 'page_1', parentId: null, position: 0 }]);
+
+      const response = await GET(createRequest() as never, createContext(mockDriveId));
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual([expect.objectContaining({ id: 'page_1' })]);
+      expect(getUserAccessiblePagesInDrive).toHaveBeenCalledWith(mockUserId, mockDriveId);
+    });
+
+    it('X-6 (partial) a stale source=org ADMIN row opens nothing beyond the canonical page set: the route never reads drive_members', async () => {
+      mockFindFirst.mockResolvedValue({ id: mockDriveId, ownerId: 'other_owner', name: 'Finance', orgId: 'org_1', orgVisibility: 'PRIVATE' });
+      // The row the old inline admin check would have honoured.
+      mockSelectLimit.mockResolvedValue([{ id: 'membership_1', role: 'ADMIN', source: 'org' }]);
+      vi.mocked(loadDriveRelationship).mockResolvedValue(NONE);
+      vi.mocked(getUserAccessiblePagesInDrive).mockResolvedValue([]);
+
+      const response = await GET(createRequest() as never, createContext(mockDriveId));
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual([]);
+      expect(mockSelectLimit).not.toHaveBeenCalled();
+      expect(mockFindMany).not.toHaveBeenCalled();
     });
   });
 

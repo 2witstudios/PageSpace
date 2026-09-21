@@ -70,6 +70,11 @@ vi.mock('@paralleldrive/cuid2', () => ({
   isCuid: vi.fn(() => true),
 }));
 
+// The org-aware relationship is the gate (its pure role decisions stay real).
+vi.mock('@pagespace/lib/permissions/drive-relationship-loader', () => ({
+  loadDriveRelationship: vi.fn(),
+}));
+
 vi.mock('@pagespace/db/db', () => {
   const txInsertValues = vi.fn().mockResolvedValue(undefined);
   const txInsert = vi.fn().mockReturnValue({ values: txInsertValues });
@@ -112,6 +117,8 @@ vi.mock('@pagespace/db/schema/members', () => ({
 // ── Imports (after mocks) ───────────────────────────────────────────────
 
 import { POST } from '../route';
+import type { DriveRelationship } from '@pagespace/lib/permissions/drive-relationship';
+import { loadDriveRelationship } from '@pagespace/lib/permissions/drive-relationship-loader';
 import { authenticateRequestWithOptions, checkMCPDriveScope, getAllowedDriveIds, isMCPAuthResult } from '@/lib/auth';
 import { broadcastPageEvent } from '@/lib/websocket';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
@@ -195,7 +202,20 @@ const validBody = {
   includeChildren: true,
 };
 
+const NONE: DriveRelationship = { isOwner: false, membership: null };
+const asMember = (role: 'OWNER' | 'ADMIN' | 'MEMBER', source: 'invite' | 'org' = 'invite'): DriveRelationship => ({
+  isOwner: false,
+  membership: { role, customRoleId: null, source, auditOrgAdminPrivateAccess: false },
+});
+/** The non-lead relationship loadDriveRelationship answers; the lead (drives.ownerId) is always LEAD. */
+let nonLead: DriveRelationship = NONE;
+const setRelationship = (rel: DriveRelationship) => { nonLead = rel; };
+
 function setupSuccessScenario() {
+  nonLead = NONE;
+  vi.mocked(loadDriveRelationship).mockImplementation(async (userId, drive) =>
+    drive.ownerId === userId ? { isOwner: true, membership: null } : nonLead);
+
   // Auth
   vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
   vi.mocked(checkMCPDriveScope).mockReturnValue(null);
@@ -328,7 +348,7 @@ describe('POST /api/pages/bulk-copy', () => {
 
     it('allows when user is drive ADMIN member', async () => {
       vi.mocked(db.query.drives.findFirst).mockResolvedValue({ id: mockDriveId, ownerId: 'other-user' } as never);
-      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue({ role: 'ADMIN' } as never);
+      setRelationship(asMember('ADMIN'));
 
       const response = await POST(createRequest(validBody));
       const body = await response.json();
@@ -339,7 +359,7 @@ describe('POST /api/pages/bulk-copy', () => {
 
     it('allows when user is drive OWNER member', async () => {
       vi.mocked(db.query.drives.findFirst).mockResolvedValue({ id: mockDriveId, ownerId: 'other-user' } as never);
-      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue({ role: 'OWNER' } as never);
+      setRelationship(asMember('OWNER'));
 
       const response = await POST(createRequest(validBody));
       const body = await response.json();
@@ -350,7 +370,7 @@ describe('POST /api/pages/bulk-copy', () => {
 
     it('returns 403 when user is only a VIEWER member', async () => {
       vi.mocked(db.query.drives.findFirst).mockResolvedValue({ id: mockDriveId, ownerId: 'other-user' } as never);
-      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue({ role: 'VIEWER' } as never);
+      setRelationship(asMember('MEMBER'));
 
       const response = await POST(createRequest(validBody));
       const body = await response.json();
@@ -361,7 +381,7 @@ describe('POST /api/pages/bulk-copy', () => {
 
     it('returns 403 when user has no membership', async () => {
       vi.mocked(db.query.drives.findFirst).mockResolvedValue({ id: mockDriveId, ownerId: 'other-user' } as never);
-      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue(undefined as never);
+      setRelationship(NONE);
 
       const response = await POST(createRequest(validBody));
       const body = await response.json();
@@ -370,18 +390,40 @@ describe('POST /api/pages/bulk-copy', () => {
       expect(body.error).toMatch(/permission.*copy/i);
     });
 
+    it('ORG-4 (partial) an org Admin with no drive_members row copies into an org drive', async () => {
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue({ id: mockDriveId, ownerId: 'other-user', orgId: 'org_1', orgVisibility: 'PRIVATE' } as never);
+      setRelationship(asMember('ADMIN'));
+
+      const response = await POST(createRequest(validBody));
+
+      expect(response.status).toBe(200);
+      expect(loadDriveRelationship).toHaveBeenCalledWith(mockUserId, expect.objectContaining({ orgId: 'org_1', orgVisibility: 'PRIVATE' }));
+    });
+
+    it('X-6 (partial) a stale source=org ADMIN row opens nothing: the route never reads drive_members', async () => {
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue({ id: mockDriveId, ownerId: 'other-user', orgId: 'org_1', orgVisibility: 'OPEN' } as never);
+      // The row the old inline gate would have honoured.
+      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue({ role: 'ADMIN', source: 'org' } as never);
+      setRelationship(NONE);
+
+      const response = await POST(createRequest(validBody));
+
+      expect(response.status).toBe(403);
+      expect(db.query.driveMembers.findFirst).not.toHaveBeenCalled();
+    });
+
     // Review C2 — pending ADMIN escalation. Adversarial pin against drift back
     // to the role-only predicate that allowed pending invitees to write into
     // a drive they had not joined.
     it('rejects pending ADMIN (acceptedAt IS NULL) — adversarial pending-admin-can-bulk-copy-into-unaccepted-drive path', async () => {
       vi.mocked(db.query.drives.findFirst).mockResolvedValue({ id: mockDriveId, ownerId: 'other-user' } as never);
-      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue(undefined as never);
+      // The org-aware relationship reads ACCEPTED rows only: a pending ADMIN invitation is no membership.
+      setRelationship(NONE);
 
       const response = await POST(createRequest(validBody));
 
       expect(response.status).toBe(403);
-      const { isNotNull } = await import('@pagespace/db/operators');
-      expect(isNotNull).toHaveBeenCalledWith('driveMembers.acceptedAt');
+      expect(db.query.driveMembers.findFirst).not.toHaveBeenCalled();
     });
   });
 

@@ -65,11 +65,25 @@ vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
   getAppDriveMembership: vi.fn(),
 }));
 
+// The org-aware relationship is the gate (its pure role decisions stay real).
+vi.mock('@pagespace/lib/permissions/drive-relationship-loader', () => ({
+  loadDriveRelationship: vi.fn(),
+}));
+
 import { GET } from '../route';
 import { db } from '@pagespace/db/db';
 import { buildTree } from '@pagespace/lib/content/tree-utils'
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
+import type { DriveRelationship } from '@pagespace/lib/permissions/drive-relationship';
+import { loadDriveRelationship } from '@pagespace/lib/permissions/drive-relationship-loader';
+
+const LEAD: DriveRelationship = { isOwner: true, membership: null };
+const NONE: DriveRelationship = { isOwner: false, membership: null };
+const asMember = (role: 'ADMIN' | 'MEMBER'): DriveRelationship => ({
+  isOwner: false,
+  membership: { role, customRoleId: null, source: 'invite', auditOrgAdminPrivateAccess: false },
+});
 
 // ============================================================================
 // Test Helpers
@@ -128,6 +142,7 @@ describe('GET /api/drives/[driveId]/trash', () => {
     vi.mocked(checkMCPDriveScope).mockReturnValue(null);
     vi.mocked(buildTree).mockReturnValue([]);
     vi.mocked(db.select).mockReturnValue({ from: mockFromFn } as never);
+    vi.mocked(loadDriveRelationship).mockResolvedValue(LEAD);
   });
 
   describe('authentication', () => {
@@ -202,17 +217,59 @@ describe('GET /api/drives/[driveId]/trash', () => {
         createDriveFixture({ id: mockDriveId, ownerId: 'other_user' })
       );
       // User is an admin member
-      mockFromFn.mockReturnValue({
-        where: vi.fn().mockReturnValue({
-          limit: vi.fn().mockResolvedValue([{ userId: mockUserId, role: 'ADMIN' }]),
-        }),
-      });
+      vi.mocked(loadDriveRelationship).mockResolvedValue(asMember('ADMIN'));
       vi.mocked(db.query.pages.findMany).mockResolvedValue([]);
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/trash`);
       const response = await GET(request, createContext(mockDriveId));
 
       expect(response.status).toBe(200);
+      expect(loadDriveRelationship).toHaveBeenCalledWith(mockUserId, expect.objectContaining({ id: mockDriveId, ownerId: 'other_user' }));
+    });
+
+    it('ORG-4 (partial) an org Admin with no drive_members row views an org drive\'s trash, because the org-aware relationship makes them ADMIN', async () => {
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue({
+        ...createDriveFixture({ id: mockDriveId, ownerId: 'other_user' }),
+        orgId: 'org_1',
+        orgVisibility: 'PRIVATE' as const,
+      });
+      vi.mocked(loadDriveRelationship).mockResolvedValue(asMember('ADMIN'));
+      vi.mocked(db.query.pages.findMany).mockResolvedValue([]);
+
+      const response = await GET(new Request(`https://example.com/api/drives/${mockDriveId}/trash`), createContext(mockDriveId));
+
+      expect(response.status).toBe(200);
+      expect(loadDriveRelationship).toHaveBeenCalledWith(mockUserId, expect.objectContaining({ orgId: 'org_1', orgVisibility: 'PRIVATE' }));
+    });
+
+    it('X-6 (partial) a stale source=org ADMIN row opens nothing: the route never reads drive_members, the relationship refuses', async () => {
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue({
+        ...createDriveFixture({ id: mockDriveId, ownerId: 'other_user' }),
+        orgId: 'org_1',
+      });
+      // The row the old inline gate would have honoured.
+      mockFromFn.mockReturnValue({
+        where: vi.fn().mockReturnValue({
+          limit: vi.fn().mockResolvedValue([{ userId: mockUserId, role: 'ADMIN', source: 'org' }]),
+        }),
+      });
+      vi.mocked(loadDriveRelationship).mockResolvedValue(NONE);
+
+      const response = await GET(new Request(`https://example.com/api/drives/${mockDriveId}/trash`), createContext(mockDriveId));
+
+      expect(response.status).toBe(403);
+      expect(db.select).not.toHaveBeenCalled();
+    });
+
+    it('a plain member (not ADMIN) cannot view trash', async () => {
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue(
+        createDriveFixture({ id: mockDriveId, ownerId: 'other_user' })
+      );
+      vi.mocked(loadDriveRelationship).mockResolvedValue(asMember('MEMBER'));
+
+      const response = await GET(new Request(`https://example.com/api/drives/${mockDriveId}/trash`), createContext(mockDriveId));
+
+      expect(response.status).toBe(403);
     });
 
     it('should return 403 when user is not owner or admin', async () => {
@@ -221,11 +278,7 @@ describe('GET /api/drives/[driveId]/trash', () => {
         createDriveFixture({ id: mockDriveId, ownerId: 'other_user' })
       );
       // User has no admin membership
-      mockFromFn.mockReturnValue({
-        where: vi.fn().mockReturnValue({
-          limit: vi.fn().mockResolvedValue([]),
-        }),
-      });
+      vi.mocked(loadDriveRelationship).mockResolvedValue(NONE);
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/trash`);
       const response = await GET(request, createContext(mockDriveId));
