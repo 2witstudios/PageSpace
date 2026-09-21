@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const { mockWhere, mockCanConsumeAI, mockReleaseHold } = vi.hoisted(() => ({
   mockWhere: vi.fn(),
@@ -21,7 +21,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { api: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } },
 }));
 
-import { withZoomAiCredit } from '../zoom-ai-credit';
+import { withZoomAiCredit, ZOOM_AI_TRANSIENT_RETRY_DELAYS_MS } from '../zoom-ai-credit';
 
 describe('withZoomAiCredit', () => {
   beforeEach(() => {
@@ -38,6 +38,47 @@ describe('withZoomAiCredit', () => {
     expect(await withZoomAiCredit('agent_1', 'zoom_summary', run, '')).toBe('');
     expect(run).not.toHaveBeenCalled();
     expect(mockReleaseHold).not.toHaveBeenCalled();
+  });
+
+  it('given a terminal refusal, should not retry the gate', async () => {
+    mockCanConsumeAI.mockResolvedValue({ allowed: false, reason: 'out_of_credits' });
+
+    expect(await withZoomAiCredit('user_1', 'zoom_summary', vi.fn(async () => 'summary'), '')).toBe('');
+    expect(mockCanConsumeAI).toHaveBeenCalledTimes(1);
+  });
+
+  describe('transient refusal (a free owner already at the in-flight cap when the transcript lands)', () => {
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    it('given the cap clears before a retry, should wait, re-gate and still enrich the transcript', async () => {
+      mockCanConsumeAI
+        .mockResolvedValueOnce({ allowed: false, reason: 'too_many_in_flight' })
+        .mockResolvedValueOnce({ allowed: true, reason: 'ok', holdId: 'hold_retry' });
+      const run = vi.fn(async () => 'summary');
+
+      const pending = withZoomAiCredit('user_1', 'zoom_summary', run, '');
+      await vi.advanceTimersByTimeAsync(ZOOM_AI_TRANSIENT_RETRY_DELAYS_MS[0] - 1);
+      expect(mockCanConsumeAI).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(await pending).toBe('summary');
+      expect(mockCanConsumeAI).toHaveBeenCalledTimes(2);
+      expect(run).toHaveBeenCalledTimes(1);
+      expect(mockReleaseHold).toHaveBeenCalledWith('hold_retry');
+    });
+
+    it('given the cap never clears, should re-gate once per scheduled delay, then fall back without running the model', async () => {
+      mockCanConsumeAI.mockResolvedValue({ allowed: false, reason: 'too_many_in_flight' });
+      const run = vi.fn(async () => 'summary');
+
+      const pending = withZoomAiCredit('user_1', 'zoom_summary', run, '');
+      await vi.runAllTimersAsync();
+
+      expect(await pending).toBe('');
+      expect(mockCanConsumeAI).toHaveBeenCalledTimes(1 + ZOOM_AI_TRANSIENT_RETRY_DELAYS_MS.length);
+      expect(run).not.toHaveBeenCalled();
+    });
   });
 
   it('given an allowed gate, should gate the owner at their tier without the daily cap, run, and release the hold', async () => {
