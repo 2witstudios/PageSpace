@@ -1,0 +1,209 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+// ============================================================================
+// Prepaid credit gate + metering for POST /api/ai/btw (side questions).
+//
+// The route shipped calling the model with no gate, no usage row and no hold
+// (#2678). These pin the contract the chat route already keeps: gate BEFORE the
+// provider is built, refuse with the shared credit-gate error shape, record
+// exactly one usage row carrying the real cost when the stream ends however it
+// ends, and never leak the hold. `side-question` is real; only the AI SDK's
+// streamText is faked so the test can drive the stream's terminal callbacks.
+// ============================================================================
+
+type StreamOptions = {
+  onFinish?: (event: { totalUsage: Record<string, number | undefined>; steps: unknown[] }) => unknown;
+  onAbort?: (event: { steps: unknown[] }) => unknown;
+  onError?: (event: { error: unknown }) => unknown;
+  onStepFinish?: (step: unknown) => unknown;
+};
+
+const mocks = vi.hoisted(() => ({
+  auth: vi.fn(),
+  audit: vi.fn(),
+  conversationRow: vi.fn(),
+  userRow: vi.fn(),
+  access: vi.fn(),
+  messages: vi.fn(),
+  plan: vi.fn(),
+  provider: vi.fn(),
+  gate: vi.fn(),
+  releaseHold: vi.fn(),
+  trackUsage: vi.fn(),
+  streamText: vi.fn(),
+}));
+
+vi.mock('@/lib/auth', () => ({
+  authenticateRequestWithOptions: mocks.auth,
+  isAuthError: (value: unknown) => Boolean((value as { error?: unknown })?.error),
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: mocks.audit }));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+  loggers: { ai: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } },
+}));
+vi.mock('@pagespace/db/schema/conversations', () => ({ conversations: { __table: 'conversations', id: 'id', userId: 'userId', isShared: 'isShared', type: 'type', contextId: 'contextId' } }));
+vi.mock('@pagespace/db/schema/auth', () => ({ users: { __table: 'users', id: 'id', subscriptionTier: 'subscriptionTier', role: 'role', currentAiProvider: 'currentAiProvider', currentAiModel: 'currentAiModel' } }));
+vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn() }));
+vi.mock('@pagespace/db/db', () => ({
+  db: {
+    select: () => ({
+      from: (table: { __table: string }) => ({
+        where: () => ({ limit: () => (table.__table === 'users' ? mocks.userRow() : mocks.conversationRow()) }),
+      }),
+    }),
+  },
+}));
+vi.mock('@pagespace/lib/permissions/conversation-access', () => ({ canAccessConversation: mocks.access }));
+vi.mock('@/lib/repositories/message-repository', () => ({ messageRepository: { getMessagesByConversationId: mocks.messages } }));
+vi.mock('@/lib/ai/core/plan-binding', () => ({ getActivePlan: mocks.plan }));
+vi.mock('@/lib/ai/core/provider-factory', () => ({ createAIProvider: mocks.provider }));
+vi.mock('@/lib/ai/core/ai-providers-config', () => ({
+  ADMIN_ONLY_PROVIDERS: new Set(['glm']),
+  resolveProviderModel: (_p: unknown, _m: unknown, provider?: string, model?: string) => ({ provider: provider ?? 'openrouter', model: model ?? 'openai/gpt-5.4-nano' }),
+}));
+vi.mock('@/lib/subscription/rate-limit-middleware', () => ({
+  createAdminRestrictedResponse: () => new Response(JSON.stringify({ error: 'admin_only' }), { status: 403 }),
+}));
+vi.mock('@pagespace/lib/billing/credit-gate', () => ({ canConsumeAI: mocks.gate }));
+vi.mock('@pagespace/lib/billing/credit-consume', () => ({ releaseHold: mocks.releaseHold }));
+vi.mock('@pagespace/lib/billing/credit-pricing', () => ({ MAX_CHAT_INFLIGHT: 8 }));
+vi.mock('@pagespace/lib/ai/model-defaults', () => ({ isMeteringExempt: (provider: string) => provider === 'glm' }));
+vi.mock('@pagespace/lib/monitoring/chat-pricing', () => ({ estimateChatHoldCentsForModel: () => 7 }));
+vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
+  AIMonitoring: { trackUsage: mocks.trackUsage },
+  estimateTokens: (text: string) => Math.ceil(text.length / 4),
+  extractOpenRouterCostDollars: (steps: Array<{ providerMetadata?: { openrouter?: { usage?: { cost?: number } } } }> | undefined) =>
+    steps?.reduce<number | undefined>((sum, step) => {
+      const cost = step.providerMetadata?.openrouter?.usage?.cost;
+      return cost === undefined ? sum : (sum ?? 0) + cost;
+    }, undefined),
+  extractOpenRouterGenerationIds: (steps: Array<{ providerMetadata?: { openrouter?: { id?: string } } }> | undefined) =>
+    (steps ?? []).flatMap((step) => (step.providerMetadata?.openrouter?.id ? [step.providerMetadata.openrouter.id] : [])),
+}));
+vi.mock('ai', () => ({ streamText: mocks.streamText }));
+
+import { POST } from '../route';
+
+const post = () => POST(new Request('http://test/api/ai/btw', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ conversationId: 'c1', question: 'What changed?' }),
+}));
+
+const streamOptions = (): StreamOptions => mocks.streamText.mock.calls[0][0] as StreamOptions;
+const billedStep = { usage: { inputTokens: 900, outputTokens: 100, totalTokens: 1000 }, providerMetadata: { openrouter: { id: 'gen-1', usage: { cost: 0.0042 } } } };
+
+describe('POST /api/ai/btw credit gate', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.auth.mockResolvedValue({ userId: 'u1' });
+    mocks.conversationRow.mockResolvedValue([{ userId: 'u1', isShared: false, type: 'page', contextId: 'p1' }]);
+    mocks.userRow.mockResolvedValue([{ subscriptionTier: 'free', role: 'user', currentAiProvider: 'openrouter', currentAiModel: 'openai/gpt-5.4-nano' }]);
+    mocks.access.mockResolvedValue(true);
+    mocks.messages.mockResolvedValue([]);
+    mocks.plan.mockResolvedValue(null);
+    mocks.provider.mockResolvedValue({ model: {}, provider: 'openrouter', modelName: 'openai/gpt-5.4-nano' });
+    mocks.gate.mockResolvedValue({ allowed: true, holdId: 'hold_1' });
+    mocks.releaseHold.mockResolvedValue(undefined);
+    mocks.trackUsage.mockResolvedValue({ status: 'recorded' });
+    mocks.streamText.mockReturnValue({ toTextStreamResponse: () => new Response('side') });
+  });
+
+  it('refuses an out-of-credit user with the shared 402 shape and never builds or calls the model', async () => {
+    mocks.gate.mockResolvedValue({ allowed: false, reason: 'out_of_credits' });
+    const response = await post();
+    expect(response.status).toBe(402);
+    expect(await response.json()).toMatchObject({ error: 'out_of_credits' });
+    expect(mocks.provider).not.toHaveBeenCalled();
+    expect(mocks.streamText).not.toHaveBeenCalled();
+    expect(mocks.trackUsage).not.toHaveBeenCalled();
+  });
+
+  it('applies the chat in-flight cap and refuses with 429 when it is hit', async () => {
+    mocks.gate.mockResolvedValue({ allowed: false, reason: 'too_many_in_flight' });
+    const response = await post();
+    expect(response.status).toBe(429);
+    expect(mocks.gate).toHaveBeenCalledWith('u1', 'free', expect.objectContaining({ maxInFlight: 8, estCostCents: 7 }));
+    expect(mocks.streamText).not.toHaveBeenCalled();
+  });
+
+  it('refuses a non-admin whose resolved provider is admin-only, before the gate', async () => {
+    mocks.userRow.mockResolvedValue([{ subscriptionTier: 'pro', role: 'user', currentAiProvider: 'glm', currentAiModel: 'glm-4.6' }]);
+    const response = await post();
+    expect(response.status).toBe(403);
+    expect(mocks.gate).not.toHaveBeenCalled();
+    expect(mocks.streamText).not.toHaveBeenCalled();
+  });
+
+  it('records exactly one usage row with the real cost on a finished side question, settling the hold', async () => {
+    const response = await post();
+    expect(await response.text()).toBe('side');
+    const options = streamOptions();
+    await options.onStepFinish?.(billedStep);
+    await options.onFinish?.({ totalUsage: { inputTokens: 900, outputTokens: 100, totalTokens: 1000 }, steps: [billedStep] });
+    // A late terminal callback (the SDK can report more than one) must not bill twice.
+    await options.onError?.({ error: new Error('late') });
+
+    expect(mocks.trackUsage).toHaveBeenCalledTimes(1);
+    expect(mocks.trackUsage).toHaveBeenCalledWith(expect.objectContaining({
+      userId: 'u1',
+      provider: 'openrouter',
+      model: 'openai/gpt-5.4-nano',
+      inputTokens: 900,
+      outputTokens: 100,
+      totalTokens: 1000,
+      providerCostDollars: 0.0042,
+      openrouterGenerationIds: ['gen-1'],
+      conversationId: 'c1',
+      success: true,
+      holdId: 'hold_1',
+    }));
+    // trackUsage owns the hold once the stream starts; a route-level release would double-settle.
+    expect(mocks.releaseHold).not.toHaveBeenCalled();
+  });
+
+  it('settles an aborted stream exactly once, billing the completed steps, without leaking the hold', async () => {
+    await post();
+    const options = streamOptions();
+    await options.onAbort?.({ steps: [billedStep] });
+    await options.onFinish?.({ totalUsage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, steps: [] });
+
+    expect(mocks.trackUsage).toHaveBeenCalledTimes(1);
+    expect(mocks.trackUsage).toHaveBeenCalledWith(expect.objectContaining({
+      holdId: 'hold_1',
+      success: false,
+      inputTokens: 900,
+      outputTokens: 100,
+      providerCostDollars: 0.0042,
+    }));
+    expect(mocks.releaseHold).not.toHaveBeenCalled();
+  });
+
+  it('settles a stream that errors mid-flight with the steps completed so far', async () => {
+    await post();
+    const options = streamOptions();
+    await options.onStepFinish?.(billedStep);
+    await options.onError?.({ error: new Error('provider 500') });
+
+    expect(mocks.trackUsage).toHaveBeenCalledTimes(1);
+    expect(mocks.trackUsage).toHaveBeenCalledWith(expect.objectContaining({ holdId: 'hold_1', success: false, providerCostDollars: 0.0042, error: 'provider 500' }));
+  });
+
+  it('releases the hold when the provider cannot be built after the gate allowed the call', async () => {
+    mocks.provider.mockResolvedValue({ error: 'not configured', status: 503 });
+    const response = await post();
+    expect(response.status).toBe(503);
+    expect(mocks.streamText).not.toHaveBeenCalled();
+    expect(mocks.releaseHold).toHaveBeenCalledWith('hold_1');
+    expect(mocks.trackUsage).not.toHaveBeenCalled();
+  });
+
+  it('skips the gate for a metering-exempt provider and bills with no hold', async () => {
+    mocks.userRow.mockResolvedValue([{ subscriptionTier: 'pro', role: 'admin', currentAiProvider: 'glm', currentAiModel: 'glm-4.6' }]);
+    mocks.provider.mockResolvedValue({ model: {}, provider: 'glm', modelName: 'glm-4.6' });
+    await post();
+    expect(mocks.gate).not.toHaveBeenCalled();
+    await streamOptions().onFinish?.({ totalUsage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, steps: [] });
+    expect(mocks.trackUsage).toHaveBeenCalledWith(expect.objectContaining({ provider: 'glm', holdId: undefined }));
+  });
+});

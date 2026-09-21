@@ -19,6 +19,7 @@ import {
   applyEnqueueQueuedSend,
   applyRemoveQueuedSend,
   applyShiftQueuedSend,
+  applyRequeueQueuedSend,
   applyClearQueuedSends,
   applySetQueuedSends,
   MAX_QUEUED_SENDS,
@@ -139,6 +140,8 @@ interface ConversationMessagesState {
   removeQueuedSend: (conversationId: string, messageId: string) => void;
   /** Removes and returns the OLDEST entry — what the drain dispatches next — or null when empty. */
   shiftQueuedSend: (conversationId: string) => UIMessage | null;
+  /** Puts a drained entry whose dispatch rejected back at the head (bypasses the enqueue cap). */
+  requeueQueuedSend: (conversationId: string, message: UIMessage) => void;
   /** Empties the conversation's queue (tray clear-all, double-ESC interrupt). */
   clearQueuedSends: (conversationId: string) => void;
   /** Replaces the queue wholesale (restore-on-mount); entries keep their minted ids. */
@@ -317,6 +320,12 @@ export const useConversationMessagesStore = create<ConversationMessagesState>((s
     const [head] = queue;
     set({ queuedSendsByConversationId: applyShiftQueuedSend(state.queuedSendsByConversationId, conversationId) });
     return head;
+  },
+
+  requeueQueuedSend: (conversationId, message) => {
+    set((state) => ({
+      queuedSendsByConversationId: applyRequeueQueuedSend(state.queuedSendsByConversationId, { conversationId, message }),
+    }));
   },
 
   clearQueuedSends: (conversationId) => {

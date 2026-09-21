@@ -16,6 +16,9 @@ import type { ChatSessionStatus } from '../useChatSession';
  * reload). `consumeStreamJoin` resolving with no `resumeFromSeq` and having
  * delivered nothing is exactly the "stream was already over" join.
  */
+const toastError = vi.hoisted(() => vi.fn());
+vi.mock('sonner', () => ({ toast: { error: toastError } }));
+
 vi.mock('@/lib/ai/core/stream-join-client', () => ({
   consumeStreamJoin: vi.fn(() => Promise.resolve({})),
   StreamJoinError: class StreamJoinError extends Error {
@@ -62,6 +65,7 @@ const msgText = (message: UIMessage): string =>
 
 describe('useQueuedSends', () => {
   beforeEach(() => {
+    toastError.mockClear();
     window.localStorage.clear();
     clearLiveStreams();
     useConversationMessagesStore.setState({ queuedSendsByConversationId: {} });
@@ -342,7 +346,7 @@ describe('useQueuedSends', () => {
     expect(dispatchA.mock.calls.length + dispatchB.mock.calls.length).toBe(1);
   });
 
-  it('a rejected drained dispatch does not wedge the queue', async () => {
+  it('a rejected drained dispatch keeps the prompt queued at the head, surfaces an error, and retries it next turn', async () => {
     const dispatch = vi.fn()
       .mockImplementationOnce(() => Promise.reject(new Error('402 credit gate')))
       .mockImplementation(() => undefined);
@@ -350,15 +354,66 @@ describe('useQueuedSends', () => {
 
     act(() => { hook.result.current.enqueue('first'); });
     act(() => { hook.result.current.enqueue('second'); });
+    const firstId = hook.result.current.queuedSends[0].id;
 
     fireEnd('turn-1', CONV);
     expect(dispatch).toHaveBeenCalledTimes(1);
-    await flushMicrotasks(); // the rejection releases the claim
+    await flushMicrotasks(); // the rejection restores the entry and releases the claim
+
+    // Never silently lost: back at the head, same id (idempotent re-dispatch), persisted.
+    expect(hook.result.current.queuedSends.map(msgText)).toEqual(['first', 'second']);
+    expect(hook.result.current.queuedSends[0].id).toBe(firstId);
+    expect(JSON.parse(window.localStorage.getItem(`pagespace:queued-sends:${CONV}`) ?? '[]').map((m: UIMessage) => m.id)[0]).toBe(firstId);
+    expect(toastError).toHaveBeenCalledTimes(1);
+
+    // Not wedged: the next terminal drains again, and it is the SAME prompt.
+    await new Promise((r) => setTimeout(r, 10));
+    fireEnd('turn-2', CONV);
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    expect((dispatch.mock.calls[1][0] as UIMessage).id).toBe(firstId);
+    expect(hook.result.current.queuedSends.map(msgText)).toEqual(['second']);
+  });
+
+  it('a synchronously throwing drained dispatch keeps the prompt queued too', async () => {
+    const dispatch = vi.fn()
+      .mockImplementationOnce(() => { throw new Error('sendMessage threw'); })
+      .mockImplementation(() => undefined);
+    const { hook } = mount({ dispatch });
+    act(() => { hook.result.current.enqueue('only'); });
+
+    fireEnd('turn-1', CONV);
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(hook.result.current.queuedSends.map(msgText)).toEqual(['only']);
+    expect(toastError).toHaveBeenCalledTimes(1);
 
     await new Promise((r) => setTimeout(r, 10));
     fireEnd('turn-2', CONV);
     expect(dispatch).toHaveBeenCalledTimes(2);
-    expect(msgText(dispatch.mock.calls[1][0] as UIMessage)).toBe('second');
+    expect(msgText(dispatch.mock.calls[1][0] as UIMessage)).toBe('only');
+  });
+
+  it('a rejection lands back on a queue the user filled meanwhile without dropping anything, across a reload', async () => {
+    let rejectDispatch: (error: Error) => void = () => {};
+    const dispatch = vi.fn()
+      .mockImplementationOnce(() => new Promise((_, reject) => { rejectDispatch = reject; }))
+      .mockImplementation(() => undefined);
+    const { hook, enqueue } = mount({ dispatch });
+    for (let i = 1; i <= 10; i++) enqueue(`m${i}`);
+
+    fireEnd('turn-1', CONV); // m1 goes out; 9 left
+    expect(enqueue('m11')).toBe(true); // the user tops the queue back up to the cap
+    await act(async () => { rejectDispatch(new Error('network')); await Promise.resolve(); await Promise.resolve(); });
+
+    const expected = ['m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm8', 'm9', 'm10', 'm11'];
+    expect(hook.result.current.queuedSends.map(msgText)).toEqual(expected);
+    expect(hook.result.current.isQueueFull).toBe(true);
+
+    // A reload restores every entry — the requeued one is not truncated away.
+    hook.unmount();
+    useConversationMessagesStore.setState({ queuedSendsByConversationId: {} });
+    addLiveStream('turn-live', CONV); // keep the remount from draining so the restore is observable
+    const remounted = mount({ dispatch: vi.fn() });
+    expect(remounted.hook.result.current.queuedSends.map(msgText)).toEqual(expected);
   });
 
   it('ignores end events for other conversations', () => {

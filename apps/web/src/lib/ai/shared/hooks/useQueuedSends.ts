@@ -9,6 +9,7 @@ import { buildUserMessage } from '@/lib/ai/streams/buildUserMessage';
 import { readPersistedQueuedSends } from '@/stores/conversationMessages/queuedSendsPersistence';
 import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
 import { isThenable } from '@/lib/ai/streams/isThenable';
+import { toast } from 'sonner';
 import type { ChatSessionStatus } from './useChatSession';
 
 const EMPTY_QUEUED: UIMessage[] = [];
@@ -66,7 +67,8 @@ const CLAIM_FANOUT_WINDOW_MS = 5;
  *    and the same event then drains the next entry. A dispatch that rejects
  *    (a failed admission starts no turn) or a taker that unmounts releases
  *    it too, so the queue cannot wedge waiting for a terminal that will
- *    never come.
+ *    never come — and a rejected dispatch puts its entry back at the head of
+ *    the queue first, so a failed admission never loses the prompt.
  *
  * 3. ANY OTHER LIVE STREAM for the conversation — own or remote — blocks the
  *    drain. The end event proves THE ENDED session is over, nothing about a
@@ -184,24 +186,25 @@ export function useQueuedSends({
     const token = ++drainClaimToken;
     drainClaims.set(endedConversationId, { token, at: Date.now() });
     tookClaimTokenRef.current = token;
-    try {
-      const result = dispatchRef.current(next);
-      if (isThenable(result)) {
-        Promise.resolve(result).catch(() => {
-          // A failed admission started no turn; release so the queue is not
-          // wedged waiting for a terminal event that will never come. Only
-          // OUR claim — a newer dispatch's is not ours to release.
-          if (drainClaims.get(endedConversationId)?.token === token) {
-            drainClaims.delete(endedConversationId);
-          }
-        });
-      }
-    } catch {
-      // Same, for a synchronous throw — the dispatch implementations surface
-      // their own errors (rollback + toast); nothing to rethrow.
+    // A failed admission (network error, the 402 credit gate) started no turn.
+    // The entry was shifted out BEFORE dispatch, so put it back at the head —
+    // same id, so the retry is idempotent against the server's upsert-by-id —
+    // and say so: the prompt must never vanish silently. Then release OUR claim
+    // (a newer dispatch's is not ours) so the next terminal event drains it
+    // again instead of the queue wedging behind a terminal that will never come.
+    const onRejected = () => {
+      conversationMessagesActions.requeueQueuedSend(endedConversationId, next);
+      toast.error('Your queued message could not be sent. It is still in the queue and will retry after the next response.');
       if (drainClaims.get(endedConversationId)?.token === token) {
         drainClaims.delete(endedConversationId);
       }
+    };
+    try {
+      const result = dispatchRef.current(next);
+      if (isThenable(result)) Promise.resolve(result).catch(onRejected);
+    } catch {
+      // Same, for a synchronous throw; nothing to rethrow.
+      onRejected();
     }
   }, []);
 

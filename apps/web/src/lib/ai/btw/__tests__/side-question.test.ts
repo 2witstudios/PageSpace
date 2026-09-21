@@ -40,6 +40,7 @@ describe('detached side questions', () => {
       question: 'What changed?',
       snapshot: 'safe context',
       abortSignal: controller.signal,
+      onSettle: vi.fn().mockResolvedValue(undefined),
       streamText,
     });
     expect(await response.text()).toBe('answer');
@@ -50,7 +51,37 @@ describe('detached side questions', () => {
       prompt: expect.stringContaining('<conversation_snapshot>\nsafe context\n</conversation_snapshot>'),
     }));
     expect(streamText.mock.calls[0][0].prompt).toContain('<side_question>\nWhat changed?\n</side_question>');
-    expect(streamText.mock.calls[0][0]).not.toHaveProperty('onFinish');
+    // No streaming-content hook: the terminal callbacks only meter the run (below).
     expect(streamText.mock.calls[0][0]).not.toHaveProperty('onChunk');
+  });
+
+  it('settles exactly once however the stream ends, summing the completed steps when it does not finish', async () => {
+    const run = () => {
+      const streamText = vi.fn().mockReturnValue({ toTextStreamResponse: () => new Response('answer') });
+      const onSettle = vi.fn().mockResolvedValue(undefined);
+      createSideQuestionStream({ model: {} as never, question: 'q', snapshot: 's', abortSignal: new AbortController().signal, onSettle, streamText });
+      return { options: streamText.mock.calls[0][0], onSettle };
+    };
+    const step = { usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 } };
+
+    const finished = run();
+    await finished.options.onFinish({ totalUsage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 }, steps: [step] });
+    await finished.options.onAbort({ steps: [step] });
+    await finished.options.onError({ error: new Error('late') });
+    expect(finished.onSettle).toHaveBeenCalledTimes(1);
+    expect(finished.onSettle).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'finished', usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 } }));
+
+    const aborted = run();
+    await aborted.options.onAbort({ steps: [step, step] });
+    await aborted.options.onFinish({ totalUsage: {}, steps: [] });
+    expect(aborted.onSettle).toHaveBeenCalledTimes(1);
+    expect(aborted.onSettle).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'aborted', usage: { inputTokens: 20, outputTokens: 10, totalTokens: 30 } }));
+
+    const errored = run();
+    await errored.options.onStepFinish(step);
+    const error = new Error('provider 500');
+    await errored.options.onError({ error });
+    expect(errored.onSettle).toHaveBeenCalledTimes(1);
+    expect(errored.onSettle).toHaveBeenCalledWith({ outcome: 'errored', usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 }, steps: [step], error });
   });
 });
