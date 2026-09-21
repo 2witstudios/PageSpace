@@ -64,6 +64,7 @@ export async function issueAgentSignupChallenge(input: {
       .select({ id: agentSignupChallenges.id })
       .from(agentSignupChallenges)
       .where(lt(agentSignupChallenges.expiresAt, input.now))
+      .orderBy(agentSignupChallenges.expiresAt)
       .limit(CHALLENGE_PRUNE_BATCH);
     await db.delete(agentSignupChallenges).where(inArray(agentSignupChallenges.id, expired));
   } catch (error) {

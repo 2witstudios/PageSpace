@@ -31,6 +31,8 @@ const MAX_QUESTION_CHARS = 2_000;
 const SIDE_QUESTION_TIMEOUT_MS = 55_000;
 
 export async function POST(request: Request) {
+  // Measured from the start of the request, so auth, reads and the snapshot count against it.
+  const deadline = Date.now() + SIDE_QUESTION_TIMEOUT_MS;
   const auth = await authenticateRequestWithOptions(request, { allow: ['session'] as const, requireCSRF: true });
   if (isAuthError(auth)) {
     auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'ai_btw', resourceId: 'side-question', details: { reason: 'auth_failed', method: 'POST', authFailureReason: auth.authFailureReason }, riskScore: 0.5 });
@@ -86,7 +88,7 @@ export async function POST(request: Request) {
       model: provider.model,
       question: question.trim(),
       snapshot,
-      abortSignal: AbortSignal.timeout(SIDE_QUESTION_TIMEOUT_MS),
+      abortSignal: AbortSignal.timeout(Math.max(1, deadline - Date.now())),
       // The chat turn's settle path: trackUsage writes ai_usage_logs and settles the
       // hold through consumeCredits (or releases it on a failed write). It always
       // logs a row, even with no usage, so the orphan sweep can recover the spend.

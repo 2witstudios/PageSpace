@@ -1,7 +1,7 @@
 /**
  * Who may rotate an agent's secret, and over which credential (ADR 0007
  * Decision 14). Rotation is a key-management action: whoever holds the new
- * secret IS the agent. So the owner path is browser-session only (a narrowly
+ * secret IS the agent. So the owner path is session-only (a narrowly
  * scoped OAuth grant an owner handed to some other client must not be able to
  * take over their agent), and the agent itself may use its own ps_at_ only
  * when that token carries the `account` scope — what the jwt-bearer grant
@@ -19,7 +19,7 @@ const unclaimed = { ownerUserId: null };
 
 describe('agentSecretActor', () => {
   describe('given the agent itself', () => {
-    it('with a browser session, should be self', () => {
+    it('with a session, should be self', () => {
       expect(agentSecretActor({ caller: session('a'), agentUserId: 'a', identity: unclaimed })).toBe('self');
     });
 
@@ -33,7 +33,7 @@ describe('agentSecretActor', () => {
   });
 
   describe("given the agent's owner", () => {
-    it('with a browser session, should be owner', () => {
+    it('with a session, should be owner', () => {
       expect(agentSecretActor({ caller: session('h'), agentUserId: 'a', identity: claimed })).toBe('owner');
     });
 

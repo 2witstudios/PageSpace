@@ -2,9 +2,9 @@
  * POST /api/agent/secret/rotate — replace an agent's `ps_agent_*` secret (ADR
  * 0007 Decision 14; auth.md "Rotate / Revoke").
  *
- * Caller: the agent itself (a browser session, or the `account`-scoped
+ * Caller: the agent itself (a session, or the `account`-scoped
  * `ps_at_` its own jwt-bearer grant minted — CSRF is enforced for sessions only) or the human who claimed it,
- * from a browser SESSION only, naming the agent with `agentId` (see
+ * from a SESSION only, naming the agent with `agentId` (see
  * `agentSecretActor` for why an owner's OAuth token is never enough). Anyone else, a non-agent, or a revoked agent answers the same
  * 404. The old secret stops matching immediately; `revokeExistingTokens` also
  * bumps `users.tokenVersion` so every live session and token dies. The new

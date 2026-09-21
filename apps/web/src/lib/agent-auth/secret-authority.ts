@@ -4,7 +4,8 @@
  *
  * Rotation is a key-management action: whoever holds the new secret IS the
  * agent. So:
- *  - the OWNER may rotate only from a browser session. An OAuth access token
+ *  - the OWNER may rotate only from a session (browser cookie, or the desktop
+ *    and mobile apps' own session bearer — full human sessions). An OAuth access token
  *    an owner holds may be a narrowly scoped grant to some other client; the
  *    `account` scope names account access, not "may take over my agents", so
  *    no OAuth token of the owner's is accepted here;
@@ -21,7 +22,7 @@
 export type AgentSecretActor = 'self' | 'owner';
 
 /**
- * How the caller authenticated: a browser session; the account-scoped access
+ * How the caller authenticated: a session; the account-scoped access
  * token minted by the agent's own jwt-bearer grant; or any other token.
  */
 export type AgentSecretCallerCredential = 'session' | 'agent_grant_token' | 'other_token';
