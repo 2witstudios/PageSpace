@@ -4,11 +4,22 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { conversations } from '@pagespace/db/schema/conversations';
+import { users } from '@pagespace/db/schema/auth';
 import { canAccessConversation } from '@pagespace/lib/permissions/conversation-access';
 import { messageRepository } from '@/lib/repositories/message-repository';
 import { getActivePlan } from '@/lib/ai/core/plan-binding';
 import { createAIProvider } from '@/lib/ai/core/provider-factory';
 import { buildSideQuestionSnapshot, createSideQuestionStream } from '@/lib/ai/btw/side-question';
+import { resolveProviderModel } from '@/lib/ai/core/ai-providers-config';
+import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { releaseHold } from '@pagespace/lib/billing/credit-consume';
+import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
+import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
+import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
+import { AIMonitoring, extractOpenRouterCostDollars, extractOpenRouterGenerationIds } from '@pagespace/lib/monitoring/ai-monitoring';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
+import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
 
 export const maxDuration = 60;
 const MAX_QUESTION_CHARS = 2_000;
@@ -31,8 +42,71 @@ export async function POST(request: Request) {
     auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'ai_btw', resourceId: conversationId, details: { reason: 'conversation_not_accessible', method: 'POST' }, riskScore: 0.5 });
     return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
   }
-  const provider = await createAIProvider(auth.userId, {});
-  if ('error' in provider) return NextResponse.json({ error: provider.error }, { status: provider.status });
-  const snapshot = await buildSideQuestionSnapshot({ conversationId, readMessages: () => messageRepository.getMessagesByConversationId(conversationId), readPlan: async () => (await getActivePlan(conversationId, auth.userId))?.title ?? null });
-  return createSideQuestionStream({ model: provider.model, question: question.trim(), snapshot, abortSignal: request.signal });
+  // Prepaid credit gate BEFORE the provider is resolved: a side question is a real
+  // model call, so a zero balance — and an unclaimed agent (402 requires_funding) —
+  // is refused here and never streams. Metering-exempt providers skip the hold,
+  // exactly as the chat turn does (see isMeteringExempt in trackAIUsage).
+  const userId = auth.userId;
+  const [gateUser] = await db.select({ subscriptionTier: users.subscriptionTier, currentAiProvider: users.currentAiProvider, currentAiModel: users.currentAiModel }).from(users).where(eq(users.id, userId)).limit(1);
+  const { provider: gateProvider, model: gateModel } = resolveProviderModel(undefined, undefined, gateUser?.currentAiProvider, gateUser?.currentAiModel);
+  let holdId: string | undefined;
+  // Becomes true once the stream owns the hold (its settle callback releases it via
+  // trackUsage). Until then, every exit below must release it in `finally`.
+  let holdHandedOff = false;
+  try {
+    if (!isMeteringExempt(gateProvider)) {
+      const creditGate = await canConsumeAI(userId, (gateUser?.subscriptionTier ?? 'free') as SubscriptionTier, {
+        estCostCents: estimateChatHoldCentsForModel(gateModel),
+        maxInFlight: MAX_CHAT_INFLIGHT,
+      });
+      if (!creditGate.allowed) {
+        auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'ai_btw', resourceId: conversationId, details: { reason: 'credit_gate', gateReason: creditGate.reason, method: 'POST' }, riskScore: 0.2 });
+        return creditGateErrorResponse(creditGate.reason);
+      }
+      holdId = creditGate.holdId;
+    }
+    const provider = await createAIProvider(userId, {}, gateUser ? { user: { currentAiProvider: gateUser.currentAiProvider, currentAiModel: gateUser.currentAiModel } } : undefined);
+    if ('error' in provider) return NextResponse.json({ error: provider.error }, { status: provider.status });
+    const snapshot = await buildSideQuestionSnapshot({ conversationId, readMessages: () => messageRepository.getMessagesByConversationId(conversationId), readPlan: async () => (await getActivePlan(conversationId, userId))?.title ?? null });
+    const startTime = Date.now();
+    const response = createSideQuestionStream({
+      model: provider.model,
+      question: question.trim(),
+      snapshot,
+      abortSignal: request.signal,
+      // The chat turn's settle path: trackUsage writes ai_usage_logs and settles the
+      // hold through consumeCredits (or releases it on a failed write). It always
+      // logs a row, even with no usage, so the orphan sweep can recover the spend.
+      onSettle: async ({ success, usage, steps }) => {
+        try {
+          await AIMonitoring.trackUsage({
+            userId,
+            provider: provider.provider,
+            model: provider.modelName,
+            source: 'chat',
+            inputTokens: usage?.inputTokens,
+            outputTokens: usage?.outputTokens,
+            totalTokens: usage?.totalTokens,
+            cachedInputTokens: usage?.cachedInputTokens,
+            reasoningTokens: usage?.reasoningTokens,
+            providerCostDollars: extractOpenRouterCostDollars(steps),
+            openrouterGenerationIds: extractOpenRouterGenerationIds(steps),
+            duration: Date.now() - startTime,
+            conversationId,
+            success,
+            holdId,
+            metadata: { sideQuestion: true },
+          });
+        } catch (trackingError) {
+          loggers.api.error('Side question: could not track AI usage', trackingError as Error, { conversationId });
+        }
+      },
+    });
+    holdHandedOff = true;
+    return response;
+  } finally {
+    // The stream never took ownership (gate refused, provider error, snapshot or
+    // stream construction threw) — free the reservation.
+    if (holdId && !holdHandedOff) void releaseHold(holdId).catch(() => {});
+  }
 }
