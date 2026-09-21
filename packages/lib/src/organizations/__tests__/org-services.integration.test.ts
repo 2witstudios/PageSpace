@@ -831,14 +831,19 @@ describe('org services (real Postgres)', () => {
       }
     });
 
-    it('ORG-6 everyone whose drive row the delete revokes is kicked from that drive\'s realtime rooms only after it commits, never the new owner, and a refused delete kicks no one', async () => {
+    it('ORG-6 everyone whose access the delete ends is kicked from that drive\'s realtime rooms only after it commits: revoked rows and rowless org Owner/Admin power, never the new owner or someone still invited, and a refused delete kicks no one', async () => {
       const { jono, org } = await seedNorthwind();
       const priya = await person('Priya Nair');
       const marcus = await person('Marcus Oyelaran');
+      const dana = await person('Dana Kim');
+      const aisha = await person('Aisha Bello');
       await addMember(org.id, priya.id, 'ADMIN');
       await addMember(org.id, marcus.id, 'MEMBER');
+      // Dana reaches every drive through her Admin role alone; Aisha too, but she was also invited to Finance.
+      await addMember(org.id, dana.id, 'ADMIN');
+      await addMember(org.id, aisha.id, 'ADMIN');
       const product = await seedDrive(priya.id, org.id, { name: 'Product' });
-      const finance = await seedDrive(priya.id, org.id, { name: 'Finance' });
+      const finance = await seedDrive(priya.id, org.id, { name: 'Finance', orgVisibility: 'PRIVATE' });
       const wiki = await seedDrive(jono.id, org.id, { name: 'Wiki' });
       await ownerRow(product.id, priya.id);
       await ownerRow(finance.id, priya.id);
@@ -847,6 +852,7 @@ describe('org services (real Postgres)', () => {
       await db.insert(driveMembers).values([
         { driveId: product.id, userId: marcus.id, role: 'MEMBER', source: 'org', acceptedAt: new Date() },
         { driveId: finance.id, userId: marcus.id, role: 'MEMBER', source: 'org', acceptedAt: new Date() },
+        { driveId: finance.id, userId: aisha.id, role: 'MEMBER', source: 'invite', acceptedAt: new Date() },
       ]);
 
       const kicked: { userId: string; driveId: string; rowsAtKick: number }[] = [];
@@ -881,9 +887,19 @@ describe('org services (real Postgres)', () => {
         `${a.driveId}:${a.userId}`.localeCompare(`${b.driveId}:${b.userId}`);
       expect(kicked.sort(byKey)).toEqual(
         [
+          // Revoked rows: Priya's OWNER rows as former lead, Marcus's org row on Finance.
           { userId: priya.id, driveId: product.id, rowsAtKick: 0 },
           { userId: priya.id, driveId: finance.id, rowsAtKick: 0 },
           { userId: marcus.id, driveId: finance.id, rowsAtKick: 0 },
+          // Rowless org power ends: the Admins on every drive they do not now own, and Jono on
+          // Product, which now belongs to Marcus.
+          { userId: priya.id, driveId: wiki.id, rowsAtKick: 0 },
+          { userId: dana.id, driveId: product.id, rowsAtKick: 0 },
+          { userId: dana.id, driveId: finance.id, rowsAtKick: 0 },
+          { userId: dana.id, driveId: wiki.id, rowsAtKick: 0 },
+          { userId: aisha.id, driveId: product.id, rowsAtKick: 0 },
+          { userId: aisha.id, driveId: wiki.id, rowsAtKick: 0 },
+          { userId: jono.id, driveId: product.id, rowsAtKick: 0 },
         ].sort(byKey),
       );
     });

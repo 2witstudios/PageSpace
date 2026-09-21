@@ -11,21 +11,22 @@
  * - Deleting the org is every member leaving it: what each minted on a drive they do
  *   not end up owning (explicit key scopes, OAuth grants, share links, agent
  *   memberships) is revoked with it, as leaveOrganization revokes a leaver's.
- * - Everyone whose drive row the delete revokes (that former lead, and every
- *   org-materialized member) is kicked from the drive's realtime rooms after commit;
- *   the drive's new owner never is.
+ * - Everyone whose access the delete ends is kicked from the drive's realtime rooms
+ *   after commit: the former lead, every org-materialized member, and every org Owner
+ *   or Admin who reached it through their org role alone. The drive's new owner, and
+ *   anyone still invited to it, never is.
  * - Nothing moves silently: a live drive without a choice refuses the whole delete,
  *   and the returned steps name every drive's destination for the confirmation and
  *   for the per-drive audit event the caller writes.
  */
 import { db } from '@pagespace/db/db';
-import { and, eq, inArray } from '@pagespace/db/operators';
+import { and, eq, inArray, isNotNull } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
 import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
 import { kickForDriveMembershipRevocation } from '../permissions/revocation-kick';
 import { revokeOrgDriveGrantsForMembers } from './leave';
-import { settleInBatches } from '../services/org-membership-sync-core';
+import { chunk, settleInBatches } from '../services/org-membership-sync-core';
 
 export type DriveDeletionChoice =
   | { driveId: string; action: 'transfer'; toUserId: string }
@@ -122,6 +123,11 @@ const deleteOrganizationDeps: DeleteOrganizationDeps = {
 
 type RevokedRow = { userId: string; driveId: string };
 
+const pairKey = (row: RevokedRow) => `${row.driveId}:${row.userId}`;
+
+/** Ids per statement when reading who is still invited, far under Postgres's bind limit. */
+const STILL_INVITED_CHUNK = 500;
+
 /** Kicks in flight at once; each enumerates pages and conversations, as the org-membership publisher bounds its events. */
 const KICK_CONCURRENCY = 20;
 
@@ -134,7 +140,7 @@ export async function deleteOrganization(
   },
   deps: DeleteOrganizationDeps = deleteOrganizationDeps,
 ): Promise<DeleteOrganizationResult> {
-  const revoked: RevokedRow[] = [];
+  const toKick: RevokedRow[] = [];
   const result = await db.transaction(async (tx): Promise<DeleteOrganizationResult> => {
     const [org] = await tx
       .select({ ownerId: organizations.ownerId })
@@ -149,7 +155,7 @@ export async function deleteOrganization(
       .where(eq(drives.orgId, input.orgId))
       .for('update');
     const members = await tx
-      .select({ userId: orgMembers.userId })
+      .select({ userId: orgMembers.userId, role: orgMembers.role })
       .from(orgMembers)
       .where(eq(orgMembers.orgId, input.orgId));
 
@@ -180,7 +186,7 @@ export async function deleteOrganization(
       // The former lead's OWNER row would keep them inside a drive that is no longer theirs, and
       // come back with it on restore; drop it as reassignLedOrgDrives does.
       if (before && before.ownerId !== step.ownerId) {
-        revoked.push(...(await tx.delete(driveMembers).where(and(
+        toKick.push(...(await tx.delete(driveMembers).where(and(
           eq(driveMembers.driveId, step.driveId),
           eq(driveMembers.userId, before.ownerId),
           eq(driveMembers.role, 'OWNER'),
@@ -206,13 +212,33 @@ export async function deleteOrganization(
         .returning({ userId: driveMembers.userId, driveId: driveMembers.driveId });
       // A drive's new owner keeps it through drives.ownerId, so their live connection stays.
       const newOwner = new Map(plan.steps.map((step) => [step.driveId, step.ownerId]));
-      revoked.push(...orgRows.filter((row) => newOwner.get(row.driveId) !== row.userId));
+      toKick.push(...orgRows.filter((row) => newOwner.get(row.driveId) !== row.userId));
+
+      // Org Owner and Admin power reaches a drive with no row at all, and ends with the org.
+      const withOrgPower = members.filter((member) => member.role !== 'MEMBER').map((member) => member.userId);
+      const candidates = new Map<string, RevokedRow>();
+      for (const row of toKick) candidates.set(pairKey(row), row);
+      for (const step of plan.steps) {
+        for (const userId of withOrgPower) {
+          if (userId !== step.ownerId) candidates.set(pairKey({ userId, driveId: step.driveId }), { userId, driveId: step.driveId });
+        }
+      }
+      // Someone still invited to the drive keeps it, and their connection with it.
+      const candidateUsers = [...new Set([...candidates.values()].map((row) => row.userId))];
+      for (const ids of chunk(driveIds, STILL_INVITED_CHUNK)) {
+        const stillIn = candidateUsers.length === 0 ? [] : await tx
+          .select({ userId: driveMembers.userId, driveId: driveMembers.driveId })
+          .from(driveMembers)
+          .where(and(inArray(driveMembers.driveId, ids), inArray(driveMembers.userId, candidateUsers), isNotNull(driveMembers.acceptedAt)));
+        for (const row of stillIn) candidates.delete(pairKey(row));
+      }
+      toKick.splice(0, toKick.length, ...candidates.values());
     }
 
     await tx.delete(organizations).where(eq(organizations.id, input.orgId));
     return { ok: true, steps: plan.steps };
   });
   // Best effort once committed: a failed kick must not report a completed delete as failed.
-  if (result.ok) await settleInBatches(revoked.map((row) => () => deps.kick(row)), KICK_CONCURRENCY);
+  if (result.ok) await settleInBatches(toKick.map((row) => () => deps.kick(row)), KICK_CONCURRENCY);
   return result;
 }
