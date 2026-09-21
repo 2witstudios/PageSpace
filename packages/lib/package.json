@@ -2602,6 +2602,12 @@
       "auth/agent/reserved-email": [
         "./dist/auth/agent/reserved-email.d.ts"
       ],
+      "billing/classify-gate-refusal": [
+        "./dist/billing/classify-gate-refusal.d.ts"
+      ],
+      "billing/stripe-customer-eligibility": [
+        "./dist/billing/stripe-customer-eligibility.d.ts"
+      ],
       "client-safe": [
         "./dist/client-safe.d.ts"
       ],
