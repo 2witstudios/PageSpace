@@ -16,8 +16,10 @@ import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { users, mcpTokens } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
-import { driveMembers, mcpTokenDrives } from '@pagespace/db/schema/members';
-import { driveShareLinks } from '@pagespace/db/schema/share-links';
+import { driveAgentMembers, driveMembers, mcpTokenDrives } from '@pagespace/db/schema/members';
+import { driveShareLinks, pageShareLinks } from '@pagespace/db/schema/share-links';
+import { oauthAccessTokens, oauthClients, oauthRefreshTokens } from '@pagespace/db/schema/oauth';
+import { hashToken } from '../../auth/token-utils';
 import { organizations, orgInvitations, orgMembers } from '@pagespace/db/schema/organizations';
 import {
   countOrgSeats,
@@ -62,6 +64,7 @@ describe('org services (real Postgres)', () => {
   const createdUsers: string[] = [];
   const createdOrgs: string[] = [];
   const createdDrives: string[] = [];
+  const createdClients: string[] = [];
 
   beforeAll(async () => {
     try {
@@ -92,6 +95,8 @@ describe('org services (real Postgres)', () => {
       await db.delete(organizations).where(inArray(organizations.id, orgIds));
     }
     if (userIds.length) await db.delete(users).where(inArray(users.id, userIds));
+    const clientIds = createdClients.splice(0);
+    if (clientIds.length) await db.delete(oauthClients).where(inArray(oauthClients.id, clientIds));
   });
 
   // The lib integration run shares one process across files, each with its own pool; this
@@ -138,7 +143,8 @@ describe('org services (real Postgres)', () => {
   }
 
   async function seedDrive(ownerId: string, orgId: string, values: Partial<typeof drives.$inferInsert> = {}) {
-    const drive = await factories.createDrive(ownerId, { orgId, ...values });
+    // A unique slug: the factory's random one can repeat inside an org (drives_org_slug_unique).
+    const drive = await factories.createDrive(ownerId, { orgId, slug: `drive-${createId()}`, ...values });
     createdDrives.push(drive.id);
     return drive;
   }
@@ -882,7 +888,7 @@ describe('org services (real Postgres)', () => {
       );
     });
 
-    it('ORG-6 deleting an org revokes what every member minted on a drive they do not end up owning: an explicit-ADMIN key scope opens nothing and share links go', async () => {
+    it('ORG-6 deleting an org revokes what every member minted on a drive they do not end up owning: key scopes, OAuth grants, share links and agent memberships; the new owner keeps theirs', async () => {
       const { jono, org } = await seedNorthwind();
       const priya = await person('Priya Nair');
       const marcus = await person('Marcus Oyelaran');
@@ -893,22 +899,64 @@ describe('org services (real Postgres)', () => {
       const product = await seedDrive(priya.id, org.id, { name: 'Product' });
       const finance = await seedDrive(priya.id, org.id, { name: 'Finance' });
       const wiki = await seedDrive(jono.id, org.id, { name: 'Wiki' });
+      const productPage = await factories.createPage(product.id);
 
-      async function keyOn(userId: string, driveId: string) {
+      /** One of each thing `userId` can hand out on `driveId`, as ids to look up afterwards. */
+      async function mint(userId: string, driveId: string, pageId: string | null) {
         const [token] = await db.insert(mcpTokens)
           .values({ userId, tokenHash: `h-${createId()}`, tokenPrefix: 'mcp_', name: 'key' }).returning();
         await db.insert(mcpTokenDrives).values({ tokenId: token.id, driveId, role: 'ADMIN' });
-        return token.id;
+        const [driveLink] = await db.insert(driveShareLinks)
+          .values({ driveId, token: `dl-${createId()}`, createdBy: userId }).returning();
+        const [pageLink] = pageId
+          ? await db.insert(pageShareLinks).values({ pageId, token: `pl-${createId()}`, permissions: ['VIEW'], createdBy: userId }).returning()
+          : [];
+        const home = await factories.createDrive(userId, { name: 'Agent home', slug: `agent-home-${createId()}` });
+        createdDrives.push(home.id);
+        const agent = await factories.createPage(home.id, { type: 'AI_CHAT', title: 'Agent' });
+        const [agentRow] = await db.insert(driveAgentMembers)
+          .values({ driveId, agentPageId: agent.id, role: 'MEMBER', addedBy: userId }).returning();
+        const [client] = await db.insert(oauthClients).values({
+          clientId: `client-${createId()}`, name: 'Test client', clientType: 'public', redirectUris: ['http://127.0.0.1/callback'],
+        }).returning();
+        createdClients.push(client.id);
+        const familyId = createId();
+        const now = Date.now();
+        await db.insert(oauthAccessTokens).values({
+          tokenHash: hashToken(`ps_at_${createId()}`), tokenPrefix: 'ps_at_test', familyId, clientId: client.id, userId,
+          scopes: [`drive:${driveId}`], tokenVersion: 0, expiresAt: new Date(now + 15 * 60_000),
+        });
+        return { tokenId: token.id, driveLinkId: driveLink.id, pageLinkId: pageLink?.id ?? null, agentRowId: agentRow.id, familyId };
       }
-      // Priya minted an explicit-ADMIN key scope and a share link on Product while she led it.
-      const priyaKey = await keyOn(priya.id, product.id);
-      const [priyaLink] = await db.insert(driveShareLinks)
-        .values({ driveId: product.id, token: `dl-${createId()}`, createdBy: priya.id }).returning();
-      const lenaKey = await keyOn(lena.id, finance.id);
-      // Marcus is about to own Product and Jono keeps Wiki: what they minted there is theirs to keep.
-      const marcusKey = await keyOn(marcus.id, product.id);
-      const jonoKey = await keyOn(jono.id, wiki.id);
-      expect(await hasAppDriveMembership(priyaKey, product.id)).toBe(true);
+
+      async function standing(m: Awaited<ReturnType<typeof mint>>, driveId: string) {
+        const [driveLinks, pageLinks, agents, access] = await Promise.all([
+          db.select().from(driveShareLinks).where(eq(driveShareLinks.id, m.driveLinkId)),
+          m.pageLinkId ? db.select().from(pageShareLinks).where(eq(pageShareLinks.id, m.pageLinkId)) : Promise.resolve([]),
+          db.select().from(driveAgentMembers).where(eq(driveAgentMembers.id, m.agentRowId)),
+          db.select({ revokedAt: oauthAccessTokens.revokedAt }).from(oauthAccessTokens).where(eq(oauthAccessTokens.familyId, m.familyId)),
+        ]);
+        return {
+          key: await hasAppDriveMembership(m.tokenId, driveId),
+          driveLink: driveLinks.length === 1,
+          pageLink: pageLinks.length === 1,
+          agent: agents.length === 1,
+          oauth: access.every((t) => t.revokedAt === null),
+        };
+      }
+
+      // Priya minted on Product while she led it; Lena on Finance. Marcus is about to own Product
+      // and Jono keeps Wiki: what they minted there is theirs to keep.
+      const priyaOnProduct = await mint(priya.id, product.id, productPage.id);
+      const lenaOnFinance = await mint(lena.id, finance.id, null);
+      const marcusOnProduct = await mint(marcus.id, product.id, productPage.id);
+      const jonoOnWiki = await mint(jono.id, wiki.id, null);
+      const all = { key: true, driveLink: true, pageLink: true, agent: true, oauth: true };
+      expect(await standing(priyaOnProduct, product.id)).toEqual(all);
+      // An agent that lives in Product itself is Product's own member, not something Priya granted on it.
+      const residentAgent = await factories.createPage(product.id, { type: 'AI_CHAT', title: 'Resident' });
+      const [resident] = await db.insert(driveAgentMembers)
+        .values({ driveId: product.id, agentPageId: residentAgent.id, role: 'MEMBER', addedBy: priya.id }).returning();
 
       const result = await deleteOrganization({
         actorId: jono.id,
@@ -922,11 +970,39 @@ describe('org services (real Postgres)', () => {
       }, noKick);
       expect(result.ok).toBe(true);
 
-      expect(await hasAppDriveMembership(priyaKey, product.id)).toBe(false);
-      expect(await hasAppDriveMembership(lenaKey, finance.id)).toBe(false);
-      expect(await db.select().from(driveShareLinks).where(eq(driveShareLinks.id, priyaLink.id))).toEqual([]);
-      expect(await hasAppDriveMembership(marcusKey, product.id)).toBe(true);
-      expect(await hasAppDriveMembership(jonoKey, wiki.id)).toBe(true);
+      const none = { key: false, driveLink: false, pageLink: false, agent: false, oauth: false };
+      expect(await standing(priyaOnProduct, product.id)).toEqual(none);
+      expect(await standing(lenaOnFinance, finance.id)).toEqual({ ...none, pageLink: false });
+      expect(await standing(marcusOnProduct, product.id)).toEqual(all);
+      expect(await standing(jonoOnWiki, wiki.id)).toEqual({ ...all, pageLink: false });
+      expect(await db.select().from(driveAgentMembers).where(eq(driveAgentMembers.id, resident.id))).toHaveLength(1);
+    });
+
+    it('ORG-6 (partial) deleting an org kicks at most 20 revoked connections at a time', async () => {
+      const { jono, org } = await seedNorthwind();
+      const marcus = await person('Marcus Oyelaran');
+      await addMember(org.id, marcus.id, 'MEMBER');
+      // Drives already in trash need no choice; each carries one org row of Marcus's to revoke.
+      for (let i = 0; i < 25; i += 1) {
+        const drive = await seedDrive(jono.id, org.id, { name: `Archive ${i}`, isTrashed: true, trashedAt: new Date() });
+        await db.insert(driveMembers).values({ driveId: drive.id, userId: marcus.id, role: 'MEMBER', source: 'org', acceptedAt: new Date() });
+      }
+
+      let inFlight = 0;
+      let peak = 0;
+      let kicks = 0;
+      const kick = async () => {
+        inFlight += 1;
+        kicks += 1;
+        peak = Math.max(peak, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        inFlight -= 1;
+      };
+
+      expect((await deleteOrganization({ actorId: jono.id, orgId: org.id, choices: [], now: new Date() }, { kick })).ok).toBe(true);
+      expect(kicks).toBe(25);
+      expect(peak).toBeLessThanOrEqual(20);
+      expect(peak).toBeGreaterThan(1);
     });
 
     it('ORG-6 a live drive without a deletion choice refuses the delete and nothing moves', async () => {

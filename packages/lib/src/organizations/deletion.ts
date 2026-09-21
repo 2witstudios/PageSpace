@@ -24,7 +24,8 @@ import { drives } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
 import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
 import { kickForDriveMembershipRevocation } from '../permissions/revocation-kick';
-import { revokeOrgDriveGrants } from './leave';
+import { revokeOrgDriveGrantsForMembers } from './leave';
+import { settleInBatches } from '../services/org-membership-sync-core';
 
 export type DriveDeletionChoice =
   | { driveId: string; action: 'transfer'; toUserId: string }
@@ -121,6 +122,9 @@ const deleteOrganizationDeps: DeleteOrganizationDeps = {
 
 type RevokedRow = { userId: string; driveId: string };
 
+/** Kicks in flight at once; each enumerates pages and conversations, as the org-membership publisher bounds its events. */
+const KICK_CONCURRENCY = 20;
+
 export async function deleteOrganization(
   input: {
     actorId: string;
@@ -186,9 +190,11 @@ export async function deleteOrganization(
 
     // An explicit key scope or OAuth drive grant is never re-checked against its holder, so
     // it would outlive the org power that let them mint it (revokeOrgDriveGrants).
-    for (const { userId } of members) {
-      await revokeOrgDriveGrants(tx, userId, plan.steps.filter((step) => step.ownerId !== userId).map((step) => step.driveId));
-    }
+    await revokeOrgDriveGrantsForMembers(tx, {
+      userIds: members.map((member) => member.userId),
+      driveIds: plan.steps.map((step) => step.driveId),
+      keep: plan.steps.map((step) => ({ userId: step.ownerId, driveId: step.driveId })),
+    });
 
     const driveIds = plan.steps.map((step) => step.driveId);
     if (driveIds.length > 0) {
@@ -207,6 +213,6 @@ export async function deleteOrganization(
     return { ok: true, steps: plan.steps };
   });
   // Best effort once committed: a failed kick must not report a completed delete as failed.
-  if (result.ok) await Promise.allSettled(revoked.map((row) => deps.kick(row)));
+  if (result.ok) await settleInBatches(revoked.map((row) => () => deps.kick(row)), KICK_CONCURRENCY);
   return result;
 }

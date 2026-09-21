@@ -16,14 +16,13 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, eq, inArray, isNull } from '@pagespace/db/operators';
+import { and, eq, inArray, isNull, ne, not, or } from '@pagespace/db/operators';
 import { drives, pages } from '@pagespace/db/schema/core';
-import { driveMembers, mcpTokenDrives } from '@pagespace/db/schema/members';
+import { driveAgentMembers, driveMembers, mcpTokenDrives } from '@pagespace/db/schema/members';
 import { mcpTokens } from '@pagespace/db/schema/auth';
 import { oauthAccessTokens, oauthRefreshTokens } from '@pagespace/db/schema/oauth';
 import { driveShareLinks, pageShareLinks } from '@pagespace/db/schema/share-links';
 import { orgMembers, organizations, type OrgRole } from '@pagespace/db/schema/organizations';
-import { revokeAgentMembershipsGrantedBy } from '../services/drive-agent-service';
 import { getActorInfo, logActivityWithTx } from '../monitoring/activity-logger';
 import { parseScopeList } from '../auth/oauth/scopes';
 
@@ -156,64 +155,141 @@ export interface OrgDriveGrantCounts {
  * revoked: the client re-authorizes for what the person can still grant. Shared by leave, removal
  * (which is a leave) and demotion.
  */
-export async function revokeOrgDriveGrants(tx: LeaveTx, userId: string, driveIds: string[]): Promise<OrgDriveGrantCounts> {
-  const counts: OrgDriveGrantCounts = { agentMemberships: 0, driveShareLinks: 0, pageShareLinks: 0, mcpTokenDriveRows: 0, oauthTokenFamilies: 0 };
-  if (driveIds.length === 0) return counts;
+export function revokeOrgDriveGrants(tx: LeaveTx, userId: string, driveIds: string[]): Promise<OrgDriveGrantCounts> {
+  return revokeOrgDriveGrantsForMembers(tx, { userIds: [userId], driveIds, keep: [] });
+}
 
-  // revokeAgentMembershipsGrantedBy is per drive and already spares the agent's home drive.
-  for (const id of driveIds) {
-    counts.agentMemberships += (await revokeAgentMembershipsGrantedBy(tx, id, userId)).length;
+/** A (person, drive) pair whose grants stay, e.g. the person who ends up owning the drive. */
+export interface KeptDriveGrant {
+  userId: string;
+  driveId: string;
+}
+
+type KeyColumn = Parameters<typeof eq>[0];
+
+/** Ids per statement: two id lists plus the kept pairs stay far under Postgres's 65,535 bind parameters. */
+const GRANT_CHUNK = 500;
+
+function chunks<T>(items: readonly T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+}
+
+/**
+ * revokeOrgDriveGrants for many people at once (org deletion is every member leaving): what each of
+ * `userIds` handed out in each of `driveIds`, except the `keep` pairs. Set-based, one statement per
+ * artifact kind per chunk, so the cost does not grow with members × drives in round trips.
+ */
+export async function revokeOrgDriveGrantsForMembers(
+  tx: LeaveTx,
+  { userIds, driveIds, keep }: { userIds: readonly string[]; driveIds: readonly string[]; keep: readonly KeptDriveGrant[] },
+): Promise<OrgDriveGrantCounts> {
+  const counts: OrgDriveGrantCounts = { agentMemberships: 0, driveShareLinks: 0, pageShareLinks: 0, mcpTokenDriveRows: 0, oauthTokenFamilies: 0 };
+  if (userIds.length === 0 || driveIds.length === 0) return counts;
+
+  for (const driveChunk of chunks(driveIds, GRANT_CHUNK)) {
+    const inChunk = new Set(driveChunk);
+    const kept = keep.filter((k) => inChunk.has(k.driveId));
+    for (const userChunk of chunks(userIds, GRANT_CHUNK)) {
+      /** Not one of the kept (drive, person) pairs; undefined when nothing is kept. */
+      const notKept = (driveCol: KeyColumn, userCol: KeyColumn) =>
+        kept.length === 0 ? undefined : not(or(...kept.map((k) => and(eq(driveCol, k.driveId), eq(userCol, k.userId))))!);
+
+      // An agent whose home is the drive itself is not a grant on it (revokeAgentMembershipsGrantedBy).
+      counts.agentMemberships += (await tx
+        .delete(driveAgentMembers)
+        .where(inArray(driveAgentMembers.id, tx
+          .select({ id: driveAgentMembers.id })
+          .from(driveAgentMembers)
+          .innerJoin(pages, eq(driveAgentMembers.agentPageId, pages.id))
+          .where(and(
+            inArray(driveAgentMembers.driveId, driveChunk),
+            inArray(driveAgentMembers.addedBy, userChunk),
+            ne(pages.driveId, driveAgentMembers.driveId),
+            notKept(driveAgentMembers.driveId, driveAgentMembers.addedBy),
+          ))))
+        .returning({ id: driveAgentMembers.id })).length;
+
+      counts.driveShareLinks += (await tx
+        .delete(driveShareLinks)
+        .where(and(
+          inArray(driveShareLinks.driveId, driveChunk),
+          inArray(driveShareLinks.createdBy, userChunk),
+          notKept(driveShareLinks.driveId, driveShareLinks.createdBy),
+        ))
+        .returning({ id: driveShareLinks.id })).length;
+
+      counts.pageShareLinks += (await tx
+        .delete(pageShareLinks)
+        .where(inArray(pageShareLinks.id, tx
+          .select({ id: pageShareLinks.id })
+          .from(pageShareLinks)
+          .innerJoin(pages, eq(pageShareLinks.pageId, pages.id))
+          .where(and(
+            inArray(pages.driveId, driveChunk),
+            inArray(pageShareLinks.createdBy, userChunk),
+            notKept(pages.driveId, pageShareLinks.createdBy),
+          ))))
+        .returning({ id: pageShareLinks.id })).length;
+
+      counts.mcpTokenDriveRows += (await tx
+        .delete(mcpTokenDrives)
+        .where(inArray(mcpTokenDrives.id, tx
+          .select({ id: mcpTokenDrives.id })
+          .from(mcpTokenDrives)
+          .innerJoin(mcpTokens, eq(mcpTokenDrives.tokenId, mcpTokens.id))
+          .where(and(
+            inArray(mcpTokenDrives.driveId, driveChunk),
+            inArray(mcpTokens.userId, userChunk),
+            notKept(mcpTokenDrives.driveId, mcpTokens.userId),
+          ))))
+        .returning({ id: mcpTokenDrives.id })).length;
+    }
   }
 
-  counts.driveShareLinks = (await tx
-    .delete(driveShareLinks)
-    .where(and(eq(driveShareLinks.createdBy, userId), inArray(driveShareLinks.driveId, driveIds)))
-    .returning({ id: driveShareLinks.id })).length;
-
-  counts.pageShareLinks = (await tx
-    .delete(pageShareLinks)
-    .where(and(
-      eq(pageShareLinks.createdBy, userId),
-      inArray(pageShareLinks.pageId, tx.select({ id: pages.id }).from(pages).where(inArray(pages.driveId, driveIds))),
-    ))
-    .returning({ id: pageShareLinks.id })).length;
-
-  counts.mcpTokenDriveRows = (await tx
-    .delete(mcpTokenDrives)
-    .where(and(
-      inArray(mcpTokenDrives.driveId, driveIds),
-      inArray(mcpTokenDrives.tokenId, tx.select({ id: mcpTokens.id }).from(mcpTokens).where(eq(mcpTokens.userId, userId))),
-    ))
-    .returning({ id: mcpTokenDrives.id })).length;
-
-  counts.oauthTokenFamilies = await revokeOAuthFamiliesNamingDrives(tx, userId, new Set(driveIds));
+  counts.oauthTokenFamilies = await revokeOAuthFamiliesNamingDrives(tx, userIds, driveIds, keep);
   return counts;
 }
 
-/** The OAuth token families of `userId` with a live token whose scopes name a drive in `driveIds`. */
-async function revokeOAuthFamiliesNamingDrives(tx: LeaveTx, userId: string, driveIds: ReadonlySet<string>): Promise<number> {
-  // One connection holds a transaction: read sequentially.
-  const accessTokens = await tx.select({ familyId: oauthAccessTokens.familyId, scopes: oauthAccessTokens.scopes })
-    .from(oauthAccessTokens)
-    .where(and(eq(oauthAccessTokens.userId, userId), isNull(oauthAccessTokens.revokedAt)));
-  const refreshTokens = await tx.select({ familyId: oauthRefreshTokens.familyId, scopes: oauthRefreshTokens.scopes })
-    .from(oauthRefreshTokens)
-    .where(and(eq(oauthRefreshTokens.userId, userId), isNull(oauthRefreshTokens.revokedAt)));
-  const families = new Set(
-    [...accessTokens, ...refreshTokens]
-      .filter((t) => scopesNameDrive(t.scopes, driveIds))
-      .map((t) => t.familyId),
-  );
+/** The OAuth token families of `userIds` with a live token whose scopes name one of their revoked drives. */
+async function revokeOAuthFamiliesNamingDrives(
+  tx: LeaveTx,
+  userIds: readonly string[],
+  driveIds: readonly string[],
+  keep: readonly KeptDriveGrant[],
+): Promise<number> {
+  const keptFor = new Map<string, Set<string>>();
+  for (const k of keep) keptFor.set(k.userId, (keptFor.get(k.userId) ?? new Set()).add(k.driveId));
+  const revokedFor = (userId: string): ReadonlySet<string> => {
+    const kept = keptFor.get(userId);
+    return new Set(kept ? driveIds.filter((id) => !kept.has(id)) : driveIds);
+  };
+
+  const families = new Set<string>();
+  for (const userChunk of chunks(userIds, GRANT_CHUNK)) {
+    // One connection holds a transaction: read sequentially.
+    const accessTokens = await tx.select({ userId: oauthAccessTokens.userId, familyId: oauthAccessTokens.familyId, scopes: oauthAccessTokens.scopes })
+      .from(oauthAccessTokens)
+      .where(and(inArray(oauthAccessTokens.userId, userChunk), isNull(oauthAccessTokens.revokedAt)));
+    const refreshTokens = await tx.select({ userId: oauthRefreshTokens.userId, familyId: oauthRefreshTokens.familyId, scopes: oauthRefreshTokens.scopes })
+      .from(oauthRefreshTokens)
+      .where(and(inArray(oauthRefreshTokens.userId, userChunk), isNull(oauthRefreshTokens.revokedAt)));
+    for (const t of [...accessTokens, ...refreshTokens]) {
+      if (scopesNameDrive(t.scopes, revokedFor(t.userId))) families.add(t.familyId);
+    }
+  }
   if (families.size === 0) return 0;
 
   const now = new Date();
-  const familyIds = [...families];
-  await tx.update(oauthRefreshTokens)
-    .set({ revokedAt: now, revokedReason: ORG_ACCESS_REVOKED })
-    .where(and(inArray(oauthRefreshTokens.familyId, familyIds), isNull(oauthRefreshTokens.revokedAt)));
-  await tx.update(oauthAccessTokens)
-    .set({ revokedAt: now, revokedReason: ORG_ACCESS_REVOKED })
-    .where(and(inArray(oauthAccessTokens.familyId, familyIds), isNull(oauthAccessTokens.revokedAt)));
+  for (const familyIds of chunks([...families], GRANT_CHUNK)) {
+    await tx.update(oauthRefreshTokens)
+      .set({ revokedAt: now, revokedReason: ORG_ACCESS_REVOKED })
+      .where(and(inArray(oauthRefreshTokens.familyId, familyIds), isNull(oauthRefreshTokens.revokedAt)));
+    await tx.update(oauthAccessTokens)
+      .set({ revokedAt: now, revokedReason: ORG_ACCESS_REVOKED })
+      .where(and(inArray(oauthAccessTokens.familyId, familyIds), isNull(oauthAccessTokens.revokedAt)));
+  }
   return families.size;
 }
 
