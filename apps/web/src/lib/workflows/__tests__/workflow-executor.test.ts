@@ -1065,7 +1065,7 @@ describe('executeWorkflow — credit gate inside the executor', () => {
   });
 
   test('given a transient refusal for an occurrence older than 24h, should stop retrying and record the error run', async () => {
-    creditGate.decision = { allowed: false, reason: 'daily_cap_exceeded' };
+    creditGate.decision = { allowed: false, reason: 'too_many_in_flight' };
     mockInsertValues.mockReturnValue({ returning: mockInsertReturning, onConflictDoNothing: mockOnConflictDoNothing });
     mockInsertReturning.mockResolvedValue([{ id: 'run_expired' }]);
 
@@ -1074,6 +1074,25 @@ describe('executeWorkflow — credit gate inside the executor', () => {
     );
 
     expect(result).toMatchObject({ runId: 'run_expired', refusal: { kind: 'transient' } });
+    expect(result.retryable).toBeFalsy();
+    expect(mockInsertValues).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'error', error: 'AI credit gate denied: too_many_in_flight' }),
+    );
+  });
+
+  test('given the daily cap is hit on a FRESH scheduled occurrence, should record it once and settle (terminal: it clears only when the UTC day rolls)', async () => {
+    creditGate.decision = { allowed: false, reason: 'daily_cap_exceeded' };
+    mockInsertValues.mockReturnValue({ returning: mockInsertReturning, onConflictDoNothing: mockOnConflictDoNothing });
+    mockInsertReturning.mockResolvedValue([{ id: 'run_capped' }]);
+
+    const result = await executeWorkflow(
+      createInputFixture({ source: { table: 'taskTriggers', id: 'tt_1', triggerAt: new Date(Date.now() - 60_000) } }),
+    );
+
+    expect(result).toMatchObject({
+      runId: 'run_capped',
+      refusal: { reason: 'daily_cap_exceeded', kind: 'terminal' },
+    });
     expect(result.retryable).toBeFalsy();
     expect(mockInsertValues).toHaveBeenCalledWith(
       expect.objectContaining({ status: 'error', error: 'AI credit gate denied: daily_cap_exceeded' }),
@@ -1122,7 +1141,7 @@ describe('executeWorkflow — credit gate inside the executor', () => {
   });
 
   test('given a transient refusal on a webhook fire (nothing re-fires it), should record the error run instead of dropping the event', async () => {
-    creditGate.decision = { allowed: false, reason: 'daily_cap_exceeded' };
+    creditGate.decision = { allowed: false, reason: 'too_many_in_flight' };
     mockInsertValues.mockReturnValue({ returning: mockInsertReturning, onConflictDoNothing: mockOnConflictDoNothing });
     mockInsertReturning.mockResolvedValue([{ id: 'run_webhook_refused' }]);
 
@@ -1132,7 +1151,7 @@ describe('executeWorkflow — credit gate inside the executor', () => {
 
     expect(result).toMatchObject({
       runId: 'run_webhook_refused',
-      refusal: { reason: 'daily_cap_exceeded', kind: 'transient' },
+      refusal: { reason: 'too_many_in_flight', kind: 'transient' },
     });
     expect(result.retryable).toBeFalsy();
     expect(mockInsertValues).toHaveBeenCalledWith(expect.objectContaining({ status: 'error' }));

@@ -11,8 +11,8 @@ describe('classifyGateRefusal', () => {
     expect(classifyGateRefusal('too_many_in_flight')).toBe('transient');
   });
 
-  it('given daily_cap_exceeded, should be transient (the UTC day rolls over)', () => {
-    expect(classifyGateRefusal('daily_cap_exceeded')).toBe('transient');
+  it('given daily_cap_exceeded, should be terminal (nothing clears it until the UTC day rolls, so retrying every tick is noise)', () => {
+    expect(classifyGateRefusal('daily_cap_exceeded')).toBe('terminal');
   });
 
   it('given out_of_credits, should be terminal (someone must add credits)', () => {

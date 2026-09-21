@@ -202,9 +202,9 @@ describe('POST /api/cron/workflows', () => {
     vi.mocked(executeWorkflow).mockResolvedValue({
       success: false,
       durationMs: 0,
-      error: 'AI credit gate denied: daily_cap_exceeded',
+      error: 'AI credit gate denied: too_many_in_flight',
       retryable: true,
-      refusal: { reason: 'daily_cap_exceeded', kind: 'transient' },
+      refusal: { reason: 'too_many_in_flight', kind: 'transient' },
     });
 
     const response = await POST(new Request('https://example.com/api/cron/workflows', { method: 'POST' }));

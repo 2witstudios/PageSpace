@@ -136,8 +136,8 @@ export async function executeWorkflow(input: WorkflowExecutionInput): Promise<Wo
 
   // 0. Credit gate on the billed user, for EVERY entry point, BEFORE the run is
   //    claimed. A refusal (out of credits, an unclaimed agent's
-  //    requires_funding, a transient concurrency/daily cap) never resolves a
-  //    model. Gating first is what keeps a transient refusal retryable: the
+  //    requires_funding, the daily cap, a transient concurrency cap) never
+  //    resolves a model. Gating first is what keeps a transient refusal retryable: the
   //    calendar cron only re-discovers occurrences with NO workflow_runs row,
   //    so claiming first would turn a busy minute into a lost meeting run. The
   //    claim below stays the one atomic "single running" guarantee; a gate
