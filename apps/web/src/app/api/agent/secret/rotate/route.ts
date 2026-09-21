@@ -2,9 +2,10 @@
  * POST /api/agent/secret/rotate — replace an agent's `ps_agent_*` secret (ADR
  * 0007 Decision 14; auth.md "Rotate / Revoke").
  *
- * Caller: the agent itself (a browser session, or its own `ps_at_` — CSRF is
- * enforced for sessions only) or the human who claimed it, naming the agent
- * with `agentId`. Anyone else, a non-agent, or a revoked agent answers the same
+ * Caller: the agent itself (a browser session, or its own `account`-scoped
+ * `ps_at_` — CSRF is enforced for sessions only) or the human who claimed it,
+ * from a browser SESSION only, naming the agent with `agentId` (see
+ * `agentSecretActor` for why an owner's OAuth token is never enough). Anyone else, a non-agent, or a revoked agent answers the same
  * 404. The old secret stops matching immediately; `revokeExistingTokens` also
  * bumps `users.tokenVersion` so every live session and token dies. The new
  * secret is returned once, never logged or audited (threat model §3).
@@ -47,7 +48,8 @@ export async function POST(request: Request) {
 
   const agentUserId = parsed.data.agentId ?? auth.userId;
   const revokeTokens = parsed.data.revokeExistingTokens ?? false;
-  const actor = agentSecretActor({ callerId: auth.userId, agentUserId, identity: await getAgentIdentitySummary(agentUserId) });
+  const credential = auth.tokenType === 'session' ? 'session' : auth.tokenType === 'oauth' && auth.scopes.account ? 'oauth_account' : 'oauth_narrow';
+  const actor = agentSecretActor({ caller: { id: auth.userId, credential }, agentUserId, identity: await getAgentIdentitySummary(agentUserId) });
   const refuse = (reason: string) => {
     auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'agent_identity', resourceId: agentUserId, details: { reason, agentAuthEvent: 'secret_rotate_refused' }, riskScore: 0.5 });
     return agentNotFound();

@@ -33,7 +33,7 @@ const NOT_FOUND = { error: 'not_found' };
 describe('POST /api/agent/secret/rotate', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.auth.mockResolvedValue({ userId: 'agent-1', tokenType: 'oauth' });
+    mocks.auth.mockResolvedValue({ userId: 'agent-1', tokenType: 'oauth', scopes: { account: true } });
     mocks.summary.mockImplementation(async (userId: string) => (userId === 'agent-1' ? { ownerUserId: 'human-1', claimedAt: new Date(), source: 'codex' } : null));
     mocks.rotate.mockResolvedValue({ ok: true, data: { secret: NEW_SECRET, secretPrefix: NEW_SECRET.slice(0, 12), secretVersion: 2 } });
   });
@@ -78,6 +78,28 @@ describe('POST /api/agent/secret/rotate', () => {
       expect(response.status).toBe(200);
       expect(mocks.rotate).toHaveBeenCalledWith({ userId: 'agent-1', revokeTokens: true });
       expect(mocks.audit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ userId: 'human-1', resourceId: 'agent-1', details: expect.objectContaining({ actor: 'owner' }) }));
+    });
+  });
+
+  describe('credential strength (rotation is key management)', () => {
+    it("given the owner presenting an OAuth access token (even account-scoped), should answer the same 404 and rotate nothing", async () => {
+      mocks.auth.mockResolvedValue({ userId: 'human-1', tokenType: 'oauth', scopes: { account: true } });
+      const response = await POST(rotateRequest({ agentId: 'agent-1' }));
+      expect(response.status).toBe(404);
+      expect(await response.json()).toEqual(NOT_FOUND);
+      expect(mocks.rotate).not.toHaveBeenCalled();
+    });
+
+    it('given the agent presenting a narrowly scoped (non-account) access token, should answer 404 and rotate nothing', async () => {
+      mocks.auth.mockResolvedValue({ userId: 'agent-1', tokenType: 'oauth', scopes: { account: false } });
+      const response = await POST(rotateRequest({}));
+      expect(response.status).toBe(404);
+      expect(mocks.rotate).not.toHaveBeenCalled();
+    });
+
+    it('given the agent with a browser session, should rotate', async () => {
+      mocks.auth.mockResolvedValue({ userId: 'agent-1', tokenType: 'session' });
+      expect((await POST(rotateRequest({}))).status).toBe(200);
     });
   });
 
