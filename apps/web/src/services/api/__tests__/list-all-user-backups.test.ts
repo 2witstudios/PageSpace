@@ -12,11 +12,11 @@ vi.mock('@pagespace/db/operators', async (importOriginal) => ({
 }));
 // The one member-drive listing (org-aware; owned drives plus accepted rows while dark).
 vi.mock('@pagespace/lib/permissions/member-drives', () => ({
-  listMemberDrives: vi.fn(),
+  getAdministeredDriveIds: vi.fn(),
 }));
 
 import { listAllUserBackups } from '../drive-backup-service';
-import { listMemberDrives } from '@pagespace/lib/permissions/member-drives';
+import { getAdministeredDriveIds } from '@pagespace/lib/permissions/member-drives';
 
 function stubBackupQueries() {
   const rowsChain = { from: () => rowsChain, innerJoin: () => rowsChain, where: () => rowsChain, orderBy: () => rowsChain, limit: () => rowsChain, offset: async () => [] };
@@ -29,24 +29,19 @@ describe('listAllUserBackups', () => {
     vi.clearAllMocks();
   });
 
-  it('ORG-4 (partial) X-6 (partial) lists backups of the drives the user leads or administers, from the org-aware member-drive listing (an org Admin\'s ADMIN, never a stale org row), never a drive_members read of its own', async () => {
-    vi.mocked(listMemberDrives).mockResolvedValueOnce([
-      { driveId: 'led', isOwner: true, role: 'OWNER' },
-      { driveId: 'org-admin-drive', isOwner: false, role: 'ADMIN' },
-      { driveId: 'member-drive', isOwner: false, role: 'MEMBER' },
-      { driveId: 'former-owner-row', isOwner: false, role: 'OWNER' },
-    ]);
+  it('ORG-4 (partial) X-6 (partial) lists backups of every drive the user leads or administers, from the org-aware getAdministeredDriveIds (an org Admin\'s unjoined PRIVATE drive included, never a stale org row), never a drive_members read of its own', async () => {
+    vi.mocked(getAdministeredDriveIds).mockResolvedValueOnce(['led', 'org-private-unjoined']);
     stubBackupQueries();
 
     const result = await listAllUserBackups('user-1');
 
     expect(result).toEqual({ success: true, backups: [], total: 0 });
-    expect(listMemberDrives).toHaveBeenCalledWith('user-1', { includeTrashed: false });
-    expect(mockInArray.mock.calls.map(([, values]) => values)).toEqual([['led', 'org-admin-drive'], ['led', 'org-admin-drive']]);
+    expect(getAdministeredDriveIds).toHaveBeenCalledWith('user-1', { includeTrashed: false });
+    expect(mockInArray.mock.calls.map(([, values]) => values)).toEqual([['led', 'org-private-unjoined'], ['led', 'org-private-unjoined']]);
   });
 
   it('returns nothing, and runs no backup query, when the user leads and administers no drive', async () => {
-    vi.mocked(listMemberDrives).mockResolvedValueOnce([{ driveId: 'member-drive', isOwner: false, role: 'MEMBER' }]);
+    vi.mocked(getAdministeredDriveIds).mockResolvedValueOnce([]);
 
     expect(await listAllUserBackups('user-1')).toEqual({ success: true, backups: [], total: 0 });
     expect(mockSelect).not.toHaveBeenCalled();

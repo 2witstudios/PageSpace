@@ -28,21 +28,26 @@ const DRIVE_MEMBERS_READ = [
   /\.(?:inner|left|right|full)Join\(\s*driveMembers\b/g,
   /\bquery\.driveMembers\.find(?:First|Many)\b/g,
   /\b(?:FROM|JOIN)\s+"?drive_members"?\b/gi,
+  // The table interpolated into a raw sql`` template: sql`select … from ${driveMembers} …`.
+  /\$\{\s*driveMembers\s*\}/g,
 ];
 
 /**
- * A comparison involving an ownerId: drizzle eq/ne on drives.ownerId (either side), a JS equality
- * with `.ownerId` on either side, and raw SQL `x."ownerId" =` / `= x."ownerId"`. Selecting the
- * column (`ownerId: drives.ownerId`) and writing it (`.set({ ownerId })`) are not comparisons.
- * Non-drive owners (agent workspaces, sessions, organizations) match too and are allowlisted as such.
+ * A comparison involving an ownerId: drizzle eq/ne on drives.ownerId (either side); a JS equality
+ * (===, !==, ==, !=) with any identifier ending in ownerId on either side, so `drive.ownerId`, a
+ * destructured `ownerId` and `driveOwnerId` all count; raw SQL `x."ownerId" =` / `= x."ownerId"`;
+ * and the column interpolated into a sql`` template (`${drives.ownerId}`). Selecting the column
+ * (`ownerId: drives.ownerId`) and writing it (`.set({ ownerId })`) are not comparisons. Non-drive
+ * owners (agent sessions, conversations, env enrollments) match too and are allowlisted as such.
  */
 const DRIVE_OWNER_COMPARE = [
   /\b(?:eq|ne)\(\s*drives\.ownerId\b/g,
   /\b(?:eq|ne)\([^,()]+,\s*drives\.ownerId\b/g,
-  /\.ownerId\s*[!=]==/g,
-  /[!=]==\s*[\w.?[\]]*\.ownerId\b/g,
+  /\b[\w$]*[oO]wnerId\s*(?:===?|!==?)/g,
+  /(?:===?|!==?)\s*[\w$.?[\]]*[oO]wnerId\b/g,
   /\b\w+\."ownerId"\s*=(?!=)/g,
   /=\s*\w+\."ownerId"/g,
+  /\$\{\s*drives\.ownerId\s*\}/g,
 ];
 
 /**

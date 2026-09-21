@@ -5,6 +5,7 @@ import { driveMembers } from '@pagespace/db/schema/members';
 import { orgMembers, type OrgRole } from '@pagespace/db/schema/organizations';
 import { ORGS_ENABLED } from '../organizations/orgs-enabled';
 import { decideListedDriveRole } from './org-drive-resolution';
+import { loadAcceptedRowsInDrives, resolveEffectiveDriveMemberships } from './org-drive-membership';
 import type { DriveMemberRole } from './org-access';
 
 /**
@@ -105,6 +106,51 @@ export async function listMemberDrives(userId: string, options: MemberDriveOptio
     });
   }
   return [...out.values()];
+}
+
+/**
+ * The drives a person may administer: those they lead, plus every drive whose effective membership
+ * (resolveEffectiveDriveMemberships) is ADMIN. Unlike listMemberDrives this is not the listing rule:
+ * an org Owner or Admin administers every drive of their org, joined or not (ORG-4), so an admin
+ * surface (the all-backups list) shows what isDriveOwnerOrAdmin opens. Org power over a PRIVATE drive
+ * writes the ORG-4 audit, as every resolver path does. While dark: owned drives plus accepted ADMIN rows.
+ */
+export async function getAdministeredDriveIds(userId: string, options: { includeTrashed: boolean }): Promise<string[]> {
+  const notTrashed = options.includeTrashed ? undefined : eq(drives.isTrashed, false);
+
+  const owned = await db.select({ id: drives.id }).from(drives).where(and(eq(drives.ownerId, userId), notTrashed));
+  const ownedIds = new Set(owned.map((d) => d.id));
+
+  const adminRowDrives = await db
+    .select({ id: drives.id, orgId: drives.orgId, orgVisibility: drives.orgVisibility })
+    .from(driveMembers)
+    .innerJoin(drives, eq(drives.id, driveMembers.driveId))
+    .where(and(eq(driveMembers.userId, userId), eq(driveMembers.role, 'ADMIN'), isNotNull(driveMembers.acceptedAt), notTrashed));
+
+  const adminOrgIds = ORGS_ENABLED
+    ? (await db
+      .select({ orgId: orgMembers.orgId })
+      .from(orgMembers)
+      .where(and(eq(orgMembers.userId, userId), inArray(orgMembers.role, ['OWNER', 'ADMIN'])))
+    ).map((r) => r.orgId)
+    : [];
+  const orgDrives = adminOrgIds.length > 0
+    ? await db
+      .select({ id: drives.id, orgId: drives.orgId, orgVisibility: drives.orgVisibility })
+      .from(drives)
+      .where(and(inArray(drives.orgId, adminOrgIds), notTrashed))
+    : [];
+
+  const candidates = new Map([...adminRowDrives, ...orgDrives].filter((d) => !ownedIds.has(d.id)).map((d) => [d.id, d]));
+  if (candidates.size === 0) return [...ownedIds];
+
+  const rows = await loadAcceptedRowsInDrives(db, userId, [...candidates.keys()]);
+  const effective = await resolveEffectiveDriveMemberships(
+    [...candidates.values()].map((drive) => ({ userId, drive, row: rows.get(drive.id) ?? null })),
+    { audit: true },
+  );
+  const administered = [...candidates.values()].filter((_, i) => effective[i]?.role === 'ADMIN').map((d) => d.id);
+  return [...ownedIds, ...administered];
 }
 
 export async function getMemberDriveIds(userId: string, options: MemberDriveOptions): Promise<string[]> {

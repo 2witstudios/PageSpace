@@ -57,6 +57,12 @@ export const DRIVE_ACCESS_GATE_ALLOWLIST: AccessGateAllowlist = {
   'apps/web/src/app/api/ai/conversations/[conversationId]/plan/route.ts': {
     DELETE: { ownerCompares: 1, reason: NOT_A_DRIVE("row.ownerId is the AI conversation's userId") },
   },
+  'apps/web/src/app/api/app-hosting/apps/[appId]/dedicated/route.ts': {
+    authorize: {
+      ownerCompares: 1,
+      reason: "payer gate: dedicated app hosting is bought by the drive's payer (lookupDriveOwnerId, the lead today); who pays for an org drive is the WAL-9 lane's, not an access decision",
+    },
+  },
   'apps/web/src/app/api/cron/scheduled-backups/route.ts': {
     GET: { ownerCompares: 1, reason: PAYER },
   },
@@ -120,12 +126,26 @@ export const DRIVE_ACCESS_GATE_ALLOWLIST: AccessGateAllowlist = {
   'apps/web/src/components/shared/PageWebhooksDialog.tsx': {
     PageWebhooksDialogImpl: { ownerCompares: 2, reason: NOT_A_DRIVE('revealed.ownerId is the owner of a revealed webhook secret (client state)') },
   },
+  'apps/web/src/hooks/usePermissions.ts': {
+    usePermissions: { ownerCompares: 1, reason: "client display flag (isOwner) for UI affordances; every write it gates is enforced by the API" },
+  },
   // ── apps/web: lib and services ───────────────────────────────────────────
+  'apps/web/src/lib/agent-workspaces/agent-workspaces-runtime.ts': {
+    endSession: { ownerCompares: 1, reason: NOT_A_DRIVE('ownerId is an optional agent-workspace owner filter compared with undefined') },
+  },
+  'apps/web/src/lib/ai/core/materialize-interrupted-stream.ts': {
+    materializeInterruptedStream: { ownerCompares: 1, reason: NOT_A_DRIVE('globalOwnerId is a global conversation owner compared with null') },
+  },
+  'apps/web/src/lib/ai/core/stream-subscription-authz.ts': {
+    canSubscribeToStream: { ownerCompares: 1, reason: NOT_A_DRIVE("streamOwnerId is an AI stream's owner") },
+  },
   'apps/web/src/lib/ai/tools/member-tools.ts': {
     execute: { ownerCompares: 2, reason: "joins the drive lead's user and profile rows to show the owner in the member list, after checkDriveAccess; display" },
   },
   'apps/web/src/lib/ai/tools/session-tools-runtime.ts': {
     listSharedWorkspaces: { ownerCompares: 1, reason: NOT_A_DRIVE("session.ownerId is an agent session's owner") },
+    killWorker: { ownerCompares: 1, reason: NOT_A_DRIVE("streamOwnerId is a worker stream's owner") },
+    resolveCallerSessionForWorker: { ownerCompares: 1, reason: NOT_A_DRIVE("ownerId is an agent conversation's owner") },
   },
   'apps/web/src/lib/ai/tools/session-tools.ts': {
     execute: { ownerCompares: 1, reason: NOT_A_DRIVE("opened.row.ownerId is an agent session's owner") },
@@ -133,6 +153,12 @@ export const DRIVE_ACCESS_GATE_ALLOWLIST: AccessGateAllowlist = {
   },
   'apps/web/src/lib/memory/integration-service.ts': {
     updatePersonalizationPage: { ownerCompares: 1, reason: "scopes the memory write to the caller's own HOME drive (kind HOME, never an org drive)" },
+  },
+  'apps/web/src/lib/auth/session-retirement.ts': {
+    retireReplacedSession: { ownerCompares: 1, reason: NOT_A_DRIVE("ownerId is an auth session's user") },
+  },
+  'apps/web/src/lib/dev-preview/manage-decision.ts': {
+    decideDevPreviewManage: { ownerCompares: 2, reason: NOT_A_DRIVE("sessionOwnerId is a dev-preview session's owner (drive authority goes through isDriveOwnerOrAdmin)") },
   },
   'apps/web/src/lib/repositories/drive-invite-repository.ts': {
     findExistingMember: { reads: 1, reason: 'invite management: looks up a row by (drive, user) to avoid a duplicate invitation' },
@@ -160,7 +186,7 @@ export const DRIVE_ACCESS_GATE_ALLOWLIST: AccessGateAllowlist = {
     decideAgentSessionRenameAccess: { ownerCompares: 1, reason: NOT_A_DRIVE("session.ownerId is an agent session's owner") },
   },
   'packages/lib/src/agent-workspaces/redact-conversation-listing.ts': {
-    isConversationVisibleToViewer: { ownerCompares: 1, reason: NOT_A_DRIVE("conversation.ownerId is a conversation thread's owner") },
+    isConversationVisibleToViewer: { ownerCompares: 2, reason: NOT_A_DRIVE("workspaceOwnerId and conversation.ownerId are an agent workspace's and a conversation thread's owners") },
   },
   'packages/lib/src/compliance/export/gdpr-export.ts': {
     collectUserDrives: { ownerCompares: 1, reads: 1, reason: "GDPR subject-access export of the subject's OWN drives and membership rows; pending invitations are the subject's personal data" },
@@ -168,8 +194,18 @@ export const DRIVE_ACCESS_GATE_ALLOWLIST: AccessGateAllowlist = {
   'packages/lib/src/onboarding/home-drive.ts': {
     provisionHomeDriveIfNeeded: { ownerCompares: 1, reason: "provisioning looks up the user's own HOME drive (never an org drive)" },
   },
+  'packages/lib/src/env-bridge/decide-bind.ts': {
+    policyAllows: { ownerCompares: 1, reason: NOT_A_DRIVE("ownerId is a local environment's owner") },
+  },
+  'packages/lib/src/organizations/deletion.ts': {
+    refuse: { ownerCompares: 1, reason: NOT_A_DRIVE("ownerId is the organization's Owner (org deletion, ORG-6)") },
+  },
+  'packages/lib/src/organizations/membership.ts': {
+    decideOwnershipTransfer: { ownerCompares: 2, reason: NOT_A_DRIVE("currentOwnerId is the organization's Owner (org ownership transfer, ORG-1)") },
+  },
   'packages/lib/src/organizations/leave.ts': {
     reassignLedOrgDrives: { ownerCompares: 1, reason: 'writer: selects the org drives a leaving member LEADS so their lead can be reassigned to the org Owner (ORG-6)' },
+    planLeadReassignments: { ownerCompares: 1, reason: NOT_A_DRIVE("orgOwnerId is the organization's Owner, excluded as a reassignment source") },
   },
   'packages/lib/src/repositories/account-repository.ts': {
     checkAndDeleteSoloDrives: { ownerCompares: 1, reads: 1, reason: `account deletion: ${OWN_LEAD_INVENTORY} (personal drives only); counting every row, pending included, keeps a drive "multi-member", the conservative direction` },
@@ -179,6 +215,9 @@ export const DRIVE_ACCESS_GATE_ALLOWLIST: AccessGateAllowlist = {
   'packages/lib/src/services/app-shell-service.ts': {
     fetchDriveMembers: { reads: 1, reason: 'member list of the drives the shell already listed through listMemberDrives; returns acceptedAt so the UI can show pending invitations (display)' },
     fetchDriveSummaries: { reads: 1, reason: "display only: the caller's own lastAccessedAt per listed drive; ownership and role come from listMemberDrives" },
+  },
+  'packages/lib/src/services/agent-workspaces/agent-workspaces-store.ts': {
+    list: { ownerCompares: 2, reason: NOT_A_DRIVE('ownerId is an optional agent-workspace owner filter compared with undefined') },
   },
   'packages/lib/src/services/drive-envs/drive-envs-store.ts': {
     countEnvsOwnedBy: { ownerCompares: 1, reason: 'payer quota: counts environments across the drives a payer leads (billing), not an access decision' },
@@ -265,6 +304,14 @@ describe('access-gate scanner (planted shapes, fake files)', () => {
     expect(kinds('where: and(eq(drives.id, id), eq(drives.ownerId, userId)),')).toEqual(['drive ownerId comparison']);
     expect(kinds('where: ne(userProfiles.userId, drives.ownerId),')).toEqual(['drive ownerId comparison']);
     expect(kinds('sql`WHERE d."ownerId" = ${userId}`')).toEqual(['drive ownerId comparison']);
+    expect(kinds('const { ownerId } = drive; if (ownerId !== auth.userId) return;')).toEqual(['drive ownerId comparison']);
+    expect(kinds('if (drive.ownerId == auth.userId) return;')).toEqual(['drive ownerId comparison']);
+    expect(kinds('if (auth.userId != driveOwnerId) return;')).toEqual(['drive ownerId comparison']);
+    expect(kinds('sql`${drives.ownerId} = ${auth.userId}`')).toEqual(['drive ownerId comparison']);
+  });
+
+  it('counts the drive_members table interpolated into a raw sql template', () => {
+    expect(kinds('await db.execute(sql`select 1 from ${driveMembers} dm where dm."userId" = ${u}`);')).toEqual(['drive_members read']);
   });
 
   it('ignores writes, column selects, comments and prose', () => {
@@ -275,6 +322,8 @@ describe('access-gate scanner (planted shapes, fake files)', () => {
     expect(kinds('// if (drive.ownerId === userId) — the old inline check')).toEqual([]);
     expect(kinds('/* db.select().from(driveMembers) */')).toEqual([]);
     expect(kinds("message.includes('drive_members');")).toEqual([]);
+    expect(kinds('const byDrive = (d: Drive) => d.id;')).toEqual([]);
+    expect(kinds('return { ownerId, name };')).toEqual([]);
   });
 
   it('attributes a site to the innermost function whose body holds it, not to a sibling closure above it', () => {

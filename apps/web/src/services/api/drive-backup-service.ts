@@ -8,7 +8,7 @@ import { pagePermissions, driveMembers, driveRoles } from '@pagespace/db/schema/
 import { files } from '@pagespace/db/schema/storage'
 import { driveBackups, driveBackupPages, driveBackupPermissions, driveBackupMembers, driveBackupRoles, driveBackupFiles } from '@pagespace/db/schema/versioning';
 import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
-import { listMemberDrives } from '@pagespace/lib/permissions/member-drives';
+import { getAdministeredDriveIds } from '@pagespace/lib/permissions/member-drives';
 import { createChangeGroupId, inferChangeGroupType } from '@pagespace/lib/monitoring/change-group';
 import { computePageStateHash, createPageVersion } from '@pagespace/lib/services/page-version-service'
 import { hashWithPrefix } from '@pagespace/lib/utils/hash-utils';
@@ -79,10 +79,9 @@ export async function listAllUserBackups(
   userId: string,
   options?: { limit?: number; offset?: number }
 ): Promise<{ success: boolean; backups: DriveBackupWithDriveName[]; total: number; error?: string }> {
-  // Drives the user leads or administers (org-aware member drives, not trashed).
-  const driveIds = (await listMemberDrives(userId, { includeTrashed: false }))
-    .filter((d) => d.isOwner || d.role === 'ADMIN')
-    .map((d) => d.driveId);
+  // Drives the user leads or administers (org-aware: an org Owner/Admin administers every drive of
+  // the org, joined or not), not trashed.
+  const driveIds = await getAdministeredDriveIds(userId, { includeTrashed: false });
 
   if (driveIds.length === 0) {
     return { success: true, backups: [], total: 0 };
