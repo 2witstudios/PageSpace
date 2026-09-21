@@ -70,14 +70,20 @@ export interface WorkflowExecutionResult {
    */
   finalizeError?: string;
   /**
-   * Set when the credit gate refused the run before anything executed.
-   * `retry: true` means no workflow_runs row was written, so the scheduled
-   * source (calendar occurrence, task trigger, cron slot) must be left eligible
-   * for its next tick; `retry: false` means the refusal was recorded as an
-   * error run (`runId`) and the source should settle as it does for any
-   * failure.
+   * The ONE field a scheduled caller branches on. True when the run never
+   * started (a transient credit refusal, or the gate itself threw) and, inside
+   * the source's 24h retry window, NO workflow_runs row was written: the source
+   * (calendar occurrence, task trigger, cron slot) must stay eligible for its
+   * next tick. Absent/false means the outcome is settled, and any unstarted
+   * run was recorded as one error row (`runId`).
    */
-  refusal?: { reason: DeniedGateReason; kind: GateRefusalKind; retry: boolean };
+  retryable?: boolean;
+  /**
+   * Set when the credit gate refused the run before anything executed; carries
+   * the reason for user-facing mapping (the manual run route's 402/429). A gate
+   * that THREW sets no refusal. Scheduling decisions use `retryable`.
+   */
+  refusal?: { reason: DeniedGateReason; kind: GateRefusalKind };
 }
 
 /**
@@ -150,7 +156,9 @@ export async function executeWorkflow(input: WorkflowExecutionInput): Promise<Wo
       durationMs: Date.now() - startTime,
       error: error instanceof Error ? error.message : String(error),
     };
-    if (shouldRetryRefusal({ kind: 'transient', source: input.source, now: new Date() })) return failed;
+    if (shouldRetryRefusal({ kind: 'transient', source: input.source, now: new Date() })) {
+      return { ...failed, retryable: true };
+    }
     return recordUnstartedRun(input, failed);
   }
 
@@ -238,9 +246,9 @@ async function recordRefusal(
     success: false,
     durationMs: Date.now() - startTime,
     error: `AI credit gate denied: ${reason}`,
-    refusal: { reason, kind, retry },
+    refusal: { reason, kind },
   };
-  return retry ? refused : recordUnstartedRun(input, refused);
+  return retry ? { ...refused, retryable: true } : recordUnstartedRun(input, refused);
 }
 
 /**

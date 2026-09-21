@@ -210,7 +210,7 @@ describe('POST /api/workflows/[workflowId]/run', () => {
         durationMs: 0,
         runId: 'run_refused',
         error: 'AI credit gate denied: requires_funding',
-        refusal: { reason: 'requires_funding', kind: 'terminal', retry: false },
+        refusal: { reason: 'requires_funding', kind: 'terminal' },
       });
 
       const response = await POST(new Request('https://example.com/api/workflows/wf_1/run', { method: 'POST' }), createContext('wf_1'));
@@ -230,7 +230,7 @@ describe('POST /api/workflows/[workflowId]/run', () => {
         durationMs: 0,
         runId: 'run_refused',
         error: 'AI credit gate denied: too_many_in_flight',
-        refusal: { reason: 'too_many_in_flight', kind: 'transient', retry: false },
+        refusal: { reason: 'too_many_in_flight', kind: 'transient' },
       });
 
       const response = await POST(new Request('https://example.com/api/workflows/wf_1/run', { method: 'POST' }), createContext('wf_1'));

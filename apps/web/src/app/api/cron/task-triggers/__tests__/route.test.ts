@@ -334,10 +334,25 @@ describe('POST /api/cron/task-triggers', () => {
         success: false,
         durationMs: 1,
         error: 'AI credit gate denied: too_many_in_flight',
-        refusal: { reason: 'too_many_in_flight', kind: 'transient', retry: true },
+        retryable: true,
+        refusal: { reason: 'too_many_in_flight', kind: 'transient' },
       });
 
       expect(sets).toContainEqual({ lastFiredAt: null, lastFireError: 'AI credit gate denied: too_many_in_flight' });
+      expect(sets.some((set) => set.isEnabled === false)).toBe(false);
+      expect(body).toMatchObject({ executed: 0, deferred: 1 });
+      expect(body.errors).toBeUndefined();
+    });
+
+    it('given the credit gate itself THREW inside the retry window (retryable, no refusal), should release the claim and keep the trigger enabled so the next tick retries it', async () => {
+      const { body, sets } = await fire({
+        success: false,
+        durationMs: 1,
+        error: 'connection terminated unexpectedly',
+        retryable: true,
+      });
+
+      expect(sets).toContainEqual({ lastFiredAt: null, lastFireError: 'connection terminated unexpectedly' });
       expect(sets.some((set) => set.isEnabled === false)).toBe(false);
       expect(body).toMatchObject({ executed: 0, deferred: 1 });
       expect(body.errors).toBeUndefined();
@@ -349,7 +364,7 @@ describe('POST /api/cron/task-triggers', () => {
         durationMs: 1,
         runId: 'run_refused',
         error: 'AI credit gate denied: requires_funding',
-        refusal: { reason: 'requires_funding', kind: 'terminal', retry: false },
+        refusal: { reason: 'requires_funding', kind: 'terminal' },
       });
 
       expect(sets).toContainEqual({ isEnabled: false, lastFireError: 'AI credit gate denied: requires_funding' });
@@ -407,7 +422,7 @@ describe('POST /api/cron/task-triggers', () => {
         durationMs: 1,
         runId: 'run_expired',
         error: 'AI credit gate denied: too_many_in_flight',
-        refusal: { reason: 'too_many_in_flight', kind: 'transient', retry: false },
+        refusal: { reason: 'too_many_in_flight', kind: 'transient' },
       });
 
       expect(sets).toContainEqual({ isEnabled: false, lastFireError: 'AI credit gate denied: too_many_in_flight' });

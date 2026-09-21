@@ -1025,8 +1025,9 @@ describe('executeWorkflow — credit gate inside the executor', () => {
       success: false,
       error: 'AI credit gate denied: requires_funding',
       runId: 'run_refused',
-      refusal: { reason: 'requires_funding', kind: 'terminal', retry: false },
+      refusal: { reason: 'requires_funding', kind: 'terminal' },
     });
+    expect(result.retryable).toBeFalsy();
     expect(mockInsertValues).toHaveBeenCalledTimes(1);
     expect(mockInsertValues).toHaveBeenCalledWith(
       expect.objectContaining({ status: 'error', error: 'AI credit gate denied: requires_funding' }),
@@ -1046,7 +1047,8 @@ describe('executeWorkflow — credit gate inside the executor', () => {
     expect(result).toMatchObject({
       success: false,
       error: 'AI credit gate denied: too_many_in_flight',
-      refusal: { reason: 'too_many_in_flight', kind: 'transient', retry: true },
+      retryable: true,
+      refusal: { reason: 'too_many_in_flight', kind: 'transient' },
     });
     expect(result.runId).toBeUndefined();
     expect(mockInsert).not.toHaveBeenCalled();
@@ -1062,21 +1064,35 @@ describe('executeWorkflow — credit gate inside the executor', () => {
       createInputFixture({ source: { table: 'taskTriggers', id: 'tt_1', triggerAt: new Date(Date.now() - 25 * 60 * 60 * 1000) } }),
     );
 
-    expect(result).toMatchObject({ runId: 'run_expired', refusal: { kind: 'transient', retry: false } });
+    expect(result).toMatchObject({ runId: 'run_expired', refusal: { kind: 'transient' } });
+    expect(result.retryable).toBeFalsy();
     expect(mockInsertValues).toHaveBeenCalledWith(
       expect.objectContaining({ status: 'error', error: 'AI credit gate denied: daily_cap_exceeded' }),
     );
   });
 
-  test('given the gate itself throws for a fresh scheduled occurrence, should fail without any run row so the next tick retries it', async () => {
+  test.each([
+    ['calendarTriggers', 'ct_1'],
+    ['taskTriggers', 'tt_1'],
+  ] as const)('given the gate itself throws for a fresh %s occurrence, should report it RETRYABLE with no run row so the caller keeps the source eligible', async (table, id) => {
     creditGate.throws = new Error('db down');
 
     const result = await executeWorkflow(
-      createInputFixture({ source: { table: 'calendarTriggers', id: 'ct_1', triggerAt: new Date(Date.now() - 60_000) } }),
+      createInputFixture({ source: { table, id, triggerAt: new Date(Date.now() - 60_000) } }),
     );
 
-    expect(result).toMatchObject({ success: false, error: 'db down' });
+    expect(result).toMatchObject({ success: false, error: 'db down', retryable: true });
     expect(result.refusal).toBeUndefined();
+    expect(mockInsert).not.toHaveBeenCalled();
+    expect(generateText).not.toHaveBeenCalled();
+  });
+
+  test('given the gate itself throws for a fresh cron slot, should report it RETRYABLE with no run row', async () => {
+    creditGate.throws = new Error('db down');
+
+    const result = await executeWorkflow(createInputFixture({ source: { table: 'cron', id: null, triggerAt: new Date(Date.now() - 60_000) } }));
+
+    expect(result).toMatchObject({ success: false, retryable: true });
     expect(mockInsert).not.toHaveBeenCalled();
   });
 
@@ -1090,6 +1106,8 @@ describe('executeWorkflow — credit gate inside the executor', () => {
     );
 
     expect(result).toMatchObject({ success: false, error: 'db down', runId: 'run_gate_error' });
+    expect(result.retryable).toBeFalsy();
+    expect(mockInsertValues).toHaveBeenCalledTimes(1);
     expect(mockInsertValues).toHaveBeenCalledWith(expect.objectContaining({ status: 'error', error: 'db down' }));
     expect(mockOnConflictDoNothing).not.toHaveBeenCalled();
   });
@@ -1105,8 +1123,9 @@ describe('executeWorkflow — credit gate inside the executor', () => {
 
     expect(result).toMatchObject({
       runId: 'run_webhook_refused',
-      refusal: { reason: 'daily_cap_exceeded', kind: 'transient', retry: false },
+      refusal: { reason: 'daily_cap_exceeded', kind: 'transient' },
     });
+    expect(result.retryable).toBeFalsy();
     expect(mockInsertValues).toHaveBeenCalledWith(expect.objectContaining({ status: 'error' }));
   });
 

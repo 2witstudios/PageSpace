@@ -281,8 +281,9 @@ export async function fireCompletionTrigger(taskId: string): Promise<void> {
 
     void executeWorkflow(input).then(async (result) => {
       try {
-        if (result.refusal?.retry) {
-          // A transient credit refusal ran nothing and nothing in-process will
+        if (result.retryable) {
+          // A retryable unstarted run (transient refusal, or the gate threw)
+          // ran nothing and nothing in-process will
           // fire this again: hand it to the task-triggers cron (isEnabled,
           // nextRunAt <= now, lastFiredAt IS NULL), which retries it with the
           // same completion task context under the same 24h bound.

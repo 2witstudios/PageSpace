@@ -140,10 +140,11 @@ export async function POST(req: Request) {
           totalAttempted++;
           if (settled.value.result.success) {
             executed++;
-          } else if (settled.value.result.refusal?.retry) {
-            // Transient credit refusal: the executor wrote no workflow_runs
-            // row, so discovery returns this occurrence next tick (bounded to
-            // 24h, after which the executor records the refusal as an error).
+          } else if (settled.value.result.retryable) {
+            // Retryable (transient refusal, or the gate threw): the executor
+            // wrote no workflow_runs row, so discovery returns this occurrence
+            // next tick (bounded to 24h, after which the executor records it
+            // as one error run).
             deferred++;
           } else if (!settled.value.result.claimConflict) {
             errors.push(`trigger-${settled.value.trigger.id}: ${settled.value.result.error}`);

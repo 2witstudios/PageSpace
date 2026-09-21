@@ -103,12 +103,12 @@ export async function POST(req: Request) {
           // workflow, claimConflict comes back true — we leave nextRunAt
           // alone so the running fire's natural completion governs the
           // next schedule advance.
-          // A transient credit refusal (retry) wrote no run either: keep the
-          // past-due slot so the next tick fires it again (bounded to 24h by
-          // the executor). A terminal refusal is recorded and advances like
+          // A retryable unstarted run (transient credit refusal, or the gate
+          // itself threw) wrote no run either: keep the past-due slot so the
+          // next tick fires it again (bounded to 24h by the executor). A terminal refusal is recorded and advances like
           // any failure, leaving the workflow enabled for its next slot.
           const result = await executeWorkflow(toExecutionInput(workflow));
-          if (!result.claimConflict && !result.refusal?.retry) {
+          if (!result.claimConflict && !result.retryable) {
             await advanceNextRunAt(workflow);
           }
           return { workflow, result };
@@ -122,7 +122,7 @@ export async function POST(req: Request) {
           totalAttempted++;
           if (settled.value.result.success) {
             executed++;
-          } else if (settled.value.result.refusal?.retry) {
+          } else if (settled.value.result.retryable) {
             deferred++;
           } else {
             errors.push(`${settled.value.workflow.name}: ${settled.value.result.error}`);

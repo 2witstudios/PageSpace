@@ -203,7 +203,25 @@ describe('POST /api/cron/workflows', () => {
       success: false,
       durationMs: 0,
       error: 'AI credit gate denied: daily_cap_exceeded',
-      refusal: { reason: 'daily_cap_exceeded', kind: 'transient', retry: true },
+      retryable: true,
+      refusal: { reason: 'daily_cap_exceeded', kind: 'transient' },
+    });
+
+    const response = await POST(new Request('https://example.com/api/cron/workflows', { method: 'POST' }));
+    const body = await response.json();
+
+    expect(getNextRunDate).not.toHaveBeenCalled();
+    expect(body).toMatchObject({ executed: 0, deferred: 1 });
+    expect(body.errors).toBeUndefined();
+  });
+
+  it('given the credit gate itself THREW inside the retry window (retryable, no refusal), should keep the slot so the next tick retries it, and not report an error', async () => {
+    mockSelectWhere.mockResolvedValue([MOCK_WORKFLOW]);
+    vi.mocked(executeWorkflow).mockResolvedValue({
+      success: false,
+      durationMs: 0,
+      error: 'connection terminated unexpectedly',
+      retryable: true,
     });
 
     const response = await POST(new Request('https://example.com/api/cron/workflows', { method: 'POST' }));
@@ -221,7 +239,7 @@ describe('POST /api/cron/workflows', () => {
       durationMs: 0,
       runId: 'run_refused',
       error: 'AI credit gate denied: out_of_credits',
-      refusal: { reason: 'out_of_credits', kind: 'terminal', retry: false },
+      refusal: { reason: 'out_of_credits', kind: 'terminal' },
     });
     vi.mocked(getNextRunDate).mockReturnValue(new Date('2025-01-02T09:00:00Z'));
 

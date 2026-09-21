@@ -333,12 +333,25 @@ describe('POST /api/cron/calendar-triggers', () => {
         success: false,
         durationMs: 0,
         error: 'AI credit gate denied: too_many_in_flight',
-        refusal: { reason: 'too_many_in_flight', kind: 'transient', retry: true },
+        retryable: true,
+        refusal: { reason: 'too_many_in_flight', kind: 'transient' },
       });
 
       expect(body).toMatchObject({ executed: 0, deferred: 1 });
       expect(body.errors).toBeUndefined();
       expect(mockInsert).not.toHaveBeenCalled();
+    });
+
+    it('given the credit gate itself THREW inside the retry window (retryable, no refusal), should report it deferred, not an error', async () => {
+      const body = await fire({
+        success: false,
+        durationMs: 0,
+        error: 'connection terminated unexpectedly',
+        retryable: true,
+      });
+
+      expect(body).toMatchObject({ executed: 0, deferred: 1 });
+      expect(body.errors).toBeUndefined();
     });
 
     it('given a terminal refusal (recorded once by the executor), should report the occurrence as an error', async () => {
@@ -347,7 +360,7 @@ describe('POST /api/cron/calendar-triggers', () => {
         durationMs: 0,
         runId: 'run_refused',
         error: 'AI credit gate denied: requires_funding',
-        refusal: { reason: 'requires_funding', kind: 'terminal', retry: false },
+        refusal: { reason: 'requires_funding', kind: 'terminal' },
       });
 
       expect(body.errors).toEqual([`trigger-${MOCK_TRIGGER.id}: AI credit gate denied: requires_funding`]);

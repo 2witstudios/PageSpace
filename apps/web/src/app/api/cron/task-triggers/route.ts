@@ -159,8 +159,9 @@ export async function POST(req: Request) {
 
           const result = await executeWorkflow(input);
 
-          if (result.refusal?.retry) {
-            // A transient credit refusal wrote no run: release this tick's claim
+          if (result.retryable) {
+            // A retryable unstarted run (transient refusal, or the gate threw)
+            // wrote no run: release this tick's claim
             // so the next tick fires the trigger again (bounded to 24h by the
             // executor), and show why it is waiting.
             await db.update(taskTriggers).set({
@@ -184,7 +185,7 @@ export async function POST(req: Request) {
         if (settled.status === 'fulfilled') {
           if (settled.value.result.success) {
             executed++;
-          } else if (settled.value.result.refusal?.retry) {
+          } else if (settled.value.result.retryable) {
             deferred++;
           } else {
             errors.push(`task-trigger-${settled.value.trigger.id}: ${settled.value.result.error}`);

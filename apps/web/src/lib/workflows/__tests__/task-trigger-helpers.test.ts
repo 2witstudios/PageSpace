@@ -296,7 +296,8 @@ describe('task-trigger-helpers', () => {
         success: false,
         durationMs: 1,
         error: 'AI credit gate denied: too_many_in_flight',
-        refusal: { reason: 'too_many_in_flight', kind: 'transient', retry: true },
+        retryable: true,
+        refusal: { reason: 'too_many_in_flight', kind: 'transient' },
       });
 
       const firedAt = vi.mocked(executeWorkflow).mock.calls[0][0].source.triggerAt;
@@ -310,13 +311,32 @@ describe('task-trigger-helpers', () => {
       expect(mockSet).not.toHaveBeenCalledWith(expect.objectContaining({ isEnabled: false }));
     });
 
+    it('given the credit gate itself THREW inside the retry window (retryable, no refusal), should hand the fire to the task-triggers cron instead of disabling it', async () => {
+      await fireWith({
+        success: false,
+        durationMs: 1,
+        error: 'connection terminated unexpectedly',
+        retryable: true,
+      });
+
+      const firedAt = vi.mocked(executeWorkflow).mock.calls[0][0].source.triggerAt;
+      await vi.waitFor(() => {
+        expect(mockSet).toHaveBeenCalledWith({
+          lastFiredAt: null,
+          nextRunAt: firedAt,
+          lastFireError: 'connection terminated unexpectedly',
+        });
+      });
+      expect(mockSet).not.toHaveBeenCalledWith(expect.objectContaining({ isEnabled: false }));
+    });
+
     it('given a terminal refusal (or a transient one past its window), should disable the trigger once with the reason', async () => {
       await fireWith({
         success: false,
         durationMs: 1,
         runId: 'run_refused',
         error: 'AI credit gate denied: requires_funding',
-        refusal: { reason: 'requires_funding', kind: 'terminal', retry: false },
+        refusal: { reason: 'requires_funding', kind: 'terminal' },
       });
 
       await vi.waitFor(() => {
