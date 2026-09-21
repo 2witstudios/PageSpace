@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { AlertTriangle } from "lucide-react";
+import { SignInWithAppleDeletionNotice, type AppleSignInRevocation } from "@/components/account/SignInWithAppleDeletionNotice";
 
 interface DeleteAccountDialogProps {
   isOpen: boolean;
@@ -21,6 +22,8 @@ interface DeleteAccountDialogProps {
   userEmail: string;
   isDeleting: boolean;
   soloDrivesCount: number;
+  /** Unknown (still loading, or the status request failed) renders no Apple notice. */
+  appleSignInRevocation?: AppleSignInRevocation;
 }
 
 export function DeleteAccountDialog({
@@ -30,6 +33,7 @@ export function DeleteAccountDialog({
   userEmail,
   isDeleting,
   soloDrivesCount,
+  appleSignInRevocation,
 }: DeleteAccountDialogProps) {
   const [emailConfirmation, setEmailConfirmation] = useState("");
 
@@ -72,6 +76,8 @@ export function DeleteAccountDialog({
               </ul>
             </AlertDescription>
           </Alert>
+
+          {appleSignInRevocation && <SignInWithAppleDeletionNotice revocation={appleSignInRevocation} />}
 
           <div className="space-y-2">
             <Label htmlFor="email-confirmation">

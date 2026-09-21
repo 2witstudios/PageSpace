@@ -533,7 +533,7 @@ describe('POST /api/oauth/authorize — step-up gate (Phase 8: bearer-OAuth mint
   });
 
   it('ORG-4 (partial) refuses consent to an explicit drive:<id>:admin scope on an org drive the user reaches only through org power, issuing no code', async () => {
-    vi.mocked(getDriveAccess).mockResolvedValueOnce({ isOwner: false, isAdmin: true, isMember: true, role: 'ADMIN' });
+    vi.mocked(getDriveAccess).mockResolvedValueOnce({ isOwner: false, isAdmin: true, isMember: true, role: 'ADMIN', customRoleId: null });
     vi.mocked(getExplicitScopeAuthority).mockResolvedValueOnce({ orgDrive: true, row: null });
 
     const res = await POST(postRequest({ ...approvalBody, scope: 'drive:testdrive1:admin name:ci' }) as never);
@@ -550,7 +550,7 @@ describe('POST /api/oauth/authorize — step-up gate (Phase 8: bearer-OAuth mint
     // once so this particular request has no access to the requested drive,
     // driving checkGrantAuthority's 'no_access' branch (a real scope-cap
     // rejection, not a request-syntax one — the scope itself is well-formed).
-    vi.mocked(getDriveAccess).mockResolvedValueOnce({ isOwner: false, isAdmin: false, isMember: false, role: null });
+    vi.mocked(getDriveAccess).mockResolvedValueOnce({ isOwner: false, isAdmin: false, isMember: false, role: null, customRoleId: null });
 
     const overPrivilegedBody = { ...approvalBody, scope: 'drive:testdrive1 name:ci' };
     const res = await POST(postRequest(overPrivilegedBody) as never);

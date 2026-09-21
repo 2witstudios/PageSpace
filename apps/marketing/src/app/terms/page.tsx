@@ -67,6 +67,22 @@ export default function TermsOfService() {
               <li>Respecting intellectual property rights</li>
               <li>Not attempting to compromise the security of the Service</li>
             </ul>
+            <p className="mb-4">
+              You must be at least 16 years old to create an account or use the Service.
+            </p>
+
+            <h3 className="text-xl font-semibold mb-3">4.1 Acceptable Use</h3>
+            <p className="mb-4">
+              PageSpace has zero tolerance for objectionable content and abusive users. You may not use the
+              Service — including channels, direct messages, shared drives, and published pages — to post,
+              send, or share content that is unlawful, harassing, threatening, hateful, sexually explicit,
+              or otherwise objectionable, or to abuse, harass, or impersonate other users.
+            </p>
+            <p className="mb-4">
+              You can report objectionable content or abusive users through Feedback in the app or by
+              emailing hello@pagespace.ai. We review reports, remove content that violates this section,
+              and may suspend or terminate the accounts responsible without notice.
+            </p>
           </section>
 
           <section className="mb-8">

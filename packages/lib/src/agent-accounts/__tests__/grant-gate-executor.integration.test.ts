@@ -37,6 +37,7 @@ import type {
   UserId,
 } from '../grant';
 import type { AccountId, CredentialVersion, PolicyVersion, TenantId } from '@pagespace/db/schema/agent-accounts';
+import { VERIFIED_GRANT } from '../verified-grant-brand';
 
 const issuer = generateKeyPairSync('ed25519');
 const rogue = generateKeyPairSync('ed25519');
@@ -155,7 +156,7 @@ describe('grant gate — nonce recorded only on ok (ADR 0004 §8.11)', () => {
     expect({ forged, afterForged, legitimate }).toEqual({
       forged: { ok: false, reason: 'bad_signature' },
       afterForged: { ok: true, recorded: null },
-      legitimate: { ok: true, grant },
+      legitimate: { ok: true, grant: { ...grant, [VERIFIED_GRANT]: grant.aud } },
     });
   });
 
@@ -179,7 +180,7 @@ describe('grant gate — nonce recorded only on ok (ADR 0004 §8.11)', () => {
     const recorded = await store.lookup({ nonce: grant.nonce });
     const second = await gate.present(presentation(grant));
     expect({ first, recordedGrantId: recorded.ok && recorded.recorded?.grantId, second }).toEqual({
-      first: { ok: true, grant },
+      first: { ok: true, grant: { ...grant, [VERIFIED_GRANT]: grant.aud } },
       recordedGrantId: grant.grantId,
       second: { ok: false, reason: 'replayed' },
     });

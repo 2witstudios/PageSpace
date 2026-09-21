@@ -39,9 +39,11 @@ CREATE TABLE "organizations" (
 	CONSTRAINT "organizations_stripeCustomerId_unique" UNIQUE("stripeCustomerId")
 );
 --> statement-breakpoint
+ALTER TABLE "users" ADD COLUMN "subscriptionGrandfathered" boolean DEFAULT false NOT NULL;--> statement-breakpoint
 ALTER TABLE "drives" ADD COLUMN "orgId" text;--> statement-breakpoint
 ALTER TABLE "drives" ADD COLUMN "orgVisibility" "OrgDriveVisibility" DEFAULT 'OPEN' NOT NULL;--> statement-breakpoint
 ALTER TABLE "drive_members" ADD COLUMN "source" "DriveMemberSource" DEFAULT 'invite' NOT NULL;--> statement-breakpoint
+ALTER TABLE "credit_ledger" ADD COLUMN "paidCents" integer;--> statement-breakpoint
 ALTER TABLE "org_invitations" ADD CONSTRAINT "org_invitations_orgId_organizations_id_fk" FOREIGN KEY ("orgId") REFERENCES "public"."organizations"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "org_invitations" ADD CONSTRAINT "org_invitations_invitedBy_users_id_fk" FOREIGN KEY ("invitedBy") REFERENCES "public"."users"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "org_members" ADD CONSTRAINT "org_members_orgId_organizations_id_fk" FOREIGN KEY ("orgId") REFERENCES "public"."organizations"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint

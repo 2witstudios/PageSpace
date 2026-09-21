@@ -5,12 +5,23 @@
  * registry match, exactly as it will in production — never from the request.
  * The `{slot}` names are the resource keys; their values come from the path.
  */
-import type { OperationRegistry } from '../canonical-request';
+import type { CanonicalOrigin, OperationRegistry, OperationRegistryEntry } from '../canonical-request';
 
 export const TEST_PROVIDER = 'github';
+export const TEST_ORIGIN = 'https://api.github.com:443' as CanonicalOrigin;
+
+/** The G1c fields every entry carries; an entry that binds nothing beyond its path uses these. */
+export const ENTRY_DEFAULTS: Pick<OperationRegistryEntry, 'origin' | 'bodySlots' | 'derivedResources' | 'restrictionKeys' | 'auditResourceSlots'> = {
+  origin: TEST_ORIGIN,
+  bodySlots: [],
+  derivedResources: [],
+  restrictionKeys: {},
+  auditResourceSlots: [],
+};
 
 export const TEST_REGISTRY: OperationRegistry = [
   {
+    ...ENTRY_DEFAULTS,
     providerSlug: TEST_PROVIDER,
     channel: 'http-executor',
     method: 'POST',
@@ -19,6 +30,7 @@ export const TEST_REGISTRY: OperationRegistry = [
     declaredHeaders: ['x-github-api-version'],
   },
   {
+    ...ENTRY_DEFAULTS,
     providerSlug: TEST_PROVIDER,
     channel: 'http-executor',
     method: 'GET',
@@ -27,6 +39,7 @@ export const TEST_REGISTRY: OperationRegistry = [
     declaredHeaders: [],
   },
   {
+    ...ENTRY_DEFAULTS,
     providerSlug: TEST_PROVIDER,
     channel: 'http-executor',
     method: 'PUT',
@@ -35,6 +48,7 @@ export const TEST_REGISTRY: OperationRegistry = [
     declaredHeaders: [],
   },
   {
+    ...ENTRY_DEFAULTS,
     providerSlug: TEST_PROVIDER,
     channel: 'http-executor',
     method: 'PUT',
@@ -43,6 +57,7 @@ export const TEST_REGISTRY: OperationRegistry = [
     declaredHeaders: [],
   },
   {
+    ...ENTRY_DEFAULTS,
     providerSlug: TEST_PROVIDER,
     channel: 'http-executor',
     method: 'POST',

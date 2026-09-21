@@ -2,7 +2,7 @@
 
 import { motion } from 'motion/react';
 import { Loader2 } from 'lucide-react';
-import Link from 'next/link';
+import { MarketingLink } from '@/components/ui/MarketingLink';
 import { Button } from '@/components/ui/button';
 
 interface OAuthButtonsProps {
@@ -85,14 +85,15 @@ export function OAuthButtons({
           affirmative confirmation (OAuth has no form to collect a checkbox). */}
       <p className="text-center text-xs text-muted-foreground">
         By continuing with Google or Apple, you confirm you are at least 16 and agree to our{' '}
-        <Link href="/terms" className="underline hover:text-foreground">
+        <MarketingLink href="/terms" className="underline hover:text-foreground">
           Terms
-        </Link>{' '}
+        </MarketingLink>{' '}
         and{' '}
-        <Link href="/privacy" className="underline hover:text-foreground">
+        <MarketingLink href="/privacy" className="underline hover:text-foreground">
           Privacy Policy
-        </Link>
-        .
+        </MarketingLink>
+        . AI features send the content you use them with
+        to OpenRouter and the model provider you choose.
       </p>
     </div>
   );

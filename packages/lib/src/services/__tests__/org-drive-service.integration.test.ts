@@ -167,7 +167,7 @@ describe('moveDriveToOrg', () => {
 
     expect(await moveDriveToOrg(marcus, driveId, { orgId: northwind }, deps)).toMatchObject({ ok: true, orgId: northwind });
     expect(await readDrive(driveId)).toMatchObject({ orgId: northwind, ownerId: marcus });
-    expect(await getDriveAccess(driveId, marcus)).toEqual({ isOwner: true, isAdmin: true, isMember: true, role: 'OWNER' });
+    expect(await getDriveAccess(driveId, marcus)).toEqual({ isOwner: true, isAdmin: true, isMember: true, role: 'OWNER', customRoleId: null });
 
     // A Home drive is refused by the service and, beneath it, by the drives_home_never_org_check CHECK.
     expect(await moveDriveToOrg(marcus, homeId, { orgId: northwind }, deps)).toMatchObject({ ok: false, code: 'HOME_DRIVE' });
@@ -177,7 +177,7 @@ describe('moveDriveToOrg', () => {
     // The Owner role stays with a person: when the lead's account goes, the org Owner leads the drive.
     await accountRepository.deleteUser(marcus);
     expect(await readDrive(driveId)).toMatchObject({ orgId: northwind, ownerId: jono });
-    expect(await getDriveAccess(driveId, jono)).toEqual({ isOwner: true, isAdmin: true, isMember: true, role: 'OWNER' });
+    expect(await getDriveAccess(driveId, jono)).toEqual({ isOwner: true, isAdmin: true, isMember: true, role: 'OWNER', customRoleId: null });
   });
 
   it('DRV-1 (partial) a Home drive is refused and nothing is written', async () => {

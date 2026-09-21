@@ -21,10 +21,17 @@ import type {
   RequestDigest,
 } from './grant';
 import type { CanonicalOrigin, CanonicalRequest } from './canonical-request';
+import type { AccountStatus } from '@pagespace/db/schema/agent-accounts';
 
 export type AuditOutcome =
   | { readonly kind: 'allowed' }
-  | { readonly kind: 'denied'; readonly reason: GrantDenyReason }
+  /**
+   * `accountStatus` is the status the adapter read when the reason is
+   * `account_not_active` — the verifier withholds it from the caller (F16) and
+   * it belongs in the audit instead; null for every other reason and for an
+   * unknown account (G1c R14).
+   */
+  | { readonly kind: 'denied'; readonly reason: GrantDenyReason; readonly accountStatus: AccountStatus | null }
   | { readonly kind: 'executed'; readonly upstreamStatus: number | null }
   | { readonly kind: 'upstream_failed'; readonly upstreamStatus: number | null }
   /** A timeout after a possible upstream write: replay protection is not idempotency (threat model §2.4). */
@@ -53,7 +60,7 @@ export type NormalizedAction = {
   readonly pathDigest: string;
   readonly headerNames: readonly string[];
   readonly bodySha256: string;
-  /** Sorted `[key, value]` pairs, restricted to the operation's declared resource keys. */
+  /** Sorted `[key, value]` pairs, restricted to the resources of the entry's `auditResourceSlots` allowlist (empty by default, G1c R6). */
   readonly resourceIds: readonly (readonly [string, string])[];
   readonly operation: OperationRef;
 };
@@ -79,10 +86,16 @@ export type AgentAccountAuditRecord = {
 
 /**
  * `buildAuditRecord` — pure; never includes a body, a credential, a header
- * value, a URL path or an undeclared resource. The hash is injected (SHA3-256
- * in production) so this module stays free of `node:crypto`, and the declared
- * resource keys come from the operation catalogue, so the projection is the
- * typed operation's, not the caller's. G1b implements.
+ * value, a URL path or a resource outside the audit allowlist. The hash is
+ * injected (SHA3-256 in production) so this module stays free of
+ * `node:crypto`, and the allowlist comes from the operation registry entry,
+ * so the projection is the reviewed operation's, not the caller's.
+ *
+ * AMENDED 2026-09-16 (G1c R6). The input was every DECLARED resource key —
+ * after M8, every path slot — so `/v1/tokens/{token}` wrote the token into the
+ * non-erasable chain. It is now the entry's explicit `auditResourceSlots`,
+ * mapped through `restrictionKeys` to the keys `canonical.resources` carries;
+ * an entry that lists nothing audits no resource value.
  */
 export type BuildAuditRecord = (input: {
   readonly grant: AgentAccountGrant;
@@ -90,6 +103,6 @@ export type BuildAuditRecord = (input: {
   readonly outcome: AuditOutcome;
   readonly at: number;
   readonly hash: HashBytes;
-  /** The resource keys this operation declares; every other key is dropped. */
-  readonly declaredResourceKeys: readonly string[];
+  /** The restriction keys of the matched entry's `auditResourceSlots`; every other resource is dropped. `[]` for a generic request. */
+  readonly auditResourceKeys: readonly string[];
 }) => AgentAccountAuditRecord;

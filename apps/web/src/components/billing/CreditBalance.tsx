@@ -14,7 +14,7 @@ import { useCreditBalance } from '@/hooks/useCreditBalance';
 import { useBillingVisibility } from '@/hooks/useBillingVisibility';
 import { BuyCreditsButton } from '@/components/billing/BuyCreditsButton';
 import { UpgradeTierButton } from '@/components/billing/UpgradeTierButton';
-import { creditsFromCents, formatCreditCount } from '@/lib/subscription/credits';
+import { creditBalanceCopy, creditsFromCents, formatCreditCount } from '@/lib/subscription/credits';
 
 /** Percentage of the allowance remaining below which we warn the user. */
 const LOW_BALANCE_THRESHOLD_PCT = 15;
@@ -47,6 +47,7 @@ export function CreditBalance() {
 
   const { spendable, monthly, topup, reserved, debt, subscriptionTier } = balance;
   const isFree = subscriptionTier === 'free';
+  const copy = creditBalanceCopy({ isFree, showBilling });
   const inDebt = spendable < 0;
   // Net monthly portion: gross bucket minus any outstanding debt (topup credits are separate).
   // Using monthly.remaining would overstate the balance when a lapsed period carries debt
@@ -102,12 +103,12 @@ export function CreditBalance() {
           <TooltipContent>
             <p className="font-medium">
               {inDebt
-                ? 'In the red — add credits to keep using AI'
+                ? copy.inDebt
                 : `${monthlyStr} / ${allowanceStr} credits remaining`}
             </p>
             {debt > 0 && (
               <p className="text-xs text-primary-foreground/80">
-                {isFree ? 'Overage clears with a top-up' : 'Overage clears at your next renewal or with a top-up'}
+                {copy.overage}
               </p>
             )}
             {topupCredits > 0 && (

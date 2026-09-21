@@ -8,7 +8,7 @@ import { useCreditBalance } from '@/hooks/useCreditBalance';
 import { useBillingVisibility } from '@/hooks/useBillingVisibility';
 import { BuyCreditsButton } from '@/components/billing/BuyCreditsButton';
 import { UpgradeTierButton } from '@/components/billing/UpgradeTierButton';
-import { formatCreditCount } from '@/lib/subscription/credits';
+import { creditBalanceCopy, formatCreditCount } from '@/lib/subscription/credits';
 
 /**
  * Settings card showing the user's prepaid AI-credit balance on a 0–100 scale,
@@ -26,6 +26,7 @@ export function CreditBalanceCard() {
 
   const renewDate = balance?.monthly.periodEnd ? new Date(balance.monthly.periodEnd) : null;
   const isFree = balance?.subscriptionTier === 'free';
+  const copy = creditBalanceCopy({ isFree, showBilling });
 
   return (
     <Card>
@@ -35,9 +36,7 @@ export function CreditBalanceCard() {
           Credits
         </CardTitle>
         <CardDescription>
-          {isFree
-            ? 'Credits power AI features. Your starter credits are a one-time grant; buy top-up credits (they never expire) or upgrade for a monthly allowance.'
-            : 'Credits power AI features. Your monthly allowance renews each billing period; purchased top-up credits never expire.'}
+          {copy.description}
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -81,9 +80,7 @@ export function CreditBalanceCard() {
               <div className="text-sm text-muted-foreground space-y-0.5">
                 {balance.debt > 0 && (
                   <div className="text-red-600 dark:text-red-400">
-                    {isFree
-                      ? 'In the red — add credits to keep using AI.'
-                      : 'In the red — add credits to keep using AI (or it clears at your next renewal).'}
+                    {copy.inDebt}
                   </div>
                 )}
                 {balance.topup.remaining > 0 && (

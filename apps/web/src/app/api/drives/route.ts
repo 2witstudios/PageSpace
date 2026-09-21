@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { listAccessibleDrives, createDrive, type DriveWithAccess } from '@pagespace/lib/services/drive-service';
 import { isReservedDriveName } from '@pagespace/lib/services/drive-guards';
 import { getAppDriveMembership, getScopedDriveMembership, hasAppDriveMembership, hasScopedDriveMembership } from '@pagespace/lib/permissions/app-permissions';
+import { resolveDriveWideCanEdit } from '@pagespace/lib/permissions/membership-queries';
+import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db';
 import { and, eq, inArray } from '@pagespace/db/operators';
 import { drives as drivesTable, ORG_DRIVE_VISIBILITIES } from '@pagespace/db/schema/core';
@@ -55,22 +57,47 @@ async function listScopedDrivesWithMembership({
       : and(inArray(drivesTable.id, allowedDriveIds), eq(drivesTable.isTrashed, false)),
   });
 
-  const drives = await Promise.all(
-    rows.map(async (drive): Promise<DriveWithAccess | null> => {
+  const resolved = await Promise.all(
+    rows.map(async (drive) => {
       const membership = await getMembership(drive.id);
       if (!membership) return null;
       const role = membership.role
         ?? (isDriveLead(userId, drive) ? ('OWNER' as const) : ('MEMBER' as const));
+      return { drive, membership, role };
+    }),
+  );
+  const valid = resolved.filter(
+    (entry): entry is NonNullable<typeof entry> => entry !== null,
+  );
+
+  // Same drive-wide canEdit rule as the session path (#2627), batched once
+  // for the whole scoped list — never a per-role query per drive.
+  const canCreatePagesMap = await resolveDriveWideCanEdit(
+    valid.map(({ drive, membership, role }) => ({
+      driveId: drive.id,
+      role,
+      customRoleId: membership.customRoleId,
+    })),
+  );
+
+  return Promise.all(
+    valid.map(async ({ drive, membership, role }) => {
+      // An inherited scope (role: null) carries the owner's ACTUAL permissions,
+      // which the token resolvers read through getUserAccessLevel — the scope
+      // row's synthesized MEMBER knows nothing of the owner's custom role.
+      const inheritsNonOwner = membership.role === null && !isDriveLead(userId, drive);
+      const canCreatePages = inheritsNonOwner
+        ? (await getUserAccessLevel(userId, drive.id))?.canEdit === true
+        : (canCreatePagesMap.get(drive.id) ?? false);
       return {
         ...drive,
         isOwned: membership.role === null && isDriveLead(userId, drive),
         role,
+        canCreatePages,
         lastAccessedAt: null,
       };
     }),
   );
-
-  return drives.filter((drive): drive is DriveWithAccess => drive !== null);
 }
 
 export async function GET(req: Request) {
@@ -177,7 +204,8 @@ export async function POST(request: Request) {
       if (!created.ok) {
         return NextResponse.json({ error: created.message, code: created.code }, { status: created.status });
       }
-      newDrive = { ...created.drive, isOwned: true, role: 'OWNER', lastAccessedAt: null };
+      // The creator leads the new drive, so the drive-wide canEdit rule (#2627) grants create, as createDrive does.
+      newDrive = { ...created.drive, isOwned: true, role: 'OWNER', canCreatePages: true, lastAccessedAt: null };
     } else {
       newDrive = await createDrive(userId, { name });
     }

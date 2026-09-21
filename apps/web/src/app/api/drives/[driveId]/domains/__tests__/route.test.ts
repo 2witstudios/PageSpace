@@ -359,7 +359,8 @@ describe('POST /api/drives/[driveId]/domains', () => {
     const res = await POST(makeReq({ hostname: 'acme.com' }), ctx());
     expect(res.status).toBe(403);
     const body = await res.json();
-    expect(body.error).toMatch(/not available on your current plan/i);
+    expect(body.error).toMatch(/available on Pro and higher plans/i);
+    expect(body.error).not.toMatch(/upgrade/i);
   });
 
   it('returns 403 when the drive is at the pro tier cap (1 domain)', async () => {

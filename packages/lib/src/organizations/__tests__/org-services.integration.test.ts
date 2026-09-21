@@ -766,7 +766,7 @@ describe('org services (real Postgres)', () => {
     expect((await listAccessibleDrives(marcus.id)).map((d) => d.id)).toContain(product.id);
 
     for (const drive of [product, finance, legal]) {
-      expect(await getDriveAccess(drive.id, tomas.id)).toEqual({ isOwner: false, isAdmin: false, isMember: false, role: null });
+      expect(await getDriveAccess(drive.id, tomas.id)).toEqual({ isOwner: false, isAdmin: false, isMember: false, role: null, customRoleId: null });
     }
     expect(await getUserAccessLevel(tomas.id, productPage.id)).toBeNull();
     const listed = (await listAccessibleDrives(tomas.id, { includeTrash: true })).map((d) => d.id);
@@ -820,7 +820,7 @@ describe('org services (real Postgres)', () => {
       for (const orgsEnabled of [false, true]) {
         flags.orgsEnabled = orgsEnabled;
         for (const drive of [product, finance]) {
-          expect(await getDriveAccess(drive.id, priya.id)).toEqual({ isOwner: false, isAdmin: false, isMember: false, role: null });
+          expect(await getDriveAccess(drive.id, priya.id)).toEqual({ isOwner: false, isAdmin: false, isMember: false, role: null, customRoleId: null });
         }
         expect(await getUserAccessLevel(priya.id, productPage.id)).toBeNull();
         expect(await getUserAccessLevel(priya.id, financePage.id)).toBeNull();

@@ -20,10 +20,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { OAuthProvider } from '../oauth-types';
 
 // Mock external dependencies at system boundary
-vi.mock('apple-signin-auth', () => ({
-  default: {
-    verifyIdToken: vi.fn(),
-  },
+vi.mock('../apple/apple-jwt', () => ({
+  verifyAppleJwt: vi.fn(),
 }));
 
 vi.mock('google-auth-library', () => ({
@@ -44,33 +42,32 @@ vi.mock('../../logging/logger-config', () => ({
 }));
 
 // Import after mocking
-import appleSignIn from 'apple-signin-auth';
-import type { AppleIdTokenType } from 'apple-signin-auth';
+import { verifyAppleJwt } from '../apple/apple-jwt';
 import { OAuth2Client } from 'google-auth-library';
 import { verifyAppleIdToken, verifyGoogleIdToken } from '../oauth-utils';
 import { loggers } from '../../logging/logger-config';
 
-// Helper to create valid Apple token mock with required fields
-const createAppleTokenMock = (overrides: Partial<AppleIdTokenType> = {}): AppleIdTokenType => ({
+// Verified Apple identity-token claims, as verifyAppleJwt returns them
+const createAppleClaims = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
   sub: 'apple-user-123',
   email: 'user@example.com',
   email_verified: true,
   iss: 'https://appleid.apple.com',
   aud: 'ai.pagespace.ios',
-  exp: String(Math.floor(Date.now() / 1000) + 3600),
-  iat: String(Math.floor(Date.now() / 1000)),
-  nonce: 'test-nonce',
-  nonce_supported: true,
+  exp: Math.floor(Date.now() / 1000) + 3600,
+  iat: Math.floor(Date.now() / 1000),
   is_private_email: false,
   ...overrides,
 });
+
+const verified = (claims: Record<string, unknown>) => ({ ok: true as const, claims });
+const rejected = (reason: string) => ({ ok: false as const, reason });
 
 describe('verifyAppleIdToken', () => {
   const originalEnv = { ...process.env };
 
   beforeEach(() => {
     vi.clearAllMocks();
-    // Reset environment
     delete process.env.APPLE_CLIENT_ID;
     delete process.env.APPLE_SERVICE_ID;
   });
@@ -81,42 +78,32 @@ describe('verifyAppleIdToken', () => {
 
   describe('configuration validation', () => {
     it('verifyAppleIdToken_noClientIds_returnsError', async () => {
-      // No APPLE_CLIENT_ID or APPLE_SERVICE_ID configured
       const result = await verifyAppleIdToken('fake-token');
 
       expect(result.success).toBe(false);
       expect(result.error).toBe('Apple Sign-In not configured');
       expect(result.userInfo).toBeUndefined();
+      expect(verifyAppleJwt).not.toHaveBeenCalled();
     });
 
     it('verifyAppleIdToken_onlyClientId_usesClientId', async () => {
       process.env.APPLE_CLIENT_ID = 'ai.pagespace.ios';
-
-      vi.mocked(appleSignIn.verifyIdToken).mockResolvedValue(createAppleTokenMock());
+      vi.mocked(verifyAppleJwt).mockResolvedValue(verified(createAppleClaims()));
 
       const result = await verifyAppleIdToken('valid-token');
 
-      expect(appleSignIn.verifyIdToken).toHaveBeenCalledWith('valid-token', {
-        audience: ['ai.pagespace.ios'],
-        ignoreExpiration: false,
-      });
+      expect(verifyAppleJwt).toHaveBeenCalledWith('valid-token', { audience: ['ai.pagespace.ios'] });
       expect(result.success).toBe(true);
     });
 
     it('verifyAppleIdToken_bothClientIds_usesBoth', async () => {
       process.env.APPLE_CLIENT_ID = 'ai.pagespace.ios';
       process.env.APPLE_SERVICE_ID = 'ai.pagespace.web';
-
-      vi.mocked(appleSignIn.verifyIdToken).mockResolvedValue(
-        createAppleTokenMock({ email_verified: 'true' })
-      );
+      vi.mocked(verifyAppleJwt).mockResolvedValue(verified(createAppleClaims({ email_verified: 'true' })));
 
       await verifyAppleIdToken('valid-token');
 
-      expect(appleSignIn.verifyIdToken).toHaveBeenCalledWith('valid-token', {
-        audience: ['ai.pagespace.ios', 'ai.pagespace.web'],
-        ignoreExpiration: false,
-      });
+      expect(verifyAppleJwt).toHaveBeenCalledWith('valid-token', { audience: ['ai.pagespace.ios', 'ai.pagespace.web'] });
     });
   });
 
@@ -126,11 +113,12 @@ describe('verifyAppleIdToken', () => {
     });
 
     it('verifyAppleIdToken_validToken_returnsUserInfo', async () => {
-      vi.mocked(appleSignIn.verifyIdToken).mockResolvedValue(createAppleTokenMock());
+      vi.mocked(verifyAppleJwt).mockResolvedValue(verified(createAppleClaims()));
 
       const result = await verifyAppleIdToken('valid-token');
 
       expect(result.success).toBe(true);
+      expect(result.audience).toBe('ai.pagespace.ios');
       expect(result.userInfo).toEqual({
         providerId: 'apple-user-123',
         email: 'user@example.com',
@@ -142,9 +130,7 @@ describe('verifyAppleIdToken', () => {
     });
 
     it('verifyAppleIdToken_emailVerifiedAsString_parsesCorrectly', async () => {
-      vi.mocked(appleSignIn.verifyIdToken).mockResolvedValue(
-        createAppleTokenMock({ email_verified: 'true' }) // Apple sometimes sends as string
-      );
+      vi.mocked(verifyAppleJwt).mockResolvedValue(verified(createAppleClaims({ email_verified: 'true' })));
 
       const result = await verifyAppleIdToken('valid-token');
 
@@ -153,9 +139,7 @@ describe('verifyAppleIdToken', () => {
     });
 
     it('verifyAppleIdToken_emailVerifiedFalse_parsesCorrectly', async () => {
-      vi.mocked(appleSignIn.verifyIdToken).mockResolvedValue(
-        createAppleTokenMock({ email_verified: false })
-      );
+      vi.mocked(verifyAppleJwt).mockResolvedValue(verified(createAppleClaims({ email_verified: false })));
 
       const result = await verifyAppleIdToken('valid-token');
 
@@ -170,10 +154,9 @@ describe('verifyAppleIdToken', () => {
     });
 
     it('verifyAppleIdToken_missingEmail_returnsError', async () => {
-      // Use type assertion since email is required in type but we're testing missing case
-      const tokenWithoutEmail = { ...createAppleTokenMock() } as any;
-      delete tokenWithoutEmail.email;
-      vi.mocked(appleSignIn.verifyIdToken).mockResolvedValue(tokenWithoutEmail);
+      const claims = createAppleClaims();
+      delete claims.email;
+      vi.mocked(verifyAppleJwt).mockResolvedValue(verified(claims));
 
       const result = await verifyAppleIdToken('token-without-email');
 
@@ -181,61 +164,32 @@ describe('verifyAppleIdToken', () => {
       expect(result.error).toBe('Invalid ID token: missing required claims');
     });
 
-    it('verifyAppleIdToken_nullPayload_returnsError', async () => {
-      vi.mocked(appleSignIn.verifyIdToken).mockResolvedValue(null as any);
+    it('verifyAppleIdToken_missingSubject_returnsError', async () => {
+      const claims = createAppleClaims();
+      delete claims.sub;
+      vi.mocked(verifyAppleJwt).mockResolvedValue(verified(claims));
 
-      const result = await verifyAppleIdToken('invalid-token');
+      const result = await verifyAppleIdToken('token-without-sub');
 
       expect(result.success).toBe(false);
       expect(result.error).toBe('Invalid ID token: missing required claims');
     });
 
-    it('verifyAppleIdToken_expiredToken_returnsError', async () => {
-      const expiredError = new Error('Token has expired');
-      vi.mocked(appleSignIn.verifyIdToken).mockRejectedValue(expiredError);
+    it.each(['expired', 'invalid_signature', 'invalid_audience', 'unknown_kid'])(
+      'verifyAppleIdToken_%s_returnsReasonAsError',
+      async (reason) => {
+        vi.mocked(verifyAppleJwt).mockResolvedValue(rejected(reason));
 
-      const result = await verifyAppleIdToken('expired-token');
+        const result = await verifyAppleIdToken('bad-token');
 
-      expect(result.success).toBe(false);
-      expect(result.error).toBe('Token has expired');
-      expect(loggers.auth.error).toHaveBeenCalledWith(
-        'Apple ID token verification failed',
-        expiredError
-      );
-    });
+        expect(result.success).toBe(false);
+        expect(result.error).toBe(reason);
+        expect(loggers.auth.warn).toHaveBeenCalledWith('Apple ID token verification failed', { reason });
+      },
+    );
 
-    it('verifyAppleIdToken_invalidSignature_returnsError', async () => {
-      const signatureError = new Error('Invalid signature');
-      vi.mocked(appleSignIn.verifyIdToken).mockRejectedValue(signatureError);
-
-      const result = await verifyAppleIdToken('tampered-token');
-
-      expect(result.success).toBe(false);
-      expect(result.error).toBe('Invalid signature');
-    });
-
-    it('verifyAppleIdToken_wrongAudience_returnsError', async () => {
-      const audienceError = new Error('Audience mismatch');
-      vi.mocked(appleSignIn.verifyIdToken).mockRejectedValue(audienceError);
-
-      const result = await verifyAppleIdToken('wrong-audience-token');
-
-      expect(result.success).toBe(false);
-      expect(result.error).toBe('Audience mismatch');
-    });
-
-    it('verifyAppleIdToken_networkError_returnsError', async () => {
-      const networkError = new Error('Network request failed');
-      vi.mocked(appleSignIn.verifyIdToken).mockRejectedValue(networkError);
-
-      const result = await verifyAppleIdToken('valid-token');
-
-      expect(result.success).toBe(false);
-      expect(result.error).toBe('Network request failed');
-    });
-
-    it('verifyAppleIdToken_unknownError_returnsGenericMessage', async () => {
-      vi.mocked(appleSignIn.verifyIdToken).mockRejectedValue('non-error-throw');
+    it('verifyAppleIdToken_unexpectedThrow_returnsGenericMessage', async () => {
+      vi.mocked(verifyAppleJwt).mockRejectedValue('non-error-throw');
 
       const result = await verifyAppleIdToken('valid-token');
 
@@ -249,21 +203,13 @@ describe('verifyAppleIdToken', () => {
       process.env.APPLE_CLIENT_ID = 'ai.pagespace.ios';
     });
 
-    it('verifyAppleIdToken_failure_logsErrorWithoutToken', async () => {
-      const error = new Error('Verification failed');
-      vi.mocked(appleSignIn.verifyIdToken).mockRejectedValue(error);
+    it('verifyAppleIdToken_failure_logsWithoutToken', async () => {
+      vi.mocked(verifyAppleJwt).mockResolvedValue(rejected('invalid_signature'));
 
       await verifyAppleIdToken('secret-token-value');
 
-      // Should log error but NOT the token itself
-      expect(loggers.auth.error).toHaveBeenCalledWith(
-        'Apple ID token verification failed',
-        error
-      );
-      // Verify token is not in any call
-      const calls = vi.mocked(loggers.auth.error).mock.calls;
-      const callStr = JSON.stringify(calls);
-      expect(callStr).not.toContain('secret-token-value');
+      const calls = [...vi.mocked(loggers.auth.warn).mock.calls, ...vi.mocked(loggers.auth.error).mock.calls];
+      expect(JSON.stringify(calls)).not.toContain('secret-token-value');
     });
   });
 });

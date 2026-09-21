@@ -18,9 +18,34 @@ export interface CommandSuggestionItem {
   shadows?: CommandScope;
   /** Set on a shadowed (losing) command: the scope of the command that wins. */
   shadowedBy?: CommandScope;
+  /** Composer-handled command (e.g. /btw): selection inserts plain text, not a chip. */
+  clientHandled?: boolean;
 }
 
 const SCOPE_ORDER: Record<CommandScope, number> = { builtin: 0, user: 1, drive: 2 };
+
+/**
+ * A client-handled command (e.g. /btw) must insert as PLAIN TEXT: the
+ * composer's pre-send interception matches the literal `/trigger ` — a
+ * tracked command chip would serialize to `/[trigger](id:command)` and never
+ * fire. Selection skips token registration for exactly these items.
+ */
+export function commandInsertsPlainText(item: CommandSuggestionItem): boolean {
+  return item.clientHandled === true;
+}
+
+/**
+ * Whether the `/` at `triggerIndex` is LEADING: everything before it is
+ * whitespace (so a trigger after a newline still counts — the composer's
+ * pre-send gate tests the trimmed value, meaning the first non-whitespace
+ * character decides). Client-handled commands are only offered/selectable at
+ * a leading trigger: inserted mid-text they stay plain text, the composer's
+ * interception never matches, and the message would go out as an ordinary
+ * primary-chat message instead of firing the command.
+ */
+export function isLeadingSlashTrigger(value: string, triggerIndex: number): boolean {
+  return value.slice(0, triggerIndex).trim().length === 0;
+}
 
 /**
  * Filter + rank per spec §1.4: empty query lists everything ordered

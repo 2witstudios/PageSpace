@@ -1,7 +1,8 @@
 /**
  * FROZEN COPY of the four human drive resolvers as they were before org access was wired in
  * (pu/org-wallets at b2852bcfc: permissions.ts getUserAccessLevel, drive-service.ts
- * listAccessibleDrives, getDriveAccess, getDriveAccessWithDrive), with only the export names
+ * listAccessibleDrives, getDriveAccess, getDriveAccessWithDrive; re-copied from master at 12ef8f23b
+ * when the master sync brought #2627's drive-wide canEdit rule), with only the export names
  * prefixed `legacy` and the imports adjusted. Do not edit or "fix" these bodies: they are the
  * reference the dark-flag equivalence test compares the live resolvers against, byte for byte.
  */
@@ -11,7 +12,7 @@ import { pages, drives } from '@pagespace/db/schema/core';
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 import { loggers } from '../../../logging/logger-config';
 import { parseUserId, parsePageId } from '../../../validators/id-validators';
-import { fetchCustomRolePermissions, resolveCustomRolePermissions } from '../../membership-queries';
+import { fetchCustomRolePermissions, resolveCustomRolePermissions, resolveDriveWideCanEdit } from '../../membership-queries';
 import type { PermissionLevel } from '../../permissions';
 import { getDriveById, type DriveAccessInfo, type DriveAccessWithDrive, type DriveWithAccess, type ListDrivesOptions } from '../../../services/drive-service';
 
@@ -89,7 +90,7 @@ export async function legacyGetUserAccessLevel(
         return { canView: true, canEdit: true, canShare: true, canDelete: true };
       }
 
-      const membership = await db.select({ role: driveMembers.role })
+      const membership = await db.select({ role: driveMembers.role, customRoleId: driveMembers.customRoleId })
         .from(driveMembers)
         .where(and(
           eq(driveMembers.driveId, drive[0].id),
@@ -100,9 +101,15 @@ export async function legacyGetUserAccessLevel(
 
       if (membership.length > 0) {
         const isAdmin = membership[0].role === 'ADMIN';
+        // The single drive-wide canEdit rule (#2627): a custom role bounds a
+        // MEMBER to what its driveWidePermissions grant; an unresolvable or
+        // foreign-drive role fails closed.
+        const canEditMap = await resolveDriveWideCanEdit([
+          { driveId: drive[0].id, role: isAdmin ? 'ADMIN' : 'MEMBER', customRoleId: membership[0].customRoleId },
+        ]);
         return {
           canView: true,
-          canEdit: true,
+          canEdit: canEditMap.get(drive[0].id) === true,
           canShare: isAdmin,
           canDelete: isAdmin,
         };
@@ -235,7 +242,7 @@ export async function legacyListAccessibleDrives(
 
   // 2. Get drives where user is a member (including last access time)
   const memberDrives = await db
-    .selectDistinct({ driveId: driveMembers.driveId, role: driveMembers.role, lastAccessedAt: driveMembers.lastAccessedAt })
+    .selectDistinct({ driveId: driveMembers.driveId, role: driveMembers.role, customRoleId: driveMembers.customRoleId, lastAccessedAt: driveMembers.lastAccessedAt })
     .from(driveMembers)
     .where(and(
       eq(driveMembers.userId, userId),
@@ -255,12 +262,14 @@ export async function legacyListAccessibleDrives(
   // 4. Build role map and lastAccessedAt map (membership role takes precedence)
   const driveRoles = new Map<string, 'OWNER' | 'ADMIN' | 'MEMBER'>();
   const driveLastAccessed = new Map<string, Date | null>();
+  const memberCustomRoleIds = new Map<string, string | null>();
   const allSharedDriveIds = new Set<string>();
 
   for (const d of memberDrives) {
     if (d.driveId) {
       allSharedDriveIds.add(d.driveId);
       driveRoles.set(d.driveId, d.role as 'OWNER' | 'ADMIN' | 'MEMBER');
+      memberCustomRoleIds.set(d.driveId, d.customRoleId ?? null);
       driveLastAccessed.set(d.driveId, d.lastAccessedAt);
     }
   }
@@ -289,18 +298,36 @@ export async function legacyListAccessibleDrives(
       })
     : [];
 
-  // 6. Combine and deduplicate (owned drives take precedence)
+  // 6. Drive-wide create permission (#2627): one resolver for the DTO flag.
+  // Owned drives enter as OWNER; shared drives only when the user holds an
+  // actual membership — page-collaborator-only drives are not memberships
+  // and fail closed below. Batched: a single custom-role query at most.
+  const ownedDriveIds = new Set(ownedDrives.map((drive) => drive.id));
+  const canCreatePagesMap = await resolveDriveWideCanEdit([
+    ...ownedDrives.map((drive) => ({ driveId: drive.id, role: 'OWNER' as const, customRoleId: null })),
+    ...memberDrives
+      .filter((d) => d.driveId && !ownedDriveIds.has(d.driveId))
+      .map((d) => ({
+        driveId: d.driveId as string,
+        role: d.role as 'OWNER' | 'ADMIN' | 'MEMBER',
+        customRoleId: memberCustomRoleIds.get(d.driveId as string) ?? null,
+      })),
+  ]);
+
+  // 7. Combine and deduplicate (owned drives take precedence)
   const allDrives: DriveWithAccess[] = [
     ...ownedDrives.map((drive) => ({
       ...drive,
       isOwned: true,
       role: 'OWNER' as const,
+      canCreatePages: true,
       lastAccessedAt: driveLastAccessed.get(drive.id) ?? null,
     })),
     ...sharedDrives.map((drive) => ({
       ...drive,
       isOwned: false,
       role: driveRoles.get(drive.id) || ('MEMBER' as const),
+      canCreatePages: canCreatePagesMap.get(drive.id) ?? false,
       lastAccessedAt: driveLastAccessed.get(drive.id) ?? null,
     })),
   ];
@@ -321,18 +348,18 @@ export async function legacyGetDriveAccess(
   const drive = await getDriveById(driveId);
 
   if (!drive) {
-    return { isOwner: false, isAdmin: false, isMember: false, role: null };
+    return { isOwner: false, isAdmin: false, isMember: false, role: null, customRoleId: null };
   }
 
   const isOwner = drive.ownerId === userId;
 
   if (isOwner) {
-    return { isOwner: true, isAdmin: true, isMember: true, role: 'OWNER' };
+    return { isOwner: true, isAdmin: true, isMember: true, role: 'OWNER', customRoleId: null };
   }
 
   // Check membership
   const membership = await db
-    .select({ role: driveMembers.role })
+    .select({ role: driveMembers.role, customRoleId: driveMembers.customRoleId })
     .from(driveMembers)
     .where(and(
       eq(driveMembers.driveId, driveId),
@@ -348,10 +375,11 @@ export async function legacyGetDriveAccess(
       isAdmin: role === 'ADMIN',
       isMember: true,
       role,
+      customRoleId: membership[0].customRoleId ?? null,
     };
   }
 
-  return { isOwner: false, isAdmin: false, isMember: false, role: null };
+  return { isOwner: false, isAdmin: false, isMember: false, role: null, customRoleId: null };
 }
 
 /**
@@ -373,13 +401,13 @@ export async function legacyGetDriveAccessWithDrive(
   if (isOwner) {
     return {
       drive,
-      access: { isOwner: true, isAdmin: true, isMember: true, role: 'OWNER' },
+      access: { isOwner: true, isAdmin: true, isMember: true, role: 'OWNER', customRoleId: null },
     };
   }
 
   // Check membership
   const membership = await db
-    .select({ role: driveMembers.role })
+    .select({ role: driveMembers.role, customRoleId: driveMembers.customRoleId })
     .from(driveMembers)
     .where(and(
       eq(driveMembers.driveId, driveId),
@@ -397,12 +425,13 @@ export async function legacyGetDriveAccessWithDrive(
         isAdmin: role === 'ADMIN',
         isMember: true,
         role,
+        customRoleId: membership[0].customRoleId ?? null,
       },
     };
   }
 
   return {
     drive,
-    access: { isOwner: false, isAdmin: false, isMember: false, role: null },
+    access: { isOwner: false, isAdmin: false, isMember: false, role: null, customRoleId: null },
   };
 }

@@ -76,6 +76,15 @@ vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
   hasAppDriveMembership: vi.fn(),
   hasScopedDriveMembership: vi.fn(),
 }));
+vi.mock('@pagespace/lib/permissions/membership-queries', () => ({
+  resolveDriveWideCanEdit: vi.fn(),
+}));
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  getUserAccessLevel: vi.fn(),
+}));
+vi.mock('@pagespace/db/db', () => ({
+  db: { query: { drives: { findMany: vi.fn() } } },
+}));
 
 import { listAccessibleDrives, createDrive } from '@pagespace/lib/services/drive-service'
 import { createOrgDrive } from '@pagespace/lib/services/org-drive-service';
@@ -83,7 +92,11 @@ import { orgDriveServiceDeps } from '@pagespace/lib/services/org-drive-service-d
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
-import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope, isScopedMCPAuth } from '@/lib/auth';
+import { getAppDriveMembership, hasAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
+import { resolveDriveWideCanEdit } from '@pagespace/lib/permissions/membership-queries';
+import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
+import { db } from '@pagespace/db/db';
 
 // ============================================================================
 // Test Helpers
@@ -119,6 +132,7 @@ const createDriveFixture = (overrides: Partial<DriveWithAccess> & { id: string; 
   homePageId: overrides.homePageId ?? null,
   orgId: overrides.orgId ?? null,
   orgVisibility: overrides.orgVisibility ?? 'OPEN',
+  canCreatePages: overrides.canCreatePages ?? true,
 });
 
 // ============================================================================
@@ -248,6 +262,7 @@ describe('GET /api/drives', () => {
       expect(body[0]).toHaveProperty('drivePrompt');
       expect(body[0]).toHaveProperty('isOwned');
       expect(body[0]).toHaveProperty('role');
+      expect(body[0]).toHaveProperty('canCreatePages');
     });
   });
 
@@ -457,7 +472,7 @@ describe('POST /api/drives', () => {
         orgDriveServiceDeps
       );
       expect(createDrive).not.toHaveBeenCalled();
-      expect(await response.json()).toMatchObject({ id: 'drive_eng', orgId: 'org-northwind', isOwned: true, role: 'OWNER' });
+      expect(await response.json()).toMatchObject({ id: 'drive_eng', orgId: 'org-northwind', isOwned: true, role: 'OWNER', canCreatePages: true });
     });
 
     it('DRV-3 (partial) a refused org create returns the verdict and creates nothing', async () => {
@@ -681,5 +696,85 @@ describe('POST /api/drives', () => {
       expect(response.status).toBe(403);
       expect(createDrive).not.toHaveBeenCalled();
     });
+  });
+});
+
+
+// ============================================================================
+// GET /api/drives — scoped MCP token canCreatePages (#2627)
+// ============================================================================
+
+describe('GET /api/drives — scoped MCP canCreatePages', () => {
+  type AuthResult = Awaited<ReturnType<typeof authenticateRequestWithOptions>>;
+
+  const mockScopedMCPAuth = (): AuthResult =>
+    ({
+      userId: 'user_123',
+      tokenType: 'mcp',
+      tokenId: 'tok_1',
+      allowedDriveIds: ['drive_scoped'],
+      tokenVersion: 0,
+    }) as unknown as AuthResult;
+
+  const scopedDriveRow = {
+    id: 'drive_scoped',
+    name: 'Scoped',
+    slug: 'scoped',
+    ownerId: 'other_user',
+    kind: 'STANDARD',
+    isTrashed: false,
+    trashedAt: null,
+    drivePrompt: null,
+    createdAt: new Date('2024-01-01'),
+    updatedAt: new Date('2024-01-01'),
+    homePageId: null,
+  } as never;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    vi.mocked(isAuthError).mockReturnValue(false);
+    vi.mocked(isScopedMCPAuth).mockReturnValue(true);
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockScopedMCPAuth());
+    vi.mocked(getAppDriveMembership).mockResolvedValue({ role: 'MEMBER', customRoleId: null, ownerUserId: 'other_user' });
+    vi.mocked(hasAppDriveMembership).mockResolvedValue(true);
+    vi.mocked(db.query.drives.findMany).mockResolvedValue([scopedDriveRow]);
+    vi.mocked(resolveDriveWideCanEdit).mockResolvedValue(new Map([['drive_scoped', true]]));
+  });
+
+  it('given a scoped token MEMBER, should compute canCreatePages from the drive-wide rule', async () => {
+    const response = await GET(new Request('https://example.com/api/drives'));
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body[0]).toMatchObject({ id: 'drive_scoped', role: 'MEMBER', canCreatePages: true });
+    expect(resolveDriveWideCanEdit).toHaveBeenCalledWith([
+      { driveId: 'drive_scoped', role: 'MEMBER', customRoleId: null },
+    ]);
+  });
+
+  it('given a scoped token MEMBER with a view-only custom role, should fail closed', async () => {
+    vi.mocked(getAppDriveMembership).mockResolvedValue({ role: 'MEMBER', customRoleId: 'role_view', ownerUserId: 'other_user' });
+    vi.mocked(resolveDriveWideCanEdit).mockResolvedValue(new Map([['drive_scoped', false]]));
+
+    const response = await GET(new Request('https://example.com/api/drives'));
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body[0]).toMatchObject({ id: 'drive_scoped', canCreatePages: false });
+    expect(resolveDriveWideCanEdit).toHaveBeenCalledWith([
+      { driveId: 'drive_scoped', role: 'MEMBER', customRoleId: 'role_view' },
+    ]);
+  });
+
+  it('given an inherited scope whose owner cannot edit the drive root, should resolve through the owner permissions and fail closed', async () => {
+    vi.mocked(getAppDriveMembership).mockResolvedValue({ role: null, customRoleId: null, ownerUserId: 'user_123' });
+    vi.mocked(getUserAccessLevel).mockResolvedValue({ canView: true, canEdit: false, canShare: false, canDelete: false });
+
+    const response = await GET(new Request('https://example.com/api/drives'));
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body[0]).toMatchObject({ id: 'drive_scoped', canCreatePages: false });
+    expect(getUserAccessLevel).toHaveBeenCalledWith('user_123', 'drive_scoped');
   });
 });

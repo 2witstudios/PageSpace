@@ -45,6 +45,9 @@ function resolveDeploymentMode(): DeploymentMode {
   return 'cloud';
 }
 
+/** Steps the web app runs and records at lodge time. */
+const WEB_RECORDED_STEPS: ReadonlySet<ErasureStepId> = new Set(['stripe-customer', 'revoke-apple-tokens']);
+
 const ok = (detail?: string) => ({ status: 'ok' as const, detail });
 const skipped = (detail?: string) => ({ status: 'skipped' as const, detail });
 
@@ -211,6 +214,9 @@ export async function runAccountErasureJob(data: AccountErasureJobData): Promise
 
   // Stripe lives in the web app (its SDK isn't bundled here); the web records
   // that step on the DSR row at enqueue time, so the durable job skips it.
+  // revoke-apple-tokens is the same: this process holds no ENCRYPTION_KEY to
+  // decrypt the stored Apple token, so the web revokes before enqueueing and the
+  // users cascade on delete-user removes any row left behind.
   const steps: RunnableStep[] = buildErasurePlan({
     deploymentMode: mode,
     // With CH configured at all (flag-independent), purge-monitoring becomes
@@ -218,7 +224,7 @@ export async function runAccountErasureJob(data: AccountErasureJobData): Promise
     // with the subject's error rows retained forever (error_logs has no TTL).
     clickHouseInPlay: isClickHouseAnalyticsInPlay(),
   })
-    .filter((step) => step.id !== 'stripe-customer')
+    .filter((step) => !WEB_RECORDED_STEPS.has(step.id))
     .map((step) => ({
       id: step.id,
       fatal: step.fatal,

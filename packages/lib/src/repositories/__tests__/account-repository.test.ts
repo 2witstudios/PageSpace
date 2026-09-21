@@ -83,6 +83,16 @@ describe('accountRepository.findById', () => {
     expect(result).toEqual(user);
   });
 
+  it('given a lookup, should select appleId so deletion can tell a Sign in with Apple user what to do', async () => {
+    vi.mocked(db.query.users.findFirst).mockResolvedValue({ id: 'user-1', email: 'e', image: null, stripeCustomerId: null, appleId: 'apple-sub' } as never);
+
+    await accountRepository.findById('user-1');
+
+    expect(vi.mocked(db.query.users.findFirst).mock.calls[0][0]).toEqual(
+      expect.objectContaining({ columns: expect.objectContaining({ appleId: true }) }),
+    );
+  });
+
   it('returns null when user not found', async () => {
     vi.mocked(db.query.users.findFirst).mockResolvedValue(undefined as never);
 

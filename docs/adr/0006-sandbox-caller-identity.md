@@ -75,6 +75,13 @@ Only a Sprites primitive that (a) lets the **server** inject a per-connection se
 // packages/lib/src/agent-accounts/relay/restrict-git-operation.ts (G4)
 export type RestrictGitOperation = (input: { request: GitRelayRequest; restrictions: ResourceRestrictions }) =>
   { ok: true; canonical: CanonicalRequest } | { ok: false; reason: 'flag_injection' | 'repo_not_allowed' | 'branch_not_allowed' | 'operation_not_supported' | 'malformed' };
+// G1c R11: ResourceRestrictions is defined in canonical-request.ts (restriction key → allowed values).
+// restrictGitOperation is no longer a second constructor of CanonicalRequest.resources: relay operations
+// have OperationRegistryEntry rows (channel 'relay-runner') whose derivedResources rules
+// ('receive_pack_ref_names' | 'receive_pack_branches') are parsed from the git-receive-pack pkt-line
+// command list by the pure deriveGitResources, inside canonicalizeRequest — so the digest the grant
+// binds is recomputed from exactly the refs pushed, and a ref starting with '-' or carrying NUL is
+// flag_injection before any grant is requested.
 
 // packages/lib/src/agent-accounts/relay/decide-sandbox-binding.ts (G1b — it is part of verifyGrant's expected-binding fact)
 export type DecideSandboxBinding = (input: { grant: SandboxBinding | null; observed: SandboxBinding | null;   // all three fields compared (ADR 0004 F9)

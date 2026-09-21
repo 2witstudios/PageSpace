@@ -2223,6 +2223,46 @@
       "import": "./dist/auth/oauth-utils.js",
       "require": "./dist/auth/oauth-utils.js"
     },
+    "./auth/apple/apple-client-secret": {
+      "types": "./dist/auth/apple/apple-client-secret.d.ts",
+      "import": "./dist/auth/apple/apple-client-secret.js",
+      "require": "./dist/auth/apple/apple-client-secret.js"
+    },
+    "./auth/apple/apple-jwks": {
+      "types": "./dist/auth/apple/apple-jwks.d.ts",
+      "import": "./dist/auth/apple/apple-jwks.js",
+      "require": "./dist/auth/apple/apple-jwks.js"
+    },
+    "./auth/apple/apple-jwt": {
+      "types": "./dist/auth/apple/apple-jwt.d.ts",
+      "import": "./dist/auth/apple/apple-jwt.js",
+      "require": "./dist/auth/apple/apple-jwt.js"
+    },
+    "./auth/apple/apple-token-api": {
+      "types": "./dist/auth/apple/apple-token-api.d.ts",
+      "import": "./dist/auth/apple/apple-token-api.js",
+      "require": "./dist/auth/apple/apple-token-api.js"
+    },
+    "./auth/apple/apple-token-store": {
+      "types": "./dist/auth/apple/apple-token-store.d.ts",
+      "import": "./dist/auth/apple/apple-token-store.js",
+      "require": "./dist/auth/apple/apple-token-store.js"
+    },
+    "./auth/apple/apple-notifications": {
+      "types": "./dist/auth/apple/apple-notifications.d.ts",
+      "import": "./dist/auth/apple/apple-notifications.js",
+      "require": "./dist/auth/apple/apple-notifications.js"
+    },
+    "./auth/apple/capture-apple-refresh-token": {
+      "types": "./dist/auth/apple/capture-apple-refresh-token.d.ts",
+      "import": "./dist/auth/apple/capture-apple-refresh-token.js",
+      "require": "./dist/auth/apple/capture-apple-refresh-token.js"
+    },
+    "./auth/apple/revoke-apple-tokens": {
+      "types": "./dist/auth/apple/revoke-apple-tokens.d.ts",
+      "import": "./dist/auth/apple/revoke-apple-tokens.js",
+      "require": "./dist/auth/apple/revoke-apple-tokens.js"
+    },
     "./auth/opaque-tokens": {
       "types": "./dist/auth/opaque-tokens.d.ts",
       "import": "./dist/auth/opaque-tokens.js",
@@ -3457,7 +3497,6 @@
     "@paralleldrive/cuid2": "^2.2.2",
     "@react-email/components": "^0.5.5",
     "@simplewebauthn/server": "^13.2.2",
-    "apple-signin-auth": "^2.0.0",
     "diff-match-patch": "^1.0.5",
     "drizzle-orm": "^0.45.2",
     "google-auth-library": "^10.3.0",
