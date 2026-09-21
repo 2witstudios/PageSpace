@@ -26,8 +26,9 @@
  *       verbatim evidence of ones settled 90+ days ago. Runs on EVERY exit
  *       path, including the failure ones.
  *
- * Paying users only — gated on MEMORY_PAYING_TIERS, the same constant the
- * settings UI uses, so the two cannot disagree about who gets Memory.
+ * Paying HUMAN users only — gated on MEMORY_PAYING_TIERS, the same constant
+ * the settings UI uses, so the two cannot disagree about who gets Memory. Agent
+ * accounts are excluded outright, whatever their tier.
  *
  * Security: HMAC-signed cron requests via cron-curl (X-Cron-Timestamp/Nonce/Signature)
  * Trigger via: cron-curl POST http://web:3000/api/memory/cron
@@ -93,7 +94,10 @@ export async function POST(request: Request) {
           eq(sessions.type, 'user'),
           isNull(sessions.revokedAt),
           gte(sessions.lastUsedAt, sevenDaysAgo),
-          inArray(users.subscriptionTier, PAYING_TIERS)
+          inArray(users.subscriptionTier, PAYING_TIERS),
+          // Memory AI is ungated (paying tiers only), so an agent row given a
+          // paying tier out-of-band must still never reach it.
+          eq(users.accountType, 'human')
         )
       )
       .groupBy(sessions.userId, users.subscriptionTier);

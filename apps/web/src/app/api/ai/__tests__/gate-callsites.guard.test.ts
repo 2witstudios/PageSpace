@@ -160,9 +160,9 @@ describe('AI provider resolution is credit-gated', () => {
     'lib/ai/core/provider-factory.ts': 'defines createAIProvider',
     'lib/ai/core/compaction/compaction-service.ts': 'runs after a gated chat turn, on that turn’s conversation',
     'lib/ai/tools/agent-communication-tools.ts': 'ask_agent runs inside an already-gated parent request',
-    'lib/memory/compaction-service.ts': 'memory cron: paying tiers only (MEMORY_PAYING_TIERS)',
-    'lib/memory/discovery-service.ts': 'memory cron: paying tiers only (MEMORY_PAYING_TIERS)',
-    'lib/memory/integration-service.ts': 'memory cron: paying tiers only (MEMORY_PAYING_TIERS)',
+    'lib/memory/compaction-service.ts': 'memory cron: paying human accounts only (MEMORY_PAYING_TIERS + accountType human)',
+    'lib/memory/discovery-service.ts': 'memory cron: paying human accounts only (MEMORY_PAYING_TIERS + accountType human)',
+    'lib/memory/integration-service.ts': 'memory cron: paying human accounts only (MEMORY_PAYING_TIERS + accountType human)',
   };
 
   const sourceFiles = (dir: string): string[] => {
