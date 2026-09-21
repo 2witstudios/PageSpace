@@ -1,17 +1,17 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { db } from '@pagespace/db/db';
-import { and, eq, inArray, isNotNull, ne, or } from '@pagespace/db/operators';
+import { and, eq, inArray, ne, or } from '@pagespace/db/operators';
 import { commands } from '@pagespace/db/schema/commands';
 import type { SelectCommand } from '@pagespace/db/schema/commands';
-import { drives, pages } from '@pagespace/db/schema/core';
-import { driveMembers } from '@pagespace/db/schema/members';
+import { pages } from '@pagespace/db/schema/core';
 import {
   isReservedTrigger,
   validateCommandDescription,
   validateCommandTrigger,
 } from '@pagespace/lib/commands/command-core';
 import { canUserViewPage, isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
+import { getMemberDriveIds } from '@pagespace/lib/permissions/member-drives';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
@@ -28,28 +28,6 @@ async function broadcastCommandChange(driveId: string): Promise<void> {
 }
 
 const commandLogger = loggers.ai.child({ module: 'command-tools' });
-
-async function getMemberDriveIds(userId: string): Promise<string[]> {
-  const driveIds = new Set<string>();
-  const owned = await db
-    .select({ id: drives.id })
-    .from(drives)
-    .where(and(eq(drives.ownerId, userId), eq(drives.isTrashed, false)));
-  for (const drive of owned) driveIds.add(drive.id);
-  const memberships = await db
-    .select({ driveId: driveMembers.driveId })
-    .from(driveMembers)
-    .innerJoin(drives, eq(driveMembers.driveId, drives.id))
-    .where(
-      and(
-        eq(driveMembers.userId, userId),
-        isNotNull(driveMembers.acceptedAt),
-        eq(drives.isTrashed, false)
-      )
-    );
-  for (const m of memberships) driveIds.add(m.driveId);
-  return Array.from(driveIds);
-}
 
 async function loadCommandForManage(userId: string, commandId: string): Promise<SelectCommand> {
   const command = await db.query.commands.findFirst({
@@ -336,7 +314,8 @@ export const commandTools = {
       if (!userId) throw new Error('User authentication required');
 
       try {
-        const allMemberDriveIds = await getMemberDriveIds(userId);
+        // Drives the caller is a member of (org-aware; page-level access does not count).
+        const allMemberDriveIds = await getMemberDriveIds(userId, { includeTrashed: false });
 
         if (driveId && !allMemberDriveIds.includes(driveId)) {
           throw new Error('Drive not found or you are not a member of that drive');

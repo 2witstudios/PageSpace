@@ -25,6 +25,11 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
+// The one member-drive set (org-aware; owned drives plus accepted rows while dark).
+vi.mock('@pagespace/lib/permissions/member-drives', () => ({
+  getMemberDriveIds: vi.fn(async () => []),
+}));
+
 vi.mock('@pagespace/db/db', () => {
   const mockWhere = vi.fn().mockResolvedValue([{ count: 0 }]);
   const mockFrom = vi.fn().mockReturnValue({ where: mockWhere });
@@ -62,6 +67,7 @@ vi.mock('@pagespace/db/schema/social', () => ({
 
 import { GET } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { getMemberDriveIds } from '@pagespace/lib/permissions/member-drives';
 
 const mockWebAuth = (userId: string): SessionAuthResult => ({
   userId,
@@ -105,6 +111,22 @@ describe('GET /api/activity/summary', () => {
     await GET(request);
 
     expect(mockAuditRequest).not.toHaveBeenCalled();
+  });
+
+  it('DRV-5 (partial) X-6 (partial) counts updated pages over the org-aware member-drive set (trash included, as before), never a drive_members read of its own', async () => {
+    const { db } = await import('@pagespace/db/db');
+    vi.mocked(getMemberDriveIds).mockResolvedValueOnce(['drive_open_org']);
+    vi.mocked(db.select).mockReturnValue({
+      from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([{ count: 0 }]) }),
+    } as never);
+
+    const response = await GET(new Request('https://example.com/api/activity/summary'));
+
+    expect(response.status).toBe(200);
+    expect(getMemberDriveIds).toHaveBeenCalledWith('user_1', { includeTrashed: true });
+    const { driveMembers } = await import('@pagespace/db/schema/members');
+    const fromCalls = vi.mocked(db.select).mock.results.flatMap((r) => (r.value as { from: ReturnType<typeof vi.fn> }).from.mock.calls.map((c) => c[0]));
+    expect(fromCalls).not.toContain(driveMembers);
   });
 
   it('does not log audit event when auth fails', async () => {

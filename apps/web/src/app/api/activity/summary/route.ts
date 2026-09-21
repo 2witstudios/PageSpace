@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db/db'
-import { eq, and, or, lt, gte, ne, sql, count, isNotNull, isNull } from '@pagespace/db/operators'
-import { pages, drives } from '@pagespace/db/schema/core'
-import { driveMembers } from '@pagespace/db/schema/members'
+import { eq, and, or, lt, gte, ne, sql, count, isNull } from '@pagespace/db/operators'
+import { pages } from '@pagespace/db/schema/core'
+import { getMemberDriveIds } from '@pagespace/lib/permissions/member-drives';
 import { taskItems } from '@pagespace/db/schema/tasks'
 import { directMessages, dmConversations } from '@pagespace/db/schema/social';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -125,22 +125,9 @@ export async function GET(req: Request) {
       unreadCount = unreadResult?.count ?? 0;
     }
 
-    // Get pages updated count (pages in drives user has access to)
-    // First get drives user has access to (both owned and member drives)
-    const [ownedDrives, memberDrives] = await Promise.all([
-      db.select({ driveId: drives.id }).from(drives).where(eq(drives.ownerId, userId)),
-      db.select({ driveId: driveMembers.driveId }).from(driveMembers).where(and(
-        eq(driveMembers.userId, userId),
-        isNotNull(driveMembers.acceptedAt)
-      )),
-    ]);
-
-    // Combine and deduplicate drive IDs
-    const driveIdSet = new Set([
-      ...ownedDrives.map(d => d.driveId),
-      ...memberDrives.map(d => d.driveId),
-    ]);
-    const userDrives = Array.from(driveIdSet).map(driveId => ({ driveId }));
+    // Get pages updated count (pages in drives user has access to): the drives the user is a
+    // member of, owned or joined (org-aware; page-level access does not count)
+    const userDrives = (await getMemberDriveIds(userId, { includeTrashed: true })).map(driveId => ({ driveId }));
 
     let pagesUpdatedToday = 0;
     let pagesUpdatedThisWeek = 0;
