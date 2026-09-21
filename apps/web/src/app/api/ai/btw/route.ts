@@ -87,7 +87,8 @@ export async function POST(request: Request) {
       question: trimmedQuestion,
       snapshot,
       abortSignal: request.signal,
-      onSettle: async ({ outcome, usage, steps, error }) => {
+      estimateTokens,
+      onSettle: async ({ outcome, usage, estimated, steps, error }) => {
         try {
           await AIMonitoring.trackUsage({
             userId,
@@ -104,7 +105,7 @@ export async function POST(request: Request) {
             success: outcome === 'finished',
             holdId: settledHoldId,
             error: outcome === 'errored' ? (error instanceof Error ? error.message : String(error)) : undefined,
-            metadata: { feature: 'side_question', outcome },
+            metadata: { feature: 'side_question', outcome, usageEstimated: estimated },
           });
         } catch (trackError) {
           // trackUsage releases the hold on its own failure paths; this only keeps a

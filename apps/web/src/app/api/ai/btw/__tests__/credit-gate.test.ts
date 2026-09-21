@@ -16,6 +16,7 @@ type StreamOptions = {
   onAbort?: (event: { steps: unknown[] }) => unknown;
   onError?: (event: { error: unknown }) => unknown;
   onStepFinish?: (step: unknown) => unknown;
+  onChunk?: (event: { chunk: { type: string; text?: string } }) => unknown;
 };
 
 const mocks = vi.hoisted(() => ({
@@ -179,14 +180,36 @@ describe('POST /api/ai/btw credit gate', () => {
     expect(mocks.releaseHold).not.toHaveBeenCalled();
   });
 
-  it('settles a stream that errors mid-flight with the steps completed so far', async () => {
+  it('an in-stream error still bills the real usage the SDK reports at finish, once, as a failure', async () => {
     await post();
     const options = streamOptions();
-    await options.onStepFinish?.(billedStep);
-    await options.onError?.({ error: new Error('provider 500') });
+    // ai@6 order: the error part fires onError inline; the flush fires onFinish after.
+    await options.onError?.({ error: new Error('upstream hiccup') });
+    await options.onFinish?.({ totalUsage: { inputTokens: 900, outputTokens: 100, totalTokens: 1000 }, steps: [billedStep] });
 
     expect(mocks.trackUsage).toHaveBeenCalledTimes(1);
-    expect(mocks.trackUsage).toHaveBeenCalledWith(expect.objectContaining({ holdId: 'hold_1', success: false, providerCostDollars: 0.0042, error: 'provider 500' }));
+    expect(mocks.trackUsage).toHaveBeenCalledWith(expect.objectContaining({
+      holdId: 'hold_1', success: false, inputTokens: 900, providerCostDollars: 0.0042, error: 'upstream hiccup',
+    }));
+  });
+
+  it('an abort before any step completes bills an estimate of what streamed, flagged as estimated', async () => {
+    await post();
+    const options = streamOptions();
+    await options.onChunk?.({ chunk: { type: 'text-delta', text: 'x'.repeat(400) } });
+    await options.onAbort?.({ steps: [] });
+
+    expect(mocks.trackUsage).toHaveBeenCalledTimes(1);
+    const [row] = mocks.trackUsage.mock.calls[0] as [{ inputTokens: number; outputTokens: number; success: boolean; holdId: string; metadata: Record<string, unknown> }];
+    expect(row).toMatchObject({ holdId: 'hold_1', success: false, outputTokens: 100, metadata: { usageEstimated: true, outcome: 'aborted' } });
+    expect(row.inputTokens).toBeGreaterThan(0);
+  });
+
+  it('a run that completes no step (no onFinish, no onAbort) still settles the hold once', async () => {
+    mocks.streamText.mockReturnValue({ toTextStreamResponse: () => new Response('side'), steps: Promise.reject(new Error('No output generated')) });
+    await post();
+    await vi.waitFor(() => expect(mocks.trackUsage).toHaveBeenCalledTimes(1));
+    expect(mocks.trackUsage).toHaveBeenCalledWith(expect.objectContaining({ holdId: 'hold_1', success: false, error: 'No output generated' }));
   });
 
   it('releases the hold when the provider cannot be built after the gate allowed the call', async () => {
