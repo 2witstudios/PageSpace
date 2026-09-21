@@ -6,7 +6,7 @@
  *   ./scripts/test-with-db.sh
  *   bun run --filter '@pagespace/lib' test -- src/services/__tests__/app-shell-service.integration.test.ts
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { factories } from '@pagespace/db/test/factories';
 import { db } from '@pagespace/db/db';
 import { users } from '@pagespace/db/schema/auth';
@@ -15,6 +15,14 @@ import { drives, pages } from '@pagespace/db/schema/core';
 import { pagePermissions, driveMembers } from '@pagespace/db/schema/members';
 import { connections } from '@pagespace/db/schema/social';
 import { loadAppShell } from '../app-shell-service';
+import { cleanupNorthwind, northwind } from '../../permissions/__tests__/fixtures/northwind-org-drives';
+
+const flags = vi.hoisted(() => ({ orgsEnabled: false }));
+vi.mock('../../organizations/orgs-enabled', () => ({
+  get ORGS_ENABLED() {
+    return flags.orgsEnabled;
+  },
+}));
 
 describe('loadAppShell (integration)', () => {
   beforeEach(async () => {
@@ -173,5 +181,34 @@ describe('loadAppShell (integration)', () => {
 
   it('throws when the caller user does not exist', async () => {
     await expect(loadAppShell('does-not-exist')).rejects.toThrow(/user not found/);
+  });
+
+  describe('org drives (B7c)', () => {
+    afterEach(async () => {
+      flags.orgsEnabled = false;
+      await cleanupNorthwind();
+    }, 120_000);
+
+    const shellDrives = async (userId: string) =>
+      (await loadAppShell(userId)).drives.map((d) => `${d.name}:${d.role}:${d.isOwned ? 'owned' : 'joined'}`).sort();
+
+    it('DRV-5 (partial) X-6 (partial) the shell lists what the org-aware member-drive set lists: an implicit Open member with no row, never a stale org row, and the lead of an org drive owns it', async () => {
+      flags.orgsEnabled = true;
+      const f = await northwind();
+
+      expect(await shellDrives(f.people.nina.id)).toEqual(['Marcus Notes:ADMIN:joined', 'Product:MEMBER:joined']);
+      expect(await shellDrives(f.people.dana.id)).toEqual(['Acme Wiki:OWNER:owned', 'Marcus Notes:MEMBER:joined']);
+      expect(await shellDrives(f.people.marcus.id)).toEqual(['Marcus Notes:OWNER:owned', 'Product:MEMBER:joined']);
+      expect(await shellDrives(f.people.priya.id)).toEqual(['Product:ADMIN:joined']);
+      expect(await shellDrives(f.people.lena.id)).toEqual(['Customer Research:OWNER:owned', 'Finance:OWNER:owned', 'Product:OWNER:owned']);
+    });
+
+    it('while ORGS_ENABLED is false the shell lists owned drives plus accepted rows with the row role, as before', async () => {
+      const f = await northwind();
+
+      // Marcus's stale org rows still count while dark (the pre-org answer).
+      expect(await shellDrives(f.people.marcus.id)).toEqual(['Customer Research:MEMBER:joined', 'Finance:MEMBER:joined', 'Marcus Notes:OWNER:owned', 'Product:MEMBER:joined']);
+      expect(await shellDrives(f.people.nina.id)).toEqual(['Marcus Notes:ADMIN:joined']);
+    });
   });
 });

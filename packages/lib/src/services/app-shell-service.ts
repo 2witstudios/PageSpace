@@ -47,6 +47,7 @@ import type {
 import { PageType } from '../utils/enums';
 import { loadPagePayload } from './page-payload-service';
 import { decryptUserRow } from '../auth/user-repository';
+import { listMemberDrives, type MemberDrive } from '../permissions/member-drives';
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -121,42 +122,14 @@ async function fetchConnections(tx: Tx, userId: string): Promise<ConnectionSumma
   });
 }
 
-async function fetchShellDriveIds(tx: Tx, userId: string): Promise<Set<string>> {
-  // Drives surfaced by the app shell = drives the user belongs to (owner or
-  // accepted member of any role). Drives reached only via an explicit page
-  // grant are NOT promoted here: their metadata and member list would leak to
-  // non-members, and existing member-list endpoints require the same
-  // owner/member gate.
-  const ids = new Set<string>();
-
-  const owned = await tx
-    .select({ id: drives.id })
-    .from(drives)
-    .where(and(eq(drives.ownerId, userId), eq(drives.isTrashed, false)));
-  for (const row of owned) ids.add(row.id);
-
-  const memberOf = await tx
-    .selectDistinct({ driveId: driveMembers.driveId })
-    .from(driveMembers)
-    .innerJoin(drives, eq(drives.id, driveMembers.driveId))
-    .where(
-      and(
-        eq(driveMembers.userId, userId),
-        isNotNull(driveMembers.acceptedAt),
-        eq(drives.isTrashed, false),
-      ),
-    );
-  for (const row of memberOf) ids.add(row.driveId);
-
-  return ids;
-}
-
 async function fetchDriveSummaries(
   tx: Tx,
   userId: string,
-  driveIds: string[],
+  memberDrives: MemberDrive[],
 ): Promise<DriveSummary[]> {
-  if (driveIds.length === 0) return [];
+  if (memberDrives.length === 0) return [];
+  const driveIds = memberDrives.map((d) => d.driveId);
+  const listedById = new Map(memberDrives.map((d) => [d.driveId, d]));
 
   const driveRows = await tx
     .select({
@@ -173,27 +146,25 @@ async function fetchDriveSummaries(
     .from(drives)
     .where(inArray(drives.id, driveIds));
 
-  const memberRows = await tx
+  // Display only: when the caller last opened each drive (their own row, if any).
+  const lastAccessedRows = await tx
     .select({
       driveId: driveMembers.driveId,
-      role: driveMembers.role,
       lastAccessedAt: driveMembers.lastAccessedAt,
     })
     .from(driveMembers)
     .where(and(eq(driveMembers.userId, userId), inArray(driveMembers.driveId, driveIds)));
 
-  const callerRoleByDrive = new Map<string, 'OWNER' | 'ADMIN' | 'MEMBER'>();
   const lastAccessedByDrive = new Map<string, Date | null>();
-  for (const row of memberRows) {
-    callerRoleByDrive.set(row.driveId, row.role as 'OWNER' | 'ADMIN' | 'MEMBER');
+  for (const row of lastAccessedRows) {
     lastAccessedByDrive.set(row.driveId, row.lastAccessedAt);
   }
 
   return driveRows.map((row): DriveSummary => {
-    const isOwned = row.ownerId === userId;
-    const role: 'OWNER' | 'ADMIN' | 'MEMBER' = isOwned
-      ? 'OWNER'
-      : callerRoleByDrive.get(row.id) ?? 'MEMBER';
+    // Ownership and role come from the member-drive listing (the lead is OWNER).
+    const listed = listedById.get(row.id);
+    const isOwned = listed?.isOwner ?? false;
+    const role: 'OWNER' | 'ADMIN' | 'MEMBER' = listed?.role ?? 'MEMBER';
     return {
       id: row.id,
       name: row.name,
@@ -272,11 +243,15 @@ export async function loadAppShell(
   return await db.transaction(async (tx) => {
     const user = await fetchUser(tx, userId);
     const connectionList = await fetchConnections(tx, userId);
-    const driveIdSet = await fetchShellDriveIds(tx, userId);
-    const driveIds = Array.from(driveIdSet);
+    // Drives surfaced by the app shell = drives the user belongs to, owned or joined (org-aware).
+    // Drives reached only via an explicit page grant are NOT promoted here: their metadata and
+    // member list would leak to non-members.
+    const memberDrives = await listMemberDrives(userId, { includeTrashed: false, executor: tx });
+    const driveIds = memberDrives.map((d) => d.driveId);
+    const driveIdSet = new Set(driveIds);
 
     const [drivesList, driveMemberList] = await Promise.all([
-      fetchDriveSummaries(tx, userId, driveIds),
+      fetchDriveSummaries(tx, userId, memberDrives),
       fetchDriveMembers(tx, driveIds),
     ]);
 
