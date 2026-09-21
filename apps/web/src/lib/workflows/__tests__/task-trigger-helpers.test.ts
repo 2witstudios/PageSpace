@@ -110,6 +110,7 @@ import {
   recomputeTaskTriggerMetadata,
 } from '../task-trigger-helpers';
 import { executeWorkflow } from '../workflow-executor';
+import { workflowGateOptions } from '../core/workflow-gate-options';
 import { db } from '@pagespace/db/db';
 import { isNull } from '@pagespace/db/operators';
 
@@ -285,10 +286,18 @@ describe('task-trigger-helpers', () => {
       expect((source.triggerAt as Date).getTime()).toBeGreaterThanOrEqual(before);
     });
 
-    it('given any fire, should skip the daily cap exactly like the task-triggers cron that retries it (one policy for both paths)', async () => {
+    it('given any fire, should keep the tier daily cap on: a completion is user-paced (500 completions = 500 runs), not bounded by a schedule', async () => {
       await fireWith({ success: true, durationMs: 1 });
 
-      expect(vi.mocked(executeWorkflow).mock.calls[0][0].creditGate).toEqual({ skipDailyCap: true });
+      const policy = vi.mocked(executeWorkflow).mock.calls[0][0].creditGate;
+      expect(policy?.skipDailyCap).toBeUndefined();
+      expect(workflowGateOptions({
+        sourceTable: 'taskTriggers',
+        aiStepCount: 1,
+        policy,
+        holdEstimateCents: 25,
+        maxInteractiveInFlight: 2,
+      })).not.toHaveProperty('skipDailyCap');
     });
 
     it('given a transient refusal, should keep the trigger enabled, release its claim and schedule it for the task-triggers cron (nextRunAt = the completion instant) with the reason recorded', async () => {

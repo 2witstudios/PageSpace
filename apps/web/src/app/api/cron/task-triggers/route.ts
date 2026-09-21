@@ -153,8 +153,10 @@ export async function POST(req: Request) {
             timezone: workflow.timezone,
             source: { table: 'taskTriggers', id: trigger.id, triggerAt: trigger.nextRunAt },
             taskContext: { taskItemId: trigger.taskItemId, triggerType: trigger.triggerType },
-            // executeWorkflow gates credit on createdBy; server-scheduled fire.
-            creditGate: { skipDailyCap: true },
+            // executeWorkflow gates credit on createdBy. A due-date fire is
+            // bounded by its schedule, so it skips the daily cap; a completion
+            // retry keeps it, the same policy as its first fire (user-paced).
+            creditGate: trigger.triggerType === 'due_date' ? { skipDailyCap: true } : {},
           };
 
           const result = await executeWorkflow(input);

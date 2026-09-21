@@ -274,9 +274,11 @@ export async function fireCompletionTrigger(taskId: string): Promise<void> {
       timezone: workflow.timezone,
       source: { table: 'taskTriggers', id: completionTrigger.id, triggerAt: firedAt },
       taskContext: { taskItemId: taskId, triggerType: 'completion' },
-      // Same credit policy as the task-triggers cron that retries this fire,
-      // so a refusal here is never one the retry would ignore.
-      creditGate: { skipDailyCap: true },
+      // No skipDailyCap: a completion fire is paced by the user (completing
+      // 500 tasks fires 500 runs), not by a schedule, so the tier daily cap
+      // stays on as the per-user/day backstop. The task-triggers cron retries
+      // a completion under the same policy.
+      creditGate: {},
     };
 
     void executeWorkflow(input).then(async (result) => {

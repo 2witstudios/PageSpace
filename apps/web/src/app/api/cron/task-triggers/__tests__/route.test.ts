@@ -404,6 +404,12 @@ describe('POST /api/cron/task-triggers', () => {
       expect(body.executed).toBe(1);
     });
 
+    it('given a completion retry, should keep the tier daily cap on (same policy as the first fire), while a due-date fire still skips it', async () => {
+      await tick({ success: true, durationMs: 10 });
+
+      expect(vi.mocked(executeWorkflow).mock.calls[0][0].creditGate?.skipDailyCap).toBeUndefined();
+    });
+
     it('given the task was reopened before the retry tick, should not run the completion workflow and should end the trigger with the skip reason', async () => {
       pushDiscoveryRows([RETRY_TRIGGER]);
       mockReturning.mockResolvedValueOnce([RETRY_TRIGGER]);
