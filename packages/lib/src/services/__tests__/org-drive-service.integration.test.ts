@@ -30,6 +30,7 @@ import { STORAGE_REATTRIBUTION_LEAF_ID } from '../../organizations/org-drive-own
 import { orgDriveServiceDeps } from '../org-drive-service-deps';
 import { accountRepository } from '../../repositories/account-repository';
 import { removeMember } from '../../organizations/membership';
+import { getDriveAccess } from '../drive-service';
 
 // Northwind Labs fixture names (Sequence Spec Part 2), with per-run ids.
 const run = createId().slice(0, 8);
@@ -158,6 +159,25 @@ describe('moveDriveToOrg', () => {
     expect(await db.select().from(driveEnvs).where(eq(driveEnvs.driveId, driveId))).toHaveLength(1);
     expect(syncCalls).toEqual([{ kind: 'move-in', driveId, orgId: northwind }]);
     expect(published).toEqual([{ call: syncCalls[0], orgIdAtPublish: northwind }]);
+  });
+
+  it('DRV-1 an org owns a drive moved in while its human lead keeps the Owner role, a Home drive never joins an org, and the lead\'s account deletion hands the Owner role to the org Owner', async () => {
+    const driveId = await seedPersonalDrive();
+    const homeId = await seedPersonalDrive({ kind: 'HOME', name: 'Home' });
+
+    expect(await moveDriveToOrg(marcus, driveId, { orgId: northwind }, deps)).toMatchObject({ ok: true, orgId: northwind });
+    expect(await readDrive(driveId)).toMatchObject({ orgId: northwind, ownerId: marcus });
+    expect(await getDriveAccess(driveId, marcus)).toEqual({ isOwner: true, isAdmin: true, isMember: true, role: 'OWNER' });
+
+    // A Home drive is refused by the service and, beneath it, by the drives_home_never_org_check CHECK.
+    expect(await moveDriveToOrg(marcus, homeId, { orgId: northwind }, deps)).toMatchObject({ ok: false, code: 'HOME_DRIVE' });
+    await expect(db.update(drives).set({ orgId: northwind }).where(eq(drives.id, homeId))).rejects.toThrow();
+    expect((await readDrive(homeId)).orgId).toBeNull();
+
+    // The Owner role stays with a person: when the lead's account goes, the org Owner leads the drive.
+    await accountRepository.deleteUser(marcus);
+    expect(await readDrive(driveId)).toMatchObject({ orgId: northwind, ownerId: jono });
+    expect(await getDriveAccess(driveId, jono)).toEqual({ isOwner: true, isAdmin: true, isMember: true, role: 'OWNER' });
   });
 
   it('DRV-1 (partial) a Home drive is refused and nothing is written', async () => {
@@ -428,7 +448,7 @@ describe('with the production wiring (requireOrgRole, syncDriveOrgMembership, de
     expect(await rowsOf(driveId)).not.toContainEqual([marcus, 'org']);
   });
 
-  it('DRV-1 D-OW-7 deleting the lead\'s account does not cascade the org drive: the org Owner becomes its lead', async () => {
+  it('D-OW-7 deleting the lead\'s account does not cascade the org drive: the org Owner becomes its lead', async () => {
     const driveId = await productInNorthwind();
 
     await accountRepository.deleteUser(marcus);
