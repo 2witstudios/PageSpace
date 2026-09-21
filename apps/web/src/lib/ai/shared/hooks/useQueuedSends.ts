@@ -9,7 +9,6 @@ import { buildUserMessage } from '@/lib/ai/streams/buildUserMessage';
 import { readPersistedQueuedSends } from '@/stores/conversationMessages/queuedSendsPersistence';
 import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
 import { isThenable } from '@/lib/ai/streams/isThenable';
-import { toast } from 'sonner';
 import type { ChatSessionStatus } from './useChatSession';
 
 const EMPTY_QUEUED: UIMessage[] = [];
@@ -189,14 +188,14 @@ export function useQueuedSends({
     // A failed admission (network error, the 402 credit gate) started no turn.
     // The entry was shifted out BEFORE dispatch, so put it back at the head —
     // same id, so the retry is idempotent against the server's upsert-by-id —
-    // and say so: the prompt must never vanish silently. The send path's own
-    // `wrapSend` already toasts the failure's cause (e.g. out of credits), so this
-    // toast only says where the prompt went. Then release OUR claim
-    // (a newer dispatch's is not ours) so the next terminal event drains it
-    // again instead of the queue wedging behind a terminal that will never come.
+    // where the tray shows it: the prompt must never vanish silently. No toast
+    // here — every dispatch runs through `wrapSend`, whose failure path already
+    // toasts the cause (e.g. out of credits); a second one would duplicate it.
+    // Then release OUR claim (a newer dispatch's is not ours) so the next
+    // terminal event drains it again instead of the queue wedging behind a
+    // terminal that will never come.
     const onRejected = () => {
       conversationMessagesActions.requeueQueuedSend(endedConversationId, next);
-      toast.info('Your queued message is still in the queue. It will be sent after the next response.');
       if (drainClaims.get(endedConversationId)?.token === token) {
         drainClaims.delete(endedConversationId);
       }

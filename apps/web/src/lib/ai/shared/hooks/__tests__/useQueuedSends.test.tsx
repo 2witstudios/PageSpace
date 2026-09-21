@@ -16,8 +16,10 @@ import type { ChatSessionStatus } from '../useChatSession';
  * reload). `consumeStreamJoin` resolving with no `resumeFromSeq` and having
  * delivered nothing is exactly the "stream was already over" join.
  */
-const toastInfo = vi.hoisted(() => vi.fn());
-vi.mock('sonner', () => ({ toast: { info: toastInfo } }));
+// Recording fake: the send path's `wrapSend` owns the failure toast, so the
+// queue must never add its own (Codex review on #2694: a doubled notification).
+const toast = vi.hoisted(() => ({ error: vi.fn(), info: vi.fn(), message: vi.fn(), warning: vi.fn() }));
+vi.mock('sonner', () => ({ toast }));
 
 vi.mock('@/lib/ai/core/stream-join-client', () => ({
   consumeStreamJoin: vi.fn(() => Promise.resolve({})),
@@ -65,7 +67,7 @@ const msgText = (message: UIMessage): string =>
 
 describe('useQueuedSends', () => {
   beforeEach(() => {
-    toastInfo.mockClear();
+    Object.values(toast).forEach((fn) => fn.mockClear());
     window.localStorage.clear();
     clearLiveStreams();
     useConversationMessagesStore.setState({ queuedSendsByConversationId: {} });
@@ -346,7 +348,7 @@ describe('useQueuedSends', () => {
     expect(dispatchA.mock.calls.length + dispatchB.mock.calls.length).toBe(1);
   });
 
-  it('a rejected drained dispatch keeps the prompt queued at the head, surfaces an error, and retries it next turn', async () => {
+  it('a rejected drained dispatch keeps the prompt queued at the head and retries it next turn', async () => {
     const dispatch = vi.fn()
       .mockImplementationOnce(() => Promise.reject(new Error('402 credit gate')))
       .mockImplementation(() => undefined);
@@ -364,7 +366,8 @@ describe('useQueuedSends', () => {
     expect(hook.result.current.queuedSends.map(msgText)).toEqual(['first', 'second']);
     expect(hook.result.current.queuedSends[0].id).toBe(firstId);
     expect(JSON.parse(window.localStorage.getItem(`pagespace:queued-sends:${CONV}`) ?? '[]').map((m: UIMessage) => m.id)[0]).toBe(firstId);
-    expect(toastInfo).toHaveBeenCalledTimes(1);
+    // The failure is surfaced once, by the send path's wrapSend — not again here.
+    Object.values(toast).forEach((fn) => expect(fn).not.toHaveBeenCalled());
 
     // Not wedged: the next terminal drains again, and it is the SAME prompt.
     await new Promise((r) => setTimeout(r, 10));
@@ -384,7 +387,6 @@ describe('useQueuedSends', () => {
     fireEnd('turn-1', CONV);
     expect(dispatch).toHaveBeenCalledTimes(1);
     expect(hook.result.current.queuedSends.map(msgText)).toEqual(['only']);
-    expect(toastInfo).toHaveBeenCalledTimes(1);
 
     await new Promise((r) => setTimeout(r, 10));
     fireEnd('turn-2', CONV);
