@@ -12,7 +12,7 @@
 import { db } from '@pagespace/db/db';
 import { and, asc, eq, isNull, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
-import { orgInvitations, orgMembers, type OrgInvitation, type OrgRole } from '@pagespace/db/schema/organizations';
+import { organizations, orgInvitations, orgMembers, type OrgInvitation, type OrgRole } from '@pagespace/db/schema/organizations';
 import { generateToken, hashToken } from '../auth/token-utils';
 import { decryptUserRow } from '../auth/user-repository';
 import { normalizeEmail } from '../encryption/blind-index';
@@ -316,7 +316,13 @@ export async function acceptInvitation(
       .from(orgInvitations)
       .where(eq(orgInvitations.tokenHash, tokenHash))
       .limit(1);
-    if (peek) await lockOrgInviteAddress(tx, peek.orgId, peek.email);
+    if (peek) {
+      await lockOrgInviteAddress(tx, peek.orgId, peek.email);
+      // The org row, before the invite row: org drive creation and moves share-lock it, so a join
+      // and a new drive serialize and the later one materializes the joiner there (D-OW-6); and
+      // deleting the org, which locks it first too, can no longer deadlock on the invite row.
+      await tx.select({ id: organizations.id }).from(organizations).where(eq(organizations.id, peek.orgId)).for('update');
+    }
     const [invite] = await tx
       .select()
       .from(orgInvitations)

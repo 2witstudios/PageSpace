@@ -40,6 +40,8 @@ import { hasAppDriveMembership } from '../../permissions/app-permissions';
 import { getDriveAccess, listAccessibleDrives, restoreDrive } from '../../services/drive-service';
 import { getDriveRecipientUserIds } from '../../services/drive-member-service';
 import { syncOrgMemberAccess, type OrgMembershipSyncResult } from '../../services/org-membership-sync';
+import { createOrgDrive } from '../../services/org-drive-service';
+import { orgDriveServiceDeps } from '../../services/org-drive-service-deps';
 
 // Org-derived access is dark by default; a test that proves an org-shaped negative turns it on,
 // or the negative would hold only because the whole org branch is off.
@@ -578,6 +580,81 @@ describe('org services (real Postgres)', () => {
         { userId: tomas.id, operation: 'member_added', driveIds: expect.arrayContaining([product.id, roadmap.id]) },
       ]);
       expect(published[0].affectedUsers[0].driveIds).toHaveLength(2);
+    });
+
+    it('DRV-5 (partial) a join that races an org drive being created waits for it, so the joiner is materialized on that drive too', async () => {
+      const { jono, org } = await seedNorthwind();
+      const tomas = await person('Tomás Alvarez');
+      const invite = await createOrRotateInvitation({ orgId: org.id, email: tomas.email, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver });
+      if (!invite.ok) throw new Error('invite failed');
+
+      // The real createOrgDrive, paused inside its transaction right after its own membership sync
+      // has read org_members (without Tomás) and before it commits.
+      let resume: () => void = () => {};
+      const paused = new Promise<void>((resolve) => { resume = resolve; });
+      let synced: () => void = () => {};
+      const syncedInside = new Promise<void>((resolve) => { synced = resolve; });
+      const creating = createOrgDrive(jono.id, { name: 'Roadmap', orgId: org.id }, {
+        ...orgDriveServiceDeps,
+        syncOrgMembership: async (tx, call) => {
+          await orgDriveServiceDeps.syncOrgMembership(tx, call);
+          synced();
+          await paused;
+          return async () => {};
+        },
+      });
+      await syncedInside;
+
+      const accepting = acceptInvitation(
+        { token: invite.token, userId: tomas.id, now: new Date() },
+        { syncMemberAccess: syncOrgMemberAccess, publishSyncEvents: async () => {} },
+      );
+      let acceptSettled = false;
+      void accepting.finally(() => { acceptSettled = true; }).catch(() => {});
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const waitedForCreate = !acceptSettled;
+
+      // Release the create before asserting, so a failure never leaves its transaction open.
+      resume();
+      const created = await creating;
+      if (!created.ok) throw new Error('create failed');
+      createdDrives.push(created.drive.id);
+      expect(waitedForCreate).toBe(true);
+      expect(await accepting).toMatchObject({ ok: true, joined: true });
+      expect(await rowsFor(tomas.id, [created.drive.id])).toMatchObject([{ driveId: created.drive.id, source: 'org' }]);
+    });
+
+    it('ORG-6 (partial) an acceptance racing an org deletion waits on the org row instead of deadlocking on the invite row', async () => {
+      const { jono, org } = await seedNorthwind();
+      const tomas = await person('Tomás Alvarez');
+      const invite = await createOrRotateInvitation({ orgId: org.id, email: tomas.email, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver });
+      if (!invite.ok) throw new Error('invite failed');
+
+      // Stands in for deleteOrganization: it locks the org row first, and deleting the org then
+      // cascades to org_invitations, which needs the invite row.
+      let resume: () => void = () => {};
+      const paused = new Promise<void>((resolve) => { resume = resolve; });
+      let locked: () => void = () => {};
+      const orgLocked = new Promise<void>((resolve) => { locked = resolve; });
+      const deleting = db.transaction(async (tx) => {
+        await tx.select({ id: organizations.id }).from(organizations).where(eq(organizations.id, org.id)).for('update');
+        locked();
+        await paused;
+        await tx.delete(orgInvitations).where(eq(orgInvitations.id, invite.invitation.id));
+      });
+      await orgLocked;
+
+      const accepting = acceptInvitation(
+        { token: invite.token, userId: tomas.id, now: new Date() },
+        { syncMemberAccess: syncOrgMemberAccess, publishSyncEvents: async () => {} },
+      );
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      resume();
+
+      const [deleted, accepted] = await Promise.allSettled([deleting, accepting]);
+      expect(deleted.status).toBe('fulfilled');
+      expect(accepted).toEqual({ status: 'fulfilled', value: expect.objectContaining({ ok: false, reason: 'not_found' }) });
+      expect(await requireOrgRole(tomas.id, org.id, 'MEMBER')).toMatchObject({ ok: false });
     });
 
     it('DRV-5 (partial) accepting is idempotent: a second acceptance adds no row and publishes nothing', async () => {
