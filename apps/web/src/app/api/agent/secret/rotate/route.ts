@@ -2,8 +2,8 @@
  * POST /api/agent/secret/rotate — replace an agent's `ps_agent_*` secret (ADR
  * 0007 Decision 14; auth.md "Rotate / Revoke").
  *
- * Caller: the agent itself (a browser session, or its own `account`-scoped
- * `ps_at_` — CSRF is enforced for sessions only) or the human who claimed it,
+ * Caller: the agent itself (a browser session, or the `account`-scoped
+ * `ps_at_` its own jwt-bearer grant minted — CSRF is enforced for sessions only) or the human who claimed it,
  * from a browser SESSION only, naming the agent with `agentId` (see
  * `agentSecretActor` for why an owner's OAuth token is never enough). Anyone else, a non-agent, or a revoked agent answers the same
  * 404. The old secret stops matching immediately; `revokeExistingTokens` also
@@ -13,7 +13,9 @@
 import { z } from 'zod/v4';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { agentNoStoreJson, agentNotFound } from '@/lib/agent-auth/door';
-import { agentSecretActor } from '@/lib/agent-auth/secret-authority';
+import { agentSecretActor, type AgentSecretCallerCredential } from '@/lib/agent-auth/secret-authority';
+import { findAccessTokenClientId } from '@/lib/repositories/oauth-repository';
+import { PAGESPACE_AGENT_CLIENT_ID } from '@pagespace/lib/auth/oauth/clients';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getAgentIdentitySummary, rotateAgentSecret } from '@pagespace/lib/services/agent-identities';
 
@@ -48,7 +50,11 @@ export async function POST(request: Request) {
 
   const agentUserId = parsed.data.agentId ?? auth.userId;
   const revokeTokens = parsed.data.revokeExistingTokens ?? false;
-  const credential = auth.tokenType === 'session' ? 'session' : auth.tokenType === 'oauth' && auth.scopes.account ? 'oauth_account' : 'oauth_narrow';
+  const credential: AgentSecretCallerCredential = auth.tokenType === 'session'
+    ? 'session'
+    : auth.tokenType === 'oauth' && auth.scopes.account && (await findAccessTokenClientId(auth.tokenId)) === PAGESPACE_AGENT_CLIENT_ID
+      ? 'agent_grant_token'
+      : 'other_token';
   const actor = agentSecretActor({ caller: { id: auth.userId, credential }, agentUserId, identity: await getAgentIdentitySummary(agentUserId) });
   const refuse = (reason: string) => {
     auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'agent_identity', resourceId: agentUserId, details: { reason, agentAuthEvent: 'secret_rotate_refused' }, riskScore: 0.5 });

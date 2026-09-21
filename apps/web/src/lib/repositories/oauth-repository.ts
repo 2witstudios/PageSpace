@@ -981,6 +981,21 @@ export async function exchangeAgentAssertion(input: ExchangeAgentAssertionInput)
   });
 }
 
+/**
+ * The registry client id (`pagespace-agent`, `pagespace-cli`, …) an access
+ * token was minted for, by the token's row id (`OAuthAuthResult.tokenId`).
+ * `null` when the row is gone.
+ */
+export async function findAccessTokenClientId(accessTokenId: string): Promise<string | null> {
+  const [row] = await db
+    .select({ clientId: oauthClients.clientId })
+    .from(oauthAccessTokens)
+    .innerJoin(oauthClients, eq(oauthClients.id, oauthAccessTokens.clientId))
+    .where(eq(oauthAccessTokens.id, accessTokenId))
+    .limit(1);
+  return row?.clientId ?? null;
+}
+
 // ---------------------------------------------------------------------------
 // Connected-apps listing + revoke-by-id (Phase 8 task k58h61obmc91sn1ndngrsev5).
 // ---------------------------------------------------------------------------
