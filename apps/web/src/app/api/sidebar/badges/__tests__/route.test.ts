@@ -20,9 +20,10 @@ vi.mock('@pagespace/db/db', () => ({
 
 vi.mock('@pagespace/db/operators', () => {
   // Capture the literal text chunks so tests can identify which query ran.
-  const sql = (strings: TemplateStringsArray, ..._values: unknown[]) => ({
-    __sqlText: strings.join('?'),
-  });
+  const sql = Object.assign(
+    (strings: TemplateStringsArray, ...values: unknown[]) => ({ __sqlText: strings.join('?'), __values: values }),
+    { param: (value: unknown) => ({ __param: value }) },
+  );
   const noop = (...args: unknown[]) => ({ __op: args });
   return {
     sql,
@@ -41,6 +42,11 @@ vi.mock('@pagespace/db/schema/notifications', () => ({ notifications: {} }));
 vi.mock('@pagespace/db/schema/core', () => ({ pages: {} }));
 vi.mock('@pagespace/db/schema/calendar', () => ({ calendarEvents: {}, eventAttendees: {} }));
 
+// The one member-drive set (org-aware; owned drives plus accepted rows while dark).
+vi.mock('@pagespace/lib/permissions/member-drives', () => ({
+  getMemberDriveIds: vi.fn(async () => ['drive_member']),
+}));
+
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() } },
 }));
@@ -52,6 +58,7 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
 }));
 
 import { GET } from '../route';
+import { getMemberDriveIds } from '@pagespace/lib/permissions/member-drives';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { getBatchPagePermissions } from '@pagespace/lib/permissions/permissions';
@@ -129,6 +136,18 @@ describe('GET /api/sidebar/badges — channels', () => {
     vi.clearAllMocks();
     mockAuth();
     stubQueryBuilder();
+  });
+
+  it('DRV-5 (partial) X-6 (partial) takes candidate drives from the org-aware member-drive set; the SQL reads neither drive_members nor drives.ownerId', async () => {
+    withUnreadRows([{ id: 'ch_1', unread_count: '2' }]);
+    grantView('ch_1');
+
+    expect(await getChannels()).toBe(2);
+    expect(getMemberDriveIds).toHaveBeenCalledWith(mockUserId, { includeTrashed: true });
+    const { __sqlText, __values } = vi.mocked(db.execute).mock.calls[0][0] as unknown as { __sqlText: string; __values: unknown[] };
+    expect(__sqlText).not.toMatch(/drive_members/);
+    expect(__sqlText).not.toMatch(/"ownerId"/);
+    expect(__values).toContainEqual({ __param: ['drive_member'] });
   });
 
   it('sums unread message counts across viewable channels', async () => {

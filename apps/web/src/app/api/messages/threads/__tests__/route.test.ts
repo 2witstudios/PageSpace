@@ -17,11 +17,22 @@ vi.mock('@pagespace/db/db', () => ({
 
 vi.mock('@pagespace/db/operators', () => {
   // Capture the literal text chunks so tests can identify which CTE ran.
-  const sql = (strings: TemplateStringsArray, ..._values: unknown[]) => ({
-    __sqlText: strings.join('?'),
-  });
+  const sql = Object.assign(
+    (strings: TemplateStringsArray, ...values: unknown[]) => ({ __sqlText: strings.join('?'), __values: values }),
+    { param: (value: unknown) => ({ __param: value }) },
+  );
   return { sql };
 });
+
+// The one member-drive set (org-aware; owned drives plus accepted rows while dark).
+vi.mock('@pagespace/lib/permissions/member-drives', () => ({
+  getMemberDriveIds: vi.fn(async () => ['drive_member']),
+}));
+
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  getBatchPagePermissions: vi.fn(async (_userId: string, pageIds: string[]) =>
+    new Map(pageIds.map((id) => [id, { canView: true, canEdit: false, canShare: false, canDelete: false }]))),
+}));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
@@ -45,6 +56,8 @@ vi.mock('@pagespace/lib/auth/user-repository', async (importOriginal) => {
 });
 
 import { GET } from '../route';
+import { getMemberDriveIds } from '@pagespace/lib/permissions/member-drives';
+import { getBatchPagePermissions } from '@pagespace/lib/permissions/permissions';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { decryptUsersByIdOnce } from '@pagespace/lib/auth/user-repository';
@@ -156,5 +169,42 @@ describe('GET /api/messages/threads PII decryption dedup', () => {
     expect(response.status).toBe(200);
     expect(body.dms[0].otherUser.name).toBeNull();
     expect(body.dms[0].otherUser.email).toBeNull();
+  });
+});
+
+describe('GET /api/messages/threads channel access (B7c)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAuth();
+  });
+
+  const channelSql = () =>
+    vi.mocked(db.execute).mock.calls.map(([arg]) => arg as unknown as { __sqlText: string; __values: unknown[] })
+      .find((arg) => !isDmQuery(arg)) as { __sqlText: string; __values: unknown[] };
+
+  it('DRV-5 (partial) X-6 (partial) takes its candidate drives from the org-aware member-drive set; the channel SQL reads neither drive_members nor drives.ownerId', async () => {
+    mockExecute([], [channelRow]);
+
+    const response = await GET(new Request('http://localhost/api/messages/threads'));
+
+    expect(response.status).toBe(200);
+    expect(getMemberDriveIds).toHaveBeenCalledWith(mockUserId, { includeTrashed: true });
+    const { __sqlText, __values } = channelSql();
+    expect(__sqlText).not.toMatch(/drive_members/);
+    expect(__sqlText).not.toMatch(/"ownerId"/);
+    expect(__values).toContainEqual({ __param: ['drive_member'] });
+  });
+
+  it('X-6 (partial) lists only the channels getBatchPagePermissions lets the caller view: a pending invitee, a stale org row or a private channel sees nothing', async () => {
+    mockExecute([], [channelRow, { ...channelRow, id: 'ch_secret', title: 'secret' }]);
+    vi.mocked(getBatchPagePermissions).mockResolvedValueOnce(new Map([
+      ['ch_1', { canView: true, canEdit: false, canShare: false, canDelete: false }],
+      ['ch_secret', { canView: false, canEdit: false, canShare: false, canDelete: false }],
+    ]));
+
+    const body = await (await GET(new Request('http://localhost/api/messages/threads'))).json();
+
+    expect(body.channels.map((c: { id: string }) => c.id)).toEqual(['ch_1']);
+    expect(getBatchPagePermissions).toHaveBeenCalledWith(mockUserId, ['ch_1', 'ch_secret']);
   });
 });
