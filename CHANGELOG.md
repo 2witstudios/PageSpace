@@ -603,6 +603,16 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **A pending drive invitation no longer reveals the drive's people** — someone invited to a drive
+  who had not yet accepted saw every member's name, email, bio and avatar in the New Conversation
+  picker and could start a direct message with them (and members could do the same to them). Until
+  the invitation is accepted, neither side appears in the other's picker and a new direct message
+  between them is refused, unless they are already connected.
+- **Pulse no longer surfaces pages you are denied** — the activity summaries built pages a person
+  can view from a database rule that ignored a custom role's "no view" setting and a per-page
+  "no view" grant, so a member could see those pages' activity in Pulse. Pulse now follows the same
+  rules as opening the page: those denies are honoured, a custom role's per-page grant on a private
+  page is included, and a time-limited grant expires at the right moment in every time zone.
 - **Agents can write to their own memory pages again** — every agent is instructed to keep notes
   on an "Agent Memory" child page of its own, but the permission check behind the write tools
   looked only at the agent's drive membership, which grants edit on no ordinary page — so every
