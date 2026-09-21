@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect } from 'react';
-import { isDesktopPlatform } from '@/lib/desktop-auth';
 import { currentDesktopShell, desktopDeepLink } from '@/lib/auth/desktop-shell';
 
 export function buildDesktopExchangeDeepLink(
@@ -21,13 +20,16 @@ export function buildDesktopExchangeDeepLink(
 
 /**
  * Extract desktopExchange param from search string.
- * Returns the exchange code if present and on desktop, null otherwise.
+ * Returns the exchange code if present, null otherwise.
+ *
+ * No shell gate: the emailed link opens in the user's system browser, not the
+ * Electron shell, so the deep link must fire from any browser. Whether the
+ * desktop app accepts it is decided by the main process's flow-in-progress
+ * gate (auth-exchange-state.ts) — begun when the desktop form submitted.
  */
 export function extractDesktopExchangeCode(search = typeof window !== 'undefined' ? window.location.search : ''): string | null {
   const params = new URLSearchParams(search);
-  const exchangeCode = params.get('desktopExchange');
-  if (!exchangeCode || !isDesktopPlatform()) return null;
-  return exchangeCode;
+  return params.get('desktopExchange');
 }
 
 /**

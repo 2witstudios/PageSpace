@@ -5,7 +5,11 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
+- /btw side questions now work on every chat surface (dashboard assistant, right-sidebar chat, agent console) and /btw appears in the / command picker on all of them.
+
 ### Added
+
+- **Ask a detached side question with `/btw`** — while an agent is working, type `/btw` followed by a question to get a separate, temporary answer from the completed conversation context. It never interrupts the active run or becomes part of the chat history.
 
 - **Sign-up says where AI content goes** — the consent line on every sign-up screen now says AI
   features send your content to OpenRouter and the model provider you choose, alongside the Terms
@@ -55,10 +59,10 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   RSVP, a finished agent session, or what changed since you were last here — with a couple of
   quick prompts underneath that put the same thing straight into the composer without sending it.
   Nothing is invented: the line only ever says what it can back up, and on a quiet day it just says
-  you're caught up. Once you start a conversation the line tucks into a small strip under the
-  header instead of taking up the page, and you can still expand it. On desktop, collapse the left
-  sidebar and a small drive switcher stays next to the title, so you always know what the assistant
-  can see; on a phone the sidebar sheet's own switcher covers that, so the header row stays one row.
+  you're caught up. The line and its suggestions stay in the empty state, then give the conversation
+  the full pane once you begin. On desktop, collapse the left sidebar and a small drive switcher
+  stays next to the title, so you always know what the assistant can see; on a phone the sidebar
+  sheet's own switcher covers that, so the header row stays one row.
 - **Channels, Files, Tasks and Calendar are one page each, with a drive focus** — each of those
   views used to exist twice: a dashboard version and a drive version, with different titles and a
   sidebar that only ever linked to whichever one you were in. Now "All drives" is a focus like any
@@ -603,6 +607,16 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   Edit Workflow dialog's fields past its right edge and pushed Save below the fold. The dialog is
   now wider on desktop, its fields scroll between a fixed header and a fixed Cancel/Save footer, and
   long prompts wrap and scroll inside their own box.
+- **A pending drive invitation no longer reveals the drive's people** — someone invited to a drive
+  who had not yet accepted saw every member's name, email, bio and avatar in the New Conversation
+  picker and could start a direct message with them (and members could do the same to them). Until
+  the invitation is accepted, neither side appears in the other's picker and a new direct message
+  between them is refused, unless they are already connected.
+- **Pulse no longer surfaces pages you are denied** — the activity summaries built pages a person
+  can view from a database rule that ignored a custom role's "no view" setting and a per-page
+  "no view" grant, so a member could see those pages' activity in Pulse. Pulse now follows the same
+  rules as opening the page: those denies are honoured, a custom role's per-page grant on a private
+  page is included, and a time-limited grant expires at the right moment in every time zone.
 - **Agents can write to their own memory pages again** — every agent is instructed to keep notes
   on an "Agent Memory" child page of its own, but the permission check behind the write tools
   looked only at the agent's drive membership, which grants edit on no ordinary page — so every

@@ -31,6 +31,8 @@ import { Conversation, ConversationScrollButton } from '@/components/ai/ui/conve
 import { SidebarMessagesContent } from '@/components/layout/right-sidebar/ai-assistant/SidebarChatTab';
 import { hasVisionCapability } from '@/lib/ai/core/vision-models';
 import { useOpenPagePane } from '@/lib/ai/shared/hooks/useOpenPagePane';
+import { useSideQuestion, parseSideQuestionInput } from '@/components/ai/btw/useSideQuestion';
+import { SideQuestionCard } from '@/components/ai/btw/SideQuestionCard';
 import type { AgentInfo } from '@/types/agent';
 import { useAgentSessionChat, type UseAgentSessionChatReturn } from './useAgentSessionChat';
 
@@ -116,6 +118,7 @@ export function SessionChatView({
   const [input, setInput] = useState('');
   const [showError, setShowError] = useState(true);
   const [undoMessageId, setUndoMessageId] = useState<string | null>(null);
+  const sideQuestion = useSideQuestion(conversationId);
 
   useOpenPagePane({ sessionId, conversationId, messages: chat.messages });
 
@@ -129,6 +132,20 @@ export function SessionChatView({
     if (!dispatched) {
       setInput((current) => (current === '' ? text : current));
     }
+  }, [input, chat]);
+
+  const handleSideQuestion = useCallback(() => {
+    const question = parseSideQuestionInput(input) ?? '';
+    if (!question) return;
+    setInput('');
+    void sideQuestion.ask(question);
+  }, [input, sideQuestion]);
+
+  // Queue-send (issue #2676): the composer enqueues during a stream; the
+  // composer text clears only when the enqueue succeeded (full queue, empty
+  // text → nothing to clear). Read-only surfaces never offer it.
+  const handleEnqueue = useCallback(() => {
+    if (chat.enqueueQueuedSend(input)) setInput('');
   }, [input, chat]);
 
   const handleUndoSuccess = useCallback(async () => {
@@ -211,6 +228,7 @@ export function SessionChatView({
       </div>
 
       <div className="shrink-0 space-y-1.5 border-t border-border p-2">
+        {sideQuestion.state && <SideQuestionCard state={sideQuestion.state} onDismiss={sideQuestion.dismiss} />}
         <ChatErrorBanner
           cause={chat.errorCause}
           show={showError}
@@ -223,6 +241,7 @@ export function SessionChatView({
           value={input}
           onChange={setInput}
           onSend={() => void handleSendClick()}
+          onSideQuestion={handleSideQuestion}
           onStop={() => void chat.handleStop()}
           isStreaming={chat.displayIsStreaming}
           isStopping={chat.isStopping}
@@ -233,6 +252,12 @@ export function SessionChatView({
           hasVision={hasVisionCapability(visionModel)}
           commandDriveId={commandDriveId ?? undefined}
           remoteStreamingUser={remoteStreamingUser}
+          queuedMessages={chat.queuedSends}
+          onEnqueue={isReadOnly ? undefined : handleEnqueue}
+          onRemoveQueued={chat.removeQueuedSend}
+          onClearQueued={chat.clearQueuedSends}
+          onCancelQueue={chat.cancelQueuedDrain}
+          isQueueFull={chat.isQueueFull}
         />
       </div>
 

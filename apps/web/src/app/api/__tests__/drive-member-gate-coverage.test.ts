@@ -85,10 +85,6 @@ const EXEMPT = new Map<string, Exemption>([
     ormReads: 1,
     reason: 'Enumerates ALL current members (including pending) for full replacement during restore; filtering on acceptedAt would silently leave pending-invite rows behind.',
   }],
-  ['apps/web/src/app/api/users/messageable/route.ts', {
-    ormReads: 2,
-    reason: 'DM eligibility intentionally drops the gate (documented in the route and in usersShareDrive) so co-members with a NULL acceptedAt still appear in the New Conversation picker. It grants no drive or page access.',
-  }],
   ['apps/web/src/app/api/inbox/route.ts', {
     sqlReads: 2,
     reason: 'Both channel queries are candidate filters; getBatchPagePermissions (accepted members only) decides which channels are returned.',
@@ -135,10 +131,6 @@ const EXEMPT = new Map<string, Exemption>([
   ['packages/lib/src/compliance/export/gdpr-export.ts', {
     ormReads: 1,
     reason: 'GDPR subject-access export of the user\'s OWN membership rows; pending invitations are the subject\'s personal data.',
-  }],
-  ['packages/lib/src/permissions/permissions.ts', {
-    ormReads: 2,
-    reason: 'usersShareDrive (DM eligibility) intentionally skips the gate, as documented on the function; every page/drive access resolver in the file is gated.',
   }],
   ['packages/lib/src/repositories/account-repository.ts', {
     ormReads: 2,
