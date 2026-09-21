@@ -74,6 +74,7 @@ export async function loadAvailableCommands(
     scope: 'builtin',
     type: 'builtin',
     ...(builtin.kind ? { kind: builtin.kind } : {}),
+    ...(builtin.clientHandled ? { clientHandled: true } : {}),
   }));
 
   // The personal and drive lookups are independent — run them concurrently

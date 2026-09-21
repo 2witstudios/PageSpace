@@ -182,7 +182,7 @@ restricted to app administrators.`,
       if (!gate.allowed) {
         return {
           success: false,
-          error: 'Insufficient credits to generate an image. Ask the user to top up their balance.',
+          error: 'Insufficient credits to generate an image. Tell the user their credit balance is too low.',
         };
       }
       const holdId = gate.holdId;

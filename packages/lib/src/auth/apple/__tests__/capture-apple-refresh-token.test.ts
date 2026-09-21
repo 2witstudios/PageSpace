@@ -1,0 +1,139 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+vi.mock('../apple-token-api', () => ({
+  exchangeAppleAuthorizationCode: vi.fn(),
+}));
+vi.mock('../apple-token-store', () => ({
+  appleTokenStore: { upsert: vi.fn() },
+}));
+vi.mock('../revoke-apple-tokens', () => ({
+  revokeAndDiscardAppleTokens: vi.fn(),
+}));
+vi.mock('../../../repositories/data-subject-request-repository', () => ({
+  dataSubjectRequestRepository: { findActiveErasureForUser: vi.fn() },
+}));
+vi.mock('../../../logging/logger-config', () => ({
+  loggers: { auth: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } },
+}));
+
+import { captureAppleRefreshToken } from '../capture-apple-refresh-token';
+import { exchangeAppleAuthorizationCode } from '../apple-token-api';
+import { appleTokenStore } from '../apple-token-store';
+import { revokeAndDiscardAppleTokens } from '../revoke-apple-tokens';
+import { loggers } from '../../../logging/logger-config';
+import { dataSubjectRequestRepository } from '../../../repositories/data-subject-request-repository';
+import { decryptField, looksEncrypted } from '../../../encryption/field-crypto';
+import type { AppleSigningConfig } from '../apple-client-secret';
+
+const config: AppleSigningConfig = { teamId: 'T', keyId: 'K', privateKey: 'unused-by-mocked-api' };
+
+// An unsigned id_token is enough here: it came back from Apple's /auth/token
+// over TLS, so only its `sub` is read, to bind the code to the verified user.
+const idTokenFor = (sub: string) =>
+  `${Buffer.from('{"alg":"RS256"}').toString('base64url')}.${Buffer.from(JSON.stringify({ sub })).toString('base64url')}.sig`;
+
+const baseArgs = { userId: 'user-1', code: 'code-1', clientId: 'ai.pagespace.ios', expectedSub: 'apple-sub-1' };
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.mocked(dataSubjectRequestRepository.findActiveErasureForUser).mockResolvedValue(null);
+});
+
+describe('captureAppleRefreshToken', () => {
+  it('given the signing key is not configured, should skip without calling Apple or storing anything', async () => {
+    const outcome = await captureAppleRefreshToken(baseArgs, null);
+
+    expect(outcome).toBe('skipped');
+    expect(exchangeAppleAuthorizationCode).not.toHaveBeenCalled();
+    expect(appleTokenStore.upsert).not.toHaveBeenCalled();
+  });
+
+  it('given a successful exchange for the verified user, should store the refresh token encrypted, keyed by user and client', async () => {
+    vi.mocked(exchangeAppleAuthorizationCode).mockResolvedValue({ ok: true, refreshToken: 'rt-plain', idToken: idTokenFor('apple-sub-1') });
+
+    const outcome = await captureAppleRefreshToken({ ...baseArgs, redirectUri: 'https://pagespace.ai/cb' }, config);
+
+    expect(outcome).toBe('stored');
+    expect(exchangeAppleAuthorizationCode).toHaveBeenCalledWith({
+      code: 'code-1',
+      clientId: 'ai.pagespace.ios',
+      redirectUri: 'https://pagespace.ai/cb',
+      config,
+    });
+    const stored = vi.mocked(appleTokenStore.upsert).mock.calls[0][0];
+    expect(stored.userId).toBe('user-1');
+    expect(stored.clientId).toBe('ai.pagespace.ios');
+    expect(stored.encryptedRefreshToken).not.toContain('rt-plain');
+    expect(looksEncrypted(stored.encryptedRefreshToken)).toBe(true);
+    expect(await decryptField(stored.encryptedRefreshToken)).toBe('rt-plain');
+  });
+
+  it('given the user requested account deletion while the exchange was in flight, should not store a token the erasure already revoked for', async () => {
+    vi.mocked(exchangeAppleAuthorizationCode).mockResolvedValue({ ok: true, refreshToken: 'rt', idToken: idTokenFor('apple-sub-1') });
+    vi.mocked(dataSubjectRequestRepository.findActiveErasureForUser).mockResolvedValue({ id: 'dsr-1' } as never);
+
+    expect(await captureAppleRefreshToken(baseArgs, config)).toBe('skipped');
+    expect(appleTokenStore.upsert).not.toHaveBeenCalled();
+  });
+
+  it('given account deletion is lodged between the erasure check and the upsert, should revoke and discard the token it just stored', async () => {
+    const order: string[] = [];
+    vi.mocked(exchangeAppleAuthorizationCode).mockResolvedValue({ ok: true, refreshToken: 'rt', idToken: idTokenFor('apple-sub-1') });
+    vi.mocked(dataSubjectRequestRepository.findActiveErasureForUser)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: 'dsr-1' } as never);
+    vi.mocked(appleTokenStore.upsert).mockImplementation(async () => {
+      order.push('upsert');
+    });
+    vi.mocked(revokeAndDiscardAppleTokens).mockImplementation(async () => {
+      order.push('revoke');
+      return { hadTokens: true, revoked: 1, failed: 0, unconfigured: false };
+    });
+
+    expect(await captureAppleRefreshToken(baseArgs, config)).toBe('skipped');
+    expect(revokeAndDiscardAppleTokens).toHaveBeenCalledWith('user-1', config);
+    expect(order).toEqual(['upsert', 'revoke']);
+  });
+
+  it('given no erasure before or after the upsert, should keep the token without revoking', async () => {
+    vi.mocked(exchangeAppleAuthorizationCode).mockResolvedValue({ ok: true, refreshToken: 'rt', idToken: idTokenFor('apple-sub-1') });
+
+    expect(await captureAppleRefreshToken(baseArgs, config)).toBe('stored');
+    expect(dataSubjectRequestRepository.findActiveErasureForUser).toHaveBeenCalledTimes(2);
+    expect(revokeAndDiscardAppleTokens).not.toHaveBeenCalled();
+  });
+
+  it('given the exchanged token belongs to a different Apple user, should refuse to store it', async () => {
+    vi.mocked(exchangeAppleAuthorizationCode).mockResolvedValue({ ok: true, refreshToken: 'rt', idToken: idTokenFor('someone-else') });
+
+    const outcome = await captureAppleRefreshToken(baseArgs, config);
+
+    expect(outcome).toBe('failed');
+    expect(appleTokenStore.upsert).not.toHaveBeenCalled();
+  });
+
+  it('given the exchange returns no id_token, should refuse to store it', async () => {
+    vi.mocked(exchangeAppleAuthorizationCode).mockResolvedValue({ ok: true, refreshToken: 'rt', idToken: null });
+
+    expect(await captureAppleRefreshToken(baseArgs, config)).toBe('failed');
+    expect(appleTokenStore.upsert).not.toHaveBeenCalled();
+  });
+
+  it('given Apple rejects the code, should report failure without throwing and log only the reason', async () => {
+    vi.mocked(exchangeAppleAuthorizationCode).mockResolvedValue({ ok: false, reason: 'invalid_grant' });
+
+    expect(await captureAppleRefreshToken(baseArgs, config)).toBe('failed');
+    expect(loggers.auth.warn).toHaveBeenCalledWith(
+      'Apple refresh token capture failed',
+      expect.objectContaining({ userId: 'user-1', clientId: 'ai.pagespace.ios', reason: 'invalid_grant' }),
+    );
+    expect(JSON.stringify(vi.mocked(loggers.auth.warn).mock.calls)).not.toContain('code-1');
+  });
+
+  it('given the store throws, should report failure without throwing', async () => {
+    vi.mocked(exchangeAppleAuthorizationCode).mockResolvedValue({ ok: true, refreshToken: 'rt', idToken: idTokenFor('apple-sub-1') });
+    vi.mocked(appleTokenStore.upsert).mockRejectedValue(new Error('db down'));
+
+    await expect(captureAppleRefreshToken(baseArgs, config)).resolves.toBe('failed');
+  });
+});

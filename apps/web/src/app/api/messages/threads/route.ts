@@ -5,9 +5,11 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { decryptUsersByIdOnce } from '@pagespace/lib/auth/user-repository';
+import { getBatchPagePermissions } from '@pagespace/lib/permissions/permissions';
 import type { ConversationRow, ChannelThreadRow } from '@/types/messaging';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
+const PERMISSION_BATCH_SIZE = 200;
 
 // GET /api/messages/threads - Get user's unified message threads (DMs + channels)
 export async function GET(request: Request) {
@@ -158,12 +160,16 @@ async function fetchChannelsWithLastMessage(userId: string) {
       FROM pages p
       INNER JOIN drives d ON p."driveId" = d.id
       LEFT JOIN page_permissions pp ON p.id = pp."pageId"
-      LEFT JOIN drive_members dm ON d.id = dm."driveId"
+      -- Candidate filter only; getBatchPagePermissions below is the access
+      -- decision. This join matches a drive_members row whatever its
+      -- acceptedAt, so on its own it let a pending invitee read every
+      -- channel's latest message.
+      LEFT JOIN drive_members dm ON dm."driveId" = d.id AND dm."userId" = ${userId}
       WHERE p.type = 'CHANNEL'
         AND p."isTrashed" = false
         AND (
           d."ownerId" = ${userId}
-          OR dm."userId" = ${userId}
+          OR dm."userId" IS NOT NULL
           OR (pp."userId" = ${userId} AND pp."canView" = true)
         )
     ),
@@ -194,7 +200,16 @@ async function fetchChannelsWithLastMessage(userId: string) {
     ORDER BY COALESCE(lm.last_message_at, uc."updatedAt") DESC
   `);
 
-  return channelDetails.rows.map((row) => {
+  // Drive membership is not page access, and a pending invite is not
+  // membership: the centralized resolver decides, never the SQL above.
+  const visibleRows: ChannelThreadRow[] = [];
+  for (let i = 0; i < channelDetails.rows.length; i += PERMISSION_BATCH_SIZE) {
+    const chunk = channelDetails.rows.slice(i, i + PERMISSION_BATCH_SIZE);
+    const permissions = await getBatchPagePermissions(userId, chunk.map((row) => row.id));
+    visibleRows.push(...chunk.filter((row) => permissions.get(row.id)?.canView));
+  }
+
+  return visibleRows.map((row) => {
     return {
       id: row.id,
       title: row.title,

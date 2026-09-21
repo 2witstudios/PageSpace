@@ -4,6 +4,7 @@ import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
 import { createExchangeCode } from '@pagespace/lib/auth/exchange-codes';
 import { SESSION_DURATION_MS } from '@pagespace/lib/auth/constants';
 import { verifyAppleIdToken } from '@pagespace/lib/auth/oauth-utils';
+import { captureAppleRefreshToken } from '@pagespace/lib/auth/apple/capture-apple-refresh-token';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
@@ -46,10 +47,12 @@ const appleUserSchema = z.object({
 export async function POST(req: Request) {
   try {
     // Parse form data (Apple uses application/x-www-form-urlencoded)
-    // Note: Apple sends both 'code' and 'id_token' with response_type=code id_token
-    // We use id_token directly for verification (no token exchange needed)
+    // Note: Apple sends both 'code' and 'id_token' with response_type=code id_token.
+    // The id_token alone authenticates the user; the code is exchanged afterwards,
+    // out of band, only to keep a revocable refresh token (TN3194).
     const formData = await req.formData();
     const idToken = formData.get('id_token') as string | null;
+    const authorizationCode = formData.get('code');
     const state = formData.get('state') as string | null;
     const userJson = formData.get('user') as string | null;
     const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || new URL(req.url).origin;
@@ -247,6 +250,27 @@ export async function POST(req: Request) {
 
     const csrfToken = generateCSRFToken(sessionClaims.sessionId);
 
+    // TN3194: keep a revocable refresh token so account deletion can revoke the
+    // Apple authorization. Called only once each platform's response is built,
+    // and never awaited — sign-in must not wait on, or fail because of, Apple.
+    const appleClientId = verificationResult.audience;
+    const signedInUserId = user.id;
+    const captureAppleTokenInBackground = () => {
+      if (typeof authorizationCode !== 'string' || authorizationCode.length === 0 || !appleClientId) return;
+      void captureAppleRefreshToken({
+        userId: signedInUserId,
+        code: authorizationCode,
+        clientId: appleClientId,
+        expectedSub: appleId,
+        redirectUri: process.env.APPLE_REDIRECT_URI,
+      }).catch((error: unknown) => {
+        loggers.auth.warn('Apple refresh token capture threw', {
+          userId: signedInUserId,
+          reason: error instanceof Error ? error.name : 'unknown_error',
+        });
+      });
+    };
+
     try {
       await resetDistributedRateLimit(`oauth:callback:ip:${clientIP}`);
     } catch (resetError) {
@@ -335,7 +359,9 @@ export async function POST(req: Request) {
         invitedDriveId: oauthInviteResult.invitedDriveId ?? null,
       });
 
-      return buildHandoffBridgeResponse(deepLinkUrl.toString(), "You're signed in");
+      const desktopResponse = buildHandoffBridgeResponse(deepLinkUrl.toString(), "You're signed in");
+      captureAppleTokenInBackground();
+      return desktopResponse;
     }
 
     // iOS PLATFORM: Same as desktop - use secure exchange code flow
@@ -409,7 +435,9 @@ export async function POST(req: Request) {
         invitedDriveId: oauthInviteResult.invitedDriveId ?? null,
       });
 
-      return NextResponse.redirect(deepLinkUrl.toString());
+      const iosResponse = NextResponse.redirect(deepLinkUrl.toString());
+      captureAppleTokenInBackground();
+      return iosResponse;
     }
 
     let webDeviceTokenValue: string | undefined;
@@ -448,7 +476,9 @@ export async function POST(req: Request) {
       headers.append('Set-Cookie', createDeviceTokenHandoffCookie(webDeviceTokenValue));
     }
 
-    return NextResponse.redirect(redirectUrl, { headers });
+    const webResponse = NextResponse.redirect(redirectUrl, { headers });
+    captureAppleTokenInBackground();
+    return webResponse;
 
   } catch (error) {
     loggers.auth.error('Apple OAuth callback error', error as Error);

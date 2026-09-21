@@ -44,7 +44,15 @@ vi.mock('@pagespace/lib/auth/user-repository', async (importOriginal) => {
   return { ...actual, decryptUsersByIdOnce: vi.fn(actual.decryptUsersByIdOnce) };
 });
 
+// Default: every candidate channel is viewable, so the PII suites above see
+// the rows they seed. The pending-invite suite below overrides per test.
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  getBatchPagePermissions: vi.fn(async (_userId: string, pageIds: string[]) =>
+    new Map(pageIds.map((id) => [id, { canView: true, canEdit: false, canShare: false, canDelete: false }]))),
+}));
+
 import { GET } from '../route';
+import { getBatchPagePermissions } from '@pagespace/lib/permissions/permissions';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { decryptUsersByIdOnce } from '@pagespace/lib/auth/user-repository';
@@ -156,5 +164,67 @@ describe('GET /api/messages/threads PII decryption dedup', () => {
     expect(response.status).toBe(200);
     expect(body.dms[0].otherUser.name).toBeNull();
     expect(body.dms[0].otherUser.email).toBeNull();
+  });
+});
+
+// The channel list used to be decided entirely by SQL that matched ANY
+// drive_members row — no acceptedAt filter — so a user holding a pending,
+// unaccepted invite saw every channel in that drive together with its latest
+// message. The candidate query stays a candidate filter; the canonical
+// getBatchPagePermissions (which requires an accepted membership) decides.
+describe('GET /api/messages/threads channel access — pending invites', () => {
+  const view = (canView: boolean) => ({ canView, canEdit: false, canShare: false, canDelete: false });
+  const pendingDriveChannel = { ...channelRow, id: 'ch_pending', driveId: 'drv_pending', last_message: 'secret' };
+  const acceptedDriveChannel = { ...channelRow, id: 'ch_accepted', driveId: 'drv_accepted' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAuth();
+  });
+
+  it.each(['ADMIN', 'MEMBER'])('omits channels of a drive where the %s invite is still pending', async () => {
+    mockExecute([], [pendingDriveChannel, acceptedDriveChannel]);
+    vi.mocked(getBatchPagePermissions).mockResolvedValue(
+      new Map([['ch_pending', view(false)], ['ch_accepted', view(true)]]),
+    );
+
+    const response = await GET(new Request('http://localhost/api/messages/threads'));
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.channels.map((c: { id: string }) => c.id)).toEqual(['ch_accepted']);
+    expect(JSON.stringify(body)).not.toContain('secret');
+    expect(getBatchPagePermissions).toHaveBeenCalledWith(mockUserId, ['ch_pending', 'ch_accepted']);
+  });
+
+  it('lists the same channel once the invite is accepted', async () => {
+    mockExecute([], [pendingDriveChannel]);
+    vi.mocked(getBatchPagePermissions).mockResolvedValue(new Map([['ch_pending', view(true)]]));
+
+    const response = await GET(new Request('http://localhost/api/messages/threads'));
+    const body = await response.json();
+
+    expect(body.channels.map((c: { id: string }) => c.id)).toEqual(['ch_pending']);
+    expect(body.channels[0].lastMessage).toBe('secret');
+  });
+
+  it('omits a channel the resolver has no answer for (fail closed)', async () => {
+    mockExecute([], [pendingDriveChannel]);
+    vi.mocked(getBatchPagePermissions).mockResolvedValue(new Map());
+
+    const response = await GET(new Request('http://localhost/api/messages/threads'));
+    const body = await response.json();
+
+    expect(body.channels).toEqual([]);
+  });
+
+  it('skips the permission lookup when there are no candidate channels', async () => {
+    mockExecute([], []);
+
+    const response = await GET(new Request('http://localhost/api/messages/threads'));
+    const body = await response.json();
+
+    expect(body.channels).toEqual([]);
+    expect(getBatchPagePermissions).not.toHaveBeenCalled();
   });
 });

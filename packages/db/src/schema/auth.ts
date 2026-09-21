@@ -285,6 +285,30 @@ export const passkeysRelations = relations(passkeys, ({ one }) => ({
   }),
 }));
 
+// Sign in with Apple refresh tokens (App Store Guideline 5.1.1(v), Apple TN3194).
+// Kept only so account deletion can revoke the user's Apple authorization via
+// /auth/revoke. One row per (user, client): the native app (bundle id) and the
+// web flow (Services ID) are distinct Apple clients, and a token can only be
+// revoked by the client it was issued to. `refreshToken` is AES-256-GCM
+// ciphertext (field-crypto); the plaintext never touches the database.
+export const appleSignInTokens = pgTable('apple_sign_in_tokens', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  clientId: text('client_id').notNull(),
+  refreshToken: text('refresh_token').notNull(),
+  createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow().notNull(),
+}, (table) => ({
+  userClientIdx: uniqueIndex('apple_sign_in_tokens_user_client_idx').on(table.userId, table.clientId),
+}));
+
+export const appleSignInTokensRelations = relations(appleSignInTokens, ({ one }) => ({
+  user: one(users, {
+    fields: [appleSignInTokens.userId],
+    references: [users.id],
+  }),
+}));
+
 // Email unsubscribe tokens for one-click email unsubscribe links
 // Replaces JWT-based tokens for Legacy JWT Deprecation (P5-T5)
 export const emailUnsubscribeTokens = pgTable('email_unsubscribe_tokens', {

@@ -16,6 +16,12 @@ export {
 } from './InputActions';
 
 export {
+  QueueTray,
+  queuedMessageText,
+  type QueueTrayProps,
+} from './QueueTray';
+
+export {
   ProviderModelSelector,
   type ProviderModelSelectorProps,
 } from './ProviderModelSelector';

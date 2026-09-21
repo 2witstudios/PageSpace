@@ -35,6 +35,13 @@ export interface CommandSummary {
    * entry pages instead.
    */
   kind?: 'skill';
+  /**
+   * The suggestion is handled entirely in the composer: the picker inserts
+   * plain `/trigger` text (no chip, no server-side execution) because the
+   * surface intercepts it before send. Set only on built-ins whose whole
+   * behavior lives client-side (e.g. /btw's detached side question).
+   */
+  clientHandled?: boolean;
 }
 
 /**
@@ -61,6 +68,12 @@ export interface BuiltinCommandDefinition {
    * built-in (/help) whose content comes from buildPromptSection.
    */
   kind?: 'skill';
+  /**
+   * Handled in the composer, not by the model: the picker inserts plain
+   * `/trigger` text and the surface intercepts it before send (see
+   * CommandSummary.clientHandled). Never set together with kind: 'skill'.
+   */
+  clientHandled?: boolean;
   /**
    * The skill is offered (catalog + load) only when the agent has at least
    * one of these tools (hasAny semantics, mirroring inline-instructions).
@@ -257,6 +270,15 @@ export const BUILTIN_COMMANDS: readonly BuiltinCommandDefinition[] = [
     description:
       'Writes and edits DOCUMENT and CODE pages: HTML versus markdown content modes, line-numbered reading with precise line-range edits, inserting content relative to headings, and linking pages or people with @mentions. Use when the user asks to write, draft, restructure, or edit documents, notes, or long-form content.',
     requiredTools: ['replace_lines', 'insert_content', 'create_page'],
+  },
+  {
+    // Not a skill and never model-facing: the composer's send interception
+    // (ChatInput) and the detached /api/ai/btw stream are the whole feature.
+    // `clientHandled` makes the picker insert literal `/btw ` text — a chip
+    // would serialize to `/[btw](builtin:btw)` and never match the regex.
+    trigger: 'btw',
+    clientHandled: true,
+    description: 'Ask a side question without interrupting the run',
   },
 ];
 

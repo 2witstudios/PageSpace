@@ -15,7 +15,19 @@ import { promoteOptimisticSends } from '@/stores/conversationMessages/promoteOpt
 import { replayPendingMutations } from '@/stores/conversationMessages/replayPendingMutations';
 import { mergeSnapshotTail } from '@/stores/conversationMessages/mergeSnapshotTail';
 import { advanceRev } from '@/stores/conversationMessages/advanceRev';
+import {
+  applyEnqueueQueuedSend,
+  applyRemoveQueuedSend,
+  applyShiftQueuedSend,
+  applyClearQueuedSends,
+  applySetQueuedSends,
+  MAX_QUEUED_SENDS,
+  type QueuedSendsByConversationId,
+} from '@/stores/conversationMessages/applyQueuedSends';
 import { seedEmpty, type ConversationCacheEntry, type ConversationMessagesById } from '@/stores/conversationMessages/seedEmpty';
+
+export { MAX_QUEUED_SENDS };
+export type { QueuedSendsByConversationId };
 import type { MessageEditPayload } from '@/lib/ai/streams/applyMessageEdit';
 import { revertAskUserAnswer, type AskUserAnswerPayload, type AskUserAnswerRevertPayload } from '@/lib/ai/streams/applyAskUserAnswer';
 
@@ -112,10 +124,30 @@ interface ConversationMessagesState {
    * should ever fetch for it and the UI must not show a loading state.
    */
   seedConversation: (conversationId: string) => void;
+  /**
+   * The send queue (issue #2676): messages typed while a response streams,
+   * dispatched one per turn after the stream's terminal event. Kept as a
+   * TOP-LEVEL map, deliberately outside `ConversationCacheEntry`: loads,
+   * snapshots and promotes rewrite entries wholesale via `seedEmpty`, and a
+   * queue inside the entry would be wiped by any of them. Separateness from
+   * `optimisticSends` is the point — see `applyQueuedSends`' docblock.
+   */
+  queuedSendsByConversationId: QueuedSendsByConversationId;
+  /** Appends in FIFO order. False when the queue is at `MAX_QUEUED_SENDS` (or the id is already queued). */
+  enqueueQueuedSend: (conversationId: string, message: UIMessage) => boolean;
+  /** Drops one queued message by id (tray remove button). */
+  removeQueuedSend: (conversationId: string, messageId: string) => void;
+  /** Removes and returns the OLDEST entry — what the drain dispatches next — or null when empty. */
+  shiftQueuedSend: (conversationId: string) => UIMessage | null;
+  /** Empties the conversation's queue (tray clear-all, double-ESC interrupt). */
+  clearQueuedSends: (conversationId: string) => void;
+  /** Replaces the queue wholesale (restore-on-mount); entries keep their minted ids. */
+  setQueuedSends: (conversationId: string, messages: UIMessage[]) => void;
 }
 
 export const useConversationMessagesStore = create<ConversationMessagesState>((set, get) => ({
   byConversationId: {},
+  queuedSendsByConversationId: {},
 
   getEntry: (conversationId) => get().byConversationId[conversationId] ?? seedEmpty(),
 
@@ -261,5 +293,41 @@ export const useConversationMessagesStore = create<ConversationMessagesState>((s
       const { byConversationId, generation } = applyStartLoad(state.byConversationId, conversationId);
       return { byConversationId: applyLoad(byConversationId, { conversationId, generation, messages: [] }) };
     });
+  },
+
+  enqueueQueuedSend: (conversationId, message) => {
+    const queue = get().queuedSendsByConversationId[conversationId] ?? [];
+    if (queue.length >= MAX_QUEUED_SENDS) return false;
+    set((state) => ({
+      queuedSendsByConversationId: applyEnqueueQueuedSend(state.queuedSendsByConversationId, { conversationId, message }),
+    }));
+    return true;
+  },
+
+  removeQueuedSend: (conversationId, messageId) => {
+    set((state) => ({
+      queuedSendsByConversationId: applyRemoveQueuedSend(state.queuedSendsByConversationId, { conversationId, messageId }),
+    }));
+  },
+
+  shiftQueuedSend: (conversationId) => {
+    const state = get();
+    const queue = state.queuedSendsByConversationId[conversationId];
+    if (!queue || queue.length === 0) return null;
+    const [head] = queue;
+    set({ queuedSendsByConversationId: applyShiftQueuedSend(state.queuedSendsByConversationId, conversationId) });
+    return head;
+  },
+
+  clearQueuedSends: (conversationId) => {
+    set((state) => ({
+      queuedSendsByConversationId: applyClearQueuedSends(state.queuedSendsByConversationId, conversationId),
+    }));
+  },
+
+  setQueuedSends: (conversationId, messages) => {
+    set((state) => ({
+      queuedSendsByConversationId: applySetQueuedSends(state.queuedSendsByConversationId, { conversationId, messages }),
+    }));
   },
 }));

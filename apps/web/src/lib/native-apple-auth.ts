@@ -58,7 +58,11 @@ async function loadAppleSdk() {
     const { Preferences } = await import('@capacitor/preferences');
     const { PageSpaceKeychain } = await import('./keychain-plugin');
 
-    await SocialLogin.initialize({ apple: { clientId: APPLE_CLIENT_ID } });
+    // Proper token exchange mode makes the plugin return Apple's authorization
+    // code, which the server exchanges for a revocable refresh token (TN3194).
+    // The Swift support ships in the plugin already in the app binary, so this
+    // needs no new native build.
+    await SocialLogin.initialize({ apple: { clientId: APPLE_CLIENT_ID, useProperTokenExchange: true } });
 
     return { SocialLogin, Preferences, PageSpaceKeychain };
   } catch (error) {
@@ -126,6 +130,7 @@ export async function signInWithApple(options: { inviteToken?: string; returnUrl
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         idToken: appleResult.idToken,
+        ...(appleResult.authorizationCode && { authorizationCode: appleResult.authorizationCode }),
         platform,
         deviceId,
         deviceName: platform === 'ios' ? 'iOS App' : 'Android App',

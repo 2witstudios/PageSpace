@@ -18,6 +18,7 @@ export type ErasureStepId =
   | 'purge-monitoring'
   | 'purge-stream-state'
   | 'revoke-integrations'
+  | 'revoke-apple-tokens'
   | 'email-suppression'
   | 'ai-provider-erasure'
   | 'security-audit'
@@ -31,6 +32,10 @@ export const ERASURE_STEPS: readonly ErasureStepId[] = [
   'anonymize-activity-logs',
   'purge-monitoring',
   'revoke-integrations',
+  // Recorded by the web app at lodge time (the processor holds no ENCRYPTION_KEY
+  // to decrypt the token); the worker skips it like stripe-customer. The users
+  // FK cascade on delete-user is the backstop for the rows.
+  'revoke-apple-tokens',
   'email-suppression',
   // AI-provider erasure derives the provider list from the user's ai_usage
   // rows, so it MUST run before those rows are purged (else the manifest is
@@ -66,6 +71,8 @@ const STEP_DEFS: ErasureStep[] = [
   // durable retry, never leave it "completed" with rows retained.
   { id: 'purge-monitoring', fatal: false, cloudOnly: false },
   { id: 'revoke-integrations', fatal: false, cloudOnly: false },
+  // Best-effort: Apple being down must not stop the deletion (TN3194).
+  { id: 'revoke-apple-tokens', fatal: false, cloudOnly: false },
   { id: 'email-suppression', fatal: false, cloudOnly: true },
   // Must precede purge-ai-usage: it reads the ai_usage rows to learn which
   // providers the user touched.

@@ -44,6 +44,14 @@ export interface ChatTextareaProps {
    * the user commands that fail as `not_found` the moment they're sent.
    */
   commandDriveId?: string;
+  /**
+   * Surface capability gate (default false): when false, client-handled
+   * commands (e.g. /btw) are excluded from the `/` picker. They fire via the
+   * composer's pre-send interception, which only some surfaces own — a
+   * surface without it (e.g. ChannelInput) would post the literal
+   * `/trigger …` text instead of firing the command.
+   */
+  allowClientHandledCommands?: boolean;
   /** Enable cross-drive mention search */
   crossDrive?: boolean;
   /** Whether the input is disabled */
@@ -79,6 +87,7 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
       placeholder = 'Type your message...',
       driveId,
       commandDriveId,
+      allowClientHandledCommands = false,
       crossDrive = false,
       disabled = false,
       variant = 'main',
@@ -129,6 +138,7 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
       enterSelects: enterToSend,
       onValueChange: handleDisplayTextChange,
       onTokenInserted: registerToken,
+      allowClientHandledCommands,
     });
     const { syncDisplayText } = command;
 

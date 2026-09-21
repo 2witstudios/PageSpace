@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import Link from 'next/link';
+import { MarketingLink } from '@/components/ui/MarketingLink';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
@@ -33,13 +33,13 @@ export function CookieBanner() {
             We use strictly necessary cookies to run PageSpace, plus optional cookies for analytics
             and preferences. Necessary cookies are always on. You can accept all, reject the
             optional ones, or choose which to allow. See our{' '}
-            <Link href="/privacy" className="underline hover:text-foreground">
+            <MarketingLink href="/privacy" className="underline hover:text-foreground">
               Privacy Policy
-            </Link>{' '}
+            </MarketingLink>{' '}
             and{' '}
-            <Link href="/cookies" className="underline hover:text-foreground">
+            <MarketingLink href="/cookies" className="underline hover:text-foreground">
               Cookie Policy
-            </Link>{' '}
+            </MarketingLink>{' '}
             for details.
           </p>
         </div>

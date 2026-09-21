@@ -52,6 +52,11 @@ vi.mock('@pagespace/lib/services/dm-message-repository', () => ({
   },
 }));
 
+const mockIsBlockedBetween = vi.fn();
+vi.mock('@/lib/repositories/user-block-repository', () => ({
+  isBlockedBetween: (...args: unknown[]) => mockIsBlockedBetween(...args),
+}));
+
 // --- Audit + logger seams ------------------------------------------------------
 const mockAuditRequest = vi.fn();
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
@@ -186,6 +191,7 @@ function setupHappyPath() {
   vi.mocked(authenticateRequestWithOptions).mockResolvedValue(sessionAuth());
   vi.mocked(isEmailVerified).mockResolvedValue(true);
   mockFindConversationForParticipant.mockResolvedValue(mockConversation());
+  mockIsBlockedBetween.mockResolvedValue(false);
   mockInsertDmMessageWithAttachment.mockImplementation(async (input) => ({
     kind: 'ok',
     message: mockInsertedRow(input),
@@ -230,6 +236,18 @@ describe('POST /api/messages/[conversationId]', () => {
     } else {
       process.env.INTERNAL_REALTIME_URL = originalRealtimeUrl;
     }
+  });
+
+  // Guideline 1.2: a block must stop messages in a conversation that already
+  // exists, not only the creation of a new one.
+  describe('blocked participants', () => {
+    it('given either participant has blocked the other, should refuse the message and store nothing', async () => {
+      mockIsBlockedBetween.mockResolvedValue(true);
+      const res = await callRoute({ content: 'hello' });
+      expect(res.status).toBe(403);
+      expect(mockIsBlockedBetween).toHaveBeenCalledWith(SENDER_ID, RECIPIENT_ID);
+      expect(mockInsertDmMessageWithAttachment).not.toHaveBeenCalled();
+    });
   });
 
   // ===== 1. Body validation =====
@@ -957,6 +975,7 @@ describe('POST /api/messages/[conversationId] (thread reply)', () => {
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(sessionAuth());
     vi.mocked(isEmailVerified).mockResolvedValue(true);
     mockFindConversationForParticipant.mockResolvedValue(mockConversation());
+    mockIsBlockedBetween.mockResolvedValue(false);
     mockBroadcastThreadReplyCountUpdated.mockResolvedValue(undefined);
     mockListDmThreadFollowers.mockResolvedValue([]);
     mockBroadcastInboxEvent.mockResolvedValue(undefined);

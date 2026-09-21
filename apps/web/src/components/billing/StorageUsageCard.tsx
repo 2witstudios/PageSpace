@@ -150,7 +150,7 @@ export function StorageUsageCard() {
             </AlertTitle>
             <AlertDescription>
               You have used {Math.round(quota.utilizationPercent)}% of your storage quota.
-              {quota.warningLevel === 'critical' && ' Consider deleting some files or upgrading your plan.'}
+              {quota.warningLevel === 'critical' && ' Consider deleting some files to free up space.'}
             </AlertDescription>
           </Alert>
         )}

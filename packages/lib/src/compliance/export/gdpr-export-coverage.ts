@@ -214,6 +214,10 @@ function withReason(reason: string, ...tables: string[]): Record<string, string>
 export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
   ...withReason(
     CREDENTIAL_MATERIAL,
+    // Sign in with Apple refresh tokens, kept (encrypted) only so account
+    // deletion can revoke the Apple authorization. Erased at the deletion
+    // request, and by the users cascade.
+    'apple_sign_in_tokens',
     'auth_handoff_tokens',
     'device_tokens',
     'email_unsubscribe_tokens',

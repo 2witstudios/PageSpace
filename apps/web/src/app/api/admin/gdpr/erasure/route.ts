@@ -93,6 +93,7 @@ export const POST = withAdminAuth(async (admin, request) => {
       requestedByType: 'admin',
       forceDelete,
       legalBasis: legalBasis ?? 'admin_escalation',
+      subjectAppleLinked: subject.appleId !== null,
     });
 
     loggers.auth.info(

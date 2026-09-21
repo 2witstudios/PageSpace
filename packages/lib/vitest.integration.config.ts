@@ -9,7 +9,9 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['src/**/*.integration.test.{js,ts}'],
-    setupFiles: ['./src/test/setup.ts'],
+    // integration-db-teardown ends each file's @pagespace/db pool; without it the
+    // isolated files' idle connections exhaust Postgres (53300 too many clients).
+    setupFiles: ['./src/test/setup.ts', './src/test/integration-db-teardown.ts'],
     fileParallelism: false,
     pool: 'forks',
     poolOptions: {
