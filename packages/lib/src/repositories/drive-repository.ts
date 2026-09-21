@@ -8,6 +8,7 @@
 import { db } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
+import { isDriveLead } from '../permissions/drive-relationship';
 
 // Types for repository operations
 export interface DriveRecord {
@@ -57,10 +58,12 @@ export const driveRepository = {
     ownerId: string
   ): Promise<DriveRecord | null> => {
     const drive = await db.query.drives.findFirst({
-      where: and(eq(drives.id, driveId), eq(drives.ownerId, ownerId)),
+      where: eq(drives.id, driveId),
     });
+    if (!drive) return null;
 
-    return drive as DriveRecord | null;
+    // Lead-only (drives.ownerId), decided in the permissions layer.
+    return isDriveLead(ownerId, drive) ? (drive as DriveRecord) : null;
   },
 
   /**

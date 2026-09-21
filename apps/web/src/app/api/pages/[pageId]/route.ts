@@ -9,9 +9,10 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, isMCPAu
 import { jsonResponse } from '@pagespace/lib/utils/api-utils';
 import { pageService } from '@/services/api';
 import { db } from '@pagespace/db/db';
-import { and, eq, isNotNull, ne, not, exists, or, isNull, gt, inArray, sql } from '@pagespace/db/operators';
-import { pages, drives } from '@pagespace/db/schema/core';
-import { driveMembers, pagePermissions, driveRoles } from '@pagespace/db/schema/members';
+import { eq } from '@pagespace/db/operators';
+import { pages } from '@pagespace/db/schema/core';
+import { getUsersWhoCanViewPage } from '@pagespace/lib/permissions/permissions';
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -155,48 +156,18 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
       );
     }
 
-    // Instant revocation: kick members who lose implicit access when page becomes private
+    // Instant revocation: kick the drive's members (the org-aware enumeration) whom the canonical
+    // viewer check no longer lets see the page now that it is private.
     if (isPrivateUpdate === true && previousIsPrivate === false) {
-      const drive = await db.query.drives.findFirst({
-        where: eq(drives.id, result.driveId),
-        columns: { ownerId: true },
-      });
+      const members = await getDriveRecipientUserIds(result.driveId);
+      const stillViewing = await getUsersWhoCanViewPage(pageId, members);
+      const membersLosingAccess = members.filter((memberId) => !stillViewing.has(memberId));
 
-      if (drive) {
-        const membersLosingAccess: { userId: string }[] = await db
-          .select({ userId: driveMembers.userId })
-          .from(driveMembers)
-          .where(and(
-            eq(driveMembers.driveId, result.driveId),
-            isNotNull(driveMembers.acceptedAt),
-            ne(driveMembers.userId, drive.ownerId),
-            not(inArray(driveMembers.role, ['OWNER', 'ADMIN'])),
-            not(exists(
-              db.select({ id: pagePermissions.id })
-                .from(pagePermissions)
-                .where(and(
-                  eq(pagePermissions.pageId, pageId),
-                  eq(pagePermissions.userId, driveMembers.userId),
-                  eq(pagePermissions.canView, true),
-                  or(isNull(pagePermissions.expiresAt), gt(pagePermissions.expiresAt, new Date()))
-                ))
-            )),
-            not(exists(
-              db.select({ id: driveRoles.id })
-                .from(driveRoles)
-                .where(and(
-                  eq(driveRoles.id, driveMembers.customRoleId),
-                  sql`${driveRoles.permissions} -> ${pageId} ->> 'canView' = 'true'`
-                ))
-            ))
-          ));
-
-        await Promise.all(
-          membersLosingAccess.map(({ userId: memberId }) =>
-            kickForPagePermissionRevocation({ userId: memberId, pageId, reason: 'page_private' })
-          )
-        );
-      }
+      await Promise.all(
+        membersLosingAccess.map((memberId) =>
+          kickForPagePermissionRevocation({ userId: memberId, pageId, reason: 'page_private' })
+        )
+      );
     }
 
     // Broadcast privacy change so connected clients revalidate their tree

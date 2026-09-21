@@ -115,11 +115,17 @@ describe('driveRepository.findByIdAndOwner', () => {
     expect(result).toEqual(driveRecord);
   });
 
-  it('returns null/undefined when drive not found or wrong owner', async () => {
+  it('returns null/undefined when drive not found', async () => {
     vi.mocked(db.query.drives.findFirst).mockResolvedValue(undefined as never);
 
     const result = await driveRepository.findByIdAndOwner('drive-1', 'wrong-user');
     expect(result).toBeFalsy();
+  });
+
+  it('returns null for anyone but the drive\'s lead (isDriveLead), an org Owner or Admin included', async () => {
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRecord as never);
+
+    expect(await driveRepository.findByIdAndOwner('drive-1', 'someone-else')).toBeNull();
   });
 });
 

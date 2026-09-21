@@ -1,5 +1,5 @@
 import { db } from '@pagespace/db/db'
-import { eq, and, inArray, isNotNull, desc, sql } from '@pagespace/db/operators'
+import { eq, and, inArray, desc, sql } from '@pagespace/db/operators'
 import { drives, pages } from '@pagespace/db/schema/core'
 import { isSheetType } from '@pagespace/lib/sheets/sheet';
 import { readSheetDocument } from '@pagespace/lib/sheets/store';
@@ -8,6 +8,7 @@ import { pagePermissions, driveMembers, driveRoles } from '@pagespace/db/schema/
 import { files } from '@pagespace/db/schema/storage'
 import { driveBackups, driveBackupPages, driveBackupPermissions, driveBackupMembers, driveBackupRoles, driveBackupFiles } from '@pagespace/db/schema/versioning';
 import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
+import { listMemberDrives } from '@pagespace/lib/permissions/member-drives';
 import { createChangeGroupId, inferChangeGroupType } from '@pagespace/lib/monitoring/change-group';
 import { computePageStateHash, createPageVersion } from '@pagespace/lib/services/page-version-service'
 import { hashWithPrefix } from '@pagespace/lib/utils/hash-utils';
@@ -78,24 +79,10 @@ export async function listAllUserBackups(
   userId: string,
   options?: { limit?: number; offset?: number }
 ): Promise<{ success: boolean; backups: DriveBackupWithDriveName[]; total: number; error?: string }> {
-  const ownedDrives = await db.select({ id: drives.id })
-    .from(drives)
-    .where(and(eq(drives.ownerId, userId), eq(drives.isTrashed, false)));
-
-  const adminMemberships = await db
-    .select({ driveId: driveMembers.driveId })
-    .from(driveMembers)
-    .innerJoin(drives, and(eq(driveMembers.driveId, drives.id), eq(drives.isTrashed, false)))
-    .where(and(
-      eq(driveMembers.userId, userId),
-      eq(driveMembers.role, 'ADMIN'),
-      isNotNull(driveMembers.acceptedAt)
-    ));
-
-  const driveIds = [
-    ...ownedDrives.map((d) => d.id),
-    ...adminMemberships.map((d) => d.driveId),
-  ];
+  // Drives the user leads or administers (org-aware member drives, not trashed).
+  const driveIds = (await listMemberDrives(userId, { includeTrashed: false }))
+    .filter((d) => d.isOwner || d.role === 'ADMIN')
+    .map((d) => d.driveId);
 
   if (driveIds.length === 0) {
     return { success: true, backups: [], total: 0 };

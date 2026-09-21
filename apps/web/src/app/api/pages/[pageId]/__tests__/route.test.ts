@@ -52,6 +52,12 @@ vi.mock('@pagespace/lib/permissions/revocation-kick', () => ({
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
   canUserSharePage: vi.fn().mockResolvedValue(true),
+  getUsersWhoCanViewPage: vi.fn(async () => new Set<string>()),
+}));
+
+// The drive's members, from the one org-aware enumeration.
+vi.mock('@pagespace/lib/services/drive-member-service', () => ({
+  getDriveRecipientUserIds: vi.fn(async () => []),
 }));
 
 vi.mock('@pagespace/db/db', () => ({
@@ -125,6 +131,8 @@ import { pageService } from '@/services/api';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, isMCPAuthResult, canPrincipalSharePage } from '@/lib/auth';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { kickForPagePermissionRevocation } from '@pagespace/lib/permissions/revocation-kick';
+import { getUsersWhoCanViewPage } from '@pagespace/lib/permissions/permissions';
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { jsonResponse } from '@pagespace/lib/utils/api-utils';
@@ -346,6 +354,8 @@ describe('PATCH /api/pages/[pageId]', () => {
     // @ts-expect-error - partial mock
     vi.mocked(db.query.drives.findFirst).mockResolvedValue({ ownerId: 'owner_user' });
     // Default: no members lose access
+    vi.mocked(getDriveRecipientUserIds).mockResolvedValue([]);
+    vi.mocked(getUsersWhoCanViewPage).mockResolvedValue(new Set());
     // @ts-expect-error - partial mock chain
     vi.mocked(db.select).mockReturnValue({
       from: vi.fn().mockReturnValue({
@@ -613,41 +623,44 @@ describe('PATCH /api/pages/[pageId]', () => {
     it('kicks members who lose implicit access when page transitions false→true', async () => {
       // @ts-expect-error - partial mock: page was public
       vi.mocked(db.query.pages.findFirst).mockResolvedValue({ isPrivate: false });
-      // @ts-expect-error - partial mock chain
-      vi.mocked(db.select).mockReturnValue({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockResolvedValue([
-            { userId: 'member_1' },
-            { userId: 'member_2' },
-          ]),
-        }),
-      });
+      vi.mocked(getDriveRecipientUserIds).mockResolvedValueOnce(['lead_1', 'admin_1', 'member_1', 'member_2']);
+      // After the change only the lead and the admin can still view it.
+      vi.mocked(getUsersWhoCanViewPage).mockResolvedValueOnce(new Set(['lead_1', 'admin_1']));
 
       await PATCH(createRequest({ isPrivate: true }), { params: mockParams });
 
+      expect(getUsersWhoCanViewPage).toHaveBeenCalledWith(mockPageId, ['lead_1', 'admin_1', 'member_1', 'member_2']);
       expect(kickForPagePermissionRevocation).toHaveBeenCalledWith({
         userId: 'member_1', pageId: mockPageId, reason: 'page_private',
       });
       expect(kickForPagePermissionRevocation).toHaveBeenCalledWith({
         userId: 'member_2', pageId: mockPageId, reason: 'page_private',
       });
+      expect(kickForPagePermissionRevocation).toHaveBeenCalledTimes(2);
     });
 
-    it('does not kick members who retain access via custom role when page transitions false→true', async () => {
-      // The DB query excludes members with custom role access — they return [] from the kick query
+    it('does not kick members who retain access via custom role or an explicit grant when page transitions false→true', async () => {
       // @ts-expect-error - partial mock: page was public
       vi.mocked(db.query.pages.findFirst).mockResolvedValue({ isPrivate: false });
-      // @ts-expect-error - partial mock chain: empty result means all members with implicit access
-      // are already excluded by the NOT EXISTS subqueries (explicit perms + custom role)
-      vi.mocked(db.select).mockReturnValue({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockResolvedValue([]),
-        }),
-      });
+      vi.mocked(getDriveRecipientUserIds).mockResolvedValueOnce(['lead_1', 'role_member', 'granted_member']);
+      vi.mocked(getUsersWhoCanViewPage).mockResolvedValueOnce(new Set(['lead_1', 'role_member', 'granted_member']));
 
       await PATCH(createRequest({ isPrivate: true }), { params: mockParams });
 
       expect(kickForPagePermissionRevocation).not.toHaveBeenCalled();
+    });
+
+    it('DRV-5 (partial) X-6 (partial) the kick audience is the org-aware drive membership (an implicit Open member is kicked too), decided by the canonical viewer check, never a drive_members read here', async () => {
+      // @ts-expect-error - partial mock: page was public
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue({ isPrivate: false });
+      vi.mocked(getDriveRecipientUserIds).mockResolvedValueOnce(['lead_1', 'implicit_member']);
+      vi.mocked(getUsersWhoCanViewPage).mockResolvedValueOnce(new Set(['lead_1']));
+
+      await PATCH(createRequest({ isPrivate: true }), { params: mockParams });
+
+      expect(getDriveRecipientUserIds).toHaveBeenCalledWith(mockDriveId);
+      expect(kickForPagePermissionRevocation).toHaveBeenCalledWith({ userId: 'implicit_member', pageId: mockPageId, reason: 'page_private' });
+      expect(db.select).not.toHaveBeenCalled();
     });
 
     it('does not kick anyone when page is already private (no transition)', async () => {

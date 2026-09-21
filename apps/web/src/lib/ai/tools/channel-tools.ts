@@ -5,9 +5,8 @@ import { canActorEditPage } from './actor-permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getActorInfo, logMessageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { db } from '@pagespace/db/db'
-import { eq, and, isNotNull } from '@pagespace/db/operators'
+import { eq, and } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
-import { driveMembers } from '@pagespace/db/schema/members'
 import { channelMessages, channelReadStatus } from '@pagespace/db/schema/chat';
 import { channelMessageRepository } from '@pagespace/lib/services/channel-message-repository';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
@@ -15,6 +14,7 @@ import { broadcastInboxEvent } from '@/lib/websocket/socket-utils';
 import type { ToolExecutionContext } from '../core/types';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { notifyMentionedUsers } from '@/lib/channels/notify-mentioned-users';
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 
 const channelLogger = loggers.ai.child({ module: 'channel-tools' });
 
@@ -189,22 +189,9 @@ export const channelTools = {
         // Broadcast inbox updates to channel members
         try {
           if (channel.driveId) {
-            // Pending admins (acceptedAt IS NULL) must not receive inbox
-            // notifications for channels in a drive they have not joined.
-            // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
-            const members = await db.query.driveMembers.findMany({
-              where: and(
-                eq(driveMembers.driveId, channel.driveId),
-                isNotNull(driveMembers.acceptedAt)
-              ),
-              columns: { userId: true },
-            });
-
-            const driveOwnerId = channel.drive?.ownerId;
-            const memberUserIds = new Set(members.map(m => m.userId));
-            if (driveOwnerId && !memberUserIds.has(driveOwnerId)) {
-              members.push({ userId: driveOwnerId });
-            }
+            // The drive's members, lead included, from the one org-aware enumeration: a pending
+            // invitation or a stale org row receives no inbox notification.
+            const members = (await getDriveRecipientUserIds(channel.driveId)).map((memberId) => ({ userId: memberId }));
 
             const messagePreview = content.length > 100
               ? content.substring(0, 100) + '...'

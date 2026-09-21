@@ -28,6 +28,11 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 // --- Permissions ---------------------------------------------------------------
+// The drive's members, from the one org-aware enumeration (the lead included).
+vi.mock('@pagespace/lib/services/drive-member-service', () => ({
+  getDriveRecipientUserIds: vi.fn(async () => ['owner-1']),
+}));
+
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
   canUserViewPage: vi.fn().mockResolvedValue(true),
   canUserEditPage: vi.fn().mockResolvedValue(true),
