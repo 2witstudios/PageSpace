@@ -204,7 +204,8 @@ export async function POST(request: Request) {
       if (!created.ok) {
         return NextResponse.json({ error: created.message, code: created.code }, { status: created.status });
       }
-      newDrive = { ...created.drive, isOwned: true, role: 'OWNER', lastAccessedAt: null };
+      // The creator leads the new drive, so the drive-wide canEdit rule (#2627) grants create, as createDrive does.
+      newDrive = { ...created.drive, isOwned: true, role: 'OWNER', canCreatePages: true, lastAccessedAt: null };
     } else {
       newDrive = await createDrive(userId, { name });
     }

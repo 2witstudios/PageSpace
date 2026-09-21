@@ -472,7 +472,7 @@ describe('POST /api/drives', () => {
         orgDriveServiceDeps
       );
       expect(createDrive).not.toHaveBeenCalled();
-      expect(await response.json()).toMatchObject({ id: 'drive_eng', orgId: 'org-northwind', isOwned: true, role: 'OWNER' });
+      expect(await response.json()).toMatchObject({ id: 'drive_eng', orgId: 'org-northwind', isOwned: true, role: 'OWNER', canCreatePages: true });
     });
 
     it('DRV-3 (partial) a refused org create returns the verdict and creates nothing', async () => {
