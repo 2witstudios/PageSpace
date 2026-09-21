@@ -19,6 +19,15 @@ describe('next.config rewrites — RFC 8414 discovery URL', () => {
   });
 });
 
+describe('next.config rewrites — /auth.md (ADR 0007 Decision 12)', () => {
+  it('rewrites /auth.md to the routable handler via beforeFiles, from the same list middleware uses', async () => {
+    const { nextConfig } = await import('../../next.config');
+    const rewrites = await nextConfig.rewrites?.();
+    const beforeFiles = Array.isArray(rewrites) ? [] : (rewrites?.beforeFiles ?? []);
+    expect(beforeFiles).toContainEqual({ source: '/auth.md', destination: '/api/well-known/auth-md' });
+  });
+});
+
 describe('next.config rewrites — agent-sessions → agent-workspaces compat alias', () => {
   it('aliases the pre-rename API paths via afterFiles, so a stale browser bundle keeps working through the deploy', async () => {
     const { nextConfig } = await import('../../next.config');
