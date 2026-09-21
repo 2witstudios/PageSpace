@@ -7,7 +7,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockDriveFindFirst = vi.hoisted(() => vi.fn());
+// Membership resolves through the shared org-aware loader (accepted rows only), not a local read.
 const mockDriveMemberFindFirst = vi.hoisted(() => vi.fn());
+vi.mock('../../../permissions/org-drive-membership', () => ({
+  loadEffectiveDriveMembership: mockDriveMemberFindFirst,
+}));
 vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
@@ -74,23 +78,24 @@ describe('resolveDriveMembership', () => {
 
   it('given an accepted MEMBER who is not the owner, should answer member', async () => {
     mockDriveFindFirst.mockResolvedValue({ ownerId: 'someone-else' });
-    mockDriveMemberFindFirst.mockResolvedValue({ role: 'MEMBER' });
+    mockDriveMemberFindFirst.mockResolvedValue({ role: 'MEMBER', customRoleId: null, source: 'invite' });
     const result = await resolveDriveMembership({ userId: 'user-1', driveId: 'drive-1' });
     expect(result).toBe('member');
   });
 
   it('given an accepted ADMIN, should answer admin — the END decision needs delete authority (codex round 12)', async () => {
     mockDriveFindFirst.mockResolvedValue({ ownerId: 'someone-else' });
-    mockDriveMemberFindFirst.mockResolvedValue({ role: 'ADMIN' });
+    mockDriveMemberFindFirst.mockResolvedValue({ role: 'ADMIN', customRoleId: null, source: 'invite' });
     const result = await resolveDriveMembership({ userId: 'user-1', driveId: 'drive-1' });
     expect(result).toBe('admin');
   });
 
   it('given no accepted membership row, should answer none', async () => {
     mockDriveFindFirst.mockResolvedValue({ ownerId: 'someone-else' });
-    mockDriveMemberFindFirst.mockResolvedValue(undefined);
+    mockDriveMemberFindFirst.mockResolvedValue(null);
     const result = await resolveDriveMembership({ userId: 'user-1', driveId: 'drive-1' });
     expect(result).toBe('none');
+    expect(mockDriveMemberFindFirst).toHaveBeenCalledWith('user-1', { id: 'drive-1', ownerId: 'someone-else' });
   });
 });
 

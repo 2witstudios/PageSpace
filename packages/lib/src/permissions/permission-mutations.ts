@@ -18,6 +18,7 @@ import { GrantInputSchema, RevokeInputSchema, type PermissionFlags } from './sch
 import { logPermissionActivity, getActorInfo } from '../monitoring/activity-logger';
 import { isHomeDrive, homeDriveActionError } from '../services/drive-guards';
 import { kickForPagePermissionRevocation } from './revocation-kick';
+import { loadEffectiveDriveMembership } from './org-drive-membership';
 
 // ============================================================================
 // Error Types
@@ -103,6 +104,8 @@ async function getPageIfCanShare(
       driveId: pages.driveId,
       driveOwnerId: drives.ownerId,
       driveKind: drives.kind,
+      driveOrgId: drives.orgId,
+      driveOrgVisibility: drives.orgVisibility,
       createdBy: pages.createdBy,
     })
     .from(pages)
@@ -128,43 +131,23 @@ async function getPageIfCanShare(
     };
   }
 
-  // Check if user is the page creator AND still has active drive membership
-  if (page.createdBy === userId) {
-    const creatorMembership = await db
-      .select({ id: driveMembers.id })
-      .from(driveMembers)
-      .where(
-        and(
-          eq(driveMembers.driveId, page.driveId),
-          eq(driveMembers.userId, userId),
-          isNotNull(driveMembers.acceptedAt)
-        )
-      )
-      .limit(1);
+  // The shared org-aware membership decides both the creator and the admin branch.
+  const membership = await loadEffectiveDriveMembership(userId, {
+    id: page.driveId,
+    orgId: page.driveOrgId,
+    orgVisibility: page.driveOrgVisibility,
+  });
 
-    if (creatorMembership.length > 0) {
-      return {
-        ok: true,
-        page: { pageId: page.id, driveId: page.driveId, driveKind: page.driveKind },
-      };
-    }
+  // Check if user is the page creator AND still has active drive membership
+  if (page.createdBy === userId && membership !== null) {
+    return {
+      ok: true,
+      page: { pageId: page.id, driveId: page.driveId, driveKind: page.driveKind },
+    };
   }
 
   // Check if user is drive admin (can share)
-  const adminMembership = await db
-    .select({ id: driveMembers.id })
-    .from(driveMembers)
-    .where(
-      and(
-        eq(driveMembers.driveId, page.driveId),
-        eq(driveMembers.userId, userId),
-        eq(driveMembers.role, 'ADMIN'),
-        isNotNull(driveMembers.acceptedAt)
-      )
-    )
-    .limit(1);
-
-  if (adminMembership.length > 0) {
+  if (membership?.role === 'ADMIN') {
     return {
       ok: true,
       page: { pageId: page.id, driveId: page.driveId, driveKind: page.driveKind },

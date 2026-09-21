@@ -119,6 +119,19 @@ describe('resolvePagePermissionRow', () => {
       expect(resolved?.canDelete).toBe(false);
     });
 
+    it('grants nothing when the custom role entry denies view, whatever else it sets', () => {
+      expect(
+        resolvePagePermissionRow(
+          row({
+            memberRole: 'MEMBER',
+            pageType: 'DOCUMENT',
+            customRolePerms: { page_1: { canView: false, canEdit: true, canShare: true } },
+          }),
+          USER
+        )
+      ).toBeNull();
+    });
+
     it('falls back to the custom role drive-wide grant when the page has no entry', () => {
       // resolveCustomRolePermissions takes two inputs — the per-page entry and
       // the drive-wide default. Only the former is exercised above, and the
@@ -126,7 +139,7 @@ describe('resolvePagePermissionRow', () => {
       const resolved = resolvePagePermissionRow(
         row({
           memberRole: 'MEMBER',
-          isPrivate: true,
+          isPrivate: false,
           customRolePerms: {},
           customRoleDriveWidePerms: { canView: true, canEdit: true, canShare: false },
         }),
@@ -135,6 +148,19 @@ describe('resolvePagePermissionRow', () => {
       expect(resolved?.canView).toBe(true);
       expect(resolved?.canEdit).toBe(true);
       expect(resolved?.canDelete).toBe(false);
+    });
+
+    it('never opens a PRIVATE page through the drive-wide fallback, only through a per-page entry (parity with getUserAccessLevel)', () => {
+      // DRV-5: an implicit Open-drive member holds the drive default role, whose drive-wide view
+      // must not surface the drive's private pages in search, badges or the channel fan-out.
+      const driveWideOnly = row({
+        memberRole: 'MEMBER',
+        isPrivate: true,
+        customRolePerms: {},
+        customRoleDriveWidePerms: { canView: true, canEdit: true, canShare: false },
+      });
+      expect(resolvePagePermissionRow(driveWideOnly, USER)).toBeNull();
+      expect(resolvePagePermissionRow({ ...driveWideOnly, customRolePerms: { page_1: { canView: true, canEdit: false, canShare: false } } }, USER)?.canView).toBe(true);
     });
   });
 });

@@ -23,6 +23,7 @@ import { and, eq, isNotNull } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
 import { canRunCode } from '../sandbox/can-run-code';
+import { loadEffectiveDriveMembership } from '../../permissions/org-drive-membership';
 import type { DriveMembership } from '../../agent-workspaces/decide-workspace-access';
 
 export type ResolveSessionTenantIdResult =
@@ -59,14 +60,12 @@ export async function resolveDriveMembership({
 }): Promise<DriveMembership> {
   const drive = await db.query.drives.findFirst({
     where: eq(drives.id, driveId),
-    columns: { ownerId: true },
+    columns: { ownerId: true, orgId: true, orgVisibility: true },
   });
   if (!drive) return 'none';
   if (drive.ownerId === userId) return 'owner';
-  const membership = await db.query.driveMembers.findFirst({
-    where: and(eq(driveMembers.driveId, driveId), eq(driveMembers.userId, userId), isNotNull(driveMembers.acceptedAt)),
-    columns: { role: true },
-  });
+  // The shared org-aware membership (accepted rows, org Owner/Admin power, implicit Open membership).
+  const membership = await loadEffectiveDriveMembership(userId, { id: driveId, ...drive });
   if (!membership) return 'none';
   // ADMIN is surfaced distinctly because the END decision requires drive
   // delete authority (owner/admin) — plain members may not tear down another

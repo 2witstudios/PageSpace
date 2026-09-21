@@ -11,6 +11,7 @@ import { drives } from '@pagespace/db/schema/core';
 import { driveRoles, driveMembers } from '@pagespace/db/schema/members';
 import type { PagePerm } from '../permissions/membership-queries';
 import { computeReorderPlan, lockedBatchReorder } from './reorder';
+import { loadEffectiveDriveMembership } from '../permissions/org-drive-membership';
 
 // Re-export canonical type so callers can import from one place
 export type { PagePerm };
@@ -116,13 +117,9 @@ export async function checkDriveAccessForRoles(
     };
   }
 
-  // Check membership
-  const membership = await db.query.driveMembers.findFirst({
-    where: and(
-      eq(driveMembers.driveId, driveId),
-      eq(driveMembers.userId, userId)
-    ),
-  });
+  // The shared org-aware membership. It reads ACCEPTED rows only: a pending ADMIN invitation
+  // manages no roles.
+  const membership = await loadEffectiveDriveMembership(userId, drive);
 
   if (!membership) {
     return {

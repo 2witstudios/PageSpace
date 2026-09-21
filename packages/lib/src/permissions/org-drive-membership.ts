@@ -1,9 +1,9 @@
 import { db } from '@pagespace/db/db';
-import { and, eq, isNotNull } from '@pagespace/db/operators';
+import { and, eq, inArray, isNotNull } from '@pagespace/db/operators';
 import type { OrgDriveVisibility } from '@pagespace/db/schema/core';
 import { driveMembers, driveRoles } from '@pagespace/db/schema/members';
 import { orgMembers, type OrgRole } from '@pagespace/db/schema/organizations';
-import { audit } from '../audit/audit-log';
+import { auditOrgAdminPrivateDriveAccess } from './org-admin-access-audit';
 import { ORGS_ENABLED } from '../organizations/orgs-enabled';
 import type { DriveMemberRole, DriveRoleGrant, OrgDriveMembership } from './org-access';
 import { drives } from '@pagespace/db/schema/core';
@@ -47,42 +47,99 @@ export async function loadEffectiveDriveMembership(
     ))
     .limit(1);
 
-  const row = toMembership(rows[0]);
+  const [effective] = await resolveEffectiveDriveMemberships(
+    [{ userId, drive, row: toMembership(rows[0]) }],
+    { audit: true },
+  );
+  return effective;
+}
 
-  const orgId = drive.orgId ?? null;
-  if (!ORGS_ENABLED || orgId === null) {
-    return resolveEffectiveDriveMembership({
+export interface MembershipCandidate {
+  userId: string;
+  drive: MembershipDrive;
+  /** The user's ACCEPTED drive_members row for this drive, already read by the caller. */
+  row: OrgDriveMembership | null;
+}
+
+export interface ResolveMembershipsOptions {
+  /**
+   * Write the ORG-4 event when org power opens a PRIVATE drive. True when the answer serves the
+   * user's own request (opening, listing pages, searching, a realtime join or event). False when it
+   * computes an audience (which OTHER users can see a page): nobody accessed anything.
+   */
+  audit: boolean;
+}
+
+/**
+ * The effective membership of many (user, drive) pairs whose accepted rows the caller already read,
+ * in the order given. The ONE IO edge every human drive resolver goes through, single or batched:
+ * while ORGS_ENABLED is false, or for a personal drive, it runs no query and returns the row.
+ * Otherwise it reads the org roles (one query) and the default roles of the OPEN drives a row-less
+ * member needs (one query), then applies resolveEffectiveDriveMembership to each pair.
+ */
+export async function resolveEffectiveDriveMemberships(
+  candidates: MembershipCandidate[],
+  options: ResolveMembershipsOptions,
+): Promise<Array<EffectiveDriveMembership | null>> {
+  const facts = candidates.map(({ drive }) => ({
+    orgId: drive.orgId ?? null,
+    orgVisibility: drive.orgVisibility ?? 'OPEN',
+  }));
+
+  if (!ORGS_ENABLED || facts.every((f) => f.orgId === null)) {
+    return candidates.map(({ row }, i) => resolveEffectiveDriveMembership({
       orgsEnabled: false,
-      drive: { orgId, orgVisibility: drive.orgVisibility ?? 'OPEN' },
+      drive: facts[i],
       orgRole: null,
       row,
       driveDefaultRole: NO_DEFAULT_ROLE,
-    });
+    }));
   }
 
-  const orgVisibility = drive.orgVisibility ?? 'OPEN';
-  const orgRole = await findOrgRole(orgId, userId);
+  const orgRoles = await findOrgRoles(candidates.flatMap(({ userId }, i) => {
+    const orgId = facts[i].orgId;
+    return orgId === null ? [] : [{ orgId, userId }];
+  }));
+  const orgRoleOf = (i: number): OrgRole | null => {
+    const orgId = facts[i].orgId;
+    return orgId === null ? null : orgRoles.get(orgRoleKey(orgId, candidates[i].userId)) ?? null;
+  };
+
   // A stale row (a misplaced org row, a former lead's OWNER row) counts as no row here too, or the
   // member would resolve the implicit OPEN membership without the drive's default role.
-  const hasValidRow = validOrgDriveRow(row, { orgId, orgVisibility }, orgRole) !== null;
-  const needsDefaultRole = orgRole === 'MEMBER' && orgVisibility === 'OPEN' && !hasValidRow;
-  const driveDefaultRole = needsDefaultRole
-    ? { role: 'MEMBER' as const, customRoleId: await findDefaultCustomRoleId(drive.id) }
-    : NO_DEFAULT_ROLE;
-
-  const effective = resolveEffectiveDriveMembership({
-    orgsEnabled: true,
-    drive: { orgId, orgVisibility },
-    orgRole,
-    row,
-    driveDefaultRole,
+  const needsDefaultRole = candidates.map(({ row }, i) => {
+    const orgRole = orgRoleOf(i);
+    return facts[i].orgId !== null
+      && orgRole === 'MEMBER'
+      && facts[i].orgVisibility === 'OPEN'
+      && validOrgDriveRow(row, facts[i], orgRole) === null;
   });
+  const defaultRoles = await findDefaultCustomRoleIds(
+    candidates.filter((_, i) => needsDefaultRole[i]).map(({ drive }) => drive.id),
+  );
 
-  if (effective?.auditOrgAdminPrivateAccess && orgRole !== null) {
-    auditOrgAdminPrivateDriveAccess({ userId, driveId: drive.id, orgId, orgRole });
-  }
-
-  return effective;
+  return candidates.map(({ userId, drive, row }, i) => {
+    const orgId = facts[i].orgId;
+    if (orgId === null) {
+      return resolveEffectiveDriveMembership({
+        orgsEnabled: false, drive: facts[i], orgRole: null, row, driveDefaultRole: NO_DEFAULT_ROLE,
+      });
+    }
+    const orgRole = orgRoleOf(i);
+    const effective = resolveEffectiveDriveMembership({
+      orgsEnabled: true,
+      drive: facts[i],
+      orgRole,
+      row,
+      driveDefaultRole: needsDefaultRole[i]
+        ? { role: 'MEMBER', customRoleId: defaultRoles.get(drive.id) ?? null }
+        : NO_DEFAULT_ROLE,
+    });
+    if (options.audit && effective?.auditOrgAdminPrivateAccess && orgRole !== null) {
+      void auditOrgAdminPrivateDriveAccess({ userId, driveId: drive.id, orgId, orgRole });
+    }
+    return effective;
+  });
 }
 
 function toMembership(
@@ -120,6 +177,29 @@ export async function loadExplicitScopeAuthority(userId: string, driveId: string
   return explicitScopeAuthorityRow({ orgsEnabled: true, drive, row: toMembership(rows[0]) });
 }
 
+/**
+ * One user's ACCEPTED drive_members rows in `driveIds`, keyed by drive, read through `executor` (an
+ * org demotion reads them inside the role change's transaction).
+ */
+export async function loadAcceptedRowsInDrives(
+  executor: Pick<typeof db, 'select'>,
+  userId: string,
+  driveIds: string[],
+): Promise<Map<string, OrgDriveMembership>> {
+  const rows = new Map<string, OrgDriveMembership>();
+  for (const ids of chunks(driveIds)) {
+    const found = await executor
+      .select({ driveId: driveMembers.driveId, role: driveMembers.role, customRoleId: driveMembers.customRoleId, source: driveMembers.source })
+      .from(driveMembers)
+      .where(and(eq(driveMembers.userId, userId), isNotNull(driveMembers.acceptedAt), inArray(driveMembers.driveId, ids)));
+    for (const r of found) {
+      const row = toMembership(r);
+      if (row) rows.set(r.driveId, row);
+    }
+  }
+  return rows;
+}
+
 /** The user's role in each org they belong to (for listing many drives at once). */
 export async function loadOrgRolesForUser(userId: string): Promise<Map<string, OrgRole>> {
   const rows = await db
@@ -129,41 +209,40 @@ export async function loadOrgRolesForUser(userId: string): Promise<Map<string, O
   return new Map(rows.map((r) => [r.orgId, r.role]));
 }
 
-async function findOrgRole(orgId: string, userId: string): Promise<OrgRole | null> {
-  const [row] = await db
-    .select({ role: orgMembers.role })
-    .from(orgMembers)
-    .where(and(eq(orgMembers.orgId, orgId), eq(orgMembers.userId, userId)))
-    .limit(1);
-  return row?.role ?? null;
+const orgRoleKey = (orgId: string, userId: string) => `${orgId}:${userId}`;
+
+/** Chunk size for the IN lists below (Postgres bind parameter limit). */
+const IN_LIST_CHUNK = 500;
+
+function chunks<T>(items: T[]): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += IN_LIST_CHUNK) out.push(items.slice(i, i + IN_LIST_CHUNK));
+  return out;
 }
 
-async function findDefaultCustomRoleId(driveId: string): Promise<string | null> {
-  const [row] = await db
-    .select({ id: driveRoles.id })
-    .from(driveRoles)
-    .where(and(eq(driveRoles.driveId, driveId), eq(driveRoles.isDefault, true)))
-    .limit(1);
-  return row?.id ?? null;
+async function findOrgRoles(pairs: Array<{ orgId: string; userId: string }>): Promise<Map<string, OrgRole>> {
+  const roles = new Map<string, OrgRole>();
+  if (pairs.length === 0) return roles;
+  const orgIds = [...new Set(pairs.map((p) => p.orgId))];
+  for (const userIds of chunks([...new Set(pairs.map((p) => p.userId))])) {
+    const rows = await db
+      .select({ orgId: orgMembers.orgId, userId: orgMembers.userId, role: orgMembers.role })
+      .from(orgMembers)
+      .where(and(inArray(orgMembers.orgId, orgIds), inArray(orgMembers.userId, userIds)));
+    for (const r of rows) roles.set(orgRoleKey(r.orgId, r.userId), r.role);
+  }
+  return roles;
 }
 
-/** ORG-4, AUD-1: an org Owner or Admin used org power, not a membership row, on a PRIVATE drive. */
-function auditOrgAdminPrivateDriveAccess({
-  userId,
-  driveId,
-  orgId,
-  orgRole,
-}: {
-  userId: string;
-  driveId: string;
-  orgId: string;
-  orgRole: OrgRole;
-}): void {
-  audit({
-    eventType: 'authz.access.granted',
-    userId,
-    resourceType: 'drive',
-    resourceId: driveId,
-    details: { via: 'org_admin', orgId, orgRole, orgVisibility: 'PRIVATE' },
-  });
+/** Each drive's default custom role (drive_roles.isDefault), for the drives given. */
+async function findDefaultCustomRoleIds(driveIds: string[]): Promise<Map<string, string>> {
+  const defaults = new Map<string, string>();
+  for (const ids of chunks([...new Set(driveIds)])) {
+    const rows = await db
+      .select({ driveId: driveRoles.driveId, id: driveRoles.id })
+      .from(driveRoles)
+      .where(and(inArray(driveRoles.driveId, ids), eq(driveRoles.isDefault, true)));
+    for (const r of rows) if (!defaults.has(r.driveId)) defaults.set(r.driveId, r.id);
+  }
+  return defaults;
 }
