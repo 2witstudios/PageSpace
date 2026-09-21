@@ -12,8 +12,9 @@
  *   not end up owning (explicit key scopes, OAuth grants, share links, agent
  *   memberships) is revoked with it, as leaveOrganization revokes a leaver's.
  * - Everyone whose access the delete ends is kicked from the drive's realtime rooms
- *   after commit: the former lead, every org-materialized member, and every org Owner
- *   or Admin who reached it through their org role alone. The drive's new owner, and
+ *   after commit: the former lead, every org-materialized member, every org Owner or
+ *   Admin who reached it through their org role alone, and every member who reached an
+ *   Open drive implicitly. The drive's new owner, and
  *   anyone still invited to it, never is.
  * - Nothing moves silently: a live drive without a choice refuses the whole delete,
  *   and the returned steps name every drive's destination for the confirmation and
@@ -150,7 +151,7 @@ export async function deleteOrganization(
     if (!org) return { ok: false, status: 404, reason: 'not_found' } as const;
 
     const orgDrives = await tx
-      .select({ id: drives.id, name: drives.name, isTrashed: drives.isTrashed, ownerId: drives.ownerId })
+      .select({ id: drives.id, name: drives.name, isTrashed: drives.isTrashed, ownerId: drives.ownerId, orgVisibility: drives.orgVisibility })
       .from(drives)
       .where(eq(drives.orgId, input.orgId))
       .for('update');
@@ -214,13 +215,16 @@ export async function deleteOrganization(
       const newOwner = new Map(plan.steps.map((step) => [step.driveId, step.ownerId]));
       toKick.push(...orgRows.filter((row) => newOwner.get(row.driveId) !== row.userId));
 
-      // Org Owner and Admin power reaches a drive with no row at all, and ends with the org.
-      const withOrgPower = members.filter((member) => member.role !== 'MEMBER').map((member) => member.userId);
+      // Org access needs no row: an org Owner or Admin reaches every org drive, and every member
+      // reaches an Open one (a member whose direct invite is still pending has no org row there).
+      // All of it ends with the org.
+      const openDrives = new Set(orgDrives.filter((drive) => drive.orgVisibility === 'OPEN').map((drive) => drive.id));
       const candidates = new Map<string, RevokedRow>();
       for (const row of toKick) candidates.set(pairKey(row), row);
       for (const step of plan.steps) {
-        for (const userId of withOrgPower) {
-          if (userId !== step.ownerId) candidates.set(pairKey({ userId, driveId: step.driveId }), { userId, driveId: step.driveId });
+        for (const { userId, role } of members) {
+          const reached = role !== 'MEMBER' || openDrives.has(step.driveId);
+          if (reached && userId !== step.ownerId) candidates.set(pairKey({ userId, driveId: step.driveId }), { userId, driveId: step.driveId });
         }
       }
       // Someone still invited to the drive keeps it, and their connection with it.

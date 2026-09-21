@@ -831,7 +831,7 @@ describe('org services (real Postgres)', () => {
       }
     });
 
-    it('ORG-6 everyone whose access the delete ends is kicked from that drive\'s realtime rooms only after it commits: revoked rows and rowless org Owner/Admin power, never the new owner or someone still invited, and a refused delete kicks no one', async () => {
+    it('ORG-6 everyone whose access the delete ends is kicked from that drive\'s realtime rooms only after it commits: revoked rows, rowless org Owner/Admin power and rowless Open-drive membership, never the new owner or someone still invited, and a refused delete kicks no one', async () => {
       const { jono, org } = await seedNorthwind();
       const priya = await person('Priya Nair');
       const marcus = await person('Marcus Oyelaran');
@@ -842,6 +842,10 @@ describe('org services (real Postgres)', () => {
       // Dana reaches every drive through her Admin role alone; Aisha too, but she was also invited to Finance.
       await addMember(org.id, dana.id, 'ADMIN');
       await addMember(org.id, aisha.id, 'ADMIN');
+      // Chris is a Member whose direct invite to Product is still pending: the sync makes no org row
+      // for him there, and his Open-drive access is implicit.
+      const chris = await person('Chris Rowe');
+      await addMember(org.id, chris.id, 'MEMBER');
       const product = await seedDrive(priya.id, org.id, { name: 'Product' });
       const finance = await seedDrive(priya.id, org.id, { name: 'Finance', orgVisibility: 'PRIVATE' });
       const wiki = await seedDrive(jono.id, org.id, { name: 'Wiki' });
@@ -853,6 +857,7 @@ describe('org services (real Postgres)', () => {
         { driveId: product.id, userId: marcus.id, role: 'MEMBER', source: 'org', acceptedAt: new Date() },
         { driveId: finance.id, userId: marcus.id, role: 'MEMBER', source: 'org', acceptedAt: new Date() },
         { driveId: finance.id, userId: aisha.id, role: 'MEMBER', source: 'invite', acceptedAt: new Date() },
+        { driveId: product.id, userId: chris.id, role: 'MEMBER', source: 'invite', acceptedAt: null },
       ]);
 
       const kicked: { userId: string; driveId: string; rowsAtKick: number }[] = [];
@@ -900,6 +905,11 @@ describe('org services (real Postgres)', () => {
           { userId: aisha.id, driveId: product.id, rowsAtKick: 0 },
           { userId: aisha.id, driveId: wiki.id, rowsAtKick: 0 },
           { userId: jono.id, driveId: product.id, rowsAtKick: 0 },
+          // Rowless Open-drive membership ends: Chris on Product (his invite still pending) and on
+          // Wiki, Marcus on Wiki. Finance is PRIVATE, so a Member without a row never reached it.
+          { userId: chris.id, driveId: product.id, rowsAtKick: 1 },
+          { userId: chris.id, driveId: wiki.id, rowsAtKick: 0 },
+          { userId: marcus.id, driveId: wiki.id, rowsAtKick: 0 },
         ].sort(byKey),
       );
     });
