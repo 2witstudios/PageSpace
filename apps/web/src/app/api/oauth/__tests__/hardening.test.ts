@@ -145,7 +145,7 @@ describe('OAuth hardening sweep', () => {
       expect(exchangeAt).toBeGreaterThan(-1);
       const clientGuardAt = handlerBody.indexOf('clientAllowsGrant(registered, AGENT_ASSERTION_GRANT_TYPE)');
       const scopeAt = handlerBody.indexOf('resolveAgentAssertionScopes(');
-      const rateLimitAt = handlerBody.indexOf('checkTokenExchangeRateLimit(');
+      const rateLimitAt = handlerBody.indexOf('checkAgentTokenRateLimit(');
       expect(clientGuardAt).toBeGreaterThan(-1);
       expect(scopeAt).toBeGreaterThan(-1);
       expect(rateLimitAt).toBeGreaterThan(-1);

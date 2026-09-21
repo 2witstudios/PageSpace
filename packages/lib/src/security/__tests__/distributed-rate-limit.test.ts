@@ -931,6 +931,17 @@ describe('distributed-rate-limit', () => {
       expect(DISTRIBUTED_RATE_LIMITS.AGENT_SIGNIN).toEqual(DISTRIBUTED_RATE_LIMITS.LOGIN);
     });
 
+    // pagespace-agent token grants (jwt-bearer + refresh): per IP (generous — a
+    // fleet behind one NAT/CI runner shares it) and per presented credential
+    // (tight — a hot loop on one secret), never one platform-wide client bucket.
+    it('AGENT_TOKEN_IP allows 60 token requests per IP per 5 minutes', () => {
+      expect(DISTRIBUTED_RATE_LIMITS.AGENT_TOKEN_IP).toEqual({ maxAttempts: 60, windowMs: 5 * 60 * 1000, blockDurationMs: 5 * 60 * 1000, progressiveDelay: false });
+    });
+
+    it('AGENT_TOKEN_CREDENTIAL allows 10 token requests per credential per 5 minutes', () => {
+      expect(DISTRIBUTED_RATE_LIMITS.AGENT_TOKEN_CREDENTIAL).toEqual({ maxAttempts: 10, windowMs: 5 * 60 * 1000, blockDurationMs: 5 * 60 * 1000, progressiveDelay: false });
+    });
+
     it('AGENT_CLAIM_INIT allows 10 claim starts per 5 minutes', () => {
       expect(DISTRIBUTED_RATE_LIMITS.AGENT_CLAIM_INIT).toEqual({ maxAttempts: 10, windowMs: 5 * 60 * 1000, blockDurationMs: 5 * 60 * 1000, progressiveDelay: false });
     });

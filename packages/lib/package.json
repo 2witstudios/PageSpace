@@ -2623,6 +2623,11 @@
       "import": "./dist/auth/agent/account-type.js",
       "require": "./dist/auth/agent/account-type.js"
     },
+    "./auth/agent/token-rate-limit-keys": {
+      "types": "./dist/auth/agent/token-rate-limit-keys.d.ts",
+      "import": "./dist/auth/agent/token-rate-limit-keys.js",
+      "require": "./dist/auth/agent/token-rate-limit-keys.js"
+    },
     "./auth/agent/lifecycle-decision": {
       "types": "./dist/auth/agent/lifecycle-decision.d.ts",
       "import": "./dist/auth/agent/lifecycle-decision.js",

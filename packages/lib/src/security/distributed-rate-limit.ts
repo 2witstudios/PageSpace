@@ -1132,6 +1132,26 @@ export const DISTRIBUTED_RATE_LIMITS = {
     blockDurationMs: 15 * 60 * 1000,
     progressiveDelay: true,
   },
+  // POST /api/oauth/token for client_id=pagespace-agent (jwt-bearer and its
+  // refresh_token grant). NOT the per-client OAUTH_TOKEN_EXCHANGE bucket: every
+  // agent shares that client id, so a per-client bucket is one platform-wide
+  // bucket a single IP could exhaust to lock every agent out. Keys:
+  // auth/agent/token-rate-limit-keys.ts. Per IP, generous — a fleet of agents
+  // behind one CI runner or NAT shares an IP and refreshes every ~15 min.
+  AGENT_TOKEN_IP: {
+    maxAttempts: 60,
+    windowMs: 5 * 60 * 1000,
+    blockDurationMs: 5 * 60 * 1000,
+    progressiveDelay: false,
+  },
+  // Per presented credential (hash of the secret or refresh token), tight: stops
+  // a hot loop on one secret without touching any other agent.
+  AGENT_TOKEN_CREDENTIAL: {
+    maxAttempts: 10,
+    windowMs: 5 * 60 * 1000,
+    blockDurationMs: 5 * 60 * 1000,
+    progressiveDelay: false,
+  },
   // POST /api/agent/claim — starting a claim mints a user code, like
   // OAUTH_DEVICE_INIT.
   AGENT_CLAIM_INIT: {

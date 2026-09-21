@@ -36,6 +36,8 @@ vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   DISTRIBUTED_RATE_LIMITS: {
     OAUTH_TOKEN_EXCHANGE: { maxAttempts: 10, windowMs: 300_000, progressiveDelay: true },
     OAUTH_DEVICE_POLL: { maxAttempts: 100, windowMs: 300_000 },
+    AGENT_TOKEN_IP: { maxAttempts: 60, windowMs: 300_000 },
+    AGENT_TOKEN_CREDENTIAL: { maxAttempts: 10, windowMs: 300_000 },
   },
 }));
 
@@ -96,7 +98,8 @@ describe('POST /api/oauth/token — jwt-bearer (agent assertion) grant', () => {
       const response = await POST(tokenRequest(fields()) as never);
       expect(response.status).toBe(429);
       expect(mocks.exchangeAgentAssertion).not.toHaveBeenCalled();
-      expect(mocks.rateLimit).toHaveBeenCalledWith('oauth-token:exchange:ip:203.0.113.21', expect.anything());
+      expect(mocks.rateLimit).toHaveBeenCalledWith('agent-token:ip:203.0.113.21', { maxAttempts: 60, windowMs: 300_000 });
+      expect(mocks.rateLimit).toHaveBeenCalledWith(expect.stringMatching(/^agent-token:credential:[0-9a-f]{64}$/), { maxAttempts: 10, windowMs: 300_000 });
     });
   });
 

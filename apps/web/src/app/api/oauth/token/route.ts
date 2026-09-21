@@ -41,6 +41,8 @@ import {
 import { AGENT_ASSERTION_GRANT_TYPE } from '@pagespace/lib/auth/oauth/metadata';
 import { resolveAgentAssertionScopes } from '@/lib/agent-auth/assertion-scope';
 import { isAgentDoorOpen } from '@/lib/agent-auth/door';
+import { PAGESPACE_AGENT_CLIENT_ID } from '@pagespace/lib/auth/oauth/clients';
+import { agentTokenIpRateLimitKey, agentTokenCredentialRateLimitKey } from '@pagespace/lib/auth/agent/token-rate-limit-keys';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getActorInfo, logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
@@ -143,6 +145,32 @@ async function checkTokenExchangeRateLimit(req: NextRequest, clientId: string): 
     details: { clientId, oauthEvent: 'token_exchange_rate_limited' },
   });
   return noStoreJson({ error: 'rate_limited', retryAfter: Math.max(ipLimit.retryAfter ?? 0, clientLimit.retryAfter ?? 0) }, 429);
+}
+
+/**
+ * The `pagespace-agent` client's grants (jwt-bearer and its refresh_token)
+ * are NOT limited per client: every agent on the platform shares that
+ * client_id, so a per-client bucket is one global bucket a single IP could
+ * exhaust to lock every agent out. Instead: per IP (AGENT_TOKEN_IP, generous —
+ * a fleet behind one NAT or CI runner shares an IP) and per presented
+ * credential (AGENT_TOKEN_CREDENTIAL, tight — a hot loop on one secret), keyed
+ * by the credential's hash. Both run before any DB lookup and answer the same
+ * 429 shape as `checkTokenExchangeRateLimit`, so the two buckets are
+ * indistinguishable on the wire.
+ */
+async function checkAgentTokenRateLimit(req: NextRequest, credential: string): Promise<NextResponse | null> {
+  const ip = getClientIP(req);
+  const [ipLimit, credentialLimit] = await Promise.all([
+    checkDistributedRateLimit(agentTokenIpRateLimitKey(ip), DISTRIBUTED_RATE_LIMITS.AGENT_TOKEN_IP),
+    checkDistributedRateLimit(agentTokenCredentialRateLimitKey(credential), DISTRIBUTED_RATE_LIMITS.AGENT_TOKEN_CREDENTIAL),
+  ]);
+  if (ipLimit.allowed && credentialLimit.allowed) return null;
+
+  auditRequest(req, {
+    eventType: 'security.rate.limited',
+    details: { clientId: PAGESPACE_AGENT_CLIENT_ID, oauthEvent: 'agent_token_rate_limited', bucket: !ipLimit.allowed ? 'ip' : 'credential' },
+  });
+  return noStoreJson({ error: 'rate_limited', retryAfter: Math.max(ipLimit.retryAfter ?? 0, credentialLimit.retryAfter ?? 0) }, 429);
 }
 
 /**
@@ -342,7 +370,11 @@ async function handleRefreshTokenGrant(req: NextRequest, form: URLSearchParams):
     return noStoreJson(INVALID_REQUEST, 400);
   }
 
-  const rateLimited = await checkTokenExchangeRateLimit(req, clientId);
+  // pagespace-agent is limited per IP + per credential (see checkAgentTokenRateLimit);
+  // every other client keeps its per-client bucket unchanged.
+  const rateLimited = clientId === PAGESPACE_AGENT_CLIENT_ID
+    ? await checkAgentTokenRateLimit(req, refreshToken)
+    : await checkTokenExchangeRateLimit(req, clientId);
   if (rateLimited) return rateLimited;
 
   const resolved = await resolveClient(form, clientId, 'refresh_token');
@@ -486,7 +518,7 @@ async function handleAgentAssertionGrant(req: NextRequest, form: URLSearchParams
     return noStoreJson(INVALID_REQUEST, 400);
   }
 
-  const rateLimited = await checkTokenExchangeRateLimit(req, clientId);
+  const rateLimited = await checkAgentTokenRateLimit(req, assertion);
   if (rateLimited) return rateLimited;
 
   const registered = getRegisteredClient(clientId);
