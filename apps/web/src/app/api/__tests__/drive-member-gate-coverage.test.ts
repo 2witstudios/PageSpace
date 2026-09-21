@@ -43,10 +43,6 @@ const ACCEPTED_AT_GATE_EXEMPT = new Map<string, string>([
     'Followup #4: admin drive picker should hide pending invitations — tracked in followup-4.',
   ],
   [
-    'channels/[pageId]/messages',
-    'Followup #4: pending admins should not receive @mention broadcast — tracked in followup-4.',
-  ],
-  [
     'drives/[driveId]/backups/[backupId]/restore',
     'Reads driveMembers to enumerate ALL current members (including pending) for full-replacement during restore. The gate is intentionally absent here: the goal is to delete all rows so the backup state is faithfully restored — filtering on acceptedAt would silently leave pending-invite rows behind.',
   ],
@@ -67,10 +63,6 @@ const LIB_ACCEPTED_AT_GATE_EXEMPT = new Map<string, string>([
   [
     'repositories/drive-invite-repository.ts',
     'Repository seam — each query carries its own gate (findAdminMembership filters IS NOT NULL; findActivePendingMemberByEmail intentionally filters IS NULL to surface pending rows; createDriveMember/findExistingMember/updateDriveMemberRole operate by composite key or memberId and do not branch on acceptedAt).',
-  ],
-  [
-    'auth/revoke-adapters.ts',
-    'findActorMembership returns raw {role, acceptedAt} so the strict "accepted OWNER/ADMIN" gate lives once in validateRevokeRequest (pure-core). Filtering acceptedAt at the SQL layer would silently NOT_FOUND a request that should FORBIDDEN, masking a wrong-role attempt.',
   ],
   [
     'repositories/page-invite-repository.ts',

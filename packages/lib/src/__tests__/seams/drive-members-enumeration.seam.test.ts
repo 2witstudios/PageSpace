@@ -36,72 +36,24 @@ const NOT_APPLICATION_CODE = ['packages/db/', 'apps/e2e/'];
 export const DRIVE_MEMBERS_ENUMERATION_ALLOWLIST: Readonly<Record<string, string>> = {
   "apps/web/src/app/api/account/drives-status/route.ts":
     "TODO(OW-B4): pre-materialization read; route via the one membership enumeration when B4 lands",
-  "apps/web/src/app/api/account/handle-drive/route.ts":
-    "TODO(OW-B4): pre-materialization read; route via the one membership enumeration when B4 lands",
-  "apps/web/src/app/api/activity/summary/route.ts":
-    "TODO(OW-B4): pre-materialization read; route via the one membership enumeration when B4 lands",
   "apps/web/src/app/api/admin/global-prompt/route.ts":
-    "TODO(OW-B4): pre-materialization read; route via the one membership enumeration when B4 lands",
-  "apps/web/src/app/api/ai/page-agents/multi-drive/route.ts":
-    "TODO(OW-B4): pre-materialization read; route via the one membership enumeration when B4 lands",
-  "apps/web/src/app/api/channels/[pageId]/messages/route.ts":
-    "TODO(OW-B4): pre-materialization read; route via the one membership enumeration when B4 lands",
-  "apps/web/src/app/api/commands/route.ts":
     "TODO(OW-B4): pre-materialization read; route via the one membership enumeration when B4 lands",
   "apps/web/src/app/api/drives/[driveId]/assignees/route.ts":
     "TODO(OW-B4): pre-materialization read; route via the one membership enumeration when B4 lands",
   "apps/web/src/app/api/drives/[driveId]/backups/[backupId]/restore/route.ts":
     "TODO(OW-X-3): backups/restore enumerate members directly; route via the membership service when X-3 lands",
-  "apps/web/src/app/api/drives/[driveId]/pages/route.ts":
-    "TODO(OW-B4): pre-materialization read; route via the one membership enumeration when B4 lands",
-  "apps/web/src/app/api/drives/[driveId]/permissions-tree/route.ts":
-    "TODO(OW-B4): pre-materialization read; route via the one membership enumeration when B4 lands",
-  "apps/web/src/app/api/drives/[driveId]/trash/route.ts":
-    "TODO(OW-B4): pre-materialization read; route via the one membership enumeration when B4 lands",
-  "apps/web/src/app/api/inbox/route.ts":
-    "TODO(OW-B4): pre-materialization read; route via the one membership enumeration when B4 lands",
-  "apps/web/src/app/api/messages/threads/route.ts":
-    "TODO(OW-B4): pre-materialization read; route via the one membership enumeration when B4 lands",
-  "apps/web/src/app/api/pages/[pageId]/route.ts":
-    "TODO(OW-B4): pre-materialization read; route via the one membership enumeration when B4 lands",
-  "apps/web/src/app/api/pages/bulk-copy/route.ts":
-    "TODO(OW-B4): pre-materialization read; route via the one membership enumeration when B4 lands",
-  "apps/web/src/app/api/pages/bulk-move/route.ts":
-    "TODO(OW-B4): pre-materialization read; route via the one membership enumeration when B4 lands",
-  "apps/web/src/app/api/pages/tree/route.ts":
-    "TODO(OW-B4): pre-materialization read; route via the one membership enumeration when B4 lands",
   "apps/web/src/app/api/pulse/cron/route.ts":
     "TODO(OW-B4): pre-materialization read; route via the one membership enumeration when B4 lands",
   "apps/web/src/app/api/pulse/generate/route.ts":
     "TODO(OW-B4): pre-materialization read; route via the one membership enumeration when B4 lands",
-  "apps/web/src/app/api/pulse/route.ts":
-    "TODO(OW-B4): pre-materialization read; route via the one membership enumeration when B4 lands",
-  "apps/web/src/app/api/sidebar/badges/route.ts":
-    "TODO(OW-B4): pre-materialization read; route via the one membership enumeration when B4 lands",
   "apps/web/src/app/api/users/messageable/route.ts":
-    "TODO(OW-B4): pre-materialization read; route via the one membership enumeration when B4 lands",
-  "apps/web/src/lib/ai/tools/activity-tools.ts":
-    "TODO(OW-B4): pre-materialization read; route via the one membership enumeration when B4 lands",
-  "apps/web/src/lib/ai/tools/channel-tools.ts":
-    "TODO(OW-B4): pre-materialization read; route via the one membership enumeration when B4 lands",
-  "apps/web/src/lib/ai/tools/command-tools.ts":
-    "TODO(OW-B4): pre-materialization read; route via the one membership enumeration when B4 lands",
-  "apps/web/src/lib/auth/revoke-adapters.ts":
-    "TODO(OW-B4): pre-materialization read; route via the one membership enumeration when B4 lands",
-  "apps/web/src/lib/memory/discovery-service.ts":
     "TODO(OW-B4): pre-materialization read; route via the one membership enumeration when B4 lands",
   "apps/web/src/lib/repositories/drive-invite-repository.ts":
     "TODO(OW-B4): pre-materialization read; route via the one membership enumeration when B4 lands",
   "apps/web/src/lib/repositories/page-invite-repository.ts":
     "TODO(OW-B4): pre-materialization read; route via the one membership enumeration when B4 lands",
-  "apps/web/src/lib/users/visibility.ts":
-    "TODO(OW-B4): pre-materialization read; route via the one membership enumeration when B4 lands",
   "apps/web/src/services/api/drive-backup-service.ts":
     "TODO(OW-X-3): backups/restore enumerate members directly; route via the membership service when X-3 lands",
-  "apps/web/src/services/api/page-reorder-service.ts":
-    "TODO(OW-B4): pre-materialization read; route via the one membership enumeration when B4 lands",
-  "apps/web/src/services/api/permission-management-service.ts":
-    "TODO(OW-B4): pre-materialization read; route via the one membership enumeration when B4 lands",
   "apps/web/src/services/api/rollback/preview.ts":
     "TODO(OW-B4): pre-materialization read; route via the one membership enumeration when B4 lands",
   "apps/web/src/services/api/rollback/redo-executors.ts":

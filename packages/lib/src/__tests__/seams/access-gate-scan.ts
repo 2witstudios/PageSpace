@@ -45,12 +45,19 @@ const DRIVE_OWNER_COMPARE = [
   /=\s*\w+\."ownerId"/g,
 ];
 
+/**
+ * A line that starts a named function: a function declaration, a `const` bound to an arrow or a
+ * function expression (its parameters closed on the line with `=>`, or left open for the next
+ * lines), a class or object method, or an object property holding an arrow or an async function.
+ */
 const DECLARATION = [
   /^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)/,
-  /^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*(?:async\b|\(|[A-Za-z_$][\w$]*\s*=>|function\b)/,
-  /^\s*(?:(?:public|private|protected|static|readonly)\s+)*(?:async\s+)?([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*(?::\s*[^{=]+)?\{\s*$/,
-  /^\s*([A-Za-z_$][\w$]*)\s*:\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*(?::\s*[^=]+)?=>/,
-  /^\s*([A-Za-z_$][\w$]*)\s*:\s*(?:async\s+)?function\b/,
+  /^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*(?:async\s*)?(?:\([^)]*\)\s*(?::[^=]+)?=>|\([^)]*$|[A-Za-z_$][\w$]*\s*=>|function\b)/,
+  /^\s*(?:(?:public|private|protected|static|readonly)\s+)*(?:async\s+)?([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*(?::\s*.+)?\{\s*$/,
+  /^\s*([A-Za-z_$][\w$]*)\s*:\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*(?::\s*[^=]+)?=>\s*\{?\s*$/,
+  /^\s*([A-Za-z_$][\w$]*)\s*:\s*async\s*(?:\(|function\b)/,
+  /^\s*([A-Za-z_$][\w$]*)\s*:\s*function\b/,
+  /^\s*(?:(?:public|private|protected|static|readonly)\s+)*async\s+([A-Za-z_$][\w$]*)\s*\(/,
 ];
 const NOT_A_NAME = new Set(['if', 'for', 'while', 'switch', 'catch', 'return', 'await', 'with', 'else', 'do', 'try', 'new', 'typeof']);
 
@@ -63,11 +70,42 @@ function stripComments(source: string): string {
     .replace(/^(\s*)--[^\n]*/gm, (m, lead: string) => lead + blank(m.slice(lead.length)));
 }
 
-function anchorAt(lines: string[], lineIndex: number): string {
+/**
+ * Offset of the `}` closing the body of the function declared on `lines[declIndex]`, or -1. The
+ * body opens at the last `{` of the first signature line (the declaration line or one of the next
+ * few, for a multi-line signature) that ends in `{` after a `)` or `=>`, so destructured parameters
+ * and object return types are not taken for the body.
+ */
+function closingBrace(code: string, lines: string[], lineStarts: number[], declIndex: number): number {
+  let open = -1;
+  for (let i = declIndex; i < Math.min(lines.length, declIndex + 20); i++) {
+    const line = lines[i].replace(/\s+$/, '');
+    if (line.endsWith('{') && /(?:\)|=>)/.test(line)) {
+      open = lineStarts[i] + line.length - 1;
+      break;
+    }
+  }
+  if (open === -1) return -1;
+  let depth = 0;
+  for (let i = open; i < code.length; i++) {
+    if (code[i] === '{') depth++;
+    else if (code[i] === '}' && --depth === 0) return i;
+  }
+  return -1;
+}
+
+/**
+ * The innermost named function whose body encloses `offset`: walk up from the site's line to each
+ * declaration and keep the first whose braces close after the site. A sibling closure declared
+ * above the site (its body already closed) is skipped.
+ */
+function anchorAt(code: string, lines: string[], lineStarts: number[], lineIndex: number, offset: number): string {
   for (let i = lineIndex; i >= 0; i--) {
     for (const pattern of DECLARATION) {
       const name = pattern.exec(lines[i])?.[1];
-      if (name && !NOT_A_NAME.has(name)) return name;
+      if (!name || NOT_A_NAME.has(name)) continue;
+      const end = closingBrace(code, lines, lineStarts, i);
+      if (end === -1 || end > offset) return name;
     }
   }
   return '<module>';
@@ -78,6 +116,7 @@ export function scanSource(file: string, source: string): Site[] {
   const code = stripComments(source);
   const lines = code.split('\n');
   const rawLines = source.split('\n');
+  const lineStarts = lines.reduce<number[]>((starts, line, i) => [...starts, i === 0 ? 0 : starts[i - 1] + lines[i - 1].length + 1], []);
   const lineOf = (offset: number) => code.slice(0, offset).split('\n').length - 1;
   const sites: Site[] = [];
   const collect = (patterns: RegExp[], kind: SiteKind) => {
@@ -88,7 +127,7 @@ export function scanSource(file: string, source: string): Site[] {
         if (seen.has(offset)) continue;
         seen.add(offset);
         const line = lineOf(offset);
-        sites.push({ file, line: line + 1, kind, anchor: anchorAt(lines, line), text: rawLines[line].trim() });
+        sites.push({ file, line: line + 1, kind, anchor: anchorAt(code, lines, lineStarts, line, offset), text: rawLines[line].trim() });
       }
     }
   };
