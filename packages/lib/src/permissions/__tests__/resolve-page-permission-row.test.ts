@@ -119,6 +119,19 @@ describe('resolvePagePermissionRow', () => {
       expect(resolved?.canDelete).toBe(false);
     });
 
+    it('grants nothing when the custom role entry denies view, whatever else it sets', () => {
+      expect(
+        resolvePagePermissionRow(
+          row({
+            memberRole: 'MEMBER',
+            pageType: 'DOCUMENT',
+            customRolePerms: { page_1: { canView: false, canEdit: true, canShare: true } },
+          }),
+          USER
+        )
+      ).toBeNull();
+    });
+
     it('falls back to the custom role drive-wide grant when the page has no entry', () => {
       // resolveCustomRolePermissions takes two inputs — the per-page entry and
       // the drive-wide default. Only the former is exercised above, and the

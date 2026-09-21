@@ -1045,7 +1045,7 @@ export function resolvePagePermissionRow(
       // driveWidePermissions fallback must not grant access to private pages (getUserAccessLevel,
       // resolveExplicitAppRoleAccess and getAgentAccessLevel apply the same rule).
       if (row.isPrivate && row.customRolePerms[row.pageId] === undefined) return null;
-      return { ...resolved, canDelete: false };
+      return resolved.canView ? { ...resolved, canDelete: false } : null;
     }
   }
 

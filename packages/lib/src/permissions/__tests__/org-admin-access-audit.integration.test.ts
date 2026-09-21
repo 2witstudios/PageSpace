@@ -14,7 +14,13 @@ import { rateLimitBuckets } from '@pagespace/db/schema/rate-limit-buckets';
 import { resetAuditDbBindingForTests } from '../../audit/audit-db-binding';
 import { resetDefaultSecurityAuditForTests, securityAudit } from '../../audit/security-audit';
 import { canUserViewPage, getBatchPagePermissions, getUserAccessLevel, getUserDriveAccess, getUsersWhoCanViewPage } from '../permissions';
-import { claimOrgAdminAuditWindow, orgAdminAuditClaim } from '../org-admin-access-audit';
+import {
+  ORG_ADMIN_AUDIT_LOSS_TTL_MS,
+  claimOrgAdminAuditWindow,
+  createOrgAdminAccessAuditor,
+  orgAdminAuditClaim,
+  releaseOrgAdminAuditWindow,
+} from '../org-admin-access-audit';
 import { checkDriveAccessForSearch, globSearchPages } from '../../services/drive-search-service';
 import { getDriveAccess } from '../../services/drive-service';
 import { cleanupNorthwind, northwind } from './fixtures/northwind-org-drives';
@@ -165,6 +171,36 @@ describe('ORG-4 (partial) audit dedupe (integration)', () => {
       failOnce.mockRestore();
     }
   }, 60_000);
+
+  it('ORG-4 (partial) a process that lost the claim while the winner\'s write was in flight and then failed writes the record on a later access in the same window', async () => {
+    const access = { userId: createId(), driveId: createId(), orgId: createId(), orgRole: 'ADMIN' as const };
+    let now = new Date('2031-03-06T09:01:00.000Z');
+    const claim = orgAdminAuditClaim(access, now);
+    let failA: (error: Error) => void = () => undefined;
+    const writeA = vi.fn(() => new Promise<void>((_, reject) => { failA = reject; }));
+    const writeB = vi.fn(async () => undefined);
+    // Two processes: separate memos, one Postgres claim store.
+    const deps = { claim: claimOrgAdminAuditWindow, release: releaseOrgAdminAuditWindow, now: () => now };
+    const processA = createOrgAdminAccessAuditor({ ...deps, write: writeA });
+    const processB = createOrgAdminAccessAuditor({ ...deps, write: writeB });
+    try {
+      const recordA = processA.record(access);
+      await vi.waitFor(() => expect(writeA).toHaveBeenCalledTimes(1), { timeout: 10_000, interval: 20 });
+      await processB.record(access);
+      expect(writeB).not.toHaveBeenCalled();
+
+      failA(new Error('audit store down'));
+      await recordA;
+      expect(await claimRow(claim)).toEqual([]);
+
+      now = new Date(now.getTime() + ORG_ADMIN_AUDIT_LOSS_TTL_MS);
+      await processB.record(access);
+      expect(writeB).toHaveBeenCalledTimes(1);
+      expect(await claimRow(claim)).toEqual([{ key: claim.key }]);
+    } finally {
+      await releaseOrgAdminAuditWindow(claim);
+    }
+  });
 
   it('ORG-4 (partial) the claim is a unique key in Postgres, not process memory: a second process loses the same window and wins the next', async () => {
     const access = { userId: createId(), driveId: createId(), orgId: createId(), orgRole: 'ADMIN' as const };

@@ -105,12 +105,17 @@ async function matrixFixture() {
     tokens.set(person.id, token.id);
   }
 
+  // Product's default role hides the Board deck page while still setting canEdit on it: a role entry
+  // that denies view grants nothing, whatever else it sets (#2672). Every implicit Open member, and
+  // Marcus's synced row, reaches it through that role.
+  const boardDeck = await factories.createPage(f.drives.product.id, { title: 'Board deck' });
   const [productDefaultRole] = await db
-    .select({ id: driveRoles.id })
-    .from(driveRoles)
-    .where(and(eq(driveRoles.driveId, f.drives.product.id), eq(driveRoles.isDefault, true)));
+    .update(driveRoles)
+    .set({ permissions: { [boardDeck.id]: { canView: false, canEdit: true, canShare: false } } })
+    .where(and(eq(driveRoles.driveId, f.drives.product.id), eq(driveRoles.isDefault, true)))
+    .returning({ id: driveRoles.id });
 
-  return { ...f, people, zed, tokens, productDefaultRoleId: productDefaultRole.id };
+  return { ...f, people, zed, tokens, boardDeck, productDefaultRoleId: productDefaultRole.id };
 }
 
 type Matrix = Awaited<ReturnType<typeof matrixFixture>>;
@@ -256,7 +261,7 @@ describe('B7b: every human drive resolver answers with one org-aware membership 
     await pool.end();
   });
 
-  it('while ORGS_ENABLED is false every routed sibling returns exactly the pre-B7b result, except the two named fixes: a pending invitation manages no roles, and a drive-wide custom role opens no private page', async () => {
+  it('while ORGS_ENABLED is false every routed sibling returns exactly the pre-B7b result, except the three named fixes: a pending invitation manages no roles, a drive-wide custom role opens no private page, and a role entry that denies view grants nothing', async () => {
     const m = await matrixFixture();
     flags.orgsEnabled = false;
     const everyone = Object.entries(m.people);
@@ -304,6 +309,7 @@ describe('B7b: every human drive resolver answers with one org-aware membership 
     }
 
     const hiring = m.pages.productPrivatePage.id;
+    const boardDeck = m.boardDeck.id;
     expect(differences.sort()).toEqual([
       // Tomás's pending ADMIN (Finance) and MEMBER (Marcus Notes) invitations passed the roles gate.
       `checkDriveAccessForRoles tomas ${m.drives.finance.name}`,
@@ -311,6 +317,8 @@ describe('B7b: every human drive resolver answers with one org-aware membership 
       // Marcus's Product row carries the Contributor role (drive-wide view): the private Hiring page leaked.
       `getBatchPagePermissions marcus ${m.drives.product.name} ${hiring}`,
       `getUsersWhoCanViewPage ${m.drives.product.name} ${hiring}`,
+      // The Contributor role hides the Board deck but sets canEdit on it: Marcus could edit what he cannot view (#2672).
+      `getBatchPagePermissions marcus ${m.drives.product.name} ${boardDeck}`,
     ].sort());
     expect(compared).toBeGreaterThan(1000);
 
@@ -319,6 +327,8 @@ describe('B7b: every human drive resolver answers with one org-aware membership 
     expect((await legacyGetBatchPagePermissions(m.people.marcus.id, [hiring])).get(hiring)?.canView).toBe(true);
     expect((await getBatchPagePermissions(m.people.marcus.id, [hiring])).get(hiring)?.canView).toBe(false);
     expect(await legacyGetUsersWhoCanViewPage(hiring, [m.people.marcus.id])).toEqual(new Set([m.people.marcus.id]));
+    expect((await legacyGetBatchPagePermissions(m.people.marcus.id, [boardDeck])).get(boardDeck)).toEqual({ canView: false, canEdit: true, canShare: false, canDelete: false });
+    expect((await getBatchPagePermissions(m.people.marcus.id, [boardDeck])).get(boardDeck)).toEqual(DENY);
     // Not vacuous while dark: stale org rows still open drives exactly as before orgs.
     expect(await isUserDriveMember(m.people.marcus.id, m.drives.finance.id)).toBe(true);
     expect(await isUserDriveMember(m.people.priya.id, m.drives.research.id)).toBe(false);
@@ -342,6 +352,15 @@ describe('B7b: every human drive resolver answers with one org-aware membership 
     expect(await getDriveAccess(m.drives.product.id, chris.id)).toMatchObject({ isMember: true });
     expect(await getDriveAccess(m.drives.finance.id, tomas.id)).toMatchObject({ isMember: false });
     expect(await getUserAccessLevel(m.people.lu.id, m.pages.personalPage.id)).toBeNull();
+    // The Board deck's role entry sets canEdit without canView: every implicit Open member (Nina, Kai)
+    // and Marcus's synced row resolve it through the default role, and it grants none of them anything.
+    const [role] = await db.select({ permissions: driveRoles.permissions }).from(driveRoles).where(eq(driveRoles.id, m.productDefaultRoleId));
+    expect(role.permissions[m.boardDeck.id]).toEqual({ canView: false, canEdit: true, canShare: false });
+    for (const person of [nina, kai, marcus]) {
+      expect(await getMemberCustomRoleId(m.drives.product.id, person.id), person.name).toBe(m.productDefaultRoleId);
+      expect(await getUserAccessLevel(person.id, m.boardDeck.id), person.name).toBeNull();
+      expect((await getBatchPagePermissions(person.id, [m.boardDeck.id])).get(m.boardDeck.id), person.name).toEqual(DENY);
+    }
   }, 180_000);
 
   it('an expired page share lists no drive, dark or enabled: listAccessibleDrives and getDriveIdsForUser agree', async () => {

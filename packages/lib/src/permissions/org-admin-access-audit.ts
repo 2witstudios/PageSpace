@@ -69,10 +69,19 @@ export interface OrgAdminAccessAuditor {
 /** Bound on the in-process memo; it is only a fast path in front of the claim store. */
 const MEMO_LIMIT = 10_000;
 
+/**
+ * How long a LOST claim is trusted. A loss can be stale: the winner's audit write may still be in
+ * flight and then fail, releasing the window. Memoizing the loss for the whole window would let
+ * this process write nothing for up to 15 minutes of access, so a loss only short-circuits the claim
+ * store briefly and a later access asks it again. A won claim is memoized for the whole window.
+ */
+export const ORG_ADMIN_AUDIT_LOSS_TTL_MS = 30 * 1000;
+
 export function createOrgAdminAccessAuditor({ claim, release, write, now }: OrgAdminAccessAuditorDeps): OrgAdminAccessAuditor {
-  // Claims this process already settled (won or lost) in the current window: a realtime socket
+  // Claims this process already settled in the current window, each with the epoch ms it is trusted
+  // until (a win: the window's end; a loss: ORG_ADMIN_AUDIT_LOSS_TTL_MS). A realtime socket
   // re-resolving per event must not reach Postgres on every event.
-  const settled = new Set<string>();
+  const settled = new Map<string, number>();
   let memoWindow = 0;
 
   const writeOrWarn = async (access: OrgAdminAccess): Promise<boolean> => {
@@ -90,13 +99,15 @@ export function createOrgAdminAccessAuditor({ claim, release, write, now }: OrgA
   return {
     // Never rejects: resolvers call it without awaiting.
     async record(access) {
-      const current = orgAdminAuditClaim(access, now());
+      const at = now();
+      const current = orgAdminAuditClaim(access, at);
       const windowMs = current.windowStart.getTime();
       if (windowMs !== memoWindow || settled.size >= MEMO_LIMIT) {
         settled.clear();
         memoWindow = windowMs;
       }
-      if (settled.has(current.key)) return;
+      const trustedUntil = settled.get(current.key);
+      if (trustedUntil !== undefined && at.getTime() < trustedUntil) return;
 
       let won: boolean;
       try {
@@ -108,7 +119,9 @@ export function createOrgAdminAccessAuditor({ claim, release, write, now }: OrgA
         await writeOrWarn(access);
         return;
       }
-      if (memoWindow === windowMs) settled.add(current.key);
+      if (memoWindow === windowMs) {
+        settled.set(current.key, won ? current.expiresAt.getTime() : at.getTime() + ORG_ADMIN_AUDIT_LOSS_TTL_MS);
+      }
       if (!won || await writeOrWarn(access)) return;
 
       settled.delete(current.key);

@@ -4,6 +4,7 @@ vi.mock('@pagespace/db/db', () => ({ db: {} }));
 vi.mock('../../audit/security-audit', () => ({ securityAudit: { logEvent: vi.fn() } }));
 
 import {
+  ORG_ADMIN_AUDIT_LOSS_TTL_MS,
   ORG_ADMIN_AUDIT_WINDOW_MS,
   createOrgAdminAccessAuditor,
   orgAdminAuditClaim,
@@ -101,6 +102,62 @@ describe('createOrgAdminAccessAuditor', () => {
     await auditor.record(priyaOnFinance);
     expect(write).toHaveBeenCalledTimes(2);
     expect(store.taken.size).toBe(1);
+  });
+
+  it('ORG-4 (partial) a process that lost the claim while the winner\'s write was in flight and then failed writes the record on a later access in the same window', async () => {
+    const store = memoryClaimStore();
+    let now = new Date('2026-09-17T09:01:00.000Z');
+    let failA: (error: Error) => void = () => undefined;
+    const writeA = vi.fn(() => new Promise<void>((_, reject) => { failA = reject; }));
+    const writeB = vi.fn(async () => undefined);
+    const processA = createOrgAdminAccessAuditor({ claim: store.claim, release: store.release, write: writeA, now: () => now });
+    const processB = createOrgAdminAccessAuditor({ claim: store.claim, release: store.release, write: writeB, now: () => now });
+
+    // A wins and its write hangs; B loses the claim meanwhile and writes nothing.
+    const recordA = processA.record(priyaOnFinance);
+    await vi.waitFor(() => expect(writeA).toHaveBeenCalledTimes(1));
+    await processB.record(priyaOnFinance);
+    expect(writeB).not.toHaveBeenCalled();
+
+    // A's write fails and releases the window.
+    failA(new Error('audit store down'));
+    await recordA;
+    expect(store.release).toHaveBeenCalledTimes(1);
+    expect(store.taken.size).toBe(0);
+
+    // Inside the loss TTL B still trusts its loss (no claim-store round trip on every event)...
+    const claimsBefore = store.claim.mock.calls.length;
+    now = new Date(now.getTime() + ORG_ADMIN_AUDIT_LOSS_TTL_MS - 1);
+    await processB.record(priyaOnFinance);
+    expect(store.claim).toHaveBeenCalledTimes(claimsBefore);
+    expect(writeB).not.toHaveBeenCalled();
+
+    // ...and once it lapses, B's re-access in the same window claims it and writes the row.
+    now = new Date(now.getTime() + 1);
+    expect(orgAdminAuditClaim(priyaOnFinance, now).windowStart).toEqual(new Date('2026-09-17T09:00:00.000Z'));
+    await processB.record(priyaOnFinance);
+    expect(writeB).toHaveBeenCalledTimes(1);
+    expect(store.taken.size).toBe(1);
+  });
+
+  it('ORG-4 (partial) a loss re-checked after its TTL is still a loss while the winner\'s record stands: one event per window', async () => {
+    const store = memoryClaimStore();
+    let now = new Date('2026-09-17T09:01:00.000Z');
+    const writeA = vi.fn(async () => undefined);
+    const writeB = vi.fn(async () => undefined);
+    const processA = createOrgAdminAccessAuditor({ claim: store.claim, release: store.release, write: writeA, now: () => now });
+    const processB = createOrgAdminAccessAuditor({ claim: store.claim, release: store.release, write: writeB, now: () => now });
+
+    await processA.record(priyaOnFinance);
+    for (let i = 0; i < 10; i += 1) {
+      await processB.record(priyaOnFinance);
+      await processA.record(priyaOnFinance);
+      now = new Date(now.getTime() + ORG_ADMIN_AUDIT_LOSS_TTL_MS);
+    }
+    expect(writeA).toHaveBeenCalledTimes(1);
+    expect(writeB).not.toHaveBeenCalled();
+    // The winner never re-asks the claim store inside its window: 1 win + one re-check per lapsed loss.
+    expect(store.claim).toHaveBeenCalledTimes(11);
   });
 
   it('ORG-4 (partial) an unreachable claim store fails open: every access is audited rather than none', async () => {
