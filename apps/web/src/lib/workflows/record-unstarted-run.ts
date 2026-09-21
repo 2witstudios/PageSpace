@@ -1,5 +1,5 @@
 import { db } from '@pagespace/db/db';
-import { and, eq, sql } from '@pagespace/db/operators';
+import { and, eq, ne, sql } from '@pagespace/db/operators';
 import { workflowRuns, type NewWorkflowRun } from '@pagespace/db/schema/workflow-runs';
 
 export type UnstartedRunRow = Pick<NewWorkflowRun, 'workflowId' | 'sourceTable' | 'sourceId' | 'triggerAt' | 'durationMs' | 'error'>;
@@ -13,10 +13,12 @@ export type UnstartedRunRow = Pick<NewWorkflowRun, 'workflowId' | 'sourceTable' 
  * both refuse the same occurrence never meet the running-claim index, and
  * workflow_runs has no other unique index. Each writer instead takes a
  * transaction-scoped advisory lock keyed on the occurrence, then inserts only
- * if the occurrence has NO run row yet (the same NOT EXISTS the calendar
- * discovery uses): the second writer waits, sees the first row and returns its
- * id. An occurrence that already ran, or is running, gets no error row beside
- * it.
+ * if the occurrence has no unsuccessful run row yet: the second writer waits,
+ * sees the first row and returns its id. An occurrence that is running (or was
+ * already recorded as failed) gets no error row beside it. A SUCCESSFUL run at
+ * the same time does not count: a slot retried at an unchanged nextRunAt (its
+ * advance failed) that is then refused gets its own error row, so the failed
+ * result never carries the successful run's id.
  *
  * A fire with no occurrence time (manual) has no identity to dedupe on, so
  * every attempt is recorded.
@@ -41,6 +43,7 @@ export async function recordUnstartedRunOnce(row: UnstartedRunRow): Promise<stri
           eq(workflowRuns.sourceTable, row.sourceTable),
           sql`${workflowRuns.sourceId} IS NOT DISTINCT FROM ${row.sourceId ?? null}`,
           eq(workflowRuns.triggerAt, triggerAt),
+          ne(workflowRuns.status, 'success'),
         ),
       )
       .limit(1);

@@ -120,7 +120,7 @@ describe('recordUnstartedRunOnce — one error row per occurrence', () => {
     expect(await runRows(workflowId)).toHaveLength(2);
   });
 
-  it('given an occurrence that already has a run row (it ran, or is running), should not add an error row beside it', async () => {
+  it('given an occurrence that is still running, should not add an error row beside it', async () => {
     if (!dbAvailable) return;
     const workflowId = await createWorkflow();
     const triggerAt = new Date('2026-09-20T09:00:00.000Z');
@@ -151,6 +151,23 @@ describe('recordUnstartedRunOnce — one error row per occurrence', () => {
     await recordUnstartedRunOnce({ ...shared, sourceTable: 'taskTriggers' });
 
     expect(await runRows(workflowId)).toHaveLength(2);
+  });
+
+  it('given an occurrence whose earlier run SUCCEEDED (a slot retried at the same time), should record the refusal as its own row, never hand back the success run id', async () => {
+    if (!dbAvailable) return;
+    const workflowId = await createWorkflow();
+    const triggerAt = new Date('2026-09-20T09:00:00.000Z');
+    const [ran] = await db
+      .insert(workflowRuns)
+      .values({ workflowId, sourceTable: 'cron', sourceId: null, triggerAt, status: 'success', endedAt: triggerAt })
+      .returning({ id: workflowRuns.id });
+
+    const runId = await recordUnstartedRunOnce({ workflowId, sourceTable: 'cron', sourceId: null, triggerAt, durationMs: 1, error: 'refused' });
+
+    const rows = await runRows(workflowId);
+    expect(rows.map((r) => r.status).sort()).toEqual(['error', 'success']);
+    expect(runId).toBe(rows.find((r) => r.status === 'error')?.id);
+    expect(runId).not.toBe(ran.id);
   });
 
   it('given a fire with no occurrence time (manual), should record every attempt', async () => {
