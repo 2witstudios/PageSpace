@@ -14,9 +14,10 @@ import { db, pool } from '@pagespace/db/db';
 import { and, eq, inArray } from '@pagespace/db/operators';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
-import { users } from '@pagespace/db/schema/auth';
+import { users, mcpTokens } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
-import { driveMembers } from '@pagespace/db/schema/members';
+import { driveMembers, mcpTokenDrives } from '@pagespace/db/schema/members';
+import { driveShareLinks } from '@pagespace/db/schema/share-links';
 import { organizations, orgInvitations, orgMembers } from '@pagespace/db/schema/organizations';
 import {
   countOrgSeats,
@@ -35,6 +36,7 @@ import {
 import { deleteOrganization } from '../deletion';
 import { requireOrgRole } from '../authorize';
 import { getUserAccessLevel } from '../../permissions/permissions';
+import { hasAppDriveMembership } from '../../permissions/app-permissions';
 import { getDriveAccess, listAccessibleDrives, restoreDrive } from '../../services/drive-service';
 import { getDriveRecipientUserIds } from '../../services/drive-member-service';
 import { syncOrgMemberAccess, type OrgMembershipSyncResult } from '../../services/org-membership-sync';
@@ -770,6 +772,53 @@ describe('org services (real Postgres)', () => {
           { userId: marcus.id, driveId: finance.id, rowsAtKick: 0 },
         ].sort(byKey),
       );
+    });
+
+    it('ORG-6 deleting an org revokes what every member minted on a drive they do not end up owning: an explicit-ADMIN key scope opens nothing and share links go', async () => {
+      const { jono, org } = await seedNorthwind();
+      const priya = await person('Priya Nair');
+      const marcus = await person('Marcus Oyelaran');
+      const lena = await person('Lena Schulz');
+      await addMember(org.id, priya.id, 'ADMIN');
+      await addMember(org.id, marcus.id, 'MEMBER');
+      await addMember(org.id, lena.id, 'MEMBER');
+      const product = await seedDrive(priya.id, org.id, { name: 'Product' });
+      const finance = await seedDrive(priya.id, org.id, { name: 'Finance' });
+      const wiki = await seedDrive(jono.id, org.id, { name: 'Wiki' });
+
+      async function keyOn(userId: string, driveId: string) {
+        const [token] = await db.insert(mcpTokens)
+          .values({ userId, tokenHash: `h-${createId()}`, tokenPrefix: 'mcp_', name: 'key' }).returning();
+        await db.insert(mcpTokenDrives).values({ tokenId: token.id, driveId, role: 'ADMIN' });
+        return token.id;
+      }
+      // Priya minted an explicit-ADMIN key scope and a share link on Product while she led it.
+      const priyaKey = await keyOn(priya.id, product.id);
+      const [priyaLink] = await db.insert(driveShareLinks)
+        .values({ driveId: product.id, token: `dl-${createId()}`, createdBy: priya.id }).returning();
+      const lenaKey = await keyOn(lena.id, finance.id);
+      // Marcus is about to own Product and Jono keeps Wiki: what they minted there is theirs to keep.
+      const marcusKey = await keyOn(marcus.id, product.id);
+      const jonoKey = await keyOn(jono.id, wiki.id);
+      expect(await hasAppDriveMembership(priyaKey, product.id)).toBe(true);
+
+      const result = await deleteOrganization({
+        actorId: jono.id,
+        orgId: org.id,
+        choices: [
+          { driveId: product.id, action: 'transfer', toUserId: marcus.id },
+          { driveId: finance.id, action: 'trash' },
+          { driveId: wiki.id, action: 'trash' },
+        ],
+        now: new Date(),
+      }, noKick);
+      expect(result.ok).toBe(true);
+
+      expect(await hasAppDriveMembership(priyaKey, product.id)).toBe(false);
+      expect(await hasAppDriveMembership(lenaKey, finance.id)).toBe(false);
+      expect(await db.select().from(driveShareLinks).where(eq(driveShareLinks.id, priyaLink.id))).toEqual([]);
+      expect(await hasAppDriveMembership(marcusKey, product.id)).toBe(true);
+      expect(await hasAppDriveMembership(jonoKey, wiki.id)).toBe(true);
     });
 
     it('ORG-6 a live drive without a deletion choice refuses the delete and nothing moves', async () => {

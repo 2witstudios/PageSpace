@@ -8,6 +8,9 @@
  * - A trashed-by-choice drive, and every drive already in trash, becomes a trashed
  *   drive owned by the org Owner (orgId cleared, still in trash, restorable).
  * - The former lead of a drive that changes hands loses their OWNER row with it.
+ * - Deleting the org is every member leaving it: what each minted on a drive they do
+ *   not end up owning (explicit key scopes, OAuth grants, share links, agent
+ *   memberships) is revoked with it, as leaveOrganization revokes a leaver's.
  * - Everyone whose drive row the delete revokes (that former lead, and every
  *   org-materialized member) is kicked from the drive's realtime rooms after commit;
  *   the drive's new owner never is.
@@ -21,6 +24,7 @@ import { drives } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
 import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
 import { kickForDriveMembershipRevocation } from '../permissions/revocation-kick';
+import { revokeOrgDriveGrants } from './leave';
 
 export type DriveDeletionChoice =
   | { driveId: string; action: 'transfer'; toUserId: string }
@@ -178,6 +182,12 @@ export async function deleteOrganization(
           eq(driveMembers.role, 'OWNER'),
         )).returning({ userId: driveMembers.userId, driveId: driveMembers.driveId })));
       }
+    }
+
+    // An explicit key scope or OAuth drive grant is never re-checked against its holder, so
+    // it would outlive the org power that let them mint it (revokeOrgDriveGrants).
+    for (const { userId } of members) {
+      await revokeOrgDriveGrants(tx, userId, plan.steps.filter((step) => step.ownerId !== userId).map((step) => step.driveId));
     }
 
     const driveIds = plan.steps.map((step) => step.driveId);
