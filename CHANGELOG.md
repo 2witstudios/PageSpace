@@ -599,6 +599,10 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **The workflow editor fits the screen again** — a workflow with a long AI prompt pushed the
+  Edit Workflow dialog's fields past its right edge and pushed Save below the fold. The dialog is
+  now wider on desktop, its fields scroll between a fixed header and a fixed Cancel/Save footer, and
+  long prompts wrap and scroll inside their own box.
 - **Agents can write to their own memory pages again** — every agent is instructed to keep notes
   on an "Agent Memory" child page of its own, but the permission check behind the write tools
   looked only at the agent's drive membership, which grants edit on no ordinary page — so every
