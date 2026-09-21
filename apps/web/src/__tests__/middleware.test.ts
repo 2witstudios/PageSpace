@@ -614,3 +614,38 @@ describe('middleware — handoff-bridge OAuth callbacks skip the middleware CSP'
     );
   });
 });
+
+// Agent Signup Phase 2 (ADR 0007): the API door's two pre-identity endpoints are
+// reached by an agent that has no session and no token yet — that is what they
+// create. They must skip the session gate, and ONLY they: the carve-out is two
+// exact matches, never an /api/agent/ prefix, so every other agent route
+// (rotate, claim-management) still needs a credential before route.ts runs.
+describe('middleware — agent API door exact-match carve-out', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetSessionFromCookies.mockReturnValue(undefined);
+    mockValidateOriginForMiddleware.mockReturnValue({ valid: true, origin: null, skipped: true, reason: 'no origin' });
+    mockIsOriginValidationBlocking.mockReturnValue(true);
+  });
+
+  it.each([
+    ['GET', '/api/agent/challenge'],
+    ['POST', '/api/agent/identity'],
+  ])('given %s %s with no session or token, should reach the route', async (method, pathname) => {
+    const response = await middleware(buildRequest(pathname, {}, method));
+    expect(response.status).not.toBe(401);
+    expect(mockGetSessionFromCookies).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    '/api/agent/secret/rotate',
+    '/api/agent/challenge/extra',
+    '/api/agent/identity/x',
+    '/api/agent/identities',
+    '/api/agent',
+  ])('given %s with no credential, should still hit the session gate (no /api/agent/ prefix carve-out)', async (pathname) => {
+    const response = await middleware(buildRequest(pathname, {}, 'POST'));
+    expect(mockGetSessionFromCookies).toHaveBeenCalled();
+    expect(response.status).toBe(401);
+  });
+});

@@ -342,6 +342,15 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
     // as `/api/mcp/` above. Without this the session gate answers 401 before any of them runs
     // and the entire bridge is unreachable — route tests never saw it because they invoke the
     // handlers directly, and the exit-gate run found it on the first real enrollment.
+    // `/api/agent/challenge` and `/api/agent/identity` are the agent API door (ADR 0007,
+    // auth.md): an AI agent with a shell fetches a proof-of-work challenge and registers
+    // itself, and by definition holds no session, token or key yet — those two calls are
+    // what create its identity. Each route carries its own controls instead: the
+    // deployment gate (`isAgentSignupEnabled`, 404 when closed), per-IP rate limits
+    // (AGENT_CHALLENGE; AGENT_SIGNUP + AGENT_SIGNUP_DAILY), and on registration a
+    // server-issued, single-use proof-of-work consumed atomically with the account insert.
+    // Exact matches only, NEVER an `/api/agent/` prefix: every other agent route (secret
+    // rotation, claim management) acts on an existing identity and must keep this gate.
     if (
       pathname.startsWith('/api/auth/csrf') ||
       pathname.startsWith('/api/auth/login-csrf') ||
@@ -364,6 +373,8 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
       pathname === '/api/oauth/token' ||
       pathname === '/api/oauth/revoke' ||
       pathname === '/api/oauth/device_authorization' ||
+      pathname === '/api/agent/challenge' ||
+      pathname === '/api/agent/identity' ||
       pathname === '/api/memory/cron' ||
       pathname === '/api/pulse/cron' ||
       pathname === '/api/integrations/zoom/webhook' ||
