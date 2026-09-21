@@ -310,6 +310,10 @@ describe('org route behaviour', () => {
     const created = await orgsRoute.POST(req('POST', { name: 'N', slug: 'northwind' }));
     expect(created.status).toBe(403);
     expect(await created.json()).toMatchObject({ reason: 'owner_not_human' });
+    vi.mocked(repository.createOrganization).mockResolvedValue({ ok: false, reason: 'owner_not_found' });
+    const vanished = await orgsRoute.POST(req('POST', { name: 'N', slug: 'northwind' }));
+    expect(vanished.status).toBe(404);
+    expect(await vanished.json()).toMatchObject({ reason: 'owner_not_found' });
 
     asRole('OWNER');
     vi.mocked(membership.transferOwnership).mockResolvedValue({ ok: false, status: 400, reason: 'owner_not_human' });
