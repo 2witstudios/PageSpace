@@ -58,6 +58,21 @@ describe('Zoom transcript AI enrichment is credit-gated', () => {
     expect(mockCreateAIProvider).not.toHaveBeenCalled();
   });
 
+  it('given model output with malformed entries, should keep only objects with a string text and a string assignee', async () => {
+    mockGenerateText.mockResolvedValueOnce({
+      text: '```json\n[null, 3, {"text": 5}, {"text":"ship","assignee":7}, {"text":"review","assignee":"Ana"}]\n```',
+      usage: {},
+    });
+
+    expect(await extractActionItems('user_1', 't')).toEqual([{ text: 'ship' }, { text: 'review', assignee: 'Ana' }]);
+  });
+
+  it('given model output that is not an array, should return no items', async () => {
+    mockGenerateText.mockResolvedValueOnce({ text: '{"text":"ship"}', usage: {} });
+
+    expect(await extractActionItems('user_1', 't')).toEqual([]);
+  });
+
   it('given an allowed owner, both should still call the model', async () => {
     mockGenerateText
       .mockResolvedValueOnce({ text: '- decided', usage: {} })

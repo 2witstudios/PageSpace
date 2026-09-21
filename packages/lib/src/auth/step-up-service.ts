@@ -315,10 +315,11 @@ export async function requestMagicLinkStepUp(input: unknown): Promise<RequestMag
     subject: 'Confirm this action in PageSpace',
     react: React.createElement(StepUpConfirmationEmail, { confirmUrl }),
   });
-  // A suppressed send delivered nothing, so no one can follow the link: report
-  // it instead of claiming a confirmation email is on its way. The unreachable
-  // token expires on its own (STEP_UP_MAGIC_LINK_EXPIRY_MINUTES).
-  if (outcome.status === 'suppressed') return { ok: false, error: { code: 'EMAIL_UNDELIVERABLE' } };
+  // Anything but a real send (a suppressed agent address, or email disabled
+  // on-prem) delivered nothing, so no one can follow the link: report it instead
+  // of claiming a confirmation email is on its way. The unreachable token
+  // expires on its own (STEP_UP_MAGIC_LINK_EXPIRY_MINUTES).
+  if (outcome.status !== 'sent') return { ok: false, error: { code: 'EMAIL_UNDELIVERABLE' } };
 
   return { ok: true };
 }

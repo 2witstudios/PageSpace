@@ -52,14 +52,15 @@ async function extract(userId: string, transcriptPlainText: string): Promise<Act
   }));
 
   const jsonText = result.text.trim().replace(/^```json\s*/i, '').replace(/\s*```$/, '');
-  const parsed = JSON.parse(jsonText);
+  const parsed: unknown = JSON.parse(jsonText);
 
   if (!Array.isArray(parsed)) return [];
 
-  return parsed
-    .filter((item): item is ActionItem => typeof item?.text === 'string')
-    .map((item) => ({
-      text: item.text,
-      ...(typeof item.assignee === 'string' ? { assignee: item.assignee } : {}),
-    }));
+  // Model output is untrusted: narrow every entry before reading a field.
+  return parsed.flatMap((item: unknown): ActionItem[] => {
+    if (typeof item !== 'object' || item === null) return [];
+    const { text, assignee } = item as Record<string, unknown>;
+    if (typeof text !== 'string') return [];
+    return [{ text, ...(typeof assignee === 'string' ? { assignee } : {}) }];
+  });
 }

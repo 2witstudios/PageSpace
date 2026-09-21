@@ -415,6 +415,15 @@ describe('step-up-service', () => {
       expect(result).toEqual({ ok: false, error: { code: 'EMAIL_UNDELIVERABLE' } });
     });
 
+    it('given email sending is disabled (on-prem), should fail with EMAIL_UNDELIVERABLE rather than report a link that was never sent', async () => {
+      mockDb.query.users.findFirst.mockResolvedValue({ id: 'user-1', email: 'user@example.com' });
+      mockSendEmail.mockResolvedValueOnce({ status: 'disabled' });
+
+      const result = await requestMagicLinkStepUp({ userId: 'user-1', actionBinding: { clientId: 'cli-1' } });
+
+      expect(result).toEqual({ ok: false, error: { code: 'EMAIL_UNDELIVERABLE' } });
+    });
+
     it('sends a step-up confirmation email to the user\'s own registered address', async () => {
       mockDb.query.users.findFirst.mockResolvedValue({ id: 'user-1', email: 'user@example.com' });
 
