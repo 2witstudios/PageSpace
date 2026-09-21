@@ -11,8 +11,8 @@
  * - Deleting the org is every member leaving it: what each minted on a drive they do
  *   not end up owning (explicit key scopes, OAuth grants, share links, agent
  *   memberships) is revoked with it, as leaveOrganization revokes a leaver's.
- * - Everyone whose access the delete ends is kicked from the drive's realtime rooms
- *   after commit: the former lead, every org-materialized member, every org Owner or
+ * - Everyone whose access the delete ends gets a member_removed drive-list event and is
+ *   kicked from the drive's realtime rooms after commit: the former lead, every org-materialized member, every org Owner or
  *   Admin who reached it through their org role alone, and every member who reached an
  *   Open drive implicitly. The drive's new owner, and
  *   anyone still invited to it, never is.
@@ -25,10 +25,10 @@ import { and, eq, inArray } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
 import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
-import { kickForDriveMembershipRevocation } from '../permissions/revocation-kick';
 import { loadAcceptedDriveMemberPairs } from '../permissions/org-drive-membership';
 import { revokeOrgDriveGrantsForMembers } from './leave';
-import { settleInBatches } from '../services/org-membership-sync-core';
+import { publishDriveAccessEvents, type OrgMembershipSyncPorts } from '../services/org-membership-sync';
+import type { AffectedUser } from '../services/org-membership-sync-core';
 
 export type DriveDeletionChoice =
   | { driveId: string; action: 'transfer'; toUserId: string }
@@ -115,21 +115,15 @@ export type DeleteOrganizationResult =
   | { ok: false; status: 400; reason: Exclude<OrgDeletionRefusal, 'not_owner'>; driveIds: string[] };
 
 export interface DeleteOrganizationDeps {
-  /** Drops a revoked person's live realtime connection from a drive's rooms; runs only after commit. */
-  kick: (target: { userId: string; driveId: string }) => Promise<void>;
+  /** Realtime ports for the post-commit events; defaults to the org-membership publisher's. */
+  ports?: OrgMembershipSyncPorts;
 }
-
-const deleteOrganizationDeps: DeleteOrganizationDeps = {
-  kick: ({ userId, driveId }) => kickForDriveMembershipRevocation({ userId, driveId, reason: 'member_removed' }),
-};
 
 type RevokedRow = { userId: string; driveId: string };
 
 const pairKey = (row: RevokedRow) => `${row.driveId}:${row.userId}`;
 
 
-/** Kicks in flight at once; each enumerates pages and conversations, as the org-membership publisher bounds its events. */
-const KICK_CONCURRENCY = 20;
 
 export async function deleteOrganization(
   input: {
@@ -138,7 +132,7 @@ export async function deleteOrganization(
     choices: readonly DriveDeletionChoice[];
     now: Date;
   },
-  deps: DeleteOrganizationDeps = deleteOrganizationDeps,
+  deps: DeleteOrganizationDeps = {},
 ): Promise<DeleteOrganizationResult> {
   const toKick: RevokedRow[] = [];
   const result = await db.transaction(async (tx): Promise<DeleteOrganizationResult> => {
@@ -235,7 +229,13 @@ export async function deleteOrganization(
     await tx.delete(organizations).where(eq(organizations.id, input.orgId));
     return { ok: true, steps: plan.steps };
   });
-  // Best effort once committed: a failed kick must not report a completed delete as failed.
-  if (result.ok) await settleInBatches(toKick.map((row) => () => deps.kick(row)), KICK_CONCURRENCY);
+  // Once committed, and best effort: each person gets one member_removed event naming the drives
+  // they lost (the sidebar and picker refresh on it) and a room kick per drive, 20 at a time.
+  if (result.ok && toKick.length > 0) {
+    const lost = new Map<string, string[]>();
+    for (const { userId, driveId } of toKick) lost.set(userId, [...(lost.get(userId) ?? []), driveId]);
+    const affectedUsers = [...lost].map(([userId, driveIds]): AffectedUser => ({ userId, operation: 'member_removed', driveIds }));
+    await publishDriveAccessEvents({ affectedUsers, revoked: toKick }, deps.ports);
+  }
   return result;
 }

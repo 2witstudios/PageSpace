@@ -55,8 +55,8 @@ vi.mock('../orgs-enabled', () => ({
 }));
 
 const HOUR = 60 * 60 * 1000;
-/** A delete that revokes rows would otherwise call the realtime service over HTTP; tests of the kick pass their own. */
-const noKick = { kick: async () => {} };
+/** A delete that ends access would otherwise call the realtime service over HTTP; tests of the events pass their own. */
+const noKick = { ports: { broadcast: async () => {}, kick: async () => {} } };
 /** Delivery that succeeds; tests of a failed delivery pass their own. */
 const deliver = async () => {};
 
@@ -831,7 +831,7 @@ describe('org services (real Postgres)', () => {
       }
     });
 
-    it('ORG-6 everyone whose access the delete ends is kicked from that drive\'s realtime rooms only after it commits: revoked rows, rowless org Owner/Admin power and rowless Open-drive membership, never the new owner or someone still invited, and a refused delete kicks no one', async () => {
+    it('ORG-6 everyone whose access the delete ends gets a member_removed drive-list event and a room kick, only after it commits: revoked rows, rowless org Owner/Admin power and rowless Open-drive membership, never the new owner or someone still invited, and a refused delete kicks no one', async () => {
       const { jono, org } = await seedNorthwind();
       const priya = await person('Priya Nair');
       const marcus = await person('Marcus Oyelaran');
@@ -866,13 +866,20 @@ describe('org services (real Postgres)', () => {
         const rows = await db.select().from(driveMembers).where(and(eq(driveMembers.userId, target.userId), eq(driveMembers.driveId, target.driveId)));
         kicked.push({ ...target, rowsAtKick: rows.length });
       };
+      // The sidebar and picker refresh on a drive:* event on user:<id>:drives, not on a room kick.
+      const broadcasts: { userId: string; operation: string; driveIds: string[] }[] = [];
+      const broadcast = async (user: { userId: string; operation: string; driveIds: string[] }) => {
+        broadcasts.push({ ...user, driveIds: [...user.driveIds].sort() });
+      };
+      const ports = { broadcast, kick };
 
       const refused = await deleteOrganization(
         { actorId: jono.id, orgId: org.id, choices: [{ driveId: product.id, action: 'trash' }], now: new Date() },
-        { kick },
+        { ports },
       );
       expect(refused).toMatchObject({ ok: false, reason: 'missing_choice' });
       expect(kicked).toEqual([]);
+      expect(broadcasts).toEqual([]);
 
       const result = await deleteOrganization(
         {
@@ -885,7 +892,7 @@ describe('org services (real Postgres)', () => {
           ],
           now: new Date(),
         },
-        { kick },
+        { ports },
       );
       expect(result.ok).toBe(true);
       const byKey = (a: { userId: string; driveId: string }, b: { userId: string; driveId: string }) =>
@@ -911,6 +918,13 @@ describe('org services (real Postgres)', () => {
           { userId: chris.id, driveId: wiki.id, rowsAtKick: 0 },
           { userId: marcus.id, driveId: wiki.id, rowsAtKick: 0 },
         ].sort(byKey),
+      );
+      // One member_removed event per person, naming every drive they lost, so their drive list refreshes.
+      const lostByUser = new Map<string, string[]>();
+      for (const k of kicked) lostByUser.set(k.userId, [...(lostByUser.get(k.userId) ?? []), k.driveId]);
+      expect(broadcasts.sort((a, b) => a.userId.localeCompare(b.userId))).toEqual(
+        [...lostByUser].map(([userId, driveIds]) => ({ userId, operation: 'member_removed', driveIds: driveIds.sort() }))
+          .sort((a, b) => a.userId.localeCompare(b.userId)),
       );
     });
 
@@ -1025,7 +1039,7 @@ describe('org services (real Postgres)', () => {
         inFlight -= 1;
       };
 
-      expect((await deleteOrganization({ actorId: jono.id, orgId: org.id, choices: [], now: new Date() }, { kick })).ok).toBe(true);
+      expect((await deleteOrganization({ actorId: jono.id, orgId: org.id, choices: [], now: new Date() }, { ports: { broadcast: async () => {}, kick } })).ok).toBe(true);
       expect(kicks).toBe(25);
       expect(peak).toBeLessThanOrEqual(20);
       expect(peak).toBeGreaterThan(1);
