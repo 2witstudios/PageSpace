@@ -322,6 +322,7 @@ describe('/api/admin/users/[userId]/data', () => {
       email: 'target@example.com',
       image: null,
       stripeCustomerId: null,
+      appleId: null,
     });
     vi.mocked(accountRepository.getOwnedOrganizationNames).mockResolvedValue(['Northwind Labs']);
 
