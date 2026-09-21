@@ -657,6 +657,37 @@ describe('org services (real Postgres)', () => {
       expect(await requireOrgRole(tomas.id, org.id, 'MEMBER')).toMatchObject({ ok: false });
     });
 
+    it('DRV-5 (partial) an acceptance that loses a deadlock is retried whole and joins once', async () => {
+      const { jono, org } = await seedNorthwind();
+      const priya = await person('Priya Nair');
+      await addMember(org.id, priya.id, 'ADMIN');
+      const { product, roadmap } = await seedDrives(jono, priya, org.id);
+      const tomas = await person('Tomás Alvarez');
+      const invite = await createOrRotateInvitation({ orgId: org.id, email: tomas.email, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver });
+      if (!invite.ok) throw new Error('invite failed');
+
+      let calls = 0;
+      const publishSyncEvents = vi.fn(async () => {});
+      const result = await acceptInvitation(
+        { token: invite.token, userId: tomas.id, now: new Date() },
+        {
+          syncMemberAccess: async (orgId, userId, options) => {
+            calls += 1;
+            const synced = await syncOrgMemberAccess(orgId, userId, options);
+            // Postgres chose this transaction as the deadlock victim on the first attempt.
+            if (calls === 1) throw Object.assign(new Error('deadlock detected'), { code: '40P01' });
+            return synced;
+          },
+          publishSyncEvents,
+        },
+      );
+
+      expect(result).toEqual({ ok: true, orgId: org.id, role: 'MEMBER', joined: true });
+      expect(calls).toBe(2);
+      expect(publishSyncEvents).toHaveBeenCalledTimes(1);
+      expect(await rowsFor(tomas.id, [product.id, roadmap.id])).toHaveLength(2);
+    });
+
     it('DRV-5 (partial) accepting is idempotent: a second acceptance adds no row and publishes nothing', async () => {
       const { jono, org } = await seedNorthwind();
       const priya = await person('Priya Nair');

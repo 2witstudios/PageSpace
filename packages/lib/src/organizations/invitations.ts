@@ -16,7 +16,7 @@ import { organizations, orgInvitations, orgMembers, type OrgInvitation, type Org
 import { generateToken, hashToken } from '../auth/token-utils';
 import { decryptUserRow } from '../auth/user-repository';
 import { normalizeEmail } from '../encryption/blind-index';
-import { isEmailAMember, isUniqueViolation } from './repository';
+import { isEmailAMember, isUniqueViolation, retryOnDeadlock } from './repository';
 import {
   publishOrgMembershipSyncEvents,
   syncOrgMemberAccess,
@@ -309,7 +309,9 @@ export async function acceptInvitation(
   deps: AcceptInvitationDeps = acceptInvitationDeps,
 ): Promise<AcceptInvitationResult> {
   const tokenHash = hashToken(input.token);
-  const outcome = await db.transaction(async (tx): Promise<{ result: AcceptInvitationResult; sync: OrgMembershipSyncResult | null }> => {
+  // A join locks the org row then its drives; a leave that reassigns a led drive locks drive and
+  // org rows in one statement, so the two can still deadlock. The acceptance rolls back whole.
+  const outcome = await retryOnDeadlock(() => db.transaction(async (tx): Promise<{ result: AcceptInvitationResult; sync: OrgMembershipSyncResult | null }> => {
     // Take the address lock (shared with invite creation) before the row lock.
     const [peek] = await tx
       .select({ orgId: orgInvitations.orgId, email: orgInvitations.email })
@@ -374,7 +376,7 @@ export async function acceptInvitation(
       },
       sync,
     };
-  });
+  }));
   if (outcome.sync) await deps.publishSyncEvents(outcome.sync);
   return outcome.result;
 }

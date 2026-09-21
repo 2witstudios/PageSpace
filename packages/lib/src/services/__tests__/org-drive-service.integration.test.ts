@@ -13,7 +13,7 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
 import { db, pool } from '@pagespace/db/db';
-import { and, eq, inArray, or } from '@pagespace/db/operators';
+import { and, eq, inArray, or, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { driveMembers, driveRoles } from '@pagespace/db/schema/members';
@@ -285,6 +285,40 @@ describe('moveDriveOutOfOrg', () => {
     expect(await db.select().from(driveRoles).where(eq(driveRoles.driveId, driveId))).toHaveLength(1);
     expect(await db.select().from(pages).where(eq(pages.driveId, driveId))).toHaveLength(1);
     expect(await db.select().from(driveEnvs).where(eq(driveEnvs.driveId, driveId))).toHaveLength(1);
+  });
+
+  it('DRV-2 (partial) moving a drive out takes the org row before the drive row, the order org deletion and joins lock in', async () => {
+    const driveId = await seedOrgDrive();
+
+    // Hold the org row the way deleteOrganization and acceptInvitation do.
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let locked: () => void = () => {};
+    const orgLocked = new Promise<void>((resolve) => { locked = resolve; });
+    const holder = db.transaction(async (tx) => {
+      await tx.select({ id: organizations.id }).from(organizations).where(eq(organizations.id, northwind)).for('update');
+      locked();
+      await held;
+    });
+    await orgLocked;
+
+    const moving = moveDriveOutOfOrg(priya, driveId, { implicitMembers: 'keep' }, deps);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    // The waiting move-out must not already hold the drive row: that would be a lock cycle.
+    const driveRowFree = await db.transaction(async (tx) => {
+      try {
+        await tx.execute(sql`select id from drives where id = ${driveId} for update nowait`);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+
+    release();
+    await holder;
+    expect(driveRowFree).toBe(true);
+    expect(await moving).toMatchObject({ ok: true });
+    expect((await readDrive(driveId)).orgId).toBeNull();
   });
 
   it.each(['keep', 'remove'] as const)(

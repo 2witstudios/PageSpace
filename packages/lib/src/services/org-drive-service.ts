@@ -170,12 +170,18 @@ export async function moveDriveOutOfOrg(
   deps: OrgDriveServiceDeps
 ): Promise<MoveDriveResult> {
   const outcome = await db.transaction(async (tx) => {
+    // The org row before the drive row: org deletion and joining an org lock in that order, and
+    // taking the drive first would close a lock cycle with either.
+    const [current] = await tx.select({ orgId: drives.orgId }).from(drives).where(eq(drives.id, driveId));
+    if (!current) return driveNotFound();
+    const orgLocked = current.orgId !== null && (await lockOrg(tx, current.orgId));
     const drive = await lockDrive(tx, driveId);
     if (!drive) return driveNotFound();
 
     const { orgId } = drive;
+    // A drive that changed org between the read and the lock is judged as outside the org locked.
     const actorOrgRole =
-      orgId !== null && (await lockOrg(tx, orgId)) ? await deps.getOrgRole(tx, orgId, actorId) : null;
+      orgId !== null && orgId === current.orgId && orgLocked ? await deps.getOrgRole(tx, orgId, actorId) : null;
     const verdict = decideMoveDriveOutOfOrg({ drive, actorOrgRole, implicitMembers: input.implicitMembers });
     if (!verdict.ok) return verdict;
     if (orgId === null) throw new Error('Unreachable: move-out admitted a drive with no org');

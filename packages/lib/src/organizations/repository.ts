@@ -35,6 +35,22 @@ export function pgErrorCode(error: unknown): string | undefined {
 
 export const isUniqueViolation = (error: unknown): boolean => pgErrorCode(error) === UNIQUE_VIOLATION;
 
+const DEADLOCK_DETECTED = '40P01';
+
+/**
+ * Run a whole transaction again when Postgres picks it as a deadlock victim. Only for work that
+ * rolls back completely and may simply be run again; any other error is rethrown at once.
+ */
+export async function retryOnDeadlock<T>(work: () => Promise<T>, attempts = 3): Promise<T> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await work();
+    } catch (error) {
+      if (attempt >= attempts || pgErrorCode(error) !== DEADLOCK_DETECTED) throw error;
+    }
+  }
+}
+
 export async function findMembershipRole(orgId: string, userId: string): Promise<OrgRole | null> {
   const [row] = await db
     .select({ role: orgMembers.role })
