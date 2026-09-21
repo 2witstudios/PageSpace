@@ -913,6 +913,28 @@ describe('distributed-rate-limit', () => {
       expect(DISTRIBUTED_RATE_LIMITS.TRACKING.progressiveDelay).toBe(false);
     });
 
+    // Agent signup doors (ADR 0007 Decision 10, threat model T1/T3). PoW shapes
+    // rate; these per-IP ceilings are the real bound on bulk account creation.
+    it('AGENT_CHALLENGE allows 30 challenges per 5 minutes', () => {
+      expect(DISTRIBUTED_RATE_LIMITS.AGENT_CHALLENGE).toEqual({ maxAttempts: 30, windowMs: 5 * 60 * 1000, blockDurationMs: 5 * 60 * 1000, progressiveDelay: false });
+    });
+
+    it('AGENT_SIGNUP allows 5 registrations per hour', () => {
+      expect(DISTRIBUTED_RATE_LIMITS.AGENT_SIGNUP).toEqual({ maxAttempts: 5, windowMs: 60 * 60 * 1000, blockDurationMs: 60 * 60 * 1000, progressiveDelay: false });
+    });
+
+    it('AGENT_SIGNUP_DAILY caps registrations at 10 per 24 hours', () => {
+      expect(DISTRIBUTED_RATE_LIMITS.AGENT_SIGNUP_DAILY).toEqual({ maxAttempts: 10, windowMs: 24 * 60 * 60 * 1000, blockDurationMs: 24 * 60 * 60 * 1000, progressiveDelay: false });
+    });
+
+    it('AGENT_SIGNIN has the LOGIN shape (secret guessing is credential stuffing)', () => {
+      expect(DISTRIBUTED_RATE_LIMITS.AGENT_SIGNIN).toEqual(DISTRIBUTED_RATE_LIMITS.LOGIN);
+    });
+
+    it('AGENT_CLAIM_INIT allows 10 claim starts per 5 minutes', () => {
+      expect(DISTRIBUTED_RATE_LIMITS.AGENT_CLAIM_INIT).toEqual({ maxAttempts: 10, windowMs: 5 * 60 * 1000, blockDurationMs: 5 * 60 * 1000, progressiveDelay: false });
+    });
+
     it('EMAIL_RESEND has 3 attempts per hour', () => {
       expect(DISTRIBUTED_RATE_LIMITS.EMAIL_RESEND.maxAttempts).toBe(3);
       expect(DISTRIBUTED_RATE_LIMITS.EMAIL_RESEND.windowMs).toBe(60 * 60 * 1000);

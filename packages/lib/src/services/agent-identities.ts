@@ -30,6 +30,74 @@ import { loggers } from '../logging/logger-config';
 /** Prefix of the claim token an agent hands a human (auth.md "Fund"). Hash-only at rest. */
 export const AGENT_CLAIM_TOKEN_PREFIX = 'ps_claim';
 
+/** Prefix of a proof-of-work challenge. Hash-only at rest. */
+export const AGENT_POW_CHALLENGE_PREFIX = 'ps_pow';
+
+export interface IssuedAgentSignupChallenge {
+  /** Plaintext challenge — returned to the caller once; only its hash is stored. */
+  challenge: string;
+  expiresAt: Date;
+}
+
+/**
+ * Persist a single-use proof-of-work challenge (ADR 0007 Decision 10, threat
+ * model T2). The difficulty is stored on the row so a later change to
+ * `AGENT_SIGNUP_POW_BITS` never re-grades a challenge already handed out.
+ */
+export async function issueAgentSignupChallenge(input: {
+  difficultyBits: number;
+  ttlMs: number;
+  issuedToIp: string | null;
+  now: Date;
+}): Promise<IssuedAgentSignupChallenge> {
+  const generated = generateToken(AGENT_POW_CHALLENGE_PREFIX);
+  const expiresAt = new Date(input.now.getTime() + input.ttlMs);
+  await db.insert(agentSignupChallenges).values({
+    challengeHash: generated.hash,
+    difficultyBits: input.difficultyBits,
+    issuedToIp: input.issuedToIp,
+    expiresAt,
+  });
+  return { challenge: generated.token, expiresAt };
+}
+
+/** The facts `decideAgentSignup` needs about a presented challenge, plus the row id to consume. */
+export type AgentSignupChallengeLookup =
+  | { found: false; expired: false; consumed: false; difficultyBits: 0; id: null }
+  | { found: true; expired: boolean; consumed: boolean; difficultyBits: number; id: string };
+
+const CHALLENGE_NOT_FOUND = { found: false, expired: false, consumed: false, difficultyBits: 0, id: null } as const;
+
+/**
+ * Look a presented challenge up by hash. Reports facts only; `decideAgentSignup`
+ * orders them, and `createAgentAccount` re-checks expiry and consumption
+ * atomically, so this read is never the thing that admits a replay.
+ */
+export async function findAgentSignupChallenge(input: { challenge: string; now: Date }): Promise<AgentSignupChallengeLookup> {
+  if (typeof input.challenge !== 'string' || input.challenge.length === 0 || input.challenge.length > 256) {
+    return CHALLENGE_NOT_FOUND;
+  }
+  const [row] = await db
+    .select({
+      id: agentSignupChallenges.id,
+      difficultyBits: agentSignupChallenges.difficultyBits,
+      expiresAt: agentSignupChallenges.expiresAt,
+      consumedAt: agentSignupChallenges.consumedAt,
+    })
+    .from(agentSignupChallenges)
+    .where(eq(agentSignupChallenges.challengeHash, hashToken(input.challenge)))
+    .limit(1);
+  if (!row) return CHALLENGE_NOT_FOUND;
+  return {
+    found: true,
+    // Same boundary as createAgentAccount's `expiresAt > now`: expiring exactly now is expired.
+    expired: row.expiresAt.getTime() <= input.now.getTime(),
+    consumed: row.consumedAt !== null,
+    difficultyBits: row.difficultyBits,
+    id: row.id,
+  };
+}
+
 export interface CreateAgentAccountInput {
   name: string;
   /** Self-reported client label, ≤120 chars (validated by the route). */

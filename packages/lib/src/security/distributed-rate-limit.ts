@@ -1096,6 +1096,50 @@ export const DISTRIBUTED_RATE_LIMITS = {
     blockDurationMs: 5 * 60 * 1000,
     progressiveDelay: false,
   },
+  // Agent signup doors (ADR 0007 Decision 10, threat model T1/T3). All keyed
+  // per IP: the doors are unauthenticated by design, so IP is the only identity
+  // available. Proof-of-work only makes each attempt cost CPU; these are the
+  // real ceiling on bulk agent creation.
+  //
+  // GET /api/agent/challenge — issuing a challenge writes a row, so the cap
+  // bounds table growth; generous enough for a solver that lets one expire.
+  AGENT_CHALLENGE: {
+    maxAttempts: 30,
+    windowMs: 5 * 60 * 1000,
+    blockDurationMs: 5 * 60 * 1000,
+    progressiveDelay: false,
+  },
+  // POST /api/agent/identity — one account per accepted call.
+  AGENT_SIGNUP: {
+    maxAttempts: 5,
+    windowMs: 60 * 60 * 1000,
+    blockDurationMs: 60 * 60 * 1000,
+    progressiveDelay: false,
+  },
+  // Daily backstop over AGENT_SIGNUP, so an IP that paces itself under the
+  // hourly limit still cannot mint more than this many agents a day.
+  AGENT_SIGNUP_DAILY: {
+    maxAttempts: 10,
+    windowMs: 24 * 60 * 60 * 1000,
+    blockDurationMs: 24 * 60 * 60 * 1000,
+    progressiveDelay: false,
+  },
+  // Presenting an agent secret (browser sign-in door, jwt-bearer exchange):
+  // guessing a secret is credential stuffing, so it gets LOGIN's shape.
+  AGENT_SIGNIN: {
+    maxAttempts: 5,
+    windowMs: 15 * 60 * 1000,
+    blockDurationMs: 15 * 60 * 1000,
+    progressiveDelay: true,
+  },
+  // POST /api/agent/claim — starting a claim mints a user code, like
+  // OAUTH_DEVICE_INIT.
+  AGENT_CLAIM_INIT: {
+    maxAttempts: 10,
+    windowMs: 5 * 60 * 1000,
+    blockDurationMs: 5 * 60 * 1000,
+    progressiveDelay: false,
+  },
   // Per-webhook cap on posted channel messages (key: `page-webhook:{webhookId}`).
   // Meant to blunt abuse/runaway senders, not throttle legitimate bursty use —
   // matches Discord's own per-webhook limit (30 posts/min). A flooding caller
