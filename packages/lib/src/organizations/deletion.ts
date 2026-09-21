@@ -7,6 +7,7 @@
  *   cleared, ownerId = that person) or trash.
  * - A trashed-by-choice drive, and every drive already in trash, becomes a trashed
  *   drive owned by the org Owner (orgId cleared, still in trash, restorable).
+ * - The former lead of a drive that changes hands loses their OWNER row with it.
  * - Nothing moves silently: a live drive without a choice refuses the whole delete,
  *   and the returned steps name every drive's destination for the confirmation and
  *   for the per-drive audit event the caller writes.
@@ -116,7 +117,7 @@ export async function deleteOrganization(input: {
     if (!org) return { ok: false, status: 404, reason: 'not_found' } as const;
 
     const orgDrives = await tx
-      .select({ id: drives.id, name: drives.name, isTrashed: drives.isTrashed })
+      .select({ id: drives.id, name: drives.name, isTrashed: drives.isTrashed, ownerId: drives.ownerId })
       .from(drives)
       .where(eq(drives.orgId, input.orgId))
       .for('update');
@@ -139,7 +140,8 @@ export async function deleteOrganization(input: {
     }
 
     for (const step of plan.steps) {
-      const alreadyTrashed = orgDrives.find((drive) => drive.id === step.driveId)?.isTrashed === true;
+      const before = orgDrives.find((drive) => drive.id === step.driveId);
+      const alreadyTrashed = before?.isTrashed === true;
       await tx
         .update(drives)
         .set({
@@ -148,6 +150,15 @@ export async function deleteOrganization(input: {
           ...(step.trashed && !alreadyTrashed ? { isTrashed: true, trashedAt: input.now } : {}),
         })
         .where(eq(drives.id, step.driveId));
+      // The former lead's OWNER row would keep them inside a drive that is no longer theirs, and
+      // come back with it on restore; drop it as reassignLedOrgDrives does.
+      if (before && before.ownerId !== step.ownerId) {
+        await tx.delete(driveMembers).where(and(
+          eq(driveMembers.driveId, step.driveId),
+          eq(driveMembers.userId, before.ownerId),
+          eq(driveMembers.role, 'OWNER'),
+        ));
+      }
     }
 
     const driveIds = plan.steps.map((step) => step.driveId);

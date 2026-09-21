@@ -26,9 +26,11 @@ export async function POST(request: Request, context: { params: Promise<{ orgId:
           ? 'Ownership can only move to a member of this organization'
           : result.reason === 'already_owner'
             ? 'You already own this organization'
-            : result.reason === 'not_found'
-              ? 'Organization not found'
-              : 'Only the Owner can transfer ownership';
+            : result.reason === 'owner_not_human'
+              ? 'Only a person can own an organization'
+              : result.reason === 'not_found'
+                ? 'Organization not found'
+                : 'Only the Owner can transfer ownership';
       return NextResponse.json({ error, reason: result.reason }, { status: result.status });
     }
     auditRequest(request, {

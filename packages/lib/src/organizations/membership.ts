@@ -11,6 +11,7 @@ import { db } from '@pagespace/db/db';
 import { and, asc, eq, inArray } from '@pagespace/db/operators';
 import { organizations, orgMembers, type OrgRole } from '@pagespace/db/schema/organizations';
 import { decideOrgRole } from './authorize';
+import { loadOrgPrincipalKind, type OrgPrincipalKind } from './owner-candidate';
 import { leaveOrganization } from './leave';
 import { revokeForDemotion } from './demotion';
 import { getActorInfo } from '../monitoring/activity-logger';
@@ -33,6 +34,7 @@ export type MembershipRefusal =
   | 'use_ownership_transfer'
   | 'use_leave'
   | 'already_owner'
+  | 'owner_not_human'
   | 'not_owner'
   | 'not_found'
   | 'not_member'
@@ -82,14 +84,18 @@ export const decideOwnershipTransfer = ({
   actorId,
   targetId,
   targetRole,
+  targetKind,
 }: {
   currentOwnerId: string;
   actorId: string;
   targetId: string;
   targetRole: OrgRole | null;
+  /** ORG-1: an agent never becomes Owner, member or not. */
+  targetKind: OrgPrincipalKind | null;
 }): MembershipDecision => {
   if (actorId !== currentOwnerId) return { ok: false, status: 403, reason: 'not_owner' };
   if (targetId === currentOwnerId) return { ok: false, status: 400, reason: 'already_owner' };
+  if (targetKind === 'agent') return { ok: false, status: 400, reason: 'owner_not_human' };
   if (targetRole === null) return { ok: false, status: 400, reason: 'target_not_member' };
   return { ok: true };
 };
@@ -201,7 +207,8 @@ export async function transferOwnership(input: {
     if (!org) return { ok: false, status: 404, reason: 'not_found' } as const;
 
     const targetRole = await lockTargetRole(tx, input.orgId, input.targetId);
-    const decision = decideOwnershipTransfer({ currentOwnerId: org.ownerId, ...input, targetRole });
+    const targetKind = await loadOrgPrincipalKind(tx, input.targetId);
+    const decision = decideOwnershipTransfer({ currentOwnerId: org.ownerId, ...input, targetRole, targetKind });
     if (!decision.ok) return decision;
 
     await tx

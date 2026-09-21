@@ -305,6 +305,19 @@ describe('org route behaviour', () => {
     expect((await orgsRoute.POST(req('POST', { name: 'N', slug: 'northwind' }))).status).toBe(409);
   });
 
+  it('ORG-1 (partial) POST /api/orgs and transfer-ownership refuse an Owner who is not a person, never as a taken slug', async () => {
+    vi.mocked(repository.createOrganization).mockResolvedValue({ ok: false, reason: 'owner_not_human' });
+    const created = await orgsRoute.POST(req('POST', { name: 'N', slug: 'northwind' }));
+    expect(created.status).toBe(403);
+    expect(await created.json()).toMatchObject({ reason: 'owner_not_human' });
+
+    asRole('OWNER');
+    vi.mocked(membership.transferOwnership).mockResolvedValue({ ok: false, status: 400, reason: 'owner_not_human' });
+    const transferred = await transferRoute.POST(req('POST', { toUserId: 'agent_page' }), params({ orgId: ORG_ID }));
+    expect(transferred.status).toBe(400);
+    expect(await transferred.json()).toEqual({ error: 'Only a person can own an organization', reason: 'owner_not_human' });
+  });
+
   it('ORG-1 (partial) an org avatar must be an https URL, never a script or data URI', async () => {
     for (const avatarUrl of ['javascript:alert(1)', 'data:image/png;base64,AAAA', 'http://example.test/n.png']) {
       expect((await orgsRoute.POST(req('POST', { name: 'N', slug: 'northwind', avatarUrl }))).status).toBe(400);

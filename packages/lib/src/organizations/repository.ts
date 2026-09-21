@@ -18,6 +18,7 @@ import {
   type OrgRole,
 } from '@pagespace/db/schema/organizations';
 import { decryptUserRows, userEmailMatch } from '../auth/user-repository';
+import { decideOrgOwnerCandidate, loadOrgPrincipalKind } from './owner-candidate';
 
 const UNIQUE_VIOLATION = '23505';
 
@@ -137,9 +138,12 @@ export async function countOrgSeats(orgId: string): Promise<number> {
 
 export type CreateOrganizationResult =
   | { ok: true; organization: Organization }
-  | { ok: false; reason: 'slug_taken' };
+  | { ok: false; reason: 'slug_taken' | 'owner_not_human' | 'owner_not_found' };
 
-/** ORG-1: the org row and its OWNER membership are written together or not at all. */
+/**
+ * ORG-1: the org row and its OWNER membership are written together or not at all,
+ * and only for a person (an agent never becomes an Owner).
+ */
 export async function createOrganization(input: {
   name: string;
   slug: string;
@@ -147,15 +151,17 @@ export async function createOrganization(input: {
   ownerId: string;
 }): Promise<CreateOrganizationResult> {
   try {
-    const organization = await db.transaction(async (tx) => {
+    const result = await db.transaction(async (tx): Promise<CreateOrganizationResult> => {
+      const candidate = decideOrgOwnerCandidate(await loadOrgPrincipalKind(tx, input.ownerId));
+      if (!candidate.ok) return { ok: false, reason: candidate.reason };
       const [org] = await tx
         .insert(organizations)
         .values({ name: input.name, slug: input.slug, avatarUrl: input.avatarUrl ?? null, ownerId: input.ownerId })
         .returning();
       await tx.insert(orgMembers).values({ orgId: org.id, userId: input.ownerId, role: 'OWNER' });
-      return org;
+      return { ok: true, organization: org };
     });
-    return { ok: true, organization };
+    return result;
   } catch (error) {
     if (isUniqueViolation(error)) return { ok: false, reason: 'slug_taken' };
     throw error;

@@ -13,6 +13,7 @@ import {
 } from '../invitations';
 import { decideRoleChange, decideMemberRemoval, decideOwnershipTransfer } from '../membership';
 import { planOrgDeletion } from '../deletion';
+import { decideOrgOwnerCandidate } from '../owner-candidate';
 
 const NOW = new Date('2026-09-17T12:00:00.000Z');
 const HOUR = 60 * 60 * 1000;
@@ -196,21 +197,32 @@ describe('membership decisions', () => {
   });
 
   it('ORG-1 (partial) ownership transfers only from the current Owner to another member', () => {
-    expect(decideOwnershipTransfer({ currentOwnerId: 'jono', actorId: 'jono', targetId: 'priya', targetRole: 'ADMIN' })).toEqual({ ok: true });
-    expect(decideOwnershipTransfer({ currentOwnerId: 'jono', actorId: 'jono', targetId: 'chris', targetRole: null })).toEqual({
+    expect(decideOwnershipTransfer({ currentOwnerId: 'jono', actorId: 'jono', targetId: 'priya', targetRole: 'ADMIN', targetKind: 'human' })).toEqual({ ok: true });
+    expect(decideOwnershipTransfer({ currentOwnerId: 'jono', actorId: 'jono', targetId: 'chris', targetRole: null, targetKind: null })).toEqual({
       ok: false,
       status: 400,
       reason: 'target_not_member',
     });
-    expect(decideOwnershipTransfer({ currentOwnerId: 'jono', actorId: 'jono', targetId: 'jono', targetRole: 'OWNER' })).toEqual({
+    expect(decideOwnershipTransfer({ currentOwnerId: 'jono', actorId: 'jono', targetId: 'jono', targetRole: 'OWNER', targetKind: 'human' })).toEqual({
       ok: false,
       status: 400,
       reason: 'already_owner',
     });
-    expect(decideOwnershipTransfer({ currentOwnerId: 'jono', actorId: 'priya', targetId: 'dana', targetRole: 'ADMIN' })).toEqual({
+    expect(decideOwnershipTransfer({ currentOwnerId: 'jono', actorId: 'priya', targetId: 'dana', targetRole: 'ADMIN', targetKind: 'human' })).toEqual({
       ok: false,
       status: 403,
       reason: 'not_owner',
+    });
+  });
+
+  it('ORG-1 (partial) only a person can become an org Owner, at creation or by transfer', () => {
+    expect(decideOrgOwnerCandidate('human')).toEqual({ ok: true });
+    expect(decideOrgOwnerCandidate('agent')).toEqual({ ok: false, status: 400, reason: 'owner_not_human' });
+    expect(decideOrgOwnerCandidate(null)).toEqual({ ok: false, status: 404, reason: 'owner_not_found' });
+    expect(decideOwnershipTransfer({ currentOwnerId: 'jono', actorId: 'jono', targetId: 'agent-page', targetRole: null, targetKind: 'agent' })).toEqual({
+      ok: false,
+      status: 400,
+      reason: 'owner_not_human',
     });
   });
 });

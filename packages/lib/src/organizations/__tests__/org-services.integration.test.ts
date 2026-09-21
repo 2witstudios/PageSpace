@@ -8,7 +8,7 @@
  *   DATABASE_URL=postgresql://user:password@localhost:5433/pagespace_test \
  *   bun run --filter '@pagespace/lib' test:integration -- org-services
  */
-import { describe, it, expect, afterAll, afterEach, beforeAll } from 'vitest';
+import { describe, it, expect, afterAll, afterEach, beforeAll, vi } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
 import { db, pool } from '@pagespace/db/db';
 import { and, eq, inArray } from '@pagespace/db/operators';
@@ -34,6 +34,19 @@ import {
 } from '../invitations';
 import { deleteOrganization } from '../deletion';
 import { requireOrgRole } from '../authorize';
+import { getUserAccessLevel } from '../../permissions/permissions';
+import { getDriveAccess, listAccessibleDrives, restoreDrive } from '../../services/drive-service';
+import { getDriveRecipientUserIds } from '../../services/drive-member-service';
+import { syncOrgMemberAccess, type OrgMembershipSyncResult } from '../../services/org-membership-sync';
+
+// Org-derived access is dark by default; a test that proves an org-shaped negative turns it on,
+// or the negative would hold only because the whole org branch is off.
+const flags = vi.hoisted(() => ({ orgsEnabled: false }));
+vi.mock('../orgs-enabled', () => ({
+  get ORGS_ENABLED() {
+    return flags.orgsEnabled;
+  },
+}));
 
 const HOUR = 60 * 60 * 1000;
 /** Delivery that succeeds; tests of a failed delivery pass their own. */
@@ -57,6 +70,7 @@ describe('org services (real Postgres)', () => {
   // suite's user cleanup fail in the shared CI database. Orgs are also swept by owner, so
   // one created by a service call this file did not track still goes.
   afterEach(async () => {
+    flags.orgsEnabled = false;
     const driveIds = createdDrives.splice(0);
     const userIds = createdUsers.splice(0);
     const trackedOrgIds = createdOrgs.splice(0);
@@ -139,6 +153,21 @@ describe('org services (real Postgres)', () => {
       const result = await createOrganization({ name: 'Copycat', slug: org.slug, ownerId: priya.id });
       expect(result).toEqual({ ok: false, reason: 'slug_taken' });
       expect(await listOrganizationsForUser(priya.id)).toEqual([]);
+    });
+
+    it('ORG-1 (partial) an AI agent can neither create an org as its Owner nor receive ownership, and nothing is written', async () => {
+      const { jono, org } = await seedNorthwind();
+      const product = await seedDrive(jono.id, org.id, { name: 'Product' });
+      const agent = await factories.createPage(product.id, { type: 'AI_CHAT', title: 'Planner' });
+      const slug = `agent-org-${createId()}`;
+
+      expect(await createOrganization({ name: 'Agent Org', slug, ownerId: agent.id })).toEqual({ ok: false, reason: 'owner_not_human' });
+      expect(await db.select({ id: organizations.id }).from(organizations).where(eq(organizations.slug, slug))).toEqual([]);
+      expect(await createOrganization({ name: 'Ghost Org', slug, ownerId: createId() })).toEqual({ ok: false, reason: 'owner_not_found' });
+
+      expect(await transferOwnership({ orgId: org.id, actorId: jono.id, targetId: agent.id })).toEqual({ ok: false, status: 400, reason: 'owner_not_human' });
+      expect(await orgOwnerId(org.id)).toBe(jono.id);
+      expect(await ownerRows(org.id)).toEqual([{ userId: jono.id }]);
     });
 
     it('ORG-1 (partial) ownership transfer moves ownerId and the OWNER row together and they never diverge', async () => {
@@ -482,6 +511,223 @@ describe('org services (real Postgres)', () => {
       expect(result).toEqual({ ok: false, status: 400, reason: 'transfer_target_not_member', driveIds: [product.id] });
       const [drive] = await db.select().from(drives).where(eq(drives.id, product.id));
       expect(drive).toMatchObject({ orgId: org.id, ownerId: jono.id, isTrashed: false });
+      expect(await db.select({ id: organizations.id }).from(organizations).where(eq(organizations.id, org.id))).toHaveLength(1);
+    });
+  });
+
+  describe('joining materializes Open drives', () => {
+    async function seedDrives(jono: { id: string }, priya: { id: string }, orgId: string) {
+      return {
+        product: await seedDrive(jono.id, orgId, { name: 'Product' }),
+        roadmap: await seedDrive(priya.id, orgId, { name: 'Roadmap' }),
+        finance: await seedDrive(priya.id, orgId, { name: 'Finance', orgVisibility: 'RESTRICTED' }),
+        legal: await seedDrive(jono.id, orgId, { name: 'Legal', orgVisibility: 'PRIVATE' }),
+      };
+    }
+
+    async function rowsFor(userId: string, driveIds: string[]) {
+      return db
+        .select({ driveId: driveMembers.driveId, source: driveMembers.source, role: driveMembers.role, acceptedAt: driveMembers.acceptedAt })
+        .from(driveMembers)
+        .where(and(eq(driveMembers.userId, userId), inArray(driveMembers.driveId, driveIds)));
+    }
+
+    it('DRV-5 (partial) a joiner is materialized on every existing OPEN org drive, is a drive recipient there, and gets nothing on RESTRICTED or PRIVATE drives; events publish after commit', async () => {
+      const { jono, org } = await seedNorthwind();
+      const priya = await person('Priya Nair');
+      await addMember(org.id, priya.id, 'ADMIN');
+      const { product, roadmap, finance, legal } = await seedDrives(jono, priya, org.id);
+      const allIds = [product.id, roadmap.id, finance.id, legal.id];
+      const tomas = await person('Tomás Alvarez');
+      const invite = await createOrRotateInvitation({ orgId: org.id, email: tomas.email, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver });
+      if (!invite.ok) throw new Error('invite failed');
+
+      const published: OrgMembershipSyncResult[] = [];
+      const rowsSeenAtPublish: number[] = [];
+      const result = await acceptInvitation(
+        { token: invite.token, userId: tomas.id, now: new Date() },
+        {
+          syncMemberAccess: syncOrgMemberAccess,
+          publishSyncEvents: async (sync) => {
+            published.push(sync);
+            // Read on another connection: the rows are visible, so the transaction has committed.
+            rowsSeenAtPublish.push((await rowsFor(tomas.id, allIds)).length);
+          },
+        },
+      );
+      expect(result).toEqual({ ok: true, orgId: org.id, role: 'MEMBER', joined: true });
+
+      const rows = await rowsFor(tomas.id, allIds);
+      expect(rows.map((r) => r.driveId).sort()).toEqual([product.id, roadmap.id].sort());
+      for (const row of rows) {
+        expect(row).toMatchObject({ source: 'org', role: 'MEMBER' });
+        expect(row.acceptedAt).not.toBeNull();
+      }
+      expect(await getDriveRecipientUserIds(product.id)).toContain(tomas.id);
+      expect(await getDriveRecipientUserIds(roadmap.id)).toContain(tomas.id);
+      expect(await getDriveRecipientUserIds(finance.id)).not.toContain(tomas.id);
+      expect(await getDriveRecipientUserIds(legal.id)).not.toContain(tomas.id);
+
+      expect(rowsSeenAtPublish).toEqual([2]);
+      expect(published).toHaveLength(1);
+      expect(published[0].affectedUsers).toEqual([
+        { userId: tomas.id, operation: 'member_added', driveIds: expect.arrayContaining([product.id, roadmap.id]) },
+      ]);
+      expect(published[0].affectedUsers[0].driveIds).toHaveLength(2);
+    });
+
+    it('DRV-5 (partial) accepting is idempotent: a second acceptance adds no row and publishes nothing', async () => {
+      const { jono, org } = await seedNorthwind();
+      const priya = await person('Priya Nair');
+      await addMember(org.id, priya.id, 'ADMIN');
+      const { product, roadmap, finance, legal } = await seedDrives(jono, priya, org.id);
+      const tomas = await person('Tomás Alvarez');
+      const invite = await createOrRotateInvitation({ orgId: org.id, email: tomas.email, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver });
+      if (!invite.ok) throw new Error('invite failed');
+      expect(await acceptInvitation({ token: invite.token, userId: tomas.id, now: new Date() })).toMatchObject({ ok: true, joined: true });
+
+      const publishSyncEvents = vi.fn(async () => {});
+      expect(
+        await acceptInvitation({ token: invite.token, userId: tomas.id, now: new Date() }, { syncMemberAccess: syncOrgMemberAccess, publishSyncEvents }),
+      ).toMatchObject({ ok: false, reason: 'already_accepted' });
+      expect(publishSyncEvents).not.toHaveBeenCalled();
+      expect(await rowsFor(tomas.id, [product.id, roadmap.id, finance.id, legal.id])).toHaveLength(2);
+    });
+
+    it('DRV-5 (partial) an acceptance whose transaction rolls back leaves no member, no drive row and publishes nothing', async () => {
+      const { jono, org } = await seedNorthwind();
+      const priya = await person('Priya Nair');
+      await addMember(org.id, priya.id, 'ADMIN');
+      const { product, roadmap } = await seedDrives(jono, priya, org.id);
+      const tomas = await person('Tomás Alvarez');
+      const invite = await createOrRotateInvitation({ orgId: org.id, email: tomas.email, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver });
+      if (!invite.ok) throw new Error('invite failed');
+
+      const publishSyncEvents = vi.fn(async () => {});
+      let synced: OrgMembershipSyncResult | null = null;
+      await expect(
+        acceptInvitation(
+          { token: invite.token, userId: tomas.id, now: new Date() },
+          {
+            // The real sync writes its rows, then the transaction fails after it.
+            syncMemberAccess: async (orgId, userId, options) => {
+              synced = await syncOrgMemberAccess(orgId, userId, options);
+              throw new Error('boom after sync');
+            },
+            publishSyncEvents,
+          },
+        ),
+      ).rejects.toThrow('boom after sync');
+
+      expect(synced).not.toBeNull();
+      expect(publishSyncEvents).not.toHaveBeenCalled();
+      expect(await rowsFor(tomas.id, [product.id, roadmap.id])).toEqual([]);
+      expect(await requireOrgRole(tomas.id, org.id, 'MEMBER')).toMatchObject({ ok: false });
+      expect(await listOpenInvitations(org.id)).toHaveLength(1);
+    });
+  });
+
+  it('X-6 (partial) a pending org invitation grants no drive access and lists no drive', async () => {
+    flags.orgsEnabled = true;
+    const { jono, org } = await seedNorthwind();
+    const marcus = await person('Marcus Oyelaran');
+    await addMember(org.id, marcus.id, 'MEMBER');
+    const product = await seedDrive(jono.id, org.id, { name: 'Product' });
+    const finance = await seedDrive(jono.id, org.id, { name: 'Finance', orgVisibility: 'RESTRICTED' });
+    const legal = await seedDrive(jono.id, org.id, { name: 'Legal', orgVisibility: 'PRIVATE' });
+    const productPage = await factories.createPage(product.id);
+    const tomas = await person('Tomás Alvarez');
+    const invite = await createOrRotateInvitation({ orgId: org.id, email: tomas.email, role: 'ADMIN', invitedBy: jono.id, now: new Date(), deliver });
+    if (!invite.ok) throw new Error('invite failed');
+
+    // Control: the org branch is live, so an accepted member does open and list the Open drive.
+    expect(await getDriveAccess(product.id, marcus.id)).toMatchObject({ isMember: true });
+    expect((await listAccessibleDrives(marcus.id)).map((d) => d.id)).toContain(product.id);
+
+    for (const drive of [product, finance, legal]) {
+      expect(await getDriveAccess(drive.id, tomas.id)).toEqual({ isOwner: false, isAdmin: false, isMember: false, role: null });
+    }
+    expect(await getUserAccessLevel(tomas.id, productPage.id)).toBeNull();
+    const listed = (await listAccessibleDrives(tomas.id, { includeTrash: true })).map((d) => d.id);
+    expect(listed).not.toContain(product.id);
+    expect(listed).not.toContain(finance.id);
+    expect(listed).not.toContain(legal.id);
+  });
+
+  describe('deletion leaves no former lead behind', () => {
+    async function ownerRow(driveId: string, userId: string) {
+      await db.insert(driveMembers).values({ driveId, userId, role: 'OWNER', acceptedAt: new Date() });
+    }
+
+    it('ORG-6 after deleting an org the former lead of a transferred or trashed drive cannot open, list or restore into it; the Owner keeps their own row', async () => {
+      const { jono, org } = await seedNorthwind();
+      const priya = await person('Priya Nair');
+      const marcus = await person('Marcus Oyelaran');
+      await addMember(org.id, priya.id, 'ADMIN');
+      await addMember(org.id, marcus.id, 'MEMBER');
+      // Priya leads Product and Finance, each with the OWNER row a personal drive carries in.
+      const product = await seedDrive(priya.id, org.id, { name: 'Product' });
+      const finance = await seedDrive(priya.id, org.id, { name: 'Finance', orgVisibility: 'PRIVATE' });
+      const wiki = await seedDrive(jono.id, org.id, { name: 'Wiki' });
+      await ownerRow(product.id, priya.id);
+      await ownerRow(finance.id, priya.id);
+      await ownerRow(wiki.id, jono.id);
+      const productPage = await factories.createPage(product.id);
+      const financePage = await factories.createPage(finance.id);
+
+      const result = await deleteOrganization({
+        actorId: jono.id,
+        orgId: org.id,
+        choices: [
+          { driveId: product.id, action: 'transfer', toUserId: marcus.id },
+          { driveId: finance.id, action: 'trash' },
+          { driveId: wiki.id, action: 'trash' },
+        ],
+        now: new Date(),
+      });
+      expect(result.ok).toBe(true);
+
+      expect(
+        await db.select().from(driveMembers).where(and(eq(driveMembers.userId, priya.id), inArray(driveMembers.driveId, [product.id, finance.id]))),
+      ).toEqual([]);
+      // The org Owner receives Wiki back into their own trash: their row is theirs, not a former lead's.
+      expect(await db.select().from(driveMembers).where(and(eq(driveMembers.userId, jono.id), eq(driveMembers.driveId, wiki.id)))).toHaveLength(1);
+
+      // Restoring Finance out of the Owner's trash brings no access back to Priya.
+      expect(await restoreDrive(finance.id)).not.toBeNull();
+
+      for (const orgsEnabled of [false, true]) {
+        flags.orgsEnabled = orgsEnabled;
+        for (const drive of [product, finance]) {
+          expect(await getDriveAccess(drive.id, priya.id)).toEqual({ isOwner: false, isAdmin: false, isMember: false, role: null });
+        }
+        expect(await getUserAccessLevel(priya.id, productPage.id)).toBeNull();
+        expect(await getUserAccessLevel(priya.id, financePage.id)).toBeNull();
+        const listed = (await listAccessibleDrives(priya.id, { includeTrash: true })).map((d) => d.id);
+        expect(listed).not.toContain(product.id);
+        expect(listed).not.toContain(finance.id);
+        expect(await getDriveAccess(product.id, marcus.id)).toMatchObject({ isOwner: true });
+      }
+    });
+
+    it('ORG-6 a live drive without a deletion choice refuses the delete and nothing moves', async () => {
+      const { jono, org } = await seedNorthwind();
+      const priya = await person('Priya Nair');
+      await addMember(org.id, priya.id, 'ADMIN');
+      const product = await seedDrive(jono.id, org.id, { name: 'Product' });
+      const finance = await seedDrive(priya.id, org.id, { name: 'Finance' });
+
+      const result = await deleteOrganization({
+        actorId: jono.id,
+        orgId: org.id,
+        choices: [{ driveId: product.id, action: 'trash' }],
+        now: new Date(),
+      });
+      expect(result).toEqual({ ok: false, status: 400, reason: 'missing_choice', driveIds: [finance.id] });
+      const after = await db.select().from(drives).where(inArray(drives.id, [product.id, finance.id]));
+      const byId = new Map(after.map((d) => [d.id, d]));
+      expect(byId.get(product.id)).toMatchObject({ orgId: org.id, ownerId: jono.id, isTrashed: false });
+      expect(byId.get(finance.id)).toMatchObject({ orgId: org.id, ownerId: priya.id, isTrashed: false });
       expect(await db.select({ id: organizations.id }).from(organizations).where(eq(organizations.id, org.id))).toHaveLength(1);
     });
   });

@@ -36,7 +36,9 @@ export async function POST(request: Request) {
     }
     const result = await createOrganization({ ...parsed.data, ownerId: gate.userId });
     if (!result.ok) {
-      return NextResponse.json({ error: 'That organization URL is already taken' }, { status: 409 });
+      return result.reason === 'slug_taken'
+        ? NextResponse.json({ error: 'That organization URL is already taken' }, { status: 409 })
+        : NextResponse.json({ error: 'Only a person can own an organization', reason: result.reason }, { status: 403 });
     }
     auditRequest(request, {
       eventType: 'data.write',

@@ -17,6 +17,11 @@ import { generateToken, hashToken } from '../auth/token-utils';
 import { decryptUserRow } from '../auth/user-repository';
 import { normalizeEmail } from '../encryption/blind-index';
 import { isEmailAMember, isUniqueViolation } from './repository';
+import {
+  publishOrgMembershipSyncEvents,
+  syncOrgMemberAccess,
+  type OrgMembershipSyncResult,
+} from '../services/org-membership-sync';
 
 export const INVITE_EXPIRY_DAYS = 7;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -273,19 +278,38 @@ export type AcceptInvitationResult =
   | { ok: true; orgId: string; role: OrgRole; joined: boolean }
   | Extract<InviteAcceptanceDecision, { ok: false }>;
 
+export interface AcceptInvitationDeps {
+  /** Materializes the joiner on the org's Open drives inside the acceptance transaction (D-OW-6). */
+  syncMemberAccess: typeof syncOrgMemberAccess;
+  /** Runs only after the acceptance has committed. */
+  publishSyncEvents: (result: OrgMembershipSyncResult) => Promise<void>;
+}
+
+const acceptInvitationDeps: AcceptInvitationDeps = {
+  syncMemberAccess: syncOrgMemberAccess,
+  publishSyncEvents: (result) => publishOrgMembershipSyncEvents(result),
+};
+
 /**
  * Accept by raw token. The invite row is locked so two tabs accepting the same
  * link serialize; the membership insert and acceptedAt are one transaction, so a
  * consumed invite always has its member row and a member never keeps a live
  * invite (and a second seat).
+ *
+ * A join also materializes the new member on every Open drive of the org in the
+ * same transaction (DRV-5, D-OW-6), so row enumerators (drive recipients,
+ * notifications) see them; the realtime events go out only after commit.
  */
-export async function acceptInvitation(input: {
-  token: string;
-  userId: string;
-  now: Date;
-}): Promise<AcceptInvitationResult> {
+export async function acceptInvitation(
+  input: {
+    token: string;
+    userId: string;
+    now: Date;
+  },
+  deps: AcceptInvitationDeps = acceptInvitationDeps,
+): Promise<AcceptInvitationResult> {
   const tokenHash = hashToken(input.token);
-  return db.transaction(async (tx) => {
+  const outcome = await db.transaction(async (tx): Promise<{ result: AcceptInvitationResult; sync: OrgMembershipSyncResult | null }> => {
     // Take the address lock (shared with invite creation) before the row lock.
     const [peek] = await tx
       .select({ orgId: orgInvitations.orgId, email: orgInvitations.email })
@@ -303,7 +327,7 @@ export async function acceptInvitation(input: {
       .from(users)
       .where(eq(users.id, input.userId))
       .limit(1);
-    if (!userRow) return { ok: false, status: 404, reason: 'not_found' } as const;
+    if (!userRow) return { result: { ok: false, status: 404, reason: 'not_found' }, sync: null };
     const { email: userEmail } = await decryptUserRow(userRow);
 
     const [membership] = invite
@@ -320,10 +344,11 @@ export async function acceptInvitation(input: {
       isExistingMember: membership !== undefined,
       now: input.now,
     });
-    if (!decision.ok) return decision;
+    if (!decision.ok) return { result: decision, sync: null };
     // decideInviteAcceptance refuses a null invite, so it is present from here on.
-    if (!invite) return { ok: false, status: 404, reason: 'not_found' } as const;
+    if (!invite) return { result: { ok: false, status: 404, reason: 'not_found' }, sync: null };
 
+    let sync: OrgMembershipSyncResult | null = null;
     if (decision.action === 'join') {
       await tx.insert(orgMembers).values({
         orgId: invite.orgId,
@@ -331,13 +356,19 @@ export async function acceptInvitation(input: {
         role: invite.role,
         invitedBy: invite.invitedBy,
       });
+      sync = await deps.syncMemberAccess(invite.orgId, input.userId, { tx });
     }
     await tx.update(orgInvitations).set({ acceptedAt: input.now }).where(eq(orgInvitations.id, invite.id));
     return {
-      ok: true,
-      orgId: invite.orgId,
-      role: membership?.role ?? invite.role,
-      joined: decision.action === 'join',
+      result: {
+        ok: true,
+        orgId: invite.orgId,
+        role: membership?.role ?? invite.role,
+        joined: decision.action === 'join',
+      },
+      sync,
     };
   });
+  if (outcome.sync) await deps.publishSyncEvents(outcome.sync);
+  return outcome.result;
 }
