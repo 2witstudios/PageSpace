@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { UIMessage } from 'ai';
 import {
   applyEnqueueQueuedSend,
@@ -116,6 +116,11 @@ describe('queuedSendsPersistence', () => {
     window.localStorage.clear();
   });
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
   it('round-trips entries preserving ids and order', () => {
     const queue = [msg('q1', 'first'), msg('q2', 'second')];
     persistQueuedSends('c1', queue);
@@ -165,13 +170,25 @@ describe('queuedSendsPersistence', () => {
     expect(raw).toHaveLength(MAX_QUEUED_SENDS);
   });
 
-  it('survives a storage write failure (private mode / quota)', () => {
-    const original = window.localStorage.setItem;
-    window.localStorage.setItem = () => {
-      throw new DOMException('quota exceeded', 'QuotaExceededError');
-    };
+  it('persist no-ops during SSR, where window is undefined', () => {
+    vi.stubGlobal('window', undefined);
     expect(() => persistQueuedSends('c1', [msg('q1')])).not.toThrow();
-    window.localStorage.setItem = original;
+    vi.unstubAllGlobals();
+    expect(window.localStorage.getItem('pagespace:queued-sends:c1')).toBeNull();
+  });
+
+  it('read returns [] during SSR, where window is undefined', () => {
+    window.localStorage.setItem('pagespace:queued-sends:c1', JSON.stringify([msg('q1')]));
+    vi.stubGlobal('window', undefined);
+    expect(readPersistedQueuedSends('c1')).toEqual([]);
+  });
+
+  it('survives a storage write failure (private mode / quota)', () => {
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('quota exceeded', 'QuotaExceededError');
+    });
+    expect(() => persistQueuedSends('c1', [msg('q1')])).not.toThrow();
+    expect(readPersistedQueuedSends('c1')).toEqual([]);
   });
 });
 
