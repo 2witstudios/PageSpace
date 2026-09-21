@@ -603,6 +603,10 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **The workflow editor fits the screen again** — a workflow with a long AI prompt pushed the
+  Edit Workflow dialog's fields past its right edge and pushed Save below the fold. The dialog is
+  now wider on desktop, its fields scroll between a fixed header and a fixed Cancel/Save footer, and
+  long prompts wrap and scroll inside their own box.
 - **A pending drive invitation no longer reveals the drive's people** — someone invited to a drive
   who had not yet accepted saw every member's name, email, bio and avatar in the New Conversation
   picker and could start a direct message with them (and members could do the same to them). Until
