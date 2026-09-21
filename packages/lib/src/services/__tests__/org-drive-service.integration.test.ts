@@ -235,10 +235,15 @@ describe('moveDriveOutOfOrg', () => {
     return driveId;
   }
 
-  it('DRV-2 (partial) an org Admin moves a drive out: it becomes its lead\'s personal drive with members, pages and publishSubdomain intact', async () => {
+  it('DRV-2 an org Admin moves a drive out: it becomes its lead\'s personal drive with members, roles, pages, envs and publishSubdomain intact', async () => {
     const driveId = await seedOrgDrive();
-    await db.insert(driveMembers).values({ driveId, userId: chris, role: 'MEMBER', acceptedAt: new Date() });
+    const [role] = await db.insert(driveRoles).values({ driveId, name: 'Editors', permissions: {} }).returning();
+    await db.insert(driveMembers).values([
+      { driveId, userId: chris, role: 'MEMBER', acceptedAt: new Date() },
+      { driveId, userId: lena, role: 'ADMIN', customRoleId: role.id, acceptedAt: new Date() },
+    ]);
     await db.insert(pages).values({ driveId, title: 'Roadmap', type: 'DOCUMENT', position: 1, updatedAt: new Date() });
+    await db.insert(driveEnvs).values({ driveId, name: 'prod', createdBy: marcus, updatedAt: new Date() });
     const before = await readDrive(driveId);
 
     const result = await moveDriveOutOfOrg(priya, driveId, { implicitMembers: 'keep' }, deps);
@@ -252,8 +257,14 @@ describe('moveDriveOutOfOrg', () => {
     expect(after.orgId).toBeNull();
     expect(after.ownerId).toBe(marcus);
     expect(after.publishSubdomain).toBe(before.publishSubdomain);
-    expect(await db.select().from(driveMembers).where(eq(driveMembers.driveId, driveId))).toHaveLength(1);
+    expect(after.slug).toBe(before.slug);
+    const members = await db.select().from(driveMembers).where(eq(driveMembers.driveId, driveId));
+    expect(members.map((m) => [m.userId, m.role, m.customRoleId, m.source]).sort()).toEqual(
+      [[chris, 'MEMBER', null, 'invite'], [lena, 'ADMIN', role.id, 'invite']].sort()
+    );
+    expect(await db.select().from(driveRoles).where(eq(driveRoles.driveId, driveId))).toHaveLength(1);
     expect(await db.select().from(pages).where(eq(pages.driveId, driveId))).toHaveLength(1);
+    expect(await db.select().from(driveEnvs).where(eq(driveEnvs.driveId, driveId))).toHaveLength(1);
   });
 
   it.each(['keep', 'remove'] as const)(

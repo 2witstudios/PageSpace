@@ -17,6 +17,7 @@ import { and, eq, inArray } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
 import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
+import { kickForDriveMembershipRevocation } from '../permissions/revocation-kick';
 
 export type DriveDeletionChoice =
   | { driveId: string; action: 'transfer'; toUserId: string }
@@ -102,13 +103,28 @@ export type DeleteOrganizationResult =
   | { ok: false; status: 403; reason: 'not_owner' }
   | { ok: false; status: 400; reason: Exclude<OrgDeletionRefusal, 'not_owner'>; driveIds: string[] };
 
-export async function deleteOrganization(input: {
-  actorId: string;
-  orgId: string;
-  choices: readonly DriveDeletionChoice[];
-  now: Date;
-}): Promise<DeleteOrganizationResult> {
-  return db.transaction(async (tx) => {
+export interface DeleteOrganizationDeps {
+  /** Drops a former lead's live realtime connection from a drive's rooms; runs only after commit. */
+  kick: (target: { userId: string; driveId: string }) => Promise<void>;
+}
+
+const deleteOrganizationDeps: DeleteOrganizationDeps = {
+  kick: ({ userId, driveId }) => kickForDriveMembershipRevocation({ userId, driveId, reason: 'member_removed' }),
+};
+
+type RevokedLeadRow = { userId: string; driveId: string };
+
+export async function deleteOrganization(
+  input: {
+    actorId: string;
+    orgId: string;
+    choices: readonly DriveDeletionChoice[];
+    now: Date;
+  },
+  deps: DeleteOrganizationDeps = deleteOrganizationDeps,
+): Promise<DeleteOrganizationResult> {
+  const revokedLeads: RevokedLeadRow[] = [];
+  const result = await db.transaction(async (tx): Promise<DeleteOrganizationResult> => {
     const [org] = await tx
       .select({ ownerId: organizations.ownerId })
       .from(organizations)
@@ -153,11 +169,11 @@ export async function deleteOrganization(input: {
       // The former lead's OWNER row would keep them inside a drive that is no longer theirs, and
       // come back with it on restore; drop it as reassignLedOrgDrives does.
       if (before && before.ownerId !== step.ownerId) {
-        await tx.delete(driveMembers).where(and(
+        revokedLeads.push(...(await tx.delete(driveMembers).where(and(
           eq(driveMembers.driveId, step.driveId),
           eq(driveMembers.userId, before.ownerId),
           eq(driveMembers.role, 'OWNER'),
-        ));
+        )).returning({ userId: driveMembers.userId, driveId: driveMembers.driveId })));
       }
     }
 
@@ -173,4 +189,7 @@ export async function deleteOrganization(input: {
     await tx.delete(organizations).where(eq(organizations.id, input.orgId));
     return { ok: true, steps: plan.steps };
   });
+  // Best effort once committed: a failed kick must not report a completed delete as failed.
+  if (result.ok) await Promise.allSettled(revokedLeads.map((row) => deps.kick(row)));
+  return result;
 }

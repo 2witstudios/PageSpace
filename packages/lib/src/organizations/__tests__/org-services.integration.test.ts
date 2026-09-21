@@ -710,6 +710,55 @@ describe('org services (real Postgres)', () => {
       }
     });
 
+    it('ORG-6 the former lead is kicked from each drive\'s realtime rooms only after the delete commits, and a refused delete kicks no one', async () => {
+      const { jono, org } = await seedNorthwind();
+      const priya = await person('Priya Nair');
+      const marcus = await person('Marcus Oyelaran');
+      await addMember(org.id, priya.id, 'ADMIN');
+      await addMember(org.id, marcus.id, 'MEMBER');
+      const product = await seedDrive(priya.id, org.id, { name: 'Product' });
+      const finance = await seedDrive(priya.id, org.id, { name: 'Finance' });
+      const wiki = await seedDrive(jono.id, org.id, { name: 'Wiki' });
+      await ownerRow(product.id, priya.id);
+      await ownerRow(finance.id, priya.id);
+      await ownerRow(wiki.id, jono.id);
+
+      const kicked: { userId: string; driveId: string; rowsAtKick: number }[] = [];
+      const kick = async (target: { userId: string; driveId: string }) => {
+        // Read on another connection: the row is already gone, so the delete has committed.
+        const rows = await db.select().from(driveMembers).where(and(eq(driveMembers.userId, target.userId), eq(driveMembers.driveId, target.driveId)));
+        kicked.push({ ...target, rowsAtKick: rows.length });
+      };
+
+      const refused = await deleteOrganization(
+        { actorId: jono.id, orgId: org.id, choices: [{ driveId: product.id, action: 'trash' }], now: new Date() },
+        { kick },
+      );
+      expect(refused).toMatchObject({ ok: false, reason: 'missing_choice' });
+      expect(kicked).toEqual([]);
+
+      const result = await deleteOrganization(
+        {
+          actorId: jono.id,
+          orgId: org.id,
+          choices: [
+            { driveId: product.id, action: 'transfer', toUserId: marcus.id },
+            { driveId: finance.id, action: 'trash' },
+            { driveId: wiki.id, action: 'trash' },
+          ],
+          now: new Date(),
+        },
+        { kick },
+      );
+      expect(result.ok).toBe(true);
+      expect(kicked.sort((a, b) => a.driveId.localeCompare(b.driveId))).toEqual(
+        [
+          { userId: priya.id, driveId: product.id, rowsAtKick: 0 },
+          { userId: priya.id, driveId: finance.id, rowsAtKick: 0 },
+        ].sort((a, b) => a.driveId.localeCompare(b.driveId)),
+      );
+    });
+
     it('ORG-6 a live drive without a deletion choice refuses the delete and nothing moves', async () => {
       const { jono, org } = await seedNorthwind();
       const priya = await person('Priya Nair');
