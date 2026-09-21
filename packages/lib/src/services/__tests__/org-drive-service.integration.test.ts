@@ -127,7 +127,7 @@ afterAll(async () => {
 });
 
 describe('moveDriveToOrg', () => {
-  it('DRV-2 (partial) moving a drive in keeps its members, roles, pages, envs and publishSubdomain', async () => {
+  it('DRV-2 moving a drive in keeps its members, roles, pages, envs and publishSubdomain', async () => {
     const driveId = await seedPersonalDrive();
     const [role] = await db.insert(driveRoles).values({ driveId, name: 'Editors', permissions: {} }).returning();
     await db.insert(driveMembers).values([
@@ -417,7 +417,7 @@ describe('with the production wiring (requireOrgRole, syncDriveOrgMembership, de
     expect(await rowsOf(driveId)).not.toContainEqual([marcus, 'org']);
   });
 
-  it('D-OW-7 deleting the lead\'s account does not cascade the org drive: the org Owner becomes its lead', async () => {
+  it('DRV-1 D-OW-7 deleting the lead\'s account does not cascade the org drive: the org Owner becomes its lead', async () => {
     const driveId = await productInNorthwind();
 
     await accountRepository.deleteUser(marcus);

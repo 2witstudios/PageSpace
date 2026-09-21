@@ -24,12 +24,6 @@
 AUD-1
 AUD-2
 AUD-3
-# DRV-1 (org-owned drives; Home drives never can; the human drive lead keeps the Owner role) re-added
-# per reviews 5230157358 and 5230240628 on #2659: the B1 tests prove orgId, the Home CHECK and
-# RESTRICT on org delete, so they are titled "DRV-1 (partial)"; the lead keeping the Owner role
-# through move-in and account deletion is unproven until B5/B6.
-DRV-1
-DRV-2
 DRV-3
 # DRV-5 (Open: every org member resolves as an implicit member with the drive's default role; sidebar,
 # picker and accessible-drives include it): B4's org-membership-sync tests prove the materialized rows

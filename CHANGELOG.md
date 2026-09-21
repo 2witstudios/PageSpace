@@ -567,6 +567,12 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **A page share that has expired no longer lists its drive** — when someone shared a single page
+  with you for a limited time, the share stopped opening the page once it expired, but the drive
+  it lived in stayed in your drive picker and sidebar, where it opened to nothing. An expired
+  share now lists nothing, just as it opens nothing, so that drive disappears from your list
+  unless you still have another way in.
+
 - **Sign-in emails no longer lock you out of your own account** — every email PageSpace sends to
   the same address (a sign-in link, an invite, a notification) shared one rate-limit bucket capped
   at 3 per hour, and a failed send still used up one of those 3 — so a couple of sign-in attempts,
