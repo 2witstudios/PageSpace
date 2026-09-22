@@ -9,6 +9,13 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Agents can use a real browser (where an operator enables it)** — an agent with its sandbox
+  turned on can open public web pages, read them, click, type and fill in forms, take screenshots
+  and manage tabs in a browser that runs separately from its sandbox. The agent gets only those
+  actions: it cannot run scripts in the page or read cookies or stored data, and private or
+  internal addresses are refused. Browser time is billed like sandbox time. Off unless the server
+  is configured for it.
+
 - **Ask a detached side question with `/btw`** — while an agent is working, type `/btw` followed by a question to get a separate, temporary answer from the completed conversation context. It never interrupts the active run or becomes part of the chat history.
 
 - **Sign-up says where AI content goes** — the consent line on every sign-up screen now says AI

@@ -13,6 +13,7 @@ COPY package.json bun.lock ./
 COPY packages/db/package.json ./packages/db/
 COPY packages/lib/package.json ./packages/lib/
 COPY packages/editor/package.json ./packages/editor/
+COPY packages/browser-worker/package.json ./packages/browser-worker/
 COPY packages/sdk/package.json ./packages/sdk/
 COPY packages/cli/package.json ./packages/cli/
 COPY apps/admin/package.json ./apps/admin/
@@ -52,6 +53,7 @@ COPY --from=builder /app/package.json /app/bun.lock ./
 COPY --from=builder /app/packages/db/package.json ./packages/db/
 COPY --from=builder /app/packages/lib/package.json ./packages/lib/
 COPY --from=builder /app/packages/editor/package.json ./packages/editor/
+COPY --from=builder /app/packages/browser-worker/package.json ./packages/browser-worker/
 COPY --from=builder /app/packages/sdk/package.json ./packages/sdk/
 COPY --from=builder /app/packages/cli/package.json ./packages/cli/
 COPY --from=builder /app/apps/admin/package.json ./apps/admin/

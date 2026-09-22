@@ -14,7 +14,7 @@ import { WELL_KNOWN_REWRITES } from "./src/lib/well-known/rewrites";
 //
 // One list drives the dist check, the transpilePackages fallback and the
 // externals predicate below, so a new workspace package is one edit here.
-const WORKSPACE_PACKAGES = ["db", "lib", "editor"] as const;
+const WORKSPACE_PACKAGES = ["db", "lib", "editor", "browser-worker"] as const;
 const workspaceDistReady =
   process.env.NODE_ENV === "production" &&
   WORKSPACE_PACKAGES.every((pkg) =>

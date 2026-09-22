@@ -102,6 +102,16 @@ const PENDING_RICH_RENDERERS = new Set<string>([
   'writeFile',
   'readFile',
   'editFile',
+  // browser family (createBrowserTools, G6a). Their live view is the browser
+  // pane the human-control work (G6b) builds; a per-call card before that pane
+  // exists would be a second, weaker view of the same page. Screenshots reach
+  // the model as image parts, not as a payload to render.
+  'browser_navigate',
+  'browser_click',
+  'browser_type',
+  'browser_read',
+  'browser_screenshot',
+  'browser_tabs',
 ]);
 
 describe('tool renderer coverage', () => {

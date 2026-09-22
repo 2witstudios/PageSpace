@@ -99,10 +99,22 @@ describe('tool registry — internal consistency', () => {
 
 /**
  * Tools declared in a `*-tools.ts` module that are deliberately NOT part of
- * `pageSpaceTools`. `ask_user` is the only one: it is attached by the chat
- * route to the one turn that can answer it, never to the registry.
+ * `pageSpaceTools` as this test builds it. `ask_user` is attached by the chat
+ * route to the one turn that can answer it, never to the registry. The
+ * browser tools (G6a) are registered only on a server with a browser
+ * substrate and control key configured (`browser-tools-runtime.ts`), and this
+ * test's environment configures none — `ai-tools.test.ts` covers the
+ * configured registration through the injected factory.
  */
-const DECLARED_BUT_NOT_REGISTERED = new Set(['ask_user']);
+const DECLARED_BUT_NOT_REGISTERED = new Set([
+  'ask_user',
+  'browser_navigate',
+  'browser_click',
+  'browser_type',
+  'browser_read',
+  'browser_screenshot',
+  'browser_tabs',
+]);
 
 describe('every declared tool is registered', () => {
   it('a `name: tool(` in any *-tools.ts module is a key of the full registry, or ledgered here', () => {
