@@ -146,6 +146,13 @@ vi.mock('@/lib/repositories/message-repository', () => ({
   },
 }));
 
+// Every run that does NOT bind a session conversation mints a plain page
+// conversation here, so the run's messages have a real parent row (#2686).
+const { mockCreateConversation } = vi.hoisted(() => ({ mockCreateConversation: vi.fn() }));
+vi.mock('@/lib/repositories/conversation-repository', () => ({
+  conversationRepository: { createConversation: mockCreateConversation },
+}));
+
 vi.mock('@/lib/ai/core/integration-tool-resolver', () => ({
   resolvePageAgentIntegrationTools: mockResolvePageAgentIntegrationTools,
 }));
@@ -169,6 +176,7 @@ import { executeWorkflow, type WorkflowExecutionInput } from '../workflow-execut
 import { generateText } from 'ai';
 import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
 import { messageRepository } from '@/lib/repositories/message-repository';
+import { createId } from '@paralleldrive/cuid2';
 
 const createInputFixture = (overrides: Partial<WorkflowExecutionInput> = {}): WorkflowExecutionInput => ({
   workflowId: 'wf_1',
@@ -229,6 +237,7 @@ describe('executeWorkflow', () => {
     // (spawn refused ⇒ the executor degrades to running without sandbox tools).
     mockSpawnSession.mockResolvedValue({ ok: false, reason: 'spawn_failed' });
     mockCreateConversationInSession.mockResolvedValue(undefined);
+    mockCreateConversation.mockResolvedValue('created');
     mockEndSession.mockResolvedValue({ ok: true });
     vi.mocked(isProviderError).mockReturnValue(false);
     vi.mocked(createAIProvider).mockResolvedValue(mockProviderResult as never);
@@ -584,6 +593,109 @@ describe('executeWorkflow', () => {
     });
   });
 
+  describe('every run persists into a REAL conversation (#2686)', () => {
+    // Distinct ids per createId call, so the assertions can tell the
+    // conversation id apart from the message ids.
+    beforeEach(() => {
+      let n = 0;
+      vi.mocked(createId).mockImplementation(() => `cuid${++n}`);
+    });
+
+    function savedConversationIds(): unknown[] {
+      return vi.mocked(messageRepository.savePageMessage).mock.calls.map(
+        ([args]) => (args as { conversationId: string }).conversationId,
+      );
+    }
+
+    test('sandbox OFF: mints a page conversation for the agent and saves both messages into it', async () => {
+      setupSelectChain(
+        [{ ...mockAgent, sandboxEnabled: false, enabledTools: ['list_pages'] }],
+        [mockDrive],
+      );
+
+      const result = await executeWorkflow(createInputFixture());
+
+      expect(result.success).toBe(true);
+      expect(mockCreateConversation).toHaveBeenCalledTimes(1);
+      const [conversationId, userId, pageId, opts] = mockCreateConversation.mock.calls[0];
+      expect(userId).toBe('user_123');
+      expect(pageId).toBe('agent_1');
+      expect(opts).toEqual({ title: 'Workflow: Test Workflow' });
+      expect(conversationId).not.toMatch(/^workflow-/);
+      expect(savedConversationIds()).toEqual([conversationId, conversationId]);
+      expect(result.conversationId).toBe(conversationId);
+      const genCall = vi.mocked(generateText).mock.calls[0][0] as Record<string, unknown>;
+      expect((genCall.experimental_context as { conversationId: string }).conversationId).toBe(conversationId);
+      // The row exists BEFORE the model (and therefore any tool) runs.
+      expect(mockCreateConversation.mock.invocationCallOrder[0])
+        .toBeLessThan(vi.mocked(generateText).mock.invocationCallOrder[0]);
+    });
+
+    test('sandbox ON but spawn refused: still mints a plain conversation', async () => {
+      mockSpawnSession.mockResolvedValue({ ok: false, reason: 'session_limit_reached' });
+      setupSelectChain(
+        [{ ...mockAgent, sandboxEnabled: true, enabledTools: ['list_pages', 'bash'] }],
+        [mockDrive],
+      );
+
+      const result = await executeWorkflow(createInputFixture());
+
+      expect(result.success).toBe(true);
+      expect(mockCreateConversation).toHaveBeenCalledTimes(1);
+      const conversationId = mockCreateConversation.mock.calls[0][0];
+      expect(savedConversationIds()).toEqual([conversationId, conversationId]);
+    });
+
+    test('sandbox ON with a bound session: messages land in the BOUND conversation, no second row is minted', async () => {
+      mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'wf-ses-bound' } });
+      setupSelectChain(
+        [{ ...mockAgent, sandboxEnabled: true, enabledTools: ['list_pages', 'bash'] }],
+        [mockDrive],
+      );
+
+      const result = await executeWorkflow(createInputFixture());
+
+      expect(result.success).toBe(true);
+      expect(mockCreateConversation).not.toHaveBeenCalled();
+      const bound = (mockCreateConversationInSession.mock.calls[0][0] as { conversationId: string }).conversationId;
+      expect(savedConversationIds()).toEqual([bound, bound]);
+      expect(result.conversationId).toBe(bound);
+    });
+
+    test('generation throws: the user prompt is already saved, so the conversation is not left empty', async () => {
+      vi.mocked(generateText).mockRejectedValue(new Error('provider 503'));
+      setupSelectChain(
+        [{ ...mockAgent, sandboxEnabled: false, enabledTools: ['list_pages'] }],
+        [mockDrive],
+      );
+
+      const result = await executeWorkflow(createInputFixture());
+
+      expect(result.success).toBe(false);
+      const conversationId = mockCreateConversation.mock.calls[0][0];
+      const saves = vi.mocked(messageRepository.savePageMessage).mock.calls;
+      expect(saves).toHaveLength(1);
+      expect(saves[0][0]).toMatchObject({ conversationId, role: 'user', content: 'Generate a report' });
+      expect(vi.mocked(messageRepository.savePageMessage).mock.invocationCallOrder[0])
+        .toBeLessThan(vi.mocked(generateText).mock.invocationCallOrder[0]);
+    });
+
+    test('a conversation that could not be created fails the run BEFORE the model runs', async () => {
+      mockCreateConversation.mockResolvedValue('message_owner_conflict');
+      setupSelectChain(
+        [{ ...mockAgent, sandboxEnabled: false, enabledTools: ['list_pages'] }],
+        [mockDrive],
+      );
+
+      const result = await executeWorkflow(createInputFixture());
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('message_owner_conflict');
+      expect(generateText).not.toHaveBeenCalled();
+      expect(messageRepository.savePageMessage).not.toHaveBeenCalled();
+    });
+  });
+
   test('merges granted integration tools for workflow agents', async () => {
     setupSelectChain(
       [{ ...mockAgent, enabledTools: [] }],
@@ -882,6 +994,7 @@ describe('executeWorkflow — explicit step chains', () => {
     // (spawn refused ⇒ the executor degrades to running without sandbox tools).
     mockSpawnSession.mockResolvedValue({ ok: false, reason: 'spawn_failed' });
     mockCreateConversationInSession.mockResolvedValue(undefined);
+    mockCreateConversation.mockResolvedValue('created');
     mockEndSession.mockResolvedValue({ ok: true });
     vi.mocked(isProviderError).mockReturnValue(false);
     vi.mocked(createAIProvider).mockResolvedValue(mockProviderResult as never);
