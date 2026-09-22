@@ -770,6 +770,91 @@ describe('executeWorkflow', () => {
     expect(result.success).toBe(true);
     expect(result.finalizeError).toBe('connection terminated');
   });
+
+  // ==========================================================================
+  // Admission hook: the caller's credit gate runs INSIDE the claim, so only the
+  // fire that holds the running claim can be refused and record the refusal —
+  // an overlapping fire loses the claim first and never reaches the gate.
+  // ==========================================================================
+
+  describe('admit hook', () => {
+    test('runs after the running claim and before any model is built', async () => {
+      setupSelectChain([mockAgent], [mockDrive]);
+      const admit = vi.fn().mockResolvedValue({ admitted: true, release: vi.fn() });
+
+      await executeWorkflow(createInputFixture(), { admit });
+
+      expect(admit).toHaveBeenCalledTimes(1);
+      expect(mockInsertReturning.mock.invocationCallOrder[0]).toBeLessThan(admit.mock.invocationCallOrder[0]);
+      expect(admit.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(createAIProvider).mock.invocationCallOrder[0]);
+    });
+
+    test('is never consulted when the claim is lost to an in-flight run', async () => {
+      mockInsertReturning.mockResolvedValueOnce([]);
+      const admit = vi.fn();
+
+      const result = await executeWorkflow(createInputFixture(), { admit });
+
+      expect(result.claimConflict).toBe(true);
+      expect(admit).not.toHaveBeenCalled();
+    });
+
+    test('a refusal runs no model and finalizes the claimed run as cancelled with the reason', async () => {
+      setupSelectChain([mockAgent], [mockDrive]);
+      const admit = vi.fn().mockResolvedValue({ admitted: false, error: 'AI credit gate denied: out_of_credits' });
+
+      const result = await executeWorkflow(createInputFixture(), { admit });
+
+      expect(result).toEqual(expect.objectContaining({
+        success: false,
+        skipped: true,
+        error: 'AI credit gate denied: out_of_credits',
+        runId: 'run_1',
+      }));
+      expect(createAIProvider).not.toHaveBeenCalled();
+      expect(generateText).not.toHaveBeenCalled();
+      expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({
+        status: 'cancelled',
+        error: 'AI credit gate denied: out_of_credits',
+      }));
+    });
+
+    test('an admitted run releases exactly once, after the model call settles', async () => {
+      setupSelectChain([mockAgent], [mockDrive]);
+      const release = vi.fn();
+
+      const result = await executeWorkflow(createInputFixture(), {
+        admit: vi.fn().mockResolvedValue({ admitted: true, release }),
+      });
+
+      expect(result.success).toBe(true);
+      expect(release).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(generateText).mock.invocationCallOrder[0]).toBeLessThan(release.mock.invocationCallOrder[0]);
+    });
+
+    test('an admitted run releases when the run fails', async () => {
+      setupSelectChain([mockAgent], [mockDrive]);
+      vi.mocked(generateText).mockRejectedValue(new Error('Agent crashed'));
+      const release = vi.fn();
+
+      await executeWorkflow(createInputFixture(), { admit: vi.fn().mockResolvedValue({ admitted: true, release }) });
+
+      expect(release).toHaveBeenCalledTimes(1);
+    });
+
+    test('a throwing gate fails the run (finalized, not left running) and runs no model', async () => {
+      setupSelectChain([mockAgent], [mockDrive]);
+
+      const result = await executeWorkflow(createInputFixture(), {
+        admit: vi.fn().mockRejectedValue(new Error('gate db down')),
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('gate db down');
+      expect(createAIProvider).not.toHaveBeenCalled();
+      expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({ status: 'error', error: 'gate db down' }));
+    });
+  });
 });
 
 describe('executeWorkflow — explicit step chains', () => {
