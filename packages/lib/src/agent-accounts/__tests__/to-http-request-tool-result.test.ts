@@ -53,4 +53,19 @@ describe('toHttpRequestToolResult', () => {
     ];
     expect(actual).toEqual(expected);
   });
+
+  it('given request headers the canonical request did not carry, should name them so the model knows they were not sent', () => {
+    const verdict = toHttpRequestToolResult({ accountId: 'acct_1', result: { ok: true, response: released }, droppedHeaders: ['x-trace', 'x-github-api-version'] });
+    const actual = 'droppedHeaders' in verdict ? verdict.droppedHeaders : null;
+    const expected = ['x-github-api-version', 'x-trace'];
+    expect(actual).toEqual(expected);
+  });
+
+  it('given no dropped headers, should add no droppedHeaders field', () => {
+    const verdict = toHttpRequestToolResult({ accountId: 'acct_1', result: { ok: true, response: released }, droppedHeaders: [] });
+    const actual = 'droppedHeaders' in verdict;
+    const expected = false;
+    expect(actual).toEqual(expected);
+  });
 });
+
