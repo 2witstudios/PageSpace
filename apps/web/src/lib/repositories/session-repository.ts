@@ -94,7 +94,7 @@ export const sessionRepository = {
    *    (`users.tokenVersion` still equals the version on the caller's token);
    *  - the agent holds fewer than `maxLiveKeys` live keys.
    *
-   * Both run under `SELECT … FOR UPDATE` on the agent's `users` row — the row
+   * Both run under `SELECT … FOR NO KEY UPDATE` on the agent's `users` row — the row
    * `killAgentCredentials` updates when it revokes. So a revoke that commits
    * first makes this refuse, and a revoke that arrives while this holds the
    * lock waits and then revokes the key this inserted. Concurrent mints for
@@ -109,7 +109,10 @@ export const sessionRepository = {
         .select({ tokenVersion: users.tokenVersion })
         .from(users)
         .where(eq(users.id, data.userId))
-        .for('update');
+        // NO KEY UPDATE: conflicts with the revoke's tokenVersion UPDATE (the
+        // serialisation this needs) but not with FK KEY SHARE locks, so inserts
+        // elsewhere that reference this user are not blocked by a mint.
+        .for('no key update');
       if (!user || user.tokenVersion !== guard.expectedTokenVersion) {
         return { ok: false, reason: 'credentials_revoked' } as const;
       }

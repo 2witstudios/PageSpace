@@ -132,6 +132,20 @@ describe('POST /api/auth/mcp-tokens — agent bearer path', () => {
     });
   });
 
+  describe('the session path is untouched by the agent guard', () => {
+    it('given a session caller, should mint through the plain path with no cap, rate limit or credential lookup', async () => {
+      mocks.auth.mockResolvedValue({ userId: 'human-1', tokenType: 'session', tokenVersion: 3, role: 'user' });
+      const response = await POST(new NextRequest('http://localhost/api/auth/mcp-tokens', {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'k' }),
+      }));
+      expect(response.status).toBe(200);
+      expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({ userId: 'human-1' }));
+      expect(mocks.guarded).not.toHaveBeenCalled();
+      expect(mocks.rateLimit).not.toHaveBeenCalled();
+      expect(mocks.issuance).not.toHaveBeenCalled();
+    });
+  });
+
   describe('every other OAuth token keeps the refusal this route has always given a bearer', () => {
     it.each([
       ["the same agent's account token minted for ANOTHER client", { clientId: 'pagespace-cli', accountType: 'agent' }, agentAuth],

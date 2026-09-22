@@ -280,6 +280,11 @@ export type RotateAgentSecretResult =
  * outlives the rotation or revocation meant to stop it.
  */
 async function killAgentCredentials(tx: Tx, userId: string, now: Date): Promise<void> {
+  // ORDER IS LOAD-BEARING: the version bump comes first because it takes the
+  // lock on the users row that an in-flight agent key mint holds
+  // (createAgentMcpTokenGuarded). Waiting here means the key revoke below runs
+  // after that mint commits and so sees — and revokes — the key it inserted.
+  // Revoking keys first would miss it.
   await tx.update(users)
     .set({ tokenVersion: sql`${users.tokenVersion} + 1` })
     .where(eq(users.id, userId));

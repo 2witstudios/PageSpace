@@ -17,6 +17,9 @@ import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
 import { and, eq, inArray, isNull, sql } from '@pagespace/db/operators';
 import { users, mcpTokens } from '@pagespace/db/schema/auth';
+import { agentIdentities } from '@pagespace/db/schema/agent-identities';
+import { rotateAgentSecret } from '@pagespace/lib/services/agent-identities';
+import { hashToken } from '@pagespace/lib/auth/token-utils';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { sessionRepository } from '../session-repository';
@@ -54,6 +57,24 @@ const keyData = (userId: string) => ({
   drives: [],
 });
 
+/**
+ * Resolve once a backend in this database is blocked on a lock while running a
+ * statement against "users" — proof the two sides really overlap (rather than
+ * one simply finishing before the other starts). Scoped to "users" so another
+ * suite's lock wait on a shared CI database cannot satisfy it.
+ */
+async function untilABackendWaitsOnALock(): Promise<void> {
+  for (let i = 0; i < 100; i += 1) {
+    const rows = await db.execute(sql`
+      select 1 from pg_stat_activity
+      where datname = current_database() and wait_event_type = 'Lock' and query ilike '%"users"%'
+      limit 1`);
+    if (rows.rows.length > 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error('no backend ever waited on a lock — the race was not exercised');
+}
+
 async function liveKeyCount(userId: string): Promise<number> {
   const rows = await db.select({ id: mcpTokens.id }).from(mcpTokens)
     .where(and(eq(mcpTokens.userId, userId), isNull(mcpTokens.revokedAt)));
@@ -88,9 +109,29 @@ describe('sessionRepository.createAgentMcpTokenGuarded — real Postgres', () =>
       await tx.update(mcpTokens).set({ revokedAt: new Date() }).where(and(eq(mcpTokens.userId, user.id), isNull(mcpTokens.revokedAt)));
       // A mint authenticated under the OLD version starts now, before the revoke commits.
       mint = sessionRepository.createAgentMcpTokenGuarded(keyData(user.id), { expectedTokenVersion: user.tokenVersion, maxLiveKeys: 20 });
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await untilABackendWaitsOnALock();
     });
     expect(await mint).toEqual({ ok: false, reason: 'credentials_revoked' });
+    expect(await liveKeyCount(user.id)).toBe(0);
+  });
+
+  it('given a mint HOLDING the lock when a rotate-with-revoke arrives, should make the revoke wait and then revoke the new key', async () => {
+    if (!dbAvailable) return;
+    const user = await newUser();
+    await db.insert(agentIdentities).values({ userId: user.id, secretHash: hashToken(`ps_agent_${createId()}`), secretPrefix: 'ps_agent_tes' });
+    let insertedKeyId = '';
+    let rotation: Promise<unknown> | undefined;
+    await db.transaction(async (tx) => {
+      // The guarded mint's own order: lock the users row, then insert.
+      await tx.select({ id: users.id }).from(users).where(eq(users.id, user.id)).for('no key update');
+      const [key] = await tx.insert(mcpTokens).values(keyData(user.id)).returning({ id: mcpTokens.id });
+      insertedKeyId = key.id;
+      rotation = rotateAgentSecret({ userId: user.id, revokeTokens: true });
+      await untilABackendWaitsOnALock();
+    });
+    await rotation;
+    const [row] = await db.select({ revokedAt: mcpTokens.revokedAt }).from(mcpTokens).where(eq(mcpTokens.id, insertedKeyId));
+    expect(row?.revokedAt).toBeInstanceOf(Date);
     expect(await liveKeyCount(user.id)).toBe(0);
   });
 
