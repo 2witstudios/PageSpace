@@ -2110,6 +2110,13 @@
       "breakpoints": true
     },
     {
+      "idx": 303,
+      "version": "7",
+      "when": 1790095779574,
+      "tag": "0300_1_wallets_lock_and_require_wallet_ids",
+      "breakpoints": true
+    },
+    {
       "idx": 301,
       "version": "7",
       "when": 1790031046674,
