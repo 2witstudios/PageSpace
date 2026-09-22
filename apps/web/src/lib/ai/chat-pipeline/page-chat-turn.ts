@@ -53,7 +53,7 @@ import { startChatGeneration } from './start-chat-generation';
 import { takeOverConversationStreams } from '@/lib/ai/core/stream-takeover';
 import { startGenerationExclusive } from '@/lib/ai/core/start-generation-exclusive';
 import { resolveMessageId } from '@/lib/ai/streams/resolveMessageId';
-import { isMCPAuthResult, isServiceAuthResult, isSessionAuthResult, checkMCPPageScope, getAllowedDriveIds, isDriveScopedPrincipal, canPrincipalViewPage, canPrincipalEditPage, type AuthResult } from '@/lib/auth';
+import { isMCPAuthResult, isServiceAuthResult, authSessionIdOf, checkMCPPageScope, getAllowedDriveIds, isDriveScopedPrincipal, canPrincipalViewPage, canPrincipalEditPage, type AuthResult } from '@/lib/auth';
 
 /**
  * Thrown when the conversation was still active at the ownership check far
@@ -100,7 +100,6 @@ import {
   filterToolsForSandboxTier,
   filterToolsForAgentAccounts,
 } from '@/lib/ai/core/tool-filtering';
-import { isAgentAccountsConfigured } from '@/lib/agent-accounts/account-authority-client';
 import { resolveSandboxToolEligibilityForConversation } from '@/lib/ai/core/sandbox-tool-eligibility';
 import { shouldExposeImageGen } from '@/lib/ai/core/image-gen-access';
 import { DEFAULT_IMAGE_MODEL } from '@/lib/ai/core/model-capabilities';
@@ -1259,7 +1258,6 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     const agentEnabledTools = page.enabledTools as string[] | null;
     let filteredTools = filterToolsForAgentAccounts(
       filterToolsForAgentAllowlist(baseToolsWithoutOverrides, agentEnabledTools),
-      isAgentAccountsConfigured(),
     ) as ToolSet;
 
     // Step 3b: the per-agent sandbox switch AND the payer's tier eligibility.
@@ -1886,8 +1884,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
                   agentTitle: page.title,
                 },
                 enabledTools: agentEnabledTools ?? null,
-                // Agent accounts (G2): the person's session id marks this run as live, not unattended.
-                authSessionId: isSessionAuthResult(authResult) ? authResult.sessionId : undefined,
+                authSessionId: authSessionIdOf(authResult),
                 // Bind tool execution to the MCP token's drive scope and RBAC role
                 // so a scoped token cannot reach drives outside its scope — or
                 // exceed its own membership role — via the agent's broader ACL.

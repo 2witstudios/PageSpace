@@ -5,6 +5,7 @@
  * toggles that filter out specific tools based on user settings.
  */
 
+import { isAgentAccountsConfigured } from '@/lib/agent-accounts/agent-accounts-config';
 import { SANDBOX_CORE_TOOL_NAMES } from '../tools/sandbox-tools';
 import { SANDBOX_GIT_TOOL_NAMES } from '../tools/sandbox-git-tools';
 import { parseIntegrationToolName } from '@pagespace/lib/integrations/converter/ai-sdk';
@@ -440,7 +441,7 @@ export function filterToolsForAgentAllowlist<T>(
 /** The agent-account tool, offered only when the deployment configured the credential plane (G2). */
 const AGENT_ACCOUNT_TOOLS = new Set(['http_request']);
 
-export function filterToolsForAgentAccounts<T>(tools: Record<string, T>, configured: boolean): Record<string, T> {
+export function filterToolsForAgentAccounts<T>(tools: Record<string, T>, configured: boolean = isAgentAccountsConfigured()): Record<string, T> {
   if (configured) return tools;
   return Object.fromEntries(Object.entries(tools).filter(([name]) => !AGENT_ACCOUNT_TOOLS.has(name)));
 }

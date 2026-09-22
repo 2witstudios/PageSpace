@@ -14,17 +14,12 @@ import { createAccountAuthority, type AccountAuthority } from '@pagespace/lib/ag
 import { createAgentAccountRepository } from '@pagespace/lib/agent-accounts/agent-account-repository';
 import { createAccountFactsRepository } from '@pagespace/lib/agent-accounts/account-facts-repository';
 import { createPlaneClient, PLANE_SERVICE_SECRET_VAR, PLANE_URL_VAR } from '@pagespace/lib/agent-accounts/plane-client';
+import { isAgentAccountsConfigured, PRESENTER_KEY_ID_ENV } from './agent-accounts-config';
 import { loadAccountAuthorityKeyring } from '@pagespace/lib/auth/account-authority-signing-key';
 import type { PresenterKeyId } from '@pagespace/lib/agent-accounts/grant';
 import { db } from '@pagespace/db/db';
 
-const PRESENTER_KEY_ID_VAR = 'AGENT_ACCOUNTS_PRESENTER_KEY_ID';
-
 let cached: AccountAuthority | null | undefined;
-
-export function isAgentAccountsConfigured(env: Record<string, string | undefined> = process.env): boolean {
-  return [PLANE_URL_VAR, PLANE_SERVICE_SECRET_VAR, PRESENTER_KEY_ID_VAR].every((name) => (env[name]?.trim() ?? '').length > 0) && ((env.ACCOUNT_AUTHORITY_SIGNING_KEY?.trim() ?? '') !== '' || (env.ACCOUNT_AUTHORITY_SIGNING_KEYS?.trim() ?? '') !== '');
-}
 
 export function getAccountAuthority(): AccountAuthority | null {
   if (cached !== undefined) return cached;
@@ -39,7 +34,7 @@ export function getAccountAuthority(): AccountAuthority | null {
       facts: createAccountFactsRepository(),
       plane: createPlaneClient({ baseUrl: process.env[PLANE_URL_VAR]!.trim(), secret: process.env[PLANE_SERVICE_SECRET_VAR]!.trim() }),
       authorityKey: keyring.current,
-      presenterKeyId: process.env[PRESENTER_KEY_ID_VAR]!.trim() as PresenterKeyId,
+      presenterKeyId: process.env[PRESENTER_KEY_ID_ENV]!.trim() as PresenterKeyId,
       registry: [],
       hash: (bytes) => createHash('sha3-256').update(bytes).digest('hex'),
       now: () => Date.now(),
