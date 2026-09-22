@@ -596,3 +596,25 @@ describe('token-endpoint timeout', () => {
     expect(classifyRefreshFailure(error)).toBe('retryable');
   });
 });
+
+describe('token-endpoint timeout does not rely on the fetch honouring AbortSignal', () => {
+  it('times out a fetch that ignores the signal', async () => {
+    const deaf = (() => new Promise<Response>(() => undefined)) as typeof fetch;
+
+    const error = await captureError(
+      refreshWithTokenEndpoint({ tokenEndpoint: TOKEN_ENDPOINT, clientId: 'app_123', refreshToken: 'ps_rt_x' }, { fetch: deaf, timeoutMs: 20 }),
+    );
+
+    expect(isTimeoutError(error)).toBe(true);
+  });
+
+  it('times out a body that never finishes, and reports it as a TimeoutError (not a malformed response)', async () => {
+    const stalledBody = (async () =>
+      new Response(new ReadableStream({ start: () => undefined }), { status: 200, headers: { 'Content-Type': 'application/json' } })) as typeof fetch;
+
+    const error = await captureError(discoverMetadata(BASE_URL, { fetch: stalledBody, timeoutMs: 20 }));
+
+    expect(isTimeoutError(error)).toBe(true);
+    expect(classifyRefreshFailure(error)).toBe('retryable');
+  });
+});

@@ -487,7 +487,9 @@ export class PageSpaceAuth {
             ...toOAuthTokens({ ...tokens, refreshToken: tokens.refreshToken }, issuedAt),
             scope: tokens.scope,
           };
-    const persisted = this.#writeSession(storage, session);
+    // Under the refresh lock: an older sign-in's refresh already in flight
+    // persists first, so this newer sign-in is the record that remains.
+    const persisted = await withSessionLock(this.#lockName, async () => this.#writeSession(storage, session));
     return this.#providerFor(session, storage, persisted);
   }
 
@@ -549,12 +551,19 @@ export class PageSpaceAuth {
     );
   }
 
-  /** Best effort: returns whether the write landed. A provider whose write failed keeps working in memory; only a reload loses it. */
+  /**
+   * Best effort: returns whether the write landed. When it does not, the
+   * now-stale record is removed (a quota error does not block removal): left
+   * in place, it would lead another provider to replay a spent refresh token,
+   * or make this sign-in look replaced by an older one. The writing provider
+   * keeps working in memory; only a reload loses it.
+   */
   #writeSession(storage: AuthStorage, session: StoredSession): boolean {
     try {
       storage.setItem(this.#sessionKey, JSON.stringify(session));
       return true;
     } catch {
+      this.#forget(storage);
       return false;
     }
   }
@@ -619,6 +628,10 @@ export class PageSpaceAuth {
       const tokens = await tokenEndpointRefresh(refreshToken);
       const rotation = fromRotation + 1;
       heldRotation = rotation;
+      // Storage shared without a common lock (another realm) may have gained a
+      // newer sign-in during the network call: never overwrite it.
+      const current = this.#readStoredSession(storage);
+      if (current.kind === 'present' && current.session.lineage !== lineage) return tokens;
       lastWriteLanded = this.#writeSession(storage, {
         v: 1,
         baseUrl: this.baseUrl,

@@ -150,18 +150,27 @@ async function send(url: string, init: RequestInit | undefined, operation: strin
   const fetchImpl = deps.fetch ?? fetch;
   const timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const controller = new AbortController();
-  let timedOut = false;
-  const timer = setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, timeoutMs);
-  try {
+  const timeoutError = () => new TimeoutError(`The PageSpace authorization server did not answer within ${timeoutMs}ms (${operation})`, { operation, timeoutMs });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  // The deadline RACES the whole exchange (headers and body) instead of only
+  // signalling it: a fetch implementation that ignores `signal`, or a body
+  // that never ends, still cannot hold the caller — or the refresh lock — past it.
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(timeoutError());
+    }, timeoutMs);
+  });
+  const exchange = (async (): Promise<Exchange> => {
     const response = await fetchImpl(url, { ...init, signal: controller.signal });
     return { response, json: await readJson(response) };
+  })();
+  // Once the deadline wins, the abandoned exchange may still reject later; that is expected, not unhandled.
+  exchange.catch(() => undefined);
+  try {
+    return await Promise.race([exchange, deadline]);
   } catch (error) {
-    if (timedOut) {
-      throw new TimeoutError(`The PageSpace authorization server did not answer within ${timeoutMs}ms (${operation})`, { operation, timeoutMs });
-    }
+    if (controller.signal.aborted) throw timeoutError();
     throw new NetworkError(`Could not reach the PageSpace authorization server (${operation})`, { cause: error, operation });
   } finally {
     clearTimeout(timer);

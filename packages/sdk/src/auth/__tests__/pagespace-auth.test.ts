@@ -483,7 +483,8 @@ describe('several providers over one stored session', () => {
       harness.advance(900 * 1000);
       await provider.getAccessToken();
 
-      expect(lockNames).toEqual([`pagespace.auth.refresh:${CLIENT_ID}`]);
+      // Once for the sign-in's write, once for the refresh — the same lock serialises both.
+      expect(lockNames).toEqual([`pagespace.auth.refresh:${CLIENT_ID}`, `pagespace.auth.refresh:${CLIENT_ID}`]);
     } finally {
       vi.unstubAllGlobals();
     }
@@ -529,6 +530,7 @@ function rotatingServer() {
   let counter = 0;
   const refreshCalls: string[] = [];
   const revoked: string[] = [];
+  const codes: string[] = [];
   const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
     const body = new URLSearchParams(typeof init?.body === 'string' ? init.body : '');
     if (String(input).endsWith('/revoke')) {
@@ -536,6 +538,7 @@ function rotatingServer() {
       return new Response(null, { status: 200 });
     }
     const grant = body.get('grant_type');
+    if (grant === 'authorization_code') codes.push(body.get('code') ?? '');
     if (grant === 'refresh_token') {
       const token = body.get('refresh_token') ?? '';
       refreshCalls.push(token);
@@ -552,7 +555,7 @@ function rotatingServer() {
       scope: 'profile offline_access',
     });
   }) as typeof fetch;
-  return { fetch: fetchImpl, refreshCalls, revoked };
+  return { fetch: fetchImpl, refreshCalls, revoked, codes };
 }
 
 /** Shares one storage and one clock across several PageSpaceAuth instances (tabs, re-renders). */
@@ -664,6 +667,97 @@ describe('refresh coordination across providers and sign-ins', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it('a sign-in that completes while an older sign-in is refreshing is not overwritten by it', async () => {
+    const server = rotatingServer();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const gatedFetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      if (typeof init?.body === 'string' && init.body.includes('grant_type=refresh_token')) await gate;
+      return server.fetch(input, init);
+    }) as typeof fetch;
+    const world = sharedWorld(gatedFetch);
+    const alice = await world.signIn(world.make(), 'alice');
+
+    world.advance(900 * 1000);
+    const aliceRefresh = alice.getAccessToken();
+    await Promise.resolve();
+    const bobSignIn = world.signIn(world.make(), 'bob');
+    // Let bob's code exchange finish while alice's refresh is still on the wire, so the two writes overlap.
+    while (!server.codes.includes('bob')) await new Promise((resolve) => setTimeout(resolve, 0));
+    for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+    release();
+    await aliceRefresh;
+    const bob = await bobSignIn;
+
+    const restored = world.make().restore();
+    await expect(restored?.getAccessToken()).resolves.toMatch(/^ps_at_bob~/);
+    world.advance(900 * 1000);
+    await expect(bob.getAccessToken()).resolves.toMatch(/^ps_at_bob~/);
+  });
+
+  it('never overwrites a newer sign-in that another realm (no shared lock) wrote while the refresh was on the wire', async () => {
+    vi.stubGlobal('navigator', {});
+    try {
+      const server = rotatingServer();
+      let world!: ReturnType<typeof sharedWorld>;
+      let otherRealmRecord = '';
+      const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+        if (typeof init?.body === 'string' && init.body.includes('grant_type=refresh_token')) {
+          // Another tab, outside this realm's queue, completes a different sign-in meanwhile.
+          const record = JSON.parse(world.storage.getItem(`pagespace.auth.session:${CLIENT_ID}`) ?? '{}') as Record<string, unknown>;
+          otherRealmRecord = JSON.stringify({ ...record, lineage: 'other-realm-sign-in', rotation: 0, accessToken: 'ps_at_other~1', refreshToken: 'ps_rt_other~1' });
+          world.storage.setItem(`pagespace.auth.session:${CLIENT_ID}`, otherRealmRecord);
+        }
+        return server.fetch(input, init);
+      }) as typeof fetch;
+      world = sharedWorld(fetchImpl);
+      const gus = await world.signIn(world.make(), 'gus');
+
+      world.advance(900 * 1000);
+      await gus.getAccessToken();
+
+      expect(world.storage.getItem(`pagespace.auth.session:${CLIENT_ID}`)).toBe(otherRealmRecord);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('when one provider cannot persist its rotation, another provider over the same storage fails closed instead of replaying the spent token', async () => {
+    const server = rotatingServer();
+    const world = sharedWorld(server.fetch);
+    const auth = world.make();
+    const a = await world.signIn(auth, 'carol');
+    const b = auth.restore();
+    world.storage.setItem = () => {
+      throw new Error('QuotaExceededError');
+    };
+
+    world.advance(900 * 1000);
+    await a.getAccessToken();
+    const error = await captureError(async () => b?.getAccessToken());
+
+    expect(isAuthenticationError(error)).toBe(true);
+    expect(server.refreshCalls).toEqual(['ps_rt_carol~1']);
+  });
+
+  it('a new sign-in whose first write fails still works in memory (it is not mistaken for a replaced sign-in)', async () => {
+    const server = rotatingServer();
+    const world = sharedWorld(server.fetch);
+    await world.signIn(world.make(), 'dan');
+    const realSetItem = world.storage.setItem.bind(world.storage);
+    world.storage.setItem = (key, value) => {
+      if (key.startsWith('pagespace.auth.session')) throw new Error('QuotaExceededError');
+      realSetItem(key, value);
+    };
+    const erin = await world.signIn(world.make(), 'erin');
+
+    world.advance(900 * 1000);
+    await expect(erin.getAccessToken()).resolves.toMatch(/^ps_at_erin~/);
+    expect(server.refreshCalls).toEqual(['ps_rt_erin~2']);
   });
 
   it('signOut from ANOTHER instance waits for an in-flight refresh, then revokes the rotated token; the old provider is dead', async () => {
