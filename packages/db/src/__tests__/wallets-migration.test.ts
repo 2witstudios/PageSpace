@@ -352,6 +352,10 @@ describeLive('0298–0302 against a real Postgres', () => {
       const ledgerBefore = await s.query<{ id: string; userId: string }>(`SELECT "id", "userId" FROM "credit_ledger" ORDER BY "id"`);
       const holdsBefore = await s.query<{ id: string; userId: string }>(`SELECT "id", "userId" FROM "credit_holds" ORDER BY "id"`);
 
+      // "In place": the relation that holds the balances is the SAME relation afterwards (a
+      // rename keeps its OID; a copy into a new table and a drop would not).
+      const [{ oid: balancesOid }] = await s.query<{ oid: number }>(`SELECT 'credit_balances'::regclass::oid::int AS oid`);
+
       // The expand step first, then a DRY RUN of the backfill: it names the work and writes nothing.
       await s.migrate(throughExpand);
       const expanded = await fullSnapshot(s);
@@ -365,6 +369,8 @@ describeLive('0298–0302 against a real Postgres', () => {
       // One balance store: credit_balances no longer exists.
       const gone = await s.query<{ present: boolean }>(`SELECT to_regclass('public.credit_balances') IS NOT NULL AS present`);
       expect(gone[0].present).toBe(false);
+      const [{ oid: walletsOid }] = await s.query<{ oid: number }>(`SELECT 'wallets'::regclass::oid::int AS oid`);
+      expect(walletsOid).toBe(balancesOid);
 
       // Row count equality: exactly one personal root wallet per former credit_balances row.
       const counts = await s.query<{ wallets: number; roots: number; distinctUsers: number }>(`
@@ -547,6 +553,25 @@ describeLive('0298–0302 against a real Postgres', () => {
       await s.migrate(throughThisChange);
       const nulls = await s.query<{ n: number }>(`SELECT count(*)::int AS n FROM "credit_ledger" WHERE "walletId" IS NULL`);
       expect(nulls[0].n).toBe(0);
+    } finally {
+      await s.pool.end();
+    }
+  }, 180_000);
+
+  it('X-5 (partial): the backfill runner refuses to commit a run that would move money, and writes nothing', async () => {
+    const s = await openScenario('refuse');
+    try {
+      await seedCorpus(s);
+      await s.migrate(throughExpand);
+      const untouched = await fullSnapshot(s);
+
+      // The real 0301 statements plus one that moves a cent: the whole run must roll back.
+      const moving = [...walletBackfillStatements(MIGRATIONS_DIR), `UPDATE "wallets" SET "topupRemainingCents" = "topupRemainingCents" + 1 WHERE "userId" = 'u_paid'`];
+      await expect(
+        withClient(s.pool, (c) => runWalletBackfill(c, { dryRun: false, statements: moving })),
+      ).rejects.toThrow(/would move money; rolled back \(topupRemainingCents: \d+ -> \d+\)/);
+
+      expect(await fullSnapshot(s)).toBe(untouched);
     } finally {
       await s.pool.end();
     }
