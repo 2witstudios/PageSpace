@@ -45,7 +45,13 @@ export type { ParsedVersion } from './version.js';
 export type { AuthProvider } from './auth/provider.js';
 export { StaticTokenProvider } from './auth/static.js';
 export { OAuthTokenProvider } from './auth/oauth.js';
-export type { OAuthTokenProviderOptions, OAuthTokens, RefreshAccessToken } from './auth/oauth.js';
+export type {
+  InjectedRefreshProviderOptions,
+  OAuthTokenProviderOptions,
+  OAuthTokens,
+  RefreshAccessToken,
+  TokenEndpointProviderOptions,
+} from './auth/oauth.js';
 
 // PKCE (RFC 7636) — client-side math for the authorization-code + PKCE flow.
 // Consumed by `pagespace login` (packages/cli/src/auth/loopback-flow.ts) so
@@ -92,6 +98,17 @@ export type {
   TokenEndpointRefreshOptions,
   TokenResponse,
 } from './auth/token-endpoint.js';
+export {
+  DEFAULT_SIGN_IN_SCOPE,
+  isAcceptableBaseUrl,
+  isPageSpaceConfigError,
+  isSignInError,
+  PageSpaceAuth,
+  PageSpaceConfigError,
+  PENDING_SIGN_IN_TTL_MS,
+  SignInError,
+} from './auth/pagespace-auth.js';
+export type { AuthStorage, PageSpaceAuthOptions, SignInErrorReason, SignInOptions } from './auth/pagespace-auth.js';
 export { classifyRefreshFailure } from './auth/decide.js';
 export type { RefreshFailureClassification } from './auth/decide.js';
 

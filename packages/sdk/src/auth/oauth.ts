@@ -3,11 +3,11 @@
  *
  * Pure core (decide.ts) + I/O edges (clock, and the refresh HTTP call
  * itself) constructor-injected — the "pure core, I/O edges" design law for
- * this phase. `refreshAccessToken` is the injection point for task 3's
- * transport against the token endpoint (form-encoded per Phase 1); this
- * module deliberately contains no bespoke fetch of its own; the
- * PageSpaceClient facade (task 6) wires the real transport in once it
- * exists.
+ * this phase. `refreshAccessToken` is the injection point for the refresh
+ * transport; omit it and pass `tokenEndpoint` + `clientId` instead to get
+ * the SDK's own form-encoded refresh_token grant (`token-endpoint.ts`,
+ * Phase 3 of Sign in with PageSpace). This module still contains no fetch of
+ * its own.
  *
  * Tokens live in a private class field only. Errors thrown by this class
  * never embed a token value, and the class has no enumerable fields, so
@@ -17,6 +17,7 @@
 import { AuthenticationError } from '../errors.js';
 import { classifyRefreshFailure, decideTokenAction, type OAuthTokenState } from './decide.js';
 import type { AuthProvider } from './provider.js';
+import { createTokenEndpointRefresh } from './token-endpoint.js';
 
 /** The opaque ps_at_* / ps_rt_* pair per ADR 0003 §3.1, plus their absolute expiries. */
 export interface OAuthTokens {
@@ -44,9 +45,8 @@ export interface OAuthTokens {
  */
 export type RefreshAccessToken = (refreshToken: string) => Promise<OAuthTokens>;
 
-export interface OAuthTokenProviderOptions {
+interface OAuthTokenProviderBaseOptions {
   initialTokens: OAuthTokens;
-  refreshAccessToken: RefreshAccessToken;
   /** Injected clock; defaults to Date.now. */
   now?: () => number;
   /** Proactive-refresh skew window in ms; defaults to 60_000 per ADR 0003 §3.2. */
@@ -59,6 +59,38 @@ export interface OAuthTokenProviderOptions {
    * write must land before the token is used.
    */
   onTokensUpdated?: (tokens: OAuthTokens) => void | Promise<void>;
+}
+
+/** Refresh through a caller-supplied transport (the historical shape). */
+export interface InjectedRefreshProviderOptions extends OAuthTokenProviderBaseOptions {
+  refreshAccessToken: RefreshAccessToken;
+}
+
+/**
+ * Refresh through PageSpace's own token endpoint (`refreshWithTokenEndpoint`,
+ * token-endpoint.ts) — the default a sign-in hands back, so an app never has
+ * to write the refresh call itself.
+ */
+export interface TokenEndpointProviderOptions extends OAuthTokenProviderBaseOptions {
+  refreshAccessToken?: undefined;
+  tokenEndpoint: string;
+  clientId: string;
+  /** Defaults to the global `fetch`. */
+  fetch?: typeof fetch;
+}
+
+export type OAuthTokenProviderOptions = InjectedRefreshProviderOptions | TokenEndpointProviderOptions;
+
+function resolveRefresh(options: OAuthTokenProviderOptions): RefreshAccessToken {
+  if (options.refreshAccessToken !== undefined) {
+    return options.refreshAccessToken;
+  }
+  return createTokenEndpointRefresh({
+    tokenEndpoint: options.tokenEndpoint,
+    clientId: options.clientId,
+    fetch: options.fetch,
+    now: options.now,
+  });
 }
 
 const DEFAULT_SKEW_MS = 60_000;
@@ -76,7 +108,7 @@ export class OAuthTokenProvider implements AuthProvider {
 
   constructor(options: OAuthTokenProviderOptions) {
     this.#tokens = options.initialTokens;
-    this.#refreshAccessToken = options.refreshAccessToken;
+    this.#refreshAccessToken = resolveRefresh(options);
     this.#now = options.now ?? Date.now;
     this.#skewMs = options.skewMs ?? DEFAULT_SKEW_MS;
     this.#onTokensUpdated = options.onTokensUpdated;
