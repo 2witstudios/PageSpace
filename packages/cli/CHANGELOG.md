@@ -2,6 +2,22 @@
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.12.0] — 2026-09-22
+
+### Changed
+
+- **Login, refresh and logout run on `@pagespace/sdk`'s token-endpoint calls.** `pagespace login`,
+  `login --device`, `keys`, `whoami` and `logout` used to carry their own copies of discovery, the
+  code exchange, the refresh grant and revocation; they now call the same functions every app
+  that signs in with PageSpace uses (SDK 2.6.0), so the wire protocol has one implementation.
+  Behaviour is unchanged; every existing CLI test passes untouched. Two edge cases now read
+  differently: a server error code outside the OAuth standard is reported as `http_<status>`
+  instead of being echoed, and a malformed refresh answer is a response-validation error instead
+  of an `HTTP 200` error — both still mean "log in again".
+- **`pagespace whoami` asks who you are through `client.auth.me()`**, the SDK's `auth.me`
+  operation, instead of a private copy of it.
+- Requires `@pagespace/sdk` 2.6.0.
+
 ## [1.11.0] — 2026-09-16
 
 ### Added

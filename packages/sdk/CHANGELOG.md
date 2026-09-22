@@ -2,6 +2,50 @@
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.6.0] — 2026-09-22
+
+### Added
+
+- **Sign in with PageSpace.** An app can now sign a PageSpace user in and act as them without
+  holding a key — OAuth 2.1 authorization code + PKCE as a public client, no secret anywhere.
+  `PageSpaceAuth` runs the browser flow: `signInWithRedirect()` keeps the PKCE verifier and a
+  one-time `state` in `sessionStorage` (or storage you pass) and sends the browser to PageSpace;
+  `handleRedirectCallback(url)` checks the `state` before anything else, exchanges the code and
+  returns an `OAuthTokenProvider` that refreshes itself; `restore()` brings the session back after
+  a reload; `signOut()` revokes it. A callback URL can be redeemed once, a pending sign-in expires
+  after 10 minutes, and failures are typed (`SignInError` with a `reason`, e.g.
+  `authorizationError: 'access_denied'` when the user declines). The default scope is
+  `profile offline_access`.
+- **`client.auth.me()`** — who signed in: `{ id, name, email, image }` for an app holding the new
+  `profile` scope, plus `role`, `emailVerified` and `subscriptionTier` for a session or first-party
+  client. `RequiredScope` gains `'profile'`.
+- **`PageSpaceClient.fromEnvironment()`** — zero-config sign-in for an app hosted in a PageSpace
+  environment: reads `PAGESPACE_URL` and `PAGESPACE_CLIENT_ID` (or the `env` you pass) and uses the
+  page origin + `/auth/pagespace/callback` (`PAGESPACE_CALLBACK_PATH`) as the redirect. A missing
+  variable throws a `PageSpaceConfigError` naming it, before any request.
+- **The token-endpoint calls, exported individually** for servers, native apps and custom flows:
+  `buildAuthorizeUrl`, `parseCallback` (never throws; compares `state` first), `discoverMetadata`,
+  `exchangeAuthorizationCode`, `refreshWithTokenEndpoint` / `createTokenEndpointRefresh`,
+  `revokeToken` (a result, never a throw), `parseTokenResponse`, `readOAuthErrorCode`,
+  `classifyRefreshFailure`. Every call takes an injected `fetch`, sends form-encoded bodies,
+  validates every response with zod, and classifies failures the ADR 0003 way (network, 429 and
+  5xx retryable; a definitive 4xx or a malformed body terminal). Browser-safe: no Node APIs.
+- **`OAuthTokenProvider` refreshes on its own.** Pass `{ tokenEndpoint, clientId }` instead of a
+  `refreshAccessToken` function and it uses PageSpace's token endpoint. Passing your own
+  `refreshAccessToken` works exactly as before.
+
+### Security
+
+- No token, code or verifier ever appears in an error message or a log line from these paths: a
+  server's `error` field is only carried when it is a known OAuth error code, so a server echoing
+  a token back cannot route it into your logs through the SDK.
+- An access-only grant (no `offline_access`, so no refresh token) signs in and then fails closed
+  at expiry without a network call.
+
+### Compatibility
+
+- Server API contract 1.4.0 adds `auth.me`; `MIN_SERVER_API_VERSION` stays 1.0.0.
+
 ## [2.5.0] — 2026-09-16
 
 ### Added

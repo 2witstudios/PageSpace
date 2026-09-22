@@ -5,6 +5,12 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
+- **Sign in with PageSpace, for developers** — `@pagespace/sdk` 2.6.0 lets an app sign a PageSpace
+  user in and act as them without ever holding a key: `PageSpaceAuth` runs the browser sign-in,
+  `client.auth.me()` says who signed in, and `PageSpaceClient.fromEnvironment()` needs only the
+  two public values a PageSpace environment provides. Native apps get a four-call guide
+  (`docs/sdk/native-signin.md`). The API contract version is now 1.4.0.
+
 - /btw side questions now work on every chat surface (dashboard assistant, right-sidebar chat, agent console) and /btw appears in the / command picker on all of them.
 
 ### Added

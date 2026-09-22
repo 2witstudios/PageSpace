@@ -21,7 +21,7 @@ It's the same client the [\`pagespace\` CLI](/docs/features/cli) and the \`pages
 npm install @pagespace/sdk
 \`\`\`
 
-ESM only, with a single runtime dependency (\`zod\`). The current version is **2.5.0**.
+ESM only, with a single runtime dependency (\`zod\`). The current version is **2.6.0**.
 
 ## Quickstart
 
@@ -59,21 +59,58 @@ The client takes an \`auth\` provider. There are two.
 new StaticTokenProvider(process.env.PAGESPACE_TOKEN!)
 \`\`\`
 
-**\`OAuthTokenProvider\`** — for apps that log a *user* in and act on their behalf. You give it an initial token pair and a refresh function; it refreshes proactively before expiry and hands you the new pair to persist.
-
-\`\`\`typescript
-import { OAuthTokenProvider } from '@pagespace/sdk';
-
-const auth = new OAuthTokenProvider({
-  initialTokens: { accessToken, accessExpiresAt, refreshToken, refreshExpiresAt },
-  refreshAccessToken: (refreshToken) => exchangeRefreshToken(refreshToken),
-  onTokensUpdated: (tokens) => saveTokens(tokens),
-});
-\`\`\`
-
-Building your own browser-based login? The SDK ships the PKCE helpers too — \`generateCodeVerifier\` and \`deriveCodeChallenge\` (async; it runs on Web Crypto so it works in a browser bundle).
+**\`OAuthTokenProvider\`** — a user's refreshable OAuth credential. You get one from **Sign in with PageSpace** (below); it refreshes itself before the access token expires and hands you each rotated pair to persist.
 
 An \`mcp_\` key works for every namespace except \`client.tokens\`, which manages keys themselves and requires an OAuth token.
+
+## Sign in with PageSpace
+
+Your app can sign a PageSpace user in and act as them — without ever holding a key. The user signs in on PageSpace (Google, Apple, passkey or magic link), sees your app's name and exactly what it asks for, and approves. Your app is a public OAuth client: it has a \`client_id\` and its exact redirect URIs registered with PageSpace, and no secret at all, so there is nothing to leak from a browser bundle, a mobile app, or a repo.
+
+\`\`\`typescript
+import { PAGESPACE_CALLBACK_PATH, PageSpaceAuth, PageSpaceClient } from '@pagespace/sdk';
+
+const auth = new PageSpaceAuth({
+  baseUrl: 'https://pagespace.ai',
+  clientId: 'your-client-id',
+  redirectUri: \`\${location.origin}\${PAGESPACE_CALLBACK_PATH}\`,
+  scope: 'profile offline_access',
+});
+
+// On the callback page, finish the sign-in; anywhere else, pick up the current session.
+const provider =
+  location.pathname === PAGESPACE_CALLBACK_PATH ? await auth.handleRedirectCallback(location.href) : auth.restore();
+
+if (provider === null) {
+  await auth.signInWithRedirect(); // your "Sign in with PageSpace" button
+} else {
+  const client = new PageSpaceClient({ baseUrl: auth.baseUrl, auth: provider });
+  const me = await client.auth.me({});
+}
+\`\`\`
+
+\`signInWithRedirect\` keeps a PKCE verifier and a one-time \`state\` in \`sessionStorage\` and sends the browser to PageSpace. \`handleRedirectCallback\` checks the \`state\` before anything else, exchanges the code, and returns an \`OAuthTokenProvider\` that refreshes through PageSpace's token endpoint. \`restore()\` brings the session back after a reload, and \`signOut()\` revokes it. Failures are typed — \`isSignInError(error) && error.authorizationError === 'access_denied'\` means the user declined — and no token ever appears in an error or a log line.
+
+**Scopes.** Ask for only what you need:
+
+| Scope | Grants |
+|-------|--------|
+| \`profile\` | Who the user is — \`client.auth.me()\` returns \`{ id, name, email, image }\`. No content. A plain Allow. |
+| \`drive:<driveId>:member\` (or \`:admin\`, \`:role:<roleId>\`) | That one drive at that role, and nothing outside it. The user confirms with a step-up check. |
+| \`offline_access\` | A refresh token, so the session outlives the 15-minute access token. |
+
+**Apps built in PageSpace.** An app hosted in a PageSpace environment gets \`PAGESPACE_URL\` and \`PAGESPACE_CLIENT_ID\` in its environment — two public values — and needs no other setup. The redirect URI is the page's own origin plus \`/auth/pagespace/callback\`:
+
+\`\`\`typescript
+import { PageSpaceClient } from '@pagespace/sdk';
+
+const auth = PageSpaceClient.fromEnvironment();
+await auth.signInWithRedirect();
+\`\`\`
+
+**Servers and native apps.** A server-rendered app uses the same building blocks the browser flow is made of — \`buildAuthorizeUrl\`, \`parseCallback\`, \`exchangeAuthorizationCode\`, and \`OAuthTokenProvider\` with PageSpace's token endpoint — keeping the verifier and tokens server-side; the [SDK README](https://github.com/2witstudios/PageSpace/tree/master/packages/sdk#sign-in-with-pagespace) has the full example. A native app needs no SDK: it makes [four HTTP calls](https://github.com/2witstudios/PageSpace/blob/master/docs/sdk/native-signin.md) — discovery, the authorize URL in the system browser with a private-scheme redirect like \`swipesend://callback\`, the code exchange, and refresh.
+
+**Revocation.** The user can disconnect your app at any time from **Settings → Account → Connected Apps**; its next request fails with \`AuthenticationError\`.
 
 ## Resource namespaces
 
@@ -81,6 +118,7 @@ Every operation hangs off a namespace on the client. Inputs and outputs are sche
 
 | Namespace | What it does |
 |-----------|-------------|
+| \`auth\` | \`me\` — the signed-in user's identity |
 | \`drives\` | \`list\`, \`create\`, \`rename\`, \`updateContext\`, \`setHomePage\`, \`trash\`, \`restore\` |
 | \`pages\` | \`list\`, \`listTrash\`, \`create\`, \`details\`, \`rename\`, \`move\`, \`trash\`, \`restore\` — plus content editing: \`read\`, \`replaceLines\`, \`insertLines\`, \`deleteLines\`, \`editCells\` |
 | \`tasks\` | \`create\`, \`update\`, \`delete\`, \`reorder\`, \`getAssigned\`, \`createStatus\`, \`setTrigger\`, \`deleteTrigger\` |
