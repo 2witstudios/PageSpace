@@ -78,7 +78,7 @@ export interface ShellCheckAuthDeps {
    * inside it actually serializes concurrent provisioners.
    */
   ensureSessionSandbox: (input: { workspaceId: string; userId: string }) => Promise<
-    | { ok: true; sandboxId: string }
+    | { ok: true; sandboxId: string; envId: string | null }
     | { ok: false; reason: string }
   >;
   /** Read the resolved Sprite handle — called exactly once, on the cold path only. */
@@ -209,6 +209,7 @@ export function buildShellCheckAuth(deps: ShellCheckAuthDeps): ShellCheckAuthFn 
           shellId: shell.shellId,
           workspaceId: shell.workspaceId,
           sandboxId: ensured.sandboxId,
+          envId: ensured.envId,
           cwd,
           sprite,
           command: spec.command,

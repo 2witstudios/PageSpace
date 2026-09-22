@@ -239,6 +239,17 @@ const DESCRIPTION = z
   .refine((value) => value === value.trim())
   .refine(isSafeDisplayText);
 const HTTPS_URL = z.string().refine(isHttpsUrl);
+
+/**
+ * Whether a string may be stored as a client's consent-screen name — the
+ * `name` rule above, exported so a PLATFORM-provisioned client (the
+ * per-environment client, `services/drive-envs/env-oauth-client.ts`) is held
+ * to exactly the bar a registered third party is, rather than to a second
+ * spelling of it.
+ */
+export function isValidClientName(value: string): boolean {
+  return NAME.safeParse(value).success;
+}
 const REDIRECT_URIS = z.array(z.unknown()).min(1).max(10);
 // There are only six legal shapes, so anything longer is a mistake or an
 // attempt to make the error list itself the payload.

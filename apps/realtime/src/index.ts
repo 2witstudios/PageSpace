@@ -229,7 +229,7 @@ async function resolveDriveEnvPayer(driveId: string) {
  * drive fails closed identically on both tiers.
  */
 async function ensureShellSessionSandbox({ workspaceId, userId }: { workspaceId: string; userId: string }): Promise<
-  { ok: true; sandboxId: string } | { ok: false; reason: string }
+  { ok: true; sandboxId: string; envId: string | null } | { ok: false; reason: string }
 > {
   const store = await dbAgentSessionStorePromise;
   const row = await store.findById(workspaceId);
@@ -335,7 +335,9 @@ async function ensureShellSessionSandbox({ workspaceId, userId }: { workspaceId:
   // dev-server watcher for its HOLDER — the env for an env-bound session.
   void devPreviewRegistry.ensure({ holder: resolveDevPreviewHolder(row) });
 
-  return { ok: true, sandboxId: result.sandboxId };
+  // The env (if any) rides along so the PTY's env can name the env's own
+  // OAuth client — the same `buildSandboxEnv` seam the bash tool feeds.
+  return { ok: true, sandboxId: result.sandboxId, envId: row.envId };
 }
 
 /**

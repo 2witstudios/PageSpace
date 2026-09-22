@@ -6,6 +6,16 @@ import {
 } from '@pagespace/lib/commands/command-core';
 import { getSkillBody } from '../skill-bodies';
 import { WORKSPACE_TOOL_NAMES } from '@/lib/ai/core/ai-tools';
+import { SANDBOX_TOOL_NAMES } from '@/lib/ai/core/tool-filtering';
+
+/**
+ * Every tool a skill may be gated on or may name: the workspace registry plus
+ * the sandbox family (bash / files / git / shells), which `WORKSPACE_TOOL_NAMES`
+ * deliberately excludes (flag-gated, registered separately) but which are the
+ * tools an agent building inside an environment actually holds — and what the
+ * sign-in-with-pagespace skill is gated on.
+ */
+const KNOWN_TOOL_NAMES = new Set([...WORKSPACE_TOOL_NAMES, ...SANDBOX_TOOL_NAMES]);
 
 /**
  * Size guards follow the Agent Skills authoring guidance: a body is a
@@ -31,7 +41,7 @@ describe('skill bodies', () => {
     // the registry lives in packages/lib, which cannot import the apps/web tool
     // registry, so the cross-check has to happen here (same reason as
     // starter-skill-tool-references.test.ts).
-    const known = new Set(WORKSPACE_TOOL_NAMES);
+    const known = KNOWN_TOOL_NAMES;
     const stale = BUILTIN_SKILLS.flatMap((skill) =>
       (skill.requiredTools ?? [])
         .filter((tool) => !known.has(tool))
@@ -48,7 +58,7 @@ describe('skill bodies', () => {
     // FIELD names in the same style, listed here so they are not mistaken
     // for tools (same device as starter-skill-tool-references.test.ts).
     const NOT_TOOLS = new Set(['in_progress', 'in_review', 'due_date']);
-    const known = new Set(WORKSPACE_TOOL_NAMES);
+    const known = KNOWN_TOOL_NAMES;
     const mentioned = [...new Set([...getSkillBody(trigger)!.matchAll(/`([a-z]+(?:_[a-z]+)+)`/g)].map((m) => m[1]))];
     const unknown = mentioned.filter((name) => !known.has(name) && !NOT_TOOLS.has(name));
     expect(unknown, `${trigger} names tools that do not exist: ${unknown.join(', ')}`).toEqual([]);
@@ -87,5 +97,37 @@ describe('skill bodies', () => {
     // ship as an empty instruction pack.
     expect(body.length).toBeGreaterThan(2_000);
     expect(body).toContain('## ');
+  });
+});
+
+describe('the sign-in-with-pagespace body (US7: a deterministic step, never an invented key)', () => {
+  const body = getSkillBody('sign-in-with-pagespace')!;
+
+  it('tells the agent to read the two public values and call fromEnvironment, and names the fixed callback path', () => {
+    expect(body).toContain('PAGESPACE_URL');
+    expect(body).toContain('PAGESPACE_CLIENT_ID');
+    expect(body).toContain('PageSpaceClient.fromEnvironment(');
+    expect(body).toContain('/auth/pagespace/callback');
+    expect(body).toContain('auth.me');
+    expect(body).toContain('prototypes/pagespace-signin-template');
+  });
+
+  it('never suggests minting or pasting an mcp_ key — every mention of one is a prohibition', () => {
+    const lines = body.split('\n').filter((line) => /mcp_/.test(line));
+    expect(lines.length).toBeGreaterThan(0);
+    for (const line of lines) expect(line, line).toMatch(/[Nn]ever|not needed|grep for/);
+    expect(body).not.toMatch(/keys create|--show-token|paste (the|your|an?) (key|token)|MCP_TOKEN|PAGESPACE_TOKEN|PAGESPACE_API_KEY|client_secret|CLIENT_SECRET/);
+  });
+
+  it('carries the two dev-mode traps the Phase 3 smoke recorded, so the next builder does not rediscover them', () => {
+    expect(body).toMatch(/unsafe-eval/);
+    expect(body).toMatch(/onprem/);
+    expect(body).toMatch(/does not hydrate|never hydrates/);
+    expect(body).toMatch(/email/);
+  });
+
+  it('requests drive scope only when the app needs content, and profile by default', () => {
+    expect(body).toContain("scope: 'profile'");
+    expect(body).toMatch(/drive:<driveId>:member[^\n]*ONLY when/);
   });
 });

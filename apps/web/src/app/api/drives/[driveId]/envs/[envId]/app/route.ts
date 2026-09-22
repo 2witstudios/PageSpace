@@ -25,6 +25,7 @@ import {
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { resolveEnvInDrive } from '@/lib/drive-envs/drive-envs-runtime';
+import { syncEnvOAuthClientBestEffort, syncEnvOAuthClientForRemoval } from '@/lib/drive-envs/env-oauth-client-runtime';
 import { createPublishedApp, destroyPublishedApp } from '@pagespace/lib/services/app-hosting/provisioner';
 import { resolvePublishedAppsOrgSlug } from '@pagespace/lib/services/app-hosting/app-hosting-env';
 import { allocateUniqueSubdomainWithRetry, subdomainCollisionPrefix } from '@pagespace/lib/services/subdomain-allocation';
@@ -230,6 +231,11 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
       await snapshot.cleanup();
     }
 
+    // The published origin (<subdomain>.<apex>) joins the env client's redirect
+    // URIs — ADDED beside the preview one, which stays — so the app signs in
+    // after publish exactly as it did in preview (US6).
+    await syncEnvOAuthClientBestEffort({ envId }, { operation: 'publish', publishedAppId: claimedApp.id });
+
     auditRequest(request, {
       eventType: 'data.write',
       userId: auth.userId,
@@ -271,6 +277,13 @@ export async function DELETE(request: Request, context: { params: Promise<{ driv
 
     const app = await findPublishedAppByEnvId(envId);
     if (!app) return NextResponse.json({ error: 'This environment is not published' }, { status: 404 });
+
+    // The published origin leaves the env client's redirect URIs BEFORE the
+    // hosting row and its Fly app go — a removal is never best-effort: if this
+    // write fails the unpublish fails (500) and the caller retries the whole
+    // thing, rather than a torn-down origin staying a valid redirect. The
+    // preview redirect stays — the env still exists and can be published again.
+    await syncEnvOAuthClientForRemoval({ envId }, { unpublish: true });
 
     const result = await destroyPublishedApp(app.id);
     if (!result.ok) {

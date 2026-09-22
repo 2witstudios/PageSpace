@@ -19,6 +19,7 @@
  */
 
 import type { ServerEnv } from '../../config/env-validation';
+import { signInEnvFor } from '../drive-envs/env-oauth-client';
 
 /**
  * The sandbox's OWN environment — values the sandbox defines for itself, with no
@@ -97,6 +98,26 @@ export const SANDBOX_BASE_ENV = {
 type ForwardableEnvKey = Extract<keyof ServerEnv, 'NODE_ENV' | 'SENTRY_DSN' | 'WEB_APP_URL'>;
 
 /**
+ * Which environment (if any) the sandbox belongs to — the ONE fact "Sign in
+ * with PageSpace" needs from the caller (ADR 0004 Decision 12, US6).
+ *
+ * A drive environment hosts an app, and that app signs users in through the
+ * platform-managed OAuth client `env_<envId>` (`drive-envs/env-oauth-client.ts`).
+ * The sandbox is told so through two PUBLIC values: `PAGESPACE_URL` (the host
+ * app's origin, read from the validated `WEB_APP_URL`) and
+ * `PAGESPACE_CLIENT_ID`. Neither is a credential — a public client
+ * authenticates with PKCE, never with an id — which is the whole reason they
+ * may cross this boundary at all; the secret-shape guard below
+ * ({@link findSecretShapedEnvEntries}) is what keeps that sentence true as the
+ * map grows. An ephemeral SESSION sandbox has no env and therefore no client:
+ * it gets the URL only, and `PageSpaceClient.fromEnvironment()` names the
+ * missing variable rather than signing in as nobody.
+ */
+export interface SandboxSignInTarget {
+  envId: string | null;
+}
+
+/**
  * Host env keys actually forwarded verbatim into a sandbox.
  *
  * Deliberately EMPTY: no property of the host process is currently a fact the
@@ -128,6 +149,7 @@ const SANDBOX_ENV_ALLOWLIST: readonly ForwardableEnvKey[] = [];
 export function composeSandboxEnvForTest(
   env: Partial<ServerEnv>,
   allowlist: readonly ForwardableEnvKey[],
+  signIn?: SandboxSignInTarget,
 ): Record<string, string> {
   const forwarded: Record<string, string> = {};
   for (const key of allowlist) {
@@ -136,13 +158,54 @@ export function composeSandboxEnvForTest(
       forwarded[key] = value;
     }
   }
-  // Sandbox-owned values are applied LAST so a forwarded host key can never
-  // shadow one — the sandbox's own identity is not the host's to overwrite.
-  return { ...forwarded, ...SANDBOX_BASE_ENV };
+  // The sign-in values are DERIVED (from the env id and the validated app
+  // URL), never forwarded: `signInEnvFor` is the single source both this map
+  // and the published machine's env read from, so the two cannot spell them
+  // differently. Sandbox-owned values are applied LAST so neither a forwarded
+  // host key nor a derived value can ever shadow one — the sandbox's own
+  // identity is not the host's to overwrite.
+  const signInValues = signInEnvFor({ envId: signIn?.envId ?? null, pagespaceUrl: env.WEB_APP_URL });
+  return { ...forwarded, ...signInValues, ...SANDBOX_BASE_ENV };
 }
 
-export function buildSandboxEnv({ env }: { env: Partial<ServerEnv> }): Record<string, string> {
-  return composeSandboxEnvForTest(env, SANDBOX_ENV_ALLOWLIST);
+export function buildSandboxEnv({ env, signIn }: { env: Partial<ServerEnv>; signIn?: SandboxSignInTarget }): Record<string, string> {
+  return composeSandboxEnvForTest(env, SANDBOX_ENV_ALLOWLIST, signIn);
+}
+
+/** Why an entry looks like a secret: its value carries a known credential prefix, or its key is named like one. */
+export interface SecretShapedEnvEntry {
+  key: string;
+  reason: 'value_prefix' | 'key_suffix';
+}
+
+/**
+ * Credential prefixes this platform mints or stores: `mcp_` (MCP keys),
+ * `ps_` (OAuth `ps_at_`/`ps_rt_`, session `ps_sess_`), `sk_` (provider API
+ * keys). Case-insensitive, checked on the VALUE.
+ */
+const SECRET_VALUE_PREFIX_RE = /^(mcp_|ps_|sk_)/i;
+
+/** Key names that by convention hold credentials. Case-insensitive, checked on the KEY. */
+const SECRET_KEY_SUFFIX_RE = /_(TOKEN|SECRET|KEY)$/i;
+
+/**
+ * Pure: every entry of an env map that LOOKS like a secret, by shape alone —
+ * the tripwire the sandbox and the published-machine env maps are both held
+ * to in their tests. A public client id (`env_<id>`) matches neither rule and
+ * is exactly the value this guard exists to distinguish from a credential.
+ *
+ * Shape is all it can see: a secret under an innocent key with an unknown
+ * prefix passes. That is the allowlist construction's job (nothing reaches the
+ * map without a reviewed key); this is the second line, for the values the
+ * platform DERIVES rather than forwards.
+ */
+export function findSecretShapedEnvEntries(env: Readonly<Record<string, string>>): SecretShapedEnvEntry[] {
+  const found: SecretShapedEnvEntry[] = [];
+  for (const [key, value] of Object.entries(env)) {
+    if (SECRET_VALUE_PREFIX_RE.test(value)) found.push({ key, reason: 'value_prefix' });
+    else if (SECRET_KEY_SUFFIX_RE.test(key)) found.push({ key, reason: 'key_suffix' });
+  }
+  return found;
 }
 
 /**

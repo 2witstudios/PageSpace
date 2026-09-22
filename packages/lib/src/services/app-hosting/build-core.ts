@@ -15,6 +15,7 @@
  */
 
 import type { MachineConfig, MachineGuest } from '../fly/flaps-client';
+import { signInEnvFor } from '../drive-envs/env-oauth-client';
 import type { PublishedAppTier } from '@pagespace/db/schema/published-apps';
 import { findGuestPreset, minMachinesRunningFor } from './dedicated-tier';
 import type { PublishedAppStatus } from '@pagespace/db/schema/published-apps';
@@ -139,6 +140,16 @@ export interface BuildMachineConfigInput {
   tier: PublishedAppTier;
   /** Extra environment for the app process. `PORT` is set by us and cannot be overridden. */
   env?: Record<string, string>;
+  /**
+   * Sign in with PageSpace (ADR 0004 Decision 12, US6): the env this app was
+   * published from and the PageSpace origin. Becomes `PAGESPACE_URL` /
+   * `PAGESPACE_CLIENT_ID` on the machine — the same two PUBLIC values the
+   * env's sandbox carries, from the same function (`signInEnvFor`), so an app
+   * that signed in during preview signs in after publish unchanged. Required:
+   * a machine built without knowing its env would be an app whose sign-in
+   * silently stopped working at publish.
+   */
+  signIn: { envId: string; pagespaceUrl: string | null };
 }
 
 /**
@@ -174,6 +185,9 @@ export function buildMachineConfig(input: BuildMachineConfigInput): MachineConfi
     guest,
     env: {
       ...(input.env ?? {}),
+      // AFTER the caller env, so an app cannot point its own sign-in at a
+      // different PageSpace or claim another env's client id.
+      ...signInEnvFor(input.signIn),
       // Last, so a caller-supplied PORT cannot move the app off the port the
       // router will forward to.
       PORT: String(PUBLISHED_APP_INTERNAL_PORT),

@@ -86,6 +86,12 @@ export interface AppBuildDeps {
   /** Flaps operations bound to this app. */
   flapsFor(flyAppName: string): DeployerFlaps;
   region?: string;
+  /**
+   * The PageSpace origin an app signs users in against (`PAGESPACE_URL`), or
+   * null when this deployment has not configured one — then the machine gets
+   * its client id only and the SDK names the missing value.
+   */
+  pagespaceUrl: string | null;
   log(level: 'info' | 'warn' | 'error', message: string, context: Record<string, unknown>): void;
 }
 
@@ -210,6 +216,10 @@ export async function runAppBuildJob(
     // and a deploy that guessed it would quietly re-create a paid always-on app as
     // scale-to-zero on its very next build.
     tier: app.tier,
+    // The env this app is published from IS its OAuth client (env_<envId>);
+    // the two public sign-in values ride on the machine so the app signs in
+    // after publish exactly as it did in preview.
+    signIn: { envId: app.envId, pagespaceUrl: deps.pagespaceUrl },
   });
   if (config === null) {
     return await failBuild(deps, app, previousDigest, previousSize, 'deploy_failed',

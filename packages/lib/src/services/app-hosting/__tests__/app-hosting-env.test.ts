@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  resolvePageSpaceAppUrl,
   PUBLISHED_APPS_NETWORK_DEFAULT,
   PUBLISHED_APP_DAILY_AWAKE_SECONDS_CAP_DEFAULT,
   PUBLISHED_APP_HIT_STAMP_INTERVAL_SECONDS_DEFAULT,
@@ -145,5 +146,29 @@ describe('the lifecycle knobs — idle threshold, hit-stamp throttle, daily cap'
     // that would never fire and the runaway bound would be decorative.
     expect(PUBLISHED_APP_DAILY_AWAKE_SECONDS_CAP_DEFAULT).toBeLessThan(86_400);
     expect(PUBLISHED_APP_DAILY_AWAKE_SECONDS_CAP_DEFAULT).toBeGreaterThan(0);
+  });
+});
+
+describe('resolvePageSpaceAppUrl — the PAGESPACE_URL a published app signs in against', () => {
+  const ORIGINAL = process.env.WEB_APP_URL;
+  afterEach(() => {
+    if (ORIGINAL === undefined) delete process.env.WEB_APP_URL;
+    else process.env.WEB_APP_URL = ORIGINAL;
+  });
+
+  it('given WEB_APP_URL, returns its origin (path and trailing slash dropped)', () => {
+    process.env.WEB_APP_URL = 'https://app.pagespace.ai/dashboard/';
+    expect(resolvePageSpaceAppUrl()).toBe('https://app.pagespace.ai');
+  });
+
+  it('given no WEB_APP_URL, or one that is not an http(s) URL, returns null so the machine carries no PAGESPACE_URL at all', () => {
+    delete process.env.WEB_APP_URL;
+    expect(resolvePageSpaceAppUrl()).toBeNull();
+    process.env.WEB_APP_URL = '   ';
+    expect(resolvePageSpaceAppUrl()).toBeNull();
+    process.env.WEB_APP_URL = 'javascript:alert(1)';
+    expect(resolvePageSpaceAppUrl()).toBeNull();
+    process.env.WEB_APP_URL = 'not a url';
+    expect(resolvePageSpaceAppUrl()).toBeNull();
   });
 });

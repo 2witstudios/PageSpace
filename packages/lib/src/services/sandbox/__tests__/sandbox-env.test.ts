@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   buildSandboxEnv,
   composeSandboxEnvForTest,
+  findSecretShapedEnvEntries,
   SANDBOX_BASE_ENV,
   SANDBOX_ENV_ALLOWLIST_TRIPWIRE,
 } from '../sandbox-env';
@@ -171,3 +172,71 @@ describe('buildSandboxEnv', () => {
     expect(env).toEqual(SANDBOX_BASE_ENV);
   });
 });
+
+// --- Sign in with PageSpace: the two PUBLIC values (US6, ADR 0004 Decision 12) ---
+// A drive ENVIRONMENT hosts an app that signs users in through the platform-
+// managed client `env_<envId>`. The sandbox learns where PageSpace is and which
+// client it is through PAGESPACE_URL / PAGESPACE_CLIENT_ID — public values, so
+// the no-secrets invariant above holds — and the secret-shape guard below is
+// what keeps that sentence true as the map grows.
+
+const ENV_ID = 'k3m9xq2p7r4t8v1w5y6z0a1b';
+const hostWithUrl = { ...hostEnv, WEB_APP_URL: 'https://app.pagespace.ai' };
+
+describe('buildSandboxEnv — sign-in values', () => {
+  it('given an ENV sandbox, adds PAGESPACE_URL (the host app origin) and PAGESPACE_CLIENT_ID = env_<envId>, and nothing else', () => {
+    const env = buildSandboxEnv({ env: hostWithUrl, signIn: { envId: ENV_ID } });
+    expect(env.PAGESPACE_URL).toBe('https://app.pagespace.ai');
+    expect(env.PAGESPACE_CLIENT_ID).toBe(`env_${ENV_ID}`);
+    expect(Object.keys(env).sort()).toEqual(['NODE_ENV', 'PAGESPACE_CLIENT_ID', 'PAGESPACE_URL', 'PYTHONUNBUFFERED']);
+  });
+
+  it('given an ephemeral SESSION sandbox (no env), adds PAGESPACE_URL only — there is no client to name', () => {
+    const env = buildSandboxEnv({ env: hostWithUrl, signIn: { envId: null } });
+    expect(env.PAGESPACE_URL).toBe('https://app.pagespace.ai');
+    expect(env).not.toHaveProperty('PAGESPACE_CLIENT_ID');
+  });
+
+  it('given no sign-in target at all (a caller that predates the seam), behaves exactly as before', () => {
+    expect(buildSandboxEnv({ env: hostWithUrl })).toEqual({ ...SANDBOX_BASE_ENV, PAGESPACE_URL: 'https://app.pagespace.ai' });
+    expect(buildSandboxEnv({ env: hostEnv })).toEqual(SANDBOX_BASE_ENV);
+  });
+
+  it('given a host with no usable WEB_APP_URL, omits PAGESPACE_URL rather than forwarding an empty string', () => {
+    expect(buildSandboxEnv({ env: { ...hostEnv, WEB_APP_URL: '' }, signIn: { envId: ENV_ID } })).not.toHaveProperty('PAGESPACE_URL');
+    expect(buildSandboxEnv({ env: hostEnv, signIn: { envId: ENV_ID } })).toEqual({ ...SANDBOX_BASE_ENV, PAGESPACE_CLIENT_ID: `env_${ENV_ID}` });
+  });
+
+  it('still lets no host key shadow a sandbox-owned value, and the sign-in values cannot either', () => {
+    const env = composeSandboxEnvForTest({ ...hostWithUrl, NODE_ENV: 'production' }, ['NODE_ENV'], { envId: ENV_ID });
+    expect(env.NODE_ENV).toBe('development');
+    expect(env.PAGESPACE_CLIENT_ID).toBe(`env_${ENV_ID}`);
+  });
+});
+
+describe('secret-shape guard — a public client id is NOT a secret; anything secret-shaped fails this suite', () => {
+  it('given the env sandbox map WITH PAGESPACE_CLIENT_ID set, finds no secret-shaped key or value (env_… is public)', () => {
+    const env = buildSandboxEnv({ env: hostWithUrl, signIn: { envId: ENV_ID } });
+    expect(findSecretShapedEnvEntries(env)).toEqual([]);
+  });
+
+  it('given the session sandbox map and the bare base, finds no secret-shaped key or value', () => {
+    expect(findSecretShapedEnvEntries(buildSandboxEnv({ env: hostWithUrl, signIn: { envId: null } }))).toEqual([]);
+    expect(findSecretShapedEnvEntries(SANDBOX_BASE_ENV)).toEqual([]);
+  });
+
+  it('control: flags a value shaped like an mcp_ key, a ps_ token or an sk_ key, and a key ending _TOKEN, _SECRET or _KEY', () => {
+    // If this control ever passes on an empty list, the guard above is vacuous.
+    expect(findSecretShapedEnvEntries({ SAFE: 'x', LEAK: 'ps_at_abcdef' })).toEqual([{ key: 'LEAK', reason: 'value_prefix' }]);
+    expect(findSecretShapedEnvEntries({ A: 'mcp_1234' })).toEqual([{ key: 'A', reason: 'value_prefix' }]);
+    expect(findSecretShapedEnvEntries({ A: 'sk_live_1' })).toEqual([{ key: 'A', reason: 'value_prefix' }]);
+    expect(findSecretShapedEnvEntries({ A: 'ps_rt_1' })).toEqual([{ key: 'A', reason: 'value_prefix' }]);
+    expect(findSecretShapedEnvEntries({ GITHUB_TOKEN: 'x' })).toEqual([{ key: 'GITHUB_TOKEN', reason: 'key_suffix' }]);
+    expect(findSecretShapedEnvEntries({ CSRF_SECRET: 'x' })).toEqual([{ key: 'CSRF_SECRET', reason: 'key_suffix' }]);
+    expect(findSecretShapedEnvEntries({ ENCRYPTION_KEY: 'x' })).toEqual([{ key: 'ENCRYPTION_KEY', reason: 'key_suffix' }]);
+    expect(findSecretShapedEnvEntries({ stripe_secret_key: 'x' })).toEqual([{ key: 'stripe_secret_key', reason: 'key_suffix' }]);
+    // The ONE public value that looks adjacent: env_ is not on the list, and _ID is not a secret suffix.
+    expect(findSecretShapedEnvEntries({ PAGESPACE_CLIENT_ID: 'env_abc' })).toEqual([]);
+  });
+});
+

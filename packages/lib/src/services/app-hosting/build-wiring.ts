@@ -12,7 +12,7 @@
  * them.
  */
 
-import { isAppHostingEnabled, resolveFlyMachinesToken } from './app-hosting-env';
+import { isAppHostingEnabled, resolveFlyMachinesToken, resolvePageSpaceAppUrl } from './app-hosting-env';
 import type { AppBuildDeps, MaterializedSource } from './build-job';
 import type { BuildReconcilerDeps } from './build-reconciler';
 import type { DeployerFlaps } from './deployer';
@@ -84,6 +84,7 @@ export function createAppBuildDeps({
 }): AppBuildDeps {
   return {
     isEnabled: isAppHostingEnabled,
+    pagespaceUrl: resolvePageSpaceAppUrl(),
     loadApp: (publishedAppId) => getPublishedApp(publishedAppId),
     transition: (publishedAppId, to, patch) =>
       transitionPublishedApp(publishedAppId, to, { patch }),

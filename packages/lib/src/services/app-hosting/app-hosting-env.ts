@@ -56,6 +56,24 @@ export function resolvePublishedAppsNetwork(): string {
   return configured && configured.length > 0 ? configured : PUBLISHED_APPS_NETWORK_DEFAULT;
 }
 
+/**
+ * The PageSpace origin a published app signs users in against — `WEB_APP_URL`,
+ * read RAW for the reason the file header gives: the build worker runs in the
+ * processor, whose lean env makes `getValidatedEnv()` throw. Returns null when
+ * unset or not an http(s) URL; `signInEnvFor` then omits `PAGESPACE_URL` and
+ * the SDK names the missing value rather than dialling an empty origin.
+ */
+export function resolvePageSpaceAppUrl(): string | null {
+  const raw = (process.env.WEB_APP_URL ?? '').trim();
+  if (raw.length === 0) return null;
+  try {
+    const url = new URL(raw);
+    return url.protocol === 'https:' || url.protocol === 'http:' ? url.origin : null;
+  } catch {
+    return null;
+  }
+}
+
 /** The Fly org every published app is created in. Same override shape as the network name above. */
 export const PUBLISHED_APPS_ORG_SLUG_DEFAULT = 'pagespace';
 

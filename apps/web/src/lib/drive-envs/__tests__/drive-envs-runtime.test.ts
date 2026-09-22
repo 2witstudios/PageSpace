@@ -48,6 +48,11 @@ vi.mock('@pagespace/lib/services/drive-envs/drive-envs-store', () => ({
   createDbDriveEnvStore: async () => ({ findById: async () => envRow }),
 }));
 vi.mock('@/lib/agent-workspaces/sandbox-host-runtime', () => ({ getSandboxHost: async () => ({}) }));
+vi.mock('@/lib/drive-envs/env-oauth-client-runtime', () => ({
+  syncEnvOAuthClientBestEffort: vi.fn(async () => undefined),
+  syncEnvOAuthClientForRemoval: vi.fn(async () => ({ ok: true })),
+  retireEnvOAuthClientBestEffort: vi.fn(async () => ({ clientId: 'env_x', disabled: true, familiesRevoked: 0 })),
+}));
 
 /**
  * `rebuildDriveEnv` is replaced by a probe that does ONE thing: hand the
@@ -106,7 +111,9 @@ vi.mock('@pagespace/lib/services/drive-envs/env-provision-deps', () => ({
 
 import type { EnsureSpriteHolderSandboxResult } from '@pagespace/lib/services/agent-workspaces/agent-workspace-sprite';
 import type { ensureDriveEnvSandbox as ensureDriveEnvSandboxFn } from '@pagespace/lib/services/drive-envs/env-provision-deps';
-import { ensureEnvSandboxForSession, rebuildEnv, resolveDriveEnvPayer, redeemEnvChallenge } from '../drive-envs-runtime';
+import { createEnvInDrive, deleteEnv, ensureEnvSandboxForSession, rebuildEnv, resolveDriveEnvPayer, redeemEnvChallenge } from '../drive-envs-runtime';
+import { createDriveEnv, deleteDriveEnv } from '@pagespace/lib/services/drive-envs/drive-envs';
+import { retireEnvOAuthClientBestEffort, syncEnvOAuthClientBestEffort } from '@/lib/drive-envs/env-oauth-client-runtime';
 import { db } from '@pagespace/db/db';
 
 type EnsureDriveEnvSandboxInput = Parameters<typeof ensureDriveEnvSandboxFn>[0];
@@ -125,6 +132,40 @@ function stubPayer(tier: string): void {
 beforeEach(() => {
   vi.clearAllMocks();
   stubPayer('pro');
+});
+
+describe('the env lifecycle keeps the env\'s OAuth client in step (Sign in with PageSpace, [D-9])', () => {
+  it('given a created env, should sync its client row from the new env id', async () => {
+    vi.mocked(createDriveEnv).mockResolvedValue({ ok: true, env: { id: 'env-new' } } as never);
+    await createEnvInDrive({ driveId: DRIVE_ID, name: 'staging', createdBy: 'u1' });
+    expect(syncEnvOAuthClientBestEffort).toHaveBeenCalledWith({ envId: 'env-new' }, { operation: 'create' });
+  });
+
+  it('given a refused create, should touch no client', async () => {
+    vi.mocked(createDriveEnv).mockResolvedValue({ ok: false, reason: 'name_taken' } as never);
+    await createEnvInDrive({ driveId: DRIVE_ID, name: 'staging', createdBy: 'u1' });
+    expect(syncEnvOAuthClientBestEffort).not.toHaveBeenCalled();
+  });
+
+  it('given a deleted env, should retire its client AFTER the delete — and not when the delete is refused', async () => {
+    const order: string[] = [];
+    vi.mocked(deleteDriveEnv).mockImplementation(async () => {
+      order.push('delete');
+      return { ok: true, spriteTornDown: true } as never;
+    });
+    vi.mocked(retireEnvOAuthClientBestEffort).mockImplementation(async () => {
+      order.push('retire');
+      return { clientId: 'env_env-1', disabled: true, familiesRevoked: 1 };
+    });
+    await deleteEnv({ envId: ENV_ID, force: false });
+    expect(order).toEqual(['delete', 'retire']);
+    expect(retireEnvOAuthClientBestEffort).toHaveBeenCalledWith(ENV_ID, { operation: 'delete' });
+
+    vi.mocked(retireEnvOAuthClientBestEffort).mockClear();
+    vi.mocked(deleteDriveEnv).mockResolvedValue({ ok: false, reason: 'live_sessions', liveSessionCount: 1 } as never);
+    await deleteEnv({ envId: ENV_ID, force: false });
+    expect(retireEnvOAuthClientBestEffort).not.toHaveBeenCalled();
+  });
 });
 
 describe('resolveDriveEnvPayer', () => {

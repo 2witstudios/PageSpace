@@ -159,7 +159,7 @@ export async function runGitInSandbox({
           cmd,
           args,
           cwd: resolvedCwd,
-          env: buildGitToolEnv({ baseEnv: deps.buildEnv(), token }),
+          env: buildGitToolEnv({ baseEnv: deps.buildEnv({ envId: session.envId }), token }),
           timeoutMs: SANDBOX_TIMEOUT_MS,
           maxBytes: SANDBOX_MAX_OUTPUT_BYTES,
         });

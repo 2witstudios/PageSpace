@@ -11,6 +11,8 @@ import { eq, and, gt, isNull } from '@pagespace/db/operators';
 import { oauthClients, oauthAuthorizationCodes, oauthRefreshTokens, oauthAccessTokens, oauthDeviceCodes } from '@pagespace/db/schema/oauth';
 import { users } from '@pagespace/db/schema/auth';
 import { resolveClientFrom, type RegisteredClient, type OAuthClientRecord } from '@pagespace/lib/auth/oauth/clients';
+import { parseEnvOAuthClientId } from '@pagespace/lib/services/drive-envs/env-oauth-client';
+import { resolveLiveEnvClientRedirectUris } from '@/lib/drive-envs/env-oauth-client-facts';
 import { hashToken, generateToken } from '@pagespace/lib/auth/token-utils';
 import { decideCodeExchange, type CodeExchangeDecision } from '@pagespace/lib/auth/oauth/code-lifecycle';
 import {
@@ -79,7 +81,18 @@ async function findEnabledOAuthClientRecord(clientId: string): Promise<OAuthClie
       disabledAt: true,
     },
   });
-  return row ?? null;
+  if (!row) return null;
+  // A platform-managed ENV client (Phase 4) answers with only the redirects
+  // its env's CURRENT facts still derive — a custom domain that lost its
+  // proven-serving status, was deleted or detached, or a published origin
+  // after unpublish, is not honoured even if the removal sync never landed;
+  // an env that no longer exists does not resolve at all. Same shapes as any
+  // other invalid redirect / unknown client, so nothing is disclosed.
+  const envId = parseEnvOAuthClientId(clientId);
+  if (envId === null) return row;
+  const live = await resolveLiveEnvClientRedirectUris(envId, row.redirectUris);
+  if (live === null) return null;
+  return { ...row, redirectUris: live };
 }
 
 /**
@@ -536,6 +549,35 @@ export interface RevokeOAuthTokenInput {
 }
 
 const OAUTH_REFRESH_TOKEN_PREFIX = 'ps_rt_';
+
+/**
+ * Revoke EVERY live OAuth family a client ever issued — the teeth behind
+ * disabling a client (a platform-managed env client on env delete, Phase 4).
+ * `disabledAt` alone only stops NEW grants (`resolveClient` filters it); the
+ * tokens already out there keep working until this runs, so a disable that
+ * skips it is a control that never reaches where the effect lives. Reuses
+ * `revokeTokenFamily` — the same helper reuse detection and revocation use —
+ * so an access token issued by the family dies with its refresh token.
+ * Returns the number of DISTINCT families revoked.
+ */
+export async function revokeOAuthFamiliesForClient(input: { clientDbId: string; now: Date; reason?: string }): Promise<number> {
+  const reason = input.reason ?? 'client_disabled';
+  const [refreshRows, accessRows] = await Promise.all([
+    db
+      .select({ familyId: oauthRefreshTokens.familyId })
+      .from(oauthRefreshTokens)
+      .where(and(eq(oauthRefreshTokens.clientId, input.clientDbId), isNull(oauthRefreshTokens.revokedAt))),
+    db
+      .select({ familyId: oauthAccessTokens.familyId })
+      .from(oauthAccessTokens)
+      .where(and(eq(oauthAccessTokens.clientId, input.clientDbId), isNull(oauthAccessTokens.revokedAt))),
+  ]);
+  const familyIds = [...new Set([...refreshRows, ...accessRows].map((row) => row.familyId))];
+  for (const familyId of familyIds) {
+    await revokeTokenFamily(db, familyId, input.now, reason);
+  }
+  return familyIds.length;
+}
 
 /**
  * Revoke every live OAuth token family of `userId` whose scopes name `driveId`,

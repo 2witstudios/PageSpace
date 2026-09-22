@@ -1,0 +1,21 @@
+{
+  "name": "pagespace-signin-template",
+  "private": true,
+  "version": "0.1.0",
+  "license": "UNLICENSED",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "start": "node server.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@pagespace/sdk": "^2.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "typescript": "~5.8.3",
+    "vite": "^6.3.2"
+  }
+}

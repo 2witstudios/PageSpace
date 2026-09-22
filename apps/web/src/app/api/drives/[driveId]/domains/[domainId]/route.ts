@@ -18,6 +18,7 @@ import { isServingStatus } from '@pagespace/lib/canvas/cert-action';
 import { resolveAppRouterFlyAppName } from '@pagespace/lib/services/app-hosting/routing-env';
 import { removeCertificate } from '@/lib/fly/certs';
 import { isValidDriveNotFoundPage } from '@pagespace/lib/services/drive-service';
+import { syncEnvOAuthClientBestEffort, syncEnvOAuthClientForRemoval } from '@/lib/drive-envs/env-oauth-client-runtime';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -75,7 +76,7 @@ export async function PATCH(
 
     const target = await db.query.customDomains.findFirst({
       where: and(eq(customDomains.id, domainId), eq(customDomains.driveId, driveId)),
-      columns: { id: true, hostname: true, status: true },
+      columns: { id: true, hostname: true, status: true, publishedAppId: true },
     });
 
     if (!target) {
@@ -218,6 +219,12 @@ export async function PATCH(
     }
 
     if (body.data.publishedAppId !== undefined) {
+      // Pointing the domain AWAY from an app removes this hostname from that
+      // app's sign-in redirects — written BEFORE the retarget, never
+      // best-effort: a failure aborts the retarget and the caller retries.
+      if (typeof target.publishedAppId === 'string' && target.publishedAppId !== body.data.publishedAppId) {
+        await syncEnvOAuthClientForRemoval({ publishedAppId: target.publishedAppId }, { hostname: target.hostname });
+      }
       // The certificate itself needs no per-target change: every custom domain's
       // TLS is terminated at the shared router app regardless of what it points
       // at (`resolveAppRouterFlyAppName()`, used identically by the DELETE
@@ -241,6 +248,12 @@ export async function PATCH(
           publishedAppId: body.data.publishedAppId,
         },
       });
+
+      // A verified custom domain pointed at an app becomes one of that app's
+      // sign-in redirect origins (an addition: best-effort, visible if missing).
+      if (typeof body.data.publishedAppId === 'string') {
+        await syncEnvOAuthClientBestEffort({ publishedAppId: body.data.publishedAppId }, { operation: 'custom-domain-target', hostname: target.hostname });
+      }
     }
 
     return NextResponse.json({ domain: updated });
@@ -264,6 +277,21 @@ export async function DELETE(
 
     if (!(await isPrincipalDriveOwnerOrAdmin(auth, driveId))) {
       return NextResponse.json({ error: 'Only drive owners and admins can remove custom domains' }, { status: 403 });
+    }
+
+    // A domain pointed at an app is one of that app's sign-in redirect
+    // origins: drop it from the env client BEFORE the row goes, never
+    // best-effort — a failure here aborts the delete and the caller retries,
+    // rather than a hostname the customer may no longer control staying a
+    // valid redirect. (The row read is what tells us whether there is an
+    // app to remove it from; the delete below is still the authoritative
+    // existence check.)
+    const pointed = await db.query.customDomains.findFirst({
+      where: and(eq(customDomains.id, domainId), eq(customDomains.driveId, driveId)),
+      columns: { hostname: true, publishedAppId: true },
+    });
+    if (pointed?.publishedAppId) {
+      await syncEnvOAuthClientForRemoval({ publishedAppId: pointed.publishedAppId }, { hostname: pointed.hostname });
     }
 
     const [deleted] = await db

@@ -3,8 +3,14 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { DELETE, PATCH } from '../route';
+import { syncEnvOAuthClientForRemoval } from '@/lib/drive-envs/env-oauth-client-runtime';
 
 vi.mock('server-only', () => ({}));
+vi.mock('@/lib/drive-envs/env-oauth-client-runtime', () => ({
+  syncEnvOAuthClientBestEffort: vi.fn(async () => undefined),
+  syncEnvOAuthClientForRemoval: vi.fn(async () => ({ ok: true })),
+  retireEnvOAuthClientBestEffort: vi.fn(async () => ({ clientId: 'env_x', disabled: true, familiesRevoked: 0 })),
+}));
 
 const authenticateRequestWithOptions = vi.fn();
 const checkMCPDriveScope = vi.fn();
@@ -121,6 +127,26 @@ describe('DELETE /api/drives/[driveId]/domains/[domainId]', () => {
     dbDelete.mockReturnValue({ where: vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([]) }) });
     const res = await DELETE(makeReq(), ctx());
     expect(res.status).toBe(404);
+  });
+
+  it('given the domain points at a published app, removes its hostname from that app\'s env client BEFORE the row is deleted', async () => {
+    const order: string[] = [];
+    findFirst.mockResolvedValueOnce({ hostname: 'acme.com', publishedAppId: 'app-1' });
+    vi.mocked(syncEnvOAuthClientForRemoval).mockImplementationOnce(async () => { order.push('remove'); return { ok: true } as never; });
+    const deleted = { id: DOMAIN_ID, driveId: DRIVE_ID, hostname: 'acme.com', status: 'active', platformOwned: false, publishedAppId: 'app-1', createdAt: new Date() };
+    dbDelete.mockImplementationOnce(() => { order.push('delete'); return { where: vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([deleted]) }) }; });
+    const res = await DELETE(makeReq(), ctx());
+    expect(res.status).toBe(200);
+    expect(syncEnvOAuthClientForRemoval).toHaveBeenCalledWith({ publishedAppId: 'app-1' }, { hostname: 'acme.com' });
+    expect(order).toEqual(['remove', 'delete']);
+  });
+
+  it('given the removal write fails, the delete FAILS and the row stays — a removal is never best-effort', async () => {
+    findFirst.mockResolvedValueOnce({ hostname: 'acme.com', publishedAppId: 'app-1' });
+    vi.mocked(syncEnvOAuthClientForRemoval).mockRejectedValueOnce(new Error('db down'));
+    const res = await DELETE(makeReq(), ctx());
+    expect(res.status).toBe(500);
+    expect(dbDelete).not.toHaveBeenCalled();
   });
 
   it('returns 200 + deleted:true on success', async () => {

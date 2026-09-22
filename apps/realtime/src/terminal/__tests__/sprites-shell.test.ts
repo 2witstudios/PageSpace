@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import { openPtyShell, planReconnect, planWatchdogResponse, planTeardown, sessionIds } from '../sprites-shell';
 import { appendScrollback } from '../terminal-session-map';
 import { spawnWithSelfHealingCwd } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
-import { buildSandboxEnv } from '@pagespace/lib/services/sandbox/sandbox-env';
+import { buildSandboxEnv, findSecretShapedEnvEntries } from '@pagespace/lib/services/sandbox/sandbox-env';
 import { TASK_HOLD_AGENT_IDLE_MS } from '@pagespace/lib/services/sandbox/sandbox-client/sprite-tasks';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
@@ -1166,6 +1166,23 @@ describe('openPtyShell', () => {
         env: { ...buildSandboxEnv({ env: process.env as never }), TERM: 'xterm-256color', COLORTERM: 'truecolor', LANG: 'en_US.UTF-8' },
       },
     );
+  });
+
+  it('given a shell inside a drive ENVIRONMENT, should hand the PTY that env\'s own OAuth client id (Sign in with PageSpace, US6) and no secret', () => {
+    const cmd = buildFakeCommand();
+    const sprite = buildFakeSprite(cmd);
+    const envId = 'k3m9xq2p7r4t8v1w5y6z0a1b';
+
+    openPtyShell({ sprite, cols: 80, rows: 24, envId, onOutput: vi.fn(), onExit: vi.fn() });
+
+    const options = vi.mocked(sprite.createSession).mock.calls[0]?.[2] as { env: Record<string, string> };
+    expect(options.env.PAGESPACE_CLIENT_ID).toBe(`env_${envId}`);
+    // Same rule the bash tool's env is held to: a client id is public; nothing secret-shaped may ride a PTY env.
+    expect(findSecretShapedEnvEntries(options.env)).toEqual([]);
+    // A session sandbox (no env) names no client — the default the older callers get.
+    openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn() });
+    const plain = vi.mocked(sprite.createSession).mock.calls[1]?.[2] as { env: Record<string, string> };
+    expect(plain.env).not.toHaveProperty('PAGESPACE_CLIENT_ID');
   });
 
   it('given a custom cwd, should create the session there instead of the default sandbox root', () => {

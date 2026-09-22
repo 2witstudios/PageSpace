@@ -5,6 +5,11 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { GET, POST } from '../route';
 
 vi.mock('server-only', () => ({}));
+vi.mock('@/lib/drive-envs/env-oauth-client-runtime', () => ({
+  syncEnvOAuthClientBestEffort: vi.fn(async () => undefined),
+  syncEnvOAuthClientForRemoval: vi.fn(async () => ({ ok: true })),
+  retireEnvOAuthClientBestEffort: vi.fn(async () => ({ clientId: 'env_x', disabled: true, familiesRevoked: 0 })),
+}));
 
 const authenticateRequestWithOptions = vi.fn();
 const checkMCPDriveScope = vi.fn();

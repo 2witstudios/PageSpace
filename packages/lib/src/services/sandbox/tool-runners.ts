@@ -36,7 +36,7 @@ import { evaluateCommandPolicy } from './command-policy';
 import { truncateToBytes, selectLineWindow, LINE_ELISION_MARKER } from './output-limit';
 import { resolveSandboxPath, SANDBOX_ROOT } from './sandbox-paths';
 import { applyEdit } from './edit-file';
-import { buildSandboxEnv } from './sandbox-env';
+import { buildSandboxEnv, type SandboxSignInTarget } from './sandbox-env';
 import {
   shouldCheckpoint,
   checkpointComment,
@@ -236,6 +236,14 @@ export type SandboxAcquireResult =
        */
       workspaceId: string;
       pageId?: string;
+      /**
+       * The drive ENVIRONMENT the sandbox belongs to, or null for an ephemeral
+       * session sandbox. Feeds the sandbox env's sign-in values
+       * (`PAGESPACE_CLIENT_ID = env_<envId>`, see `sandbox-env.ts`). Optional
+       * so a handle-bound acquire that has no session row in hand may leave it
+       * unknown — read as "no client", never as a guess.
+       */
+      envId?: string | null;
     }
   | {
       ok: false;
@@ -260,7 +268,8 @@ export interface SandboxRunDeps {
    */
   reconnect: (sandboxId: string, principal: SandboxReconnectPrincipal) => Promise<ExecutableSandbox | null>;
   quota: SandboxQuotaDeps;
-  buildEnv: () => Record<string, string>;
+  /** The sandbox's env for a run — told which env (if any) the sandbox belongs to, so an env sandbox carries its own client id. */
+  buildEnv: (target: SandboxSignInTarget) => Record<string, string>;
   audit: (input: CodeExecutionAuditInput) => Promise<void>;
   /**
    * Optional injection-detection seam (DEFENSE-IN-DEPTH, fail-open). Applied to
@@ -736,7 +745,7 @@ export async function openSession(
   ctx: SandboxActorContext,
   deps: SandboxRunDeps,
 ): Promise<
-  | { ok: true; sandbox: ExecutableSandbox; workspaceId: string; release: () => void; pageId?: string }
+  | { ok: true; sandbox: ExecutableSandbox; workspaceId: string; envId: string | null; release: () => void; pageId?: string }
   | { ok: false; reason: SandboxToolDenialReason }
 > {
   if (!deps.quota.acquireSlot({ userId: ctx.userId, tier: ctx.tier })) {
@@ -775,6 +784,7 @@ export async function openSession(
       ok: true,
       sandbox,
       workspaceId: acquired.workspaceId,
+      envId: acquired.envId ?? null,
       release: () => {
         deps.quota.releaseSlot({ userId: ctx.userId });
         // Opportunistic, throttled, best-effort storage measurement. Fired from
@@ -1010,7 +1020,7 @@ export async function runBashInSandbox({
         cmd: 'sh',
         args: ['-c', command],
         cwd: resolvedCwd,
-        env: deps.buildEnv(),
+        env: deps.buildEnv({ envId: session.envId }),
         timeoutMs: Math.min(Math.max(timeoutMs ?? SANDBOX_TIMEOUT_MS, 1), SANDBOX_MAX_TIMEOUT_MS),
         maxBytes: SANDBOX_MAX_OUTPUT_BYTES,
       });
@@ -1565,5 +1575,5 @@ export async function editSandboxFile({
  * read. The one live effect meanwhile is that a broken env throws here — which,
  * in the web service, it would already have done long before any tool ran.
  */
-export const defaultBuildEnv = (): Record<string, string> =>
-  buildSandboxEnv({ env: getValidatedEnv() });
+export const defaultBuildEnv = (target: SandboxSignInTarget): Record<string, string> =>
+  buildSandboxEnv({ env: getValidatedEnv(), signIn: target });
