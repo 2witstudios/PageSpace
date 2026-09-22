@@ -18,6 +18,12 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   dedicated account for the agent; sharing a personal login needs an explicit acknowledgment, which
   the account list shows. Revoking stops PageSpace from using the key immediately; revoke it at the
   site too to disable it everywhere.
+- **Agents can use a real browser (where an operator enables it)** — an agent with its sandbox
+  turned on can open public web pages, read them, click, type and fill in forms, take screenshots
+  and manage tabs in a browser that runs separately from its sandbox. The agent gets only those
+  actions: it cannot run scripts in the page or read cookies or stored data, and private or
+  internal addresses are refused. Browser time is billed like sandbox time. Off unless the server
+  is configured for it.
 
 - **Ask a detached side question with `/btw`** — while an agent is working, type `/btw` followed by a question to get a separate, temporary answer from the completed conversation context. It never interrupts the active run or becomes part of the chat history.
 
@@ -613,6 +619,12 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Workflows no longer run when you are out of AI credits** — pressing Run on a workflow,
+  a scheduled workflow, and a task's due-date or completion trigger now check your AI credit
+  balance before the agent starts, as calendar, Zoom and webhook triggers already did. Previously
+  they ran anyway and were charged afterwards. Pressing Run with no credits left now says so; a
+  scheduled or task-triggered run that is skipped shows in the workflow's run history as cancelled,
+  with the reason, and the schedule moves on to its next time.
 - **A stopped AI reply is charged for what it used** — pressing Stop, or running out of credits,
   while the assistant was still answering used to charge nothing for the unfinished part of the reply,
   and in a multi-step reply sometimes nothing for the finished steps either. Stopped replies are now
@@ -639,6 +651,11 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   "no view" grant, so a member could see those pages' activity in Pulse. Pulse now follows the same
   rules as opening the page: those denies are honoured, a custom role's per-page grant on a private
   page is included, and a time-limited grant expires at the right moment in every time zone.
+- **Workflows run by agents without the sandbox no longer fail** — a workflow whose agent has the
+  sandbox turned off failed every run, from any trigger (schedule, task, calendar or page webhook),
+  when saving its messages — often after its tools had already done their work. Every run now saves
+  into its own conversation on the agent, so it completes and its transcript can be opened like any
+  other chat.
 - **Agents can write to their own memory pages again** — every agent is instructed to keep notes
   on an "Agent Memory" child page of its own, but the permission check behind the write tools
   looked only at the agent's drive membership, which grants edit on no ordinary page — so every

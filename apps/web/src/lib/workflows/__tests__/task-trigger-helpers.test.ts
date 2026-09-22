@@ -87,6 +87,11 @@ vi.mock('../workflow-executor', () => ({
   executeWorkflow: vi.fn(),
 }));
 
+const { mockCreditAdmission } = vi.hoisted(() => ({ mockCreditAdmission: vi.fn() }));
+vi.mock('../workflow-credit-gate', () => ({
+  creditAdmission: mockCreditAdmission,
+}));
+
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
     loggers: {
     api: {
@@ -169,6 +174,8 @@ describe('task-trigger-helpers', () => {
     mockSelectWhere.mockResolvedValue([]);
     mockDelete.mockImplementation(() => ({ where: mockDeleteWhere }));
     mockDeleteWhere.mockResolvedValue(undefined);
+
+    mockCreditAdmission.mockReturnValue(async () => ({ admitted: true, release: () => {} }));
 
     // Default: transaction runs the callback against a fresh tx mock.
     mockTransaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) => {
@@ -261,7 +268,7 @@ describe('task-trigger-helpers', () => {
         workflowId: 'wf-1',
         agentPageId: 'agent-1',
         taskContext: { taskItemId: 'task-1', triggerType: 'completion' },
-      }));
+      }), expect.objectContaining({ admit: expect.any(Function) }));
     });
 
     it('given the claim UPDATE, should gate on lastFiredAt IS NULL so concurrent callers cannot double-fire', async () => {
@@ -318,6 +325,43 @@ describe('task-trigger-helpers', () => {
       mockSelect.mockImplementationOnce(() => { throw new Error('DB connection lost'); });
 
       await expect(fireCompletionTrigger('task-1')).resolves.toBeUndefined();
+    });
+
+    describe('credit gate', () => {
+      const claimAndLoad = () => {
+        mockFrom
+          .mockImplementationOnce(() => ({ where: vi.fn().mockResolvedValueOnce([mockTrigger]) }))
+          .mockImplementationOnce(() => ({ where: vi.fn().mockResolvedValueOnce([mockWorkflow]) }));
+        mockReturning.mockResolvedValueOnce([mockTrigger]);
+      };
+
+      it('hands the executor the credit gate as its admit hook, gating the owner as a scheduled run', async () => {
+        claimAndLoad();
+        const admit = async () => ({ admitted: true as const, release: () => {} });
+        mockCreditAdmission.mockReturnValue(admit);
+        vi.mocked(executeWorkflow).mockResolvedValueOnce({ success: true, durationMs: 50 });
+
+        await fireCompletionTrigger('task-1');
+
+        const [input, options] = vi.mocked(executeWorkflow).mock.calls[0];
+        expect(options?.admit).toBe(admit);
+        expect(mockCreditAdmission).toHaveBeenCalledWith(input, 'scheduled');
+        expect(input.createdBy).toBe('user-1');
+      });
+
+      it('a refused fire retires the one-shot trigger with the reason', async () => {
+        claimAndLoad();
+        vi.mocked(executeWorkflow).mockResolvedValueOnce({
+          success: false, skipped: true, durationMs: 0, runId: 'run_1', error: 'AI credit gate denied: out_of_credits',
+        });
+
+        await fireCompletionTrigger('task-1');
+
+        await vi.waitFor(() => expect(mockSet).toHaveBeenCalledWith({
+          lastFireError: 'AI credit gate denied: out_of_credits',
+          isEnabled: false,
+        }));
+      });
     });
   });
 

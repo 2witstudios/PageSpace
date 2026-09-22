@@ -99,6 +99,51 @@ describe('agentRunBillingFields', () => {
     });
   });
 
+  it('prices the cached share of the interrupted prompt at the cache-read rate', () => {
+    const run: Run = {
+      accumulatedUsage: usage(800, 30),
+      accumulatedSteps: [{}],
+      abortedStep: interrupted({ priorStepContextTokens: 830, priorStepCachedTokens: 700 }),
+    };
+
+    const fields = agentRunBillingFields({ agentRun: run, model: MODEL });
+
+    assert({
+      given: 'an interrupted step whose 830-token prompt has 700 tokens the provider serves from cache',
+      should: 'bill 130 fresh + 700 at the 10% cache-read rate + 50 output, and report the 700 cached',
+      actual: {
+        providerCostDollars: dollars(fields.providerCostDollars),
+        cachedInputTokens: fields.cachedInputTokens,
+        stepCachedInputTokens: fields.abortedStep?.cachedInputTokens,
+      },
+      // step 1: (800*2 + 30*10)/1e6 = 0.0019; step 2: (130*2 + 700*2*0.1 + 50*10)/1e6 = 0.0009
+      expected: { providerCostDollars: 0.0028, cachedInputTokens: 700, stepCachedInputTokens: 700 },
+    });
+  });
+
+  it('reports finished-step and interrupted-step cache reads together', () => {
+    const run: Run = {
+      accumulatedUsage: { ...usage(800, 30), cachedInputTokens: 600 },
+      accumulatedSteps: [{}],
+      abortedStep: interrupted({ priorStepContextTokens: 830, priorStepCachedTokens: 700 }),
+    };
+    const uncached: Run = {
+      accumulatedUsage: usage(800, 30),
+      accumulatedSteps: [{}],
+      abortedStep: interrupted({ priorStepContextTokens: 830 }),
+    };
+
+    assert({
+      given: 'step 1 read 600 tokens from cache and the interrupted step 700, vs a run with no cache data',
+      should: 'report 600 + 700 for the first, and leave the second undefined',
+      actual: {
+        cached: agentRunBillingFields({ agentRun: run, model: MODEL }).cachedInputTokens,
+        uncached: agentRunBillingFields({ agentRun: uncached, model: MODEL }).cachedInputTokens,
+      },
+      expected: { cached: 1300, uncached: undefined },
+    });
+  });
+
   it('adds the interrupted step on top of OpenRouter\'s returned cost and keeps it out of the reconcile', () => {
     const run: Run = {
       accumulatedUsage: usage(800, 30),

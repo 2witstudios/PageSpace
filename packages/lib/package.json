@@ -669,6 +669,11 @@
       "import": "./dist/monitoring/ai-monitoring.js",
       "require": "./dist/monitoring/ai-monitoring.js"
     },
+    "./monitoring/machine-pricing": {
+      "types": "./dist/monitoring/machine-pricing.d.ts",
+      "import": "./dist/monitoring/machine-pricing.js",
+      "require": "./dist/monitoring/machine-pricing.js"
+    },
     "./monitoring/usage-source": {
       "types": "./dist/monitoring/usage-source.d.ts",
       "import": "./dist/monitoring/usage-source.js",
@@ -2695,6 +2700,9 @@
       ],
       "monitoring/ai-monitoring": [
         "./dist/monitoring/ai-monitoring.d.ts"
+      ],
+      "monitoring/machine-pricing": [
+        "./dist/monitoring/machine-pricing.d.ts"
       ],
       "monitoring/usage-source": [
         "./dist/monitoring/usage-source.d.ts"
