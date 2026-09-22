@@ -22,7 +22,7 @@ export default defineConfig({
       reporter: ['text', 'json', 'json-summary'],
       reportsDirectory: './coverage',
       reportOnFailure: true,
-      include: ['src/decide-*.ts', 'src/reduce-*.ts', 'src/verify-*.ts', 'src/encode-*.ts', 'src/parse-*.ts', 'src/plan-*.ts'],
+      include: ['src/decide-*.ts', 'src/reduce-*.ts', 'src/verify-*.ts', 'src/encode-*.ts', 'src/parse-*.ts', 'src/plan-*.ts', 'src/derive-*.ts'],
       exclude: ['**/*.d.ts', '**/__tests__/**'],
       // The pure decision modules are the security boundary of this package
       // (Control Board §7): every branch of every decision is a table row.
