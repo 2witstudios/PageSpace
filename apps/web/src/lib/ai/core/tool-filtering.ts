@@ -11,6 +11,8 @@ import { parseIntegrationToolName } from '@pagespace/lib/integrations/converter/
 
 // Tools that modify content (excluded in read-only mode; also used by elision to protect side-effectful results)
 export const WRITE_TOOLS = new Set([
+  // Credentialed external requests can write at the provider (G2 agent accounts).
+  'http_request',
   // Page write operations
   'create_page',
   'rename_page',
@@ -433,6 +435,14 @@ export function filterToolsForAgentAllowlist<T>(
   return Object.fromEntries(
     Object.entries(tools).filter(([name]) => allowlist.includes(name))
   );
+}
+
+/** The agent-account tool, offered only when the deployment configured the credential plane (G2). */
+const AGENT_ACCOUNT_TOOLS = new Set(['http_request']);
+
+export function filterToolsForAgentAccounts<T>(tools: Record<string, T>, configured: boolean): Record<string, T> {
+  if (configured) return tools;
+  return Object.fromEntries(Object.entries(tools).filter(([name]) => !AGENT_ACCOUNT_TOOLS.has(name)));
 }
 
 /**
