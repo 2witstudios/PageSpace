@@ -1,6 +1,15 @@
 import { defineConfig } from 'vitest/config';
+import path from 'node:path';
+
+/**
+ * `@pagespace/lib` subpaths resolve to lib's SOURCE here, so the decision
+ * suites run without a lib dist build (CI builds it anyway; the worktree
+ * need not). The modules this package imports from lib are themselves pure.
+ */
+const libSource = { find: /^@pagespace\/lib\/(.*)$/, replacement: `${path.resolve(__dirname, '../lib/src')}/$1` };
 
 export default defineConfig({
+  resolve: { alias: [libSource] },
   test: {
     globals: true,
     environment: 'node',
