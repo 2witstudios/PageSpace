@@ -61,7 +61,7 @@ function ledgerInsert(returned: Array<{ id: string }>, cap: Captured) {
   };
 }
 
-// Build a credit_balances upsert chain.
+// Build a personal root wallet upsert chain.
 function balanceUpsert(cap: Captured) {
   return {
     values: (v: Record<string, unknown>) => {
@@ -77,7 +77,7 @@ function balanceUpsert(cap: Captured) {
   };
 }
 
-// Build a select chain for reading the current creditBalances row inside the tx.
+// Build a select chain for reading the current personal root wallet row inside the tx.
 // Includes the .for('update') call that locks the row before the rollover write.
 function balanceSelectReturning(monthlyRemainingCents: number, debtCents = 0) {
   const result = Promise.resolve([{ monthlyRemainingCents, debtCents }]);

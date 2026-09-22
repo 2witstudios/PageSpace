@@ -78,7 +78,7 @@ const H = vi.hoisted(() => {
   const and = (...parts: Pred[]): Pred => ({ kind: 'and', parts });
   const or = (...parts: Pred[]): Pred => ({ kind: 'or', parts });
   // Capture interpolated operands so an `update().set()` value like
-  // sql`${creditBalances.debtCents} + ${shortfall}` can be evaluated per-row. Used as
+  // sql`${wallets.debtCents} + ${shortfall}` can be evaluated per-row. Used as
   // a predicate (where) it still just passes (kind 'sql' -> true in evalPred).
   const sqlTag = (_strings?: TemplateStringsArray, ...values: unknown[]): Pred => ({ kind: 'sql', values });
 

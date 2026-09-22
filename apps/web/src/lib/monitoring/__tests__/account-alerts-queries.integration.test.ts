@@ -6,7 +6,7 @@
  * money risk in getBalanceDriftAlerts / getNegativeMarginAccounts lives in their SQL:
  * the per-entryType CASE WHEN aggregates, the COALESCE(...)::int casts, and the
  * `HAVING chargedSum < realCostSum * (1 + bps)`. This file inserts real credit_ledger /
- * credit_balances / ai_usage_logs rows and runs the ACTUAL queries so that SQL is
+ * wallets / ai_usage_logs rows and runs the ACTUAL queries so that SQL is
  * exercised, then asserts the flagged accounts + numbers, and that the SQL HAVING and the
  * JS isNegativeMargin re-check agree on real data.
  *

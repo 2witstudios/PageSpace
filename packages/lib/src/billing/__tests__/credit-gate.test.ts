@@ -5,15 +5,6 @@ const mockDb = vi.hoisted(() => ({ select: vi.fn(), insert: vi.fn(), update: vi.
 
 vi.mock('@pagespace/db/db', () => ({ db: mockDb }));
 vi.mock('@pagespace/db/schema/credits', () => ({
-  creditBalances: {
-    userId: 'cb.userId',
-    monthlyRemainingCents: 'cb.monthly',
-    topupRemainingCents: 'cb.topup',
-    monthlyAllowanceCents: 'cb.allowance',
-    debtCents: 'cb.debt',
-    monthlyPeriodStart: 'cb.periodStart',
-    monthlyPeriodEnd: 'cb.periodEnd',
-  },
   creditHolds: { id: 'ch.id', userId: 'ch.userId', estCents: 'ch.estCents', expiresAt: 'ch.expiresAt' },
   creditLedger: {
     userId: 'cl.userId',
