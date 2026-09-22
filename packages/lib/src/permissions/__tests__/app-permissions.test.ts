@@ -155,6 +155,28 @@ describe('resolveExplicitAppRoleAccess (pure user-parity table)', () => {
     ).toEqual(expected);
   });
 
+  // The drive-wide canEdit rule (#2627) at the drive root — the same answer
+  // getUserAccessLevel gives a human member bound by the same role.
+  it.each([
+    ['custom role, view-only drive-wide → view, no edit (cannot create root pages)', 'MEMBER', { canView: true, canEdit: false, canShare: false }, false, { canView: true, canEdit: false, canShare: false, canDelete: false }],
+    ['custom role, edit drive-wide → view + edit', 'MEMBER', { canView: true, canEdit: true, canShare: false }, false, { canView: true, canEdit: true, canShare: false, canDelete: false }],
+    ['custom role, null drive-wide → no edit', 'MEMBER', null, false, { canView: true, canEdit: false, canShare: false, canDelete: false }],
+    ['custom role id unresolvable → all-false', 'MEMBER', undefined, true, NONE],
+    ['ADMIN keeps full access whatever the custom role says', 'ADMIN', { canView: true, canEdit: false, canShare: false }, false, FULL],
+  ] as const)('drive root: %s', (_desc, role, driveWidePermissions, customRoleUnresolved, expected) => {
+    expect(
+      resolveExplicitAppRoleAccess({
+        ...base,
+        role,
+        customRole: driveWidePermissions === undefined ? null : { permissions: {}, driveWidePermissions },
+        customRoleUnresolved,
+        pageType: null,
+        isPrivate: false,
+        isDriveRoot: true,
+      }),
+    ).toEqual(expected);
+  });
+
   it('custom role per-page grant wins; canDelete forced false', () => {
     expect(
       resolveExplicitAppRoleAccess({

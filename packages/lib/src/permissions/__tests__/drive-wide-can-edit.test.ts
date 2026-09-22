@@ -23,7 +23,7 @@ vi.mock('@pagespace/db/operators', () => ({
   inArray: vi.fn(),
 }));
 
-import { resolveDriveWideCanEdit } from '../membership-queries';
+import { driveWideCanEdit, resolveDriveWideCanEdit } from '../membership-queries';
 import { db } from '@pagespace/db/db';
 
 function chain(rows: unknown[]) {
@@ -99,5 +99,24 @@ describe('resolveDriveWideCanEdit', () => {
       { driveId: 'd_null', role: 'MEMBER', customRoleId: 'role_null' },
     ]);
     expect(map.get('d_null')).toBe(false);
+  });
+});
+
+// The pure rule both the membership batch and the token resolvers call, so the
+// drives DTO flag, the session check and the token checks cannot drift.
+describe('driveWideCanEdit (pure)', () => {
+  const EDIT = { canView: true, canEdit: true, canShare: false };
+  const VIEW = { canView: true, canEdit: false, canShare: false };
+
+  it.each([
+    ['OWNER', false, null, true],
+    ['ADMIN', true, { driveWidePermissions: VIEW }, true],
+    ['MEMBER', false, null, true],
+    ['MEMBER', true, { driveWidePermissions: EDIT }, true],
+    ['MEMBER', true, { driveWidePermissions: VIEW }, false],
+    ['MEMBER', true, { driveWidePermissions: null }, false],
+    ['MEMBER', true, null, false], // custom role set but unresolved / foreign-drive
+  ] as const)('given %s, hasCustomRole %s, role %j, should be %s', (role, hasCustomRole, customRole, expected) => {
+    expect(driveWideCanEdit({ role, hasCustomRole, customRole })).toBe(expected);
   });
 });

@@ -8,7 +8,7 @@ import {
   isUserDriveMember,
   getUserAccessiblePagesInDriveWithDetails,
 } from './permissions';
-import { fetchCustomRolePermissions, resolveCustomRolePermissions, type CustomRolePerms, type PagePerm } from './membership-queries';
+import { driveWideCanEdit, fetchCustomRolePermissions, resolveCustomRolePermissions, type CustomRolePerms, type PagePerm } from './membership-queries';
 import type { PermissionLevel, PageWithPermissions } from './permissions';
 import type { DriveScopeRow } from '../auth/oauth/scopes';
 
@@ -105,7 +105,19 @@ export function resolveExplicitAppRoleAccess(input: {
   const isAdminLike = role === 'ADMIN' || role === 'OWNER';
 
   if (isDriveRoot) {
-    return { canView: true, canEdit: true, canShare: isAdminLike, canDelete: isAdminLike };
+    // Root-page create is edit on the drive root, decided by the one drive-wide
+    // canEdit rule (#2627) — the answer a human member bound by the same role
+    // gets from getUserAccessLevel. A custom role that did not resolve in this
+    // drive grants nothing.
+    if (!isAdminLike && customRoleUnresolved) {
+      return { canView: false, canEdit: false, canShare: false, canDelete: false };
+    }
+    return {
+      canView: true,
+      canEdit: driveWideCanEdit({ role, hasCustomRole: customRole !== null || customRoleUnresolved, customRole }),
+      canShare: isAdminLike,
+      canDelete: isAdminLike,
+    };
   }
 
   if (isAdminLike) {

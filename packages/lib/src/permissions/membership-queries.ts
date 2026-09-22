@@ -69,6 +69,25 @@ export async function customRoleBelongsToDrive(customRoleId: string, driveId: st
   return result.length > 0;
 }
 
+/**
+ * The drive-wide canEdit rule (#2627) as one pure decision. Every caller —
+ * {@link resolveDriveWideCanEdit} (the drives DTO flag and the session
+ * drive-root check) and the token resolvers' drive-root branch
+ * (resolveExplicitAppRoleAccess) — decides through this, so they cannot drift.
+ *
+ * `customRole` must already be bound to the drive being decided: pass null when
+ * the role id is set but did not resolve there (unresolvable, deleted, or
+ * another drive's role), which fails closed.
+ */
+export function driveWideCanEdit(input: {
+  role: 'OWNER' | 'ADMIN' | 'MEMBER';
+  hasCustomRole: boolean;
+  customRole: { driveWidePermissions: PagePerm | null } | null;
+}): boolean {
+  if (input.role === 'OWNER' || input.role === 'ADMIN' || !input.hasCustomRole) return true;
+  return input.customRole?.driveWidePermissions?.canEdit === true;
+}
+
 export interface DriveWideEditEntry {
   driveId: string;
   role: 'OWNER' | 'ADMIN' | 'MEMBER';
@@ -82,9 +101,10 @@ export interface DriveWideEditEntry {
  * therefore create root-level pages, which the API authorizes as edit on the
  * drive-as-root. A custom role bounds a MEMBER to what the role's
  * driveWidePermissions explicitly grant; an unresolvable role or a null
- * driveWidePermissions fails closed. This mirrors getUserDrivePermissions and
- * the token resolvers (getAppAccessLevel / getScopedAccessLevel) so the drives
- * DTO flag, the session check and the token checks can never disagree.
+ * driveWidePermissions fails closed. The token resolvers (getAppAccessLevel /
+ * getScopedAccessLevel) decide the drive root through the same pure
+ * {@link driveWideCanEdit}, so the drives DTO flag, the session check and the
+ * token checks can never disagree.
  *
  * Callers pass ONE entry per drive the user actually owns or holds a
  * membership in. Page-collaborator-only drives are NOT memberships and must
@@ -120,18 +140,13 @@ export async function resolveDriveWideCanEdit(
 
   const result = new Map<string, boolean>();
   for (const entry of entries) {
-    if (entry.role === 'OWNER' || entry.role === 'ADMIN' || !entry.customRoleId) {
-      result.set(entry.driveId, true);
-      continue;
-    }
-    // Fail closed: an unresolvable custom role, a role bound to another
-    // drive, or a role without explicit drive-wide edit grants nothing at the
-    // drive root.
-    const role = roles.get(entry.customRoleId);
-    result.set(
-      entry.driveId,
-      role?.driveId === entry.driveId && role.driveWidePermissions?.canEdit === true,
-    );
+    // A role bound to another drive counts as unresolved: it fails closed.
+    const role = entry.customRoleId ? roles.get(entry.customRoleId) : undefined;
+    result.set(entry.driveId, driveWideCanEdit({
+      role: entry.role,
+      hasCustomRole: !!entry.customRoleId,
+      customRole: role?.driveId === entry.driveId ? role : null,
+    }));
   }
   return result;
 }
