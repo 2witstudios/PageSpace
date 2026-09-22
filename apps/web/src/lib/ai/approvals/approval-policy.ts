@@ -27,6 +27,7 @@
  */
 
 import type { ToolSet } from 'ai';
+import type { AuthResult } from '@/lib/auth';
 import { isWriteTool } from '../core/tool-filtering';
 import { FINISH_TOOL_NAME } from '../tools/finish-tool';
 import { ASK_USER_TOOL_NAME } from '../tools/ask-user-tools';
@@ -89,6 +90,35 @@ export interface ApprovalPolicyContext {
 }
 
 export type ApprovalDecision = 'allow' | 'ask';
+
+// ─── Interactive? ──────────────────────────────────────────────────────────────
+
+/**
+ * Is there a human on this turn who can answer an approval card?
+ *
+ * Decided from the AUTHENTICATED principal and nothing else. In particular NOT
+ * from `X-Agent-Dispatch-Depth`: that is a plain request header, and a browser
+ * that sets it to 1 must not be able to turn its own gate off. A dispatched
+ * worker does not need the depth to be recognised as headless — its hop is
+ * authenticated as a `service` principal (`/api/internal/agent-dispatch`), and
+ * MCP clients and OAuth apps have no card to click. Workflow, trigger and
+ * channel-mention runs never reach the chat turns at all (they drive streamText
+ * themselves), so they are `auto` by construction.
+ *
+ * The table is exhaustive over `AuthResult['tokenType']` on purpose: a new
+ * principal kind is a compile error here, not a silent fall-through to either
+ * side (the "new AuthResult variant falls through" rule). Type-only import —
+ * this module stays pure.
+ */
+const HEADLESS_BY_TOKEN_TYPE: Record<AuthResult['tokenType'], boolean> = {
+  session: false,
+  service: true,
+  mcp: true,
+  oauth: true,
+};
+
+export const isInteractiveApprovalTurn = (auth: Pick<AuthResult, 'tokenType'>): boolean =>
+  !HEADLESS_BY_TOKEN_TYPE[auth.tokenType];
 
 /**
  * The tool that will actually run. `execute_tool({tool_name, parameters})` is
