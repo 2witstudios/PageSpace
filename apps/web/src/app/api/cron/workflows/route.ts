@@ -102,11 +102,7 @@ export async function POST(req: Request) {
           // bills. A refused fire is a skip, not a failure: record it in the run
           // history and advance the schedule, so an out-of-credits owner's
           // workflow is not re-fired (and re-reported) on every tick.
-          const hold = await acquireWorkflowCreditHold(
-            workflow.createdBy,
-            { steps: workflow.steps, prompt: workflow.prompt, agentPageId: workflow.agentPageId },
-            'scheduled',
-          );
+          const hold = await acquireWorkflowCreditHold(input, 'scheduled');
           if (!hold.allowed) {
             loggers.api.info('Workflow cron: skipped (credit gate denied)', { workflowId: workflow.id, reason: hold.reason });
             await recordCreditSkippedRun({ workflowId: workflow.id, source: input.source, reason: hold.reason });

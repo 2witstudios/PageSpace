@@ -6,6 +6,7 @@ import { taskTriggers } from '@pagespace/db/schema/task-triggers';
 import { taskItems } from '@pagespace/db/schema/tasks';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { executeWorkflow, type WorkflowExecutionInput, type WorkflowExecutionResult } from '@/lib/workflows/workflow-executor';
+import { acquireWorkflowCreditHold, recordCreditSkippedRun, creditDeniedError } from '@/lib/workflows/workflow-credit-gate';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { audit } from '@pagespace/lib/audit/audit-log';
 
@@ -52,6 +53,7 @@ export async function POST(req: Request) {
 
     let executed = 0;
     let totalClaimed = 0;
+    let skipped = 0;
     const errors: string[] = [];
 
     for (let i = 0; i < dueTriggers.length; i += MAX_CONCURRENT_TRIGGERS) {
@@ -100,7 +102,7 @@ export async function POST(req: Request) {
               lastFireError: 'Linked workflow not found',
             }).where(eq(taskTriggers.id, trigger.id));
             const skippedResult: WorkflowExecutionResult = { success: false, durationMs: 0, error: 'Linked workflow not found' };
-            return { trigger, result: skippedResult };
+            return { trigger, creditSkipped: false as const, result: skippedResult };
           }
 
           // Pre-execution skip for due_date triggers whose task became ineligible
@@ -120,7 +122,7 @@ export async function POST(req: Request) {
                 lastFireError: skipReason,
               }).where(eq(taskTriggers.id, trigger.id));
               const skippedResult: WorkflowExecutionResult = { success: false, durationMs: 0, error: skipReason };
-              return { trigger, result: skippedResult };
+              return { trigger, creditSkipped: false as const, result: skippedResult };
             }
           }
 
@@ -138,27 +140,53 @@ export async function POST(req: Request) {
             taskContext: { taskItemId: trigger.taskItemId, triggerType: trigger.triggerType },
           };
 
-          const result = await executeWorkflow(input);
+          // Credit gate BEFORE the executor builds a model, on the owner the run
+          // bills. The trigger is one-shot and already claimed, so a refused fire
+          // retires it with the reason (as the task skips above do) and records a
+          // cancelled run — a skip, not a failure.
+          const hold = await acquireWorkflowCreditHold(input, 'scheduled');
+          if (!hold.allowed) {
+            logger.info('Task trigger: skipped (credit gate denied)', { triggerId: trigger.id, reason: hold.reason });
+            await recordCreditSkippedRun({ workflowId: workflow.id, source: input.source, reason: hold.reason });
+            await db.update(taskTriggers).set({
+              isEnabled: false,
+              lastFireError: creditDeniedError(hold.reason),
+            }).where(eq(taskTriggers.id, trigger.id));
+            return { trigger, creditSkipped: true as const };
+          }
+
+          let result: WorkflowExecutionResult;
+          try {
+            result = await executeWorkflow(input);
+          } finally {
+            // executeWorkflow debits real usage itself; the hold only reserved headroom.
+            hold.release();
+          }
 
           await db.update(taskTriggers).set({
             isEnabled: false,
             lastFireError: result.error || null,
           }).where(eq(taskTriggers.id, trigger.id));
 
-          return { trigger, result };
+          return { trigger, creditSkipped: false as const, result };
         }),
       );
 
       for (let j = 0; j < batchResults.length; j++) {
         const settled = batchResults[j];
         if (settled.status === 'fulfilled') {
-          if (settled.value.result.success) {
+          const outcome = settled.value;
+          if (outcome.creditSkipped) {
+            skipped++;
+            continue;
+          }
+          if (outcome.result.success) {
             executed++;
           } else {
-            errors.push(`task-trigger-${settled.value.trigger.id}: ${settled.value.result.error}`);
+            errors.push(`task-trigger-${outcome.trigger.id}: ${outcome.result.error}`);
           }
-          if (settled.value.result.finalizeError) {
-            errors.push(`task-trigger-${settled.value.trigger.id}: finalize failed: ${settled.value.result.finalizeError}`);
+          if (outcome.result.finalizeError) {
+            errors.push(`task-trigger-${outcome.trigger.id}: finalize failed: ${outcome.result.finalizeError}`);
           }
         } else {
           const trigger = claimed[j];
@@ -174,14 +202,15 @@ export async function POST(req: Request) {
       }
     }
 
-    logger.info(`Task trigger cron: Complete. Executed ${executed}/${totalClaimed}`);
+    logger.info(`Task trigger cron: Complete. Executed ${executed}/${totalClaimed}, skipped ${skipped}`);
 
-    audit({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'task_triggers', details: { executed, failed: errors.length } });
+    audit({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'task_triggers', details: { executed, failed: errors.length, skipped } });
 
     return NextResponse.json({
       message: 'Task trigger cron complete',
       executed,
       total: totalClaimed,
+      skipped,
       errors: errors.length > 0 ? errors : undefined,
     });
   } catch (error) {

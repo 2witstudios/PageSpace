@@ -87,6 +87,17 @@ vi.mock('../workflow-executor', () => ({
   executeWorkflow: vi.fn(),
 }));
 
+const { mockAcquireHold, mockReleaseHold, mockRecordSkip } = vi.hoisted(() => ({
+  mockAcquireHold: vi.fn(),
+  mockReleaseHold: vi.fn(),
+  mockRecordSkip: vi.fn(),
+}));
+vi.mock('../workflow-credit-gate', () => ({
+  acquireWorkflowCreditHold: mockAcquireHold,
+  recordCreditSkippedRun: mockRecordSkip,
+  creditDeniedError: (reason: string) => `AI credit gate denied: ${reason}`,
+}));
+
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
     loggers: {
     api: {
@@ -169,6 +180,9 @@ describe('task-trigger-helpers', () => {
     mockSelectWhere.mockResolvedValue([]);
     mockDelete.mockImplementation(() => ({ where: mockDeleteWhere }));
     mockDeleteWhere.mockResolvedValue(undefined);
+
+    mockAcquireHold.mockResolvedValue({ allowed: true, release: mockReleaseHold });
+    mockRecordSkip.mockResolvedValue(undefined);
 
     // Default: transaction runs the callback against a fresh tx mock.
     mockTransaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) => {
@@ -318,6 +332,62 @@ describe('task-trigger-helpers', () => {
       mockSelect.mockImplementationOnce(() => { throw new Error('DB connection lost'); });
 
       await expect(fireCompletionTrigger('task-1')).resolves.toBeUndefined();
+    });
+
+    describe('credit gate', () => {
+      const claimAndLoad = () => {
+        mockFrom
+          .mockImplementationOnce(() => ({ where: vi.fn().mockResolvedValueOnce([mockTrigger]) }))
+          .mockImplementationOnce(() => ({ where: vi.fn().mockResolvedValueOnce([mockWorkflow]) }));
+        mockReturning.mockResolvedValueOnce([mockTrigger]);
+      };
+
+      it('gates the workflow owner on the input it runs, before executing', async () => {
+        claimAndLoad();
+        vi.mocked(executeWorkflow).mockResolvedValueOnce({ success: true, durationMs: 50 });
+
+        await fireCompletionTrigger('task-1');
+
+        expect(mockAcquireHold).toHaveBeenCalledWith(vi.mocked(executeWorkflow).mock.calls[0][0], 'scheduled');
+        expect(mockAcquireHold.mock.calls[0][0].createdBy).toBe('user-1');
+        expect(mockAcquireHold.mock.invocationCallOrder[0])
+          .toBeLessThan(vi.mocked(executeWorkflow).mock.invocationCallOrder[0]);
+      });
+
+      it('out of credits: never runs, records a skipped run, retires the one-shot trigger with the reason', async () => {
+        claimAndLoad();
+        mockAcquireHold.mockResolvedValueOnce({ allowed: false, reason: 'out_of_credits' });
+
+        await fireCompletionTrigger('task-1');
+
+        expect(executeWorkflow).not.toHaveBeenCalled();
+        expect(mockRecordSkip).toHaveBeenCalledWith({
+          workflowId: 'wf-1',
+          source: { table: 'taskTriggers', id: 'trg-1', triggerAt: null },
+          reason: 'out_of_credits',
+        });
+        expect(mockSet).toHaveBeenCalledWith({ isEnabled: false, lastFireError: 'AI credit gate denied: out_of_credits' });
+      });
+
+      it('releases the hold exactly once, after the fire-and-forget run settles', async () => {
+        claimAndLoad();
+        vi.mocked(executeWorkflow).mockResolvedValueOnce({ success: true, durationMs: 50 });
+
+        await fireCompletionTrigger('task-1');
+
+        await vi.waitFor(() => expect(mockReleaseHold).toHaveBeenCalledTimes(1));
+        expect(vi.mocked(executeWorkflow).mock.invocationCallOrder[0])
+          .toBeLessThan(mockReleaseHold.mock.invocationCallOrder[0]);
+      });
+
+      it('releases the hold when the run rejects', async () => {
+        claimAndLoad();
+        vi.mocked(executeWorkflow).mockRejectedValueOnce(new Error('boom'));
+
+        await fireCompletionTrigger('task-1');
+
+        await vi.waitFor(() => expect(mockReleaseHold).toHaveBeenCalledTimes(1));
+      });
     });
   });
 

@@ -15,7 +15,13 @@ const {
   mockSelect,
   mockOrderBy,
   mockLimit,
+  mockAcquireHold,
+  mockReleaseHold,
+  mockRecordSkip,
 } = vi.hoisted(() => ({
+  mockAcquireHold: vi.fn(),
+  mockReleaseHold: vi.fn(),
+  mockRecordSkip: vi.fn(),
   mockReturning: vi.fn().mockResolvedValue([]),
   mockUpdateWhere: vi.fn(),
   mockUpdateSet: vi.fn(),
@@ -33,6 +39,12 @@ vi.mock('@/lib/auth/cron-auth', () => ({
 
 vi.mock('@/lib/workflows/workflow-executor', () => ({
   executeWorkflow: vi.fn(),
+}));
+
+vi.mock('@/lib/workflows/workflow-credit-gate', () => ({
+  acquireWorkflowCreditHold: mockAcquireHold,
+  recordCreditSkippedRun: mockRecordSkip,
+  creditDeniedError: (reason: string) => `AI credit gate denied: ${reason}`,
 }));
 
 const mockAudit = vi.hoisted(() => vi.fn());
@@ -183,6 +195,9 @@ describe('POST /api/cron/task-triggers', () => {
       return p;
     });
     mockReturning.mockResolvedValue([]);
+
+    mockAcquireHold.mockResolvedValue({ allowed: true, release: mockReleaseHold });
+    mockRecordSkip.mockResolvedValue(undefined);
   });
 
   it('returns auth error when cron request is invalid', async () => {
@@ -315,5 +330,77 @@ describe('POST /api/cron/task-triggers', () => {
         && (arg as { isEnabled?: boolean }).isEnabled === false,
     );
     expect(disablingCall).toBeDefined();
+  });
+
+  describe('credit gate', () => {
+    const fireOneDueTrigger = async () => {
+      pushDiscoveryRows([MOCK_TRIGGER]);
+      mockReturning.mockResolvedValueOnce([MOCK_TRIGGER]);
+      pushLookupRows([MOCK_WORKFLOW]);
+      pushLookupRows([MOCK_TASK]);
+      const response = await POST(new Request('https://example.com/api/cron/task-triggers', { method: 'POST' }));
+      return response.json();
+    };
+
+    beforeEach(() => {
+      vi.mocked(executeWorkflow).mockResolvedValue({ success: true, durationMs: 50 });
+    });
+
+    it('gates the workflow owner as a scheduled run before executing', async () => {
+      await fireOneDueTrigger();
+
+      // The gate reads the very input the executor runs: billed user + steps.
+      expect(mockAcquireHold).toHaveBeenCalledWith(vi.mocked(executeWorkflow).mock.calls[0][0], 'scheduled');
+      expect(mockAcquireHold.mock.calls[0][0].createdBy).toBe(MOCK_WORKFLOW.createdBy);
+      expect(mockAcquireHold.mock.invocationCallOrder[0])
+        .toBeLessThan(vi.mocked(executeWorkflow).mock.invocationCallOrder[0]);
+    });
+
+    it('does not gate a trigger that is skipped for its task (no model would run)', async () => {
+      pushDiscoveryRows([MOCK_TRIGGER]);
+      mockReturning.mockResolvedValueOnce([MOCK_TRIGGER]);
+      pushLookupRows([MOCK_WORKFLOW]);
+      pushLookupRows([{ ...MOCK_TASK, completedAt: new Date() }]);
+
+      await POST(new Request('https://example.com/api/cron/task-triggers', { method: 'POST' }));
+
+      expect(mockAcquireHold).not.toHaveBeenCalled();
+    });
+
+    it('out of credits: never runs, records a skipped run, retires the one-shot trigger with the reason, reports no failure', async () => {
+      mockAcquireHold.mockResolvedValue({ allowed: false, reason: 'out_of_credits' });
+
+      const body = await fireOneDueTrigger();
+
+      expect(executeWorkflow).not.toHaveBeenCalled();
+      expect(mockRecordSkip).toHaveBeenCalledWith({
+        workflowId: MOCK_WORKFLOW.id,
+        source: { table: 'taskTriggers', id: MOCK_TRIGGER.id, triggerAt: MOCK_TRIGGER.nextRunAt },
+        reason: 'out_of_credits',
+      });
+      expect(mockUpdateSet).toHaveBeenCalledWith({
+        isEnabled: false,
+        lastFireError: 'AI credit gate denied: out_of_credits',
+      });
+      expect(body.skipped).toBe(1);
+      expect(body.executed).toBe(0);
+      expect(body.errors).toBeUndefined();
+    });
+
+    it('releases the hold exactly once, after the run settles', async () => {
+      await fireOneDueTrigger();
+
+      expect(mockReleaseHold).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(executeWorkflow).mock.invocationCallOrder[0])
+        .toBeLessThan(mockReleaseHold.mock.invocationCallOrder[0]);
+    });
+
+    it('releases the hold when the executor throws', async () => {
+      vi.mocked(executeWorkflow).mockRejectedValue(new Error('boom'));
+
+      await fireOneDueTrigger();
+
+      expect(mockReleaseHold).toHaveBeenCalledTimes(1);
+    });
   });
 });

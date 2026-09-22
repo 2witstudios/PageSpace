@@ -79,26 +79,11 @@ function routeAndDirectImports(file: string): Array<{ path: string; src: string 
 }
 
 /**
- * Pre-existing routes that run a model with no credit gate, surfaced when this
- * guard learned to look for ungated routes (it previously only checked that gate
- * CALLERS passed maxInFlight, so a route that never called the gate was invisible
- * to it — which is how /api/ai/btw shipped unmetered). Each is a known gap with
- * its own fix lane (fix-workflow-gate). The list is pinned EXACTLY below: it may
- * only shrink, and adding a route to it is a billing decision, not a way to quiet
- * the guard.
- */
-const KNOWN_UNGATED: Record<string, string> = {
-  '/api/workflows/[workflowId]/run/route.ts':
-    'user-triggered manual run: calls executeWorkflow (runs the model) without the trigger-budget hold the calendar/zoom/webhook executors take',
-  '/api/cron/workflows/route.ts':
-    'scheduled workflows: calls executeWorkflow without the trigger-budget hold',
-  '/api/cron/task-triggers/route.ts':
-    'task-trigger workflows: calls executeWorkflow (via task-trigger-helpers) without the trigger-budget hold',
-};
-
-/**
- * Routes that run a model without a PRE-call gate by design. Pinned exactly too.
- * Not a gap list: each entry is a considered exemption with its reason.
+ * Routes that run a model without a PRE-call gate by design. Pinned exactly below:
+ * adding a route here is a billing decision, not a way to quiet the guard. There
+ * is no "known gap" list any more — the workflow routes that were on one (manual
+ * run, the workflows cron, the task-triggers cron) now take the credit hold via
+ * `@/lib/workflows/workflow-credit-gate`, and a new ungated route fails outright.
  */
 const UNGATED_BY_DESIGN: Record<string, string> = {
   '/api/memory/cron/route.ts':
@@ -118,34 +103,39 @@ function ungatedModelRoutes(): string[] {
 
 describe('AI gate call-site guards', () => {
   it('every route that creates an AI provider or runs a model passes the credit gate', () => {
-    const offenders = ungatedModelRoutes().filter((rel) => !(rel in KNOWN_UNGATED) && !(rel in UNGATED_BY_DESIGN));
+    const offenders = ungatedModelRoutes().filter((rel) => !(rel in UNGATED_BY_DESIGN));
     // A model call with no canConsumeAI = unmetered spend: no hold, no balance check,
     // no in-flight cap. Gate before the call and settle the hold via trackUsage.
     expect(offenders).toEqual([]);
   });
 
-  it('the ungated lists are exactly these routes, each with a reason', () => {
-    // Pinned literally: growing either list must fail here and be argued in review.
-    expect(Object.keys(KNOWN_UNGATED).sort()).toEqual([
-      '/api/cron/task-triggers/route.ts',
-      '/api/cron/workflows/route.ts',
-      '/api/workflows/[workflowId]/run/route.ts',
-    ]);
+  it('the ungated list is exactly these routes, each with a reason', () => {
+    // Pinned literally: growing the list must fail here and be argued in review.
     expect(Object.keys(UNGATED_BY_DESIGN)).toEqual(['/api/memory/cron/route.ts']);
-    for (const reason of [...Object.values(KNOWN_UNGATED), ...Object.values(UNGATED_BY_DESIGN)]) {
+    for (const reason of Object.values(UNGATED_BY_DESIGN)) {
       expect(reason.length).toBeGreaterThan(20);
     }
   });
 
   it('every listed route is still ungated (a fixed route must leave the list)', () => {
     const stillUngated = new Set(ungatedModelRoutes());
-    expect([...Object.keys(KNOWN_UNGATED), ...Object.keys(UNGATED_BY_DESIGN)].filter((rel) => !stillUngated.has(rel))).toEqual([]);
+    expect(Object.keys(UNGATED_BY_DESIGN).filter((rel) => !stillUngated.has(rel))).toEqual([]);
   });
 
   it('the model-call scan sees the /btw side-question stream (guard is not vacuous)', () => {
     const btw = ROUTE_FILES.find((f) => apiRelPath(f) === '/api/ai/btw/route.ts');
     expect(btw).toBeDefined();
     expect(routeAndDirectImports(btw!).some(({ src }) => MODEL_CALL.test(src))).toBe(true);
+  });
+
+  it('the model-call scan sees the workflow routes run a model (their gate is required, not vacuous)', () => {
+    // These run the model through executeWorkflow; if the scan stopped seeing it,
+    // dropping their gate would pass this guard silently.
+    for (const rel of ['/api/workflows/[workflowId]/run/route.ts', '/api/cron/workflows/route.ts', '/api/cron/task-triggers/route.ts']) {
+      const file = ROUTE_FILES.find((f) => apiRelPath(f) === rel);
+      expect(file, rel).toBeDefined();
+      expect(routeAndDirectImports(file!).some(({ src }) => MODEL_CALL.test(src)), rel).toBe(true);
+    }
   });
 
   it('found the route files (guard is actually scanning something)', () => {

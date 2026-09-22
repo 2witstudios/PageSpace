@@ -302,11 +302,12 @@ describe('POST /api/cron/workflows', () => {
     it('gates the workflow owner as a scheduled run before executing', async () => {
       await tick();
 
+      // The gate reads the very input the executor runs: billed user + steps.
       expect(mockAcquireHold).toHaveBeenCalledWith(
-        MOCK_WORKFLOW.createdBy,
-        { steps: undefined, prompt: MOCK_WORKFLOW.prompt, agentPageId: MOCK_WORKFLOW.agentPageId },
+        vi.mocked(executeWorkflow).mock.calls[0][0],
         'scheduled',
       );
+      expect(mockAcquireHold.mock.calls[0][0].createdBy).toBe(MOCK_WORKFLOW.createdBy);
       expect(mockAcquireHold.mock.invocationCallOrder[0])
         .toBeLessThan(vi.mocked(executeWorkflow).mock.invocationCallOrder[0]);
     });

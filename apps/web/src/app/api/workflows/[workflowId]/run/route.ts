@@ -8,7 +8,7 @@ import { workflows } from '@pagespace/db/schema/workflows';
 import { executeWorkflow, type WorkflowExecutionInput, type WorkflowExecutionResult } from '@/lib/workflows/workflow-executor';
 import { getNextRunDate } from '@/lib/workflows/cron-utils';
 import { acquireWorkflowCreditHold } from '@/lib/workflows/workflow-credit-gate';
-import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
+import { creditGatePayload } from '@/lib/subscription/credit-gate-response';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 const MANAGEABLE_TRIGGER_TYPE = 'cron' as const;
@@ -59,13 +59,13 @@ export async function POST(
 
   // Credit gate BEFORE the executor builds a model. The run bills the workflow's
   // creator (executeWorkflow tracks usage as createdBy), so that is who is gated,
-  // not the admin who pressed Run. out_of_credits -> 402, a cap -> 429.
-  const hold = await acquireWorkflowCreditHold(
-    workflow.createdBy,
-    { steps: workflow.steps, prompt: workflow.prompt, agentPageId: workflow.agentPageId },
-    'interactive',
-  );
-  if (!hold.allowed) return creditGateErrorResponse(hold.reason);
+  // not the admin who pressed Run. out_of_credits -> 402, a cap -> 429. The Run
+  // button toasts `error`, so it carries the readable message; `code` the reason.
+  const hold = await acquireWorkflowCreditHold(executionInput, 'interactive');
+  if (!hold.allowed) {
+    const denied = creditGatePayload(hold.reason);
+    return NextResponse.json({ error: denied.message, code: denied.error }, { status: denied.status });
+  }
 
   // Atomic claim is enforced by the workflow_runs partial unique index inside
   // the executor — any concurrent fire (cron / manual) for the same workflow

@@ -314,11 +314,12 @@ describe('POST /api/workflows/[workflowId]/run', () => {
 
       await run();
 
+      // The gate reads the very input the executor runs: billed user + steps.
       expect(mockAcquireHold).toHaveBeenCalledWith(
-        'user_123',
-        { steps: undefined, prompt: mockWorkflow.prompt, agentPageId: mockWorkflow.agentPageId },
+        vi.mocked(executeWorkflow).mock.calls[0][0],
         'interactive',
       );
+      expect(mockAcquireHold.mock.calls[0][0].createdBy).toBe('user_123');
       expect(mockAcquireHold.mock.invocationCallOrder[0])
         .toBeLessThan(vi.mocked(executeWorkflow).mock.invocationCallOrder[0]);
     });
@@ -329,6 +330,10 @@ describe('POST /api/workflows/[workflowId]/run', () => {
       const response = await run();
 
       expect(response.status).toBe(402);
+      // The Run button toasts `error` verbatim, so it must read as a sentence, not a code.
+      const body = await response.json();
+      expect(body.code).toBe('out_of_credits');
+      expect(body.error).toMatch(/credit balance is too low/);
       expect(executeWorkflow).not.toHaveBeenCalled();
       expect(getNextRunDate).not.toHaveBeenCalled();
     });

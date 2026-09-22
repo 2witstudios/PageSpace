@@ -603,6 +603,13 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Workflows no longer run when you are out of AI credits** — pressing Run on a workflow,
+  a scheduled workflow, and a task's due-date or completion trigger now check your AI credit
+  balance before the agent starts, as calendar, Zoom and webhook triggers already did. Previously
+  they ran anyway and were charged afterwards. Pressing Run with no credits left now says so; a
+  scheduled or task-triggered run that is skipped shows in the workflow's run history as cancelled,
+  with the reason, and the schedule moves on to its next time.
+
 - **A queued message is no longer lost when it fails to send** — if a message you queued while a
   response was streaming could not be sent (a network error, or not enough credits), it used to
   disappear. It now stays at the front of the queue, you see an error, and it goes out after the
