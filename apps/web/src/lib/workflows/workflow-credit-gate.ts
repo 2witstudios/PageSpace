@@ -1,14 +1,13 @@
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
-import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
 import { canConsumeAI, type GateOptions } from '@pagespace/lib/billing/credit-gate';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { CREDIT_HOLD_ESTIMATE_CENTS, MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import type { GateReason } from '@pagespace/lib/billing/credit-core';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { resolveSteps, hasAiStep, countAiSteps } from './core/step-plan';
-import type { WorkflowExecutionInput, WorkflowRunSource } from './workflow-executor';
+import type { RunAdmission, WorkflowExecutionInput } from './workflow-executor';
 
 /**
  * How a run was started, which decides the gate's caps:
@@ -35,7 +34,8 @@ const NO_HOLD: WorkflowCreditHold = { allowed: true, release: () => {} };
  * Credit gate for a workflow run, taken BEFORE executeWorkflow builds a model.
  * It reads the same input the executor will run, so the gated user is the
  * billed user (executeWorkflow tracks usage as `createdBy`) and the reservation
- * is sized from the steps that will actually execute.
+ * is sized from the steps that will actually execute. Callers pass it to the
+ * executor through `creditAdmission` rather than calling it before the run.
  * executeWorkflow debits real usage itself (AIMonitoring.trackUsage →
  * consumeCredits, no holdId), so the hold only reserves headroom while the run
  * is in flight: the caller must call `release` once the run settles, in a
@@ -80,24 +80,23 @@ export async function acquireWorkflowCreditHold(
 }
 
 /**
- * Record a scheduled fire the gate refused as a terminal `cancelled` run, so the
- * workflow's run history says why it did not run (the calendar-trigger cron
- * records its skips the same way). Not `error`: nothing failed, the owner is out
- * of credits — the cron counts it as skipped, not as a failure.
+ * The credit gate as executeWorkflow's `admit` hook, so it runs INSIDE the
+ * run's atomic claim: an overlapping fire of the same workflow loses the claim
+ * and never gates, and a refused fire is finalized by the executor as a
+ * `cancelled` run whose error names the reason (a skip, not a failure). The
+ * executor calls `release` exactly once when an admitted run settles.
+ * `onDenied` hands the raw gate reason to a caller that maps it (the manual
+ * Run route's 402/429).
  */
-export async function recordCreditSkippedRun(params: {
-  workflowId: string;
-  source: WorkflowRunSource;
-  reason: GateReason;
-}): Promise<void> {
-  await db.insert(workflowRuns).values({
-    workflowId: params.workflowId,
-    sourceTable: params.source.table,
-    sourceId: params.source.id,
-    triggerAt: params.source.triggerAt,
-    status: 'cancelled',
-    endedAt: new Date(),
-    durationMs: 0,
-    error: creditDeniedError(params.reason),
-  });
+export function creditAdmission(
+  input: GatedRunInput,
+  mode: WorkflowRunMode,
+  onDenied?: (reason: GateReason) => void,
+): () => Promise<RunAdmission> {
+  return async () => {
+    const hold = await acquireWorkflowCreditHold(input, mode);
+    if (hold.allowed) return { admitted: true, release: hold.release };
+    onDenied?.(hold.reason);
+    return { admitted: false, error: creditDeniedError(hold.reason) };
+  };
 }

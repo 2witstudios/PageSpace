@@ -7,11 +7,7 @@ const {
   mockSelectWhere,
   mockCanConsumeAI,
   mockReleaseHold,
-  mockInsert,
-  mockInsertValues,
 } = vi.hoisted(() => ({
-  mockInsert: vi.fn(),
-  mockInsertValues: vi.fn(),
   mockSelect: vi.fn(),
   mockSelectFrom: vi.fn(),
   mockSelectWhere: vi.fn(),
@@ -19,8 +15,7 @@ const {
   mockReleaseHold: vi.fn(),
 }));
 
-vi.mock('@pagespace/db/db', () => ({ db: { select: mockSelect, insert: mockInsert } }));
-vi.mock('@pagespace/db/schema/workflow-runs', () => ({ workflowRuns: { id: 'id' } }));
+vi.mock('@pagespace/db/db', () => ({ db: { select: mockSelect } }));
 vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn() }));
 vi.mock('@pagespace/db/schema/auth', () => ({ users: { id: 'id', subscriptionTier: 'subscriptionTier' } }));
 vi.mock('@pagespace/lib/billing/credit-gate', () => ({ canConsumeAI: mockCanConsumeAI }));
@@ -30,7 +25,7 @@ vi.mock('@pagespace/lib/billing/credit-pricing', () => ({
   MAX_CHAT_INFLIGHT: 3,
 }));
 
-import { acquireWorkflowCreditHold, creditDeniedError, recordCreditSkippedRun } from '../workflow-credit-gate';
+import { acquireWorkflowCreditHold, creditAdmission, creditDeniedError } from '../workflow-credit-gate';
 
 const LEGACY_AI_WORKFLOW = { createdBy: 'user_1', steps: null, prompt: 'Summarize', agentPageId: 'agent_1' };
 
@@ -151,31 +146,38 @@ describe('creditDeniedError', () => {
   });
 });
 
-describe('recordCreditSkippedRun', () => {
+describe('creditAdmission', () => {
   beforeEach(() => {
     vi.resetAllMocks();
-    mockInsert.mockReturnValue({ values: mockInsertValues });
-    mockInsertValues.mockResolvedValue(undefined);
+    mockSelect.mockReturnValue({ from: mockSelectFrom });
+    mockSelectFrom.mockReturnValue({ where: mockSelectWhere });
+    mockSelectWhere.mockResolvedValue([{ subscriptionTier: 'pro' }]);
+    mockReleaseHold.mockResolvedValue(undefined);
   });
 
-  it('writes a terminal cancelled run carrying the denial, so run history shows the skip', async () => {
-    const triggerAt = new Date('2025-01-01T09:00:00Z');
+  it('gates nothing until the executor calls it (inside the run claim)', () => {
+    creditAdmission(LEGACY_AI_WORKFLOW, 'scheduled');
 
-    await recordCreditSkippedRun({
-      workflowId: 'wf_1',
-      source: { table: 'taskTriggers', id: 'trig_1', triggerAt },
-      reason: 'out_of_credits',
-    });
+    expect(mockCanConsumeAI).not.toHaveBeenCalled();
+  });
 
-    expect(mockInsertValues).toHaveBeenCalledWith({
-      workflowId: 'wf_1',
-      sourceTable: 'taskTriggers',
-      sourceId: 'trig_1',
-      triggerAt,
-      status: 'cancelled',
-      endedAt: expect.any(Date),
-      durationMs: 0,
-      error: 'AI credit gate denied: out_of_credits',
-    });
+  it('admits with a release that frees the hold', async () => {
+    mockCanConsumeAI.mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'hold_1' });
+
+    const admission = await creditAdmission(LEGACY_AI_WORKFLOW, 'scheduled')();
+    if (!admission.admitted) throw new Error('expected admission');
+    admission.release();
+
+    expect(mockReleaseHold).toHaveBeenCalledWith('hold_1');
+  });
+
+  it('refuses with the reason as the run error and hands the raw reason to onDenied', async () => {
+    mockCanConsumeAI.mockResolvedValue({ allowed: false, reason: 'out_of_credits' });
+    const onDenied = vi.fn();
+
+    const admission = await creditAdmission(LEGACY_AI_WORKFLOW, 'interactive', onDenied)();
+
+    expect(admission).toEqual({ admitted: false, error: 'AI credit gate denied: out_of_credits' });
+    expect(onDenied).toHaveBeenCalledWith('out_of_credits');
   });
 });

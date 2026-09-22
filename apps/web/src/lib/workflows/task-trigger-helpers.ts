@@ -4,7 +4,7 @@ import { taskItems } from '@pagespace/db/schema/tasks'
 import { workflows } from '@pagespace/db/schema/workflows';
 import { taskTriggers } from '@pagespace/db/schema/task-triggers';
 import { executeWorkflow, type WorkflowExecutionInput } from './workflow-executor';
-import { acquireWorkflowCreditHold, recordCreditSkippedRun, creditDeniedError } from './workflow-credit-gate';
+import { creditAdmission } from './workflow-credit-gate';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { validateAgentTrigger, type AgentTriggerPayload } from './agent-trigger-shared';
 
@@ -274,24 +274,11 @@ export async function fireCompletionTrigger(taskId: string): Promise<void> {
       taskContext: { taskItemId: taskId, triggerType: 'completion' },
     };
 
-    // Credit gate BEFORE the executor builds a model, on the owner the run bills
-    // — the same gate the task-triggers cron takes for due-date fires. The
-    // trigger is one-shot and already claimed, so a refused fire retires it with
-    // the reason and records a cancelled run.
-    const hold = await acquireWorkflowCreditHold(input, 'scheduled');
-    if (!hold.allowed) {
-      logger.info('Completion trigger: skipped (credit gate denied)', { triggerId: completionTrigger.id, reason: hold.reason });
-      await recordCreditSkippedRun({ workflowId: workflow.id, source: input.source, reason: hold.reason });
-      await db.update(taskTriggers).set({
-        isEnabled: false,
-        lastFireError: creditDeniedError(hold.reason),
-      }).where(eq(taskTriggers.id, completionTrigger.id));
-      return;
-    }
-
-    // executeWorkflow debits real usage itself; the hold only reserves headroom
-    // until the run settles, however it settles.
-    void executeWorkflow(input).finally(hold.release).then(async (result) => {
+    // The credit gate runs inside the executor's run claim, on the owner the run
+    // bills — the same gate the task-triggers cron takes for due-date fires. A
+    // refused fire comes back `skipped` (recorded as a cancelled run with the
+    // reason) and retires the one-shot trigger with that reason below.
+    void executeWorkflow(input, { admit: creditAdmission(input, 'scheduled') }).then(async (result) => {
       try {
         await db.update(taskTriggers).set({
           lastFireError: result.error || null,

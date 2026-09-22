@@ -12,13 +12,9 @@ const {
   mockSelectWhere,
   mockSelectFrom,
   mockSelect,
-  mockAcquireHold,
-  mockReleaseHold,
-  mockRecordSkip,
+  mockCreditAdmission,
 } = vi.hoisted(() => ({
-  mockAcquireHold: vi.fn(),
-  mockReleaseHold: vi.fn(),
-  mockRecordSkip: vi.fn(),
+  mockCreditAdmission: vi.fn(),
   mockUpdateWhere: vi.fn(),
   mockUpdateSet: vi.fn(),
   mockUpdate: vi.fn(),
@@ -40,9 +36,7 @@ vi.mock('@/lib/workflows/cron-utils', () => ({
 }));
 
 vi.mock('@/lib/workflows/workflow-credit-gate', () => ({
-  acquireWorkflowCreditHold: mockAcquireHold,
-  recordCreditSkippedRun: mockRecordSkip,
-  creditDeniedError: (reason: string) => `AI credit gate denied: ${reason}`,
+  creditAdmission: mockCreditAdmission,
 }));
 
 const mockAudit = vi.hoisted(() => vi.fn());
@@ -136,8 +130,7 @@ describe('POST /api/cron/workflows', () => {
     mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
     mockUpdateWhere.mockResolvedValue(undefined);
 
-    mockAcquireHold.mockResolvedValue({ allowed: true, release: mockReleaseHold });
-    mockRecordSkip.mockResolvedValue(undefined);
+    mockCreditAdmission.mockReturnValue(async () => ({ admitted: true, release: () => {} }));
   });
 
   it('should return auth error when cron request is invalid', async () => {
@@ -188,7 +181,7 @@ describe('POST /api/cron/workflows', () => {
       prompt: MOCK_WORKFLOW.prompt,
       timezone: MOCK_WORKFLOW.timezone,
       source: { table: 'cron', id: null, triggerAt: MOCK_WORKFLOW.nextRunAt },
-    }));
+    }), expect.objectContaining({ admit: expect.any(Function) }));
   });
 
   it('should not advance nextRunAt when the executor reports a claim conflict', async () => {
@@ -299,30 +292,25 @@ describe('POST /api/cron/workflows', () => {
       vi.mocked(executeWorkflow).mockResolvedValue({ success: true, durationMs: 1 });
     });
 
-    it('gates the workflow owner as a scheduled run before executing', async () => {
+    it('hands the executor the credit gate as its admit hook, gating the owner as a scheduled run', async () => {
+      const admit = async () => ({ admitted: true as const, release: () => {} });
+      mockCreditAdmission.mockReturnValue(admit);
+
       await tick();
 
-      // The gate reads the very input the executor runs: billed user + steps.
-      expect(mockAcquireHold).toHaveBeenCalledWith(
-        vi.mocked(executeWorkflow).mock.calls[0][0],
-        'scheduled',
-      );
-      expect(mockAcquireHold.mock.calls[0][0].createdBy).toBe(MOCK_WORKFLOW.createdBy);
-      expect(mockAcquireHold.mock.invocationCallOrder[0])
-        .toBeLessThan(vi.mocked(executeWorkflow).mock.invocationCallOrder[0]);
+      const [input, options] = vi.mocked(executeWorkflow).mock.calls[0];
+      expect(options?.admit).toBe(admit);
+      expect(mockCreditAdmission).toHaveBeenCalledWith(input, 'scheduled');
+      expect(input.createdBy).toBe(MOCK_WORKFLOW.createdBy);
     });
 
-    it('out of credits: never runs, records a skipped run, advances the schedule, reports no failure', async () => {
-      mockAcquireHold.mockResolvedValue({ allowed: false, reason: 'out_of_credits' });
+    it('a refused fire advances the schedule and counts as skipped, not as a failure', async () => {
+      vi.mocked(executeWorkflow).mockResolvedValue({
+        success: false, skipped: true, durationMs: 0, runId: 'run_1', error: 'AI credit gate denied: out_of_credits',
+      });
 
       const body = await tick();
 
-      expect(executeWorkflow).not.toHaveBeenCalled();
-      expect(mockRecordSkip).toHaveBeenCalledWith({
-        workflowId: MOCK_WORKFLOW.id,
-        source: { table: 'cron', id: null, triggerAt: MOCK_WORKFLOW.nextRunAt },
-        reason: 'out_of_credits',
-      });
       // Advancing is what stops the next tick re-firing it: no per-minute storm.
       expect(getNextRunDate).toHaveBeenCalledWith(MOCK_WORKFLOW.cronExpression, MOCK_WORKFLOW.timezone);
       expect(body.skipped).toBe(1);
@@ -331,20 +319,15 @@ describe('POST /api/cron/workflows', () => {
       expect(body.errors).toBeUndefined();
     });
 
-    it('releases the hold exactly once, after the run settles', async () => {
-      await tick();
+    it('a fire that lost the claim to an overlapping run is neither skipped nor advanced', async () => {
+      vi.mocked(executeWorkflow).mockResolvedValue({
+        success: false, claimConflict: true, durationMs: 0, error: 'Workflow already running',
+      });
 
-      expect(mockReleaseHold).toHaveBeenCalledTimes(1);
-      expect(vi.mocked(executeWorkflow).mock.invocationCallOrder[0])
-        .toBeLessThan(mockReleaseHold.mock.invocationCallOrder[0]);
-    });
+      const body = await tick();
 
-    it('releases the hold when the executor throws', async () => {
-      vi.mocked(executeWorkflow).mockRejectedValue(new Error('Network error'));
-
-      await tick();
-
-      expect(mockReleaseHold).toHaveBeenCalledTimes(1);
+      expect(getNextRunDate).not.toHaveBeenCalled();
+      expect(body.skipped).toBe(0);
     });
   });
 });

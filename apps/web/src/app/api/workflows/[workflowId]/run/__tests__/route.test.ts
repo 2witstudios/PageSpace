@@ -15,11 +15,9 @@ const {
   mockSelectWhere,
   mockSelectFrom,
   mockSelect,
-  mockAcquireHold,
-  mockReleaseHold,
+  mockCreditAdmission,
 } = vi.hoisted(() => ({
-  mockAcquireHold: vi.fn(),
-  mockReleaseHold: vi.fn(),
+  mockCreditAdmission: vi.fn(),
   mockReturning: vi.fn().mockResolvedValue([{ id: 'wf_1' }]),
   mockUpdateWhere: vi.fn(),
   mockUpdateSet: vi.fn(),
@@ -72,8 +70,7 @@ vi.mock('@/lib/workflows/cron-utils', () => ({
 }));
 
 vi.mock('@/lib/workflows/workflow-credit-gate', () => ({
-  acquireWorkflowCreditHold: mockAcquireHold,
-  creditDeniedError: (reason: string) => `AI credit gate denied: ${reason}`,
+  creditAdmission: mockCreditAdmission,
 }));
 
 import { POST } from '../../run/route';
@@ -178,7 +175,7 @@ describe('POST /api/workflows/[workflowId]/run', () => {
       durationMs: 1,
     });
     vi.mocked(getNextRunDate).mockReturnValue(new Date('2025-06-01T09:00:00Z'));
-    mockAcquireHold.mockResolvedValue({ allowed: true, release: mockReleaseHold });
+    mockCreditAdmission.mockReturnValue(async () => ({ admitted: true, release: () => {} }));
   });
 
   test('returns 401 when not authenticated', async () => {
@@ -254,7 +251,7 @@ describe('POST /api/workflows/[workflowId]/run', () => {
       agentPageId: mockWorkflow.agentPageId,
       prompt: mockWorkflow.prompt,
       timezone: mockWorkflow.timezone,
-    }));
+    }), expect.objectContaining({ admit: expect.any(Function) }));
   });
 
   test('non-scheduled workflow is treated as not found', async () => {
@@ -309,23 +306,39 @@ describe('POST /api/workflows/[workflowId]/run', () => {
       createContext('wf_1'),
     );
 
-    test('gates the billed workflow owner (not the clicker) as an interactive run, before executing', async () => {
+    // An executor stand-in that consults `admit` the way the real one does
+    // (inside its claim): a refusal comes back as a skipped run.
+    const executorThatAdmits = () => vi.mocked(executeWorkflow).mockImplementation(async (_input, options) => {
+      const admission = await options?.admit?.();
+      if (admission && !admission.admitted) {
+        return { success: false, skipped: true, durationMs: 0, runId: 'run_1', error: admission.error };
+      }
+      return { success: true, durationMs: 1 };
+    });
+
+    const denyWith = (reason: string) => mockCreditAdmission.mockImplementation(
+      (_input: unknown, _mode: unknown, onDenied?: (r: string) => void) => async () => {
+        onDenied?.(reason);
+        return { admitted: false, error: `AI credit gate denied: ${reason}` };
+      },
+    );
+
+    test('hands the executor the credit gate as its admit hook, gating the billed owner (not the clicker) as interactive', async () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth('admin_clicker'));
+      const admit = async () => ({ admitted: true as const, release: () => {} });
+      mockCreditAdmission.mockReturnValue(admit);
 
       await run();
 
-      // The gate reads the very input the executor runs: billed user + steps.
-      expect(mockAcquireHold).toHaveBeenCalledWith(
-        vi.mocked(executeWorkflow).mock.calls[0][0],
-        'interactive',
-      );
-      expect(mockAcquireHold.mock.calls[0][0].createdBy).toBe('user_123');
-      expect(mockAcquireHold.mock.invocationCallOrder[0])
-        .toBeLessThan(vi.mocked(executeWorkflow).mock.invocationCallOrder[0]);
+      const [input, options] = vi.mocked(executeWorkflow).mock.calls[0];
+      expect(options?.admit).toBe(admit);
+      expect(mockCreditAdmission).toHaveBeenCalledWith(input, 'interactive', expect.any(Function));
+      expect(input.createdBy).toBe('user_123');
     });
 
-    test('out of credits: 402, the workflow never runs, the schedule is not advanced', async () => {
-      mockAcquireHold.mockResolvedValue({ allowed: false, reason: 'out_of_credits' });
+    test('out of credits: 402 with a readable error, and the schedule is not advanced', async () => {
+      executorThatAdmits();
+      denyWith('out_of_credits');
 
       const response = await run();
 
@@ -334,43 +347,25 @@ describe('POST /api/workflows/[workflowId]/run', () => {
       const body = await response.json();
       expect(body.code).toBe('out_of_credits');
       expect(body.error).toMatch(/credit balance is too low/);
-      expect(executeWorkflow).not.toHaveBeenCalled();
       expect(getNextRunDate).not.toHaveBeenCalled();
     });
 
-    test('in-flight cap: 429, the workflow never runs', async () => {
-      mockAcquireHold.mockResolvedValue({ allowed: false, reason: 'too_many_in_flight' });
+    test('in-flight cap: 429', async () => {
+      executorThatAdmits();
+      denyWith('too_many_in_flight');
 
       const response = await run();
 
       expect(response.status).toBe(429);
-      expect(executeWorkflow).not.toHaveBeenCalled();
     });
 
-    test('releases the hold exactly once, after the run settles', async () => {
-      await run();
+    test('an admitted run returns the normal result', async () => {
+      executorThatAdmits();
 
-      expect(mockReleaseHold).toHaveBeenCalledTimes(1);
-      expect(vi.mocked(executeWorkflow).mock.invocationCallOrder[0])
-        .toBeLessThan(mockReleaseHold.mock.invocationCallOrder[0]);
-    });
+      const response = await run();
 
-    test('releases the hold when the executor throws', async () => {
-      vi.mocked(executeWorkflow).mockRejectedValue(new Error('boom'));
-
-      await expect(run()).rejects.toThrow('boom');
-
-      expect(mockReleaseHold).toHaveBeenCalledTimes(1);
-    });
-
-    test('releases the hold on a claim conflict (the run never started)', async () => {
-      vi.mocked(executeWorkflow).mockResolvedValue({
-        success: false, durationMs: 0, error: 'Workflow already running', claimConflict: true,
-      });
-
-      await run();
-
-      expect(mockReleaseHold).toHaveBeenCalledTimes(1);
+      expect(response.status).toBe(200);
+      expect((await response.json()).success).toBe(true);
     });
   });
 });

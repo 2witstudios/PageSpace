@@ -15,13 +15,9 @@ const {
   mockSelect,
   mockOrderBy,
   mockLimit,
-  mockAcquireHold,
-  mockReleaseHold,
-  mockRecordSkip,
+  mockCreditAdmission,
 } = vi.hoisted(() => ({
-  mockAcquireHold: vi.fn(),
-  mockReleaseHold: vi.fn(),
-  mockRecordSkip: vi.fn(),
+  mockCreditAdmission: vi.fn(),
   mockReturning: vi.fn().mockResolvedValue([]),
   mockUpdateWhere: vi.fn(),
   mockUpdateSet: vi.fn(),
@@ -42,9 +38,7 @@ vi.mock('@/lib/workflows/workflow-executor', () => ({
 }));
 
 vi.mock('@/lib/workflows/workflow-credit-gate', () => ({
-  acquireWorkflowCreditHold: mockAcquireHold,
-  recordCreditSkippedRun: mockRecordSkip,
-  creditDeniedError: (reason: string) => `AI credit gate denied: ${reason}`,
+  creditAdmission: mockCreditAdmission,
 }));
 
 const mockAudit = vi.hoisted(() => vi.fn());
@@ -196,8 +190,7 @@ describe('POST /api/cron/task-triggers', () => {
     });
     mockReturning.mockResolvedValue([]);
 
-    mockAcquireHold.mockResolvedValue({ allowed: true, release: mockReleaseHold });
-    mockRecordSkip.mockResolvedValue(undefined);
+    mockCreditAdmission.mockReturnValue(async () => ({ admitted: true, release: () => {} }));
   });
 
   it('returns auth error when cron request is invalid', async () => {
@@ -311,7 +304,7 @@ describe('POST /api/cron/task-triggers', () => {
       agentPageId: MOCK_WORKFLOW.agentPageId,
       prompt: MOCK_WORKFLOW.prompt,
       taskContext: { taskItemId: MOCK_TRIGGER.taskItemId, triggerType: MOCK_TRIGGER.triggerType },
-    }));
+    }), expect.objectContaining({ admit: expect.any(Function) }));
   });
 
   it('disables the trigger after firing (one-shot semantics)', async () => {
@@ -342,18 +335,17 @@ describe('POST /api/cron/task-triggers', () => {
       return response.json();
     };
 
-    beforeEach(() => {
+    it('hands the executor the credit gate as its admit hook, gating the owner as a scheduled run', async () => {
+      const admit = async () => ({ admitted: true as const, release: () => {} });
+      mockCreditAdmission.mockReturnValue(admit);
       vi.mocked(executeWorkflow).mockResolvedValue({ success: true, durationMs: 50 });
-    });
 
-    it('gates the workflow owner as a scheduled run before executing', async () => {
       await fireOneDueTrigger();
 
-      // The gate reads the very input the executor runs: billed user + steps.
-      expect(mockAcquireHold).toHaveBeenCalledWith(vi.mocked(executeWorkflow).mock.calls[0][0], 'scheduled');
-      expect(mockAcquireHold.mock.calls[0][0].createdBy).toBe(MOCK_WORKFLOW.createdBy);
-      expect(mockAcquireHold.mock.invocationCallOrder[0])
-        .toBeLessThan(vi.mocked(executeWorkflow).mock.invocationCallOrder[0]);
+      const [input, options] = vi.mocked(executeWorkflow).mock.calls[0];
+      expect(options?.admit).toBe(admit);
+      expect(mockCreditAdmission).toHaveBeenCalledWith(input, 'scheduled');
+      expect(input.createdBy).toBe(MOCK_WORKFLOW.createdBy);
     });
 
     it('does not gate a trigger that is skipped for its task (no model would run)', async () => {
@@ -364,20 +356,16 @@ describe('POST /api/cron/task-triggers', () => {
 
       await POST(new Request('https://example.com/api/cron/task-triggers', { method: 'POST' }));
 
-      expect(mockAcquireHold).not.toHaveBeenCalled();
+      expect(mockCreditAdmission).not.toHaveBeenCalled();
     });
 
-    it('out of credits: never runs, records a skipped run, retires the one-shot trigger with the reason, reports no failure', async () => {
-      mockAcquireHold.mockResolvedValue({ allowed: false, reason: 'out_of_credits' });
+    it('a refused fire retires the one-shot trigger with the reason and counts as skipped, not as a failure', async () => {
+      vi.mocked(executeWorkflow).mockResolvedValue({
+        success: false, skipped: true, durationMs: 0, runId: 'run_1', error: 'AI credit gate denied: out_of_credits',
+      });
 
       const body = await fireOneDueTrigger();
 
-      expect(executeWorkflow).not.toHaveBeenCalled();
-      expect(mockRecordSkip).toHaveBeenCalledWith({
-        workflowId: MOCK_WORKFLOW.id,
-        source: { table: 'taskTriggers', id: MOCK_TRIGGER.id, triggerAt: MOCK_TRIGGER.nextRunAt },
-        reason: 'out_of_credits',
-      });
       expect(mockUpdateSet).toHaveBeenCalledWith({
         isEnabled: false,
         lastFireError: 'AI credit gate denied: out_of_credits',
@@ -385,22 +373,6 @@ describe('POST /api/cron/task-triggers', () => {
       expect(body.skipped).toBe(1);
       expect(body.executed).toBe(0);
       expect(body.errors).toBeUndefined();
-    });
-
-    it('releases the hold exactly once, after the run settles', async () => {
-      await fireOneDueTrigger();
-
-      expect(mockReleaseHold).toHaveBeenCalledTimes(1);
-      expect(vi.mocked(executeWorkflow).mock.invocationCallOrder[0])
-        .toBeLessThan(mockReleaseHold.mock.invocationCallOrder[0]);
-    });
-
-    it('releases the hold when the executor throws', async () => {
-      vi.mocked(executeWorkflow).mockRejectedValue(new Error('boom'));
-
-      await fireOneDueTrigger();
-
-      expect(mockReleaseHold).toHaveBeenCalledTimes(1);
     });
   });
 });

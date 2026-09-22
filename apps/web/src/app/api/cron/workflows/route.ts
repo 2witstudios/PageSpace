@@ -4,8 +4,8 @@ import { eq, and, lte, sql } from '@pagespace/db/operators'
 import { workflows } from '@pagespace/db/schema/workflows';
 import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
-import { executeWorkflow, type WorkflowExecutionInput, type WorkflowExecutionResult } from '@/lib/workflows/workflow-executor';
-import { acquireWorkflowCreditHold, recordCreditSkippedRun } from '@/lib/workflows/workflow-credit-gate';
+import { executeWorkflow, type WorkflowExecutionInput } from '@/lib/workflows/workflow-executor';
+import { creditAdmission } from '@/lib/workflows/workflow-credit-gate';
 import { getNextRunDate } from '@/lib/workflows/cron-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { audit } from '@pagespace/lib/audit/audit-log';
@@ -98,34 +98,22 @@ export async function POST(req: Request) {
         batch.map(async (workflow) => {
           const input = toExecutionInput(workflow);
 
-          // Credit gate BEFORE the executor builds a model, on the owner the run
-          // bills. A refused fire is a skip, not a failure: record it in the run
-          // history and advance the schedule, so an out-of-credits owner's
-          // workflow is not re-fired (and re-reported) on every tick.
-          const hold = await acquireWorkflowCreditHold(input, 'scheduled');
-          if (!hold.allowed) {
-            loggers.api.info('Workflow cron: skipped (credit gate denied)', { workflowId: workflow.id, reason: hold.reason });
-            await recordCreditSkippedRun({ workflowId: workflow.id, source: input.source, reason: hold.reason });
-            await advanceNextRunAt(workflow);
-            return { workflow, skipped: true as const };
-          }
-
           // The atomic claim is the workflow_runs partial unique index inside
           // the executor. If a peer cron invocation already claimed this
           // workflow, claimConflict comes back true — we leave nextRunAt
           // alone so the running fire's natural completion governs the
           // next schedule advance.
-          let result: WorkflowExecutionResult;
-          try {
-            result = await executeWorkflow(input);
-          } finally {
-            // executeWorkflow debits real usage itself; the hold only reserved headroom.
-            hold.release();
-          }
+          //
+          // The credit gate runs inside that claim, on the owner the run bills,
+          // before any model is built. A refused fire comes back `skipped` (the
+          // executor records it as a cancelled run with the reason) and still
+          // advances the schedule, so an out-of-credits owner's workflow is not
+          // re-fired and re-reported on every tick.
+          const result = await executeWorkflow(input, { admit: creditAdmission(input, 'scheduled') });
           if (!result.claimConflict) {
             await advanceNextRunAt(workflow);
           }
-          return { workflow, skipped: false as const, result };
+          return { workflow, result };
         }),
       );
 
@@ -133,11 +121,12 @@ export async function POST(req: Request) {
         const settled = batchResults[j];
         if (settled.status === 'fulfilled') {
           const outcome = settled.value;
-          if (outcome.skipped) {
+          if (outcome.result.claimConflict) continue;
+          if (outcome.result.skipped) {
+            loggers.api.info('Workflow cron: skipped', { workflowId: outcome.workflow.id, reason: outcome.result.error });
             skipped++;
             continue;
           }
-          if (outcome.result.claimConflict) continue;
           totalAttempted++;
           if (outcome.result.success) {
             executed++;

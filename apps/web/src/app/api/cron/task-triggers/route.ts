@@ -6,7 +6,7 @@ import { taskTriggers } from '@pagespace/db/schema/task-triggers';
 import { taskItems } from '@pagespace/db/schema/tasks';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { executeWorkflow, type WorkflowExecutionInput, type WorkflowExecutionResult } from '@/lib/workflows/workflow-executor';
-import { acquireWorkflowCreditHold, recordCreditSkippedRun, creditDeniedError } from '@/lib/workflows/workflow-credit-gate';
+import { creditAdmission } from '@/lib/workflows/workflow-credit-gate';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { audit } from '@pagespace/lib/audit/audit-log';
 
@@ -102,7 +102,7 @@ export async function POST(req: Request) {
               lastFireError: 'Linked workflow not found',
             }).where(eq(taskTriggers.id, trigger.id));
             const skippedResult: WorkflowExecutionResult = { success: false, durationMs: 0, error: 'Linked workflow not found' };
-            return { trigger, creditSkipped: false as const, result: skippedResult };
+            return { trigger, result: skippedResult };
           }
 
           // Pre-execution skip for due_date triggers whose task became ineligible
@@ -122,7 +122,7 @@ export async function POST(req: Request) {
                 lastFireError: skipReason,
               }).where(eq(taskTriggers.id, trigger.id));
               const skippedResult: WorkflowExecutionResult = { success: false, durationMs: 0, error: skipReason };
-              return { trigger, creditSkipped: false as const, result: skippedResult };
+              return { trigger, result: skippedResult };
             }
           }
 
@@ -140,35 +140,18 @@ export async function POST(req: Request) {
             taskContext: { taskItemId: trigger.taskItemId, triggerType: trigger.triggerType },
           };
 
-          // Credit gate BEFORE the executor builds a model, on the owner the run
-          // bills. The trigger is one-shot and already claimed, so a refused fire
-          // retires it with the reason (as the task skips above do) and records a
-          // cancelled run — a skip, not a failure.
-          const hold = await acquireWorkflowCreditHold(input, 'scheduled');
-          if (!hold.allowed) {
-            logger.info('Task trigger: skipped (credit gate denied)', { triggerId: trigger.id, reason: hold.reason });
-            await recordCreditSkippedRun({ workflowId: workflow.id, source: input.source, reason: hold.reason });
-            await db.update(taskTriggers).set({
-              isEnabled: false,
-              lastFireError: creditDeniedError(hold.reason),
-            }).where(eq(taskTriggers.id, trigger.id));
-            return { trigger, creditSkipped: true as const };
-          }
-
-          let result: WorkflowExecutionResult;
-          try {
-            result = await executeWorkflow(input);
-          } finally {
-            // executeWorkflow debits real usage itself; the hold only reserved headroom.
-            hold.release();
-          }
+          // The credit gate runs inside the executor's run claim, on the owner
+          // the run bills, before any model is built. A refused fire comes back
+          // `skipped` (recorded as a cancelled run with the reason); the one-shot
+          // trigger is retired with that reason just below, like any other fire.
+          const result = await executeWorkflow(input, { admit: creditAdmission(input, 'scheduled') });
 
           await db.update(taskTriggers).set({
             isEnabled: false,
             lastFireError: result.error || null,
           }).where(eq(taskTriggers.id, trigger.id));
 
-          return { trigger, creditSkipped: false as const, result };
+          return { trigger, result };
         }),
       );
 
@@ -176,7 +159,8 @@ export async function POST(req: Request) {
         const settled = batchResults[j];
         if (settled.status === 'fulfilled') {
           const outcome = settled.value;
-          if (outcome.creditSkipped) {
+          if (outcome.result.skipped) {
+            logger.info('Task trigger: skipped', { triggerId: outcome.trigger.id, reason: outcome.result.error });
             skipped++;
             continue;
           }

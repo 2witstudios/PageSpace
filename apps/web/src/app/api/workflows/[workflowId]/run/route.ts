@@ -5,9 +5,10 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { workflows } from '@pagespace/db/schema/workflows';
-import { executeWorkflow, type WorkflowExecutionInput, type WorkflowExecutionResult } from '@/lib/workflows/workflow-executor';
+import { executeWorkflow, type WorkflowExecutionInput } from '@/lib/workflows/workflow-executor';
 import { getNextRunDate } from '@/lib/workflows/cron-utils';
-import { acquireWorkflowCreditHold } from '@/lib/workflows/workflow-credit-gate';
+import { creditAdmission } from '@/lib/workflows/workflow-credit-gate';
+import type { GateReason } from '@pagespace/lib/billing/credit-core';
 import { creditGatePayload } from '@/lib/subscription/credit-gate-response';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
@@ -57,29 +58,27 @@ export async function POST(
     source: { table: 'manual', id: null, triggerAt: null },
   };
 
-  // Credit gate BEFORE the executor builds a model. The run bills the workflow's
-  // creator (executeWorkflow tracks usage as createdBy), so that is who is gated,
-  // not the admin who pressed Run. out_of_credits -> 402, a cap -> 429. The Run
-  // button toasts `error`, so it carries the readable message; `code` the reason.
-  const hold = await acquireWorkflowCreditHold(executionInput, 'interactive');
-  if (!hold.allowed) {
-    const denied = creditGatePayload(hold.reason);
-    return NextResponse.json({ error: denied.message, code: denied.error }, { status: denied.status });
-  }
-
   // Atomic claim is enforced by the workflow_runs partial unique index inside
   // the executor — any concurrent fire (cron / manual) for the same workflow
-  // returns claimConflict and we surface a 409.
-  let result: WorkflowExecutionResult;
-  try {
-    result = await executeWorkflow(executionInput);
-  } finally {
-    // executeWorkflow debits real usage itself; the hold only reserved headroom.
-    hold.release();
-  }
+  // returns claimConflict and we surface a 409. The credit gate runs inside
+  // that claim, before any model is built. The run bills the workflow's creator
+  // (executeWorkflow tracks usage as createdBy), so that is who is gated, not
+  // the admin who pressed Run.
+  let deniedReason: GateReason | undefined;
+  const result = await executeWorkflow(executionInput, {
+    admit: creditAdmission(executionInput, 'interactive', (reason) => { deniedReason = reason; }),
+  });
 
   if (result.claimConflict) {
     return NextResponse.json({ error: 'Workflow is already running' }, { status: 409 });
+  }
+
+  // Refused by the gate: out_of_credits -> 402, a cap -> 429. The Run button
+  // toasts `error`, so it carries the readable message; `code` the reason. The
+  // schedule is not advanced — nothing ran.
+  if (result.skipped && deniedReason) {
+    const denied = creditGatePayload(deniedReason);
+    return NextResponse.json({ error: denied.message, code: denied.error }, { status: denied.status });
   }
 
   // Advance the schedule so the next cron tick doesn't re-fire immediately.

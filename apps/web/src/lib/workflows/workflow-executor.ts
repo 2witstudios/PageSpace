@@ -54,6 +54,12 @@ export interface WorkflowExecutionResult {
   /** True iff the partial unique index rejected the claim (another in-flight run). */
   claimConflict?: boolean;
   /**
+   * True iff the claimed run was refused by the caller's `admit` hook (e.g. the
+   * credit gate): no model ran, and the run row was finalized as 'cancelled'
+   * with `error` as the reason. A skip, not a failure.
+   */
+  skipped?: boolean;
+  /**
    * Set when execution itself completed but the end-of-run UPDATE on
    * workflow_runs failed. The row is left in 'running' state and the
    * stuck-run sweeper will mark it as 'error' after the timeout. Callers
@@ -101,7 +107,27 @@ export interface WorkflowExecutionInput {
   eventContext?: { promptOverride?: string; payload?: unknown };
 }
 
-export async function executeWorkflow(input: WorkflowExecutionInput): Promise<WorkflowExecutionResult> {
+/** A caller's go/no-go for a claimed run. `release` runs once the run settles. */
+export type RunAdmission =
+  | { admitted: true; release: () => void }
+  | { admitted: false; error: string };
+
+export interface ExecuteWorkflowOptions {
+  /**
+   * Consulted AFTER the running claim is won and BEFORE any model is built —
+   * the seam for the credit gate. Inside the claim on purpose: an overlapping
+   * fire of the same workflow loses the claim first and never reaches it, so
+   * only the fire that holds the claim can be refused and record the refusal
+   * (a gate run before the claim could be denied by a peer's hold and write a
+   * false cancellation beside the peer's real run).
+   */
+  admit?: () => Promise<RunAdmission>;
+}
+
+export async function executeWorkflow(
+  input: WorkflowExecutionInput,
+  options: ExecuteWorkflowOptions = {},
+): Promise<WorkflowExecutionResult> {
   const startTime = Date.now();
 
   // 0. Atomic claim via workflow_runs partial unique index. The
@@ -131,23 +157,15 @@ export async function executeWorkflow(input: WorkflowExecutionInput): Promise<Wo
 
   const runId = runRow.id;
   let result: WorkflowExecutionResult;
+  let release: (() => void) | undefined;
 
   try {
-    const explicitSteps = input.steps && input.steps.length > 0 ? input.steps : null;
-    if (explicitSteps) {
-      result = await runStepChain(input, explicitSteps, runId, startTime);
-    } else if (input.agentPageId) {
-      // Legacy single-AI-prompt path, byte-for-byte pre-steps behavior.
-      result = await runExecution(input, startTime, {
-        prompt: input.eventContext?.promptOverride ?? input.prompt,
-        agentPageId: input.agentPageId,
-      });
+    const admission = options.admit ? await options.admit() : undefined;
+    if (admission && !admission.admitted) {
+      result = { success: false, skipped: true, durationMs: Date.now() - startTime, error: admission.error };
     } else {
-      result = {
-        success: false,
-        durationMs: Date.now() - startTime,
-        error: 'workflow has no steps and no agentPageId',
-      };
+      release = admission?.release;
+      result = await runClaimed(input, runId, startTime);
     }
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -156,6 +174,8 @@ export async function executeWorkflow(input: WorkflowExecutionInput): Promise<Wo
       durationMs: Date.now() - startTime,
       error: errorMessage,
     };
+  } finally {
+    release?.();
   }
 
   const finalizeError = await finalizeRun(runId, result);
@@ -163,6 +183,28 @@ export async function executeWorkflow(input: WorkflowExecutionInput): Promise<Wo
   return finalizeError
     ? { ...result, runId, finalizeError }
     : { ...result, runId };
+}
+
+/** The body of a claimed, admitted run. Throws propagate to executeWorkflow. */
+async function runClaimed(
+  input: WorkflowExecutionInput,
+  runId: string,
+  startTime: number,
+): Promise<WorkflowExecutionResult> {
+  const explicitSteps = input.steps && input.steps.length > 0 ? input.steps : null;
+  if (explicitSteps) return runStepChain(input, explicitSteps, runId, startTime);
+  if (input.agentPageId) {
+    // Legacy single-AI-prompt path, byte-for-byte pre-steps behavior.
+    return runExecution(input, startTime, {
+      prompt: input.eventContext?.promptOverride ?? input.prompt,
+      agentPageId: input.agentPageId,
+    });
+  }
+  return {
+    success: false,
+    durationMs: Date.now() - startTime,
+    error: 'workflow has no steps and no agentPageId',
+  };
 }
 
 /**
@@ -177,7 +219,7 @@ async function finalizeRun(runId: string, result: WorkflowExecutionResult): Prom
     await db
       .update(workflowRuns)
       .set({
-        status: result.success ? 'success' : 'error',
+        status: result.success ? 'success' : result.skipped ? 'cancelled' : 'error',
         endedAt: new Date(),
         durationMs: result.durationMs,
         error: result.error ?? null,
