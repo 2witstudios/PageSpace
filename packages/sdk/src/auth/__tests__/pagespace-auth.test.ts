@@ -618,7 +618,7 @@ describe('refresh coordination across providers and sign-ins', () => {
     expect(server.refreshCalls).toEqual([]);
   });
 
-  it('keeps working in memory when storage writes start failing — it never replays the stale stored token', async () => {
+  it('a rotated pair that cannot be stored is revoked and the provider fails closed — no token lives on outside storage', async () => {
     const server = rotatingServer();
     const world = sharedWorld(server.fetch);
     const provider = await world.signIn(world.make(), 'carol');
@@ -627,12 +627,41 @@ describe('refresh coordination across providers and sign-ins', () => {
     };
 
     world.advance(900 * 1000);
-    const second = await provider.getAccessToken();
-    world.advance(900 * 1000);
-    const third = await provider.getAccessToken();
+    const first = await captureError(() => provider.getAccessToken());
+    const second = await captureError(() => provider.getAccessToken());
 
-    expect(second).not.toBe(third);
-    expect(server.refreshCalls).toEqual(['ps_rt_carol~1', 'ps_rt_carol~2']);
+    expect(isAuthenticationError(first)).toBe(true);
+    expect(isAuthenticationError(second)).toBe(true);
+    expect(server.refreshCalls).toEqual(['ps_rt_carol~1']);
+    expect(server.revoked).toEqual(['ps_rt_carol~2']);
+    expect(world.storage.items.size).toBe(0);
+  });
+
+  it('a one-off failed write is retried; signOut then revokes the newest token and nothing comes back', async () => {
+    const server = rotatingServer();
+    const world = sharedWorld(server.fetch);
+    const auth = world.make();
+    const provider = await world.signIn(auth, 'hal');
+    const realSetItem = world.storage.setItem.bind(world.storage);
+    let failNext = true;
+    world.storage.setItem = (key, value) => {
+      if (failNext && key.startsWith('pagespace.auth.session')) {
+        failNext = false;
+        throw new Error('QuotaExceededError');
+      }
+      realSetItem(key, value);
+    };
+
+    world.advance(900 * 1000);
+    await expect(provider.getAccessToken()).resolves.toBe('ps_at_hal~2');
+    await auth.signOut();
+    world.advance(900 * 1000);
+    const afterSignOut = await captureError(() => provider.getAccessToken());
+
+    expect(server.revoked).toEqual(['ps_rt_hal~2']);
+    expect(isAuthenticationError(afterSignOut)).toBe(true);
+    expect(server.refreshCalls).toEqual(['ps_rt_hal~1']);
+    expect(world.make().restore()).toBeNull();
   });
 
   it('two providers refreshing at the same moment spend the refresh token once and both get the new pair', async () => {
@@ -718,9 +747,11 @@ describe('refresh coordination across providers and sign-ins', () => {
       const gus = await world.signIn(world.make(), 'gus');
 
       world.advance(900 * 1000);
-      await gus.getAccessToken();
+      const error = await captureError(() => gus.getAccessToken());
 
+      expect(isAuthenticationError(error)).toBe(true);
       expect(world.storage.getItem(`pagespace.auth.session:${CLIENT_ID}`)).toBe(otherRealmRecord);
+      expect(server.revoked).toEqual(['ps_rt_gus~2']); // the replaced sign-in's fresh pair is ended, not left alive
     } finally {
       vi.unstubAllGlobals();
     }
@@ -737,14 +768,14 @@ describe('refresh coordination across providers and sign-ins', () => {
     };
 
     world.advance(900 * 1000);
-    await a.getAccessToken();
+    await captureError(() => a.getAccessToken());
     const error = await captureError(async () => b?.getAccessToken());
 
     expect(isAuthenticationError(error)).toBe(true);
     expect(server.refreshCalls).toEqual(['ps_rt_carol~1']);
   });
 
-  it('a new sign-in whose first write fails still works in memory (it is not mistaken for a replaced sign-in)', async () => {
+  it('a sign-in whose session cannot be stored fails with storage_unavailable and is revoked, as is the sign-in it replaced', async () => {
     const server = rotatingServer();
     const world = sharedWorld(server.fetch);
     await world.signIn(world.make(), 'dan');
@@ -753,11 +784,46 @@ describe('refresh coordination across providers and sign-ins', () => {
       if (key.startsWith('pagespace.auth.session')) throw new Error('QuotaExceededError');
       realSetItem(key, value);
     };
-    const erin = await world.signIn(world.make(), 'erin');
 
-    world.advance(900 * 1000);
-    await expect(erin.getAccessToken()).resolves.toMatch(/^ps_at_erin~/);
-    expect(server.refreshCalls).toEqual(['ps_rt_erin~2']);
+    const error = await captureError(() => world.signIn(world.make(), 'erin'));
+
+    expect(isSignInError(error) && error.reason).toBe('storage_unavailable');
+    expect(server.revoked).toEqual(['ps_rt_dan~1', 'ps_rt_erin~2']);
+    expect(world.storage.items.size).toBe(0);
+  });
+
+  it('a new sign-in in the same storage revokes the sign-in it replaces', async () => {
+    const server = rotatingServer();
+    const world = sharedWorld(server.fetch);
+    await world.signIn(world.make(), 'ivy');
+    await world.signIn(world.make(), 'jay');
+
+    expect(server.revoked).toEqual(['ps_rt_ivy~1']);
+  });
+
+  it('a rotation whose record was signed out of by another realm mid-call revokes what it received and does not write it back', async () => {
+    vi.stubGlobal('navigator', {});
+    try {
+      const server = rotatingServer();
+      let world!: ReturnType<typeof sharedWorld>;
+      const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+        if (typeof init?.body === 'string' && init.body.includes('grant_type=refresh_token')) {
+          world.storage.removeItem(`pagespace.auth.session:${CLIENT_ID}`); // another tab signed out
+        }
+        return server.fetch(input, init);
+      }) as typeof fetch;
+      world = sharedWorld(fetchImpl);
+      const kim = await world.signIn(world.make(), 'kim');
+
+      world.advance(900 * 1000);
+      const error = await captureError(() => kim.getAccessToken());
+
+      expect(isAuthenticationError(error)).toBe(true);
+      expect(server.revoked).toEqual(['ps_rt_kim~2']);
+      expect(world.storage.items.size).toBe(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('signOut from ANOTHER instance waits for an in-flight refresh, then revokes the rotated token; the old provider is dead', async () => {

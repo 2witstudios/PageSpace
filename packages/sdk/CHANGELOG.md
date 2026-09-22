@@ -41,9 +41,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   lock. Each stored session carries the sign-in it belongs to, so a provider from an earlier or
   replaced sign-in fails closed without a network call instead of taking over the new one.
   `signOut()` and a new sign-in's write take the same lock, so the newest sign-in's record is
-  the one that remains and sign-out revokes the newest token. A provider whose storage write
-  fails removes the stale record and keeps working in memory. A duplicated tab still starts from
-  a copy of `sessionStorage` (see the README).
+  the one that remains and sign-out revokes the newest token. A session exists only while its
+  record is stored — that is what lets `signOut()` end it everywhere — so a sign-in or rotation
+  that cannot be stored is revoked and fails closed, and a new sign-in in the same storage
+  revokes the one it replaces. A duplicated tab still starts from a copy of `sessionStorage`
+  (see the README).
 - Token-endpoint calls take a `timeoutMs` (default 30s) covering headers and body, enforced even
   when a custom `fetch` ignores `AbortSignal`; a hung request is a retryable `TimeoutError`, so it
   cannot hold the refresh lock indefinitely.

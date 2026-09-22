@@ -98,7 +98,10 @@ coordinate: every refresh runs under one lock (a Web Lock across this origin's t
 runtime has them, else a queue within the page), re-reads storage, adopts a newer pair from the
 same sign-in instead of replaying a spent token, persists the rotated pair before releasing the
 lock, and fails closed — without a network call — once that sign-in was signed out or replaced by
-another. `signOut()` takes the same lock, so it revokes the newest token. Two limits remain: a
+another. `signOut()` takes the same lock, so it revokes the newest token. A session exists only
+while its record is in storage: a sign-in or refresh whose record cannot be written is revoked on
+the spot and fails closed (never left alive in memory where `signOut()` cannot reach it), and a new
+sign-in in the same storage revokes the one it replaces. Two limits remain: a
 **duplicated tab** starts with a *copy* of `sessionStorage` it cannot see updates to (whichever copy
 refreshes second is refused, and signs both out if it does so more than 30 seconds later), and
 separate processes are not coordinated. If duplicated tabs matter to your app, pass

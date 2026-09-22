@@ -489,8 +489,22 @@ export class PageSpaceAuth {
           };
     // Under the refresh lock: an older sign-in's refresh already in flight
     // persists first, so this newer sign-in is the record that remains.
-    const persisted = await withSessionLock(this.#lockName, async () => this.#writeSession(storage, session));
-    return this.#providerFor(session, storage, persisted);
+    const outcome = await withSessionLock(this.#lockName, async () => {
+      const previous = this.#readStoredSession(storage);
+      return {
+        replaced: previous.kind === 'present' && previous.session.lineage !== lineage ? previous.session : null,
+        persisted: this.#persistSession(storage, session),
+      };
+    });
+    // One session per app and storage: the sign-in this one replaces is ended on the server, not just forgotten.
+    if (outcome.replaced !== null) await this.#revokeSession(outcome.replaced);
+    if (!outcome.persisted) {
+      // A session exists only while its record is stored — that is what lets signOut() end it.
+      // Tokens that could not be stored are revoked rather than left alive in memory.
+      await this.#revokeSession(session);
+      throw new SignInError('storage_unavailable');
+    }
+    return this.#providerFor(session, storage);
   }
 
   /**
@@ -514,7 +528,7 @@ export class PageSpaceAuth {
       this.#forget(storage);
       return null;
     }
-    return this.#providerFor(session, storage, true);
+    return this.#providerFor(session, storage);
   }
 
   /**
@@ -541,6 +555,11 @@ export class PageSpaceAuth {
       return stored !== null && sameDeployment(stored.baseUrl, this.baseUrl) ? stored : null;
     });
     if (session === null) return null;
+    return this.#revokeSession(session);
+  }
+
+  /** Revokes a stored session's refresh token (its whole family), or its access token when it has none. Never throws. */
+  #revokeSession(session: StoredSession): Promise<RevokeTokenResult> {
     return revokeToken(
       {
         revocationEndpoint: pageSpaceOAuthEndpoints(this.baseUrl).revocationEndpoint,
@@ -551,21 +570,28 @@ export class PageSpaceAuth {
     );
   }
 
-  /**
-   * Best effort: returns whether the write landed. When it does not, the
-   * now-stale record is removed (a quota error does not block removal): left
-   * in place, it would lead another provider to replay a spent refresh token,
-   * or make this sign-in look replaced by an older one. The writing provider
-   * keeps working in memory; only a reload loses it.
-   */
   #writeSession(storage: AuthStorage, session: StoredSession): boolean {
     try {
       storage.setItem(this.#sessionKey, JSON.stringify(session));
       return true;
     } catch {
-      this.#forget(storage);
       return false;
     }
+  }
+
+  /**
+   * Writes the session record; on failure removes the stale record (which
+   * frees its space — a quota error does not block removal) and tries once
+   * more. Returns whether the record is now stored. When it is not, no
+   * record remains at all, so no provider can replay a spent token from it;
+   * the caller must revoke the tokens it could not store.
+   */
+  #persistSession(storage: AuthStorage, session: StoredSession): boolean {
+    if (this.#writeSession(storage, session)) return true;
+    this.#forget(storage);
+    if (this.#writeSession(storage, session)) return true;
+    this.#forget(storage);
+    return false;
   }
 
   get #lockName(): string {
@@ -592,7 +618,7 @@ export class PageSpaceAuth {
     return session !== null && sameDeployment(session.baseUrl, this.baseUrl) ? { kind: 'present', session } : { kind: 'absent' };
   }
 
-  #providerFor(session: StoredSession, storage: AuthStorage, persisted: boolean): OAuthTokenProvider {
+  #providerFor(session: StoredSession, storage: AuthStorage): OAuthTokenProvider {
     const initialTokens: OAuthTokens = {
       accessToken: session.accessToken,
       accessExpiresAt: session.accessExpiresAt,
@@ -615,57 +641,34 @@ export class PageSpaceAuth {
       now: this.#now,
     });
     const lineage = session.lineage;
-    // What this provider holds: the rotation of its current pair, and whether
-    // its last write to storage landed (if it did, a vanished record means
-    // someone signed out; if it did not, storage is simply unusable).
     let heldRotation = session.rotation;
-    let lastWriteLanded = persisted;
 
     const signedOutOrReplaced = (): AuthenticationError =>
       new AuthenticationError('This sign-in was signed out or replaced by another sign-in; sign in again.', 'auth.refresh');
 
-    const rotateAndPersist = async (refreshToken: string, fromRotation: number): Promise<OAuthTokens> => {
-      const tokens = await tokenEndpointRefresh(refreshToken);
-      const rotation = fromRotation + 1;
-      heldRotation = rotation;
-      // Storage shared without a common lock (another realm) may have gained a
-      // newer sign-in during the network call: never overwrite it.
-      const current = this.#readStoredSession(storage);
-      if (current.kind === 'present' && current.session.lineage !== lineage) return tokens;
-      lastWriteLanded = this.#writeSession(storage, {
-        v: 1,
-        baseUrl: this.baseUrl,
-        lineage,
-        rotation,
-        accessToken: tokens.accessToken,
-        accessExpiresAt: tokens.accessExpiresAt,
-        refreshToken: tokens.refreshToken,
-        refreshExpiresAt: tokens.refreshExpiresAt,
-        scope: tokens.scope ?? session.scope,
-      });
-      return tokens;
-    };
-
-    // Refresh tokens are single-use: presenting a spent one revokes the whole
-    // sign-in. So every refresh runs under one lock (Web Locks across this
-    // origin's tabs; an in-realm queue otherwise), reads storage first, and
-    // persists the rotated pair before the lock is released:
-    //   - same sign-in, newer rotation in storage → another provider already
-    //     rotated: adopt that pair (refreshing it only if its access token is
-    //     stale). Never refresh with anything older than what is held.
-    //   - a different sign-in in storage, or none where this provider's own
-    //     write had landed → signed out or replaced: fail closed, no network.
-    //   - otherwise (same rotation, or storage unusable) → rotate what is held.
+    // The invariant: a session exists only while its record is in storage.
+    // That is what lets signOut() — which removes the record and revokes its
+    // token under the same lock — end a session everywhere. Refresh tokens
+    // are single-use (presenting a spent one revokes the whole sign-in), so
+    // every refresh runs under that lock and:
+    //   1. requires this sign-in's record: absent, unreadable, or another
+    //      sign-in's → signed out or replaced; fail closed, no network call;
+    //   2. adopts a newer rotation another provider already stored (as-is
+    //      while its access token is fresh), never presenting anything older;
+    //   3. persists the rotated pair before releasing the lock — and if the
+    //      record vanished or was replaced during the call, or cannot be
+    //      stored, revokes the pair it just received and fails closed, so no
+    //      token lives on where signOut() cannot reach it.
     const refreshAccessToken: RefreshAccessToken = (heldRefreshToken) =>
       withSessionLock(this.#lockName, async () => {
         const read = this.#readStoredSession(storage);
-        if (read.kind === 'present' && read.session.lineage !== lineage) throw signedOutOrReplaced();
-        if (read.kind === 'absent' && lastWriteLanded) throw signedOutOrReplaced();
-        if (read.kind === 'present' && read.session.rotation > heldRotation) {
-          const stored = read.session;
+        if (read.kind !== 'present' || read.session.lineage !== lineage) throw signedOutOrReplaced();
+        const stored = read.session;
+        let presentToken = heldRefreshToken;
+        let fromRotation = heldRotation;
+        if (stored.rotation > heldRotation) {
           if (stored.refreshToken === null) throw signedOutOrReplaced();
           heldRotation = stored.rotation;
-          lastWriteLanded = true;
           if (this.#now() + ADOPT_FRESH_SKEW_MS < stored.accessExpiresAt) {
             return {
               accessToken: stored.accessToken,
@@ -675,9 +678,35 @@ export class PageSpaceAuth {
               scope: stored.scope,
             };
           }
-          return rotateAndPersist(stored.refreshToken, stored.rotation);
+          presentToken = stored.refreshToken;
+          fromRotation = stored.rotation;
         }
-        return rotateAndPersist(heldRefreshToken, heldRotation);
+
+        const tokens = await tokenEndpointRefresh(presentToken);
+        const rotation = fromRotation + 1;
+        heldRotation = rotation;
+        const next: StoredSession = {
+          v: 1,
+          baseUrl: this.baseUrl,
+          lineage,
+          rotation,
+          accessToken: tokens.accessToken,
+          accessExpiresAt: tokens.accessExpiresAt,
+          refreshToken: tokens.refreshToken,
+          refreshExpiresAt: tokens.refreshExpiresAt,
+          scope: tokens.scope ?? session.scope,
+        };
+        // Storage shared without a common lock (another realm) may have been
+        // signed out of, or given a newer sign-in, during the network call.
+        const current = this.#readStoredSession(storage);
+        const stillOurs = current.kind === 'present' && current.session.lineage === lineage;
+        if (!stillOurs || !this.#persistSession(storage, next)) {
+          await this.#revokeSession(next);
+          throw stillOurs
+            ? new AuthenticationError('The refreshed session could not be stored, so it was revoked; sign in again.', 'auth.refresh')
+            : signedOutOrReplaced();
+        }
+        return tokens;
       });
     return new OAuthTokenProvider({ initialTokens, refreshAccessToken, now: this.#now });
   }
