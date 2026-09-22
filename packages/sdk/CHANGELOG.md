@@ -50,7 +50,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   this instance's providers from serving a cached access token (including one a concurrent refresh
   delivered) and covers every storage `restore(storage)` was given; a revocation the server does
   not accept — including the background revocation of a replaced sign-in — is kept, per
-  deployment and merged rather than overwritten, and retried by the next `signOut()`; a
+  deployment and merged rather than overwritten, and retried by the next `signOut()` (tokens are
+  queued before the revocation request goes out, so navigating away mid-revocation loses none); a
   `signOut()` that cannot read storage reports a retryable failure instead of "nobody signed in". A duplicated tab still starts from a
   copy of `sessionStorage` (see the README).
 - Token-endpoint calls take a `timeoutMs` (default 30s) covering headers and body, enforced even

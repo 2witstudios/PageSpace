@@ -1145,6 +1145,68 @@ describe('refresh coordination across providers and sign-ins', () => {
     expect(server.revoked).toContain('ps_rt_amy~1');
   });
 
+  it('signOut reports a retryable failure when one storage is unreadable, even if another storage signed out fine', async () => {
+    const server = rotatingServer();
+    const world = sharedWorld(server.fetch);
+    const auth = world.make();
+    await world.signIn(auth, 'dee'); // configured storage
+    const other = sharedWorld(server.fetch);
+    await other.signIn(other.make(), 'eve');
+    expect(auth.restore(other.storage)).not.toBeNull();
+    const realGetItem = world.storage.getItem.bind(world.storage);
+    world.storage.getItem = () => {
+      throw new Error('SecurityError');
+    };
+
+    const result = await auth.signOut();
+    world.storage.getItem = realGetItem;
+
+    expect(result).toMatchObject({ outcome: 'failed', retryable: true });
+    await expect(auth.signOut()).resolves.toEqual({ outcome: 'revoked' });
+    expect(server.revoked).toContain('ps_rt_dee~1');
+  });
+
+  it('the token being revoked is queued BEFORE the request goes out, so leaving mid-revocation loses nothing', async () => {
+    const server = rotatingServer();
+    const hang = (async (input: string | URL | Request, init?: RequestInit) =>
+      String(input).endsWith('/revoke') ? new Promise<Response>(() => undefined) : server.fetch(input, init)) as typeof fetch;
+    const world = sharedWorld(hang);
+    const auth = world.make();
+    await world.signIn(auth, 'fin');
+
+    void auth.signOut(); // the revocation never answers (the page navigates away)
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const pendingKey = [...world.storage.items.keys()].find((key) => key.startsWith('pagespace.auth.revoke-pending')) ?? '';
+    expect(world.storage.getItem(pendingKey)).toContain('ps_rt_fin~1');
+  });
+
+  it('a replaced sign-in is queued for revocation before its background request goes out', async () => {
+    const server = rotatingServer();
+    const hang = (async (input: string | URL | Request, init?: RequestInit) =>
+      String(input).endsWith('/revoke') ? new Promise<Response>(() => undefined) : server.fetch(input, init)) as typeof fetch;
+    const world = sharedWorld(hang);
+    await world.signIn(world.make(), 'gil');
+
+    await world.signIn(world.make(), 'hana'); // then the callback page navigates away
+
+    const pendingKey = [...world.storage.items.keys()].find((key) => key.startsWith('pagespace.auth.revoke-pending')) ?? '';
+    expect(world.storage.getItem(pendingKey)).toContain('ps_rt_gil~1');
+  });
+
+  it('a queued revocation is cleared once the server accepts it', async () => {
+    const server = rotatingServer();
+    const world = sharedWorld(server.fetch);
+    const auth = world.make();
+    await world.signIn(world.make(), 'ian');
+    await world.signIn(auth, 'joy');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await auth.signOut();
+
+    expect([...world.storage.items.keys()]).toEqual([]);
+    expect(server.revoked.sort()).toEqual(['ps_rt_ian~1', 'ps_rt_joy~2']);
+  });
+
   it('signOut from ANOTHER instance waits for an in-flight refresh, then revokes the rotated token; the old provider is dead', async () => {
     const server = rotatingServer();
     let release!: () => void;
