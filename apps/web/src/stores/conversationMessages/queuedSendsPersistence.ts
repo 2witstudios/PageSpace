@@ -1,5 +1,5 @@
 import type { UIMessage } from 'ai';
-import { MAX_QUEUED_SENDS } from '@/stores/conversationMessages/applyQueuedSends';
+import { MAX_HELD_QUEUED_SENDS } from '@/stores/conversationMessages/applyQueuedSends';
 
 /**
  * localStorage persistence for the send queue, keyed by conversationId
@@ -35,7 +35,7 @@ export const persistQueuedSends = (conversationId: string, messages: UIMessage[]
     }
     window.localStorage.setItem(
       keyFor(conversationId),
-      JSON.stringify(messages.slice(0, MAX_QUEUED_SENDS)),
+      JSON.stringify(messages.slice(0, MAX_HELD_QUEUED_SENDS)),
     );
   } catch {
     // Quota / privacy-mode failure: the in-memory queue keeps working.
@@ -70,7 +70,7 @@ export const readPersistedQueuedSends = (conversationId: string): UIMessage[] =>
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(isPersistedQueuedSend).slice(0, MAX_QUEUED_SENDS);
+    return parsed.filter(isPersistedQueuedSend).slice(0, MAX_HELD_QUEUED_SENDS);
   } catch {
     return [];
   }
