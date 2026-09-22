@@ -58,6 +58,12 @@ import {
   getUserAccessiblePagesInDriveWithDetails,
 } from '../permissions';
 
+// vi.clearAllMocks() keeps queued mockReturnValueOnce stubs; one a test left
+// unconsumed would answer the NEXT test's query. Every test starts empty.
+beforeEach(() => {
+  vi.mocked(db.select).mockReset();
+});
+
 const TOKEN_ID = 'mcp_aaaaaaaaaaaaaaaaaaaaaa';
 const OWNER_ID = 'user_oooooooooooooooooooo';
 const PAGE_ID = 'page_bbbbbbbbbbbbbbbbbbbbbbb';
