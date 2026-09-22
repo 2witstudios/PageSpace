@@ -4,7 +4,8 @@ import { eq, and, lte, sql } from '@pagespace/db/operators'
 import { workflows } from '@pagespace/db/schema/workflows';
 import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
-import { executeWorkflow, type WorkflowExecutionInput } from '@/lib/workflows/workflow-executor';
+import { executeWorkflow, type WorkflowExecutionInput, type WorkflowExecutionResult } from '@/lib/workflows/workflow-executor';
+import { acquireWorkflowCreditHold, recordCreditSkippedRun } from '@/lib/workflows/workflow-credit-gate';
 import { getNextRunDate } from '@/lib/workflows/cron-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { audit } from '@pagespace/lib/audit/audit-log';
@@ -87,6 +88,7 @@ export async function POST(req: Request) {
 
     let executed = 0;
     let totalAttempted = 0;
+    let skipped = 0;
     const errors: string[] = [];
 
     for (let i = 0; i < dueWorkflows.length; i += MAX_CONCURRENT_WORKFLOWS) {
@@ -94,31 +96,60 @@ export async function POST(req: Request) {
 
       const batchResults = await Promise.allSettled(
         batch.map(async (workflow) => {
+          const input = toExecutionInput(workflow);
+
+          // Credit gate BEFORE the executor builds a model, on the owner the run
+          // bills. A refused fire is a skip, not a failure: record it in the run
+          // history and advance the schedule, so an out-of-credits owner's
+          // workflow is not re-fired (and re-reported) on every tick.
+          const hold = await acquireWorkflowCreditHold(
+            workflow.createdBy,
+            { steps: workflow.steps, prompt: workflow.prompt, agentPageId: workflow.agentPageId },
+            'scheduled',
+          );
+          if (!hold.allowed) {
+            loggers.api.info('Workflow cron: skipped (credit gate denied)', { workflowId: workflow.id, reason: hold.reason });
+            await recordCreditSkippedRun({ workflowId: workflow.id, source: input.source, reason: hold.reason });
+            await advanceNextRunAt(workflow);
+            return { workflow, skipped: true as const };
+          }
+
           // The atomic claim is the workflow_runs partial unique index inside
           // the executor. If a peer cron invocation already claimed this
           // workflow, claimConflict comes back true — we leave nextRunAt
           // alone so the running fire's natural completion governs the
           // next schedule advance.
-          const result = await executeWorkflow(toExecutionInput(workflow));
+          let result: WorkflowExecutionResult;
+          try {
+            result = await executeWorkflow(input);
+          } finally {
+            // executeWorkflow debits real usage itself; the hold only reserved headroom.
+            hold.release();
+          }
           if (!result.claimConflict) {
             await advanceNextRunAt(workflow);
           }
-          return { workflow, result };
+          return { workflow, skipped: false as const, result };
         }),
       );
 
       for (let j = 0; j < batchResults.length; j++) {
         const settled = batchResults[j];
         if (settled.status === 'fulfilled') {
-          if (settled.value.result.claimConflict) continue;
+          const outcome = settled.value;
+          if (outcome.skipped) {
+            skipped++;
+            continue;
+          }
+          if (outcome.result.claimConflict) continue;
           totalAttempted++;
-          if (settled.value.result.success) {
+          if (outcome.result.success) {
             executed++;
           } else {
-            errors.push(`${settled.value.workflow.name}: ${settled.value.result.error}`);
+            errors.push(`${outcome.workflow.name}: ${outcome.result.error}`);
           }
-          if (settled.value.result.finalizeError) {
-            errors.push(`${settled.value.workflow.name}: finalize failed: ${settled.value.result.finalizeError}`);
+          if (outcome.result.finalizeError) {
+            errors.push(`${outcome.workflow.name}: finalize failed: ${outcome.result.finalizeError}`);
           }
         } else {
           totalAttempted++;
@@ -139,14 +170,15 @@ export async function POST(req: Request) {
       }
     }
 
-    loggers.api.info(`Workflow cron: Complete. Executed ${executed}/${totalAttempted}`);
+    loggers.api.info(`Workflow cron: Complete. Executed ${executed}/${totalAttempted}, skipped ${skipped}`);
 
-    audit({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'workflows', details: { executed, failed: errors.length } });
+    audit({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'workflows', details: { executed, failed: errors.length, skipped } });
 
     return NextResponse.json({
       message: 'Workflow cron complete',
       executed,
       total: totalAttempted,
+      skipped,
       errors: errors.length > 0 ? errors : undefined,
     });
   } catch (error) {

@@ -15,7 +15,11 @@ const {
   mockSelectWhere,
   mockSelectFrom,
   mockSelect,
+  mockAcquireHold,
+  mockReleaseHold,
 } = vi.hoisted(() => ({
+  mockAcquireHold: vi.fn(),
+  mockReleaseHold: vi.fn(),
   mockReturning: vi.fn().mockResolvedValue([{ id: 'wf_1' }]),
   mockUpdateWhere: vi.fn(),
   mockUpdateSet: vi.fn(),
@@ -65,6 +69,11 @@ vi.mock('@/lib/workflows/workflow-executor', () => ({
 
 vi.mock('@/lib/workflows/cron-utils', () => ({
   getNextRunDate: vi.fn(),
+}));
+
+vi.mock('@/lib/workflows/workflow-credit-gate', () => ({
+  acquireWorkflowCreditHold: mockAcquireHold,
+  creditDeniedError: (reason: string) => `AI credit gate denied: ${reason}`,
 }));
 
 import { POST } from '../../run/route';
@@ -169,6 +178,7 @@ describe('POST /api/workflows/[workflowId]/run', () => {
       durationMs: 1,
     });
     vi.mocked(getNextRunDate).mockReturnValue(new Date('2025-06-01T09:00:00Z'));
+    mockAcquireHold.mockResolvedValue({ allowed: true, release: mockReleaseHold });
   });
 
   test('returns 401 when not authenticated', async () => {
@@ -291,5 +301,71 @@ describe('POST /api/workflows/[workflowId]/run', () => {
     const body = await response.json();
     expect(body.success).toBe(false);
     expect(body.error).toBe('Agent crashed');
+  });
+
+  describe('credit gate', () => {
+    const run = () => POST(
+      new Request('https://example.com/api/workflows/wf_1/run', { method: 'POST' }),
+      createContext('wf_1'),
+    );
+
+    test('gates the billed workflow owner (not the clicker) as an interactive run, before executing', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth('admin_clicker'));
+
+      await run();
+
+      expect(mockAcquireHold).toHaveBeenCalledWith(
+        'user_123',
+        { steps: undefined, prompt: mockWorkflow.prompt, agentPageId: mockWorkflow.agentPageId },
+        'interactive',
+      );
+      expect(mockAcquireHold.mock.invocationCallOrder[0])
+        .toBeLessThan(vi.mocked(executeWorkflow).mock.invocationCallOrder[0]);
+    });
+
+    test('out of credits: 402, the workflow never runs, the schedule is not advanced', async () => {
+      mockAcquireHold.mockResolvedValue({ allowed: false, reason: 'out_of_credits' });
+
+      const response = await run();
+
+      expect(response.status).toBe(402);
+      expect(executeWorkflow).not.toHaveBeenCalled();
+      expect(getNextRunDate).not.toHaveBeenCalled();
+    });
+
+    test('in-flight cap: 429, the workflow never runs', async () => {
+      mockAcquireHold.mockResolvedValue({ allowed: false, reason: 'too_many_in_flight' });
+
+      const response = await run();
+
+      expect(response.status).toBe(429);
+      expect(executeWorkflow).not.toHaveBeenCalled();
+    });
+
+    test('releases the hold exactly once, after the run settles', async () => {
+      await run();
+
+      expect(mockReleaseHold).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(executeWorkflow).mock.invocationCallOrder[0])
+        .toBeLessThan(mockReleaseHold.mock.invocationCallOrder[0]);
+    });
+
+    test('releases the hold when the executor throws', async () => {
+      vi.mocked(executeWorkflow).mockRejectedValue(new Error('boom'));
+
+      await expect(run()).rejects.toThrow('boom');
+
+      expect(mockReleaseHold).toHaveBeenCalledTimes(1);
+    });
+
+    test('releases the hold on a claim conflict (the run never started)', async () => {
+      vi.mocked(executeWorkflow).mockResolvedValue({
+        success: false, durationMs: 0, error: 'Workflow already running', claimConflict: true,
+      });
+
+      await run();
+
+      expect(mockReleaseHold).toHaveBeenCalledTimes(1);
+    });
   });
 });
