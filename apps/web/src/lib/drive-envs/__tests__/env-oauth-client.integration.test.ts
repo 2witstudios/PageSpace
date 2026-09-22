@@ -20,6 +20,7 @@ import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
 import { and, eq, isNull } from '@pagespace/db/operators';
 import { customDomains } from '@pagespace/db/schema/custom-domains';
+import { drives } from '@pagespace/db/schema/core';
 import { driveEnvs } from '@pagespace/db/schema/drive-envs';
 import { oauthAccessTokens, oauthClients, oauthRefreshTokens } from '@pagespace/db/schema/oauth';
 import { publishedApps } from '@pagespace/db/schema/published-apps';
@@ -282,6 +283,37 @@ describe('US6: sign-in works in an environment and, unchanged, after publish', (
     expect(await authorizeWouldHonour(clientId, `${previewOrigin}${PAGESPACE_CALLBACK_PATH}`)).toBe(true);
   });
 
+  it('a DRIVE hard-delete cascades the env away without the env route: the trigger still disables the client and revokes its families (Codex P1)', async () => {
+    // A separate drive + env + client, deleted the way the trash purge, handle-drive and account erasure do it: `DELETE FROM drives`.
+    const otherDrive = await factories.createDrive(ownerId);
+    const [otherEnv] = await db.insert(driveEnvs).values({ id: createId(), driveId: otherDrive.id, name: 'doomed', createdBy: ownerId }).returning();
+    const otherClientId = envOAuthClientId(otherEnv.id);
+    expect((await syncEnvOAuthClientForEnv(otherEnv.id)).ok).toBe(true);
+    const row = await clientRow(otherClientId);
+    const familyId = createId();
+    const refresh = generateToken('ps_rt');
+    const access = generateToken('ps_at');
+    const soon = new Date(Date.now() + 15 * 60 * 1000);
+    await db.insert(oauthRefreshTokens).values({ tokenHash: refresh.hash, tokenPrefix: refresh.tokenPrefix, familyId, clientId: row!.id, userId: ownerId, scopes: ['profile'], tokenVersion: 0, expiresAt: soon, familyExpiresAt: soon });
+    await db.insert(oauthAccessTokens).values({ tokenHash: access.hash, tokenPrefix: access.tokenPrefix, familyId, clientId: row!.id, userId: ownerId, scopes: ['profile'], tokenVersion: 0, expiresAt: soon });
+    expect(await resolveClient(otherClientId)).not.toBeNull();
+
+    await db.delete(drives).where(eq(drives.id, otherDrive.id));
+
+    expect(await db.query.driveEnvs.findFirst({ where: eq(driveEnvs.id, otherEnv.id) })).toBeUndefined();
+    const after = await clientRow(otherClientId);
+    expect(after?.disabledAt).toBeInstanceOf(Date);
+    expect(await resolveClient(otherClientId)).toBeNull();
+    const refreshRow = await db.query.oauthRefreshTokens.findFirst({ where: eq(oauthRefreshTokens.tokenHash, refresh.hash) });
+    const accessRow = await db.query.oauthAccessTokens.findFirst({ where: eq(oauthAccessTokens.tokenHash, access.hash) });
+    expect(refreshRow?.revokedAt).toBeInstanceOf(Date);
+    expect(refreshRow?.revokedReason).toBe('client_disabled');
+    expect(accessRow?.revokedAt).toBeInstanceOf(Date);
+    expect(accessRow?.revokedReason).toBe('client_disabled');
+    // The stamp is UTC wall-clock, not a session-zone drift: within a minute of now.
+    expect(Math.abs(after!.disabledAt!.getTime() - Date.now())).toBeLessThan(60_000);
+  });
+
   it('env delete → the client is disabled and EVERY family it issued is revoked (refresh and access), and the provider no longer resolves it', async () => {
     const row = await clientRow(clientId);
     const familyId = createId();
@@ -300,10 +332,12 @@ describe('US6: sign-in works in an environment and, unchanged, after publish', (
       { tokenHash: bystander.hash, tokenPrefix: bystander.tokenPrefix, familyId: unrelatedFamily, clientId: unrelatedClient[0].id, userId: ownerId, scopes: ['profile'], tokenVersion: 0, expiresAt: soon },
     ]);
 
-    // The env row goes first (the real delete path: row, then retire); the client id is derivable without it.
-    await db.delete(driveEnvs).where(eq(driveEnvs.id, envId));
+    // The app-level retire (what the env DELETE route runs after the row is gone) — exercised here BEFORE the row
+    // goes so it is proven on its own; in production the AFTER DELETE trigger below has already done the same work
+    // by the time it runs, and it is idempotent over that.
     const retired = await retireEnvOAuthClientForEnv(envId);
     expect(retired).toEqual({ clientId, disabled: true, familiesRevoked: 1 });
+    await db.delete(driveEnvs).where(eq(driveEnvs.id, envId));
 
     const after = await clientRow(clientId);
     expect(after?.disabledAt).toBeInstanceOf(Date);
