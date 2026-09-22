@@ -61,7 +61,9 @@ record('fromEnvironment', true, { baseUrl: auth.baseUrl, clientId: auth.clientId
 async function signIn(): Promise<void> {
   const drive = document.querySelector<HTMLInputElement>('#drive')?.value.trim() ?? '';
   sessionStorage.setItem('smoke.drive', drive);
-  const scope = drive ? `profile offline_access drive:${drive}:member` : 'profile offline_access';
+  // `?offline=1` adds offline_access (a refresh token); the default grant is identity + one drive.
+  const offline = new URLSearchParams(location.search).get('offline') === '1' ? ' offline_access' : '';
+  const scope = `profile${drive ? ` drive:${drive}:member` : ''}${offline}`;
   await auth.signInWithRedirect({ scope });
 }
 

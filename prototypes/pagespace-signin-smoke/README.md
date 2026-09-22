@@ -22,7 +22,19 @@ ADR 0004 Decision 3: a third-party client gets **no** cleartext loopback redirec
 3. Build the SDK: `bun run --filter @pagespace/sdk build` (the SPA imports `packages/sdk/dist` directly)
 4. In this folder: `cp .env.example .env.local && bun install && bun run dev`
 5. Open `https://127.0.0.1:5173`, optionally enter a drive id you own, click **Sign in with
-   PageSpace**, approve on the consent screen (a drive grant asks for a step-up).
+   PageSpace**, approve on the consent screen. A drive grant asks for a step-up; add `?offline=1`
+   to the SPA URL to request `offline_access` (a refresh token) as well.
+
+Two things a dev-mode server needs that production does not:
+
+- **Hydration.** The app's CSP has no `unsafe-eval` in any mode, and Next's dev HMR needs it, so a
+  dev-served consent screen never hydrates and its Allow button does nothing. Drive it with
+  Playwright's `bypassCSP: true` (or use a production build). The bypass is a harness workaround,
+  not a product change.
+- **The step-up email.** `onprem` disables email sending outright
+  (`packages/lib/src/services/email-service.ts`), so the magic-link step-up a `drive:*` grant
+  requires is never delivered. Mint the link straight into `verification_tokens` (the same row
+  `requestMagicLinkStepUp` writes) and open the verify URL.
 
 ## What passes
 
