@@ -156,11 +156,10 @@ import {
   readToolApprovalScopes,
   type ApprovedToolExecution,
 } from '@/lib/ai/core/approval-resume';
-import { applyApprovalPolicy, isToolApprovalMode, DEFAULT_TOOL_APPROVAL_MODE, type ApprovalPolicyContext } from '@/lib/ai/approvals/approval-policy';
+import { applyApprovalPolicy, isInteractiveApprovalTurn, isToolApprovalMode, DEFAULT_TOOL_APPROVAL_MODE, type ApprovalPolicyContext } from '@/lib/ai/approvals/approval-policy';
 import { gatedIntegrationToolNames } from '@/lib/ai/approvals/integration-approval';
 import { approvalResumeRefusal, executeApprovedCallsAndReassemble } from '@/lib/ai/chat-pipeline/approval-turn-support';
 import { loadToolApprovalGrants } from '@/lib/ai/approvals/load-approval-context';
-import { isSessionAuthResult } from '@/lib/auth';
 import type { ContextRef } from '@/lib/ai/shared/buildContextRef';
 import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
 import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
@@ -1373,11 +1372,13 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // Tool approvals — the per-AGENT mode, and whether a human can answer at
     // all. Interactive = a browser session drove this turn (not an MCP client,
     // which has no card to click, and not a dispatched worker turn under
-    // service auth). Anything else runs as `auto` whatever the mode says.
+    // service auth) — decided from the principal alone, never from the
+    // dispatch-depth header (isInteractiveApprovalTurn). Anything else runs as
+    // `auto` whatever the mode says.
     // Workflow, trigger and channel-mention runs never come through this turn
     // (they drive streamText themselves), so they are `auto` by construction.
     const toolApprovalMode = isToolApprovalMode(page.toolApprovalMode) ? page.toolApprovalMode : DEFAULT_TOOL_APPROVAL_MODE;
-    const toolApprovalsInteractive = isSessionAuthResult(authResult) && agentDispatchDepth === 0;
+    const toolApprovalsInteractive = isInteractiveApprovalTurn(authResult);
     // Fails SAFE (no grants) — see load-approval-context.ts.
     const toolApprovalGrants =
       toolApprovalsInteractive && toolApprovalMode === 'ask'

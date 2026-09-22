@@ -30,7 +30,7 @@ import {
   readToolApprovalScopes,
   type ApprovedToolExecution,
 } from '@/lib/ai/core/approval-resume';
-import { applyApprovalPolicy, type ApprovalPolicyContext } from '@/lib/ai/approvals/approval-policy';
+import { applyApprovalPolicy, isInteractiveApprovalTurn, type ApprovalPolicyContext } from '@/lib/ai/approvals/approval-policy';
 import { loadGlobalToolApprovalMode, loadToolApprovalGrants } from '@/lib/ai/approvals/load-approval-context';
 import { gatedIntegrationToolNames } from '@/lib/ai/approvals/integration-approval';
 import { approvalResumeRefusal, executeApprovedCallsAndReassemble } from '@/lib/ai/chat-pipeline/approval-turn-support';
@@ -1057,7 +1057,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
       conversationType: conversation.type,
       conversationContextId: conversation.contextId,
       includeAskUser: true,
-      toolApprovals: toolApprovalMode === 'ask' && agentDispatchDepth === 0,
+      toolApprovals: toolApprovalMode === 'ask' && isInteractiveApprovalTurn(auth),
       drivePromptSection,
       agentAwareness: agentAwarenessPrompt,
       nonCoreToolNames: nonCoreToolNamesPrompt,
@@ -1199,12 +1199,13 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
 
     // Tool approvals — the human-in-the-loop gate. Applied LAST, over the fully
     // merged set (integration + MCP + finish + ask_user), so nothing merged after
-    // it could slip past. Interactive means a human can answer: a browser
-    // session drove this turn and it is not a dispatched worker turn; anything
-    // else runs as `auto` whatever the user's mode says.
+    // it could slip past. Interactive means a human can answer: decided from
+    // the authenticated principal ALONE (a browser session), never from the
+    // dispatch-depth header a browser could set — see isInteractiveApprovalTurn.
+    // Anything else runs as `auto` whatever the user's mode says.
     const approvalPolicy: ApprovalPolicyContext = {
       mode: toolApprovalMode,
-      interactive: agentDispatchDepth === 0,
+      interactive: isInteractiveApprovalTurn(auth),
       conversationId,
       grants: toolApprovalGrants,
       gatedIntegrationToolNames: gatedIntegrationToolNames(Object.keys(finalTools)),
