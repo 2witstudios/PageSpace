@@ -15,7 +15,7 @@
  * (`__tests__/agent-account-repository.integration.test.ts`).
  */
 import type { db as defaultDb } from '@pagespace/db/db';
-import { and, desc, eq, gte, isNull, sql } from '@pagespace/db/operators';
+import { and, desc, eq, gte, inArray, isNull, sql } from '@pagespace/db/operators';
 import { agentAccountApprovals, agentAccountBindings, agentAccounts, type AccountOwnerRef, type AgentAccountRecord, type TenantId } from '@pagespace/db/schema/agent-accounts';
 import type { AgentPageId, ApprovalId, GrantId, RequestDigest } from './grant';
 import type { AccountApprovalPolicy } from './approval';
@@ -35,6 +35,8 @@ export type AgentAccountRepository = {
   readonly setCredentialVersion: (input: { readonly id: string; readonly version: number }) => Promise<boolean>;
   readonly remove: (id: string) => Promise<void>;
   readonly find: (id: string) => Promise<AgentAccountRecord | null>;
+  /** Which of these ids still have a reference row (the plane's orphan sweep, review MED-1). */
+  readonly existingIds: (ids: readonly string[]) => Promise<readonly string[]>;
   readonly listForUser: (userId: string) => Promise<readonly AgentAccountRecord[]>;
   readonly listForAgentPage: (agentPageId: string) => Promise<readonly AgentAccountRecord[]>;
   /** Broker-denied from now on; bumps policyVersion. null when the row is gone. */
@@ -100,6 +102,12 @@ export function createAgentAccountRepository({ db }: { readonly db: AgentAccount
     async find(id) {
       const rows = await db.select().from(agentAccounts).where(eq(agentAccounts.id, id)).limit(1);
       return rows[0] ?? null;
+    },
+
+    async existingIds(ids) {
+      if (ids.length === 0) return [];
+      const rows = await db.select({ id: agentAccounts.id }).from(agentAccounts).where(inArray(agentAccounts.id, [...ids])).limit(ids.length);
+      return rows.map((row) => row.id);
     },
 
     async listForUser(userId) {

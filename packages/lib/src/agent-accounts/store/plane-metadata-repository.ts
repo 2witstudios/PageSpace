@@ -75,6 +75,8 @@ export type PlaneMetadataRepository = {
   /** `false` when no row was marked: the ref is gone, or a revocation is already recorded. */
   readonly markRevoked: (input: { readonly ref: SecretRef; readonly revokedAt: number; readonly reason: RevokeReason }) => Promise<boolean>;
   readonly remove: (ref: SecretRef) => Promise<void>;
+  /** A page of every ref the plane holds, keyset-ordered by (tenant, account, kind) — for the orphan sweep (review MED-1). */
+  readonly listRefs: (input: { readonly after: SecretRef | null; readonly limit: number }) => Promise<readonly { readonly ref: SecretRef; readonly createdAt: number }[]>;
   /** CAS on the stored `policy_version`; `false` when another writer moved it first. */
   readonly updateBindings: (input: { readonly ref: SecretRef; readonly expectedPolicyVersion: PolicyVersion; readonly record: PlaneBindingsRecord }) => Promise<boolean>;
 };
@@ -229,6 +231,19 @@ export function createPlaneMetadataRepository({ pool }: { readonly pool: PlaneMe
         [...key(ref), JSON.stringify(record.bindings), JSON.stringify(record.scope), JSON.stringify(record.consenters), record.bindings.policyVersion, expectedPolicyVersion],
       );
       return result.rowCount === 1;
+    },
+
+    async listRefs({ after, limit }) {
+      const result = await pool.query(
+        `SELECT tenant_id, account_id, kind, created_at FROM agent_account_secret_versions
+          WHERE ($1::text IS NULL OR (tenant_id, account_id, kind) > ($1, $2, $3))
+          ORDER BY tenant_id, account_id, kind LIMIT $4`,
+        [after?.tenantId ?? null, after?.accountId ?? null, after?.kind ?? null, limit],
+      );
+      return (result.rows as { tenant_id: string; account_id: string; kind: string; created_at: Date }[]).map((row) => ({
+        ref: { tenantId: row.tenant_id, accountId: row.account_id, kind: row.kind } as SecretRef,
+        createdAt: row.created_at.getTime(),
+      }));
     },
 
     async remove(ref) {

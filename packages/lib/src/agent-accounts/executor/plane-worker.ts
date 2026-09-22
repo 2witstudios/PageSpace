@@ -34,6 +34,7 @@ import { createAgentAccountRepository } from '../agent-account-repository';
 import { createPinnedHttpsClient, DEFAULT_PINNED_HTTPS_LIMITS } from './pinned-https-client';
 import { createHttpRequestExecutor } from './http-request-executor';
 import { createPlaneRequestHandler } from './plane-http-adapter';
+import { sweepOrphanedRefs } from './plane-orphan-sweep-worker';
 
 const sha3: HashBytes = (bytes) => createHash('sha3-256').update(bytes).digest('hex');
 const sha256: HashBytes = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -47,6 +48,7 @@ const verifyEd25519: Ed25519Verify = (message, signature, publicKey) => {
 /** What the executor may release toward a model, per response. */
 const MAX_RELEASED_BODY_BYTES = 256 * 1024;
 const DNS_TIMEOUT_MS = 5_000;
+const ORPHAN_SWEEP_INTERVAL_MS = 30 * 60_000;
 
 export async function startCredentialPlane({ config }: { readonly config: PlaneConfig }): Promise<Server> {
   const metadataPool = new Pool({ connectionString: config.metadataDatabaseUrl });
@@ -106,7 +108,14 @@ export async function startCredentialPlane({ config }: { readonly config: PlaneC
     }),
   );
   await new Promise<void>((resolve) => server.listen(config.port, resolve));
+  // Erasure reaches the vault: refs whose reference row cascaded away are deleted (review MED-1).
+  const accounts = createAgentAccountRepository({ db });
+  const sweep = setInterval(() => {
+    void sweepOrphanedRefs({ metadata, accounts, provisioner, store, now: () => Date.now() }).catch(() => undefined);
+  }, ORPHAN_SWEEP_INTERVAL_MS);
+  sweep.unref();
   server.on('close', () => {
+    clearInterval(sweep);
     void metadataPool.end();
   });
   return server;
