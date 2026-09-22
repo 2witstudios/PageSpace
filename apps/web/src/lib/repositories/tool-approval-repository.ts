@@ -6,12 +6,19 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, eq, isNull, or } from '@pagespace/db/operators';
+import { and, eq, inArray, isNull, lt, or } from '@pagespace/db/operators';
 import { aiToolApprovalGrants, aiToolApprovalDecisions } from '@pagespace/db/schema/tool-approvals';
 import type { ToolApprovalGrant } from '@/lib/ai/approvals/approval-policy';
 
 export type ToolApprovalScope = 'once' | 'conversation' | 'always';
-export type ToolApprovalOutcome = 'ok' | 'error' | 'denied' | 'stale';
+export type ToolApprovalOutcome = 'ok' | 'error' | 'denied' | 'stale' | 'running';
+
+/**
+ * A `running` claim older than this may be closed as stale by a dismiss: the
+ * turn that claimed it is presumed dead. A run that outlives it and still
+ * reports is not lost — `recordOutcome` wins over `stale` (truth over guess).
+ */
+export const STALE_RUNNING_AFTER_MS = 15 * 60 * 1000;
 
 export interface ToolApprovalGrantRow extends ToolApprovalGrant {
   id: string;
@@ -58,7 +65,60 @@ export const toolApprovalRepository = {
     return row ?? null;
   },
 
-  /** Record what actually happened to an approved call. Idempotent (a plain update). */
+  /**
+   * The turn is about to RUN an approved call: `outcome NULL → running`. Lost
+   * (false) means a dismiss already closed it as stale, or it was denied — the
+   * caller must not execute. This is the arbiter that keeps a stale-close and
+   * an execution from both happening to one approval.
+   */
+  async claimExecutionStart(approvalId: string): Promise<boolean> {
+    const rows = await db
+      .update(aiToolApprovalDecisions)
+      .set({ outcome: 'running', executedAt: new Date() })
+      .where(and(eq(aiToolApprovalDecisions.approvalId, approvalId), isNull(aiToolApprovalDecisions.outcome)))
+      .returning({ approvalId: aiToolApprovalDecisions.approvalId });
+    return rows.length > 0;
+  },
+
+  /**
+   * A dismiss found an approved part with no result: close it as stale ONLY if
+   * no execution has started (`outcome NULL`), or one started so long ago that
+   * its turn is presumed dead. A live `running` claim is left for its turn.
+   */
+  async claimStale(approvalId: string): Promise<boolean> {
+    const presumedDeadBefore = new Date(Date.now() - STALE_RUNNING_AFTER_MS);
+    const rows = await db
+      .update(aiToolApprovalDecisions)
+      .set({ outcome: 'stale', executedAt: new Date() })
+      .where(
+        and(
+          eq(aiToolApprovalDecisions.approvalId, approvalId),
+          or(
+            isNull(aiToolApprovalDecisions.outcome),
+            and(eq(aiToolApprovalDecisions.outcome, 'running'), lt(aiToolApprovalDecisions.executedAt, presumedDeadBefore)),
+          ),
+        ),
+      )
+      .returning({ approvalId: aiToolApprovalDecisions.approvalId });
+    return rows.length > 0;
+  },
+
+  /**
+   * The call actually finished: `running | stale → ok | error`. Truth wins over
+   * a stale guess, so a slow run that outlived the stale window is still
+   * recorded as what it was. Lost (false) means nothing under that id was ever
+   * started — a second report, or a call that never ran.
+   */
+  async recordOutcome(approvalId: string, outcome: 'ok' | 'error'): Promise<boolean> {
+    const rows = await db
+      .update(aiToolApprovalDecisions)
+      .set({ outcome, executedAt: new Date() })
+      .where(and(eq(aiToolApprovalDecisions.approvalId, approvalId), inArray(aiToolApprovalDecisions.outcome, ['running', 'stale'])))
+      .returning({ approvalId: aiToolApprovalDecisions.approvalId });
+    return rows.length > 0;
+  },
+
+  /** Record a denial's outcome on a decision claimed in the same step. Idempotent (a plain update). */
   async markExecuted(approvalId: string, outcome: ToolApprovalOutcome): Promise<void> {
     await db
       .update(aiToolApprovalDecisions)

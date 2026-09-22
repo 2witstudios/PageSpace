@@ -12,6 +12,7 @@ import { NextResponse } from 'next/server';
 import type { ModelMessage, ToolSet } from 'ai';
 import type { ApplyToolApprovalResult, ApprovedToolExecution, ApprovedToolOutcome } from '@/lib/ai/core/approval-resume';
 import { runApprovedToolExecutions } from '@/lib/ai/approvals/run-approved-executions';
+import { toolApprovalRepository } from '@/lib/repositories/tool-approval-repository';
 
 /**
  * A resume that cannot proceed answers before any generation starts (nothing to
@@ -58,9 +59,10 @@ export async function executeApprovedCallsAndReassemble<T extends AssembledModel
     executions: args.executions,
     tools: args.tools,
     toolOptions: args.toolOptions,
+    claimStart: (execution) => toolApprovalRepository.claimExecutionStart(execution.approvalId),
     record: args.record,
     logger: args.logger,
   });
-  args.logger.info('approved tool calls executed', { ...args.logContext, ran: outcome.ran, failed: outcome.failed });
+  args.logger.info('approved tool calls executed', { ...args.logContext, ran: outcome.ran, failed: outcome.failed, skipped: outcome.skipped });
   return args.assemble(await args.loadHistory());
 }

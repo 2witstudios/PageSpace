@@ -33,11 +33,13 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { ai: { warn: vi.fn(), error: vi.fn(), debug: vi.fn(), trace: vi.fn(), info: vi.fn() } },
 }));
 
-const { saveGlobal, claimDecision, addGrant, markExecuted } = vi.hoisted(() => ({
+const { saveGlobal, claimDecision, addGrant, markExecuted, claimStale, recordOutcome } = vi.hoisted(() => ({
   saveGlobal: vi.fn().mockResolvedValue(undefined),
   claimDecision: vi.fn(),
   addGrant: vi.fn().mockResolvedValue(undefined),
   markExecuted: vi.fn().mockResolvedValue(undefined),
+  claimStale: vi.fn(),
+  recordOutcome: vi.fn(),
 }));
 const uiMessagesById = vi.hoisted(() => new Map<string, UIMessage>());
 
@@ -56,7 +58,7 @@ vi.mock('@/lib/repositories/message-repository', () => ({
   },
 }));
 vi.mock('@/lib/repositories/tool-approval-repository', () => ({
-  toolApprovalRepository: { claimDecision, addGrant, markExecuted },
+  toolApprovalRepository: { claimDecision, addGrant, markExecuted, claimStale, recordOutcome },
 }));
 
 import {
@@ -89,6 +91,10 @@ beforeEach(() => {
   markExecuted.mockClear();
   claimDecision.mockReset();
   claimDecision.mockImplementation(async ({ approvalId }: { approvalId: string }) => ({ approvalId }));
+  claimStale.mockReset();
+  claimStale.mockResolvedValue(true);
+  recordOutcome.mockReset();
+  recordOutcome.mockResolvedValue(true);
 });
 
 describe('extractClientToolApprovalResponses', () => {
@@ -202,7 +208,17 @@ describe('dismissPendingToolApprovals', () => {
     expect(parts[0]).toMatchObject({ state: 'output-denied', approval: { id: 'ap1', approved: false, reason: DISMISSED_APPROVAL_REASON } });
     expect(parts[1]).toMatchObject({ state: 'output-denied', approval: { id: 'ap2', approved: false, reason: STALE_APPROVAL_REASON } });
     expect(markExecuted).toHaveBeenCalledWith('ap1', 'denied');
-    expect(markExecuted).toHaveBeenCalledWith('ap2', 'stale');
+    expect(claimStale).toHaveBeenCalledWith('ap2');
+    expect(markExecuted).not.toHaveBeenCalledWith('ap2', expect.anything());
+  });
+
+  it('an approved part whose execution has STARTED (stale claim lost) is left alone for the running turn to record', async () => {
+    claimStale.mockResolvedValue(false);
+    const r = row([responded('tc2', 'ap2', true)]);
+    limitQueue = [[r]];
+    expect(await dismissPendingToolApprovalsForGlobalConversation({ conversationId: 'conv-1', userId: 'user-1' })).toEqual({ denied: 0 });
+    expect(saveGlobal).not.toHaveBeenCalled();
+    expect(markExecuted).not.toHaveBeenCalled();
   });
 
   it('a pending request already claimed elsewhere (approve raced the typed message) is left for that winner', async () => {
@@ -228,7 +244,27 @@ describe('recordApprovedToolOutcome', () => {
     const result = await recordApprovedToolOutcomeOnGlobalMessage({ conversationId: 'conv-1', messageId: 'msg-1', toolCallId: 'tc1', approvalId: 'ap1', outcome: { ok: true, output: { trashed: true } } });
     expect(result.recorded).toBe(true);
     expect(savedParts()[0]).toMatchObject({ state: 'output-available', output: { trashed: true }, approval: { id: 'ap1', approved: true } });
-    expect(markExecuted).toHaveBeenCalledWith('ap1', 'ok');
+    expect(recordOutcome).toHaveBeenCalledWith('ap1', 'ok');
+    expect(markExecuted).not.toHaveBeenCalled();
+  });
+
+  it('loses the outcome claim (nothing running or stale under that id): records nothing and writes nothing', async () => {
+    recordOutcome.mockResolvedValue(false);
+    const r = row([responded('tc1', 'ap1', true)]);
+    limitQueue = [[r]];
+    const result = await recordApprovedToolOutcomeOnGlobalMessage({ conversationId: 'conv-1', messageId: 'msg-1', toolCallId: 'tc1', approvalId: 'ap1', outcome: { ok: true, output: 1 } });
+    expect(result.recorded).toBe(false);
+    expect(saveGlobal).not.toHaveBeenCalled();
+  });
+
+  it('truth wins over stale: a part closed as stale while the call was still running is rewritten with the real result', async () => {
+    const staleClosed = { ...(responded('tc1', 'ap1', true) as unknown as Record<string, unknown>), state: 'output-denied', approval: { id: 'ap1', approved: false, reason: STALE_APPROVAL_REASON } } as unknown as Part;
+    const r = row([staleClosed]);
+    limitQueue = [[r]];
+    const result = await recordApprovedToolOutcomeOnGlobalMessage({ conversationId: 'conv-1', messageId: 'msg-1', toolCallId: 'tc1', approvalId: 'ap1', outcome: { ok: true, output: { trashed: true } } });
+    expect(result.recorded).toBe(true);
+    expect(savedParts()[0]).toMatchObject({ state: 'output-available', output: { trashed: true }, approval: { id: 'ap1', approved: true } });
+    expect(recordOutcome).toHaveBeenCalledWith('ap1', 'ok');
   });
 
   it('writes output-error with the message and marks the decision error', async () => {
@@ -236,7 +272,7 @@ describe('recordApprovedToolOutcome', () => {
     limitQueue = [[r]];
     await recordApprovedToolOutcomeOnGlobalMessage({ conversationId: 'conv-1', messageId: 'msg-1', toolCallId: 'tc1', approvalId: 'ap1', outcome: { ok: false, errorText: 'boom' } });
     expect(savedParts()[0]).toMatchObject({ state: 'output-error', errorText: 'boom' });
-    expect(markExecuted).toHaveBeenCalledWith('ap1', 'error');
+    expect(recordOutcome).toHaveBeenCalledWith('ap1', 'error');
   });
 
   it('is a no-op for a part that is not in approval-responded (second report, or never approved)', async () => {
@@ -245,6 +281,6 @@ describe('recordApprovedToolOutcome', () => {
     const result = await recordApprovedToolOutcomeOnGlobalMessage({ conversationId: 'conv-1', messageId: 'msg-1', toolCallId: 'tc1', approvalId: 'ap1', outcome: { ok: true, output: 1 } });
     expect(result.recorded).toBe(false);
     expect(saveGlobal).not.toHaveBeenCalled();
-    expect(markExecuted).not.toHaveBeenCalled();
+    expect(recordOutcome).not.toHaveBeenCalled();
   });
 });

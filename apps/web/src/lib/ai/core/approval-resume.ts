@@ -223,10 +223,12 @@ async function applyToolApprovalResponses(
  * A new user message arrived instead of an answer, or the turn is starting
  * with leftovers. Every still-pending request on the conversation's last
  * assistant message becomes `output-denied` (claimed, so a concurrent approve
- * from another tab loses), and any `approval-responded` part that never got a
- * result — an approved call whose turn died before it ran — is closed the
- * same way with {@link STALE_APPROVAL_REASON}, so no responded-without-result
- * part ever reaches model assembly.
+ * from another tab loses). An `approval-responded` part with no result is
+ * closed the same way with {@link STALE_APPROVAL_REASON} ONLY when
+ * `claimStale` wins — i.e. no turn has started running it. A call that IS
+ * running is left alone; its turn records the real result. Either way no
+ * responded-without-result part reaches model assembly (the sanitizer drops
+ * that state).
  */
 async function dismissPendingToolApprovals(
   adapter: AssistantMessageAdapter,
@@ -245,7 +247,10 @@ async function dismissPendingToolApprovals(
 
     const stale = part.state === 'approval-responded';
     const reason = stale ? STALE_APPROVAL_REASON : DISMISSED_APPROVAL_REASON;
-    if (!stale) {
+    if (stale) {
+      // Arbiter: lost means the turn already claimed `running` (or recorded).
+      if (!(await toolApprovalRepository.claimStale(approvalId))) continue;
+    } else {
       const won = await toolApprovalRepository.claimDecision({
         approvalId,
         toolCallId: part.toolCallId,
@@ -258,13 +263,13 @@ async function dismissPendingToolApprovals(
         scope: null,
       });
       if (!won) continue;
+      await toolApprovalRepository.markExecuted(approvalId, 'denied');
     }
     parts = replacePart(parts, part.toolCallId, {
       ...withoutOutput(part),
       state: 'output-denied',
       approval: { id: approvalId, approved: false, reason },
     });
-    await toolApprovalRepository.markExecuted(approvalId, stale ? 'stale' : 'denied');
     denied += 1;
   }
 
@@ -277,8 +282,10 @@ export type ApprovedToolOutcome = { ok: true; output: unknown } | { ok: false; e
 
 /**
  * The turn ran (or failed to run) an approved call: make the result durable on
- * the original row. Only a part still in `approval-responded` is written —
- * a second report for the same call is a no-op.
+ * the original row. `recordOutcome` is the arbiter — it wins only over a
+ * `running` or `stale` row, so a second report is a no-op, and a part a dismiss
+ * closed as stale while the call was still running is REWRITTEN with the real
+ * result: the audit never says "did not run" for a write that ran.
  */
 async function recordApprovedToolOutcome(
   adapter: AssistantMessageAdapter,
@@ -290,14 +297,19 @@ async function recordApprovedToolOutcome(
   const part = (fetched.message.parts as Array<{ type: string }>).find(
     (candidate) => isToolPart(candidate) && candidate.toolCallId === args.toolCallId,
   ) as ApprovalToolPart | undefined;
-  if (!part || part.state !== 'approval-responded') return { recorded: false, message: fetched };
+  const staleClosed = part?.state === 'output-denied' && part.approval?.reason === STALE_APPROVAL_REASON;
+  if (!part || (part.state !== 'approval-responded' && !staleClosed)) return { recorded: false, message: fetched };
+  if (!(await toolApprovalRepository.recordOutcome(args.approvalId, args.outcome.ok ? 'ok' : 'error'))) {
+    return { recorded: false, message: fetched };
+  }
 
+  const approval: ToolApproval = { ...(part.approval ?? { id: args.approvalId }), approved: true };
+  if (staleClosed) delete approval.reason;
   const next: ApprovalToolPart = args.outcome.ok
-    ? { ...withoutOutput(part), state: 'output-available', output: args.outcome.output }
-    : { ...withoutOutput(part), state: 'output-error', errorText: args.outcome.errorText };
+    ? { ...withoutOutput(part), state: 'output-available', output: args.outcome.output, approval }
+    : { ...withoutOutput(part), state: 'output-error', errorText: args.outcome.errorText, approval };
   const parts = replacePart(fetched.message.parts, args.toolCallId, next);
   await fetched.persist(buildAssistantPersistencePayload(args.messageId, parts));
-  await toolApprovalRepository.markExecuted(args.approvalId, args.outcome.ok ? 'ok' : 'error');
   return { recorded: true, message: fetched };
 }
 

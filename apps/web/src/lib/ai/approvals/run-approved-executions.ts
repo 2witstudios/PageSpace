@@ -8,10 +8,14 @@
  * inside the open stream, means a long bash call cannot trip a proxy timeout
  * before the first byte.
  *
- * Every path ends in a RECORDED outcome. A responded part left without a result
- * would be re-run by the SDK's own execute-on-resume next turn (see
- * `core/approval-resume.ts`), so "tool vanished", "input no longer validates",
- * "execute threw" and "aborted" all become `output-error` on the row.
+ * Every call that STARTS ends in a RECORDED outcome. A responded part left
+ * without a result would be re-run by the SDK's own execute-on-resume next turn
+ * (see `core/approval-resume.ts`), so "tool vanished", "input no longer
+ * validates", "execute threw" and "aborted" all become `output-error` on the row.
+ *
+ * Starting is itself a claim (`claimStart`): a call a dismiss already closed as
+ * stale — or that another writer decided — is SKIPPED, not run and not recorded.
+ * That claim is what makes "did not run" and "ran" mutually exclusive.
  */
 
 import type { ToolSet } from 'ai';
@@ -24,6 +28,8 @@ export interface RunApprovedExecutionsArgs {
   tools: ToolSet;
   /** Passed to each `execute` as its options; the same object streamText gets. */
   toolOptions: { abortSignal?: AbortSignal; experimental_context: unknown; messages?: unknown[] };
+  /** Atomic "this call is now running" — false means do not run it (see module doc). */
+  claimStart: (execution: ApprovedToolExecution) => Promise<boolean>;
   record: (execution: ApprovedToolExecution, outcome: ApprovedToolOutcome) => Promise<unknown>;
   logger?: { warn: (msg: string, meta?: Record<string, unknown>) => void };
 }
@@ -31,6 +37,8 @@ export interface RunApprovedExecutionsArgs {
 export interface RunApprovedExecutionsResult {
   ran: number;
   failed: number;
+  /** Lost the start claim: closed as stale or otherwise decided before the turn got here. */
+  skipped: number;
 }
 
 const errorText = (error: unknown): string =>
@@ -39,10 +47,19 @@ const errorText = (error: unknown): string =>
 export async function runApprovedToolExecutions(args: RunApprovedExecutionsArgs): Promise<RunApprovedExecutionsResult> {
   let ran = 0;
   let failed = 0;
+  let skipped = 0;
 
   // Sequential, in approval order: two approved writes may depend on each other
   // (create then edit), and the model issued them in this order.
   for (const execution of args.executions) {
+    if (!(await args.claimStart(execution))) {
+      skipped += 1;
+      args.logger?.warn('approved tool execution skipped: start claim lost (closed as stale or already decided)', {
+        toolName: execution.toolName,
+        toolCallId: execution.toolCallId,
+      });
+      continue;
+    }
     const tool = Object.hasOwn(args.tools, execution.toolName) ? args.tools[execution.toolName] : undefined;
     let outcome: ApprovedToolOutcome;
 
@@ -84,5 +101,5 @@ export async function runApprovedToolExecutions(args: RunApprovedExecutionsArgs)
     await args.record(execution, outcome);
   }
 
-  return { ran, failed };
+  return { ran, failed, skipped };
 }

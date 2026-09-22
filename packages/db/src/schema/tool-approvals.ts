@@ -70,8 +70,13 @@ export const aiToolApprovalDecisions = pgTable('ai_tool_approval_decisions', {
   decidedAt: timestamp('decided_at', { mode: 'date' }).defaultNow().notNull(),
   /** Set when the approved call finished running (or was refused at execution time). */
   executedAt: timestamp('executed_at', { mode: 'date' }),
-  /** 'ok' | 'error' | 'denied' | 'stale' — what actually happened to the call. */
-  outcome: text('outcome', { enum: ['ok', 'error', 'denied', 'stale'] }),
+  /**
+   * What actually happened to the call — and the ARBITER between a dismiss and
+   * an execution: NULL → 'running' (turn started it) | 'stale' (dismiss closed
+   * it first); 'running' | 'stale' → 'ok' | 'error' (truth wins over stale).
+   * 'denied' is written with the denial claim itself.
+   */
+  outcome: text('outcome', { enum: ['ok', 'error', 'denied', 'stale', 'running'] }),
 }, (table) => ({
   conversationIdx: index('ai_tool_approval_decisions_conversation_idx').on(table.conversationId),
   messageIdx: index('ai_tool_approval_decisions_message_idx').on(table.messageId),
