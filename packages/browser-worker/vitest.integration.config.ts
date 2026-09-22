@@ -1,4 +1,7 @@
 import { defineConfig } from 'vitest/config';
+import path from 'node:path';
+
+const libSource = { find: /^@pagespace\/lib\/(.*)$/, replacement: `${path.resolve(__dirname, '../lib/src')}/$1` };
 
 /**
  * Adapter suites (Control Board §7.3): each drives the real thing it adapts —
@@ -8,6 +11,7 @@ import { defineConfig } from 'vitest/config';
  * not in the unit config.
  */
 export default defineConfig({
+  resolve: { alias: [libSource] },
   test: {
     globals: true,
     environment: 'node',

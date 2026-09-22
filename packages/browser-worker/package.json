@@ -9,15 +9,35 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:coverage": "vitest run --coverage",
+    "test:coverage": "vitest run --coverage && vitest run --config vitest.integration.config.ts",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "lint": "eslint src"
   },
   "exports": {
+    "./browser-control-worker": {
+      "types": "./dist/browser-control-worker.d.ts",
+      "import": "./dist/browser-control-worker.js",
+      "default": "./dist/browser-control-worker.js"
+    },
+    "./browser-driver-client": {
+      "types": "./dist/browser-driver-client.d.ts",
+      "import": "./dist/browser-driver-client.js",
+      "default": "./dist/browser-driver-client.js"
+    },
+    "./browser-egress-proxy-adapter": {
+      "types": "./dist/browser-egress-proxy-adapter.d.ts",
+      "import": "./dist/browser-egress-proxy-adapter.js",
+      "default": "./dist/browser-egress-proxy-adapter.js"
+    },
     "./browser-operation": {
       "types": "./dist/browser-operation.d.ts",
       "import": "./dist/browser-operation.js",
       "default": "./dist/browser-operation.js"
+    },
+    "./browser-sprite-name": {
+      "types": "./dist/browser-sprite-name.d.ts",
+      "import": "./dist/browser-sprite-name.js",
+      "default": "./dist/browser-sprite-name.js"
     },
     "./browser-substrate": {
       "types": "./dist/browser-substrate.d.ts",
@@ -64,6 +84,11 @@
       "import": "./dist/human-control-state.js",
       "default": "./dist/human-control-state.js"
     },
+    "./local-chromium-substrate-adapter": {
+      "types": "./dist/local-chromium-substrate-adapter.d.ts",
+      "import": "./dist/local-chromium-substrate-adapter.js",
+      "default": "./dist/local-chromium-substrate-adapter.js"
+    },
     "./observation-kind": {
       "types": "./dist/observation-kind.d.ts",
       "import": "./dist/observation-kind.js",
@@ -74,10 +99,30 @@
       "import": "./dist/parse-control-command.js",
       "default": "./dist/parse-control-command.js"
     },
+    "./parse-worker-env": {
+      "types": "./dist/parse-worker-env.d.ts",
+      "import": "./dist/parse-worker-env.js",
+      "default": "./dist/parse-worker-env.js"
+    },
+    "./plan-browser-network-policy": {
+      "types": "./dist/plan-browser-network-policy.d.ts",
+      "import": "./dist/plan-browser-network-policy.js",
+      "default": "./dist/plan-browser-network-policy.js"
+    },
     "./reduce-human-control-mode": {
       "types": "./dist/reduce-human-control-mode.d.ts",
       "import": "./dist/reduce-human-control-mode.js",
       "default": "./dist/reduce-human-control-mode.js"
+    },
+    "./sprites-substrate-adapter": {
+      "types": "./dist/sprites-substrate-adapter.d.ts",
+      "import": "./dist/sprites-substrate-adapter.js",
+      "default": "./dist/sprites-substrate-adapter.js"
+    },
+    "./standalone-browser-worker": {
+      "types": "./dist/standalone-browser-worker.d.ts",
+      "import": "./dist/standalone-browser-worker.js",
+      "default": "./dist/standalone-browser-worker.js"
     },
     "./verify-control-instruction": {
       "types": "./dist/verify-control-instruction.d.ts",
@@ -87,8 +132,20 @@
   },
   "typesVersions": {
     "*": {
+      "browser-control-worker": [
+        "./dist/browser-control-worker.d.ts"
+      ],
+      "browser-driver-client": [
+        "./dist/browser-driver-client.d.ts"
+      ],
+      "browser-egress-proxy-adapter": [
+        "./dist/browser-egress-proxy-adapter.d.ts"
+      ],
       "browser-operation": [
         "./dist/browser-operation.d.ts"
+      ],
+      "browser-sprite-name": [
+        "./dist/browser-sprite-name.d.ts"
       ],
       "browser-substrate": [
         "./dist/browser-substrate.d.ts"
@@ -117,14 +174,29 @@
       "human-control-state": [
         "./dist/human-control-state.d.ts"
       ],
+      "local-chromium-substrate-adapter": [
+        "./dist/local-chromium-substrate-adapter.d.ts"
+      ],
       "observation-kind": [
         "./dist/observation-kind.d.ts"
       ],
       "parse-control-command": [
         "./dist/parse-control-command.d.ts"
       ],
+      "parse-worker-env": [
+        "./dist/parse-worker-env.d.ts"
+      ],
+      "plan-browser-network-policy": [
+        "./dist/plan-browser-network-policy.d.ts"
+      ],
       "reduce-human-control-mode": [
         "./dist/reduce-human-control-mode.d.ts"
+      ],
+      "sprites-substrate-adapter": [
+        "./dist/sprites-substrate-adapter.d.ts"
+      ],
+      "standalone-browser-worker": [
+        "./dist/standalone-browser-worker.d.ts"
       ],
       "verify-control-instruction": [
         "./dist/verify-control-instruction.d.ts"
