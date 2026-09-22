@@ -155,11 +155,12 @@ describe('US6: sign-in works in an environment and, unchanged, after publish', (
       tier: app.tier,
       signIn: { envId: app.envId, pagespaceUrl: PAGESPACE_URL },
     });
-    expect(machine?.env).toMatchObject({ PAGESPACE_URL, PAGESPACE_CLIENT_ID: clientId });
-    expect(findSecretShapedEnvEntries(machine?.env ?? { LEAK_IF_NULL: 'ps_at_x' })).toEqual([]);
+    const machineEnv = machine?.env ?? { LEAK_IF_NULL: 'ps_at_x' };
+    expect(machineEnv).toMatchObject({ PAGESPACE_URL, PAGESPACE_CLIENT_ID: clientId });
+    expect(findSecretShapedEnvEntries(machineEnv)).toEqual([]);
 
     // The SAME app code, now served from the published origin, resolves the published callback — and authorize honours it.
-    const published = resolveEnvironmentConfig(machine!.env, publishedOrigin);
+    const published = resolveEnvironmentConfig(machineEnv, publishedOrigin);
     expect(published.redirectUri).toBe(`${publishedOrigin}${PAGESPACE_CALLBACK_PATH}`);
     expect(await authorizeWouldHonour(clientId, published.redirectUri)).toBe(true);
     // …WITHOUT the preview one disappearing.

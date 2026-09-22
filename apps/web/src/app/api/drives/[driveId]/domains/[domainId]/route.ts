@@ -76,7 +76,7 @@ export async function PATCH(
 
     const target = await db.query.customDomains.findFirst({
       where: and(eq(customDomains.id, domainId), eq(customDomains.driveId, driveId)),
-      columns: { id: true, hostname: true, status: true },
+      columns: { id: true, hostname: true, status: true, publishedAppId: true },
     });
 
     if (!target) {
