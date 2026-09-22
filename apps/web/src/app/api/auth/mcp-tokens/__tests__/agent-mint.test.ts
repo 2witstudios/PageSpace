@@ -12,7 +12,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { NextRequest } from 'next/server';
 
 const mocks = vi.hoisted(() => ({
-  auth: vi.fn(), issuance: vi.fn(), validate: vi.fn(), create: vi.fn(), rateLimit: vi.fn(), audit: vi.fn(),
+  auth: vi.fn(), issuance: vi.fn(), validate: vi.fn(), create: vi.fn(), rateLimit: vi.fn(), audit: vi.fn(), liveKeys: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -24,7 +24,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 vi.mock('@/lib/repositories/oauth-repository', () => ({ findAccessTokenIssuance: mocks.issuance }));
 vi.mock('@/lib/repositories/session-repository', () => ({
-  sessionRepository: { createMcpTokenWithDriveScopes: mocks.create, findDrivesByIds: vi.fn().mockResolvedValue([]) },
+  sessionRepository: { createMcpTokenWithDriveScopes: mocks.create, findDrivesByIds: vi.fn().mockResolvedValue([]), countActiveMcpTokens: mocks.liveKeys },
 }));
 vi.mock('@pagespace/lib/services/drive-service', () => ({ validateDriveScopeAccess: mocks.validate }));
 vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
@@ -57,6 +57,7 @@ describe('POST /api/auth/mcp-tokens — agent bearer path', () => {
     mocks.validate.mockResolvedValue(NO_SCOPE_PROBLEMS);
     mocks.rateLimit.mockResolvedValue({ allowed: true });
     mocks.create.mockResolvedValue({ id: 'k1', name: 'agent key', createdAt: new Date() });
+    mocks.liveKeys.mockResolvedValue(0);
   });
 
   it('should authenticate session (CSRF-checked) or oauth — CSRF applies to sessions only', async () => {
@@ -97,6 +98,21 @@ describe('POST /api/auth/mcp-tokens — agent bearer path', () => {
       const response = await mint({ name: 'k', drives: [{ id: 'd1', role: 'ADMIN' }] });
       expect(response.status).toBe(403);
       expect(mocks.create).not.toHaveBeenCalled();
+    });
+
+    it('given the agent already holds the maximum number of live keys, should refuse 409, mint nothing, and audit', async () => {
+      mocks.liveKeys.mockResolvedValue(20);
+      const response = await mint();
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({ error: 'key_limit_reached', limit: 20 });
+      expect(mocks.liveKeys).toHaveBeenCalledWith('agent-1');
+      expect(mocks.create).not.toHaveBeenCalled();
+      expect(mocks.audit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'authz.access.denied', details: expect.objectContaining({ method: 'agent', reason: 'live_key_limit' }) }));
+    });
+
+    it('given one key below the maximum, should mint', async () => {
+      mocks.liveKeys.mockResolvedValue(19);
+      expect((await mint()).status).toBe(200);
     });
 
     it('given the per-agent AGENT_KEY_MINT limit is exhausted, should answer 429, mint nothing, and audit', async () => {

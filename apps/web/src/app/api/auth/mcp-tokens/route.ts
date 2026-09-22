@@ -29,6 +29,12 @@ import { rejectScopedOAuth } from './scope-guard';
 const AUTH_OPTIONS_READ = { allow: ['session', 'oauth'] as const, requireCSRF: false };
 const AUTH_OPTIONS_MINT = { allow: ['session', 'oauth'] as const, requireCSRF: true };
 
+// An agent's live mcp_ keys are capped: AGENT_KEY_MINT bounds the RATE, this
+// bounds how many a leaked agent secret could stockpile before the owner
+// revokes (revocation kills them all, but fewer live keys is less exposure).
+// The session path is uncapped, as before.
+const AGENT_MAX_LIVE_KEYS = 20;
+
 /** The response a bearer token has always received from POST here (it was `allow: ['session']`). */
 function oauthNotPermitted(): NextResponse {
   return NextResponse.json({ error: 'OAuth tokens are not permitted for this endpoint' }, { status: 401 });
@@ -74,6 +80,10 @@ export async function POST(req: NextRequest) {
       auditRequest(req, { eventType: 'security.rate.limited', userId, resourceType: 'mcp_token', details: { method: 'agent' } });
       const retryAfter = Math.max(0, Math.ceil(limit.retryAfter ?? 0));
       return NextResponse.json({ error: 'rate_limited', retryAfter }, { status: 429, headers: { 'Retry-After': String(retryAfter) } });
+    }
+    if ((await sessionRepository.countActiveMcpTokens(userId)) >= AGENT_MAX_LIVE_KEYS) {
+      refuseAgent('live_key_limit');
+      return NextResponse.json({ error: 'key_limit_reached', limit: AGENT_MAX_LIVE_KEYS }, { status: 409 });
     }
   }
 

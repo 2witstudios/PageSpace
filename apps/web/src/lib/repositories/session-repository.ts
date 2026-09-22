@@ -5,7 +5,7 @@
  */
 
 import { db } from '@pagespace/db/db'
-import { eq, and, inArray, isNull, type InferSelectModel } from '@pagespace/db/operators'
+import { eq, and, inArray, isNull, count, type InferSelectModel } from '@pagespace/db/operators'
 import { deviceTokens, mcpTokens } from '@pagespace/db/schema/auth'
 import { mcpTokenDrives } from '@pagespace/db/schema/members'
 import { drives } from '@pagespace/db/schema/core';
@@ -212,6 +212,15 @@ export const sessionRepository = {
       columns: { id: true, name: true },
     });
     return token ?? null;
+  },
+
+  /** How many live (unrevoked) MCP tokens a user holds — the agent mint path caps it. */
+  async countActiveMcpTokens(userId: string): Promise<number> {
+    const [row] = await db
+      .select({ n: count() })
+      .from(mcpTokens)
+      .where(and(eq(mcpTokens.userId, userId), isNull(mcpTokens.revokedAt)));
+    return row?.n ?? 0;
   },
 
   /**

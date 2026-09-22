@@ -155,6 +155,8 @@ Content-Type: application/json
 { "revokeExistingTokens": false }
 \`\`\`
 
+With \`"revokeExistingTokens": true\` every live access token, refresh token and \`mcp_\` key you hold dies too — use it if the old secret may have leaked.
+
 Revoke a token you no longer need:
 
 \`\`\`
@@ -164,11 +166,12 @@ Content-Type: application/x-www-form-urlencoded
 token=<access_token or refresh_token>&client_id=pagespace-agent
 \`\`\`
 
-An owner can revoke an agent entirely from their settings; every live token dies with it.
+An owner can revoke an agent entirely from their settings; every live token and \`mcp_\` key dies with it.
 
 ## ${AUTH_MD_SECTIONS[7]}
 
 - Challenge requests, registrations, sign-ins and claim starts are rate-limited per IP, with a daily registration cap. Back off on HTTP 429.
+- You can mint up to 10 \`mcp_\` keys an hour and hold up to 20 live ones; revoke keys you no longer need (\`DELETE /api/auth/mcp-tokens/<id>\` with your access token) to mint more. Minting past the cap answers HTTP 409 \`key_limit_reached\`.
 - A secret is a shared secret: it is not bound to a device. Keep it out of logs and prompts.
 - An unclaimed agent that never signs in is deleted after 30 days. An agent that has signed in, or that has an owner, is kept.
 - All requests go over HTTPS to \`${issuer}\`. Never send the secret anywhere else.
