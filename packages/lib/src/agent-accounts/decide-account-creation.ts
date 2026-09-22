@@ -19,6 +19,8 @@
  */
 import type { AccountAcknowledgment, AccountKind } from '@pagespace/db/schema/agent-accounts';
 import type { CanonicalOrigin } from './canonical-request';
+import type { AccountApprovalPolicy } from './approval';
+import type { UserId } from './grant';
 import type { SecretMaterialByKind } from './store/store-adapter';
 import { decideAcknowledgment, type LoginOwnership } from './decide-acknowledgment';
 import { normalizeOrigin, type NormalizeOriginVerdict } from './normalize-origin';
@@ -31,15 +33,28 @@ export type AccountDraft = {
   readonly allowedOrigins: readonly CanonicalOrigin[];
   readonly acknowledgment: AccountAcknowledgment;
   readonly placement: KeyPlacement;
+  /** null = every request asks a human; otherwise the bounded generic-request policy the human chose. */
+  readonly approvalPolicy: AccountApprovalPolicy | null;
 };
 
 export type AccountCreationRefusal =
-  | { readonly ok: false; readonly reason: 'kind_not_supported' | 'name_invalid' | 'origins_empty' | 'acknowledgment_required' | 'placement_invalid' }
+  | { readonly ok: false; readonly reason: 'kind_not_supported' | 'name_invalid' | 'origins_empty' | 'acknowledgment_required' | 'placement_invalid' | 'key_invalid' }
   | { readonly ok: false; readonly reason: 'origin_invalid'; readonly index: number; readonly rule: Extract<NormalizeOriginVerdict, { readonly ok: false }>['reason'] };
 
 export type AccountCreationVerdict = { readonly ok: true; readonly draft: AccountDraft } | AccountCreationRefusal;
 
 export const MAX_ACCOUNT_NAME_LENGTH = 100;
+const MAX_KEY_LENGTH = 8_192;
+const CONTROL_CHAR_RE = /[\x00-\x1F\x7F]/;
+
+/**
+ * "Allow requests to these origins without asking each time" — ADR 0004 §3.4
+ * lets a human accept generic requests to an origin as a bounded capability.
+ * Bounded: only `unknown/generic_request` by exact name, only the pinned
+ * origins, a use and byte ceiling, and the trigger still asks for every
+ * irreversible or privileged operation.
+ */
+const GENERIC_REQUEST_LIMITS = { maxUsesPerHour: 60, maxBytesOut: 10 * 1024 * 1024, maxConcurrent: 4 } as const;
 
 const HEADER_TOKEN_RE = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 const QUERY_NAME_RE = /^[A-Za-z0-9._~-]{1,64}$/;
@@ -77,6 +92,12 @@ export function decideAccountCreation(input: {
   readonly ownership: LoginOwnership;
   readonly acknowledged: boolean;
   readonly placement: KeyPlacement;
+  /** The key itself — validated here, never part of the draft. */
+  readonly apiKey: string;
+  /** Exactly `true` = the human ticked "allow without asking each time". */
+  readonly allowGenericRequests: boolean;
+  /** The human creating the account; recorded as the policy's approver. */
+  readonly approver: UserId;
 }): AccountCreationVerdict {
   if (input.kind !== 'api_key') return { ok: false, reason: 'kind_not_supported' };
 
@@ -97,8 +118,16 @@ export function decideAccountCreation(input: {
   const placement = placementOf(input.placement);
   if (placement === null) return { ok: false, reason: 'placement_invalid' };
 
+  if (typeof input.apiKey !== 'string' || input.apiKey.length === 0 || input.apiKey.length > MAX_KEY_LENGTH || CONTROL_CHAR_RE.test(input.apiKey)) return { ok: false, reason: 'key_invalid' };
+
+  const allowedOrigins = [...origins].sort();
+  const approvalPolicy: AccountApprovalPolicy | null =
+    input.allowGenericRequests === true
+      ? { scope: { origins: allowedOrigins, operations: [{ class: 'unknown', name: 'generic_request' }], resources: [] }, trigger: 'irreversible_only', duration: null, limits: { ...GENERIC_REQUEST_LIMITS }, approver: input.approver }
+      : null;
+
   return {
     ok: true,
-    draft: { kind: 'api_key', name, allowedOrigins: [...origins].sort(), acknowledgment: acknowledgment.acknowledgment, placement },
+    draft: { kind: 'api_key', name, allowedOrigins, acknowledgment: acknowledgment.acknowledgment, placement, approvalPolicy },
   };
 }
