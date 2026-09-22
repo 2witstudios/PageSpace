@@ -9,6 +9,16 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Give an agent its own account** — in an agent's settings (Accounts), or in your personal
+  settings for your global assistant, add an API key for a site so the agent can call that site's
+  API for you. The agent refers to the account by name and never sees the key: PageSpace keeps it in
+  a separate credential vault and adds it to each request itself, only for the site address you
+  pinned — no other sites, other ports or redirects. New requests ask you to approve them in the
+  chat unless you let the agent use that site without asking. The dialog recommends creating a
+  dedicated account for the agent; sharing a personal login needs an explicit acknowledgment, which
+  the account list shows. Revoking stops PageSpace from using the key immediately; revoke it at the
+  site too to disable it everywhere.
+
 - **Ask a detached side question with `/btw`** — while an agent is working, type `/btw` followed by a question to get a separate, temporary answer from the completed conversation context. It never interrupts the active run or becomes part of the chat history.
 
 - **Sign-up says where AI content goes** — the consent line on every sign-up screen now says AI
