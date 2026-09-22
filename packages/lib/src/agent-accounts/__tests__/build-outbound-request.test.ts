@@ -98,5 +98,10 @@ describe('buildOutboundRequest', () => {
     const expected = urls.map(() => ({ ok: false, reason: 'placement_collision' }));
     expect(actual).toEqual(expected);
   });
-});
 
+  it('given a caller query parameter spelled with + for the space (api+key), should refuse placement_collision — form decoders read + as a space', () => {
+    const actual = buildOutboundRequest({ canonical: canonicalOf('https://api.example.com/v1/x?api+key=attacker'), body: new Uint8Array(0), material: { value: KEY, placement: { in: 'query', name: 'api_key' } }, sha256 });
+    const expected = { ok: false, reason: 'placement_collision' };
+    expect(actual).toEqual(expected);
+  });
+});

@@ -120,5 +120,11 @@ describe('filterResponse', () => {
     const expected = '{"a":1}';
     expect(actual).toEqual(expected);
   });
-});
 
+  it('given a body with no declared charset whose text is NUL-interleaved (an undeclared UTF-16 echo), should omit it', () => {
+    const verdict = release({ headers: [['content-type', 'text/plain']], body: new Uint8Array(Buffer.from(`key=${KEY}`, 'utf16le')) });
+    const actual = { body: verdict.body, bodyOmitted: verdict.bodyOmitted };
+    const expected = { body: null, bodyOmitted: 'binary' };
+    expect(actual).toEqual(expected);
+  });
+});
