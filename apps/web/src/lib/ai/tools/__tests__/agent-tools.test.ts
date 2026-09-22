@@ -373,6 +373,32 @@ describe('agent-tools', () => {
       expect(call.updates).not.toHaveProperty('enabledTools');
     });
 
+    it('the model cannot change toolApprovalMode: the schema does not offer it and a smuggled value is not written', async () => {
+      const schema = agentTools.update_agent_config.inputSchema as unknown as { shape: Record<string, unknown> };
+      expect(schema.shape).not.toHaveProperty('toolApprovalMode');
+
+      const mockAgent = {
+        id: 'agent-1', title: 'My Agent', type: 'AI_CHAT', driveId: 'drive-1',
+        systemPrompt: 'Old prompt', enabledTools: ['read_page'], aiProvider: null, aiModel: null,
+        agentDefinition: null, visibleToGlobalAssistant: false, includeDrivePrompt: false,
+        includePageTree: false, pageTreeScope: null, sandboxEnabled: false,
+        toolExposureMode: 'upfront' as const, toolApprovalMode: 'ask' as const, userScopedAccess: false, revision: 2,
+      };
+      mockAgentRepository.findById
+        .mockResolvedValueOnce(mockAgent)
+        .mockResolvedValueOnce({ ...mockAgent, systemPrompt: 'New prompt', revision: 3 });
+      mockCanUserEditPage.mockResolvedValue(true);
+
+      await agentTools.update_agent_config.execute!(
+        { agentPath: '/drive/agent', agentId: 'agent-1', systemPrompt: 'New prompt', toolApprovalMode: 'auto' } as unknown as Parameters<NonNullable<typeof agentTools.update_agent_config.execute>>[0],
+        { toolCallId: '1', messages: [], experimental_context: { userId: 'user-123' } as ToolExecutionContext },
+      );
+
+      const call = vi.mocked(applyPageMutation).mock.calls.at(-1)?.[0] as { updates: Record<string, unknown> };
+      expect(call.updates).toHaveProperty('systemPrompt', 'New prompt');
+      expect(call.updates).not.toHaveProperty('toolApprovalMode');
+    });
+
     it('updates provider and model settings', async () => {
       // Arrange
       const mockAgent = {

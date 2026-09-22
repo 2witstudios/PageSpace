@@ -40,10 +40,12 @@ export const agentTools = {
       pageTreeScope: z.enum(['children', 'drive']).optional().describe('Scope for page tree: "children" or "drive".'),
       sandboxEnabled: z.boolean().optional().describe('Whether this agent is offered the sandbox tool families (bash/writeFile/readFile/editFile, the git+gh toolkit, and the session/shell tools). Off by default: while it is off, naming those tools in enabledTools grants NOTHING — the switch strips them whatever the allowlist says.'),
       toolExposureMode: z.enum(['upfront', 'search']).optional().describe('How tools are exposed to the agent: "upfront" sends every enabled tool schema directly, "search" sends only core tools plus tool_search/execute_tool so the model discovers the rest on demand.'),
-      toolApprovalMode: z.enum(['ask', 'auto']).optional().describe('Whether gated writes (edits, creates, deletions, messages, commands, spawns) pause for the owner\'s approval before running: "ask" (default) pauses in interactive chats; "auto" never pauses. Turns with no human present (workflows, triggers, channel mentions, dispatched workers) always run as auto.'),
+      // `toolApprovalMode` is deliberately NOT offered here: it is the gate on this
+      // very tool, and a model must never be able to switch its own approvals off.
+      // Owners change it in the agent's settings (Action Approval) or the config API.
       userScopedAccess: z.boolean().optional().describe('Owner-only: when true, this agent falls back to the invoking user\'s own access instead of being confined to its own drive memberships. Use for personal/global-style assistants that need the user\'s full reach.'),
     }),
-    execute: async ({ agentPath, agentId, systemPrompt, enabledTools, aiProvider, aiModel, agentDefinition, visibleToGlobalAssistant, includeDrivePrompt, includePageTree, pageTreeScope, sandboxEnabled, toolExposureMode, toolApprovalMode, userScopedAccess }, { experimental_context: context }) => {
+    execute: async ({ agentPath, agentId, systemPrompt, enabledTools, aiProvider, aiModel, agentDefinition, visibleToGlobalAssistant, includeDrivePrompt, includePageTree, pageTreeScope, sandboxEnabled, toolExposureMode, userScopedAccess }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
@@ -110,7 +112,6 @@ export const agentTools = {
           pageTreeScope?: 'children' | 'drive';
           sandboxEnabled?: boolean;
           toolExposureMode?: 'upfront' | 'search';
-          toolApprovalMode?: 'ask' | 'auto';
           userScopedAccess?: boolean;
         }
 
@@ -166,9 +167,6 @@ export const agentTools = {
         }
         if (toolExposureMode !== undefined) {
           updateData.toolExposureMode = toolExposureMode;
-        }
-        if (toolApprovalMode !== undefined) {
-          updateData.toolApprovalMode = toolApprovalMode;
         }
         if (userScopedAccess !== undefined) {
           updateData.userScopedAccess = userScopedAccess;
