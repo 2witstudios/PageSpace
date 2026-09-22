@@ -129,9 +129,22 @@ export const startBrowserEgressProxy = async ({
       req.socket.destroy();
       return;
     }
-    const headers = Object.fromEntries(Object.entries(req.headers).filter(([name]) => !HOP_HEADERS.has(name.toLowerCase())));
     const { connectAddress, transportOrigin } = verdict;
-    const upstream = httpRequest(url, {
+    // The upstream socket is `dial(connectAddress)` — the address the
+    // decision checked — so the request URL carries only the path; its
+    // origin is a placeholder no DNS lookup or connection ever uses. The
+    // client's Host header travels in `headers` and is what the site sees.
+    const requested = new URL(url);
+    const target = new URL('http://upstream.invalid/');
+    target.pathname = requested.pathname;
+    target.search = requested.search;
+    // Headers as the raw [name, value, …] list minus the proxy hop's own:
+    // never an object keyed by client-chosen names.
+    const headers: string[] = [];
+    for (let i = 0; i + 1 < req.rawHeaders.length; i += 2) {
+      if (!HOP_HEADERS.has(req.rawHeaders[i].toLowerCase())) headers.push(req.rawHeaders[i], req.rawHeaders[i + 1]);
+    }
+    const upstream = httpRequest(target, {
       method: req.method,
       headers,
       createConnection: () => dial(connectAddress, transportOrigin.port),
