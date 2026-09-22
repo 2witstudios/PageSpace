@@ -28,7 +28,6 @@ import { OAuthTokenProvider, type OAuthTokens, type RefreshAccessToken } from '.
 import { deriveCodeChallenge, generateCodeVerifier } from './pkce.js';
 import { buildAuthorizeUrl, pageSpaceOAuthEndpoints, parseCallback, type AuthorizationErrorCode, type CallbackError } from './sign-in.js';
 import {
-  createTokenEndpointRefresh,
   exchangeAuthorizationCode,
   revokeToken,
   toOAuthTokens,
@@ -463,24 +462,23 @@ export class PageSpaceAuth {
       refreshExpiresAt: session.refreshExpiresAt,
       scope: session.scope,
     };
-    const refreshAccessToken: RefreshAccessToken =
-      session.refreshToken === null
-        ? async () => {
-            throw new AuthenticationError('This sign-in has no refresh token (the grant had no offline_access); sign in again.', 'auth.refresh');
-          }
-        : createTokenEndpointRefresh({
-            tokenEndpoint: pageSpaceOAuthEndpoints(this.baseUrl).tokenEndpoint,
-            clientId: this.clientId,
-            fetch: this.#fetch,
-            now: this.#now,
-          });
+    const onTokensUpdated = (tokens: OAuthTokens): void => {
+      this.#writeSession(storage, { v: 1, baseUrl: this.baseUrl, ...tokens, scope: tokens.scope ?? session.scope });
+    };
+    if (session.refreshToken === null) {
+      const noRefresh: RefreshAccessToken = async () => {
+        throw new AuthenticationError('This sign-in has no refresh token (the grant had no offline_access); sign in again.', 'auth.refresh');
+      };
+      return new OAuthTokenProvider({ initialTokens, refreshAccessToken: noRefresh, now: this.#now, onTokensUpdated });
+    }
+    // The provider's own default refresh: PageSpace's token endpoint, form-encoded, rotation persisted.
     return new OAuthTokenProvider({
       initialTokens,
-      refreshAccessToken,
+      tokenEndpoint: pageSpaceOAuthEndpoints(this.baseUrl).tokenEndpoint,
+      clientId: this.clientId,
+      fetch: this.#fetch,
       now: this.#now,
-      onTokensUpdated: (tokens) => {
-        this.#writeSession(storage, { v: 1, baseUrl: this.baseUrl, ...tokens, scope: tokens.scope ?? session.scope });
-      },
+      onTokensUpdated,
     });
   }
 }

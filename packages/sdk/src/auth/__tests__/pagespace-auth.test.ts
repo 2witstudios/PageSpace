@@ -380,6 +380,43 @@ describe('handleRedirectCallback', () => {
   });
 });
 
+describe('OAuthTokenProvider default refresh (tokenEndpoint + clientId instead of an injected refreshAccessToken)', () => {
+  it('rotates through the token endpoint and hands the new pair to onTokensUpdated', async () => {
+    const { fetch, calls } = scriptedFetch([bearer({ access_token: SECRETS.rotatedAccessToken, refresh_token: SECRETS.rotatedRefreshToken })]);
+    const updated: string[] = [];
+    const provider = new OAuthTokenProvider({
+      initialTokens: { accessToken: SECRETS.accessToken, accessExpiresAt: 0, refreshToken: SECRETS.refreshToken, refreshExpiresAt: 10_000_000 },
+      tokenEndpoint: TOKEN_ENDPOINT,
+      clientId: CLIENT_ID,
+      fetch,
+      now: () => 1_000_000,
+      onTokensUpdated: (tokens) => {
+        updated.push(tokens.refreshToken);
+      },
+    });
+
+    await expect(provider.getAccessToken()).resolves.toBe(SECRETS.rotatedAccessToken);
+    expect(calls.map((call) => [call.url, Object.fromEntries(call.body)])).toEqual([
+      [TOKEN_ENDPOINT, { grant_type: 'refresh_token', refresh_token: SECRETS.refreshToken, client_id: CLIENT_ID }],
+    ]);
+    expect(updated).toEqual([SECRETS.rotatedRefreshToken]);
+  });
+
+  it('treats a definitive rejection from the token endpoint as terminal (re-login required)', async () => {
+    const provider = new OAuthTokenProvider({
+      initialTokens: { accessToken: SECRETS.accessToken, accessExpiresAt: 0, refreshToken: SECRETS.refreshToken, refreshExpiresAt: 10_000_000 },
+      tokenEndpoint: TOKEN_ENDPOINT,
+      clientId: CLIENT_ID,
+      fetch: scriptedFetch([() => jsonResponse(400, { error: 'invalid_grant' })]).fetch,
+      now: () => 1_000_000,
+    });
+
+    const error = await captureError(() => provider.getAccessToken());
+
+    expect(isAuthenticationError(error)).toBe(true);
+  });
+});
+
 describe('restore', () => {
   it('returns null when nothing was signed in', () => {
     expect(makeAuth().auth.restore()).toBeNull();
