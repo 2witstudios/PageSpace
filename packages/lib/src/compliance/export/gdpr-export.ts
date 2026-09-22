@@ -22,6 +22,7 @@ import { displayPreferences } from '@pagespace/db/schema/display-preferences';
 import { userPersonalization, personalizationCandidates } from '@pagespace/db/schema/personalization';
 import { userHotkeyPreferences } from '@pagespace/db/schema/hotkeys';
 import { userAutomationPreferences } from '@pagespace/db/schema/automation-preferences';
+import { aiToolApprovalGrants, aiToolApprovalDecisions } from '@pagespace/db/schema/tool-approvals';
 import { userToastNotificationPreferences } from '@pagespace/db/schema/toast-notification-preferences';
 import { emailNotificationPreferences } from '@pagespace/db/schema/email-notifications';
 import { decryptUserRow } from '../../auth/user-repository';
@@ -269,6 +270,19 @@ export interface UserSettingsExport {
   automation: { pulseEnabled: boolean; updatedAt: Date } | null;
   toastNotifications: { level: string; updatedAt: Date } | null;
   emailNotifications: { notificationType: string; emailEnabled: boolean; updatedAt: Date }[];
+  /** Standing "allow this tool" grants the subject gave the assistant (always, or per conversation). */
+  toolApprovalGrants: { toolName: string; conversationId: string | null; createdAt: Date }[];
+  /** Every Allow/Deny the subject answered on a paused tool call, and what then happened to it. */
+  toolApprovalDecisions: {
+    toolName: string;
+    conversationId: string;
+    approved: boolean;
+    reason: string | null;
+    scope: string | null;
+    decidedAt: Date;
+    executedAt: Date | null;
+    outcome: string | null;
+  }[];
 }
 
 export interface UserPersonalizationExport {
@@ -1176,7 +1190,7 @@ export async function collectUserDisplayPreferences(database: DB, userId: string
 
 /** Every settings row the subject owns, in one Art 15 category. */
 export async function collectUserSettings(database: DB, userId: string): Promise<UserSettingsExport> {
-  const [hotkeys, automation, toast, email] = await Promise.all([
+  const [hotkeys, automation, toast, email, toolApprovalGrants, toolApprovalDecisions] = await Promise.all([
     database
       .select({ hotkeyId: userHotkeyPreferences.hotkeyId, binding: userHotkeyPreferences.binding, updatedAt: userHotkeyPreferences.updatedAt })
       .from(userHotkeyPreferences)
@@ -1193,6 +1207,23 @@ export async function collectUserSettings(database: DB, userId: string): Promise
       .select({ notificationType: emailNotificationPreferences.notificationType, emailEnabled: emailNotificationPreferences.emailEnabled, updatedAt: emailNotificationPreferences.updatedAt })
       .from(emailNotificationPreferences)
       .where(eq(emailNotificationPreferences.userId, userId)),
+    database
+      .select({ toolName: aiToolApprovalGrants.toolName, conversationId: aiToolApprovalGrants.conversationId, createdAt: aiToolApprovalGrants.createdAt })
+      .from(aiToolApprovalGrants)
+      .where(eq(aiToolApprovalGrants.userId, userId)),
+    database
+      .select({
+        toolName: aiToolApprovalDecisions.toolName,
+        conversationId: aiToolApprovalDecisions.conversationId,
+        approved: aiToolApprovalDecisions.approved,
+        reason: aiToolApprovalDecisions.reason,
+        scope: aiToolApprovalDecisions.scope,
+        decidedAt: aiToolApprovalDecisions.decidedAt,
+        executedAt: aiToolApprovalDecisions.executedAt,
+        outcome: aiToolApprovalDecisions.outcome,
+      })
+      .from(aiToolApprovalDecisions)
+      .where(eq(aiToolApprovalDecisions.userId, userId)),
   ]);
   return {
     hotkeys,
@@ -1201,6 +1232,8 @@ export async function collectUserSettings(database: DB, userId: string): Promise
     automation: automation[0] ?? null,
     toastNotifications: toast[0] ?? null,
     emailNotifications: email,
+    toolApprovalGrants,
+    toolApprovalDecisions,
   };
 }
 

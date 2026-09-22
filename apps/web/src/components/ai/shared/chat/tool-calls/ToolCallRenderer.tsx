@@ -7,6 +7,7 @@ import {
 } from '@/components/ai/ui/tool';
 import { PageAgentConversationRenderer } from '@/components/ai/page-agents';
 import { AskUserQuestionCard } from '../ask-user/AskUserQuestionCard';
+import { ToolApprovalCard } from '../approvals/ToolApprovalCard';
 import { TaskRenderer } from './TaskRenderer';
 import { GeneratedImageRenderer } from './GeneratedImageRenderer';
 import { TASK_TOOL_NAMES } from '../useAggregatedTasks';
@@ -23,7 +24,7 @@ export interface ToolPart {
   type: string;
   toolName?: string;
   toolCallId?: string;
-  state?: 'input-streaming' | 'input-available' | 'output-available' | 'output-error' | 'done' | 'streaming';
+  state?: 'input-streaming' | 'input-available' | 'approval-requested' | 'approval-responded' | 'output-available' | 'output-error' | 'output-denied' | 'done' | 'streaming';
   input?: unknown;
   output?: unknown;
   errorText?: string;
@@ -62,6 +63,8 @@ export function renderToolFallbackContent(state: string): React.ReactNode {
         'Processing...'
       ) : state === 'input-available' ? (
         'Waiting for result...'
+      ) : state === 'output-denied' ? (
+        'Denied by user'
       ) : (
         'Completed'
       )}
@@ -82,12 +85,14 @@ export function useToolCallDisplay(part: ToolPart, toolName: string) {
   const error = part.errorText;
 
   // Map state to ToolHeader valid states
-  const toolState = useMemo((): "input-streaming" | "input-available" | "output-available" | "output-error" => {
+  const toolState = useMemo((): "input-streaming" | "input-available" | "output-available" | "output-error" | "output-denied" => {
     switch (state) {
       case 'input-streaming': return 'input-streaming';
       case 'input-available': return 'input-available';
       case 'output-available': return 'output-available';
       case 'output-error': return 'output-error';
+      // The user refused this call: its own header icon, never "completed".
+      case 'output-denied': return 'output-denied';
       case 'done': return 'output-available';
       case 'streaming': return 'input-streaming';
       default: return 'input-available';
@@ -166,6 +171,8 @@ export const ToolCallRenderer: React.FC<ToolCallRendererProps> = memo(function T
       return <PageAgentConversationRenderer part={dispatch.part} />;
     case 'question':
       return <AskUserQuestionCard part={dispatch.part} />;
+    case 'approval':
+      return <ToolApprovalCard part={dispatch.part} />;
     case 'image':
       return <GeneratedImageRenderer part={dispatch.part} />;
     case 'generic':

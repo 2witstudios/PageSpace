@@ -153,7 +153,7 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
       'position', 'isTrashed', 'aiProvider', 'aiModel', 'systemPrompt',
       'enabledTools', 'includeDrivePrompt', 'agentDefinition',
       'visibleToGlobalAssistant', 'includePageTree', 'pageTreeScope',
-      'toolExposureMode', 'sandboxEnabled', 'userScopedAccess', 'siteMode', 'description',
+      'toolExposureMode', 'toolApprovalMode', 'sandboxEnabled', 'userScopedAccess', 'siteMode', 'description',
       'fileSize', 'mimeType', 'originalFileName', 'filePath', 'fileMetadata',
       'processingStatus', 'processingError', 'processedAt', 'extractionMethod',
       'extractionMetadata', 'contentHash', 'excludeFromSearch', 'isPrivate',
@@ -368,6 +368,16 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
  * importing cleanly.
  */
 export const TENANT_EXPORT_EXCLUDED_TABLES: Readonly<Record<string, string>> = {
+  /**
+   * Tool approvals (human-in-the-loop gate). The MODE travels — it is a column
+   * on `pages` (carried above) and on the user's assistant config — but the
+   * consent state does not.
+   */
+  ai_tool_approval_grants:
+    'The subject\'s standing "allow this tool" consents on the SOURCE deployment. Consent given to one instance is not consent given to another: a migrated tenant starts with no grants and asks once more, which is the safe direction (more prompts, never fewer). Conversation-scoped rows also name conversations by id, and re-asking is cheaper than proving every id survived the move.',
+  ai_tool_approval_decisions:
+    'The exactly-once claim and audit log of each Allow/Deny — keyed by an approval id the SOURCE instance\'s SDK minted, naming a `message_id` with no FK. Its job (one winner per approval) is over the moment the source turn finished; carrying rows would only let a tenant collide on approval ids it will never see again. The Art 15 export DOES carry both tables — "every byte about you" and "the state a working instance is reconstituted from" are different questions, as the ai_stream_sessions entry below says.',
+
   /**
    * The Art 15 export DOES carry this table (`stream-state.json`), and that is
    * not an inconsistency: "every byte about you that exists" and "the state a

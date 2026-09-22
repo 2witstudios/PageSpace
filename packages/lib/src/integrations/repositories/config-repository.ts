@@ -74,6 +74,7 @@ export const updateConfig = async (
       | 'enabledUserIntegrations'
       | 'driveOverrides'
       | 'inheritDriveIntegrations'
+      | 'toolApprovalMode'
     >
   >
 ): Promise<GlobalAssistantConfig> => {
