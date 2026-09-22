@@ -13,6 +13,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { AccountKind } from '@pagespace/db/schema/agent-accounts';
+import type { UserId } from '../grant';
 import { decideAccountCreation } from '../decide-account-creation';
 
 const base = {
@@ -22,6 +23,9 @@ const base = {
   ownership: 'dedicated' as const,
   acknowledged: false,
   placement: { in: 'header' as const, name: 'Authorization' },
+  apiKey: 'sk_live_4f9a2c7e1b3d5f7a9c1e',
+  allowGenericRequests: false,
+  approver: 'user_1' as UserId,
 };
 
 describe('decideAccountCreation', () => {
@@ -35,8 +39,35 @@ describe('decideAccountCreation', () => {
         allowedOrigins: ['https://api.weather.example:443'],
         acknowledgment: 'dedicated_agent_account',
         placement: { in: 'header', name: 'authorization' },
+        approvalPolicy: null,
       },
     };
+    expect(actual).toEqual(expected);
+  });
+
+  it('given an empty key, one over 8 KiB, or one carrying a control character, should refuse key_invalid', () => {
+    const actual = ['', 'x'.repeat(8_193), 'sk\r\nx-evil: 1', 'sk\u0000x'].map((apiKey) => decideAccountCreation({ ...base, apiKey }));
+    const expected = Array.from({ length: 4 }, () => ({ ok: false, reason: 'key_invalid' }));
+    expect(actual).toEqual(expected);
+  });
+
+  it('given the human chose to allow requests without asking each time, should attach a bounded policy covering ONLY generic requests to the pinned origins, still asking for irreversible and privileged ones', () => {
+    const verdict = decideAccountCreation({ ...base, allowGenericRequests: true });
+    const actual = verdict.ok ? verdict.draft.approvalPolicy : verdict;
+    const expected = {
+      scope: { origins: ['https://api.weather.example:443'], operations: [{ class: 'unknown', name: 'generic_request' }], resources: [] },
+      trigger: 'irreversible_only',
+      duration: null,
+      limits: { maxUsesPerHour: 60, maxBytesOut: 10_485_760, maxConcurrent: 4 },
+      approver: 'user_1',
+    };
+    expect(actual).toEqual(expected);
+  });
+
+  it('given an allow flag that is anything but true, should attach no policy — every request asks', () => {
+    const verdict = decideAccountCreation({ ...base, allowGenericRequests: 'true' as unknown as boolean });
+    const actual = verdict.ok ? verdict.draft.approvalPolicy : verdict;
+    const expected = null;
     expect(actual).toEqual(expected);
   });
 
