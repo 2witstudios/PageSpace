@@ -6,7 +6,9 @@ import {
   applyShiftQueuedSend,
   applyClearQueuedSends,
   applySetQueuedSends,
+  applyRequeueQueuedSend,
   MAX_QUEUED_SENDS,
+  MAX_HELD_QUEUED_SENDS,
   type QueuedSendsByConversationId,
 } from '../applyQueuedSends';
 import {
@@ -103,11 +105,29 @@ describe('applyQueuedSends (pure functions)', () => {
     expect(result.c1).toEqual([]);
   });
 
-  it('set replaces wholesale, truncating past the cap', () => {
+  it('set replaces wholesale, truncating past what the queue can hold', () => {
     const restored = Array.from({ length: MAX_QUEUED_SENDS + 3 }, (_, i) => msg(`r${i}`));
     const result = applySetQueuedSends({}, { conversationId: 'c1', messages: restored });
-    expect(result.c1).toHaveLength(MAX_QUEUED_SENDS);
-    expect(result.c1[MAX_QUEUED_SENDS - 1].id).toBe(`r${MAX_QUEUED_SENDS - 1}`);
+    expect(result.c1).toHaveLength(MAX_HELD_QUEUED_SENDS);
+    expect(result.c1[MAX_HELD_QUEUED_SENDS - 1].id).toBe(`r${MAX_HELD_QUEUED_SENDS - 1}`);
+  });
+
+  it('requeue puts a rejected entry back at the head, past the enqueue cap, without duplicating it', () => {
+    let state: QueuedSendsByConversationId = {};
+    for (let i = 0; i < MAX_QUEUED_SENDS; i++) {
+      state = applyEnqueueQueuedSend(state, { conversationId: 'c1', message: msg(`q${i}`) });
+    }
+    const requeued = applyRequeueQueuedSend(state, { conversationId: 'c1', message: msg('rejected') });
+    expect(requeued.c1).toHaveLength(MAX_HELD_QUEUED_SENDS);
+    expect(requeued.c1[0].id).toBe('rejected');
+    expect(requeued.c1[1].id).toBe('q0');
+    expect(applyRequeueQueuedSend(requeued, { conversationId: 'c1', message: msg('rejected') })).toBe(requeued);
+  });
+
+  it('requeue into a conversation with no queue entry yet starts one holding just that message', () => {
+    // A reload or conversation switch can clear the in-memory entry while the
+    // dispatch is in flight; the rejection must still land.
+    expect(applyRequeueQueuedSend({}, { conversationId: 'c1', message: msg('rejected') })).toEqual({ c1: [msg('rejected')] });
   });
 });
 
@@ -157,17 +177,17 @@ describe('queuedSendsPersistence', () => {
     expect(readPersistedQueuedSends('c1')).toEqual([msg('q2')]);
   });
 
-  it('truncates an over-cap payload to MAX_QUEUED_SENDS', () => {
+  it('truncates an over-cap payload to MAX_HELD_QUEUED_SENDS (the cap plus one requeued entry)', () => {
     const overcap = Array.from({ length: MAX_QUEUED_SENDS + 5 }, (_, i) => msg(`q${i}`));
     persistQueuedSends('c1', overcap);
-    expect(readPersistedQueuedSends('c1')).toHaveLength(MAX_QUEUED_SENDS);
+    expect(readPersistedQueuedSends('c1')).toHaveLength(MAX_HELD_QUEUED_SENDS);
   });
 
   it('persists are capped on write too', () => {
     const overcap = Array.from({ length: MAX_QUEUED_SENDS + 5 }, (_, i) => msg(`q${i}`));
     persistQueuedSends('c1', overcap);
     const raw = JSON.parse(window.localStorage.getItem('pagespace:queued-sends:c1') ?? '[]');
-    expect(raw).toHaveLength(MAX_QUEUED_SENDS);
+    expect(raw).toHaveLength(MAX_HELD_QUEUED_SENDS);
   });
 
   it('persist no-ops during SSR, where window is undefined', () => {

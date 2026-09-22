@@ -608,6 +608,13 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   and in a multi-step reply sometimes nothing for the finished steps either. Stopped replies are now
   charged for the finished steps plus the part of the reply you already saw. The unfinished part is
   never charged more than the amount set aside when the reply started.
+- **A queued message is no longer lost when it fails to send** — if a message you queued while a
+  response was streaming could not be sent (a network error, or not enough credits), it used to
+  disappear. It now stays at the front of the queue, you see an error, and it goes out after the
+  next response.
+- **`/btw` side questions use your AI credits like any other chat message** — a side question now
+  checks your balance before it runs (and says so when you are out of credits or have too many AI
+  requests running), and its usage shows up on your usage page.
 - **The workflow editor fits the screen again** — a workflow with a long AI prompt pushed the
   Edit Workflow dialog's fields past its right edge and pushed Save below the fold. The dialog is
   now wider on desktop, its fields scroll between a fixed header and a fixed Cancel/Save footer, and
