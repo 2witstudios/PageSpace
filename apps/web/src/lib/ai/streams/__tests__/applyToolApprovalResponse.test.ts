@@ -23,6 +23,14 @@ describe('applyToolApprovalResponse', () => {
     const noParts = [{ id: 'm1', role: 'assistant' } as unknown as UIMessage];
     expect(applyToolApprovalResponse(noParts, { messageId: 'm1', toolCallId: 'a', approval: { id: 'ap-a', approved: true } })).toBe(noParts);
   });
+
+  it.each(['approval-responded', 'output-available', 'output-error', 'output-denied'])(
+    'never overwrites a part already in %s (a realtime event or a replay landing after the server moved on) — returns the input reference',
+    (state) => {
+      const list = [msg('m1', [{ ...paused('a', 'ap-a'), state, approval: { id: 'ap-a', approved: false } }])];
+      expect(applyToolApprovalResponse(list, { messageId: 'm1', toolCallId: 'a', approval: { id: 'ap-a', approved: true } })).toBe(list);
+    },
+  );
 });
 
 describe('revertToolApprovalResponse', () => {
@@ -36,4 +44,12 @@ describe('revertToolApprovalResponse', () => {
     const out = revertToolApprovalResponse([msg('m1', [{ type: 'tool-trash_page', toolCallId: 'a', state: 'approval-responded' }])], { messageId: 'm1', toolCallId: 'a' });
     expect(out[0].parts[0]).toEqual({ type: 'tool-trash_page', toolCallId: 'a', state: 'approval-requested' });
   });
+
+  it.each(['approval-requested', 'output-available', 'output-error', 'output-denied'])(
+    'leaves a part in %s alone (newer server truth arrived before the 409) — returns the input reference',
+    (state) => {
+      const list = [msg('m1', [{ ...paused('a', 'ap-a'), state, approval: { id: 'ap-a', approved: true } }])];
+      expect(revertToolApprovalResponse(list, { messageId: 'm1', toolCallId: 'a' })).toBe(list);
+    },
+  );
 });
