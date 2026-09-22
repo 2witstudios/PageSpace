@@ -297,7 +297,7 @@ describe('/api/auth/mcp-tokens', () => {
         expect(response.status).toBe(401);
       });
 
-      it('requires CSRF token for write operations, and no longer accepts OAuth bearer tokens', async () => {
+      it('requires CSRF for session writes; admits OAuth only for the agent path (agent-mint.test.ts)', async () => {
         // Arrange
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
           method: 'POST',
@@ -315,7 +315,7 @@ describe('/api/auth/mcp-tokens', () => {
         // Assert
         expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
           request,
-          { allow: ['session'], requireCSRF: true }
+          { allow: ['session', 'oauth'], requireCSRF: true }
         );
       });
     });

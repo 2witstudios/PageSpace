@@ -34,6 +34,7 @@ export function buildAuthMd(config: AuthMdConfig): string {
   const metadataUrl = `${issuer}/.well-known/oauth-authorization-server`;
   const rotateUrl = `${issuer}/api/agent/secret/rotate`;
   const meUrl = `${issuer}/api/auth/me`;
+  const keysUrl = `${issuer}/api/auth/mcp-tokens`;
   const claimPage = `${issuer}/claim`;
 
   return `# PageSpace — sign up as an AI agent
@@ -95,7 +96,7 @@ Content-Type: application/x-www-form-urlencoded
 grant_type=${agent.assertion_grant_type}&assertion=<identity_assertion>&client_id=pagespace-agent
 \`\`\`
 
-The response is a standard OAuth token response: \`access_token\` (\`ps_at_…\`, short-lived), \`refresh_token\` (\`ps_rt_…\`), \`token_type=Bearer\`, \`expires_in\`, \`scope\` (\`account offline_access\`). Refresh with \`grant_type=refresh_token&refresh_token=<refresh_token>&client_id=pagespace-agent\` at the same endpoint. Content scopes (\`drive:*\`) and key-management scopes are not issued on this grant; mint an \`mcp_\` key for content access through the normal key-management API once signed in.
+The response is a standard OAuth token response: \`access_token\` (\`ps_at_…\`, short-lived), \`refresh_token\` (\`ps_rt_…\`), \`token_type=Bearer\`, \`expires_in\`, \`scope\` (\`account offline_access\`). Refresh with \`grant_type=refresh_token&refresh_token=<refresh_token>&client_id=pagespace-agent\` at the same endpoint. Content scopes (\`drive:*\`) and key-management scopes are not issued on this grant; mint an \`mcp_\` key for content access (see Use).
 
 ## ${AUTH_MD_SECTIONS[4]}
 
@@ -106,7 +107,18 @@ GET ${meUrl}
 → { "accountType": "agent", ... }
 \`\`\`
 
-Everything a human can do that costs nothing works now: drives, pages, keys, the CLI, MCP, collaboration.
+For content (drives, pages, the CLI, MCP), mint an \`mcp_\` key with that same access token. It is shown once:
+
+\`\`\`
+POST ${keysUrl}
+Authorization: Bearer <access_token>
+Content-Type: application/json
+
+{ "name": "<key name>", "drives": [{ "id": "<driveId>", "role": "MEMBER" }] }
+→ { "id": "…", "token": "mcp_…", ... }
+\`\`\`
+
+Omit \`drives\` for a key that acts as you in every drive you can reach. Use the key as \`Authorization: Bearer mcp_…\` for content calls. Everything a human can do that costs nothing works this way: drives, pages, keys, the CLI, MCP, collaboration.
 
 ## ${AUTH_MD_SECTIONS[5]}
 
@@ -124,6 +136,8 @@ Give the human \`verification_uri_complete\`. They sign in as themselves and app
 
 \`\`\`
 POST ${metadata.token_endpoint}
+Content-Type: application/x-www-form-urlencoded
+
 grant_type=${agent.claim_grant_type}&claim_token=<claim_token>&client_id=pagespace-agent
 \`\`\`
 
@@ -136,6 +150,8 @@ Rotate your secret (you, or your owner) — the new secret is shown once, like t
 \`\`\`
 POST ${rotateUrl}
 Authorization: Bearer <access_token>
+Content-Type: application/json
+
 { "revokeExistingTokens": false }
 \`\`\`
 
@@ -143,6 +159,8 @@ Revoke a token you no longer need:
 
 \`\`\`
 POST ${metadata.revocation_endpoint}
+Content-Type: application/x-www-form-urlencoded
+
 token=<access_token or refresh_token>&client_id=pagespace-agent
 \`\`\`
 

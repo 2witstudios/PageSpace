@@ -27,6 +27,7 @@ vi.mock('@pagespace/lib/auth/oauth/clients', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@pagespace/lib/auth/oauth/clients')>();
   return {
     clientAllowsGrant: actual.clientAllowsGrant,
+    PAGESPACE_AGENT_CLIENT_ID: actual.PAGESPACE_AGENT_CLIENT_ID,
     getRegisteredClient: (clientId: string) => (clientId === RESTRICTED_CLIENT_ID ? RESTRICTED_CLIENT : null),
   };
 });

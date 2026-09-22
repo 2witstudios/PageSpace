@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { OAUTH_ACCESS_TOKEN_PREFIX } from '@/lib/auth/token-prefixes';
+import { resolveCallerCredential } from '@/lib/agent-auth/caller-credential';
+import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 import { sessionRepository } from '@/lib/repositories/session-repository';
 import { z } from 'zod/v4';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -13,13 +16,23 @@ import { rejectScopedOAuth } from './scope-guard';
 // `pagespace keys list` authenticates with an OAuth access token from
 // `pagespace login`) call GET directly. CSRF is already skipped for
 // Bearer-token auth (`authenticateRequestWithOptions`), so this is not a
-// CSRF-relevant change. Minting (POST) is session-only — the CLI has no
-// session cookie and never reaches this route; it mints a new mcp_*
-// credential exclusively through the separate OAuth authorize/consent flow
-// (`/api/oauth/authorize`), which has its own step-up gate. This route only
-// serves the web UI's own already-authenticated "Create Token" button.
+// CSRF-relevant change. Minting (POST) is for a session — the web UI's own
+// already-authenticated "Create Token" button; the CLI mints through the
+// OAuth authorize/consent flow (`/api/oauth/authorize`) with its own step-up
+// gate — plus ONE bearer: an AI agent's own account-scoped access token
+// minted by the pagespace-agent jwt-bearer grant (ADR 0007 Decision 6, agents
+// mint mcp_ keys; `classifyCallerCredential`). A headless agent has no
+// session and no browser, so without this it could never obtain a content
+// credential. Every other OAuth token — every human's, a token the agent gave
+// another client, a narrow scope — gets exactly the refusal a bearer has
+// always had here. CSRF still applies to sessions only.
 const AUTH_OPTIONS_READ = { allow: ['session', 'oauth'] as const, requireCSRF: false };
-const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
+const AUTH_OPTIONS_MINT = { allow: ['session', 'oauth'] as const, requireCSRF: true };
+
+/** The response a bearer token has always received from POST here (it was `allow: ['session']`). */
+function oauthNotPermitted(): NextResponse {
+  return NextResponse.json({ error: 'OAuth tokens are not permitted for this endpoint' }, { status: 401 });
+}
 
 // Schema for creating a new MCP token
 const createTokenSchema = z.object({
@@ -37,9 +50,32 @@ const createTokenSchema = z.object({
 
 // POST: Create a new MCP token
 export async function POST(req: NextRequest) {
-  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS_WRITE);
-  if (isAuthError(auth)) return auth.error;
+  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS_MINT);
+  if (isAuthError(auth)) {
+    // An unusable ps_at_ gets the same answer as a usable non-agent one: no new
+    // oracle on OAuth token validity from a route that never accepted them.
+    return req.headers.get('authorization')?.startsWith(`Bearer ${OAUTH_ACCESS_TOKEN_PREFIX}`) ? oauthNotPermitted() : auth.error;
+  }
   const userId = auth.userId;
+
+  // The agent path (ADR 0007 D6). Everything after this block is the session
+  // path's own scoping, applied to the caller — no second scoping rule.
+  const viaAgent = auth.tokenType !== 'session';
+  const refuseAgent = (reason: string) => {
+    if (viaAgent) auditRequest(req, { eventType: 'authz.access.denied', userId, resourceType: 'mcp_token', details: { method: 'agent', reason } });
+  };
+  if (viaAgent) {
+    if ((await resolveCallerCredential(auth)) !== 'agent_grant_token') {
+      refuseAgent('not_agent_grant_credential');
+      return oauthNotPermitted();
+    }
+    const limit = await checkDistributedRateLimit(`agent-key-mint:user:${userId}`, DISTRIBUTED_RATE_LIMITS.AGENT_KEY_MINT);
+    if (!limit.allowed) {
+      auditRequest(req, { eventType: 'security.rate.limited', userId, resourceType: 'mcp_token', details: { method: 'agent' } });
+      const retryAfter = Math.max(0, Math.ceil(limit.retryAfter ?? 0));
+      return NextResponse.json({ error: 'rate_limited', retryAfter }, { status: 429, headers: { 'Retry-After': String(retryAfter) } });
+    }
+  }
 
   try {
     const body = await req.json();
@@ -55,24 +91,28 @@ export async function POST(req: NextRequest) {
         await validateDriveScopeAccess(uniqueDriveScopes, userId);
 
       if (invalidDriveIds.length > 0) {
+        refuseAgent('invalid_drive_scope');
         return NextResponse.json(
           { error: 'You do not have access to these drives: ' + invalidDriveIds.join(', ') },
           { status: 403 }
         );
       }
       if (unauthorizedRoles.length > 0) {
+        refuseAgent('unauthorized_role');
         return NextResponse.json(
           { error: 'You do not have permission to grant ADMIN role in these drives: ' + unauthorizedRoles.join(', ') },
           { status: 403 }
         );
       }
       if (invalidCustomRoles.length > 0) {
+        refuseAgent('invalid_custom_role');
         return NextResponse.json(
           { error: 'Custom role does not belong to the specified drive: ' + invalidCustomRoles.join(', ') },
           { status: 400 }
         );
       }
       if (unauthorizedCustomRoles.length > 0) {
+        refuseAgent('unauthorized_custom_role');
         return NextResponse.json(
           { error: 'You may only mint tokens with your own assigned custom role in these drives: ' + unauthorizedCustomRoles.join(', ') },
           { status: 403 }
@@ -108,7 +148,7 @@ export async function POST(req: NextRequest) {
       tokenType: 'mcp',
       tokenName: newToken.name,
     }, actorInfo);
-    auditRequest(req, { eventType: 'auth.token.created', userId, details: { tokenType: 'mcp' } });
+    auditRequest(req, { eventType: 'auth.token.created', userId, details: { tokenType: 'mcp', ...(viaAgent ? { method: 'agent' } : {}) } });
 
     // Return the raw token ONCE to the user - this is the only time they'll see it
     // Response format matches GET for consistency
@@ -123,6 +163,7 @@ export async function POST(req: NextRequest) {
   } catch (error) {
     loggers.auth.error('Error creating MCP token:', error as Error);
     if (error instanceof z.ZodError) {
+      refuseAgent('invalid_request');
       return NextResponse.json({ error: error.issues }, { status: 400 });
     }
     return NextResponse.json({ error: 'Failed to create MCP token' }, { status: 500 });

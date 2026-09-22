@@ -87,7 +87,7 @@ describe('OAuth hardening sweep', () => {
     // A crude but effective guard: the `details` object literal passed to
     // auditRequest must never reference the route's raw secret-holding
     // variables (only clientId/oauthEvent/outcome-shaped summaries).
-    const FORBIDDEN_IN_AUDIT_DETAILS = [/token:\s*[a-zA-Z]/, /code:\s*[a-zA-Z]/, /userCode:\s*[a-zA-Z]/];
+    const FORBIDDEN_IN_AUDIT_DETAILS = [/token:\s*[a-zA-Z]/, /code:\s*[a-zA-Z]/, /userCode:\s*[a-zA-Z]/, /assertion:\s*[a-zA-Z]/, /secret:\s*[a-zA-Z]/];
     const violations: string[] = [];
 
     for (const route of routes) {
@@ -102,5 +102,65 @@ describe('OAuth hardening sweep', () => {
     }
 
     expect(violations).toEqual([]);
+  });
+
+  /**
+   * Agent Signup Phase 2 — the jwt-bearer grant (ADR 0007 Decisions 5-6,
+   * threat model T3/T4). An agent secret is full control of an agent account,
+   * so the grant must never become an oracle: every credential or scope
+   * failure is the one invalid_grant body, and the client/scope refusals run
+   * before the secret is looked up at all.
+   */
+  describe('jwt-bearer (agent assertion) grant', () => {
+    const token = routes.find((r) => r.path === 'token');
+    const handlerBody = (() => {
+      const src = token?.content ?? '';
+      const start = src.indexOf('async function handleAgentAssertionGrant(');
+      const end = src.indexOf('\n}\n', start);
+      return start === -1 ? '' : src.slice(start, end);
+    })();
+
+    it('the token route dispatches the RFC 7523 URN to its own handler', () => {
+      expect(handlerBody.length).toBeGreaterThan(0);
+      expect(token?.content).toMatch(/grantType === AGENT_ASSERTION_GRANT_TYPE\)\s*\{\s*return handleAgentAssertionGrant\(/);
+    });
+
+    it('every response the handler builds is invalid_grant, invalid_request, unauthorized_client, unsupported_grant_type or the token success body — no per-reason oracle', () => {
+      const bodies = [...handlerBody.matchAll(/noStoreJson\((.+?),\s*\d{3}\)/g)].map((m) => m[1].trim());
+      expect(bodies.length).toBeGreaterThan(0);
+      const allowed = new Set([
+        'INVALID_GRANT',
+        'INVALID_REQUEST',
+        "{ error: 'unauthorized_client' }",
+        "{ error: 'unsupported_grant_type' }",
+        'tokenSuccessBody(result.tokens, result.scopes)',
+      ]);
+      expect(bodies.filter((b) => !allowed.has(b))).toEqual([]);
+      // Both the scope refusal and the credential refusal collapse to invalid_grant.
+      expect(bodies.filter((b) => b === 'INVALID_GRANT').length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('refuses a client outside the grant, and a content or key-shaped scope, BEFORE the secret is looked up', () => {
+      const exchangeAt = handlerBody.indexOf('exchangeAgentAssertion(');
+      expect(exchangeAt).toBeGreaterThan(-1);
+      const clientGuardAt = handlerBody.indexOf('clientAllowsGrant(registered, AGENT_ASSERTION_GRANT_TYPE)');
+      const scopeAt = handlerBody.indexOf('resolveAgentAssertionScopes(');
+      const rateLimitAt = handlerBody.indexOf('checkAgentTokenRateLimit(');
+      expect(clientGuardAt).toBeGreaterThan(-1);
+      expect(scopeAt).toBeGreaterThan(-1);
+      expect(rateLimitAt).toBeGreaterThan(-1);
+      expect(clientGuardAt).toBeLessThan(exchangeAt);
+      expect(scopeAt).toBeLessThan(exchangeAt);
+      expect(rateLimitAt).toBeLessThan(exchangeAt);
+    });
+
+    it('the grant is registered to pagespace-agent only — pagespace-cli can never redeem an agent secret', async () => {
+      const { getRegisteredClient, clientAllowsGrant } = await import('@pagespace/lib/auth/oauth/clients');
+      const { AGENT_ASSERTION_GRANT_TYPE } = await import('@pagespace/lib/auth/oauth/metadata');
+      const cli = getRegisteredClient('pagespace-cli');
+      const agent = getRegisteredClient('pagespace-agent');
+      expect(cli && clientAllowsGrant(cli, AGENT_ASSERTION_GRANT_TYPE)).toBe(false);
+      expect(agent && clientAllowsGrant(agent, AGENT_ASSERTION_GRANT_TYPE)).toBe(true);
+    });
   });
 });

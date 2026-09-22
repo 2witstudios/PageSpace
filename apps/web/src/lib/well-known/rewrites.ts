@@ -1,6 +1,6 @@
 /**
- * Single source of truth for `/.well-known/*` routes rewritten to routable
- * API paths. Next.js App Router does not route dot-prefixed folders under
+ * Single source of truth for `/.well-known/*` routes (and `/auth.md`)
+ * rewritten to routable API paths. Next.js App Router does not route dot-prefixed folders under
  * app/, so any `/.well-known/*` handler must live at a normal path and be
  * reached via a next.config.ts rewrite of its public URL.
  *
@@ -18,5 +18,13 @@ export const WELL_KNOWN_REWRITES = [
   {
     source: '/.well-known/oauth-authorization-server',
     destination: '/api/well-known/oauth-authorization-server',
+  },
+  // Not under /.well-known/, but the same shape: a fixed, public discovery
+  // document an agent fetches before it has any identity (ADR 0007 Decision 12,
+  // the auth.md recipe). A `.md` path would otherwise be looked up as a static
+  // file; the middleware rewrite reaches the handler first.
+  {
+    source: '/auth.md',
+    destination: '/api/well-known/auth-md',
   },
 ] as const;

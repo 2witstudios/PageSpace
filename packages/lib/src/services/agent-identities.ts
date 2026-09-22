@@ -15,7 +15,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, eq, gt, isNull, sql } from '@pagespace/db/operators';
+import { and, eq, gt, inArray, isNull, lt, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { agentIdentities, agentSignupChallenges } from '@pagespace/db/schema/agent-identities';
 import { createId } from '@paralleldrive/cuid2';
@@ -29,6 +29,100 @@ import { loggers } from '../logging/logger-config';
 
 /** Prefix of the claim token an agent hands a human (auth.md "Fund"). Hash-only at rest. */
 export const AGENT_CLAIM_TOKEN_PREFIX = 'ps_claim';
+
+/** Prefix of a proof-of-work challenge. Hash-only at rest. */
+export const AGENT_POW_CHALLENGE_PREFIX = 'ps_pow';
+
+export interface IssuedAgentSignupChallenge {
+  /** Plaintext challenge — returned to the caller once; only its hash is stored. */
+  challenge: string;
+  expiresAt: Date;
+}
+
+/** How many expired challenges one issuance deletes. */
+const CHALLENGE_PRUNE_BATCH = 100;
+
+/**
+ * Persist a single-use proof-of-work challenge (ADR 0007 Decision 10, threat
+ * model T2). The difficulty is stored on the row so a later change to
+ * `AGENT_SIGNUP_POW_BITS` never re-grades a challenge already handed out.
+ *
+ * Each issuance first deletes up to CHALLENGE_PRUNE_BATCH expired challenges,
+ * claimed with FOR UPDATE SKIP LOCKED so concurrent issuances take disjoint
+ * batches. Every row is written by an issuance and each issuance can delete
+ * more than one, so expired rows (and the caller IPs on them) cannot
+ * accumulate without a cron, even under a burst. An expired row is worthless: the lookup treats it exactly like an
+ * unknown challenge. A prune failure never blocks issuing.
+ */
+export async function issueAgentSignupChallenge(input: {
+  difficultyBits: number;
+  ttlMs: number;
+  issuedToIp: string | null;
+  now: Date;
+}): Promise<IssuedAgentSignupChallenge> {
+  try {
+    const expired = db
+      .select({ id: agentSignupChallenges.id })
+      .from(agentSignupChallenges)
+      .where(lt(agentSignupChallenges.expiresAt, input.now))
+      .orderBy(agentSignupChallenges.expiresAt)
+      .limit(CHALLENGE_PRUNE_BATCH)
+      // Concurrent issuances claim DISJOINT batches: without SKIP LOCKED every
+      // request in a burst selects the same oldest rows, one deletes them, the
+      // rest delete nothing (or wait) — and all of them insert.
+      .for('update', { skipLocked: true });
+    await db.delete(agentSignupChallenges).where(inArray(agentSignupChallenges.id, expired));
+  } catch (error) {
+    loggers.auth.warn('Failed to prune expired agent signup challenges', { error: (error as Error).message });
+  }
+
+  const generated = generateToken(AGENT_POW_CHALLENGE_PREFIX);
+  const expiresAt = new Date(input.now.getTime() + input.ttlMs);
+  await db.insert(agentSignupChallenges).values({
+    challengeHash: generated.hash,
+    difficultyBits: input.difficultyBits,
+    issuedToIp: input.issuedToIp,
+    expiresAt,
+  });
+  return { challenge: generated.token, expiresAt };
+}
+
+/** The facts `decideAgentSignup` needs about a presented challenge, plus the row id to consume. */
+export type AgentSignupChallengeLookup =
+  | { found: false; expired: false; consumed: false; difficultyBits: 0; id: null }
+  | { found: true; expired: boolean; consumed: boolean; difficultyBits: number; id: string };
+
+const CHALLENGE_NOT_FOUND = { found: false, expired: false, consumed: false, difficultyBits: 0, id: null } as const;
+
+/**
+ * Look a presented challenge up by hash. Reports facts only; `decideAgentSignup`
+ * orders them, and `createAgentAccount` re-checks expiry and consumption
+ * atomically, so this read is never the thing that admits a replay.
+ */
+export async function findAgentSignupChallenge(input: { challenge: string; now: Date }): Promise<AgentSignupChallengeLookup> {
+  if (typeof input.challenge !== 'string' || input.challenge.length === 0 || input.challenge.length > 256) {
+    return CHALLENGE_NOT_FOUND;
+  }
+  const [row] = await db
+    .select({
+      id: agentSignupChallenges.id,
+      difficultyBits: agentSignupChallenges.difficultyBits,
+      expiresAt: agentSignupChallenges.expiresAt,
+      consumedAt: agentSignupChallenges.consumedAt,
+    })
+    .from(agentSignupChallenges)
+    .where(eq(agentSignupChallenges.challengeHash, hashToken(input.challenge)))
+    .limit(1);
+  if (!row) return CHALLENGE_NOT_FOUND;
+  return {
+    found: true,
+    // Same boundary as createAgentAccount's `expiresAt > now`: expiring exactly now is expired.
+    expired: row.expiresAt.getTime() <= input.now.getTime(),
+    consumed: row.consumedAt !== null,
+    difficultyBits: row.difficultyBits,
+    id: row.id,
+  };
+}
 
 export interface CreateAgentAccountInput {
   name: string;

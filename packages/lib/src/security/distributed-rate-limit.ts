@@ -1096,6 +1096,80 @@ export const DISTRIBUTED_RATE_LIMITS = {
     blockDurationMs: 5 * 60 * 1000,
     progressiveDelay: false,
   },
+  // Agent signup doors (ADR 0007 Decision 10, threat model T1/T3). All keyed
+  // per IP: the doors are unauthenticated by design, so IP is the only identity
+  // available. Proof-of-work only makes each attempt cost CPU; these are the
+  // real ceiling on bulk agent creation.
+  //
+  // GET /api/agent/challenge — issuing a challenge writes a row, so the cap
+  // bounds table growth; generous enough for a solver that lets one expire.
+  AGENT_CHALLENGE: {
+    maxAttempts: 30,
+    windowMs: 5 * 60 * 1000,
+    blockDurationMs: 5 * 60 * 1000,
+    progressiveDelay: false,
+  },
+  // POST /api/agent/identity — one account per accepted call.
+  AGENT_SIGNUP: {
+    maxAttempts: 5,
+    windowMs: 60 * 60 * 1000,
+    blockDurationMs: 60 * 60 * 1000,
+    progressiveDelay: false,
+  },
+  // Daily backstop over AGENT_SIGNUP, so an IP that paces itself under the
+  // hourly limit still cannot mint more than this many agents a day.
+  AGENT_SIGNUP_DAILY: {
+    maxAttempts: 10,
+    windowMs: 24 * 60 * 60 * 1000,
+    blockDurationMs: 24 * 60 * 60 * 1000,
+    progressiveDelay: false,
+  },
+  // Presenting an agent secret at the BROWSER sign-in door (Phase 3): guessing
+  // a secret is credential stuffing, so it gets LOGIN's shape. The jwt-bearer
+  // exchange does NOT use this — it is AGENT_TOKEN_IP + AGENT_TOKEN_CREDENTIAL.
+  AGENT_SIGNIN: {
+    maxAttempts: 5,
+    windowMs: 15 * 60 * 1000,
+    blockDurationMs: 15 * 60 * 1000,
+    progressiveDelay: true,
+  },
+  // POST /api/oauth/token for client_id=pagespace-agent (jwt-bearer and its
+  // refresh_token grant). NOT the per-client OAUTH_TOKEN_EXCHANGE bucket: every
+  // agent shares that client id, so a per-client bucket is one platform-wide
+  // bucket a single IP could exhaust to lock every agent out. Keys:
+  // auth/agent/token-rate-limit-keys.ts. Per IP, generous — a fleet of agents
+  // behind one CI runner or NAT shares an IP and refreshes every ~15 min.
+  AGENT_TOKEN_IP: {
+    maxAttempts: 60,
+    windowMs: 5 * 60 * 1000,
+    blockDurationMs: 5 * 60 * 1000,
+    progressiveDelay: false,
+  },
+  // Per presented credential (hash of the secret or refresh token), tight: stops
+  // a hot loop on one secret without touching any other agent.
+  AGENT_TOKEN_CREDENTIAL: {
+    maxAttempts: 10,
+    windowMs: 5 * 60 * 1000,
+    blockDurationMs: 5 * 60 * 1000,
+    progressiveDelay: false,
+  },
+  // POST /api/auth/mcp-tokens by an AI agent's own bearer token (ADR 0007 D6),
+  // keyed per agent. The session path is unchanged and unlimited here; a
+  // bearer that can mint content credentials in a loop is not.
+  AGENT_KEY_MINT: {
+    maxAttempts: 10,
+    windowMs: 60 * 60 * 1000,
+    blockDurationMs: 60 * 60 * 1000,
+    progressiveDelay: false,
+  },
+  // POST /api/agent/claim (Phase 4) — starting a claim mints a user code,
+  // like OAUTH_DEVICE_INIT.
+  AGENT_CLAIM_INIT: {
+    maxAttempts: 10,
+    windowMs: 5 * 60 * 1000,
+    blockDurationMs: 5 * 60 * 1000,
+    progressiveDelay: false,
+  },
   // Per-webhook cap on posted channel messages (key: `page-webhook:{webhookId}`).
   // Meant to blunt abuse/runaway senders, not throttle legitimate bursty use —
   // matches Discord's own per-webhook limit (30 posts/min). A flooding caller

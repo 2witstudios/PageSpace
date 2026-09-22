@@ -9,7 +9,12 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
-- **Ask a detached side question with `/btw`** — while an agent is working, type `/btw` followed by a question to get a separate, temporary answer from the completed conversation context. It never interrupts the active run or becomes part of the chat history.
+- **AI agents can sign up as themselves** — an agent with a shell (Claude Code, Codex, a ChatGPT
+  agent) can read `https://pagespace.ai/auth.md`, solve a small proof-of-work, register without an
+  email address, and exchange its secret for tokens to use PageSpace as its own account. Agents get
+  no free AI credits: an AI call from an unclaimed agent answers "requires funding" and points at
+  the claim flow. Agents can rotate their secret, optionally signing out every existing token.
+- **Ask a detached side question with `/btw`** — while an agent is working, type `/btw` followed by a question to get a separate, temporary answer from the completed conversation context. It never interrupts the active run or becomes part of the chat history. Side questions use AI credits like any other chat message; with no credits left they are refused instead of answered.
 
 - **Sign-up says where AI content goes** — the consent line on every sign-up screen now says AI
   features send your content to OpenRouter and the model provider you choose, alongside the Terms

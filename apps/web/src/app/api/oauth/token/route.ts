@@ -36,7 +36,15 @@ import {
   exchangeAuthorizationCode,
   refreshTokenGrant,
   pollDeviceToken,
+  exchangeAgentAssertion,
 } from '@/lib/repositories/oauth-repository';
+import { AGENT_ASSERTION_GRANT_TYPE } from '@pagespace/lib/auth/oauth/metadata';
+import { resolveAgentAssertionScopes } from '@/lib/agent-auth/assertion-scope';
+import { isAgentDoorOpen } from '@/lib/agent-auth/door';
+import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { PAGESPACE_AGENT_CLIENT_ID } from '@pagespace/lib/auth/oauth/clients';
+import { agentTokenIpRateLimitKey, agentTokenCredentialRateLimitKey } from '@pagespace/lib/auth/agent/token-rate-limit-keys';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getActorInfo, logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
@@ -139,6 +147,32 @@ async function checkTokenExchangeRateLimit(req: NextRequest, clientId: string): 
     details: { clientId, oauthEvent: 'token_exchange_rate_limited' },
   });
   return noStoreJson({ error: 'rate_limited', retryAfter: Math.max(ipLimit.retryAfter ?? 0, clientLimit.retryAfter ?? 0) }, 429);
+}
+
+/**
+ * The `pagespace-agent` client's grants (jwt-bearer and its refresh_token)
+ * are NOT limited per client: every agent on the platform shares that
+ * client_id, so a per-client bucket is one global bucket a single IP could
+ * exhaust to lock every agent out. Instead: per IP (AGENT_TOKEN_IP, generous —
+ * a fleet behind one NAT or CI runner shares an IP) and per presented
+ * credential (AGENT_TOKEN_CREDENTIAL, tight — a hot loop on one secret), keyed
+ * by the credential's hash. Both run before any DB lookup and answer the same
+ * 429 shape as `checkTokenExchangeRateLimit`, so the two buckets are
+ * indistinguishable on the wire.
+ */
+async function checkAgentTokenRateLimit(req: NextRequest, credential: string): Promise<NextResponse | null> {
+  const ip = getClientIP(req);
+  const [ipLimit, credentialLimit] = await Promise.all([
+    checkDistributedRateLimit(agentTokenIpRateLimitKey(ip), DISTRIBUTED_RATE_LIMITS.AGENT_TOKEN_IP),
+    checkDistributedRateLimit(agentTokenCredentialRateLimitKey(credential), DISTRIBUTED_RATE_LIMITS.AGENT_TOKEN_CREDENTIAL),
+  ]);
+  if (ipLimit.allowed && credentialLimit.allowed) return null;
+
+  auditRequest(req, {
+    eventType: 'security.rate.limited',
+    details: { clientId: PAGESPACE_AGENT_CLIENT_ID, oauthEvent: 'agent_token_rate_limited', bucket: !ipLimit.allowed ? 'ip' : 'credential' },
+  });
+  return noStoreJson({ error: 'rate_limited', retryAfter: Math.max(ipLimit.retryAfter ?? 0, credentialLimit.retryAfter ?? 0) }, 429);
 }
 
 /**
@@ -338,7 +372,11 @@ async function handleRefreshTokenGrant(req: NextRequest, form: URLSearchParams):
     return noStoreJson(INVALID_REQUEST, 400);
   }
 
-  const rateLimited = await checkTokenExchangeRateLimit(req, clientId);
+  // pagespace-agent is limited per IP + per credential (see checkAgentTokenRateLimit);
+  // every other client keeps its per-client bucket unchanged.
+  const rateLimited = clientId === PAGESPACE_AGENT_CLIENT_ID
+    ? await checkAgentTokenRateLimit(req, refreshToken)
+    : await checkTokenExchangeRateLimit(req, clientId);
   if (rateLimited) return rateLimited;
 
   const resolved = await resolveClient(form, clientId, 'refresh_token');
@@ -454,6 +492,88 @@ async function handleDeviceCodeGrant(req: NextRequest, form: URLSearchParams): P
   return noStoreJson(tokenSuccessBody(result.tokens, result.scopes), 200);
 }
 
+/**
+ * The jwt-bearer grant (RFC 7523 URN; ADR 0007 Decisions 5-6, threat model
+ * T3/T4): an AI agent exchanges its opaque `ps_agent_*` secret (the auth.md
+ * `identity_assertion` — not a JWT) for a `ps_at_`/`ps_rt_` pair minted for
+ * ITSELF, scoped `account` (+ `offline_access`).
+ *
+ * The client check runs before the secret is ever looked up. A REGISTERED
+ * client whose grant list excludes this grant (`pagespace-cli`) is told
+ * `unauthorized_client` (RFC 6749 §5.2): client ids are public, so naming the
+ * refusal leaks nothing about the credential, and it keeps an agent secret
+ * from ever being redeemed through the CLI's client. Every credential or
+ * scope failure — unknown, revoked, suspended or locked agent, a content or
+ * key-shaped scope, an unknown client — is the one `invalid_grant` body.
+ */
+async function handleAgentAssertionGrant(req: NextRequest, form: URLSearchParams): Promise<NextResponse> {
+  // ADR 0007 Decision 11: a deployment with the agent door closed has no agent
+  // grant at all — the same answer as any grant this endpoint does not speak.
+  if (!isAgentDoorOpen()) {
+    auditRequest(req, { eventType: 'authz.access.denied', details: { oauthEvent: 'agent_assertion_door_closed' } });
+    return noStoreJson({ error: 'unsupported_grant_type' }, 400);
+  }
+
+  const assertion = form.get('assertion');
+  const clientId = form.get('client_id');
+  if (!assertion || !clientId) {
+    auditRequest(req, { eventType: 'authz.access.denied', details: { oauthEvent: 'agent_assertion_invalid_request' } });
+    return noStoreJson(INVALID_REQUEST, 400);
+  }
+
+  const rateLimited = await checkAgentTokenRateLimit(req, assertion);
+  if (rateLimited) return rateLimited;
+
+  const registered = getRegisteredClient(clientId);
+  if (registered && !clientAllowsGrant(registered, AGENT_ASSERTION_GRANT_TYPE)) {
+    auditRequest(req, { eventType: 'authz.access.denied', details: { clientId: registered.clientId, oauthEvent: 'agent_assertion_unauthorized_client' } });
+    return noStoreJson({ error: 'unauthorized_client' }, 400);
+  }
+
+  const resolved = await resolveClient(form, clientId, AGENT_ASSERTION_GRANT_TYPE);
+  if ('rejection' in resolved) {
+    // Unknown client, or a client_secret on the public agent client.
+    auditRequest(req, { eventType: 'authz.access.denied', details: { oauthEvent: 'agent_assertion_client_rejected' } });
+    return resolved.rejection;
+  }
+  const { client, clientDbId } = resolved;
+
+  const scope = resolveAgentAssertionScopes(form.get('scope'));
+  if (!scope.ok) {
+    auditRequest(req, { eventType: 'authz.access.denied', details: { clientId: client.clientId, oauthEvent: 'agent_assertion_scope_refused' } });
+    return noStoreJson(INVALID_GRANT, 400);
+  }
+
+  const result = await exchangeAgentAssertion({ assertion, clientDbId, scopes: scope.scopes, now: new Date() });
+
+  if (result.outcome !== 'ok') {
+    auditRequest(req, {
+      eventType: 'authz.access.denied',
+      userId: result.userId ?? undefined,
+      details: { clientId: client.clientId, oauthEvent: 'agent_assertion_rejected', outcome: result.outcome },
+    });
+    return noStoreJson(INVALID_GRANT, 400);
+  }
+
+  auditRequest(req, {
+    eventType: 'auth.token.created',
+    userId: result.userId,
+    details: { clientId: client.clientId, oauthEvent: 'agent_assertion_exchanged' },
+  });
+
+  // The API door's sign-in. createAgentAccount returns the one-time secret even
+  // if Home-drive provisioning failed after its commit, relying on a later
+  // sign-in to retry — this is that retry (idempotent; a no-op once the drive
+  // exists), exactly as the magic-link sign-in does. Never blocks the tokens.
+  try {
+    await provisionHomeDriveIfNeeded(result.userId);
+  } catch (error) {
+    loggers.auth.error('Failed to provision Home drive on agent sign-in', error as Error, { userId: result.userId });
+  }
+
+  return noStoreJson(tokenSuccessBody(result.tokens, result.scopes), 200);
+}
+
 export async function POST(req: NextRequest) {
   const contentType = req.headers.get('content-type') ?? '';
   if (!contentType.toLowerCase().includes('application/x-www-form-urlencoded')) {
@@ -471,6 +591,9 @@ export async function POST(req: NextRequest) {
   }
   if (grantType === 'urn:ietf:params:oauth:grant-type:device_code') {
     return handleDeviceCodeGrant(req, form);
+  }
+  if (grantType === AGENT_ASSERTION_GRANT_TYPE) {
+    return handleAgentAssertionGrant(req, form);
   }
 
   return noStoreJson({ error: 'unsupported_grant_type' }, 400);
