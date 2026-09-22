@@ -222,12 +222,11 @@ export const startBrowserEgressProxy = async ({
       createConnection: () => dial(connectAddress, transportOrigin.port),
     });
     upstream.on('response', (response) => {
-      const forwarded: Record<string, string | string[]> = {};
       for (const name of FORWARDED_RESPONSE_HEADERS) {
         const value = response.headers[name];
-        if (value !== undefined) forwarded[name] = value;
+        if (value !== undefined) res.setHeader(name, value);
       }
-      res.writeHead(response.statusCode ?? 502, forwarded);
+      res.writeHead(response.statusCode ?? 502);
       response.pipe(res);
     });
     upstream.on('error', () => {
