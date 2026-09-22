@@ -75,6 +75,49 @@ const FORWARDED_REQUEST_HEADERS: readonly string[] = Object.freeze([
   'sec-fetch-user',
 ]);
 
+/**
+ * The response headers returned on plaintext http — the standard semantics a
+ * page needs (type, length, encoding, caching, redirects, cookies, CORS and
+ * the security policies), by fixed name. Plaintext is the minority path: TLS
+ * responses travel inside the CONNECT tunnel untouched.
+ */
+const FORWARDED_RESPONSE_HEADERS: readonly string[] = Object.freeze([
+  'content-type',
+  'content-length',
+  'content-encoding',
+  'content-language',
+  'content-range',
+  'transfer-encoding',
+  'accept-ranges',
+  'cache-control',
+  'expires',
+  'last-modified',
+  'etag',
+  'vary',
+  'date',
+  'age',
+  'location',
+  'refresh',
+  'retry-after',
+  'set-cookie',
+  'link',
+  'www-authenticate',
+  'access-control-allow-origin',
+  'access-control-allow-credentials',
+  'access-control-allow-methods',
+  'access-control-allow-headers',
+  'access-control-expose-headers',
+  'access-control-max-age',
+  'content-security-policy',
+  'x-frame-options',
+  'x-content-type-options',
+  'referrer-policy',
+  'permissions-policy',
+  'cross-origin-opener-policy',
+  'cross-origin-embedder-policy',
+  'cross-origin-resource-policy',
+]);
+
 /** A page can loop refused requests forever; only a bounded tail is kept. */
 export const RECENT_REFUSALS_KEPT = 100;
 
@@ -179,7 +222,12 @@ export const startBrowserEgressProxy = async ({
       createConnection: () => dial(connectAddress, transportOrigin.port),
     });
     upstream.on('response', (response) => {
-      res.writeHead(response.statusCode ?? 502, response.headers);
+      const forwarded: Record<string, string | string[]> = {};
+      for (const name of FORWARDED_RESPONSE_HEADERS) {
+        const value = response.headers[name];
+        if (value !== undefined) forwarded[name] = value;
+      }
+      res.writeHead(response.statusCode ?? 502, forwarded);
       response.pipe(res);
     });
     upstream.on('error', () => {
