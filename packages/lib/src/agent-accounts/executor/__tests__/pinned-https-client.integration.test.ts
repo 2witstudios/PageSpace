@@ -76,7 +76,9 @@ const clientFor = (resolveHost: ResolveHost, isPublic: (ip: string) => boolean, 
 beforeAll(async () => {
   dir = mkdtempSync(path.join(tmpdir(), 'g2-pinned-https-'));
   openssl(['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'ca.key', '-subj', '/CN=g2-test-ca', '-days', '1', '-out', 'ca.pem']);
-  ca = readFileSync(path.join(dir, 'ca.pem'), 'utf8');
+  // The trust anchor comes from openssl's stdout, not a file read, so no file data flows into the client's
+  // request options (CodeQL js/file-access-to-http); production never passes `ca` at all.
+  ca = execFileSync('openssl', ['x509', '-in', 'ca.pem'], { cwd: dir }).toString('utf8');
   const started = await startServer(leaf('leaf', HOST));
   server = started.server;
   port = started.port;

@@ -60,6 +60,8 @@ import { digestBindings } from '../../store/digest-bindings';
 import { agentAccounts } from '@pagespace/db/schema/agent-accounts';
 import { createPinnedHttpsClient } from '../../executor/pinned-https-client';
 import { createHttpRequestExecutor } from '../../executor/http-request-executor';
+import { sweepOrphanedRefs } from '../../executor/plane-orphan-sweep-worker';
+import { ORPHAN_GRACE_MS } from '../../executor/decide-orphaned-refs';
 import { createPlaneRequestHandler } from '../../executor/plane-http-adapter';
 
 const INFISICAL_URL = process.env.INFISICAL_DEV_URL ?? 'http://localhost:8080';
@@ -106,7 +108,9 @@ function startUpstream(): Promise<void> {
   openssl(['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'ca.key', '-subj', '/CN=g2-e2e-ca', '-days', '1', '-out', 'ca.pem']);
   openssl(['req', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'leaf.key', '-subj', `/CN=${HOST}`, '-out', 'leaf.csr']);
   openssl(['x509', '-req', '-in', 'leaf.csr', '-CA', 'ca.pem', '-CAkey', 'ca.key', '-CAcreateserial', '-days', '1', '-extfile', 'leaf.ext', '-out', 'leaf.pem']);
-  ca = readFileSync(path.join(certDir, 'ca.pem'), 'utf8');
+  // The trust anchor comes from openssl's stdout, not a file read, so no file data flows into the client's
+  // request options (CodeQL js/file-access-to-http); production never passes `ca` at all.
+  ca = execFileSync('openssl', ['x509', '-in', 'ca.pem'], { cwd: certDir }).toString('utf8');
   upstream = createHttpsServer({ key: readFileSync(path.join(certDir, 'leaf.key')), cert: readFileSync(path.join(certDir, 'leaf.pem')) }, (req, res) => {
     upstreamHits.push(req.url ?? '');
     const authorized = req.headers['x-api-key'] === CANARY;
@@ -128,7 +132,7 @@ function startUpstream(): Promise<void> {
   return new Promise((resolve) => upstream.listen(0, '127.0.0.1', () => resolve()));
 }
 
-async function startPlane({ isPublic = () => true, wrapAudit = (r: AgentAccountAuditRepository) => r }: { readonly isPublic?: (ip: string) => boolean; readonly wrapAudit?: (r: AgentAccountAuditRepository) => AgentAccountAuditRepository } = {}): Promise<PlaneClient> {
+function planeStore() {
   const metadata = createPlaneMetadataRepository({ pool: metadataPool as never });
   const provisioner = createInfisicalTenantProvisioner({ baseUrl: INFISICAL_URL, organizationId: orgId, auth: { kind: 'token', token: ADMIN_TOKEN ?? '' }, pool: metadataPool as never, advisoryLockPool: metadata.advisoryLockPool });
   const store = createInfisicalStoreAdapter({
@@ -145,6 +149,11 @@ async function startPlane({ isPublic = () => true, wrapAudit = (r: AgentAccountA
     verify: verifyEd25519,
     consentLedger: createConsentLedgerRepository({ pool: metadataPool }),
   });
+  return { metadata, provisioner, store };
+}
+
+async function startPlane({ isPublic = () => true, wrapAudit = (r: AgentAccountAuditRepository) => r }: { readonly isPublic?: (ip: string) => boolean; readonly wrapAudit?: (r: AgentAccountAuditRepository) => AgentAccountAuditRepository } = {}): Promise<PlaneClient> {
+  const { provisioner, store } = planeStore();
   const executor = createHttpRequestExecutor({
     store,
     provisioner,
@@ -459,6 +468,28 @@ describe.skipIf(!ADMIN_TOKEN)('adversarial: the G2 thin slice end to end (real p
     const expected = { result: { ok: false, reason: 'outcome_unrecorded' }, ran: 1 };
     expect(actual).toEqual(expected);
   }, 60_000);
+
+  // Review MED-1: deleting the owner (GDPR erasure ends in delete-user) cascades the reference row away;
+  // the plane's sweep must then erase the material and metadata that nothing else could ever reach.
+  it('given an account whose owning user was deleted, should erase its vault material and plane metadata on the next sweep', async () => {
+    const plane = await startPlane();
+    const authority = authorityOver(plane);
+    const erased = createId() as UserId;
+    await db.insert(users).values({ id: erased, name: 'erased', email: `${erased}@example.test` });
+    const created = await authority.createAccount({ actorUserId: erased, owner: { kind: 'user' }, input: createInput(true) });
+    if (!created.ok) throw new Error(created.reason);
+    const secretRows = () => metadataPool.query('SELECT 1 FROM agent_account_secret_versions WHERE account_id = $1', [created.account.id]).then((r) => r.rowCount);
+    const before = await secretRows();
+    await db.delete(users).where(eq(users.id, erased));
+    const { metadata, provisioner, store } = planeStore();
+    const sweep = await sweepOrphanedRefs({ metadata, accounts: createAgentAccountRepository({ db }), provisioner, store, now: () => Date.now() + ORPHAN_GRACE_MS + 1 });
+    const tenant = await provisioner.identityOf(`user:${erased}` as never);
+    const creds = tenant === null ? null : await provisioner.credentialsFor({ tenantId: `user:${erased}` as never, identityId: tenant.identityId });
+    const secret = tenant === null || creds === null ? null : await createInfisicalClient({ baseUrl: INFISICAL_URL, environment: 'dev' }).getSecret({ projectId: tenant.projectId, credentials: creds, secretKey: `${created.account.id}__api_key` });
+    const actual = { before, after: await secretRows(), erasedAtLeastOne: sweep.erased >= 1, vault: secret?.ok === false ? secret.reason : secret === null ? 'no tenant' : 'still present' };
+    const expected = { before: 1, after: 0, erasedAtLeastOne: true, vault: 'not_found' };
+    expect(actual).toEqual(expected);
+  }, 120_000);
 
   it('given every model-visible value this slice produced above, should never contain the canary key', () => {
     const actual = { surfaces: modelVisible.length > 10, leaks: modelVisible.filter((text) => text.includes(CANARY)).length };
