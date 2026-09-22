@@ -1194,6 +1194,36 @@ describe('refresh coordination across providers and sign-ins', () => {
     expect(world.storage.getItem(pendingKey)).toContain('ps_rt_gil~1');
   });
 
+  it('a replaced sign-in whose write-ahead queue entry could not be written is still queued when its revocation fails', async () => {
+    const server = rotatingServer();
+    let revokeFails = true;
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).endsWith('/revoke') && revokeFails) {
+        revokeFails = false;
+        return jsonResponse(503, {});
+      }
+      return server.fetch(input, init);
+    }) as typeof fetch;
+    const world = sharedWorld(fetchImpl);
+    await world.signIn(world.make(), 'kai');
+    const realSetItem = world.storage.setItem.bind(world.storage);
+    let pendingWritesFail = true;
+    world.storage.setItem = (key, value) => {
+      if (pendingWritesFail && key.startsWith('pagespace.auth.revoke-pending')) throw new Error('QuotaExceededError');
+      realSetItem(key, value);
+    };
+    const auth = world.make();
+    const signingIn = world.signIn(auth, 'lia');
+    await signingIn;
+    pendingWritesFail = false; // storage recovers before the background revocation answers
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    await auth.signOut();
+
+    expect(server.revoked).toContain('ps_rt_kai~1');
+  });
+
   it('a queued revocation is cleared once the server accepts it', async () => {
     const server = rotatingServer();
     const world = sharedWorld(server.fetch);

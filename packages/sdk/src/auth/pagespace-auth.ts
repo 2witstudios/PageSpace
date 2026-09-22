@@ -518,7 +518,7 @@ export class PageSpaceAuth {
     });
     // One session per app and storage: the sign-in this one replaces is ended on the server, not just
     // forgotten — in the background (revokeToken never throws), so a slow endpoint does not delay sign-in.
-    if (outcome.replaced !== null) void this.#revokeReplaced(storage, outcome.replaced);
+    if (outcome.replaced !== null) this.#revokeReplaced(storage, outcome.replaced).catch(() => undefined);
     if (!outcome.persisted) {
       // A session exists only while its record is stored — that is what lets signOut() end it.
       // Tokens that could not be stored are revoked rather than left alive in memory.
@@ -638,10 +638,10 @@ export class PageSpaceAuth {
   async #revokeReplaced(storage: AuthStorage, replaced: StoredSession): Promise<void> {
     const token = tokenOf(replaced);
     const result = await this.#revokeAt(replaced.baseUrl, token);
-    // Already queued (write-ahead); a revocation the server accepted is taken off the queue.
-    if (result.outcome === 'revoked') {
-      await withSessionLock(this.#lockName, async () => this.#mergePendingRevocations(storage, replaced.baseUrl, { remove: [token], add: [] }));
-    }
+    // Queued write-ahead already; the server's answer settles it: accepted → off the queue, refused →
+    // (re-)queued, idempotently, in case the write-ahead entry could not be written at the time.
+    const change = result.outcome === 'revoked' ? { remove: [token], add: [] } : { remove: [], add: [token] };
+    await withSessionLock(this.#lockName, async () => this.#mergePendingRevocations(storage, replaced.baseUrl, change));
   }
 
   #invalidateProviders(): void {
