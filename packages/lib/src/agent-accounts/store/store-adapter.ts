@@ -522,22 +522,66 @@ export type PendingWrite = {
   readonly rotation: boolean;
 };
 
-/** SHA3-256 over `canonicalJson({ secretValue, secretComment })` of one Infisical write. */
+/**
+ * HMAC-SHA3-256 under the plane-held `WriteDigestKey` over
+ * `canonicalJson({ secretValue, secretComment })` of one Infisical write.
+ *
+ * AMENDED 2026-09-21 (G2 ruling 4). The first digest was an unkeyed hash, so a
+ * reader of the plane metadata row could recover the material from a known
+ * candidate set (a leaked key list, a key format with a short random tail).
+ */
 export type WriteDigest = Brand<string, 'WriteDigest'>;
 
-export type DigestWrite = (input: { readonly secretValue: string; readonly secretComment: string; readonly hash: HashBytes }) => WriteDigest;
+/**
+ * The plane-held HMAC key for `WriteDigest` (G2 ruling 4). Lives only in the
+ * credential plane's own process environment — never in the main DB, never in
+ * the web process — and is at least 32 bytes (`parseWriteDigestKey`).
+ */
+export type WriteDigestKey = Brand<Uint8Array, 'WriteDigestKey'>;
+
+/** Injected keyed MAC (HMAC-SHA3-256 in production), so pure modules never touch `node:crypto`. */
+export type HmacBytes = (key: Uint8Array, bytes: Uint8Array) => string;
+
+export type DigestWrite = (input: {
+  readonly secretValue: string;
+  readonly secretComment: string;
+  readonly key: WriteDigestKey;
+  readonly hmac: HmacBytes;
+}) => WriteDigest;
 
 /**
  * `decideReconcile` — pure (E1). The next adapter call on a reconcile-required
  * ref reads Infisical's current version and write digest under the advisory
  * lock and hands them here: `commit_forward` only when they are exactly the
- * pending write; otherwise `fail_closed` (the ref stays reconcile-required and
- * nothing is served or written).
+ * pending write; `abort_pending` when Infisical still holds the version the
+ * plane last committed (`current`) — every Infisical write creates a new
+ * version, so the replacing write provably did not land and the ref returns
+ * to service (G2 ruling E1(b)); otherwise `fail_closed` (the ref stays
+ * reconcile-required and nothing is served or written).
  */
 export type DecideReconcile = (input: {
   readonly pending: PendingWrite;
+  /** The plane's committed `currentVersion` — the version the pending write was replacing. */
+  readonly current: CredentialVersion;
   readonly observed: { readonly version: CredentialVersion; readonly digest: WriteDigest } | null;
-}) => { readonly outcome: 'commit_forward'; readonly version: CredentialVersion } | { readonly outcome: 'fail_closed' };
+}) =>
+  | { readonly outcome: 'commit_forward'; readonly version: CredentialVersion }
+  | { readonly outcome: 'abort_pending' }
+  | { readonly outcome: 'fail_closed' };
+
+/**
+ * Why a replacing Infisical write returned no version. `not_sent`: the adapter
+ * knows the request never left the process (login failed, request could not
+ * be built). Every other failure leaves the outcome unknown.
+ */
+export type WriteFailure = 'not_sent' | 'not_found' | 'unavailable';
+
+/**
+ * `decidePendingOnWriteFailure` — pure (G2 ruling E1(a)). A write that was
+ * never sent cannot have landed, so its marker is aborted in the same locked
+ * section; any other failure keeps it for `decideReconcile`.
+ */
+export type DecidePendingOnWriteFailure = (input: { readonly failure: WriteFailure }) => { readonly action: 'abort_pending' } | { readonly action: 'keep_pending' };
 
 /**
  * `decideOrphanAdoption` — pure (E1). A first put (no metadata row) that finds
