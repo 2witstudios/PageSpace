@@ -33,6 +33,7 @@ import type { KeyPlacement, AccountCreationRefusal } from './decide-account-crea
 import type { AuthorizeCaller, AuthorizeRefusal } from './authorize';
 import { decideAccountCreatePermission } from '../permissions/decide-account-create-permission';
 import { decideAccountAccess } from '../permissions/decide-account-access';
+import { decideAccountListView } from '../permissions/decide-account-list-view';
 import { isDriveWithinCredentialScope } from '../agent-workspaces/credential-scope';
 import { decideAccountCreation } from './decide-account-creation';
 import { deriveTenantId } from './store/derive-tenant-id';
@@ -158,9 +159,12 @@ export function createAccountAuthority(deps: AccountAuthorityDeps): AccountAutho
         consenters,
       });
       if (!put.ok) {
-        // Nothing usable was stored: the reference row goes too, so no account points at missing material.
-        await deps.accounts.remove(row.id);
-        return { ok: false, reason: put.reason === 'plane_unavailable' ? 'plane_unavailable' : 'store_refused' };
+        // A definite refusal stored nothing, so the row goes. Any uncertain failure (the plane was unreachable
+        // or timed out, the write could not be verified) may have left material in the vault: the row STAYS at
+        // credentialVersion 0 — listed as not ready, unusable, revocable — so nothing is orphaned (review MED-2).
+        const definite = put.reason === 'kind_mismatch' || put.reason === 'consenters_invalid' || put.reason === 'identity_refused' || put.reason === 'version_conflict';
+        if (definite) await deps.accounts.remove(row.id);
+        return { ok: false, reason: definite ? 'store_refused' : 'plane_unavailable' };
       }
       await deps.accounts.setCredentialVersion({ id: row.id, version: put.version });
       const stored = await deps.accounts.find(row.id);
@@ -169,11 +173,14 @@ export function createAccountAuthority(deps: AccountAuthorityDeps): AccountAutho
 
     async listAccounts({ actorUserId, owner }) {
       if (owner.kind === 'user') return (await deps.accounts.listForUser(actorUserId)).map((row) => toSafeAccount({ row }));
-      const rows = await deps.accounts.listForAgentPage(owner.agentPageId);
-      const visible: SafeAccount[] = [];
-      for (const row of rows) if ((await accessOf(row, actorUserId)).view) visible.push(toSafeAccount({ row }));
-      // No row visible and none to see are the same answer to a caller who may not view the page's accounts.
-      return rows.length > 0 && visible.length === 0 ? null : visible;
+      // Decided from the caller's standing on the page BEFORE any row is read, so a refusal says nothing about
+      // whether the page has accounts (review LOW-2).
+      const driveId = await deps.facts.pageDrive(owner.agentPageId);
+      if (driveId === null) return null;
+      const humanDriveRole = await deps.facts.driveRole({ driveId, userId: actorUserId });
+      const pagePermission = await deps.facts.pagePermission({ userId: actorUserId, pageId: owner.agentPageId });
+      if (!decideAccountListView({ humanDriveRole, pagePermission })) return null;
+      return (await deps.accounts.listForAgentPage(owner.agentPageId)).map((row) => toSafeAccount({ row }));
     },
 
     async revokeAccount({ actorUserId, accountId }) {
@@ -218,7 +225,7 @@ export function createAccountAuthority(deps: AccountAuthorityDeps): AccountAutho
       if (verdict.approvalToConsume !== null) {
         // The approval is spent BY this grant (ADR 0004 §4.3): the verifier accepts it only for this grantId.
         const consumed = await deps.accounts.consumeApproval({ approvalId: verdict.approvalToConsume, grantId: verdict.grant.grantId, now });
-        if (!consumed) return { ok: false, reason: 'approval_required', digest: verdict.grant.requestDigest, subject: renderApprovalSubject({ canonical: verdict.canonical }), stepUp: false };
+        if (!consumed) return { ok: false, reason: 'approval_required', digest: verdict.grant.requestDigest, subject: renderApprovalSubject({ canonical: verdict.canonical }), stepUp: verdict.approvalStepUp };
       }
 
       const signature = signGrant({ grant: verdict.grant, key: deps.authorityKey });

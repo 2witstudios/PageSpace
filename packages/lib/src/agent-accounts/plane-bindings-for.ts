@@ -6,7 +6,10 @@
  * function, or every grant would be `binding_mismatch`.
  *
  * Bound agent pages: the owner page of an agent-page-owned account, plus the
- * unrevoked `agent_account_bindings` the repository read; deduplicated and
+ * unrevoked `agent_account_bindings` the repository read. NOTE (review LOW-6):
+ * no G2 path creates a binding; whatever later does MUST write the new scope
+ * to the plane through `rebind`, or every grant for that account is
+ * `binding_mismatch` at resolve; deduplicated and
  * sorted (the plane digest sorts them too, but the record is stored as
  * built). The approval policy is taken VERBATIM from the row — the plane
  * digests the stored bytes, so any normalization here would diverge. Pure.

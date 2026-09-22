@@ -46,6 +46,7 @@ const verifyEd25519: Ed25519Verify = (message, signature, publicKey) => {
 };
 /** What the executor may release toward a model, per response. */
 const MAX_RELEASED_BODY_BYTES = 256 * 1024;
+const DNS_TIMEOUT_MS = 5_000;
 
 export async function startCredentialPlane({ config }: { readonly config: PlaneConfig }): Promise<Server> {
   const metadataPool = new Pool({ connectionString: config.metadataDatabaseUrl });
@@ -72,7 +73,14 @@ export async function startCredentialPlane({ config }: { readonly config: PlaneC
     grantGate: createGrantGate({ replayStore: createReplayStoreRepository({ db }) }),
     audited: createAuditedExecutor({ auditRepository: createAgentAccountAuditRepository({ appendPath: createSecurityAuditRepository({ db }) }), hash: sha3 }),
     network: createPinnedHttpsClient({
-      resolveHost: async (hostname) => (await lookup(hostname, { all: true, verbatim: true })).map((answer) => ({ address: answer.address, family: answer.family === 6 ? 6 : 4 })),
+      // DNS gets its own deadline: the pinned client's timer starts only at connect (review HIGH-2).
+      resolveHost: async (hostname) => {
+        const answers = await Promise.race([
+          lookup(hostname, { all: true, verbatim: true }),
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error('dns timeout')), DNS_TIMEOUT_MS)),
+        ]);
+        return answers.map((answer) => ({ address: answer.address, family: answer.family === 6 ? 6 : 4 }));
+      },
       isPublic: isPublicIp,
       limits: DEFAULT_PINNED_HTTPS_LIMITS,
     }),

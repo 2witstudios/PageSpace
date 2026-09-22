@@ -20,7 +20,8 @@ export type PlaneCallFailure =
   | { readonly kind: 'network'; readonly code: string | null }
   | { readonly kind: 'status'; readonly status: number };
 
-const NEVER_REACHED: ReadonlySet<string> = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN']);
+/** Node surfaces `ECONNREFUSED`/`ENOTFOUND`/`EAI_AGAIN`; Bun surfaces `ConnectionRefused`. */
+const NEVER_REACHED: ReadonlySet<string> = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ConnectionRefused']);
 
 export function classifyPlaneCallFailure({ route, failure }: { readonly route: PlaneRoute; readonly failure: PlaneCallFailure }): 'plane_unavailable' | 'outcome_unknown' | 'refused' {
   if (route !== 'execute') return 'plane_unavailable';

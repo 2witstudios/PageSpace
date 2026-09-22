@@ -25,8 +25,8 @@ describe('classifyPlaneCallFailure', () => {
   });
 
   it('given execute failing before the plane could receive it, should report plane_unavailable', () => {
-    const actual = ['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN'].map((code) => classifyPlaneCallFailure({ route: 'execute', failure: { kind: 'network', code } }));
-    const expected = ['plane_unavailable', 'plane_unavailable', 'plane_unavailable'];
+    const actual = ['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ConnectionRefused'].map((code) => classifyPlaneCallFailure({ route: 'execute', failure: { kind: 'network', code } }));
+    const expected = ['plane_unavailable', 'plane_unavailable', 'plane_unavailable', 'plane_unavailable'];
     expect(actual).toEqual(expected);
   });
 
