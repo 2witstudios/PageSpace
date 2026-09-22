@@ -82,7 +82,7 @@ const INTERNAL_ZONES: readonly string[] = Object.freeze([
   'metadata.goog',
   'metadata.azure.com',
   'instance-data',
-  ...buildInternalSurfaceDenyRules().map((rule) => rule.domain.replace(/^\*\./, '')),
+  ...buildInternalSurfaceDenyRules().map((rule) => String(rule.domain).replace(/^\*\./, '')),
 ]);
 
 const isInternalHost = (host: string): boolean => INTERNAL_ZONES.some((zone) => host === zone || host.endsWith(`.${zone}`));

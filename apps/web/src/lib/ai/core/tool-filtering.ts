@@ -7,6 +7,7 @@
 
 import { SANDBOX_CORE_TOOL_NAMES } from '../tools/sandbox-tools';
 import { SANDBOX_GIT_TOOL_NAMES } from '../tools/sandbox-git-tools';
+import { BROWSER_MUTATING_TOOL_NAMES, BROWSER_TOOL_NAMES } from '@pagespace/browser-worker/browser-tool-name';
 import { parseIntegrationToolName } from '@pagespace/lib/integrations/converter/ai-sdk';
 
 // Tools that modify content (excluded in read-only mode; also used by elision to protect side-effectful results)
@@ -140,6 +141,9 @@ export const WRITE_TOOLS = new Set([
   'spawn_shell',
   'send_shell',
   'kill_shell',
+  // Browser operations that can change the page or submit to the web (G6a).
+  // browser_read and browser_screenshot only observe and stay available.
+  ...BROWSER_MUTATING_TOOL_NAMES,
 ]);
 
 // Web search tools (excluded when web search is disabled)
@@ -232,6 +236,9 @@ export const SANDBOX_TOOL_NAMES: ReadonlySet<string> = new Set([
   ...SANDBOX_CORE_TOOL_NAMES,
   ...SANDBOX_GIT_TOOL_NAMES,
   ...SESSION_FAMILY_TOOL_NAMES,
+  // The browser runs on a machine of its own (G6a) — the same per-agent switch
+  // that enables the sandbox enables it.
+  ...BROWSER_TOOL_NAMES,
 ]);
 
 /**
@@ -267,6 +274,8 @@ export const SANDBOX_COMPUTE_TOOL_NAMES: ReadonlySet<string> = new Set([
   'send_shell',
   'read_shell',
   'kill_shell',
+  // A browser session is a billable machine like a sandbox (G6a, S3 R14).
+  ...BROWSER_TOOL_NAMES,
 ]);
 
 /**

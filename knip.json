@@ -591,6 +591,17 @@
         "@types/xlsx"
       ]
     },
+    "packages/browser-worker": {
+      "entry": [
+        "src/*.ts"
+      ],
+      "project": [
+        "src/**/*.ts"
+      ],
+      "ignore": [
+        "src/**/__tests__/**"
+      ]
+    },
     "packages/editor": {
       "entry": [
         "src/*.ts"

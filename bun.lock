@@ -329,6 +329,7 @@
         "@fly/sprites": "0.0.1-rc37",
         "@monaco-editor/react": "^4.7.0",
         "@openrouter/ai-sdk-provider": "^2.10.0",
+        "@pagespace/browser-worker": "workspace:*",
         "@pagespace/db": "workspace:*",
         "@pagespace/editor": "workspace:*",
         "@pagespace/lib": "workspace:*",
