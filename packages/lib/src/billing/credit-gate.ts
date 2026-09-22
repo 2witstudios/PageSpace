@@ -1,6 +1,7 @@
 /**
  * credit-gate — the fast, pre-request prepaid check. Reads the denormalized
- * credit_balances row and asks the pure evaluateGate whether the user may spend.
+ * personal root wallet (the former credit_balances row) and asks the pure evaluateGate
+ * whether the user may spend.
  * Never calls Stripe; the hot path stays a single indexed read.
  *
  * A missing balance row is lazy-initialized from the tier's allowance (this is how a
@@ -19,7 +20,8 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { creditBalances, creditHolds, creditLedger } from '@pagespace/db/schema/credits';
+import { creditHolds, creditLedger } from '@pagespace/db/schema/credits';
+import { wallets, personalRootWalletOf, PERSONAL_ROOT_WALLET_ARBITER } from '@pagespace/db/schema/wallets';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { subscriptions } from '@pagespace/db/schema/subscriptions';
 import { and, eq, gt, gte, inArray, sql } from '@pagespace/db/operators';
@@ -44,6 +46,7 @@ import {
 import { readSpendableCents } from './credit-balance';
 import { tierAllowanceCents } from './money-model';
 import { isSubscriptionTier } from './subscription-tiers';
+import { ensurePersonalRootWalletId } from './personal-wallet';
 import type { SubscriptionTier } from '../services/subscription-utils';
 
 // The partial unique index credit_ledger_stripe_ref_unique is defined WHERE
@@ -82,6 +85,8 @@ export function startOfUtcDay(from: Date): Date {
 }
 
 interface BalanceRow {
+  /** The personal root wallet's id (WAL-5): every ledger and hold row written here names it. */
+  id: string;
   monthlyRemainingCents: number;
   topupRemainingCents: number;
   debtCents: number;
@@ -106,9 +111,10 @@ export const RENEWAL_CAPABLE_STATUSES = ['active', 'trialing', 'past_due', 'unpa
  * it the exactly-once key shared by the lazy-init path and the bare-row starter-grant
  * path, so whichever lands first wins and the other is a no-op.
  */
-function starterGrantLedgerRow(userId: string, monthly: number) {
+function starterGrantLedgerRow(userId: string, walletId: string, monthly: number) {
   return {
     userId,
+    walletId,
     entryType: 'monthly_grant',
     bucket: 'monthly',
     amountCents: monthly,
@@ -225,9 +231,12 @@ export async function canConsumeAI(
         capCents: ceiling,
       });
       if (!cap.allowed) return { allowed: false, reason: cap.reason };
+      // Holds are per wallet (WAL-5). A billing-off deployment has no balance, so the
+      // user's personal root wallet may not exist yet; a bare one carries no money.
+      const walletId = await ensurePersonalRootWalletId(tx, userId);
       const inserted = await tx
         .insert(creditHolds)
-        .values({ userId, estCents: estCost, expiresAt })
+        .values({ userId, walletId, estCents: estCost, expiresAt })
         .returning({ id: creditHolds.id });
       return { allowed: true, reason: 'unlimited', holdId: inserted[0]?.id };
     });
@@ -238,13 +247,14 @@ export async function canConsumeAI(
   const readBalance = async (): Promise<BalanceRow | null> => {
     const rows = await db
       .select({
-        monthlyRemainingCents: creditBalances.monthlyRemainingCents,
-        topupRemainingCents: creditBalances.topupRemainingCents,
-        debtCents: creditBalances.debtCents,
-        monthlyPeriodEnd: creditBalances.monthlyPeriodEnd,
+        id: wallets.id,
+        monthlyRemainingCents: wallets.monthlyRemainingCents,
+        topupRemainingCents: wallets.topupRemainingCents,
+        debtCents: wallets.debtCents,
+        monthlyPeriodEnd: wallets.monthlyPeriodEnd,
       })
-      .from(creditBalances)
-      .where(eq(creditBalances.userId, userId))
+      .from(wallets)
+      .where(personalRootWalletOf(userId))
       .limit(1);
     return rows[0] ?? null;
   };
@@ -297,12 +307,13 @@ export async function canConsumeAI(
       // us to observe any settle/top-up that committed since the unlocked pre-check.
       const lockedRows = await tx
         .select({
-          monthlyRemainingCents: creditBalances.monthlyRemainingCents,
-          debtCents: creditBalances.debtCents,
-          monthlyPeriodEnd: creditBalances.monthlyPeriodEnd,
+          id: wallets.id,
+          monthlyRemainingCents: wallets.monthlyRemainingCents,
+          debtCents: wallets.debtCents,
+          monthlyPeriodEnd: wallets.monthlyPeriodEnd,
         })
-        .from(creditBalances)
-        .where(eq(creditBalances.userId, userId))
+        .from(wallets)
+        .where(personalRootWalletOf(userId))
         .for('update');
       const locked = lockedRows[0] ?? null;
 
@@ -336,7 +347,7 @@ export async function canConsumeAI(
       );
 
       await tx
-        .update(creditBalances)
+        .update(wallets)
         .set({
           monthlyRemainingCents: refill.monthlyRemainingCents,
           monthlyAllowanceCents: refill.monthlyAllowanceCents,
@@ -346,7 +357,7 @@ export async function canConsumeAI(
           monthlyPeriodStart: now,
           monthlyPeriodEnd: newEnd,
         })
-        .where(eq(creditBalances.userId, userId));
+        .where(personalRootWalletOf(userId));
 
       // Record the grant. We only reach here holding the lock with a confirmed-expired
       // window, so this call owns the reset; onConflictDoNothing on the period-keyed
@@ -355,6 +366,7 @@ export async function canConsumeAI(
         .insert(creditLedger)
         .values({
           userId,
+          walletId: locked.id,
           entryType: 'monthly_grant',
           bucket: 'monthly',
           amountCents: refill.monthlyAllowanceCents,
@@ -380,7 +392,7 @@ export async function canConsumeAI(
     const monthly = tierAllowanceCents(tier);
     await db.transaction(async (tx) => {
       const balanceInserted = await tx
-        .insert(creditBalances)
+        .insert(wallets)
         .values({
           userId,
           monthlyRemainingCents: monthly,
@@ -389,8 +401,8 @@ export async function canConsumeAI(
           monthlyPeriodStart: now,
           monthlyPeriodEnd: addOneMonth(now),
         })
-        .onConflictDoNothing({ target: creditBalances.userId })
-        .returning({ userId: creditBalances.userId });
+        .onConflictDoNothing(PERSONAL_ROOT_WALLET_ARBITER)
+        .returning({ id: wallets.id });
       // Only record the grant when THIS transaction created the balance row.
       // If a concurrent top-up or invoice.paid already created the row between
       // readBalance() and here, balanceInserted is empty and we skip the ledger
@@ -399,7 +411,7 @@ export async function canConsumeAI(
       if (balanceInserted.length > 0) {
         await tx
           .insert(creditLedger)
-          .values(starterGrantLedgerRow(userId, monthly))
+          .values(starterGrantLedgerRow(userId, balanceInserted[0].id, monthly))
           .onConflictDoNothing(STRIPE_REF_ARBITER);
       }
     });
@@ -407,7 +419,7 @@ export async function canConsumeAI(
 
   // Starter grant for a NON-refilling tier whose row already exists but was never
   // granted. A top-up purchase before the user's first AI call (or a top-up racing
-  // the lazy-init above, caught on the next call) creates a bare credit_balances
+  // the lazy-init above, caught on the next call) creates a bare personal wallet
   // row with no period stamped.
   // A refilling tier gets such a row rolled by the reset path; free is excluded from
   // that path, so without this branch a user who bought credits first would
@@ -419,22 +431,23 @@ export async function canConsumeAI(
   // concurrent top-up's own locked write to the same row.
   if (row && row.monthlyPeriodEnd === null && isOneTimeAllowanceTier(tier)) {
     const monthly = tierAllowanceCents(tier);
+    const walletId = row.id;
     await db.transaction(async (tx) => {
       const granted = await tx
         .insert(creditLedger)
-        .values(starterGrantLedgerRow(userId, monthly))
+        .values(starterGrantLedgerRow(userId, walletId, monthly))
         .onConflictDoNothing(STRIPE_REF_ARBITER)
         .returning({ id: creditLedger.id });
       if (granted.length === 0) return;
       await tx
-        .update(creditBalances)
+        .update(wallets)
         .set({
-          monthlyRemainingCents: sql`${creditBalances.monthlyRemainingCents} + ${monthly}`,
+          monthlyRemainingCents: sql`${wallets.monthlyRemainingCents} + ${monthly}`,
           monthlyAllowanceCents: monthly,
           monthlyPeriodStart: now,
           monthlyPeriodEnd: addOneMonth(now),
         })
-        .where(eq(creditBalances.userId, userId));
+        .where(personalRootWalletOf(userId));
     });
     row = await readBalance();
   }
@@ -469,13 +482,14 @@ export async function canConsumeAI(
   const result = await db.transaction(async (tx): Promise<GateResult> => {
     const balRows = await tx
       .select({
-        monthlyRemainingCents: creditBalances.monthlyRemainingCents,
-        topupRemainingCents: creditBalances.topupRemainingCents,
-        debtCents: creditBalances.debtCents,
-        monthlyPeriodEnd: creditBalances.monthlyPeriodEnd,
+        id: wallets.id,
+        monthlyRemainingCents: wallets.monthlyRemainingCents,
+        topupRemainingCents: wallets.topupRemainingCents,
+        debtCents: wallets.debtCents,
+        monthlyPeriodEnd: wallets.monthlyPeriodEnd,
       })
-      .from(creditBalances)
-      .where(eq(creditBalances.userId, userId))
+      .from(wallets)
+      .where(personalRootWalletOf(userId))
       .for('update');
     const bal = balRows[0] ?? null;
 
@@ -521,7 +535,8 @@ export async function canConsumeAI(
       maxInFlight,
     });
 
-    if (!result.allowed) return result;
+    // evaluateGate never allows a missing balance (needs_init), so `bal` is set past here.
+    if (!result.allowed || !bal) return result;
 
     // Per-user/day exposure cap: a runaway loop can stay within the in-flight cap yet
     // accrue real cost all day. Checked only on the allow path (the credit gate denied
@@ -558,7 +573,7 @@ export async function canConsumeAI(
     // reconcile sweep to expire.
     const inserted = await tx
       .insert(creditHolds)
-      .values({ userId, estCents: estCost, expiresAt })
+      .values({ userId, walletId: bal.id, estCents: estCost, expiresAt })
       .returning({ id: creditHolds.id });
 
     // Net spendable after ALL holds (existing `reserved` + this call's `estCost`) and

@@ -7,6 +7,10 @@
       "types": "./dist/db.d.ts",
       "default": "./dist/db.js"
     },
+    "./wallet-backfill": {
+      "types": "./dist/wallet-backfill.d.ts",
+      "default": "./dist/wallet-backfill.js"
+    },
     "./advisory-lock": {
       "types": "./dist/advisory-lock.d.ts",
       "default": "./dist/advisory-lock.js"
@@ -226,6 +230,10 @@
     "./schema/credits": {
       "types": "./dist/schema/credits.d.ts",
       "default": "./dist/schema/credits.js"
+    },
+    "./schema/wallets": {
+      "types": "./dist/schema/wallets.d.ts",
+      "default": "./dist/schema/wallets.js"
     },
     "./schema/tasks": {
       "types": "./dist/schema/tasks.d.ts",

@@ -21,7 +21,9 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
-import { creditBalances, creditHolds, creditLedger } from '@pagespace/db/schema/credits';
+import { creditHolds, creditLedger } from '@pagespace/db/schema/credits';
+import { wallets } from '@pagespace/db/schema/wallets';
+import { users } from '@pagespace/db/schema/auth';
 import { factories } from '@pagespace/db/test/factories';
 import { canConsumeAI, addOneMonth } from '../credit-gate';
 import { RESERVE_FLOOR_CENTS, CREDIT_HOLD_ESTIMATE_CENTS } from '../credit-pricing';
@@ -31,10 +33,10 @@ let dbAvailable = false;
 
 const originalProCap = process.env.DAILY_CAP_PRO_CENTS;
 
-/** Insert a balance row directly (bypassing the gate's lazy-init) with a live monthly window. */
-async function seedBalance(userId: string, monthlyRemainingCents: number): Promise<void> {
+/** Insert a personal root wallet directly (bypassing the gate's lazy-init) with a live monthly window. */
+async function seedBalance(userId: string, monthlyRemainingCents: number): Promise<string> {
   const now = new Date();
-  await db.insert(creditBalances).values({
+  const [wallet] = await db.insert(wallets).values({
     userId,
     monthlyRemainingCents,
     monthlyAllowanceCents: monthlyRemainingCents,
@@ -43,20 +45,22 @@ async function seedBalance(userId: string, monthlyRemainingCents: number): Promi
     pendingMillicents: 0,
     monthlyPeriodStart: now,
     monthlyPeriodEnd: addOneMonth(now),
-  });
+  }).returning({ id: wallets.id });
+  return wallet.id;
 }
 
 async function cleanup(userId: string): Promise<void> {
   // FK-safe order: holds + ledger reference the user; delete them before the balance/user.
   await db.delete(creditHolds).where(eq(creditHolds.userId, userId));
   await db.delete(creditLedger).where(eq(creditLedger.userId, userId));
-  await db.delete(creditBalances).where(eq(creditBalances.userId, userId));
+  await db.delete(wallets).where(eq(wallets.userId, userId));
+  await db.delete(users).where(eq(users.id, userId));
 }
 
 describe('canConsumeAI concurrency (Postgres row lock)', () => {
   beforeAll(async () => {
     try {
-      await db.select().from(creditBalances).limit(1);
+      await db.select().from(wallets).limit(1);
       dbAvailable = true;
     } catch (error) {
       requireDb('credit-gate-concurrency.integration.test.ts', error);
@@ -84,7 +88,7 @@ describe('canConsumeAI concurrency (Postgres row lock)', () => {
       // the denial is purely the credit decision the lock must serialize.)
       expect(CREDIT_HOLD_ESTIMATE_CENTS).toBe(25);
       expect(RESERVE_FLOOR_CENTS).toBe(25);
-      await seedBalance(user.id, 60);
+      const walletId = await seedBalance(user.id, 60);
 
       const N = 8;
       const results = await Promise.all(
@@ -102,6 +106,8 @@ describe('canConsumeAI concurrency (Postgres row lock)', () => {
       // and all insert a hold.
       const holds = await db.select().from(creditHolds).where(eq(creditHolds.userId, user.id));
       expect(holds).toHaveLength(1);
+      // WAL-5: holds are per wallet — the reservation is against the personal root wallet.
+      expect(holds[0].walletId).toBe(walletId);
       expect(allowed[0].holdId).toBe(holds[0].id);
     } finally {
       await cleanup(user.id);

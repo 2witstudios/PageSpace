@@ -7,7 +7,8 @@ import { sql, eq, and, or, gt, asc, gte, lte, lt, desc, count, inArray, isNull, 
 import { users } from '@pagespace/db/schema/auth'
 import { apiMetrics, aiUsageLogs, systemLogs, errorLogs, activityLogs } from '@pagespace/db/schema/monitoring';
 import { sessions } from '@pagespace/db/schema/sessions';
-import { creditLedger, creditBalances, creditHolds } from '@pagespace/db/schema/credits';
+import { creditLedger, creditHolds } from '@pagespace/db/schema/credits';
+import { wallets, isPersonalRootWallet } from '@pagespace/db/schema/wallets';
 import { subscriptions } from '@pagespace/db/schema/subscriptions';
 import type { SQL } from '@pagespace/db/operators';
 import { computeBalanceDrift, isNegativeMargin } from '@pagespace/lib/billing/credit-core';
@@ -456,7 +457,7 @@ export interface UnitEconomicsSummary {
   requestCount: number;
   /**
    * Total outstanding user debt as an ALL-TIME point-in-time snapshot of
-   * `credit_balances.debtCents`. Unlike the other fields, it is NOT scoped to
+   * `wallets.debtCents (personal root wallets)`. Unlike the other fields, it is NOT scoped to
    * the summary's start/end date range — debt has no time dimension.
    */
   debtCents: number;
@@ -559,8 +560,9 @@ export async function getUnitEconomicsSummary(
     .where(and(...usageConditions(startDate, endDate)));
 
   const debt = await db
-    .select({ debtCents: sql<number>`COALESCE(SUM(${creditBalances.debtCents}), 0)::int` })
-    .from(creditBalances);
+    .select({ debtCents: sql<number>`COALESCE(SUM(${wallets.debtCents}), 0)::int` })
+    .from(wallets)
+    .where(isPersonalRootWallet());
 
   const realCostCents = usage[0]?.realCostCents ?? 0;
   const chargedCents = usage[0]?.chargedCents ?? 0;
@@ -713,15 +715,15 @@ export async function getMarginByTier(
 export async function getOutstandingDebtByUser(limit = 10): Promise<DebtByUserRow[]> {
   const rows = await db
     .select({
-      userId: creditBalances.userId,
+      userId: users.id,
       userName: users.name,
       userEmail: users.email,
-      debtCents: creditBalances.debtCents,
+      debtCents: wallets.debtCents,
     })
-    .from(creditBalances)
-    .innerJoin(users, eq(creditBalances.userId, users.id))
-    .where(gt(creditBalances.debtCents, 0))
-    .orderBy(desc(creditBalances.debtCents))
+    .from(wallets)
+    .innerJoin(users, eq(wallets.userId, users.id))
+    .where(and(isPersonalRootWallet(), gt(wallets.debtCents, 0)))
+    .orderBy(desc(wallets.debtCents))
     .limit(limit);
 
   return (await decryptUserDisplayFields(rows)).map((r) => ({
@@ -748,25 +750,26 @@ export async function getBalanceDriftAlerts(
 ): Promise<BalanceDriftRow[]> {
   const rows = await db
     .select({
-      userId: creditBalances.userId,
+      userId: users.id,
       userName: users.name,
       userEmail: users.email,
-      materializedSpendableCents: sql<number>`(${creditBalances.monthlyRemainingCents} + ${creditBalances.topupRemainingCents})::int`,
-      debtCents: creditBalances.debtCents,
+      materializedSpendableCents: sql<number>`(${wallets.monthlyRemainingCents} + ${wallets.topupRemainingCents})::int`,
+      debtCents: wallets.debtCents,
       grantCents: sql<number>`COALESCE(SUM(CASE WHEN ${creditLedger.entryType} IN ('monthly_grant', 'topup_purchase') THEN ${creditLedger.amountCents} ELSE 0 END), 0)::int`,
       appliedUsageCents: sql<number>`COALESCE(SUM(CASE WHEN ${creditLedger.entryType} = 'usage' THEN ABS(${creditLedger.appliedCents}) ELSE 0 END), 0)::int`,
       adjustmentCents: sql<number>`COALESCE(SUM(CASE WHEN ${creditLedger.entryType} = 'adjustment' THEN COALESCE(${creditLedger.appliedCents}, 0) ELSE 0 END), 0)::int`,
     })
-    .from(creditBalances)
-    .innerJoin(users, eq(creditBalances.userId, users.id))
-    .leftJoin(creditLedger, eq(creditLedger.userId, creditBalances.userId))
+    .from(wallets)
+    .innerJoin(users, eq(wallets.userId, users.id))
+    .leftJoin(creditLedger, eq(creditLedger.walletId, wallets.id))
+    .where(isPersonalRootWallet())
     .groupBy(
-      creditBalances.userId,
+      users.id,
       users.name,
       users.email,
-      creditBalances.monthlyRemainingCents,
-      creditBalances.topupRemainingCents,
-      creditBalances.debtCents,
+      wallets.monthlyRemainingCents,
+      wallets.topupRemainingCents,
+      wallets.debtCents,
     );
 
   return (await decryptUserDisplayFields(rows))
@@ -1113,9 +1116,10 @@ export async function getCreditRevenue(
   // not from the range-scoped grant rows above, so it is a liability, not a flow.
   const outstanding = await db
     .select({
-      includedCreditLiabilityCents: sql<number>`COALESCE(SUM(${creditBalances.monthlyRemainingCents}), 0)::double precision`,
+      includedCreditLiabilityCents: sql<number>`COALESCE(SUM(${wallets.monthlyRemainingCents}), 0)::double precision`,
     })
-    .from(creditBalances);
+    .from(wallets)
+    .where(isPersonalRootWallet());
 
   return {
     topupCents,
@@ -1181,11 +1185,12 @@ export async function getActiveSubscriptionsByTier(): Promise<SubscriptionsByTie
 export async function getCreditLiability(): Promise<CreditLiability> {
   const rows = await db
     .select({
-      monthlyRemainingCents: sql<number>`COALESCE(SUM(${creditBalances.monthlyRemainingCents}), 0)::double precision`,
-      topupRemainingCents: sql<number>`COALESCE(SUM(${creditBalances.topupRemainingCents}), 0)::double precision`,
+      monthlyRemainingCents: sql<number>`COALESCE(SUM(${wallets.monthlyRemainingCents}), 0)::double precision`,
+      topupRemainingCents: sql<number>`COALESCE(SUM(${wallets.topupRemainingCents}), 0)::double precision`,
       userCount: count(),
     })
-    .from(creditBalances);
+    .from(wallets)
+    .where(isPersonalRootWallet());
 
   const monthlyRemainingCents = rows[0]?.monthlyRemainingCents ?? 0;
   const topupRemainingCents = rows[0]?.topupRemainingCents ?? 0;

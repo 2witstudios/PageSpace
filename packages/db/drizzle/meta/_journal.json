@@ -2087,6 +2087,41 @@
       "when": 1790027113093,
       "tag": "0297_aromatic_smiling_tiger",
       "breakpoints": true
+    },
+    {
+      "idx": 298,
+      "version": "7",
+      "when": 1790030988036,
+      "tag": "0298_quick_falcon",
+      "breakpoints": true
+    },
+    {
+      "idx": 299,
+      "version": "7",
+      "when": 1790031025576,
+      "tag": "0299_wallets_drop_user_primary_key",
+      "breakpoints": true
+    },
+    {
+      "idx": 300,
+      "version": "7",
+      "when": 1790031038888,
+      "tag": "0300_wallets_owner_subject_parent_and_wallet_ids",
+      "breakpoints": true
+    },
+    {
+      "idx": 301,
+      "version": "7",
+      "when": 1790031046674,
+      "tag": "0301_wallets_backfill_wallet_ids",
+      "breakpoints": true
+    },
+    {
+      "idx": 302,
+      "version": "7",
+      "when": 1790031078207,
+      "tag": "0302_wallet_ids_required",
+      "breakpoints": true
     }
   ]
 }

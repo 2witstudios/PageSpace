@@ -3,7 +3,13 @@ import { createId } from '@paralleldrive/cuid2';
 import { factories } from '@pagespace/db/test/factories';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
-import { creditBalances, creditLedger, creditHolds } from '@pagespace/db/schema/credits';
+import { creditLedger, creditHolds } from '@pagespace/db/schema/credits';
+import {
+  wallets,
+  personalRootWalletOf,
+  PERSONAL_ROOT_WALLET_ARBITER,
+  PERSONAL_ROOT_WALLET_UPSERT_TARGET,
+} from '@pagespace/db/schema/wallets';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { mcpTokens } from '@pagespace/db/schema/auth';
 import { conversations } from '@pagespace/db/schema/conversations';
@@ -17,6 +23,13 @@ import type { SubscriptionTier as Tier } from '@pagespace/lib/billing/subscripti
 export type { Tier };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** The user's personal root wallet id (the former credit_balances row), created bare if absent. */
+async function personalWalletId(userId: string): Promise<string> {
+  await db.insert(wallets).values({ ownerType: 'user', userId }).onConflictDoNothing(PERSONAL_ROOT_WALLET_ARBITER);
+  const [row] = await db.select({ id: wallets.id }).from(wallets).where(personalRootWalletOf(userId));
+  return row.id;
+}
 
 export interface SeededUser {
   userId: string;
@@ -95,16 +108,16 @@ export async function setBalance(
     updatedAt: new Date(now),
   };
   await db
-    .insert(creditBalances)
+    .insert(wallets)
     .values(row)
-    .onConflictDoUpdate({ target: creditBalances.userId, set: row });
+    .onConflictDoUpdate({ ...PERSONAL_ROOT_WALLET_UPSERT_TARGET, set: row });
 }
 
 export async function getBalance(userId: string) {
   const [row] = await db
     .select()
-    .from(creditBalances)
-    .where(eq(creditBalances.userId, userId));
+    .from(wallets)
+    .where(personalRootWalletOf(userId));
   return row ?? null;
 }
 
@@ -120,8 +133,9 @@ export async function getHolds(userId: string) {
 /** Pre-seed N active (non-expired) holds to simulate concurrent in-flight calls. */
 export async function seedHolds(userId: string, count: number, estCents = 25): Promise<void> {
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+  const walletId = await personalWalletId(userId);
   for (let i = 0; i < count; i++) {
-    await db.insert(creditHolds).values({ userId, estCents, expiresAt });
+    await db.insert(creditHolds).values({ userId, walletId, estCents, expiresAt });
   }
 }
 
@@ -265,6 +279,7 @@ export async function seedPendingReconcileCall(
 
   await db.insert(creditLedger).values({
     userId,
+    walletId: await personalWalletId(userId),
     entryType: 'usage',
     bucket: 'monthly',
     amountCents: -opts.chargedCents,

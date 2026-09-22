@@ -19,12 +19,14 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { creditBalances, creditLedger, creditHolds } from '@pagespace/db/schema/credits';
+import { creditLedger, creditHolds } from '@pagespace/db/schema/credits';
+import { wallets, personalRootWalletOf } from '@pagespace/db/schema/wallets';
 import { eq, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
 import { chargeMillicents, accruePending, allocateSpend } from './credit-core';
 import { MARKUP_BPS } from './credit-pricing';
 import { emitCreditsUpdated } from './credit-emit';
+import { ensurePersonalRootWalletId } from './personal-wallet';
 import { loggers } from '../logging/logger-config';
 
 export interface ConsumeCreditsInput {
@@ -89,11 +91,12 @@ async function decrementAndSettle(
 ): Promise<boolean> {
   const rows = await tx
     .select()
-    .from(creditBalances)
-    .where(eq(creditBalances.userId, userId))
+    .from(wallets)
+    .where(personalRootWalletOf(userId))
     .for('update');
   const bal = rows[0] as
     | {
+        id: string;
         monthlyRemainingCents: number;
         topupRemainingCents: number;
         pendingMillicents: number;
@@ -123,7 +126,7 @@ async function decrementAndSettle(
   );
 
   await tx
-    .update(creditBalances)
+    .update(wallets)
     .set({
       monthlyRemainingCents: spend.monthlyCents,
       topupRemainingCents: spend.topupCents,
@@ -133,10 +136,10 @@ async function decrementAndSettle(
       // netted against carry at the next renewal. Buckets still floor at 0 (above); debt carries
       // the overage. No-op when the call was fully covered (shortfallCents === 0).
       ...(spend.shortfallCents > 0
-        ? { debtCents: sql`${creditBalances.debtCents} + ${spend.shortfallCents}` }
+        ? { debtCents: sql`${wallets.debtCents} + ${spend.shortfallCents}` }
         : {}),
     })
-    .where(eq(creditBalances.userId, userId));
+    .where(personalRootWalletOf(userId));
 
   await tx
     .update(creditLedger)
@@ -158,6 +161,7 @@ async function decrementAndSettle(
   if (spend.shortfallCents > 0) {
     await tx.insert(creditLedger).values({
       userId,
+      walletId: bal.id,
       entryType: 'adjustment',
       bucket: 'monthly',
       amountCents: -spend.shortfallCents,
@@ -220,13 +224,18 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<Credit
   const amountCents = -nominalCents || 0;
   const realCostCents = Math.max(0, Math.round(input.costDollars * 100));
 
-  // 1. Idempotent claim — one usage ledger row per aiUsageLogId.
+  // 1. Idempotent claim — one usage ledger row per aiUsageLogId, against the payer's
+  // personal root wallet (WAL-5). A user with no wallet yet gets a bare one: its empty
+  // buckets settle the charge as debt, which their first grant then nets (see
+  // personal-wallet).
   let ledgerId: string;
   try {
+    const walletId = await ensurePersonalRootWalletId(db, input.userId);
     const claimed = await db
       .insert(creditLedger)
       .values({
         userId: input.userId,
+        walletId,
         entryType: 'usage',
         bucket: 'monthly',
         amountCents,

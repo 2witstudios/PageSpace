@@ -340,7 +340,10 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     'integration_audit_log',
     'oauth_clients',
     'subscriptions',
-    'credit_balances',
+    // `wallets` is the table credit_balances became (X-5): the personal root wallet is
+    // the same billing row it always was, now alongside org and drive wallets.
+    'wallets',
+    'wallet_consumer_caps',
     'credit_holds',
     'credit_ledger',
   ),

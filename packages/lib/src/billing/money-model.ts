@@ -16,7 +16,7 @@
  * No other file may tabulate an allowance, a pack size, or a credit-to-money
  * conversion (money-model-guard.test.ts greps for `/ 100` and `* 100` on any cents
  * or credit value outside this file). Balances are still stored in whole cents of
- * credit VALUE — `creditBalances.*Cents`, the ledger, holds — and this module is how
+ * credit VALUE — `wallets.*Cents`, the ledger, holds — and this module is how
  * those cents become the counts a person sees.
  *
  * MONEY_MODEL_V2_ACTIVE (D-OW-17) gates only the RATIO. Off, a paid tier is granted

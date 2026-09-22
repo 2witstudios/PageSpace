@@ -12,8 +12,13 @@ const mockAiLogger = vi.hoisted(() => ({ debug: vi.fn(), error: vi.fn() }));
 const mockEmitCreditsUpdated = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 
 vi.mock('@pagespace/db/db', () => ({ db: mockDb }));
+const mockEnsurePersonalRootWalletId = vi.hoisted(() => vi.fn().mockResolvedValue('w_root'));
+vi.mock('@pagespace/db/schema/wallets', () => ({
+  wallets: { id: 'w.id', userId: 'w.userId', monthlyRemainingCents: 'w.monthly', topupRemainingCents: 'w.topup', pendingMillicents: 'w.pending', debtCents: 'w.debt' },
+  personalRootWalletOf: vi.fn((userId: string) => ({ op: 'personalRootWalletOf', userId })),
+}));
+vi.mock('../personal-wallet', () => ({ ensurePersonalRootWalletId: mockEnsurePersonalRootWalletId }));
 vi.mock('@pagespace/db/schema/credits', () => ({
-  creditBalances: { userId: 'cb.userId', monthlyRemainingCents: 'cb.monthly', topupRemainingCents: 'cb.topup', pendingMillicents: 'cb.pending', debtCents: 'cb.debt' },
   creditLedger: { id: 'cl.id', aiUsageLogId: 'cl.aiUsageLogId', entryType: 'cl.entryType' },
   creditHolds: { id: 'ch.id' },
 }));
@@ -88,7 +93,7 @@ describe('consumeCredits', () => {
     const captured: { balanceSet?: Record<string, unknown>; ledgerSet?: Record<string, unknown>; debtRow?: Record<string, unknown> } = {};
     mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
       const tx = {
-        select: () => ({ from: () => ({ where: () => ({ for: () => Promise.resolve([{ monthlyRemainingCents: 30, topupRemainingCents: 20, pendingMillicents: 0, debtCents: 0 }]) }) }) }),
+        select: () => ({ from: () => ({ where: () => ({ for: () => Promise.resolve([{ id: 'w_root', monthlyRemainingCents: 30, topupRemainingCents: 20, pendingMillicents: 0, debtCents: 0 }]) }) }) }),
         update: vi.fn()
           .mockReturnValueOnce({ set: (v: Record<string, unknown>) => { captured.balanceSet = v; return { where: vi.fn().mockResolvedValue(undefined) }; } })
           .mockReturnValueOnce({ set: (v: Record<string, unknown>) => { captured.ledgerSet = v; return { where: vi.fn().mockResolvedValue(undefined) }; } }),
@@ -101,10 +106,12 @@ describe('consumeCredits', () => {
 
     expect(captured.balanceSet).toMatchObject({ monthlyRemainingCents: 0, topupRemainingCents: 0, pendingMillicents: 0 });
     // debtCents is bumped by the uncovered 100 via a `debtCents + 100` SQL expression.
-    expect(captured.balanceSet!.debtCents).toMatchObject({ sql: true, values: ['cb.debt', 100] });
+    expect(captured.balanceSet!.debtCents).toMatchObject({ sql: true, values: ['w.debt', 100] });
     expect(captured.ledgerSet).toMatchObject({ consumeStatus: 'applied', appliedCents: -50 });
     // Debt row: the uncovered 100 cents, owed, terminal status (not retried), same aiUsageLogId.
     expect(captured.debtRow).toMatchObject({
+      // WAL-5: the debt row lands on the wallet the balance lock read.
+      walletId: 'w_root',
       entryType: 'adjustment',
       bucket: 'monthly',
       amountCents: -100,
@@ -214,6 +221,19 @@ describe('consumeCredits', () => {
 
     // $0.0033 ×1.5 = 0.495 cents = 495 millicents; nominal whole-cent amount rounds to 0.
     expect(claimValues).toMatchObject({ entryType: 'usage', chargeMillicents: 495, amountCents: 0 });
+    // WAL-5: the claim names the payer's personal root wallet.
+    expect(mockEnsurePersonalRootWalletId).toHaveBeenCalledWith(mockDb, 'u1');
+    expect(claimValues).toMatchObject({ walletId: 'w_root' });
+  });
+
+  it('WAL-5 (partial): defers without writing a claim when the payer wallet cannot be resolved', async () => {
+    mockEnsurePersonalRootWalletId.mockRejectedValueOnce(new Error('db down'));
+
+    const status = await consumeCredits({ aiUsageLogId: 'aul_nowallet', userId: 'u1', costDollars: 1 });
+
+    expect(status).toBe('deferred');
+    expect(mockDb.insert).not.toHaveBeenCalled();
+    expect(mockDb.transaction).not.toHaveBeenCalled();
   });
 
   it('honors markupBpsOverride instead of the global MARKUP_BPS when a caller supplies one', async () => {

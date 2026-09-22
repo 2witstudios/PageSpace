@@ -19,7 +19,9 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import { db } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
-import { creditBalances, creditLedger, creditHolds } from '@pagespace/db/schema/credits';
+import { creditLedger, creditHolds } from '@pagespace/db/schema/credits';
+import { wallets, personalRootWalletOf } from '@pagespace/db/schema/wallets';
+import { users } from '@pagespace/db/schema/auth';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { factories } from '@pagespace/db/test/factories';
 import { reconcileOpenRouterCosts, type GenerationFetcher } from '../cost-reconcile';
@@ -32,14 +34,15 @@ let dbAvailable = false;
 async function cleanup(userId: string): Promise<void> {
   await db.delete(creditHolds).where(eq(creditHolds.userId, userId));
   await db.delete(creditLedger).where(eq(creditLedger.userId, userId));
-  await db.delete(creditBalances).where(eq(creditBalances.userId, userId));
+  await db.delete(wallets).where(eq(wallets.userId, userId));
   await db.delete(aiUsageLogs).where(eq(aiUsageLogs.userId, userId));
+  await db.delete(users).where(eq(users.id, userId));
 }
 
 describe('applyCorrection transaction atomicity (Postgres)', () => {
   beforeAll(async () => {
     try {
-      await db.select().from(creditBalances).limit(1);
+      await db.select().from(wallets).limit(1);
       dbAvailable = true;
     } catch (error) {
       requireDb('cost-reconcile.integration.test.ts', error);
@@ -55,14 +58,14 @@ describe('applyCorrection transaction atomicity (Postgres)', () => {
       // Empty buckets + debt parked at INT_MAX: an undercharge correction debits the extra
       // monthly-first, finds nothing, and accrues the shortfall as `debtCents + shortfall`,
       // which overflows the int4 column → the UPDATE throws inside the transaction.
-      await db.insert(creditBalances).values({
+      const [wallet] = await db.insert(wallets).values({
         userId: user.id,
         monthlyRemainingCents: 0,
         monthlyAllowanceCents: 0,
         topupRemainingCents: 0,
         debtCents: INT4_MAX,
         pendingMillicents: 0,
-      });
+      }).returning({ id: wallets.id });
 
       // A billed-at-$0 OpenRouter call still pending reconcile, old enough to clear the grace
       // window, carrying a generation id. Its base `usage` ledger row must exist (reconcile
@@ -84,6 +87,7 @@ describe('applyCorrection transaction atomicity (Postgres)', () => {
 
       await db.insert(creditLedger).values({
         userId: user.id,
+        walletId: wallet.id,
         entryType: 'usage',
         bucket: 'monthly',
         amountCents: 0,
@@ -116,7 +120,7 @@ describe('applyCorrection transaction atomicity (Postgres)', () => {
       expect(adjustments).toHaveLength(0);
 
       // The balance is exactly as seeded — the failed UPDATE moved nothing.
-      const [bal] = await db.select().from(creditBalances).where(eq(creditBalances.userId, user.id));
+      const [bal] = await db.select().from(wallets).where(personalRootWalletOf(user.id));
       expect(bal).toMatchObject({ debtCents: INT4_MAX, monthlyRemainingCents: 0, topupRemainingCents: 0 });
 
       // The base usage row (written before the transaction) is untouched.

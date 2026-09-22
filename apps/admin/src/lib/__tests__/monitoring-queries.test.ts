@@ -3,6 +3,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // ── Hoisted mock state ────────────────────────────────────────────────────────
 // FIFO queue of result sets; each db.select() dequeues the next set in query order.
 const resultQueue = vi.hoisted(() => [] as unknown[][]);
+// Every argument any query passed to .where(), in call order.
+const whereCalls = vi.hoisted(() => [] as unknown[]);
 
 const mockEq = vi.hoisted(() => vi.fn((col: unknown, val: unknown) => ({ type: 'eq', col, val })));
 const mockGte = vi.hoisted(() => vi.fn((col: unknown, val: unknown) => ({ type: 'gte', col, val })));
@@ -24,7 +26,10 @@ const makeChain = vi.hoisted(() => () => {
   chain.from = vi.fn(() => chain);
   chain.innerJoin = vi.fn(() => chain);
   chain.leftJoin = vi.fn(() => chain);
-  chain.where = vi.fn(() => chain);
+  chain.where = vi.fn((arg: unknown) => {
+    whereCalls.push(arg);
+    return chain;
+  });
   chain.groupBy = vi.fn(() => chain);
   chain.orderBy = vi.fn(() => chain);
   chain.having = vi.fn(() => chain);
@@ -52,8 +57,13 @@ vi.mock('@pagespace/db/schema/sessions', () => ({
 
 vi.mock('@pagespace/db/schema/credits', () => ({
   creditLedger: { entryType: 'CL_ENTRY_TYPE', amountCents: 'CL_AMOUNT', chargeMillicents: 'CL_CHARGE', appliedCents: 'CL_APPLIED', realCostCents: 'CL_REAL_COST', aiUsageLogId: 'CL_AI_ID', createdAt: 'CL_CREATED', userId: 'CL_USER' },
-  creditBalances: { userId: 'CB_USER', monthlyRemainingCents: 'CB_MONTHLY', topupRemainingCents: 'CB_TOPUP', debtCents: 'CB_DEBT' },
   creditHolds: { estCents: 'CH_EST', expiresAt: 'CH_EXPIRES' },
+}));
+
+vi.mock('@pagespace/db/schema/wallets', () => ({
+  wallets: { id: 'W_ID', userId: 'CB_USER', monthlyRemainingCents: 'CB_MONTHLY', topupRemainingCents: 'CB_TOPUP', debtCents: 'CB_DEBT' },
+  isPersonalRootWallet: vi.fn(() => ({ personalRoot: true })),
+  personalRootWalletOf: vi.fn((userId: string) => ({ personalRootOf: userId })),
 }));
 
 vi.mock('@pagespace/db/schema/subscriptions', () => ({
@@ -115,6 +125,7 @@ function resetQueue(...sets: unknown[][]) {
 beforeEach(() => {
   vi.clearAllMocks();
   resultQueue.length = 0;
+  whereCalls.length = 0;
   mockSelect.mockImplementation(() => makeChain());
 });
 
@@ -216,6 +227,9 @@ describe('getCreditRevenue', () => {
     const balanceSelect = (mockSelect.mock.calls as unknown[][])[1]?.[0] as Record<string, unknown> | undefined;
     expect(balanceSelect).toHaveProperty('includedCreditLiabilityCents');
     expect(mockSql).toHaveBeenCalledWith(expect.anything(), 'CB_MONTHLY');
+    // WAL-2 (partial): only personal root wallets (the former credit_balances rows) count
+    // as users' included-credit liability, never a drive or org wallet.
+    expect(whereCalls).toContainEqual({ personalRoot: true });
   });
 
   it('MON-7 reports zero liability when no balance rows exist', async () => {

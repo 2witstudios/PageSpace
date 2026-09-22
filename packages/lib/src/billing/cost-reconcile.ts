@@ -18,7 +18,8 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { creditBalances, creditLedger } from '@pagespace/db/schema/credits';
+import { creditLedger } from '@pagespace/db/schema/credits';
+import { wallets, personalRootWalletOf } from '@pagespace/db/schema/wallets';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { and, eq, lt, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
@@ -117,14 +118,17 @@ async function bumpAttempts(aiUsageLogId: string): Promise<void> {
  * sweep (which left-joins creditLedger by aiUsageLogId), leaving the BASE charge unbilled.
  * So we defer until a usage row exists (any status — a 'pending' one is settled by the
  * backfill pending sweep, an absent one is billed by its orphan sweep).
+ *
+ * Returns the wallet that base charge was billed to (WAL-5: reconciliation is keyed on
+ * the wallet), or null when there is no base charge yet.
  */
-async function hasUsageLedgerRow(aiUsageLogId: string): Promise<boolean> {
+async function usageLedgerWalletId(aiUsageLogId: string): Promise<string | null> {
   const rows = await db
-    .select({ id: creditLedger.id })
+    .select({ walletId: creditLedger.walletId })
     .from(creditLedger)
     .where(and(eq(creditLedger.aiUsageLogId, aiUsageLogId), eq(creditLedger.entryType, 'usage')))
     .limit(1);
-  return rows.length > 0;
+  return rows[0]?.walletId ?? null;
 }
 
 /**
@@ -136,6 +140,7 @@ async function hasUsageLedgerRow(aiUsageLogId: string): Promise<boolean> {
  */
 async function applyCorrection(
   userId: string,
+  walletId: string,
   drift: ReturnType<typeof computeCostDrift>,
   aiUsageLogId: string,
   generationIds: string[],
@@ -150,6 +155,8 @@ async function applyCorrection(
       .insert(creditLedger)
       .values({
         userId,
+        // The correction lands on the same wallet as the charge it corrects.
+        walletId,
         entryType: 'adjustment',
         bucket: 'monthly',
         amountCents,
@@ -171,8 +178,8 @@ async function applyCorrection(
 
     const balRows = await tx
       .select()
-      .from(creditBalances)
-      .where(eq(creditBalances.userId, userId))
+      .from(wallets)
+      .where(personalRootWalletOf(userId))
       .for('update');
     const bal = balRows[0] as
       | {
@@ -200,25 +207,25 @@ async function applyCorrection(
         accrual.wholeCents,
       );
       await tx
-        .update(creditBalances)
+        .update(wallets)
         .set({
           monthlyRemainingCents: spend.monthlyCents,
           topupRemainingCents: spend.topupCents,
           pendingMillicents: accrual.newPending,
           ...(spend.shortfallCents > 0
-            ? { debtCents: sql`${creditBalances.debtCents} + ${spend.shortfallCents}` }
+            ? { debtCents: sql`${wallets.debtCents} + ${spend.shortfallCents}` }
             : {}),
         })
-        .where(eq(creditBalances.userId, userId));
+        .where(personalRootWalletOf(userId));
       appliedCents = -spend.appliedCents || 0; // negative: decremented
     } else if (drift.deltaChargeMillicents < 0) {
       // Overcharge → refund: pay down debt first, remainder to the never-expiring top-up.
       const refundCents = Math.round(Math.abs(drift.deltaChargeMillicents) / 1000);
       const r = applyPaymentToDebt(bal.debtCents ?? 0, bal.topupRemainingCents, refundCents);
       await tx
-        .update(creditBalances)
+        .update(wallets)
         .set({ debtCents: r.debtCents, topupRemainingCents: r.topupCents })
-        .where(eq(creditBalances.userId, userId));
+        .where(personalRootWalletOf(userId));
       appliedCents = refundCents; // positive: credited back
     }
 
@@ -237,10 +244,11 @@ async function reconcileRow(row: PendingRow, fetcher: GenerationFetcher, now: Da
   }
 
   // Defer until the base usage charge exists: correcting drift before the base is billed
-  // would leave it unbilled AND mask the orphan from credit-backfill (see hasUsageLedgerRow).
+  // would leave it unbilled AND mask the orphan from credit-backfill (see usageLedgerWalletId).
   // Bump attempts so a row whose base never materializes eventually drops to 'unavailable'
   // rather than retrying forever. No /generation fetch is spent while deferred.
-  if (!(await hasUsageLedgerRow(row.id))) {
+  const walletId = await usageLedgerWalletId(row.id);
+  if (walletId === null) {
     if (row.reconcileAttempts + 1 >= COST_RECONCILE_MAX_ATTEMPTS) {
       await markStatus(row.id, 'unavailable', now);
       return 'unavailable';
@@ -280,7 +288,7 @@ async function reconcileRow(row: PendingRow, fetcher: GenerationFetcher, now: Da
     return 'reconciled';
   }
 
-  const applied = await applyCorrection(row.userId, drift, row.id, ids);
+  const applied = await applyCorrection(row.userId, walletId, drift, row.id, ids);
   await markStatus(row.id, 'reconciled', now);
   if (applied) void emitCreditsUpdated(row.userId);
   return 'corrected';

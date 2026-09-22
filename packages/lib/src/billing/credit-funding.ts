@@ -41,7 +41,8 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { creditBalances, creditLedger } from '@pagespace/db/schema/credits';
+import { creditLedger } from '@pagespace/db/schema/credits';
+import { wallets, personalRootWalletOf, PERSONAL_ROOT_WALLET_UPSERT_TARGET } from '@pagespace/db/schema/wallets';
 import { users } from '@pagespace/db/schema/auth';
 import { subscriptions } from '@pagespace/db/schema/subscriptions';
 import { eq, sql } from '@pagespace/db/operators';
@@ -49,6 +50,7 @@ import { isBillingEnabled } from '../deployment-mode';
 import { classifyStripeEvent, computeMonthlyRefill, applyPaymentToDebt } from './credit-core';
 import { grantForInvoice } from './invoice-grant';
 import { MONEY_MODEL_V2_ACTIVE } from './money-model';
+import { ensurePersonalRootWalletId } from './personal-wallet';
 import type { SubscriptionTier } from '../services/subscription-utils';
 import { loggers } from '../logging/logger-config';
 
@@ -266,10 +268,12 @@ async function recordMissedGrant(
     storedTier: tier,
     paidCents,
   });
+  const walletId = await ensurePersonalRootWalletId(db, userId);
   await db
     .insert(creditLedger)
     .values({
       userId,
+      walletId,
       entryType: 'missed_grant',
       bucket: 'monthly',
       amountCents: 0,
@@ -351,10 +355,18 @@ async function applyMonthlyRefill(
   let carriedCents = 0;
 
   await db.transaction(async (tx) => {
+    // The payer's personal root wallet (WAL-5), created bare if this is their first
+    // funding. It must exist before the FOR UPDATE below: that lock only locks an
+    // existing row, and if two distinct invoices raced for a brand-new user both would
+    // read "no row" -> carriedCents = 0 -> each would write the allowance, the second
+    // overwriting the first and losing a grant. With the row guaranteed, the lock
+    // serialises concurrent refills correctly.
+    const walletId = await ensurePersonalRootWalletId(tx, user.id);
     const inserted = await tx
       .insert(creditLedger)
       .values({
         userId: user.id,
+        walletId,
         entryType: 'monthly_grant',
         bucket: 'monthly',
         amountCents: allowanceCents,
@@ -377,16 +389,6 @@ async function applyMonthlyRefill(
     // the balance was already updated for this period. Do not refill again.
     if (inserted.length === 0) return;
 
-    // Ensure the balance row exists before we try to lock it. FOR UPDATE only locks
-    // existing rows: if two distinct invoices race for a brand-new user, both would
-    // read "no row" → carriedCents = 0 → each writes allowance, the second
-    // overwriting the first and losing a grant. The stub insert guarantees a row is
-    // present so the FOR UPDATE below can serialise concurrent refills correctly.
-    await tx
-      .insert(creditBalances)
-      .values({ userId: user.id })
-      .onConflictDoNothing({ target: creditBalances.userId });
-
     // Read the current balance INSIDE the same transaction, locked FOR UPDATE, so the
     // rollover addition is atomic. The ON CONFLICT guard serialises redelivery of the
     // SAME invoice, but two DISTINCT invoices for the same user (e.g. rapid plan change
@@ -395,16 +397,16 @@ async function applyMonthlyRefill(
     // writes carried + allowance, the second overwriting the first and losing a grant.
     // The row lock serialises them so both increments apply.
     const [currentRow] = await tx
-      .select({ monthlyRemainingCents: creditBalances.monthlyRemainingCents, debtCents: creditBalances.debtCents })
-      .from(creditBalances)
-      .where(eq(creditBalances.userId, user.id))
+      .select({ monthlyRemainingCents: wallets.monthlyRemainingCents, debtCents: wallets.debtCents })
+      .from(wallets)
+      .where(personalRootWalletOf(user.id))
       .for('update')
       .limit(1);
     carriedCents = currentRow?.monthlyRemainingCents ?? 0;
     const refill = computeMonthlyRefill(allowanceCents, carriedCents, currentRow?.debtCents ?? 0);
 
     await tx
-      .insert(creditBalances)
+      .insert(wallets)
       .values({
         userId: user.id,
         monthlyRemainingCents: refill.monthlyRemainingCents,
@@ -416,7 +418,7 @@ async function applyMonthlyRefill(
         monthlyPeriodEnd: end,
       })
       .onConflictDoUpdate({
-        target: creditBalances.userId,
+        ...PERSONAL_ROOT_WALLET_UPSERT_TARGET,
         set: {
           monthlyRemainingCents: refill.monthlyRemainingCents,
           monthlyAllowanceCents: refill.monthlyAllowanceCents,
@@ -465,10 +467,19 @@ async function applyTopupFunding(event: FundingEvent, packCents: number): Promis
   }
 
   await db.transaction(async (tx) => {
+    // The payer's personal root wallet (WAL-5), created bare if this is their first
+    // purchase. It must exist FIRST, so the FOR UPDATE below always locks a real row.
+    // Without it, two concurrent first-time purchases (distinct session ids — their
+    // ledger inserts don't serialize each other) would both read 0 from a non-existent
+    // row, both compute applyPaymentToDebt(.., pack), and the second write would
+    // overwrite the first: a lost top-up on a money path. The lock makes the
+    // read-modify-write atomic so both increments apply.
+    const walletId = await ensurePersonalRootWalletId(tx, user.id);
     const inserted = await tx
       .insert(creditLedger)
       .values({
         userId: user.id,
+        walletId,
         entryType: 'topup_purchase',
         bucket: 'topup',
         amountCents: packCents,
@@ -484,24 +495,13 @@ async function applyTopupFunding(event: FundingEvent, packCents: number): Promis
     // credited. Do not add it again.
     if (inserted.length === 0) return;
 
-    // Ensure a balance row exists FIRST, so the FOR UPDATE below always locks a real
-    // row. Without this, two concurrent first-time purchases (distinct session ids —
-    // their ledger inserts don't serialize each other) would both read 0 from a
-    // non-existent row, both compute applyPaymentToDebt(.., pack), and the second write
-    // would overwrite the first: a lost top-up on a money path. The lock makes the
-    // read-modify-write atomic so both increments apply.
-    await tx
-      .insert(creditBalances)
-      .values({ userId: user.id })
-      .onConflictDoNothing({ target: creditBalances.userId });
-
     const rows = await tx
       .select({
-        topupRemainingCents: creditBalances.topupRemainingCents,
-        debtCents: creditBalances.debtCents,
+        topupRemainingCents: wallets.topupRemainingCents,
+        debtCents: wallets.debtCents,
       })
-      .from(creditBalances)
-      .where(eq(creditBalances.userId, user.id))
+      .from(wallets)
+      .where(personalRootWalletOf(user.id))
       .for('update');
     // Pay down any outstanding overage FIRST, then credit the remainder to the
     // never-expiring top-up bucket. This is the within-period recovery: a user in the
@@ -509,9 +509,9 @@ async function applyTopupFunding(event: FundingEvent, packCents: number): Promis
     const settled = applyPaymentToDebt(rows[0].debtCents, rows[0].topupRemainingCents, packCents);
 
     await tx
-      .update(creditBalances)
+      .update(wallets)
       .set({ topupRemainingCents: settled.topupCents, debtCents: settled.debtCents })
-      .where(eq(creditBalances.userId, user.id));
+      .where(personalRootWalletOf(user.id));
   });
 
   loggers.api.info('credit funding: top-up applied', {

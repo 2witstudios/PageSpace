@@ -11,7 +11,6 @@ const mockAiLogger = vi.hoisted(() => ({ debug: vi.fn(), error: vi.fn() }));
 
 vi.mock('@pagespace/db/db', () => ({ db: mockDb }));
 vi.mock('@pagespace/db/schema/credits', () => ({
-  creditBalances: { userId: 'cb.userId' },
   creditLedger: { id: 'cl.id', aiUsageLogId: 'cl.aiUsageLogId', consumeStatus: 'cl.consumeStatus', createdAt: 'cl.createdAt' },
   creditHolds: { id: 'ch.id', expiresAt: 'ch.expiresAt' },
 }));

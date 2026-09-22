@@ -508,7 +508,7 @@ export interface LedgerDerivedInput {
   appliedUsageCents: number;
   /** SUM(appliedCents) of adjustment rows (signed): reconcile corrections that moved buckets. */
   adjustmentCents: number;
-  /** The materialized creditBalances buckets: monthlyRemaining + topupRemaining. */
+  /** The materialized personal-wallet buckets: monthlyRemaining + topupRemaining. */
   materializedSpendableCents: number;
   /** The materialized debt (reported alongside; not part of the bucket equation). */
   debtCents: number;

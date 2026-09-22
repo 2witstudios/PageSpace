@@ -26,7 +26,6 @@ vi.mock('@pagespace/db/db', () => ({ db: mockDb }));
 vi.mock('../../deployment-mode', () => ({ isBillingEnabled: mockIsBillingEnabled }));
 vi.mock('../credit-balance', () => ({ readSpendableCents: mockReadSpendableCents }));
 vi.mock('@pagespace/db/schema/credits', () => ({
-  creditBalances: { userId: 'cb.userId' },
   creditHolds: { id: 'ch.id', userId: 'ch.userId', estCents: 'ch.est', expiresAt: 'ch.exp' },
   creditLedger: {
     userId: 'cl.userId',

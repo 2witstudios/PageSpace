@@ -17,12 +17,14 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { creditBalances, creditLedger } from '@pagespace/db/schema/credits';
+import { creditLedger } from '@pagespace/db/schema/credits';
+import { wallets, personalRootWalletOf } from '@pagespace/db/schema/wallets';
 import { subscriptions } from '@pagespace/db/schema/subscriptions';
 import { and, eq, gt, inArray } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
 import { computeMonthlyRefill } from './credit-core';
 import { allowanceCentsForPaidCents } from './money-model';
+import { ensurePersonalRootWalletId } from './personal-wallet';
 import { toSubscriptionTier, type SubscriptionTier } from './subscription-tiers';
 import { deriveTierFromSubscriptions, type SubscriptionRowLike } from './subscription-tier-sync';
 import { emitCreditsUpdated } from './credit-emit';
@@ -125,15 +127,13 @@ async function grantMissedRow(row: { id: string; userId: string }, allowanceCent
       .returning({ id: creditLedger.id });
     if (claimed.length === 0) return 'already_claimed';
 
-    await tx
-      .insert(creditBalances)
-      .values({ userId: row.userId })
-      .onConflictDoNothing({ target: creditBalances.userId });
+    // The row this grant lands on must exist before the FOR UPDATE below can lock it.
+    await ensurePersonalRootWalletId(tx, row.userId);
 
     const [balanceRow] = await tx
-      .select({ monthlyRemainingCents: creditBalances.monthlyRemainingCents, debtCents: creditBalances.debtCents })
-      .from(creditBalances)
-      .where(eq(creditBalances.userId, row.userId))
+      .select({ monthlyRemainingCents: wallets.monthlyRemainingCents, debtCents: wallets.debtCents })
+      .from(wallets)
+      .where(personalRootWalletOf(row.userId))
       .for('update')
       .limit(1);
 
@@ -144,13 +144,13 @@ async function grantMissedRow(row: { id: string; userId: string }, allowanceCent
     );
 
     await tx
-      .update(creditBalances)
+      .update(wallets)
       .set({
         monthlyRemainingCents: refill.monthlyRemainingCents,
         monthlyAllowanceCents: refill.monthlyAllowanceCents,
         debtCents: refill.debtCents,
       })
-      .where(eq(creditBalances.userId, row.userId));
+      .where(personalRootWalletOf(row.userId));
 
     return 'granted';
   });

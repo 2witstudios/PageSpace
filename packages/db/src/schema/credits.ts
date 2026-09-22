@@ -2,54 +2,7 @@ import { pgTable, text, integer, timestamp, index, uniqueIndex, check } from 'dr
 import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
-
-/**
- * creditBalances — denormalized, one row per user. The fast pre-request gate and
- * the dashboard read this. Two buckets plus a debt counter:
- *   - monthly: tier allowance. Paid tiers: re-granted each renewal and ACCUMULATES
- *              across periods (rollover). Free: a ONE-TIME starter grant, never refilled
- *              (TIER_ALLOWANCE_REFILLS in credit-pricing)
- *   - topup:   purchased packs, NEVER expire
- *   - debt:    overage owed (a NON-NEGATIVE magnitude). Accrues when a call's real
- *              cost can't be covered; paid down by a purchase; FORGIVEN (zeroed) at
- *              the next renewal so it never reduces next period's allowance.
- * Net spendable = monthlyRemainingCents + topupRemainingCents − debtCents (may be < 0).
- */
-export const creditBalances = pgTable('credit_balances', {
-  userId: text('userId').primaryKey().references(() => users.id, { onDelete: 'cascade' }),
-  monthlyRemainingCents: integer('monthlyRemainingCents').default(0).notNull(),
-  monthlyAllowanceCents: integer('monthlyAllowanceCents').default(0).notNull(),
-  topupRemainingCents: integer('topupRemainingCents').default(0).notNull(),
-  // Outstanding overage owed, as a non-negative magnitude (the net goes negative via
-  // subtraction, not by storing a negative bucket). Raised at settle when a call's
-  // cost exceeds the buckets, lowered by a purchase (debt paid first), reset to 0 at
-  // each renewal (overage is forgiven, never carried into the next period).
-  debtCents: integer('debtCents').default(0).notNull(),
-  // Sub-cent carry: a single AI call can cost a fraction of a cent (high-volume
-  // cheap models). We charge in millicents (1/1000 cent) and bank the leftover
-  // fraction here so those calls don't silently round to $0. Always in [0, 1000):
-  // each settle debits floor((pending + charge)/1000) whole cents and keeps the
-  // remainder. Never a float — integer millicents only.
-  pendingMillicents: integer('pendingMillicents').default(0).notNull(),
-  monthlyPeriodStart: timestamp('monthlyPeriodStart', { mode: 'date', withTimezone: true }),
-  monthlyPeriodEnd: timestamp('monthlyPeriodEnd', { mode: 'date', withTimezone: true }),
-  updatedAt: timestamp('updatedAt', { mode: 'date', withTimezone: true }).defaultNow().notNull().$onUpdate(() => new Date()),
-}, (table) => ({
-  // The prepaid source of truth: enforce the invariants in the DB so a single bad
-  // write can't manufacture negative balances or an inverted billing window that
-  // the gate would treat as real spendable state.
-  monthlyNonNeg: check('credit_balances_monthly_remaining_nonneg', sql`${table.monthlyRemainingCents} >= 0`),
-  allowanceNonNeg: check('credit_balances_monthly_allowance_nonneg', sql`${table.monthlyAllowanceCents} >= 0`),
-  topupNonNeg: check('credit_balances_topup_remaining_nonneg', sql`${table.topupRemainingCents} >= 0`),
-  debtNonNeg: check('credit_balances_debt_cents_nonneg', sql`${table.debtCents} >= 0`),
-  // The carry is a sub-cent fraction by construction; bound it so a bad write
-  // can't park whole cents of unbilled value here, out of sight of the balance.
-  pendingRange: check('credit_balances_pending_millicents_range', sql`${table.pendingMillicents} >= 0 AND ${table.pendingMillicents} < 1000`),
-  periodOrder: check(
-    'credit_balances_period_order',
-    sql`${table.monthlyPeriodStart} IS NULL OR ${table.monthlyPeriodEnd} IS NULL OR ${table.monthlyPeriodStart} <= ${table.monthlyPeriodEnd}`,
-  ),
-}));
+import { wallets } from './wallets';
 
 /**
  * creditLedger — append-only audit/provenance. One row per grant, purchase, or
@@ -64,6 +17,9 @@ export const creditBalances = pgTable('credit_balances', {
 export const creditLedger = pgTable('credit_ledger', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  // WAL-5: the wallet this row moved money in or out of. For every row written before
+  // wallets existed it is the user's personal root wallet (backfilled by 0299).
+  walletId: text('walletId').notNull().references(() => wallets.id, { onDelete: 'cascade' }),
   entryType: text('entryType').notNull(), // 'monthly_grant' | 'topup_purchase' | 'usage' | 'adjustment' | 'missed_grant' (a paid invoice whose tier had no ratio: amountCents 0, for the reconcile cron to re-grant)
   bucket: text('bucket').notNull(), // 'monthly' | 'topup'
   amountCents: integer('amountCents').notNull(), // signed full intended charge: grants/purchases +, usage/debt -
@@ -84,6 +40,7 @@ export const creditLedger = pgTable('credit_ledger', {
   createdAt: timestamp('createdAt', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   userIdx: index('credit_ledger_user_idx').on(table.userId, table.createdAt),
+  walletIdx: index('credit_ledger_wallet_idx').on(table.walletId, table.createdAt),
   usageLogUnique: uniqueIndex('credit_ledger_usage_log_unique')
     .on(table.aiUsageLogId)
     .where(sql`${table.aiUsageLogId} IS NOT NULL AND ${table.entryType} = 'usage'`),
@@ -113,6 +70,8 @@ export const creditLedger = pgTable('credit_ledger', {
 export const creditHolds = pgTable('credit_holds', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  // WAL-5: holds are per wallet — the wallet this reservation is against.
+  walletId: text('walletId').notNull().references(() => wallets.id, { onDelete: 'cascade' }),
   estCents: integer('estCents').notNull(),
   aiUsageLogId: text('aiUsageLogId'),
   createdAt: timestamp('createdAt', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
@@ -122,15 +81,9 @@ export const creditHolds = pgTable('credit_holds', {
   // hot lookup. The expiry index keeps the reconcile sweep (DELETE WHERE expiresAt
   // < now) cheap as the table grows.
   userIdx: index('credit_holds_user_idx').on(table.userId),
+  walletIdx: index('credit_holds_wallet_idx').on(table.walletId),
   expiresIdx: index('credit_holds_expires_idx').on(table.expiresAt),
   estNonNeg: check('credit_holds_est_cents_nonneg', sql`${table.estCents} >= 0`),
-}));
-
-export const creditBalancesRelations = relations(creditBalances, ({ one }) => ({
-  user: one(users, {
-    fields: [creditBalances.userId],
-    references: [users.id],
-  }),
 }));
 
 export const creditLedgerRelations = relations(creditLedger, ({ one }) => ({
@@ -138,11 +91,19 @@ export const creditLedgerRelations = relations(creditLedger, ({ one }) => ({
     fields: [creditLedger.userId],
     references: [users.id],
   }),
+  wallet: one(wallets, {
+    fields: [creditLedger.walletId],
+    references: [wallets.id],
+  }),
 }));
 
 export const creditHoldsRelations = relations(creditHolds, ({ one }) => ({
   user: one(users, {
     fields: [creditHolds.userId],
     references: [users.id],
+  }),
+  wallet: one(wallets, {
+    fields: [creditHolds.walletId],
+    references: [wallets.id],
   }),
 }));
