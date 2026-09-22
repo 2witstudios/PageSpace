@@ -128,6 +128,16 @@ describe('decideNavigation', () => {
       });
     });
 
+    it('hands the caller every checked address, in order, to dial in turn', () => {
+      const verdict = decideNavigation({ url: 'https://example.com/', resolvedAddresses: ['2606:2800:220:1::1', PUBLIC_V4], allowedOrigins: null });
+      assert({
+        given: 'a dual-stack answer with the IPv6 address first',
+        should: 'list both checked addresses so an IPv4-only substrate can still connect',
+        actual: verdict.verdict === 'allow' ? verdict.connectAddresses : verdict,
+        expected: ['2606:2800:220:1::1', PUBLIC_V4],
+      });
+    });
+
     it('refuses a hostname resolving to a private address', () => {
       assert({
         given: 'a hostname resolving to 10.0.0.5',
