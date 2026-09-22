@@ -4,7 +4,7 @@
  * to the credit ledger, and what matters here is when and with what this
  * client calls it.
  */
-import { afterAll, describe, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import { generateKeyPairSync, sign as nodeSign } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -24,7 +24,8 @@ const sign = (message: Uint8Array): Uint8Array => new Uint8Array(nodeSign(null, 
 const roots: string[] = [];
 afterAll(async () => Promise.all(roots.map((root) => rm(root, { recursive: true, force: true }))));
 
-const setup = async (options: { readonly refuse?: boolean } = {}) => {
+const setup = async (options: { readonly refuse?: boolean; readonly refuseAfter?: number } = {}) => {
+  let opens = 0;
   const profileRoot = await mkdtemp(join(tmpdir(), 'bw-client-'));
   roots.push(profileRoot);
   const launched: string[] = [];
@@ -36,20 +37,24 @@ const setup = async (options: { readonly refuse?: boolean } = {}) => {
     clock: () => now,
     launch: async (spec: BrowserSessionSpec) => {
       launched.push(spec.sessionId);
-      const worker = await startBrowserControlWorker({ ...spec, listen: { host: '127.0.0.1', port: 0 }, profileRoot });
+      const worker = await startBrowserControlWorker({ ...spec, listen: { host: '127.0.0.1', port: 0 }, profileRoot, clock: () => now });
       return { url: worker.url, stop: worker.close };
     },
   });
   const meter: BrowserMeter<Billing> = {
     open: async (billing) => {
       meterCalls.push(['open', billing.payerId]);
-      return options.refuse === true ? { ok: false, reason: 'Out of credits.' } : { ok: true, hold: { holdId: `hold-${billing.payerId}` } };
+      opens += 1;
+      return options.refuse === true || (options.refuseAfter !== undefined && opens > options.refuseAfter)
+        ? { ok: false, reason: 'Out of credits.' }
+        : { ok: true, hold: { holdId: `hold-${opens}`, payerId: billing.payerId } };
     },
     close: async ({ billing, hold, activeSeconds, shape, substrate: label }) => {
       meterCalls.push(['close', billing.payerId, hold.holdId, activeSeconds, shape, label]);
+      expect(hold.payerId).toBe(billing.payerId);
     },
   };
-  const client = createBrowserSessionClient<Billing>({ substrate, controlPublicKey, sign, meter, clock: () => now, idleTimeoutMs: 60_000 });
+  const client = createBrowserSessionClient<Billing>({ substrate, controlPublicKey, sign, meter, clock: () => now, idleTimeoutMs: 60_000, settleIntervalMs: 120_000 });
   return { client, launched, meterCalls, advance: (ms: number) => (now += ms) };
 };
 
@@ -73,7 +78,7 @@ describe('browser session client', () => {
         launched: ['bws_client_1'],
         meterCalls: [
           ['open', 'payer-1'],
-          ['close', 'payer-1', 'hold-payer-1', 90, { cpus: 2, memoryGB: 2 }, 'local'],
+          ['close', 'payer-1', 'hold-1', 90, { cpus: 2, memoryGB: 2 }, 'local'],
         ],
       },
     });
@@ -109,6 +114,38 @@ describe('browser session client', () => {
         settled: meterCalls.filter((call) => (call as unknown[])[0] === 'close').length,
       },
       expected: { takeOver: 200, agentDuring: 'human-control', noSession: 404, swept: ['bws_client_3'], settled: 1 },
+    });
+  });
+
+  it('settles each elapsed interval and ends the session when the payer can no longer be held', async () => {
+    const { client, launched, meterCalls, advance } = await setup({ refuseAfter: 2 });
+    const op = () => client.operate({ session: ref('bws_client_4'), agentId: 'agent-1', operation: { kind: 'tabs', action: 'list' } });
+    const first = await op();
+    advance(130_000);
+    const second = await op();
+    advance(130_000);
+    const third = await op();
+    const fourth = await op();
+    assert({
+      given: 'a 2-minute settle interval, uses 130 s apart, and a payer that can be held twice',
+      should: 'settle 130 s and re-hold, then settle 130 s, fail the re-hold, end the session, and start a fresh one only if held',
+      actual: {
+        results: [first, second, third, fourth].map((r) => (r.ok ? 'ok' : r.refusal.reason)),
+        meterCalls,
+        launched,
+      },
+      expected: {
+        results: ['ok', 'ok', 'billing-denied', 'billing-denied'],
+        meterCalls: [
+          ['open', 'payer-1'],
+          ['close', 'payer-1', 'hold-1', 130, { cpus: 2, memoryGB: 2 }, 'local'],
+          ['open', 'payer-1'],
+          ['close', 'payer-1', 'hold-2', 130, { cpus: 2, memoryGB: 2 }, 'local'],
+          ['open', 'payer-1'],
+          ['open', 'payer-1'],
+        ],
+        launched: ['bws_client_4'],
+      },
     });
   });
 });

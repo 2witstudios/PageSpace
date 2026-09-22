@@ -9,8 +9,10 @@
  * observe (read, screenshot): navigating, clicking, typing and opening tabs
  * can all submit something to the web.
  *
- * The registry and the tool's own execute path both ask this question, so a
- * tool that should not be exposed is also refused if it is called anyway.
+ * The registry asks it with every gate (through the request-time filters for
+ * the per-agent switch, tier and read-only). The tool's execute path asks it
+ * again for the agent's allowlist only — the kill switch, tier and quota are
+ * re-checked there by the sandbox call-time gate instead.
  */
 import { BROWSER_MUTATING_TOOL_NAMES, BROWSER_TOOL_NAMES, type BrowserToolName } from './browser-tool-name.js';
 

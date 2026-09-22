@@ -7,7 +7,7 @@
  *    and storage charge streams share;
  *  - the hold is `defaultSandboxBillingDeps.gate` (the payer's balance and
  *    tier, the machine in-flight ceiling), placed BEFORE any browser starts;
- *  - the settlement is the session's whole lifetime at the browser's REAL
+ *  - the settlement is every elapsed interval of the session's lifetime at the browser's REAL
  *    shape (2 vCPU / 2 GB on Sprites), priced by `calculateMachineCostDollars`
  *    with the machine markup — not the default sandbox shape, which would
  *    under-recover a browser about threefold (S3 §3.6).
@@ -45,10 +45,11 @@ export function createBrowserMeter(primitives: BillingPrimitives = realPrimitive
       const payerId = await primitives.resolvePayerId({ driveId, ownerId });
       const gated = await primitives.gate({ payerId });
       if (!gated.allowed) return { ok: false, reason: gated.reason ?? 'The browser could not be started: insufficient credits.' };
-      return { ok: true, hold: { holdId: gated.holdId ?? null } };
+      return { ok: true, hold: { holdId: gated.holdId ?? null, payerId } };
     },
     close: async ({ billing, hold, activeSeconds, shape, substrate }) => {
-      const payerId = await primitives.resolvePayerId({ driveId: billing.driveId, ownerId: billing.ownerId });
+      // The payer fixed at open: an ownership change mid-session must not move the charge.
+      const { payerId } = hold;
       if (activeSeconds <= 0) {
         if (hold.holdId !== null) await primitives.releaseHold(hold.holdId);
         return;

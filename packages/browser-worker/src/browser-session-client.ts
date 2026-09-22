@@ -8,8 +8,10 @@
  *
  * Metering (S3 R14): a session is a billable machine like a sandbox. The
  * meter places a hold for the paying principal BEFORE the substrate is asked
- * for anything, and settles the session's whole lifetime at its real shape
- * when it ends. A refused hold is a refused session, never an unmetered one.
+ * for anything. While the session lives it is settled every
+ * `settleIntervalMs` at its real shape and a fresh hold is taken; a refused
+ * fresh hold ends the session. The rest is settled when it ends. A refused
+ * hold is a refused session, never an unmetered one.
  *
  * Lifetime (S3 R15): a session idle past `idleTimeoutMs` is destroyed, not
  * paused — no browser profile outlives the work that needed it. The idle
@@ -28,7 +30,8 @@ import {
 } from './control-instruction.js';
 import { encodeControlInstruction } from './encode-control-instruction.js';
 
-export type BrowserMeterHold = { readonly holdId: string | null };
+/** What `open` placed. `payerId` is fixed at open, so a mid-session ownership change cannot move the charge. */
+export type BrowserMeterHold = { readonly holdId: string | null; readonly payerId: string };
 
 export type BrowserMeter<B> = {
   /** Places the hold for whoever pays for this session; refuses when they cannot. */
@@ -52,6 +55,7 @@ export type BrowserSessionClientOptions<B> = {
   readonly clock?: () => number;
   readonly idleTimeoutMs?: number;
   readonly instructionTtlMs?: number;
+  readonly settleIntervalMs?: number;
 };
 
 export type BrowserSessionClient<B> = {
@@ -65,12 +69,16 @@ export type BrowserSessionClient<B> = {
 type LiveSession<B> = {
   readonly session: ProvisionedBrowserSession;
   readonly billing: B;
-  readonly hold: BrowserMeterHold;
+  hold: BrowserMeterHold;
+  settledAt: number;
   lastUsedAt: number;
+  /** An in-progress renewal, so two concurrent operations never settle the same interval twice. */
+  renewal: Promise<string | null> | null;
 };
 
 const DEFAULT_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_INSTRUCTION_TTL_MS = 30_000;
+const DEFAULT_SETTLE_INTERVAL_MS = 5 * 60 * 1000;
 
 const unavailable = (detail: string): BrowserControlResponse => ({ ok: false, refusal: { reason: 'unavailable', detail } });
 
@@ -82,6 +90,7 @@ export const createBrowserSessionClient = <B>({
   clock = Date.now,
   idleTimeoutMs = DEFAULT_IDLE_TIMEOUT_MS,
   instructionTtlMs = DEFAULT_INSTRUCTION_TTL_MS,
+  settleIntervalMs = DEFAULT_SETTLE_INTERVAL_MS,
 }: BrowserSessionClientOptions<B>): BrowserSessionClient<B> => {
   const live = new Map<string, Promise<LiveSession<B> | { readonly refused: string }>>();
 
@@ -113,7 +122,8 @@ export const createBrowserSessionClient = <B>({
       if (!held.ok) return { refused: held.reason };
       try {
         const session = await substrate.provision({ sessionId: ref.sessionId, controlPublicKey, allowedOrigins: ref.allowedOrigins });
-        return { session, billing: ref.billing, hold: held.hold, lastUsedAt: clock() };
+        const now = clock();
+        return { session, billing: ref.billing, hold: held.hold, settledAt: now, lastUsedAt: now, renewal: null };
       } catch (error) {
         await meter.close({ billing: ref.billing, hold: held.hold, activeSeconds: 0, shape: substrate.shape, substrate: substrate.substrate });
         throw error;
@@ -137,6 +147,8 @@ export const createBrowserSessionClient = <B>({
       return unavailable('The browser could not be started. Try again shortly.');
     }
     if ('refused' in opened) return { ok: false, refusal: { reason: 'billing-denied', detail: opened.refused } };
+    const renewed = await renewIfDue(ref.sessionId, opened);
+    if (renewed !== null) return { ok: false, refusal: { reason: 'billing-denied', detail: renewed } };
     opened.lastUsedAt = clock();
     const response = await send(opened.session, { kind: 'agent', agentId }, { type: 'operation', operation }).catch(() => null);
     if (response === null || response.status !== 200) return unavailable(`The browser did not answer (${response?.status ?? 'no response'}).`);
@@ -152,15 +164,46 @@ export const createBrowserSessionClient = <B>({
     return send(session, { kind: 'human', userId }, command);
   };
 
+  const settle = (opened: LiveSession<B>, until: number): Promise<void> =>
+    meter.close({
+      billing: opened.billing,
+      hold: opened.hold,
+      activeSeconds: Math.max(0, (until - opened.settledAt) / 1000),
+      shape: opened.session.shape,
+      substrate: opened.session.substrate,
+    });
+
+  /** Settles the elapsed interval and re-holds; returns the refusal when the payer can no longer be held (the session is then ended). */
+  const renewIfDue = (sessionId: string, opened: LiveSession<B>): Promise<string | null> => {
+    if (opened.renewal !== null) return opened.renewal;
+    if (clock() - opened.settledAt < settleIntervalMs) return Promise.resolve(null);
+    opened.renewal = renew(sessionId, opened).finally(() => {
+      opened.renewal = null;
+    });
+    return opened.renewal;
+  };
+
+  const renew = async (sessionId: string, opened: LiveSession<B>): Promise<string | null> => {
+    const now = clock();
+    await settle(opened, now);
+    opened.settledAt = now;
+    const held = await meter.open(opened.billing);
+    if (!held.ok) {
+      opened.hold = { holdId: null, payerId: opened.hold.payerId };
+      live.delete(sessionId);
+      await substrate.destroy(sessionId);
+      return held.reason;
+    }
+    opened.hold = held.hold;
+    return null;
+  };
+
   const end = async (sessionId: string): Promise<void> => {
     const entry = live.get(sessionId);
     live.delete(sessionId);
     const opened = entry === undefined ? null : await entry.catch(() => null);
     await substrate.destroy(sessionId);
-    if (opened !== null && !('refused' in opened)) {
-      const activeSeconds = Math.max(0, (clock() - opened.session.provisionedAt) / 1000);
-      await meter.close({ billing: opened.billing, hold: opened.hold, activeSeconds, shape: opened.session.shape, substrate: opened.session.substrate });
-    }
+    if (opened !== null && !('refused' in opened)) await settle(opened, clock());
   };
 
   const sweepIdle = async (): Promise<readonly string[]> => {

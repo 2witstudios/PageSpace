@@ -54,6 +54,8 @@ export type SpritesSubstrateOptions = {
 
 const WORKER_SERVICE = 'pagespace-browser-worker';
 const WORKER_PORT = 8080;
+/** A reused Sprite wakes in seconds; one that does not answer by then is replaced. */
+const REUSE_HEALTH_TIMEOUT_MS = 10_000;
 
 const toSdkPolicy = (policy: BrowserNetworkPolicy): { rules: { domain?: string; action?: 'allow' | 'deny' }[] } => ({
   rules: policy.rules.map((rule) => ({ domain: rule.domain, action: rule.action })),
@@ -83,8 +85,8 @@ export const createSpritesBrowserSubstrate = ({
     return { sessionId, substrate: 'sprites', shape, provisionedAt, send };
   };
 
-  const waitReady = async (session: ProvisionedBrowserSession): Promise<void> => {
-    const deadline = clock() + readyTimeoutMs;
+  const waitReady = async (session: ProvisionedBrowserSession, timeoutMs: number = readyTimeoutMs): Promise<void> => {
+    const deadline = clock() + timeoutMs;
     while (clock() < deadline) {
       const health = await session.send({ method: 'GET', path: '/healthz', headers: {}, body: null }).catch(() => null);
       if (health?.status === 200) return;
@@ -100,7 +102,13 @@ export const createSpritesBrowserSubstrate = ({
 
   const provision = async (spec: BrowserSessionSpec): Promise<ProvisionedBrowserSession> => {
     const live = await find(spec.sessionId);
-    if (live !== null) return live;
+    if (live !== null) {
+      // A Sprite left by a failed delete, or whose worker expired itself, is
+      // not a session: prove the worker answers, else replace the Sprite.
+      const healthy = await waitReady(live, REUSE_HEALTH_TIMEOUT_MS).then(() => true, () => false);
+      if (healthy) return live;
+      await host.deleteSprite(browserSpriteName(spec.sessionId)).catch(() => undefined);
+    }
     const sprite = await host.createSprite(browserSpriteName(spec.sessionId), { cpus: shape.cpus, ramMB: shape.memoryGB * 1024 });
     try {
       const { cmd, args } = await installWorker(sprite);
