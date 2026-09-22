@@ -140,6 +140,11 @@ export const conversationMessagesActions = {
     if (head) persistQueuedSends(conversationId, conversationMessagesActions.getQueuedSends(conversationId));
     return head;
   },
+  /** A drained entry whose dispatch rejected goes back to the head — never lost. */
+  requeueQueuedSend: (conversationId: string, message: UIMessage): void => {
+    useConversationMessagesStore.getState().requeueQueuedSend(conversationId, message);
+    persistQueuedSends(conversationId, conversationMessagesActions.getQueuedSends(conversationId));
+  },
   clearQueuedSends: (conversationId: string): void => {
     useConversationMessagesStore.getState().clearQueuedSends(conversationId);
     persistQueuedSends(conversationId, conversationMessagesActions.getQueuedSends(conversationId));
