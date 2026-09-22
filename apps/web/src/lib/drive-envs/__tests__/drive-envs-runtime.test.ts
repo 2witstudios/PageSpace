@@ -50,6 +50,7 @@ vi.mock('@pagespace/lib/services/drive-envs/drive-envs-store', () => ({
 vi.mock('@/lib/agent-workspaces/sandbox-host-runtime', () => ({ getSandboxHost: async () => ({}) }));
 vi.mock('@/lib/drive-envs/env-oauth-client-runtime', () => ({
   syncEnvOAuthClientBestEffort: vi.fn(async () => undefined),
+  syncEnvOAuthClientForRemoval: vi.fn(async () => ({ ok: true })),
   retireEnvOAuthClientBestEffort: vi.fn(async () => ({ clientId: 'env_x', disabled: true, familiesRevoked: 0 })),
 }));
 

@@ -14,6 +14,9 @@ import { describe, it, expect } from 'vitest';
 import { validateRedirectUri } from '../../../auth/oauth/clients';
 import { validateClientRegistration } from '../../../auth/oauth/client-registration';
 import {
+  applyPendingRemoval,
+  liveEnvRedirectUris,
+  parseEnvOAuthClientId,
   deriveEnvClient,
   ENV_OAUTH_CALLBACK_PATH,
   ENV_OAUTH_CLIENT_ID_PREFIX,
@@ -255,3 +258,70 @@ describe('retireEnvOAuthClient (env delete)', () => {
     expect(await retireEnvOAuthClient({ envId: ENV_ID, deps: { store: fake.store } })).toEqual({ clientId: `env_${ENV_ID}`, disabled: false, familiesRevoked: 0 });
   });
 });
+
+describe('parseEnvOAuthClientId', () => {
+  it('reads the env id out of env_<id> and refuses anything else (another client, a malformed id)', () => {
+    expect(parseEnvOAuthClientId(`env_${ENV_ID}`)).toBe(ENV_ID);
+    expect(parseEnvOAuthClientId('pagespace-cli')).toBeNull();
+    expect(parseEnvOAuthClientId('app_abc')).toBeNull();
+    expect(parseEnvOAuthClientId('env_')).toBeNull();
+    expect(parseEnvOAuthClientId('env_NOT-A-LABEL')).toBeNull();
+  });
+});
+
+describe('liveEnvRedirectUris — a stored redirect the env no longer derives grants nothing (PR #2711 ruling)', () => {
+  const stale = 'https://old.example.com/auth/pagespace/callback';
+
+  it('keeps only stored entries the current facts still derive, in stored order', () => {
+    expect(liveEnvRedirectUris([PREVIEW_CB, stale, PUBLISHED_CB], [PUBLISHED_CB, PREVIEW_CB])).toEqual([PREVIEW_CB, PUBLISHED_CB]);
+  });
+
+  it('drops the published callback after an unpublish the sync never recorded, and a custom domain that lost serving status', () => {
+    expect(liveEnvRedirectUris([PREVIEW_CB, PUBLISHED_CB, stale], envRedirectUris(ENV_ID, previewOnly))).toEqual([PREVIEW_CB]);
+  });
+
+  it('never ADDS a derived entry the row does not hold — additions are the sync\'s job', () => {
+    expect(liveEnvRedirectUris([PREVIEW_CB], [PREVIEW_CB, PUBLISHED_CB])).toEqual([PREVIEW_CB]);
+  });
+
+  it('given no derivable facts at all, honours nothing', () => {
+    expect(liveEnvRedirectUris([PREVIEW_CB, PUBLISHED_CB], [])).toEqual([]);
+  });
+});
+
+describe('applyPendingRemoval — the facts as they will be once the removal lands', () => {
+  it('unpublish drops the published half and keeps the preview apex', () => {
+    expect(applyPendingRemoval(publishedWithDomains, { unpublish: true })).toEqual(previewOnly);
+  });
+
+  it('a hostname removal drops exactly that custom domain, case-insensitively, and nothing else', () => {
+    const out = applyPendingRemoval(publishedWithDomains, { hostname: 'APP.example.com' });
+    expect(out.published?.customDomains).toEqual(['shop.example.org']);
+    expect(out.published?.subdomain).toBe('staging-4f2');
+    expect(envRedirectUris(ENV_ID, out)).toEqual([PREVIEW_CB, PUBLISHED_CB, 'https://shop.example.org/auth/pagespace/callback']);
+  });
+
+  it('a hostname removal on an unpublished env is a no-op, and the input is never mutated', () => {
+    const before = JSON.stringify(publishedWithDomains);
+    expect(applyPendingRemoval(previewOnly, { hostname: 'app.example.com' })).toEqual(previewOnly);
+    applyPendingRemoval(publishedWithDomains, { hostname: 'app.example.com' });
+    expect(JSON.stringify(publishedWithDomains)).toBe(before);
+  });
+});
+
+describe('syncEnvOAuthClient with a pending removal', () => {
+  it('stores the REDUCED redirect set before the caller makes the removal durable', async () => {
+    const fake = fakeStore();
+    await syncEnvOAuthClient({ envId: ENV_ID, deps: depsFor(publishedWithDomains, fake).deps, removal: { hostname: 'app.example.com' } });
+    expect(fake.rows.get(`env_${ENV_ID}`)?.redirectUris).toEqual([PREVIEW_CB, PUBLISHED_CB, 'https://shop.example.org/auth/pagespace/callback']);
+    await syncEnvOAuthClient({ envId: ENV_ID, deps: depsFor(publishedWithDomains, fake).deps, removal: { unpublish: true } });
+    expect(fake.rows.get(`env_${ENV_ID}`)?.redirectUris).toEqual([PREVIEW_CB]);
+  });
+
+  it('propagates a store failure — a removal that did not land must not look like one that did', async () => {
+    const failing = { ...fakeStore().store, upsert: async () => { throw new Error('db down'); } };
+    const deps = { ...depsFor(publishedWithDomains).deps, store: failing };
+    await expect(syncEnvOAuthClient({ envId: ENV_ID, deps, removal: { unpublish: true } })).rejects.toThrow('db down');
+  });
+});
+

@@ -22,23 +22,18 @@
 import { db } from '@pagespace/db/db';
 import { and, eq, isNull } from '@pagespace/db/operators';
 import { customDomains } from '@pagespace/db/schema/custom-domains';
-import { drives } from '@pagespace/db/schema/core';
-import { driveEnvs } from '@pagespace/db/schema/drive-envs';
 import { oauthClients } from '@pagespace/db/schema/oauth';
 import { publishedApps } from '@pagespace/db/schema/published-apps';
-import { isServingStatus } from '@pagespace/lib/canvas/cert-action';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { resolvePublishedAppsApex } from '@pagespace/lib/services/app-hosting/routing-env';
 import {
   retireEnvOAuthClient,
   syncEnvOAuthClient,
-  type EnvClientHosting,
-  type EnvClientSource,
+  type EnvClientHostingRemoval,
   type EnvOAuthClientStore,
   type SyncEnvOAuthClientResult,
 } from '@pagespace/lib/services/drive-envs/env-oauth-client';
-import { isDevPreviewEnabled, resolveDevPreviewApex } from '@pagespace/lib/services/sandbox/preview/dev-preview-env';
 import { revokeOAuthFamiliesForClient } from '@/lib/repositories/oauth-repository';
+import { loadEnvClientHosting, loadEnvClientSource } from './env-oauth-client-facts';
 
 /** The `oauth_clients`-backed store. `now` is injected for the disable stamp and the revoke, like every other store here. */
 export function createDbEnvOAuthClientStore(now: () => Date = () => new Date()): EnvOAuthClientStore {
@@ -98,45 +93,6 @@ export function createDbEnvOAuthClientStore(now: () => Date = () => new Date()):
   };
 }
 
-/** The env and its drive's OWNER — the client's owner, like every other bill for the env. Null when either is gone. */
-export async function loadEnvClientSource(envId: string): Promise<EnvClientSource | null> {
-  const [row] = await db
-    .select({ id: driveEnvs.id, name: driveEnvs.name, driveOwnerId: drives.ownerId })
-    .from(driveEnvs)
-    .innerJoin(drives, eq(drives.id, driveEnvs.driveId))
-    .where(eq(driveEnvs.id, envId))
-    .limit(1);
-  return row ? { env: { id: row.id, name: row.name }, driveOwnerId: row.driveOwnerId } : null;
-}
-
-/**
- * Where the env's app is reachable: the preview apex (only while the preview
- * feature is on — a host the proxy refuses is not a redirect), the published
- * subdomain, and every custom domain pointed at the app whose DNS ownership
- * is proven (`isServingStatus`: verified, provisioning or active).
- */
-export async function loadEnvClientHosting(envId: string): Promise<EnvClientHosting> {
-  const previewApex = isDevPreviewEnabled() ? resolveDevPreviewApex() : null;
-  const [app] = await db
-    .select({ id: publishedApps.id, subdomain: publishedApps.subdomain })
-    .from(publishedApps)
-    .where(eq(publishedApps.envId, envId))
-    .limit(1);
-  if (!app) return { previewApex, published: null };
-  const domains = await db
-    .select({ hostname: customDomains.hostname, status: customDomains.status })
-    .from(customDomains)
-    .where(eq(customDomains.publishedAppId, app.id));
-  return {
-    previewApex,
-    published: {
-      subdomain: app.subdomain,
-      apex: resolvePublishedAppsApex(),
-      customDomains: domains.filter((d) => isServingStatus(d.status)).map((d) => d.hostname),
-    },
-  };
-}
-
 /** Bring the env's client row up to date with the env's current facts. Throws on a database failure; see the best-effort wrapper. */
 export function syncEnvOAuthClientForEnv(envId: string): Promise<SyncEnvOAuthClientResult> {
   return syncEnvOAuthClient({
@@ -184,6 +140,36 @@ export async function syncEnvOAuthClientBestEffort(target: EnvOAuthClientSyncTar
 /** Env delete: disable `env_<envId>` and revoke everything it issued. The env row may already be gone. */
 export function retireEnvOAuthClientForEnv(envId: string): Promise<{ clientId: string; disabled: boolean; familiesRevoked: number }> {
   return retireEnvOAuthClient({ envId, deps: { store: createDbEnvOAuthClientStore() } });
+}
+
+/** The env a sync target names, or null when its hosting row / domain no longer points anywhere. */
+async function resolveSyncTargetEnvId(target: EnvOAuthClientSyncTarget): Promise<string | null> {
+  if ('envId' in target) return target.envId;
+  if ('publishedAppId' in target) {
+    const [app] = await db.select({ envId: publishedApps.envId }).from(publishedApps).where(eq(publishedApps.id, target.publishedAppId)).limit(1);
+    return app?.envId ?? null;
+  }
+  const [domain] = await db.select({ publishedAppId: customDomains.publishedAppId }).from(customDomains).where(eq(customDomains.id, target.customDomainId)).limit(1);
+  return domain?.publishedAppId ? resolveSyncTargetEnvId({ publishedAppId: domain.publishedAppId }) : null;
+}
+
+/**
+ * A REMOVAL is never best-effort (PR #2711 ruling): the reduced redirect set
+ * is written BEFORE the caller's destructive step, and a failure here THROWS
+ * so that step does not happen and the caller retries the whole operation. A
+ * dropped removal would leave a hostname the customer may no longer control
+ * as a valid redirect; `resolveLiveEnvClientRedirectUris` is the backstop at
+ * authorize time, this is the front door. Returns null when the target no
+ * longer names an env (nothing to remove from).
+ */
+export async function syncEnvOAuthClientForRemoval(target: EnvOAuthClientSyncTarget, removal: EnvClientHostingRemoval): Promise<SyncEnvOAuthClientResult | null> {
+  const envId = await resolveSyncTargetEnvId(target);
+  if (envId === null) return null;
+  return syncEnvOAuthClient({
+    envId,
+    removal,
+    deps: { loadEnv: loadEnvClientSource, loadHosting: loadEnvClientHosting, store: createDbEnvOAuthClientStore() },
+  });
 }
 
 /** The hook shape for delete. Logged at error level: a client that outlives its env is a real, if bounded, exposure. */

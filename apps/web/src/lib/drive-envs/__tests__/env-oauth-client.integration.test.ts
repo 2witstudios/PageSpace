@@ -27,12 +27,13 @@ import { factories } from '@pagespace/db/test/factories';
 import { registeredClientFromRecord, validateRedirectUri } from '@pagespace/lib/auth/oauth/clients';
 import { generateToken } from '@pagespace/lib/auth/token-utils';
 import { buildMachineConfig } from '@pagespace/lib/services/app-hosting/build-core';
-import { ENV_OAUTH_CALLBACK_PATH, envOAuthClientId } from '@pagespace/lib/services/drive-envs/env-oauth-client';
+import { ENV_OAUTH_CALLBACK_PATH, envOAuthClientId, syncEnvOAuthClient } from '@pagespace/lib/services/drive-envs/env-oauth-client';
 import { buildSandboxEnv, findSecretShapedEnvEntries } from '@pagespace/lib/services/sandbox/sandbox-env';
 import { PAGESPACE_CALLBACK_PATH, resolveEnvironmentConfig } from '@pagespace/sdk';
 import { ensureTestDb } from '@/test/ensure-test-db';
 import { resolveClient } from '@/lib/repositories/oauth-repository';
-import { retireEnvOAuthClientForEnv, syncEnvOAuthClientForEnv, syncEnvOAuthClientForPublishedApp } from '../env-oauth-client-runtime';
+import { retireEnvOAuthClientForEnv, syncEnvOAuthClientForEnv, syncEnvOAuthClientForPublishedApp, syncEnvOAuthClientForRemoval } from '../env-oauth-client-runtime';
+import { loadEnvClientHosting, loadEnvClientSource } from '../env-oauth-client-facts';
 
 const PREVIEW_APEX = 'pagespace-preview.app';
 const PUBLISHED_APEX = 'pagespace.io';
@@ -48,8 +49,19 @@ async function clientRowCount(clientId: string): Promise<number> {
   return (await db.select({ id: oauthClients.id }).from(oauthClients).where(eq(oauthClients.clientId, clientId))).length;
 }
 
-/** The REAL authorize-time check, over the REAL stored row: would `/api/oauth/authorize` honour this redirect for this client? */
+/**
+ * The REAL authorize-time check: `resolveClient` is what `/api/oauth/authorize`
+ * calls (static registry, then the enabled row — with an env client's redirects
+ * filtered to what its env still derives), and `validateRedirectUri` is the
+ * redirect rule it applies. Would authorize honour this redirect for this client?
+ */
 async function authorizeWouldHonour(clientId: string, redirectUri: string): Promise<boolean> {
+  const client = await resolveClient(clientId);
+  return client !== null && validateRedirectUri(client, redirectUri);
+}
+
+/** The same check over the RAW stored row — what the answer would be WITHOUT the resolve-time filter (the stale-entry control). */
+async function storedRowWouldHonour(clientId: string, redirectUri: string): Promise<boolean> {
   const row = await clientRow(clientId);
   if (!row) return false;
   const client = registeredClientFromRecord(row);
@@ -186,6 +198,78 @@ describe('US6: sign-in works in an environment and, unchanged, after publish', (
     expect(await authorizeWouldHonour(clientId, `https://${active}${PAGESPACE_CALLBACK_PATH}`)).toBe(false);
   });
 
+  // --- PR #2711 ruling: a dropped REMOVAL must grant nothing at authorize time ---
+  // Each case changes the database the way the removal path would, WITHOUT the
+  // sync that should have followed (the dropped-removal scenario), then asks
+  // the provider's own `resolveClient` — what /api/oauth/authorize calls — and
+  // the real `validateRedirectUri` over it. The stale entry is still in the
+  // row; it is simply not honoured. Same shape as any other refusal.
+
+  it('serving status lost + the removal sync dropped: authorize refuses the hostname, while the still-serving entries are honoured', async () => {
+    const app = await db.query.publishedApps.findFirst({ where: eq(publishedApps.envId, envId) });
+    const lost = `lost-${createId().slice(0, 6)}.example.test`;
+    await db.insert(customDomains).values({ driveId, hostname: lost, status: 'active', publishedAppId: app!.id });
+    expect((await syncEnvOAuthClientForPublishedApp(app!.id))?.ok).toBe(true);
+    expect(await authorizeWouldHonour(clientId, `https://${lost}${PAGESPACE_CALLBACK_PATH}`)).toBe(true);
+
+    // The cert reconciler flips the status; the sync that should have followed never runs.
+    await db.update(customDomains).set({ status: 'cert_failed' }).where(eq(customDomains.hostname, lost));
+    expect(await storedRowWouldHonour(clientId, `https://${lost}${PAGESPACE_CALLBACK_PATH}`)).toBe(true); // stale in the row — the raw row alone would still honour it
+    expect(await authorizeWouldHonour(clientId, `https://${lost}${PAGESPACE_CALLBACK_PATH}`)).toBe(false); // the provider refuses it anyway
+    expect(await authorizeWouldHonour(clientId, `https://${app!.subdomain}.${PUBLISHED_APEX}${PAGESPACE_CALLBACK_PATH}`)).toBe(true);
+    expect(await authorizeWouldHonour(clientId, `https://env-${envId}.preview.${PREVIEW_APEX}${PAGESPACE_CALLBACK_PATH}`)).toBe(true);
+    await db.delete(customDomains).where(eq(customDomains.hostname, lost));
+  });
+
+  it('domain deleted + the removal sync dropped: authorize refuses the hostname', async () => {
+    const app = await db.query.publishedApps.findFirst({ where: eq(publishedApps.envId, envId) });
+    const gone = `gone-${createId().slice(0, 6)}.example.test`;
+    await db.insert(customDomains).values({ driveId, hostname: gone, status: 'active', publishedAppId: app!.id });
+    expect((await syncEnvOAuthClientForPublishedApp(app!.id))?.ok).toBe(true);
+    expect(await authorizeWouldHonour(clientId, `https://${gone}${PAGESPACE_CALLBACK_PATH}`)).toBe(true);
+
+    await db.delete(customDomains).where(eq(customDomains.hostname, gone));
+    expect(await storedRowWouldHonour(clientId, `https://${gone}${PAGESPACE_CALLBACK_PATH}`)).toBe(true);
+    expect(await authorizeWouldHonour(clientId, `https://${gone}${PAGESPACE_CALLBACK_PATH}`)).toBe(false);
+  });
+
+  it('the removal path itself writes the reduced set BEFORE the destructive step, and a store failure throws', async () => {
+    const app = await db.query.publishedApps.findFirst({ where: eq(publishedApps.envId, envId) });
+    const leaving = `leaving-${createId().slice(0, 6)}.example.test`;
+    await db.insert(customDomains).values({ driveId, hostname: leaving, status: 'active', publishedAppId: app!.id });
+    expect((await syncEnvOAuthClientForPublishedApp(app!.id))?.ok).toBe(true);
+    expect((await clientRow(clientId))?.redirectUris).toContain(`https://${leaving}${PAGESPACE_CALLBACK_PATH}`);
+
+    // The domain row still exists (the delete has not happened yet) — the removal is written first.
+    const removed = await syncEnvOAuthClientForRemoval({ publishedAppId: app!.id }, { hostname: leaving });
+    expect(removed?.ok).toBe(true);
+    expect((await clientRow(clientId))?.redirectUris).not.toContain(`https://${leaving}${PAGESPACE_CALLBACK_PATH}`);
+    await db.delete(customDomains).where(eq(customDomains.hostname, leaving));
+
+    // The lib verb propagates a store failure — nothing swallows it on the removal path.
+    await expect(
+      syncEnvOAuthClient({
+        envId,
+        removal: { unpublish: true },
+        deps: { loadEnv: loadEnvClientSource, loadHosting: loadEnvClientHosting, store: { upsert: async () => { throw new Error('db down'); } } },
+      }),
+    ).rejects.toThrow('db down');
+  });
+
+  it('unpublished + the removal sync dropped: authorize refuses the published origin, the preview stays honoured', async () => {
+    const app = await db.query.publishedApps.findFirst({ where: eq(publishedApps.envId, envId) });
+    const publishedOrigin = `https://${app!.subdomain}.${PUBLISHED_APEX}`;
+    expect(await authorizeWouldHonour(clientId, `${publishedOrigin}${PAGESPACE_CALLBACK_PATH}`)).toBe(true);
+    await db.delete(publishedApps).where(eq(publishedApps.id, app!.id)); // no sync follows
+    expect(await storedRowWouldHonour(clientId, `${publishedOrigin}${PAGESPACE_CALLBACK_PATH}`)).toBe(true);
+    expect(await authorizeWouldHonour(clientId, `${publishedOrigin}${PAGESPACE_CALLBACK_PATH}`)).toBe(false);
+    expect(await authorizeWouldHonour(clientId, `https://env-${envId}.preview.${PREVIEW_APEX}${PAGESPACE_CALLBACK_PATH}`)).toBe(true);
+    // The provider still resolves the client (the env exists) — only the redirect is refused.
+    expect(await resolveClient(clientId)).toMatchObject({ clientId, redirectUris: [`https://env-${envId}.preview.${PREVIEW_APEX}${PAGESPACE_CALLBACK_PATH}`] });
+    // Put the hosting row back for the unpublish test below.
+    await db.insert(publishedApps).values({ id: app!.id, envId, driveId, ownerId, flyAppName: app!.flyAppName, networkName: 'published-apps', subdomain: app!.subdomain, status: 'building' });
+  });
+
   it('unpublish → re-upsert removes only the published redirect', async () => {
     const app = await db.query.publishedApps.findFirst({ where: eq(publishedApps.envId, envId) });
     const publishedOrigin = `https://${app!.subdomain}.${PUBLISHED_APEX}`;
@@ -234,6 +318,11 @@ describe('US6: sign-in works in an environment and, unchanged, after publish', (
     // Another client's family is untouched — the revoke is keyed on THIS client's rows.
     const bystanderRow = await db.query.oauthAccessTokens.findFirst({ where: eq(oauthAccessTokens.tokenHash, bystander.hash) });
     expect(bystanderRow?.revokedAt).toBeNull();
+
+    // Env gone + the retire dropped: even an ENABLED row for a deleted env does not resolve (same as an unknown client).
+    await db.update(oauthClients).set({ disabledAt: null }).where(eq(oauthClients.clientId, clientId));
+    expect(await resolveClient(clientId)).toBeNull();
+    await db.update(oauthClients).set({ disabledAt: new Date() }).where(eq(oauthClients.clientId, clientId));
 
     // Idempotent: a second retire disables nothing and revokes nothing.
     expect(await retireEnvOAuthClientForEnv(envId)).toEqual({ clientId, disabled: false, familiesRevoked: 0 });

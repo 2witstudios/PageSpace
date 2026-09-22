@@ -11,6 +11,8 @@ import { eq, and, gt, isNull } from '@pagespace/db/operators';
 import { oauthClients, oauthAuthorizationCodes, oauthRefreshTokens, oauthAccessTokens, oauthDeviceCodes } from '@pagespace/db/schema/oauth';
 import { users } from '@pagespace/db/schema/auth';
 import { resolveClientFrom, type RegisteredClient, type OAuthClientRecord } from '@pagespace/lib/auth/oauth/clients';
+import { parseEnvOAuthClientId } from '@pagespace/lib/services/drive-envs/env-oauth-client';
+import { resolveLiveEnvClientRedirectUris } from '@/lib/drive-envs/env-oauth-client-facts';
 import { hashToken, generateToken } from '@pagespace/lib/auth/token-utils';
 import { decideCodeExchange, type CodeExchangeDecision } from '@pagespace/lib/auth/oauth/code-lifecycle';
 import {
@@ -79,7 +81,18 @@ async function findEnabledOAuthClientRecord(clientId: string): Promise<OAuthClie
       disabledAt: true,
     },
   });
-  return row ?? null;
+  if (!row) return null;
+  // A platform-managed ENV client (Phase 4) answers with only the redirects
+  // its env's CURRENT facts still derive — a custom domain that lost its
+  // proven-serving status, was deleted or detached, or a published origin
+  // after unpublish, is not honoured even if the removal sync never landed;
+  // an env that no longer exists does not resolve at all. Same shapes as any
+  // other invalid redirect / unknown client, so nothing is disclosed.
+  const envId = parseEnvOAuthClientId(clientId);
+  if (envId === null) return row;
+  const live = await resolveLiveEnvClientRedirectUris(envId, row.redirectUris);
+  if (live === null) return null;
+  return { ...row, redirectUris: live };
 }
 
 /**

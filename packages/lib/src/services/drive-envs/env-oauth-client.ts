@@ -60,6 +60,59 @@ export function envOAuthClientId(envId: string): string {
   return `${ENV_OAUTH_CLIENT_ID_PREFIX}${envId}`;
 }
 
+const ENV_ID_SHAPE = /^[a-z0-9]{1,64}$/;
+
+/** Pure: the env id an env client's `client_id` names, or null when the id is not one (any other client). */
+export function parseEnvOAuthClientId(clientId: string): string | null {
+  if (!clientId.startsWith(ENV_OAUTH_CLIENT_ID_PREFIX)) return null;
+  const envId = clientId.slice(ENV_OAUTH_CLIENT_ID_PREFIX.length);
+  return ENV_ID_SHAPE.test(envId) ? envId : null;
+}
+
+/**
+ * Pure: the redirect URIs of an env client that may be HONOURED right now —
+ * the stored set intersected with what the env's current facts derive.
+ *
+ * The stored row is what a lifecycle sync last wrote; the derived set is what
+ * the env's hosting facts say NOW. A stored entry the facts no longer derive
+ * — a custom domain that lost its proven-serving status, was deleted or
+ * detached, a published origin after unpublish — grants nothing, whether or
+ * not the removal sync that should have dropped it ever ran. Point-guard
+ * ruling on PR #2711: a hostname the customer may no longer control must not
+ * stay a valid redirect, PKCE or not. Evaluated at resolve time, so the
+ * authorize endpoint's redirect check sees only live entries and a stale one
+ * fails with the same `invalid_redirect_uri` shape as any other (no oracle).
+ * Order is the stored order; a derived entry the row does not hold is NOT
+ * added (an addition is the sync's job, and visible when missing).
+ */
+export function liveEnvRedirectUris(stored: readonly string[], derivedNow: readonly string[]): string[] {
+  const live = new Set(derivedNow);
+  return stored.filter((uri) => live.has(uri));
+}
+
+/** A removal the caller is about to make durable: the hosting facts as they will be once it lands. */
+export type EnvClientHostingRemoval = { unpublish: true } | { hostname: string };
+
+/**
+ * Pure: the hosting facts with a pending removal applied — the published row
+ * gone, or one custom domain gone (case-insensitive). Used by the removal
+ * paths, which sync the REDUCED set BEFORE the destructive step so a sync
+ * failure aborts the step (and the caller retries) rather than leaving a
+ * redirect behind. Does not mutate its input.
+ */
+export function applyPendingRemoval(hosting: EnvClientHosting, removal: EnvClientHostingRemoval): EnvClientHosting {
+  if ('unpublish' in removal) return { previewApex: hosting.previewApex, published: null };
+  if (hosting.published === null) return { previewApex: hosting.previewApex, published: null };
+  const gone = removal.hostname.trim().toLowerCase();
+  return {
+    previewApex: hosting.previewApex,
+    published: {
+      ...hosting.published,
+      customDomains: hosting.published.customDomains.filter((domain) => domain.trim().toLowerCase() !== gone),
+    },
+  };
+}
+
 /** The env facts the derivation reads. `driveOwnerId` is the drive's owner — the client's owner, like every other bill for the env. */
 export interface EnvClientSource {
   env: { id: string; name: string };
@@ -211,10 +264,20 @@ export type SyncEnvOAuthClientResult = { ok: true; row: EnvOAuthClientRow } | { 
  * the facts and not of the event: a publish ADDS the published redirect
  * without the preview one going anywhere, and an unpublish removes only it.
  */
-export async function syncEnvOAuthClient({ envId, deps }: { envId: string; deps: SyncEnvOAuthClientDeps }): Promise<SyncEnvOAuthClientResult> {
+export async function syncEnvOAuthClient({
+  envId,
+  deps,
+  removal,
+}: {
+  envId: string;
+  deps: SyncEnvOAuthClientDeps;
+  /** A removal about to be made durable: derive as if it already had (see {@link applyPendingRemoval}). */
+  removal?: EnvClientHostingRemoval;
+}): Promise<SyncEnvOAuthClientResult> {
   const source = await deps.loadEnv(envId);
   if (!source) return { ok: false, reason: 'env_not_found' };
-  const row = deriveEnvClient(source, await deps.loadHosting(envId));
+  const hosting = await deps.loadHosting(envId);
+  const row = deriveEnvClient(source, removal ? applyPendingRemoval(hosting, removal) : hosting);
   await deps.store.upsert(row);
   return { ok: true, row };
 }

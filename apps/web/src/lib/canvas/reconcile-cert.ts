@@ -2,7 +2,7 @@ import 'server-only';
 
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { nextCertAction, certActionToDbStatus, isCertEligible, isServingStatus } from '@pagespace/lib/canvas/cert-action';
-import { syncEnvOAuthClientBestEffort } from '@/lib/drive-envs/env-oauth-client-runtime';
+import { syncEnvOAuthClientBestEffort, syncEnvOAuthClientForRemoval } from '@/lib/drive-envs/env-oauth-client-runtime';
 import type { CertAction, CertEligibleStatus, FlyCertResponse } from '@pagespace/lib/canvas/cert-action';
 import {
   describeOwnershipVerification,
@@ -188,11 +188,18 @@ export async function reconcileCustomDomainCert(
 
   const nextStatus = certActionToDbStatus(action);
 
+  // Losing proven-serving status REMOVES this hostname from the sign-in
+  // redirects of the app it points at — written BEFORE the status, never
+  // best-effort: a failure throws, the status stays, and the next reconcile
+  // (cron, or the explicit refresh) retries the whole transition.
+  if (isServingStatus(domain.status) && !isServingStatus(nextStatus)) {
+    await syncEnvOAuthClientForRemoval({ customDomainId: domain.id }, { hostname: domain.hostname });
+  }
+
   await db.update(customDomains).set({ status: nextStatus }).where(eq(customDomains.id, domain.id));
 
-  // Crossing the serving boundary (DNS ownership proven, or lost) adds or
-  // removes this hostname from the redirect URIs of the app it points at.
-  if (isServingStatus(nextStatus) !== isServingStatus(domain.status)) {
+  // Gaining proven-serving status ADDS it (best-effort: visible if missing).
+  if (!isServingStatus(domain.status) && isServingStatus(nextStatus)) {
     await syncEnvOAuthClientBestEffort({ customDomainId: domain.id }, { operation: 'cert-reconcile', hostname: domain.hostname, status: nextStatus });
   }
 

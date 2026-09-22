@@ -25,7 +25,7 @@ import {
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { resolveEnvInDrive } from '@/lib/drive-envs/drive-envs-runtime';
-import { syncEnvOAuthClientBestEffort } from '@/lib/drive-envs/env-oauth-client-runtime';
+import { syncEnvOAuthClientBestEffort, syncEnvOAuthClientForRemoval } from '@/lib/drive-envs/env-oauth-client-runtime';
 import { createPublishedApp, destroyPublishedApp } from '@pagespace/lib/services/app-hosting/provisioner';
 import { resolvePublishedAppsOrgSlug } from '@pagespace/lib/services/app-hosting/app-hosting-env';
 import { allocateUniqueSubdomainWithRetry, subdomainCollisionPrefix } from '@pagespace/lib/services/subdomain-allocation';
@@ -278,6 +278,13 @@ export async function DELETE(request: Request, context: { params: Promise<{ driv
     const app = await findPublishedAppByEnvId(envId);
     if (!app) return NextResponse.json({ error: 'This environment is not published' }, { status: 404 });
 
+    // The published origin leaves the env client's redirect URIs BEFORE the
+    // hosting row and its Fly app go — a removal is never best-effort: if this
+    // write fails the unpublish fails (500) and the caller retries the whole
+    // thing, rather than a torn-down origin staying a valid redirect. The
+    // preview redirect stays — the env still exists and can be published again.
+    await syncEnvOAuthClientForRemoval({ envId }, { unpublish: true });
+
     const result = await destroyPublishedApp(app.id);
     if (!result.ok) {
       const status = result.reason === 'fly_error' ? 502 : 404;
@@ -292,10 +299,6 @@ export async function DELETE(request: Request, context: { params: Promise<{ driv
         { status },
       );
     }
-
-    // The hosting row is gone, so the published redirect leaves the env client;
-    // the preview redirect stays — the env still exists and can be published again.
-    await syncEnvOAuthClientBestEffort({ envId }, { operation: 'unpublish', publishedAppId: app.id });
 
     auditRequest(request, {
       eventType: 'data.delete',

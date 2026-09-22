@@ -9,6 +9,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/drive-envs/env-oauth-client-runtime', () => ({
   syncEnvOAuthClientBestEffort: vi.fn(async () => undefined),
+  syncEnvOAuthClientForRemoval: vi.fn(async () => ({ ok: true })),
   retireEnvOAuthClientBestEffort: vi.fn(async () => ({ clientId: 'env_x', disabled: true, familiesRevoked: 0 })),
 }));
 
@@ -58,6 +59,7 @@ vi.mock('@/lib/canvas/publish-page', () => ({
 }));
 
 import { reconcileCustomDomainCert } from '../reconcile-cert';
+import { syncEnvOAuthClientBestEffort, syncEnvOAuthClientForRemoval } from '@/lib/drive-envs/env-oauth-client-runtime';
 
 const DRIVE_ID = 'drive-1';
 const setMock = vi.fn();
@@ -184,6 +186,34 @@ describe('reconcileCustomDomainCert — cert advance', () => {
     expect(regeneratePublishedSiteFiles).not.toHaveBeenCalled();
     expect(mirrorDriveToCustomHost).not.toHaveBeenCalled();
     expect(clearCustomHost).not.toHaveBeenCalled();
+  });
+});
+
+describe('reconcileCustomDomainCert — the sign-in redirect of the app the domain points at (PR #2711 ruling)', () => {
+  it('verified (serving) + Fly error → cert_failed: the hostname is REMOVED from the env client before the status is written', async () => {
+    const order: string[] = [];
+    addCertificate.mockResolvedValue({ ok: false, error: 'Fly API timeout' });
+    vi.mocked(syncEnvOAuthClientForRemoval).mockImplementationOnce(async () => { order.push('remove'); return { ok: true } as never; });
+    setMock.mockImplementationOnce(() => { order.push('status'); return { where: vi.fn().mockResolvedValue(undefined) }; });
+    const result = await reconcileCustomDomainCert(domain('verified'));
+    expect(result.status).toBe('cert_failed');
+    expect(syncEnvOAuthClientForRemoval).toHaveBeenCalledWith({ customDomainId: expect.any(String) }, { hostname: expect.any(String) });
+    expect(order).toEqual(['remove', 'status']);
+    expect(syncEnvOAuthClientBestEffort).not.toHaveBeenCalled();
+  });
+
+  it('given the removal write fails, the transition is NOT written (the next reconcile retries it)', async () => {
+    addCertificate.mockResolvedValue({ ok: false, error: 'Fly API timeout' });
+    vi.mocked(syncEnvOAuthClientForRemoval).mockRejectedValueOnce(new Error('db down'));
+    await expect(reconcileCustomDomainCert(domain('verified'))).rejects.toThrow('db down');
+    expect(dbUpdate).not.toHaveBeenCalled();
+  });
+
+  it('verified + cert Ready → active stays serving: no removal, no addition (the boundary was not crossed)', async () => {
+    addCertificate.mockResolvedValue({ ok: true, configured: true });
+    await reconcileCustomDomainCert(domain('verified'));
+    expect(syncEnvOAuthClientForRemoval).not.toHaveBeenCalled();
+    expect(syncEnvOAuthClientBestEffort).not.toHaveBeenCalled();
   });
 });
 
