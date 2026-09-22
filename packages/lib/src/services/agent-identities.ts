@@ -47,10 +47,11 @@ const CHALLENGE_PRUNE_BATCH = 100;
  * model T2). The difficulty is stored on the row so a later change to
  * `AGENT_SIGNUP_POW_BITS` never re-grades a challenge already handed out.
  *
- * Each issuance first deletes up to CHALLENGE_PRUNE_BATCH expired challenges.
- * Every row is written by an issuance and each issuance can delete more than
- * one, so expired rows (and the caller IPs on them) cannot accumulate without
- * a cron. An expired row is worthless: the lookup treats it exactly like an
+ * Each issuance first deletes up to CHALLENGE_PRUNE_BATCH expired challenges,
+ * claimed with FOR UPDATE SKIP LOCKED so concurrent issuances take disjoint
+ * batches. Every row is written by an issuance and each issuance can delete
+ * more than one, so expired rows (and the caller IPs on them) cannot
+ * accumulate without a cron, even under a burst. An expired row is worthless: the lookup treats it exactly like an
  * unknown challenge. A prune failure never blocks issuing.
  */
 export async function issueAgentSignupChallenge(input: {
@@ -65,7 +66,11 @@ export async function issueAgentSignupChallenge(input: {
       .from(agentSignupChallenges)
       .where(lt(agentSignupChallenges.expiresAt, input.now))
       .orderBy(agentSignupChallenges.expiresAt)
-      .limit(CHALLENGE_PRUNE_BATCH);
+      .limit(CHALLENGE_PRUNE_BATCH)
+      // Concurrent issuances claim DISJOINT batches: without SKIP LOCKED every
+      // request in a burst selects the same oldest rows, one deletes them, the
+      // rest delete nothing (or wait) — and all of them insert.
+      .for('update', { skipLocked: true });
     await db.delete(agentSignupChallenges).where(inArray(agentSignupChallenges.id, expired));
   } catch (error) {
     loggers.auth.warn('Failed to prune expired agent signup challenges', { error: (error as Error).message });

@@ -114,6 +114,10 @@ export async function POST(request: Request) {
           });
         } catch (trackingError) {
           loggers.api.error('Side question: could not track AI usage', trackingError as Error, { conversationId });
+          // trackUsage settles or releases the hold on its own failure paths; if it
+          // threw before doing either, free the reservation here. Idempotent: a
+          // hold that was already settled or released matches nothing.
+          if (holdId) await releaseHold(holdId).catch(() => {});
         }
       },
     });

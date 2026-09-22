@@ -158,6 +158,23 @@ describe('POST /api/ai/btw', () => {
       expect(mocks.release).not.toHaveBeenCalled();
     });
 
+    it('given trackUsage itself throws, should release the hold as a fallback so it never sits reserved', async () => {
+      await ask();
+      const { onSettle } = mocks.stream.mock.calls[0][0] as { onSettle: Settle };
+      mocks.track.mockRejectedValue(new Error('usage write failed'));
+      await onSettle({ success: true, usage: { inputTokens: 1 }, steps: [] });
+      expect(mocks.release).toHaveBeenCalledWith('hold-1');
+    });
+
+    it('given a metering-exempt call (no hold) whose trackUsage throws, should release nothing', async () => {
+      mocks.exempt.mockReturnValue(true);
+      await ask();
+      const { onSettle } = mocks.stream.mock.calls[0][0] as { onSettle: Settle };
+      mocks.track.mockRejectedValue(new Error('usage write failed'));
+      await onSettle({ success: true, usage: undefined, steps: [] });
+      expect(mocks.release).not.toHaveBeenCalled();
+    });
+
     it('given an aborted or failed stream, should still settle (success false) so the hold never leaks', async () => {
       await ask();
       const { onSettle } = mocks.stream.mock.calls[0][0] as { onSettle: Settle };

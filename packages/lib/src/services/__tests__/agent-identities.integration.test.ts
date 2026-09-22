@@ -33,7 +33,7 @@ vi.mock('../../onboarding/home-drive', async (importOriginal) => {
 });
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
-import { and, eq, inArray } from '@pagespace/db/operators';
+import { and, eq, inArray, lt } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { agentIdentities, agentSignupChallenges } from '@pagespace/db/schema/agent-identities';
@@ -331,4 +331,45 @@ describe('issueAgentSignupChallenge / findAgentSignupChallenge', () => {
       .where(inArray(agentSignupChallenges.id, [expiredId, liveId]));
     expect(remaining.map((r) => r.id)).toEqual([liveId]);
   });
+
+  it('given a concurrent prune holding the oldest batch, should prune the NEXT batch instead of blocking or re-selecting it (SKIP LOCKED)', async () => {
+    const base = Date.now() - 10 * 60_000;
+    const rows = Array.from({ length: 200 }, (_, i) => ({
+      challengeHash: hashToken(`skip-locked-${createId()}`),
+      difficultyBits: 12,
+      expiresAt: new Date(base + i * 1000),
+    }));
+    const inserted = await db.insert(agentSignupChallenges).values(rows).returning({ id: agentSignupChallenges.id, expiresAt: agentSignupChallenges.expiresAt });
+    inserted.sort((a, b) => a.expiresAt.getTime() - b.expiresAt.getTime());
+    const ids = inserted.map((r) => r.id);
+    createdChallengeIds.push(...ids);
+    // Other tests' expired rows may be older; lock whatever the prune would take first.
+    const oldest = await db.select({ id: agentSignupChallenges.id }).from(agentSignupChallenges)
+      .where(lt(agentSignupChallenges.expiresAt, new Date())).orderBy(agentSignupChallenges.expiresAt).limit(100);
+    const lockedIds = oldest.map((r) => r.id);
+
+    let pending: Promise<unknown> | undefined;
+    await db.transaction(async (tx) => {
+      await tx.select({ id: agentSignupChallenges.id }).from(agentSignupChallenges)
+        .where(inArray(agentSignupChallenges.id, lockedIds)).for('update');
+      pending = issueAgentSignupChallenge({ difficultyBits: 12, ttlMs: 5 * 60_000, issuedToIp: null, now: new Date() })
+        .then(async (issued) => {
+          const found = await findAgentSignupChallenge({ challenge: issued.challenge, now: new Date() });
+          if (found.found) createdChallengeIds.push(found.id);
+        });
+      const outcome = await Promise.race([
+        pending.then(() => 'finished'),
+        new Promise((resolve) => setTimeout(() => resolve('blocked'), 3000)),
+      ]);
+      expect(outcome).toBe('finished');
+    });
+    await pending;
+
+    const survivors = new Set((await db.select({ id: agentSignupChallenges.id }).from(agentSignupChallenges)
+      .where(inArray(agentSignupChallenges.id, ids))).map((r) => r.id));
+    // The locked batch survived; a further 100 expired rows were pruned past it.
+    for (const id of lockedIds.filter((id) => ids.includes(id))) expect(survivors.has(id)).toBe(true);
+    expect(ids.filter((id) => !survivors.has(id)).length).toBeGreaterThan(0);
+    expect(ids.filter((id) => !lockedIds.includes(id) && survivors.has(id))).toEqual(ids.filter((id) => !lockedIds.includes(id)).slice(100));
+  }, 15_000);
 });
