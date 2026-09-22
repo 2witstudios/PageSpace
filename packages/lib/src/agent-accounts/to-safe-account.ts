@@ -26,6 +26,8 @@ export type SafeAccount = {
   readonly lastUsedAt: number | null;
   readonly createdAt: number;
   readonly revokedAt: number | null;
+  /** False until the credential plane committed the material (credentialVersion 0): listed, but not usable yet. */
+  readonly ready: boolean;
 };
 
 export function toSafeAccount({ row }: { readonly row: AgentAccountRecord }): SafeAccount {
@@ -42,5 +44,6 @@ export function toSafeAccount({ row }: { readonly row: AgentAccountRecord }): Sa
     lastUsedAt: row.lastUsedAt?.getTime() ?? null,
     createdAt: row.createdAt.getTime(),
     revokedAt: row.revokedAt?.getTime() ?? null,
+    ready: row.credentialVersion > 0,
   };
 }

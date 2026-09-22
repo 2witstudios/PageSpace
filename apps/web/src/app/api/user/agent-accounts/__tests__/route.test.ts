@@ -27,7 +27,7 @@ import { authenticateRequestWithOptions } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const CANARY = 'sk_canary_route_7f3a9c1e5b2d4f6a';
-const safeAccount = { id: 'acct_1', kind: 'api_key', name: 'Weather', ownerKind: 'user', providerSlug: null, allowedOrigins: ['https://api.weather.example:443'], acknowledgment: 'dedicated_agent_account', status: 'active', upstreamRevocation: null, lastUsedAt: null, createdAt: 1, revokedAt: null };
+const safeAccount = { id: 'acct_1', kind: 'api_key', name: 'Weather', ownerKind: 'user', providerSlug: null, allowedOrigins: ['https://api.weather.example:443'], acknowledgment: 'dedicated_agent_account', status: 'active', upstreamRevocation: null, lastUsedAt: null, createdAt: 1, revokedAt: null, ready: true };
 const body = { name: 'Weather', allowedOrigins: ['https://api.weather.example'], ownership: 'dedicated', acknowledged: false, apiKey: CANARY, placement: { in: 'header', name: 'X-Api-Key' }, allowGenericRequests: false };
 const post = (payload: unknown) => new Request('http://localhost/api/user/agent-accounts', { method: 'POST', body: JSON.stringify(payload), headers: { 'content-type': 'application/json' } });
 

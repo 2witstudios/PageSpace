@@ -61,6 +61,7 @@ export function AgentAccountsPanel({ scope }: { readonly scope: AgentAccountScop
               <div className="flex flex-wrap items-center gap-2">
                 <span className="font-medium truncate">{account.name}</span>
                 <Badge variant={account.status === 'active' ? 'secondary' : 'destructive'}>{account.status}</Badge>
+                {!account.ready && account.status === 'active' && <Badge variant="outline">Not ready — add it again</Badge>}
                 <Badge variant="outline">{account.acknowledgment === 'personal_login_acknowledged' ? 'Personal login (acknowledged)' : 'Dedicated account'}</Badge>
               </div>
               <div className="text-xs text-muted-foreground truncate">
