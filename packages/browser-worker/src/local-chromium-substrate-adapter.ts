@@ -38,7 +38,8 @@ const INHERITED_ENV = ['PATH', 'HOME', 'TMPDIR', 'PLAYWRIGHT_BROWSERS_PATH'] as 
 
 const spawnWorker = (entryPath: string, spec: BrowserSessionSpec): Promise<LocalWorkerProcess> =>
   new Promise((resolve, reject) => {
-    const env: Record<string, string> = {
+    const env: NodeJS.ProcessEnv = {
+      NODE_ENV: 'production',
       BROWSER_SESSION_ID: spec.sessionId,
       BROWSER_CONTROL_PUBLIC_KEY: spec.controlPublicKey,
       BROWSER_WORKER_HOST: '127.0.0.1',
