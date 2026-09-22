@@ -109,6 +109,7 @@ export const createSpritesBrowserSubstrate = ({
       if (healthy) return live;
       await host.deleteSprite(browserSpriteName(spec.sessionId)).catch(() => undefined);
     }
+    const provisionedAt = clock();
     const sprite = await host.createSprite(browserSpriteName(spec.sessionId), { cpus: shape.cpus, ramMB: shape.memoryGB * 1024 });
     try {
       const { cmd, args } = await installWorker(sprite);
@@ -121,7 +122,7 @@ export const createSpritesBrowserSubstrate = ({
         ...(spec.allowedOrigins === null ? [] : [`BROWSER_ALLOWED_ORIGINS=${JSON.stringify(spec.allowedOrigins)}`]),
       ];
       await sprite.createService(WORKER_SERVICE, { cmd: 'env', args: [...env, cmd, ...args], httpPort: WORKER_PORT });
-      const session = sessionFor(spec.sessionId, sprite, clock());
+      const session = sessionFor(spec.sessionId, sprite, provisionedAt);
       await waitReady(session);
       return session;
     } catch (error) {

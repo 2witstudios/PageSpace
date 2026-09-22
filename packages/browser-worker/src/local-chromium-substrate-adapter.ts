@@ -27,6 +27,8 @@ export type LocalChromiumSubstrateOptions = {
   readonly launch?: (spec: BrowserSessionSpec) => Promise<LocalWorkerProcess>;
   /** Path of `standalone-browser-worker.js`; defaults to the sibling in this package's dist. */
   readonly entryPath?: string;
+  /** The Chromium executable the workers launch; `undefined` uses Playwright's own browser cache. */
+  readonly executablePath?: string;
   readonly shape?: BrowserSessionShape;
   readonly clock?: () => number;
 };
@@ -36,7 +38,7 @@ const STOP_GRACE_MS = 5_000;
 /** The only variables a worker inherits: enough to find node, the browser cache and a temp dir. */
 const INHERITED_ENV = ['PATH', 'HOME', 'TMPDIR', 'PLAYWRIGHT_BROWSERS_PATH'] as const;
 
-const spawnWorker = (entryPath: string, spec: BrowserSessionSpec): Promise<LocalWorkerProcess> =>
+const spawnWorker = (entryPath: string, executablePath: string | undefined, spec: BrowserSessionSpec): Promise<LocalWorkerProcess> =>
   new Promise((resolve, reject) => {
     const env: NodeJS.ProcessEnv = {
       NODE_ENV: 'production',
@@ -46,6 +48,7 @@ const spawnWorker = (entryPath: string, spec: BrowserSessionSpec): Promise<Local
       BROWSER_WORKER_PORT: '0',
     };
     if (spec.allowedOrigins !== null) env.BROWSER_ALLOWED_ORIGINS = JSON.stringify(spec.allowedOrigins);
+    if (executablePath !== undefined) env.BROWSER_EXECUTABLE_PATH = executablePath;
     for (const name of INHERITED_ENV) {
       const value = process.env[name];
       if (value !== undefined) env[name] = value;
@@ -90,10 +93,11 @@ const sendTo = async (baseUrl: string, request: WorkerRequest): Promise<WorkerRe
 export const createLocalChromiumSubstrate = ({
   launch,
   entryPath = fileURLToPath(new URL('./standalone-browser-worker.js', import.meta.url)),
+  executablePath,
   shape = { cpus: 1, memoryGB: 1 },
   clock = Date.now,
 }: LocalChromiumSubstrateOptions = {}): BrowserSubstrate => {
-  const start = launch ?? ((spec: BrowserSessionSpec) => spawnWorker(entryPath, spec));
+  const start = launch ?? ((spec: BrowserSessionSpec) => spawnWorker(entryPath, executablePath, spec));
   const sessions = new Map<string, Promise<{ readonly process: LocalWorkerProcess; readonly session: ProvisionedBrowserSession }>>();
 
   const provision = async (spec: BrowserSessionSpec): Promise<ProvisionedBrowserSession> => {

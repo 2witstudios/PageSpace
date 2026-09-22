@@ -11,6 +11,11 @@
  *    never leaves this process. Unset or unusable ⇒ no browser tools, never
  *    an ephemeral key (the env-bridge rule).
  *
+ * `local` additionally needs `BROWSER_WORKER_EXECUTABLE`, the path of a
+ * Chromium build that exists on this host: the web image ships no browser
+ * (playwright-core is only the driver), so without one every session would
+ * fail at launch — the tools stay hidden instead.
+ *
  * `sprites` additionally needs `SPRITES_API_TOKEN` (held by the adapter,
  * used only to reach the worker's port), `BROWSER_WORKER_SPRITE_BOOTSTRAP`
  * (the operator's install command that puts Chromium and the worker bundle in
@@ -19,6 +24,7 @@
  * (G6a probe #1), so this path stays dark until an approved probe proves it.
  */
 import type { Tool } from 'ai';
+import { existsSync } from 'node:fs';
 import { createPrivateKey, createPublicKey, sign as nodeSign, type KeyObject } from 'node:crypto';
 import { SpritesClient } from '@fly/sprites';
 import { createLocalChromiumSubstrate } from '@pagespace/browser-worker/local-chromium-substrate-adapter';
@@ -70,8 +76,11 @@ const buildSpritesSubstrate = (): BrowserSubstrate | null => {
 
 const buildSubstrate = (): BrowserSubstrate | null => {
   switch (process.env.BROWSER_SUBSTRATE?.trim()) {
-    case 'local':
-      return createLocalChromiumSubstrate({ entryPath: process.env.BROWSER_WORKER_ENTRY?.trim() || undefined });
+    case 'local': {
+      const executablePath = process.env.BROWSER_WORKER_EXECUTABLE?.trim();
+      if (!executablePath || !existsSync(executablePath)) return null;
+      return createLocalChromiumSubstrate({ entryPath: process.env.BROWSER_WORKER_ENTRY?.trim() || undefined, executablePath });
+    }
     case 'sprites':
       return buildSpritesSubstrate();
     default:

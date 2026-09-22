@@ -24,12 +24,13 @@ const sign = (message: Uint8Array): Uint8Array => new Uint8Array(nodeSign(null, 
 const roots: string[] = [];
 afterAll(async () => Promise.all(roots.map((root) => rm(root, { recursive: true, force: true }))));
 
-const setup = async (options: { readonly refuse?: boolean; readonly refuseAfter?: number } = {}) => {
+const setup = async (options: { readonly refuse?: boolean; readonly refuseAfter?: number; readonly bootMs?: number } = {}) => {
   let opens = 0;
   const profileRoot = await mkdtemp(join(tmpdir(), 'bw-client-'));
   roots.push(profileRoot);
   const launched: string[] = [];
   const meterCalls: unknown[] = [];
+  const workers: { close: () => Promise<void> }[] = [];
   // Starts at the real time: the workers verify instruction windows against their own clock.
   let now = Date.now();
   const substrate = createLocalChromiumSubstrate({
@@ -38,6 +39,8 @@ const setup = async (options: { readonly refuse?: boolean; readonly refuseAfter?
     launch: async (spec: BrowserSessionSpec) => {
       launched.push(spec.sessionId);
       const worker = await startBrowserControlWorker({ ...spec, listen: { host: '127.0.0.1', port: 0 }, profileRoot, clock: () => now });
+      workers.push(worker);
+      now += options.bootMs ?? 0;
       return { url: worker.url, stop: worker.close };
     },
   });
@@ -55,7 +58,7 @@ const setup = async (options: { readonly refuse?: boolean; readonly refuseAfter?
     },
   };
   const client = createBrowserSessionClient<Billing>({ substrate, controlPublicKey, sign, meter, clock: () => now, idleTimeoutMs: 60_000, settleIntervalMs: 120_000 });
-  return { client, launched, meterCalls, advance: (ms: number) => (now += ms) };
+  return { client, launched, meterCalls, workers, advance: (ms: number) => (now += ms) };
 };
 
 const ref = (sessionId: string) => ({ sessionId, allowedOrigins: null, billing: { payerId: 'payer-1' } });
@@ -145,6 +148,31 @@ describe('browser session client', () => {
           ['open', 'payer-1'],
         ],
         launched: ['bws_client_4'],
+      },
+    });
+  });
+
+  it('bills the boot, and replaces a worker that stopped answering', async () => {
+    const { client, launched, meterCalls, workers, advance } = await setup({ bootMs: 20_000 });
+    const op = () => client.operate({ session: ref('bws_client_5'), agentId: 'agent-1', operation: { kind: 'tabs', action: 'list' } });
+    const first = await op();
+    advance(10_000);
+    await workers[0].close();
+    const dead = await op();
+    const revived = await op();
+    await client.end('bws_client_5');
+    assert({
+      given: 'a 20 s boot, 10 s of use, a worker that dies, then two more calls',
+      should: 'settle the dead session including its boot, answer unavailable once, and serve the next call from a fresh worker',
+      actual: {
+        results: [first, dead, revived].map((r) => (r.ok ? 'ok' : r.refusal.reason)),
+        launched,
+        firstSettlement: meterCalls[1],
+      },
+      expected: {
+        results: ['ok', 'unavailable', 'ok'],
+        launched: ['bws_client_5', 'bws_client_5'],
+        firstSettlement: ['close', 'payer-1', 'hold-1', 30, { cpus: 2, memoryGB: 2 }, 'local'],
       },
     });
   });

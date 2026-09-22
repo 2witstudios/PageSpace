@@ -120,10 +120,12 @@ export const createBrowserSessionClient = <B>({
     const opening = (async (): Promise<LiveSession<B> | { readonly refused: string }> => {
       const held = await meter.open(ref.billing);
       if (!held.ok) return { refused: held.reason };
+      // The billing clock starts BEFORE provisioning: creating the machine and
+      // booting the browser run on the paid substrate too.
+      const startedAt = clock();
       try {
         const session = await substrate.provision({ sessionId: ref.sessionId, controlPublicKey, allowedOrigins: ref.allowedOrigins });
-        const now = clock();
-        return { session, billing: ref.billing, hold: held.hold, settledAt: now, lastUsedAt: now, renewal: null };
+        return { session, billing: ref.billing, hold: held.hold, settledAt: startedAt, lastUsedAt: clock(), renewal: null };
       } catch (error) {
         await meter.close({ billing: ref.billing, hold: held.hold, activeSeconds: 0, shape: substrate.shape, substrate: substrate.substrate });
         throw error;
@@ -151,7 +153,13 @@ export const createBrowserSessionClient = <B>({
     if (renewed !== null) return { ok: false, refusal: { reason: 'billing-denied', detail: renewed } };
     opened.lastUsedAt = clock();
     const response = await send(opened.session, { kind: 'agent', agentId }, { type: 'operation', operation }).catch(() => null);
-    if (response === null || response.status !== 200) return unavailable(`The browser did not answer (${response?.status ?? 'no response'}).`);
+    if (response === null || response.status !== 200) {
+      // A worker that cannot answer (exited, expired, unreachable, or no longer
+      // pinned to our key) is not a session: settle and remove it, so the next
+      // call provisions a fresh one instead of retrying a dead end forever.
+      await end(ref.sessionId).catch(() => undefined);
+      return unavailable(`The browser did not answer (${response?.status ?? 'no response'}); a fresh one will be started on the next call.`);
+    }
     return JSON.parse(response.body) as BrowserControlResponse;
   };
 
