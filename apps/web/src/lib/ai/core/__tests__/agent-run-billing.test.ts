@@ -121,6 +121,29 @@ describe('agentRunBillingFields', () => {
     });
   });
 
+  it('reports finished-step and interrupted-step cache reads together', () => {
+    const run: Run = {
+      accumulatedUsage: { ...usage(800, 30), cachedInputTokens: 600 },
+      accumulatedSteps: [{}],
+      abortedStep: interrupted({ priorStepContextTokens: 830, priorStepCachedTokens: 700 }),
+    };
+    const uncached: Run = {
+      accumulatedUsage: usage(800, 30),
+      accumulatedSteps: [{}],
+      abortedStep: interrupted({ priorStepContextTokens: 830 }),
+    };
+
+    assert({
+      given: 'step 1 read 600 tokens from cache and the interrupted step 700, vs a run with no cache data',
+      should: 'report 600 + 700 for the first, and leave the second undefined',
+      actual: {
+        cached: agentRunBillingFields({ agentRun: run, model: MODEL }).cachedInputTokens,
+        uncached: agentRunBillingFields({ agentRun: uncached, model: MODEL }).cachedInputTokens,
+      },
+      expected: { cached: 1300, uncached: undefined },
+    });
+  });
+
   it('adds the interrupted step on top of OpenRouter\'s returned cost and keeps it out of the reconcile', () => {
     const run: Run = {
       accumulatedUsage: usage(800, 30),
