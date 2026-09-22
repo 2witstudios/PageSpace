@@ -13,7 +13,7 @@
  */
 
 import { NextResponse } from 'next/server';
-import { streamText, stepCountIs, hasToolCall, UIMessage, createUIMessageStream, type ToolSet } from 'ai';
+import { streamText, stepCountIs, hasToolCall, UIMessage, createUIMessageStream, type ModelMessage, type ToolSet } from 'ai';
 import type { convertToModelMessages } from 'ai';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { askUserTools, ASK_USER_TOOL_NAME } from '@/lib/ai/tools/ask-user-tools';
@@ -88,7 +88,7 @@ import { maskIdentifier } from '@/lib/logging/mask';
 import type { MCPTool } from '@/types/mcp';
 import type { LocationContext } from '@/lib/ai/shared/chat-types';
 import type { ContextRef } from '@/lib/ai/shared/buildContextRef';
-import { AIMonitoring, extractOpenRouterCostDollars, extractOpenRouterGenerationIds } from '@pagespace/lib/monitoring/ai-monitoring';
+import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { calculateTotalContextSize } from '@pagespace/lib/monitoring/ai-context-calculator';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import {
@@ -97,6 +97,7 @@ import {
   removeStream,
 } from '@/lib/ai/core/stream-abort-registry';
 import { runAgentWithRetry, AGENT_MAX_STEPS, isRunAborted, type RunAgentWithRetryResult } from '@/lib/ai/core/run-agent-with-retry';
+import { agentRunBillingFields } from '@/lib/ai/core/agent-run-billing';
 import { resolveGenerationAdmission } from '@/lib/ai/core/generation-admission';
 import { makeOnStepFinishHandler } from '@/lib/ai/core/step-finish-handler';
 import { resolveRequestContext } from '@/lib/ai/core/resolve-request-context';
@@ -1300,6 +1301,21 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
         });
         // Resolve once outside the per-attempt factory (the factory is synchronous).
         const modelCapabilitiesForTools = await getModelCapabilities(currentModel, currentProvider);
+        // Volatile per-turn data (timestamp/location/mention/command) is appended to the
+        // last user message so the system prefix stays byte-stable and provider prefix
+        // caches survive. One definition, so the abort-billing prompt estimate prices
+        // exactly what the provider was sent.
+        const toSentMessages = (messages: ModelMessage[]): ModelMessage[] =>
+          appendTurnContextToLastUserMessage(
+            messages,
+            buildVolatileTurnContext({
+              timestampPrompt: timestampSystemPrompt,
+              locationPrompt,
+              mentionPrompt: mentionSystemPrompt,
+              commandCatalogPrompt: userCommandCatalog.catalogPrompt,
+              commandPrompt: commandSystemPrompt,
+            }),
+          );
         // Server-side, in-request retry: transparently re-drive the loop under one
         // message envelope when an attempt drops mid-loop or ends without finishing.
         // The loop lives inside execute(), so onFinish still fires exactly once below.
@@ -1315,19 +1331,9 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
           maxSteps: AGENT_MAX_STEPS,
           startTimeMs: startTime,
           logger: loggers.api,
+          toSentMessages,
           buildStreamText: (messages) => {
-            // Volatile per-turn data (timestamp/location/mention/command) is
-            // appended to the last user message so the stable system prefix
-            // stays byte-identical across turns and provider prefix caches
-            // survive — including turns where only the user's page changed.
-            const turnContext = buildVolatileTurnContext({
-              timestampPrompt: timestampSystemPrompt,
-              locationPrompt,
-              mentionPrompt: mentionSystemPrompt,
-              commandCatalogPrompt: userCommandCatalog.catalogPrompt,
-              commandPrompt: commandSystemPrompt,
-            });
-            const messagesWithContext = appendTurnContextToLastUserMessage(messages, turnContext);
+            const messagesWithContext = toSentMessages(messages);
             // Apply cache breakpoints: A) last message, B) summary/elision boundary.
             const cachedMessages = withCacheBreakpoints(messagesWithContext, stableBoundaryIndex);
             return streamText({
@@ -1498,22 +1504,21 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
         // so the orphan-sweep can recover/bill it. Missing tokens mean a $0 cost
         // row, not a skipped one (which would silently front the spend).
         try {
-          const usage = agentRun?.accumulatedUsage;
-          const steps = agentRun?.accumulatedSteps;
           const duration = Date.now() - startTime;
+          // Provider usage + cost, plus the step an abort interrupted (which the
+          // provider charged for but reports no usage on) — see agentRunBillingFields.
+          const { abortedStep, ...billing } = agentRunBillingFields({
+            agentRun,
+            model: currentModel,
+            promptOverheadTokens: () => contextCalculation.systemPromptTokens + contextCalculation.toolDefinitionTokens,
+          });
 
           await AIMonitoring.trackUsage({
             userId: userId!,
             provider: currentProvider,
             model: currentModel,
             source: 'chat',
-            inputTokens: usage?.inputTokens,
-            outputTokens: usage?.outputTokens,
-            totalTokens: usage?.totalTokens,
-            cachedInputTokens: usage?.cachedInputTokens,
-            reasoningTokens: usage?.reasoningTokens,
-            providerCostDollars: extractOpenRouterCostDollars(steps),
-            openrouterGenerationIds: extractOpenRouterGenerationIds(steps),
+            ...billing,
             duration,
             conversationId,
             messageId,
@@ -1533,6 +1538,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
               toolCallsCount: extractedToolCalls.length,
               toolResultsCount: extractedToolResults.length,
               isReadOnly: readOnlyMode,
+              ...(abortedStep ? { abortedStep } : {}),
               retryAttempts: agentRun?.attempts,
               retryOutcome: agentRun?.finalOutcome,
               retryTerminalReason: agentRun?.terminalReason,

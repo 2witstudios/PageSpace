@@ -609,7 +609,11 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   they ran anyway and were charged afterwards. Pressing Run with no credits left now says so; a
   scheduled or task-triggered run that is skipped shows in the workflow's run history as cancelled,
   with the reason, and the schedule moves on to its next time.
-
+- **A stopped AI reply is charged for what it used** — pressing Stop, or running out of credits,
+  while the assistant was still answering used to charge nothing for the unfinished part of the reply,
+  and in a multi-step reply sometimes nothing for the finished steps either. Stopped replies are now
+  charged for the finished steps plus the part of the reply you already saw. The unfinished part is
+  never charged more than the amount set aside when the reply started.
 - **A queued message is no longer lost when it fails to send** — if a message you queued while a
   response was streaming could not be sent (a network error, or not enough credits), it used to
   disappear. It now stays at the front of the queue, you see an error, and it goes out after the
