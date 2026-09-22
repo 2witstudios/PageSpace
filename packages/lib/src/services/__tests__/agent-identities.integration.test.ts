@@ -34,7 +34,7 @@ vi.mock('../../onboarding/home-drive', async (importOriginal) => {
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
 import { and, eq, inArray, lt } from '@pagespace/db/operators';
-import { users } from '@pagespace/db/schema/auth';
+import { users, mcpTokens } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { agentIdentities, agentSignupChallenges } from '@pagespace/db/schema/agent-identities';
 import { hashToken } from '../../auth/token-utils';
@@ -87,6 +87,23 @@ async function signUp(challengeId: string, now = new Date()) {
   });
   if (result.ok) createdUserIds.push(result.data.userId);
   return result;
+}
+
+/** A live mcp_ key row for `userId` (the key an agent mints via POST /api/auth/mcp-tokens). */
+async function mintKeyRow(userId: string): Promise<string> {
+  const [row] = await db.insert(mcpTokens).values({
+    userId,
+    tokenHash: hashToken(`mcp_${createId()}`),
+    tokenPrefix: 'mcp_test',
+    name: 'agent key',
+  }).returning({ id: mcpTokens.id });
+  if (!row) throw new Error('mcp token insert returned nothing');
+  return row.id;
+}
+
+async function keyRevokedAt(id: string): Promise<Date | null> {
+  const [row] = await db.select({ revokedAt: mcpTokens.revokedAt }).from(mcpTokens).where(eq(mcpTokens.id, id));
+  return row?.revokedAt ?? null;
 }
 
 describe('createAgentAccount', () => {
@@ -252,6 +269,29 @@ describe('rotateAgentSecret', () => {
   it('given a user that is not an agent, should be not_found', async () => {
     expect(await rotateAgentSecret({ userId: createId(), revokeTokens: false })).toEqual({ ok: false, error: 'not_found' });
   });
+
+  it("given rotation WITH token revocation, should also revoke the agent's mcp_ keys (they carry no tokenVersion), and no one else's", async () => {
+    const agent = await signUp(await issueChallenge());
+    const other = await signUp(await issueChallenge());
+    if (!agent.ok || !other.ok) throw new Error('signup failed');
+    const agentKey = await mintKeyRow(agent.data.userId);
+    const otherKey = await mintKeyRow(other.data.userId);
+
+    await rotateAgentSecret({ userId: agent.data.userId, revokeTokens: true });
+
+    expect(await keyRevokedAt(agentKey)).toBeInstanceOf(Date);
+    expect(await keyRevokedAt(otherKey)).toBeNull();
+  });
+
+  it("given rotation WITHOUT token revocation, should leave the agent's mcp_ keys live", async () => {
+    const agent = await signUp(await issueChallenge());
+    if (!agent.ok) throw new Error('signup failed');
+    const key = await mintKeyRow(agent.data.userId);
+
+    await rotateAgentSecret({ userId: agent.data.userId, revokeTokens: false });
+
+    expect(await keyRevokedAt(key)).toBeNull();
+  });
 });
 
 describe('revokeAgent', () => {
@@ -267,6 +307,20 @@ describe('revokeAgent', () => {
     const [user] = await db.select({ tokenVersion: users.tokenVersion }).from(users).where(eq(users.id, userId));
     expect(user?.tokenVersion).toBe(2);
     expect((await verifyAgentSecret({ secret, now: new Date() })).decision).toEqual({ status: 'revoked' });
+  });
+
+  it("given a live agent with mcp_ keys, should revoke every one of them in the same transaction, and no one else's", async () => {
+    const agent = await signUp(await issueChallenge());
+    const other = await signUp(await issueChallenge());
+    if (!agent.ok || !other.ok) throw new Error('signup failed');
+    const keys = [await mintKeyRow(agent.data.userId), await mintKeyRow(agent.data.userId)];
+    const otherKey = await mintKeyRow(other.data.userId);
+    const now = new Date();
+
+    await revokeAgent({ userId: agent.data.userId, now });
+
+    for (const key of keys) expect(await keyRevokedAt(key)).toEqual(now);
+    expect(await keyRevokedAt(otherKey)).toBeNull();
   });
 
   it('given an already revoked agent, should report revoked:false and not bump tokenVersion again', async () => {

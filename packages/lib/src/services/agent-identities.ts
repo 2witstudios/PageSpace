@@ -16,7 +16,7 @@
 
 import { db } from '@pagespace/db/db';
 import { and, eq, gt, inArray, isNull, lt, sql } from '@pagespace/db/operators';
-import { users } from '@pagespace/db/schema/auth';
+import { users, mcpTokens } from '@pagespace/db/schema/auth';
 import { agentIdentities, agentSignupChallenges } from '@pagespace/db/schema/agent-identities';
 import { createId } from '@paralleldrive/cuid2';
 import { prepareUserWrite } from '../auth/user-repository';
@@ -26,6 +26,8 @@ import { agentSyntheticEmail } from '../auth/agent/reserved-email';
 import { decideAgentSignin, type AgentSigninDecision } from '../auth/agent/signin-decision';
 import { provisionHomeDriveIfNeeded } from '../onboarding/home-drive';
 import { loggers } from '../logging/logger-config';
+
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 /** Prefix of the claim token an agent hands a human (auth.md "Fund"). Hash-only at rest. */
 export const AGENT_CLAIM_TOKEN_PREFIX = 'ps_claim';
@@ -270,11 +272,28 @@ export type RotateAgentSecretResult =
   | { ok: false; error: 'not_found' };
 
 /**
- * Replace a live agent's secret (ADR 0007 Decision 14). The old secret stops
- * matching immediately. `revokeTokens` also bumps `users.tokenVersion` so
- * every live `ps_at_`/`ps_rt_` minted before the rotation dies.
+ * Every live credential an agent holds carries `users.tokenVersion` — except
+ * its `mcp_` keys, which have no version column and are checked only against
+ * `mcp_tokens.revokedAt`. So "kill every live token" for an agent means BOTH:
+ * bump the version (sessions, `ps_at_`, `ps_rt_`) AND revoke its keys, in the
+ * same transaction. Without the second half a key minted with a leaked secret
+ * outlives the rotation or revocation meant to stop it.
  */
-export async function rotateAgentSecret(input: { userId: string; revokeTokens: boolean }): Promise<RotateAgentSecretResult> {
+async function killAgentCredentials(tx: Tx, userId: string, now: Date): Promise<void> {
+  await tx.update(users)
+    .set({ tokenVersion: sql`${users.tokenVersion} + 1` })
+    .where(eq(users.id, userId));
+  await tx.update(mcpTokens)
+    .set({ revokedAt: now })
+    .where(and(eq(mcpTokens.userId, userId), isNull(mcpTokens.revokedAt)));
+}
+
+/**
+ * Replace a live agent's secret (ADR 0007 Decision 14). The old secret stops
+ * matching immediately. `revokeTokens` also kills every live credential the
+ * agent holds — sessions, `ps_at_`/`ps_rt_` and its `mcp_` keys.
+ */
+export async function rotateAgentSecret(input: { userId: string; revokeTokens: boolean; now?: Date }): Promise<RotateAgentSecretResult> {
   const minted = mintAgentSecret();
 
   return db.transaction(async (tx) => {
@@ -290,9 +309,7 @@ export async function rotateAgentSecret(input: { userId: string; revokeTokens: b
     if (!updated) return { ok: false, error: 'not_found' } as const;
 
     if (input.revokeTokens) {
-      await tx.update(users)
-        .set({ tokenVersion: sql`${users.tokenVersion} + 1` })
-        .where(eq(users.id, input.userId));
+      await killAgentCredentials(tx, input.userId, input.now ?? new Date());
     }
 
     return {
@@ -303,8 +320,9 @@ export async function rotateAgentSecret(input: { userId: string; revokeTokens: b
 }
 
 /**
- * Revoke an agent: `revokedAt` is set and `users.tokenVersion` bumped in one
- * transaction, so the secret stops signing in AND live tokens die (a control
+ * Revoke an agent: `revokedAt` is set and every live credential killed (see
+ * `killAgentCredentials`) in one transaction, so the secret stops signing in
+ * AND live tokens and keys die (a control
  * must reach where the effect lives). Revoking an already revoked agent is a
  * no-op that reports `revoked: false`.
  */
@@ -317,9 +335,7 @@ export async function revokeAgent(input: { userId: string; now: Date }): Promise
       .returning({ userId: agentIdentities.userId });
     if (updated.length === 0) return { revoked: false };
 
-    await tx.update(users)
-      .set({ tokenVersion: sql`${users.tokenVersion} + 1` })
-      .where(eq(users.id, input.userId));
+    await killAgentCredentials(tx, input.userId, input.now);
     return { revoked: true };
   });
 }
