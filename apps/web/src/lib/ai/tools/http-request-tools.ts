@@ -26,9 +26,28 @@ const MAX_BODY_CHARS = 1_000_000;
 /** What a generic request carries (no provider registry entries yet): anything else is dropped before digesting. */
 const PROJECTED_HEADERS = new Set(['accept', 'content-type', 'content-length']);
 
+/** An origin as a person reads it: the default port is implied. */
+const siteOf = (origin: string) => origin.replace(/:443$/, '');
+
 export const httpRequestTools = {
+  list_accounts: tool({
+    description: `List the accounts you can use with http_request: each account's id, name and the sites it works with. Never returns a key. Use it to find the accountId for a site the person mentioned.`,
+    inputSchema: z.object({}),
+    execute: async (_input, { experimental_context }) => {
+      const context = experimental_context as ToolExecutionContext | undefined;
+      const authority = getAccountAuthority();
+      if (context?.userId === undefined || authority === null) return { accounts: [] };
+      const agentPageId = context.chatSource?.type === 'page' ? (context.chatSource.agentPageId ?? null) : null;
+      // The same scoping as the settings list: an agent page's own accounts, or the person's own for the global assistant.
+      const listed = await authority.listAccounts({ actorUserId: context.userId as UserId, owner: agentPageId === null ? { kind: 'user' } : { kind: 'agent_page', agentPageId } });
+      return {
+        accounts: (listed ?? []).filter((account) => account.status === 'active').map((account) => ({ accountId: account.id, name: account.name, sites: account.allowedOrigins.map(siteOf), ready: account.ready })),
+      };
+    },
+  }),
+
   http_request: tool({
-    description: `Make an HTTPS request to an external API using one of this agent's accounts (added by a person in the agent's Accounts settings, or in their personal settings for the global assistant). Pass the account id, never a key: the account supplies its own credential, so do not set Authorization, Cookie or Host. Only the account's allowed origins can be reached, redirects are not followed, and credential-like values are removed from what comes back. Requests may need a person's approval first; if the result says approval_required, ask the person to approve it, then repeat the identical request.`,
+    description: `Make an HTTPS request to an external API using one of this agent's accounts (added by a person in the agent's Accounts settings, or in their personal settings for the global assistant). Pass the account id (list_accounts shows them), never a key: the account supplies its own credential, so do not set Authorization, Cookie or Host. Only the account's allowed origins can be reached, redirects are not followed, and credential-like values are removed from what comes back. Requests may need a person's approval first; if the result says approval_required, ask the person to approve it, then repeat the identical request.`,
     inputSchema: z.object({
       accountId: z.string().min(1).max(64).describe('The id of the account to use, as listed in the agent settings.'),
       method: z.enum(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE']),

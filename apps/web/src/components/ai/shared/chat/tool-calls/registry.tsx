@@ -911,6 +911,8 @@ export const toolRenderers: Record<string, ToolRenderer> = {
     );
   },
 
+  // Plain list of ids, names and sites: the generic view shows it well.
+  list_accounts: () => null,
   http_request: ({ parsedInput, parsedOutput }) => (
     <HttpRequestRenderer method={parsedInput?.method as string | undefined} url={parsedInput?.url as string | undefined} output={parsedOutput as HttpRequestToolOutput} />
   ),

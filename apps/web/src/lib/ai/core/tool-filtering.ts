@@ -439,7 +439,7 @@ export function filterToolsForAgentAllowlist<T>(
 }
 
 /** The agent-account tool, offered only when the deployment configured the credential plane (G2). */
-const AGENT_ACCOUNT_TOOLS = new Set(['http_request']);
+const AGENT_ACCOUNT_TOOLS = new Set(['http_request', 'list_accounts']);
 
 export function filterToolsForAgentAccounts<T>(tools: Record<string, T>, configured: boolean = isAgentAccountsConfigured()): Record<string, T> {
   if (configured) return tools;
