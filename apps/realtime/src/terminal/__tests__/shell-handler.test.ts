@@ -117,6 +117,7 @@ function makeAuthSuccess(over: Partial<{
     shellId: 'shell-row-1',
     workspaceId: 'conv-1',
     sandboxId: 'sbx1',
+    envId: null,
     cwd: over.cwd ?? SANDBOX_ROOT,
     sprite,
     command: over.command ?? 'pagespace-cli',

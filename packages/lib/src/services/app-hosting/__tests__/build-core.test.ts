@@ -16,6 +16,7 @@ import {
   PUBLISHED_APP_INTERNAL_PORT,
   resolveBuildReconcilerPolicy,
 } from '../build-core';
+import { findSecretShapedEnvEntries } from '../../sandbox/sandbox-env';
 
 const DIGEST = `sha256:${'a'.repeat(64)}`;
 
@@ -91,7 +92,8 @@ describe('machine config', () => {
     guestPreset: 'shared-cpu-1x-512',
     publishedAppId: 'abc',
     tier: 'metered',
-    env: { FOO: 'bar', PORT: '3000' },
+    env: { FOO: 'bar', PORT: '3000', PAGESPACE_URL: 'https://attacker.example' },
+    signIn: { envId: 'k3m9xq2p7r4t8v1w5y6z0a1b', pagespaceUrl: 'https://app.pagespace.ai' },
   });
 
   assert({
@@ -117,6 +119,7 @@ describe('machine config', () => {
       guestPreset: 'performance-8x',
       publishedAppId: 'abc',
       tier: 'metered',
+      signIn: { envId: 'k3m9xq2p7r4t8v1w5y6z0a1b', pagespaceUrl: 'https://app.pagespace.ai' },
     }),
     expected: null,
   });
@@ -129,10 +132,39 @@ describe('machine config', () => {
   });
 
   assert({
-    given: 'caller env that tries to move the app off the routed port',
-    should: 'override PORT with the contract port',
+    given: 'caller env that tries to move the app off the routed port and to point sign-in elsewhere',
+    should: 'keep the caller env, override PORT with the contract port, and let the PLATFORM sign-in values win',
     actual: config?.env,
-    expected: { FOO: 'bar', PORT: String(PUBLISHED_APP_INTERNAL_PORT) },
+    expected: {
+      FOO: 'bar',
+      PAGESPACE_URL: 'https://app.pagespace.ai',
+      PAGESPACE_CLIENT_ID: 'env_k3m9xq2p7r4t8v1w5y6z0a1b',
+      PORT: String(PUBLISHED_APP_INTERNAL_PORT),
+    },
+  });
+
+  // Sign in with PageSpace (US6): the published machine gets the SAME two
+  // public values the sandbox gets, from the same function — so an app that
+  // signed in during preview signs in after publish with zero changes.
+  assert({
+    given: 'a published machine for an env whose deployment knows no PageSpace URL',
+    should: 'still name the client, and omit PAGESPACE_URL rather than emit an empty one',
+    actual: buildMachineConfig({
+      flyAppName: 'pgs-app-abc',
+      digest: DIGEST,
+      guestPreset: 'shared-cpu-1x-512',
+      publishedAppId: 'abc',
+      tier: 'metered',
+      signIn: { envId: 'k3m9xq2p7r4t8v1w5y6z0a1b', pagespaceUrl: null },
+    })?.env,
+    expected: { PAGESPACE_CLIENT_ID: 'env_k3m9xq2p7r4t8v1w5y6z0a1b', PORT: String(PUBLISHED_APP_INTERNAL_PORT) },
+  });
+
+  assert({
+    given: 'the published machine env map (secret-shape guard, same rule as the sandbox)',
+    should: 'hold no secret-shaped key or value — a public client id is not a secret',
+    actual: findSecretShapedEnvEntries(config?.env ?? { LEAK_IF_NULL: 'ps_at_x' }),
+    expected: [],
   });
 
   assert({
@@ -398,6 +430,7 @@ describe('machine config: the tier', () => {
       guestPreset,
       publishedAppId: 'abc',
       tier,
+      signIn: { envId: 'k3m9xq2p7r4t8v1w5y6z0a1b', pagespaceUrl: 'https://app.pagespace.ai' },
     });
 
   /** The single service the router replays into. */

@@ -67,6 +67,8 @@ export type ShellSandboxResult =
       /** The owning workspace id (`agent_workspaces.id`) — no conversation involved, a shell is a PTY, not a chat thread. */
       workspaceId: string;
       sandboxId: string;
+      /** The drive ENVIRONMENT the session runs inside, or null — the PTY's env names the env's own OAuth client (`sandbox-env.ts`). */
+      envId: string | null;
       /** The working directory for a FRESH session — always `SANDBOX_ROOT` (`/workspace`). */
       cwd: string;
       sprite: SpriteInstanceLike;
@@ -1202,6 +1204,7 @@ export async function ensureShellSession(
         command: launch.command,
         args: launch.args,
         cwd: sandbox.cwd,
+        envId: sandbox.envId,
         // The watchdog's idle signal, read off the SAME clock the Tasks API
         // hold ticks on (`startTaskHoldHeartbeat` below): once this session
         // has been idle long enough for the platform hold to be dropped, the

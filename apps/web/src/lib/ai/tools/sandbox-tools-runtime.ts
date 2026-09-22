@@ -260,6 +260,9 @@ export function buildRealSandboxRunDeps({
         // The session the sandbox belongs to — what every post-run hook
         // (storage measurement, activity feed) is keyed by.
         workspaceId: row.id,
+        // The env this session runs inside (or null): the sandbox's sign-in
+        // values name the env's own OAuth client, never the session's.
+        envId: row.envId,
         // The CALLER's surface agent page (the conversation this run came
         // through) — purely descriptive per-agent attribution for the usage
         // breakdown, never a billing/payer key. A session hosts MANY

@@ -577,7 +577,7 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
     mockProvisionSessionSandbox.mockResolvedValue({ ok: true, sandboxId: 'sbx-1', resumed: true, workspaceId: 'ws-1' });
     const deps = buildRealSandboxRunDeps();
     const result = await deps.acquireSandbox(baseInput());
-    expect(result).toEqual({ ok: true, sandboxId: 'sbx-1', resumed: true, workspaceId: 'ses-1', pageId: 'agent-1' });
+    expect(result).toEqual({ ok: true, sandboxId: 'sbx-1', resumed: true, workspaceId: 'ses-1', envId: null, pageId: 'agent-1' });
     expect(mockFindSessionForConversation).toHaveBeenCalledWith('conv-1');
     expect(mockProvisionSessionSandbox).toHaveBeenCalledWith(sessionRecord, 'u1');
     expect(mockRecordSessionActivity).toHaveBeenCalledWith({
@@ -586,10 +586,18 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
     });
   });
 
+  it('given an ENV-bound session, should carry the env id on the acquire result (the sandbox env names env_<envId> as its OAuth client)', async () => {
+    mockFindSessionForConversation.mockResolvedValue(makeSessionRecord({ envId: 'env-9' }));
+    mockProvisionSessionSandbox.mockResolvedValue({ ok: true, sandboxId: 'sbx-env', resumed: true, workspaceId: 'ws-1' });
+    const deps = buildRealSandboxRunDeps();
+    const result = await deps.acquireSandbox(baseInput());
+    expect(result).toMatchObject({ ok: true, envId: 'env-9' });
+  });
+
   it('given no agentPageId (a global-assistant conversation), should return no pageId', async () => {
     const deps = buildRealSandboxRunDeps();
     const result = await deps.acquireSandbox(baseInput({ agentPageId: undefined, driveId: undefined }));
-    expect(result).toEqual({ ok: true, sandboxId: 'sbx-1', resumed: false, workspaceId: 'ses-1', pageId: undefined });
+    expect(result).toEqual({ ok: true, sandboxId: 'sbx-1', resumed: false, workspaceId: 'ses-1', envId: null, pageId: undefined });
     expect(mockFindSessionForConversation).toHaveBeenCalledWith('conv-1');
   });
 });

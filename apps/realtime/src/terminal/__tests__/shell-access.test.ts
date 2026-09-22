@@ -56,7 +56,7 @@ function buildDeps(overrides: Partial<ShellCheckAuthDeps> = {}): {
     releaseSlot: () => {},
     ensureSessionSandbox: async () => {
       calls.ensureSessionSandbox += 1;
-      return { ok: true, sandboxId: 'sbx-1' };
+      return { ok: true, sandboxId: 'sbx-1', envId: null };
     },
     getSprite: async () => {
       calls.getSprite += 1;

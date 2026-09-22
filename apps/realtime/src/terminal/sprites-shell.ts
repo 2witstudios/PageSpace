@@ -6,7 +6,7 @@ import type {
 import { readSessionInfoId, spawnWithSelfHealingCwd } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import { isAgentActive } from '@pagespace/lib/services/sandbox/sandbox-client/sprite-tasks';
 import { SANDBOX_ROOT } from '@pagespace/lib/services/sandbox/sandbox-paths';
-import { buildSandboxEnv } from '@pagespace/lib/services/sandbox/sandbox-env';
+import { buildSandboxEnv, type SandboxSignInTarget } from '@pagespace/lib/services/sandbox/sandbox-env';
 import type { ServerEnv } from '@pagespace/lib/config/env-validation';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
@@ -177,6 +177,8 @@ export type OpenPtyShellArgs = {
   command?: string;
   args?: string[];
   cwd?: string;
+  /** The drive ENVIRONMENT this shell runs inside, or null/absent for a session sandbox — see `terminalEnv`. */
+  envId?: string | null;
   onOutput(data: string): void;
   onExit(exitCode: number): void;
   /**
@@ -573,12 +575,12 @@ const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
  * the way out is to kill it and open a fresh one, not to reconnect. Exec
  * sessions do not survive a Sprite pause either, so the window closes on its own.
  */
-export function terminalEnv(): Record<string, string> {
+export function terminalEnv(signIn: SandboxSignInTarget = { envId: null }): Record<string, string> {
   return {
     // Sandbox env first, tty settings last: the ownership described above has to
     // hold at runtime too, so a `TERM`/`LANG` that ever reaches the sandbox env
     // can never quietly reset this surface's terminal type or locale.
-    ...buildSandboxEnv({ env: process.env as Partial<ServerEnv> }),
+    ...buildSandboxEnv({ env: process.env as Partial<ServerEnv>, signIn }),
     TERM: 'xterm-256color',
     COLORTERM: 'truecolor',
     LANG: 'en_US.UTF-8',
@@ -593,6 +595,7 @@ export function openPtyShell({
   command = 'bash',
   args = [],
   cwd = SANDBOX_ROOT,
+  envId = null,
   onOutput,
   onExit,
   onSessionId,
@@ -1119,7 +1122,7 @@ export function openPtyShell({
       tty: true,
       cols: lastCols,
       rows: lastRows,
-      env: terminalEnv(),
+      env: terminalEnv({ envId }),
     });
     current.on('message', (message) => {
       const id = readSessionInfoId(message);

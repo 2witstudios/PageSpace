@@ -127,6 +127,7 @@ function harness({
 
   const deps: AppBuildDeps = {
     isEnabled: () => true,
+    pagespaceUrl: 'https://app.pagespace.ai',
     loadApp: async () => row,
     transition: async (_id, to, patch = {}) => {
       transitions.push({ to, patch: patch as Record<string, unknown> });
