@@ -23,6 +23,8 @@ export type HttpRequestToolResult =
       readonly bodyOmitted: null | 'empty' | 'binary';
       readonly truncated: boolean;
       readonly redacted: boolean;
+      /** Request headers the canonical request did not carry, so they were never sent (lowercase, sorted). */
+      readonly droppedHeaders?: readonly string[];
     }
   | {
       readonly ok: false;
@@ -52,10 +54,21 @@ const MESSAGES: Readonly<Record<string, string>> = {
   destination_denied: "The request targets an address outside this account's allowed origins; nothing was sent.",
 };
 
-export function toHttpRequestToolResult({ accountId, result }: { readonly accountId: string; readonly result: AccountOperationResult }): HttpRequestToolResult {
+export function toHttpRequestToolResult({
+  accountId,
+  result,
+  droppedHeaders = [],
+}: {
+  readonly accountId: string;
+  readonly result: AccountOperationResult;
+  /** Header names the request asked for that the canonical request does not project (never digested, never sent). */
+  readonly droppedHeaders?: readonly string[];
+}): HttpRequestToolResult {
   if (result.ok) {
     const { response } = result;
+    const dropped = [...new Set(droppedHeaders.map((name) => name.toLowerCase()))].sort();
     return {
+      ...(dropped.length > 0 ? { droppedHeaders: dropped } : {}),
       ok: true,
       accountId,
       status: response.status,

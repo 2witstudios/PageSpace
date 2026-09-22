@@ -23,6 +23,8 @@ import { getAccountAuthority } from '@/lib/agent-accounts/account-authority-clie
 import type { ToolExecutionContext } from '../core/types';
 
 const MAX_BODY_CHARS = 1_000_000;
+/** What a generic request carries (no provider registry entries yet): anything else is dropped before digesting. */
+const PROJECTED_HEADERS = new Set(['accept', 'content-type', 'content-length']);
 
 export const httpRequestTools = {
   http_request: tool({
@@ -56,7 +58,8 @@ export const httpRequestTools = {
         accountId,
         request: { channel: 'http-executor', method, url, headers: headers ?? {}, body: new TextEncoder().encode(body ?? '') },
       });
-      return toHttpRequestToolResult({ accountId, result });
+      const droppedHeaders = Object.keys(headers ?? {}).filter((name) => !PROJECTED_HEADERS.has(name.trim().toLowerCase()));
+      return toHttpRequestToolResult({ accountId, result, droppedHeaders });
     },
   }),
 };
