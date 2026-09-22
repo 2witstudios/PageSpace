@@ -154,6 +154,11 @@ describe('PageSpaceAuth constructor', () => {
     expect(() => makeAuth({ baseUrl: 'http://127.0.0.1:3000' })).not.toThrow();
   });
 
+  it('rejects a base URL with surrounding whitespace (it would end up inside every endpoint URL)', () => {
+    expect(isAcceptableBaseUrl(' https://pagespace.example ')).toBe(false);
+    expect(isAcceptableBaseUrl('https://pagespace.example\n')).toBe(false);
+  });
+
   it('rejects a base URL carrying a query or fragment (it would move the token endpoint)', () => {
     expect(isAcceptableBaseUrl('https://pagespace.example#')).toBe(false);
     expect(isAcceptableBaseUrl('https://pagespace.example/?x=1')).toBe(false);
@@ -896,12 +901,10 @@ describe('refresh coordination across providers and sign-ins', () => {
     const world = sharedWorld(server.fetch);
     const provider = await world.signIn(world.make(), 'oli');
     const realGetItem = world.storage.getItem.bind(world.storage);
-    let throwOnce = true;
+    let sessionReads = 0;
     world.storage.getItem = (key) => {
-      if (throwOnce && key.startsWith('pagespace.auth.session')) {
-        throwOnce = false;
-        throw new Error('SecurityError');
-      }
+      // Read 1 is the provider's "still stored?" check; read 2 is the refresh's own read — the one that throws.
+      if (key.startsWith('pagespace.auth.session') && ++sessionReads === 2) throw new Error('SecurityError');
       return realGetItem(key);
     };
 
@@ -923,7 +926,7 @@ describe('refresh coordination across providers and sign-ins', () => {
     world.storage.getItem = (key) => {
       if (key.startsWith('pagespace.auth.session')) {
         sessionReads += 1;
-        if (sessionReads === 2) throw new Error('SecurityError'); // the read after the network call
+        if (sessionReads === 3) throw new Error('SecurityError'); // after the "still stored?" check and the refresh's first read: the read after the network call
       }
       return realGetItem(key);
     };
@@ -1235,6 +1238,74 @@ describe('refresh coordination across providers and sign-ins', () => {
 
     expect([...world.storage.items.keys()]).toEqual([]);
     expect(server.revoked.sort()).toEqual(['ps_rt_ian~1', 'ps_rt_joy~2']);
+  });
+
+  it('a definitively rejected refresh removes the record and revokes the rejected token, so nothing replays it later', async () => {
+    const server = rotatingServer();
+    let malformed = true;
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      if (typeof init?.body === 'string' && init.body.includes('grant_type=refresh_token') && malformed) {
+        malformed = false;
+        await server.fetch(input, init); // the server rotates…
+        return new Response('<html>proxy error</html>', { status: 200 }); // …but the answer is unreadable
+      }
+      return server.fetch(input, init);
+    }) as typeof fetch;
+    const world = sharedWorld(fetchImpl);
+    const provider = await world.signIn(world.make(), 'mia');
+
+    world.advance(900 * 1000);
+    const error = await captureError(() => provider.getAccessToken());
+
+    expect(isAuthenticationError(error)).toBe(true);
+    expect(world.make().restore()).toBeNull();
+    expect(server.revoked).toEqual(['ps_rt_mia~1']); // ends the family whose new pair was lost
+    expect(server.refreshCalls).toEqual(['ps_rt_mia~1']);
+  });
+
+  it('a rejected refresh never erases a newer rotation another realm stored meanwhile', async () => {
+    vi.stubGlobal('navigator', {});
+    try {
+      let world!: ReturnType<typeof sharedWorld>;
+      let winner = '';
+      const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+        const body = new URLSearchParams(typeof init?.body === 'string' ? init.body : '');
+        if (body.get('grant_type') === 'authorization_code') {
+          return jsonResponse(200, { access_token: 'ps_at_ora~1', token_type: 'Bearer', expires_in: 900, refresh_token: 'ps_rt_ora~1', scope: 'profile offline_access' });
+        }
+        if (body.get('grant_type') === 'refresh_token') {
+          // Another tab (no shared lock) rotated first and stored its pair…
+          const record = JSON.parse(world.storage.getItem(`pagespace.auth.session:${CLIENT_ID}`) ?? '{}') as Record<string, unknown>;
+          winner = JSON.stringify({ ...record, rotation: 1, accessToken: 'ps_at_ora~2', refreshToken: 'ps_rt_ora~2', accessExpiresAt: 99_999_999_999 });
+          world.storage.setItem(`pagespace.auth.session:${CLIENT_ID}`, winner);
+          return jsonResponse(400, { error: 'invalid_grant' }); // …so this presentation is refused
+        }
+        return new Response(null, { status: 200 });
+      }) as typeof fetch;
+      world = sharedWorld(fetchImpl);
+      const provider = await world.signIn(world.make(), 'ora');
+
+      world.advance(900 * 1000);
+      await captureError(() => provider.getAccessToken());
+
+      expect(world.storage.getItem(`pagespace.auth.session:${CLIENT_ID}`)).toBe(winner);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('a provider in ANOTHER instance stops serving its cached access token once the sign-in is signed out', async () => {
+    const server = rotatingServer();
+    const failingRevoke = (async (input: string | URL | Request, init?: RequestInit) =>
+      String(input).endsWith('/revoke') ? jsonResponse(503, {}) : server.fetch(input, init)) as typeof fetch;
+    const world = sharedWorld(failingRevoke);
+    const provider = await world.signIn(world.make(), 'noa');
+    await expect(provider.getAccessToken()).resolves.toBe('ps_at_noa~1');
+
+    await world.make().signOut(); // another tab; revocation fails, so the server still honours the token
+
+    const error = await captureError(() => provider.getAccessToken());
+    expect(isAuthenticationError(error)).toBe(true);
   });
 
   it('signOut from ANOTHER instance waits for an in-flight refresh, then revokes the rotated token; the old provider is dead', async () => {

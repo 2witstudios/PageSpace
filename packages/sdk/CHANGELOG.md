@@ -65,7 +65,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   a token back cannot route it into your logs through the SDK.
 - An access-only grant (no `offline_access`, so no refresh token) signs in, is used for its whole
   lifetime, and then fails closed at expiry without a network call.
-- A base URL carrying a query or fragment is rejected (it would move every endpoint).
+- A base URL carrying a query or fragment, or surrounding whitespace, is rejected (it would end
+  up inside every endpoint URL).
+- A definitively rejected refresh (including an unreadable 2xx, after which the server may have
+  rotated) removes the stored session and revokes the presented token, so it is never replayed.
+- A provider returned by `PageSpaceAuth` checks that its sign-in is still stored before handing
+  out even a cached access token, so a sign-out in another tab takes effect at once.
 
 ### Compatibility
 

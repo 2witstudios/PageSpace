@@ -24,7 +24,8 @@
  */
 import { z } from 'zod';
 import { AuthenticationError, NetworkError } from '../errors.js';
-import { OAuthTokenProvider, type OAuthTokens, type RefreshAccessToken } from './oauth.js';
+import { classifyRefreshFailure } from './decide.js';
+import { OAuthTokenProvider, type OAuthTokenProviderInit, type OAuthTokens, type RefreshAccessToken } from './oauth.js';
 import { deriveCodeChallenge, generateCodeVerifier } from './pkce.js';
 import {
   buildAuthorizeUrl,
@@ -174,6 +175,8 @@ export function isAcceptableBaseUrl(baseUrl: string): boolean {
   // (`https://host#` + `/api/oauth/token` posts to `/`). Checked on the raw
   // string: `new URL('https://host#').hash` is empty.
   if (baseUrl.includes('?') || baseUrl.includes('#')) return false;
+  // `new URL` trims surrounding whitespace, but the ORIGINAL string is what endpoints are built from.
+  if (baseUrl !== baseUrl.trim()) return false;
   let url: URL;
   try {
     url = new URL(baseUrl);
@@ -352,6 +355,30 @@ const LINEAGE_BYTES = 16;
 /** Upper bound on queued revocations, so a long-offline app cannot grow storage without limit. */
 const MAX_PENDING_REVOCATIONS = 20;
 const STATE_BYTES = 32;
+
+/**
+ * An `OAuthTokenProvider` bound to a stored session: before handing out even
+ * a cached access token it checks that its sign-in's record still exists, so
+ * a sign-out in another tab or instance takes effect at once — not only when
+ * the cached token next needs a refresh. A storage read that throws does not
+ * block it (the record may well be there).
+ */
+class StoredSessionTokenProvider extends OAuthTokenProvider {
+  readonly #stillStored: () => boolean;
+
+  constructor(options: OAuthTokenProviderInit, stillStored: () => boolean) {
+    super(options);
+    this.#stillStored = stillStored;
+  }
+
+  override async getAccessToken(): Promise<string> {
+    if (!this.#stillStored()) {
+      this.invalidate();
+      throw new AuthenticationError('This sign-in was signed out or replaced by another sign-in; sign in again.', 'auth.getAccessToken');
+    }
+    return super.getAccessToken();
+  }
+}
 
 export class PageSpaceAuth {
   readonly baseUrl: string;
@@ -644,6 +671,24 @@ export class PageSpaceAuth {
     await withSessionLock(this.#lockName, async () => this.#mergePendingRevocations(storage, replaced.baseUrl, change));
   }
 
+  /**
+   * A definitive refresh rejection (revoked, expired, replayed — or a 2xx the
+   * SDK could not read, after which the server may have rotated) ends the
+   * session: the record is removed, if it is still exactly the one that was
+   * presented (a concurrent winner is never erased), and the presented token
+   * is revoked — which ends its family even if a rotated pair was lost in
+   * transit. Queued write-ahead, like every revocation. Caller holds the lock.
+   */
+  async #discardRejected(storage: AuthStorage, presented: StoredSession): Promise<void> {
+    const current = this.#readStoredSession(storage);
+    if (current.kind !== 'present' || current.session.lineage !== presented.lineage || current.session.rotation !== presented.rotation) return;
+    const token = tokenOf(presented);
+    this.#mergePendingRevocations(storage, this.baseUrl, { remove: [], add: [token] });
+    this.#forget(storage);
+    const result = await this.#revokeAt(this.baseUrl, token);
+    if (result.outcome === 'revoked') this.#mergePendingRevocations(storage, this.baseUrl, { remove: [token], add: [] });
+  }
+
   #invalidateProviders(): void {
     for (const provider of this.#providers) provider.invalidate();
     this.#providers.clear();
@@ -776,12 +821,16 @@ export class PageSpaceAuth {
       refreshExpiresAt: session.refreshExpiresAt,
       scope: session.scope,
     };
+    const stillStored = (): boolean => {
+      const read = this.#readStoredSession(storage);
+      return read.kind === 'unreadable' || (read.kind === 'present' && read.session.lineage === session.lineage);
+    };
     if (session.refreshToken === null) {
       const noRefresh: RefreshAccessToken = async () => {
         throw new AuthenticationError('This sign-in has no refresh token (the grant had no offline_access); sign in again.', 'auth.refresh');
       };
       // Skew 0: with nothing to refresh to, the token is used for its whole lifetime, then fails closed.
-      return new OAuthTokenProvider({ initialTokens, refreshAccessToken: noRefresh, now: this.#now, skewMs: 0 });
+      return new StoredSessionTokenProvider({ initialTokens, refreshAccessToken: noRefresh, now: this.#now, skewMs: 0 }, stillStored);
     }
     const tokenEndpointRefresh = createTokenEndpointRefresh({
       tokenEndpoint: pageSpaceOAuthEndpoints(this.baseUrl).tokenEndpoint,
@@ -829,7 +878,13 @@ export class PageSpaceAuth {
 
         // The stored record is the newest rotation of this sign-in, so its token is the one to present —
         // never the one held in memory, which another provider may already have spent.
-        const tokens = await tokenEndpointRefresh(stored.refreshToken);
+        let tokens: OAuthTokens;
+        try {
+          tokens = await tokenEndpointRefresh(stored.refreshToken);
+        } catch (error) {
+          if (classifyRefreshFailure(error) === 'terminal') await this.#discardRejected(storage, stored);
+          throw error;
+        }
         const next: StoredSession = {
           v: 1,
           baseUrl: this.baseUrl,
@@ -855,6 +910,6 @@ export class PageSpaceAuth {
         heldRotation = next.rotation;
         return tokens;
       });
-    return new OAuthTokenProvider({ initialTokens, refreshAccessToken, now: this.#now });
+    return new StoredSessionTokenProvider({ initialTokens, refreshAccessToken, now: this.#now }, stillStored);
   }
 }
