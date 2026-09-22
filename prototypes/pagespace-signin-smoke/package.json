@@ -1,0 +1,16 @@
+{
+  "name": "pagespace-signin-smoke",
+  "private": true,
+  "version": "0.0.1",
+  "license": "UNLICENSED",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-basic-ssl": "^2.0.0",
+    "typescript": "~5.8.3",
+    "vite": "^6.3.2"
+  }
+}
