@@ -23,7 +23,7 @@
  * shows none).
  */
 import { z } from 'zod';
-import { AuthenticationError } from '../errors.js';
+import { AuthenticationError, NetworkError } from '../errors.js';
 import { OAuthTokenProvider, type OAuthTokens, type RefreshAccessToken } from './oauth.js';
 import { deriveCodeChallenge, generateCodeVerifier } from './pkce.js';
 import {
@@ -217,6 +217,13 @@ const sessionSchema = z.object({
 });
 type StoredSession = z.infer<typeof sessionSchema>;
 
+/** Tokens a signOut() could not get the server to revoke: kept (and retried by the next signOut) rather than lost. */
+const pendingRevocationSchema = z.object({
+  v: z.literal(1),
+  baseUrl: z.string(),
+  tokens: z.array(z.string().min(1)).min(1),
+});
+
 /** Pure: parse-and-validate a stored JSON record, or null for anything absent, unparseable or the wrong shape. */
 function parseStored<T>(raw: string | null, schema: z.ZodType<T>): T | null {
   if (raw === null) return null;
@@ -349,6 +356,8 @@ export class PageSpaceAuth {
   readonly #fetch: typeof fetch | undefined;
   readonly #now: () => number;
   readonly #randomBytes: (length: number) => Uint8Array;
+  /** Providers this instance created, so signOut() can stop them serving a cached access token. */
+  readonly #providers = new Set<OAuthTokenProvider>();
 
   constructor(options: PageSpaceAuthOptions) {
     const invalid = [
@@ -492,19 +501,21 @@ export class PageSpaceAuth {
     const outcome = await withSessionLock(this.#lockName, async () => {
       const previous = this.#readStoredSession(storage);
       return {
-        replaced: previous.kind === 'present' && previous.session.lineage !== lineage ? previous.session : null,
+        replaced:
+          previous.kind === 'foreign' || (previous.kind === 'present' && previous.session.lineage !== lineage) ? previous.session : null,
         persisted: this.#persistSession(storage, session),
       };
     });
-    // One session per app and storage: the sign-in this one replaces is ended on the server, not just forgotten.
-    if (outcome.replaced !== null) await this.#revokeSession(outcome.replaced);
+    // One session per app and storage: the sign-in this one replaces is ended on the server, not just
+    // forgotten — in the background (revokeToken never throws), so a slow endpoint does not delay sign-in.
+    if (outcome.replaced !== null) void this.#revokeSession(outcome.replaced);
     if (!outcome.persisted) {
       // A session exists only while its record is stored — that is what lets signOut() end it.
       // Tokens that could not be stored are revoked rather than left alive in memory.
       await this.#revokeSession(session);
       throw new SignInError('storage_unavailable');
     }
-    return this.#providerFor(session, storage);
+    return this.#track(this.#providerFor(session, storage));
   }
 
   /**
@@ -524,11 +535,13 @@ export class PageSpaceAuth {
     }
     if (raw === null) return null;
     const session = parseStored(raw, sessionSchema);
-    if (session === null || !sameDeployment(session.baseUrl, this.baseUrl) || !isSessionUsable(session, this.#now())) {
+    // Another deployment's record (same client id) is not ours to delete: its session stays revocable by its own signOut().
+    if (session !== null && !sameDeployment(session.baseUrl, this.baseUrl)) return null;
+    if (session === null || !isSessionUsable(session, this.#now())) {
       this.#forget(storage);
       return null;
     }
-    return this.#providerFor(session, storage);
+    return this.#track(this.#providerFor(session, storage));
   }
 
   /**
@@ -539,33 +552,74 @@ export class PageSpaceAuth {
    */
   async signOut(): Promise<RevokeTokenResult | null> {
     const storage = this.#resolveStorage();
+    // Providers this instance handed out stop serving their cached access token at once; their next
+    // refresh finds no record and fails closed. (Providers in other tabs learn it from the server's revocation.)
+    for (const provider of this.#providers) provider.invalidate();
+    this.#providers.clear();
     if (storage === null) return null;
     // Under the refresh lock: a refresh already in flight (in any instance or
     // tab sharing this lock) finishes and persists first, so the token revoked
     // below is the newest one — revoking it ends the whole sign-in family.
-    const session = await withSessionLock(this.#lockName, async () => {
-      let raw: string | null;
-      try {
-        raw = storage.getItem(this.#sessionKey);
-      } catch {
-        return null;
+    const toRevoke = await withSessionLock(this.#lockName, async () => {
+      const tokens = this.#readPendingRevocations(storage);
+      const read = this.#readStoredSession(storage);
+      if (read.kind === 'present') {
+        this.#forget(storage);
+        tokens.unshift(read.session.refreshToken ?? read.session.accessToken);
       }
-      this.#forget(storage);
-      const stored = parseStored(raw, sessionSchema);
-      return stored !== null && sameDeployment(stored.baseUrl, this.baseUrl) ? stored : null;
+      return tokens;
     });
-    if (session === null) return null;
-    return this.#revokeSession(session);
+    if (toRevoke.length === 0) return null;
+
+    const results = await Promise.all(
+      toRevoke.map(async (token) => ({ token, result: await this.#revokeAt(this.baseUrl, token) })),
+    );
+    const failed = results.filter(({ result }) => result.outcome === 'failed');
+    // A revocation the server did not accept is kept, not lost: the next signOut() retries it.
+    await withSessionLock(this.#lockName, async () => this.#writePendingRevocations(storage, failed.map(({ token }) => token)));
+    return failed.length === 0 ? { outcome: 'revoked' } : failed[0].result;
+  }
+
+  #readPendingRevocations(storage: AuthStorage): string[] {
+    try {
+      const pending = parseStored(storage.getItem(this.#pendingRevocationKey), pendingRevocationSchema);
+      return pending !== null && sameDeployment(pending.baseUrl, this.baseUrl) ? [...pending.tokens] : [];
+    } catch {
+      return [];
+    }
+  }
+
+  #writePendingRevocations(storage: AuthStorage, tokens: readonly string[]): void {
+    try {
+      if (tokens.length === 0) {
+        storage.removeItem(this.#pendingRevocationKey);
+      } else {
+        storage.setItem(this.#pendingRevocationKey, JSON.stringify({ v: 1, baseUrl: this.baseUrl, tokens }));
+      }
+    } catch {
+      // Best effort: the failure was already reported to the caller as the signOut() result.
+    }
+  }
+
+  get #pendingRevocationKey(): string {
+    return `pagespace.auth.revoke-pending:${this.clientId}`;
+  }
+
+  #track(provider: OAuthTokenProvider): OAuthTokenProvider {
+    this.#providers.add(provider);
+    return provider;
   }
 
   /** Revokes a stored session's refresh token (its whole family), or its access token when it has none. Never throws. */
   #revokeSession(session: StoredSession): Promise<RevokeTokenResult> {
+    return this.#revokeAt(session.baseUrl, session.refreshToken ?? session.accessToken);
+  }
+
+  /** Revocation goes to the deployment that issued the token — never anywhere a stored value could point that is not an acceptable base URL. */
+  #revokeAt(baseUrl: string, token: string): Promise<RevokeTokenResult> {
+    const target = isAcceptableBaseUrl(baseUrl) ? baseUrl : this.baseUrl;
     return revokeToken(
-      {
-        revocationEndpoint: pageSpaceOAuthEndpoints(this.baseUrl).revocationEndpoint,
-        token: session.refreshToken ?? session.accessToken,
-        clientId: this.clientId,
-      },
+      { revocationEndpoint: pageSpaceOAuthEndpoints(target).revocationEndpoint, token, clientId: this.clientId },
       { fetch: this.#fetch },
     );
   }
@@ -607,7 +661,14 @@ export class PageSpaceAuth {
   }
 
   /** The stored session record as this deployment sees it: unreadable (storage threw), absent, or present. */
-  #readStoredSession(storage: AuthStorage): { readonly kind: 'unreadable' } | { readonly kind: 'absent' } | { readonly kind: 'present'; readonly session: StoredSession } {
+  /** The stored record as this deployment sees it: unreadable (storage threw), absent, another deployment's, or ours. */
+  #readStoredSession(
+    storage: AuthStorage,
+  ):
+    | { readonly kind: 'unreadable' }
+    | { readonly kind: 'absent' }
+    | { readonly kind: 'foreign'; readonly session: StoredSession }
+    | { readonly kind: 'present'; readonly session: StoredSession } {
     let raw: string | null;
     try {
       raw = storage.getItem(this.#sessionKey);
@@ -615,7 +676,8 @@ export class PageSpaceAuth {
       return { kind: 'unreadable' };
     }
     const session = parseStored(raw, sessionSchema);
-    return session !== null && sameDeployment(session.baseUrl, this.baseUrl) ? { kind: 'present', session } : { kind: 'absent' };
+    if (session === null) return { kind: 'absent' };
+    return sameDeployment(session.baseUrl, this.baseUrl) ? { kind: 'present', session } : { kind: 'foreign', session };
   }
 
   #providerFor(session: StoredSession, storage: AuthStorage): OAuthTokenProvider {
@@ -659,37 +721,33 @@ export class PageSpaceAuth {
     //      record vanished or was replaced during the call, or cannot be
     //      stored, revokes the pair it just received and fails closed, so no
     //      token lives on where signOut() cannot reach it.
-    const refreshAccessToken: RefreshAccessToken = (heldRefreshToken) =>
+    const refreshAccessToken: RefreshAccessToken = () =>
       withSessionLock(this.#lockName, async () => {
         const read = this.#readStoredSession(storage);
+        // A storage read that throws is a hiccup, not a verdict: retryable, and nothing is revoked.
+        if (read.kind === 'unreadable') throw new NetworkError('The stored session could not be read; try again.', { operation: 'auth.refresh' });
         if (read.kind !== 'present' || read.session.lineage !== lineage) throw signedOutOrReplaced();
         const stored = read.session;
-        let presentToken = heldRefreshToken;
-        let fromRotation = heldRotation;
-        if (stored.rotation > heldRotation) {
-          if (stored.refreshToken === null) throw signedOutOrReplaced();
+        if (stored.refreshToken === null) throw signedOutOrReplaced();
+        if (stored.rotation > heldRotation && this.#now() + ADOPT_FRESH_SKEW_MS < stored.accessExpiresAt) {
           heldRotation = stored.rotation;
-          if (this.#now() + ADOPT_FRESH_SKEW_MS < stored.accessExpiresAt) {
-            return {
-              accessToken: stored.accessToken,
-              accessExpiresAt: stored.accessExpiresAt,
-              refreshToken: stored.refreshToken,
-              refreshExpiresAt: stored.refreshExpiresAt,
-              scope: stored.scope,
-            };
-          }
-          presentToken = stored.refreshToken;
-          fromRotation = stored.rotation;
+          return {
+            accessToken: stored.accessToken,
+            accessExpiresAt: stored.accessExpiresAt,
+            refreshToken: stored.refreshToken,
+            refreshExpiresAt: stored.refreshExpiresAt,
+            scope: stored.scope,
+          };
         }
 
-        const tokens = await tokenEndpointRefresh(presentToken);
-        const rotation = fromRotation + 1;
-        heldRotation = rotation;
+        // The stored record is the newest rotation of this sign-in, so its token is the one to present —
+        // never the one held in memory, which another provider may already have spent.
+        const tokens = await tokenEndpointRefresh(stored.refreshToken);
         const next: StoredSession = {
           v: 1,
           baseUrl: this.baseUrl,
           lineage,
-          rotation,
+          rotation: stored.rotation + 1,
           accessToken: tokens.accessToken,
           accessExpiresAt: tokens.accessExpiresAt,
           refreshToken: tokens.refreshToken,
@@ -698,14 +756,16 @@ export class PageSpaceAuth {
         };
         // Storage shared without a common lock (another realm) may have been
         // signed out of, or given a newer sign-in, during the network call.
+        // An unreadable storage is not proof of either: still try to persist.
         const current = this.#readStoredSession(storage);
-        const stillOurs = current.kind === 'present' && current.session.lineage === lineage;
+        const stillOurs = current.kind === 'unreadable' || (current.kind === 'present' && current.session.lineage === lineage);
         if (!stillOurs || !this.#persistSession(storage, next)) {
           await this.#revokeSession(next);
           throw stillOurs
             ? new AuthenticationError('The refreshed session could not be stored, so it was revoked; sign in again.', 'auth.refresh')
             : signedOutOrReplaced();
         }
+        heldRotation = next.rotation;
         return tokens;
       });
     return new OAuthTokenProvider({ initialTokens, refreshAccessToken, now: this.#now });

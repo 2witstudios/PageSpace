@@ -44,8 +44,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the one that remains and sign-out revokes the newest token. A session exists only while its
   record is stored — that is what lets `signOut()` end it everywhere — so a sign-in or rotation
   that cannot be stored is revoked and fails closed, and a new sign-in in the same storage
-  revokes the one it replaces. A duplicated tab still starts from a copy of `sessionStorage`
-  (see the README).
+  revokes the one it replaces (in the background, so sign-in never waits on it). A refresh always
+  presents the stored — newest — refresh token, so a failed attempt never leads to replaying a
+  spent one; a storage read that throws is a retryable hiccup, not a sign-out. `signOut()` stops
+  this instance's providers from serving a cached access token, and a revocation the server does
+  not accept is kept and retried by the next `signOut()`. A duplicated tab still starts from a
+  copy of `sessionStorage` (see the README).
 - Token-endpoint calls take a `timeoutMs` (default 30s) covering headers and body, enforced even
   when a custom `fetch` ignores `AbortSignal`; a hung request is a retryable `TimeoutError`, so it
   cannot hold the refresh lock indefinitely.

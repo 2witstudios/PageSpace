@@ -826,6 +826,148 @@ describe('refresh coordination across providers and sign-ins', () => {
     }
   });
 
+  it('a network failure while picking up another provider\'s newer rotation never leads to replaying a spent token', async () => {
+    const server = rotatingServer();
+    let refreshAttempts = 0;
+    const flakyFetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      if (typeof init?.body === 'string' && init.body.includes('grant_type=refresh_token')) {
+        refreshAttempts += 1;
+        if (refreshAttempts === 2) throw new TypeError('network down'); // never reaches the server
+      }
+      return server.fetch(input, init);
+    }) as typeof fetch;
+    const world = sharedWorld(flakyFetch);
+    const auth = world.make();
+    const p1 = await world.signIn(auth, 'lou');
+    const p2 = auth.restore();
+
+    world.advance(900 * 1000);
+    await p1.getAccessToken(); // rotation 1 stored
+    world.advance(900 * 1000); // stored access token now stale for p2 too
+    await captureError(async () => p2?.getAccessToken()); // picks up rotation 1, network fails
+    const retried = await p2?.getAccessToken();
+
+    expect(retried).toBe('ps_at_lou~3');
+    expect(server.refreshCalls).toEqual(['ps_rt_lou~1', 'ps_rt_lou~2']); // no replay of a spent token
+  });
+
+  it('a signOut whose revocation fails can be retried: the next signOut revokes it', async () => {
+    const server = rotatingServer();
+    let revokeFailures = 1;
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).endsWith('/revoke') && revokeFailures > 0) {
+        revokeFailures -= 1;
+        return jsonResponse(503, {});
+      }
+      return server.fetch(input, init);
+    }) as typeof fetch;
+    const world = sharedWorld(fetchImpl);
+    const auth = world.make();
+    await world.signIn(auth, 'max');
+
+    const first = await auth.signOut();
+    const second = await world.make().signOut();
+    const third = await auth.signOut();
+
+    expect(first).toMatchObject({ outcome: 'failed', retryable: true });
+    expect(second).toEqual({ outcome: 'revoked' });
+    expect(server.revoked).toEqual(['ps_rt_max~1']);
+    expect(third).toBeNull();
+    expect(world.storage.items.size).toBe(0);
+  });
+
+  it('after signOut, a provider this instance created stops serving its cached access token', async () => {
+    const server = rotatingServer();
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) =>
+      String(input).endsWith('/revoke') ? jsonResponse(503, {}) : server.fetch(input, init)) as typeof fetch;
+    const world = sharedWorld(fetchImpl);
+    const auth = world.make();
+    const provider = await world.signIn(auth, 'ned');
+
+    await auth.signOut(); // revocation fails, so the server would still honour the access token
+    const error = await captureError(() => provider.getAccessToken());
+
+    expect(isAuthenticationError(error)).toBe(true);
+    expect(server.refreshCalls).toEqual([]);
+  });
+
+  it('a storage read that throws once is a retryable hiccup, not the end of the session', async () => {
+    const server = rotatingServer();
+    const world = sharedWorld(server.fetch);
+    const provider = await world.signIn(world.make(), 'oli');
+    const realGetItem = world.storage.getItem.bind(world.storage);
+    let throwOnce = true;
+    world.storage.getItem = (key) => {
+      if (throwOnce && key.startsWith('pagespace.auth.session')) {
+        throwOnce = false;
+        throw new Error('SecurityError');
+      }
+      return realGetItem(key);
+    };
+
+    world.advance(900 * 1000);
+    const hiccup = await captureError(() => provider.getAccessToken());
+    const retried = await provider.getAccessToken();
+
+    expect(isAuthenticationError(hiccup)).toBe(false);
+    expect(retried).toBe('ps_at_oli~2');
+    expect(server.revoked).toEqual([]);
+  });
+
+  it('a storage read that throws right after the rotation still persists the new pair (and revokes nothing)', async () => {
+    const server = rotatingServer();
+    const world = sharedWorld(server.fetch);
+    const provider = await world.signIn(world.make(), 'pat');
+    const realGetItem = world.storage.getItem.bind(world.storage);
+    let sessionReads = 0;
+    world.storage.getItem = (key) => {
+      if (key.startsWith('pagespace.auth.session')) {
+        sessionReads += 1;
+        if (sessionReads === 2) throw new Error('SecurityError'); // the read after the network call
+      }
+      return realGetItem(key);
+    };
+
+    world.advance(900 * 1000);
+    await expect(provider.getAccessToken()).resolves.toBe('ps_at_pat~2');
+
+    expect(server.revoked).toEqual([]);
+    expect(world.storage.dump()).toContain('ps_rt_pat~2');
+  });
+
+  it('never deletes a record written for another PageSpace deployment that shares the client id', async () => {
+    const server = rotatingServer();
+    const world = sharedWorld(server.fetch);
+    await world.signIn(world.make(), 'pam');
+    const prodRecord = world.storage.dump();
+    const staging = new PageSpaceAuth({ baseUrl: 'https://staging.example', clientId: CLIENT_ID, redirectUri: REDIRECT_URI, storage: world.storage, now: () => 1_000_000 });
+
+    expect(staging.restore()).toBeNull();
+    await expect(staging.signOut()).resolves.toBeNull();
+    expect(world.storage.dump()).toBe(prodRecord);
+  });
+
+  it('a new sign-in does not wait for revoking the session it replaces', async () => {
+    const server = rotatingServer();
+    let releaseRevoke!: () => void;
+    const revokeGate = new Promise<void>((resolve) => {
+      releaseRevoke = resolve;
+    });
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).endsWith('/revoke')) await revokeGate;
+      return server.fetch(input, init);
+    }) as typeof fetch;
+    const world = sharedWorld(fetchImpl);
+    await world.signIn(world.make(), 'quinn');
+
+    const second = await world.signIn(world.make(), 'rae'); // would hang if the revoke were awaited
+
+    expect(second).toBeInstanceOf(OAuthTokenProvider);
+    releaseRevoke();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(server.revoked).toEqual(['ps_rt_quinn~1']);
+  });
+
   it('signOut from ANOTHER instance waits for an in-flight refresh, then revokes the rotated token; the old provider is dead', async () => {
     const server = rotatingServer();
     let release!: () => void;
@@ -942,7 +1084,7 @@ describe('signOut', () => {
     expect(harness.storage.items.size).toBe(0);
   });
 
-  it('forgets the session locally even when revocation fails', async () => {
+  it('forgets the session locally even when revocation fails, keeping only the pending revocation to retry', async () => {
     const harness = makeAuth({ fetch: scriptedFetch([bearer(), () => jsonResponse(503, {})]).fetch });
     const { callbackUrl } = await startSignIn(harness);
     await harness.auth.handleRedirectCallback(callbackUrl);
@@ -950,7 +1092,8 @@ describe('signOut', () => {
     const result = await harness.auth.signOut();
 
     expect(result).toMatchObject({ outcome: 'failed', retryable: true });
-    expect(harness.storage.items.size).toBe(0);
+    expect(harness.auth.restore()).toBeNull();
+    expect([...harness.storage.items.keys()]).toEqual([`pagespace.auth.revoke-pending:${CLIENT_ID}`]);
   });
 
   it('is a no-op returning null when nobody is signed in', async () => {

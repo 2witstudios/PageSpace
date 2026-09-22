@@ -339,7 +339,8 @@ const auth = PageSpaceClient.fromEnvironment({
 });
 const result = await auth.signOut(); // revokes the refresh token, forgets the session
 if (result?.outcome === 'failed' && result.retryable) {
-  // The local session is already gone; the server can be asked again later.
+  // The local session is already gone. The token is kept as a pending revocation,
+  // and the next signOut() — from any instance — asks the server again.
 }
 ```
 
