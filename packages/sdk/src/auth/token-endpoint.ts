@@ -33,6 +33,7 @@ import {
   NetworkError,
   RateLimitError,
   ResponseValidationError,
+  TimeoutError,
   type PageSpaceError,
   type ValidationIssue,
 } from '../errors.js';
@@ -42,7 +43,15 @@ import type { OAuthTokens, RefreshAccessToken } from './oauth.js';
 export interface TokenEndpointDeps {
   /** Defaults to the global `fetch`. */
   readonly fetch?: typeof fetch;
+  /**
+   * Per-request deadline in ms (default 30s). A hung token request becomes a
+   * retryable `TimeoutError` instead of an unbounded wait — which matters
+   * because a refresh runs under a lock every other refresh waits on.
+   */
+  readonly timeoutMs?: number;
 }
+
+const DEFAULT_TIMEOUT_MS = 30_000;
 
 export interface TokenEndpointClockDeps extends TokenEndpointDeps {
   /** Defaults to `Date.now`; turns the relative `expires_in` into an absolute expiry. */
@@ -131,16 +140,35 @@ async function readJson(response: Response): Promise<unknown> {
   }
 }
 
-async function send(url: string, init: RequestInit | undefined, operation: string, deps: TokenEndpointDeps): Promise<Response> {
+/** A completed exchange: the response and its body, both read inside the deadline. */
+interface Exchange {
+  readonly response: Response;
+  readonly json: unknown;
+}
+
+async function send(url: string, init: RequestInit | undefined, operation: string, deps: TokenEndpointDeps): Promise<Exchange> {
   const fetchImpl = deps.fetch ?? fetch;
+  const timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
   try {
-    return await fetchImpl(url, init);
+    const response = await fetchImpl(url, { ...init, signal: controller.signal });
+    return { response, json: await readJson(response) };
   } catch (error) {
+    if (timedOut) {
+      throw new TimeoutError(`The PageSpace authorization server did not answer within ${timeoutMs}ms (${operation})`, { operation, timeoutMs });
+    }
     throw new NetworkError(`Could not reach the PageSpace authorization server (${operation})`, { cause: error, operation });
+  } finally {
+    clearTimeout(timer);
   }
 }
 
-function postForm(url: string, form: Record<string, string>, operation: string, deps: TokenEndpointDeps): Promise<Response> {
+function postForm(url: string, form: Record<string, string>, operation: string, deps: TokenEndpointDeps): Promise<Exchange> {
   return send(url, { method: 'POST', headers: FORM_HEADERS, body: new URLSearchParams(form).toString() }, operation, deps);
 }
 
@@ -178,8 +206,7 @@ function trimTrailingSlashes(value: string): string {
 /** Reads `<baseUrl>/.well-known/oauth-authorization-server`. A missing or non-URL endpoint fails closed. */
 export async function discoverMetadata(baseUrl: string, deps: TokenEndpointDeps = {}): Promise<AuthorizationServerMetadata> {
   const operation = 'auth.discover';
-  const response = await send(`${trimTrailingSlashes(baseUrl)}${WELL_KNOWN_PATH}`, undefined, operation, deps);
-  const json = await readJson(response);
+  const { response, json } = await send(`${trimTrailingSlashes(baseUrl)}${WELL_KNOWN_PATH}`, undefined, operation, deps);
   if (!response.ok) {
     throw classifyTokenEndpointError(response.status, response.headers, json, operation);
   }
@@ -266,8 +293,7 @@ function malformedTokenResponse(operation: string): ResponseValidationError {
   return new ResponseValidationError(operation, [{ path: [], message: 'Token endpoint response matched no known token shape' }]);
 }
 
-async function readTokenResponse(response: Response, operation: string): Promise<TokenResponse> {
-  const json = await readJson(response);
+function readTokenResponse({ response, json }: Exchange, operation: string): TokenResponse {
   if (!response.ok) {
     throw classifyTokenEndpointError(response.status, response.headers, json, operation);
   }
@@ -296,7 +322,7 @@ export async function exchangeAuthorizationCode(
   deps: TokenEndpointDeps = {},
 ): Promise<TokenResponse> {
   const operation = 'auth.token';
-  const response = await postForm(
+  const exchange = await postForm(
     params.tokenEndpoint,
     {
       grant_type: 'authorization_code',
@@ -308,7 +334,7 @@ export async function exchangeAuthorizationCode(
     operation,
     deps,
   );
-  return readTokenResponse(response, operation);
+  return readTokenResponse(exchange, operation);
 }
 
 // ---------------------------------------------------------------------------
@@ -352,13 +378,13 @@ export async function refreshWithTokenEndpoint(
   deps: TokenEndpointClockDeps = {},
 ): Promise<OAuthTokens> {
   const operation = 'auth.refresh';
-  const response = await postForm(
+  const exchange = await postForm(
     params.tokenEndpoint,
     { grant_type: 'refresh_token', refresh_token: params.refreshToken, client_id: params.clientId },
     operation,
     deps,
   );
-  const tokens = await readTokenResponse(response, operation);
+  const tokens = readTokenResponse(exchange, operation);
   if (tokens.kind !== 'oauth' || tokens.refreshToken === undefined) {
     throw malformedTokenResponse(operation);
   }
@@ -400,17 +426,17 @@ export type RevokeTokenResult =
 
 export async function revokeToken(params: RevokeTokenParams, deps: TokenEndpointDeps = {}): Promise<RevokeTokenResult> {
   const operation = 'auth.revoke';
-  let response: Response;
+  let exchange: Exchange;
   try {
-    response = await postForm(params.revocationEndpoint, { token: params.token, client_id: params.clientId }, operation, deps);
+    exchange = await postForm(params.revocationEndpoint, { token: params.token, client_id: params.clientId }, operation, deps);
   } catch (error) {
-    // `send` only ever throws a NetworkError; the guard keeps that a checked fact, not a cast.
-    const networkError = error instanceof NetworkError ? error : new NetworkError('Revocation request failed', { cause: error, operation });
-    return { outcome: 'failed', retryable: true, error: networkError };
+    // `send` only ever throws a NetworkError or a TimeoutError (both retryable); the guard keeps that a checked fact, not a cast.
+    const transportError = isPageSpaceError(error) ? error : new NetworkError('Revocation request failed', { cause: error, operation });
+    return { outcome: 'failed', retryable: true, error: transportError };
   }
-  if (response.ok) {
+  if (exchange.response.ok) {
     return { outcome: 'revoked' };
   }
-  const error = classifyTokenEndpointError(response.status, response.headers, await readJson(response), operation);
+  const error = classifyTokenEndpointError(exchange.response.status, exchange.response.headers, exchange.json, operation);
   return { outcome: 'failed', retryable: classifyRefreshFailure(error) === 'retryable', error };
 }

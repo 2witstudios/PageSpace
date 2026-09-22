@@ -489,7 +489,7 @@ describe('several providers over one stored session', () => {
     }
   });
 
-  it('signOut wins over a refresh already in flight: the rotated pair is not written back', async () => {
+  it('signOut wins over a refresh already in flight: the session is gone afterwards, not written back', async () => {
     let releaseRefresh!: () => void;
     const refreshGate = new Promise<void>((resolve) => {
       releaseRefresh = resolve;
@@ -512,12 +512,187 @@ describe('several providers over one stored session', () => {
     harness.advance(900 * 1000);
     const inFlight = provider.getAccessToken();
     await Promise.resolve();
-    await harness.auth.signOut();
+    // signOut takes the refresh lock, so it completes only after the in-flight refresh has persisted.
+    const signingOut = harness.auth.signOut();
     releaseRefresh();
     await inFlight.catch(() => undefined);
+    await signingOut;
 
     expect(harness.storage.items.size).toBe(0);
     expect(harness.auth.restore()).toBeNull();
+  });
+});
+
+/** A token server where every refresh token works exactly once, like the real rotation. */
+function rotatingServer() {
+  const spent = new Set<string>();
+  let counter = 0;
+  const refreshCalls: string[] = [];
+  const revoked: string[] = [];
+  const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+    const body = new URLSearchParams(typeof init?.body === 'string' ? init.body : '');
+    if (String(input).endsWith('/revoke')) {
+      revoked.push(body.get('token') ?? '');
+      return new Response(null, { status: 200 });
+    }
+    const grant = body.get('grant_type');
+    if (grant === 'refresh_token') {
+      const token = body.get('refresh_token') ?? '';
+      refreshCalls.push(token);
+      if (spent.has(token) || revoked.includes(token)) return jsonResponse(400, { error: 'invalid_grant' });
+      spent.add(token);
+    }
+    counter += 1;
+    const owner = grant === 'authorization_code' ? (body.get('code') ?? 'x') : (body.get('refresh_token') ?? 'x').split('~')[0].replace('ps_rt_', '');
+    return jsonResponse(200, {
+      access_token: `ps_at_${owner}~${counter}`,
+      token_type: 'Bearer',
+      expires_in: 900,
+      refresh_token: `ps_rt_${owner}~${counter}`,
+      scope: 'profile offline_access',
+    });
+  }) as typeof fetch;
+  return { fetch: fetchImpl, refreshCalls, revoked };
+}
+
+/** Shares one storage and one clock across several PageSpaceAuth instances (tabs, re-renders). */
+function sharedWorld(fetchImpl: typeof fetch) {
+  const storage = new MemoryStorage();
+  let clock = 1_000_000;
+  const assigned: string[] = [];
+  // One random source for the whole world, like a real CSPRNG: every draw in every instance differs.
+  const randomBytes = countingRandomBytes();
+  const make = () =>
+    new PageSpaceAuth({
+      baseUrl: BASE_URL,
+      clientId: CLIENT_ID,
+      redirectUri: REDIRECT_URI,
+      storage,
+      fetch: fetchImpl,
+      assign: (url) => {
+        assigned.push(url);
+      },
+      now: () => clock,
+      randomBytes,
+    });
+  const signIn = async (auth: PageSpaceAuth, user: string) => {
+    await auth.signInWithRedirect();
+    const state = new URL(assigned[assigned.length - 1]).searchParams.get('state') ?? '';
+    return auth.handleRedirectCallback(`${REDIRECT_URI}?code=${user}&state=${state}`);
+  };
+  return { storage, make, signIn, advance: (ms: number) => { clock += ms; } };
+}
+
+describe('refresh coordination across providers and sign-ins', () => {
+  it('a provider from an earlier sign-in never takes over a later sign-in in the same storage', async () => {
+    const server = rotatingServer();
+    const world = sharedWorld(server.fetch);
+    const tab = world.make();
+    const alice = await world.signIn(tab, 'alice');
+    await tab.signOut();
+    const bob = await world.signIn(world.make(), 'bob');
+    const bobStoredBefore = world.storage.dump();
+
+    world.advance(900 * 1000);
+    const error = await captureError(() => alice.getAccessToken());
+
+    expect(isAuthenticationError(error)).toBe(true);
+    expect(server.refreshCalls).toEqual([]); // never touched bob's refresh token
+    expect(world.storage.dump()).toBe(bobStoredBefore);
+    await expect(bob.getAccessToken()).resolves.toMatch(/^ps_at_bob~/);
+  });
+
+  it('...including when the other sign-in happened in another tab with no signOut here', async () => {
+    const server = rotatingServer();
+    const world = sharedWorld(server.fetch);
+    const alice = await world.signIn(world.make(), 'alice');
+    await world.signIn(world.make(), 'bob');
+
+    world.advance(900 * 1000);
+    const error = await captureError(() => alice.getAccessToken());
+
+    expect(isAuthenticationError(error)).toBe(true);
+    expect(server.refreshCalls).toEqual([]);
+  });
+
+  it('keeps working in memory when storage writes start failing — it never replays the stale stored token', async () => {
+    const server = rotatingServer();
+    const world = sharedWorld(server.fetch);
+    const provider = await world.signIn(world.make(), 'carol');
+    world.storage.setItem = () => {
+      throw new Error('QuotaExceededError');
+    };
+
+    world.advance(900 * 1000);
+    const second = await provider.getAccessToken();
+    world.advance(900 * 1000);
+    const third = await provider.getAccessToken();
+
+    expect(second).not.toBe(third);
+    expect(server.refreshCalls).toEqual(['ps_rt_carol~1', 'ps_rt_carol~2']);
+  });
+
+  it('two providers refreshing at the same moment spend the refresh token once and both get the new pair', async () => {
+    const server = rotatingServer();
+    const world = sharedWorld(server.fetch);
+    const auth = world.make();
+    const first = await world.signIn(auth, 'dan');
+    const second = auth.restore();
+
+    world.advance(900 * 1000);
+    const [a, b] = await Promise.all([first.getAccessToken(), second?.getAccessToken()]);
+
+    expect(server.refreshCalls).toEqual(['ps_rt_dan~1']);
+    expect(a).toBe('ps_at_dan~2');
+    expect(b).toBe('ps_at_dan~2');
+  });
+
+  it('serialises the same way without Web Locks (in-realm queue fallback, e.g. older runtimes)', async () => {
+    vi.stubGlobal('navigator', {});
+    try {
+      const server = rotatingServer();
+      const world = sharedWorld(server.fetch);
+      const auth = world.make();
+      const first = await world.signIn(auth, 'fay');
+      const second = auth.restore();
+
+      world.advance(900 * 1000);
+      const [a, b] = await Promise.all([first.getAccessToken(), second?.getAccessToken()]);
+
+      expect(server.refreshCalls).toEqual(['ps_rt_fay~1']);
+      expect([a, b]).toEqual(['ps_at_fay~2', 'ps_at_fay~2']);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('signOut from ANOTHER instance waits for an in-flight refresh, then revokes the rotated token; the old provider is dead', async () => {
+    const server = rotatingServer();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const gatedFetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      if (typeof init?.body === 'string' && init.body.includes('grant_type=refresh_token')) await gate;
+      return server.fetch(input, init);
+    }) as typeof fetch;
+    const world = sharedWorld(gatedFetch);
+    const provider = await world.signIn(world.make(), 'erin');
+
+    world.advance(900 * 1000);
+    const inFlight = provider.getAccessToken();
+    await Promise.resolve();
+    const signingOut = world.make().signOut();
+    release();
+    await inFlight;
+    await signingOut;
+
+    expect(world.storage.items.size).toBe(0);
+    expect(server.revoked).toEqual(['ps_rt_erin~2']); // the newest token, so the whole family dies
+    world.advance(900 * 1000);
+    const error = await captureError(() => provider.getAccessToken());
+    expect(isAuthenticationError(error)).toBe(true);
+    expect(server.refreshCalls).toEqual(['ps_rt_erin~1']);
   });
 });
 

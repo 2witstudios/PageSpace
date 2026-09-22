@@ -10,6 +10,7 @@ import {
   isRateLimitError,
   isResponseValidationError,
   isServerError,
+  isTimeoutError,
   type RateLimitError,
 } from '../../errors.js';
 import {
@@ -577,5 +578,21 @@ describe('readOAuthErrorCode', () => {
     expect(readOAuthErrorCode(network)).toBeNull();
     expect(readOAuthErrorCode(new Error('invalid_grant'))).toBeNull();
     expect(readOAuthErrorCode('invalid_grant')).toBeNull();
+  });
+});
+
+describe('token-endpoint timeout', () => {
+  it('aborts a hung request and reports a retryable TimeoutError (a stalled refresh must not hold the refresh lock forever)', async () => {
+    const hanging = ((_input: string | URL | Request, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+      })) as typeof fetch;
+
+    const error = await captureError(
+      refreshWithTokenEndpoint({ tokenEndpoint: TOKEN_ENDPOINT, clientId: 'app_123', refreshToken: 'ps_rt_x' }, { fetch: hanging, timeoutMs: 20 }),
+    );
+
+    expect(isTimeoutError(error)).toBe(true);
+    expect(classifyRefreshFailure(error)).toBe('retryable');
   });
 });

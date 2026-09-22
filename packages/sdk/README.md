@@ -93,11 +93,17 @@ Scopes combine (`profile drive:abc123:member offline_access`); `profile` cannot 
 `account`. A grant never widens on refresh.
 
 One sign-in is one refresh-token family, and refresh tokens are single-use: presenting a spent one
-revokes the family. Providers over the same storage coordinate (each refresh re-reads storage under
-a Web Lock and adopts a pair another provider already rotated), but a **duplicated tab** starts with
-a *copy* of `sessionStorage` it cannot see updates to — whichever copy refreshes second signs both
-tabs out. If that matters to your app, pass `localStorage`-backed storage (shared across tabs, at
-the at-rest cost described under [Where tokens live](#where-tokens-live)).
+fails, and after a 30-second window revokes the whole family. Providers over the same storage
+coordinate: every refresh runs under one lock (a Web Lock across this origin's tabs where the
+runtime has them, else a queue within the page), re-reads storage, adopts a newer pair from the
+same sign-in instead of replaying a spent token, persists the rotated pair before releasing the
+lock, and fails closed — without a network call — once that sign-in was signed out or replaced by
+another. `signOut()` takes the same lock, so it revokes the newest token. Two limits remain: a
+**duplicated tab** starts with a *copy* of `sessionStorage` it cannot see updates to (whichever copy
+refreshes second is refused, and signs both out if it does so more than 30 seconds later), and
+separate processes are not coordinated. If duplicated tabs matter to your app, pass
+`localStorage`-backed storage (shared across tabs, at the at-rest cost described under
+[Where tokens live](#where-tokens-live)).
 
 ### In a browser app
 
@@ -130,8 +136,9 @@ if (provider === null) {
 
 `PAGESPACE_CALLBACK_PATH` is `/auth/pagespace/callback`, the path PageSpace-hosted apps use.
 PageSpace redirects only to an exactly registered `https://` URI (or a native app's private
-scheme): `http://localhost` is never accepted, so serve your dev build over https — e.g.
-`https://127.0.0.1:5173` with a self-signed certificate — and register that URI.
+scheme). The host name `localhost` is refused under both `http://` and `https://`, and plain
+`http://` is refused for third-party apps even on `127.0.0.1` — so serve your dev build at
+`https://127.0.0.1:<port>` (e.g. Vite with a self-signed certificate) and register that exact URI.
 Call `handleRedirectCallback` once per callback: React StrictMode's double-run effect makes the
 second call throw `SignInError('no_pending_sign_in')` (the entry is single-use), so guard it.
 `handleRedirectCallback` removes the pending sign-in before anything else, so a callback URL can be

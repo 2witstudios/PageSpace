@@ -35,10 +35,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `refreshAccessToken` function and it uses PageSpace's token endpoint (the constructor now takes
   `OAuthTokenProviderInit`, either shape). `OAuthTokenProviderOptions` and passing your own
   `refreshAccessToken` work exactly as before.
-- **Providers over one stored session don't replay a spent refresh token.** Each refresh re-reads
-  storage under a Web Lock (where available) and adopts a pair another provider already rotated —
-  a replayed refresh token would revoke the whole sign-in. `signOut()` wins over a refresh already
-  in flight. A duplicated tab still starts from a copy of `sessionStorage` (see the README).
+- **Providers over one stored session don't replay a spent refresh token.** Every refresh runs
+  under one lock (Web Locks where the runtime has them, else an in-page queue), re-reads storage,
+  adopts a newer pair from the same sign-in, and persists the rotated pair before releasing the
+  lock. Each stored session carries the sign-in it belongs to, so a provider from an earlier or
+  replaced sign-in fails closed without a network call instead of taking over the new one.
+  `signOut()` takes the same lock and revokes the newest token. A provider whose storage writes
+  fail keeps working in memory. A duplicated tab still starts from a copy of `sessionStorage`
+  (see the README).
+- Token-endpoint calls take a `timeoutMs` (default 30s); a hung request is a retryable
+  `TimeoutError`, so it cannot hold the refresh lock indefinitely.
 
 ### Security
 
