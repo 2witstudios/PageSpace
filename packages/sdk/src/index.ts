@@ -106,6 +106,7 @@ export {
   PageSpaceAuth,
   PageSpaceConfigError,
   PENDING_SIGN_IN_TTL_MS,
+  resolveEnvironmentConfig,
   SignInError,
 } from './auth/pagespace-auth.js';
 export type { AuthStorage, PageSpaceAuthOptions, SignInErrorReason, SignInOptions } from './auth/pagespace-auth.js';
@@ -123,6 +124,9 @@ export type { OperationRegistry } from './registry/registry.js';
 
 // Activity (Phase 3 task 9).
 export { getActivity } from './operations/activity.js';
+
+// Identity (Sign in with PageSpace, Phase 3) — `client.auth.me()`.
+export { getAuthMe } from './operations/auth.js';
 
 // Agents (Phase 3 task 5).
 export {
@@ -299,4 +303,4 @@ export type { Jitter, RetryPolicy } from './retry.js';
 
 // The facade.
 export { PageSpaceClient, resolveTimeoutMs } from './client.js';
-export type { ClientNamespaces, PageSpaceClientOptions } from './client.js';
+export type { ClientNamespaces, FromEnvironmentOptions, PageSpaceClientOptions } from './client.js';

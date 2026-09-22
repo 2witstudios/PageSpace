@@ -18,9 +18,10 @@ import type { HttpMethod } from '../transport/types.js';
  * definition) and the custom-role variant (a role id is a per-grant value,
  * not a per-operation constant) — this is the minimum drive relationship
  * the CLI/MCP layers need to pre-flight a permission error before the
- * network layer, not a full scope grant.
+ * network layer, not a full scope grant. `'profile'` is ADR 0004 Decision 4's
+ * identity-only scope: it satisfies nothing but identity (`auth.me`).
  */
-export type RequiredScope = 'account' | 'drive' | 'drive:admin' | 'drive:member';
+export type RequiredScope = 'account' | 'drive' | 'drive:admin' | 'drive:member' | 'profile';
 
 /** Names of the `:param` segments in a path template, as a type-level union. */
 export type PathParamNames<TPath extends string> = TPath extends `${string}:${infer Param}/${infer Rest}`

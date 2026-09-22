@@ -26,7 +26,14 @@ import { z } from 'zod';
 import { AuthenticationError } from '../errors.js';
 import { OAuthTokenProvider, type OAuthTokens, type RefreshAccessToken } from './oauth.js';
 import { deriveCodeChallenge, generateCodeVerifier } from './pkce.js';
-import { buildAuthorizeUrl, pageSpaceOAuthEndpoints, parseCallback, type AuthorizationErrorCode, type CallbackError } from './sign-in.js';
+import {
+  buildAuthorizeUrl,
+  PAGESPACE_CALLBACK_PATH,
+  pageSpaceOAuthEndpoints,
+  parseCallback,
+  type AuthorizationErrorCode,
+  type CallbackError,
+} from './sign-in.js';
 import {
   exchangeAuthorizationCode,
   revokeToken,
@@ -211,6 +218,42 @@ function parseStored<T>(raw: string | null, schema: z.ZodType<T>): T | null {
 /** Pure: whether a stored session can still yield an access token at `now`. */
 function isSessionUsable(session: StoredSession, now: number): boolean {
   return session.refreshToken === null ? now < session.accessExpiresAt : now < session.refreshExpiresAt;
+}
+
+/**
+ * Pure: the two environment variables + the page origin → the three values
+ * `PageSpaceAuth` needs, or a `PageSpaceConfigError` naming every one that
+ * is missing or unusable. Values are trimmed; a blank value is missing. The
+ * message names variables, never their values.
+ */
+export function resolveEnvironmentConfig(
+  env: Readonly<Record<string, string | undefined>>,
+  origin: string | undefined,
+): { readonly baseUrl: string; readonly clientId: string; readonly redirectUri: string } {
+  const baseUrl = env.PAGESPACE_URL?.trim() ?? '';
+  const clientId = env.PAGESPACE_CLIENT_ID?.trim() ?? '';
+  const appOrigin = origin?.trim() ?? '';
+  const invalid = [
+    ...(isAcceptableBaseUrl(baseUrl) ? [] : ['PAGESPACE_URL']),
+    ...(clientId.length > 0 ? [] : ['PAGESPACE_CLIENT_ID']),
+    // `location.origin` is the string "null" for an opaque origin (file:, sandboxed iframe) — nothing can redirect back there.
+    ...(appOrigin.length > 0 && appOrigin !== 'null' ? [] : ['origin']),
+  ];
+  if (invalid.length > 0) {
+    throw new PageSpaceConfigError(
+      `Sign in with PageSpace is not configured: ${invalid.join(', ')} missing or invalid (PAGESPACE_URL must be https, or http on localhost/127.0.0.1)`,
+      invalid,
+    );
+  }
+  return { baseUrl, clientId, redirectUri: `${trimTrailingSlashes(appOrigin)}${PAGESPACE_CALLBACK_PATH}` };
+}
+
+function trimTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === '/') {
+    end -= 1;
+  }
+  return value.slice(0, end);
 }
 
 // ---------------------------------------------------------------------------

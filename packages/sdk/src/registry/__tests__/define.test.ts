@@ -134,7 +134,7 @@ describe('defineOperation — static type inference', () => {
   });
 
   it('narrows requiredScope to the ADR 0002 grammar union, not a free string', () => {
-    expectTypeOf<RequiredScope>().toEqualTypeOf<'account' | 'drive' | 'drive:admin' | 'drive:member'>();
+    expectTypeOf<RequiredScope>().toEqualTypeOf<'account' | 'drive' | 'drive:admin' | 'drive:member' | 'profile'>();
   });
 
   it('rejects an inputSchema missing a path param at compile time', () => {

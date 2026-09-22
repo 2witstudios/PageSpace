@@ -23,5 +23,14 @@
  * scope), and `POST /api/agent-workspaces/[workspaceId]/exec` runs a shell
  * command in the workspace's sandbox. Additive, so MINOR; `MIN_SERVER_API_VERSION`
  * stays at 1.0.0 — against an older server only these two calls are missing.
+ *
+ * 1.4.0 — `auth.me` (`GET /api/auth/me`, `requiredScope: 'profile'`) joins the
+ * operation registry as `client.auth.me()`, the identity call an app makes
+ * after "Sign in with PageSpace" (ADR 0004 Decision 11). The route already
+ * existed; what is new is the registry contract for it, including the
+ * profile-only `{ id, name, email, image }` body a third-party app receives.
+ * Additive, so MINOR; `MIN_SERVER_API_VERSION` stays at 1.0.0 — the SDK's
+ * sign-in helpers talk to the OAuth endpoints, which are not versioned
+ * registry operations, and every older server still answers `/api/auth/me`.
  */
-export const API_CONTRACT_VERSION = '1.3.0';
+export const API_CONTRACT_VERSION = '1.4.0';

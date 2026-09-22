@@ -37,6 +37,8 @@ import {
   type ValidationIssue,
 } from './errors.js';
 import type { AuthProvider } from './auth/provider.js';
+import { PageSpaceAuth, resolveEnvironmentConfig, type PageSpaceAuthOptions } from './auth/pagespace-auth.js';
+import { getAuthMe } from './operations/auth.js';
 import { getActivity } from './operations/activity.js';
 import { askAgent, listAgents, listModels, multiDriveListAgents, updateAgentConfig } from './operations/agents.js';
 import {
@@ -114,6 +116,10 @@ import { computeBackoff, DEFAULT_RETRY_POLICY, isIdempotentMethod, type Jitter, 
 import { checkServerCompatibility, MIN_SERVER_API_VERSION } from './version.js';
 
 const DEFAULT_OPERATIONS_MAP = {
+  /** Identity of the signed-in user — the first call after "Sign in with PageSpace". */
+  auth: {
+    me: getAuthMe,
+  },
   drives: {
     list: listDrives,
     create: createDrive,
@@ -392,6 +398,28 @@ function buildNamespaces(
   return namespaces as unknown as ClientNamespaces;
 }
 
+/** Options for `PageSpaceClient.fromEnvironment`; everything `PageSpaceAuth` takes except what the environment supplies. */
+export interface FromEnvironmentOptions extends Omit<PageSpaceAuthOptions, 'baseUrl' | 'clientId' | 'redirectUri'> {
+  /**
+   * Where `PAGESPACE_URL` and `PAGESPACE_CLIENT_ID` are read from. Defaults
+   * to `process.env`. A browser bundle has no `process.env`: pass the values
+   * your bundler exposes (e.g. Vite with `envPrefix: ['VITE_', 'PAGESPACE_']`
+   * and `env: import.meta.env`).
+   */
+  readonly env?: Readonly<Record<string, string | undefined>>;
+  /** The app's own origin; defaults to `location.origin`. The redirect URI is this + `PAGESPACE_CALLBACK_PATH`. */
+  readonly origin?: string;
+}
+
+function ambientEnv(): Readonly<Record<string, string | undefined>> {
+  const processLike = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process;
+  return processLike?.env ?? {};
+}
+
+function ambientOrigin(): string | undefined {
+  return (globalThis as { location?: { origin?: string } }).location?.origin;
+}
+
 export interface PageSpaceClient extends ClientNamespaces {}
 
 export class PageSpaceClient {
@@ -407,6 +435,23 @@ export class PageSpaceClient {
   readonly #jitter: Jitter;
   readonly #abortFactory: () => AbortController;
   #compatibilityVerified = false;
+
+  /**
+   * Zero-config "Sign in with PageSpace" for an app hosted in a PageSpace
+   * environment (US6): the platform injects `PAGESPACE_URL` and
+   * `PAGESPACE_CLIENT_ID` — two public values, no secret — and the redirect
+   * URI is this page's origin + `/auth/pagespace/callback` ([D-10]).
+   *
+   * Returns the `PageSpaceAuth` to sign in with; a client exists only once a
+   * user has signed in: `new PageSpaceClient({ baseUrl: auth.baseUrl, auth: provider })`.
+   * Fails closed with a `PageSpaceConfigError` naming every missing or
+   * invalid variable, before any request is made.
+   */
+  static fromEnvironment(options: FromEnvironmentOptions = {}): PageSpaceAuth {
+    const { env, origin, ...authOptions } = options;
+    const config = resolveEnvironmentConfig(env ?? ambientEnv(), origin ?? ambientOrigin());
+    return new PageSpaceAuth({ ...authOptions, ...config });
+  }
 
   constructor(options: PageSpaceClientOptions) {
     this.#config = { baseUrl: trimTrailingSlashes(options.baseUrl), apiVersion: options.apiVersion };
