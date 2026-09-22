@@ -40,8 +40,20 @@ export function walletBackfillStatements(migrationsDir: string = MIGRATIONS_DIR)
   return migrationStatements(BACKFILL_MIGRATION_PREFIX, migrationsDir);
 }
 
-/** Every migration of the X-5 chain, in the order the migrator applies them. */
+/** The file-name prefixes of the X-5 chain. `0300_` also covers `0300_1_`, which runs between
+ * 0300 and 0301 (the journal, not the name, sets the order). */
 const WALLET_CHAIN_PREFIXES = ['0298_', '0299_', '0300_', '0301_', '0302_'] as const;
+
+/** Every X-5 chain migration, in the order the migrator applies them: journal order, not file order. */
+function walletChainStatements(migrationsDir: string): string[] {
+  const journal = JSON.parse(readFileSync(path.join(migrationsDir, 'meta/_journal.json'), 'utf8')) as {
+    entries: Array<{ tag: string }>;
+  };
+  const chain = journal.entries
+    .map((entry) => entry.tag)
+    .filter((tag) => WALLET_CHAIN_PREFIXES.some((prefix) => tag.startsWith(prefix)));
+  return chain.flatMap((tag) => migrationStatements(`${tag}.sql`, migrationsDir));
+}
 
 /** A connected client this runner may BEGIN and COMMIT/ROLLBACK on (a pg Client or PoolClient). */
 export interface BackfillClient {
@@ -202,7 +214,7 @@ export async function rehearseWalletMigration(
   client: BackfillClient,
   migrationsDir: string = MIGRATIONS_DIR,
 ): Promise<WalletMigrationRehearsal> {
-  const statements = WALLET_CHAIN_PREFIXES.flatMap((prefix) => migrationStatements(prefix, migrationsDir));
+  const statements = walletChainStatements(migrationsDir);
   const { rows: stateRows } = await client.query(
     `SELECT to_regclass('public.credit_balances') IS NOT NULL AS "hasBalances", to_regclass('public.wallets') IS NOT NULL AS "hasWallets"`,
   );

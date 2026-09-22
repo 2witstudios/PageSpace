@@ -26,7 +26,7 @@
  * touched, and every database it creates is dropped in afterAll.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { readFileSync, readdirSync, mkdtempSync, copyFileSync, appendFileSync, rmSync } from 'fs';
+import { readFileSync, readdirSync, mkdtempSync, mkdirSync, copyFileSync, appendFileSync, rmSync } from 'fs';
 import os from 'os';
 import path from 'path';
 import { Pool, type PoolClient } from 'pg';
@@ -37,9 +37,10 @@ import { runWalletBackfill, walletBackfillStatements, moneyDrift, rehearseWallet
 
 const MIGRATIONS_DIR = path.resolve(__dirname, '../../drizzle');
 
-function readMigration(idx: number): { file: string; sql: string; code: string } {
-  const prefix = String(idx).padStart(4, '0');
-  const file = readdirSync(MIGRATIONS_DIR).find((f) => new RegExp(`^${prefix}_.*\\.sql$`).test(f));
+function readMigration(tagPrefix: number | string): { file: string; sql: string; code: string } {
+  const prefix = typeof tagPrefix === 'number' ? String(tagPrefix).padStart(4, '0') : tagPrefix;
+  // `0300` must not match `0300_1_…`: the suffixed file is its own migration.
+  const file = readdirSync(MIGRATIONS_DIR).find((f) => new RegExp(`^${prefix}_(?!1_).*\\.sql$`).test(f));
   if (!file) throw new Error(`no migration ${prefix}_*.sql`);
   const sql = readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8');
   // Line and block comments stripped, so assertions never match prose.
@@ -70,6 +71,7 @@ function statementVerbs(rawSql: string): string[] {
 const rename = readMigration(298);
 const dropPk = readMigration(299);
 const expand = readMigration(300);
+const lockAndRequire = readMigration('0300_1');
 const backfill = readMigration(301);
 const required = readMigration(302);
 
@@ -115,6 +117,22 @@ describe('drizzle/0298–0302 — credit_balances becomes wallets (static)', () 
     expect(backfill.code).toContain('RAISE EXCEPTION');
   });
 
+  it('X-5 (partial): 0300_1 runs before 0301, locks both tables, backfills and requires walletId in one transaction', () => {
+    expect(statementVerbs(lockAndRequire.sql)).toEqual([
+      'LOCK TABLE', 'INSERT INTO', 'UPDATE "CREDIT_LEDGER"', 'UPDATE "CREDIT_HOLDS"', 'DO $$', 'ALTER TABLE', 'ALTER TABLE',
+    ]);
+    expect(lockAndRequire.code).toContain('LOCK TABLE "credit_ledger", "credit_holds" IN SHARE ROW EXCLUSIVE MODE;');
+    expect(lockAndRequire.code).toContain('ALTER TABLE "credit_ledger" ALTER COLUMN "walletId" SET NOT NULL;');
+    expect(lockAndRequire.code).toContain('ALTER TABLE "credit_holds" ALTER COLUMN "walletId" SET NOT NULL;');
+    expect(lockAndRequire.code).not.toMatch(/DELETE|TRUNCATE|DROP/i);
+    // Every UPDATE only touches rows with no wallet yet, so a re-run is a no-op.
+    const updates = lockAndRequire.code.match(/UPDATE "credit_(ledger|holds)"[\s\S]*?;/g) ?? [];
+    expect(updates).toHaveLength(2);
+    for (const update of updates) expect(update).toMatch(/"walletId" IS NULL/);
+    // It changes no file that already shipped.
+    expect(backfill.sql).toBe(readFileSync(path.join(MIGRATIONS_DIR, backfill.file), 'utf8'));
+  });
+
   it('X-5 (partial): 0302 only makes walletId required on ledger and holds', () => {
     expect(required.code.replace(/--> statement-breakpoint/g, '').trim().split(/;\s*/).filter(Boolean)).toEqual([
       'ALTER TABLE "credit_holds" ALTER COLUMN "walletId" SET NOT NULL',
@@ -153,8 +171,10 @@ const allMigrations: RunnableMigration[] = readMigrationFiles({ migrationsFolder
 const baseMigrations = allMigrations.slice(0, 298);
 /** Through 0300: the columns exist but the backfill has not run (the dry-run scenario). */
 const throughExpand = allMigrations.slice(0, 301);
+/** Through 0300_1: the lock-and-require migration has run, 0301 and 0302 have not. */
+const throughRequire = allMigrations.slice(0, 302);
 /** Through 0302 and no further — bounded by index so a later migration never joins in. */
-const throughThisChange = allMigrations.slice(0, 303);
+const throughThisChange = allMigrations.slice(0, 304);
 
 const JOURNAL = { migrationsSchema: 'drizzle', migrationsTable: '__drizzle_migrations' };
 
@@ -341,7 +361,16 @@ describeLive('0298–0302 against a real Postgres', () => {
   it('pins the base: 0297 is the last migration before this change', () => {
     expect(allMigrations.length).toBe(journal.entries.length);
     expect(journal.entries[297]?.tag).toBe('0297_aromatic_smiling_tiger');
-    expect(throughThisChange.length - baseMigrations.length).toBe(5);
+    expect(throughThisChange.length - baseMigrations.length).toBe(6);
+    // 0300_1 runs between 0300 and 0301: journal order is what the migrator follows.
+    expect(journal.entries.slice(298, 304).map((e) => e.tag)).toEqual([
+      '0298_quick_falcon',
+      '0299_wallets_drop_user_primary_key',
+      '0300_wallets_owner_subject_parent_and_wallet_ids',
+      '0300_1_wallets_lock_and_require_wallet_ids',
+      '0301_wallets_backfill_wallet_ids',
+      '0302_wallet_ids_required',
+    ]);
   });
 
   it('X-5: credit_balances becomes wallets in place — dry-run writes nothing, row counts and every balance and the sum equal to the cent, every ledger and hold row on its owner\'s root, a re-run changes nothing', async () => {
@@ -613,6 +642,8 @@ describeLive('0298–0302 against a real Postgres', () => {
     // A copy of the chain whose 0301 also moves one cent: the pre-flight must name it.
     const dir = mkdtempSync(path.join(os.tmpdir(), 'wallets-drift-'));
     try {
+      mkdirSync(path.join(dir, 'meta'), { recursive: true });
+      copyFileSync(path.join(MIGRATIONS_DIR, 'meta/_journal.json'), path.join(dir, 'meta/_journal.json'));
       for (const file of readdirSync(MIGRATIONS_DIR).filter((f) => /^030[0-2]_|^029[89]_/.test(f))) {
         copyFileSync(path.join(MIGRATIONS_DIR, file), path.join(dir, file));
       }
@@ -636,6 +667,88 @@ describeLive('0298–0302 against a real Postgres', () => {
       expect(await snapshot()).toBe(untouched);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+      await s.pool.end();
+    }
+  }, 180_000);
+
+  it('X-5 (partial): an old pod writing a NULL-walletId claim while the chain runs cannot abort it — the writer waits and is backfilled', async () => {
+    const s = await openScenario('race');
+    try {
+      await seedCorpus(s);
+      await s.migrate(throughExpand);
+
+      // An old pod's in-flight claim: a transaction that has inserted a ledger row with no
+      // walletId (old code never sets it) and has not committed yet.
+      const oldPodPool = new Pool({ connectionString: urlForDatabase(`psx_wallets_race_${suffix}`), max: 1 });
+      const migrator = new Pool({ connectionString: urlForDatabase(`psx_wallets_race_${suffix}`), max: 1 });
+      oldPodPool.on('error', () => {});
+      migrator.on('error', () => {});
+      const oldPod = await oldPodPool.connect();
+      try {
+        await oldPod.query('BEGIN');
+        await oldPod.query(`INSERT INTO "credit_ledger" ("id", "userId", "entryType", "bucket", "amountCents", "aiUsageLogId") VALUES ('l_oldpod', 'u_paid', 'usage', 'monthly', -7, 'log_oldpod')`);
+
+        // The deploy migrates while that write is in flight.
+        const migrating = runMigrations(drizzle(migrator), throughThisChange, JOURNAL);
+
+        // It must WAIT for the writer rather than race it.
+        let waiting = false;
+        for (let i = 0; i < 100 && !waiting; i++) {
+          const rows = await s.query<{ n: number }>(
+            `SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'`,
+          );
+          waiting = rows[0].n > 0;
+          if (!waiting) await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        expect(waiting).toBe(true);
+
+        await oldPod.query('COMMIT');
+        await migrating; // completes: no guard RAISE, no NOT NULL failure
+
+        const [row] = await s.query<{ walletId: string | null; rootId: string }>(
+          `SELECT l."walletId", w."id" AS "rootId" FROM "credit_ledger" l JOIN "wallets" w ON w."userId" = l."userId" AND w."subjectType" IS NULL AND w."parentWalletId" IS NULL WHERE l."id" = 'l_oldpod'`,
+        );
+        expect(row.walletId).toBe(row.rootId);
+      } finally {
+        oldPod.release();
+        await oldPodPool.end();
+        await migrator.end();
+      }
+    } finally {
+      await s.pool.end();
+    }
+  }, 180_000);
+
+  it('X-5 (partial): once 0300_1 commits, an old pod\'s NULL-walletId write is already refused — nothing can slip in before 0302', async () => {
+    const s = await openScenario('window');
+    try {
+      await seedCorpus(s);
+      await s.migrate(throughRequire); // through 0300_1; 0301 and 0302 have not run
+      const attempt = (sql: string) => s.pool.query(sql).then(() => 'ok', (err: Error) => err.message);
+      expect(await attempt(`INSERT INTO "credit_ledger" ("id", "userId", "entryType", "bucket", "amountCents") VALUES ('l_gap', 'u_paid', 'usage', 'monthly', -1)`))
+        .toMatch(/null value in column "walletId"/);
+      expect(await attempt(`INSERT INTO "credit_holds" ("id", "userId", "estCents", "expiresAt") VALUES ('h_gap', 'u_paid', 1, now())`))
+        .toMatch(/null value in column "walletId"/);
+      await s.migrate(throughThisChange); // 0301 and 0302 then find nothing to do
+    } finally {
+      await s.pool.end();
+    }
+  }, 180_000);
+
+  it('X-5 (partial): on a database that already ran 0301 and 0302, 0300_1 applies as a no-op', async () => {
+    const s = await openScenario('noop');
+    try {
+      await seedCorpus(s);
+      // The chain as #2698 shipped it, without the new migration.
+      const withoutNew = [...allMigrations.slice(0, 301), allMigrations[302], allMigrations[303]];
+      await s.migrate(withoutNew);
+      const before = await fullSnapshot(s);
+
+      await s.migrate(throughThisChange); // only 0300_1 is pending
+      expect(await fullSnapshot(s)).toBe(before);
+      const applied = await s.query<{ n: number }>(`SELECT count(*)::int AS n FROM drizzle.__drizzle_migrations`);
+      expect(applied[0].n).toBe(throughThisChange.length);
+    } finally {
       await s.pool.end();
     }
   }, 180_000);
