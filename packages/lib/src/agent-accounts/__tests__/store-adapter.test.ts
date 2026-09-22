@@ -36,7 +36,8 @@ describe('agent_accounts schema (ADR 0005 §10.1)', () => {
     // Strip comments and the AccountKind/kind literal declarations before scanning for a forbidden
     // column-shaped identifier — the union literal `'password'` and `kind: AccountKind` are allowed.
     const withoutComments = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
-    const withoutKindUnion = withoutComments.replace(/export type AccountKind[^;]*;/, '');
+    // G2: the pg enum needs the same literals as a value (`ACCOUNT_KIND_VALUES`); it is the kind literal too.
+    const withoutKindUnion = withoutComments.replace(/export type AccountKind[^;]*;/, '').replace(/export const ACCOUNT_KIND_VALUES[^;]*;/, '');
     const forbidden = /\b(credential|secret|token|password)\b/i;
     const offendingLine = withoutKindUnion
       .split('\n')
