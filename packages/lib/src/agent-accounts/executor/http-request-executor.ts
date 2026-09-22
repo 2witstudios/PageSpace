@@ -80,7 +80,7 @@ export function createHttpRequestExecutor(deps: HttpRequestExecutorDeps): HttpRe
 
   async function planeFacts(row: AgentAccountRecord, identity: Omit<StoreIdentity, 'channel'>): Promise<PlaneAttestedFacts | null> {
     const described = await deps.store.describe({ ref: { tenantId: identity.tenantId, accountId: row.id as never, kind: row.kind }, identity: { ...identity, channel: 'manage' } });
-    return described.ok ? { version: described.version, previousVersion: described.previousVersion, rotatedAt: described.rotatedAt, revokedAt: described.revokedAt } : null;
+    return described.ok ? { allowedOrigins: described.bindings.allowedOrigins, version: described.version, previousVersion: described.previousVersion, rotatedAt: described.rotatedAt, revokedAt: described.revokedAt } : null;
   }
 
   return {
@@ -113,8 +113,10 @@ export function createHttpRequestExecutor(deps: HttpRequestExecutorDeps): HttpRe
         rotationGraceMs: deps.rotationGraceMs,
       });
       if (!verdict.ok) return deny(claim, verdict.reason, now);
-      if (row === null || identityBase === null) return deny(claim, 'version_mismatch', now);
+      if (row === null || identityBase === null || plane === null) return deny(claim, 'version_mismatch', now);
       const grant: VerifiedGrant<'http-executor'> = verdict.grant;
+      // The pin is the PLANE's stored origins, checked before the key is even resolved (review HIGH-1).
+      const pinnedOrigins = plane.allowedOrigins as never;
 
       let caller: CallerClass = 'refused';
       let released: ReleasedResponse | null = null;
@@ -125,6 +127,12 @@ export function createHttpRequestExecutor(deps: HttpRequestExecutorDeps): HttpRe
         auditResourceKeys: [],
         act: async () => {
           let stage: ExecutionStage = { kind: 'not_resolved' };
+          const destination = decideDestination({ url: `${canonical.origin}${canonical.path}`, allowedOrigins: pinnedOrigins, hop: 'initial' });
+          if (!destination.allow) {
+            const outcome = decideOperationOutcome({ stage: { kind: 'not_built' } });
+            caller = outcome.caller;
+            return outcome.audit;
+          }
           const resolved = await deps.store.resolve({
             ref: { tenantId: identityBase.tenantId, accountId: grant.accountId, kind: 'api_key' },
             version: grant.credentialVersion,
@@ -132,9 +140,8 @@ export function createHttpRequestExecutor(deps: HttpRequestExecutorDeps): HttpRe
             identity: { ...identityBase, channel: 'http-executor' },
           });
           if (resolved.ok) {
-            const destination = decideDestination({ url: `${canonical.origin}${canonical.path}`, allowedOrigins: row.allowedOrigins as never, hop: 'initial' });
-            const outbound = destination.allow ? buildOutboundRequest({ canonical, body: request.body, material: resolved.material, sha256: deps.sha256 }) : null;
-            if (outbound === null || !outbound.ok) {
+            const outbound = buildOutboundRequest({ canonical, body: request.body, material: resolved.material, sha256: deps.sha256 });
+            if (!outbound.ok) {
               stage = { kind: 'not_built' };
             } else {
               const send = await deps.network.send(outbound.request);

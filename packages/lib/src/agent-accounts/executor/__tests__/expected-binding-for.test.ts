@@ -17,7 +17,7 @@ import { expectedBindingFor } from '../expected-binding-for';
 
 const row = { id: 'acct_1', kind: 'api_key', status: 'active', ownerDriveId: 'drive_1', tenantId: 'drive:drive_1', policyVersion: 4 } as unknown as AgentAccountRecord;
 const run = { human: { userId: 'u1' as UserId, sessionId: 's1' as SessionId }, agentPageId: 'page_a' as AgentPageId, conversationId: 'c1' as ConversationId, runId: 'r1' as RunId };
-const plane = { version: 3 as CredentialVersion, previousVersion: 2 as CredentialVersion, rotatedAt: 1_000, revokedAt: null };
+const plane = { allowedOrigins: ['https://api.example.com:443'], version: 3 as CredentialVersion, previousVersion: 2 as CredentialVersion, rotatedAt: 1_000, revokedAt: null };
 const presenter = { keyId: 'exec_1' as PresenterKeyId, channel: 'http-executor' as const };
 
 describe('expectedBindingFor', () => {

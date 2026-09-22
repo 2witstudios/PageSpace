@@ -4,8 +4,10 @@
  *
  * Three sources, each used only for what it can attest:
  * - the RUN envelope: the principals of the run being served (human, agent
- *   page, conversation, run) — a grant issued for another run is
- *   `principal_mismatch`;
+ *   page, conversation, run). The web process builds it from the same run it
+ *   asked a grant for, so today this comparison is an integrity check on the
+ *   web's own request, not an independent control (review LOW-1); it becomes
+ *   one when the plane can observe runs itself;
  * - the MAIN-DB row: status, drive, current policy version — facts compared
  *   against the signed grant, never plane state;
  * - the PLANE's record: current and previous credential version, rotation
@@ -27,6 +29,12 @@ export type RunEnvelope = {
 };
 
 export type PlaneAttestedFacts = {
+  /**
+   * The origins in the PLANE's stored bindings — the only pin the executor sends to. The main-DB row's
+   * `allowedOrigins` is never consulted for the destination: a writer who widened it could otherwise
+   * aim a grant signed over the original bindings at an origin the plane never agreed to (review HIGH-1).
+   */
+  readonly allowedOrigins: readonly string[];
   readonly version: CredentialVersion;
   readonly previousVersion: CredentialVersion | null;
   readonly rotatedAt: number | null;
