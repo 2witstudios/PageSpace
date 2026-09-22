@@ -23,7 +23,7 @@
  * shows none).
  */
 import { z } from 'zod';
-import { AuthenticationError, NetworkError } from '../errors.js';
+import { AuthenticationError, isNetworkError, isTimeoutError, NetworkError } from '../errors.js';
 import { classifyRefreshFailure } from './decide.js';
 import { OAuthTokenProvider, type OAuthTokenProviderInit, type OAuthTokens, type RefreshAccessToken } from './oauth.js';
 import { deriveCodeChallenge, generateCodeVerifier } from './pkce.js';
@@ -838,6 +838,21 @@ export class PageSpaceAuth {
       fetch: this.#fetch,
       now: this.#now,
     });
+    // A transport failure is ambiguous: the request may never have left
+    // (offline), or the server may have rotated and the answer was lost. One
+    // immediate retry with the same token settles it inside the server's
+    // 30-second reuse window: success means it never landed; a refusal as
+    // spent is terminal (the session is then ended, not kept to be replayed
+    // later); a second transport failure most likely means offline, so the
+    // session is kept and stays retryable.
+    const refreshRetryingAmbiguousFailureOnce = async (refreshToken: string): Promise<OAuthTokens> => {
+      try {
+        return await tokenEndpointRefresh(refreshToken);
+      } catch (error) {
+        if (!isNetworkError(error) && !isTimeoutError(error)) throw error;
+        return tokenEndpointRefresh(refreshToken);
+      }
+    };
     const lineage = session.lineage;
     let heldRotation = session.rotation;
 
@@ -880,7 +895,7 @@ export class PageSpaceAuth {
         // never the one held in memory, which another provider may already have spent.
         let tokens: OAuthTokens;
         try {
-          tokens = await tokenEndpointRefresh(stored.refreshToken);
+          tokens = await refreshRetryingAmbiguousFailureOnce(stored.refreshToken);
         } catch (error) {
           if (classifyRefreshFailure(error) === 'terminal') await this.#discardRejected(storage, stored);
           throw error;

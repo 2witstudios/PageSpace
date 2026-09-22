@@ -837,7 +837,7 @@ describe('refresh coordination across providers and sign-ins', () => {
     const flakyFetch = (async (input: string | URL | Request, init?: RequestInit) => {
       if (typeof init?.body === 'string' && init.body.includes('grant_type=refresh_token')) {
         refreshAttempts += 1;
-        if (refreshAttempts === 2) throw new TypeError('network down'); // never reaches the server
+        if (refreshAttempts === 2 || refreshAttempts === 3) throw new TypeError('network down'); // offline: the attempt and its immediate retry never reach the server
       }
       return server.fetch(input, init);
     }) as typeof fetch;
@@ -1292,6 +1292,51 @@ describe('refresh coordination across providers and sign-ins', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it('a lost refresh response (the server rotated, the answer never arrived) ends the session cleanly instead of keeping a spent token', async () => {
+    const server = rotatingServer();
+    let loseNext = true;
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      if (typeof init?.body === 'string' && init.body.includes('grant_type=refresh_token') && loseNext) {
+        loseNext = false;
+        await server.fetch(input, init); // rotated server-side…
+        throw new TypeError('connection reset'); // …but the response is lost
+      }
+      return server.fetch(input, init);
+    }) as typeof fetch;
+    const world = sharedWorld(fetchImpl);
+    const provider = await world.signIn(world.make(), 'pia');
+
+    world.advance(900 * 1000);
+    const error = await captureError(() => provider.getAccessToken());
+
+    expect(isAuthenticationError(error)).toBe(true);
+    expect(server.refreshCalls).toEqual(['ps_rt_pia~1', 'ps_rt_pia~1']); // one immediate retry, inside the grace window
+    expect(world.make().restore()).toBeNull(); // the spent token is not kept for a later replay
+    expect(server.revoked).toEqual(['ps_rt_pia~1']);
+  });
+
+  it('being offline (the request never left, twice) keeps the session for a later retry', async () => {
+    const server = rotatingServer();
+    let offline = 2;
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      if (typeof init?.body === 'string' && init.body.includes('grant_type=refresh_token') && offline > 0) {
+        offline -= 1;
+        throw new TypeError('network down');
+      }
+      return server.fetch(input, init);
+    }) as typeof fetch;
+    const world = sharedWorld(fetchImpl);
+    const provider = await world.signIn(world.make(), 'rex');
+
+    world.advance(900 * 1000);
+    const offlineError = await captureError(() => provider.getAccessToken());
+    const online = await provider.getAccessToken();
+
+    expect(isAuthenticationError(offlineError)).toBe(false);
+    expect(online).toBe('ps_at_rex~2');
+    expect(server.refreshCalls).toEqual(['ps_rt_rex~1']);
   });
 
   it('a provider in ANOTHER instance stops serving its cached access token once the sign-in is signed out', async () => {

@@ -101,7 +101,11 @@ lock, and fails closed — without a network call — once that sign-in was sign
 another. `signOut()` takes the same lock, so it revokes the newest token. A session exists only
 while its record is in storage: a sign-in or refresh whose record cannot be written is revoked on
 the spot and fails closed (never left alive in memory where `signOut()` cannot reach it), and a new
-sign-in in the same storage revokes the one it replaces. Two limits remain: a
+sign-in in the same storage revokes the one it replaces. A refresh that fails in transit is
+retried once, immediately, with the same token: if the server had already rotated it (the answer
+was lost), that retry is refused inside the 30-second window and the session ends cleanly instead
+of keeping a spent token to replay later; if both attempts fail in transit (offline), the session
+is kept and the next call tries again. Two limits remain: a
 **duplicated tab** starts with a *copy* of `sessionStorage` it cannot see updates to (whichever copy
 refreshes second is refused, and signs both out if it does so more than 30 seconds later), and
 separate processes are not coordinated. If duplicated tabs matter to your app, pass

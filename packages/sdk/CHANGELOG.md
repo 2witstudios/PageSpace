@@ -69,6 +69,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   up inside every endpoint URL).
 - A definitively rejected refresh (including an unreadable 2xx, after which the server may have
   rotated) removes the stored session and revokes the presented token, so it is never replayed.
+  A refresh that fails in transit is retried once immediately, inside the server's reuse window,
+  so a lost response ends the session cleanly while being offline keeps it.
 - A provider returned by `PageSpaceAuth` checks that its sign-in is still stored before handing
   out even a cached access token, so a sign-out in another tab takes effect at once.
 
