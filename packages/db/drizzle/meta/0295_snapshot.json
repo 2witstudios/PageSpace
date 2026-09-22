@@ -1,9 +1,96 @@
 {
-  "id": "4e327976-ef15-4dc7-a8aa-60f98f19bbc0",
+  "id": "21c142a0-b5c6-4092-a19e-566f94c2ff50",
   "prevId": "ff5650fa-cac0-4687-8d81-3b3b01b4dbce",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
+    "public.apple_sign_in_tokens": {
+      "name": "apple_sign_in_tokens",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "client_id": {
+          "name": "client_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "refresh_token": {
+          "name": "refresh_token",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "apple_sign_in_tokens_user_client_idx": {
+          "name": "apple_sign_in_tokens_user_client_idx",
+          "columns": [
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "client_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "apple_sign_in_tokens_user_id_users_id_fk": {
+          "name": "apple_sign_in_tokens_user_id_users_id_fk",
+          "tableFrom": "apple_sign_in_tokens",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.device_tokens": {
       "name": "device_tokens",
       "schema": "",
@@ -20054,51 +20141,6 @@
           "primaryKey": false,
           "notNull": true
         },
-        "allowedGrantTypes": {
-          "name": "allowedGrantTypes",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'[]'::jsonb"
-        },
-        "allowedScopes": {
-          "name": "allowedScopes",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'[]'::jsonb"
-        },
-        "ownerUserId": {
-          "name": "ownerUserId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "logoUrl": {
-          "name": "logoUrl",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "homepageUrl": {
-          "name": "homepageUrl",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "description": {
-          "name": "description",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "verified": {
-          "name": "verified",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
         "isFirstParty": {
           "name": "isFirstParty",
           "type": "boolean",
@@ -20108,13 +20150,6 @@
         },
         "createdAt": {
           "name": "createdAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updatedAt": {
-          "name": "updatedAt",
           "type": "timestamp",
           "primaryKey": false,
           "notNull": true,
@@ -20142,38 +20177,9 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
-        },
-        "oauth_clients_owner_user_id_idx": {
-          "name": "oauth_clients_owner_user_id_idx",
-          "columns": [
-            {
-              "expression": "ownerUserId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
         }
       },
-      "foreignKeys": {
-        "oauth_clients_ownerUserId_users_id_fk": {
-          "name": "oauth_clients_ownerUserId_users_id_fk",
-          "tableFrom": "oauth_clients",
-          "tableTo": "users",
-          "columnsFrom": [
-            "ownerUserId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        }
-      },
+      "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
         "oauth_clients_clientId_unique": {

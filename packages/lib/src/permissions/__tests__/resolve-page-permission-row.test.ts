@@ -119,14 +119,29 @@ describe('resolvePagePermissionRow', () => {
       expect(resolved?.canDelete).toBe(false);
     });
 
-    it('falls back to the custom role drive-wide grant when the page has no entry', () => {
+    // Same rule as getUserAccessLevel: a role entry that does not grant view
+    // grants nothing, so a stored {canView:false, canEdit:true} cannot surface
+    // as editable to a batch caller that reads canEdit without canView.
+    it('grants nothing when the custom role entry denies view, whatever else it sets', () => {
+      expect(
+        resolvePagePermissionRow(
+          row({
+            memberRole: 'MEMBER',
+            pageType: 'DOCUMENT',
+            customRolePerms: { page_1: { canView: false, canEdit: true, canShare: true } },
+          }),
+          USER
+        )
+      ).toBeNull();
+    });
+
+    it('falls back to the custom role drive-wide grant when a NON-private page has no entry', () => {
       // resolveCustomRolePermissions takes two inputs — the per-page entry and
       // the drive-wide default. Only the former is exercised above, and the
       // fallback is the half a second implementation is likeliest to drop.
       const resolved = resolvePagePermissionRow(
         row({
           memberRole: 'MEMBER',
-          isPrivate: true,
           customRolePerms: {},
           customRoleDriveWidePerms: { canView: true, canEdit: true, canShare: false },
         }),
@@ -135,6 +150,36 @@ describe('resolvePagePermissionRow', () => {
       expect(resolved?.canView).toBe(true);
       expect(resolved?.canEdit).toBe(true);
       expect(resolved?.canDelete).toBe(false);
+    });
+
+    // The same guard getUserAccessLevel, app-permissions and agent-permissions
+    // apply: a drive-wide default is not a grant to a PRIVATE page. Only a
+    // per-page entry (or an explicit page grant) opens one.
+    it('does not let the custom role drive-wide grant open a PRIVATE page with no entry', () => {
+      expect(
+        resolvePagePermissionRow(
+          row({
+            memberRole: 'MEMBER',
+            isPrivate: true,
+            customRolePerms: {},
+            customRoleDriveWidePerms: { canView: true, canEdit: true, canShare: true },
+          }),
+          USER
+        )
+      ).toBeNull();
+    });
+
+    it('still lets a per-page role entry open a PRIVATE page when a drive-wide grant is also set', () => {
+      const resolved = resolvePagePermissionRow(
+        row({
+          memberRole: 'MEMBER',
+          isPrivate: true,
+          customRolePerms: { page_1: { canView: true, canEdit: false, canShare: false } },
+          customRoleDriveWidePerms: { canView: true, canEdit: true, canShare: true },
+        }),
+        USER
+      );
+      expect(resolved).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
     });
   });
 });

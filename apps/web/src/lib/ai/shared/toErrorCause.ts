@@ -2,7 +2,7 @@ import type { AIErrorCause } from './aiErrorCause';
 
 export const DEFAULT_ERROR_MESSAGES: Record<AIErrorCause['code'], string> = {
   auth: 'Authentication failed. Please refresh the page and try again.',
-  out_of_credits: "You've used up your credits. Buy more credits or wait for your monthly allowance to reset.",
+  out_of_credits: "You've used up your credits. Your monthly allowance resets at your next renewal.",
   too_many_in_flight: 'Too many AI requests are running at once. Wait for one to finish, then try again.',
   daily_cap_exceeded: "You've reached your daily AI usage limit. Try again tomorrow.",
   rate_limit: 'The AI service is busy right now. Please try again in a few seconds.',

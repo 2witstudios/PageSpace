@@ -3,6 +3,8 @@ import type { UIMessage } from 'ai';
 import { usePathname } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { ChatInput, type ChatInputRef } from '@/components/ai/chat/input';
+import { useSideQuestion, parseSideQuestionInput } from '@/components/ai/btw/useSideQuestion';
+import { SideQuestionCard } from '@/components/ai/btw/SideQuestionCard';
 import { useImageAttachments } from '@/lib/ai/shared/hooks/useImageAttachments';
 import { hasVisionCapability } from '@/lib/ai/core/vision-models';
 import { Loader2, Plus } from 'lucide-react';
@@ -44,7 +46,7 @@ import { buildUserMessage } from '@/lib/ai/streams/buildUserMessage';
 import { rollbackOptimisticSendOnFailure } from '@/lib/ai/streams/rollbackOptimisticSendOnFailure';
 import { createId } from '@paralleldrive/cuid2';
 import { useStopStream } from '@/hooks/useStopStream';
-import { useSendHandoff, useCacheMessageActions, useResumeBootstrap, useAnswerAskUser, useChatErrorCause, buildGlobalChatRequestBody } from '@/lib/ai/shared';
+import { useSendHandoff, useCacheMessageActions, useResumeBootstrap, useAnswerAskUser, useChatErrorCause, useQueuedSends, buildGlobalChatRequestBody } from '@/lib/ai/shared';
 import { AskUserAnswerProvider } from '@/components/ai/shared/chat/ask-user/AskUserAnswerContext';
 import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
 import { VoiceCallBarForConversation } from '@/components/ai/voice/realtime';
@@ -499,6 +501,16 @@ const SidebarChatTab: React.FC = () => {
   // Refs
   const chatInputRef = useRef<ChatInputRef>(null);
 
+  // Detached /btw side question (#2678 contract): independent of the primary
+  // chat lifecycle and activeStreamId; no persistence, ephemeral card.
+  const sideQuestion = useSideQuestion(currentConversationId ?? '');
+  const handleSideQuestion = useCallback(() => {
+    const question = parseSideQuestionInput(input);
+    if (!question || !currentConversationId) return;
+    setInput('');
+    void sideQuestion.ask(question);
+  }, [input, currentConversationId, sideQuestion]);
+
   // ============================================
   // Effects: Drive Loading
   // ============================================
@@ -666,6 +678,41 @@ const SidebarChatTab: React.FC = () => {
     currentProvider,
     currentModel,
   ]);
+
+  /**
+   * The one send path for the mode on screen, shared by the composer and the
+   * DRAIN (issue #2676): optimistic write first, then the wrapped dispatch
+   * with rollback — the drain hook re-invokes it with each queued message, so
+   * rollback/handoff/promotion behave exactly as for a composer send.
+   */
+  const dispatchUserMessage = useCallback((message: UIMessage) => {
+    if (!currentConversationId) return;
+    conversationMessagesActions.addOptimisticSend(currentConversationId, message);
+    return rollbackOptimisticSendOnFailure(
+      () => wrapSend(() => sendMessage(message, currentConversationId, { body: buildSidebarChatRequestBody(buildFreshContextRef(), !writeMode) })),
+      currentConversationId,
+      message.id,
+    );
+  }, [currentConversationId, wrapSend, sendMessage, buildSidebarChatRequestBody, buildFreshContextRef, writeMode]);
+
+  // Send queue (issue #2676): drains one queued message per observed stream
+  // end, FIFO; manual sends/retries take precedence via the status guard.
+  const {
+    queuedSends,
+    isQueueFull,
+    enqueue: enqueueQueuedSend,
+    remove: removeQueuedSend,
+    clear: clearQueuedSends,
+    cancelPendingDrain: cancelQueuedDrain,
+  } = useQueuedSends({
+    conversationId: currentConversationId,
+    status,
+    dispatch: dispatchUserMessage,
+  });
+
+  const handleEnqueueFromComposer = useCallback(() => {
+    if (enqueueQueuedSend(input)) setInput('');
+  }, [enqueueQueuedSend, input]);
 
   const handleSendMessage = useCallback(async () => {
     const files = getFilesForSend();
@@ -962,6 +1009,9 @@ const SidebarChatTab: React.FC = () => {
           paddingBottom: isKeyboardOpen ? `calc(0.75rem + ${keyboardHeight}px)` : undefined,
         }}
       >
+        {sideQuestion.state && (
+          <SideQuestionCard state={sideQuestion.state} onDismiss={sideQuestion.dismiss} />
+        )}
         <ChatErrorBanner
           cause={errorCause}
           show={showError}
@@ -985,6 +1035,7 @@ const SidebarChatTab: React.FC = () => {
           value={input}
           onChange={setInput}
           onSend={handleSendMessage}
+          onSideQuestion={handleSideQuestion}
           onStop={handleStop}
           isStreaming={displayIsStreaming}
           isStopping={isStopping}
@@ -1007,6 +1058,12 @@ const SidebarChatTab: React.FC = () => {
             (selectedAgent ? selectedAgent.aiModel : currentModel) || ''
           )}
           remoteStreamingUser={remoteStreamingUser}
+          queuedMessages={queuedSends}
+          onEnqueue={handleEnqueueFromComposer}
+          onRemoveQueued={removeQueuedSend}
+          onClearQueued={clearQueuedSends}
+          onCancelQueue={cancelQueuedDrain}
+          isQueueFull={isQueueFull}
         />
       </div>
 

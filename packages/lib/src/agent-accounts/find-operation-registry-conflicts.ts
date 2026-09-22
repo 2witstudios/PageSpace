@@ -1,24 +1,28 @@
 /**
  * `findOperationRegistryConflicts` — the registry-load check (ADR 0004 §3.4
- * amendment). Two entries conflict when some request could match both: same
- * provider, channel and method, same segment count, and every segment pair
- * either equal or at least one a placeholder. A conflict is a defect to fix
- * in the reviewed registry, never something resolved by entry order.
+ * amendment; G1c R17). Two entries conflict when some request could match
+ * both AND neither is more specific: same provider, origin, channel and
+ * method, the same segment-kind shape (literal / `{slot}` / `{slot+}` at every
+ * position), and equal literals wherever both are literal. A literal and a
+ * slot at one position never conflict — the literal wins at lookup. A
+ * conflict is a defect to fix in the reviewed registry, never something
+ * resolved by entry order.
  *
  * Returns the conflicting `[pathTemplate, pathTemplate]` pairs; empty means
  * the registry is sound. Pure.
  */
 import type { OperationRegistry, OperationRegistryEntry } from './canonical-request';
-import { isPlaceholderSegment } from './is-placeholder-segment';
+import { parseTemplateSegment } from './parse-template-segment';
 
 function overlaps(a: OperationRegistryEntry, b: OperationRegistryEntry): boolean {
-  if (a.providerSlug !== b.providerSlug || a.channel !== b.channel || a.method !== b.method) return false;
-  const left = a.pathTemplate.split('/');
-  const right = b.pathTemplate.split('/');
+  if (a.providerSlug !== b.providerSlug || a.origin !== b.origin || a.channel !== b.channel || a.method !== b.method) return false;
+  const left = a.pathTemplate.split('/').map(parseTemplateSegment);
+  const right = b.pathTemplate.split('/').map(parseTemplateSegment);
   if (left.length !== right.length) return false;
   return left.every((segment, index) => {
     const other = right[index]!;
-    return segment === other || isPlaceholderSegment(segment) || isPlaceholderSegment(other);
+    if (segment.kind !== other.kind) return false;
+    return segment.kind !== 'literal' || other.kind !== 'literal' || segment.text === other.text;
   });
 }
 

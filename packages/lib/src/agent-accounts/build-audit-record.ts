@@ -23,8 +23,8 @@ import type { AgentAccountAuditRecord, BuildAuditRecord, NormalizedAction } from
 import type { CanonicalRequest } from './canonical-request';
 import type { HashBytes } from './grant';
 
-function normalize(canonical: CanonicalRequest, hash: HashBytes, declaredResourceKeys: readonly string[]): NormalizedAction {
-  const declared = new Set(declaredResourceKeys);
+function normalize(canonical: CanonicalRequest, hash: HashBytes, auditResourceKeys: readonly string[]): NormalizedAction {
+  const allowed = new Set(auditResourceKeys);
   return {
     channel: canonical.channel,
     method: canonical.method,
@@ -35,15 +35,16 @@ function normalize(canonical: CanonicalRequest, hash: HashBytes, declaredResourc
     pathDigest: hash(new TextEncoder().encode(canonical.path)),
     headerNames: canonical.headers.map(([name]) => name),
     bodySha256: canonical.bodySha256,
-    // Only the keys the TYPED OPERATION declares. A caller that passes
-    // anything else contributes nothing to the row — the projection belongs
-    // to the catalogue, not to whoever built the request.
-    resourceIds: canonical.resources.filter(([key]) => declared.has(key)).map(([key, value]) => [key, value] as const),
+    // Only the keys the registry entry ALLOWLISTS for audit (G1c R6), empty by
+    // default: a slot that can carry a secret is simply never listed. The
+    // projection belongs to the reviewed catalogue, not to whoever built the
+    // request.
+    resourceIds: canonical.resources.filter(([key]) => allowed.has(key)).map(([key, value]) => [key, value] as const),
     operation: { class: canonical.operation.class, name: canonical.operation.name },
   };
 }
 
-export const buildAuditRecord: BuildAuditRecord = ({ grant, canonical, outcome, at, hash, declaredResourceKeys }): AgentAccountAuditRecord => ({
+export const buildAuditRecord: BuildAuditRecord = ({ grant, canonical, outcome, at, hash, auditResourceKeys }): AgentAccountAuditRecord => ({
   grantId: grant.grantId,
   principal: {
     tenantId: grant.tenantId,
@@ -67,7 +68,7 @@ export const buildAuditRecord: BuildAuditRecord = ({ grant, canonical, outcome, 
   policyVersion: grant.policyVersion,
   approvalId: grant.approvalId,
   requestDigest: grant.requestDigest,
-  normalizedAction: normalize(canonical, hash, declaredResourceKeys),
+  normalizedAction: normalize(canonical, hash, auditResourceKeys),
   presenter: { keyId: grant.presenter.keyId, channel: grant.presenter.channel },
   outcome,
   at,

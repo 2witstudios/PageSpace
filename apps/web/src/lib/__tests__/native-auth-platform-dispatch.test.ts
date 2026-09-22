@@ -205,6 +205,49 @@ describe('native auth: platform dispatch', () => {
     });
   });
 
+  // TN3194: the server exchanges Apple's authorization code for a revocable
+  // refresh token. The plugin returns that code only in proper-token-exchange
+  // mode (supported by the Swift side already in the shipped 7.20.0 binary).
+  describe('Apple sign-in on iOS hands the authorization code to the server', () => {
+    it('should initialize the Apple provider in proper token exchange mode', async () => {
+      setPlatform('ios');
+      socialLogin.login.mockResolvedValue({ provider: 'apple', result: { idToken: 'apple-id-token', authorizationCode: 'apple-code' } });
+      const { signInWithApple } = await import('../native-apple-auth');
+
+      await signInWithApple();
+
+      expect(socialLogin.initialize).toHaveBeenCalledWith({
+        apple: { clientId: 'ai.pagespace.ios', useProperTokenExchange: true },
+      });
+    });
+
+    it('given the plugin returns an authorization code, should send it with the id token', async () => {
+      setPlatform('ios');
+      socialLogin.login.mockResolvedValue({ provider: 'apple', result: { idToken: 'apple-id-token', authorizationCode: 'apple-code' } });
+      const { signInWithApple } = await import('../native-apple-auth');
+
+      await signInWithApple();
+
+      const [url, init] = fetchMock.mock.calls[0];
+      expect(url).toBe('/api/auth/apple/native');
+      const body = JSON.parse((init as RequestInit).body as string);
+      expect(body.idToken).toBe('apple-id-token');
+      expect(body.authorizationCode).toBe('apple-code');
+    });
+
+    it('given the plugin returns no authorization code, should still sign in on the id token alone', async () => {
+      setPlatform('ios');
+      socialLogin.login.mockResolvedValue({ provider: 'apple', result: { idToken: 'apple-id-token' } });
+      const { signInWithApple } = await import('../native-apple-auth');
+
+      const result = await signInWithApple();
+
+      const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+      expect(body).not.toHaveProperty('authorizationCode');
+      expect(result.success).toBe(true);
+    });
+  });
+
   // A shell built without `@capgo/capacitor-social-login`, or one whose native
   // side did not register, fails at load/initialize rather than at sign-in. It is
   // caught separately so the user gets a named cause instead of a raw bridge

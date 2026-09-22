@@ -82,3 +82,17 @@ describe('canAccessConversation', () => {
     ).resolves.toBe(false);
   });
 });
+
+describe('/btw surface conversations (owner-scoped)', () => {
+  it('allows the owner of a GLOBAL conversation — dashboard/sidebar global mode', async () => {
+    await expect(
+      canAccessConversation('owner-1', { userId: 'owner-1', isShared: false, type: 'global', contextId: null })
+    ).resolves.toBe(true);
+  });
+
+  it('allows the owner of an agent (page) conversation — agent mode on both surfaces', async () => {
+    await expect(
+      canAccessConversation('owner-1', { userId: 'owner-1', isShared: false, type: 'page', contextId: 'agent-1' })
+    ).resolves.toBe(true);
+  });
+});

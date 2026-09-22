@@ -5,7 +5,33 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
+- /btw side questions now work on every chat surface (dashboard assistant, right-sidebar chat, agent console) and /btw appears in the / command picker on all of them.
+
 ### Added
+
+- **Ask a detached side question with `/btw`** — while an agent is working, type `/btw` followed by a question to get a separate, temporary answer from the completed conversation context. It never interrupts the active run or becomes part of the chat history.
+
+- **Sign-up says where AI content goes** — the consent line on every sign-up screen now says AI
+  features send your content to OpenRouter and the model provider you choose, alongside the Terms
+  and Privacy Policy.
+- **Deleting your account disconnects Sign in with Apple** — if you sign in with Apple, PageSpace
+  now keeps a revocable Apple token and revokes it when you delete your account, so PageSpace no
+  longer stays listed under your Apple Account's Sign in with Apple apps. If PageSpace has no token
+  for you (you last signed in before this change, or Apple could not be reached), the delete dialog
+  and the page after deletion show how to stop using Sign in with Apple for PageSpace yourself.
+  Stopping Sign in with Apple for PageSpace from your Apple Account now also signs you out of
+  PageSpace everywhere.
+- **Report and block people** — a direct message conversation now has a menu to report the other
+  person (the report goes to the PageSpace team with what happened) or block them, and Connections
+  has a Block action plus a Blocked list to unblock. A block stops direct messages in both
+  directions, including in a conversation that already exists.
+- **The + button in a drive now matches what you can actually do** — a plain member of a drive,
+  who could always create pages through the command palette or the API, saw a lock on the +
+  button and could not click it. The button now reflects the server's effective create permission:
+  enabled for members and members whose custom role grants drive-wide edit, locked for view-only
+  custom roles and page-collaborator-only access. The same rule now also gates the API check that
+  backs it, so a view-only custom role is refused at the server too instead of silently
+  over-granted on the session path.
 
 - **Run shell commands in an agent workspace from the CLI and SDK** — a workspace's sandbox was
   only reachable through an agent in chat. `pagespace workspaces exec <workspaceId> -- <command>`
@@ -33,10 +59,10 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   RSVP, a finished agent session, or what changed since you were last here — with a couple of
   quick prompts underneath that put the same thing straight into the composer without sending it.
   Nothing is invented: the line only ever says what it can back up, and on a quiet day it just says
-  you're caught up. Once you start a conversation the line tucks into a small strip under the
-  header instead of taking up the page, and you can still expand it. On desktop, collapse the left
-  sidebar and a small drive switcher stays next to the title, so you always know what the assistant
-  can see; on a phone the sidebar sheet's own switcher covers that, so the header row stays one row.
+  you're caught up. The line and its suggestions stay in the empty state, then give the conversation
+  the full pane once you begin. On desktop, collapse the left sidebar and a small drive switcher
+  stays next to the title, so you always know what the assistant can see; on a phone the sidebar
+  sheet's own switcher covers that, so the header row stays one row.
 - **Channels, Files, Tasks and Calendar are one page each, with a drive focus** — each of those
   views used to exist twice: a dashboard version and a drive version, with different titles and a
   sidebar that only ever linked to whichever one you were in. Now "All drives" is a focus like any
@@ -493,6 +519,30 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Changed
 
+- **The privacy policy now describes AI routing as it actually works** — every cloud AI request
+  goes through OpenRouter to the provider of the model you picked, including Anthropic, OpenAI,
+  Google and xAI models. The policy previously described those four as direct and said OpenRouter
+  models were optional extras you had to select. The subprocessors page says the same, and both now
+  point to OpenRouter's per-model retention and training policies rather than implying one rule for
+  every model.
+- **Paid-feature prompts in the iOS app no longer send you to a purchase page** — the locked Memory
+  automation, automatic backups and custom subdomain settings linked to the plan page, which the
+  iOS app cannot sell. They now say the feature is available on paid plans; on the web the upgrade
+  links are unchanged. Out-of-credits and paid-model messages no longer tell you to buy or upgrade in
+  their text (the web still shows its Buy credits button beside them), and the Privacy & Cookies
+  settings entry is hidden in the native app, matching the cookie banner. The native app also no
+  longer sends usage analytics, even if analytics consent was saved in an earlier version.
+- **iOS app: legal pages, integrations and privacy tightened for App Review** — Settings now has
+  Privacy Policy and Terms of Service entries on every platform, and in the iOS app those pages (and
+  the Terms/Privacy links on sign-in and invite screens) open in a browser sheet instead of loading
+  the marketing site inside the app. Connecting Google Calendar or another integration from the iOS
+  app opens the sign-in screen in a browser sheet, where it can finish, instead of an error page
+  with no way back. The iOS app no longer shows buy, top-up or upgrade wording on credit balances,
+  storage and domain limits, or the image generator, and never offers the published-app always-on
+  checkout. The iOS app records no session replays. The Terms now set a minimum age of 16 (matching
+  sign-up) and an acceptable-use policy with zero tolerance for objectionable content and abusive
+  users; the privacy policy uses the same minimum age, and the subprocessors page discloses web
+  session replay.
 - **The header now says "Home", and the drive name next to it opens a proper drive picker** —
   the way back out of a drive used to be a small house icon followed by a `/`, and nothing on
   screen said where it went, so it was easy to miss entirely. It now reads **Home** in words, next
@@ -552,6 +602,41 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   OpenRouter's live data, and a handful of models OpenRouter no longer serves were removed.
 
 ### Fixed
+
+- **The workflow editor fits the screen again** — a workflow with a long AI prompt pushed the
+  Edit Workflow dialog's fields past its right edge and pushed Save below the fold. The dialog is
+  now wider on desktop, its fields scroll between a fixed header and a fixed Cancel/Save footer, and
+  long prompts wrap and scroll inside their own box.
+- **A pending drive invitation no longer reveals the drive's people** — someone invited to a drive
+  who had not yet accepted saw every member's name, email, bio and avatar in the New Conversation
+  picker and could start a direct message with them (and members could do the same to them). Until
+  the invitation is accepted, neither side appears in the other's picker and a new direct message
+  between them is refused, unless they are already connected.
+- **Pulse no longer surfaces pages you are denied** — the activity summaries built pages a person
+  can view from a database rule that ignored a custom role's "no view" setting and a per-page
+  "no view" grant, so a member could see those pages' activity in Pulse. Pulse now follows the same
+  rules as opening the page: those denies are honoured, a custom role's per-page grant on a private
+  page is included, and a time-limited grant expires at the right moment in every time zone.
+- **Agents can write to their own memory pages again** — every agent is instructed to keep notes
+  on an "Agent Memory" child page of its own, but the permission check behind the write tools
+  looked only at the agent's drive membership, which grants edit on no ordinary page — so every
+  create or edit of that page was refused with "Insufficient permissions to edit this document",
+  and scheduled workflow runs that journal to their memory failed at the write. An agent can now
+  always edit its own page and the pages under it; deleting them is still refused, and everything
+  beyond its own subtree stays governed by its membership exactly as before, including any API
+  token's drive scope.
+
+- **An unaccepted drive invitation no longer grants drive access** — a person invited to a drive but
+  who had not yet accepted could already, in four places, act as if they had joined: an invited
+  admin could view and edit the drive's custom roles, reorder and move its pages, and grant or
+  revoke page permissions, and any invitee saw every channel in the drive with its latest message
+  in their messages list. All four now require an accepted membership, like the rest of the app.
+
+- **A custom role's drive-wide access no longer opens private pages in search, badges and
+  notifications** — opening a private page already required a per-page entry, but the batch check
+  behind search, the inbox, sidebar badges and channel notifications let a role's drive-wide
+  default stand in for one, so a member with that role could see a private page's title and
+  unread counts and receive its channel events. It now applies the same rule as everywhere else.
 
 - **Sign-in emails no longer lock you out of your own account** — every email PageSpace sends to
   the same address (a sign-in link, an invite, a notification) shared one rate-limit bucket capped

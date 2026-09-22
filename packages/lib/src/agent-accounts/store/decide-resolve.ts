@@ -6,9 +6,16 @@
  * channel/kind gate, F1/F2/F2a) and `decidePlaneBinding` (the signed-digest
  * compare, F4) are not re-derived here.
  *
- * Deny order matches §8: not_found / revoked facts are checked first (no
- * point comparing a version or a binding against a row that is not there or
- * is dead), then the caller gate, then version, then bindings.
+ * Deny order: the caller's own identity first — another tenant is
+ * `not_found`, another channel than `grant.aud` is `identity_refused` (G1c
+ * R8: the channel is a runtime fact, not only a type) — then not_found /
+ * revoked facts (no point comparing a version or a binding against a row that
+ * is not there or is dead), then a reconcile-required row (`store_unavailable`,
+ * E1: a write whose commit failed may or may not have landed, so no version of
+ * it is served), then the kind gate, then version, then bindings: a grant
+ * signed under an older `policyVersion` than the plane holds is
+ * `bindings_stale` (a rebind landed since issuance, H2), anything else that
+ * disagrees is `binding_mismatch` (the tampering signal).
  */
 import type { DecideResolve, ResolveDecision } from './store-adapter';
 import { decideResolveCaller } from './decide-resolve-caller';
@@ -19,9 +26,14 @@ const REVOKED: ResolveDecision = { ok: false, reason: 'revoked' };
 const KIND_NOT_RESOLVABLE: ResolveDecision = { ok: false, reason: 'kind_not_resolvable' };
 const VERSION_MISMATCH: ResolveDecision = { ok: false, reason: 'version_mismatch' };
 const BINDING_MISMATCH: ResolveDecision = { ok: false, reason: 'binding_mismatch' };
+const BINDINGS_STALE: ResolveDecision = { ok: false, reason: 'bindings_stale' };
+const IDENTITY_REFUSED: ResolveDecision = { ok: false, reason: 'identity_refused' };
+const STORE_UNAVAILABLE: ResolveDecision = { ok: false, reason: 'store_unavailable' };
 const OK: ResolveDecision = { ok: true };
 
-export const decideResolve: DecideResolve = ({ grant, ref, stored, now, rotationGraceMs, hash }) => {
+export const decideResolve: DecideResolve = ({ grant, identity, ref, stored, now, rotationGraceMs, hash }) => {
+  if (identity.tenantId !== ref.tenantId) return NOT_FOUND;
+  if (identity.channel !== grant.aud) return IDENTITY_REFUSED;
   if (stored === null) return NOT_FOUND;
 
   // `PlaneBindings` and its digest carry no `accountId` (the digest covers owner/origins/policy,
@@ -34,6 +46,7 @@ export const decideResolve: DecideResolve = ({ grant, ref, stored, now, rotation
   // BEFORE the revoked check, so a grant for account A cannot learn whether account B is revoked.
   if (grant.accountId !== ref.accountId || grant.tenantId !== ref.tenantId || grant.accountKind !== ref.kind) return NOT_FOUND;
   if (stored.revokedAt !== null) return REVOKED;
+  if (stored.pendingWrite !== null) return STORE_UNAVAILABLE;
 
   const caller = decideResolveCaller({ aud: grant.aud, kind: ref.kind, sessionHttp: grant.sessionHttp });
   if (!caller.ok) return KIND_NOT_RESOLVABLE;
@@ -49,6 +62,7 @@ export const decideResolve: DecideResolve = ({ grant, ref, stored, now, rotation
       now < stored.rotatedAt + rotationGraceMs);
   if (!versionOk) return VERSION_MISMATCH;
 
+  if (grant.policyVersion < stored.bindings.policyVersion) return BINDINGS_STALE;
   const binding = decidePlaneBinding({ storedBindings: stored.bindings, grantBindingDigest: grant.bindingDigest, hash });
   if (!binding.ok) return BINDING_MISMATCH;
 

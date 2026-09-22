@@ -10,7 +10,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Skeleton } from '@/components/ui/skeleton';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ChevronLeft, Shield, Globe, Trash2, Plus, RefreshCw, CheckCircle2, XCircle, Lock, Loader2, Star, Image as ImageIcon, FileWarning } from 'lucide-react';
-import Link from 'next/link';
 import { useDriveStore, type Drive } from '@/hooks/useDrive';
 import { useAuth } from '@/hooks/useAuth';
 import { toast } from 'sonner';
@@ -19,6 +18,7 @@ import useSWR from 'swr';
 import { normalizeHostname, validateCustomDomain, buildDnsInstructions } from '@pagespace/lib/validators/custom-domain';
 import { selectPrimaryActiveDomain, isEligibleForPrimaryHost } from '@pagespace/lib/canvas/primary-host';
 import { PagePickerPopover } from '@/components/common/PagePickerPopover';
+import { UpgradeLink } from '@/components/billing/UpgradeLink';
 import { PageType } from '@pagespace/lib/utils/enums';
 
 interface CustomDomain {
@@ -787,7 +787,10 @@ function SubdomainCard({ subdomain, publishHost, canChange, inputValue, onInputC
           </>
         ) : (
           <p className="text-sm text-muted-foreground">
-            Custom subdomain selection is a Pro feature. <Link href="/settings/billing" className="text-blue-500 hover:underline">Upgrade</Link> to choose your own subdomain.
+            Custom subdomain selection is a Pro feature.{' '}
+            <UpgradeLink href="/settings/billing" className="text-blue-500 hover:underline" fallback={null}>
+              Upgrade to choose your own subdomain.
+            </UpgradeLink>
           </p>
         )}
       </CardContent>
@@ -891,7 +894,7 @@ function CustomDomainsCard({ driveId, domains, limit, apps, newDomain, onNewDoma
       <CardContent className="space-y-4">
         {notAvailable ? (
           <p className="text-sm text-muted-foreground">
-            Custom domains are not available on your current plan. Upgrade to Pro or higher to add a custom domain.
+            Custom domains are available on Pro and higher plans.
           </p>
         ) : (
           <div className="flex gap-2">
@@ -914,7 +917,7 @@ function CustomDomainsCard({ driveId, domains, limit, apps, newDomain, onNewDoma
 
         {atCap && !notAvailable && (
           <p className="text-xs text-muted-foreground">
-            Domain limit reached ({domains.length} / {limit}). Remove a domain to add another, or upgrade your plan.
+            Domain limit reached ({domains.length} / {limit}). Remove a domain to add another.
           </p>
         )}
 

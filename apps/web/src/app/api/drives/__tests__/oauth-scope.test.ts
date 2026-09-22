@@ -53,6 +53,9 @@ vi.mock('@pagespace/lib/permissions/app-permissions', async (importOriginal) => 
     getScopedDriveMembership: (await import('@/lib/auth/__tests__/oauth-principal-fixture')).stillMemberScopedResolvers().getScopedDriveMembership,
     hasAppDriveMembership: vi.fn(),
     hasScopedDriveMembership: vi.fn(),
+    // The drive-level ceiling read behind canCreatePages queries Postgres; its
+    // role ∩ user answer runs for real in can-create-pages.integration.test.ts.
+    getScopedDriveAccessLevel: vi.fn(async () => ({ canView: true, canEdit: true, canShare: false, canDelete: false })),
   };
 });
 
@@ -114,7 +117,7 @@ describe('GET /api/drives — OAuth credentials', () => {
     const drives = [
       driveFixture({ id: 'drive-a', name: 'Drive A', ownerId: 'user-manage-keys' }),
       driveFixture({ id: 'drive-b', name: 'Drive B', ownerId: 'someone-else' }),
-    ].map((drive) => ({ ...drive, isOwned: true, role: 'OWNER' as const, lastAccessedAt: null })) satisfies DriveWithAccess[];
+    ].map((drive) => ({ ...drive, isOwned: true, role: 'OWNER' as const, canCreatePages: true, lastAccessedAt: null })) satisfies DriveWithAccess[];
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(manageKeysScopedAuthResult());
     vi.mocked(listAccessibleDrives).mockResolvedValue(drives);
 
@@ -131,7 +134,7 @@ describe('GET /api/drives — OAuth credentials', () => {
   it('gives an account-scoped OAuth credential the full listAccessibleDrives result', async () => {
     const drives = [
       driveFixture({ id: 'drive-account', name: 'Account Drive', ownerId: 'user-account' }),
-    ].map((drive) => ({ ...drive, isOwned: true, role: 'OWNER' as const, lastAccessedAt: null })) satisfies DriveWithAccess[];
+    ].map((drive) => ({ ...drive, isOwned: true, role: 'OWNER' as const, canCreatePages: true, lastAccessedAt: null })) satisfies DriveWithAccess[];
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(
       manageKeysScopedAuthResult({
         userId: 'user-account',
@@ -176,7 +179,7 @@ describe('GET /api/drives — OAuth credentials', () => {
       }),
     );
     vi.mocked(listAccessibleDrives).mockResolvedValue([
-      { ...driveFixture({ id: 'drive-leak', name: 'Should Not Leak' }), isOwned: true, role: 'OWNER' as const, lastAccessedAt: null },
+      { ...driveFixture({ id: 'drive-leak', name: 'Should Not Leak' }), isOwned: true, role: 'OWNER' as const, canCreatePages: true, lastAccessedAt: null },
     ]);
 
     const request = new Request('https://example.com/api/drives');

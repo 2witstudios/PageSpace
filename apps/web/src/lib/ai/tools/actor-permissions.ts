@@ -221,6 +221,43 @@ async function pageOutsideMcpScope(context: ToolExecutionContext, pageId: string
   return !context.mcpAllowedDriveIds!.includes(driveId);
 }
 
+/**
+ * How many parent hops the own-subtree walk below will follow before giving
+ * up. Page trees are shallow in practice; the bound only turns a pathological
+ * or cyclic parent chain into a denial instead of a hang.
+ */
+const AGENT_SUBTREE_WALK_LIMIT = 32;
+
+/**
+ * Whether `pageId` is the acting agent's own page or one of its descendants.
+ *
+ * An agent's own subtree is the one space it is meant to author: the Agent
+ * Memory feature (lib/ai/core/agent-memory.ts) instructs every AI_CHAT agent
+ * to create and edit an "Agent Memory" child of its own page, but the default
+ * drive membership (MEMBER) resolves canEdit:false on every non-channel page,
+ * so every write there was refused — create_page against the agent page as
+ * parent and every line edit on the memory page alike (cron workflow runs fail
+ * this way since the workflow executor began carrying the agent identity into
+ * the tool context). Children of the agent page can only come to exist by an
+ * actor already passing the edit gate on the agent page, so the subtree
+ * carries no authority the agent was not already trusted with.
+ *
+ * Delete is deliberately NOT granted by this walk — an agent must not be able
+ * to trash its own page (or its memory) even though it may write them.
+ */
+async function isAgentOwnedPage(agentPageId: string, pageId: string): Promise<boolean> {
+  let currentId: string | null = pageId;
+  for (let hops = 0; currentId && hops < AGENT_SUBTREE_WALK_LIMIT; hops++) {
+    if (currentId === agentPageId) return true;
+    const [row] = await db
+      .select({ parentId: pages.parentId })
+      .from(pages)
+      .where(eq(pages.id, currentId));
+    currentId = row?.parentId ?? null;
+  }
+  return false;
+}
+
 export async function canActorEditPage(
   context: ToolExecutionContext,
   pageId: string,
@@ -229,6 +266,7 @@ export async function canActorEditPage(
   if (await pageDeniedByAppToken(context, pageId, 'edit')) return false;
   const agentPageId = await resolveActingAgentId(context);
   if (agentPageId) {
+    if (await isAgentOwnedPage(agentPageId, pageId)) return true;
     const perms = await getAgentAccessLevel(agentPageId, pageId);
     return perms?.canEdit ?? false;
   }

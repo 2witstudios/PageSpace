@@ -301,3 +301,17 @@ describe('GET /api/commands/suggest', () => {
     expect(longResponse.status).toBe(400);
   });
 });
+
+describe('/btw through GET /api/commands/suggest', () => {
+  it('offers the btw built-in with clientHandled:true and the side-question copy', async () => {
+    mockedAuth.mockResolvedValue(webAuth());
+    vi.mocked(db.query.commands.findMany).mockResolvedValue([]);
+    mockedBatchPermissions.mockResolvedValue(new Map());
+    const response = await GET(new Request('http://test/api/commands/suggest'));
+    const { suggestions } = (await response.json()) as { suggestions: Array<{ trigger: string; description: string; clientHandled?: boolean }> };
+    const btw = suggestions.find((s) => s.trigger === 'btw');
+    expect(btw).toBeDefined();
+    expect(btw?.clientHandled).toBe(true);
+    expect(btw?.description).toBe('Ask a side question without interrupting the run');
+  });
+});

@@ -61,6 +61,23 @@ describe('buildErasurePlan', () => {
     });
   });
 
+  describe('revoke-apple-tokens (Guideline 5.1.1(v), TN3194)', () => {
+    it('given cloud mode, should revoke Apple tokens BEFORE delete-user, while the token rows still exist', () => {
+      const ids = cloudPlan().map((s) => s.id);
+      expect(ids).toContain('revoke-apple-tokens');
+      expect(ids.indexOf('revoke-apple-tokens')).toBeLessThan(ids.indexOf('delete-user'));
+    });
+
+    it('given Apple is unavailable, should be best-effort — the deletion request must still be fulfilled', () => {
+      expect(cloudPlan().find((s) => s.id === 'revoke-apple-tokens')?.fatal).toBe(false);
+    });
+
+    it('given on-prem mode, should still run — the token rows live in our own Postgres', () => {
+      const ids = buildErasurePlan({ deploymentMode: 'onprem', clickHouseInPlay: false }).map((s) => s.id);
+      expect(ids).toContain('revoke-apple-tokens');
+    });
+  });
+
   it('every step id is unique', () => {
     const plan = cloudPlan();
     const ids = plan.map((s) => s.id);

@@ -253,7 +253,7 @@ function ToolArgField({
           onChange={(e) => onChange(e.target.value)}
           placeholder={field.placeholder}
           rows={3}
-          className="text-xs"
+          className="text-xs max-h-[45dvh] overflow-y-auto break-words"
         />
       ) : field.type === 'number' ? (
         <Input
@@ -325,7 +325,7 @@ function StepEditor({
             onChange={(e) => onChange({ ...step, prompt: e.target.value })}
             rows={3}
             placeholder="Write a daily summary report..."
-            className="text-xs"
+            className="text-xs max-h-[45dvh] overflow-y-auto break-words"
           />
         </div>
       </div>
@@ -425,9 +425,9 @@ export function WorkflowStepsEditor({ steps, onChange, agents }: WorkflowStepsEd
   };
 
   return (
-    <div className="space-y-2">
+    <div className="min-w-0 space-y-2">
       {steps.map((step, index) => (
-        <div key={index} className="rounded-lg border bg-card">
+        <div key={index} className="min-w-0 rounded-lg border bg-card">
           <div className="flex items-center gap-2 p-2">
             <button
               type="button"
@@ -475,7 +475,7 @@ export function WorkflowStepsEditor({ steps, onChange, agents }: WorkflowStepsEd
             </div>
           </div>
           {expanded.has(index) && (
-            <div className="border-t p-3">
+            <div className="min-w-0 border-t p-3">
               <StepEditor step={step} onChange={(s) => updateStep(index, s)} agents={agents} />
             </div>
           )}
