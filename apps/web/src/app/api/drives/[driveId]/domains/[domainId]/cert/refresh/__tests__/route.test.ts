@@ -5,6 +5,13 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { POST } from '../route';
 
 vi.mock('server-only', () => ({}));
+// The cert reconciler (real here) keeps the env OAuth client's redirects in step
+// with a domain's serving status; that write is exercised in reconcile-cert.test.ts
+// and needs a database, so it is stubbed at its own seam for this route contract.
+vi.mock('@/lib/drive-envs/env-oauth-client-runtime', () => ({
+  syncEnvOAuthClientBestEffort: vi.fn(async () => undefined),
+  syncEnvOAuthClientForRemoval: vi.fn(async () => ({ ok: true })),
+}));
 
 const authenticateRequestWithOptions = vi.fn();
 const checkMCPDriveScope = vi.fn();
