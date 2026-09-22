@@ -604,10 +604,10 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 ### Fixed
 
 - **Access keys and connected apps follow a custom role's drive-wide rule for new root pages** — a
-  custom role that does not grant drive-wide edit stops a member from creating pages at the top of
-  a drive, but an access key or a connected app given that same role could still create them. Both
-  now get the same answer as a person with the role: they can create root pages only when the role
-  grants drive-wide edit.
+  custom role that does not grant drive-wide edit stops a member from creating pages or uploading
+  files at the top of a drive, but an access key or a connected app given that same role could still
+  do both. They now get the same answer as a person with the role: they can create root pages and
+  upload to the drive only when the role grants drive-wide edit.
 
 - **The workflow editor fits the screen again** — a workflow with a long AI prompt pushed the
   Edit Workflow dialog's fields past its right edge and pushed Save below the fold. The dialog is
