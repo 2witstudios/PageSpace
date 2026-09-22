@@ -105,4 +105,20 @@ describe('filterResponse', () => {
     const expected = false;
     expect(actual).toEqual(expected);
   });
+
+  it('given a text body in a charset other than UTF-8, should omit it — the scrub reads UTF-8 and a UTF-16 echo of the key would pass through', () => {
+    const utf16 = new Uint8Array(Buffer.from(`key=${KEY}`, 'utf16le'));
+    const verdict = release({ headers: [['content-type', 'text/plain; charset=utf-16le']], body: utf16 });
+    const actual = { body: verdict.body, bodyOmitted: verdict.bodyOmitted };
+    const expected = { body: null, bodyOmitted: 'binary' };
+    expect(actual).toEqual(expected);
+  });
+
+  it('given an explicit UTF-8 charset, should release the text as usual', () => {
+    const verdict = release({ headers: [['content-type', 'application/json; charset=UTF-8']], body: '{"a":1}' });
+    const actual = verdict.body;
+    const expected = '{"a":1}';
+    expect(actual).toEqual(expected);
+  });
 });
+
