@@ -91,4 +91,12 @@ describe('buildOutboundRequest', () => {
     const expected = { ok: false, reason: 'key_invalid' };
     expect(actual).toEqual(expected);
   });
+
+  it('given a caller query parameter whose name differs from the key placement only by case, dots, spaces or brackets, should refuse placement_collision — servers that fold names would read the attacker\'s value', () => {
+    const urls = ['https://api.example.com/v1/x?API_KEY=attacker', 'https://api.example.com/v1/x?api.key=attacker', 'https://api.example.com/v1/x?api%20key=attacker', 'https://api.example.com/v1/x?api%5Bkey=attacker'];
+    const actual = urls.map((url) => buildOutboundRequest({ canonical: canonicalOf(url), body: new Uint8Array(0), material: { value: KEY, placement: { in: 'query', name: 'api_key' } }, sha256 }));
+    const expected = urls.map(() => ({ ok: false, reason: 'placement_collision' }));
+    expect(actual).toEqual(expected);
+  });
 });
+
