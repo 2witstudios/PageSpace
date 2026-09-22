@@ -11,6 +11,7 @@ import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
 import { DEFAULT_PROVIDER, DEFAULT_MODEL } from '@/lib/ai/core/ai-providers-config';
 import type { ToolExecutionContext } from '@/lib/ai/core/types';
 import { messageRepository } from '@/lib/repositories/message-repository';
+import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { db } from '@pagespace/db/db'
 import { eq, and, inArray } from '@pagespace/db/operators'
@@ -606,10 +607,10 @@ async function runExecution(
 
     // 6c. Session-backed execution (review #2326, three rounds). The session
     // runtime resolves a conversation's BOUND SESSION and refuses session-less
-    // callers — a synthetic `workflow-…` id has no conversation row at all,
-    // so EVERY session-backed tool the gates above admitted (bash/file/git
-    // compute AND the chat-only session family, which free-tier and
-    // kill-switch-off runs keep) would answer `no_session` and never execute.
+    // callers — a plain page conversation has no bound session, so EVERY
+    // session-backed tool the gates above admitted (bash/file/git compute AND
+    // the chat-only session family, which free-tier and kill-switch-off runs
+    // keep) would answer `no_session` and never execute.
     //
     // spawn_session/send_session are stripped from EVERY workflow run. This
     // used to rest on two reasons (codex rounds 7, 8 and 11); only ONE is still
@@ -636,7 +637,7 @@ async function runExecution(
     // cap, transient fault) degrades to running WITHOUT the session-backed
     // families rather than failing the workflow — the same posture as an
     // agent with the sandbox toggled off.
-    let conversationId = `workflow-${input.workflowId}-${Date.now()}`;
+    let conversationId: string | null = null;
     availableTools = filterToolsForEphemeralWorkspace(availableTools, false) as ToolSet;
     const sessionBackedToolsActive =
       workflowSandboxEnabled &&
@@ -682,6 +683,27 @@ async function runExecution(
           reason: spawned.reason,
         });
       }
+    }
+
+    // 6d. Every run persists into a REAL conversation (#2686). `messages.
+    // conversationId` is a hard FK, so a run that bound no session (sandbox
+    // off, spawn refused, bind failed) gets a plain page conversation on the
+    // agent — the same row an interactive chat would have — minted BEFORE the
+    // model runs, because tools read `conversationId` from the execution
+    // context. Without it the run did its tool work and then failed saving its
+    // own transcript.
+    if (conversationId === null) {
+      const plainConversationId = createId();
+      const created = await conversationRepository.createConversation(
+        plainConversationId,
+        input.createdBy,
+        agent.id,
+        { title: `Workflow: ${input.workflowName}`.slice(0, 100) },
+      );
+      if (created !== 'created') {
+        throw new Error(`Workflow run conversation could not be created: ${created}`);
+      }
+      conversationId = plainConversationId;
     }
 
     // 7. Build execution context

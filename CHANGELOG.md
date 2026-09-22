@@ -629,6 +629,11 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   "no view" grant, so a member could see those pages' activity in Pulse. Pulse now follows the same
   rules as opening the page: those denies are honoured, a custom role's per-page grant on a private
   page is included, and a time-limited grant expires at the right moment in every time zone.
+- **Workflows run by agents without the sandbox no longer fail** — a workflow whose agent has the
+  sandbox turned off failed every run, from any trigger (schedule, task, calendar or page webhook),
+  when saving its messages — often after its tools had already done their work. Every run now saves
+  into its own conversation on the agent, so it completes and its transcript can be opened like any
+  other chat.
 - **Agents can write to their own memory pages again** — every agent is instructed to keep notes
   on an "Agent Memory" child page of its own, but the permission check behind the write tools
   looked only at the agent's drive membership, which grants edit on no ordinary page — so every
