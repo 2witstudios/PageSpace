@@ -57,6 +57,7 @@ describe('toSafeAccount', () => {
       lastUsedAt: 1_800_000_100_000,
       createdAt: 1_800_000_000_000,
       revokedAt: null,
+      ready: true,
     };
     expect(actual).toEqual(expected);
   });
@@ -72,6 +73,12 @@ describe('toSafeAccount', () => {
     const keys = Object.keys(toSafeAccount({ row }));
     const actual = ['tenantId', 'ownerUserId', 'ownerAgentPageId', 'ownerDriveId', 'approvalPolicy', 'resourceRestrictions', 'credentialVersion', 'policyVersion'].filter((key) => keys.includes(key));
     const expected: string[] = [];
+    expect(actual).toEqual(expected);
+  });
+
+  it('given a row whose material the plane never committed (credentialVersion 0), should report it not ready — never as a usable active account', () => {
+    const actual = toSafeAccount({ row: { ...row, credentialVersion: 0 } }).ready;
+    const expected = false;
     expect(actual).toEqual(expected);
   });
 });
