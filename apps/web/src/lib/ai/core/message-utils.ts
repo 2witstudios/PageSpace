@@ -676,8 +676,13 @@ export async function convertGlobalAssistantMessageToUIMessage(dbMessage: Global
  *   fields can be a security risk..."), which floods logs inside agent retry loops.
  * - Filters out tool parts without results to prevent "input-available" state errors.
  *   `output-denied` IS a result (the user refused; convertToModelMessages emits a
- *   tool-result the model can read) and is kept. `approval-requested` and
- *   `approval-responded` are NOT: a call + approval response with no result is
+ *   tool-result the model can read) and is kept. So is an `output-error` that
+ *   carries an `approval`: an approved call that failed or was refused at
+ *   execution time. Dropping it would erase the call from history and let the
+ *   continuation retry the write — under a conversation/always grant, without a
+ *   second approval, possibly duplicating a side effect whose response merely
+ *   failed. `approval-requested` and `approval-responded` are NOT results: a
+ *   call + approval response with no result is
  *   precisely the shape that makes the SDK run its own execute-on-resume step,
  *   whose output would land under the OLD toolCallId in a NEW message and be lost
  *   — the approval resume must have turned every responded part into a result
@@ -697,6 +702,8 @@ export function sanitizeMessagesForModel(msgs: UIMessage[]): UIMessage[] {
       if (isToolInvocationPart(part)) {
         // Only include tool parts that have a result (completed or refused executions)
         if (part.state === 'output-denied') return true;
+        // A failed APPROVED execution is a result the model must see (see docblock).
+        if (part.state === 'output-error' && 'approval' in part && part.approval !== undefined) return true;
         return part.state === 'output-available' && 'output' in part && part.output !== undefined;
       }
 

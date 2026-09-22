@@ -92,6 +92,23 @@ describe('tool approvals vs the AI SDK resume step', () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
+  it('an approved call that FAILED (output-error + approval) reaches the model as an error tool-result and is never executed again', async () => {
+    const execute = vi.fn(async () => ({ trashed: true }));
+    const rows = history({ state: 'output-error', errorText: 'permission changed before it ran', approval: { id: 'ap1', approved: true } });
+
+    const sanitized = sanitizeMessagesForModel(rows);
+    expect(sanitized[1].parts.map((p) => (p as { state?: string }).state)).toEqual(['output-error']);
+
+    const messages = await convertToModelMessages(sanitized);
+    const toolMessage = messages.find((m) => m.role === 'tool');
+    const result = (toolMessage!.content as Array<{ type: string; toolCallId?: string; output?: { type: string; value?: unknown } }>).find((p) => p.type === 'tool-result');
+    expect(result?.toolCallId).toBe('tc1');
+    expect(JSON.stringify(result!.output)).toContain('permission changed before it ran');
+
+    await generateText({ model: textOnlyModel(), messages, tools: { trash_page: trashPage(execute) } });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it('the shape that WOULD trigger the SDK resume step — approval-responded with no result — never survives the sanitizer', () => {
     const rows = history({ state: 'approval-responded', approval: { id: 'ap1', approved: true } });
     const sanitized = sanitizeMessagesForModel(rows);
