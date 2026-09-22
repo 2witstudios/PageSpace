@@ -130,8 +130,10 @@ const TOOLS: readonly ToolCase[] = [
 /**
  * What each role may do, pinned — so parity can never be two matching failures.
  * A MEMBER may create at the drive root (user parity) but not edit, move,
- * delete or administer; the custom role grants view+edit on `doc` only; ADMIN
- * and INHERIT (the owner's own access) may do everything.
+ * delete or administer; the custom role grants view+edit on `doc` only — no
+ * drive-wide edit, so no root-page create (#2627, the same answer a human
+ * member bound by the role gets); ADMIN and INHERIT (the owner's own access)
+ * may do everything.
  */
 const EXPECTED: Readonly<Record<Variant, Readonly<Record<string, Outcome>>>> = {
   MEMBER: {
@@ -139,7 +141,7 @@ const EXPECTED: Readonly<Record<Variant, Readonly<Record<string, Outcome>>>> = {
     'share/permissions — create drive role': 'denied', 'move page': 'denied', 'delete page': 'denied', 'drive manage — rename drive': 'denied',
   },
   CUSTOM: {
-    'read page': 'ok', 'read private page': 'denied', search: 'ok', 'edit page': 'ok', 'create page (drive root)': 'ok',
+    'read page': 'ok', 'read private page': 'denied', search: 'ok', 'edit page': 'ok', 'create page (drive root)': 'denied',
     'share/permissions — create drive role': 'denied', 'move page': 'denied', 'delete page': 'denied', 'drive manage — rename drive': 'denied',
   },
   ADMIN: {

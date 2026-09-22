@@ -58,6 +58,12 @@ import {
   getUserAccessiblePagesInDriveWithDetails,
 } from '../permissions';
 
+// vi.clearAllMocks() keeps queued mockReturnValueOnce stubs; one a test left
+// unconsumed would answer the NEXT test's query. Every test starts empty.
+beforeEach(() => {
+  vi.mocked(db.select).mockReset();
+});
+
 const TOKEN_ID = 'mcp_aaaaaaaaaaaaaaaaaaaaaa';
 const OWNER_ID = 'user_oooooooooooooooooooo';
 const PAGE_ID = 'page_bbbbbbbbbbbbbbbbbbbbbbb';
@@ -152,6 +158,30 @@ describe('resolveExplicitAppRoleAccess (pure user-parity table)', () => {
   ] as const)('%s', (_desc, role, expected) => {
     expect(
       resolveExplicitAppRoleAccess({ ...base, role, pageType: null, isPrivate: false, isDriveRoot: true }),
+    ).toEqual(expected);
+  });
+
+  // The drive-wide canEdit rule (#2627) at the drive root — the same answer
+  // getUserAccessLevel gives a human member bound by the same role.
+  it.each([
+    ['custom role, view-only drive-wide → view, no edit (cannot create root pages)', 'MEMBER', { canView: true, canEdit: false, canShare: false }, false, { canView: true, canEdit: false, canShare: false, canDelete: false }],
+    ['custom role, edit drive-wide → view + edit', 'MEMBER', { canView: true, canEdit: true, canShare: false }, false, { canView: true, canEdit: true, canShare: false, canDelete: false }],
+    ['custom role, null drive-wide → no edit', 'MEMBER', null, false, { canView: true, canEdit: false, canShare: false, canDelete: false }],
+    ['custom role id unresolvable → all-false', 'MEMBER', undefined, true, NONE],
+    ['ADMIN keeps full access whatever the custom role says', 'ADMIN', { canView: true, canEdit: false, canShare: false }, false, FULL],
+    ['ADMIN with an unresolvable custom role keeps full access', 'ADMIN', undefined, true, FULL],
+    ['OWNER row keeps full access', 'OWNER', null, false, FULL],
+  ] as const)('drive root: %s', (_desc, role, driveWidePermissions, customRoleUnresolved, expected) => {
+    expect(
+      resolveExplicitAppRoleAccess({
+        ...base,
+        role,
+        customRole: driveWidePermissions === undefined ? null : { permissions: {}, driveWidePermissions },
+        customRoleUnresolved,
+        pageType: null,
+        isPrivate: false,
+        isDriveRoot: true,
+      }),
     ).toEqual(expected);
   });
 
@@ -355,6 +385,20 @@ describe('getAppDriveAccessLevel', () => {
   it('explicit ADMIN → full', async () => {
     vi.mocked(db.select).mockReturnValueOnce(stubSelectJoin([membershipRow('ADMIN')]));
     expect(await getAppDriveAccessLevel(TOKEN_ID, DRIVE_ID)).toEqual(FULL);
+  });
+
+  // The drive-wide canEdit rule (#2627): upload/presign and upload/complete
+  // authorize a root-level FILE page through this drive-level answer.
+  it.each([
+    ['view-only drive-wide → view, no edit', false],
+    ['edit drive-wide → view + edit', true],
+  ] as const)('explicit MEMBER with a custom role, %s', async (_desc, canEdit) => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelectJoin([membershipRow('MEMBER', CUSTOM_ROLE_ID)]))
+      .mockReturnValueOnce(stubSelect([{ permissions: {}, driveWidePermissions: { canView: true, canEdit, canShare: false } }]));
+    expect(await getAppDriveAccessLevel(TOKEN_ID, DRIVE_ID)).toEqual({
+      canView: true, canEdit, canShare: false, canDelete: false,
+    });
   });
 });
 
@@ -605,6 +649,17 @@ describe('getScopedDriveAccessLevel', () => {
 
   it('explicit ADMIN → full', async () => {
     expect(await getScopedDriveAccessLevel([scopeRow(DRIVE_ID, 'ADMIN')], OWNER_ID, DRIVE_ID)).toEqual(FULL);
+  });
+
+  it.each([
+    ['view-only drive-wide → view, no edit', false],
+    ['edit drive-wide → view + edit', true],
+  ] as const)('explicit MEMBER with a custom role (drive:D:role:<id>), %s', async (_desc, canEdit) => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ permissions: {}, driveWidePermissions: { canView: true, canEdit, canShare: false } }]));
+    expect(await getScopedDriveAccessLevel([scopeRow(DRIVE_ID, 'MEMBER', CUSTOM_ROLE_ID)], OWNER_ID, DRIVE_ID)).toEqual({
+      canView: true, canEdit, canShare: false, canDelete: false,
+    });
   });
 });
 

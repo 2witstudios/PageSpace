@@ -8,7 +8,7 @@ import {
   isUserDriveMember,
   getUserAccessiblePagesInDriveWithDetails,
 } from './permissions';
-import { fetchCustomRolePermissions, resolveCustomRolePermissions, type CustomRolePerms, type PagePerm } from './membership-queries';
+import { driveWideCanEdit, fetchCustomRolePermissions, resolveCustomRolePermissions, type CustomRolePerms, type PagePerm } from './membership-queries';
 import type { PermissionLevel, PageWithPermissions } from './permissions';
 import type { DriveScopeRow } from '../auth/oauth/scopes';
 
@@ -82,9 +82,10 @@ export async function fetchPageTarget(targetPageId: string): Promise<PageTarget>
 /**
  * Pure parity resolver for EXPLICIT roles. Mirrors getUserAccessLevel
  * (permissions.ts:92-280) cell for cell:
- *  - drive-root target: ANY membership → view+edit (members may create root
- *    pages); share/delete only for ADMIN/OWNER; customRoleId is not consulted
- *    at the drive root, same as the user branch.
+ *  - drive-root target: the drive-wide canEdit rule (#2627, driveWideCanEdit) —
+ *    view for any membership, edit (root-page create) unless a custom role
+ *    withholds drive-wide edit; an unresolvable custom role grants nothing;
+ *    share/delete only for ADMIN/OWNER. Same answer as the user branch.
  *  - ADMIN/OWNER → full access, including private pages.
  *  - custom role: per-page grant wins; driveWidePermissions fallback (never on
  *    private pages); no grant at all → all-false; canDelete always false.
@@ -105,7 +106,19 @@ export function resolveExplicitAppRoleAccess(input: {
   const isAdminLike = role === 'ADMIN' || role === 'OWNER';
 
   if (isDriveRoot) {
-    return { canView: true, canEdit: true, canShare: isAdminLike, canDelete: isAdminLike };
+    // Root-page create is edit on the drive root, decided by the one drive-wide
+    // canEdit rule (#2627) — the answer a human member bound by the same role
+    // gets from getUserAccessLevel. A custom role that did not resolve in this
+    // drive grants nothing.
+    if (!isAdminLike && customRoleUnresolved) {
+      return { canView: false, canEdit: false, canShare: false, canDelete: false };
+    }
+    return {
+      canView: true,
+      canEdit: driveWideCanEdit({ role, hasCustomRole: customRole !== null || customRoleUnresolved, customRole }),
+      canShare: isAdminLike,
+      canDelete: isAdminLike,
+    };
   }
 
   if (isAdminLike) {
@@ -215,9 +228,33 @@ export async function getAppDriveMembership(
 }
 
 /**
+ * What an explicit role grants on the drive as a whole: the drive-root answer
+ * of {@link resolveExplicitAppRoleAccess}, custom role included — the same
+ * decision a page-level check on the drive id reaches, so a drive-level gate
+ * (uploads) and a root-page create cannot disagree.
+ */
+async function resolveExplicitDriveRootAccess(
+  role: AppMemberRole,
+  customRoleId: string | null,
+  driveId: string,
+): Promise<PermissionLevel | null> {
+  const customRole = customRoleId ? await fetchCustomRolePermissions(customRoleId, driveId) : null;
+  return resolveExplicitAppRoleAccess({
+    role,
+    customRole,
+    customRoleUnresolved: !!customRoleId && !customRole,
+    targetPageId: driveId,
+    pageType: null,
+    isPrivate: false,
+    isDriveRoot: true,
+  });
+}
+
+/**
  * Drive-level access. Inherit → the owner's drive-root access (user rule);
- * explicit → user drive-root parity: any membership gets view+edit, ADMIN/
- * OWNER add share+delete.
+ * explicit → the role's drive-root answer (the drive-wide canEdit rule, custom
+ * role included; ADMIN/OWNER add share+delete), never more than the owner can
+ * do right now.
  */
 export async function getAppDriveAccessLevel(
   tokenId: string,
@@ -230,9 +267,8 @@ export async function getAppDriveAccessLevel(
     return getUserAccessLevel(membership.ownerUserId, driveId);
   }
 
-  const isAdminLike = membership.role === 'ADMIN' || membership.role === 'OWNER';
   return intersectPermissionLevels(
-    { canView: true, canEdit: true, canShare: isAdminLike, canDelete: isAdminLike },
+    await resolveExplicitDriveRootAccess(membership.role, membership.customRoleId, driveId),
     await getUserAccessLevel(membership.ownerUserId, driveId),
   );
 }
@@ -527,9 +563,10 @@ export async function getScopedDriveMembership(
 
 /**
  * Drive-level access. Inherit → the owner's drive-root access (user rule);
- * explicit → user drive-root parity: any membership gets view+edit, ADMIN
- * adds share+delete. Mirrors getAppDriveAccessLevel (OAuth's grammar has no
- * OWNER role — scopeSetToDriveScopes only ever emits 'ADMIN' | 'MEMBER' | null).
+ * explicit → the role's drive-root answer (the drive-wide canEdit rule, custom
+ * role included; ADMIN adds share+delete), never more than the owner can do
+ * right now. Mirrors getAppDriveAccessLevel (OAuth's grammar has no OWNER role
+ * — scopeSetToDriveScopes only ever emits 'ADMIN' | 'MEMBER' | null).
  */
 export async function getScopedDriveAccessLevel(
   driveScopes: DriveScopeRow[],
@@ -543,9 +580,8 @@ export async function getScopedDriveAccessLevel(
     return getUserAccessLevel(ownerUserId, driveId);
   }
 
-  const isAdminLike = row.role === 'ADMIN';
   return intersectPermissionLevels(
-    { canView: true, canEdit: true, canShare: isAdminLike, canDelete: isAdminLike },
+    await resolveExplicitDriveRootAccess(row.role, row.customRoleId, driveId),
     await getUserAccessLevel(ownerUserId, driveId),
   );
 }
