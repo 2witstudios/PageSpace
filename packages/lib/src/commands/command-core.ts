@@ -272,6 +272,16 @@ export const BUILTIN_COMMANDS: readonly BuiltinCommandDefinition[] = [
     requiredTools: ['replace_lines', 'insert_content', 'create_page'],
   },
   {
+    trigger: 'sign-in-with-pagespace',
+    kind: 'skill',
+    description:
+      'Adds "Sign in with PageSpace" to an app being built in a PageSpace environment: reads the two public values PAGESPACE_URL and PAGESPACE_CLIENT_ID the environment already provides, calls PageSpaceClient.fromEnvironment() from @pagespace/sdk, serves the /auth/pagespace/callback route, shows who is signed in via auth.me, and requests drive access only when the app needs content. No registration, no config, no secret — never an mcp_ key. Use when the user asks to add sign-in, login, authentication, user accounts, or "log in with PageSpace" to an app in an environment, or to act as the signed-in user from that app.',
+    // The sandbox core tools: an agent that can edit and run code in an
+    // environment is the one this skill is for. Gates discovery only — an
+    // agent that asks for it by name still gets it (see skill-tools.ts).
+    requiredTools: ['bash', 'writeFile', 'editFile'],
+  },
+  {
     // Not a skill and never model-facing: the composer's send interception
     // (ChatInput) and the detached /api/ai/btw stream are the whole feature.
     // `clientHandled` makes the picker insert literal `/btw ` text — a chip
