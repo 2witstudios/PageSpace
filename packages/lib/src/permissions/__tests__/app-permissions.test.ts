@@ -163,6 +163,8 @@ describe('resolveExplicitAppRoleAccess (pure user-parity table)', () => {
     ['custom role, null drive-wide → no edit', 'MEMBER', null, false, { canView: true, canEdit: false, canShare: false, canDelete: false }],
     ['custom role id unresolvable → all-false', 'MEMBER', undefined, true, NONE],
     ['ADMIN keeps full access whatever the custom role says', 'ADMIN', { canView: true, canEdit: false, canShare: false }, false, FULL],
+    ['ADMIN with an unresolvable custom role keeps full access', 'ADMIN', undefined, true, FULL],
+    ['OWNER row keeps full access', 'OWNER', null, false, FULL],
   ] as const)('drive root: %s', (_desc, role, driveWidePermissions, customRoleUnresolved, expected) => {
     expect(
       resolveExplicitAppRoleAccess({
@@ -377,6 +379,20 @@ describe('getAppDriveAccessLevel', () => {
   it('explicit ADMIN → full', async () => {
     vi.mocked(db.select).mockReturnValueOnce(stubSelectJoin([membershipRow('ADMIN')]));
     expect(await getAppDriveAccessLevel(TOKEN_ID, DRIVE_ID)).toEqual(FULL);
+  });
+
+  // The drive-wide canEdit rule (#2627): upload/presign and upload/complete
+  // authorize a root-level FILE page through this drive-level answer.
+  it.each([
+    ['view-only drive-wide → view, no edit', false],
+    ['edit drive-wide → view + edit', true],
+  ] as const)('explicit MEMBER with a custom role, %s', async (_desc, canEdit) => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelectJoin([membershipRow('MEMBER', CUSTOM_ROLE_ID)]))
+      .mockReturnValueOnce(stubSelect([{ permissions: {}, driveWidePermissions: { canView: true, canEdit, canShare: false } }]));
+    expect(await getAppDriveAccessLevel(TOKEN_ID, DRIVE_ID)).toEqual({
+      canView: true, canEdit, canShare: false, canDelete: false,
+    });
   });
 });
 
@@ -627,6 +643,17 @@ describe('getScopedDriveAccessLevel', () => {
 
   it('explicit ADMIN → full', async () => {
     expect(await getScopedDriveAccessLevel([scopeRow(DRIVE_ID, 'ADMIN')], OWNER_ID, DRIVE_ID)).toEqual(FULL);
+  });
+
+  it.each([
+    ['view-only drive-wide → view, no edit', false],
+    ['edit drive-wide → view + edit', true],
+  ] as const)('explicit MEMBER with a custom role (drive:D:role:<id>), %s', async (_desc, canEdit) => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ permissions: {}, driveWidePermissions: { canView: true, canEdit, canShare: false } }]));
+    expect(await getScopedDriveAccessLevel([scopeRow(DRIVE_ID, 'MEMBER', CUSTOM_ROLE_ID)], OWNER_ID, DRIVE_ID)).toEqual({
+      canView: true, canEdit, canShare: false, canDelete: false,
+    });
   });
 });
 

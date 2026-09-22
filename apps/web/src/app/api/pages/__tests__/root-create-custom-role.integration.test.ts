@@ -9,9 +9,14 @@
  * everything and the credential's own role is the only thing that can refuse.
  * The human is a MEMBER bound by the same role.
  *
+ * Two root-level writes are checked: POST /api/pages with no parent, and
+ * POST /api/upload/presign to the drive (its completion inserts a FILE page at
+ * the drive root), which authorizes credentials through the drive-level
+ * resolvers (getAppDriveAccessLevel / getScopedDriveAccessLevel).
+ *
  * Every request runs the REAL route over the REAL authenticateRequestWithOptions,
  * token lookup and permission helpers. Stubbed only: realtime broadcasts, the
- * audit sink, the rate limiter and the two object-storage writes.
+ * audit sink, the rate limiter and the object-storage effects.
  */
 import { describe, it, expect, beforeAll, vi } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
@@ -41,6 +46,10 @@ vi.mock('@pagespace/lib/services/page-content-store', async (importOriginal) => 
     return { ref: `${format}:root-create`, size, compressed: false, storedSize: size, compressionRatio: 1 };
   }),
 }));
+vi.mock('@/lib/upload/s3-effects', () => ({
+  checkObjectExists: vi.fn(async () => false),
+  issuePresignedPutUrl: vi.fn(async () => 'https://storage.example/put'),
+}));
 vi.mock('@pagespace/lib/services/page-version-service', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@pagespace/lib/services/page-version-service')>()),
   createPageVersion: vi.fn(async (input: { content: string }) => {
@@ -50,6 +59,7 @@ vi.mock('@pagespace/lib/services/page-version-service', async (importOriginal) =
 }));
 
 import { POST as pagesPOST } from '../route';
+import { POST as presignPOST } from '../../upload/presign/route';
 
 type Principal = 'session' | 'mcp' | 'oauth';
 
@@ -110,14 +120,25 @@ async function createRootPage(token: string, driveId: string): Promise<number> {
   return res.status;
 }
 
+async function presignRootUpload(token: string, driveId: string): Promise<number> {
+  const res = await presignPOST(
+    new Request('http://localhost/api/upload/presign', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ contentHash: 'a'.repeat(64), driveId, filename: 'root.txt', mimeType: 'text/plain', fileSize: 12 }),
+    }),
+  );
+  return res.status;
+}
+
 beforeAll(async () => {
   await ensureTestDb();
 });
 
 describe.each([
-  { roleName: 'view-only drive-wide', canEdit: false, expected: 403 },
-  { roleName: 'edit drive-wide', canEdit: true, expected: 201 },
-])('root-page create under a custom role with $roleName — one answer for every principal', ({ canEdit, expected }) => {
+  { roleName: 'view-only drive-wide', canEdit: false, expected: 403, expectedUpload: 403 },
+  { roleName: 'edit drive-wide', canEdit: true, expected: 201, expectedUpload: 200 },
+])('root-level writes under a custom role with $roleName — one answer for every principal', ({ canEdit, expected, expectedUpload }) => {
   const tokens = {} as Record<Principal, string>;
   let driveId: string;
 
@@ -133,7 +154,11 @@ describe.each([
     tokens.oauth = await oauthRoleGrant(owner.id, driveId, roleId);
   });
 
-  it.each<Principal>(['session', 'mcp', 'oauth'])(`given a %s principal, should answer ${expected}`, async (principal) => {
+  it.each<Principal>(['session', 'mcp', 'oauth'])(`given a %s principal, root-page create should answer ${expected}`, async (principal) => {
     expect(await createRootPage(tokens[principal], driveId)).toBe(expected);
+  });
+
+  it.each<Principal>(['session', 'mcp', 'oauth'])(`given a %s principal, a root upload presign should answer ${expectedUpload}`, async (principal) => {
+    expect(await presignRootUpload(tokens[principal], driveId)).toBe(expectedUpload);
   });
 });
