@@ -180,6 +180,7 @@
     "packages/lib": {
       "entry": [
         "src/agent-accounts/grant.ts",
+        "src/agent-accounts/executor/plane-main.ts",
         "src/agent-accounts/canonical-request.ts",
         "src/agent-accounts/approval.ts",
         "src/agent-accounts/audit.ts",
