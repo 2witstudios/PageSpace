@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import Link from 'next/link';
+import { MarketingLink } from '@/components/ui/MarketingLink';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -145,6 +145,31 @@ export function MagicLinkForm({ nextPath, inviteToken }: MagicLinkFormProps = {}
         return;
       }
 
+      // Desktop shell only: mark an auth flow in progress (finding L9) BEFORE
+      // showing confirmation. The emailed link opens in the user's browser,
+      // outside this shell, so the pagespace:// deep link it fires cannot
+      // carry the flow state back — the main process accepts it via the
+      // in-progress-flow gate instead. A rejected bridge call or a null state
+      // (untrusted sender — the main process never records a flow) would leave
+      // that gate closed: the later deep link would be rejected and the
+      // desktop app would stay signed out. Surface a retryable error instead
+      // of a confirmation that promises a sign-in that cannot complete.
+      const beginExchange = window.electron?.auth?.beginExchange;
+      if (beginExchange) {
+        try {
+          const state = await beginExchange();
+          if (!state) {
+            throw new Error('Desktop auth bridge returned no flow state');
+          }
+        } catch {
+          setFormState('error');
+          setError(
+            'Your sign-in link was emailed, but the desktop app failed to prepare for sign-in. Please try again.'
+          );
+          return;
+        }
+      }
+
       // Success - show confirmation
       setFormState('sent');
       setCooldownSeconds(60); // 60 second cooldown before allowing resend
@@ -269,14 +294,15 @@ export function MagicLinkForm({ nextPath, inviteToken }: MagicLinkFormProps = {}
           className="text-xs font-normal leading-snug text-muted-foreground"
         >
           I agree to PageSpace&apos;s{' '}
-          <Link href="/terms" className="underline hover:text-foreground">
+          <MarketingLink href="/terms" className="underline hover:text-foreground">
             Terms
-          </Link>
+          </MarketingLink>
           {' '}and{' '}
-          <Link href="/privacy" className="underline hover:text-foreground">
+          <MarketingLink href="/privacy" className="underline hover:text-foreground">
             Privacy Policy
-          </Link>
-          , and I&apos;m at least 16 years old.
+          </MarketingLink>
+          , and I&apos;m at least 16 years old. AI features send the content you use them with to
+          OpenRouter and the model provider you choose.
         </Label>
       </div>
 

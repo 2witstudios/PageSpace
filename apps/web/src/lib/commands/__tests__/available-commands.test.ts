@@ -185,3 +185,22 @@ describe('loadAvailableCommands', () => {
     ]);
   });
 });
+
+describe('/btw built-in surfaces through loadAvailableCommands', () => {
+  it('includes btw with clientHandled for a drive-less global context', async () => {
+    mockFindMany.mockResolvedValue([]);
+    mockBatchPermissions.mockResolvedValue(new Map());
+    const { winners } = await loadAvailableCommands('user_1', null);
+    const btw = winners.find((c) => c.trigger === 'btw');
+    expect(btw).toBeDefined();
+    expect(btw?.clientHandled).toBe(true);
+    expect(btw?.scope).toBe('builtin');
+  });
+
+  it('includes btw with clientHandled inside a drive context too', async () => {
+    mockFindMany.mockResolvedValue([]);
+    mockBatchPermissions.mockResolvedValue(new Map());
+    const { winners } = await loadAvailableCommands('user_1', 'drive_1');
+    expect(winners.find((c) => c.trigger === 'btw')?.clientHandled).toBe(true);
+  });
+});

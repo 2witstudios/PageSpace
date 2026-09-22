@@ -56,8 +56,8 @@ export type AuditedExecutor = {
     readonly grant: AgentAccountGrant;
     readonly canonical: CanonicalRequest;
     readonly now: number;
-    /** The resource keys this operation's catalogue entry declares (ADR 0004 §5 amendment). */
-    readonly declaredResourceKeys: readonly string[];
+    /** `auditResourceKeysFor` the matched registry entry — the audit allowlist, empty by default (ADR 0004 §5; G1c R6). */
+    readonly auditResourceKeys: readonly string[];
     /** The effect. Return `upstream_failed` (status null) for a failure known to precede sending; a throw is recorded as `unknown`. */
     readonly act: () => Promise<OperationOutcome>;
   }) => Promise<AuditedExecution>;
@@ -84,9 +84,9 @@ export function createAuditedExecutor({
   readonly hash: HashBytes;
 }): AuditedExecutor {
   return {
-    async execute({ grant, canonical, now, declaredResourceKeys, act }) {
+    async execute({ grant, canonical, now, auditResourceKeys, act }) {
       const acceptance = await auditRepository.accept({
-        record: buildAuditRecord({ grant, canonical, outcome: { kind: 'allowed' }, at: now, hash, declaredResourceKeys }),
+        record: buildAuditRecord({ grant, canonical, outcome: { kind: 'allowed' }, at: now, hash, auditResourceKeys }),
       });
       const gate = decideAuditGate({ acceptance });
       if (gate.action === 'refuse') return { ok: false, reason: gate.reason };
@@ -102,7 +102,7 @@ export function createAuditedExecutor({
         outcome = { kind: 'unknown' };
       }
       const outcomeAcceptance = await auditRepository.accept({
-        record: buildAuditRecord({ grant, canonical, outcome, at: now, hash, declaredResourceKeys }),
+        record: buildAuditRecord({ grant, canonical, outcome, at: now, hash, auditResourceKeys }),
       });
       return { ok: true, outcome, outcomeRecorded: outcomeAcceptance.kind === 'accepted' };
     },

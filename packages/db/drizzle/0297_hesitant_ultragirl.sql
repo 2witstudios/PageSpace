@@ -1,3 +1,4 @@
+ALTER TABLE "workflows" ADD COLUMN "credentialCeiling" jsonb;--> statement-breakpoint
 ALTER TABLE "oauth_clients" ADD COLUMN "allowedGrantTypes" jsonb DEFAULT '[]'::jsonb NOT NULL;--> statement-breakpoint
 ALTER TABLE "oauth_clients" ADD COLUMN "allowedScopes" jsonb DEFAULT '[]'::jsonb NOT NULL;--> statement-breakpoint
 ALTER TABLE "oauth_clients" ADD COLUMN "ownerUserId" text;--> statement-breakpoint

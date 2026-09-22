@@ -12,7 +12,7 @@ import { drives, pages } from '@pagespace/db/schema/core';
 import { allocateUniqueSubdomainWithRetry } from './subdomain-allocation';
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 import { slugify } from '../utils/utils';
-import { customRoleBelongsToDrive, getMemberCustomRoleId } from '../permissions/membership-queries';
+import { customRoleBelongsToDrive, getMemberCustomRoleId, resolveDriveWideCanEdit } from '../permissions/membership-queries';
 
 // ============================================================================
 // Types
@@ -31,6 +31,13 @@ export interface DriveWithAccess {
   updatedAt: Date;
   isOwned: boolean;
   role: 'OWNER' | 'ADMIN' | 'MEMBER';
+  /**
+   * Server-computed effective permission for root-level page create — the
+   * drive-wide canEdit rule (custom-role bounded, fail closed). The UI's
+   * create affordances gate on this flag instead of deriving from `role`
+   * (#2627); the API still independently enforces it.
+   */
+  canCreatePages: boolean;
   lastAccessedAt: Date | null;
   homePageId: string | null;
 }
@@ -59,6 +66,7 @@ export interface DriveAccessInfo {
   isAdmin: boolean;
   isMember: boolean;
   role: 'OWNER' | 'ADMIN' | 'MEMBER' | null;
+  customRoleId: string | null;
 }
 
 // ============================================================================
@@ -84,7 +92,7 @@ export async function listAccessibleDrives(
 
   // 2. Get drives where user is a member (including last access time)
   const memberDrives = await db
-    .selectDistinct({ driveId: driveMembers.driveId, role: driveMembers.role, lastAccessedAt: driveMembers.lastAccessedAt })
+    .selectDistinct({ driveId: driveMembers.driveId, role: driveMembers.role, customRoleId: driveMembers.customRoleId, lastAccessedAt: driveMembers.lastAccessedAt })
     .from(driveMembers)
     .where(and(
       eq(driveMembers.userId, userId),
@@ -104,12 +112,14 @@ export async function listAccessibleDrives(
   // 4. Build role map and lastAccessedAt map (membership role takes precedence)
   const driveRoles = new Map<string, 'OWNER' | 'ADMIN' | 'MEMBER'>();
   const driveLastAccessed = new Map<string, Date | null>();
+  const memberCustomRoleIds = new Map<string, string | null>();
   const allSharedDriveIds = new Set<string>();
 
   for (const d of memberDrives) {
     if (d.driveId) {
       allSharedDriveIds.add(d.driveId);
       driveRoles.set(d.driveId, d.role as 'OWNER' | 'ADMIN' | 'MEMBER');
+      memberCustomRoleIds.set(d.driveId, d.customRoleId ?? null);
       driveLastAccessed.set(d.driveId, d.lastAccessedAt);
     }
   }
@@ -138,18 +148,36 @@ export async function listAccessibleDrives(
       })
     : [];
 
-  // 6. Combine and deduplicate (owned drives take precedence)
+  // 6. Drive-wide create permission (#2627): one resolver for the DTO flag.
+  // Owned drives enter as OWNER; shared drives only when the user holds an
+  // actual membership — page-collaborator-only drives are not memberships
+  // and fail closed below. Batched: a single custom-role query at most.
+  const ownedDriveIds = new Set(ownedDrives.map((drive) => drive.id));
+  const canCreatePagesMap = await resolveDriveWideCanEdit([
+    ...ownedDrives.map((drive) => ({ driveId: drive.id, role: 'OWNER' as const, customRoleId: null })),
+    ...memberDrives
+      .filter((d) => d.driveId && !ownedDriveIds.has(d.driveId))
+      .map((d) => ({
+        driveId: d.driveId as string,
+        role: d.role as 'OWNER' | 'ADMIN' | 'MEMBER',
+        customRoleId: memberCustomRoleIds.get(d.driveId as string) ?? null,
+      })),
+  ]);
+
+  // 7. Combine and deduplicate (owned drives take precedence)
   const allDrives: DriveWithAccess[] = [
     ...ownedDrives.map((drive) => ({
       ...drive,
       isOwned: true,
       role: 'OWNER' as const,
+      canCreatePages: true,
       lastAccessedAt: driveLastAccessed.get(drive.id) ?? null,
     })),
     ...sharedDrives.map((drive) => ({
       ...drive,
       isOwned: false,
       role: driveRoles.get(drive.id) || ('MEMBER' as const),
+      canCreatePages: canCreatePagesMap.get(drive.id) ?? false,
       lastAccessedAt: driveLastAccessed.get(drive.id) ?? null,
     })),
   ];
@@ -192,6 +220,7 @@ export async function createDrive(
     ...newDrive,
     isOwned: true,
     role: 'OWNER' as const,
+    canCreatePages: true,
     lastAccessedAt: null,
   };
 }
@@ -216,18 +245,18 @@ export async function getDriveAccess(
   const drive = await getDriveById(driveId);
 
   if (!drive) {
-    return { isOwner: false, isAdmin: false, isMember: false, role: null };
+    return { isOwner: false, isAdmin: false, isMember: false, role: null, customRoleId: null };
   }
 
   const isOwner = drive.ownerId === userId;
 
   if (isOwner) {
-    return { isOwner: true, isAdmin: true, isMember: true, role: 'OWNER' };
+    return { isOwner: true, isAdmin: true, isMember: true, role: 'OWNER', customRoleId: null };
   }
 
   // Check membership
   const membership = await db
-    .select({ role: driveMembers.role })
+    .select({ role: driveMembers.role, customRoleId: driveMembers.customRoleId })
     .from(driveMembers)
     .where(and(
       eq(driveMembers.driveId, driveId),
@@ -243,10 +272,11 @@ export async function getDriveAccess(
       isAdmin: role === 'ADMIN',
       isMember: true,
       role,
+      customRoleId: membership[0].customRoleId ?? null,
     };
   }
 
-  return { isOwner: false, isAdmin: false, isMember: false, role: null };
+  return { isOwner: false, isAdmin: false, isMember: false, role: null, customRoleId: null };
 }
 
 export interface DriveScopeToValidate {
@@ -329,13 +359,13 @@ export async function getDriveAccessWithDrive(
   if (isOwner) {
     return {
       drive,
-      access: { isOwner: true, isAdmin: true, isMember: true, role: 'OWNER' },
+      access: { isOwner: true, isAdmin: true, isMember: true, role: 'OWNER', customRoleId: null },
     };
   }
 
   // Check membership
   const membership = await db
-    .select({ role: driveMembers.role })
+    .select({ role: driveMembers.role, customRoleId: driveMembers.customRoleId })
     .from(driveMembers)
     .where(and(
       eq(driveMembers.driveId, driveId),
@@ -353,13 +383,14 @@ export async function getDriveAccessWithDrive(
         isAdmin: role === 'ADMIN',
         isMember: true,
         role,
+        customRoleId: membership[0].customRoleId ?? null,
       },
     };
   }
 
   return {
     drive,
-    access: { isOwner: false, isAdmin: false, isMember: false, role: null },
+    access: { isOwner: false, isAdmin: false, isMember: false, role: null, customRoleId: null },
   };
 }
 
@@ -382,11 +413,20 @@ export async function getDriveWithAccess(
     return null;
   }
 
+  const canCreatePagesMap = await resolveDriveWideCanEdit([
+    {
+      driveId,
+      role: access.isOwner ? 'OWNER' : (access.role ?? 'MEMBER'),
+      customRoleId: access.isMember && !access.isOwner ? access.customRoleId : null,
+    },
+  ]);
+
   return {
     ...drive,
     isOwned: access.isOwner,
     isMember: access.isMember,
     role: access.role || 'MEMBER',
+    canCreatePages: canCreatePagesMap.get(driveId) ?? false,
     lastAccessedAt: null, // Not fetched here — only listAccessibleDrives queries driveMembers for this
   };
 }

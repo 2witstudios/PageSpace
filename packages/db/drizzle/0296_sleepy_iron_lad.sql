@@ -1,1 +1,0 @@
-ALTER TABLE "workflows" ADD COLUMN "credentialCeiling" jsonb;

@@ -11,7 +11,7 @@
  * model, a page body or a summary carries no authority (threat model ASI06).
  */
 import type { OperationClass, OperationRef, RequestDigest, UserId } from './grant';
-import type { CanonicalOrigin } from './canonical-request';
+import type { CanonicalOrigin, ResourceRestrictions } from './canonical-request';
 
 export type ApprovalOutcome = 'allow_once' | 'always' | 'deny';
 
@@ -21,6 +21,11 @@ export type ApprovalScope = {
   readonly origins: readonly CanonicalOrigin[];
   /** Allowed operations by class and name; `name: '*'` within a class is allowed only for `read`/`write`. */
   readonly operations: readonly OperationRef[];
+  /**
+   * `[restrictionKey, value]` pairs. Every key named here must be BOUND by the
+   * request with every value allowed; a key the operation does not bind is
+   * `out_of_scope`, never "unrestricted" (G1c R5). `[]` restricts no resource.
+   */
   readonly resources: readonly (readonly [string, string])[];
 };
 
@@ -56,9 +61,19 @@ export type ApprovalRequirement =
 /** Which classes an `always` policy may cover: `Record<OperationClass, boolean>` so an added class fails typecheck. */
 export type AlwaysAllowedByClass = Readonly<Record<OperationClass, boolean>>;
 
-/** `decideApproval` — pure; G1b implements. */
+/**
+ * `decideApproval` — pure. Order: the account's `restrictions` first (a key the
+ * request does not bind, or a value outside the list, is `out_of_scope`
+ * whatever any policy says — R5); then, for an unattended run, the
+ * `delegationScope` the human delegated (a request outside it is
+ * `out_of_scope` — R12); then the policy as before.
+ */
 export type DecideApproval = (input: {
   readonly operation: OperationRef;
+  /** `agent_accounts.resourceRestrictions` (a `PlaneScope` field, so bound by `policyDigest`). */
+  readonly restrictions: ResourceRestrictions;
+  /** `DelegationFact.scope` for an unattended run; null for a live human session. */
+  readonly delegationScope: ApprovalScope | null;
   readonly policy: AccountApprovalPolicy | null;
   readonly requestDigest: RequestDigest;
   readonly origin: CanonicalOrigin;

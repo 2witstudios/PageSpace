@@ -12,7 +12,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useAuth } from "@/hooks/useAuth";
-import { getPermissionErrorMessage, canManageDrive } from "@/hooks/usePermissions";
+import { getPermissionErrorMessage } from "@/hooks/usePermissions";
 import { useDriveStore } from "@/hooks/useDrive";
 import { useUIStore } from "@/stores/useUIStore";
 
@@ -36,7 +36,10 @@ export default function Sidebar({ className }: SidebarProps) {
   const driveId = focusDriveId(useFocus());
 
   const drive = drives.find((d) => d.id === driveId);
-  const canManage = canManageDrive(drive);
+  // Server-computed effective permission (#2627): the + button is a projection
+  // of drive.canCreatePages — never a client-side role-tier derivation. A
+  // stale persisted DTO without the field fails closed to the lock.
+  const canCreate = drive?.canCreatePages === true;
 
   useEffect(() => {
     if (user?.id) {
@@ -61,11 +64,12 @@ export default function Sidebar({ className }: SidebarProps) {
                     onChange={(event) => setSearchQuery(event.target.value)}
                   />
                 </div>
-                {canManage ? (
+                {canCreate ? (
                   <Button
                     variant="ghost"
                     size="icon"
                     className="h-8 w-8 shrink-0"
+                    aria-label="Create new page"
                     onClick={() => openQuickCreate(null)}
                   >
                     <Plus className="h-4 w-4" />
@@ -78,6 +82,7 @@ export default function Sidebar({ className }: SidebarProps) {
                           variant="ghost"
                           size="icon"
                           disabled
+                          aria-label="Create page locked"
                           className="h-8 w-8 shrink-0 cursor-not-allowed opacity-50"
                         >
                           <Lock className="h-4 w-4" />

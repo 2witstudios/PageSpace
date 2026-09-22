@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db';
-import { eq, and, or, ne, inArray } from '@pagespace/db/operators';
+import { eq, and, or, ne, inArray, isNotNull } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { driveMembers, userProfiles } from '@pagespace/db/schema/members';
 import { drives } from '@pagespace/db/schema/core';
@@ -28,8 +28,8 @@ export interface MessageableUser {
 }
 
 // GET /api/users/messageable - Users the current user can DM (accepted
-// connections ∪ drive co-members), deduplicated. When a user appears in both,
-// `source` is reported as 'connection'.
+// connections ∪ accepted drive co-members), deduplicated. When a user appears
+// in both, `source` is reported as 'connection'.
 export async function GET(request: Request) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
@@ -48,15 +48,16 @@ export async function GET(request: Request) {
       .from(drives)
       .where(eq(drives.ownerId, userId));
 
-    // Note: no acceptedAt gate. DM eligibility is intentionally softer than
-    // drive-access checks elsewhere in the permissions layer; a co-member with
-    // a `driveMembers` row predating the new invite flow (or otherwise missing
-    // acceptedAt) should still appear in the picker rather than be silently
-    // hidden.
+    // Both drive_members reads gate on acceptedAt: this response carries each
+    // co-member's name, email, bio and avatar, and a pending, unaccepted
+    // invitation is not an established shared context — the invitee must not
+    // resolve the members' identities, nor they the invitee's. Same rule as
+    // callerCanViewUser in lib/users/visibility.ts, and as usersShareDrive,
+    // which gates opening the DM itself.
     const memberDrives = await db
       .select({ driveId: driveMembers.driveId })
       .from(driveMembers)
-      .where(eq(driveMembers.userId, userId));
+      .where(and(eq(driveMembers.userId, userId), isNotNull(driveMembers.acceptedAt)));
 
     const myDriveIds = Array.from(
       new Set<string>([
@@ -78,7 +79,8 @@ export async function GET(request: Request) {
         .where(
           and(
             inArray(driveMembers.driveId, myDriveIds),
-            ne(driveMembers.userId, userId)
+            ne(driveMembers.userId, userId),
+            isNotNull(driveMembers.acceptedAt)
           )
         );
 

@@ -63,13 +63,14 @@ vi.mock('@pagespace/db/db', () => ({
 }));
 vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn() }));
 vi.mock('@pagespace/db/schema/core', () => ({
-  pages: { id: 'id', driveId: 'driveId', type: 'type', userScopedAccess: 'userScopedAccess' },
+  pages: { id: 'id', driveId: 'driveId', type: 'type', userScopedAccess: 'userScopedAccess', parentId: 'parentId' },
 }));
 
 import {
   canActorManageDrive,
   canActorAccessDrive,
   canActorEditPage,
+  canActorDeletePage,
   canActorViewPage,
   canActorConsultAgent,
   getActorAccessiblePagesInDrive,
@@ -610,6 +611,94 @@ describe('non-agent-page conversations (agentPageId is not an AI_CHAT agent)', (
 
     expect(await canActorViewPage(agentCtx, 'page-x')).toBe(true);
     expect(mockGetAgentAccessLevel).toHaveBeenCalledWith('agent-1', 'page-x');
+  });
+});
+
+// The Agent Memory write path: every AI_CHAT agent is instructed (agent-memory.ts)
+// to create and edit an "Agent Memory" child of its own page, but the default
+// MEMBER membership resolves canEdit:false on every non-channel page — so the
+// write was refused everywhere, and cron workflow runs (whose tool context
+// carries the agent identity) failed with "Insufficient permissions to edit
+// this document". The agent's own subtree is the one space it authors.
+describe('agent-owned subtree (Agent Memory write path)', () => {
+  const VIEW_ONLY = { canView: true, canEdit: false, canShare: false, canDelete: false };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockDbWhere.mockResolvedValue([AGENT_PAGE_ROW]);
+  });
+
+  it('canActorEditPage: the agent page itself is editable (create_page passes it as the parent)', async () => {
+    expect(await canActorEditPage(agentCtx, 'agent-1')).toBe(true);
+    expect(mockGetAgentAccessLevel).not.toHaveBeenCalled();
+  });
+
+  it('canActorEditPage: a child of the agent page ("Agent Memory") is editable despite a view-only membership', async () => {
+    mockGetAgentAccessLevel.mockResolvedValue(VIEW_ONLY);
+    mockDbWhere.mockResolvedValueOnce([AGENT_PAGE_ROW]).mockResolvedValueOnce([{ parentId: 'agent-1' }]);
+
+    expect(await canActorEditPage(agentCtx, 'memory-page')).toBe(true);
+    expect(mockGetAgentAccessLevel).not.toHaveBeenCalled();
+  });
+
+  it('canActorEditPage: a grandchild is editable too (the walk follows the parent chain)', async () => {
+    mockGetAgentAccessLevel.mockResolvedValue(VIEW_ONLY);
+    mockDbWhere
+      .mockResolvedValueOnce([AGENT_PAGE_ROW])
+      .mockResolvedValueOnce([{ parentId: 'memory-page' }])
+      .mockResolvedValueOnce([{ parentId: 'agent-1' }]);
+
+    expect(await canActorEditPage(agentCtx, 'deep-note')).toBe(true);
+    expect(mockGetAgentAccessLevel).not.toHaveBeenCalled();
+  });
+
+  it('canActorEditPage: an unrelated page still defers to the membership ACL', async () => {
+    mockGetAgentAccessLevel.mockResolvedValue(VIEW_ONLY);
+    mockDbWhere.mockResolvedValueOnce([AGENT_PAGE_ROW]).mockResolvedValueOnce([{ parentId: null }]);
+
+    expect(await canActorEditPage(agentCtx, 'some-doc')).toBe(false);
+    expect(mockGetAgentAccessLevel).toHaveBeenCalledWith('agent-1', 'some-doc');
+  });
+
+  it('canActorEditPage: an MCP token scope still ceilings the own subtree', async () => {
+    const scopedAgentCtx = {
+      userId: 'user-1',
+      chatSource: { type: 'page', agentPageId: 'agent-1' },
+      mcpAllowedDriveIds: ['drive-A'],
+    } as ToolExecutionContext;
+    mockDbWhere
+      .mockResolvedValueOnce([{ driveId: 'drive-B' }]) // pageOutsideMcpScope: memory-page's drive
+      .mockResolvedValueOnce([AGENT_PAGE_ROW]);
+
+    expect(await canActorEditPage(scopedAgentCtx, 'memory-page')).toBe(false);
+    expect(mockGetAgentAccessLevel).not.toHaveBeenCalled();
+  });
+
+  it('canActorEditPage: an explicit-role credential ceiling still denies inside the own subtree', async () => {
+    const ceiledAgentCtx = {
+      userId: 'user-1',
+      chatSource: { type: 'page', agentPageId: 'agent-1' },
+      mcpAllowedDriveIds: ['drive-A'],
+      credentialCeiling: { kind: 'mcp', tokenId: 'token-1' },
+    } as ToolExecutionContext;
+    // Every row read is in scope AND a child of the agent page, so the walk
+    // would grant edit if it ran before the ceiling. (mockReset drains any
+    // once-queue an earlier test left behind.)
+    mockDbWhere.mockReset().mockResolvedValue([{ ...AGENT_PAGE_ROW, driveId: 'drive-A', parentId: 'agent-1' }]);
+    mockGetAppDriveMembership.mockResolvedValue({ role: 'MEMBER', customRoleId: null, ownerUserId: 'user-1' });
+    mockGetAppAccessLevel.mockResolvedValue(VIEW_ONLY);
+
+    expect(await canActorEditPage(ceiledAgentCtx, 'memory-page')).toBe(false);
+    expect(mockGetAppAccessLevel).toHaveBeenCalledWith('token-1', 'memory-page');
+  });
+
+  it('canActorDeletePage is NOT widened by the walk — the agent cannot trash its own page', async () => {
+    // canEdit:true is exactly what the walk would grant on the agent's own
+    // page; delete must still come from the membership ACL alone.
+    mockGetAgentAccessLevel.mockResolvedValue({ canView: true, canEdit: true, canShare: true, canDelete: false });
+
+    expect(await canActorDeletePage(agentCtx, 'agent-1')).toBe(false);
+    expect(mockGetAgentAccessLevel).toHaveBeenCalledWith('agent-1', 'agent-1');
   });
 });
 

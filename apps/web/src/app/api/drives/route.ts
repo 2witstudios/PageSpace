@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { listAccessibleDrives, createDrive, type DriveWithAccess } from '@pagespace/lib/services/drive-service';
 import { isReservedDriveName } from '@pagespace/lib/services/drive-guards';
+import { resolveDriveWideCanEdit } from '@pagespace/lib/permissions/membership-queries';
 import { db } from '@pagespace/db/db';
 import { and, eq, inArray } from '@pagespace/db/operators';
 import { drives as drivesTable } from '@pagespace/db/schema/core';
@@ -9,7 +10,7 @@ import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
-import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope, isDriveScopedPrincipal, isScopedOAuthAuth, isManageKeysOnly, getAllowedDriveIds, getPrincipalDriveMembership, isPrincipalDriveMember } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope, isDriveScopedPrincipal, isScopedOAuthAuth, isManageKeysOnly, getAllowedDriveIds, getPrincipalDriveMembership, isPrincipalDriveMember, getPrincipalDriveAccessLevel } from '@/lib/auth';
 import { jsonResponse } from '@pagespace/lib/utils/api-utils';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { safeParseBody } from '@/lib/validation/parse-body';
@@ -34,11 +35,13 @@ async function listScopedDrivesWithMembership({
   includeTrash,
   userId,
   getMembership,
+  canEditDrive,
 }: {
   allowedDriveIds: string[];
   includeTrash: boolean;
   userId: string;
   getMembership: (driveId: string) => ScopedDriveMembership | Promise<ScopedDriveMembership>;
+  canEditDrive: (driveId: string) => Promise<boolean>;
 }): Promise<DriveWithAccess[]> {
   // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
   const rows = await db.query.drives.findMany({
@@ -47,22 +50,47 @@ async function listScopedDrivesWithMembership({
       : and(inArray(drivesTable.id, allowedDriveIds), eq(drivesTable.isTrashed, false)),
   });
 
-  const drives = await Promise.all(
-    rows.map(async (drive): Promise<DriveWithAccess | null> => {
+  const resolved = await Promise.all(
+    rows.map(async (drive) => {
       const membership = await getMembership(drive.id);
       if (!membership) return null;
       const role = membership.role
         ?? (drive.ownerId === userId ? ('OWNER' as const) : ('MEMBER' as const));
+      return { drive, membership, role };
+    }),
+  );
+  const valid = resolved.filter(
+    (entry): entry is NonNullable<typeof entry> => entry !== null,
+  );
+
+  // Same drive-wide canEdit rule as the session path (#2627), batched once
+  // for the whole scoped list — never a per-role query per drive.
+  const canCreatePagesMap = await resolveDriveWideCanEdit(
+    valid.map(({ drive, membership, role }) => ({
+      driveId: drive.id,
+      role,
+      customRoleId: membership.customRoleId,
+    })),
+  );
+
+  return Promise.all(
+    valid.map(async ({ drive, membership, role }) => {
+      // An inherited scope (role: null) carries the owner's ACTUAL permissions,
+      // which the credential's own drive resolver reads — the scope row's
+      // synthesized MEMBER knows nothing of the owner's custom role.
+      const inheritsNonOwner = membership.role === null && drive.ownerId !== userId;
+      const canCreatePages = inheritsNonOwner
+        ? await canEditDrive(drive.id)
+        : (canCreatePagesMap.get(drive.id) ?? false);
       return {
         ...drive,
         isOwned: membership.role === null && drive.ownerId === userId,
         role,
+        canCreatePages,
         lastAccessedAt: null,
       };
     }),
   );
-
-  return drives.filter((drive): drive is DriveWithAccess => drive !== null);
 }
 
 export async function GET(req: Request) {
@@ -100,6 +128,7 @@ export async function GET(req: Request) {
           if (!membership || membership.role !== null) return membership;
           return (await isPrincipalDriveMember(auth, driveId)) ? membership : null;
         },
+        canEditDrive: async (driveId) => (await getPrincipalDriveAccessLevel(auth, driveId))?.canEdit === true,
       });
     } else if (isScopedOAuthAuth(auth)) {
       // Fail closed: a non-account OAuth credential with no drive rows is not a

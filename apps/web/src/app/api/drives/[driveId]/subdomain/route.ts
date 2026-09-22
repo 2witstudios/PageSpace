@@ -15,6 +15,7 @@ import { users } from '@pagespace/db/schema/auth';
 import { getPlan } from '@/lib/subscription/plans';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { changePublishSubdomain, PublishError, PUBLISH_HOST } from '@/lib/canvas/publish-page';
+import { CUSTOM_SUBDOMAIN_UNAVAILABLE_MESSAGE } from '@/lib/subscription/plan-refusal-copy';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true }; // keep PATCH CSRF-protected
 
@@ -88,7 +89,7 @@ export async function PATCH(
 
     if (!(await canChooseSubdomain(driveId))) {
       return NextResponse.json(
-        { error: 'Custom subdomain selection is a Pro feature. Upgrade to choose your own subdomain.' },
+        { error: CUSTOM_SUBDOMAIN_UNAVAILABLE_MESSAGE },
         { status: 403 }
       );
     }

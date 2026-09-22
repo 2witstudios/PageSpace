@@ -433,8 +433,10 @@ describe('generate_image execute', () => {
 
   it('fails softly when credits are exhausted', async () => {
     canConsumeAI.mockResolvedValue({ allowed: false });
-    const res = (await run({ prompt: 'x' }, { userId: 'u1', isAdmin: true, subscriptionTier: 'pro' })) as { success: boolean };
+    const res = (await run({ prompt: 'x' }, { userId: 'u1', isAdmin: true, subscriptionTier: 'pro' })) as { success: boolean; error: string };
     expect(res.success).toBe(false);
     expect(generateImageBytes).not.toHaveBeenCalled();
+    // Rendered verbatim in chat and repeated by the model — including in the iOS app (3.1.1).
+    expect(res.error).not.toMatch(/\b(buy|purchase|upgrade|top.?up|add credits)\b/i);
   });
 });

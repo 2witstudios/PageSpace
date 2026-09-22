@@ -16,7 +16,7 @@ import { toast } from 'sonner';
 import {
   AI_PROVIDERS,
   getModelDisplayName,
-  getDefaultModel,
+  getDefaultModelForTier,
   getVisibleProviders,
   isModelAllowedForTier,
   ADMIN_ONLY_PROVIDERS,
@@ -232,6 +232,18 @@ export function ProviderModelSelector({
     [subscriptionTier]
   );
 
+  // Whether the current tier can use a provider at all. Providers whose entire
+  // static catalog is paid are hidden rather than selectable-and-failing.
+  const hasAccessibleModel = useCallback(
+    (providerId: string) => {
+      if (LOCAL_PROVIDERS[providerId]) return true;
+      const config = AI_PROVIDERS[providerId as keyof typeof AI_PROVIDERS];
+      if (!config) return false;
+      return Object.keys(config.models).some((modelId) => isModelAccessible(providerId, modelId));
+    },
+    [isModelAccessible]
+  );
+
   // Get models for current provider
   const availableModels = useMemo(() => {
     if (!provider) return [];
@@ -258,7 +270,10 @@ export function ProviderModelSelector({
 
       setIsSaving(true);
       try {
-        const newModel = getDefaultModel(newProvider);
+        // Land on the first model the current tier can actually select — the raw
+        // catalog default is usually a paid flagship, which the server's tier
+        // gate would reject for free users.
+        const newModel = getDefaultModelForTier(newProvider, subscriptionTier);
 
         // Build request body - model is optional for local providers
         const requestBody: { provider: string; model?: string } = {
@@ -274,12 +289,12 @@ export function ProviderModelSelector({
         setProviderOpen(false);
       } catch (error) {
         console.error('Failed to update provider:', error);
-        toast.error('Failed to update provider');
+        toast.error(error instanceof Error ? error.message : 'Failed to update provider');
       } finally {
         setIsSaving(false);
       }
     },
-    [provider, onChange]
+    [provider, subscriptionTier, onChange]
   );
 
   // Handle model selection
@@ -344,7 +359,7 @@ export function ProviderModelSelector({
                 .map((group) => ({
                   ...group,
                   providers: group.providers.filter((p) =>
-                    isProviderAvailable(p.id) && (!ADMIN_ONLY_PROVIDERS.has(p.id) || isAdmin)
+                    isProviderAvailable(p.id) && (!ADMIN_ONLY_PROVIDERS.has(p.id) || isAdmin) && hasAccessibleModel(p.id)
                   ),
                 }))
                 .filter((group) => group.providers.length > 0)

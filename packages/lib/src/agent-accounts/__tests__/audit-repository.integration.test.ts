@@ -41,7 +41,7 @@ import type { AccountId, CredentialVersion, PolicyVersion, TenantId } from '@pag
 
 const hash: HashBytes = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const sha3: HashBytes = (bytes) => createHash('sha3-256').update(bytes).digest('hex');
-const DECLARED_RESOURCE_KEYS = ['repo'];
+const AUDIT_RESOURCE_KEYS = ['repo'];
 const SECRET = 'ghp_canary_itest_7c1d9a';
 const BODY = `{"title":"ship","token":"${SECRET}"}`;
 const PREFIX = 'itest-audit-';
@@ -141,7 +141,7 @@ describe('agent-account audit repository (ADR 0004 §5)', () => {
     if (!dbAvailable) return;
     const repository = createAgentAccountAuditRepository({ appendPath: createSecurityAuditRepository({ db }) });
     const grant = makeGrant();
-    const acceptance = await repository.accept({ record: buildAuditRecord({ grant, canonical: canonical(), outcome: { kind: 'allowed' }, at: AT, hash: sha3, declaredResourceKeys: DECLARED_RESOURCE_KEYS }) });
+    const acceptance = await repository.accept({ record: buildAuditRecord({ grant, canonical: canonical(), outcome: { kind: 'allowed' }, at: AT, hash: sha3, auditResourceKeys: AUDIT_RESOURCE_KEYS }) });
     const rows = await rowsFor(grant.grantId);
     expect({ acceptance, count: rows.length, eventType: rows[0]?.eventType, chained: typeof rows[0]?.eventHash === 'string' && rows[0]!.eventHash.length === 64 }).toEqual({
       acceptance: { kind: 'accepted' },
@@ -155,7 +155,7 @@ describe('agent-account audit repository (ADR 0004 §5)', () => {
     if (!dbAvailable) return;
     const repository = createAgentAccountAuditRepository({ appendPath: createSecurityAuditRepository({ db }) });
     const grant = makeGrant();
-    await repository.accept({ record: buildAuditRecord({ grant, canonical: canonical(), outcome: { kind: 'allowed' }, at: AT, hash: sha3, declaredResourceKeys: DECLARED_RESOURCE_KEYS }) });
+    await repository.accept({ record: buildAuditRecord({ grant, canonical: canonical(), outcome: { kind: 'allowed' }, at: AT, hash: sha3, auditResourceKeys: AUDIT_RESOURCE_KEYS }) });
     const [row] = await rowsFor(grant.grantId);
     const serialized = JSON.stringify(row);
     expect({ hasSecret: serialized.includes(SECRET), hasBody: serialized.includes(BODY) }).toEqual({ hasSecret: false, hasBody: false });
@@ -165,7 +165,7 @@ describe('agent-account audit repository (ADR 0004 §5)', () => {
     if (!dbAvailable) return;
     const repository = createAgentAccountAuditRepository({ appendPath: unavailableAppendPath });
     const grant = makeGrant();
-    const actual = await repository.accept({ record: buildAuditRecord({ grant, canonical: canonical(), outcome: { kind: 'allowed' }, at: AT, hash: sha3, declaredResourceKeys: DECLARED_RESOURCE_KEYS }) });
+    const actual = await repository.accept({ record: buildAuditRecord({ grant, canonical: canonical(), outcome: { kind: 'allowed' }, at: AT, hash: sha3, auditResourceKeys: AUDIT_RESOURCE_KEYS }) });
     expect(actual).toEqual({ kind: 'unavailable' });
   });
 });
@@ -180,7 +180,7 @@ describe('audit acceptance before execute (ADR 0004 F13)', () => {
       grant,
       canonical: canonical(),
       now: AT,
-      declaredResourceKeys: DECLARED_RESOURCE_KEYS,
+      auditResourceKeys: AUDIT_RESOURCE_KEYS,
       act: async () => {
         acted.push(grant.grantId);
         return { kind: 'executed', upstreamStatus: 201 } as const;
@@ -204,7 +204,7 @@ describe('audit acceptance before execute (ADR 0004 F13)', () => {
       grant,
       canonical: canonical(),
       now: AT,
-      declaredResourceKeys: DECLARED_RESOURCE_KEYS,
+      auditResourceKeys: AUDIT_RESOURCE_KEYS,
       act: async () => {
         acted.push(grant.grantId);
         return { kind: 'executed', upstreamStatus: 201 } as const;
@@ -222,7 +222,7 @@ describe('audit acceptance before execute (ADR 0004 F13)', () => {
       grant,
       canonical: canonical(),
       now: AT,
-      declaredResourceKeys: DECLARED_RESOURCE_KEYS,
+      auditResourceKeys: AUDIT_RESOURCE_KEYS,
       act: async () => {
         throw new Error('socket hang up');
       },

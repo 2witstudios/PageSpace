@@ -12,6 +12,7 @@ import { broadcastInboxEvent, broadcastThreadReplyCountUpdated } from '@/lib/web
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import { extractMentionedUserIds } from '@/lib/channels/extract-user-mentions';
 import { MAX_MESSAGE_ATTACHMENTS, parseMessageAttachments } from '@pagespace/lib/services/attachment-upload-core';
+import { isBlockedBetween } from '@/lib/repositories/user-block-repository';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -320,6 +321,15 @@ export async function POST(
         { error: 'Conversation not found' },
         { status: 404 }
       );
+    }
+
+    // A block stops messages in a conversation that already exists, not only the
+    // creation of a new one (App Review Guideline 1.2).
+    const otherParticipantId = conversation.participant1Id === userId
+      ? conversation.participant2Id
+      : conversation.participant1Id;
+    if (await isBlockedBetween(userId, otherParticipantId)) {
+      return NextResponse.json({ error: 'You can\'t message this user' }, { status: 403 });
     }
 
     // Quote-reply validation. Quotes are top-level only — the quoted DM must

@@ -3,7 +3,7 @@
 import { useState, useCallback, useEffect } from 'react';
 import { startRegistration } from '@simplewebauthn/browser';
 import { AnimatePresence, motion } from 'motion/react';
-import Link from 'next/link';
+import { MarketingLink } from '@/components/ui/MarketingLink';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -261,14 +261,15 @@ export function PasskeySignupButton({
                 className="text-xs font-normal leading-snug text-muted-foreground"
               >
                 I agree to PageSpace&apos;s{' '}
-                <Link href="/terms" className="underline hover:text-foreground">
+                <MarketingLink href="/terms" className="underline hover:text-foreground">
                   Terms
-                </Link>
+                </MarketingLink>
                 {' '}and{' '}
-                <Link href="/privacy" className="underline hover:text-foreground">
+                <MarketingLink href="/privacy" className="underline hover:text-foreground">
                   Privacy Policy
-                </Link>
-                , and I&apos;m at least 16 years old.
+                </MarketingLink>
+                , and I&apos;m at least 16 years old. AI features send the content you use them with to
+          OpenRouter and the model provider you choose.
               </Label>
             </div>
             <div className="flex gap-2">

@@ -19,6 +19,7 @@ import {
 } from '../account-authority-key';
 import { signGrant } from '../sign-grant';
 import { verifyGrant } from '../verify-grant';
+import { VERIFIED_GRANT } from '../verified-grant-brand';
 import { encodeGrant } from '../encode-grant';
 import { GRANT_ISSUER } from '../grant-constants';
 import { ENV_BRIDGE_SIGNING_KEY_VAR } from '../../env-bridge/server-signing-key';
@@ -205,7 +206,7 @@ describe('signGrant (ADR 0004 §2.2)', () => {
       hash,
       rotationGraceMs: 300_000,
     });
-    expect(actual).toEqual({ ok: true, grant });
+    expect(actual).toEqual({ ok: true, grant: { ...grant, [VERIFIED_GRANT]: grant.aud } });
   });
 
   it('given a grant signed by a ROTATED-OUT key, should not verify under the current key', () => {

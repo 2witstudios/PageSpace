@@ -46,7 +46,10 @@ vi.mock('../../validators', () => ({
 
 import { usersShareDrive } from '../permissions';
 import { db } from '@pagespace/db/db';
+import { and } from '@pagespace/db/operators';
 import { loggers } from '../../logging/logger-config';
+
+const isEqual = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
 const A = 'user_a';
 const B = 'user_b';
@@ -117,17 +120,21 @@ describe('usersShareDrive', () => {
     expect(await usersShareDrive(A, B)).toBe(true);
   });
 
-  it('returns true even when membership rows lack acceptedAt (legacy data)', async () => {
-    // Defensive: a driveMembers row whose acceptedAt is NULL (e.g., a legacy
-    // pending row not yet cleaned up by migrate-pending-invites) still counts
-    // as drive co-membership for DM purposes.
+  it('gates both drive_members reads on acceptedAt so a pending invitation counts for nothing', async () => {
+    // A pending, unaccepted invitation is not an established shared context
+    // (apps/web/src/lib/users/visibility.ts). The round trip against a real
+    // database is users-share-drive.integration.test.ts; this pins the query shape.
     vi.mocked(db.select)
       .mockReturnValueOnce(stubFromWhere([])) // A owns nothing
-      .mockReturnValueOnce(stubFromWhere([{ driveId: 'drive_1' }])) // A row exists, acceptedAt may be NULL
+      .mockReturnValueOnce(stubFromWhere([{ driveId: 'drive_1' }])) // A's accepted memberships
       .mockReturnValueOnce(stubFromWhereLimit([])) // B not owner
-      .mockReturnValueOnce(stubFromWhereLimit([{ id: 'mem_b' }])); // B row exists, acceptedAt may be NULL
+      .mockReturnValueOnce(stubFromWhereLimit([])); // B has no accepted membership
 
-    expect(await usersShareDrive(A, B)).toBe(true);
+    expect(await usersShareDrive(A, B)).toBe(false);
+    const gated = vi
+      .mocked(and)
+      .mock.calls.filter((args) => args.some((arg) => isEqual(arg, { isNotNull: 'acceptedAt' })));
+    expect(gated).toHaveLength(2);
   });
 
   it('returns false when A has drives but B has no overlap (neither owner nor member)', async () => {

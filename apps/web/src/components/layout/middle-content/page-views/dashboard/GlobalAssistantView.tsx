@@ -58,7 +58,6 @@ import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
 import { useHomeSignals } from '@/hooks/useHomeSignals';
 import { HomeLine } from '@/components/ai/chat/layouts/HomeLine';
 import { HomeSuggestions } from '@/components/ai/chat/layouts/HomeSuggestions';
-import { HomeStrip } from '@/components/ai/chat/layouts/HomeStrip';
 import DriveSwitcher from '@/components/layout/navbar/DriveSwitcher';
 
 // Shared hooks and components
@@ -68,6 +67,7 @@ import {
   useProviderSettings,
   useChatSession,
   useSendHandoff,
+  useQueuedSends,
   useResumeBootstrap,
   useAnswerAskUser,
   useChatErrorCause,
@@ -88,6 +88,8 @@ import {
   type ChatLayoutRef,
 } from '@/components/ai/chat/layouts';
 import { ChatInput, type ChatInputRef } from '@/components/ai/chat/input';
+import { useSideQuestion, parseSideQuestionInput } from '@/components/ai/btw/useSideQuestion';
+import { SideQuestionCard } from '@/components/ai/btw/SideQuestionCard';
 import { useImageAttachments } from '@/lib/ai/shared/hooks/useImageAttachments';
 import { hasVisionCapability } from '@/lib/ai/core/vision-models';
 import { DEFAULT_PROVIDER } from '@/lib/ai/core/ai-providers-config';
@@ -188,6 +190,16 @@ const GlobalAssistantView: React.FC = () => {
   // SHARED HOOKS
   // ============================================
   const currentConversationId = selectedAgent ? agentConversationId : globalConversationId;
+
+  // Detached /btw side question (#2678 contract): independent of the primary
+  // useChat lifecycle and activeStreamId; no persistence, ephemeral card.
+  const sideQuestion = useSideQuestion(currentConversationId ?? '');
+  const handleSideQuestion = useCallback(() => {
+    const question = parseSideQuestionInput(input);
+    if (!question || !currentConversationId) return;
+    setInput('');
+    void sideQuestion.ask(question);
+  }, [input, currentConversationId, sideQuestion]);
 
   // The switcher is the voice switcher — see the twin of this comment in
   // SidebarChatTab. Records an intent on the explicit act; navigation records
@@ -751,6 +763,41 @@ const GlobalAssistantView: React.FC = () => {
   ]);
 
   /**
+   * The one text send path, shared by the composer and the DRAIN (issue
+   * #2676): optimistic write first, then the wrapped dispatch with rollback —
+   * the drain hook re-invokes it with each queued message. Text-only: queued
+   * messages never carry the composer's image attachments.
+   */
+  const dispatchUserMessage = useCallback((message: UIMessage) => {
+    if (!currentConversationId) return;
+    conversationMessagesActions.addOptimisticSend(currentConversationId, message);
+    return rollbackOptimisticSendOnFailure(
+      () => wrapSend(() => sendMessage(message, currentConversationId, { body: buildRequestBody() })),
+      currentConversationId,
+      message.id,
+    );
+  }, [currentConversationId, wrapSend, sendMessage, buildRequestBody]);
+
+  // Send queue (issue #2676): drains one queued message per observed stream
+  // end, FIFO; manual sends/retries take precedence via the status guard.
+  const {
+    queuedSends,
+    isQueueFull,
+    enqueue: enqueueQueuedSend,
+    remove: removeQueuedSend,
+    clear: clearQueuedSends,
+    cancelPendingDrain: cancelQueuedDrain,
+  } = useQueuedSends({
+    conversationId: currentConversationId,
+    status,
+    dispatch: dispatchUserMessage,
+  });
+
+  const handleEnqueueFromComposer = useCallback(() => {
+    if (enqueueQueuedSend(input)) setInput('');
+  }, [enqueueQueuedSend, input]);
+
+  /**
    * Send `text` as the user's message.
    *
    * Split out from `handleSendMessage` so a caller that did not come from the
@@ -976,10 +1023,6 @@ const GlobalAssistantView: React.FC = () => {
         </div>
       </div>
 
-      {isGlobalMode && plainMessages.length > 0 && (
-        <HomeStrip line={homeLine} />
-      )}
-
       {/*
         Voice as a MODE on this surface — same conversation, same message list,
         with the live call's chrome above it. Spoken turns arrive in that list as
@@ -1083,11 +1126,15 @@ const GlobalAssistantView: React.FC = () => {
         remoteStreams={remoteStreams}
         renderInput={(props) => (
           <>
+            {sideQuestion.state && (
+              <SideQuestionCard state={sideQuestion.state} onDismiss={sideQuestion.dismiss} />
+            )}
             <ChatInput
               ref={inputRef}
               value={props.value}
               onChange={props.onChange}
               onSend={props.onSend}
+              onSideQuestion={handleSideQuestion}
               onStop={props.onStop}
               isStreaming={props.isStreaming}
               isStopping={props.isStopping}
@@ -1111,6 +1158,12 @@ const GlobalAssistantView: React.FC = () => {
                 (selectedAgent ? agentSelectedModel : currentModel) || ''
               )}
               remoteStreamingUser={remoteStreamingUser}
+              queuedMessages={queuedSends}
+              onEnqueue={handleEnqueueFromComposer}
+              onRemoveQueued={removeQueuedSend}
+              onClearQueued={clearQueuedSends}
+              onCancelQueue={cancelQueuedDrain}
+              isQueueFull={isQueueFull}
             />
           </>
         )}

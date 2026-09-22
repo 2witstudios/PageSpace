@@ -7,13 +7,18 @@ import { post } from '../auth/auth-fetch';
 import { shouldFireAnalytics } from '@pagespace/lib/consent';
 import { getDeploymentMode } from '../deployment-mode';
 import { getConsentStateFromCookie, CONSENT_CHANGED_EVENT } from '@/stores/useConsentStore';
+import { isCapacitorApp } from '@/lib/capacitor-bridge';
 
 /**
  * Single GDPR/ePrivacy gate for all analytics sends: fires only with analytics consent
  * AND on a mode where analytics is permitted (never on onprem). Read at call time so a
  * later consent decision takes effect immediately.
+ *
+ * Never in the native apps: they show no consent prompt (App Review reads one as
+ * tracking), so a grant stored earlier must not switch analytics back on there.
  */
 function analyticsAllowed(): boolean {
+  if (isCapacitorApp()) return false;
   return shouldFireAnalytics(getConsentStateFromCookie(), getDeploymentMode());
 }
 

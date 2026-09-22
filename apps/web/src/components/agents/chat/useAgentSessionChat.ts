@@ -30,6 +30,7 @@ import {
   useChatSession,
   useCacheMessageActions,
   useSendHandoff,
+  useQueuedSends,
   useChatErrorCause,
   useAnswerAskUser,
   type AIErrorCause,
@@ -80,6 +81,16 @@ export interface UseAgentSessionChatReturn {
   handleEdit: (messageId: string, newContent: string) => Promise<void>;
   handleDelete: (messageId: string) => Promise<void>;
   handleRetry: () => Promise<void>;
+  /** Messages queued while a response streams, in dispatch order (FIFO) — issue #2676. */
+  queuedSends: UIMessage[];
+  queueCount: number;
+  isQueueFull: boolean;
+  /** Queue a text-only message; false when the queue is full or the text is empty. */
+  enqueueQueuedSend: (text: string) => boolean;
+  removeQueuedSend: (messageId: string) => void;
+  clearQueuedSends: () => void;
+  /** Double-ESC: clear the queue and cancel the drain the pending abort would fire. */
+  cancelQueuedDrain: () => void;
   lastAssistantMessageId: string | undefined;
   lastUserMessageId: string | undefined;
   handleScrollNearTop: () => void;
@@ -218,6 +229,41 @@ export function useAgentSessionChat({
     buildBody,
   });
 
+  /**
+   * The one send path, shared by the composer and the DRAIN (issue #2676):
+   * optimistic write first, then the wrapped dispatch with rollback. The
+   * drain hook re-invokes this with each queued message, so rollback,
+   * handoff and promotion work exactly as for a composer send.
+   */
+  const dispatchUserMessage = useCallback(
+    (message: UIMessage) => {
+      conversationMessagesActions.addOptimisticSend(conversationId, message);
+      return rollbackOptimisticSendOnFailure(
+        () => wrapSend(() => sendMessage(message, conversationId, { body: buildBody() })),
+        conversationId,
+        message.id,
+      );
+    },
+    [conversationId, wrapSend, sendMessage, buildBody],
+  );
+
+  // Send queue (issue #2676): drains one queued message per observed stream
+  // end, FIFO. `status` is what makes a manual send or retry take precedence —
+  // the queue waits out its TTFB window (the guard in the hook).
+  const {
+    queuedSends,
+    queueCount,
+    isQueueFull,
+    enqueue: enqueueQueuedSend,
+    remove: removeQueuedSend,
+    clear: clearQueuedSends,
+    cancelPendingDrain: cancelQueuedDrain,
+  } = useQueuedSends({
+    conversationId,
+    status,
+    dispatch: dispatchUserMessage,
+  });
+
   const handleSend = useCallback(
     async (text: string) => {
       const trimmed = text.trim();
@@ -227,17 +273,10 @@ export function useAgentSessionChat({
       // generation already running in another conversation is simply not this send's concern.
       // The `stop()` + settle-wait + possible refusal that stood here is the thing this
       // workstream exists to delete.
-      const userMessage = buildUserMessage({ id: createId(), text: trimmed }) as UIMessage;
-      conversationMessagesActions.addOptimisticSend(conversationId, userMessage);
-
-      rollbackOptimisticSendOnFailure(
-        () => wrapSend(() => sendMessage(userMessage, conversationId, { body: buildBody() })),
-        conversationId,
-        userMessage.id,
-      );
+      dispatchUserMessage(buildUserMessage({ id: createId(), text: trimmed }) as UIMessage);
       return true;
     },
-    [conversationId, wrapSend, sendMessage, buildBody],
+    [conversationId, dispatchUserMessage],
   );
 
   const { handleStop, isStopping } = useStopStream({
@@ -302,6 +341,13 @@ export function useAgentSessionChat({
     handleEdit,
     handleDelete,
     handleRetry,
+    queuedSends,
+    queueCount,
+    isQueueFull,
+    enqueueQueuedSend,
+    removeQueuedSend,
+    clearQueuedSends,
+    cancelQueuedDrain,
     lastAssistantMessageId,
     lastUserMessageId,
     handleScrollNearTop,

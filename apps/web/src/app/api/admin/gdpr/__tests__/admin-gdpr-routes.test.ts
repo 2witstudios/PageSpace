@@ -53,12 +53,18 @@ beforeEach(() => vi.clearAllMocks());
 describe('POST /api/admin/gdpr/erasure (force-delete escalation)', () => {
   beforeEach(() => {
     vi.mocked(accountRepository.findById).mockResolvedValue({
-      id: 'u1', email: 'a@b.com', image: null, stripeCustomerId: null,
+      id: 'u1', email: 'a@b.com', image: null, stripeCustomerId: null, appleId: 'apple-sub-1',
     });
     vi.mocked(dataSubjectRequestRepository.findActiveErasureForUser).mockResolvedValue(null);
     vi.mocked(lodgeAndEnqueueErasure).mockResolvedValue({
-      requestId: 'dsr_1', jobId: 'job_1', slaDeadline: new Date('2026-03-01T00:00:00Z'),
+      requestId: 'dsr_1', jobId: 'job_1', slaDeadline: new Date('2026-03-01T00:00:00Z'), appleSignIn: 'revoked',
     });
+  });
+
+  it('given a subject who signed in with Apple, should have the erasure revoke their Apple tokens', async () => {
+    const res = await post(erasurePost, { userId: 'u1', confirmation: 'ERASE u1' });
+    expect(res.status).toBe(202);
+    expect(lodgeAndEnqueueErasure).toHaveBeenCalledWith(expect.objectContaining({ subjectAppleLinked: true }));
   });
 
   it('given the wrong confirmation phrase, should refuse with 400', async () => {

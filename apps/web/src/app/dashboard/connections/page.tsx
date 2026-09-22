@@ -9,7 +9,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-import { UserPlus, UserMinus, UserCheck, UserX, MessageSquare, MoreVertical, User, Mail } from 'lucide-react';
+import { UserPlus, UserMinus, UserCheck, UserX, MessageSquare, MoreVertical, User, Mail, Ban } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -23,6 +23,7 @@ import { VerificationRequiredAlert } from '@/components/VerificationRequiredAler
 import { post, patch, del, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useSocket } from '@/hooks/useSocket';
 import { useNotificationStore } from '@/stores/useNotificationStore';
+import { BlockedUsersList } from '@/components/moderation/BlockedUsersList';
 
 const fetcher = async (url: string) => {
   const response = await fetchWithAuth(url);
@@ -168,6 +169,19 @@ export default function ConnectionsPage() {
     }
   };
 
+  const handleBlockUser = async (userId: string, name: string) => {
+    if (!window.confirm(`Block ${name}? Neither of you will be able to send the other direct messages.`)) return;
+    try {
+      await post(`/api/users/${encodeURIComponent(userId)}/block`);
+      toast.success(`${name} is blocked`);
+      mutate('/api/connections?status=ACCEPTED');
+      mutate('/api/connections?status=BLOCKED');
+    } catch (error) {
+      toast.error('Failed to block user');
+      console.error('Block user error:', error);
+    }
+  };
+
   const handleConnectionAction = async (connectionId: string, action: 'accept' | 'reject' | 'remove') => {
     try {
       if (action === 'remove') {
@@ -306,6 +320,13 @@ export default function ConnectionsPage() {
                                 <UserMinus className="h-4 w-4 mr-2" />
                                 Remove Connection
                               </DropdownMenuItem>
+                              <DropdownMenuItem
+                                onClick={() => void handleBlockUser(connection.user.id, displayName)}
+                                className="text-destructive"
+                              >
+                                <Ban className="h-4 w-4 mr-2" />
+                                Block
+                              </DropdownMenuItem>
                             </DropdownMenuContent>
                           </DropdownMenu>
                         </div>
@@ -314,6 +335,9 @@ export default function ConnectionsPage() {
                   })}
                 </div>
               )}
+              <div className="mt-6">
+                <BlockedUsersList />
+              </div>
             </CardContent>
           </Card>
         </TabsContent>

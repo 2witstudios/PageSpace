@@ -13,7 +13,7 @@ import userEvent from '@testing-library/user-event';
 import type { PaneNode, WorkspaceNode } from '@pagespace/lib/agent-workspaces/workspace-node';
 
 const mobileState = vi.hoisted(() => ({ current: false }));
-vi.mock('@/hooks/useMobile', () => ({ useMobile: () => mobileState.current }));
+vi.mock('@/hooks/useBreakpoint', () => ({ useBreakpoint: () => mobileState.current }));
 
 import SessionPanes from '../SessionPanes';
 
