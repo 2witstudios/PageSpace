@@ -56,9 +56,11 @@ Two ship with the SDK:
   ```
 
 - **`OAuthTokenProvider(options)`** — manages a refreshable OAuth 2.1 credential (what
-  `pagespace login` stores). Takes `{ initialTokens, refreshAccessToken, now?, skewMs?,
-  onTokensUpdated? }` and refreshes automatically once the access token is within `skewMs`
-  (default 60s) of `accessExpiresAt`.
+  `pagespace login` stores, and what [Sign in with PageSpace](#sign-in-with-pagespace) returns).
+  Takes `{ initialTokens, now?, skewMs?, onTokensUpdated? }` plus either your own
+  `refreshAccessToken` or `{ tokenEndpoint, clientId, fetch? }` to refresh through PageSpace's
+  token endpoint, and refreshes automatically once the access token is within `skewMs` (default
+  60s) of `accessExpiresAt`.
 
   ```ts
   import { OAuthTokenProvider } from '@pagespace/sdk';
@@ -69,6 +71,288 @@ Two ship with the SDK:
     onTokensUpdated: (tokens) => saveTokens(tokens),
   });
   ```
+
+## Sign in with PageSpace
+
+An app can sign a PageSpace user in and act as them — without ever holding a key. It is OAuth 2.1
+authorization code + PKCE with a **public client**: your app has a `client_id` and its exact
+redirect URIs registered with PageSpace, and no secret at all, so there is nothing to leak from a
+browser bundle, a mobile app or a repo. The user signs in on PageSpace (Google, Apple, passkey or
+magic link — whatever their account uses), sees your app's name and exactly what it asks for, and
+approves. Your app never sees a password.
+
+### Scopes
+
+| Scope | Grants | Consent |
+|---|---|---|
+| `profile` | Who the user is: `client.auth.me()` returns `{ id, name, email, image }`. No content. | A plain Allow |
+| `drive:<driveId>:member` / `:admin` / `:role:<roleId>`, or `drive:<driveId>` | That one drive, at that role (or with the user's own access in it). Nothing outside it, ever. | Allow, confirmed with a step-up check |
+| `offline_access` | A refresh token, so the session outlives the 15-minute access token. | — |
+
+Scopes combine (`profile drive:abc123:member offline_access`); `profile` cannot be combined with
+`account`. A grant never widens on refresh.
+
+One sign-in is one refresh-token family, and refresh tokens are single-use: presenting a spent one
+fails, and after a 30-second window revokes the whole family. Providers over the same storage
+coordinate: every refresh runs under one lock (a Web Lock across this origin's tabs where the
+runtime has them, else a queue within the page), re-reads storage, adopts a newer pair from the
+same sign-in instead of replaying a spent token, persists the rotated pair before releasing the
+lock, and fails closed — without a network call — once that sign-in was signed out or replaced by
+another. `signOut()` takes the same lock, so it revokes the newest token. A session exists only
+while its record is in storage: a sign-in or refresh whose record cannot be written is revoked on
+the spot and fails closed (never left alive in memory where `signOut()` cannot reach it), and a new
+sign-in in the same storage revokes the one it replaces. A refresh that fails in transit is
+retried once, immediately, with the same token: if the server had already rotated it (the answer
+was lost), that retry is refused inside the 30-second window and the session ends cleanly instead
+of keeping a spent token to replay later; if both attempts fail in transit (offline), the session
+is kept and the next call tries again. Two limits remain: a
+**duplicated tab** starts with a *copy* of `sessionStorage` it cannot see updates to (whichever copy
+refreshes second is refused, and signs both out if it does so more than 30 seconds later), and
+separate processes are not coordinated. If duplicated tabs matter to your app, pass
+`localStorage`-backed storage (shared across tabs, at the at-rest cost described under
+[Where tokens live](#where-tokens-live)).
+
+### In a browser app
+
+`PageSpaceAuth` runs the whole flow: it keeps the PKCE verifier and the `state` in
+`sessionStorage`, sends the browser to PageSpace, and on your callback page checks the `state`,
+exchanges the code and hands back an `OAuthTokenProvider` that refreshes itself.
+
+```ts
+import { PAGESPACE_CALLBACK_PATH, PageSpaceAuth, PageSpaceClient } from '@pagespace/sdk';
+
+const auth = new PageSpaceAuth({
+  baseUrl: 'https://pagespace.ai',
+  clientId: 'your-client-id',
+  redirectUri: `${location.origin}${PAGESPACE_CALLBACK_PATH}`, // registered exactly
+  scope: 'profile offline_access',
+});
+
+// On the callback page, finish the sign-in; anywhere else, pick up the current session.
+const provider =
+  location.pathname === PAGESPACE_CALLBACK_PATH ? await auth.handleRedirectCallback(location.href) : auth.restore();
+
+if (provider === null) {
+  await auth.signInWithRedirect(); // wire this to your "Sign in with PageSpace" button
+} else {
+  const client = new PageSpaceClient({ baseUrl: auth.baseUrl, auth: provider });
+  const me = await client.auth.me({});
+  console.log(`Signed in as ${me.name} <${me.email}>`);
+}
+```
+
+`PAGESPACE_CALLBACK_PATH` is `/auth/pagespace/callback`, the path PageSpace-hosted apps use.
+PageSpace redirects only to an exactly registered `https://` URI (or a native app's private
+scheme). The host name `localhost` is refused under both `http://` and `https://`, and plain
+`http://` is refused for third-party apps even on `127.0.0.1` — so serve your dev build at
+`https://127.0.0.1:<port>` (e.g. Vite with a self-signed certificate) and register that exact URI.
+Call `handleRedirectCallback` once per callback: React StrictMode's double-run effect makes the
+second call throw `SignInError('no_pending_sign_in')` (the entry is single-use), so guard it.
+`handleRedirectCallback` removes the pending sign-in before anything else, so a callback URL can be
+redeemed once; a forged or replayed callback never reaches the token endpoint. Failures are typed:
+
+```ts
+import { isSignInError, PageSpaceAuth } from '@pagespace/sdk';
+
+const auth = new PageSpaceAuth({
+  baseUrl: 'https://pagespace.ai',
+  clientId: 'your-client-id',
+  redirectUri: 'https://app.example.com/auth/pagespace/callback',
+});
+
+try {
+  await auth.handleRedirectCallback(location.href);
+} catch (error) {
+  if (isSignInError(error) && error.authorizationError === 'access_denied') {
+    // The user declined. Anything else — a state mismatch, an expired sign-in, a rejected
+    // code (ValidationError), a network failure (NetworkError) — is a different, typed error.
+  } else {
+    throw error;
+  }
+}
+```
+
+No token ever appears in an error message or a log line from this package.
+
+### Where tokens live
+
+By default `PageSpaceAuth` keeps the pending sign-in and the signed-in session — the access token,
+and the refresh token when `offline_access` was granted — in `sessionStorage`. That storage is
+scoped to the tab and gone when the tab closes, but **any script running on your page can read
+it**: an XSS bug in your app exposes the session. So:
+
+- Request `offline_access` only when the app needs sessions longer than the 15-minute access
+  token. Without it there is no refresh token to steal, and the session simply ends.
+- To keep nothing at rest, pass your own storage — for example an in-memory one. The sign-in then
+  lasts only as long as the page, and a full-page redirect would lose the pending sign-in, so use
+  it with a popup: this page keeps the verifier in memory, and the popup's callback page hands its
+  URL back (e.g. `window.opener.postMessage(location.href, origin)`) for this page to finish:
+
+  ```ts
+  import { PageSpaceAuth, type AuthStorage } from '@pagespace/sdk';
+
+  const memory = new Map<string, string>();
+  const inMemory: AuthStorage = {
+    getItem: (key) => memory.get(key) ?? null,
+    setItem: (key, value) => {
+      memory.set(key, value);
+    },
+    removeItem: (key) => {
+      memory.delete(key);
+    },
+  };
+
+  const auth = new PageSpaceAuth({
+    baseUrl: 'https://pagespace.ai',
+    clientId: 'your-client-id',
+    redirectUri: 'https://app.example.com/auth/pagespace/callback',
+    storage: inMemory,
+  });
+  window.open(await auth.createSignInUrl(), 'pagespace-sign-in', 'popup'); // from your button's click handler
+  window.addEventListener('message', async (event) => {
+    if (event.origin !== location.origin || typeof event.data !== 'string') return;
+    const provider = await auth.handleRedirectCallback(event.data); // state is still checked here
+    console.log('signed in', provider.canRefresh);
+  });
+  ```
+
+- A server-rendered app should keep tokens on the server (a backend-for-frontend, see
+  [On a server](#on-a-server)) and never ship them to the browser at all — the browser holds only
+  your own session cookie.
+
+### In a PageSpace environment
+
+An app built and hosted in a PageSpace environment gets two public values in its environment,
+`PAGESPACE_URL` and `PAGESPACE_CLIENT_ID`. `fromEnvironment()` turns them, plus the page's origin,
+into a configured `PageSpaceAuth`. A browser bundle has no `process.env`, so pass the two values
+your bundler exposes — with Vite, as `VITE_PAGESPACE_URL` and `VITE_PAGESPACE_CLIENT_ID`:
+
+```ts
+import { PageSpaceClient } from '@pagespace/sdk';
+
+// Map exactly the two public values — never hand the bundler's whole env object over.
+const auth = PageSpaceClient.fromEnvironment({
+  env: {
+    PAGESPACE_URL: import.meta.env.VITE_PAGESPACE_URL,
+    PAGESPACE_CLIENT_ID: import.meta.env.VITE_PAGESPACE_CLIENT_ID,
+  },
+}); // redirect URI: this page's origin + /auth/pagespace/callback
+await auth.signInWithRedirect();
+```
+
+**Do not** widen Vite's `envPrefix` to `PAGESPACE_` or pass `import.meta.env` itself: that inlines
+every `PAGESPACE_*` variable into the public bundle, including a CLI credential such as
+`PAGESPACE_TOKEN` if one is set in the build environment. Map the two public values explicitly.
+
+With no `env`, `fromEnvironment()` reads `process.env` (server-side rendering, tests); with no
+`origin`, it reads `location.origin`, so on a server pass `origin` too. If either variable or the
+origin is missing it throws a `PageSpaceConfigError` naming it, before any request.
+
+### On a server
+
+A server-rendered app keeps the verifier and `state` in its own session and the tokens server-side.
+The building blocks are exported individually:
+
+```ts
+import { randomBytes } from 'node:crypto';
+import {
+  buildAuthorizeUrl,
+  deriveCodeChallenge,
+  exchangeAuthorizationCode,
+  generateCodeVerifier,
+  pageSpaceOAuthEndpoints,
+  parseCallback,
+} from '@pagespace/sdk';
+
+const BASE_URL = 'https://pagespace.ai';
+const CLIENT_ID = 'your-client-id';
+const REDIRECT_URI = 'https://app.example.com/auth/pagespace/callback';
+
+/** Returns the URL to redirect the user to; the session keeps what the callback needs. */
+export async function startSignIn(session: Map<string, string>): Promise<string> {
+  const codeVerifier = generateCodeVerifier(randomBytes(32));
+  const state = randomBytes(32).toString('base64url');
+  session.set('pagespace.state', state);
+  session.set('pagespace.verifier', codeVerifier);
+  return buildAuthorizeUrl({
+    baseUrl: BASE_URL,
+    clientId: CLIENT_ID,
+    redirectUri: REDIRECT_URI,
+    scope: 'profile offline_access',
+    state,
+    codeChallenge: await deriveCodeChallenge(codeVerifier),
+  });
+}
+
+export async function finishSignIn(session: Map<string, string>, callbackUrl: string) {
+  const state = session.get('pagespace.state') ?? '';
+  const codeVerifier = session.get('pagespace.verifier') ?? '';
+  session.delete('pagespace.state');
+  session.delete('pagespace.verifier');
+
+  const callback = parseCallback(callbackUrl, state); // never throws; state is compared first
+  if (!callback.ok) throw new Error(`Sign-in failed: ${callback.error.reason}`);
+
+  const tokens = await exchangeAuthorizationCode({
+    tokenEndpoint: pageSpaceOAuthEndpoints(BASE_URL).tokenEndpoint,
+    clientId: CLIENT_ID,
+    code: callback.code,
+    redirectUri: REDIRECT_URI,
+    codeVerifier,
+  });
+  if (tokens.kind !== 'oauth') throw new Error('Unexpected token response');
+  return tokens; // { accessToken, refreshToken?, expiresIn, scope } — keep these server-side
+}
+```
+
+Acting as the user afterwards is an `OAuthTokenProvider` that refreshes through the token endpoint
+and tells you when to persist the rotated pair (each refresh token is single-use):
+
+```ts
+import { OAuthTokenProvider, PageSpaceClient, pageSpaceOAuthEndpoints, type OAuthTokens } from '@pagespace/sdk';
+
+export function clientFor(tokens: OAuthTokens, save: (tokens: OAuthTokens) => Promise<void>): PageSpaceClient {
+  const baseUrl = 'https://pagespace.ai';
+  const auth = new OAuthTokenProvider({
+    initialTokens: tokens,
+    tokenEndpoint: pageSpaceOAuthEndpoints(baseUrl).tokenEndpoint,
+    clientId: 'your-client-id',
+    onTokensUpdated: save, // awaited before the new access token is used
+  });
+  return new PageSpaceClient({ baseUrl, auth });
+}
+```
+
+### Native apps
+
+No SDK is required: a native app makes four HTTP calls — discovery, the authorize URL (opened in the
+system browser, e.g. `ASWebAuthenticationSession`, with a private-scheme redirect such as
+`swipesend://callback`), the code exchange, and refresh. They are written out in
+[Sign in with PageSpace from a native app](https://github.com/2witstudios/PageSpace/blob/master/docs/sdk/native-signin.md).
+
+### Signing out and revocation
+
+```ts
+import { PageSpaceClient } from '@pagespace/sdk';
+
+const auth = PageSpaceClient.fromEnvironment({
+  env: {
+    PAGESPACE_URL: import.meta.env.VITE_PAGESPACE_URL,
+    PAGESPACE_CLIENT_ID: import.meta.env.VITE_PAGESPACE_CLIENT_ID,
+  },
+});
+const result = await auth.signOut(); // revokes the refresh token, forgets the session
+if (result?.outcome === 'failed' && result.retryable) {
+  // The local session is already gone. The token is kept as a pending revocation,
+  // and the next signOut() — from any instance — asks the server again.
+}
+```
+
+`revokeToken` does the same for a token you hold yourself. The user can also cut your app off at
+any time from **Settings → Account → Connected Apps** in PageSpace. Your next request then fails
+with an
+`AuthenticationError`: the provider tries one refresh, the server refuses it, and the provider
+stops presenting the credential.
 
 ## Resource namespaces
 

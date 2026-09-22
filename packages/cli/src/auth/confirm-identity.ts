@@ -1,26 +1,26 @@
 /**
- * Identity confirmation after login (Phase 4 task 3) — a `whoami`-style call
- * through the SDK's own invoke pipeline (`GET /api/auth/me`, Bearer-authed),
- * unlike the token exchange this fits the registry perfectly: a GET with no
- * body, authenticated with the access token login just obtained. Reused
- * verbatim by `pagespace whoami` (Phase 4 task 5).
+ * Identity confirmation after login — `client.auth.me()`, the SDK's own
+ * `auth.me` operation (`GET /api/auth/me`, Bearer-authed), shared by
+ * `pagespace login`, `login --device`, `keys` and `whoami`. Before ADR 0004
+ * Decision 11 the CLI declared a private copy of that operation; the SDK
+ * now owns it, with an output schema that reads both the full first-party
+ * body and the profile-only body a third-party app gets.
  */
-import { z } from 'zod';
-import { defineOperation, PageSpaceClient, StaticTokenProvider } from '@pagespace/sdk';
+import { getAuthMe, PageSpaceClient, StaticTokenProvider, defineOperation } from '@pagespace/sdk';
 import type { ConfirmIdentity, Identity } from './loopback-flow.js';
 
-const meOutputSchema = z.object({
-  name: z.string().nullable(),
-  email: z.string(),
-});
-
+/**
+ * The SDK's `auth.me`, projected to the two fields the CLI renders. Kept as a
+ * public export for existing importers; `confirmIdentity` itself calls the
+ * facade, `client.auth.me()`.
+ */
 export const whoamiOperation = defineOperation({
-  name: 'auth.me',
-  method: 'GET',
-  path: '/api/auth/me',
-  inputSchema: z.object({}),
-  outputSchema: meOutputSchema,
-  requiredScope: 'account',
+  name: getAuthMe.name,
+  method: getAuthMe.method,
+  path: getAuthMe.path,
+  inputSchema: getAuthMe.inputSchema,
+  outputSchema: getAuthMe.outputSchema.pick({ name: true, email: true }),
+  requiredScope: getAuthMe.requiredScope,
   description: "Confirm the authenticated user's identity (name/email).",
 });
 
@@ -40,6 +40,6 @@ export const confirmIdentity: ConfirmIdentity = async ({ host, accessToken }): P
     timeoutMs: CONFIRM_IDENTITY_TIMEOUT_MS,
     retryPolicy: { maxRetries: 0 },
   });
-  const result = await client.invoke(whoamiOperation, {});
-  return { name: result.name, email: result.email };
+  const me = await client.auth.me({});
+  return { name: me.name, email: me.email };
 };

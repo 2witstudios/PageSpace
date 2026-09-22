@@ -1,20 +1,17 @@
 /**
- * The authorization_code + PKCE token exchange (Phase 4 task 3) against the
- * OAuth 2.1 token endpoint (`apps/web/src/app/api/oauth/token/route.ts`).
- * Deliberately NOT routed through `PageSpaceClient.invoke` — that pipeline
- * always attaches a Bearer `Authorization` header from an already-issued
- * `AuthProvider` and always serializes bodies as JSON, but the token
- * endpoint is unauthenticated (public client, no secret; RFC 6749 §5.1
- * requires `application/x-www-form-urlencoded`), which is exactly the
- * pre-authentication step no `AuthProvider` can exist for yet. The response
- * shape is still validated with zod rather than trusted blind.
- *
- * The four possible response shapes are discriminated by `parseTokenResponse`
- * (`token-response.ts`), shared with the device-grant poller so both grants
- * read the same wire contract.
+ * The authorization_code + PKCE token exchange — the CLI adapter over
+ * `@pagespace/sdk`'s `exchangeAuthorizationCode` (ADR 0004 Decision 11). The
+ * SDK sends the form-encoded grant (public client, no secret; RFC 6749
+ * §4.1.3) and classifies failures; this module keeps the CLI's contract:
+ * the result is mapped through `token-response.ts` (so a refresh-less Bearer
+ * answer is refused, as before) and every failure is a `TokenExchangeError`
+ * whose `code` is the server's RFC 6749 error code, `http_<status>` when it
+ * sent none the SDK recognises, `invalid_response` for a malformed body, or
+ * `network_error: …` when the server was never reached.
  */
+import { exchangeAuthorizationCode, isNetworkError, isResponseValidationError, readOAuthErrorCode } from '@pagespace/sdk';
 import type { ExchangeCode, ExchangeCodeParams, ExchangedTokens } from './loopback-flow.js';
-import { parseTokenResponse } from './token-response.js';
+import { toExchangedTokens } from './token-response.js';
 
 export class TokenExchangeError extends Error {
   constructor(public readonly code: string) {
@@ -23,41 +20,29 @@ export class TokenExchangeError extends Error {
   }
 }
 
-function extractErrorCode(json: unknown, status: number): string {
-  if (json !== null && typeof json === 'object' && 'error' in json && typeof (json as Record<string, unknown>).error === 'string') {
-    return (json as Record<string, unknown>).error as string;
+function toExchangeErrorCode(error: unknown): string {
+  if (isNetworkError(error)) {
+    const cause = error.cause;
+    return `network_error: ${cause instanceof Error ? cause.message : String(cause)}`;
   }
-  return `http_${status}`;
+  if (isResponseValidationError(error)) return 'invalid_response';
+  const oauthCode = readOAuthErrorCode(error);
+  if (oauthCode !== null) return oauthCode;
+  if (typeof error === 'object' && error !== null && 'status' in error && typeof error.status === 'number') {
+    return `http_${error.status}`;
+  }
+  return 'invalid_response';
 }
 
 export function createExchangeCode(fetchImpl: typeof fetch = fetch): ExchangeCode {
   return async (params: ExchangeCodeParams): Promise<ExchangedTokens> => {
-    const body = new URLSearchParams({
-      grant_type: 'authorization_code',
-      code: params.code,
-      redirect_uri: params.redirectUri,
-      client_id: params.clientId,
-      code_verifier: params.codeVerifier,
-    });
-
-    let response: Response;
+    let wire;
     try {
-      response = await fetchImpl(params.tokenEndpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: body.toString(),
-      });
+      wire = await exchangeAuthorizationCode(params, { fetch: fetchImpl });
     } catch (error) {
-      throw new TokenExchangeError(`network_error: ${error instanceof Error ? error.message : String(error)}`);
+      throw new TokenExchangeError(toExchangeErrorCode(error));
     }
-
-    const json: unknown = await response.json().catch(() => null);
-
-    if (!response.ok) {
-      throw new TokenExchangeError(extractErrorCode(json, response.status));
-    }
-
-    const tokens = parseTokenResponse(json);
+    const tokens = toExchangedTokens(wire);
     if (tokens === null) {
       throw new TokenExchangeError('invalid_response');
     }

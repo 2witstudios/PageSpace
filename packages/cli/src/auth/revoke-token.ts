@@ -1,16 +1,15 @@
 /**
- * RFC 7009 token revocation (Phase 4 task 5) against the OAuth revocation
- * endpoint (`apps/web/src/app/api/oauth/revoke/route.ts`; Phase 1 task 10).
- * Same shape as `exchange-code.ts`: unauthenticated, form-encoded,
- * deliberately not routed through `PageSpaceClient.invoke`. The endpoint
- * returns the SAME 200 for an unknown/already-revoked token as for a live
- * one (RFC 7009 §2.2, no oracle), so a 2xx round trip is the only "success"
- * signal this module ever reports — it never claims to know whether a
- * token actually existed. Never throws: `pagespace logout` needs the
- * outcome of every host in `--all` to decide what to delete, so failures
- * are a typed result, not an exception.
+ * RFC 7009 token revocation — the CLI adapter over `@pagespace/sdk`'s
+ * `revokeToken` (ADR 0004 Decision 11). The SDK posts the form-encoded
+ * request to `/api/oauth/revoke` and never throws; the endpoint answers the
+ * SAME 200 for an unknown or already-revoked token as for a live one
+ * (RFC 7009 §2.2, no oracle), so `'revoked'` only ever means the server
+ * accepted the request. This module keeps the CLI's result shape:
+ * `pagespace logout --all` reads every host's outcome to decide what to
+ * delete, and prints the failure message, which never contains the token.
  */
-import { z } from 'zod';
+import { isNetworkError, isRateLimitError, pageSpaceOAuthEndpoints, revokeToken } from '@pagespace/sdk';
+import type { PageSpaceError } from '@pagespace/sdk';
 
 export interface RevokeTokenParams {
   readonly host: string;
@@ -22,37 +21,27 @@ export type RevokeResult = { readonly outcome: 'revoked' } | { readonly outcome:
 
 export type RevokeToken = (params: RevokeTokenParams) => Promise<RevokeResult>;
 
-const RATE_LIMITED_STATUS = 429;
-
-const rateLimitedBodySchema = z.object({ retryAfter: z.number().optional() });
+function describeFailure(error: PageSpaceError): string {
+  if (isNetworkError(error)) {
+    const cause = error.cause;
+    return `network_error: ${cause instanceof Error ? cause.message : String(cause)}`;
+  }
+  if (isRateLimitError(error)) {
+    return error.retryAfterMs ? `rate_limited (retry after ${Math.ceil(error.retryAfterMs / 1000)}s)` : 'rate_limited';
+  }
+  return 'status' in error && typeof error.status === 'number' ? `http_${error.status}` : error.code.toLowerCase();
+}
 
 export function createRevokeToken(fetchImpl: typeof fetch = fetch): RevokeToken {
   return async (params: RevokeTokenParams): Promise<RevokeResult> => {
-    const url = `${params.host.replace(/\/+$/, '')}/api/oauth/revoke`;
-    const body = new URLSearchParams({ token: params.refreshToken, client_id: params.clientId });
-
-    let response: Response;
-    try {
-      response = await fetchImpl(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: body.toString(),
-      });
-    } catch (error) {
-      return { outcome: 'failed', message: `network_error: ${error instanceof Error ? error.message : String(error)}` };
-    }
-
-    if (response.status === RATE_LIMITED_STATUS) {
-      const json: unknown = await response.json().catch(() => null);
-      const parsed = rateLimitedBodySchema.safeParse(json);
-      const retryAfter = parsed.success ? parsed.data.retryAfter : undefined;
-      return { outcome: 'failed', message: retryAfter ? `rate_limited (retry after ${retryAfter}s)` : 'rate_limited' };
-    }
-
-    if (!response.ok) {
-      return { outcome: 'failed', message: `http_${response.status}` };
-    }
-
-    return { outcome: 'revoked' };
+    const result = await revokeToken(
+      {
+        revocationEndpoint: pageSpaceOAuthEndpoints(params.host).revocationEndpoint,
+        token: params.refreshToken,
+        clientId: params.clientId,
+      },
+      { fetch: fetchImpl },
+    );
+    return result.outcome === 'revoked' ? { outcome: 'revoked' } : { outcome: 'failed', message: describeFailure(result.error) };
   };
 }

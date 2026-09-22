@@ -117,10 +117,12 @@ import { CLI_VERSION } from '../commands/version.js';
  * `operationToMcpTool`), so drift between "operations the SDK has" and
  * "tools MCP serves" is structurally impossible.
  *
- * `tokens.list`/`tokens.revoke` are the two deliberate omissions: key
+ * `tokens.list`/`tokens.revoke` are deliberate omissions: key
  * management is not something an agent's own key should be able to do to the
  * other keys its owner holds, and the routes behind them refuse `mcp_`
- * credentials anyway. `describeSelfKey` is here for the opposite reason — an
+ * credentials anyway. `auth.me` (`getAuthMe`) is omitted too: `/api/auth/me`
+ * refuses `mcp_` keys by design (a scoped key has no "current user" to
+ * disclose), so as a tool it could only ever fail. `describeSelfKey` is here for the opposite reason — an
  * agent asking what its own credential may do is exactly the question this
  * surface should be able to answer, and it answers only about itself.
  */

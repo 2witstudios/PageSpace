@@ -2,6 +2,82 @@
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.6.0] — 2026-09-22
+
+### Added
+
+- **Sign in with PageSpace.** An app can now sign a PageSpace user in and act as them without
+  holding a key — OAuth 2.1 authorization code + PKCE as a public client, no secret anywhere.
+  `PageSpaceAuth` runs the browser flow: `signInWithRedirect()` keeps the PKCE verifier and a
+  one-time `state` in `sessionStorage` (or storage you pass) and sends the browser to PageSpace;
+  `handleRedirectCallback(url)` checks the `state` before anything else, exchanges the code and
+  returns an `OAuthTokenProvider` that refreshes itself; `restore()` brings the session back after
+  a reload; `signOut()` revokes it. A callback URL can be redeemed once, a pending sign-in expires
+  after 30 minutes, and failures are typed (`SignInError` with a `reason`, e.g.
+  `authorizationError: 'access_denied'` when the user declines). The default scope is
+  `profile offline_access`.
+- **`client.auth.me()`** — who signed in: `{ id, name, email, image }` for an app holding the new
+  `profile` scope, plus `role`, `emailVerified` and `subscriptionTier` for a session or first-party
+  client. `RequiredScope` gains `'profile'`.
+- **`PageSpaceClient.fromEnvironment()`** — sign-in for an app hosted in a PageSpace environment
+  from its two public values, `PAGESPACE_URL` and `PAGESPACE_CLIENT_ID` (map them into `env` in a
+  browser bundle; never pass a bundler's whole env object), with the page origin +
+  `/auth/pagespace/callback` (`PAGESPACE_CALLBACK_PATH`) as the redirect. A missing value throws a
+  `PageSpaceConfigError` naming it, before any request.
+- **The token-endpoint calls, exported individually** for servers, native apps and custom flows:
+  `buildAuthorizeUrl`, `parseCallback` (never throws; compares `state` first), `discoverMetadata`,
+  `exchangeAuthorizationCode`, `refreshWithTokenEndpoint` / `createTokenEndpointRefresh`,
+  `revokeToken` (a result, never a throw), `parseTokenResponse`, `readOAuthErrorCode`,
+  `classifyRefreshFailure`. Every call takes an injected `fetch`, sends form-encoded bodies,
+  validates every response with zod, and classifies failures the ADR 0003 way (network, 429 and
+  5xx retryable; a definitive 4xx or a malformed body terminal). Browser-safe: no Node APIs.
+- **`OAuthTokenProvider` refreshes on its own.** Pass `{ tokenEndpoint, clientId }` instead of a
+  `refreshAccessToken` function and it uses PageSpace's token endpoint (the constructor now takes
+  `OAuthTokenProviderInit`, either shape). `OAuthTokenProviderOptions` and passing your own
+  `refreshAccessToken` work exactly as before.
+- **Providers over one stored session don't replay a spent refresh token.** Every refresh runs
+  under one lock (Web Locks where the runtime has them, else an in-page queue), re-reads storage,
+  adopts a newer pair from the same sign-in, and persists the rotated pair before releasing the
+  lock. Each stored session carries the sign-in it belongs to, so a provider from an earlier or
+  replaced sign-in fails closed without a network call instead of taking over the new one.
+  `signOut()` and a new sign-in's write take the same lock, so the newest sign-in's record is
+  the one that remains and sign-out revokes the newest token. A session exists only while its
+  record is stored — that is what lets `signOut()` end it everywhere — so a sign-in or rotation
+  that cannot be stored is revoked and fails closed, and a new sign-in in the same storage
+  revokes the one it replaces (in the background, so sign-in never waits on it). A refresh always
+  presents the stored — newest — refresh token, so a failed attempt never leads to replaying a
+  spent one; a storage read that throws is a retryable hiccup, not a sign-out. `signOut()` stops
+  this instance's providers from serving a cached access token (including one a concurrent refresh
+  delivered) and covers every storage `restore(storage)` was given; a revocation the server does
+  not accept — including the background revocation of a replaced sign-in — is kept, per
+  deployment and merged rather than overwritten, and retried by the next `signOut()` (tokens are
+  queued before the revocation request goes out, so navigating away mid-revocation loses none); a
+  `signOut()` that cannot read storage reports a retryable failure instead of "nobody signed in". A duplicated tab still starts from a
+  copy of `sessionStorage` (see the README).
+- Token-endpoint calls take a `timeoutMs` (default 30s) covering headers and body, enforced even
+  when a custom `fetch` ignores `AbortSignal`; a hung request is a retryable `TimeoutError`, so it
+  cannot hold the refresh lock indefinitely.
+
+### Security
+
+- No token, code or verifier ever appears in an error message or a log line from these paths: a
+  server's `error` field is only carried when it is a known OAuth error code, so a server echoing
+  a token back cannot route it into your logs through the SDK.
+- An access-only grant (no `offline_access`, so no refresh token) signs in, is used for its whole
+  lifetime, and then fails closed at expiry without a network call.
+- A base URL carrying a query or fragment, or surrounding whitespace, is rejected (it would end
+  up inside every endpoint URL).
+- A definitively rejected refresh (including an unreadable 2xx, after which the server may have
+  rotated) removes the stored session and revokes the presented token, so it is never replayed.
+  A refresh that fails in transit is retried once immediately, inside the server's reuse window,
+  so a lost response ends the session cleanly while being offline keeps it.
+- A provider returned by `PageSpaceAuth` checks that its sign-in is still stored before handing
+  out even a cached access token, so a sign-out in another tab takes effect at once.
+
+### Compatibility
+
+- Server API contract 1.4.0 adds `auth.me`; `MIN_SERVER_API_VERSION` stays 1.0.0.
+
 ## [2.5.0] — 2026-09-16
 
 ### Added
