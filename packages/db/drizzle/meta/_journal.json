@@ -2129,13 +2129,6 @@
       "when": 1790031078207,
       "tag": "0302_wallet_ids_required",
       "breakpoints": true
-    },
-    {
-      "idx": 303,
-      "version": "7",
-      "when": 1790095779574,
-      "tag": "0300_1_wallets_lock_and_require_wallet_ids",
-      "breakpoints": true
     }
   ]
 }

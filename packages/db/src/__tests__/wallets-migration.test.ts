@@ -80,6 +80,13 @@ const journal = JSON.parse(
 ) as { entries: Array<{ idx: number; tag: string }> };
 
 describe('drizzle/0298–0302 — credit_balances becomes wallets (static)', () => {
+  it('X-5 (partial): every journal entry is listed exactly once, so no migration runs twice', () => {
+    const tags = journal.entries.map((e) => e.tag);
+    const seen = new Set<string>();
+    const duplicates = tags.filter((tag) => (seen.has(tag) ? true : (seen.add(tag), false)));
+    expect(duplicates).toEqual([]);
+  });
+
   it('X-5 (partial): the five migrations are journal entries 298–302, in order', () => {
     for (const [idx, m] of [[298, rename], [299, dropPk], [300, expand], [301, backfill], [302, required]] as const) {
       expect(journal.entries.find((e) => e.idx === idx)?.tag).toBe(path.basename(m.file, '.sql'));
