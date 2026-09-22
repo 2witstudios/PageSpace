@@ -25,6 +25,7 @@ import { userAutomationPreferences } from '@pagespace/db/schema/automation-prefe
 import { userToastNotificationPreferences } from '@pagespace/db/schema/toast-notification-preferences';
 import { emailNotificationPreferences } from '@pagespace/db/schema/email-notifications';
 import { decryptUserRow } from '../../auth/user-repository';
+import { agentAccounts, agentAccountApprovals, agentAccountBindings, agentAccountDelegations } from '@pagespace/db/schema/agent-accounts';
 import { getClickHouseGdprClient } from '../../observability/clickhouse-client';
 import {
   collectChUserSystemLogs,
@@ -491,10 +492,76 @@ export interface AllUserData {
   personalization: UserPersonalizationExport | null;
   personalizationCandidates: UserPersonalizationCandidateExport[];
   agentWorkspaces: UserAgentWorkspaceExport[];
+  agentAccounts: UserAgentAccountsExport;
   streamState: UserStreamStateExport[];
   contentTags: UserContentTagExport[];
   /** Machines the subject enrolled as local environments — their own devices. */
   localEnvironments: UserLocalEnvironmentExport[];
+}
+
+/**
+ * The subject's AGENT ACCOUNTS (L2·G2): the accounts they own (metadata only —
+ * the credential itself lives in the credential plane and is never exported,
+ * exactly as it is never shown), and the approvals, bindings and delegations
+ * they themselves gave. An agent page's own accounts belong to the drive, not
+ * to the person who added them, so they travel with the drive's data, not here
+ * (the Art 15(4) boundary `collectUserMessages` settled: rows the subject
+ * authored or owns).
+ */
+export type UserAgentAccountsExport = {
+  accounts: {
+    id: string;
+    kind: string;
+    name: string;
+    providerSlug: string | null;
+    allowedOrigins: string[];
+    acknowledgment: string;
+    status: string;
+    lastUsedAt: Date | null;
+    createdAt: Date;
+    revokedAt: Date | null;
+  }[];
+  approvalsGiven: { id: string; accountId: string; outcome: string; createdAt: Date; expiresAt: Date; consumedAt: Date | null }[];
+  bindingsMade: { accountId: string; agentPageId: string; boundAt: Date; revokedAt: Date | null }[];
+  delegationsGiven: { id: string; accountId: string; agentPageId: string | null; expiresAt: Date; createdAt: Date; revokedAt: Date | null }[];
+};
+
+/** Bounded like every other collector's worst case; a person's accounts and decisions are few. */
+const AGENT_ACCOUNT_EXPORT_LIMIT = 10_000;
+
+export async function collectUserAgentAccounts(database: DB, userId: string): Promise<UserAgentAccountsExport> {
+  const accounts = await database
+    .select({
+      id: agentAccounts.id,
+      kind: agentAccounts.kind,
+      name: agentAccounts.name,
+      providerSlug: agentAccounts.providerSlug,
+      allowedOrigins: agentAccounts.allowedOrigins,
+      acknowledgment: agentAccounts.acknowledgment,
+      status: agentAccounts.status,
+      lastUsedAt: agentAccounts.lastUsedAt,
+      createdAt: agentAccounts.createdAt,
+      revokedAt: agentAccounts.revokedAt,
+    })
+    .from(agentAccounts)
+    .where(eq(agentAccounts.ownerUserId, userId))
+    .limit(AGENT_ACCOUNT_EXPORT_LIMIT);
+  const approvalsGiven = await database
+    .select({ id: agentAccountApprovals.id, accountId: agentAccountApprovals.accountId, outcome: agentAccountApprovals.outcome, createdAt: agentAccountApprovals.createdAt, expiresAt: agentAccountApprovals.expiresAt, consumedAt: agentAccountApprovals.consumedAt })
+    .from(agentAccountApprovals)
+    .where(eq(agentAccountApprovals.approvedByUserId, userId))
+    .limit(AGENT_ACCOUNT_EXPORT_LIMIT);
+  const bindingsMade = await database
+    .select({ accountId: agentAccountBindings.accountId, agentPageId: agentAccountBindings.agentPageId, boundAt: agentAccountBindings.boundAt, revokedAt: agentAccountBindings.revokedAt })
+    .from(agentAccountBindings)
+    .where(eq(agentAccountBindings.boundByUserId, userId))
+    .limit(AGENT_ACCOUNT_EXPORT_LIMIT);
+  const delegationsGiven = await database
+    .select({ id: agentAccountDelegations.id, accountId: agentAccountDelegations.accountId, agentPageId: agentAccountDelegations.agentPageId, expiresAt: agentAccountDelegations.expiresAt, createdAt: agentAccountDelegations.createdAt, revokedAt: agentAccountDelegations.revokedAt })
+    .from(agentAccountDelegations)
+    .where(eq(agentAccountDelegations.delegatedByUserId, userId))
+    .limit(AGENT_ACCOUNT_EXPORT_LIMIT);
+  return { accounts: accounts.map((row) => ({ ...row, allowedOrigins: [...row.allowedOrigins] })), approvalsGiven, bindingsMade, delegationsGiven };
 }
 
 export async function collectUserProfile(database: DB, userId: string): Promise<UserProfileExport | null> {
@@ -1665,7 +1732,7 @@ export async function collectAllUserData(database: DB, userId: string): Promise<
   // Positional: this destructuring order must exactly match the Promise.all array
   // order below (each collector returns a differently-shaped array, so TypeScript
   // cannot catch a reorder/insert mismatch here).
-  const [userPages, userSheets, userMessages, userFiles, activity, userSystemLogs, userApiMetrics, userErrorLogs, aiUsage, tasks, userSessions, userNotifications, userDisplayPreferences, userSettings, userPersonalizationData, userPersonalizationCandidates, userAgentWorkspaces, userStreamState, userContentTags, userLocalEnvironments] = await Promise.all([
+  const [userPages, userSheets, userMessages, userFiles, activity, userSystemLogs, userApiMetrics, userErrorLogs, aiUsage, tasks, userSessions, userNotifications, userDisplayPreferences, userSettings, userPersonalizationData, userPersonalizationCandidates, userAgentWorkspaces, userAgentAccounts, userStreamState, userContentTags, userLocalEnvironments] = await Promise.all([
     collectUserPages(database, userId, driveIds),
     collectUserSheets(database, userId, driveIds),
     collectUserMessages(database, userId),
@@ -1683,6 +1750,7 @@ export async function collectAllUserData(database: DB, userId: string): Promise<
     collectUserPersonalization(database, userId),
     collectUserPersonalizationCandidates(database, userId),
     collectUserAgentWorkspaces(database, userId),
+    collectUserAgentAccounts(database, userId),
     collectUserStreamState(database, userId),
     collectUserContentTags(database, userId, driveIds),
     collectUserLocalEnvironments(database, userId),
@@ -1708,6 +1776,7 @@ export async function collectAllUserData(database: DB, userId: string): Promise<
     personalization: userPersonalizationData,
     personalizationCandidates: userPersonalizationCandidates,
     agentWorkspaces: userAgentWorkspaces,
+    agentAccounts: userAgentAccounts,
     streamState: userStreamState,
     contentTags: userContentTags,
     localEnvironments: userLocalEnvironments,
