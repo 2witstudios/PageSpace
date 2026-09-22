@@ -12,7 +12,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { NextRequest } from 'next/server';
 
 const mocks = vi.hoisted(() => ({
-  auth: vi.fn(), issuance: vi.fn(), validate: vi.fn(), create: vi.fn(), rateLimit: vi.fn(), audit: vi.fn(), liveKeys: vi.fn(),
+  auth: vi.fn(), issuance: vi.fn(), validate: vi.fn(), create: vi.fn(), rateLimit: vi.fn(), audit: vi.fn(), guarded: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -24,7 +24,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 vi.mock('@/lib/repositories/oauth-repository', () => ({ findAccessTokenIssuance: mocks.issuance }));
 vi.mock('@/lib/repositories/session-repository', () => ({
-  sessionRepository: { createMcpTokenWithDriveScopes: mocks.create, findDrivesByIds: vi.fn().mockResolvedValue([]), countActiveMcpTokens: mocks.liveKeys },
+  sessionRepository: { createMcpTokenWithDriveScopes: mocks.create, createAgentMcpTokenGuarded: mocks.guarded, findDrivesByIds: vi.fn().mockResolvedValue([]) },
 }));
 vi.mock('@pagespace/lib/services/drive-service', () => ({ validateDriveScopeAccess: mocks.validate }));
 vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
@@ -41,7 +41,7 @@ import { POST } from '../route';
 const OAUTH_REFUSAL = { error: 'OAuth tokens are not permitted for this endpoint' };
 const NO_SCOPE_PROBLEMS = { invalidDriveIds: [], unauthorizedRoles: [], invalidCustomRoles: [], unauthorizedCustomRoles: [] };
 
-const agentAuth = { userId: 'agent-1', tokenType: 'oauth', tokenId: 'at-1', role: 'user', scopes: { account: true } };
+const agentAuth = { userId: 'agent-1', tokenType: 'oauth', tokenId: 'at-1', role: 'user', tokenVersion: 7, scopes: { account: true } };
 const mint = (body: unknown = { name: 'agent key' }) =>
   POST(new NextRequest('http://localhost/api/auth/mcp-tokens', {
     method: 'POST',
@@ -57,7 +57,7 @@ describe('POST /api/auth/mcp-tokens — agent bearer path', () => {
     mocks.validate.mockResolvedValue(NO_SCOPE_PROBLEMS);
     mocks.rateLimit.mockResolvedValue({ allowed: true });
     mocks.create.mockResolvedValue({ id: 'k1', name: 'agent key', createdAt: new Date() });
-    mocks.liveKeys.mockResolvedValue(0);
+    mocks.guarded.mockImplementation(async (row: Record<string, unknown>) => ({ ok: true, token: await mocks.create(row) }));
   });
 
   it('should authenticate session (CSRF-checked) or oauth — CSRF applies to sessions only', async () => {
@@ -100,19 +100,25 @@ describe('POST /api/auth/mcp-tokens — agent bearer path', () => {
       expect(mocks.create).not.toHaveBeenCalled();
     });
 
-    it('given the agent already holds the maximum number of live keys, should refuse 409, mint nothing, and audit', async () => {
-      mocks.liveKeys.mockResolvedValue(20);
+    it('should mint through the guarded path with the caller\'s tokenVersion and the cap of 20', async () => {
+      await mint();
+      expect(mocks.guarded).toHaveBeenCalledWith(expect.objectContaining({ userId: 'agent-1' }), { expectedTokenVersion: 7, maxLiveKeys: 20 });
+    });
+
+    it('given the agent already holds the maximum number of live keys, should refuse 409 and audit', async () => {
+      mocks.guarded.mockResolvedValue({ ok: false, reason: 'key_limit_reached' });
       const response = await mint();
       expect(response.status).toBe(409);
       expect(await response.json()).toEqual({ error: 'key_limit_reached', limit: 20 });
-      expect(mocks.liveKeys).toHaveBeenCalledWith('agent-1');
-      expect(mocks.create).not.toHaveBeenCalled();
       expect(mocks.audit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'authz.access.denied', details: expect.objectContaining({ method: 'agent', reason: 'live_key_limit' }) }));
     });
 
-    it('given one key below the maximum, should mint', async () => {
-      mocks.liveKeys.mockResolvedValue(19);
-      expect((await mint()).status).toBe(200);
+    it('given the credentials were revoked while the request was in flight, should answer the dead-bearer 401 and audit', async () => {
+      mocks.guarded.mockResolvedValue({ ok: false, reason: 'credentials_revoked' });
+      const response = await mint();
+      expect(response.status).toBe(401);
+      expect(await response.json()).toEqual(OAUTH_REFUSAL);
+      expect(mocks.audit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'authz.access.denied', details: expect.objectContaining({ method: 'agent', reason: 'credentials_revoked' }) }));
     });
 
     it('given the per-agent AGENT_KEY_MINT limit is exhausted, should answer 429, mint nothing, and audit', async () => {

@@ -3,7 +3,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { OAUTH_ACCESS_TOKEN_PREFIX } from '@/lib/auth/token-prefixes';
 import { resolveCallerCredential } from '@/lib/agent-auth/caller-credential-resolver';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
-import { sessionRepository } from '@/lib/repositories/session-repository';
+import { sessionRepository, type McpToken } from '@/lib/repositories/session-repository';
 import { z } from 'zod/v4';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -81,10 +81,6 @@ export async function POST(req: NextRequest) {
       const retryAfter = Math.max(0, Math.ceil(limit.retryAfter ?? 0));
       return NextResponse.json({ error: 'rate_limited', retryAfter }, { status: 429, headers: { 'Retry-After': String(retryAfter) } });
     }
-    if ((await sessionRepository.countActiveMcpTokens(userId)) >= AGENT_MAX_LIVE_KEYS) {
-      refuseAgent('live_key_limit');
-      return NextResponse.json({ error: 'key_limit_reached', limit: AGENT_MAX_LIVE_KEYS }, { status: 409 });
-    }
   }
 
   try {
@@ -136,14 +132,31 @@ export async function POST(req: NextRequest) {
     const isScoped = uniqueDriveScopes.length > 0;
 
     // Use transaction to ensure token and drive scopes are created atomically
-    const newToken = await sessionRepository.createMcpTokenWithDriveScopes({
-      userId,
-      tokenHash,
-      tokenPrefix,
-      name,
-      isScoped,
-      drives: uniqueDriveScopes,
-    });
+    const tokenRow = { userId, tokenHash, tokenPrefix, name, isScoped, drives: uniqueDriveScopes };
+    let newToken: McpToken;
+    if (viaAgent) {
+      // The live-key cap and the "credentials not revoked since this caller
+      // authenticated" check must hold at COMMIT, not just at the start of the
+      // request: both run under a lock on the agent's users row, the row a
+      // revoke/rotation updates (createAgentMcpTokenGuarded).
+      const guarded = await sessionRepository.createAgentMcpTokenGuarded(tokenRow, {
+        expectedTokenVersion: auth.tokenVersion,
+        maxLiveKeys: AGENT_MAX_LIVE_KEYS,
+      });
+      if (!guarded.ok) {
+        if (guarded.reason === 'key_limit_reached') {
+          refuseAgent('live_key_limit');
+          return NextResponse.json({ error: 'key_limit_reached', limit: AGENT_MAX_LIVE_KEYS }, { status: 409 });
+        }
+        // Revoked or rotated while this request was in flight: the token that
+        // authenticated it is dead now, so answer as for any dead bearer.
+        refuseAgent('credentials_revoked');
+        return oauthNotPermitted();
+      }
+      newToken = guarded.token;
+    } else {
+      newToken = await sessionRepository.createMcpTokenWithDriveScopes(tokenRow);
+    }
 
     // Fetch drive names for consistent response format with GET
     let driveScopeNames: { id: string; name: string }[] = [];
