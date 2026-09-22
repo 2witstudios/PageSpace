@@ -11,6 +11,8 @@ import type { RunAgentWithRetryResult } from './run-agent-with-retry';
 /** How the step that was still streaming at an abort was priced. Stamped into usage metadata. */
 export interface AbortedStepBilling {
   inputTokens: number;
+  /** The part of `inputTokens` priced at the cache-read rate. */
+  cachedInputTokens: number;
   outputTokens: number;
   /** Real (pre-markup) cost added for the interrupted step. */
   costDollars: number;
@@ -85,8 +87,10 @@ export function agentRunBillingFields(params: {
   const stepInputTokens =
     aborted.priorStepContextTokens ?? estimateTokens(aborted.promptText) + promptOverheadTokens();
   const stepOutputTokens = estimateTokens(aborted.outputText);
+  // Clamped to the step's input, as calculateCost clamps it.
+  const stepCachedTokens = Math.min(Math.max(aborted.priorStepCachedTokens ?? 0, 0), stepInputTokens);
   const estimatedDollars = calculateCost(model, stepInputTokens, stepOutputTokens, {
-    cachedInputTokens: aborted.priorStepCachedTokens,
+    cachedInputTokens: stepCachedTokens,
   });
   const capDollars = estimateChatHoldCentsForModel(model) / 100 / (MARKUP_BPS / 10000);
   const stepDollars = Math.min(estimatedDollars, capDollars);
@@ -101,13 +105,18 @@ export function agentRunBillingFields(params: {
     inputTokens: billedInput,
     outputTokens: billedOutput,
     totalTokens: billedInput + billedOutput,
-    cachedInputTokens,
+    // The interrupted step's cached share is part of billedInput too, so report it.
+    cachedInputTokens:
+      cachedInputTokens === undefined && stepCachedTokens === 0
+        ? undefined
+        : (cachedInputTokens ?? 0) + stepCachedTokens,
     reasoningTokens,
     providerCostDollars: finishedStepsDollars + stepDollars,
     openrouterGenerationIds: [],
     costSource: 'estimate',
     abortedStep: {
       inputTokens: stepInputTokens,
+      cachedInputTokens: stepCachedTokens,
       outputTokens: stepOutputTokens,
       costDollars: stepDollars,
       capped: estimatedDollars > capDollars,

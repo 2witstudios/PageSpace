@@ -110,10 +110,14 @@ describe('agentRunBillingFields', () => {
 
     assert({
       given: 'an interrupted step whose 830-token prompt has 700 tokens the provider serves from cache',
-      should: 'bill 130 fresh + 700 at the 10% cache-read rate + 50 output, on top of step 1',
-      actual: dollars(fields.providerCostDollars),
+      should: 'bill 130 fresh + 700 at the 10% cache-read rate + 50 output, and report the 700 cached',
+      actual: {
+        providerCostDollars: dollars(fields.providerCostDollars),
+        cachedInputTokens: fields.cachedInputTokens,
+        stepCachedInputTokens: fields.abortedStep?.cachedInputTokens,
+      },
       // step 1: (800*2 + 30*10)/1e6 = 0.0019; step 2: (130*2 + 700*2*0.1 + 50*10)/1e6 = 0.0009
-      expected: 0.0028,
+      expected: { providerCostDollars: 0.0028, cachedInputTokens: 700, stepCachedInputTokens: 700 },
     });
   });
 
