@@ -44,8 +44,36 @@ export type BrowserEgressProxy = {
   readonly close: () => Promise<void>;
 };
 
-/** Headers that address the proxy hop itself and must not travel upstream. */
-const HOP_HEADERS = new Set(['proxy-connection', 'proxy-authorization', 'connection', 'keep-alive', 'te', 'trailer', 'upgrade']);
+/**
+ * The request headers forwarded on plaintext http. An allowlist, so the proxy
+ * hop's own headers (Proxy-Authorization, Proxy-Connection, Connection, …)
+ * and anything unusual stay behind. TLS traffic is a CONNECT tunnel and is
+ * not touched by this list.
+ */
+const FORWARDED_REQUEST_HEADERS: readonly string[] = Object.freeze([
+  'host',
+  'user-agent',
+  'accept',
+  'accept-language',
+  'accept-encoding',
+  'content-type',
+  'content-length',
+  'transfer-encoding',
+  'cookie',
+  'referer',
+  'origin',
+  'cache-control',
+  'pragma',
+  'if-none-match',
+  'if-modified-since',
+  'range',
+  'upgrade-insecure-requests',
+  'dnt',
+  'sec-fetch-site',
+  'sec-fetch-mode',
+  'sec-fetch-dest',
+  'sec-fetch-user',
+]);
 
 /** A page can loop refused requests forever; only a bounded tail is kept. */
 export const RECENT_REFUSALS_KEPT = 100;
@@ -138,11 +166,12 @@ export const startBrowserEgressProxy = async ({
     const target = new URL('http://upstream.invalid/');
     target.pathname = requested.pathname;
     target.search = requested.search;
-    // Headers as the raw [name, value, …] list minus the proxy hop's own:
-    // never an object keyed by client-chosen names.
-    const headers: string[] = [];
-    for (let i = 0; i + 1 < req.rawHeaders.length; i += 2) {
-      if (!HOP_HEADERS.has(req.rawHeaders[i].toLowerCase())) headers.push(req.rawHeaders[i], req.rawHeaders[i + 1]);
+    // Only the request headers a browser needs, by FIXED name — never a name
+    // the client chose, and never the proxy hop's own headers.
+    const headers: Record<string, string | string[]> = {};
+    for (const name of FORWARDED_REQUEST_HEADERS) {
+      const value = req.headers[name];
+      if (value !== undefined) headers[name] = value;
     }
     const upstream = httpRequest(target, {
       method: req.method,
