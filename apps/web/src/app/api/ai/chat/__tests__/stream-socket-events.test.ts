@@ -411,6 +411,16 @@ vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
   AIMonitoring: { trackUsage: vi.fn(), trackToolUsage: vi.fn() },
   extractOpenRouterCostDollars: vi.fn(() => undefined),
   extractOpenRouterGenerationIds: vi.fn(() => []),
+  // $2 / $10 per million input / output tokens, and 4 chars per token.
+  calculateCost: vi.fn((_model: string, input = 0, output = 0) => (input * 2 + output * 10) / 1e6),
+  estimateTokens: vi.fn((text: string) => Math.ceil(text.length / 4)),
+}));
+
+// Deterministic hold: 3 cents reserved per chat call.
+vi.mock('@pagespace/lib/monitoring/chat-pricing', () => ({
+  estimateChatHoldCentsForModel: vi.fn(() => 3),
+  calcStepCostDollars: vi.fn(() => 0),
+  shouldAbortAfterStep: vi.fn(() => false),
 }));
 
 vi.mock('@/lib/mcp', () => ({ getMCPBridge: vi.fn() }));
@@ -475,6 +485,10 @@ import type { SessionAuthResult } from '@/lib/auth';
 import { MAX_BROWSER_SESSION_ID_LENGTH } from '@/lib/ai/core/browser-session-id-validation';
 import { createStreamAbortController } from '@/lib/ai/core/stream-abort-registry';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { streamText, type UIMessageChunk } from 'ai';
+import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
+import { createAIProvider } from '@/lib/ai/core/provider-factory';
+import { pipeUIMessageStreamStrippingStart } from '@/lib/ai/core/stream-pipe-utils';
 
 /** A signal that reports aborted=true — simulates onAbort having already fired. */
 const abortedSignal = (): AbortSignal => {
@@ -1605,6 +1619,73 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
       expect(mockCreateStreamLifecycle).not.toHaveBeenCalled();
       const assistantSave = mockSaveMessageToDatabase.mock.calls.find((c: { role?: string }[]) => c[0]?.role === 'assistant');
       expect(assistantSave).toBeUndefined();
+    });
+  });
+
+  // A Stop (or the credit ceiling) aborting the step that is still streaming. ai@6 then
+  // rejects `steps` and `totalUsage` for a single-step turn, which used to settle at $0.
+  describe('billing a turn aborted mid-step', () => {
+    const streamAbortedMidStep = () => {
+      vi.mocked(streamText).mockImplementationOnce(((options: MockStreamTextOptions) => {
+        captured.streamTextOptions = options;
+        const aborted = Promise.reject(new DOMException('This operation was aborted', 'AbortError'));
+        aborted.catch(() => {});
+        return {
+          toUIMessageStream: () => (async function* () {})(),
+          totalUsage: aborted,
+          steps: aborted,
+          finishReason: aborted,
+          response: aborted,
+        };
+      }) as unknown as typeof streamText);
+      vi.mocked(pipeUIMessageStreamStrippingStart).mockImplementationOnce(async (_result, _writer, options) => {
+        const chunks: UIMessageChunk[] = [
+          { type: 'start-step' },
+          { type: 'text-start', id: 't' },
+          { type: 'text-delta', id: 't', delta: 'o'.repeat(200) },
+        ];
+        for (const chunk of chunks) options?.onChunk?.(chunk);
+        options?.onContent?.();
+      });
+    };
+
+    it('given a Stop during the only step, settles the hold ONCE and bills the prompt plus the streamed output', async () => {
+      // Node 20's AbortSignal.any is missing under jsdom; the gated route combines signals with it.
+      const signalAny = (AbortSignal as { any?: unknown }).any;
+      (AbortSignal as unknown as { any: (signals: AbortSignal[]) => AbortSignal }).any = (signals) =>
+        signals.find((s) => s.aborted) ?? signals[0];
+      try {
+        mockCanConsumeAI.mockResolvedValueOnce({
+          allowed: true,
+          holdId: 'hold-1',
+          balanceSnapshot: { netSpendableCents: 1000 },
+        });
+        vi.mocked(createAIProvider).mockResolvedValueOnce({
+          model: {},
+          modelName: 'anthropic/claude-sonnet-5',
+          provider: 'openrouter',
+        } as unknown as Awaited<ReturnType<typeof createAIProvider>>);
+        vi.mocked(createStreamAbortController).mockReturnValueOnce({ streamId: 'stream_123', signal: abortedSignal(), controller: new AbortController() });
+        streamAbortedMidStep();
+
+        await POST(makeRequest());
+        await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+        await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: mockResponseMessage });
+      } finally {
+        (AbortSignal as { any?: unknown }).any = signalAny;
+      }
+
+      const calls = vi.mocked(AIMonitoring.trackUsage).mock.calls;
+      expect(calls).toHaveLength(1);
+      const settled = calls[0][0];
+      expect(settled.holdId).toBe('hold-1');
+      // 50 output tokens were streamed (200 chars); the prompt is estimated, never zero.
+      expect(settled.outputTokens).toBe(50);
+      expect(settled.inputTokens).toBeGreaterThan(0);
+      expect(settled.providerCostDollars).toBeGreaterThan(0);
+      // Never above the 3-cent hold (at the 1.5x markup).
+      expect(settled.providerCostDollars).toBeLessThanOrEqual(0.03 / 1.5);
+      expect(settled.metadata).toMatchObject({ abortedStep: { outputTokens: 50, capped: false } });
     });
   });
 });

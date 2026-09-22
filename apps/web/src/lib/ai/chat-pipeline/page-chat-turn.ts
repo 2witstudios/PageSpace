@@ -22,6 +22,7 @@ import {
   stepCountIs,
   hasToolCall,
   createUIMessageStream,
+  type ModelMessage,
   type TextUIPart,
   type ToolSet,
 } from 'ai';
@@ -129,7 +130,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { trackFeature } from '@pagespace/lib/monitoring/activity-tracker';
-import { AIMonitoring, extractOpenRouterCostDollars, extractOpenRouterGenerationIds } from '@pagespace/lib/monitoring/ai-monitoring';
+import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import type { MCPTool } from '@/types/mcp';
 import { getMCPBridge } from '@/lib/mcp';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
@@ -141,6 +142,8 @@ import {
   removeStream,
 } from '@/lib/ai/core/stream-abort-registry';
 import { runAgentWithRetry, AGENT_MAX_STEPS, isRunAborted, type RunAgentWithRetryResult } from '@/lib/ai/core/run-agent-with-retry';
+import { agentRunBillingFields } from '@/lib/ai/core/agent-run-billing';
+import { estimateSystemPromptTokens, estimateToolDefinitionTokens } from '@pagespace/lib/monitoring/ai-context-calculator';
 import { resolveRequestContext } from '@/lib/ai/core/resolve-request-context';
 import { locationContextToPageContext, pageContextToLocationContext } from '@/lib/ai/shared/buildPageContext';
 import type { LocationContext } from '@/lib/ai/shared/chat-types';
@@ -215,6 +218,9 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
   // summed usage/steps for billing plus the success flag, abort detection, and retry
   // observability — so no separate usage/steps promises are needed.
   let agentRun: RunAgentWithRetryResult | undefined;
+  // System prompt + tool definition tokens sent with every step — prices the prompt of
+  // a step interrupted by an abort (see agentRunBillingFields). Only called on that path.
+  let promptOverheadTokens = (): number => 0;
   // Hoisted to outer scope so the catch-path trackUsage call bills on the real
   // backend model id rather than the client-supplied alias (selectedModel).
   let resolvedModelName: string | undefined;
@@ -1779,6 +1785,24 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
           // PageSpace alias in currentModel — vision/tool detection pattern-matches the
           // model string, so an alias yields wrong capability flags.
           const modelCapabilitiesForTools = await getModelCapabilities(resolvedModelName!, currentProvider);
+          promptOverheadTokens = () =>
+            estimateSystemPromptTokens(systemPrompt) +
+            estimateToolDefinitionTokens(filteredTools as Record<string, unknown>);
+          // Volatile per-turn data (timestamp/location/mention/command) is appended to the
+          // last user message so the system prefix stays byte-stable and provider prefix
+          // caches survive. One definition, so the abort-billing prompt estimate prices
+          // exactly what the provider was sent.
+          const toSentMessages = (messages: ModelMessage[]): ModelMessage[] =>
+            appendTurnContextToLastUserMessage(
+              messages,
+              buildVolatileTurnContext({
+                timestampPrompt: timestampSystemPrompt,
+                locationPrompt,
+                mentionPrompt: mentionSystemPrompt,
+                commandCatalogPrompt: userCommandCatalog.catalogPrompt,
+                commandPrompt: commandSystemPrompt,
+              }),
+            );
           // Server-side, in-request retry: if an attempt drops mid-loop (OpenRouter
           // disconnect) or ends mid-tool without the finish tool, transparently
           // re-drive the loop under one message envelope. The loop lives inside
@@ -1799,20 +1823,9 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
             maxSteps: AGENT_MAX_STEPS,
             startTimeMs: startTime,
             logger: loggers.ai,
+            toSentMessages,
             buildStreamText: (messages) => {
-              // Volatile per-turn data (timestamp/location/mention/command) is
-              // appended to the last user message so the system prefix stays
-              // byte-stable and provider prefix caches (Anthropic/OpenAI/Gemini)
-              // are not invalidated on every turn — including turns where only
-              // the user's current page/drive changed.
-              const turnContext = buildVolatileTurnContext({
-                timestampPrompt: timestampSystemPrompt,
-                locationPrompt,
-                mentionPrompt: mentionSystemPrompt,
-                commandCatalogPrompt: userCommandCatalog.catalogPrompt,
-                commandPrompt: commandSystemPrompt,
-              });
-              const messagesWithContext = appendTurnContextToLastUserMessage(messages, turnContext);
+              const messagesWithContext = toSentMessages(messages);
               // Apply cache breakpoints:
               //   A) last message — covers system+tools+history every step after step 1.
               //   B) stableBoundaryIndex — the first tail message after the compaction
@@ -2072,13 +2085,13 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
             // hold and feeds unit-economics observability.
             const duration = Date.now() - startTime;
 
-            const usage = agentRun?.accumulatedUsage;
-            const steps = agentRun?.accumulatedSteps;
-            const inputTokens = usage?.inputTokens ?? undefined;
-            const outputTokens = usage?.outputTokens ?? undefined;
-            const totalTokens =
-              usage?.totalTokens ??
-              ((usage?.inputTokens || 0) + (usage?.outputTokens || 0) || undefined);
+            // Provider usage + cost, plus the step an abort interrupted (which the
+            // provider charged for but reports no usage on) — see agentRunBillingFields.
+            const { abortedStep, ...billing } = agentRunBillingFields({
+              agentRun,
+              model: resolvedModelName!,
+              promptOverheadTokens,
+            });
 
             // Use enhanced AI monitoring with token usage from SDK
             await AIMonitoring.trackUsage({
@@ -2086,13 +2099,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
               provider: resolvedProvider ?? currentProvider,
               model: resolvedModelName!,
               source: 'chat',
-              inputTokens,
-              outputTokens,
-              totalTokens,
-              cachedInputTokens: usage?.cachedInputTokens,
-              reasoningTokens: usage?.reasoningTokens,
-              providerCostDollars: extractOpenRouterCostDollars(steps),
-              openrouterGenerationIds: extractOpenRouterGenerationIds(steps),
+              ...billing,
               duration,
               conversationId, // Use actual conversation ID instead of pageId
               messageId,
@@ -2113,8 +2120,9 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
                 toolCallsCount: extractedToolCalls.length,
                 toolResultsCount: extractedToolResults.length,
                 hasTools: extractedToolCalls.length > 0 || extractedToolResults.length > 0,
-                reasoningTokens: usage?.reasoningTokens,
-                cachedInputTokens: usage?.cachedInputTokens,
+                reasoningTokens: billing.reasoningTokens,
+                cachedInputTokens: billing.cachedInputTokens,
+                ...(abortedStep ? { abortedStep } : {}),
                 retryAttempts: agentRun?.attempts,
                 retryOutcome: agentRun?.finalOutcome,
                 retryTerminalReason: agentRun?.terminalReason,
@@ -2246,25 +2254,21 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       responseTime: Date.now() - startTime
     });
 
-    const usage = agentRun?.accumulatedUsage;
-    const steps = agentRun?.accumulatedSteps;
+    const billingModel = resolvedModelName ?? selectedModel ?? 'unknown';
+    const { abortedStep, ...billing } = agentRunBillingFields({
+      agentRun,
+      model: billingModel,
+      promptOverheadTokens,
+    });
 
     // Track AI usage even for errors using enhanced monitoring
     // Note: conversationId might not be available in error path, use chatId as fallback
     await AIMonitoring.trackUsage({
       userId: userId || 'unknown',
       provider: (resolvedProvider ?? selectedProvider) || 'unknown',
-      model: resolvedModelName ?? selectedModel ?? 'unknown',
+      model: billingModel,
       source: 'chat',
-      inputTokens: usage?.inputTokens ?? undefined,
-      outputTokens: usage?.outputTokens ?? undefined,
-      totalTokens:
-        usage?.totalTokens ??
-        ((usage?.inputTokens || 0) + (usage?.outputTokens || 0) || undefined),
-      cachedInputTokens: usage?.cachedInputTokens,
-      reasoningTokens: usage?.reasoningTokens,
-      providerCostDollars: extractOpenRouterCostDollars(steps),
-      openrouterGenerationIds: extractOpenRouterGenerationIds(steps),
+      ...billing,
       duration: Date.now() - startTime,
       conversationId: conversationId || chatId, // Use conversationId if available, fallback to chatId
       pageId: chatId,
@@ -2274,8 +2278,9 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       error: error instanceof Error ? error.message : 'Unknown error',
       metadata: {
         errorType: error instanceof Error ? error.name : 'UnknownError',
-        reasoningTokens: usage?.reasoningTokens,
-        cachedInputTokens: usage?.cachedInputTokens,
+        reasoningTokens: billing.reasoningTokens,
+        cachedInputTokens: billing.cachedInputTokens,
+        ...(abortedStep ? { abortedStep } : {}),
       }
     });
     // The error-path trackUsage above released the hold; don't double-release.
