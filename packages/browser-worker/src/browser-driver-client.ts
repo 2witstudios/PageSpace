@@ -166,9 +166,16 @@ export const createBrowserDriver = async ({
           return ok({ kind: 'screenshot', page: await summarize(page), image: await screenshot(page) });
         case 'tabs': {
           if (operation.action === 'open') {
+            const previous = active;
             const opened = await context.newPage();
             const failure = await navigate(opened, operation.url);
-            if (failure !== null) return failure;
+            if (failure !== null) {
+              // A refused or failed open leaves no stray blank tab, and the
+              // agent keeps working on the page it had.
+              await opened.close().catch(() => undefined);
+              active = previous;
+              return failure;
+            }
           } else if (operation.action === 'select' || operation.action === 'close') {
             const tab = findTab(operation.tabId);
             if (tab === null) return refused('tab-not-found', `No tab ${operation.tabId}`);

@@ -131,6 +131,9 @@ const defaultResolve = async (host: string): Promise<readonly string[]> => {
 
 const defaultDial = (address: string, port: number): Socket => netConnect({ host: address, port });
 
+/** How long one checked address gets before the next is tried. */
+const DIAL_ATTEMPT_TIMEOUT_MS = 5_000;
+
 export const startBrowserEgressProxy = async ({
   allowedOrigins,
   resolve = defaultResolve,
@@ -148,6 +151,33 @@ export const startBrowserEgressProxy = async ({
     refusals.push(refusal);
     if (refusals.length > RECENT_REFUSALS_KEPT) refusals.shift();
     onRefused?.(refusal);
+  };
+
+  /**
+   * The first checked address that connects, in order, or `null`. Only
+   * addresses the decision already checked are ever tried, so falling back
+   * never widens the policy; it keeps a dual-stack site reachable from a
+   * substrate with one address family.
+   */
+  const dialChecked = async (addresses: readonly string[], port: number): Promise<Socket | null> => {
+    for (const address of addresses) {
+      const socket = dial(address, port);
+      const connected = await new Promise<boolean>((done) => {
+        const timer = setTimeout(() => done(false), DIAL_ATTEMPT_TIMEOUT_MS);
+        timer.unref();
+        socket.once('connect', () => {
+          clearTimeout(timer);
+          done(true);
+        });
+        socket.once('error', () => {
+          clearTimeout(timer);
+          done(false);
+        });
+      });
+      if (connected) return socket;
+      socket.destroy();
+    }
+    return null;
   };
 
   const decide = async (url: string): Promise<NavigationVerdict> => {
@@ -169,19 +199,22 @@ export const startBrowserEgressProxy = async ({
       client.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n');
       return;
     }
-    const upstream = dial(verdict.connectAddress, verdict.transportOrigin.port);
     tunnels.add(client);
-    tunnels.add(upstream);
     client.once('close', () => tunnels.delete(client));
+    const upstream = await dialChecked(verdict.connectAddresses, verdict.transportOrigin.port);
+    if (upstream === null || client.destroyed) {
+      upstream?.destroy();
+      client.destroy();
+      return;
+    }
+    tunnels.add(upstream);
     upstream.once('close', () => tunnels.delete(upstream));
-    upstream.once('connect', () => {
-      client.write('HTTP/1.1 200 Connection Established\r\n\r\n');
-      if (head.length > 0) upstream.write(head);
-      upstream.pipe(client);
-      client.pipe(upstream);
-    });
     upstream.on('error', () => client.destroy());
     client.once('close', () => upstream.destroy());
+    client.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+    if (head.length > 0) upstream.write(head);
+    upstream.pipe(client);
+    client.pipe(upstream);
   };
 
   const onRequest = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
@@ -200,7 +233,11 @@ export const startBrowserEgressProxy = async ({
       req.socket.destroy();
       return;
     }
-    const { connectAddress, transportOrigin } = verdict;
+    const socket = await dialChecked(verdict.connectAddresses, verdict.transportOrigin.port);
+    if (socket === null) {
+      res.writeHead(502).end();
+      return;
+    }
     // The upstream socket is `dial(connectAddress)` — the address the
     // decision checked — so the request URL carries only the path; its
     // origin is a placeholder no DNS lookup or connection ever uses. The
@@ -219,7 +256,7 @@ export const startBrowserEgressProxy = async ({
     const upstream = httpRequest(target, {
       method: req.method,
       headers,
-      createConnection: () => dial(connectAddress, transportOrigin.port),
+      createConnection: () => socket,
     });
     upstream.on('response', (response) => {
       for (const name of FORWARDED_RESPONSE_HEADERS) {

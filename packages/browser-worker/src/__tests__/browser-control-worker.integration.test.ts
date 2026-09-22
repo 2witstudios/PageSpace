@@ -10,7 +10,7 @@
  * private addresses are still refused, and that is asserted below.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createServer, type Server } from 'node:http';
+import { createServer, request as httpRequest, type Server } from 'node:http';
 import { connect, type AddressInfo } from 'node:net';
 import { execFileSync } from 'node:child_process';
 import { mkdtemp, readdir, rm, stat } from 'node:fs/promises';
@@ -115,19 +115,25 @@ describe('browser control worker (real Chromium)', () => {
     const psOut = execFileSync('ps', ['-axww', '-o', 'pid=,command=']).toString();
     const browserLines = psOut.split('\n').filter((line) => line.includes(profileRoot) && line.includes('--user-data-dir'));
     const pids = browserLines.map((line) => line.trim().split(/\s+/)[0]);
-    const listening = pids.length === 0 ? '' : (() => {
+    // lsof exits 1 both for "nothing found" and for real failures, so the
+    // probe is only believed if the same command finds THIS process's own
+    // listening sockets (the site and the worker port) — a control.
+    const listeningOf = (pidList: string): string => {
       try {
-        return execFileSync('lsof', ['-a', '-nP', '-iTCP', '-sTCP:LISTEN', '-p', pids.join(',')]).toString();
+        return execFileSync('lsof', ['-a', '-nP', '-iTCP', '-sTCP:LISTEN', '-p', pidList]).toString();
       } catch {
         return '';
       }
-    })();
+    };
+    const control = listeningOf(String(process.pid));
+    const listening = pids.length === 0 ? 'no browser found' : listeningOf(pids.join(','));
     const contexts = await readdir(profileRoot);
     const profileMode = (await stat(join(profileRoot, contexts[0]))).mode & 0o777;
     assert({
       given: 'a running session',
       should: 'show a browser launched with --remote-debugging-pipe, no --remote-debugging-port, no listening TCP socket, and a 0700 profile',
       actual: {
+        probeWorks: control.includes('LISTEN'),
         browserFound: browserLines.length > 0,
         pipe: browserLines.some((l) => l.includes('--remote-debugging-pipe')),
         port: browserLines.some((l) => l.includes('--remote-debugging-port')),
@@ -135,7 +141,7 @@ describe('browser control worker (real Chromium)', () => {
         contexts: contexts.length,
         profileMode: profileMode.toString(8),
       },
-      expected: { browserFound: true, pipe: true, port: false, listening: '', contexts: 1, profileMode: '700' },
+      expected: { probeWorks: true, browserFound: true, pipe: true, port: false, listening: '', contexts: 1, profileMode: '700' },
     });
   });
 
@@ -188,6 +194,20 @@ describe('browser control worker (real Chromium)', () => {
         submissions: [...submissions],
       },
       expected: { navigated: 'Contact us', typed: true, clicked: 'Thanks', submissions: ['name=Ada+Lovelace'] },
+    });
+  });
+
+  it('leaves no stray tab when opening one is refused', async () => {
+    await agentOp({ kind: 'navigate', url: 'http://www.form.test/contact' });
+    const before = await agentOp({ kind: 'tabs', action: 'list' });
+    const refused = await agentOp({ kind: 'tabs', action: 'open', url: 'http://rebind.form-attack.test/' });
+    const after = await agentOp({ kind: 'tabs', action: 'list' });
+    const tabs = (r: BrowserControlResponse) => (r.ok && r.result.kind === 'tabs' ? [r.result.tabs.length, r.result.activeTabId] : r);
+    assert({
+      given: 'a tab open to a refused destination',
+      should: 'refuse it, close the blank tab, and keep the previous tab active',
+      actual: { refused: refused.ok ? 'opened' : refused.refusal.reason, same: JSON.stringify(tabs(before)) === JSON.stringify(tabs(after)) },
+      expected: { refused: 'navigation-denied', same: true },
     });
   });
 
@@ -355,6 +375,33 @@ describe('egress proxy resilience', () => {
       should: 'stay up and refuse the second',
       actual: stillAnswers,
       expected: 'HTTP/1.1 403 Forbidden',
+    });
+  });
+
+  it('falls back to the next checked address when the first cannot be dialled', async () => {
+    const dialled: string[] = [];
+    const proxy = await startBrowserEgressProxy({
+      allowedOrigins: null,
+      resolve: async () => ['2606:2800:220:1::1', FAKE_PUBLIC],
+      dial: (address) => {
+        dialled.push(address);
+        return address === FAKE_PUBLIC ? connect({ host: '127.0.0.1', port: sitePort }) : connect({ host: '127.0.0.1', port: 1 });
+      },
+    });
+    const status = await new Promise<number>((done) => {
+      const request = httpRequest({ host: '127.0.0.1', port: Number(new URL(proxy.url).port), path: 'http://dual.form.test/contact', headers: { host: 'dual.form.test' } }, (response) => {
+        response.resume();
+        done(response.statusCode ?? 0);
+      });
+      request.on('error', () => done(-1));
+      request.end();
+    });
+    await proxy.close();
+    assert({
+      given: 'a dual-stack answer whose first (IPv6) address refuses the connection',
+      should: 'dial the next checked address and serve the page',
+      actual: { status, dialled },
+      expected: { status: 200, dialled: ['2606:2800:220:1::1', FAKE_PUBLIC] },
     });
   });
 });
