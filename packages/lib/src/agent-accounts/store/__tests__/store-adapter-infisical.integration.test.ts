@@ -63,12 +63,12 @@ import type {
   WriteDigestKey,
 } from '../store-adapter';
 import type { ConsentId } from '../../grant';
-import type { ConsumeOutcome } from '../../replay-store-repository';
 import { digestBindings } from '../digest-bindings';
 import { digestPlaneScope } from '../digest-plane-scope';
 import { createInfisicalClient, type InfisicalClient } from '../infisical-client';
 import { createPlaneMetadataRepository, type PlaneMetadataRepository } from '../plane-metadata-repository';
 import { createInfisicalStoreAdapter } from '../store-adapter-infisical';
+import { createConsentLedgerRepository, type ConsentLedger } from '../consent-ledger-repository';
 
 const INFISICAL_URL = process.env.INFISICAL_DEV_URL ?? 'http://localhost:8080';
 const INFISICAL_ADMIN_TOKEN = process.env.INFISICAL_DEV_ADMIN_TOKEN;
@@ -133,17 +133,8 @@ function recordOver(bindings: PlaneBindings, scope: PlaneScope, consenters: Plan
   return { bindings: { ...bindings, allowedOrigins: scope.allowedOrigins, policyDigest: digestPlaneScope({ scope, hash }) }, scope, consenters };
 }
 
-/** An in-memory single-use consent ledger standing in for the replay store (its own integration test covers the real one). */
-function memoryConsentLedger() {
-  const consumed = new Set<string>();
-  return {
-    consume: async ({ consentId }: { readonly consentId: ConsentId; readonly expiresAt: number; readonly now: number }): Promise<ConsumeOutcome> => {
-      if (consumed.has(consentId)) return 'replayed';
-      consumed.add(consentId);
-      return 'consumed';
-    },
-  };
-}
+/** The REAL single-use consent ledger, in the plane's own metadata store (G2 ruling 3). */
+const planeConsentLedger = () => createConsentLedgerRepository({ pool: pool as never });
 
 type Loose<I extends { readonly identity: StoreIdentity }> = Omit<I, 'identity' | 'scope' | 'consenters'> & {
   readonly identity: Omit<StoreIdentity, 'channel'> & { readonly channel?: StoreChannel };
@@ -271,11 +262,11 @@ afterAll(async () => {
 function makeRawAdapter({
   wrapMetadata = (m: PlaneMetadataRepository) => m,
   wrapInfisical = (c: InfisicalClient) => c,
-  consentLedger = memoryConsentLedger(),
+  consentLedger = planeConsentLedger(),
 }: {
   readonly wrapMetadata?: (m: PlaneMetadataRepository) => PlaneMetadataRepository;
   readonly wrapInfisical?: (c: InfisicalClient) => InfisicalClient;
-  readonly consentLedger?: ReturnType<typeof memoryConsentLedger>;
+  readonly consentLedger?: ConsentLedger;
 } = {}): StoreAdapter {
   const infisical = wrapInfisical(createInfisicalClient({ baseUrl: INFISICAL_URL, environment: 'dev' }));
   const realMetadata = createPlaneMetadataRepository({ pool: pool as never });
@@ -1187,7 +1178,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
       now: () => Date.now(),
       consentPublicKey: CONSENT_PUBLIC_KEY,
       verify: verifyEd25519,
-      consentLedger: memoryConsentLedger(),
+      consentLedger: planeConsentLedger(),
     });
     const settle = (promise: Promise<unknown>) => promise.catch((error: unknown) => ({ threw: String(error) }));
 
@@ -1356,7 +1347,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
   });
 
   it('given one owner consent applied twice, should refuse the second as consent_invalid — consent is single-use (G1c E2)', async () => {
-    const adapter = makeAdapter({ consentLedger: memoryConsentLedger() });
+    const adapter = makeAdapter({ consentLedger: planeConsentLedger() });
     const accountId = `acct-g1c-consent-once-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
     const identity = baseIdentity();
@@ -1467,6 +1458,31 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
       describe: { ok: false, reason: 'store_unavailable' },
       row: [{ current_version: 1, previous_version: null, pending_version: 2 }],
     });
+  });
+
+  // G2 ruling 3: the consent single-use ledger lives in the PLANE's metadata store. The main-DB writer
+  // is untrusted (R3), so a ledger it can delete rows from is a ledger it can replay a consent through.
+  it('given one owner consent presented to two plane replicas, should be consumed by exactly one, recorded in the plane metadata store (G2 ruling 3)', async () => {
+    const replicaA = createConsentLedgerRepository({ pool: pool as never });
+    const replicaB = createConsentLedgerRepository({ pool: pool as never });
+    const consentId = `consent-g2-ledger-${NOW}` as ConsentId;
+    const now = Date.now();
+    const outcomes = await Promise.all([replicaA.consume({ consentId, expiresAt: now + 300_000, now }), replicaB.consume({ consentId, expiresAt: now + 300_000, now })]);
+    const rows = await pool.query('SELECT consent_id FROM agent_account_consent_ledger WHERE consent_id = $1', [consentId]);
+
+    const actual = { outcomes: [...outcomes].sort(), rows: rows.rows };
+    const expected = { outcomes: ['consumed', 'replayed'], rows: [{ consent_id: consentId }] };
+    expect(actual).toEqual(expected);
+  });
+
+  it('given a plane ledger whose metadata store is unreachable, should answer unavailable — never assume fresh (G2 ruling 3)', async () => {
+    const deadPool = new Pool({ connectionString: 'postgres://plane_metadata:plane_metadata@127.0.0.1:1/plane_metadata', connectionTimeoutMillis: 500 });
+    const ledger = createConsentLedgerRepository({ pool: deadPool as never });
+    const now = Date.now();
+    const actual = await ledger.consume({ consentId: `consent-g2-dead-${NOW}` as ConsentId, expiresAt: now + 300_000, now });
+    await deadPool.end();
+    const expected = 'unavailable';
+    expect(actual).toEqual(expected);
   });
 
   // G2 ruling E1(a): the replacing write's login fails at REAL Infisical (wrong client secret), so the
@@ -1585,7 +1601,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
   });
 
   it('given a revoked account, rebind should refuse revoked and leave the consent unspent (G1c review LOW)', async () => {
-    const ledger = memoryConsentLedger();
+    const ledger = planeConsentLedger();
     const adapter = makeAdapter({ consentLedger: ledger });
     const accountId = `acct-g1c-rebind-revoked-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
