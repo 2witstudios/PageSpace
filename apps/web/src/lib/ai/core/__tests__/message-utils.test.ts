@@ -364,6 +364,18 @@ describe('tool approval states — round trip through the DB shape', () => {
     ]);
   });
 
+  it('given an approved call that then FAILED (output-error + approval), should reconstruct the error AND the approval, and the sanitizer should keep it for the model', async () => {
+    const msg = makeMessage([
+      { type: 'tool-trash_page', toolCallId: 'tc1', toolName: 'trash_page', input: { pageId: 'p1' }, state: 'output-error', errorText: 'refused at execution time', approval: { id: 'ap1', approved: true } },
+    ] as unknown as UIMessage['parts']);
+    const reconstructed = await convertDbMessageToUIMessage(row(extractToolCalls(msg), extractToolResults(msg)));
+    expect(reconstructed.parts).toEqual([
+      { type: 'tool-trash_page', toolCallId: 'tc1', toolName: 'trash_page', input: { pageId: 'p1' }, state: 'output-error', errorText: 'refused at execution time', approval: { id: 'ap1', approved: true } },
+    ]);
+    const [sanitized] = sanitizeMessagesForModel([reconstructed]);
+    expect(sanitized.parts.map((p) => (p as { state?: string }).state)).toEqual(['output-error']);
+  });
+
   it('given a malformed approval record on the call row, should drop it rather than reconstruct garbage', async () => {
     const reconstructed = await convertDbMessageToUIMessage(
       row([{ toolCallId: 'tc1', toolName: 'trash_page', input: {}, state: 'approval-requested', approval: { nope: 1 } }], []),
@@ -388,5 +400,15 @@ describe('sanitizeMessagesForModel — approval states', () => {
       ]),
     ]);
     expect(out.parts.map((p) => (p as { state?: string }).state)).toEqual(['output-denied', 'output-available']);
+  });
+
+  it('keeps an output-error that carries an approval (an approved call that failed) so the model sees the failure instead of retrying under a grant; a plain output-error is dropped as before', () => {
+    const [out] = sanitizeMessagesForModel([
+      makeMessage([
+        { ...part('output-error', { errorText: 'refused at execution time', approval: { id: 'a', approved: true } }), toolCallId: 'tc-approved-error' } as unknown as UIMessage['parts'][number],
+        { ...part('output-error', { errorText: 'ordinary failure' }), toolCallId: 'tc-plain-error' } as unknown as UIMessage['parts'][number],
+      ]),
+    ]);
+    expect(out.parts.map((p) => (p as { toolCallId?: string }).toolCallId)).toEqual(['tc-approved-error']);
   });
 });
