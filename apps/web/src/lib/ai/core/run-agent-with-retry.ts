@@ -83,11 +83,18 @@ export interface AbortedStepEstimate {
   /** Text of the messages the aborted attempt sent (system prompt and tools excluded). */
   promptText: string;
   /**
-   * Provider-reported input + output tokens of the aborted attempt's last FINISHED
-   * step. The interrupted step re-sends that whole context, so it is a floor for its
-   * prompt. Absent when no step finished before the abort.
+   * Provider-reported input + visible output tokens of the aborted attempt's last
+   * FINISHED step. The interrupted step re-sends that context, so it is a floor for its
+   * prompt. Reasoning is left out: not every provider re-sends it as input. Absent when
+   * no step finished before the abort.
    */
   priorStepContextTokens?: number;
+  /**
+   * The part of that context the provider serves from its prompt cache on the
+   * interrupted step: what the prior step read from the cache plus what it wrote to it.
+   * Billed at the cache-read rate.
+   */
+  priorStepCachedTokens?: number;
   /** Text, reasoning and tool input streamed for the interrupted step before the abort. */
   outputText: string;
 }
@@ -314,12 +321,19 @@ export async function runAgentWithRetry(
     // landing in between leaves the step "open" here while `steps` already bills it
     // from provider usage. Estimate only a step the SDK has not recorded.
     if (abortSignal.aborted && stepOpen && steps.length <= finishedStepChunks) {
-      const priorStepUsage = (steps.at(-1) as { usage?: LanguageModelUsage } | undefined)?.usage;
+      const prior = (steps.at(-1) as { usage?: LanguageModelUsage } | undefined)?.usage;
+      const priorReasoning = prior?.outputTokenDetails?.reasoningTokens ?? prior?.reasoningTokens ?? 0;
       abortedStep = {
         promptText: messagesText(toSentMessages(baseMessages)),
-        priorStepContextTokens: hasTokenCounts(priorStepUsage)
-          ? (priorStepUsage?.inputTokens ?? 0) + (priorStepUsage?.outputTokens ?? 0)
-          : undefined,
+        ...(prior && hasTokenCounts(prior)
+          ? {
+              priorStepContextTokens:
+                (prior.inputTokens ?? 0) + Math.max((prior.outputTokens ?? 0) - priorReasoning, 0),
+              priorStepCachedTokens:
+                (prior.inputTokenDetails?.cacheReadTokens ?? prior.cachedInputTokens ?? 0) +
+                (prior.inputTokenDetails?.cacheWriteTokens ?? 0),
+            }
+          : {}),
         outputText: inFlightOutput,
       };
     }
