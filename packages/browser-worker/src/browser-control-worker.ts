@@ -36,6 +36,7 @@ import { verifyControlInstruction } from './verify-control-instruction.js';
 import { decideActionAdmission } from './decide-action-admission.js';
 import { decideObservationRelease } from './decide-observation-release.js';
 import { decideNavigation } from './decide-navigation.js';
+import { decideWorkerExpiry } from './decide-worker-expiry.js';
 import { reduceHumanControlMode, type HumanControlEvent, type HumanControlTransition } from './reduce-human-control-mode.js';
 import { createBrowserDriver, type BrowserDriver, type BrowserDriverOptions } from './browser-driver-client.js';
 import { startBrowserEgressProxy, type BrowserEgressProxy, type BrowserEgressProxyOptions } from './browser-egress-proxy-adapter.js';
@@ -64,6 +65,10 @@ export type BrowserControlWorkerOptions = {
   readonly clock?: () => number;
   readonly launchDriver?: (options: BrowserDriverOptions) => Promise<BrowserDriver>;
   readonly egress?: Pick<BrowserEgressProxyOptions, 'resolve' | 'dial'>;
+  /** No accepted instruction for this long ⇒ close the browser, delete the profile, stop (`decideWorkerExpiry`). */
+  readonly idleShutdownMs?: number;
+  /** Called once the worker has shut itself down for idleness. */
+  readonly onExpire?: () => void;
 };
 
 export type BrowserControlWorker = {
@@ -103,6 +108,8 @@ export const startBrowserControlWorker = async ({
   clock = Date.now,
   launchDriver = createBrowserDriver,
   egress,
+  idleShutdownMs = 15 * 60 * 1000,
+  onExpire,
 }: BrowserControlWorkerOptions): Promise<BrowserControlWorker> => {
   const controlKey = importControlKey(controlPublicKey);
   const verify = (message: Uint8Array, signature: Uint8Array): boolean => {
@@ -125,6 +132,7 @@ export const startBrowserControlWorker = async ({
   let agentQueue: Promise<void> = Promise.resolve();
   let controlQueue: Promise<unknown> = Promise.resolve();
   const seenNonces = new Map<string, number>();
+  let lastInstructedAt = clock();
   const counters = {
     agentResultsReleased: 0,
     agentResultsReleasedOutsideAgentControl: 0,
@@ -247,6 +255,7 @@ export const startBrowserControlWorker = async ({
     });
     if (!verdict.ok) return { status: 401, body: { error: verdict.reason } };
     seenNonces.set(verdict.claims.nonce, verdict.claims.exp);
+    lastInstructedAt = now;
 
     const { actor, command } = verdict.claims;
     switch (command.type) {
@@ -285,10 +294,12 @@ export const startBrowserControlWorker = async ({
   const port = typeof address === 'object' && address !== null ? address.port : listen.port;
   const host = listen.host.includes(':') ? `[${listen.host}]` : listen.host;
 
-  return {
-    url: `http://${host}:${port}`,
-    audit,
-    close: async () => {
+  let expiryTimer: ReturnType<typeof setTimeout> | null = null;
+  let closed: Promise<void> | null = null;
+  const close = (): Promise<void> => {
+    if (closed !== null) return closed;
+    if (expiryTimer !== null) clearTimeout(expiryTimer);
+    closed = (async () => {
       await new Promise<void>((done) => {
         server.closeAllConnections();
         server.close(() => done());
@@ -296,6 +307,19 @@ export const startBrowserControlWorker = async ({
       await driver?.close();
       driver = null;
       await proxy.close();
-    },
+    })();
+    return closed;
   };
+
+  const scheduleExpiry = (delayMs: number): void => {
+    expiryTimer = setTimeout(() => {
+      const expiry = decideWorkerExpiry({ lastInstructedAt, now: clock(), idleShutdownMs });
+      if (!expiry.expire) return scheduleExpiry(expiry.recheckInMs);
+      void close().then(() => onExpire?.());
+    }, delayMs);
+    expiryTimer.unref();
+  };
+  scheduleExpiry(idleShutdownMs);
+
+  return { url: `http://${host}:${port}`, audit, close };
 };

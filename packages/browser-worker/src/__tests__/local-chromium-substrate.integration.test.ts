@@ -70,3 +70,32 @@ describe('local chromium substrate', () => {
     });
   });
 });
+
+describe('worker idle expiry', () => {
+  it('closes the browser and deletes the profile when nobody instructs it', async () => {
+    const profileRoot = await mkdtemp(join(tmpdir(), 'bw-expiry-'));
+    let expired = false;
+    const worker = await startBrowserControlWorker({
+      sessionId: 'bws_expiry',
+      controlPublicKey: signer.publicKey,
+      allowedOrigins: null,
+      listen: { host: '127.0.0.1', port: 0 },
+      profileRoot,
+      idleShutdownMs: 1_500,
+      onExpire: () => {
+        expired = true;
+      },
+    });
+    const before = (await readdir(profileRoot)).length;
+    await new Promise((done) => setTimeout(done, 4_000));
+    const reachable = await fetch(`${worker.url}/healthz`).then(() => true, () => false);
+    const after = (await readdir(profileRoot)).length;
+    await rm(profileRoot, { recursive: true, force: true });
+    assert({
+      given: 'a worker with a 1.5 s idle limit that receives no instruction',
+      should: 'expire on its own: profile deleted, port closed, onExpire called',
+      actual: { before, after, reachable, expired },
+      expected: { before: 1, after: 0, reachable: false, expired: true },
+    });
+  });
+});

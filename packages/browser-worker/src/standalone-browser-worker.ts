@@ -22,6 +22,7 @@ const main = async (): Promise<void> => {
     listen: { host: config.host, port: config.port },
     profileRoot: config.profileRoot ?? undefined,
     executablePath: config.executablePath ?? undefined,
+    onExpire: () => process.exit(0),
   });
   process.stdout.write(`${JSON.stringify({ listening: worker.url })}\n`);
 
