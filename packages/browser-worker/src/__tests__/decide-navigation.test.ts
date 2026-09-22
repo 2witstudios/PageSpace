@@ -91,7 +91,7 @@ describe('decideNavigation', () => {
         given: 'a public IPv4 literal',
         should: 'allow without resolution and pin the connection to the literal',
         actual: decideNavigation({ url: 'https://8.8.8.8/', resolvedAddresses: null, allowedOrigins: null }),
-        expected: { verdict: 'allow', transportOrigin: { secure: true, host: '8.8.8.8', port: 443 }, connectAddress: '8.8.8.8' },
+        expected: { verdict: 'allow', transportOrigin: { secure: true, host: '8.8.8.8', port: 443 }, connectAddress: '8.8.8.8', connectAddresses: ['8.8.8.8'] },
       });
     });
 
@@ -104,6 +104,7 @@ describe('decideNavigation', () => {
           verdict: 'allow',
           transportOrigin: { secure: true, host: '[2606:4700:4700::1111]', port: 443 },
           connectAddress: '2606:4700:4700::1111',
+          connectAddresses: ['2606:4700:4700::1111'],
         },
       });
     });
@@ -124,7 +125,7 @@ describe('decideNavigation', () => {
         given: 'a hostname resolving only to public addresses',
         should: 'allow and pin the connection to the first address, so a second lookup cannot redirect it',
         actual: decideNavigation({ url: 'https://example.com/', resolvedAddresses: [PUBLIC_V4, '93.184.216.35'], allowedOrigins: null }),
-        expected: { verdict: 'allow', transportOrigin: { secure: true, host: 'example.com', port: 443 }, connectAddress: PUBLIC_V4 },
+        expected: { verdict: 'allow', transportOrigin: { secure: true, host: 'example.com', port: 443 }, connectAddress: PUBLIC_V4, connectAddresses: [PUBLIC_V4, '93.184.216.35'] },
       });
     });
 
@@ -181,7 +182,7 @@ describe('decideNavigation', () => {
         given: 'an http URL',
         should: 'allow it as a plaintext transport origin on port 80',
         actual: decideNavigation({ url: 'http://example.com/', resolvedAddresses: [PUBLIC_V4], allowedOrigins: null }),
-        expected: { verdict: 'allow', transportOrigin: { secure: false, host: 'example.com', port: 80 }, connectAddress: PUBLIC_V4 },
+        expected: { verdict: 'allow', transportOrigin: { secure: false, host: 'example.com', port: 80 }, connectAddress: PUBLIC_V4, connectAddresses: [PUBLIC_V4] },
       });
     });
 
@@ -194,8 +195,8 @@ describe('decideNavigation', () => {
           decideNavigation({ url: 'ws://example.com/socket', resolvedAddresses: [PUBLIC_V4], allowedOrigins: null }),
         ],
         expected: [
-          { verdict: 'allow', transportOrigin: { secure: true, host: 'example.com', port: 443 }, connectAddress: PUBLIC_V4 },
-          { verdict: 'allow', transportOrigin: { secure: false, host: 'example.com', port: 80 }, connectAddress: PUBLIC_V4 },
+          { verdict: 'allow', transportOrigin: { secure: true, host: 'example.com', port: 443 }, connectAddress: PUBLIC_V4, connectAddresses: [PUBLIC_V4] },
+          { verdict: 'allow', transportOrigin: { secure: false, host: 'example.com', port: 80 }, connectAddress: PUBLIC_V4, connectAddresses: [PUBLIC_V4] },
         ],
       });
     });

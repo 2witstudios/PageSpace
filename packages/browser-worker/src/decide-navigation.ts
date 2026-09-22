@@ -29,9 +29,11 @@
  *     address must be public. One private address in the answer denies the
  *     whole name: that is the DNS-rebinding case, where the connection could
  *     land on either.
- *  7. An allowed connection is PINNED to `connectAddress`, an address this
- *     function checked. The caller connects to that address and never looks
- *     the name up again, so a rebinding resolver gets no second answer.
+ *  7. An allowed connection is PINNED to `connectAddresses`, the addresses
+ *     this function checked, in resolver order (`connectAddress` is the
+ *     first). The caller dials them in turn and never looks the name up
+ *     again, so a rebinding resolver gets no second answer — and a
+ *     dual-stack site stays reachable from a substrate with one family.
  *
  * `https:`/`wss:` are one transport unit and `http:`/`ws:` another, because
  * a non-intercepting proxy sees `CONNECT host:443` for both (S3 R12, round 4).
@@ -55,7 +57,12 @@ export type TransportOrigin = {
 };
 
 export type NavigationVerdict =
-  | { readonly verdict: 'allow'; readonly transportOrigin: TransportOrigin; readonly connectAddress: string }
+  | {
+      readonly verdict: 'allow';
+      readonly transportOrigin: TransportOrigin;
+      readonly connectAddress: string;
+      readonly connectAddresses: readonly string[];
+    }
   | { readonly verdict: 'resolve'; readonly host: string }
   | { readonly verdict: 'deny'; readonly reason: NavigationDenyReason };
 
@@ -132,10 +139,10 @@ export const decideNavigation = ({ url, resolvedAddresses, allowedOrigins }: Dec
 
   if (allowedOrigins !== null && !isPinned(transportOrigin, allowedOrigins)) return { verdict: 'deny', reason: 'origin-not-allowed' };
 
-  if (literal) return { verdict: 'allow', transportOrigin, connectAddress: host };
+  if (literal) return { verdict: 'allow', transportOrigin, connectAddress: host, connectAddresses: [host] };
   if (resolvedAddresses === null) return { verdict: 'resolve', host };
   if (resolvedAddresses.length === 0) return { verdict: 'deny', reason: 'unresolved' };
   if (!resolvedAddresses.every((address) => isPublicIp(address))) return { verdict: 'deny', reason: 'private-address' };
 
-  return { verdict: 'allow', transportOrigin, connectAddress: resolvedAddresses[0] };
+  return { verdict: 'allow', transportOrigin, connectAddress: resolvedAddresses[0], connectAddresses: [...resolvedAddresses] };
 };
