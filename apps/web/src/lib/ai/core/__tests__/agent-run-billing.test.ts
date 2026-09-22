@@ -99,6 +99,24 @@ describe('agentRunBillingFields', () => {
     });
   });
 
+  it('prices the cached share of the interrupted prompt at the cache-read rate', () => {
+    const run: Run = {
+      accumulatedUsage: usage(800, 30),
+      accumulatedSteps: [{}],
+      abortedStep: interrupted({ priorStepContextTokens: 830, priorStepCachedTokens: 700 }),
+    };
+
+    const fields = agentRunBillingFields({ agentRun: run, model: MODEL });
+
+    assert({
+      given: 'an interrupted step whose 830-token prompt has 700 tokens the provider serves from cache',
+      should: 'bill 130 fresh + 700 at the 10% cache-read rate + 50 output, on top of step 1',
+      actual: dollars(fields.providerCostDollars),
+      // step 1: (800*2 + 30*10)/1e6 = 0.0019; step 2: (130*2 + 700*2*0.1 + 50*10)/1e6 = 0.0009
+      expected: 0.0028,
+    });
+  });
+
   it('adds the interrupted step on top of OpenRouter\'s returned cost and keeps it out of the reconcile', () => {
     const run: Run = {
       accumulatedUsage: usage(800, 30),

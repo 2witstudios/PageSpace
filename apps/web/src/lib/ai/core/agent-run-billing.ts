@@ -43,9 +43,10 @@ export interface AgentRunBillingFields {
  *
  * For a run aborted mid-step (user Stop, credit ceiling) it adds the interrupted step,
  * which the provider has already charged us for but ai@6 reports no usage for: its
- * prompt (the prior finished step's reported context when there is one, else the
- * estimated messages + system prompt + tools) plus the output actually streamed before
- * the abort, counted with `estimateTokens` and priced at the model's catalog rate. The
+ * prompt (the prior finished step's reported context when there is one, its cached
+ * share at the cache-read rate; else the estimated messages + system prompt + tools)
+ * plus the output actually streamed before the abort, counted with `estimateTokens`
+ * and priced at the model's catalog rate. The
  * addition never exceeds the chat hold the credit gate reserved for the call, so a
  * wrong estimate is bounded by what the user was already told could be spent.
  */
@@ -84,7 +85,9 @@ export function agentRunBillingFields(params: {
   const stepInputTokens =
     aborted.priorStepContextTokens ?? estimateTokens(aborted.promptText) + promptOverheadTokens();
   const stepOutputTokens = estimateTokens(aborted.outputText);
-  const estimatedDollars = calculateCost(model, stepInputTokens, stepOutputTokens);
+  const estimatedDollars = calculateCost(model, stepInputTokens, stepOutputTokens, {
+    cachedInputTokens: aborted.priorStepCachedTokens,
+  });
   const capDollars = estimateChatHoldCentsForModel(model) / 100 / (MARKUP_BPS / 10000);
   const stepDollars = Math.min(estimatedDollars, capDollars);
 

@@ -217,6 +217,53 @@ describe('runAgentWithRetry — abort mid-step (real ai@6 stream)', () => {
     });
   });
 
+  it('floors the interrupted prompt without reasoning and carries the cached share', async () => {
+    const stop = new AbortController();
+    let call = 0;
+    const model = new MockLanguageModelV3({
+      doStream: async ({ abortSignal }) => {
+        call++;
+        if (call === 1) {
+          return {
+            stream: providerStream(
+              [
+                { type: 'stream-start', warnings: [] },
+                { type: 'tool-call', toolCallId: 'call-1', toolName: 'noop', input: '{}' },
+                {
+                  type: 'finish',
+                  finishReason: { unified: 'tool-calls', raw: 'tool_calls' },
+                  // 800 in (600 cache reads, 100 cache writes), 30 out of which 10 reasoning.
+                  usage: {
+                    inputTokens: { total: 800, noCache: 100, cacheRead: 600, cacheWrite: 100 },
+                    outputTokens: { total: 30, text: 20, reasoning: 10 },
+                  },
+                },
+              ],
+              abortSignal,
+            ),
+          };
+        }
+        return {
+          stream: providerStream(textStep(20, [finish(900, 60)]), abortSignal, (i) => {
+            if (i === 6) stop.abort();
+          }),
+        };
+      },
+    });
+
+    const { result } = await drive({ model, signal: stop.signal, tools: { noop: noopTool } });
+
+    assert({
+      given: 'step 1 reported 800 in (700 cached/written), 30 out incl. 10 reasoning; step 2 stopped',
+      should: 'floor step 2 at 800 + 20 visible output and carry 700 cached tokens',
+      actual: {
+        priorStepContextTokens: result.abortedStep?.priorStepContextTokens,
+        priorStepCachedTokens: result.abortedStep?.priorStepCachedTokens,
+      },
+      expected: { priorStepContextTokens: 820, priorStepCachedTokens: 700 },
+    });
+  });
+
   it('treats a credit-ceiling abort mid-step exactly like a user Stop', async () => {
     const userStop = new AbortController();
     const creditCeiling = new AbortController();
