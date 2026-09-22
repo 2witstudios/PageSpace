@@ -18,6 +18,7 @@ import { isServingStatus } from '@pagespace/lib/canvas/cert-action';
 import { resolveAppRouterFlyAppName } from '@pagespace/lib/services/app-hosting/routing-env';
 import { removeCertificate } from '@/lib/fly/certs';
 import { isValidDriveNotFoundPage } from '@pagespace/lib/services/drive-service';
+import { syncEnvOAuthClientBestEffort } from '@/lib/drive-envs/env-oauth-client-runtime';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -241,6 +242,12 @@ export async function PATCH(
           publishedAppId: body.data.publishedAppId,
         },
       });
+
+      // A verified custom domain pointed at an app is one of that app's
+      // sign-in redirect origins; the app it was pointed AWAY from loses it.
+      for (const publishedAppId of new Set([target.publishedAppId, body.data.publishedAppId].filter((id): id is string => typeof id === 'string'))) {
+        await syncEnvOAuthClientBestEffort({ publishedAppId }, { operation: 'custom-domain-target', hostname: target.hostname });
+      }
     }
 
     return NextResponse.json({ domain: updated });
@@ -273,6 +280,11 @@ export async function DELETE(
 
     if (!deleted) {
       return NextResponse.json({ error: 'Domain not found' }, { status: 404 });
+    }
+
+    // The hostname is no longer a redirect origin of the app it pointed at.
+    if (deleted.publishedAppId) {
+      await syncEnvOAuthClientBestEffort({ publishedAppId: deleted.publishedAppId }, { operation: 'custom-domain-delete', hostname: deleted.hostname });
     }
 
     // Wipe all artifacts under this host's prefix so stale content is not

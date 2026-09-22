@@ -7,6 +7,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
+vi.mock('@/lib/drive-envs/env-oauth-client-runtime', () => ({
+  syncEnvOAuthClientBestEffort: vi.fn(async () => undefined),
+  retireEnvOAuthClientBestEffort: vi.fn(async () => ({ clientId: 'env_x', disabled: true, familiesRevoked: 0 })),
+}));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { api: { warn: vi.fn(), error: vi.fn() } },

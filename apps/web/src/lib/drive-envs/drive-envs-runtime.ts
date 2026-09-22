@@ -49,6 +49,7 @@ import {
 import type { DriveEnvDTO } from '@pagespace/lib/drive-envs/env-contract';
 import type { RevokeLocalDriveEnvResult } from '@pagespace/lib/services/drive-envs/local-env-revoke';
 import { getSandboxHost } from '@/lib/agent-workspaces/sandbox-host-runtime';
+import { retireEnvOAuthClientBestEffort, syncEnvOAuthClientBestEffort } from '@/lib/drive-envs/env-oauth-client-runtime';
 import { createHash, createPublicKey, randomBytes, verify as nodeVerify } from 'crypto';
 import { createId } from '@paralleldrive/cuid2';
 import { loadServerSigningKey } from '@pagespace/lib/auth/env-bridge-signing-key';
@@ -209,7 +210,7 @@ export async function createEnvInDrive(input: {
   local?: { label: string; ownerId: string };
 }): Promise<CreateDriveEnvResult> {
   const store = await getDriveEnvStore();
-  return createDriveEnv({
+  const result = await createDriveEnv({
     driveId: input.driveId,
     name: input.name,
     createdBy: input.createdBy,
@@ -221,6 +222,12 @@ export async function createEnvInDrive(input: {
       identity: input.local ? envBridgeIdentity() : undefined,
     },
   });
+  // Every env is a "Sign in with PageSpace" client from birth ([D-9]): the row
+  // is derived from the env, so an app built inside it signs in with no
+  // registration. Best-effort — the env exists either way, and first preview
+  // or publish re-syncs.
+  if (result.ok) await syncEnvOAuthClientBestEffort({ envId: result.env.id }, { operation: 'create' });
+  return result;
 }
 
 /**
@@ -258,7 +265,10 @@ export async function listEnvsInDrive(driveId: string): Promise<DriveEnvDTO[]> {
 
 export async function renameEnv(input: { envId: string; name: string }): Promise<RenameDriveEnvResult> {
   const store = await getDriveEnvStore();
-  return renameDriveEnv({ envId: input.envId, name: input.name, deps: { store, now: () => new Date() } });
+  const result = await renameDriveEnv({ envId: input.envId, name: input.name, deps: { store, now: () => new Date() } });
+  // The env's name is what the consent screen shows for its client.
+  if (result.ok) await syncEnvOAuthClientBestEffort({ envId: input.envId }, { operation: 'rename' });
+  return result;
 }
 
 /**
@@ -273,7 +283,13 @@ export async function revokeEnv(input: { envId: string; reason: string }): Promi
 
 export async function deleteEnv(input: { envId: string; force: boolean }): Promise<DeleteDriveEnvResult> {
   const [store, host] = await Promise.all([getDriveEnvStore(), getSandboxHost()]);
-  return deleteDriveEnv({ envId: input.envId, force: input.force, deps: { store, host, now: () => new Date() } });
+  const result = await deleteDriveEnv({ envId: input.envId, force: input.force, deps: { store, host, now: () => new Date() } });
+  // AFTER the delete, never before: a refused delete (live sessions) must not
+  // leave the env's app unable to sign anyone in. Once the row is gone the
+  // client is disabled and every family it issued is revoked — the control
+  // reaches the tokens, not just the row.
+  if (result.ok) await retireEnvOAuthClientBestEffort(input.envId, { operation: 'delete' });
+  return result;
 }
 
 /**

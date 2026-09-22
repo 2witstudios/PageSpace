@@ -153,6 +153,11 @@
       "import": "./dist/services/drive-envs/drive-envs.js",
       "require": "./dist/services/drive-envs/drive-envs.js"
     },
+    "./services/drive-envs/env-oauth-client": {
+      "types": "./dist/services/drive-envs/env-oauth-client.d.ts",
+      "import": "./dist/services/drive-envs/env-oauth-client.js",
+      "require": "./dist/services/drive-envs/env-oauth-client.js"
+    },
     "./services/drive-envs/local-envs-enabled": {
       "types": "./dist/services/drive-envs/local-envs-enabled.d.ts",
       "import": "./dist/services/drive-envs/local-envs-enabled.js",

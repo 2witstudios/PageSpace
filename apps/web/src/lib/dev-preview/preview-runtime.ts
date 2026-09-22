@@ -47,6 +47,7 @@ import {
 import { createRequestScopedSandboxHost } from '@/lib/sandbox/sprites-client';
 import { findSessionRecord } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { getDriveEnvStore, resolveDriveEnvPayer } from '@/lib/drive-envs/drive-envs-runtime';
+import { syncEnvOAuthClientBestEffort } from '@/lib/drive-envs/env-oauth-client-runtime';
 import { readDevPreviewListeners } from './listeners-source';
 
 let previewStore: DevPreviewStore | null = null;
@@ -201,6 +202,9 @@ export async function openPreviewForUser({
   if (apex === null) return { ok: false, reason: 'not-configured' };
   const authorization: PreviewAuthorization = await authorizePreviewHolder({ holder: authorizeAs, userId, deps: buildPreviewAccessDeps() });
   if (!authorization.allowed) return { ok: false, reason: 'not-authorized', detail: authorization.reason };
+  // The preview origin is a redirect URI of the env's OAuth client; make sure
+  // the row says so BEFORE the user lands there and taps "Sign in" (US6).
+  if (mintFor.kind === 'env') await syncEnvOAuthClientBestEffort({ envId: mintFor.id }, { operation: 'preview-open' });
   const grant = await getPreviewGrantsStore().mint({ holder: mintFor, userId, sessionId, now: new Date() });
   return { ok: true, redirectTo: buildPreviewAuthRedirect(buildPreviewHost(mintFor, apex), grant.id) };
 }

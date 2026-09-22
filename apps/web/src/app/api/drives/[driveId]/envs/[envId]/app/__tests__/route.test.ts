@@ -25,6 +25,10 @@ vi.mock('@/lib/auth', () => ({
 vi.mock('@/lib/drive-envs/drive-envs-runtime', () => ({
   resolveEnvInDrive: vi.fn(),
 }));
+vi.mock('@/lib/drive-envs/env-oauth-client-runtime', () => ({
+  syncEnvOAuthClientBestEffort: vi.fn(async () => undefined),
+  retireEnvOAuthClientBestEffort: vi.fn(async () => ({ clientId: 'env_x', disabled: true, familiesRevoked: 0 })),
+}));
 vi.mock('@pagespace/lib/services/app-hosting/provisioner', () => ({
   createPublishedApp: vi.fn(),
   destroyPublishedApp: vi.fn(),
@@ -74,6 +78,9 @@ import { findPublishedAppByEnvId } from '@/lib/app-hosting/published-app-dto';
 import { ensureBuildableSource } from '@/lib/app-hosting/publish-source-check';
 import { snapshotEnvFilesystem } from '@/lib/app-hosting/env-snapshot';
 import { enqueuePublishBuild } from '@/lib/app-hosting/publish-build-enqueue';
+import { destroyPublishedApp } from '@pagespace/lib/services/app-hosting/provisioner';
+import { syncEnvOAuthClientBestEffort } from '@/lib/drive-envs/env-oauth-client-runtime';
+import { DELETE } from '../route';
 
 const DRIVE_ID = 'drive-1';
 const ENV_ID = 'env-1';
@@ -197,6 +204,31 @@ describe('POST /app — the up-front buildability refusal (D1)', () => {
 
     expect(response.status).toBe(200);
     expect(enqueuePublishBuild).toHaveBeenCalled();
+    // Sign in with PageSpace (US6): a publish re-syncs the env's OAuth client so
+    // the published origin becomes a redirect URI, AFTER the hosting row is claimed.
+    expect(syncEnvOAuthClientBestEffort).toHaveBeenCalledWith({ envId: ENV_ID }, expect.objectContaining({ operation: 'publish', publishedAppId: PUBLISHED_APP_ID }));
+  });
+
+  it('given a refused publish (unbuildable source), never touches the env OAuth client', async () => {
+    vi.mocked(ensureBuildableSource).mockResolvedValue({ ok: false, reason: 'no_recognizable_source' });
+    await POST(postReq(), envParams);
+    expect(syncEnvOAuthClientBestEffort).not.toHaveBeenCalled();
+  });
+
+  it('given an unpublish, re-syncs the env OAuth client after the hosting row is destroyed (the published redirect leaves, the preview one stays)', async () => {
+    vi.mocked(findPublishedAppByEnvId).mockResolvedValue({ ...appRow, status: 'running' } as never);
+    vi.mocked(destroyPublishedApp).mockResolvedValue({ ok: true } as never);
+    const response = await DELETE(new Request(`http://localhost/api/drives/${DRIVE_ID}/envs/${ENV_ID}/app`, { method: 'DELETE' }), envParams);
+    expect(response.status).toBe(200);
+    expect(syncEnvOAuthClientBestEffort).toHaveBeenCalledWith({ envId: ENV_ID }, expect.objectContaining({ operation: 'unpublish', publishedAppId: PUBLISHED_APP_ID }));
+  });
+
+  it('given an unpublish Fly refuses, leaves the env OAuth client alone (the row is still there, still published)', async () => {
+    vi.mocked(findPublishedAppByEnvId).mockResolvedValue({ ...appRow, status: 'running' } as never);
+    vi.mocked(destroyPublishedApp).mockResolvedValue({ ok: false, reason: 'fly_error', error: 'down' } as never);
+    const response = await DELETE(new Request(`http://localhost/api/drives/${DRIVE_ID}/envs/${ENV_ID}/app`, { method: 'DELETE' }), envParams);
+    expect(response.status).toBe(502);
+    expect(syncEnvOAuthClientBestEffort).not.toHaveBeenCalled();
   });
 
   it('given two publishes racing past the early status check, the CAS lets exactly one through and 409s the loser', async () => {

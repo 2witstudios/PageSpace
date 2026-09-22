@@ -1,7 +1,8 @@
 import 'server-only';
 
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { nextCertAction, certActionToDbStatus, isCertEligible } from '@pagespace/lib/canvas/cert-action';
+import { nextCertAction, certActionToDbStatus, isCertEligible, isServingStatus } from '@pagespace/lib/canvas/cert-action';
+import { syncEnvOAuthClientBestEffort } from '@/lib/drive-envs/env-oauth-client-runtime';
 import type { CertAction, CertEligibleStatus, FlyCertResponse } from '@pagespace/lib/canvas/cert-action';
 import {
   describeOwnershipVerification,
@@ -188,6 +189,12 @@ export async function reconcileCustomDomainCert(
   const nextStatus = certActionToDbStatus(action);
 
   await db.update(customDomains).set({ status: nextStatus }).where(eq(customDomains.id, domain.id));
+
+  // Crossing the serving boundary (DNS ownership proven, or lost) adds or
+  // removes this hostname from the redirect URIs of the app it points at.
+  if (isServingStatus(nextStatus) !== isServingStatus(domain.status)) {
+    await syncEnvOAuthClientBestEffort({ customDomainId: domain.id }, { operation: 'cert-reconcile', hostname: domain.hostname, status: nextStatus });
+  }
 
   // On the freshly-active transition, regenerate site files so the now-active
   // custom host is adopted as canonical/primary. Best-effort: a failure here

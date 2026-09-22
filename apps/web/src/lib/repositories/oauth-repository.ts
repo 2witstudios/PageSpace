@@ -538,6 +538,35 @@ export interface RevokeOAuthTokenInput {
 const OAUTH_REFRESH_TOKEN_PREFIX = 'ps_rt_';
 
 /**
+ * Revoke EVERY live OAuth family a client ever issued — the teeth behind
+ * disabling a client (a platform-managed env client on env delete, Phase 4).
+ * `disabledAt` alone only stops NEW grants (`resolveClient` filters it); the
+ * tokens already out there keep working until this runs, so a disable that
+ * skips it is a control that never reaches where the effect lives. Reuses
+ * `revokeTokenFamily` — the same helper reuse detection and revocation use —
+ * so an access token issued by the family dies with its refresh token.
+ * Returns the number of DISTINCT families revoked.
+ */
+export async function revokeOAuthFamiliesForClient(input: { clientDbId: string; now: Date; reason?: string }): Promise<number> {
+  const reason = input.reason ?? 'client_disabled';
+  const [refreshRows, accessRows] = await Promise.all([
+    db
+      .select({ familyId: oauthRefreshTokens.familyId })
+      .from(oauthRefreshTokens)
+      .where(and(eq(oauthRefreshTokens.clientId, input.clientDbId), isNull(oauthRefreshTokens.revokedAt))),
+    db
+      .select({ familyId: oauthAccessTokens.familyId })
+      .from(oauthAccessTokens)
+      .where(and(eq(oauthAccessTokens.clientId, input.clientDbId), isNull(oauthAccessTokens.revokedAt))),
+  ]);
+  const familyIds = [...new Set([...refreshRows, ...accessRows].map((row) => row.familyId))];
+  for (const familyId of familyIds) {
+    await revokeTokenFamily(db, familyId, input.now, reason);
+  }
+  return familyIds.length;
+}
+
+/**
  * Revoke every live OAuth token family of `userId` whose scopes name `driveId`,
  * inside the caller's transaction — the drive-membership removal that makes
  * those grants stale (the OAuth counterpart of deleting the user's
