@@ -59,7 +59,7 @@ describe('ensurePersonalRootWalletId', () => {
     }
   });
 
-  it('WAL-1 X-5: returns the existing personal root wallet and leaves its money untouched', async () => {
+  it('WAL-1 (partial) X-5 (partial): returns the existing personal root wallet and leaves its money untouched', async () => {
     if (!dbAvailable) return;
     const user = await factories.createUser();
     try {

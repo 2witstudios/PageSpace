@@ -1734,7 +1734,7 @@ describe('credits flow — per-user/day exposure cap (fund → consume past the 
   });
 });
 
-describe('credits flow — every row names the personal root wallet (WAL-5)', () => {
+describe('credits flow — every row names the personal root wallet (WAL-5 (partial))', () => {
   it('WAL-5 (partial): funding, gate and settle all write against ONE personal root wallet, and every ledger and hold row names it', async () => {
     seedUser('u1', 'cus_1', 'pro');
     await applyStripeFunding(invoicePaid('in_w5', 'cus_1', PERIOD_START, PERIOD_END));

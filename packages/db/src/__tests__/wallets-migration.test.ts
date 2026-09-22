@@ -224,8 +224,12 @@ const ORPHAN_USER = 'u_orphan';
 /** Has nothing at all: must not gain a wallet. */
 const BYSTANDER_USER = 'u_bystander';
 
-/** The 0297 corpus: users, balances, ledger rows and holds, written as the old code wrote them. */
-async function seedCorpus(s: Scenario): Promise<void> {
+/**
+ * The 0297 corpus: users, balances, ledger rows and holds, written as the old code wrote them.
+ * `withOrphan: false` leaves out the user whose ledger and holds have no balance row, so the
+ * wallet count after must EQUAL the credit_balances count before.
+ */
+async function seedCorpus(s: Scenario, { withOrphan = true }: { withOrphan?: boolean } = {}): Promise<void> {
   const userIds = [...BALANCES.map((b) => b.userId), ORPHAN_USER, BYSTANDER_USER];
   for (const id of userIds) {
     await s.query(
@@ -259,7 +263,7 @@ async function seedCorpus(s: Scenario): Promise<void> {
   await ledger('u_debt', 'usage', -1500, { aiUsageLogId: 'log_debt_1' });
   await ledger('u_debt', 'adjustment', -845, { aiUsageLogId: 'log_debt_1' });
   await ledger('u_bare', 'topup_purchase', 500, { stripeRef: 'cs_bare_1' });
-  await ledger(ORPHAN_USER, 'usage', 0, { aiUsageLogId: 'log_orphan_1' });
+  if (withOrphan) await ledger(ORPHAN_USER, 'usage', 0, { aiUsageLogId: 'log_orphan_1' });
 
   const hold = async (id: string, userId: string, estCents: number) => {
     await s.query(
@@ -270,7 +274,7 @@ async function seedCorpus(s: Scenario): Promise<void> {
   await hold('h_paid_1', 'u_paid', 5);
   await hold('h_paid_2', 'u_paid', 5);
   await hold('h_free_1', 'u_free', 1);
-  await hold('h_orphan_1', ORPHAN_USER, 3);
+  if (withOrphan) await hold('h_orphan_1', ORPHAN_USER, 3);
 }
 
 async function readBalancesBefore(s: Scenario): Promise<Balance[]> {
@@ -339,7 +343,67 @@ describeLive('0298–0302 against a real Postgres', () => {
     expect(throughThisChange.length - baseMigrations.length).toBe(5);
   });
 
-  it('X-5 WAL-1: every balance lands in its personal root wallet to the cent, sums and counts equal', async () => {
+  it('X-5: credit_balances becomes wallets in place — dry-run writes nothing, row counts and every balance and the sum equal to the cent, every ledger and hold row on its owner\'s root, a re-run changes nothing', async () => {
+    const s = await openScenario('x5');
+    try {
+      await seedCorpus(s, { withOrphan: false });
+      const before = await readBalancesBefore(s);
+      expect(before).toHaveLength(BALANCES.length);
+      const ledgerBefore = await s.query<{ id: string; userId: string }>(`SELECT "id", "userId" FROM "credit_ledger" ORDER BY "id"`);
+      const holdsBefore = await s.query<{ id: string; userId: string }>(`SELECT "id", "userId" FROM "credit_holds" ORDER BY "id"`);
+
+      // The expand step first, then a DRY RUN of the backfill: it names the work and writes nothing.
+      await s.migrate(throughExpand);
+      const expanded = await fullSnapshot(s);
+      const dry = await withClient(s.pool, (c) => runWalletBackfill(c, { dryRun: true, statements: walletBackfillStatements(MIGRATIONS_DIR) }));
+      expect(dry).toMatchObject({ committed: false, walletsCreated: 0, ledgerRowsAssigned: ledgerBefore.length, holdRowsAssigned: holdsBefore.length });
+      expect(await fullSnapshot(s)).toBe(expanded);
+
+      // The rest of the chain: the backfill for real, then walletId required.
+      await s.migrate(throughThisChange);
+
+      // One balance store: credit_balances no longer exists.
+      const gone = await s.query<{ present: boolean }>(`SELECT to_regclass('public.credit_balances') IS NOT NULL AS present`);
+      expect(gone[0].present).toBe(false);
+
+      // Row count equality: exactly one personal root wallet per former credit_balances row.
+      const counts = await s.query<{ wallets: number; roots: number; distinctUsers: number }>(`
+        SELECT (SELECT count(*)::int FROM "wallets") AS wallets,
+               (SELECT count(*)::int FROM "wallets" WHERE "ownerType" = 'user' AND "subjectType" IS NULL AND "parentWalletId" IS NULL) AS roots,
+               (SELECT count(DISTINCT "userId")::int FROM "wallets") AS "distinctUsers"`);
+      expect(counts[0]).toEqual({ wallets: before.length, roots: before.length, distinctUsers: before.length });
+
+      // Every user's balance, bucket by bucket and so spendable, to the cent.
+      const after = await readPersonalRootWallets(s);
+      expect(after.map(({ id: _id, ...w }) => w)).toEqual(before);
+      for (const [i, b] of before.entries()) expect(spendable(after[i])).toBe(spendable(b));
+
+      // Sum of balances equality, bucket by bucket and net.
+      const total = (rows: Balance[]) => rows.reduce(
+        (acc, r) => ({ monthly: acc.monthly + r.monthlyRemainingCents, topup: acc.topup + r.topupRemainingCents, debt: acc.debt + r.debtCents, pending: acc.pending + r.pendingMillicents, net: acc.net + spendable(r) }),
+        { monthly: 0, topup: 0, debt: 0, pending: 0, net: 0 },
+      );
+      expect(total(after)).toEqual(total(before));
+
+      // Every historical ledger and hold row, and only those, names its owner's personal root wallet.
+      const rootOf = new Map(after.map((w) => [w.userId, w.id]));
+      const ledgerAfter = await s.query<{ id: string; userId: string; walletId: string }>(`SELECT "id", "userId", "walletId" FROM "credit_ledger" ORDER BY "id"`);
+      const holdsAfter = await s.query<{ id: string; userId: string; walletId: string }>(`SELECT "id", "userId", "walletId" FROM "credit_holds" ORDER BY "id"`);
+      expect(ledgerAfter.map(({ id, userId }) => ({ id, userId }))).toEqual(ledgerBefore);
+      expect(holdsAfter.map(({ id, userId }) => ({ id, userId }))).toEqual(holdsBefore);
+      for (const row of [...ledgerAfter, ...holdsAfter]) expect(row.walletId, row.id).toBe(rootOf.get(row.userId));
+
+      // Idempotent: the backfill again, committed, changes nothing at all.
+      const migrated = await fullSnapshot(s);
+      const again = await withClient(s.pool, (c) => runWalletBackfill(c, { dryRun: false, statements: walletBackfillStatements(MIGRATIONS_DIR) }));
+      expect(again).toMatchObject({ committed: true, walletsCreated: 0, ledgerRowsAssigned: 0, holdRowsAssigned: 0 });
+      expect(await fullSnapshot(s)).toBe(migrated);
+    } finally {
+      await s.pool.end();
+    }
+  }, 180_000);
+
+  it('X-5 (partial) WAL-1 (partial): every balance lands in its personal root wallet to the cent, sums and counts equal', async () => {
     const s = await openScenario('money');
     try {
       await seedCorpus(s);
@@ -401,7 +465,7 @@ describeLive('0298–0302 against a real Postgres', () => {
     }
   }, 180_000);
 
-  it('X-5 WAL-5: every ledger and hold row carries its owner\'s personal root wallet', async () => {
+  it('X-5 (partial) WAL-5 (partial): every ledger and hold row carries its owner\'s personal root wallet', async () => {
     const s = await openScenario('walletids');
     try {
       await seedCorpus(s);
@@ -435,7 +499,7 @@ describeLive('0298–0302 against a real Postgres', () => {
     }
   }, 180_000);
 
-  it('X-5: running the backfill again changes nothing (idempotent)', async () => {
+  it('X-5 (partial): running the backfill again changes nothing (idempotent)', async () => {
     const s = await openScenario('idempotent');
     try {
       await seedCorpus(s);
@@ -455,7 +519,7 @@ describeLive('0298–0302 against a real Postgres', () => {
     }
   }, 180_000);
 
-  it('X-5: --dry-run reports the backfill and writes nothing; the real run then does exactly that', async () => {
+  it('X-5 (partial): --dry-run reports the backfill and writes nothing; the real run then does exactly that', async () => {
     const s = await openScenario('dryrun');
     try {
       await seedCorpus(s);
@@ -488,7 +552,7 @@ describeLive('0298–0302 against a real Postgres', () => {
     }
   }, 180_000);
 
-  it('WAL-1 WAL-2 (partial): the wallets table refuses shapes and values that are not money', async () => {
+  it('WAL-1 (partial) WAL-2 (partial): the wallets table refuses shapes and values that are not money', async () => {
     const s = await openScenario('constraints');
     try {
       await seedCorpus(s);
@@ -537,7 +601,7 @@ describeLive('0298–0302 against a real Postgres', () => {
     }
   }, 180_000);
 
-  it('X-5: deleting a user still cascades their wallet, ledger and holds, as credit_balances did', async () => {
+  it('X-5 (partial): deleting a user still cascades their wallet, ledger and holds, as credit_balances did', async () => {
     const s = await openScenario('cascade');
     try {
       await seedCorpus(s);

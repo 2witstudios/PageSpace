@@ -50,7 +50,7 @@ describe('the money path writes every row against the personal root wallet', () 
     else process.env.DEPLOYMENT_MODE = originalMode;
   });
 
-  it('WAL-5 X-5: fund → gate → settle names one personal root wallet on every ledger and hold row, and the money adds up', async () => {
+  it('WAL-5 (partial) X-5 (partial): fund → gate → settle names one personal root wallet on every ledger and hold row, and the money adds up', async () => {
     if (!dbAvailable) return;
     process.env.DEPLOYMENT_MODE = 'cloud';
     const user = await factories.createUser({ subscriptionTier: 'free' });
@@ -95,7 +95,7 @@ describe('the money path writes every row against the personal root wallet', () 
     }
   });
 
-  it('WAL-5: a billing-off deployment\'s ceiling hold is placed against a bare personal wallet that holds no money', async () => {
+  it('WAL-5 (partial): a billing-off deployment\'s ceiling hold is placed against a bare personal wallet that holds no money', async () => {
     if (!dbAvailable) return;
     process.env.DEPLOYMENT_MODE = 'onprem';
     const user = await factories.createUser();
