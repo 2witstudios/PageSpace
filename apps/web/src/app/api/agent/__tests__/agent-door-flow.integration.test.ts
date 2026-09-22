@@ -176,6 +176,10 @@ describe('agent API door — real Postgres', () => {
     expect(revoking.status).toBe(200);
     expect((await revoking.json() as { revoked_existing_tokens: boolean }).revoked_existing_tokens).toBe(true);
     expect((await meGET(bearer('/api/auth/me', pair3.access_token))).status).toBe(401);
+    // ...and so does the mcp_ key it minted earlier: a key has no tokenVersion,
+    // so revocation must reach it explicitly (ADR 0007 D14).
+    const afterRevoke = await drivesPOST(bearer('/api/drives', mcpKey, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'After revoke' }) }));
+    expect(afterRevoke.status).toBe(401);
   });
 
   it('given one solved challenge submitted twice CONCURRENTLY, should create exactly one agent (atomic consume, T2)', async () => {

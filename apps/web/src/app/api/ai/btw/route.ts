@@ -114,9 +114,10 @@ export async function POST(request: Request) {
           });
         } catch (trackingError) {
           loggers.api.error('Side question: could not track AI usage', trackingError as Error, { conversationId });
-          // trackUsage settles or releases the hold on its own failure paths; if it
-          // threw before doing either, free the reservation here. Idempotent: a
-          // hold that was already settled or released matches nothing.
+          // Defensive: trackUsage is documented never to throw and settles or
+          // releases the hold on every internal failure path, so this should not
+          // run. If that contract ever breaks, the reservation must not sit until
+          // orphan cleanup. Idempotent: a settled or released hold matches nothing.
           if (holdId) await releaseHold(holdId).catch(() => {});
         }
       },

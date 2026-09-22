@@ -5,13 +5,24 @@
  */
 
 import { db } from '@pagespace/db/db'
-import { eq, and, inArray, isNull, type InferSelectModel } from '@pagespace/db/operators'
-import { deviceTokens, mcpTokens } from '@pagespace/db/schema/auth'
+import { eq, and, inArray, isNull, count, type InferSelectModel } from '@pagespace/db/operators'
+import { deviceTokens, mcpTokens, users } from '@pagespace/db/schema/auth'
 import { mcpTokenDrives } from '@pagespace/db/schema/members'
 import { drives } from '@pagespace/db/schema/core';
 
 export type DeviceToken = InferSelectModel<typeof deviceTokens>;
 export type McpToken = InferSelectModel<typeof mcpTokens>;
+
+/** The row an MCP token mint writes: the token plus its drive scopes. */
+interface McpTokenCreateInput {
+  userId: string;
+  tokenHash: string;
+  tokenPrefix: string;
+  name: string;
+  isScoped: boolean;
+  // role null = INHERIT (the key acts as its owner in that drive)
+  drives: { id: string; role: 'ADMIN' | 'MEMBER' | null; customRoleId?: string }[];
+}
 
 export const sessionRepository = {
   /**
@@ -42,15 +53,7 @@ export const sessionRepository = {
    * outer one could roll back after this one already committed.
    */
   async createMcpTokenWithDriveScopes(
-    data: {
-      userId: string;
-      tokenHash: string;
-      tokenPrefix: string;
-      name: string;
-      isScoped: boolean;
-      // role null = INHERIT (the key acts as its owner in that drive)
-      drives: { id: string; role: 'ADMIN' | 'MEMBER' | null; customRoleId?: string }[];
-    },
+    data: McpTokenCreateInput,
     txClient?: Pick<typeof db, 'insert'>,
   ): Promise<McpToken> {
     const run = async (tx: Pick<typeof db, 'insert'>): Promise<McpToken> => {
@@ -81,6 +84,50 @@ export const sessionRepository = {
     };
 
     return txClient ? run(txClient) : db.transaction(run);
+  },
+
+  /**
+   * Mint an MCP token for an AI agent's bearer caller (ADR 0007 Decision 6),
+   * atomically with the two checks that must hold at commit time:
+   *
+   *  - the agent's credentials were not revoked since the caller authenticated
+   *    (`users.tokenVersion` still equals the version on the caller's token);
+   *  - the agent holds fewer than `maxLiveKeys` live keys.
+   *
+   * Both run under `SELECT … FOR NO KEY UPDATE` on the agent's `users` row — the row
+   * `killAgentCredentials` updates when it revokes. So a revoke that commits
+   * first makes this refuse, and a revoke that arrives while this holds the
+   * lock waits and then revokes the key this inserted. Concurrent mints for
+   * one agent serialise, so the cap cannot be overshot.
+   */
+  async createAgentMcpTokenGuarded(
+    data: McpTokenCreateInput,
+    guard: { expectedTokenVersion: number; maxLiveKeys: number },
+  ): Promise<{ ok: true; token: McpToken } | { ok: false; reason: 'credentials_revoked' | 'key_limit_reached' }> {
+    return db.transaction(async (tx) => {
+      const [user] = await tx
+        .select({ tokenVersion: users.tokenVersion })
+        .from(users)
+        .where(eq(users.id, data.userId))
+        // NO KEY UPDATE: conflicts with the revoke's tokenVersion UPDATE (the
+        // serialisation this needs) but not with FK KEY SHARE locks, so inserts
+        // elsewhere that reference this user are not blocked by a mint.
+        .for('no key update');
+      if (!user || user.tokenVersion !== guard.expectedTokenVersion) {
+        return { ok: false, reason: 'credentials_revoked' } as const;
+      }
+
+      const [live] = await tx
+        .select({ n: count() })
+        .from(mcpTokens)
+        .where(and(eq(mcpTokens.userId, data.userId), isNull(mcpTokens.revokedAt)));
+      if ((live?.n ?? 0) >= guard.maxLiveKeys) {
+        return { ok: false, reason: 'key_limit_reached' } as const;
+      }
+
+      const token = await sessionRepository.createMcpTokenWithDriveScopes(data, tx);
+      return { ok: true, token } as const;
+    });
   },
 
   /**

@@ -15,12 +15,13 @@
  *    agent granted to any other client, a narrow scope, an mcp_ or service
  *    credential. Key management refuses it exactly as before.
  *
- * Pure: the route resolves the token's issuance (client + principal account
- * type) through `findAccessTokenIssuance` and hands it in.
+ * Pure: no I/O and no runtime imports beyond constants. The adapter that reads
+ * the token's issuance is `resolveCallerCredential` in
+ * `caller-credential-resolver.ts`.
  */
 import { PAGESPACE_AGENT_CLIENT_ID } from '@pagespace/lib/auth/oauth/clients';
 import type { AuthResult } from '@/lib/auth';
-import { findAccessTokenIssuance, type AccessTokenIssuance } from '@/lib/repositories/oauth-repository';
+import type { AccessTokenIssuance } from '@/lib/repositories/oauth-repository';
 
 export type CallerCredential = 'session' | 'agent_grant_token' | 'other_token';
 
@@ -45,16 +46,4 @@ export function classifyCallerCredential(input: {
 /** May this credential mint or rotate key material at all? (Who it may act FOR is each route's own rule.) */
 export function mayManageKeysWithCredential(credential: CallerCredential): boolean {
   return credential !== 'other_token';
-}
-
-/** The adapter: classify an authenticated caller, reading the token's issuance only when it could matter. */
-export async function resolveCallerCredential(auth: AuthResult): Promise<CallerCredential> {
-  const issuance = auth.tokenType === 'oauth' && auth.scopes.account
-    ? await findAccessTokenIssuance(auth.tokenId)
-    : null;
-  return classifyCallerCredential({
-    tokenType: auth.tokenType,
-    hasAccountScope: auth.tokenType === 'oauth' && auth.scopes.account,
-    issuance,
-  });
 }
