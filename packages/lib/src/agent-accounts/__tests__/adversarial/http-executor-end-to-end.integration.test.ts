@@ -44,6 +44,7 @@ import { createInfisicalClient } from '../../store/infisical-client';
 import { createPlaneMetadataRepository } from '../../store/plane-metadata-repository';
 import { createInfisicalStoreAdapter } from '../../store/store-adapter-infisical';
 import { createConsentLedgerRepository } from '../../store/consent-ledger-repository';
+import { createUsageLedgerRepository } from '../../store/usage-ledger-repository';
 import { createInfisicalTenantProvisioner } from '../../store/infisical-tenant-provisioner-client';
 import { createReplayStoreRepository } from '../../replay-store-repository';
 import { createGrantGate } from '../../grant-gate-executor';
@@ -153,13 +154,15 @@ function planeStore() {
 }
 
 async function startPlane({ isPublic = () => true, wrapAudit = (r: AgentAccountAuditRepository) => r }: { readonly isPublic?: (ip: string) => boolean; readonly wrapAudit?: (r: AgentAccountAuditRepository) => AgentAccountAuditRepository } = {}): Promise<PlaneClient> {
-  const { provisioner, store } = planeStore();
+  const { metadata, provisioner, store } = planeStore();
   const executor = createHttpRequestExecutor({
     store,
     provisioner,
     accounts: createAgentAccountRepository({ db }),
     grantGate: createGrantGate({ replayStore: createReplayStoreRepository({ db }) }),
     audited: createAuditedExecutor({ auditRepository: wrapAudit(createAgentAccountAuditRepository({ appendPath: createSecurityAuditRepository({ db }) })), hash: sha3 }),
+    planeScope: (ref) => metadata.read(ref).then((facts) => facts?.scope ?? null),
+    usage: createUsageLedgerRepository({ pool: metadataPool }),
     network: createPinnedHttpsClient({ resolveHost: async () => [{ address: '127.0.0.1', family: 4 }], isPublic, ca, limits: { totalTimeoutMs: 5_000, maxResponseBytes: 1_000_000, maxConcurrent: 8 } }),
     registry: [],
     issuerPublicKey: keyring.current.publicKey,
@@ -490,6 +493,29 @@ describe.skipIf(!ADMIN_TOKEN)('adversarial: the G2 thin slice end to end (real p
     const expected = { before: 1, after: 0, erasedAtLeastOne: true, vault: 'not_found' };
     expect(actual).toEqual(expected);
   }, 120_000);
+
+  // Codex P1 on #2705: the advertised 60-per-hour cap of a standing permission is enforced by the plane
+  // from its own stored scope and ledger — the 61st use in the hour is refused with nothing sent.
+  it('given a standing permission already used 60 times this hour, should refuse the next request before any upstream I/O; at 59, should run it', async () => {
+    const authority = authorityOver(await startPlane());
+    const created = await authority.createAccount({ actorUserId: OWNER, owner: { kind: 'agent_page', agentPageId: PAGE_A }, input: createInput(true) });
+    if (!created.ok) throw new Error(created.reason);
+    const seed = async (count: number) => {
+      await metadataPool.query('DELETE FROM agent_account_usage WHERE account_id = $1', [created.account.id]);
+      for (let index = 0; index < count; index += 1) {
+        await metadataPool.query("INSERT INTO agent_account_usage (grant_id, tenant_id, account_id, started_at, finished_at) VALUES ($1, $2, $3, now() - interval '10 minutes', now() - interval '10 minutes')", [`seed_${created.account.id}_${index}`, `drive:${DRIVE}`, created.account.id]);
+      }
+    };
+    await seed(60);
+    const before = upstreamHits.length;
+    const atCap = seen(await authority.requestOperation({ caller: caller(), accountId: created.account.id, request: get(`${origin}/v1/weather?at=cap`) }));
+    const hitsAtCap = upstreamHits.length - before;
+    await seed(59);
+    const underCap = seen(await authority.requestOperation({ caller: caller(), accountId: created.account.id, request: get(`${origin}/v1/weather?at=59`) }));
+    const actual = { atCap, hitsAtCap, underCap: underCap.ok ? underCap.response.status : underCap };
+    const expected = { atCap: { ok: false, reason: 'refused' }, hitsAtCap: 0, underCap: 200 };
+    expect(actual).toEqual(expected);
+  }, 60_000);
 
   it('given every model-visible value this slice produced above, should never contain the canary key', () => {
     const actual = { surfaces: modelVisible.length > 10, leaks: modelVisible.filter((text) => text.includes(CANARY)).length };

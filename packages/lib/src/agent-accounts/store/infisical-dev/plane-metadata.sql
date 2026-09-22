@@ -67,3 +67,18 @@ CREATE TABLE IF NOT EXISTS agent_account_plane_tenants (
   client_id text NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+
+-- Usage of standing (`always`) policies, per account (Codex review P1 on
+-- #2705): the plane counts uses, in-flight requests and bytes sent, and
+-- enforces the policy's caps from its OWN stored scope — a main-DB writer can
+-- neither raise a cap nor reset a count. One row per grant; rows older than
+-- two hours are swept on reserve.
+CREATE TABLE IF NOT EXISTS agent_account_usage (
+  grant_id text PRIMARY KEY,
+  tenant_id text NOT NULL,
+  account_id text NOT NULL,
+  started_at timestamptz NOT NULL,
+  finished_at timestamptz,
+  bytes_out integer NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS agent_account_usage_account_started_idx ON agent_account_usage (tenant_id, account_id, started_at);

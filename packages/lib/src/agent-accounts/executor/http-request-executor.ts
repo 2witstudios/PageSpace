@@ -18,7 +18,9 @@
 import type { AgentAccountRecord } from '@pagespace/db/schema/agent-accounts';
 import type { Ed25519Verify, HashBytes, PresenterKeyId, VerifiedGrant } from '../grant';
 import type { CanonicalRequestInput, OperationRegistry } from '../canonical-request';
-import type { StoreAdapter, StoreIdentity, StoreLimits } from '../store/store-adapter';
+import type { PlaneScope, SecretRef, StoreAdapter, StoreIdentity, StoreLimits } from '../store/store-adapter';
+import type { UsageLedger } from '../store/usage-ledger-repository';
+import { decidePolicyUsage } from './decide-policy-usage';
 import type { TenantProvisioner } from '../store/infisical-tenant-provisioner-client';
 import type { AgentAccountRepository } from '../agent-account-repository';
 import type { GrantGate } from '../grant-gate-executor';
@@ -43,6 +45,9 @@ export type HttpRequestExecutorDeps = {
   readonly grantGate: GrantGate;
   readonly audited: AuditedExecutor;
   readonly network: PinnedHttpsClient;
+  /** The plane's stored scope for a ref — the only source of a standing policy's caps (Codex P1). */
+  readonly planeScope: (ref: SecretRef) => Promise<PlaneScope | null>;
+  readonly usage: UsageLedger;
   readonly registry: OperationRegistry;
   /** The account authority's public key (DER SPKI) — the only issuer this executor accepts. */
   readonly issuerPublicKey: Uint8Array;
@@ -99,6 +104,17 @@ export function createHttpRequestExecutor(deps: HttpRequestExecutorDeps): HttpRe
       const canonical = canonicalized.canonical;
 
       const approvalRow = parsed.grant.approvalId === 'policy' ? null : await deps.accounts.findApproval(parsed.grant.approvalId).catch(() => null);
+      // A standing policy's caps come from the PLANE's stored scope and its own usage ledger; anything the
+      // plane cannot read counts as exhausted, never as unlimited (Codex P1).
+      const usageRef: SecretRef | null = row === null ? null : { tenantId: row.tenantId as never, accountId: row.id as never, kind: 'api_key' };
+      const requestBytes = request.body.byteLength;
+      const policyUsage =
+        parsed.grant.approvalId !== 'policy' || usageRef === null
+          ? { expired: false, limitsExceeded: false }
+          : await Promise.all([deps.planeScope(usageRef), deps.usage.window({ ref: usageRef, now })]).then(
+              ([scope, usage]) => decidePolicyUsage({ policy: scope?.approvalPolicy ?? null, usage, requestBytes, now }),
+              () => ({ expired: true, limitsExceeded: true }),
+            );
       const verdict = await deps.grantGate.present<'http-executor'>({
         grant: claim,
         signature,
@@ -107,7 +123,7 @@ export function createHttpRequestExecutor(deps: HttpRequestExecutorDeps): HttpRe
         expected: expectedBindingFor({ run, presenter, row, plane, allowedDriveIds: parsed.grant.callerCeiling.allowedDriveIds }),
         requestDigest: digestRequest({ canonical, hash: deps.hash }),
         requestOperation: canonical.operation,
-        approval: approvalFactFor({ approvalId: parsed.grant.approvalId, approval: approvalRow, account: { approvalPolicy: row?.approvalPolicy ?? null, policyVersion: row?.policyVersion ?? 0 }, now }),
+        approval: approvalFactFor({ approvalId: parsed.grant.approvalId, approval: approvalRow, policyVersion: row?.policyVersion ?? 0, policyUsage }),
         verify: deps.verify,
         hash: deps.hash,
         rotationGraceMs: deps.rotationGraceMs,
@@ -117,6 +133,21 @@ export function createHttpRequestExecutor(deps: HttpRequestExecutorDeps): HttpRe
       const grant: VerifiedGrant<'http-executor'> = verdict.grant;
       // The pin is the PLANE's stored origins, checked before the key is even resolved (review HIGH-1).
       const pinnedOrigins = plane.allowedOrigins as never;
+      // Reserve the use atomically: a request racing another at the cap is refused here, after the verifier.
+      if (grant.approvalId === 'policy' && usageRef !== null) {
+        const scope = await deps.planeScope(usageRef).catch(() => null);
+        const reserved = await deps.usage.reserve({
+          ref: usageRef,
+          grantId: grant.grantId,
+          bytes: requestBytes,
+          now,
+          admits: (usage) => {
+            const verdict = decidePolicyUsage({ policy: scope?.approvalPolicy ?? null, usage, requestBytes, now });
+            return !verdict.expired && !verdict.limitsExceeded;
+          },
+        });
+        if (!reserved) return deny(claim, 'approval_mismatch', now);
+      }
 
       let caller: CallerClass = 'refused';
       let released: ReleasedResponse | null = null;
@@ -158,6 +189,7 @@ export function createHttpRequestExecutor(deps: HttpRequestExecutorDeps): HttpRe
         },
       });
 
+      if (grant.approvalId === 'policy') await deps.usage.finish({ grantId: grant.grantId, now: deps.now() });
       if (audited.ok) await deps.accounts.touchLastUsed({ id: row.id, at: now }).catch(() => undefined);
       return decideExecutionResult({ audited, caller, released });
     },

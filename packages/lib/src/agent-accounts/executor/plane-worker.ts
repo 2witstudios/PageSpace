@@ -25,6 +25,7 @@ import { createInfisicalClient } from '../store/infisical-client';
 import { createPlaneMetadataRepository } from '../store/plane-metadata-repository';
 import { createInfisicalStoreAdapter } from '../store/store-adapter-infisical';
 import { createConsentLedgerRepository } from '../store/consent-ledger-repository';
+import { createUsageLedgerRepository } from '../store/usage-ledger-repository';
 import { createInfisicalTenantProvisioner } from '../store/infisical-tenant-provisioner-client';
 import { createReplayStoreRepository } from '../replay-store-repository';
 import { createGrantGate } from '../grant-gate-executor';
@@ -74,6 +75,8 @@ export async function startCredentialPlane({ config }: { readonly config: PlaneC
     accounts: createAgentAccountRepository({ db }),
     grantGate: createGrantGate({ replayStore: createReplayStoreRepository({ db }) }),
     audited: createAuditedExecutor({ auditRepository: createAgentAccountAuditRepository({ appendPath: createSecurityAuditRepository({ db }) }), hash: sha3 }),
+    planeScope: (ref) => metadata.read(ref).then((facts) => facts?.scope ?? null),
+    usage: createUsageLedgerRepository({ pool: metadataPool }),
     network: createPinnedHttpsClient({
       // DNS gets its own deadline: the pinned client's timer starts only at connect (review HIGH-2).
       resolveHost: async (hostname) => {
