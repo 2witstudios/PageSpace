@@ -17,7 +17,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Pool } from 'pg';
-import { createHash, createPublicKey, generateKeyPairSync, sign as nodeSign, verify as nodeVerify } from 'node:crypto';
+import { createHash, createHmac, createPublicKey, generateKeyPairSync, randomBytes, sign as nodeSign, verify as nodeVerify } from 'node:crypto';
 import { get } from 'node:http';
 import type { AccountId, PolicyVersion, TenantId } from '@pagespace/db/schema/agent-accounts';
 import type { CanonicalOrigin } from '../../canonical-request';
@@ -59,12 +59,14 @@ import type {
   StoreChannel,
   StoreIdentity,
   VerifiedGrant,
+  HmacBytes,
+  WriteDigestKey,
 } from '../store-adapter';
 import type { ConsentId } from '../../grant';
 import type { ConsumeOutcome } from '../../replay-store-repository';
 import { digestBindings } from '../digest-bindings';
 import { digestPlaneScope } from '../digest-plane-scope';
-import { createInfisicalClient } from '../infisical-client';
+import { createInfisicalClient, type InfisicalClient } from '../infisical-client';
 import { createPlaneMetadataRepository, type PlaneMetadataRepository } from '../plane-metadata-repository';
 import { createInfisicalStoreAdapter } from '../store-adapter-infisical';
 
@@ -73,6 +75,9 @@ const INFISICAL_ADMIN_TOKEN = process.env.INFISICAL_DEV_ADMIN_TOKEN;
 const METADATA_URL = process.env.PLANE_METADATA_DEV_URL ?? 'postgres://plane_metadata:plane_metadata@127.0.0.1:55433/plane_metadata';
 
 const hash: HashBytes = (bytes) => createHash('sha3-256').update(bytes).digest('hex');
+// G2 ruling 4: the plane-held pending-write digest key (a fresh one per run — the plane's own secret).
+const WRITE_DIGEST_KEY = new Uint8Array(randomBytes(32)) as WriteDigestKey;
+const hmac: HmacBytes = (key, bytes) => createHmac('sha3-256', key).update(bytes).digest('hex');
 const consentKey = generateKeyPairSync('ed25519');
 const CONSENT_PUBLIC_KEY = new Uint8Array(consentKey.publicKey.export({ type: 'spki', format: 'der' }));
 const verifyEd25519: Ed25519Verify = (message, signature, publicKey) =>
@@ -265,9 +270,14 @@ afterAll(async () => {
 
 function makeRawAdapter({
   wrapMetadata = (m: PlaneMetadataRepository) => m,
+  wrapInfisical = (c: InfisicalClient) => c,
   consentLedger = memoryConsentLedger(),
-}: { readonly wrapMetadata?: (m: PlaneMetadataRepository) => PlaneMetadataRepository; readonly consentLedger?: ReturnType<typeof memoryConsentLedger> } = {}): StoreAdapter {
-  const infisical = createInfisicalClient({ baseUrl: INFISICAL_URL, environment: 'dev' });
+}: {
+  readonly wrapMetadata?: (m: PlaneMetadataRepository) => PlaneMetadataRepository;
+  readonly wrapInfisical?: (c: InfisicalClient) => InfisicalClient;
+  readonly consentLedger?: ReturnType<typeof memoryConsentLedger>;
+} = {}): StoreAdapter {
+  const infisical = wrapInfisical(createInfisicalClient({ baseUrl: INFISICAL_URL, environment: 'dev' }));
   const realMetadata = createPlaneMetadataRepository({ pool: pool as never });
   const metadata = { ...wrapMetadata(realMetadata), advisoryLockPool: realMetadata.advisoryLockPool };
   const projects: Record<string, string> = { [TENANT_A]: projectAId, [TENANT_B]: projectBId, [TENANT_PAGE]: projectAId };
@@ -282,6 +292,8 @@ function makeRawAdapter({
     resolveProject: async (tenantId) => (projects[tenantId] ? { projectId: projects[tenantId] } : null),
     resolveCredentials: async ({ identityId }) => identities[identityId] ?? null,
     hash,
+    writeDigestKey: WRITE_DIGEST_KEY,
+    hmac,
     now: () => Date.now(),
     consentPublicKey: CONSENT_PUBLIC_KEY,
     verify: verifyEd25519,
@@ -1455,6 +1467,65 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
       describe: { ok: false, reason: 'store_unavailable' },
       row: [{ current_version: 1, previous_version: null, pending_version: 2 }],
     });
+  });
+
+  // G2 ruling E1(a): the replacing write's login fails at REAL Infisical (wrong client secret), so the
+  // request never left the process — the marker must be gone before the put returns.
+  it('given a replacing write whose Infisical login fails before sending, should clear its pending marker in the same locked section and keep the ref in service (G2 ruling E1a)', async () => {
+    const plain = makeAdapter();
+    const badLogin = makeAdapter({
+      wrapInfisical: (c) => ({ ...c, updateSecret: (input) => c.updateSecret({ ...input, credentials: { ...input.credentials, clientSecret: 'not-the-secret' } }) }),
+    });
+    const accountId = `acct-g2-e1a-${NOW}` as AccountId;
+    const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
+    const identity = baseIdentity();
+    const grantV1 = makeGrant({ accountId, credentialVersion: 1 as never, bindingDigest: digestBindings({ bindings: plainBindings(), hash }) });
+    const valueOf = (result: Awaited<ReturnType<typeof plain.resolve>>) => (result.ok ? (result.material as { value: string }).value : result);
+
+    await plain.put({ ref, material: API_KEY_V1, expectedVersion: null, bindings: plainBindings(), identity });
+    const failed = await badLogin.put({ ref, material: API_KEY_V2, expectedVersion: 1 as never, bindings: plainBindings(), identity });
+    const rowAfterFailure = await secretVersionRow(accountId);
+    const stillServed = valueOf(await plain.resolve({ ref, version: 1 as never, grant: grantV1, identity }));
+    const retried = await plain.put({ ref, material: API_KEY_V2, expectedVersion: 1 as never, bindings: plainBindings(), identity });
+
+    const actual = { failed, rowAfterFailure, stillServed, retried };
+    const expected = {
+      failed: { ok: false, reason: 'store_unavailable' },
+      rowAfterFailure: [{ current_version: 1, previous_version: null, pending_version: null }],
+      stillServed: 'sk-g1c-v1',
+      retried: { ok: true, version: 2 },
+    };
+    expect(actual).toEqual(expected);
+  });
+
+  // G2 ruling E1(b): the write's outcome is UNKNOWN to the writer (it reports `unavailable` — a
+  // timeout after sending) but it never reached Infisical. The next locked call reads REAL Infisical,
+  // sees the committed version, aborts the marker and serves again instead of locking the account out.
+  it('given a reconcile-required ref whose Infisical copy is still the committed version, should abort the marker on the next call and return the ref to service (G2 ruling E1b)', async () => {
+    const plain = makeAdapter();
+    const lostWrite = makeAdapter({ wrapInfisical: (c) => ({ ...c, updateSecret: async () => ({ ok: false, reason: 'unavailable' }) }) });
+    const accountId = `acct-g2-e1b-${NOW}` as AccountId;
+    const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
+    const identity = baseIdentity();
+    const grantV1 = makeGrant({ accountId, credentialVersion: 1 as never, bindingDigest: digestBindings({ bindings: plainBindings(), hash }) });
+    const valueOf = (result: Awaited<ReturnType<typeof plain.resolve>>) => (result.ok ? (result.material as { value: string }).value : result);
+
+    await plain.put({ ref, material: API_KEY_V1, expectedVersion: null, bindings: plainBindings(), identity });
+    const failed = await lostWrite.put({ ref, material: API_KEY_V2, expectedVersion: 1 as never, bindings: plainBindings(), identity });
+    const pendingRow = await secretVersionRow(accountId);
+    const servedAgain = valueOf(await plain.resolve({ ref, version: 1 as never, grant: grantV1, identity }));
+    const rowAfterAbort = await secretVersionRow(accountId);
+    const retried = await plain.put({ ref, material: API_KEY_V2, expectedVersion: 1 as never, bindings: plainBindings(), identity });
+
+    const actual = { failed, pendingRow, servedAgain, rowAfterAbort, retried };
+    const expected = {
+      failed: { ok: false, reason: 'write_unverified' },
+      pendingRow: [{ current_version: 1, previous_version: null, pending_version: 2 }],
+      servedAgain: 'sk-g1c-v1',
+      rowAfterAbort: [{ current_version: 1, previous_version: null, pending_version: null }],
+      retried: { ok: true, version: 2 },
+    };
+    expect(actual).toEqual(expected);
   });
 
   it('given a first put whose commit failed, a retry with the same material should adopt the orphan and one with other material should erase it (G1c E1)', async () => {

@@ -49,6 +49,8 @@ import type {
   StoreAdapter,
   StoreIdentity,
   StoreLimits,
+  HmacBytes,
+  WriteDigestKey,
 } from './store-adapter';
 import type { InfisicalClient, InfisicalCredentials } from './infisical-client';
 import type { PlaneMetadataRepository, StoredPlaneFacts } from './plane-metadata-repository';
@@ -56,6 +58,7 @@ import type { ConsentLedger } from './consent-ledger-repository';
 import { lockKeyFor } from './plane-metadata-repository';
 import { canonicalJson } from '../canonical-json';
 import { decideCas } from './decide-cas';
+import { decidePendingOnWriteFailure } from './decide-pending-on-write-failure';
 import { decideConsentConsumption } from './decide-consent-consumption';
 import { decideOrphanAdoption } from './decide-orphan-adoption';
 import { decideRebind } from './decide-rebind';
@@ -76,6 +79,13 @@ export type StoreAdapterInfisicalDeps = {
   readonly resolveProject: ResolveProject;
   readonly resolveCredentials: ResolveCredentials;
   readonly hash: HashBytes;
+  /**
+   * The plane-held key the pending-write digest is an HMAC under (G2 ruling 4) — from the plane
+   * process's own environment (`parseWriteDigestKey`), never the main DB or the web process.
+   */
+  readonly writeDigestKey: WriteDigestKey;
+  /** HMAC-SHA3-256 in production. */
+  readonly hmac: HmacBytes;
   readonly now: () => number;
   readonly rotationGraceMs?: number;
   /** The authority's step-up consent public key (DER SPKI) — distinct from the grant key; `rebind` verifies under it. */
@@ -190,7 +200,7 @@ export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): St
   async function observeWrite(store: TenantStore, secretKey: string): Promise<{ readonly version: CredentialVersion; readonly digest: ReturnType<typeof digestWrite> } | null> {
     const got = await deps.infisical.getSecret({ projectId: store.projectId, credentials: store.credentials, secretKey });
     if (!got.ok) return null;
-    return { version: got.secret.version as CredentialVersion, digest: digestWrite({ secretValue: got.secret.secretValue, secretComment: got.secret.secretComment, hash: deps.hash }) };
+    return { version: got.secret.version as CredentialVersion, digest: digestWrite({ secretValue: got.secret.secretValue, secretComment: got.secret.secretComment, key: deps.writeDigestKey, hmac: deps.hmac }) };
   }
 
   /**
@@ -200,10 +210,15 @@ export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): St
    */
   async function reconcileLocked(ref: SecretRef, facts: StoredPlaneFacts, store: TenantStore): Promise<StoredPlaneFacts | 'fail_closed' | typeof METADATA_UNAVAILABLE> {
     if (facts.pendingWrite === null) return facts;
+    const pending = facts.pendingWrite;
     const observed = await observeWrite(store, secretKeyFor(ref.accountId, ref.kind));
-    const decision = decideReconcile({ pending: facts.pendingWrite, observed });
+    const decision = decideReconcile({ pending, current: facts.currentVersion, observed });
     if (decision.outcome === 'fail_closed') return 'fail_closed';
-    const moved = await metadataCall(() => deps.metadata.commitForward({ ref, pending: facts.pendingWrite!, rotatedAt: deps.now() }));
+    // G2 ruling E1(b): Infisical still holds the committed version, so the write never landed —
+    // drop the marker and return the ref to service instead of refusing it forever.
+    const moved = await metadataCall(() =>
+      decision.outcome === 'abort_pending' ? deps.metadata.abortPending({ ref, pending }) : deps.metadata.commitForward({ ref, pending, rotatedAt: deps.now() }),
+    );
     if (moved === METADATA_UNAVAILABLE) return METADATA_UNAVAILABLE;
     if (!moved) return 'fail_closed';
     const after = await metadataCall(() => deps.metadata.read(ref));
@@ -291,7 +306,7 @@ export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): St
       // (Codex review PR #2646 P1).
       const secretValue = JSON.stringify({ kind: ref.kind, material: material.material });
       const secretComment = JSON.stringify(bindings);
-      const attempted = digestWrite({ secretValue, secretComment, hash: deps.hash });
+      const attempted = digestWrite({ secretValue, secretComment, key: deps.writeDigestKey, hmac: deps.hmac });
 
       if (before !== null) {
         // Snapshot the CURRENT material into the grace companion before it is overwritten, so a
@@ -315,7 +330,14 @@ export function createInfisicalStoreAdapter(deps: StoreAdapterInfisicalDeps): St
         if (marked === METADATA_UNAVAILABLE) return 'metadata_unavailable';
         if (!marked) return { ok: false, reason: 'write_unverified' };
         const updated = await deps.infisical.updateSecret({ projectId, credentials, secretKey, secretValue, secretComment });
-        if (!updated.ok) return { ok: false, reason: 'write_unverified' };
+        if (!updated.ok) {
+          // G2 ruling E1(a): a write known never to have left the process clears its own marker in
+          // this same locked section, so a failed login is an outage of one call, not of the account.
+          if (decidePendingOnWriteFailure({ failure: updated.reason }).action === 'keep_pending') return { ok: false, reason: 'write_unverified' };
+          const aborted = await metadataCall(() => deps.metadata.abortPending({ ref, pending: { version: assumedNextVersion, digest: attempted, rotation } }));
+          if (aborted === METADATA_UNAVAILABLE) return 'metadata_unavailable';
+          return aborted ? { ok: false, reason: 'store_unavailable' } : { ok: false, reason: 'write_unverified' };
+        }
       } else {
         const created = await deps.infisical.createSecret({ projectId, credentials, secretKey, secretValue, secretComment });
         if (!created.ok) {

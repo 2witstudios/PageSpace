@@ -65,6 +65,11 @@ export type PlaneMetadataRepository = {
   }) => Promise<boolean>;
   /** Record the uncertain-write marker before a replacing write. `false` when the ref is revoked or already pending. */
   readonly markPending: (input: { readonly ref: SecretRef; readonly pending: PendingWrite }) => Promise<boolean>;
+  /**
+   * Drop exactly this pending write without moving any version (G2 ruling E1): the write provably did
+   * not land. `false` when that pending write is not the one recorded.
+   */
+  readonly abortPending: (input: { readonly ref: SecretRef; readonly pending: PendingWrite }) => Promise<boolean>;
   /** Advance to exactly the pending write (and open grace if it was a rotation). `false` when that pending write is not recorded. */
   readonly commitForward: (input: { readonly ref: SecretRef; readonly pending: PendingWrite; readonly rotatedAt: number }) => Promise<boolean>;
   /** `false` when no row was marked: the ref is gone, or a revocation is already recorded. */
@@ -172,6 +177,17 @@ export function createPlaneMetadataRepository({ pool }: { readonly pool: PlaneMe
         `UPDATE agent_account_secret_versions SET pending_version = $4, pending_digest = $5, pending_rotation = $6
           WHERE tenant_id = $1 AND account_id = $2 AND kind = $3 AND revoked_at IS NULL AND pending_version IS NULL`,
         [...key(ref), pending.version, pending.digest, pending.rotation],
+      );
+      return result.rowCount === 1;
+    },
+
+    // Matches the exact marker (version AND digest), so an abort can never clear a DIFFERENT pending
+    // write another replica recorded after this one's section ended.
+    async abortPending({ ref, pending }) {
+      const result = await pool.query(
+        `UPDATE agent_account_secret_versions SET pending_version = NULL, pending_digest = NULL, pending_rotation = NULL
+          WHERE tenant_id = $1 AND account_id = $2 AND kind = $3 AND pending_version = $4 AND pending_digest = $5`,
+        [...key(ref), pending.version, pending.digest],
       );
       return result.rowCount === 1;
     },
