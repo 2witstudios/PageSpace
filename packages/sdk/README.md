@@ -148,6 +148,52 @@ try {
 
 No token ever appears in an error message or a log line from this package.
 
+### Where tokens live
+
+By default `PageSpaceAuth` keeps the pending sign-in and the signed-in session — the access token,
+and the refresh token when `offline_access` was granted — in `sessionStorage`. That storage is
+scoped to the tab and gone when the tab closes, but **any script running on your page can read
+it**: an XSS bug in your app exposes the session. So:
+
+- Request `offline_access` only when the app needs sessions longer than the 15-minute access
+  token. Without it there is no refresh token to steal, and the session simply ends.
+- To keep nothing at rest, pass your own storage — for example an in-memory one. The sign-in then
+  lasts only as long as the page, and a full-page redirect would lose the pending sign-in, so use
+  it with a popup: this page keeps the verifier in memory, and the popup's callback page hands its
+  URL back (e.g. `window.opener.postMessage(location.href, origin)`) for this page to finish:
+
+  ```ts
+  import { PageSpaceAuth, type AuthStorage } from '@pagespace/sdk';
+
+  const memory = new Map<string, string>();
+  const inMemory: AuthStorage = {
+    getItem: (key) => memory.get(key) ?? null,
+    setItem: (key, value) => {
+      memory.set(key, value);
+    },
+    removeItem: (key) => {
+      memory.delete(key);
+    },
+  };
+
+  const auth = new PageSpaceAuth({
+    baseUrl: 'https://pagespace.ai',
+    clientId: 'your-client-id',
+    redirectUri: 'https://app.example.com/auth/pagespace/callback',
+    storage: inMemory,
+  });
+  window.open(await auth.createSignInUrl(), 'pagespace-sign-in', 'popup'); // from your button's click handler
+  window.addEventListener('message', async (event) => {
+    if (event.origin !== location.origin || typeof event.data !== 'string') return;
+    const provider = await auth.handleRedirectCallback(event.data); // state is still checked here
+    console.log('signed in', provider.canRefresh);
+  });
+  ```
+
+- A server-rendered app should keep tokens on the server (a backend-for-frontend, see
+  [On a server](#on-a-server)) and never ship them to the browser at all — the browser holds only
+  your own session cookie.
+
 ### In a PageSpace environment
 
 An app built and hosted in a PageSpace environment gets two public values in its environment,
