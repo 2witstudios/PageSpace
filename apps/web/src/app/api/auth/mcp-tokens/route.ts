@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { OAUTH_ACCESS_TOKEN_PREFIX } from '@/lib/auth/token-prefixes';
-import { resolveCallerCredential } from '@/lib/agent-auth/caller-credential';
+import { resolveCallerCredential } from '@/lib/agent-auth/caller-credential-resolver';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 import { sessionRepository } from '@/lib/repositories/session-repository';
 import { z } from 'zod/v4';

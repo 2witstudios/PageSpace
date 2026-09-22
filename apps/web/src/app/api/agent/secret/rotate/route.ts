@@ -14,7 +14,7 @@ import { z } from 'zod/v4';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { agentNoStoreJson, agentNotFound } from '@/lib/agent-auth/door';
 import { agentSecretActor } from '@/lib/agent-auth/secret-authority';
-import { resolveCallerCredential } from '@/lib/agent-auth/caller-credential';
+import { resolveCallerCredential } from '@/lib/agent-auth/caller-credential-resolver';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getAgentIdentitySummary, rotateAgentSecret } from '@pagespace/lib/services/agent-identities';
 
