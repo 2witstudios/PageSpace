@@ -10,6 +10,13 @@ import type { UIMessage } from 'ai';
  * Any `tool-*` part can be paused, so this matches by toolCallId alone (unlike
  * the ask_user patch, which also pins the part type).
  *
+ * STATE-CONDITIONAL, both ways. The optimistic flip only applies to a part still
+ * in `approval-requested`, and the revert only undoes a part still in
+ * `approval-responded`. Anything else means newer server truth already landed —
+ * a realtime event moved the part to `output-*`, or another tab answered first —
+ * and an optimistic patch, a 409 revert, or a replayed pending mutation must
+ * never write an older guess over it.
+ *
  * Pure — never mutates input; returns the input reference when nothing matched.
  */
 
@@ -35,6 +42,8 @@ const patchToolPart = <T extends UIMessage>(
   messages: T[],
   messageId: string,
   toolCallId: string,
+  /** The part state this patch is allowed to act on; any other state is newer truth and is left alone. */
+  fromState: string,
   patch: (part: ApprovalPart) => ApprovalPart,
 ): T[] => {
   const idx = messages.findIndex((m) => m.id === messageId);
@@ -43,7 +52,7 @@ const patchToolPart = <T extends UIMessage>(
   const message = messages[idx];
   const parts = (message.parts ?? []) as ApprovalPart[];
   const partIdx = parts.findIndex((p) => p.type.startsWith('tool-') && p.toolCallId === toolCallId);
-  if (partIdx < 0) return messages;
+  if (partIdx < 0 || parts[partIdx].state !== fromState) return messages;
 
   const nextParts = parts.slice();
   nextParts[partIdx] = patch(parts[partIdx]);
@@ -58,7 +67,7 @@ export const applyToolApprovalResponse = <T extends UIMessage>(
   messages: T[],
   payload: ToolApprovalResponsePayload,
 ): T[] =>
-  patchToolPart(messages, payload.messageId, payload.toolCallId, (part) => ({
+  patchToolPart(messages, payload.messageId, payload.toolCallId, 'approval-requested', (part) => ({
     ...part,
     state: 'approval-responded',
     approval: payload.approval,
@@ -66,13 +75,14 @@ export const applyToolApprovalResponse = <T extends UIMessage>(
 
 /**
  * Revert an optimistic answer (the resume POST was rejected) back to
- * approval-requested, keeping only the approval id the server issued.
+ * approval-requested, keeping only the approval id the server issued. Only a
+ * part still in `approval-responded` is reverted — see the module doc.
  */
 export const revertToolApprovalResponse = <T extends UIMessage>(
   messages: T[],
   payload: ToolApprovalRevertPayload,
 ): T[] =>
-  patchToolPart(messages, payload.messageId, payload.toolCallId, (part) => ({
+  patchToolPart(messages, payload.messageId, payload.toolCallId, 'approval-responded', (part) => ({
     ...part,
     state: 'approval-requested',
     ...(part.approval ? { approval: { id: part.approval.id } } : {}),

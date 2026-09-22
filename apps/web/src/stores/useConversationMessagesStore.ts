@@ -10,6 +10,7 @@ import { applyConversationEdit } from '@/stores/conversationMessages/applyConver
 import { applyConversationDelete } from '@/stores/conversationMessages/applyConversationDelete';
 import { applyConversationAskUserAnswer } from '@/stores/conversationMessages/applyConversationAskUserAnswer';
 import { applyConversationToolApprovalResponse } from '@/stores/conversationMessages/applyConversationToolApprovalResponse';
+import { revertConversationToolApprovalResponse } from '@/stores/conversationMessages/revertConversationToolApprovalResponse';
 import { applyRemoteUserMessage } from '@/stores/conversationMessages/applyRemoteUserMessage';
 import { applyConfirmedMessage } from '@/stores/conversationMessages/applyConfirmedMessage';
 import { promoteOptimisticSends } from '@/stores/conversationMessages/promoteOptimisticSends';
@@ -32,7 +33,7 @@ export { MAX_QUEUED_SENDS };
 export type { QueuedSendsByConversationId };
 import type { MessageEditPayload } from '@/lib/ai/streams/applyMessageEdit';
 import { revertAskUserAnswer, type AskUserAnswerPayload, type AskUserAnswerRevertPayload } from '@/lib/ai/streams/applyAskUserAnswer';
-import { revertToolApprovalResponse, type ToolApprovalResponsePayload, type ToolApprovalRevertPayload } from '@/lib/ai/streams/applyToolApprovalResponse';
+import type { ToolApprovalResponsePayload, ToolApprovalRevertPayload } from '@/lib/ai/streams/applyToolApprovalResponse';
 
 export type { ConversationCacheEntry, ConversationMessagesById };
 
@@ -245,16 +246,7 @@ export const useConversationMessagesStore = create<ConversationMessagesState>((s
   },
 
   revertToolApprovalResponse: (conversationId, payload) => {
-    set((state) => {
-      const existing = state.byConversationId[conversationId];
-      if (!existing) return state;
-      return {
-        byConversationId: {
-          ...state.byConversationId,
-          [conversationId]: { ...existing, messages: revertToolApprovalResponse(existing.messages, payload) },
-        },
-      };
-    });
+    set((state) => ({ byConversationId: revertConversationToolApprovalResponse(state.byConversationId, { conversationId, payload }) }));
   },
 
   applyRemoteUserMessage: (conversationId, message) => {
