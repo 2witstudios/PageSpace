@@ -41,6 +41,21 @@ export type OutboundRequestVerdict =
 
 const CONTROL_CHAR_RE = /[\x00-\x1F\x7F]/;
 
+/**
+ * How servers commonly fold query names: case-insensitively (ASP.NET) and with `.`, space and `[`
+ * read as `_` (PHP). A caller parameter that folds to the placement name could be read instead of
+ * the key, so collisions compare folded names.
+ */
+function foldQueryName(name: string): string {
+  let decoded = name;
+  try {
+    decoded = decodeURIComponent(name);
+  } catch {
+    // An undecodable name still compares by its raw form.
+  }
+  return decoded.toLowerCase().replace(/[.\s[]/g, '_');
+}
+
 function compareStrings(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
@@ -69,7 +84,7 @@ export function buildOutboundRequest({
 
   const query = canonical.query.map(([name, value]) => `${name}=${value}`);
   for (const [name, value] of Object.entries(auth.queryParams)) {
-    if (canonical.query.some(([existing]) => existing === name)) return { ok: false, reason: 'placement_collision' };
+    if (canonical.query.some(([existing]) => foldQueryName(existing) === foldQueryName(name))) return { ok: false, reason: 'placement_collision' };
     query.push(`${encodeURIComponent(name)}=${encodeURIComponent(value)}`);
   }
 

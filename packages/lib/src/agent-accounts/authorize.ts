@@ -128,7 +128,14 @@ export type AuthorizeRefusal =
   | { readonly ok: false; readonly reason: 'out_of_scope' | 'limits_exceeded' | 'class_never_always' | 'policy_expired' };
 
 export type AuthorizeVerdict =
-  | { readonly ok: true; readonly grant: AgentAccountGrant; readonly canonical: CanonicalRequest; readonly approvalToConsume: ApprovalId | null }
+  | {
+      readonly ok: true;
+      readonly grant: AgentAccountGrant;
+      readonly canonical: CanonicalRequest;
+      readonly approvalToConsume: ApprovalId | null;
+      /** Whether the approval this grant needed also needed step-up — carried so a lost consumption race re-asks correctly. */
+      readonly approvalStepUp: boolean;
+    }
   | AuthorizeRefusal;
 
 const UNAVAILABLE: AuthorizeRefusal = { ok: false, reason: 'account_unavailable' };
@@ -201,6 +208,7 @@ export function authorize(input: AuthorizeInput): AuthorizeVerdict {
   if (requirement.kind === 'refuse') return { ok: false, reason: requirement.reason };
 
   let approvalId: ApprovalId | 'policy' = 'policy';
+  const approvalStepUp = requirement.kind === 'concrete' && requirement.stepUp;
   let approvalToConsume: ApprovalId | null = null;
   if (requirement.kind === 'concrete') {
     const approval = input.approvals.find(
@@ -245,5 +253,5 @@ export function authorize(input: AuthorizeInput): AuthorizeVerdict {
     nonce: input.nonce,
     presenter: input.presenter,
   };
-  return { ok: true, grant, canonical, approvalToConsume };
+  return { ok: true, grant, canonical, approvalToConsume, approvalStepUp };
 }

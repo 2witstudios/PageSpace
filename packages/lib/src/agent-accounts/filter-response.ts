@@ -77,6 +77,12 @@ function scrub(text: string, knownValues: readonly string[]): { readonly text: s
   return { text: out, redacted: known.redacted || out !== before };
 }
 
+/** The scrub reads UTF-8: a body declared in any other charset (UTF-16 would hide an echoed key) is not released as text. */
+function isUtf8Charset(contentType: string): boolean {
+  const charset = /;\s*charset\s*=\s*"?([^";\s]+)/i.exec(contentType)?.[1]?.toLowerCase();
+  return charset === undefined || charset === 'utf-8' || charset === 'utf8' || charset === 'us-ascii';
+}
+
 function locationOf(value: string): string | null {
   try {
     const url = new URL(value);
@@ -132,7 +138,7 @@ export function filterResponse({
     } catch {
       return { status, headers: released, body: null, bodyOmitted: 'binary', truncated: false, redacted };
     }
-  } else if (TEXT_TYPE_RE.test(contentType.trim())) {
+  } else if (TEXT_TYPE_RE.test(contentType.trim()) && isUtf8Charset(contentType)) {
     text = new TextDecoder('utf-8', { fatal: false }).decode(body);
   } else {
     return { status, headers: released, body: null, bodyOmitted: 'binary', truncated: false, redacted };
