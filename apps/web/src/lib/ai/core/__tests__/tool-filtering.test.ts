@@ -20,6 +20,8 @@ import {
   SANDBOX_COMPUTE_TOOL_NAMES,
   SANDBOX_TOOL_NAMES,
   SESSION_FAMILY_TOOL_NAMES,
+  filterToolsForAgentAccounts,
+  WRITE_TOOLS,
 } from '../tool-filtering';
 import { SANDBOX_CORE_TOOL_NAMES, createSandboxTools } from '../../tools/sandbox-tools';
 import { SANDBOX_GIT_TOOL_NAMES } from '../../tools/sandbox-git-tools';
@@ -683,5 +685,27 @@ describe('browser tools under the sandbox gates (G6a)', () => {
       gate: (() => {}) as never,
     });
     expect(Object.keys(built).sort()).toEqual([...SANDBOX_CORE_TOOL_NAMES].sort());
+  });
+});
+
+describe('filterToolsForAgentAccounts (G2 agent accounts)', () => {
+  const tools = { http_request: 'h', read_page: 'r' };
+
+  it('given the credential plane configured, should keep http_request', () => {
+    const actual = Object.keys(filterToolsForAgentAccounts(tools, true));
+    const expected = ['http_request', 'read_page'];
+    expect(actual).toEqual(expected);
+  });
+
+  it('given the credential plane not configured, should drop only http_request', () => {
+    const actual = Object.keys(filterToolsForAgentAccounts(tools, false));
+    const expected = ['read_page'];
+    expect(actual).toEqual(expected);
+  });
+
+  it('given a read-only agent, should drop http_request — a credentialed request can write at the provider', () => {
+    const actual = WRITE_TOOLS.has('http_request');
+    const expected = true;
+    expect(actual).toEqual(expected);
   });
 });

@@ -6,64 +6,58 @@
  * `decide-reconcile.ts` and `decide-orphan-adoption.ts` exist.
  */
 import { describe, expect, it } from 'vitest';
-import { createHash } from 'node:crypto';
+import { createHmac } from 'node:crypto';
 import type { CredentialVersion } from '@pagespace/db/schema/agent-accounts';
-import type { HashBytes } from '../../grant';
-import type { PendingWrite, WriteDigest } from '../store-adapter';
-import { canonicalJson } from '../../canonical-json';
+import type { HmacBytes, PendingWrite, WriteDigest, WriteDigestKey } from '../store-adapter';
 import { digestWrite } from '../digest-write';
 import { decideReconcile } from '../decide-reconcile';
 import { decideOrphanAdoption } from '../decide-orphan-adoption';
 
-const sha3: HashBytes = (bytes) => createHash('sha3-256').update(bytes).digest('hex');
+const hmac: HmacBytes = (key, bytes) => createHmac('sha3-256', key).update(bytes).digest('hex');
+const key = new Uint8Array(32).fill(9) as WriteDigestKey;
 const v = (n: number) => n as CredentialVersion;
 
-describe('digestWrite (G1c E1)', () => {
-  it('given a value and comment, should be the injected hash over canonicalJson of both', () => {
-    const actual = digestWrite({ secretValue: '{"kind":"api_key"}', secretComment: '{"tenantId":"t"}', hash: sha3 });
-    const expected = sha3(new TextEncoder().encode(canonicalJson({ secretValue: '{"kind":"api_key"}', secretComment: '{"tenantId":"t"}' })));
-    expect(actual).toEqual(expected);
-  });
-
-  it('given writes that differ only in value, or only in comment, or that swap the two, should digest differently', () => {
-    const base = digestWrite({ secretValue: 'a', secretComment: 'b', hash: sha3 });
-    const actual = [
-      digestWrite({ secretValue: 'a2', secretComment: 'b', hash: sha3 }) === base,
-      digestWrite({ secretValue: 'a', secretComment: 'b2', hash: sha3 }) === base,
-      digestWrite({ secretValue: 'b', secretComment: 'a', hash: sha3 }) === base,
-    ];
-    expect(actual).toEqual([false, false, false]);
-  });
-});
-
 describe('decideReconcile (G1c E1)', () => {
-  const attempted = digestWrite({ secretValue: 'next', secretComment: 'bindings', hash: sha3 });
+  const attempted = digestWrite({ secretValue: 'next', secretComment: 'bindings', key, hmac });
   const pending: PendingWrite = { version: v(5), digest: attempted, rotation: true };
 
   it('given Infisical at exactly the pending version with exactly the attempted write, should commit forward to that version', () => {
-    const actual = decideReconcile({ pending, observed: { version: v(5), digest: attempted } });
+    const actual = decideReconcile({ pending, current: v(4), observed: { version: v(5), digest: attempted } });
     expect(actual).toEqual({ outcome: 'commit_forward', version: 5 });
   });
 
-  it('given another version, another write at the pending version, or nothing observable, should fail closed', () => {
-    const other = digestWrite({ secretValue: 'someone-else', secretComment: 'bindings', hash: sha3 });
+  // G2 ruling E1(b): Infisical still at the committed version means the replacing write provably
+  // did not land (every Infisical write creates a new version), so the marker is aborted and the ref
+  // returns to service instead of staying reconcile-required forever.
+  it('given Infisical still at the committed version, should abort the pending write whatever digest it shows', () => {
+    const other = digestWrite({ secretValue: 'still-the-old-material', secretComment: 'bindings', key, hmac });
     const actual = [
-      decideReconcile({ pending, observed: { version: v(4), digest: attempted } }),
-      decideReconcile({ pending, observed: { version: v(6), digest: attempted } }),
-      decideReconcile({ pending, observed: { version: v(5), digest: other } }),
-      decideReconcile({ pending, observed: null }),
+      decideReconcile({ pending, current: v(4), observed: { version: v(4), digest: attempted } }),
+      decideReconcile({ pending, current: v(4), observed: { version: v(4), digest: other } }),
+    ];
+    const expected = [{ outcome: 'abort_pending' }, { outcome: 'abort_pending' }];
+    expect(actual).toEqual(expected);
+  });
+
+  it('given a version below the committed one, above the pending one, another write at the pending version, or nothing observable, should fail closed', () => {
+    const other = digestWrite({ secretValue: 'someone-else', secretComment: 'bindings', key, hmac });
+    const actual = [
+      decideReconcile({ pending, current: v(4), observed: { version: v(3), digest: attempted } }),
+      decideReconcile({ pending, current: v(4), observed: { version: v(6), digest: attempted } }),
+      decideReconcile({ pending, current: v(4), observed: { version: v(5), digest: other } }),
+      decideReconcile({ pending, current: v(4), observed: null }),
     ];
     expect(actual).toEqual([{ outcome: 'fail_closed' }, { outcome: 'fail_closed' }, { outcome: 'fail_closed' }, { outcome: 'fail_closed' }]);
   });
 
   it('given digests that differ only in case, should fail closed — a digest compare is exact', () => {
-    const actual = decideReconcile({ pending, observed: { version: v(5), digest: attempted.toUpperCase() as WriteDigest } });
+    const actual = decideReconcile({ pending, current: v(4), observed: { version: v(5), digest: attempted.toUpperCase() as WriteDigest } });
     expect(actual).toEqual({ outcome: 'fail_closed' });
   });
 });
 
 describe('decideOrphanAdoption (G1c E1)', () => {
-  const attempted = digestWrite({ secretValue: 'material', secretComment: 'bindings', hash: sha3 });
+  const attempted = digestWrite({ secretValue: 'material', secretComment: 'bindings', key, hmac });
 
   it('given an orphan that is exactly this attempted write, should adopt it at its version', () => {
     const actual = decideOrphanAdoption({ attempted, observed: { version: v(1), digest: attempted } });
@@ -71,7 +65,7 @@ describe('decideOrphanAdoption (G1c E1)', () => {
   });
 
   it('given an orphan holding any other write, should erase it', () => {
-    const other = digestWrite({ secretValue: 'older-material', secretComment: 'bindings', hash: sha3 });
+    const other = digestWrite({ secretValue: 'older-material', secretComment: 'bindings', key, hmac });
     const actual = decideOrphanAdoption({ attempted, observed: { version: v(1), digest: other } });
     expect(actual).toEqual({ outcome: 'erase' });
   });

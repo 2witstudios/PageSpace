@@ -194,6 +194,7 @@ import { taskManagementTools } from '../../tools/task-management-tools';
 import { agentTools } from '../../tools/agent-tools';
 import { agentCommunicationTools } from '../../tools/agent-communication-tools';
 import { webSearchTools } from '../../tools/web-search-tools';
+import { httpRequestTools } from '../../tools/http-request-tools';
 import { activityTools } from '../../tools/activity-tools';
 import { calendarReadTools } from '../../tools/calendar-read-tools';
 import { calendarWriteTools } from '../../tools/calendar-write-tools';
@@ -253,6 +254,7 @@ describe('ai-tools', () => {
         ...agentTools,
         ...agentCommunicationTools,
         ...webSearchTools,
+        ...httpRequestTools,
         ...activityTools,
         ...calendarReadTools,
         ...calendarWriteTools,

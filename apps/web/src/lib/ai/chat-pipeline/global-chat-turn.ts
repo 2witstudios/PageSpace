@@ -45,7 +45,7 @@ import { startChatGeneration } from './start-chat-generation';
 import { takeOverConversationStreams } from '@/lib/ai/core/stream-takeover';
 import { startGenerationExclusive } from '@/lib/ai/core/start-generation-exclusive';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
-import { getAllowedDriveIds, type AuthResult } from '@/lib/auth';
+import { getAllowedDriveIds, authSessionIdOf, type AuthResult } from '@/lib/auth';
 import { createAIProvider, updateUserProviderSettings, createProviderErrorResponse, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { extractMessageContent, extractToolCalls, extractToolResults, sanitizeMessagesForModel, convertGlobalAssistantMessageToUIMessage } from '@/lib/ai/core/message-utils';
@@ -64,7 +64,7 @@ import { respondWithHelpAnswer } from '@/lib/ai/core/help-responder';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
 import { buildNonCoreToolNamesPrompt } from '@/lib/ai/core/system-prompt';
 import { buildAgentAwarenessPrompt } from '@/lib/ai/core/agent-awareness';
-import { filterToolsForReadOnly, filterToolsForWebSearch, filterToolsForImageGen, filterToolsForSandboxTier } from '@/lib/ai/core/tool-filtering';
+import { filterToolsForReadOnly, filterToolsForWebSearch, filterToolsForImageGen, filterToolsForSandboxTier, filterToolsForAgentAccounts } from '@/lib/ai/core/tool-filtering';
 import { resolveSandboxToolEligibilityForConversation } from '@/lib/ai/core/sandbox-tool-eligibility';
 import { shouldExposeImageGen } from '@/lib/ai/core/image-gen-access';
 import { getPageTreeContext, getDriveListSummary } from '@/lib/ai/core/page-tree-context';
@@ -951,7 +951,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
     const filteredAllTools = filterToolsForImageGen(
       filterToolsForWebSearch(
         filterToolsForReadOnly(
-          filterToolsForSandboxTier(pageSpaceTools, sandboxTierEligible),
+          filterToolsForAgentAccounts(filterToolsForSandboxTier(pageSpaceTools, sandboxTierEligible)),
           readOnlyMode
         ),
         webSearchMode
@@ -1373,6 +1373,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
               subscriptionTier: userSubscriptionTier,
               imageGenerationModel: userImageGenerationModel ?? DEFAULT_IMAGE_MODEL,
               chatSource: { type: 'global' as const },
+              authSessionId: authSessionIdOf(auth),
               // Worker-dispatch chain depth (spawn_session/send_session) — the
               // X-Agent-Dispatch-Depth header is how depth survives the HTTP
               // hop; forging it low is the default, forging it high only

@@ -30,6 +30,10 @@ export default defineConfig({
       'src/agent-accounts/__tests__/grant-gate-executor.integration.test.ts',
       'src/agent-accounts/__tests__/audit-repository.integration.test.ts',
       'src/agent-accounts/store/__tests__/store-adapter-infisical.integration.test.ts',
+      'src/agent-accounts/executor/__tests__/pinned-https-client.integration.test.ts',
+      'src/agent-accounts/__tests__/agent-account-repository.integration.test.ts',
+      'src/agent-accounts/__tests__/plane-client.integration.test.ts',
+      'src/agent-accounts/__tests__/adversarial/http-executor-end-to-end.integration.test.ts',
     ],
     setupFiles: ['./src/test/setup.ts'],
     // Run test files sequentially to avoid database race conditions
@@ -81,6 +85,10 @@ export default defineConfig({
       'src/agent-accounts/__tests__/grant-gate-executor.integration.test.ts',
       'src/agent-accounts/__tests__/audit-repository.integration.test.ts',
       'src/agent-accounts/store/__tests__/store-adapter-infisical.integration.test.ts',
+      'src/agent-accounts/executor/__tests__/pinned-https-client.integration.test.ts',
+      'src/agent-accounts/__tests__/agent-account-repository.integration.test.ts',
+      'src/agent-accounts/__tests__/plane-client.integration.test.ts',
+      'src/agent-accounts/__tests__/adversarial/http-executor-end-to-end.integration.test.ts',
       ],
       thresholds: {
         lines: 85,

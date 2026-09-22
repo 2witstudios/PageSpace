@@ -968,6 +968,7 @@ describe('collectAllUserData', () => {
     // as every other one: a collector nobody calls from `collectAllUserData`
     // reaches nobody's export.
     expect(Array.isArray(result!.agentWorkspaces)).toBe(true);
+    expect(Array.isArray(result!.agentAccounts.accounts)).toBe(true);
     expect(Array.isArray(result!.streamState)).toBe(true);
     // Same rule again for the content-tags category: a collector that
     // `collectAllUserData` never calls reaches nobody's export.

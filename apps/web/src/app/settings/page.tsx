@@ -7,7 +7,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useBillingVisibility } from "@/hooks/useBillingVisibility";
 import { useCapacitor } from "@/hooks/useCapacitor";
 import { Button } from "@/components/ui/button";
-import { User, Plug2, Key, ArrowLeft, CreditCard, Bell, Shield, Keyboard, Sparkles, Eye, Cable, Calendar, Scale, HardDrive, SlashSquare, Coins, Cookie, FileText, Lock } from "lucide-react";
+import { User, Plug2, Key, ArrowLeft, CreditCard, Bell, Shield, Keyboard, Sparkles, Eye, Cable, Calendar, Scale, HardDrive, SlashSquare, Coins, Cookie, FileText, Lock, KeyRound } from "lucide-react";
 import { SettingsRow, type SettingsItem } from "./SettingsRow";
 import { MarketingLink } from "@/components/ui/MarketingLink";
 import { filterSettingsItems } from "./settings-visibility";
@@ -129,6 +129,13 @@ export default function SettingsPage() {
           description: "Connect external APIs and services to your AI assistants",
           icon: Cable,
           href: "/settings/integrations",
+          available: true,
+        },
+        {
+          title: "Agent Accounts",
+          description: "API keys your global assistant can use without ever seeing them",
+          icon: KeyRound,
+          href: "/settings/agent-accounts",
           available: true,
         },
         {

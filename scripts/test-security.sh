@@ -354,6 +354,18 @@ echo "--------------------------------------------------------------------------
 run_full_package_suite "pagespace SDK (full package — StaticTokenProvider/OAuthTokenProvider, typed error hierarchy)" "packages/sdk"
 
 # =============================================================================
+# Agent Accounts & Credential Plane (L2·G2) — directory-prefix filters
+# =============================================================================
+echo "🔑 Agent Accounts"
+echo "-----------------"
+
+run_test_suite "Agent Accounts decisions + adversarial harness (pure)" "@pagespace/lib" "src/agent-accounts"
+run_test_suite "Account permissions (access, create)" "@pagespace/lib" "src/permissions/__tests__/decide-account"
+run_test_suite "Agent Account routes (create/list/revoke/approve)" "web" "src/app/api/agent-accounts"
+run_test_suite "Agent Account routes (personal)" "web" "src/app/api/user/agent-accounts"
+run_test_suite "http_request tool (caller from run context)" "web" "src/lib/ai/tools/__tests__/http-request-tools.test.ts"
+
+# =============================================================================
 # Security Audit Coverage Gate
 # =============================================================================
 echo "📋 Security Audit Coverage"

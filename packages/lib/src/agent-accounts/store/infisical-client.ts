@@ -39,9 +39,15 @@ export type InfisicalGetResult =
   | { readonly ok: true; readonly secret: InfisicalSecretRecord }
   | { readonly ok: false; readonly reason: 'not_found' | 'unavailable' };
 
+/**
+ * `not_sent`: the client KNOWS the write never left the process — the
+ * Universal Auth login failed or the request could not be built — so Infisical
+ * cannot have changed (G2 ruling E1(a)). `unavailable` covers everything after
+ * the request may have left: a network error, a timeout, a non-2xx answer.
+ */
 export type InfisicalWriteResult =
   | { readonly ok: true; readonly version: number }
-  | { readonly ok: false; readonly reason: 'not_found' | 'unavailable' };
+  | { readonly ok: false; readonly reason: 'not_found' | 'not_sent' | 'unavailable' };
 
 export type InfisicalDeleteResult = { readonly ok: true } | { readonly ok: false; readonly reason: 'not_found' | 'unavailable' };
 
@@ -109,9 +115,15 @@ export function createInfisicalClient(config: InfisicalConfig, fetchImpl: FetchI
 
     async createSecret({ projectId, credentials, secretKey, secretValue, secretComment }) {
       const auth = await authorize(credentials);
-      if (!auth.ok) return { ok: false, reason: 'unavailable' };
+      if (!auth.ok) return { ok: false, reason: 'not_sent' };
+      let url: string;
       try {
-        const response = await fetchImpl(secretUrl(config, secretKey), {
+        url = new URL(secretUrl(config, secretKey)).toString();
+      } catch {
+        return { ok: false, reason: 'not_sent' };
+      }
+      try {
+        const response = await fetchImpl(url, {
           method: 'POST',
           headers: { authorization: `Bearer ${auth.accessToken}`, 'content-type': 'application/json' },
           body: JSON.stringify({ workspaceId: projectId, environment: config.environment, secretPath: '/', secretValue, secretComment }),
@@ -126,9 +138,15 @@ export function createInfisicalClient(config: InfisicalConfig, fetchImpl: FetchI
 
     async updateSecret({ projectId, credentials, secretKey, secretValue, secretComment }) {
       const auth = await authorize(credentials);
-      if (!auth.ok) return { ok: false, reason: 'unavailable' };
+      if (!auth.ok) return { ok: false, reason: 'not_sent' };
+      let url: string;
       try {
-        const response = await fetchImpl(secretUrl(config, secretKey), {
+        url = new URL(secretUrl(config, secretKey)).toString();
+      } catch {
+        return { ok: false, reason: 'not_sent' };
+      }
+      try {
+        const response = await fetchImpl(url, {
           method: 'PATCH',
           headers: { authorization: `Bearer ${auth.accessToken}`, 'content-type': 'application/json' },
           body: JSON.stringify({ workspaceId: projectId, environment: config.environment, secretPath: '/', secretValue, secretComment }),

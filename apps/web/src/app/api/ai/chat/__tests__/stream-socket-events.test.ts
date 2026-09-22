@@ -85,6 +85,8 @@ vi.mock('@/lib/auth', () => ({
     (result): result is import('@/lib/auth').ServiceAuthResult =>
       !('error' in result) && 'tokenType' in result && result.tokenType === 'service',
   ),
+  // G2 agent accounts: the real rule, so a session fixture yields its session id.
+  authSessionIdOf: vi.fn<typeof import('@/lib/auth').authSessionIdOf>((result) => (result.tokenType === 'session' ? result.sessionId : undefined)),
   canPrincipalViewPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
     return canUserViewPage(auth.userId, pageId);
@@ -348,6 +350,8 @@ vi.mock('@/lib/ai/core/tool-filtering', () => ({
   filterToolsForEphemeralWorkspace: vi.fn((tools: unknown) => tools),
   filterToolsForSandboxEnablement: vi.fn((tools: unknown) => tools),
   filterToolsForAgentAllowlist: vi.fn((tools: unknown) => tools),
+  // G2 agent accounts: identity passthrough (the credential plane is not configured in these fixtures).
+  filterToolsForAgentAccounts: vi.fn((tools: unknown) => tools),
   filterToolsForReadOnly: vi.fn().mockReturnValue({}),
   filterToolsForWebSearch: vi.fn().mockReturnValue({}),
   filterToolsForMcpScope: vi.fn().mockReturnValue({}),

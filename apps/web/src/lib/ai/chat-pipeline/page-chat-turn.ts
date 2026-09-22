@@ -53,7 +53,7 @@ import { startChatGeneration } from './start-chat-generation';
 import { takeOverConversationStreams } from '@/lib/ai/core/stream-takeover';
 import { startGenerationExclusive } from '@/lib/ai/core/start-generation-exclusive';
 import { resolveMessageId } from '@/lib/ai/streams/resolveMessageId';
-import { isMCPAuthResult, isServiceAuthResult, checkMCPPageScope, getAllowedDriveIds, isDriveScopedPrincipal, canPrincipalViewPage, canPrincipalEditPage, type AuthResult } from '@/lib/auth';
+import { isMCPAuthResult, isServiceAuthResult, authSessionIdOf, checkMCPPageScope, getAllowedDriveIds, isDriveScopedPrincipal, canPrincipalViewPage, canPrincipalEditPage, type AuthResult } from '@/lib/auth';
 
 /**
  * Thrown when the conversation was still active at the ownership check far
@@ -98,6 +98,7 @@ import {
   filterToolsForAgentAllowlist,
   filterToolsForSandboxEnablement,
   filterToolsForSandboxTier,
+  filterToolsForAgentAccounts,
 } from '@/lib/ai/core/tool-filtering';
 import { resolveSandboxToolEligibilityForConversation } from '@/lib/ai/core/sandbox-tool-eligibility';
 import { shouldExposeImageGen } from '@/lib/ai/core/image-gen-access';
@@ -1255,9 +1256,8 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // []            = zero tools selected — block all PageSpace tools.
     // ['tool1', …]  = only those tools.
     const agentEnabledTools = page.enabledTools as string[] | null;
-    let filteredTools = filterToolsForAgentAllowlist(
-      baseToolsWithoutOverrides,
-      agentEnabledTools
+    let filteredTools = filterToolsForAgentAccounts(
+      filterToolsForAgentAllowlist(baseToolsWithoutOverrides, agentEnabledTools),
     ) as ToolSet;
 
     // Step 3b: the per-agent sandbox switch AND the payer's tier eligibility.
@@ -1884,6 +1884,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
                   agentTitle: page.title,
                 },
                 enabledTools: agentEnabledTools ?? null,
+                authSessionId: authSessionIdOf(authResult),
                 // Bind tool execution to the MCP token's drive scope and RBAC role
                 // so a scoped token cannot reach drives outside its scope — or
                 // exceed its own membership role — via the agent's broader ACL.

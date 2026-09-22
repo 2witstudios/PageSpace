@@ -9,6 +9,15 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Give an agent its own account** — in an agent's settings (Accounts), or in your personal
+  settings for your global assistant, add an API key for a site so the agent can call that site's
+  API for you. The agent refers to the account by name and never sees the key: PageSpace keeps it in
+  a separate credential vault and adds it to each request itself, only for the site address you
+  pinned — no other sites, other ports or redirects. New requests ask you to approve them in the
+  chat unless you let the agent use that site without asking. The dialog recommends creating a
+  dedicated account for the agent; sharing a personal login needs an explicit acknowledgment, which
+  the account list shows. Revoking stops PageSpace from using the key immediately; revoke it at the
+  site too to disable it everywhere.
 - **Agents can use a real browser (where an operator enables it)** — an agent with its sandbox
   turned on can open public web pages, read them, click, type and fill in forms, take screenshots
   and manage tabs in a browser that runs separately from its sandbox. The agent gets only those

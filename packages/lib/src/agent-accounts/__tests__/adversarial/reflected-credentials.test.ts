@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { redactKnownValues } from '../../redact-known-values';
+import { filterResponse } from '../../filter-response';
 
 // Threat model Λ10, A1 (ASI01). An authorized site can echo the credential;
 // redaction is a tripwire, not a boundary. The scrub itself is a pure row;
@@ -39,5 +40,22 @@ describe('adversarial: reflected-credentials', () => {
     expect(actual).toEqual([true, false]);
   });
 
-  it.todo('given a canary-secret account, should never appear in any tool result, terminal output, screenshot or DOM dump across the G2 slice — I/O row, owned by G2 (http executor + canary account)');
+  it('given a canary-secret account whose site echoes the key in a body, a header and a cookie, should release a view with no copy of it (G2 filterResponse)', () => {
+    const released = filterResponse({
+      status: 200,
+      headers: [['content-type', 'application/json'], ['x-echo', CANARY], ['set-cookie', `s=${CANARY}`]],
+      body: new TextEncoder().encode(JSON.stringify({ echoed: CANARY, encoded: encodeURIComponent(CANARY) })),
+      knownValues: [CANARY],
+      maxBodyBytes: 65_536,
+    });
+    const actual = { leaked: JSON.stringify(released).includes(CANARY), redacted: released.redacted };
+    const expected = { leaked: false, redacted: true };
+    expect(actual).toEqual(expected);
+  });
+
+  // The whole-slice sweep — every create/list/tool result/approval subject the G2 slice produced
+  // against a real plane and a real reflecting upstream, searched for the canary — is the last row of
+  // `http-executor-end-to-end.integration.test.ts`. Terminal output, screenshots and DOM dumps belong
+  // to the gates that build those surfaces (G4, G6a–c).
+  it.todo('given a canary-secret account, should never appear in terminal output, a screenshot or a DOM dump — I/O rows, owned by G4 (relay) and G6a–c (browser)');
 });
