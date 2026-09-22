@@ -27,8 +27,13 @@ export const CONTROL_INSTRUCTION_AUDIENCE = 'pagespace-browser-worker';
 export const CONTROL_INSTRUCTION_MAX_TTL_MS = 60_000;
 /** Tolerated clock difference between the web server and the worker. */
 export const CONTROL_INSTRUCTION_MAX_CLOCK_SKEW_MS = 30_000;
-/** Header carrying the encoded instruction on every worker request. */
-export const CONTROL_INSTRUCTION_HEADER = 'x-ps-browser-instruction';
+/**
+ * The encoded instruction travels as the request BODY of `POST /control`
+ * (a header would cap typed text at the relay's header limit). A body larger
+ * than this is refused unread: the largest legal instruction — 10k characters
+ * of non-ASCII text — encodes well under it.
+ */
+export const CONTROL_INSTRUCTION_MAX_BYTES = 128 * 1024;
 
 export type ControlActor =
   | { readonly kind: 'agent'; readonly agentId: string }

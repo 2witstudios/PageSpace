@@ -21,7 +21,6 @@ import type { BrowserControlResponse, BrowserOperation } from './browser-operati
 import type { BrowserSessionShape, BrowserSubstrate, ProvisionedBrowserSession, WorkerResponse } from './browser-substrate.js';
 import {
   CONTROL_INSTRUCTION_AUDIENCE,
-  CONTROL_INSTRUCTION_HEADER,
   CONTROL_INSTRUCTION_VERSION,
   type ControlActor,
   type ControlCommand,
@@ -104,7 +103,7 @@ export const createBrowserSessionClient = <B>({
   };
 
   const send = (session: ProvisionedBrowserSession, actor: ControlActor, command: ControlCommand): Promise<WorkerResponse> =>
-    session.send({ method: 'POST', path: '/control', headers: { [CONTROL_INSTRUCTION_HEADER]: instruct(session.sessionId, actor, command) }, body: null });
+    session.send({ method: 'POST', path: '/control', headers: { 'content-type': 'text/plain' }, body: instruct(session.sessionId, actor, command) });
 
   const open = (ref: BrowserSessionRef<B>): Promise<LiveSession<B> | { readonly refused: string }> => {
     const existing = live.get(ref.sessionId);

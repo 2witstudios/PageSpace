@@ -37,12 +37,18 @@ export type BrowserEgressProxyOptions = {
 export type BrowserEgressProxy = {
   /** `http://127.0.0.1:<port>`, for Chromium's `--proxy-server`. */
   readonly url: string;
+  /** Total refusals since start. */
+  readonly refusalCount: () => number;
+  /** The most recent refusals, at most {@link RECENT_REFUSALS_KEPT}. */
   readonly refusals: () => readonly EgressRefusal[];
   readonly close: () => Promise<void>;
 };
 
 /** Headers that address the proxy hop itself and must not travel upstream. */
 const HOP_HEADERS = new Set(['proxy-connection', 'proxy-authorization', 'connection', 'keep-alive', 'te', 'trailer', 'upgrade']);
+
+/** A page can loop refused requests forever; only a bounded tail is kept. */
+export const RECENT_REFUSALS_KEPT = 100;
 
 const defaultResolve = async (host: string): Promise<readonly string[]> => {
   try {
@@ -61,12 +67,15 @@ export const startBrowserEgressProxy = async ({
   onRefused,
 }: BrowserEgressProxyOptions): Promise<BrowserEgressProxy> => {
   const refusals: EgressRefusal[] = [];
+  let refusalCount = 0;
   // CONNECT tunnels are hijacked sockets the http server no longer tracks.
   const tunnels = new Set<Duplex>();
 
   const refuse = (url: string, reason: EgressRefusal['reason']): void => {
     const refusal = { url, reason };
+    refusalCount += 1;
     refusals.push(refusal);
+    if (refusals.length > RECENT_REFUSALS_KEPT) refusals.shift();
     onRefused?.(refusal);
   };
 
@@ -77,9 +86,13 @@ export const startBrowserEgressProxy = async ({
   };
 
   const onConnect = async (req: IncomingMessage, client: Duplex, head: Buffer): Promise<void> => {
+    // Node stops handling errors on a socket once it is handed to 'connect'.
+    // Attach first: a reset during the lookup must not crash the worker.
+    client.on('error', () => client.destroy());
     const target = req.url ?? '';
     const url = `https://${target}/`;
     const verdict = await decide(url);
+    if (client.destroyed) return;
     if (verdict.verdict !== 'allow') {
       refuse(url, verdict.verdict === 'deny' ? verdict.reason : 'unresolved');
       client.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n');
@@ -97,7 +110,7 @@ export const startBrowserEgressProxy = async ({
       client.pipe(upstream);
     });
     upstream.on('error', () => client.destroy());
-    client.on('error', () => upstream.destroy());
+    client.once('close', () => upstream.destroy());
   };
 
   const onRequest = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
@@ -131,6 +144,7 @@ export const startBrowserEgressProxy = async ({
       if (!res.headersSent) res.writeHead(502);
       res.end();
     });
+    req.on('error', () => upstream.destroy());
     req.pipe(upstream);
   };
 
@@ -149,6 +163,7 @@ export const startBrowserEgressProxy = async ({
 
   return {
     url: `http://127.0.0.1:${port}`,
+    refusalCount: () => refusalCount,
     refusals: () => [...refusals],
     close: () =>
       new Promise<void>((done) => {

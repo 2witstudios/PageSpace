@@ -19,7 +19,8 @@ import { join } from 'node:path';
 import { assert } from './riteway.js';
 import { createTestSigner } from './support/control-signer.js';
 import { startBrowserControlWorker, type BrowserControlWorker } from '../browser-control-worker.js';
-import { CONTROL_INSTRUCTION_HEADER, type ControlActor, type ControlCommand } from '../control-instruction.js';
+import { startBrowserEgressProxy } from '../browser-egress-proxy-adapter.js';
+import type { ControlActor, ControlCommand } from '../control-instruction.js';
 import type { BrowserControlResponse, BrowserOperation } from '../browser-operation.js';
 
 const SESSION = 'bws_integration_1';
@@ -55,6 +56,10 @@ const startSite = (): Promise<void> =>
         });
         return;
       }
+      if (req.url === '/stall') {
+        setTimeout(() => res.writeHead(200, { 'content-type': 'text/html' }).end('<!doctype html><title>Stalled</title>'), 8_000);
+        return;
+      }
       if (req.url === '/slow') {
         setTimeout(() => res.writeHead(200, { 'content-type': 'text/html' }).end('<!doctype html><title>Slow</title><p>slow</p>'), 1_500);
         return;
@@ -70,7 +75,7 @@ const startSite = (): Promise<void> =>
 const post = async (instruction: string | null): Promise<{ status: number; body: unknown }> => {
   const response = await fetch(`${worker.url}/control`, {
     method: 'POST',
-    headers: instruction === null ? {} : { [CONTROL_INSTRUCTION_HEADER]: instruction },
+    body: instruction ?? '',
   });
   return { status: response.status, body: await response.json() };
 };
@@ -259,6 +264,97 @@ describe('browser control worker (real Chromium)', () => {
         restarts: 1,
         profiles: 1,
       },
+    });
+  });
+
+  it('accepts the largest typed text, even when it is not ASCII', async () => {
+    await agentOp({ kind: 'navigate', url: 'http://www.form.test/contact' });
+    const read = await agentOp({ kind: 'read' });
+    const snapshot = read.ok && read.result.kind === 'read' ? read.result.snapshot : '';
+    const typed = await agentOp({ kind: 'type', ref: refOf(snapshot, /textbox "Your name"/), text: 'é'.repeat(10_000), submit: false });
+    assert({
+      given: '10,000 two-byte characters typed into a field',
+      should: 'reach the worker and succeed (the instruction travels in the body, not a header)',
+      actual: typed.ok,
+      expected: true,
+    });
+  });
+});
+
+describe('a page that will not answer', () => {
+  it('restarts the browser at the operation deadline, so a take-over is never held hostage', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bw-deadline-'));
+    const stuck = await startBrowserControlWorker({
+      sessionId: 'bws_deadline',
+      controlPublicKey: signer.publicKey,
+      allowedOrigins: null,
+      listen: { host: '127.0.0.1', port: 0 },
+      profileRoot: root,
+      operationDeadlineMs: 2_000,
+      egress: {
+        resolve: async () => [FAKE_PUBLIC],
+        dial: (_address, _port) => connect({ host: '127.0.0.1', port: sitePort }),
+      },
+    });
+    const send = async (actor: ControlActor, cmd: ControlCommand) => {
+      const response = await fetch(`${stuck.url}/control`, { method: 'POST', body: signer.instruct({ sid: 'bws_deadline', actor, command: cmd }) });
+      return { status: response.status, body: (await response.json()) as Record<string, unknown> };
+    };
+    const started = Date.now();
+    const navigation = send(AGENT, { type: 'operation', operation: { kind: 'navigate', url: 'http://www.form.test/stall' } });
+    await new Promise((done) => setTimeout(done, 300));
+    const takeOver = await send(ALICE, { type: 'take-over' });
+    const tookMs = Date.now() - started;
+    const navigated = (await navigation).body as unknown as BrowserControlResponse;
+    const audit = stuck.audit();
+    await stuck.close();
+    await rm(root, { recursive: true, force: true });
+    assert({
+      given: 'an agent navigation to a page that answers after 8 s, a 2 s deadline, and a take-over 0.3 s in',
+      should: 'give the human control within the deadline plus a restart, withhold the navigation, and restart once',
+      actual: {
+        takeOver: [takeOver.status, takeOver.body.mode],
+        inTime: tookMs < 7_000,
+        navigated: navigated.ok ? 'released' : navigated.refusal.reason,
+        restarts: audit.browserRestarts,
+        releasedOutside: audit.agentResultsReleasedOutsideAgentControl,
+      },
+      expected: { takeOver: [200, 'human-control'], inTime: true, navigated: 'observation-suppressed', restarts: 1, releasedOutside: 0 },
+    });
+  });
+});
+
+describe('egress proxy resilience', () => {
+  it('survives a client that resets its CONNECT socket mid-lookup', async () => {
+    const proxy = await startBrowserEgressProxy({
+      allowedOrigins: null,
+      resolve: (host) => new Promise((done) => setTimeout(() => done(host === 'slow.form.test' ? [FAKE_PUBLIC] : []), 400)),
+      dial: () => connect({ host: '127.0.0.1', port: sitePort }),
+    });
+    const port = Number(new URL(proxy.url).port);
+    await new Promise<void>((done) => {
+      const socket = connect({ host: '127.0.0.1', port }, () => {
+        socket.write('CONNECT slow.form.test:443 HTTP/1.1\r\nHost: slow.form.test:443\r\n\r\n');
+        setTimeout(() => {
+          socket.resetAndDestroy();
+          done();
+        }, 50);
+      });
+    });
+    await new Promise((done) => setTimeout(done, 800));
+    const stillAnswers = await new Promise<string>((done) => {
+      const probe = connect({ host: '127.0.0.1', port }, () => probe.write('CONNECT 10.0.0.1:443 HTTP/1.1\r\n\r\n'));
+      probe.once('data', (data) => {
+        done(data.toString().split('\r\n')[0]);
+        probe.destroy();
+      });
+    });
+    await proxy.close();
+    assert({
+      given: 'a CONNECT whose client resets during the lookup, then a CONNECT to a private address',
+      should: 'stay up and refuse the second',
+      actual: stillAnswers,
+      expected: 'HTTP/1.1 403 Forbidden',
     });
   });
 });

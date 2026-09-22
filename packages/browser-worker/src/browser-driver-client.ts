@@ -49,6 +49,11 @@ export const MAX_SNAPSHOT_CHARS = 40_000;
 const ACTION_TIMEOUT_MS = 10_000;
 const NAVIGATION_TIMEOUT_MS = 30_000;
 const SCREENSHOT_QUALITY = 60;
+const TITLE_TIMEOUT_MS = 2_000;
+
+/** A page that spins its main thread can hang even `title()`; answer '' rather than wait. */
+const titleOf = (page: Page): Promise<string> =>
+  Promise.race([page.title().catch(() => ''), new Promise<string>((done) => setTimeout(() => done(''), TITLE_TIMEOUT_MS).unref())]);
 
 const CHROMIUM_ARGS: readonly string[] = [
   '--disable-quic',
@@ -106,7 +111,7 @@ export const createBrowserDriver = async ({
   const summarize = async (page: Page): Promise<PageSummary> => ({
     tabId: tabIds.get(page) ?? 'tab-unknown',
     url: page.url(),
-    title: await page.title().catch(() => ''),
+    title: await titleOf(page),
   });
 
   const findTab = (tabId: string): Page | null => context.pages().find((page) => tabIds.get(page) === tabId) ?? null;

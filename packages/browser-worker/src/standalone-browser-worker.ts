@@ -34,6 +34,11 @@ const main = async (): Promise<void> => {
   };
   process.once('SIGTERM', stop);
   process.once('SIGINT', stop);
+  // Last resort: whatever threw, the profile must not outlive the process.
+  process.once('uncaughtException', (error) => {
+    process.stderr.write(`browser worker crashed: ${error.message}\n`);
+    stop();
+  });
 };
 
 main().catch((error: unknown) => {

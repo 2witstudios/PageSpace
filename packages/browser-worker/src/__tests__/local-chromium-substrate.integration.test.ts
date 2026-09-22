@@ -14,7 +14,6 @@ import { assert } from './riteway.js';
 import { createTestSigner } from './support/control-signer.js';
 import { createLocalChromiumSubstrate } from '../local-chromium-substrate-adapter.js';
 import { startBrowserControlWorker } from '../browser-control-worker.js';
-import { CONTROL_INSTRUCTION_HEADER } from '../control-instruction.js';
 import type { BrowserSubstrate } from '../browser-substrate.js';
 
 const signer = createTestSigner();
@@ -24,7 +23,7 @@ const listTabs = async (substrate: BrowserSubstrate, sessionId: string) => {
   const session = await substrate.find(sessionId);
   if (session === null) return null;
   const instruction = signer.instruct({ sid: sessionId, actor: { kind: 'agent', agentId: 'a1' }, command: { type: 'operation', operation: { kind: 'tabs', action: 'list' } } });
-  const response = await session.send({ method: 'POST', path: '/control', headers: { [CONTROL_INSTRUCTION_HEADER]: instruction }, body: null });
+  const response = await session.send({ method: 'POST', path: '/control', headers: {}, body: instruction });
   return { status: response.status, ok: (JSON.parse(response.body) as { ok: boolean }).ok };
 };
 

@@ -29,7 +29,7 @@ import { mkdtemp, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BrowserControlResponse, BrowserOperation, BrowserRefusalReason } from './browser-operation.js';
-import { CONTROL_INSTRUCTION_HEADER, type ControlActor, type HumanInput } from './control-instruction.js';
+import { CONTROL_INSTRUCTION_MAX_BYTES, type ControlActor, type HumanInput } from './control-instruction.js';
 import { INITIAL_HUMAN_CONTROL_MODE, type HumanControlMode, type HumanControlState } from './human-control-state.js';
 import { OBSERVATION_KIND_BY_OPERATION } from './observation-kind.js';
 import { verifyControlInstruction } from './verify-control-instruction.js';
@@ -69,6 +69,7 @@ export type BrowserControlWorkerOptions = {
   readonly idleShutdownMs?: number;
   /** Called once the worker has shut itself down for idleness. */
   readonly onExpire?: () => void;
+  readonly operationDeadlineMs?: number;
 };
 
 export type BrowserControlWorker = {
@@ -78,6 +79,18 @@ export type BrowserControlWorker = {
 };
 
 type Reply = { readonly status: number; readonly body: unknown };
+
+/**
+ * The longest any one agent operation may hold the queue. Beyond it the page
+ * is treated as hostile or wedged: the browser is restarted, so a page that
+ * spins its main thread can never keep a human from taking over.
+ */
+export const OPERATION_DEADLINE_MS = 45_000;
+const CLOSE_DEADLINE_MS = 10_000;
+
+const TIMED_OUT = Symbol('timed-out');
+const withDeadline = <T>(work: Promise<T>, ms: number): Promise<T | typeof TIMED_OUT> =>
+  Promise.race([work, new Promise<typeof TIMED_OUT>((done) => setTimeout(() => done(TIMED_OUT), ms).unref())]);
 
 const SUPPRESSED: BrowserControlResponse = {
   ok: false,
@@ -110,6 +123,7 @@ export const startBrowserControlWorker = async ({
   egress,
   idleShutdownMs = 15 * 60 * 1000,
   onExpire,
+  operationDeadlineMs = OPERATION_DEADLINE_MS,
 }: BrowserControlWorkerOptions): Promise<BrowserControlWorker> => {
   const controlKey = importControlKey(controlPublicKey);
   const verify = (message: Uint8Array, signature: Uint8Array): boolean => {
@@ -171,6 +185,15 @@ export const startBrowserControlWorker = async ({
   const refuseForMode = (): BrowserControlResponse =>
     mode.state === 'agent-control' ? refusal('draining', MODE_DETAIL.draining) : refusal(mode.state, MODE_DETAIL[mode.state]);
 
+  /** Replace the browser with a fresh one in a new profile. The old one is closed, or abandoned if it will not close. */
+  const restartBrowser = async (): Promise<void> => {
+    const previous = driver;
+    driver = null;
+    counters.browserRestarts += 1;
+    if (previous !== null) await withDeadline(previous.close(), CLOSE_DEADLINE_MS);
+    driver = await launch();
+  };
+
   const runAgentOperation = (actor: ControlActor, operation: BrowserOperation): Promise<BrowserControlResponse> => {
     const admission = decideActionAdmission({ mode, actor });
     if (!admission.admit) {
@@ -189,7 +212,12 @@ export const startBrowserControlWorker = async ({
         counters.agentActionsCancelled += 1;
         return refuseForMode();
       }
-      return releaseToAgent(await driver.run(operation), operation.kind, admittedEpoch);
+      const outcome = await withDeadline(driver.run(operation), operationDeadlineMs);
+      if (outcome === TIMED_OUT) {
+        await restartBrowser();
+        return releaseToAgent(refusal('operation-failed', 'The page stopped responding; the browser was restarted.'), operation.kind, admittedEpoch);
+      }
+      return releaseToAgent(outcome, operation.kind, admittedEpoch);
     });
     agentQueue = result.then(
       () => undefined,
@@ -213,12 +241,8 @@ export const startBrowserControlWorker = async ({
     serialized(async () => {
       const transition = apply({ type: 'release', by: { userId } });
       if (transition.rejected !== null) return { status: 409, body: { rejected: transition.rejected, mode: mode.state } };
-      const previous = driver;
-      driver = null;
-      await previous?.close();
-      counters.browserRestarts += 1;
       try {
-        driver = await launch();
+        await restartBrowser();
         apply({ type: 'hydrated' });
       } catch {
         // Fail closed: the agent stays cut off in `hydrating`.
@@ -240,14 +264,13 @@ export const startBrowserControlWorker = async ({
     return { status: 200, body: { ok: true } };
   };
 
-  const audit = (): WorkerAudit => ({ mode: mode.state, ...counters, egressRefusals: proxy.refusals().length });
+  const audit = (): WorkerAudit => ({ mode: mode.state, ...counters, egressRefusals: proxy.refusalCount() });
 
-  const handleControl = async (req: IncomingMessage): Promise<Reply> => {
+  const handleControl = async (instruction: string): Promise<Reply> => {
     const now = clock();
     for (const [nonce, expiresAt] of seenNonces) if (expiresAt <= now) seenNonces.delete(nonce);
-    const header = req.headers[CONTROL_INSTRUCTION_HEADER];
     const verdict = verifyControlInstruction({
-      instruction: typeof header === 'string' ? header : '',
+      instruction,
       verify,
       now,
       sessionId,
@@ -278,15 +301,39 @@ export const startBrowserControlWorker = async ({
     res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(JSON.stringify(body));
   };
 
+  /** The body, or `null` once it exceeds the instruction bound (the rest is never buffered). */
+  const readInstruction = (req: IncomingMessage): Promise<string | null> =>
+    new Promise((done) => {
+      const chunks: Buffer[] = [];
+      let size = 0;
+      req.on('data', (chunk: Buffer) => {
+        size += chunk.length;
+        if (size > CONTROL_INSTRUCTION_MAX_BYTES) {
+          done(null);
+          req.destroy();
+          return;
+        }
+        chunks.push(chunk);
+      });
+      req.on('end', () => done(Buffer.concat(chunks).toString('utf8').trim()));
+      req.on('error', () => done(null));
+    });
+
   const server = createServer((req, res) => {
-    // Drain and ignore any body: every parameter travels inside the signed instruction.
-    req.resume();
-    if (req.method === 'GET' && req.url === '/healthz') return respond(res, { status: 200, body: { ok: true } });
-    if (req.method !== 'POST' || req.url !== '/control') return respond(res, { status: 404, body: { error: 'not-found' } });
-    handleControl(req).then(
-      (reply) => respond(res, reply),
-      () => respond(res, { status: 500, body: { error: 'internal' } }),
-    );
+    if (req.method === 'GET' && req.url === '/healthz') {
+      req.resume();
+      return respond(res, { status: 200, body: { ok: true } });
+    }
+    if (req.method !== 'POST' || req.url !== '/control') {
+      req.resume();
+      return respond(res, { status: 404, body: { error: 'not-found' } });
+    }
+    readInstruction(req)
+      .then((instruction) => (instruction === null ? { status: 413, body: { error: 'too-large' } } : handleControl(instruction)))
+      .then(
+        (reply) => respond(res, reply),
+        () => respond(res, { status: 500, body: { error: 'internal' } }),
+      );
   });
 
   await new Promise<void>((done) => server.listen(listen.port, listen.host, done));
