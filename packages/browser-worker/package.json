@@ -34,6 +34,11 @@
       "import": "./dist/browser-operation.js",
       "default": "./dist/browser-operation.js"
     },
+    "./browser-session-client": {
+      "types": "./dist/browser-session-client.d.ts",
+      "import": "./dist/browser-session-client.js",
+      "default": "./dist/browser-session-client.js"
+    },
     "./browser-sprite-name": {
       "types": "./dist/browser-sprite-name.d.ts",
       "import": "./dist/browser-sprite-name.js",
@@ -73,6 +78,11 @@
       "types": "./dist/decide-tool-exposure.d.ts",
       "import": "./dist/decide-tool-exposure.js",
       "default": "./dist/decide-tool-exposure.js"
+    },
+    "./derive-browser-session-id": {
+      "types": "./dist/derive-browser-session-id.d.ts",
+      "import": "./dist/derive-browser-session-id.js",
+      "default": "./dist/derive-browser-session-id.js"
     },
     "./encode-control-instruction": {
       "types": "./dist/encode-control-instruction.d.ts",
@@ -144,6 +154,9 @@
       "browser-operation": [
         "./dist/browser-operation.d.ts"
       ],
+      "browser-session-client": [
+        "./dist/browser-session-client.d.ts"
+      ],
       "browser-sprite-name": [
         "./dist/browser-sprite-name.d.ts"
       ],
@@ -167,6 +180,9 @@
       ],
       "decide-tool-exposure": [
         "./dist/decide-tool-exposure.d.ts"
+      ],
+      "derive-browser-session-id": [
+        "./dist/derive-browser-session-id.d.ts"
       ],
       "encode-control-instruction": [
         "./dist/encode-control-instruction.d.ts"

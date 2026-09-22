@@ -57,6 +57,8 @@ export const BROWSER_REFUSAL_REASONS = [
   'tab-not-found',
   'observation-suppressed',
   'operation-failed',
+  'billing-denied',
+  'unavailable',
 ] as const;
 export type BrowserRefusalReason = (typeof BROWSER_REFUSAL_REASONS)[number];
 
