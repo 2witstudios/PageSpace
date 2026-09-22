@@ -47,9 +47,10 @@ const CONTROL_CHAR_RE = /[\x00-\x1F\x7F]/;
  * the key, so collisions compare folded names.
  */
 function foldQueryName(name: string): string {
-  let decoded = name;
+  // Form decoders read `+` as a space before anything else.
+  let decoded = name.replace(/\+/g, ' ');
   try {
-    decoded = decodeURIComponent(name);
+    decoded = decodeURIComponent(decoded);
   } catch {
     // An undecodable name still compares by its raw form.
   }

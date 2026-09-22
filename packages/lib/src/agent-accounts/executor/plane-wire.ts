@@ -24,6 +24,8 @@ export const planePutBody = z
   .strict();
 
 export const planeRevokeBody = z.object({ ref }).strict();
+/** Erase material wherever it is (Infisical is searched even without a plane metadata row). */
+export const planeDeleteBody = z.object({ ref }).strict();
 
 export const planeExecuteBody = z
   .object({
@@ -51,6 +53,7 @@ export const planeExecuteBody = z
 
 export type PlanePutBody = z.infer<typeof planePutBody>;
 export type PlaneRevokeBody = z.infer<typeof planeRevokeBody>;
+export type PlaneDeleteBody = z.infer<typeof planeDeleteBody>;
 export type PlaneExecuteBody = z.infer<typeof planeExecuteBody>;
 
-export const PLANE_ROUTES = { put: '/v1/accounts/put', revoke: '/v1/accounts/revoke', execute: '/v1/http/execute' } as const;
+export const PLANE_ROUTES = { put: '/v1/accounts/put', revoke: '/v1/accounts/revoke', delete: '/v1/accounts/delete', execute: '/v1/http/execute' } as const;

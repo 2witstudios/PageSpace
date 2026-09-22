@@ -39,7 +39,12 @@ export const httpRequestTools = {
       if (context?.userId === undefined || authority === null) return { accounts: [] };
       const agentPageId = context.chatSource?.type === 'page' ? (context.chatSource.agentPageId ?? null) : null;
       // The same scoping as the settings list: an agent page's own accounts, or the person's own for the global assistant.
-      const listed = await authority.listAccounts({ actorUserId: context.userId as UserId, owner: agentPageId === null ? { kind: 'user' } : { kind: 'agent_page', agentPageId } });
+      const listed = await authority.listAccounts({
+        actorUserId: context.userId as UserId,
+        owner: agentPageId === null ? { kind: 'user' } : { kind: 'agent_page', agentPageId },
+        // A drive-scoped credential never sees accounts outside its drives (second review MED-2).
+        allowedDriveIds: context.mcpAllowedDriveIds ?? [],
+      });
       return {
         accounts: (listed ?? []).filter((account) => account.status === 'active').map((account) => ({ accountId: account.id, name: account.name, sites: account.allowedOrigins.map(siteOf), ready: account.ready })),
       };

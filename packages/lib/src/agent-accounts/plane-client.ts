@@ -15,9 +15,9 @@
  * plane is `plane_unavailable`. Never a thrown error a route turns into a 500.
  */
 import { createHash, createHmac } from 'node:crypto';
-import type { PutResult, RevokeResult } from './store/store-adapter';
+import type { DeleteResult, PutResult, RevokeResult } from './store/store-adapter';
 import type { HttpExecutionResult } from './executor/decide-execution-result';
-import type { PlaneExecuteBody, PlanePutBody, PlaneRevokeBody } from './executor/plane-wire';
+import type { PlaneDeleteBody, PlaneExecuteBody, PlanePutBody, PlaneRevokeBody } from './executor/plane-wire';
 import { PLANE_ROUTES } from './executor/plane-wire';
 import { PLANE_SIGNATURE_HEADER, signPlaneRequest } from './executor/plane-request-signature';
 import { classifyPlaneCallFailure, type PlaneCallFailure, type PlaneRoute } from './classify-plane-call-failure';
@@ -30,6 +30,8 @@ export type PlaneUnavailable = { readonly ok: false; readonly reason: 'plane_una
 export type PlaneClient = {
   readonly put: (body: PlanePutBody) => Promise<PutResult | PlaneUnavailable>;
   readonly revoke: (body: PlaneRevokeBody) => Promise<RevokeResult | PlaneUnavailable>;
+  /** Erase the material wherever it is — used for an account whose first put never committed. */
+  readonly delete: (body: PlaneDeleteBody) => Promise<DeleteResult | PlaneUnavailable>;
   readonly execute: (body: PlaneExecuteBody) => Promise<HttpExecutionResult | PlaneUnavailable>;
 };
 
@@ -76,6 +78,7 @@ export function createPlaneClient({
   return {
     put: (body) => call<PutResult>('put', PLANE_ROUTES.put, body) as Promise<PutResult | PlaneUnavailable>,
     revoke: (body) => call<RevokeResult>('revoke', PLANE_ROUTES.revoke, body) as Promise<RevokeResult | PlaneUnavailable>,
+    delete: (body) => call<DeleteResult>('delete', PLANE_ROUTES.delete, body) as Promise<DeleteResult | PlaneUnavailable>,
     execute: (body) => call<HttpExecutionResult>('execute', PLANE_ROUTES.execute, body) as Promise<HttpExecutionResult | PlaneUnavailable>,
   };
 }

@@ -144,6 +144,8 @@ export function filterResponse({
     return { status, headers: released, body: null, bodyOmitted: 'binary', truncated: false, redacted };
   }
 
+  // NUL-interleaved "UTF-8" is an undeclared UTF-16 body: the scrub cannot read it, so it is not released.
+  if (text.includes('\u0000')) return { status, headers: released, body: null, bodyOmitted: 'binary', truncated: false, redacted };
   const scrubbed = scrub(text, knownValues);
   const cut = truncateUtf8(scrubbed.text, maxBodyBytes);
   return { status, headers: released, body: cut.text, bodyOmitted: null, truncated: cut.truncated, redacted: redacted || scrubbed.redacted };

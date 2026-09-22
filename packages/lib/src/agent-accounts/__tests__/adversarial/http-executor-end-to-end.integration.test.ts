@@ -517,6 +517,28 @@ describe.skipIf(!ADMIN_TOKEN)('adversarial: the G2 thin slice end to end (real p
     expect(actual).toEqual(expected);
   }, 60_000);
 
+  // Second review MED-1: a first put whose metadata commit failed leaves material in Infisical with no plane
+  // row, and the reference row stays at credentialVersion 0 (not ready). Revoking it must erase the vault copy.
+  it('given a not-ready account whose material reached Infisical without a plane record, should erase it on revoke', async () => {
+    const plane = await startPlane();
+    const authority = authorityOver(plane);
+    const created = await authority.createAccount({ actorUserId: OWNER, owner: { kind: 'agent_page', agentPageId: PAGE_A }, input: createInput(true) });
+    if (!created.ok) throw new Error(created.reason);
+    await metadataPool.query('DELETE FROM agent_account_secret_versions WHERE account_id = $1', [created.account.id]);
+    await metadataPool.query('DELETE FROM agent_account_plane_bindings WHERE account_id = $1', [created.account.id]);
+    await db.update(agentAccounts).set({ credentialVersion: 0 }).where(eq(agentAccounts.id, created.account.id));
+    const { provisioner } = planeStore();
+    const tenant = await provisioner.identityOf(`drive:${DRIVE}` as never);
+    const creds = tenant === null ? null : await provisioner.credentialsFor({ tenantId: `drive:${DRIVE}` as never, identityId: tenant.identityId });
+    const vault = () => createInfisicalClient({ baseUrl: INFISICAL_URL, environment: 'dev' }).getSecret({ projectId: tenant!.projectId, credentials: creds!, secretKey: `${created.account.id}__api_key` });
+    const before = (await vault()).ok;
+    const revoked = await authority.revokeAccount({ actorUserId: OWNER, accountId: created.account.id });
+    const after = await vault();
+    const actual = { before, revoked: revoked.ok, after: after.ok ? 'still present' : after.reason };
+    const expected = { before: true, revoked: true, after: 'not_found' };
+    expect(actual).toEqual(expected);
+  }, 60_000);
+
   it('given every model-visible value this slice produced above, should never contain the canary key', () => {
     const actual = { surfaces: modelVisible.length > 10, leaks: modelVisible.filter((text) => text.includes(CANARY)).length };
     const expected = { surfaces: true, leaks: 0 };

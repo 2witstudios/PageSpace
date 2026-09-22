@@ -81,8 +81,16 @@ describe('list_accounts tool (Codex P1: the model needs account ids)', () => {
     const actual = { result, call: mockAuthority.listAccounts.mock.calls[0]?.[0] };
     const expected = {
       result: { accounts: [{ accountId: 'acct_1', name: 'Weather', sites: ['https://api.weather.example'], ready: true }, { accountId: 'acct_3', name: 'Pending', sites: ['https://api.weather.example'], ready: false }] },
-      call: { actorUserId: 'user_1', owner: { kind: 'agent_page', agentPageId: 'page_a' } },
+      call: { actorUserId: 'user_1', owner: { kind: 'agent_page', agentPageId: 'page_a' }, allowedDriveIds: [] },
     };
+    expect(actual).toEqual(expected);
+  });
+
+  it('given a drive-scoped credential, should hand its ceiling to the authority so accounts outside it are not listed', async () => {
+    mockAuthority.listAccounts.mockResolvedValue([]);
+    await listAccounts({ userId: 'user_1', chatSource: { type: 'global' }, mcpAllowedDriveIds: ['drive_a'] });
+    const actual = mockAuthority.listAccounts.mock.calls[0]?.[0]?.allowedDriveIds;
+    const expected = ['drive_a'];
     expect(actual).toEqual(expected);
   });
 

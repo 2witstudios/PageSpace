@@ -73,7 +73,8 @@ export type AccountOperationResult =
 
 export type AccountAuthority = {
   readonly createAccount: (input: { readonly actorUserId: UserId; readonly owner: AccountOwnerTarget; readonly input: CreateAccountInput }) => Promise<CreateAccountResult>;
-  readonly listAccounts: (input: { readonly actorUserId: UserId; readonly owner: AccountOwnerTarget }) => Promise<readonly SafeAccount[] | null>;
+  /** `allowedDriveIds`: the caller's credential ceiling (`[]` = none); accounts outside it are not listed. */
+  readonly listAccounts: (input: { readonly actorUserId: UserId; readonly owner: AccountOwnerTarget; readonly allowedDriveIds?: readonly string[] }) => Promise<readonly SafeAccount[] | null>;
   readonly revokeAccount: (input: { readonly actorUserId: UserId; readonly accountId: string }) => Promise<{ readonly ok: true; readonly account: SafeAccount } | { readonly ok: false; readonly reason: 'account_unavailable' | 'plane_unavailable' }>;
   readonly requestOperation: (input: { readonly caller: AuthorizeCaller; readonly accountId: string; readonly request: CanonicalRequestInput }) => Promise<AccountOperationResult>;
   readonly approveRequest: (input: {
@@ -171,8 +172,9 @@ export function createAccountAuthority(deps: AccountAuthorityDeps): AccountAutho
       return stored === null ? { ok: false, reason: 'store_refused' } : { ok: true, account: toSafeAccount({ row: stored }) };
     },
 
-    async listAccounts({ actorUserId, owner }) {
-      if (owner.kind === 'user') return (await deps.accounts.listForUser(actorUserId)).map((row) => toSafeAccount({ row }));
+    async listAccounts({ actorUserId, owner, allowedDriveIds = [] }) {
+      const withinCeiling = (row: AgentAccountRecord) => isDriveWithinCredentialScope(allowedDriveIds, row.ownerDriveId);
+      if (owner.kind === 'user') return (await deps.accounts.listForUser(actorUserId)).filter(withinCeiling).map((row) => toSafeAccount({ row }));
       // Decided from the caller's standing on the page BEFORE any row is read, so a refusal says nothing about
       // whether the page has accounts (review LOW-2).
       const driveId = await deps.facts.pageDrive(owner.agentPageId);
@@ -180,14 +182,18 @@ export function createAccountAuthority(deps: AccountAuthorityDeps): AccountAutho
       const humanDriveRole = await deps.facts.driveRole({ driveId, userId: actorUserId });
       const pagePermission = await deps.facts.pagePermission({ userId: actorUserId, pageId: owner.agentPageId });
       if (!decideAccountListView({ humanDriveRole, pagePermission })) return null;
-      return (await deps.accounts.listForAgentPage(owner.agentPageId)).map((row) => toSafeAccount({ row }));
+      // An account minted in the page's previous drive stays bound to that drive (its tenant is immutable): not listed here.
+      return (await deps.accounts.listForAgentPage(owner.agentPageId)).filter((row) => row.ownerDriveId === driveId && withinCeiling(row)).map((row) => toSafeAccount({ row }));
     },
 
     async revokeAccount({ actorUserId, accountId }) {
       const row = await deps.accounts.find(accountId);
       if (row === null || !(await accessOf(row, actorUserId)).manage) return { ok: false, reason: 'account_unavailable' };
-      const revoked = await deps.plane.revoke({ ref: { tenantId: row.tenantId, accountId: row.id, kind: 'api_key' } });
-      if (!revoked.ok && revoked.reason !== 'not_found') return { ok: false, reason: 'plane_unavailable' };
+      const ref = { tenantId: row.tenantId, accountId: row.id, kind: 'api_key' as const };
+      // A not-ready account (its first put never committed) may still have left material in the vault with no
+      // plane record to revoke: erase it outright instead (second review MED-1).
+      const done = row.credentialVersion === 0 ? await deps.plane.delete({ ref }) : await deps.plane.revoke({ ref });
+      if (!done.ok && done.reason !== 'not_found') return { ok: false, reason: 'plane_unavailable' };
       const marked = await deps.accounts.markRevoked({ id: row.id, at: deps.now() });
       return marked === null ? { ok: false, reason: 'account_unavailable' } : { ok: true, account: toSafeAccount({ row: marked }) };
     },

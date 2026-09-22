@@ -23,13 +23,13 @@ import type { TenantProvisioner } from '../store/infisical-tenant-provisioner-cl
 import type { AgentPageId, ConversationId, RunId, SessionId, UserId } from '../grant';
 import type { HttpRequestExecutor } from './http-request-executor';
 import { decidePlaneRequestSignature, PLANE_SIGNATURE_HEADER } from './plane-request-signature';
-import { PLANE_ROUTES, planeExecuteBody, planePutBody, planeRevokeBody } from './plane-wire';
+import { PLANE_ROUTES, planeDeleteBody, planeExecuteBody, planePutBody, planeRevokeBody } from './plane-wire';
 
 const MAX_BODY_BYTES = 1_500_000;
 
 export type PlaneRequestHandlerDeps = {
   readonly secret: string;
-  readonly store: Pick<StoreAdapter, 'put' | 'revoke'>;
+  readonly store: Pick<StoreAdapter, 'put' | 'revoke' | 'delete'>;
   readonly provisioner: Pick<TenantProvisioner, 'ensureTenant' | 'identityOf'>;
   readonly executor: HttpRequestExecutor;
   readonly hmac: (key: string, text: string) => string;
@@ -106,6 +106,17 @@ export function createPlaneRequestHandler(deps: PlaneRequestHandlerDeps): (req: 
       if (tenant === null) return send(res, 200, { ok: false, reason: 'not_found' });
       const result = await deps.store.revoke({ ref: ref as SecretRef, reason: 'owner_revoked', identity: { tenantId: ref.tenantId as TenantId, identityId: tenant.identityId, channel: 'manage', blastRadius: 'tenant' } });
       return send(res, 200, result);
+    }
+
+    if (path === PLANE_ROUTES.delete) {
+      const parsed = planeDeleteBody.safeParse(json);
+      if (!parsed.success) return send(res, 400, { error: 'malformed' });
+      const { ref } = parsed.data;
+      const tenant = await deps.provisioner.identityOf(ref.tenantId as TenantId);
+      // No tenant project was ever created: nothing of this account can be in the vault.
+      if (tenant === null) return send(res, 200, { ok: true, removed: true, upstream: 'not_attempted' });
+      const result = await deps.store.delete({ ref: ref as SecretRef, upstream: 'not_attempted', identity: { tenantId: ref.tenantId as TenantId, identityId: tenant.identityId, channel: 'manage', blastRadius: 'tenant' } });
+      return send(res, 200, result.ok || result.reason === 'not_found' ? { ok: true, removed: true, upstream: 'not_attempted' } : result);
     }
 
     const parsed = planeExecuteBody.safeParse(json);

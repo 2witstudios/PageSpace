@@ -151,6 +151,8 @@ export function createHttpRequestExecutor(deps: HttpRequestExecutorDeps): HttpRe
 
       let caller: CallerClass = 'refused';
       let released: ReleasedResponse | null = null;
+      // The reserved use is always finished, whatever happens below (second review LOW-1).
+      try {
       const audited = await deps.audited.execute({
         grant,
         canonical,
@@ -175,6 +177,8 @@ export function createHttpRequestExecutor(deps: HttpRequestExecutorDeps): HttpRe
             if (!outbound.ok) {
               stage = { kind: 'not_built' };
             } else {
+              // From here on the request may have left: a throw is an unknown outcome, never a refusal (second review LOW-2).
+              caller = 'outcome_unknown';
               const send = await deps.network.send(outbound.request);
               stage = { kind: 'sent', send };
               if (send.kind === 'response') {
@@ -189,9 +193,11 @@ export function createHttpRequestExecutor(deps: HttpRequestExecutorDeps): HttpRe
         },
       });
 
-      if (grant.approvalId === 'policy') await deps.usage.finish({ grantId: grant.grantId, now: deps.now() });
       if (audited.ok) await deps.accounts.touchLastUsed({ id: row.id, at: now }).catch(() => undefined);
       return decideExecutionResult({ audited, caller, released });
+      } finally {
+        if (grant.approvalId === 'policy') await deps.usage.finish({ grantId: grant.grantId, now: deps.now() });
+      }
     },
   };
 }
