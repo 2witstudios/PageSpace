@@ -26,7 +26,8 @@
  * touched, and every database it creates is dropped in afterAll.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { readFileSync, readdirSync } from 'fs';
+import { readFileSync, readdirSync, mkdtempSync, copyFileSync, appendFileSync, rmSync } from 'fs';
+import os from 'os';
 import path from 'path';
 import { Pool, type PoolClient } from 'pg';
 import { drizzle } from 'drizzle-orm/node-postgres';
@@ -603,6 +604,38 @@ describeLive('0298–0302 against a real Postgres', () => {
       await s.migrate(throughThisChange);
       await expect(withClient(s.pool, (c) => rehearseWalletMigration(c, MIGRATIONS_DIR))).rejects.toThrow(/not at 0297/);
     } finally {
+      await s.pool.end();
+    }
+  }, 180_000);
+
+  it('X-5 (partial): the 0297 rehearsal reports drift when the chain would move money, and still writes nothing', async () => {
+    const s = await openScenario('rehearsedrift');
+    // A copy of the chain whose 0301 also moves one cent: the pre-flight must name it.
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'wallets-drift-'));
+    try {
+      for (const file of readdirSync(MIGRATIONS_DIR).filter((f) => /^030[0-2]_|^029[89]_/.test(f))) {
+        copyFileSync(path.join(MIGRATIONS_DIR, file), path.join(dir, file));
+      }
+      const backfillFile = readdirSync(dir).find((f) => f.startsWith('0301_')) as string;
+      appendFileSync(
+        path.join(dir, backfillFile),
+        `\n--> statement-breakpoint\nUPDATE "wallets" SET "topupRemainingCents" = "topupRemainingCents" + 1 WHERE "userId" = 'u_paid';\n`,
+      );
+
+      await seedCorpus(s);
+      const snapshot = async () => JSON.stringify({
+        balances: await s.query(`SELECT * FROM "credit_balances" ORDER BY "userId"`),
+        ledger: await s.query(`SELECT * FROM "credit_ledger" ORDER BY "id"`),
+        holds: await s.query(`SELECT * FROM "credit_holds" ORDER BY "id"`),
+      });
+      const untouched = await snapshot();
+
+      const report = await withClient(s.pool, (c) => rehearseWalletMigration(c, dir));
+      const topup = BALANCES.reduce((acc, b) => acc + b.topupRemainingCents, 0);
+      expect(report.drift).toEqual([`topupRemainingCents: ${topup} -> ${topup + 1}`]);
+      expect(await snapshot()).toBe(untouched);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
       await s.pool.end();
     }
   }, 180_000);
