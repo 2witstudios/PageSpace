@@ -2,6 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // FIFO queue of result sets; each db.select() terminal resolves to the next set.
 const resultQueue = vi.hoisted(() => [] as unknown[][]);
+// Every builder call any query made, as [method, ...args], in call order.
+const chainCalls = vi.hoisted(() => [] as unknown[][]);
+const PERSONAL_ROOT = vi.hoisted(() => ({ personalRoot: true }));
 
 const mockSql = vi.hoisted(() => {
   const tag = vi.fn(() => 'SQL') as unknown as { (..._a: unknown[]): string; raw: (s: string) => string };
@@ -17,7 +20,10 @@ const makeChain = vi.hoisted(() => () => {
   const promise = Promise.resolve(rows);
   const chain: Record<string, unknown> = {};
   for (const m of ['from', 'innerJoin', 'leftJoin', 'where', 'groupBy', 'having', 'orderBy', 'limit']) {
-    chain[m] = vi.fn(() => chain);
+    chain[m] = vi.fn((...args: unknown[]) => {
+      chainCalls.push([m, ...args]);
+      return chain;
+    });
   }
   chain.then = (resolve: (v: unknown[]) => void, reject?: (e: unknown) => void) => promise.then(resolve, reject);
   return chain;
@@ -32,13 +38,17 @@ vi.mock('@pagespace/db/schema/monitoring', () => ({
 }));
 vi.mock('@pagespace/db/schema/credits', () => ({
   creditLedger: {
-    userId: 'CL_USER', entryType: 'CL_TYPE', amountCents: 'CL_AMOUNT', appliedCents: 'CL_APPLIED',
+    userId: 'CL_USER', walletId: 'CL_WALLET', entryType: 'CL_TYPE', amountCents: 'CL_AMOUNT', appliedCents: 'CL_APPLIED',
     chargeMillicents: 'CL_CHARGE_MC', realCostCents: 'CL_REAL', aiUsageLogId: 'CL_AI_ID', createdAt: 'CL_CREATED',
   },
-  creditBalances: {
-    userId: 'CB_USER', monthlyRemainingCents: 'CB_MONTHLY', topupRemainingCents: 'CB_TOPUP', debtCents: 'CB_DEBT',
-  },
   creditHolds: {},
+}));
+vi.mock('@pagespace/db/schema/wallets', () => ({
+  wallets: {
+    id: 'W_ID', userId: 'CB_USER', monthlyRemainingCents: 'CB_MONTHLY', topupRemainingCents: 'CB_TOPUP', debtCents: 'CB_DEBT',
+  },
+  isPersonalRootWallet: vi.fn(() => PERSONAL_ROOT),
+  personalRootWalletOf: vi.fn((userId: string) => ({ personalRootOf: userId })),
 }));
 vi.mock('@pagespace/db/schema/auth', () => ({ users: { id: 'U_ID', name: 'U_NAME', email: 'U_EMAIL' } }));
 vi.mock('@pagespace/db/schema/subscriptions', () => ({ subscriptions: {} }));
@@ -66,6 +76,7 @@ function resetQueue(...sets: unknown[][]) {
 beforeEach(() => {
   vi.clearAllMocks();
   resultQueue.length = 0;
+  chainCalls.length = 0;
   mockSelect.mockImplementation(() => makeChain());
 });
 
@@ -94,6 +105,20 @@ describe('getBalanceDriftAlerts', () => {
       { userId: 'a', userName: null, userEmail: null, materializedSpendableCents: 705, debtCents: 0, grantCents: 1000, appliedUsageCents: 300, adjustmentCents: 0 },
     ]);
     expect(await getBalanceDriftAlerts(10)).toEqual([]);
+  });
+});
+
+describe('getBalanceDriftAlerts query shape', () => {
+  it('WAL-5 (partial): compares each personal root wallet against the ledger rows keyed on THAT wallet', async () => {
+    resetQueue([]);
+    await getBalanceDriftAlerts();
+
+    // Ledger joined by walletId, not userId: a drive wallet's ledger rows must never
+    // count toward its owner's personal balance.
+    expect(chainCalls).toContainEqual(['leftJoin', expect.anything(), { type: 'eq', col: 'CL_WALLET', val: 'W_ID' }]);
+    expect(chainCalls).not.toContainEqual(['leftJoin', expect.anything(), { type: 'eq', col: 'CL_USER', val: 'CB_USER' }]);
+    // Only personal root wallets are checked — the former credit_balances rows.
+    expect(chainCalls).toContainEqual(['where', PERSONAL_ROOT]);
   });
 });
 

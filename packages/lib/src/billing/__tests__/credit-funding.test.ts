@@ -11,9 +11,15 @@ const mockApiLogger = vi.hoisted(() => ({ debug: vi.fn(), info: vi.fn(), warn: v
 
 vi.mock('@pagespace/db/db', () => ({ db: mockDb }));
 vi.mock('@pagespace/db/schema/credits', () => ({
-  creditBalances: { userId: 'cb.userId', topupRemainingCents: 'cb.topup', debtCents: 'cb.debt' },
   creditLedger: { id: 'cl.id', stripeRef: 'cl.stripeRef' },
 }));
+vi.mock('@pagespace/db/schema/wallets', () => ({
+  wallets: { id: 'w.id', userId: 'w.userId', monthlyRemainingCents: 'w.monthly', topupRemainingCents: 'w.topup', debtCents: 'w.debt' },
+  personalRootWalletOf: vi.fn((userId: string) => ({ op: 'personalRootWalletOf', userId })),
+  PERSONAL_ROOT_WALLET_UPSERT_TARGET: { target: 'w.userId', targetWhere: 'personal-root-predicate' },
+}));
+const mockEnsurePersonalRootWalletId = vi.hoisted(() => vi.fn().mockResolvedValue('w_root'));
+vi.mock('../personal-wallet', () => ({ ensurePersonalRootWalletId: mockEnsurePersonalRootWalletId }));
 vi.mock('@pagespace/db/schema/subscriptions', () => ({
   subscriptions: { userId: 's.userId', gifted: 's.gifted', status: 's.status' },
 }));
@@ -36,6 +42,7 @@ interface Captured {
   arbiter?: { target?: unknown; where?: unknown };
   balanceValues?: Record<string, unknown>;
   balanceSet?: Record<string, unknown>;
+  upsertTarget?: { target?: unknown; targetWhere?: unknown };
 }
 
 // Build a credit_ledger insert chain whose returning() resolves to `returned`
@@ -54,14 +61,15 @@ function ledgerInsert(returned: Array<{ id: string }>, cap: Captured) {
   };
 }
 
-// Build a credit_balances upsert chain.
+// Build a personal root wallet upsert chain.
 function balanceUpsert(cap: Captured) {
   return {
     values: (v: Record<string, unknown>) => {
       cap.balanceValues = v;
       return {
-        onConflictDoUpdate: ({ set }: { target: unknown; set: Record<string, unknown> }) => {
+        onConflictDoUpdate: ({ set, target, targetWhere }: { target: unknown; targetWhere?: unknown; set: Record<string, unknown> }) => {
           cap.balanceSet = set;
+          cap.upsertTarget = { target, targetWhere };
           return Promise.resolve(undefined);
         },
       };
@@ -69,30 +77,25 @@ function balanceUpsert(cap: Captured) {
   };
 }
 
-// Build a select chain for reading the current creditBalances row inside the tx.
+// Build a select chain for reading the current personal root wallet row inside the tx.
 // Includes the .for('update') call that locks the row before the rollover write.
 function balanceSelectReturning(monthlyRemainingCents: number, debtCents = 0) {
   const result = Promise.resolve([{ monthlyRemainingCents, debtCents }]);
   return { from: () => ({ where: () => ({ for: () => ({ limit: () => result }), limit: () => result }) }) };
 }
 
-// tx for the monthly refill path: ledger insert -> stub-row insert -> select current balance -> balance upsert.
+// tx for the monthly refill path: (wallet ensured via the mocked personal-wallet) -> ledger
+// insert -> select current balance -> balance upsert.
 function refillTx(cap: Captured, ledgerReturned: Array<{ id: string }>, currentRemaining: number, currentDebt = 0) {
   return {
     insert: vi.fn()
       .mockReturnValueOnce(ledgerInsert(ledgerReturned, cap))
-      .mockReturnValueOnce(ensureRowInsert())   // stub: INSERT ... ON CONFLICT DO NOTHING
       .mockReturnValueOnce(balanceUpsert(cap)),
     select: vi.fn().mockReturnValueOnce(balanceSelectReturning(currentRemaining, currentDebt)),
   };
 }
 
-// Ensure-row insert in the top-up path: .values({userId}).onConflictDoNothing({target}).
-function ensureRowInsert() {
-  return { values: () => ({ onConflictDoNothing: () => Promise.resolve(undefined) }) };
-}
-
-// Build the tx the top-up path drives: ledger insert -> ensure-row insert ->
+// Build the tx the top-up path drives: (wallet ensured) -> ledger insert ->
 // SELECT ... FOR UPDATE (returns `existingTopup`/`existingDebt`) -> UPDATE (captured).
 function topupTx(
   cap: Captured,
@@ -102,8 +105,7 @@ function topupTx(
 ) {
   return {
     insert: vi.fn()
-      .mockReturnValueOnce(ledgerInsert(ledgerReturned, cap))
-      .mockReturnValueOnce(ensureRowInsert()),
+      .mockReturnValueOnce(ledgerInsert(ledgerReturned, cap)),
     select: () => ({ from: () => ({ where: () => ({ for: () => Promise.resolve([{ topupRemainingCents: existingTopup, debtCents: existingDebt }]) }) }) }),
     update: () => ({ set: (v: Record<string, unknown>) => { cap.balanceSet = v; return { where: () => Promise.resolve(undefined) }; } }),
   };
@@ -234,6 +236,8 @@ describe('applyStripeFunding', () => {
     expect(allowance).toBe(1500);
     expect(cap.ledgerValues).toMatchObject({
       userId: 'u1',
+      // WAL-5: the grant names the payer's personal root wallet, resolved inside the tx.
+      walletId: 'w_root',
       entryType: 'monthly_grant',
       bucket: 'monthly',
       amountCents: allowance,
@@ -252,6 +256,8 @@ describe('applyStripeFunding', () => {
       monthlyPeriodStart: new Date(1_700_000_000 * 1000),
       monthlyPeriodEnd: new Date(1_702_592_000 * 1000),
     });
+    // The upsert names the partial personal-root index as its arbiter, never bare userId.
+    expect(cap.upsertTarget).toEqual({ target: 'w.userId', targetWhere: 'personal-root-predicate' });
   });
 
   it('invoice.paid stamps the LINE-ITEM service period, not the invoice-level fields (which describe the just-ended cycle)', async () => {
@@ -374,6 +380,7 @@ describe('applyStripeFunding', () => {
 
     expect(cap.ledgerValues).toMatchObject({
       userId: 'u1',
+      walletId: 'w_root', // WAL-5
       entryType: 'topup_purchase',
       bucket: 'topup',
       amountCents: 2500,
@@ -424,6 +431,9 @@ describe('applyStripeFunding', () => {
     await applyStripeFunding(topupEvent);
 
     expect(cap.balanceSet).toEqual({ topupRemainingCents: 2500, debtCents: 0 });
+    // The wallet row is ensured inside the tx (so the FOR UPDATE has a row to lock).
+    expect(mockEnsurePersonalRootWalletId).toHaveBeenCalledWith(expect.anything(), 'u1');
+    expect(mockEnsurePersonalRootWalletId.mock.calls[0][0]).not.toBe(mockDb);
   });
 
   it('resolves a first-time credit-pack buyer from trusted session metadata.userId when the customer is unlinked', async () => {
@@ -647,6 +657,7 @@ describe('applyStripeFunding', () => {
       );
       expect(cap.ledgerValues).toMatchObject({
         userId: 'u1',
+        walletId: 'w_root', // WAL-5
         entryType: 'missed_grant',
         bucket: 'monthly',
         amountCents: 0,

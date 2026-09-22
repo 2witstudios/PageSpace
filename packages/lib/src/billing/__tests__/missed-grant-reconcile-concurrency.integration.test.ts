@@ -23,7 +23,8 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { db } from '@pagespace/db/db';
 import { eq, sql } from '@pagespace/db/operators';
-import { creditBalances, creditLedger } from '@pagespace/db/schema/credits';
+import { creditLedger } from '@pagespace/db/schema/credits';
+import { wallets, personalRootWalletOf } from '@pagespace/db/schema/wallets';
 import { subscriptions } from '@pagespace/db/schema/subscriptions';
 import { users } from '@pagespace/db/schema/auth';
 import { factories } from '@pagespace/db/test/factories';
@@ -89,9 +90,12 @@ describe('reconcileMissedGrants concurrency (Postgres)', () => {
         currentPeriodStart: now,
         currentPeriodEnd: new Date(now.getTime() + 30 * 86_400_000),
       });
+      // The missed_grant row was written against the payer's personal root wallet (WAL-5).
+      const [wallet] = await db.insert(wallets).values({ ownerType: 'user', userId: user.id }).returning({ id: wallets.id });
       await db.insert(creditLedger).values({
         id: ledgerId,
         userId: user.id,
+        walletId: wallet.id,
         entryType: 'missed_grant',
         bucket: 'monthly',
         amountCents: 0,
@@ -118,14 +122,15 @@ describe('reconcileMissedGrants concurrency (Postgres)', () => {
       expect(results.reduce((n, r) => n + r.reconciled, 0)).toBe(1);
       expect(results.reduce((n, r) => n + r.failed, 0)).toBe(0);
 
-      const [balance] = await db.select().from(creditBalances).where(eq(creditBalances.userId, user.id));
+      const [balance] = await db.select().from(wallets).where(personalRootWalletOf(user.id));
       expect(balance.monthlyRemainingCents).toBe(allowance); // not 2 × allowance
+      expect(balance.id).toBe(wallet.id); // the grant landed on the same wallet, not a second one
 
       const [row] = await db.select().from(creditLedger).where(eq(creditLedger.id, ledgerId));
       expect(row).toMatchObject({ entryType: 'monthly_grant', amountCents: allowance });
     } finally {
       await db.delete(creditLedger).where(eq(creditLedger.userId, user.id));
-      await db.delete(creditBalances).where(eq(creditBalances.userId, user.id));
+      await db.delete(wallets).where(eq(wallets.userId, user.id));
       await db.delete(subscriptions).where(eq(subscriptions.userId, user.id));
       await db.delete(users).where(eq(users.id, user.id));
     }

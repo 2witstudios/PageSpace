@@ -19,7 +19,9 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import { db } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
-import { creditBalances, creditLedger, creditHolds } from '@pagespace/db/schema/credits';
+import { creditLedger, creditHolds } from '@pagespace/db/schema/credits';
+import { wallets, personalRootWalletOf } from '@pagespace/db/schema/wallets';
+import { users } from '@pagespace/db/schema/auth';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { factories } from '@pagespace/db/test/factories';
 import { reconcileOpenRouterCosts, type GenerationFetcher } from '../cost-reconcile';
@@ -32,14 +34,15 @@ let dbAvailable = false;
 async function cleanup(userId: string): Promise<void> {
   await db.delete(creditHolds).where(eq(creditHolds.userId, userId));
   await db.delete(creditLedger).where(eq(creditLedger.userId, userId));
-  await db.delete(creditBalances).where(eq(creditBalances.userId, userId));
+  await db.delete(wallets).where(eq(wallets.userId, userId));
   await db.delete(aiUsageLogs).where(eq(aiUsageLogs.userId, userId));
+  await db.delete(users).where(eq(users.id, userId));
 }
 
 describe('applyCorrection transaction atomicity (Postgres)', () => {
   beforeAll(async () => {
     try {
-      await db.select().from(creditBalances).limit(1);
+      await db.select().from(wallets).limit(1);
       dbAvailable = true;
     } catch (error) {
       requireDb('cost-reconcile.integration.test.ts', error);
@@ -55,14 +58,14 @@ describe('applyCorrection transaction atomicity (Postgres)', () => {
       // Empty buckets + debt parked at INT_MAX: an undercharge correction debits the extra
       // monthly-first, finds nothing, and accrues the shortfall as `debtCents + shortfall`,
       // which overflows the int4 column → the UPDATE throws inside the transaction.
-      await db.insert(creditBalances).values({
+      const [wallet] = await db.insert(wallets).values({
         userId: user.id,
         monthlyRemainingCents: 0,
         monthlyAllowanceCents: 0,
         topupRemainingCents: 0,
         debtCents: INT4_MAX,
         pendingMillicents: 0,
-      });
+      }).returning({ id: wallets.id });
 
       // A billed-at-$0 OpenRouter call still pending reconcile, old enough to clear the grace
       // window, carrying a generation id. Its base `usage` ledger row must exist (reconcile
@@ -84,6 +87,7 @@ describe('applyCorrection transaction atomicity (Postgres)', () => {
 
       await db.insert(creditLedger).values({
         userId: user.id,
+        walletId: wallet.id,
         entryType: 'usage',
         bucket: 'monthly',
         amountCents: 0,
@@ -116,7 +120,7 @@ describe('applyCorrection transaction atomicity (Postgres)', () => {
       expect(adjustments).toHaveLength(0);
 
       // The balance is exactly as seeded — the failed UPDATE moved nothing.
-      const [bal] = await db.select().from(creditBalances).where(eq(creditBalances.userId, user.id));
+      const [bal] = await db.select().from(wallets).where(personalRootWalletOf(user.id));
       expect(bal).toMatchObject({ debtCents: INT4_MAX, monthlyRemainingCents: 0, topupRemainingCents: 0 });
 
       // The base usage row (written before the transaction) is untouched.
@@ -126,6 +130,69 @@ describe('applyCorrection transaction atomicity (Postgres)', () => {
         .where(and(eq(creditLedger.userId, user.id), eq(creditLedger.entryType, 'usage')));
       expect(usage).toHaveLength(1);
     } finally {
+      await cleanup(user.id);
+    }
+  });
+
+  it('WAL-5 (partial): reconciliation is keyed on wallet — a correction lands on the wallet the charge was billed to, not the owner\'s personal root', async () => {
+    if (!dbAvailable) return;
+    const user = await factories.createUser({ subscriptionTier: 'pro' });
+    try {
+      const [root] = await db.insert(wallets).values({ userId: user.id, topupRemainingCents: 700 }).returning({ id: wallets.id });
+      // A drive wallet the person owns, under their personal root (WAL-2), holding its own funds.
+      const [driveWallet] = await db
+        .insert(wallets)
+        .values({ userId: user.id, subjectType: 'drive', subjectId: `drive_${user.id}`, parentWalletId: root.id, topupRemainingCents: 1000 })
+        .returning({ id: wallets.id });
+
+      const tenMinAgo = new Date(Date.now() - 10 * 60 * 1000);
+      const [log] = await db
+        .insert(aiUsageLogs)
+        .values({
+          userId: user.id,
+          provider: 'openrouter',
+          model: 'e2e/stub',
+          cost: 0,
+          timestamp: tenMinAgo,
+          reconcileStatus: 'pending',
+          reconcileAttempts: 0,
+          metadata: { generationIds: ['gen-wallet-keyed-1'] },
+        })
+        .returning({ id: aiUsageLogs.id });
+      // The base charge was billed to the DRIVE wallet.
+      await db.insert(creditLedger).values({
+        userId: user.id,
+        walletId: driveWallet.id,
+        entryType: 'usage',
+        bucket: 'monthly',
+        amountCents: 0,
+        appliedCents: 0,
+        chargeMillicents: 0,
+        realCostCents: 0,
+        aiUsageLogId: log.id,
+      });
+
+      // Authoritative $1.00 vs billed $0 → an undercharge debit of the marked-up cost.
+      const fetcher: GenerationFetcher = async (id) => (id === 'gen-wallet-keyed-1' ? { totalCost: 1.0 } : 'not_found');
+      await reconcileOpenRouterCosts({ fetcher });
+
+      const [logAfter] = await db.select().from(aiUsageLogs).where(eq(aiUsageLogs.id, log.id));
+      expect(logAfter.reconcileStatus).toBe('reconciled');
+      const [adjustment] = await db
+        .select()
+        .from(creditLedger)
+        .where(and(eq(creditLedger.userId, user.id), eq(creditLedger.entryType, 'adjustment')));
+      expect(adjustment.walletId).toBe(driveWallet.id);
+
+      const [driveAfter] = await db.select().from(wallets).where(eq(wallets.id, driveWallet.id));
+      const [rootAfter] = await db.select().from(wallets).where(eq(wallets.id, root.id));
+      // The drive wallet paid exactly what the adjustment row says left it; the root is untouched.
+      expect(driveAfter.topupRemainingCents).toBe(1000 + (adjustment.appliedCents ?? 0));
+      expect(adjustment.appliedCents).toBeLessThan(0);
+      expect(rootAfter.topupRemainingCents).toBe(700);
+    } finally {
+      await db.delete(creditLedger).where(eq(creditLedger.userId, user.id));
+      await db.delete(wallets).where(and(eq(wallets.userId, user.id), eq(wallets.subjectType, 'drive')));
       await cleanup(user.id);
     }
   });

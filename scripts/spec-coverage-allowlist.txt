@@ -124,7 +124,13 @@ UI-8
 UI-9
 UI-10
 UI-11
+# WAL-1 (partial, ow-c1): the wallets table carries every WAL-1 field, the migration proves each
+# former credit_balances row became its user's personal root wallet to the cent, and the constraint
+# suite proves owner/subject/parent/status shapes; top-up "never expires" on child wallets is unproven
+# until C3/C5 spend and refill against them.
 WAL-1
+# WAL-2 (partial, ow-c1): one pool per org, one wallet per subject and a drive wallet under a parent
+# are enforced by the schema; creating the pool, drive wallets and seat caps is C5/C6.
 WAL-2
 # WAL-3 (partial, ow-c2): allocation draws against the parent as spend happens and legs last until spent,
 # as pure math; persisted wallets and ledger rows are unproven until C1/C3.
@@ -135,6 +141,10 @@ WAL-4
 # wiv716vr39v9wbx2z40aoio1, Follow-up 2): no wallet exists yet, and the tests that named it
 # prove user-keyed missed-grant reconciliation (MON-2), not wallet keying. Their titles no
 # longer claim it. Remove this line once a test exercises wallet-keyed rows.
+# ow-c1: usage rows now record the wallet charged, every ledger and hold row names its wallet (NOT
+# NULL, backfilled), and cost reconciliation corrects the wallet the charge was billed to — each
+# titled "WAL-5 (partial)". Still user-keyed: the gate's monthly reset and settle lock the personal
+# root by user (identical while every wallet charged is a personal root); C3 keys them on wallet.
 WAL-5
 # WAL-6 (partial, ow-c2): overshoot landing by funder choice, over state, once-per-period notice and
 # debt netting are pure logic; the hold/settle path, forgiveness at renewal and the notification are unproven.
@@ -153,7 +163,6 @@ X-3
 # per affected user from the org membership sync, titled "X-4 (partial)"; wallet-state events and the
 # client updating without refresh are unproven until Wave C/F.
 X-4
-X-5
 # X-6 (Negative tests: non-member sees no other org's Open drive; a guest sees exactly one
 # drive; a disabled policy refuses; an empty chosen wallet charges nothing; an automation never
 # charges a person) needs org/wallet resolution logic that does not exist until Wave B/C lands.

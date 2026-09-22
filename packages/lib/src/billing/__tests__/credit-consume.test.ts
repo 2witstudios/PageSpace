@@ -12,13 +12,20 @@ const mockAiLogger = vi.hoisted(() => ({ debug: vi.fn(), error: vi.fn() }));
 const mockEmitCreditsUpdated = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 
 vi.mock('@pagespace/db/db', () => ({ db: mockDb }));
+const mockEnsurePersonalRootWalletId = vi.hoisted(() => vi.fn().mockResolvedValue('w_root'));
+vi.mock('@pagespace/db/schema/wallets', () => ({
+  wallets: { id: 'w.id', userId: 'w.userId', monthlyRemainingCents: 'w.monthly', topupRemainingCents: 'w.topup', pendingMillicents: 'w.pending', debtCents: 'w.debt' },
+  personalRootWalletOf: vi.fn((userId: string) => ({ op: 'personalRootWalletOf', userId })),
+}));
+vi.mock('../personal-wallet', () => ({ ensurePersonalRootWalletId: mockEnsurePersonalRootWalletId }));
 vi.mock('@pagespace/db/schema/credits', () => ({
-  creditBalances: { userId: 'cb.userId', monthlyRemainingCents: 'cb.monthly', topupRemainingCents: 'cb.topup', pendingMillicents: 'cb.pending', debtCents: 'cb.debt' },
   creditLedger: { id: 'cl.id', aiUsageLogId: 'cl.aiUsageLogId', entryType: 'cl.entryType' },
   creditHolds: { id: 'ch.id' },
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ({ op: 'eq', a, b })),
+  and: vi.fn((...a: unknown[]) => ({ op: 'and', a })),
+  isNull: vi.fn((a: unknown) => ({ op: 'isNull', a })),
   sql: vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({ sql: true, strings, values })),
 }));
 vi.mock('../../deployment-mode', () => ({ isBillingEnabled: mockIsBillingEnabled }));
@@ -28,6 +35,13 @@ vi.mock('../../logging/logger-config', () => ({ loggers: { ai: mockAiLogger } })
 vi.mock('../credit-emit', () => ({ emitCreditsUpdated: mockEmitCreditsUpdated }));
 
 import { consumeCredits, settlePendingLedgerRow, releaseHold } from '../credit-consume';
+
+// WAL-5: a settle also records the charged wallet on the AI usage row — one more update
+// after the balance and ledger updates. Captured here so tests can assert what it wrote.
+const usageWalletSets: Array<Record<string, unknown>> = [];
+function usageWalletUpdate() {
+  return { set: (v: Record<string, unknown>) => { usageWalletSets.push(v); return { where: vi.fn().mockResolvedValue(undefined) }; } };
+}
 
 // Build a claim-insert chain that resolves to `returned`.
 function claimReturning(returned: Array<{ id: string }>) {
@@ -43,6 +57,7 @@ function claimReturning(returned: Array<{ id: string }>) {
 describe('consumeCredits', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    usageWalletSets.length = 0;
     mockIsBillingEnabled.mockReturnValue(true);
   });
 
@@ -64,7 +79,8 @@ describe('consumeCredits', () => {
         select: () => ({ from: () => ({ where: () => ({ for: () => Promise.resolve([{ monthlyRemainingCents: 100, topupRemainingCents: 1000 }]) }) }) }),
         update: vi.fn()
           .mockReturnValueOnce({ set: (v: Record<string, number>) => { captured.balanceSet = v; return { where: balanceUpdateWhere }; } })
-          .mockReturnValueOnce({ set: (v: Record<string, unknown>) => { captured.ledgerSet = v; return { where: ledgerUpdateWhere }; } }),
+          .mockReturnValueOnce({ set: (v: Record<string, unknown>) => { captured.ledgerSet = v; return { where: ledgerUpdateWhere }; } })
+          .mockReturnValue(usageWalletUpdate()),
       };
       await cb(tx);
     });
@@ -88,10 +104,11 @@ describe('consumeCredits', () => {
     const captured: { balanceSet?: Record<string, unknown>; ledgerSet?: Record<string, unknown>; debtRow?: Record<string, unknown> } = {};
     mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
       const tx = {
-        select: () => ({ from: () => ({ where: () => ({ for: () => Promise.resolve([{ monthlyRemainingCents: 30, topupRemainingCents: 20, pendingMillicents: 0, debtCents: 0 }]) }) }) }),
+        select: () => ({ from: () => ({ where: () => ({ for: () => Promise.resolve([{ id: 'w_root', monthlyRemainingCents: 30, topupRemainingCents: 20, pendingMillicents: 0, debtCents: 0 }]) }) }) }),
         update: vi.fn()
           .mockReturnValueOnce({ set: (v: Record<string, unknown>) => { captured.balanceSet = v; return { where: vi.fn().mockResolvedValue(undefined) }; } })
-          .mockReturnValueOnce({ set: (v: Record<string, unknown>) => { captured.ledgerSet = v; return { where: vi.fn().mockResolvedValue(undefined) }; } }),
+          .mockReturnValueOnce({ set: (v: Record<string, unknown>) => { captured.ledgerSet = v; return { where: vi.fn().mockResolvedValue(undefined) }; } })
+          .mockReturnValue(usageWalletUpdate()),
         insert: vi.fn().mockReturnValue({ values: (v: Record<string, unknown>) => { captured.debtRow = v; return Promise.resolve(undefined); } }),
       };
       await cb(tx);
@@ -101,16 +118,20 @@ describe('consumeCredits', () => {
 
     expect(captured.balanceSet).toMatchObject({ monthlyRemainingCents: 0, topupRemainingCents: 0, pendingMillicents: 0 });
     // debtCents is bumped by the uncovered 100 via a `debtCents + 100` SQL expression.
-    expect(captured.balanceSet!.debtCents).toMatchObject({ sql: true, values: ['cb.debt', 100] });
+    expect(captured.balanceSet!.debtCents).toMatchObject({ sql: true, values: ['w.debt', 100] });
     expect(captured.ledgerSet).toMatchObject({ consumeStatus: 'applied', appliedCents: -50 });
     // Debt row: the uncovered 100 cents, owed, terminal status (not retried), same aiUsageLogId.
     expect(captured.debtRow).toMatchObject({
+      // WAL-5: the debt row lands on the wallet the balance lock read.
+      walletId: 'w_root',
       entryType: 'adjustment',
       bucket: 'monthly',
       amountCents: -100,
       aiUsageLogId: 'aul_short',
       consumeStatus: 'applied',
     });
+    // WAL-5: the usage row records the same wallet, in the same transaction.
+    expect(usageWalletSets).toEqual([{ walletId: 'w_root' }]);
   });
 
   it('draws from the carry monthly balance even after the period has expired (rollover)', async () => {
@@ -128,7 +149,8 @@ describe('consumeCredits', () => {
         }]) }) }) }),
         update: vi.fn()
           .mockReturnValueOnce({ set: (v: Record<string, number>) => { captured.balanceSet = v; return { where: vi.fn().mockResolvedValue(undefined) }; } })
-          .mockReturnValueOnce({ set: (v: Record<string, unknown>) => { captured.ledgerSet = v; return { where: vi.fn().mockResolvedValue(undefined) }; } }),
+          .mockReturnValueOnce({ set: (v: Record<string, unknown>) => { captured.ledgerSet = v; return { where: vi.fn().mockResolvedValue(undefined) }; } })
+          .mockReturnValue(usageWalletUpdate()),
         insert: vi.fn().mockReturnValue({ values: () => Promise.resolve(undefined) }),
       };
       await cb(tx);
@@ -149,7 +171,8 @@ describe('consumeCredits', () => {
         select: () => ({ from: () => ({ where: () => ({ for: () => Promise.resolve([{ monthlyRemainingCents: 1000, topupRemainingCents: 0, pendingMillicents: 0 }]) }) }) }),
         update: vi.fn()
           .mockReturnValueOnce({ set: () => ({ where: vi.fn().mockResolvedValue(undefined) }) })
-          .mockReturnValueOnce({ set: () => ({ where: vi.fn().mockResolvedValue(undefined) }) }),
+          .mockReturnValueOnce({ set: () => ({ where: vi.fn().mockResolvedValue(undefined) }) })
+          .mockReturnValue(usageWalletUpdate()),
         insert: vi.fn(() => { insertCalled = true; return { values: () => Promise.resolve(undefined) }; }),
       };
       await cb(tx);
@@ -171,7 +194,8 @@ describe('consumeCredits', () => {
         select: () => ({ from: () => ({ where: () => ({ for: () => Promise.resolve([{ monthlyRemainingCents: 500, topupRemainingCents: 0, pendingMillicents: 600 }]) }) }) }),
         update: vi.fn()
           .mockReturnValueOnce({ set: (v: Record<string, number>) => { captured.balanceSet = v; return { where: vi.fn().mockResolvedValue(undefined) }; } })
-          .mockReturnValueOnce({ set: (v: Record<string, unknown>) => { captured.ledgerSet = v; return { where: vi.fn().mockResolvedValue(undefined) }; } }),
+          .mockReturnValueOnce({ set: (v: Record<string, unknown>) => { captured.ledgerSet = v; return { where: vi.fn().mockResolvedValue(undefined) }; } })
+          .mockReturnValue(usageWalletUpdate()),
         insert: vi.fn().mockReturnValue({ values: () => Promise.resolve(undefined) }),
       };
       await cb(tx);
@@ -214,6 +238,19 @@ describe('consumeCredits', () => {
 
     // $0.0033 ×1.5 = 0.495 cents = 495 millicents; nominal whole-cent amount rounds to 0.
     expect(claimValues).toMatchObject({ entryType: 'usage', chargeMillicents: 495, amountCents: 0 });
+    // WAL-5: the claim names the payer's personal root wallet.
+    expect(mockEnsurePersonalRootWalletId).toHaveBeenCalledWith(mockDb, 'u1');
+    expect(claimValues).toMatchObject({ walletId: 'w_root' });
+  });
+
+  it('WAL-5 (partial): defers without writing a claim when the payer wallet cannot be resolved', async () => {
+    mockEnsurePersonalRootWalletId.mockRejectedValueOnce(new Error('db down'));
+
+    const status = await consumeCredits({ aiUsageLogId: 'aul_nowallet', userId: 'u1', costDollars: 1 });
+
+    expect(status).toBe('deferred');
+    expect(mockDb.insert).not.toHaveBeenCalled();
+    expect(mockDb.transaction).not.toHaveBeenCalled();
   });
 
   it('honors markupBpsOverride instead of the global MARKUP_BPS when a caller supplies one', async () => {
@@ -255,20 +292,23 @@ describe('consumeCredits', () => {
     expect(update).not.toHaveBeenCalled();
   });
 
-  it('settles a zero-charge call (free model / tool-only log) as skipped, without opening the balance transaction', async () => {
+  it('WAL-5 (partial): settles a zero-charge call (free model / tool-only log) as skipped, without opening the balance transaction, and records the charged wallet on the usage row', async () => {
     // cost 0 -> markupCents 0 -> nothing to draw down. The claim row is still
     // written (idempotency/orphan-sweep marker) but we must NOT take the balance
     // row lock or run a $0 decrement for it.
     mockDb.insert.mockReturnValue(claimReturning([{ id: 'led_zero' }]));
     let ledgerSet: Record<string, unknown> | undefined;
     const where = vi.fn().mockResolvedValue(undefined);
-    mockDb.update.mockReturnValue({ set: (v: Record<string, unknown>) => { ledgerSet = v; return { where }; } });
+    mockDb.update
+      .mockReturnValueOnce({ set: (v: Record<string, unknown>) => { ledgerSet = v; return { where }; } })
+      .mockReturnValue(usageWalletUpdate());
 
     await consumeCredits({ aiUsageLogId: 'aul_free', userId: 'u1', costDollars: 0 });
 
     expect(mockDb.transaction).not.toHaveBeenCalled();
-    expect(mockDb.update).toHaveBeenCalledTimes(1);
+    expect(mockDb.update).toHaveBeenCalledTimes(2);
     expect(ledgerSet).toEqual({ consumeStatus: 'skipped' });
+    expect(usageWalletSets).toEqual([{ walletId: 'w_root' }]);
   });
 
   it('skips an invalid cost (negative or non-finite) without claiming a ledger row', async () => {
@@ -372,7 +412,8 @@ describe('consumeCredits', () => {
         select: () => ({ from: () => ({ where: () => ({ for: () => Promise.resolve([{ monthlyRemainingCents: 1000, topupRemainingCents: 0, pendingMillicents: 0 }]) }) }) }),
         update: vi.fn()
           .mockReturnValueOnce({ set: () => ({ where: vi.fn().mockResolvedValue(undefined) }) })
-          .mockReturnValueOnce({ set: () => ({ where: vi.fn().mockResolvedValue(undefined) }) }),
+          .mockReturnValueOnce({ set: () => ({ where: vi.fn().mockResolvedValue(undefined) }) })
+          .mockReturnValue(usageWalletUpdate()),
         insert: vi.fn().mockReturnValue({ values: () => Promise.resolve(undefined) }),
         delete: vi.fn(() => ({ where: () => { holdDeleted = true; return Promise.resolve(undefined); } })),
       };
@@ -393,7 +434,8 @@ describe('consumeCredits', () => {
         select: () => ({ from: () => ({ where: () => ({ for: () => Promise.resolve([{ monthlyRemainingCents: 1000, topupRemainingCents: 0, pendingMillicents: 0 }]) }) }) }),
         update: vi.fn()
           .mockReturnValueOnce({ set: () => ({ where: vi.fn().mockResolvedValue(undefined) }) })
-          .mockReturnValueOnce({ set: () => ({ where: vi.fn().mockResolvedValue(undefined) }) }),
+          .mockReturnValueOnce({ set: () => ({ where: vi.fn().mockResolvedValue(undefined) }) })
+          .mockReturnValue(usageWalletUpdate()),
         insert: vi.fn().mockReturnValue({ values: () => Promise.resolve(undefined) }),
         delete: txDelete,
       };
@@ -485,7 +527,8 @@ describe('settlePendingLedgerRow', () => {
         } }) }) }),
         update: vi.fn()
           .mockReturnValueOnce({ set: (v: Record<string, number>) => { captured.balanceSet = v; return { where: vi.fn().mockResolvedValue(undefined) }; } })
-          .mockReturnValueOnce({ set: (v: Record<string, unknown>) => { captured.ledgerSet = v; return { where: vi.fn().mockResolvedValue(undefined) }; } }),
+          .mockReturnValueOnce({ set: (v: Record<string, unknown>) => { captured.ledgerSet = v; return { where: vi.fn().mockResolvedValue(undefined) }; } })
+          .mockReturnValue(usageWalletUpdate()),
         insert: vi.fn().mockReturnValue({ values: () => Promise.resolve(undefined) }),
       };
       await cb(tx);

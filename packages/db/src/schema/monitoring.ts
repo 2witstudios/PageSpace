@@ -184,6 +184,11 @@ export const aiUsageLogs = pgTable('ai_usage_logs', {
   // existed; the breakdown query folds null/unknown into 'other'.
   source: text('source'),
 
+  // WAL-5: the wallet this call was charged to. A soft link (no FK), like every id on
+  // this table: usage logs are purged on retention and must never block a wallet delete.
+  // Null on rows written before wallets existed.
+  walletId: text('wallet_id'),
+
   // Metadata
   metadata: jsonb('metadata'),
 

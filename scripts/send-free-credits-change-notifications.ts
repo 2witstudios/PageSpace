@@ -21,7 +21,8 @@
  *     rights-request and erasure-suppression exclusions apply on top, as legal
  *     must-skips rather than preferences.
  *   - Each email quotes the recipient's CURRENT spendable balance (one LEFT JOIN
- *     on credit_balances), so "what you keep" is a number, not a promise.
+ *     on their personal root wallet, the former credit_balances row), so "what you
+ *     keep" is a number, not a promise.
  *
  * Usage:
  *   bun scripts/send-free-credits-change-notifications.ts                    # dry run (default)
@@ -42,7 +43,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getMigrationDb } from '@pagespace/db/db';
 import { users } from '@pagespace/db/schema/auth';
-import { creditBalances } from '@pagespace/db/schema/credits';
+import { wallets, isPersonalRootWallet } from '@pagespace/db/schema/wallets';
 import { emailNotificationPreferences } from '@pagespace/db/schema/email-notifications';
 import { dataSubjectRequests } from '@pagespace/db/schema/data-subject-requests';
 import { and, eq, inArray, isNotNull, isNull, ne, or } from '@pagespace/db/operators';
@@ -245,13 +246,13 @@ async function main(): Promise<number> {
       id: users.id,
       name: users.name,
       email: users.email,
-      monthlyRemainingCents: creditBalances.monthlyRemainingCents,
-      topupRemainingCents: creditBalances.topupRemainingCents,
-      debtCents: creditBalances.debtCents,
-      monthlyPeriodEnd: creditBalances.monthlyPeriodEnd,
+      monthlyRemainingCents: wallets.monthlyRemainingCents,
+      topupRemainingCents: wallets.topupRemainingCents,
+      debtCents: wallets.debtCents,
+      monthlyPeriodEnd: wallets.monthlyPeriodEnd,
     })
     .from(users)
-    .leftJoin(creditBalances, eq(creditBalances.userId, users.id))
+    .leftJoin(wallets, and(eq(wallets.userId, users.id), isPersonalRootWallet()))
     .where(and(...audience));
 
   console.log(`👥 ${rows.length} free-tier user(s) returned from the database.\n`);

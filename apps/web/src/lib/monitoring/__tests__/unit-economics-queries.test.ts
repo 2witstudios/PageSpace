@@ -4,6 +4,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // A FIFO queue of result sets. Each call to db.select() dequeues the next set,
 // in the order the queries run. Tests push the rows they want each query to see.
 const resultQueue = vi.hoisted(() => [] as unknown[][]);
+// Every argument any query passed to .where(), in call order.
+const whereCalls = vi.hoisted(() => [] as unknown[]);
+const PERSONAL_ROOT = vi.hoisted(() => ({ personalRoot: true }));
 
 const mockEq = vi.hoisted(() => vi.fn((col: unknown, val: unknown) => ({ type: 'eq', col, val })));
 const mockGt = vi.hoisted(() => vi.fn((col: unknown, val: unknown) => ({ type: 'gt', col, val })));
@@ -26,7 +29,10 @@ const makeChain = vi.hoisted(() => () => {
   chain.from = vi.fn(() => chain);
   chain.innerJoin = vi.fn(() => chain);
   chain.leftJoin = vi.fn(() => chain);
-  chain.where = vi.fn(() => chain);
+  chain.where = vi.fn((arg: unknown) => {
+    whereCalls.push(arg);
+    return chain;
+  });
   chain.groupBy = vi.fn(() => chain);
   chain.orderBy = vi.fn(() => chain);
   chain.limit = vi.fn(() => promise);
@@ -72,10 +78,16 @@ vi.mock('@pagespace/db/schema/credits', () => ({
     aiUsageLogId: 'CREDIT_LEDGER_AI_USAGE_LOG_ID',
     createdAt: 'CREDIT_LEDGER_CREATED_AT',
   },
-  creditBalances: {
-    userId: 'CREDIT_BALANCES_USER_ID',
-    debtCents: 'CREDIT_BALANCES_DEBT_CENTS',
+}));
+
+vi.mock('@pagespace/db/schema/wallets', () => ({
+  wallets: {
+    id: 'WALLETS_ID',
+    userId: 'WALLETS_USER_ID',
+    debtCents: 'WALLETS_DEBT_CENTS',
   },
+  isPersonalRootWallet: vi.fn(() => PERSONAL_ROOT),
+  personalRootWalletOf: vi.fn((userId: string) => ({ personalRootOf: userId })),
 }));
 
 vi.mock('@pagespace/db/schema/auth', () => ({
@@ -111,6 +123,7 @@ function resetQueue(...sets: unknown[][]) {
 beforeEach(() => {
   vi.clearAllMocks();
   resultQueue.length = 0;
+  whereCalls.length = 0;
   mockSelect.mockImplementation(() => makeChain());
 });
 
@@ -163,9 +176,12 @@ describe('getUnitEconomicsSummary', () => {
 
     const eqArgs = mockEq.mock.calls.map((c) => [c[0], c[1]]);
     expect(eqArgs).toContainEqual(['CREDIT_LEDGER_ENTRY_TYPE', 'usage']);
-    // Outstanding debt is now the live credit_balances.debtCents snapshot (repaid/forgiven
+    // Outstanding debt is now the live personal-wallet debtCents snapshot (repaid/forgiven
     // debt is cleared there), NOT a historical sum of 'adjustment' ledger rows.
     expect(eqArgs).not.toContainEqual(['CREDIT_LEDGER_ENTRY_TYPE', 'adjustment']);
+    // WAL-2 (partial): the debt snapshot sums personal root wallets only — the former
+    // credit_balances rows — never drive or org wallets.
+    expect(whereCalls).toContainEqual(PERSONAL_ROOT);
   });
 
   it('handles empty result sets by defaulting to zero', async () => {
@@ -253,11 +269,14 @@ describe('getOutstandingDebtByUser', () => {
     const rows = await getOutstandingDebtByUser();
 
     expect(rows[0]).toMatchObject({ userId: 'u1', debtCents: 25 });
-    // Sourced from live credit_balances.debtCents (not historical 'adjustment' rows),
-    // filtered to users who currently owe (debtCents > 0).
+    // Sourced from the personal root wallets' live debtCents (not historical 'adjustment'
+    // rows), filtered to users who currently owe (debtCents > 0).
     const eqArgs = mockEq.mock.calls.map((c) => [c[0], c[1]]);
     expect(eqArgs).not.toContainEqual(['CREDIT_LEDGER_ENTRY_TYPE', 'adjustment']);
     const gtArgs = mockGt.mock.calls.map((c) => [c[0], c[1]]);
-    expect(gtArgs).toContainEqual(['CREDIT_BALANCES_DEBT_CENTS', 0]);
+    expect(gtArgs).toContainEqual(['WALLETS_DEBT_CENTS', 0]);
+    // WAL-2 (partial): only personal root wallets, so a drive wallet's debt is never
+    // reported as its owner's.
+    expect(whereCalls).toContainEqual({ type: 'and', args: [PERSONAL_ROOT, { type: 'gt', col: 'WALLETS_DEBT_CENTS', val: 0 }] });
   });
 });

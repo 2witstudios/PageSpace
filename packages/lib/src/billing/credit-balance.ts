@@ -29,7 +29,8 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { creditBalances, creditHolds } from '@pagespace/db/schema/credits';
+import { creditHolds } from '@pagespace/db/schema/credits';
+import { wallets, personalRootWalletOf } from '@pagespace/db/schema/wallets';
 import { users } from '@pagespace/db/schema/auth';
 import { and, eq, gt, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
@@ -168,14 +169,14 @@ export async function readSpendableCents(
 ): Promise<number> {
   const [row] = await db
     .select({
-      monthlyRemainingCents: creditBalances.monthlyRemainingCents,
-      monthlyAllowanceCents: creditBalances.monthlyAllowanceCents,
-      topupRemainingCents: creditBalances.topupRemainingCents,
-      debtCents: creditBalances.debtCents,
-      monthlyPeriodEnd: creditBalances.monthlyPeriodEnd,
+      monthlyRemainingCents: wallets.monthlyRemainingCents,
+      monthlyAllowanceCents: wallets.monthlyAllowanceCents,
+      topupRemainingCents: wallets.topupRemainingCents,
+      debtCents: wallets.debtCents,
+      monthlyPeriodEnd: wallets.monthlyPeriodEnd,
     })
-    .from(creditBalances)
-    .where(eq(creditBalances.userId, userId))
+    .from(wallets)
+    .where(personalRootWalletOf(userId))
     .limit(1);
 
   return spendableCentsFor(row ?? null, tier);
@@ -197,14 +198,14 @@ export async function getCreditBalance(
   const [rows, holdAgg] = await Promise.all([
     db
       .select({
-        monthlyRemainingCents: creditBalances.monthlyRemainingCents,
-        monthlyAllowanceCents: creditBalances.monthlyAllowanceCents,
-        topupRemainingCents: creditBalances.topupRemainingCents,
-        debtCents: creditBalances.debtCents,
-        monthlyPeriodEnd: creditBalances.monthlyPeriodEnd,
+        monthlyRemainingCents: wallets.monthlyRemainingCents,
+        monthlyAllowanceCents: wallets.monthlyAllowanceCents,
+        topupRemainingCents: wallets.topupRemainingCents,
+        debtCents: wallets.debtCents,
+        monthlyPeriodEnd: wallets.monthlyPeriodEnd,
       })
-      .from(creditBalances)
-      .where(eq(creditBalances.userId, userId))
+      .from(wallets)
+      .where(personalRootWalletOf(userId))
       .limit(1),
     db
       .select({ reserved: sql<number>`coalesce(sum(${creditHolds.estCents}), 0)` })

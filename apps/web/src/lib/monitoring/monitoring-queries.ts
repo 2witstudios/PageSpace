@@ -7,7 +7,8 @@ import { getBackendProvider } from '@/lib/ai/core/ai-providers-config'
 import { sql, eq, and, or, gt, gte, lte, asc, desc, count, inArray } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { apiMetrics, userActivities, aiUsageLogs, systemLogs, errorLogs } from '@pagespace/db/schema/monitoring';
-import { creditLedger, creditBalances, creditHolds } from '@pagespace/db/schema/credits';
+import { creditLedger, creditHolds } from '@pagespace/db/schema/credits';
+import { wallets, isPersonalRootWallet } from '@pagespace/db/schema/wallets';
 import { subscriptions } from '@pagespace/db/schema/subscriptions';
 import type { SQL } from '@pagespace/db/operators';
 import { decryptUserDisplayFields } from '@pagespace/lib/auth/user-repository';
@@ -604,7 +605,7 @@ export async function getPerformanceMetrics(startDate?: Date, endDate?: Date) {
 //   - creditLedger.realCostCents   — our REAL provider cost, pre-markup (cents)
 //   - creditLedger.amountCents      — full intended charge to the user (signed)
 //   - creditLedger.appliedCents     — actually debited from the balance (signed)
-//   - credit_balances.debtCents     — CURRENT outstanding overage (point-in-time). NOT
+//   - wallets.debtCents (personal root wallets)     — CURRENT outstanding overage (point-in-time). NOT
 //                                     the historical 'adjustment' ledger rows: debt is
 //                                     repaid by top-ups and forgiven at renewal directly
 //                                     on debtCents, so only the live balance is accurate.
@@ -735,14 +736,15 @@ export async function getUnitEconomicsSummary(
     .where(and(...usageConditions(startDate, endDate)));
 
   // Outstanding debt is the CURRENT liability — a point-in-time snapshot of the live
-  // credit_balances.debtCents, NOT a sum of historical 'adjustment' incurrence rows.
+  // wallets.debtCents (personal root wallets), NOT a sum of historical 'adjustment' incurrence rows.
   // Debt is paid down by top-ups and forgiven at renewal directly on debtCents without
   // offsetting ledger rows, so summing adjustment history would keep counting overage
   // the user has already repaid or had forgiven. Period-independent (like the prepaid
   // liability metric); the start/end window scopes the usage flows above, not this stock.
   const debt = await db
-    .select({ debtCents: sql<number>`COALESCE(SUM(${creditBalances.debtCents}), 0)::int` })
-    .from(creditBalances);
+    .select({ debtCents: sql<number>`COALESCE(SUM(${wallets.debtCents}), 0)::int` })
+    .from(wallets)
+    .where(isPersonalRootWallet());
 
   const realCostCents = usage[0]?.realCostCents ?? 0;
   const chargedCents = usage[0]?.chargedCents ?? 0;
@@ -870,21 +872,21 @@ export async function getTopSpendersByMargin(
 
 /**
  * Users currently carrying outstanding overage — a point-in-time snapshot of the live
- * credit_balances.debtCents (NOT historical 'adjustment' rows, which would still count
+ * wallets.debtCents (personal root wallets) (NOT historical 'adjustment' rows, which would still count
  * debt already repaid by a top-up or forgiven at renewal). Period-independent.
  */
 export async function getOutstandingDebtByUser(limit = 10): Promise<DebtByUserRow[]> {
   const rows = await db
     .select({
-      userId: creditBalances.userId,
+      userId: users.id,
       userName: users.name,
       userEmail: users.email,
-      debtCents: creditBalances.debtCents,
+      debtCents: wallets.debtCents,
     })
-    .from(creditBalances)
-    .innerJoin(users, eq(creditBalances.userId, users.id))
-    .where(gt(creditBalances.debtCents, 0))
-    .orderBy(desc(creditBalances.debtCents))
+    .from(wallets)
+    .innerJoin(users, eq(wallets.userId, users.id))
+    .where(and(isPersonalRootWallet(), gt(wallets.debtCents, 0)))
+    .orderBy(desc(wallets.debtCents))
     .limit(limit);
 
   return decryptUserDisplayFields(
@@ -921,25 +923,26 @@ export async function getBalanceDriftAlerts(
 ): Promise<BalanceDriftRow[]> {
   const rows = await db
     .select({
-      userId: creditBalances.userId,
+      userId: users.id,
       userName: users.name,
       userEmail: users.email,
-      materializedSpendableCents: sql<number>`(${creditBalances.monthlyRemainingCents} + ${creditBalances.topupRemainingCents})::int`,
-      debtCents: creditBalances.debtCents,
+      materializedSpendableCents: sql<number>`(${wallets.monthlyRemainingCents} + ${wallets.topupRemainingCents})::int`,
+      debtCents: wallets.debtCents,
       grantCents: sql<number>`COALESCE(SUM(CASE WHEN ${creditLedger.entryType} IN ('monthly_grant', 'topup_purchase') THEN ${creditLedger.amountCents} ELSE 0 END), 0)::int`,
       appliedUsageCents: sql<number>`COALESCE(SUM(CASE WHEN ${creditLedger.entryType} = 'usage' THEN ABS(${creditLedger.appliedCents}) ELSE 0 END), 0)::int`,
       adjustmentCents: sql<number>`COALESCE(SUM(CASE WHEN ${creditLedger.entryType} = 'adjustment' THEN COALESCE(${creditLedger.appliedCents}, 0) ELSE 0 END), 0)::int`,
     })
-    .from(creditBalances)
-    .innerJoin(users, eq(creditBalances.userId, users.id))
-    .leftJoin(creditLedger, eq(creditLedger.userId, creditBalances.userId))
+    .from(wallets)
+    .innerJoin(users, eq(wallets.userId, users.id))
+    .leftJoin(creditLedger, eq(creditLedger.walletId, wallets.id))
+    .where(isPersonalRootWallet())
     .groupBy(
-      creditBalances.userId,
+      users.id,
       users.name,
       users.email,
-      creditBalances.monthlyRemainingCents,
-      creditBalances.topupRemainingCents,
-      creditBalances.debtCents,
+      wallets.monthlyRemainingCents,
+      wallets.topupRemainingCents,
+      wallets.debtCents,
     );
 
   const flagged = rows
@@ -1380,11 +1383,12 @@ export async function getActiveSubscriptionsByTier(): Promise<SubscriptionsByTie
 export async function getCreditLiability(): Promise<CreditLiability> {
   const rows = await db
     .select({
-      monthlyRemainingCents: sql<number>`COALESCE(SUM(${creditBalances.monthlyRemainingCents}), 0)::double precision`,
-      topupRemainingCents: sql<number>`COALESCE(SUM(${creditBalances.topupRemainingCents}), 0)::double precision`,
+      monthlyRemainingCents: sql<number>`COALESCE(SUM(${wallets.monthlyRemainingCents}), 0)::double precision`,
+      topupRemainingCents: sql<number>`COALESCE(SUM(${wallets.topupRemainingCents}), 0)::double precision`,
       userCount: count(),
     })
-    .from(creditBalances);
+    .from(wallets)
+    .where(isPersonalRootWallet());
 
   const monthlyRemainingCents = rows[0]?.monthlyRemainingCents ?? 0;
   const topupRemainingCents = rows[0]?.topupRemainingCents ?? 0;

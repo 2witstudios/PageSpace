@@ -6,7 +6,7 @@
  * money risk in getBalanceDriftAlerts / getNegativeMarginAccounts lives in their SQL:
  * the per-entryType CASE WHEN aggregates, the COALESCE(...)::int casts, and the
  * `HAVING chargedSum < realCostSum * (1 + bps)`. This file inserts real credit_ledger /
- * credit_balances / ai_usage_logs rows and runs the ACTUAL queries so that SQL is
+ * wallets / ai_usage_logs rows and runs the ACTUAL queries so that SQL is
  * exercised, then asserts the flagged accounts + numbers, and that the SQL HAVING and the
  * JS isNegativeMargin re-check agree on real data.
  *
@@ -26,7 +26,9 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
-import { creditLedger, creditBalances, creditHolds } from '@pagespace/db/schema/credits';
+import { creditLedger, creditHolds } from '@pagespace/db/schema/credits';
+import { wallets, personalRootWalletOf, PERSONAL_ROOT_WALLET_ARBITER } from '@pagespace/db/schema/wallets';
+import { users } from '@pagespace/db/schema/auth';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { factories } from '@pagespace/db/test/factories';
 import { isNegativeMargin } from '@pagespace/lib/billing/credit-core';
@@ -47,26 +49,38 @@ async function mkUser(overrides?: Parameters<typeof factories.createUser>[0]) {
   return user;
 }
 
-/** Delete only the rows belonging to users this file created (FK-safe order). */
+/** Delete only the rows belonging to users this file created (FK-safe order: children first, users last). */
 async function cleanupCreated(): Promise<void> {
   for (const id of createdUserIds) {
     await db.delete(creditHolds).where(eq(creditHolds.userId, id));
     await db.delete(creditLedger).where(eq(creditLedger.userId, id));
-    await db.delete(creditBalances).where(eq(creditBalances.userId, id));
+    // One statement removes a user's drive wallets and their personal root together, so the
+    // parentWalletId reference (no cascade) is satisfied at end of statement.
+    await db.delete(wallets).where(eq(wallets.userId, id));
     await db.delete(aiUsageLogs).where(eq(aiUsageLogs.userId, id));
+    await db.delete(users).where(eq(users.id, id));
   }
   createdUserIds.length = 0;
 }
 
-type LedgerRow = typeof creditLedger.$inferInsert;
+/** The user's personal root wallet id, created bare (zero balance) if the test seeded none. */
+async function personalWalletId(userId: string): Promise<string> {
+  await db.insert(wallets).values({ ownerType: 'user', userId }).onConflictDoNothing(PERSONAL_ROOT_WALLET_ARBITER);
+  const [row] = await db.select({ id: wallets.id }).from(wallets).where(personalRootWalletOf(userId));
+  return row.id;
+}
+
+/** A ledger row; written against the user's personal root wallet unless the test names one (WAL-5). */
+type LedgerRow = Omit<typeof creditLedger.$inferInsert, 'walletId'> & { walletId?: string };
 async function insertLedger(row: LedgerRow): Promise<void> {
-  await db.insert(creditLedger).values(row);
+  const walletId = row.walletId ?? (await personalWalletId(row.userId));
+  await db.insert(creditLedger).values({ ...row, walletId });
 }
 
 describe('account-alerts monitoring queries (Postgres)', () => {
   beforeAll(async () => {
     try {
-      await db.select().from(creditBalances).limit(1);
+      await db.select().from(wallets).limit(1);
       dbAvailable = true;
     } catch (error) {
       requireDb('account-alerts-queries.integration.test.ts', error);
@@ -87,7 +101,7 @@ describe('account-alerts monitoring queries (Postgres)', () => {
       if (!dbAvailable) return;
       // d_ok: grant 1000 − usage 300 = expected 700; materialized 700 → drift 0 (within 10¢).
       const ok = await mkUser();
-      await db.insert(creditBalances).values({
+      await db.insert(wallets).values({
         userId: ok.id, monthlyRemainingCents: 700, monthlyAllowanceCents: 1000, topupRemainingCents: 0,
       });
       await insertLedger({ userId: ok.id, entryType: 'monthly_grant', bucket: 'monthly', amountCents: 1000 });
@@ -95,7 +109,7 @@ describe('account-alerts monitoring queries (Postgres)', () => {
 
       // d_flag: expected 700; materialized 800 → drift +100.
       const flag = await mkUser();
-      await db.insert(creditBalances).values({
+      await db.insert(wallets).values({
         userId: flag.id, monthlyRemainingCents: 800, monthlyAllowanceCents: 1000, topupRemainingCents: 0,
       });
       await insertLedger({ userId: flag.id, entryType: 'monthly_grant', bucket: 'monthly', amountCents: 1000 });
@@ -104,7 +118,7 @@ describe('account-alerts monitoring queries (Postgres)', () => {
       // d_buckets: grant 500(monthly)+1000(topup)=1500 − usage 200 + adjustment 50 = expected 1350;
       // materialized 1000+300=1300 → drift −50. Exercises every entryType bucket of the CASE WHENs.
       const buckets = await mkUser();
-      await db.insert(creditBalances).values({
+      await db.insert(wallets).values({
         userId: buckets.id, monthlyRemainingCents: 1000, monthlyAllowanceCents: 1500, topupRemainingCents: 300,
       });
       await insertLedger({ userId: buckets.id, entryType: 'monthly_grant', bucket: 'monthly', amountCents: 500 });
@@ -127,11 +141,31 @@ describe('account-alerts monitoring queries (Postgres)', () => {
       expect(rows.some((r) => r.userId === ok.id)).toBe(false);
     });
 
+    it('WAL-5 (partial): a drive wallet\'s own ledger rows never count toward its owner\'s personal drift', async () => {
+      if (!dbAvailable) return;
+      const u = await mkUser();
+      // Personal root: grant 1000 − usage 300 = expected 700; materialized 700 → drift 0.
+      const [root] = await db.insert(wallets).values({
+        userId: u.id, monthlyRemainingCents: 700, monthlyAllowanceCents: 1000, topupRemainingCents: 0,
+      }).returning({ id: wallets.id });
+      await insertLedger({ userId: u.id, entryType: 'monthly_grant', bucket: 'monthly', amountCents: 1000 });
+      await insertLedger({ userId: u.id, entryType: 'usage', bucket: 'monthly', amountCents: -300, appliedCents: -300 });
+      // A drive wallet the same person owns, with a 5000¢ top-up recorded against IT. Were the
+      // ledger joined by userId, the personal root would read expected 5700 vs 700 → flagged.
+      const [drive] = await db.insert(wallets).values({
+        userId: u.id, subjectType: 'drive', subjectId: `drive-${u.id}`, parentWalletId: root.id, topupRemainingCents: 5000,
+      }).returning({ id: wallets.id });
+      await insertLedger({ userId: u.id, walletId: drive.id, entryType: 'topup_purchase', bucket: 'topup', amountCents: 5000 });
+
+      const rows = await getBalanceDriftAlerts(undefined, BIG_LIMIT);
+      expect(rows.some((r) => r.userId === u.id)).toBe(false);
+    });
+
     it('does not flag an account within tolerance', async () => {
       if (!dbAvailable) return;
       const u = await mkUser();
       // expected 700, materialized 705 → drift 5 ≤ 10¢ tolerance.
-      await db.insert(creditBalances).values({
+      await db.insert(wallets).values({
         userId: u.id, monthlyRemainingCents: 705, monthlyAllowanceCents: 1000, topupRemainingCents: 0,
       });
       await insertLedger({ userId: u.id, entryType: 'monthly_grant', bucket: 'monthly', amountCents: 1000 });

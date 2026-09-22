@@ -20,7 +20,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 // ── A column reference the fake operators/select can resolve against a row ────────
 type Col = { __col: true; table: TableKey; name: string };
-type TableKey = 'creditBalances' | 'creditLedger' | 'creditHolds' | 'users' | 'aiUsageLogs' | 'subscriptions';
+type TableKey = 'wallets' | 'creditLedger' | 'creditHolds' | 'users' | 'aiUsageLogs' | 'subscriptions';
 
 interface Row { [k: string]: unknown }
 type Store = Record<TableKey, Row[]>;
@@ -39,7 +39,7 @@ type Pred =
 
 // ── Hoisted shared state: one store + one fake db, shared by all four real shells ─
 const H = vi.hoisted(() => {
-  const store: Store = { creditBalances: [], creditLedger: [], creditHolds: [], users: [], aiUsageLogs: [], subscriptions: [] };
+  const store: Store = { wallets: [], creditLedger: [], creditHolds: [], users: [], aiUsageLogs: [], subscriptions: [] };
 
   const col = (table: TableKey, name: string): Col => ({ __col: true, table, name });
   const cols = (table: TableKey, names: string[]): Record<string, Col> & { __table: TableKey } => {
@@ -48,16 +48,18 @@ const H = vi.hoisted(() => {
     return t as Record<string, Col> & { __table: TableKey };
   };
 
-  const creditBalances = cols('creditBalances', [
-    'userId', 'monthlyRemainingCents', 'monthlyAllowanceCents', 'topupRemainingCents',
+  // The personal root wallet is the row that was credit_balances (X-5).
+  const wallets = cols('wallets', [
+    'id', 'ownerType', 'userId', 'orgId', 'subjectType', 'subjectId', 'parentWalletId',
+    'monthlyRemainingCents', 'monthlyAllowanceCents', 'topupRemainingCents',
     'pendingMillicents', 'debtCents', 'monthlyPeriodStart', 'monthlyPeriodEnd', 'updatedAt',
   ]);
   const creditLedger = cols('creditLedger', [
-    'id', 'userId', 'entryType', 'bucket', 'amountCents', 'appliedCents', 'chargeMillicents',
+    'id', 'userId', 'walletId', 'entryType', 'bucket', 'amountCents', 'appliedCents', 'chargeMillicents',
     'aiUsageLogId', 'realCostCents', 'markupBps', 'stripeRef', 'paidCents', 'consumeStatus',
     'reconcileGenerationKey', 'createdAt',
   ]);
-  const creditHolds = cols('creditHolds', ['id', 'userId', 'estCents', 'aiUsageLogId', 'createdAt', 'expiresAt']);
+  const creditHolds = cols('creditHolds', ['id', 'userId', 'walletId', 'estCents', 'aiUsageLogId', 'createdAt', 'expiresAt']);
   const users = cols('users', ['id', 'stripeCustomerId', 'subscriptionTier']);
   const subscriptions = cols('subscriptions', ['id', 'userId', 'status', 'gifted', 'stripePriceId']);
   const aiUsageLogs = cols('aiUsageLogs', [
@@ -76,7 +78,7 @@ const H = vi.hoisted(() => {
   const and = (...parts: Pred[]): Pred => ({ kind: 'and', parts });
   const or = (...parts: Pred[]): Pred => ({ kind: 'or', parts });
   // Capture interpolated operands so an `update().set()` value like
-  // sql`${creditBalances.debtCents} + ${shortfall}` can be evaluated per-row. Used as
+  // sql`${wallets.debtCents} + ${shortfall}` can be evaluated per-row. Used as
   // a predicate (where) it still just passes (kind 'sql' -> true in evalPred).
   const sqlTag = (_strings?: TemplateStringsArray, ...values: unknown[]): Pred => ({ kind: 'sql', values });
 
@@ -130,8 +132,9 @@ const H = vi.hoisted(() => {
         ...v,
       };
     }
-    if (table === 'creditBalances') {
+    if (table === 'wallets') {
       return {
+        id: nextId('w'), ownerType: 'user', orgId: null, subjectType: null, subjectId: null, parentWalletId: null,
         monthlyRemainingCents: 0, monthlyAllowanceCents: 0, topupRemainingCents: 0,
         pendingMillicents: 0, debtCents: 0, monthlyPeriodStart: null, monthlyPeriodEnd: null,
         updatedAt: new Date(),
@@ -147,8 +150,10 @@ const H = vi.hoisted(() => {
   // Detect an existing row that collides with `row` under the conflict arbiter
   // implied by `target`. Mirrors the real partial unique indexes.
   const conflictRow = (table: TableKey, target: Col, row: Row): Row | undefined => {
-    if (table === 'creditBalances' && target.name === 'userId') {
-      return store.creditBalances.find((r) => r.userId === row.userId);
+    // wallets_personal_root_unique: one (ownerType 'user', no subject, no parent) row per user.
+    if (table === 'wallets' && target.name === 'userId') {
+      const isRoot = (r: Row) => r.ownerType === 'user' && r.subjectType == null && r.parentWalletId == null;
+      return isRoot(row) ? store.wallets.find((r) => isRoot(r) && r.userId === row.userId) : undefined;
     }
     if (table === 'creditLedger' && target.name === 'stripeRef') {
       return row.stripeRef == null
@@ -166,6 +171,13 @@ const H = vi.hoisted(() => {
         : store.creditLedger.find((r) => r.reconcileGenerationKey === row.reconcileGenerationKey);
     }
     return undefined;
+  };
+
+  // WAL-5 / 0302: credit_ledger and credit_holds walletId is NOT NULL and references wallets.
+  const enforceWalletRef = (table: TableKey, r: Row): void => {
+    if (table !== 'creditLedger' && table !== 'creditHolds') return;
+    if (r.walletId == null) throw new Error(`NOT NULL violation: ${table}.walletId`);
+    if (!store.wallets.some((w) => w.id === r.walletId)) throw new Error(`FK violation: ${table}.walletId ${String(r.walletId)}`);
   };
 
   const enforceBalanceInvariants = (r: Row): void => {
@@ -256,7 +268,7 @@ const H = vi.hoisted(() => {
 
         const plainInsert = (): Row => {
           if (done) return row; done = true;
-          if (table === 'creditBalances') enforceBalanceInvariants(row);
+          enforceWalletRef(table, row); if (table === 'wallets') enforceBalanceInvariants(row);
           store[table].push(row);
           return row;
         };
@@ -270,7 +282,7 @@ const H = vi.hoisted(() => {
             const target = arb?.target;
             const clash = target ? conflictRow(table, target, row) : undefined;
             if (clash) return [];
-            if (table === 'creditBalances') enforceBalanceInvariants(row);
+            enforceWalletRef(table, row); if (table === 'wallets') enforceBalanceInvariants(row);
             store[table].push(row);
             inserted = row;
             return [row];
@@ -292,9 +304,9 @@ const H = vi.hoisted(() => {
           const clash = conflictRow(table, target, row);
           if (clash) {
             Object.assign(clash, set);
-            if (table === 'creditBalances') enforceBalanceInvariants(clash);
+            if (table === 'wallets') enforceBalanceInvariants(clash);
           } else {
-            if (table === 'creditBalances') enforceBalanceInvariants(row);
+            enforceWalletRef(table, row); if (table === 'wallets') enforceBalanceInvariants(row);
             store[table].push(row);
           }
           return Promise.resolve(undefined);
@@ -369,7 +381,7 @@ const H = vi.hoisted(() => {
                   resolved[k] = isSqlExpr(val) ? evalSqlExpr(val, r) : val;
                 }
                 Object.assign(r, resolved);
-                if (table === 'creditBalances') enforceBalanceInvariants(r);
+                if (table === 'wallets') enforceBalanceInvariants(r);
                 matched.push(r);
               }
             }
@@ -399,13 +411,25 @@ const H = vi.hoisted(() => {
 
   return {
     store, db, isBillingEnabled, logger,
-    schema: { creditBalances, creditLedger, creditHolds, users, aiUsageLogs, subscriptions },
+    schema: { wallets, creditLedger, creditHolds, users, aiUsageLogs, subscriptions },
     ops: { eq, lt, gt, gte, inArray, notInArray, isNull, and, or, sql: sqlTag },
   };
 });
 
 vi.mock('@pagespace/db/db', () => ({ db: H.db }));
-vi.mock('@pagespace/db/schema/credits', () => ({ creditBalances: H.schema.creditBalances, creditLedger: H.schema.creditLedger, creditHolds: H.schema.creditHolds }));
+vi.mock('@pagespace/db/schema/credits', () => ({ creditLedger: H.schema.creditLedger, creditHolds: H.schema.creditHolds }));
+vi.mock('@pagespace/db/schema/wallets', () => {
+  const w = H.schema.wallets;
+  const personalRootWalletOf = (userId: string) =>
+    H.ops.and(H.ops.eq(w.userId, userId), H.ops.eq(w.ownerType, 'user'), H.ops.isNull(w.subjectType), H.ops.isNull(w.parentWalletId));
+  const where = H.ops.sql();
+  return {
+    wallets: w,
+    personalRootWalletOf,
+    PERSONAL_ROOT_WALLET_ARBITER: { target: w.userId, where },
+    PERSONAL_ROOT_WALLET_UPSERT_TARGET: { target: w.userId, targetWhere: where },
+  };
+});
 vi.mock('@pagespace/db/schema/auth', () => ({ users: H.schema.users }));
 vi.mock('@pagespace/db/schema/subscriptions', () => ({ subscriptions: H.schema.subscriptions }));
 vi.mock('@pagespace/db/schema/monitoring', () => ({ aiUsageLogs: H.schema.aiUsageLogs }));
@@ -442,7 +466,7 @@ const TIER_MONTHLY_ALLOWANCE_CENTS = {
 const store = H.store;
 
 function reset() {
-  store.creditBalances.length = 0;
+  store.wallets.length = 0;
   store.creditLedger.length = 0;
   store.creditHolds.length = 0;
   store.users.length = 0;
@@ -460,9 +484,17 @@ function seedLiveSubscription(userId: string, status = 'active', gifted = false)
 }
 
 function balanceOf(userId: string) {
-  return store.creditBalances.find((r) => r.userId === userId) as
+  return store.wallets.find((r) => r.userId === userId && r.subjectType == null && r.parentWalletId == null) as
     | { monthlyRemainingCents: number; topupRemainingCents: number; pendingMillicents: number; debtCents: number; monthlyPeriodEnd: Date | null }
     | undefined;
+}
+
+/** A personal root wallet that exists but holds nothing and has no period stamped. */
+function expectBareWallet(userId: string) {
+  expect(balanceOf(userId)).toMatchObject({
+    monthlyRemainingCents: 0, monthlyAllowanceCents: 0, topupRemainingCents: 0,
+    pendingMillicents: 0, debtCents: 0, monthlyPeriodStart: null, monthlyPeriodEnd: null,
+  });
 }
 
 function ledgerOf(userId: string) {
@@ -616,7 +648,8 @@ describe('credits flow — grants sized from the invoice paid (MON-2)', () => {
     const missed = ledgerOf('u1').filter((r) => r.entryType === 'missed_grant');
     expect(missed).toHaveLength(1);
     expect(missed[0]).toMatchObject({ amountCents: 0, paidCents: 1500, stripeRef: 'in_missed', consumeStatus: 'applied' });
-    expect(balanceOf('u1')).toBeUndefined();
+    // A missed grant ensures the payer's wallet (WAL-5: its ledger row names it) but funds nothing.
+    expectBareWallet('u1');
   });
 });
 
@@ -710,7 +743,8 @@ describe('credits flow — missed-grant reconcile (MON-2)', () => {
     seedUser('u1', 'cus_1', 'free'); // at funding time: stale stored tier, invoice grants nothing
     await applyStripeFunding(invoicePaid('in_missed', 'cus_1', PERIOD_START, PERIOD_END, 1500));
     expect(ledgerOf('u1').filter((r) => r.entryType === 'missed_grant')).toHaveLength(1);
-    expect(balanceOf('u1')).toBeUndefined();
+    // A missed grant ensures the payer's wallet (WAL-5: its ledger row names it) but funds nothing.
+    expectBareWallet('u1');
 
     // The tier gets repaired: the subscription row now says Pro.
     seedPricedSubscription('u1', 'price_pro');
@@ -734,14 +768,15 @@ describe('credits flow — missed-grant reconcile (MON-2)', () => {
 
     expect(result).toEqual({ reconciled: 0, stillMissing: 1, indeterminate: 0, indeterminateLedgerIds: [], failed: 0 });
     expect(ledgerOf('u1').filter((r) => r.entryType === 'missed_grant')).toHaveLength(1);
-    expect(balanceOf('u1')).toBeUndefined();
+    // A missed grant ensures the payer's wallet (WAL-5: its ledger row names it) but funds nothing.
+    expectBareWallet('u1');
   });
 
   it('MON-2 missed grant: rolls over onto whatever balance already exists (netted with debt, same arithmetic as a normal renewal)', async () => {
     seedUser('u1', 'cus_1', 'pro');
     // A normal grant lands first, leaving a carried balance and some debt.
     await applyStripeFunding(invoicePaid('in_normal', 'cus_1', PERIOD_START, PERIOD_END, 1500));
-    store.creditBalances.find((r) => r.userId === 'u1')!.debtCents = 100;
+    store.wallets.find((r) => r.userId === 'u1')!.debtCents = 100;
 
     // Then a SEPARATE missed invoice (different tier resolution failure) lands.
     seedUser('u2', 'cus_2', 'free');
@@ -811,7 +846,8 @@ describe('credits flow — missed-grant reconcile review fixes (#2645 threads)',
 
     expect(result).toEqual({ reconciled: 0, stillMissing: 1, indeterminate: 0, indeterminateLedgerIds: [], failed: 0 });
     expect(ledgerOf('u1').filter((r) => r.entryType === 'missed_grant')).toHaveLength(1);
-    expect(balanceOf('u1')).toBeUndefined();
+    // A missed grant ensures the payer's wallet (WAL-5: its ledger row names it) but funds nothing.
+    expectBareWallet('u1');
   });
 
   it('MON-2 missed grant: an indeterminate derivation (entitled row on an unmapped price, amount not a legacy price) is left for a human — counted as indeterminate and warned, never granted from a lower bound', async () => {
@@ -1139,7 +1175,8 @@ describe('credits flow — crash recovery (backfill reconcile)', () => {
   it('settles a pending ledger row, sweeps an orphan usage row, and bills a success:false row', async () => {
     seedUser('u1', 'cus_1', 'pro');
     // Give the user plenty of monthly credit to absorb the reconciled charges.
-    store.creditBalances.push({
+    store.wallets.push({
+      id: `w_seed_${store.wallets.length + 1}`, ownerType: 'user', orgId: null, subjectType: null, subjectId: null, parentWalletId: null,
       userId: 'u1', monthlyRemainingCents: 5000, monthlyAllowanceCents: 5000,
       topupRemainingCents: 0, pendingMillicents: 0,
       monthlyPeriodStart: new Date(PERIOD_START * 1000), monthlyPeriodEnd: new Date(PERIOD_END * 1000),
@@ -1180,7 +1217,8 @@ describe('credits flow — crash recovery (backfill reconcile)', () => {
 
   it('drains a backlog larger than one BATCH across multiple passes', async () => {
     seedUser('u1', 'cus_1', 'business');
-    store.creditBalances.push({
+    store.wallets.push({
+      id: `w_seed_${store.wallets.length + 1}`, ownerType: 'user', orgId: null, subjectType: null, subjectId: null, parentWalletId: null,
       userId: 'u1', monthlyRemainingCents: 1_000_000, monthlyAllowanceCents: 1_000_000,
       topupRemainingCents: 0, pendingMillicents: 0,
       monthlyPeriodStart: new Date(PERIOD_START * 1000), monthlyPeriodEnd: new Date(PERIOD_END * 1000),
@@ -1207,7 +1245,8 @@ describe('credits flow — crash recovery (backfill reconcile)', () => {
     // `source` field, through the REAL computeBackfillActions -> consumeCredits path
     // (not mocked), landing a ledger row stamped with MACHINE_MARKUP_BPS.
     seedUser('u1', 'cus_1', 'business');
-    store.creditBalances.push({
+    store.wallets.push({
+      id: `w_seed_${store.wallets.length + 1}`, ownerType: 'user', orgId: null, subjectType: null, subjectId: null, parentWalletId: null,
       userId: 'u1', monthlyRemainingCents: 5000, monthlyAllowanceCents: 5000,
       topupRemainingCents: 0, pendingMillicents: 0,
       monthlyPeriodStart: new Date(PERIOD_START * 1000), monthlyPeriodEnd: new Date(PERIOD_END * 1000),
@@ -1231,7 +1270,8 @@ describe('credits flow — monthly reset', () => {
     seedUser('u1', 'cus_1', 'free'); // free = one-time grant (TIER_ALLOWANCE_REFILLS.free === false)
     // Drained balance whose period already ended yesterday.
     const periodEnd = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    store.creditBalances.push({
+    store.wallets.push({
+      id: `w_seed_${store.wallets.length + 1}`, ownerType: 'user', orgId: null, subjectType: null, subjectId: null, parentWalletId: null,
       userId: 'u1', monthlyRemainingCents: 0, monthlyAllowanceCents: 500,
       topupRemainingCents: 0, pendingMillicents: 0,
       monthlyPeriodStart: new Date(Date.now() - 40 * 24 * 60 * 60 * 1000),
@@ -1248,7 +1288,8 @@ describe('credits flow — monthly reset', () => {
 
   it('a FREE user keeps spending carried starter credit after the window expires (no refill, no expiry)', async () => {
     seedUser('u1', 'cus_1', 'free');
-    store.creditBalances.push({
+    store.wallets.push({
+      id: `w_seed_${store.wallets.length + 1}`, ownerType: 'user', orgId: null, subjectType: null, subjectId: null, parentWalletId: null,
       userId: 'u1', monthlyRemainingCents: 200, monthlyAllowanceCents: 500,
       topupRemainingCents: 0, pendingMillicents: 0,
       monthlyPeriodStart: new Date(Date.now() - 40 * 24 * 60 * 60 * 1000),
@@ -1302,7 +1343,8 @@ describe('credits flow — monthly reset', () => {
   it('paid user with expired window, a live subscription, and ZERO carry is blocked (no credits — invoice.paid owns the refill)', async () => {
     seedUser('u3', 'cus_3', 'pro');
     seedLiveSubscription('u3');
-    store.creditBalances.push({
+    store.wallets.push({
+      id: `w_seed_${store.wallets.length + 1}`, ownerType: 'user', orgId: null, subjectType: null, subjectId: null, parentWalletId: null,
       userId: 'u3', monthlyRemainingCents: 0, monthlyAllowanceCents: 1500,
       topupRemainingCents: 0, pendingMillicents: 0,
       monthlyPeriodStart: new Date(Date.now() - 40 * 24 * 60 * 60 * 1000),
@@ -1319,7 +1361,8 @@ describe('credits flow — monthly reset', () => {
     seedUser('u5', 'cus_5', 'business');
     // A dead subscription must not block the roll — it can never deliver an invoice.
     store.subscriptions.push({ id: 'sub_u5_old', userId: 'u5', status: 'incomplete_expired' });
-    store.creditBalances.push({
+    store.wallets.push({
+      id: `w_seed_${store.wallets.length + 1}`, ownerType: 'user', orgId: null, subjectType: null, subjectId: null, parentWalletId: null,
       userId: 'u5', monthlyRemainingCents: 0, monthlyAllowanceCents: 10000,
       topupRemainingCents: 0, pendingMillicents: 0,
       monthlyPeriodStart: new Date(Date.now() - 40 * 24 * 60 * 60 * 1000),
@@ -1338,7 +1381,8 @@ describe('credits flow — monthly reset', () => {
   it('paid user with expired window, a live subscription, and carry credits CAN spend (rollover — carry is always spendable)', async () => {
     seedUser('u4', 'cus_4', 'pro');
     seedLiveSubscription('u4');
-    store.creditBalances.push({
+    store.wallets.push({
+      id: `w_seed_${store.wallets.length + 1}`, ownerType: 'user', orgId: null, subjectType: null, subjectId: null, parentWalletId: null,
       userId: 'u4', monthlyRemainingCents: 400, monthlyAllowanceCents: 1500,
       topupRemainingCents: 0, pendingMillicents: 0,
       monthlyPeriodStart: new Date(Date.now() - 40 * 24 * 60 * 60 * 1000),
@@ -1380,7 +1424,8 @@ describe('credits flow — monthly reset', () => {
 describe('credits flow — sub-cent accrual', () => {
   it('accumulates sub-cent charges via the fractional remainder; nothing is lost', async () => {
     seedUser('u1', 'cus_1', 'free');
-    store.creditBalances.push({
+    store.wallets.push({
+      id: `w_seed_${store.wallets.length + 1}`, ownerType: 'user', orgId: null, subjectType: null, subjectId: null, parentWalletId: null,
       userId: 'u1', monthlyRemainingCents: 100, monthlyAllowanceCents: 500,
       topupRemainingCents: 0, pendingMillicents: 0,
       monthlyPeriodStart: new Date(PERIOD_START * 1000), monthlyPeriodEnd: new Date(PERIOD_END * 1000),
@@ -1413,7 +1458,8 @@ describe('credits flow — sub-cent accrual', () => {
 describe('credits flow — shortfall / debt', () => {
   it('floors the balance at 0 and records a debt adjustment equal to the uncovered remainder', async () => {
     seedUser('u1', 'cus_1', 'free');
-    store.creditBalances.push({
+    store.wallets.push({
+      id: `w_seed_${store.wallets.length + 1}`, ownerType: 'user', orgId: null, subjectType: null, subjectId: null, parentWalletId: null,
       userId: 'u1', monthlyRemainingCents: 10, monthlyAllowanceCents: 500,
       topupRemainingCents: 0, pendingMillicents: 0,
       monthlyPeriodStart: new Date(PERIOD_START * 1000), monthlyPeriodEnd: new Date(PERIOD_END * 1000),
@@ -1455,7 +1501,7 @@ describe('credits flow — billing disabled (tenant/onprem)', () => {
 
     expect(result).toEqual({ retried: 0, orphans: 0, expiredHolds: 0 });
     expect(store.creditLedger).toHaveLength(0);
-    expect(store.creditBalances).toHaveLength(0);
+    expect(store.wallets).toHaveLength(0);
   });
 });
 
@@ -1463,7 +1509,8 @@ describe('credits flow — async cost reconcile (/generation drift correction)',
   const TEN_MIN_AGO = () => new Date(Date.now() - 10 * 60 * 1000);
 
   function seedBalance(userId: string, partial: Partial<{ monthly: number; topup: number; debt: number }> = {}) {
-    store.creditBalances.push({
+    store.wallets.push({
+      id: `w_seed_${store.wallets.length + 1}`, ownerType: 'user', orgId: null, subjectType: null, subjectId: null, parentWalletId: null,
       userId,
       monthlyRemainingCents: partial.monthly ?? 1000,
       monthlyAllowanceCents: 1000,
@@ -1493,8 +1540,10 @@ describe('credits flow — async cost reconcile (/generation drift correction)',
   // Reconcile only CORRECTS an already-billed call, so a base `usage` ledger row must
   // exist for the aiUsageLogId or the row is deferred (see hasUsageLedgerRow). Seed one.
   function seedUsageLedger(aiUsageLogId: string, userId: string) {
+    // Every usage row carries its wallet (0302 NOT NULL): the user's seeded personal root.
+    const walletId = balanceWalletId(userId);
     store.creditLedger.push({
-      id: `led_${aiUsageLogId}`, userId, entryType: 'usage', bucket: 'monthly',
+      id: `led_${aiUsageLogId}`, userId, walletId, entryType: 'usage', bucket: 'monthly',
       amountCents: -150, appliedCents: -150, chargeMillicents: 150_000, aiUsageLogId,
       realCostCents: 100, markupBps: 15000, stripeRef: null, reconcileGenerationKey: null,
       consumeStatus: 'applied', createdAt: new Date(),
@@ -1505,6 +1554,7 @@ describe('credits flow — async cost reconcile (/generation drift correction)',
     | { reconcileStatus: string; reconcileAttempts: number }
     | undefined;
   const adjustments = (userId: string) => ledgerOf(userId).filter((r) => r.entryType === 'adjustment');
+  const balanceWalletId = (userId: string) => (balanceOf(userId) as { id?: string } | undefined)?.id ?? null;
 
   it('corrects an undercharge: authoritative cost > billed → adjustment + extra debit', async () => {
     seedBalance('u1', { monthly: 1000 });
@@ -1521,6 +1571,9 @@ describe('credits flow — async cost reconcile (/generation drift correction)',
     const adj = adjustments('u1');
     expect(adj).toHaveLength(1);
     expect(adj[0]).toMatchObject({ aiUsageLogId: 'log_1', reconcileGenerationKey: 'gen-1', appliedCents: -15 });
+    // WAL-5: the correction lands on the wallet the corrected charge was billed to.
+    expect(adj[0].walletId).toBe(store.creditLedger.find((r) => r.id === 'led_log_1')!.walletId);
+    expect(adj[0].walletId).toBe(balanceWalletId('u1'));
   });
 
   it('corrects an overcharge: authoritative cost < billed → refund pays down debt first', async () => {
@@ -1628,7 +1681,8 @@ describe('credits flow — async cost reconcile (/generation drift correction)',
 
   it('draws from monthly carry even when the billing period has expired (rollover: no use-it-or-lose-it)', async () => {
     // Balance row with a period that ended yesterday — rollover means carry is still spendable.
-    store.creditBalances.push({
+    store.wallets.push({
+      id: `w_seed_${store.wallets.length + 1}`, ownerType: 'user', orgId: null, subjectType: null, subjectId: null, parentWalletId: null,
       userId: 'u1', monthlyRemainingCents: 1000, monthlyAllowanceCents: 1000,
       topupRemainingCents: 0, pendingMillicents: 0, debtCents: 0,
       monthlyPeriodStart: new Date(Date.now() - 40 * 24 * 60 * 60 * 1000),
@@ -1677,5 +1731,38 @@ describe('credits flow — per-user/day exposure cap (fund → consume past the 
     g = await canConsumeAI('u1', 'pro');
     expect(g).toEqual({ allowed: false, reason: 'daily_cap_exceeded' });
     expect(store.creditHolds).toHaveLength(0);
+  });
+});
+
+describe('credits flow — every row names the personal root wallet (WAL-5 (partial))', () => {
+  it('WAL-5 (partial): funding, gate and settle all write against ONE personal root wallet, and every ledger and hold row names it', async () => {
+    seedUser('u1', 'cus_1', 'pro');
+    await applyStripeFunding(invoicePaid('in_w5', 'cus_1', PERIOD_START, PERIOD_END));
+    await applyStripeFunding(creditPackCheckout('cs_w5', 'cus_1', 1000));
+
+    const gate = await canConsumeAI('u1', 'pro');
+    expect(gate.allowed).toBe(true);
+    const heldWallets = store.creditHolds.filter((h) => h.userId === 'u1').map((h) => h.walletId);
+
+    await consumeCredits({ aiUsageLogId: 'log_w5', userId: 'u1', costDollars: 1, holdId: gate.holdId });
+
+    const roots = store.wallets.filter((w) => w.userId === 'u1');
+    expect(roots).toHaveLength(1);
+    const rootId = roots[0].id;
+    expect(heldWallets).toEqual([rootId]);
+    const ledger = ledgerOf('u1');
+    expect(ledger.map((r) => r.entryType).sort()).toEqual(['monthly_grant', 'topup_purchase', 'usage']);
+    for (const row of ledger) expect(row.walletId).toBe(rootId);
+  });
+
+  it('WAL-5 (partial): a first AI call for a user with no wallet creates exactly one, and a settle against it names it', async () => {
+    seedUser('u2', 'cus_2', 'free');
+    const gate = await canConsumeAI('u2', 'free');
+    expect(gate.allowed).toBe(true);
+    await consumeCredits({ aiUsageLogId: 'log_w5_first', userId: 'u2', costDollars: 0.01, holdId: gate.holdId });
+
+    const roots = store.wallets.filter((w) => w.userId === 'u2');
+    expect(roots).toHaveLength(1);
+    for (const row of ledgerOf('u2')) expect(row.walletId).toBe(roots[0].id);
   });
 });

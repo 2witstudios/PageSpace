@@ -45,6 +45,7 @@ export * from './schema/webhook-triggers';
 export * from './schema/drafts';
 export * from './schema/published-pages';
 export * from './schema/credits';
+export * from './schema/wallets';
 export * from './schema/commands';
 export * from './schema/content-tags';
 export * from './schema/ai-compaction';
@@ -114,6 +115,7 @@ import * as webhookTriggers from './schema/webhook-triggers';
 import * as drafts from './schema/drafts';
 import * as publishedPages from './schema/published-pages';
 import * as credits from './schema/credits';
+import * as walletsSchema from './schema/wallets';
 import * as commands from './schema/commands';
 import * as contentTags from './schema/content-tags';
 import * as aiCompaction from './schema/ai-compaction';
@@ -184,6 +186,7 @@ export const schema = {
   ...drafts,
   ...publishedPages,
   ...credits,
+  ...walletsSchema,
   ...commands,
   ...contentTags,
   ...aiCompaction,

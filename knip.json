@@ -164,13 +164,15 @@
         "src/schema/tasks.ts",
         "src/schema/toast-notification-preferences.ts",
         "src/schema/versioning.ts",
+        "src/schema/wallets.ts",
         "src/schema/webhook-triggers.ts",
         "src/schema/workflow-runs.ts",
         "src/schema/workflows.ts",
         "src/schema/zoom.ts",
         "src/test/factories.ts",
         "src/test/require-db.ts",
-        "src/transactions/auth-transactions.ts"
+        "src/transactions/auth-transactions.ts",
+        "src/wallet-backfill.ts"
       ],
       "project": [
         "src/**/*.ts"

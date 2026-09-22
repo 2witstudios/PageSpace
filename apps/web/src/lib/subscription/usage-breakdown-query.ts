@@ -7,7 +7,8 @@
 
 import { db } from '@pagespace/db/db';
 import { and, eq, gte, lte } from '@pagespace/db/operators';
-import { creditBalances, creditLedger } from '@pagespace/db/schema/credits';
+import { creditLedger } from '@pagespace/db/schema/credits';
+import { wallets, personalRootWalletOf } from '@pagespace/db/schema/wallets';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { pages } from '@pagespace/db/schema/core';
 import { driveEnvs } from '@pagespace/db/schema/drive-envs';
@@ -35,11 +36,11 @@ export async function getUserUsageBreakdown(
 ): Promise<UsageBreakdown> {
   const [balance] = await db
     .select({
-      periodStart: creditBalances.monthlyPeriodStart,
-      periodEnd: creditBalances.monthlyPeriodEnd,
+      periodStart: wallets.monthlyPeriodStart,
+      periodEnd: wallets.monthlyPeriodEnd,
     })
-    .from(creditBalances)
-    .where(eq(creditBalances.userId, userId))
+    .from(wallets)
+    .where(personalRootWalletOf(userId))
     .limit(1);
 
   // A stale window (periodEnd in the past — renewal never landed) falls back to

@@ -19,12 +19,15 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { creditBalances, creditLedger, creditHolds } from '@pagespace/db/schema/credits';
-import { eq, sql } from '@pagespace/db/operators';
+import { creditLedger, creditHolds } from '@pagespace/db/schema/credits';
+import { wallets, personalRootWalletOf } from '@pagespace/db/schema/wallets';
+import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
+import { and, eq, isNull, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
 import { chargeMillicents, accruePending, allocateSpend } from './credit-core';
 import { MARKUP_BPS } from './credit-pricing';
 import { emitCreditsUpdated } from './credit-emit';
+import { ensurePersonalRootWalletId } from './personal-wallet';
 import { loggers } from '../logging/logger-config';
 
 export interface ConsumeCreditsInput {
@@ -55,6 +58,19 @@ export interface ConsumeCreditsInput {
 }
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/**
+ * WAL-5: the AI usage row records the wallet its call was charged to. Written with the
+ * charge itself (the settle transaction, or the zero-charge settle), and only while the
+ * row names no wallet yet, so a retry or a replay never re-points it.
+ */
+async function recordUsageWallet(executor: Tx | typeof db, aiUsageLogId: string | null, walletId: string): Promise<void> {
+  if (!aiUsageLogId) return;
+  await executor
+    .update(aiUsageLogs)
+    .set({ walletId })
+    .where(and(eq(aiUsageLogs.id, aiUsageLogId), isNull(aiUsageLogs.walletId)));
+}
 
 /**
  * Within a transaction: lock the balance row, fold this call's sub-cent charge into
@@ -89,11 +105,12 @@ async function decrementAndSettle(
 ): Promise<boolean> {
   const rows = await tx
     .select()
-    .from(creditBalances)
-    .where(eq(creditBalances.userId, userId))
+    .from(wallets)
+    .where(personalRootWalletOf(userId))
     .for('update');
   const bal = rows[0] as
     | {
+        id: string;
         monthlyRemainingCents: number;
         topupRemainingCents: number;
         pendingMillicents: number;
@@ -123,7 +140,7 @@ async function decrementAndSettle(
   );
 
   await tx
-    .update(creditBalances)
+    .update(wallets)
     .set({
       monthlyRemainingCents: spend.monthlyCents,
       topupRemainingCents: spend.topupCents,
@@ -133,10 +150,10 @@ async function decrementAndSettle(
       // netted against carry at the next renewal. Buckets still floor at 0 (above); debt carries
       // the overage. No-op when the call was fully covered (shortfallCents === 0).
       ...(spend.shortfallCents > 0
-        ? { debtCents: sql`${creditBalances.debtCents} + ${spend.shortfallCents}` }
+        ? { debtCents: sql`${wallets.debtCents} + ${spend.shortfallCents}` }
         : {}),
     })
-    .where(eq(creditBalances.userId, userId));
+    .where(personalRootWalletOf(userId));
 
   await tx
     .update(creditLedger)
@@ -158,6 +175,7 @@ async function decrementAndSettle(
   if (spend.shortfallCents > 0) {
     await tx.insert(creditLedger).values({
       userId,
+      walletId: bal.id,
       entryType: 'adjustment',
       bucket: 'monthly',
       amountCents: -spend.shortfallCents,
@@ -165,6 +183,8 @@ async function decrementAndSettle(
       consumeStatus: 'applied',
     });
   }
+
+  await recordUsageWallet(tx, aiUsageLogId, bal.id);
 
   // Release the gate's reservation in the SAME transaction as the decrement: once
   // this call's real cost has left the balance, its hold no longer reserves spend
@@ -220,13 +240,19 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<Credit
   const amountCents = -nominalCents || 0;
   const realCostCents = Math.max(0, Math.round(input.costDollars * 100));
 
-  // 1. Idempotent claim — one usage ledger row per aiUsageLogId.
+  // 1. Idempotent claim — one usage ledger row per aiUsageLogId, against the payer's
+  // personal root wallet (WAL-5). A user with no wallet yet gets a bare one: its empty
+  // buckets settle the charge as debt, which their first grant then nets (see
+  // personal-wallet).
   let ledgerId: string;
+  let walletId: string;
   try {
+    walletId = await ensurePersonalRootWalletId(db, input.userId);
     const claimed = await db
       .insert(creditLedger)
       .values({
         userId: input.userId,
+        walletId,
         entryType: 'usage',
         bucket: 'monthly',
         amountCents,
@@ -270,6 +296,7 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<Credit
         .update(creditLedger)
         .set({ consumeStatus: 'skipped' })
         .where(eq(creditLedger.id, ledgerId));
+      await recordUsageWallet(db, input.aiUsageLogId, walletId);
       // A zero-charge call still placed a hold at the gate (the gate runs before the
       // real cost is known). Release it so it doesn't reserve phantom spend or keep
       // counting against the in-flight cap until it expires.
