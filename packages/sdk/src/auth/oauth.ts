@@ -61,15 +61,18 @@ interface OAuthTokenProviderBaseOptions {
   onTokensUpdated?: (tokens: OAuthTokens) => void | Promise<void>;
 }
 
-/** Refresh through a caller-supplied transport (the historical shape). */
-export interface InjectedRefreshProviderOptions extends OAuthTokenProviderBaseOptions {
+/**
+ * Refresh through a caller-supplied transport — the historical options shape,
+ * kept an interface so existing `interface X extends OAuthTokenProviderOptions`
+ * declarations still compile.
+ */
+export interface OAuthTokenProviderOptions extends OAuthTokenProviderBaseOptions {
   refreshAccessToken: RefreshAccessToken;
 }
 
 /**
  * Refresh through PageSpace's own token endpoint (`refreshWithTokenEndpoint`,
- * token-endpoint.ts) — the default a sign-in hands back, so an app never has
- * to write the refresh call itself.
+ * token-endpoint.ts) — so an app never has to write the refresh call itself.
  */
 export interface TokenEndpointProviderOptions extends OAuthTokenProviderBaseOptions {
   refreshAccessToken?: undefined;
@@ -79,9 +82,10 @@ export interface TokenEndpointProviderOptions extends OAuthTokenProviderBaseOpti
   fetch?: typeof fetch;
 }
 
-export type OAuthTokenProviderOptions = InjectedRefreshProviderOptions | TokenEndpointProviderOptions;
+/** What the constructor accepts: either options shape. */
+export type OAuthTokenProviderInit = OAuthTokenProviderOptions | TokenEndpointProviderOptions;
 
-function resolveRefresh(options: OAuthTokenProviderOptions): RefreshAccessToken {
+function resolveRefresh(options: OAuthTokenProviderInit): RefreshAccessToken {
   if (options.refreshAccessToken !== undefined) {
     return options.refreshAccessToken;
   }
@@ -106,7 +110,7 @@ export class OAuthTokenProvider implements AuthProvider {
   readonly #onTokensUpdated: ((tokens: OAuthTokens) => void | Promise<void>) | undefined;
   #inFlightRefresh: Promise<string> | null = null;
 
-  constructor(options: OAuthTokenProviderOptions) {
+  constructor(options: OAuthTokenProviderInit) {
     this.#tokens = options.initialTokens;
     this.#refreshAccessToken = resolveRefresh(options);
     this.#now = options.now ?? Date.now;

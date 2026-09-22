@@ -99,12 +99,17 @@ if (provider === null) {
 | \`drive:<driveId>:member\` (or \`:admin\`, \`:role:<roleId>\`) | That one drive at that role, and nothing outside it. The user confirms with a step-up check. |
 | \`offline_access\` | A refresh token, so the session outlives the 15-minute access token. |
 
-**Apps built in PageSpace.** An app hosted in a PageSpace environment gets \`PAGESPACE_URL\` and \`PAGESPACE_CLIENT_ID\` in its environment — two public values — and needs no other setup. The redirect URI is the page's own origin plus \`/auth/pagespace/callback\`:
+**Apps built in PageSpace.** An app hosted in a PageSpace environment gets \`PAGESPACE_URL\` and \`PAGESPACE_CLIENT_ID\` in its environment — two public values. Map exactly those two into the browser bundle (with Vite, as \`VITE_PAGESPACE_URL\` and \`VITE_PAGESPACE_CLIENT_ID\`; never pass the whole env object, which would inline any other \`PAGESPACE_*\` variable, such as a CLI token). The redirect URI is the page's own origin plus \`/auth/pagespace/callback\`:
 
 \`\`\`typescript
 import { PageSpaceClient } from '@pagespace/sdk';
 
-const auth = PageSpaceClient.fromEnvironment();
+const auth = PageSpaceClient.fromEnvironment({
+  env: {
+    PAGESPACE_URL: import.meta.env.VITE_PAGESPACE_URL,
+    PAGESPACE_CLIENT_ID: import.meta.env.VITE_PAGESPACE_CLIENT_ID,
+  },
+});
 await auth.signInWithRedirect();
 \`\`\`
 

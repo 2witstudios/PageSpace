@@ -64,6 +64,13 @@ function collectSnippets(): Snippet[] {
   ];
 }
 
+/**
+ * Stands in for `vite/client` (not installed at the repo root): the browser
+ * samples read `import.meta.env.VITE_*`, the way a Vite app exposes values.
+ */
+const VITE_ENV_SHIM = join(SDK_ROOT, '__doc_snippet_vite_env.d.ts');
+const VITE_ENV_SHIM_SOURCE = 'interface ImportMeta { readonly env: Readonly<Record<string, string | undefined>>; }\n';
+
 function typecheck(snippets: readonly Snippet[]): string[] {
   const files = new Map(snippets.map((snippet) => [join(SDK_ROOT, `__doc_snippet_${snippet.source.replace(/\W+/g, '_')}_${snippet.index}.ts`), snippet]));
   const options: ts.CompilerOptions = {
@@ -82,9 +89,9 @@ function typecheck(snippets: readonly Snippet[]): string[] {
   const host = ts.createCompilerHost(options);
   const readFile = host.readFile.bind(host);
   const fileExists = host.fileExists.bind(host);
-  host.readFile = (fileName) => files.get(fileName)?.code ?? readFile(fileName);
-  host.fileExists = (fileName) => files.has(fileName) || fileExists(fileName);
-  const program = ts.createProgram([...files.keys()], options, host);
+  host.readFile = (fileName) => (fileName === VITE_ENV_SHIM ? VITE_ENV_SHIM_SOURCE : files.get(fileName)?.code ?? readFile(fileName));
+  host.fileExists = (fileName) => fileName === VITE_ENV_SHIM || files.has(fileName) || fileExists(fileName);
+  const program = ts.createProgram([...files.keys(), VITE_ENV_SHIM], options, host);
   return ts
     .getPreEmitDiagnostics(program)
     .filter((diagnostic) => diagnostic.file === undefined || files.has(diagnostic.file.fileName))

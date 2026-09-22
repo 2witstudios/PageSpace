@@ -46,7 +46,7 @@ export type { AuthProvider } from './auth/provider.js';
 export { StaticTokenProvider } from './auth/static.js';
 export { OAuthTokenProvider } from './auth/oauth.js';
 export type {
-  InjectedRefreshProviderOptions,
+  OAuthTokenProviderInit,
   OAuthTokenProviderOptions,
   OAuthTokens,
   RefreshAccessToken,

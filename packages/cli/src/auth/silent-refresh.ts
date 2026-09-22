@@ -7,8 +7,11 @@
  * malformed 2xx terminal), and never a token in an error. This module keeps
  * the CLI's positional signature.
  */
-import { createTokenEndpointRefresh } from '@pagespace/sdk';
+import { createTokenEndpointRefresh, isNetworkError, NetworkError } from '@pagespace/sdk';
 import type { RefreshAccessToken } from '@pagespace/sdk';
+
+/** The CLI's own wording for an unreachable token endpoint, as `enforceAuth` has always printed it. */
+const REFRESH_NETWORK_FAILURE_MESSAGE = 'Refresh token request failed';
 
 export function createRefreshAccessToken(
   tokenEndpoint: string,
@@ -16,5 +19,15 @@ export function createRefreshAccessToken(
   fetchImpl: typeof fetch = fetch,
   now: () => number = Date.now,
 ): RefreshAccessToken {
-  return createTokenEndpointRefresh({ tokenEndpoint, clientId, fetch: fetchImpl, now });
+  const refresh = createTokenEndpointRefresh({ tokenEndpoint, clientId, fetch: fetchImpl, now });
+  return async (refreshToken: string) => {
+    try {
+      return await refresh(refreshToken);
+    } catch (error) {
+      if (isNetworkError(error)) {
+        throw new NetworkError(REFRESH_NETWORK_FAILURE_MESSAGE, { cause: error.cause, operation: 'auth.refresh' });
+      }
+      throw error;
+    }
+  };
 }

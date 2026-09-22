@@ -35,6 +35,7 @@ import {
   type CallbackError,
 } from './sign-in.js';
 import {
+  createTokenEndpointRefresh,
   exchangeAuthorizationCode,
   revokeToken,
   toOAuthTokens,
@@ -156,13 +157,23 @@ export function isSignInError(error: unknown): error is SignInError {
 
 export const DEFAULT_SIGN_IN_SCOPE = 'profile offline_access';
 
-/** How long a started sign-in stays redeemable — the same order as the provider's own authorization-code lifetime. */
-export const PENDING_SIGN_IN_TTL_MS = 10 * 60 * 1000;
+/**
+ * How long a started sign-in (its state + verifier) stays redeemable. It spans
+ * the whole trip through PageSpace — which can include signing up, waiting
+ * for a magic-link email and a step-up check — so it is deliberately longer
+ * than the authorization code itself, which the provider expires 60 seconds
+ * after consent regardless of this value.
+ */
+export const PENDING_SIGN_IN_TTL_MS = 30 * 60 * 1000;
 
 const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(['localhost', '127.0.0.1', '[::1]']);
 
 /** Pure: https anywhere; plain http only on loopback, where there is no network for a code to cross. */
 export function isAcceptableBaseUrl(baseUrl: string): boolean {
+  // A query or fragment would silently become part of every endpoint URL
+  // (`https://host#` + `/api/oauth/token` posts to `/`). Checked on the raw
+  // string: `new URL('https://host#').hash` is empty.
+  if (baseUrl.includes('?') || baseUrl.includes('#')) return false;
   let url: URL;
   try {
     url = new URL(baseUrl);
@@ -213,6 +224,11 @@ function parseStored<T>(raw: string | null, schema: z.ZodType<T>): T | null {
   }
   const parsed = schema.safeParse(json);
   return parsed.success ? parsed.data : null;
+}
+
+/** Pure: whether two base URLs name the same deployment (a trailing slash is not a different server). */
+function sameDeployment(a: string, b: string): boolean {
+  return trimTrailingSlashes(a) === trimTrailingSlashes(b);
 }
 
 /** Pure: whether a stored session can still yield an access token at `now`. */
@@ -283,6 +299,23 @@ function ambientRandomBytes(length: number): Uint8Array {
 // PageSpaceAuth
 // ---------------------------------------------------------------------------
 
+/** A stored pair is adopted without a network call only if its access token has more than this left (OAuthTokenProvider's own skew). */
+const ADOPT_FRESH_SKEW_MS = 60_000;
+
+interface LockManagerLike {
+  request<T>(name: string, callback: () => Promise<T>): Promise<T>;
+}
+
+/**
+ * Runs `task` under a Web Lock when the environment has one (browsers:
+ * serialises refreshes across this origin's tabs and instances), and directly
+ * otherwise (Node, older browsers).
+ */
+function withRefreshLock<T>(name: string, task: () => Promise<T>): Promise<T> {
+  const locks = (globalThis as { navigator?: { locks?: LockManagerLike } }).navigator?.locks;
+  return typeof locks?.request === 'function' ? locks.request(name, task) : task();
+}
+
 const VERIFIER_BYTES = 32;
 const STATE_BYTES = 32;
 
@@ -296,6 +329,8 @@ export class PageSpaceAuth {
   readonly #fetch: typeof fetch | undefined;
   readonly #now: () => number;
   readonly #randomBytes: (length: number) => Uint8Array;
+  /** Bumped by `signOut()`; a provider created under an older generation never writes a session back. */
+  #generation = 0;
 
   constructor(options: PageSpaceAuthOptions) {
     const invalid = [
@@ -445,7 +480,7 @@ export class PageSpaceAuth {
     }
     if (raw === null) return null;
     const session = parseStored(raw, sessionSchema);
-    if (session === null || session.baseUrl !== this.baseUrl || !isSessionUsable(session, this.#now())) {
+    if (session === null || !sameDeployment(session.baseUrl, this.baseUrl) || !isSessionUsable(session, this.#now())) {
       this.#forget(storage);
       return null;
     }
@@ -467,9 +502,10 @@ export class PageSpaceAuth {
     } catch {
       return null;
     }
+    this.#generation += 1;
     this.#forget(storage);
     const session = parseStored(raw, sessionSchema);
-    if (session === null || session.baseUrl !== this.baseUrl) return null;
+    if (session === null || !sameDeployment(session.baseUrl, this.baseUrl)) return null;
     return revokeToken(
       {
         revocationEndpoint: pageSpaceOAuthEndpoints(this.baseUrl).revocationEndpoint,
@@ -496,6 +532,15 @@ export class PageSpaceAuth {
     }
   }
 
+  #readSession(storage: AuthStorage): StoredSession | null {
+    try {
+      const session = parseStored(storage.getItem(this.#sessionKey), sessionSchema);
+      return session !== null && sameDeployment(session.baseUrl, this.baseUrl) ? session : null;
+    } catch {
+      return null;
+    }
+  }
+
   #providerFor(session: StoredSession, storage: AuthStorage): OAuthTokenProvider {
     const initialTokens: OAuthTokens = {
       accessToken: session.accessToken,
@@ -505,23 +550,48 @@ export class PageSpaceAuth {
       refreshExpiresAt: session.refreshExpiresAt,
       scope: session.scope,
     };
+    const generation = this.#generation;
     const onTokensUpdated = (tokens: OAuthTokens): void => {
+      // A sign-out that happened while this refresh was in flight wins: never resurrect the session.
+      if (generation !== this.#generation) return;
       this.#writeSession(storage, { v: 1, baseUrl: this.baseUrl, ...tokens, scope: tokens.scope ?? session.scope });
     };
     if (session.refreshToken === null) {
       const noRefresh: RefreshAccessToken = async () => {
         throw new AuthenticationError('This sign-in has no refresh token (the grant had no offline_access); sign in again.', 'auth.refresh');
       };
-      return new OAuthTokenProvider({ initialTokens, refreshAccessToken: noRefresh, now: this.#now, onTokensUpdated });
+      // Skew 0: with nothing to refresh to, the token is used for its whole lifetime, then fails closed.
+      return new OAuthTokenProvider({ initialTokens, refreshAccessToken: noRefresh, now: this.#now, skewMs: 0, onTokensUpdated });
     }
-    // The provider's own default refresh: PageSpace's token endpoint, form-encoded, rotation persisted.
-    return new OAuthTokenProvider({
-      initialTokens,
+    const tokenEndpointRefresh = createTokenEndpointRefresh({
       tokenEndpoint: pageSpaceOAuthEndpoints(this.baseUrl).tokenEndpoint,
       clientId: this.clientId,
       fetch: this.#fetch,
       now: this.#now,
-      onTokensUpdated,
     });
+    // Refresh tokens rotate and a replayed one revokes the whole sign-in, so a
+    // provider must never present a token another provider over the same
+    // storage (a second `restore()`, another tab on shared storage) already
+    // spent. Under a same-origin lock, re-read storage first: a newer pair
+    // there is adopted — as-is while its access token is fresh, else refreshed
+    // with ITS refresh token.
+    const refreshAccessToken: RefreshAccessToken = (heldRefreshToken) =>
+      withRefreshLock(`pagespace.auth.refresh:${this.clientId}`, async () => {
+        const stored = this.#readSession(storage);
+        if (stored === null || stored.refreshToken === null || stored.refreshToken === heldRefreshToken) {
+          return tokenEndpointRefresh(heldRefreshToken);
+        }
+        if (this.#now() + ADOPT_FRESH_SKEW_MS < stored.accessExpiresAt) {
+          return {
+            accessToken: stored.accessToken,
+            accessExpiresAt: stored.accessExpiresAt,
+            refreshToken: stored.refreshToken,
+            refreshExpiresAt: stored.refreshExpiresAt,
+            scope: stored.scope,
+          };
+        }
+        return tokenEndpointRefresh(stored.refreshToken);
+      });
+    return new OAuthTokenProvider({ initialTokens, refreshAccessToken, now: this.#now, onTokensUpdated });
   }
 }

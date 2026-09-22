@@ -1,8 +1,9 @@
 # Sign in with PageSpace — real-browser smoke (Phase 3)
 
 A foreign-origin Vite SPA that signs a user in through `@pagespace/sdk` 2.6.0 and calls the API as
-them. It is configured **only** by `PAGESPACE_URL` + `PAGESPACE_CLIENT_ID`
-(`PageSpaceClient.fromEnvironment({ env: import.meta.env })`) — the US7 path — and exercises the
+them. It is configured **only** by the two public values `PAGESPACE_URL` + `PAGESPACE_CLIENT_ID`
+(exposed to Vite as `VITE_PAGESPACE_URL` / `VITE_PAGESPACE_CLIENT_ID` and mapped explicitly into
+`PageSpaceClient.fromEnvironment({ env })`) — the US7 path — and exercises the
 US4 acceptance: sign in from a foreign origin, read the token response cross-origin, then
 `client.auth.me()` and `client.pages.list()` for the granted drive.
 

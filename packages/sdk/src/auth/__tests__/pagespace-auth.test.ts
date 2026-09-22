@@ -6,11 +6,13 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { isAuthenticationError, isValidationError } from '../../errors.js';
-import { OAuthTokenProvider } from '../oauth.js';
+import { OAuthTokenProvider, type OAuthTokenProviderOptions } from '../oauth.js';
 import {
+  isAcceptableBaseUrl,
   isPageSpaceConfigError,
   isSignInError,
   PageSpaceAuth,
+  PENDING_SIGN_IN_TTL_MS,
   type AuthStorage,
   type PageSpaceAuthOptions,
 } from '../pagespace-auth.js';
@@ -150,6 +152,12 @@ describe('PageSpaceAuth constructor', () => {
     expect(() => makeAuth({ baseUrl: 'not a url' })).toThrowError(expect.objectContaining({ code: 'CONFIGURATION_ERROR' }));
     expect(() => makeAuth({ baseUrl: 'http://localhost:3000' })).not.toThrow();
     expect(() => makeAuth({ baseUrl: 'http://127.0.0.1:3000' })).not.toThrow();
+  });
+
+  it('rejects a base URL carrying a query or fragment (it would move the token endpoint)', () => {
+    expect(isAcceptableBaseUrl('https://pagespace.example#')).toBe(false);
+    expect(isAcceptableBaseUrl('https://pagespace.example/?x=1')).toBe(false);
+    expect(isAcceptableBaseUrl('https://pagespace.example/sub')).toBe(true);
   });
 
   it('rejects an empty client id or redirect URI', () => {
@@ -301,10 +309,19 @@ describe('handleRedirectCallback', () => {
     expect(isSignInError(error) && error.reason).toBe('no_pending_sign_in');
   });
 
-  it('refuses a pending sign-in older than ten minutes', async () => {
+  it('keeps a pending sign-in redeemable for 30 minutes (magic-link sign-up plus a step-up can take a while)', async () => {
+    expect(PENDING_SIGN_IN_TTL_MS).toBe(30 * 60 * 1000);
     const harness = makeAuth({ fetch: scriptedFetch([bearer()]).fetch });
     const { callbackUrl } = await startSignIn(harness);
-    harness.advance(10 * 60 * 1000 + 1);
+    harness.advance(29 * 60 * 1000);
+
+    await expect(harness.auth.handleRedirectCallback(callbackUrl)).resolves.toBeInstanceOf(OAuthTokenProvider);
+  });
+
+  it('refuses a pending sign-in older than thirty minutes', async () => {
+    const harness = makeAuth({ fetch: scriptedFetch([bearer()]).fetch });
+    const { callbackUrl } = await startSignIn(harness);
+    harness.advance(30 * 60 * 1000 + 1);
 
     const error = await captureError(() => harness.auth.handleRedirectCallback(callbackUrl));
 
@@ -365,6 +382,18 @@ describe('handleRedirectCallback', () => {
     expect(harness.storage.dump()).not.toContain(SECRETS.refreshToken);
   });
 
+  it('uses an access-only token for its whole lifetime — no early refresh attempt in the last minute', async () => {
+    const { fetch, calls } = scriptedFetch([bearer({ refresh_token: undefined, scope: 'profile' })]);
+    const harness = makeAuth({ fetch, scope: 'profile' });
+    const { callbackUrl } = await startSignIn(harness);
+    const provider = await harness.auth.handleRedirectCallback(callbackUrl);
+
+    harness.advance(850 * 1000);
+    await expect(provider.getAccessToken()).resolves.toBe(SECRETS.accessToken);
+    expect(harness.auth.restore()).not.toBeNull();
+    expect(calls).toHaveLength(1);
+  });
+
   it('signs in with an access-only grant (no offline_access) and fails closed, without a network call, once it expires', async () => {
     const { fetch, calls } = scriptedFetch([bearer({ refresh_token: undefined, scope: 'profile' })]);
     const harness = makeAuth({ fetch, scope: 'profile' });
@@ -417,6 +446,81 @@ describe('OAuthTokenProvider default refresh (tokenEndpoint + clientId instead o
   });
 });
 
+describe('several providers over one stored session', () => {
+  it('a provider whose refresh token was already rotated by another adopts the stored pair instead of replaying the spent token', async () => {
+    const { fetch, calls } = scriptedFetch([
+      bearer(),
+      bearer({ access_token: SECRETS.rotatedAccessToken, refresh_token: SECRETS.rotatedRefreshToken }),
+    ]);
+    const harness = makeAuth({ fetch });
+    const { callbackUrl } = await startSignIn(harness);
+    const first = await harness.auth.handleRedirectCallback(callbackUrl);
+    const second = harness.auth.restore();
+    expect(second).not.toBeNull();
+
+    harness.advance(900 * 1000);
+    await expect(first.getAccessToken()).resolves.toBe(SECRETS.rotatedAccessToken);
+    await expect(second?.getAccessToken()).resolves.toBe(SECRETS.rotatedAccessToken);
+
+    // One refresh on the wire, with the original token; the second provider never presented the spent one.
+    expect(calls.slice(1).map((call) => call.body.get('refresh_token'))).toEqual([SECRETS.refreshToken]);
+  });
+
+  it('serialises refreshes through navigator.locks when the environment has Web Locks', async () => {
+    const lockNames: string[] = [];
+    vi.stubGlobal('navigator', {
+      locks: {
+        request: async <T,>(name: string, callback: () => Promise<T>): Promise<T> => {
+          lockNames.push(name);
+          return callback();
+        },
+      },
+    });
+    try {
+      const harness = makeAuth({ fetch: scriptedFetch([bearer(), bearer({ refresh_token: SECRETS.rotatedRefreshToken })]).fetch });
+      const { callbackUrl } = await startSignIn(harness);
+      const provider = await harness.auth.handleRedirectCallback(callbackUrl);
+      harness.advance(900 * 1000);
+      await provider.getAccessToken();
+
+      expect(lockNames).toEqual([`pagespace.auth.refresh:${CLIENT_ID}`]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('signOut wins over a refresh already in flight: the rotated pair is not written back', async () => {
+    let releaseRefresh!: () => void;
+    const refreshGate = new Promise<void>((resolve) => {
+      releaseRefresh = resolve;
+    });
+    const calls: string[] = [];
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      const body = new URLSearchParams(typeof init?.body === 'string' ? init.body : '');
+      calls.push(body.get('grant_type') ?? `revoke:${String(input)}`);
+      if (body.get('grant_type') === 'authorization_code') return bearer()();
+      if (body.get('grant_type') === 'refresh_token') {
+        await refreshGate;
+        return bearer({ access_token: SECRETS.rotatedAccessToken, refresh_token: SECRETS.rotatedRefreshToken })();
+      }
+      return new Response(null, { status: 200 });
+    }) as typeof fetch;
+    const harness = makeAuth({ fetch: fetchImpl });
+    const { callbackUrl } = await startSignIn(harness);
+    const provider = await harness.auth.handleRedirectCallback(callbackUrl);
+
+    harness.advance(900 * 1000);
+    const inFlight = provider.getAccessToken();
+    await Promise.resolve();
+    await harness.auth.signOut();
+    releaseRefresh();
+    await inFlight.catch(() => undefined);
+
+    expect(harness.storage.items.size).toBe(0);
+    expect(harness.auth.restore()).toBeNull();
+  });
+});
+
 describe('restore', () => {
   it('returns null when nothing was signed in', () => {
     expect(makeAuth().auth.restore()).toBeNull();
@@ -434,6 +538,16 @@ describe('restore', () => {
     expect(provider).toBeInstanceOf(OAuthTokenProvider);
     await expect(provider?.getAccessToken()).resolves.toBe(SECRETS.accessToken);
     expect(calls).toHaveLength(1);
+  });
+
+  it('treats a base URL that differs only by a trailing slash as the same deployment', async () => {
+    const first = makeAuth({ fetch: scriptedFetch([bearer()]).fetch });
+    const { callbackUrl } = await startSignIn(first);
+    await first.auth.handleRedirectCallback(callbackUrl);
+
+    const reloaded = new PageSpaceAuth({ baseUrl: `${BASE_URL}/`, clientId: CLIENT_ID, redirectUri: REDIRECT_URI, storage: first.storage, now: () => 1_000_000 });
+
+    expect(reloaded.restore()).not.toBeNull();
   });
 
   it('ignores a session stored for a different PageSpace deployment', async () => {
@@ -604,5 +718,19 @@ describe('no token value ever reaches an error or a log', () => {
     await harness.auth.handleRedirectCallback(callbackUrl);
 
     expectNoSecret(JSON.stringify(harness.auth));
+  });
+});
+
+// Compile-time: OAuthTokenProviderOptions stays an extendable interface (2.5.0 callers may extend it).
+interface LegacyProviderOptions extends OAuthTokenProviderOptions {
+  readonly label?: string;
+}
+const legacyOptions: LegacyProviderOptions = {
+  initialTokens: { accessToken: 'a', accessExpiresAt: 0, refreshToken: 'r', refreshExpiresAt: 0 },
+  refreshAccessToken: async () => ({ accessToken: 'a', accessExpiresAt: 0, refreshToken: 'r', refreshExpiresAt: 0 }),
+};
+describe('OAuthTokenProviderOptions compatibility', () => {
+  it('still accepts an object typed through an interface that extends it', () => {
+    expect(new OAuthTokenProvider(legacyOptions)).toBeInstanceOf(OAuthTokenProvider);
   });
 });

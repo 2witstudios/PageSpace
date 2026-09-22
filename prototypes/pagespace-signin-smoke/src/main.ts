@@ -49,8 +49,13 @@ function render(): void {
   document.querySelector('#signout')?.addEventListener('click', () => void signOut());
 }
 
-// fromEnvironment: the two env vars + this page's origin + /auth/pagespace/callback.
-const auth = PageSpaceClient.fromEnvironment({ env: import.meta.env });
+// fromEnvironment: exactly the two public values + this page's origin + /auth/pagespace/callback.
+const auth = PageSpaceClient.fromEnvironment({
+  env: {
+    PAGESPACE_URL: import.meta.env.VITE_PAGESPACE_URL,
+    PAGESPACE_CLIENT_ID: import.meta.env.VITE_PAGESPACE_CLIENT_ID,
+  },
+});
 record('fromEnvironment', true, { baseUrl: auth.baseUrl, clientId: auth.clientId, redirectUri: auth.redirectUri, scope: auth.scope });
 
 async function signIn(): Promise<void> {

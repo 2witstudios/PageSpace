@@ -7,13 +7,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 - **Login, refresh and logout run on `@pagespace/sdk`'s token-endpoint calls.** `pagespace login`,
-  `login --device`, `keys`, `whoami` and `logout` used to carry their own copies of discovery, the
-  code exchange, the refresh grant and revocation; they now call the same functions every app
-  that signs in with PageSpace uses (SDK 2.6.0), so the wire protocol has one implementation.
-  Behaviour is unchanged; every existing CLI test passes untouched. Two edge cases now read
-  differently: a server error code outside the OAuth standard is reported as `http_<status>`
-  instead of being echoed, and a malformed refresh answer is a response-validation error instead
-  of an `HTTP 200` error — both still mean "log in again".
+  `keys`, `whoami` and `logout` used to carry their own copies of discovery, the code exchange, the
+  token-response parsing, the refresh grant and revocation; those five now call the same functions
+  every app that signs in with PageSpace uses (SDK 2.6.0). (The device grant's own two calls,
+  device authorization and polling, are unchanged.) Every existing CLI test passes untouched. The
+  observable differences are all at edges a working server never reaches:
+  - a server `error` value outside the OAuth standard is no longer echoed — a failed code exchange
+    reports `http_<status>`, a failed refresh reads `HTTP <status>`;
+  - a malformed refresh answer is a response-validation error instead of an `HTTP 200` error, and a
+    refresh answer whose `token_type` is not `Bearer` is refused — both still mean "log in again";
+  - `/api/auth/me` answers must carry `id`, `name`, `email` and `image` (every server version does);
+    the exported `whoamiOperation` now derives from the SDK's `auth.me` (`requiredScope: 'profile'`,
+    strict input);
+  - revocation prefers a `Retry-After` header over the body's `retryAfter` when a server sends both.
 - **`pagespace whoami` asks who you are through `client.auth.me()`**, the SDK's `auth.me`
   operation, instead of a private copy of it.
 - Requires `@pagespace/sdk` 2.6.0.

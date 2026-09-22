@@ -8,8 +8,9 @@ import { defineConfig } from 'vite';
 // redirect back to it. plugin-basic-ssl serves a self-signed certificate;
 // accept it once in the browser.
 //
-// envPrefix exposes PAGESPACE_URL / PAGESPACE_CLIENT_ID to import.meta.env,
-// which is what PageSpaceClient.fromEnvironment({ env: import.meta.env }) reads.
+// Only VITE_* reaches the bundle (Vite's default envPrefix). Do NOT widen it to
+// PAGESPACE_: that would inline every PAGESPACE_* variable in the build
+// environment — including a CLI token — into the public JS.
 //
 // @pagespace/sdk resolves to this repo's BUILT SDK (packages/sdk/dist — run
 // `bun run --filter @pagespace/sdk build` first), i.e. exactly what an npm
@@ -19,7 +20,6 @@ export default defineConfig({
   resolve: {
     alias: { '@pagespace/sdk': fileURLToPath(new URL('../../packages/sdk/dist/index.js', import.meta.url)) },
   },
-  envPrefix: ['VITE_', 'PAGESPACE_'],
   server: {
     host: '127.0.0.1',
     port: 5173,

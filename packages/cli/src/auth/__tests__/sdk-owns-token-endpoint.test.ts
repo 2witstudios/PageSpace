@@ -26,7 +26,7 @@ describe('the CLI token-endpoint helpers are adapters over @pagespace/sdk', () =
   });
 
   it.each(ADAPTERS)('%s makes no network call of its own', (file) => {
-    expect(source(file)).not.toMatch(/fetchImpl\s*\(/);
+    expect(source(file)).not.toMatch(/\b(fetchImpl|fetch)\s*\(/);
   });
 
   it.each(ADAPTERS)('%s declares no wire schema of its own', (file) => {

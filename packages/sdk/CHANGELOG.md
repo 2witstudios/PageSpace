@@ -13,16 +13,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `handleRedirectCallback(url)` checks the `state` before anything else, exchanges the code and
   returns an `OAuthTokenProvider` that refreshes itself; `restore()` brings the session back after
   a reload; `signOut()` revokes it. A callback URL can be redeemed once, a pending sign-in expires
-  after 10 minutes, and failures are typed (`SignInError` with a `reason`, e.g.
+  after 30 minutes, and failures are typed (`SignInError` with a `reason`, e.g.
   `authorizationError: 'access_denied'` when the user declines). The default scope is
   `profile offline_access`.
 - **`client.auth.me()`** — who signed in: `{ id, name, email, image }` for an app holding the new
   `profile` scope, plus `role`, `emailVerified` and `subscriptionTier` for a session or first-party
   client. `RequiredScope` gains `'profile'`.
-- **`PageSpaceClient.fromEnvironment()`** — zero-config sign-in for an app hosted in a PageSpace
-  environment: reads `PAGESPACE_URL` and `PAGESPACE_CLIENT_ID` (or the `env` you pass) and uses the
-  page origin + `/auth/pagespace/callback` (`PAGESPACE_CALLBACK_PATH`) as the redirect. A missing
-  variable throws a `PageSpaceConfigError` naming it, before any request.
+- **`PageSpaceClient.fromEnvironment()`** — sign-in for an app hosted in a PageSpace environment
+  from its two public values, `PAGESPACE_URL` and `PAGESPACE_CLIENT_ID` (map them into `env` in a
+  browser bundle; never pass a bundler's whole env object), with the page origin +
+  `/auth/pagespace/callback` (`PAGESPACE_CALLBACK_PATH`) as the redirect. A missing value throws a
+  `PageSpaceConfigError` naming it, before any request.
 - **The token-endpoint calls, exported individually** for servers, native apps and custom flows:
   `buildAuthorizeUrl`, `parseCallback` (never throws; compares `state` first), `discoverMetadata`,
   `exchangeAuthorizationCode`, `refreshWithTokenEndpoint` / `createTokenEndpointRefresh`,
@@ -31,16 +32,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   validates every response with zod, and classifies failures the ADR 0003 way (network, 429 and
   5xx retryable; a definitive 4xx or a malformed body terminal). Browser-safe: no Node APIs.
 - **`OAuthTokenProvider` refreshes on its own.** Pass `{ tokenEndpoint, clientId }` instead of a
-  `refreshAccessToken` function and it uses PageSpace's token endpoint. Passing your own
-  `refreshAccessToken` works exactly as before.
+  `refreshAccessToken` function and it uses PageSpace's token endpoint (the constructor now takes
+  `OAuthTokenProviderInit`, either shape). `OAuthTokenProviderOptions` and passing your own
+  `refreshAccessToken` work exactly as before.
+- **Providers over one stored session don't replay a spent refresh token.** Each refresh re-reads
+  storage under a Web Lock (where available) and adopts a pair another provider already rotated —
+  a replayed refresh token would revoke the whole sign-in. `signOut()` wins over a refresh already
+  in flight. A duplicated tab still starts from a copy of `sessionStorage` (see the README).
 
 ### Security
 
 - No token, code or verifier ever appears in an error message or a log line from these paths: a
   server's `error` field is only carried when it is a known OAuth error code, so a server echoing
   a token back cannot route it into your logs through the SDK.
-- An access-only grant (no `offline_access`, so no refresh token) signs in and then fails closed
-  at expiry without a network call.
+- An access-only grant (no `offline_access`, so no refresh token) signs in, is used for its whole
+  lifetime, and then fails closed at expiry without a network call.
+- A base URL carrying a query or fragment is rejected (it would move every endpoint).
 
 ### Compatibility
 

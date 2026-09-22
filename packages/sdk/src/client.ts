@@ -402,9 +402,11 @@ function buildNamespaces(
 export interface FromEnvironmentOptions extends Omit<PageSpaceAuthOptions, 'baseUrl' | 'clientId' | 'redirectUri'> {
   /**
    * Where `PAGESPACE_URL` and `PAGESPACE_CLIENT_ID` are read from. Defaults
-   * to `process.env`. A browser bundle has no `process.env`: pass the values
-   * your bundler exposes (e.g. Vite with `envPrefix: ['VITE_', 'PAGESPACE_']`
-   * and `env: import.meta.env`).
+   * to `process.env`. A browser bundle has no `process.env`: map the two
+   * public values explicitly (Vite: `{ PAGESPACE_URL: import.meta.env.VITE_PAGESPACE_URL, … }`).
+   * Never pass a bundler's whole env object or widen Vite's `envPrefix` to
+   * `PAGESPACE_` — that inlines every `PAGESPACE_*` variable, including a CLI
+   * token, into the public bundle.
    */
   readonly env?: Readonly<Record<string, string | undefined>>;
   /** The app's own origin; defaults to `location.origin`. The redirect URI is this + `PAGESPACE_CALLBACK_PATH`. */

@@ -192,15 +192,17 @@ grant_type=refresh_token
 
 The answer has the same shape as step 3, with a **new** refresh token. Refresh tokens rotate: the
 old one is spent the moment this call succeeds, so write the new pair to the keychain **before**
-using the new access token. Presenting a spent refresh token again (outside a few seconds' grace
-for a lost response) is treated as theft and revokes the whole sign-in.
+using the new access token. Presenting a spent refresh token again is treated as theft and revokes
+the whole sign-in — including when the refresh response was lost in transit and the app retries
+with the old token. Today a lost refresh response therefore means signing in again; never retry a
+refresh with a token you may already have spent.
 
 How to read a failed refresh (ADR 0003):
 
 | Response | Meaning | Do |
 |---|---|---|
 | Network error, `429`, `5xx` | Transient. A `429` body carries `retryAfter` (seconds). | Retry later with backoff. Keep the stored refresh token. |
-| `400` `invalid_grant` / `invalid_request`, `401` `invalid_client` | Definitive: revoked, expired or replayed. | Delete the stored tokens; sign in again. |
+| Any other `4xx` (e.g. `400` `invalid_grant`, `invalid_request`) | Definitive: revoked, expired, replayed or refused. | Delete the stored tokens; sign in again. |
 
 ## Signing out
 
