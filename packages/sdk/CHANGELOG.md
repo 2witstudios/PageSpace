@@ -47,8 +47,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   revokes the one it replaces (in the background, so sign-in never waits on it). A refresh always
   presents the stored — newest — refresh token, so a failed attempt never leads to replaying a
   spent one; a storage read that throws is a retryable hiccup, not a sign-out. `signOut()` stops
-  this instance's providers from serving a cached access token, and a revocation the server does
-  not accept is kept and retried by the next `signOut()`. A duplicated tab still starts from a
+  this instance's providers from serving a cached access token (including one a concurrent refresh
+  delivered) and covers every storage `restore(storage)` was given; a revocation the server does
+  not accept — including the background revocation of a replaced sign-in — is kept, per
+  deployment and merged rather than overwritten, and retried by the next `signOut()`; a
+  `signOut()` that cannot read storage reports a retryable failure instead of "nobody signed in". A duplicated tab still starts from a
   copy of `sessionStorage` (see the README).
 - Token-endpoint calls take a `timeoutMs` (default 30s) covering headers and body, enforced even
   when a custom `fetch` ignores `AbortSignal`; a hung request is a retryable `TimeoutError`, so it

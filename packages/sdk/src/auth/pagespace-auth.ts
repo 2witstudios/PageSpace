@@ -344,6 +344,8 @@ function withSessionLock<T>(name: string, task: () => Promise<T>): Promise<T> {
 
 const VERIFIER_BYTES = 32;
 const LINEAGE_BYTES = 16;
+/** Upper bound on queued revocations, so a long-offline app cannot grow storage without limit. */
+const MAX_PENDING_REVOCATIONS = 20;
 const STATE_BYTES = 32;
 
 export class PageSpaceAuth {
@@ -358,6 +360,8 @@ export class PageSpaceAuth {
   readonly #randomBytes: (length: number) => Uint8Array;
   /** Providers this instance created, so signOut() can stop them serving a cached access token. */
   readonly #providers = new Set<OAuthTokenProvider>();
+  /** Storages other than the configured one that `restore(storage)` handed a session out from. */
+  readonly #restoredStorages = new Set<AuthStorage>();
 
   constructor(options: PageSpaceAuthOptions) {
     const invalid = [
@@ -508,7 +512,7 @@ export class PageSpaceAuth {
     });
     // One session per app and storage: the sign-in this one replaces is ended on the server, not just
     // forgotten — in the background (revokeToken never throws), so a slow endpoint does not delay sign-in.
-    if (outcome.replaced !== null) void this.#revokeSession(outcome.replaced);
+    if (outcome.replaced !== null) void this.#revokeReplaced(storage, outcome.replaced);
     if (!outcome.persisted) {
       // A session exists only while its record is stored — that is what lets signOut() end it.
       // Tokens that could not be stored are revoked rather than left alive in memory.
@@ -527,6 +531,8 @@ export class PageSpaceAuth {
    */
   restore(storage: AuthStorage | null = this.#resolveStorage()): OAuthTokenProvider | null {
     if (storage === null) return null;
+    // signOut() must be able to reach every storage this instance handed out a session from.
+    if (storage !== this.#resolveStorage()) this.#restoredStorages.add(storage);
     let raw: string | null;
     try {
       raw = storage.getItem(this.#sessionKey);
@@ -551,58 +557,129 @@ export class PageSpaceAuth {
    * it. `null` when nobody is signed in.
    */
   async signOut(): Promise<RevokeTokenResult | null> {
-    const storage = this.#resolveStorage();
     // Providers this instance handed out stop serving their cached access token at once; their next
     // refresh finds no record and fails closed. (Providers in other tabs learn it from the server's revocation.)
-    for (const provider of this.#providers) provider.invalidate();
-    this.#providers.clear();
-    if (storage === null) return null;
-    // Under the refresh lock: a refresh already in flight (in any instance or
-    // tab sharing this lock) finishes and persists first, so the token revoked
-    // below is the newest one — revoking it ends the whole sign-in family.
-    const toRevoke = await withSessionLock(this.#lockName, async () => {
-      const tokens = this.#readPendingRevocations(storage);
-      const read = this.#readStoredSession(storage);
-      if (read.kind === 'present') {
-        this.#forget(storage);
-        tokens.unshift(read.session.refreshToken ?? read.session.accessToken);
-      }
-      return tokens;
-    });
-    if (toRevoke.length === 0) return null;
+    this.#invalidateProviders();
+    const primary = this.#resolveStorage();
+    const storages = [...new Set([...(primary === null ? [] : [primary]), ...this.#restoredStorages])];
+    if (storages.length === 0) return null;
 
-    const results = await Promise.all(
-      toRevoke.map(async (token) => ({ token, result: await this.#revokeAt(this.baseUrl, token) })),
-    );
-    const failed = results.filter(({ result }) => result.outcome === 'failed');
-    // A revocation the server did not accept is kept, not lost: the next signOut() retries it.
-    await withSessionLock(this.#lockName, async () => this.#writePendingRevocations(storage, failed.map(({ token }) => token)));
-    return failed.length === 0 ? { outcome: 'revoked' } : failed[0].result;
+    let current: RevokeTokenResult | null = null;
+    let unreadable = false;
+    let retriedPending: RevokeTokenResult | null = null;
+    for (const storage of storages) {
+      const outcome = await this.#signOutOf(storage);
+      if (outcome.unreadable) unreadable = true;
+      if (outcome.current !== null && (current === null || current.outcome === 'revoked')) current = outcome.current;
+      if (outcome.pending !== null && (retriedPending === null || retriedPending.outcome === 'revoked')) retriedPending = outcome.pending;
+    }
+    // A refresh that was in flight when sign-out began may have handed a provider new tokens since.
+    this.#invalidateProviders();
+
+    if (current !== null) return current;
+    if (unreadable) {
+      return {
+        outcome: 'failed',
+        retryable: true,
+        error: new NetworkError('The stored session could not be read, so nothing was signed out; try again.', { operation: 'auth.signOut' }),
+      };
+    }
+    return retriedPending;
   }
 
-  #readPendingRevocations(storage: AuthStorage): string[] {
-    try {
-      const pending = parseStored(storage.getItem(this.#pendingRevocationKey), pendingRevocationSchema);
-      return pending !== null && sameDeployment(pending.baseUrl, this.baseUrl) ? [...pending.tokens] : [];
-    } catch {
-      return [];
+  /**
+   * Signs out of one storage. Under the refresh lock: a refresh already in
+   * flight (any instance or tab sharing this lock) finishes and persists
+   * first, so the token revoked is the newest one — revoking it ends the
+   * whole family. A revocation the server does not accept is kept in the
+   * pending list (merged, never overwritten) for the next signOut() to retry.
+   */
+  async #signOutOf(storage: AuthStorage): Promise<{ current: RevokeTokenResult | null; pending: RevokeTokenResult | null; unreadable: boolean }> {
+    const taken = await withSessionLock(this.#lockName, async () => {
+      const read = this.#readStoredSession(storage);
+      if (read.kind === 'unreadable') return { currentToken: null, pendingTokens: this.#readPendingRevocations(storage) ?? [], unreadable: true };
+      let currentToken: string | null = null;
+      if (read.kind === 'present') {
+        this.#forget(storage);
+        currentToken = read.session.refreshToken ?? read.session.accessToken;
+      }
+      return { currentToken, pendingTokens: this.#readPendingRevocations(storage) ?? [], unreadable: false };
+    });
+
+    const revokeAll = async (tokens: readonly string[]) =>
+      Promise.all(tokens.map(async (token) => ({ token, result: await this.#revokeAt(this.baseUrl, token) })));
+    const currentResults = await revokeAll(taken.currentToken === null ? [] : [taken.currentToken]);
+    const pendingResults = await revokeAll(taken.pendingTokens.filter((token) => token !== taken.currentToken));
+    const all = [...currentResults, ...pendingResults];
+    if (all.length > 0) {
+      await withSessionLock(this.#lockName, async () =>
+        this.#mergePendingRevocations(storage, this.baseUrl, {
+          remove: all.filter(({ result }) => result.outcome === 'revoked').map(({ token }) => token),
+          add: all.filter(({ result }) => result.outcome === 'failed').map(({ token }) => token),
+        }),
+      );
+    }
+    const summarize = (results: typeof all): RevokeTokenResult | null =>
+      results.length === 0 ? null : (results.find(({ result }) => result.outcome === 'failed')?.result ?? { outcome: 'revoked' });
+    return { current: summarize(currentResults), pending: summarize(pendingResults), unreadable: taken.unreadable };
+  }
+
+  /** Revokes a sign-in replaced by a new one, in the background; a failure is queued for the next signOut() to retry. */
+  async #revokeReplaced(storage: AuthStorage, replaced: StoredSession): Promise<void> {
+    const token = replaced.refreshToken ?? replaced.accessToken;
+    const result = await this.#revokeAt(replaced.baseUrl, token);
+    if (result.outcome === 'failed') {
+      await withSessionLock(this.#lockName, async () => this.#mergePendingRevocations(storage, replaced.baseUrl, { remove: [], add: [token] }));
     }
   }
 
-  #writePendingRevocations(storage: AuthStorage, tokens: readonly string[]): void {
+  #invalidateProviders(): void {
+    for (const provider of this.#providers) provider.invalidate();
+    this.#providers.clear();
+  }
+
+  /** The pending list for this deployment, `[]` when there is none, or `null` when storage could not be read. */
+  #readPendingRevocations(storage: AuthStorage): string[] | null {
+    let raw: string | null;
     try {
-      if (tokens.length === 0) {
-        storage.removeItem(this.#pendingRevocationKey);
+      raw = storage.getItem(this.#pendingRevocationKeyFor(this.baseUrl));
+    } catch {
+      return null;
+    }
+    const pending = parseStored(raw, pendingRevocationSchema);
+    return pending === null ? [] : [...pending.tokens];
+  }
+
+  /**
+   * Read-modify-write of a deployment's pending list; the caller holds the
+   * lock. Re-reads first so concurrent sign-outs merge instead of
+   * overwriting, and writes nothing if the read threw (never wipe what could
+   * not be seen). Keeps at most `MAX_PENDING_REVOCATIONS`, newest first.
+   */
+  #mergePendingRevocations(storage: AuthStorage, baseUrl: string, change: { remove: readonly string[]; add: readonly string[] }): void {
+    const key = this.#pendingRevocationKeyFor(baseUrl);
+    let raw: string | null;
+    try {
+      raw = storage.getItem(key);
+    } catch {
+      return;
+    }
+    const existing = parseStored(raw, pendingRevocationSchema)?.tokens ?? [];
+    const removed = new Set(change.remove);
+    const next = [...new Set([...change.add, ...existing])].filter((token) => !removed.has(token) || change.add.includes(token)).slice(0, MAX_PENDING_REVOCATIONS);
+    try {
+      if (next.length === 0) {
+        storage.removeItem(key);
       } else {
-        storage.setItem(this.#pendingRevocationKey, JSON.stringify({ v: 1, baseUrl: this.baseUrl, tokens }));
+        storage.setItem(key, JSON.stringify({ v: 1, baseUrl, tokens: next }));
       }
     } catch {
       // Best effort: the failure was already reported to the caller as the signOut() result.
     }
   }
 
-  get #pendingRevocationKey(): string {
-    return `pagespace.auth.revoke-pending:${this.clientId}`;
+  #pendingRevocationKeyFor(baseUrl: string): string {
+    return `pagespace.auth.revoke-pending:${this.clientId}:${trimTrailingSlashes(baseUrl)}`;
   }
 
   #track(provider: OAuthTokenProvider): OAuthTokenProvider {
