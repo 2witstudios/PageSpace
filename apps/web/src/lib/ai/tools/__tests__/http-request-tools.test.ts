@@ -8,7 +8,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const mockAuthority = vi.hoisted(() => ({ requestOperation: vi.fn() }));
+const mockAuthority = vi.hoisted(() => ({ requestOperation: vi.fn(), listAccounts: vi.fn() }));
 const mockGetAuthority = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/agent-accounts/account-authority-client', () => ({ getAccountAuthority: mockGetAuthority }));
 
@@ -68,3 +68,40 @@ describe('http_request tool', () => {
     expect(actual).toEqual(expected);
   });
 });
+
+const listAccounts = (context: Partial<ToolExecutionContext>) =>
+  (httpRequestTools.list_accounts as unknown as { execute: (input: unknown, options: unknown) => Promise<unknown> }).execute({}, { experimental_context: context, toolCallId: 't2', messages: [] });
+
+const account = (overrides: Record<string, unknown>) => ({ id: 'acct_1', kind: 'api_key', name: 'Weather', ownerKind: 'agent_page', providerSlug: null, allowedOrigins: ['https://api.weather.example:443'], acknowledgment: 'dedicated_agent_account', status: 'active', upstreamRevocation: null, lastUsedAt: null, createdAt: 1, revokedAt: null, ready: true, ...overrides });
+
+describe('list_accounts tool (Codex P1: the model needs account ids)', () => {
+  it('given an agent page run, should list that page’s active accounts by id, name and site — nothing else', async () => {
+    mockAuthority.listAccounts.mockResolvedValue([account({}), account({ id: 'acct_2', name: 'Old', status: 'revoked' }), account({ id: 'acct_3', name: 'Pending', ready: false })]);
+    const result = await listAccounts({ userId: 'user_1', chatSource: { type: 'page', agentPageId: 'page_a' } });
+    const actual = { result, call: mockAuthority.listAccounts.mock.calls[0]?.[0] };
+    const expected = {
+      result: { accounts: [{ accountId: 'acct_1', name: 'Weather', sites: ['https://api.weather.example'], ready: true }, { accountId: 'acct_3', name: 'Pending', sites: ['https://api.weather.example'], ready: false }] },
+      call: { actorUserId: 'user_1', owner: { kind: 'agent_page', agentPageId: 'page_a' } },
+    };
+    expect(actual).toEqual(expected);
+  });
+
+  it('given the global assistant, should list the person’s own accounts', async () => {
+    mockAuthority.listAccounts.mockResolvedValue([]);
+    await listAccounts({ userId: 'user_1', chatSource: { type: 'global' } });
+    const actual = mockAuthority.listAccounts.mock.calls[0]?.[0]?.owner;
+    const expected = { kind: 'user' };
+    expect(actual).toEqual(expected);
+  });
+
+  it('given a caller who may not see the page’s accounts, or no configuration, should list none', async () => {
+    mockAuthority.listAccounts.mockResolvedValue(null);
+    const denied = await listAccounts({ userId: 'user_1', chatSource: { type: 'page', agentPageId: 'page_a' } });
+    mockGetAuthority.mockReturnValue(null);
+    const unconfigured = await listAccounts({ userId: 'user_1' });
+    const actual = [denied, unconfigured];
+    const expected = [{ accounts: [] }, { accounts: [] }];
+    expect(actual).toEqual(expected);
+  });
+});
+
