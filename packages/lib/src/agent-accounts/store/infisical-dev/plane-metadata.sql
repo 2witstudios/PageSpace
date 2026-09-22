@@ -55,3 +55,15 @@ CREATE TABLE IF NOT EXISTS agent_account_consent_ledger (
   consumed_at timestamptz NOT NULL
 );
 CREATE INDEX IF NOT EXISTS agent_account_consent_ledger_expires_at_idx ON agent_account_consent_ledger (expires_at);
+
+-- One Infisical project + one machine identity per tenant (D-29 = B), created
+-- by the provisioner on the tenant's first put. Ids only: the identity's
+-- Universal Auth client secrets are minted short-lived per operation
+-- (ADR 0005 §3.3 rider i) and never stored.
+CREATE TABLE IF NOT EXISTS agent_account_plane_tenants (
+  tenant_id text PRIMARY KEY,
+  project_id text NOT NULL,
+  identity_id text NOT NULL,
+  client_id text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);

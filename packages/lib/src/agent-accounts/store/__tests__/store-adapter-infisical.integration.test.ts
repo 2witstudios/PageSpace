@@ -69,6 +69,7 @@ import { createInfisicalClient, type InfisicalClient } from '../infisical-client
 import { createPlaneMetadataRepository, type PlaneMetadataRepository } from '../plane-metadata-repository';
 import { createInfisicalStoreAdapter } from '../store-adapter-infisical';
 import { createConsentLedgerRepository, type ConsentLedger } from '../consent-ledger-repository';
+import { createInfisicalTenantProvisioner } from '../infisical-tenant-provisioner-client';
 
 const INFISICAL_URL = process.env.INFISICAL_DEV_URL ?? 'http://localhost:8080';
 const INFISICAL_ADMIN_TOKEN = process.env.INFISICAL_DEV_ADMIN_TOKEN;
@@ -1458,6 +1459,64 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
       describe: { ok: false, reason: 'store_unavailable' },
       row: [{ current_version: 1, previous_version: null, pending_version: 2 }],
     });
+  });
+
+  // L2·G2 — D-29 = B at runtime: one project + one member identity per tenant, created on first use,
+  // with short-lived client secrets minted per operation and never stored.
+  const makeProvisioner = () => {
+    const metadata = createPlaneMetadataRepository({ pool: pool as never });
+    return createInfisicalTenantProvisioner({ baseUrl: INFISICAL_URL, organizationId: orgId, auth: { kind: 'token', token: INFISICAL_ADMIN_TOKEN ?? '' }, pool: pool as never, advisoryLockPool: metadata.advisoryLockPool });
+  };
+
+  it('given a tenant used for the first time, twice and concurrently, should provision exactly one project and identity and record only ids (G2, D-29)', async () => {
+    const provisioner = makeProvisioner();
+    const tenantId = `user:g2-prov-${NOW}` as TenantId;
+    const [first, second] = await Promise.all([provisioner.ensureTenant(tenantId), provisioner.ensureTenant(tenantId)]);
+    const again = await provisioner.ensureTenant(tenantId);
+    const rows = await pool.query('SELECT * FROM agent_account_plane_tenants WHERE tenant_id = $1', [tenantId]);
+    const actual = {
+      same: first !== null && second !== null && again !== null && first.projectId === second.projectId && first.projectId === again.projectId && first.identityId === again.identityId,
+      rowCount: rows.rows.length,
+      columns: Object.keys(rows.rows[0] ?? {}).sort(),
+    };
+    const expected = { same: true, rowCount: 1, columns: ['client_id', 'created_at', 'identity_id', 'project_id', 'tenant_id'] };
+    expect(actual).toEqual(expected);
+  });
+
+  it('given provisioned tenants, should mint working credentials for a tenant only for its own identity, and the adapter should put and resolve through them (G2, D-29)', async () => {
+    const provisioner = makeProvisioner();
+    const tenantX = `user:g2-prov-x-${NOW}` as TenantId;
+    const tenantY = `user:g2-prov-y-${NOW}` as TenantId;
+    const x = await provisioner.ensureTenant(tenantX);
+    const y = await provisioner.ensureTenant(tenantY);
+    const crossTenant = await provisioner.credentialsFor({ tenantId: tenantX, identityId: y?.identityId ?? '' });
+
+    const realMetadata = createPlaneMetadataRepository({ pool: pool as never });
+    const adapter = createInfisicalStoreAdapter({
+      infisical: createInfisicalClient({ baseUrl: INFISICAL_URL, environment: 'dev' }),
+      metadata: realMetadata,
+      advisoryLockPool: realMetadata.advisoryLockPool,
+      resolveProject: (tenantId) => provisioner.projectOf(tenantId),
+      resolveCredentials: (input) => provisioner.credentialsFor(input),
+      hash,
+      writeDigestKey: WRITE_DIGEST_KEY,
+      hmac,
+      now: () => Date.now(),
+      consentPublicKey: CONSENT_PUBLIC_KEY,
+      verify: verifyEd25519,
+      consentLedger: planeConsentLedger(),
+    });
+    const accountId = `acct-g2-prov-${NOW}` as AccountId;
+    const bindings: PlaneBindings = { ...plainBindings(), tenantId: tenantX, ownerRef: { kind: 'user', userId: `g2-prov-x-${NOW}` } };
+    const ref = { tenantId: tenantX, accountId, kind: 'api_key' as const };
+    const identityBase = { tenantId: tenantX, identityId: x?.identityId ?? '', blastRadius: 'tenant' as const };
+    const put = await adapter.put({ ref, material: API_KEY_V1, expectedVersion: null, bindings, scope: EXAMPLE_SCOPE, consenters: OWNER_CONSENTERS, identity: { ...identityBase, channel: 'ingress' } });
+    const grant = makeGrant({ accountId, tenantId: tenantX, credentialVersion: 1 as never, bindingDigest: digestBindings({ bindings, hash }) });
+    const resolved = await adapter.resolve({ ref, version: 1 as never, grant, identity: { ...identityBase, channel: 'http-executor' } });
+
+    const actual = { crossTenant, put, value: resolved.ok ? (resolved.material as { value: string }).value : resolved };
+    const expected = { crossTenant: null, put: { ok: true, version: 1 }, value: 'sk-g1c-v1' };
+    expect(actual).toEqual(expected);
   });
 
   // G2 ruling 3: the consent single-use ledger lives in the PLANE's metadata store. The main-DB writer
