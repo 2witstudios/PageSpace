@@ -9,7 +9,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockInsertChain = vi.hoisted(() => ({ values: vi.fn(), onConflictDoNothing: vi.fn(), returning: vi.fn() }));
-const mockUpdateChain = vi.hoisted(() => ({ set: vi.fn(), where: vi.fn() }));
+const mockUpdateChain = vi.hoisted(() => ({ set: vi.fn(), where: vi.fn(), returning: vi.fn() }));
 const mockSelectChain = vi.hoisted(() => ({ from: vi.fn(), where: vi.fn() }));
 const mockDeleteChain = vi.hoisted(() => ({ where: vi.fn(), returning: vi.fn() }));
 
@@ -27,6 +27,8 @@ vi.mock('@pagespace/db/operators', () => ({
   and: vi.fn((...conditions) => ({ kind: 'and', conditions })),
   or: vi.fn((...conditions) => ({ kind: 'or', conditions })),
   isNull: vi.fn((field) => ({ kind: 'isNull', field })),
+  inArray: vi.fn((field, values) => ({ kind: 'inArray', field, values })),
+  lt: vi.fn((field, value) => ({ kind: 'lt', field, value })),
 }));
 
 vi.mock('@pagespace/db/schema/tool-approvals', () => ({
@@ -39,6 +41,8 @@ vi.mock('@pagespace/db/schema/tool-approvals', () => ({
   },
   aiToolApprovalDecisions: {
     approvalId: 'decisions.approvalId',
+    outcome: 'decisions.outcome',
+    executedAt: 'decisions.executedAt',
   },
 }));
 
@@ -60,7 +64,8 @@ beforeEach(() => {
   mockInsertChain.values.mockReturnValue(mockInsertChain);
   mockInsertChain.onConflictDoNothing.mockReturnValue(mockInsertChain);
   mockUpdateChain.set.mockReturnValue(mockUpdateChain);
-  mockUpdateChain.where.mockResolvedValue(undefined);
+  mockUpdateChain.where.mockReturnValue(mockUpdateChain);
+  mockUpdateChain.returning.mockResolvedValue([]);
   mockSelectChain.from.mockReturnValue(mockSelectChain);
   mockSelectChain.where.mockResolvedValue([]);
   mockDeleteChain.where.mockReturnValue(mockDeleteChain);
@@ -148,5 +153,67 @@ describe('markExecuted', () => {
     await toolApprovalRepository.markExecuted('ap1', 'ok');
     expect(mockUpdateChain.set).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'ok', executedAt: expect.any(Date) }));
     expect(mockUpdateChain.where).toHaveBeenCalledWith({ kind: 'eq', field: 'decisions.approvalId', value: 'ap1' });
+  });
+});
+
+describe('outcome claims (the arbiter of what happened to an approved call)', () => {
+  it('claimExecutionStart: given the row is undecided-on-outcome (NULL), should move it to running and report won', async () => {
+    mockUpdateChain.returning.mockResolvedValue([{ approvalId: 'ap1' }]);
+    expect(await toolApprovalRepository.claimExecutionStart('ap1')).toBe(true);
+    expect(mockUpdateChain.set).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'running', executedAt: expect.any(Date) }));
+    expect(mockUpdateChain.where).toHaveBeenCalledWith({
+      kind: 'and',
+      conditions: [
+        { kind: 'eq', field: 'decisions.approvalId', value: 'ap1' },
+        { kind: 'isNull', field: 'decisions.outcome' },
+      ],
+    });
+  });
+
+  it('claimExecutionStart: given the outcome is already set (stale/denied/ok), should report lost and change nothing', async () => {
+    mockUpdateChain.returning.mockResolvedValue([]);
+    expect(await toolApprovalRepository.claimExecutionStart('ap1')).toBe(false);
+  });
+
+  it('claimStale: given an undecided outcome OR a running one older than the stale window, should move it to stale; otherwise lost', async () => {
+    mockUpdateChain.returning.mockResolvedValue([{ approvalId: 'ap1' }]);
+    expect(await toolApprovalRepository.claimStale('ap1')).toBe(true);
+    expect(mockUpdateChain.set).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'stale' }));
+    expect(mockUpdateChain.where).toHaveBeenCalledWith({
+      kind: 'and',
+      conditions: [
+        { kind: 'eq', field: 'decisions.approvalId', value: 'ap1' },
+        {
+          kind: 'or',
+          conditions: [
+            { kind: 'isNull', field: 'decisions.outcome' },
+            {
+              kind: 'and',
+              conditions: [
+                { kind: 'eq', field: 'decisions.outcome', value: 'running' },
+                { kind: 'lt', field: 'decisions.executedAt', value: expect.any(Date) },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    mockUpdateChain.returning.mockResolvedValue([]);
+    expect(await toolApprovalRepository.claimStale('ap1')).toBe(false);
+  });
+
+  it('recordOutcome: given a running OR stale row, should write the real result (truth wins over stale); given anything else, lost', async () => {
+    mockUpdateChain.returning.mockResolvedValue([{ approvalId: 'ap1' }]);
+    expect(await toolApprovalRepository.recordOutcome('ap1', 'ok')).toBe(true);
+    expect(mockUpdateChain.set).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'ok', executedAt: expect.any(Date) }));
+    expect(mockUpdateChain.where).toHaveBeenCalledWith({
+      kind: 'and',
+      conditions: [
+        { kind: 'eq', field: 'decisions.approvalId', value: 'ap1' },
+        { kind: 'inArray', field: 'decisions.outcome', values: ['running', 'stale'] },
+      ],
+    });
+    mockUpdateChain.returning.mockResolvedValue([]);
+    expect(await toolApprovalRepository.recordOutcome('ap1', 'error')).toBe(false);
   });
 });
