@@ -18,7 +18,7 @@ import { db } from '@pagespace/db/db';
 import { wallets, personalRootWalletOf, PERSONAL_ROOT_WALLET_ARBITER } from '@pagespace/db/schema/wallets';
 
 /** A db or an open transaction. */
-export type WalletExecutor = Pick<typeof db, 'select' | 'insert'>;
+type WalletExecutor = Pick<typeof db, 'select' | 'insert'>;
 
 async function findPersonalRootWalletId(executor: WalletExecutor, userId: string): Promise<string | null> {
   const rows = await executor
