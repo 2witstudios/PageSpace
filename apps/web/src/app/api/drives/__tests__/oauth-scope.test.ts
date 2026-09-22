@@ -53,6 +53,9 @@ vi.mock('@pagespace/lib/permissions/app-permissions', async (importOriginal) => 
     getScopedDriveMembership: (await import('@/lib/auth/__tests__/oauth-principal-fixture')).stillMemberScopedResolvers().getScopedDriveMembership,
     hasAppDriveMembership: vi.fn(),
     hasScopedDriveMembership: vi.fn(),
+    // The drive-level ceiling read behind canCreatePages queries Postgres; its
+    // role ∩ user answer runs for real in can-create-pages.integration.test.ts.
+    getScopedDriveAccessLevel: vi.fn(async () => ({ canView: true, canEdit: true, canShare: false, canDelete: false })),
   };
 });
 

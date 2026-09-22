@@ -64,7 +64,7 @@ async function listScopedDrivesWithMembership({
   );
 
   // Same drive-wide canEdit rule as the session path (#2627), batched once
-  // for the whole scoped list — never a per-role query per drive.
+  // for the whole scoped list.
   const canCreatePagesMap = await resolveDriveWideCanEdit(
     valid.map(({ drive, membership, role }) => ({
       driveId: drive.id,
@@ -75,13 +75,13 @@ async function listScopedDrivesWithMembership({
 
   return Promise.all(
     valid.map(async ({ drive, membership, role }) => {
-      // An inherited scope (role: null) carries the owner's ACTUAL permissions,
-      // which the credential's own drive resolver reads — the scope row's
-      // synthesized MEMBER knows nothing of the owner's custom role.
-      const inheritsNonOwner = membership.role === null && drive.ownerId !== userId;
-      const canCreatePages = inheritsNonOwner
-        ? await canEditDrive(drive.id)
-        : (canCreatePagesMap.get(drive.id) ?? false);
+      // The role's drive-wide rule AND what the credential can do at the drive
+      // root right now: an explicit role never exceeds its user, and an
+      // inherited scope (role: null, a synthesized MEMBER here) carries the
+      // owner's ACTUAL permissions, custom role included. Third-party apps
+      // read this flag, so it never claims a create the real gate refuses.
+      const canCreatePages = (canCreatePagesMap.get(drive.id) ?? false)
+        && await canEditDrive(drive.id);
       return {
         ...drive,
         isOwned: membership.role === null && drive.ownerId === userId,

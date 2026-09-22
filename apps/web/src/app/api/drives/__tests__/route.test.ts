@@ -609,6 +609,7 @@ describe('GET /api/drives — scoped MCP canCreatePages', () => {
     vi.mocked(isPrincipalDriveMember).mockResolvedValue(true);
     vi.mocked(db.query.drives.findMany).mockResolvedValue([scopedDriveRow]);
     vi.mocked(resolveDriveWideCanEdit).mockResolvedValue(new Map([['drive_scoped', true]]));
+    vi.mocked(getPrincipalDriveAccessLevel).mockResolvedValue({ canView: true, canEdit: true, canShare: false, canDelete: false });
   });
 
   it('given a scoped token MEMBER, should compute canCreatePages from the drive-wide rule', async () => {
@@ -620,6 +621,17 @@ describe('GET /api/drives — scoped MCP canCreatePages', () => {
     expect(resolveDriveWideCanEdit).toHaveBeenCalledWith([
       { driveId: 'drive_scoped', role: 'MEMBER', customRoleId: null },
     ]);
+  });
+
+  it('given a scoped token MEMBER whose credential cannot edit the drive root, should be false though the role rule allows it', async () => {
+    vi.mocked(getPrincipalDriveAccessLevel).mockResolvedValue({ canView: true, canEdit: false, canShare: false, canDelete: false });
+
+    const response = await GET(new Request('https://example.com/api/drives'));
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body[0]).toMatchObject({ id: 'drive_scoped', role: 'MEMBER', canCreatePages: false });
+    expect(getPrincipalDriveAccessLevel).toHaveBeenCalledWith(expect.objectContaining({ tokenId: 'tok_1' }), 'drive_scoped');
   });
 
   it('given a scoped token MEMBER with a view-only custom role, should fail closed', async () => {
