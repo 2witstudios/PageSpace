@@ -32,7 +32,7 @@ import { Pool, type PoolClient } from 'pg';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { readMigrationFiles } from 'drizzle-orm/migrator';
 import { runMigrations, type RunnableMigration } from '../migration-runner';
-import { runWalletBackfill, walletBackfillStatements, moneyDrift, type BackfillClient } from '../wallet-backfill';
+import { runWalletBackfill, walletBackfillStatements, moneyDrift, rehearseWalletMigration, type BackfillClient } from '../wallet-backfill';
 
 const MIGRATIONS_DIR = path.resolve(__dirname, '../../drizzle');
 
@@ -553,6 +553,55 @@ describeLive('0298–0302 against a real Postgres', () => {
       await s.migrate(throughThisChange);
       const nulls = await s.query<{ n: number }>(`SELECT count(*)::int AS n FROM "credit_ledger" WHERE "walletId" IS NULL`);
       expect(nulls[0].n).toBe(0);
+    } finally {
+      await s.pool.end();
+    }
+  }, 180_000);
+
+  it('X-5 (partial): --dry-run on a database still at 0297 (production before the deploy) rehearses the whole 0298–0302 chain and writes nothing', async () => {
+    const s = await openScenario('rehearse');
+    try {
+      await seedCorpus(s);
+      const preSnapshot = async () => JSON.stringify({
+        balances: await s.query(`SELECT * FROM "credit_balances" ORDER BY "userId"`),
+        ledger: await s.query(`SELECT * FROM "credit_ledger" ORDER BY "id"`),
+        holds: await s.query(`SELECT * FROM "credit_holds" ORDER BY "id"`),
+        tables: await s.query(`SELECT to_regclass('public.wallets') IS NULL AS "noWallets", 'credit_balances'::regclass::oid::int AS oid`),
+      });
+      const untouched = await preSnapshot();
+
+      const report = await withClient(s.pool, (c) => rehearseWalletMigration(c, MIGRATIONS_DIR));
+
+      // It reports what the deploy would do: every balance row a personal root wallet, the
+      // orphan user a zero one, every ledger and hold row assigned, and not one cent moved.
+      expect(report.rolledBack).toBe(true);
+      expect(report.before).toMatchObject({ balanceRows: BALANCES.length, ledgerRows: 9, holdRows: 4 });
+      expect(report.after).toMatchObject({
+        wallets: BALANCES.length + 1,
+        personalRootWallets: BALANCES.length + 1,
+        ledgerRows: 9,
+        holdRows: 4,
+        ledgerMissingWallet: 0,
+        holdsMissingWallet: 0,
+      });
+      expect(report.zeroWalletsCreated).toBe(1);
+      expect(report.drift).toEqual([]);
+      const sum = (key: keyof Balance) => BALANCES.reduce((acc, b) => acc + Number(b[key]), 0);
+      expect(report.after).toMatchObject({
+        monthlyRemainingCents: sum('monthlyRemainingCents'),
+        topupRemainingCents: sum('topupRemainingCents'),
+        debtCents: sum('debtCents'),
+        pendingMillicents: sum('pendingMillicents'),
+      });
+
+      // And the database is exactly as it was: still credit_balances (same relation), no wallets.
+      expect(await preSnapshot()).toBe(untouched);
+      const applied = await s.query<{ n: number }>(`SELECT count(*)::int AS n FROM drizzle.__drizzle_migrations`);
+      expect(applied[0].n).toBe(baseMigrations.length);
+
+      // Once migrated there is nothing to rehearse: it says so rather than pretending.
+      await s.migrate(throughThisChange);
+      await expect(withClient(s.pool, (c) => rehearseWalletMigration(c, MIGRATIONS_DIR))).rejects.toThrow(/not at 0297/);
     } finally {
       await s.pool.end();
     }
