@@ -1176,6 +1176,8 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
         throw new Error('synthetic credential store outage');
       },
       hash,
+      writeDigestKey: WRITE_DIGEST_KEY,
+      hmac,
       now: () => Date.now(),
       consentPublicKey: CONSENT_PUBLIC_KEY,
       verify: verifyEd25519,

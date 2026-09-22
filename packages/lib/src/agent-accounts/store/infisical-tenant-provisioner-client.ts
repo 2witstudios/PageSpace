@@ -30,6 +30,8 @@ export type TenantProvisioner = {
   readonly ensureTenant: (tenantId: TenantId) => Promise<{ readonly projectId: string; readonly identityId: string } | null>;
   /** The project of an already-provisioned tenant; null when none (never creates). */
   readonly projectOf: (tenantId: TenantId) => Promise<{ readonly projectId: string } | null>;
+  /** The project and identity of an already-provisioned tenant; null when none (never creates). */
+  readonly identityOf: (tenantId: TenantId) => Promise<{ readonly projectId: string; readonly identityId: string } | null>;
   /** Short-lived Universal Auth credentials for the tenant's identity; null when the tenant is not provisioned or minting failed. */
   readonly credentialsFor: (input: { readonly tenantId: TenantId; readonly identityId: string }) => Promise<InfisicalCredentials | null>;
 };
@@ -141,6 +143,15 @@ export function createInfisicalTenantProvisioner({
       try {
         const row = await read(tenantId);
         return row === null ? null : { projectId: row.project_id };
+      } catch {
+        return null;
+      }
+    },
+
+    async identityOf(tenantId) {
+      try {
+        const row = await read(tenantId);
+        return row === null ? null : { projectId: row.project_id, identityId: row.identity_id };
       } catch {
         return null;
       }

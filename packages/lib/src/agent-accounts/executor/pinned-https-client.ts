@@ -23,6 +23,7 @@
  */
 import { request as httpsRequest } from 'node:https';
 import type { LookupAddress } from 'node:dns';
+import type { LookupFunction } from 'node:net';
 import type { OutboundRequest } from '../build-outbound-request';
 import { decidePinnedAddress } from '../decide-pinned-address';
 
@@ -90,6 +91,10 @@ function sendPinned(outbound: OutboundRequest, pinned: { readonly address: strin
       resolve(outcome);
     };
 
+    const pinnedLookup: LookupFunction = (_hostname, options, callback) => {
+      if (options.all === true) callback(null, [{ address: pinned.address, family: pinned.family } satisfies LookupAddress]);
+      else callback(null, pinned.address, pinned.family);
+    };
     const url = new URL(outbound.url);
     const headers: Record<string, string> = {};
     for (const [name, value] of outbound.headers) headers[name] = value;
@@ -104,10 +109,7 @@ function sendPinned(outbound: OutboundRequest, pinned: { readonly address: strin
       agent: false,
       ca,
       // The ONLY answer the socket may use: the address decidePinnedAddress chose.
-      lookup: (_hostname: string, options: { readonly all?: boolean }, callback: (...args: unknown[]) => void) => {
-        if (options?.all === true) callback(null, [{ address: pinned.address, family: pinned.family } satisfies LookupAddress]);
-        else callback(null, pinned.address, pinned.family);
-      },
+      lookup: pinnedLookup,
     });
 
     const timer = setTimeout(() => {

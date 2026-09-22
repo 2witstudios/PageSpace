@@ -23,7 +23,7 @@ const USER = `${RUN}_user`;
 const DRIVE = `${RUN}_drive`;
 const PAGE = `${RUN}_page`;
 const repo = createAgentAccountRepository({ db });
-const draft = { kind: 'api_key' as const, name: 'Weather', allowedOrigins: ['https://api.weather.example:443' as CanonicalOrigin], acknowledgment: 'dedicated_agent_account' as const, placement: { in: 'header' as const, name: 'authorization' } };
+const draft = { kind: 'api_key' as const, name: 'Weather', allowedOrigins: ['https://api.weather.example:443' as CanonicalOrigin], acknowledgment: 'dedicated_agent_account' as const, placement: { in: 'header' as const, name: 'authorization' }, approvalPolicy: null };
 
 beforeAll(async () => {
   try {

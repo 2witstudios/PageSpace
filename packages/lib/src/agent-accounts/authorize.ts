@@ -145,7 +145,8 @@ function policyOf(value: unknown): AccountApprovalPolicy | null {
   return value as unknown as AccountApprovalPolicy;
 }
 
-function pagePermissionSuffices(account: AgentAccountRecord, caller: AuthorizeCaller, facts: AuthorizeFacts): boolean {
+/** The PageSpace page-permission term of the intersection (exported so an approval is held to the same bar). */
+export function pagePermissionSuffices(account: Pick<AgentAccountRecord, 'ownerKind' | 'ownerAgentPageId'>, caller: Pick<AuthorizeCaller, 'agentPageId'>, facts: Pick<AuthorizeFacts, 'agentPagePermission'>): boolean {
   if (account.ownerKind === 'agent_page') return caller.agentPageId === account.ownerAgentPageId && facts.agentPagePermission === 'edit';
   return caller.agentPageId === null || facts.agentPagePermission !== 'none';
 }
