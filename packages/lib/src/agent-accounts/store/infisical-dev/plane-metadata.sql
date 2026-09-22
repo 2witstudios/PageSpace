@@ -42,3 +42,16 @@ CREATE TABLE IF NOT EXISTS agent_account_plane_bindings (
   created_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (tenant_id, account_id, kind)
 );
+
+-- The single-use ledger for OwnerConsent.consentId (G1c E2), in the PLANE's
+-- store (G2 ruling 3): the main-DB writer is untrusted (R3), so a consumed
+-- consent recorded there could be deleted and replayed. consume is one
+-- INSERT … ON CONFLICT DO NOTHING; rows are swept once past expires_at (the
+-- consent's max age — decideRebind refuses an older consent before it is
+-- presented).
+CREATE TABLE IF NOT EXISTS agent_account_consent_ledger (
+  consent_id text PRIMARY KEY,
+  expires_at timestamptz NOT NULL,
+  consumed_at timestamptz NOT NULL
+);
+CREATE INDEX IF NOT EXISTS agent_account_consent_ledger_expires_at_idx ON agent_account_consent_ledger (expires_at);

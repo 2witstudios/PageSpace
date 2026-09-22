@@ -249,8 +249,8 @@ jobs:
           # already ran it against a fresh volume above — this just confirms that happened
           # rather than assuming it silently.
           docker exec -i infisical-dev-metadata psql -U plane_metadata -d plane_metadata -c \
-            "SELECT 1 FROM agent_account_secret_versions LIMIT 0" || {
-            echo "::error::agent_account_secret_versions was not created by plane-metadata.sql's initdb mount"
+            "SELECT 1 FROM agent_account_secret_versions LIMIT 0; SELECT 1 FROM agent_account_consent_ledger LIMIT 0" || {
+            echo "::error::agent_account_secret_versions / agent_account_consent_ledger were not created by plane-metadata.sql's initdb mount"
             exit 1
           }
 
