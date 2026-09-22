@@ -108,7 +108,7 @@ describe('authorize — the intersection', () => {
   it('given an entitled editor of the agent page and a bounded policy for generic requests to the pin, should issue a grant binding every principal, the digest, the epochs and the plane bindings', () => {
     const verdict = authorize(input());
     const { bindings } = planeBindingsFor({ row: agentAccount, boundAgentPageIds: [], hash: sha3 });
-    const actual = verdict.ok ? { grant: verdict.grant, approvalToConsume: verdict.approvalToConsume } : verdict;
+    const actual = verdict.ok ? { grant: verdict.grant, approvalToConsume: verdict.approvalToConsume, approvalStepUp: verdict.approvalStepUp } : verdict;
     const expected = {
       grant: {
         grantId: 'grant_1',
@@ -138,6 +138,7 @@ describe('authorize — the intersection', () => {
         presenter: { keyId: 'exec_key_1', channel: 'http-executor' },
       },
       approvalToConsume: null,
+      approvalStepUp: false,
     };
     expect(actual).toEqual(expected);
   });
