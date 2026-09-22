@@ -1,4 +1,18 @@
-import type { BrowserToolName } from './browser-tool-name.js';
+/**
+ * Which browser tools does this agent get? — pure.
+ *
+ * Every hard gate must be open, or the answer is none: a configured substrate
+ * (and control key), the platform code-execution kill switch, the agent's own
+ * sandbox switch, and a payer tier that may run machines — a browser session
+ * is a billable machine exactly like a sandbox (S3 R14). Then the agent's
+ * allowlist narrows the set, and a read-only agent keeps only the tools that
+ * observe (read, screenshot): navigating, clicking, typing and opening tabs
+ * can all submit something to the web.
+ *
+ * The registry and the tool's own execute path both ask this question, so a
+ * tool that should not be exposed is also refused if it is called anyway.
+ */
+import { BROWSER_MUTATING_TOOL_NAMES, BROWSER_TOOL_NAMES, type BrowserToolName } from './browser-tool-name.js';
 
 export type DecideToolExposureOptions = {
   /** A substrate and the control signing key are configured on this server. */
@@ -15,6 +29,9 @@ export type DecideToolExposureOptions = {
   readonly tierEligible: boolean;
 };
 
-export const decideToolExposure = (_options: DecideToolExposureOptions): readonly BrowserToolName[] => {
-  throw new Error('decideToolExposure: not implemented (RED)');
+export const decideToolExposure = ({ substrateConfigured, codeExecutionEnabled, agent, tierEligible }: DecideToolExposureOptions): readonly BrowserToolName[] => {
+  if (!substrateConfigured || !codeExecutionEnabled || !agent.sandboxEnabled || !tierEligible) return [];
+  return BROWSER_TOOL_NAMES.filter(
+    (name) => (agent.enabledTools === null || agent.enabledTools.includes(name)) && !(agent.readOnly && BROWSER_MUTATING_TOOL_NAMES.includes(name)),
+  );
 };
