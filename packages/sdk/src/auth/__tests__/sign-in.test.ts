@@ -24,6 +24,7 @@ import {
   discoverMetadata,
   exchangeAuthorizationCode,
   parseTokenResponse,
+  readOAuthErrorCode,
   refreshWithTokenEndpoint,
   revokeToken,
 } from '../token-endpoint.js';
@@ -550,5 +551,31 @@ describe('revokeToken', () => {
 
     expect(result.outcome).toBe('failed');
     expect(result.outcome === 'failed' ? everythingVisible(result.error) : '').not.toContain(params.token);
+  });
+});
+
+describe('readOAuthErrorCode', () => {
+  const params = {
+    tokenEndpoint: TOKEN_ENDPOINT,
+    clientId: 'app_123',
+    code: 'c',
+    redirectUri: 'https://app.example.com/cb',
+    codeVerifier: 'v'.repeat(43),
+  };
+
+  it('reads the RFC 6749 error code off a token-endpoint rejection', async () => {
+    const error = await captureError(exchangeAuthorizationCode(params, { fetch: recordingFetch(() => jsonResponse(400, { error: 'invalid_grant' })).fetch }));
+
+    expect(readOAuthErrorCode(error)).toBe('invalid_grant');
+  });
+
+  it('is null when the server sent no known code, and for anything that is not a token-endpoint error', async () => {
+    const unknown = await captureError(exchangeAuthorizationCode(params, { fetch: recordingFetch(() => jsonResponse(400, { error: 'made_up' })).fetch }));
+    const network = await captureError(exchangeAuthorizationCode(params, { fetch: throwingFetch('ECONNRESET') }));
+
+    expect(readOAuthErrorCode(unknown)).toBeNull();
+    expect(readOAuthErrorCode(network)).toBeNull();
+    expect(readOAuthErrorCode(new Error('invalid_grant'))).toBeNull();
+    expect(readOAuthErrorCode('invalid_grant')).toBeNull();
   });
 });

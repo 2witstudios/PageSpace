@@ -1,98 +1,44 @@
 /**
- * The token endpoint's response contract, in one place.
+ * The token endpoint's response contract, as the CLI stores it.
  *
- * `apps/web/src/app/api/oauth/token/route.ts` renders the same four response
- * shapes no matter which grant produced them — the authorization_code exchange
- * and the RFC 8628 device poll both go through one `keyGrantSuccessResponse`
- * helper server-side. This module is the client-side counterpart: both
- * `exchange-code.ts` and `poll-device-token.ts` discriminate through it, so a
- * change to the wire contract can't be applied to one grant and forgotten on
- * the other.
+ * The wire contract itself — the four shapes
+ * `apps/web/src/app/api/oauth/token/route.ts` renders, discriminated on
+ * `token_type` — lives in `@pagespace/sdk`'s `parseTokenResponse` (ADR 0004
+ * Decision 11: one implementation). Both `exchange-code.ts` and
+ * `poll-device-token.ts` read it through this adapter, so a change to the
+ * contract can't be applied to one grant and forgotten on the other.
  *
- * The four shapes, discriminated by `token_type`:
+ * - `'Bearer'` → `kind: 'oauth'` — the refresh/access pair `pagespace login`
+ *   feeds `OAuthTokenProvider`.
+ * - `'mcp'` — a pure drive:* grant (`pagespace keys create`): a real `mcp_*`
+ *   token, no refresh cycle.
+ * - `'mcp_update'` — an `update_key:<id>` grant: an existing key re-scoped in
+ *   place, no secret returned.
+ * - `'mcp_activate'` — an `activate_key:<id>` approval: nothing minted.
  *
- * - `'Bearer'` — the classic OAuth refresh/access-token pair `pagespace login`
- *   uses, feeding `PageSpaceClient`/`OAuthTokenProvider`.
- * - `'mcp'` — a pure drive:* grant (`pagespace keys create`): the server
- *   minted a real `mcp_*` token instead of an OAuth grant, so there is no
- *   `refresh_token`/`expires_in` to report — an `mcp_*` token doesn't expire
- *   and has no refresh cycle.
- * - `'mcp_update'` — an `update_key:<id>` grant (the wizard's Edit): the
- *   server re-scoped an EXISTING `mcp_*` token in place and deliberately
- *   returns no secret at all, only the verified success signal + granted
- *   scope + which token changed.
- * - `'mcp_activate'` — an `activate_key:<id>` approval (`pagespace keys
- *   use`): nothing minted, nothing re-scoped, no secret returned.
- *
- * Callers persist these differently — an `OAuthHostCredential` vs a
- * `StaticHostCredential` vs nothing at all — which is why the discrimination
- * is worth doing once, precisely, rather than being re-derived per flow.
+ * The one CLI-specific rule: every CLI grant requests `offline_access`, so a
+ * Bearer answer WITHOUT a refresh token (which the SDK accepts, for apps that
+ * sign in identity-only) is not something the CLI can persist — it reads as
+ * no known shape (`null`), exactly as it did before the move.
  */
-import { z } from 'zod';
+import { parseTokenResponse as parseSdkTokenResponse, type TokenResponse } from '@pagespace/sdk';
 import type { ExchangedTokens } from './loopback-flow.js';
 
-const oauthTokenResponseSchema = z.object({
-  token_type: z.literal('Bearer'),
-  access_token: z.string(),
-  expires_in: z.number(),
-  refresh_token: z.string(),
-  scope: z.string(),
-});
+/** Pure: the SDK's parsed token response → the CLI's union, or `null` for a Bearer answer with no refresh token. */
+export function toExchangedTokens(tokens: TokenResponse): ExchangedTokens | null {
+  if (tokens.kind !== 'oauth') return tokens;
+  if (tokens.refreshToken === undefined) return null;
+  return {
+    kind: 'oauth',
+    accessToken: tokens.accessToken,
+    refreshToken: tokens.refreshToken,
+    expiresIn: tokens.expiresIn,
+    scope: tokens.scope,
+  };
+}
 
-const mcpTokenResponseSchema = z.object({
-  token_type: z.literal('mcp'),
-  access_token: z.string(),
-  scope: z.string(),
-});
-
-const mcpUpdateResponseSchema = z.object({
-  token_type: z.literal('mcp_update'),
-  token_id: z.string(),
-  scope: z.string(),
-});
-
-const mcpActivateResponseSchema = z.object({
-  token_type: z.literal('mcp_activate'),
-  token_id: z.string(),
-  scope: z.string(),
-});
-
-/**
- * Discriminate a successful token-endpoint body into the typed union, or
- * `null` when it matches no known shape (the caller decides whether that is a
- * thrown `TokenExchangeError` or a `request_failed` poll result). Pure.
- */
-/**
- * One schema, discriminated on the `token_type` the server always sends.
- * Zod dispatches to the single matching member rather than trying each in
- * turn, so a body of the RIGHT shape that fails validation can never be
- * silently mistaken for a body of a different shape.
- */
-const tokenResponseSchema = z.discriminatedUnion('token_type', [
-  oauthTokenResponseSchema,
-  mcpTokenResponseSchema,
-  mcpUpdateResponseSchema,
-  mcpActivateResponseSchema,
-]);
-
+/** Pure: a successful token-endpoint body → the CLI's typed union, or `null` when the CLI cannot use it. */
 export function parseTokenResponse(json: unknown): ExchangedTokens | null {
-  const parsed = tokenResponseSchema.safeParse(json);
-  if (!parsed.success) return null;
-
-  switch (parsed.data.token_type) {
-    case 'mcp':
-      return { kind: 'mcp', token: parsed.data.access_token, scope: parsed.data.scope };
-    case 'mcp_update':
-      return { kind: 'mcp_update', tokenId: parsed.data.token_id, scope: parsed.data.scope };
-    case 'mcp_activate':
-      return { kind: 'mcp_activate', tokenId: parsed.data.token_id, scope: parsed.data.scope };
-    case 'Bearer':
-      return {
-        kind: 'oauth',
-        accessToken: parsed.data.access_token,
-        refreshToken: parsed.data.refresh_token,
-        expiresIn: parsed.data.expires_in,
-        scope: parsed.data.scope,
-      };
-  }
+  const tokens = parseSdkTokenResponse(json);
+  return tokens === null ? null : toExchangedTokens(tokens);
 }

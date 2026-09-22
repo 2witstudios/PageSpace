@@ -83,6 +83,7 @@ export {
   exchangeAuthorizationCode,
   NOMINAL_REFRESH_TTL_MS,
   parseTokenResponse,
+  readOAuthErrorCode,
   refreshWithTokenEndpoint,
   revokeToken,
   toOAuthTokens,

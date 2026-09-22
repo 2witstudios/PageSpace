@@ -29,6 +29,7 @@ import { z } from 'zod';
 import {
   classifyHttpError,
   getHeaderValue,
+  isPageSpaceError,
   NetworkError,
   RateLimitError,
   ResponseValidationError,
@@ -100,6 +101,18 @@ export function classifyTokenEndpointError(
     }
   }
   return classified;
+}
+
+/**
+ * The RFC 6749 §5.2 error code a token-endpoint rejection carried (e.g.
+ * `'invalid_grant'`), or `null` — for a network failure, a malformed
+ * response, a server that sent no recognised code, or anything that is not
+ * an SDK error at all. Reads only what `classifyTokenEndpointError` already
+ * allowlisted, so it can never return server-supplied free text.
+ */
+export function readOAuthErrorCode(error: unknown): string | null {
+  if (!isPageSpaceError(error) || !('status' in error)) return null;
+  return KNOWN_OAUTH_ERROR_CODES.has(error.message) ? error.message : null;
 }
 
 function toIssues(error: z.ZodError): ValidationIssue[] {
