@@ -740,6 +740,21 @@ async function runExecution(
 
     const messages = [{ role: 'user' as const, content: userMessage }];
 
+    // 7b. Save the user prompt BEFORE the model runs. The conversation row
+    // above is already committed, and both history lists only show a
+    // conversation with an active message — a run whose generation throws
+    // would otherwise leave an empty conversation its owner can neither see
+    // nor delete. With the prompt saved, a failed run is a visible, deletable
+    // conversation holding what was asked.
+    await messageRepository.savePageMessage({
+      messageId: createId(),
+      pageId: agent.id,
+      conversationId,
+      userId: input.createdBy,
+      role: 'user',
+      content: userMessage,
+    });
+
     // 8. Call generateText
     const result = Object.keys(availableTools).length > 0
       ? await generateText({
@@ -781,21 +796,9 @@ async function runExecution(
       0
     ) || 0;
 
-    // 9. Save user prompt + AI response as chat messages
-    const userMessageId = createId();
-    const assistantMessageId = createId();
-
+    // 9. Save the AI response into the run's conversation
     await messageRepository.savePageMessage({
-      messageId: userMessageId,
-      pageId: agent.id,
-      conversationId,
-      userId: input.createdBy,
-      role: 'user',
-      content: userMessage,
-    });
-
-    await messageRepository.savePageMessage({
-      messageId: assistantMessageId,
+      messageId: createId(),
       pageId: agent.id,
       conversationId,
       userId: null,

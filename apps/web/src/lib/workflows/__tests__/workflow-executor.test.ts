@@ -662,6 +662,24 @@ describe('executeWorkflow', () => {
       expect(result.conversationId).toBe(bound);
     });
 
+    test('generation throws: the user prompt is already saved, so the conversation is not left empty', async () => {
+      vi.mocked(generateText).mockRejectedValue(new Error('provider 503'));
+      setupSelectChain(
+        [{ ...mockAgent, sandboxEnabled: false, enabledTools: ['list_pages'] }],
+        [mockDrive],
+      );
+
+      const result = await executeWorkflow(createInputFixture());
+
+      expect(result.success).toBe(false);
+      const conversationId = mockCreateConversation.mock.calls[0][0];
+      const saves = vi.mocked(messageRepository.savePageMessage).mock.calls;
+      expect(saves).toHaveLength(1);
+      expect(saves[0][0]).toMatchObject({ conversationId, role: 'user', content: 'Generate a report' });
+      expect(vi.mocked(messageRepository.savePageMessage).mock.invocationCallOrder[0])
+        .toBeLessThan(vi.mocked(generateText).mock.invocationCallOrder[0]);
+    });
+
     test('a conversation that could not be created fails the run BEFORE the model runs', async () => {
       mockCreateConversation.mockResolvedValue('message_owner_conflict');
       setupSelectChain(
