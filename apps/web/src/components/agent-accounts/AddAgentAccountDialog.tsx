@@ -162,10 +162,10 @@ export function AddAgentAccountDialog({ scope, open, onOpenChange, onCreated }: 
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button onClick={submit} disabled={!canSubmit}>
+          <Button type="button" onClick={submit} disabled={!canSubmit}>
             Add account
           </Button>
         </DialogFooter>

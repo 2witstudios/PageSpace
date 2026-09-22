@@ -45,7 +45,7 @@ export function AgentAccountsPanel({ scope }: { readonly scope: AgentAccountScop
           </CardDescription>
         </div>
         {configured && (
-          <Button size="sm" onClick={() => setAdding(true)}>
+          <Button type="button" size="sm" onClick={() => setAdding(true)}>
             <Plus className="h-4 w-4 mr-1" /> Add account
           </Button>
         )}
@@ -70,7 +70,7 @@ export function AgentAccountsPanel({ scope }: { readonly scope: AgentAccountScop
               </div>
             </div>
             {account.status === 'active' && (
-              <Button size="sm" variant="outline" onClick={() => revoke(account.id, account.name)}>
+              <Button type="button" size="sm" variant="outline" onClick={() => revoke(account.id, account.name)}>
                 Revoke
               </Button>
             )}
