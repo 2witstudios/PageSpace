@@ -52,6 +52,49 @@ export type { OAuthTokenProviderOptions, OAuthTokens, RefreshAccessToken } from 
 // the CLI never needs to runtime-import `@pagespace/lib`.
 export { deriveCodeChallenge, generateCodeVerifier } from './auth/pkce.js';
 
+// Sign in with PageSpace (ADR 0004 Decision 11) — the authorization-code +
+// PKCE flow's pure half (authorize URL, callback) and its token-endpoint
+// calls (discovery, exchange, refresh, revoke) with an injected fetch. The
+// CLI's login/refresh/logout run on these same functions.
+export {
+  AUTHORIZATION_ERROR_CODES,
+  buildAuthorizeUrl,
+  PAGESPACE_CALLBACK_PATH,
+  pageSpaceOAuthEndpoints,
+  parseCallback,
+} from './auth/sign-in.js';
+export type {
+  AuthorizationErrorCode,
+  AuthorizeUrlParams,
+  CallbackError,
+  CallbackResult,
+  PageSpaceOAuthEndpoints,
+} from './auth/sign-in.js';
+export {
+  classifyTokenEndpointError,
+  createTokenEndpointRefresh,
+  discoverMetadata,
+  exchangeAuthorizationCode,
+  NOMINAL_REFRESH_TTL_MS,
+  parseTokenResponse,
+  refreshWithTokenEndpoint,
+  revokeToken,
+  toOAuthTokens,
+} from './auth/token-endpoint.js';
+export type {
+  AuthorizationServerMetadata,
+  ExchangeAuthorizationCodeParams,
+  RefreshWithTokenEndpointParams,
+  RevokeTokenParams,
+  RevokeTokenResult,
+  TokenEndpointClockDeps,
+  TokenEndpointDeps,
+  TokenEndpointRefreshOptions,
+  TokenResponse,
+} from './auth/token-endpoint.js';
+export { classifyRefreshFailure } from './auth/decide.js';
+export type { RefreshFailureClassification } from './auth/decide.js';
+
 // Operation registry — the source of truth SDK resource methods, CLI verbs,
 // and MCP tool definitions all derive from.
 export { defineOperation } from './registry/define.js';
