@@ -2603,6 +2603,11 @@
       "types": "./dist/agent-accounts/decide-acknowledgment.d.ts",
       "import": "./dist/agent-accounts/decide-acknowledgment.js",
       "require": "./dist/agent-accounts/decide-acknowledgment.js"
+    },
+    "./agent-accounts/to-http-request-tool-result": {
+      "types": "./dist/agent-accounts/to-http-request-tool-result.d.ts",
+      "import": "./dist/agent-accounts/to-http-request-tool-result.js",
+      "require": "./dist/agent-accounts/to-http-request-tool-result.js"
     }
   },
   "typesVersions": {

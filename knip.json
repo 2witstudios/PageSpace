@@ -188,6 +188,7 @@
         "src/agent-accounts/to-safe-account.ts",
         "src/agent-accounts/decide-account-creation.ts",
         "src/agent-accounts/decide-acknowledgment.ts",
+        "src/agent-accounts/to-http-request-tool-result.ts",
         "src/agent-accounts/canonical-request.ts",
         "src/agent-accounts/approval.ts",
         "src/agent-accounts/audit.ts",
