@@ -153,6 +153,7 @@ describe('verifyControlInstruction', () => {
     const bad = [
       { ...claims(), command: { type: 'operation', operation: { kind: 'evaluate', expression: '1' } } },
       { ...claims(), actor: { kind: 'root' } },
+      { ...claims(), actor: null },
       { ...claims(), actor: { kind: 'agent', agentId: '' } },
       { ...claims(), nonce: 'short' },
       { ...claims(), nonce: 'has spaces in the nonce value' },
@@ -161,11 +162,12 @@ describe('verifyControlInstruction', () => {
       { ...claims(), exp: 1.5 },
     ] as unknown as ControlClaims[];
     assert({
-      given: 'an untyped command, an unknown actor, an empty agent id, a short or unsafe nonce, an empty session, and non-integer times',
+      given: 'an untyped command, an unknown or null actor, an empty agent id, a short or unsafe nonce, an empty session, and non-integer times',
       should: 'refuse each as malformed or as an invalid command',
       actual: bad.map((c) => verifyWith(encodeControlInstruction({ claims: c, sign: server.sign }))),
       expected: [
         { ok: false, reason: 'invalid-command' },
+        { ok: false, reason: 'malformed' },
         { ok: false, reason: 'malformed' },
         { ok: false, reason: 'malformed' },
         { ok: false, reason: 'malformed' },
