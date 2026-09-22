@@ -21,7 +21,8 @@
 import { db } from '@pagespace/db/db';
 import { creditLedger, creditHolds } from '@pagespace/db/schema/credits';
 import { wallets, personalRootWalletOf } from '@pagespace/db/schema/wallets';
-import { eq, sql } from '@pagespace/db/operators';
+import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
+import { and, eq, isNull, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
 import { chargeMillicents, accruePending, allocateSpend } from './credit-core';
 import { MARKUP_BPS } from './credit-pricing';
@@ -57,6 +58,19 @@ export interface ConsumeCreditsInput {
 }
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/**
+ * WAL-5: the AI usage row records the wallet its call was charged to. Written with the
+ * charge itself (the settle transaction, or the zero-charge settle), and only while the
+ * row names no wallet yet, so a retry or a replay never re-points it.
+ */
+async function recordUsageWallet(executor: Tx | typeof db, aiUsageLogId: string | null, walletId: string): Promise<void> {
+  if (!aiUsageLogId) return;
+  await executor
+    .update(aiUsageLogs)
+    .set({ walletId })
+    .where(and(eq(aiUsageLogs.id, aiUsageLogId), isNull(aiUsageLogs.walletId)));
+}
 
 /**
  * Within a transaction: lock the balance row, fold this call's sub-cent charge into
@@ -170,6 +184,8 @@ async function decrementAndSettle(
     });
   }
 
+  await recordUsageWallet(tx, aiUsageLogId, bal.id);
+
   // Release the gate's reservation in the SAME transaction as the decrement: once
   // this call's real cost has left the balance, its hold no longer reserves spend
   // and must not keep shrinking spendable or counting against the in-flight cap.
@@ -229,8 +245,9 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<Credit
   // buckets settle the charge as debt, which their first grant then nets (see
   // personal-wallet).
   let ledgerId: string;
+  let walletId: string;
   try {
-    const walletId = await ensurePersonalRootWalletId(db, input.userId);
+    walletId = await ensurePersonalRootWalletId(db, input.userId);
     const claimed = await db
       .insert(creditLedger)
       .values({
@@ -279,6 +296,7 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<Credit
         .update(creditLedger)
         .set({ consumeStatus: 'skipped' })
         .where(eq(creditLedger.id, ledgerId));
+      await recordUsageWallet(db, input.aiUsageLogId, walletId);
       // A zero-charge call still placed a hold at the gate (the gate runs before the
       // real cost is known). Release it so it doesn't reserve phantom spend or keep
       // counting against the in-flight cap until it expires.

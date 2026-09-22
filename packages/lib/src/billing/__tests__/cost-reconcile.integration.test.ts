@@ -133,4 +133,67 @@ describe('applyCorrection transaction atomicity (Postgres)', () => {
       await cleanup(user.id);
     }
   });
+
+  it('WAL-5 (partial): reconciliation is keyed on wallet — a correction lands on the wallet the charge was billed to, not the owner\'s personal root', async () => {
+    if (!dbAvailable) return;
+    const user = await factories.createUser({ subscriptionTier: 'pro' });
+    try {
+      const [root] = await db.insert(wallets).values({ userId: user.id, topupRemainingCents: 700 }).returning({ id: wallets.id });
+      // A drive wallet the person owns, under their personal root (WAL-2), holding its own funds.
+      const [driveWallet] = await db
+        .insert(wallets)
+        .values({ userId: user.id, subjectType: 'drive', subjectId: `drive_${user.id}`, parentWalletId: root.id, topupRemainingCents: 1000 })
+        .returning({ id: wallets.id });
+
+      const tenMinAgo = new Date(Date.now() - 10 * 60 * 1000);
+      const [log] = await db
+        .insert(aiUsageLogs)
+        .values({
+          userId: user.id,
+          provider: 'openrouter',
+          model: 'e2e/stub',
+          cost: 0,
+          timestamp: tenMinAgo,
+          reconcileStatus: 'pending',
+          reconcileAttempts: 0,
+          metadata: { generationIds: ['gen-wallet-keyed-1'] },
+        })
+        .returning({ id: aiUsageLogs.id });
+      // The base charge was billed to the DRIVE wallet.
+      await db.insert(creditLedger).values({
+        userId: user.id,
+        walletId: driveWallet.id,
+        entryType: 'usage',
+        bucket: 'monthly',
+        amountCents: 0,
+        appliedCents: 0,
+        chargeMillicents: 0,
+        realCostCents: 0,
+        aiUsageLogId: log.id,
+      });
+
+      // Authoritative $1.00 vs billed $0 → an undercharge debit of the marked-up cost.
+      const fetcher: GenerationFetcher = async (id) => (id === 'gen-wallet-keyed-1' ? { totalCost: 1.0 } : 'not_found');
+      await reconcileOpenRouterCosts({ fetcher });
+
+      const [logAfter] = await db.select().from(aiUsageLogs).where(eq(aiUsageLogs.id, log.id));
+      expect(logAfter.reconcileStatus).toBe('reconciled');
+      const [adjustment] = await db
+        .select()
+        .from(creditLedger)
+        .where(and(eq(creditLedger.userId, user.id), eq(creditLedger.entryType, 'adjustment')));
+      expect(adjustment.walletId).toBe(driveWallet.id);
+
+      const [driveAfter] = await db.select().from(wallets).where(eq(wallets.id, driveWallet.id));
+      const [rootAfter] = await db.select().from(wallets).where(eq(wallets.id, root.id));
+      // The drive wallet paid exactly what the adjustment row says left it; the root is untouched.
+      expect(driveAfter.topupRemainingCents).toBe(1000 + (adjustment.appliedCents ?? 0));
+      expect(adjustment.appliedCents).toBeLessThan(0);
+      expect(rootAfter.topupRemainingCents).toBe(700);
+    } finally {
+      await db.delete(creditLedger).where(eq(creditLedger.userId, user.id));
+      await db.delete(wallets).where(and(eq(wallets.userId, user.id), eq(wallets.subjectType, 'drive')));
+      await cleanup(user.id);
+    }
+  });
 });

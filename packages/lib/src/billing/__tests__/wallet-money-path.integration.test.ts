@@ -16,6 +16,7 @@ import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { creditHolds, creditLedger } from '@pagespace/db/schema/credits';
+import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { wallets, personalRootWalletOf } from '@pagespace/db/schema/wallets';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
@@ -28,6 +29,7 @@ let dbAvailable = false;
 const originalMode = process.env.DEPLOYMENT_MODE;
 
 async function cleanup(userId: string): Promise<void> {
+  await db.delete(aiUsageLogs).where(eq(aiUsageLogs.userId, userId));
   await db.delete(creditHolds).where(eq(creditHolds.userId, userId));
   await db.delete(creditLedger).where(eq(creditLedger.userId, userId));
   await db.delete(wallets).where(eq(wallets.userId, userId));
@@ -90,6 +92,35 @@ describe('the money path writes every row against the personal root wallet', () 
       expect(root.debtCents).toBe(0);
       // The hold was released at settle.
       expect(await db.select().from(creditHolds).where(eq(creditHolds.userId, user.id))).toHaveLength(0);
+    } finally {
+      await cleanup(user.id);
+    }
+  });
+
+  it('WAL-5 (partial): every AI usage row that settles records the wallet charged — a paid call and a zero-charge call alike', async () => {
+    if (!dbAvailable) return;
+    process.env.DEPLOYMENT_MODE = 'cloud';
+    const user = await factories.createUser({ subscriptionTier: 'free' });
+    try {
+      const usageRow = async (id: string) => {
+        await db.insert(aiUsageLogs).values({ id, userId: user.id, provider: 'openrouter', model: 'test-model' });
+      };
+      await usageRow(`log_paid_${user.id}`);
+      await usageRow(`log_free_${user.id}`);
+
+      const gate = await canConsumeAI(user.id, 'free');
+      expect(gate.allowed).toBe(true);
+      expect(await consumeCredits({ aiUsageLogId: `log_paid_${user.id}`, userId: user.id, costDollars: 0.1, holdId: gate.holdId })).toBe('settled');
+      expect(await consumeCredits({ aiUsageLogId: `log_free_${user.id}`, userId: user.id, costDollars: 0 })).toBe('settled');
+
+      const [root] = await db.select({ id: wallets.id }).from(wallets).where(personalRootWalletOf(user.id));
+      const logs = await db.select({ id: aiUsageLogs.id, walletId: aiUsageLogs.walletId }).from(aiUsageLogs).where(eq(aiUsageLogs.userId, user.id));
+      expect(logs).toHaveLength(2);
+      for (const log of logs) expect(log.walletId, log.id).toBe(root.id);
+
+      // The ledger row for each call names the same wallet the usage row does.
+      const usage = await db.select({ aiUsageLogId: creditLedger.aiUsageLogId, walletId: creditLedger.walletId }).from(creditLedger).where(eq(creditLedger.userId, user.id));
+      for (const log of logs) expect(usage.find((r) => r.aiUsageLogId === log.id)?.walletId).toBe(log.walletId);
     } finally {
       await cleanup(user.id);
     }

@@ -19,7 +19,7 @@
 
 import { db } from '@pagespace/db/db';
 import { creditLedger } from '@pagespace/db/schema/credits';
-import { wallets, personalRootWalletOf } from '@pagespace/db/schema/wallets';
+import { wallets } from '@pagespace/db/schema/wallets';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { and, eq, lt, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
@@ -155,7 +155,8 @@ async function applyCorrection(
       .insert(creditLedger)
       .values({
         userId,
-        // The correction lands on the same wallet as the charge it corrects.
+        // WAL-5: the correction lands on the same wallet as the charge it corrects, and
+        // the buckets below are that wallet's, locked by its id.
         walletId,
         entryType: 'adjustment',
         bucket: 'monthly',
@@ -179,7 +180,7 @@ async function applyCorrection(
     const balRows = await tx
       .select()
       .from(wallets)
-      .where(personalRootWalletOf(userId))
+      .where(eq(wallets.id, walletId))
       .for('update');
     const bal = balRows[0] as
       | {
@@ -216,7 +217,7 @@ async function applyCorrection(
             ? { debtCents: sql`${wallets.debtCents} + ${spend.shortfallCents}` }
             : {}),
         })
-        .where(personalRootWalletOf(userId));
+        .where(eq(wallets.id, walletId));
       appliedCents = -spend.appliedCents || 0; // negative: decremented
     } else if (drift.deltaChargeMillicents < 0) {
       // Overcharge → refund: pay down debt first, remainder to the never-expiring top-up.
@@ -225,7 +226,7 @@ async function applyCorrection(
       await tx
         .update(wallets)
         .set({ debtCents: r.debtCents, topupRemainingCents: r.topupCents })
-        .where(personalRootWalletOf(userId));
+        .where(eq(wallets.id, walletId));
       appliedCents = refundCents; // positive: credited back
     }
 
