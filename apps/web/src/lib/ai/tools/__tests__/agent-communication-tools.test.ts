@@ -1113,6 +1113,47 @@ describe('agent-communication-tools', () => {
 
         expect(runCompaction).toHaveBeenCalledWith(pendingCompaction);
       });
+
+      it('SPEND-6 (partial) the compaction a mention reply schedules settles on the drive wallet the reply was gated on, never the sender', async () => {
+        const pendingCompaction = {
+          conversationId: 'channel:channel-1:agent:agent-1',
+          source: 'page' as const,
+          pageId: 'agent-1',
+          userId: 'user-123',
+          provider: 'openai',
+          model: 'openai/gpt-5.4-nano',
+          plan: {
+            reason: 'over-soft-threshold' as const,
+            cutBeforeIndex: 0,
+            estimatedTailTokens: 100,
+            messagesToSummarize: [],
+            compactedUpToMessageId: null,
+            compactedUpToCreatedAt: null,
+            currentSummaryVersion: null,
+            previousSummary: null,
+          },
+        };
+        vi.mocked(prepareHistoryForModel).mockResolvedValueOnce({
+          messages: [] as never,
+          summaryText: '',
+          stableBoundaryIndex: 0,
+          pendingCompaction,
+          scheduleCompaction: vi.fn(),
+        });
+
+        await executeAskAgent(
+          { agentPath: '/test/agent', agentId: 'agent-1', question: 'Test question' },
+          {
+            toolCallId: '1', messages: [],
+            experimental_context: {
+              userId: 'user-123',
+              creditSpend: { spend: { kind: 'automation', driveId: 'drive-1' }, walletId: 'w-drive-1' },
+            } as ToolExecutionContext,
+          },
+        );
+
+        expect(runCompaction).toHaveBeenCalledWith({ ...pendingCompaction, walletId: 'w-drive-1' });
+      });
     });
 
     describe('integration tool resolution', () => {

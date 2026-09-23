@@ -23,6 +23,13 @@ export interface RunCompactionParams {
   provider: string;
   model: string;
   plan: CompactionPlan;
+  /**
+   * The wallet the turn this compaction belongs to reserved on (WAL-5). A compaction is part
+   * of that turn's spend, so it settles on the same wallet: a mention reply's compaction on
+   * the drive wallet, never the sender's own credits (SPEND-6). Absent when the turn named
+   * none, which settles on the payer's personal root as before wallets.
+   */
+  walletId?: string;
 }
 
 async function summarize(
@@ -144,6 +151,7 @@ export async function runCompaction(params: RunCompactionParams): Promise<void> 
       conversationId,
       pageId: pageId ?? undefined,
       source: 'compaction',
+      walletId: params.walletId,
       success: true,
     });
 
