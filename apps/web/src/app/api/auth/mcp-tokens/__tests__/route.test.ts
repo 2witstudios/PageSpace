@@ -21,6 +21,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextRequest } from 'next/server';
+import { DrizzleQueryError } from 'drizzle-orm/errors';
 
 vi.mock('@/lib/repositories/session-repository', () => ({
   sessionRepository: {
@@ -366,9 +367,46 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
         expect(response.status).toBe(500);
         expect(body.error).toBe('Failed to create MCP token');
         expect(loggers.auth.error).toHaveBeenCalledWith(
-          'Error creating MCP token:',
-          new Error('Transaction failed'),
+          'Error creating MCP token',
+          { errorName: 'Error', code: null, constraint: null },
         );
+      });
+
+      // Phase 2b: drizzle 0.45.2's DrizzleQueryError message is the query plus
+      // its bound params, and the pg cause's `detail` echoes the duplicate key —
+      // both carry the new key's tokenHash.
+      it('given a drizzle-wrapped unique violation on the key insert, should log only the pg code and constraint, never the tokenHash', async () => {
+        const tokenHash = 'mockTokenHash123';
+        vi.mocked(sessionRepository.createMcpTokenWithDriveScopes).mockRejectedValueOnce(
+          new DrizzleQueryError(
+            'insert into "mcp_tokens" ("userId", "tokenHash", "tokenPrefix", "name") values ($1, $2, $3, $4)',
+            ['user_123', tokenHash, 'mcp_randomBas', 'My Token'],
+            Object.assign(new Error('duplicate key value violates unique constraint "mcp_tokens_tokenHash_unique"'), {
+              code: '23505',
+              constraint: 'mcp_tokens_tokenHash_unique',
+              detail: `Key ("tokenHash")=(${tokenHash}) already exists.`,
+            }),
+          ),
+        );
+
+        const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Cookie: 'ps_session=valid-token', 'X-CSRF-Token': 'valid-csrf-token' },
+          body: JSON.stringify({ name: 'My Token', stepUpToken: 'ps_stepup_test' }),
+        });
+
+        const response = await POST(request);
+
+        expect(response.status).toBe(500);
+        expect(loggers.auth.error).toHaveBeenCalledWith('Error creating MCP token', {
+          errorName: 'DrizzleQueryError',
+          code: '23505',
+          constraint: 'mcp_tokens_tokenHash_unique',
+        });
+        const logged = JSON.stringify(vi.mocked(loggers.auth.error).mock.calls, (_key, value: unknown) =>
+          value instanceof Error ? { message: value.message, stack: value.stack } : value);
+        expect(logged).not.toContain(tokenHash);
+        expect(logged).not.toContain('Failed query');
       });
     });
   });

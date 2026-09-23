@@ -304,12 +304,12 @@ describe('createAgentAccount — a store failure logs no credential hash (Phase 
       expect(failure).toBeInstanceOf(AgentIdentityStoreError);
       const storeError = failure as AgentIdentityStoreError;
       expect(storeError.redacted).toMatchObject({ code: '23505', constraint: expect.stringContaining('secretHash') });
-      expect(storeError.cause).toBeUndefined();
+      expect((storeError as { cause?: unknown }).cause).toBeUndefined();
       expect(`${storeError.message}\n${storeError.stack}\n${JSON.stringify(storeError)}`).not.toContain(secretHash);
 
       expect(logged).toHaveBeenCalled();
       const logText = JSON.stringify(logged.mock.calls, (_key, value: unknown) =>
-        value instanceof Error ? { message: value.message, stack: value.stack, cause: String(value.cause) } : value);
+        value instanceof Error ? { message: value.message, stack: value.stack, cause: String((value as { cause?: unknown }).cause) } : value);
       expect(logText).not.toContain(secretHash);
       expect(logText).not.toContain('Failed query');
       expect(logText).toContain('23505');

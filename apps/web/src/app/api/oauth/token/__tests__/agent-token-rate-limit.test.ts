@@ -17,6 +17,8 @@ const mocks = vi.hoisted(() => ({
   counts: new Map<string, number>(),
   exchangeAgentAssertion: vi.fn(),
   refreshTokenGrant: vi.fn(),
+  // refresh token -> family id; an unmapped token resolves to no family.
+  families: new Map<string, string>(),
 }));
 
 vi.mock('@/lib/repositories/oauth-repository', () => ({
@@ -25,6 +27,7 @@ vi.mock('@/lib/repositories/oauth-repository', () => ({
   refreshTokenGrant: mocks.refreshTokenGrant,
   pollDeviceToken: vi.fn(),
   exchangeAgentAssertion: mocks.exchangeAgentAssertion,
+  findRefreshTokenFamilyId: async (refreshToken: string) => mocks.families.get(refreshToken) ?? null,
 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 vi.mock('@pagespace/lib/onboarding/home-drive', () => ({ provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'home', created: false }) }));
@@ -71,6 +74,7 @@ const RATE_LIMITED = { error: 'rate_limited', retryAfter: 300 };
 describe('pagespace-agent token grants — per-IP and per-credential buckets', () => {
   beforeEach(() => {
     mocks.counts.clear();
+    mocks.families.clear();
     mocks.exchangeAgentAssertion.mockReset().mockResolvedValue({ outcome: 'ok', userId: 'agent', scopes: ['account', 'offline_access'], tokens });
     mocks.refreshTokenGrant.mockReset().mockResolvedValue({ outcome: 'ok', userId: 'agent', scopes: ['account', 'offline_access'], tokens });
   });
@@ -130,6 +134,45 @@ describe('pagespace-agent token grants — per-IP and per-credential buckets', (
       expect(mocks.refreshTokenGrant).toHaveBeenCalledTimes(10);
       expect((await refreshAs('198.51.100.9', 6)).status).toBe(200);
       expect([...mocks.counts.keys()].some((k) => k.includes(refresh(5)))).toBe(false);
+    });
+  });
+
+  // Phase 2b: every refresh presents a NEW token (rotation), so a bucket keyed
+  // on the presented token was a fresh bucket per refresh — a refresh loop was
+  // never bounded. The family survives rotation.
+  describe('the refresh bucket is keyed on the token family, not the presented token', () => {
+    it('given a refresh loop that presents each freshly rotated token of one family, should refuse the 11th refresh', async () => {
+      for (let n = 0; n < 11; n += 1) mocks.families.set(refresh(500 + n), 'family-A');
+
+      for (let n = 0; n < 10; n += 1) expect((await refreshAs('198.51.100.20', 500 + n)).status).toBe(200);
+      const refused = await refreshAs('198.51.100.20', 510);
+
+      expect(refused.status).toBe(429);
+      expect(await refused.json()).toEqual(RATE_LIMITED);
+      expect(mocks.refreshTokenGrant).toHaveBeenCalledTimes(10);
+      expect(mocks.counts.get('agent-token:refresh-family:family-A')).toBe(11);
+    });
+
+    it('given a spent family, should not throttle another agent\'s family on the same IP', async () => {
+      for (let n = 0; n < 11; n += 1) mocks.families.set(refresh(600 + n), 'family-B');
+      mocks.families.set(refresh(700), 'family-C');
+      for (let n = 0; n < 11; n += 1) await refreshAs('198.51.100.21', 600 + n);
+
+      expect((await refreshAs('198.51.100.21', 700)).status).toBe(200);
+    });
+
+    it('given the per-IP bucket is spent, should refuse before resolving any family', async () => {
+      const resolved: string[] = [];
+      for (let i = 0; i < 60; i += 1) await exchange('198.51.100.22', 8000 + i);
+      mocks.families.set(refresh(800), 'family-D');
+      const original = mocks.families.get.bind(mocks.families);
+      mocks.families.get = (key: string) => { resolved.push(key); return original(key); };
+      try {
+        expect((await refreshAs('198.51.100.22', 800)).status).toBe(429);
+        expect(resolved).toEqual([]);
+      } finally {
+        mocks.families.get = original;
+      }
     });
   });
 

@@ -14,14 +14,15 @@
  * @module @pagespace/lib/logging/db-error-redaction
  */
 
-export interface RedactedDbError {
+// A type alias, not an interface, so it is assignable to the logger's `LogInput` record.
+export type RedactedDbError = {
   /** Constructor name of the outermost error (`DrizzleQueryError`, `Error`, …), or `unknown`. */
   errorName: string;
   /** SQLSTATE (`23505`) or driver code (`ECONNREFUSED`) from the error or its cause chain. */
   code: string | null;
   /** Violated constraint name, when the driver reports one. */
   constraint: string | null;
-}
+};
 
 const MAX_CAUSE_DEPTH = 5;
 const CODE_SHAPE = /^[A-Z0-9_]{1,32}$/;

@@ -25,6 +25,7 @@ vi.mock('@/lib/repositories/oauth-repository', () => ({
   refreshTokenGrant: mocks.refreshTokenGrant,
   pollDeviceToken: vi.fn(),
   exchangeAgentAssertion: mocks.exchangeAgentAssertion,
+  findRefreshTokenFamilyId: vi.fn().mockResolvedValue('family-1'),
 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: mocks.audit }));
 vi.mock('@pagespace/lib/onboarding/home-drive', () => ({ provisionHomeDriveIfNeeded: mocks.provision }));
@@ -99,7 +100,8 @@ describe('POST /api/oauth/token — jwt-bearer (agent assertion) grant', () => {
     });
 
     it('should apply the token-exchange rate limit before the secret is looked up', async () => {
-      mocks.rateLimit.mockResolvedValue({ allowed: false, retryAfter: 30 });
+      // The IP bucket passes; the per-credential bucket (checked second) refuses.
+      mocks.rateLimit.mockResolvedValueOnce({ allowed: true }).mockResolvedValueOnce({ allowed: false, retryAfter: 30 });
       const response = await POST(tokenRequest(fields()) as never);
       expect(response.status).toBe(429);
       expect(mocks.exchangeAgentAssertion).not.toHaveBeenCalled();
