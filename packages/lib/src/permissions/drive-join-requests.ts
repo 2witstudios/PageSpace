@@ -150,13 +150,8 @@ export function decideJoinRequestDecision({
   requesterOrgRole,
   requesterRow,
 }: JoinRequestDecisionInput): JoinRequestAnswer {
-  // The lead approves only while in the org (D-OW-7 keeps them there); outsiders learn nothing.
-  if (!isLiveOrgDrive(drive) || actorOrgRole === null) return requestNotFound();
-
-  const authority = decideDriveLeadAuthority({ orgsEnabled: true, userId: actorId, drive, orgRole: actorOrgRole });
-  if (!authority.allowed) {
-    return refuse('NOT_APPROVER', 403, 'Only the drive lead or an organization Owner or Admin can answer join requests.');
-  }
+  const approver = decideJoinRequestApprover({ actorId, actorOrgRole, drive });
+  if (!approver.ok) return approver;
   if (request.userId === actorId) {
     return refuse('SELF_DECISION', 403, 'You cannot answer your own join request.');
   }
@@ -178,6 +173,27 @@ export function decideJoinRequestDecision({
     return refuse('PENDING_INVITE', 409, 'The requester has a pending invitation to this drive; it is theirs to accept.');
   }
   return { ok: true, action: 'approve', admit: true };
+}
+
+/**
+ * Who may answer (and list) a drive's join requests: its lead while in the org (D-OW-7 keeps them
+ * there), or an org Owner or Admin. Someone outside the org learns nothing.
+ */
+export function decideJoinRequestApprover({
+  actorId,
+  actorOrgRole,
+  drive,
+}: {
+  actorId: string;
+  actorOrgRole: OrgRole | null;
+  drive: JoinDrive | null;
+}): { ok: true } | JoinRequestRefusal {
+  if (!isLiveOrgDrive(drive) || actorOrgRole === null) return requestNotFound();
+  const authority = decideDriveLeadAuthority({ orgsEnabled: true, userId: actorId, drive, orgRole: actorOrgRole });
+  if (!authority.allowed) {
+    return refuse('NOT_APPROVER', 403, 'Only the drive lead or an organization Owner or Admin can answer join requests.');
+  }
+  return { ok: true };
 }
 
 /** The requester, and only they, may withdraw a pending request. */
