@@ -1,8 +1,11 @@
 import { db } from '@pagespace/db/db';
 import { and, eq } from '@pagespace/db/operators';
 import { zoomConnections, type ZoomConnection } from '@pagespace/db/schema/zoom';
+import { CREDIT_HOLD_ESTIMATE_CENTS } from '@pagespace/lib/billing/credit-pricing';
+import type { GateReason } from '@pagespace/lib/billing/credit-core';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { pageService } from '@/services/api';
+import { acquireUserCreditHold } from '@/lib/ai/core/user-credit-hold';
 import { getRecordings, downloadTranscript } from './zoom-api-client';
 import { getValidZoomAccessToken } from './token-refresh';
 import { parseVtt, vttToHtml } from './parse-vtt';
@@ -118,11 +121,11 @@ export async function processZoomWebhook(
   const transcriptHtml = connection.includeTranscript ? vttToHtml(segments) : '';
   const plainText = segments.map((s) => `${s.speaker}: ${s.text}`).join('\n');
 
-  // AI enrichment (fail-safe — never blocks page creation)
-  const [summary, actionItems] = await Promise.all([
-    connection.includeAiSummary ? generateTranscriptSummary(connection.userId, plainText) : Promise.resolve(''),
-    connection.includeActionItems ? extractActionItems(connection.userId, plainText) : Promise.resolve([]),
-  ]);
+  // AI enrichment (fail-safe — never blocks page creation). The connection owner
+  // is billed for it, so it passes the credit gate first; a refusal still creates
+  // the page, just without the summary/action items, and records why.
+  const enrichment = await enrichTranscript(connection, plainText);
+  const { summary, actionItems } = enrichment;
 
   const html = buildDocumentHtml(
     { topic, startTime: start_time, duration, hostEmail: host_email },
@@ -143,7 +146,15 @@ export async function processZoomWebhook(
       content: html,
       contentMode: 'html',
     },
-    { context: { metadata: { source: 'zoom_transcript', meetingUuid } } }
+    {
+      context: {
+        metadata: {
+          source: 'zoom_transcript',
+          meetingUuid,
+          ...(enrichment.skippedReason ? { aiEnrichmentSkipped: enrichment.skippedReason } : {}),
+        },
+      },
+    }
   );
 
   if (!result.success) {
@@ -161,4 +172,45 @@ export async function processZoomWebhook(
     title,
     meetingUuid,
   });
+}
+
+interface TranscriptEnrichment {
+  summary: string;
+  actionItems: Awaited<ReturnType<typeof extractActionItems>>;
+  /** Set when the credit gate refused the enrichment calls. */
+  skippedReason?: GateReason;
+}
+
+/**
+ * Run the enabled AI enrichment calls behind ONE credit hold, sized for how many
+ * model calls will run. skipDailyCap: server-triggered by Zoom, not interactive
+ * fan-out — the same bound the Zoom/calendar trigger executors use. Each helper
+ * debits its own real usage, so the hold is released exactly once when they
+ * settle, whether they succeeded or not.
+ */
+async function enrichTranscript(connection: ZoomConnection, plainText: string): Promise<TranscriptEnrichment> {
+  const aiCalls = Number(connection.includeAiSummary) + Number(connection.includeActionItems);
+  if (aiCalls === 0) return { summary: '', actionItems: [] };
+
+  const hold = await acquireUserCreditHold(connection.userId, {
+    estCostCents: CREDIT_HOLD_ESTIMATE_CENTS * aiCalls,
+    skipDailyCap: true,
+  });
+  if (!hold.allowed) {
+    loggers.api.info('Zoom webhook: AI enrichment skipped (credit gate denied)', {
+      userId: connection.userId,
+      reason: hold.reason,
+    });
+    return { summary: '', actionItems: [], skippedReason: hold.reason };
+  }
+
+  try {
+    const [summary, actionItems] = await Promise.all([
+      connection.includeAiSummary ? generateTranscriptSummary(connection.userId, plainText) : Promise.resolve(''),
+      connection.includeActionItems ? extractActionItems(connection.userId, plainText) : Promise.resolve([]),
+    ]);
+    return { summary, actionItems };
+  } finally {
+    hold.release();
+  }
 }

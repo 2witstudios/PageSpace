@@ -619,6 +619,11 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Agent mentions and Zoom summaries now check your AI credits first** — @mentioning an agent in
+  a channel, and the AI summary and action items on a recorded Zoom meeting's page, used to run
+  and charge you even when your balance was used up, so you could go into debt. Now they check
+  your credits before the AI runs. When you're out of credits, a mentioned agent doesn't reply.
+  A Zoom meeting still gets its page, just without the summary and action items.
 - **A page share link now opens only that page** — opening a link to one page used to make you a
   full member of its drive, so you could read every other non-private page there and post in its
   channels. Now you join as a guest: you see only the pages that were shared with you. Guests do
