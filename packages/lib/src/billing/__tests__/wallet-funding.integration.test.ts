@@ -23,9 +23,9 @@ import {
   applyOrgPoolRefill,
   resetDueAllocations,
   donateToDriveWallet,
-  drawWalletFundingLegs,
   refundFundingLeg,
 } from '../wallet-funding-shell';
+import { drawWalletFundingLegs } from '../wallet-legs';
 
 let dbAvailable = false;
 const originalMode = process.env.DEPLOYMENT_MODE;

@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // ── Hoisted mocks ────────────────────────────────────────────────────────────
 const mockIsBillingEnabled = vi.hoisted(() => vi.fn(() => true));
 const mockDb = vi.hoisted(() => ({
+  select: vi.fn(),
   insert: vi.fn(),
   transaction: vi.fn(),
   update: vi.fn(),
@@ -20,7 +21,7 @@ vi.mock('@pagespace/db/schema/wallets', () => ({
 vi.mock('../personal-wallet', () => ({ ensurePersonalRootWalletId: mockEnsurePersonalRootWalletId }));
 vi.mock('@pagespace/db/schema/credits', () => ({
   creditLedger: { id: 'cl.id', aiUsageLogId: 'cl.aiUsageLogId', entryType: 'cl.entryType' },
-  creditHolds: { id: 'ch.id' },
+  creditHolds: { id: 'ch.id', walletId: 'ch.walletId' },
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ({ op: 'eq', a, b })),
@@ -59,6 +60,10 @@ describe('consumeCredits', () => {
     vi.clearAllMocks();
     usageWalletSets.length = 0;
     mockIsBillingEnabled.mockReturnValue(true);
+    // The settle's hold lookup (which wallet the hold names): none found here, so these
+    // unit tests take the caller's-wallet path; the hold-authoritative path runs against
+    // Postgres in wallet-settle-legs.integration.test.ts.
+    mockDb.select.mockReturnValue({ from: () => ({ where: () => Promise.resolve([]) }) });
   });
 
   it('does nothing when billing is disabled (tenant/onprem)', async () => {

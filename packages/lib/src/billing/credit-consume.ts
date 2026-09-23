@@ -27,6 +27,7 @@ import { isBillingEnabled } from '../deployment-mode';
 import { chargeMillicents, accruePending, allocateSpend } from './credit-core';
 import { allocateWalletSpend, settleOvershoot, DEFAULT_OVERSHOOT_CHOICE } from './wallet-core';
 import { childWalletFunds, type WalletBalanceFacts } from './spend-target';
+import { drawWalletFundingLegs } from './wallet-legs';
 import { MARKUP_BPS } from './credit-pricing';
 import { emitCreditsUpdated } from './credit-emit';
 import { ensurePersonalRootWalletId } from './personal-wallet';
@@ -228,9 +229,13 @@ async function settleOnRootWallet(
 
 /**
  * A CHILD wallet (a drive wallet): the allocation is drawn from the parent as the spend
- * happens (WAL-3), then the wallet's own top-up. Overshoot never lands on the consumer:
- * it lands where the wallet's funder chose (WAL-6b/c) — absorbed into the parent's debt
- * by default (D20.2), or carried as this wallet's debt.
+ * happens (WAL-3), then the wallet's own funding legs, FIFO, through the locked-legs draw
+ * that keeps topupRemainingCents equal to SUM(legs.remainingCents) (D-OW-13) — so a
+ * refund plans from what a leg truly still holds and each donor's share stays attributed.
+ * Overshoot never lands on the consumer: it lands where the wallet's funder chose
+ * (WAL-6b/c) — absorbed into the parent's debt by default (D20.2), or carried as this
+ * wallet's debt. Locks: this wallet (the caller), its parent, then its legs — the global
+ * order (wallet-legs).
  */
 async function settleOnChildWallet(
   tx: Tx,
@@ -246,16 +251,22 @@ async function settleOnChildWallet(
     .for('update');
   const parent = parentRows[0] as WalletBalanceFacts | undefined;
 
+  // The allocation draw alone (no legs): what the parent funds of this spend.
   const draw = allocateWalletSpend({
     parent: parent
       ? { monthlyCents: parent.monthlyRemainingCents, topupCents: parent.topupRemainingCents, debtCents: parent.debtCents }
       : { monthlyCents: 0, topupCents: 0, debtCents: 0 },
-    wallet: childWalletFunds(bal),
+    wallet: { ...childWalletFunds(bal), topupLegs: [] },
     amountCents: wholeCents,
   });
+  // The rest from the stored legs, which also moves topupRemainingCents by what they gave.
+  const legs = draw.shortfallCents > 0
+    ? await drawWalletFundingLegs(tx, bal.id, draw.shortfallCents)
+    : { appliedCents: 0, shortfallCents: 0 };
+  const appliedCents = draw.appliedCents + legs.appliedCents;
   const landing = settleOvershoot({
     source: 'drive_wallet',
-    overshootCents: draw.shortfallCents,
+    overshootCents: legs.shortfallCents,
     chargedWalletId: bal.id,
     parentWalletId: parent ? parent.id : null,
     // The funder's overshoot choice has no storage yet; the default applies (D20.2).
@@ -273,20 +284,19 @@ async function settleOnChildWallet(
       })
       .where(eq(wallets.id, parent.id));
   }
+  // topupRemainingCents is NOT written here: drawWalletFundingLegs moved it with the legs.
   await tx
     .update(wallets)
     .set({
       spentCents: draw.wallet.allocationSpentCents,
-      topupRemainingCents: draw.wallet.topupLegs.reduce((sum, leg) => sum + leg.remainingCents, 0),
       pendingMillicents: newPending,
       ...(landing.kind === 'wallet_debt' ? { debtCents: sql`${wallets.debtCents} + ${landing.cents}` } : {}),
     })
     .where(eq(wallets.id, bal.id));
 
-  const topupDrawn = draw.appliedCents - draw.allocationDrawCents;
   return {
-    appliedCents: draw.appliedCents,
-    bucket: topupDrawn > draw.allocationDrawCents ? 'topup' : 'monthly',
+    appliedCents,
+    bucket: legs.appliedCents > draw.allocationDrawCents ? 'topup' : 'monthly',
     debt: landing.kind === 'none' ? null : { walletId: landing.walletId, cents: landing.cents },
   };
 }
@@ -309,6 +319,37 @@ async function settleOnChildWallet(
  *                 be mistaken for work a cron will finish.
  */
 export type CreditSettleStatus = 'settled' | 'deferred' | 'unbillable';
+
+/**
+ * The wallet a call settles on (WAL-5). The gate's hold names the wallet the call was
+ * admitted against, so while the hold is present IT decides: a caller's `walletId` that
+ * disagrees is refused (logged, never charged) and the charge settles where the hold was
+ * placed — a hold on one wallet is never settled on another, and the drive hold is never
+ * deleted by a settle on the personal root. Refusing by writing nothing would not help:
+ * the orphan sweep re-bills an unclaimed call to the payer's personal root, the same
+ * wrong wallet. With no hold (the reconcile cron, an expired hold), the caller's wallet,
+ * else the payer's personal root, as before wallets.
+ */
+async function settleWalletId(input: ConsumeCreditsInput): Promise<string> {
+  if (input.holdId) {
+    const [hold] = await db
+      .select({ walletId: creditHolds.walletId })
+      .from(creditHolds)
+      .where(eq(creditHolds.id, input.holdId));
+    if (hold) {
+      if (input.walletId !== undefined && input.walletId !== hold.walletId) {
+        loggers.ai.error('credit settle wallet does not match its hold', {
+          holdId: input.holdId,
+          holdWalletId: hold.walletId,
+          requestedWalletId: input.walletId,
+          aiUsageLogId: input.aiUsageLogId,
+        });
+      }
+      return hold.walletId;
+    }
+  }
+  return input.walletId ?? ensurePersonalRootWalletId(db, input.userId);
+}
 
 export async function consumeCredits(input: ConsumeCreditsInput): Promise<CreditSettleStatus> {
   if (!isBillingEnabled()) return 'settled'; // tenant/onprem are unlimited
@@ -342,7 +383,7 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<Credit
   let ledgerId: string;
   let walletId: string;
   try {
-    walletId = input.walletId ?? (await ensurePersonalRootWalletId(db, input.userId));
+    walletId = await settleWalletId(input);
     const claimed = await db
       .insert(creditLedger)
       .values({

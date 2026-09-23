@@ -12,7 +12,8 @@
  *     left where it is until C3 lands.
  *   - donateToDriveWallet: moves a one-off amount from the donor's personal root wallet
  *     into a drive wallet as its own non-refundable funding leg, with a ledger pair.
- *   - drawWalletFundingLegs / refundFundingLeg: the only writers of a leg's remaining.
+ *   - refundFundingLeg (and wallet-legs drawWalletFundingLegs, the settle's draw): the only
+ *     writers of a leg's remaining.
  *
  * Every money write runs inside one transaction with its rows locked FOR UPDATE, so a
  * concurrent writer is serialised, never overwritten. Idempotency keys:
@@ -38,15 +39,12 @@ import {
   refillPool,
   invoiceServicePeriodMs,
   planAllocationReset,
-  drawFundingLegs,
   planLegRefund,
   planDonation,
   type DonationRefusal,
   type LegRefundPlan,
-  type StoredFundingLeg,
 } from './wallet-funding';
 
-type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 const STRIPE_REF_ARBITER = {
   target: creditLedger.stripeRef,
@@ -352,59 +350,24 @@ async function resetOne(
 // Funding legs (D-OW-13)
 // ---------------------------------------------------------------------------
 
-async function lockedLegs(tx: Tx, walletId: string): Promise<StoredFundingLeg[]> {
-  const rows = await tx
-    .select({
-      id: walletFundingLegs.id,
-      funderKind: walletFundingLegs.funderKind,
-      funderUserId: walletFundingLegs.funderUserId,
-      remainingCents: walletFundingLegs.remainingCents,
-      nonRefundable: walletFundingLegs.nonRefundable,
-      createdAt: walletFundingLegs.createdAt,
-    })
-    .from(walletFundingLegs)
-    .where(and(eq(walletFundingLegs.walletId, walletId), gt(walletFundingLegs.remainingCents, 0)))
-    .orderBy(asc(walletFundingLegs.createdAt), asc(walletFundingLegs.id))
-    .for('update');
-  return rows.map((r) => ({ ...r, createdAtMs: r.createdAt.getTime() }));
-}
-
-/**
- * Spend `amountCents` from a wallet's funding legs in the defined order (FIFO), inside
- * the caller's transaction, and keep wallets.topupRemainingCents equal to the legs'
- * total. Returns what was drawn from which leg and the uncovered remainder; the caller
- * (the gate's settle) decides where a shortfall lands (WAL-6).
- */
-export async function drawWalletFundingLegs(
-  tx: Tx,
-  walletId: string,
-  amountCents: number,
-): Promise<{ draws: { legId: string; cents: number }[]; appliedCents: number; shortfallCents: number }> {
-  const [wallet] = await tx.select({ id: wallets.id }).from(wallets).where(eq(wallets.id, walletId)).for('update');
-  if (!wallet) throw new Error(`wallet ${walletId} not found`);
-  const drawn = drawFundingLegs(await lockedLegs(tx, walletId), amountCents);
-  for (const d of drawn.draws) {
-    await tx
-      .update(walletFundingLegs)
-      .set({ remainingCents: sql`${walletFundingLegs.remainingCents} - ${d.cents}` })
-      .where(eq(walletFundingLegs.id, d.legId));
-  }
-  if (drawn.appliedCents > 0) {
-    await tx
-      .update(wallets)
-      .set({ topupRemainingCents: sql`${wallets.topupRemainingCents} - ${drawn.appliedCents}` })
-      .where(eq(wallets.id, walletId));
-  }
-  return { draws: drawn.draws, appliedCents: drawn.appliedCents, shortfallCents: drawn.shortfallCents };
-}
-
 /**
  * Take `cents` back out of one funding leg for a refund. A donation leg ALWAYS refuses
  * (D-OW-13) and nothing is written; an owner leg gives back at most what it holds. The
  * caller issues the actual refund (e.g. to Stripe) only on `kind: 'refund'`.
+ *
+ * Locks the leg's wallet BEFORE the leg (the global order, see wallet-legs): a settle
+ * holds the wallet and then locks its legs, so a refund taking the leg first would wait
+ * on the settle while the settle waited on it.
  */
 export async function refundFundingLeg(legId: string, cents: number): Promise<LegRefundPlan> {
   return db.transaction(async (tx) => {
+    // A leg never moves between wallets, so the unlocked read names the wallet to lock.
+    const [owner] = await tx
+      .select({ walletId: walletFundingLegs.walletId })
+      .from(walletFundingLegs)
+      .where(eq(walletFundingLegs.id, legId));
+    if (!owner) return { kind: 'refuse', legId, reason: 'invalid_amount' };
+    await tx.select({ id: wallets.id }).from(wallets).where(eq(wallets.id, owner.walletId)).for('update');
     const [row] = await tx
       .select({
         id: walletFundingLegs.id,
@@ -451,7 +414,7 @@ export interface DonateInput {
  * WAL-4: donate a one-off amount from the donor's personal root wallet to a drive
  * wallet. The drive-visibility decision goes through the permissions module
  * (getUserDriveAccess) before anything is locked. In one transaction: the donor wallet
- * and the target wallet are locked (in id order, so two donations never deadlock), the
+ * and the target wallet are locked (drive wallet first, then the donor root: the global order), the
  * plan is made from the locked rows, a non-refundable donation leg is written (its
  * sourceRef makes a replay a no-op), both balances move, and a ledger pair records the
  * donor on both sides.
@@ -474,8 +437,10 @@ export async function donateToDriveWallet(input: DonateInput): Promise<DonationO
     const [donorRow] = await tx.select({ id: wallets.id }).from(wallets).where(personalRootWalletOf(input.donorUserId)).limit(1);
     if (!donorRow) return { kind: 'refused', reason: 'insufficient_funds' };
 
-    // Lock both rows in id order.
-    const lockOrder = [donorRow.id, target.id].sort();
+    // Lock the drive wallet, then the donor's root: the global order (child, then root —
+    // see wallet-legs). The donor's root may BE the drive wallet's parent (an owner giving
+    // to their own drive), which a settle locks second; an id sort could invert that.
+    const lockOrder = [target.id, donorRow.id];
     const locked = new Map<string, typeof wallets.$inferSelect>();
     for (const id of lockOrder) {
       const [row] = await tx.select().from(wallets).where(eq(wallets.id, id)).for('update');
