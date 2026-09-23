@@ -296,16 +296,16 @@ describe('drive-wallet service (orgs on, real Postgres)', () => {
     if (!world) return;
     const [conv] = await db.insert(conversations).values({ userId: world.ids.marcus, type: 'drive', contextId: world.productId, updatedAt: new Date() }).returning();
 
-    const before = await getConversationSpend(world.ids.marcus, conv.id, world.productId);
+    const before = await getConversationSpend(world.ids.marcus, conv.id);
     expect(before).toMatchObject({ ok: true, chosenWalletId: null, resolved: { kind: 'refuse', reason: 'no_source_chosen' } });
     if (!before.ok) throw new Error('expected a read');
     expect(before.options.map((o) => o.source)).toEqual(['drive_wallet', 'seat_allowance', 'own_credits']);
 
-    const chosen = await setConversationSpend(world.ids.marcus, conv.id, world.productId, world.poolId);
+    const chosen = await setConversationSpend(world.ids.marcus, conv.id, world.poolId);
     expect(chosen).toMatchObject({ ok: true, chosenWalletId: world.poolId, resolved: { kind: 'spend', source: 'seat_allowance', walletId: world.poolId } });
     expect((await db.select().from(conversations).where(eq(conversations.id, conv.id)))[0].chosenWalletId).toBe(world.poolId);
 
-    expect(await setConversationSpend(world.ids.marcus, conv.id, world.productId, null)).toMatchObject({ ok: true, chosenWalletId: null });
+    expect(await setConversationSpend(world.ids.marcus, conv.id, null)).toMatchObject({ ok: true, chosenWalletId: null });
   });
 
   it('SPEND-3 (partial) X-6 (partial) a conversation cannot store a wallet the person may not spend: another person\'s, a Restricted drive\'s they have not joined, the pool for a guest', async () => {
@@ -313,11 +313,11 @@ describe('drive-wallet service (orgs on, real Postgres)', () => {
     const [conv] = await db.insert(conversations).values({ userId: world.ids.marcus, type: 'drive', contextId: world.productId, updatedAt: new Date() }).returning();
     const [lenaWallet] = await db.insert(wallets).values({ userId: world.ids.lena }).returning();
     for (const walletId of [lenaWallet.id, world.researchWalletId, 'w-does-not-exist']) {
-      expect(await setConversationSpend(world.ids.marcus, conv.id, world.productId, walletId), walletId).toMatchObject({ ok: false, status: 400, code: 'wallet_not_available' });
+      expect(await setConversationSpend(world.ids.marcus, conv.id, walletId), walletId).toMatchObject({ ok: false, status: 400, code: 'wallet_not_available' });
     }
     const [chrisConv] = await db.insert(conversations).values({ userId: world.ids.chris, type: 'drive', contextId: world.productId, updatedAt: new Date() }).returning();
     for (const walletId of [world.poolId, world.productWalletId]) {
-      expect(await setConversationSpend(world.ids.chris, chrisConv.id, world.productId, walletId), walletId).toMatchObject({ ok: false, status: 400 });
+      expect(await setConversationSpend(world.ids.chris, chrisConv.id, walletId), walletId).toMatchObject({ ok: false, status: 400 });
     }
     expect((await db.select().from(conversations).where(eq(conversations.id, conv.id)))[0].chosenWalletId).toBeNull();
   });
@@ -325,7 +325,23 @@ describe('drive-wallet service (orgs on, real Postgres)', () => {
   it('SPEND-3 (partial) a person cannot read or change the source of someone else\'s conversation', async () => {
     if (!world) return;
     const [lenasConv] = await db.insert(conversations).values({ userId: world.ids.lena, type: 'drive', contextId: world.productId, updatedAt: new Date() }).returning();
-    expect(await getConversationSpend(world.ids.marcus, lenasConv.id, world.productId)).toMatchObject({ ok: false, status: 404 });
-    expect(await setConversationSpend(world.ids.marcus, lenasConv.id, world.productId, null)).toMatchObject({ ok: false, status: 404 });
+    expect(await getConversationSpend(world.ids.marcus, lenasConv.id)).toMatchObject({ ok: false, status: 404 });
+    expect(await setConversationSpend(world.ids.marcus, lenasConv.id, null)).toMatchObject({ ok: false, status: 404 });
+  });
+  it('SPEND-7 (partial) SPEND-3 (partial) a page conversation\'s options come from its page\'s drive; a global one offers own credits unless a drive is named, and a drive the person cannot open offers nothing more', async () => {
+    if (!world) return;
+    const page = await factories.createPage(world.productId, { title: 'Roadmap', type: 'AI_CHAT' });
+    const [pageConv] = await db.insert(conversations).values({ userId: world.ids.marcus, type: 'page', contextId: page.id, updatedAt: new Date() }).returning();
+    const onPage = await getConversationSpend(world.ids.marcus, pageConv.id);
+    expect(onPage.ok && onPage.options.map((o) => o.source)).toEqual(['drive_wallet', 'seat_allowance', 'own_credits']);
+
+    const [globalConv] = await db.insert(conversations).values({ userId: world.ids.marcus, type: 'global', updatedAt: new Date() }).returning();
+    const alone = await getConversationSpend(world.ids.marcus, globalConv.id);
+    expect(alone.ok && alone.options.map((o) => o.source)).toEqual(['own_credits']);
+    const inProduct = await getConversationSpend(world.ids.marcus, globalConv.id, world.productId);
+    expect(inProduct.ok && inProduct.options.map((o) => o.source)).toEqual(['drive_wallet', 'seat_allowance', 'own_credits']);
+    const inResearch = await getConversationSpend(world.ids.marcus, globalConv.id, world.researchId);
+    expect(inResearch.ok && inResearch.options.map((o) => o.source)).toEqual(['own_credits']);
+    expect(await setConversationSpend(world.ids.marcus, globalConv.id, world.researchWalletId, world.researchId)).toMatchObject({ ok: false, status: 400 });
   });
 });

@@ -20,6 +20,7 @@ import { db } from '@pagespace/db/db';
 import { and, eq, gt, gte, inArray, isNull, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { conversations } from '@pagespace/db/schema/conversations';
+import { pages } from '@pagespace/db/schema/core';
 import { creditHolds, creditLedger } from '@pagespace/db/schema/credits';
 import { orgMembers } from '@pagespace/db/schema/organizations';
 import {
@@ -636,24 +637,41 @@ export interface ConversationSpendRead {
   resolved: CallSpendDecision;
 }
 
-async function ownConversation(userId: string, conversationId: string) {
+/**
+ * The caller's own conversation and the drive of its session (SPEND-7), resolved on the
+ * server: a drive conversation's drive, a page conversation's page's drive. A global
+ * conversation has no drive of its own — the assistant spends in whatever drive the person is
+ * in — so `globalDriveId` (the drive the person is choosing for) is used for it, and only as
+ * the context the options are listed in: the options are opened by the permissions module, so
+ * a drive the person cannot open offers nothing but their own credits, and the gate re-resolves
+ * the stored wallet against the real session drive on every call.
+ */
+async function ownConversation(userId: string, conversationId: string, globalDriveId: string | null) {
   const [row] = await db
-    .select({ id: conversations.id, chosenWalletId: conversations.chosenWalletId })
+    .select({ id: conversations.id, chosenWalletId: conversations.chosenWalletId, type: conversations.type, contextId: conversations.contextId })
     .from(conversations)
     .where(and(eq(conversations.id, conversationId), eq(conversations.userId, userId)))
     .limit(1);
-  return row ?? null;
+  if (!row) return null;
+  let sessionDriveId: string | null = null;
+  if (row.type === 'drive') sessionDriveId = row.contextId;
+  else if (row.type === 'page' && row.contextId) {
+    const [page] = await db.select({ driveId: pages.driveId }).from(pages).where(eq(pages.id, row.contextId)).limit(1);
+    sessionDriveId = page?.driveId ?? null;
+  } else if (row.type === 'global') sessionDriveId = globalDriveId;
+  return { id: row.id, chosenWalletId: row.chosenWalletId, sessionDriveId };
 }
 
 /**
  * The conversation's source as the person will see it before sending (SPEND-2): the stored
  * choice, the options, and the gate's own decision for a zero-cost preview (nothing reserved,
- * no refusal logged). `sessionDriveId` is the SERVER-resolved drive of the conversation's
- * session, or null for a personal one; the route derives it, never the client.
+ * no refusal logged). `globalDriveId` is read only for a global conversation (see
+ * ownConversation).
  */
-export async function getConversationSpend(userId: string, conversationId: string, sessionDriveId: string | null): Promise<ConversationSpendRead | WalletServiceError> {
-  const conversation = await ownConversation(userId, conversationId);
+export async function getConversationSpend(userId: string, conversationId: string, globalDriveId: string | null = null): Promise<ConversationSpendRead | WalletServiceError> {
+  const conversation = await ownConversation(userId, conversationId, globalDriveId);
   if (!conversation) return notFound('Conversation not found');
+  const { sessionDriveId } = conversation;
   const [user] = await db.select({ tier: users.subscriptionTier }).from(users).where(eq(users.id, userId)).limit(1);
   const options = await listSpendChoices(userId, sessionDriveId);
   const resolved = await resolveCallSpend({
@@ -675,13 +693,13 @@ export async function getConversationSpend(userId: string, conversationId: strin
 export async function setConversationSpend(
   userId: string,
   conversationId: string,
-  sessionDriveId: string | null,
   walletId: string | null,
+  globalDriveId: string | null = null,
 ): Promise<ConversationSpendRead | WalletServiceError> {
-  const conversation = await ownConversation(userId, conversationId);
+  const conversation = await ownConversation(userId, conversationId, globalDriveId);
   if (!conversation) return notFound('Conversation not found');
   if (walletId !== null) {
-    const options = await listSpendChoices(userId, sessionDriveId);
+    const options = await listSpendChoices(userId, conversation.sessionDriveId);
     if (!options.some((o) => o.walletId === walletId)) {
       return { ok: false, status: 400, code: 'wallet_not_available', message: 'That wallet is not one you can spend from in this conversation' };
     }
@@ -690,5 +708,5 @@ export async function setConversationSpend(
     .update(conversations)
     .set({ chosenWalletId: walletId })
     .where(and(eq(conversations.id, conversationId), eq(conversations.userId, userId)));
-  return getConversationSpend(userId, conversationId, sessionDriveId);
+  return getConversationSpend(userId, conversationId, globalDriveId);
 }
