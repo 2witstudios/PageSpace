@@ -7,7 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
-import { Loader2, Bot, FolderTree, Shield, Copy, Check, Code2, Wrench, TerminalSquare, Cable, ChevronLeft } from 'lucide-react';
+import { Loader2, Bot, FolderTree, Shield, Copy, Check, Code2, Wrench, TerminalSquare, Cable, ChevronLeft, KeyRound } from 'lucide-react';
 import { toast } from 'sonner';
 import { useSWRConfig } from 'swr';
 import { useForm, useFormState, Controller } from 'react-hook-form';
@@ -21,6 +21,7 @@ import { useEditingStore } from '@/stores/useEditingStore';
 import { useAgentMembership } from '@/lib/ai/shared/hooks/useAgentMembership';
 import { useDriveEnvs } from '@/hooks/drive-envs/useDriveEnvs';
 import { AgentIntegrationsPanel } from './AgentIntegrationsPanel';
+import { AgentAccountsPanel } from '@/components/agent-accounts/AgentAccountsPanel';
 import {
   AgentSettingsMenu,
   type AgentSettingsCategory,
@@ -151,6 +152,12 @@ const SETTINGS_ITEMS: AgentSettingsMenuItem[] = [
     title: 'Integrations',
     description: 'External services available to this agent',
     icon: Cable,
+  },
+  {
+    key: 'accounts',
+    title: 'Accounts',
+    description: 'API keys this agent can use without ever seeing them',
+    icon: KeyRound,
   },
 ];
 
@@ -1186,6 +1193,8 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
             {category === 'integrations' && (
               <AgentIntegrationsPanel pageId={pageId} driveId={driveId} />
             )}
+
+            {category === 'accounts' && <AgentAccountsPanel scope={{ kind: 'agent_page', pageId }} />}
           </>
         )}
       </form>

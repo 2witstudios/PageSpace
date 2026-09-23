@@ -7,7 +7,7 @@ import { organizations } from './organizations';
 /**
  * wallets — every balance in PageSpace (Spec WAL-1, WAL-2; X-5).
  *
- * X-5: this IS the table that used to be `credit_balances`. Migration 0298 renamed it
+ * X-5: this IS the table that used to be `credit_balances`. Migration 0300 renamed it
  * in place, so every per-user balance row became that user's PERSONAL ROOT WALLET
  * without a copy: same row, same cents. There is no second balance store.
  *
@@ -55,7 +55,7 @@ export const WALLET_FALLBACK_RULES = ['refuse', 'seat_allowance', 'own_credits']
 export type WalletFallbackRuleValue = (typeof WALLET_FALLBACK_RULES)[number];
 
 export const wallets = pgTable('wallets', {
-  // Existing credit_balances rows receive their id from the database default when 0298
+  // Existing credit_balances rows receive their id from the database default when 0302
   // adds the column; application inserts mint a cuid as every other table does. The
   // default is cuid-shaped (a letter, then 23 lowercase alphanumerics) so an id minted by
   // either path passes the same id validators.

@@ -173,7 +173,7 @@ const H = vi.hoisted(() => {
     return undefined;
   };
 
-  // WAL-5 / 0302: credit_ledger and credit_holds walletId is NOT NULL and references wallets.
+  // WAL-5 / 0305: credit_ledger and credit_holds walletId is NOT NULL and references wallets.
   const enforceWalletRef = (table: TableKey, r: Row): void => {
     if (table !== 'creditLedger' && table !== 'creditHolds') return;
     if (r.walletId == null) throw new Error(`NOT NULL violation: ${table}.walletId`);
@@ -1540,7 +1540,7 @@ describe('credits flow — async cost reconcile (/generation drift correction)',
   // Reconcile only CORRECTS an already-billed call, so a base `usage` ledger row must
   // exist for the aiUsageLogId or the row is deferred (see hasUsageLedgerRow). Seed one.
   function seedUsageLedger(aiUsageLogId: string, userId: string) {
-    // Every usage row carries its wallet (0302 NOT NULL): the user's seeded personal root.
+    // Every usage row carries its wallet (0305 NOT NULL): the user's seeded personal root.
     const walletId = balanceWalletId(userId);
     store.creditLedger.push({
       id: `led_${aiUsageLogId}`, userId, walletId, entryType: 'usage', bucket: 'monthly',

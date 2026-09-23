@@ -12,7 +12,9 @@ const {
   mockSelectWhere,
   mockSelectFrom,
   mockSelect,
+  mockCreditAdmission,
 } = vi.hoisted(() => ({
+  mockCreditAdmission: vi.fn(),
   mockUpdateWhere: vi.fn(),
   mockUpdateSet: vi.fn(),
   mockUpdate: vi.fn(),
@@ -31,6 +33,10 @@ vi.mock('@/lib/workflows/workflow-executor', () => ({
 
 vi.mock('@/lib/workflows/cron-utils', () => ({
   getNextRunDate: vi.fn(),
+}));
+
+vi.mock('@/lib/workflows/workflow-credit-gate', () => ({
+  creditAdmission: mockCreditAdmission,
 }));
 
 const mockAudit = vi.hoisted(() => vi.fn());
@@ -123,6 +129,8 @@ describe('POST /api/cron/workflows', () => {
     mockUpdate.mockReturnValue({ set: mockUpdateSet });
     mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
     mockUpdateWhere.mockResolvedValue(undefined);
+
+    mockCreditAdmission.mockReturnValue(async () => ({ admitted: true, release: () => {} }));
   });
 
   it('should return auth error when cron request is invalid', async () => {
@@ -173,7 +181,7 @@ describe('POST /api/cron/workflows', () => {
       prompt: MOCK_WORKFLOW.prompt,
       timezone: MOCK_WORKFLOW.timezone,
       source: { table: 'cron', id: null, triggerAt: MOCK_WORKFLOW.nextRunAt },
-    }));
+    }), expect.objectContaining({ admit: expect.any(Function) }));
   });
 
   it('should not advance nextRunAt when the executor reports a claim conflict', async () => {
@@ -229,7 +237,7 @@ describe('POST /api/cron/workflows', () => {
     await POST(request);
 
     expect(mockAudit).toHaveBeenCalledWith(
-      expect.objectContaining({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'workflows', details: { executed: 1, failed: 0 } })
+      expect.objectContaining({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'workflows', details: { executed: 1, failed: 0, skipped: 0 } })
     );
     expect(mockAudit).not.toHaveBeenCalledWith(expect.objectContaining({ userId: expect.anything() }));
   });
@@ -270,5 +278,56 @@ describe('POST /api/cron/workflows', () => {
     expect(body.executed).toBe(0);
     expect(body.errors).toBeDefined();
     expect(body.errors[0]).toContain('Network error');
+  });
+
+  describe('credit gate', () => {
+    const tick = async () => {
+      const response = await POST(new Request('https://example.com/api/cron/workflows', { method: 'POST' }));
+      return response.json();
+    };
+
+    beforeEach(() => {
+      mockSelectWhere.mockResolvedValue([MOCK_WORKFLOW]);
+      vi.mocked(getNextRunDate).mockReturnValue(new Date('2025-01-02T09:00:00Z'));
+      vi.mocked(executeWorkflow).mockResolvedValue({ success: true, durationMs: 1 });
+    });
+
+    it('hands the executor the credit gate as its admit hook, gating the owner as a scheduled run', async () => {
+      const admit = async () => ({ admitted: true as const, release: () => {} });
+      mockCreditAdmission.mockReturnValue(admit);
+
+      await tick();
+
+      const [input, options] = vi.mocked(executeWorkflow).mock.calls[0];
+      expect(options?.admit).toBe(admit);
+      expect(mockCreditAdmission).toHaveBeenCalledWith(input, 'scheduled');
+      expect(input.createdBy).toBe(MOCK_WORKFLOW.createdBy);
+    });
+
+    it('a refused fire advances the schedule and counts as skipped, not as a failure', async () => {
+      vi.mocked(executeWorkflow).mockResolvedValue({
+        success: false, skipped: true, durationMs: 0, runId: 'run_1', error: 'AI credit gate denied: out_of_credits',
+      });
+
+      const body = await tick();
+
+      // Advancing is what stops the next tick re-firing it: no per-minute storm.
+      expect(getNextRunDate).toHaveBeenCalledWith(MOCK_WORKFLOW.cronExpression, MOCK_WORKFLOW.timezone);
+      expect(body.skipped).toBe(1);
+      expect(body.executed).toBe(0);
+      expect(body.total).toBe(0);
+      expect(body.errors).toBeUndefined();
+    });
+
+    it('a fire that lost the claim to an overlapping run is neither skipped nor advanced', async () => {
+      vi.mocked(executeWorkflow).mockResolvedValue({
+        success: false, claimConflict: true, durationMs: 0, error: 'Workflow already running',
+      });
+
+      const body = await tick();
+
+      expect(getNextRunDate).not.toHaveBeenCalled();
+      expect(body.skipped).toBe(0);
+    });
   });
 });

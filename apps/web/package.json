@@ -30,6 +30,7 @@
     "@monaco-editor/react": "^4.7.0",
     "@openrouter/ai-sdk-provider": "^2.10.0",
     "@pagespace/db": "workspace:*",
+    "@pagespace/browser-worker": "workspace:*",
     "@pagespace/editor": "workspace:*",
     "@pagespace/lib": "workspace:*",
     "@paralleldrive/cuid2": "^2.2.2",

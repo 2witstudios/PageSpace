@@ -16,6 +16,12 @@ export interface PipeOptions {
    * is already on the wire (the append-only stream cannot retract it).
    */
   onContent?: () => void;
+  /**
+   * Observes every chunk the inner stream yields, before any suppression. The retry
+   * shell uses it to see which step was still streaming when an abort landed, so the
+   * interrupted step can be billed (see AbortedStepEstimate in run-agent-with-retry).
+   */
+  onChunk?: (chunk: UIMessageChunk) => void;
 }
 
 // Envelope/framing chunk types that carry no assistant content. Everything else
@@ -57,6 +63,7 @@ export async function pipeUIMessageStreamStrippingStart(
 ): Promise<void> {
   let contentReported = false;
   for await (const chunk of aiResult.toUIMessageStream()) {
+    options.onChunk?.(chunk);
     if (!contentReported && !FRAMING_CHUNK_TYPES.has(chunk.type)) {
       contentReported = true;
       options.onContent?.();

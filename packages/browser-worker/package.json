@@ -1,0 +1,230 @@
+{
+  "name": "@pagespace/browser-worker",
+  "version": "0.1.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "module",
+  "description": "Browser worker outside the agent VM (G6a): typed browser operations over a substrate-agnostic seam, the human-control-mode primitive, and the pure decisions that gate them. The worker is the only CDP client of its Chromium, over a pipe.",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage && vitest run --config vitest.integration.config.ts",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "lint": "eslint src"
+  },
+  "exports": {
+    "./browser-control-worker": {
+      "types": "./dist/browser-control-worker.d.ts",
+      "import": "./dist/browser-control-worker.js",
+      "default": "./dist/browser-control-worker.js"
+    },
+    "./browser-driver-client": {
+      "types": "./dist/browser-driver-client.d.ts",
+      "import": "./dist/browser-driver-client.js",
+      "default": "./dist/browser-driver-client.js"
+    },
+    "./browser-egress-proxy-adapter": {
+      "types": "./dist/browser-egress-proxy-adapter.d.ts",
+      "import": "./dist/browser-egress-proxy-adapter.js",
+      "default": "./dist/browser-egress-proxy-adapter.js"
+    },
+    "./browser-operation": {
+      "types": "./dist/browser-operation.d.ts",
+      "import": "./dist/browser-operation.js",
+      "default": "./dist/browser-operation.js"
+    },
+    "./browser-session-client": {
+      "types": "./dist/browser-session-client.d.ts",
+      "import": "./dist/browser-session-client.js",
+      "default": "./dist/browser-session-client.js"
+    },
+    "./browser-sprite-name": {
+      "types": "./dist/browser-sprite-name.d.ts",
+      "import": "./dist/browser-sprite-name.js",
+      "default": "./dist/browser-sprite-name.js"
+    },
+    "./browser-substrate": {
+      "types": "./dist/browser-substrate.d.ts",
+      "import": "./dist/browser-substrate.js",
+      "default": "./dist/browser-substrate.js"
+    },
+    "./browser-tool-name": {
+      "types": "./dist/browser-tool-name.d.ts",
+      "import": "./dist/browser-tool-name.js",
+      "default": "./dist/browser-tool-name.js"
+    },
+    "./control-instruction": {
+      "types": "./dist/control-instruction.d.ts",
+      "import": "./dist/control-instruction.js",
+      "default": "./dist/control-instruction.js"
+    },
+    "./decide-action-admission": {
+      "types": "./dist/decide-action-admission.d.ts",
+      "import": "./dist/decide-action-admission.js",
+      "default": "./dist/decide-action-admission.js"
+    },
+    "./decide-navigation": {
+      "types": "./dist/decide-navigation.d.ts",
+      "import": "./dist/decide-navigation.js",
+      "default": "./dist/decide-navigation.js"
+    },
+    "./decide-observation-release": {
+      "types": "./dist/decide-observation-release.d.ts",
+      "import": "./dist/decide-observation-release.js",
+      "default": "./dist/decide-observation-release.js"
+    },
+    "./decide-tool-exposure": {
+      "types": "./dist/decide-tool-exposure.d.ts",
+      "import": "./dist/decide-tool-exposure.js",
+      "default": "./dist/decide-tool-exposure.js"
+    },
+    "./derive-browser-session-id": {
+      "types": "./dist/derive-browser-session-id.d.ts",
+      "import": "./dist/derive-browser-session-id.js",
+      "default": "./dist/derive-browser-session-id.js"
+    },
+    "./encode-control-instruction": {
+      "types": "./dist/encode-control-instruction.d.ts",
+      "import": "./dist/encode-control-instruction.js",
+      "default": "./dist/encode-control-instruction.js"
+    },
+    "./human-control-state": {
+      "types": "./dist/human-control-state.d.ts",
+      "import": "./dist/human-control-state.js",
+      "default": "./dist/human-control-state.js"
+    },
+    "./local-chromium-substrate-adapter": {
+      "types": "./dist/local-chromium-substrate-adapter.d.ts",
+      "import": "./dist/local-chromium-substrate-adapter.js",
+      "default": "./dist/local-chromium-substrate-adapter.js"
+    },
+    "./observation-kind": {
+      "types": "./dist/observation-kind.d.ts",
+      "import": "./dist/observation-kind.js",
+      "default": "./dist/observation-kind.js"
+    },
+    "./parse-control-command": {
+      "types": "./dist/parse-control-command.d.ts",
+      "import": "./dist/parse-control-command.js",
+      "default": "./dist/parse-control-command.js"
+    },
+    "./parse-worker-env": {
+      "types": "./dist/parse-worker-env.d.ts",
+      "import": "./dist/parse-worker-env.js",
+      "default": "./dist/parse-worker-env.js"
+    },
+    "./plan-browser-network-policy": {
+      "types": "./dist/plan-browser-network-policy.d.ts",
+      "import": "./dist/plan-browser-network-policy.js",
+      "default": "./dist/plan-browser-network-policy.js"
+    },
+    "./reduce-human-control-mode": {
+      "types": "./dist/reduce-human-control-mode.d.ts",
+      "import": "./dist/reduce-human-control-mode.js",
+      "default": "./dist/reduce-human-control-mode.js"
+    },
+    "./sprites-substrate-adapter": {
+      "types": "./dist/sprites-substrate-adapter.d.ts",
+      "import": "./dist/sprites-substrate-adapter.js",
+      "default": "./dist/sprites-substrate-adapter.js"
+    },
+    "./standalone-browser-worker": {
+      "types": "./dist/standalone-browser-worker.d.ts",
+      "import": "./dist/standalone-browser-worker.js",
+      "default": "./dist/standalone-browser-worker.js"
+    },
+    "./verify-control-instruction": {
+      "types": "./dist/verify-control-instruction.d.ts",
+      "import": "./dist/verify-control-instruction.js",
+      "default": "./dist/verify-control-instruction.js"
+    }
+  },
+  "typesVersions": {
+    "*": {
+      "browser-control-worker": [
+        "./dist/browser-control-worker.d.ts"
+      ],
+      "browser-driver-client": [
+        "./dist/browser-driver-client.d.ts"
+      ],
+      "browser-egress-proxy-adapter": [
+        "./dist/browser-egress-proxy-adapter.d.ts"
+      ],
+      "browser-operation": [
+        "./dist/browser-operation.d.ts"
+      ],
+      "browser-session-client": [
+        "./dist/browser-session-client.d.ts"
+      ],
+      "browser-sprite-name": [
+        "./dist/browser-sprite-name.d.ts"
+      ],
+      "browser-substrate": [
+        "./dist/browser-substrate.d.ts"
+      ],
+      "browser-tool-name": [
+        "./dist/browser-tool-name.d.ts"
+      ],
+      "control-instruction": [
+        "./dist/control-instruction.d.ts"
+      ],
+      "decide-action-admission": [
+        "./dist/decide-action-admission.d.ts"
+      ],
+      "decide-navigation": [
+        "./dist/decide-navigation.d.ts"
+      ],
+      "decide-observation-release": [
+        "./dist/decide-observation-release.d.ts"
+      ],
+      "decide-tool-exposure": [
+        "./dist/decide-tool-exposure.d.ts"
+      ],
+      "derive-browser-session-id": [
+        "./dist/derive-browser-session-id.d.ts"
+      ],
+      "encode-control-instruction": [
+        "./dist/encode-control-instruction.d.ts"
+      ],
+      "human-control-state": [
+        "./dist/human-control-state.d.ts"
+      ],
+      "local-chromium-substrate-adapter": [
+        "./dist/local-chromium-substrate-adapter.d.ts"
+      ],
+      "observation-kind": [
+        "./dist/observation-kind.d.ts"
+      ],
+      "parse-control-command": [
+        "./dist/parse-control-command.d.ts"
+      ],
+      "parse-worker-env": [
+        "./dist/parse-worker-env.d.ts"
+      ],
+      "plan-browser-network-policy": [
+        "./dist/plan-browser-network-policy.d.ts"
+      ],
+      "reduce-human-control-mode": [
+        "./dist/reduce-human-control-mode.d.ts"
+      ],
+      "sprites-substrate-adapter": [
+        "./dist/sprites-substrate-adapter.d.ts"
+      ],
+      "standalone-browser-worker": [
+        "./dist/standalone-browser-worker.d.ts"
+      ],
+      "verify-control-instruction": [
+        "./dist/verify-control-instruction.d.ts"
+      ]
+    }
+  },
+  "dependencies": {
+    "@pagespace/lib": "workspace:*",
+    "playwright-core": "^1.60.0"
+  },
+  "devDependencies": {
+    "eslint": "^9.36.0",
+    "typescript-eslint": "^8.59.0"
+  }
+}

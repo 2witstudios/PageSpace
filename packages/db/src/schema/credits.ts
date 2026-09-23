@@ -18,7 +18,7 @@ export const creditLedger = pgTable('credit_ledger', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
   // WAL-5: the wallet this row moved money in or out of. For every row written before
-  // wallets existed it is the user's personal root wallet (backfilled by 0299).
+  // wallets existed it is the user's personal root wallet (backfilled by 0303/0304).
   walletId: text('walletId').notNull().references(() => wallets.id, { onDelete: 'cascade' }),
   entryType: text('entryType').notNull(), // 'monthly_grant' | 'topup_purchase' | 'usage' | 'adjustment' | 'missed_grant' (a paid invoice whose tier had no ratio: amountCents 0, for the reconcile cron to re-grant)
   bucket: text('bucket').notNull(), // 'monthly' | 'topup'

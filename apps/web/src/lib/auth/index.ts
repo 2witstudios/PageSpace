@@ -524,6 +524,14 @@ export function isMCPAuthResult(result: AuthenticationResult): result is MCPAuth
   return !('error' in result) && result.tokenType === 'mcp';
 }
 
+/**
+ * The session id of a session-authenticated result, else undefined. The tool context carries it so the
+ * agent-account authority can tell a person's live run from an unattended one (G2, ADR 0004 §4.4).
+ */
+export function authSessionIdOf(result: AuthResult): string | undefined {
+  return result.tokenType === 'session' ? result.sessionId : undefined;
+}
+
 export function isSessionAuthResult(result: AuthenticationResult): result is SessionAuthResult {
   return !('error' in result) && result.tokenType === 'session';
 }

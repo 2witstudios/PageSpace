@@ -7,6 +7,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:db": "vitest run --config vitest.security.config.ts",
+    "credential-plane": "bun src/agent-accounts/executor/plane-main.ts",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:coverage": "vitest run --coverage",
     "email:dev": "email dev --dir emails",
@@ -722,6 +723,11 @@
       "types": "./dist/monitoring/ai-monitoring.d.ts",
       "import": "./dist/monitoring/ai-monitoring.js",
       "require": "./dist/monitoring/ai-monitoring.js"
+    },
+    "./monitoring/machine-pricing": {
+      "types": "./dist/monitoring/machine-pricing.d.ts",
+      "import": "./dist/monitoring/machine-pricing.js",
+      "require": "./dist/monitoring/machine-pricing.js"
     },
     "./monitoring/usage-source": {
       "types": "./dist/monitoring/usage-source.d.ts",
@@ -2672,6 +2678,46 @@
       "types": "./dist/validators/fly-ownership.d.ts",
       "import": "./dist/validators/fly-ownership.js",
       "require": "./dist/validators/fly-ownership.js"
+    },
+    "./agent-accounts/account-authority-executor": {
+      "types": "./dist/agent-accounts/account-authority-executor.d.ts",
+      "import": "./dist/agent-accounts/account-authority-executor.js",
+      "require": "./dist/agent-accounts/account-authority-executor.js"
+    },
+    "./agent-accounts/account-facts-repository": {
+      "types": "./dist/agent-accounts/account-facts-repository.d.ts",
+      "import": "./dist/agent-accounts/account-facts-repository.js",
+      "require": "./dist/agent-accounts/account-facts-repository.js"
+    },
+    "./agent-accounts/agent-account-repository": {
+      "types": "./dist/agent-accounts/agent-account-repository.d.ts",
+      "import": "./dist/agent-accounts/agent-account-repository.js",
+      "require": "./dist/agent-accounts/agent-account-repository.js"
+    },
+    "./agent-accounts/plane-client": {
+      "types": "./dist/agent-accounts/plane-client.d.ts",
+      "import": "./dist/agent-accounts/plane-client.js",
+      "require": "./dist/agent-accounts/plane-client.js"
+    },
+    "./agent-accounts/to-safe-account": {
+      "types": "./dist/agent-accounts/to-safe-account.d.ts",
+      "import": "./dist/agent-accounts/to-safe-account.js",
+      "require": "./dist/agent-accounts/to-safe-account.js"
+    },
+    "./agent-accounts/decide-account-creation": {
+      "types": "./dist/agent-accounts/decide-account-creation.d.ts",
+      "import": "./dist/agent-accounts/decide-account-creation.js",
+      "require": "./dist/agent-accounts/decide-account-creation.js"
+    },
+    "./agent-accounts/decide-acknowledgment": {
+      "types": "./dist/agent-accounts/decide-acknowledgment.d.ts",
+      "import": "./dist/agent-accounts/decide-acknowledgment.js",
+      "require": "./dist/agent-accounts/decide-acknowledgment.js"
+    },
+    "./agent-accounts/to-http-request-tool-result": {
+      "types": "./dist/agent-accounts/to-http-request-tool-result.d.ts",
+      "import": "./dist/agent-accounts/to-http-request-tool-result.js",
+      "require": "./dist/agent-accounts/to-http-request-tool-result.js"
     }
   },
   "typesVersions": {
@@ -2771,6 +2817,9 @@
       ],
       "monitoring/ai-monitoring": [
         "./dist/monitoring/ai-monitoring.d.ts"
+      ],
+      "monitoring/machine-pricing": [
+        "./dist/monitoring/machine-pricing.d.ts"
       ],
       "monitoring/usage-source": [
         "./dist/monitoring/usage-source.d.ts"

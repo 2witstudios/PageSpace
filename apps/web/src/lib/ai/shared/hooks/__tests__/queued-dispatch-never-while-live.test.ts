@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
 /**
@@ -105,14 +105,16 @@ describe('queued dispatch never while live', () => {
 
     const offenders: string[] = [];
     const walk = (dir: string): void => {
-      for (const entry of readdirSync(dir)) {
-        if (entry === 'node_modules' || entry === '.next') continue;
-        const full = join(dir, entry);
-        if (statSync(full).isDirectory()) {
+      // The directory listing's own entry types — no stat-then-read of the same
+      // path (a check-then-use file-system race).
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (entry.name === 'node_modules' || entry.name === '.next') continue;
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) {
           walk(full);
           continue;
         }
-        if (!/\.tsx?$/.test(entry)) continue;
+        if (!entry.isFile() || !/\.tsx?$/.test(entry.name)) continue;
         const rel = relative(WEB_SRC, full);
         if (ALLOWED.has(rel)) continue;
         if (readFileSync(full, 'utf8').includes('shiftQueuedSend')) offenders.push(rel);

@@ -10,21 +10,21 @@ import {
 /**
  * The X-5 wallets backfill, outside the migrator (Spec X-5, WAL-5).
  *
- * Migration 0301 already runs this backfill on every deploy, in the same migrate
- * invocation as the walletId NOT NULL (0302) that depends on it — so there is never a
+ * Migration 0304 already runs this backfill on every deploy, in the same migrate
+ * invocation as the walletId NOT NULL (0305) that depends on it — so there is never a
  * window where a ledger or hold row lacks a wallet. This script runs the SAME statements
- * (read from the 0301 file) in one transaction, for two jobs:
+ * (read from the 0304 file) in one transaction, for two jobs:
  *
  *   --dry-run   rehearse, then ROLL BACK. Writes nothing.
- *               - Database still at 0297 (production BEFORE the deploy): runs the whole
- *                 0298–0302 chain in one transaction and reports the balance rows, the
- *                 zero wallets 0301 would add, the rows it would assign, and any money
+ *               - Database still at 0298 (production BEFORE the deploy): runs the whole
+ *                 0299–0305 chain (org schema, then wallets) in one transaction and reports
+ *                 the balance rows, the zero wallets 0304 would add, the rows it would assign, and any money
  *                 drift (must be none). It holds the migration's locks (the rename is
  *                 ACCESS EXCLUSIVE on credit_balances) until it rolls back, so run it
  *                 against a restored snapshot of production, not the live primary:
  *                   1. restore the latest production backup into a scratch database;
  *                   2. DATABASE_URL=<scratch> bun scripts/backfill-wallets.ts --dry-run
- *               - Database already through 0300: runs 0301 alone; against a fully
+ *               - Database already through 0302: runs 0304 alone; against a fully
  *                 migrated database every count comes back unchanged.
  *   (default)   repair: apply it and COMMIT. Idempotent — a second run changes nothing.
  *
@@ -38,7 +38,7 @@ import {
 
 function describeRehearsal(r: WalletMigrationRehearsal): string {
   return [
-    'DRY RUN from 0297 — migrations 0298–0302 applied in one transaction, then rolled back. Nothing written.',
+    'DRY RUN from 0298 — migrations 0299–0305 applied in one transaction, then rolled back. Nothing written.',
     `  credit_balances rows:   ${r.before.balanceRows} -> personal root wallets ${r.after.personalRootWallets} (${r.zeroWalletsCreated} zero-balance added)`,
     `  ledger rows assigned:   ${r.after.ledgerRows - r.after.ledgerMissingWallet} of ${r.before.ledgerRows}`,
     `  hold rows assigned:     ${r.after.holdRows - r.after.holdsMissingWallet} of ${r.before.holdRows}`,
@@ -67,7 +67,7 @@ async function main(): Promise<void> {
     const { rows } = await client.query(`SELECT to_regclass('public.wallets') IS NULL AS "atBase"`);
     const atBase = (rows[0] as { atBase: boolean }).atBase;
     if (atBase && !dryRun) {
-      throw new Error('this database is still at 0297: the wallets table does not exist yet. Run the migrations (or --dry-run to rehearse them).');
+      throw new Error('this database is still at 0298: the wallets table does not exist yet. Run the migrations (or --dry-run to rehearse them).');
     }
     if (atBase) {
       const rehearsal = await rehearseWalletMigration(client);

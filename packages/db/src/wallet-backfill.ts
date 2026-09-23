@@ -4,25 +4,31 @@ import path from 'path';
 /**
  * The X-5 wallets backfill, runnable outside the migrator.
  *
- * Migration 0301 IS the backfill: it gives every credit_ledger and credit_holds row its
- * owner's personal root wallet, in the same migrate invocation as the NOT NULL (0302)
+ * Migration 0304 IS the backfill: it gives every credit_ledger and credit_holds row its
+ * owner's personal root wallet, in the same migrate invocation as the NOT NULL (0305)
  * that depends on it. This runner executes the exact statements of that file (read from
  * disk, never a copy) inside one transaction, measures the money and the row counts
  * before and after, and then:
  *   - with `dryRun`, ROLLS BACK, so nothing is written, and reports what would change;
  *   - otherwise COMMITS, after refusing (rolling back) if any money moved.
- * On a database already migrated through 0301 it is a verifier: every count in the
+ * On a database already migrated through 0304 it is a verifier: every count in the
  * report comes back unchanged, which is what idempotent means here.
  *
- * Production is at 0297 until the deploy, so a rehearsal there cannot run 0301 alone:
- * `rehearseWalletMigration` runs the WHOLE chain, 0298 through 0302, inside one
+ * Production is at 0298 until the deploy, so a rehearsal there cannot run 0304 alone:
+ * `rehearseWalletMigration` runs the WHOLE chain, 0299 through 0305, inside one
  * transaction and always rolls it back (Postgres DDL is transactional).
+ *
+ * The chain was renumbered when master's 0297/0298 (agent accounts) landed first; the SQL
+ * files were renamed with their bytes unchanged (the migrator keys on a hash of the
+ * content, so a rename never re-runs one). Comments INSIDE those files still use the old
+ * numbers: 0297 -> 0299, 0298 -> 0300, 0299 -> 0301, 0300 -> 0302, 0300_1 -> 0303,
+ * 0301 -> 0304, 0302 -> 0305.
  *
  * Run it through `scripts/backfill-wallets.ts`.
  */
 
 const MIGRATIONS_DIR = path.resolve(__dirname, '../drizzle');
-const BACKFILL_MIGRATION_PREFIX = '0301_';
+const BACKFILL_MIGRATION_PREFIX = '0304_';
 const BREAKPOINT = '--> statement-breakpoint';
 
 /** The statements of the migration file starting with `prefix`, in order, exactly as the migrator runs them. */
@@ -35,14 +41,16 @@ function migrationStatements(prefix: string, migrationsDir: string): string[] {
     .filter((statement) => statement.length > 0);
 }
 
-/** The statements of migration 0301, in order, exactly as the migrator runs them. */
+/** The statements of migration 0304, in order, exactly as the migrator runs them. */
 export function walletBackfillStatements(migrationsDir: string = MIGRATIONS_DIR): string[] {
   return migrationStatements(BACKFILL_MIGRATION_PREFIX, migrationsDir);
 }
 
-/** The file-name prefixes of the X-5 chain. `0300_` also covers `0300_1_`, which runs between
- * 0300 and 0301 (the journal, not the name, sets the order). */
-const WALLET_CHAIN_PREFIXES = ['0298_', '0299_', '0300_', '0301_', '0302_'] as const;
+/** The file-name prefixes of everything the deploy runs on top of production's 0298: the org
+ * schema (0299; 0302 adds a foreign key to its `organizations` table) and the X-5 chain,
+ * 0300 through 0305, with the lock-and-require (0303) before the backfill (0304). The journal,
+ * not the name, sets the order. */
+const WALLET_CHAIN_PREFIXES = ['0299_', '0300_', '0301_', '0302_', '0303_', '0304_', '0305_'] as const;
 
 /** Every X-5 chain migration, in the order the migrator applies them: journal order, not file order. */
 function walletChainStatements(migrationsDir: string): string[] {
@@ -167,7 +175,7 @@ export async function runWalletBackfill(
   }
 }
 
-/** The balances as they stand at 0297, read from credit_balances. Whole cents. */
+/** The balances as they stand at 0298, read from credit_balances. Whole cents. */
 export interface PreMigrationCounts {
   balanceRows: number;
   ledgerRows: number;
@@ -183,7 +191,7 @@ export interface WalletMigrationRehearsal {
   rolledBack: true;
   before: PreMigrationCounts;
   after: WalletBackfillCounts;
-  /** Zero-balance personal wallets 0301 would create for users with ledger or hold rows but no balance row. */
+  /** Zero-balance personal wallets 0304 would create for users with ledger or hold rows but no balance row. */
   zeroWalletsCreated: number;
   /** Balance totals that would change; the deploy must leave this empty. */
   drift: string[];
@@ -201,9 +209,9 @@ const PRE_COUNTS_SQL = `
 `;
 
 /**
- * Rehearse the X-5 deploy against a database still at 0297 (production before the deploy,
- * or a restored snapshot of it): run 0298–0302 in ONE transaction, measure, and ROLL BACK.
- * Refuses a database that is not at 0297, rather than reporting "nothing to do".
+ * Rehearse the X-5 deploy against a database still at 0298 (production before the deploy,
+ * or a restored snapshot of it): run 0299–0305 in ONE transaction, measure, and ROLL BACK.
+ * Refuses a database that is not at 0298, rather than reporting "nothing to do".
  *
  * It holds the locks the real migration takes (the rename is ACCESS EXCLUSIVE on the
  * balance table) until it rolls back, so live traffic waits for it: rehearse against a
@@ -216,11 +224,11 @@ export async function rehearseWalletMigration(
 ): Promise<WalletMigrationRehearsal> {
   const statements = walletChainStatements(migrationsDir);
   const { rows: stateRows } = await client.query(
-    `SELECT to_regclass('public.credit_balances') IS NOT NULL AS "hasBalances", to_regclass('public.wallets') IS NOT NULL AS "hasWallets"`,
+    `SELECT to_regclass('public.credit_balances') IS NOT NULL AS "hasBalances", to_regclass('public.wallets') IS NOT NULL AS "hasWallets", to_regclass('public.organizations') IS NOT NULL AS "hasOrganizations"`,
   );
-  const state = stateRows[0] as { hasBalances: boolean; hasWallets: boolean };
-  if (!state.hasBalances || state.hasWallets) {
-    throw new Error('database is not at 0297 (credit_balances present, wallets absent); run the dry run of the backfill (0301) instead');
+  const state = stateRows[0] as { hasBalances: boolean; hasWallets: boolean; hasOrganizations: boolean };
+  if (!state.hasBalances || state.hasWallets || state.hasOrganizations) {
+    throw new Error('database is not at 0298 (credit_balances present, wallets and organizations absent); run the dry run of the backfill (0304) instead');
   }
 
   await client.query('BEGIN');
