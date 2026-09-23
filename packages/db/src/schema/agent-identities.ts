@@ -37,6 +37,8 @@ export const agentIdentities = pgTable('agent_identities', {
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
 }, (table) => ({
   ownerUserIdx: index('agent_identities_owner_user_id_idx').on(table.ownerUserId),
+  // The deployment-wide signup budget counts identities created in a rolling window.
+  createdAtIdx: index('agent_identities_created_at_idx').on(table.createdAt),
 }));
 
 /**
@@ -73,7 +75,8 @@ export const agentSignupChallenges = pgTable('agent_signup_challenges', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   challengeHash: text('challengeHash').unique().notNull(),
   difficultyBits: integer('difficultyBits').notNull(),
-  issuedToIp: text('issuedToIp'),
+  // No caller IP (Phase 2b): redemption is not bound to the issuing address,
+  // so storing it served no purpose. The per-IP limits act on the request.
   expiresAt: timestamp('expiresAt', { mode: 'date' }).notNull(),
   consumedAt: timestamp('consumedAt', { mode: 'date' }),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),

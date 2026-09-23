@@ -1,0 +1,1 @@
+CREATE INDEX "agent_identities_created_at_idx" ON "agent_identities" USING btree ("createdAt");

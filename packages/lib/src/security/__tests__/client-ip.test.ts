@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { getClientIP } from '../client-ip';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { getClientIP, resolveClientIP, readClientIpTrust, isIpAddress } from '../client-ip';
 
 describe('getClientIP', () => {
   // Fly-Client-IP is only trustworthy when the request genuinely traversed
@@ -112,23 +112,23 @@ describe('getClientIP', () => {
   // client-settable header with zero trust guarantee — a caller could forge
   // it directly to bypass IP-keyed rate limits and poison audit/
   // device-fingerprint data, the exact class of attack #1908 exists to close.
+  //
+  // Agent Signup Phase 2b: the same is true of x-forwarded-for and x-real-ip.
+  // Off Fly they are honoured ONLY when TRUSTED_PROXY_HOPS says how many
+  // reverse proxies in front of the app append to x-forwarded-for; unset, the
+  // caller's headers are ignored (default-deny), so a rotating header can no
+  // longer mint a fresh rate-limit bucket per request.
   describe('not running on Fly (FLY_APP_NAME unset — e.g. tenant/self-hosted)', () => {
+    const ORIGINAL_HOPS = process.env.TRUSTED_PROXY_HOPS;
+
     beforeEach(() => {
       delete process.env.FLY_APP_NAME;
+      delete process.env.TRUSTED_PROXY_HOPS;
     });
 
-    it('ignores a forged fly-client-ip entirely and falls back to x-forwarded-for', () => {
-      const request = new Request('http://localhost', {
-        headers: { 'fly-client-ip': '9.9.9.9', 'x-forwarded-for': '1.2.3.4' },
-      });
-      expect(getClientIP(request)).toBe('1.2.3.4');
-    });
-
-    it('ignores a forged fly-client-ip and falls back to x-real-ip when x-forwarded-for is absent', () => {
-      const request = new Request('http://localhost', {
-        headers: { 'fly-client-ip': '9.9.9.9', 'x-real-ip': '10.0.0.1' },
-      });
-      expect(getClientIP(request)).toBe('10.0.0.1');
+    afterEach(() => {
+      if (ORIGINAL_HOPS === undefined) delete process.env.TRUSTED_PROXY_HOPS;
+      else process.env.TRUSTED_PROXY_HOPS = ORIGINAL_HOPS;
     });
 
     it('returns unknown when only a forged fly-client-ip is present, never trusting it', () => {
@@ -136,6 +136,181 @@ describe('getClientIP', () => {
         headers: { 'fly-client-ip': '9.9.9.9' },
       });
       expect(getClientIP(request)).toBe('unknown');
+    });
+
+    describe('given no trusted-proxy configuration (default-deny)', () => {
+      it('ignores a caller-supplied x-forwarded-for', () => {
+        const request = new Request('http://localhost', { headers: { 'x-forwarded-for': '1.2.3.4' } });
+        expect(getClientIP(request)).toBe('unknown');
+      });
+
+      it('ignores a caller-supplied x-real-ip', () => {
+        const request = new Request('http://localhost', { headers: { 'x-real-ip': '10.0.0.1' } });
+        expect(getClientIP(request)).toBe('unknown');
+      });
+
+      // The default-deny gate is what stops the x-real-ip fallback. (For
+      // x-forwarded-for alone, hops=0 selects past the end of the chain, so the
+      // gate is belt-and-braces there; the x-real-ip branch is where deleting
+      // it would open a hole.)
+      it.each([['a rotating x-real-ip', 'x-real-ip'], ['an empty x-forwarded-for beside x-real-ip', 'both']])(
+        'given %s flood, should resolve every request to the same client',
+        (_label, mode) => {
+          const resolved = new Set(Array.from({ length: 20 }, (_, i) => getClientIP(new Request('http://localhost', {
+            headers: mode === 'both' ? { 'x-forwarded-for': '', 'x-real-ip': `198.51.100.${i}` } : { 'x-real-ip': `198.51.100.${i}` },
+          }))));
+          expect([...resolved]).toEqual(['unknown']);
+        },
+      );
+
+      it('given a flood rotating x-forwarded-for, should resolve every request to the same client (one bucket, not one per header)', () => {
+        const resolved = new Set(Array.from({ length: 50 }, (_, i) =>
+          getClientIP(new Request('http://localhost', { headers: { 'x-forwarded-for': `198.51.100.${i}`, 'fly-client-ip': `203.0.113.${i}` } }))));
+        expect([...resolved]).toEqual(['unknown']);
+      });
+
+      it('given a proxy fingerprint it is ignoring (a chain, or x-real-ip), should warn the operator once, not per request', async () => {
+        vi.resetModules();
+        const { getClientIP: freshGetClientIP } = await import('../client-ip');
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+          freshGetClientIP(new Request('http://localhost', { headers: { 'x-forwarded-for': '1.2.3.4, 10.0.0.2' } }));
+          freshGetClientIP(new Request('http://localhost', { headers: { 'x-real-ip': '5.6.7.8' } }));
+          expect(warn).toHaveBeenCalledTimes(1);
+          expect(String(warn.mock.calls[0]?.[0])).toContain('TRUSTED_PROXY_HOPS');
+        } finally {
+          warn.mockRestore();
+        }
+      });
+
+      it('given the single x-forwarded-for entry Next.js fills in on every request, should not warn (no proxy evidence)', async () => {
+        vi.resetModules();
+        const { getClientIP: freshGetClientIP } = await import('../client-ip');
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+          freshGetClientIP(new Request('http://localhost', { headers: { 'x-forwarded-for': '203.0.113.9' } }));
+          expect(warn).not.toHaveBeenCalled();
+        } finally {
+          warn.mockRestore();
+        }
+      });
+
+      it.each(['0', '', 'abc', '-1', '1.5', ' 2x'])('treats TRUSTED_PROXY_HOPS=%j as no trusted proxy', (hops) => {
+        process.env.TRUSTED_PROXY_HOPS = hops;
+        const request = new Request('http://localhost', { headers: { 'x-forwarded-for': '1.2.3.4' } });
+        expect(getClientIP(request)).toBe('unknown');
+      });
+    });
+
+    describe('given TRUSTED_PROXY_HOPS=1 (one reverse proxy, e.g. Traefik, appends the peer it saw)', () => {
+      beforeEach(() => {
+        process.env.TRUSTED_PROXY_HOPS = '1';
+      });
+
+      it('takes the entry the proxy appended (the rightmost), ignoring anything the caller prepended', () => {
+        const request = new Request('http://localhost', {
+          headers: { 'x-forwarded-for': '6.6.6.6, 7.7.7.7, 203.0.113.50' },
+        });
+        expect(getClientIP(request)).toBe('203.0.113.50');
+      });
+
+      it('given a flood rotating a spoofed prefix, should resolve every request to the real peer', () => {
+        const resolved = new Set(Array.from({ length: 50 }, (_, i) =>
+          getClientIP(new Request('http://localhost', { headers: { 'x-forwarded-for': `198.51.100.${i}, 203.0.113.50` } }))));
+        expect([...resolved]).toEqual(['203.0.113.50']);
+      });
+
+      it('given a legitimate fleet of distinct clients behind the one proxy, should resolve each to its own address', () => {
+        const fleet = ['203.0.113.1', '203.0.113.2', '198.51.100.9'];
+        expect(fleet.map((ip) => getClientIP(new Request('http://localhost', { headers: { 'x-forwarded-for': ip } })))).toEqual(fleet);
+      });
+
+      it('falls back to x-real-ip when x-forwarded-for is absent', () => {
+        const request = new Request('http://localhost', { headers: { 'x-real-ip': '10.0.0.1' } });
+        expect(getClientIP(request)).toBe('10.0.0.1');
+      });
+
+      it('still ignores a forged fly-client-ip', () => {
+        const request = new Request('http://localhost', { headers: { 'fly-client-ip': '9.9.9.9', 'x-forwarded-for': '1.2.3.4' } });
+        expect(getClientIP(request)).toBe('1.2.3.4');
+      });
+
+      it('skips empty entries', () => {
+        const request = new Request('http://localhost', { headers: { 'x-forwarded-for': '1.2.3.4, , ' } });
+        expect(getClientIP(request)).toBe('1.2.3.4');
+      });
+    });
+
+    describe('given a resolved value that is not an IP literal', () => {
+      beforeEach(() => {
+        process.env.TRUSTED_PROXY_HOPS = '1';
+      });
+
+      it.each(['<script>', 'evil.example', '1.2.3.4:80', '256.1.1.1', '1.2.3', '::1::2', 'unknown'])(
+        'given the trusted entry %j, should resolve to unknown',
+        (value) => {
+          expect(getClientIP(new Request('http://localhost', { headers: { 'x-forwarded-for': `1.1.1.1, ${value}` } }))).toBe('unknown');
+        },
+      );
+
+      it('given a non-IP x-real-ip, should resolve to unknown', () => {
+        expect(getClientIP(new Request('http://localhost', { headers: { 'x-real-ip': 'not-an-ip' } }))).toBe('unknown');
+      });
+    });
+
+    describe('given TRUSTED_PROXY_HOPS=2 (a CDN in front of the reverse proxy)', () => {
+      beforeEach(() => {
+        process.env.TRUSTED_PROXY_HOPS = '2';
+      });
+
+      it('takes the second entry from the right (what the outer proxy saw)', () => {
+        const request = new Request('http://localhost', { headers: { 'x-forwarded-for': '6.6.6.6, 203.0.113.50, 10.0.0.2' } });
+        expect(getClientIP(request)).toBe('203.0.113.50');
+      });
+
+      // Fewer entries than declared proxies = a proxy was bypassed (e.g. the
+      // origin hit directly past the CDN): the leftmost entry is then
+      // caller-written, so it must never become the bucket key.
+      it('given fewer entries than hops (a proxy was bypassed), should fail closed to unknown', () => {
+        expect(getClientIP(new Request('http://localhost', { headers: { 'x-forwarded-for': '203.0.113.50' } }))).toBe('unknown');
+      });
+
+      it('given a multi-entry chain still shorter than hops, should fail closed rather than take the caller-written leftmost', () => {
+        process.env.TRUSTED_PROXY_HOPS = '3';
+        expect(getClientIP(new Request('http://localhost', { headers: { 'x-forwarded-for': '9.9.9.9, 203.0.113.50' } }))).toBe('unknown');
+      });
+    });
+  });
+
+  describe('resolveClientIP (pure)', () => {
+    const headers = (h: Record<string, string>) => new Headers(h);
+
+    it('given Fly trust, should ignore TRUSTED_PROXY_HOPS and behave as on Fly', () => {
+      expect(resolveClientIP(headers({ 'fly-client-ip': '9.9.9.9', 'x-forwarded-for': '1.2.3.4' }), { onFly: true, trustedProxyHops: 0 })).toBe('9.9.9.9');
+    });
+
+    it('given no trust, should resolve unknown whatever the headers claim', () => {
+      expect(resolveClientIP(headers({ 'fly-client-ip': '9.9.9.9', 'x-forwarded-for': '1.2.3.4', 'x-real-ip': '5.5.5.5' }), { onFly: false, trustedProxyHops: 0 })).toBe('unknown');
+    });
+  });
+
+  describe('isIpAddress', () => {
+    it.each(['203.0.113.5', '0.0.0.0', '255.255.255.255', '2001:db8::1', '::1', '::', 'fe80::1%eth0', '::ffff:203.0.113.5', '2001:db8:1:2:3:4:5:6', '1:2:3:4:5:6:1.2.3.4'])('accepts %j', (value) => {
+      expect(isIpAddress(value)).toBe(true);
+    });
+
+    it.each(['', 'unknown', '256.0.0.1', '1.2.3.4.5', '01.2.3.4x', '<script>', '2001:db8::1::2', '1:2:3:4:5:6:7:8:9', '1:2:3:4:5:6:7', 'gggg::1', '[::1]', '1.2.3.4:80', ':::'])('rejects %j', (value) => {
+      expect(isIpAddress(value)).toBe(false);
+    });
+  });
+
+  describe('readClientIpTrust', () => {
+    it('given FLY_APP_NAME and TRUSTED_PROXY_HOPS, should report both', () => {
+      expect(readClientIpTrust({ FLY_APP_NAME: 'pagespace-web', TRUSTED_PROXY_HOPS: '1' })).toEqual({ onFly: true, trustedProxyHops: 1 });
+    });
+
+    it('given neither, should report no trust', () => {
+      expect(readClientIpTrust({})).toEqual({ onFly: false, trustedProxyHops: 0 });
     });
   });
 });

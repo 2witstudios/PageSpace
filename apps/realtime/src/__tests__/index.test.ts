@@ -2088,6 +2088,52 @@ describe('populateUserMetadata', () => {
     expect((socket.data.user as { name: string }).name).toBe('User Name');
   });
 
+  it('given an AI agent account, should carry accountType agent into the presence metadata (Agent Signup Phase 2b)', async () => {
+    mockDbLimit
+      .mockResolvedValueOnce([{ name: 'Jane from IT', image: null, accountType: 'agent' }]) // users query
+      .mockResolvedValueOnce([]); // no profile
+
+    vi.mocked(sessionService.validateSession).mockResolvedValue({
+      userId: 'agent-meta-1',
+    } as Awaited<ReturnType<typeof sessionService.validateSession>>);
+
+    const socket = createMockSocket({
+      data: { user: { id: 'agent-meta-1', name: 'Unknown', avatarUrl: null } },
+      handshake: {
+        auth: { token: 'ps_sess_agentmeta' },
+        headers: { origin: undefined },
+        address: '127.0.0.1',
+      },
+    });
+
+    await capturedIoUseCallback!(socket, vi.fn());
+
+    expect(socket.data.user).toMatchObject({ name: 'Jane from IT', accountType: 'agent' });
+  });
+
+  it('given a user row with no accountType, should default presence metadata to human', async () => {
+    mockDbLimit
+      .mockResolvedValueOnce([{ name: 'User Name', image: null }])
+      .mockResolvedValueOnce([]);
+
+    vi.mocked(sessionService.validateSession).mockResolvedValue({
+      userId: 'user-meta-h',
+    } as Awaited<ReturnType<typeof sessionService.validateSession>>);
+
+    const socket = createMockSocket({
+      data: { user: { id: 'user-meta-h', name: 'Unknown', avatarUrl: null } },
+      handshake: {
+        auth: { token: 'ps_sess_metah' },
+        headers: { origin: undefined },
+        address: '127.0.0.1',
+      },
+    });
+
+    await capturedIoUseCallback!(socket, vi.fn());
+
+    expect(socket.data.user).toMatchObject({ accountType: 'human' });
+  });
+
   it('given no profile and a ciphertext user name (GDPR #965 post-cutover), should decrypt before using as fallback', async () => {
     mockDbLimit
       .mockResolvedValueOnce([{ name: 'ciphertext-blob', image: null }]) // users query

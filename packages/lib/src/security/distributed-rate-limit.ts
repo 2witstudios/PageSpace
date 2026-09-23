@@ -41,6 +41,7 @@ import { db } from '@pagespace/db/db';
 import { sql, eq, lt } from '@pagespace/db/operators';
 import { rateLimitBuckets } from '@pagespace/db/schema/rate-limit-buckets';
 import { loggers } from '../logging/logger-config';
+import { redactDbError } from '../logging/db-error-redaction';
 
 // =============================================================================
 // Types
@@ -653,9 +654,9 @@ export async function checkDistributedRateLimit(
       attemptsRemaining: 0,
     };
   } catch (error) {
-    loggers.api.warn('Postgres rate limit check failed, falling back', {
-      error: error instanceof Error ? error.message : String(error),
-    });
+    // Never error.message: drizzle's DrizzleQueryError message carries the
+    // bound params, and the bucket key is one of them (Phase 2b).
+    loggers.api.warn('Postgres rate limit check failed, falling back', redactDbError(error));
 
     // Re-arm the mode log so recovery ("Distributed rate limiting enabled")
     // is visible in logs after an outage.
@@ -687,9 +688,7 @@ export async function resetDistributedRateLimit(identifier: string): Promise<voi
     await db.delete(rateLimitBuckets).where(eq(rateLimitBuckets.key, identifier));
     closePgCircuitIfCurrent(admittedEpoch);
   } catch (error) {
-    loggers.api.debug('Postgres rate limit reset failed', {
-      error: error instanceof Error ? error.message : String(error),
-    });
+    loggers.api.debug('Postgres rate limit reset failed', redactDbError(error));
     recordPgFailure(error, Date.now());
   }
 
@@ -728,9 +727,7 @@ export async function refundDistributedRateLimitAttempt(
       );
     closePgCircuitIfCurrent(admittedEpoch);
   } catch (error) {
-    loggers.api.debug('Postgres rate limit refund failed', {
-      error: error instanceof Error ? error.message : String(error),
-    });
+    loggers.api.debug('Postgres rate limit refund failed', redactDbError(error));
     recordPgFailure(error, Date.now());
   }
 }
@@ -866,9 +863,7 @@ export async function countAuthFailure(identifier: string, windowMs: number): Pr
     closePgCircuitIfCurrent(admittedEpoch);
     return rows[0]?.count ?? 0;
   } catch (error) {
-    loggers.api.warn('countAuthFailure failed', {
-      error: error instanceof Error ? error.message : String(error),
-    });
+    loggers.api.warn('countAuthFailure failed', redactDbError(error));
     recordPgFailure(error, Date.now());
     return 0;
   }
@@ -1145,12 +1140,25 @@ export const DISTRIBUTED_RATE_LIMITS = {
     blockDurationMs: 5 * 60 * 1000,
     progressiveDelay: false,
   },
-  // Per presented credential (hash of the secret or refresh token), tight: stops
-  // a hot loop on one secret without touching any other agent.
+  // Per presented secret (its hash) on jwt-bearer, per token FAMILY on the
+  // refresh grant (a refresh token rotates every use, so keying on it would be a
+  // fresh bucket per refresh). Tight: stops a hot loop without touching any
+  // other agent.
   AGENT_TOKEN_CREDENTIAL: {
     maxAttempts: 10,
     windowMs: 5 * 60 * 1000,
     blockDurationMs: 5 * 60 * 1000,
+    progressiveDelay: false,
+  },
+  // POST /api/agent/secret/rotate (Agent Signup Phase 2b), keyed per agent AND
+  // per actor (auth/agent/token-rate-limit-keys.ts). Rotation is rare; a loop
+  // is a stolen token that, with revokeExistingTokens, would mass-revoke the
+  // agent's keys on every call. The owner's bucket is separate, so the owner can
+  // always rotate the agent back out of a thief's hands.
+  AGENT_SECRET_ROTATE: {
+    maxAttempts: 5,
+    windowMs: 60 * 60 * 1000,
+    blockDurationMs: 60 * 60 * 1000,
     progressiveDelay: false,
   },
   // POST /api/auth/mcp-tokens by an AI agent's own bearer token (ADR 0007 D6),

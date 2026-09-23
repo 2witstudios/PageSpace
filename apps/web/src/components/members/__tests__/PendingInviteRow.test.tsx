@@ -20,6 +20,16 @@ describe('PendingInviteRow', () => {
     expect(screen.getByText(/Invited by Alice/)).toBeInTheDocument();
   });
 
+  it('given an invite sent by an AI agent account, should mark the inviter as an agent (Phase 2b)', () => {
+    render(<PendingInviteRow invite={buildInvite({ invitedByName: 'Drive Owner', invitedByAccountType: 'agent' })} />);
+    expect(screen.getByLabelText('AI agent account')).toBeInTheDocument();
+  });
+
+  it('given a human inviter, should not mark it', () => {
+    render(<PendingInviteRow invite={buildInvite({ invitedByAccountType: 'human' })} />);
+    expect(screen.queryByLabelText('AI agent account')).not.toBeInTheDocument();
+  });
+
   it('shows Pending badge for non-expired invites', () => {
     render(<PendingInviteRow invite={buildInvite()} />);
     expect(screen.getByText('Pending')).toBeInTheDocument();

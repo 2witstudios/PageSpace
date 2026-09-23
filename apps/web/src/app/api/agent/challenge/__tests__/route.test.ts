@@ -10,6 +10,11 @@ const mocks = vi.hoisted(() => ({
   issue: vi.fn(),
   audit: vi.fn(),
   powBits: { value: 20 },
+  StoreError: class AgentIdentityStoreError extends Error {
+    constructor(readonly operation: string, readonly redacted: { errorName: string; code: string | null; constraint: string | null }) {
+      super(`Agent identity store failed: ${operation}`);
+    }
+  },
 }));
 
 vi.mock('@/lib/agent-auth/door', async (importOriginal) => ({
@@ -22,7 +27,7 @@ vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   checkDistributedRateLimit: mocks.rateLimit,
   DISTRIBUTED_RATE_LIMITS: { AGENT_CHALLENGE: { maxAttempts: 30, windowMs: 300_000 } },
 }));
-vi.mock('@pagespace/lib/services/agent-identities', () => ({ issueAgentSignupChallenge: mocks.issue }));
+vi.mock('@pagespace/lib/services/agent-identities', () => ({ issueAgentSignupChallenge: mocks.issue, AgentIdentityStoreError: mocks.StoreError }));
 vi.mock('@pagespace/lib/auth/agent/pow', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@pagespace/lib/auth/agent/pow')>();
   return {
@@ -57,9 +62,20 @@ describe('GET /api/agent/challenge', () => {
     });
   });
 
-  it('should persist the challenge with the caller IP, the configured difficulty and a 5-minute TTL', async () => {
+  it('given the store fails (Phase 2b), should answer 503 temporarily_unavailable and audit only the pg code', async () => {
+    mocks.issue.mockRejectedValue(new mocks.StoreError('issue_challenge', { errorName: 'DrizzleQueryError', code: '53300', constraint: null }));
+
+    const response = await GET(new Request('http://web.local/api/agent/challenge'));
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: 'temporarily_unavailable' });
+    expect(mocks.audit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ details: { reason: 'store_failed', code: '53300' } }));
+  });
+
+  it('should persist the challenge with the configured difficulty and a 5-minute TTL, and no caller IP', async () => {
     await GET(challengeRequest());
-    expect(mocks.issue).toHaveBeenCalledWith({ difficultyBits: 20, ttlMs: 300_000, issuedToIp: '203.0.113.7', now: expect.any(Date) });
+    // No caller IP reaches the store: redemption is not IP-bound (Phase 2b).
+    expect(mocks.issue).toHaveBeenCalledWith({ difficultyBits: 20, ttlMs: 300_000, now: expect.any(Date) });
   });
 
   it('should never be cached', async () => {

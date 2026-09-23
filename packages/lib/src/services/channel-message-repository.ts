@@ -64,6 +64,8 @@ const messageWith = {
       id: true,
       name: true,
       image: true,
+      // Marks a self-named AI agent account wherever the author is shown (Phase 2b).
+      accountType: true,
     },
   },
   // Legacy single-attachment relation. Still read so a row written by a pod on

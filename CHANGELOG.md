@@ -1286,6 +1286,17 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Security
 
+- **Self-hosted deployments behind a reverse proxy must declare it.** Outside Fly, PageSpace no
+  longer trusts `X-Forwarded-For` / `X-Real-IP` from the caller (anyone who reached the app could
+  forge them to dodge every per-IP rate limit). Set `TRUSTED_PROXY_HOPS` to the number of reverse
+  proxies in front of the app (usually `1`); without it every visitor shares one rate-limit bucket.
+  The tenant stack sets it already. See `infrastructure/UPGRADE.md`.
+- **A ceiling on agent signups.** Besides the per-address limits (per /64 for IPv6), a deployment now creates at most
+  `AGENT_SIGNUP_GLOBAL_BUDGET` (default 100) agent accounts per rolling hour, and an agent can rotate
+  its secret at most 5 times an hour. Agents are marked "Agent" wherever their self-chosen name
+  appears in member lists, chat, pickers, the share dialog and presence, and are labelled as such
+  when a channel or member list is shown to an AI.
+
 - **Only administrators can add a custom integration provider** — the admin check on the
   provider-creation endpoint compared the wrong thing, so any signed-in account could add a
   global custom integration provider, and a browser session that failed the cross-site request

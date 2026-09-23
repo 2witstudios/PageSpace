@@ -5,6 +5,8 @@
  * that is mis-wired fails here.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { DrizzleQueryError } from 'drizzle-orm/errors';
+import { createHash } from 'crypto';
 
 vi.mock('server-only', () => ({}));
 
@@ -25,6 +27,7 @@ vi.mock('@/lib/repositories/oauth-repository', () => ({
   refreshTokenGrant: mocks.refreshTokenGrant,
   pollDeviceToken: vi.fn(),
   exchangeAgentAssertion: mocks.exchangeAgentAssertion,
+  findRefreshTokenFamilyId: vi.fn().mockResolvedValue('family-1'),
 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: mocks.audit }));
 vi.mock('@pagespace/lib/onboarding/home-drive', () => ({ provisionHomeDriveIfNeeded: mocks.provision }));
@@ -46,6 +49,7 @@ vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
 }));
 
 import { POST } from '../route';
+import { AgentIdentityStoreError } from '@pagespace/lib/services/agent-identities';
 
 const GRANT = 'urn:ietf:params:oauth:grant-type:jwt-bearer';
 const SECRET = 'ps_agent_abcdefghijklmnopqrstuvwxyz012345';
@@ -99,12 +103,59 @@ describe('POST /api/oauth/token — jwt-bearer (agent assertion) grant', () => {
     });
 
     it('should apply the token-exchange rate limit before the secret is looked up', async () => {
-      mocks.rateLimit.mockResolvedValue({ allowed: false, retryAfter: 30 });
+      // The IP bucket passes; the per-credential bucket (checked second) refuses.
+      mocks.rateLimit.mockResolvedValueOnce({ allowed: true }).mockResolvedValueOnce({ allowed: false, retryAfter: 30 });
       const response = await POST(tokenRequest(fields()) as never);
       expect(response.status).toBe(429);
       expect(mocks.exchangeAgentAssertion).not.toHaveBeenCalled();
       expect(mocks.rateLimit).toHaveBeenCalledWith('agent-token:ip:203.0.113.21', { maxAttempts: 60, windowMs: 300_000 });
-      expect(mocks.rateLimit).toHaveBeenCalledWith(expect.stringMatching(/^agent-token:credential:[0-9a-f]{64}$/), { maxAttempts: 10, windowMs: 300_000 });
+      expect(mocks.rateLimit).toHaveBeenCalledWith(expect.stringMatching(/^agent-token:credential:[0-9a-f]{20}$/), { maxAttempts: 10, windowMs: 300_000 });
+    });
+  });
+
+  describe('given the store fails mid-grant (Phase 2b: no hash reaches a log)', () => {
+    it('should answer a constant 503 and log only the redacted class, code and constraint — never the bound secret hash', async () => {
+      const secretHash = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+      mocks.exchangeAgentAssertion.mockRejectedValue(new DrizzleQueryError(
+        'select "userId" from "agent_identities" where "secretHash" = $1',
+        [secretHash],
+        Object.assign(new Error('canceling statement due to statement timeout'), { code: '57014' }),
+      ));
+
+      const response = await POST(tokenRequest(fields()) as never);
+
+      expect(response.status).toBe(503);
+      expect(await response.json()).toEqual({ error: 'temporarily_unavailable' });
+      expect(response.headers.get('Cache-Control')).toBe('no-store');
+      expect(mocks.logError).toHaveBeenCalledWith('OAuth token request failed', { errorName: 'DrizzleQueryError', code: '57014', constraint: null });
+      expect(JSON.stringify(mocks.logError.mock.calls)).not.toContain(secretHash);
+    });
+  });
+
+  describe('given a non-database bug mid-grant', () => {
+    // Every Node builtin error carries a SCREAMING_SNAKE `code`; a plain
+    // TypeError would pass vacuously, so use the real code-bearing shape.
+    it('given a real Node builtin error (it carries a code), should rethrow it untouched so Sentry still sees the bug', async () => {
+      let builtin: unknown;
+      try {
+        createHash('sha3-256').update(undefined as unknown as string);
+      } catch (error) {
+        builtin = error;
+      }
+      expect((builtin as { code?: string }).code).toBe('ERR_INVALID_ARG_TYPE');
+      mocks.exchangeAgentAssertion.mockRejectedValue(builtin);
+
+      await expect(POST(tokenRequest(fields()) as never)).rejects.toBe(builtin);
+      expect(mocks.logError).not.toHaveBeenCalledWith('OAuth token request failed', expect.anything());
+    });
+
+    it('given a lib identity-store failure (already redacted), should answer 503 like the identity door', async () => {
+      mocks.exchangeAgentAssertion.mockRejectedValue(new AgentIdentityStoreError('verify_secret', { errorName: 'DrizzleQueryError', code: '57014', constraint: null }));
+
+      const response = await POST(tokenRequest(fields()) as never);
+
+      expect(response.status).toBe(503);
+      expect(await response.json()).toEqual({ error: 'temporarily_unavailable' });
     });
   });
 

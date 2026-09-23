@@ -73,17 +73,20 @@ describe('getClientIP (edge)', () => {
 
   // Regression coverage: on a non-Fly host (e.g. this repo's `tenant`
   // deployment mode — Docker/Traefik), fly-client-ip is just another
-  // ordinary, client-settable header with no trust guarantee at all.
+  // ordinary, client-settable header with no trust guarantee at all — and so
+  // are x-forwarded-for and x-real-ip unless TRUSTED_PROXY_HOPS declares the
+  // proxies in front (Agent Signup Phase 2b; kept in sync with packages/lib).
   describe('not running on Fly (FLY_APP_NAME unset — e.g. tenant/self-hosted)', () => {
+    const ORIGINAL_HOPS = process.env.TRUSTED_PROXY_HOPS;
+
     beforeEach(() => {
       delete process.env.FLY_APP_NAME;
+      delete process.env.TRUSTED_PROXY_HOPS;
     });
 
-    it('ignores a forged fly-client-ip entirely and falls back to x-forwarded-for', () => {
-      const request = new Request('http://localhost', {
-        headers: { 'fly-client-ip': '9.9.9.9', 'x-forwarded-for': '1.2.3.4' },
-      });
-      expect(getClientIP(request)).toBe('1.2.3.4');
+    afterEach(() => {
+      if (ORIGINAL_HOPS === undefined) delete process.env.TRUSTED_PROXY_HOPS;
+      else process.env.TRUSTED_PROXY_HOPS = ORIGINAL_HOPS;
     });
 
     it('returns unknown when only a forged fly-client-ip is present, never trusting it', () => {
@@ -91,6 +94,43 @@ describe('getClientIP (edge)', () => {
         headers: { 'fly-client-ip': '9.9.9.9' },
       });
       expect(getClientIP(request)).toBe('unknown');
+    });
+
+    // The Edge copy only feeds logs (security events, monitoring), never a
+    // gate, so without a declared proxy it reports the observed address rather
+    // than stripping it to `unknown` (orchestrator ruling, Phase 2b).
+    it('given no trusted-proxy configuration, reports the observed address for logging', () => {
+      expect(getClientIP(new Request('http://localhost', { headers: { 'x-forwarded-for': '1.2.3.4, 5.6.7.8' } }))).toBe('1.2.3.4');
+      expect(getClientIP(new Request('http://localhost', { headers: { 'x-real-ip': '10.0.0.1' } }))).toBe('10.0.0.1');
+    });
+
+    it('given a value that is not an IP literal, reports unknown rather than logging it', () => {
+      expect(getClientIP(new Request('http://localhost', { headers: { 'x-forwarded-for': '<script>' } }))).toBe('unknown');
+      process.env.TRUSTED_PROXY_HOPS = '1';
+      expect(getClientIP(new Request('http://localhost', { headers: { 'x-forwarded-for': '1.1.1.1, evil.example' } }))).toBe('unknown');
+    });
+
+    it('given a chain shorter than the declared hops, falls back to the observed address', () => {
+      process.env.TRUSTED_PROXY_HOPS = '2';
+      expect(getClientIP(new Request('http://localhost', { headers: { 'x-forwarded-for': '203.0.113.50' } }))).toBe('203.0.113.50');
+    });
+
+    it('given TRUSTED_PROXY_HOPS=1, takes the entry the proxy appended and ignores a forged fly-client-ip and prefix', () => {
+      process.env.TRUSTED_PROXY_HOPS = '1';
+      const request = new Request('http://localhost', {
+        headers: { 'fly-client-ip': '9.9.9.9', 'x-forwarded-for': '6.6.6.6, 203.0.113.50' },
+      });
+      expect(getClientIP(request)).toBe('203.0.113.50');
+    });
+
+    it('given TRUSTED_PROXY_HOPS=1 and no x-forwarded-for, falls back to x-real-ip', () => {
+      process.env.TRUSTED_PROXY_HOPS = '1';
+      expect(getClientIP(new Request('http://localhost', { headers: { 'x-real-ip': '10.0.0.1' } }))).toBe('10.0.0.1');
+    });
+
+    it('given TRUSTED_PROXY_HOPS=2, takes the second entry from the right', () => {
+      process.env.TRUSTED_PROXY_HOPS = '2';
+      expect(getClientIP(new Request('http://localhost', { headers: { 'x-forwarded-for': '6.6.6.6, 203.0.113.50, 10.0.0.2' } }))).toBe('203.0.113.50');
     });
   });
 });

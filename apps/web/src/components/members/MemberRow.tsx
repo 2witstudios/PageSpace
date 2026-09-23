@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import Link from 'next/link';
+import { AgentBadge } from '@/components/shared/AgentBadge';
 
 interface MemberRowProps {
   member: {
@@ -17,6 +18,8 @@ interface MemberRowProps {
       id: string;
       email: string;
       name?: string;
+      /** `agent` renders the AgentBadge: the name is self-chosen (Phase 2b). */
+      accountType?: 'human' | 'agent';
     };
     profile?: {
       username?: string;
@@ -112,6 +115,7 @@ export function MemberRow({ member, driveId, currentUserRole, onRemove }: Member
         <div>
           <div className="flex items-center space-x-2">
             <p className="font-medium">{displayName}</p>
+            <AgentBadge accountType={member.user.accountType} />
             {member.profile?.username && (
               <span className="text-sm text-gray-500 dark:text-gray-400">@{member.profile.username}</span>
             )}

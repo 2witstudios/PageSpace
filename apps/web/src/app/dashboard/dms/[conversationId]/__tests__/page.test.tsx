@@ -268,6 +268,38 @@ describe('InboxDMPage — attachments', () => {
     expect(body.attachmentMeta).toBeUndefined();
   });
 
+  it('given the other participant is an AI agent account, should mark the conversation heading and their messages (Phase 2b)', async () => {
+    const otherUser = (swrConversation as { conversation: { otherUser: Record<string, unknown> } }).conversation.otherUser;
+    otherUser.accountType = 'agent';
+    swrMessages = {
+      messages: [
+        {
+          id: 'msg-agent', conversationId: 'conv-1', senderId: 'user-other', content: 'hello from the agent',
+          isRead: false, readAt: null, isEdited: false, editedAt: null, createdAt: '2026-05-06T12:00:00.000Z', parentId: null, reactions: [],
+        },
+      ],
+    };
+    try {
+      await act(async () => {
+        render(<InboxDMPage />);
+      });
+
+      const badges = screen.getAllByLabelText('AI agent account');
+      expect(badges.length).toBeGreaterThanOrEqual(2);
+      expect(screen.getByRole('heading', { name: /Bob/ })).toContainElement(badges[0] ?? null);
+    } finally {
+      delete otherUser.accountType;
+    }
+  });
+
+  it('given a human other participant, should not mark anything', async () => {
+    swrMessages = { messages: [] };
+    await act(async () => {
+      render(<InboxDMPage />);
+    });
+    expect(screen.queryByLabelText('AI agent account')).not.toBeInTheDocument();
+  });
+
   it('renders the current user avatar for own DM messages', async () => {
     swrMessages = {
       messages: [

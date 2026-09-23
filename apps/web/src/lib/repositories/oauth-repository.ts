@@ -27,6 +27,8 @@ import { agentIdentities } from '@pagespace/db/schema/agent-identities';
 import { isAgentSecretShape } from '@pagespace/lib/auth/agent/secret';
 import { decideAgentSignin, type AgentSigninDecision } from '@pagespace/lib/auth/agent/signin-decision';
 import { sessionRepository } from './session-repository';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { redactDbError } from '@pagespace/lib/logging/db-error-redaction';
 
 /**
  * First-party clients are defined in code (the static registry), not the DB —
@@ -986,6 +988,28 @@ export interface AccessTokenIssuance {
   clientId: string;
   /** The token principal's `users.accountType`. */
   accountType: 'human' | 'agent';
+}
+
+/**
+ * The token family a presented refresh token belongs to — the key of the
+ * `pagespace-agent` refresh grant's rate-limit bucket (a refresh token rotates
+ * on every use; its family does not). One indexed lookup by hash. `null` for an
+ * unknown token, and on any store error (logged redacted: the query binds the
+ * token's hash), so the caller falls back to the per-credential bucket and the
+ * grant itself decides the outcome.
+ */
+export async function findRefreshTokenFamilyId(refreshToken: string): Promise<string | null> {
+  try {
+    const [row] = await db
+      .select({ familyId: oauthRefreshTokens.familyId })
+      .from(oauthRefreshTokens)
+      .where(eq(oauthRefreshTokens.tokenHash, hashToken(refreshToken)))
+      .limit(1);
+    return row?.familyId ?? null;
+  } catch (error) {
+    loggers.auth.warn('Refresh token family lookup failed', redactDbError(error));
+    return null;
+  }
 }
 
 /**

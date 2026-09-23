@@ -78,6 +78,8 @@ export interface ConversationDetailRow extends Record<string, unknown> {
   user_name: string | null;
   user_email: string | null;
   user_image: string | null;
+  /** `users.accountType` — `agent` marks a self-named AI agent account (Phase 2b). */
+  user_account_type: 'human' | 'agent' | null;
   user_username: string | null;
   user_display_name: string | null;
   user_avatar_url: string | null;

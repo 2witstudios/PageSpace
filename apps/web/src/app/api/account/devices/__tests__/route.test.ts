@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi, beforeAll, afterAll } from 'vitest';
 import { NextResponse } from 'next/server';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
@@ -138,6 +138,18 @@ const mockUpdateChain = () => {
 // ============================================================================
 // GET /api/account/devices
 // ============================================================================
+
+// Modelled behind ONE trusted reverse proxy: off Fly, x-forwarded-for and
+// x-real-ip are default-deny unless TRUSTED_PROXY_HOPS declares the proxies
+// in front (Agent Signup Phase 2b, security/client-ip.ts).
+const ORIGINAL_TRUSTED_PROXY_HOPS = process.env.TRUSTED_PROXY_HOPS;
+beforeAll(() => {
+  process.env.TRUSTED_PROXY_HOPS = '1';
+});
+afterAll(() => {
+  if (ORIGINAL_TRUSTED_PROXY_HOPS === undefined) delete process.env.TRUSTED_PROXY_HOPS;
+  else process.env.TRUSTED_PROXY_HOPS = ORIGINAL_TRUSTED_PROXY_HOPS;
+});
 
 describe('GET /api/account/devices', () => {
   beforeEach(() => {
@@ -449,7 +461,7 @@ describe('DELETE /api/account/devices', () => {
       expect(createArgs[4]).toEqual({
         deviceName: 'My MacBook',
         userAgent: 'TestAgent/1.0',
-        ipAddress: '10.0.0.1',
+        ipAddress: '10.0.0.2',
       });
     });
 

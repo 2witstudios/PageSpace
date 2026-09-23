@@ -9,6 +9,8 @@ export interface MemberInfo {
   userId?: string;
   name?: string | null;
   displayName?: string | null;
+  /** From list_drive_members / list_collaborators: `agent` = self-named AI agent account (Phase 2b). */
+  accountType?: 'human' | 'agent';
   email?: string | null;
   role?: string | null;
   avatarUrl?: string | null;
@@ -78,7 +80,8 @@ export const MemberListRenderer: React.FC<MemberListRendererProps> = memo(functi
                 <Avatar className="h-8 w-8 shrink-0">
                   <AvatarImage src={m.avatarUrl || undefined} alt={label} />
                   <AvatarFallback className="text-xs">
-                    {initials(m.name ?? m.displayName, m.email)}
+                    {/* An agent's name arrives labelled for the model; its initials would read "[A". */}
+                    {m.accountType === 'agent' ? 'AI' : initials(m.name ?? m.displayName, m.email)}
                   </AvatarFallback>
                 </Avatar>
 

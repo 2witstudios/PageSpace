@@ -4,8 +4,10 @@
  * agent fetches this before it has any identity at all.
  *
  * The challenge is single-use, expires after POW_TTL_MS, and is stored only as
- * a hash with the caller's IP (threat model T2). Registration consumes it
- * atomically. PoW shapes rate; the per-IP AGENT_CHALLENGE limit bounds how many
+ * a hash (threat model T2). Registration consumes it atomically. It is NOT
+ * bound to the caller's IP: an honest agent's egress can change between this
+ * GET and the POST (dual-stack, CGNAT, multi-egress NAT), and the per-IP
+ * limits already act where an account is created — so no IP is stored. PoW shapes rate; the per-IP AGENT_CHALLENGE limit bounds how many
  * rows one caller can make us write.
  */
 import { getClientIP } from '@/lib/auth';
@@ -13,7 +15,8 @@ import { agentNoStoreJson, agentNotFound, agentRateLimited, isAgentDoorOpen } fr
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 import { POW_DIFFICULTY_BITS, POW_TTL_MS, isPowDifficultyInRange } from '@pagespace/lib/auth/agent/pow';
-import { issueAgentSignupChallenge } from '@pagespace/lib/services/agent-identities';
+import { AgentIdentityStoreError, issueAgentSignupChallenge } from '@pagespace/lib/services/agent-identities';
+import { agentRateLimitAddress } from '@pagespace/lib/auth/agent/token-rate-limit-keys';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
 export const dynamic = 'force-dynamic';
@@ -26,7 +29,7 @@ export async function GET(request: Request) {
   }
 
   const ip = getClientIP(request);
-  const limit = await checkDistributedRateLimit(`agent-challenge:ip:${ip}`, DISTRIBUTED_RATE_LIMITS.AGENT_CHALLENGE);
+  const limit = await checkDistributedRateLimit(`agent-challenge:ip:${agentRateLimitAddress(ip)}`, DISTRIBUTED_RATE_LIMITS.AGENT_CHALLENGE);
   if (!limit.allowed) {
     auditRequest(request, { eventType: 'security.rate.limited', resourceType: 'agent_signup_challenge', details: { agentAuthEvent: 'challenge_rate_limited' }, riskScore: 0.4 });
     return agentRateLimited(limit.retryAfter);
@@ -41,7 +44,15 @@ export async function GET(request: Request) {
     return agentNoStoreJson({ error: 'temporarily_unavailable' }, 503);
   }
 
-  const issued = await issueAgentSignupChallenge({ difficultyBits, ttlMs: POW_TTL_MS, issuedToIp: ip, now: new Date() });
+  let issued: Awaited<ReturnType<typeof issueAgentSignupChallenge>>;
+  try {
+    issued = await issueAgentSignupChallenge({ difficultyBits, ttlMs: POW_TTL_MS, now: new Date() });
+  } catch (error) {
+    // The store already logged a redacted form; answer like the identity route.
+    if (!(error instanceof AgentIdentityStoreError)) throw error;
+    auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'agent_signup_challenge', details: { reason: 'store_failed', code: error.redacted.code }, riskScore: 0.1 });
+    return agentNoStoreJson({ error: 'temporarily_unavailable' }, 503);
+  }
 
   auditRequest(request, { eventType: 'auth.token.created', resourceType: 'agent_signup_challenge', details: { agentAuthEvent: 'challenge_issued', difficultyBits } });
 

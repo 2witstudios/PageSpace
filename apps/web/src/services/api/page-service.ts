@@ -137,6 +137,8 @@ export interface MessageWithUser {
     name: string | null;
     email: string;
     image: string | null;
+    /** `agent` marks a self-named AI agent account wherever the name is shown (Phase 2b). */
+    accountType?: 'human' | 'agent';
   } | null;
 }
 

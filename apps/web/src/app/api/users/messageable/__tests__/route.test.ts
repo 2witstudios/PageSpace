@@ -189,6 +189,20 @@ describe('GET /api/users/messageable', () => {
     });
   });
 
+  it('given an AI agent account among the co-members, should return accountType agent so the new-DM picker can mark it (Phase 2b)', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(fromWhere([{ id: 'drive_1' }]))
+      .mockReturnValueOnce(fromWhere([]))
+      .mockReturnValueOnce(fromWhere([]))
+      .mockReturnValueOnce(fromWhere([{ userId: 'agent_1', driveId: 'drive_1' }]))
+      .mockReturnValueOnce(fromWhere([]))
+      .mockReturnValueOnce(fromLeftJoinWhere([{ ...userRow('agent_1', 'PageSpace Support'), accountType: 'agent' }]));
+
+    const body = await (await GET(new Request('http://localhost/api/users/messageable'))).json();
+
+    expect(body.users[0]).toMatchObject({ id: 'agent_1', displayName: 'PageSpace Support', accountType: 'agent' });
+  });
+
   it('prefers source=connection when user is both a connection and a drive co-member', async () => {
     vi.mocked(db.select)
       .mockReturnValueOnce(fromWhere([{ id: 'drive_1' }])) // owned drives

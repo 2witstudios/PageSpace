@@ -6,6 +6,7 @@ import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/l
 import { sessionRepository, type McpToken } from '@/lib/repositories/session-repository';
 import { z } from 'zod/v4';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { redactDbError } from '@pagespace/lib/logging/db-error-redaction';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getActorInfo, logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { generateToken } from '@pagespace/lib/auth/token-utils';
@@ -184,7 +185,9 @@ export async function POST(req: NextRequest) {
       driveScopes: driveScopeNames,
     });
   } catch (error) {
-    loggers.auth.error('Error creating MCP token:', error as Error);
+    // Never the error itself: a drizzle query error's message carries the bound
+    // params, and this insert binds the new key's tokenHash.
+    loggers.auth.error('Error creating MCP token', redactDbError(error));
     if (error instanceof z.ZodError) {
       refuseAgent('invalid_request');
       return NextResponse.json({ error: error.issues }, { status: 400 });

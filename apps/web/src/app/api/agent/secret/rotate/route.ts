@@ -9,14 +9,22 @@
  * 404. The old secret stops matching immediately; `revokeExistingTokens` also
  * bumps `users.tokenVersion` so every live session and token dies. The new
  * secret is returned once, never logged or audited (threat model §3).
+ *
+ * AGENT_SECRET_ROTATE limits rotation per agent AND per actor, checked only
+ * once the caller is proven to be the agent or its owner — so a stranger naming
+ * an agentId cannot drain anyone's bucket, and a stolen agent token looping
+ * rotation (each `revokeExistingTokens` call mass-revokes the agent's keys)
+ * never exhausts the owner's recovery rotation.
  */
 import { z } from 'zod/v4';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { agentNoStoreJson, agentNotFound } from '@/lib/agent-auth/door';
+import { agentNoStoreJson, agentNotFound, agentRateLimited } from '@/lib/agent-auth/door';
 import { agentSecretActor } from '@/lib/agent-auth/secret-authority';
 import { resolveCallerCredential } from '@/lib/agent-auth/caller-credential-resolver';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { getAgentIdentitySummary, rotateAgentSecret } from '@pagespace/lib/services/agent-identities';
+import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
+import { agentSecretRotateRateLimitKey } from '@pagespace/lib/auth/agent/token-rate-limit-keys';
+import { AgentIdentityStoreError, getAgentIdentitySummary, rotateAgentSecret } from '@pagespace/lib/services/agent-identities';
 
 const AUTH_OPTIONS = { allow: ['session', 'oauth'] as const, requireCSRF: true };
 
@@ -26,6 +34,19 @@ const rotateRequestSchema = z.object({
 });
 
 export async function POST(request: Request) {
+  try {
+    return await rotate(request);
+  } catch (error) {
+    // Any identity-store failure — the ownership lookup as much as the rotation
+    // itself — is the door's constant 503; the store has already logged a
+    // redacted form (Phase 2b).
+    if (!(error instanceof AgentIdentityStoreError)) throw error;
+    auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'agent_identity', details: { reason: 'store_failed', agentAuthEvent: 'secret_rotate_refused', operation: error.operation, code: error.redacted.code }, riskScore: 0.1 });
+    return agentNoStoreJson({ error: 'temporarily_unavailable' }, 503);
+  }
+}
+
+async function rotate(request: Request) {
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
   if (isAuthError(auth)) {
     auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'agent_identity', details: { reason: 'auth_failed', agentAuthEvent: 'secret_rotate_refused' }, riskScore: 0.5 });
@@ -56,6 +77,12 @@ export async function POST(request: Request) {
     return agentNotFound();
   };
   if (actor === null) return refuse('not_agent_or_not_owner');
+
+  const limit = await checkDistributedRateLimit(agentSecretRotateRateLimitKey({ agentUserId, actor }), DISTRIBUTED_RATE_LIMITS.AGENT_SECRET_ROTATE);
+  if (!limit.allowed) {
+    auditRequest(request, { eventType: 'security.rate.limited', userId: auth.userId, resourceType: 'agent_identity', resourceId: agentUserId, details: { agentAuthEvent: 'secret_rotate_rate_limited', actor }, riskScore: 0.6 });
+    return agentRateLimited(limit.retryAfter);
+  }
 
   const rotated = await rotateAgentSecret({ userId: agentUserId, revokeTokens });
   if (!rotated.ok) return refuse('agent_revoked');

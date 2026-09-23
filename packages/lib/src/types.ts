@@ -12,6 +12,8 @@ export interface PresenceViewer {
   socketId: string;
   name: string;
   avatarUrl: string | null;
+  /** `agent` marks a self-named AI agent account among the viewers (Agent Signup Phase 2b). */
+  accountType?: 'human' | 'agent';
 }
 
 export interface PresencePageViewersPayload {

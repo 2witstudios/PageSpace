@@ -163,6 +163,8 @@ export interface AuthSocket extends Socket {
       id: string;
       name: string;
       avatarUrl: string | null;
+      /** `agent` marks a self-named AI agent account in presence (Agent Signup Phase 2b). */
+      accountType?: 'human' | 'agent';
     };
   };
 }

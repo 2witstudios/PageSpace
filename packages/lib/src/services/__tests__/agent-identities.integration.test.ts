@@ -31,9 +31,23 @@ vi.mock('../../onboarding/home-drive', async (importOriginal) => {
     },
   };
 });
+// Real minting by default; a test pins the next secret to force a unique
+// violation on `secretHash` (Phase 2b: a DB failure must log no hash).
+const mint = vi.hoisted(() => ({ next: null as null | { secret: string; hash: string; prefix: string } }));
+vi.mock('../../auth/agent/secret', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../auth/agent/secret')>();
+  return {
+    ...actual,
+    mintAgentSecret: () => {
+      const pinned = mint.next;
+      mint.next = null;
+      return pinned ?? actual.mintAgentSecret();
+    },
+  };
+});
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
-import { and, eq, inArray, lt } from '@pagespace/db/operators';
+import { and, eq, inArray, lt, sql } from '@pagespace/db/operators';
 import { users, mcpTokens } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { agentIdentities, agentSignupChallenges } from '@pagespace/db/schema/agent-identities';
@@ -41,7 +55,9 @@ import { hashToken } from '../../auth/token-utils';
 import { isAgentSecretShape } from '../../auth/agent/secret';
 import { isAgentReservedEmail } from '../../auth/agent/reserved-email';
 import { isEmailVerified } from '../../auth/verification-utils';
+import { loggers } from '../../logging/logger-config';
 import {
+  AgentIdentityStoreError,
   createAgentAccount,
   verifyAgentSecret,
   rotateAgentSecret,
@@ -203,6 +219,151 @@ describe('createAgentAccount', () => {
   });
 });
 
+describe('createAgentAccount — the deployment-wide signup budget (Phase 2b)', () => {
+  // Each test runs on its own far-future clock, later than every earlier test's
+  // (the window has no upper bound), so it holds only the identities that
+  // test created — other suites' signups (real clock) are far in the past.
+  const HOUR = 60 * 60 * 1000;
+
+  // The window is (now - 1h, now + 5 min]: a row counts only if it lies within
+  // ~1h of a test's clock. Each run picks a random day in a ~270-year span
+  // after 2090 and steps 100 days per test, so a concurrent or aborted run's
+  // rows practically never share a window with ours — no shared cleanup that
+  // could delete another run's rows.
+  let clockBase = Date.UTC(2090, 0, 1) + Math.floor(Math.random() * 100_000) * 24 * HOUR;
+  const futureClock = () => {
+    clockBase += 100 * 24 * HOUR;
+    return new Date(clockBase);
+  };
+
+  async function budgetedSignUp(now: Date, budget: number, preIssuedChallengeId?: string) {
+    const challengeId = preIssuedChallengeId ?? await issueChallenge({ expiresAt: new Date(now.getTime() + 10 * HOUR) });
+    const result = await createAgentAccount({
+      name: 'Budget Agent', source: null, tosAcceptedAt: now, createdByIp: null, challengeId, now, budget, budgetWindowMs: HOUR,
+    });
+    if (result.ok) createdUserIds.push(result.data.userId);
+    return { result, challengeId };
+  }
+
+  it('given the budget already spent in the rolling window, should refuse with a retry hint, consume no challenge and create no user', async () => {
+    const now = futureClock();
+    expect((await budgetedSignUp(now, 2)).result.ok).toBe(true);
+    expect((await budgetedSignUp(new Date(now.getTime() + 10 * 60 * 1000), 2)).result.ok).toBe(true);
+
+    const usersBefore = createdUserIds.length;
+    const refused = await budgetedSignUp(new Date(now.getTime() + 20 * 60 * 1000), 2);
+
+    expect(refused.result).toEqual({ ok: false, error: 'signup_budget_exhausted', retryAfterSeconds: 40 * 60 });
+    expect(createdUserIds.length).toBe(usersBefore);
+    const [challenge] = await db.select({ consumedAt: agentSignupChallenges.consumedAt }).from(agentSignupChallenges)
+      .where(eq(agentSignupChallenges.id, refused.challengeId));
+    expect(challenge?.consumedAt).toBeNull();
+  });
+
+  it('given a row stamped well in the future (clock skew, a restored row), should not let it consume budget', async () => {
+    const now = futureClock();
+    expect((await budgetedSignUp(new Date(now.getTime() + 2 * HOUR), 5)).result.ok).toBe(true);
+
+    expect((await budgetedSignUp(now, 1)).result.ok).toBe(true);
+  });
+
+  it('given the oldest signup has aged out of the window, should admit the next one', async () => {
+    const now = futureClock();
+    expect((await budgetedSignUp(now, 1)).result.ok).toBe(true);
+    expect((await budgetedSignUp(new Date(now.getTime() + 30 * 60 * 1000), 1)).result.ok).toBe(false);
+
+    expect((await budgetedSignUp(new Date(now.getTime() + HOUR + 1000), 1)).result.ok).toBe(true);
+  });
+
+  it('given concurrent signups racing for the last unit of budget, should admit exactly one (the check and insert are serialised)', async () => {
+    const now = futureClock();
+    const challengeIds = await Promise.all(Array.from({ length: 4 }, () => issueChallenge({ expiresAt: new Date(now.getTime() + 10 * HOUR) })));
+
+    // Hold the budget lock while all four start, so they genuinely overlap: a
+    // signup that does not take the lock would count zero and commit meanwhile.
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => { release = resolve; });
+    let acquired!: () => void;
+    const holding = new Promise<void>((resolve) => { acquired = resolve; });
+    const holder = db.transaction(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext('agent_signup_budget'))`);
+      acquired();
+      await released;
+    });
+    await holding;
+    // Distinct, DESCENDING clocks: each racer took its `now` before the lock,
+    // and whoever wins the lock may carry a later stamp than those queued
+    // behind it. A window bounded above at `now` would miss that row.
+    const racing = Promise.all(challengeIds.map((id, i) => budgetedSignUp(new Date(now.getTime() + (challengeIds.length - i) * 1000), 1, id)));
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    release();
+    await holder;
+    const results = await racing;
+
+    expect(results.filter((r) => r.result.ok)).toHaveLength(1);
+    expect(results.filter((r) => !r.result.ok).map((r) => r.result.ok ? null : r.result.error)).toEqual(
+      Array.from({ length: 3 }, () => 'signup_budget_exhausted'),
+    );
+  }, 15_000);
+});
+
+describe('createAgentAccount — a store failure logs no credential hash (Phase 2b)', () => {
+  it('given a unique violation on secretHash, should throw a constant-message store error and log only the pg code and constraint', async () => {
+    const first = await signUp(await issueChallenge());
+    if (!first.ok) throw new Error('signup failed');
+    const [identity] = await db.select().from(agentIdentities).where(eq(agentIdentities.userId, first.data.userId));
+    if (!identity) throw new Error('identity row missing');
+    const secretHash = identity.secretHash;
+
+    const secondChallenge = await issueChallenge();
+    mint.next = { secret: first.data.secret, hash: secretHash, prefix: identity.secretPrefix };
+    const logged = vi.spyOn(loggers.auth, 'error');
+    try {
+      const failure = await signUp(secondChallenge).then(() => null, (error: unknown) => error);
+
+      expect(failure).toBeInstanceOf(AgentIdentityStoreError);
+      const storeError = failure as AgentIdentityStoreError;
+      expect(storeError.redacted).toMatchObject({ code: '23505', constraint: expect.stringContaining('secretHash') });
+      expect((storeError as { cause?: unknown }).cause).toBeUndefined();
+      expect(`${storeError.message}\n${storeError.stack}\n${JSON.stringify(storeError)}`).not.toContain(secretHash);
+
+      expect(logged).toHaveBeenCalled();
+      const logText = JSON.stringify(logged.mock.calls, (_key, value: unknown) =>
+        value instanceof Error ? { message: value.message, stack: value.stack, cause: String((value as { cause?: unknown }).cause) } : value);
+      expect(logText).not.toContain(secretHash);
+      expect(logText).not.toContain('Failed query');
+      expect(logText).toContain('23505');
+    } finally {
+      logged.mockRestore();
+    }
+
+    // The failed transaction consumed nothing.
+    const [challenge] = await db.select({ consumedAt: agentSignupChallenges.consumedAt }).from(agentSignupChallenges)
+      .where(eq(agentSignupChallenges.id, secondChallenge));
+    expect(challenge?.consumedAt).toBeNull();
+  });
+
+  it('given a unique violation on the rotated secretHash, should throw the store error and log no hash', async () => {
+    const holder = await signUp(await issueChallenge());
+    const rotating = await signUp(await issueChallenge());
+    if (!holder.ok || !rotating.ok) throw new Error('signup failed');
+    const [identity] = await db.select().from(agentIdentities).where(eq(agentIdentities.userId, holder.data.userId));
+    if (!identity) throw new Error('identity row missing');
+
+    mint.next = { secret: holder.data.secret, hash: identity.secretHash, prefix: identity.secretPrefix };
+    const logged = vi.spyOn(loggers.auth, 'error');
+    try {
+      const failure = await rotateAgentSecret({ userId: rotating.data.userId, revokeTokens: false }).then(() => null, (error: unknown) => error);
+
+      expect(failure).toBeInstanceOf(AgentIdentityStoreError);
+      expect(JSON.stringify(logged.mock.calls)).not.toContain(identity.secretHash);
+      expect(`${(failure as Error).message}${(failure as Error).stack}`).not.toContain(identity.secretHash);
+    } finally {
+      logged.mockRestore();
+    }
+  });
+});
+
 describe('verifyAgentSecret', () => {
   it('given the secret returned at signup, should be ok for that user and stamp lastAuthAt', async () => {
     const result = await signUp(await issueChallenge());
@@ -345,9 +506,9 @@ describe('getAgentIdentitySummary', () => {
 });
 
 describe('issueAgentSignupChallenge / findAgentSignupChallenge', () => {
-  it('given an issued challenge, should store only its hash with the IP and difficulty, and find it by the plaintext', async () => {
+  it('given an issued challenge, should store only its hash and difficulty (no caller IP), and find it by the plaintext', async () => {
     const now = new Date();
-    const issued = await issueAgentSignupChallenge({ difficultyBits: 12, ttlMs: 5 * 60_000, issuedToIp: '198.51.100.20', now });
+    const issued = await issueAgentSignupChallenge({ difficultyBits: 12, ttlMs: 5 * 60_000, now });
     const found = await findAgentSignupChallenge({ challenge: issued.challenge, now });
     expect(found).toMatchObject({ found: true, expired: false, consumed: false, difficultyBits: 12 });
     if (!found.found) return;
@@ -355,13 +516,13 @@ describe('issueAgentSignupChallenge / findAgentSignupChallenge', () => {
 
     const [row] = await db.select().from(agentSignupChallenges).where(eq(agentSignupChallenges.id, found.id));
     expect(row?.challengeHash).toBe(hashToken(issued.challenge));
-    expect(row?.issuedToIp).toBe('198.51.100.20');
+    expect(Object.keys(row ?? {}).sort()).toEqual(['challengeHash', 'consumedAt', 'createdAt', 'difficultyBits', 'expiresAt', 'id']);
     expect(JSON.stringify(row)).not.toContain(issued.challenge);
   });
 
   it('given a challenge at its expiry instant, should report it expired (the same boundary createAgentAccount consumes against)', async () => {
     const now = new Date();
-    const issued = await issueAgentSignupChallenge({ difficultyBits: 12, ttlMs: 60_000, issuedToIp: null, now });
+    const issued = await issueAgentSignupChallenge({ difficultyBits: 12, ttlMs: 60_000, now });
     const found = await findAgentSignupChallenge({ challenge: issued.challenge, now: issued.expiresAt });
     if (found.found) createdChallengeIds.push(found.id);
     expect(found).toMatchObject({ found: true, expired: true });
@@ -375,7 +536,7 @@ describe('issueAgentSignupChallenge / findAgentSignupChallenge', () => {
     const expiredId = await issueChallenge({ expiresAt: new Date(Date.now() - 60_000) });
     const liveId = await issueChallenge();
 
-    await issueAgentSignupChallenge({ difficultyBits: 12, ttlMs: 5 * 60_000, issuedToIp: null, now: new Date() })
+    await issueAgentSignupChallenge({ difficultyBits: 12, ttlMs: 5 * 60_000, now: new Date() })
       .then(async (issued) => {
         const found = await findAgentSignupChallenge({ challenge: issued.challenge, now: new Date() });
         if (found.found) createdChallengeIds.push(found.id);
@@ -406,7 +567,7 @@ describe('issueAgentSignupChallenge / findAgentSignupChallenge', () => {
     await db.transaction(async (tx) => {
       await tx.select({ id: agentSignupChallenges.id }).from(agentSignupChallenges)
         .where(inArray(agentSignupChallenges.id, lockedIds)).for('update');
-      pending = issueAgentSignupChallenge({ difficultyBits: 12, ttlMs: 5 * 60_000, issuedToIp: null, now: new Date() })
+      pending = issueAgentSignupChallenge({ difficultyBits: 12, ttlMs: 5 * 60_000, now: new Date() })
         .then(async (issued) => {
           const found = await findAgentSignupChallenge({ challenge: issued.challenge, now: new Date() });
           if (found.found) createdChallengeIds.push(found.id);

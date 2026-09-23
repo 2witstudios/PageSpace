@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
 
 // Hoisted mocks — shared state accessible from vi.mock factories
 const { mockLoggers, mockSecurityAudit } = vi.hoisted(() => ({
@@ -26,6 +26,18 @@ vi.mock('@pagespace/db/schema/security-audit', () => ({
 }));
 
 import { audit, auditRequest } from '../audit-log';
+
+// Modelled behind ONE trusted reverse proxy: off Fly, x-forwarded-for and
+// x-real-ip are default-deny unless TRUSTED_PROXY_HOPS declares the proxies
+// in front (Agent Signup Phase 2b, security/client-ip.ts).
+const ORIGINAL_TRUSTED_PROXY_HOPS = process.env.TRUSTED_PROXY_HOPS;
+beforeAll(() => {
+  process.env.TRUSTED_PROXY_HOPS = '1';
+});
+afterAll(() => {
+  if (ORIGINAL_TRUSTED_PROXY_HOPS === undefined) delete process.env.TRUSTED_PROXY_HOPS;
+  else process.env.TRUSTED_PROXY_HOPS = ORIGINAL_TRUSTED_PROXY_HOPS;
+});
 
 describe('audit()', () => {
   beforeEach(() => {
@@ -147,7 +159,7 @@ describe('auditRequest()', () => {
     mockSecurityAudit.logEvent.mockResolvedValue(undefined);
   });
 
-  it('given a Request, should extract ipAddress from x-forwarded-for header', () => {
+  it('given a Request, should extract ipAddress as the entry the trusted proxy appended to x-forwarded-for', () => {
     const req = new Request('http://localhost/api/test', {
       headers: {
         'x-forwarded-for': '10.0.0.1, 10.0.0.2',
@@ -164,7 +176,7 @@ describe('auditRequest()', () => {
 
     expect(mockSecurityAudit.logEvent).toHaveBeenCalledWith(
       expect.objectContaining({
-        ipAddress: '10.0.0.1',
+        ipAddress: '10.0.0.2',
       })
     );
   });

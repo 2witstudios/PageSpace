@@ -10,12 +10,15 @@ import { Trash2, Shield, Users } from 'lucide-react';
 import { toast } from 'sonner';
 import { post, del, put, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import type { RoleGrant } from '@/services/api';
+import { AgentBadge } from '@/components/shared/AgentBadge';
 
 type User = {
   id: string;
   name: string | null;
   email: string | null;
   image: string | null;
+  /** `agent` renders the AgentBadge — the name is self-chosen (Phase 2b). */
+  accountType?: 'human' | 'agent';
 };
 
 type Permission = {
@@ -234,7 +237,7 @@ export function PermissionsList({ pageId: propPageId }: { pageId?: string | null
             </AvatarFallback>
           </Avatar>
           <div>
-            <p className="text-sm font-medium">{owner.name || owner.email}</p>
+            <p className="text-sm font-medium flex items-center gap-2">{owner.name || owner.email}<AgentBadge accountType={owner.accountType} /></p>
             <p className="text-xs text-muted-foreground">Owner</p>
           </div>
         </div>
@@ -340,8 +343,9 @@ export function PermissionsList({ pageId: propPageId }: { pageId?: string | null
                   </AvatarFallback>
                 </Avatar>
                 <div>
-                  <p className="text-sm font-medium">
+                  <p className="text-sm font-medium flex items-center gap-2">
                     {permission.user?.name || permission.user?.email || 'Unknown User'}
+                    <AgentBadge accountType={permission.user?.accountType} />
                   </p>
                   <p className="text-xs text-muted-foreground">
                     {permission.user?.email}

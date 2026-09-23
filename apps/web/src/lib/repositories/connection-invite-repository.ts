@@ -16,6 +16,7 @@ import { decryptField } from '@pagespace/lib/encryption/field-crypto'
 import { users } from '@pagespace/db/schema/auth'
 import { connections } from '@pagespace/db/schema/social';
 import { pendingConnectionInvites } from '@pagespace/db/schema/pending-connection-invites';
+import { withAgentMarker } from '@pagespace/lib/auth/agent/display-name';
 
 // Returns [user1Id, user2Id] in sorted order so the
 // `connections_user_pair_key` unique constraint behaves consistently
@@ -29,6 +30,8 @@ export const connectionInviteRepository = {
     email: string;
     invitedBy: string;
     inviterName: string;
+    /** `agent` = the inviter is a self-named AI agent account (Phase 2b). */
+    inviterAccountType: 'human' | 'agent';
     requestMessage: string | null;
     expiresAt: Date;
     consumedAt: Date | null;
@@ -39,6 +42,7 @@ export const connectionInviteRepository = {
         email: pendingConnectionInvites.email,
         invitedBy: pendingConnectionInvites.invitedBy,
         inviterName: users.name,
+        inviterAccountType: users.accountType,
         requestMessage: pendingConnectionInvites.requestMessage,
         expiresAt: pendingConnectionInvites.expiresAt,
         consumedAt: pendingConnectionInvites.consumedAt,
@@ -248,11 +252,18 @@ export const connectionInviteRepository = {
     return { id: row.id };
   },
 
+  /**
+   * The inviter as named in invite emails and notifications. Plain text cannot
+   * carry a badge, so an AI agent account's self-chosen name carries the
+   * marker in the text itself (Agent Signup Phase 2b).
+   */
   async findInviterDisplay(userId: string): Promise<{ name: string; email: string } | null> {
     const user = await db.query.users.findFirst({
       where: eq(users.id, userId),
-      columns: { name: true, email: true },
+      columns: { name: true, email: true, accountType: true },
     });
-    return user ? decryptUserRow({ name: user.name, email: user.email }) : null;
+    if (!user) return null;
+    const decrypted = await decryptUserRow({ name: user.name, email: user.email });
+    return { name: withAgentMarker(decrypted.name, user.accountType), email: decrypted.email };
   },
 };

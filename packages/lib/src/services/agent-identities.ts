@@ -15,7 +15,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, eq, gt, inArray, isNull, lt, sql } from '@pagespace/db/operators';
+import { and, eq, gt, inArray, isNull, lt, lte, sql } from '@pagespace/db/operators';
 import { users, mcpTokens } from '@pagespace/db/schema/auth';
 import { agentIdentities, agentSignupChallenges } from '@pagespace/db/schema/agent-identities';
 import { createId } from '@paralleldrive/cuid2';
@@ -24,10 +24,48 @@ import { generateToken, hashToken } from '../auth/token-utils';
 import { mintAgentSecret, isAgentSecretShape } from '../auth/agent/secret';
 import { agentSyntheticEmail } from '../auth/agent/reserved-email';
 import { decideAgentSignin, type AgentSigninDecision } from '../auth/agent/signin-decision';
+import {
+  AGENT_SIGNUP_BUDGET_CLOCK_SKEW_MS,
+  AGENT_SIGNUP_BUDGET_WINDOW_MS,
+  AGENT_SIGNUP_GLOBAL_BUDGET,
+  decideAgentSignupBudget,
+} from '../auth/agent/signup-budget';
 import { provisionHomeDriveIfNeeded } from '../onboarding/home-drive';
 import { loggers } from '../logging/logger-config';
+import { redactDbError, type RedactedDbError } from '../logging/db-error-redaction';
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/**
+ * Thrown in place of any query error from this service. Every write here binds
+ * a credential hash (`secretHash`, `claimTokenHash`, `challengeHash`), and
+ * drizzle's `DrizzleQueryError` message is the query plus its bound params —
+ * so the original error must never be logged or rethrown to a route (Next
+ * logs an uncaught route error in full). This one's message is constant and
+ * it carries no `cause`; the redacted code and constraint are on the instance.
+ */
+export class AgentIdentityStoreError extends Error {
+  constructor(readonly operation: string, readonly redacted: RedactedDbError) {
+    super(`Agent identity store failed: ${operation}`);
+    this.name = 'AgentIdentityStoreError';
+  }
+}
+
+function storeFailure(operation: string, error: unknown): AgentIdentityStoreError {
+  const redacted = redactDbError(error);
+  loggers.auth.error('Agent identity store failed', { operation, ...redacted });
+  return new AgentIdentityStoreError(operation, redacted);
+}
+
+/** Runs one store operation; any query error leaves as an `AgentIdentityStoreError`. */
+async function guardStore<T>(operation: string, run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    if (error instanceof ChallengeUnavailable) throw error;
+    throw storeFailure(operation, error);
+  }
+}
 
 /** Prefix of the claim token an agent hands a human (auth.md "Fund"). Hash-only at rest. */
 export const AGENT_CLAIM_TOKEN_PREFIX = 'ps_claim';
@@ -52,14 +90,14 @@ const CHALLENGE_PRUNE_BATCH = 100;
  * Each issuance first deletes up to CHALLENGE_PRUNE_BATCH expired challenges,
  * claimed with FOR UPDATE SKIP LOCKED so concurrent issuances take disjoint
  * batches. Every row is written by an issuance and each issuance can delete
- * more than one, so expired rows (and the caller IPs on them) cannot
- * accumulate without a cron, even under a burst. An expired row is worthless: the lookup treats it exactly like an
+ * more than one, so expired rows cannot accumulate without a cron, even
+ * under a burst. No caller IP is stored: redemption is deliberately not bound
+ * to the issuing address (Phase 2b), so it would be PII with no purpose. An expired row is worthless: the lookup treats it exactly like an
  * unknown challenge. A prune failure never blocks issuing.
  */
 export async function issueAgentSignupChallenge(input: {
   difficultyBits: number;
   ttlMs: number;
-  issuedToIp: string | null;
   now: Date;
 }): Promise<IssuedAgentSignupChallenge> {
   try {
@@ -75,17 +113,16 @@ export async function issueAgentSignupChallenge(input: {
       .for('update', { skipLocked: true });
     await db.delete(agentSignupChallenges).where(inArray(agentSignupChallenges.id, expired));
   } catch (error) {
-    loggers.auth.warn('Failed to prune expired agent signup challenges', { error: (error as Error).message });
+    loggers.auth.warn('Failed to prune expired agent signup challenges', redactDbError(error));
   }
 
   const generated = generateToken(AGENT_POW_CHALLENGE_PREFIX);
   const expiresAt = new Date(input.now.getTime() + input.ttlMs);
-  await db.insert(agentSignupChallenges).values({
+  await guardStore('issue_challenge', () => db.insert(agentSignupChallenges).values({
     challengeHash: generated.hash,
     difficultyBits: input.difficultyBits,
-    issuedToIp: input.issuedToIp,
     expiresAt,
-  });
+  }));
   return { challenge: generated.token, expiresAt };
 }
 
@@ -105,7 +142,7 @@ export async function findAgentSignupChallenge(input: { challenge: string; now: 
   if (typeof input.challenge !== 'string' || input.challenge.length === 0 || input.challenge.length > 256) {
     return CHALLENGE_NOT_FOUND;
   }
-  const [row] = await db
+  const [row] = await guardStore('find_challenge', () => db
     .select({
       id: agentSignupChallenges.id,
       difficultyBits: agentSignupChallenges.difficultyBits,
@@ -114,7 +151,7 @@ export async function findAgentSignupChallenge(input: { challenge: string; now: 
     })
     .from(agentSignupChallenges)
     .where(eq(agentSignupChallenges.challengeHash, hashToken(input.challenge)))
-    .limit(1);
+    .limit(1));
   if (!row) return CHALLENGE_NOT_FOUND;
   return {
     found: true,
@@ -134,6 +171,10 @@ export interface CreateAgentAccountInput {
   createdByIp: string | null;
   challengeId: string;
   now: Date;
+  /** Deployment-wide budget override (tests); defaults to `AGENT_SIGNUP_GLOBAL_BUDGET`. */
+  budget?: number;
+  /** Rolling window override (tests); defaults to `AGENT_SIGNUP_BUDGET_WINDOW_MS`. */
+  budgetWindowMs?: number;
 }
 
 export type CreateAgentAccountResult =
@@ -149,16 +190,37 @@ export type CreateAgentAccountResult =
         claimToken: string;
       };
     }
-  | { ok: false; error: 'challenge_invalid' };
+  | { ok: false; error: 'challenge_invalid' }
+  | { ok: false; error: 'signup_budget_exhausted'; retryAfterSeconds: number };
 
 /** Rolls the transaction back when the challenge was not consumable. */
 class ChallengeUnavailable extends Error {}
 
+/** Rolls the transaction back when the deployment-wide signup budget is spent. */
+class SignupBudgetExhausted extends Error {
+  constructor(readonly retryAfterSeconds: number) {
+    super('agent signup budget exhausted');
+  }
+}
+
 /**
- * Create an agent: consume the challenge, insert the `users` row and the
- * identity row in ONE transaction, then provision the home drive. Two racing
- * submits of one challenge serialise on the challenge row: the loser's UPDATE
- * re-checks `consumedAt IS NULL` after the winner commits and matches nothing.
+ * Serialises every agent signup's budget check + insert, so N concurrent
+ * signups cannot all count the same N-1 and overshoot. Signups are rare and
+ * the lock is held for one transaction.
+ */
+const SIGNUP_BUDGET_LOCK = sql`select pg_advisory_xact_lock(hashtext('agent_signup_budget'))`;
+
+/**
+ * Create an agent: check the deployment-wide signup budget, consume the
+ * challenge, insert the `users` row and the identity row in ONE transaction,
+ * then provision the home drive. Two racing submits of one challenge serialise
+ * on the challenge row: the loser's UPDATE re-checks `consumedAt IS NULL` after
+ * the winner commits and matches nothing.
+ *
+ * The budget (`decideAgentSignupBudget`) lives here rather than in a route so
+ * that no door can skip it: it counts identities created in the rolling window
+ * under an advisory lock, and a refusal rolls back before the challenge is
+ * consumed.
  */
 export async function createAgentAccount(input: CreateAgentAccountInput): Promise<CreateAgentAccountResult> {
   const userId = createId();
@@ -168,6 +230,34 @@ export async function createAgentAccount(input: CreateAgentAccountInput): Promis
 
   try {
     await db.transaction(async (tx) => {
+      await tx.execute(SIGNUP_BUDGET_LOCK);
+      const windowMs = input.budgetWindowMs ?? AGENT_SIGNUP_BUDGET_WINDOW_MS;
+      const [recent] = await tx
+        .select({
+          count: sql<number>`count(*)::int`,
+          oldest: sql<Date | null>`min(${agentIdentities.createdAt})`.mapWith(agentIdentities.createdAt),
+        })
+        .from(agentIdentities)
+        // The upper bound is `now` PLUS a skew allowance, not `now`: callers
+        // take `now` before they wait on the lock, so a signup that won the
+        // lock with a slightly LATER now has already committed a row stamped
+        // after ours, and bounding at `now` would miss it and admit past the
+        // budget. It is bounded at all so that a row stamped far in the future
+        // (clock skew between machines, a restored row) cannot consume budget
+        // in every window forever.
+        .where(and(
+          gt(agentIdentities.createdAt, new Date(input.now.getTime() - windowMs)),
+          lte(agentIdentities.createdAt, new Date(input.now.getTime() + AGENT_SIGNUP_BUDGET_CLOCK_SKEW_MS)),
+        ));
+      const budget = decideAgentSignupBudget({
+        signupsInWindow: recent?.count ?? 0,
+        oldestInWindow: recent?.oldest ?? null,
+        budget: input.budget ?? AGENT_SIGNUP_GLOBAL_BUDGET,
+        windowMs,
+        now: input.now,
+      });
+      if (!budget.allowed) throw new SignupBudgetExhausted(budget.retryAfterSeconds);
+
       const consumed = await tx
         .update(agentSignupChallenges)
         .set({ consumedAt: input.now })
@@ -200,11 +290,18 @@ export async function createAgentAccount(input: CreateAgentAccountInput): Promis
         claimTokenPrefix: claim.tokenPrefix,
         source: input.source,
         createdByIp: input.createdByIp,
+        // Set from the caller's clock, not the column default: the budget
+        // window above compares against `input.now`, and a DB-side now() is
+        // rendered in the session time zone.
+        createdAt: input.now,
       });
     });
   } catch (error) {
     if (error instanceof ChallengeUnavailable) return { ok: false, error: 'challenge_invalid' };
-    throw error;
+    if (error instanceof SignupBudgetExhausted) {
+      return { ok: false, error: 'signup_budget_exhausted', retryAfterSeconds: error.retryAfterSeconds };
+    }
+    throw storeFailure('create_account', error);
   }
 
   // The account is committed, and the secret below exists nowhere else — a
@@ -239,7 +336,7 @@ export async function verifyAgentSecret(input: { secret: string; now: Date }): P
     return { decision: decideAgentSignin({ account: { found: false }, now: input.now }), userId: null };
   }
 
-  const [row] = await db
+  const [row] = await guardStore('verify_secret', () => db
     .select({
       userId: agentIdentities.userId,
       revokedAt: agentIdentities.revokedAt,
@@ -249,7 +346,7 @@ export async function verifyAgentSecret(input: { secret: string; now: Date }): P
     .from(agentIdentities)
     .innerJoin(users, eq(users.id, agentIdentities.userId))
     .where(eq(agentIdentities.secretHash, hashToken(input.secret)))
-    .limit(1);
+    .limit(1));
 
   if (!row) {
     return { decision: decideAgentSignin({ account: { found: false }, now: input.now }), userId: null };
@@ -261,7 +358,7 @@ export async function verifyAgentSecret(input: { secret: string; now: Date }): P
   });
 
   if (decision.status === 'ok') {
-    await db.update(agentIdentities).set({ lastAuthAt: input.now }).where(eq(agentIdentities.userId, row.userId));
+    await guardStore('stamp_last_auth', () => db.update(agentIdentities).set({ lastAuthAt: input.now }).where(eq(agentIdentities.userId, row.userId)));
   }
 
   return { decision, userId: row.userId };
@@ -301,7 +398,7 @@ async function killAgentCredentials(tx: Tx, userId: string, now: Date): Promise<
 export async function rotateAgentSecret(input: { userId: string; revokeTokens: boolean; now?: Date }): Promise<RotateAgentSecretResult> {
   const minted = mintAgentSecret();
 
-  return db.transaction(async (tx) => {
+  return guardStore('rotate_secret', () => db.transaction(async (tx) => {
     const [updated] = await tx
       .update(agentIdentities)
       .set({
@@ -321,7 +418,7 @@ export async function rotateAgentSecret(input: { userId: string; revokeTokens: b
       ok: true,
       data: { secret: minted.secret, secretPrefix: minted.prefix, secretVersion: updated.secretVersion },
     } as const;
-  });
+  }));
 }
 
 /**
@@ -332,7 +429,7 @@ export async function rotateAgentSecret(input: { userId: string; revokeTokens: b
  * no-op that reports `revoked: false`.
  */
 export async function revokeAgent(input: { userId: string; now: Date }): Promise<{ revoked: boolean }> {
-  return db.transaction(async (tx) => {
+  return guardStore('revoke_agent', () => db.transaction(async (tx) => {
     const updated = await tx
       .update(agentIdentities)
       .set({ revokedAt: input.now })
@@ -342,7 +439,7 @@ export async function revokeAgent(input: { userId: string; now: Date }): Promise
 
     await killAgentCredentials(tx, input.userId, input.now);
     return { revoked: true };
-  });
+  }));
 }
 
 export interface AgentIdentitySummary {
@@ -353,7 +450,7 @@ export interface AgentIdentitySummary {
 
 /** The ownership facts `/api/auth/me` exposes for an agent; `null` for anyone without an identity row. */
 export async function getAgentIdentitySummary(userId: string): Promise<AgentIdentitySummary | null> {
-  const [row] = await db
+  const [row] = await guardStore('get_identity_summary', () => db
     .select({
       ownerUserId: agentIdentities.ownerUserId,
       claimedAt: agentIdentities.claimedAt,
@@ -361,6 +458,6 @@ export async function getAgentIdentitySummary(userId: string): Promise<AgentIden
     })
     .from(agentIdentities)
     .where(eq(agentIdentities.userId, userId))
-    .limit(1);
+    .limit(1));
   return row ?? null;
 }

@@ -131,6 +131,7 @@ const mockOwner = {
   name: 'Owner',
   email: 'owner@example.com',
   image: null,
+  accountType: 'human' as const,
 };
 
 const mockPermission: PermissionEntry = {
@@ -147,6 +148,7 @@ const mockPermission: PermissionEntry = {
     name: 'User',
     email: 'user@example.com',
     image: null,
+    accountType: 'human' as const,
   },
 };
 

@@ -19,7 +19,7 @@
  * - initializeLogging calls setupErrorHandlers and logs startup
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 
 // ── Mock the logger module so no actual I/O occurs ──
 vi.mock('../logger', async (importOriginal) => {
@@ -136,6 +136,18 @@ function makeExpressRequest(overrides: Partial<{
   };
 }
 
+// Modelled behind ONE trusted reverse proxy: off Fly, x-forwarded-for and
+// x-real-ip are default-deny unless TRUSTED_PROXY_HOPS declares the proxies
+// in front (Agent Signup Phase 2b, security/client-ip.ts).
+const ORIGINAL_TRUSTED_PROXY_HOPS = process.env.TRUSTED_PROXY_HOPS;
+beforeAll(() => {
+  process.env.TRUSTED_PROXY_HOPS = '1';
+});
+afterAll(() => {
+  if (ORIGINAL_TRUSTED_PROXY_HOPS === undefined) delete process.env.TRUSTED_PROXY_HOPS;
+  else process.env.TRUSTED_PROXY_HOPS = ORIGINAL_TRUSTED_PROXY_HOPS;
+});
+
 describe('loggers object', () => {
   it('has all expected category keys', () => {
     expect(loggers).toHaveProperty('auth');
@@ -164,10 +176,10 @@ describe('extractRequestContext', () => {
       expect(ctx.method).toBe('PUT');
     });
 
-    it('extracts IP from x-forwarded-for (first value)', () => {
+    it('extracts IP from x-forwarded-for (the entry the trusted proxy appended)', () => {
       const req = makeNextRequest({ xForwardedFor: '10.0.0.1,10.0.0.2' });
       const ctx = extractRequestContext(req);
-      expect(ctx.ip).toBe('10.0.0.1');
+      expect(ctx.ip).toBe('10.0.0.2');
     });
 
     it('falls back to x-real-ip when x-forwarded-for is absent', () => {

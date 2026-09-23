@@ -9,6 +9,7 @@
  * pagePermissions row in a single transaction.
  */
 
+import { withAgentMarker } from '@pagespace/lib/auth/agent/display-name';
 import { db } from '@pagespace/db/db'
 import { eq, and, or, gt, lte, isNull } from '@pagespace/db/operators'
 import { userEmailMatch, decryptUserRow } from '@pagespace/lib/auth/user-repository'
@@ -41,6 +42,8 @@ export const pageInviteRepository = {
     permissions: PendingPagePermission[];
     invitedBy: string;
     inviterName: string;
+    /** `agent` = the inviter is a self-named AI agent account (Phase 2b). */
+    inviterAccountType: 'human' | 'agent';
     expiresAt: Date | null;
     consumedAt: Date | null;
   } | null> {
@@ -55,6 +58,7 @@ export const pageInviteRepository = {
         permissions: pendingPageInvites.permissions,
         invitedBy: pendingPageInvites.invitedBy,
         inviterName: users.name,
+        inviterAccountType: users.accountType,
         expiresAt: pendingPageInvites.expiresAt,
         consumedAt: pendingPageInvites.consumedAt,
       })
@@ -277,12 +281,19 @@ export const pageInviteRepository = {
     }
   },
 
+  /**
+   * The inviter as named in invite emails and notifications. Plain text cannot
+   * carry a badge, so an AI agent account's self-chosen name carries the
+   * marker in the text itself (Agent Signup Phase 2b).
+   */
   async findInviterDisplay(userId: string): Promise<{ name: string; email: string } | null> {
     const user = await db.query.users.findFirst({
       where: eq(users.id, userId),
-      columns: { name: true, email: true },
+      columns: { name: true, email: true, accountType: true },
     });
-    return user ? decryptUserRow({ name: user.name, email: user.email }) : null;
+    if (!user) return null;
+    const decrypted = await decryptUserRow({ name: user.name, email: user.email });
+    return { name: withAgentMarker(decrypted.name, user.accountType), email: decrypted.email };
   },
 
   async findUserIdByEmail(

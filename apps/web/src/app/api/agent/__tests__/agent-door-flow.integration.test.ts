@@ -22,6 +22,9 @@ import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 vi.hoisted(() => {
   process.env.AGENT_SIGNUP_POW_BITS = '8';
   process.env.WEB_APP_URL = 'https://pagespace.test';
+  // The requests below model one reverse proxy reporting the caller in
+  // x-forwarded-for; off Fly that header is ignored unless declared (Phase 2b).
+  process.env.TRUSTED_PROXY_HOPS = '1';
 });
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn(), audit: vi.fn() }));

@@ -26,6 +26,8 @@ export interface PermissionUser {
   name: string | null;
   email: string;
   image: string | null;
+  /** `agent` marks a self-named AI agent account in the share dialog (Agent Signup Phase 2b). */
+  accountType: 'human' | 'agent';
 }
 
 /**
@@ -128,7 +130,7 @@ export const permissionManagementService = {
         drive: {
           with: {
             owner: {
-              columns: { id: true, name: true, email: true, image: true },
+              columns: { id: true, name: true, email: true, image: true, accountType: true },
             },
           },
         },
@@ -153,6 +155,7 @@ export const permissionManagementService = {
         name: users.name,
         email: users.email,
         image: users.image,
+        accountType: users.accountType,
       }
     })
     .from(pagePermissions)

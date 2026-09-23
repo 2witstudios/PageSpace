@@ -13,6 +13,32 @@ emits everything below.
 > It is a provisioning tool for new tenants only. Upgrades are always
 > append-only edits to the existing `.env`.
 
+## 2026-09 — Declare your reverse proxy: `TRUSTED_PROXY_HOPS` (Agent Signup Phase 2b)
+
+Outside Fly, the app no longer trusts `X-Forwarded-For` / `X-Real-IP` unless
+you say how many reverse proxies sit in front of it. A caller who can reach the
+app could forge those headers and get a fresh rate-limit bucket per request.
+
+- **Tenant stack (`docker-compose.tenant.yml`, Traefik):** nothing to do. The
+  compose file sets `TRUSTED_PROXY_HOPS: "1"` on `web`.
+- **Self-host behind nginx / Caddy / a load balancer:** add
+  `TRUSTED_PROXY_HOPS=1` (one proxy that appends the client to
+  `X-Forwarded-For`; use `2` with a CDN in front of it) to the `web` service's
+  environment. The proxy must set `X-Forwarded-For` — `X-Real-IP` alone is not
+  enough, because Next.js fills a missing `X-Forwarded-For` with the proxy's own
+  address. Only do this if the app is NOT reachable except through those
+  proxies.
+- **App reached directly (no proxy):** leave it unset — but know that the app
+  then cannot tell clients apart safely (any caller can write
+  `X-Forwarded-For`), so every visitor shares ONE rate-limit bucket. Put a
+  reverse proxy in front and declare it if per-client limits matter.
+
+Symptom of a missing setting: every visitor shares ONE rate-limit bucket (all
+clients resolve to `unknown`), so a burst of failed sign-ins from anyone can
+throttle everyone. The web app logs `TRUSTED_PROXY_HOPS is unset` once when a
+request carries a proxy's fingerprint (`X-Real-IP`, or a multi-entry
+`X-Forwarded-For`) that it is ignoring.
+
 ## 2026-08 — ⚠️ Minimum upgrade path: workspace membership becomes a node tree (`0255` → `0256`)
 
 **Two separate concerns, with different audiences — read the one that is yours:**
