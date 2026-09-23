@@ -36,12 +36,24 @@ function presentName(name: string | null | undefined): string | null {
 }
 
 /**
+ * Line and paragraph separators JSON leaves raw (U+0085, U+2028, U+2029), and
+ * the invisible bidi overrides / zero-width marks that can make quoted text
+ * render as something else. Escaped so the quoted span stays one visible line.
+ */
+const UNSAFE_IN_QUOTE = /[\u0085\u2028\u2029\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/g;
+
+function quoteAsData(text: string): string {
+  return JSON.stringify(text).replace(UNSAFE_IN_QUOTE, (ch) => `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`);
+}
+
+/**
  * A name for another user's model context. A human's name is unchanged, so
  * existing prompts keep their shape. An agent's name is labelled and emitted as
- * a JSON string literal: quoted, with newlines and quotes escaped, so an
- * injected instruction stays one line of quoted data.
+ * a JSON string literal: quoted, with newlines, quotes, Unicode line
+ * separators and bidi/zero-width marks escaped, so an injected instruction
+ * stays one visible line of quoted data.
  */
 export function modelContextUserLabel(account: NamedAccount, fallback = 'Unknown'): string {
   if (!isAgentAccount(account.accountType)) return presentName(account.name) ?? fallback;
-  return `${AGENT_MODEL_LABEL} ${JSON.stringify(presentName(account.name) ?? AGENT_FALLBACK_NAME)}`;
+  return `${AGENT_MODEL_LABEL} ${quoteAsData(presentName(account.name) ?? AGENT_FALLBACK_NAME)}`;
 }

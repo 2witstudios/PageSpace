@@ -220,11 +220,15 @@ describe('createAgentAccount', () => {
 });
 
 describe('createAgentAccount — the deployment-wide signup budget (Phase 2b)', () => {
-  // Each test runs on its own far-future clock, so the rolling window holds
-  // only the identities that test created — other suites' signups (real
-  // clock) can never fall inside it.
+  // Each test runs on its own far-future clock, later than every earlier test's
+  // (the window has no upper bound), so it holds only the identities that
+  // test created — other suites' signups (real clock) are far in the past.
   const HOUR = 60 * 60 * 1000;
-  const futureClock = () => new Date(Date.UTC(2090, 0, 1) + Math.floor(Math.random() * 1_000_000) * HOUR);
+  let clockBase = Date.UTC(2090, 0, 1) + Math.floor(Math.random() * 1000) * 1000 * HOUR;
+  const futureClock = () => {
+    clockBase += 100 * 24 * HOUR;
+    return new Date(clockBase);
+  };
 
   async function budgetedSignUp(now: Date, budget: number, preIssuedChallengeId?: string) {
     const challengeId = preIssuedChallengeId ?? await issueChallenge({ expiresAt: new Date(now.getTime() + 10 * HOUR) });
@@ -274,15 +278,18 @@ describe('createAgentAccount — the deployment-wide signup budget (Phase 2b)', 
       await released;
     });
     await holding;
-    const racing = Promise.all(challengeIds.map((id) => budgetedSignUp(now, 1, id)));
+    // Distinct, DESCENDING clocks: each racer took its `now` before the lock,
+    // and whoever wins the lock may carry a later stamp than those queued
+    // behind it. A window bounded above at `now` would miss that row.
+    const racing = Promise.all(challengeIds.map((id, i) => budgetedSignUp(new Date(now.getTime() + (challengeIds.length - i) * 1000), 1, id)));
     await new Promise((resolve) => setTimeout(resolve, 500));
     release();
     await holder;
     const results = await racing;
 
     expect(results.filter((r) => r.result.ok)).toHaveLength(1);
-    expect(results.filter((r) => !r.result.ok).map((r) => r.result)).toEqual(
-      Array.from({ length: 3 }, () => ({ ok: false, error: 'signup_budget_exhausted', retryAfterSeconds: 3600 })),
+    expect(results.filter((r) => !r.result.ok).map((r) => r.result.ok ? null : r.result.error)).toEqual(
+      Array.from({ length: 3 }, () => 'signup_budget_exhausted'),
     );
   });
 });

@@ -24,8 +24,31 @@
 
 import { hashToken } from '../token-utils';
 
+/**
+ * The address a per-IP agent-door bucket is keyed on. An IPv4 address (or an
+ * IPv4-mapped IPv6 one) is itself; an IPv6 address is its /64, because one
+ * host is routinely handed a whole /64 and could otherwise mint a fresh bucket
+ * per address. Anything unparseable is returned unchanged (e.g. `unknown`).
+ */
+export function agentRateLimitAddress(ip: string): string {
+  const address = ip.trim().toLowerCase().replace(/^\[|\]$/g, '').split('%')[0] ?? '';
+  if (!address.includes(':')) return ip;
+  const mapped = /^(?:0{0,4}:){0,5}(?:0{0,4}:)?ffff:(\d{1,3}(?:\.\d{1,3}){3})$/.exec(address);
+  if (mapped?.[1]) return mapped[1];
+
+  const halves = address.split('::');
+  if (halves.length > 2) return ip;
+  const head = halves[0] ? halves[0].split(':') : [];
+  const tail = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
+  const missing = 8 - head.length - tail.length;
+  if (halves.length === 1 ? head.length !== 8 : missing < 1) return ip;
+  const groups = [...head, ...Array.from({ length: halves.length === 2 ? missing : 0 }, () => '0'), ...tail];
+  if (groups.length !== 8 || !groups.every((group) => /^[0-9a-f]{1,4}$/.test(group))) return ip;
+  return `${groups.slice(0, 4).map((group) => group.padStart(4, '0')).join(':')}::/64`;
+}
+
 export function agentTokenIpRateLimitKey(ip: string): string {
-  return `agent-token:ip:${ip}`;
+  return `agent-token:ip:${agentRateLimitAddress(ip)}`;
 }
 
 export function agentTokenCredentialRateLimitKey(credential: string): string {

@@ -44,6 +44,7 @@ import { resolveAgentAssertionScopes } from '@/lib/agent-auth/assertion-scope';
 import { isAgentDoorOpen } from '@/lib/agent-auth/door';
 import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { redactDbError } from '@pagespace/lib/logging/db-error-redaction';
 import { PAGESPACE_AGENT_CLIENT_ID } from '@pagespace/lib/auth/oauth/clients';
 import { agentTokenIpRateLimitKey, agentTokenCredentialRateLimitKey, agentRefreshRateLimitKey } from '@pagespace/lib/auth/agent/token-rate-limit-keys';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -577,7 +578,24 @@ async function handleAgentAssertionGrant(req: NextRequest, form: URLSearchParams
   return noStoreJson(tokenSuccessBody(result.tokens, result.scopes), 200);
 }
 
+/**
+ * Every grant binds a credential hash into its queries (a code, a refresh
+ * token, an agent secret, the new token pair), and drizzle's DrizzleQueryError
+ * message is the query plus its bound params. An uncaught error here would
+ * reach Next's request-error log and Sentry (`instrumentation.ts`
+ * onRequestError) verbatim, so the handler never lets one escape: it logs only
+ * the redacted class/code/constraint and answers a constant 503.
+ */
 export async function POST(req: NextRequest) {
+  try {
+    return await handleTokenRequest(req);
+  } catch (error) {
+    loggers.auth.error('OAuth token request failed', redactDbError(error));
+    return noStoreJson({ error: 'temporarily_unavailable' }, 503);
+  }
+}
+
+async function handleTokenRequest(req: NextRequest): Promise<NextResponse> {
   const contentType = req.headers.get('content-type') ?? '';
   if (!contentType.toLowerCase().includes('application/x-www-form-urlencoded')) {
     return noStoreJson(INVALID_REQUEST, 400);

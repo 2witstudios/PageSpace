@@ -27,6 +27,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 import { verifyPowSolution, POW_NONCE_MAX_LENGTH } from '@pagespace/lib/auth/agent/pow';
 import { decideAgentSignup } from '@pagespace/lib/auth/agent/signup-decision';
+import { agentRateLimitAddress } from '@pagespace/lib/auth/agent/token-rate-limit-keys';
 import { buildServerMetadata, AGENT_ASSERTION_GRANT_TYPE } from '@pagespace/lib/auth/oauth/metadata';
 import { PAGESPACE_AGENT_CLIENT_ID } from '@pagespace/lib/auth/oauth/clients';
 import { AgentIdentityStoreError, createAgentAccount, findAgentSignupChallenge } from '@pagespace/lib/services/agent-identities';
@@ -69,9 +70,11 @@ async function register(request: Request) {
   }
 
   const ip = getClientIP(request);
-  const hourly = await checkDistributedRateLimit(`agent-signup:ip:${ip}`, DISTRIBUTED_RATE_LIMITS.AGENT_SIGNUP);
+  // IPv6 callers are bucketed by /64: one host is routinely handed a whole /64.
+  const bucket = agentRateLimitAddress(ip);
+  const hourly = await checkDistributedRateLimit(`agent-signup:ip:${bucket}`, DISTRIBUTED_RATE_LIMITS.AGENT_SIGNUP);
   const daily = hourly.allowed
-    ? await checkDistributedRateLimit(`agent-signup-daily:ip:${ip}`, DISTRIBUTED_RATE_LIMITS.AGENT_SIGNUP_DAILY)
+    ? await checkDistributedRateLimit(`agent-signup-daily:ip:${bucket}`, DISTRIBUTED_RATE_LIMITS.AGENT_SIGNUP_DAILY)
     : null;
   if (!hourly.allowed || (daily && !daily.allowed)) {
     const limited = !hourly.allowed ? hourly : daily;

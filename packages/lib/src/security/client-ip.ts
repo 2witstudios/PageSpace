@@ -120,6 +120,23 @@ export function resolveClientIP(headers: HeaderSource, trust: ClientIpTrust): st
   return headers.get('x-real-ip')?.trim() || 'unknown';
 }
 
+let warnedIgnoredForwardedFor = false;
+
+/**
+ * A misconfigured self-host (a proxy in front, TRUSTED_PROXY_HOPS unset)
+ * collapses every visitor into the one `unknown` bucket. Say so once, in the
+ * log an operator reads — console, because this module must stay importable
+ * from the Edge runtime.
+ */
+function warnIfForwardedForIgnored(headers: HeaderSource, trust: ClientIpTrust): void {
+  if (warnedIgnoredForwardedFor || trust.onFly || trust.trustedProxyHops > 0) return;
+  if (!headers.get('x-forwarded-for') && !headers.get('x-real-ip')) return;
+  warnedIgnoredForwardedFor = true;
+  console.warn('[client-ip] Ignoring X-Forwarded-For / X-Real-IP: TRUSTED_PROXY_HOPS is unset, so every client shares one rate-limit bucket. Set it to the number of reverse proxies in front of the app (see infrastructure/UPGRADE.md).');
+}
+
 export function getClientIP(request: HasHeaders): string {
-  return resolveClientIP(request.headers, readClientIpTrust());
+  const trust = readClientIpTrust();
+  warnIfForwardedForIgnored(request.headers, trust);
+  return resolveClientIP(request.headers, trust);
 }

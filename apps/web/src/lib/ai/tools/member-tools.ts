@@ -60,7 +60,7 @@ export const memberTools = {
       if (ownerRow?.id) {
         result.push({
           userId: ownerRow.id,
-          name: ownerRow.name,
+          name: modelContextUserLabel({ name: ownerRow.name, accountType: ownerRow.accountType }),
           displayName: modelContextUserLabel({ name: ownerRow.displayName ?? ownerRow.name, accountType: ownerRow.accountType }),
           accountType: ownerRow.accountType ?? 'human',
           email: ownerRow.email,
@@ -75,7 +75,7 @@ export const memberTools = {
         if (ownerRow?.id && m.user.id === ownerRow.id) continue;
         result.push({
           userId: m.user.id,
-          name: m.user.name,
+          name: modelContextUserLabel({ name: m.user.name, accountType: m.user.accountType }),
           displayName: modelContextUserLabel({ name: m.profile?.displayName ?? m.user.name, accountType: m.user.accountType }),
           accountType: m.user.accountType,
           email: m.user.email,
@@ -142,7 +142,7 @@ export const memberTools = {
 
       const collaborators = userRows.map((u) => ({
         userId: u.id,
-        name: u.name,
+        name: modelContextUserLabel({ name: u.name, accountType: u.accountType }),
         displayName: modelContextUserLabel({ name: u.displayName ?? u.name, accountType: u.accountType }),
         accountType: u.accountType,
         email: u.email,

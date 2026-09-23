@@ -127,8 +127,8 @@ describe('member-tools', () => {
       };
 
       expect(result.members).toEqual([
-        expect.objectContaining({ userId: 'owner1', displayName: 'Ada', accountType: 'human' }),
-        expect.objectContaining({ userId: 'agent1', displayName: '[AI agent account, self-named] "Drive Owner"', accountType: 'agent' }),
+        expect.objectContaining({ userId: 'owner1', name: 'Ada', displayName: 'Ada', accountType: 'human' }),
+        expect.objectContaining({ userId: 'agent1', name: '[AI agent account, self-named] "Drive Owner"', displayName: '[AI agent account, self-named] "Drive Owner"', accountType: 'agent' }),
       ]);
     });
   });

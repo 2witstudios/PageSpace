@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { getClientIP, resolveClientIP, readClientIpTrust } from '../client-ip';
 
 describe('getClientIP', () => {
@@ -153,6 +153,20 @@ describe('getClientIP', () => {
         const resolved = new Set(Array.from({ length: 50 }, (_, i) =>
           getClientIP(new Request('http://localhost', { headers: { 'x-forwarded-for': `198.51.100.${i}`, 'fly-client-ip': `203.0.113.${i}` } }))));
         expect([...resolved]).toEqual(['unknown']);
+      });
+
+      it('given a forwarded header it is ignoring, should warn the operator once, not per request', async () => {
+        vi.resetModules();
+        const { getClientIP: freshGetClientIP } = await import('../client-ip');
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+          freshGetClientIP(new Request('http://localhost', { headers: { 'x-forwarded-for': '1.2.3.4' } }));
+          freshGetClientIP(new Request('http://localhost', { headers: { 'x-forwarded-for': '5.6.7.8' } }));
+          expect(warn).toHaveBeenCalledTimes(1);
+          expect(String(warn.mock.calls[0]?.[0])).toContain('TRUSTED_PROXY_HOPS');
+        } finally {
+          warn.mockRestore();
+        }
       });
 
       it.each(['0', '', 'abc', '-1', '1.5', ' 2x'])('treats TRUSTED_PROXY_HOPS=%j as no trusted proxy', (hops) => {

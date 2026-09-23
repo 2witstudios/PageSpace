@@ -11,6 +11,7 @@ import {
   agentTokenCredentialRateLimitKey,
   agentRefreshRateLimitKey,
   agentSecretRotateRateLimitKey,
+  agentRateLimitAddress,
 } from '../token-rate-limit-keys';
 
 const SECRET = 'ps_agent_abcdefghijklmnopqrstuvwxyz012345';
@@ -85,5 +86,43 @@ describe('agentSecretRotateRateLimitKey', () => {
   it('given two agents, should give them separate buckets', () => {
     expect(agentSecretRotateRateLimitKey({ agentUserId: 'agent-1', actor: 'self' }))
       .not.toBe(agentSecretRotateRateLimitKey({ agentUserId: 'agent-2', actor: 'self' }));
+  });
+});
+
+// Phase 2b: one host is routinely handed a whole IPv6 /64, so keying the
+// agent door's per-IP buckets on the full address gives it unlimited buckets.
+describe('agentRateLimitAddress', () => {
+  it('given IPv4, should return it unchanged', () => {
+    expect(agentRateLimitAddress('203.0.113.5')).toBe('203.0.113.5');
+  });
+
+  it('given two addresses in one IPv6 /64, should give them the same bucket', () => {
+    expect(agentRateLimitAddress('2001:db8:1:2::1')).toBe('2001:0db8:0001:0002::/64');
+    expect(agentRateLimitAddress('2001:db8:1:2:ffff:ffff:ffff:ffff')).toBe('2001:0db8:0001:0002::/64');
+    expect(agentRateLimitAddress('2001:DB8:1:2:a:b:c:d')).toBe('2001:0db8:0001:0002::/64');
+  });
+
+  it('given addresses in different /64s, should give them different buckets', () => {
+    expect(agentRateLimitAddress('2001:db8:1:2::1')).not.toBe(agentRateLimitAddress('2001:db8:1:3::1'));
+  });
+
+  it('given leading or all-zero compression, should expand correctly', () => {
+    expect(agentRateLimitAddress('::1')).toBe('0000:0000:0000:0000::/64');
+    expect(agentRateLimitAddress('fe80::1%eth0')).toBe('fe80:0000:0000:0000::/64');
+    expect(agentRateLimitAddress('[2001:db8::5]')).toBe('2001:0db8:0000:0000::/64');
+  });
+
+  it('given an IPv4-mapped IPv6 address, should key on the IPv4 address', () => {
+    expect(agentRateLimitAddress('::ffff:203.0.113.5')).toBe('203.0.113.5');
+  });
+
+  it('given something unparseable, should return it unchanged', () => {
+    expect(agentRateLimitAddress('unknown')).toBe('unknown');
+    expect(agentRateLimitAddress('1::2::3')).toBe('1::2::3');
+    expect(agentRateLimitAddress('zz::1')).toBe('zz::1');
+  });
+
+  it('should be what the token IP bucket keys on', () => {
+    expect(agentTokenIpRateLimitKey('2001:db8:1:2::9')).toBe('agent-token:ip:2001:0db8:0001:0002::/64');
   });
 });

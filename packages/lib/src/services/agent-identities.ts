@@ -15,7 +15,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, eq, gt, inArray, isNull, lt, lte, sql } from '@pagespace/db/operators';
+import { and, eq, gt, inArray, isNull, lt, sql } from '@pagespace/db/operators';
 import { users, mcpTokens } from '@pagespace/db/schema/auth';
 import { agentIdentities, agentSignupChallenges } from '@pagespace/db/schema/agent-identities';
 import { createId } from '@paralleldrive/cuid2';
@@ -237,10 +237,11 @@ export async function createAgentAccount(input: CreateAgentAccountInput): Promis
           oldest: sql<Date | null>`min(${agentIdentities.createdAt})`.mapWith(agentIdentities.createdAt),
         })
         .from(agentIdentities)
-        .where(and(
-          gt(agentIdentities.createdAt, new Date(input.now.getTime() - windowMs)),
-          lte(agentIdentities.createdAt, input.now),
-        ));
+        // No upper bound: callers take `now` before they wait on the lock, so
+        // a signup that won the lock with a LATER now has already committed a
+        // row stamped after ours. Bounding at `now` would miss it and admit
+        // past the budget.
+        .where(gt(agentIdentities.createdAt, new Date(input.now.getTime() - windowMs)));
       const budget = decideAgentSignupBudget({
         signupsInWindow: recent?.count ?? 0,
         oldestInWindow: recent?.oldest ?? null,
