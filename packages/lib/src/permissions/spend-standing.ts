@@ -4,6 +4,7 @@ import { drives } from '@pagespace/db/schema/core';
 import { orgMembers } from '@pagespace/db/schema/organizations';
 import { isDriveLead, isDriveMemberRelationship } from './drive-relationship';
 import { loadDriveRelationships } from './drive-relationship-loader';
+import type { WalletStanding } from './wallet-access';
 
 /**
  * A person's standing in the drive an AI call runs in, for the wallet-aware credit gate
@@ -73,4 +74,45 @@ export async function loadDriveSpendStanding(userId: string, driveId: string): P
 export function sharedSpendLegsFor(standing: DriveSpendStanding | null): { driveWallet: boolean; seat: boolean } {
   if (standing === null || !standing.isDriveMember) return { driveWallet: false, seat: false };
   return { driveWallet: true, seat: standing.orgId !== null && standing.isOrgMember };
+}
+
+/** A person's standing for the drive-wallet surfaces, with the drive facts the service needs. */
+export interface DriveWalletStanding extends WalletStanding {
+  driveId: string;
+  ownerId: string;
+}
+
+/**
+ * The standing a drive-wallet route decides on (wallet-access `walletViewerRole`): effective
+ * drive membership through the one org-aware access model — audited, since an org Owner or
+ * Admin reaching a Private drive through org power is an ORG-4 audit event — and the person's
+ * ACCEPTED role in the drive's org (org_members holds accepted members only; a pending invite
+ * is no role). Null when the drive does not exist or is trashed.
+ */
+export async function loadDriveWalletStanding(userId: string, driveId: string): Promise<DriveWalletStanding | null> {
+  const [drive] = await db
+    .select({ id: drives.id, ownerId: drives.ownerId, orgId: drives.orgId, orgVisibility: drives.orgVisibility, isTrashed: drives.isTrashed })
+    .from(drives)
+    .where(eq(drives.id, driveId))
+    .limit(1);
+  if (!drive || drive.isTrashed) return null;
+
+  const relationship = (await loadDriveRelationships(userId, [drive])).get(drive.id);
+  let orgRole: WalletStanding['orgRole'] = null;
+  if (drive.orgId !== null) {
+    const [membership] = await db
+      .select({ role: orgMembers.role })
+      .from(orgMembers)
+      .where(and(eq(orgMembers.orgId, drive.orgId), eq(orgMembers.userId, userId)))
+      .limit(1);
+    orgRole = membership?.role ?? null;
+  }
+  return {
+    driveId: drive.id,
+    ownerId: drive.ownerId,
+    orgId: drive.orgId,
+    isLead: isDriveLead(userId, drive),
+    isDriveMember: relationship ? isDriveMemberRelationship(relationship) : false,
+    orgRole,
+  };
 }
