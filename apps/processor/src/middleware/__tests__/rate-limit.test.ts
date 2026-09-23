@@ -396,8 +396,51 @@ describe('Fly-Client-IP trust gate (FLY_APP_NAME)', () => {
     expect(status2).toHaveBeenCalledWith(429);
   });
 
+  // Agent Signup Phase 2b: off Fly, x-forwarded-for is honoured only under
+  // TRUSTED_PROXY_HOPS; otherwise the socket peer is the client, so rotating
+  // the header cannot mint a fresh bucket per request.
+  it('when NOT running on Fly and no trusted proxy is declared, rotating x-forwarded-for from one peer collides into one bucket', async () => {
+    delete process.env.FLY_APP_NAME;
+    delete process.env.TRUSTED_PROXY_HOPS;
+    process.env.PROCESSOR_READ_RATE_LIMIT = '1';
+    process.env.PROCESSOR_READ_RATE_WINDOW = '3600';
+    const { rateLimitRead } = await import('../rate-limit');
+
+    rateLimitRead(createMockReq({ forwardedFor: '1.2.3.4', ip: '10.9.9.9' }), createMockRes().res, createMockNext());
+
+    const { res: res2, status: status2 } = createMockRes();
+    const next2 = createMockNext();
+    rateLimitRead(createMockReq({ forwardedFor: '5.6.7.8', ip: '10.9.9.9' }), res2, next2);
+    expect(next2).not.toHaveBeenCalled();
+    expect(status2).toHaveBeenCalledWith(429);
+  });
+
+  it('when NOT running on Fly with TRUSTED_PROXY_HOPS=1, distinct clients behind the proxy get distinct buckets (the entry the proxy appended)', async () => {
+    delete process.env.FLY_APP_NAME;
+    process.env.TRUSTED_PROXY_HOPS = '1';
+    process.env.PROCESSOR_READ_RATE_LIMIT = '1';
+    process.env.PROCESSOR_READ_RATE_WINDOW = '3600';
+    try {
+      const { rateLimitRead } = await import('../rate-limit');
+
+      rateLimitRead(createMockReq({ forwardedFor: '6.6.6.6, 1.2.3.4' }), createMockRes().res, createMockNext());
+
+      const next2 = createMockNext();
+      rateLimitRead(createMockReq({ forwardedFor: '6.6.6.6, 5.6.7.8' }), createMockRes().res, next2);
+      expect(next2).toHaveBeenCalledTimes(1);
+
+      // A forged prefix does not escape the real client's bucket.
+      const { res: res3, status: status3 } = createMockRes();
+      rateLimitRead(createMockReq({ forwardedFor: '7.7.7.7, 1.2.3.4' }), res3, createMockNext());
+      expect(status3).toHaveBeenCalledWith(429);
+    } finally {
+      delete process.env.TRUSTED_PROXY_HOPS;
+    }
+  });
+
   it('when NOT running on Fly, distinct x-forwarded-for values still get distinct buckets', async () => {
     delete process.env.FLY_APP_NAME;
+    process.env.TRUSTED_PROXY_HOPS = '1';
     process.env.PROCESSOR_READ_RATE_LIMIT = '1';
     process.env.PROCESSOR_READ_RATE_WINDOW = '3600';
     const { rateLimitRead } = await import('../rate-limit');
@@ -411,5 +454,6 @@ describe('Fly-Client-IP trust gate (FLY_APP_NAME)', () => {
     const next2 = createMockNext();
     rateLimitRead(req2, res2, next2);
     expect(next2).toHaveBeenCalledTimes(1);
+    delete process.env.TRUSTED_PROXY_HOPS;
   });
 });

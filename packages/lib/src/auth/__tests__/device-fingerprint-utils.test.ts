@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import {
   getClientIP,
   detectPlatform,
@@ -12,13 +12,25 @@ import {
   anonymizeIP,
 } from '../device-fingerprint-utils';
 
+// Modelled behind ONE trusted reverse proxy: off Fly, x-forwarded-for and
+// x-real-ip are default-deny unless TRUSTED_PROXY_HOPS declares the proxies
+// in front (Agent Signup Phase 2b, security/client-ip.ts).
+const ORIGINAL_TRUSTED_PROXY_HOPS = process.env.TRUSTED_PROXY_HOPS;
+beforeAll(() => {
+  process.env.TRUSTED_PROXY_HOPS = '1';
+});
+afterAll(() => {
+  if (ORIGINAL_TRUSTED_PROXY_HOPS === undefined) delete process.env.TRUSTED_PROXY_HOPS;
+  else process.env.TRUSTED_PROXY_HOPS = ORIGINAL_TRUSTED_PROXY_HOPS;
+});
+
 describe('device-fingerprint-utils', () => {
   describe('getClientIP', () => {
-    it('should extract IP from x-forwarded-for header', () => {
+    it('should extract the IP the trusted proxy appended to x-forwarded-for', () => {
       const request = new Request('http://localhost', {
         headers: { 'x-forwarded-for': '1.2.3.4, 5.6.7.8' },
       });
-      expect(getClientIP(request)).toBe('1.2.3.4');
+      expect(getClientIP(request)).toBe('5.6.7.8');
     });
 
     it('should extract IP from x-real-ip header', () => {

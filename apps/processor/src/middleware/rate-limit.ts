@@ -15,6 +15,9 @@ const WINDOW_SECONDS = parseInt(process.env.PROCESSOR_UPLOAD_RATE_WINDOW ?? '360
 // on Fly; this repo also ships a non-Fly `tenant` deployment mode where
 // Fly-Client-IP is just another ordinary client-settable header, see the
 // packages/lib copy's doc for the full reasoning), adapted to Express's shape.
+// Off Fly, x-forwarded-for is honoured only under TRUSTED_PROXY_HOPS (the
+// n-th entry from the right, what the outermost trusted proxy saw) — Agent
+// Signup Phase 2b; otherwise the socket peer (`req.ip`) is the client.
 function getClientIP(req: Request): string {
   const flyClientIP = process.env.FLY_APP_NAME ? req.headers['fly-client-ip'] : undefined;
   if (typeof flyClientIP === 'string' && flyClientIP.length > 0) {
@@ -22,8 +25,20 @@ function getClientIP(req: Request): string {
   }
 
   const forwarded = req.headers['x-forwarded-for'];
-  if (typeof forwarded === 'string' && forwarded.length > 0) {
-    return forwarded.split(',')[0].trim();
+  if (process.env.FLY_APP_NAME) {
+    if (typeof forwarded === 'string' && forwarded.length > 0) {
+      return forwarded.split(',')[0].trim();
+    }
+    return req.ip ?? 'unknown';
+  }
+
+  const rawHops = process.env.TRUSTED_PROXY_HOPS?.trim() ?? '';
+  const hops = /^\d{1,2}$/.test(rawHops) ? Number.parseInt(rawHops, 10) : 0;
+  const chain = typeof forwarded === 'string'
+    ? forwarded.split(',').map((entry) => entry.trim()).filter((entry) => entry.length > 0)
+    : [];
+  if (hops >= 1 && chain.length > 0) {
+    return chain[Math.max(0, chain.length - hops)] ?? req.ip ?? 'unknown';
   }
 
   return req.ip ?? 'unknown';

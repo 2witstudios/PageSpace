@@ -9,8 +9,9 @@
  *
  * Prefers Fly's own `Fly-Client-IP` header — set by Fly's edge from the
  * actual TCP peer it accepted the connection from, so it cannot be spoofed
- * by a client-supplied header (GitHub issue #1908). Falls back to
- * `x-forwarded-for`/`x-real-ip` for local dev/CI, where there's no Fly edge.
+ * by a client-supplied header (GitHub issue #1908). Off Fly,
+ * `x-forwarded-for`/`x-real-ip` are honoured only under `TRUSTED_PROXY_HOPS`
+ * (Agent Signup Phase 2b) — default-deny, the client is then `unknown`.
  *
  * EXCEPT: `Fly-Client-IP` is set fresh per Fly Proxy hop, not chained.
  * `pagespace.ai` traffic reaches this app via `pagespace-proxy` (Caddy) over
@@ -34,13 +35,20 @@
  * trust, not `DEPLOYMENT_MODE` — see the `packages/lib` copy's doc for why.
  */
 export function getClientIP(request: Request): string {
-  const flyClientIP = process.env.FLY_APP_NAME ? request.headers.get('fly-client-ip')?.trim() : undefined;
-  if (flyClientIP && !flyClientIP.toLowerCase().startsWith('fdaa:')) return flyClientIP;
+  const headers = request.headers;
+  const forwardedFor = (headers.get('x-forwarded-for') ?? '').split(',').map((entry) => entry.trim()).filter((entry) => entry.length > 0);
 
-  return (
-    request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
-    request.headers.get('x-real-ip')?.trim() ||
-    flyClientIP ||
-    'unknown'
-  );
+  if (process.env.FLY_APP_NAME) {
+    const flyClientIP = headers.get('fly-client-ip')?.trim();
+    if (flyClientIP && !flyClientIP.toLowerCase().startsWith('fdaa:')) return flyClientIP;
+    return forwardedFor[0] || headers.get('x-real-ip')?.trim() || flyClientIP || 'unknown';
+  }
+
+  // Off Fly: x-forwarded-for / x-real-ip are default-deny unless the operator
+  // declares TRUSTED_PROXY_HOPS — see the packages/lib copy's doc (Phase 2b).
+  const rawHops = process.env.TRUSTED_PROXY_HOPS?.trim() ?? '';
+  const hops = /^\d{1,2}$/.test(rawHops) ? Number.parseInt(rawHops, 10) : 0;
+  if (hops < 1) return 'unknown';
+  if (forwardedFor.length > 0) return forwardedFor[Math.max(0, forwardedFor.length - hops)] ?? 'unknown';
+  return headers.get('x-real-ip')?.trim() || 'unknown';
 }

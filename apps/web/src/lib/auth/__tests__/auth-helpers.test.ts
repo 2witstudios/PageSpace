@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import {
   isSafeReturnUrl,
   isSafeNextPath,
@@ -38,6 +38,18 @@ const CLI_CONSENT_URL =
  * - Valid relative path: returns true
  * - Any external redirect attempt: returns false
  */
+
+// Modelled behind ONE trusted reverse proxy: off Fly, x-forwarded-for and
+// x-real-ip are default-deny unless TRUSTED_PROXY_HOPS declares the proxies
+// in front (Agent Signup Phase 2b, security/client-ip.ts).
+const ORIGINAL_TRUSTED_PROXY_HOPS = process.env.TRUSTED_PROXY_HOPS;
+beforeAll(() => {
+  process.env.TRUSTED_PROXY_HOPS = '1';
+});
+afterAll(() => {
+  if (ORIGINAL_TRUSTED_PROXY_HOPS === undefined) delete process.env.TRUSTED_PROXY_HOPS;
+  else process.env.TRUSTED_PROXY_HOPS = ORIGINAL_TRUSTED_PROXY_HOPS;
+});
 
 describe('isSafeReturnUrl', () => {
   describe('safe inputs (should return true)', () => {
@@ -505,11 +517,11 @@ describe('getClientIP', () => {
       expect(getClientIP(request)).toBe('192.168.1.1');
     });
 
-    it('getClientIP_multipleIPs_returnsFirstIP', () => {
+    it('getClientIP_multipleIPs_returnsTheEntryTheTrustedProxyAppended', () => {
       const request = new Request('https://example.com', {
         headers: { 'x-forwarded-for': '192.168.1.1, 10.0.0.1, 172.16.0.1' },
       });
-      expect(getClientIP(request)).toBe('192.168.1.1');
+      expect(getClientIP(request)).toBe('172.16.0.1');
     });
 
     it('getClientIP_ipWithWhitespace_trimmed', () => {

@@ -198,6 +198,11 @@ services:
       FILE_STORAGE_PATH: /app/storage
       PROCESSOR_URL: http://processor:3003
       CRON_SECRET: ${CRON_SECRET}
+      # One reverse proxy (Traefik) sits in front of web and appends the peer it
+      # saw to X-Forwarded-For. Off Fly the app ignores X-Forwarded-For unless
+      # this declares the hops (packages/lib/src/security/client-ip.ts); without
+      # it every client resolves to one "unknown" rate-limit bucket.
+      TRUSTED_PROXY_HOPS: "1"
       PORT: "3000"
       HOSTNAME: "0.0.0.0"
       NODE_OPTIONS: --max-old-space-size=640

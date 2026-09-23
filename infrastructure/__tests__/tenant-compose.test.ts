@@ -350,6 +350,10 @@ describe('Tenant docker-compose configuration', () => {
       expect(getEnv('web').DEPLOYMENT_MODE).toBe('tenant');
     });
 
+    it('given the web service behind one Traefik, should declare exactly one trusted proxy hop (off Fly, X-Forwarded-For is otherwise ignored)', () => {
+      expect(getEnv('web').TRUSTED_PROXY_HOPS).toBe('1');
+    });
+
     it('given the web service, should set NEXT_PUBLIC_DEPLOYMENT_MODE to tenant', () => {
       expect(getEnv('web').NEXT_PUBLIC_DEPLOYMENT_MODE).toBe('tenant');
     });
