@@ -2629,6 +2629,16 @@
       "import": "./dist/auth/agent/claim-decision.js",
       "require": "./dist/auth/agent/claim-decision.js"
     },
+    "./auth/agent/display-name": {
+      "types": "./dist/auth/agent/display-name.d.ts",
+      "import": "./dist/auth/agent/display-name.js",
+      "require": "./dist/auth/agent/display-name.js"
+    },
+    "./auth/agent/signup-budget": {
+      "types": "./dist/auth/agent/signup-budget.d.ts",
+      "import": "./dist/auth/agent/signup-budget.js",
+      "require": "./dist/auth/agent/signup-budget.js"
+    },
     "./auth/agent/account-type": {
       "types": "./dist/auth/agent/account-type.d.ts",
       "import": "./dist/auth/agent/account-type.js",

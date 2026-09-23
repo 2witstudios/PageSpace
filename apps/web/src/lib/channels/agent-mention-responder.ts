@@ -1,6 +1,7 @@
 import { db } from '@pagespace/db/db'
 import { and, desc, eq, inArray } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
+import { modelContextUserLabel } from '@pagespace/lib/auth/agent/display-name'
 import { channelMessages } from '@pagespace/db/schema/chat';
 import { canActorEditPage, canActorConsultAgent } from '@/lib/ai/tools/actor-permissions'
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -55,7 +56,8 @@ export interface MentionedAgent {
 export interface RecentChannelMessage {
   content: string;
   createdAt: Date;
-  user: { name: string | null } | null;
+  /** `accountType` marks a self-named AI agent account in the transcript (Phase 2b). */
+  user: { name: string | null; accountType?: 'human' | 'agent' | null } | null;
   aiMeta: ChannelMessageAiMeta | null;
   fileId: string | null;
   attachmentMeta: AttachmentMeta | null;
@@ -136,7 +138,7 @@ function buildChannelTranscript(
   messages: Array<{
     content: string;
     createdAt: Date;
-    user: { name: string | null } | null;
+    user: { name: string | null; accountType?: 'human' | 'agent' | null } | null;
     aiMeta: { senderName: string } | null;
   }>
 ): string {
@@ -145,7 +147,9 @@ function buildChannelTranscript(
   }
 
   const lines = messages.map((message) => {
-    const senderName = message.aiMeta?.senderName || message.user?.name || 'Unknown';
+    // An agent ACCOUNT chose its own name: labelled and quoted as data (Phase 2b).
+    const senderName = message.aiMeta?.senderName
+      || modelContextUserLabel({ name: message.user?.name, accountType: message.user?.accountType });
     const timestamp = message.createdAt.toISOString();
     const displayContent = toSingleLine(
       convertMentionsToDisplayText(message.content || ''),
@@ -252,6 +256,7 @@ export async function fetchRecentChannelMessages(channelId: string): Promise<Rec
       user: {
         columns: {
           name: true,
+          accountType: true,
         },
       },
       attachments: {

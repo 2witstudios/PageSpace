@@ -34,6 +34,7 @@ import { fetchCachedImagePreset } from '../core/image-preset-fetch';
 import { toModelOutputForReadPage, buildVisualContentMetadata } from './read-page-vision-output';
 import { ensureTaskListForPage, seedInheritedTaskStatusConfigs } from '@/services/api/task-sync-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { modelContextUserLabel } from '@pagespace/lib/auth/agent/display-name';
 import { resolveOrThrowPageId } from './page-context-defaults';
 import { resolveDriveScope } from './drive-context-defaults';
 
@@ -818,6 +819,7 @@ export const pageReadTools = {
                 columns: {
                   id: true,
                   name: true,
+                  accountType: true,
                 },
               },
             },
@@ -865,7 +867,11 @@ export const pageReadTools = {
           };
 
           const getSenderInfo = (message: typeof messages[number]) => {
-            const senderName = message.aiMeta?.senderName || message.user?.name || 'Unknown';
+            // A person's name comes through modelContextUserLabel: an AI agent
+            // ACCOUNT chose its own name, so it is labelled and quoted as data
+            // rather than trusted as an identity (Agent Signup Phase 2b).
+            const senderName = message.aiMeta?.senderName
+              || modelContextUserLabel({ name: message.user?.name, accountType: message.user?.accountType });
 
             if (message.aiMeta?.senderType === 'agent') {
               return { senderType: 'agent' as const, senderName, prefix: '[agent]' };

@@ -10,6 +10,7 @@ import { decryptUserRow, decryptUserRows } from '@pagespace/lib/auth/user-reposi
 import { checkDriveAccess, listDriveMembers } from '@pagespace/lib/services/drive-member-service';
 import type { ToolExecutionContext } from '../core/types';
 import { driveDeniedByAppToken } from './actor-permissions';
+import { modelContextUserLabel } from '@pagespace/lib/auth/agent/display-name';
 
 export const memberTools = {
   list_drive_members: tool({
@@ -31,12 +32,15 @@ export const memberTools = {
         return { success: false, error: 'You must be a drive member to view members' };
       }
 
+      // displayName below is what the model reads: an AI agent ACCOUNT's
+      // self-chosen name is labelled and quoted as data (Agent Signup Phase 2b).
       // Fetch owner — stored in drives.ownerId, not in drive_members table
       const [ownerRowRaw] = await db
         .select({
           id: users.id,
           name: users.name,
           email: users.email,
+          accountType: users.accountType,
           displayName: userProfiles.displayName,
           avatarUrl: userProfiles.avatarUrl,
         })
@@ -57,7 +61,8 @@ export const memberTools = {
         result.push({
           userId: ownerRow.id,
           name: ownerRow.name,
-          displayName: ownerRow.displayName ?? ownerRow.name,
+          displayName: modelContextUserLabel({ name: ownerRow.displayName ?? ownerRow.name, accountType: ownerRow.accountType }),
+          accountType: ownerRow.accountType ?? 'human',
           email: ownerRow.email,
           role: 'OWNER' as const,
           avatarUrl: ownerRow.avatarUrl ?? null,
@@ -71,7 +76,8 @@ export const memberTools = {
         result.push({
           userId: m.user.id,
           name: m.user.name,
-          displayName: m.profile?.displayName ?? m.user.name,
+          displayName: modelContextUserLabel({ name: m.profile?.displayName ?? m.user.name, accountType: m.user.accountType }),
+          accountType: m.user.accountType,
           email: m.user.email,
           role: m.role,
           avatarUrl: m.profile?.avatarUrl ?? null,
@@ -126,6 +132,7 @@ export const memberTools = {
           id: users.id,
           name: users.name,
           email: users.email,
+          accountType: users.accountType,
           displayName: userProfiles.displayName,
           avatarUrl: userProfiles.avatarUrl,
         })
@@ -136,7 +143,8 @@ export const memberTools = {
       const collaborators = userRows.map((u) => ({
         userId: u.id,
         name: u.name,
-        displayName: u.displayName ?? u.name,
+        displayName: modelContextUserLabel({ name: u.displayName ?? u.name, accountType: u.accountType }),
+        accountType: u.accountType,
         email: u.email,
         avatarUrl: u.avatarUrl ?? null,
         connectedSince: connectedSinceMap.get(u.id) ?? null,

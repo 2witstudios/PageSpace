@@ -37,7 +37,7 @@ vi.mock('@pagespace/db/db', () => ({
   },
 }));
 vi.mock('@pagespace/db/schema/auth', () => ({
-  users: { id: 'users.id', email: 'users.email', name: 'users.name' },
+  users: { id: 'users.id', email: 'users.email', name: 'users.name', accountType: 'users.accountType' },
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   drives: { id: 'drives.id', ownerId: 'drives.ownerId' },
@@ -463,6 +463,25 @@ describe('drive-member-service', () => {
       expect(result).toHaveLength(1);
       expect(result[0].permissionCounts).toEqual({ view: 3, edit: 1, share: 0 });
       expect(mockDb.execute).toHaveBeenCalledTimes(1);
+    });
+
+    it('given an agent member (Phase 2b), should select and return its accountType so every member list can mark it', async () => {
+      const members = [
+        { userId: 'a1', role: 'MEMBER', id: 'dm-9', invitedBy: null, invitedAt: null,
+          acceptedAt: null, lastAccessedAt: null,
+          user: { id: 'a1', email: 'agent-a1@agents.pagespace.invalid', name: 'PageSpace Support', accountType: 'agent' },
+          profile: null, customRole: null },
+      ];
+      const chain = { leftJoin: vi.fn().mockReturnThis(), where: vi.fn().mockResolvedValue(members) };
+      mockDb.select.mockReturnValue({ from: vi.fn().mockReturnValue(chain) });
+      mockDb.execute.mockResolvedValue({ rows: [] });
+
+      const result = await listDriveMembers('drive-1');
+
+      expect(mockDb.select).toHaveBeenCalledWith(expect.objectContaining({
+        user: expect.objectContaining({ accountType: 'users.accountType' }),
+      }));
+      expect(result[0].user?.accountType).toBe('agent');
     });
 
     it('should default permission counts to zero for members with no page permissions', async () => {

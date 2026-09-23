@@ -111,6 +111,7 @@ const createMemberFixture = (overrides: {
     id: overrides.userId,
     email: overrides.email ?? `${overrides.userId}@example.com`,
     name: `User ${overrides.userId}`,
+    accountType: 'human',
   },
   profile: {
     username: overrides.userId,
@@ -137,6 +138,7 @@ const createOwnerMemberFixture = (userId: string): MemberWithDetails => ({
     id: userId,
     email: `${userId}@example.com`,
     name: `User ${userId}`,
+    accountType: 'human',
   },
   profile: {
     username: userId,

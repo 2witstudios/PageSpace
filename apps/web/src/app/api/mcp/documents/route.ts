@@ -16,6 +16,7 @@ import { deleteLines, insertLines, LineRangeError, replaceLines, type LineEditRe
 import { describeContentModeMismatch, isRawTextPage, serializePageContentForAI } from '@/lib/ai/core/page-serializer';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { modelContextUserLabel } from '@pagespace/lib/auth/agent/display-name';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateMCPRequest, isAuthError, isMCPAuthResult, getPrincipalAccessLevel } from '@/lib/auth';
 import { writeDeniedDetails } from '../write-denied-details';
@@ -109,12 +110,14 @@ function extractChannelMessageText(content: string): string {
 
 interface ChannelMessageForSender {
   userId: string | null;
-  user?: { id: string; name: string | null } | null;
+  user?: { id: string; name: string | null; accountType?: 'human' | 'agent' | null } | null;
   aiMeta?: { senderType?: string; senderName?: string } | null;
 }
 
 function getChannelSenderInfo(message: ChannelMessageForSender) {
-  const senderName = message.aiMeta?.senderName || message.user?.name || 'Unknown';
+  // An AI agent ACCOUNT chose its own name: labelled and quoted as data (Phase 2b).
+  const senderName = message.aiMeta?.senderName
+    || modelContextUserLabel({ name: message.user?.name, accountType: message.user?.accountType });
 
   if (message.aiMeta?.senderType === 'agent') {
     return { senderType: 'agent' as const, senderName, prefix: '[agent]' };
@@ -498,7 +501,7 @@ export async function POST(req: NextRequest) {
             ),
             with: {
               user: {
-                columns: { id: true, name: true },
+                columns: { id: true, name: true, accountType: true },
               },
             },
             orderBy: [asc(channelMessages.createdAt)],

@@ -15,6 +15,7 @@ import {
 } from '@/components/ai/ui/conversation';
 import { type ChannelInputRef, type FileAttachment } from './ChannelInput';
 import { MessageInput } from '@/components/shared/MessageInput';
+import { AgentBadge } from '@/components/shared/AgentBadge';
 import { MessageDropZone } from './MessageDropZone';
 import { MessageReactions, type Reaction } from '@/components/shared/MessageReactions';
 import { MessageHoverToolbar } from '@/components/shared/MessageHoverToolbar';
@@ -834,6 +835,7 @@ function ChannelView({ page }: ChannelViewProps) {
                                 {isFirst && (
                                   <div className="flex items-center gap-2">
                                       <span className="font-semibold text-sm">{displayName}</span>
+                                      {!isAi && <AgentBadge accountType={m.user?.accountType} />}
                                       {aiLabel && (
                                         <span className="text-xs px-1.5 py-0.5 rounded-full bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300 font-medium">
                                           {aiLabel}
