@@ -2143,6 +2143,13 @@
       "when": 1790038084778,
       "tag": "0305_wallet_ids_required",
       "breakpoints": true
+    },
+    {
+      "idx": 306,
+      "version": "7",
+      "when": 1790168679179,
+      "tag": "0306_fuzzy_adam_destine",
+      "breakpoints": true
     }
   ]
 }
