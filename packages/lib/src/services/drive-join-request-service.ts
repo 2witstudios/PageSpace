@@ -14,7 +14,7 @@
 
 import { db } from '@pagespace/db/db';
 import { and, asc, eq, sql } from '@pagespace/db/operators';
-import { drives } from '@pagespace/db/schema/core';
+import { drives, type OrgDriveVisibility } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { driveJoinRequests, type DriveJoinRequest } from '@pagespace/db/schema/drive-join-requests';
 import { organizations, orgMembers, type OrgRole } from '@pagespace/db/schema/organizations';
@@ -128,6 +128,15 @@ export async function requestToJoinDrive(
   }));
 }
 
+/** The drive a request was answered on, as the ORG-4 org-power audit needs it. */
+export interface AnsweredDrive {
+  id: string;
+  name: string;
+  ownerId: string;
+  orgId: string;
+  orgVisibility: OrgDriveVisibility;
+}
+
 export type JoinRequestAnswerResult =
   | {
       ok: true;
@@ -135,7 +144,7 @@ export type JoinRequestAnswerResult =
       /** A drive_members row was written for the requester (approval of a non-member). */
       admitted: boolean;
       request: DriveJoinRequest;
-      drive: { id: string; name: string; orgId: string };
+      drive: AnsweredDrive;
     }
   | JoinRequestRefusal;
 
@@ -196,7 +205,7 @@ export async function answerDriveJoinRequest(
       action: verdict.action,
       admitted,
       request: answered,
-      drive: { id: drive.id, name: drive.name, orgId: drive.orgId },
+      drive: { id: drive.id, name: drive.name, ownerId: drive.ownerId, orgId: drive.orgId, orgVisibility: drive.orgVisibility },
     };
     return { result, sync };
   }));

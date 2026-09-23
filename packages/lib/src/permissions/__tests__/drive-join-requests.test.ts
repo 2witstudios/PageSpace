@@ -182,9 +182,9 @@ describe('decideJoinRequestDecision', () => {
 
 describe('decideJoinRequestApprover', () => {
   it('DRV-6 (partial) the lead in the org, the org Owner and an org Admin may list and answer requests; a plain member and an outsider may not', () => {
-    expect(decideJoinRequestApprover({ actorId: MARCUS, actorOrgRole: 'MEMBER', drive: drive() })).toEqual({ ok: true });
-    expect(decideJoinRequestApprover({ actorId: JONO, actorOrgRole: 'OWNER', drive: drive() })).toEqual({ ok: true });
-    expect(decideJoinRequestApprover({ actorId: PRIYA, actorOrgRole: 'ADMIN', drive: drive() })).toEqual({ ok: true });
+    expect(decideJoinRequestApprover({ actorId: MARCUS, actorOrgRole: 'MEMBER', drive: drive() })).toEqual({ ok: true, drive: drive() });
+    expect(decideJoinRequestApprover({ actorId: JONO, actorOrgRole: 'OWNER', drive: drive() })).toEqual({ ok: true, drive: drive() });
+    expect(decideJoinRequestApprover({ actorId: PRIYA, actorOrgRole: 'ADMIN', drive: drive() })).toEqual({ ok: true, drive: drive() });
     expect(decideJoinRequestApprover({ actorId: LENA, actorOrgRole: 'MEMBER', drive: drive() })).toMatchObject({ ok: false, code: 'NOT_APPROVER' });
     expect(decideJoinRequestApprover({ actorId: CHRIS, actorOrgRole: null, drive: drive() })).toMatchObject({ ok: false, code: 'REQUEST_NOT_FOUND' });
     expect(decideJoinRequestApprover({ actorId: PRIYA, actorOrgRole: 'ADMIN', drive: null })).toMatchObject({ ok: false, code: 'REQUEST_NOT_FOUND' });

@@ -224,7 +224,7 @@ export function decideChangeOrgDriveLead({
 }): { ok: true; changed: boolean; fromUserId: string; toUserId: string } | OrgDriveRefusal {
   const refusal = authorizeOrgDriveChange(drive, actorId, actorOrgRole, "this drive's lead");
   if (refusal) return refusal;
-  if (targetId === drive.ownerId) return { ok: true, changed: false, fromUserId: drive.ownerId, toUserId: targetId };
+  if (isDriveLead(targetId, drive)) return { ok: true, changed: false, fromUserId: drive.ownerId, toUserId: targetId };
   if (!canLeadOrgDrive(targetOrgRole)) {
     return refuse('TARGET_NOT_ORG_MEMBER', 409, 'The new lead must be a member of the organization.');
   }

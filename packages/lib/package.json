@@ -1419,6 +1419,11 @@
       "import": "./dist/services/org-drive-service.js",
       "require": "./dist/services/org-drive-service.js"
     },
+    "./services/drive-join-request-service": {
+      "types": "./dist/services/drive-join-request-service.d.ts",
+      "import": "./dist/services/drive-join-request-service.js",
+      "require": "./dist/services/drive-join-request-service.js"
+    },
     "./services/org-drive-service-deps": {
       "types": "./dist/services/org-drive-service-deps.d.ts",
       "import": "./dist/services/org-drive-service-deps.js",
@@ -2363,6 +2368,11 @@
       "types": "./dist/permissions/drive-relationship-loader.d.ts",
       "import": "./dist/permissions/drive-relationship-loader.js",
       "require": "./dist/permissions/drive-relationship-loader.js"
+    },
+    "./permissions/org-drive-directory": {
+      "types": "./dist/permissions/org-drive-directory.d.ts",
+      "import": "./dist/permissions/org-drive-directory.js",
+      "require": "./dist/permissions/org-drive-directory.js"
     },
     "./permissions/member-drives": {
       "types": "./dist/permissions/member-drives.d.ts",

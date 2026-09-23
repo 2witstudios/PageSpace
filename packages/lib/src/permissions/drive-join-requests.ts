@@ -152,6 +152,7 @@ export function decideJoinRequestDecision({
 }: JoinRequestDecisionInput): JoinRequestAnswer {
   const approver = decideJoinRequestApprover({ actorId, actorOrgRole, drive });
   if (!approver.ok) return approver;
+  const orgDrive = approver.drive;
   if (request.userId === actorId) {
     return refuse('SELF_DECISION', 403, 'You cannot answer your own join request.');
   }
@@ -160,13 +161,13 @@ export function decideJoinRequestDecision({
   }
   if (decision === 'deny') return { ok: true, action: 'deny' };
 
-  if (drive.orgVisibility !== 'RESTRICTED') {
+  if (orgDrive.orgVisibility !== 'RESTRICTED') {
     return refuse('NOT_RESTRICTED', 409, 'This drive is no longer Restricted. Invite the person instead.');
   }
   if (requesterOrgRole === null) {
     return refuse('REQUESTER_NOT_ORG_MEMBER', 409, 'The requester is no longer a member of the organization.');
   }
-  if (holdsMembership(request.userId, drive, requesterOrgRole, requesterRow)) {
+  if (holdsMembership(request.userId, orgDrive, requesterOrgRole, requesterRow)) {
     return { ok: true, action: 'approve', admit: false };
   }
   if (isPendingInvite(requesterRow)) {
@@ -187,13 +188,13 @@ export function decideJoinRequestApprover({
   actorId: string;
   actorOrgRole: OrgRole | null;
   drive: JoinDrive | null;
-}): { ok: true } | JoinRequestRefusal {
+}): { ok: true; drive: JoinDrive & { orgId: string } } | JoinRequestRefusal {
   if (!isLiveOrgDrive(drive) || actorOrgRole === null) return requestNotFound();
   const authority = decideDriveLeadAuthority({ orgsEnabled: true, userId: actorId, drive, orgRole: actorOrgRole });
   if (!authority.allowed) {
     return refuse('NOT_APPROVER', 403, 'Only the drive lead or an organization Owner or Admin can answer join requests.');
   }
-  return { ok: true };
+  return { ok: true, drive };
 }
 
 /** The requester, and only they, may withdraw a pending request. */

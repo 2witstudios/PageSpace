@@ -13,6 +13,11 @@ vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({
 vi.mock('@pagespace/lib/services/org-drive-service', () => ({
   moveDriveToOrg: vi.fn(),
   moveDriveOutOfOrg: vi.fn(),
+  changeDriveVisibility: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/permissions/drive-relationship-loader', () => ({
+  recordOrgPowerDriveAction: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('@pagespace/lib/services/org-drive-service-deps', () => ({
@@ -44,8 +49,9 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
-import { PUT, DELETE } from '../route';
-import { moveDriveToOrg, moveDriveOutOfOrg } from '@pagespace/lib/services/org-drive-service';
+import { PUT, DELETE, PATCH } from '../route';
+import { moveDriveToOrg, moveDriveOutOfOrg, changeDriveVisibility } from '@pagespace/lib/services/org-drive-service';
+import { recordOrgPowerDriveAction } from '@pagespace/lib/permissions/drive-relationship-loader';
 import { orgDriveServiceDeps } from '@pagespace/lib/services/org-drive-service-deps';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
@@ -68,7 +74,7 @@ const session = (userId: string): SessionAuthResult => ({
 
 const context = { params: Promise.resolve({ driveId: DRIVE }) };
 
-const request = (method: 'PUT' | 'DELETE', body: unknown) =>
+const request = (method: 'PUT' | 'DELETE' | 'PATCH', body: unknown) =>
   new Request(`https://example.com/api/drives/${DRIVE}/org`, {
     method,
     headers: { 'content-type': 'application/json' },
@@ -232,12 +238,72 @@ describe('/api/drives/[driveId]/org', () => {
     });
   });
 
+  describe('PATCH (visibility)', () => {
+    const restricted = { ...product, ownerId: MARCUS, orgId: NORTHWIND, orgVisibility: 'RESTRICTED' };
+
+    it('DRV-4 (partial) changes visibility with the caller, body and production deps, audits it (AUD-1, ORG-4) and broadcasts', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(session(PRIYA));
+      vi.mocked(changeDriveVisibility).mockResolvedValue({
+        ok: true, changed: true, drive: restricted as never, from: 'OPEN', to: 'RESTRICTED',
+      });
+
+      const response = await PATCH(request('PATCH', { orgVisibility: 'RESTRICTED' }), context);
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ drive: { id: DRIVE, orgVisibility: 'RESTRICTED' } });
+      expect(changeDriveVisibility).toHaveBeenCalledWith(PRIYA, DRIVE, { orgVisibility: 'RESTRICTED' }, orgDriveServiceDeps);
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          userId: PRIYA,
+          resourceId: DRIVE,
+          details: { operation: 'org_visibility_change', orgId: NORTHWIND, from: 'OPEN', to: 'RESTRICTED' },
+        })
+      );
+      expect(recordOrgPowerDriveAction).toHaveBeenCalledWith(PRIYA, restricted, 'change_visibility');
+      expect(broadcastDriveEvent).toHaveBeenCalledWith(expect.objectContaining({ driveId: DRIVE, operation: 'updated' }), ['user-marcus', 'user-lena']);
+    });
+
+    it('DRV-4 (partial) a refusal answers with the service verdict and audits nothing', async () => {
+      vi.mocked(changeDriveVisibility).mockResolvedValue({
+        ok: false, code: 'NOT_DRIVE_LEAD_OR_ORG_ADMIN', status: 403, message: 'no',
+      });
+
+      const response = await PATCH(request('PATCH', { orgVisibility: 'PRIVATE' }), context);
+
+      expect(response.status).toBe(403);
+      expect((await response.json()).code).toBe('NOT_DRIVE_LEAD_OR_ORG_ADMIN');
+      expect(auditRequest).not.toHaveBeenCalled();
+      expect(broadcastDriveEvent).not.toHaveBeenCalled();
+    });
+
+    it('DRV-4 (partial) an unchanged visibility writes no audit event and broadcasts nothing', async () => {
+      vi.mocked(changeDriveVisibility).mockResolvedValue({
+        ok: true, changed: false, drive: restricted as never, from: 'RESTRICTED', to: 'RESTRICTED',
+      });
+
+      const response = await PATCH(request('PATCH', { orgVisibility: 'RESTRICTED' }), context);
+
+      expect(response.status).toBe(200);
+      expect(auditRequest).not.toHaveBeenCalled();
+      expect(broadcastDriveEvent).not.toHaveBeenCalled();
+    });
+
+    it('DRV-4 (partial) an unknown visibility is rejected before the service runs', async () => {
+      const response = await PATCH(request('PATCH', { orgVisibility: 'SECRET' }), context);
+
+      expect(response.status).toBe(400);
+      expect(changeDriveVisibility).not.toHaveBeenCalled();
+    });
+  });
+
   it.each([
     ['PUT', { orgId: NORTHWIND }],
     ['DELETE', { implicitMembers: 'keep' }],
+    ['PATCH', { orgVisibility: 'PRIVATE' }],
   ] as const)('%s answers 404 and does nothing while ORGS_ENABLED is false', async (method, body) => {
     orgsFlag.enabled = false;
-    const handler = method === 'PUT' ? PUT : DELETE;
+    const handler = method === 'PUT' ? PUT : method === 'DELETE' ? DELETE : PATCH;
 
     const response = await handler(request(method, body), context);
 
@@ -245,5 +311,6 @@ describe('/api/drives/[driveId]/org', () => {
     expect(authenticateRequestWithOptions).not.toHaveBeenCalled();
     expect(moveDriveToOrg).not.toHaveBeenCalled();
     expect(moveDriveOutOfOrg).not.toHaveBeenCalled();
+    expect(changeDriveVisibility).not.toHaveBeenCalled();
   });
 });
