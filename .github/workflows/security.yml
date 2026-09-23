@@ -65,6 +65,11 @@ on:
       - 'packages/lib/src/services/app-hosting/**'
       - 'packages/lib/src/services/fly/**'
       - 'packages/db/src/schema/published-apps.ts'
+      # The browser worker's egress proxy is the network boundary under an
+      # agent-driven Chromium (SSRF, rebinding, header allowlists). Without this
+      # entry a PR touching only the proxy got no Security Tests and no CodeQL
+      # (CodeQL alert 350 surfaced on master only, blocking unrelated PRs).
+      - 'packages/browser-worker/**'
   pull_request:
     # BASE branches, not head. This branch listed itself here and it bought
     # nothing: its PR targets `master`, which is already listed, so the suite
@@ -137,6 +142,11 @@ on:
       - 'packages/lib/src/services/app-hosting/**'
       - 'packages/lib/src/services/fly/**'
       - 'packages/db/src/schema/published-apps.ts'
+      # The browser worker's egress proxy is the network boundary under an
+      # agent-driven Chromium (SSRF, rebinding, header allowlists). Without this
+      # entry a PR touching only the proxy got no Security Tests and no CodeQL
+      # (CodeQL alert 350 surfaced on master only, blocking unrelated PRs).
+      - 'packages/browser-worker/**'
   # Allow manual trigger
   workflow_dispatch:
   # Run on schedule for continuous security monitoring
