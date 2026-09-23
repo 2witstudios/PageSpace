@@ -188,7 +188,7 @@ describe('changeOrgDriveLead', () => {
     db.select().from(driveMembers).where(and(eq(driveMembers.driveId, driveId), eq(driveMembers.userId, userId), eq(driveMembers.role, 'OWNER')));
 
   it('DRV-1 (partial) the lead hands an Open drive to a member: ownerId and the OWNER row move together, and the former lead stays in only as an org member', async () => {
-    // Marcus's owner self-heal row, carried in from when Product was his personal drive.
+    // Marcus's owner self-heal row, carried in from when Product was Marcus's personal drive.
     await db.insert(driveMembers).values({ driveId: product, userId: marcus, role: 'OWNER', acceptedAt: new Date() });
 
     const result = await changeOrgDriveLead(marcus, product, { newLeadId: lena }, orgDriveServiceDeps);
