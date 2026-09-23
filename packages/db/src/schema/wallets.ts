@@ -98,7 +98,7 @@ export const wallets = pgTable('wallets', {
   // administers the wallet); on a PERSONAL ROOT wallet it is the person's own default from
   // Settings. NULL means no default: nothing is preselected from this row, and where a person
   // has more than one source the gate refuses until one is chosen (SPEND-4). Meaningless on
-  // an org pool, which no one spends "by default".
+  // an org pool, which no one spends "by default" — the CHECK refuses one there.
   defaultSpendSource: text('defaultSpendSource').$type<SpendSourceKindValue>(),
   createdAt: timestamp('createdAt', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date', withTimezone: true }).defaultNow().notNull().$onUpdate(() => new Date()),
@@ -138,7 +138,9 @@ export const wallets = pgTable('wallets', {
 
   defaultSpendSourceValid: check(
     'wallets_default_spend_source_valid',
-    sql`${table.defaultSpendSource} IS NULL OR ${table.defaultSpendSource} IN ('drive_wallet', 'seat_allowance', 'own_credits')`,
+    // A known kind, and never on an org pool: no one spends a pool "by default" (the seat is
+    // a source, the pool is not a place a default can live).
+    sql`${table.defaultSpendSource} IS NULL OR (${table.defaultSpendSource} IN ('drive_wallet', 'seat_allowance', 'own_credits') AND NOT (${table.ownerType} = 'org' AND ${table.subjectType} IS NULL))`,
   ),
 
   // The credit_balances invariants, carried over unchanged: a single bad write can't

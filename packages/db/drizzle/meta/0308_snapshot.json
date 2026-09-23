@@ -1,5 +1,5 @@
 {
-  "id": "e3818a1a-f48e-4fbd-95f5-8f1b89a1cd5e",
+  "id": "90e3d87d-aada-4b45-b5fe-e600c3906593",
   "prevId": "85177c65-2505-490f-822a-25c21fb78a1f",
   "version": "7",
   "dialect": "postgresql",
@@ -19271,7 +19271,7 @@
         },
         "wallets_default_spend_source_valid": {
           "name": "wallets_default_spend_source_valid",
-          "value": "\"wallets\".\"defaultSpendSource\" IS NULL OR \"wallets\".\"defaultSpendSource\" IN ('drive_wallet', 'seat_allowance', 'own_credits')"
+          "value": "\"wallets\".\"defaultSpendSource\" IS NULL OR (\"wallets\".\"defaultSpendSource\" IN ('drive_wallet', 'seat_allowance', 'own_credits') AND NOT (\"wallets\".\"ownerType\" = 'org' AND \"wallets\".\"subjectType\" IS NULL))"
         },
         "wallets_monthly_remaining_nonneg": {
           "name": "wallets_monthly_remaining_nonneg",

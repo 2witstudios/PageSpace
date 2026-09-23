@@ -166,7 +166,7 @@ describe('wallet_consumer_caps', () => {
 });
 
 describe('the stored spend source (SPEND-3)', () => {
-  it('SPEND-3 (partial): a wallet carries a nullable default spend source, checked against the three source kinds', () => {
+  it('SPEND-3 (partial): a wallet carries a nullable default spend source, checked against the three source kinds and refused on an org pool', () => {
     const column = getTableColumns(wallets).defaultSpendSource;
     // NULL means "no default set": nothing is preselected from this row.
     expect(column.notNull).toBe(false);
@@ -174,7 +174,7 @@ describe('the stored spend source (SPEND-3)', () => {
     expect(SPEND_SOURCE_KINDS).toEqual(['drive_wallet', 'seat_allowance', 'own_credits']);
     const check = getTableConfig(wallets).checks.find((c) => c.name === 'wallets_default_spend_source_valid');
     expect(check && dialect.sqlToQuery(check.value).sql).toBe(
-      `"wallets"."defaultSpendSource" IS NULL OR "wallets"."defaultSpendSource" IN ('drive_wallet', 'seat_allowance', 'own_credits')`,
+      `"wallets"."defaultSpendSource" IS NULL OR ("wallets"."defaultSpendSource" IN ('drive_wallet', 'seat_allowance', 'own_credits') AND NOT ("wallets"."ownerType" = 'org' AND "wallets"."subjectType" IS NULL))`,
     );
   });
 
