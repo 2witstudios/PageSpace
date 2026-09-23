@@ -12,6 +12,12 @@ const mocks = vi.hoisted(() => ({
   find: vi.fn(),
   create: vi.fn(),
   audit: vi.fn(),
+  // Stands in for the lib class so the route's instanceof check sees the same constructor.
+  StoreError: class AgentIdentityStoreError extends Error {
+    constructor(readonly operation: string, readonly redacted: { errorName: string; code: string | null; constraint: string | null }) {
+      super(`Agent identity store failed: ${operation}`);
+    }
+  },
 }));
 
 vi.mock('@/lib/agent-auth/door', async (importOriginal) => ({
@@ -29,6 +35,7 @@ vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   },
 }));
 vi.mock('@pagespace/lib/services/agent-identities', () => ({
+  AgentIdentityStoreError: mocks.StoreError,
   findAgentSignupChallenge: mocks.find,
   createAgentAccount: mocks.create,
 }));
@@ -112,6 +119,52 @@ describe('POST /api/agent/identity', () => {
       const audited = JSON.stringify(mocks.audit.mock.calls);
       expect(audited).not.toContain(SECRET);
       expect(audited).not.toContain(CLAIM);
+    });
+  });
+
+  describe('given the deployment-wide signup budget is spent (Phase 2b)', () => {
+    it('should answer the same 429 body a per-IP limit does, with the retry hint, and audit it as a global-window refusal', async () => {
+      mocks.create.mockResolvedValue({ ok: false, error: 'signup_budget_exhausted', retryAfterSeconds: 1200 });
+
+      const response = await register(validBody());
+
+      expect(response.status).toBe(429);
+      expect(await response.json()).toEqual({ error: 'rate_limited', retryAfter: 1200 });
+      expect(response.headers.get('Retry-After')).toBe('1200');
+      expect(mocks.audit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+        eventType: 'security.rate.limited',
+        details: expect.objectContaining({ agentAuthEvent: 'signup_rate_limited', window: 'global' }),
+      }));
+    });
+
+    it('should refuse every caller once spent, whatever client IP each request reports', async () => {
+      mocks.create.mockResolvedValue({ ok: false, error: 'signup_budget_exhausted', retryAfterSeconds: 60 });
+
+      const statuses = await Promise.all(Array.from({ length: 5 }, () => register(validBody()).then((r) => r.status)));
+
+      expect(statuses).toEqual([429, 429, 429, 429, 429]);
+    });
+  });
+
+  describe('given the identity store fails (Phase 2b: no hash reaches a log)', () => {
+    it('should answer 503 temporarily_unavailable and audit only the operation and the pg code', async () => {
+      mocks.create.mockRejectedValue(new mocks.StoreError('create_account', { errorName: 'DrizzleQueryError', code: '23505', constraint: 'agent_identities_secretHash_unique' }));
+
+      const response = await register(validBody());
+
+      expect(response.status).toBe(503);
+      expect(await response.json()).toEqual({ error: 'temporarily_unavailable' });
+      expect(response.headers.get('Cache-Control')).toBe('no-store');
+      expect(mocks.audit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+        eventType: 'auth.login.failure',
+        details: { agentAuthEvent: 'signup_refused', reason: 'store_failed', operation: 'create_account', code: '23505' },
+      }));
+    });
+
+    it('given any other error, should not swallow it', async () => {
+      mocks.create.mockRejectedValue(new TypeError('bug'));
+
+      await expect(register(validBody())).rejects.toThrow('bug');
     });
   });
 

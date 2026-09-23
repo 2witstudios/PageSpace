@@ -10,10 +10,15 @@
  * `createAgentAccount` consumes the challenge atomically with the account
  * insert, so a replay that races past the lookup still creates nothing.
  *
- * Wire shape: a bad proof is 403 `pow_invalid` (re-solve, don't re-fetch);
- * every other failure is ONE 400 body. The response is the only place the
- * `ps_agent_*` secret ever leaves the server (threat model §3): it is never
- * logged or audited.
+ * The deployment-wide signup budget (`decideAgentSignupBudget`, enforced inside
+ * `createAgentAccount` so no door can skip it) answers exactly like a per-IP
+ * limit: the same 429 body, so the two ceilings are indistinguishable.
+ *
+ * Wire shape: a bad proof is 403 `pow_invalid` (re-solve, don't re-fetch); a
+ * store failure is 503 `temporarily_unavailable` (its log carries no bound
+ * value — see `AgentIdentityStoreError`); every other failure is ONE 400 body.
+ * The response is the only place the `ps_agent_*` secret ever leaves the server
+ * (threat model §3): it is never logged or audited.
  */
 import { z } from 'zod/v4';
 import { getClientIP } from '@/lib/auth';
@@ -24,7 +29,7 @@ import { verifyPowSolution, POW_NONCE_MAX_LENGTH } from '@pagespace/lib/auth/age
 import { decideAgentSignup } from '@pagespace/lib/auth/agent/signup-decision';
 import { buildServerMetadata, AGENT_ASSERTION_GRANT_TYPE } from '@pagespace/lib/auth/oauth/metadata';
 import { PAGESPACE_AGENT_CLIENT_ID } from '@pagespace/lib/auth/oauth/clients';
-import { createAgentAccount, findAgentSignupChallenge } from '@pagespace/lib/services/agent-identities';
+import { AgentIdentityStoreError, createAgentAccount, findAgentSignupChallenge } from '@pagespace/lib/services/agent-identities';
 
 export const dynamic = 'force-dynamic';
 
@@ -48,6 +53,16 @@ const identityRequestSchema = z.object({
 const INVALID_REQUEST = { error: 'invalid_request' } as const;
 
 export async function POST(request: Request) {
+  try {
+    return await register(request);
+  } catch (error) {
+    if (!(error instanceof AgentIdentityStoreError)) throw error;
+    auditRequest(request, { eventType: 'auth.login.failure', resourceType: 'agent_identity', details: { agentAuthEvent: 'signup_refused', reason: 'store_failed', operation: error.operation, code: error.redacted.code }, riskScore: 0.1 });
+    return agentNoStoreJson({ error: 'temporarily_unavailable' }, 503);
+  }
+}
+
+async function register(request: Request) {
   if (!isAgentDoorOpen()) {
     auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'agent_identity', details: { reason: 'agent_signup_disabled' }, riskScore: 0.1 });
     return agentNotFound();
@@ -94,6 +109,10 @@ export async function POST(request: Request) {
     challengeId: challenge.id,
     now,
   });
+  if (!created.ok && created.error === 'signup_budget_exhausted') {
+    auditRequest(request, { eventType: 'security.rate.limited', resourceType: 'agent_identity', details: { agentAuthEvent: 'signup_rate_limited', window: 'global' }, riskScore: 0.5 });
+    return agentRateLimited(created.retryAfterSeconds);
+  }
   if (!created.ok) return refuse('challenge_consumed_concurrently');
 
   const { userId, secret, claimToken } = created.data;

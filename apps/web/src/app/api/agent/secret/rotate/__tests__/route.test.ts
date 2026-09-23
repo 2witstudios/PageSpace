@@ -6,7 +6,14 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ auth: vi.fn(), summary: vi.fn(), rotate: vi.fn(), audit: vi.fn(), tokenClient: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  auth: vi.fn(), summary: vi.fn(), rotate: vi.fn(), audit: vi.fn(), tokenClient: vi.fn(), rateLimit: vi.fn(),
+  StoreError: class AgentIdentityStoreError extends Error {
+    constructor(readonly operation: string, readonly redacted: { errorName: string; code: string | null; constraint: string | null }) {
+      super(`Agent identity store failed: ${operation}`);
+    }
+  },
+}));
 
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: mocks.auth,
@@ -14,7 +21,12 @@ vi.mock('@/lib/auth', () => ({
 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: mocks.audit }));
 vi.mock('@/lib/repositories/oauth-repository', () => ({ findAccessTokenIssuance: mocks.tokenClient }));
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
+  checkDistributedRateLimit: mocks.rateLimit,
+  DISTRIBUTED_RATE_LIMITS: { AGENT_SECRET_ROTATE: { maxAttempts: 5, windowMs: 3_600_000 } },
+}));
 vi.mock('@pagespace/lib/services/agent-identities', () => ({
+  AgentIdentityStoreError: mocks.StoreError,
   getAgentIdentitySummary: mocks.summary,
   rotateAgentSecret: mocks.rotate,
 }));
@@ -38,6 +50,55 @@ describe('POST /api/agent/secret/rotate', () => {
     mocks.tokenClient.mockResolvedValue({ clientId: 'pagespace-agent', accountType: 'agent' });
     mocks.summary.mockImplementation(async (userId: string) => (userId === 'agent-1' ? { ownerUserId: 'human-1', claimedAt: new Date(), source: 'codex' } : null));
     mocks.rotate.mockResolvedValue({ ok: true, data: { secret: NEW_SECRET, secretPrefix: NEW_SECRET.slice(0, 12), secretVersion: 2 } });
+    mocks.rateLimit.mockResolvedValue({ allowed: true, attemptsRemaining: 4 });
+  });
+
+  describe('rotation rate limit (Phase 2b: AGENT_SECRET_ROTATE)', () => {
+    it('given the agent rotating itself, should spend the agent\'s own self bucket', async () => {
+      await POST(rotateRequest({}));
+      expect(mocks.rateLimit).toHaveBeenCalledWith('agent-secret-rotate:self:agent-1', { maxAttempts: 5, windowMs: 3_600_000 });
+    });
+
+    it('given the owner rotating from a session, should spend a separate owner bucket for that agent', async () => {
+      mocks.auth.mockResolvedValue({ userId: 'human-1', tokenType: 'session', sessionId: 's-1' });
+      await POST(rotateRequest({ agentId: 'agent-1' }));
+      expect(mocks.rateLimit).toHaveBeenCalledWith('agent-secret-rotate:owner:agent-1', expect.anything());
+    });
+
+    it('given the bucket is spent, should answer 429, rotate nothing, and audit the refusal', async () => {
+      mocks.rateLimit.mockResolvedValue({ allowed: false, retryAfter: 1800 });
+
+      const response = await POST(rotateRequest({ revokeExistingTokens: true }));
+
+      expect(response.status).toBe(429);
+      expect(await response.json()).toEqual({ error: 'rate_limited', retryAfter: 1800 });
+      expect(mocks.rotate).not.toHaveBeenCalled();
+      expect(mocks.audit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+        eventType: 'security.rate.limited',
+        details: { agentAuthEvent: 'secret_rotate_rate_limited', actor: 'self' },
+      }));
+    });
+
+    it('given a caller who is neither the agent nor its owner, should 404 without touching any bucket (no one can drain another agent\'s budget)', async () => {
+      mocks.auth.mockResolvedValue({ userId: 'stranger-1', tokenType: 'session', sessionId: 's-2' });
+      const response = await POST(rotateRequest({ agentId: 'agent-1' }));
+      expect(response.status).toBe(404);
+      expect(mocks.rateLimit).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('given the identity store fails (Phase 2b: no hash reaches a log)', () => {
+    it('should answer 503 temporarily_unavailable and audit only the pg code', async () => {
+      mocks.rotate.mockRejectedValue(new mocks.StoreError('rotate_secret', { errorName: 'DrizzleQueryError', code: '23505', constraint: 'agent_identities_secretHash_unique' }));
+
+      const response = await POST(rotateRequest({}));
+
+      expect(response.status).toBe(503);
+      expect(await response.json()).toEqual({ error: 'temporarily_unavailable' });
+      expect(mocks.audit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+        details: { reason: 'store_failed', agentAuthEvent: 'secret_rotate_refused', code: '23505' },
+      }));
+    });
   });
 
   it('should authenticate with a session (CSRF-checked) or an OAuth access token', async () => {

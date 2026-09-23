@@ -1145,12 +1145,25 @@ export const DISTRIBUTED_RATE_LIMITS = {
     blockDurationMs: 5 * 60 * 1000,
     progressiveDelay: false,
   },
-  // Per presented credential (hash of the secret or refresh token), tight: stops
-  // a hot loop on one secret without touching any other agent.
+  // Per presented secret (its hash) on jwt-bearer, per token FAMILY on the
+  // refresh grant (a refresh token rotates every use, so keying on it would be a
+  // fresh bucket per refresh). Tight: stops a hot loop without touching any
+  // other agent.
   AGENT_TOKEN_CREDENTIAL: {
     maxAttempts: 10,
     windowMs: 5 * 60 * 1000,
     blockDurationMs: 5 * 60 * 1000,
+    progressiveDelay: false,
+  },
+  // POST /api/agent/secret/rotate (Agent Signup Phase 2b), keyed per agent AND
+  // per actor (auth/agent/token-rate-limit-keys.ts). Rotation is rare; a loop
+  // is a stolen token that, with revokeExistingTokens, would mass-revoke the
+  // agent's keys on every call. The owner's bucket is separate, so the owner can
+  // always rotate the agent back out of a thief's hands.
+  AGENT_SECRET_ROTATE: {
+    maxAttempts: 5,
+    windowMs: 60 * 60 * 1000,
+    blockDurationMs: 60 * 60 * 1000,
     progressiveDelay: false,
   },
   // POST /api/auth/mcp-tokens by an AI agent's own bearer token (ADR 0007 D6),

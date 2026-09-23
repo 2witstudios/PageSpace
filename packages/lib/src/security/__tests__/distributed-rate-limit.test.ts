@@ -942,6 +942,10 @@ describe('distributed-rate-limit', () => {
       expect(DISTRIBUTED_RATE_LIMITS.AGENT_TOKEN_CREDENTIAL).toEqual({ maxAttempts: 10, windowMs: 5 * 60 * 1000, blockDurationMs: 5 * 60 * 1000, progressiveDelay: false });
     });
 
+    it('AGENT_SECRET_ROTATE allows an agent (or its owner, in a separate bucket) 5 rotations per hour', () => {
+      expect(DISTRIBUTED_RATE_LIMITS.AGENT_SECRET_ROTATE).toEqual({ maxAttempts: 5, windowMs: 60 * 60 * 1000, blockDurationMs: 60 * 60 * 1000, progressiveDelay: false });
+    });
+
     it('AGENT_KEY_MINT allows an agent 10 mcp_ key mints per hour', () => {
       expect(DISTRIBUTED_RATE_LIMITS.AGENT_KEY_MINT).toEqual({ maxAttempts: 10, windowMs: 60 * 60 * 1000, blockDurationMs: 60 * 60 * 1000, progressiveDelay: false });
     });

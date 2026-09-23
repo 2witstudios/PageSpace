@@ -37,6 +37,8 @@ export const agentIdentities = pgTable('agent_identities', {
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
 }, (table) => ({
   ownerUserIdx: index('agent_identities_owner_user_id_idx').on(table.ownerUserId),
+  // The deployment-wide signup budget counts identities created in a rolling window.
+  createdAtIdx: index('agent_identities_created_at_idx').on(table.createdAt),
 }));
 
 /**

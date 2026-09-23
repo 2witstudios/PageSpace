@@ -669,6 +669,11 @@
       "import": "./dist/logging/siem-error-hook.js",
       "require": "./dist/logging/siem-error-hook.js"
     },
+    "./logging/db-error-redaction": {
+      "types": "./dist/logging/db-error-redaction.d.ts",
+      "import": "./dist/logging/db-error-redaction.js",
+      "require": "./dist/logging/db-error-redaction.js"
+    },
     "./logging/monitoring-purge": {
       "types": "./dist/logging/monitoring-purge.d.ts",
       "import": "./dist/logging/monitoring-purge.js",
@@ -2767,6 +2772,9 @@
       ],
       "billing/live-concurrency-query": [
         "./dist/billing/live-concurrency-query.d.ts"
+      ],
+      "logging/db-error-redaction": [
+        "./dist/logging/db-error-redaction.d.ts"
       ],
       "logging/siem-error-hook": [
         "./dist/logging/siem-error-hook.d.ts"

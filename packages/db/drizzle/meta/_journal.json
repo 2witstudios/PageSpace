@@ -2101,6 +2101,13 @@
       "when": 1790131665618,
       "tag": "0299_smiling_sheva_callister",
       "breakpoints": true
+    },
+    {
+      "idx": 300,
+      "version": "7",
+      "when": 1790167726027,
+      "tag": "0300_thankful_doctor_doom",
+      "breakpoints": true
     }
   ]
 }
