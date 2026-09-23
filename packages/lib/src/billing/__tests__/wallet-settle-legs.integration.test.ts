@@ -18,7 +18,7 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
 import { db, pool } from '@pagespace/db/db';
-import { eq, inArray, asc } from '@pagespace/db/operators';
+import { eq, inArray, asc, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { creditHolds, creditLedger } from '@pagespace/db/schema/credits';
@@ -29,6 +29,7 @@ import { requireDb } from '@pagespace/db/test/require-db';
 import { loggers } from '../../logging/logger-config';
 import { consumeCredits } from '../credit-consume';
 import { donateToDriveWallet, refundFundingLeg } from '../wallet-funding-shell';
+import { expectWalletLegInvariant, installWalletLegInvariantTrigger, WALLET_LEG_INVARIANT_GUC } from '../../test/wallet-leg-invariant';
 
 let dbAvailable = false;
 const originalMode = process.env.DEPLOYMENT_MODE;
@@ -67,25 +68,30 @@ async function build(input: { ownerLegCents: number; jonoRootCents?: number; dri
     ...period,
   }).returning();
   const [adaRoot] = await db.insert(wallets).values({ userId: ada.id, monthlyRemainingCents: 5_000, ...period }).returning();
-  const [driveWallet] = await db.insert(wallets).values({
-    id: `z${createId()}`,
-    userId: jono.id,
-    subjectType: 'drive',
-    subjectId: drive.id,
-    parentWalletId: jonoRoot.id,
-    monthlyAllowanceCents: input.driveAllocationCents ?? 0,
-    topupRemainingCents: input.ownerLegCents,
-  }).returning();
-  // The owner's top-up arrived first, so FIFO draws it before any later donation.
-  const [ownerLeg] = await db.insert(walletFundingLegs).values({
-    walletId: driveWallet.id,
-    funderKind: 'owner',
-    funderUserId: jono.id,
-    originalCents: input.ownerLegCents,
-    remainingCents: input.ownerLegCents,
-    nonRefundable: false,
-    createdAt: new Date(Date.now() - 60_000),
-  }).returning();
+  // The drive wallet and its owner leg in ONE transaction: the row mirrors its legs at
+  // every commit (the integration setup's invariant trigger checks exactly that).
+  const { driveWallet, ownerLeg } = await db.transaction(async (tx) => {
+    const [w] = await tx.insert(wallets).values({
+      id: `z${createId()}`,
+      userId: jono.id,
+      subjectType: 'drive',
+      subjectId: drive.id,
+      parentWalletId: jonoRoot.id,
+      monthlyAllowanceCents: input.driveAllocationCents ?? 0,
+      topupRemainingCents: input.ownerLegCents,
+    }).returning();
+    // The owner's top-up arrived first, so FIFO draws it before any later donation.
+    const [leg] = await tx.insert(walletFundingLegs).values({
+      walletId: w.id,
+      funderKind: 'owner',
+      funderUserId: jono.id,
+      originalCents: input.ownerLegCents,
+      remainingCents: input.ownerLegCents,
+      nonRefundable: false,
+      createdAt: new Date(Date.now() - 60_000),
+    }).returning();
+    return { driveWallet: w, ownerLeg: leg };
+  });
   return {
     jonoId: jono.id,
     adaId: ada.id,
@@ -192,8 +198,17 @@ describe('a drive-wallet settle and the funding legs (real Postgres)', () => {
     vi.restoreAllMocks();
     if (originalMode === undefined) delete process.env.DEPLOYMENT_MODE;
     else process.env.DEPLOYMENT_MODE = originalMode;
-    if (world) await teardown(world);
+    // The invariant on the wallet this test touched, before teardown deletes it — also when
+    // the test failed mid-way.
+    const touched = world;
     world = null;
+    if (touched) {
+      try {
+        await expectWalletLegInvariant([touched.driveWalletId]);
+      } finally {
+        await teardown(touched);
+      }
+    }
   });
 
   afterAll(async () => {
@@ -322,6 +337,31 @@ describe('a drive-wallet settle and the funding legs (real Postgres)', () => {
     expect(await legInvariant(w.driveWalletId)).toEqual({ topupRemainingCents: 550, legsTotal: 550 });
     expect((await walletRow(w.jonoRootId)).monthlyRemainingCents).toBe(4_800);
   }, 15_000);
+
+  it('the invariant helper refuses to pass vacuously: no wallet named, or none that exists', async () => {
+    if (!dbAvailable) return;
+    world = await build({ ownerLegCents: 500 });
+    await expect(expectWalletLegInvariant([])).rejects.toThrow(/vacuously/);
+    await expect(expectWalletLegInvariant([`missing-${createId()}`])).rejects.toThrow(/nothing was checked/);
+    // A root wallet alone is not a check either: only child wallets carry legs.
+    await expect(expectWalletLegInvariant([world.jonoRootId])).rejects.toThrow(/nothing was checked/);
+  });
+
+  it('a write that breaks topupRemainingCents == SUM(legs) is refused at COMMIT by the harness trigger', async () => {
+    if (!dbAvailable) return;
+    world = await build({ ownerLegCents: 500 });
+    const w = world;
+    await installWalletLegInvariantTrigger(pool);
+
+    // A direct top-up write that skips the legs — the class of bug P1-1 and the reconcile had.
+    const write = db.transaction(async (tx) => {
+      await tx.execute(sql.raw(`SET LOCAL ${WALLET_LEG_INVARIANT_GUC} = 'on'`));
+      await tx.update(wallets).set({ topupRemainingCents: 425 }).where(eq(wallets.id, w.driveWalletId));
+    });
+
+    await expect(write).rejects.toMatchObject({ cause: { code: '23514' } });
+    expect(await legInvariant(w.driveWalletId)).toEqual({ topupRemainingCents: 500, legsTotal: 500 });
+  });
 
   it('a settle and a refund of the same wallet\'s leg never deadlock (wallet before legs, in both)', async () => {
     if (!dbAvailable) return;

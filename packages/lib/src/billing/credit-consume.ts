@@ -24,10 +24,11 @@ import { wallets } from '@pagespace/db/schema/wallets';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { and, eq, isNull, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
-import { chargeMillicents, accruePending, allocateSpend } from './credit-core';
+import { chargeMillicents, accruePending, allocateSpend, applyPaymentToDebt } from './credit-core';
 import { allocateWalletSpend, settleOvershoot, DEFAULT_OVERSHOOT_CHOICE } from './wallet-core';
 import { childWalletFunds, type WalletBalanceFacts } from './spend-target';
-import { drawWalletFundingLegs } from './wallet-legs';
+import { drawWalletFundingLegs, creditWalletFundingLegs } from './wallet-legs';
+import { parseWalletDraws, addWalletDraws, planWalletRefund, type WalletDraws } from './wallet-draws';
 import { MARKUP_BPS } from './credit-pricing';
 import { emitCreditsUpdated } from './credit-emit';
 import { ensurePersonalRootWalletId } from './personal-wallet';
@@ -115,30 +116,13 @@ async function decrementAndSettle(
   aiUsageLogId: string | null,
   holdId: string | null = null,
 ): Promise<boolean> {
-  // Lock the charged wallet, then (for a drive wallet) its parent: the order the gate
-  // locks in, so a gate and a settle on the same wallets never wait in a cycle.
-  const rows = await tx
-    .select()
-    .from(wallets)
-    .where(eq(wallets.id, walletId))
-    .for('update');
-  const bal = rows[0] as
-    | (WalletBalanceFacts & { pendingMillicents: number; monthlyPeriodEnd: Date | null })
-    | undefined;
+  const settled = await chargeWallet(tx, walletId, chargeMc, aiUsageLogId);
 
   // No balance row yet (e.g. an existing user before the gate lazy-inits one).
   // Leave the ledger row 'pending' so the reconcile cron retries once a balance
   // exists — never mark a call 'applied' without decrementing it, which would
   // silently drop the charge and hide it from both backfill sweeps.
-  if (!bal) return false;
-
-  // Fold the sub-cent charge into the charged wallet's carried remainder, then spend the
-  // whole cents.
-  const accrual = accruePending(bal.pendingMillicents ?? 0, chargeMc);
-
-  const settled = bal.parentWalletId
-    ? await settleOnChildWallet(tx, bal, accrual.wholeCents, accrual.newPending)
-    : await settleOnRootWallet(tx, bal, accrual.wholeCents, accrual.newPending);
+  if (!settled) return false;
 
   await tx
     .update(creditLedger)
@@ -170,7 +154,7 @@ async function decrementAndSettle(
     });
   }
 
-  await recordUsageWallet(tx, aiUsageLogId, bal.id);
+  await recordUsageWallet(tx, aiUsageLogId, walletId);
 
   // Release the gate's reservation in the SAME transaction as the decrement: once
   // this call's real cost has left the balance, its hold no longer reserves spend
@@ -182,10 +166,127 @@ async function decrementAndSettle(
   return true;
 }
 
-interface WalletSettlement {
+export interface WalletSettlement {
   appliedCents: number;
   bucket: 'monthly' | 'topup';
   debt: { walletId: string; cents: number } | null;
+}
+
+type LockedWallet = WalletBalanceFacts & { pendingMillicents: number };
+
+async function lockWallet(tx: Tx, walletId: string): Promise<LockedWallet | null> {
+  const rows = await tx.select().from(wallets).where(eq(wallets.id, walletId)).for('update');
+  return (rows[0] as LockedWallet | undefined) ?? null;
+}
+
+/**
+ * Charge `chargeMc` millicents to one wallet inside the caller's transaction — the ONE
+ * charge path, shared by the settle (decrementAndSettle) and a cost-reconcile undercharge
+ * correction, so neither can bypass the funding legs. Locks the wallet, then (for a drive
+ * wallet) its parent, then its legs: the global order (wallet-legs). The sub-cent
+ * remainder carries in the wallet's pendingMillicents. On a drive wallet the call's draws
+ * are added to its usage row's record (wallet-draws), so a later refund can return them
+ * exactly. `null` when the wallet row does not exist.
+ */
+export async function chargeWallet(
+  tx: Tx,
+  walletId: string,
+  chargeMc: number,
+  aiUsageLogId: string | null,
+): Promise<WalletSettlement | null> {
+  const bal = await lockWallet(tx, walletId);
+  if (!bal) return null;
+  // Fold the sub-cent charge into the charged wallet's carried remainder, then spend the
+  // whole cents.
+  const accrual = accruePending(bal.pendingMillicents ?? 0, chargeMc);
+  if (!bal.parentWalletId) return settleOnRootWallet(tx, bal, accrual.wholeCents, accrual.newPending);
+
+  const { settlement, draws } = await settleOnChildWallet(tx, bal, accrual.wholeCents, accrual.newPending);
+  if (aiUsageLogId) {
+    const usage = await usageMetadata(tx, aiUsageLogId);
+    if (usage) {
+      const prior = parseWalletDraws(usage.metadata, bal.id);
+      await writeWalletDraws(tx, aiUsageLogId, usage.metadata, addWalletDraws(prior.ok ? prior.draws : null, { walletId: bal.id, ...draws }));
+    }
+  }
+  return settlement;
+}
+
+async function usageMetadata(tx: Tx, aiUsageLogId: string): Promise<{ metadata: unknown } | null> {
+  const [row] = await tx.select({ metadata: aiUsageLogs.metadata }).from(aiUsageLogs).where(eq(aiUsageLogs.id, aiUsageLogId));
+  return row ?? null;
+}
+
+async function writeWalletDraws(tx: Tx, aiUsageLogId: string, metadata: unknown, draws: WalletDraws): Promise<void> {
+  const base = typeof metadata === 'object' && metadata !== null && !Array.isArray(metadata) ? (metadata as Record<string, unknown>) : {};
+  await tx.update(aiUsageLogs).set({ metadata: { ...base, walletDraws: draws } }).where(eq(aiUsageLogs.id, aiUsageLogId));
+}
+
+/**
+ * Give `refundCents` back to the wallet a call was charged to (a cost-reconcile overcharge
+ * correction), inside the caller's transaction. The caller makes it idempotent: it runs
+ * only when the correction's own ledger row was freshly claimed.
+ *   - A ROOT wallet: debt first, the rest to its never-expiring top-up (as before wallets).
+ *   - A DRIVE wallet: the call's recorded draws in the inverse order (wallet-draws) —
+ *     landed debt, then the legs newest-drawn first (each at most what this call took,
+ *     never past a leg's originalCents), then the allocation (spentCents down, the parent
+ *     credited debt-first). The record is untrusted: if it is missing (a charge settled
+ *     before the record existed, or a pruned usage row), malformed, names another wallet,
+ *     disagrees with the refund, or names a leg that is gone or cannot take it back, the
+ *     WHOLE refund goes to the parent, debt first, with the legs untouched — logged,
+ *     never thrown, never a guessed leg. Either way topupRemainingCents == SUM(legs).
+ * Returns the cents actually credited.
+ */
+export async function refundWalletCharge(tx: Tx, walletId: string, refundCents: number, aiUsageLogId: string | null): Promise<number> {
+  const bal = await lockWallet(tx, walletId);
+  if (!bal || refundCents <= 0) return 0;
+  if (!bal.parentWalletId) {
+    const r = applyPaymentToDebt(bal.debtCents ?? 0, bal.topupRemainingCents, refundCents);
+    await tx.update(wallets).set({ debtCents: r.debtCents, topupRemainingCents: r.topupCents }).where(eq(wallets.id, walletId));
+    return refundCents;
+  }
+  const parent = await lockWallet(tx, bal.parentWalletId);
+
+  const creditParent = async (cents: number): Promise<number> => {
+    if (cents <= 0) return 0;
+    if (!parent) {
+      loggers.ai.error('reconcile refund has no parent wallet to credit', { walletId, aiUsageLogId, cents });
+      return 0;
+    }
+    const r = applyPaymentToDebt(parent.debtCents ?? 0, parent.topupRemainingCents, cents);
+    await tx.update(wallets).set({ debtCents: r.debtCents, topupRemainingCents: r.topupCents }).where(eq(wallets.id, parent.id));
+    return cents;
+  };
+  const legacy = (reason: string): Promise<number> => {
+    loggers.ai.warn('reconcile refund on a drive wallet took the parent-debt-first path', { walletId, aiUsageLogId, reason, refundCents });
+    return creditParent(refundCents);
+  };
+
+  const usage = aiUsageLogId ? await usageMetadata(tx, aiUsageLogId) : null;
+  if (!usage) return legacy('usage_row_missing');
+  const parsed = parseWalletDraws(usage.metadata, bal.id);
+  if (!parsed.ok) return legacy(parsed.reason);
+  const plan = planWalletRefund(parsed.draws, refundCents);
+  if (!plan) return legacy('refund_exceeds_record');
+  if (plan.debtCents > 0 && plan.debtWalletId !== bal.parentWalletId && plan.debtWalletId !== bal.id) return legacy('debt_wallet_unknown');
+
+  const legs = await creditWalletFundingLegs(tx, bal.id, plan.legCredits);
+  if (!legs) return legacy('legs_changed');
+
+  // Debt this call landed on the drive wallet itself comes off that debt; any part a later
+  // payment already cleared goes to the parent with the rest.
+  const ownDebt = plan.debtWalletId === bal.id ? Math.min(plan.debtCents, Math.max(0, bal.debtCents)) : 0;
+  const toParent = plan.debtCents - ownDebt + plan.allocationCents;
+  await tx
+    .update(wallets)
+    .set({
+      spentCents: Math.max(0, bal.spentCents - plan.allocationCents),
+      ...(ownDebt > 0 ? { debtCents: bal.debtCents - ownDebt } : {}),
+    })
+    .where(eq(wallets.id, bal.id));
+  const parentCredited = await creditParent(toParent);
+  await writeWalletDraws(tx, aiUsageLogId as string, usage.metadata, plan.remaining);
+  return ownDebt + legs.appliedCents + parentCredited;
 }
 
 /**
@@ -242,7 +343,7 @@ async function settleOnChildWallet(
   bal: WalletBalanceFacts,
   wholeCents: number,
   newPending: number,
-): Promise<WalletSettlement> {
+): Promise<{ settlement: WalletSettlement; draws: Omit<WalletDraws, 'walletId' | 'totalCents'> }> {
   const parentId = bal.parentWalletId as string;
   const parentRows = await tx
     .select()
@@ -262,7 +363,7 @@ async function settleOnChildWallet(
   // The rest from the stored legs, which also moves topupRemainingCents by what they gave.
   const legs = draw.shortfallCents > 0
     ? await drawWalletFundingLegs(tx, bal.id, draw.shortfallCents)
-    : { appliedCents: 0, shortfallCents: 0 };
+    : { draws: [], appliedCents: 0, shortfallCents: 0 };
   const appliedCents = draw.appliedCents + legs.appliedCents;
   const landing = settleOvershoot({
     source: 'drive_wallet',
@@ -294,10 +395,19 @@ async function settleOnChildWallet(
     })
     .where(eq(wallets.id, bal.id));
 
+  const debt = landing.kind === 'none' ? null : { walletId: landing.walletId, cents: landing.cents };
   return {
-    appliedCents,
-    bucket: legs.appliedCents > draw.allocationDrawCents ? 'topup' : 'monthly',
-    debt: landing.kind === 'none' ? null : { walletId: landing.walletId, cents: landing.cents },
+    settlement: {
+      appliedCents,
+      bucket: legs.appliedCents > draw.allocationDrawCents ? 'topup' : 'monthly',
+      debt,
+    },
+    draws: {
+      allocationCents: draw.allocationDrawCents,
+      legs: legs.draws,
+      debtCents: debt?.cents ?? 0,
+      debtWalletId: debt?.walletId ?? null,
+    },
   };
 }
 
