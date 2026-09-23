@@ -104,6 +104,7 @@ import { globSearch, multiDriveSearch, regexSearch } from './operations/search.j
 import { cancelUpload, completeUpload, presignUpload } from './operations/uploads.js';
 import { createWorkflow, deleteWorkflow, listWorkflows, updateWorkflow } from './operations/workflows.js';
 import { execInWorkspace, listWorkspaces } from './operations/workspaces.js';
+import { getConversationSpendSource, getDriveWallet, listMyWallets } from './operations/wallets.js';
 import type { Operation } from './registry/define.js';
 import { createRegistry, type OperationRegistry } from './registry/registry.js';
 import { buildRequest } from './transport/build-request.js';
@@ -259,6 +260,15 @@ const DEFAULT_OPERATIONS_MAP = {
   workspaces: {
     list: listWorkspaces,
     exec: execInWorkspace,
+  },
+  /**
+   * Wallet READS only ([D-OW-26]): an access key never moves money or changes a spend
+   * source, so no wallet write is an operation. A key always reads the consumer view.
+   */
+  wallets: {
+    getDriveWallet: getDriveWallet,
+    list: listMyWallets,
+    getConversationSource: getConversationSpendSource,
   },
 } as const;
 

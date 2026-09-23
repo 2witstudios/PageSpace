@@ -284,6 +284,16 @@ New surface, not a port: the in-app `bash` AI tool had no token-reachable route.
 | `workspaces.list` | `driveId?` | GET `agent-workspaces/route.ts` (`allow: session, mcp`) | `{sessions: [AgentSessionDTO + shells, conversations, rev, nodes, targets]}` — owner-only, then filtered to the credential's drive scope (`credential-scope.ts`; a driveless workspace only for an unscoped credential). A drive-scoped credential additionally keeps only drives its own principal permissions can view (`getPrincipalDriveAccessLevel`) and gets the session DTOs with `shells`/`conversations`/`nodes`/`targets` empty at `rev: 0` — the child reads resolve as the owning user, so they are never run for a key. |
 | `workspaces.exec` | `workspaceId*`, `command*`, `cwd?`, `timeoutMs?` | POST `agent-workspaces/[workspaceId]/exec/route.ts` (`allow: session, mcp`) | `200 {stdout, stderr, exitCode, truncated}` for any command that ran (non-zero exit included). Body = the `bash` tool's `bashInputSchema`. Denied / not found / out of scope / ended → the same `404`; so is a drive-scoped key whose OWN grant fails the drive-wide edit bar (`principal-code-exec-access.ts`: inherit → owner's `canEdit`, OWNER/ADMIN/plain MEMBER → yes, custom role → its `driveWidePermissions.canEdit`), checked before the owning user's `canRunCode` gate. Gate/runner refusals → `{error, reason, retryAfter?}` with `DENIAL_STATUS` (403 plan/access, 402 credits, 429 quota, 400 policy, 503 provisioning). |
 
+### 2.18 Wallet reads (3 SDK operations — no v5.2.7 tool; X-1 narrowed by [D-OW-26])
+
+New surface, not a port. READS ONLY: every wallet write route (`POST/PATCH/DELETE drives/[driveId]/wallet`, `…/wallet/top-up`, `…/wallet/donate`, `PUT wallets/default`, `PUT wallets/conversations/[conversationId]`) admits an `mcp` token only to refuse it by name (`mcp_token_cannot_move_money` / `mcp_token_cannot_change_spend_source`, 403, nothing read or written), so none is an operation. All three reads are dark (404) while `ORGS_ENABLED` is false.
+
+| Operation | Input | Route | Response (route truth) |
+|---|---|---|---|
+| `wallets.getDriveWallet` | `driveId*` | GET `drives/[driveId]/wallet/route.ts` (`allow: session, mcp`; `checkMCPDriveScope`) | `{viewer, actions, wallet}`. A token is always the consumer projection (`viewerForCredential`): `viewer` ∈ `member`/`guest`, `actions` ⊆ `['view']`, `wallet` null or exactly `ConsumerWalletView` (`CONSUMER_WALLET_FIELDS`, `billing/wallet-views.ts`). 404 for a drive the caller cannot open. |
+| `wallets.list` | — | GET `wallets/route.ts` (`allow: session, mcp`) | `MyWallets` (`services/drive-wallet-service.ts`); `funds.pools` is always `[]` for a token. A drive-scoped token → 403 (`refuseScopedTokenForAccountRead`). |
+| `wallets.getConversationSource` | `conversationId*`, `driveId?` (query; only read for a global conversation) | GET `wallets/conversations/[conversationId]/route.ts` (`allow: session, mcp`) | `{conversationId, driveId (nullable), chosenWalletId (nullable), options: {source, walletId}[], resolved: CallSpendDecision}` (`billing/spend-target.ts`, `kind` ∈ `spend`/`refuse`/`skip`). Caller's own conversation only (else 404). A drive-scoped token → 403. |
+
 ---
 
 ## 3. MCP-only routes — the SDK's content-edit surface (documented fully)

@@ -216,6 +216,12 @@ workspaces list [--drive <driveId>]                # your agent workspaces; each
                 # one argument runs as a shell command line (-- 'ls | wc -l');
                 # several are separate words, quoting preserved (-- sh -c 'echo hi; exit 3')
 
+wallets   drive <driveId>                          # a drive's remaining credits and your own cap
+          list                                     # what you spend from and fund (key with no drive restriction)
+          source <conversationId> [--drive <driveId>]   # which wallet a conversation spends from
+                # read-only: a key can never create, fund, donate to or change a wallet or a
+                # spend source — sign in to the web app for that
+
 keys      (no args: guided wizard) · create · use · list · describe · revoke
 
 env       enroll <enrollmentId> <code>   # bind THIS machine to a local environment (one-time code)

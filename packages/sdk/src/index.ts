@@ -205,6 +205,10 @@ export type { TaskCompletionGatedError } from './operations/tasks.js';
 export { createWorkflow, deleteWorkflow, listWorkflows, updateWorkflow } from './operations/workflows.js';
 export { execInWorkspace, listWorkspaces } from './operations/workspaces.js';
 
+// Wallet reads (X-1, [D-OW-26]: reads only — a key never moves money or changes a spend source).
+export { CONSUMER_WALLET_VIEW_KEYS, getConversationSpendSource, getDriveWallet, listMyWallets } from './operations/wallets.js';
+export type { CallSpendDecision, ConsumerWalletView, MyWallets } from './operations/wallets.js';
+
 // Uploads — the two API legs of a direct-to-storage upload, plus the slot release.
 export { cancelUpload, completeUpload, needsUpload, presignUpload } from './operations/uploads.js';
 export type { PresignFastPath, PresignPutTarget, PresignResult, UploadedFilePage } from './operations/uploads.js';

@@ -2,6 +2,33 @@
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- **`wallets.getDriveWallet`, `wallets.list` and `wallets.getConversationSource` — wallet reads
+  for a key.** `getDriveWallet({ driveId })` returns a drive's wallet as a consumer sees it: status,
+  remaining credit, your own remaining daily/monthly cap (null = no cap), whether donations are on,
+  and the drive's default spend source (`wallet` is null when the drive has none). `list({})` returns
+  what you spend from and fund: your own wallet and default source, the wallets of drives you can
+  open, your org seats, the drive wallets your wallet funds and your donations.
+  `getConversationSource({ conversationId, driveId? })` returns a conversation's stored choice, the
+  wallets you may pick there, and what the next AI call would spend (`resolved`, discriminated on
+  `kind`: `spend`, `refuse` or `skip`). `list` and `getConversationSource` need a key with no drive
+  restriction. Amounts are cents of credit value — render them as credits, not money.
+- **Reads only, by design.** An access key never moves money or changes a spend source: creating,
+  allocating, pausing, topping up or donating to a wallet, and setting a default or a
+  conversation's source, need a signed-in session, and the server refuses a key on each by name
+  (`mcp_token_cannot_move_money`, `mcp_token_cannot_change_spend_source`). None of them is an
+  operation here.
+- **A key always reads the consumer view, and the SDK holds the server to it.** The output schemas
+  stay open-world for additive fields, but a response that shows a key more than a consumer may see
+  — a `lead`/`org_admin` viewer, an action other than `view`, the org pool, the allocation or spend
+  by member, or a non-empty `funds.pools` — is refused as a `ResponseValidationError` rather than
+  passed through.
+- Organizations and wallets are not yet enabled on pagespace.ai; until they are, these reads answer
+  not found.
+
 ## [2.5.0] — 2026-09-16
 
 ### Added

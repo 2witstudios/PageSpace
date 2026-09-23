@@ -2,6 +2,25 @@
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- **`pagespace wallets drive|list|source` — read your wallets from the terminal.** `wallets drive
+  <driveId>` shows a drive's wallet: remaining credits, your own cap for today and this month,
+  whether donations are on and the drive's default spend source. `wallets list` shows what you spend
+  from and fund. `wallets source <conversationId> [--drive <driveId>]` shows which wallet a
+  conversation spends from and what the next AI call would do (`--drive` only matters for a global
+  conversation). Amounts are shown as credits, never as money; `--json` prints the raw result.
+  `list` and `source` need a key with no drive restriction.
+- **Read-only, by design.** A key can never create, fund, donate to or change a wallet, or change
+  what a conversation or your account spends from — sign in to the web app for that. There is no
+  CLI verb for any of it.
+- **`pagespace mcp` exposes `wallets.getDriveWallet`, `wallets.list` and
+  `wallets.getConversationSource` as tools** — and no wallet write.
+- Organizations and wallets are not yet enabled on pagespace.ai; until they are, these verbs answer
+  not found.
+
 ## [1.11.0] — 2026-09-16
 
 ### Added
