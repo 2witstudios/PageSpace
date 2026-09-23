@@ -3,6 +3,7 @@ import { storageRepository, type DrizzleTx } from './storage-repository';
 import { reserveUploadSlot } from './pending-uploads';
 import { getAdvisoryLockPool } from '@pagespace/db/db';
 import { withAdvisoryLock, type AdvisoryLockPool } from '@pagespace/db/advisory-lock';
+import type { BillingPayer } from '../billing/sandbox-payer';
 
 // Re-exported for existing consumers; the canonical table lives in subscription-utils.
 export { STORAGE_TIERS };
@@ -17,10 +18,22 @@ export interface StorageQuota {
   warningLevel: 'none' | 'warning' | 'critical';
 }
 
-export interface StorageCheckResult {
+/**
+ * An organization's storage quota (WAL-9, O-9). Every org is on Business (SEAT-8), and its
+ * usage is DERIVED — SUM(files.sizeBytes) over files in the org's drives — rather than cached,
+ * so a drive moving in or out changes the org's usage with no counter to keep in step.
+ */
+export interface OrgStorageQuota extends Omit<StorageQuota, 'userId'> {
+  orgId: string;
+}
+
+/** The quota an upload is checked against: the uploader's, or the drive's org's. */
+export type AnyStorageQuota = StorageQuota | OrgStorageQuota;
+
+export interface StorageCheckResult<Q extends AnyStorageQuota = StorageQuota> {
   allowed: boolean;
   reason?: string;
-  quota?: StorageQuota;
+  quota?: Q;
   requiredBytes?: number;
 }
 
@@ -71,7 +84,19 @@ export async function checkStorageQuota(
     };
   }
 
-  // Check tier file size limit
+  const bytes = decideStorageBytes({ quota, fileSize });
+  if (!bytes.allowed) return bytes;
+
+  // Counted only once the byte checks pass: the count is the expensive read.
+  return decideFileCount({ quota, fileCount: await getUserFileCount(userId) });
+}
+
+/**
+ * The byte half of a quota check (pure): the tier's per-file limit, then the bytes left.
+ * One rule for a person's quota and an org's.
+ */
+export function decideStorageBytes<Q extends AnyStorageQuota>(input: { quota: Q; fileSize: number }): StorageCheckResult<Q> {
+  const { quota, fileSize } = input;
   const tierConfig = STORAGE_TIERS[quota.tier];
   if (fileSize > tierConfig.maxFileSize) {
     return {
@@ -81,8 +106,6 @@ export async function checkStorageQuota(
       requiredBytes: fileSize
     };
   }
-
-  // Check available storage
   if (fileSize > quota.availableBytes) {
     return {
       allowed: false,
@@ -91,9 +114,13 @@ export async function checkStorageQuota(
       requiredBytes: fileSize
     };
   }
+  return { allowed: true, quota };
+}
 
-  // Check file count limit
-  const fileCount = await getUserFileCount(userId);
+/** The file-count half of a quota check (pure). A tier limit of 0 means unlimited. */
+export function decideFileCount<Q extends AnyStorageQuota>(input: { quota: Q; fileCount: number }): StorageCheckResult<Q> {
+  const { quota, fileCount } = input;
+  const tierConfig = STORAGE_TIERS[quota.tier];
   if (tierConfig.maxFileCount > 0 && fileCount >= tierConfig.maxFileCount) {
     return {
       allowed: false,
@@ -101,10 +128,26 @@ export async function checkStorageQuota(
       quota
     };
   }
+  return { allowed: true, quota };
+}
 
+/**
+ * An org's quota over its derived usage (pure). Every org is on Business (SEAT-8), so the
+ * Business storage limits apply; a lapsed org's restrictions are SEAT-9's, not storage's.
+ */
+export function buildOrgStorageQuota(input: { orgId: string; usedBytes: number }): OrgStorageQuota {
+  const storageConfig = getStorageConfigFromSubscription('business');
+  const quotaBytes = storageConfig.quotaBytes;
+  const usedBytes = toByteCount(input.usedBytes);
+  const utilizationPercent = quotaBytes > 0 ? (usedBytes / quotaBytes) * 100 : 0;
   return {
-    allowed: true,
-    quota
+    orgId: input.orgId,
+    quotaBytes,
+    usedBytes,
+    availableBytes: Math.max(0, quotaBytes - usedBytes),
+    utilizationPercent,
+    tier: storageConfig.tier,
+    warningLevel: getWarningLevel(utilizationPercent),
   };
 }
 
@@ -221,9 +264,66 @@ export function shouldChargeForStore(fileRowNewlyInserted: boolean): boolean {
   return fileRowNewlyInserted;
 }
 
+/**
+ * WAL-9, O-9 (D-OW-9) — who a stored file's bytes bill (pure). A file in an org drive
+ * attributes to the drive and bills the org, whoever uploaded it; any other file bills its
+ * uploader (files.createdBy), or nobody once that user is gone. `driveOrgId` is the orgId of
+ * the file's drive (files.driveId) — null for a personal drive or a drive-less attachment.
+ *
+ * The attribution follows files.driveId: storage is content-addressed, so a blob has ONE files
+ * row, and its bytes stay where they were first stored even when a page in another drive links
+ * the same hash.
+ */
+export function storagePayerForFile(input: { createdBy: string | null; driveOrgId: string | null }): BillingPayer | null {
+  if (input.driveOrgId !== null) return { kind: 'org', orgId: input.driveOrgId };
+  if (input.createdBy) return { kind: 'user', userId: input.createdBy };
+  return null;
+}
+
+export type DriveMoveDirection = 'into-org' | 'out-of-org';
+
+export interface StorageReattributionDelta {
+  userId: string;
+  /** Negative on a move in (the bytes leave the personal quota), positive on a move out. */
+  deltaBytes: number;
+}
+
+/**
+ * O-9 (D-OW-9) — re-attribute a drive's stored bytes when it moves into or out of an org
+ * (pure). Each uploader was charged, on their personal quota, exactly the bytes of the files
+ * rows they created in the drive while it was personal; moving in takes exactly those bytes off
+ * their quota (the org's usage is derived from its drives, so it rises by the same total with
+ * no write), and moving out puts exactly them back. A move in then out nets zero for every
+ * uploader: nothing is double-counted or orphaned. Files whose uploader was deleted were never
+ * charged to anyone, so they move nobody's counter.
+ *
+ * Sorted by userId so every move updates users rows in one order (no lock cycle between two
+ * concurrent moves that share uploaders). Integer bytes only.
+ */
+export function computeMoveReattribution(input: {
+  files: ReadonlyArray<{ createdBy: string | null; sizeBytes: number | string | null }>;
+  direction: DriveMoveDirection;
+}): StorageReattributionDelta[] {
+  const byUser = new Map<string, number>();
+  for (const file of input.files) {
+    if (!file.createdBy) continue;
+    byUser.set(file.createdBy, (byUser.get(file.createdBy) ?? 0) + toByteCount(file.sizeBytes));
+  }
+  const sign = input.direction === 'into-org' ? -1 : 1;
+  return [...byUser.entries()]
+    .filter(([, bytes]) => bytes > 0)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([userId, bytes]) => ({ userId, deltaBytes: sign * bytes }));
+}
+
 export interface UnlinkCreditInput {
   /** files.createdBy — the uploader who was charged on first physical store. */
   createdBy: string | null;
+  /**
+   * The orgId of the file's drive at reap time. An org drive's bytes bill the org, whose usage
+   * is derived from the rows themselves, so no personal quota is credited (WAL-9).
+   */
+  driveOrgId: string | null;
   sizeBytes: number | string | null;
   /** Whether THIS reap call actually deleted the row (race-safe credit gate). */
   deletedByThisCall: boolean;
@@ -247,10 +347,11 @@ export interface StorageCredit {
 export function computeStorageCreditOnUnlink(input: UnlinkCreditInput): StorageCredit | null {
   if (!input.deletedByThisCall) return null;
   if (!input.hadPhysicalBlob) return null;
-  if (!input.createdBy) return null;
+  const payer = storagePayerForFile({ createdBy: input.createdBy, driveOrgId: input.driveOrgId });
+  if (payer?.kind !== 'user') return null;
   const bytes = toByteCount(input.sizeBytes);
   if (bytes === 0) return null;
-  return { userId: input.createdBy, deltaBytes: -bytes };
+  return { userId: payer.userId, deltaBytes: -bytes };
 }
 
 /**

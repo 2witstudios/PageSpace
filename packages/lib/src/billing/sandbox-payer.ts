@@ -1,4 +1,22 @@
 /**
+ * Who a bill lands on (Spec WAL-9): a person, or an organization. An org drive's storage,
+ * sandbox runtime, environments and published apps bill the org; everything else bills a
+ * person. The payer is a value, never a bare id, so no caller can mistake an org for a user.
+ */
+export type BillingPayer = { kind: 'user'; userId: string } | { kind: 'org'; orgId: string };
+
+/** The two drive columns that decide a drive's payer. */
+export interface DriveBillingFacts {
+  ownerId: string;
+  orgId: string | null;
+}
+
+/** WAL-9: the org if drives.orgId is set, else the drive's owner. */
+export function payerForDrive(drive: DriveBillingFacts): BillingPayer {
+  return drive.orgId !== null ? { kind: 'org', orgId: drive.orgId } : { kind: 'user', userId: drive.ownerId };
+}
+
+/**
  * resolveSessionPayerId — the ONE seam that names who pays for a sandbox's
  * active runtime, and (via the storage reconcile) its persistent storage.
  *
