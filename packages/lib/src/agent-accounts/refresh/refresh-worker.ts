@@ -4,7 +4,8 @@
  * decision is a pure module (`decideRefresh`, `decideRefreshEndpoint`,
  * `buildRefreshRequest`, `interpretTokenResponse`, `planRefreshedMaterial`,
  * `classifyRefreshFailure`, `decideRefreshFailureEffects`,
- * `nextRefreshAttempt`); this file fetches their facts and acts on verdicts.
+ * `nextRefreshAttempt`, `decideRefreshBasis`, `decideRefreshRefusal`); this
+ * file fetches their facts and acts on verdicts.
  *
  *   single-flight per account (this process)
  *   ─▶ resolve refresh-capable material ─▶ decideRefresh (fresh? no lock needed)
@@ -46,6 +47,7 @@ import type { OAuthClientCredentials } from './build-refresh-request';
 import type { RefreshFailure } from './classify-refresh-failure';
 import { decideRefresh } from './decide-refresh';
 import { decideRefreshBasis } from './decide-refresh-basis';
+import { decideRefreshRefusal } from './decide-refresh-refusal';
 import { decideRefreshEndpoint } from './decide-refresh-endpoint';
 import { buildRefreshRequest } from './build-refresh-request';
 import { interpretTokenResponse } from './interpret-token-response';
@@ -122,7 +124,7 @@ export function createRefreshWorker(deps: RefreshWorkerDeps) {
   async function resolveOrFail(request: RefreshRequest): Promise<{ readonly material: SecretMaterialByKind['oauth2']; readonly version: CredentialVersion } | RefreshOutcome> {
     const resolved = await deps.resolveRefreshable({ ref: request.ref, version: request.version }).catch(() => null);
     if (resolved === null) return { ok: false, reason: 'store_unavailable' };
-    if (!resolved.ok) return { ok: false, reason: resolved.reason === 'version_mismatch' || resolved.reason === 'bindings_stale' ? 'version_conflict' : 'store_unavailable' };
+    if (!resolved.ok) return { ok: false, reason: decideRefreshRefusal({ refusal: { from: 'resolve', reason: resolved.reason } }).outcome };
     return { material: resolved.material, version: resolved.version };
   }
 
@@ -158,8 +160,9 @@ export function createRefreshWorker(deps: RefreshWorkerDeps) {
 
     const endpoint = decideRefreshEndpoint({ providerSlug: request.providerSlug, material: current.material, registry: deps.registry });
     if (!endpoint.ok) {
-      if (endpoint.reason === 'endpoint_mismatch') await deps.accounts.markNeedsReauth({ id: request.ref.accountId, at: now });
-      return { ok: false, reason: endpoint.reason === 'endpoint_mismatch' ? 'needs_reauth' : 'not_refreshable' };
+      const refusal = decideRefreshRefusal({ refusal: { from: 'endpoint', reason: endpoint.reason } });
+      if (refusal.markNeedsReauth) await deps.accounts.markNeedsReauth({ id: request.ref.accountId, at: now });
+      return { ok: false, reason: refusal.outcome };
     }
     const client = request.providerSlug === null ? null : deps.clientFor(request.providerSlug);
     const identity = await deps.identityFor(request.ref);
@@ -177,8 +180,10 @@ export function createRefreshWorker(deps: RefreshWorkerDeps) {
 
     const rotated = await deps.store.rotate({ ref: request.ref, expectedVersion: current.version, next: { kind: 'oauth2', material: plan.next }, bindings: request.bindings, identity });
     if (!rotated.ok) return { ok: false, reason: rotated.reason === 'version_conflict' ? 'version_conflict' : 'store_unavailable' };
-    await deps.attempts.write({ ref: request.ref, fact: null });
-    await deps.accounts.advanceCredentialVersion({ id: request.ref.accountId, from: current.version, to: rotated.version });
+    // The rotation is committed in the plane: bookkeeping failures below must not turn it into a
+    // reported failure (the caller would re-issue against a version that no longer resolves).
+    await deps.attempts.write({ ref: request.ref, fact: null }).catch(() => undefined);
+    await deps.accounts.advanceCredentialVersion({ id: request.ref.accountId, from: current.version, to: rotated.version }).catch(() => false);
     return { ok: true, material: accessOnly(plan.next), version: rotated.version, refreshed: true };
   }
 
@@ -207,7 +212,10 @@ export function createRefreshWorker(deps: RefreshWorkerDeps) {
       const key = refKey(request.ref);
       const pending = inFlight.get(key);
       if (pending !== undefined) return pending;
-      const started = run(request).finally(() => inFlight.delete(key));
+      // A ledger, status or lock write that throws is a typed outcome, never a rejection.
+      const started = run(request)
+        .catch((): RefreshOutcome => ({ ok: false, reason: 'store_unavailable' }))
+        .finally(() => inFlight.delete(key));
       inFlight.set(key, started);
       return started;
     },
