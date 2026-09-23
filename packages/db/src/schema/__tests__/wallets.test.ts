@@ -17,7 +17,9 @@ import {
   PERSONAL_ROOT_WALLET_ARBITER,
   WALLET_STATUSES,
   WALLET_FALLBACK_RULES,
+  SPEND_SOURCE_KINDS,
 } from '../wallets';
+import { conversations } from '../conversations';
 import { creditLedger, creditHolds } from '../credits';
 import { aiUsageLogs } from '../monitoring';
 
@@ -57,7 +59,7 @@ describe('wallets', () => {
 
   it('WAL-1 (partial): carries owner, optional subject, optional parent, allocation, spent, top-up, debt, UTC period, status', () => {
     expect(Object.keys(columns).sort()).toEqual([
-      'createdAt', 'debtCents', 'donationsEnabled', 'fallbackRule', 'id', 'monthlyAllowanceCents',
+      'createdAt', 'debtCents', 'defaultSpendSource', 'donationsEnabled', 'fallbackRule', 'id', 'monthlyAllowanceCents',
       'monthlyPeriodEnd', 'monthlyPeriodStart', 'monthlyRemainingCents', 'orgId', 'ownerType',
       'parentWalletId', 'pendingMillicents', 'spentCents', 'status', 'subjectId', 'subjectType',
       'topupRemainingCents', 'updatedAt', 'userId',
@@ -78,6 +80,7 @@ describe('wallets', () => {
   it('WAL-1 (partial): keeps every credit_balances non-negativity CHECK, plus the wallet shape CHECKs', () => {
     expect(checkNames(wallets)).toEqual([
       'wallets_debt_cents_nonneg',
+      'wallets_default_spend_source_valid',
       'wallets_fallback_rule_valid',
       'wallets_monthly_allowance_nonneg',
       'wallets_monthly_remaining_nonneg',
@@ -159,5 +162,29 @@ describe('wallet_consumer_caps', () => {
       'wallet_consumer_caps_daily_nonneg',
       'wallet_consumer_caps_monthly_nonneg',
     ]);
+  });
+});
+
+describe('the stored spend source (SPEND-3)', () => {
+  it('SPEND-3 (partial): a wallet carries a nullable default spend source, checked against the three source kinds', () => {
+    const column = getTableColumns(wallets).defaultSpendSource;
+    // NULL means "no default set": nothing is preselected from this row.
+    expect(column.notNull).toBe(false);
+    expect(column.default).toBeUndefined();
+    expect(SPEND_SOURCE_KINDS).toEqual(['drive_wallet', 'seat_allowance', 'own_credits']);
+    const check = getTableConfig(wallets).checks.find((c) => c.name === 'wallets_default_spend_source_valid');
+    expect(check && dialect.sqlToQuery(check.value).sql).toBe(
+      `"wallets"."defaultSpendSource" IS NULL OR "wallets"."defaultSpendSource" IN ('drive_wallet', 'seat_allowance', 'own_credits')`,
+    );
+  });
+
+  it('SPEND-3 (partial): a conversation records the wallet chosen for it, nullable and with no foreign key', () => {
+    const column = getTableColumns(conversations).chosenWalletId;
+    // NULL means "nothing chosen for this conversation": the gate preselects or refuses, never guesses.
+    expect(column.notNull).toBe(false);
+    expect(column.default).toBeUndefined();
+    // No FK on purpose: a deleted wallet must leave the id behind so the gate refuses it,
+    // where ON DELETE SET NULL would silently move the conversation to a preselected source.
+    expect(getTableConfig(conversations).foreignKeys.some((f) => f.reference().columns.some((c) => c.name === 'chosenWalletId'))).toBe(false);
   });
 });

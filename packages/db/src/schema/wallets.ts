@@ -54,6 +54,14 @@ export type WalletStatusValue = (typeof WALLET_STATUSES)[number];
 export const WALLET_FALLBACK_RULES = ['refuse', 'seat_allowance', 'own_credits'] as const;
 export type WalletFallbackRuleValue = (typeof WALLET_FALLBACK_RULES)[number];
 
+/**
+ * SPEND-1/SPEND-3. Mirrors wallet-core `SpendSourceKind`: the three sources an AI call
+ * inside a drive can spend from. Stored as a DEFAULT (wallets.defaultSpendSource), never as
+ * the source of a call: the call's own source is the wallet chosen for its conversation.
+ */
+export const SPEND_SOURCE_KINDS = ['drive_wallet', 'seat_allowance', 'own_credits'] as const;
+export type SpendSourceKindValue = (typeof SPEND_SOURCE_KINDS)[number];
+
 export const wallets = pgTable('wallets', {
   // Existing credit_balances rows receive their id from the database default when 0302
   // adds the column; application inserts mint a cuid as every other table does. The
@@ -86,6 +94,12 @@ export const wallets = pgTable('wallets', {
   // WAL-4: the drive lead can turn donations off. On by default.
   donationsEnabled: boolean('donationsEnabled').default(true).notNull(),
   fallbackRule: text('fallbackRule').$type<WalletFallbackRuleValue>(),
+  // SPEND-3 preselection. On a DRIVE wallet it is the drive's default (set by whoever
+  // administers the wallet); on a PERSONAL ROOT wallet it is the person's own default from
+  // Settings. NULL means no default: nothing is preselected from this row, and where a person
+  // has more than one source the gate refuses until one is chosen (SPEND-4). Meaningless on
+  // an org pool, which no one spends "by default".
+  defaultSpendSource: text('defaultSpendSource').$type<SpendSourceKindValue>(),
   createdAt: timestamp('createdAt', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date', withTimezone: true }).defaultNow().notNull().$onUpdate(() => new Date()),
 }, (table) => ({
@@ -120,6 +134,11 @@ export const wallets = pgTable('wallets', {
   fallbackRuleValid: check(
     'wallets_fallback_rule_valid',
     sql`${table.fallbackRule} IS NULL OR ${table.fallbackRule} IN ('refuse', 'seat_allowance', 'own_credits')`,
+  ),
+
+  defaultSpendSourceValid: check(
+    'wallets_default_spend_source_valid',
+    sql`${table.defaultSpendSource} IS NULL OR ${table.defaultSpendSource} IN ('drive_wallet', 'seat_allowance', 'own_credits')`,
   ),
 
   // The credit_balances invariants, carried over unchanged: a single bad write can't

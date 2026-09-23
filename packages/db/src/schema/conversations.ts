@@ -95,6 +95,24 @@ export const conversations = pgTable('conversations', {
    * leaving it pointing at a tombstone.
    */
   planPageId: text('planPageId').references(() => pages.id, { onDelete: 'set null' }),
+  /**
+   * The wallet this conversation spends from (Spec SPEND-3: switching source is per
+   * conversation and persists for it). Written ONLY by an explicit choice — the
+   * conversation spend-source route — and never by a turn, so a source never changes
+   * because a message was sent.
+   *
+   * NULL means nothing was chosen for this conversation: the gate preselects from the
+   * drive's default, then the person's default (wallets.defaultSpendSource), and refuses
+   * where a person still has more than one source (SPEND-4). It never guesses a wallet.
+   *
+   * A SOFT link with no foreign key, on purpose. The id is re-resolved on every call
+   * against the wallets this person may spend in the session's drive right now (the drive
+   * wallet, the seat on its org's pool, their own personal wallet); an id that matches none
+   * of them — a deleted wallet, a seat after leaving the org, a drive wallet of another
+   * drive — REFUSES the call. `ON DELETE SET NULL` would instead turn a deleted wallet into
+   * "nothing chosen" and silently move the conversation onto a preselected source.
+   */
+  chosenWalletId: text('chosenWalletId'),
   lastMessageAt: timestamp('lastMessageAt', { mode: 'date' }),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
