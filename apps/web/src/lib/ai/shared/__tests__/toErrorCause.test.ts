@@ -95,4 +95,31 @@ describe('toErrorCause', () => {
     const cause = toErrorCause(429, { error: 'unrecognized', message: 'raw upstream body' });
     expect(cause.message).not.toBe('raw upstream body');
   });
+  it('SPEND-4 (partial) given the spend_source_refused code (402), should classify it and KEEP the refused source, why, and the options offered', () => {
+    const cause = toErrorCause(402, {
+      error: 'spend_source_refused',
+      message: 'The credit source for this request cannot cover it. Choose another source to continue.',
+      source: 'drive_wallet',
+      refusalReason: 'source_empty',
+      options: ['seat_allowance', 'own_credits'],
+    });
+    expect(cause).toEqual({
+      code: 'spend_source_refused',
+      httpStatus: 402,
+      message: 'The credit source for this request cannot cover it. Choose another source to continue.',
+      retryable: false,
+      refusal: { source: 'drive_wallet', reason: 'source_empty', options: ['seat_allowance', 'own_credits'] },
+    });
+  });
+
+  it('SPEND-4 (partial) given spend_source_refused with no source named (none chosen among several), should keep a null source', () => {
+    const cause = toErrorCause(402, { error: 'spend_source_refused', source: null, refusalReason: 'no_source_chosen', options: ['drive_wallet', 'own_credits'] });
+    expect(cause.refusal).toEqual({ source: null, reason: 'no_source_chosen', options: ['drive_wallet', 'own_credits'] });
+  });
+
+  it('given spend_source_refused with a malformed refusal payload, should still classify it and drop only the malformed payload, never crash', () => {
+    const cause = toErrorCause(402, { error: 'spend_source_refused', source: 'drive_wallet', refusalReason: 'source_empty', options: 'own_credits' });
+    expect(cause).toMatchObject({ code: 'spend_source_refused', httpStatus: 402, retryable: false });
+    expect(cause.refusal).toBeUndefined();
+  });
 });

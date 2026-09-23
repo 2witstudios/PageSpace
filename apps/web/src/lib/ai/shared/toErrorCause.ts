@@ -1,10 +1,11 @@
-import type { AIErrorCause } from './aiErrorCause';
+import { isAISpendRefusal, type AIErrorCause } from './aiErrorCause';
 
 export const DEFAULT_ERROR_MESSAGES: Record<AIErrorCause['code'], string> = {
   auth: 'Authentication failed. Please refresh the page and try again.',
   out_of_credits: "You've used up your credits. Your monthly allowance resets at your next renewal.",
   too_many_in_flight: 'Too many AI requests are running at once. Wait for one to finish, then try again.',
   daily_cap_exceeded: "You've reached your daily AI usage limit. Try again tomorrow.",
+  spend_source_refused: 'The credit source for this request cannot cover it. Choose another source to continue.',
   rate_limit: 'The AI service is busy right now. Please try again in a few seconds.',
   unknown: 'Something went wrong. Please try again.',
 };
@@ -14,6 +15,7 @@ export const RETRYABLE_BY_CODE: Record<AIErrorCause['code'], boolean> = {
   out_of_credits: false,
   too_many_in_flight: true,
   daily_cap_exceeded: false,
+  spend_source_refused: false,
   rate_limit: true,
   unknown: false,
 };
@@ -22,6 +24,7 @@ const KNOWN_CODES = new Set<AIErrorCause['code']>([
   'out_of_credits',
   'too_many_in_flight',
   'daily_cap_exceeded',
+  'spend_source_refused',
 ]);
 
 const stringField = (body: unknown, key: string): string | undefined => {
@@ -61,7 +64,13 @@ export const toErrorCause = (httpStatus: number, body: unknown): AIErrorCause =>
 
   if (rawCode && KNOWN_CODES.has(rawCode as AIErrorCause['code'])) {
     const serverMessage = stringField(body, 'message');
-    return buildErrorCause(rawCode as AIErrorCause['code'], httpStatus, serverMessage);
+    const cause = buildErrorCause(rawCode as AIErrorCause['code'], httpStatus, serverMessage);
+    if (cause.code !== 'spend_source_refused') return cause;
+    // SPEND-4: keep which source was refused, why, and what else the person may pick
+    // (credit-gate-response.ts). A malformed payload is dropped; the code still stands.
+    const record = body as Record<string, unknown>;
+    const refusal = { source: record.source, reason: record.refusalReason, options: record.options };
+    return isAISpendRefusal(refusal) ? { ...cause, refusal } : cause;
   }
 
   if (httpStatus === 401) return buildErrorCause('auth', httpStatus, undefined, false);
