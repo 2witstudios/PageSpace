@@ -34,7 +34,7 @@ export function decideRefreshEndpoint({
   readonly material: { readonly issuer: string; readonly tokenEndpoint: string };
   readonly registry: OAuthEndpointRegistry;
 }): RefreshEndpointDecision {
-  if (providerSlug === null || !Object.hasOwn(registry, providerSlug)) return { ok: false, reason: 'unknown_provider' };
+  if (providerSlug === null || !Object.prototype.hasOwnProperty.call(registry, providerSlug)) return { ok: false, reason: 'unknown_provider' };
   const pinned = registry[providerSlug];
   if (material.issuer !== pinned.issuer || material.tokenEndpoint !== pinned.tokenEndpoint) return { ok: false, reason: 'endpoint_mismatch' };
   return { ok: true, tokenEndpoint: pinned.tokenEndpoint, clientAuth: pinned.clientAuth };
