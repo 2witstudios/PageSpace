@@ -7,11 +7,11 @@
  * `decideAccountAccess` and `decideAccountCreatePermission` do.
  */
 import { db } from '@pagespace/db/db';
-import { and, eq, isNotNull } from '@pagespace/db/operators';
-import { drives, pages } from '@pagespace/db/schema/core';
-import { driveMembers } from '@pagespace/db/schema/members';
+import { and, eq } from '@pagespace/db/operators';
+import { pages } from '@pagespace/db/schema/core';
 import { getDriveAccess } from '../services/drive-service';
 import { canUserEditPage, canUserViewPage } from '../permissions/permissions';
+import { listDriveAudience } from '../permissions/drive-audience';
 import type { DriveRoleOfHuman } from '../permissions/account-permissions';
 import type { UserId } from './grant';
 
@@ -22,7 +22,7 @@ export type AccountFactsRepository = {
   /** The drive of a live (untrashed) page; null when it does not exist. */
   readonly pageDrive: (pageId: string) => Promise<string | null>;
   readonly driveRole: (input: { readonly driveId: string; readonly userId: string }) => Promise<DriveRoleOfHuman>;
-  /** The drive owner and accepted ADMINs, sorted — the consenters an agent-page account pins. */
+  /** The drive owner and its effective ADMINs, sorted — the consenters an agent-page account pins. */
   readonly driveConsenters: (driveId: string) => Promise<readonly UserId[]>;
   readonly pagePermission: (input: { readonly userId: string; readonly pageId: string }) => Promise<'edit' | 'view' | 'none'>;
 };
@@ -39,14 +39,18 @@ export function createAccountFactsRepository(): AccountFactsRepository {
       return access.role === 'OWNER' || access.role === 'ADMIN' || access.role === 'MEMBER' ? access.role : null;
     },
 
+    // Who is a drive's admin is a membership answer, so it comes from the permissions layer's
+    // audience (the same effective membership getDriveAccess gives driveRole): a pending invite
+    // or a stale org row is no admin, and an org Owner/Admin's power on an org drive is one.
     async driveConsenters(driveId) {
-      const owner = await db.select({ ownerId: drives.ownerId }).from(drives).where(eq(drives.id, driveId)).limit(1);
-      const admins = await db
-        .select({ userId: driveMembers.userId })
-        .from(driveMembers)
-        .where(and(eq(driveMembers.driveId, driveId), eq(driveMembers.role, 'ADMIN'), isNotNull(driveMembers.acceptedAt)))
-        .limit(MAX_CONSENTERS);
-      const ids = new Set<string>([...owner.map((row) => row.ownerId), ...admins.map((row) => row.userId)]);
+      const audience = await listDriveAudience(driveId);
+      const owner = audience.filter((member) => member.isOwner).map((member) => member.userId);
+      const admins = audience
+        .filter((member) => !member.isOwner && member.role === 'ADMIN')
+        .map((member) => member.userId)
+        .sort()
+        .slice(0, MAX_CONSENTERS);
+      const ids = new Set<string>([...owner, ...admins]);
       return [...ids].sort() as UserId[];
     },
 
