@@ -48,7 +48,17 @@ import type { SubscriptionTier } from './subscription-tiers';
  */
 export type SpendTarget =
   | { kind: 'personal' }
-  | { kind: 'drive'; driveId: string; chosen: SpendSourceKind | null };
+  | {
+      kind: 'drive';
+      driveId: string;
+      chosen: SpendSourceKind | null;
+      /**
+       * The conversation the call answers, whose stored choice (conversations.chosenWalletId)
+       * the gate resolves (SPEND-3). Absent or null for a call with no conversation; the
+       * drive's and the person's defaults still apply.
+       */
+      conversationId?: string | null;
+    };
 
 /** The personal root wallet: no drive (SPEND-8). */
 export const PERSONAL_SPEND: SpendTarget = Object.freeze({ kind: 'personal' });
@@ -63,13 +73,25 @@ export function driveSpend(driveId: string | null | undefined, chosen: SpendSour
 }
 
 /**
+ * The target for a turn of `conversationId` running in a session of `driveId`: the gate
+ * reads the conversation's stored choice (SPEND-3). `driveId` must be SERVER-resolved (the
+ * conversation's or page's drive), never a drive id the client sent. No drive is personal.
+ */
+export function conversationSpend(driveId: string | null | undefined, conversationId: string | null | undefined): SpendTarget {
+  const target = driveSpend(driveId);
+  return target.kind === 'drive' && typeof conversationId === 'string' && conversationId.length > 0
+    ? { ...target, conversationId }
+    : target;
+}
+
+/**
  * The target a follow-on call in the same turn names once the turn's gate resolved
  * `source`: the same drive and exactly the source already chosen, so a tool that gates
  * its own model call can never land on a different wallet than the turn it runs in.
  */
 export function resolvedSpend(target: SpendTarget, source: SpendSourceKind | undefined): SpendTarget {
   if (target.kind !== 'drive' || source === undefined) return target;
-  return { kind: 'drive', driveId: target.driveId, chosen: source };
+  return { ...target, chosen: source };
 }
 
 /**

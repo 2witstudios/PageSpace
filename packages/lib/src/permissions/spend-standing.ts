@@ -59,3 +59,18 @@ export async function loadDriveSpendStanding(userId: string, driveId: string): P
     isOrgMember,
   };
 }
+
+/**
+ * Which SHARED legs a person may draw at all in a drive — the authorization for spend, decided
+ * here and never by the spend actor's guest flag (review 5296437500, P1-2). The drive wallet
+ * opens only to an effective member of the drive (the lead, an accepted member, an org
+ * Owner/Admin, an org member of an Open drive): an org member with no membership of a
+ * Restricted or Private org drive draws nothing there, whatever source or wallet id they
+ * name. A seat is the per-consumer leg on the org pool, so it additionally needs an accepted
+ * org membership (a guest holds none, DRV-8). A person's own credits are theirs everywhere and
+ * are not decided here. A missing drive opens nothing.
+ */
+export function sharedSpendLegsFor(standing: DriveSpendStanding | null): { driveWallet: boolean; seat: boolean } {
+  if (standing === null || !standing.isDriveMember) return { driveWallet: false, seat: false };
+  return { driveWallet: true, seat: standing.orgId !== null && standing.isOrgMember };
+}

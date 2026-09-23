@@ -7,6 +7,7 @@ import {
   driveSpend,
   resolvesDriveWallets,
   resolvedSpend,
+  conversationSpend,
   personalRootDecision,
   personActor,
   rootAvailableCents,
@@ -77,6 +78,22 @@ describe('spend-target: the target a caller names', () => {
   it('given orgs dark, a drive session spends the personal root exactly as before wallets', () => {
     expect(resolvesDriveWallets({ orgsEnabled: false, target: driveSpend('d-product', 'drive_wallet') })).toBe(false);
     expect(resolvesDriveWallets({ orgsEnabled: true, target: driveSpend('d-product', 'drive_wallet') })).toBe(true);
+  });
+});
+
+describe('spend-target: a conversation turn names its conversation', () => {
+  it('SPEND-3 (partial) a drive conversation carries its id so the gate reads its stored choice; nothing is chosen by the target itself', () => {
+    expect(conversationSpend('d-product', 'c-1')).toEqual({ kind: 'drive', driveId: 'd-product', chosen: null, conversationId: 'c-1' });
+    expect(conversationSpend('d-product', null)).toEqual({ kind: 'drive', driveId: 'd-product', chosen: null });
+  });
+
+  it('SPEND-8 (partial) a conversation with no drive is personal, whatever its id', () => {
+    expect(conversationSpend(null, 'c-1')).toEqual(PERSONAL_SPEND);
+  });
+
+  it('SPEND-4 (partial) a follow-on call keeps the conversation and names the turn\'s resolved source', () => {
+    expect(resolvedSpend(conversationSpend('d-product', 'c-1'), 'seat_allowance'))
+      .toEqual({ kind: 'drive', driveId: 'd-product', chosen: 'seat_allowance', conversationId: 'c-1' });
   });
 });
 
