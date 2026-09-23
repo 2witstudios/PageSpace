@@ -152,6 +152,130 @@ export function buildOrgStorageQuota(input: { orgId: string; usedBytes: number }
 }
 
 /**
+ * The org's storage quota over its derived usage (WAL-9): SUM(files.sizeBytes) across its drives.
+ */
+export async function getOrgStorageQuota(orgId: string): Promise<OrgStorageQuota> {
+  return buildOrgStorageQuota({ orgId, usedBytes: await storageRepository.sumOrgFileBytes(orgId) });
+}
+
+/**
+ * drives.orgId for each of `driveIds`, for callers that attribute many files at once (the
+ * orphan reaper). A drive that no longer exists maps to null: its files rows cascaded with it.
+ */
+export async function findDriveOrgIds(driveIds: ReadonlyArray<string>): Promise<Map<string, string | null>> {
+  return storageRepository.findDriveOrgIds([...new Set(driveIds)]);
+}
+
+/** FILE pages across the org's drives: the org's file count (WAL-9). */
+export async function getOrgFileCount(orgId: string): Promise<number> {
+  const driveIds = await storageRepository.findOrgDriveIds(orgId);
+  if (driveIds.length === 0) return 0;
+  return storageRepository.countFiles(driveIds);
+}
+
+/**
+ * Who an upload into `driveId` bills (WAL-9, O-9): the drive's org when it has one, else the
+ * uploader. A drive-less upload (a DM attachment) and a drive that cannot be found bill the
+ * uploader, which is what every upload did before orgs.
+ */
+export async function resolveUploadPayer(userId: string, driveId: string | null | undefined): Promise<BillingPayer> {
+  const orgId = driveId ? await storageRepository.findDriveOrgId(driveId) : null;
+  return storagePayerForFile({ createdBy: userId, driveOrgId: orgId ?? null }) ?? { kind: 'user', userId };
+}
+
+/**
+ * The quota an upload into `driveId` is checked against: the org's for an org drive, the
+ * uploader's otherwise (WAL-9). An upload into an org drive never reads or touches the
+ * uploader's personal quota. Null when the uploader does not exist.
+ */
+export async function getStorageQuotaForDrive(
+  userId: string,
+  driveId: string | null | undefined,
+): Promise<AnyStorageQuota | null> {
+  const payer = await resolveUploadPayer(userId, driveId);
+  return payer.kind === 'org' ? getOrgStorageQuota(payer.orgId) : getUserStorageQuota(userId);
+}
+
+/**
+ * The upload quota check for an upload into `driveId` (WAL-9): an org drive checks the org's
+ * bytes, per-file size and file count; anything else is `checkStorageQuota` on the uploader.
+ */
+export async function checkStorageQuotaForDrive(
+  userId: string,
+  driveId: string | null | undefined,
+  fileSize: number,
+): Promise<StorageCheckResult<AnyStorageQuota>> {
+  const payer = await resolveUploadPayer(userId, driveId);
+  if (payer.kind === 'user') return checkStorageQuota(userId, fileSize);
+
+  const quota = await getOrgStorageQuota(payer.orgId);
+  const bytes = decideStorageBytes({ quota, fileSize });
+  if (!bytes.allowed) return bytes;
+  return decideFileCount({ quota, fileCount: await getOrgFileCount(payer.orgId) });
+}
+
+/**
+ * Charge the first physical store of `deltaBytes` uploaded into `driveId` (WAL-9, O-9). The
+ * uploader's personal counter moves only when the upload bills them; an org drive's usage is
+ * derived from its files rows, so an org-billed store writes no counter at all. Returns who the
+ * bytes bill.
+ */
+export async function chargeStorageForStore(
+  userId: string,
+  driveId: string | null | undefined,
+  deltaBytes: number,
+  context: { pageId?: string; eventType?: 'upload' | 'delete' | 'update' | 'reconcile' },
+): Promise<BillingPayer> {
+  const payer = await resolveUploadPayer(userId, driveId);
+  if (payer.kind === 'user') {
+    await updateStorageUsage(userId, deltaBytes, { ...context, driveId: driveId ?? undefined });
+  }
+  return payer;
+}
+
+/** What a drive move did to stored-byte attribution (O-9). */
+export interface StorageReattributionResult {
+  status: 'applied';
+  direction: DriveMoveDirection;
+  /** Bytes whose attribution moved between uploaders' personal quotas and the org. */
+  movedBytes: number;
+  deltas: StorageReattributionDelta[];
+}
+
+/**
+ * O-9 (D-OW-9): re-attribute a moving drive's stored bytes INSIDE the move's transaction, so
+ * drives.orgId and every uploader's counter change together or not at all. Moving in takes each
+ * uploader's bytes in the drive off their personal quota; moving out puts them back. The org's
+ * usage is derived from its drives, so it follows drives.orgId with no write. One
+ * 'reattribute' storage event per uploader, inserted in chunks.
+ */
+export async function reattributeDriveStorageInTx(
+  tx: DrizzleTx,
+  input: { driveId: string; orgId: string; direction: DriveMoveDirection },
+): Promise<StorageReattributionResult> {
+  const files = await storageRepository.findDriveFileBytesInTx(tx, input.driveId);
+  const deltas = computeMoveReattribution({ files, direction: input.direction });
+  const events: Parameters<typeof storageRepository.insertStorageEventsInTx>[1] = [];
+  for (const { userId, deltaBytes } of deltas) {
+    const { newUsage } = await storageRepository.updateStorageInTx(tx, userId, deltaBytes);
+    events.push({
+      userId,
+      eventType: 'reattribute',
+      sizeDelta: deltaBytes,
+      totalSizeAfter: newUsage,
+      metadata: { driveId: input.driveId, orgId: input.orgId, direction: input.direction },
+    });
+  }
+  await storageRepository.insertStorageEventsInTx(tx, events);
+  return {
+    status: 'applied',
+    direction: input.direction,
+    movedBytes: deltas.reduce((sum, d) => sum + Math.abs(d.deltaBytes), 0),
+    deltas,
+  };
+}
+
+/**
  * Atomically check the user's live-upload count against their tier's
  * concurrency limit AND reserve the slot (insert the `pending_uploads` row)
  * in one step — the presign routes' cross-process concurrency gate (#2154).

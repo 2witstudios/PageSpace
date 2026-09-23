@@ -22,7 +22,7 @@ import { getHomeDrive } from '@pagespace/lib/services/drive-service';
 import { getDefaultContent } from '@pagespace/lib/content/page-types.config';
 import { buildS3Key } from '@pagespace/lib/services/upload-validation';
 import { pageRepository } from '@pagespace/lib/repositories/page-repository';
-import { checkStorageQuota, updateStorageUsage, shouldChargeForStore } from '@pagespace/lib/services/storage-limits';
+import { checkStorageQuotaForDrive, chargeStorageForStore, shouldChargeForStore } from '@pagespace/lib/services/storage-limits';
 import { putObject } from './s3-effects';
 
 /** Folder (at the Home-drive root) that collects auto-filed generated images. */
@@ -242,7 +242,10 @@ export async function createImageFilePage(
 
   // Enforce the storage quota BEFORE writing any bytes, mirroring the upload flow, so
   // generated images can't let a user exceed their plan storage.
-  const quota = await (deps.checkQuota ?? checkStorageQuota)(input.userId, fileSize);
+  // WAL-9: an image filed into an org drive checks the org's quota, never the user's. With no
+  // target drive it lands in the user's Home drive, which is never an org drive.
+  const checkQuota = deps.checkQuota ?? ((u, b) => checkStorageQuotaForDrive(u, input.targetDriveId, b));
+  const quota = await checkQuota(input.userId, fileSize);
   if (!quota.allowed) {
     throw new ImageStorageQuotaError(quota.reason ?? 'Saving this image would exceed your storage quota.');
   }
@@ -302,7 +305,9 @@ export async function createImageFilePage(
   // the credit issued at unlink) — dedup stores add no bytes. Best-effort: a bookkeeping
   // failure must not fail an already-committed page.
   if (shouldChargeForStore(fileWasInserted)) {
-    const charge = deps.chargeStorage ?? ((u, b, ctx) => updateStorageUsage(u, b, ctx));
+    // WAL-9: bytes in an org drive bill the org (derived usage), never the user's quota.
+    const charge = deps.chargeStorage
+      ?? (async (u, b, ctx) => { await chargeStorageForStore(u, ctx.driveId, b, { pageId: ctx.pageId, eventType: ctx.eventType }); });
     await charge(input.userId, fileSize, { pageId, driveId, eventType: 'upload' }).catch(() => {});
   }
 

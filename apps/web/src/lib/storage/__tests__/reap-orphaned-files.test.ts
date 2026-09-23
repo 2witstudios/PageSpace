@@ -5,7 +5,9 @@ const {
   mockDeleteRecords,
   mockCreateSystemFileDeleteToken,
   mockUpdateStorageUsage,
+  mockFindDriveOrgIds,
 } = vi.hoisted(() => ({
+  mockFindDriveOrgIds: vi.fn(),
   mockFindOrphans: vi.fn(),
   mockDeleteRecords: vi.fn(),
   mockCreateSystemFileDeleteToken: vi.fn(),
@@ -23,14 +25,17 @@ vi.mock('@pagespace/lib/services/validated-service-token', () => ({
 
 vi.mock('@pagespace/lib/services/storage-limits', () => ({
   updateStorageUsage: mockUpdateStorageUsage,
-  // Real (pure) impl so the reaper's credit rules are exercised, not stubbed.
+  findDriveOrgIds: mockFindDriveOrgIds,
+  // Mirrors the pure impl so the reaper's credit rules are exercised, not stubbed.
   computeStorageCreditOnUnlink: (input: {
     createdBy: string | null;
+    driveOrgId: string | null;
     sizeBytes: number | string | null;
     deletedByThisCall: boolean;
     hadPhysicalBlob: boolean;
   }) => {
     if (!input.deletedByThisCall || !input.hadPhysicalBlob || !input.createdBy) return null;
+    if (input.driveOrgId !== null) return null;
     const n = typeof input.sizeBytes === 'string' ? Number(input.sizeBytes) : (input.sizeBytes ?? 0);
     if (!Number.isFinite(n) || n <= 0) return null;
     return { userId: input.createdBy, deltaBytes: -Math.floor(n) };
@@ -56,6 +61,7 @@ describe('reapOrphanedFiles', () => {
     mockDeleteRecords.mockResolvedValue([]);
     mockCreateSystemFileDeleteToken.mockResolvedValue({ token: 'sys-tok' });
     mockUpdateStorageUsage.mockResolvedValue(undefined);
+    mockFindDriveOrgIds.mockResolvedValue(new Map([['d1', null]]));
   });
 
   it('forwards an explicit fileIds list to findOrphanedFileRecords (scoped reap)', async () => {
@@ -91,6 +97,21 @@ describe('reapOrphanedFiles', () => {
 
     expect(mockUpdateStorageUsage).toHaveBeenCalledWith('u1', -2048, expect.objectContaining({ eventType: 'delete' }));
     expect(result.physicalFilesDeleted).toBe(1);
+    expect(result.dbRecordsDeleted).toBe(1);
+
+    vi.unstubAllGlobals();
+  });
+
+  it('WAL-9 (partial) does NOT credit the uploader for a reaped file in an org drive: the org was billed, not them', async () => {
+    mockFindOrphans.mockResolvedValue([orphan({ id: 'f1', driveId: 'org-drive', sizeBytes: 2048, createdBy: 'u1' })]);
+    mockDeleteRecords.mockResolvedValue(['f1']);
+    mockFindDriveOrgIds.mockResolvedValue(new Map([['org-drive', 'org-northwind']]));
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 200 })));
+
+    const result = await reapOrphanedFiles(db, { fileIds: ['f1'] });
+
+    expect(mockFindDriveOrgIds).toHaveBeenCalledWith(['org-drive']);
+    expect(mockUpdateStorageUsage).not.toHaveBeenCalled();
     expect(result.dbRecordsDeleted).toBe(1);
 
     vi.unstubAllGlobals();
