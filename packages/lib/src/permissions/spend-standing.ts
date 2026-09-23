@@ -2,7 +2,7 @@ import { db } from '@pagespace/db/db';
 import { and, eq } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { orgMembers } from '@pagespace/db/schema/organizations';
-import { isDriveMemberRelationship } from './drive-relationship';
+import { isDriveLead, isDriveMemberRelationship } from './drive-relationship';
 import { loadDriveRelationships } from './drive-relationship-loader';
 
 /**
@@ -20,6 +20,8 @@ export interface DriveSpendStanding {
   orgId: string | null;
   /** The drive's lead, whose personal wallet parents a personal drive's wallet (WAL-2). */
   ownerId: string;
+  /** The caller leads this drive. */
+  isLead: boolean;
   isDriveMember: boolean;
   isOrgMember: boolean;
 }
@@ -48,5 +50,12 @@ export async function loadDriveSpendStanding(userId: string, driveId: string): P
     isOrgMember = membership !== undefined;
   }
 
-  return { driveId: drive.id, orgId: drive.orgId, ownerId: drive.ownerId, isDriveMember, isOrgMember };
+  return {
+    driveId: drive.id,
+    orgId: drive.orgId,
+    ownerId: drive.ownerId,
+    isLead: isDriveLead(userId, drive),
+    isDriveMember,
+    isOrgMember,
+  };
 }

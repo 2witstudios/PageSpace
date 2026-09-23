@@ -93,7 +93,7 @@ describe('spend-target: follow-on calls in a turn', () => {
 });
 
 describe('spend-target: who spends', () => {
-  it('a drive member who is not in the org is a guest (DRV-8); an org member is not', () => {
+  it('DRV-8 (partial) a drive member who is not in the org is a guest; an org member is not', () => {
     expect(personActor('u-chris', { orgId: 'o-northwind', isDriveMember: true, isOrgMember: false })).toEqual(chris);
     expect(personActor('u-marcus', { orgId: 'o-northwind', isDriveMember: true, isOrgMember: true })).toEqual(marcus);
   });

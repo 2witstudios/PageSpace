@@ -1184,9 +1184,10 @@ describe('credits flow — crash recovery (backfill reconcile)', () => {
       updatedAt: new Date(),
     });
 
-    // (a) claimed-but-unsettled usage row: consume crashed after the claim insert.
+    // (a) claimed-but-unsettled usage row: consume crashed after the claim insert. The
+    // claim named its wallet (0305 NOT NULL), and the retry settles on exactly that one.
     store.creditLedger.push({
-      id: 'led_pending', userId: 'u1', entryType: 'usage', bucket: 'monthly',
+      id: 'led_pending', userId: 'u1', walletId: (balanceOf('u1') as { id?: string } | undefined)?.id, entryType: 'usage', bucket: 'monthly',
       amountCents: -1, appliedCents: null, chargeMillicents: chargeMc(1), // 150¢
       aiUsageLogId: 'log_pending', realCostCents: 100, markupBps: MARKUP_BPS,
       stripeRef: null, consumeStatus: 'pending', createdAt: PAST(),

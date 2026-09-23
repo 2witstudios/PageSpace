@@ -189,7 +189,7 @@ export async function resolveCallSpend(input: {
   // org drives, the drive owner (the funder of its wallet) on a personal drive.
   const walletOwnerTier: SubscriptionTier = standing?.orgId
     ? ORG_ENTITLEMENT_TIER
-    : standing && standing.ownerId !== userId
+    : standing && !standing.isLead
       ? await tierOf(standing.ownerId)
       : consumerTier;
 
