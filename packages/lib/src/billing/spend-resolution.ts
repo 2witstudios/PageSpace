@@ -21,6 +21,7 @@ import { wallets, personalRootWalletOf } from '@pagespace/db/schema/wallets';
 import { ORGS_ENABLED } from '../organizations/orgs-enabled';
 import { loadDriveSpendStanding } from '../permissions/spend-standing';
 import { loggers } from '../logging/logger-config';
+import { notifyLeadOfAutomationSkip } from './automation-skip-notifier';
 import { spendableCentsFor } from './credit-balance';
 import { effectiveSpendPolicy, type FallbackRule, type SpendLeg, type WalletStatus } from './wallet-core';
 import {
@@ -50,11 +51,12 @@ const WALLET_FACTS = {
   spentCents: wallets.spentCents,
   topupRemainingCents: wallets.topupRemainingCents,
   debtCents: wallets.debtCents,
+  monthlyPeriodStart: wallets.monthlyPeriodStart,
   monthlyPeriodEnd: wallets.monthlyPeriodEnd,
   fallbackRule: wallets.fallbackRule,
 } as const;
 
-type WalletRow = WalletBalanceFacts & { monthlyPeriodEnd: Date | null; fallbackRule: FallbackRule | null };
+type WalletRow = WalletBalanceFacts & { monthlyPeriodStart: Date | null; monthlyPeriodEnd: Date | null; fallbackRule: FallbackRule | null };
 
 async function walletById(id: string): Promise<WalletRow | null> {
   const [row] = await db.select(WALLET_FACTS).from(wallets).where(eq(wallets.id, id)).limit(1);
@@ -121,7 +123,6 @@ function statusOf(row: WalletRow): WalletStatus {
 async function driveWalletLeg(driveWallet: WalletRow | null, now: Date, extraHoldWalletIds: string[] = []): Promise<{
   leg: SpendLeg | null;
   holds: WalletHoldTotal[];
-  parent: WalletRow | null;
 }> {
   const parent = driveWallet?.parentWalletId ? await walletById(driveWallet.parentWalletId) : null;
   const holds = await liveHoldTotals(
@@ -137,7 +138,7 @@ async function driveWalletLeg(driveWallet: WalletRow | null, now: Date, extraHol
           : null,
       }))
     : null;
-  return { leg, holds, parent };
+  return { leg, holds };
 }
 
 /**
@@ -152,6 +153,8 @@ async function resolveAutomationSpend(input: {
   driveId: string;
   reservationCents: number;
   now: Date;
+  /** Log the skip and tell the lead (off for a read-only question that is not the gate itself). */
+  recordSkip: boolean;
 }): Promise<CallSpendDecision> {
   const standing = await loadDriveSpendStanding(input.userId, input.driveId);
   const driveWallet = standing ? await driveWalletOf(standing.driveId) : null;
@@ -169,13 +172,28 @@ async function resolveAutomationSpend(input: {
     walletOwnerTier,
     reservationCents: input.reservationCents,
   }));
-  if (decision.kind === 'skip') {
-    // SPEND-6: an empty wallet skips the run and logs it.
+  if (decision.kind === 'skip' && input.recordSkip) {
+    // SPEND-6: an empty wallet skips the run and logs it, and the lead hears of it once a period.
     loggers.ai.info('automation run skipped', {
       driveId: input.driveId,
       walletId: decision.walletId,
       reason: decision.reason,
     });
+    if (standing) {
+      try {
+        await notifyLeadOfAutomationSkip({
+          driveId: standing.driveId,
+          leadUserId: standing.ownerId,
+          walletId: decision.walletId,
+          walletPeriodStart: driveWallet?.monthlyPeriodStart ?? null,
+          reason: decision.reason,
+          now: input.now,
+        });
+      } catch (error) {
+        // The skip stands whether or not the notice lands; a failed notice is retried by the next skip.
+        loggers.ai.error('automation skip notice failed', error as Error, { driveId: input.driveId });
+      }
+    }
   }
   return decision;
 }
@@ -199,7 +217,13 @@ export async function resolveCallSpend(input: {
   }
   const now = input.now ?? new Date();
   if (target.kind === 'automation') {
-    return resolveAutomationSpend({ userId, driveId: target.driveId, reservationCents: input.reservationCents, now });
+    return resolveAutomationSpend({
+      userId,
+      driveId: target.driveId,
+      reservationCents: input.reservationCents,
+      now,
+      recordSkip: input.recordRefusal !== false,
+    });
   }
 
   const standing = await loadDriveSpendStanding(userId, target.driveId);

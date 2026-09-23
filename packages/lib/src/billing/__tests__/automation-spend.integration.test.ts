@@ -16,19 +16,21 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
 import { db, pool } from '@pagespace/db/db';
-import { eq, inArray } from '@pagespace/db/operators';
+import { and, eq, inArray, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { creditHolds, creditLedger } from '@pagespace/db/schema/credits';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
+import { notifications } from '@pagespace/db/schema/notifications';
 import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
-import { wallets } from '@pagespace/db/schema/wallets';
+import { automationSkipNotices, wallets } from '@pagespace/db/schema/wallets';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { loggers } from '../../logging/logger-config';
 import { canConsumeAI } from '../credit-gate';
 import { consumeCredits } from '../credit-consume';
 import { automationSpend } from '../spend-target';
+import { notifyLeadOfAutomationSkip } from '../automation-skip-notifier';
 
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
@@ -40,6 +42,7 @@ interface World {
   productId: string;
   marcusDriveId: string;
   marcusId: string;
+  jonoId: string;
   poolId: string;
   productWalletId: string;
   marcusWalletId: string;
@@ -86,6 +89,7 @@ async function build(input: { productAllocationCents: number | null; productStat
     productId: product.id,
     marcusDriveId: marcusDrive.id,
     marcusId: marcus.id,
+    jonoId: jono.id,
     poolId: poolWallet.id,
     productWalletId,
     marcusWalletId: marcusWallet.id,
@@ -94,6 +98,8 @@ async function build(input: { productAllocationCents: number | null; productStat
 }
 
 async function teardown(w: World): Promise<void> {
+  await db.delete(notifications).where(inArray(notifications.userId, w.userIds));
+  await db.delete(automationSkipNotices).where(inArray(automationSkipNotices.driveId, [w.productId, w.marcusDriveId]));
   await db.delete(aiUsageLogs).where(inArray(aiUsageLogs.userId, w.userIds));
   await db.delete(creditHolds).where(inArray(creditHolds.userId, w.userIds));
   await db.delete(creditLedger).where(inArray(creditLedger.userId, w.userIds));
@@ -109,6 +115,12 @@ async function teardown(w: World): Promise<void> {
 const walletRow = async (id: string) => (await db.select().from(wallets).where(eq(wallets.id, id)))[0];
 const holdsOf = (userId: string) => db.select().from(creditHolds).where(eq(creditHolds.userId, userId));
 const ledgerOf = (userId: string) => db.select().from(creditLedger).where(eq(creditLedger.userId, userId));
+const skipNoticesTo = (userId: string) =>
+  db.select().from(notifications).where(and(eq(notifications.userId, userId), eq(notifications.type, 'AUTOMATION_SKIPPED')));
+const stampOf = async (driveId: string) =>
+  (await db.select().from(automationSkipNotices).where(eq(automationSkipNotices.driveId, driveId)))[0]?.lastNotifiedAt ?? null;
+const startOfUtcMonth = (d: Date) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
+const skipEmptyProduct = (w: World) => canConsumeAI(w.marcusId, 'free', { spend: automationSpend(w.productId), skipDailyCap: true });
 
 describe('automations spend the drive wallet only (orgs on, real Postgres)', () => {
   beforeAll(async () => {
@@ -158,6 +170,64 @@ describe('automations spend the drive wallet only (orgs on, real Postgres)', () 
     expect(await ledgerOf(world.marcusId)).toEqual([]);
     expect((await walletRow(world.marcusWalletId)).monthlyRemainingCents).toBe(5_000);
     expect((await walletRow(world.poolId)).monthlyRemainingCents).toBe(5_000);
+  });
+
+  it('SPEND-6 (partial) the drive lead is told of a skip in-app; two skips in one period notify once, and never the person the run was recorded against', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 0 });
+
+    await skipEmptyProduct(world);
+    await skipEmptyProduct(world);
+
+    const notices = await skipNoticesTo(world.jonoId);
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toMatchObject({
+      driveId: world.productId,
+      metadata: { walletId: world.productWalletId, reason: 'drive_wallet_empty' },
+    });
+    expect(await skipNoticesTo(world.marcusId)).toEqual([]);
+  });
+
+  it('SPEND-6 (partial) a skip in the next period notifies again', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 0 });
+    await skipEmptyProduct(world);
+    // The last notice now falls in the previous period.
+    await db.update(automationSkipNotices)
+      .set({ lastNotifiedAt: sql`(now() at time zone 'utc') - interval '40 days'` })
+      .where(eq(automationSkipNotices.driveId, world.productId));
+
+    await skipEmptyProduct(world);
+    await skipEmptyProduct(world);
+
+    expect(await skipNoticesTo(world.jonoId)).toHaveLength(2);
+  });
+
+  it('SPEND-6 (partial) the notice clock is UTC: the stamp is UTC wall-clock and the period boundary is the UTC instant, whatever the session time zone', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 0 });
+    const before = Date.now();
+    await skipEmptyProduct(world);
+    const stamp = await stampOf(world.productId);
+    // Read back as UTC (timestamp without time zone, mode date): within the test's own window.
+    expect(stamp).not.toBeNull();
+    expect(Math.abs(stamp!.getTime() - before)).toBeLessThan(60_000);
+
+    const periodStart = startOfUtcMonth(new Date());
+    const notify = () => notifyLeadOfAutomationSkip({
+      driveId: world!.productId,
+      leadUserId: world!.jonoId,
+      walletId: world!.productWalletId,
+      walletPeriodStart: null,
+      reason: 'drive_wallet_empty',
+    });
+    // One minute after the UTC boundary: already told this period.
+    await db.update(automationSkipNotices).set({ lastNotifiedAt: new Date(periodStart.getTime() + 60_000) }).where(eq(automationSkipNotices.driveId, world.productId));
+    expect(await notify()).toBe(false);
+    // One minute before it: last period, so told again.
+    await db.update(automationSkipNotices).set({ lastNotifiedAt: new Date(periodStart.getTime() - 60_000) }).where(eq(automationSkipNotices.driveId, world.productId));
+    expect(await notify()).toBe(true);
+    expect(await skipNoticesTo(world.jonoId)).toHaveLength(2);
   });
 
   it('SPEND-6 (partial) a paused drive wallet skips the run and reserves nothing', async () => {
