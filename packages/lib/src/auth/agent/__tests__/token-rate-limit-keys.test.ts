@@ -27,12 +27,23 @@ describe('agentTokenIpRateLimitKey', () => {
 });
 
 describe('agentTokenCredentialRateLimitKey', () => {
-  it('given a credential, should key the bucket on its SHA3-256 hash', () => {
-    expect(agentTokenCredentialRateLimitKey(SECRET)).toBe(`agent-token:credential:${hashToken(SECRET)}`);
+  it('given a credential, should key the bucket on a short domain-separated digest', () => {
+    expect(agentTokenCredentialRateLimitKey(SECRET)).toMatch(/^agent-token:credential:[0-9a-f]{20}$/);
   });
 
-  it('should never contain the raw credential (the key is persisted in the rate-limit table)', () => {
-    expect(agentTokenCredentialRateLimitKey(SECRET)).not.toContain(SECRET);
+  // Phase 2b: the key is bound into the rate-limit query, and a failed query's
+  // message carries its params — so the key must never be (or contain) the
+  // stored hashToken value, nor the raw credential.
+  it('should never contain the raw credential, the stored hash, or any 64-hex run', () => {
+    const key = agentTokenCredentialRateLimitKey(SECRET);
+    expect(key).not.toContain(SECRET);
+    expect(key).not.toContain(hashToken(SECRET));
+    expect(key).not.toContain(hashToken(SECRET).slice(0, 20));
+    expect(key).not.toMatch(/[0-9a-f]{64}/);
+  });
+
+  it('given the same credential twice, should give the same bucket', () => {
+    expect(agentTokenCredentialRateLimitKey(SECRET)).toBe(agentTokenCredentialRateLimitKey(SECRET));
   });
 
   it('given two credentials, should give them separate buckets', () => {
@@ -43,6 +54,7 @@ describe('agentTokenCredentialRateLimitKey', () => {
     expect(agentTokenCredentialRateLimitKey('203.0.113.5')).not.toBe(agentTokenIpRateLimitKey('203.0.113.5'));
   });
 });
+
 
 // Phase 2b: a refresh token rotates on every use, so a bucket keyed on the
 // presented token is a fresh bucket per refresh — no bound at all. The family

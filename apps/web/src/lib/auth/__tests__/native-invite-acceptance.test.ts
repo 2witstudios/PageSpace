@@ -84,6 +84,7 @@ const driveRow = (overrides = {}) => ({
   consumedAt: null as Date | null,
   driveName: 'Acme',
   inviterName: 'Jane',
+  inviterAccountType: 'human' as const,
   ...overrides,
 });
 
@@ -97,6 +98,7 @@ const pageRow = (overrides = {}) => ({
   permissions: ['VIEW' as const],
   invitedBy: 'user_inviter',
   inviterName: 'Jane',
+  inviterAccountType: 'human' as const,
   expiresAt: new Date('2099-01-01'),
   consumedAt: null,
   ...overrides,
@@ -107,6 +109,7 @@ const connectionRow = (overrides = {}) => ({
   email: 'invitee@example.com',
   invitedBy: 'user_inviter',
   inviterName: 'Jane',
+  inviterAccountType: 'human' as const,
   requestMessage: null,
   expiresAt: new Date('2099-01-01'),
   consumedAt: null,

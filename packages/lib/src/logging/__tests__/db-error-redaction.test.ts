@@ -8,8 +8,9 @@
  * tests build the REAL wrapper shape, not a flat stand-in.
  */
 import { describe, it, expect } from 'vitest';
+import { createHash } from 'crypto';
 import { DrizzleQueryError } from 'drizzle-orm/errors';
-import { redactDbError } from '../db-error-redaction';
+import { redactDbError, isDatabaseError } from '../db-error-redaction';
 
 const SECRET_HASH = 'a3f1c9e2b7d4a3f1c9e2b7d4a3f1c9e2b7d4a3f1c9e2b7d4a3f1c9e2b7d4a3f1';
 const CLAIM_HASH = '0b9e1d7c5a3f0b9e1d7c5a3f0b9e1d7c5a3f0b9e1d7c5a3f0b9e1d7c5a3f0b9e';
@@ -84,5 +85,40 @@ describe('redactDbError', () => {
     error.cause = error;
 
     expect(redactDbError(error)).toEqual({ errorName: 'Error', code: null, constraint: null });
+  });
+});
+
+describe('isDatabaseError', () => {
+  it('given a drizzle query error, should be true', () => {
+    expect(isDatabaseError(drizzleInsertFailure())).toBe(true);
+  });
+
+  it('given a bare pg error with a SQLSTATE, or one wrapped in a cause, should be true', () => {
+    expect(isDatabaseError(pgUniqueViolation())).toBe(true);
+    expect(isDatabaseError(Object.assign(new Error('wrapped'), { cause: Object.assign(new Error('x'), { code: '57014' }) }))).toBe(true);
+    expect(isDatabaseError(Object.assign(new Error('internal'), { code: 'XX000' }))).toBe(true);
+  });
+
+  // A genuine code bug must never be mistaken for an outage: every Node
+  // builtin error carries a SCREAMING_SNAKE code, none of them a SQLSTATE.
+  it('given a real Node builtin error carrying a code, should be false', () => {
+    let builtin: unknown;
+    try {
+      createHash('sha3-256').update(undefined as unknown as string);
+    } catch (error) {
+      builtin = error;
+    }
+    expect((builtin as { code?: string }).code).toBe('ERR_INVALID_ARG_TYPE');
+    expect(isDatabaseError(builtin)).toBe(false);
+  });
+
+  it.each(['ECONNREFUSED', 'EPIPE', 'ABORT_ERR', 'ERR_INVALID_ARG_TYPE', 'UND_ERR_SOCKET', 'ETIMEDOUT'])('given a non-SQLSTATE code %s, should be false', (code) => {
+    expect(isDatabaseError(Object.assign(new Error('x'), { code }))).toBe(false);
+  });
+
+  it('given a plain error or a non-error, should be false', () => {
+    expect(isDatabaseError(new TypeError('boom'))).toBe(false);
+    expect(isDatabaseError('57014')).toBe(false);
+    expect(isDatabaseError(undefined)).toBe(false);
   });
 });

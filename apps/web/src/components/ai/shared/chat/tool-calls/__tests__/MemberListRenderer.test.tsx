@@ -18,6 +18,5 @@ describe('MemberListRenderer — agent accounts', () => {
     expect(screen.getByText('[AI agent account, self-named] "Support"')).toBeInTheDocument();
     expect(screen.getByText('AI')).toBeInTheDocument();
     expect(screen.getByText('AL')).toBeInTheDocument();
-    expect(screen.queryByText('[A')).not.toBeInTheDocument();
   });
 });

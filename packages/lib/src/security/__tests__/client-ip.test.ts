@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { getClientIP, resolveClientIP, readClientIpTrust } from '../client-ip';
+import { getClientIP, resolveClientIP, readClientIpTrust, isIpAddress } from '../client-ip';
 
 describe('getClientIP', () => {
   // Fly-Client-IP is only trustworthy when the request genuinely traversed
@@ -149,6 +149,20 @@ describe('getClientIP', () => {
         expect(getClientIP(request)).toBe('unknown');
       });
 
+      // The default-deny gate is what stops the x-real-ip fallback. (For
+      // x-forwarded-for alone, hops=0 selects past the end of the chain, so the
+      // gate is belt-and-braces there; the x-real-ip branch is where deleting
+      // it would open a hole.)
+      it.each([['a rotating x-real-ip', 'x-real-ip'], ['an empty x-forwarded-for beside x-real-ip', 'both']])(
+        'given %s flood, should resolve every request to the same client',
+        (_label, mode) => {
+          const resolved = new Set(Array.from({ length: 20 }, (_, i) => getClientIP(new Request('http://localhost', {
+            headers: mode === 'both' ? { 'x-forwarded-for': '', 'x-real-ip': `198.51.100.${i}` } : { 'x-real-ip': `198.51.100.${i}` },
+          }))));
+          expect([...resolved]).toEqual(['unknown']);
+        },
+      );
+
       it('given a flood rotating x-forwarded-for, should resolve every request to the same client (one bucket, not one per header)', () => {
         const resolved = new Set(Array.from({ length: 50 }, (_, i) =>
           getClientIP(new Request('http://localhost', { headers: { 'x-forwarded-for': `198.51.100.${i}`, 'fly-client-ip': `203.0.113.${i}` } }))));
@@ -227,6 +241,23 @@ describe('getClientIP', () => {
       });
     });
 
+    describe('given a resolved value that is not an IP literal', () => {
+      beforeEach(() => {
+        process.env.TRUSTED_PROXY_HOPS = '1';
+      });
+
+      it.each(['<script>', 'evil.example', '1.2.3.4:80', '256.1.1.1', '1.2.3', '::1::2', 'unknown'])(
+        'given the trusted entry %j, should resolve to unknown',
+        (value) => {
+          expect(getClientIP(new Request('http://localhost', { headers: { 'x-forwarded-for': `1.1.1.1, ${value}` } }))).toBe('unknown');
+        },
+      );
+
+      it('given a non-IP x-real-ip, should resolve to unknown', () => {
+        expect(getClientIP(new Request('http://localhost', { headers: { 'x-real-ip': 'not-an-ip' } }))).toBe('unknown');
+      });
+    });
+
     describe('given TRUSTED_PROXY_HOPS=2 (a CDN in front of the reverse proxy)', () => {
       beforeEach(() => {
         process.env.TRUSTED_PROXY_HOPS = '2';
@@ -237,9 +268,16 @@ describe('getClientIP', () => {
         expect(getClientIP(request)).toBe('203.0.113.50');
       });
 
-      it('given fewer entries than hops, takes the leftmost present', () => {
-        const request = new Request('http://localhost', { headers: { 'x-forwarded-for': '203.0.113.50' } });
-        expect(getClientIP(request)).toBe('203.0.113.50');
+      // Fewer entries than declared proxies = a proxy was bypassed (e.g. the
+      // origin hit directly past the CDN): the leftmost entry is then
+      // caller-written, so it must never become the bucket key.
+      it('given fewer entries than hops (a proxy was bypassed), should fail closed to unknown', () => {
+        expect(getClientIP(new Request('http://localhost', { headers: { 'x-forwarded-for': '203.0.113.50' } }))).toBe('unknown');
+      });
+
+      it('given a multi-entry chain still shorter than hops, should fail closed rather than take the caller-written leftmost', () => {
+        process.env.TRUSTED_PROXY_HOPS = '3';
+        expect(getClientIP(new Request('http://localhost', { headers: { 'x-forwarded-for': '9.9.9.9, 203.0.113.50' } }))).toBe('unknown');
       });
     });
   });
@@ -253,6 +291,16 @@ describe('getClientIP', () => {
 
     it('given no trust, should resolve unknown whatever the headers claim', () => {
       expect(resolveClientIP(headers({ 'fly-client-ip': '9.9.9.9', 'x-forwarded-for': '1.2.3.4', 'x-real-ip': '5.5.5.5' }), { onFly: false, trustedProxyHops: 0 })).toBe('unknown');
+    });
+  });
+
+  describe('isIpAddress', () => {
+    it.each(['203.0.113.5', '0.0.0.0', '255.255.255.255', '2001:db8::1', '::1', '::', 'fe80::1%eth0', '::ffff:203.0.113.5', '2001:db8:1:2:3:4:5:6', '1:2:3:4:5:6:1.2.3.4'])('accepts %j', (value) => {
+      expect(isIpAddress(value)).toBe(true);
+    });
+
+    it.each(['', 'unknown', '256.0.0.1', '1.2.3.4.5', '01.2.3.4x', '<script>', '2001:db8::1::2', '1:2:3:4:5:6:7:8:9', '1:2:3:4:5:6:7', 'gggg::1', '[::1]', '1.2.3.4:80', ':::'])('rejects %j', (value) => {
+      expect(isIpAddress(value)).toBe(false);
     });
   });
 

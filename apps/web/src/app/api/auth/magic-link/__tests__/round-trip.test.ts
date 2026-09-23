@@ -284,6 +284,7 @@ describe('magic-link round-trip — inviteToken metadata binding end-to-end', ()
         kind: 'drive',
         driveName: 'Acme',
         inviterName: 'Jane',
+        inviterAccountType: 'human' as const,
         role: 'MEMBER',
         email: 'invitee@example.com',
         isExistingUser: true,

@@ -6,7 +6,7 @@
  * from `accountType` — never from anything in the name.
  */
 import { describe, it, expect } from 'vitest';
-import { isAgentAccount, modelContextUserLabel } from '../display-name';
+import { isAgentAccount, modelContextUserLabel, withAgentMarker } from '../display-name';
 
 describe('isAgentAccount', () => {
   it('given accountType agent, should be true', () => {
@@ -24,6 +24,13 @@ describe('isAgentAccount', () => {
 describe('modelContextUserLabel', () => {
   it('given a human, should return the name unchanged (existing prompts keep their shape)', () => {
     expect(modelContextUserLabel({ name: 'Ada Lovelace', accountType: 'human' })).toBe('Ada Lovelace');
+  });
+
+  it('given a human name with surrounding or only whitespace, should pass it through byte-identical, as the transcripts always have', () => {
+    expect(modelContextUserLabel({ name: ' Ada ', accountType: 'human' })).toBe(' Ada ');
+    expect(modelContextUserLabel({ name: '  ', accountType: 'human' })).toBe('  ');
+    expect(modelContextUserLabel({ name: '', accountType: 'human' })).toBe('Unknown');
+    expect(modelContextUserLabel({ name: null, accountType: undefined })).toBe('Unknown');
   });
 
   it('given an agent, should label it and quote the self-chosen name as data', () => {
@@ -63,5 +70,16 @@ describe('modelContextUserLabel', () => {
 
   it('given an agent with no name, should still label it', () => {
     expect(modelContextUserLabel({ name: null, accountType: 'agent' })).toBe('[AI agent account, self-named] "Agent"');
+  });
+});
+
+describe('withAgentMarker (plain-text surfaces: invite emails)', () => {
+  it('given a human, should return the name unchanged', () => {
+    expect(withAgentMarker('Ada Lovelace', 'human')).toBe('Ada Lovelace');
+  });
+
+  it('given an agent posing as a colleague, should append the marker the name cannot remove', () => {
+    expect(withAgentMarker('Your IT Team', 'agent')).toBe('Your IT Team (AI agent)');
+    expect(withAgentMarker('  ', 'agent')).toBe('Agent (AI agent)');
   });
 });

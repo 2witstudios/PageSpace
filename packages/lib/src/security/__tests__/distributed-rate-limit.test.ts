@@ -1,3 +1,4 @@
+import { DrizzleQueryError } from 'drizzle-orm/errors';
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 
 const { insertMock, deleteMock, selectMock, executeMock, updateMock } = vi.hoisted(() => ({
@@ -1332,5 +1333,69 @@ describe('distributed-rate-limit', () => {
         expect.any(Object)
       );
     });
+  });
+});
+
+// Agent Signup Phase 2b: a failed bucket query is swallowed and falls back, so
+// a route's own error handling never sees it. drizzle's DrizzleQueryError
+// message is `Failed query: ...\nparams: ...` — and the bucket key is a bound
+// param. Whatever the key holds must never reach a log through this path.
+describe('a failed bucket query logs no bound value (Phase 2b)', () => {
+  const HEX64 = 'a3f1c9e2b7d4a3f1c9e2b7d4a3f1c9e2b7d4a3f1c9e2b7d4a3f1c9e2b7d4a3f1';
+  const key = `agent-token:credential:${HEX64}`;
+  const ORIGINAL_ENV = process.env.NODE_ENV;
+
+  function realDrizzleFailure(): Error {
+    return new DrizzleQueryError(
+      'insert into "rate_limit_buckets" ("key", "count") values ($1, $2) on conflict ("key") do update set ...',
+      [key, 1],
+      Object.assign(new Error('canceling statement due to statement timeout'), { code: '57014' }),
+    );
+  }
+
+  afterEach(() => {
+    process.env.NODE_ENV = ORIGINAL_ENV;
+  });
+
+  it.each(['production', 'development'])('given a %s check whose query fails, should log only the redacted error', async (env) => {
+    process.env.NODE_ENV = env;
+    const { loggers } = await import('../../logging/logger-config');
+    vi.mocked(loggers.api.warn).mockClear();
+    mockInsertThrows(realDrizzleFailure());
+
+    await checkDistributedRateLimit(key, { maxAttempts: 5, windowMs: 60_000 });
+
+    const logged = JSON.stringify([
+      vi.mocked(loggers.api.warn).mock.calls,
+      vi.mocked(loggers.api.debug).mock.calls,
+      vi.mocked(loggers.api.error).mock.calls,
+    ]);
+    expect(logged).not.toMatch(/[0-9a-f]{64}/);
+    expect(logged).not.toContain('Failed query');
+    expect(loggers.api.warn).toHaveBeenCalledWith('Postgres rate limit check failed, falling back', expect.objectContaining({ errorName: 'DrizzleQueryError', code: '57014' }));
+  });
+
+  it('given a reset or refund whose query fails, should log only the redacted error', async () => {
+    const { loggers } = await import('../../logging/logger-config');
+    vi.mocked(loggers.api.debug).mockClear();
+    deleteMock.mockImplementation(() => { throw realDrizzleFailure(); });
+    updateMock.mockImplementation(() => { throw realDrizzleFailure(); });
+
+    await resetDistributedRateLimit(key);
+    await refundDistributedRateLimitAttempt(key, 60_000);
+
+    expect(loggers.api.debug).toHaveBeenCalledWith('Postgres rate limit reset failed', expect.objectContaining({ code: '57014' }));
+    expect(loggers.api.debug).toHaveBeenCalledWith('Postgres rate limit refund failed', expect.objectContaining({ code: '57014' }));
+    expect(JSON.stringify(vi.mocked(loggers.api.debug).mock.calls)).not.toMatch(/[0-9a-f]{64}/);
+  });
+
+  it('given countAuthFailure whose query fails, should log only the redacted error', async () => {
+    const { loggers } = await import('../../logging/logger-config');
+    vi.mocked(loggers.api.warn).mockClear();
+    mockInsertThrows(realDrizzleFailure());
+
+    await countAuthFailure(key, 60_000);
+
+    expect(JSON.stringify(vi.mocked(loggers.api.warn).mock.calls)).not.toMatch(/[0-9a-f]{64}/);
   });
 });

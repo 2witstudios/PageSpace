@@ -96,9 +96,23 @@ describe('getClientIP (edge)', () => {
       expect(getClientIP(request)).toBe('unknown');
     });
 
-    it('given no trusted-proxy configuration, ignores x-forwarded-for and x-real-ip (default-deny)', () => {
-      expect(getClientIP(new Request('http://localhost', { headers: { 'x-forwarded-for': '1.2.3.4' } }))).toBe('unknown');
-      expect(getClientIP(new Request('http://localhost', { headers: { 'x-real-ip': '10.0.0.1' } }))).toBe('unknown');
+    // The Edge copy only feeds logs (security events, monitoring), never a
+    // gate, so without a declared proxy it reports the observed address rather
+    // than stripping it to `unknown` (orchestrator ruling, Phase 2b).
+    it('given no trusted-proxy configuration, reports the observed address for logging', () => {
+      expect(getClientIP(new Request('http://localhost', { headers: { 'x-forwarded-for': '1.2.3.4, 5.6.7.8' } }))).toBe('1.2.3.4');
+      expect(getClientIP(new Request('http://localhost', { headers: { 'x-real-ip': '10.0.0.1' } }))).toBe('10.0.0.1');
+    });
+
+    it('given a value that is not an IP literal, reports unknown rather than logging it', () => {
+      expect(getClientIP(new Request('http://localhost', { headers: { 'x-forwarded-for': '<script>' } }))).toBe('unknown');
+      process.env.TRUSTED_PROXY_HOPS = '1';
+      expect(getClientIP(new Request('http://localhost', { headers: { 'x-forwarded-for': '1.1.1.1, evil.example' } }))).toBe('unknown');
+    });
+
+    it('given a chain shorter than the declared hops, falls back to the observed address', () => {
+      process.env.TRUSTED_PROXY_HOPS = '2';
+      expect(getClientIP(new Request('http://localhost', { headers: { 'x-forwarded-for': '203.0.113.50' } }))).toBe('203.0.113.50');
     });
 
     it('given TRUSTED_PROXY_HOPS=1, takes the entry the proxy appended and ignores a forged fly-client-ip and prefix', () => {

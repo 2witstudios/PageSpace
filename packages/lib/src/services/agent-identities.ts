@@ -15,7 +15,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, eq, gt, inArray, isNull, lt, sql } from '@pagespace/db/operators';
+import { and, eq, gt, inArray, isNull, lt, lte, sql } from '@pagespace/db/operators';
 import { users, mcpTokens } from '@pagespace/db/schema/auth';
 import { agentIdentities, agentSignupChallenges } from '@pagespace/db/schema/agent-identities';
 import { createId } from '@paralleldrive/cuid2';
@@ -25,6 +25,7 @@ import { mintAgentSecret, isAgentSecretShape } from '../auth/agent/secret';
 import { agentSyntheticEmail } from '../auth/agent/reserved-email';
 import { decideAgentSignin, type AgentSigninDecision } from '../auth/agent/signin-decision';
 import {
+  AGENT_SIGNUP_BUDGET_CLOCK_SKEW_MS,
   AGENT_SIGNUP_BUDGET_WINDOW_MS,
   AGENT_SIGNUP_GLOBAL_BUDGET,
   decideAgentSignupBudget,
@@ -237,11 +238,17 @@ export async function createAgentAccount(input: CreateAgentAccountInput): Promis
           oldest: sql<Date | null>`min(${agentIdentities.createdAt})`.mapWith(agentIdentities.createdAt),
         })
         .from(agentIdentities)
-        // No upper bound: callers take `now` before they wait on the lock, so
-        // a signup that won the lock with a LATER now has already committed a
-        // row stamped after ours. Bounding at `now` would miss it and admit
-        // past the budget.
-        .where(gt(agentIdentities.createdAt, new Date(input.now.getTime() - windowMs)));
+        // The upper bound is `now` PLUS a skew allowance, not `now`: callers
+        // take `now` before they wait on the lock, so a signup that won the
+        // lock with a slightly LATER now has already committed a row stamped
+        // after ours, and bounding at `now` would miss it and admit past the
+        // budget. It is bounded at all so that a row stamped far in the future
+        // (clock skew between machines, a restored row) cannot consume budget
+        // in every window forever.
+        .where(and(
+          gt(agentIdentities.createdAt, new Date(input.now.getTime() - windowMs)),
+          lte(agentIdentities.createdAt, new Date(input.now.getTime() + AGENT_SIGNUP_BUDGET_CLOCK_SKEW_MS)),
+        ));
       const budget = decideAgentSignupBudget({
         signupsInWindow: recent?.count ?? 0,
         oldestInWindow: recent?.oldest ?? null,
@@ -351,7 +358,7 @@ export async function verifyAgentSecret(input: { secret: string; now: Date }): P
   });
 
   if (decision.status === 'ok') {
-    await db.update(agentIdentities).set({ lastAuthAt: input.now }).where(eq(agentIdentities.userId, row.userId));
+    await guardStore('stamp_last_auth', () => db.update(agentIdentities).set({ lastAuthAt: input.now }).where(eq(agentIdentities.userId, row.userId)));
   }
 
   return { decision, userId: row.userId };
@@ -422,7 +429,7 @@ export async function rotateAgentSecret(input: { userId: string; revokeTokens: b
  * no-op that reports `revoked: false`.
  */
 export async function revokeAgent(input: { userId: string; now: Date }): Promise<{ revoked: boolean }> {
-  return db.transaction(async (tx) => {
+  return guardStore('revoke_agent', () => db.transaction(async (tx) => {
     const updated = await tx
       .update(agentIdentities)
       .set({ revokedAt: input.now })
@@ -432,7 +439,7 @@ export async function revokeAgent(input: { userId: string; now: Date }): Promise
 
     await killAgentCredentials(tx, input.userId, input.now);
     return { revoked: true };
-  });
+  }));
 }
 
 export interface AgentIdentitySummary {
@@ -443,7 +450,7 @@ export interface AgentIdentitySummary {
 
 /** The ownership facts `/api/auth/me` exposes for an agent; `null` for anyone without an identity row. */
 export async function getAgentIdentitySummary(userId: string): Promise<AgentIdentitySummary | null> {
-  const [row] = await db
+  const [row] = await guardStore('get_identity_summary', () => db
     .select({
       ownerUserId: agentIdentities.ownerUserId,
       claimedAt: agentIdentities.claimedAt,
@@ -451,6 +458,6 @@ export async function getAgentIdentitySummary(userId: string): Promise<AgentIden
     })
     .from(agentIdentities)
     .where(eq(agentIdentities.userId, userId))
-    .limit(1);
+    .limit(1));
   return row ?? null;
 }

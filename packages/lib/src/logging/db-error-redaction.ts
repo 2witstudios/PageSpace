@@ -50,3 +50,30 @@ export function redactDbError(error: unknown): RedactedDbError {
   const errorName = shaped(error.constructor?.name, CONSTRAINT_SHAPE) ?? 'Error';
   return { errorName, code, constraint };
 }
+
+/**
+ * A Postgres SQLSTATE: five characters, digits and capitals, always containing a
+ * digit (`23505`, `57014`, `XX000`). Node's own codes (`ERR_INVALID_ARG_TYPE`,
+ * `ABORT_ERR`) and errnos (`EPIPE`, `ECONNREFUSED`) never match.
+ */
+const SQLSTATE_SHAPE = /^(?=[A-Z0-9]*\d)[A-Z0-9]{5}$/;
+
+/**
+ * Is this a database failure — a drizzle query error, or an error whose cause
+ * chain carries a Postgres SQLSTATE? A caller uses it to decide between
+ * answering "temporarily unavailable" (and logging `redactDbError`) and
+ * rethrowing a genuine code bug so the request-error hook still reports it.
+ * Every Node builtin error carries a SCREAMING_SNAKE `code`; none is a SQLSTATE.
+ */
+export function isDatabaseError(error: unknown): boolean {
+  const seen = new Set<unknown>();
+  let current: unknown = error;
+  for (let depth = 0; depth < MAX_CAUSE_DEPTH && current !== null && typeof current === 'object' && !seen.has(current); depth++) {
+    seen.add(current);
+    if (current instanceof Error && current.constructor?.name === 'DrizzleQueryError') return true;
+    const code = (current as { code?: unknown }).code;
+    if (typeof code === 'string' && SQLSTATE_SHAPE.test(code)) return true;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
+}

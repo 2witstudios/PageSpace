@@ -264,6 +264,13 @@ describe('createAgentAccount — the deployment-wide signup budget (Phase 2b)', 
     expect(challenge?.consumedAt).toBeNull();
   });
 
+  it('given a row stamped well in the future (clock skew, a restored row), should not let it consume budget', async () => {
+    const now = futureClock();
+    expect((await budgetedSignUp(new Date(now.getTime() + 2 * HOUR), 5)).result.ok).toBe(true);
+
+    expect((await budgetedSignUp(now, 1)).result.ok).toBe(true);
+  });
+
   it('given the oldest signup has aged out of the window, should admit the next one', async () => {
     const now = futureClock();
     expect((await budgetedSignUp(now, 1)).result.ok).toBe(true);

@@ -44,7 +44,8 @@ import { resolveAgentAssertionScopes } from '@/lib/agent-auth/assertion-scope';
 import { isAgentDoorOpen } from '@/lib/agent-auth/door';
 import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { redactDbError } from '@pagespace/lib/logging/db-error-redaction';
+import { isDatabaseError, redactDbError } from '@pagespace/lib/logging/db-error-redaction';
+import { AgentIdentityStoreError } from '@pagespace/lib/services/agent-identities';
 import { PAGESPACE_AGENT_CLIENT_ID } from '@pagespace/lib/auth/oauth/clients';
 import { agentTokenIpRateLimitKey, agentTokenCredentialRateLimitKey, agentRefreshRateLimitKey } from '@pagespace/lib/auth/agent/token-rate-limit-keys';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -583,17 +584,20 @@ async function handleAgentAssertionGrant(req: NextRequest, form: URLSearchParams
  * token, an agent secret, the new token pair), and drizzle's DrizzleQueryError
  * message is the query plus its bound params. Such an error must not reach
  * Next's request-error log or Sentry (`instrumentation.ts` onRequestError)
- * verbatim, so a DATABASE error is caught here, logged as its redacted
+ * verbatim, so a DATABASE error (a DrizzleQueryError, or a Postgres SQLSTATE in
+ * the cause chain — `isDatabaseError`) is caught here, logged as its redacted
  * class/code/constraint, and answered with a constant 503. Anything else is a
- * code bug with no bound values in it: it is rethrown so Sentry still sees it.
+ * code bug with no bound values in it — including Node builtin errors, which all
+ * carry a `code` — and is rethrown so Sentry still sees it.
  */
 export async function POST(req: NextRequest) {
   try {
     return await handleTokenRequest(req);
   } catch (error) {
-    const redacted = redactDbError(error);
-    if (redacted.errorName !== 'DrizzleQueryError' && redacted.code === null) throw error;
-    loggers.auth.error('OAuth token request failed', redacted);
+    // An AgentIdentityStoreError is the lib service's already-redacted database
+    // failure: answer it exactly as /api/agent/identity does (503).
+    if (!(error instanceof AgentIdentityStoreError) && !isDatabaseError(error)) throw error;
+    loggers.auth.error('OAuth token request failed', redactDbError(error));
     return noStoreJson({ error: 'temporarily_unavailable' }, 503);
   }
 }

@@ -12,6 +12,7 @@ import { driveMembers, driveRoles, pagePermissions } from '@pagespace/db/schema/
 import { pendingInvites } from '@pagespace/db/schema/pending-invites';
 import { userEmailMatch, decryptUserRow } from '@pagespace/lib/auth/user-repository';
 import { decryptField } from '@pagespace/lib/encryption/field-crypto';
+import { withAgentMarker } from '@pagespace/lib/auth/agent/display-name';
 
 export const driveInviteRepository = {
   async findDriveById(driveId: string) {
@@ -187,12 +188,19 @@ export const driveInviteRepository = {
     return results.at(0) ?? null;
   },
 
+  /**
+   * The inviter as named in invite emails and notifications. Plain text cannot
+   * carry a badge, so an AI agent account's self-chosen name carries the
+   * marker in the text itself (Agent Signup Phase 2b).
+   */
   async findInviterDisplay(userId: string): Promise<{ name: string; email: string } | null> {
     const user = await db.query.users.findFirst({
       where: eq(users.id, userId),
-      columns: { name: true, email: true },
+      columns: { name: true, email: true, accountType: true },
     });
-    return user ? decryptUserRow({ name: user.name, email: user.email }) : null;
+    if (!user) return null;
+    const decrypted = await decryptUserRow({ name: user.name, email: user.email });
+    return { name: withAgentMarker(decrypted.name, user.accountType), email: decrypted.email };
   },
 
   async deleteDriveMemberById(memberId: string): Promise<void> {
@@ -284,6 +292,8 @@ export const driveInviteRepository = {
     consumedAt: Date | null;
     driveName: string;
     inviterName: string;
+    /** `agent` = the inviter is a self-named AI agent account (Phase 2b). */
+    inviterAccountType: 'human' | 'agent';
   } | null> {
     const results = await db
       .select({
@@ -297,6 +307,7 @@ export const driveInviteRepository = {
         consumedAt: pendingInvites.consumedAt,
         driveName: drives.name,
         inviterName: users.name,
+        inviterAccountType: users.accountType,
       })
       .from(pendingInvites)
       .innerJoin(drives, eq(drives.id, pendingInvites.driveId))
@@ -411,6 +422,8 @@ export const driveInviteRepository = {
     customRoleColor: string | null;
     driveId: string;
     invitedByName: string;
+    /** `agent` = the inviter is a self-named AI agent account (Phase 2b). */
+    invitedByAccountType: 'human' | 'agent';
     createdAt: Date;
     expiresAt: Date | null;
   }>> {
@@ -424,6 +437,7 @@ export const driveInviteRepository = {
         customRoleColor: driveRoles.color,
         driveId: pendingInvites.driveId,
         invitedByName: users.name,
+        invitedByAccountType: users.accountType,
         createdAt: pendingInvites.createdAt,
         expiresAt: pendingInvites.expiresAt,
       })

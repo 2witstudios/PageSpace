@@ -12,6 +12,8 @@ export type InviteContextData =
       kind: 'drive';
       driveName: string;
       inviterName: string;
+      /** `agent` = a self-named AI agent account invited you (Phase 2b). */
+      inviterAccountType: 'human' | 'agent';
       role: 'OWNER' | 'ADMIN' | 'MEMBER';
       email: string;
       isExistingUser: boolean;
@@ -21,6 +23,8 @@ export type InviteContextData =
       pageTitle: string;
       driveName: string;
       inviterName: string;
+      /** `agent` = a self-named AI agent account invited you (Phase 2b). */
+      inviterAccountType: 'human' | 'agent';
       permissions: PendingPagePermission[];
       email: string;
       isExistingUser: boolean;
@@ -28,6 +32,8 @@ export type InviteContextData =
   | {
       kind: 'connection';
       inviterName: string;
+      /** `agent` = a self-named AI agent account invited you (Phase 2b). */
+      inviterAccountType: 'human' | 'agent';
       email: string;
       isExistingUser: boolean;
       message: string | null;
@@ -88,6 +94,7 @@ export const resolveInviteContext = async ({
         kind: 'drive',
         driveName: driveRow.driveName,
         inviterName: driveRow.inviterName,
+        inviterAccountType: driveRow.inviterAccountType,
         role: driveRow.role,
         email: driveRow.email,
         isExistingUser,
@@ -103,6 +110,7 @@ export const resolveInviteContext = async ({
         pageTitle: pageRow.pageTitle,
         driveName: pageRow.driveName,
         inviterName: pageRow.inviterName,
+        inviterAccountType: pageRow.inviterAccountType,
         permissions: pageRow.permissions,
         email: pageRow.email,
         isExistingUser,
@@ -115,6 +123,7 @@ export const resolveInviteContext = async ({
     data: {
       kind: 'connection',
       inviterName: connectionRow!.inviterName,
+      inviterAccountType: connectionRow!.inviterAccountType,
       email: connectionRow!.email,
       isExistingUser,
       message: connectionRow!.requestMessage,

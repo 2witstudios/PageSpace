@@ -16,6 +16,7 @@ import {
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
 import { getRoleColorClasses } from '@/lib/utils';
+import { AgentBadge } from '@/components/shared/AgentBadge';
 
 export interface PendingInvite {
   id: string;
@@ -25,6 +26,8 @@ export interface PendingInvite {
   customRoleName?: string | null;
   customRoleColor?: string | null;
   invitedByName: string;
+  /** `agent` renders the AgentBadge: the inviter's name is self-chosen (Phase 2b). */
+  invitedByAccountType?: 'human' | 'agent';
   createdAt: string;
   expiresAt: string | null;
 }
@@ -110,6 +113,7 @@ export function PendingInviteRow({ invite, canRevoke = false, onRevoke }: Pendin
           </div>
           <p className="text-sm text-gray-600 dark:text-gray-400">
             Invited by {invite.invitedByName}
+            <AgentBadge accountType={invite.invitedByAccountType} className="ml-1 align-middle" />
             {expiryLabel && (
               <span className="ml-2 text-gray-400 dark:text-gray-500">· {expiryLabel}</span>
             )}

@@ -449,6 +449,7 @@ describe('GET /api/drives/[driveId]/members', () => {
       customRoleColor: null,
       driveId: 'drive_abc',
       invitedByName: 'Alice',
+      invitedByAccountType: 'human' as const,
       createdAt: new Date('2024-02-01'),
       expiresAt: new Date('2024-02-03') as Date | null,
     }];

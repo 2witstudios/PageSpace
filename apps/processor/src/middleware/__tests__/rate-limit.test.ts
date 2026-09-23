@@ -438,6 +438,41 @@ describe('Fly-Client-IP trust gate (FLY_APP_NAME)', () => {
     }
   });
 
+  it('when NOT running on Fly with more hops declared than the chain has (a proxy bypassed), should fail closed to the socket peer', async () => {
+    delete process.env.FLY_APP_NAME;
+    process.env.TRUSTED_PROXY_HOPS = '2';
+    process.env.PROCESSOR_READ_RATE_LIMIT = '1';
+    process.env.PROCESSOR_READ_RATE_WINDOW = '3600';
+    try {
+      const { rateLimitRead } = await import('../rate-limit');
+      rateLimitRead(createMockReq({ forwardedFor: '1.1.1.1', ip: '10.9.9.8' }), createMockRes().res, createMockNext());
+
+      // A different caller-written entry, same socket peer: same bucket.
+      const { res, status } = createMockRes();
+      rateLimitRead(createMockReq({ forwardedFor: '2.2.2.2', ip: '10.9.9.8' }), res, createMockNext());
+      expect(status).toHaveBeenCalledWith(429);
+    } finally {
+      delete process.env.TRUSTED_PROXY_HOPS;
+    }
+  });
+
+  it('when NOT running on Fly, a trusted entry that is not an IP literal falls back to the socket peer', async () => {
+    delete process.env.FLY_APP_NAME;
+    process.env.TRUSTED_PROXY_HOPS = '1';
+    process.env.PROCESSOR_READ_RATE_LIMIT = '1';
+    process.env.PROCESSOR_READ_RATE_WINDOW = '3600';
+    try {
+      const { rateLimitRead } = await import('../rate-limit');
+      rateLimitRead(createMockReq({ forwardedFor: '1.1.1.1, <script>', ip: '10.9.9.7' }), createMockRes().res, createMockNext());
+
+      const { res, status } = createMockRes();
+      rateLimitRead(createMockReq({ forwardedFor: '1.1.1.1, <img>', ip: '10.9.9.7' }), res, createMockNext());
+      expect(status).toHaveBeenCalledWith(429);
+    } finally {
+      delete process.env.TRUSTED_PROXY_HOPS;
+    }
+  });
+
   it('when NOT running on Fly, distinct x-forwarded-for values still get distinct buckets', async () => {
     delete process.env.FLY_APP_NAME;
     process.env.TRUSTED_PROXY_HOPS = '1';

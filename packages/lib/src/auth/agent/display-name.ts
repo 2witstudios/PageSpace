@@ -9,7 +9,8 @@
  * of the name, which the agent controls.
  *
  * UI surfaces render `AgentBadge` (apps/web) from `isAgentAccount`; model
- * context uses `modelContextUserLabel`. Pure: callers pass the `name` and
+ * context uses `modelContextUserLabel`; plain text (emails) uses
+ * `withAgentMarker`. Pure: callers pass the `name` and
  * `accountType` they already selected.
  *
  * @module @pagespace/lib/auth/agent/display-name
@@ -56,13 +57,25 @@ function quoteAsData(text: string): string {
 }
 
 /**
- * A name for another user's model context. A human's name is unchanged, so
- * existing prompts keep their shape. An agent's name is labelled and emitted as
+ * A name for another user's model context. A human's name is unchanged — byte
+ * for byte, whitespace included — so existing prompts keep their shape. An agent's name is labelled and emitted as
  * a JSON string literal: quoted, with newlines, quotes, Unicode line
  * separators and bidi/zero-width marks escaped, so an injected instruction
  * stays one visible line of quoted data.
  */
 export function modelContextUserLabel(account: NamedAccount, fallback = 'Unknown'): string {
-  if (!isAgentAccount(account.accountType)) return presentName(account.name) ?? fallback;
+  // A human's name passes through byte-identical (only an absent/empty name
+  // takes the fallback) — existing transcripts must not change shape.
+  if (!isAgentAccount(account.accountType)) return account.name || fallback;
   return `${AGENT_MODEL_LABEL} ${quoteAsData(presentName(account.name) ?? AGENT_FALLBACK_NAME)}`;
+}
+
+/**
+ * A name for a PLAIN-TEXT surface that cannot carry a badge — an invite email,
+ * a notification line: `"<name> (AI agent)"` for an agent, the name unchanged
+ * for a human.
+ */
+export function withAgentMarker(name: string, accountType: string | null | undefined): string {
+  if (!isAgentAccount(accountType)) return name;
+  return `${presentName(name) ?? AGENT_FALLBACK_NAME} (AI agent)`;
 }

@@ -1,3 +1,4 @@
+import { isIP } from 'node:net';
 import type { NextFunction, Request, Response } from 'express';
 
 interface RateLimitBucket {
@@ -18,18 +19,26 @@ const WINDOW_SECONDS = parseInt(process.env.PROCESSOR_UPLOAD_RATE_WINDOW ?? '360
 // Off Fly, x-forwarded-for is honoured only under TRUSTED_PROXY_HOPS (the
 // n-th entry from the right, what the outermost trusted proxy saw) — Agent
 // Signup Phase 2b; otherwise the socket peer (`req.ip`) is the client.
+// A chain shorter than the declared hops means a proxy was bypassed: fail
+// closed to the socket peer. Only an IP literal is ever used as a bucket key.
+function ipOr(value: string | undefined, fallback: string): string {
+  const trimmed = value?.trim();
+  return trimmed && isIP(trimmed) ? trimmed : fallback;
+}
+
 function getClientIP(req: Request): string {
+  const peer = req.ip ?? 'unknown';
   const flyClientIP = process.env.FLY_APP_NAME ? req.headers['fly-client-ip'] : undefined;
   if (typeof flyClientIP === 'string' && flyClientIP.length > 0) {
-    return flyClientIP.trim();
+    return ipOr(flyClientIP, peer);
   }
 
   const forwarded = req.headers['x-forwarded-for'];
   if (process.env.FLY_APP_NAME) {
     if (typeof forwarded === 'string' && forwarded.length > 0) {
-      return forwarded.split(',')[0].trim();
+      return ipOr(forwarded.split(',')[0], peer);
     }
-    return req.ip ?? 'unknown';
+    return peer;
   }
 
   const rawHops = process.env.TRUSTED_PROXY_HOPS?.trim() ?? '';
@@ -37,11 +46,11 @@ function getClientIP(req: Request): string {
   const chain = typeof forwarded === 'string'
     ? forwarded.split(',').map((entry) => entry.trim()).filter((entry) => entry.length > 0)
     : [];
-  if (hops >= 1 && chain.length > 0) {
-    return chain[Math.max(0, chain.length - hops)] ?? req.ip ?? 'unknown';
+  if (hops >= 1 && chain.length >= hops) {
+    return ipOr(chain[chain.length - hops], peer);
   }
 
-  return req.ip ?? 'unknown';
+  return peer;
 }
 
 function getBucketKey(req: Request): string {

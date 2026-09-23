@@ -21,6 +21,13 @@ import { envInt } from '../../billing/credit-pricing';
 export const AGENT_SIGNUP_BUDGET_WINDOW_MS = 60 * 60 * 1000;
 
 /**
+ * How far past `now` a signup stamp may be and still count: covers a racer
+ * that took its clock reading before waiting on the budget lock, and small
+ * skew between machines. Anything further in the future is ignored.
+ */
+export const AGENT_SIGNUP_BUDGET_CLOCK_SKEW_MS = 5 * 60 * 1000;
+
+/**
  * Agent accounts the whole deployment may create per rolling hour. Twenty times
  * one IP's hourly allowance; `0` closes the door by budget. A value that is not
  * an unsigned integer falls back to the default (`envInt`).

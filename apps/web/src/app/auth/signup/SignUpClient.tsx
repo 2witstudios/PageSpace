@@ -18,6 +18,7 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { useAuthCSRF } from '@/hooks/useAuthCSRF';
 import { useOAuthSignIn } from '@/hooks/useOAuthSignIn';
 import type { InviteContextData } from '@/lib/auth/invite-resolver';
+import { AgentBadge } from '@/components/shared/AgentBadge';
 import { getPreferredBrowserName } from '@/lib/auth/browser-detection';
 import { useInAppBrowserNotice } from '@/hooks/useInAppBrowserNotice';
 
@@ -97,6 +98,7 @@ export function SignUpClient({ inviteToken, inviteContext, returnUrl }: SignUpCl
             {inviteContext.kind === 'connection' ? (
               <>
                 <span className="font-semibold">{inviteContext.inviterName}</span>
+                <AgentBadge accountType={inviteContext.inviterAccountType} className="ml-1 align-middle" />
                 {' '}wants to connect with you on PageSpace.
               </>
             ) : (
@@ -106,7 +108,8 @@ export function SignUpClient({ inviteToken, inviteContext, returnUrl }: SignUpCl
                   {inviteContext.driveName}
                 </span>
                 , invited by{' '}
-                <span className="font-semibold">{inviteContext.inviterName}</span>.
+                <span className="font-semibold">{inviteContext.inviterName}</span>
+                <AgentBadge accountType={inviteContext.inviterAccountType} className="ml-1 align-middle" />.
               </>
             )}
           </p>

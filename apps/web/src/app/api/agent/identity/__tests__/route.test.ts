@@ -9,6 +9,8 @@ import { solvePow, powLeadingZeroBits } from '@pagespace/lib/auth/agent/pow';
 const mocks = vi.hoisted(() => ({
   enabled: vi.fn(),
   rateLimit: vi.fn(),
+  refund: vi.fn(),
+  ip: vi.fn(),
   find: vi.fn(),
   create: vi.fn(),
   audit: vi.fn(),
@@ -25,10 +27,11 @@ vi.mock('@/lib/agent-auth/door', async (importOriginal) => ({
   isAgentDoorOpen: () => mocks.enabled(),
   agentIssuer: () => 'https://pagespace.test',
 }));
-vi.mock('@/lib/auth', () => ({ getClientIP: () => '203.0.113.9' }));
+vi.mock('@/lib/auth', () => ({ getClientIP: () => mocks.ip() }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: mocks.audit }));
 vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   checkDistributedRateLimit: mocks.rateLimit,
+  refundDistributedRateLimitAttempt: mocks.refund,
   DISTRIBUTED_RATE_LIMITS: {
     AGENT_SIGNUP: { maxAttempts: 5, windowMs: 3_600_000 },
     AGENT_SIGNUP_DAILY: { maxAttempts: 10, windowMs: 86_400_000 },
@@ -79,6 +82,8 @@ describe('POST /api/agent/identity', () => {
     vi.clearAllMocks();
     mocks.enabled.mockReturnValue(true);
     mocks.rateLimit.mockResolvedValue({ allowed: true, attemptsRemaining: 4 });
+    mocks.refund.mockResolvedValue(undefined);
+    mocks.ip.mockReturnValue('203.0.113.9');
     mocks.find.mockResolvedValue({ found: true, expired: false, consumed: false, difficultyBits: BITS, id: 'chal-1' });
     mocks.create.mockResolvedValue({ ok: true, data: { userId: 'agent-1', email: 'agent-agent-1@agents.pagespace.invalid', secret: SECRET, secretPrefix: SECRET.slice(0, 12), claimToken: CLAIM } });
   });
@@ -137,12 +142,38 @@ describe('POST /api/agent/identity', () => {
       }));
     });
 
-    it('should refuse every caller once spent, whatever client IP each request reports', async () => {
+    it('given callers on five different IPs (each with fresh per-IP buckets), should answer every one 429 because the refusal comes from the budget', async () => {
       mocks.create.mockResolvedValue({ ok: false, error: 'signup_budget_exhausted', retryAfterSeconds: 60 });
+      const ips = ['198.51.100.1', '198.51.100.2', '198.51.100.3', '2001:db8:1:1::1', '2001:db8:2:2::1'];
 
-      const statuses = await Promise.all(Array.from({ length: 5 }, () => register(validBody()).then((r) => r.status)));
+      const statuses: number[] = [];
+      for (const address of ips) {
+        mocks.ip.mockReturnValue(address);
+        statuses.push((await register(validBody())).status);
+      }
 
       expect(statuses).toEqual([429, 429, 429, 429, 429]);
+      // Each caller went through its OWN per-IP bucket (all allowed), so the
+      // 429s came from the budget, not from a shared per-IP key.
+      const hourlyKeys = mocks.rateLimit.mock.calls.map(([key]) => key).filter((key: string) => key.startsWith('agent-signup:ip:'));
+      expect(new Set(hourlyKeys).size).toBe(5);
+    });
+
+    it('given a budget refusal, should refund the per-IP hourly and daily attempts it consumed (the caller did not cause it)', async () => {
+      mocks.create.mockResolvedValue({ ok: false, error: 'signup_budget_exhausted', retryAfterSeconds: 60 });
+
+      await register(validBody());
+
+      expect(mocks.refund).toHaveBeenCalledWith('agent-signup:ip:203.0.113.9', 3_600_000);
+      expect(mocks.refund).toHaveBeenCalledWith('agent-signup-daily:ip:203.0.113.9', 86_400_000);
+    });
+
+    it('given any other refusal or a success, should not refund the per-IP attempts', async () => {
+      await register(validBody());
+      mocks.create.mockResolvedValue({ ok: false, error: 'challenge_invalid' });
+      await register(validBody());
+
+      expect(mocks.refund).not.toHaveBeenCalled();
     });
   });
 

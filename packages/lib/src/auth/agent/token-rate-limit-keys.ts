@@ -7,8 +7,12 @@
  * that a single IP can exhaust to lock every agent out. Agents are limited per
  * client IP (AGENT_TOKEN_IP, generous: fleets behind one NAT or CI runner share
  * an IP) and per presented credential (AGENT_TOKEN_CREDENTIAL, tight: a hot
- * loop on one secret). The credential bucket is keyed by the SHA3-256 hash —
- * these keys are persisted in the rate-limit table, so the raw secret never is.
+ * loop on one secret). The credential bucket is keyed by a DOMAIN-SEPARATED,
+ * TRUNCATED digest of the credential — never the raw secret and never the
+ * stored `hashToken` value (Phase 2b): the key is persisted in the rate-limit
+ * table and bound into its queries, and a failed query's message carries its
+ * bound params, so the key must be useless even if it reaches a log. 80 bits is
+ * ample to keep one credential's bucket apart from another's.
  *
  * The refresh_token grant is the exception to "per presented credential": a
  * refresh token rotates on every use, so keying on it gives every refresh a
@@ -63,8 +67,11 @@ export function agentTokenIpRateLimitKey(ip: string): string {
   return `agent-token:ip:${agentRateLimitAddress(ip)}`;
 }
 
+const CREDENTIAL_BUCKET_DIGEST_HEX = 20;
+
 export function agentTokenCredentialRateLimitKey(credential: string): string {
-  return `agent-token:credential:${hashToken(credential)}`;
+  const digest = hashToken(`agent-token-rate-limit:${credential}`).slice(0, CREDENTIAL_BUCKET_DIGEST_HEX);
+  return `agent-token:credential:${digest}`;
 }
 
 /**

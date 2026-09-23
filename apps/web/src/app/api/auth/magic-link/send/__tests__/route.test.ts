@@ -589,6 +589,7 @@ describe('POST /api/auth/magic-link/send', () => {
         data: {
           driveName: 'Acme',
           inviterName: 'Jane',
+          inviterAccountType: 'human' as const,
           role: 'MEMBER',
           email: 'invitee@example.com',
           isExistingUser: false,
@@ -612,6 +613,7 @@ describe('POST /api/auth/magic-link/send', () => {
         data: {
           driveName: 'Acme',
           inviterName: 'Jane',
+          inviterAccountType: 'human' as const,
           role: 'MEMBER',
           email: 'Joe@Example.com',
           isExistingUser: false,
@@ -634,6 +636,7 @@ describe('POST /api/auth/magic-link/send', () => {
         data: {
           driveName: 'Acme',
           inviterName: 'Jane',
+          inviterAccountType: 'human' as const,
           role: 'MEMBER',
           email: 'someone-else@example.com',
           isExistingUser: false,

@@ -24,7 +24,7 @@ import { z } from 'zod/v4';
 import { getClientIP } from '@/lib/auth';
 import { agentIssuer, agentNoStoreJson, agentNotFound, agentRateLimited, isAgentDoorOpen } from '@/lib/agent-auth/door';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
+import { checkDistributedRateLimit, refundDistributedRateLimitAttempt, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 import { verifyPowSolution, POW_NONCE_MAX_LENGTH } from '@pagespace/lib/auth/agent/pow';
 import { decideAgentSignup } from '@pagespace/lib/auth/agent/signup-decision';
 import { agentRateLimitAddress } from '@pagespace/lib/auth/agent/token-rate-limit-keys';
@@ -72,9 +72,11 @@ async function register(request: Request) {
   const ip = getClientIP(request);
   // IPv6 callers are bucketed by /64: one host is routinely handed a whole /64.
   const bucket = agentRateLimitAddress(ip);
-  const hourly = await checkDistributedRateLimit(`agent-signup:ip:${bucket}`, DISTRIBUTED_RATE_LIMITS.AGENT_SIGNUP);
+  const hourlyKey = `agent-signup:ip:${bucket}`;
+  const dailyKey = `agent-signup-daily:ip:${bucket}`;
+  const hourly = await checkDistributedRateLimit(hourlyKey, DISTRIBUTED_RATE_LIMITS.AGENT_SIGNUP);
   const daily = hourly.allowed
-    ? await checkDistributedRateLimit(`agent-signup-daily:ip:${bucket}`, DISTRIBUTED_RATE_LIMITS.AGENT_SIGNUP_DAILY)
+    ? await checkDistributedRateLimit(dailyKey, DISTRIBUTED_RATE_LIMITS.AGENT_SIGNUP_DAILY)
     : null;
   if (!hourly.allowed || (daily && !daily.allowed)) {
     const limited = !hourly.allowed ? hourly : daily;
@@ -113,6 +115,14 @@ async function register(request: Request) {
     now,
   });
   if (!created.ok && created.error === 'signup_budget_exhausted') {
+    // The deployment's budget refused this, not the caller: give back the two
+    // per-IP attempts it consumed, or an honest agent retrying through a spent
+    // hour burns its whole DAILY allowance on refusals it did not cause. The
+    // response stays identical to a per-IP refusal.
+    await Promise.all([
+      refundDistributedRateLimitAttempt(hourlyKey, DISTRIBUTED_RATE_LIMITS.AGENT_SIGNUP.windowMs),
+      refundDistributedRateLimitAttempt(dailyKey, DISTRIBUTED_RATE_LIMITS.AGENT_SIGNUP_DAILY.windowMs),
+    ]);
     auditRequest(request, { eventType: 'security.rate.limited', resourceType: 'agent_identity', details: { agentAuthEvent: 'signup_rate_limited', window: 'global' }, riskScore: 0.5 });
     return agentRateLimited(created.retryAfterSeconds);
   }

@@ -34,6 +34,19 @@ const rotateRequestSchema = z.object({
 });
 
 export async function POST(request: Request) {
+  try {
+    return await rotate(request);
+  } catch (error) {
+    // Any identity-store failure — the ownership lookup as much as the rotation
+    // itself — is the door's constant 503; the store has already logged a
+    // redacted form (Phase 2b).
+    if (!(error instanceof AgentIdentityStoreError)) throw error;
+    auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'agent_identity', details: { reason: 'store_failed', agentAuthEvent: 'secret_rotate_refused', operation: error.operation, code: error.redacted.code }, riskScore: 0.1 });
+    return agentNoStoreJson({ error: 'temporarily_unavailable' }, 503);
+  }
+}
+
+async function rotate(request: Request) {
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
   if (isAuthError(auth)) {
     auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'agent_identity', details: { reason: 'auth_failed', agentAuthEvent: 'secret_rotate_refused' }, riskScore: 0.5 });
@@ -71,14 +84,7 @@ export async function POST(request: Request) {
     return agentRateLimited(limit.retryAfter);
   }
 
-  let rotated: Awaited<ReturnType<typeof rotateAgentSecret>>;
-  try {
-    rotated = await rotateAgentSecret({ userId: agentUserId, revokeTokens });
-  } catch (error) {
-    if (!(error instanceof AgentIdentityStoreError)) throw error;
-    auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'agent_identity', resourceId: agentUserId, details: { reason: 'store_failed', agentAuthEvent: 'secret_rotate_refused', code: error.redacted.code }, riskScore: 0.1 });
-    return agentNoStoreJson({ error: 'temporarily_unavailable' }, 503);
-  }
+  const rotated = await rotateAgentSecret({ userId: agentUserId, revokeTokens });
   if (!rotated.ok) return refuse('agent_revoked');
 
   auditRequest(request, {

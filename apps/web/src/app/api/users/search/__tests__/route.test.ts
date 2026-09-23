@@ -278,6 +278,19 @@ describe('GET /api/users/search', () => {
     });
   });
 
+  describe('account type lookup failure (Phase 2b)', () => {
+    it('given the accountType lookup fails, should still return the search results, unmarked (human)', async () => {
+      const { loadAccountTypes } = await import('@/lib/users/account-types');
+      vi.mocked(loadAccountTypes).mockRejectedValueOnce(new Error('statement timeout'));
+      setupDbChains([{ userId: 'user_9', username: 'nine', displayName: 'Nine', bio: null, avatarUrl: null }], []);
+
+      const response = await GET(new Request('https://example.com/api/users/search?q=nine'));
+
+      expect(response.status).toBe(200);
+      expect((await response.json()).users[0]).toMatchObject({ userId: 'user_9', accountType: 'human' });
+    });
+  });
+
   describe('rate limiting (M3)', () => {
     it('should return 429 when the per-user rate limit is exceeded', async () => {
       vi.mocked(checkDistributedRateLimit).mockResolvedValue({

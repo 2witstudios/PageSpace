@@ -96,8 +96,23 @@ describe('POST /api/agent/secret/rotate', () => {
       expect(response.status).toBe(503);
       expect(await response.json()).toEqual({ error: 'temporarily_unavailable' });
       expect(mocks.audit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-        details: { reason: 'store_failed', agentAuthEvent: 'secret_rotate_refused', code: '23505' },
+        details: { reason: 'store_failed', agentAuthEvent: 'secret_rotate_refused', operation: 'rotate_secret', code: '23505' },
       }));
+    });
+
+    it('given the ownership lookup itself fails (before the rotation), should also answer the constant 503, not a raw 500', async () => {
+      mocks.summary.mockRejectedValue(new mocks.StoreError('get_identity_summary', { errorName: 'DrizzleQueryError', code: '57014', constraint: null }));
+
+      const response = await POST(rotateRequest({}));
+
+      expect(response.status).toBe(503);
+      expect(await response.json()).toEqual({ error: 'temporarily_unavailable' });
+      expect(mocks.rotate).not.toHaveBeenCalled();
+    });
+
+    it('given a non-store error, should rethrow it', async () => {
+      mocks.summary.mockRejectedValue(new TypeError('bug'));
+      await expect(POST(rotateRequest({}))).rejects.toThrow('bug');
     });
   });
 
