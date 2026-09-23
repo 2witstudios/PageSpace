@@ -471,6 +471,7 @@ When summarizing multiple changes, group them thematically and describe the over
                 and(
                   eq(driveMembers.userId, userId),
                   isNotNull(driveMembers.acceptedAt),
+                  ne(driveMembers.role, 'GUEST'),
                   eq(drives.isTrashed, false)
                 )
               ),

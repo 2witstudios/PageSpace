@@ -587,6 +587,28 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       expect(driveInviteRepository.updateDriveMemberRole).not.toHaveBeenCalled();
     });
 
+    it('does not 409 an email that maps to a GUEST of the drive — the add path upgrades them', async () => {
+      vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue({
+        id: 'guest_user',
+        emailVerified: new Date(),
+        suspendedAt: null,
+      } as never);
+      vi.mocked(driveInviteRepository.findExistingMember).mockResolvedValue({
+        id: 'mem_guest',
+        userId: 'guest_user',
+        role: 'GUEST',
+        acceptedAt: new Date('2026-01-01'),
+      } as never);
+
+      const response = await POST(
+        buildPost(mockDriveId, { email: 'guest@example.com', role: 'MEMBER', permissions: [] }),
+        createContext(mockDriveId)
+      );
+
+      expect(response.status).toBe(200);
+      expect(driveInviteRepository.updateDriveMemberRole).toHaveBeenCalledWith('mem_guest', 'MEMBER', null);
+    });
+
     it('returns 409 with existingMemberId when active pending invite exists', async () => {
       vi.mocked(driveInviteRepository.findActivePendingInviteByDriveAndEmail).mockResolvedValue({
         id: 'inv_pending_existing',
@@ -848,6 +870,21 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       expect(response.status).toBe(200);
       expect(broadcastDriveMemberEvent).not.toHaveBeenCalled();
       expect(broadcastDriveMemberEventToRecipients).not.toHaveBeenCalled();
+    });
+
+    it('treats upgrading a GUEST row (redeemed page share link) as a join: role updated, member_added broadcast', async () => {
+      vi.mocked(driveInviteRepository.findExistingMember).mockResolvedValue({
+        id: 'mem_guest',
+        userId: mockInvitedUserId,
+        role: 'GUEST',
+        acceptedAt: new Date(),
+      } as never);
+
+      const response = await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
+
+      expect(response.status).toBe(200);
+      expect(driveInviteRepository.updateDriveMemberRole).toHaveBeenCalledWith('mem_guest', 'MEMBER', null);
+      expect(broadcastDriveMemberEvent).toHaveBeenCalledTimes(1);
     });
 
     it('sends in-app drive notification on fresh accepted join', async () => {

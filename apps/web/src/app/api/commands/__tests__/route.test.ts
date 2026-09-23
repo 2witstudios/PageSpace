@@ -20,6 +20,7 @@ vi.mock('@pagespace/db/operators', () => ({
   or: vi.fn((...args: unknown[]) => ({ or: args })),
   inArray: vi.fn((field: unknown, values: unknown) => ({ field, values })),
   isNotNull: vi.fn((field: unknown) => ({ isNotNull: field })),
+  ne: vi.fn((a: unknown, b: unknown) => ({ _ne: true, a, b })),
 }));
 vi.mock('@pagespace/db/schema/commands', () => ({
   commands: { id: 'id', userId: 'userId', driveId: 'driveId', trigger: 'trigger', enabled: 'enabled' },
@@ -29,7 +30,7 @@ vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'id', driveId: 'driveId', isTrashed: 'isTrashed' },
 }));
 vi.mock('@pagespace/db/schema/members', () => ({
-  driveMembers: { driveId: 'driveId', userId: 'userId', acceptedAt: 'acceptedAt' },
+  driveMembers: { driveId: 'driveId', userId: 'userId', acceptedAt: 'acceptedAt', role: 'role' },
 }));
 vi.mock('@pagespace/db/schema/auth', () => ({
   users: { id: 'id', name: 'name' },
@@ -71,6 +72,7 @@ vi.mock('@pagespace/lib/auth/user-repository', async (importOriginal) => {
 });
 
 import { GET, POST } from '../route';
+import { ne } from '@pagespace/db/operators';
 import { db } from '@pagespace/db/db';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
@@ -184,6 +186,8 @@ describe('GET /api/commands', () => {
     expect(json.commands).toHaveLength(2);
     expect(json.commands[0].scope).toBe('user');
     expect(json.commands[1]).toMatchObject({ scope: 'drive', driveId: 'drive_member' });
+    // A GUEST row (redeemed page share link) does not make a drive's commands the caller's.
+    expect(ne).toHaveBeenCalledWith('role', 'GUEST');
   });
 
   it('enriches each command with entry page title, availability, and author name', async () => {

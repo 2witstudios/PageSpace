@@ -38,7 +38,7 @@ export interface AcceptancePorts {
   findExistingMembership: (input: {
     driveId: string;
     userId: string;
-  }) => Promise<{ acceptedAt: Date | null } | null>;
+  }) => Promise<{ acceptedAt: Date | null; role: string } | null>;
   consumeInviteAndCreateMember: (input: {
     invite: Invite;
     userId: string;
@@ -96,7 +96,7 @@ export interface RevokePorts {
   findActorMembership: (input: {
     driveId: string;
     actorId: string;
-  }) => Promise<{ role: Role; acceptedAt: Date | null } | null>;
+  }) => Promise<{ role: Role | 'GUEST'; acceptedAt: Date | null } | null>;
   deletePendingInviteForDrive: (input: {
     inviteId: string;
     driveId: string;

@@ -15,6 +15,7 @@ import {
 } from '@pagespace/lib/security/distributed-rate-limit';
 import { emitAcceptanceSideEffects, type AcceptedInviteData } from '@pagespace/lib/services/invites';
 import { buildAcceptancePorts } from '@/lib/auth/invite-acceptance-adapters';
+import { isGuestRole } from '@pagespace/lib/permissions/guest-role';
 import { db } from '@pagespace/db/db';
 import { and, eq } from '@pagespace/db/operators';
 import { driveRoles } from '@pagespace/db/schema/members';
@@ -229,7 +230,9 @@ async function handleUserIdPath(args: {
 
   let memberId: string;
   let permissionsGranted = 0;
-  const isFreshJoin = !existingMember;
+  // A GUEST row (redeemed page share link) is upgraded in place below, and for
+  // the drive that is a join: it gets the same side effects as a new member.
+  const isFreshJoin = !existingMember || isGuestRole(existingMember.role);
 
   if (!existingMember) {
     const result = await driveInviteRepository.createAcceptedMemberWithPermissions({
@@ -377,7 +380,8 @@ async function handleEmailPath(args: {
   // Email maps to a verified user with no pending row → fall through to add path.
   if (existingUser && existingUser.emailVerified) {
     const alreadyAcceptedMember = await driveInviteRepository.findExistingMember(driveId, existingUser.id);
-    if (alreadyAcceptedMember && alreadyAcceptedMember.acceptedAt) {
+    // A guest is not a member yet: fall through so the add path upgrades it.
+    if (alreadyAcceptedMember && alreadyAcceptedMember.acceptedAt && !isGuestRole(alreadyAcceptedMember.role)) {
       return NextResponse.json(
         { error: 'User is already a member of this drive.', existingMemberId: alreadyAcceptedMember.id },
         { status: 409 }

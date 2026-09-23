@@ -2094,6 +2094,20 @@
       "when": 1790038077778,
       "tag": "0298_agent_accounts_immutable_tenant",
       "breakpoints": true
+    },
+    {
+      "idx": 299,
+      "version": "7",
+      "when": 1790169270562,
+      "tag": "0308_member_role_guest",
+      "breakpoints": true
+    },
+    {
+      "idx": 300,
+      "version": "7",
+      "when": 1790169279445,
+      "tag": "0309_accessible_page_ids_excludes_guest",
+      "breakpoints": true
     }
   ]
 }

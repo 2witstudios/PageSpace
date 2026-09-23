@@ -7,6 +7,7 @@ import { loggers } from '../logging/logger-config';
 import { parseUserId, parsePageId } from '../validators/id-validators';
 import { fetchCustomRolePermissions, resolveCustomRolePermissions, resolveDriveWideCanEdit, type CustomRolePerms, type PagePerm } from './membership-queries';
 import { resolveRolePermissions } from './resolve-role-permissions';
+import { isGuestRole } from './guest-role';
 
 /**
  * Permission level for a single page.
@@ -48,14 +49,16 @@ export async function getDriveIdsForUser(userId: string): Promise<string[]> {
     driveIdSet.add(drive.id);
   }
 
-  const memberDrives = await db.select({ driveId: driveMembers.driveId })
+  const memberDrives = await db.select({ driveId: driveMembers.driveId, role: driveMembers.role })
     .from(driveMembers)
     .where(and(
       eq(driveMembers.userId, userId),
       isNotNull(driveMembers.acceptedAt),
     ));
 
+  // A GUEST row reaches the drive only through its page grants, below.
   for (const membership of memberDrives) {
+    if (isGuestRole(membership.role)) continue;
     driveIdSet.add(membership.driveId);
   }
 
@@ -160,7 +163,8 @@ export async function getUserAccessLevel(
         ))
         .limit(1);
 
-      if (membership.length > 0) {
+      // A GUEST holds pages, not the drive: no drive-root access.
+      if (membership.length > 0 && !isGuestRole(membership[0].role)) {
         const isAdmin = membership[0].role === 'ADMIN';
         // The single drive-wide canEdit rule (#2627): a custom role bounds a
         // MEMBER to what its driveWidePermissions grant; an unresolvable or
@@ -210,7 +214,9 @@ export async function getUserAccessLevel(
         ))
         .limit(1);
 
-      if (memberRow.length > 0) {
+      // A GUEST row is not a membership here: it gets neither a custom role nor
+      // rule 4 below, only its explicit page_permissions grants.
+      if (memberRow.length > 0 && !isGuestRole(memberRow[0].role)) {
         memberRole = memberRow[0].role;
         memberCustomRoleId = memberRow[0].customRoleId;
 
@@ -346,7 +352,8 @@ export async function isDriveOwnerOrAdmin(
 }
 
 /**
- * Check if user is a member of a drive (accepted members only)
+ * Check if user is a member of a drive (accepted members only). A GUEST is not
+ * a member: they hold pages in the drive, not the drive.
  */
 export async function isUserDriveMember(
   userId: string,
@@ -370,7 +377,7 @@ export async function isUserDriveMember(
     ))
     .limit(1);
 
-  return membership.length > 0;
+  return membership.length > 0 && !isGuestRole(membership[0].role);
 }
 
 /**
@@ -410,7 +417,7 @@ export async function getUserAccessiblePagesInDrive(
     return allPages.map((page: { id: string }) => page.id);
   }
 
-  const memberCheck = await db.select({ id: driveMembers.id, customRoleId: driveMembers.customRoleId })
+  const memberCheck = await db.select({ id: driveMembers.id, role: driveMembers.role, customRoleId: driveMembers.customRoleId })
     .from(driveMembers)
     .where(and(
       eq(driveMembers.driveId, driveId),
@@ -419,7 +426,8 @@ export async function getUserAccessiblePagesInDrive(
     ))
     .limit(1);
 
-  const memberRow = memberCheck[0] ?? null;
+  // A GUEST sees only its explicit grants (below): no rule 4, no custom role.
+  const memberRow = memberCheck[0] && !isGuestRole(memberCheck[0].role) ? memberCheck[0] : null;
 
   const pageIdSet = new Set<string>();
 
@@ -561,7 +569,7 @@ export async function getUserAccessiblePagesInDriveWithDetails(
     }));
   }
 
-  const memberCheck = await db.select({ id: driveMembers.id, customRoleId: driveMembers.customRoleId })
+  const memberCheck = await db.select({ id: driveMembers.id, role: driveMembers.role, customRoleId: driveMembers.customRoleId })
     .from(driveMembers)
     .where(and(
       eq(driveMembers.driveId, driveId),
@@ -570,7 +578,9 @@ export async function getUserAccessiblePagesInDriveWithDetails(
     ))
     .limit(1);
 
-  const isMember = memberCheck.length > 0;
+  // A GUEST sees only its explicit grants (below): no rule 4, no custom role.
+  const memberRow = memberCheck[0] && !isGuestRole(memberCheck[0].role) ? memberCheck[0] : null;
+  const isMember = memberRow !== null;
 
   const pageMap = new Map<string, PageWithPermissions>();
 
@@ -599,7 +609,7 @@ export async function getUserAccessiblePagesInDriveWithDetails(
     }
   }
 
-  const memberCustomRoleId = memberCheck[0]?.customRoleId ?? null;
+  const memberCustomRoleId = memberRow?.customRoleId ?? null;
   if (memberCustomRoleId) {
     const role = await fetchCustomRolePermissions(memberCustomRoleId, driveId);
     if (role) {
@@ -748,7 +758,7 @@ export async function getUserDriveAccess(
       loggers.api.debug('[DRIVE_ACCESS] User is NOT drive owner - checking drive membership');
     }
 
-    const membership = await db.select({ id: driveMembers.id })
+    const membership = await db.select({ id: driveMembers.id, role: driveMembers.role })
       .from(driveMembers)
       .where(and(
         eq(driveMembers.driveId, driveData.id),
@@ -757,7 +767,8 @@ export async function getUserDriveAccess(
       ))
       .limit(1);
 
-    if (membership.length > 0) {
+    // A GUEST has drive access only while it still holds a page grant (below).
+    if (membership.length > 0 && !isGuestRole(membership[0].role)) {
       if (!silent) {
         loggers.api.debug('[DRIVE_ACCESS] User is a drive member - granting access');
       }
@@ -854,7 +865,8 @@ export async function getUserDrivePermissions(
       )
       .limit(1);
 
-    if (membership.length > 0) {
+    // A GUEST is a page collaborator, not a member: no drive-wide permissions.
+    if (membership.length > 0 && !isGuestRole(membership[0].role)) {
       const { role, customRoleId } = membership[0];
       const isAdmin = role === 'ADMIN';
       let canEdit = isAdmin || role === 'MEMBER';
@@ -908,7 +920,8 @@ export async function getUserDrivePermissions(
  * `drive_members` row for that drive. A pending, unaccepted invitation is not
  * an established shared context (see apps/web/src/lib/users/visibility.ts), so
  * it lets neither the invitee DM the drive's people nor them DM the invitee.
- * Page-level collaborators (page_permissions only) do NOT count either.
+ * Page-level collaborators (page_permissions only) do NOT count either, and
+ * nor does a GUEST row (a redeemed page share link), which is one of them.
  *
  * Used to gate DM eligibility: drive co-members can DM each other without
  * needing a connections-level relationship.
@@ -931,10 +944,10 @@ export async function usersShareDrive(
     for (const d of aOwned) aDriveIds.add(d.id);
 
     const aMember = await db
-      .select({ driveId: driveMembers.driveId })
+      .select({ driveId: driveMembers.driveId, role: driveMembers.role })
       .from(driveMembers)
       .where(and(eq(driveMembers.userId, userIdA), isNotNull(driveMembers.acceptedAt)));
-    for (const m of aMember) aDriveIds.add(m.driveId);
+    for (const m of aMember) if (!isGuestRole(m.role)) aDriveIds.add(m.driveId);
 
     if (aDriveIds.size === 0) return false;
     const aIds = Array.from(aDriveIds);
@@ -946,8 +959,9 @@ export async function usersShareDrive(
       .limit(1);
     if (bOwned.length > 0) return true;
 
+    // One row per drive at most (drive_members is unique on driveId, userId).
     const bMember = await db
-      .select({ id: driveMembers.id })
+      .select({ id: driveMembers.id, role: driveMembers.role })
       .from(driveMembers)
       .where(
         and(
@@ -956,9 +970,9 @@ export async function usersShareDrive(
           isNotNull(driveMembers.acceptedAt)
         )
       )
-      .limit(1);
+      .limit(aIds.length);
 
-    return bMember.length > 0;
+    return bMember.some((m) => !isGuestRole(m.role));
   } catch (error) {
     loggers.api.error('[USERS_SHARE_DRIVE] Error checking shared drive membership', {
       userIdA,
@@ -1013,7 +1027,9 @@ export function resolvePagePermissionRow(
 
   const isOwner = row.driveOwnerId === userId;
   const isAdmin = row.memberRole === 'ADMIN';
-  const isMember = row.memberRole !== null;
+  // A GUEST row (a redeemed page share link) is not a drive-wide membership:
+  // it gets only the explicit grant above, never a custom role or rule 4.
+  const isMember = row.memberRole !== null && !isGuestRole(row.memberRole);
 
   if (isOwner || isAdmin) {
     return { canView: true, canEdit: true, canShare: true, canDelete: true };
@@ -1028,7 +1044,7 @@ export function resolvePagePermissionRow(
     };
   }
 
-  if (row.customRolePerms) {
+  if (isMember && row.customRolePerms) {
     const resolved = resolveCustomRolePermissions(
       {
         permissions: row.customRolePerms,
@@ -1043,7 +1059,7 @@ export function resolvePagePermissionRow(
     }
   }
 
-  // Rule 4: any accepted drive member gets access to non-private pages.
+  // Rule 4: any accepted drive member (not a GUEST) gets access to non-private pages.
   // Channels grant canEdit so members can post messages (Discord/Slack semantics).
   if (isMember && !row.isPrivate) {
     return {

@@ -216,7 +216,7 @@ async function gatherRecentConversations(
   const userDrives = await db
     .select({ driveId: driveMembers.driveId })
     .from(driveMembers)
-    .where(and(eq(driveMembers.userId, userId), isNotNull(driveMembers.acceptedAt)));
+    .where(and(eq(driveMembers.userId, userId), isNotNull(driveMembers.acceptedAt), ne(driveMembers.role, 'GUEST')));
   const driveIds = userDrives.map((d) => d.driveId);
 
   if (driveIds.length > 0) {
@@ -268,7 +268,7 @@ async function gatherRecentActivity(
   const userDrives = await db
     .select({ driveId: driveMembers.driveId })
     .from(driveMembers)
-    .where(and(eq(driveMembers.userId, userId), isNotNull(driveMembers.acceptedAt)));
+    .where(and(eq(driveMembers.userId, userId), isNotNull(driveMembers.acceptedAt), ne(driveMembers.role, 'GUEST')));
   const driveIds = userDrives.map((d) => d.driveId);
 
   if (driveIds.length === 0) return [];

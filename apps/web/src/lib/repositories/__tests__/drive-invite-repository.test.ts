@@ -37,6 +37,7 @@ vi.mock('@pagespace/db/operators', () => ({
   lte: vi.fn((field, value) => ({ kind: 'lte', field, value })),
   isNotNull: vi.fn((field) => ({ kind: 'isNotNull', field })),
   isNull: vi.fn((field) => ({ kind: 'isNull', field })),
+  sql: vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({ kind: 'sql', text: strings.join('?'), values })),
 }));
 
 vi.mock('@pagespace/db/schema/auth', () => ({
@@ -516,7 +517,8 @@ describe('driveInviteRepository.consumeInviteAndCreateMembership', () => {
     const txInsertReturning = insertThrows
       ? vi.fn().mockRejectedValue(insertThrows)
       : vi.fn().mockResolvedValue(insertReturning ?? []);
-    const txInsertValues = vi.fn().mockReturnValue({ returning: txInsertReturning });
+    const txInsertOnConflict = vi.fn().mockReturnValue({ returning: txInsertReturning });
+    const txInsertValues = vi.fn().mockReturnValue({ onConflictDoUpdate: txInsertOnConflict });
     const txInsert = vi.fn().mockReturnValue({ values: txInsertValues });
 
     mockTransaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) => {
@@ -524,7 +526,7 @@ describe('driveInviteRepository.consumeInviteAndCreateMembership', () => {
       return cb(tx);
     });
 
-    return { txUpdateSet, txUpdateWhere, txInsertValues };
+    return { txUpdateSet, txUpdateWhere, txInsertValues, txInsertOnConflict };
   };
 
   const baseInput = {
@@ -571,6 +573,37 @@ describe('driveInviteRepository.consumeInviteAndCreateMembership', () => {
   it('given the drive_members insert throws on a unique-violation (unique drive_user_key), returns ok=false reason=ALREADY_MEMBER', async () => {
     const uniqueViolation = new Error('duplicate key value violates unique constraint "drive_members_drive_user_key"');
     setupTx({ consumeReturning: [{ id: 'inv_1' }], insertThrows: uniqueViolation });
+
+    const result = await driveInviteRepository.consumeInviteAndCreateMembership(baseInput);
+
+    expect(result).toEqual({ ok: false, reason: 'ALREADY_MEMBER' });
+  });
+
+  it('given an existing GUEST row (redeemed page share link), upgrades it in place to the invited role', async () => {
+    const { txInsertOnConflict } = setupTx({
+      consumeReturning: [{ id: 'inv_1' }],
+      insertReturning: [{ id: 'mem_guest' }],
+    });
+
+    const result = await driveInviteRepository.consumeInviteAndCreateMembership(baseInput);
+
+    expect(result).toEqual({ ok: true, memberId: 'mem_guest' });
+    const conflict = txInsertOnConflict.mock.calls[0]?.[0] as {
+      set: Record<string, unknown>;
+      setWhere: { text: string };
+    };
+    expect(conflict.set).toEqual({
+      role: 'MEMBER',
+      customRoleId: null,
+      invitedBy: 'inviter_1',
+      acceptedAt: baseInput.acceptedAt,
+    });
+    // Only a GUEST row may be overwritten; the role column is interpolated.
+    expect(conflict.setWhere.text).toBe("? = 'GUEST'");
+  });
+
+  it('given an existing non-GUEST row, the guarded upsert touches nothing and returns ALREADY_MEMBER', async () => {
+    setupTx({ consumeReturning: [{ id: 'inv_1' }], insertReturning: [] });
 
     const result = await driveInviteRepository.consumeInviteAndCreateMembership(baseInput);
 

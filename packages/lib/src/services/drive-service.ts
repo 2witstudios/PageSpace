@@ -13,6 +13,7 @@ import { allocateUniqueSubdomainWithRetry } from './subdomain-allocation';
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 import { slugify } from '../utils/utils';
 import { customRoleBelongsToDrive, getMemberCustomRoleId, resolveDriveWideCanEdit } from '../permissions/membership-queries';
+import { isGuestRole } from '../permissions/guest-role';
 
 // ============================================================================
 // Types
@@ -90,14 +91,16 @@ export async function listAccessibleDrives(
       : and(eq(drives.ownerId, userId), eq(drives.isTrashed, false)),
   });
 
-  // 2. Get drives where user is a member (including last access time)
-  const memberDrives = await db
+  // 2. Get drives where user is a member (including last access time). A GUEST
+  // row is not a membership: its drive is reached, like any page collaborator's,
+  // through step 3 — never token-scopable, never drive-wide create.
+  const memberDrives = (await db
     .selectDistinct({ driveId: driveMembers.driveId, role: driveMembers.role, customRoleId: driveMembers.customRoleId, lastAccessedAt: driveMembers.lastAccessedAt })
     .from(driveMembers)
     .where(and(
       eq(driveMembers.userId, userId),
       isNotNull(driveMembers.acceptedAt),
-    ));
+    ))).filter((d) => !isGuestRole(d.role));
 
   // 3. Get drives where user has page-level permissions
   // Skip this if tokenScopable is true (only owned + member drives can be scoped to tokens)
@@ -265,7 +268,8 @@ export async function getDriveAccess(
     ))
     .limit(1);
 
-  if (membership.length > 0) {
+  // A GUEST (redeemed page share link) is a page collaborator, not a member.
+  if (membership.length > 0 && !isGuestRole(membership[0].role)) {
     const role = membership[0].role as 'ADMIN' | 'MEMBER';
     return {
       isOwner: false,
@@ -374,7 +378,8 @@ export async function getDriveAccessWithDrive(
     ))
     .limit(1);
 
-  if (membership.length > 0) {
+  // A GUEST (redeemed page share link) is a page collaborator, not a member.
+  if (membership.length > 0 && !isGuestRole(membership[0].role)) {
     const role = membership[0].role as 'ADMIN' | 'MEMBER';
     return {
       drive,

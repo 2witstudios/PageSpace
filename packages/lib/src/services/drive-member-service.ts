@@ -11,6 +11,7 @@ import { users } from '@pagespace/db/schema/auth';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { driveMembers, userProfiles, driveRoles, pagePermissions } from '@pagespace/db/schema/members';
 import { decryptUserRow, decryptUsersByIdOnce } from '../auth/user-repository';
+import { isGuestRole } from '../permissions/guest-role';
 
 // ============================================================================
 // Types
@@ -100,7 +101,8 @@ export async function checkDriveAccess(
     ))
     .limit(1);
 
-  if (membership.length === 0) {
+  // A GUEST (redeemed page share link) holds pages, not the drive.
+  if (membership.length === 0 || isGuestRole(membership[0].role)) {
     return { isOwner: false, isAdmin: false, isMember: false, drive };
   }
 
@@ -119,14 +121,14 @@ export async function checkDriveAccess(
  */
 export async function getDriveMemberUserIds(driveId: string): Promise<string[]> {
   const members = await db
-    .select({ userId: driveMembers.userId })
+    .select({ userId: driveMembers.userId, role: driveMembers.role })
     .from(driveMembers)
     .where(and(
       eq(driveMembers.driveId, driveId),
       isNotNull(driveMembers.acceptedAt),
     ));
 
-  return members.map((m) => m.userId);
+  return members.filter((m) => !isGuestRole(m.role)).map((m) => m.userId);
 }
 
 /**
@@ -144,14 +146,16 @@ export async function getDriveRecipientUserIds(driveId: string): Promise<string[
   if (!drive) return [];
 
   const members = await db
-    .select({ userId: driveMembers.userId })
+    .select({ userId: driveMembers.userId, role: driveMembers.role })
     .from(driveMembers)
     .where(and(
       eq(driveMembers.driveId, driveId),
       isNotNull(driveMembers.acceptedAt),
     ));
 
-  const userIds = new Set([drive.ownerId, ...members.map((m) => m.userId)]);
+  // Drive-wide events carry drive-wide content (tree changes, titles, roles);
+  // a GUEST holds single pages and hears about them through page-scoped paths.
+  const userIds = new Set([drive.ownerId, ...members.filter((m) => !isGuestRole(m.role)).map((m) => m.userId)]);
   return Array.from(userIds);
 }
 
@@ -191,7 +195,7 @@ export async function getDriveMemberUserIdsByCustomRole(
   customRoleId: string,
 ): Promise<string[]> {
   const members = await db
-    .select({ userId: driveMembers.userId })
+    .select({ userId: driveMembers.userId, role: driveMembers.role })
     .from(driveMembers)
     .where(and(
       eq(driveMembers.driveId, driveId),
@@ -199,14 +203,14 @@ export async function getDriveMemberUserIdsByCustomRole(
       isNotNull(driveMembers.acceptedAt),
     ));
 
-  return members.map((m) => m.userId);
+  return members.filter((m) => !isGuestRole(m.role)).map((m) => m.userId);
 }
 
 /**
  * List all members of a drive with their details and permission counts
  */
 export async function listDriveMembers(driveId: string): Promise<MemberWithDetails[]> {
-  const members = await db
+  const rows = await db
     .select({
       id: driveMembers.id,
       userId: driveMembers.userId,
@@ -236,6 +240,10 @@ export async function listDriveMembers(driveId: string): Promise<MemberWithDetai
     .leftJoin(userProfiles, eq(driveMembers.userId, userProfiles.userId))
     .leftJoin(driveRoles, eq(driveMembers.customRoleId, driveRoles.id))
     .where(eq(driveMembers.driveId, driveId));
+
+  // A GUEST is not a member of the drive: it is listed where its page grants
+  // are (the page's share dialog), not on the Members page or in member counts.
+  const members = rows.filter((m) => !isGuestRole(m.role));
 
   if (members.length === 0) return [];
 
@@ -322,7 +330,7 @@ export async function getDriveOwnerAsMember(driveId: string): Promise<MemberWith
  */
 export async function isMemberOfDrive(driveId: string, userId: string): Promise<boolean> {
   const existing = await db
-    .select({ id: driveMembers.id })
+    .select({ id: driveMembers.id, role: driveMembers.role })
     .from(driveMembers)
     .where(and(
       eq(driveMembers.driveId, driveId),
@@ -331,7 +339,7 @@ export async function isMemberOfDrive(driveId: string, userId: string): Promise<
     ))
     .limit(1);
 
-  return existing.length > 0;
+  return existing.length > 0 && !isGuestRole(existing[0].role);
 }
 
 /**
@@ -390,7 +398,8 @@ export async function getDriveMemberDetails(
     .where(and(eq(driveMembers.driveId, driveId), eq(driveMembers.userId, targetUserId)))
     .limit(1);
 
-  if (memberData.length === 0) {
+  // A GUEST is not a drive member, so it has no member detail page.
+  if (memberData.length === 0 || isGuestRole(memberData[0].role)) {
     return null;
   }
 

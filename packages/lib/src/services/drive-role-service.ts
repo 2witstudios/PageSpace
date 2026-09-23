@@ -11,6 +11,7 @@ import { drives } from '@pagespace/db/schema/core';
 import { driveRoles, driveMembers } from '@pagespace/db/schema/members';
 import type { PagePerm } from '../permissions/membership-queries';
 import { computeReorderPlan, lockedBatchReorder } from './reorder';
+import { isGuestRole } from '../permissions/guest-role';
 
 // Re-export canonical type so callers can import from one place
 export type { PagePerm };
@@ -126,7 +127,8 @@ export async function checkDriveAccessForRoles(
     ),
   });
 
-  if (!membership) {
+  // A GUEST (redeemed page share link) is not a member and sees no roles.
+  if (!membership || isGuestRole(membership.role)) {
     return {
       isOwner: false,
       isAdmin: false,
