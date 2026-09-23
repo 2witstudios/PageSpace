@@ -1,0 +1,76 @@
+/**
+ * wallet-access — who may see and run a drive wallet (Spec SPEND-9, SPEND-10, UI-9, WAL-4).
+ *
+ * PURE: the caller (the drive-wallet service) loads the person's standing through the
+ * permissions module (drive relationship, org role) and asks here. No route decides wallet
+ * access on its own.
+ *
+ * Roles, strongest first:
+ *   - org_admin: an Owner or Admin of the drive's org (ORG-4: full access on every org-owned
+ *                drive). Sees every wallet field, the pool and the unallocated balance (SPEND-10).
+ *   - lead:      the drive lead (drives.ownerId). Sees the wallet and spend by member (SPEND-10).
+ *   - member:    an effective member of the drive who is in its org (or any member of a
+ *                personal drive). A consumer: the remaining amount and their own cap (SPEND-9).
+ *   - guest:     a drive member not in the drive's org (DRV-8). The consumer projection.
+ *   - none:      no access to the drive (including an org member who has not joined a
+ *                Restricted or Private org drive). Answered as 404.
+ *
+ * Money authority: on an ORG drive the drive wallet is funded by the org pool, so creating,
+ * allocating, topping up and deleting it move org money and are for org admins only (A-1: the
+ * org pool allocates into drive wallets). The lead runs it: pause (the kill switch, WAL-7) and
+ * rules (fallback, donations on/off per WAL-4, the drive's default source per SPEND-3). On a
+ * PERSONAL drive the lead's own wallet funds it, so the lead does everything. Anyone who can
+ * see the drive may donate (WAL-4); the donation service re-checks visibility itself.
+ */
+
+export type WalletViewer = 'org_admin' | 'lead' | 'member' | 'guest' | 'none';
+
+export const WALLET_ACTIONS = [
+  'view',
+  'view_spend_by_member',
+  'create',
+  'allocate',
+  'top_up',
+  'pause',
+  'set_rules',
+  'delete',
+  'donate',
+] as const;
+export type WalletAction = (typeof WALLET_ACTIONS)[number];
+
+/** A person's standing in one drive, as the permissions module answers it. */
+export interface WalletStanding {
+  /** The drive's org, or null for a personal drive. */
+  orgId: string | null;
+  /** The person leads the drive (drives.ownerId). */
+  isLead: boolean;
+  /** The person is an effective member of the drive (the one org-aware access model). */
+  isDriveMember: boolean;
+  /** Their accepted role in the drive's org; null when not in it (a pending invite is not a role). */
+  orgRole: 'OWNER' | 'ADMIN' | 'MEMBER' | null;
+}
+
+export function walletViewerRole(standing: WalletStanding): WalletViewer {
+  if (standing.orgId !== null && (standing.orgRole === 'OWNER' || standing.orgRole === 'ADMIN')) return 'org_admin';
+  if (standing.isLead) return 'lead';
+  if (!standing.isDriveMember) return 'none';
+  if (standing.orgId !== null && standing.orgRole === null) return 'guest';
+  return 'member';
+}
+
+const CONSUMER_ACTIONS: readonly WalletAction[] = ['view', 'donate'];
+const ORG_LEAD_ACTIONS: readonly WalletAction[] = ['view', 'view_spend_by_member', 'pause', 'set_rules', 'donate'];
+
+/** Every action `role` may take on a drive wallet, in WALLET_ACTIONS order. */
+export function walletActionsFor(role: WalletViewer, drive: { orgDrive: boolean }): WalletAction[] {
+  const allowed: readonly WalletAction[] =
+    role === 'org_admin' ? WALLET_ACTIONS
+      : role === 'lead' ? (drive.orgDrive ? ORG_LEAD_ACTIONS : WALLET_ACTIONS)
+        : role === 'member' || role === 'guest' ? CONSUMER_ACTIONS
+          : [];
+  return WALLET_ACTIONS.filter((action) => allowed.includes(action));
+}
+
+export function mayTakeWalletAction(role: WalletViewer, action: WalletAction, drive: { orgDrive: boolean }): boolean {
+  return walletActionsFor(role, drive).includes(action);
+}
