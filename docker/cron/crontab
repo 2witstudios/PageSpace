@@ -87,6 +87,12 @@
 # across crashes/deploys. Local-only — makes no Stripe calls.
 */10 * * * * cron-curl GET __WEB_URL__/api/cron/reconcile-credits >> /var/log/cron/reconcile-credits.log 2>&1
 
+# Wallet allocation reset - Hourly at :15
+# Resets each drive/agent wallet's allocation on its governing date (D-OW-12): an org
+# drive's on the org pool's refill date, a personal drive's on the owner's personal
+# renewal. Idempotent per period, so a repeated or overlapping tick resets once.
+15 * * * * cron-curl GET __WEB_URL__/api/cron/reset-wallet-allocations >> /var/log/cron/reset-wallet-allocations.log 2>&1
+
 # Machine storage reconcile - Hourly
 # Bills each Terminal Machine's persistent storage from its last persisted
 # measurement (see machine-storage-reconcile.ts in @pagespace/lib); watermarks
