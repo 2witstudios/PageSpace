@@ -4,6 +4,7 @@ import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { createId } from '@paralleldrive/cuid2';
 import { createAIProvider, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
+import { automationSpend } from '@pagespace/lib/billing/spend-target';
 import { filterToolsForEphemeralWorkspace, filterToolsForImageGen, filterToolsForSandboxEnablement, filterToolsForSandboxTier, SANDBOX_COMPUTE_TOOL_NAMES } from '@/lib/ai/core/tool-filtering';
 import { resolveSandboxToolEligibility } from '@/lib/ai/core/sandbox-tool-eligibility';
 import { spawnSession, createConversationInSession, endSession } from '@/lib/agent-workspaces/agent-workspaces-runtime';
@@ -108,10 +109,20 @@ export interface WorkflowExecutionInput {
   eventContext?: { promptOverride?: string; payload?: unknown };
 }
 
+/**
+ * Where a run's AI usage is charged: the spend target its gate resolved and the wallet the
+ * gate reserved on (WAL-5). Threaded to settlement and to the run's own tools, so a tool
+ * that gates or bills inside the run lands on the same wallet (SPEND-6, SPEND-7).
+ */
+export type RunCreditSpend = NonNullable<ToolExecutionContext['creditSpend']>;
+
 /** A caller's go/no-go for a claimed run. `release` runs once the run settles. */
 export type RunAdmission =
-  | { admitted: true; release: () => void }
+  | { admitted: true; release: () => void; creditSpend?: RunCreditSpend }
   | { admitted: false; error: string };
+
+/** A claimed, admitted run's input plus the wallet it spends. Internal to this module. */
+type ClaimedRunInput = WorkflowExecutionInput & { creditSpend: RunCreditSpend };
 
 export interface ExecuteWorkflowOptions {
   /**
@@ -123,6 +134,12 @@ export interface ExecuteWorkflowOptions {
    * false cancellation beside the peer's real run).
    */
   admit?: () => Promise<RunAdmission>;
+  /**
+   * For a caller that gated BEFORE the claim (the calendar, zoom and page-webhook trigger
+   * executors): the wallet its gate reserved on. An admission's own creditSpend wins.
+   * Absent both, the run names its drive (SPEND-6) and no wallet — never a person.
+   */
+  creditSpend?: RunCreditSpend;
 }
 
 export async function executeWorkflow(
@@ -166,7 +183,8 @@ export async function executeWorkflow(
       result = { success: false, skipped: true, durationMs: Date.now() - startTime, error: admission.error };
     } else {
       release = admission?.release;
-      result = await runClaimed(input, runId, startTime);
+      const creditSpend = admission?.creditSpend ?? options.creditSpend ?? { spend: automationSpend(input.driveId) };
+      result = await runClaimed({ ...input, creditSpend }, runId, startTime);
     }
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -188,7 +206,7 @@ export async function executeWorkflow(
 
 /** The body of a claimed, admitted run. Throws propagate to executeWorkflow. */
 async function runClaimed(
-  input: WorkflowExecutionInput,
+  input: ClaimedRunInput,
   runId: string,
   startTime: number,
 ): Promise<WorkflowExecutionResult> {
@@ -245,7 +263,7 @@ async function finalizeRun(runId: string, result: WorkflowExecutionResult): Prom
  * the legacy execution body with the step's own prompt/agent.
  */
 async function runStepChain(
-  input: WorkflowExecutionInput,
+  input: ClaimedRunInput,
   steps: WorkflowStep[],
   runId: string,
   startTime: number
@@ -377,7 +395,7 @@ type ToolStepResult = { ok: true } | { ok: false; error: string };
 async function runToolStep(
   step: WorkflowToolStep,
   index: number,
-  input: WorkflowExecutionInput
+  input: ClaimedRunInput
 ): Promise<ToolStepResult> {
   if (!(DETERMINISTIC_TOOL_ALLOWLIST as readonly string[]).includes(step.toolName)) {
     return { ok: false, error: `tool "${step.toolName}" is not deterministically invocable` };
@@ -406,6 +424,7 @@ async function runToolStep(
   const executionContext: ToolExecutionContext = {
     userId: input.createdBy,
     timezone: input.timezone,
+    creditSpend: input.creditSpend,
   };
 
   try {
@@ -478,7 +497,7 @@ async function releaseWorkflowSession(workspaceId: string, workflowId: string): 
 }
 
 async function runExecution(
-  input: WorkflowExecutionInput,
+  input: ClaimedRunInput,
   startTime: number,
   exec: { prompt: string; agentPageId: string }
 ): Promise<WorkflowExecutionResult> {
@@ -752,6 +771,7 @@ async function runExecution(
     const executionContext: ToolExecutionContext = {
       userId: input.createdBy,
       timezone: input.timezone,
+      creditSpend: input.creditSpend,
       aiProvider: agent.aiProvider ?? undefined,
       aiModel: agent.aiModel ?? undefined,
       conversationId,
@@ -870,6 +890,9 @@ async function runExecution(
       totalTokens: usage ? ((usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)) : undefined,
       pageId: agent.id,
       driveId: input.driveId,
+      // WAL-5 / SPEND-6: settle on the wallet the run's gate reserved on — the drive wallet,
+      // never a person's — not the payer's personal root.
+      walletId: input.creditSpend.walletId,
       success: true,
     });
 

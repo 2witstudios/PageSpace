@@ -177,6 +177,7 @@ import { generateText } from 'ai';
 import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
 import { messageRepository } from '@/lib/repositories/message-repository';
 import { createId } from '@paralleldrive/cuid2';
+import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 
 const createInputFixture = (overrides: Partial<WorkflowExecutionInput> = {}): WorkflowExecutionInput => ({
   workflowId: 'wf_1',
@@ -952,6 +953,28 @@ describe('executeWorkflow', () => {
       await executeWorkflow(createInputFixture(), { admit: vi.fn().mockResolvedValue({ admitted: true, release }) });
 
       expect(release).toHaveBeenCalledTimes(1);
+    });
+
+    test('SPEND-6 (partial) an admitted run settles its usage on the wallet the gate reserved on, and its tools spend the same drive wallet', async () => {
+      setupSelectChain([mockAgent], [mockDrive]);
+      const creditSpend = { spend: { kind: 'automation' as const, driveId: 'drive_1' }, walletId: 'w_product' };
+
+      await executeWorkflow(createInputFixture(), {
+        admit: vi.fn().mockResolvedValue({ admitted: true, release: vi.fn(), creditSpend }),
+      });
+
+      expect(AIMonitoring.trackUsage).toHaveBeenCalledWith(expect.objectContaining({ walletId: 'w_product', source: 'workflow' }));
+      const genCall = vi.mocked(generateText).mock.calls[0][0] as { experimental_context: { creditSpend?: unknown } };
+      expect(genCall.experimental_context.creditSpend).toEqual(creditSpend);
+    });
+
+    test('SPEND-6 (partial) a run gated before the claim settles on the wallet its caller names', async () => {
+      setupSelectChain([mockAgent], [mockDrive]);
+      const creditSpend = { spend: { kind: 'automation' as const, driveId: 'drive_1' }, walletId: 'w_product' };
+
+      await executeWorkflow(createInputFixture(), { creditSpend });
+
+      expect(AIMonitoring.trackUsage).toHaveBeenCalledWith(expect.objectContaining({ walletId: 'w_product' }));
     });
 
     test('a throwing gate fails the run (finalized, not left running) and runs no model', async () => {

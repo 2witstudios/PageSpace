@@ -365,6 +365,39 @@ describe('executeCalendarTrigger', () => {
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 
+  it('SPEND-6 (partial) the gate names the drive as consumer, never the scheduling user\'s credits', async () => {
+    await executeCalendarTrigger(createTrigger(), createEvent());
+
+    expect(mockCanConsumeAI).toHaveBeenCalledWith('user-123', 'free', {
+      spend: { kind: 'automation', driveId: 'drive-1' },
+      skipDailyCap: true,
+    });
+  });
+
+  it('SPEND-6 (partial) the run settles on the drive wallet the gate reserved on', async () => {
+    mockCanConsumeAI.mockResolvedValue({ allowed: true, holdId: 'hold-1', reason: 'ok', walletId: 'w-drive' });
+
+    await executeCalendarTrigger(createTrigger(), createEvent());
+
+    expect(mockExecuteWorkflow.mock.calls[0][1]).toEqual({
+      creditSpend: { spend: { kind: 'automation', driveId: 'drive-1' }, walletId: 'w-drive' },
+    });
+  });
+
+  it('SPEND-6 (partial) with only the person funded and the drive wallet empty the run is skipped, naming why', async () => {
+    mockCanConsumeAI.mockResolvedValue({
+      allowed: false,
+      reason: 'source_refused',
+      refusal: { source: 'drive_wallet', reason: 'drive_wallet_empty', options: [] },
+    });
+
+    const result = await executeCalendarTrigger(createTrigger(), createEvent());
+
+    expect(result).toMatchObject({ success: false, error: 'AI credit gate denied: source_refused (drive_wallet_empty)' });
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(mockCanConsumeAI).toHaveBeenCalledTimes(1);
+  });
+
   it('skips execution and returns failure when credit gate denies', async () => {
     mockCanConsumeAI.mockResolvedValue({ allowed: false, reason: 'out_of_credits' });
 

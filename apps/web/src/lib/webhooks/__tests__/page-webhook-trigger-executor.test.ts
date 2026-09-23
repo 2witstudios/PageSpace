@@ -107,12 +107,12 @@ describe('executePageWebhookTrigger', () => {
     expect(input.eventContext.promptOverride).toContain('Do the thing.');
   });
 
-  it('bills the credit gate to workflow.createdBy and releases the hold', async () => {
+  it('SPEND-6 (partial) gates the workflow\'s drive (recorded against workflow.createdBy) and releases the hold', async () => {
     await executePageWebhookTrigger(TRIGGER, ENVELOPE);
     // Legacy workflow (no steps column) synthesizes exactly one ai step, so
     // the reservation is 1x the per-call estimate.
     expect(mockCanConsume).toHaveBeenCalledWith('user-1', 'pro', {
-      spend: { kind: 'personal' },
+      spend: { kind: 'automation', driveId: 'drive-1' },
       dailyCapCeilingCents: 500,
       estCostCents: 10,
     });
@@ -152,10 +152,33 @@ describe('executePageWebhookTrigger', () => {
     await executePageWebhookTrigger(TRIGGER, ENVELOPE);
 
     expect(mockCanConsume).toHaveBeenCalledWith('user-1', 'pro', {
-      spend: { kind: 'personal' },
+      spend: { kind: 'automation', driveId: 'drive-1' },
       dailyCapCeilingCents: 500,
       estCostCents: 30, // 3 ai steps * 10-cent per-call estimate
     });
+  });
+
+  it('SPEND-6 (partial) the run settles on the drive wallet the gate reserved on', async () => {
+    mockCanConsume.mockResolvedValue({ allowed: true, holdId: 'hold-1', walletId: 'w-drive' });
+
+    await executePageWebhookTrigger(TRIGGER, ENVELOPE);
+
+    expect(mockExecuteWorkflow.mock.calls[0][1]).toEqual({
+      creditSpend: { spend: { kind: 'automation', driveId: 'drive-1' }, walletId: 'w-drive' },
+    });
+  });
+
+  it('SPEND-6 (partial) with only the person funded and the drive wallet empty the run is skipped, naming why', async () => {
+    mockCanConsume.mockResolvedValue({
+      allowed: false,
+      reason: 'source_refused',
+      refusal: { source: 'drive_wallet', reason: 'drive_wallet_empty', options: [] },
+    });
+
+    const result = await executePageWebhookTrigger(TRIGGER, ENVELOPE);
+
+    expect(result).toMatchObject({ success: false, error: 'AI credit gate denied: source_refused (drive_wallet_empty)' });
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 
   it('releases the credit hold even when executeWorkflow throws', async () => {
