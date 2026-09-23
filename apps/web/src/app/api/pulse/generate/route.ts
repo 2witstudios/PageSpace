@@ -36,6 +36,7 @@ import { getMemberDriveIds } from '@pagespace/lib/permissions/member-drives';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { AIMonitoring, discardUsageOutcome, extractOpenRouterCostDollars, extractOpenRouterGenerationIds } from '@pagespace/lib/monitoring/ai-monitoring';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { PERSONAL_SPEND } from '@pagespace/lib/billing/spend-target';
 import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
@@ -53,6 +54,8 @@ export async function POST(req: Request) {
   // Credit-gate reservation, released when usage is billed below. Hoisted so the
   // finally can free it on any pre-generation early return/throw after the gate.
   let holdId: string | undefined;
+  // The wallet the hold was placed on, settled against with it (WAL-5).
+  let walletId: string | undefined;
   let holdHandedOff = false;
   try {
     // Parse request body for timezone
@@ -96,14 +99,18 @@ export async function POST(req: Request) {
     // Model isn't resolved until the generation step below, so we let the hold use the
     // default flat estimate (estCostCents omitted) and just apply the chat concurrency cap.
     const creditGate = await canConsumeAI(userId, (user.subscriptionTier ?? 'free') as SubscriptionTier, {
+      // Pulse summarizes the person's own workspace and is not a drive session, so it
+      // spends their personal credits (SPEND-8).
+      spend: PERSONAL_SPEND,
       maxInFlight: MAX_CHAT_INFLIGHT,
     });
     if (!creditGate.allowed) {
       loggers.api.warn('Pulse generate: AI credit gate denied', { userId, reason: creditGate.reason });
-      return creditGateErrorResponse(creditGate.reason);
+      return creditGateErrorResponse(creditGate.reason, creditGate.refusal);
     }
     // The gate's reservation for this call, released when usage is billed below.
     holdId = creditGate.holdId;
+    walletId = creditGate.walletId;
 
     // Determine timezone: use client-provided, then stored preference, then UTC
     const userTimezone = clientTimezone || normalizeTimezone(user?.timezone);
@@ -757,6 +764,7 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
       openrouterGenerationIds: extractOpenRouterGenerationIds(result.steps),
       success: true,
       holdId,
+      walletId,
     }));
     // trackUsage owns the hold release from here.
     holdHandedOff = true;

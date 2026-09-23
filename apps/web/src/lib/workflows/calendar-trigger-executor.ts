@@ -10,6 +10,7 @@ import type { CalendarTrigger } from '@pagespace/db/schema/calendar-triggers';
 import { executeWorkflow, type WorkflowExecutionResult, type WorkflowExecutionInput } from './workflow-executor';
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { PERSONAL_SPEND } from '@pagespace/lib/billing/spend-target';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -78,7 +79,9 @@ export async function executeCalendarTrigger(
     const gate = await canConsumeAI(
       trigger.scheduledById,
       (schedulingUser?.subscriptionTier ?? 'free') as SubscriptionTier,
-      { skipDailyCap: true },
+      // Automations spend the drive wallet only (SPEND-6) once lane C4 lands; until then
+      // the run bills the person it has always billed, named here explicitly.
+      { spend: PERSONAL_SPEND, skipDailyCap: true },
     );
     if (!gate.allowed) {
       logger.info('Calendar trigger: skipped (credit gate denied)', {

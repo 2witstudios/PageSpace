@@ -36,6 +36,7 @@ import { getMemberDriveIds } from '@pagespace/lib/permissions/member-drives';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { AIMonitoring, discardUsageOutcome, extractOpenRouterCostDollars, extractOpenRouterGenerationIds } from '@pagespace/lib/monitoring/ai-monitoring';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { PERSONAL_SPEND } from '@pagespace/lib/billing/spend-target';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
@@ -167,6 +168,9 @@ async function generatePulseForUser(userId: string, now: Date): Promise<boolean>
   // credit balance still gates it. No maxInFlight: the cron runs one generation per user
   // per tick, so there is no concurrency to bound.
   const gate = await canConsumeAI(userId, (user.subscriptionTier ?? 'free') as SubscriptionTier, {
+    // Pulse summarizes the person's own workspace and is not a drive session, so it
+    // spends their personal credits (SPEND-8).
+    spend: PERSONAL_SPEND,
     skipDailyCap: true,
   });
   if (!gate.allowed) {
@@ -184,7 +188,7 @@ async function generatePulseForUser(userId: string, now: Date): Promise<boolean>
   const holdId = gate.holdId;
   let holdHandedOff = false;
   try {
-    await buildAndPersistPulse(user, now, holdId, () => {
+    await buildAndPersistPulse(user, now, { holdId, walletId: gate.walletId }, () => {
       holdHandedOff = true;
     });
     return true;
@@ -202,9 +206,10 @@ async function generatePulseForUser(userId: string, now: Date): Promise<boolean>
 async function buildAndPersistPulse(
   user: typeof users.$inferSelect,
   now: Date,
-  holdId: string | undefined,
+  reservation: { holdId: string | undefined; walletId: string | undefined },
   markHandedOff: () => void,
 ): Promise<void> {
+  const { holdId, walletId } = reservation;
   const userId = user.id;
   // Decrypt PII at the edge so the pulse prompt addresses the user in plaintext.
   const userNamePlain = await decryptField(user.name);
@@ -932,6 +937,7 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
     providerCostDollars: extractOpenRouterCostDollars(result.steps),
     openrouterGenerationIds: extractOpenRouterGenerationIds(result.steps),
     holdId,
+    walletId,
     success: true,
   }));
   // The hold is now owned by trackUsage — keep the caller's finally from releasing it.

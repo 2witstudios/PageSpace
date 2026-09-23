@@ -29,6 +29,7 @@ import { conversationRepository } from '@/lib/repositories/conversation-reposito
 import { authorizePageConversation, type PageConversationAccess } from '@/lib/ai/core/authorize-page-conversation';
 import { createId } from '@paralleldrive/cuid2';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { driveSpend, resolvedSpend } from '@pagespace/lib/billing/spend-target';
 import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
 import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
@@ -203,6 +204,8 @@ export async function POST(request: Request) {
   // Credit-gate reservation, released when usage is billed below. Hoisted so the
   // finally can free it on any pre-generation early return/throw after the gate.
   let holdId: string | undefined;
+  // The wallet the hold was placed on, threaded to settlement with it (WAL-5).
+  let walletId: string | undefined;
   let holdHandedOff = false;
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
@@ -309,17 +312,23 @@ export async function POST(request: Request) {
     // Metering-exempt providers (admin Z.ai Coder Plan) bill on a flat-rate external
     // subscription, so skip the gate entirely — no hold, no balance check — and never
     // debit at settle (see isMeteringExempt in trackAIUsage).
+    // A consultation runs as a conversation on the agent's page, so its session is the
+    // agent's drive (SPEND-7). The per-conversation chosen source has no storage yet.
+    let spend = driveSpend(agent.driveId);
     if (!isMeteringExempt(effectiveProvider)) {
       const creditGate = await canConsumeAI(userId, (gateUser?.subscriptionTier ?? 'free') as SubscriptionTier, {
+        spend,
         estCostCents: estimateChatHoldCentsForModel(agent.aiModel ?? undefined),
         maxInFlight: MAX_CHAT_INFLIGHT,
       });
       if (!creditGate.allowed) {
         loggers.api.warn('Agent consultation: AI credit gate denied', { userId, agentId, reason: creditGate.reason });
-        return creditGateErrorResponse(creditGate.reason);
+        return creditGateErrorResponse(creditGate.reason, creditGate.refusal);
       }
       // The gate's reservation for this call, released when usage is billed below.
       holdId = creditGate.holdId;
+      walletId = creditGate.walletId;
+      spend = resolvedSpend(spend, creditGate.spendSource);
     }
 
     // Get the drive information for context awareness
@@ -516,6 +525,7 @@ export async function POST(request: Request) {
       aiProvider: agent.aiProvider ?? undefined,
       aiModel: agent.aiModel ?? undefined,
       conversationId: `agent-consult-${agentId}-${Date.now()}`,
+      creditSpend: { spend, walletId },
       locationContext: {
         currentPage: {
           id: agent.id,
@@ -755,6 +765,7 @@ export async function POST(request: Request) {
         driveId: agent.driveId,
         success: true,
         holdId,
+        walletId,
       }));
       // trackUsage owns the hold release from here.
       holdHandedOff = true;

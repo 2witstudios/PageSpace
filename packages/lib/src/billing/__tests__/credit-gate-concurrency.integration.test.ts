@@ -26,6 +26,7 @@ import { wallets } from '@pagespace/db/schema/wallets';
 import { users } from '@pagespace/db/schema/auth';
 import { factories } from '@pagespace/db/test/factories';
 import { canConsumeAI, addOneMonth } from '../credit-gate';
+import { PERSONAL_SPEND } from '../spend-target';
 import { RESERVE_FLOOR_CENTS, CREDIT_HOLD_ESTIMATE_CENTS } from '../credit-pricing';
 import { requireDb } from '@pagespace/db/test/require-db';
 
@@ -92,7 +93,7 @@ describe('canConsumeAI concurrency (Postgres row lock)', () => {
 
       const N = 8;
       const results = await Promise.all(
-        Array.from({ length: N }, () => canConsumeAI(user.id, 'pro')),
+        Array.from({ length: N }, () => canConsumeAI(user.id, 'pro', { spend: PERSONAL_SPEND })),
       );
 
       const allowed = results.filter((r) => r.allowed);
@@ -128,7 +129,7 @@ describe('canConsumeAI concurrency (Postgres row lock)', () => {
 
       const N = 8;
       const results = await Promise.all(
-        Array.from({ length: N }, () => canConsumeAI(user.id, 'pro')),
+        Array.from({ length: N }, () => canConsumeAI(user.id, 'pro', { spend: PERSONAL_SPEND })),
       );
 
       const allowed = results.filter((r) => r.allowed);

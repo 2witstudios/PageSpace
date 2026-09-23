@@ -443,6 +443,7 @@ vi.mock('../credit-emit', () => ({ emitCreditsUpdated: vi.fn().mockResolvedValue
 
 import { applyStripeFunding } from '../credit-funding';
 import { canConsumeAI } from '../credit-gate';
+import { PERSONAL_SPEND } from '../spend-target';
 import { consumeCredits } from '../credit-consume';
 import { backfillCredits } from '../credit-backfill';
 import { reconcileOpenRouterCosts, type GenerationFetcher } from '../cost-reconcile';
@@ -993,7 +994,7 @@ describe('credits flow — happy path (fund → gate → consume → top-up → 
     // accumulate and spendable returns to balance−0 between calls.
 
     // ── CALL 1: $2 real cost, monthly-first (500 spendable, reserve passes) ──────
-    let g = await canConsumeAI('u1', 'free');
+    let g = await canConsumeAI('u1', 'free', { spend: PERSONAL_SPEND });
     expect(g).toMatchObject({ allowed: true, reason: 'ok' });
     expect(g.holdId).toBeTruthy();
     await consumeCredits({ aiUsageLogId: 'log_1', userId: 'u1', costDollars: 2, holdId: g.holdId }); // 300¢
@@ -1001,7 +1002,7 @@ describe('credits flow — happy path (fund → gate → consume → top-up → 
     expect(store.creditHolds).toHaveLength(0); // hold released at settle
 
     // ── CALL 2: $1 real cost ────────────────────────────────────────────────────
-    g = await canConsumeAI('u1', 'free');
+    g = await canConsumeAI('u1', 'free', { spend: PERSONAL_SPEND });
     expect(g.allowed).toBe(true);
     await consumeCredits({ aiUsageLogId: 'log_2', userId: 'u1', costDollars: 1, holdId: g.holdId }); // 150¢
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(50);
@@ -1009,7 +1010,7 @@ describe('credits flow — happy path (fund → gate → consume → top-up → 
     // ── GATE with 50¢ left → DENIED: reserving the 25¢ estimate would leave only
     // 25¢ == the reserve floor. The reservation guard blocks before overshoot, so a
     // near-empty bucket can't fund a call. (Denied, so no hold is inserted.) ──────
-    expect((await canConsumeAI('u1', 'free')).allowed).toBe(false);
+    expect((await canConsumeAI('u1', 'free', { spend: PERSONAL_SPEND })).allowed).toBe(false);
     expect(store.creditHolds).toHaveLength(0);
 
     // ── TOP-UP: a $10 credit pack unblocks the user (spendable 50 + 1000) ────────
@@ -1018,21 +1019,21 @@ describe('credits flow — happy path (fund → gate → consume → top-up → 
     expect(ledgerOf('u1').filter((r) => r.entryType === 'topup_purchase')).toHaveLength(1);
 
     // ── CALL 3 across the bucket boundary: $0.50 spends the last 50¢ monthly + 25¢ top-up
-    g = await canConsumeAI('u1', 'free');
+    g = await canConsumeAI('u1', 'free', { spend: PERSONAL_SPEND });
     expect(g.allowed).toBe(true);
     await consumeCredits({ aiUsageLogId: 'log_3', userId: 'u1', costDollars: 0.5, holdId: g.holdId }); // 75¢
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(0);
     expect(balanceOf('u1')!.topupRemainingCents).toBe(975);
 
     // ── CALL 4 (DRAIN): a $6.50 call empties the top-up bucket exactly ───────────
-    g = await canConsumeAI('u1', 'free');
+    g = await canConsumeAI('u1', 'free', { spend: PERSONAL_SPEND });
     expect(g.allowed).toBe(true);
     await consumeCredits({ aiUsageLogId: 'log_4', userId: 'u1', costDollars: 6.5, holdId: g.holdId }); // 975¢
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(0);
     expect(balanceOf('u1')!.topupRemainingCents).toBe(0);
 
     // ── GATE: drained → out_of_credits ──────────────────────────────────────────
-    expect((await canConsumeAI('u1', 'free')).allowed).toBe(false);
+    expect((await canConsumeAI('u1', 'free', { spend: PERSONAL_SPEND })).allowed).toBe(false);
 
     // Ledger sanity: 4 usage rows, 1 grant, 1 purchase, no debt (every call covered).
     expect(ledgerOf('u1').filter((r) => r.entryType === 'usage')).toHaveLength(4);
@@ -1050,7 +1051,7 @@ describe('credits flow — negative balance (overage → debt → recover)', () 
 
     // ── OVERSHOOT: gate allows (1500 spendable), but the call costs $12 -> 1800¢.
     // The 300¢ it can't cover becomes debt; the monthly bucket floors at 0. ─────────
-    const g1 = await canConsumeAI('u1', 'pro');
+    const g1 = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
     expect(g1.allowed).toBe(true);
     await consumeCredits({ aiUsageLogId: 'log_over', userId: 'u1', costDollars: 12, holdId: g1.holdId });
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(0);
@@ -1062,7 +1063,7 @@ describe('credits flow — negative balance (overage → debt → recover)', () 
     expect(debtRows[0]).toMatchObject({ amountCents: -300, aiUsageLogId: 'log_over' });
 
     // ── BLOCKED: net = 0 − 300 = −300 < floor → out_of_credits (must get positive) ─
-    expect((await canConsumeAI('u1', 'pro'))).toMatchObject({ allowed: false, reason: 'out_of_credits' });
+    expect((await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND }))).toMatchObject({ allowed: false, reason: 'out_of_credits' });
 
     // ── RECOVER: a $25 pack pays the 300¢ debt FIRST, banking the 2200¢ remainder. ─
     await applyStripeFunding(creditPackCheckout('cs_1', 'cus_1', 2500));
@@ -1070,31 +1071,31 @@ describe('credits flow — negative balance (overage → debt → recover)', () 
     expect(balanceOf('u1')!.topupRemainingCents).toBe(2200);
 
     // ── UNBLOCKED: net positive again. ──────────────────────────────────────────
-    expect((await canConsumeAI('u1', 'pro')).allowed).toBe(true);
+    expect((await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND })).allowed).toBe(true);
   });
 
   it('nets outstanding debt against carry at renewal — debt absorbed, monthly reduced accordingly', async () => {
     seedUser('u1', 'cus_1', 'pro');
     await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END));
 
-    const g = await canConsumeAI('u1', 'pro');
+    const g = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
     await consumeCredits({ aiUsageLogId: 'log_over', userId: 'u1', costDollars: 12, holdId: g.holdId });
     expect(balanceOf('u1')!.debtCents).toBe(300);
-    expect((await canConsumeAI('u1', 'pro')).allowed).toBe(false); // blocked while in the red
+    expect((await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND })).allowed).toBe(false); // blocked while in the red
 
     // ── RENEWAL: debt netted against carry before allowance added. ──
     // monthly = 0, debt = 300; netCarried = 0 − 300 = −300; monthly = −300 + 1500 = 1200.
     await applyStripeFunding(invoicePaid('in_2', 'cus_1', PERIOD_START, PERIOD_END));
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(1200); // 1500 − 300 debt absorbed
     expect(balanceOf('u1')!.debtCents).toBe(0); // absorbed into monthly balance
-    expect((await canConsumeAI('u1', 'pro')).allowed).toBe(true);
+    expect((await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND })).allowed).toBe(true);
   });
 
   it('a partial top-up (smaller than the debt) reduces debt but stays blocked until net-positive', async () => {
     seedUser('u1', 'cus_1', 'pro');
     await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END));
 
-    const g = await canConsumeAI('u1', 'pro');
+    const g = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
     // $20 call -> 3000¢; covers 1500 monthly, leaves 1500¢ debt.
     await consumeCredits({ aiUsageLogId: 'log_big', userId: 'u1', costDollars: 20, holdId: g.holdId });
     expect(balanceOf('u1')!.debtCents).toBe(1500);
@@ -1103,7 +1104,7 @@ describe('credits flow — negative balance (overage → debt → recover)', () 
     await applyStripeFunding(creditPackCheckout('cs_partial', 'cus_1', 500));
     expect(balanceOf('u1')!.debtCents).toBe(1000);
     expect(balanceOf('u1')!.topupRemainingCents).toBe(0);
-    expect((await canConsumeAI('u1', 'pro')).allowed).toBe(false);
+    expect((await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND })).allowed).toBe(false);
   });
 
   it('ACCUMULATES debt across two in-flight overages (settle adds to existing debt, never overwrites)', async () => {
@@ -1115,8 +1116,8 @@ describe('credits flow — negative balance (overage → debt → recover)', () 
     // path that drives a SECOND overage settle while debtCents is already > 0, which
     // is exactly what the additive `debtCents + shortfall` SQL increment exists to
     // handle — an overwrite would silently erase the first overage's debt.
-    const g1 = await canConsumeAI('u1', 'pro');
-    const g2 = await canConsumeAI('u1', 'pro');
+    const g1 = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
+    const g2 = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
     expect(g1.allowed).toBe(true);
     expect(g2.allowed).toBe(true);
     expect(store.creditHolds).toHaveLength(2); // both reservations live, nothing settled yet
@@ -1139,7 +1140,7 @@ describe('credits flow — negative balance (overage → debt → recover)', () 
     expect(store.creditHolds).toHaveLength(0); // both holds released at settle
 
     // Net = 0 − 900 < floor → blocked until paid down (or renewal nets debt below allowance).
-    expect((await canConsumeAI('u1', 'pro')).allowed).toBe(false);
+    expect((await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND })).allowed).toBe(false);
   });
 });
 
@@ -1183,9 +1184,10 @@ describe('credits flow — crash recovery (backfill reconcile)', () => {
       updatedAt: new Date(),
     });
 
-    // (a) claimed-but-unsettled usage row: consume crashed after the claim insert.
+    // (a) claimed-but-unsettled usage row: consume crashed after the claim insert. The
+    // claim named its wallet (0305 NOT NULL), and the retry settles on exactly that one.
     store.creditLedger.push({
-      id: 'led_pending', userId: 'u1', entryType: 'usage', bucket: 'monthly',
+      id: 'led_pending', userId: 'u1', walletId: (balanceOf('u1') as { id?: string } | undefined)?.id, entryType: 'usage', bucket: 'monthly',
       amountCents: -1, appliedCents: null, chargeMillicents: chargeMc(1), // 150¢
       aiUsageLogId: 'log_pending', realCostCents: 100, markupBps: MARKUP_BPS,
       stripeRef: null, consumeStatus: 'pending', createdAt: PAST(),
@@ -1279,7 +1281,7 @@ describe('credits flow — monthly reset', () => {
       updatedAt: new Date(),
     });
 
-    const gate = await canConsumeAI('u1', 'free');
+    const gate = await canConsumeAI('u1', 'free', { spend: PERSONAL_SPEND });
     expect(gate).toEqual({ allowed: false, reason: 'out_of_credits' });
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(0); // NOT refilled
     expect(balanceOf('u1')!.monthlyPeriodEnd!.getTime()).toBe(periodEnd.getTime()); // window NOT advanced
@@ -1297,7 +1299,7 @@ describe('credits flow — monthly reset', () => {
       updatedAt: new Date(),
     });
 
-    const gate = await canConsumeAI('u1', 'free');
+    const gate = await canConsumeAI('u1', 'free', { spend: PERSONAL_SPEND });
     expect(gate).toMatchObject({ allowed: true, reason: 'ok' });
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(200); // untouched by any reset
   });
@@ -1308,7 +1310,7 @@ describe('credits flow — monthly reset', () => {
     await applyStripeFunding(creditPackCheckout('cs_1', 'cus_1', 2500));
     expect(balanceOf('u1')).toMatchObject({ monthlyRemainingCents: 0, topupRemainingCents: 2500, monthlyPeriodEnd: null });
 
-    const first = await canConsumeAI('u1', 'free');
+    const first = await canConsumeAI('u1', 'free', { spend: PERSONAL_SPEND });
     expect(first).toMatchObject({ allowed: true, reason: 'ok' });
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.free);
     expect(balanceOf('u1')!.topupRemainingCents).toBe(2500); // top-up untouched
@@ -1318,7 +1320,7 @@ describe('credits flow — monthly reset', () => {
     expect(String(grants[0].stripeRef)).toBe('free-init-u1');
 
     // Second call: nothing further.
-    await canConsumeAI('u1', 'free');
+    await canConsumeAI('u1', 'free', { spend: PERSONAL_SPEND });
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.free);
     expect(ledgerOf('u1').filter((r) => r.entryType === 'monthly_grant')).toHaveLength(1);
   });
@@ -1326,7 +1328,7 @@ describe('credits flow — monthly reset', () => {
   it('a brand-new FREE user gets the one-time starter grant on first call, and only once', async () => {
     seedUser('u1', 'cus_1', 'free');
 
-    const first = await canConsumeAI('u1', 'free');
+    const first = await canConsumeAI('u1', 'free', { spend: PERSONAL_SPEND });
     expect(first).toMatchObject({ allowed: true, reason: 'ok' });
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.free);
     const grants = ledgerOf('u1').filter((r) => r.entryType === 'monthly_grant');
@@ -1335,7 +1337,7 @@ describe('credits flow — monthly reset', () => {
 
     // Age the window past its end: still no second grant.
     balanceOf('u1')!.monthlyPeriodEnd = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const second = await canConsumeAI('u1', 'free');
+    const second = await canConsumeAI('u1', 'free', { spend: PERSONAL_SPEND });
     expect(second).toMatchObject({ allowed: true, reason: 'ok' });
     expect(ledgerOf('u1').filter((r) => r.entryType === 'monthly_grant')).toHaveLength(1);
   });
@@ -1352,7 +1354,7 @@ describe('credits flow — monthly reset', () => {
       updatedAt: new Date(),
     });
 
-    const gate = await canConsumeAI('u3', 'pro');
+    const gate = await canConsumeAI('u3', 'pro', { spend: PERSONAL_SPEND });
     expect(gate).toEqual({ allowed: false, reason: 'out_of_credits' });
     expect(balanceOf('u3')!.monthlyRemainingCents).toBe(0); // gate does NOT refill; invoice.paid does
   });
@@ -1370,7 +1372,7 @@ describe('credits flow — monthly reset', () => {
       updatedAt: new Date(),
     });
 
-    const gate = await canConsumeAI('u5', 'business');
+    const gate = await canConsumeAI('u5', 'business', { spend: PERSONAL_SPEND });
     expect(gate).toMatchObject({ allowed: true, reason: 'ok' });
     expect(balanceOf('u5')!.monthlyRemainingCents).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.business); // refilled at the paid tier's allowance
     expect(balanceOf('u5')!.monthlyPeriodEnd!.getTime()).toBeGreaterThan(Date.now()); // window advanced
@@ -1390,7 +1392,7 @@ describe('credits flow — monthly reset', () => {
       updatedAt: new Date(),
     });
 
-    const gate = await canConsumeAI('u4', 'pro');
+    const gate = await canConsumeAI('u4', 'pro', { spend: PERSONAL_SPEND });
     expect(gate).toMatchObject({ allowed: true, reason: 'ok' });
 
     // Spend 150¢ ($1) from carry during the expiry gap — should draw monthly.
@@ -1406,7 +1408,7 @@ describe('credits flow — monthly reset', () => {
     seedUser('u2', 'cus_2', 'pro');
 
     // No balance row yet → gate lazy-inits from the tier allowance and allows.
-    const gate = await canConsumeAI('u2', 'pro');
+    const gate = await canConsumeAI('u2', 'pro', { spend: PERSONAL_SPEND });
     expect(gate).toMatchObject({ allowed: true, reason: 'ok' });
     expect(balanceOf('u2')!.monthlyRemainingCents).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.pro);
     expect(balanceOf('u2')!.monthlyPeriodEnd).not.toBeNull();
@@ -1493,7 +1495,7 @@ describe('credits flow — billing disabled (tenant/onprem)', () => {
     H.isBillingEnabled.mockReturnValue(false);
     seedUser('u1', 'cus_1', 'pro');
 
-    expect(await canConsumeAI('u1', 'pro')).toEqual({ allowed: true, reason: 'unlimited' });
+    expect(await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND })).toEqual({ allowed: true, reason: 'unlimited' });
 
     await consumeCredits({ aiUsageLogId: 'log_1', userId: 'u1', costDollars: 5 });
     await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END));
@@ -1716,19 +1718,19 @@ describe('credits flow — per-user/day exposure cap (fund → consume past the 
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.pro);
 
     // CALL 1: $1 real → 150¢ charged. day total 0 + EST(25) < 200 → allowed.
-    let g = await canConsumeAI('u1', 'pro');
+    let g = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
     expect(g).toMatchObject({ allowed: true, reason: 'ok' });
     await consumeCredits({ aiUsageLogId: 'log_1', userId: 'u1', costDollars: 1, holdId: g.holdId });
 
     // CALL 2: day total 150¢ + EST(25) = 175 < 200 → still allowed.
-    g = await canConsumeAI('u1', 'pro');
+    g = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
     expect(g.allowed).toBe(true);
     await consumeCredits({ aiUsageLogId: 'log_2', userId: 'u1', costDollars: 1, holdId: g.holdId });
 
     // CALL 3: day total now 300¢ — already over the 200¢ cap → denied by the backstop,
     // NOT by credits (monthly still has 1200¢). No hold is reserved on the denial.
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(1200);
-    g = await canConsumeAI('u1', 'pro');
+    g = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
     expect(g).toEqual({ allowed: false, reason: 'daily_cap_exceeded' });
     expect(store.creditHolds).toHaveLength(0);
   });
@@ -1740,7 +1742,7 @@ describe('credits flow — every row names the personal root wallet (WAL-5 (part
     await applyStripeFunding(invoicePaid('in_w5', 'cus_1', PERIOD_START, PERIOD_END));
     await applyStripeFunding(creditPackCheckout('cs_w5', 'cus_1', 1000));
 
-    const gate = await canConsumeAI('u1', 'pro');
+    const gate = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
     expect(gate.allowed).toBe(true);
     const heldWallets = store.creditHolds.filter((h) => h.userId === 'u1').map((h) => h.walletId);
 
@@ -1757,7 +1759,7 @@ describe('credits flow — every row names the personal root wallet (WAL-5 (part
 
   it('WAL-5 (partial): a first AI call for a user with no wallet creates exactly one, and a settle against it names it', async () => {
     seedUser('u2', 'cus_2', 'free');
-    const gate = await canConsumeAI('u2', 'free');
+    const gate = await canConsumeAI('u2', 'free', { spend: PERSONAL_SPEND });
     expect(gate.allowed).toBe(true);
     await consumeCredits({ aiUsageLogId: 'log_w5_first', userId: 'u2', costDollars: 0.01, holdId: gate.holdId });
 

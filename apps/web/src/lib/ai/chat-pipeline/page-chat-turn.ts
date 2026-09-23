@@ -40,6 +40,8 @@ import {
 } from '@/lib/ai/core/ask-user-resume';
 import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { driveSpend } from '@pagespace/lib/billing/spend-target';
+import { UNGATED_TURN_CREDIT, turnCreditAfterGate, type TurnCredit } from './turn-credit';
 import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
 import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
 import { makeOnStepFinishHandler } from '@/lib/ai/core/step-finish-handler';
@@ -345,6 +347,8 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
   let bufferedPartsAtStreamError: Awaited<ReturnType<StreamLifecycleHandle['getParts']>> | undefined;
   // The credit-gate reservation for this request, released when usage is billed.
   let holdId: string | undefined;
+  // What the gate named: the wallet, the source and the funding tier (see turn-credit).
+  let credit: TurnCredit = UNGATED_TURN_CREDIT;
   // True once the stream/error handler owns the hold's release. Any earlier
   // return/throw must release the hold (a pre-generation exit doesn't invoke the
   // model, so the reservation would otherwise sit until the reconcile cron sweeps it).
@@ -746,16 +750,22 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // A solo /help never reaches streamText (see isSoloHelpRequest below), so
     // it costs nothing — skip the gate entirely rather than take a hold that
     // would need special-cased release on the short-circuit path.
+    // The turn runs in a session of this page's conversation, in the page's drive
+    // (SPEND-7). The per-conversation chosen source has no storage yet, so none is named.
+    const pageSpend = driveSpend(page.driveId);
+    credit = { spend: pageSpend };
     if (!isMeteringExempt(gateProvider) && !isSoloHelpRequest) {
       const creditGate = await canConsumeAI(userId, (user?.subscriptionTier ?? 'free') as SubscriptionTier, {
+        spend: pageSpend,
         estCostCents: estimateChatHoldCentsForModel(selectedModel),
         maxInFlight: MAX_CHAT_INFLIGHT,
       });
       if (!creditGate.allowed) {
         loggers.ai.warn('AI Chat API: AI credit gate denied', { userId, reason: creditGate.reason });
-        return creditGateErrorResponse(creditGate.reason);
+        return creditGateErrorResponse(creditGate.reason, creditGate.refusal);
       }
       holdId = creditGate.holdId;
+      credit = turnCreditAfterGate(pageSpend, creditGate);
       availableBalanceCents =
         holdId && creditGate.balanceSnapshot
           ? creditGate.balanceSnapshot.netSpendableCents
@@ -1119,7 +1129,8 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     const admission = resolveGenerationAdmission({
       provider: currentProvider,
       model: currentModel,
-      subscriptionTier: user?.subscriptionTier ?? undefined,
+      // WAL-8: the tier of whoever funds this call, as the gate resolved it.
+      subscriptionTier: credit.entitlementTier ?? user?.subscriptionTier ?? undefined,
       isAdmin: isAdminUser,
       requiresProSubscription,
     });
@@ -1878,6 +1889,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
                 isAdmin: isAdminUser,
                 subscriptionTier: user?.subscriptionTier,
                 imageGenerationModel: user?.imageGenerationModel ?? DEFAULT_IMAGE_MODEL,
+                creditSpend: credit,
                 chatSource: {
                   type: 'page' as const,
                   agentPageId: chatId,
@@ -2116,6 +2128,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
               // completion. Cost still settles regardless (the provider charged us).
               success: agentRun?.finalOutcome !== 'exhausted',
               holdId,
+              walletId: credit.walletId,
               metadata: {
                 pageName: page.title,
                 toolCallsCount: extractedToolCalls.length,
@@ -2276,6 +2289,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       driveId: undefined,
       success: false,
       holdId,
+      walletId: credit.walletId,
       error: error instanceof Error ? error.message : 'Unknown error',
       metadata: {
         errorType: error instanceof Error ? error.name : 'UnknownError',

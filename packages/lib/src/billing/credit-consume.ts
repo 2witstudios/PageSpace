@@ -20,11 +20,13 @@
 
 import { db } from '@pagespace/db/db';
 import { creditLedger, creditHolds } from '@pagespace/db/schema/credits';
-import { wallets, personalRootWalletOf } from '@pagespace/db/schema/wallets';
+import { wallets } from '@pagespace/db/schema/wallets';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { and, eq, isNull, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
 import { chargeMillicents, accruePending, allocateSpend } from './credit-core';
+import { allocateWalletSpend, settleOvershoot, DEFAULT_OVERSHOOT_CHOICE } from './wallet-core';
+import { childWalletFunds, type WalletBalanceFacts } from './spend-target';
 import { MARKUP_BPS } from './credit-pricing';
 import { emitCreditsUpdated } from './credit-emit';
 import { ensurePersonalRootWalletId } from './personal-wallet';
@@ -40,6 +42,14 @@ export interface ConsumeCreditsInput {
    * orphan/retry paths pass none (the hold, if any, is reclaimed by expiry).
    */
   holdId?: string;
+  /**
+   * The wallet the gate reserved on for this call (CreditGateResult.walletId), threaded
+   * with the hold so the charge settles against exactly the wallet the call named (WAL-5).
+   * Absent only for callers that never gated a shared wallet (the reconcile cron's orphan
+   * path, un-gated system calls): those charge the payer's personal root wallet, as every
+   * charge did before wallets.
+   */
+  walletId?: string;
   /**
    * Optional scope so the live `credits:updated` push can carry conversation/page
    * hints (the per-conversation usage monitor filters on them). Live chat routes
@@ -99,23 +109,20 @@ async function decrementAndSettle(
   tx: Tx,
   ledgerId: string,
   userId: string,
+  walletId: string,
   chargeMc: number,
   aiUsageLogId: string | null,
   holdId: string | null = null,
 ): Promise<boolean> {
+  // Lock the charged wallet, then (for a drive wallet) its parent: the order the gate
+  // locks in, so a gate and a settle on the same wallets never wait in a cycle.
   const rows = await tx
     .select()
     .from(wallets)
-    .where(personalRootWalletOf(userId))
+    .where(eq(wallets.id, walletId))
     .for('update');
   const bal = rows[0] as
-    | {
-        id: string;
-        monthlyRemainingCents: number;
-        topupRemainingCents: number;
-        pendingMillicents: number;
-        monthlyPeriodEnd: Date | null;
-      }
+    | (WalletBalanceFacts & { pendingMillicents: number; monthlyPeriodEnd: Date | null })
     | undefined;
 
   // No balance row yet (e.g. an existing user before the gate lazy-inits one).
@@ -124,61 +131,39 @@ async function decrementAndSettle(
   // silently drop the charge and hide it from both backfill sweeps.
   if (!bal) return false;
 
-  // Rollover: the carry balance is always spendable, even after the monthly period
-  // ends. The gate no longer zeroes expired paid monthly, and settle must match:
-  // allocateSpend draws monthly-first, so if we excluded the monthly here a call
-  // approved via carry credits would draw from top-up instead, misattributing the
-  // spend bucket. The renewal invoice.paid adds the new allowance on top of whatever
-  // remains at the time it fires, so spending during the gap is correctly accounted.
-  const spendableMonthly = bal.monthlyRemainingCents;
-
-  // Fold the sub-cent charge into the carried remainder, then spend the whole cents.
+  // Fold the sub-cent charge into the charged wallet's carried remainder, then spend the
+  // whole cents.
   const accrual = accruePending(bal.pendingMillicents ?? 0, chargeMc);
-  const spend = allocateSpend(
-    { monthlyCents: spendableMonthly, topupCents: bal.topupRemainingCents },
-    accrual.wholeCents,
-  );
 
-  await tx
-    .update(wallets)
-    .set({
-      monthlyRemainingCents: spend.monthlyCents,
-      topupRemainingCents: spend.topupCents,
-      pendingMillicents: accrual.newPending,
-      // Uncovered cost becomes debt: the net balance (monthly + topup − debt) goes
-      // negative and the gate blocks further AI until it's paid down by a purchase or
-      // netted against carry at the next renewal. Buckets still floor at 0 (above); debt carries
-      // the overage. No-op when the call was fully covered (shortfallCents === 0).
-      ...(spend.shortfallCents > 0
-        ? { debtCents: sql`${wallets.debtCents} + ${spend.shortfallCents}` }
-        : {}),
-    })
-    .where(personalRootWalletOf(userId));
+  const settled = bal.parentWalletId
+    ? await settleOnChildWallet(tx, bal, accrual.wholeCents, accrual.newPending)
+    : await settleOnRootWallet(tx, bal, accrual.wholeCents, accrual.newPending);
 
   await tx
     .update(creditLedger)
     .set({
       consumeStatus: 'applied',
-      bucket: spend.spentTopup > spend.spentMonthly ? 'topup' : 'monthly',
-      // What actually came out of the balance (signed, matching the usage row's
-      // negative convention). The gap between this and the intended charge is the
-      // shortfall, recorded as a debt row below. `|| 0` avoids storing -0 when a
-      // sub-cent call accrues into pending without decrementing a whole cent.
-      appliedCents: -spend.appliedCents || 0,
+      bucket: settled.bucket,
+      // What actually came out of the wallets (signed, matching the usage row's negative
+      // convention). The gap between this and the intended charge is the shortfall,
+      // recorded as a debt row below. `|| 0` avoids storing -0 when a sub-cent call
+      // accrues into pending without decrementing a whole cent.
+      appliedCents: -settled.appliedCents || 0,
     })
     .where(eq(creditLedger.id, ledgerId));
 
-  // Uncovered remainder -> persist as debt rather than discard it. Same txn, so the
-  // books reconcile atomically: balance floored at 0, the overage owed and queryable
-  // by aiUsageLogId. consumeStatus is terminal ('applied') so the backfill cron's
-  // pending sweep never mistakes this debt row for an unsettled decrement to retry.
-  if (spend.shortfallCents > 0) {
+  // Uncovered remainder -> persist as debt rather than discard it, on the wallet the debt
+  // landed on (WAL-6c). Same txn, so the books reconcile atomically: buckets floored at
+  // 0, the overage owed and queryable by aiUsageLogId. consumeStatus is terminal
+  // ('applied') so the backfill cron's pending sweep never mistakes this debt row for an
+  // unsettled decrement to retry.
+  if (settled.debt) {
     await tx.insert(creditLedger).values({
       userId,
-      walletId: bal.id,
+      walletId: settled.debt.walletId,
       entryType: 'adjustment',
       bucket: 'monthly',
-      amountCents: -spend.shortfallCents,
+      amountCents: -settled.debt.cents,
       aiUsageLogId,
       consumeStatus: 'applied',
     });
@@ -194,6 +179,116 @@ async function decrementAndSettle(
     await tx.delete(creditHolds).where(eq(creditHolds.id, holdId));
   }
   return true;
+}
+
+interface WalletSettlement {
+  appliedCents: number;
+  bucket: 'monthly' | 'topup';
+  debt: { walletId: string; cents: number } | null;
+}
+
+/**
+ * A ROOT wallet (a personal wallet, an org pool): draw monthly-first via the pure core.
+ * Uncovered cost becomes debt on the same wallet (WAL-6: a seat's overshoot lands on the
+ * pool, own credits' on the person who chose them): the net balance (monthly + topup −
+ * debt) goes negative and the gate blocks further AI until a purchase pays it down or the
+ * next renewal nets it against carry. Buckets still floor at 0; debt carries the overage.
+ *
+ * Rollover: the carry balance is always spendable, even after the monthly period ends.
+ * allocateSpend draws monthly-first, so if we excluded the monthly here a call approved
+ * via carry credits would draw from top-up instead, misattributing the spend bucket.
+ */
+async function settleOnRootWallet(
+  tx: Tx,
+  bal: WalletBalanceFacts,
+  wholeCents: number,
+  newPending: number,
+): Promise<WalletSettlement> {
+  const spend = allocateSpend(
+    { monthlyCents: bal.monthlyRemainingCents, topupCents: bal.topupRemainingCents },
+    wholeCents,
+  );
+  await tx
+    .update(wallets)
+    .set({
+      monthlyRemainingCents: spend.monthlyCents,
+      topupRemainingCents: spend.topupCents,
+      pendingMillicents: newPending,
+      ...(spend.shortfallCents > 0
+        ? { debtCents: sql`${wallets.debtCents} + ${spend.shortfallCents}` }
+        : {}),
+    })
+    .where(eq(wallets.id, bal.id));
+  return {
+    appliedCents: spend.appliedCents,
+    bucket: spend.spentTopup > spend.spentMonthly ? 'topup' : 'monthly',
+    debt: spend.shortfallCents > 0 ? { walletId: bal.id, cents: spend.shortfallCents } : null,
+  };
+}
+
+/**
+ * A CHILD wallet (a drive wallet): the allocation is drawn from the parent as the spend
+ * happens (WAL-3), then the wallet's own top-up. Overshoot never lands on the consumer:
+ * it lands where the wallet's funder chose (WAL-6b/c) — absorbed into the parent's debt
+ * by default (D20.2), or carried as this wallet's debt.
+ */
+async function settleOnChildWallet(
+  tx: Tx,
+  bal: WalletBalanceFacts,
+  wholeCents: number,
+  newPending: number,
+): Promise<WalletSettlement> {
+  const parentId = bal.parentWalletId as string;
+  const parentRows = await tx
+    .select()
+    .from(wallets)
+    .where(eq(wallets.id, parentId))
+    .for('update');
+  const parent = parentRows[0] as WalletBalanceFacts | undefined;
+
+  const draw = allocateWalletSpend({
+    parent: parent
+      ? { monthlyCents: parent.monthlyRemainingCents, topupCents: parent.topupRemainingCents, debtCents: parent.debtCents }
+      : { monthlyCents: 0, topupCents: 0, debtCents: 0 },
+    wallet: childWalletFunds(bal),
+    amountCents: wholeCents,
+  });
+  const landing = settleOvershoot({
+    source: 'drive_wallet',
+    overshootCents: draw.shortfallCents,
+    chargedWalletId: bal.id,
+    parentWalletId: parent ? parent.id : null,
+    // The funder's overshoot choice has no storage yet; the default applies (D20.2).
+    funderChoice: DEFAULT_OVERSHOOT_CHOICE,
+    fallbackFrom: null,
+  });
+
+  if (parent) {
+    await tx
+      .update(wallets)
+      .set({
+        monthlyRemainingCents: draw.parent.monthlyCents,
+        topupRemainingCents: draw.parent.topupCents,
+        ...(landing.kind === 'parent_debt' ? { debtCents: sql`${wallets.debtCents} + ${landing.cents}` } : {}),
+      })
+      .where(eq(wallets.id, parent.id));
+  }
+  await tx
+    .update(wallets)
+    .set({
+      spentCents: draw.wallet.allocationSpentCents,
+      topupRemainingCents: draw.wallet.topupLegs.reduce((sum, leg) => sum + leg.remainingCents, 0),
+      pendingMillicents: newPending,
+      ...(landing.kind === 'wallet_debt' ? { debtCents: sql`${wallets.debtCents} + ${landing.cents}` } : {}),
+    })
+    .where(eq(wallets.id, bal.id));
+
+  const topupDrawn = draw.appliedCents - draw.allocationDrawCents;
+  return {
+    appliedCents: draw.appliedCents,
+    bucket: topupDrawn > draw.allocationDrawCents ? 'topup' : 'monthly',
+    debt: landing.kind === 'none' ? null : { walletId: landing.walletId, cents: landing.cents },
+  };
 }
 
 /**
@@ -240,14 +335,14 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<Credit
   const amountCents = -nominalCents || 0;
   const realCostCents = Math.max(0, Math.round(input.costDollars * 100));
 
-  // 1. Idempotent claim — one usage ledger row per aiUsageLogId, against the payer's
-  // personal root wallet (WAL-5). A user with no wallet yet gets a bare one: its empty
-  // buckets settle the charge as debt, which their first grant then nets (see
-  // personal-wallet).
+  // 1. Idempotent claim — one usage ledger row per aiUsageLogId, against the wallet the
+  // gate reserved on (WAL-5), or the payer's personal root wallet when the call named
+  // none. A user with no wallet yet gets a bare one: its empty buckets settle the charge
+  // as debt, which their first grant then nets (see personal-wallet).
   let ledgerId: string;
   let walletId: string;
   try {
-    walletId = await ensurePersonalRootWalletId(db, input.userId);
+    walletId = input.walletId ?? (await ensurePersonalRootWalletId(db, input.userId));
     const claimed = await db
       .insert(creditLedger)
       .values({
@@ -332,6 +427,7 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<Credit
         tx,
         ledgerId,
         input.userId,
+        walletId,
         chargeMc,
         input.aiUsageLogId,
         input.holdId ?? null,
@@ -399,6 +495,7 @@ export async function settlePendingLedgerRow(ledgerId: string): Promise<void> {
     const row = rows[0] as
       | {
           userId: string;
+          walletId: string;
           amountCents: number;
           chargeMillicents: number | null;
           aiUsageLogId: string | null;
@@ -410,7 +507,8 @@ export async function settlePendingLedgerRow(ledgerId: string): Promise<void> {
     // stored; fall back to the whole-cent intended charge (loses <1 cent of
     // precision on those legacy rows only).
     const chargeMc = row.chargeMillicents ?? Math.abs(row.amountCents) * 1000;
-    await decrementAndSettle(tx, ledgerId, row.userId, chargeMc, row.aiUsageLogId);
+    // Settle against the wallet the claim named (WAL-5), never re-derived from the user.
+    await decrementAndSettle(tx, ledgerId, row.userId, row.walletId, chargeMc, row.aiUsageLogId);
     settledUserId = row.userId;
   });
   // A pending row settled this run (cron retry): push the user's fresh balance so a

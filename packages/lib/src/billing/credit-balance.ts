@@ -100,7 +100,7 @@ function disabledSummary(): CreditBalanceSummary {
 }
 
 /** The funded-balance columns both the display read and the routing gate need. */
-interface FundedBalanceRow {
+export interface FundedBalanceRow {
   monthlyRemainingCents: number;
   monthlyAllowanceCents: number;
   topupRemainingCents: number;
@@ -130,7 +130,7 @@ function pendingStarterGrant(row: FundedBalanceRow, tier: SubscriptionTier): boo
   return isOneTimeAllowanceTier(tier) && row.monthlyPeriodEnd === null;
 }
 
-function spendableCentsFor(row: FundedBalanceRow | null, tier: SubscriptionTier): number {
+export function spendableCentsFor(row: FundedBalanceRow | null, tier: SubscriptionTier): number {
   // No row yet: the gate lazy-inits from the tier allowance on the first call.
   if (!row) return Math.max(0, allowanceFor(tier));
 
