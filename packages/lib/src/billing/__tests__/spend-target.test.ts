@@ -210,7 +210,7 @@ describe('spend-target: decideCallSpend', () => {
   });
 });
 
-describe('spend-target: automations (SPEND-6)', () => {
+describe('spend-target: automations', () => {
   // Northwind's weekly digest workflow runs in Product; Marcus created it and holds his own credits.
   const automation = (over: Partial<Parameters<typeof automationSpendInput>[0]> = {}): CallSpendInput =>
     automationSpendInput({

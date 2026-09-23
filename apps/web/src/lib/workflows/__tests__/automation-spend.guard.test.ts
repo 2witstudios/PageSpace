@@ -57,7 +57,7 @@ const AUTOMATION_GATES = [
   'lib/channels/mention-credit-gate.ts',
 ];
 
-describe('SPEND-6 automation entry points', () => {
+describe('automation entry points spend their drive, never a person', () => {
   it('SPEND-6 (partial) every caller of executeWorkflow is listed, and each passes the gate that names its drive', () => {
     const callers = FILES
       .filter((f) => f.path !== 'lib/workflows/workflow-executor.ts' && /\bexecuteWorkflow\(/.test(f.src))
