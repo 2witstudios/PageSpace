@@ -259,14 +259,17 @@ function workerOver({ store, provisioner }: { readonly store: StoreAdapter; read
 
 const request = (seeded: Seeded, version: CredentialVersion = seeded.version) => ({ ref: seeded.ref, version, providerSlug: 'itest', bindings: seeded.bindings });
 
-describe.skipIf(!reachable)('refresh worker against real Infisical, plane metadata and a TLS token endpoint', () => {
+/** Real provisioning + TLS keygen on a shared machine: the defaults (5 s / 10 s) are too tight. */
+const SLOW_MS = 60_000;
+
+describe.skipIf(!reachable)('refresh worker against real Infisical, plane metadata and a TLS token endpoint', { timeout: SLOW_MS }, () => {
   beforeAll(async () => {
     certDir = mkdtempSync(path.join(tmpdir(), 'g3-refresh-'));
     await startTokenServer();
     metadataPool = new Pool({ connectionString: METADATA_URL });
     await metadataPool.query('SELECT 1 FROM agent_account_refresh_attempts LIMIT 0');
     orgId = process.env.INFISICAL_DEV_ORG_ID ?? '';
-  });
+  }, SLOW_MS);
 
   afterAll(async () => {
     await new Promise<void>((resolve) => (tokenServer ? tokenServer.close(() => resolve()) : resolve()));
