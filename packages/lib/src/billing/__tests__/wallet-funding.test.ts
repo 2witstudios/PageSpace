@@ -143,6 +143,7 @@ describe('wallet-funding: allocation reset (D-OW-12)', () => {
   const NOW = Date.UTC(2026, 8, 20, 12);
   const wallet = (periodStartMs: number | null, spentCents = 700, debtCents = 0) => ({
     periodStartMs,
+    periodEndMs: null,
     allocationCents: 1000,
     spentCents,
     debtCents,
@@ -225,6 +226,34 @@ describe('wallet-funding: allocation reset (D-OW-12)', () => {
     // The renewal then lands, stamping the pool with the period that starts at the old end.
     const renewed = { ownerType: 'org' as const, periodStartMs: POOL_END, periodEndMs: Date.UTC(2026, 10, 17) };
     expect(planAllocationReset({ wallet: wallet(POOL_END, 300), governing: renewed, nowMs: lateNow + 60_000 })).toEqual({ due: false });
+  });
+
+  it('WAL-3 (partial) a personal root the gate re-stamps late never resets a child twice in overlapping periods', () => {
+    const day = 86_400_000;
+    const sep3 = Date.UTC(2026, 8, 3);
+    const oct3 = Date.UTC(2026, 9, 3);
+    const lapsed = { ownerType: 'user' as const, periodStartMs: sep3, periodEndMs: oct3 };
+    const child = (periodStartMs: number, periodEndMs: number, spentCents: number) => ({
+      periodStartMs, periodEndMs, allocationCents: 1000, spentCents, debtCents: 0, paused: false,
+    });
+
+    // Oct 5: the root lapsed on Oct 3; the child resets once onto the rolled period.
+    const first = planAllocationReset({ wallet: child(sep3, oct3, 900), governing: lapsed, nowMs: oct3 + 2 * day });
+    expect(first).toMatchObject({ due: true, periodStartMs: oct3, spentCents: 0 });
+    if (!first.due) return;
+
+    // Oct 10: the owner spends and the gate stamps the root Oct 10 → Nov 10. The child is
+    // still inside its Oct 3 period, so this is not a second allocation.
+    const oct10 = oct3 + 7 * day;
+    const restamped = { ownerType: 'user' as const, periodStartMs: oct10, periodEndMs: Date.UTC(2026, 10, 10) };
+    const child1 = child(first.periodStartMs, first.periodEndMs, 400);
+    expect(planAllocationReset({ wallet: child1, governing: restamped, nowMs: oct10 + day })).toEqual({ due: false });
+    // Nor once the child's period ends mid-way through the root's: the Oct 10 period
+    // overlaps the one the child already had.
+    expect(planAllocationReset({ wallet: child1, governing: restamped, nowMs: first.periodEndMs + day })).toEqual({ due: false });
+    // The next root boundary that starts after the child's period ends resets it, once.
+    const nov10 = Date.UTC(2026, 10, 10);
+    expect(planAllocationReset({ wallet: child1, governing: restamped, nowMs: nov10 + day })).toMatchObject({ due: true, periodStartMs: nov10 });
   });
 
   it('a wallet never reset is due at once', () => {

@@ -255,6 +255,7 @@ export async function resetDueAllocations(opts: { now: Date; batchSize?: number 
       .select({
         id: wallets.id,
         periodStart: wallets.monthlyPeriodStart,
+        periodEnd: wallets.monthlyPeriodEnd,
         parentOwnerType: parent.ownerType,
         parentPeriodStart: parent.monthlyPeriodStart,
         parentPeriodEnd: parent.monthlyPeriodEnd,
@@ -275,7 +276,14 @@ export async function resetDueAllocations(opts: { now: Date; batchSize?: number 
         periodEndMs: row.parentPeriodEnd?.getTime() ?? null,
       };
       const cheap = planAllocationReset({
-        wallet: { periodStartMs: row.periodStart?.getTime() ?? null, allocationCents: 0, spentCents: 0, debtCents: 0, paused: false },
+        wallet: {
+          periodStartMs: row.periodStart?.getTime() ?? null,
+          periodEndMs: row.periodEnd?.getTime() ?? null,
+          allocationCents: 0,
+          spentCents: 0,
+          debtCents: 0,
+          paused: false,
+        },
         governing,
         nowMs,
       });
@@ -301,6 +309,7 @@ async function resetOne(
     const [locked] = await tx
       .select({
         periodStart: wallets.monthlyPeriodStart,
+        periodEnd: wallets.monthlyPeriodEnd,
         allocationCents: wallets.monthlyAllowanceCents,
         spentCents: wallets.spentCents,
         debtCents: wallets.debtCents,
@@ -313,6 +322,7 @@ async function resetOne(
     const plan = planAllocationReset({
       wallet: {
         periodStartMs: locked.periodStart?.getTime() ?? null,
+        periodEndMs: locked.periodEnd?.getTime() ?? null,
         allocationCents: locked.allocationCents,
         spentCents: locked.spentCents,
         debtCents: locked.debtCents,

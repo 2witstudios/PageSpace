@@ -208,6 +208,8 @@ export interface GoverningRoot {
 
 export interface ChildAllocation {
   periodStartMs: number | null;
+  /** The end of the period the child last reset onto; null when none was stamped. */
+  periodEndMs: number | null;
   allocationCents: number;
   spentCents: number;
   debtCents: number;
@@ -261,8 +263,14 @@ export function currentGoverningPeriodMs(governing: GoverningRoot, nowMs: number
  * nets the wallet debt against the new allocation and clears it (WAL-6d), and never
  * touches top-ups or donations (WAL-3: they last until spent).
  *
- * Idempotent by construction: once the wallet carries the governing period start, the
- * same period is never due again, however many times this runs.
+ * A child's allocation periods never overlap: when the child has a period end, a reset
+ * is due only once the governing period starts at or after that end. A root whose
+ * clock shifts earlier (the gate's lazy roll stamps the day the owner next spends; a
+ * mid-period plan change) therefore makes the child wait for the next governing
+ * boundary rather than hand it a second allocation for time it already had.
+ *
+ * Idempotent by construction: once the wallet carries the governing period, the same
+ * period is never due again, however many times this runs.
  */
 export function planAllocationReset(input: {
   wallet: ChildAllocation;
@@ -278,7 +286,9 @@ export function planAllocationReset(input: {
   });
   // A governing period that has not begun yet is not this period.
   if (governingStartMs > input.nowMs) return { due: false };
-  if (
+  if (input.wallet.periodEndMs !== null && input.wallet.periodStartMs !== null) {
+    if (governingStartMs < input.wallet.periodEndMs) return { due: false };
+  } else if (
     input.wallet.periodStartMs !== null &&
     !isAllocationResetDue({ walletPeriodStartMs: input.wallet.periodStartMs, governingPeriodStartMs: governingStartMs })
   ) {
