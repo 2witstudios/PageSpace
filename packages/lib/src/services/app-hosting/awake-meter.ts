@@ -261,6 +261,11 @@ export interface MeterAwakeResult {
   skipped: number;
   /** Rows left unbilled because the owning drive could not be resolved — retried next tick. */
   unresolvedPayer: number;
+  /**
+   * WAL-9 interim: rows left unbilled because the owning drive is an org drive, which no compute
+   * charge path can debit until the C3 lane lands. Nobody is charged; the watermark is left alone.
+   */
+  orgBillingPending: number;
   /** Rows stopped and parked because the payer ran out of credits at the re-gate. */
   parked: number;
   /**
@@ -307,6 +312,7 @@ const EMPTY_RESULT: MeterAwakeResult = {
   stamped: 0,
   skipped: 0,
   unresolvedPayer: 0,
+  orgBillingPending: 0,
   parked: 0,
   cappedParked: 0,
   failed: 0,
@@ -377,11 +383,16 @@ async function meterOneApp(
   // rather than an invented amount. A hold is placed with it so the very next tick
   // settles against a real reservation.
   if (row.awakeBilledThrough === null) {
-    const payerId = await deps.billing.resolvePayerId({ driveId: row.driveId });
-    if (!payerId) {
+    const payer = await deps.billing.resolvePayerId({ driveId: row.driveId });
+    if (!payer) {
       result.unresolvedPayer += 1;
       return;
     }
+    if (!payer.ok) {
+      result.orgBillingPending += 1;
+      return;
+    }
+    const payerId = payer.userId;
     const gate = await deps.billing.gate({ payerId });
     if (!gate.allowed) {
       await deps.park(row.id, 'insolvent');
@@ -432,8 +443,8 @@ async function meterOneApp(
     return;
   }
 
-  const payerId = await deps.billing.resolvePayerId({ driveId: row.driveId });
-  if (!payerId) {
+  const payer = await deps.billing.resolvePayerId({ driveId: row.driveId });
+  if (!payer) {
     // Leave the watermark alone so the span keeps accruing and is billed in full
     // once the drive resolves — or is torn down with the row. Never substitute a
     // payer: a misdirected charge cannot be taken back, a skipped tick corrects
@@ -441,6 +452,13 @@ async function meterOneApp(
     result.unresolvedPayer += 1;
     return;
   }
+  if (!payer.ok) {
+    // WAL-9 interim: the org pays, and nothing can debit it until the C3 lane lands. Never
+    // bill the lead instead; leave the watermark for the org charge that replaces this.
+    result.orgBillingPending += 1;
+    return;
+  }
+  const payerId = payer.userId;
 
   const settle = await deps.billing.trackUsage({
     payerId,

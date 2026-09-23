@@ -48,6 +48,7 @@ import type { ExecutableSandbox, SandboxRunResult } from './sandbox-client/types
 import { LocalEnvUnsupportedError } from './sandbox-host';
 import type { CodeExecutionAuditInput, CodeExecutionAnomaly } from './audit';
 import type { UsageTrackingOutcome } from '../../monitoring/ai-monitoring';
+import { ORG_BILLING_PENDING_MESSAGE, type UserPayerResult } from '../../billing/sandbox-payer';
 
 /** Largest file body a single `writeFile` may submit, in bytes. */
 export const MAX_WRITE_BYTES = 1024 * 1024;
@@ -118,10 +119,12 @@ export interface SandboxBillingDeps {
    * ACQUIRED SESSION's own `driveId`/`ownerId` (drive owner when it has one,
    * else the session's own owner), never the caller's surface drive or agent
    * page. The one seam payer resolution goes through; see `sandbox-payer.ts`'s
-   * `resolveSessionPayerId` — the same rule `storageBillingTarget` applies for
-   * storage attribution.
+   * `resolveSessionPayer` — the same rule `storageBillingTarget` applies for
+   * storage attribution. An org drive's payer is the org, which this charge
+   * path cannot debit yet: it answers the named `org_billing_pending` refusal
+   * (replaced by the C3 lane's wallet-keyed holds), never a person to bill.
    */
-  resolvePayerId: (input: { driveId: string | null; ownerId: string }) => Promise<string>;
+  resolvePayerId: (input: { driveId: string | null; ownerId: string }) => Promise<UserPayerResult>;
   /** Places a flat-estimate hold for this payer before the machine run begins. */
   gate: (input: { payerId: string }) => Promise<{ allowed: boolean; holdId?: string; reason?: string }>;
   /**
@@ -364,7 +367,7 @@ export function safeLogWarn(
 // error-level line for every free-tier user hitting their own plan ceiling is
 // noise that trains the on-call to ignore this logger.
 const AUTHZ_DENY_REASONS = new Set([
-  'no_drive_access', 'insufficient_role', 'no_agent_access', 'tier_ineligible', 'kill_switch_off', 'no_machine',
+  'no_drive_access', 'insufficient_role', 'no_agent_access', 'tier_ineligible', 'org_billing_pending', 'kill_switch_off', 'no_machine',
   'session_runtime_exceeded', 'session_limit_reached',
   // A legacy conversation that predates sessions has no working context to run
   // in — an expected refusal (not an infra fault), so it belongs here rather
@@ -387,6 +390,8 @@ export interface SandboxReconnectPrincipal {
 export type SandboxToolDenialReason =
   | 'kill_switch_off'
   | 'tier_ineligible'
+  /** WAL-9 interim: the drive's payer is an org, which compute cannot charge until the C3 lane lands. */
+  | 'org_billing_pending'
   | 'no_drive_access'
   | 'insufficient_role'
   | 'no_agent_access'
@@ -476,6 +481,7 @@ export type EditFileToolResult =
 export const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
   kill_switch_off: 'Code execution is disabled.',
   tier_ineligible: 'Running code requires a Pro plan or above.',
+  org_billing_pending: ORG_BILLING_PENDING_MESSAGE,
   no_drive_access: 'You do not have access to run code in this drive.',
   insufficient_role: 'Running code requires edit access to this drive.',
   no_agent_access: 'This agent is not permitted to run code in this drive.',
@@ -679,10 +685,14 @@ export async function withMachineBilling<S>(
   if (billingSession && 'deny' in billingSession) return fail(billingSession.deny);
   if (!billingSession) return run();
 
-  const payerId = await billing.resolvePayerId({
+  const payer = await billing.resolvePayerId({
     driveId: billingSession.driveId,
     ownerId: billingSession.ownerId,
   });
+  // WAL-9 interim: an org payer is refused before any hold or run — never billed to a person.
+  // The C3 lane replaces this with a hold on the org's wallet.
+  if (!payer.ok) return fail(payer.refusal.code);
+  const payerId = payer.userId;
   const gate = await billing.gate({ payerId });
   if (!gate.allowed) return fail('credit_exhausted');
 

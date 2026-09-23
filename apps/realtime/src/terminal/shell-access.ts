@@ -32,6 +32,7 @@ import type { AgentSessionAccessSubject } from '@pagespace/lib/agent-workspaces/
 import type { ShellDTO } from '@pagespace/lib/agent-workspaces/shells-contract';
 import type { SpriteInstanceLike } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
+import type { UserPayerResult } from '@pagespace/lib/billing/sandbox-payer';
 import type { ShellCheckAuthFn } from './shell-handler';
 
 /**
@@ -60,12 +61,14 @@ export interface ShellCheckAuthDeps {
   checkSessionAccess: (input: { requesterId: string; workspaceId: string }) => Promise<ShellSessionAccessResult>;
   /**
    * Who pays for this session's runtime, and which drive an audit row lands
-   * under. Payer = the session's own DRIVE owner, falling back to the
-   * session's own owner when there is no drive (a global-assistant session)
-   * or the drive has vanished — the drive-owner ?? session-owner attribution
-   * rule.
+   * under. Payer = the session's own DRIVE's payer (`resolveSessionPayer`),
+   * falling back to the session's own owner when there is no drive (a
+   * global-assistant session) or the drive has vanished. An org drive's payer
+   * is the org (WAL-9), which the terminal's credit hold cannot debit yet: it
+   * answers the named `org_billing_pending` refusal, never a person — replaced
+   * by the C3 lane's wallet-keyed holds.
    */
-  resolvePayer: (session: AgentSessionAccessSubject) => Promise<{ payerId: string; driveId: string | null }>;
+  resolvePayer: (session: AgentSessionAccessSubject) => Promise<{ payer: UserPayerResult; driveId: string | null }>;
   /** A user row's tier + email, or undefined when the row is missing. Called for the requester (audit email) and, when different, the payer (slot-eligibility tier). */
   getUser: (userId: string) => Promise<{ subscriptionTier: string | null; email: string | null } | undefined>;
   resolveActorEmail: (email: string | null | undefined) => Promise<string>;
@@ -124,7 +127,13 @@ export function buildShellCheckAuth(deps: ShellCheckAuthDeps): ShellCheckAuthFn 
       return { ok: false, reason: access.reason };
     }
 
-    const { payerId, driveId } = await deps.resolvePayer(access.session);
+    const { payer, driveId } = await deps.resolvePayer(access.session);
+    // WAL-9 interim: refused before any slot, hold or sandbox — never billed to a person.
+    if (!payer.ok) {
+      deps.logDenied(payer.refusal.code, { userId, shellId, workspaceId: shell.workspaceId });
+      return { ok: false, reason: payer.refusal.code };
+    }
+    const payerId = payer.userId;
 
     // Decrypt the actor email BEFORE anything is reserved (a decrypt throw here
     // must not leak a reserved slot — same ordering the predecessor had).

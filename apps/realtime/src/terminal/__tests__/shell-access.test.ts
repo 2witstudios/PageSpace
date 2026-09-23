@@ -45,7 +45,7 @@ function buildDeps(overrides: Partial<ShellCheckAuthDeps> = {}): {
     },
     resolvePayer: async () => {
       calls.resolvePayer += 1;
-      return { payerId: 'payer-1', driveId: 'drive-1' };
+      return { payer: { ok: true, userId: 'payer-1' }, driveId: 'drive-1' };
     },
     getUser: async () => {
       calls.getUser += 1;
@@ -185,13 +185,50 @@ describe('buildShellCheckAuth — access half', () => {
     });
   });
 
+  it('WAL-9 (partial) refuses an org-drive session by name before any slot, user read or sandbox — nobody is billed', async () => {
+    const denials: string[] = [];
+    let slotsAcquired = 0;
+    const { deps, calls } = buildDeps({
+      resolvePayer: async () => ({
+        payer: {
+          ok: false,
+          refusal: { code: 'org_billing_pending', orgId: 'org-northwind', message: 'org billing pending' },
+        },
+        driveId: 'drive-1',
+      }),
+      acquireSlot: () => {
+        slotsAcquired += 1;
+        return true;
+      },
+      logDenied: (reason) => {
+        denials.push(reason);
+      },
+    });
+    const checkAuth = buildShellCheckAuth(deps);
+
+    const result = await checkAuth({ userId: 'user-1', shellId: 'shl-1' });
+
+    assert({
+      given: 'a session whose drive belongs to an org',
+      should: 'refuse with org_billing_pending and touch no payer, slot or sandbox',
+      actual: { result, denials, slotsAcquired, getUser: calls.getUser, ensure: calls.ensureSessionSandbox },
+      expected: {
+        result: { ok: false, reason: 'org_billing_pending' },
+        denials: ['org_billing_pending'],
+        slotsAcquired: 0,
+        getUser: 0,
+        ensure: 0,
+      },
+    });
+  });
+
   it('surfaces a null driveId (a global-assistant session) so billing attributes to the owner', async () => {
     const { deps } = buildDeps({
       checkSessionAccess: async () => ({
         allowed: true,
         session: { workspaceId: 'ses-1', ownerId: 'owner-1', driveId: null },
       }),
-      resolvePayer: async () => ({ payerId: 'owner-1', driveId: null }),
+      resolvePayer: async () => ({ payer: { ok: true, userId: 'owner-1' }, driveId: null }),
     });
     const checkAuth = buildShellCheckAuth(deps);
 

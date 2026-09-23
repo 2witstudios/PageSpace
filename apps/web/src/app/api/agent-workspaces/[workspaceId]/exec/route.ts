@@ -35,6 +35,7 @@ type RouteContext = { params: Promise<{ workspaceId: string }> };
 const DENIAL_STATUS: Record<SandboxToolDenialReason, number> = {
   kill_switch_off: 403,
   tier_ineligible: 403,
+  org_billing_pending: 403,
   no_drive_access: 403,
   insufficient_role: 403,
   no_agent_access: 403,

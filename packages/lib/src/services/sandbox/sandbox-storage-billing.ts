@@ -10,7 +10,7 @@
  * composition: same cron, same advisory lock, same credit pipeline, one extra
  * SELECT and one extra watermark UPDATE. The only place the two units diverge
  * is the payer — an env resolves to its DRIVE OWNER with no fallback
- * (`resolveEnvPayerId`), because `drive_envs` has no owner column to fall back
+ * (`resolveEnvPayer`), because `drive_envs` has no owner column to fall back
  * to. Nothing here names a substrate: an env that later runs on a bigger guest,
  * a GPU host or a non-Fly platform bills through these exact lines.
  *
@@ -57,7 +57,7 @@ import { withAdvisoryLock, type AdvisoryLockPool } from '@pagespace/db/advisory-
 import { agentWorkspaces } from '@pagespace/db/schema/agent-workspaces';
 import { driveEnvs } from '@pagespace/db/schema/drive-envs';
 import { publishedApps } from '@pagespace/db/schema/published-apps';
-import { lookupDriveOwnerId } from '../../billing/sandbox-payer';
+import { lookupDriveBillingFacts } from '../../billing/sandbox-payer';
 import { MACHINE_MARKUP_BPS } from '../../billing/credit-pricing';
 import { AIMonitoring } from '../../monitoring/ai-monitoring';
 import { SANDBOX_STORAGE_MODELS } from '../../monitoring/usage-source';
@@ -184,7 +184,7 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
       .where(and(ne(publishedApps.status, 'destroying'), eq(publishedApps.tier, 'metered')));
   },
 
-  lookupDriveOwnerId,
+  lookupDriveBillingFacts,
 
   /**
    * REPORTS ITS FAILURE. `AIMonitoring.trackUsage` still never throws (a throw

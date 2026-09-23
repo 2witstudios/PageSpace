@@ -470,7 +470,7 @@ function makeBilling(over: Partial<NonNullable<SandboxRunDeps['billing']>> = {})
   const billing: NonNullable<SandboxRunDeps['billing']> = {
     resolvePayerId: async (input) => {
       resolvePayerIdCalls.push(input);
-      return input.ownerId;
+      return { ok: true, userId: input.ownerId };
     },
     gate: async (input) => {
       gateCalls.push(input);

@@ -55,12 +55,12 @@ const agentViewOnlyPerms: PermissionLevel = {
 // Fully-permissive deps; individual tests override the single field under test
 // so each test exercises exactly one denial path. Tier defaults to 'pro' (so
 // the tier gate stays out of the way of tests exercising other gates), and
-// `lookupDriveOwnerId` defaults to null (payer falls back to the resolved
+// `lookupDriveBillingFacts` defaults to null (payer falls back to the resolved
 // `ownerId`/`userId`), matching what most tests actually want to exercise.
 function makeDeps(overrides: Partial<CanRunCodeDeps> = {}): CanRunCodeDeps {
   return {
     getUserDrivePermissions: async () => adminPerms,
-    lookupDriveOwnerId: async () => null,
+    lookupDriveBillingFacts: async () => null,
     getUserSubscriptionTier: async () => 'pro',
     getAgentAccessLevel: async () => agentEditPerms,
     isCodeExecutionEnabled: () => true,
@@ -173,7 +173,7 @@ describe('canRunCode', () => {
       userId: 'free-actor',
       driveId: 'd1',
       deps: makeDeps({
-        lookupDriveOwnerId: async () => 'pro-owner',
+        lookupDriveBillingFacts: async () => ({ ownerId: 'pro-owner', orgId: null }),
         getUserSubscriptionTier: async (userId) => (userId === 'pro-owner' ? 'pro' : 'free'),
       }),
     });
@@ -185,11 +185,28 @@ describe('canRunCode', () => {
       userId: 'pro-actor',
       driveId: 'd1',
       deps: makeDeps({
-        lookupDriveOwnerId: async () => 'free-owner',
+        lookupDriveBillingFacts: async () => ({ ownerId: 'free-owner', orgId: null }),
         getUserSubscriptionTier: async (userId) => (userId === 'free-owner' ? 'free' : 'pro'),
       }),
     });
     expect(result).toEqual({ ok: false, reason: 'tier_ineligible' });
+  });
+
+  it('WAL-9 (partial) given a drive that belongs to an ORG, should deny with org_billing_pending — never on the lead\'s tier', async () => {
+    const tierLookups: string[] = [];
+    const result = await canRunCode({
+      userId: 'pro-actor',
+      driveId: 'd1',
+      deps: makeDeps({
+        lookupDriveBillingFacts: async () => ({ ownerId: 'pro-lead', orgId: 'org-northwind' }),
+        getUserSubscriptionTier: async (userId) => {
+          tierLookups.push(userId);
+          return 'pro';
+        },
+      }),
+    });
+    expect(result).toEqual({ ok: false, reason: 'org_billing_pending' });
+    expect(tierLookups).toEqual([]);
   });
 
   it('given no driveId (global assistant) and a free-tier session owner, should deny with tier_ineligible', async () => {

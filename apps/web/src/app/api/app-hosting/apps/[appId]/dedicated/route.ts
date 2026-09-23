@@ -9,12 +9,18 @@
  *        has already been paid for actually ends, and the webhook moves the tier.
  *
  * ONLY THE DRIVE OWNER MAY BUY. Hosting is billed to the drive owner
- * (`resolveEnvPayerId` semantics — see `app-billing.ts`), so anybody else buying
+ * (`resolveEnvPayer` semantics — see `app-billing.ts`), so anybody else buying
  * would be committing a recurring charge to somebody else's card. That makes
  * ownership the authorization question here rather than the drive's usual
  * edit-permission question, and it is checked against `drives.ownerId` directly
  * rather than through a role: a role can be granted, and "may spend this person's
  * money" is not something a role should be able to grant.
+ *
+ * AN ORG DRIVE'S APP CANNOT BE BOUGHT YET (WAL-9 interim). Its hosting bills the
+ * org, and this purchase can only charge a person's card, so POST refuses with the
+ * named `org_billing_pending` (409) rather than committing the lead's card to the
+ * org's bill; the org Stripe customer (Phase 3) and the C3 lane replace it. Cancel
+ * stays open: it can only stop a charge, never start one.
  *
  * Dark behind `APP_HOSTING_ENABLED`, and inert where `isBillingEnabled()` is false
  * (tenant, onprem) — both checked inside `isDedicatedTierPurchasable()`, before any
@@ -29,7 +35,7 @@ import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { lookupDriveOwnerId } from '@pagespace/lib/billing/sandbox-payer';
+import { lookupDriveBillingFacts, payerForDrive, requireUserPayer } from '@pagespace/lib/billing/sandbox-payer';
 import { getPublishedApp } from '@pagespace/lib/services/app-hosting/provisioner';
 import { isDedicatedTierPurchasable } from '@pagespace/lib/services/app-hosting/dedicated-tier-service';
 import {
@@ -77,8 +83,9 @@ async function authorize(request: NextRequest, appId: string) {
   const app = await getPublishedApp(appId);
   if (!app) return { error: NextResponse.json({ error: 'Not found' }, { status: 404 }) } as const;
 
-  const ownerId = await lookupDriveOwnerId(app.driveId);
-  if (!ownerId || ownerId !== auth.userId) {
+  const facts = await lookupDriveBillingFacts(app.driveId);
+  const ownerId = facts?.ownerId ?? null;
+  if (!facts || !ownerId || ownerId !== auth.userId) {
     // 404, not 403: a non-owner must not be able to confirm that an app id exists
     // by the shape of the refusal.
     return { error: NextResponse.json({ error: 'Not found' }, { status: 404 }) } as const;
@@ -89,7 +96,7 @@ async function authorize(request: NextRequest, appId: string) {
     return { error: NextResponse.json({ error: 'Not found' }, { status: 404 }) } as const;
   }
 
-  return { app, owner, userId: auth.userId } as const;
+  return { app, owner, userId: auth.userId, payer: payerForDrive(facts) } as const;
 }
 
 export async function POST(request: NextRequest, context: { params: Promise<{ appId: string }> }) {
@@ -97,6 +104,13 @@ export async function POST(request: NextRequest, context: { params: Promise<{ ap
   const authorized = await authorize(request, appId);
   if ('error' in authorized) return authorized.error;
   const { app, owner, userId } = authorized;
+
+  // WAL-9 interim: an org drive's hosting bills the org, and this purchase can only charge a
+  // person's card. Refuse by name — never put the lead's card on the org's bill.
+  const payer = requireUserPayer(authorized.payer);
+  if (!payer.ok) {
+    return NextResponse.json({ error: payer.refusal.code, message: payer.refusal.message }, { status: 409 });
+  }
 
   // The size being bought is the size the app ALREADY RUNS, read from the row
   // rather than taken from the request body. A body-supplied preset would let a

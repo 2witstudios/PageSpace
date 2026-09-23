@@ -20,7 +20,7 @@ vi.mock('@pagespace/db/operators', () => ({
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'pages.id', driveId: 'pages.driveId' },
-  drives: { id: 'drives.id', ownerId: 'drives.ownerId' },
+  drives: { id: 'drives.id', ownerId: 'drives.ownerId', orgId: 'drives.orgId' },
 }));
 vi.mock('@pagespace/db/schema/agent-workspaces', () => ({
   agentWorkspaces: {
@@ -133,16 +133,16 @@ describe('defaultReconcileSandboxStorageDeps.listAgentSessionSprites', () => {
   });
 });
 
-describe('defaultReconcileSandboxStorageDeps.lookupDriveOwnerId', () => {
+describe('defaultReconcileSandboxStorageDeps.lookupDriveBillingFacts', () => {
   it('is the shared sandbox-payer.ts lookup (a direct drives read — no page join exists any more)', async () => {
     mockDb.select.mockReturnValue({
       from: () => ({
         where: () => ({
-          limit: async () => [{ ownerId: 'owner-1' }],
+          limit: async () => [{ ownerId: 'owner-1', orgId: null }],
         }),
       }),
     });
-    await expect(defaultReconcileSandboxStorageDeps.lookupDriveOwnerId('drive-1')).resolves.toBe('owner-1');
+    await expect(defaultReconcileSandboxStorageDeps.lookupDriveBillingFacts('drive-1')).resolves.toEqual({ ownerId: 'owner-1', orgId: null });
   });
 });
 
@@ -467,7 +467,7 @@ describe('reconcileSandboxStorageSerialized', () => {
       listAgentSessionSprites: vi.fn(async () => []),
       listDriveEnvSprites: vi.fn(async () => []),
       listPublishedAppRootfs: vi.fn(async () => []),
-      lookupDriveOwnerId: vi.fn(async () => null),
+      lookupDriveBillingFacts: vi.fn(async () => null),
       chargeStorage: vi.fn(async () => ({ persisted: true, creditsSettled: true })),
       advanceAgentSessionWatermark: vi.fn(async () => 'advanced' as const),
       advanceDriveEnvWatermark: vi.fn(async () => 'advanced' as const),

@@ -31,10 +31,12 @@ import {
   type CanRunCodeResult,
 } from './can-run-code';
 import { checkCodeExecutionQuota, type CodeExecutionQuotaDecision } from './quota';
+import { ORG_BILLING_PENDING_MESSAGE } from '../../billing/sandbox-payer';
 
 export type SandboxToolGateDenialReason =
   | 'kill_switch_off'
   | 'tier_ineligible'
+  | 'org_billing_pending'
   | 'no_drive_access'
   | 'insufficient_role'
   | 'no_agent_access'
@@ -49,6 +51,7 @@ export type SandboxToolGateResult =
 const DENIAL_MESSAGES: Record<SandboxToolGateDenialReason, string> = {
   kill_switch_off: 'Code execution is disabled.',
   tier_ineligible: 'Running code requires a Pro plan or above.',
+  org_billing_pending: ORG_BILLING_PENDING_MESSAGE,
   no_drive_access: 'You do not have access to run code in this drive.',
   insufficient_role: 'Running code requires edit access to this drive.',
   no_agent_access: 'This agent is not permitted to run code in this drive.',
