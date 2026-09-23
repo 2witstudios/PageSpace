@@ -21,8 +21,6 @@ import { isDriveLead } from '../permissions/drive-relationship';
  *   (POL-5), which Wave E owns; the service passes the policy through a seam.
  */
 
-/** Board leaf that owns storage re-attribution on move (O-9, D-OW-9). */
-export const STORAGE_REATTRIBUTION_LEAF_ID = 't1759m6mfxrj5hyaleu1mdqs';
 /** Board leaf that owns the "who can create org drives" policy (POL-5). */
 export const ORG_DRIVE_CREATION_POLICY_LEAF_ID = 'lyt8275djmdcwlwm8wvk2xa5';
 

@@ -189,6 +189,71 @@ export const walletConsumerCaps = pgTable('wallet_consumer_caps', {
   monthlyNonNeg: check('wallet_consumer_caps_monthly_nonneg', sql`${table.monthlyCapCents} IS NULL OR ${table.monthlyCapCents} >= 0`),
 }));
 
+/** Mirrors wallet-core `FundingLeg['funder']`: the wallet owner's own top-up, or a donation (WAL-4). */
+export const FUNDING_LEG_KINDS = ['owner', 'donation'] as const;
+export type FundingLegKind = (typeof FUNDING_LEG_KINDS)[number];
+
+/**
+ * walletFundingLegs — funds moved INTO a child wallet that last until spent (WAL-3), one
+ * row per top-up or donation (D-OW-13: donation legs are tracked separately and are
+ * non-refundable). Each row maps 1:1 onto wallet-core's `FundingLeg`
+ * (legId = id, funder = funderKind, donorUserId = funderUserId on a donation,
+ * remainingCents); the other columns are storage-only (which wallet, how much it
+ * started with, the refund rule, the idempotency key, when it arrived).
+ *
+ * Spend draws legs FIFO by (createdAt, id) across both kinds — see
+ * wallet-funding `orderFundingLegs`. On a child wallet the legs are the store and
+ * `wallets.topupRemainingCents` is kept equal to SUM(remainingCents) in the same
+ * transaction that changes a leg, so readers of the wallet row stay right.
+ *
+ * A donor's leg outlives the donor's account (funderUserId SET NULL): the money was
+ * given to the drive, and erasing the donor must not take it back out.
+ */
+export const walletFundingLegs = pgTable('wallet_funding_legs', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  walletId: text('walletId').notNull().references(() => wallets.id, { onDelete: 'cascade' }),
+  funderKind: text('funderKind').$type<FundingLegKind>().notNull(),
+  // Who funded it. A donation always names a person at insert; an owner top-up names
+  // the paying user or org.
+  funderUserId: text('funderUserId').references(() => users.id, { onDelete: 'set null' }),
+  funderOrgId: text('funderOrgId').references(() => organizations.id, { onDelete: 'set null' }),
+  originalCents: integer('originalCents').notNull(),
+  remainingCents: integer('remainingCents').notNull(),
+  nonRefundable: boolean('nonRefundable').notNull(),
+  // Idempotency key: one leg per donation id or payment reference.
+  sourceRef: text('sourceRef'),
+  createdAt: timestamp('createdAt', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  // The draw order: a wallet's legs, oldest first.
+  walletOrderIdx: index('wallet_funding_legs_wallet_order_idx').on(table.walletId, table.createdAt, table.id),
+  sourceRefUnique: uniqueIndex('wallet_funding_legs_source_ref_unique')
+    .on(table.sourceRef)
+    .where(sql`"sourceRef" IS NOT NULL`),
+  funderKindValid: check('wallet_funding_legs_funder_kind_valid', sql`${table.funderKind} IN ('owner', 'donation')`),
+  originalPositive: check('wallet_funding_legs_original_positive', sql`${table.originalCents} > 0`),
+  remainingInRange: check(
+    'wallet_funding_legs_remaining_range',
+    sql`${table.remainingCents} >= 0 AND ${table.remainingCents} <= ${table.originalCents}`,
+  ),
+  // D-OW-13: a donation leg is never refundable.
+  donationNonRefundable: check(
+    'wallet_funding_legs_donation_non_refundable',
+    sql`${table.funderKind} <> 'donation' OR ${table.nonRefundable}`,
+  ),
+  // A donation comes from a person's own balance, never an org.
+  donationNotFromOrg: check(
+    'wallet_funding_legs_donation_not_from_org',
+    sql`${table.funderKind} <> 'donation' OR ${table.funderOrgId} IS NULL`,
+  ),
+}));
+
+export const walletFundingLegsRelations = relations(walletFundingLegs, ({ one }) => ({
+  wallet: one(wallets, {
+    fields: [walletFundingLegs.walletId],
+    references: [wallets.id],
+  }),
+}));
+
 export const walletsRelations = relations(wallets, ({ one, many }) => ({
   user: one(users, {
     fields: [wallets.userId],
@@ -205,6 +270,7 @@ export const walletsRelations = relations(wallets, ({ one, many }) => ({
   }),
   children: many(wallets, { relationName: 'walletParent' }),
   consumerCaps: many(walletConsumerCaps),
+  fundingLegs: many(walletFundingLegs),
 }));
 
 export const walletConsumerCapsRelations = relations(walletConsumerCaps, ({ one }) => ({

@@ -64,8 +64,13 @@ const SPEC = path.join(repoRoot(), 'docs/2.0-architecture/agent-sessions.md');
  * The epilogue (stream construction, `onFinish`, terminal persist, hold
  * settle, telemetry) is where most of it lives and is the extraction that
  * would pay first; see the entry's docblock.
+ *
+ * 158 → 161 (lane ow-c3, wallet-aware gate): the turn's credit state (wallet, source,
+ * funding tier) was EXTRACTED to `turn-credit.ts` rather than copied into both turns;
+ * the three new identical lines are the two imports of that shared module and the one
+ * declaration of its value, which any extraction shared by both files adds.
  */
-const RECORDED_IDENTICAL_LINES = 158;
+const RECORDED_IDENTICAL_LINES = 161;
 
 /** Substantive lines: no blanks, no comments, trimmed. */
 const substantiveLines = (file: string): string[] =>

@@ -6,7 +6,7 @@ vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn((a, b) => ({ op: 'eq', a, 
 vi.mock('@pagespace/db/schema/auth', () => ({ users: { id: 'users.id', subscriptionTier: 'users.subscriptionTier' } }));
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'pages.id', driveId: 'pages.driveId' },
-  drives: { id: 'drives.id', ownerId: 'drives.ownerId' },
+  drives: { id: 'drives.id', ownerId: 'drives.ownerId', orgId: 'drives.orgId' },
 }));
 
 const mockCanConsumeAI = vi.hoisted(() => vi.fn());
@@ -39,7 +39,7 @@ beforeEach(() => {
   mockTrackUsage.mockReset();
 });
 
-function mockDriveOwnerRow(row: { ownerId: string } | undefined) {
+function mockDriveOwnerRow(row: { ownerId: string; orgId: string | null } | undefined) {
   mockDb.select.mockReturnValue({
     from: () => ({
       where: () => ({
@@ -52,19 +52,34 @@ function mockDriveOwnerRow(row: { ownerId: string } | undefined) {
 describe('defaultSandboxBillingDeps.resolvePayerId', () => {
   it('bills the session ownerId directly for a global-assistant session (driveId null), with no DB lookup', async () => {
     const result = await defaultSandboxBillingDeps.resolvePayerId({ driveId: null, ownerId: 'owner-1' });
-    expect(result).toBe('owner-1');
+    expect(result).toEqual({ ok: true, userId: 'owner-1' });
     expect(mockDb.select).not.toHaveBeenCalled();
   });
 
   it("resolves to the SESSION's ACTUAL drive owner via a direct drives read — never the session's own ownerId when a real owner resolves", async () => {
-    mockDriveOwnerRow({ ownerId: 'real-owner' });
+    mockDriveOwnerRow({ ownerId: 'real-owner', orgId: null });
 
     const result = await defaultSandboxBillingDeps.resolvePayerId({
       driveId: 'session-drive-1',
       ownerId: 'session-owner-1',
     });
 
-    expect(result).toBe('real-owner');
+    expect(result).toEqual({ ok: true, userId: 'real-owner' });
+  });
+
+  it('WAL-9 (partial) answers the named org_billing_pending refusal for an ORG drive — never the drive lead, and takes no hold', async () => {
+    mockDriveOwnerRow({ ownerId: 'lead-marcus', orgId: 'org-northwind' });
+
+    const result = await defaultSandboxBillingDeps.resolvePayerId({
+      driveId: 'org-drive',
+      ownerId: 'session-owner-1',
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      refusal: { code: 'org_billing_pending', orgId: 'org-northwind', message: expect.any(String) },
+    });
+    expect(mockCanConsumeAI).not.toHaveBeenCalled();
   });
 
   it('falls back to the session ownerId when the drive cannot be resolved (a stale read mid-delete)', async () => {
@@ -75,7 +90,7 @@ describe('defaultSandboxBillingDeps.resolvePayerId', () => {
       ownerId: 'owner-1',
     });
 
-    expect(result).toBe('owner-1');
+    expect(result).toEqual({ ok: true, userId: 'owner-1' });
   });
 });
 
@@ -89,7 +104,8 @@ describe('defaultSandboxBillingDeps.gate', () => {
     expect(mockCanConsumeAI).toHaveBeenCalledWith(
       'owner-1',
       'business',
-      expect.objectContaining({ estCostCents: expect.any(Number), maxInFlight: expect.any(Number) }),
+      // Compute bills the payer's personal wallet (WAL-9): no drive wallet is ever named.
+      expect.objectContaining({ spend: { kind: 'personal' }, estCostCents: expect.any(Number), maxInFlight: expect.any(Number) }),
     );
     expect(result).toEqual({ allowed: true, holdId: 'hold-1', reason: undefined });
   });

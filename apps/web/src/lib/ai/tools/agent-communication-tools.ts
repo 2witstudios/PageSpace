@@ -864,7 +864,9 @@ export async function executeAskAgent(
         // sub-agent charge durable if the tool returns into a serverless freeze.
         // No holdId: this nested call runs inside an already-gated parent request;
         // the parent's hold covers its own settle, and these sub-agent decrements
-        // draw the balance directly (no separate reservation to release).
+        // draw the balance directly (no separate reservation to release). They draw
+        // the wallet the PARENT turn's gate named (walletId), because an agent's spend
+        // belongs to the session it runs in, not the drive the agent lives in (SPEND-7).
         await AIMonitoring.trackUsage({
           userId,
           provider: resolvedProvider,
@@ -876,6 +878,7 @@ export async function executeAskAgent(
           conversationId: activeConversationId,
           pageId: agentId,
           driveId: targetAgent.driveId,
+          walletId: executionContext?.creditSpend?.walletId,
           success: true,
           metadata: { feature: 'ask_agent', agentCallDepth: callDepth + 1 },
         });

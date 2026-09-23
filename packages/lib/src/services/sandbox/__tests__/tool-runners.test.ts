@@ -1439,7 +1439,7 @@ function makeBilling(over: Partial<SandboxRunDeps['billing']> = {}): {
   const billing: NonNullable<SandboxRunDeps['billing']> = {
     resolvePayerId: async (input) => {
       resolvePayerIdCalls.push(input);
-      return input.ownerId;
+      return { ok: true, userId: input.ownerId };
     },
     gate: async (input) => {
       gateCalls.push(input);
@@ -1682,6 +1682,32 @@ describe('runBashInSandbox — machine billing (Terminal Epic 3)', () => {
     expect(resolvePayerIdCalls).toEqual([{ driveId: 'session-drive-1', ownerId: 'session-owner-1' }]);
   });
 
+  it('WAL-9 (partial) refuses an ORG-drive session by name before any hold or run — no wallet is gated, charged or released', async () => {
+    let reconnects = 0;
+    const { billing, gateCalls, trackUsageCalls, releaseHoldCalls } = makeBilling({
+      resolvePayerId: async () => ({
+        ok: false,
+        refusal: { code: 'org_billing_pending', orgId: 'org-northwind', message: 'org billing pending' },
+      }),
+    });
+    const { deps } = makeDeps({
+      billing,
+      resolveBillingSession: makeBillingSession({ driveId: 'org-drive', ownerId: 'session-owner-1' }),
+      reconnect: async () => {
+        reconnects += 1;
+        return makeSandbox({});
+      },
+    });
+
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+
+    expect(result).toMatchObject({ success: false, reason: 'org_billing_pending' });
+    expect(gateCalls).toEqual([]);
+    expect(trackUsageCalls).toEqual([]);
+    expect(releaseHoldCalls).toEqual([]);
+    expect(reconnects).toBe(0);
+  });
+
   it("forwards ctx.agentPageId as pageId to trackUsage (purely descriptive per-agent attribution), so usage-breakdown can attribute cost to the right agent page", async () => {
     const clock = makeMutableClock(new Date('2026-06-01T12:00:00.000Z').getTime());
     const sandbox = makeSandbox({
@@ -1721,7 +1747,7 @@ describe('runBashInSandbox — machine billing (Terminal Epic 3)', () => {
       },
     });
     const { billing, gateCalls, trackUsageCalls } = makeBilling({
-      resolvePayerId: async () => 'real-owner-99',
+      resolvePayerId: async () => ({ ok: true, userId: 'real-owner-99' }),
     });
     const { deps } = makeDeps({
       billing,
@@ -1761,10 +1787,10 @@ describe('runBashInSandbox — machine billing (Terminal Epic 3)', () => {
     });
     const resolvePayerIdCalls: Array<{ driveId: string | null; ownerId: string }> = [];
     const { billing, gateCalls, trackUsageCalls } = makeBilling({
-      // Mirrors the real resolveSessionPayerId rule: drive owner when set.
+      // Mirrors the real resolveSessionPayer rule: drive owner when set.
       resolvePayerId: async (input) => {
         resolvePayerIdCalls.push(input);
-        return input.driveId ? `owner-of-${input.driveId}` : 'unreachable';
+        return { ok: true, userId: input.driveId ? `owner-of-${input.driveId}` : 'unreachable' };
       },
     });
     const { deps } = makeDeps({

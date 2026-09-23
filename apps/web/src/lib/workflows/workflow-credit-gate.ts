@@ -2,6 +2,7 @@ import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { canConsumeAI, type GateOptions } from '@pagespace/lib/billing/credit-gate';
+import { PERSONAL_SPEND } from '@pagespace/lib/billing/spend-target';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { CREDIT_HOLD_ESTIMATE_CENTS, MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import type { GateReason } from '@pagespace/lib/billing/credit-core';
@@ -58,9 +59,11 @@ export async function acquireWorkflowCreditHold(
     .where(eq(users.id, userId));
 
   const estCostCents = CREDIT_HOLD_ESTIMATE_CENTS * countAiSteps(steps);
+  // Automations spend the drive wallet only (SPEND-6) once lane C4 lands; until then the
+  // run bills the person it has always billed (createdBy), named here explicitly.
   const opts: GateOptions = mode === 'interactive'
-    ? { estCostCents, maxInFlight: MAX_CHAT_INFLIGHT }
-    : { estCostCents, skipDailyCap: true };
+    ? { spend: PERSONAL_SPEND, estCostCents, maxInFlight: MAX_CHAT_INFLIGHT }
+    : { spend: PERSONAL_SPEND, estCostCents, skipDailyCap: true };
 
   const gate = await canConsumeAI(userId, (user?.subscriptionTier ?? 'free') as SubscriptionTier, opts);
   if (!gate.allowed) return { allowed: false, reason: gate.reason };

@@ -4,8 +4,9 @@
  *
  * The decisions are pure (organizations/org-drive-ownership.ts); this module is the IO edge.
  * Each operation runs in one transaction: lock the drive, lock the org, read the actor's org
- * role, decide, write drives.orgId, and run the org-membership sync, so a refused or failed
- * sync leaves the drive exactly as it was.
+ * role, decide, write drives.orgId, re-attribute the drive's stored bytes (O-9), and run the
+ * org-membership sync, so a refused or failed move leaves the drive and every quota exactly as
+ * they were.
  *
  * A move rewrites drives.orgId (and, on move-in, the slug when it collides inside the org and
  * the visibility). Members, custom roles, pages, envs, and publishSubdomain are keyed by
@@ -16,7 +17,6 @@ import { db } from '@pagespace/db/db';
 import { and, eq, like, sql } from '@pagespace/db/operators';
 import { drives, type OrgDriveVisibility } from '@pagespace/db/schema/core';
 import { organizations, type OrgRole } from '@pagespace/db/schema/organizations';
-import { loggers } from '../logging/logger-config';
 import { slugify } from '../utils/utils';
 import { resolveUniqueSlug } from './drive-guards';
 import { allocatePublishSubdomain } from './drive-service';
@@ -28,7 +28,6 @@ import {
   decideMoveDriveOutOfOrg,
   orgDriveVisibilityForInsert,
   retryOnOrgSlugConflict,
-  STORAGE_REATTRIBUTION_LEAF_ID,
   type ImplicitMembersChoice,
   type OrgDriveCreationPolicy,
   type OrgDriveRefusal,
@@ -36,6 +35,7 @@ import {
 import { retryOnDeadlock } from '../organizations/repository';
 import { removeFormerLeadOwnerRow } from '../permissions/org-drive-membership';
 import { getActorInfo, logActivityWithTx } from '../monitoring/activity-logger';
+import { reattributeDriveStorageInTx, type StorageReattributionResult } from './storage-limits';
 
 export type OrgDriveTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -62,14 +62,8 @@ export interface OrgDriveServiceDeps {
   getOrgDriveCreationPolicy(tx: OrgDriveTx, orgId: string): Promise<OrgDriveCreationPolicy>;
 }
 
-/**
- * Storage re-attribution on move (O-9) is owned by the storage-attribution leaf. Until it
- * lands, a move reports the work as deferred, loudly, instead of silently skipping it.
- */
-export interface StorageReattribution {
-  status: 'deferred';
-  leafId: typeof STORAGE_REATTRIBUTION_LEAF_ID;
-}
+/** What the move did to stored-byte attribution (O-9, D-OW-9). */
+export type StorageReattribution = StorageReattributionResult;
 
 type DriveRow = typeof drives.$inferSelect;
 
@@ -89,18 +83,6 @@ const driveNotFound = (): DriveNotFound => ({
   status: 404,
   message: 'Drive not found',
 });
-
-// TODO(t1759m6mfxrj5hyaleu1mdqs): re-attribute the drive's stored bytes between the lead's
-// personal quota and the org (O-9, D-OW-9) when the storage-attribution leaf lands.
-function deferStorageReattribution(driveId: string, direction: 'into-org' | 'out-of-org', orgId: string): StorageReattribution {
-  loggers.api.warn('Org drive move: storage re-attribution deferred', {
-    driveId,
-    orgId,
-    direction,
-    leafId: STORAGE_REATTRIBUTION_LEAF_ID,
-  });
-  return { status: 'deferred', leafId: STORAGE_REATTRIBUTION_LEAF_ID };
-}
 
 async function lockDrive(tx: OrgDriveTx, driveId: string): Promise<DriveRow | null> {
   const [row] = await tx.select().from(drives).where(eq(drives.id, driveId)).for('update');
@@ -162,14 +144,17 @@ export async function moveDriveToOrg(
       .where(eq(drives.id, driveId))
       .returning();
 
+    // O-9: the drive's bytes leave each uploader's personal quota in the same transaction that
+    // makes them the org's; the org's usage is derived from its drives, so it follows orgId.
+    const storageReattribution = await reattributeDriveStorageInTx(tx, { driveId, orgId: input.orgId, direction: 'into-org' });
     const publish = await deps.syncOrgMembership(tx, { kind: 'move-in', driveId, orgId: input.orgId });
-    return { ok: true as const, drive: moved, publish };
+    return { ok: true as const, drive: moved, storageReattribution, publish };
   })));
 
   if (!outcome.ok) return outcome;
   const { publish, ...moved } = outcome;
   await publish();
-  return { ...moved, orgId: input.orgId, storageReattribution: deferStorageReattribution(driveId, 'into-org', input.orgId) };
+  return { ...moved, orgId: input.orgId };
 }
 
 export async function moveDriveOutOfOrg(
@@ -203,19 +188,21 @@ export async function moveDriveOutOfOrg(
       .where(eq(drives.id, driveId))
       .returning();
 
+    // O-9: the drive's bytes go back onto each uploader's personal quota, atomically with orgId.
+    const storageReattribution = await reattributeDriveStorageInTx(tx, { driveId, orgId, direction: 'out-of-org' });
     const publish = await deps.syncOrgMembership(tx, {
       kind: 'move-out',
       driveId,
       orgId,
       implicitMembers: verdict.implicitMembers,
     });
-    return { ok: true as const, drive: moved, orgId, publish };
+    return { ok: true as const, drive: moved, orgId, storageReattribution, publish };
   }));
 
   if (!outcome.ok) return outcome;
-  const { orgId, publish, ...rest } = outcome;
+  const { publish, ...rest } = outcome;
   await publish();
-  return { ...rest, orgId, storageReattribution: deferStorageReattribution(driveId, 'out-of-org', orgId) };
+  return rest;
 }
 
 export async function createOrgDrive(

@@ -9,10 +9,10 @@
  */
 
 import {
-  getUserStorageQuota,
-  checkStorageQuota,
+  getStorageQuotaForDrive,
+  checkStorageQuotaForDrive,
   reserveConcurrentUploadSlot,
-  updateStorageUsage,
+  chargeStorageForStore,
   shouldChargeForStore,
 } from '@pagespace/lib/services/storage-limits';
 import { releasePendingUpload } from '@pagespace/lib/services/pending-uploads';
@@ -59,14 +59,17 @@ export interface PresignAttachmentArgs {
 export async function presignAttachment(args: PresignAttachmentArgs): Promise<OrchestratorResult> {
   const { userId, target, request, contentHash, filename, mimeType, fileSize } = args;
 
-  const quota = await getUserStorageQuota(userId);
+  // WAL-9, O-9: a channel attachment in an org drive is checked against the org's quota; a DM
+  // attachment has no drive and stays on the uploader's.
+  const fileDriveId = attachmentFileDriveId(target);
+  const quota = await getStorageQuotaForDrive(userId, fileDriveId);
   if (!quota) return { status: 500, body: { error: 'Could not retrieve storage quota' } };
 
   const validation = validateAttachmentPresign({ contentHash, mimeType, fileSize, tier: quota.tier });
   if (!validation.ok) return { status: validation.status, body: { error: validation.error } };
   const canonicalHash = validation.canonicalHash;
 
-  const quotaCheck = await checkStorageQuota(userId, fileSize);
+  const quotaCheck = await checkStorageQuotaForDrive(userId, fileDriveId, fileSize);
   if (!quotaCheck.allowed) {
     return { status: 413, body: { error: quotaCheck.reason, storageInfo: quotaCheck.quota } };
   }
@@ -217,10 +220,7 @@ export async function completeAttachment(args: CompleteAttachmentArgs): Promise<
       });
     });
     if (shouldChargeForStore(fileWasInserted)) {
-      await updateStorageUsage(userId, resolvedSize, {
-        driveId: attachmentFileDriveId(target) ?? undefined,
-        eventType: 'upload',
-      });
+      await chargeStorageForStore(userId, attachmentFileDriveId(target), resolvedSize, { eventType: 'upload' });
     }
     auditRequest(request, {
       eventType: 'data.write',

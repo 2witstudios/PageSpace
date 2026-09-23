@@ -18,6 +18,7 @@ import { aiSettingsRepository } from '@/lib/repositories/ai-settings-repository'
 import { isBillingEnabled } from '@pagespace/lib/deployment-mode';
 import { PAID_TIERS } from '@/lib/subscription/rate-limit-middleware';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { PERSONAL_SPEND } from '@pagespace/lib/billing/spend-target';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { VOICE_MAX_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
@@ -44,6 +45,8 @@ export async function POST(request: Request) {
   // hand it off to trackUsage (validation error, provider failure, or throw), so a
   // failed TTS call never strands a hold against the user's spendable balance.
   let holdId: string | undefined;
+  // The wallet the hold was placed on, settled against with it (WAL-5).
+  let walletId: string | undefined;
   let holdHandedOff = false;
   const startTime = Date.now();
 
@@ -150,13 +153,16 @@ export async function POST(request: Request) {
     // tiny for a sentence chunk, up to ~18¢ for a max-length tts-1-hd request —
     // rather than a flat estimate a long request would blow past.
     const gate = await canConsumeAI(userId, tier, {
+      // Voice is a personal feature, not a drive session: personal credits (SPEND-8).
+      spend: PERSONAL_SPEND,
       estCostCents: estimateVoiceHoldCents(model, { chars: text.length }),
       maxInFlight: VOICE_MAX_INFLIGHT,
     });
     if (!gate.allowed) {
-      return creditGateErrorResponse(gate.reason);
+      return creditGateErrorResponse(gate.reason, gate.refusal);
     }
     holdId = gate.holdId;
+    walletId = gate.walletId;
 
     // Call OpenAI TTS API
     const response = await fetch('https://api.openai.com/v1/audio/speech', {
@@ -215,6 +221,7 @@ export async function POST(request: Request) {
       duration: Date.now() - startTime,
       success: true,
       holdId,
+      walletId,
       // Deterministic list-price cost (chars × published rate), not a live
       // provider-returned figure — labels the admin-panel coverage honestly.
       costSource: 'list_price',

@@ -10,16 +10,25 @@ function editorOf(...driveIds: string[]) {
 describe('computeSandboxEligibilityByDrive', () => {
   it('marks a drive eligible when its owner is on a paying tier and the requester can edit it', () => {
     const result = computeSandboxEligibilityByDrive(
-      [{ id: 'drive-1', ownerId: 'owner-1' }],
+      [{ id: 'drive-1', ownerId: 'owner-1', orgId: null }],
       [{ id: 'owner-1', subscriptionTier: 'pro' }],
       editorOf('drive-1'),
     );
     expect(result.get('drive-1')).toBe(true);
   });
 
+  it('WAL-9 (partial) marks an ORG drive ineligible even when its lead is on a paying tier — the org pays, and org compute billing is pending', () => {
+    const result = computeSandboxEligibilityByDrive(
+      [{ id: 'drive-1', ownerId: 'owner-1', orgId: 'org-northwind' }],
+      [{ id: 'owner-1', subscriptionTier: 'pro' }],
+      editorOf('drive-1'),
+    );
+    expect(result.get('drive-1')).toBe(false);
+  });
+
   it('marks a drive ineligible when its owner is free-tier', () => {
     const result = computeSandboxEligibilityByDrive(
-      [{ id: 'drive-1', ownerId: 'owner-1' }],
+      [{ id: 'drive-1', ownerId: 'owner-1', orgId: null }],
       [{ id: 'owner-1', subscriptionTier: 'free' }],
       editorOf('drive-1'),
     );
@@ -28,7 +37,7 @@ describe('computeSandboxEligibilityByDrive', () => {
 
   it('defaults to free (ineligible) when the owner row is missing entirely', () => {
     const result = computeSandboxEligibilityByDrive(
-      [{ id: 'drive-1', ownerId: 'owner-missing' }],
+      [{ id: 'drive-1', ownerId: 'owner-missing', orgId: null }],
       [],
       editorOf('drive-1'),
     );
@@ -37,7 +46,7 @@ describe('computeSandboxEligibilityByDrive', () => {
 
   it('coerces an unrecognized/malformed tier string to free (ineligible), never throws', () => {
     const result = computeSandboxEligibilityByDrive(
-      [{ id: 'drive-1', ownerId: 'owner-1' }],
+      [{ id: 'drive-1', ownerId: 'owner-1', orgId: null }],
       [{ id: 'owner-1', subscriptionTier: 'not-a-real-tier' }],
       editorOf('drive-1'),
     );
@@ -46,7 +55,7 @@ describe('computeSandboxEligibilityByDrive', () => {
 
   it('marks a Pro drive ineligible for a VIEWER-role requester — payer tier alone must not advertise shell affordances (review #2326)', () => {
     const result = computeSandboxEligibilityByDrive(
-      [{ id: 'drive-1', ownerId: 'owner-1' }],
+      [{ id: 'drive-1', ownerId: 'owner-1', orgId: null }],
       [{ id: 'owner-1', subscriptionTier: 'pro' }],
       { userId: 'requester-1', editableDriveIds: new Set(), codeExecutionEnabled: true },
     );
@@ -55,7 +64,7 @@ describe('computeSandboxEligibilityByDrive', () => {
 
   it("treats the requester's OWN drive as editable without a membership row", () => {
     const result = computeSandboxEligibilityByDrive(
-      [{ id: 'drive-1', ownerId: 'requester-1' }],
+      [{ id: 'drive-1', ownerId: 'requester-1', orgId: null }],
       [{ id: 'requester-1', subscriptionTier: 'pro' }],
       { userId: 'requester-1', editableDriveIds: new Set(), codeExecutionEnabled: true },
     );
@@ -64,7 +73,7 @@ describe('computeSandboxEligibilityByDrive', () => {
 
   it('marks everything ineligible while the code-execution kill switch is off', () => {
     const result = computeSandboxEligibilityByDrive(
-      [{ id: 'drive-1', ownerId: 'owner-1' }],
+      [{ id: 'drive-1', ownerId: 'owner-1', orgId: null }],
       [{ id: 'owner-1', subscriptionTier: 'business' }],
       { userId: 'requester-1', editableDriveIds: new Set(['drive-1']), codeExecutionEnabled: false },
     );
@@ -74,8 +83,8 @@ describe('computeSandboxEligibilityByDrive', () => {
   it('resolves each drive independently — a free-tier owner does not poison a co-owned Pro drive, or vice versa', () => {
     const result = computeSandboxEligibilityByDrive(
       [
-        { id: 'drive-free', ownerId: 'owner-free' },
-        { id: 'drive-pro', ownerId: 'owner-pro' },
+        { id: 'drive-free', ownerId: 'owner-free', orgId: null },
+        { id: 'drive-pro', ownerId: 'owner-pro', orgId: null },
       ],
       [
         { id: 'owner-free', subscriptionTier: 'free' },
@@ -90,9 +99,9 @@ describe('computeSandboxEligibilityByDrive', () => {
   it('dedupes correctly when several drives share the same owner — one owner row covers them all', () => {
     const result = computeSandboxEligibilityByDrive(
       [
-        { id: 'drive-a', ownerId: 'owner-1' },
-        { id: 'drive-b', ownerId: 'owner-1' },
-        { id: 'drive-c', ownerId: 'owner-1' },
+        { id: 'drive-a', ownerId: 'owner-1', orgId: null },
+        { id: 'drive-b', ownerId: 'owner-1', orgId: null },
+        { id: 'drive-c', ownerId: 'owner-1', orgId: null },
       ],
       [{ id: 'owner-1', subscriptionTier: 'business' }],
       editorOf('drive-a', 'drive-b', 'drive-c'),
@@ -105,9 +114,9 @@ describe('computeSandboxEligibilityByDrive', () => {
   it('mixes the axes per drive — editable Pro yes, viewer Pro no, editable Free no', () => {
     const result = computeSandboxEligibilityByDrive(
       [
-        { id: 'drive-editable-pro', ownerId: 'owner-pro' },
-        { id: 'drive-viewer-pro', ownerId: 'owner-pro' },
-        { id: 'drive-editable-free', ownerId: 'owner-free' },
+        { id: 'drive-editable-pro', ownerId: 'owner-pro', orgId: null },
+        { id: 'drive-viewer-pro', ownerId: 'owner-pro', orgId: null },
+        { id: 'drive-editable-free', ownerId: 'owner-free', orgId: null },
       ],
       [
         { id: 'owner-pro', subscriptionTier: 'pro' },

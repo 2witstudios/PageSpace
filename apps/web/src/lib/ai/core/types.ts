@@ -5,6 +5,7 @@
 
 import { ModelCapabilities } from './model-capabilities';
 import type { CommandExecutionData } from './command-processor';
+import type { SpendTarget } from '@pagespace/lib/billing/spend-target';
 
 export interface ToolExecutionContext {
   userId: string;
@@ -48,6 +49,14 @@ export interface ToolExecutionContext {
   isAdmin?: boolean;
   subscriptionTier?: string;
   imageGenerationModel?: string | null;
+
+  // The wallet this turn spends (WAL-5, SPEND-1): the target its credit gate was given,
+  // naming the source the gate resolved, and the wallet the gate reserved on. A tool that
+  // gates its own model call (generate_image) names this same source, and a nested call
+  // that rides the turn's gate (an agent consulted inside it) settles on this wallet —
+  // never on a different one. Absent outside a gated turn: such a caller has no drive
+  // session and spends personal credits (SPEND-8).
+  creditSpend?: { spend: SpendTarget; walletId?: string };
 
   // MCP token drive-scope restriction. Empty/undefined = full access (session auth
   // or an unscoped MCP token); non-empty = tools may only touch these drive IDs.

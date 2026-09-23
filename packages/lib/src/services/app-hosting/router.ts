@@ -42,6 +42,7 @@ import { hasSpendableBalance } from '../../billing/credit-gate';
 import { resolveTier } from '../../billing/credit-balance';
 import { loggers } from '../../logging/logger-config';
 import { defaultAppBillingDeps } from './app-billing';
+import type { UserPayerResult } from '../../billing/sandbox-payer';
 import { isAppHostingEnabled, resolveHitStampIntervalSeconds } from './app-hosting-env';
 import {
   DAILY_CAP_PARK_REASON,
@@ -75,11 +76,13 @@ export interface AppRouterDeps {
   findAppByCustomHost: (hostname: string) => Promise<PublishedAppRouteRow | null>;
   /**
    * Who pays — resolved the SAME way the awake-seconds meter resolves it
-   * (`drives.ownerId`, via `resolveEnvPayerId`). Null means unresolvable (a stale
+   * (the drive's payer, via `resolveEnvPayer`). Null means unresolvable (a stale
    * read of a drive mid-delete); the caller refuses rather than substituting a
    * payer or falling back to a denormalized column the meter does not charge.
+   * An org drive answers the named `org_billing_pending` refusal (WAL-9 interim,
+   * until the C3 lane), and the router refuses it the same way.
    */
-  resolvePayerId: (input: { driveId: string }) => Promise<string | null>;
+  resolvePayerId: (input: { driveId: string }) => Promise<UserPayerResult | null>;
   /** The payer's subscription tier — the allowance the balance is judged against. */
   resolveTier: (userId: string) => Promise<string>;
   /** Whether the payer can still spend. */
@@ -107,7 +110,7 @@ export interface PublishedAppRouteRow {
   /**
    * The app's owning drive — NOT `published_apps.ownerId`. The balance gate must
    * ask about the SAME payer the awake-seconds meter charges, and the meter
-   * charges `drives.ownerId` (via `resolveEnvPayerId`), never the denormalized
+   * charges `drives.ownerId` (via `resolveEnvPayer`), never the denormalized
    * `ownerId` column, which exists only for indexing and cascade reach and can
    * drift from the drive's real owner (a transfer, a stale write). Gating on the
    * wrong payer would decide admission against one person's balance while the
@@ -265,6 +268,8 @@ function refusalForWake(wake: WakePublishedAppRunResult, driveId: string, envId:
         case 'disabled':
           return { kind: 'unavailable', reason: 'hosting_disabled', driveId, envId };
         case 'unresolved_payer':
+        // WAL-9 interim: the org pays and nothing can charge it yet (C3 lane).
+        case 'org_billing_pending':
           // No honest payer, so no start. Refusing costs one visitor a page;
           // serving would bill a machine to somebody who may not own the drive.
           return { kind: 'unavailable', reason: 'failed', driveId, envId };
@@ -336,10 +341,12 @@ async function decideForRow(app: PublishedAppRouteRow, deps: AppRouterDeps): Pro
   // than a hope. `decideAppRoute` still re-checks the tier itself, so the skip
   // here can never quietly become the policy.
   if (app.tier === 'metered') {
-    const payerId = await deps.resolvePayerId({ driveId: app.driveId });
-    // An unresolvable drive fails CLOSED here — the router has no honest payer to
-    // ask, so it refuses exactly as the wake gate does for the same condition,
-    // rather than assuming a balance nobody can vouch for.
+    const payer = await deps.resolvePayerId({ driveId: app.driveId });
+    // An unresolvable drive — or an org payer, which nothing can charge until the C3
+    // lane (WAL-9 interim) — fails CLOSED here: the router has no person to ask, so it
+    // refuses exactly as the wake gate does, rather than assuming a balance nobody can
+    // vouch for or asking the lead's.
+    const payerId = payer?.ok ? payer.userId : null;
     const balanceOk = payerId
       ? await deps.hasSpendableBalance(payerId, await deps.resolveTier(payerId))
       : false;

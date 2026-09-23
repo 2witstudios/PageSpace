@@ -28,6 +28,7 @@ import {
 } from '@pagespace/lib/services/sandbox/containment';
 import { getSandboxSessionSecret } from '@pagespace/lib/services/sandbox/machine-session-manager';
 import { defaultSandboxBillingDeps } from '@pagespace/lib/services/sandbox/sandbox-billing';
+import { lookupDriveBillingFacts, requireUserPayer, resolveSessionPayer } from '@pagespace/lib/billing/sandbox-payer';
 import { acquireCodeExecutionSlot, releaseCodeExecutionSlot } from '@pagespace/lib/services/sandbox/quota';
 import { createSpritesSandboxClient, createSpriteHandleCache, type SpritesSdk } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import { createSpriteSandboxHost } from '@pagespace/lib/services/sandbox/sandbox-client/sprite-sandbox-host';
@@ -423,12 +424,16 @@ const shellCheckAuth = buildShellCheckAuth({
     return { allowed: true, session: subject };
   },
   resolvePayer: async (session) => {
-    // Payer = the session's DRIVE owner; a global-assistant session (or a
+    // Payer = the session's DRIVE's payer through the one seam (WAL-9: the org for an org
+    // drive, which is refused by name until the C3 lane); a global-assistant session (or a
     // vanished drive) attributes to the session owner instead.
-    if (session.driveId === null) return { payerId: session.ownerId, driveId: null };
-    const [drive] = await db.select({ ownerId: drives.ownerId }).from(drives).where(eq(drives.id, session.driveId)).limit(1);
-    if (!drive) return { payerId: session.ownerId, driveId: null };
-    return { payerId: drive.ownerId, driveId: session.driveId };
+    const facts = session.driveId === null ? null : await lookupDriveBillingFacts(session.driveId);
+    const payer = await resolveSessionPayer({
+      driveId: session.driveId,
+      ownerId: session.ownerId,
+      lookupDriveBillingFacts: async () => facts,
+    });
+    return { payer: requireUserPayer(payer), driveId: facts ? session.driveId : null };
   },
   getUser: async (userId) => {
     const [userRow] = await db

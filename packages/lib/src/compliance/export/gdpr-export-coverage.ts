@@ -349,6 +349,9 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     // the same billing row it always was, now alongside org and drive wallets.
     'wallets',
     'wallet_consumer_caps',
+    // Funds moved into a drive/agent wallet (0307): the wallet's own record, beside the
+    // ledger rows below. Whether a donor's legs join the export is X-2's decision.
+    'wallet_funding_legs',
     'credit_holds',
     'credit_ledger',
   ),

@@ -82,7 +82,7 @@ const request = (method: 'PUT' | 'DELETE' | 'PATCH', body: unknown) =>
   });
 
 const product = { id: DRIVE, name: 'Product', slug: 'product' };
-const deferred = { status: 'deferred' as const, leafId: 't1759m6mfxrj5hyaleu1mdqs' as const };
+const applied = { status: 'applied' as const, direction: 'into-org' as const, movedBytes: 0, deltas: [] };
 
 describe('/api/drives/[driveId]/org', () => {
   beforeEach(() => {
@@ -98,13 +98,13 @@ describe('/api/drives/[driveId]/org', () => {
         ok: true,
         drive: { ...product, orgId: NORTHWIND } as never,
         orgId: NORTHWIND,
-        storageReattribution: deferred,
+        storageReattribution: applied,
       });
 
       const response = await PUT(request('PUT', { orgId: NORTHWIND }), context);
 
       expect(response.status).toBe(200);
-      expect(await response.json()).toMatchObject({ drive: { id: DRIVE, orgId: NORTHWIND }, storageReattribution: deferred });
+      expect(await response.json()).toMatchObject({ drive: { id: DRIVE, orgId: NORTHWIND }, storageReattribution: applied });
       expect(moveDriveToOrg).toHaveBeenCalledWith(MARCUS, DRIVE, { orgId: NORTHWIND }, orgDriveServiceDeps);
       expect(auditRequest).toHaveBeenCalledWith(
         expect.any(Request),
@@ -112,7 +112,7 @@ describe('/api/drives/[driveId]/org', () => {
           userId: MARCUS,
           resourceType: 'drive',
           resourceId: DRIVE,
-          details: { operation: 'org_move_in', orgId: NORTHWIND, storageReattribution: 'deferred' },
+          details: { operation: 'org_move_in', orgId: NORTHWIND, storageReattribution: 'applied' },
         })
       );
       expect(broadcastDriveEvent).toHaveBeenCalledWith(
@@ -126,7 +126,7 @@ describe('/api/drives/[driveId]/org', () => {
         ok: true,
         drive: { ...product, orgId: NORTHWIND } as never,
         orgId: NORTHWIND,
-        storageReattribution: deferred,
+        storageReattribution: applied,
       });
       vi.mocked(getDriveRecipientUserIds).mockRejectedValueOnce(new Error('connection reset'));
 
@@ -161,7 +161,7 @@ describe('/api/drives/[driveId]/org', () => {
         ok: true,
         drive: product as never,
         orgId: NORTHWIND,
-        storageReattribution: deferred,
+        storageReattribution: applied,
       });
 
       await PUT(request('PUT', { orgId: NORTHWIND, orgVisibility: 'RESTRICTED' }), context);
@@ -202,7 +202,7 @@ describe('/api/drives/[driveId]/org', () => {
           ok: true,
           drive: { ...product, orgId: null } as never,
           orgId: NORTHWIND,
-          storageReattribution: deferred,
+          storageReattribution: applied,
         });
 
         const response = await DELETE(request('DELETE', { implicitMembers }), context);
@@ -211,7 +211,7 @@ describe('/api/drives/[driveId]/org', () => {
         expect(moveDriveOutOfOrg).toHaveBeenCalledWith(PRIYA, DRIVE, { implicitMembers }, orgDriveServiceDeps);
         expect(auditRequest).toHaveBeenCalledWith(
           expect.any(Request),
-          expect.objectContaining({ details: { operation: 'org_move_out', orgId: NORTHWIND, storageReattribution: 'deferred' } })
+          expect.objectContaining({ details: { operation: 'org_move_out', orgId: NORTHWIND, storageReattribution: 'applied' } })
         );
       }
     );

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import type { GateResult } from '@pagespace/lib/billing/credit-core';
+import type { SpendRefusal } from '@pagespace/lib/billing/credit-gate';
 
 /**
  * Map a denied credit-gate result to the HTTP error the AI routes return. Two
@@ -25,6 +26,16 @@ export function creditGatePayload(reason: GateResult['reason']): {
       message: 'Too many AI requests in flight at once. Wait for one to finish, then try again.',
     };
   }
+  if (reason === 'source_refused') {
+    // SPEND-4: the source the call named cannot pay (empty, paused, not this person's to
+    // spend, or none named where several exist). Nothing was reserved or charged, and the
+    // gate did not switch wallets; the body names the source and the other options.
+    return {
+      status: 402,
+      error: 'spend_source_refused',
+      message: 'The credit source for this request cannot cover it. Choose another source to continue.',
+    };
+  }
   if (reason === 'daily_cap_exceeded') {
     return {
       status: 429,
@@ -39,8 +50,16 @@ export function creditGatePayload(reason: GateResult['reason']): {
   };
 }
 
-/** Convenience: the standard JSON response for a denied gate result. */
-export function creditGateErrorResponse(reason: GateResult['reason']): NextResponse {
+/**
+ * Convenience: the standard JSON response for a denied gate result. A refused source
+ * (SPEND-4) also carries the refused source, why, and the sources the person may pick.
+ */
+export function creditGateErrorResponse(reason: GateResult['reason'], refusal?: SpendRefusal): NextResponse {
   const { status, error, message } = creditGatePayload(reason);
-  return NextResponse.json({ error, message }, { status });
+  return NextResponse.json(
+    refusal
+      ? { error, message, source: refusal.source, refusalReason: refusal.reason, options: refusal.options }
+      : { error, message },
+    { status },
+  );
 }

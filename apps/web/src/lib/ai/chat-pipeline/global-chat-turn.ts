@@ -32,6 +32,8 @@ import { requiresProSubscription, createSubscriptionRequiredResponse, createAdmi
 import { resolveProviderModel } from '@/lib/ai/core/ai-providers-config';
 import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { driveSpend } from '@pagespace/lib/billing/spend-target';
+import { UNGATED_TURN_CREDIT, turnCreditAfterGate, type TurnCredit } from './turn-credit';
 import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
 import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
@@ -212,6 +214,8 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
   let browserSessionId = '';
   // The credit-gate reservation for this request, released when usage is billed.
   let holdId: string | undefined;
+  // What the gate named: the wallet, the source and the funding tier (see turn-credit).
+  let credit: TurnCredit = UNGATED_TURN_CREDIT;
   // Becomes true once the stream owns the hold (its onFinish will release it via
   // trackUsage). Until then, any early return/throw below must release the hold so a
   // pre-generation exit (auth/permission/provider/save failure) doesn't strand the
@@ -432,8 +436,14 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
       // A solo /help never reaches streamText (see isSoloHelpRequest below), so
       // it costs nothing — skip the gate entirely rather than take a hold that
       // would need special-cased release on the short-circuit path.
+      // The global assistant spends in the drive the person is in (SPEND-7), resolved from
+      // the server-checked location; with no drive it spends personal credits (SPEND-8).
+      // The per-conversation chosen source has no storage yet, so none is named.
+      const locationSpend = driveSpend(locationContext?.currentDrive?.id);
+      credit = { spend: locationSpend };
       if (!isMeteringExempt(gateProvider) && !isSoloHelpRequest) {
         const creditGate = await canConsumeAI(userId, (gateUser?.subscriptionTier ?? 'free') as SubscriptionTier, {
+          spend: locationSpend,
           estCostCents: estimateChatHoldCentsForModel(selectedModel),
           maxInFlight: MAX_CHAT_INFLIGHT,
         });
@@ -443,9 +453,10 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
             reason: creditGate.reason,
             conversationId,
           });
-          return creditGateErrorResponse(creditGate.reason);
+          return creditGateErrorResponse(creditGate.reason, creditGate.refusal);
         }
         holdId = creditGate.holdId;
+        credit = turnCreditAfterGate(locationSpend, creditGate);
         availableBalanceCents = creditGate.balanceSnapshot?.netSpendableCents ?? null;
       }
     }
@@ -707,7 +718,8 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
     const admission = resolveGenerationAdmission({
       provider: currentProvider,
       model: currentModel,
-      subscriptionTier: userSubscriptionTier,
+      // WAL-8: the tier of whoever funds this call, as the gate resolved it.
+      subscriptionTier: credit.entitlementTier ?? userSubscriptionTier,
       isAdmin: auth.role === 'admin',
       requiresProSubscription,
     });
@@ -1372,6 +1384,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
               isAdmin: auth.role === 'admin',
               subscriptionTier: userSubscriptionTier,
               imageGenerationModel: userImageGenerationModel ?? DEFAULT_IMAGE_MODEL,
+              creditSpend: credit,
               chatSource: { type: 'global' as const },
               authSessionId: authSessionIdOf(auth),
               // Worker-dispatch chain depth (spawn_session/send_session) — the
@@ -1527,6 +1540,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
             // completion. Cost still settles regardless (the provider charged us).
             success: agentRun?.finalOutcome !== 'exhausted',
             holdId,
+            walletId: credit.walletId,
             contextMessages: contextCalculation.messageIds,
             contextSize: contextCalculation.totalTokens,
             systemPromptTokens: contextCalculation.systemPromptTokens,

@@ -1,6 +1,6 @@
 import { findOrphanedFileRecords, deleteFileRecords } from '@pagespace/lib/compliance/file-cleanup/orphan-detector';
 import { createSystemFileDeleteToken } from '@pagespace/lib/services/validated-service-token';
-import { updateStorageUsage, computeStorageCreditOnUnlink } from '@pagespace/lib/services/storage-limits';
+import { updateStorageUsage, computeStorageCreditOnUnlink, findDriveOrgIds } from '@pagespace/lib/services/storage-limits';
 
 type Database = typeof import('@pagespace/db/db').db;
 
@@ -132,9 +132,15 @@ export async function reapOrphanedFiles(database: Database, options?: ReapOption
   // cascade, skip rows another reap already removed (race-safe), skip DB-only
   // stubs whose bytes were never persisted — and issue exactly ONE credit per
   // blob, symmetric with the single first-store charge.
+  // WAL-9, O-9: an org drive's bytes never charged the uploader, so they are never credited
+  // back to them either. Read once for every reaped orphan's drive.
+  const driveOrgIds = await findDriveOrgIds(
+    reapedOrphans.flatMap((o) => (o.driveId && deletedIdSet.has(o.id) ? [o.driveId] : [])),
+  );
   for (const orphan of reapedOrphans) {
     const credit = computeStorageCreditOnUnlink({
       createdBy: orphan.createdBy,
+      driveOrgId: orphan.driveId ? (driveOrgIds.get(orphan.driveId) ?? null) : null,
       sizeBytes: orphan.sizeBytes,
       deletedByThisCall: deletedIdSet.has(orphan.id),
       hadPhysicalBlob: true,

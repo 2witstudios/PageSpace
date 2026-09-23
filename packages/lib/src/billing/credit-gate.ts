@@ -24,7 +24,7 @@ import { creditHolds, creditLedger } from '@pagespace/db/schema/credits';
 import { wallets, personalRootWalletOf, PERSONAL_ROOT_WALLET_ARBITER } from '@pagespace/db/schema/wallets';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { subscriptions } from '@pagespace/db/schema/subscriptions';
-import { and, eq, gt, gte, inArray, sql } from '@pagespace/db/operators';
+import { and, eq, gt, gte, inArray, or, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
 import {
   evaluateGate,
@@ -47,6 +47,15 @@ import { readSpendableCents } from './credit-balance';
 import { tierAllowanceCents } from './money-model';
 import { isSubscriptionTier } from './subscription-tiers';
 import { ensurePersonalRootWalletId } from './personal-wallet';
+import { ORGS_ENABLED } from '../organizations/orgs-enabled';
+import {
+  personalRootDecision,
+  resolvesDriveWallets,
+  walletSpendableCents,
+  type SpendTarget,
+  type WalletBalanceFacts,
+} from './spend-target';
+import type { RefusalReason, SkipReason, SpendSourceKind } from './wallet-core';
 import type { SubscriptionTier } from '../services/subscription-utils';
 
 // The partial unique index credit_ledger_stripe_ref_unique is defined WHERE
@@ -177,6 +186,36 @@ export interface GateOptions {
    * backstop that skipDailyCap exists to bypass.
    */
   dailyCapCeilingCents?: number;
+  /**
+   * WHERE the call spends, named before it runs (SPEND-1): the drive of the session it runs
+   * in (SPEND-7) and the source the caller chose, or {@link PERSONAL_SPEND} for a call with
+   * no drive (SPEND-8). Required, so no caller can reach a wallet it did not name: the gate
+   * reserves on exactly the wallet this resolves to and never switches (SPEND-4).
+   */
+  spend: SpendTarget;
+}
+
+/**
+ * A refused source (SPEND-4): the source that was refused, why, and the other sources this
+ * person may pick that cover the call. Nothing was reserved or charged.
+ */
+export interface SpendRefusal {
+  source: SpendSourceKind | null;
+  reason: RefusalReason | SkipReason;
+  options: SpendSourceKind[];
+}
+
+/**
+ * The gate's answer. On an allowed call it names the wallet the hold was placed on
+ * (`walletId`, WAL-5), which the caller threads to settlement with the hold, the source it
+ * spends, and the tier whose entitlements govern the call (WAL-8). A refused source carries
+ * `refusal` with reason `source_refused`.
+ */
+export interface CreditGateResult extends GateResult {
+  walletId?: string;
+  spendSource?: SpendSourceKind;
+  entitlementTier?: SubscriptionTier;
+  refusal?: SpendRefusal;
 }
 
 /** Normalize the caller-supplied daily ceiling: zero/negative/absent → null (off). */
@@ -186,11 +225,85 @@ function callerCeilingCents(opts: GateOptions): number | null {
     : null;
 }
 
+type GateTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+interface CallBounds {
+  estCost: number;
+  maxInFlight: number | null;
+  expiresAt: Date;
+  dailyCap: number | null;
+  dayStart: Date;
+}
+
+/** The per-call bounds every wallet path applies: reservation, in-flight cap, hold expiry, daily cap. */
+function callBounds(tier: SubscriptionTier, opts: GateOptions, now: Date): CallBounds {
+  const estCost = reservationCents(opts.estCostCents ?? CREDIT_HOLD_ESTIMATE_CENTS);
+  // Free users are capped on concurrent in-flight calls; paid tiers are bounded by
+  // credits alone UNLESS the caller supplies its own cap (voice passes one to bound
+  // concurrent paid voice spend). When both apply, the tighter (min) cap wins.
+  const caps = [
+    tier === 'free' ? MAX_FREE_INFLIGHT : null,
+    opts.maxInFlight ?? null,
+  ].filter((c): c is number => c !== null);
+  const maxInFlight = caps.length > 0 ? Math.min(...caps) : null;
+  const expiresAt = new Date(holdExpiresAt(now.getTime(), CREDIT_HOLD_TTL_SECONDS * 1000));
+
+  // Per-user/day exposure cap (null = disabled, the default). Resolved here; the day's
+  // charged total is summed inside the gate transaction on the allow path. A caller
+  // ceiling tightens (never loosens) the tier cap and applies even when the tier cap
+  // is disabled or skipped — see GateOptions.dailyCapCeilingCents.
+  const tierDailyCap = opts.skipDailyCap ? null : dailyExposureCapForTier(tier);
+  const callerCeiling = callerCeilingCents(opts);
+  const dailyCap =
+    tierDailyCap !== null && callerCeiling !== null
+      ? Math.min(tierDailyCap, callerCeiling)
+      : (tierDailyCap ?? callerCeiling);
+  return { estCost, maxInFlight, expiresAt, dailyCap, dayStart: startOfUtcDay(now) };
+}
+
+/**
+ * Per-user/day exposure cap: a runaway loop can stay within the in-flight cap yet
+ * accrue real cost all day. Checked only on the allow path (the credit gate denied
+ * otherwise) and only when a cap is configured. Sums chargeMillicents — the full
+ * intended charge, positive on usage rows and NULL elsewhere (so monthly/topup/debt
+ * rows don't count) — rather than appliedCents, so an in-debt user who keeps spending
+ * real provider money is still bounded. It bounds the PERSON, whichever wallet pays:
+ * the ledger and holds are summed by the caller's userId. Same transaction →
+ * consistent read. Returns the denial, or null; NO hold is inserted on a denial.
+ */
+async function dailyCapDenial(
+  tx: GateTx,
+  userId: string,
+  input: { dailyCap: number | null; dayStart: Date; estCost: number; userReserved: number },
+): Promise<CreditGateResult | null> {
+  if (input.dailyCap === null) return null;
+  const chargedAgg = await tx
+    .select({ chargedMc: sql<number>`coalesce(sum(${creditLedger.chargeMillicents}), 0)` })
+    .from(creditLedger)
+    .where(and(
+      eq(creditLedger.userId, userId),
+      inArray(creditLedger.entryType, ['usage', 'adjustment']),
+      gte(creditLedger.createdAt, input.dayStart),
+    ));
+  const dailyChargedCents = Math.max(0, Math.floor(Number(chargedAgg[0]?.chargedMc ?? 0) / 1000));
+  // Add this user's still-active hold reservations to the settled total: a burst of
+  // concurrent requests reserves holds that haven't reached the ledger yet, so without
+  // this each serialized gate check would see the same dailyChargedCents and up to
+  // maxInFlight estimates could blow past the cap before any settles. estCost is THIS
+  // call's reservation (not yet counted).
+  const cap = evaluateDailyCap({
+    dailyChargedCents: dailyChargedCents + input.userReserved,
+    estCostCents: input.estCost,
+    capCents: input.dailyCap,
+  });
+  return cap.allowed ? null : { allowed: false, reason: cap.reason };
+}
+
 export async function canConsumeAI(
   userId: string,
-  tier: SubscriptionTier = 'free',
-  opts: GateOptions = {},
-): Promise<GateResult> {
+  tier: SubscriptionTier,
+  opts: GateOptions,
+): Promise<CreditGateResult> {
   if (!isBillingEnabled()) {
     // Billing-off deployments (tenant/onprem) have no credit ledger, but a
     // caller-supplied daily ceiling must still bind: a metered provider (e.g.
@@ -242,6 +355,85 @@ export async function canConsumeAI(
     });
   }
 
+  // Name the wallet before anything else (SPEND-1). A refusal reserves nothing and charges
+  // nothing (SPEND-4). Own credits are the personal root wallet, whose lifecycle (lazy
+  // init, starter grant, gate-driven refill) runs below exactly as before wallets; a drive
+  // wallet or a seat on the org pool is reserved by gateSharedWallet.
+  const reservation = reservationCents(opts.estCostCents ?? CREDIT_HOLD_ESTIMATE_CENTS);
+  // The drive-wallet reads (and the permissions they go through) load only when a drive
+  // session can resolve to a shared wallet: while orgs are dark, and for a call with no
+  // drive, the personal root is answered with no reads, exactly as before wallets.
+  const decision = resolvesDriveWallets({ orgsEnabled: ORGS_ENABLED, target: opts.spend })
+    ? await (await import('./spend-resolution')).resolveCallSpend({
+        userId,
+        consumerTier: tier,
+        target: opts.spend,
+        reservationCents: reservation,
+      })
+    : personalRootDecision(tier);
+  if (decision.kind !== 'spend') {
+    return {
+      allowed: false,
+      reason: 'source_refused',
+      refusal: {
+        source: decision.kind === 'refuse' ? decision.source : 'drive_wallet',
+        reason: decision.reason,
+        options: decision.kind === 'refuse' ? decision.options.map((o) => o.source) : [],
+      },
+    };
+  }
+  if (decision.source !== 'own_credits') {
+    return gateSharedWallet(userId, tier, opts, {
+      walletId: decision.walletId,
+      source: decision.source,
+      entitlementTier: decision.entitlementTier,
+    });
+  }
+  const personalResult = await gatePersonalRoot(userId, tier, opts);
+  return personalResult.allowed
+    ? { ...personalResult, spendSource: 'own_credits', entitlementTier: decision.entitlementTier }
+    : personalResult;
+}
+
+/**
+ * WAL-8: the tier whose entitlements (the pro-model gate) govern a call that spends from
+ * `spend` — the wallet's ROOT owner's tier on a shared leg (the org inside org drives, the
+ * drive owner on a personal drive's wallet), the caller's own on their own credits. For
+ * the routes that decide model entitlement BEFORE they gate; a route that gates first
+ * reads `CreditGateResult.entitlementTier` instead. Read-only: it reserves nothing.
+ *
+ * Answers `tier` with no reads while orgs are dark or for a call with no drive, and when
+ * the target names no spendable wallet — the gate refuses that call itself.
+ */
+export async function resolveEntitlementTier(
+  userId: string,
+  tier: SubscriptionTier,
+  spend: SpendTarget,
+  estCostCents: number = CREDIT_HOLD_ESTIMATE_CENTS,
+): Promise<SubscriptionTier> {
+  if (!resolvesDriveWallets({ orgsEnabled: ORGS_ENABLED, target: spend })) return tier;
+  const decision = await (await import('./spend-resolution')).resolveCallSpend({
+    userId,
+    consumerTier: tier,
+    target: spend,
+    reservationCents: reservationCents(estCostCents),
+    recordRefusal: false,
+  });
+  return decision.kind === 'spend' ? decision.entitlementTier : tier;
+}
+
+/**
+ * The caller's personal root wallet: lazy-init, the one-time starter grant, the gate-driven
+ * refill for renewal-less paid accounts, then the locked decision and hold. Unchanged from
+ * before wallets except that the reservation it nets is what is held against THIS wallet
+ * (and its child wallets, which draw their allocation from it), while the in-flight count
+ * stays the caller's own calls.
+ */
+async function gatePersonalRoot(
+  userId: string,
+  tier: SubscriptionTier,
+  opts: GateOptions,
+): Promise<CreditGateResult> {
   const now = new Date();
 
   const readBalance = async (): Promise<BalanceRow | null> => {
@@ -452,34 +644,13 @@ export async function canConsumeAI(
     row = await readBalance();
   }
 
-  const estCost = reservationCents(opts.estCostCents ?? CREDIT_HOLD_ESTIMATE_CENTS);
-  // Free users are capped on concurrent in-flight calls; paid tiers are bounded by
-  // credits alone UNLESS the caller supplies its own cap (voice passes one to bound
-  // concurrent paid voice spend). When both apply, the tighter (min) cap wins.
-  const caps = [
-    tier === 'free' ? MAX_FREE_INFLIGHT : null,
-    opts.maxInFlight ?? null,
-  ].filter((c): c is number => c !== null);
-  const maxInFlight = caps.length > 0 ? Math.min(...caps) : null;
-  const expiresAt = new Date(holdExpiresAt(now.getTime(), CREDIT_HOLD_TTL_SECONDS * 1000));
-
-  // Per-user/day exposure cap (null = disabled, the default). Resolved here; the day's
-  // charged total is summed inside the transaction below on the allow path. A caller
-  // ceiling tightens (never loosens) the tier cap and applies even when the tier cap
-  // is disabled or skipped — see GateOptions.dailyCapCeilingCents.
-  const tierDailyCap = opts.skipDailyCap ? null : dailyExposureCapForTier(tier);
-  const callerCeiling = callerCeilingCents(opts);
-  const dailyCap =
-    tierDailyCap !== null && callerCeiling !== null
-      ? Math.min(tierDailyCap, callerCeiling)
-      : (tierDailyCap ?? callerCeiling);
-  const dayStart = startOfUtcDay(now);
+  const { estCost, maxInFlight, expiresAt, dailyCap, dayStart } = callBounds(tier, opts, now);
 
   // Authoritative decision + reservation, atomic under a balance row lock. The lock
   // serializes this user's concurrent requests so they observe each other's holds —
   // two simultaneous calls can't both pass a check that only one call's worth of
   // credit can cover, and the free-tier in-flight count can't be undercounted.
-  const result = await db.transaction(async (tx): Promise<GateResult> => {
+  const result = await db.transaction(async (tx): Promise<CreditGateResult> => {
     const balRows = await tx
       .select({
         id: wallets.id,
@@ -493,19 +664,28 @@ export async function canConsumeAI(
       .for('update');
     const bal = balRows[0] ?? null;
 
-    // Sum & count this user's still-active holds (calls in flight). Expired holds
-    // are excluded from both — they no longer reserve spend and are reclaimed by
-    // the reconcile cron — so a crashed stream can't permanently shrink spendable
-    // or block the in-flight cap forever.
+    // Still-active holds (calls in flight). Expired holds are excluded — they no longer
+    // reserve spend and are reclaimed by the reconcile cron — so a crashed stream can't
+    // permanently shrink spendable or block the in-flight cap forever.
+    //   - reserved: what is held against THIS wallet (WAL-5), including holds on its child
+    //     wallets, whose allocation is drawn from it as they spend.
+    //   - inFlight / userReserved: this caller's own calls, on any wallet — the in-flight
+    //     cap and the daily exposure backstop bound a person, not a wallet.
+    const heldAgainstWallet = bal
+      ? sql`(${creditHolds.walletId} = ${bal.id} OR ${creditHolds.walletId} IN (SELECT ${wallets.id} FROM ${wallets} WHERE ${wallets.parentWalletId} = ${bal.id}))`
+      : sql`false`;
+    const heldByUser = sql`${creditHolds.userId} = ${userId}`;
     const holdAgg = await tx
       .select({
-        reserved: sql<number>`coalesce(sum(${creditHolds.estCents}), 0)`,
-        inFlight: sql<number>`count(*)`,
+        reserved: sql<number>`coalesce(sum(${creditHolds.estCents}) FILTER (WHERE ${heldAgainstWallet}), 0)`,
+        inFlight: sql<number>`count(*) FILTER (WHERE ${heldByUser})`,
+        userReserved: sql<number>`coalesce(sum(${creditHolds.estCents}) FILTER (WHERE ${heldByUser}), 0)`,
       })
       .from(creditHolds)
-      .where(and(eq(creditHolds.userId, userId), gt(creditHolds.expiresAt, now)));
+      .where(and(or(heldByUser, heldAgainstWallet), gt(creditHolds.expiresAt, now)));
     const reserved = Number(holdAgg[0]?.reserved ?? 0);
     const inFlight = Number(holdAgg[0]?.inFlight ?? 0);
+    const userReserved = Number(holdAgg[0]?.userReserved ?? 0);
 
     // Rollover: the monthly bucket is always spendable — credits never expire. A paid user
     // whose window has lapsed continues to spend from their carried balance; the renewal
@@ -545,28 +725,8 @@ export async function canConsumeAI(
     // rows don't count) — rather than appliedCents, so an in-debt user who keeps spending
     // real provider money is still bounded. Same transaction → consistent read. NO hold
     // is inserted on a cap denial.
-    if (dailyCap !== null) {
-      const chargedAgg = await tx
-        .select({ chargedMc: sql<number>`coalesce(sum(${creditLedger.chargeMillicents}), 0)` })
-        .from(creditLedger)
-        .where(and(
-          eq(creditLedger.userId, userId),
-          inArray(creditLedger.entryType, ['usage', 'adjustment']),
-          gte(creditLedger.createdAt, dayStart),
-        ));
-      const dailyChargedCents = Math.max(0, Math.floor(Number(chargedAgg[0]?.chargedMc ?? 0) / 1000));
-      // Add this user's still-active hold reservations (`reserved`, computed above) to the
-      // settled total: a burst of concurrent requests reserves holds that haven't reached
-      // the ledger yet, so without this each serialized gate check would see the same
-      // dailyChargedCents and up to maxInFlight estimates could blow past the cap before
-      // any settles. estCost is THIS call's reservation (not yet in `reserved`).
-      const cap = evaluateDailyCap({
-        dailyChargedCents: dailyChargedCents + reserved,
-        estCostCents: estCost,
-        capCents: dailyCap,
-      });
-      if (!cap.allowed) return { allowed: false, reason: cap.reason };
-    }
+    const capDenied = await dailyCapDenial(tx, userId, { dailyCap, dayStart, estCost, userReserved });
+    if (capDenied) return capDenied;
 
     // Reserve this call's estimated spend AND register it as one in-flight call.
     // consumeCredits deletes the hold at settle; a crashed stream leaves it for the
@@ -588,6 +748,7 @@ export async function canConsumeAI(
     return {
       ...result,
       holdId: inserted[0]?.id,
+      walletId: bal.id,
       balanceSnapshot: bal ? { netSpendableCents } : undefined,
     };
   });
@@ -601,6 +762,114 @@ export async function canConsumeAI(
   // no longer affects the displayed balance, so no gate-time push is needed.
 
   return result;
+}
+
+const SHARED_WALLET_FACTS = {
+  id: wallets.id,
+  status: wallets.status,
+  parentWalletId: wallets.parentWalletId,
+  monthlyRemainingCents: wallets.monthlyRemainingCents,
+  monthlyAllowanceCents: wallets.monthlyAllowanceCents,
+  spentCents: wallets.spentCents,
+  topupRemainingCents: wallets.topupRemainingCents,
+  debtCents: wallets.debtCents,
+} as const;
+
+/**
+ * A shared wallet the caller chose (WAL-5, WAL-6a): a drive wallet, or the org pool behind
+ * a seat. The reservation is taken on THAT wallet under its row lock (and its parent's,
+ * whose allocation a drive wallet draws — child first, the order settlement locks in), and
+ * refused when the wallet cannot cover it, so a wallet is never spent past zero by design.
+ * A wallet that cannot cover the call is refused, never swapped for another (SPEND-4).
+ * No lazy-init and no refill here: those are the personal root's lifecycle, and a shared
+ * wallet's allocation and refill belong to its funder.
+ */
+async function gateSharedWallet(
+  userId: string,
+  tier: SubscriptionTier,
+  opts: GateOptions,
+  chosen: { walletId: string; source: SpendSourceKind; entitlementTier: SubscriptionTier },
+): Promise<CreditGateResult> {
+  const now = new Date();
+  const { estCost, maxInFlight, expiresAt, dailyCap, dayStart } = callBounds(tier, opts, now);
+  const refused = (reason: RefusalReason): CreditGateResult => ({
+    allowed: false,
+    reason: 'source_refused',
+    refusal: { source: chosen.source, reason, options: [] },
+  });
+
+  return db.transaction(async (tx): Promise<CreditGateResult> => {
+    // Lock order is CHILD, then parent — the order settlement uses — so a gate and a
+    // settle on the same drive wallet can never wait on each other in a cycle. A root
+    // wallet's own paths lock only the root.
+    const lock = async (id: string): Promise<WalletBalanceFacts | null> => {
+      const rows = await tx.select(SHARED_WALLET_FACTS).from(wallets).where(eq(wallets.id, id)).for('update');
+      return rows[0] ?? null;
+    };
+    const wallet = await lock(chosen.walletId);
+    if (!wallet) return refused('source_unavailable');
+    const parent = wallet.parentWalletId ? await lock(wallet.parentWalletId) : null;
+    if (wallet.status === 'paused') return refused('source_paused');
+
+    // Holds reserved against this wallet and (for a drive wallet) against its parent by
+    // everything else, plus this caller's own in-flight calls on any wallet.
+    const parentId = parent?.id ?? null;
+    const heldByUser = sql`${creditHolds.userId} = ${userId}`;
+    const heldOnWallet = sql`${creditHolds.walletId} = ${wallet.id}`;
+    const heldOnChildren = sql`${creditHolds.walletId} IN (SELECT ${wallets.id} FROM ${wallets} WHERE ${wallets.parentWalletId} = ${wallet.id})`;
+    const heldAgainstParent = parentId
+      ? sql`${creditHolds.walletId} <> ${wallet.id} AND (${creditHolds.walletId} = ${parentId} OR ${creditHolds.walletId} IN (SELECT ${wallets.id} FROM ${wallets} WHERE ${wallets.parentWalletId} = ${parentId}))`
+      : sql`false`;
+    const holdAgg = await tx
+      .select({
+        own: sql<number>`coalesce(sum(${creditHolds.estCents}) FILTER (WHERE ${heldOnWallet} OR ${heldOnChildren}), 0)`,
+        parentReserved: sql<number>`coalesce(sum(${creditHolds.estCents}) FILTER (WHERE ${heldAgainstParent}), 0)`,
+        inFlight: sql<number>`count(*) FILTER (WHERE ${heldByUser})`,
+        userReserved: sql<number>`coalesce(sum(${creditHolds.estCents}) FILTER (WHERE ${heldByUser}), 0)`,
+      })
+      .from(creditHolds)
+      .where(and(or(heldByUser, heldOnWallet, heldOnChildren, heldAgainstParent), gt(creditHolds.expiresAt, now)));
+    const ownReserved = Number(holdAgg[0]?.own ?? 0);
+    const parentReserved = Number(holdAgg[0]?.parentReserved ?? 0);
+    const inFlight = Number(holdAgg[0]?.inFlight ?? 0);
+    const userReserved = Number(holdAgg[0]?.userReserved ?? 0);
+
+    // What this wallet can still cover, already net of its debt and every hold against it
+    // (and, for a drive wallet, of what its parent can still fund) — then evaluateGate's
+    // one rule: spendable above the reserve floor after this call's reservation.
+    const spendable = walletSpendableCents({
+      wallet,
+      ownReservedCents: ownReserved,
+      parent: parent ? { wallet: parent, reservedCents: parentReserved } : null,
+    });
+    const result = evaluateGate({
+      billingEnabled: true,
+      balance: { monthlyCents: spendable, topupCents: 0, debtCents: 0 },
+      reserveFloorCents: RESERVE_FLOOR_CENTS,
+      reservedCents: 0,
+      estCostCents: estCost,
+      inFlightCount: inFlight,
+      maxInFlight,
+    });
+    if (!result.allowed) return result;
+
+    const capDenied = await dailyCapDenial(tx, userId, { dailyCap, dayStart, estCost, userReserved });
+    if (capDenied) return capDenied;
+
+    const inserted = await tx
+      .insert(creditHolds)
+      .values({ userId, walletId: wallet.id, estCents: estCost, expiresAt })
+      .returning({ id: creditHolds.id });
+
+    return {
+      ...result,
+      holdId: inserted[0]?.id,
+      walletId: wallet.id,
+      spendSource: chosen.source,
+      entitlementTier: chosen.entitlementTier,
+      balanceSnapshot: { netSpendableCents: spendable - estCost },
+    };
+  });
 }
 
 /**

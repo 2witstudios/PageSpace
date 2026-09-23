@@ -57,7 +57,7 @@ vi.mock('@pagespace/lib/utils/enums', () => ({
 }));
 
 vi.mock('@pagespace/lib/services/storage-limits', () => ({
-  updateStorageUsage: vi.fn(),
+  chargeStorageForStore: vi.fn(),
   // Real (pure) impl: charge iff the files row was newly inserted.
   shouldChargeForStore: (inserted: boolean) => inserted,
 }));
@@ -104,7 +104,7 @@ import { POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { getUserDrivePermissions } from '@pagespace/lib/permissions/permissions';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
-import { updateStorageUsage } from '@pagespace/lib/services/storage-limits';
+import { chargeStorageForStore } from '@pagespace/lib/services/storage-limits';
 import { releasePendingUpload } from '@pagespace/lib/services/pending-uploads';
 import { enqueueProcessorJob } from '@/lib/upload/processor-effects';
 
@@ -402,7 +402,7 @@ describe('POST /api/upload/complete', () => {
       expect(uploadSemaphore.releaseUploadSlot).toHaveBeenCalledWith(MOCK_JOB_ID);
       expect(releasePendingUpload).toHaveBeenCalledWith(MOCK_JOB_ID);
       // No storage charge for a rejected claim.
-      expect(updateStorageUsage).not.toHaveBeenCalled();
+      expect(chargeStorageForStore).not.toHaveBeenCalled();
     });
 
     it('allows a referencing caller to link a pre-existing (foreign-owned) object (legit dedup)', async () => {
@@ -427,7 +427,7 @@ describe('POST /api/upload/complete', () => {
   describe('M8 — charge only on first physical store', () => {
     it('charges storage when the files row was newly inserted', async () => {
       await POST(makeRequest(VALID_BODY));
-      expect(updateStorageUsage).toHaveBeenCalledWith('user-1', 2048, expect.objectContaining({ eventType: 'upload' }));
+      expect(chargeStorageForStore).toHaveBeenCalledWith('user-1', 'drive-1', 2048, expect.objectContaining({ eventType: 'upload' }));
     });
 
     it('does NOT charge storage on a legit dedup completion (files row already existed, caller references)', async () => {
@@ -436,7 +436,7 @@ describe('POST /api/upload/complete', () => {
       filesInsertReturning = [];
       mockFilesFindFirst.mockResolvedValue({ createdBy: 'user-1' });
       await POST(makeRequest(VALID_BODY));
-      expect(updateStorageUsage).not.toHaveBeenCalled();
+      expect(chargeStorageForStore).not.toHaveBeenCalled();
     });
   });
 

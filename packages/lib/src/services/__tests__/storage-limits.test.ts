@@ -604,7 +604,7 @@ describe('storage-limits', () => {
   });
 
   describe('computeStorageCreditOnUnlink (M8 — credit once, to the uploader)', () => {
-    const base = { createdBy: 'u1', sizeBytes: 2048, deletedByThisCall: true, hadPhysicalBlob: true };
+    const base = { createdBy: 'u1', driveOrgId: null, sizeBytes: 2048, deletedByThisCall: true, hadPhysicalBlob: true };
 
     it('credits the uploader the negative byte delta when this call deleted the row', () => {
       expect(computeStorageCreditOnUnlink(base)).toEqual({ userId: 'u1', deltaBytes: -2048 });

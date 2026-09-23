@@ -4,8 +4,8 @@
  * interface capability (chat, panes, sessions, GitHub tools) is free for
  * every authenticated user; only the sandbox itself is gated here.
  *
- * Payer, not actor: `resolveSandboxPayerTier` reuses `resolveSessionPayerId`
- * (the same drive-owner-else-session-owner rule billing/quota already apply)
+ * Payer, not actor: `resolveSandboxPayerTier` reuses `resolveSessionPayer`
+ * (the same drive-payer-else-session-owner rule billing/quota already apply)
  * so a free-tier collaborator in a Pro-owned drive still gets sandbox access,
  * billed to the drive's owner — eligibility and billing stay on one axis.
  *
@@ -20,7 +20,12 @@
  */
 
 import { getDeploymentMode, type DeploymentMode } from '../deployment-mode';
-import { resolveSessionPayerId } from './sandbox-payer';
+import {
+  requireUserPayer,
+  resolveSessionPayer,
+  type LookupDriveBillingFacts,
+  type OrgBillingPendingRefusal,
+} from './sandbox-payer';
 import type { SubscriptionTier } from './subscription-tiers';
 
 /** Tiers for which the sandbox (Sprite compute, code execution, terminal) is available. */
@@ -110,19 +115,29 @@ export interface ResolveSandboxPayerTierInput {
 }
 
 export interface ResolveSandboxPayerTierDeps {
-  lookupDriveOwnerId: (driveId: string) => Promise<string | null>;
+  lookupDriveBillingFacts: LookupDriveBillingFacts;
   getUserSubscriptionTier: (userId: string) => Promise<SubscriptionTier>;
 }
 
-/** Resolves the session's payer (§ `resolveSessionPayerId`), then that payer's tier. */
+export type SandboxPayerTierResult =
+  | { ok: true; tier: SubscriptionTier }
+  | { ok: false; refusal: OrgBillingPendingRefusal };
+
+/**
+ * Resolves the session's payer (§ `resolveSessionPayer`), then that payer's tier. An org drive's
+ * session is billed to the org, which no compute charge path can debit yet: it is refused by
+ * name (`org_billing_pending`, replaced by the C3 lane) and never falls back to a person's tier.
+ */
 export async function resolveSandboxPayerTier(
   input: ResolveSandboxPayerTierInput,
   deps: ResolveSandboxPayerTierDeps,
-): Promise<SubscriptionTier> {
-  const payerId = await resolveSessionPayerId({
+): Promise<SandboxPayerTierResult> {
+  const payer = await resolveSessionPayer({
     driveId: input.driveId,
     ownerId: input.ownerId,
-    lookupDriveOwnerId: deps.lookupDriveOwnerId,
+    lookupDriveBillingFacts: deps.lookupDriveBillingFacts,
   });
-  return deps.getUserSubscriptionTier(payerId);
+  const user = requireUserPayer(payer);
+  if (!user.ok) return user;
+  return { ok: true, tier: await deps.getUserSubscriptionTier(user.userId) };
 }

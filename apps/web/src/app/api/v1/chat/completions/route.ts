@@ -41,6 +41,7 @@ import { conversationRepository } from '@/lib/repositories/conversation-reposito
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { AIMonitoring, extractOpenRouterCostDollars, extractOpenRouterGenerationIds } from '@pagespace/lib/monitoring/ai-monitoring';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { driveSpend, resolvedSpend } from '@pagespace/lib/billing/spend-target';
 import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
 import { ADMIN_ONLY_PROVIDERS } from '@/lib/ai/core/ai-providers-config';
 import { createAdminRestrictedResponse } from '@/lib/subscription/rate-limit-middleware';
@@ -245,16 +246,24 @@ export async function POST(request: Request): Promise<Response> {
   // subscription, so skip the gate entirely — no hold, no balance check — and never
   // debit at settle (see isMeteringExempt in trackAIUsage).
   let holdId: string | undefined;
+  // The wallet the hold was placed on, threaded to settlement with it (WAL-5).
+  let walletId: string | undefined;
+  // The call is a conversation on the agent page, so its session is the page's drive
+  // (SPEND-7). The per-conversation chosen source has no storage yet.
+  let spend = driveSpend(page.driveId);
   if (!isMeteringExempt(effectiveProvider)) {
     const creditGate = await canConsumeAI(authResult.userId, (gateUser?.subscriptionTier ?? 'free') as SubscriptionTier, {
+      spend,
       estCostCents: estimateChatHoldCentsForModel(page.aiModel ?? undefined),
       maxInFlight: MAX_CHAT_INFLIGHT,
     });
     if (!creditGate.allowed) {
       auditRequest(request, { eventType: 'data.write', userId: authResult.userId, resourceType: 'openai_inference', resourceId: pageId, details: { reason: creditGate.reason }, riskScore: 0 });
-      return creditGateErrorResponse(creditGate.reason);
+      return creditGateErrorResponse(creditGate.reason, creditGate.refusal);
     }
     holdId = creditGate.holdId;
+    walletId = creditGate.walletId;
+    spend = resolvedSpend(spend, creditGate.spendSource);
   }
 
   // Ownership of the hold transfers to the streaming lifecycle only once we return the
@@ -601,6 +610,7 @@ export async function POST(request: Request): Promise<Response> {
         pageId,
         success: !aborted && !errored,
         holdId,
+        walletId,
         metadata: { via: 'openai_api_v1', ...(aborted ? { aborted: true } : {}), ...(errored ? { errored: true } : {}) },
       }).catch((err: unknown) => {
         loggers.ai.error('OpenAI API: failed to track usage', err as Error);
@@ -630,6 +640,7 @@ export async function POST(request: Request): Promise<Response> {
           providerResult.provider,
         ),
         chatSource: { type: 'page' as const, agentPageId: pageId, agentTitle: page.title },
+        creditSpend: { spend, walletId },
         enabledTools: agentEnabledTools ?? null,
         // Bind tool execution to the MCP token's drive scope and RBAC role so a
         // scoped token cannot reach drives outside its scope — or exceed its own

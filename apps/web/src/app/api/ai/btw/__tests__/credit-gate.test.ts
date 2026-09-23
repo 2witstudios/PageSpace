@@ -34,6 +34,8 @@ const mocks = vi.hoisted(() => ({
   streamText: vi.fn(),
   calculateCost: vi.fn(),
   requiresPro: vi.fn(),
+  sessionDrive: vi.fn(),
+  entitlement: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -69,7 +71,8 @@ vi.mock('@/lib/subscription/rate-limit-middleware', () => ({
   createSubscriptionRequiredResponse: () => new Response(JSON.stringify({ error: 'Subscription required' }), { status: 403 }),
   requiresProSubscription: mocks.requiresPro,
 }));
-vi.mock('@pagespace/lib/billing/credit-gate', () => ({ canConsumeAI: mocks.gate }));
+vi.mock('@pagespace/lib/billing/credit-gate', () => ({ canConsumeAI: mocks.gate, resolveEntitlementTier: mocks.entitlement }));
+vi.mock('@/lib/ai/core/session-spend', () => ({ conversationSessionDriveId: mocks.sessionDrive }));
 vi.mock('@pagespace/lib/billing/credit-consume', () => ({ releaseHold: mocks.releaseHold }));
 vi.mock('@pagespace/lib/billing/credit-pricing', () => ({ MAX_CHAT_INFLIGHT: 8, MARKUP_BPS: 15000 }));
 vi.mock('@pagespace/lib/ai/model-defaults', () => ({ isMeteringExempt: (provider: string) => provider === 'glm' }));
@@ -115,6 +118,55 @@ describe('POST /api/ai/btw credit gate', () => {
     mocks.streamText.mockReturnValue({ toTextStreamResponse: () => new Response('side') });
     mocks.calculateCost.mockReturnValue(0.002);
     mocks.requiresPro.mockReturnValue(false);
+    mocks.sessionDrive.mockResolvedValue('d1');
+    // While orgs are dark the funding tier is the caller's own (the real function answers
+    // it with no reads); a test that needs a funder's tier overrides this.
+    mocks.entitlement.mockImplementation(async (_userId: string, tier: string) => tier);
+  });
+
+  it('SPEND-7 (partial) names the drive of the conversation the side question asks about, with no source chosen', async () => {
+    await post();
+    expect(mocks.sessionDrive).toHaveBeenCalledWith({ userId: 'u1', isShared: false, type: 'page', contextId: 'p1' });
+    const spend = { kind: 'drive', driveId: 'd1', chosen: null };
+    expect(mocks.gate).toHaveBeenCalledWith('u1', 'free', expect.objectContaining({ spend }));
+    expect(mocks.entitlement).toHaveBeenCalledWith('u1', 'free', spend);
+  });
+
+  it('SPEND-8 (partial) a global conversation has no drive, so the side question spends personal credits', async () => {
+    mocks.sessionDrive.mockResolvedValue(null);
+    await post();
+    expect(mocks.gate).toHaveBeenCalledWith('u1', 'free', expect.objectContaining({ spend: { kind: 'personal' } }));
+  });
+
+  it('SPEND-4 (partial) a refused source answers 402 naming it and the options, and never builds the model', async () => {
+    mocks.gate.mockResolvedValue({
+      allowed: false,
+      reason: 'source_refused',
+      refusal: { source: 'drive_wallet', reason: 'source_empty', options: ['own_credits'] },
+    });
+    const response = await post();
+    expect(response.status).toBe(402);
+    expect(await response.json()).toMatchObject({
+      error: 'spend_source_refused',
+      source: 'drive_wallet',
+      refusalReason: 'source_empty',
+      options: ['own_credits'],
+    });
+    expect(mocks.provider).not.toHaveBeenCalled();
+    expect(mocks.trackUsage).not.toHaveBeenCalled();
+  });
+
+  it('WAL-8 (partial) the pro-model admission reads the tier of whoever funds the call, not the caller', async () => {
+    mocks.entitlement.mockResolvedValue('business');
+    await post();
+    expect(mocks.requiresPro).toHaveBeenCalledWith('openrouter', 'openai/gpt-5.4-nano', 'business', false);
+  });
+
+  it('WAL-5 (partial) settles on the wallet the gate reserved on', async () => {
+    mocks.gate.mockResolvedValue({ allowed: true, holdId: 'hold_1', walletId: 'w-product' });
+    await post();
+    await streamOptions().onFinish?.({ totalUsage: { inputTokens: 900, outputTokens: 100, totalTokens: 1000 }, steps: [billedStep] });
+    expect(mocks.trackUsage).toHaveBeenCalledWith(expect.objectContaining({ holdId: 'hold_1', walletId: 'w-product' }));
   });
 
   it('refuses an out-of-credit user with the shared 402 shape and never builds or calls the model', async () => {

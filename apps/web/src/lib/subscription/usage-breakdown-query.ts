@@ -25,7 +25,7 @@ import type { SubscriptionTier } from '@pagespace/lib/services/subscription-util
  * "recent usage" view.
  *
  * `byAgentSession` needs no separate drive-ownership filter: `creditLedger.userId` IS
- * the PAYER (`resolveSessionPayerId` in sandbox-payer.ts always resolves to the
+ * the PAYER (`resolveSessionPayer` in sandbox-payer.ts always resolves to the
  * session's own drive owner, falling back to the session's own owner only when
  * unresolvable), so every row this query returns for `userId` is already scoped to
  * a session they own or a run they footed the bill for directly.

@@ -88,7 +88,7 @@ function deps(overrides: Partial<AppRouterDeps> = {}): AppRouterDeps {
     replaySecret: () => SECRET,
     findAppBySubdomain: async () => row(),
     findAppByCustomHost: async () => null,
-    resolvePayerId: async ({ driveId }) => (driveId === 'drive_payer' ? 'user_payer' : null),
+    resolvePayerId: async ({ driveId }) => (driveId === 'drive_payer' ? { ok: true as const, userId: 'user_payer' } : null),
     resolveTier: async () => 'pro',
     hasSpendableBalance: async () => true,
     stampHit: async () => {},
@@ -165,7 +165,7 @@ describe('resolveAppRoute — hostname resolution', () => {
 describe('resolveAppRoute — the balance is asked about the SAME payer the meter charges', () => {
   it("given a metered app, should resolve the payer from the row's driveId, not published_apps.ownerId", async () => {
     const resolvePayerId = vi.fn(async ({ driveId }: { driveId: string }) =>
-      driveId === 'drive_xyz' ? 'user_drive_owner' : null,
+      driveId === 'drive_xyz' ? { ok: true as const, userId: 'user_drive_owner' } : null,
     );
     const hasSpendableBalance = vi.fn(async () => true);
     const resolveTier = vi.fn(async () => 'pro');
@@ -189,6 +189,18 @@ describe('resolveAppRoute — the balance is asked about the SAME payer the mete
     const decision = await resolveAppRoute(
       'acme.pagespace.io',
       deps({ resolvePayerId: async () => null, resolveTier, hasSpendableBalance }),
+    );
+    expect(decision).toEqual({ kind: 'parked', reason: 'out_of_credits', driveId: 'drive_payer', envId: 'env_1' });
+    expect(resolveTier).not.toHaveBeenCalled();
+    expect(hasSpendableBalance).not.toHaveBeenCalled();
+  });
+
+  it('WAL-9 (partial) given an ORG drive, should fail closed without asking any person\'s balance', async () => {
+    const resolveTier = vi.fn(async () => 'pro');
+    const hasSpendableBalance = vi.fn(async () => true);
+    const decision = await resolveAppRoute(
+      'acme.pagespace.io',
+      deps({ resolvePayerId: async () => ({ ok: false as const, refusal: { code: 'org_billing_pending' as const, orgId: 'org-northwind', message: 'org billing pending' } }), resolveTier, hasSpendableBalance }),
     );
     expect(decision).toEqual({ kind: 'parked', reason: 'out_of_credits', driveId: 'drive_payer', envId: 'env_1' });
     expect(resolveTier).not.toHaveBeenCalled();

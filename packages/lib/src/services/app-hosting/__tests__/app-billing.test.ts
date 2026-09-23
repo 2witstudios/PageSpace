@@ -9,7 +9,7 @@ vi.mock('@pagespace/db/schema/auth', () => ({
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'pages.id', driveId: 'pages.driveId' },
-  drives: { id: 'drives.id', ownerId: 'drives.ownerId' },
+  drives: { id: 'drives.id', ownerId: 'drives.ownerId', orgId: 'drives.orgId' },
 }));
 
 const mockCanConsumeAI = vi.hoisted(() => vi.fn());
@@ -29,6 +29,7 @@ import {
   PUBLISHED_APP_WAKE_HOLD_ESTIMATE_CENTS,
 } from '../../../billing/credit-pricing';
 import { PUBLISHED_APP_AWAKE_MODEL } from '../../../monitoring/usage-source';
+import { PERSONAL_SPEND } from '../../../billing/spend-target';
 import {
   calculateMachineCostDollars,
   PUBLISHED_APP_GUEST_SHAPE,
@@ -50,13 +51,29 @@ function mockSingleRow(row: Record<string, unknown> | undefined) {
 
 describe('defaultAppBillingDeps.resolvePayerId', () => {
   it('bills the DRIVE OWNER — the payer for anything hanging off an environment', async () => {
-    mockSingleRow({ ownerId: 'drive-owner-1' });
+    mockSingleRow({ ownerId: 'drive-owner-1', orgId: null });
 
     assert({
       given: 'a published app whose drive resolves',
       should: 'pay from the drive owner',
       actual: await defaultAppBillingDeps.resolvePayerId({ driveId: 'drive-1' }),
-      expected: 'drive-owner-1',
+      expected: { ok: true, userId: 'drive-owner-1' },
+    });
+  });
+
+  it('WAL-9 (partial) an app in an ORG drive answers the named org_billing_pending refusal, never the drive lead', async () => {
+    mockSingleRow({ ownerId: 'lead-marcus', orgId: 'org-northwind' });
+
+    const resolved = await defaultAppBillingDeps.resolvePayerId({ driveId: 'drive-1' });
+
+    assert({
+      given: 'a published app whose drive belongs to an org',
+      should: 'refuse by name with the org, and name no person',
+      actual: resolved,
+      expected: {
+        ok: false,
+        refusal: { code: 'org_billing_pending', orgId: 'org-northwind', message: expect.any(String) },
+      },
     });
   });
 
@@ -97,6 +114,8 @@ describe('defaultAppBillingDeps.gate', () => {
     await defaultAppBillingDeps.gate({ payerId: 'payer-1' });
 
     expect(mockCanConsumeAI).toHaveBeenCalledWith('payer-1', 'free', {
+      // Compute bills the payer's personal wallet (WAL-9): no drive wallet is ever named.
+      spend: PERSONAL_SPEND,
       estCostCents: PUBLISHED_APP_WAKE_HOLD_ESTIMATE_CENTS,
       maxInFlight: PUBLISHED_APP_MAX_INFLIGHT,
       dailyCapCeilingCents: PUBLISHED_APP_DAILY_CAP_CEILING_CENTS,

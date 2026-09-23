@@ -22,6 +22,7 @@ import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { applyStripeFunding } from '../credit-funding';
 import { canConsumeAI } from '../credit-gate';
+import { PERSONAL_SPEND } from '../spend-target';
 import { consumeCredits } from '../credit-consume';
 import { tierAllowanceCents } from '../money-model';
 
@@ -66,7 +67,7 @@ describe('the money path writes every row against the personal root wallet', () 
 
       // First AI call: the gate grants the one-time starter allowance into that bare
       // wallet and places a hold against it.
-      const gate = await canConsumeAI(user.id, 'free');
+      const gate = await canConsumeAI(user.id, 'free', { spend: PERSONAL_SPEND });
       expect(gate.allowed).toBe(true);
       const holdsDuring = await db.select().from(creditHolds).where(eq(creditHolds.userId, user.id));
       expect(holdsDuring).toHaveLength(1);
@@ -108,7 +109,7 @@ describe('the money path writes every row against the personal root wallet', () 
       await usageRow(`log_paid_${user.id}`);
       await usageRow(`log_free_${user.id}`);
 
-      const gate = await canConsumeAI(user.id, 'free');
+      const gate = await canConsumeAI(user.id, 'free', { spend: PERSONAL_SPEND });
       expect(gate.allowed).toBe(true);
       expect(await consumeCredits({ aiUsageLogId: `log_paid_${user.id}`, userId: user.id, costDollars: 0.1, holdId: gate.holdId })).toBe('settled');
       expect(await consumeCredits({ aiUsageLogId: `log_free_${user.id}`, userId: user.id, costDollars: 0 })).toBe('settled');
@@ -131,7 +132,7 @@ describe('the money path writes every row against the personal root wallet', () 
     process.env.DEPLOYMENT_MODE = 'onprem';
     const user = await factories.createUser();
     try {
-      const gate = await canConsumeAI(user.id, 'free', { dailyCapCeilingCents: 1_000 });
+      const gate = await canConsumeAI(user.id, 'free', { spend: PERSONAL_SPEND, dailyCapCeilingCents: 1_000 });
       expect(gate.allowed).toBe(true);
 
       const [root] = await db.select().from(wallets).where(personalRootWalletOf(user.id));

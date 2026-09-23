@@ -5,6 +5,7 @@ import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { PERSONAL_SPEND } from '@pagespace/lib/billing/spend-target';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { IMAGE_GEN_HOLD_ESTIMATE_CENTS, resolveImageCost } from '@pagespace/lib/billing/credit-pricing';
@@ -176,7 +177,11 @@ restricted to app administrators.`,
       const model = context?.imageGenerationModel || DEFAULT_IMAGE_MODEL;
 
       // Reserve credits for the call (image-sized estimate; real cost settles at trackUsage).
+      // The image spends the wallet the turn it runs in already named (WAL-5, SPEND-4):
+      // the same drive and source, never a different one. Outside a gated turn there is
+      // no drive session, so it spends personal credits (SPEND-8).
       const gate = await canConsumeAI(userId, (tier ?? 'free') as SubscriptionTier, {
+        spend: context?.creditSpend?.spend ?? PERSONAL_SPEND,
         estCostCents: IMAGE_GEN_HOLD_ESTIMATE_CENTS,
       });
       if (!gate.allowed) {
@@ -186,6 +191,7 @@ restricted to app administrators.`,
         };
       }
       const holdId = gate.holdId;
+      const walletId = gate.walletId;
 
       /**
        * Settle the reserved hold against real provider spend.
@@ -220,6 +226,7 @@ restricted to app administrators.`,
           costSource: resolved.costSource,
           openrouterGenerationIds: args.generationIds,
           holdId,
+          walletId,
           success: true,
           source: 'image_generation',
           conversationId: context?.conversationId,

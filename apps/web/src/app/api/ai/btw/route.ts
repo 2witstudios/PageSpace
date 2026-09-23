@@ -7,7 +7,8 @@ import { eq } from '@pagespace/db/operators';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { users } from '@pagespace/db/schema/auth';
 import { canAccessConversation } from '@pagespace/lib/permissions/conversation-access';
-import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { canConsumeAI, resolveEntitlementTier } from '@pagespace/lib/billing/credit-gate';
+import { driveSpend } from '@pagespace/lib/billing/spend-target';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
@@ -19,6 +20,7 @@ import { getActivePlan } from '@/lib/ai/core/plan-binding';
 import { createAIProvider } from '@/lib/ai/core/provider-factory';
 import { resolveProviderModel } from '@/lib/ai/core/ai-providers-config';
 import { resolveGenerationAdmission } from '@/lib/ai/core/generation-admission';
+import { conversationSessionDriveId } from '@/lib/ai/core/session-spend';
 import { priceInterruptedStep } from '@/lib/ai/core/interrupted-step-cost';
 import { createAdminRestrictedResponse, createSubscriptionRequiredResponse, requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
 import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
@@ -32,6 +34,8 @@ export async function POST(request: Request) {
   // the gate and the stream taking it over; once the stream starts, its settlement
   // (trackUsage) owns the release.
   let holdId: string | undefined;
+  // The wallet the hold was placed on, threaded to settlement with it (WAL-5).
+  let walletId: string | undefined;
   let holdHandedOff = false;
   try {
     const auth = await authenticateRequestWithOptions(request, { allow: ['session'] as const, requireCSRF: true });
@@ -60,13 +64,18 @@ export async function POST(request: Request) {
     // (resolveProviderModel is what createAIProvider resolves too).
     const [user] = await db.select({ subscriptionTier: users.subscriptionTier, role: users.role, currentAiProvider: users.currentAiProvider, currentAiModel: users.currentAiModel }).from(users).where(eq(users.id, userId)).limit(1);
     const { provider: effectiveProvider, model: effectiveModel } = resolveProviderModel(undefined, undefined, user?.currentAiProvider, user?.currentAiModel);
+    const consumerTier = (user?.subscriptionTier ?? 'free') as SubscriptionTier;
+    // A side question spends in the session of the conversation it asks about (SPEND-7):
+    // a page or drive conversation's drive, or personal credits for a global one (SPEND-8).
+    // The per-conversation chosen source has no storage yet, so none is named here.
+    const spend = driveSpend(await conversationSessionDriveId(conversation));
     // Entitlement exactly as a chat turn decides it: an admin-only provider is a
     // role block, a paid-tier model is a tier block (a downgraded user's stored
-    // model must not keep running here).
+    // model must not keep running here) — for the tier of whoever funds the call (WAL-8).
     const admission = resolveGenerationAdmission({
       provider: effectiveProvider,
       model: effectiveModel,
-      subscriptionTier: user?.subscriptionTier,
+      subscriptionTier: await resolveEntitlementTier(userId, consumerTier, spend),
       isAdmin: user?.role === 'admin',
       requiresProSubscription,
     });
@@ -81,15 +90,17 @@ export async function POST(request: Request) {
     // in-flight cap -> 429. Metering-exempt providers bill on a flat external plan,
     // so they skip the gate (no hold) exactly as the chat pipeline does.
     if (!isMeteringExempt(effectiveProvider)) {
-      const gate = await canConsumeAI(userId, (user?.subscriptionTier ?? 'free') as SubscriptionTier, {
+      const gate = await canConsumeAI(userId, consumerTier, {
+        spend,
         estCostCents: holdCents,
         maxInFlight: MAX_CHAT_INFLIGHT,
       });
       if (!gate.allowed) {
         loggers.ai.warn('Side question: AI credit gate denied', { userId, reason: gate.reason });
-        return creditGateErrorResponse(gate.reason);
+        return creditGateErrorResponse(gate.reason, gate.refusal);
       }
       holdId = gate.holdId;
+      walletId = gate.walletId;
     }
 
     const provider = await createAIProvider(userId, {}, { user: user ?? null });
@@ -97,6 +108,7 @@ export async function POST(request: Request) {
 
     const startTime = Date.now();
     const settledHoldId = holdId;
+    const settledWalletId = walletId;
     const response = createSideQuestionStream({
       model: provider.model,
       question: trimmedQuestion,
@@ -138,6 +150,7 @@ export async function POST(request: Request) {
             conversationId,
             success: outcome === 'finished',
             holdId: settledHoldId,
+            walletId: settledWalletId,
             error: outcome === 'errored' ? (error instanceof Error ? error.message : String(error)) : undefined,
             metadata: {
               feature: 'side_question',

@@ -60,7 +60,7 @@ export const DRIVE_ACCESS_GATE_ALLOWLIST: AccessGateAllowlist = {
   'apps/web/src/app/api/app-hosting/apps/[appId]/dedicated/route.ts': {
     authorize: {
       ownerCompares: 1,
-      reason: "payer gate: dedicated app hosting is bought by the drive's payer (lookupDriveOwnerId, the lead today); who pays for an org drive is the WAL-9 lane's, not an access decision",
+      reason: "payer gate: dedicated app hosting is bought by the drive's owner on their own card (lookupDriveBillingFacts); an org drive is refused as org_billing_pending (WAL-9), not an access decision",
     },
   },
   'apps/web/src/app/api/cron/scheduled-backups/route.ts': {

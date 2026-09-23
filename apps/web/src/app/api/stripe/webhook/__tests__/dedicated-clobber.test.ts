@@ -93,6 +93,9 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 
 const mockApplyStripeFunding = vi.hoisted(() => vi.fn());
 vi.mock('@pagespace/lib/billing/credit-funding', () => ({ applyStripeFunding: mockApplyStripeFunding }));
+vi.mock('@pagespace/lib/billing/wallet-funding-shell', () => ({
+  applyOrgPoolRefill: vi.fn().mockResolvedValue({ kind: 'not_org' }),
+}));
 vi.mock('@/lib/billing/send-payment-receipt-email', () => ({
   sendSubscriptionReceiptEmail: vi.fn(),
   sendTopupReceiptEmail: vi.fn(),

@@ -26,7 +26,6 @@ import {
   type OrgDriveServiceDeps,
   type OrgMembershipSyncCall,
 } from '../org-drive-service';
-import { STORAGE_REATTRIBUTION_LEAF_ID } from '../../organizations/org-drive-ownership';
 import { orgDriveServiceDeps } from '../org-drive-service-deps';
 import { accountRepository } from '../../repositories/account-repository';
 import { removeMember } from '../../organizations/membership';
@@ -144,7 +143,9 @@ describe('moveDriveToOrg', () => {
     expect(result).toMatchObject({
       ok: true,
       orgId: northwind,
-      storageReattribution: { status: 'deferred', leafId: STORAGE_REATTRIBUTION_LEAF_ID },
+      // No files in this drive: the re-attribution ran and moved nothing (O-9 byte counts are
+      // proven in storage-attribution.integration.test.ts).
+      storageReattribution: { status: 'applied', movedBytes: 0, deltas: [] },
     });
     const after = await readDrive(driveId);
     expect(after.orgId).toBe(northwind);
@@ -271,7 +272,9 @@ describe('moveDriveOutOfOrg', () => {
     expect(result).toMatchObject({
       ok: true,
       orgId: northwind,
-      storageReattribution: { status: 'deferred', leafId: STORAGE_REATTRIBUTION_LEAF_ID },
+      // No files in this drive: the re-attribution ran and moved nothing (O-9 byte counts are
+      // proven in storage-attribution.integration.test.ts).
+      storageReattribution: { status: 'applied', movedBytes: 0, deltas: [] },
     });
     const after = await readDrive(driveId);
     expect(after.orgId).toBeNull();

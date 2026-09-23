@@ -2150,6 +2150,13 @@
       "when": 1790168679179,
       "tag": "0306_fuzzy_adam_destine",
       "breakpoints": true
+    },
+    {
+      "idx": 307,
+      "version": "7",
+      "when": 1790168679180,
+      "tag": "0307_wallet_funding_legs",
+      "breakpoints": true
     }
   ]
 }

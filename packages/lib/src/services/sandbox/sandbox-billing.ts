@@ -11,13 +11,14 @@ import { eq } from '@pagespace/db/operators';
 import { db } from '@pagespace/db/db';
 import { users } from '@pagespace/db/schema/auth';
 import { canConsumeAI } from '../../billing/credit-gate';
+import { PERSONAL_SPEND } from '../../billing/spend-target';
 import { releaseHold as releaseCreditHold } from '../../billing/credit-consume';
 import {
   MACHINE_HOLD_ESTIMATE_CENTS,
   MACHINE_MAX_INFLIGHT,
   MACHINE_MARKUP_BPS,
 } from '../../billing/credit-pricing';
-import { resolveSessionPayerId, lookupDriveOwnerId } from '../../billing/sandbox-payer';
+import { resolveSessionPayer, lookupDriveBillingFacts, requireUserPayer } from '../../billing/sandbox-payer';
 import { AIMonitoring } from '../../monitoring/ai-monitoring';
 import { calculateMachineCostDollars } from '../../monitoring/machine-pricing';
 import { toSubscriptionTier, type SubscriptionTier } from '../../billing/subscription-tiers';
@@ -41,13 +42,14 @@ async function resolvePayerTier(payerId: string): Promise<SubscriptionTier> {
 
 export const defaultSandboxBillingDeps: SandboxBillingDeps = {
   // Resolves from the ACQUIRED SESSION's own driveId/ownerId (never the
-  // caller's surface drive or agent page) — `resolveSessionPayerId` is the
-  // same drive-owner-else-session-owner rule `storageBillingTarget` applies
+  // caller's surface drive or agent page) — `resolveSessionPayer` is the
+  // same drive-payer-else-session-owner rule `storageBillingTarget` applies
   // for the storage charge stream, so both streams bill one payer for one
   // session regardless of which conversation/drive the caller happened to be
-  // in when the run started.
+  // in when the run started. An org drive's payer is refused by name
+  // (`org_billing_pending`) until the C3 lane can hold on the org's wallet.
   async resolvePayerId({ driveId, ownerId }) {
-    return resolveSessionPayerId({ driveId, ownerId, lookupDriveOwnerId });
+    return requireUserPayer(await resolveSessionPayer({ driveId, ownerId, lookupDriveBillingFacts }));
   },
 
   async gate({ payerId }) {
@@ -62,6 +64,8 @@ export const defaultSandboxBillingDeps: SandboxBillingDeps = {
     // tier ceiling, regardless of env drift.
     const maxInFlight = Math.max(MACHINE_MAX_INFLIGHT, getCodeExecutionConcurrencyLimit(tier));
     const result = await canConsumeAI(payerId, tier, {
+      // Compute bills the payer's personal wallet: wallets do not change compute billing (WAL-9).
+      spend: PERSONAL_SPEND,
       estCostCents: MACHINE_HOLD_ESTIMATE_CENTS,
       maxInFlight,
     });

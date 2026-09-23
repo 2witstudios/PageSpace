@@ -144,6 +144,28 @@ describe('AI gate call-site guards', () => {
     expect(ROUTE_FILES.some((f) => apiRelPath(f).endsWith('/ai/chat/route.ts'))).toBe(true);
   });
 
+  it('SPEND-1 (partial) every canConsumeAI call a route makes, or delegates to, names the wallet it spends', () => {
+    // The gate takes the session's drive and the chosen source (or PERSONAL_SPEND for a
+    // call with no drive) and reserves on exactly the wallet that resolves to. A call that
+    // passed no spend target would have no wallet to name; the type makes `spend` required,
+    // and this keeps a cast or an untyped options bag from slipping one through.
+    const offenders: string[] = [];
+    let gateCalls = 0;
+    for (const file of ROUTE_FILES) {
+      for (const { path, src } of routeAndDirectImports(file)) {
+        for (const slice of gateCallSlices(src)) {
+          gateCalls++;
+          const namesSpend = /\bspend\b/.test(slice);
+          // An options variable (`canConsumeAI(userId, tier, opts)`) must be built with a spend target.
+          const passesOptionsVariable = /,\s*\w+\s*\)\s*$/.test(slice) && /\bspend:/.test(src);
+          if (!namesSpend && !passesOptionsVariable) offenders.push(relative(API_DIR, path));
+        }
+      }
+    }
+    expect(gateCalls).toBeGreaterThan(5);
+    expect([...new Set(offenders)]).toEqual([]);
+  });
+
   it('every interactive canConsumeAI caller passes maxInFlight', () => {
     const offenders: string[] = [];
     for (const file of ROUTE_FILES) {

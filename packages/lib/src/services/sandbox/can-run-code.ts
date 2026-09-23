@@ -42,10 +42,13 @@
 import type { DrivePermissionLevel, PermissionLevel } from '../../permissions/permissions';
 import { resolveSandboxPayerTier, isSandboxAvailable } from '../../billing/sandbox-eligibility';
 import type { SubscriptionTier } from '../../billing/subscription-tiers';
+import type { LookupDriveBillingFacts } from '../../billing/sandbox-payer';
 
 export type CodeExecutionDenialReason =
   | 'kill_switch_off'
   | 'tier_ineligible'
+  /** WAL-9 interim: the payer is an org, which compute cannot charge until C3 (see `ORG_BILLING_PENDING`). */
+  | 'org_billing_pending'
   | 'no_drive_access'
   | 'insufficient_role'
   | 'no_agent_access'
@@ -64,7 +67,7 @@ export interface CanRunCodeDeps {
     userId: string,
     driveId: string,
   ) => Promise<DrivePermissionLevel | null>;
-  lookupDriveOwnerId: (driveId: string) => Promise<string | null>;
+  lookupDriveBillingFacts: LookupDriveBillingFacts;
   getUserSubscriptionTier: (userId: string) => Promise<SubscriptionTier>;
   getAgentAccessLevel: (
     agentPageId: string,
@@ -110,8 +113,8 @@ const defaultDeps: CanRunCodeDeps = {
     import('../../permissions/permissions').then((m) =>
       m.getUserDrivePermissions(userId, driveId),
     ),
-  lookupDriveOwnerId: (driveId) =>
-    import('../../billing/sandbox-payer').then((m) => m.lookupDriveOwnerId(driveId)),
+  lookupDriveBillingFacts: (driveId) =>
+    import('../../billing/sandbox-payer').then((m) => m.lookupDriveBillingFacts(driveId)),
   getUserSubscriptionTier: async (userId) => {
     const [{ db }, { eq }, { users }, { toSubscriptionTier }] = await Promise.all([
       import('@pagespace/db/db'),
@@ -174,11 +177,14 @@ async function authorizeSandboxTierEligibility(
   ownerId: string | undefined,
   deps: CanRunCodeDeps,
 ): Promise<CanRunCodeResult> {
-  const tier = await resolveSandboxPayerTier(
+  const payerTier = await resolveSandboxPayerTier(
     { driveId: driveId ?? null, ownerId: ownerId ?? userId },
-    { lookupDriveOwnerId: deps.lookupDriveOwnerId, getUserSubscriptionTier: deps.getUserSubscriptionTier },
+    { lookupDriveBillingFacts: deps.lookupDriveBillingFacts, getUserSubscriptionTier: deps.getUserSubscriptionTier },
   );
-  return isSandboxAvailable(tier) ? { ok: true } : deny('tier_ineligible');
+  // WAL-9 interim: an org drive's compute bills the org, which no charge path can debit until
+  // the C3 lane lands. Refused here, before any machine starts or any hold is taken.
+  if (!payerTier.ok) return deny(payerTier.refusal.code);
+  return isSandboxAvailable(payerTier.tier) ? { ok: true } : deny('tier_ineligible');
 }
 
 export async function canRunCode({

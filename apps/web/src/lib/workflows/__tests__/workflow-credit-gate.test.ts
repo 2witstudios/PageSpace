@@ -84,7 +84,7 @@ describe('acquireWorkflowCreditHold', () => {
 
     await acquireWorkflowCreditHold(LEGACY_AI_WORKFLOW, 'scheduled');
 
-    expect(mockCanConsumeAI.mock.calls[0][2]).toEqual({ estCostCents: 10, skipDailyCap: true });
+    expect(mockCanConsumeAI.mock.calls[0][2]).toEqual({ spend: { kind: 'personal' }, estCostCents: 10, skipDailyCap: true });
   });
 
   it('manual runs keep the daily cap and pass the interactive in-flight cap', async () => {
@@ -92,7 +92,7 @@ describe('acquireWorkflowCreditHold', () => {
 
     await acquireWorkflowCreditHold(LEGACY_AI_WORKFLOW, 'interactive');
 
-    expect(mockCanConsumeAI.mock.calls[0][2]).toEqual({ estCostCents: 10, maxInFlight: 3 });
+    expect(mockCanConsumeAI.mock.calls[0][2]).toEqual({ spend: { kind: 'personal' }, estCostCents: 10, maxInFlight: 3 });
   });
 
   it('a deterministic-only chain runs no model, so it takes no gate and no hold', async () => {
