@@ -265,12 +265,15 @@ export const startBrowserEgressProxy = async ({
       }
       // The upstream chooses its status, so only a valid HTTP status passes;
       // anything else is the proxy's 502. Node's parser admits any three
-      // digits, and sending the head throws on a status below 100. The head
-      // goes out implicitly on the first write: CodeQL alert 350 flagged the
-      // unchecked upstream status flowing into `writeHead`.
+      // digits, and sending the head throws on a status below 100. The status
+      // is set on `res.statusCode` and the head flushed now, so a reset after
+      // the site's head still reaches the browser as the site's status: CodeQL
+      // alert 350 flagged the unchecked upstream status flowing into
+      // `writeHead`.
       const status = response.statusCode;
       const valid = status !== undefined && Number.isInteger(status) && status >= 100 && status <= 599;
       res.statusCode = valid ? status : 502;
+      res.flushHeaders();
       response.pipe(res);
     });
     upstream.on('error', () => {

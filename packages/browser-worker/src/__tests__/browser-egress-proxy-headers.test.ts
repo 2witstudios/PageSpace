@@ -195,11 +195,16 @@ describe('the egress proxy given a status the site chose freely', () => {
   let upstream: NetServer;
   let proxy: BrowserEgressProxy;
   let statusLine = '';
+  let resetAfterHead = false;
 
   beforeAll(async () => {
     // A raw socket server: Node's own http server refuses to send these.
     upstream = createNetServer((socket) => {
-      socket.once('data', () => socket.end(`HTTP/1.1 ${statusLine}\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok`));
+      socket.once('data', () => {
+        if (!resetAfterHead) return void socket.end(`HTTP/1.1 ${statusLine}\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok`);
+        // The head, then a reset before any of the promised body.
+        socket.write(`HTTP/1.1 ${statusLine}\r\nContent-Type: text/html\r\nContent-Length: 10\r\n\r\n`, () => setTimeout(() => socket.resetAndDestroy(), 50));
+      });
       socket.on('error', () => socket.destroy());
     });
     await new Promise<void>((done) => upstream.listen(0, '127.0.0.1', done));
@@ -243,6 +248,29 @@ describe('the egress proxy given a status the site chose freely', () => {
       should: 'return the valid statuses and 502 for every other one',
       actual,
       expected: { ok: 200, teapot: 418, highest: 599, belowRange: 502, aboveRange: 502, farAbove: 502, nonNumeric: 502 },
+    });
+  });
+
+  it("keeps the site's status when the site resets after sending its head", async () => {
+    resetAfterHead = true;
+    const status = await new Promise<number>((done, fail) => {
+      statusLine = '200 OK';
+      const url = new URL(proxy.url);
+      const req = httpRequest({ host: url.hostname, port: url.port, path: 'http://www.form.test/', headers: { host: 'www.form.test' }, agent: false }, (res) => {
+        res.on('error', () => undefined);
+        res.resume();
+        res.on('close', () => done(res.statusCode ?? 0));
+      });
+      req.on('error', fail);
+      req.end();
+    }).finally(() => {
+      resetAfterHead = false;
+    });
+    assert({
+      given: 'a site that sends a 200 head and resets before any body',
+      should: 'have sent the 200 on, as a proxy that forwards the head at once does, not a 502',
+      actual: status,
+      expected: 200,
     });
   });
 });
