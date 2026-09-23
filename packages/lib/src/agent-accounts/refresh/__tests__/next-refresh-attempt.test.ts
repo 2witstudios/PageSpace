@@ -11,7 +11,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { nextRefreshAttempt, REFRESH_BACKOFF_BASE_MS, REFRESH_BACKOFF_MAX_MS } from '../next-refresh-attempt';
-import { REFRESH_MAX_CONSECUTIVE_FAILURES, type RefreshAttemptFact } from '../decide-refresh';
+import { decideRefresh, REFRESH_MAX_CONSECUTIVE_FAILURES, type RefreshAttemptFact } from '../decide-refresh';
 
 const NOW = 1_800_000_000_000;
 const prior = (consecutiveFailures: number): RefreshAttemptFact => ({ at: NOW - 60_000, consecutiveFailures, retryAt: NOW - 1, rotationReplayed: false });
@@ -56,15 +56,23 @@ describe('nextRefreshAttempt', () => {
     expect(actual).toEqual(expected);
   });
 
-  it('given a definitive failure, should keep the replay flag it already had and schedule no retry', () => {
+  it('given a definitive failure, should exhaust the attempt count, keep the replay flag it already had and schedule no retry', () => {
     const actual = [
       nextRefreshAttempt({ previous: prior(2), outcome: { kind: 'definitive' }, now: NOW }),
       nextRefreshAttempt({ previous: { ...prior(0), rotationReplayed: true }, outcome: { kind: 'definitive' }, now: NOW }),
     ];
     const expected = [
-      { at: NOW, consecutiveFailures: 2, retryAt: null, rotationReplayed: false },
-      { at: NOW, consecutiveFailures: 0, retryAt: null, rotationReplayed: true },
+      { at: NOW, consecutiveFailures: REFRESH_MAX_CONSECUTIVE_FAILURES, retryAt: null, rotationReplayed: false },
+      { at: NOW, consecutiveFailures: REFRESH_MAX_CONSECUTIVE_FAILURES, retryAt: null, rotationReplayed: true },
     ];
+    expect(actual).toEqual(expected);
+  });
+
+  it('given a definitive failure recorded, should make the next decision require reauthorization on its own — the worker never retry-loops on a dead grant', () => {
+    const recorded = nextRefreshAttempt({ previous: null, outcome: { kind: 'definitive' }, now: NOW });
+    const material = { accessToken: 'a', accessExpiresAt: NOW - 1, refreshToken: 'r', scopes: [], issuer: 'https://zoom.us', tokenEndpoint: 'https://zoom.us/oauth/token' };
+    const actual = decideRefresh({ material, now: NOW + 86_400_000, marginMs: 60_000, lockHeld: false, lastAttempt: recorded });
+    const expected = { action: 'needs_reauth', reason: 'exhausted' };
     expect(actual).toEqual(expected);
   });
 });
