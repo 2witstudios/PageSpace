@@ -5,7 +5,7 @@
  * Chromium addresses it, with an absolute-URI request line.
  */
 import { createServer, request as httpRequest, type IncomingHttpHeaders, type Server } from 'node:http';
-import { connect, type AddressInfo } from 'node:net';
+import { connect, createServer as createNetServer, type AddressInfo, type Server as NetServer } from 'node:net';
 import { afterAll, beforeAll, describe, it } from 'vitest';
 import { assert } from './riteway.js';
 import { startBrowserEgressProxy, type BrowserEgressProxy } from '../browser-egress-proxy-adapter.js';
@@ -187,6 +187,62 @@ describe('the egress proxy on plaintext http', () => {
       should: 'return 404 to the browser',
       actual: response.status,
       expected: 404,
+    });
+  });
+});
+
+describe('the egress proxy given a status the site chose freely', () => {
+  let upstream: NetServer;
+  let proxy: BrowserEgressProxy;
+  let statusLine = '';
+
+  beforeAll(async () => {
+    // A raw socket server: Node's own http server refuses to send these.
+    upstream = createNetServer((socket) => {
+      socket.once('data', () => socket.end(`HTTP/1.1 ${statusLine}\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok`));
+      socket.on('error', () => socket.destroy());
+    });
+    await new Promise<void>((done) => upstream.listen(0, '127.0.0.1', done));
+    const { port } = upstream.address() as AddressInfo;
+    proxy = await startBrowserEgressProxy({
+      allowedOrigins: null,
+      resolve: async () => [FAKE_PUBLIC],
+      dial: () => connect({ host: '127.0.0.1', port }),
+    });
+  });
+
+  afterAll(async () => {
+    await proxy.close();
+    await new Promise<void>((done) => upstream.close(() => done()));
+  });
+
+  const statusFor = (line: string) =>
+    new Promise<number>((done, fail) => {
+      statusLine = line;
+      const url = new URL(proxy.url);
+      const req = httpRequest({ host: url.hostname, port: url.port, path: 'http://www.form.test/', headers: { host: 'www.form.test' }, agent: false }, (res) => {
+        res.resume();
+        res.on('end', () => done(res.statusCode ?? 0));
+      });
+      req.on('error', fail);
+      req.end();
+    });
+
+  it('passes a valid status through and turns an out-of-range or non-numeric one into 502', async () => {
+    const actual = {
+      ok: await statusFor('200 OK'),
+      teapot: await statusFor('418 Teapot'),
+      highest: await statusFor('599 Edge'),
+      belowRange: await statusFor('099 Low'),
+      aboveRange: await statusFor('600 High'),
+      farAbove: await statusFor('999 Max'),
+      nonNumeric: await statusFor('abc Nope'),
+    };
+    assert({
+      given: 'sites answering 200, 418, 599, 099, 600, 999 and a non-numeric status',
+      should: 'return the valid statuses and 502 for every other one',
+      actual,
+      expected: { ok: 200, teapot: 418, highest: 599, belowRange: 502, aboveRange: 502, farAbove: 502, nonNumeric: 502 },
     });
   });
 });

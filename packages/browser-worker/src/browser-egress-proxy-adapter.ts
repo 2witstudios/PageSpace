@@ -263,11 +263,14 @@ export const startBrowserEgressProxy = async ({
         const value = response.headers[name];
         if (value !== undefined) res.setHeader(name, value);
       }
-      // The status goes on `res.statusCode` and the head is sent implicitly
-      // by the first write. `writeHead(upstreamStatus)` is modelled by CodeQL
-      // as a header definition keyed by its argument (js/remote-property-
-      // injection, alert 350), though Node takes only a status there.
-      res.statusCode = response.statusCode ?? 502;
+      // The upstream chooses its status, so only a valid HTTP status passes;
+      // anything else is the proxy's 502. Node's parser admits any three
+      // digits, and sending the head throws on a status below 100. The head
+      // goes out implicitly on the first write: CodeQL alert 350 flagged the
+      // unchecked upstream status flowing into `writeHead`.
+      const status = response.statusCode;
+      const valid = status !== undefined && Number.isInteger(status) && status >= 100 && status <= 599;
+      res.statusCode = valid ? status : 502;
       response.pipe(res);
     });
     upstream.on('error', () => {
