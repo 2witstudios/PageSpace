@@ -9,11 +9,12 @@
  * one of them by name. A key always reads the consumer view: remaining amounts and your own
  * cap, never an org pool or anyone else's spend.
  *
- * Amounts arrive as cents of credit value and are shown as credits through the CLI's one
- * credit formatter (`../credits.ts`) — never with a currency symbol (UI-12).
+ * Every amount arrives as cents of credit value WITH its credit count already rendered by
+ * the server's money model (`…Credits`, e.g. "1,200"). The CLI prints that string and never
+ * converts cents itself: a credit is converted in one module only (MON-5), and a second
+ * definition here would drift from it. Never a currency symbol (UI-12).
  */
 import type { PageSpaceClient } from '@pagespace/sdk';
-import { formatCredits } from '../credits.js';
 import { EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR } from '../exit-codes.js';
 import type { CommandHandler } from '../router/router.js';
 import { callSdk } from './sdk-error.js';
@@ -34,8 +35,13 @@ export function sourceLabel(source: SpendSourceKind | null): string {
   return source === null ? '(none)' : SOURCE_LABELS[source];
 }
 
-function capLine(label: string, remainingCents: number | null): string {
-  return remainingCents === null ? `no ${label} cap` : `${formatCredits(remainingCents)} left ${label === 'daily' ? 'today' : 'this month'}`;
+/** Pure: a server-rendered credit count with its unit ("1,200 credits", "1 credit"). No conversion. */
+export function creditsLabel(count: string): string {
+  return `${count} ${count === '1' ? 'credit' : 'credits'}`;
+}
+
+function capLine(label: string, remainingCredits: string | null): string {
+  return remainingCredits === null ? `no ${label} cap` : `${creditsLabel(remainingCredits)} left ${label === 'daily' ? 'today' : 'this month'}`;
 }
 
 /** Pure: no I/O. */
@@ -44,8 +50,8 @@ export function renderDriveWallet(driveId: string, value: DriveWalletResult): st
   if (wallet === null) return `Drive ${driveId} has no wallet.\n`;
   return [
     `Drive wallet ${wallet.walletId} (drive ${wallet.driveId})  [${wallet.status}]`,
-    `  remaining: ${formatCredits(wallet.remainingCents)}`,
-    `  your cap: ${capLine('daily', wallet.myCap.dailyRemainingCents)} · ${capLine('monthly', wallet.myCap.monthlyRemainingCents)}`,
+    `  remaining: ${creditsLabel(wallet.remainingCredits)}`,
+    `  your cap: ${capLine('daily', wallet.myCap.dailyRemainingCredits)} · ${capLine('monthly', wallet.myCap.monthlyRemainingCredits)}`,
     `  donations: ${wallet.donationsEnabled ? 'on' : 'off'}`,
     `  default source: ${sourceLabel(wallet.defaultSpendSource)}`,
     `  viewing as: ${value.viewer}`,
@@ -61,10 +67,10 @@ function section(title: string, lines: readonly string[]): string[] {
 export function renderMyWallets(value: MyWalletsResult): string {
   const { personal, driveWallets, seats, funds } = value;
   return [
-    `Your wallet ${personal.walletId}  remaining: ${formatCredits(personal.remainingCents)}  default source: ${sourceLabel(personal.defaultSpendSource)}`,
+    `Your wallet ${personal.walletId}  remaining: ${creditsLabel(personal.remainingCredits)}  default source: ${sourceLabel(personal.defaultSpendSource)}`,
     ...section(
       'Drive wallets you can spend from:',
-      driveWallets.map((w) => `  ${w.driveId}  ${w.walletId}  [${w.status}]  remaining: ${formatCredits(w.remainingCents)}`),
+      driveWallets.map((w) => `  ${w.driveId}  ${w.walletId}  [${w.status}]  remaining: ${creditsLabel(w.remainingCredits)}`),
     ),
     ...section('Org seats:', seats.map((s) => `  ${s.orgId}  ${s.walletId}`)),
     ...section('Drive wallets your wallet funds:', funds.driveWallets.map((w) => `  ${w.driveId}  ${w.walletId}`)),
@@ -72,7 +78,7 @@ export function renderMyWallets(value: MyWalletsResult): string {
       'Your donations:',
       funds.donations.map(
         (d) =>
-          `  ${d.walletId}  drive: ${d.driveId ?? '(none)'}  ${formatCredits(d.remainingCents)} left of ${formatCredits(d.originalCents)}  ${d.createdAt.slice(0, 10)}`,
+          `  ${d.walletId}  drive: ${d.driveId ?? '(none)'}  ${creditsLabel(d.remainingCredits)} left of ${creditsLabel(d.originalCredits)}  ${d.createdAt.slice(0, 10)}`,
       ),
     ),
     '',

@@ -17,7 +17,8 @@ const consumerWallet = {
   driveId: 'd1',
   status: 'active',
   remainingCents: 4200,
-  myCap: { dailyRemainingCents: 300, monthlyRemainingCents: null },
+  remainingCredits: '4,200',
+  myCap: { dailyRemainingCents: 300, monthlyRemainingCents: null, dailyRemainingCredits: '300', monthlyRemainingCredits: null },
   donationsEnabled: true,
   defaultSpendSource: 'drive_wallet',
 };
@@ -26,13 +27,13 @@ const driveWalletBody = { viewer: 'member', actions: ['view'], wallet: consumerW
 
 /** `MyWallets` as a token reads it: `funds.pools` is always empty. */
 const myWalletsBody = {
-  personal: { walletId: 'w_me', remainingCents: 900, defaultSpendSource: null },
-  driveWallets: [{ driveId: 'd1', walletId: 'w_drive', status: 'active', remainingCents: 4200 }],
+  personal: { walletId: 'w_me', remainingCents: 900, remainingCredits: '900', defaultSpendSource: null },
+  driveWallets: [{ driveId: 'd1', walletId: 'w_drive', status: 'active', remainingCents: 4200, remainingCredits: '4,200' }],
   seats: [{ orgId: 'o1', walletId: 'w_pool' }],
   funds: {
     driveWallets: [{ driveId: 'd2', walletId: 'w_d2' }],
     pools: [],
-    donations: [{ walletId: 'w_d3', driveId: 'd3', originalCents: 500, remainingCents: 120, createdAt: '2026-09-01T00:00:00.000Z' }],
+    donations: [{ walletId: 'w_d3', driveId: 'd3', originalCents: 500, originalCredits: '500', remainingCents: 120, remainingCredits: '120', createdAt: '2026-09-01T00:00:00.000Z' }],
   },
 };
 

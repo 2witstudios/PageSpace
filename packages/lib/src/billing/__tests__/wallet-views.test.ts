@@ -43,6 +43,12 @@ const facts = (over: Partial<DriveWalletFacts> = {}): DriveWalletFacts => ({
 const SECRET_KEYS = ['pool', 'spendByConsumer', 'allocationCents', 'spentCents', 'debtCents', 'fallbackRule', 'parentWalletId', 'topupRemainingCents'];
 
 describe('wallet-views: the numbers', () => {
+  it('UI-12 (partial) every amount a consumer sees also carries its credit count from the money model\'s one formatter, so no client converts', () => {
+    const view = projectDriveWallet('member', facts({ wallet: { ...facts().wallet, monthlyAllowanceCents: c(120_000), spentCents: 0, topupRemainingCents: 0 } }));
+    expect(view).toMatchObject({ remainingCents: c(120_000), remainingCredits: '120,000' });
+    expect(JSON.stringify(view)).not.toContain('$');
+  });
+
   it('SPEND-9 (partial) the remaining amount is the wallet\'s OWN budget (allocation left + top-ups − debt), never capped by — so never revealing — the pool', () => {
     expect(walletRemainingCents(facts().wallet)).toBe(c(1200) - c(100) + c(40));
     expect(walletRemainingCents({ ...facts().wallet, spentCents: c(1300), topupRemainingCents: 0 })).toBe(0);
@@ -50,10 +56,10 @@ describe('wallet-views: the numbers', () => {
   });
 
   it('SPEND-9 (partial) a consumer\'s remaining cap is per window; an unset cap is unlimited (null)', () => {
-    expect(capRemainingCents(facts().myCap)).toEqual({ dailyRemainingCents: c(6), monthlyRemainingCents: null });
+    expect(capRemainingCents(facts().myCap)).toEqual({ dailyRemainingCents: c(6), monthlyRemainingCents: null, dailyRemainingCredits: '6', monthlyRemainingCredits: null });
     expect(capRemainingCents({ dailyCapCents: c(10), monthlyCapCents: c(100), spentTodayCents: c(15), spentThisMonthCents: c(120) }))
-      .toEqual({ dailyRemainingCents: 0, monthlyRemainingCents: 0 });
-    expect(capRemainingCents(null)).toEqual({ dailyRemainingCents: null, monthlyRemainingCents: null });
+      .toEqual({ dailyRemainingCents: 0, monthlyRemainingCents: 0, dailyRemainingCredits: '0', monthlyRemainingCredits: '0' });
+    expect(capRemainingCents(null)).toEqual({ dailyRemainingCents: null, monthlyRemainingCents: null, dailyRemainingCredits: null, monthlyRemainingCredits: null });
   });
 
   it('SPEND-10 (partial) the unallocated balance is the pool\'s available less what its children may still draw', () => {
@@ -71,7 +77,8 @@ describe('wallet-views: the projection each viewer gets', () => {
       driveId: 'd-product',
       status: 'active',
       remainingCents: c(1140),
-      myCap: { dailyRemainingCents: c(6), monthlyRemainingCents: null },
+      remainingCredits: '1,140',
+      myCap: { dailyRemainingCents: c(6), monthlyRemainingCents: null, dailyRemainingCredits: '6', monthlyRemainingCredits: null },
       donationsEnabled: true,
       defaultSpendSource: null,
     });
@@ -119,6 +126,6 @@ describe('wallet-views purity', () => {
   it('imports nothing that does I/O', () => {
     const src = readFileSync(fileURLToPath(new URL('../wallet-views.ts', import.meta.url)), 'utf8');
     const imports = [...src.matchAll(/from\s+'([^']+)'/g)].map((m) => m[1]);
-    expect(imports.sort()).toEqual(['../permissions/wallet-access', './wallet-core']);
+    expect(imports.sort()).toEqual(['../permissions/wallet-access', './money-model', './wallet-core']);
   });
 });

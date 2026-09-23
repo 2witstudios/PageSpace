@@ -32,7 +32,24 @@ export function refuseScopedTokenForAccountRead(auth: AuthResult): NextResponse 
   return null;
 }
 
-/** How the caller authenticated, for the service's [D-OW-26] decisions. */
+/**
+ * How the caller authenticated, for the service's [D-OW-26] decisions. Only a real session is
+ * `session`; every delegated credential (an MCP key, an OAuth connector token, a service hop)
+ * is `mcp`, so it reads the consumer view and every write refuses it. The switch is exhaustive:
+ * a new kind of AuthResult fails to compile here instead of silently getting session authority
+ * if a route's `allow` list is ever widened.
+ */
 export function walletCredentialOf(auth: AuthResult): WalletCredential {
-  return isMCPAuthResult(auth) ? 'mcp' : 'session';
+  switch (auth.tokenType) {
+    case 'session':
+      return 'session';
+    case 'mcp':
+    case 'oauth':
+    case 'service':
+      return 'mcp';
+    default: {
+      const unhandled: never = auth;
+      return unhandled;
+    }
+  }
 }

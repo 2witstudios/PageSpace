@@ -21,7 +21,7 @@ describe('wallet-admin: a change to a drive wallet', () => {
     });
   });
 
-  it('WAL-7 (partial) resuming a paused wallet returns it to active, or to over while it carries debt (WAL-6e)', () => {
+  it('WAL-7 (partial) resuming a paused wallet returns it to active, or to over while it carries debt', () => {
     expect(planWalletPatch({ paused: false }, { status: 'paused', debtCents: 0 })).toMatchObject({ set: { status: 'active' } });
     expect(planWalletPatch({ paused: false }, { status: 'paused', debtCents: 5 })).toMatchObject({ set: { status: 'over' } });
   });
@@ -39,7 +39,7 @@ describe('wallet-admin: a change to a drive wallet', () => {
   });
 });
 
-describe('wallet-admin: a top-up (WAL-3)', () => {
+describe('wallet-admin: a top-up', () => {
   const payer = { walletId: 'w-pool', balance: { monthlyCents: c(100), topupCents: c(50), debtCents: 0 }, heldCents: 0 };
   const target = { walletId: 'w-product', legsRemainingCents: c(40), debtCents: 0 };
 
@@ -74,7 +74,7 @@ describe('wallet-admin: a top-up (WAL-3)', () => {
 describe('wallet-admin: deleting a drive wallet', () => {
   const unused = { liveHoldCount: 0, ledgerEntryCount: 0, legsRemainingCents: 0, debtCents: 0 };
 
-  it('an unused wallet deletes; its unspent allocation never left the parent (WAL-3)', () => {
+  it('an unused wallet deletes; its unspent allocation never left the parent', () => {
     expect(planDeleteWallet(unused)).toEqual({ kind: 'delete' });
   });
 

@@ -48,6 +48,7 @@ import {
 import { ensurePersonalRootWalletId } from '../billing/personal-wallet';
 import { listSpendChoices, resolveCallSpend, type SpendChoice } from '../billing/spend-resolution';
 import { conversationSpend, type CallSpendDecision } from '../billing/spend-target';
+import { formatCreditCount } from '../billing/money-model';
 import { toSubscriptionTier } from '../billing/subscription-tiers';
 import { planDeleteWallet, planTopUp, planWalletPatch, type DeleteBlocker, type WalletPatchInput } from '../billing/wallet-admin';
 import { donateToDriveWallet } from '../billing/wallet-funding-shell';
@@ -164,10 +165,14 @@ async function orgPoolRow(executor: Pick<typeof db, 'select'>, orgId: string) {
   return row ?? null;
 }
 
-async function liveHeldCents(walletIds: string[], includeChildrenOf: string[] = []): Promise<number> {
+async function liveHeldCents(
+  executor: Pick<typeof db, 'select'>,
+  walletIds: string[],
+  includeChildrenOf: string[] = [],
+): Promise<number> {
   if (walletIds.length === 0 && includeChildrenOf.length === 0) return 0;
   const now = new Date();
-  const [row] = await db
+  const [row] = await executor
     .select({ cents: sql<number>`coalesce(sum(${creditHolds.estCents}), 0)::int` })
     .from(creditHolds)
     .innerJoin(wallets, eq(wallets.id, creditHolds.walletId))
@@ -234,7 +239,7 @@ async function poolFacts(orgId: string): Promise<PoolFacts | null> {
     .select({ outstanding: sql<number>`coalesce(sum(greatest(${wallets.monthlyAllowanceCents} - ${wallets.spentCents}, 0)), 0)::int` })
     .from(wallets)
     .where(eq(wallets.parentWalletId, pool.id));
-  const held = await liveHeldCents([], [pool.id]);
+  const held = await liveHeldCents(db, [], [pool.id]);
   return {
     walletId: pool.id,
     availableCents: pool.monthlyRemainingCents + pool.topupRemainingCents - pool.debtCents - held,
@@ -451,8 +456,6 @@ export async function topUpDriveWallet(
     ? (await orgPoolRow(db, standing.orgId))?.id ?? null
     : await ensurePersonalRootWalletId(db, standing.ownerId);
   if (!payerId) return { ok: false, status: 409, code: 'no_org_pool', message: 'This organization has no pool to pay from' };
-  // Holds that reserve against the payer: its own, and (for a pool) its children's.
-  const held = await liveHeldCents([payerId], standing.orgId !== null ? [payerId] : []);
 
   return db.transaction(async (tx) => {
     const [prior] = await tx.select({ id: walletFundingLegs.id }).from(walletFundingLegs).where(eq(walletFundingLegs.sourceRef, sourceRef)).limit(1);
@@ -466,6 +469,11 @@ export async function topUpDriveWallet(
     const payer = locked.get(payerId);
     const drive = locked.get(target.id);
     if (!payer || !drive) return { ok: false as const, status: 404 as const, code: 'no_wallet', message: 'The wallet was removed' };
+    // What in-flight calls reserve against the payer, read AFTER the locks so a hold placed
+    // meanwhile is counted: its own holds and its children's, since a child wallet's
+    // allocation draws on its parent (the org pool, or the lead's personal wallet) — the
+    // same rule the gate uses (spend-resolution: includeChildren on the root).
+    const held = await liveHeldCents(tx, [payerId], [payerId]);
 
     const plan = planTopUp({
       amountCents: input.amountCents,
@@ -566,17 +574,29 @@ export async function donateToDrive(
 // Settings › Usage › Wallets (UI-10): what I spend from, what I fund, my default
 // ---------------------------------------------------------------------------
 
+/**
+ * Every amount is cents of credit value with its credit count beside it (`…Credits`, the money
+ * model's formatter), so a client displays credits without converting (MON-5).
+ */
 export interface MyWallets {
-  personal: { walletId: string; remainingCents: number; defaultSpendSource: SpendSourceKind | null };
+  personal: { walletId: string; remainingCents: number; remainingCredits: string; defaultSpendSource: SpendSourceKind | null };
   /** Drive wallets of drives I can open: the consumer amount only (SPEND-9). */
-  driveWallets: { driveId: string; walletId: string; status: string; remainingCents: number }[];
+  driveWallets: { driveId: string; walletId: string; status: string; remainingCents: number; remainingCredits: string }[];
   /** A seat on each org I belong to: my own cap only, never the pool (SPEND-9). */
   seats: { orgId: string; walletId: string }[];
   /** What I fund: drive wallets my personal wallet parents, pools I administer (SPEND-10), my donations. */
   funds: {
     driveWallets: { driveId: string; walletId: string }[];
     pools: { orgId: string; walletId: string; availableCents: number; unallocatedCents: number }[];
-    donations: { walletId: string; driveId: string | null; originalCents: number; remainingCents: number; createdAt: string }[];
+    donations: {
+      walletId: string;
+      driveId: string | null;
+      originalCents: number;
+      originalCredits: string;
+      remainingCents: number;
+      remainingCredits: string;
+      createdAt: string;
+    }[];
   };
 }
 
@@ -590,10 +610,12 @@ export async function listMyWallets(userId: string, credential: WalletCredential
     .select({ monthlyRemainingCents: wallets.monthlyRemainingCents, topupRemainingCents: wallets.topupRemainingCents, debtCents: wallets.debtCents, defaultSpendSource: wallets.defaultSpendSource })
     .from(wallets)
     .where(eq(wallets.id, personalId));
+  const personalRemaining = Math.max(0, (personal?.monthlyRemainingCents ?? 0) + (personal?.topupRemainingCents ?? 0) - (personal?.debtCents ?? 0));
   const result: MyWallets = {
     personal: {
       walletId: personalId,
-      remainingCents: Math.max(0, (personal?.monthlyRemainingCents ?? 0) + (personal?.topupRemainingCents ?? 0) - (personal?.debtCents ?? 0)),
+      remainingCents: personalRemaining,
+      remainingCredits: formatCreditCount(personalRemaining),
       defaultSpendSource: personal?.defaultSpendSource ?? null,
     },
     driveWallets: [],
@@ -607,7 +629,15 @@ export async function listMyWallets(userId: string, credential: WalletCredential
     .innerJoin(wallets, eq(wallets.id, walletFundingLegs.walletId))
     .where(and(eq(walletFundingLegs.funderUserId, userId), eq(walletFundingLegs.funderKind, 'donation')))
     .limit(500);
-  result.funds.donations = donations.map((d) => ({ walletId: d.walletId, driveId: d.subjectId, originalCents: d.originalCents, remainingCents: d.remainingCents, createdAt: d.createdAt.toISOString() }));
+  result.funds.donations = donations.map((d) => ({
+    walletId: d.walletId,
+    driveId: d.subjectId,
+    originalCents: d.originalCents,
+    originalCredits: formatCreditCount(d.originalCents),
+    remainingCents: d.remainingCents,
+    remainingCredits: formatCreditCount(d.remainingCents),
+    createdAt: d.createdAt.toISOString(),
+  }));
 
   if (!ORGS_ENABLED) return result;
 
@@ -621,7 +651,8 @@ export async function listMyWallets(userId: string, credential: WalletCredential
       .limit(1000);
     for (const row of rows) {
       if (!row.subjectId) continue;
-      result.driveWallets.push({ driveId: row.subjectId, walletId: row.id, status: row.status, remainingCents: walletRemainingCents(row) });
+      const remaining = walletRemainingCents(row);
+      result.driveWallets.push({ driveId: row.subjectId, walletId: row.id, status: row.status, remainingCents: remaining, remainingCredits: formatCreditCount(remaining) });
       if (row.parentWalletId === personalId) result.funds.driveWallets.push({ driveId: row.subjectId, walletId: row.id });
     }
   }

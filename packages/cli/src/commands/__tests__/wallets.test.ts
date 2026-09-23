@@ -8,6 +8,7 @@ import {
   extractDriveWalletArgs,
   parseArgv,
   renderConversationSource,
+  creditsLabel,
   renderDriveWallet,
   renderMyWallets,
   walletsDriveHandler,
@@ -30,7 +31,8 @@ const CONSUMER_WALLET = {
   driveId: 'd1',
   status: 'active' as const,
   remainingCents: 420_000,
-  myCap: { dailyRemainingCents: 300, monthlyRemainingCents: null },
+  remainingCredits: '420,000',
+  myCap: { dailyRemainingCents: 300, monthlyRemainingCents: null, dailyRemainingCredits: '300', monthlyRemainingCredits: null },
   donationsEnabled: true,
   defaultSpendSource: 'drive_wallet' as const,
 };
@@ -38,13 +40,13 @@ const CONSUMER_WALLET = {
 const DRIVE_WALLET = { viewer: 'member' as const, actions: ['view' as const], wallet: CONSUMER_WALLET };
 
 const MY_WALLETS = {
-  personal: { walletId: 'w_me', remainingCents: 1_250, defaultSpendSource: null },
-  driveWallets: [{ driveId: 'd1', walletId: 'w_drive', status: 'active' as const, remainingCents: 420_000 }],
+  personal: { walletId: 'w_me', remainingCents: 1_250, remainingCredits: '1,250', defaultSpendSource: null },
+  driveWallets: [{ driveId: 'd1', walletId: 'w_drive', status: 'active' as const, remainingCents: 420_000, remainingCredits: '420,000' }],
   seats: [{ orgId: 'o1', walletId: 'w_pool' }],
   funds: {
     driveWallets: [],
     pools: [],
-    donations: [{ walletId: 'w_d3', driveId: 'd3', originalCents: 500, remainingCents: 120, createdAt: '2026-09-01T12:00:00.000Z' }],
+    donations: [{ walletId: 'w_d3', driveId: 'd3', originalCents: 500, originalCredits: '500', remainingCents: 120, remainingCredits: '120', createdAt: '2026-09-01T12:00:00.000Z' }],
   },
 };
 
@@ -90,6 +92,14 @@ describe('wallets argv', () => {
 });
 
 describe('wallets rendering', () => {
+  it('X-1 (partial) prints the server\'s credit count verbatim and never converts cents itself (MON-5: one conversion)', () => {
+    // The cents and the count deliberately disagree: only the server's count may reach the screen.
+    const text = renderDriveWallet('d1', { ...DRIVE_WALLET, wallet: { ...DRIVE_WALLET.wallet, remainingCents: 5, remainingCredits: '7' } });
+    expect(text).toContain('remaining: 7 credits');
+    expect(creditsLabel('1')).toBe('1 credit');
+    expect(creditsLabel('1,200')).toBe('1,200 credits');
+  });
+
   it('X-1 (partial) renders credit amounts as credits, never with a currency symbol', () => {
     const text = renderDriveWallet('d1', DRIVE_WALLET);
     expect(text).toContain('remaining: 420,000 credits');

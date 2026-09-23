@@ -28,8 +28,10 @@
  * absent, and `funds.pools` must be empty. None of those is an additive change: each is the
  * server showing a token something it must not.
  *
- * Amounts are cents of CREDIT value (not money): render them with the money model's credit
- * formatter, never with a currency symbol (UI-12).
+ * Amounts are cents of CREDIT value (not money). Each comes with its credit count already
+ * rendered by the server's money model (`…Credits`, e.g. "1,200"): display that string and
+ * never convert cents in a client — a credit is converted in one module only (MON-5). Never
+ * with a currency symbol (UI-12).
  *
  * The enum vocabularies are inlined rather than imported from `@pagespace/lib` (the
  * published SDK never runtime- or type-imports it); `__tests__/wallets-drift-guard.test.ts`
@@ -86,10 +88,14 @@ const consumerWalletViewSchema = z.object({
   driveId: z.string(),
   status: walletStatusSchema,
   remainingCents: z.number(),
+  /** `remainingCents` as a credit count ("1,200"), rendered by the server's money model (MON-5). */
+  remainingCredits: z.string(),
   /** Null = no cap of that kind (unlimited within the wallet). */
   myCap: z.object({
     dailyRemainingCents: z.number().nullable(),
     monthlyRemainingCents: z.number().nullable(),
+    dailyRemainingCredits: z.string().nullable(),
+    monthlyRemainingCredits: z.string().nullable(),
   }),
   donationsEnabled: z.boolean(),
   /** The drive's default source (SPEND-3): what a new conversation here preselects. */
@@ -106,6 +112,7 @@ export const CONSUMER_WALLET_VIEW_KEYS = [
   'driveId',
   'status',
   'remainingCents',
+  'remainingCredits',
   'myCap',
   'donationsEnabled',
   'defaultSpendSource',
@@ -116,11 +123,12 @@ const myWalletsSchema = z.object({
   personal: z.object({
     walletId: z.string(),
     remainingCents: z.number(),
+    remainingCredits: z.string(),
     defaultSpendSource: spendSourceKindSchema.nullable(),
   }),
   /** Drive wallets of drives the caller can open: the consumer amount only (SPEND-9). */
   driveWallets: z.array(
-    z.object({ driveId: z.string(), walletId: z.string(), status: walletStatusSchema, remainingCents: z.number() }),
+    z.object({ driveId: z.string(), walletId: z.string(), status: walletStatusSchema, remainingCents: z.number(), remainingCredits: z.string() }),
   ),
   /** A seat on each org the caller belongs to (their own cap only, never the pool). */
   seats: z.array(z.object({ orgId: z.string(), walletId: z.string() })),
@@ -133,7 +141,9 @@ const myWalletsSchema = z.object({
         walletId: z.string(),
         driveId: z.string().nullable(),
         originalCents: z.number(),
+        originalCredits: z.string(),
         remainingCents: z.number(),
+        remainingCredits: z.string(),
         createdAt: z.string(),
       }),
     ),

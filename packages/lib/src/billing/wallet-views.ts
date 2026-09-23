@@ -11,9 +11,15 @@
  *     so it cannot reveal how much the pool (or the lead's personal wallet) holds.
  *   - lead (SPEND-10): the wallet and spend by member and automation for their drive.
  *   - org_admin (SPEND-10): all of that plus the pool and its unallocated balance.
+ *
+ * Each amount a consumer sees also carries its credit count (`…Credits`), rendered by the
+ * money model's one formatter (MON-5, UI-12: "1,200", no currency symbol). A client that
+ * displays credits — the CLI, which never imports this library — prints that string and never
+ * converts cents itself, so there is still exactly one credit conversion.
  */
 
 import type { WalletViewer } from '../permissions/wallet-access';
+import { formatCreditCount } from './money-model';
 import type { FallbackRule, SpendSourceKind, WalletStatus } from './wallet-core';
 
 export interface DriveWalletRowFacts {
@@ -75,16 +81,23 @@ export interface CapRemaining {
   /** Null = no daily cap (unlimited within the wallet). */
   dailyRemainingCents: number | null;
   monthlyRemainingCents: number | null;
+  /** The same amounts as credit counts (money-model `formatCreditCount`); null = no cap. */
+  dailyRemainingCredits: string | null;
+  monthlyRemainingCredits: string | null;
+}
+
+/** An amount as the money model renders it, or null for no amount. */
+export function creditsOf(cents: number | null): string | null {
+  return cents === null ? null : formatCreditCount(cents);
 }
 
 export function capRemainingCents(cap: ConsumerCapFacts | null): CapRemaining {
-  if (cap === null) return { dailyRemainingCents: null, monthlyRemainingCents: null };
+  if (cap === null) return { dailyRemainingCents: null, monthlyRemainingCents: null, dailyRemainingCredits: null, monthlyRemainingCredits: null };
   const left = (capCents: number | null, spent: number): number | null =>
     capCents === null ? null : Math.max(0, whole(capCents) - Math.max(0, whole(spent)));
-  return {
-    dailyRemainingCents: left(cap.dailyCapCents, cap.spentTodayCents),
-    monthlyRemainingCents: left(cap.monthlyCapCents, cap.spentThisMonthCents),
-  };
+  const daily = left(cap.dailyCapCents, cap.spentTodayCents);
+  const monthly = left(cap.monthlyCapCents, cap.spentThisMonthCents);
+  return { dailyRemainingCents: daily, monthlyRemainingCents: monthly, dailyRemainingCredits: creditsOf(daily), monthlyRemainingCredits: creditsOf(monthly) };
 }
 
 /** The pool's balance not yet promised to a child wallet this period. May be negative (over-allocated). */
@@ -99,6 +112,7 @@ export const CONSUMER_WALLET_FIELDS = [
   'driveId',
   'status',
   'remainingCents',
+  'remainingCredits',
   'myCap',
   'donationsEnabled',
   'defaultSpendSource',
@@ -110,6 +124,8 @@ export interface ConsumerWalletView {
   driveId: string;
   status: WalletStatus;
   remainingCents: number;
+  /** `remainingCents` as a credit count ("1,200"), from the money model. */
+  remainingCredits: string;
   myCap: CapRemaining;
   donationsEnabled: boolean;
   /** The drive's default source (SPEND-3): what a new conversation here preselects. */
@@ -142,6 +158,7 @@ function consumerFields(facts: DriveWalletFacts): Omit<ConsumerWalletView, 'view
     driveId: w.driveId,
     status: w.status,
     remainingCents: walletRemainingCents(w),
+    remainingCredits: formatCreditCount(walletRemainingCents(w)),
     myCap: capRemainingCents(facts.myCap),
     donationsEnabled: w.donationsEnabled,
     defaultSpendSource: w.defaultSpendSource,

@@ -165,7 +165,7 @@ describe('wallet_consumer_caps', () => {
   });
 });
 
-describe('the stored spend source (SPEND-3)', () => {
+describe('the stored spend source', () => {
   it('SPEND-3 (partial): a wallet carries a nullable default spend source, checked against the three source kinds and refused on an org pool', () => {
     const column = getTableColumns(wallets).defaultSpendSource;
     // NULL means "no default set": nothing is preselected from this row.

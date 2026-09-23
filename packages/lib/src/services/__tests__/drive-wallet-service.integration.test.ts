@@ -275,7 +275,7 @@ describe('drive-wallet service (orgs on, real Postgres)', () => {
   it('UI-10 (partial) SPEND-9 (partial) a member lists what they spend from (drive wallets, their seat) with no pool balance; an admin also lists the pool they fund', async () => {
     if (!world) return;
     const marcus = await listMyWallets(world.ids.marcus, 'session');
-    expect(marcus.driveWallets).toEqual([{ driveId: world.productId, walletId: world.productWalletId, status: 'active', remainingCents: 120_000 - LENA_SPEND - MARCUS_SPEND }]);
+    expect(marcus.driveWallets).toEqual([{ driveId: world.productId, walletId: world.productWalletId, status: 'active', remainingCents: 120_000 - LENA_SPEND - MARCUS_SPEND, remainingCredits: (120_000 - LENA_SPEND - MARCUS_SPEND).toLocaleString('en-US') }]);
     expect(marcus.seats).toEqual([{ orgId: world.orgId, walletId: world.poolId }]);
     expect(marcus.funds.pools).toEqual([]);
     expect(JSON.stringify(marcus)).not.toContain(String(POOL_CENTS));
@@ -407,5 +407,28 @@ describe('drive-wallet service (orgs on, real Postgres)', () => {
     const priya = await listMyWallets(world.ids.priya, 'mcp');
     expect(priya.funds.pools).toEqual([]);
     expect(JSON.stringify(priya)).not.toContain(String(POOL_CENTS));
+  });
+  it('WAL-3 (partial) a personal drive\'s lead cannot top up past what their own wallet can spare: holds on the drive wallet (its child) count against it', async () => {
+    if (!world) return;
+    // Dana's personal drive, funded by her personal root (1,000 cents); a turn in the drive holds 600 on its wallet.
+    const notes = await factories.createDrive(world.ids.dana, { name: 'Dana notes', slug: `notes-${createId()}` });
+    const [root] = await db.insert(wallets).values({ userId: world.ids.dana, monthlyRemainingCents: 1_000 }).returning();
+    const [child] = await db.insert(wallets).values({
+      ownerType: 'user', userId: world.ids.dana, subjectType: 'drive', subjectId: notes.id, parentWalletId: root.id, monthlyAllowanceCents: 5_000,
+    }).returning();
+    await db.insert(creditHolds).values({ userId: world.ids.dana, walletId: child.id, estCents: 600, expiresAt: new Date(Date.now() + 60_000) });
+    try {
+      expect(await topUpDriveWallet(world.ids.dana, notes.id, { amountCents: 500, idempotencyKey: createId() }, 'session'))
+        .toMatchObject({ ok: false, status: 402, code: 'insufficient_funds' });
+      expect((await walletRow(root.id)).monthlyRemainingCents).toBe(1_000);
+      expect(await topUpDriveWallet(world.ids.dana, notes.id, { amountCents: 400, idempotencyKey: createId() }, 'session'))
+        .toMatchObject({ ok: true, amountCents: 400 });
+    } finally {
+      await db.delete(creditHolds).where(eq(creditHolds.walletId, child.id));
+      await db.delete(creditLedger).where(inArray(creditLedger.walletId, [child.id, root.id]));
+      await db.delete(walletFundingLegs).where(eq(walletFundingLegs.walletId, child.id));
+      await db.delete(wallets).where(eq(wallets.id, child.id));
+      await db.delete(drives).where(eq(drives.id, notes.id));
+    }
   });
 });

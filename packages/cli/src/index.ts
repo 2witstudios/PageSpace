@@ -477,6 +477,7 @@ export {
   extractConversationSourceArgs,
   extractDriveWalletArgs,
   renderConversationSource,
+  creditsLabel,
   renderDriveWallet,
   renderMyWallets,
   renderResolvedSpend,
@@ -486,4 +487,3 @@ export {
   walletsSourceHandler,
 } from './commands/wallets.js';
 export type { ExtractWalletArgsResult } from './commands/wallets.js';
-export { formatCreditCount, formatCredits } from './credits.js';
