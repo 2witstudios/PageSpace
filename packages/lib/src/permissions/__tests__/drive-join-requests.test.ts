@@ -350,7 +350,7 @@ describe('decideJoinRequestApprover: no existence oracle for a Private drive', (
 
 describe('decideJoinRequestStaysOpen: a pending request closes when what it asked for is gone', () => {
   const open = (over: Partial<Parameters<typeof decideJoinRequestStaysOpen>[0]> = {}) => decideJoinRequestStaysOpen({
-    drive: drive(), requesterId: LENA, requesterOrgRole: 'MEMBER', ...over,
+    drive: drive(), requesterId: LENA, requesterOrgRole: 'MEMBER', requesterRow: null, ...over,
   });
 
   it('DRV-6 (partial) stays open on a Restricted org drive while the requester is in the org and does not lead it', () => {
@@ -372,5 +372,15 @@ describe('decideJoinRequestStaysOpen: a pending request closes when what it aske
 
   it('DRV-6 (partial) closes once the requester became the lead', () => {
     expect(open({ requesterId: MARCUS })).toBe(false);
+  });
+
+  it('DRV-6 (partial) closes once the requester became a member another way (an accepted invitation)', () => {
+    expect(open({ requesterRow: accepted })).toBe(false);
+  });
+
+  it('DRV-6 (partial) stays open beside a row that is no membership: a GUEST row, a stale org row, a pending invitation', () => {
+    expect(open({ requesterRow: guestRow })).toBe(true);
+    expect(open({ requesterRow: staleOrgRow })).toBe(true);
+    expect(open({ requesterRow: pendingInvite })).toBe(true);
   });
 });

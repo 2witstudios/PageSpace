@@ -7,7 +7,7 @@ import { ORGS_ENABLED } from '../organizations/orgs-enabled';
 import { decideListedDriveRole } from './org-drive-resolution';
 import { loadAcceptedRowsInDrives, resolveEffectiveDriveMemberships } from './org-drive-membership';
 import type { DriveMemberRole } from './org-access';
-import { driveMembershipRole, driveMembershipRow } from './drive-member-role';
+import { DRIVE_MEMBERSHIP_ROLES, driveMembershipRole, driveMembershipRow } from './drive-member-role';
 
 /**
  * The drives a person is a member of: the set every "my drives" aggregate (commands, activity,
@@ -185,11 +185,15 @@ export function memberOfAnyDriveCondition(userIdColumn: SQL.Aliased | Parameters
     db.select(ONE).from(drives).where(and(eq(drives.ownerId, userIdColumn), inArray(drives.id, driveIds))),
   );
 
+  // A GUEST row (D-OW-24) is no membership, as driveMembershipRole reads it in listMemberDrives.
+  const membershipRole = inArray(driveMembers.role, [...DRIVE_MEMBERSHIP_ROLES]);
+
   if (!ORGS_ENABLED) {
     const acceptedRow = exists(
       db.select(ONE).from(driveMembers).where(and(
         eq(driveMembers.userId, userIdColumn),
         isNotNull(driveMembers.acceptedAt),
+        membershipRole,
         inArray(driveMembers.driveId, driveIds),
       )),
     );
@@ -205,6 +209,7 @@ export function memberOfAnyDriveCondition(userIdColumn: SQL.Aliased | Parameters
     db.select(ONE).from(driveMembers).innerJoin(drives, eq(drives.id, driveMembers.driveId)).where(and(
       eq(driveMembers.userId, userIdColumn),
       isNotNull(driveMembers.acceptedAt),
+      membershipRole,
       inArray(driveMembers.driveId, driveIds),
       or(
         isNull(drives.orgId),

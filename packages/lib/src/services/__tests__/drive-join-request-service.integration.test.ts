@@ -343,6 +343,20 @@ describe('a pending request closes when what it asked for is gone', () => {
     expect(forNewLead.ok && forNewLead.requests.map((r) => r.userId)).toEqual([nina]);
   });
 
+  it('DRV-6 (partial) a requester who became a member another way drops off the approver list at once, and the next transition closes the request', async () => {
+    const lenaRequest = (await requestAs(lena)).request;
+    const ninaRequest = (await requestAs(nina)).request;
+    // The lead invited Lena directly and she accepted (a path that never looks at join requests).
+    await db.insert(driveMembers).values({ driveId: research, userId: lena, role: 'MEMBER', invitedBy: marcus, acceptedAt: new Date() });
+
+    expect(await pendingFor(marcus)).toEqual([nina]);
+    expect((await statusOf(lenaRequest.id)).status).toBe('pending');
+
+    await changeOrgDriveLead(priya, research, { newLeadId: jono }, orgDriveServiceDeps);
+    await expectClosed(lenaRequest.id);
+    expect((await statusOf(ninaRequest.id)).status).toBe('pending');
+  });
+
   it('DRV-6 (partial) deleting the org closes the requests on its drives', async () => {
     const { request } = await requestAs(lena);
 

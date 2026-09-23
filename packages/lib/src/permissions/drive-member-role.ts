@@ -1,5 +1,6 @@
 import type { DriveMemberSource, memberRole } from '@pagespace/db/schema/members';
 import type { DriveMemberRole, OrgDriveMembership } from './org-access';
+import { loggers } from '../logging/logger-config';
 
 /**
  * What a stored drive_members role means for drive membership: the ONE place a role read from the
@@ -12,9 +13,11 @@ import type { DriveMemberRole, OrgDriveMembership } from './org-access';
  *
  * GUEST is classified before the enum value exists on this branch, so the decision is already
  * right when master's migration brings it in. Two guards keep the next value from passing silently:
- * - compile time: MEMBERSHIP_OF must name every value of the database enum, so adding one to
- *   memberRole without classifying it here is a type error;
- * - run time: a string nobody classified throws instead of reading as a membership.
+ * - compile time (exhaustiveness): MEMBERSHIP_OF must name every value of the database enum, so
+ *   adding one to memberRole without classifying it here is a type error;
+ * - run time (fail closed): a role nobody classified, or a row with no role, reads as NO membership
+ *   and logs a warning. It never throws: a throw would turn one odd row into a 500 on a permission
+ *   path (an outage anyone who can plant such a row could trigger) for the same security answer.
  */
 
 type StoredDriveMemberRole = (typeof memberRole.enumValues)[number];
@@ -33,10 +36,16 @@ export const DRIVE_MEMBERSHIP_ROLES: readonly DriveMemberRole[] = Object.values(
 const isClassified = (role: string): role is keyof typeof MEMBERSHIP_OF =>
   Object.prototype.hasOwnProperty.call(MEMBERSHIP_OF, role);
 
-/** The membership a stored role grants, or null when the row is not a drive membership (GUEST). */
-export function driveMembershipRole(role: string): DriveMemberRole | null {
-  if (!isClassified(role)) {
-    throw new Error(`Unknown drive member role "${role}": classify it in permissions/drive-member-role.ts`);
+/**
+ * The membership a stored role grants, or null when the row is not a drive membership: a GUEST
+ * row, or (fail closed, with a warning) a role nobody classified or no role at all.
+ */
+export function driveMembershipRole(role: string | null | undefined): DriveMemberRole | null {
+  if (typeof role !== 'string' || !isClassified(role)) {
+    loggers.api.warn('Unclassified drive member role read as no membership; classify it in permissions/drive-member-role.ts', {
+      role: role ?? null,
+    });
+    return null;
   }
   return MEMBERSHIP_OF[role];
 }

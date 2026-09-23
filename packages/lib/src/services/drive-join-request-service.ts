@@ -30,6 +30,7 @@ import {
   type JoinRequestRefusal,
 } from '../permissions/drive-join-requests';
 import { loadDriveMemberRowState } from '../permissions/org-drive-membership';
+import { findStaleDriveJoinRequests } from '../permissions/drive-join-request-closure';
 import { admitDriveJoiner, publishOrgMembershipSyncEvents, type OrgMembershipSyncResult } from './org-membership-sync';
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -250,7 +251,10 @@ const PENDING_LIST_LIMIT = 500;
 
 /**
  * The pending requests on a drive, for someone who may answer them (its lead or an org Owner or
- * Admin). Anyone else gets the refusal the approval itself would give.
+ * Admin). Anyone else gets the refusal the approval itself would give. A request that no longer
+ * asks for anything (findStaleDriveJoinRequests: say the requester left the org, or joined through
+ * an invitation) is left out even before a transition closes it, so the approver never sees that
+ * person's name or email.
  */
 export async function listPendingDriveJoinRequests(
   actorId: string,
@@ -286,5 +290,6 @@ export async function listPendingDriveJoinRequests(
     .where(and(eq(driveJoinRequests.driveId, driveId), eq(driveJoinRequests.status, 'pending')))
     .orderBy(asc(driveJoinRequests.requestedAt))
     .limit(PENDING_LIST_LIMIT);
-  return { ok: true, requests: await decryptUserRows(rows) };
+  const stale = new Set((await findStaleDriveJoinRequests(db, [driveId])).map((r) => r.id));
+  return { ok: true, requests: await decryptUserRows(rows.filter((r) => !stale.has(r.id))) };
 }

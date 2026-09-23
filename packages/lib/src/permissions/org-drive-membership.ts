@@ -196,8 +196,9 @@ export async function loadAcceptedRowsInDrives(
 }
 
 /**
- * Which of `userIds` hold an ACCEPTED drive_members row on which of `driveIds`, read through
- * `executor` (org deletion reads them inside its transaction, after its own row deletes).
+ * Which of `userIds` hold an ACCEPTED drive_members MEMBERSHIP on which of `driveIds`, read through
+ * `executor` (org deletion reads them inside its transaction, after its own row deletes). A GUEST
+ * row (D-OW-24) is no membership, so its holder is not "still on the drive" and still gets kicked.
  */
 export async function loadAcceptedDriveMemberPairs(
   executor: Pick<typeof db, 'select'>,
@@ -208,10 +209,13 @@ export async function loadAcceptedDriveMemberPairs(
   if (userIds.length === 0) return pairs;
   for (const users of chunks(userIds)) {
     for (const ids of chunks(driveIds)) {
-      pairs.push(...(await executor
-        .select({ userId: driveMembers.userId, driveId: driveMembers.driveId })
+      const rows = await executor
+        .select({ userId: driveMembers.userId, driveId: driveMembers.driveId, role: driveMembers.role })
         .from(driveMembers)
-        .where(and(inArray(driveMembers.userId, users), inArray(driveMembers.driveId, ids), isNotNull(driveMembers.acceptedAt)))));
+        .where(and(inArray(driveMembers.userId, users), inArray(driveMembers.driveId, ids), isNotNull(driveMembers.acceptedAt)));
+      for (const { userId, driveId, role } of rows) {
+        if (driveMembershipRole(role) !== null) pairs.push({ userId, driveId });
+      }
     }
   }
   return pairs;

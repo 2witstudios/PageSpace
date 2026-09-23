@@ -1,7 +1,15 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+vi.mock('../../logging/logger-config', () => ({
+  loggers: { api: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } },
+}));
+
+import { loggers } from '../../logging/logger-config';
 import { DRIVE_MEMBERSHIP_ROLES, driveMembershipRole, driveMembershipRow } from '../drive-member-role';
+
+beforeEach(() => vi.mocked(loggers.api.warn).mockClear());
 
 const LIB_SRC = path.resolve(__dirname, '../..');
 
@@ -24,10 +32,27 @@ describe('driveMembershipRole', () => {
     expect(driveMembershipRole('GUEST')).toBeNull();
   });
 
-  it('throws on a role nobody classified, so a new enum value can never pass as a membership', () => {
-    expect(() => driveMembershipRole('VIEWER')).toThrow(/Unknown drive member role "VIEWER"/);
-    expect(() => driveMembershipRole('')).toThrow(/Unknown drive member role/);
-    expect(() => driveMembershipRole('toString')).toThrow(/Unknown drive member role/);
+  it('fails closed on a role nobody classified: no membership and a warning, never a throw', () => {
+    expect(driveMembershipRole('VIEWER')).toBeNull();
+    expect(driveMembershipRole('')).toBeNull();
+    expect(driveMembershipRole('toString')).toBeNull();
+    expect(loggers.api.warn).toHaveBeenCalledTimes(3);
+    expect(loggers.api.warn).toHaveBeenCalledWith(
+      expect.stringContaining('Unclassified drive member role'),
+      expect.objectContaining({ role: 'VIEWER' }),
+    );
+  });
+
+  it('fails closed on a row with no role at all: no membership and a warning', () => {
+    expect(driveMembershipRole(undefined)).toBeNull();
+    expect(driveMembershipRole(null)).toBeNull();
+    expect(loggers.api.warn).toHaveBeenCalledTimes(2);
+  });
+
+  it('a classified role logs nothing, GUEST included (it is expected data, not an anomaly)', () => {
+    driveMembershipRole('MEMBER');
+    driveMembershipRole('GUEST');
+    expect(loggers.api.warn).not.toHaveBeenCalled();
   });
 
   it('the membership roles are exactly OWNER, ADMIN and MEMBER', () => {

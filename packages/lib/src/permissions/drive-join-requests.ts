@@ -71,7 +71,12 @@ function isLiveOrgDrive(drive: JoinDrive | null): drive is JoinDrive & { orgId: 
  * something there (validOrgDriveRow drops a stale org row and a former lead's OWNER row). Implicit
  * Open membership is the caller's to add: it needs no row.
  */
-function holdsMembership(userId: string, drive: JoinDrive, orgRole: OrgRole | null, row: RequesterRow | null): boolean {
+function holdsMembership(
+  userId: string,
+  drive: Pick<JoinDrive, 'ownerId' | 'orgId' | 'orgVisibility'>,
+  orgRole: OrgRole | null,
+  row: RequesterRow | null,
+): boolean {
   if (isDriveLead(userId, drive)) return true;
   if (!row?.accepted) return false;
   if (row.role === null) return false;
@@ -210,24 +215,29 @@ export function decideJoinRequestApprover({
 
 /**
  * Whether a pending request still asks for something (DRV-6): the drive is still a Restricted
- * drive of an org, the requester is still in that org, and they do not lead it. Anything else
- * closes it (the services mark it withdrawn), so an approver's list never keeps the name and
- * email of someone who left, and a request never revives when a drive returns to Restricted.
+ * drive of an org, the requester is still in that org, and they are not on it already (its lead, or
+ * a membership they gained another way, such as an accepted invitation). Anything else is stale:
+ * the approver list drops it at once and the next transition marks it withdrawn, so an approver
+ * never keeps the name and email of someone who left, and a request never revives when a drive
+ * returns to Restricted.
  */
 export function decideJoinRequestStaysOpen({
   drive,
   requesterId,
   requesterOrgRole,
+  requesterRow,
 }: {
   drive: Pick<JoinDrive, 'ownerId' | 'orgId' | 'orgVisibility'>;
   requesterId: string;
   /** The requester's role in drive.orgId now; null once they left or the drive has no org. */
   requesterOrgRole: OrgRole | null;
+  /** The requester's drive_members row now, accepted or pending. */
+  requesterRow: RequesterRow | null;
 }): boolean {
   if (drive.orgId === null) return false;
   if (drive.orgVisibility !== 'RESTRICTED') return false;
   if (requesterOrgRole === null) return false;
-  return !isDriveLead(requesterId, drive);
+  return !holdsMembership(requesterId, drive, requesterOrgRole, requesterRow);
 }
 
 /** The requester, and only they, may withdraw a pending request. */
