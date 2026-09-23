@@ -232,10 +232,11 @@ describe('POST /api/cron/workflows', () => {
     expect(body.errors).toBeUndefined();
   });
 
-  it('given a terminal credit refusal, should record it as an error and advance to the next slot (the workflow stays enabled)', async () => {
+  it('given a terminal credit refusal, should count it as skipped and advance to the next slot (the workflow stays enabled)', async () => {
     mockSelectWhere.mockResolvedValue([MOCK_WORKFLOW]);
     vi.mocked(executeWorkflow).mockResolvedValue({
       success: false,
+      skipped: true,
       durationMs: 0,
       runId: 'run_refused',
       error: 'AI credit gate denied: out_of_credits',
@@ -249,7 +250,8 @@ describe('POST /api/cron/workflows', () => {
     expect(getNextRunDate).toHaveBeenCalledTimes(1);
     expect(mockUpdateSet).toHaveBeenCalledWith({ nextRunAt: new Date('2025-01-02T09:00:00Z') });
     expect(mockUpdateSet).not.toHaveBeenCalledWith(expect.objectContaining({ isEnabled: false }));
-    expect(body.errors).toEqual([`${MOCK_WORKFLOW.name}: AI credit gate denied: out_of_credits`]);
+    expect(body).toMatchObject({ skipped: 1, deferred: 0 });
+    expect(body.errors).toBeUndefined();
   });
 
   it('should handle workflow execution errors gracefully', async () => {
@@ -285,7 +287,7 @@ describe('POST /api/cron/workflows', () => {
     await POST(request);
 
     expect(mockAudit).toHaveBeenCalledWith(
-      expect.objectContaining({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'workflows', details: { executed: 1, deferred: 0, failed: 0 } })
+      expect.objectContaining({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'workflows', details: { executed: 1, deferred: 0, failed: 0, skipped: 0 } })
     );
     expect(mockAudit).not.toHaveBeenCalledWith(expect.objectContaining({ userId: expect.anything() }));
   });
@@ -326,5 +328,53 @@ describe('POST /api/cron/workflows', () => {
     expect(body.executed).toBe(0);
     expect(body.errors).toBeDefined();
     expect(body.errors[0]).toContain('Network error');
+  });
+
+  describe('credit gate', () => {
+    const tick = async () => {
+      const response = await POST(new Request('https://example.com/api/cron/workflows', { method: 'POST' }));
+      return response.json();
+    };
+
+    beforeEach(() => {
+      mockSelectWhere.mockResolvedValue([MOCK_WORKFLOW]);
+      vi.mocked(getNextRunDate).mockReturnValue(new Date('2025-01-02T09:00:00Z'));
+      vi.mocked(executeWorkflow).mockResolvedValue({ success: true, durationMs: 1 });
+    });
+
+    it('hands the executor only the run input — the executor gates the owner itself, inside its claim, as a scheduled run', async () => {
+      await tick();
+
+      const call = vi.mocked(executeWorkflow).mock.calls[0];
+      expect(call).toHaveLength(1);
+      expect(call[0].createdBy).toBe(MOCK_WORKFLOW.createdBy);
+      expect(call[0].creditGate).toEqual({ skipDailyCap: true });
+    });
+
+    it('a refused fire advances the schedule and counts as skipped, not as a failure', async () => {
+      vi.mocked(executeWorkflow).mockResolvedValue({
+        success: false, skipped: true, durationMs: 0, runId: 'run_1', error: 'AI credit gate denied: out_of_credits',
+      });
+
+      const body = await tick();
+
+      // Advancing is what stops the next tick re-firing it: no per-minute storm.
+      expect(getNextRunDate).toHaveBeenCalledWith(MOCK_WORKFLOW.cronExpression, MOCK_WORKFLOW.timezone);
+      expect(body.skipped).toBe(1);
+      expect(body.executed).toBe(0);
+      expect(body.total).toBe(0);
+      expect(body.errors).toBeUndefined();
+    });
+
+    it('a fire that lost the claim to an overlapping run is neither skipped nor advanced', async () => {
+      vi.mocked(executeWorkflow).mockResolvedValue({
+        success: false, claimConflict: true, durationMs: 0, error: 'Workflow already running',
+      });
+
+      const body = await tick();
+
+      expect(getNextRunDate).not.toHaveBeenCalled();
+      expect(body.skipped).toBe(0);
+    });
   });
 });

@@ -14,6 +14,21 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   email address, and exchange its secret for tokens to use PageSpace as its own account. Agents get
   no free AI credits: an AI call from an unclaimed agent answers "requires funding" and points at
   the claim flow. Agents can rotate their secret, optionally signing out every existing token.
+- **Give an agent its own account** — in an agent's settings (Accounts), or in your personal
+  settings for your global assistant, add an API key for a site so the agent can call that site's
+  API for you. The agent refers to the account by name and never sees the key: PageSpace keeps it in
+  a separate credential vault and adds it to each request itself, only for the site address you
+  pinned — no other sites, other ports or redirects. New requests ask you to approve them in the
+  chat unless you let the agent use that site without asking. The dialog recommends creating a
+  dedicated account for the agent; sharing a personal login needs an explicit acknowledgment, which
+  the account list shows. Revoking stops PageSpace from using the key immediately; revoke it at the
+  site too to disable it everywhere.
+- **Agents can use a real browser (where an operator enables it)** — an agent with its sandbox
+  turned on can open public web pages, read them, click, type and fill in forms, take screenshots
+  and manage tabs in a browser that runs separately from its sandbox. The agent gets only those
+  actions: it cannot run scripts in the page or read cookies or stored data, and private or
+  internal addresses are refused. Browser time is billed like sandbox time. Off unless the server
+  is configured for it.
 - **Ask a detached side question with `/btw`** — while an agent is working, type `/btw` followed by a question to get a separate, temporary answer from the completed conversation context. It never interrupts the active run or becomes part of the chat history. Side questions use AI credits like any other chat message; with no credits left they are refused instead of answered.
 
 - **Sign-up says where AI content goes** — the consent line on every sign-up screen now says AI
@@ -608,6 +623,26 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Workflows no longer run when you are out of AI credits** — pressing Run on a workflow,
+  a scheduled workflow, and a task's due-date or completion trigger now check your AI credit
+  balance before the agent starts, as calendar, Zoom and webhook triggers already did. Previously
+  they ran anyway and were charged afterwards. Pressing Run with no credits left now says so; a
+  scheduled or task-triggered run that is skipped shows in the workflow's run history as cancelled,
+  with the reason, and the schedule moves on to its next time. A scheduled, calendar or task run
+  held back only because too many of your AI requests were already running is not skipped: it
+  tries again on the next check, for up to a day.
+- **A stopped AI reply is charged for what it used** — pressing Stop, or running out of credits,
+  while the assistant was still answering used to charge nothing for the unfinished part of the reply,
+  and in a multi-step reply sometimes nothing for the finished steps either. Stopped replies are now
+  charged for the finished steps plus the part of the reply you already saw. The unfinished part is
+  never charged more than the amount set aside when the reply started.
+- **A queued message is no longer lost when it fails to send** — if a message you queued while a
+  response was streaming could not be sent (a network error, or not enough credits), it used to
+  disappear. It now stays at the front of the queue, you see an error, and it goes out after the
+  next response.
+- **`/btw` side questions use your AI credits like any other chat message** — a side question now
+  checks your balance before it runs (and says so when you are out of credits or have too many AI
+  requests running), and its usage shows up on your usage page.
 - **The workflow editor fits the screen again** — a workflow with a long AI prompt pushed the
   Edit Workflow dialog's fields past its right edge and pushed Save below the fold. The dialog is
   now wider on desktop, its fields scroll between a fixed header and a fixed Cancel/Save footer, and
@@ -622,6 +657,11 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   "no view" grant, so a member could see those pages' activity in Pulse. Pulse now follows the same
   rules as opening the page: those denies are honoured, a custom role's per-page grant on a private
   page is included, and a time-limited grant expires at the right moment in every time zone.
+- **Workflows run by agents without the sandbox no longer fail** — a workflow whose agent has the
+  sandbox turned off failed every run, from any trigger (schedule, task, calendar or page webhook),
+  when saving its messages — often after its tools had already done their work. Every run now saves
+  into its own conversation on the agent, so it completes and its transcript can be opened like any
+  other chat.
 - **Agents can write to their own memory pages again** — every agent is instructed to keep notes
   on an "Agent Memory" child page of its own, but the permission check behind the write tools
   looked only at the agent's drive membership, which grants edit on no ordinary page — so every

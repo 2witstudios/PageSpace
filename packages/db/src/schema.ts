@@ -67,6 +67,7 @@ export * from './schema/dev-preview-services';
 export * from './schema/dev-preview-grants';
 export * from './schema/agent-account-grant-nonces';
 export * from './schema/agent-identities';
+export * from './schema/agent-accounts';
 
 import * as auth from './schema/auth';
 import * as sessions from './schema/sessions';
@@ -136,6 +137,7 @@ import * as devPreviewServices from './schema/dev-preview-services';
 import * as devPreviewGrants from './schema/dev-preview-grants';
 import * as agentAccountGrantNonces from './schema/agent-account-grant-nonces';
 import * as agentIdentities from './schema/agent-identities';
+import * as agentAccounts from './schema/agent-accounts';
 
 export const schema = {
   ...auth,
@@ -206,4 +208,5 @@ export const schema = {
   ...devPreviewGrants,
   ...agentAccountGrantNonces,
   ...agentIdentities,
+  ...agentAccounts,
 };

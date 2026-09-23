@@ -7,7 +7,7 @@ import { eq } from '@pagespace/db/operators'
 import { workflows } from '@pagespace/db/schema/workflows';
 import { executeWorkflow, type WorkflowExecutionInput } from '@/lib/workflows/workflow-executor';
 import { getNextRunDate } from '@/lib/workflows/cron-utils';
-import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
+import { creditGatePayload } from '@/lib/subscription/credit-gate-response';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 const MANAGEABLE_TRIGGER_TYPE = 'cron' as const;
@@ -58,18 +58,26 @@ export async function POST(
 
   // Atomic claim is enforced by the workflow_runs partial unique index inside
   // the executor — any concurrent fire (cron / manual) for the same workflow
-  // returns claimConflict and we surface a 409.
+  // returns claimConflict and we surface a 409. The credit gate runs inside
+  // that claim, before any model is built. The run bills the workflow's creator
+  // (executeWorkflow tracks usage as createdBy), so that is who is gated, not
+  // the admin who pressed Run.
   const result = await executeWorkflow(executionInput);
 
   if (result.claimConflict) {
     return NextResponse.json({ error: 'Workflow is already running' }, { status: 409 });
   }
 
-  // A credit refusal ran nothing: answer with the same status and body every
-  // AI route uses (402 requires_funding + claim_url, 429 caps, 402 out of
-  // credits), and leave the schedule and the run audit untouched.
+  // Refused by the gate: out_of_credits -> 402, a cap -> 429, an unclaimed
+  // agent -> 402 requires_funding with the claim_url it needs. The Run button
+  // toasts `error`, so it carries the readable message; `code` the reason. The
+  // schedule is not advanced — nothing ran.
   if (result.refusal) {
-    return creditGateErrorResponse(result.refusal.reason);
+    const denied = creditGatePayload(result.refusal.reason);
+    return NextResponse.json(
+      { error: denied.message, code: denied.error, ...(denied.claim_url ? { claim_url: denied.claim_url } : {}) },
+      { status: denied.status },
+    );
   }
 
   // Advance the schedule so the next cron tick doesn't re-fire immediately.

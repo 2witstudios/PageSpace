@@ -171,6 +171,7 @@ describe('task-trigger-helpers', () => {
     mockDelete.mockImplementation(() => ({ where: mockDeleteWhere }));
     mockDeleteWhere.mockResolvedValue(undefined);
 
+
     // Default: transaction runs the callback against a fresh tx mock.
     mockTransaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) => {
       const { tx } = makeTxMock();
@@ -410,6 +411,41 @@ describe('task-trigger-helpers', () => {
       mockSelect.mockImplementationOnce(() => { throw new Error('DB connection lost'); });
 
       await expect(fireCompletionTrigger('task-1')).resolves.toBeUndefined();
+    });
+
+    describe('credit gate', () => {
+      const claimAndLoad = () => {
+        mockFrom
+          .mockImplementationOnce(() => ({ where: vi.fn().mockResolvedValueOnce([mockTrigger]) }))
+          .mockImplementationOnce(() => ({ where: vi.fn().mockResolvedValueOnce([mockWorkflow]) }));
+        mockReturning.mockResolvedValueOnce([mockTrigger]);
+      };
+
+      it('hands the executor only the run input — the executor gates the owner inside its claim, keeping the tier daily cap (user-paced fires)', async () => {
+        claimAndLoad();
+        vi.mocked(executeWorkflow).mockResolvedValueOnce({ success: true, durationMs: 50 });
+
+        await fireCompletionTrigger('task-1');
+
+        const call = vi.mocked(executeWorkflow).mock.calls[0];
+        expect(call).toHaveLength(1);
+        expect(call[0].createdBy).toBe('user-1');
+        expect(call[0].creditGate?.skipDailyCap).toBeUndefined();
+      });
+
+      it('a refused fire retires the one-shot trigger with the reason', async () => {
+        claimAndLoad();
+        vi.mocked(executeWorkflow).mockResolvedValueOnce({
+          success: false, skipped: true, durationMs: 0, runId: 'run_1', error: 'AI credit gate denied: out_of_credits',
+        });
+
+        await fireCompletionTrigger('task-1');
+
+        await vi.waitFor(() => expect(mockSet).toHaveBeenCalledWith({
+          lastFireError: 'AI credit gate denied: out_of_credits',
+          isEnabled: false,
+        }));
+      });
     });
   });
 

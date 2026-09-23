@@ -358,9 +358,10 @@ describe('POST /api/cron/task-triggers', () => {
       expect(body.errors).toBeUndefined();
     });
 
-    it('given a terminal refusal (or a transient one past its window), should end the one-shot trigger with the reason recorded', async () => {
+    it('given a terminal refusal (or a transient one past its window), should end the one-shot trigger with the reason recorded and count it as skipped, not as a failure', async () => {
       const { body, sets } = await fire({
         success: false,
+        skipped: true,
         durationMs: 1,
         runId: 'run_refused',
         error: 'AI credit gate denied: requires_funding',
@@ -369,7 +370,16 @@ describe('POST /api/cron/task-triggers', () => {
 
       expect(sets).toContainEqual({ isEnabled: false, lastFireError: 'AI credit gate denied: requires_funding' });
       expect(sets.some((set) => 'lastFiredAt' in set && set.lastFiredAt === null)).toBe(false);
-      expect(body.errors).toEqual([`task-trigger-${MOCK_TRIGGER.id}: AI credit gate denied: requires_funding`]);
+      expect(body).toMatchObject({ skipped: 1, executed: 0, deferred: 0 });
+      expect(body.errors).toBeUndefined();
+    });
+
+    it('hands the executor only the run input — the executor gates the owner itself, inside its claim', async () => {
+      await fire({ success: true, durationMs: 50 });
+
+      const call = vi.mocked(executeWorkflow).mock.calls[0];
+      expect(call).toHaveLength(1);
+      expect(call[0].createdBy).toBe(MOCK_WORKFLOW.createdBy);
     });
   });
 
@@ -426,6 +436,7 @@ describe('POST /api/cron/task-triggers', () => {
       const { sets } = await tick({
         success: false,
         durationMs: 1,
+        skipped: true,
         runId: 'run_expired',
         error: 'AI credit gate denied: too_many_in_flight',
         refusal: { reason: 'too_many_in_flight', kind: 'transient' },

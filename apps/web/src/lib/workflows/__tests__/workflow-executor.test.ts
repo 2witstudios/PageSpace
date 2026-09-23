@@ -16,6 +16,8 @@ const {
   mockUpdate,
   mockUpdateSet,
   mockUpdateWhere,
+  mockDelete,
+  mockDeleteWhere,
   mockToolExecute,
   mockResolveSandboxToolEligibility,
 } = vi.hoisted(() => ({
@@ -30,6 +32,8 @@ const {
   mockUpdate: vi.fn(),
   mockUpdateSet: vi.fn(),
   mockUpdateWhere: vi.fn(),
+  mockDelete: vi.fn(),
+  mockDeleteWhere: vi.fn(),
   mockToolExecute: vi.fn(),
   mockResolveSandboxToolEligibility: vi.fn(),
 }));
@@ -44,10 +48,12 @@ const creditGate = vi.hoisted(() => ({
   calls: [] as unknown[],
   released: [] as string[],
   throws: null as Error | null,
+  onCall: null as (() => void) | null,
 }));
 vi.mock('../workflow-credit-gate', () => ({
   acquireWorkflowCredit: async (input: unknown) => {
     creditGate.calls.push(input);
+    creditGate.onCall?.();
     if (creditGate.throws) throw creditGate.throws;
     return creditGate.decision;
   },
@@ -88,16 +94,8 @@ vi.mock('@pagespace/db/db', () => ({
     select: mockSelect,
     insert: mockInsert,
     update: mockUpdate,
+    delete: mockDelete,
     query: { taskItems: { findFirst: vi.fn() }, taskLists: { findFirst: vi.fn() } },
-  },
-}));
-// The one-row-per-occurrence guard is proven against real Postgres in
-// record-unstarted-run.integration.test.ts; here it forwards to the insert mock
-// so these tests can read the error row the executor asked for.
-vi.mock('../record-unstarted-run', () => ({
-  recordUnstartedRunOnce: async (row: Record<string, unknown>) => {
-    const [inserted] = await mockInsert().values({ ...row, status: 'error', endedAt: new Date() }).returning();
-    return inserted?.id;
   },
 }));
 vi.mock('@pagespace/db/schema/workflow-runs', () => ({
@@ -184,6 +182,13 @@ vi.mock('@/lib/repositories/message-repository', () => ({
   },
 }));
 
+// Every run that does NOT bind a session conversation mints a plain page
+// conversation here, so the run's messages have a real parent row (#2686).
+const { mockCreateConversation } = vi.hoisted(() => ({ mockCreateConversation: vi.fn() }));
+vi.mock('@/lib/repositories/conversation-repository', () => ({
+  conversationRepository: { createConversation: mockCreateConversation },
+}));
+
 vi.mock('@/lib/ai/core/integration-tool-resolver', () => ({
   resolvePageAgentIntegrationTools: mockResolvePageAgentIntegrationTools,
 }));
@@ -207,6 +212,7 @@ import { executeWorkflow, type WorkflowExecutionInput } from '../workflow-execut
 import { generateText } from 'ai';
 import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
 import { messageRepository } from '@/lib/repositories/message-repository';
+import { createId } from '@paralleldrive/cuid2';
 
 const createInputFixture = (overrides: Partial<WorkflowExecutionInput> = {}): WorkflowExecutionInput => ({
   workflowId: 'wf_1',
@@ -267,6 +273,7 @@ describe('executeWorkflow', () => {
     // (spawn refused ⇒ the executor degrades to running without sandbox tools).
     mockSpawnSession.mockResolvedValue({ ok: false, reason: 'spawn_failed' });
     mockCreateConversationInSession.mockResolvedValue(undefined);
+    mockCreateConversation.mockResolvedValue('created');
     mockEndSession.mockResolvedValue({ ok: true });
     vi.mocked(isProviderError).mockReturnValue(false);
     vi.mocked(createAIProvider).mockResolvedValue(mockProviderResult as never);
@@ -622,6 +629,109 @@ describe('executeWorkflow', () => {
     });
   });
 
+  describe('every run persists into a REAL conversation (#2686)', () => {
+    // Distinct ids per createId call, so the assertions can tell the
+    // conversation id apart from the message ids.
+    beforeEach(() => {
+      let n = 0;
+      vi.mocked(createId).mockImplementation(() => `cuid${++n}`);
+    });
+
+    function savedConversationIds(): unknown[] {
+      return vi.mocked(messageRepository.savePageMessage).mock.calls.map(
+        ([args]) => (args as { conversationId: string }).conversationId,
+      );
+    }
+
+    test('sandbox OFF: mints a page conversation for the agent and saves both messages into it', async () => {
+      setupSelectChain(
+        [{ ...mockAgent, sandboxEnabled: false, enabledTools: ['list_pages'] }],
+        [mockDrive],
+      );
+
+      const result = await executeWorkflow(createInputFixture());
+
+      expect(result.success).toBe(true);
+      expect(mockCreateConversation).toHaveBeenCalledTimes(1);
+      const [conversationId, userId, pageId, opts] = mockCreateConversation.mock.calls[0];
+      expect(userId).toBe('user_123');
+      expect(pageId).toBe('agent_1');
+      expect(opts).toEqual({ title: 'Workflow: Test Workflow' });
+      expect(conversationId).not.toMatch(/^workflow-/);
+      expect(savedConversationIds()).toEqual([conversationId, conversationId]);
+      expect(result.conversationId).toBe(conversationId);
+      const genCall = vi.mocked(generateText).mock.calls[0][0] as Record<string, unknown>;
+      expect((genCall.experimental_context as { conversationId: string }).conversationId).toBe(conversationId);
+      // The row exists BEFORE the model (and therefore any tool) runs.
+      expect(mockCreateConversation.mock.invocationCallOrder[0])
+        .toBeLessThan(vi.mocked(generateText).mock.invocationCallOrder[0]);
+    });
+
+    test('sandbox ON but spawn refused: still mints a plain conversation', async () => {
+      mockSpawnSession.mockResolvedValue({ ok: false, reason: 'session_limit_reached' });
+      setupSelectChain(
+        [{ ...mockAgent, sandboxEnabled: true, enabledTools: ['list_pages', 'bash'] }],
+        [mockDrive],
+      );
+
+      const result = await executeWorkflow(createInputFixture());
+
+      expect(result.success).toBe(true);
+      expect(mockCreateConversation).toHaveBeenCalledTimes(1);
+      const conversationId = mockCreateConversation.mock.calls[0][0];
+      expect(savedConversationIds()).toEqual([conversationId, conversationId]);
+    });
+
+    test('sandbox ON with a bound session: messages land in the BOUND conversation, no second row is minted', async () => {
+      mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'wf-ses-bound' } });
+      setupSelectChain(
+        [{ ...mockAgent, sandboxEnabled: true, enabledTools: ['list_pages', 'bash'] }],
+        [mockDrive],
+      );
+
+      const result = await executeWorkflow(createInputFixture());
+
+      expect(result.success).toBe(true);
+      expect(mockCreateConversation).not.toHaveBeenCalled();
+      const bound = (mockCreateConversationInSession.mock.calls[0][0] as { conversationId: string }).conversationId;
+      expect(savedConversationIds()).toEqual([bound, bound]);
+      expect(result.conversationId).toBe(bound);
+    });
+
+    test('generation throws: the user prompt is already saved, so the conversation is not left empty', async () => {
+      vi.mocked(generateText).mockRejectedValue(new Error('provider 503'));
+      setupSelectChain(
+        [{ ...mockAgent, sandboxEnabled: false, enabledTools: ['list_pages'] }],
+        [mockDrive],
+      );
+
+      const result = await executeWorkflow(createInputFixture());
+
+      expect(result.success).toBe(false);
+      const conversationId = mockCreateConversation.mock.calls[0][0];
+      const saves = vi.mocked(messageRepository.savePageMessage).mock.calls;
+      expect(saves).toHaveLength(1);
+      expect(saves[0][0]).toMatchObject({ conversationId, role: 'user', content: 'Generate a report' });
+      expect(vi.mocked(messageRepository.savePageMessage).mock.invocationCallOrder[0])
+        .toBeLessThan(vi.mocked(generateText).mock.invocationCallOrder[0]);
+    });
+
+    test('a conversation that could not be created fails the run BEFORE the model runs', async () => {
+      mockCreateConversation.mockResolvedValue('message_owner_conflict');
+      setupSelectChain(
+        [{ ...mockAgent, sandboxEnabled: false, enabledTools: ['list_pages'] }],
+        [mockDrive],
+      );
+
+      const result = await executeWorkflow(createInputFixture());
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('message_owner_conflict');
+      expect(generateText).not.toHaveBeenCalled();
+      expect(messageRepository.savePageMessage).not.toHaveBeenCalled();
+    });
+  });
+
   test('merges granted integration tools for workflow agents', async () => {
     setupSelectChain(
       [{ ...mockAgent, enabledTools: [] }],
@@ -835,6 +945,7 @@ describe('executeWorkflow — explicit step chains', () => {
     // (spawn refused ⇒ the executor degrades to running without sandbox tools).
     mockSpawnSession.mockResolvedValue({ ok: false, reason: 'spawn_failed' });
     mockCreateConversationInSession.mockResolvedValue(undefined);
+    mockCreateConversation.mockResolvedValue('created');
     mockEndSession.mockResolvedValue({ ok: true });
     vi.mocked(isProviderError).mockReturnValue(false);
     vi.mocked(createAIProvider).mockResolvedValue(mockProviderResult as never);
@@ -995,15 +1106,17 @@ describe('executeWorkflow — explicit step chains', () => {
   });
 });
 
-describe('executeWorkflow — credit gate inside the executor', () => {
+describe('executeWorkflow — credit gate inside the run claim', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     creditGate.decision = { allowed: true, holdId: 'hold_1' };
     creditGate.calls = [];
     creditGate.released = [];
     creditGate.throws = null;
+    creditGate.onCall = null;
     mockSpawnSession.mockResolvedValue({ ok: false, reason: 'spawn_failed' });
     mockCreateConversationInSession.mockResolvedValue(undefined);
+    mockCreateConversation.mockResolvedValue('created');
     mockEndSession.mockResolvedValue({ ok: true });
     vi.mocked(isProviderError).mockReturnValue(false);
     vi.mocked(createAIProvider).mockResolvedValue(mockProviderResult as never);
@@ -1021,37 +1134,69 @@ describe('executeWorkflow — credit gate inside the executor', () => {
     mockUpdate.mockReturnValue({ set: mockUpdateSet });
     mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
     mockUpdateWhere.mockResolvedValue(undefined);
+    mockDelete.mockReturnValue({ where: mockDeleteWhere });
+    mockDeleteWhere.mockResolvedValue(undefined);
   });
 
-  test('given a terminal refusal (an unclaimed agent), should record ONE error run with the reason and never resolve a model', async () => {
-    creditGate.decision = { allowed: false, reason: 'requires_funding' };
-    mockInsertValues.mockReturnValue({ returning: mockInsertReturning, onConflictDoNothing: mockOnConflictDoNothing });
-    mockInsertReturning.mockResolvedValue([{ id: 'run_refused' }]);
+  const at = (table: 'cron' | 'calendarTriggers' | 'taskTriggers' | 'webhookTriggers', ageMs: number, id: string | null = table === 'cron' ? null : `${table}_1`) =>
+    createInputFixture({ source: { table, id, triggerAt: new Date(Date.now() - ageMs) } as never });
+  const DAY = 24 * 60 * 60 * 1000;
 
-    const result = await executeWorkflow(createInputFixture({ source: { table: 'cron', id: null, triggerAt: new Date() } }));
+  test('gates AFTER the running claim is won and BEFORE any model is built', async () => {
+    setupSelectChain([mockAgent], [mockDrive]);
+    const gateOrder: number[] = [];
+    creditGate.onCall = () => gateOrder.push(mockInsertReturning.mock.calls.length);
+
+    await executeWorkflow(createInputFixture());
+
+    expect(creditGate.calls).toHaveLength(1);
+    // The claim insert had already returned when the gate ran.
+    expect(gateOrder).toEqual([1]);
+    expect(generateText).toHaveBeenCalledTimes(1);
+  });
+
+  test('is never consulted when the claim is lost to an in-flight run (an overlapping fire cannot record a refusal)', async () => {
+    mockInsertReturning.mockResolvedValue([]);
+
+    const result = await executeWorkflow(createInputFixture());
+
+    expect(result.claimConflict).toBe(true);
+    expect(creditGate.calls).toHaveLength(0);
+    expect(creditGate.released).toEqual([]);
+    expect(generateText).not.toHaveBeenCalled();
+  });
+
+  test('given a terminal refusal (an unclaimed agent), should finalize the claimed run as cancelled with the reason and never resolve a model', async () => {
+    creditGate.decision = { allowed: false, reason: 'requires_funding' };
+
+    const result = await executeWorkflow(at('cron', 60_000));
 
     expect(result).toMatchObject({
       success: false,
+      skipped: true,
       error: 'AI credit gate denied: requires_funding',
-      runId: 'run_refused',
+      runId: 'run_1',
       refusal: { reason: 'requires_funding', kind: 'terminal' },
     });
     expect(result.retryable).toBeFalsy();
-    expect(mockInsertValues).toHaveBeenCalledTimes(1);
-    expect(mockInsertValues).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'error', error: 'AI credit gate denied: requires_funding' }),
-    );
-    expect(mockOnConflictDoNothing).not.toHaveBeenCalled(); // not a running claim
+    expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({ status: 'cancelled', error: 'AI credit gate denied: requires_funding' }));
+    expect(mockDelete).not.toHaveBeenCalled();
     expect(createAIProvider).not.toHaveBeenCalled();
     expect(generateText).not.toHaveBeenCalled();
   });
 
-  test('given a transient refusal for a fresh occurrence, should write NO run row so the next tick retries it', async () => {
+  // The lost-run bug Phase 1b fixed: the calendar cron only re-discovers an
+  // occurrence with NO workflow_runs row, the workflows cron advances its slot
+  // and a task trigger is retired unless the result is retryable. A transient
+  // refusal must therefore give the claim row back.
+  test.each([
+    ['calendarTriggers'],
+    ['taskTriggers'],
+    ['cron'],
+  ] as const)('given a transient refusal for a fresh %s occurrence, should give the claim back (delete the row, no finalize) and report it RETRYABLE', async (table) => {
     creditGate.decision = { allowed: false, reason: 'too_many_in_flight' };
 
-    const result = await executeWorkflow(
-      createInputFixture({ source: { table: 'calendarTriggers', id: 'ct_1', triggerAt: new Date(Date.now() - 60_000) } }),
-    );
+    const result = await executeWorkflow(at(table, 60_000));
 
     expect(result).toMatchObject({
       success: false,
@@ -1059,102 +1204,82 @@ describe('executeWorkflow — credit gate inside the executor', () => {
       retryable: true,
       refusal: { reason: 'too_many_in_flight', kind: 'transient' },
     });
+    expect(result.skipped).toBeFalsy();
     expect(result.runId).toBeUndefined();
-    expect(mockInsert).not.toHaveBeenCalled();
+    expect(mockDelete).toHaveBeenCalledTimes(1);
+    expect(mockUpdateSet).not.toHaveBeenCalled();
     expect(generateText).not.toHaveBeenCalled();
+    expect(creditGate.released).toEqual([]);
   });
 
-  test('given a transient refusal for an occurrence older than 24h, should stop retrying and record the error run', async () => {
+  test('given a transient refusal for an occurrence older than 24h, should stop retrying and settle the claimed run as cancelled', async () => {
     creditGate.decision = { allowed: false, reason: 'too_many_in_flight' };
-    mockInsertValues.mockReturnValue({ returning: mockInsertReturning, onConflictDoNothing: mockOnConflictDoNothing });
-    mockInsertReturning.mockResolvedValue([{ id: 'run_expired' }]);
 
-    const result = await executeWorkflow(
-      createInputFixture({ source: { table: 'taskTriggers', id: 'tt_1', triggerAt: new Date(Date.now() - 25 * 60 * 60 * 1000) } }),
-    );
+    const result = await executeWorkflow(at('taskTriggers', DAY + 60 * 60 * 1000));
 
-    expect(result).toMatchObject({ runId: 'run_expired', refusal: { kind: 'transient' } });
+    expect(result).toMatchObject({ runId: 'run_1', skipped: true, refusal: { kind: 'transient' } });
     expect(result.retryable).toBeFalsy();
-    expect(mockInsertValues).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'error', error: 'AI credit gate denied: too_many_in_flight' }),
-    );
+    expect(mockDelete).not.toHaveBeenCalled();
+    expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({ status: 'cancelled', error: 'AI credit gate denied: too_many_in_flight' }));
   });
 
-  test('given the daily cap is hit on a FRESH scheduled occurrence, should record it once and settle (terminal: it clears only when the UTC day rolls)', async () => {
+  test('given the daily cap is hit on a FRESH scheduled occurrence, should settle it (terminal: it clears only when the UTC day rolls)', async () => {
     creditGate.decision = { allowed: false, reason: 'daily_cap_exceeded' };
-    mockInsertValues.mockReturnValue({ returning: mockInsertReturning, onConflictDoNothing: mockOnConflictDoNothing });
-    mockInsertReturning.mockResolvedValue([{ id: 'run_capped' }]);
 
-    const result = await executeWorkflow(
-      createInputFixture({ source: { table: 'taskTriggers', id: 'tt_1', triggerAt: new Date(Date.now() - 60_000) } }),
-    );
+    const result = await executeWorkflow(at('taskTriggers', 60_000));
 
-    expect(result).toMatchObject({
-      runId: 'run_capped',
-      refusal: { reason: 'daily_cap_exceeded', kind: 'terminal' },
-    });
+    expect(result).toMatchObject({ runId: 'run_1', skipped: true, refusal: { reason: 'daily_cap_exceeded', kind: 'terminal' } });
     expect(result.retryable).toBeFalsy();
-    expect(mockInsertValues).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'error', error: 'AI credit gate denied: daily_cap_exceeded' }),
-    );
+    expect(mockDelete).not.toHaveBeenCalled();
+  });
+
+  test('given a transient refusal on a webhook fire (nothing re-fires it), should settle the run instead of dropping the event', async () => {
+    creditGate.decision = { allowed: false, reason: 'too_many_in_flight' };
+
+    const result = await executeWorkflow(at('webhookTriggers', 0));
+
+    expect(result).toMatchObject({ runId: 'run_1', skipped: true, refusal: { reason: 'too_many_in_flight', kind: 'transient' } });
+    expect(result.retryable).toBeFalsy();
+    expect(mockDelete).not.toHaveBeenCalled();
   });
 
   test.each([
-    ['calendarTriggers', 'ct_1'],
-    ['taskTriggers', 'tt_1'],
-  ] as const)('given the gate itself throws for a fresh %s occurrence, should report it RETRYABLE with no run row so the caller keeps the source eligible', async (table, id) => {
+    ['calendarTriggers'],
+    ['taskTriggers'],
+    ['cron'],
+  ] as const)('given the gate itself throws for a fresh %s occurrence, should give the claim back and report it RETRYABLE (no refusal)', async (table) => {
     creditGate.throws = new Error('db down');
 
-    const result = await executeWorkflow(
-      createInputFixture({ source: { table, id, triggerAt: new Date(Date.now() - 60_000) } }),
-    );
+    const result = await executeWorkflow(at(table, 60_000));
 
     expect(result).toMatchObject({ success: false, error: 'db down', retryable: true });
     expect(result.refusal).toBeUndefined();
-    expect(mockInsert).not.toHaveBeenCalled();
+    expect(mockDelete).toHaveBeenCalledTimes(1);
+    expect(mockUpdateSet).not.toHaveBeenCalled();
     expect(generateText).not.toHaveBeenCalled();
   });
 
-  test('given the gate itself throws for a fresh cron slot, should report it RETRYABLE with no run row', async () => {
+  test('given the gate keeps throwing past the 24h window, should fail the claimed run (finalized, not left running) so the occurrence stops being re-discovered', async () => {
     creditGate.throws = new Error('db down');
 
-    const result = await executeWorkflow(createInputFixture({ source: { table: 'cron', id: null, triggerAt: new Date(Date.now() - 60_000) } }));
+    const result = await executeWorkflow(at('calendarTriggers', DAY + 60 * 60 * 1000));
 
-    expect(result).toMatchObject({ success: false, retryable: true });
-    expect(mockInsert).not.toHaveBeenCalled();
-  });
-
-  test('given the gate keeps throwing past the 24h window, should record ONE error run so the occurrence stops being re-discovered', async () => {
-    creditGate.throws = new Error('db down');
-    mockInsertValues.mockReturnValue({ returning: mockInsertReturning, onConflictDoNothing: mockOnConflictDoNothing });
-    mockInsertReturning.mockResolvedValue([{ id: 'run_gate_error' }]);
-
-    const result = await executeWorkflow(
-      createInputFixture({ source: { table: 'calendarTriggers', id: 'ct_1', triggerAt: new Date(Date.now() - 25 * 60 * 60 * 1000) } }),
-    );
-
-    expect(result).toMatchObject({ success: false, error: 'db down', runId: 'run_gate_error' });
+    expect(result).toMatchObject({ success: false, error: 'db down', runId: 'run_1' });
     expect(result.retryable).toBeFalsy();
-    expect(mockInsertValues).toHaveBeenCalledTimes(1);
-    expect(mockInsertValues).toHaveBeenCalledWith(expect.objectContaining({ status: 'error', error: 'db down' }));
-    expect(mockOnConflictDoNothing).not.toHaveBeenCalled();
+    expect(result.skipped).toBeFalsy();
+    expect(mockDelete).not.toHaveBeenCalled();
+    expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({ status: 'error', error: 'db down' }));
   });
 
-  test('given a transient refusal on a webhook fire (nothing re-fires it), should record the error run instead of dropping the event', async () => {
+  test('given the claim cannot be given back, should settle the run instead of leaving it running, and report it NOT retryable', async () => {
     creditGate.decision = { allowed: false, reason: 'too_many_in_flight' };
-    mockInsertValues.mockReturnValue({ returning: mockInsertReturning, onConflictDoNothing: mockOnConflictDoNothing });
-    mockInsertReturning.mockResolvedValue([{ id: 'run_webhook_refused' }]);
+    mockDeleteWhere.mockRejectedValue(new Error('connection terminated'));
 
-    const result = await executeWorkflow(
-      createInputFixture({ source: { table: 'webhookTriggers', id: 'wt_1', triggerAt: new Date() } }),
-    );
+    const result = await executeWorkflow(at('calendarTriggers', 60_000));
 
-    expect(result).toMatchObject({
-      runId: 'run_webhook_refused',
-      refusal: { reason: 'too_many_in_flight', kind: 'transient' },
-    });
     expect(result.retryable).toBeFalsy();
-    expect(mockInsertValues).toHaveBeenCalledWith(expect.objectContaining({ status: 'error' }));
+    expect(result.runId).toBe('run_1');
+    expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({ error: 'AI credit gate denied: too_many_in_flight' }));
   });
 
   test('given a manual run, should gate the input it was handed (billed to createdBy)', async () => {
@@ -1166,7 +1291,7 @@ describe('executeWorkflow — credit gate inside the executor', () => {
     expect(creditGate.calls).toEqual([input]);
   });
 
-  test('given an allowed gate, should run and release the hold once the run ends', async () => {
+  test('given an allowed gate, should run and release the hold once, after the model call settles', async () => {
     setupSelectChain([mockAgent], [mockDrive]);
 
     const result = await executeWorkflow(createInputFixture());
@@ -1185,15 +1310,5 @@ describe('executeWorkflow — credit gate inside the executor', () => {
 
     expect(result.success).toBe(false);
     expect(creditGate.released).toEqual(['hold_1']);
-  });
-
-  test('given the gate passes but the run claim conflicts, should release the hold it took', async () => {
-    mockInsertReturning.mockResolvedValue([]);
-
-    const result = await executeWorkflow(createInputFixture());
-
-    expect(result.claimConflict).toBe(true);
-    expect(creditGate.released).toEqual(['hold_1']);
-    expect(generateText).not.toHaveBeenCalled();
   });
 });

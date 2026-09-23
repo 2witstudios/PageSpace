@@ -98,4 +98,7 @@ export interface ToolExecutionContext {
   // gates the pre-batch checkpoint's "at most once per turn" throttle
   // (`checkpoint-policy.ts`). Undefined until first stamped.
   turnId?: string;
+  // The authenticated SESSION id of the person driving this run (session auth only). Agent-account
+  // tools treat its presence as a live human session; absent = unattended (ADR 0004 §4.4).
+  authSessionId?: string;
 }

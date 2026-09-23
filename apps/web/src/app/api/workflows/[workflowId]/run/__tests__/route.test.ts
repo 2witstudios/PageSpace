@@ -217,7 +217,9 @@ describe('POST /api/workflows/[workflowId]/run', () => {
       const body = await response.json();
 
       expect(response.status).toBe(402);
-      expect(body.error).toBe('requires_funding');
+      expect(body.code).toBe('requires_funding');
+      // The Run button toasts `error` verbatim, so it reads as a sentence, not a code.
+      expect(body.error).toMatch(/claim/);
       expect(body.claim_url).toEqual(expect.any(String));
       expect(getNextRunDate).not.toHaveBeenCalled();
       expect(mockUpdateSet).not.toHaveBeenCalled();
@@ -236,8 +238,40 @@ describe('POST /api/workflows/[workflowId]/run', () => {
       const response = await POST(new Request('https://example.com/api/workflows/wf_1/run', { method: 'POST' }), createContext('wf_1'));
 
       expect(response.status).toBe(429);
-      expect((await response.json()).error).toBe('too_many_in_flight');
+      expect((await response.json()).code).toBe('too_many_in_flight');
       expect(getNextRunDate).not.toHaveBeenCalled();
+    });
+
+    test('out of credits: 402 with a readable error and no claim_url, and the schedule is not advanced', async () => {
+      vi.mocked(executeWorkflow).mockResolvedValue({
+        success: false,
+        skipped: true,
+        durationMs: 0,
+        runId: 'run_refused',
+        error: 'AI credit gate denied: out_of_credits',
+        refusal: { reason: 'out_of_credits', kind: 'terminal' },
+      });
+
+      const response = await POST(new Request('https://example.com/api/workflows/wf_1/run', { method: 'POST' }), createContext('wf_1'));
+      const body = await response.json();
+
+      expect(response.status).toBe(402);
+      expect(body.code).toBe('out_of_credits');
+      expect(body.error).toMatch(/credit balance is too low/);
+      expect(body.claim_url).toBeUndefined();
+      expect(getNextRunDate).not.toHaveBeenCalled();
+    });
+
+    test('hands the executor only the run input, billed to the workflow owner (not the clicker) — the executor gates it inside its claim', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth('admin_clicker'));
+      vi.mocked(executeWorkflow).mockResolvedValue({ success: true, durationMs: 1 });
+
+      await POST(new Request('https://example.com/api/workflows/wf_1/run', { method: 'POST' }), createContext('wf_1'));
+
+      const call = vi.mocked(executeWorkflow).mock.calls[0];
+      expect(call).toHaveLength(1);
+      expect(call[0].createdBy).toBe('user_123');
+      expect(call[0].source).toEqual({ table: 'manual', id: null, triggerAt: null });
     });
   });
 
