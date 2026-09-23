@@ -256,3 +256,25 @@ describe('MentionPicker', () => {
     });
   });
 });
+
+// Agent Signup Phase 2b: a human picks "PageSpace Support" out of this list and
+// addresses it. An agent chose that name, so the marker comes from accountType.
+describe('MentionPicker — agent accounts', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('given an AI agent account suggestion, should mark it; a human suggestion is not marked', async () => {
+    mockFetch.mockReturnValue(makeResponse([
+      { id: 'agent-1', label: 'PageSpace Support', type: 'user', data: {}, accountType: 'agent' },
+      { ...userSuggestion, accountType: 'human' },
+    ]));
+
+    render(<MentionPicker driveId="drive-1" onMentionSelect={vi.fn()} />);
+
+    const agentName = await screen.findByText('PageSpace Support');
+    await screen.findByText('Alice');
+    expect(screen.getAllByLabelText('AI agent account')).toHaveLength(1);
+    expect(agentName.parentElement).toContainElement(screen.getByLabelText('AI agent account'));
+  });
+});

@@ -19,6 +19,8 @@ export interface MessageableUser {
   name: string | null;
   email: string;
   image: string | null;
+  /** `agent` marks a self-named AI agent account in the picker (Agent Signup Phase 2b). */
+  accountType: 'human' | 'agent';
   username: string | null;
   displayName: string | null;
   bio: string | null;
@@ -146,6 +148,7 @@ export async function GET(request: Request) {
         name: users.name,
         email: users.email,
         image: users.image,
+        accountType: users.accountType,
         username: userProfiles.username,
         displayName: userProfiles.displayName,
         bio: userProfiles.bio,
@@ -160,6 +163,7 @@ export async function GET(request: Request) {
       name: u.name,
       email: u.email,
       image: u.image,
+      accountType: u.accountType,
       username: u.username,
       displayName: u.displayName,
       bio: u.bio,

@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import type { PresenceViewer } from '@/lib/websocket';
+import { AgentBadge } from '@/components/shared/AgentBadge';
 
 function getInitials(name: string): string {
   return name
@@ -101,7 +102,7 @@ export function PageViewers({ pageId, maxVisible = 4, size = 'md' }: PageViewers
           <TooltipContent side="bottom">
             <div className="flex flex-col gap-0.5">
               {otherViewers.slice(maxVisible).map((v) => (
-                <span key={v.userId}>{v.name}</span>
+                <span key={v.userId} className="flex items-center gap-1">{v.name}<AgentBadge accountType={v.accountType} /></span>
               ))}
             </div>
           </TooltipContent>
@@ -141,7 +142,9 @@ function ViewerAvatar({
           </AvatarFallback>
         </Avatar>
       </TooltipTrigger>
-      <TooltipContent side="bottom">{viewer.name}</TooltipContent>
+      <TooltipContent side="bottom">
+        <span className="flex items-center gap-1">{viewer.name}<AgentBadge accountType={viewer.accountType} /></span>
+      </TooltipContent>
     </Tooltip>
   );
 }
@@ -196,7 +199,7 @@ export function PageViewersInline({ pageId, maxVisible = 3 }: { pageId: string |
       <TooltipContent side="right">
         <div className="flex flex-col gap-0.5">
           {otherViewers.map((v) => (
-            <span key={v.userId}>{v.name}</span>
+            <span key={v.userId} className="flex items-center gap-1">{v.name}<AgentBadge accountType={v.accountType} /></span>
           ))}
         </div>
       </TooltipContent>

@@ -1189,7 +1189,7 @@ async function populateUserMetadata(socket: AuthSocket): Promise<void> {
 
   try {
     const [userResult, profileResult] = await Promise.all([
-      db.select({ name: users.name, image: users.image }).from(users).where(eq(users.id, userId)).limit(1),
+      db.select({ name: users.name, image: users.image, accountType: users.accountType }).from(users).where(eq(users.id, userId)).limit(1),
       db.select({ displayName: userProfiles.displayName, avatarUrl: userProfiles.avatarUrl }).from(userProfiles).where(eq(userProfiles.userId, userId)).limit(1),
     ]);
 
@@ -1203,7 +1203,7 @@ async function populateUserMetadata(socket: AuthSocket): Promise<void> {
     const name = displayName || decryptedName || 'Unknown';
     const avatarUrl = profileResult[0]?.avatarUrl || userResult[0]?.image || null;
 
-    socket.data.user = { id: userId, name, avatarUrl };
+    socket.data.user = { id: userId, name, avatarUrl, accountType: userResult[0]?.accountType ?? 'human' };
   } catch (error) {
     loggers.realtime.error('Error populating user metadata', error as Error, { userId });
     // Keep the basic user data (just id) - presence will work with fallback name
@@ -1749,6 +1749,7 @@ io.on('connection', (socket: AuthSocket) => {
         socketId: socket.id,
         name: user.name,
         avatarUrl: user.avatarUrl,
+        accountType: user.accountType,
       };
 
       presenceTracker.addViewer(pageId, driveId, presenceUser);

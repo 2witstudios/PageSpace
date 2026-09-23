@@ -420,6 +420,26 @@ describe('GET /api/mentions/search', () => {
   // channel's drive is the grant, the same rule the drive's agent-members
   // list already applies to every drive member.
   // ==========================================================================
+  describe('AI agent ACCOUNT user suggestions (Agent Signup Phase 2b)', () => {
+    it('given a drive member who is an AI agent account, should return accountType agent so the picker can mark it', async () => {
+      vi.mocked(getUserDriveAccess).mockResolvedValue(true);
+      vi.mocked(getDriveRecipientUserIds).mockResolvedValue([mockUserId, 'agent_x']);
+      const rows = [{ id: 'agent_x', name: 'PageSpace Support', image: null, accountType: 'agent' }];
+      const tail = { orderBy: vi.fn().mockReturnThis(), limit: vi.fn().mockResolvedValue(rows) };
+      vi.mocked(db.select).mockReturnValue({
+        from: vi.fn().mockReturnThis(),
+        where: vi.fn().mockImplementation(() => Object.assign(Promise.resolve(rows), tail)),
+      } as unknown as ReturnType<typeof db.select>);
+
+      const response = await GET(new Request(`https://example.com/api/mentions/search?driveId=${mockDriveId}&types=user&q=support`));
+      const body = await response.json();
+
+      expect(body.find((suggestion: { id: string; type: string }) => suggestion.type === 'user' && suggestion.id === 'agent_x')).toMatchObject({
+        label: 'PageSpace Support', accountType: 'agent',
+      });
+    });
+  });
+
   describe('guest agent members', () => {
     const guestAgentId = 'agent_guest_aaaaaaaaaaaaa';
     const guestRow = { id: guestAgentId, title: 'Guest Agent', memberDriveId: mockDriveId, homeDriveId: 'drive_home' };

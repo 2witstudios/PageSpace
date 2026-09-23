@@ -108,6 +108,12 @@ vi.mock('@/lib/users/visibility', () => ({
   searchRelatedProfilesByName: vi.fn(),
 }));
 
+// Agent Signup Phase 2b: one bounded accountType lookup over the merged ids.
+const accountTypes = vi.hoisted(() => new Map<string, 'human' | 'agent'>());
+vi.mock('@/lib/users/account-types', () => ({
+  loadAccountTypes: vi.fn(async () => accountTypes),
+}));
+
 import { GET } from '../route';
 import { searchRelatedProfilesByName } from '@/lib/users/visibility';
 import { loggers } from '@pagespace/lib/logging/logger-config'
@@ -245,6 +251,7 @@ describe('GET /api/users/search', () => {
       expect(response.status).toBe(200);
       expect(body.users).toHaveLength(1);
       expect(body.users[0]).toEqual({
+        accountType: 'human',
         userId: 'user_456',
         username: 'testuser',
         displayName: 'Test User',
@@ -252,6 +259,22 @@ describe('GET /api/users/search', () => {
         avatarUrl: 'https://example.com/avatar.png',
       });
       expect(body.users[0]).not.toHaveProperty('email');
+    });
+  });
+
+  describe('agent accounts (Agent Signup Phase 2b)', () => {
+    it('given an AI agent account among the results, should return accountType agent so the picker can mark it', async () => {
+      accountTypes.set('agent_1', 'agent');
+      try {
+        setupDbChains([{ userId: 'agent_1', username: null, displayName: 'PageSpace Support', bio: null, avatarUrl: null }], []);
+
+        const response = await GET(new Request('https://example.com/api/users/search?q=support'));
+        const body = await response.json();
+
+        expect(body.users[0]).toMatchObject({ userId: 'agent_1', displayName: 'PageSpace Support', accountType: 'agent' });
+      } finally {
+        accountTypes.clear();
+      }
     });
   });
 
@@ -302,6 +325,7 @@ describe('GET /api/users/search', () => {
       expect(response.status).toBe(200);
       expect(body.users).toHaveLength(1);
       expect(body.users[0]).toEqual({
+        accountType: 'human',
         userId: 'user_789',
         username: 'emailuser',
         displayName: 'Email Display',
@@ -324,6 +348,7 @@ describe('GET /api/users/search', () => {
       expect(response.status).toBe(200);
       expect(body.users).toHaveLength(1);
       expect(body.users[0]).toEqual({
+        accountType: 'human',
         userId: 'user_no_profile',
         username: null,
         displayName: 'No Profile User',
@@ -420,6 +445,7 @@ describe('GET /api/users/search', () => {
       expect(response.status).toBe(200);
       expect(body.users).toHaveLength(1);
       expect(body.users[0]).toEqual({
+        accountType: 'human',
         userId: 'friend_1',
         username: 'privfriend',
         displayName: 'Private Friend',

@@ -18,6 +18,7 @@ import {
   buildExactEmailMatchResult,
 } from '@/lib/users/enumeration-safe';
 import { searchRelatedProfilesByName } from '@/lib/users/visibility';
+import { loadAccountTypes } from '@/lib/users/account-types';
 
 export async function GET(request: Request) {
   try {
@@ -177,7 +178,12 @@ export async function GET(request: Request) {
 
     // Map preserves insertion order (email → related → public); cap the merged
     // list so the combined branches still respect `limit`.
-    const userResults = Array.from(userMap.values()).slice(0, limit);
+    const merged = Array.from(userMap.values()).slice(0, limit);
+    // Every branch above builds from profiles or email rows that carry no
+    // accountType; one bounded lookup lets the picker mark an AI agent account,
+    // whose name is self-chosen (Agent Signup Phase 2b).
+    const accountTypes = await loadAccountTypes(merged.map((result) => result.userId));
+    const userResults = merged.map((result) => ({ ...result, accountType: accountTypes.get(result.userId) ?? 'human' }));
 
     auditRequest(request, { eventType: 'data.read', userId: user.id, resourceType: 'user_search', resourceId: user.id, details: { queryLength: query.length, resultCount: userResults.length } });
 

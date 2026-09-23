@@ -36,5 +36,7 @@ export interface MentionSuggestion {
   type: MentionType;
   data: MentionData;
   description?: string; // Optional description for search results
+  /** User suggestions only: `agent` renders the AgentBadge — the name is self-chosen (Agent Signup Phase 2b). */
+  accountType?: 'human' | 'agent';
 }
 

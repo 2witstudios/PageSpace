@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import type { MentionSuggestion, MentionType } from '@/types/mentions';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { AgentBadge } from '@/components/shared/AgentBadge';
 
 export type TabType = 'all' | 'people' | 'pages' | 'groups';
 
@@ -139,6 +140,7 @@ export function MentionPickerPanel({
                   >
                     {item.label}
                   </span>
+                  <AgentBadge accountType={item.accountType} />
                   {!isGroup && (
                     <span className="text-xs text-muted-foreground ml-auto">
                       {item.type}

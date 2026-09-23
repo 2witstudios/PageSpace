@@ -171,3 +171,24 @@ describe('PageViewersInline', () => {
     expect(screen.getByText('+2')).toBeInTheDocument();
   });
 });
+
+// Agent Signup Phase 2b: an agent picks its own name, so "Jane from IT" online
+// on a page must not read as a colleague. The marker comes from accountType.
+describe('PageViewers — agent accounts', () => {
+  beforeEach(() => {
+    mockPresenceStore.clear();
+    mockUseAuth.mockReturnValue({ user: { id: 'current-user' } });
+  });
+
+  it('given an agent account among the viewers, should mark it beside its name; a human is not marked', () => {
+    mockPresenceStore.set('page-1', [
+      createViewer({ userId: 'agent-1', socketId: 's1', name: 'Jane from IT', accountType: 'agent' }),
+      createViewer({ userId: 'user-2', socketId: 's2', name: 'Bob Human', accountType: 'human' }),
+    ]);
+
+    render(<PageViewers pageId="page-1" />);
+
+    expect(screen.getAllByLabelText('AI agent account')).toHaveLength(1);
+    expect(screen.getByLabelText('AI agent account').parentElement).toHaveTextContent('Jane from IT');
+  });
+});
