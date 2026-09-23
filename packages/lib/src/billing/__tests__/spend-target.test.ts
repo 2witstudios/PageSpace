@@ -7,6 +7,7 @@ import {
   driveSpend,
   automationSpend,
   automationSpendInput,
+  automationRunUnreserved,
   resolvesDriveWallets,
   resolvedSpend,
   personalRootDecision,
@@ -251,6 +252,20 @@ describe('spend-target: automations (SPEND-6)', () => {
       fallbackFrom: null,
       entitlementTier: 'business',
     });
+  });
+
+  it('SPEND-6 (partial) an automation that would run a model with no reserved wallet is refused, so it cannot settle on a person', () => {
+    const on = { orgsEnabled: true, billingEnabled: true, target: automationSpend('d-product') };
+    expect(automationRunUnreserved({ ...on, walletId: undefined })).toBe(true);
+    expect(automationRunUnreserved({ ...on, walletId: 'w-product' })).toBe(false);
+  });
+
+  it('while orgs are dark, billing is off, or the target is a person, an unreserved run is not an automation settle to refuse', () => {
+    const base = { orgsEnabled: true, billingEnabled: true, target: automationSpend('d-product'), walletId: undefined };
+    expect(automationRunUnreserved({ ...base, orgsEnabled: false })).toBe(false);
+    expect(automationRunUnreserved({ ...base, billingEnabled: false })).toBe(false);
+    expect(automationRunUnreserved({ ...base, target: PERSONAL_SPEND })).toBe(false);
+    expect(automationRunUnreserved({ ...base, target: driveSpend('d-product', 'own_credits') })).toBe(false);
   });
 
   it.each([

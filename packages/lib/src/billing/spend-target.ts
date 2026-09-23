@@ -75,6 +75,25 @@ export function automationSpend(driveId: string): SpendTarget {
 }
 
 /**
+ * SPEND-6, fail closed: an automation about to call a model with NO reserved wallet. Its
+ * usage would settle through consumeCredits' fallback onto the recorded person's personal
+ * root, which an automation must never reach. Refuse the run before the model is called.
+ * Only while wallets are live (orgs on, billing on); while orgs are dark an automation
+ * bills as before wallets, and with billing off nothing settles at all.
+ */
+export function automationRunUnreserved(input: {
+  orgsEnabled: boolean;
+  billingEnabled: boolean;
+  target: SpendTarget;
+  walletId: string | undefined;
+}): boolean {
+  return input.billingEnabled
+    && input.orgsEnabled
+    && input.target.kind === 'automation'
+    && (input.walletId === undefined || input.walletId.length === 0);
+}
+
+/**
  * The target a follow-on call in the same turn names once the turn's gate resolved
  * `source`: the same drive and exactly the source already chosen, so a tool that gates
  * its own model call can never land on a different wallet than the turn it runs in.

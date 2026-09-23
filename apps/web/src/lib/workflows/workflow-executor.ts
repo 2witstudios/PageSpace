@@ -4,7 +4,9 @@ import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { createId } from '@paralleldrive/cuid2';
 import { createAIProvider, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
-import { automationSpend } from '@pagespace/lib/billing/spend-target';
+import { automationRunUnreserved, automationSpend } from '@pagespace/lib/billing/spend-target';
+import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
+import { isBillingEnabled } from '@pagespace/lib/deployment-mode';
 import { filterToolsForEphemeralWorkspace, filterToolsForImageGen, filterToolsForSandboxEnablement, filterToolsForSandboxTier, SANDBOX_COMPUTE_TOOL_NAMES } from '@/lib/ai/core/tool-filtering';
 import { resolveSandboxToolEligibility } from '@/lib/ai/core/sandbox-tool-eligibility';
 import { spawnSession, createConversationInSession, endSession } from '@/lib/agent-workspaces/agent-workspaces-runtime';
@@ -28,7 +30,7 @@ import { workflowRunSteps } from '@pagespace/db/schema/workflow-run-steps'
 import type { WorkflowStep, WorkflowToolStep } from '@pagespace/db/schema/workflows'
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { MAX_WORKFLOW_STEPS } from './core/step-plan';
+import { MAX_WORKFLOW_STEPS, hasAiStep, resolveSteps } from './core/step-plan';
 import { resolveStepArgs } from './core/resolve-step-args';
 import { applyImplicitStepArgs } from './core/implicit-step-args';
 import { frameWebhookPayloadPrompt } from '@/lib/webhooks/webhook-payload-framing';
@@ -137,7 +139,9 @@ export interface ExecuteWorkflowOptions {
   /**
    * For a caller that gated BEFORE the claim (the calendar, zoom and page-webhook trigger
    * executors): the wallet its gate reserved on. An admission's own creditSpend wins.
-   * Absent both, the run names its drive (SPEND-6) and no wallet — never a person.
+   * Absent both, the run names its drive (SPEND-6) and no wallet: while wallets are live a
+   * run that would call a model is then refused (automationRunUnreserved), never settled
+   * on a person.
    */
   creditSpend?: RunCreditSpend;
 }
@@ -184,7 +188,19 @@ export async function executeWorkflow(
     } else {
       release = admission?.release;
       const creditSpend = admission?.creditSpend ?? options.creditSpend ?? { spend: automationSpend(input.driveId) };
-      result = await runClaimed({ ...input, creditSpend }, runId, startTime);
+      const runsModel = hasAiStep(resolveSteps({ steps: input.steps ?? null, prompt: input.prompt, agentPageId: input.agentPageId }));
+      if (runsModel && automationRunUnreserved({
+        orgsEnabled: ORGS_ENABLED,
+        billingEnabled: isBillingEnabled(),
+        target: creditSpend.spend,
+        walletId: creditSpend.walletId,
+      })) {
+        // SPEND-6, fail closed: with no reserved drive wallet this run's usage would settle
+        // on the recorded person's personal root (consumeCredits' fallback). Skip instead.
+        result = { success: false, skipped: true, durationMs: Date.now() - startTime, error: 'AI credit gate denied: no drive wallet reserved for this automation' };
+      } else {
+        result = await runClaimed({ ...input, creditSpend }, runId, startTime);
+      }
     }
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
