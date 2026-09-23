@@ -124,7 +124,11 @@ export type GateReason =
   // Per-user/day runaway-spend backstop tripped: today's charged spend plus this
   // call's reservation would exceed the configured daily ceiling. Independent of the
   // credit-balance math (evaluateDailyCap, not evaluateGate). Maps to HTTP 429.
-  | 'daily_cap_exceeded';
+  | 'daily_cap_exceeded'
+  // The source the call named is empty, paused, or not this person's to spend, or none was
+  // named where several exist (SPEND-4). Nothing is reserved or charged, and the gate never
+  // switches to another wallet; the refusal names the source and the remaining options.
+  | 'source_refused';
 
 export interface DailyCapInput {
   /** This user's charged spend (whole cents) since the start of the current UTC day. */

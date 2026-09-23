@@ -1224,6 +1224,11 @@ export interface AIUsageData {
   // route → here → consumeCredits. Absent for un-gated calls (e.g. cron paths).
   holdId?: string;
 
+  // The wallet that hold was placed on (CreditGateResult.walletId, WAL-5), threaded with
+  // it so the charge settles against the wallet the call named, never re-derived from the
+  // user. Absent for un-gated calls, which charge the personal root wallet.
+  walletId?: string;
+
   // Override the cost provenance stamped into metadata.costSource (which the admin
   // panel reads to classify coverage). Defaults to 'openrouter' when a finite
   // providerCostDollars is given, else 'estimate'. Voice routes pass 'list_price'
@@ -1494,6 +1499,7 @@ export async function trackAIUsage(data: AIUsageData): Promise<UsageTrackingOutc
           userId: data.userId,
           costDollars: cost,
           holdId: data.holdId,
+          walletId: data.walletId,
           // Scope the live balance push so the per-conversation usage monitor
           // refreshes the right view; the navbar widget updates regardless.
           conversationId: data.conversationId,
