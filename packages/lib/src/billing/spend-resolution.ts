@@ -115,16 +115,18 @@ async function liveHoldTotals(walletIds: string[], now: Date): Promise<WalletHol
 }
 
 /**
- * The wallet stored as this conversation's choice (SPEND-3), or null when nothing was chosen
- * or the call has no conversation. Read by id alone: whether the id is one this person may
- * spend is decided against their legs (spend-target `sourceOfWallet`), never by the row.
+ * The wallet `userId` stored as this conversation's choice (SPEND-3), or null when nothing was
+ * chosen, the call has no conversation, or the conversation is not theirs (a choice is one
+ * person's, and a caller-supplied id may not have been vetted yet when the gate runs). Whether
+ * the id is one this person may spend is decided against their legs (spend-target
+ * `sourceOfWallet`), never by the row.
  */
-async function chosenWalletOf(conversationId: string | null | undefined): Promise<string | null> {
+async function chosenWalletOf(userId: string, conversationId: string | null | undefined): Promise<string | null> {
   if (typeof conversationId !== 'string' || conversationId.length === 0) return null;
   const [row] = await db
     .select({ chosenWalletId: conversations.chosenWalletId })
     .from(conversations)
-    .where(eq(conversations.id, conversationId))
+    .where(and(eq(conversations.id, conversationId), eq(conversations.userId, userId)))
     .limit(1);
   return row?.chosenWalletId ?? null;
 }
@@ -175,7 +177,7 @@ export async function resolveCallSpend(input: {
   const pool = standing?.orgId && shared.seat ? await orgPoolOf(standing.orgId) : null;
   const personal = await personalRootOf(userId);
   const stored: StoredSpendChoice = {
-    chosenWalletId: await chosenWalletOf(target.conversationId),
+    chosenWalletId: await chosenWalletOf(userId, target.conversationId),
     driveDefault: driveWallet?.defaultSpendSource ?? null,
     personalDefault: personal?.defaultSpendSource ?? null,
   };

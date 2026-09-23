@@ -29,7 +29,7 @@ import { conversationRepository } from '@/lib/repositories/conversation-reposito
 import { authorizePageConversation, type PageConversationAccess } from '@/lib/ai/core/authorize-page-conversation';
 import { createId } from '@paralleldrive/cuid2';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
-import { driveSpend, resolvedSpend } from '@pagespace/lib/billing/spend-target';
+import { conversationSpend, resolvedSpend } from '@pagespace/lib/billing/spend-target';
 import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
 import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
@@ -313,8 +313,10 @@ export async function POST(request: Request) {
     // subscription, so skip the gate entirely — no hold, no balance check — and never
     // debit at settle (see isMeteringExempt in trackAIUsage).
     // A consultation runs as a conversation on the agent's page, so its session is the
-    // agent's drive (SPEND-7). The per-conversation chosen source has no storage yet.
-    let spend = driveSpend(agent.driveId);
+    // agent's drive (SPEND-7). A continued conversation carries its stored source (SPEND-3);
+    // the gate reads it only when the caller owns that conversation, so an id not yet vetted
+    // here names nothing.
+    let spend = conversationSpend(agent.driveId, conversationId ?? null);
     if (!isMeteringExempt(effectiveProvider)) {
       const creditGate = await canConsumeAI(userId, (gateUser?.subscriptionTier ?? 'free') as SubscriptionTier, {
         spend,

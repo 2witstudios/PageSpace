@@ -398,4 +398,15 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     const drive = await canConsumeAI(world.marcusId, 'free', { spend: conversationSpend(world.productId, conversationId) });
     expect(drive).toMatchObject({ allowed: true, walletId: world.productWalletId, spendSource: 'drive_wallet' });
   });
+  it('SPEND-3 (partial) a stored choice is read only from the caller\'s OWN conversation: naming someone else\'s conversation chooses nothing', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 5_000 });
+    // Jono's conversation in Product stores Product's wallet, a wallet Marcus may also spend.
+    const jonosConversation = await conversationIn(world.productId, world.jonoId, world.productWalletId);
+
+    const gate = await canConsumeAI(world.marcusId, 'free', { spend: conversationSpend(world.productId, jonosConversation) });
+
+    expect(gate).toMatchObject({ allowed: false, reason: 'source_refused', refusal: { source: null, reason: 'no_source_chosen' } });
+    await expectNothingCharged(world);
+  });
 });

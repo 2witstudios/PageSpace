@@ -272,6 +272,14 @@ describe('POST /api/v1/chat/completions', () => {
     });
   });
 
+  test('SPEND-3 (partial) a thread names its conversation so the gate reads its stored source; a stateless call names none', async () => {
+    await POST(makeRequest({ ...validBody, conversation_id: 'conv-abc' }));
+    expect(vi.mocked(canConsumeAI).mock.calls[0]?.[2]?.spend).toEqual({ kind: 'drive', driveId: 'drive-abc', chosen: null, conversationId: 'conv-abc' });
+    vi.mocked(canConsumeAI).mockClear();
+    await POST(makeRequest(validBody));
+    expect(vi.mocked(canConsumeAI).mock.calls[0]?.[2]?.spend).toEqual({ kind: 'drive', driveId: 'drive-abc', chosen: null });
+  });
+
   test('proceeds to a 200 stream when the credit gate allows', async () => {
     vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'ok' });
     const response = await POST(makeRequest(validBody));

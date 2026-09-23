@@ -41,7 +41,7 @@ import { conversationRepository } from '@/lib/repositories/conversation-reposito
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { AIMonitoring, extractOpenRouterCostDollars, extractOpenRouterGenerationIds } from '@pagespace/lib/monitoring/ai-monitoring';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
-import { driveSpend, resolvedSpend } from '@pagespace/lib/billing/spend-target';
+import { conversationSpend, resolvedSpend } from '@pagespace/lib/billing/spend-target';
 import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
 import { ADMIN_ONLY_PROVIDERS } from '@/lib/ai/core/ai-providers-config';
 import { createAdminRestrictedResponse } from '@/lib/subscription/rate-limit-middleware';
@@ -249,8 +249,9 @@ export async function POST(request: Request): Promise<Response> {
   // The wallet the hold was placed on, threaded to settlement with it (WAL-5).
   let walletId: string | undefined;
   // The call is a conversation on the agent page, so its session is the page's drive
-  // (SPEND-7). The per-conversation chosen source has no storage yet.
-  let spend = driveSpend(page.driveId);
+  // (SPEND-7). A thread (conversation_id) carries its stored source (SPEND-3); the gate reads
+  // it only when the caller owns that conversation. A stateless call has none.
+  let spend = conversationSpend(page.driveId, incomingConversationId ?? null);
   if (!isMeteringExempt(effectiveProvider)) {
     const creditGate = await canConsumeAI(authResult.userId, (gateUser?.subscriptionTier ?? 'free') as SubscriptionTier, {
       spend,

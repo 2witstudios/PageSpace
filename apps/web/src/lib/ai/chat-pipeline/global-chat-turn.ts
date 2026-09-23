@@ -32,7 +32,7 @@ import { requiresProSubscription, createSubscriptionRequiredResponse, createAdmi
 import { resolveProviderModel } from '@/lib/ai/core/ai-providers-config';
 import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
-import { driveSpend } from '@pagespace/lib/billing/spend-target';
+import { conversationSpend } from '@pagespace/lib/billing/spend-target';
 import { UNGATED_TURN_CREDIT, turnCreditAfterGate, type TurnCredit } from './turn-credit';
 import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
 import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
@@ -438,8 +438,9 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
       // would need special-cased release on the short-circuit path.
       // The global assistant spends in the drive the person is in (SPEND-7), resolved from
       // the server-checked location; with no drive it spends personal credits (SPEND-8).
-      // The per-conversation chosen source has no storage yet, so none is named.
-      const locationSpend = driveSpend(locationContext?.currentDrive?.id);
+      // The conversation's stored source (SPEND-3) is read only if the caller owns it (the
+      // gate's shell filters on owner), since this runs before the conversation is resolved.
+      const locationSpend = conversationSpend(locationContext?.currentDrive?.id, conversationId);
       credit = { spend: locationSpend };
       if (!isMeteringExempt(gateProvider) && !isSoloHelpRequest) {
         const creditGate = await canConsumeAI(userId, (gateUser?.subscriptionTier ?? 'free') as SubscriptionTier, {

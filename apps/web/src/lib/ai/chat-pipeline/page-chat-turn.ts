@@ -40,7 +40,7 @@ import {
 } from '@/lib/ai/core/ask-user-resume';
 import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
-import { driveSpend } from '@pagespace/lib/billing/spend-target';
+import { conversationSpend } from '@pagespace/lib/billing/spend-target';
 import { UNGATED_TURN_CREDIT, turnCreditAfterGate, type TurnCredit } from './turn-credit';
 import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
 import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
@@ -751,8 +751,9 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // it costs nothing — skip the gate entirely rather than take a hold that
     // would need special-cased release on the short-circuit path.
     // The turn runs in a session of this page's conversation, in the page's drive
-    // (SPEND-7). The per-conversation chosen source has no storage yet, so none is named.
-    const pageSpend = driveSpend(page.driveId);
+    // (SPEND-7). The conversation (its id vetted above) carries its stored source, which the
+    // gate resolves or refuses (SPEND-3, SPEND-4); the turn never writes it.
+    const pageSpend = conversationSpend(page.driveId, conversationId);
     credit = { spend: pageSpend };
     if (!isMeteringExempt(gateProvider) && !isSoloHelpRequest) {
       const creditGate = await canConsumeAI(userId, (user?.subscriptionTier ?? 'free') as SubscriptionTier, {

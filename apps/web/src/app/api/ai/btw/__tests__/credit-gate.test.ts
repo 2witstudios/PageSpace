@@ -124,10 +124,10 @@ describe('POST /api/ai/btw credit gate', () => {
     mocks.entitlement.mockImplementation(async (_userId: string, tier: string) => tier);
   });
 
-  it('SPEND-7 (partial) names the drive of the conversation the side question asks about, with no source chosen', async () => {
+  it('SPEND-7 (partial) SPEND-3 (partial) names the drive of the conversation the side question asks about, and that conversation (whose stored source the gate reads); the route chooses nothing', async () => {
     await post();
     expect(mocks.sessionDrive).toHaveBeenCalledWith({ userId: 'u1', isShared: false, type: 'page', contextId: 'p1' });
-    const spend = { kind: 'drive', driveId: 'd1', chosen: null };
+    const spend = { kind: 'drive', driveId: 'd1', chosen: null, conversationId: 'c1' };
     expect(mocks.gate).toHaveBeenCalledWith('u1', 'free', expect.objectContaining({ spend }));
     expect(mocks.entitlement).toHaveBeenCalledWith('u1', 'free', spend);
   });
