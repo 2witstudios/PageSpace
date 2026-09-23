@@ -87,6 +87,31 @@ describe('createAgentAccountRepository — against the real database', () => {
     expect(actual).toEqual(expected);
   });
 
+  it('given the refresh worker mirroring a rotation, should advance credentialVersion only from the version it read — a stale mirror never moves it backwards (L3·G3)', async () => {
+    const row = await repo.insert({ draft, owner: { kind: 'user', userId: USER }, tenantId: `user:${USER}` as TenantId, approvalPolicy: null });
+    await repo.setCredentialVersion({ id: row.id, version: 1 });
+    const actual = [
+      await repo.advanceCredentialVersion({ id: row.id, from: 1, to: 2 }),
+      await repo.advanceCredentialVersion({ id: row.id, from: 1, to: 2 }),
+      await repo.advanceCredentialVersion({ id: row.id, from: 3, to: 1 }),
+      (await repo.find(row.id))?.credentialVersion,
+    ];
+    const expected = [true, false, false, 2];
+    expect(actual).toEqual(expected);
+  });
+
+  it('given a dead upstream grant, should move an active account to needs_reauth and never touch a revoked one (L3·G3)', async () => {
+    const active = await repo.insert({ draft, owner: { kind: 'user', userId: USER }, tenantId: `user:${USER}` as TenantId, approvalPolicy: null });
+    const revoked = await repo.insert({ draft, owner: { kind: 'user', userId: USER }, tenantId: `user:${USER}` as TenantId, approvalPolicy: null });
+    await repo.markRevoked({ id: revoked.id, at: 1_800_000_000_000 });
+    const actual = {
+      marked: [await repo.markNeedsReauth({ id: active.id, at: 1_800_000_000_000 }), await repo.markNeedsReauth({ id: revoked.id, at: 1_800_000_000_000 })],
+      statuses: [(await repo.find(active.id))?.status, (await repo.find(revoked.id))?.status],
+    };
+    const expected = { marked: [true, false], statuses: ['needs_reauth', 'revoked'] };
+    expect(actual).toEqual(expected);
+  });
+
   it('given the owning user deleted, should cascade the accounts away', async () => {
     const other = `${RUN}_gone`;
     await db.insert(users).values({ id: other, name: 'gone', email: `${other}@example.test` });

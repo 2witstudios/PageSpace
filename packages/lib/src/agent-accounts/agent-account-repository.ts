@@ -39,6 +39,13 @@ export type AgentAccountRepository = {
   readonly existingIds: (ids: readonly string[]) => Promise<readonly string[]>;
   readonly listForUser: (userId: string) => Promise<readonly AgentAccountRecord[]>;
   readonly listForAgentPage: (agentPageId: string) => Promise<readonly AgentAccountRecord[]>;
+  /**
+   * The refresh worker's rotation, mirrored: `from` → `to` only while the row still reads `from`
+   * (so a stale mirror never moves the version backwards). `false` when it did not move.
+   */
+  readonly advanceCredentialVersion: (input: { readonly id: string; readonly from: number; readonly to: number }) => Promise<boolean>;
+  /** Upstream grant dead (refresh revoked/rejected): `active` → `needs_reauth`; never touches a revoked or deleted row. */
+  readonly markNeedsReauth: (input: { readonly id: string; readonly at: number }) => Promise<boolean>;
   /** Broker-denied from now on; bumps policyVersion. null when the row is gone. */
   readonly markRevoked: (input: { readonly id: string; readonly at: number }) => Promise<AgentAccountRecord | null>;
   readonly touchLastUsed: (input: { readonly id: string; readonly at: number }) => Promise<void>;
@@ -91,6 +98,24 @@ export function createAgentAccountRepository({ db }: { readonly db: AgentAccount
         .update(agentAccounts)
         .set({ credentialVersion: version, updatedAt: new Date() })
         .where(and(eq(agentAccounts.id, id), eq(agentAccounts.credentialVersion, 0)))
+        .returning({ id: agentAccounts.id });
+      return updated.length === 1;
+    },
+
+    async advanceCredentialVersion({ id, from, to }) {
+      const updated = await db
+        .update(agentAccounts)
+        .set({ credentialVersion: to, updatedAt: new Date() })
+        .where(and(eq(agentAccounts.id, id), eq(agentAccounts.credentialVersion, from)))
+        .returning({ id: agentAccounts.id });
+      return updated.length === 1;
+    },
+
+    async markNeedsReauth({ id, at }) {
+      const updated = await db
+        .update(agentAccounts)
+        .set({ status: 'needs_reauth', updatedAt: new Date(at) })
+        .where(and(eq(agentAccounts.id, id), eq(agentAccounts.status, 'active')))
         .returning({ id: agentAccounts.id });
       return updated.length === 1;
     },
