@@ -2143,6 +2143,13 @@
       "when": 1790038084778,
       "tag": "0305_wallet_ids_required",
       "breakpoints": true
+    },
+    {
+      "idx": 306,
+      "version": "7",
+      "when": 1790168655975,
+      "tag": "0307_wallet_funding_legs",
+      "breakpoints": true
     }
   ]
 }

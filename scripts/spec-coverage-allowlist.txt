@@ -40,9 +40,10 @@ DRV-7
 DRV-8
 DRV-9
 # MON-3 (the org pool refill: (Business base + extra-seat items) paid × ratio) re-added per review
-# 5230424182 on #2657: invoice-grant.test.ts proves the grantForInvoiceLines arithmetic, but that
-# seam has no production caller and no org pool exists, so nothing is refilled yet. Those tests
-# are titled "MON-3 (partial)"; Phase 3 D1 proves the refill.
+# 5230424182 on #2657, and kept after ow-c5 (#2718, independent review ow-irv-2718 P1-1): the pool now
+# refills from an org invoice.paid, sized from what each line paid net of its discounts and capped at
+# amount_paid (tests titled "MON-3 (partial)"), but it sums EVERY line of the org subscription; limiting
+# the refill to the Business base and extra-seat prices needs those prices, which Phase 3 D1 defines.
 MON-3
 # ORG-1 (name, slug, avatar, one human Owner; ownership is transferable), ORG-2 (Owner/Admin/Member;
 # many orgs per user; a user in no org sees no org UI) and ORG-3 (email invites with expiry, resend,
@@ -134,7 +135,13 @@ WAL-1
 WAL-2
 # WAL-3 (partial, ow-c2): allocation draws against the parent as spend happens and legs last until spent,
 # as pure math; persisted wallets and ledger rows are unproven until C1/C3.
+# (partial, ow-c5): persisted funding legs draw FIFO and last until spent, and allocations reset on the
+# governing period (D-OW-12) against Postgres; the gate drawing an allocation against its parent as
+# spend happens is C3.
 WAL-3
+# WAL-4 (partial, ow-c5): a donation from the donor's own balance to a drive wallet they can see, as a
+# one-off amount recorded with the donor as its own non-refundable leg, refused when the drive has
+# donations off — proven against Postgres. The drive lead's toggle route and the donate route are C6.
 WAL-4
 # WAL-5 (every AI usage row records the wallet charged; holds per wallet; ledger, reconciliation
 # and monthly reset keyed on wallet) re-added by lane ow-r0-fixups per Review 0b (page

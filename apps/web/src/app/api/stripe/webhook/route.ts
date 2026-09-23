@@ -11,6 +11,7 @@ import { resolveWebhookMetadataTierForControlPlane } from './control-plane-tier'
 import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import { userEmailMatch } from '@pagespace/lib/auth/user-repository';
 import { applyStripeFunding } from '@pagespace/lib/billing/credit-funding';
+import { applyOrgPoolRefill } from '@pagespace/lib/billing/wallet-funding-shell';
 import { getCreditPack } from '@pagespace/lib/billing/credit-pricing';
 import { emitCreditsUpdated } from '@/lib/subscription/credit-balance';
 import { sendSubscriptionReceiptEmail, sendTopupReceiptEmail } from '@/lib/billing/send-payment-receipt-email';
@@ -282,6 +283,13 @@ export async function POST(request: NextRequest) {
             break;
           }
           await withFundingRetry(event.id, async () => {
+            // An ORG customer's invoice refills that org's pool (MON-3) and never the
+            // personal path: the org's Stripe customer is no person's, so the personal
+            // handlers would find nobody. Once per invoice (ledger stripeRef), and a
+            // failure rethrows so Stripe redelivers. Phase 3 wires the org
+            // subscription itself; until an org has a stripeCustomerId this is a no-op.
+            const pool = await applyOrgPoolRefill(invoice);
+            if (pool.kind !== 'not_org') return;
             await handleInvoicePaid(invoice);
             // Grant the monthly credit on each renewal. The grant is sized from what
             // this invoice actually PAID (invoice.amount_paid × the tier's included-

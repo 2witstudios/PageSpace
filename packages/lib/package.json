@@ -704,6 +704,16 @@
       "import": "./dist/billing/wallet-core.js",
       "require": "./dist/billing/wallet-core.js"
     },
+    "./billing/wallet-funding": {
+      "types": "./dist/billing/wallet-funding.d.ts",
+      "import": "./dist/billing/wallet-funding.js",
+      "require": "./dist/billing/wallet-funding.js"
+    },
+    "./billing/wallet-funding-shell": {
+      "types": "./dist/billing/wallet-funding-shell.d.ts",
+      "import": "./dist/billing/wallet-funding-shell.js",
+      "require": "./dist/billing/wallet-funding-shell.js"
+    },
     "./logging/siem-error-hook": {
       "types": "./dist/logging/siem-error-hook.d.ts",
       "import": "./dist/logging/siem-error-hook.js",
@@ -2805,6 +2815,12 @@
       ],
       "billing/wallet-core": [
         "./dist/billing/wallet-core.d.ts"
+      ],
+      "billing/wallet-funding": [
+        "./dist/billing/wallet-funding.d.ts"
+      ],
+      "billing/wallet-funding-shell": [
+        "./dist/billing/wallet-funding-shell.d.ts"
       ],
       "logging/siem-error-hook": [
         "./dist/logging/siem-error-hook.d.ts"

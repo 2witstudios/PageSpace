@@ -130,6 +130,14 @@ vi.mock('@pagespace/lib/billing/credit-funding', () => ({
   applyStripeFunding: mockApplyStripeFunding,
 }));
 
+// The org pool refill shell (MON-3) is tested against Postgres in
+// packages/lib/src/billing/__tests__/wallet-funding.integration.test.ts; here only the
+// fork: an org customer's invoice goes to the pool and never to the personal path.
+const mockApplyOrgPoolRefill = vi.hoisted(() => vi.fn());
+vi.mock('@pagespace/lib/billing/wallet-funding-shell', () => ({
+  applyOrgPoolRefill: mockApplyOrgPoolRefill,
+}));
+
 // The receipt sender does its own I/O (Resend, optional Stripe payment-intent lookup)
 // and is unit-tested in isolation at send-payment-receipt-email.test.ts; here we only
 // assert the webhook calls it (or doesn't) with the right arguments.
@@ -280,6 +288,8 @@ const mockUser = (overrides: Partial<{
 describe('POST /api/stripe/webhook', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Default: the customer is no org's, so the personal path owns every invoice.
+    mockApplyOrgPoolRefill.mockResolvedValue({ kind: 'not_org' });
 
     // Set required environment variable
     process.env.STRIPE_WEBHOOK_SECRET = 'whsec_test_secret';
@@ -792,6 +802,60 @@ describe('POST /api/stripe/webhook', () => {
       // Tier is derived from the invoice line; the bare mock invoice has no lines, so the
       // option is undefined and the funding shell falls back to the stored user tier.
       expect(mockApplyStripeFunding).toHaveBeenCalledWith(event, { tier: undefined });
+    });
+
+    it('MON-3 (partial) an org customer invoice.paid refills the org pool and never reaches the personal funding path', async () => {
+      mockApplyOrgPoolRefill.mockResolvedValueOnce({ kind: 'granted', orgId: 'org_1', walletId: 'w_pool', allowanceCents: 4800 });
+      const invoice = mockInvoice({ amountPaid: 8000 });
+      const event = mockStripeEvent('invoice.paid', invoice);
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest;
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      expect(mockApplyOrgPoolRefill).toHaveBeenCalledTimes(1);
+      expect(mockApplyOrgPoolRefill).toHaveBeenCalledWith(invoice);
+      expect(mockApplyStripeFunding).not.toHaveBeenCalled();
+    });
+
+    it('a personal customer invoice.paid asks the pool path first, then funds the personal wallet', async () => {
+      const event = mockStripeEvent('invoice.paid', mockInvoice({ amountPaid: 1500 }));
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest;
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      expect(mockApplyOrgPoolRefill).toHaveBeenCalledTimes(1);
+      expect(mockApplyStripeFunding).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns 500 (retryable) when the org pool refill throws on invoice.paid', async () => {
+      mockApplyOrgPoolRefill.mockRejectedValueOnce(new Error('db boom'));
+      const event = mockStripeEvent('invoice.paid', mockInvoice());
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest;
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(500);
+      expect(mockApplyStripeFunding).not.toHaveBeenCalled();
     });
 
     it('returns 500 (retryable) when funding throws on invoice.paid', async () => {
