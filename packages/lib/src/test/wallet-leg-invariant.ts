@@ -9,8 +9,8 @@
  *
  * 1. `expectWalletLegInvariant(ids)` — an explicit check a wallet suite runs on the
  *    wallets its test touched, BEFORE its teardown deletes them (in a finally, so it runs
- *    when the test fails mid-way). It refuses to pass vacuously: it throws unless it found
- *    at least one of the named wallets, and at least one of those is a non-root wallet.
+ *    when the test fails mid-way). It refuses to pass vacuously: it throws when no id is
+ *    named, when ANY named id does not exist, and when a named wallet is a root (no legs).
  *
  * 2. `installWalletLegInvariantTrigger(pool)` — the catch-all for paths no test names yet.
  *    A DEFERRED constraint trigger on wallets and wallet_funding_legs re-checks the
@@ -33,10 +33,16 @@ export async function expectWalletLegInvariant(walletIds: readonly string[]): Pr
     .select({ id: wallets.id, parentWalletId: wallets.parentWalletId, subjectType: wallets.subjectType, topupRemainingCents: wallets.topupRemainingCents })
     .from(wallets)
     .where(inArray(wallets.id, [...walletIds]));
-  const children = rows.filter((w) => w.parentWalletId !== null || w.subjectType !== null);
-  if (children.length === 0) {
-    throw new Error(`expectWalletLegInvariant: none of ${walletIds.join(', ')} is an existing non-root wallet — nothing was checked`);
+  const found = new Set(rows.map((w) => w.id));
+  const missing = [...new Set(walletIds)].filter((id) => !found.has(id));
+  if (missing.length > 0) {
+    throw new Error(`expectWalletLegInvariant: ${missing.join(', ')} not found — a stale or mistyped id would silently shrink the check`);
   }
+  const roots = rows.filter((w) => w.parentWalletId === null && w.subjectType === null).map((w) => w.id);
+  if (roots.length > 0) {
+    throw new Error(`expectWalletLegInvariant: ${roots.join(', ')} is a root wallet, which carries no legs — nothing to check there`);
+  }
+  const children = rows;
   const legs = await db
     .select({ walletId: walletFundingLegs.walletId, remainingCents: walletFundingLegs.remainingCents })
     .from(walletFundingLegs)

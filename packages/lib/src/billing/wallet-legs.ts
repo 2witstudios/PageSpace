@@ -7,6 +7,11 @@
  * Lock order (one, global — every multi-row money write follows it, so no two writers
  * wait in a cycle): the drive (child) wallet, then its parent/root wallet, then the
  * funding legs. A caller here already holds the wallet row; the legs are locked last.
+ * One known exception, predating this order: the backfill cron's settlePendingLedgerRow
+ * locks its credit_ledger row before the wallet, while a live settle locks the wallet and
+ * then updates that ledger row — a cron retry racing the live settle of the SAME row could
+ * invert. The cron only picks rows older than its grace window, which makes it practically
+ * unreachable.
  */
 
 import type { db } from '@pagespace/db/db';

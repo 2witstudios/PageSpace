@@ -263,14 +263,15 @@ describe('applyCorrection transaction atomicity (Postgres)', () => {
       genId: string,
       authoritativeDollars: number,
       between?: (aiUsageLogId: string) => Promise<void>,
+      billedDollars = 1.0,
     ): Promise<string> {
       const [log] = await db.insert(aiUsageLogs).values({
-        userId: w.userId, provider: 'openrouter', model: 'e2e/stub', cost: 1.0,
+        userId: w.userId, provider: 'openrouter', model: 'e2e/stub', cost: billedDollars,
         timestamp: new Date(Date.now() - 10 * 60 * 1000),
         reconcileStatus: 'pending', reconcileAttempts: 0,
         metadata: { generationIds: [genId] },
       }).returning({ id: aiUsageLogs.id });
-      expect(await consumeCredits({ aiUsageLogId: log.id, userId: w.userId, costDollars: 1.0, walletId: w.driveId })).toBe('settled');
+      expect(await consumeCredits({ aiUsageLogId: log.id, userId: w.userId, costDollars: billedDollars, walletId: w.driveId })).toBe('settled');
       if (between) await between(log.id);
       const fetcher: GenerationFetcher = async (id) => (id === genId ? { totalCost: authoritativeDollars } : 'not_found');
       await reconcileOpenRouterCosts({ fetcher });
@@ -350,6 +351,22 @@ describe('applyCorrection transaction atomicity (Postgres)', () => {
         expect((await wallet(w.rootId)).debtCents).toBe(0);
         expect(await legs(w.driveId)).toEqual([0, 40]);
         expect((await wallet(w.driveId)).topupRemainingCents).toBe(40);
+      } finally {
+        await dropWorld(w);
+      }
+    });
+
+    it('a refund that exceeds the record by rounding still goes back through the record — only the excess cent reaches the parent', async () => {
+      if (!dbAvailable) return;
+      const w = await driveWorld({ rootMonthlyCents: 0, allocationCents: 0, ownerLegCents: 1, donationLegCents: 1_000 });
+      try {
+        // $0.996 at 1.5× is 149.4¢: the settle draws 149 whole cents (owner 1, donation 148)
+        // and carries 0.4¢. Reconciled to $0, the refund rounds to 150 — 1¢ over the record.
+        await chargeThenReconcile(w, `gen-round-${w.userId}`, 0, undefined, 0.996);
+        // Ada's 148 go back to her leg (not into the owner's personal balance); the rounding cent to the parent.
+        expect(await legs(w.driveId)).toEqual([1, 1_000]);
+        expect((await wallet(w.driveId)).topupRemainingCents).toBe(1_001);
+        expect((await wallet(w.rootId)).topupRemainingCents).toBe(1);
       } finally {
         await dropWorld(w);
       }

@@ -254,6 +254,29 @@ describe('a drive-wallet settle and the funding legs (real Postgres)', () => {
     expect((await walletRow(world.driveWalletId)).debtCents).toBe(0);
   });
 
+  it('WAL-3 (partial) WAL-6 (partial) one settle draws the allocation from the parent, then the legs FIFO, then lands the overshoot on the parent', async () => {
+    if (!dbAvailable) return;
+    world = await build({ ownerLegCents: 500, jonoRootCents: 300, driveAllocationCents: 200 });
+    const donated = await donateToDriveWallet({ donorUserId: world.adaId, targetWalletId: world.driveWalletId, amountCents: 300, donationId: createId() });
+    expect(donated).toMatchObject({ kind: 'donated' });
+
+    // 1100¢: allocation 200 (from Jono's root), owner leg 500, Ada's donation 300, then 100 uncovered.
+    expect(await settleOnDrive(world, world.adaId, 1_100)).toBe('settled');
+
+    expect(await legInvariant(world.driveWalletId)).toEqual({ topupRemainingCents: 0, legsTotal: 0 });
+    const drive = await walletRow(world.driveWalletId);
+    expect([drive.spentCents, drive.debtCents]).toEqual([200, 0]);
+    const root = await walletRow(world.jonoRootId);
+    expect([root.monthlyRemainingCents, root.debtCents]).toEqual([100, 100]);
+    // The call's rows (Ada's donation pair is hers too, and not what this asserts).
+    const ledger = (await db.select().from(creditLedger).where(eq(creditLedger.userId, world.adaId)))
+      .filter((r) => r.entryType === 'usage' || r.entryType === 'adjustment');
+    expect(ledger.map((r) => [r.entryType, r.walletId, r.appliedCents ?? r.amountCents]).sort()).toEqual([
+      ['adjustment', world.jonoRootId, -100],
+      ['usage', world.driveWalletId, -1_000],
+    ].sort());
+  });
+
   it('D-OW-13 a refund after a settle cannot give back cents that were already spent', async () => {
     if (!dbAvailable) return;
     world = await build({ ownerLegCents: 500 });
@@ -338,13 +361,16 @@ describe('a drive-wallet settle and the funding legs (real Postgres)', () => {
     expect((await walletRow(w.jonoRootId)).monthlyRemainingCents).toBe(4_800);
   }, 15_000);
 
-  it('the invariant helper refuses to pass vacuously: no wallet named, or none that exists', async () => {
+  it('the invariant helper refuses to pass vacuously: no wallet named, any named wallet missing, or a root named', async () => {
     if (!dbAvailable) return;
     world = await build({ ownerLegCents: 500 });
     await expect(expectWalletLegInvariant([])).rejects.toThrow(/vacuously/);
-    await expect(expectWalletLegInvariant([`missing-${createId()}`])).rejects.toThrow(/nothing was checked/);
-    // A root wallet alone is not a check either: only child wallets carry legs.
-    await expect(expectWalletLegInvariant([world.jonoRootId])).rejects.toThrow(/nothing was checked/);
+    await expect(expectWalletLegInvariant([`missing-${createId()}`])).rejects.toThrow(/not found/);
+    // A mistyped id beside a real one must not shrink the check to the real one.
+    await expect(expectWalletLegInvariant([`typo-${createId()}`, world.driveWalletId])).rejects.toThrow(/not found/);
+    // A root wallet carries no legs: naming one checks nothing.
+    await expect(expectWalletLegInvariant([world.jonoRootId])).rejects.toThrow(/root wallet/);
+    await expect(expectWalletLegInvariant([world.driveWalletId])).resolves.toBeUndefined();
   });
 
   it('a write that breaks topupRemainingCents == SUM(legs) is refused at COMMIT by the harness trigger', async () => {

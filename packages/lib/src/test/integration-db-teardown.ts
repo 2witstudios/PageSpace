@@ -28,15 +28,30 @@ function appPool(): typeof appDb.pool | undefined {
 }
 
 const armedPool = appPool();
+// A connection whose SET failed is not armed; remembered here and thrown below rather than
+// swallowed, so a broken harness fails loudly instead of silently checking nothing.
+let armFailure: unknown = null;
 if (armedPool && typeof armedPool.on === 'function') {
   // Registered before the file's first query, so every connection runs this first.
   armedPool.on('connect', (client) => {
-    client.query(`SET ${WALLET_LEG_INVARIANT_GUC} = 'on'`).catch(() => undefined);
+    client.query(`SET ${WALLET_LEG_INVARIANT_GUC} = 'on'`).catch((error: unknown) => {
+      armFailure = error;
+    });
   });
 }
 
 beforeAll(async () => {
-  if (armedPool && typeof armedPool.connect === 'function') await installWalletLegInvariantTrigger(armedPool);
+  if (!armedPool || typeof armedPool.connect !== 'function') return;
+  await installWalletLegInvariantTrigger(armedPool);
+  // Prove the arming on a real checkout rather than trust the hook ran.
+  const client = await armedPool.connect();
+  try {
+    const { rows } = await client.query<{ armed: string | null }>(`SELECT current_setting('${WALLET_LEG_INVARIANT_GUC}', true) AS armed`);
+    if (rows[0]?.armed !== 'on') throw new Error(`wallet-leg invariant harness is not armed on this connection (got ${String(rows[0]?.armed)})`);
+  } finally {
+    client.release();
+  }
+  if (armFailure) throw armFailure;
 });
 
 afterAll(async () => {

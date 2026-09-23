@@ -223,6 +223,13 @@ async function writeWalletDraws(tx: Tx, aiUsageLogId: string, metadata: unknown,
 }
 
 /**
+ * How far a correction's rounded refund may exceed the whole cents a call's record drew:
+ * the settle floors to whole cents (carrying the sub-cent part) and the refund rounds, so
+ * they differ by at most one cent.
+ */
+const REFUND_ROUNDING_SLACK_CENTS = 1;
+
+/**
  * Give `refundCents` back to the wallet a call was charged to (a cost-reconcile overcharge
  * correction), inside the caller's transaction. The caller makes it idempotent: it runs
  * only when the correction's own ledger row was freshly claimed.
@@ -266,7 +273,13 @@ export async function refundWalletCharge(tx: Tx, walletId: string, refundCents: 
   if (!usage) return legacy('usage_row_missing');
   const parsed = parseWalletDraws(usage.metadata, bal.id);
   if (!parsed.ok) return legacy(parsed.reason);
-  const plan = planWalletRefund(parsed.draws, refundCents);
+  // The record holds the whole cents the settle drew (the sub-cent part carries in
+  // pendingMillicents), while the correction rounds its refund — so a refund may exceed the
+  // record by rounding. Reverse what the record covers through it, and only that excess to
+  // the parent; an excess past the rounding slack means the two disagree (legacy path).
+  const excessCents = refundCents - parsed.draws.totalCents;
+  if (excessCents > REFUND_ROUNDING_SLACK_CENTS) return legacy('refund_exceeds_record');
+  const plan = planWalletRefund(parsed.draws, Math.min(refundCents, parsed.draws.totalCents));
   if (!plan) return legacy('refund_exceeds_record');
   if (plan.debtCents > 0 && plan.debtWalletId !== bal.parentWalletId && plan.debtWalletId !== bal.id) return legacy('debt_wallet_unknown');
 
@@ -276,7 +289,7 @@ export async function refundWalletCharge(tx: Tx, walletId: string, refundCents: 
   // Debt this call landed on the drive wallet itself comes off that debt; any part a later
   // payment already cleared goes to the parent with the rest.
   const ownDebt = plan.debtWalletId === bal.id ? Math.min(plan.debtCents, Math.max(0, bal.debtCents)) : 0;
-  const toParent = plan.debtCents - ownDebt + plan.allocationCents;
+  const toParent = plan.debtCents - ownDebt + plan.allocationCents + Math.max(0, excessCents);
   await tx
     .update(wallets)
     .set({
