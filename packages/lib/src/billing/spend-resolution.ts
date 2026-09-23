@@ -26,6 +26,7 @@ import { effectiveSpendPolicy, type FallbackRule, type SpendLeg, type WalletStat
 import {
   ORG_ENTITLEMENT_TIER,
   PERSONAL_ROOT_NOT_YET_CREATED,
+  automationSpendInput,
   decideCallSpend,
   personalRootDecision,
   personActor,
@@ -116,6 +117,69 @@ function statusOf(row: WalletRow): WalletStatus {
   return row.status;
 }
 
+/** The drive wallet as a leg, net of every hold against it and (through the parent) its siblings. */
+async function driveWalletLeg(driveWallet: WalletRow | null, now: Date, extraHoldWalletIds: string[] = []): Promise<{
+  leg: SpendLeg | null;
+  holds: WalletHoldTotal[];
+  parent: WalletRow | null;
+}> {
+  const parent = driveWallet?.parentWalletId ? await walletById(driveWallet.parentWalletId) : null;
+  const holds = await liveHoldTotals(
+    [driveWallet?.id, parent?.id, ...extraHoldWalletIds].filter((id): id is string => typeof id === 'string'),
+    now,
+  );
+  const leg: SpendLeg | null = driveWallet
+    ? walletLeg(driveWallet.id, statusOf(driveWallet), walletSpendableCents({
+        wallet: driveWallet,
+        ownReservedCents: reservedAgainstCents(holds, driveWallet.id, { includeChildren: false }),
+        parent: parent
+          ? { wallet: parent, reservedCents: reservedAgainstCents(holds, parent.id, { includeChildren: true, excludeWalletId: driveWallet.id }) }
+          : null,
+      }))
+    : null;
+  return { leg, holds, parent };
+}
+
+/**
+ * The wallet for a person-less run (SPEND-6): the drive's wallet or a skip. It reads the
+ * drive and its wallet only — never a person's wallet, never the org pool as a seat — so
+ * no automation can reach a person's credits or allowance. `userId` (the person the run is
+ * recorded against: a workflow's creator, a trigger's scheduler, a mention's sender) is
+ * used only to read the drive's org and owner through the permissions layer.
+ */
+async function resolveAutomationSpend(input: {
+  userId: string;
+  driveId: string;
+  reservationCents: number;
+  now: Date;
+}): Promise<CallSpendDecision> {
+  const standing = await loadDriveSpendStanding(input.userId, input.driveId);
+  const driveWallet = standing ? await driveWalletOf(standing.driveId) : null;
+  const { leg } = await driveWalletLeg(driveWallet, input.now);
+  // WAL-8: the drive wallet's root owner governs — the org inside org drives, the drive
+  // owner (whose personal wallet funds the drive wallet) on a personal drive.
+  const walletOwnerTier: SubscriptionTier = standing?.orgId
+    ? ORG_ENTITLEMENT_TIER
+    : standing
+      ? await tierOf(standing.ownerId)
+      : 'free';
+  const decision = decideCallSpend(automationSpendInput({
+    driveId: input.driveId,
+    driveWallet: leg,
+    walletOwnerTier,
+    reservationCents: input.reservationCents,
+  }));
+  if (decision.kind === 'skip') {
+    // SPEND-6: an empty wallet skips the run and logs it.
+    loggers.ai.info('automation run skipped', {
+      driveId: input.driveId,
+      walletId: decision.walletId,
+      reason: decision.reason,
+    });
+  }
+  return decision;
+}
+
 /**
  * Decide the wallet for a call by `userId` (a person) against `target`, reserving
  * `reservationCents`. `consumerTier` is the caller's own tier (their own credits' tier).
@@ -130,10 +194,13 @@ export async function resolveCallSpend(input: {
   recordRefusal?: boolean;
 }): Promise<CallSpendDecision> {
   const { userId, consumerTier, target } = input;
-  if (!resolvesDriveWallets({ orgsEnabled: ORGS_ENABLED, target }) || target.kind !== 'drive') {
+  if (!resolvesDriveWallets({ orgsEnabled: ORGS_ENABLED, target }) || target.kind === 'personal') {
     return personalRootDecision(consumerTier);
   }
   const now = input.now ?? new Date();
+  if (target.kind === 'automation') {
+    return resolveAutomationSpend({ userId, driveId: target.driveId, reservationCents: input.reservationCents, now });
+  }
 
   const standing = await loadDriveSpendStanding(userId, target.driveId);
   const actor = personActor(userId, {
@@ -143,25 +210,15 @@ export async function resolveCallSpend(input: {
   });
 
   const driveWallet = standing ? await driveWalletOf(standing.driveId) : null;
-  const driveParent = driveWallet?.parentWalletId ? await walletById(driveWallet.parentWalletId) : null;
   // A seat is the per-consumer leg on the org pool (WAL-2): only an org member holds one (DRV-8).
   const pool = standing?.orgId && standing.isOrgMember ? await orgPoolOf(standing.orgId) : null;
   const personal = await personalRootOf(userId);
 
-  const holds = await liveHoldTotals(
-    [driveWallet?.id, driveParent?.id, pool?.id, personal?.id].filter((id): id is string => typeof id === 'string'),
+  const { leg: driveLeg, holds } = await driveWalletLeg(
+    driveWallet,
     now,
+    [pool?.id, personal?.id].filter((id): id is string => typeof id === 'string'),
   );
-
-  const driveLeg: SpendLeg | null = driveWallet
-    ? walletLeg(driveWallet.id, statusOf(driveWallet), walletSpendableCents({
-        wallet: driveWallet,
-        ownReservedCents: reservedAgainstCents(holds, driveWallet.id, { includeChildren: false }),
-        parent: driveParent
-          ? { wallet: driveParent, reservedCents: reservedAgainstCents(holds, driveParent.id, { includeChildren: true, excludeWalletId: driveWallet.id }) }
-          : null,
-      }))
-    : null;
   const seatLeg: SpendLeg | null = pool
     ? walletLeg(pool.id, statusOf(pool), walletSpendableCents({
         wallet: pool,
