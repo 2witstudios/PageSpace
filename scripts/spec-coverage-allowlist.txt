@@ -99,7 +99,12 @@ SEC-4
 # SPEND-1 (partial, ow-c2): resolveSpendSource picks exactly one source; that every AI call in a drive
 # goes through it before the call is unproven until C3.
 SPEND-1
+# SPEND-2 (partial, ow-c6): GET /api/wallets/conversations/[id] answers the stored choice, the options and
+# the gate's own decision before the first message (the data the chip shows); the chip itself is UI-8.
 SPEND-2
+# SPEND-3 (partial, ow-c6): conversations.chosenWalletId (0308) is written only by the explicit source route,
+# re-resolved by the gate on every call (a stale id refuses), and preselection follows the drive default then
+# the person's default, proven against Postgres; the Settings surface that sets the default is UI-10.
 SPEND-3
 # SPEND-4 (partial, ow-c2): empty chosen source refuses, names it, offers the rest, charges zero, and
 # falls back only by drive rule, as pure logic; the chip and strip showing the new source are unproven (UI-8).
@@ -112,7 +117,12 @@ SPEND-5
 SPEND-6
 SPEND-7
 SPEND-8
+# SPEND-9 (partial, ow-c6): members and guests get the consumer allowlist (remaining, own cap) with no pool
+# balance or other consumer's spend, per role against Postgres and for MCP tokens ([D-OW-26]); the chip and
+# wallet page that display it are UI-8/UI-9.
 SPEND-9
+# SPEND-10 (partial, ow-c6): the lead's view carries spend by member, the org admin's the pool and the
+# unallocated balance; automation spend is labeled per person until C4 names the drive consumer.
 SPEND-10
 UI-1
 UI-2
@@ -122,7 +132,10 @@ UI-5
 UI-6
 UI-7
 UI-8
+# UI-9 (partial, ow-c6): the Drive Settings › Wallet routes (allocation, top-up, donate, rules, pause,
+# delete) exist with per-role authority; the page itself is Wave F.
 UI-9
+# UI-10 (partial, ow-c6): GET /api/wallets and PUT /api/wallets/default exist; the Settings page is Wave F.
 UI-10
 UI-11
 # WAL-1 (partial, ow-c1): the wallets table carries every WAL-1 field, the migration proves each
@@ -161,6 +174,8 @@ WAL-6
 WAL-7
 WAL-8
 WAL-9
+# X-1 (partial, ow-c6): wallet READS are mirrored for CLI/MCP; per [D-OW-26] a token may not move money or
+# change a spend source, so wallet writes are session-only by ruling. Orgs, members, drives, policies: Wave G.
 X-1
 # X-2: B3's "X-2 (partial)" test blocks ORGS_ENABLED while org tables are excluded from the GDPR
 # export; the export and account-deletion handling itself is the Phase 6 leaf yfmlkdchehmberwthwu6g7vt.
