@@ -263,7 +263,11 @@ export const startBrowserEgressProxy = async ({
         const value = response.headers[name];
         if (value !== undefined) res.setHeader(name, value);
       }
-      res.writeHead(response.statusCode ?? 502);
+      // The status goes on `res.statusCode` and the head is sent implicitly
+      // by the first write. `writeHead(upstreamStatus)` is modelled by CodeQL
+      // as a header definition keyed by its argument (js/remote-property-
+      // injection, alert 350), though Node takes only a status there.
+      res.statusCode = response.statusCode ?? 502;
       response.pipe(res);
     });
     upstream.on('error', () => {
