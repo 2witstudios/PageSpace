@@ -29,6 +29,7 @@ import {
   PUBLISHED_APP_WAKE_HOLD_ESTIMATE_CENTS,
 } from '../../../billing/credit-pricing';
 import { PUBLISHED_APP_AWAKE_MODEL } from '../../../monitoring/usage-source';
+import { PERSONAL_SPEND } from '../../../billing/spend-target';
 import {
   calculateMachineCostDollars,
   PUBLISHED_APP_GUEST_SHAPE,
@@ -97,6 +98,8 @@ describe('defaultAppBillingDeps.gate', () => {
     await defaultAppBillingDeps.gate({ payerId: 'payer-1' });
 
     expect(mockCanConsumeAI).toHaveBeenCalledWith('payer-1', 'free', {
+      // Compute bills the payer's personal wallet (WAL-9): no drive wallet is ever named.
+      spend: PERSONAL_SPEND,
       estCostCents: PUBLISHED_APP_WAKE_HOLD_ESTIMATE_CENTS,
       maxInFlight: PUBLISHED_APP_MAX_INFLIGHT,
       dailyCapCeilingCents: PUBLISHED_APP_DAILY_CAP_CEILING_CENTS,

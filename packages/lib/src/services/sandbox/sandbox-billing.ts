@@ -11,6 +11,7 @@ import { eq } from '@pagespace/db/operators';
 import { db } from '@pagespace/db/db';
 import { users } from '@pagespace/db/schema/auth';
 import { canConsumeAI } from '../../billing/credit-gate';
+import { PERSONAL_SPEND } from '../../billing/spend-target';
 import { releaseHold as releaseCreditHold } from '../../billing/credit-consume';
 import {
   MACHINE_HOLD_ESTIMATE_CENTS,
@@ -62,6 +63,8 @@ export const defaultSandboxBillingDeps: SandboxBillingDeps = {
     // tier ceiling, regardless of env drift.
     const maxInFlight = Math.max(MACHINE_MAX_INFLIGHT, getCodeExecutionConcurrencyLimit(tier));
     const result = await canConsumeAI(payerId, tier, {
+      // Compute bills the payer's personal wallet: wallets do not change compute billing (WAL-9).
+      spend: PERSONAL_SPEND,
       estCostCents: MACHINE_HOLD_ESTIMATE_CENTS,
       maxInFlight,
     });

@@ -112,6 +112,7 @@ describe('executePageWebhookTrigger', () => {
     // Legacy workflow (no steps column) synthesizes exactly one ai step, so
     // the reservation is 1x the per-call estimate.
     expect(mockCanConsume).toHaveBeenCalledWith('user-1', 'pro', {
+      spend: { kind: 'personal' },
       dailyCapCeilingCents: 500,
       estCostCents: 10,
     });
@@ -151,6 +152,7 @@ describe('executePageWebhookTrigger', () => {
     await executePageWebhookTrigger(TRIGGER, ENVELOPE);
 
     expect(mockCanConsume).toHaveBeenCalledWith('user-1', 'pro', {
+      spend: { kind: 'personal' },
       dailyCapCeilingCents: 500,
       estCostCents: 30, // 3 ai steps * 10-cent per-call estimate
     });

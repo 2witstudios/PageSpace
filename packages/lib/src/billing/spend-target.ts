@@ -62,6 +62,16 @@ export function driveSpend(driveId: string | null | undefined, chosen: SpendSour
 }
 
 /**
+ * The target a follow-on call in the same turn names once the turn's gate resolved
+ * `source`: the same drive and exactly the source already chosen, so a tool that gates
+ * its own model call can never land on a different wallet than the turn it runs in.
+ */
+export function resolvedSpend(target: SpendTarget, source: SpendSourceKind | undefined): SpendTarget {
+  if (target.kind !== 'drive' || source === undefined) return target;
+  return { kind: 'drive', driveId: target.driveId, chosen: source };
+}
+
+/**
  * Whether the gate resolves a wallet at all. While orgs are dark (ORGS_ENABLED false),
  * and for the personal target, every call spends the personal root wallet exactly as it
  * did before wallets: no wallet reads, no new refusals.

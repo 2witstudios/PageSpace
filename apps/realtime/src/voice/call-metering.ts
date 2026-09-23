@@ -37,6 +37,7 @@
  */
 
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { PERSONAL_SPEND } from '@pagespace/lib/billing/spend-target';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import {
   REALTIME_IDLE_TIMEOUT_SECONDS,
@@ -142,6 +143,8 @@ export const startCallMeter = async (
   } = options;
 
   const opening = await gate(userId, tier, {
+    // A realtime voice call is not a drive session: it spends the caller's personal wallet (SPEND-8).
+    spend: PERSONAL_SPEND,
     estCostCents: REALTIME_SESSION_HOLD_ESTIMATE_CENTS,
     // Per-USER concurrency. The registry's own cap is per-DEPLOYMENT and cannot
     // express this one: two users at the global limit is fine, one user holding
@@ -252,6 +255,7 @@ export const startCallMeter = async (
     if (stopped || holdId !== undefined) return;
 
     const next = await gate(userId, tier, {
+      spend: PERSONAL_SPEND,
       estCostCents: REALTIME_SESSION_HOLD_ESTIMATE_CENTS,
       maxInFlight: REALTIME_MAX_INFLIGHT,
     });

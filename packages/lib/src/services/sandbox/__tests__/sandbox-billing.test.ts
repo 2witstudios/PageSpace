@@ -89,7 +89,8 @@ describe('defaultSandboxBillingDeps.gate', () => {
     expect(mockCanConsumeAI).toHaveBeenCalledWith(
       'owner-1',
       'business',
-      expect.objectContaining({ estCostCents: expect.any(Number), maxInFlight: expect.any(Number) }),
+      // Compute bills the payer's personal wallet (WAL-9): no drive wallet is ever named.
+      expect.objectContaining({ spend: { kind: 'personal' }, estCostCents: expect.any(Number), maxInFlight: expect.any(Number) }),
     );
     expect(result).toEqual({ allowed: true, holdId: 'hold-1', reason: undefined });
   });

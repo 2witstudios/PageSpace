@@ -166,7 +166,8 @@ describe('startCallMeter — the opening hold', () => {
     expect(h.gate).toHaveBeenCalledWith(
       'u1',
       'pro',
-      expect.objectContaining({ maxInFlight: expect.any(Number), estCostCents: expect.any(Number) }),
+      // A realtime voice call is not a drive session: personal credits (SPEND-8).
+      expect.objectContaining({ spend: { kind: 'personal' }, maxInFlight: expect.any(Number), estCostCents: expect.any(Number) }),
     );
   });
 });

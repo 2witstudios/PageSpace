@@ -28,6 +28,7 @@ import { eq } from '@pagespace/db/operators';
 import { db } from '@pagespace/db/db';
 import { users } from '@pagespace/db/schema/auth';
 import { canConsumeAI } from '../../billing/credit-gate';
+import { PERSONAL_SPEND } from '../../billing/spend-target';
 import { releaseHold as releaseCreditHold } from '../../billing/credit-consume';
 import {
   MACHINE_MARKUP_BPS,
@@ -103,6 +104,8 @@ export const defaultAppBillingDeps: AppBillingDeps = {
   async gate({ payerId }) {
     const tier = await resolvePayerTier(payerId);
     const result = await canConsumeAI(payerId, tier, {
+      // Compute bills the payer's personal wallet: wallets do not change compute billing (WAL-9).
+      spend: PERSONAL_SPEND,
       estCostCents: PUBLISHED_APP_WAKE_HOLD_ESTIMATE_CENTS,
       maxInFlight: PUBLISHED_APP_MAX_INFLIGHT,
       // ALWAYS passed, in every deployment mode — this is the "unlimited but not

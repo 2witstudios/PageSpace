@@ -6,6 +6,8 @@ import {
   PERSONAL_SPEND,
   driveSpend,
   resolvesDriveWallets,
+  resolvedSpend,
+  personalRootDecision,
   personActor,
   rootAvailableCents,
   walletSpendableCents,
@@ -71,6 +73,22 @@ describe('spend-target: the target a caller names', () => {
   it('given orgs dark, a drive session spends the personal root exactly as before wallets', () => {
     expect(resolvesDriveWallets({ orgsEnabled: false, target: driveSpend('d-product', 'drive_wallet') })).toBe(false);
     expect(resolvesDriveWallets({ orgsEnabled: true, target: driveSpend('d-product', 'drive_wallet') })).toBe(true);
+  });
+});
+
+describe('spend-target: follow-on calls in a turn', () => {
+  it('SPEND-4 (partial) a tool call in a turn names exactly the source the turn resolved, never re-choosing', () => {
+    expect(resolvedSpend(driveSpend('d-product'), 'drive_wallet')).toEqual({ kind: 'drive', driveId: 'd-product', chosen: 'drive_wallet' });
+    expect(resolvedSpend(driveSpend('d-product', 'drive_wallet'), 'seat_allowance')).toEqual({ kind: 'drive', driveId: 'd-product', chosen: 'seat_allowance' });
+  });
+
+  it('a turn the gate did not resolve (skipped for a flat-rate provider) passes its target through', () => {
+    expect(resolvedSpend(driveSpend('d-product'), undefined)).toEqual(driveSpend('d-product'));
+    expect(resolvedSpend(PERSONAL_SPEND, 'own_credits')).toEqual(PERSONAL_SPEND);
+  });
+
+  it('SPEND-8 (partial) the personal decision spends own credits at the caller\'s own tier', () => {
+    expect(personalRootDecision('pro')).toMatchObject({ kind: 'spend', source: 'own_credits', entitlementTier: 'pro', fallbackApplied: false });
   });
 });
 

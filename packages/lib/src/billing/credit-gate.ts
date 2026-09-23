@@ -396,6 +396,33 @@ export async function canConsumeAI(
 }
 
 /**
+ * WAL-8: the tier whose entitlements (the pro-model gate) govern a call that spends from
+ * `spend` — the wallet's ROOT owner's tier on a shared leg (the org inside org drives, the
+ * drive owner on a personal drive's wallet), the caller's own on their own credits. For
+ * the routes that decide model entitlement BEFORE they gate; a route that gates first
+ * reads `CreditGateResult.entitlementTier` instead. Read-only: it reserves nothing.
+ *
+ * Answers `tier` with no reads while orgs are dark or for a call with no drive, and when
+ * the target names no spendable wallet — the gate refuses that call itself.
+ */
+export async function resolveEntitlementTier(
+  userId: string,
+  tier: SubscriptionTier,
+  spend: SpendTarget,
+  estCostCents: number = CREDIT_HOLD_ESTIMATE_CENTS,
+): Promise<SubscriptionTier> {
+  if (!resolvesDriveWallets({ orgsEnabled: ORGS_ENABLED, target: spend })) return tier;
+  const decision = await (await import('./spend-resolution')).resolveCallSpend({
+    userId,
+    consumerTier: tier,
+    target: spend,
+    reservationCents: reservationCents(estCostCents),
+    recordRefusal: false,
+  });
+  return decision.kind === 'spend' ? decision.entitlementTier : tier;
+}
+
+/**
  * The caller's personal root wallet: lazy-init, the one-time starter grant, the gate-driven
  * refill for renewal-less paid accounts, then the locked decision and hold. Unchanged from
  * before wallets except that the reservation it nets is what is held against THIS wallet

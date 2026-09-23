@@ -634,6 +634,11 @@
       "import": "./dist/billing/credit-gate.js",
       "require": "./dist/billing/credit-gate.js"
     },
+    "./billing/spend-target": {
+      "types": "./dist/billing/spend-target.d.ts",
+      "import": "./dist/billing/spend-target.js",
+      "require": "./dist/billing/spend-target.js"
+    },
     "./billing/credit-backfill": {
       "types": "./dist/billing/credit-backfill.d.ts",
       "import": "./dist/billing/credit-backfill.js",
@@ -2784,6 +2789,9 @@
       ],
       "billing/credit-gate": [
         "./dist/billing/credit-gate.d.ts"
+      ],
+      "billing/spend-target": [
+        "./dist/billing/spend-target.d.ts"
       ],
       "billing/credit-backfill": [
         "./dist/billing/credit-backfill.d.ts"

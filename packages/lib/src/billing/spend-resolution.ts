@@ -126,6 +126,8 @@ export async function resolveCallSpend(input: {
   target: SpendTarget;
   reservationCents: number;
   now?: Date;
+  /** Log a refusal (SPEND-4). Off for a read-only question that is not the gate itself. */
+  recordRefusal?: boolean;
 }): Promise<CallSpendDecision> {
   const { userId, consumerTier, target } = input;
   if (!resolvesDriveWallets({ orgsEnabled: ORGS_ENABLED, target }) || target.kind !== 'drive') {
@@ -207,7 +209,7 @@ export async function resolveCallSpend(input: {
     consumerTier,
   });
 
-  if (decision.kind !== 'spend') {
+  if (decision.kind !== 'spend' && input.recordRefusal !== false) {
     // SPEND-4: the refusal is recorded, naming the source and what was offered instead.
     loggers.ai.info('spend source refused', {
       userId,
