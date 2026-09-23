@@ -38,7 +38,7 @@ function admissionFor(chosen: CallSpendInput['chosen']) {
   });
 }
 
-describe('the pro-model gate follows the wallet that pays (WAL-8)', () => {
+describe('the pro-model gate follows the wallet that pays', () => {
   it('the model under test is a paid-tier model', () => {
     expect(FREE_TIER_MODELS.has(PRO_MODEL)).toBe(false);
     expect(requiresProSubscription('openrouter', PRO_MODEL, 'free')).toBe(true);
