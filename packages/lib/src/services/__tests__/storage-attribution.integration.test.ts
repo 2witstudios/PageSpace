@@ -179,7 +179,7 @@ describe('uploads into an org drive', () => {
 });
 
 describe('moving a drive re-attributes its bytes', () => {
-  it('O-9 (partial) move in takes exactly each uploader\'s bytes off their counter and onto the org; move out puts exactly them back', async () => {
+  it('WAL-9 (partial) move in takes exactly each uploader\'s bytes off their counter and onto the org; move out puts exactly them back', async () => {
     const product = await seedDrive(marcus);
     const marcusOther = await seedDrive(marcus);
     await seedFile(product, marcus, 1000);
@@ -205,7 +205,7 @@ describe('moving a drive re-attributes its bytes', () => {
     expect((await getOrgStorageQuota(northwind)).usedBytes).toBe(0);
   });
 
-  it('O-9 (partial) each re-attribution is logged per uploader with the drive, org and direction', async () => {
+  it('WAL-9 (partial) each re-attribution is logged per uploader with the drive, org and direction', async () => {
     const product = await seedDrive(marcus);
     await seedFile(product, lena, 250);
     await setCounter(lena, 250);
@@ -222,7 +222,7 @@ describe('moving a drive re-attributes its bytes', () => {
     });
   });
 
-  it('O-9 (partial) a refused move re-attributes nothing', async () => {
+  it('WAL-9 (partial) a refused move re-attributes nothing', async () => {
     const product = await seedDrive(marcus);
     await seedFile(product, marcus, 1000);
     await setCounter(marcus, 1000);
@@ -237,7 +237,7 @@ describe('moving a drive re-attributes its bytes', () => {
 });
 
 describe('the reconcile agrees with the attribution', () => {
-  it('O-9 (partial) an uploader\'s derived usage excludes their files in org drives, so the cron never bills them back', async () => {
+  it('WAL-9 (partial) an uploader\'s derived usage excludes their files in org drives, so the cron never bills them back', async () => {
     const orgDrive = await seedDrive(marcus, northwind);
     const personal = await seedDrive(lena);
     await seedFile(orgDrive, lena, 1000);

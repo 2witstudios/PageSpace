@@ -29,11 +29,11 @@ describe('storagePayerForFile', () => {
     expect(storagePayerForFile({ createdBy: null, driveOrgId: NORTHWIND })).toEqual({ kind: 'org', orgId: NORTHWIND });
   });
 
-  it('O-9 (partial) a file outside any org bills its uploader', () => {
+  it('WAL-9 (partial) a file outside any org bills its uploader', () => {
     expect(storagePayerForFile({ createdBy: MARCUS, driveOrgId: null })).toEqual({ kind: 'user', userId: MARCUS });
   });
 
-  it('O-9 (partial) a personal file whose uploader was deleted bills nobody', () => {
+  it('WAL-9 (partial) a personal file whose uploader was deleted bills nobody', () => {
     expect(storagePayerForFile({ createdBy: null, driveOrgId: null })).toBeNull();
   });
 });
@@ -41,7 +41,7 @@ describe('storagePayerForFile', () => {
 describe('computeStorageCreditOnUnlink', () => {
   const reaped = { createdBy: MARCUS, sizeBytes: 500, deletedByThisCall: true, hadPhysicalBlob: true };
 
-  it('O-9 (partial) reaping a personal file credits its uploader exactly once', () => {
+  it('WAL-9 (partial) reaping a personal file credits its uploader exactly once', () => {
     expect(computeStorageCreditOnUnlink({ ...reaped, driveOrgId: null })).toEqual({ userId: MARCUS, deltaBytes: -500 });
   });
 
@@ -58,21 +58,21 @@ describe('computeMoveReattribution', () => {
     { createdBy: null, sizeBytes: 9999 },
   ];
 
-  it('O-9 (partial) moving a drive in takes each uploader\'s bytes off their personal quota, exactly', () => {
+  it('WAL-9 (partial) moving a drive in takes each uploader\'s bytes off their personal quota, exactly', () => {
     expect(computeMoveReattribution({ files: driveFiles, direction: 'into-org' })).toEqual([
       { userId: LENA, deltaBytes: -250 },
       { userId: MARCUS, deltaBytes: -1024 },
     ]);
   });
 
-  it('O-9 (partial) moving a drive out puts each uploader\'s bytes back on their personal quota, exactly', () => {
+  it('WAL-9 (partial) moving a drive out puts each uploader\'s bytes back on their personal quota, exactly', () => {
     expect(computeMoveReattribution({ files: driveFiles, direction: 'out-of-org' })).toEqual([
       { userId: LENA, deltaBytes: 250 },
       { userId: MARCUS, deltaBytes: 1024 },
     ]);
   });
 
-  it('O-9 (partial) a move in then out is a net zero for every uploader: nothing double-counted or orphaned', () => {
+  it('WAL-9 (partial) a move in then out is a net zero for every uploader: nothing double-counted or orphaned', () => {
     const net = new Map<string, number>();
     for (const direction of ['into-org', 'out-of-org'] as const) {
       for (const { userId, deltaBytes } of computeMoveReattribution({ files: driveFiles, direction })) {
@@ -100,7 +100,7 @@ describe('computeMoveReattribution', () => {
 describe('org storage quota', () => {
   const business = STORAGE_TIERS.business;
 
-  it('WAL-9 (partial) an org\'s quota is the Business tier (every org is on Business, SEAT-8) over its derived usage', () => {
+  it('WAL-9 (partial) an org\'s quota is the Business tier (every org is on Business) over its derived usage', () => {
     const quota = buildOrgStorageQuota({ orgId: NORTHWIND, usedBytes: 100 });
     expect(quota).toMatchObject({
       orgId: NORTHWIND,
