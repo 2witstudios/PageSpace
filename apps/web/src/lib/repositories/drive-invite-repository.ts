@@ -5,7 +5,7 @@
  */
 
 import { db } from '@pagespace/db/db'
-import { eq, and, or, gt, lte, isNotNull, isNull } from '@pagespace/db/operators'
+import { eq, and, or, gt, lte, isNotNull, isNull, sql } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { drives, pages } from '@pagespace/db/schema/core'
 import { driveMembers, driveRoles, pagePermissions } from '@pagespace/db/schema/members';
@@ -522,10 +522,20 @@ export const driveInviteRepository = {
         }
 
         try {
+          // A GUEST row (redeemed page share link) is upgraded in place to the
+          // invited role; any other existing row is a real membership and the
+          // conflict stays ALREADY_MEMBER (setWhere leaves it untouched, so
+          // nothing is returned).
           const [member] = await tx
             .insert(driveMembers)
             .values({ driveId, userId, role, customRoleId, invitedBy, acceptedAt })
+            .onConflictDoUpdate({
+              target: [driveMembers.driveId, driveMembers.userId],
+              set: { role, customRoleId, invitedBy, acceptedAt },
+              setWhere: sql`${driveMembers.role} = 'GUEST'`,
+            })
             .returning({ id: driveMembers.id });
+          if (!member) throw ALREADY_MEMBER;
           return member.id;
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);

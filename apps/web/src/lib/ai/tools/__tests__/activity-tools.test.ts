@@ -90,6 +90,31 @@ describe('activity-tools', () => {
       ).rejects.toThrow('No access to any of the specified drives');
     });
 
+    it('does not surface a drive the caller is only a GUEST of (redeemed page share link)', async () => {
+      const { factories } = await import('@pagespace/db/test/factories');
+      const { db } = await import('@pagespace/db/db');
+      const { activityLogs } = await import('@pagespace/db/schema/monitoring');
+      const owner = await factories.createUser();
+      const guest = await factories.createUser();
+      const drive = await factories.createDrive(owner.id, { name: 'Guest-only drive' });
+      await factories.createDriveMember(drive.id, guest.id, { role: 'GUEST' });
+      // Drive-scoped activity carries no pageId, so the page filter would keep
+      // it: only the drive list stands between a guest and the drive's feed.
+      await db.insert(activityLogs).values({
+        userId: owner.id, actorEmail: 'owner@example.com', operation: 'update',
+        resourceType: 'drive', resourceId: drive.id, resourceTitle: drive.name, driveId: drive.id,
+      });
+
+      const context = {
+        toolCallId: '1',
+        messages: [],
+        experimental_context: { userId: guest.id } as ToolExecutionContext,
+      };
+      const result = await activityTools.get_activity.execute!(createTestInput(), context);
+
+      expect(JSON.stringify(result)).not.toContain(drive.id);
+    });
+
     it('has expected input schema shape', () => {
       const schema = activityTools.get_activity.inputSchema;
       expect(schema).toBeInstanceOf(z.ZodObject);

@@ -619,6 +619,13 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **A page share link now opens only that page** — opening a link to one page used to make you a
+  full member of its drive, so you could read every other non-private page there and post in its
+  channels. Now you join as a guest: you see only the pages that were shared with you. Guests do
+  not appear on the drive's Members page, cannot message the drive's members through it, and do not
+  count as members when the owner deletes their account. Opening a page link no longer accepts a
+  pending drive invitation or changes an existing member's role. A drive link or an invitation
+  still makes a guest a full member.
 - **Workflows no longer run when you are out of AI credits** — pressing Run on a workflow,
   a scheduled workflow, and a task's due-date or completion trigger now check your AI credit
   balance before the agent starts, as calendar, Zoom and webhook triggers already did. Previously

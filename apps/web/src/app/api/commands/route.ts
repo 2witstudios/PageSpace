@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db';
-import { and, eq, or, inArray, isNotNull } from '@pagespace/db/operators';
+import { and, eq, or, inArray, isNotNull, ne } from '@pagespace/db/operators';
 import { commands } from '@pagespace/db/schema/commands';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
@@ -45,6 +45,7 @@ async function getMemberDriveIds(userId: string): Promise<string[]> {
       and(
         eq(driveMembers.userId, userId),
         isNotNull(driveMembers.acceptedAt),
+        ne(driveMembers.role, 'GUEST'),
         eq(drives.isTrashed, false)
       )
     );

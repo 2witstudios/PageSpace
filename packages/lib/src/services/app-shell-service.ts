@@ -47,6 +47,7 @@ import type {
 import { PageType } from '../utils/enums';
 import { loadPagePayload } from './page-payload-service';
 import { decryptUserRow } from '../auth/user-repository';
+import { isGuestRole } from '../permissions/guest-role';
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -136,7 +137,7 @@ async function fetchShellDriveIds(tx: Tx, userId: string): Promise<Set<string>> 
   for (const row of owned) ids.add(row.id);
 
   const memberOf = await tx
-    .selectDistinct({ driveId: driveMembers.driveId })
+    .selectDistinct({ driveId: driveMembers.driveId, role: driveMembers.role })
     .from(driveMembers)
     .innerJoin(drives, eq(drives.id, driveMembers.driveId))
     .where(
@@ -146,7 +147,9 @@ async function fetchShellDriveIds(tx: Tx, userId: string): Promise<Set<string>> 
         eq(drives.isTrashed, false),
       ),
     );
-  for (const row of memberOf) ids.add(row.driveId);
+  // A GUEST row (redeemed page share link) is an explicit page grant, not a
+  // membership, so it is not promoted either.
+  for (const row of memberOf) if (!isGuestRole(row.role)) ids.add(row.driveId);
 
   return ids;
 }
@@ -229,7 +232,8 @@ async function fetchDriveMembers(
     .from(driveMembers)
     .where(inArray(driveMembers.driveId, driveIds));
 
-  return rows.map((row) => ({
+  // Guests are not drive members, so they are not on any drive's roster.
+  return rows.filter((row) => !isGuestRole(row.role)).map((row) => ({
     id: row.id,
     driveId: row.driveId,
     userId: row.userId,

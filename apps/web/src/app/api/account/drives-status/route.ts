@@ -36,11 +36,13 @@ export async function GET(req: Request) {
 
     const driveIds = ownedDrives.map(d => d.id);
 
-    // Count members for each drive
+    // Count members for each drive. GUEST rows (redeemed page share links) are
+    // not members — the same count account deletion itself uses
+    // (accountRepository.getDriveMemberCount), so this preview cannot disagree.
     const memberCounts = await Promise.all(
       driveIds.map(async (driveId) => {
         const count = await db
-          .select({ count: sql<number>`count(*)` })
+          .select({ count: sql<number>`count(*) filter (where ${driveMembers.role} <> 'GUEST')` })
           .from(driveMembers)
           .where(eq(driveMembers.driveId, driveId));
 

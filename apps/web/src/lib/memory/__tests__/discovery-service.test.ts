@@ -36,7 +36,7 @@ vi.mock('@pagespace/db/schema/monitoring', () => ({
   },
 }));
 vi.mock('@pagespace/db/schema/members', () => ({
-  driveMembers: { userId: 'userId', driveId: 'driveId', acceptedAt: 'acceptedAt' },
+  driveMembers: { userId: 'userId', driveId: 'driveId', acceptedAt: 'acceptedAt', role: 'role' },
 }));
 vi.mock('@pagespace/db/schema/conversations', () => ({
   conversations: { id: 'id', type: 'type', userId: 'userId', contextId: 'contextId' },
@@ -137,6 +137,21 @@ describe('runDiscoveryPasses', () => {
       should: 'return no claims and not call the model at all',
       actual: { claims: result.claims, modelCalls: mockGenerateObject.mock.calls.length },
       expected: { claims: [], modelCalls: 0 },
+    });
+  });
+
+  it('does not mine a GUEST drive (redeemed page share link) for conversations or activity', async () => {
+    setupDb([]);
+    const { runDiscoveryPasses } = await import('../discovery-service');
+    const { ne } = await import('@pagespace/db/operators');
+
+    await runDiscoveryPasses('user-guest-somewhere');
+
+    assert({
+      given: 'the two drive-membership reads (conversations, activity)',
+      should: 'both exclude GUEST rows',
+      actual: vi.mocked(ne).mock.calls.filter(([col, val]) => String(col) === 'role' && val === 'GUEST').length,
+      expected: 2,
     });
   });
 

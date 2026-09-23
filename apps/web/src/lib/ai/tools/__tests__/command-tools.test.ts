@@ -72,7 +72,7 @@ vi.mock('@pagespace/db/schema/core', () => ({
 }));
 
 vi.mock('@pagespace/db/schema/members', () => ({
-  driveMembers: { driveId: 'driveId', userId: 'userId', acceptedAt: 'acceptedAt' },
+  driveMembers: { driveId: 'driveId', userId: 'userId', acceptedAt: 'acceptedAt', role: 'role' },
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
@@ -98,6 +98,7 @@ vi.mock('@/lib/logging/mask', () => ({
 }));
 
 import { commandTools } from '../command-tools';
+import { ne } from '@pagespace/db/operators';
 import { canUserViewPage, isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 
 const mockCanUserViewPage = vi.mocked(canUserViewPage);
@@ -372,6 +373,8 @@ describe('command-tools', () => {
       expect(result.total).toBe(1);
       expect(result.commands[0].trigger).toBe('my-cmd');
       expect(result.commands[0].scope).toBe('user');
+      // A GUEST row (redeemed page share link) does not make a drive's commands the caller's.
+      expect(ne).toHaveBeenCalledWith('role', 'GUEST');
     });
 
     it('returns empty list when no commands exist', async () => {

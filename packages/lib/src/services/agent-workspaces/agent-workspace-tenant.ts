@@ -22,6 +22,7 @@ import { db } from '@pagespace/db/db';
 import { and, eq, isNotNull } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
+import { isGuestRole } from '../../permissions/guest-role';
 import { canRunCode } from '../sandbox/can-run-code';
 import type { DriveMembership } from '../../agent-workspaces/decide-workspace-access';
 
@@ -67,7 +68,8 @@ export async function resolveDriveMembership({
     where: and(eq(driveMembers.driveId, driveId), eq(driveMembers.userId, userId), isNotNull(driveMembers.acceptedAt)),
     columns: { role: true },
   });
-  if (!membership) return 'none';
+  // A GUEST (redeemed page share link) holds pages, not the drive.
+  if (!membership || isGuestRole(membership.role)) return 'none';
   // ADMIN is surfaced distinctly because the END decision requires drive
   // delete authority (owner/admin) — plain members may not tear down another
   // member's session (codex round 12).

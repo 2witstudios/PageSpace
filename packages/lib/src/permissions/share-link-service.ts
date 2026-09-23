@@ -396,15 +396,18 @@ export async function redeemPageShareLink(
     .limit(1);
   const alreadyHasAccess = existingPerms.length > 0 && existingPerms[0].canView;
 
+  // A page link makes the redeemer a GUEST: a row that carries the page grant
+  // below and nothing drive-wide (see isGuestRole). An existing row — a pending
+  // invite, a real membership, an earlier guest row — is left exactly as it is:
+  // redeeming a page link must never accept an invite nor change a role.
   await db.insert(driveMembers).values({
     id: createId(),
     driveId: link.driveId,
     userId: ctx.userId,
-    role: 'MEMBER',
+    role: 'GUEST',
     acceptedAt: new Date(),
-  }).onConflictDoUpdate({
+  }).onConflictDoNothing({
     target: [driveMembers.driveId, driveMembers.userId],
-    set: { acceptedAt: new Date() },
   });
 
   const canView   = link.permissions.includes('VIEW');

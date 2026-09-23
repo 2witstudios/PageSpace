@@ -122,7 +122,8 @@ export async function GET(req: Request) {
         .from(driveMembers)
         .where(and(
           eq(driveMembers.userId, userId),
-          isNotNull(driveMembers.acceptedAt)
+          isNotNull(driveMembers.acceptedAt),
+          ne(driveMembers.role, 'GUEST')
         )),
       // User conversations
       db.select({ id: dmConversations.id })
