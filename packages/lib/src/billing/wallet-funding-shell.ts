@@ -76,6 +76,7 @@ function orgPoolOf(orgId: string) {
 export interface OrgInvoice {
   id?: string | null;
   customer?: string | { id?: string | null } | null;
+  amount_paid?: number | null;
   subtotal?: number | null;
   billing_reason?: string | null;
   period_start?: number | null;
@@ -87,7 +88,11 @@ export interface OrgInvoice {
     } | null;
   } | null;
   lines?: {
-    data?: Array<{ amount?: number | null; period?: { start?: number | null; end?: number | null } | null } | null | undefined> | null;
+    data?: Array<{
+      amount?: number | null;
+      discount_amounts?: ReadonlyArray<{ amount?: number | null } | null> | null;
+      period?: { start?: number | null; end?: number | null } | null;
+    } | null | undefined> | null;
   } | null;
 }
 
@@ -145,6 +150,7 @@ export async function applyOrgPoolRefill(invoice: OrgInvoice, opts: OrgPoolRefil
   const grant = orgPoolRefillGrant(
     {
       lines,
+      amountPaidCents: invoice.amount_paid,
       hasSubscriptionParent: hasSubscriptionParent(invoice),
       billingReason: invoice.billing_reason,
       subtotalCents: invoice.subtotal,
@@ -162,7 +168,12 @@ export async function applyOrgPoolRefill(invoice: OrgInvoice, opts: OrgPoolRefil
   const result = await db.transaction(async (tx) => {
     await tx.insert(wallets).values({ ownerType: 'org', orgId: org.id }).onConflictDoNothing(ORG_POOL_ARBITER);
     const [pool] = await tx
-      .select({ id: wallets.id, monthlyRemainingCents: wallets.monthlyRemainingCents, debtCents: wallets.debtCents })
+      .select({
+        id: wallets.id,
+        monthlyRemainingCents: wallets.monthlyRemainingCents,
+        debtCents: wallets.debtCents,
+        monthlyPeriodStart: wallets.monthlyPeriodStart,
+      })
       .from(wallets)
       .where(orgPoolOf(org.id))
       .for('update')
@@ -186,13 +197,20 @@ export async function applyOrgPoolRefill(invoice: OrgInvoice, opts: OrgPoolRefil
     if (inserted.length === 0) return { kind: 'duplicate' as const, walletId: pool.id };
 
     const refill = refillPool(pool, grant.allowanceCents);
+    // Stripe does not order invoice.paid deliveries: an older invoice settled late
+    // (dunning) still refills once, but it must never move the pool's period — the
+    // date its org allocations reset on — backwards.
+    const periodMovesForward =
+      period.startMs !== null &&
+      period.endMs !== null &&
+      (pool.monthlyPeriodStart === null || pool.monthlyPeriodStart.getTime() < period.startMs);
     await tx
       .update(wallets)
       .set({
         monthlyRemainingCents: refill.monthlyRemainingCents,
         monthlyAllowanceCents: refill.monthlyAllowanceCents,
         debtCents: refill.debtCents,
-        ...(period.startMs !== null && period.endMs !== null
+        ...(periodMovesForward && period.startMs !== null && period.endMs !== null
           ? { monthlyPeriodStart: new Date(period.startMs), monthlyPeriodEnd: new Date(period.endMs) }
           : {}),
       })
@@ -456,6 +474,16 @@ export async function donateToDriveWallet(input: DonateInput): Promise<DonationO
     const donor = locked.get(donorRow.id);
     const drive = locked.get(target.id);
     if (!donor || !drive) return { kind: 'refused', reason: 'wallet_not_found' };
+
+    // A replay of a donation that already landed is a duplicate, whatever the balances
+    // or the drive's donation switch say NOW — the check runs before any planning. The
+    // leg insert's ON CONFLICT below stays as the backstop for a concurrent replay.
+    const [prior] = await tx
+      .select({ id: walletFundingLegs.id })
+      .from(walletFundingLegs)
+      .where(eq(walletFundingLegs.sourceRef, sourceRef))
+      .limit(1);
+    if (prior) return { kind: 'duplicate', legId: prior.id };
 
     const [held] = await tx
       .select({ cents: sql<number>`coalesce(sum(${creditHolds.estCents}), 0)::int` })

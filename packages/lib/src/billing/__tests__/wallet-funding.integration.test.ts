@@ -93,7 +93,7 @@ describe('wallet funding against Postgres', () => {
   const PERIOD_START_S = Date.UTC(2026, 8, 17) / 1000;
   const PERIOD_END_S = Date.UTC(2026, 9, 17) / 1000;
 
-  it('MON-3 an org invoice paid for base + 3 extra seats refills the org pool with paid × ratio, once, and stamps the refill date', async () => {
+  it('MON-3 (partial) an org invoice paid for base + 3 extra seats refills the org pool with paid × ratio, once, and stamps the refill date', async () => {
     if (!dbAvailable) return;
     const owner = await user();
     const [org] = await db
@@ -105,6 +105,7 @@ describe('wallet funding against Postgres', () => {
       id: `in_${createId()}`,
       customer: org.stripeCustomerId,
       billing_reason: 'subscription_cycle',
+      amount_paid: 8000,
       subtotal: 8000,
       parent: { subscription_details: { subscription: `sub_${createId()}` } },
       lines: {
@@ -133,6 +134,19 @@ describe('wallet funding against Postgres', () => {
     const grants = await db.select().from(creditLedger).where(eq(creditLedger.stripeRef, invoice.id));
     expect(grants).toHaveLength(1);
     expect(grants[0]).toMatchObject({ walletId: pools[0].id, entryType: 'monthly_grant', amountCents: 4800, paidCents: 8000 });
+
+    // An OLDER invoice paid late (dunning) is a new stripeRef: it refills once, but it
+    // never moves the pool's period — the org's reset date — backwards.
+    const lateOld = {
+      ...invoice,
+      id: `in_${createId()}`,
+      lines: { data: invoice.lines.data.map((l) => ({ ...l, period: { start: PERIOD_START_S - 30 * 86_400, end: PERIOD_START_S } })) },
+    };
+    expect(await applyOrgPoolRefill(lateOld, { active: true })).toMatchObject({ kind: 'granted', allowanceCents: 4800 });
+    const [afterLate] = await db.select().from(wallets).where(eq(wallets.id, pools[0].id));
+    expect(afterLate.monthlyRemainingCents).toBe(9600);
+    expect(afterLate.monthlyPeriodStart?.getTime()).toBe(PERIOD_START_S * 1000);
+    expect(afterLate.monthlyPeriodEnd?.getTime()).toBe(PERIOD_END_S * 1000);
 
     // A customer that is no org's is left to the personal path.
     expect(await applyOrgPoolRefill({ ...invoice, customer: `cus_${createId()}` })).toEqual({ kind: 'not_org' });
@@ -246,6 +260,11 @@ describe('wallet funding against Postgres', () => {
     // The lead turns donations off: the next donation refuses.
     await db.update(wallets).set({ donationsEnabled: false }).where(eq(wallets.id, productWallet));
     expect(await donateToDriveWallet({ donorUserId: ana, targetWalletId: productWallet, amountCents: 100, donationId: createId() })).toEqual({ kind: 'refused', reason: 'donations_disabled' });
+
+    // A replay of Ana's completed gift, after she spent below its amount and with
+    // donations now off, still reports the gift it already made — not a refusal.
+    await db.update(wallets).set({ topupRemainingCents: 100 }).where(eq(wallets.id, anaRoot));
+    expect(await donateToDriveWallet({ donorUserId: ana, targetWalletId: productWallet, amountCents: 500, donationId: anaGift })).toEqual({ kind: 'duplicate', legId: anaLeg.id });
   });
 
   it('D-OW-13 the database itself refuses a refundable donation leg', async () => {

@@ -18,7 +18,7 @@
  */
 
 import { allocateSpend, applyPaymentToDebt, computeMonthlyRefill, type Balance } from './credit-core';
-import { grantForInvoiceLines, type InvoiceGrant, type InvoiceGrantLine } from './invoice-grant';
+import type { InvoiceGrant } from './invoice-grant';
 import { MONEY_MODEL_V2_ACTIVE, allowanceCentsForPaidCents, centsFromDollars, tierListPriceCents } from './money-model';
 import { TIER_PLAN_LIMITS } from './subscription-tiers';
 import {
@@ -45,7 +45,9 @@ export const ORG_POOL_TIER = 'business' as const;
  * trial with an empty pool; with this on, such an invoice funds the pool at LIST
  * price × ratio, exactly as a personal trial or gift is funded. This is the one line
  * that reverses the policy: set it to false and a trial or gift org invoice grants
- * nothing. Every trial/gift amount comes from {@link orgPoolListPriceGrantCents}.
+ * nothing — a trial pays 0 and a gift is a 100%-coupon subscription whose lines net to
+ * 0, and the refill is sized from what was PAID. Every trial/gift amount comes from
+ * {@link orgPoolListPriceGrantCents}.
  */
 export const ORG_POOL_FUNDS_TRIALS_AND_GIFTS = true;
 
@@ -61,9 +63,21 @@ export function orgPoolListPriceGrantCents(extraSeats: number, active: boolean =
   return allowanceCentsForPaidCents(listCents, ORG_POOL_TIER, active);
 }
 
+/**
+ * Structural subset of a Stripe invoice line the pool refill reads. `amount` is the
+ * line total BEFORE discounts (signed: proration credits are negative); what a coupon
+ * took off that line is in `discount_amounts`.
+ */
+export interface OrgInvoiceLine {
+  amount?: number | null;
+  discount_amounts?: ReadonlyArray<{ amount?: number | null } | null> | null;
+}
+
 export interface OrgPoolRefillInput {
   /** The org subscription invoice's line items: the Business base and the extra-seat items. */
-  lines: ReadonlyArray<InvoiceGrantLine | null | undefined>;
+  lines: ReadonlyArray<OrgInvoiceLine | null | undefined>;
+  /** Stripe invoice.amount_paid: what was actually collected (tax included), minor units. */
+  amountPaidCents: number | null | undefined;
   /**
    * Whether the invoice was generated for a subscription (invoice.parent.subscription_details).
    * A manual or one-off invoice never refills a pool, whatever it paid — the same
@@ -80,29 +94,59 @@ export interface OrgPoolRefillInput {
   extraSeats?: number;
 }
 
+function wholeCents(value: number | null | undefined): number {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : 0;
+}
+
 /**
- * MON-3: size the pool refill from what the org invoice PAID for the base and the
- * extra seats, times the Business ratio. More seats paid means a bigger pool through
- * the same derivation; proration credits net against it and a net negative grants
- * nothing. A trial or gifted org subscription is funded at list price × ratio while
- * {@link ORG_POOL_FUNDS_TRIALS_AND_GIFTS} is on ([D-OW-23], D-OW-16 extended to orgs).
+ * What the org PAID for the subscription's lines: each line net of its discounts,
+ * summed (proration credits net in), and never more than the invoice actually
+ * collected — so a coupon, a customer-balance credit or a partial payment all shrink
+ * the refill, and tax (in amount_paid, not in the lines) never grows it.
+ */
+export function orgInvoicePaidCents(input: Pick<OrgPoolRefillInput, 'lines' | 'amountPaidCents'>): number {
+  let net = 0;
+  for (const line of input.lines) {
+    net += wholeCents(line?.amount);
+    for (const discount of line?.discount_amounts ?? []) net -= wholeCents(discount?.amount);
+  }
+  return Math.max(0, Math.min(net, wholeCents(input.amountPaidCents)));
+}
+
+/**
+ * MON-3: size the pool refill from what the org invoice PAID for its lines (the
+ * Business base and the extra seats), net of discounts, times the Business ratio. More
+ * seats paid means a bigger pool through the same derivation, with no second constant.
+ * A trial (paid 0, subtotal 0, subscription_create) or a gifted org subscription is
+ * funded at list price × ratio only while `fundTrialsAndGifts` is on ([D-OW-23],
+ * D-OW-16 extended to orgs); with it off both grant nothing, because both paid
+ * nothing. A 100% coupon on a non-gifted subscription grants nothing (D-OW-16d).
  * `active` (D-OW-17) defaults to the money-model constant.
  */
-export function orgPoolRefillGrant(input: OrgPoolRefillInput, active: boolean = MONEY_MODEL_V2_ACTIVE): InvoiceGrant {
-  const paid = grantForInvoiceLines(input.lines, ORG_POOL_TIER, active);
+export function orgPoolRefillGrant(
+  input: OrgPoolRefillInput,
+  active: boolean = MONEY_MODEL_V2_ACTIVE,
+  fundTrialsAndGifts: boolean = ORG_POOL_FUNDS_TRIALS_AND_GIFTS,
+): InvoiceGrant {
+  const paidCents = orgInvoicePaidCents(input);
   if (input.hasSubscriptionParent !== true) {
-    return { paidCents: paid.paidCents, allowanceCents: 0, basis: 'none', reason: 'not_a_subscription_invoice' };
+    return { paidCents, allowanceCents: 0, basis: 'none', reason: 'not_a_subscription_invoice' };
   }
-  const trial =
-    input.billingReason === 'subscription_create' && paid.paidCents === 0 && Math.round(input.subtotalCents ?? 0) === 0;
-  const funded = input.gifted === true ? 'gifted' : trial ? 'trial' : null;
-  if (funded !== null && ORG_POOL_FUNDS_TRIALS_AND_GIFTS) {
-    const allowanceCents = orgPoolListPriceGrantCents(input.extraSeats ?? 0, active);
-    return allowanceCents > 0
-      ? { paidCents: paid.paidCents, allowanceCents, basis: 'list', reason: funded }
-      : { paidCents: paid.paidCents, allowanceCents: 0, basis: 'none', reason: 'no_ratio' };
+  if (fundTrialsAndGifts) {
+    const trial = input.billingReason === 'subscription_create' && paidCents === 0 && wholeCents(input.subtotalCents) === 0;
+    const funded = input.gifted === true ? 'gifted' : trial ? 'trial' : null;
+    if (funded !== null) {
+      const allowanceCents = orgPoolListPriceGrantCents(input.extraSeats ?? 0, active);
+      return allowanceCents > 0
+        ? { paidCents, allowanceCents, basis: 'list', reason: funded }
+        : { paidCents, allowanceCents: 0, basis: 'none', reason: 'no_ratio' };
+    }
   }
-  return paid;
+  if (paidCents === 0) return { paidCents, allowanceCents: 0, basis: 'none', reason: 'zero_amount' };
+  const allowanceCents = allowanceCentsForPaidCents(paidCents, ORG_POOL_TIER, active);
+  return allowanceCents > 0
+    ? { paidCents, allowanceCents, basis: 'paid', reason: 'paid' }
+    : { paidCents, allowanceCents: 0, basis: 'none', reason: 'no_ratio' };
 }
 
 export interface PoolBalance {
@@ -187,12 +231,35 @@ function nextUtcMonthStartMs(nowMs: number): number {
 }
 
 /**
+ * The governing root's CURRENT period. A root that is still inside its period governs
+ * with it. A root whose period ended without a renewal (a late or lapsed invoice, a
+ * Free personal root that never refills) is rolled forward by whole periods of its own
+ * length, starting exactly at its period end — which is where the renewal Stripe will
+ * stamp begins, so a renewal that arrives late lands on the SAME start and resets
+ * nothing twice. Without that roll the anchor would freeze and every allocation under
+ * it would stay exhausted forever. A root never refilled governs with the UTC calendar
+ * month (D20).
+ */
+export function currentGoverningPeriodMs(governing: GoverningRoot, nowMs: number): { startMs: number; endMs: number } {
+  const start = governing.periodStartMs;
+  const end = governing.periodEndMs;
+  if (start === null) {
+    const monthStart = utcMonthStartMs(nowMs);
+    return { startMs: monthStart, endMs: nextUtcMonthStartMs(monthStart) };
+  }
+  if (end === null || end <= start) return { startMs: start, endMs: nextUtcMonthStartMs(start) };
+  if (nowMs < end) return { startMs: start, endMs: end };
+  const length = end - start;
+  const rolledStart = end + Math.floor((nowMs - end) / length) * length;
+  return { startMs: rolledStart, endMs: rolledStart + length };
+}
+
+/**
  * D-OW-12: whether a child allocation resets now, and to what. The period comes from
  * its governing root — the pool's refill date under an org, the personal renewal under
- * a person — and falls back to the UTC calendar month (D20) only when that root has
- * never been refilled. A reset puts spend back to zero, nets the wallet debt against
- * the new allocation and clears it (WAL-6d), and never touches top-ups or donations
- * (WAL-3: they last until spent).
+ * a person — see {@link currentGoverningPeriodMs}. A reset puts spend back to zero,
+ * nets the wallet debt against the new allocation and clears it (WAL-6d), and never
+ * touches top-ups or donations (WAL-3: they last until spent).
  *
  * Idempotent by construction: once the wallet carries the governing period start, the
  * same period is never due again, however many times this runs.
@@ -202,11 +269,11 @@ export function planAllocationReset(input: {
   governing: GoverningRoot;
   nowMs: number;
 }): AllocationResetPlan {
-  const anchored = input.governing.periodStartMs !== null;
+  const current = currentGoverningPeriodMs(input.governing, input.nowMs);
   const governingStartMs = governingAllocationPeriodStartMs({
     rootOwner: input.governing.ownerType,
-    poolPeriodStartMs: input.governing.ownerType === 'org' ? input.governing.periodStartMs : null,
-    personalPeriodStartMs: input.governing.ownerType === 'user' ? input.governing.periodStartMs : null,
+    poolPeriodStartMs: input.governing.ownerType === 'org' ? current.startMs : null,
+    personalPeriodStartMs: input.governing.ownerType === 'user' ? current.startMs : null,
     nowMs: input.nowMs,
   });
   // A governing period that has not begun yet is not this period.
@@ -218,10 +285,7 @@ export function planAllocationReset(input: {
     return { due: false };
   }
 
-  const periodEndMs =
-    anchored && input.governing.periodEndMs !== null && input.governing.periodEndMs > governingStartMs
-      ? input.governing.periodEndMs
-      : nextUtcMonthStartMs(governingStartMs);
+  const periodEndMs = current.endMs;
   const renewed = renewWalletAllocation(
     {
       allocationCents: input.wallet.allocationCents,

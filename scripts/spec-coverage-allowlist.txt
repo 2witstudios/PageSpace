@@ -39,6 +39,12 @@ DRV-7
 # until B4/B7, Wave C and Wave F.
 DRV-8
 DRV-9
+# MON-3 (the org pool refill: (Business base + extra-seat items) paid × ratio) re-added per review
+# 5230424182 on #2657, and kept after ow-c5 (#2718, independent review ow-irv-2718 P1-1): the pool now
+# refills from an org invoice.paid, sized from what each line paid net of its discounts and capped at
+# amount_paid (tests titled "MON-3 (partial)"), but it sums EVERY line of the org subscription; limiting
+# the refill to the Business base and extra-seat prices needs those prices, which Phase 3 D1 defines.
+MON-3
 # ORG-1 (name, slug, avatar, one human Owner; ownership is transferable), ORG-2 (Owner/Admin/Member;
 # many orgs per user; a user in no org sees no org UI) and ORG-3 (email invites with expiry, resend,
 # revoke, acceptance for new and existing accounts; a pending invite counts as a seat) re-added per

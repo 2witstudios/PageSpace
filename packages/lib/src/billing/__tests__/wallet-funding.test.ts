@@ -5,6 +5,8 @@ import { centsFromCredits } from '../money-model';
 import {
   orgPoolRefillGrant,
   orgPoolListPriceGrantCents,
+  orgInvoicePaidCents,
+  currentGoverningPeriodMs,
   ORG_POOL_FUNDS_TRIALS_AND_GIFTS,
   refillPool,
   invoiceServicePeriodMs,
@@ -22,37 +24,40 @@ const BASE_CENTS = 5000; // Business list price, $50
 const SEAT_CENTS = 1000; // one extra seat, $10
 const base = { amount: BASE_CENTS };
 const seats = (n: number) => ({ amount: SEAT_CENTS * n });
+// An admin gift is a 100%-coupon subscription: Stripe keeps the list price on the line
+// and puts the coupon in its discount_amounts.
+const giftedBase = { amount: BASE_CENTS, discount_amounts: [{ amount: BASE_CENTS }] };
 
 describe('wallet-funding: org pool refill', () => {
   it('MON-3 (partial) base + 3 extra seats paid × the Business ratio, ratio on: 8000 paid → 4800', () => {
-    const grant = orgPoolRefillGrant({ lines: [base, seats(3)], hasSubscriptionParent: true }, true);
+    const grant = orgPoolRefillGrant({ lines: [base, seats(3)], amountPaidCents: 8000, hasSubscriptionParent: true }, true);
     expect(grant).toEqual({ paidCents: 8000, allowanceCents: 4800, basis: 'paid', reason: 'paid' });
   });
 
   it('MON-3 (partial) base + 3 extra seats with the ratio off grants the whole 8000 paid', () => {
-    const grant = orgPoolRefillGrant({ lines: [base, seats(3)], hasSubscriptionParent: true }, false);
+    const grant = orgPoolRefillGrant({ lines: [base, seats(3)], amountPaidCents: 8000, hasSubscriptionParent: true }, false);
     expect(grant.allowanceCents).toBe(8000);
   });
 
   it('MON-3 (partial) more seats means a bigger pool with no second constant: 10 seats vs 3 seats', () => {
-    const three = orgPoolRefillGrant({ lines: [base, seats(3)], hasSubscriptionParent: true }, true);
-    const ten = orgPoolRefillGrant({ lines: [base, seats(10)], hasSubscriptionParent: true }, true);
+    const three = orgPoolRefillGrant({ lines: [base, seats(3)], amountPaidCents: 8000, hasSubscriptionParent: true }, true);
+    const ten = orgPoolRefillGrant({ lines: [base, seats(10)], amountPaidCents: 15000, hasSubscriptionParent: true }, true);
     expect(ten.allowanceCents - three.allowanceCents).toBe(Math.floor((SEAT_CENTS * 7 * 6000) / 10_000));
   });
 
   it('a proration credit nets against the charge before the ratio', () => {
-    const grant = orgPoolRefillGrant({ lines: [base, seats(3), { amount: -2000 }], hasSubscriptionParent: true }, true);
+    const grant = orgPoolRefillGrant({ lines: [base, seats(3), { amount: -2000 }], amountPaidCents: 6000, hasSubscriptionParent: true }, true);
     expect(grant).toMatchObject({ paidCents: 6000, allowanceCents: 3600 });
   });
 
   it('an invoice with no subscription parent never refills the pool, whatever it paid', () => {
-    const grant = orgPoolRefillGrant({ lines: [base, seats(3)], hasSubscriptionParent: false, gifted: true }, true);
+    const grant = orgPoolRefillGrant({ lines: [base, seats(3)], amountPaidCents: 8000, hasSubscriptionParent: false, gifted: true }, true);
     expect(grant).toEqual({ paidCents: 8000, allowanceCents: 0, basis: 'none', reason: 'not_a_subscription_invoice' });
   });
 
   it('D-OW-23 a trial org invoice (paid 0, subtotal 0) funds the pool at list price × ratio, extra seats included', () => {
     const grant = orgPoolRefillGrant(
-      { lines: [{ amount: 0 }], hasSubscriptionParent: true, billingReason: 'subscription_create', subtotalCents: 0, extraSeats: 3 },
+      { lines: [{ amount: 0 }], amountPaidCents: 0, hasSubscriptionParent: true, billingReason: 'subscription_create', subtotalCents: 0, extraSeats: 3 },
       true,
     );
     expect(ORG_POOL_FUNDS_TRIALS_AND_GIFTS).toBe(true);
@@ -61,19 +66,53 @@ describe('wallet-funding: org pool refill', () => {
 
   it('D-OW-23 a gifted org subscription is funded at list price × ratio through the one named function', () => {
     const grant = orgPoolRefillGrant(
-      { lines: [{ amount: 0 }], hasSubscriptionParent: true, billingReason: 'subscription_cycle', subtotalCents: 5000, gifted: true },
+      { lines: [giftedBase], amountPaidCents: 0, hasSubscriptionParent: true, billingReason: 'subscription_cycle', subtotalCents: 5000, gifted: true },
       true,
     );
     expect(grant).toMatchObject({ allowanceCents: orgPoolListPriceGrantCents(0, true), basis: 'list', reason: 'gifted' });
     expect(orgPoolListPriceGrantCents(0, true)).toBe(3000);
   });
 
-  it('a 100% coupon on a non-gifted org subscription (subtotal is the list price) grants nothing', () => {
+  it('a 100% coupon on a non-gifted org subscription grants nothing: the line keeps list price, its discount takes it to 0', () => {
     const grant = orgPoolRefillGrant(
-      { lines: [{ amount: 0 }], hasSubscriptionParent: true, billingReason: 'subscription_cycle', subtotalCents: 5000 },
+      { lines: [giftedBase], amountPaidCents: 0, hasSubscriptionParent: true, billingReason: 'subscription_cycle', subtotalCents: 5000 },
       true,
     );
-    expect(grant).toMatchObject({ allowanceCents: 0, reason: 'zero_amount' });
+    expect(grant).toEqual({ paidCents: 0, allowanceCents: 0, basis: 'none', reason: 'zero_amount' });
+  });
+
+  it('MON-3 (partial) a 50% coupon halves the pool: base + 3 seats list 8000, paid 4000 → 2400', () => {
+    const half = (amount: number) => ({ amount, discount_amounts: [{ amount: amount / 2 }] });
+    const grant = orgPoolRefillGrant(
+      { lines: [half(BASE_CENTS), half(SEAT_CENTS * 3)], amountPaidCents: 4000, hasSubscriptionParent: true, subtotalCents: 8000 },
+      true,
+    );
+    expect(grant).toEqual({ paidCents: 4000, allowanceCents: 2400, basis: 'paid', reason: 'paid' });
+  });
+
+  it('MON-3 (partial) tax in amount_paid never grows the pool, and a short payment shrinks it', () => {
+    expect(orgInvoicePaidCents({ lines: [base, seats(3)], amountPaidCents: 8800 })).toBe(8000);
+    expect(orgInvoicePaidCents({ lines: [base, seats(3)], amountPaidCents: 3000 })).toBe(3000);
+    expect(orgInvoicePaidCents({ lines: [base, seats(3)], amountPaidCents: null })).toBe(0);
+    // A 50% coupon with tax on top: 4000 of lines after the discount, 4400 collected.
+    // The discount is netted per line, so the tax cannot fill the gap back up.
+    const half = (amount: number) => ({ amount, discount_amounts: [{ amount: amount / 2 }] });
+    expect(orgInvoicePaidCents({ lines: [half(BASE_CENTS), half(SEAT_CENTS * 3)], amountPaidCents: 4400 })).toBe(4000);
+  });
+
+  it('D-OW-23 with trial/gift funding OFF, a trial and a gift both grant nothing — the policy is one switch', () => {
+    const trial = orgPoolRefillGrant(
+      { lines: [{ amount: 0 }], amountPaidCents: 0, hasSubscriptionParent: true, billingReason: 'subscription_create', subtotalCents: 0, extraSeats: 3 },
+      true,
+      false,
+    );
+    const gift = orgPoolRefillGrant(
+      { lines: [giftedBase], amountPaidCents: 0, hasSubscriptionParent: true, billingReason: 'subscription_cycle', subtotalCents: 5000, gifted: true },
+      true,
+      false,
+    );
+    expect(trial).toMatchObject({ allowanceCents: 0, reason: 'zero_amount' });
+    expect(gift).toMatchObject({ allowanceCents: 0, reason: 'zero_amount' });
   });
 
   it('refillPool rolls the pool over and nets its debt, like a personal renewal', () => {
@@ -162,6 +201,30 @@ describe('wallet-funding: allocation reset (D-OW-12)', () => {
       nowMs: NOW,
     });
     expect(plan).toMatchObject({ due: true, status: 'paused' });
+  });
+
+  it('WAL-3 (partial) a lapsed root rolls forward by whole periods, so its allocations keep resetting', () => {
+    const start = Date.UTC(2026, 5, 3);
+    const end = Date.UTC(2026, 6, 3);
+    const length = end - start;
+    const governing = { ownerType: 'user' as const, periodStartMs: start, periodEndMs: end };
+    const current = currentGoverningPeriodMs(governing, NOW);
+    expect((current.startMs - end) % length).toBe(0);
+    expect(current.startMs).toBeLessThanOrEqual(NOW);
+    expect(current.endMs).toBe(current.startMs + length);
+    expect(NOW).toBeLessThan(current.endMs);
+    const plan = planAllocationReset({ wallet: wallet(start), governing, nowMs: NOW });
+    expect(plan).toMatchObject({ due: true, periodStartMs: current.startMs, spentCents: 0 });
+  });
+
+  it('WAL-3 (partial) a late renewal resets once: the rolled period starts where the renewal will', () => {
+    const lateNow = POOL_END + 12 * 3_600_000;
+    const governing = { ownerType: 'org' as const, periodStartMs: POOL_START, periodEndMs: POOL_END };
+    const beforeRenewal = planAllocationReset({ wallet: wallet(POOL_START), governing, nowMs: lateNow });
+    expect(beforeRenewal).toMatchObject({ due: true, periodStartMs: POOL_END });
+    // The renewal then lands, stamping the pool with the period that starts at the old end.
+    const renewed = { ownerType: 'org' as const, periodStartMs: POOL_END, periodEndMs: Date.UTC(2026, 10, 17) };
+    expect(planAllocationReset({ wallet: wallet(POOL_END, 300), governing: renewed, nowMs: lateNow + 60_000 })).toEqual({ due: false });
   });
 
   it('a wallet never reset is due at once', () => {
