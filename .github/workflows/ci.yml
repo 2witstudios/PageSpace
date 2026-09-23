@@ -282,6 +282,7 @@ jobs:
           bunx vitest run --config vitest.integration.config.ts \
             src/agent-accounts/store/__tests__/store-adapter-infisical.integration.test.ts \
             src/agent-accounts/__tests__/adversarial/http-executor-end-to-end.integration.test.ts \
+            src/agent-accounts/refresh/__tests__/refresh-worker.integration.test.ts \
             --reporter=default --reporter=json --outputFile.json=infisical-result.json
           vitest_status=$?
           set -e

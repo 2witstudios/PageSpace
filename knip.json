@@ -228,6 +228,7 @@
         "src/agent-accounts/migration/plan-migration-step.ts",
         "src/agent-accounts/guard/decide-decrypt-call-site.ts",
         "src/agent-accounts/guard/decrypt-guard-policy.ts",
+        "src/agent-accounts/refresh/refresh-worker.ts",
         "src/auth/account-authority-signing-key.ts",
         "src/agent-workspaces/session-contract.ts",
         "src/agent-workspaces/workspace-fractions.ts",
