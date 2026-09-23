@@ -1,5 +1,5 @@
 import { calculateCost } from '@pagespace/lib/monitoring/ai-monitoring';
-import { MARKUP_BPS } from '@pagespace/lib/billing/credit-pricing';
+import { providerDollarsCoveredByCents } from '@pagespace/lib/billing/money-model';
 
 /**
  * The real (pre-markup) cost of a model step that was cut off by an abort.
@@ -27,6 +27,6 @@ export function priceInterruptedStep(input: {
   holdCents: number;
 }): { costDollars: number; capped: boolean } {
   const estimatedDollars = calculateCost(input.model, input.inputTokens, input.outputTokens);
-  const capDollars = input.holdCents / 100 / (MARKUP_BPS / 10000);
+  const capDollars = providerDollarsCoveredByCents(input.holdCents);
   return { costDollars: Math.min(estimatedDollars, capDollars), capped: estimatedDollars > capDollars };
 }

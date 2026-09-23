@@ -183,6 +183,16 @@ export function dollarsFromCents(cents: number): number {
   return cents / CENTS_PER_DOLLAR;
 }
 
+/**
+ * Cents of credit value CHARGED → the real provider cost, in dollars, they cover: the
+ * inverse of the markup applied at settle. A credit hold is sized in charged cents, so a
+ * cap on the provider cost of a call comes back through here. Multiplies before dividing
+ * (cents × 10000 / (markup × 100)), never cents / 100 / (markup / 10000).
+ */
+export function providerDollarsCoveredByCents(cents: number, markupBps: number = MARKUP_BPS): number {
+  return (cents * 10_000) / (markupBps * CENTS_PER_DOLLAR);
+}
+
 /** Dollars → whole cents (real money), rounded to the nearest cent. */
 export function centsFromDollars(dollars: number): number {
   return Math.round(dollars * CENTS_PER_DOLLAR);
