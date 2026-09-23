@@ -53,6 +53,7 @@ export async function POST(req: Request) {
     let executed = 0;
     let deferred = 0;
     let totalClaimed = 0;
+    let skipped = 0;
     const errors: string[] = [];
 
     for (let i = 0; i < dueTriggers.length; i += MAX_CONCURRENT_TRIGGERS) {
@@ -159,6 +160,11 @@ export async function POST(req: Request) {
             creditGate: trigger.triggerType === 'due_date' ? { skipDailyCap: true } : {},
           };
 
+          // The credit gate runs inside the executor's run claim, on the owner
+          // the run bills, before any model is built. A settled refusal comes
+          // back `skipped` (recorded as a cancelled run with the reason); the
+          // one-shot trigger is retired with that reason just below, like any
+          // other fire. A retryable one gave its claim back and is re-armed.
           const result = await executeWorkflow(input);
 
           if (result.retryable) {
@@ -185,15 +191,21 @@ export async function POST(req: Request) {
       for (let j = 0; j < batchResults.length; j++) {
         const settled = batchResults[j];
         if (settled.status === 'fulfilled') {
-          if (settled.value.result.success) {
+          const outcome = settled.value;
+          if (outcome.result.skipped) {
+            logger.info('Task trigger: skipped', { triggerId: outcome.trigger.id, reason: outcome.result.error });
+            skipped++;
+            continue;
+          }
+          if (outcome.result.success) {
             executed++;
-          } else if (settled.value.result.retryable) {
+          } else if (outcome.result.retryable) {
             deferred++;
           } else {
-            errors.push(`task-trigger-${settled.value.trigger.id}: ${settled.value.result.error}`);
+            errors.push(`task-trigger-${outcome.trigger.id}: ${outcome.result.error}`);
           }
-          if (settled.value.result.finalizeError) {
-            errors.push(`task-trigger-${settled.value.trigger.id}: finalize failed: ${settled.value.result.finalizeError}`);
+          if (outcome.result.finalizeError) {
+            errors.push(`task-trigger-${outcome.trigger.id}: finalize failed: ${outcome.result.finalizeError}`);
           }
         } else {
           const trigger = claimed[j];
@@ -209,15 +221,16 @@ export async function POST(req: Request) {
       }
     }
 
-    logger.info(`Task trigger cron: Complete. Executed ${executed}/${totalClaimed}`);
+    logger.info(`Task trigger cron: Complete. Executed ${executed}/${totalClaimed}, skipped ${skipped}`);
 
-    audit({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'task_triggers', details: { executed, deferred, failed: errors.length } });
+    audit({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'task_triggers', details: { executed, deferred, failed: errors.length, skipped } });
 
     return NextResponse.json({
       message: 'Task trigger cron complete',
       executed,
       deferred,
       total: totalClaimed,
+      skipped,
       errors: errors.length > 0 ? errors : undefined,
     });
   } catch (error) {

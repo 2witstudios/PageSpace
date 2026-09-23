@@ -96,6 +96,11 @@ export const EXPORTED_TABLES: Readonly<Record<string, ExportCategory>> = {
   email_notification_preferences: 'settings',
   // Added with this guard — the omission that motivated it.
   agent_workspaces: 'agentWorkspaces',
+  // L2·G2 agent accounts: the subject's own accounts (metadata only) and the decisions they gave.
+  agent_accounts: 'agentAccounts',
+  agent_account_approvals: 'agentAccounts',
+  agent_account_bindings: 'agentAccounts',
+  agent_account_delegations: 'agentAccounts',
   agent_workspace_shells: 'agentWorkspaces',
   // The subject's workspace MEMBERSHIP and layout. It arrived unregistered
   // with the node model, and it became load-bearing when membership moved into

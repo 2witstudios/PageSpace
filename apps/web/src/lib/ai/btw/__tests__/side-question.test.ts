@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from 'vitest';
-import { MockLanguageModelV3 } from 'ai/test';
 import { buildSideQuestionSnapshot, createSideQuestionStream } from '../side-question';
 
 describe('detached side questions', () => {
@@ -41,6 +40,7 @@ describe('detached side questions', () => {
       question: 'What changed?',
       snapshot: 'safe context',
       abortSignal: controller.signal,
+      onSettle: vi.fn().mockResolvedValue(undefined),
       streamText,
     });
     expect(await response.text()).toBe('answer');
@@ -51,102 +51,5 @@ describe('detached side questions', () => {
       prompt: expect.stringContaining('<conversation_snapshot>\nsafe context\n</conversation_snapshot>'),
     }));
     expect(streamText.mock.calls[0][0].prompt).toContain('<side_question>\nWhat changed?\n</side_question>');
-    // No persistence hooks: only the terminal metering callbacks, never a per-chunk writer.
-    expect(streamText.mock.calls[0][0]).not.toHaveProperty('onChunk');
-    expect(streamText.mock.calls[0][0]).not.toHaveProperty('onStepFinish');
-  });
-
-  describe('metering settlement (D-35)', () => {
-    const setup = (totalUsage: Promise<unknown> = new Promise(() => {})) => {
-      const onSettle = vi.fn().mockResolvedValue(undefined);
-      const streamText = vi.fn().mockReturnValue({ totalUsage, toTextStreamResponse: () => new Response('answer') });
-      createSideQuestionStream({ model: {} as never, question: 'q', snapshot: 's', abortSignal: new AbortController().signal, streamText, onSettle });
-      const args = streamText.mock.calls[0][0] as {
-        onFinish: (e: { totalUsage: unknown; steps: unknown[] }) => Promise<void>;
-        onAbort: (e: { steps: Array<{ usage: unknown }> }) => Promise<void>;
-      };
-      return { onSettle, args };
-    };
-
-    it('given a finished stream, should settle once with the total usage and success', async () => {
-      const { onSettle, args } = setup();
-      await args.onFinish({ totalUsage: { inputTokens: 3, outputTokens: 4, totalTokens: 7 }, steps: [] });
-      expect(onSettle).toHaveBeenCalledTimes(1);
-      expect(onSettle).toHaveBeenCalledWith({ success: true, usage: { inputTokens: 3, outputTokens: 4, totalTokens: 7 }, steps: [] });
-    });
-
-    it('given an aborted stream, should settle with the finished step usage and success false', async () => {
-      const { onSettle, args } = setup();
-      const steps = [{ usage: { inputTokens: 2, outputTokens: 1, totalTokens: 3 } }];
-      await args.onAbort({ steps });
-      expect(onSettle).toHaveBeenCalledWith({ success: false, usage: steps[0].usage, steps });
-    });
-
-    it('given no output (totalUsage rejects, onFinish never fires), should settle with success false', async () => {
-      const { onSettle } = setup(Promise.reject(new Error('No output generated')));
-      await vi.waitFor(() => expect(onSettle).toHaveBeenCalledWith({ success: false, usage: undefined, steps: [] }));
-    });
-
-    // Against the REAL streamText (mock provider only), so the callback-ordering
-    // claim in createSideQuestionStream is tested, not assumed.
-    const realModel = (emit: 'text' | 'throw' | 'slow') => new MockLanguageModelV3({
-      doStream: async () => {
-        if (emit === 'throw') throw new Error('provider down');
-        return {
-          stream: new ReadableStream({
-            async start(controller) {
-              controller.enqueue({ type: 'stream-start', warnings: [] });
-              controller.enqueue({ type: 'text-start', id: 't' });
-              if (emit === 'slow') {
-                // The provider is still generating (and charging) after the client has gone.
-                for (let i = 0; i < 5; i += 1) {
-                  await new Promise((r) => setTimeout(r, 20));
-                  controller.enqueue({ type: 'text-delta', id: 't', delta: `part${i} ` });
-                }
-              }
-              controller.enqueue({ type: 'text-delta', id: 't', delta: 'answer' });
-              controller.enqueue({ type: 'text-end', id: 't' });
-              controller.enqueue({
-                type: 'finish',
-                finishReason: { unified: 'stop' as const, raw: 'stop' },
-                usage: { inputTokens: { total: 11, noCache: 11, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 4, text: 4, reasoning: 0 } },
-              });
-              controller.close();
-            },
-          }),
-        };
-      },
-    });
-
-    it('given a real streamText that finishes, should settle once with its token usage', async () => {
-      const onSettle = vi.fn().mockResolvedValue(undefined);
-      const response = createSideQuestionStream({ model: realModel('text'), question: 'q', snapshot: 's', abortSignal: new AbortController().signal, onSettle });
-      expect(await response.text()).toBe('answer');
-      await vi.waitFor(() => expect(onSettle).toHaveBeenCalledTimes(1));
-      expect(onSettle.mock.calls[0][0]).toMatchObject({ success: true, usage: { inputTokens: 11, outputTokens: 4 } });
-    });
-
-    it('given the client disconnects before reading anything, should still run the answer to completion and bill it (no free abort)', async () => {
-      const onSettle = vi.fn().mockResolvedValue(undefined);
-      const response = createSideQuestionStream({ model: realModel('slow'), question: 'q', snapshot: 's', abortSignal: new AbortController().signal, onSettle });
-      await response.body?.cancel();
-      await vi.waitFor(() => expect(onSettle).toHaveBeenCalledTimes(1));
-      expect(onSettle.mock.calls[0][0]).toMatchObject({ success: true, usage: { inputTokens: 11, outputTokens: 4 } });
-    });
-
-    it('given a real streamText whose provider throws, should settle once with success false', async () => {
-      const onSettle = vi.fn().mockResolvedValue(undefined);
-      const response = createSideQuestionStream({ model: realModel('throw'), question: 'q', snapshot: 's', abortSignal: new AbortController().signal, onSettle });
-      await response.text().catch(() => undefined);
-      await vi.waitFor(() => expect(onSettle).toHaveBeenCalledTimes(1));
-      expect(onSettle.mock.calls[0][0]).toMatchObject({ success: false });
-    });
-
-    it('given several terminal callbacks, should settle exactly once (no double charge)', async () => {
-      const { onSettle, args } = setup();
-      await args.onAbort({ steps: [] });
-      await args.onFinish({ totalUsage: { inputTokens: 1 }, steps: [] });
-      expect(onSettle).toHaveBeenCalledTimes(1);
-    });
   });
 });

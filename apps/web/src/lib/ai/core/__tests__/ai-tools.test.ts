@@ -194,6 +194,7 @@ import { taskManagementTools } from '../../tools/task-management-tools';
 import { agentTools } from '../../tools/agent-tools';
 import { agentCommunicationTools } from '../../tools/agent-communication-tools';
 import { webSearchTools } from '../../tools/web-search-tools';
+import { httpRequestTools } from '../../tools/http-request-tools';
 import { activityTools } from '../../tools/activity-tools';
 import { calendarReadTools } from '../../tools/calendar-read-tools';
 import { calendarWriteTools } from '../../tools/calendar-write-tools';
@@ -253,6 +254,7 @@ describe('ai-tools', () => {
         ...agentTools,
         ...agentCommunicationTools,
         ...webSearchTools,
+        ...httpRequestTools,
         ...activityTools,
         ...calendarReadTools,
         ...calendarWriteTools,
@@ -336,6 +338,36 @@ describe('ai-tools', () => {
         read_shell: {},
         kill_shell: {},
       }) as never;
+
+    it('given the flag disabled, should not build or register the browser tools (G6a)', () => {
+      let built = false;
+      const tools = buildPageSpaceTools({
+        codeExecutionEnabled: false,
+        browserToolsFactory: () => {
+          built = true;
+          return { browser_navigate: {} } as never;
+        },
+      });
+      expect(tools).not.toHaveProperty('browser_navigate');
+      expect(built).toBe(false);
+    });
+
+    it('given the flag enabled, should register whatever the browser factory builds — none when no substrate is configured', () => {
+      const configured = buildPageSpaceTools({
+        codeExecutionEnabled: true,
+        sandboxToolsFactory: () => ({}),
+        sandboxGitToolsFactory: () => ({}),
+        browserToolsFactory: () => ({ browser_navigate: { name: 'browser_navigate' }, browser_read: { name: 'browser_read' } }) as never,
+      });
+      const unconfigured = buildPageSpaceTools({
+        codeExecutionEnabled: true,
+        sandboxToolsFactory: () => ({}),
+        sandboxGitToolsFactory: () => ({}),
+        browserToolsFactory: () => ({}),
+      });
+      expect(Object.keys(configured).filter((name) => name.startsWith('browser_')).sort()).toEqual(['browser_navigate', 'browser_read']);
+      expect(Object.keys(unconfigured).filter((name) => name.startsWith('browser_'))).toEqual([]);
+    });
 
     it('given the flag disabled, should not register bash/writeFile/readFile or call the factory', () => {
       let built = false;

@@ -1,5 +1,5 @@
 {
-  "id": "f749da13-d136-4cf9-ad88-99a2e98746ce",
+  "id": "37e2181d-c082-41fa-82aa-fe5bbb849d6f",
   "prevId": "304fb5fb-fdc7-43cf-9f0d-b2d92b5eecaf",
   "version": "7",
   "dialect": "postgresql",
@@ -898,14 +898,6 @@
           "primaryKey": false,
           "notNull": true,
           "default": "'email'"
-        },
-        "accountType": {
-          "name": "accountType",
-          "type": "AccountType",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'human'"
         },
         "tokenVersion": {
           "name": "tokenVersion",
@@ -24027,8 +24019,8 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.agent_claims": {
-      "name": "agent_claims",
+    "public.agent_account_approvals": {
+      "name": "agent_account_approvals",
       "schema": "",
       "columns": {
         "id": {
@@ -24037,363 +24029,81 @@
           "primaryKey": true,
           "notNull": true
         },
-        "agentUserId": {
-          "name": "agentUserId",
+        "accountId": {
+          "name": "accountId",
           "type": "text",
           "primaryKey": false,
           "notNull": true
         },
-        "ownerUserId": {
-          "name": "ownerUserId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "userCodeHash": {
-          "name": "userCodeHash",
+        "requestDigest": {
+          "name": "requestDigest",
           "type": "text",
           "primaryKey": false,
           "notNull": true
         },
-        "expiresAt": {
-          "name": "expiresAt",
-          "type": "timestamp",
+        "outcome": {
+          "name": "outcome",
+          "type": "agent_account_approval_outcome",
+          "typeSchema": "public",
           "primaryKey": false,
           "notNull": true
         },
-        "approvedAt": {
-          "name": "approvedAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "deniedAt": {
-          "name": "deniedAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "redeemedAt": {
-          "name": "redeemedAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "lastPolledAt": {
-          "name": "lastPolledAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "pollIntervalSeconds": {
-          "name": "pollIntervalSeconds",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 5
-        },
-        "createdAt": {
-          "name": "createdAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "agent_claims_agent_user_id_idx": {
-          "name": "agent_claims_agent_user_id_idx",
-          "columns": [
-            {
-              "expression": "agentUserId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "agent_claims_owner_user_id_idx": {
-          "name": "agent_claims_owner_user_id_idx",
-          "columns": [
-            {
-              "expression": "ownerUserId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "agent_claims_expires_at_idx": {
-          "name": "agent_claims_expires_at_idx",
-          "columns": [
-            {
-              "expression": "expiresAt",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "agent_claims_agentUserId_users_id_fk": {
-          "name": "agent_claims_agentUserId_users_id_fk",
-          "tableFrom": "agent_claims",
-          "tableTo": "users",
-          "columnsFrom": [
-            "agentUserId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "agent_claims_ownerUserId_users_id_fk": {
-          "name": "agent_claims_ownerUserId_users_id_fk",
-          "tableFrom": "agent_claims",
-          "tableTo": "users",
-          "columnsFrom": [
-            "ownerUserId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "agent_claims_userCodeHash_unique": {
-          "name": "agent_claims_userCodeHash_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "userCodeHash"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.agent_identities": {
-      "name": "agent_identities",
-      "schema": "",
-      "columns": {
-        "userId": {
-          "name": "userId",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "secretHash": {
-          "name": "secretHash",
+        "approvedByUserId": {
+          "name": "approvedByUserId",
           "type": "text",
           "primaryKey": false,
           "notNull": true
         },
-        "secretPrefix": {
-          "name": "secretPrefix",
+        "approvedViaSessionId": {
+          "name": "approvedViaSessionId",
           "type": "text",
           "primaryKey": false,
           "notNull": true
         },
-        "secretVersion": {
-          "name": "secretVersion",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 1
-        },
-        "claimTokenHash": {
-          "name": "claimTokenHash",
+        "stepUpChallengeId": {
+          "name": "stepUpChallengeId",
           "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "claimTokenPrefix": {
-          "name": "claimTokenPrefix",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "source": {
-          "name": "source",
-          "type": "varchar(120)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "ownerUserId": {
-          "name": "ownerUserId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "claimedAt": {
-          "name": "claimedAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "createdByIp": {
-          "name": "createdByIp",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "lastAuthAt": {
-          "name": "lastAuthAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "revokedAt": {
-          "name": "revokedAt",
-          "type": "timestamp",
           "primaryKey": false,
           "notNull": false
         },
         "createdAt": {
           "name": "createdAt",
-          "type": "timestamp",
+          "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
-        }
-      },
-      "indexes": {
-        "agent_identities_owner_user_id_idx": {
-          "name": "agent_identities_owner_user_id_idx",
-          "columns": [
-            {
-              "expression": "ownerUserId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "agent_identities_userId_users_id_fk": {
-          "name": "agent_identities_userId_users_id_fk",
-          "tableFrom": "agent_identities",
-          "tableTo": "users",
-          "columnsFrom": [
-            "userId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "agent_identities_ownerUserId_users_id_fk": {
-          "name": "agent_identities_ownerUserId_users_id_fk",
-          "tableFrom": "agent_identities",
-          "tableTo": "users",
-          "columnsFrom": [
-            "ownerUserId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "agent_identities_secretHash_unique": {
-          "name": "agent_identities_secretHash_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "secretHash"
-          ]
-        },
-        "agent_identities_claimTokenHash_unique": {
-          "name": "agent_identities_claimTokenHash_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "claimTokenHash"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.agent_signup_challenges": {
-      "name": "agent_signup_challenges",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "challengeHash": {
-          "name": "challengeHash",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "difficultyBits": {
-          "name": "difficultyBits",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "issuedToIp": {
-          "name": "issuedToIp",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
         },
         "expiresAt": {
           "name": "expiresAt",
-          "type": "timestamp",
+          "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true
         },
         "consumedAt": {
           "name": "consumedAt",
-          "type": "timestamp",
+          "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
         },
-        "createdAt": {
-          "name": "createdAt",
-          "type": "timestamp",
+        "consumedByGrantId": {
+          "name": "consumedByGrantId",
+          "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
+          "notNull": false
         }
       },
       "indexes": {
-        "agent_signup_challenges_expires_at_idx": {
-          "name": "agent_signup_challenges_expires_at_idx",
+        "agent_account_approvals_account_digest_idx": {
+          "name": "agent_account_approvals_account_digest_idx",
           "columns": [
             {
-              "expression": "expiresAt",
+              "expression": "accountId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "requestDigest",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -24405,31 +24115,555 @@
           "with": {}
         }
       },
-      "foreignKeys": {},
+      "foreignKeys": {
+        "agent_account_approvals_accountId_agent_accounts_id_fk": {
+          "name": "agent_account_approvals_accountId_agent_accounts_id_fk",
+          "tableFrom": "agent_account_approvals",
+          "tableTo": "agent_accounts",
+          "columnsFrom": [
+            "accountId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "agent_account_approvals_approvedByUserId_users_id_fk": {
+          "name": "agent_account_approvals_approvedByUserId_users_id_fk",
+          "tableFrom": "agent_account_approvals",
+          "tableTo": "users",
+          "columnsFrom": [
+            "approvedByUserId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "agent_signup_challenges_challengeHash_unique": {
-          "name": "agent_signup_challenges_challengeHash_unique",
-          "nullsNotDistinct": false,
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "agent_account_approvals_consumed_chk": {
+          "name": "agent_account_approvals_consumed_chk",
+          "value": "(\"agent_account_approvals\".\"consumedAt\" IS NULL) = (\"agent_account_approvals\".\"consumedByGrantId\" IS NULL)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.agent_account_bindings": {
+      "name": "agent_account_bindings",
+      "schema": "",
+      "columns": {
+        "accountId": {
+          "name": "accountId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "agentPageId": {
+          "name": "agentPageId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "boundByUserId": {
+          "name": "boundByUserId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "boundAt": {
+          "name": "boundAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "revokedAt": {
+          "name": "revokedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "agent_account_bindings_agent_page_id_idx": {
+          "name": "agent_account_bindings_agent_page_id_idx",
           "columns": [
-            "challengeHash"
+            {
+              "expression": "agentPageId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "agent_account_bindings_accountId_agent_accounts_id_fk": {
+          "name": "agent_account_bindings_accountId_agent_accounts_id_fk",
+          "tableFrom": "agent_account_bindings",
+          "tableTo": "agent_accounts",
+          "columnsFrom": [
+            "accountId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "agent_account_bindings_agentPageId_pages_id_fk": {
+          "name": "agent_account_bindings_agentPageId_pages_id_fk",
+          "tableFrom": "agent_account_bindings",
+          "tableTo": "pages",
+          "columnsFrom": [
+            "agentPageId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "agent_account_bindings_boundByUserId_users_id_fk": {
+          "name": "agent_account_bindings_boundByUserId_users_id_fk",
+          "tableFrom": "agent_account_bindings",
+          "tableTo": "users",
+          "columnsFrom": [
+            "boundByUserId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "agent_account_bindings_accountId_agentPageId_pk": {
+          "name": "agent_account_bindings_accountId_agentPageId_pk",
+          "columns": [
+            "accountId",
+            "agentPageId"
           ]
         }
       },
+      "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.agent_account_delegations": {
+      "name": "agent_account_delegations",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "accountId": {
+          "name": "accountId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "agentPageId": {
+          "name": "agentPageId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "delegatedByUserId": {
+          "name": "delegatedByUserId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "scope": {
+          "name": "scope",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "expiresAt": {
+          "name": "expiresAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "revokedAt": {
+          "name": "revokedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "agent_account_delegations_account_id_idx": {
+          "name": "agent_account_delegations_account_id_idx",
+          "columns": [
+            {
+              "expression": "accountId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "agent_account_delegations_accountId_agent_accounts_id_fk": {
+          "name": "agent_account_delegations_accountId_agent_accounts_id_fk",
+          "tableFrom": "agent_account_delegations",
+          "tableTo": "agent_accounts",
+          "columnsFrom": [
+            "accountId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "agent_account_delegations_agentPageId_pages_id_fk": {
+          "name": "agent_account_delegations_agentPageId_pages_id_fk",
+          "tableFrom": "agent_account_delegations",
+          "tableTo": "pages",
+          "columnsFrom": [
+            "agentPageId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "agent_account_delegations_delegatedByUserId_users_id_fk": {
+          "name": "agent_account_delegations_delegatedByUserId_users_id_fk",
+          "tableFrom": "agent_account_delegations",
+          "tableTo": "users",
+          "columnsFrom": [
+            "delegatedByUserId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.agent_accounts": {
+      "name": "agent_accounts",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "agent_account_kind",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ownerKind": {
+          "name": "ownerKind",
+          "type": "agent_account_owner_kind",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ownerUserId": {
+          "name": "ownerUserId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "ownerAgentPageId": {
+          "name": "ownerAgentPageId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "ownerDriveId": {
+          "name": "ownerDriveId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "tenantId": {
+          "name": "tenantId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "providerSlug": {
+          "name": "providerSlug",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "allowedOrigins": {
+          "name": "allowedOrigins",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "auxiliaryOrigins": {
+          "name": "auxiliaryOrigins",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
+        },
+        "resourceRestrictions": {
+          "name": "resourceRestrictions",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "approvalPolicy": {
+          "name": "approvalPolicy",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "credentialVersion": {
+          "name": "credentialVersion",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "policyVersion": {
+          "name": "policyVersion",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "acknowledgment": {
+          "name": "acknowledgment",
+          "type": "agent_account_acknowledgment",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sessionFormat": {
+          "name": "sessionFormat",
+          "type": "agent_account_session_format",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "sessionHttpEnabled": {
+          "name": "sessionHttpEnabled",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "status": {
+          "name": "status",
+          "type": "agent_account_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'active'"
+        },
+        "upstreamRevocation": {
+          "name": "upstreamRevocation",
+          "type": "agent_account_upstream_revocation",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "lastUsedAt": {
+          "name": "lastUsedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updatedAt": {
+          "name": "updatedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "revokedAt": {
+          "name": "revokedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "agent_accounts_owner_user_id_idx": {
+          "name": "agent_accounts_owner_user_id_idx",
+          "columns": [
+            {
+              "expression": "ownerUserId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "agent_accounts_owner_agent_page_id_idx": {
+          "name": "agent_accounts_owner_agent_page_id_idx",
+          "columns": [
+            {
+              "expression": "ownerAgentPageId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "agent_accounts_owner_drive_id_idx": {
+          "name": "agent_accounts_owner_drive_id_idx",
+          "columns": [
+            {
+              "expression": "ownerDriveId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "agent_accounts_ownerUserId_users_id_fk": {
+          "name": "agent_accounts_ownerUserId_users_id_fk",
+          "tableFrom": "agent_accounts",
+          "tableTo": "users",
+          "columnsFrom": [
+            "ownerUserId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "agent_accounts_ownerAgentPageId_pages_id_fk": {
+          "name": "agent_accounts_ownerAgentPageId_pages_id_fk",
+          "tableFrom": "agent_accounts",
+          "tableTo": "pages",
+          "columnsFrom": [
+            "ownerAgentPageId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "agent_accounts_ownerDriveId_drives_id_fk": {
+          "name": "agent_accounts_ownerDriveId_drives_id_fk",
+          "tableFrom": "agent_accounts",
+          "tableTo": "drives",
+          "columnsFrom": [
+            "ownerDriveId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "agent_accounts_owner_scope_chk": {
+          "name": "agent_accounts_owner_scope_chk",
+          "value": "(\"agent_accounts\".\"ownerKind\" = 'user' AND \"agent_accounts\".\"ownerUserId\" IS NOT NULL AND \"agent_accounts\".\"ownerAgentPageId\" IS NULL AND \"agent_accounts\".\"ownerDriveId\" IS NULL)\n        OR (\"agent_accounts\".\"ownerKind\" = 'agent_page' AND \"agent_accounts\".\"ownerUserId\" IS NULL AND \"agent_accounts\".\"ownerAgentPageId\" IS NOT NULL AND \"agent_accounts\".\"ownerDriveId\" IS NOT NULL)"
+        },
+        "agent_accounts_tenant_derived_chk": {
+          "name": "agent_accounts_tenant_derived_chk",
+          "value": "(\"agent_accounts\".\"ownerKind\" = 'user' AND \"agent_accounts\".\"tenantId\" = 'user:' || \"agent_accounts\".\"ownerUserId\")\n        OR (\"agent_accounts\".\"ownerKind\" = 'agent_page' AND \"agent_accounts\".\"tenantId\" = 'drive:' || \"agent_accounts\".\"ownerDriveId\")"
+        },
+        "agent_accounts_allowed_origins_nonempty_chk": {
+          "name": "agent_accounts_allowed_origins_nonempty_chk",
+          "value": "jsonb_typeof(\"agent_accounts\".\"allowedOrigins\") = 'array' AND jsonb_array_length(\"agent_accounts\".\"allowedOrigins\") > 0"
+        },
+        "agent_accounts_session_format_chk": {
+          "name": "agent_accounts_session_format_chk",
+          "value": "(\"agent_accounts\".\"kind\" = 'session') = (\"agent_accounts\".\"sessionFormat\" IS NOT NULL)"
+        },
+        "agent_accounts_session_http_chk": {
+          "name": "agent_accounts_session_http_chk",
+          "value": "\"agent_accounts\".\"sessionHttpEnabled\" = false OR \"agent_accounts\".\"kind\" = 'session'"
+        },
+        "agent_accounts_versions_chk": {
+          "name": "agent_accounts_versions_chk",
+          "value": "\"agent_accounts\".\"credentialVersion\" >= 0 AND \"agent_accounts\".\"policyVersion\" >= 1"
+        }
+      },
       "isRLSEnabled": false
     }
   },
   "enums": {
-    "public.AccountType": {
-      "name": "AccountType",
-      "schema": "public",
-      "values": [
-        "human",
-        "agent"
-      ]
-    },
     "public.AuthProvider": {
       "name": "AuthProvider",
       "schema": "public",
@@ -24941,6 +25175,71 @@
         "completed",
         "failed",
         "cancelled"
+      ]
+    },
+    "public.agent_account_acknowledgment": {
+      "name": "agent_account_acknowledgment",
+      "schema": "public",
+      "values": [
+        "dedicated_agent_account",
+        "personal_login_acknowledged"
+      ]
+    },
+    "public.agent_account_approval_outcome": {
+      "name": "agent_account_approval_outcome",
+      "schema": "public",
+      "values": [
+        "allow_once",
+        "always",
+        "deny"
+      ]
+    },
+    "public.agent_account_kind": {
+      "name": "agent_account_kind",
+      "schema": "public",
+      "values": [
+        "api_key",
+        "bearer",
+        "oauth2",
+        "session",
+        "password"
+      ]
+    },
+    "public.agent_account_owner_kind": {
+      "name": "agent_account_owner_kind",
+      "schema": "public",
+      "values": [
+        "user",
+        "agent_page"
+      ]
+    },
+    "public.agent_account_session_format": {
+      "name": "agent_account_session_format",
+      "schema": "public",
+      "values": [
+        "cookie-jar-v1",
+        "storage-state-v1",
+        "human-relogin"
+      ]
+    },
+    "public.agent_account_status": {
+      "name": "agent_account_status",
+      "schema": "public",
+      "values": [
+        "active",
+        "revoked",
+        "needs_reauth",
+        "deleted"
+      ]
+    },
+    "public.agent_account_upstream_revocation": {
+      "name": "agent_account_upstream_revocation",
+      "schema": "public",
+      "values": [
+        "not_attempted",
+        "revoked",
+        "unsupported",
+        "failed"
       ]
     }
   },

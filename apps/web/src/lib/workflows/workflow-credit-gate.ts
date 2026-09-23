@@ -24,8 +24,10 @@ export interface WorkflowCreditInput {
 
 /**
  * Gate a workflow run on the billed user's credit (`createdBy`) and reserve a
- * hold sized for every ai step. Runs INSIDE executeWorkflow so no entry point
- * can skip it; the executor releases the returned hold when the run ends.
+ * hold sized for every ai step. Runs INSIDE executeWorkflow, after the run's
+ * atomic claim and before any model is built, so no entry point can skip it
+ * and only the fire holding the claim is gated; the executor releases the
+ * returned hold when the run ends.
  * An unclaimed agent is refused here (`requires_funding`) exactly as every
  * other AI surface refuses it.
  */

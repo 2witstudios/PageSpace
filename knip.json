@@ -182,6 +182,15 @@
     "packages/lib": {
       "entry": [
         "src/agent-accounts/grant.ts",
+        "src/agent-accounts/executor/plane-main.ts",
+        "src/agent-accounts/account-authority-executor.ts",
+        "src/agent-accounts/account-facts-repository.ts",
+        "src/agent-accounts/agent-account-repository.ts",
+        "src/agent-accounts/plane-client.ts",
+        "src/agent-accounts/to-safe-account.ts",
+        "src/agent-accounts/decide-account-creation.ts",
+        "src/agent-accounts/decide-acknowledgment.ts",
+        "src/agent-accounts/to-http-request-tool-result.ts",
         "src/agent-accounts/canonical-request.ts",
         "src/agent-accounts/approval.ts",
         "src/agent-accounts/audit.ts",
@@ -602,6 +611,17 @@
         "server-only",
         "@react-email/preview-server",
         "@types/xlsx"
+      ]
+    },
+    "packages/browser-worker": {
+      "entry": [
+        "src/*.ts"
+      ],
+      "project": [
+        "src/**/*.ts"
+      ],
+      "ignore": [
+        "src/**/__tests__/**"
       ]
     },
     "packages/editor": {

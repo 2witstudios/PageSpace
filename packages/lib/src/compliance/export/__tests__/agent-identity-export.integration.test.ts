@@ -86,7 +86,8 @@ describe('collectUserAgentIdentity (real Postgres)', () => {
       profile, drives: [], pages: [], sheets: [], messages: [], files: [], activity: [], systemLogs: [],
       apiMetrics: [], errorLogs: [], aiUsage: [], tasks: [], sessions: [], notifications: [],
       displayPreferences: [], settings: { hotkeys: [], automation: null, toastNotifications: null, emailNotifications: [] },
-      personalization: null, personalizationCandidates: [], agentWorkspaces: [], streamState: [], contentTags: [],
+      personalization: null, personalizationCandidates: [], agentWorkspaces: [],
+      agentAccounts: { accounts: [], approvalsGiven: [], bindingsMade: [], delegationsGiven: [] }, streamState: [], contentTags: [],
       localEnvironments: [], agentIdentity,
     } satisfies AllUserData;
 

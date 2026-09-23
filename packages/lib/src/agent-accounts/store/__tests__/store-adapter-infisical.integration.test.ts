@@ -17,7 +17,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Pool } from 'pg';
-import { createHash, createPublicKey, generateKeyPairSync, sign as nodeSign, verify as nodeVerify } from 'node:crypto';
+import { createHash, createHmac, createPublicKey, generateKeyPairSync, randomBytes, sign as nodeSign, verify as nodeVerify } from 'node:crypto';
 import { get } from 'node:http';
 import type { AccountId, PolicyVersion, TenantId } from '@pagespace/db/schema/agent-accounts';
 import type { CanonicalOrigin } from '../../canonical-request';
@@ -59,20 +59,26 @@ import type {
   StoreChannel,
   StoreIdentity,
   VerifiedGrant,
+  HmacBytes,
+  WriteDigestKey,
 } from '../store-adapter';
 import type { ConsentId } from '../../grant';
-import type { ConsumeOutcome } from '../../replay-store-repository';
 import { digestBindings } from '../digest-bindings';
 import { digestPlaneScope } from '../digest-plane-scope';
-import { createInfisicalClient } from '../infisical-client';
+import { createInfisicalClient, type InfisicalClient } from '../infisical-client';
 import { createPlaneMetadataRepository, type PlaneMetadataRepository } from '../plane-metadata-repository';
 import { createInfisicalStoreAdapter } from '../store-adapter-infisical';
+import { createConsentLedgerRepository, type ConsentLedger } from '../consent-ledger-repository';
+import { createInfisicalTenantProvisioner } from '../infisical-tenant-provisioner-client';
 
 const INFISICAL_URL = process.env.INFISICAL_DEV_URL ?? 'http://localhost:8080';
 const INFISICAL_ADMIN_TOKEN = process.env.INFISICAL_DEV_ADMIN_TOKEN;
 const METADATA_URL = process.env.PLANE_METADATA_DEV_URL ?? 'postgres://plane_metadata:plane_metadata@127.0.0.1:55433/plane_metadata';
 
 const hash: HashBytes = (bytes) => createHash('sha3-256').update(bytes).digest('hex');
+// G2 ruling 4: the plane-held pending-write digest key (a fresh one per run — the plane's own secret).
+const WRITE_DIGEST_KEY = new Uint8Array(randomBytes(32)) as WriteDigestKey;
+const hmac: HmacBytes = (key, bytes) => createHmac('sha3-256', key).update(bytes).digest('hex');
 const consentKey = generateKeyPairSync('ed25519');
 const CONSENT_PUBLIC_KEY = new Uint8Array(consentKey.publicKey.export({ type: 'spki', format: 'der' }));
 const verifyEd25519: Ed25519Verify = (message, signature, publicKey) =>
@@ -128,17 +134,8 @@ function recordOver(bindings: PlaneBindings, scope: PlaneScope, consenters: Plan
   return { bindings: { ...bindings, allowedOrigins: scope.allowedOrigins, policyDigest: digestPlaneScope({ scope, hash }) }, scope, consenters };
 }
 
-/** An in-memory single-use consent ledger standing in for the replay store (its own integration test covers the real one). */
-function memoryConsentLedger() {
-  const consumed = new Set<string>();
-  return {
-    consume: async ({ consentId }: { readonly consentId: ConsentId; readonly expiresAt: number; readonly now: number }): Promise<ConsumeOutcome> => {
-      if (consumed.has(consentId)) return 'replayed';
-      consumed.add(consentId);
-      return 'consumed';
-    },
-  };
-}
+/** The REAL single-use consent ledger, in the plane's own metadata store (G2 ruling 3). */
+const planeConsentLedger = () => createConsentLedgerRepository({ pool: pool as never });
 
 type Loose<I extends { readonly identity: StoreIdentity }> = Omit<I, 'identity' | 'scope' | 'consenters'> & {
   readonly identity: Omit<StoreIdentity, 'channel'> & { readonly channel?: StoreChannel };
@@ -265,9 +262,14 @@ afterAll(async () => {
 
 function makeRawAdapter({
   wrapMetadata = (m: PlaneMetadataRepository) => m,
-  consentLedger = memoryConsentLedger(),
-}: { readonly wrapMetadata?: (m: PlaneMetadataRepository) => PlaneMetadataRepository; readonly consentLedger?: ReturnType<typeof memoryConsentLedger> } = {}): StoreAdapter {
-  const infisical = createInfisicalClient({ baseUrl: INFISICAL_URL, environment: 'dev' });
+  wrapInfisical = (c: InfisicalClient) => c,
+  consentLedger = planeConsentLedger(),
+}: {
+  readonly wrapMetadata?: (m: PlaneMetadataRepository) => PlaneMetadataRepository;
+  readonly wrapInfisical?: (c: InfisicalClient) => InfisicalClient;
+  readonly consentLedger?: ConsentLedger;
+} = {}): StoreAdapter {
+  const infisical = wrapInfisical(createInfisicalClient({ baseUrl: INFISICAL_URL, environment: 'dev' }));
   const realMetadata = createPlaneMetadataRepository({ pool: pool as never });
   const metadata = { ...wrapMetadata(realMetadata), advisoryLockPool: realMetadata.advisoryLockPool };
   const projects: Record<string, string> = { [TENANT_A]: projectAId, [TENANT_B]: projectBId, [TENANT_PAGE]: projectAId };
@@ -282,6 +284,8 @@ function makeRawAdapter({
     resolveProject: async (tenantId) => (projects[tenantId] ? { projectId: projects[tenantId] } : null),
     resolveCredentials: async ({ identityId }) => identities[identityId] ?? null,
     hash,
+    writeDigestKey: WRITE_DIGEST_KEY,
+    hmac,
     now: () => Date.now(),
     consentPublicKey: CONSENT_PUBLIC_KEY,
     verify: verifyEd25519,
@@ -1172,10 +1176,12 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
         throw new Error('synthetic credential store outage');
       },
       hash,
+      writeDigestKey: WRITE_DIGEST_KEY,
+      hmac,
       now: () => Date.now(),
       consentPublicKey: CONSENT_PUBLIC_KEY,
       verify: verifyEd25519,
-      consentLedger: memoryConsentLedger(),
+      consentLedger: planeConsentLedger(),
     });
     const settle = (promise: Promise<unknown>) => promise.catch((error: unknown) => ({ threw: String(error) }));
 
@@ -1344,7 +1350,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
   });
 
   it('given one owner consent applied twice, should refuse the second as consent_invalid — consent is single-use (G1c E2)', async () => {
-    const adapter = makeAdapter({ consentLedger: memoryConsentLedger() });
+    const adapter = makeAdapter({ consentLedger: planeConsentLedger() });
     const accountId = `acct-g1c-consent-once-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
     const identity = baseIdentity();
@@ -1457,6 +1463,148 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
     });
   });
 
+  // L2·G2 — D-29 = B at runtime: one project + one member identity per tenant, created on first use,
+  // with short-lived client secrets minted per operation and never stored.
+  const makeProvisioner = () => {
+    const metadata = createPlaneMetadataRepository({ pool: pool as never });
+    return createInfisicalTenantProvisioner({ baseUrl: INFISICAL_URL, organizationId: orgId, auth: { kind: 'token', token: INFISICAL_ADMIN_TOKEN ?? '' }, pool: pool as never, advisoryLockPool: metadata.advisoryLockPool });
+  };
+
+  it('given a tenant used for the first time, twice and concurrently, should provision exactly one project and identity and record only ids (G2, D-29)', async () => {
+    const provisioner = makeProvisioner();
+    const tenantId = `user:g2-prov-${NOW}` as TenantId;
+    const [first, second] = await Promise.all([provisioner.ensureTenant(tenantId), provisioner.ensureTenant(tenantId)]);
+    const again = await provisioner.ensureTenant(tenantId);
+    const rows = await pool.query('SELECT * FROM agent_account_plane_tenants WHERE tenant_id = $1', [tenantId]);
+    const actual = {
+      same: first !== null && second !== null && again !== null && first.projectId === second.projectId && first.projectId === again.projectId && first.identityId === again.identityId,
+      rowCount: rows.rows.length,
+      columns: Object.keys(rows.rows[0] ?? {}).sort(),
+    };
+    const expected = { same: true, rowCount: 1, columns: ['client_id', 'created_at', 'identity_id', 'project_id', 'tenant_id'] };
+    expect(actual).toEqual(expected);
+  });
+
+  it('given provisioned tenants, should mint working credentials for a tenant only for its own identity, and the adapter should put and resolve through them (G2, D-29)', async () => {
+    const provisioner = makeProvisioner();
+    const tenantX = `user:g2-prov-x-${NOW}` as TenantId;
+    const tenantY = `user:g2-prov-y-${NOW}` as TenantId;
+    const x = await provisioner.ensureTenant(tenantX);
+    const y = await provisioner.ensureTenant(tenantY);
+    const crossTenant = await provisioner.credentialsFor({ tenantId: tenantX, identityId: y?.identityId ?? '' });
+
+    const realMetadata = createPlaneMetadataRepository({ pool: pool as never });
+    const adapter = createInfisicalStoreAdapter({
+      infisical: createInfisicalClient({ baseUrl: INFISICAL_URL, environment: 'dev' }),
+      metadata: realMetadata,
+      advisoryLockPool: realMetadata.advisoryLockPool,
+      resolveProject: (tenantId) => provisioner.projectOf(tenantId),
+      resolveCredentials: (input) => provisioner.credentialsFor(input),
+      hash,
+      writeDigestKey: WRITE_DIGEST_KEY,
+      hmac,
+      now: () => Date.now(),
+      consentPublicKey: CONSENT_PUBLIC_KEY,
+      verify: verifyEd25519,
+      consentLedger: planeConsentLedger(),
+    });
+    const accountId = `acct-g2-prov-${NOW}` as AccountId;
+    const bindings: PlaneBindings = { ...plainBindings(), tenantId: tenantX, ownerRef: { kind: 'user', userId: `g2-prov-x-${NOW}` } };
+    const ref = { tenantId: tenantX, accountId, kind: 'api_key' as const };
+    const identityBase = { tenantId: tenantX, identityId: x?.identityId ?? '', blastRadius: 'tenant' as const };
+    const put = await adapter.put({ ref, material: API_KEY_V1, expectedVersion: null, bindings, scope: EXAMPLE_SCOPE, consenters: OWNER_CONSENTERS, identity: { ...identityBase, channel: 'ingress' } });
+    const grant = makeGrant({ accountId, tenantId: tenantX, credentialVersion: 1 as never, bindingDigest: digestBindings({ bindings, hash }) });
+    const resolved = await adapter.resolve({ ref, version: 1 as never, grant, identity: { ...identityBase, channel: 'http-executor' } });
+
+    const actual = { crossTenant, put, value: resolved.ok ? (resolved.material as { value: string }).value : resolved };
+    const expected = { crossTenant: null, put: { ok: true, version: 1 }, value: 'sk-g1c-v1' };
+    expect(actual).toEqual(expected);
+  });
+
+  // G2 ruling 3: the consent single-use ledger lives in the PLANE's metadata store. The main-DB writer
+  // is untrusted (R3), so a ledger it can delete rows from is a ledger it can replay a consent through.
+  it('given one owner consent presented to two plane replicas, should be consumed by exactly one, recorded in the plane metadata store (G2 ruling 3)', async () => {
+    const replicaA = createConsentLedgerRepository({ pool: pool as never });
+    const replicaB = createConsentLedgerRepository({ pool: pool as never });
+    const consentId = `consent-g2-ledger-${NOW}` as ConsentId;
+    const now = Date.now();
+    const outcomes = await Promise.all([replicaA.consume({ consentId, expiresAt: now + 300_000, now }), replicaB.consume({ consentId, expiresAt: now + 300_000, now })]);
+    const rows = await pool.query('SELECT consent_id FROM agent_account_consent_ledger WHERE consent_id = $1', [consentId]);
+
+    const actual = { outcomes: [...outcomes].sort(), rows: rows.rows };
+    const expected = { outcomes: ['consumed', 'replayed'], rows: [{ consent_id: consentId }] };
+    expect(actual).toEqual(expected);
+  });
+
+  it('given a plane ledger whose metadata store is unreachable, should answer unavailable — never assume fresh (G2 ruling 3)', async () => {
+    const deadPool = new Pool({ connectionString: 'postgres://plane_metadata:plane_metadata@127.0.0.1:1/plane_metadata', connectionTimeoutMillis: 500 });
+    const ledger = createConsentLedgerRepository({ pool: deadPool as never });
+    const now = Date.now();
+    const actual = await ledger.consume({ consentId: `consent-g2-dead-${NOW}` as ConsentId, expiresAt: now + 300_000, now });
+    await deadPool.end();
+    const expected = 'unavailable';
+    expect(actual).toEqual(expected);
+  });
+
+  // G2 ruling E1(a): the replacing write's login fails at REAL Infisical (wrong client secret), so the
+  // request never left the process — the marker must be gone before the put returns.
+  it('given a replacing write whose Infisical login fails before sending, should clear its pending marker in the same locked section and keep the ref in service (G2 ruling E1a)', async () => {
+    const plain = makeAdapter();
+    const badLogin = makeAdapter({
+      wrapInfisical: (c) => ({ ...c, updateSecret: (input) => c.updateSecret({ ...input, credentials: { ...input.credentials, clientSecret: 'not-the-secret' } }) }),
+    });
+    const accountId = `acct-g2-e1a-${NOW}` as AccountId;
+    const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
+    const identity = baseIdentity();
+    const grantV1 = makeGrant({ accountId, credentialVersion: 1 as never, bindingDigest: digestBindings({ bindings: plainBindings(), hash }) });
+    const valueOf = (result: Awaited<ReturnType<typeof plain.resolve>>) => (result.ok ? (result.material as { value: string }).value : result);
+
+    await plain.put({ ref, material: API_KEY_V1, expectedVersion: null, bindings: plainBindings(), identity });
+    const failed = await badLogin.put({ ref, material: API_KEY_V2, expectedVersion: 1 as never, bindings: plainBindings(), identity });
+    const rowAfterFailure = await secretVersionRow(accountId);
+    const stillServed = valueOf(await plain.resolve({ ref, version: 1 as never, grant: grantV1, identity }));
+    const retried = await plain.put({ ref, material: API_KEY_V2, expectedVersion: 1 as never, bindings: plainBindings(), identity });
+
+    const actual = { failed, rowAfterFailure, stillServed, retried };
+    const expected = {
+      failed: { ok: false, reason: 'store_unavailable' },
+      rowAfterFailure: [{ current_version: 1, previous_version: null, pending_version: null }],
+      stillServed: 'sk-g1c-v1',
+      retried: { ok: true, version: 2 },
+    };
+    expect(actual).toEqual(expected);
+  });
+
+  // G2 ruling E1(b): the write's outcome is UNKNOWN to the writer (it reports `unavailable` — a
+  // timeout after sending) but it never reached Infisical. The next locked call reads REAL Infisical,
+  // sees the committed version, aborts the marker and serves again instead of locking the account out.
+  it('given a reconcile-required ref whose Infisical copy is still the committed version, should abort the marker on the next call and return the ref to service (G2 ruling E1b)', async () => {
+    const plain = makeAdapter();
+    const lostWrite = makeAdapter({ wrapInfisical: (c) => ({ ...c, updateSecret: async () => ({ ok: false, reason: 'unavailable' }) }) });
+    const accountId = `acct-g2-e1b-${NOW}` as AccountId;
+    const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };
+    const identity = baseIdentity();
+    const grantV1 = makeGrant({ accountId, credentialVersion: 1 as never, bindingDigest: digestBindings({ bindings: plainBindings(), hash }) });
+    const valueOf = (result: Awaited<ReturnType<typeof plain.resolve>>) => (result.ok ? (result.material as { value: string }).value : result);
+
+    await plain.put({ ref, material: API_KEY_V1, expectedVersion: null, bindings: plainBindings(), identity });
+    const failed = await lostWrite.put({ ref, material: API_KEY_V2, expectedVersion: 1 as never, bindings: plainBindings(), identity });
+    const pendingRow = await secretVersionRow(accountId);
+    const servedAgain = valueOf(await plain.resolve({ ref, version: 1 as never, grant: grantV1, identity }));
+    const rowAfterAbort = await secretVersionRow(accountId);
+    const retried = await plain.put({ ref, material: API_KEY_V2, expectedVersion: 1 as never, bindings: plainBindings(), identity });
+
+    const actual = { failed, pendingRow, servedAgain, rowAfterAbort, retried };
+    const expected = {
+      failed: { ok: false, reason: 'write_unverified' },
+      pendingRow: [{ current_version: 1, previous_version: null, pending_version: 2 }],
+      servedAgain: 'sk-g1c-v1',
+      rowAfterAbort: [{ current_version: 1, previous_version: null, pending_version: null }],
+      retried: { ok: true, version: 2 },
+    };
+    expect(actual).toEqual(expected);
+  });
+
   it('given a first put whose commit failed, a retry with the same material should adopt the orphan and one with other material should erase it (G1c E1)', async () => {
     const plain = makeAdapter();
     const failing = makeAdapter({ wrapMetadata: (m) => ({ ...m, commit: async () => { throw new Error('synthetic plane metadata outage'); } }) });
@@ -1514,7 +1662,7 @@ describe.skipIf(!infisicalReachable)('createInfisicalStoreAdapter — integratio
   });
 
   it('given a revoked account, rebind should refuse revoked and leave the consent unspent (G1c review LOW)', async () => {
-    const ledger = memoryConsentLedger();
+    const ledger = planeConsentLedger();
     const adapter = makeAdapter({ consentLedger: ledger });
     const accountId = `acct-g1c-rebind-revoked-${NOW}` as AccountId;
     const ref = { tenantId: TENANT_A, accountId, kind: 'api_key' as const };

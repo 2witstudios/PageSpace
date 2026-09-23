@@ -20,6 +20,17 @@ import type { UIMessage } from 'ai';
  */
 export const MAX_QUEUED_SENDS = 10;
 
+/**
+ * The most entries the queue can HOLD, as opposed to how many the user may
+ * enqueue: the enqueue cap plus the one drained entry a rejected dispatch puts
+ * back (`applyRequeueQueuedSend`). The user can top the queue back up to the cap
+ * while that dispatch is in flight, and a rejection must still land — refusing it
+ * would silently lose a prompt the queue already accepted. Enqueue refuses at
+ * `MAX_QUEUED_SENDS`, and only one drained dispatch is in flight per
+ * conversation, so this bound holds. Every truncation (restore, persist) uses it.
+ */
+export const MAX_HELD_QUEUED_SENDS = MAX_QUEUED_SENDS + 1;
+
 export type QueuedSendsByConversationId = Record<string, UIMessage[]>;
 
 export interface EnqueueQueuedSendEvent {
@@ -106,6 +117,25 @@ export const applyClearQueuedSends = (
   [conversationId]: [],
 });
 
+/**
+ * Puts a drained entry whose dispatch REJECTED back at the head of the queue, so
+ * it is the next one out and the queue's order is unchanged. Bypasses the enqueue
+ * cap (see `MAX_HELD_QUEUED_SENDS`) and no-ops (same map object) when the id is
+ * already queued, so a racing restore cannot duplicate it.
+ */
+export const applyRequeueQueuedSend = (
+  queuedSendsByConversationId: QueuedSendsByConversationId,
+  event: EnqueueQueuedSendEvent,
+): QueuedSendsByConversationId => {
+  const existing = queuedSendsByConversationId[event.conversationId] ?? [];
+  if (existing.some((m) => m.id === event.message.id)) return queuedSendsByConversationId;
+
+  return {
+    ...queuedSendsByConversationId,
+    [event.conversationId]: [event.message, ...existing].slice(0, MAX_HELD_QUEUED_SENDS),
+  };
+};
+
 export interface SetQueuedSendsEvent {
   conversationId: string;
   messages: UIMessage[];
@@ -123,5 +153,5 @@ export const applySetQueuedSends = (
   event: SetQueuedSendsEvent,
 ): QueuedSendsByConversationId => ({
   ...queuedSendsByConversationId,
-  [event.conversationId]: event.messages.slice(0, MAX_QUEUED_SENDS),
+  [event.conversationId]: event.messages.slice(0, MAX_HELD_QUEUED_SENDS),
 });

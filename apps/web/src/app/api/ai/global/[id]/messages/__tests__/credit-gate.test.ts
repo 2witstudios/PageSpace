@@ -75,6 +75,7 @@ vi.mock('@/lib/auth', () => ({
   // Session auth = unscoped, which is all this route accepts. Stubbed because
   // the route passes the scope ceiling into the Home-drive hint.
   getAllowedDriveIds: vi.fn(() => []),
+  authSessionIdOf: vi.fn<typeof import('@/lib/auth').authSessionIdOf>((result) => (result.tokenType === 'session' ? result.sessionId : undefined)),
 }));
 
 vi.mock('@/lib/ai/core/stream-takeover', () => ({
@@ -251,6 +252,7 @@ vi.mock('@/lib/ai/core/tool-filtering', () => ({
   filterToolsForSandboxEnablement: vi.fn((tools: unknown) => tools),
   filterToolsForSandboxTier: vi.fn((tools: unknown) => tools),
   filterToolsForAgentAllowlist: vi.fn((tools: unknown) => tools),
+  filterToolsForAgentAccounts: vi.fn((tools: unknown) => tools),
   filterToolsForReadOnly: vi.fn().mockReturnValue({}),
   filterToolsForWebSearch: vi.fn().mockReturnValue({}),
   filterToolsForImageGen: vi.fn((t) => t),

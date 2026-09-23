@@ -281,6 +281,10 @@ export async function fireCompletionTrigger(taskId: string): Promise<void> {
       creditGate: {},
     };
 
+    // executeWorkflow gates credit inside its run claim, on the owner the run
+    // bills. A settled refusal comes back `skipped` (a cancelled run carrying
+    // the reason) and retires the one-shot trigger below; a transient one comes
+    // back `retryable` and is handed to the task-triggers cron.
     void executeWorkflow(input).then(async (result) => {
       try {
         if (result.retryable) {

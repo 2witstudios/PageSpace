@@ -3,7 +3,7 @@
 import { forwardRef } from 'react';
 import { ChevronRight, type LucideIcon } from 'lucide-react';
 
-export type AgentSettingsCategory = 'behavior' | 'access' | 'tools' | 'integrations';
+export type AgentSettingsCategory = 'behavior' | 'access' | 'tools' | 'integrations' | 'accounts';
 
 export interface AgentSettingsMenuItem {
   key: AgentSettingsCategory;

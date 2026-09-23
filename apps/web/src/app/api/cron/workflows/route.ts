@@ -91,6 +91,7 @@ export async function POST(req: Request) {
     let executed = 0;
     let deferred = 0;
     let totalAttempted = 0;
+    let skipped = 0;
     const errors: string[] = [];
 
     for (let i = 0; i < dueWorkflows.length; i += MAX_CONCURRENT_WORKFLOWS) {
@@ -98,16 +99,23 @@ export async function POST(req: Request) {
 
       const batchResults = await Promise.allSettled(
         batch.map(async (workflow) => {
+          const input = toExecutionInput(workflow);
+
           // The atomic claim is the workflow_runs partial unique index inside
           // the executor. If a peer cron invocation already claimed this
           // workflow, claimConflict comes back true — we leave nextRunAt
           // alone so the running fire's natural completion governs the
           // next schedule advance.
-          // A retryable unstarted run (transient credit refusal, or the gate
-          // itself threw) wrote no run either: keep the past-due slot so the
-          // next tick fires it again (bounded to 24h by the executor). A terminal refusal is recorded and advances like
-          // any failure, leaving the workflow enabled for its next slot.
-          const result = await executeWorkflow(toExecutionInput(workflow));
+          //
+          // The credit gate runs inside that claim, on the owner the run bills,
+          // before any model is built. A settled refusal comes back `skipped`
+          // (the executor records it as a cancelled run with the reason) and
+          // still advances the schedule, so an out-of-credits owner's workflow
+          // is not re-fired and re-reported on every tick. A retryable one (a
+          // transient refusal, or the gate itself threw) gave its claim back
+          // and wrote no run: keep the past-due slot so the next tick fires it
+          // again (bounded to 24h by the executor).
+          const result = await executeWorkflow(input);
           if (!result.claimConflict && !result.retryable) {
             await advanceNextRunAt(workflow);
           }
@@ -118,17 +126,23 @@ export async function POST(req: Request) {
       for (let j = 0; j < batchResults.length; j++) {
         const settled = batchResults[j];
         if (settled.status === 'fulfilled') {
-          if (settled.value.result.claimConflict) continue;
+          const outcome = settled.value;
+          if (outcome.result.claimConflict) continue;
+          if (outcome.result.skipped) {
+            loggers.api.info('Workflow cron: skipped', { workflowId: outcome.workflow.id, reason: outcome.result.error });
+            skipped++;
+            continue;
+          }
           totalAttempted++;
-          if (settled.value.result.success) {
+          if (outcome.result.success) {
             executed++;
-          } else if (settled.value.result.retryable) {
+          } else if (outcome.result.retryable) {
             deferred++;
           } else {
-            errors.push(`${settled.value.workflow.name}: ${settled.value.result.error}`);
+            errors.push(`${outcome.workflow.name}: ${outcome.result.error}`);
           }
-          if (settled.value.result.finalizeError) {
-            errors.push(`${settled.value.workflow.name}: finalize failed: ${settled.value.result.finalizeError}`);
+          if (outcome.result.finalizeError) {
+            errors.push(`${outcome.workflow.name}: finalize failed: ${outcome.result.finalizeError}`);
           }
         } else {
           totalAttempted++;
@@ -149,15 +163,16 @@ export async function POST(req: Request) {
       }
     }
 
-    loggers.api.info(`Workflow cron: Complete. Executed ${executed}/${totalAttempted}`);
+    loggers.api.info(`Workflow cron: Complete. Executed ${executed}/${totalAttempted}, skipped ${skipped}`);
 
-    audit({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'workflows', details: { executed, deferred, failed: errors.length } });
+    audit({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'workflows', details: { executed, deferred, failed: errors.length, skipped } });
 
     return NextResponse.json({
       message: 'Workflow cron complete',
       executed,
       deferred,
       total: totalAttempted,
+      skipped,
       errors: errors.length > 0 ? errors : undefined,
     });
   } catch (error) {

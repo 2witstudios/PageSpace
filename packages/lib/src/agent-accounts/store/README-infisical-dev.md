@@ -26,6 +26,10 @@ row (`current_version`, `previous_version`, `bindings`, `rotated_at`,
 `revoked_at`, `created_at`) that `decideCas` / `decideResolve` compare
 against, and is the advisory-lock namespace `store-adapter-infisical.ts`
 locks against (`packages/db`'s `withAdvisoryLock`).
+It also holds `agent_account_plane_bindings` and the owner-consent single-use
+ledger `agent_account_consent_ledger` (G2 ruling 3 moved it out of the main
+DB). The adapter additionally needs a plane-held `WriteDigestKey` (32+ random
+bytes; the tests generate one per run) for the pending-write HMAC.
 
 `env.dev-fixture` (named to dodge the repo's blanket `.gitignore` `.env` rule
 — it is not a real secret file) holds synthetic, non-production
