@@ -229,7 +229,7 @@ describe('wallet-funding: funding legs (D-OW-13)', () => {
   });
 });
 
-describe('wallet-funding: donations (WAL-4)', () => {
+describe('wallet-funding: donations', () => {
   const input = (over: Partial<DonationInput> = {}): DonationInput => ({
     amountCents: 700,
     donorCanSeeDrive: true,
