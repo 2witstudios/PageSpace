@@ -180,7 +180,7 @@ describe('drive join request routes', () => {
   });
 
   describe('PATCH (approve or deny)', () => {
-    it('DRV-6 (partial) approves as the caller, audits the approval with the requester, and records org power (ORG-4)', async () => {
+    it('DRV-6 (partial) approves as the caller, audits the approval with the requester, and records org power: ORG-4 (partial)', async () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue(session(MARCUS));
       vi.mocked(answerDriveJoinRequest).mockResolvedValue({
         ok: true, action: 'approve', admitted: true, request: { ...pendingRequest, status: 'approved' } as never, drive: research,

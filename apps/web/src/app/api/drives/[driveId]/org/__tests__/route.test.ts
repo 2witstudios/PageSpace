@@ -241,7 +241,7 @@ describe('/api/drives/[driveId]/org', () => {
   describe('PATCH (visibility)', () => {
     const restricted = { ...product, ownerId: MARCUS, orgId: NORTHWIND, orgVisibility: 'RESTRICTED' };
 
-    it('DRV-4 (partial) changes visibility with the caller, body and production deps, audits it (AUD-1, ORG-4) and broadcasts', async () => {
+    it('DRV-4 (partial) changes visibility with the caller, body and production deps, audits it, records org power and broadcasts: AUD-1 (partial), ORG-4 (partial)', async () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue(session(PRIYA));
       vi.mocked(changeDriveVisibility).mockResolvedValue({
         ok: true, changed: true, drive: restricted as never, from: 'OPEN', to: 'RESTRICTED',
