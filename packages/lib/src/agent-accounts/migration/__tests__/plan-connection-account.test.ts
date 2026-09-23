@@ -52,7 +52,8 @@ describe('planConnectionAccount', () => {
 
   it('given an OAuth connection holding a refresh token or an expiry, should refuse until the refresh worker can serve it', () => {
     const oauth: AuthMethod = { type: 'oauth2', config: { authorizationUrl: 'https://x.example/a', tokenUrl: 'https://x.example/t', scopes: [] } };
-    const actual = [{ accessToken: 'a', refreshToken: 'r' }, { access_token: 'a', refresh_token: 'r' }, { accessToken: 'a', expiresAt: '2027-01-01T00:00:00Z' }].map((credentials) =>
+    const withExpiry: readonly Readonly<Record<string, string>>[] = [{ accessToken: 'a', refreshToken: 'r' }, { access_token: 'a', refresh_token: 'r' }, { accessToken: 'a', expiresAt: '2027-01-01T00:00:00Z' }];
+    const actual = withExpiry.map((credentials) =>
       planConnectionAccount({ connection: userConnection, provider: provider(oauth), credentials }),
     );
     const expected = Array.from({ length: 3 }, () => ({ ok: false, reason: 'needs_refresh_worker' }));
