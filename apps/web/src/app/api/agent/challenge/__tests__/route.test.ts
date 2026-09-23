@@ -59,7 +59,8 @@ describe('GET /api/agent/challenge', () => {
 
   it('should persist the challenge with the caller IP, the configured difficulty and a 5-minute TTL', async () => {
     await GET(challengeRequest());
-    expect(mocks.issue).toHaveBeenCalledWith({ difficultyBits: 20, ttlMs: 300_000, issuedToIp: '203.0.113.7', now: expect.any(Date) });
+    // No caller IP reaches the store: redemption is not IP-bound (Phase 2b).
+    expect(mocks.issue).toHaveBeenCalledWith({ difficultyBits: 20, ttlMs: 300_000, now: expect.any(Date) });
   });
 
   it('should never be cached', async () => {

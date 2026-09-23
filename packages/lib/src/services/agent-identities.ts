@@ -89,14 +89,14 @@ const CHALLENGE_PRUNE_BATCH = 100;
  * Each issuance first deletes up to CHALLENGE_PRUNE_BATCH expired challenges,
  * claimed with FOR UPDATE SKIP LOCKED so concurrent issuances take disjoint
  * batches. Every row is written by an issuance and each issuance can delete
- * more than one, so expired rows (and the caller IPs on them) cannot
- * accumulate without a cron, even under a burst. An expired row is worthless: the lookup treats it exactly like an
+ * more than one, so expired rows cannot accumulate without a cron, even
+ * under a burst. No caller IP is stored: redemption is deliberately not bound
+ * to the issuing address (Phase 2b), so it would be PII with no purpose. An expired row is worthless: the lookup treats it exactly like an
  * unknown challenge. A prune failure never blocks issuing.
  */
 export async function issueAgentSignupChallenge(input: {
   difficultyBits: number;
   ttlMs: number;
-  issuedToIp: string | null;
   now: Date;
 }): Promise<IssuedAgentSignupChallenge> {
   try {
@@ -120,7 +120,6 @@ export async function issueAgentSignupChallenge(input: {
   await guardStore('issue_challenge', () => db.insert(agentSignupChallenges).values({
     challengeHash: generated.hash,
     difficultyBits: input.difficultyBits,
-    issuedToIp: input.issuedToIp,
     expiresAt,
   }));
   return { challenge: generated.token, expiresAt };

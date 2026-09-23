@@ -4,8 +4,10 @@
  * agent fetches this before it has any identity at all.
  *
  * The challenge is single-use, expires after POW_TTL_MS, and is stored only as
- * a hash with the caller's IP (threat model T2). Registration consumes it
- * atomically. PoW shapes rate; the per-IP AGENT_CHALLENGE limit bounds how many
+ * a hash (threat model T2). Registration consumes it atomically. It is NOT
+ * bound to the caller's IP: an honest agent's egress can change between this
+ * GET and the POST (dual-stack, CGNAT, multi-egress NAT), and the per-IP
+ * limits already act where an account is created — so no IP is stored. PoW shapes rate; the per-IP AGENT_CHALLENGE limit bounds how many
  * rows one caller can make us write.
  */
 import { getClientIP } from '@/lib/auth';
@@ -41,7 +43,7 @@ export async function GET(request: Request) {
     return agentNoStoreJson({ error: 'temporarily_unavailable' }, 503);
   }
 
-  const issued = await issueAgentSignupChallenge({ difficultyBits, ttlMs: POW_TTL_MS, issuedToIp: ip, now: new Date() });
+  const issued = await issueAgentSignupChallenge({ difficultyBits, ttlMs: POW_TTL_MS, now: new Date() });
 
   auditRequest(request, { eventType: 'auth.token.created', resourceType: 'agent_signup_challenge', details: { agentAuthEvent: 'challenge_issued', difficultyBits } });
 

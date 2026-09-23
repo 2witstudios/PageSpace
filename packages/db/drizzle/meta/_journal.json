@@ -2108,6 +2108,13 @@
       "when": 1790167726027,
       "tag": "0300_thankful_doctor_doom",
       "breakpoints": true
+    },
+    {
+      "idx": 301,
+      "version": "7",
+      "when": 1790168805118,
+      "tag": "0301_wealthy_gideon",
+      "breakpoints": true
     }
   ]
 }

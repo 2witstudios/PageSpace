@@ -486,9 +486,9 @@ describe('getAgentIdentitySummary', () => {
 });
 
 describe('issueAgentSignupChallenge / findAgentSignupChallenge', () => {
-  it('given an issued challenge, should store only its hash with the IP and difficulty, and find it by the plaintext', async () => {
+  it('given an issued challenge, should store only its hash and difficulty (no caller IP), and find it by the plaintext', async () => {
     const now = new Date();
-    const issued = await issueAgentSignupChallenge({ difficultyBits: 12, ttlMs: 5 * 60_000, issuedToIp: '198.51.100.20', now });
+    const issued = await issueAgentSignupChallenge({ difficultyBits: 12, ttlMs: 5 * 60_000, now });
     const found = await findAgentSignupChallenge({ challenge: issued.challenge, now });
     expect(found).toMatchObject({ found: true, expired: false, consumed: false, difficultyBits: 12 });
     if (!found.found) return;
@@ -496,13 +496,13 @@ describe('issueAgentSignupChallenge / findAgentSignupChallenge', () => {
 
     const [row] = await db.select().from(agentSignupChallenges).where(eq(agentSignupChallenges.id, found.id));
     expect(row?.challengeHash).toBe(hashToken(issued.challenge));
-    expect(row?.issuedToIp).toBe('198.51.100.20');
+    expect(Object.keys(row ?? {}).sort()).toEqual(['challengeHash', 'consumedAt', 'createdAt', 'difficultyBits', 'expiresAt', 'id']);
     expect(JSON.stringify(row)).not.toContain(issued.challenge);
   });
 
   it('given a challenge at its expiry instant, should report it expired (the same boundary createAgentAccount consumes against)', async () => {
     const now = new Date();
-    const issued = await issueAgentSignupChallenge({ difficultyBits: 12, ttlMs: 60_000, issuedToIp: null, now });
+    const issued = await issueAgentSignupChallenge({ difficultyBits: 12, ttlMs: 60_000, now });
     const found = await findAgentSignupChallenge({ challenge: issued.challenge, now: issued.expiresAt });
     if (found.found) createdChallengeIds.push(found.id);
     expect(found).toMatchObject({ found: true, expired: true });
@@ -516,7 +516,7 @@ describe('issueAgentSignupChallenge / findAgentSignupChallenge', () => {
     const expiredId = await issueChallenge({ expiresAt: new Date(Date.now() - 60_000) });
     const liveId = await issueChallenge();
 
-    await issueAgentSignupChallenge({ difficultyBits: 12, ttlMs: 5 * 60_000, issuedToIp: null, now: new Date() })
+    await issueAgentSignupChallenge({ difficultyBits: 12, ttlMs: 5 * 60_000, now: new Date() })
       .then(async (issued) => {
         const found = await findAgentSignupChallenge({ challenge: issued.challenge, now: new Date() });
         if (found.found) createdChallengeIds.push(found.id);
@@ -547,7 +547,7 @@ describe('issueAgentSignupChallenge / findAgentSignupChallenge', () => {
     await db.transaction(async (tx) => {
       await tx.select({ id: agentSignupChallenges.id }).from(agentSignupChallenges)
         .where(inArray(agentSignupChallenges.id, lockedIds)).for('update');
-      pending = issueAgentSignupChallenge({ difficultyBits: 12, ttlMs: 5 * 60_000, issuedToIp: null, now: new Date() })
+      pending = issueAgentSignupChallenge({ difficultyBits: 12, ttlMs: 5 * 60_000, now: new Date() })
         .then(async (issued) => {
           const found = await findAgentSignupChallenge({ challenge: issued.challenge, now: new Date() });
           if (found.found) createdChallengeIds.push(found.id);
