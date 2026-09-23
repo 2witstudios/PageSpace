@@ -38,6 +38,7 @@ export * from './schema/auth-handoff-tokens';
 export * from './schema/pending-invites';
 export * from './schema/pending-page-invites';
 export * from './schema/pending-connection-invites';
+export * from './schema/drive-join-requests';
 export * from './schema/ai-streams';
 export * from './schema/share-links';
 export * from './schema/zoom';
@@ -109,6 +110,7 @@ import * as authHandoffTokens from './schema/auth-handoff-tokens';
 import * as pendingInvites from './schema/pending-invites';
 import * as pendingPageInvites from './schema/pending-page-invites';
 import * as pendingConnectionInvites from './schema/pending-connection-invites';
+import * as driveJoinRequestsSchema from './schema/drive-join-requests';
 import * as aiStreams from './schema/ai-streams';
 import * as shareLinks from './schema/share-links';
 import * as zoom from './schema/zoom';
@@ -181,6 +183,7 @@ export const schema = {
   ...pendingInvites,
   ...pendingPageInvites,
   ...pendingConnectionInvites,
+  ...driveJoinRequestsSchema,
   ...aiStreams,
   ...shareLinks,
   ...zoom,

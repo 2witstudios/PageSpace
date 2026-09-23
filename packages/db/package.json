@@ -71,6 +71,10 @@
       "types": "./dist/schema/organizations.d.ts",
       "default": "./dist/schema/organizations.js"
     },
+    "./schema/drive-join-requests": {
+      "types": "./dist/schema/drive-join-requests.d.ts",
+      "default": "./dist/schema/drive-join-requests.js"
+    },
     "./schema/agent-workspace-nodes": {
       "types": "./dist/schema/agent-workspace-nodes.d.ts",
       "default": "./dist/schema/agent-workspace-nodes.js"

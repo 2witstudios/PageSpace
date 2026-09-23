@@ -1,6 +1,6 @@
 /**
- * Org-owned drives: move a drive into an org, move it out, create one in an org
- * (Spec DRV-1..DRV-4, O-7, O-9, O-10).
+ * Org-owned drives: move a drive into an org, move it out, create one in an org, change its
+ * visibility, hand it to a new lead (Spec DRV-1..DRV-4, O-7, O-9, O-10).
  *
  * The decisions are pure (organizations/org-drive-ownership.ts); this module is the IO edge.
  * Each operation runs in one transaction: lock the drive, lock the org, read the actor's org
@@ -21,6 +21,8 @@ import { slugify } from '../utils/utils';
 import { resolveUniqueSlug } from './drive-guards';
 import { allocatePublishSubdomain } from './drive-service';
 import {
+  decideChangeDriveVisibility,
+  decideChangeOrgDriveLead,
   decideCreateDriveInOrg,
   decideMoveDriveIntoOrg,
   decideMoveDriveOutOfOrg,
@@ -31,6 +33,8 @@ import {
   type OrgDriveRefusal,
 } from '../organizations/org-drive-ownership';
 import { retryOnDeadlock } from '../organizations/repository';
+import { removeFormerLeadOwnerRow } from '../permissions/org-drive-membership';
+import { getActorInfo, logActivityWithTx } from '../monitoring/activity-logger';
 import { reattributeDriveStorageInTx, type StorageReattributionResult } from './storage-limits';
 
 export type OrgDriveTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -39,7 +43,9 @@ export type OrgDriveTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 export type OrgMembershipSyncCall =
   | { kind: 'move-in'; driveId: string; orgId: string }
   | { kind: 'create'; driveId: string; orgId: string }
-  | { kind: 'move-out'; driveId: string; orgId: string; implicitMembers: ImplicitMembersChoice };
+  | { kind: 'move-out'; driveId: string; orgId: string; implicitMembers: ImplicitMembersChoice }
+  | { kind: 'visibility'; driveId: string; orgId: string }
+  | { kind: 'lead-change'; driveId: string; orgId: string; fromUserId: string; toUserId: string };
 
 /** Best-effort realtime publish, run only after the membership change has committed. */
 export type PublishAfterCommit = () => Promise<void>;
@@ -233,4 +239,143 @@ export async function createOrgDrive(
   const { publish, ...created } = outcome;
   await publish();
   return created;
+}
+
+/**
+ * Lock the drive's org (share) then the drive (update), the order every org-drive path takes, and
+ * read the actor's org role under those locks. The role is null for a personal drive, or when the
+ * drive changed org between the unlocked read and the lock.
+ */
+async function lockDriveWithOrg(
+  tx: OrgDriveTx,
+  driveId: string,
+  actorId: string,
+  deps: OrgDriveServiceDeps
+): Promise<{ drive: DriveRow; actorOrgRole: OrgRole | null } | null> {
+  const [current] = await tx.select({ orgId: drives.orgId }).from(drives).where(eq(drives.id, driveId));
+  if (!current) return null;
+  const orgLocked = current.orgId !== null && (await lockOrg(tx, current.orgId));
+  const drive = await lockDrive(tx, driveId);
+  if (!drive) return null;
+  const sameOrg = drive.orgId !== null && drive.orgId === current.orgId && orgLocked;
+  const actorOrgRole = sameOrg && drive.orgId !== null ? await deps.getOrgRole(tx, drive.orgId, actorId) : null;
+  return { drive, actorOrgRole };
+}
+
+export type ChangeVisibilityResult =
+  | { ok: true; changed: boolean; drive: DriveRow; from: OrgDriveVisibility; to: OrgDriveVisibility }
+  | OrgDriveRefusal
+  | DriveNotFound;
+
+/**
+ * Change an org drive's visibility (DRV-4): the drive lead or an org Owner/Admin. The org membership
+ * sync runs in the same transaction, so materialized rows follow at once: an Open drive gains a row
+ * for every org member, a Restricted or Private one loses every org-sourced row (direct rows, from
+ * an invitation or an approved join, stay). Events publish after commit.
+ */
+export async function changeDriveVisibility(
+  actorId: string,
+  driveId: string,
+  input: { orgVisibility: OrgDriveVisibility },
+  deps: OrgDriveServiceDeps
+): Promise<ChangeVisibilityResult> {
+  const outcome = await retryOnDeadlock(() => db.transaction(async (tx) => {
+    const locked = await lockDriveWithOrg(tx, driveId, actorId, deps);
+    if (!locked) return driveNotFound();
+    const { drive, actorOrgRole } = locked;
+
+    const verdict = decideChangeDriveVisibility({ drive, actorId, actorOrgRole, visibility: input.orgVisibility });
+    if (!verdict.ok) return verdict;
+    if (drive.orgId === null) throw new Error('Unreachable: a visibility change was admitted for a drive with no org');
+    if (!verdict.changed) {
+      return { ok: true as const, changed: false, drive, from: verdict.from, to: verdict.to, publish: async () => {} };
+    }
+
+    const [updated] = await tx
+      .update(drives)
+      .set({ orgVisibility: verdict.to, updatedAt: new Date() })
+      .where(eq(drives.id, driveId))
+      .returning();
+    const publish = await deps.syncOrgMembership(tx, { kind: 'visibility', driveId, orgId: drive.orgId });
+    return { ok: true as const, changed: true, drive: updated, from: verdict.from, to: verdict.to, publish };
+  }));
+
+  if (!outcome.ok) return outcome;
+  const { publish, ...changed } = outcome;
+  await publish();
+  return changed;
+}
+
+export type ChangeLeadResult =
+  | { ok: true; changed: boolean; drive: DriveRow; fromUserId: string; toUserId: string }
+  | OrgDriveRefusal
+  | DriveNotFound;
+
+/**
+ * Hand an org drive to a new lead (DRV-1, D-OW-7): the current lead or an org Owner/Admin names an
+ * org member. In one transaction the former lead's OWNER row goes (demote) and drives.ownerId moves
+ * (promote), then the org membership sync puts both people where their own membership puts them:
+ * the new lead needs no row, the former lead keeps an Open drive through org membership and keeps a
+ * direct row they hold, and otherwise loses access. An activity event names both people.
+ */
+export async function changeOrgDriveLead(
+  actorId: string,
+  driveId: string,
+  input: { newLeadId: string },
+  deps: OrgDriveServiceDeps
+): Promise<ChangeLeadResult> {
+  const outcome = await retryOnDeadlock(() => db.transaction(async (tx) => {
+    const locked = await lockDriveWithOrg(tx, driveId, actorId, deps);
+    if (!locked) return driveNotFound();
+    const { drive, actorOrgRole } = locked;
+    // Share-locks the target's org_members row too, so they cannot leave the org mid-handover.
+    const targetOrgRole = actorOrgRole !== null && drive.orgId !== null
+      ? await deps.getOrgRole(tx, drive.orgId, input.newLeadId)
+      : null;
+
+    const verdict = decideChangeOrgDriveLead({ drive, actorId, actorOrgRole, targetId: input.newLeadId, targetOrgRole });
+    if (!verdict.ok) return verdict;
+    if (drive.orgId === null) throw new Error('Unreachable: a lead change was admitted for a drive with no org');
+    if (!verdict.changed) {
+      return { ok: true as const, changed: false, drive, fromUserId: verdict.fromUserId, toUserId: verdict.toUserId, publish: async () => {} };
+    }
+
+    await removeFormerLeadOwnerRow(tx, driveId, verdict.fromUserId);
+    const [updated] = await tx
+      .update(drives)
+      .set({ ownerId: verdict.toUserId, updatedAt: new Date() })
+      .where(eq(drives.id, driveId))
+      .returning();
+
+    const actor = await getActorInfo(actorId);
+    await logActivityWithTx(
+      {
+        userId: actorId,
+        actorEmail: actor.actorEmail,
+        actorDisplayName: actor.actorDisplayName,
+        operation: 'ownership_transfer',
+        resourceType: 'drive',
+        resourceId: driveId,
+        driveId,
+        previousValues: { ownerId: verdict.fromUserId },
+        newValues: { ownerId: verdict.toUserId },
+        metadata: { orgId: drive.orgId, reason: 'lead_changed' },
+      },
+      tx as unknown as typeof db,
+    );
+
+    const publish = await deps.syncOrgMembership(tx, {
+      kind: 'lead-change',
+      driveId,
+      orgId: drive.orgId,
+      fromUserId: verdict.fromUserId,
+      toUserId: verdict.toUserId,
+    });
+    return { ok: true as const, changed: true, drive: updated, fromUserId: verdict.fromUserId, toUserId: verdict.toUserId, publish };
+  }));
+
+  if (!outcome.ok) return outcome;
+  const { publish, ...changed } = outcome;
+  await publish();
+  return changed;
 }

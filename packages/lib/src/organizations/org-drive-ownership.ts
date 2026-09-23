@@ -33,7 +33,9 @@ export type OrgDriveRefusalCode =
   | 'NOT_IN_ORG'
   | 'NOT_ORG_ADMIN'
   | 'IMPLICIT_MEMBERS_CHOICE_REQUIRED'
-  | 'POLICY_FORBIDS_CREATE';
+  | 'POLICY_FORBIDS_CREATE'
+  | 'NOT_DRIVE_LEAD_OR_ORG_ADMIN'
+  | 'TARGET_NOT_ORG_MEMBER';
 
 export interface OrgDriveRefusal {
   ok: false;
@@ -143,6 +145,88 @@ export function decideCreateDriveInOrg({
     return refuse('POLICY_FORBIDS_CREATE', 403, 'Only organization Owners and Admins can create drives in this organization.');
   }
   return { ok: true };
+}
+
+/** The drive facts a visibility or lead change depends on. */
+export interface OrgDriveFactsForChange {
+  ownerId: string;
+  orgId: string | null;
+  orgVisibility: OrgDriveVisibility;
+  isTrashed: boolean;
+}
+
+/**
+ * Who may change an org drive's settings (visibility, lead): its lead while still an org member,
+ * or an org Owner or Admin (requireOrgRole plus the drive lead rule). On a personal drive the
+ * owner is told it has no org; anyone else learns nothing beyond a refusal.
+ */
+function authorizeOrgDriveChange(
+  drive: OrgDriveFactsForChange,
+  actorId: string,
+  actorOrgRole: OrgRole | null,
+  what: string,
+): OrgDriveRefusal | null {
+  const lead = isDriveLead(actorId, drive);
+  if (drive.orgId === null) {
+    return lead
+      ? refuse('NOT_IN_ORG', 409, 'This drive does not belong to an organization.')
+      : refuse('NOT_DRIVE_LEAD_OR_ORG_ADMIN', 403, `Only the drive lead or an organization Owner or Admin can change ${what}.`);
+  }
+  if (!(lead && canLeadOrgDrive(actorOrgRole)) && !isOrgAdmin(actorOrgRole)) {
+    return refuse('NOT_DRIVE_LEAD_OR_ORG_ADMIN', 403, `Only the drive lead or an organization Owner or Admin can change ${what}.`);
+  }
+  return null;
+}
+
+/**
+ * Change an org drive's visibility (DRV-4). The service then runs the org membership sync so the
+ * materialized rows follow: rows appear for an Open drive and go for Restricted or Private.
+ */
+export function decideChangeDriveVisibility({
+  drive,
+  actorId,
+  actorOrgRole,
+  visibility,
+}: {
+  drive: OrgDriveFactsForChange;
+  actorId: string;
+  /** The actor's role in drive.orgId; null when not a member or the drive has no org. */
+  actorOrgRole: OrgRole | null;
+  visibility: OrgDriveVisibility;
+}): { ok: true; changed: boolean; from: OrgDriveVisibility; to: OrgDriveVisibility } | OrgDriveRefusal {
+  const refusal = authorizeOrgDriveChange(drive, actorId, actorOrgRole, "this drive's visibility");
+  if (refusal) return refusal;
+  if (drive.isTrashed) {
+    return refuse('DRIVE_TRASHED', 409, "Restore this drive from trash before changing its visibility.");
+  }
+  return { ok: true, changed: drive.orgVisibility !== visibility, from: drive.orgVisibility, to: visibility };
+}
+
+/**
+ * Hand an org drive to a new lead (DRV-1, D-OW-7). The target must be an org member; a personal
+ * drive is never changed here (account/handle-drive and ownership transfer own those).
+ */
+export function decideChangeOrgDriveLead({
+  drive,
+  actorId,
+  actorOrgRole,
+  targetId,
+  targetOrgRole,
+}: {
+  drive: OrgDriveFactsForChange;
+  actorId: string;
+  actorOrgRole: OrgRole | null;
+  targetId: string;
+  /** The target's role in drive.orgId; null when not a member. */
+  targetOrgRole: OrgRole | null;
+}): { ok: true; changed: boolean; fromUserId: string; toUserId: string } | OrgDriveRefusal {
+  const refusal = authorizeOrgDriveChange(drive, actorId, actorOrgRole, "this drive's lead");
+  if (refusal) return refusal;
+  if (isDriveLead(targetId, drive)) return { ok: true, changed: false, fromUserId: drive.ownerId, toUserId: targetId };
+  if (!canLeadOrgDrive(targetOrgRole)) {
+    return refuse('TARGET_NOT_ORG_MEMBER', 409, 'The new lead must be a member of the organization.');
+  }
+  return { ok: true, changed: true, fromUserId: drive.ownerId, toUserId: targetId };
 }
 
 /**

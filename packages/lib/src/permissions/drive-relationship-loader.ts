@@ -51,7 +51,14 @@ export async function loadDriveRelationships(
 }
 
 /** The lead actions org power may take on an org-owned drive, as named in the audit event. */
-export type DriveLeadAction = 'rename' | 'trash' | 'restore' | 'permanent_delete';
+export type DriveLeadAction =
+  | 'rename'
+  | 'trash'
+  | 'restore'
+  | 'permanent_delete'
+  | 'change_visibility'
+  | 'change_lead'
+  | 'answer_join_request';
 
 async function orgRoleIn(orgId: string, userId: string) {
   const [membership] = await db

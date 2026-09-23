@@ -1,6 +1,6 @@
 {
-  "id": "85177c65-2505-490f-822a-25c21fb78a1f",
-  "prevId": "b5cbcb5d-c3bc-4172-975f-bba6f4590aec",
+  "id": "b5cbcb5d-c3bc-4172-975f-bba6f4590aec",
+  "prevId": "db15f34e-7ce7-4b59-9907-bd941ee2e901",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -16752,6 +16752,169 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.drive_join_requests": {
+      "name": "drive_join_requests",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "driveId": {
+          "name": "driveId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "userId": {
+          "name": "userId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "DriveJoinRequestStatus",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        },
+        "message": {
+          "name": "message",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "requestedAt": {
+          "name": "requestedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "(now() at time zone 'utc')"
+        },
+        "decidedAt": {
+          "name": "decidedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "decidedBy": {
+          "name": "decidedBy",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "drive_join_requests_one_pending_key": {
+          "name": "drive_join_requests_one_pending_key",
+          "columns": [
+            {
+              "expression": "driveId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "userId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"drive_join_requests\".\"status\" = 'pending'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "drive_join_requests_drive_status_idx": {
+          "name": "drive_join_requests_drive_status_idx",
+          "columns": [
+            {
+              "expression": "driveId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "drive_join_requests_user_id_idx": {
+          "name": "drive_join_requests_user_id_idx",
+          "columns": [
+            {
+              "expression": "userId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "drive_join_requests_driveId_drives_id_fk": {
+          "name": "drive_join_requests_driveId_drives_id_fk",
+          "tableFrom": "drive_join_requests",
+          "tableTo": "drives",
+          "columnsFrom": [
+            "driveId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "drive_join_requests_userId_users_id_fk": {
+          "name": "drive_join_requests_userId_users_id_fk",
+          "tableFrom": "drive_join_requests",
+          "tableTo": "users",
+          "columnsFrom": [
+            "userId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "drive_join_requests_decidedBy_users_id_fk": {
+          "name": "drive_join_requests_decidedBy_users_id_fk",
+          "tableFrom": "drive_join_requests",
+          "tableTo": "users",
+          "columnsFrom": [
+            "decidedBy"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.ai_pending_abort_intents": {
       "name": "ai_pending_abort_intents",
       "schema": "",
@@ -18630,185 +18793,6 @@
         "wallet_consumer_caps_monthly_nonneg": {
           "name": "wallet_consumer_caps_monthly_nonneg",
           "value": "\"wallet_consumer_caps\".\"monthlyCapCents\" IS NULL OR \"wallet_consumer_caps\".\"monthlyCapCents\" >= 0"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.wallet_funding_legs": {
-      "name": "wallet_funding_legs",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "walletId": {
-          "name": "walletId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "funderKind": {
-          "name": "funderKind",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "funderUserId": {
-          "name": "funderUserId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "funderOrgId": {
-          "name": "funderOrgId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "originalCents": {
-          "name": "originalCents",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "remainingCents": {
-          "name": "remainingCents",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "nonRefundable": {
-          "name": "nonRefundable",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "sourceRef": {
-          "name": "sourceRef",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "createdAt": {
-          "name": "createdAt",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "wallet_funding_legs_wallet_order_idx": {
-          "name": "wallet_funding_legs_wallet_order_idx",
-          "columns": [
-            {
-              "expression": "walletId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "createdAt",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "wallet_funding_legs_source_ref_unique": {
-          "name": "wallet_funding_legs_source_ref_unique",
-          "columns": [
-            {
-              "expression": "sourceRef",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "\"sourceRef\" IS NOT NULL",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "wallet_funding_legs_walletId_wallets_id_fk": {
-          "name": "wallet_funding_legs_walletId_wallets_id_fk",
-          "tableFrom": "wallet_funding_legs",
-          "tableTo": "wallets",
-          "columnsFrom": [
-            "walletId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "wallet_funding_legs_funderUserId_users_id_fk": {
-          "name": "wallet_funding_legs_funderUserId_users_id_fk",
-          "tableFrom": "wallet_funding_legs",
-          "tableTo": "users",
-          "columnsFrom": [
-            "funderUserId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        },
-        "wallet_funding_legs_funderOrgId_organizations_id_fk": {
-          "name": "wallet_funding_legs_funderOrgId_organizations_id_fk",
-          "tableFrom": "wallet_funding_legs",
-          "tableTo": "organizations",
-          "columnsFrom": [
-            "funderOrgId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "wallet_funding_legs_funder_kind_valid": {
-          "name": "wallet_funding_legs_funder_kind_valid",
-          "value": "\"wallet_funding_legs\".\"funderKind\" IN ('owner', 'donation')"
-        },
-        "wallet_funding_legs_original_positive": {
-          "name": "wallet_funding_legs_original_positive",
-          "value": "\"wallet_funding_legs\".\"originalCents\" > 0"
-        },
-        "wallet_funding_legs_remaining_range": {
-          "name": "wallet_funding_legs_remaining_range",
-          "value": "\"wallet_funding_legs\".\"remainingCents\" >= 0 AND \"wallet_funding_legs\".\"remainingCents\" <= \"wallet_funding_legs\".\"originalCents\""
-        },
-        "wallet_funding_legs_donation_non_refundable": {
-          "name": "wallet_funding_legs_donation_non_refundable",
-          "value": "\"wallet_funding_legs\".\"funderKind\" <> 'donation' OR \"wallet_funding_legs\".\"nonRefundable\""
-        },
-        "wallet_funding_legs_donation_not_from_org": {
-          "name": "wallet_funding_legs_donation_not_from_org",
-          "value": "\"wallet_funding_legs\".\"funderKind\" <> 'donation' OR \"wallet_funding_legs\".\"funderOrgId\" IS NULL"
         }
       },
       "isRLSEnabled": false
@@ -25678,169 +25662,6 @@
         }
       },
       "isRLSEnabled": false
-    },
-    "public.drive_join_requests": {
-      "name": "drive_join_requests",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "driveId": {
-          "name": "driveId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "userId": {
-          "name": "userId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "status": {
-          "name": "status",
-          "type": "DriveJoinRequestStatus",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'pending'"
-        },
-        "message": {
-          "name": "message",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "requestedAt": {
-          "name": "requestedAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "(now() at time zone 'utc')"
-        },
-        "decidedAt": {
-          "name": "decidedAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "decidedBy": {
-          "name": "decidedBy",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {
-        "drive_join_requests_one_pending_key": {
-          "name": "drive_join_requests_one_pending_key",
-          "columns": [
-            {
-              "expression": "driveId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "userId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "\"drive_join_requests\".\"status\" = 'pending'",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "drive_join_requests_drive_status_idx": {
-          "name": "drive_join_requests_drive_status_idx",
-          "columns": [
-            {
-              "expression": "driveId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "status",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "drive_join_requests_user_id_idx": {
-          "name": "drive_join_requests_user_id_idx",
-          "columns": [
-            {
-              "expression": "userId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "drive_join_requests_driveId_drives_id_fk": {
-          "name": "drive_join_requests_driveId_drives_id_fk",
-          "tableFrom": "drive_join_requests",
-          "tableTo": "drives",
-          "columnsFrom": [
-            "driveId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "drive_join_requests_userId_users_id_fk": {
-          "name": "drive_join_requests_userId_users_id_fk",
-          "tableFrom": "drive_join_requests",
-          "tableTo": "users",
-          "columnsFrom": [
-            "userId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "drive_join_requests_decidedBy_users_id_fk": {
-          "name": "drive_join_requests_decidedBy_users_id_fk",
-          "tableFrom": "drive_join_requests",
-          "tableTo": "users",
-          "columnsFrom": [
-            "decidedBy"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
     }
   },
   "enums": {
@@ -26216,6 +26037,16 @@
         "completion"
       ]
     },
+    "public.DriveJoinRequestStatus": {
+      "name": "DriveJoinRequestStatus",
+      "schema": "public",
+      "values": [
+        "pending",
+        "approved",
+        "denied",
+        "withdrawn"
+      ]
+    },
     "public.ZoomConnectionStatus": {
       "name": "ZoomConnectionStatus",
       "schema": "public",
@@ -26446,16 +26277,6 @@
         "revoked",
         "unsupported",
         "failed"
-      ]
-    },
-    "public.DriveJoinRequestStatus": {
-      "name": "DriveJoinRequestStatus",
-      "schema": "public",
-      "values": [
-        "pending",
-        "approved",
-        "denied",
-        "withdrawn"
       ]
     }
   },

@@ -7,6 +7,7 @@
  * - syncOrgMembership(orgId)              every drive of an org (org-wide repair, move-in batches)
  * - syncOrgMemberAccess(orgId, userId)    one user across the org's drives (join, leave)
  * - syncDriveOrgMembership(driveId)       one drive (visibility change, move in, move out)
+ * - admitDriveJoiner(driveId, userId)     one drive, admitting an approved join request (DRV-6)
  *
  * Every entry point locks the drive rows it plans for (SELECT … FOR UPDATE, in id order) and
  * reads membership and rows under that lock, so concurrent syncs serialize per drive and the
@@ -194,7 +195,7 @@ async function loadExistingRows(tx: Tx, driveIds: string[], userId?: string): Pr
   return rows;
 }
 
-async function applyPlans(tx: Tx, plans: DriveOrgMembershipPlan[]): Promise<void> {
+async function applyPlans(tx: Tx, plans: DriveOrgMembershipPlan[], admittedBy: string | null = null): Promise<void> {
   const inserts = plans.flatMap((p) => p.inserts);
   const deletes = plans.flatMap((p) => p.deletes.map((d) => d.rowId));
   const conversions = plans.flatMap((p) => p.conversions.map((c) => c.rowId));
@@ -208,6 +209,14 @@ async function applyPlans(tx: Tx, plans: DriveOrgMembershipPlan[]): Promise<void
   }
   for (const ids of chunk(deletes, WRITE_CHUNK)) {
     await tx.delete(driveMembers).where(and(inArray(driveMembers.id, ids), eq(driveMembers.source, 'org')));
+  }
+  // After the deletes, so an admitted joiner's stale org row is gone before their direct row lands.
+  // A conflict means a row appeared under the drive lock's plan, which it cannot: nothing is overwritten.
+  for (const batch of chunk(plans.flatMap((p) => p.admissions), WRITE_CHUNK)) {
+    await tx
+      .insert(driveMembers)
+      .values(batch.map((a) => ({ driveId: a.driveId, userId: a.userId, role: 'MEMBER' as const, customRoleId: a.customRoleId, source: 'invite' as const, invitedBy: admittedBy, acceptedAt })))
+      .onConflictDoNothing({ target: [driveMembers.driveId, driveMembers.userId] });
   }
   for (const ids of chunk(conversions, WRITE_CHUNK)) {
     await tx.update(driveMembers).set({ source: 'invite' }).where(and(inArray(driveMembers.id, ids), eq(driveMembers.source, 'org')));
@@ -225,10 +234,11 @@ async function applyPlans(tx: Tx, plans: DriveOrgMembershipPlan[]): Promise<void
 async function runSync(
   options: OrgMembershipSyncOptions,
   plan: (tx: Tx) => Promise<DriveOrgMembershipPlan[]>,
+  admittedBy: string | null = null,
 ): Promise<OrgMembershipSyncResult> {
   const execute = async (tx: Tx): Promise<OrgMembershipSyncResult> => {
     const plans = await plan(tx);
-    await applyPlans(tx, plans);
+    await applyPlans(tx, plans, admittedBy);
     return {
       plans,
       affectedUsers: summarizeAffectedUsers(plans),
@@ -291,4 +301,27 @@ export function syncDriveOrgMembership(driveId: string, options: DriveOrgMembers
     const existingRows = await loadExistingRows(tx, [drive.id]);
     return [planDriveOrgMembership({ drive, orgMemberUserIds: memberIds, existingRows, removedOrgRows: options.removedOrgRows })];
   });
+}
+
+/**
+ * Bring one drive in step AND admit one approved joiner (DRV-6, D-OW-22): the ONLY way a join
+ * request becomes membership. The joiner gets an accepted direct row with the drive's default role,
+ * planned under the drive lock like every other sync write, so a concurrent visibility change or
+ * leave is seen: nobody is admitted to an Open drive (they already have an org row), nor once they
+ * left the org, nor over a direct row they already hold. Returns the result; `admitted` says whether
+ * a row was written.
+ */
+export async function admitDriveJoiner(
+  driveId: string,
+  userId: string,
+  options: OrgMembershipSyncOptions & { admittedBy: string },
+): Promise<OrgMembershipSyncResult & { admitted: boolean }> {
+  const result = await runSync(options, async (tx) => {
+    const [drive] = await lockDrives(tx, { kind: 'drive', driveId });
+    if (!drive) return [];
+    const memberIds = drive.orgId ? await loadOrgMemberIds(tx, drive.orgId) : [];
+    const existingRows = await loadExistingRows(tx, [drive.id]);
+    return [planDriveOrgMembership({ drive, orgMemberUserIds: memberIds, existingRows, admit: [userId] })];
+  }, options.admittedBy);
+  return { ...result, admitted: result.plans.some((p) => p.admissions.some((a) => a.userId === userId)) };
 }

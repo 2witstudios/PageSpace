@@ -7,7 +7,10 @@
 import { and, eq } from '@pagespace/db/operators';
 import { orgMembers } from '@pagespace/db/schema/organizations';
 import { requireOrgRole } from '../organizations/authorize';
-import { publishOrgMembershipSyncEvents, syncDriveOrgMembership } from './org-membership-sync';
+import { drives } from '@pagespace/db/schema/core';
+import { db } from '@pagespace/db/db';
+import { loadEffectiveDriveMembership } from '../permissions/org-drive-membership';
+import { publishDriveAccessEvents, publishOrgMembershipSyncEvents, syncDriveOrgMembership, type OrgMembershipSyncPorts } from './org-membership-sync';
 import type { OrgDriveServiceDeps } from './org-drive-service';
 
 export const orgDriveServiceDeps: OrgDriveServiceDeps = {
@@ -36,10 +39,42 @@ export const orgDriveServiceDeps: OrgDriveServiceDeps = {
       // D-OW-10: on move-out, "keep" leaves org members on the drive as invited members.
       removedOrgRows: call.kind === 'move-out' && call.implicitMembers === 'keep' ? 'keepAsInvite' : 'delete',
     });
-    return () => publishOrgMembershipSyncEvents(result);
+    if (call.kind !== 'lead-change') return () => publishOrgMembershipSyncEvents(result);
+    return async () => {
+      await publishOrgMembershipSyncEvents(result);
+      await publishLeadChangeEvents(call.driveId, call.fromUserId, call.toUserId);
+    };
   },
 
   // TODO(lyt8275djmdcwlwm8wvk2xa5): read POL-5 through the org policy reader when Wave E lands.
   // Until then every org member may create org drives, which is DRV-3 without a policy.
   getOrgDriveCreationPolicy: async () => 'members',
 };
+
+/**
+ * After a lead change commits (X-4): both people's drive lists refetch, and the former lead, if
+ * their own membership no longer opens the drive, is kicked from its realtime rooms. Their access
+ * ended with no row deleted (the lead holds none), so the sync alone would never kick them.
+ */
+export async function publishLeadChangeEvents(
+  driveId: string,
+  fromUserId: string,
+  toUserId: string,
+  ports?: OrgMembershipSyncPorts,
+): Promise<void> {
+  const [drive] = await db
+    .select({ id: drives.id, orgId: drives.orgId, orgVisibility: drives.orgVisibility })
+    .from(drives)
+    .where(eq(drives.id, driveId))
+    .limit(1);
+  if (!drive) return;
+  // audit: false — this asks what the former lead can reach now; nobody accessed anything.
+  const formerStillMember = (await loadEffectiveDriveMembership(fromUserId, drive, { audit: false })) !== null;
+  await publishDriveAccessEvents({
+    affectedUsers: [
+      { userId: toUserId, operation: 'member_role_changed', driveIds: [driveId] },
+      { userId: fromUserId, operation: formerStillMember ? 'member_role_changed' : 'member_removed', driveIds: [driveId] },
+    ],
+    revoked: formerStillMember ? [] : [{ userId: fromUserId, driveId }],
+  }, ports);
+}

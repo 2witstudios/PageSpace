@@ -6,6 +6,7 @@ import { orgMembers, type OrgRole } from '@pagespace/db/schema/organizations';
 import { auditOrgAdminPrivateDriveAccess } from './org-admin-access-audit';
 import { ORGS_ENABLED } from '../organizations/orgs-enabled';
 import type { DriveMemberRole, DriveRoleGrant, OrgDriveMembership } from './org-access';
+import type { RequesterRow } from './drive-join-requests';
 import { drives } from '@pagespace/db/schema/core';
 import {
   explicitScopeAuthorityRow,
@@ -36,6 +37,7 @@ const NO_DEFAULT_ROLE: DriveRoleGrant = { role: 'MEMBER', customRoleId: null };
 export async function loadEffectiveDriveMembership(
   userId: string,
   drive: MembershipDrive,
+  options: ResolveMembershipsOptions = { audit: true },
 ): Promise<EffectiveDriveMembership | null> {
   const rows = await db
     .select({ role: driveMembers.role, customRoleId: driveMembers.customRoleId, source: driveMembers.source })
@@ -49,7 +51,7 @@ export async function loadEffectiveDriveMembership(
 
   const [effective] = await resolveEffectiveDriveMemberships(
     [{ userId, drive, row: toMembership(rows[0]) }],
-    { audit: true },
+    options,
   );
   return effective;
 }
@@ -267,4 +269,40 @@ async function findDefaultCustomRoleIds(driveIds: string[]): Promise<Map<string,
     for (const r of rows) if (!defaults.has(r.driveId)) defaults.set(r.driveId, r.id);
   }
   return defaults;
+}
+
+/**
+ * A person's drive_members row on one drive, ACCEPTED OR PENDING, read through `executor`. For the
+ * join-request decisions only (drive-join-requests.ts), which must tell a pending invitation (theirs
+ * to accept, so no request and no admission) from no row at all. Never an access answer by itself.
+ */
+export async function loadDriveMemberRowState(
+  executor: Pick<typeof db, 'select'>,
+  driveId: string,
+  userId: string,
+): Promise<RequesterRow | null> {
+  const [row] = await executor
+    .select({ role: driveMembers.role, source: driveMembers.source, acceptedAt: driveMembers.acceptedAt })
+    .from(driveMembers)
+    .where(and(eq(driveMembers.driveId, driveId), eq(driveMembers.userId, userId)))
+    .limit(1);
+  return row ? { role: row.role as DriveMemberRole, source: row.source, accepted: row.acceptedAt !== null } : null;
+}
+
+/**
+ * Remove a former lead's OWNER row on an org drive, inside the lead change's transaction. On an org
+ * drive the lead lives on drives.ownerId alone; a leftover OWNER row (the owner self-heal row a
+ * personal drive carried in) was never an invitation and must not outlive the handover, so the
+ * former lead keeps or loses access by their own membership only (DRV-1, D-OW-7).
+ */
+export async function removeFormerLeadOwnerRow(
+  executor: Pick<typeof db, 'delete'>,
+  driveId: string,
+  userId: string,
+): Promise<number> {
+  const removed = await executor
+    .delete(driveMembers)
+    .where(and(eq(driveMembers.driveId, driveId), eq(driveMembers.userId, userId), eq(driveMembers.role, 'OWNER')))
+    .returning({ id: driveMembers.id });
+  return removed.length;
 }

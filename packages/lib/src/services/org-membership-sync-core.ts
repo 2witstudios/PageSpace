@@ -61,6 +61,13 @@ export interface PlanDriveOrgMembershipInput {
   /** When set, only these users are considered (a join or a leave). */
   userScope?: readonly string[];
   removedOrgRows?: RemovedOrgRowsMode;
+  /**
+   * Org members whose join request for this Restricted or Private drive was just approved
+   * (DRV-6, D-OW-22). Each is admitted as a direct row with the drive's default role, unless they
+   * are outside the org, lead the drive, or already hold a direct row (an invited member, or a
+   * pending invitation that is theirs to accept). Nothing else ever admits anyone.
+   */
+  admit?: readonly string[];
 }
 
 export interface OrgRowInsert {
@@ -87,6 +94,8 @@ export interface DriveOrgMembershipPlan {
   conversions: OrgRowChange[];
   /** Org rows set back to the default role and accepted. */
   repairs: OrgRowUpdate[];
+  /** Approved joiners admitted as accepted direct ('invite') rows (DRV-6). */
+  admissions: OrgRowInsert[];
 }
 
 export function planDriveOrgMembership({
@@ -95,6 +104,7 @@ export function planDriveOrgMembership({
   existingRows,
   userScope,
   removedOrgRows = 'delete',
+  admit = [],
 }: PlanDriveOrgMembershipInput): DriveOrgMembershipPlan {
   const scope = userScope ? new Set(userScope) : null;
   const inScope = (userId: string) => scope === null || scope.has(userId);
@@ -121,12 +131,22 @@ export function planDriveOrgMembership({
     .filter((r) => desired.has(r.userId) && (!r.accepted || r.customRoleId !== drive.defaultCustomRoleId))
     .map((r) => ({ rowId: r.id, driveId: drive.id, userId: r.userId, customRoleId: drive.defaultCustomRoleId }));
 
+  // Admission is for drives that do not materialize (an Open drive's member already has an org
+  // row). A direct row of any kind blocks it; a stale org row is deleted above and replaced.
+  const orgMembers = new Set(orgMemberUserIds);
+  const usersWithDirectRow = new Set(rows.filter((r) => r.source !== 'org').map((r) => r.userId));
+  const admits = drive.orgId !== null && !materializes;
+  const admissions = [...new Set(admit)]
+    .filter((userId) => admits && orgMembers.has(userId) && !isDriveLead(userId, drive) && !usersWithDirectRow.has(userId))
+    .map((userId) => ({ driveId: drive.id, userId, customRoleId: drive.defaultCustomRoleId }));
+
   return {
     driveId: drive.id,
     inserts,
     deletes: keepStale ? [] : stale,
     conversions: keepStale ? stale : [],
     repairs,
+    admissions,
   };
 }
 
@@ -164,6 +184,7 @@ export function summarizeAffectedUsers(plans: readonly DriveOrgMembershipPlan[])
     plan.deletes.forEach((d) => note(d.userId, d.driveId, 'member_removed'));
     plan.conversions.forEach((c) => note(c.userId, c.driveId, 'member_role_changed'));
     plan.repairs.forEach((r) => note(r.userId, r.driveId, 'member_role_changed'));
+    plan.admissions.forEach((a) => note(a.userId, a.driveId, 'member_added'));
   }
   return [...byUser.values()];
 }

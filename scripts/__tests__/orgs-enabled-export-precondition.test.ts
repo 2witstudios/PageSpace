@@ -1,7 +1,7 @@
 /**
  * Turning orgs on is mechanically blocked on the Phase 6 export work
  * (leaf yfmlkdchehmberwthwu6g7vt). B1 left TEMPORARY exclusions so org rows are
- * not yet exported: `organizations` and `org_members` in the GDPR export's
+ * not yet exported: `organizations`, `org_members` and `drive_join_requests` in the GDPR export's
  * EXCLUDED_TABLES (Spec X-2) and `drives.orgId` in the tenant export's excluded
  * columns (Spec X-3). Shipping ORGS_ENABLED = true while any of those remain
  * would export org users' data without their org membership, and migrate an org
@@ -20,7 +20,7 @@ interface ExportExclusions {
 /** The temporary org exclusions still present; empty once Phase 6 has removed them. */
 function temporaryOrgExclusions({ gdprExcludedTables, tenantDriveExcludedColumns }: ExportExclusions): string[] {
   const found: string[] = [];
-  for (const table of ['organizations', 'org_members']) {
+  for (const table of ['organizations', 'org_members', 'drive_join_requests']) {
     const reason = gdprExcludedTables[table];
     if (reason !== undefined && /\bX-2\b/.test(reason) && /temporary/i.test(reason)) {
       found.push(`gdpr EXCLUDED_TABLES.${table}`);

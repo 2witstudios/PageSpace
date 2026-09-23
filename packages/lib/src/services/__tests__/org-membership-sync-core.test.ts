@@ -39,6 +39,7 @@ const emptyPlan = (driveId = 'drive-product'): DriveOrgMembershipPlan => ({
   deletes: [],
   conversions: [],
   repairs: [],
+  admissions: [],
 });
 
 describe('planDriveOrgMembership', () => {
@@ -252,6 +253,53 @@ describe('planDriveOrgMembership', () => {
   });
 });
 
+describe('planDriveOrgMembership admissions (approved join requests)', () => {
+  const restricted = openDrive({ orgVisibility: 'RESTRICTED', defaultCustomRoleId: 'role-default' });
+
+  it('DRV-6 (partial) admits an approved org member of a Restricted drive with the drive default role, as a direct row', () => {
+    const plan = planDriveOrgMembership({
+      drive: restricted, orgMemberUserIds: ['user-lena', 'user-marcus'], existingRows: [], admit: ['user-lena'],
+    });
+    expect(plan.admissions).toEqual([{ driveId: 'drive-product', userId: 'user-lena', customRoleId: 'role-default' }]);
+    expect(plan.inserts).toEqual([]);
+  });
+
+  it('DRV-6 (partial) admits nobody the sync was not asked to admit: a Restricted drive materializes no rows', () => {
+    const plan = planDriveOrgMembership({ drive: restricted, orgMemberUserIds: ['user-lena', 'user-marcus'], existingRows: [] });
+    expect(plan.admissions).toEqual([]);
+    expect(plan.inserts).toEqual([]);
+  });
+
+  it('DRV-6 (partial) never admits someone outside the org, the lead, or anyone holding a direct row (a pending invite is theirs to accept)', () => {
+    const plan = planDriveOrgMembership({
+      drive: restricted,
+      orgMemberUserIds: ['user-jono', 'user-lena', 'user-tomas'],
+      existingRows: [row('user-lena', 'invite', 'drive-product', { accepted: false })],
+      admit: ['user-chris', 'user-jono', 'user-lena'],
+    });
+    expect(plan.admissions).toEqual([]);
+  });
+
+  it('DRV-6 (partial) replaces a stale org row with the admitted direct row', () => {
+    const plan = planDriveOrgMembership({
+      drive: restricted, orgMemberUserIds: ['user-lena'], existingRows: [row('user-lena', 'org')], admit: ['user-lena'],
+    });
+    expect(plan.deletes).toEqual([{ rowId: 'row-drive-product-user-lena', driveId: 'drive-product', userId: 'user-lena' }]);
+    expect(plan.admissions).toEqual([{ driveId: 'drive-product', userId: 'user-lena', customRoleId: 'role-default' }]);
+  });
+
+  it('DRV-5 (partial) admits nothing on an Open drive or a drive outside any org: materialization already covers the member', () => {
+    for (const drive of [openDrive(), openDrive({ orgId: null, orgVisibility: 'RESTRICTED' })]) {
+      expect(planDriveOrgMembership({ drive, orgMemberUserIds: ['user-lena'], existingRows: [], admit: ['user-lena'] }).admissions).toEqual([]);
+    }
+  });
+
+  it('X-4 (partial) an admission is a member_added event', () => {
+    expect(summarizeAffectedUsers([{ ...emptyPlan(), admissions: [{ driveId: 'drive-product', userId: 'user-lena', customRoleId: null }] }]))
+      .toEqual([{ userId: 'user-lena', operation: 'member_added', driveIds: ['drive-product'] }]);
+  });
+});
+
 describe('summarizeAffectedUsers', () => {
   it('X-4 (partial) yields exactly one event per affected user across every drive in the sync', () => {
     const plans: DriveOrgMembershipPlan[] = [
@@ -261,6 +309,7 @@ describe('summarizeAffectedUsers', () => {
         deletes: [{ rowId: 'r1', driveId: 'drive-product', userId: 'user-lena' }],
         conversions: [],
         repairs: [],
+        admissions: [],
       },
       {
         driveId: 'drive-design',
@@ -268,6 +317,7 @@ describe('summarizeAffectedUsers', () => {
         deletes: [],
         conversions: [{ rowId: 'r2', driveId: 'drive-design', userId: 'user-tomas' }],
         repairs: [],
+        admissions: [],
       },
       emptyPlan('drive-engineering'),
     ];
@@ -287,6 +337,7 @@ describe('summarizeAffectedUsers', () => {
         deletes: [],
         conversions: [],
         repairs: [],
+        admissions: [],
       },
       {
         driveId: 'drive-b',
@@ -294,6 +345,7 @@ describe('summarizeAffectedUsers', () => {
         deletes: [{ rowId: 'r1', driveId: 'drive-b', userId: 'user-priya' }],
         conversions: [],
         repairs: [],
+        admissions: [],
       },
     ];
 
