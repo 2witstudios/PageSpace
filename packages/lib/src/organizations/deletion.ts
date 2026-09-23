@@ -29,6 +29,7 @@ import { resolveOrgDeletionAccessLoss } from '../permissions/org-deletion-access
 import { revokeOrgDriveGrantsForMembers } from './leave';
 import { publishDriveAccessEvents, type OrgMembershipSyncPorts } from '../services/org-membership-sync';
 import type { AffectedUser } from '../services/org-membership-sync-core';
+import { closeStaleDriveJoinRequests } from '../permissions/drive-join-request-closure';
 
 export type DriveDeletionChoice =
   | { driveId: string; action: 'transfer'; toUserId: string }
@@ -193,6 +194,8 @@ export async function deleteOrganization(
     });
 
     const driveIds = plan.steps.map((step) => step.driveId);
+    // DRV-6: the drives have left the org, so no join request on them asks for anything.
+    await closeStaleDriveJoinRequests(tx, driveIds);
     if (driveIds.length > 0) {
       // Org-materialized access means nothing once the drive has left the org;
       // leaving those rows would keep former org members inside a personal drive.

@@ -10,6 +10,7 @@ import { requireOrgRole } from '../organizations/authorize';
 import { drives } from '@pagespace/db/schema/core';
 import { db } from '@pagespace/db/db';
 import { loadEffectiveDriveMembership } from '../permissions/org-drive-membership';
+import { closeStaleDriveJoinRequests } from '../permissions/drive-join-request-closure';
 import { publishDriveAccessEvents, publishOrgMembershipSyncEvents, syncDriveOrgMembership, type OrgMembershipSyncPorts } from './org-membership-sync';
 import type { OrgDriveServiceDeps } from './org-drive-service';
 
@@ -39,6 +40,9 @@ export const orgDriveServiceDeps: OrgDriveServiceDeps = {
       // D-OW-10: on move-out, "keep" leaves org members on the drive as invited members.
       removedOrgRows: call.kind === 'move-out' && call.implicitMembers === 'keep' ? 'keepAsInvite' : 'delete',
     });
+    // DRV-6: a visibility change off Restricted, a move out, or a requester made lead leaves their
+    // pending request asking for nothing; it closes in the same transaction.
+    await closeStaleDriveJoinRequests(tx, [call.driveId]);
     if (call.kind !== 'lead-change') return () => publishOrgMembershipSyncEvents(result);
     return async () => {
       await publishOrgMembershipSyncEvents(result);

@@ -7,6 +7,7 @@ import { ORGS_ENABLED } from '../organizations/orgs-enabled';
 import { decideListedDriveRole } from './org-drive-resolution';
 import { loadAcceptedRowsInDrives, resolveEffectiveDriveMemberships } from './org-drive-membership';
 import type { DriveMemberRole } from './org-access';
+import { driveMembershipRole, driveMembershipRow } from './drive-member-role';
 
 /**
  * The drives a person is a member of: the set every "my drives" aggregate (commands, activity,
@@ -63,7 +64,8 @@ export async function listMemberDrives(userId: string, options: MemberDriveOptio
 
   if (!ORGS_ENABLED) {
     for (const row of rows) {
-      if (!out.has(row.driveId)) out.set(row.driveId, { driveId: row.driveId, isOwner: false, role: row.role as DriveMemberRole });
+      const role = driveMembershipRole(row.role);
+      if (role !== null && !out.has(row.driveId)) out.set(row.driveId, { driveId: row.driveId, isOwner: false, role });
     }
     return [...out.values()];
   }
@@ -92,7 +94,7 @@ export async function listMemberDrives(userId: string, options: MemberDriveOptio
       orgsEnabled: true,
       drive: { orgId: row.orgId, orgVisibility: row.orgVisibility },
       orgRole: row.orgId ? orgRoles.get(row.orgId) ?? null : null,
-      row: { role: row.role as DriveMemberRole, customRoleId: row.customRoleId, source: row.source },
+      row: driveMembershipRow(row),
       viaPagePermission: false,
     });
   }

@@ -6,7 +6,7 @@ import { driveMembers } from '@pagespace/db/schema/members';
 import { driveJoinRequests } from '@pagespace/db/schema/drive-join-requests';
 import { orgMembers } from '@pagespace/db/schema/organizations';
 import { decryptUserRows } from '../auth/user-repository';
-import type { DriveMemberRole } from './org-access';
+import { driveMembershipRole } from './drive-member-role';
 import { decideDriveDirectoryEntry, type DirectoryEntry, type RequesterRow } from './drive-join-requests';
 
 /**
@@ -67,7 +67,7 @@ export async function listOrgDriveDirectory(orgId: string, viewerId: string): Pr
       .from(driveMembers)
       .where(and(eq(driveMembers.userId, viewerId), inArray(driveMembers.driveId, ids)));
     for (const r of rows) {
-      rowByDrive.set(r.driveId, { role: r.role as DriveMemberRole, source: r.source, accepted: r.acceptedAt !== null });
+      rowByDrive.set(r.driveId, { role: driveMembershipRole(r.role), source: r.source, accepted: r.acceptedAt !== null });
     }
     const requests = await db
       .select({ driveId: driveJoinRequests.driveId })

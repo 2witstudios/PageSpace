@@ -14,7 +14,8 @@ import {
   type ResolveMembershipsOptions,
 } from './org-drive-membership';
 import { decideListedDriveRole } from './org-drive-resolution';
-import type { DriveMemberRole, OrgDriveMembership } from './org-access';
+import type { OrgDriveMembership } from './org-access';
+import { driveMembershipRow } from './drive-member-role';
 import { ORGS_ENABLED } from '../organizations/orgs-enabled';
 
 /**
@@ -150,7 +151,7 @@ async function getDriveIdsForUserWithOrgs(userId: string): Promise<string[]> {
         orgsEnabled: true,
         drive: { orgId: drive.orgId, orgVisibility: drive.orgVisibility },
         orgRole: drive.orgId ? orgRoles.get(drive.orgId) ?? null : null,
-        row: row ? { role: row.role as DriveMemberRole, customRoleId: row.customRoleId, source: row.source } : null,
+        row: driveMembershipRow(row),
         viaPagePermission: pageDriveIds.has(id),
       });
       if (listed !== null) driveIdSet.add(id);
@@ -1116,7 +1117,7 @@ async function withEffectiveMembership<R extends PagePermissionRow & OrgMembersh
       drive: { id: row.driveId as string, orgId: row.driveOrgId, orgVisibility: row.driveOrgVisibility },
       row: row.memberRole === null
         ? null
-        : { role: row.memberRole as DriveMemberRole, customRoleId: row.memberCustomRoleId, source: row.memberSource ?? 'invite' },
+        : driveMembershipRow({ role: row.memberRole, customRoleId: row.memberCustomRoleId, source: row.memberSource ?? 'invite' }),
     })),
     options,
   );

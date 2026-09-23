@@ -93,4 +93,16 @@ describe('decideChangeOrgDriveLead', () => {
     expect(decideChangeOrgDriveLead({ drive: product(), actorId: PRIYA, actorOrgRole: 'ADMIN', targetId: MARCUS, targetOrgRole: 'MEMBER' }))
       .toEqual({ ok: true, changed: false, fromUserId: MARCUS, toUserId: MARCUS });
   });
+
+  it('DRV-1 (partial) a trashed drive keeps its lead until restored, as it keeps its visibility', () => {
+    for (const [actorId, actorOrgRole] of [[MARCUS, 'MEMBER'], [JONO, 'OWNER'], [PRIYA, 'ADMIN']] as const) {
+      expect(decideChangeOrgDriveLead({ drive: product({ isTrashed: true }), actorId, actorOrgRole, targetId: LENA, targetOrgRole: 'MEMBER' }))
+        .toMatchObject({ ok: false, code: 'DRIVE_TRASHED', status: 409 });
+    }
+  });
+
+  it('DRV-1 (partial) the trashed refusal comes after authority: someone who may not change the lead learns only that', () => {
+    expect(decideChangeOrgDriveLead({ drive: product({ isTrashed: true }), actorId: LENA, actorOrgRole: 'MEMBER', targetId: LENA, targetOrgRole: 'MEMBER' }))
+      .toMatchObject({ ok: false, code: 'NOT_DRIVE_LEAD_OR_ORG_ADMIN', status: 403 });
+  });
 });

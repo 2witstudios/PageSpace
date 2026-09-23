@@ -15,7 +15,9 @@ import { drives } from './core';
  * - `pending`   awaiting the drive lead or an org Owner/Admin.
  * - `approved`  the approver admitted the requester (the drive_members row is theirs now).
  * - `denied`    refused; the requester may ask again.
- * - `withdrawn` the requester took it back; they may ask again.
+ * - `withdrawn` the requester took it back, or it was closed because it no longer asks for anything
+ *               (the drive left Restricted or its org, the requester left the org or now leads
+ *               the drive; decidedBy stays null). They may ask again.
  *
  * At most one PENDING request per (drive, user), enforced by a partial unique index (the same
  * shape as org_members_one_owner_key), so a repeated request is idempotent and a decided one can

@@ -24,6 +24,7 @@
 import type { DriveMemberSource } from '@pagespace/db/schema/members';
 import type { OrgDriveVisibility } from '@pagespace/db/schema/core';
 import { isDriveLead } from '../permissions/drive-relationship';
+import type { DriveMemberRole } from '../permissions/org-access';
 
 export interface OrgSyncDrive {
   id: string;
@@ -39,6 +40,11 @@ export interface ExistingDriveMemberRow {
   id: string;
   driveId: string;
   userId: string;
+  /**
+   * The membership the row carries (driveMembershipRole), or null for a row that is no membership:
+   * a D-OW-24 GUEST row from a redeemed page share link. Only admission looks at it.
+   */
+  role: DriveMemberRole | null;
   source: DriveMemberSource;
   customRoleId: string | null;
   /** acceptedAt IS NOT NULL: only accepted rows grant access. */
@@ -76,6 +82,14 @@ export interface OrgRowInsert {
   customRoleId: string | null;
 }
 
+export interface OrgRowAdmission extends OrgRowInsert {
+  /**
+   * The requester's GUEST row (D-OW-24), upgraded in place to the admitted membership: the
+   * (drive, user) pair holds one row, and a guest's page grants stay theirs.
+   */
+  upgradesRowId?: string;
+}
+
 export interface OrgRowChange {
   rowId: string;
   driveId: string;
@@ -95,7 +109,7 @@ export interface DriveOrgMembershipPlan {
   /** Org rows set back to the default role and accepted. */
   repairs: OrgRowUpdate[];
   /** Approved joiners admitted as accepted direct ('invite') rows (DRV-6). */
-  admissions: OrgRowInsert[];
+  admissions: OrgRowAdmission[];
 }
 
 export function planDriveOrgMembership({
@@ -132,13 +146,19 @@ export function planDriveOrgMembership({
     .map((r) => ({ rowId: r.id, driveId: drive.id, userId: r.userId, customRoleId: drive.defaultCustomRoleId }));
 
   // Admission is for drives that do not materialize (an Open drive's member already has an org
-  // row). A direct row of any kind blocks it; a stale org row is deleted above and replaced.
+  // row). A direct membership row, accepted or a pending invitation, blocks it; a stale org row is
+  // deleted above and replaced; a GUEST row is no membership, so it is upgraded in place.
   const orgMembers = new Set(orgMemberUserIds);
-  const usersWithDirectRow = new Set(rows.filter((r) => r.source !== 'org').map((r) => r.userId));
+  const usersWithDirectRow = new Set(rows.filter((r) => r.source !== 'org' && r.role !== null).map((r) => r.userId));
+  const guestRowOf = new Map(rows.filter((r) => r.role === null && r.source !== 'org').map((r) => [r.userId, r.id]));
   const admits = drive.orgId !== null && !materializes;
   const admissions = [...new Set(admit)]
     .filter((userId) => admits && orgMembers.has(userId) && !isDriveLead(userId, drive) && !usersWithDirectRow.has(userId))
-    .map((userId) => ({ driveId: drive.id, userId, customRoleId: drive.defaultCustomRoleId }));
+    .map((userId): OrgRowAdmission => {
+      const upgradesRowId = guestRowOf.get(userId);
+      const admission = { driveId: drive.id, userId, customRoleId: drive.defaultCustomRoleId };
+      return upgradesRowId === undefined ? admission : { ...admission, upgradesRowId };
+    });
 
   return {
     driveId: drive.id,

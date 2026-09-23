@@ -8,6 +8,7 @@ import {
   type ExistingDriveMemberRow,
   type DriveOrgMembershipPlan,
 } from '../org-membership-sync-core';
+import { driveMembershipRole } from '../../permissions/drive-member-role';
 
 const openDrive = (overrides: Partial<OrgSyncDrive> = {}): OrgSyncDrive => ({
   id: 'drive-product',
@@ -27,6 +28,7 @@ const row = (
   id: `row-${driveId}-${userId}`,
   driveId,
   userId,
+  role: 'MEMBER',
   source,
   customRoleId: null,
   accepted: true,
@@ -286,6 +288,23 @@ describe('planDriveOrgMembership admissions (approved join requests)', () => {
     });
     expect(plan.deletes).toEqual([{ rowId: 'row-drive-product-user-lena', driveId: 'drive-product', userId: 'user-lena' }]);
     expect(plan.admissions).toEqual([{ driveId: 'drive-product', userId: 'user-lena', customRoleId: 'role-default' }]);
+  });
+
+  it('D-OW-24 DRV-6 (partial) admits an org member holding only a GUEST row by upgrading that row in place', () => {
+    const guest = row('user-lena', 'invite', 'drive-product', { role: driveMembershipRole('GUEST') });
+    const plan = planDriveOrgMembership({
+      drive: restricted, orgMemberUserIds: ['user-lena'], existingRows: [guest], admit: ['user-lena'],
+    });
+    expect(plan.admissions).toEqual([
+      { driveId: 'drive-product', userId: 'user-lena', customRoleId: 'role-default', upgradesRowId: 'row-drive-product-user-lena' },
+    ]);
+    expect(plan.deletes).toEqual([]);
+  });
+
+  it('D-OW-24 DRV-6 (partial) a GUEST row is left alone when its holder is not being admitted', () => {
+    const guest = row('user-lena', 'invite', 'drive-product', { role: driveMembershipRole('GUEST') });
+    expect(planDriveOrgMembership({ drive: restricted, orgMemberUserIds: ['user-lena'], existingRows: [guest] }))
+      .toEqual(emptyPlan());
   });
 
   it('DRV-5 (partial) admits nothing on an Open drive or a drive outside any org: materialization already covers the member', () => {
