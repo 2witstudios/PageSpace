@@ -12,7 +12,7 @@
  * production read.
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { dirname, join, posix, relative, sep } from 'node:path';
+import { join, posix, relative, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { decideDecryptCallSite, type DecryptImportEdge } from '../decide-decrypt-call-site';
 import { ALLOWED_DECRYPT_SITES, DECRYPTORS, LEGACY_PENDING_MIGRATION } from '../decrypt-guard-policy';
@@ -137,9 +137,9 @@ describe('decrypt call-site guard — scanner', () => {
     expect(actual).toEqual(expected);
   });
 
-  it('given a posix dirname of a nested importer, should normalize relative specifiers', () => {
+  it('given a relative specifier climbing out of a nested importer, should resolve it to the repo-relative module', () => {
     const actual = resolveSpecifier('packages/lib/src/a/b/c.ts', '../../integrations/credentials/encrypt-credentials');
-    const expected = `${dirname('packages/lib/src/x')}/integrations/credentials/encrypt-credentials`;
+    const expected = 'packages/lib/src/integrations/credentials/encrypt-credentials';
     expect(actual).toEqual(expected);
   });
 });
