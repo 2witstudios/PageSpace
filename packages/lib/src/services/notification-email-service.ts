@@ -39,6 +39,8 @@ export type NotificationType =
   | 'TOS_PRIVACY_UPDATED'
   | 'MENTION'
   | 'TASK_ASSIGNED'
+  // In-app only (SPEND-6): no email is sent for it, but the column type is the db enum.
+  | 'AUTOMATION_SKIPPED'
   | 'PRODUCT_UPDATE';
 
 interface NotificationEmailData {
