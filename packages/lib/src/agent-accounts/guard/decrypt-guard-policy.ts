@@ -50,3 +50,10 @@ export const ALLOWED_DECRYPT_SITES: readonly AllowedDecryptSite[] = [
   { importer: 'packages/lib/src/agent-accounts/migration/', reason: 'migration' },
   ...LEGACY_PENDING_MIGRATION.map((importer): AllowedDecryptSite => ({ importer, reason: 'legacy_pending_migration' })),
 ];
+
+/**
+ * Plane/migration modules that may be imported only from the allowlist: a
+ * wrapper inside one (`readLegacy = (c) => decryptCredentials(c)`) would hand
+ * plaintext to its importer without that importer naming a decryptor.
+ */
+export const CONTAINED_MODULES: readonly string[] = ['packages/lib/src/agent-accounts/migration/'];

@@ -15,7 +15,23 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, posix, relative, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { decideDecryptCallSite, type DecryptImportEdge } from '../decide-decrypt-call-site';
-import { ALLOWED_DECRYPT_SITES, DECRYPTORS, LEGACY_PENDING_MIGRATION } from '../decrypt-guard-policy';
+import { ALLOWED_DECRYPT_SITES, CONTAINED_MODULES, DECRYPTORS, LEGACY_PENDING_MIGRATION } from '../decrypt-guard-policy';
+
+/**
+ * The allowlist as G3 began (2026-09-23). Frozen HERE, apart from the policy
+ * file, so growing the policy's list fails this test: a new legacy site (or a
+ * new plane/migration site) must also edit this baseline, which review sees.
+ */
+const G3_LEGACY_BASELINE: readonly string[] = [
+  'packages/lib/src/integrations/saga/execute-tool.ts',
+  'packages/lib/src/services/sandbox/github-token.ts',
+  'packages/lib/src/compliance/erasure/revoke-integration-tokens.ts',
+  'apps/web/src/app/api/integrations/google-calendar/disconnect/route.ts',
+  'apps/web/src/app/api/integrations/zoom/disconnect/route.ts',
+  'apps/web/src/lib/integrations/google-calendar/token-refresh.ts',
+  'apps/web/src/lib/integrations/zoom/token-refresh.ts',
+];
+const G3_NON_LEGACY_BASELINE: readonly string[] = ['packages/lib/src/integrations/credentials/encrypt-credentials.ts', 'packages/lib/src/agent-accounts/migration/'];
 
 const REPO_ROOT = join(__dirname, '..', '..', '..', '..', '..', '..');
 const ROOTS = ['apps', 'packages', 'scripts'];
@@ -80,7 +96,7 @@ const productionFiles = (): readonly string[] =>
 describe('decrypt call-site guard (repo scan)', () => {
   const files = productionFiles();
   const verdicts = files.flatMap((importer) =>
-    extractEdges(importer, readFileSync(join(REPO_ROOT, importer), 'utf8')).map((edge) => ({ edge, result: decideDecryptCallSite({ edge, decryptors: DECRYPTORS, allowed: ALLOWED_DECRYPT_SITES }) })),
+    extractEdges(importer, readFileSync(join(REPO_ROOT, importer), 'utf8')).map((edge) => ({ edge, result: decideDecryptCallSite({ edge, decryptors: DECRYPTORS, allowed: ALLOWED_DECRYPT_SITES, contained: CONTAINED_MODULES }) })),
   );
 
   it('given every production import edge in the monorepo, should find no decryptor imported outside the plane allowlist', () => {
@@ -93,6 +109,15 @@ describe('decrypt call-site guard (repo scan)', () => {
     const stillImporting = new Set(verdicts.filter(({ result }) => result.verdict === 'allowed').map(({ edge }) => edge.importer));
     const actual = LEGACY_PENDING_MIGRATION.filter((file) => !stillImporting.has(file));
     const expected: readonly string[] = [];
+    expect(actual).toEqual(expected);
+  });
+
+  it('given the G3 baseline, should never let the allowlist grow — the ratchet only shrinks', () => {
+    const actual = {
+      newLegacy: LEGACY_PENDING_MIGRATION.filter((file) => !G3_LEGACY_BASELINE.includes(file)),
+      newOther: ALLOWED_DECRYPT_SITES.filter((site) => site.reason !== 'legacy_pending_migration' && !G3_NON_LEGACY_BASELINE.includes(site.importer)).map((site) => site.importer),
+    };
+    const expected = { newLegacy: [], newOther: [] };
     expect(actual).toEqual(expected);
   });
 
@@ -114,6 +139,8 @@ describe('decrypt call-site guard — scanner', () => {
       edgesOf('apps/web/src/lib/x.ts', "import * as codec from '@pagespace/lib/integrations/credentials/encrypt-credentials';"),
       edgesOf('packages/lib/src/x.ts', "export { decryptCredentials } from './integrations/credentials/encrypt-credentials';"),
       edgesOf('apps/web/src/lib/x.ts', "const m = await import('@pagespace/lib/integrations/credentials/encrypt-credentials');"),
+      edgesOf('apps/web/src/lib/x.ts', 'const m = await import(`@pagespace/lib/integrations/credentials/encrypt-credentials`);'),
+      edgesOf('apps/web/src/lib/x.ts', 'const m = require(`@pagespace/lib/integrations/credentials/encrypt-credentials`);'),
     ];
     const expected = [
       [{ module: CREDENTIALS, names: ['decryptCredentials'] }],
@@ -121,7 +148,15 @@ describe('decrypt call-site guard — scanner', () => {
       [{ module: CREDENTIALS, names: 'all' }],
       [{ module: CREDENTIALS, names: ['decryptCredentials'] }],
       [{ module: CREDENTIALS, names: 'all' }],
+      [{ module: CREDENTIALS, names: 'all' }],
+      [{ module: CREDENTIALS, names: 'all' }],
     ];
+    expect(actual).toEqual(expected);
+  });
+
+  it('given a re-export, should mark the edge so an allowlisted barrel cannot launder a decryptor', () => {
+    const actual = extractEdges('packages/lib/src/x.ts', "export { decryptCredentials } from './integrations/credentials/encrypt-credentials';\nimport { encryptCredentials } from './integrations/credentials/encrypt-credentials';").map(({ reexport }) => reexport);
+    const expected = [false, true];
     expect(actual).toEqual(expected);
   });
 
