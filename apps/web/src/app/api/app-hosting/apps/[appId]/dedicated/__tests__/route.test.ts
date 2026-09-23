@@ -79,7 +79,7 @@ describe('/api/app-hosting/apps/[appId]/dedicated', () => {
 
     const response = await POST(request('POST'), context);
 
-    expect(response.status).toBe(200);
+    expect(response?.status).toBe(200);
     expect(startDedicatedSubscription).toHaveBeenCalledTimes(1);
   });
 
@@ -88,8 +88,8 @@ describe('/api/app-hosting/apps/[appId]/dedicated', () => {
 
     const response = await POST(request('POST'), context);
 
-    expect(response.status).toBe(409);
-    expect(await response.json()).toMatchObject({ error: 'org_billing_pending' });
+    expect(response?.status).toBe(409);
+    expect(await response?.json()).toMatchObject({ error: 'org_billing_pending' });
     expect(startDedicatedSubscription).not.toHaveBeenCalled();
   });
 
@@ -106,7 +106,7 @@ describe('/api/app-hosting/apps/[appId]/dedicated', () => {
 
     const response = await POST(request('POST'), context);
 
-    expect(response.status).toBe(404);
+    expect(response?.status).toBe(404);
     expect(startDedicatedSubscription).not.toHaveBeenCalled();
   });
 });
