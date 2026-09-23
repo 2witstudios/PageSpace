@@ -10,9 +10,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const { listDriveAudience } = vi.hoisted(() => ({ listDriveAudience: vi.fn() }));
 vi.mock('../../permissions/drive-audience', () => ({ listDriveAudience }));
 vi.mock('@pagespace/db/db', () => ({ db: {} }));
-vi.mock('@pagespace/db/operators', () => ({ and: vi.fn(), eq: vi.fn(), isNotNull: vi.fn() }));
-vi.mock('@pagespace/db/schema/core', () => ({ drives: {}, pages: {} }));
-vi.mock('@pagespace/db/schema/members', () => ({ driveMembers: {} }));
+vi.mock('@pagespace/db/operators', () => ({ and: vi.fn(), eq: vi.fn() }));
+vi.mock('@pagespace/db/schema/core', () => ({ pages: {} }));
 vi.mock('../../services/drive-service', () => ({ getDriveAccess: vi.fn() }));
 vi.mock('../../permissions/permissions', () => ({ canUserEditPage: vi.fn(), canUserViewPage: vi.fn() }));
 
