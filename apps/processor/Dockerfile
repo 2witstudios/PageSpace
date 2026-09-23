@@ -24,6 +24,7 @@ COPY package.json bun.lock ./
 COPY packages/db/package.json ./packages/db/
 COPY packages/lib/package.json ./packages/lib/
 COPY packages/editor/package.json ./packages/editor/
+COPY packages/browser-worker/package.json ./packages/browser-worker/
 COPY packages/sdk/package.json ./packages/sdk/
 COPY packages/cli/package.json ./packages/cli/
 COPY apps/admin/package.json ./apps/admin/

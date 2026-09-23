@@ -13,6 +13,7 @@ import {
   creditsFromCents,
   centsFromCredits,
   dollarsFromCents,
+  providerDollarsCoveredByCents,
   formatDollars,
   formatCreditCount,
   creditsFromDollars,
@@ -218,6 +219,23 @@ describe('MON-5 one definition of a credit', () => {
     expect(formatDollars(1000)).toBe('$10');
     expect(formatDollars(1050)).toBe('$10.50');
     expect(formatDollars(0)).toBe('$0');
+  });
+
+  it('MON-5 (partial) providerDollarsCoveredByCents takes charged cents back through the markup to the provider cost they cover', () => {
+    // At the 1.5× default: 150¢ charged covers $1.00 of provider cost; 3¢ covers $0.02.
+    expect(providerDollarsCoveredByCents(150)).toBe(1);
+    expect(providerDollarsCoveredByCents(3)).toBe(0.02);
+    expect(providerDollarsCoveredByCents(0)).toBe(0);
+    // An explicit markup (the machine floor, say) is honoured instead of MARKUP_BPS.
+    expect(providerDollarsCoveredByCents(200, 20000)).toBe(1);
+    // Multiply before divide. The divide-first form this replaces (cents / 100 / (markup / 10000))
+    // gives 0.09999999999999999, 0.11333333333333334, 0.13999999999999999, 0.15333333333333335
+    // and 0.18000000000000002 for these inputs; literal expectations, never the formula itself.
+    expect(providerDollarsCoveredByCents(15)).toBe(0.1);
+    expect(providerDollarsCoveredByCents(17)).toBe(0.11333333333333333);
+    expect(providerDollarsCoveredByCents(21)).toBe(0.14);
+    expect(providerDollarsCoveredByCents(23)).toBe(0.15333333333333332);
+    expect(providerDollarsCoveredByCents(27)).toBe(0.18);
   });
 });
 

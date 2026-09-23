@@ -265,8 +265,8 @@ jobs:
           # already ran it against a fresh volume above — this just confirms that happened
           # rather than assuming it silently.
           docker exec -i infisical-dev-metadata psql -U plane_metadata -d plane_metadata -c \
-            "SELECT 1 FROM agent_account_secret_versions LIMIT 0" || {
-            echo "::error::agent_account_secret_versions was not created by plane-metadata.sql's initdb mount"
+            "SELECT 1 FROM agent_account_secret_versions LIMIT 0; SELECT 1 FROM agent_account_consent_ledger LIMIT 0" || {
+            echo "::error::agent_account_secret_versions / agent_account_consent_ledger were not created by plane-metadata.sql's initdb mount"
             exit 1
           }
 
@@ -288,12 +288,16 @@ jobs:
         working-directory: packages/lib
         env:
           TZ: UTC
+          # The G2 end-to-end adversarial suite also needs the main DB (reference rows, grant nonces,
+          # the audit chain) beside the plane.
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
         # The default reporter names each failing test in the log; the JSON one feeds the
         # skipped/partial check below, which must run even when vitest itself exited non-zero.
         run: |
           set +e
           bunx vitest run --config vitest.integration.config.ts \
             src/agent-accounts/store/__tests__/store-adapter-infisical.integration.test.ts \
+            src/agent-accounts/__tests__/adversarial/http-executor-end-to-end.integration.test.ts \
             --reporter=default --reporter=json --outputFile.json=infisical-result.json
           vitest_status=$?
           set -e

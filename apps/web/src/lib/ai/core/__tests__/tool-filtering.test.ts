@@ -20,9 +20,13 @@ import {
   SANDBOX_COMPUTE_TOOL_NAMES,
   SANDBOX_TOOL_NAMES,
   SESSION_FAMILY_TOOL_NAMES,
+  filterToolsForAgentAccounts,
+  WRITE_TOOLS,
 } from '../tool-filtering';
 import { SANDBOX_CORE_TOOL_NAMES, createSandboxTools } from '../../tools/sandbox-tools';
 import { SANDBOX_GIT_TOOL_NAMES } from '../../tools/sandbox-git-tools';
+import { createBrowserTools } from '../../tools/browser-tools';
+import { BROWSER_TOOL_NAMES } from '@pagespace/browser-worker/browser-tool-name';
 
 const baseline = {
   // read tools
@@ -647,10 +651,31 @@ describe('hasSandboxComputeTools', () => {
 });
 
 describe('SANDBOX_TOOL_NAMES', () => {
-  it('is exactly core ∪ git ∪ session families', () => {
+  it('is exactly core ∪ git ∪ session ∪ browser families', () => {
     expect([...SANDBOX_TOOL_NAMES].sort()).toEqual(
-      [...new Set([...SANDBOX_CORE_TOOL_NAMES, ...SANDBOX_GIT_TOOL_NAMES, ...SESSION_FAMILY_TOOL_NAMES])].sort(),
+      [...new Set([...SANDBOX_CORE_TOOL_NAMES, ...SANDBOX_GIT_TOOL_NAMES, ...SESSION_FAMILY_TOOL_NAMES, ...BROWSER_TOOL_NAMES])].sort(),
     );
+  });
+
+  it('BROWSER_TOOL_NAMES never drifts from what createBrowserTools actually builds', () => {
+    const built = createBrowserTools({ resolveContext: (() => {}) as never, gate: (() => {}) as never, operate: (() => {}) as never });
+    expect(Object.keys(built).sort()).toEqual([...BROWSER_TOOL_NAMES].sort());
+  });
+});
+
+describe('browser tools under the sandbox gates (G6a)', () => {
+  const browserTools = Object.fromEntries(BROWSER_TOOL_NAMES.map((name) => [name, {}]));
+
+  it('given an agent with its sandbox off, should strip every browser tool', () => {
+    expect(Object.keys(filterToolsForSandboxEnablement({ ...browserTools, web_fetch: {} }, false))).toEqual(['web_fetch']);
+  });
+
+  it('given an ineligible payer tier, should strip every browser tool — a browser session is a billable machine', () => {
+    expect(Object.keys(filterToolsForSandboxTier({ ...browserTools, web_fetch: {} }, false))).toEqual(['web_fetch']);
+  });
+
+  it('given read-only mode, should keep only the observing browser tools', () => {
+    expect(Object.keys(filterToolsForReadOnly(browserTools, true)).sort()).toEqual(['browser_read', 'browser_screenshot']);
   });
 
   it('SANDBOX_CORE_TOOL_NAMES never drifts from what createSandboxTools actually builds', () => {
@@ -660,5 +685,27 @@ describe('SANDBOX_TOOL_NAMES', () => {
       gate: (() => {}) as never,
     });
     expect(Object.keys(built).sort()).toEqual([...SANDBOX_CORE_TOOL_NAMES].sort());
+  });
+});
+
+describe('filterToolsForAgentAccounts (G2 agent accounts)', () => {
+  const tools = { http_request: 'h', read_page: 'r' };
+
+  it('given the credential plane configured, should keep http_request', () => {
+    const actual = Object.keys(filterToolsForAgentAccounts(tools, true));
+    const expected = ['http_request', 'read_page'];
+    expect(actual).toEqual(expected);
+  });
+
+  it('given the credential plane not configured, should drop only http_request', () => {
+    const actual = Object.keys(filterToolsForAgentAccounts(tools, false));
+    const expected = ['read_page'];
+    expect(actual).toEqual(expected);
+  });
+
+  it('given a read-only agent, should drop http_request — a credentialed request can write at the provider', () => {
+    const actual = WRITE_TOOLS.has('http_request');
+    const expected = true;
+    expect(actual).toEqual(expected);
   });
 });

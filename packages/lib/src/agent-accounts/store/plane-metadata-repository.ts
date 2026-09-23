@@ -65,11 +65,18 @@ export type PlaneMetadataRepository = {
   }) => Promise<boolean>;
   /** Record the uncertain-write marker before a replacing write. `false` when the ref is revoked or already pending. */
   readonly markPending: (input: { readonly ref: SecretRef; readonly pending: PendingWrite }) => Promise<boolean>;
+  /**
+   * Drop exactly this pending write without moving any version (G2 ruling E1): the write provably did
+   * not land. `false` when that pending write is not the one recorded.
+   */
+  readonly abortPending: (input: { readonly ref: SecretRef; readonly pending: PendingWrite }) => Promise<boolean>;
   /** Advance to exactly the pending write (and open grace if it was a rotation). `false` when that pending write is not recorded. */
   readonly commitForward: (input: { readonly ref: SecretRef; readonly pending: PendingWrite; readonly rotatedAt: number }) => Promise<boolean>;
   /** `false` when no row was marked: the ref is gone, or a revocation is already recorded. */
   readonly markRevoked: (input: { readonly ref: SecretRef; readonly revokedAt: number; readonly reason: RevokeReason }) => Promise<boolean>;
   readonly remove: (ref: SecretRef) => Promise<void>;
+  /** A page of every ref the plane holds, keyset-ordered by (tenant, account, kind) — for the orphan sweep (review MED-1). */
+  readonly listRefs: (input: { readonly after: SecretRef | null; readonly limit: number }) => Promise<readonly { readonly ref: SecretRef; readonly createdAt: number }[]>;
   /** CAS on the stored `policy_version`; `false` when another writer moved it first. */
   readonly updateBindings: (input: { readonly ref: SecretRef; readonly expectedPolicyVersion: PolicyVersion; readonly record: PlaneBindingsRecord }) => Promise<boolean>;
 };
@@ -176,6 +183,17 @@ export function createPlaneMetadataRepository({ pool }: { readonly pool: PlaneMe
       return result.rowCount === 1;
     },
 
+    // Matches the exact marker (version AND digest), so an abort can never clear a DIFFERENT pending
+    // write another replica recorded after this one's section ended.
+    async abortPending({ ref, pending }) {
+      const result = await pool.query(
+        `UPDATE agent_account_secret_versions SET pending_version = NULL, pending_digest = NULL, pending_rotation = NULL
+          WHERE tenant_id = $1 AND account_id = $2 AND kind = $3 AND pending_version = $4 AND pending_digest = $5`,
+        [...key(ref), pending.version, pending.digest],
+      );
+      return result.rowCount === 1;
+    },
+
     // SET expressions read the row's OLD values, so `previous_version = current_version` is the
     // version being replaced. Only a pending rotation opens grace, as only rotate snapshots the
     // companion secret.
@@ -213,6 +231,19 @@ export function createPlaneMetadataRepository({ pool }: { readonly pool: PlaneMe
         [...key(ref), JSON.stringify(record.bindings), JSON.stringify(record.scope), JSON.stringify(record.consenters), record.bindings.policyVersion, expectedPolicyVersion],
       );
       return result.rowCount === 1;
+    },
+
+    async listRefs({ after, limit }) {
+      const result = await pool.query(
+        `SELECT tenant_id, account_id, kind, created_at FROM agent_account_secret_versions
+          WHERE ($1::text IS NULL OR (tenant_id, account_id, kind) > ($1, $2, $3))
+          ORDER BY tenant_id, account_id, kind LIMIT $4`,
+        [after?.tenantId ?? null, after?.accountId ?? null, after?.kind ?? null, limit],
+      );
+      return (result.rows as { tenant_id: string; account_id: string; kind: string; created_at: Date }[]).map((row) => ({
+        ref: { tenantId: row.tenant_id, accountId: row.account_id, kind: row.kind } as SecretRef,
+        createdAt: row.created_at.getTime(),
+      }));
     },
 
     async remove(ref) {

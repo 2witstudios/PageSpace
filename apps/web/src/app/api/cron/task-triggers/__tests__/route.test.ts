@@ -15,7 +15,9 @@ const {
   mockSelect,
   mockOrderBy,
   mockLimit,
+  mockCreditAdmission,
 } = vi.hoisted(() => ({
+  mockCreditAdmission: vi.fn(),
   mockReturning: vi.fn().mockResolvedValue([]),
   mockUpdateWhere: vi.fn(),
   mockUpdateSet: vi.fn(),
@@ -33,6 +35,10 @@ vi.mock('@/lib/auth/cron-auth', () => ({
 
 vi.mock('@/lib/workflows/workflow-executor', () => ({
   executeWorkflow: vi.fn(),
+}));
+
+vi.mock('@/lib/workflows/workflow-credit-gate', () => ({
+  creditAdmission: mockCreditAdmission,
 }));
 
 const mockAudit = vi.hoisted(() => vi.fn());
@@ -183,6 +189,8 @@ describe('POST /api/cron/task-triggers', () => {
       return p;
     });
     mockReturning.mockResolvedValue([]);
+
+    mockCreditAdmission.mockReturnValue(async () => ({ admitted: true, release: () => {} }));
   });
 
   it('returns auth error when cron request is invalid', async () => {
@@ -296,7 +304,7 @@ describe('POST /api/cron/task-triggers', () => {
       agentPageId: MOCK_WORKFLOW.agentPageId,
       prompt: MOCK_WORKFLOW.prompt,
       taskContext: { taskItemId: MOCK_TRIGGER.taskItemId, triggerType: MOCK_TRIGGER.triggerType },
-    }));
+    }), expect.objectContaining({ admit: expect.any(Function) }));
   });
 
   it('disables the trigger after firing (one-shot semantics)', async () => {
@@ -315,5 +323,56 @@ describe('POST /api/cron/task-triggers', () => {
         && (arg as { isEnabled?: boolean }).isEnabled === false,
     );
     expect(disablingCall).toBeDefined();
+  });
+
+  describe('credit gate', () => {
+    const fireOneDueTrigger = async () => {
+      pushDiscoveryRows([MOCK_TRIGGER]);
+      mockReturning.mockResolvedValueOnce([MOCK_TRIGGER]);
+      pushLookupRows([MOCK_WORKFLOW]);
+      pushLookupRows([MOCK_TASK]);
+      const response = await POST(new Request('https://example.com/api/cron/task-triggers', { method: 'POST' }));
+      return response.json();
+    };
+
+    it('hands the executor the credit gate as its admit hook, gating the owner as a scheduled run', async () => {
+      const admit = async () => ({ admitted: true as const, release: () => {} });
+      mockCreditAdmission.mockReturnValue(admit);
+      vi.mocked(executeWorkflow).mockResolvedValue({ success: true, durationMs: 50 });
+
+      await fireOneDueTrigger();
+
+      const [input, options] = vi.mocked(executeWorkflow).mock.calls[0];
+      expect(options?.admit).toBe(admit);
+      expect(mockCreditAdmission).toHaveBeenCalledWith(input, 'scheduled');
+      expect(input.createdBy).toBe(MOCK_WORKFLOW.createdBy);
+    });
+
+    it('does not gate a trigger that is skipped for its task (no model would run)', async () => {
+      pushDiscoveryRows([MOCK_TRIGGER]);
+      mockReturning.mockResolvedValueOnce([MOCK_TRIGGER]);
+      pushLookupRows([MOCK_WORKFLOW]);
+      pushLookupRows([{ ...MOCK_TASK, completedAt: new Date() }]);
+
+      await POST(new Request('https://example.com/api/cron/task-triggers', { method: 'POST' }));
+
+      expect(mockCreditAdmission).not.toHaveBeenCalled();
+    });
+
+    it('a refused fire retires the one-shot trigger with the reason and counts as skipped, not as a failure', async () => {
+      vi.mocked(executeWorkflow).mockResolvedValue({
+        success: false, skipped: true, durationMs: 0, runId: 'run_1', error: 'AI credit gate denied: out_of_credits',
+      });
+
+      const body = await fireOneDueTrigger();
+
+      expect(mockUpdateSet).toHaveBeenCalledWith({
+        isEnabled: false,
+        lastFireError: 'AI credit gate denied: out_of_credits',
+      });
+      expect(body.skipped).toBe(1);
+      expect(body.executed).toBe(0);
+      expect(body.errors).toBeUndefined();
+    });
   });
 });

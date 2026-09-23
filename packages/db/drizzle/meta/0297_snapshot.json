@@ -1,5 +1,5 @@
 {
-  "id": "cbdc9f2a-1d44-4f01-8163-b717fbd3b6dd",
+  "id": "37e2181d-c082-41fa-82aa-fe5bbb849d6f",
   "prevId": "304fb5fb-fdc7-43cf-9f0d-b2d92b5eecaf",
   "version": "7",
   "dialect": "postgresql",
@@ -974,13 +974,6 @@
           "notNull": true,
           "default": "'free'"
         },
-        "subscriptionGrandfathered": {
-          "name": "subscriptionGrandfathered",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
         "tosAcceptedAt": {
           "name": "tosAcceptedAt",
           "type": "timestamp",
@@ -1507,20 +1500,6 @@
           "notNull": true,
           "default": "'STANDARD'"
         },
-        "orgId": {
-          "name": "orgId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "orgVisibility": {
-          "name": "orgVisibility",
-          "type": "OrgDriveVisibility",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'OPEN'"
-        },
         "isTrashed": {
           "name": "isTrashed",
           "type": "boolean",
@@ -1636,28 +1615,6 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
-        },
-        "drives_org_slug_unique": {
-          "name": "drives_org_slug_unique",
-          "columns": [
-            {
-              "expression": "orgId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "slug",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "\"drives\".\"orgId\" IS NOT NULL",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
         }
       },
       "foreignKeys": {
@@ -1672,19 +1629,6 @@
             "id"
           ],
           "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "drives_orgId_organizations_id_fk": {
-          "name": "drives_orgId_organizations_id_fk",
-          "tableFrom": "drives",
-          "tableTo": "organizations",
-          "columnsFrom": [
-            "orgId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "restrict",
           "onUpdate": "no action"
         },
         "drives_homePageId_pages_id_fk": {
@@ -1725,12 +1669,7 @@
         }
       },
       "policies": {},
-      "checkConstraints": {
-        "drives_home_never_org_check": {
-          "name": "drives_home_never_org_check",
-          "value": "\"drives\".\"kind\" <> 'HOME' OR \"drives\".\"orgId\" IS NULL"
-        }
-      },
+      "checkConstraints": {},
       "isRLSEnabled": false
     },
     "public.favorites": {
@@ -3007,14 +2946,6 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
-        },
-        "source": {
-          "name": "source",
-          "type": "DriveMemberSource",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'invite'"
         },
         "invitedBy": {
           "name": "invitedBy",
@@ -18434,12 +18365,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "paidCents": {
-          "name": "paidCents",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
         "consumeStatus": {
           "name": "consumeStatus",
           "type": "text",
@@ -24094,8 +24019,8 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.org_invitations": {
-      "name": "org_invitations",
+    "public.agent_account_approvals": {
+      "name": "agent_account_approvals",
       "schema": "",
       "columns": {
         "id": {
@@ -24104,205 +24029,81 @@
           "primaryKey": true,
           "notNull": true
         },
-        "orgId": {
-          "name": "orgId",
+        "accountId": {
+          "name": "accountId",
           "type": "text",
           "primaryKey": false,
           "notNull": true
         },
-        "email": {
-          "name": "email",
+        "requestDigest": {
+          "name": "requestDigest",
           "type": "text",
           "primaryKey": false,
           "notNull": true
         },
-        "role": {
-          "name": "role",
-          "type": "OrgRole",
+        "outcome": {
+          "name": "outcome",
+          "type": "agent_account_approval_outcome",
           "typeSchema": "public",
           "primaryKey": false,
-          "notNull": true,
-          "default": "'MEMBER'"
+          "notNull": true
         },
-        "tokenHash": {
-          "name": "tokenHash",
+        "approvedByUserId": {
+          "name": "approvedByUserId",
           "type": "text",
           "primaryKey": false,
           "notNull": true
         },
-        "invitedBy": {
-          "name": "invitedBy",
+        "approvedViaSessionId": {
+          "name": "approvedViaSessionId",
           "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "expiresAt": {
-          "name": "expiresAt",
-          "type": "timestamp",
           "primaryKey": false,
           "notNull": true
         },
-        "acceptedAt": {
-          "name": "acceptedAt",
-          "type": "timestamp",
+        "stepUpChallengeId": {
+          "name": "stepUpChallengeId",
+          "type": "text",
           "primaryKey": false,
           "notNull": false
         },
         "createdAt": {
           "name": "createdAt",
-          "type": "timestamp",
+          "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true,
-          "default": "(now() at time zone 'utc')"
+          "default": "now()"
+        },
+        "expiresAt": {
+          "name": "expiresAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "consumedAt": {
+          "name": "consumedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "consumedByGrantId": {
+          "name": "consumedByGrantId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
-        "org_invitations_email_idx": {
-          "name": "org_invitations_email_idx",
+        "agent_account_approvals_account_digest_idx": {
+          "name": "agent_account_approvals_account_digest_idx",
           "columns": [
             {
-              "expression": "lower(\"email\")",
-              "asc": true,
-              "isExpression": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "org_invitations_open_org_email_key": {
-          "name": "org_invitations_open_org_email_key",
-          "columns": [
-            {
-              "expression": "orgId",
+              "expression": "accountId",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
             },
             {
-              "expression": "lower(\"email\")",
-              "asc": true,
-              "isExpression": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "\"org_invitations\".\"acceptedAt\" IS NULL",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "org_invitations_orgId_organizations_id_fk": {
-          "name": "org_invitations_orgId_organizations_id_fk",
-          "tableFrom": "org_invitations",
-          "tableTo": "organizations",
-          "columnsFrom": [
-            "orgId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "org_invitations_invitedBy_users_id_fk": {
-          "name": "org_invitations_invitedBy_users_id_fk",
-          "tableFrom": "org_invitations",
-          "tableTo": "users",
-          "columnsFrom": [
-            "invitedBy"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "org_invitations_tokenHash_unique": {
-          "name": "org_invitations_tokenHash_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "tokenHash"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.org_members": {
-      "name": "org_members",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "orgId": {
-          "name": "orgId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "userId": {
-          "name": "userId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "role": {
-          "name": "role",
-          "type": "OrgRole",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'MEMBER'"
-        },
-        "invitedBy": {
-          "name": "invitedBy",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "joinedAt": {
-          "name": "joinedAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "(now() at time zone 'utc')"
-        }
-      },
-      "indexes": {
-        "org_members_one_owner_key": {
-          "name": "org_members_one_owner_key",
-          "columns": [
-            {
-              "expression": "orgId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "\"org_members\".\"role\" = 'OWNER'",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "org_members_user_id_idx": {
-          "name": "org_members_user_id_idx",
-          "columns": [
-            {
-              "expression": "userId",
+              "expression": "requestDigest",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -24315,12 +24116,12 @@
         }
       },
       "foreignKeys": {
-        "org_members_orgId_organizations_id_fk": {
-          "name": "org_members_orgId_organizations_id_fk",
-          "tableFrom": "org_members",
-          "tableTo": "organizations",
+        "agent_account_approvals_accountId_agent_accounts_id_fk": {
+          "name": "agent_account_approvals_accountId_agent_accounts_id_fk",
+          "tableFrom": "agent_account_approvals",
+          "tableTo": "agent_accounts",
           "columnsFrom": [
-            "orgId"
+            "accountId"
           ],
           "columnsTo": [
             "id"
@@ -24328,56 +24129,303 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "org_members_userId_users_id_fk": {
-          "name": "org_members_userId_users_id_fk",
-          "tableFrom": "org_members",
+        "agent_account_approvals_approvedByUserId_users_id_fk": {
+          "name": "agent_account_approvals_approvedByUserId_users_id_fk",
+          "tableFrom": "agent_account_approvals",
           "tableTo": "users",
           "columnsFrom": [
-            "userId"
+            "approvedByUserId"
           ],
           "columnsTo": [
             "id"
           ],
           "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "org_members_invitedBy_users_id_fk": {
-          "name": "org_members_invitedBy_users_id_fk",
-          "tableFrom": "org_members",
-          "tableTo": "users",
-          "columnsFrom": [
-            "invitedBy"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "org_members_org_user_key": {
-          "name": "org_members_org_user_key",
-          "nullsNotDistinct": false,
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "agent_account_approvals_consumed_chk": {
+          "name": "agent_account_approvals_consumed_chk",
+          "value": "(\"agent_account_approvals\".\"consumedAt\" IS NULL) = (\"agent_account_approvals\".\"consumedByGrantId\" IS NULL)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.agent_account_bindings": {
+      "name": "agent_account_bindings",
+      "schema": "",
+      "columns": {
+        "accountId": {
+          "name": "accountId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "agentPageId": {
+          "name": "agentPageId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "boundByUserId": {
+          "name": "boundByUserId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "boundAt": {
+          "name": "boundAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "revokedAt": {
+          "name": "revokedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "agent_account_bindings_agent_page_id_idx": {
+          "name": "agent_account_bindings_agent_page_id_idx",
           "columns": [
-            "orgId",
-            "userId"
+            {
+              "expression": "agentPageId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "agent_account_bindings_accountId_agent_accounts_id_fk": {
+          "name": "agent_account_bindings_accountId_agent_accounts_id_fk",
+          "tableFrom": "agent_account_bindings",
+          "tableTo": "agent_accounts",
+          "columnsFrom": [
+            "accountId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "agent_account_bindings_agentPageId_pages_id_fk": {
+          "name": "agent_account_bindings_agentPageId_pages_id_fk",
+          "tableFrom": "agent_account_bindings",
+          "tableTo": "pages",
+          "columnsFrom": [
+            "agentPageId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "agent_account_bindings_boundByUserId_users_id_fk": {
+          "name": "agent_account_bindings_boundByUserId_users_id_fk",
+          "tableFrom": "agent_account_bindings",
+          "tableTo": "users",
+          "columnsFrom": [
+            "boundByUserId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "agent_account_bindings_accountId_agentPageId_pk": {
+          "name": "agent_account_bindings_accountId_agentPageId_pk",
+          "columns": [
+            "accountId",
+            "agentPageId"
           ]
         }
       },
+      "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.organizations": {
-      "name": "organizations",
+    "public.agent_account_delegations": {
+      "name": "agent_account_delegations",
       "schema": "",
       "columns": {
         "id": {
           "name": "id",
           "type": "text",
           "primaryKey": true,
+          "notNull": true
+        },
+        "accountId": {
+          "name": "accountId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "agentPageId": {
+          "name": "agentPageId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "delegatedByUserId": {
+          "name": "delegatedByUserId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "scope": {
+          "name": "scope",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "expiresAt": {
+          "name": "expiresAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "revokedAt": {
+          "name": "revokedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "agent_account_delegations_account_id_idx": {
+          "name": "agent_account_delegations_account_id_idx",
+          "columns": [
+            {
+              "expression": "accountId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "agent_account_delegations_accountId_agent_accounts_id_fk": {
+          "name": "agent_account_delegations_accountId_agent_accounts_id_fk",
+          "tableFrom": "agent_account_delegations",
+          "tableTo": "agent_accounts",
+          "columnsFrom": [
+            "accountId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "agent_account_delegations_agentPageId_pages_id_fk": {
+          "name": "agent_account_delegations_agentPageId_pages_id_fk",
+          "tableFrom": "agent_account_delegations",
+          "tableTo": "pages",
+          "columnsFrom": [
+            "agentPageId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "agent_account_delegations_delegatedByUserId_users_id_fk": {
+          "name": "agent_account_delegations_delegatedByUserId_users_id_fk",
+          "tableFrom": "agent_account_delegations",
+          "tableTo": "users",
+          "columnsFrom": [
+            "delegatedByUserId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.agent_accounts": {
+      "name": "agent_accounts",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "agent_account_kind",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ownerKind": {
+          "name": "ownerKind",
+          "type": "agent_account_owner_kind",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ownerUserId": {
+          "name": "ownerUserId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "ownerAgentPageId": {
+          "name": "ownerAgentPageId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "ownerDriveId": {
+          "name": "ownerDriveId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "tenantId": {
+          "name": "tenantId",
+          "type": "text",
+          "primaryKey": false,
           "notNull": true
         },
         "name": {
@@ -24386,64 +24434,151 @@
           "primaryKey": false,
           "notNull": true
         },
-        "slug": {
-          "name": "slug",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "avatarUrl": {
-          "name": "avatarUrl",
+        "providerSlug": {
+          "name": "providerSlug",
           "type": "text",
           "primaryKey": false,
           "notNull": false
         },
-        "ownerId": {
-          "name": "ownerId",
-          "type": "text",
+        "allowedOrigins": {
+          "name": "allowedOrigins",
+          "type": "jsonb",
           "primaryKey": false,
           "notNull": true
         },
-        "policies": {
-          "name": "policies",
+        "auxiliaryOrigins": {
+          "name": "auxiliaryOrigins",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
+        },
+        "resourceRestrictions": {
+          "name": "resourceRestrictions",
           "type": "jsonb",
           "primaryKey": false,
           "notNull": true,
           "default": "'{}'::jsonb"
         },
-        "stripeCustomerId": {
-          "name": "stripeCustomerId",
-          "type": "text",
+        "approvalPolicy": {
+          "name": "approvalPolicy",
+          "type": "jsonb",
           "primaryKey": false,
           "notNull": false
         },
-        "stripeSubscriptionId": {
-          "name": "stripeSubscriptionId",
-          "type": "text",
+        "credentialVersion": {
+          "name": "credentialVersion",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "policyVersion": {
+          "name": "policyVersion",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "acknowledgment": {
+          "name": "acknowledgment",
+          "type": "agent_account_acknowledgment",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sessionFormat": {
+          "name": "sessionFormat",
+          "type": "agent_account_session_format",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "sessionHttpEnabled": {
+          "name": "sessionHttpEnabled",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "status": {
+          "name": "status",
+          "type": "agent_account_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'active'"
+        },
+        "upstreamRevocation": {
+          "name": "upstreamRevocation",
+          "type": "agent_account_upstream_revocation",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "lastUsedAt": {
+          "name": "lastUsedAt",
+          "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
         },
         "createdAt": {
           "name": "createdAt",
-          "type": "timestamp",
+          "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true,
-          "default": "(now() at time zone 'utc')"
+          "default": "now()"
         },
         "updatedAt": {
           "name": "updatedAt",
-          "type": "timestamp",
+          "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true,
-          "default": "(now() at time zone 'utc')"
+          "default": "now()"
+        },
+        "revokedAt": {
+          "name": "revokedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
-        "organizations_owner_id_idx": {
-          "name": "organizations_owner_id_idx",
+        "agent_accounts_owner_user_id_idx": {
+          "name": "agent_accounts_owner_user_id_idx",
           "columns": [
             {
-              "expression": "ownerId",
+              "expression": "ownerUserId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "agent_accounts_owner_agent_page_id_idx": {
+          "name": "agent_accounts_owner_agent_page_id_idx",
+          "columns": [
+            {
+              "expression": "ownerAgentPageId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "agent_accounts_owner_drive_id_idx": {
+          "name": "agent_accounts_owner_drive_id_idx",
+          "columns": [
+            {
+              "expression": "ownerDriveId",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -24456,39 +24591,75 @@
         }
       },
       "foreignKeys": {
-        "organizations_ownerId_users_id_fk": {
-          "name": "organizations_ownerId_users_id_fk",
-          "tableFrom": "organizations",
+        "agent_accounts_ownerUserId_users_id_fk": {
+          "name": "agent_accounts_ownerUserId_users_id_fk",
+          "tableFrom": "agent_accounts",
           "tableTo": "users",
           "columnsFrom": [
-            "ownerId"
+            "ownerUserId"
           ],
           "columnsTo": [
             "id"
           ],
-          "onDelete": "restrict",
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "agent_accounts_ownerAgentPageId_pages_id_fk": {
+          "name": "agent_accounts_ownerAgentPageId_pages_id_fk",
+          "tableFrom": "agent_accounts",
+          "tableTo": "pages",
+          "columnsFrom": [
+            "ownerAgentPageId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "agent_accounts_ownerDriveId_drives_id_fk": {
+          "name": "agent_accounts_ownerDriveId_drives_id_fk",
+          "tableFrom": "agent_accounts",
+          "tableTo": "drives",
+          "columnsFrom": [
+            "ownerDriveId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
           "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "organizations_slug_unique": {
-          "name": "organizations_slug_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "slug"
-          ]
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "agent_accounts_owner_scope_chk": {
+          "name": "agent_accounts_owner_scope_chk",
+          "value": "(\"agent_accounts\".\"ownerKind\" = 'user' AND \"agent_accounts\".\"ownerUserId\" IS NOT NULL AND \"agent_accounts\".\"ownerAgentPageId\" IS NULL AND \"agent_accounts\".\"ownerDriveId\" IS NULL)\n        OR (\"agent_accounts\".\"ownerKind\" = 'agent_page' AND \"agent_accounts\".\"ownerUserId\" IS NULL AND \"agent_accounts\".\"ownerAgentPageId\" IS NOT NULL AND \"agent_accounts\".\"ownerDriveId\" IS NOT NULL)"
         },
-        "organizations_stripeCustomerId_unique": {
-          "name": "organizations_stripeCustomerId_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "stripeCustomerId"
-          ]
+        "agent_accounts_tenant_derived_chk": {
+          "name": "agent_accounts_tenant_derived_chk",
+          "value": "(\"agent_accounts\".\"ownerKind\" = 'user' AND \"agent_accounts\".\"tenantId\" = 'user:' || \"agent_accounts\".\"ownerUserId\")\n        OR (\"agent_accounts\".\"ownerKind\" = 'agent_page' AND \"agent_accounts\".\"tenantId\" = 'drive:' || \"agent_accounts\".\"ownerDriveId\")"
+        },
+        "agent_accounts_allowed_origins_nonempty_chk": {
+          "name": "agent_accounts_allowed_origins_nonempty_chk",
+          "value": "jsonb_typeof(\"agent_accounts\".\"allowedOrigins\") = 'array' AND jsonb_array_length(\"agent_accounts\".\"allowedOrigins\") > 0"
+        },
+        "agent_accounts_session_format_chk": {
+          "name": "agent_accounts_session_format_chk",
+          "value": "(\"agent_accounts\".\"kind\" = 'session') = (\"agent_accounts\".\"sessionFormat\" IS NOT NULL)"
+        },
+        "agent_accounts_session_http_chk": {
+          "name": "agent_accounts_session_http_chk",
+          "value": "\"agent_accounts\".\"sessionHttpEnabled\" = false OR \"agent_accounts\".\"kind\" = 'session'"
+        },
+        "agent_accounts_versions_chk": {
+          "name": "agent_accounts_versions_chk",
+          "value": "\"agent_accounts\".\"credentialVersion\" >= 0 AND \"agent_accounts\".\"policyVersion\" >= 1"
         }
       },
-      "policies": {},
-      "checkConstraints": {},
       "isRLSEnabled": false
     }
   },
@@ -24536,15 +24707,6 @@
         "drive"
       ]
     },
-    "public.OrgDriveVisibility": {
-      "name": "OrgDriveVisibility",
-      "schema": "public",
-      "values": [
-        "OPEN",
-        "RESTRICTED",
-        "PRIVATE"
-      ]
-    },
     "public.PageType": {
       "name": "PageType",
       "schema": "public",
@@ -24559,14 +24721,6 @@
         "TASK_LIST",
         "CODE",
         "MACHINE"
-      ]
-    },
-    "public.DriveMemberSource": {
-      "name": "DriveMemberSource",
-      "schema": "public",
-      "values": [
-        "invite",
-        "org"
       ]
     },
     "public.MemberRole": {
@@ -25023,13 +25177,69 @@
         "cancelled"
       ]
     },
-    "public.OrgRole": {
-      "name": "OrgRole",
+    "public.agent_account_acknowledgment": {
+      "name": "agent_account_acknowledgment",
       "schema": "public",
       "values": [
-        "OWNER",
-        "ADMIN",
-        "MEMBER"
+        "dedicated_agent_account",
+        "personal_login_acknowledged"
+      ]
+    },
+    "public.agent_account_approval_outcome": {
+      "name": "agent_account_approval_outcome",
+      "schema": "public",
+      "values": [
+        "allow_once",
+        "always",
+        "deny"
+      ]
+    },
+    "public.agent_account_kind": {
+      "name": "agent_account_kind",
+      "schema": "public",
+      "values": [
+        "api_key",
+        "bearer",
+        "oauth2",
+        "session",
+        "password"
+      ]
+    },
+    "public.agent_account_owner_kind": {
+      "name": "agent_account_owner_kind",
+      "schema": "public",
+      "values": [
+        "user",
+        "agent_page"
+      ]
+    },
+    "public.agent_account_session_format": {
+      "name": "agent_account_session_format",
+      "schema": "public",
+      "values": [
+        "cookie-jar-v1",
+        "storage-state-v1",
+        "human-relogin"
+      ]
+    },
+    "public.agent_account_status": {
+      "name": "agent_account_status",
+      "schema": "public",
+      "values": [
+        "active",
+        "revoked",
+        "needs_reauth",
+        "deleted"
+      ]
+    },
+    "public.agent_account_upstream_revocation": {
+      "name": "agent_account_upstream_revocation",
+      "schema": "public",
+      "values": [
+        "not_attempted",
+        "revoked",
+        "unsupported",
+        "failed"
       ]
     }
   },

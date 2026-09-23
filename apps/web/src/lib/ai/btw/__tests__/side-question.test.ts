@@ -40,6 +40,7 @@ describe('detached side questions', () => {
       question: 'What changed?',
       snapshot: 'safe context',
       abortSignal: controller.signal,
+      onSettle: vi.fn().mockResolvedValue(undefined),
       streamText,
     });
     expect(await response.text()).toBe('answer');
@@ -50,7 +51,5 @@ describe('detached side questions', () => {
       prompt: expect.stringContaining('<conversation_snapshot>\nsafe context\n</conversation_snapshot>'),
     }));
     expect(streamText.mock.calls[0][0].prompt).toContain('<side_question>\nWhat changed?\n</side_question>');
-    expect(streamText.mock.calls[0][0]).not.toHaveProperty('onFinish');
-    expect(streamText.mock.calls[0][0]).not.toHaveProperty('onChunk');
   });
 });

@@ -15,7 +15,9 @@ const {
   mockSelectWhere,
   mockSelectFrom,
   mockSelect,
+  mockCreditAdmission,
 } = vi.hoisted(() => ({
+  mockCreditAdmission: vi.fn(),
   mockReturning: vi.fn().mockResolvedValue([{ id: 'wf_1' }]),
   mockUpdateWhere: vi.fn(),
   mockUpdateSet: vi.fn(),
@@ -65,6 +67,10 @@ vi.mock('@/lib/workflows/workflow-executor', () => ({
 
 vi.mock('@/lib/workflows/cron-utils', () => ({
   getNextRunDate: vi.fn(),
+}));
+
+vi.mock('@/lib/workflows/workflow-credit-gate', () => ({
+  creditAdmission: mockCreditAdmission,
 }));
 
 import { POST } from '../../run/route';
@@ -171,6 +177,7 @@ describe('POST /api/workflows/[workflowId]/run', () => {
       durationMs: 1,
     });
     vi.mocked(getNextRunDate).mockReturnValue(new Date('2025-06-01T09:00:00Z'));
+    mockCreditAdmission.mockReturnValue(async () => ({ admitted: true, release: () => {} }));
   });
 
   test('returns 401 when not authenticated', async () => {
@@ -246,7 +253,7 @@ describe('POST /api/workflows/[workflowId]/run', () => {
       agentPageId: mockWorkflow.agentPageId,
       prompt: mockWorkflow.prompt,
       timezone: mockWorkflow.timezone,
-    }));
+    }), expect.objectContaining({ admit: expect.any(Function) }));
   });
 
   test('non-scheduled workflow is treated as not found', async () => {
@@ -293,5 +300,74 @@ describe('POST /api/workflows/[workflowId]/run', () => {
     const body = await response.json();
     expect(body.success).toBe(false);
     expect(body.error).toBe('Agent crashed');
+  });
+
+  describe('credit gate', () => {
+    const run = () => POST(
+      new Request('https://example.com/api/workflows/wf_1/run', { method: 'POST' }),
+      createContext('wf_1'),
+    );
+
+    // An executor stand-in that consults `admit` the way the real one does
+    // (inside its claim): a refusal comes back as a skipped run.
+    const executorThatAdmits = () => vi.mocked(executeWorkflow).mockImplementation(async (_input, options) => {
+      const admission = await options?.admit?.();
+      if (admission && !admission.admitted) {
+        return { success: false, skipped: true, durationMs: 0, runId: 'run_1', error: admission.error };
+      }
+      return { success: true, durationMs: 1 };
+    });
+
+    const denyWith = (reason: string) => mockCreditAdmission.mockImplementation(
+      (_input: unknown, _mode: unknown, onDenied?: (r: string) => void) => async () => {
+        onDenied?.(reason);
+        return { admitted: false, error: `AI credit gate denied: ${reason}` };
+      },
+    );
+
+    test('hands the executor the credit gate as its admit hook, gating the billed owner (not the clicker) as interactive', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth('admin_clicker'));
+      const admit = async () => ({ admitted: true as const, release: () => {} });
+      mockCreditAdmission.mockReturnValue(admit);
+
+      await run();
+
+      const [input, options] = vi.mocked(executeWorkflow).mock.calls[0];
+      expect(options?.admit).toBe(admit);
+      expect(mockCreditAdmission).toHaveBeenCalledWith(input, 'interactive', expect.any(Function));
+      expect(input.createdBy).toBe('user_123');
+    });
+
+    test('out of credits: 402 with a readable error, and the schedule is not advanced', async () => {
+      executorThatAdmits();
+      denyWith('out_of_credits');
+
+      const response = await run();
+
+      expect(response.status).toBe(402);
+      // The Run button toasts `error` verbatim, so it must read as a sentence, not a code.
+      const body = await response.json();
+      expect(body.code).toBe('out_of_credits');
+      expect(body.error).toMatch(/credit balance is too low/);
+      expect(getNextRunDate).not.toHaveBeenCalled();
+    });
+
+    test('in-flight cap: 429', async () => {
+      executorThatAdmits();
+      denyWith('too_many_in_flight');
+
+      const response = await run();
+
+      expect(response.status).toBe(429);
+    });
+
+    test('an admitted run returns the normal result', async () => {
+      executorThatAdmits();
+
+      const response = await run();
+
+      expect(response.status).toBe(200);
+      expect((await response.json()).success).toBe(true);
+    });
   });
 });

@@ -14,22 +14,23 @@
  * Integration-tested against the real `:5433` Postgres
  * (`__tests__/grant-gate-executor.integration.test.ts`).
  */
-import type { GrantVerdict, VerifyGrantInput } from './grant';
+import type { GrantVerdict, PresenterChannel, VerifyGrantInput } from './grant';
 import { parseGrant } from './parse-grant';
 import { verifyGrant } from './verify-grant';
 import { decideReplay } from './decide-replay';
 import type { ReplayStoreRepository } from './replay-store-repository';
 
 /** Everything the verifier needs except the nonce state, which the gate fetches. */
-export type GrantPresentation = Omit<VerifyGrantInput, 'nonceState'>;
+export type GrantPresentation<A extends PresenterChannel = PresenterChannel> = Omit<VerifyGrantInput<A>, 'nonceState'>;
 
 export type GrantGate = {
-  readonly present: (input: GrantPresentation) => Promise<GrantVerdict>;
+  /** Generic on the presenter's expected audience, so an `ok` verdict is `VerifiedGrant<A>` without a cast (G1c R9). */
+  readonly present: <A extends PresenterChannel>(input: GrantPresentation<A>) => Promise<GrantVerdict<A>>;
 };
 
 export function createGrantGate({ replayStore }: { readonly replayStore: ReplayStoreRepository }): GrantGate {
   return {
-    async present(input) {
+    async present<A extends PresenterChannel>(input: GrantPresentation<A>): Promise<GrantVerdict<A>> {
       const parsed = parseGrant({ grant: input.grant });
       if (!parsed.ok) return { ok: false, reason: 'malformed' };
 

@@ -3,7 +3,7 @@
  * against a real Postgres: the REAL applyStripeFunding, canConsumeAI and consumeCredits,
  * no mocks.
  *
- * What must hold after migration 0302 made walletId NOT NULL on credit_ledger and
+ * What must hold after migration 0305 made walletId NOT NULL on credit_ledger and
  * credit_holds: every row the money path writes names the payer's personal root wallet,
  * a user never ends up with a second root, and the money is exactly what it was before
  * wallets existed (top-up + starter grant − charge).

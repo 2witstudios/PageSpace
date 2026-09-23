@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import type { HashBytes } from '../grant';
@@ -36,7 +36,8 @@ describe('agent_accounts schema (ADR 0005 §10.1)', () => {
     // Strip comments and the AccountKind/kind literal declarations before scanning for a forbidden
     // column-shaped identifier — the union literal `'password'` and `kind: AccountKind` are allowed.
     const withoutComments = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
-    const withoutKindUnion = withoutComments.replace(/export type AccountKind[^;]*;/, '');
+    // G2: the pg enum needs the same literals as a value (`ACCOUNT_KIND_VALUES`); it is the kind literal too.
+    const withoutKindUnion = withoutComments.replace(/export type AccountKind[^;]*;/, '').replace(/export const ACCOUNT_KIND_VALUES[^;]*;/, '');
     const forbidden = /\b(credential|secret|token|password)\b/i;
     const offendingLine = withoutKindUnion
       .split('\n')
@@ -274,13 +275,27 @@ describe('web process holds no reading identity (ADR 0005 §10.11)', () => {
     expect(forbidden).toEqual([]);
   });
 
-  it('given the web server env schema (apps/web/src/lib/env or config/env-validation), should declare no INFISICAL_*_READ* variable', () => {
-    // apps/web is a separate package this repo builds independently of packages/lib's own
-    // test run; the exports-map test above is the enforceable boundary (a variable with no
-    // matching export cannot be wired to a resolving identity from apps/web in the first
-    // place). Documented here so the requirement has a home; a web-side env-schema grep is
-    // G2's to add once apps/web actually declares Infisical env vars.
-    expect(true).toBe(true);
+  // G2 made this enforceable: apps/web now talks to the plane (plane-client.ts), so the guard is a
+  // sweep of its source. The web process may name the plane CLIENT; it may never import a module that
+  // holds or reaches a store identity, nor read an Infisical variable.
+  it('given the apps/web source tree, should import no plane-side module and read no INFISICAL_ variable', () => {
+    const webSrc = path.join(__dirname, '../../../../../apps/web/src');
+    const forbiddenModules = ['store-adapter-infisical', 'infisical-client', 'infisical-tenant-provisioner-client', 'plane-metadata-repository', 'http-request-executor', 'plane-http-adapter', 'plane-worker', 'plane-main'];
+    const offenders: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (entry.name !== 'node_modules' && entry.name !== '.next') walk(full);
+          continue;
+        }
+        if (!/\.(ts|tsx|js|mjs)$/.test(entry.name)) continue;
+        const text = readFileSync(full, 'utf8');
+        if (forbiddenModules.some((name) => text.includes(`/${name}'`) || text.includes(`/${name}"`)) || /\bINFISICAL_[A-Z_]+/.test(text)) offenders.push(path.relative(webSrc, full));
+      }
+    };
+    walk(webSrc);
+    expect(offenders).toEqual([]);
   });
 });
 

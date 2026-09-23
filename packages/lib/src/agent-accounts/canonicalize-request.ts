@@ -85,6 +85,7 @@ import { findRegistryEntryDefects } from './find-registry-entry-defects';
 import { extractBodyResources } from './extract-body-resources';
 import { deriveGitResources } from './derive-git-resources';
 import { sortResourcePairs } from './sort-resource-pairs';
+import { canonicalOriginOf } from './normalize-origin';
 
 const METHODS_BY_CHANNEL: { readonly [C in ExecutorChannel]: readonly MethodFor[C][] } = {
   'http-executor': ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'],
@@ -114,11 +115,6 @@ const RESERVED_HEADER_PREFIXES: readonly string[] = ['proxy-', 'x-forwarded-'];
 
 const PROJECTED_HEADERS: readonly ProjectedHeader[] = ['accept', 'content-type', 'content-length'];
 
-const DEFAULT_HTTPS_PORT = '443';
-
-/** Host labels after IDNA→ASCII: letters, digits, hyphen; no leading/trailing hyphen. */
-const LDH_HOST_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/;
-const IPV4_RE = /^\d{1,3}(\.\d{1,3}){3}$/;
 /** Written with \x escapes on purpose: a literal NUL in this file makes grep and ripgrep skip it as binary. */
 const CONTROL_CHAR_RE = /[\x00-\x1F\x7F]/;
 
@@ -206,21 +202,6 @@ function normalizeComponent(raw: string, keep: RegExp): NormalizeOutcome {
 
 function compareStrings(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
-}
-
-type OriginVerdict = { readonly ok: true; readonly origin: CanonicalOrigin } | Refusal;
-
-function canonicalizeOrigin(url: URL): OriginVerdict {
-  if (url.protocol !== 'https:') return refuse('scheme_not_https');
-  if (url.username.length > 0 || url.password.length > 0) return refuse('userinfo_present');
-  const rawHost = url.hostname;
-  if (rawHost.length === 0) return refuse('malformed');
-  if (rawHost.includes('*')) return refuse('wildcard_host');
-  if (rawHost.startsWith('[') || IPV4_RE.test(rawHost)) return refuse('ip_literal_host');
-  const host = rawHost.endsWith('.') ? rawHost.slice(0, -1) : rawHost;
-  if (!LDH_HOST_RE.test(host)) return refuse('host_not_idna');
-  const port = url.port.length === 0 ? DEFAULT_HTTPS_PORT : url.port;
-  return { ok: true, origin: `https://${host}:${port}` as CanonicalOrigin };
 }
 
 type PathVerdict = { readonly ok: true; readonly path: string } | Refusal;
@@ -330,7 +311,7 @@ export const canonicalizeRequest: CanonicalizeRequest = (call): CanonicalizeResu
   } catch {
     return refuse('malformed');
   }
-  const origin = canonicalizeOrigin(url);
+  const origin = canonicalOriginOf(url);
   if (!origin.ok) return origin;
   const path = canonicalizePath(url.pathname);
   if (!path.ok) return path;

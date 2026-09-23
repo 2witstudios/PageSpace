@@ -329,6 +329,7 @@
         "@fly/sprites": "0.0.1-rc37",
         "@monaco-editor/react": "^4.7.0",
         "@openrouter/ai-sdk-provider": "^2.10.0",
+        "@pagespace/browser-worker": "workspace:*",
         "@pagespace/db": "workspace:*",
         "@pagespace/editor": "workspace:*",
         "@pagespace/lib": "workspace:*",
@@ -451,6 +452,18 @@
         "tailwindcss": "^4",
         "tw-animate-css": "^1.3.5",
         "typescript": "^5",
+      },
+    },
+    "packages/browser-worker": {
+      "name": "@pagespace/browser-worker",
+      "version": "0.1.0",
+      "dependencies": {
+        "@pagespace/lib": "workspace:*",
+        "playwright-core": "^1.60.0",
+      },
+      "devDependencies": {
+        "eslint": "^9.36.0",
+        "typescript-eslint": "^8.59.0",
       },
     },
     "packages/cli": {
@@ -1262,6 +1275,8 @@
     "@oxc-resolver/binding-win32-x64-msvc": ["@oxc-resolver/binding-win32-x64-msvc@11.16.4", "", { "os": "win32", "cpu": "x64" }, "sha512-qnjQhjHI4TDL3hkidZyEmQRK43w2NHl6TP5Rnt/0XxYuLdEgx/1yzShhYidyqWzdnhGhSPTM/WVP2mK66XLegA=="],
 
     "@pagespace/android": ["@pagespace/android@workspace:apps/android"],
+
+    "@pagespace/browser-worker": ["@pagespace/browser-worker@workspace:packages/browser-worker"],
 
     "@pagespace/cli": ["@pagespace/cli@workspace:packages/cli"],
 
