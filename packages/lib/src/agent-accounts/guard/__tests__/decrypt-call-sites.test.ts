@@ -74,17 +74,17 @@ const parseClause = (clause: string): readonly string[] | 'all' => {
 const extractEdges = (importer: string, source: string): readonly DecryptImportEdge[] => {
   const text = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
   const edges: DecryptImportEdge[] = [];
-  const push = (specifier: string, names: readonly string[] | 'all') => {
+  const push = (specifier: string, names: readonly string[] | 'all', reexport = false) => {
     const module = resolveSpecifier(importer, specifier);
-    if (module !== null) edges.push({ importer, module, names });
+    if (module !== null) edges.push({ importer, module, names, reexport });
   };
   for (const match of text.matchAll(/\bimport\s+(type\s+)?([^'";]*?)\s+from\s+['"]([^'"]+)['"]/g)) {
     if (match[1] === undefined) push(match[3], parseClause(match[2]));
   }
   for (const match of text.matchAll(/\bexport\s+(type\s+)?(\*(?:\s+as\s+\w+)?|\{[^}]*\})\s+from\s+['"]([^'"]+)['"]/g)) {
-    if (match[1] === undefined) push(match[3], parseClause(match[2]));
+    if (match[1] === undefined) push(match[3], parseClause(match[2]), true);
   }
-  for (const match of text.matchAll(/\b(?:import|require)\s*\(\s*['"]([^'"]+)['"]\s*\)/g)) push(match[1], 'all');
+  for (const match of text.matchAll(/\b(?:import|require)\s*\(\s*(['"`])([^'"`$]+)\1\s*\)/g)) push(match[2], 'all');
   return edges;
 };
 
