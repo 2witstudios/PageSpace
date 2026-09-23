@@ -99,7 +99,7 @@ describe('spend-target: who spends', () => {
   });
 
   it('on a personal drive a member is not a guest; a non-member is (fail closed)', () => {
-    expect(personActor('u-a', { orgId: null, isDriveMember: true, isOrgMember: false }).isGuest).toBe(false);
+    expect(personActor('u-a', { orgId: null, isDriveMember: true, isOrgMember: false })).toEqual({ kind: 'person', userId: 'u-a', isGuest: false });
     const nonMember = personActor('u-b', { orgId: null, isDriveMember: false, isOrgMember: false });
     expect(nonMember.kind === 'person' && nonMember.isGuest).toBe(true);
   });
