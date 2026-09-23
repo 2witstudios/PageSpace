@@ -10,7 +10,16 @@ import { decryptUserRow, decryptUserRows } from '@pagespace/lib/auth/user-reposi
 import { checkDriveAccess, listDriveMembers } from '@pagespace/lib/services/drive-member-service';
 import type { ToolExecutionContext } from '../core/types';
 import { driveDeniedByAppToken } from './actor-permissions';
-import { modelContextUserLabel } from '@pagespace/lib/auth/agent/display-name';
+import { isAgentAccount, modelContextUserLabel } from '@pagespace/lib/auth/agent/display-name';
+
+/**
+ * What the model reads for a name: an AI agent ACCOUNT's self-chosen name is
+ * labelled and quoted as data (Agent Signup Phase 2b); a human's is unchanged,
+ * null included.
+ */
+function forModel(name: string | null, accountType: string | null | undefined): string | null {
+  return isAgentAccount(accountType) ? modelContextUserLabel({ name, accountType }) : name;
+}
 
 export const memberTools = {
   list_drive_members: tool({
@@ -60,8 +69,8 @@ export const memberTools = {
       if (ownerRow?.id) {
         result.push({
           userId: ownerRow.id,
-          name: modelContextUserLabel({ name: ownerRow.name, accountType: ownerRow.accountType }),
-          displayName: modelContextUserLabel({ name: ownerRow.displayName ?? ownerRow.name, accountType: ownerRow.accountType }),
+          name: forModel(ownerRow.name, ownerRow.accountType),
+          displayName: forModel(ownerRow.displayName ?? ownerRow.name, ownerRow.accountType),
           accountType: ownerRow.accountType ?? 'human',
           email: ownerRow.email,
           role: 'OWNER' as const,
@@ -75,8 +84,8 @@ export const memberTools = {
         if (ownerRow?.id && m.user.id === ownerRow.id) continue;
         result.push({
           userId: m.user.id,
-          name: modelContextUserLabel({ name: m.user.name, accountType: m.user.accountType }),
-          displayName: modelContextUserLabel({ name: m.profile?.displayName ?? m.user.name, accountType: m.user.accountType }),
+          name: forModel(m.user.name, m.user.accountType),
+          displayName: forModel(m.profile?.displayName ?? m.user.name, m.user.accountType),
           accountType: m.user.accountType,
           email: m.user.email,
           role: m.role,
@@ -142,8 +151,8 @@ export const memberTools = {
 
       const collaborators = userRows.map((u) => ({
         userId: u.id,
-        name: modelContextUserLabel({ name: u.name, accountType: u.accountType }),
-        displayName: modelContextUserLabel({ name: u.displayName ?? u.name, accountType: u.accountType }),
+        name: forModel(u.name, u.accountType),
+        displayName: forModel(u.displayName ?? u.name, u.accountType),
         accountType: u.accountType,
         email: u.email,
         avatarUrl: u.avatarUrl ?? null,

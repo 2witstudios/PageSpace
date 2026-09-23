@@ -36,14 +36,23 @@ function presentName(name: string | null | undefined): string | null {
 }
 
 /**
- * Line and paragraph separators JSON leaves raw (U+0085, U+2028, U+2029), and
- * the invisible bidi overrides / zero-width marks that can make quoted text
- * render as something else. Escaped so the quoted span stays one visible line.
+ * What JSON.stringify leaves raw but a reader (human or model) cannot see or
+ * mis-reads: C1 controls (incl. U+0085 NEL), the U+2028/2029 separators, the
+ * soft hyphen, bidi overrides and marks, zero-width characters, variation
+ * selectors, and the invisible Unicode tag block (U+E0000–E007F, a known way to
+ * hide instructions from humans while a model still reads them). Escaped so the
+ * quoted span stays one visible line of visible data.
  */
-const UNSAFE_IN_QUOTE = /[\u0085\u2028\u2029\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/g;
+const UNSAFE_IN_QUOTE = /[\u0080-\u009F\u00AD\u061C\u180E\u200B-\u200F\u2028-\u202E\u2060-\u2064\u2066-\u2069\uFE00-\uFE0F\uFEFF\u{E0000}-\u{E007F}\u{E0100}-\u{E01EF}]/gu;
+
+function escapeUtf16(ch: string): string {
+  let out = '';
+  for (let i = 0; i < ch.length; i += 1) out += `\\u${ch.charCodeAt(i).toString(16).padStart(4, '0')}`;
+  return out;
+}
 
 function quoteAsData(text: string): string {
-  return JSON.stringify(text).replace(UNSAFE_IN_QUOTE, (ch) => `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`);
+  return JSON.stringify(text).replace(UNSAFE_IN_QUOTE, escapeUtf16);
 }
 
 /**

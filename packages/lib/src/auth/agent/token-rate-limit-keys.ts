@@ -31,7 +31,12 @@ import { hashToken } from '../token-utils';
  * per address. Anything unparseable is returned unchanged (e.g. `unknown`).
  */
 export function agentRateLimitAddress(ip: string): string {
-  const address = ip.trim().toLowerCase().replace(/^\[|\]$/g, '').split('%')[0] ?? '';
+  const trimmed = ip.trim().toLowerCase();
+  // A proxy may write `[v6]:port` or `v4:port`; the port must not mint a bucket.
+  const bracketed = /^\[([^\]]+)\](?::\d+)?$/.exec(trimmed);
+  const v4WithPort = /^(\d{1,3}(?:\.\d{1,3}){3}):\d+$/.exec(trimmed);
+  if (v4WithPort?.[1]) return v4WithPort[1];
+  const address = (bracketed?.[1] ?? trimmed).split('%')[0] ?? '';
   if (!address.includes(':')) return ip;
   const mapped = /^(?:0{0,4}:){0,5}(?:0{0,4}:)?ffff:(\d{1,3}(?:\.\d{1,3}){3})$/.exec(address);
   if (mapped?.[1]) return mapped[1];
@@ -44,6 +49,13 @@ export function agentRateLimitAddress(ip: string): string {
   if (halves.length === 1 ? head.length !== 8 : missing < 1) return ip;
   const groups = [...head, ...Array.from({ length: halves.length === 2 ? missing : 0 }, () => '0'), ...tail];
   if (groups.length !== 8 || !groups.every((group) => /^[0-9a-f]{1,4}$/.test(group))) return ip;
+  const words = groups.map((group) => Number.parseInt(group, 16));
+  // IPv4-mapped written in hex (`::ffff:cb00:7105`) is the IPv4 address too.
+  if (words.slice(0, 5).every((word) => word === 0) && words[5] === 0xffff) {
+    const high = words[6] ?? 0;
+    const low = words[7] ?? 0;
+    return [high >> 8, high & 0xff, low >> 8, low & 0xff].join('.');
+  }
   return `${groups.slice(0, 4).map((group) => group.padStart(4, '0')).join(':')}::/64`;
 }
 

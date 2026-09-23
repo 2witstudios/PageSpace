@@ -155,15 +155,27 @@ describe('getClientIP', () => {
         expect([...resolved]).toEqual(['unknown']);
       });
 
-      it('given a forwarded header it is ignoring, should warn the operator once, not per request', async () => {
+      it('given a proxy fingerprint it is ignoring (a chain, or x-real-ip), should warn the operator once, not per request', async () => {
         vi.resetModules();
         const { getClientIP: freshGetClientIP } = await import('../client-ip');
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
         try {
-          freshGetClientIP(new Request('http://localhost', { headers: { 'x-forwarded-for': '1.2.3.4' } }));
-          freshGetClientIP(new Request('http://localhost', { headers: { 'x-forwarded-for': '5.6.7.8' } }));
+          freshGetClientIP(new Request('http://localhost', { headers: { 'x-forwarded-for': '1.2.3.4, 10.0.0.2' } }));
+          freshGetClientIP(new Request('http://localhost', { headers: { 'x-real-ip': '5.6.7.8' } }));
           expect(warn).toHaveBeenCalledTimes(1);
           expect(String(warn.mock.calls[0]?.[0])).toContain('TRUSTED_PROXY_HOPS');
+        } finally {
+          warn.mockRestore();
+        }
+      });
+
+      it('given the single x-forwarded-for entry Next.js fills in on every request, should not warn (no proxy evidence)', async () => {
+        vi.resetModules();
+        const { getClientIP: freshGetClientIP } = await import('../client-ip');
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+          freshGetClientIP(new Request('http://localhost', { headers: { 'x-forwarded-for': '203.0.113.9' } }));
+          expect(warn).not.toHaveBeenCalled();
         } finally {
           warn.mockRestore();
         }

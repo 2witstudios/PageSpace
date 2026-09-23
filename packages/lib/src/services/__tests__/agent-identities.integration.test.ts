@@ -13,7 +13,7 @@
  *   DATABASE_URL=postgresql://user:password@localhost:5433/pagespace_test \
  *     bun run --filter '@pagespace/lib' test:integration -- src/services/__tests__/agent-identities.integration.test.ts
  */
-import { describe, it, expect, afterAll, vi } from 'vitest';
+import { describe, it, expect, afterAll, beforeAll, vi } from 'vitest';
 
 // Real provisioning by default; a test flips the flag to prove a failure after
 // commit never swallows the one-time secret.
@@ -47,7 +47,7 @@ vi.mock('../../auth/agent/secret', async (importOriginal) => {
 });
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
-import { and, eq, inArray, lt, sql } from '@pagespace/db/operators';
+import { and, eq, gte, inArray, lt, sql } from '@pagespace/db/operators';
 import { users, mcpTokens } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { agentIdentities, agentSignupChallenges } from '@pagespace/db/schema/agent-identities';
@@ -224,6 +224,16 @@ describe('createAgentAccount — the deployment-wide signup budget (Phase 2b)', 
   // (the window has no upper bound), so it holds only the identities that
   // test created — other suites' signups (real clock) are far in the past.
   const HOUR = 60 * 60 * 1000;
+  const FAR_FUTURE = new Date(Date.UTC(2090, 0, 1));
+
+  // A row an aborted earlier run left in the far future would count in every
+  // window (it has no upper bound) — clear them first.
+  beforeAll(async () => {
+    const stale = await db.select({ userId: agentIdentities.userId }).from(agentIdentities)
+      .where(gte(agentIdentities.createdAt, FAR_FUTURE));
+    if (stale.length > 0) await db.delete(users).where(inArray(users.id, stale.map((row) => row.userId)));
+  });
+
   let clockBase = Date.UTC(2090, 0, 1) + Math.floor(Math.random() * 1000) * 1000 * HOUR;
   const futureClock = () => {
     clockBase += 100 * 24 * HOUR;

@@ -130,6 +130,15 @@ describe('POST /api/oauth/token — jwt-bearer (agent assertion) grant', () => {
     });
   });
 
+  describe('given a non-database bug mid-grant', () => {
+    it('should rethrow it untouched, so the request-error hook (Sentry) still sees a code bug', async () => {
+      mocks.exchangeAgentAssertion.mockRejectedValue(new TypeError('cannot read properties of undefined'));
+
+      await expect(POST(tokenRequest(fields()) as never)).rejects.toThrow('cannot read properties of undefined');
+      expect(mocks.logError).not.toHaveBeenCalledWith('OAuth token request failed', expect.anything());
+    });
+  });
+
   describe('Home drive recovery (the sign-in retry createAgentAccount relies on)', () => {
     it('given a successful exchange, should re-run the idempotent Home-drive provisioning for the agent', async () => {
       await POST(tokenRequest(fields()) as never);

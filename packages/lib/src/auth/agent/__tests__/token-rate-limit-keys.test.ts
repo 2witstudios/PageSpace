@@ -112,8 +112,15 @@ describe('agentRateLimitAddress', () => {
     expect(agentRateLimitAddress('[2001:db8::5]')).toBe('2001:0db8:0000:0000::/64');
   });
 
-  it('given an IPv4-mapped IPv6 address, should key on the IPv4 address', () => {
+  it('given an IPv4-mapped IPv6 address, dotted or hex, should key on the IPv4 address', () => {
     expect(agentRateLimitAddress('::ffff:203.0.113.5')).toBe('203.0.113.5');
+    expect(agentRateLimitAddress('::ffff:cb00:7105')).toBe('203.0.113.5');
+  });
+
+  it('given an address with a port (as some proxies write it), should ignore the port', () => {
+    expect(agentRateLimitAddress('[2001:db8:1:2::1]:443')).toBe('2001:0db8:0001:0002::/64');
+    expect(agentRateLimitAddress('[2001:db8:1:2::1]:444')).toBe('2001:0db8:0001:0002::/64');
+    expect(agentRateLimitAddress('203.0.113.5:8080')).toBe('203.0.113.5');
   });
 
   it('given something unparseable, should return it unchanged', () => {

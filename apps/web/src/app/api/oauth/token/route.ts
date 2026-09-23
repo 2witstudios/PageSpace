@@ -581,16 +581,19 @@ async function handleAgentAssertionGrant(req: NextRequest, form: URLSearchParams
 /**
  * Every grant binds a credential hash into its queries (a code, a refresh
  * token, an agent secret, the new token pair), and drizzle's DrizzleQueryError
- * message is the query plus its bound params. An uncaught error here would
- * reach Next's request-error log and Sentry (`instrumentation.ts`
- * onRequestError) verbatim, so the handler never lets one escape: it logs only
- * the redacted class/code/constraint and answers a constant 503.
+ * message is the query plus its bound params. Such an error must not reach
+ * Next's request-error log or Sentry (`instrumentation.ts` onRequestError)
+ * verbatim, so a DATABASE error is caught here, logged as its redacted
+ * class/code/constraint, and answered with a constant 503. Anything else is a
+ * code bug with no bound values in it: it is rethrown so Sentry still sees it.
  */
 export async function POST(req: NextRequest) {
   try {
     return await handleTokenRequest(req);
   } catch (error) {
-    loggers.auth.error('OAuth token request failed', redactDbError(error));
+    const redacted = redactDbError(error);
+    if (redacted.errorName !== 'DrizzleQueryError' && redacted.code === null) throw error;
+    loggers.auth.error('OAuth token request failed', redacted);
     return noStoreJson({ error: 'temporarily_unavailable' }, 503);
   }
 }

@@ -127,12 +127,16 @@ let warnedIgnoredForwardedFor = false;
  * collapses every visitor into the one `unknown` bucket. Say so once, in the
  * log an operator reads — console, because this module must stay importable
  * from the Edge runtime.
+ *
+ * Next.js itself fills a missing `x-forwarded-for` with the socket peer, so a
+ * single entry proves nothing. Only a proxy's fingerprints count: `x-real-ip`,
+ * or a chain of two or more entries.
  */
 function warnIfForwardedForIgnored(headers: HeaderSource, trust: ClientIpTrust): void {
   if (warnedIgnoredForwardedFor || trust.onFly || trust.trustedProxyHops > 0) return;
-  if (!headers.get('x-forwarded-for') && !headers.get('x-real-ip')) return;
+  if (!headers.get('x-real-ip') && forwardedFor(headers).length < 2) return;
   warnedIgnoredForwardedFor = true;
-  console.warn('[client-ip] Ignoring X-Forwarded-For / X-Real-IP: TRUSTED_PROXY_HOPS is unset, so every client shares one rate-limit bucket. Set it to the number of reverse proxies in front of the app (see infrastructure/UPGRADE.md).');
+  console.warn('[client-ip] A reverse proxy appears to be in front of this app, but TRUSTED_PROXY_HOPS is unset, so X-Forwarded-For is ignored and every client shares one rate-limit bucket. Set TRUSTED_PROXY_HOPS to the number of proxies that append to X-Forwarded-For (see infrastructure/UPGRADE.md).');
 }
 
 export function getClientIP(request: HasHeaders): string {
