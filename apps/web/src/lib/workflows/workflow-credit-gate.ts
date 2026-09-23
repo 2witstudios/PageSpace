@@ -57,9 +57,9 @@ export async function acquireWorkflowCreditHold(
   const userId = input.createdBy;
   // SPEND-6: a workflow run has no person present; its consumer is the drive, and it
   // spends the drive wallet or is skipped — never its creator's credits or allowance.
-  const spend = automationSpend(input.driveId);
+  const target = automationSpend(input.driveId);
   const steps = resolveSteps({ steps: input.steps ?? null, prompt: input.prompt, agentPageId: input.agentPageId });
-  if (!hasAiStep(steps)) return { allowed: true, release: () => {}, creditSpend: { spend } };
+  if (!hasAiStep(steps)) return { allowed: true, release: () => {}, creditSpend: { spend: target } };
 
   const [user] = await db
     .select({ subscriptionTier: users.subscriptionTier })
@@ -68,15 +68,15 @@ export async function acquireWorkflowCreditHold(
 
   const estCostCents = CREDIT_HOLD_ESTIMATE_CENTS * countAiSteps(steps);
   const opts: GateOptions = mode === 'interactive'
-    ? { spend, estCostCents, maxInFlight: MAX_CHAT_INFLIGHT }
-    : { spend, estCostCents, skipDailyCap: true };
+    ? { spend: target, estCostCents, maxInFlight: MAX_CHAT_INFLIGHT }
+    : { spend: target, estCostCents, skipDailyCap: true };
 
   const gate = await canConsumeAI(userId, (user?.subscriptionTier ?? 'free') as SubscriptionTier, opts);
   if (!gate.allowed) return gate.refusal ? { allowed: false, reason: gate.reason, refusal: gate.refusal } : { allowed: false, reason: gate.reason };
 
   // The run settles on the wallet the gate reserved on (WAL-5): the drive wallet once
   // wallets are on; while orgs are dark, the personal root as before wallets.
-  const creditSpend: RunCreditSpend = { spend, walletId: gate.walletId };
+  const creditSpend: RunCreditSpend = { spend: target, walletId: gate.walletId };
   const holdId = gate.holdId;
   if (!holdId) return { allowed: true, release: () => {}, creditSpend };
 
