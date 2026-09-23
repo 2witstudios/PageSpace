@@ -177,8 +177,8 @@ export async function processZoomWebhook(
 interface TranscriptEnrichment {
   summary: string;
   actionItems: Awaited<ReturnType<typeof extractActionItems>>;
-  /** Set when the credit gate refused the enrichment calls. */
-  skippedReason?: GateReason;
+  /** Set when the credit gate refused the enrichment calls, or could not be checked. */
+  skippedReason?: GateReason | 'gate_error';
 }
 
 /**
@@ -192,10 +192,21 @@ async function enrichTranscript(connection: ZoomConnection, plainText: string): 
   const aiCalls = Number(connection.includeAiSummary) + Number(connection.includeActionItems);
   if (aiCalls === 0) return { summary: '', actionItems: [] };
 
-  const hold = await acquireUserCreditHold(connection.userId, {
-    estCostCents: CREDIT_HOLD_ESTIMATE_CENTS * aiCalls,
-    skipDailyCap: true,
-  });
+  // A gate that cannot be checked (DB outage, lock timeout) must not block the
+  // page either: skip the enrichment — no model call, no charge — and say why.
+  let hold: Awaited<ReturnType<typeof acquireUserCreditHold>>;
+  try {
+    hold = await acquireUserCreditHold(connection.userId, {
+      estCostCents: CREDIT_HOLD_ESTIMATE_CENTS * aiCalls,
+      skipDailyCap: true,
+    });
+  } catch (err) {
+    loggers.api.warn('Zoom webhook: AI enrichment skipped (credit gate failed)', {
+      userId: connection.userId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return { summary: '', actionItems: [], skippedReason: 'gate_error' };
+  }
   if (!hold.allowed) {
     loggers.api.info('Zoom webhook: AI enrichment skipped (credit gate denied)', {
       userId: connection.userId,

@@ -6,10 +6,11 @@
  */
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
-const { mockCanConsumeAI, mockReleaseHold, mockSelectWhere } = vi.hoisted(() => ({
+const { mockCanConsumeAI, mockReleaseHold, mockSelectWhere, mentionLogger } = vi.hoisted(() => ({
   mockCanConsumeAI: vi.fn(),
   mockReleaseHold: vi.fn(),
   mockSelectWhere: vi.fn(),
+  mentionLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
 vi.mock('@pagespace/lib/billing/credit-gate', () => ({ canConsumeAI: mockCanConsumeAI }));
@@ -54,17 +55,7 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
     canUserViewPage: vi.fn(),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
-    loggers: {
-    ai: {
-      debug: vi.fn(),
-      child: vi.fn(() => ({
-        warn: vi.fn(),
-        error: vi.fn(),
-      
-  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
-})),
-    },
-  },
+  loggers: { ai: { debug: vi.fn(), child: vi.fn(() => mentionLogger) } },
 }));
 
 vi.mock('@/lib/commands/help-answer', () => ({
@@ -154,6 +145,12 @@ describe('agent-mention-responder credit gate', () => {
     expect(mockAskAgentExecute).not.toHaveBeenCalled();
     expect(mockSendChannelExecute).not.toHaveBeenCalled();
     expect(mockReleaseHold).not.toHaveBeenCalled();
+    // The refusal is a logged skip, not a swallowed exception.
+    expect(mentionLogger.info).toHaveBeenCalledWith(
+      'Mentioned agent reply skipped (credit gate denied)',
+      expect.objectContaining({ agentId: 'agent-1', reason: 'out_of_credits' }),
+    );
+    expect(mentionLogger.error).not.toHaveBeenCalled();
   });
 
   it('given a funded mentioner, should run the agent, post its reply and release the hold once', async () => {

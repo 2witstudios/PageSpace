@@ -154,6 +154,28 @@ describe('processZoomWebhook AI enrichment credit gate', () => {
     expect(mockCreatePage).toHaveBeenCalledTimes(1);
   });
 
+  it('given the credit gate itself throws, should still create the page without enrichment or charge', async () => {
+    mockCanConsumeAI.mockRejectedValue(new Error('lock timeout'));
+
+    await expect(processZoomWebhook(event, connection)).resolves.toBeUndefined();
+
+    expect(mockGenerateText).not.toHaveBeenCalled();
+    expect(mockTrackUsage).not.toHaveBeenCalled();
+    expect(mockCreatePage).toHaveBeenCalledTimes(1);
+    expect(createdContent()).not.toContain('Decided to ship Friday');
+    expect(createdMetadata()).toMatchObject({ aiEnrichmentSkipped: 'gate_error' });
+  });
+
+  it('given the tier lookup throws, should still create the page without enrichment', async () => {
+    mockSelectWhere.mockRejectedValue(new Error('db down'));
+
+    await expect(processZoomWebhook(event, connection)).resolves.toBeUndefined();
+
+    expect(mockGenerateText).not.toHaveBeenCalled();
+    expect(mockCreatePage).toHaveBeenCalledTimes(1);
+    expect(createdMetadata()).toMatchObject({ aiEnrichmentSkipped: 'gate_error' });
+  });
+
   it('given no AI enrichment is enabled, should not gate or reserve anything', async () => {
     await processZoomWebhook(event, { ...connection, includeAiSummary: false, includeActionItems: false });
 
