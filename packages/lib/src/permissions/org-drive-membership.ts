@@ -37,6 +37,7 @@ const NO_DEFAULT_ROLE: DriveRoleGrant = { role: 'MEMBER', customRoleId: null };
 export async function loadEffectiveDriveMembership(
   userId: string,
   drive: MembershipDrive,
+  options: ResolveMembershipsOptions = { audit: true },
 ): Promise<EffectiveDriveMembership | null> {
   const rows = await db
     .select({ role: driveMembers.role, customRoleId: driveMembers.customRoleId, source: driveMembers.source })
@@ -50,7 +51,7 @@ export async function loadEffectiveDriveMembership(
 
   const [effective] = await resolveEffectiveDriveMemberships(
     [{ userId, drive, row: toMembership(rows[0]) }],
-    { audit: true },
+    options,
   );
   return effective;
 }
@@ -286,4 +287,22 @@ export async function loadDriveMemberRowState(
     .where(and(eq(driveMembers.driveId, driveId), eq(driveMembers.userId, userId)))
     .limit(1);
   return row ? { role: row.role as DriveMemberRole, source: row.source, accepted: row.acceptedAt !== null } : null;
+}
+
+/**
+ * Remove a former lead's OWNER row on an org drive, inside the lead change's transaction. On an org
+ * drive the lead lives on drives.ownerId alone; a leftover OWNER row (the owner self-heal row a
+ * personal drive carried in) was never an invitation and must not outlive the handover, so the
+ * former lead keeps or loses access by their own membership only (DRV-1, D-OW-7).
+ */
+export async function removeFormerLeadOwnerRow(
+  executor: Pick<typeof db, 'delete'>,
+  driveId: string,
+  userId: string,
+): Promise<number> {
+  const removed = await executor
+    .delete(driveMembers)
+    .where(and(eq(driveMembers.driveId, driveId), eq(driveMembers.userId, userId), eq(driveMembers.role, 'OWNER')))
+    .returning({ id: driveMembers.id });
+  return removed.length;
 }
