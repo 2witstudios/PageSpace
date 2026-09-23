@@ -357,6 +357,15 @@ describe('a pending request closes when what it asked for is gone', () => {
     expect((await statusOf(ninaRequest.id)).status).toBe('pending');
   });
 
+  it('DRV-6 (partial) a pending invitation is no membership: its holder\'s request stays on the list and open through a transition', async () => {
+    const { request } = await requestAs(lena);
+    await db.insert(driveMembers).values({ driveId: research, userId: lena, role: 'MEMBER', invitedBy: marcus });
+
+    expect(await pendingFor(marcus)).toEqual([lena]);
+    await changeOrgDriveLead(priya, research, { newLeadId: jono }, orgDriveServiceDeps);
+    expect((await statusOf(request.id)).status).toBe('pending');
+  });
+
   it('DRV-6 (partial) deleting the org closes the requests on its drives', async () => {
     const { request } = await requestAs(lena);
 

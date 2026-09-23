@@ -1,5 +1,5 @@
 import type { db } from '@pagespace/db/db';
-import { and, eq, inArray, sql } from '@pagespace/db/operators';
+import { and, eq, inArray, isNotNull, sql } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
 import { driveJoinRequests } from '@pagespace/db/schema/drive-join-requests';
@@ -36,18 +36,23 @@ export async function findStaleDriveJoinRequests(
         requesterOrgRole: orgMembers.role,
         rowRole: driveMembers.role,
         rowSource: driveMembers.source,
-        rowAcceptedAt: driveMembers.acceptedAt,
       })
       .from(driveJoinRequests)
       .innerJoin(drives, eq(drives.id, driveJoinRequests.driveId))
       .leftJoin(orgMembers, and(eq(orgMembers.orgId, drives.orgId), eq(orgMembers.userId, driveJoinRequests.userId)))
-      .leftJoin(driveMembers, and(eq(driveMembers.driveId, driveJoinRequests.driveId), eq(driveMembers.userId, driveJoinRequests.userId)))
+      // Accepted rows only: a pending invitation is no membership, so it leaves a request open
+      // exactly as no row does (decideJoinRequestStaysOpen), and it never exercises authority here.
+      .leftJoin(driveMembers, and(
+        eq(driveMembers.driveId, driveJoinRequests.driveId),
+        eq(driveMembers.userId, driveJoinRequests.userId),
+        isNotNull(driveMembers.acceptedAt),
+      ))
       .where(and(inArray(driveJoinRequests.driveId, ids), eq(driveJoinRequests.status, 'pending')));
 
     for (const r of pending) {
       const requesterRow = r.rowSource === null
         ? null
-        : { role: driveMembershipRole(r.rowRole), source: r.rowSource, accepted: r.rowAcceptedAt !== null };
+        : { role: driveMembershipRole(r.rowRole), source: r.rowSource, accepted: true };
       if (!decideJoinRequestStaysOpen({ drive: r, requesterId: r.userId, requesterOrgRole: r.requesterOrgRole, requesterRow })) {
         stale.push({ id: r.id, driveId: r.driveId, userId: r.userId });
       }
