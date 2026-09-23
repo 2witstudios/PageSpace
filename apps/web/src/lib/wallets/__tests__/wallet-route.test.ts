@@ -8,13 +8,17 @@ vi.mock('@/lib/auth', () => ({
 
 import { walletCredentialOf } from '../wallet-route';
 
-const auth = (tokenType: string) => ({ userId: 'u-1', tokenType }) as unknown as AuthResult;
+const base = { userId: 'u-1', role: 'user' as const, tokenVersion: 0, adminRoleVersion: 0 };
+const session: AuthResult = { ...base, tokenType: 'session', sessionId: 's-1' };
+const mcp: AuthResult = { ...base, tokenType: 'mcp', tokenId: 't-1', allowedDriveIds: [] };
 
 describe('walletCredentialOf ([D-OW-26])', () => {
   it('X-1 (partial) only a real session is a session; every delegated credential is refused writes as a token', () => {
-    expect(walletCredentialOf(auth('session'))).toBe('session');
-    for (const delegated of ['mcp', 'oauth', 'service']) {
-      expect(walletCredentialOf(auth(delegated)), delegated).toBe('mcp');
+    expect(walletCredentialOf(session)).toBe('session');
+    expect(walletCredentialOf(mcp)).toBe('mcp');
+    // OAuth and service results carry more fields; only the discriminant matters to the mapping.
+    for (const delegated of ['oauth', 'service'] as const) {
+      expect(walletCredentialOf({ ...mcp, tokenType: delegated } as unknown as AuthResult), delegated).toBe('mcp');
     }
   });
 });

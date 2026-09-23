@@ -7,7 +7,8 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
-import type { MCPAuthResult, SessionAuthResult } from '@/lib/auth';
+import type { AuthError, MCPAuthResult, SessionAuthResult } from '@/lib/auth';
+import type { ConversationSpendRead, MyWallets, WalletServiceError } from '@pagespace/lib/services/drive-wallet-service';
 
 vi.mock('@pagespace/lib/services/drive-wallet-service', () => ({
   listMyWallets: vi.fn(),
@@ -39,8 +40,9 @@ import { authenticateRequestWithOptions } from '@/lib/auth';
 const session = (userId: string): SessionAuthResult => ({
   userId, tokenVersion: 0, tokenType: 'session', sessionId: 's-1', role: 'user', adminRoleVersion: 0,
 });
-const token = (userId: string, allowedDriveIds: string[]) =>
-  ({ userId, tokenType: 'mcp', allowedDriveIds }) as unknown as MCPAuthResult;
+const token = (userId: string, allowedDriveIds: string[]): MCPAuthResult => ({
+  userId, tokenType: 'mcp', tokenId: 'tok-1', allowedDriveIds, role: 'user', tokenVersion: 0, adminRoleVersion: 0,
+});
 
 const req = (method: string, url: string, body?: unknown) =>
   new Request(`https://example.com${url}`, {
@@ -49,22 +51,25 @@ const req = (method: string, url: string, body?: unknown) =>
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
 
-const myWallets = {
-  personal: { walletId: 'w-marcus', remainingCents: 5_000, defaultSpendSource: null },
-  driveWallets: [{ driveId: 'd-product', walletId: 'w-product', status: 'active', remainingCents: 116_442 }],
+// Typed as the service's own results, so a fixture cannot drift from the real response shape.
+const myWallets: MyWallets = {
+  personal: { walletId: 'w-marcus', remainingCents: 5_000, remainingCredits: '5,000', defaultSpendSource: null },
+  driveWallets: [{ driveId: 'd-product', walletId: 'w-product', status: 'active', remainingCents: 116_442, remainingCredits: '116,442' }],
   seats: [{ orgId: 'o-northwind', walletId: 'w-pool' }],
   funds: { driveWallets: [], pools: [], donations: [] },
 };
 
 const conv = { params: Promise.resolve({ conversationId: 'c-1' }) };
-const sourceRead = {
-  ok: true as const,
+const sourceRead: ConversationSpendRead = {
+  ok: true,
   conversationId: 'c-1',
   driveId: 'd-product',
   chosenWalletId: 'w-pool',
-  options: [{ source: 'seat_allowance' as const, walletId: 'w-pool' }],
-  resolved: { kind: 'spend' as const, source: 'seat_allowance' as const, walletId: 'w-pool', fallbackApplied: false, fallbackFrom: null, entitlementTier: 'business' as const },
+  options: [{ source: 'seat_allowance', walletId: 'w-pool' }],
+  resolved: { kind: 'spend', source: 'seat_allowance', walletId: 'w-pool', fallbackApplied: false, fallbackFrom: null, entitlementTier: 'business' },
 };
+
+const authFailure: AuthError = { error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }) };
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -91,7 +96,7 @@ describe('GET /api/wallets', () => {
   });
 
   it('an authentication failure is returned as is', async () => {
-    vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }) } as never);
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(authFailure);
     expect((await LIST(req('GET', '/api/wallets'))).status).toBe(401);
   });
 });
@@ -158,7 +163,7 @@ describe('/api/wallets/conversations/[conversationId]', () => {
 });
 
 describe('[D-OW-26] an MCP/CLI token on the account routes', () => {
-  const refusal = { ok: false as const, status: 403 as const, code: 'mcp_token_cannot_change_spend_source', message: 'An access token cannot change what a conversation or account spends from; sign in to change it' };
+  const refusal: WalletServiceError = { ok: false, status: 403, code: 'mcp_token_cannot_change_spend_source', message: 'An access token cannot change what a conversation or account spends from; sign in to change it' };
 
   it('SPEND-3 (partial) changing a conversation\'s source or the default with a token answers the service\'s typed refusal', async () => {
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(token('u-marcus', []));
