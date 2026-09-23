@@ -79,7 +79,7 @@ export class SessionFullError extends Error {
  *
  * A GLOBAL workspace (driveId null) is exempt from this gate: its tenant/payer
  * already resolve to the workspace's own owner regardless of which agent's
- * conversation runs inside it (`resolveSessionTenantId`/`resolveSessionPayerId`
+ * conversation runs inside it (`resolveSessionTenantId`/`resolveSessionPayer`
  * key off the WORKSPACE's driveId/ownerId, never the hosted agent's), and each
  * conversation-creation route independently checks the caller can view the
  * target agent page before this gate ever runs. So a global workspace may host

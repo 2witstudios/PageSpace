@@ -5,7 +5,6 @@ import {
   decideCreateDriveInOrg,
   canLeadOrgDrive,
   orgDriveVisibilityForInsert,
-  STORAGE_REATTRIBUTION_LEAF_ID,
   ORG_DRIVE_CREATION_POLICY_LEAF_ID,
   ORG_DRIVE_SLUG_CONSTRAINT,
   ORG_SLUG_ATTEMPTS,
@@ -183,8 +182,7 @@ describe('orgDriveVisibilityForInsert', () => {
 });
 
 describe('named follow-up leaves', () => {
-  it('points storage re-attribution and the creation policy at their board leaves', () => {
-    expect(STORAGE_REATTRIBUTION_LEAF_ID).toBe('t1759m6mfxrj5hyaleu1mdqs');
+  it('points the creation policy at its board leaf', () => {
     expect(ORG_DRIVE_CREATION_POLICY_LEAF_ID).toBe('lyt8275djmdcwlwm8wvk2xa5');
   });
 });

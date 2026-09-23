@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { assert } from './riteway';
+import type { DriveBillingFacts } from '../../../billing/sandbox-payer';
 import {
   reconcileSandboxStorage,
   computeElapsedGbMonths,
@@ -147,7 +148,7 @@ function makeDeps(over: Partial<ReconcileSandboxStorageDeps> = {}): {
     listAgentSessionSprites: async () => [],
     listDriveEnvSprites: async () => [],
     listPublishedAppRootfs: async () => [],
-    lookupDriveOwnerId: async () => 'owner-1',
+    lookupDriveBillingFacts: async () => ({ ownerId: 'owner-1', orgId: null }),
     chargeStorage: async (input) => {
       chargeCalls.push(input);
       // The real seam reports whether the usage row landed; the happy-path stub
@@ -244,11 +245,11 @@ describe('reconcileSandboxStorage', () => {
     expect(agentSessionAdvanceCalls).toEqual([{ workspaceId: 'session-1', billedThrough: new Date('2026-07-01T00:00:00.000Z') }]);
   });
 
-  it('resolves the payer via lookupDriveOwnerId when driveId is set', async () => {
-    const lookup = vi.fn(async (driveId: string) => `owner-of-${driveId}`);
+  it('resolves the payer via lookupDriveBillingFacts when driveId is set', async () => {
+    const lookup = vi.fn(async (driveId: string) => ({ ownerId: `owner-of-${driveId}`, orgId: null }));
     const { deps, chargeCalls } = makeDeps({
       listAgentSessionSprites: async () => [agentSession({ driveId: 'drive-9', ownerId: 'session-owner-9' })],
-      lookupDriveOwnerId: lookup,
+      lookupDriveBillingFacts: lookup,
     });
 
     await reconcileSandboxStorage(deps);
@@ -258,10 +259,10 @@ describe('reconcileSandboxStorage', () => {
   });
 
   it('bills a global-assistant session (null driveId) straight to its ownerId, with no drive lookup and no driveId on the charge', async () => {
-    const lookup = vi.fn(async () => 'should-not-be-called');
+    const lookup = vi.fn(async () => ({ ownerId: 'should-not-be-called', orgId: null }));
     const { deps, chargeCalls } = makeDeps({
       listAgentSessionSprites: async () => [agentSession({ driveId: null, ownerId: 'global-owner-1' })],
-      lookupDriveOwnerId: lookup,
+      lookupDriveBillingFacts: lookup,
     });
 
     const result = await reconcileSandboxStorage(deps);
@@ -293,7 +294,7 @@ describe('reconcileSandboxStorage', () => {
   it('skips (and does not advance the watermark for) a page-backed session whose page owner cannot be resolved', async () => {
     const { deps, chargeCalls, agentSessionAdvanceCalls } = makeDeps({
       listAgentSessionSprites: async () => [agentSession({ driveId: 'orphaned-page' })],
-      lookupDriveOwnerId: async () => null,
+      lookupDriveBillingFacts: async () => null,
     });
 
     const result = await reconcileSandboxStorage(deps);
@@ -301,6 +302,21 @@ describe('reconcileSandboxStorage', () => {
     expect(result).toMatchObject({ processed: 1, charged: 0, skipped: 1 });
     expect(chargeCalls).toEqual([]);
     expect(agentSessionAdvanceCalls).toEqual([]);
+  });
+
+  it('WAL-9 (partial) skips ORG-drive storage by name for every kind — no wallet is charged, no watermark moves, never the lead', async () => {
+    const { deps, chargeCalls, agentSessionAdvanceCalls, driveEnvAdvanceCalls } = makeDeps({
+      listAgentSessionSprites: async () => [agentSession({ driveId: 'org-drive' })],
+      listDriveEnvSprites: async () => [driveEnv({ driveId: 'org-drive' })],
+      lookupDriveBillingFacts: async () => ({ ownerId: 'lead-marcus', orgId: 'org-northwind' }),
+    });
+
+    const result = await reconcileSandboxStorage(deps);
+
+    expect(result).toMatchObject({ processed: 2, charged: 0, skipped: 2, orgBillingPending: 2 });
+    expect(chargeCalls).toEqual([]);
+    expect(agentSessionAdvanceCalls).toEqual([]);
+    expect(driveEnvAdvanceCalls).toEqual([]);
   });
 
   it('given chargeStorage succeeds but the FOLLOWING watermark advance throws, counts the money as charged (never under-reported) and flags the row distinguishably', async () => {
@@ -418,10 +434,10 @@ describe('reconcileSandboxStorage', () => {
   // -------------------------------------------------------------------------
 
   it('bills a drive env to its DRIVE OWNER for its measured storage window and advances the ENV watermark', async () => {
-    const lookup = vi.fn(async (driveId: string) => `owner-of-${driveId}`);
+    const lookup = vi.fn(async (driveId: string) => ({ ownerId: `owner-of-${driveId}`, orgId: null }));
     const { deps, chargeCalls, driveEnvAdvanceCalls, agentSessionAdvanceCalls } = makeDeps({
       listDriveEnvSprites: async () => [driveEnv({ envId: 'env-7', driveId: 'drive-7' })],
-      lookupDriveOwnerId: lookup,
+      lookupDriveBillingFacts: lookup,
     });
 
     const result = await reconcileSandboxStorage(deps);
@@ -456,7 +472,7 @@ describe('reconcileSandboxStorage', () => {
   it('SKIPS an env whose drive owner cannot be resolved — no charge, no watermark advance, no fallback payer', async () => {
     const { deps, chargeCalls, driveEnvAdvanceCalls } = makeDeps({
       listDriveEnvSprites: async () => [driveEnv({ envId: 'env-orphan', driveId: 'drive-mid-delete' })],
-      lookupDriveOwnerId: async () => null,
+      lookupDriveBillingFacts: async () => null,
     });
 
     const result = await reconcileSandboxStorage(deps);
@@ -491,10 +507,10 @@ describe('reconcileSandboxStorage', () => {
   // -------------------------------------------------------------------------
 
   it("bills a published app's rootfs to its DRIVE OWNER and advances the APP's own watermark", async () => {
-    const lookup = vi.fn(async (driveId: string) => `owner-of-${driveId}`);
+    const lookup = vi.fn(async (driveId: string) => ({ ownerId: `owner-of-${driveId}`, orgId: null }));
     const { deps, chargeCalls, publishedAppAdvanceCalls, driveEnvAdvanceCalls, agentSessionAdvanceCalls } = makeDeps({
       listPublishedAppRootfs: async () => [publishedAppRootfs({ publishedAppId: 'app-9', driveId: 'drive-9' })],
-      lookupDriveOwnerId: lookup,
+      lookupDriveBillingFacts: lookup,
     });
 
     const result = await reconcileSandboxStorage(deps);
@@ -532,7 +548,7 @@ describe('reconcileSandboxStorage', () => {
     // "who pays". Billing it would be a money movement that cannot be taken back.
     const { deps, chargeCalls, publishedAppAdvanceCalls } = makeDeps({
       listPublishedAppRootfs: async () => [publishedAppRootfs({ driveId: 'drive-mid-delete' })],
-      lookupDriveOwnerId: async () => null,
+      lookupDriveBillingFacts: async () => null,
     });
 
     const result = await reconcileSandboxStorage(deps);
@@ -586,7 +602,7 @@ describe('reconcileSandboxStorage', () => {
       listAgentSessionSprites: async () => [agentSession({ workspaceId: 'session-a', driveId: null, ownerId: 'global-owner' })],
       listDriveEnvSprites: async () => [driveEnv({ envId: 'env-b', driveId: 'drive-b' })],
       listPublishedAppRootfs: async () => [publishedAppRootfs({ publishedAppId: 'app-c', driveId: 'drive-c' })],
-      lookupDriveOwnerId: async (driveId) => `owner-of-${driveId}`,
+      lookupDriveBillingFacts: async (driveId) => ({ ownerId: `owner-of-${driveId}`, orgId: null }),
     });
 
     const result = await reconcileSandboxStorage(deps);
@@ -610,7 +626,7 @@ describe('reconcileSandboxStorage', () => {
     const { deps, chargeCalls, agentSessionAdvanceCalls, driveEnvAdvanceCalls } = makeDeps({
       listAgentSessionSprites: async () => [agentSession({ workspaceId: 'session-a', driveId: null, ownerId: 'global-owner' })],
       listDriveEnvSprites: async () => [driveEnv({ envId: 'env-b', driveId: 'drive-b' })],
-      lookupDriveOwnerId: async (driveId) => `owner-of-${driveId}`,
+      lookupDriveBillingFacts: async (driveId) => ({ ownerId: `owner-of-${driveId}`, orgId: null }),
     });
 
     const result = await reconcileSandboxStorage(deps);
@@ -722,7 +738,7 @@ describe('reconcileSandboxStorage', () => {
       listDriveEnvSprites: async () => {
         throw new Error('envs down');
       },
-      lookupDriveOwnerId: async () => {
+      lookupDriveBillingFacts: async () => {
         throw new Error('lookup down');
       },
       chargeStorage: async () => {
@@ -743,7 +759,7 @@ describe('reconcileSandboxStorage', () => {
     const { deps } = makeDeps({
       listAgentSessionSprites: async () => [agentSession()],
       listDriveEnvSprites: async () => [driveEnv()],
-      lookupDriveOwnerId: async () => {
+      lookupDriveBillingFacts: async () => {
         throw new Error('lookup down');
       },
     });
@@ -830,7 +846,7 @@ describe('reconcileSandboxStorage', () => {
       listDriveEnvSprites: async () => [
         driveEnv({ storageLastBilledAt: new Date(now.getTime() - 40 * 24 * 60 * 60 * 1000) }),
       ],
-      lookupDriveOwnerId: async () => null,
+      lookupDriveBillingFacts: async () => null,
       now: () => now,
     });
 
@@ -1004,8 +1020,8 @@ describe('reconcileSandboxStorage', () => {
     const { deps, chargeCalls } = makeDeps({
       listAgentSessionSprites: async () => [agentSession({ workspaceId: 'session-this', driveId: 'drive-s' })],
       listDriveEnvSprites: async () => [driveEnv({ envId: 'env-this', driveId: 'drive-e' })],
-      lookupDriveOwnerId(this: ReconcileSandboxStorageDeps, driveId: string): Promise<string | null> {
-        return Promise.resolve(`owner-of-${driveId}-at-${this.now().toISOString()}`);
+      lookupDriveBillingFacts(this: ReconcileSandboxStorageDeps, driveId: string): Promise<DriveBillingFacts | null> {
+        return Promise.resolve({ ownerId: `owner-of-${driveId}-at-${this.now().toISOString()}`, orgId: null });
       },
     });
 
@@ -1093,7 +1109,7 @@ describe('reconcileSandboxStorage', () => {
   });
 
   it('looks a drive owner up ONCE PER DRIVE per tick, not once per row', async () => {
-    const lookup = vi.fn(async (driveId: string) => `owner-of-${driveId}`);
+    const lookup = vi.fn(async (driveId: string) => ({ ownerId: `owner-of-${driveId}`, orgId: null }));
     const { deps, chargeCalls } = makeDeps({
       listAgentSessionSprites: async () => [
         agentSession({ workspaceId: 's1', driveId: 'drive-a' }),
@@ -1103,7 +1119,7 @@ describe('reconcileSandboxStorage', () => {
         driveEnv({ envId: 'e1', driveId: 'drive-a' }),
         driveEnv({ envId: 'e2', driveId: 'drive-b' }),
       ],
-      lookupDriveOwnerId: lookup,
+      lookupDriveBillingFacts: lookup,
     });
 
     const result = await reconcileSandboxStorage(deps);
@@ -1130,7 +1146,7 @@ describe('reconcileSandboxStorage', () => {
         driveEnv({ envId: 'e1', driveId: 'gone' }),
         driveEnv({ envId: 'e2', driveId: 'gone' }),
       ],
-      lookupDriveOwnerId: lookup,
+      lookupDriveBillingFacts: lookup,
     });
 
     const result = await reconcileSandboxStorage(deps);
@@ -1148,7 +1164,7 @@ describe('reconcileSandboxStorage', () => {
       // one and not the other.
       listDriveEnvSprites: async () => [driveEnv({ envId: 'e1', driveId: 'drive-env' })],
       // The sessions' drive cannot resolve a payer; the env's can.
-      lookupDriveOwnerId: async (driveId) => (driveId === 'drive-1' ? null : `owner-of-${driveId}`),
+      lookupDriveBillingFacts: async (driveId) => (driveId === 'drive-1' ? null : { ownerId: `owner-of-${driveId}`, orgId: null }),
     });
 
     const result = await reconcileSandboxStorage(deps);
@@ -1216,7 +1232,7 @@ describe('reconcileSandboxStorage', () => {
         agentSession({ workspaceId: 'z2', measuredBytes: null, measuredAt: null }),
         agentSession({ workspaceId: 'z3', measuredBytes: null, measuredAt: null }),
       ],
-      lookupDriveOwnerId: async () => null,
+      lookupDriveBillingFacts: async () => null,
       advanceAgentSessionWatermark: async () => {
         throw new Error('transient db error');
       },

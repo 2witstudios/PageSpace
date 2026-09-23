@@ -45,7 +45,7 @@ function makeDeps(over: Partial<AwakeMeterDeps> = {}) {
 
   const deps: AwakeMeterDeps = {
     isEnabled: () => true,
-    billing: { resolvePayerId: async () => 'payer-1', gate, trackUsage, releaseHold },
+    billing: { resolvePayerId: async () => ({ ok: true as const, userId: 'payer-1' }), gate, trackUsage, releaseHold },
     listRunningApps: async () => [runningApp()],
     findStopBoundary,
     writeSettle,
@@ -353,6 +353,25 @@ describe('meterAwakePublishedApps — attribution and isolation', () => {
         advances: writeSettle.mock.calls.length,
       },
       expected: { unresolved: 1, charges: 0, advances: 0 },
+    });
+  });
+
+  it('WAL-9 (partial) given an ORG drive on a settle, should charge nobody, move no watermark, and count it by name', async () => {
+    const { deps, trackUsage, writeSettle } = makeDeps();
+    deps.billing.resolvePayerId = async () => ({ ok: false as const, refusal: { code: 'org_billing_pending' as const, orgId: 'org-northwind', message: 'org billing pending' } });
+
+    const run = await meter(deps);
+
+    assert({
+      given: 'a running app whose drive belongs to an org',
+      should: 'debit no wallet and leave the window for the org charge that replaces this',
+      actual: {
+        orgBillingPending: run.orgBillingPending,
+        unresolved: run.unresolvedPayer,
+        charges: trackUsage.mock.calls.length,
+        advances: writeSettle.mock.calls.length,
+      },
+      expected: { orgBillingPending: 1, unresolved: 0, charges: 0, advances: 0 },
     });
   });
 

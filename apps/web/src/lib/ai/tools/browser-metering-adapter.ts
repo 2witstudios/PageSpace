@@ -2,9 +2,11 @@
  * Metering for browser sessions — billed to the paying principal exactly
  * like a sandbox (G6a requirement; S3 R14), through the same primitives:
  *
- *  - the payer is `resolveSessionPayerId` (drive owner, else the session's
+ *  - the payer is `resolveSessionPayer` (the drive's payer, else the session's
  *    owner — never the acting user of a shared agent), the rule the sandbox
- *    and storage charge streams share;
+ *    and storage charge streams share. An org drive's payer is the org, which
+ *    this path cannot debit yet: the browser is refused by name
+ *    (`org_billing_pending`) and nobody is billed, until the C3 lane lands;
  *  - the hold is `defaultSandboxBillingDeps.gate` (the payer's balance and
  *    tier, the machine in-flight ceiling), placed BEFORE any browser starts;
  *  - the settlement is every elapsed interval of the session's lifetime at the browser's REAL
@@ -42,7 +44,10 @@ const realPrimitives: BillingPrimitives = {
 export function createBrowserMeter(primitives: BillingPrimitives = realPrimitives): BrowserMeter<BrowserBilling> {
   return {
     open: async ({ driveId, ownerId }) => {
-      const payerId = await primitives.resolvePayerId({ driveId, ownerId });
+      const payer = await primitives.resolvePayerId({ driveId, ownerId });
+      // WAL-9 interim: refuse an org payer before any hold — never bill a person for it.
+      if (!payer.ok) return { ok: false, reason: payer.refusal.code };
+      const { userId: payerId } = payer;
       const gated = await primitives.gate({ payerId });
       if (!gated.allowed) return { ok: false, reason: gated.reason ?? 'The browser could not be started: insufficient credits.' };
       return { ok: true, hold: { holdId: gated.holdId ?? null, payerId } };

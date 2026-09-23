@@ -4,7 +4,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { eq, sql, and, inArray, desc } from '@pagespace/db/operators';
+import { eq, sql, and, inArray, desc, isNull, or } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { pages, drives, storageEvents } from '@pagespace/db/schema/core';
 import { files } from '@pagespace/db/schema/storage';
@@ -21,9 +21,24 @@ export interface StorageDriftCandidate {
   userId: string;
   /** users.storageUsedBytes — the cached counter. */
   materializedBytes: number;
-  /** SUM(files.sizeBytes) for files.createdBy = userId — the source of truth. */
+  /** SUM(files.sizeBytes) for files.createdBy = userId outside org drives — the source of truth. */
   derivedBytes: number;
 }
+
+/** Rows of one drive's stored bytes, by uploader — the re-attribution population (O-9). */
+export interface DriveFileBytes {
+  createdBy: string | null;
+  sizeBytes: number;
+}
+
+/**
+ * WAL-9, O-9: a personal quota counts only files OUTSIDE org drives. Bytes in an org drive bill
+ * the org, whose usage is derived from its drives' files rows. A drive-less file (a DM
+ * attachment) is personal. Used as a filter on a `files` LEFT JOIN `drives`.
+ */
+const personallyAttributed = or(isNull(files.driveId), isNull(drives.orgId));
+
+const STORAGE_EVENT_CHUNK = 500;
 
 export const storageRepository = {
   findUserForStorage: async (userId: string): Promise<StorageUserRecord | undefined> => {
@@ -70,10 +85,13 @@ export const storageRepository = {
              COALESCE(f.total, 0) AS "derivedBytes"
       FROM users u
       LEFT JOIN (
-        SELECT "createdBy", SUM("sizeBytes") AS total, MAX("createdAt") AS "lastCreatedAt"
-        FROM files
-        WHERE "createdBy" IS NOT NULL
-        GROUP BY "createdBy"
+        SELECT fi."createdBy", SUM(fi."sizeBytes") AS total, MAX(fi."createdAt") AS "lastCreatedAt"
+        FROM files fi
+        LEFT JOIN drives d ON d.id = fi."driveId"
+        WHERE fi."createdBy" IS NOT NULL
+          -- WAL-9, O-9: org-drive bytes bill the org, never the uploader's personal quota.
+          AND d."orgId" IS NULL
+        GROUP BY fi."createdBy"
       ) f ON f."createdBy" = u.id
       WHERE ABS(ROUND(u."storageUsedBytes") - COALESCE(f.total, 0)) > ${Math.max(0, Math.round(toleranceBytes))}
         AND (f."lastCreatedAt" IS NULL OR f."lastCreatedAt" < now() - make_interval(secs => ${Math.max(0, cooldownSeconds)}))
@@ -110,9 +128,13 @@ export const storageRepository = {
     return row?.createdAt ?? null;
   },
 
+  /**
+   * The drives whose FILE pages count against the user's personal file-count limit: the ones
+   * they own that are not org drives (an org drive's files count against the org, WAL-9).
+   */
   findUserDriveIds: async (userId: string): Promise<string[]> => {
     const userDrives = await db.query.drives.findMany({
-      where: eq(drives.ownerId, userId),
+      where: and(eq(drives.ownerId, userId), isNull(drives.orgId)),
       columns: { id: true },
     });
     return userDrives.map((d: { id: string }) => d.id);
@@ -128,7 +150,8 @@ export const storageRepository = {
     const rows = await db
       .select({ sizeBytes: files.sizeBytes })
       .from(files)
-      .where(eq(files.createdBy, userId));
+      .leftJoin(drives, eq(drives.id, files.driveId))
+      .where(and(eq(files.createdBy, userId), personallyAttributed));
     return rows.map((r: { sizeBytes: number | string | null }) => ({
       sizeBytes: typeof r.sizeBytes === 'string' ? Number(r.sizeBytes) : (r.sizeBytes ?? 0),
     }));
@@ -154,6 +177,56 @@ export const storageRepository = {
       )
     `);
     return result.rows.length > 0;
+  },
+
+  /** The drive's orgId; undefined when the drive does not exist. */
+  findDriveOrgId: async (driveId: string): Promise<string | null | undefined> => {
+    const [row] = await db.select({ orgId: drives.orgId }).from(drives).where(eq(drives.id, driveId)).limit(1);
+    return row ? row.orgId : undefined;
+  },
+
+  /** An org's derived storage usage: SUM(files.sizeBytes) over files in its drives (WAL-9). */
+  sumOrgFileBytes: async (orgId: string): Promise<number> => {
+    const [row] = await db
+      .select({ total: sql<string | number | null>`COALESCE(SUM(${files.sizeBytes}), 0)` })
+      .from(files)
+      .innerJoin(drives, eq(drives.id, files.driveId))
+      .where(eq(drives.orgId, orgId));
+    return Number(row?.total ?? 0);
+  },
+
+  findOrgDriveIds: async (orgId: string): Promise<string[]> => {
+    const rows = await db.select({ id: drives.id }).from(drives).where(eq(drives.orgId, orgId));
+    return rows.map((r: { id: string }) => r.id);
+  },
+
+  /** drives.orgId for each existing drive among `driveIds` (a missing drive is absent). */
+  findDriveOrgIds: async (driveIds: string[]): Promise<Map<string, string | null>> => {
+    if (driveIds.length === 0) return new Map();
+    const rows = await db.select({ id: drives.id, orgId: drives.orgId }).from(drives).where(inArray(drives.id, driveIds));
+    return new Map(rows.map((r: { id: string; orgId: string | null }) => [r.id, r.orgId]));
+  },
+
+  /** One drive's files rows, read inside the move's transaction (O-9 re-attribution). */
+  findDriveFileBytesInTx: async (tx: DrizzleTx, driveId: string): Promise<DriveFileBytes[]> => {
+    const rows = await tx
+      .select({ createdBy: files.createdBy, sizeBytes: files.sizeBytes })
+      .from(files)
+      .where(eq(files.driveId, driveId));
+    return rows.map((r: { createdBy: string | null; sizeBytes: number | string | null }) => ({
+      createdBy: r.createdBy,
+      sizeBytes: typeof r.sizeBytes === 'string' ? Number(r.sizeBytes) : (r.sizeBytes ?? 0),
+    }));
+  },
+
+  /** Insert storage events in chunks: one statement per ~500 rows stays far below 65535 binds. */
+  insertStorageEventsInTx: async (
+    tx: DrizzleTx,
+    events: Array<typeof storageEvents.$inferInsert>,
+  ): Promise<void> => {
+    for (let i = 0; i < events.length; i += STORAGE_EVENT_CHUNK) {
+      await tx.insert(storageEvents).values(events.slice(i, i + STORAGE_EVENT_CHUNK));
+    }
   },
 
   countFiles: async (driveIds: string[]): Promise<number> => {

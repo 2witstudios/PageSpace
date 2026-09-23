@@ -587,7 +587,7 @@ describe.skipIf(dbSkipExplicitlyAllowed())('stopPublishedApp — the final settl
       ...defaultAppLifecycleMeteringDeps,
       isEnabled: () => true,
       billing: {
-        resolvePayerId: async () => ownerId,
+        resolvePayerId: async () => ({ ok: true as const, userId: ownerId }),
         gate: async () => ({ allowed: true, holdId: 'hold-x' }),
         // Reports a PERSISTED settle: the seam only closes a window — and only
         // counts the day's seconds — for a charge that actually landed, so a stub
@@ -679,7 +679,7 @@ describe.skipIf(dbSkipExplicitlyAllowed())('stopPublishedApp — the final settl
       'idle',
       stopDeps({
         billing: {
-          resolvePayerId: async () => ownerId,
+          resolvePayerId: async () => ({ ok: true as const, userId: ownerId }),
           gate: async () => ({ allowed: true, holdId: 'hold-x' }),
           trackUsage: async () => ({ persisted: false, creditsSettled: false }),
           releaseHold: async () => {},

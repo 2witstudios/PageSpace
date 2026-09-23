@@ -142,7 +142,12 @@ export type WakeRefusal =
   /** The row is not in a state a wake may leave — already running, destroying, failed. */
   | 'not_wakeable'
   /** The owning drive could not be resolved, so there is no honest payer. Nothing is started. */
-  | 'unresolved_payer';
+  | 'unresolved_payer'
+  /**
+   * WAL-9 interim: the owning drive is an org drive, and org compute billing is not wired yet.
+   * Nothing is started and nobody is charged; the C3 lane replaces this with a hold on the org.
+   */
+  | 'org_billing_pending';
 
 export type WakePublishedAppResult =
   | { outcome: 'woken'; app: PublishedApp; holdId?: string }
@@ -218,12 +223,15 @@ export async function wakePublishedApp(
   // exists to answer "who is charged", and nobody is charged per-second here.
   let holdId: string | undefined;
   if (isCreditMetered(row.tier)) {
-    const payerId = await deps.billing.resolvePayerId({ driveId: row.driveId });
+    const payer = await deps.billing.resolvePayerId({ driveId: row.driveId });
     // No fallback, by design: an app is drive-owned, and `published_apps.ownerId`
     // is a denormalized cascade handle, not an answer to "who pays". Billing a
     // machine to somebody who may not own the drive is a money movement that cannot
     // be taken back; refusing the wake costs one request a parked page.
-    if (!payerId) return { outcome: 'refused', reason: 'unresolved_payer' };
+    if (!payer) return { outcome: 'refused', reason: 'unresolved_payer' };
+    // WAL-9 interim: an org drive's app bills the org, which nothing can debit yet.
+    if (!payer.ok) return { outcome: 'refused', reason: payer.refusal.code };
+    const payerId = payer.userId;
 
     const gate = await deps.billing.gate({ payerId });
     if (!gate.allowed) {
@@ -604,7 +612,10 @@ async function settleAndClose(
   const plan = planAwakeSettle({ billedThrough: row.awakeBilledThrough, now: billedThrough });
   let billedSeconds = 0;
   if (plan.action === 'settle') {
-    const payerId = await deps.billing.resolvePayerId({ driveId: row.driveId });
+    const payer = await deps.billing.resolvePayerId({ driveId: row.driveId });
+    // WAL-9 interim: an org payer (a drive moved into an org while its app was awake) is
+    // skipped like an unresolvable one — never billed to a person.
+    const payerId = payer?.ok ? payer.userId : null;
     if (payerId) {
       // The window is NOT closed on a failed settle: leaving it open means the next
       // heartbeat retries the whole span, where closing it would silently lose the
@@ -668,9 +679,10 @@ async function settleAndClose(
       // Unresolvable drive: skip the charge rather than misattribute it, exactly
       // as the storage reconcile does. The hold is still released below — it
       // reserves against a window nobody will ever settle.
-      loggers.ai.warn('Published-app final settle skipped: the owning drive could not be resolved', {
+      loggers.ai.warn('Published-app final settle skipped: no person pays for the owning drive', {
         publishedAppId: row.id,
         driveId: row.driveId,
+        reason: payer && !payer.ok ? payer.refusal.code : 'unresolved_payer',
       });
       if (row.awakeHoldId) await deps.billing.releaseHold(row.awakeHoldId);
     }
@@ -778,18 +790,24 @@ async function settleAbandonedTail(
     return;
   }
 
-  const payerId = await deps.billing.resolvePayerId({ driveId: row.driveId });
-  if (!payerId) {
-    // Unresolvable drive — never substitute a payer. The watermark is already
-    // claimed off the row above, so there is no later retry that could recover
-    // this span; say so at ERROR rather than warn.
+  const payer = await deps.billing.resolvePayerId({ driveId: row.driveId });
+  if (!payer?.ok) {
+    // Unresolvable drive, or an org payer (WAL-9 interim, until the C3 lane) — never
+    // substitute a payer. The watermark is already claimed off the row above, so there
+    // is no later retry that could recover this span; say so at ERROR rather than warn.
     loggers.ai.error(
-      'Published-app abandoned tail could not be billed: the owning drive did not resolve — this span is lost',
+      'Published-app abandoned tail could not be billed: no person pays for the owning drive — this span is lost',
       new Error('abandoned tail payer unresolved'),
-      { publishedAppId: row.id, driveId: row.driveId, activeSeconds: plan.activeSeconds },
+      {
+        publishedAppId: row.id,
+        driveId: row.driveId,
+        activeSeconds: plan.activeSeconds,
+        reason: payer ? payer.refusal.code : 'unresolved_payer',
+      },
     );
     return;
   }
+  const payerId = payer.userId;
 
   try {
     const settle = await deps.billing.trackUsage({

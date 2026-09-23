@@ -9,7 +9,7 @@
  * `releaseHold` exactly as a sandbox run is, so there is one place where money
  * moves and one place where a gate can be got wrong.
  *
- * THE PAYER IS THE DRIVE OWNER, via `resolveEnvPayerId`. A published app hangs off
+ * THE PAYER IS THE DRIVE OWNER, via `resolveEnvPayer`. A published app hangs off
  * an ENVIRONMENT, and an environment is drive-owned and drive-shared; billing is
  * keyed to the environment and is deliberately substrate-agnostic, so nothing here
  * names Fly. `published_apps.ownerId` is denormalized for indexing and cascade
@@ -35,7 +35,12 @@ import {
   PUBLISHED_APP_MAX_INFLIGHT,
   PUBLISHED_APP_WAKE_HOLD_ESTIMATE_CENTS,
 } from '../../billing/credit-pricing';
-import { resolveEnvPayerId, lookupDriveOwnerId } from '../../billing/sandbox-payer';
+import {
+  resolveEnvPayer,
+  lookupDriveBillingFacts,
+  requireUserPayer,
+  type UserPayerResult,
+} from '../../billing/sandbox-payer';
 import { AIMonitoring, type UsageTrackingOutcome } from '../../monitoring/ai-monitoring';
 import { calculateMachineCostDollars, PUBLISHED_APP_GUEST_SHAPE } from '../../monitoring/machine-pricing';
 import { toSubscriptionTier, type SubscriptionTier } from '../../billing/subscription-tiers';
@@ -43,11 +48,14 @@ import { PUBLISHED_APP_AWAKE_MODEL } from '../../monitoring/usage-source';
 
 export interface AppBillingDeps {
   /**
-   * Who pays for this app's runtime — the OWNING DRIVE's owner, with no fallback.
+   * Who pays for this app's runtime — the OWNING DRIVE's payer, with no fallback.
    * Null means unresolvable (a stale read of a drive mid-delete): the caller
-   * refuses the wake or skips the settle rather than billing anyone else.
+   * refuses the wake or skips the settle rather than billing anyone else. An org
+   * drive's payer is the org (WAL-9), which this path cannot debit yet: it answers
+   * the named `org_billing_pending` refusal, never a person — replaced by the C3
+   * lane's wallet-keyed holds.
    */
-  resolvePayerId: (input: { driveId: string }) => Promise<string | null>;
+  resolvePayerId: (input: { driveId: string }) => Promise<UserPayerResult | null>;
   /**
    * Balance check + reservation, run BEFORE the machine is started. This is the
    * whole of hosting's credit enforcement: an exhausted payer is refused a wake
@@ -93,11 +101,12 @@ async function resolvePayerTier(payerId: string): Promise<SubscriptionTier> {
 }
 
 export const defaultAppBillingDeps: AppBillingDeps = {
-  resolvePayerId({ driveId }) {
-    // Called through a closure rather than passed unbound: `resolveEnvPayerId`
+  async resolvePayerId({ driveId }) {
+    // Called through a closure rather than passed unbound: `resolveEnvPayer`
     // invokes its input off its own object, and handing over a bare method
     // reference would drop `this` for any non-literal deps implementation.
-    return resolveEnvPayerId({ driveId, lookupDriveOwnerId: (id) => lookupDriveOwnerId(id) });
+    const payer = await resolveEnvPayer({ driveId, lookupDriveBillingFacts: (id) => lookupDriveBillingFacts(id) });
+    return payer ? requireUserPayer(payer) : null;
   },
 
   async gate({ payerId }) {

@@ -6,10 +6,10 @@ const mockCheckStorageQuota = vi.fn();
 const mockReserveConcurrentUploadSlot = vi.fn();
 const mockUpdateStorageUsage = vi.fn();
 vi.mock('@pagespace/lib/services/storage-limits', () => ({
-  getUserStorageQuota: (...a: unknown[]) => mockGetUserStorageQuota(...a),
-  checkStorageQuota: (...a: unknown[]) => mockCheckStorageQuota(...a),
+  getStorageQuotaForDrive: (...a: unknown[]) => mockGetUserStorageQuota(...a),
+  checkStorageQuotaForDrive: (...a: unknown[]) => mockCheckStorageQuota(...a),
   reserveConcurrentUploadSlot: (...a: unknown[]) => mockReserveConcurrentUploadSlot(...a),
-  updateStorageUsage: (...a: unknown[]) => mockUpdateStorageUsage(...a),
+  chargeStorageForStore: (...a: unknown[]) => mockUpdateStorageUsage(...a),
   // Real (pure) impl: charge iff the files row was newly inserted (M8).
   shouldChargeForStore: (inserted: boolean) => inserted,
 }));
@@ -215,7 +215,7 @@ describe('completeAttachment', () => {
     mockVerifyAttachmentBytes.mockResolvedValue({ ok: true, detectedMime: 'image/png', size: 2048 });
     await completeAttachment(completeArgs({ target: CONV_TARGET }));
     expect(mockSaveFileRecordAndLink).toHaveBeenCalledWith(expect.objectContaining({ fileRecord: expect.objectContaining({ driveId: null }) }));
-    expect(mockUpdateStorageUsage).toHaveBeenCalledWith('user-1', 2048, expect.objectContaining({ driveId: undefined }));
+    expect(mockUpdateStorageUsage).toHaveBeenCalledWith('user-1', null, 2048, expect.objectContaining({ eventType: 'upload' }));
   });
 
   it('persists and charges the verifier-authoritative size, not the client presign size', async () => {
@@ -226,7 +226,7 @@ describe('completeAttachment', () => {
     const res = await completeAttachment(completeArgs());
     expect(res.body).toMatchObject({ file: { size: 1024 } });
     expect(mockSaveFileRecordAndLink).toHaveBeenCalledWith(expect.objectContaining({ fileRecord: expect.objectContaining({ sizeBytes: 1024 }) }));
-    expect(mockUpdateStorageUsage).toHaveBeenCalledWith('user-1', 1024, expect.anything());
+    expect(mockUpdateStorageUsage).toHaveBeenCalledWith('user-1', expect.anything(), 1024, expect.anything());
   });
 
   it('M8: does not charge storage on a dedup completion (files row already existed)', async () => {

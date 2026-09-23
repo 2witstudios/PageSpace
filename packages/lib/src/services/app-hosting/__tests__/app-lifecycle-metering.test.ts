@@ -105,7 +105,7 @@ function makeDeps(over: Partial<AppLifecycleMeteringDeps> = {}): {
   const deps: AppLifecycleMeteringDeps = {
     isEnabled: () => true,
     billing: {
-      resolvePayerId: async () => 'payer-1',
+      resolvePayerId: async () => ({ ok: true as const, userId: 'payer-1' }),
       gate,
       trackUsage,
       releaseHold,
@@ -163,6 +163,21 @@ describe('wakePublishedApp', () => {
       expected: { result: { outcome: 'parked', reason: 'insufficient_credits' }, started: 0 },
     });
     expect(mockDb.__state.updateSets[0]).toMatchObject({ status: 'parked' });
+  });
+
+  it('WAL-9 (partial) given an ORG drive, should refuse the wake by name and neither gate, start nor charge anyone', async () => {
+    const { deps, gate, startMachine } = makeDeps();
+    deps.billing.resolvePayerId = async () => ({ ok: false as const, refusal: { code: 'org_billing_pending' as const, orgId: 'org-northwind', message: 'org billing pending' } });
+    seed(appRow());
+
+    assert({
+      given: 'a published app whose owning drive belongs to an org',
+      should: 'refuse with org_billing_pending before any hold',
+      actual: await wakePublishedApp('app-1', deps),
+      expected: { outcome: 'refused', reason: 'org_billing_pending' },
+    });
+    expect(gate).not.toHaveBeenCalled();
+    expect(startMachine).not.toHaveBeenCalled();
   });
 
   it('given an unresolvable drive, should refuse the wake rather than bill somebody else', async () => {

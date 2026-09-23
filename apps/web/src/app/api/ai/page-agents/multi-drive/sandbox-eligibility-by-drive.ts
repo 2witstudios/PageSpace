@@ -1,4 +1,5 @@
 import { isSandboxAvailable } from '@pagespace/lib/billing/sandbox-eligibility';
+import { payerForDrive, requireUserPayer } from '@pagespace/lib/billing/sandbox-payer';
 import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { isDriveLead, type DriveRelationship } from '@pagespace/lib/permissions/drive-relationship';
 
@@ -12,9 +13,13 @@ import { isDriveLead, type DriveRelationship } from '@pagespace/lib/permissions/
  * unit-testable without a database: `multi-drive/route.ts` supplies the DB
  * reads (accessible drives, the distinct set of their owners' rows, the
  * requester's edit-capable memberships) already done.
+ *
+ * WAL-9: an ORG drive's payer is the org, not its owner, and no compute charge path can debit
+ * an org until the C3 lane lands — so an org drive is advertised as ineligible, matching the
+ * `org_billing_pending` refusal every enforcement point gives it, rather than on the lead's tier.
  */
 export function computeSandboxEligibilityByDrive(
-  driveOwners: readonly { id: string; ownerId: string }[],
+  driveOwners: readonly { id: string; ownerId: string; orgId: string | null }[],
   ownerRows: readonly { id: string; subscriptionTier: string | null }[],
   actor: {
     userId: string;
@@ -25,12 +30,16 @@ export function computeSandboxEligibilityByDrive(
 ): Map<string, boolean> {
   const tierByOwnerId = new Map(ownerRows.map((row) => [row.id, toSubscriptionTier(row.subscriptionTier)]));
   return new Map(
-    driveOwners.map((drive) => [
-      drive.id,
-      actor.codeExecutionEnabled &&
-        isSandboxAvailable(tierByOwnerId.get(drive.ownerId) ?? 'free') &&
-        (isDriveLead(actor.userId, drive) || actor.editableDriveIds.has(drive.id)),
-    ]),
+    driveOwners.map((drive) => {
+      const payer = requireUserPayer(payerForDrive(drive));
+      return [
+        drive.id,
+        actor.codeExecutionEnabled &&
+          payer.ok &&
+          isSandboxAvailable(tierByOwnerId.get(payer.userId) ?? 'free') &&
+          (isDriveLead(actor.userId, drive) || actor.editableDriveIds.has(drive.id)),
+      ];
+    }),
   );
 }
 

@@ -8,7 +8,7 @@ import { files, filePages } from '@pagespace/db/schema/storage';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { getUserDrivePermissions } from '@pagespace/lib/permissions/permissions';
 import { getAppDriveAccessLevel } from '@pagespace/lib/permissions/app-permissions';
-import { updateStorageUsage, shouldChargeForStore } from '@pagespace/lib/services/storage-limits';
+import { chargeStorageForStore, shouldChargeForStore } from '@pagespace/lib/services/storage-limits';
 import { releasePendingUpload } from '@pagespace/lib/services/pending-uploads';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { buildS3Key, canLinkExistingFileRow } from '@pagespace/lib/services/upload-validation';
@@ -341,7 +341,8 @@ export async function POST(request: Request) {
     // single credit the reaper issues at unlink). Dedup completes store no new
     // bytes and must not be charged.
     if (shouldChargeForStore(fileWasInserted)) {
-      await updateStorageUsage(userId, fileSize, { pageId: newPage.id, driveId, eventType: 'upload' });
+      // WAL-9, O-9: an org drive's bytes bill the org, never the uploader's personal quota.
+      await chargeStorageForStore(userId, driveId, fileSize, { pageId: newPage.id, eventType: 'upload' });
     }
 
     auditRequest(request, {
