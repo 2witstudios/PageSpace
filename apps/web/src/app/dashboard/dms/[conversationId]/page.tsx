@@ -559,6 +559,7 @@ export default function InboxDMPage() {
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="font-semibold text-sm">{name}</span>
+            {!isOwn && <AgentBadge accountType={otherUser.accountType} />}
             <span className="text-xs text-muted-foreground">
               {new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
             </span>
@@ -619,7 +620,7 @@ export default function InboxDMPage() {
             <AvatarFallback>{displayName.charAt(0).toUpperCase()}</AvatarFallback>
           </Avatar>
           <div className="min-w-0 flex-1">
-            <h2 className="font-semibold">{displayName}</h2>
+            <h2 className="font-semibold flex items-center gap-2">{displayName}<AgentBadge accountType={otherUser.accountType} /></h2>
             {otherUser.username && (
               <p className="text-sm text-muted-foreground">@{otherUser.username}</p>
             )}

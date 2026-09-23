@@ -692,6 +692,7 @@ function ChannelView({ page }: ChannelViewProps) {
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="font-semibold text-sm">{displayName}</span>
+            {!isAi && <AgentBadge accountType={m.user?.accountType} />}
             <span className="text-xs text-muted-foreground">
               {new Date(m.createdAt).toLocaleTimeString()}
             </span>
