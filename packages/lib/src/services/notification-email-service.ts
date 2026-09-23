@@ -271,9 +271,21 @@ function getEmailTemplate(data: NotificationEmailData, user: { name: string; ema
         }),
       };
 
-    default:
-      // No email template for this notification type
+    // No per-event email, each deliberately. Listed by name so the switch is exhaustive:
+    // a NEW type reaches the `never` below and fails typecheck until someone decides
+    // whether it gets a template or joins this list.
+    case 'EMAIL_VERIFICATION_REQUIRED':
+    case 'TOS_PRIVACY_UPDATED':
+    case 'MENTION':
+    case 'TASK_ASSIGNED':
+    case 'PRODUCT_UPDATE': // broadcast-only (email_broadcasts), never a per-event email
+    case 'AUTOMATION_SKIPPED': // in-app only (SPEND-6): the drive lead's skip notice
       return null;
+
+    default: {
+      const unhandled: never = data.type;
+      return unhandled;
+    }
   }
 }
 
