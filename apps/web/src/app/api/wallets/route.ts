@@ -3,7 +3,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { listMyWallets } from '@pagespace/lib/services/drive-wallet-service';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { WALLET_READ_AUTH, refuseScopedTokenForAccountRead } from '@/lib/wallets/wallet-route';
+import { WALLET_READ_AUTH, refuseScopedTokenForAccountRead, walletCredentialOf } from '@/lib/wallets/wallet-route';
 
 /**
  * GET /api/wallets — Settings › Usage › Wallets (Spec UI-10): everything the caller spends from
@@ -13,7 +13,8 @@ import { WALLET_READ_AUTH, refuseScopedTokenForAccountRead } from '@/lib/wallets
  * pool's balance appears only for its org's Owner and Admins (SPEND-9, SPEND-10).
  *
  * Session, or an MCP token with no drive restriction (a drive-scoped token would see drives
- * outside its scope, so it is refused).
+ * outside its scope, so it is refused). Read with a token it is the consumer view: no pool
+ * balances ([D-OW-26]).
  */
 export async function GET(request: Request) {
   const auth = await authenticateRequestWithOptions(request, WALLET_READ_AUTH);
@@ -21,7 +22,7 @@ export async function GET(request: Request) {
   const scopeError = refuseScopedTokenForAccountRead(auth);
   if (scopeError) return scopeError;
   try {
-    const wallets = await listMyWallets(auth.userId);
+    const wallets = await listMyWallets(auth.userId, walletCredentialOf(auth));
     auditRequest(request, {
       eventType: 'data.read',
       userId: auth.userId,

@@ -5,7 +5,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getConversationSpend, setConversationSpend } from '@pagespace/lib/services/drive-wallet-service';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { safeParseBody } from '@/lib/validation/parse-body';
-import { WALLET_READ_AUTH, WALLET_WRITE_AUTH, refuseScopedTokenForAccountRead, walletErrorResponse } from '@/lib/wallets/wallet-route';
+import { WALLET_READ_AUTH, WALLET_WRITE_AUTH, refuseScopedTokenForAccountRead, walletCredentialOf, walletErrorResponse } from '@/lib/wallets/wallet-route';
 
 /**
  * A conversation's spend source (Spec SPEND-2, SPEND-3, SPEND-4).
@@ -20,7 +20,9 @@ import { WALLET_READ_AUTH, WALLET_WRITE_AUTH, refuseScopedTokenForAccountRead, w
  * The drive is the conversation's own (a drive or page conversation). A GLOBAL conversation has
  * none, so `?driveId=` names the drive the person is choosing for; it only lists options (which
  * the permissions module opens) and is ignored for any other conversation type.
- * Only the caller's own conversation: anyone else's is 404. PUT is session only.
+ * Only the caller's own conversation: anyone else's is 404. PUT is session only: an MCP/CLI
+ * token is refused by name (`mcp_token_cannot_change_spend_source`, [D-OW-26]) — a source
+ * change moves no money itself but redirects every later call's spend.
  */
 
 type RouteContext = { params: Promise<{ conversationId: string }> };
@@ -63,7 +65,7 @@ export async function PUT(request: Request, context: RouteContext) {
   const parsed = await safeParseBody(request, schema);
   if (!parsed.success) return parsed.response;
   try {
-    const result = await setConversationSpend(auth.userId, conversationId, parsed.data.walletId, globalDriveIdOf(request));
+    const result = await setConversationSpend(auth.userId, conversationId, parsed.data.walletId, walletCredentialOf(auth), globalDriveIdOf(request));
     if (!result.ok) return walletErrorResponse(result);
     auditRequest(request, {
       eventType: 'data.write',

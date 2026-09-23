@@ -11,7 +11,7 @@ import {
 } from '@pagespace/lib/services/drive-wallet-service';
 import { authenticateRequestWithOptions, checkMCPDriveScope, isAuthError } from '@/lib/auth';
 import { safeParseBody } from '@/lib/validation/parse-body';
-import { WALLET_READ_AUTH, WALLET_WRITE_AUTH, walletErrorResponse } from '@/lib/wallets/wallet-route';
+import { WALLET_READ_AUTH, WALLET_WRITE_AUTH, walletCredentialOf, walletErrorResponse } from '@/lib/wallets/wallet-route';
 
 /**
  * A drive's wallet (Spec UI-9, SPEND-9, SPEND-10, WAL-3, WAL-7).
@@ -25,6 +25,8 @@ import { WALLET_READ_AUTH, WALLET_WRITE_AUTH, walletErrorResponse } from '@/lib/
  *         (set_rules); a change is refused whole if any field is not the caller's to change.
  * DELETE  only a wallet that never moved money; otherwise 409 with the blockers (pause it).
  *
+ * [D-OW-26] An MCP/CLI token reads the consumer projection only (whatever the person's role)
+ * and every write refuses it by name (`mcp_token_cannot_move_money`), writing nothing.
  * Dark while ORGS_ENABLED is false (404).
  */
 
@@ -49,7 +51,7 @@ export async function GET(request: Request, context: RouteContext) {
   const scopeError = checkMCPDriveScope(auth, driveId);
   if (scopeError) return scopeError;
   try {
-    const result = await getDriveWallet(auth.userId, driveId);
+    const result = await getDriveWallet(auth.userId, driveId, walletCredentialOf(auth));
     if (!result.ok) return walletErrorResponse(result);
     auditRequest(request, {
       eventType: 'data.read',
@@ -72,7 +74,7 @@ export async function POST(request: Request, context: RouteContext) {
   const parsed = await safeParseBody(request, createSchema);
   if (!parsed.success) return parsed.response;
   try {
-    const result = await createDriveWallet(auth.userId, driveId, parsed.data);
+    const result = await createDriveWallet(auth.userId, driveId, parsed.data, walletCredentialOf(auth));
     if (!result.ok) return walletErrorResponse(result);
     auditRequest(request, {
       eventType: 'data.write',
@@ -95,7 +97,7 @@ export async function PATCH(request: Request, context: RouteContext) {
   const parsed = await safeParseBody(request, patchSchema);
   if (!parsed.success) return parsed.response;
   try {
-    const result = await updateDriveWallet(auth.userId, driveId, parsed.data);
+    const result = await updateDriveWallet(auth.userId, driveId, parsed.data, walletCredentialOf(auth));
     if (!result.ok) return walletErrorResponse(result);
     auditRequest(request, {
       eventType: 'data.write',
@@ -116,7 +118,7 @@ export async function DELETE(request: Request, context: RouteContext) {
   const auth = await authenticateRequestWithOptions(request, WALLET_WRITE_AUTH);
   if (isAuthError(auth)) return auth.error;
   try {
-    const result = await deleteDriveWallet(auth.userId, driveId);
+    const result = await deleteDriveWallet(auth.userId, driveId, walletCredentialOf(auth));
     if (!result.ok) return walletErrorResponse(result);
     auditRequest(request, {
       eventType: 'data.delete',

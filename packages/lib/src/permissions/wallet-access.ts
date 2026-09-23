@@ -74,3 +74,47 @@ export function walletActionsFor(role: WalletViewer, drive: { orgDrive: boolean 
 export function mayTakeWalletAction(role: WalletViewer, action: WalletAction, drive: { orgDrive: boolean }): boolean {
   return walletActionsFor(role, drive).includes(action);
 }
+
+// ---------------------------------------------------------------------------
+// The credential (D-OW-26)
+// ---------------------------------------------------------------------------
+
+/** How the caller authenticated: a real session, or a delegated MCP/CLI token. */
+export type WalletCredential = 'session' | 'mcp';
+
+/** Every write the wallet surfaces offer: each wallet action but `view`, and the source choices. */
+export type WalletWrite =
+  | Exclude<WalletAction, 'view' | 'view_spend_by_member'>
+  | 'set_conversation_source'
+  | 'set_default_source';
+
+export interface CredentialRefusal {
+  code: 'mcp_token_cannot_move_money' | 'mcp_token_cannot_change_spend_source';
+  message: string;
+}
+
+/**
+ * [D-OW-26] A delegated MCP/CLI token never moves money and never redirects spend: every
+ * wallet write (create, allocate, top-up, donate, delete, pause, rules) and every source
+ * choice (a conversation's source, the personal default) needs a real session. Changing a
+ * source moves no money by itself, but it silently redirects every future call's spend — the
+ * same harm one step removed — and a long-lived delegated token is the wrong authority for it.
+ * Null when the credential may make the write (the role check still applies).
+ */
+export function credentialRefusalFor(credential: WalletCredential, write: WalletWrite): CredentialRefusal | null {
+  if (credential === 'session') return null;
+  if (write === 'set_conversation_source' || write === 'set_default_source') {
+    return { code: 'mcp_token_cannot_change_spend_source', message: 'An access token cannot change what a conversation or account spends from; sign in to change it' };
+  }
+  return { code: 'mcp_token_cannot_move_money', message: 'An access token cannot move money or change a wallet; sign in to do this' };
+}
+
+/**
+ * [D-OW-26] What a token may read of a drive wallet: exactly the consumer projection a member
+ * or guest gets in a session (D-OW-5), whatever the person's own role — no pool balance, no
+ * other person's spend, no funder. A session reads as its role.
+ */
+export function viewerForCredential(viewer: Exclude<WalletViewer, 'none'>, credential: WalletCredential): Exclude<WalletViewer, 'none'> {
+  if (credential === 'session') return viewer;
+  return viewer === 'guest' ? 'guest' : 'member';
+}
