@@ -159,8 +159,10 @@ describe('processZoomWebhook AI enrichment credit gate', () => {
 
     await expect(processZoomWebhook(event, connection)).resolves.toBeUndefined();
 
+    expect(mockCreateAIProvider).not.toHaveBeenCalled();
     expect(mockGenerateText).not.toHaveBeenCalled();
     expect(mockTrackUsage).not.toHaveBeenCalled();
+    expect(mockReleaseHold).not.toHaveBeenCalled();
     expect(mockCreatePage).toHaveBeenCalledTimes(1);
     expect(createdContent()).not.toContain('Decided to ship Friday');
     expect(createdMetadata()).toMatchObject({ aiEnrichmentSkipped: 'gate_error' });
@@ -171,7 +173,9 @@ describe('processZoomWebhook AI enrichment credit gate', () => {
 
     await expect(processZoomWebhook(event, connection)).resolves.toBeUndefined();
 
+    expect(mockCanConsumeAI).not.toHaveBeenCalled();
     expect(mockGenerateText).not.toHaveBeenCalled();
+    expect(mockTrackUsage).not.toHaveBeenCalled();
     expect(mockCreatePage).toHaveBeenCalledTimes(1);
     expect(createdMetadata()).toMatchObject({ aiEnrichmentSkipped: 'gate_error' });
   });
