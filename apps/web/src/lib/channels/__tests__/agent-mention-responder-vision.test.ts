@@ -1,6 +1,12 @@
 import { beforeEach, describe, it, vi, type Mock } from 'vitest';
 import { assert } from '@/lib/ai/core/__tests__/riteway';
 
+// Billing is covered by agent-mention-responder-credit-gate.test.ts; here the
+// mentioner is always funded so the gate never stands between a test and its reply.
+vi.mock('@/lib/ai/core/user-credit-hold', () => ({
+  acquireUserCreditHold: vi.fn(async () => ({ allowed: true, release: () => {} })),
+}));
+
 vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
