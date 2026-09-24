@@ -325,7 +325,7 @@ describe('POST /api/workflows/[workflowId]/run', () => {
       },
     );
 
-    test('hands the executor the credit gate as its admit hook, gating the billed owner (not the clicker) as interactive', async () => {
+    test('SPEND-6 (partial) hands the executor the credit gate as its admit hook, gating the drive the workflow runs in (not the clicker) as interactive', async () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth('admin_clicker'));
       const admit = async () => ({ admitted: true as const, release: () => {} });
       mockCreditAdmission.mockReturnValue(admit);
@@ -336,6 +336,8 @@ describe('POST /api/workflows/[workflowId]/run', () => {
       expect(options?.admit).toBe(admit);
       expect(mockCreditAdmission).toHaveBeenCalledWith(input, 'interactive', expect.any(Function));
       expect(input.createdBy).toBe('user_123');
+      // SPEND-6: the gate is told the drive the run spends; the creator is only who it is recorded against.
+      expect(input.driveId).toBe(mockWorkflow.driveId);
     });
 
     test('out of credits: 402 with a readable error, and the schedule is not advanced', async () => {

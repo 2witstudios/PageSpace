@@ -633,6 +633,11 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Agents answering an @mention in a channel now check credits first** — an agent's reply to a
+  channel mention used to run even when there were no credits to pay for it. Each reply is now
+  checked before the agent starts; if there is nothing to pay with, the agent does not reply and
+  you are not charged.
+
 - **A page share that has expired no longer lists its drive** — when someone shared a single page
   with you for a limited time, the share stopped opening the page once it expired, but the drive
   it lived in stayed in your drive picker and sidebar, where it opened to nothing. An expired

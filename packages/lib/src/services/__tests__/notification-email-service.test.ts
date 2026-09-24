@@ -110,6 +110,27 @@ describe('notification-email-service', () => {
     expect(sendEmail).not.toHaveBeenCalled();
   });
 
+  // Every type the template switch leaves without an email is named there, and its default
+  // is a compile-time `never`: a new type cannot fall silently into "no email".
+  it.each([
+    'EMAIL_VERIFICATION_REQUIRED',
+    'TOS_PRIVACY_UPDATED',
+    'MENTION',
+    'TASK_ASSIGNED',
+    'PRODUCT_UPDATE',
+    'AUTOMATION_SKIPPED',
+  ] as const)('sends no per-event email for %s (named silent in the template switch)', async (type) => {
+    await sendNotificationEmail({ userId: 'user-1', type, metadata: {} });
+
+    expect(sendEmail).not.toHaveBeenCalled();
+  });
+
+  it('SPEND-6 (partial) the lead\'s automation-skip notice is in-app only: no email', async () => {
+    await sendNotificationEmail({ userId: 'user-1', type: 'AUTOMATION_SKIPPED', metadata: { reason: 'drive_wallet_empty' } });
+
+    expect(sendEmail).not.toHaveBeenCalled();
+  });
+
   it('should send DRIVE_INVITED email', async () => {
     await sendNotificationEmail({
       userId: 'user-1',

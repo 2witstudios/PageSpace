@@ -44,10 +44,15 @@ import type { SubscriptionTier } from './subscription-tiers';
  *   the drive an agent page lives in (SPEND-7). `chosen` is the source picked before the
  *   call; null when the caller has none to pass (the gate then refuses unless exactly one
  *   source exists for this person, see {@link preselectSoleSource}).
+ * - `automation`: a run no person is present for — an automation, a trigger, a scheduled
+ *   workflow, a channel mention — in `driveId`. The consumer is the drive and the only
+ *   source is its wallet; an uncovered wallet skips the run (SPEND-6). There is no chosen
+ *   source to pass, because there is nothing to choose between.
  */
 export type SpendTarget =
   | { kind: 'personal' }
-  | { kind: 'drive'; driveId: string; chosen: SpendSourceKind | null };
+  | { kind: 'drive'; driveId: string; chosen: SpendSourceKind | null }
+  | { kind: 'automation'; driveId: string };
 
 /** The personal root wallet: no drive (SPEND-8). */
 export const PERSONAL_SPEND: SpendTarget = Object.freeze({ kind: 'personal' });
@@ -59,6 +64,33 @@ export const PERSONAL_SPEND: SpendTarget = Object.freeze({ kind: 'personal' });
  */
 export function driveSpend(driveId: string | null | undefined, chosen: SpendSourceKind | null = null): SpendTarget {
   return typeof driveId === 'string' && driveId.length > 0 ? { kind: 'drive', driveId, chosen } : PERSONAL_SPEND;
+}
+
+/**
+ * The target for a person-less run in `driveId` (SPEND-6): it spends the drive wallet or
+ * is skipped, never a person's credits or allowance.
+ */
+export function automationSpend(driveId: string): SpendTarget {
+  return { kind: 'automation', driveId };
+}
+
+/**
+ * SPEND-6, fail closed: an automation about to call a model with NO reserved wallet. Its
+ * usage would settle through consumeCredits' fallback onto the recorded person's personal
+ * root, which an automation must never reach. Refuse the run before the model is called.
+ * Only while wallets are live (orgs on, billing on); while orgs are dark an automation
+ * bills as before wallets, and with billing off nothing settles at all.
+ */
+export function automationRunUnreserved(input: {
+  orgsEnabled: boolean;
+  billingEnabled: boolean;
+  target: SpendTarget;
+  walletId: string | undefined;
+}): boolean {
+  return input.billingEnabled
+    && input.orgsEnabled
+    && input.target.kind === 'automation'
+    && (input.walletId === undefined || input.walletId.length === 0);
 }
 
 /**
@@ -74,10 +106,11 @@ export function resolvedSpend(target: SpendTarget, source: SpendSourceKind | und
 /**
  * Whether the gate resolves a wallet at all. While orgs are dark (ORGS_ENABLED false),
  * and for the personal target, every call spends the personal root wallet exactly as it
- * did before wallets: no wallet reads, no new refusals.
+ * did before wallets: no wallet reads, no new refusals. That includes an automation while
+ * orgs are dark: it bills the person it has always billed until wallets turn on.
  */
 export function resolvesDriveWallets(input: { orgsEnabled: boolean; target: SpendTarget }): boolean {
-  return input.orgsEnabled && input.target.kind === 'drive';
+  return input.orgsEnabled && input.target.kind !== 'personal';
 }
 
 // ---------------------------------------------------------------------------
@@ -268,6 +301,34 @@ export type CallSpendDecision =
     }
   | { kind: 'refuse'; source: SpendSourceKind | null; reason: RefusalReason; options: SpendOption[]; chargeCents: 0 }
   | { kind: 'skip'; reason: SkipReason; walletId: string | null; chargeCents: 0 };
+
+/**
+ * The decision input for a person-less run (SPEND-6). The consumer is the drive, so the
+ * input carries no personal leg and no seat at all: the shell never reads a person's
+ * wallet for an automation, and the resolver could not reach one if it did. Nothing is
+ * chosen, overridden, or fallen back to.
+ */
+export function automationSpendInput(input: {
+  driveId: string;
+  driveWallet: SpendLeg | null;
+  /** The tier of the drive wallet's ROOT owner: the org for org drives, the drive owner otherwise (WAL-8). */
+  walletOwnerTier: SubscriptionTier;
+  reservationCents: number;
+}): CallSpendInput {
+  return {
+    actor: { kind: 'automation', driveId: input.driveId },
+    driveWallet: input.driveWallet,
+    seatAllowance: null,
+    personal: null,
+    driveRule: { fallback: 'refuse', guestsMaySpendDriveWallet: false },
+    chosen: null,
+    userOverride: { alwaysOwnCredits: false, alwaysOwnCreditsInDrive: false },
+    reservationCents: input.reservationCents,
+    walletOwnerTier: input.walletOwnerTier,
+    // Never consulted: an automation cannot spend own credits, the only source this tier governs.
+    consumerTier: input.walletOwnerTier,
+  };
+}
 
 /**
  * The walletId a personal leg carries before the person has a wallet row. The gate's own

@@ -1,6 +1,17 @@
 import { beforeEach, describe, it, vi, type Mock } from 'vitest';
 import { assert } from '@/lib/ai/core/__tests__/riteway';
 
+// SPEND-6: each mentioned agent's reply is gated on the channel's drive wallet
+// (mention-credit-gate, unit-tested on its own). This suite covers other behaviour,
+// so the gate admits every reply here.
+vi.mock('@/lib/channels/mention-credit-gate', () => ({
+  acquireMentionCreditHold: async () => ({
+    allowed: true,
+    creditSpend: { spend: { kind: 'automation', driveId: 'drive-1' }, walletId: 'w-drive-1' },
+    release: () => {},
+  }),
+}));
+
 vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {

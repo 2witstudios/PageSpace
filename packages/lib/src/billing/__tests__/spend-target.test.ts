@@ -5,6 +5,9 @@ import { centsFromCredits } from '../money-model';
 import {
   PERSONAL_SPEND,
   driveSpend,
+  automationSpend,
+  automationSpendInput,
+  automationRunUnreserved,
   resolvesDriveWallets,
   resolvedSpend,
   personalRootDecision,
@@ -204,6 +207,74 @@ describe('spend-target: decideCallSpend', () => {
       driveRule: { fallback: 'seat_allowance', guestsMaySpendDriveWallet: false },
     }));
     expect(decision).toMatchObject({ kind: 'spend', source: 'seat_allowance', fallbackApplied: true, fallbackFrom: 'drive_wallet' });
+  });
+});
+
+describe('spend-target: automations', () => {
+  // Northwind's weekly digest workflow runs in Product; Marcus created it and holds his own credits.
+  const automation = (over: Partial<Parameters<typeof automationSpendInput>[0]> = {}): CallSpendInput =>
+    automationSpendInput({
+      driveId: 'd-product',
+      driveWallet: walletLeg('w-product', 'active', c(1200)),
+      walletOwnerTier: ORG_ENTITLEMENT_TIER,
+      reservationCents: c(5),
+      ...over,
+    });
+
+  it('SPEND-6 (partial) an automation names its drive as the consumer, never a person', () => {
+    expect(automationSpend('d-product')).toEqual({ kind: 'automation', driveId: 'd-product' });
+    expect(automation().actor).toEqual({ kind: 'automation', driveId: 'd-product' });
+  });
+
+  it('SPEND-6 (partial) an automation offers the gate no personal leg and no seat to reach', () => {
+    const legs = automation();
+    expect(legs.personal).toBeNull();
+    expect(legs.seatAllowance).toBeNull();
+    expect(availableSources(legs)).toEqual(['drive_wallet']);
+  });
+
+  it('SPEND-6 (partial) with orgs on an automation resolves drive wallets; while orgs are dark it bills as before wallets', () => {
+    expect(resolvesDriveWallets({ orgsEnabled: true, target: automationSpend('d-product') })).toBe(true);
+    expect(resolvesDriveWallets({ orgsEnabled: false, target: automationSpend('d-product') })).toBe(false);
+  });
+
+  it('SPEND-6 (partial) a tool call inside an automation run stays an automation, whatever source the turn resolved', () => {
+    expect(resolvedSpend(automationSpend('d-product'), 'drive_wallet')).toEqual(automationSpend('d-product'));
+    expect(resolvedSpend(automationSpend('d-product'), 'own_credits')).toEqual(automationSpend('d-product'));
+  });
+
+  it('SPEND-6 (partial) a funded drive wallet is the wallet an automation spends, at the wallet owner tier', () => {
+    expect(decideCallSpend(automation())).toEqual({
+      kind: 'spend',
+      source: 'drive_wallet',
+      walletId: 'w-product',
+      fallbackApplied: false,
+      fallbackFrom: null,
+      entitlementTier: 'business',
+    });
+  });
+
+  it('SPEND-6 (partial) an automation that would run a model with no reserved wallet is refused, so it cannot settle on a person', () => {
+    const on = { orgsEnabled: true, billingEnabled: true, target: automationSpend('d-product') };
+    expect(automationRunUnreserved({ ...on, walletId: undefined })).toBe(true);
+    expect(automationRunUnreserved({ ...on, walletId: 'w-product' })).toBe(false);
+  });
+
+  it('while orgs are dark, billing is off, or the target is a person, an unreserved run is not an automation settle to refuse', () => {
+    const base = { orgsEnabled: true, billingEnabled: true, target: automationSpend('d-product'), walletId: undefined };
+    expect(automationRunUnreserved({ ...base, orgsEnabled: false })).toBe(false);
+    expect(automationRunUnreserved({ ...base, billingEnabled: false })).toBe(false);
+    expect(automationRunUnreserved({ ...base, target: PERSONAL_SPEND })).toBe(false);
+    expect(automationRunUnreserved({ ...base, target: driveSpend('d-product', 'own_credits') })).toBe(false);
+  });
+
+  it.each([
+    ['empty', walletLeg('w-product', 'active', 0), { kind: 'skip', reason: 'drive_wallet_empty', walletId: 'w-product', chargeCents: 0 }],
+    ['short of the reservation', walletLeg('w-product', 'active', c(1)), { kind: 'skip', reason: 'drive_wallet_empty', walletId: 'w-product', chargeCents: 0 }],
+    ['paused', walletLeg('w-product', 'paused', c(1200)), { kind: 'skip', reason: 'drive_wallet_paused', walletId: 'w-product', chargeCents: 0 }],
+    ['missing', null, { kind: 'skip', reason: 'no_drive_wallet', walletId: null, chargeCents: 0 }],
+  ] as const)('SPEND-6 (partial) an automation whose drive wallet is %s skips and charges zero', (_label, driveWallet, expected) => {
+    expect(decideCallSpend(automation({ driveWallet }))).toEqual(expected);
   });
 });
 

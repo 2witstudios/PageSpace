@@ -2157,6 +2157,13 @@
       "when": 1790168679180,
       "tag": "0307_wallet_funding_legs",
       "breakpoints": true
+    },
+    {
+      "idx": 309,
+      "version": "7",
+      "when": 1790195490864,
+      "tag": "0309_automation_skip_notices",
+      "breakpoints": true
     }
   ]
 }

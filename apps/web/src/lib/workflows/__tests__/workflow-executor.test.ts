@@ -149,6 +149,16 @@ vi.mock('@/lib/repositories/message-repository', () => ({
 // Every run that does NOT bind a session conversation mints a plain page
 // conversation here, so the run's messages have a real parent row (#2686).
 const { mockCreateConversation } = vi.hoisted(() => ({ mockCreateConversation: vi.fn() }));
+
+// Wallets are dark in every test unless one turns them on (SPEND-6 fail-closed cases).
+const walletFlags = vi.hoisted(() => ({ orgsEnabled: false, billingEnabled: true }));
+vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({
+  get ORGS_ENABLED() { return walletFlags.orgsEnabled; },
+}));
+vi.mock('@pagespace/lib/deployment-mode', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@pagespace/lib/deployment-mode')>()),
+  isBillingEnabled: () => walletFlags.billingEnabled,
+}));
 vi.mock('@/lib/repositories/conversation-repository', () => ({
   conversationRepository: { createConversation: mockCreateConversation },
 }));
@@ -177,6 +187,7 @@ import { generateText } from 'ai';
 import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
 import { messageRepository } from '@/lib/repositories/message-repository';
 import { createId } from '@paralleldrive/cuid2';
+import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 
 const createInputFixture = (overrides: Partial<WorkflowExecutionInput> = {}): WorkflowExecutionInput => ({
   workflowId: 'wf_1',
@@ -952,6 +963,61 @@ describe('executeWorkflow', () => {
       await executeWorkflow(createInputFixture(), { admit: vi.fn().mockResolvedValue({ admitted: true, release }) });
 
       expect(release).toHaveBeenCalledTimes(1);
+    });
+
+    test('SPEND-6 (partial) an admitted run settles its usage on the wallet the gate reserved on, and its tools spend the same drive wallet', async () => {
+      setupSelectChain([mockAgent], [mockDrive]);
+      const creditSpend = { spend: { kind: 'automation' as const, driveId: 'drive_1' }, walletId: 'w_product' };
+
+      await executeWorkflow(createInputFixture(), {
+        admit: vi.fn().mockResolvedValue({ admitted: true, release: vi.fn(), creditSpend }),
+      });
+
+      expect(AIMonitoring.trackUsage).toHaveBeenCalledWith(expect.objectContaining({ walletId: 'w_product', source: 'workflow' }));
+      const genCall = vi.mocked(generateText).mock.calls[0][0] as { experimental_context: { creditSpend?: unknown } };
+      expect(genCall.experimental_context.creditSpend).toEqual(creditSpend);
+    });
+
+    test('SPEND-6 (partial) a run gated before the claim settles on the wallet its caller names', async () => {
+      setupSelectChain([mockAgent], [mockDrive]);
+      const creditSpend = { spend: { kind: 'automation' as const, driveId: 'drive_1' }, walletId: 'w_product' };
+
+      await executeWorkflow(createInputFixture(), { creditSpend });
+
+      expect(AIMonitoring.trackUsage).toHaveBeenCalledWith(expect.objectContaining({ walletId: 'w_product' }));
+    });
+
+    test('SPEND-6 (partial) with wallets on, an automation run with no reserved wallet is refused before any model runs, so nothing can settle on a person', async () => {
+      walletFlags.orgsEnabled = true;
+      try {
+        setupSelectChain([mockAgent], [mockDrive]);
+
+        // No admit and no creditSpend: the executor's own default names the drive and no wallet.
+        const result = await executeWorkflow(createInputFixture());
+
+        expect(result).toEqual(expect.objectContaining({ success: false, skipped: true }));
+        expect(result.error).toMatch(/no drive wallet reserved/);
+        expect(createAIProvider).not.toHaveBeenCalled();
+        expect(generateText).not.toHaveBeenCalled();
+        expect(AIMonitoring.trackUsage).not.toHaveBeenCalled();
+      } finally {
+        walletFlags.orgsEnabled = false;
+      }
+    });
+
+    test('SPEND-6 (partial) with wallets on, an admitted automation that names a drive wallet runs and settles there', async () => {
+      walletFlags.orgsEnabled = true;
+      try {
+        setupSelectChain([mockAgent], [mockDrive]);
+        const creditSpend = { spend: { kind: 'automation' as const, driveId: 'drive_1' }, walletId: 'w_product' };
+
+        const result = await executeWorkflow(createInputFixture(), { admit: vi.fn().mockResolvedValue({ admitted: true, release: vi.fn(), creditSpend }) });
+
+        expect(result.success).toBe(true);
+        expect(AIMonitoring.trackUsage).toHaveBeenCalledWith(expect.objectContaining({ walletId: 'w_product' }));
+      } finally {
+        walletFlags.orgsEnabled = false;
+      }
     });
 
     test('a throwing gate fails the run (finalized, not left running) and runs no model', async () => {
