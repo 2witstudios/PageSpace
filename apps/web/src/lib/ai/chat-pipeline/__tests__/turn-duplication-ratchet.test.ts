@@ -69,8 +69,12 @@ const SPEC = path.join(repoRoot(), 'docs/2.0-architecture/agent-sessions.md');
  * funding tier) was EXTRACTED to `turn-credit.ts` rather than copied into both turns;
  * the three new identical lines are the two imports of that shared module and the one
  * declaration of its value, which any extraction shared by both files adds.
+ *
+ * 161 → 160 (lane ow-fix-2720): the global turn's spend-target import now also names
+ * PERSONAL_SPEND (its spend drive comes only from the server-resolved contextRef), so that
+ * import line is no longer identical to the page turn's.
  */
-const RECORDED_IDENTICAL_LINES = 161;
+const RECORDED_IDENTICAL_LINES = 160;
 
 /** Substantive lines: no blanks, no comments, trimmed. */
 const substantiveLines = (file: string): string[] =>

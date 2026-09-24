@@ -19,11 +19,11 @@
 
 import { db } from '@pagespace/db/db';
 import { creditLedger } from '@pagespace/db/schema/credits';
-import { wallets } from '@pagespace/db/schema/wallets';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { and, eq, lt, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
-import { computeCostDrift, accruePending, allocateSpend, applyPaymentToDebt } from './credit-core';
+import { computeCostDrift } from './credit-core';
+import { chargeWallet, refundWalletCharge } from './credit-consume';
 import {
   MARKUP_BPS,
   COST_RECONCILE_TOLERANCE_CENTS,
@@ -133,10 +133,12 @@ async function usageLedgerWalletId(aiUsageLogId: string): Promise<string | null>
 
 /**
  * Apply the drift correction in one transaction: claim an adjustment row keyed by the
- * generation set (idempotent), then — only if the claim was fresh — lock the balance and
- * move the signed delta. Positive delta (we undercharged) debits monthly-first and accrues
- * debt on shortfall, mirroring decrementAndSettle; negative delta (we overcharged) refunds
- * debt-first then tops up. Returns true when a balance change was actually applied.
+ * generation set (idempotent: the claim IS the correction's key, so a re-run or an
+ * overlapping cron never moves money twice), then — only if the claim was fresh — move the
+ * signed delta through credit-consume's shared paths. Positive delta (we undercharged) is
+ * charged exactly as the settle charges (chargeWallet); negative delta (we overcharged) is
+ * returned to where the call's cents came from (refundWalletCharge), which on a drive
+ * wallet includes its funding legs. Returns true when a balance change was applied.
  */
 async function applyCorrection(
   userId: string,
@@ -177,57 +179,27 @@ async function applyCorrection(
     if (claimed.length === 0) return false;
     const ledgerId = claimed[0].id;
 
-    const balRows = await tx
-      .select()
-      .from(wallets)
-      .where(eq(wallets.id, walletId))
-      .for('update');
-    const bal = balRows[0] as
-      | {
-          monthlyRemainingCents: number;
-          topupRemainingCents: number;
-          pendingMillicents: number;
-          debtCents: number;
-          monthlyPeriodEnd: Date | null;
-        }
-      | undefined;
-    // No balance row to move (rare — reconcile runs on billed rows). Record the
-    // correction row with no applied delta so a later run doesn't re-correct.
-    if (!bal) {
-      await tx.update(creditLedger).set({ appliedCents: 0 }).where(eq(creditLedger.id, ledgerId));
-      return false;
-    }
-
     let appliedCents = 0;
     if (drift.deltaChargeMillicents > 0) {
-      // Undercharge → debit the extra, monthly-first, debt on shortfall (matches settle).
+      // Undercharge → charge the extra through the SAME path as the settle (credit-consume
+      // chargeWallet): monthly-first with debt on shortfall on a root wallet; on a drive
+      // wallet, allocation from the parent, then the locked funding legs, then overshoot
+      // per D20.2 — never a direct write of topupRemainingCents past the legs.
       // Rollover: carry balance is always spendable; no period-expiry exclusion here.
-      const accrual = accruePending(bal.pendingMillicents ?? 0, drift.deltaChargeMillicents);
-      const spend = allocateSpend(
-        { monthlyCents: bal.monthlyRemainingCents, topupCents: bal.topupRemainingCents },
-        accrual.wholeCents,
-      );
-      await tx
-        .update(wallets)
-        .set({
-          monthlyRemainingCents: spend.monthlyCents,
-          topupRemainingCents: spend.topupCents,
-          pendingMillicents: accrual.newPending,
-          ...(spend.shortfallCents > 0
-            ? { debtCents: sql`${wallets.debtCents} + ${spend.shortfallCents}` }
-            : {}),
-        })
-        .where(eq(wallets.id, walletId));
-      appliedCents = -spend.appliedCents || 0; // negative: decremented
+      const charged = await chargeWallet(tx, walletId, drift.deltaChargeMillicents, aiUsageLogId);
+      // No balance row to move (rare — reconcile runs on billed rows). Record the
+      // correction row with no applied delta so a later run doesn't re-correct.
+      if (!charged) {
+        await tx.update(creditLedger).set({ appliedCents: 0 }).where(eq(creditLedger.id, ledgerId));
+        return false;
+      }
+      appliedCents = -charged.appliedCents || 0; // negative: decremented
     } else if (drift.deltaChargeMillicents < 0) {
-      // Overcharge → refund: pay down debt first, remainder to the never-expiring top-up.
+      // Overcharge → refund to where the call's cents came from (credit-consume
+      // refundWalletCharge): debt first, then the top-up on a root wallet; on a drive
+      // wallet, the call's recorded draws in the inverse order, legs included.
       const refundCents = Math.round(Math.abs(drift.deltaChargeMillicents) / 1000);
-      const r = applyPaymentToDebt(bal.debtCents ?? 0, bal.topupRemainingCents, refundCents);
-      await tx
-        .update(wallets)
-        .set({ debtCents: r.debtCents, topupRemainingCents: r.topupCents })
-        .where(eq(wallets.id, walletId));
-      appliedCents = refundCents; // positive: credited back
+      appliedCents = await refundWalletCharge(tx, walletId, refundCents, aiUsageLogId); // positive: credited back
     }
 
     await tx.update(creditLedger).set({ appliedCents }).where(eq(creditLedger.id, ledgerId));

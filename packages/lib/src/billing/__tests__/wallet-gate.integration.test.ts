@@ -31,6 +31,21 @@ import { PERSONAL_SPEND, driveSpend } from '../spend-target';
 
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
+// A pass-through of the real resolution with a seam AFTER it returns: a test can change the
+// world between the unlocked resolution and gateSharedWallet's locked re-read (SPEND-4).
+const afterResolution = vi.hoisted(() => ({ run: null as null | (() => Promise<void>) }));
+vi.mock('../spend-resolution', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../spend-resolution')>();
+  return {
+    ...real,
+    resolveCallSpend: async (...args: Parameters<typeof real.resolveCallSpend>) => {
+      const decision = await real.resolveCallSpend(...args);
+      if (afterResolution.run) await afterResolution.run();
+      return decision;
+    },
+  };
+});
+
 let dbAvailable = false;
 const originalMode = process.env.DEPLOYMENT_MODE;
 
@@ -126,6 +141,7 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    afterResolution.run = null;
     if (originalMode === undefined) delete process.env.DEPLOYMENT_MODE;
     else process.env.DEPLOYMENT_MODE = originalMode;
     if (world) await teardown(world);
@@ -180,6 +196,26 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
 
     expect(gate).toMatchObject({ allowed: false, reason: 'source_refused', refusal: { source: 'drive_wallet', reason: 'source_paused' } });
     expect(await holdsOf(world.marcusId)).toEqual([]);
+  });
+
+  it('SPEND-4 (partial) a wallet paused after resolution named it is refused under the lock and reserves nothing', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 5_000 });
+    const w = world;
+    // The unlocked resolution sees an active wallet and names it; the funder pauses it
+    // before the gate takes the row lock. Only the locked re-read can catch that.
+    afterResolution.run = async () => {
+      await db.update(wallets).set({ status: 'paused' }).where(eq(wallets.id, w.productWalletId));
+    };
+
+    const gate = await canConsumeAI(w.marcusId, 'free', { spend: driveSpend(w.productId, 'drive_wallet') });
+
+    expect(gate).toEqual({
+      allowed: false,
+      reason: 'source_refused',
+      refusal: { source: 'drive_wallet', reason: 'source_paused', options: [] },
+    });
+    expect(await holdsOf(w.marcusId)).toEqual([]);
   });
 
   it('SPEND-4 (partial) a guest who chose the drive wallet is refused with only their own credits offered', async () => {
