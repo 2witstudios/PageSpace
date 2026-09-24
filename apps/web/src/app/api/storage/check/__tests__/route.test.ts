@@ -221,7 +221,7 @@ describe('GET /api/storage/check', () => {
   // member whose personal quota is full can still drop into an org drive with room. A drive is
   // honoured only when the permissions seam says the caller can upload into it; anything else
   // fails CLOSED to the caller's personal quota, identically whether or not the drive exists.
-  describe('WAL-9 (partial) POST /api/storage/check against the drop target drive', () => {
+  describe('WAL-9 (partial) the drop pre-check (POST /api/storage/check) uses the drop drive\'s quota', () => {
     beforeEach(() => {
       vi.mocked(checkUploadQuotaTarget).mockImplementation(fakeCheck);
       vi.mocked(uploadSemaphore.canAcquireSlot).mockResolvedValue(true);

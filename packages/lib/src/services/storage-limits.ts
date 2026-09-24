@@ -229,17 +229,6 @@ export async function checkUploadQuotaTarget(
 }
 
 /**
- * The quota an upload into `driveId` is checked against: the org's for an org drive, the
- * uploader's otherwise (WAL-9). Null when the uploader does not exist.
- */
-export async function getStorageQuotaForDrive(
-  userId: string,
-  driveId: string | null | undefined,
-): Promise<AnyStorageQuota | null> {
-  return (await resolveUploadQuotaTarget(userId, driveId))?.quota ?? null;
-}
-
-/**
  * The upload quota check for an upload into `driveId` (WAL-9): an org drive checks the org's
  * bytes, per-file size and file count; anything else checks the uploader's.
  */
