@@ -1,13 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // --- Effect seams (pure core is left real) -------------------------------------
-const mockGetUserStorageQuota = vi.fn();
-const mockCheckStorageQuota = vi.fn();
+const mockResolveUploadQuotaTarget = vi.fn();
+const mockCheckUploadQuotaTarget = vi.fn();
 const mockReserveConcurrentUploadSlot = vi.fn();
 const mockUpdateStorageUsage = vi.fn();
 vi.mock('@pagespace/lib/services/storage-limits', () => ({
-  getStorageQuotaForDrive: (...a: unknown[]) => mockGetUserStorageQuota(...a),
-  checkStorageQuotaForDrive: (...a: unknown[]) => mockCheckStorageQuota(...a),
+  resolveUploadQuotaTarget: (...a: unknown[]) => mockResolveUploadQuotaTarget(...a),
+  checkUploadQuotaTarget: (...a: unknown[]) => mockCheckUploadQuotaTarget(...a),
   reserveConcurrentUploadSlot: (...a: unknown[]) => mockReserveConcurrentUploadSlot(...a),
   chargeStorageForStore: (...a: unknown[]) => mockUpdateStorageUsage(...a),
   // Real (pure) impl: charge iff the files row was newly inserted (M8).
@@ -81,11 +81,16 @@ function presignArgs(over: Partial<Parameters<typeof presignAttachment>[0]> = {}
   };
 }
 
+const USER_TARGET = {
+  payer: { kind: 'user', userId: 'user-1' },
+  quota: { tier: 'free', usedBytes: 0, quotaBytes: 500 * 1024 * 1024 },
+};
+
 describe('presignAttachment', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockGetUserStorageQuota.mockResolvedValue({ tier: 'free', usedBytes: 0, quotaBytes: 500 * 1024 * 1024 });
-    mockCheckStorageQuota.mockResolvedValue({ allowed: true });
+    mockResolveUploadQuotaTarget.mockResolvedValue(USER_TARGET);
+    mockCheckUploadQuotaTarget.mockResolvedValue({ allowed: true });
     mockCheckObjectExists.mockResolvedValue(false);
     mockAcquire.mockResolvedValue('job-1');
     mockIssuePresignedPutUrl.mockResolvedValue('https://tigris/put');
@@ -127,10 +132,31 @@ describe('presignAttachment', () => {
   });
 
   it('returns 413 when the storage quota check fails', async () => {
-    mockCheckStorageQuota.mockResolvedValue({ allowed: false, reason: 'Insufficient storage' });
+    mockCheckUploadQuotaTarget.mockResolvedValue({ allowed: false, reason: 'Insufficient storage' });
     const res = await presignAttachment(presignArgs());
     expect(res.status).toBe(413);
     expect(mockAcquire).not.toHaveBeenCalled();
+  });
+
+  it('WAL-9 (partial) resolves the drive quota once and checks against that same read (#2719 review P2-2)', async () => {
+    const orgTarget = { payer: { kind: 'org', orgId: 'org-1' }, quota: { tier: 'business', usedBytes: 0, quotaBytes: 50 * 1024 ** 3 } };
+    mockResolveUploadQuotaTarget.mockResolvedValue(orgTarget);
+
+    const res = await presignAttachment(presignArgs());
+
+    expect(res.status).toBe(200);
+    expect(mockResolveUploadQuotaTarget).toHaveBeenCalledTimes(1);
+    expect(mockResolveUploadQuotaTarget).toHaveBeenCalledWith('user-1', 'drive-1');
+    expect(mockCheckUploadQuotaTarget).toHaveBeenCalledTimes(1);
+    expect(mockCheckUploadQuotaTarget).toHaveBeenCalledWith(orgTarget, 1024);
+    expect(mockAcquire).toHaveBeenCalledWith('user-1', 'business', 1024, expect.anything());
+  });
+
+  it('returns 500 when the uploader has no storage quota', async () => {
+    mockResolveUploadQuotaTarget.mockResolvedValue(null);
+    const res = await presignAttachment(presignArgs());
+    expect(res.status).toBe(500);
+    expect(mockCheckUploadQuotaTarget).not.toHaveBeenCalled();
   });
 
   it('returns 429 when no upload slot is available', async () => {

@@ -9,7 +9,7 @@ import {
   canClaimExistingObject,
 } from '@pagespace/lib/services/upload-validation';
 import { getUserDrivePermissions } from '@pagespace/lib/permissions/permissions';
-import { checkStorageQuotaForDrive, reserveConcurrentUploadSlot, getStorageQuotaForDrive, userReferencesContentHash } from '@pagespace/lib/services/storage-limits';
+import { resolveUploadQuotaTarget, checkUploadQuotaTarget, reserveConcurrentUploadSlot, userReferencesContentHash } from '@pagespace/lib/services/storage-limits';
 import { releasePendingUpload } from '@pagespace/lib/services/pending-uploads';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { checkObjectExists, issuePresignedPutUrl } from '@/lib/upload/s3-effects';
@@ -79,11 +79,13 @@ export async function POST(request: Request) {
   }
 
   // WAL-9, O-9: an upload into an org drive is checked against the org's quota (Business),
-  // never the uploader's personal one.
-  const quota = await getStorageQuotaForDrive(userId, driveId);
-  if (!quota) {
+  // never the uploader's personal one. Resolved once: the org's usage is a SUM over its files,
+  // and the size and quota checks below both decide against this one read (#2719 review P2-2).
+  const quotaTarget = await resolveUploadQuotaTarget(userId, driveId);
+  if (!quotaTarget) {
     return NextResponse.json({ error: 'Could not retrieve storage quota' }, { status: 500 });
   }
+  const { quota } = quotaTarget;
 
   const sizeResult = validateFileSize(fileSize, quota.tier);
   if (!sizeResult.ok) {
@@ -91,7 +93,7 @@ export async function POST(request: Request) {
   }
 
   // Enforce remaining storage + file-count limits, not just per-file size.
-  const quotaCheck = await checkStorageQuotaForDrive(userId, driveId, fileSize);
+  const quotaCheck = await checkUploadQuotaTarget(quotaTarget, fileSize);
   if (!quotaCheck.allowed) {
     return NextResponse.json({ error: quotaCheck.reason, storageInfo: quotaCheck.quota }, { status: 413 });
   }

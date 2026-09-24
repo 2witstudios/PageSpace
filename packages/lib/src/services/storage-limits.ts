@@ -184,34 +184,71 @@ export async function resolveUploadPayer(userId: string, driveId: string | null 
 }
 
 /**
+ * Who an upload into a drive bills, and the quota it is checked against, read ONCE (WAL-9).
+ * A caller that needs both the quota (its tier) and the check resolves this once and passes it
+ * to `checkUploadQuotaTarget`, so the org's derived usage (a SUM over every file in the org) is
+ * read once per request (#2719 review P2-2). Deliberately uncached: an undercounted usage lets
+ * an org exceed its quota.
+ */
+export interface UploadQuotaTarget {
+  payer: BillingPayer;
+  quota: AnyStorageQuota;
+}
+
+/**
+ * The payer and quota for an upload into `driveId`: the org's for an org drive, the uploader's
+ * otherwise. An upload into an org drive never reads the uploader's personal quota. Null when a
+ * personally billed uploader does not exist.
+ */
+export async function resolveUploadQuotaTarget(
+  userId: string,
+  driveId: string | null | undefined,
+): Promise<UploadQuotaTarget | null> {
+  const payer = await resolveUploadPayer(userId, driveId);
+  if (payer.kind === 'org') return { payer, quota: await getOrgStorageQuota(payer.orgId) };
+  const quota = await getUserStorageQuota(userId);
+  return quota ? { payer, quota } : null;
+}
+
+/**
+ * The upload quota check against an already-resolved target: the tier's per-file limit, the
+ * bytes left, then the payer's file count. Re-reads neither the payer nor the usage.
+ */
+export async function checkUploadQuotaTarget(
+  target: UploadQuotaTarget | null,
+  fileSize: number,
+): Promise<StorageCheckResult<AnyStorageQuota>> {
+  if (!target) return { allowed: false, reason: 'User not found' };
+  const { payer, quota } = target;
+  const bytes = decideStorageBytes({ quota, fileSize });
+  if (!bytes.allowed) return bytes;
+
+  // Counted only once the byte checks pass: the count is the expensive read.
+  const fileCount = payer.kind === 'org' ? await getOrgFileCount(payer.orgId) : await getUserFileCount(payer.userId);
+  return decideFileCount({ quota, fileCount });
+}
+
+/**
  * The quota an upload into `driveId` is checked against: the org's for an org drive, the
- * uploader's otherwise (WAL-9). An upload into an org drive never reads or touches the
- * uploader's personal quota. Null when the uploader does not exist.
+ * uploader's otherwise (WAL-9). Null when the uploader does not exist.
  */
 export async function getStorageQuotaForDrive(
   userId: string,
   driveId: string | null | undefined,
 ): Promise<AnyStorageQuota | null> {
-  const payer = await resolveUploadPayer(userId, driveId);
-  return payer.kind === 'org' ? getOrgStorageQuota(payer.orgId) : getUserStorageQuota(userId);
+  return (await resolveUploadQuotaTarget(userId, driveId))?.quota ?? null;
 }
 
 /**
  * The upload quota check for an upload into `driveId` (WAL-9): an org drive checks the org's
- * bytes, per-file size and file count; anything else is `checkStorageQuota` on the uploader.
+ * bytes, per-file size and file count; anything else checks the uploader's.
  */
 export async function checkStorageQuotaForDrive(
   userId: string,
   driveId: string | null | undefined,
   fileSize: number,
 ): Promise<StorageCheckResult<AnyStorageQuota>> {
-  const payer = await resolveUploadPayer(userId, driveId);
-  if (payer.kind === 'user') return checkStorageQuota(userId, fileSize);
-
-  const quota = await getOrgStorageQuota(payer.orgId);
-  const bytes = decideStorageBytes({ quota, fileSize });
-  if (!bytes.allowed) return bytes;
-  return decideFileCount({ quota, fileCount: await getOrgFileCount(payer.orgId) });
+  return checkUploadQuotaTarget(await resolveUploadQuotaTarget(userId, driveId), fileSize);
 }
 
 /**
