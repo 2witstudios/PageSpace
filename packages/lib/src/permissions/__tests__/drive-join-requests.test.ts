@@ -4,10 +4,12 @@ import {
   decideJoinRequest,
   decideJoinRequestApprover,
   decideJoinRequestDecision,
+  decideJoinRequestStaysOpen,
   decideJoinRequestWithdrawal,
   type JoinDrive,
   type RequesterRow,
 } from '../drive-join-requests';
+import { driveMembershipRole } from '../drive-member-role';
 
 // Northwind Labs (Sequence Spec Part 2): Jono owns the org, Priya is an Admin, Marcus and Lena
 // are members, Chris is outside the org.
@@ -28,6 +30,9 @@ const drive = (over: Partial<JoinDrive> = {}): JoinDrive => ({
 const accepted: RequesterRow = { role: 'MEMBER', source: 'invite', accepted: true };
 const pendingInvite: RequesterRow = { role: 'ADMIN', source: 'invite', accepted: false };
 const staleOrgRow: RequesterRow = { role: 'MEMBER', source: 'org', accepted: true };
+// D-OW-24: the accepted row a redeemed page share link leaves. Built through the same mapping the
+// loaders use, so this is exactly what a GUEST row reads as once master syncs the enum value in.
+const guestRow: RequesterRow = { role: driveMembershipRole('GUEST'), source: 'invite', accepted: true };
 
 describe('decideJoinRequest', () => {
   it('DRV-6 (partial) an org member without a row on a Restricted drive may request to join', () => {
@@ -252,5 +257,130 @@ describe('decideDriveDirectoryEntry', () => {
 
   it('DRV-6 (partial) the lead of a Restricted drive sees it joined', () => {
     expect(entry({ viewerId: MARCUS })).toEqual({ joined: true, joinRequest: null, canRequest: false });
+  });
+});
+
+describe('D-OW-24 a GUEST row (redeemed page share link) is never drive membership', () => {
+  const entry = (over: Partial<Parameters<typeof decideDriveDirectoryEntry>[0]>) => decideDriveDirectoryEntry({
+    viewerId: LENA, viewerOrgRole: 'MEMBER', drive: drive(), viewerRow: guestRow, hasPendingRequest: false, ...over,
+  });
+
+  it('DRV-6 (partial) an org member holding only a GUEST row may still request a Restricted drive', () => {
+    expect(decideJoinRequest({
+      drive: drive(), requesterId: LENA, requesterOrgRole: 'MEMBER', requesterRow: guestRow, hasPendingRequest: false,
+    })).toEqual({ ok: true, action: 'create' });
+  });
+
+  it('DRV-6 (partial) a non-membership row not yet accepted invites to nothing: its holder may still request', () => {
+    expect(decideJoinRequest({
+      drive: drive(), requesterId: LENA, requesterOrgRole: 'MEMBER', requesterRow: { ...guestRow, accepted: false }, hasPendingRequest: false,
+    })).toEqual({ ok: true, action: 'create' });
+  });
+
+  it('DRV-6 (partial) approving a requester who holds only a GUEST row admits them', () => {
+    expect(decideJoinRequestDecision({
+      decision: 'approve', actorId: MARCUS, actorOrgRole: 'MEMBER', drive: drive(),
+      request: { userId: LENA, status: 'pending' }, requesterOrgRole: 'MEMBER', requesterRow: guestRow,
+    })).toEqual({ ok: true, action: 'approve', admit: true });
+  });
+
+  it('DRV-6 (partial) a GUEST row does not make a Restricted drive joined in the directory', () => {
+    expect(entry({})).toEqual({ joined: false, joinRequest: null, canRequest: true });
+  });
+
+  it('DRV-7 (partial) a Private drive is never listed to a plain org member holding only a GUEST row', () => {
+    expect(entry({ drive: drive({ orgVisibility: 'PRIVATE' }) })).toBeNull();
+  });
+
+  it('DRV-7 (partial) an org Admin holding a GUEST row sees a Private drive through org power only, not joined', () => {
+    expect(entry({ drive: drive({ orgVisibility: 'PRIVATE' }), viewerId: PRIYA, viewerOrgRole: 'ADMIN' }))
+      .toEqual({ joined: false, joinRequest: null, canRequest: false });
+  });
+});
+
+describe('D-OW-25 who the directory lists a Private drive to: only people who can already open it', () => {
+  const priv = drive({ orgVisibility: 'PRIVATE' });
+  const entry = (over: Partial<Parameters<typeof decideDriveDirectoryEntry>[0]>) => decideDriveDirectoryEntry({
+    viewerId: LENA, viewerOrgRole: 'MEMBER', drive: priv, viewerRow: null, hasPendingRequest: false, ...over,
+  });
+
+  it('DRV-7 (partial) the org Owner', () => {
+    expect(entry({ viewerId: JONO, viewerOrgRole: 'OWNER' })).toEqual({ joined: false, joinRequest: null, canRequest: false });
+  });
+
+  it('DRV-7 (partial) an org Admin', () => {
+    expect(entry({ viewerId: PRIYA, viewerOrgRole: 'ADMIN' })).toEqual({ joined: false, joinRequest: null, canRequest: false });
+  });
+
+  it('DRV-7 (partial) its lead', () => {
+    expect(entry({ viewerId: MARCUS })).toEqual({ joined: true, joinRequest: null, canRequest: false });
+  });
+
+  it('DRV-7 (partial) an accepted invited member', () => {
+    expect(entry({ viewerRow: accepted })).toEqual({ joined: true, joinRequest: null, canRequest: false });
+  });
+
+  it('DRV-7 (partial) never a plain member with no row, a pending invitee, a stale org row, a GUEST, or someone outside the org', () => {
+    expect(entry({})).toBeNull();
+    expect(entry({ viewerRow: pendingInvite })).toBeNull();
+    expect(entry({ viewerRow: staleOrgRow })).toBeNull();
+    expect(entry({ viewerRow: guestRow })).toBeNull();
+    expect(entry({ viewerId: CHRIS, viewerOrgRole: null, viewerRow: accepted })).toBeNull();
+  });
+});
+
+describe('decideJoinRequestApprover: no existence oracle for a Private drive', () => {
+  it('DRV-7 (partial) a plain member who cannot answer gets the same not-found as a missing drive, not a 403 that confirms it', () => {
+    const missing = decideJoinRequestApprover({ actorId: LENA, actorOrgRole: 'MEMBER', drive: null });
+    expect(decideJoinRequestApprover({ actorId: LENA, actorOrgRole: 'MEMBER', drive: drive({ orgVisibility: 'PRIVATE' }) })).toEqual(missing);
+    expect(missing).toMatchObject({ ok: false, code: 'REQUEST_NOT_FOUND', status: 404 });
+  });
+
+  it('DRV-6 (partial) on a Restricted drive, which every org member already sees in the directory, the refusal still says why', () => {
+    expect(decideJoinRequestApprover({ actorId: LENA, actorOrgRole: 'MEMBER', drive: drive() }))
+      .toMatchObject({ ok: false, code: 'NOT_APPROVER', status: 403 });
+  });
+
+  it('DRV-7 (partial) the lead and org Admins still answer on a Private drive', () => {
+    const priv = drive({ orgVisibility: 'PRIVATE' });
+    expect(decideJoinRequestApprover({ actorId: MARCUS, actorOrgRole: 'MEMBER', drive: priv })).toEqual({ ok: true, drive: priv });
+    expect(decideJoinRequestApprover({ actorId: PRIYA, actorOrgRole: 'ADMIN', drive: priv })).toEqual({ ok: true, drive: priv });
+  });
+});
+
+describe('decideJoinRequestStaysOpen: a pending request closes when what it asked for is gone', () => {
+  const open = (over: Partial<Parameters<typeof decideJoinRequestStaysOpen>[0]> = {}) => decideJoinRequestStaysOpen({
+    drive: drive(), requesterId: LENA, requesterOrgRole: 'MEMBER', requesterRow: null, ...over,
+  });
+
+  it('DRV-6 (partial) stays open on a Restricted org drive while the requester is in the org and does not lead it', () => {
+    expect(open()).toBe(true);
+  });
+
+  it('DRV-6 (partial) closes once the drive is no longer Restricted (Open or Private)', () => {
+    expect(open({ drive: drive({ orgVisibility: 'OPEN' }) })).toBe(false);
+    expect(open({ drive: drive({ orgVisibility: 'PRIVATE' }) })).toBe(false);
+  });
+
+  it('DRV-6 (partial) closes once the requester left the org', () => {
+    expect(open({ requesterOrgRole: null })).toBe(false);
+  });
+
+  it('DRV-6 (partial) closes once the drive moved out of the org', () => {
+    expect(open({ drive: drive({ orgId: null }) })).toBe(false);
+  });
+
+  it('DRV-6 (partial) closes once the requester became the lead', () => {
+    expect(open({ requesterId: MARCUS })).toBe(false);
+  });
+
+  it('DRV-6 (partial) closes once the requester became a member another way (an accepted invitation)', () => {
+    expect(open({ requesterRow: accepted })).toBe(false);
+  });
+
+  it('DRV-6 (partial) stays open beside a row that is no membership: a GUEST row, a stale org row, a pending invitation', () => {
+    expect(open({ requesterRow: guestRow })).toBe(true);
+    expect(open({ requesterRow: staleOrgRow })).toBe(true);
+    expect(open({ requesterRow: pendingInvite })).toBe(true);
   });
 });

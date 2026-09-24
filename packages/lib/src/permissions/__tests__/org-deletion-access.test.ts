@@ -3,9 +3,11 @@ import type { db } from '@pagespace/db/db';
 import { resolveOrgDeletionAccessLoss } from '../org-deletion-access';
 
 type Pair = { userId: string; driveId: string };
+/** A drive_members row as the read selects it: role is a NOT NULL column. */
+type AcceptedRow = Pair & { role: string };
 
 /** An executor whose drive_members read answers `accepted` (the rows still accepted after the deletes). */
-const executorWith = (accepted: Pair[]) => {
+const executorWith = (accepted: AcceptedRow[]) => {
   const reads: number[] = [];
   const executor = {
     select: () => ({ from: () => ({ where: async () => (reads.push(1), accepted) }) }),
@@ -49,12 +51,17 @@ describe('resolveOrgDeletionAccessLoss', () => {
   });
 
   it('ORG-6 (partial) keeps anyone still holding an accepted row on the drive', async () => {
-    const { executor } = executorWith([{ userId: 'admin', driveId: 'd_open' }]);
+    const { executor } = executorWith([{ userId: 'admin', driveId: 'd_open', role: 'MEMBER' }]);
     expect(sorted(await resolveOrgDeletionAccessLoss(executor, { outcomes: [open], members, removedRows: [] }))).toEqual(['d_open:owner']);
   });
 
+  it('D-OW-24 ORG-6 (partial) a GUEST row (a redeemed page share link) keeps no one on the drive: its holder is still taken off', async () => {
+    const { executor } = executorWith([{ userId: 'admin', driveId: 'd_open', role: 'GUEST' }]);
+    expect(sorted(await resolveOrgDeletionAccessLoss(executor, { outcomes: [open], members, removedRows: [] }))).toEqual(['d_open:admin', 'd_open:owner']);
+  });
+
   it('ORG-6 (partial) reads nothing and takes no one off when the org had no drives', async () => {
-    const { executor, reads } = executorWith([{ userId: 'admin', driveId: 'd_open' }]);
+    const { executor, reads } = executorWith([{ userId: 'admin', driveId: 'd_open', role: 'MEMBER' }]);
     expect(await resolveOrgDeletionAccessLoss(executor, { outcomes: [], members, removedRows: [] })).toEqual([]);
     expect(reads).toEqual([]);
   });

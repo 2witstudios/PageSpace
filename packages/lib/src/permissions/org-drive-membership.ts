@@ -5,7 +5,8 @@ import { driveMembers, driveRoles } from '@pagespace/db/schema/members';
 import { orgMembers, type OrgRole } from '@pagespace/db/schema/organizations';
 import { auditOrgAdminPrivateDriveAccess } from './org-admin-access-audit';
 import { ORGS_ENABLED } from '../organizations/orgs-enabled';
-import type { DriveMemberRole, DriveRoleGrant, OrgDriveMembership } from './org-access';
+import type { DriveRoleGrant, OrgDriveMembership } from './org-access';
+import { driveMembershipRole, driveMembershipRow } from './drive-member-role';
 import type { RequesterRow } from './drive-join-requests';
 import { drives } from '@pagespace/db/schema/core';
 import {
@@ -50,7 +51,7 @@ export async function loadEffectiveDriveMembership(
     .limit(1);
 
   const [effective] = await resolveEffectiveDriveMemberships(
-    [{ userId, drive, row: toMembership(rows[0]) }],
+    [{ userId, drive, row: driveMembershipRow(rows[0]) }],
     options,
   );
   return effective;
@@ -144,14 +145,6 @@ export async function resolveEffectiveDriveMemberships(
   });
 }
 
-function toMembership(
-  found: { role: string; customRoleId: string | null; source: OrgDriveMembership['source'] } | undefined,
-): OrgDriveMembership | null {
-  return found
-    ? { role: found.role as DriveMemberRole, customRoleId: found.customRoleId ?? null, source: found.source }
-    : null;
-}
-
 /**
  * The membership that may back an explicit-role token scope on a drive the user does not own
  * (explicitScopeAuthorityRow). Reads nothing while ORGS_ENABLED is false.
@@ -176,7 +169,7 @@ export async function loadExplicitScopeAuthority(userId: string, driveId: string
     ))
     .limit(1);
 
-  return explicitScopeAuthorityRow({ orgsEnabled: true, drive, row: toMembership(rows[0]) });
+  return explicitScopeAuthorityRow({ orgsEnabled: true, drive, row: driveMembershipRow(rows[0]) });
 }
 
 /**
@@ -195,7 +188,7 @@ export async function loadAcceptedRowsInDrives(
       .from(driveMembers)
       .where(and(eq(driveMembers.userId, userId), isNotNull(driveMembers.acceptedAt), inArray(driveMembers.driveId, ids)));
     for (const r of found) {
-      const row = toMembership(r);
+      const row = driveMembershipRow(r);
       if (row) rows.set(r.driveId, row);
     }
   }
@@ -203,8 +196,9 @@ export async function loadAcceptedRowsInDrives(
 }
 
 /**
- * Which of `userIds` hold an ACCEPTED drive_members row on which of `driveIds`, read through
- * `executor` (org deletion reads them inside its transaction, after its own row deletes).
+ * Which of `userIds` hold an ACCEPTED drive_members MEMBERSHIP on which of `driveIds`, read through
+ * `executor` (org deletion reads them inside its transaction, after its own row deletes). A GUEST
+ * row (D-OW-24) is no membership, so its holder is not "still on the drive" and still gets kicked.
  */
 export async function loadAcceptedDriveMemberPairs(
   executor: Pick<typeof db, 'select'>,
@@ -215,10 +209,13 @@ export async function loadAcceptedDriveMemberPairs(
   if (userIds.length === 0) return pairs;
   for (const users of chunks(userIds)) {
     for (const ids of chunks(driveIds)) {
-      pairs.push(...(await executor
-        .select({ userId: driveMembers.userId, driveId: driveMembers.driveId })
+      const rows = await executor
+        .select({ userId: driveMembers.userId, driveId: driveMembers.driveId, role: driveMembers.role })
         .from(driveMembers)
-        .where(and(inArray(driveMembers.userId, users), inArray(driveMembers.driveId, ids), isNotNull(driveMembers.acceptedAt)))));
+        .where(and(inArray(driveMembers.userId, users), inArray(driveMembers.driveId, ids), isNotNull(driveMembers.acceptedAt)));
+      for (const { userId, driveId, role } of rows) {
+        if (driveMembershipRole(role) !== null) pairs.push({ userId, driveId });
+      }
     }
   }
   return pairs;
@@ -286,7 +283,7 @@ export async function loadDriveMemberRowState(
     .from(driveMembers)
     .where(and(eq(driveMembers.driveId, driveId), eq(driveMembers.userId, userId)))
     .limit(1);
-  return row ? { role: row.role as DriveMemberRole, source: row.source, accepted: row.acceptedAt !== null } : null;
+  return row ? { role: driveMembershipRole(row.role), source: row.source, accepted: row.acceptedAt !== null } : null;
 }
 
 /**

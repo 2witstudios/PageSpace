@@ -26,7 +26,12 @@ export interface JoinDrive {
 
 /** A person's drive_members row on the drive, accepted or still a pending invitation. */
 export interface RequesterRow {
-  role: DriveMemberRole;
+  /**
+   * The membership the row carries (driveMembershipRole), or null for a row that is no drive
+   * membership at all: a D-OW-24 GUEST row from a redeemed page share link. Such a row is neither
+   * a membership nor an invitation, so its holder may request and be admitted like anyone else.
+   */
+  role: DriveMemberRole | null;
   source: DriveMemberSource;
   /** acceptedAt IS NOT NULL. */
   accepted: boolean;
@@ -66,13 +71,20 @@ function isLiveOrgDrive(drive: JoinDrive | null): drive is JoinDrive & { orgId: 
  * something there (validOrgDriveRow drops a stale org row and a former lead's OWNER row). Implicit
  * Open membership is the caller's to add: it needs no row.
  */
-function holdsMembership(userId: string, drive: JoinDrive, orgRole: OrgRole | null, row: RequesterRow | null): boolean {
+function holdsMembership(
+  userId: string,
+  drive: Pick<JoinDrive, 'ownerId' | 'orgId' | 'orgVisibility'>,
+  orgRole: OrgRole | null,
+  row: RequesterRow | null,
+): boolean {
   if (isDriveLead(userId, drive)) return true;
   if (!row?.accepted) return false;
+  if (row.role === null) return false;
   return validOrgDriveRow({ role: row.role, customRoleId: null, source: row.source }, drive, orgRole) !== null;
 }
 
-const isPendingInvite = (row: RequesterRow | null): boolean => row !== null && !row.accepted;
+/** A pending invitation to a membership; a non-membership row (GUEST) invites to nothing. */
+const isPendingInvite = (row: RequesterRow | null): boolean => row !== null && !row.accepted && row.role !== null;
 
 export interface JoinRequestInput {
   drive: JoinDrive | null;
@@ -178,7 +190,10 @@ export function decideJoinRequestDecision({
 
 /**
  * Who may answer (and list) a drive's join requests: its lead while in the org (D-OW-7 keeps them
- * there), or an org Owner or Admin. Someone outside the org learns nothing.
+ * there), or an org Owner or Admin. Someone outside the org learns nothing, and neither does an org
+ * member refused on a PRIVATE drive: they get the same not-found as a missing drive, so holding its
+ * id confirms nothing. A Restricted or Open drive is listed to every org member in the directory
+ * anyway, so there the refusal says why.
  */
 export function decideJoinRequestApprover({
   actorId,
@@ -192,9 +207,37 @@ export function decideJoinRequestApprover({
   if (!isLiveOrgDrive(drive) || actorOrgRole === null) return requestNotFound();
   const authority = decideDriveLeadAuthority({ orgsEnabled: true, userId: actorId, drive, orgRole: actorOrgRole });
   if (!authority.allowed) {
+    if (drive.orgVisibility === 'PRIVATE') return requestNotFound();
     return refuse('NOT_APPROVER', 403, 'Only the drive lead or an organization Owner or Admin can answer join requests.');
   }
   return { ok: true, drive };
+}
+
+/**
+ * Whether a pending request still asks for something (DRV-6): the drive is still a Restricted
+ * drive of an org, the requester is still in that org, and they are not on it already (its lead, or
+ * a membership they gained another way, such as an accepted invitation). Anything else is stale:
+ * the approver list drops it at once and the next transition marks it withdrawn, so an approver
+ * never keeps the name and email of someone who left, and a request never revives when a drive
+ * returns to Restricted.
+ */
+export function decideJoinRequestStaysOpen({
+  drive,
+  requesterId,
+  requesterOrgRole,
+  requesterRow,
+}: {
+  drive: Pick<JoinDrive, 'ownerId' | 'orgId' | 'orgVisibility'>;
+  requesterId: string;
+  /** The requester's role in drive.orgId now; null once they left or the drive has no org. */
+  requesterOrgRole: OrgRole | null;
+  /** The requester's drive_members row now, accepted or pending. */
+  requesterRow: RequesterRow | null;
+}): boolean {
+  if (drive.orgId === null) return false;
+  if (drive.orgVisibility !== 'RESTRICTED') return false;
+  if (requesterOrgRole === null) return false;
+  return !holdsMembership(requesterId, drive, requesterOrgRole, requesterRow);
 }
 
 /** The requester, and only they, may withdraw a pending request. */
@@ -229,9 +272,10 @@ export interface DirectoryEntry {
 
 /**
  * One drive's line in the org Drives directory for one viewer, or null when the viewer may not see
- * it there (DRV-6, DRV-7). Open and Restricted drives are listed for every org member; a Private
- * drive only for the org Owner and Admins (who can open it) and for the people already on it (its
- * lead and invited members), so the directory never reveals a drive its viewer cannot reach.
+ * it there (DRV-6, DRV-7). Open and Restricted drives are listed for every org member. A Private
+ * drive is listed only to people who can already open it (D-OW-25): the org Owner and Admins, its
+ * lead, and its accepted members. Never to a pending invitee, a stale org row or a GUEST row, so
+ * the directory never reveals a drive its viewer cannot reach.
  */
 export function decideDriveDirectoryEntry({
   viewerId,
