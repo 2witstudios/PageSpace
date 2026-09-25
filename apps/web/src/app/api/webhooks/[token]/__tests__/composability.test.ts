@@ -242,6 +242,10 @@ describe('Incoming Webhooks: composability (real trigger fan-out reaches execute
         createdBy: WORKFLOW.createdBy,
         source: expect.objectContaining({ table: 'webhookTriggers', id: TRIGGER.id }),
       }),
+      // SPEND-6: the fan-out's run spends the workflow's drive (the wallet its gate reserved).
+      expect.objectContaining({
+        creditSpend: expect.objectContaining({ spend: { kind: 'automation', driveId: WORKFLOW.driveId } }),
+      }),
     );
     // The channel action still only ran once — the fan-out didn't duplicate it.
     expect(mockDispatch).toHaveBeenCalledTimes(1);

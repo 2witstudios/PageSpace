@@ -102,7 +102,7 @@ SPEND-1
 # SPEND-2 (partial, ow-c6): GET /api/wallets/conversations/[id] answers the stored choice, the options and
 # the gate's own decision before the first message (the data the chip shows); the chip itself is UI-8.
 SPEND-2
-# SPEND-3 (partial, ow-c6): conversations.chosenWalletId (0308) is written only by the explicit source route,
+# SPEND-3 (partial, ow-c6): conversations.chosenWalletId (0310) is written only by the explicit source route,
 # re-resolved by the gate on every call (a stale id refuses), and preselection follows the drive default then
 # the person's default, proven against Postgres; the Settings surface that sets the default is UI-10.
 SPEND-3

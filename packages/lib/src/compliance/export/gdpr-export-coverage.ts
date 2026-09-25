@@ -352,6 +352,10 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     // Funds moved into a drive/agent wallet (0307): the wallet's own record, beside the
     // ledger rows below. Whether a donor's legs join the export is X-2's decision.
     'wallet_funding_legs',
+    // When a drive's lead was last told an automation skipped for want of wallet funds
+    // (0309, SPEND-6): a per-drive throttle stamp. The notice itself is exported under
+    // `notifications`.
+    'automation_skip_notices',
     'credit_holds',
     'credit_ledger',
   ),

@@ -98,10 +98,11 @@ export function useFileDrop({
     }
 
     // Check storage quota before uploading. Per-file quota is also enforced
-    // server-side at presign time; this is an early, friendlier guard.
+    // server-side at presign time; this is an early, friendlier guard. It names
+    // the drive so an org drive is checked against the org's quota (WAL-9).
     const totalSize = files.reduce((sum, f) => sum + f.size, 0);
     try {
-      await post('/api/storage/check', { fileSize: totalSize });
+      await post('/api/storage/check', { fileSize: totalSize, driveId });
     } catch (error) {
       console.error('Storage check failed:', error);
       const errorMessage = (error as Error).message;

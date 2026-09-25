@@ -335,7 +335,7 @@ describe('POST /api/cron/task-triggers', () => {
       return response.json();
     };
 
-    it('hands the executor the credit gate as its admit hook, gating the owner as a scheduled run', async () => {
+    it('SPEND-6 (partial) hands the executor the credit gate as its admit hook, gating the drive the workflow runs in as a scheduled run', async () => {
       const admit = async () => ({ admitted: true as const, release: () => {} });
       mockCreditAdmission.mockReturnValue(admit);
       vi.mocked(executeWorkflow).mockResolvedValue({ success: true, durationMs: 50 });
@@ -346,6 +346,8 @@ describe('POST /api/cron/task-triggers', () => {
       expect(options?.admit).toBe(admit);
       expect(mockCreditAdmission).toHaveBeenCalledWith(input, 'scheduled');
       expect(input.createdBy).toBe(MOCK_WORKFLOW.createdBy);
+      // SPEND-6: the gate is told the drive the run spends; the creator is only who it is recorded against.
+      expect(input.driveId).toBe(MOCK_WORKFLOW.driveId);
     });
 
     it('does not gate a trigger that is skipped for its task (no model would run)', async () => {

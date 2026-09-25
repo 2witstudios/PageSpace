@@ -1,5 +1,5 @@
 /**
- * Migration 0308 — where the spend source is stored (Spec SPEND-3).
+ * Migration 0310 — where the spend source is stored (Spec SPEND-3).
  *
  *   conversations.chosenWalletId  the wallet chosen for a conversation; NULL = nothing chosen.
  *                                 No foreign key: a deleted wallet leaves the id behind so the
@@ -17,11 +17,11 @@ import path from 'path';
 import { Pool, type PoolClient } from 'pg';
 
 const MIGRATIONS_DIR = path.resolve(__dirname, '../../drizzle');
-const file = readdirSync(MIGRATIONS_DIR).find((f) => /^0308_.*\.sql$/.test(f));
+const file = readdirSync(MIGRATIONS_DIR).find((f) => /^0310_.*\.sql$/.test(f));
 const sql = file ? readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8') : '';
 const statements = sql.split('--> statement-breakpoint').map((s) => s.trim()).filter(Boolean);
 
-describe('drizzle/0308 — the stored spend source (static)', () => {
+describe('drizzle/0310 — the stored spend source (static)', () => {
   it('SPEND-3 (partial): adds the two nullable columns and the CHECK, and nothing else', () => {
     expect(file).toBeDefined();
     expect(statements).toEqual([
@@ -37,7 +37,7 @@ describe('drizzle/0308 — the stored spend source (static)', () => {
 const DATABASE_URL = process.env.DATABASE_URL;
 const describeLive = DATABASE_URL ? describe : describe.skip;
 
-describeLive('drizzle/0308 against a real Postgres', () => {
+describeLive('drizzle/0310 against a real Postgres', () => {
   let pool: Pool;
   let client: PoolClient;
 

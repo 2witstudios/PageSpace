@@ -16,9 +16,14 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 vi.mock('@pagespace/lib/services/storage-limits', () => ({
-  checkStorageQuota: vi.fn().mockResolvedValue({ allowed: true, quota: {} }),
-  getUserStorageQuota: vi.fn().mockResolvedValue({ tier: 'free', usedBytes: 0, quotaBytes: 1e9, availableBytes: 1e9 }),
-  STORAGE_TIERS: { free: { maxConcurrentUploads: 3 } },
+  resolveUploadQuotaTarget: vi.fn(),
+  checkUploadQuotaTarget: vi.fn(),
+  getUserStorageQuota: vi.fn(),
+  STORAGE_TIERS: { free: { maxConcurrentUploads: 3 }, business: { maxConcurrentUploads: 10 } },
+}));
+
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  getUserDrivePermissions: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/services/pending-uploads', () => ({
@@ -44,6 +49,49 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { countLiveUploadsForUser } from '@pagespace/lib/services/pending-uploads';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
+import {
+  resolveUploadQuotaTarget,
+  checkUploadQuotaTarget,
+  getUserStorageQuota,
+  type UploadQuotaTarget,
+} from '@pagespace/lib/services/storage-limits';
+import { getUserDrivePermissions } from '@pagespace/lib/permissions/permissions';
+import { safeParseBody } from '@/lib/validation/parse-body';
+
+const GiB = 1024 ** 3;
+const MiB = 1024 ** 2;
+
+/** Lena, on Free, has used every byte of her 500 MiB personal quota. */
+const PERSONAL_FULL: UploadQuotaTarget = {
+  payer: { kind: 'user', userId: 'user_1' },
+  quota: { userId: 'user_1', tier: 'free', quotaBytes: 500 * MiB, usedBytes: 500 * MiB, availableBytes: 0, utilizationPercent: 100, warningLevel: 'critical' },
+};
+
+/** Northwind's Business quota, with room. */
+const ORG_WITH_ROOM: UploadQuotaTarget = {
+  payer: { kind: 'org', orgId: 'org_northwind' },
+  quota: { orgId: 'org_northwind', tier: 'business', quotaBytes: 50 * GiB, usedBytes: GiB, availableBytes: 49 * GiB, utilizationPercent: 2, warningLevel: 'none' },
+};
+
+/** The lib resolver's contract: an org drive resolves to its org, anything else to the uploader. */
+const DRIVE_ORGS: Record<string, string> = { drive_org: 'org_northwind', drive_org_other: 'org_other' };
+function fakeResolve(_userId: string, driveId: string | null | undefined): Promise<UploadQuotaTarget> {
+  return Promise.resolve(driveId && DRIVE_ORGS[driveId] ? ORG_WITH_ROOM : PERSONAL_FULL);
+}
+/** The lib check's byte rule: the file must fit in what is left. */
+function fakeCheck(target: UploadQuotaTarget | null, fileSize: number) {
+  if (!target) return Promise.resolve({ allowed: false, reason: 'User not found' });
+  return Promise.resolve(fileSize <= target.quota.availableBytes
+    ? { allowed: true, quota: target.quota }
+    : { allowed: false, reason: 'Insufficient storage', quota: target.quota, requiredBytes: fileSize });
+}
+
+const EDITOR = { hasAccess: true, isOwner: false, isAdmin: false, isMember: true, canEdit: true };
+const VIEWER = { hasAccess: true, isOwner: false, isAdmin: false, isMember: true, canEdit: false };
+
+function dropBody(body: { fileSize: number; driveId?: string }) {
+  vi.mocked(safeParseBody).mockResolvedValue({ success: true, data: body } as never);
+}
 
 const postRequest = () => new Request('https://example.com/api/storage/check', {
   method: 'POST',
@@ -68,6 +116,11 @@ describe('GET /api/storage/check', () => {
     vi.clearAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth('user_1'));
     vi.mocked(isAuthError).mockReturnValue(false);
+    vi.mocked(getUserStorageQuota).mockResolvedValue({ userId: 'user_1', tier: 'free', usedBytes: 0, quotaBytes: 1e9, availableBytes: 1e9, utilizationPercent: 0, warningLevel: 'none' });
+    vi.mocked(resolveUploadQuotaTarget).mockImplementation(fakeResolve);
+    vi.mocked(checkUploadQuotaTarget).mockResolvedValue({ allowed: true });
+    vi.mocked(getUserDrivePermissions).mockResolvedValue(null);
+    dropBody({ fileSize: 1024 });
   });
 
   it('logs audit event on successful storage check', async () => {
@@ -161,6 +214,101 @@ describe('GET /api/storage/check', () => {
 
       expect(res.status).toBe(429);
       expect(body.allowed).toBe(false);
+    });
+  });
+
+  // #2719 review P1-1: the page-tree drop pre-checks the quota of the drive it drops into, so a
+  // member whose personal quota is full can still drop into an org drive with room. A drive is
+  // honoured only when the permissions seam says the caller can upload into it; anything else
+  // fails CLOSED to the caller's personal quota, identically whether or not the drive exists.
+  describe('WAL-9 (partial) the drop pre-check (POST /api/storage/check) uses the drop drive\'s quota', () => {
+    beforeEach(() => {
+      vi.mocked(checkUploadQuotaTarget).mockImplementation(fakeCheck);
+      vi.mocked(uploadSemaphore.canAcquireSlot).mockResolvedValue(true);
+      vi.mocked(countLiveUploadsForUser).mockResolvedValue(0);
+    });
+
+    it('allows a drop into an org drive with room when the personal quota is full', async () => {
+      vi.mocked(getUserDrivePermissions).mockResolvedValue(EDITOR);
+      dropBody({ fileSize: 10 * MiB, driveId: 'drive_org' });
+
+      const res = await POST(postRequest() as never);
+      const body = await res.json();
+
+      expect(res.status).toBe(200);
+      expect(body.allowed).toBe(true);
+      expect(getUserDrivePermissions).toHaveBeenCalledWith('user_1', 'drive_org');
+      expect(resolveUploadQuotaTarget).toHaveBeenCalledWith('user_1', 'drive_org');
+      expect(body.quota).toMatchObject({ orgId: 'org_northwind' });
+    });
+
+    it('refuses a drop into a personal drive when the personal quota is full', async () => {
+      vi.mocked(getUserDrivePermissions).mockResolvedValue({ ...EDITOR, isOwner: true, isMember: false });
+      dropBody({ fileSize: 10 * MiB, driveId: 'drive_own' });
+
+      const res = await POST(postRequest() as never);
+      const body = await res.json();
+
+      expect(res.status).toBe(413);
+      expect(body.allowed).toBe(false);
+      expect(body.quota).toMatchObject({ userId: 'user_1' });
+    });
+
+    it('refuses a drop naming an org drive the caller cannot access, checking the personal quota instead', async () => {
+      vi.mocked(getUserDrivePermissions).mockResolvedValue(null);
+      dropBody({ fileSize: 10 * MiB, driveId: 'drive_org_other' });
+
+      const res = await POST(postRequest() as never);
+      const body = await res.json();
+
+      expect(res.status).toBe(413);
+      expect(body.allowed).toBe(false);
+      expect(resolveUploadQuotaTarget).toHaveBeenCalledWith('user_1', null);
+      expect(resolveUploadQuotaTarget).not.toHaveBeenCalledWith('user_1', 'drive_org_other');
+      expect(JSON.stringify(body)).not.toContain('org_other');
+    });
+
+    it('refuses a drop into an org drive the caller can only view: upload needs drive-wide edit, as presign does', async () => {
+      vi.mocked(getUserDrivePermissions).mockResolvedValue(VIEWER);
+      dropBody({ fileSize: 10 * MiB, driveId: 'drive_org' });
+
+      const res = await POST(postRequest() as never);
+
+      expect(res.status).toBe(413);
+      expect(resolveUploadQuotaTarget).toHaveBeenCalledWith('user_1', null);
+    });
+
+    it('answers an inaccessible drive exactly as a drive that does not exist, and as no drive at all', async () => {
+      vi.mocked(getUserDrivePermissions).mockResolvedValue(null);
+      const answers: Array<{ status: number; body: unknown }> = [];
+      for (const body of [{ fileSize: 10 * MiB, driveId: 'drive_org_other' }, { fileSize: 10 * MiB, driveId: 'no_such_drive' }, { fileSize: 10 * MiB }]) {
+        dropBody(body);
+        const res = await POST(postRequest() as never);
+        answers.push({ status: res.status, body: await res.json() });
+      }
+
+      expect(answers[0]).toEqual(answers[2]);
+      expect(answers[1]).toEqual(answers[2]);
+    });
+
+    it('does not ask the permissions seam when the drop names no drive', async () => {
+      dropBody({ fileSize: 10 * MiB });
+
+      await POST(postRequest() as never);
+
+      expect(getUserDrivePermissions).not.toHaveBeenCalled();
+      expect(resolveUploadQuotaTarget).toHaveBeenCalledWith('user_1', null);
+    });
+
+    it('checks the per-user concurrency limit against the uploader\'s own tier, as presign\'s atomic reserve does', async () => {
+      vi.mocked(getUserDrivePermissions).mockResolvedValue(EDITOR);
+      vi.mocked(countLiveUploadsForUser).mockResolvedValue(3);
+      dropBody({ fileSize: 10 * MiB, driveId: 'drive_org' });
+
+      const res = await POST(postRequest() as never);
+
+      expect(res.status).toBe(429);
+      expect(uploadSemaphore.canAcquireSlot).toHaveBeenCalledWith('user_1', 'business');
     });
   });
 });

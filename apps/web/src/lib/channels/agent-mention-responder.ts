@@ -11,6 +11,7 @@ import {
   broadcastThreadReplyCountUpdated,
 } from '@/lib/websocket/socket-utils';
 import { notifyMentionedUsers } from '@/lib/channels/notify-mentioned-users';
+import { acquireMentionCreditHold } from '@/lib/channels/mention-credit-gate';
 import { processMentionsInMessage } from '@/lib/ai/core/mention-processor';
 import {
   buildCommandPromptSection,
@@ -417,6 +418,7 @@ function buildMentionerContext(
   params: TriggerMentionedAgentResponsesParams,
   conversationId: string,
   locationContext: ToolExecutionContext['locationContext'],
+  creditSpend?: ToolExecutionContext['creditSpend'],
 ): ToolExecutionContext {
   return {
     userId: params.userId,
@@ -424,6 +426,7 @@ function buildMentionerContext(
     locationContext,
     requestOrigin: 'user',
     agentCallDepth: 0,
+    ...(creditSpend ? { creditSpend } : {}),
   } as ToolExecutionContext;
 }
 
@@ -717,28 +720,44 @@ export async function triggerMentionedAgentResponses(
         if (isSoloHelpMention) {
           replyContent = await loadHelpAnswerText(params.userId, params.driveId ?? null);
         } else {
-          const rawAskResult: unknown = await askAgentExecute(
-            {
-              agentPath: `/${agent.title}`,
+          // SPEND-6: the reply spends the channel's drive wallet or is skipped — never the
+          // sender's credits — gated before the model call and settled on that wallet.
+          const hold = await acquireMentionCreditHold({ userId: params.userId, driveId: params.driveId });
+          if (!hold.allowed) {
+            channelMentionLogger.warn('Mentioned agent skipped (credit gate denied)', {
+              channelId: params.channelId,
               agentId: agent.id,
-              question,
-              context: [
-                `You were mentioned in the channel "${params.channelTitle}".`,
-                'Respond directly to the latest request and use recent channel context when relevant.',
-                '',
-                'Recent channel transcript (oldest to newest):',
-                transcript,
-                ...(commandContext ? ['', commandContext] : []),
-              ].join('\n'),
-              conversationId: mentionConversationId,
-              ...(imageAttachments.length > 0 ? { imageAttachments } : {}),
-            },
-            {
-              toolCallId: `channel-mention-ask-${params.sourceMessageId}-${agent.id}`,
-              messages: [],
-              experimental_context: buildMentionerContext(params, mentionConversationId, locationContext),
-            }
-          );
+              error: hold.error,
+            });
+            continue;
+          }
+          let rawAskResult: unknown;
+          try {
+            rawAskResult = await askAgentExecute(
+              {
+                agentPath: `/${agent.title}`,
+                agentId: agent.id,
+                question,
+                context: [
+                  `You were mentioned in the channel "${params.channelTitle}".`,
+                  'Respond directly to the latest request and use recent channel context when relevant.',
+                  '',
+                  'Recent channel transcript (oldest to newest):',
+                  transcript,
+                  ...(commandContext ? ['', commandContext] : []),
+                ].join('\n'),
+                conversationId: mentionConversationId,
+                ...(imageAttachments.length > 0 ? { imageAttachments } : {}),
+              },
+              {
+                toolCallId: `channel-mention-ask-${params.sourceMessageId}-${agent.id}`,
+                messages: [],
+                experimental_context: buildMentionerContext(params, mentionConversationId, locationContext, hold.creditSpend),
+              }
+            );
+          } finally {
+            hold.release();
+          }
 
           if (!isAskAgentResult(rawAskResult)) {
             channelMentionLogger.error('Mentioned agent returned a malformed result; skipping', {

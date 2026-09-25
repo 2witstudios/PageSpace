@@ -25,6 +25,7 @@ import { driveShareLinks, pageShareLinks } from '@pagespace/db/schema/share-link
 import { orgMembers, organizations, type OrgRole } from '@pagespace/db/schema/organizations';
 import { getActorInfo, logActivityWithTx } from '../monitoring/activity-logger';
 import { parseScopeList } from '../auth/oauth/scopes';
+import { closeStaleDriveJoinRequests } from '../permissions/drive-join-request-closure';
 
 /** A Drizzle transaction handle. */
 export type LeaveTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -388,6 +389,9 @@ export async function leaveOrganization(
   });
 
   await tx.delete(orgMembers).where(eq(orgMembers.id, membership.id));
+  // DRV-6: the leaver's pending join requests on the org's drives ask for nothing now (nor does one
+  // by a reassigned drive's new lead); approvers stop seeing them.
+  await closeStaleDriveJoinRequests(tx, driveRows.map((d) => d.id));
 
   return {
     ok: true,

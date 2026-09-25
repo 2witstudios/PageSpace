@@ -25,7 +25,7 @@ import {
   chargeStorageForStore,
   checkStorageQuotaForDrive,
   getOrgStorageQuota,
-  getStorageQuotaForDrive,
+  resolveUploadQuotaTarget,
   STORAGE_TIERS,
 } from '../storage-limits';
 import { storageRepository } from '../storage-repository';
@@ -163,7 +163,7 @@ describe('uploads into an org drive', () => {
     expect(intoOrg.allowed).toBe(true);
     expect(intoOrg.quota).toMatchObject({ orgId: northwind, tier: 'business' });
     expect(intoOwn.allowed).toBe(false);
-    expect(await getStorageQuotaForDrive(lena, orgDrive)).toMatchObject({ orgId: northwind });
+    expect((await resolveUploadQuotaTarget(lena, orgDrive))?.quota).toMatchObject({ orgId: northwind });
   });
 
   it('WAL-9 (partial) the org\'s usage is derived from every drive it owns, and nothing else', async () => {

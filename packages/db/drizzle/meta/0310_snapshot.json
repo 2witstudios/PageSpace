@@ -1,6 +1,6 @@
 {
-  "id": "90e3d87d-aada-4b45-b5fe-e600c3906593",
-  "prevId": "85177c65-2505-490f-822a-25c21fb78a1f",
+  "id": "16737f38-6e3c-452d-ab98-462e584e6249",
+  "prevId": "a8a871dc-2f72-488b-842e-ce2a6bbeaff2",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -18717,6 +18717,45 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.automation_skip_notices": {
+      "name": "automation_skip_notices",
+      "schema": "",
+      "columns": {
+        "driveId": {
+          "name": "driveId",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "lastNotifiedAt": {
+          "name": "lastNotifiedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "automation_skip_notices_driveId_drives_id_fk": {
+          "name": "automation_skip_notices_driveId_drives_id_fk",
+          "tableFrom": "automation_skip_notices",
+          "tableTo": "drives",
+          "columnsFrom": [
+            "driveId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.wallet_consumer_caps": {
       "name": "wallet_consumer_caps",
       "schema": "",
@@ -25973,6 +26012,7 @@
         "TOS_PRIVACY_UPDATED",
         "MENTION",
         "TASK_ASSIGNED",
+        "AUTOMATION_SKIPPED",
         "PRODUCT_UPDATE"
       ]
     },

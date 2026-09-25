@@ -335,7 +335,7 @@ describe('task-trigger-helpers', () => {
         mockReturning.mockResolvedValueOnce([mockTrigger]);
       };
 
-      it('hands the executor the credit gate as its admit hook, gating the owner as a scheduled run', async () => {
+      it('SPEND-6 (partial) hands the executor the credit gate as its admit hook, gating the drive the workflow runs in as a scheduled run', async () => {
         claimAndLoad();
         const admit = async () => ({ admitted: true as const, release: () => {} });
         mockCreditAdmission.mockReturnValue(admit);
@@ -347,6 +347,8 @@ describe('task-trigger-helpers', () => {
         expect(options?.admit).toBe(admit);
         expect(mockCreditAdmission).toHaveBeenCalledWith(input, 'scheduled');
         expect(input.createdBy).toBe('user-1');
+        // SPEND-6: the gate is told the drive the run spends; the creator is only who it is recorded against.
+        expect(input.driveId).toBe('drive-1');
       });
 
       it('a refused fire retires the one-shot trigger with the reason', async () => {

@@ -27,7 +27,9 @@ vi.mock('@pagespace/lib/billing/credit-pricing', () => ({
 
 import { acquireWorkflowCreditHold, creditAdmission, creditDeniedError } from '../workflow-credit-gate';
 
-const LEGACY_AI_WORKFLOW = { createdBy: 'user_1', steps: null, prompt: 'Summarize', agentPageId: 'agent_1' };
+// Northwind's weekly digest: Marcus (user_1) created it in Product; its runs spend Product's wallet (SPEND-6).
+const LEGACY_AI_WORKFLOW = { driveId: 'drive_product', createdBy: 'user_1', steps: null, prompt: 'Summarize', agentPageId: 'agent_1' };
+const PRODUCT_AUTOMATION = { kind: 'automation', driveId: 'drive_product' };
 
 describe('acquireWorkflowCreditHold', () => {
   beforeEach(() => {
@@ -36,6 +38,15 @@ describe('acquireWorkflowCreditHold', () => {
     mockSelectFrom.mockReturnValue({ where: mockSelectWhere });
     mockSelectWhere.mockResolvedValue([{ subscriptionTier: 'pro' }]);
     mockReleaseHold.mockResolvedValue(undefined);
+  });
+
+  it('SPEND-6 (partial) a workflow run names its drive as the consumer, never the person who created it', async () => {
+    mockCanConsumeAI.mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'hold_1', walletId: 'w_product' });
+
+    await acquireWorkflowCreditHold(LEGACY_AI_WORKFLOW, 'scheduled');
+    await acquireWorkflowCreditHold(LEGACY_AI_WORKFLOW, 'interactive');
+
+    expect(mockCanConsumeAI.mock.calls.map((call) => call[2].spend)).toEqual([PRODUCT_AUTOMATION, PRODUCT_AUTOMATION]);
   });
 
   it('gates the billed user at their tier before any model runs', async () => {
@@ -74,7 +85,7 @@ describe('acquireWorkflowCreditHold', () => {
       { kind: 'ai', prompt: 'b' },
     ];
 
-    await acquireWorkflowCreditHold({ createdBy: 'user_1', steps, prompt: '', agentPageId: null }, 'scheduled');
+    await acquireWorkflowCreditHold({ driveId: 'drive_product', createdBy: 'user_1', steps, prompt: '', agentPageId: null }, 'scheduled');
 
     expect(mockCanConsumeAI.mock.calls[0][2].estCostCents).toBe(20);
   });
@@ -84,7 +95,7 @@ describe('acquireWorkflowCreditHold', () => {
 
     await acquireWorkflowCreditHold(LEGACY_AI_WORKFLOW, 'scheduled');
 
-    expect(mockCanConsumeAI.mock.calls[0][2]).toEqual({ spend: { kind: 'personal' }, estCostCents: 10, skipDailyCap: true });
+    expect(mockCanConsumeAI.mock.calls[0][2]).toEqual({ spend: PRODUCT_AUTOMATION, estCostCents: 10, skipDailyCap: true });
   });
 
   it('manual runs keep the daily cap and pass the interactive in-flight cap', async () => {
@@ -92,13 +103,13 @@ describe('acquireWorkflowCreditHold', () => {
 
     await acquireWorkflowCreditHold(LEGACY_AI_WORKFLOW, 'interactive');
 
-    expect(mockCanConsumeAI.mock.calls[0][2]).toEqual({ spend: { kind: 'personal' }, estCostCents: 10, maxInFlight: 3 });
+    expect(mockCanConsumeAI.mock.calls[0][2]).toEqual({ spend: PRODUCT_AUTOMATION, estCostCents: 10, maxInFlight: 3 });
   });
 
   it('a deterministic-only chain runs no model, so it takes no gate and no hold', async () => {
     const steps: WorkflowStep[] = [{ kind: 'tool', toolName: 'send_channel_message', args: {} }];
 
-    const hold = await acquireWorkflowCreditHold({ createdBy: 'user_1', steps, prompt: '', agentPageId: null }, 'scheduled');
+    const hold = await acquireWorkflowCreditHold({ driveId: 'drive_product', createdBy: 'user_1', steps, prompt: '', agentPageId: null }, 'scheduled');
 
     expect(hold.allowed).toBe(true);
     expect(mockCanConsumeAI).not.toHaveBeenCalled();
@@ -144,6 +155,11 @@ describe('creditDeniedError', () => {
   it('names the gate and the reason, matching the trigger executors', () => {
     expect(creditDeniedError('out_of_credits')).toBe('AI credit gate denied: out_of_credits');
   });
+
+  it('SPEND-6 (partial) a skipped run names why the drive wallet could not pay', () => {
+    expect(creditDeniedError('source_refused', { source: 'drive_wallet', reason: 'drive_wallet_empty', options: [] }))
+      .toBe('AI credit gate denied: source_refused (drive_wallet_empty)');
+  });
 });
 
 describe('creditAdmission', () => {
@@ -169,6 +185,30 @@ describe('creditAdmission', () => {
     admission.release();
 
     expect(mockReleaseHold).toHaveBeenCalledWith('hold_1');
+  });
+
+  it('SPEND-6 (partial) an admitted run carries the wallet the gate reserved on, so the run settles on the drive wallet', async () => {
+    mockCanConsumeAI.mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'hold_1', walletId: 'w_product' });
+
+    const admission = await creditAdmission(LEGACY_AI_WORKFLOW, 'scheduled')();
+
+    expect(admission).toMatchObject({ admitted: true, creditSpend: { spend: PRODUCT_AUTOMATION, walletId: 'w_product' } });
+  });
+
+  it('SPEND-6 (partial) an empty drive wallet refuses the run as a skip naming the wallet reason; the person is never gated instead', async () => {
+    mockCanConsumeAI.mockResolvedValue({
+      allowed: false,
+      reason: 'source_refused',
+      refusal: { source: 'drive_wallet', reason: 'drive_wallet_empty', options: [] },
+    });
+    const onDenied = vi.fn();
+
+    const admission = await creditAdmission(LEGACY_AI_WORKFLOW, 'scheduled', onDenied)();
+
+    expect(admission).toEqual({ admitted: false, error: 'AI credit gate denied: source_refused (drive_wallet_empty)' });
+    expect(onDenied).toHaveBeenCalledWith('source_refused');
+    expect(mockCanConsumeAI).toHaveBeenCalledTimes(1);
+    expect(mockCanConsumeAI.mock.calls[0][2].spend).toEqual(PRODUCT_AUTOMATION);
   });
 
   it('refuses with the reason as the run error and hands the raw reason to onDenied', async () => {

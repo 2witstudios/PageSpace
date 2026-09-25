@@ -221,20 +221,28 @@ describe('getUserDrivePermissions', () => {
     });
   });
 
-  it('given a VIEWER role, returns { isMember: true, canEdit: false }', async () => {
+  it('given a role nobody classified (VIEWER), fails closed: no drive-level membership, a warning, no throw', async () => {
     vi.mocked(db.select)
       .mockReturnValueOnce(stubDriveLookup([{ id: DRIVE, ownerId: 'other-user' }]))
       .mockReturnValueOnce(stubMembershipLookup([{ role: 'VIEWER' }]));
 
     const result = await getUserDrivePermissions(USER, DRIVE);
 
-    expect(result).toEqual({
-      hasAccess: true,
-      isOwner: false,
-      isAdmin: false,
-      isMember: true,
-      canEdit: false,
-    });
+    expect(result).toBeNull();
+    expect(loggers.api.warn).toHaveBeenCalledWith(
+      expect.stringContaining('Unclassified drive member role'),
+      expect.objectContaining({ role: 'VIEWER' }),
+    );
+    expect(loggers.api.error).not.toHaveBeenCalled();
+  });
+
+  it('D-OW-24 given a GUEST row (a redeemed page share link), returns no drive-level membership', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubDriveLookup([{ id: DRIVE, ownerId: 'other-user' }]))
+      .mockReturnValueOnce(stubMembershipLookup([{ role: 'GUEST' }]));
+
+    expect(await getUserDrivePermissions(USER, DRIVE)).toBeNull();
+    expect(loggers.api.warn).not.toHaveBeenCalled();
   });
 
   it('given no drive, returns null', async () => {
@@ -362,7 +370,7 @@ describe('getUserDriveAccess (silent: false branches)', () => {
   it('given accepted drive member, logs and returns true', async () => {
     vi.mocked(db.select)
       .mockReturnValueOnce(stubDriveLookup([{ id: DRIVE, ownerId: 'other-user' }]))
-      .mockReturnValueOnce(stubMembershipLookup([{ id: 'member-row' }]));
+      .mockReturnValueOnce(stubMembershipLookup([{ id: 'member-row', role: 'MEMBER' }]));
 
     const result = await getUserDriveAccess(USER, DRIVE, { silent: false });
 

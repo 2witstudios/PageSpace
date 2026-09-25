@@ -204,7 +204,9 @@ export function decideChangeDriveVisibility({
 
 /**
  * Hand an org drive to a new lead (DRV-1, D-OW-7). The target must be an org member; a personal
- * drive is never changed here (account/handle-drive and ownership transfer own those).
+ * drive is never changed here (account/handle-drive and ownership transfer own those). A trashed
+ * drive keeps its lead until restored, as it keeps its visibility. (A lead who leaves the org is
+ * reassigned by reassignLedOrgDrives, trashed drives included: that path does not come here.)
  */
 export function decideChangeOrgDriveLead({
   drive,
@@ -222,6 +224,9 @@ export function decideChangeOrgDriveLead({
 }): { ok: true; changed: boolean; fromUserId: string; toUserId: string } | OrgDriveRefusal {
   const refusal = authorizeOrgDriveChange(drive, actorId, actorOrgRole, "this drive's lead");
   if (refusal) return refusal;
+  if (drive.isTrashed) {
+    return refuse('DRIVE_TRASHED', 409, "Restore this drive from trash before changing its lead.");
+  }
   if (isDriveLead(targetId, drive)) return { ok: true, changed: false, fromUserId: drive.ownerId, toUserId: targetId };
   if (!canLeadOrgDrive(targetOrgRole)) {
     return refuse('TARGET_NOT_ORG_MEMBER', 409, 'The new lead must be a member of the organization.');

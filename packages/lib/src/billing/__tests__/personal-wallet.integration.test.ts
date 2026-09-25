@@ -16,7 +16,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import { db } from '@pagespace/db/db';
 import { and, eq, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
-import { wallets } from '@pagespace/db/schema/wallets';
+import { wallets, walletFundingLegs } from '@pagespace/db/schema/wallets';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { ensurePersonalRootWalletId } from '../personal-wallet';
@@ -141,13 +141,20 @@ describe('ensurePersonalRootWalletId', () => {
     const user = await factories.createUser();
     try {
       const rootId = await ensurePersonalRootWalletId(db, user.id);
-      await db.insert(wallets).values({
-        ownerType: 'user',
-        userId: user.id,
-        subjectType: 'drive',
-        subjectId: `drive-${user.id}`,
-        parentWalletId: rootId,
-        topupRemainingCents: 900,
+      // A funded drive wallet (its 900 is an owner funding leg, written with it so the row
+      // mirrors its legs, D-OW-13): money of the person's that is still not their root.
+      await db.transaction(async (tx) => {
+        const [driveWallet] = await tx.insert(wallets).values({
+          ownerType: 'user',
+          userId: user.id,
+          subjectType: 'drive',
+          subjectId: `drive-${user.id}`,
+          parentWalletId: rootId,
+          topupRemainingCents: 900,
+        }).returning({ id: wallets.id });
+        await tx.insert(walletFundingLegs).values({
+          walletId: driveWallet.id, funderKind: 'owner', funderUserId: user.id, originalCents: 900, remainingCents: 900, nonRefundable: false,
+        });
       });
 
       expect(await ensurePersonalRootWalletId(db, user.id)).toBe(rootId);

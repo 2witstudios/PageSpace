@@ -1624,6 +1624,18 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
       const assistantSave = mockSaveMessageToDatabase.mock.calls.find((c: { role?: string }[]) => c[0]?.role === 'assistant');
       expect(assistantSave).toBeUndefined();
     });
+
+    it('WAL-5 (partial) given a gated turn that fails after the gate, settles on the wallet its hold was placed on', async () => {
+      mockCanConsumeAI.mockResolvedValueOnce({ allowed: true, holdId: 'hold-err', walletId: 'wallet-drive' });
+      mockTakeOverConversationStreams.mockRejectedValue(new Error('takeover boom'));
+
+      await POST(makeRequest());
+
+      const calls = vi.mocked(AIMonitoring.trackUsage).mock.calls;
+      expect(calls).toHaveLength(1);
+      expect({ success: calls[0][0].success, holdId: calls[0][0].holdId, walletId: calls[0][0].walletId })
+        .toEqual({ success: false, holdId: 'hold-err', walletId: 'wallet-drive' });
+    });
   });
 
   // A Stop (or the credit ceiling) aborting the step that is still streaming. ai@6 then
@@ -1662,6 +1674,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
         mockCanConsumeAI.mockResolvedValueOnce({
           allowed: true,
           holdId: 'hold-1',
+          walletId: 'wallet-drive',
           balanceSnapshot: { netSpendableCents: 1000 },
         });
         vi.mocked(createAIProvider).mockResolvedValueOnce({
@@ -1683,6 +1696,8 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
       expect(calls).toHaveLength(1);
       const settled = calls[0][0];
       expect(settled.holdId).toBe('hold-1');
+      // WAL-5: the interrupted turn settles on the wallet its hold was placed on.
+      expect(settled.walletId).toBe('wallet-drive');
       // 50 output tokens were streamed (200 chars); the prompt is estimated, never zero.
       expect(settled.outputTokens).toBe(50);
       expect(settled.inputTokens).toBeGreaterThan(0);

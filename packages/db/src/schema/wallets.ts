@@ -3,6 +3,7 @@ import { relations, sql, and, eq, isNull, type SQL } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
 import { organizations } from './organizations';
+import { drives } from './core';
 
 /**
  * wallets — every balance in PageSpace (Spec WAL-1, WAL-2; X-5).
@@ -209,6 +210,20 @@ export const walletConsumerCaps = pgTable('wallet_consumer_caps', {
   dailyNonNeg: check('wallet_consumer_caps_daily_nonneg', sql`${table.dailyCapCents} IS NULL OR ${table.dailyCapCents} >= 0`),
   monthlyNonNeg: check('wallet_consumer_caps_monthly_nonneg', sql`${table.monthlyCapCents} IS NULL OR ${table.monthlyCapCents} >= 0`),
 }));
+
+/**
+ * automationSkipNotices — when a drive's lead was last told that an automation in the drive
+ * was skipped for want of drive-wallet funds (SPEND-6), so the notice goes out at most once
+ * per period. One row per drive, keyed by the drive rather than its wallet: a drive with no
+ * wallet at all skips too, and has no wallet row to stamp.
+ *
+ * `lastNotifiedAt` is timestamp WITHOUT time zone holding UTC wall-clock, written only as
+ * `(now() at time zone 'utc')`, so the period boundary never follows a session time zone.
+ */
+export const automationSkipNotices = pgTable('automation_skip_notices', {
+  driveId: text('driveId').primaryKey().references(() => drives.id, { onDelete: 'cascade' }),
+  lastNotifiedAt: timestamp('lastNotifiedAt', { mode: 'date' }).notNull(),
+});
 
 /** Mirrors wallet-core `FundingLeg['funder']`: the wallet owner's own top-up, or a donation (WAL-4). */
 export const FUNDING_LEG_KINDS = ['owner', 'donation'] as const;

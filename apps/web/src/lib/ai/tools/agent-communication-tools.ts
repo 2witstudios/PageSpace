@@ -853,7 +853,14 @@ export async function executeAskAgent(
         // so we launch directly — the parent stream is still open but this is safe
         // as a detached promise (no response coupling).
         if (prepared.pendingCompaction) {
-          void runCompaction(prepared.pendingCompaction);
+          // The compaction is part of this turn's spend: it settles on the wallet the turn
+          // was gated on (a mention reply's drive wallet), never the caller's own (SPEND-6).
+          const compactionWalletId = executionContext?.creditSpend?.walletId;
+          void runCompaction(
+            compactionWalletId
+              ? { ...prepared.pendingCompaction, walletId: compactionWalletId }
+              : prepared.pendingCompaction,
+          );
         }
 
         // Bill the requesting user for the sub-agent run. Use totalUsage so all

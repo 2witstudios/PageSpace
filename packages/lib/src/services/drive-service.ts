@@ -15,7 +15,7 @@ import { slugify } from '../utils/utils';
 import { customRoleBelongsToDrive, getMemberCustomRoleId, resolveDriveWideCanEdit } from '../permissions/membership-queries';
 import { loadEffectiveDriveMembership, loadExplicitScopeAuthority, loadOrgRolesForUser, resolveEffectiveDriveMemberships } from '../permissions/org-drive-membership';
 import { decideExplicitDriveScope, decideListedDriveRole, type ExplicitScopeAuthority } from '../permissions/org-drive-resolution';
-import type { DriveMemberRole } from '../permissions/org-access';
+import { driveMembershipRow } from '../permissions/drive-member-role';
 import { ORGS_ENABLED } from '../organizations/orgs-enabled';
 import { isDriveLead } from '../permissions/drive-relationship';
 
@@ -281,7 +281,7 @@ async function listAccessibleDrivesWithOrgs(
       return {
         userId,
         drive,
-        row: row ? { role: row.role as DriveMemberRole, customRoleId: row.customRoleId, source: row.source } : null,
+        row: driveMembershipRow(row),
       };
     }),
     { audit: false },
@@ -309,7 +309,7 @@ async function listAccessibleDrivesWithOrgs(
       orgsEnabled: true,
       drive: { orgId: drive.orgId, orgVisibility: drive.orgVisibility },
       orgRole: drive.orgId ? orgRoles.get(drive.orgId) ?? null : null,
-      row: row ? { role: row.role as DriveMemberRole, customRoleId: row.customRoleId, source: row.source } : null,
+      row: driveMembershipRow(row),
       viaPagePermission: permissionDriveIds.has(drive.id),
     });
     if (role === null) continue;

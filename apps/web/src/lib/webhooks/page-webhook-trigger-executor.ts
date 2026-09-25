@@ -12,7 +12,8 @@ import {
 } from '@/lib/workflows/workflow-executor';
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
-import { PERSONAL_SPEND } from '@pagespace/lib/billing/spend-target';
+import { automationSpend } from '@pagespace/lib/billing/spend-target';
+import { creditDeniedError } from '@/lib/workflows/workflow-credit-gate';
 import { WEBHOOK_DAILY_EXPOSURE_CAP_CENTS, CREDIT_HOLD_ESTIMATE_CENTS } from '@pagespace/lib/billing/credit-pricing';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
@@ -192,7 +193,11 @@ export async function executePageWebhookTrigger(
     //    MAX_WORKFLOW_STEPS), so the reservation must be sized by the
     //    chain's ai-step count or a multi-step chain blows straight through
     //    the daily exposure ceiling this gate exists to enforce.
+    // SPEND-6: a webhook fire has no person present; it spends the workflow's drive wallet
+    // or is skipped, never the workflow creator's credits or allowance.
+    const spend = automationSpend(workflow.driveId);
     let holdId: string | undefined;
+    let walletId: string | undefined;
     if (needsAi) {
       const [owner] = await db
         .select({ subscriptionTier: users.subscriptionTier })
@@ -202,9 +207,7 @@ export async function executePageWebhookTrigger(
         workflow.createdBy,
         (owner?.subscriptionTier ?? 'free') as SubscriptionTier,
         {
-          // Automations spend the drive wallet only (SPEND-6) once lane C4 lands; until
-          // then the run bills the person it has always billed, named here explicitly.
-          spend: PERSONAL_SPEND,
+          spend,
           dailyCapCeilingCents: WEBHOOK_DAILY_EXPOSURE_CAP_CENTS,
           estCostCents: CREDIT_HOLD_ESTIMATE_CENTS * countAiSteps(steps),
         },
@@ -213,14 +216,16 @@ export async function executePageWebhookTrigger(
         logger.info('Page webhook trigger: skipped (credit gate denied)', {
           triggerId: trigger.id,
           reason: gate.reason,
+          refusal: gate.refusal?.reason,
         });
         return {
           success: false,
           durationMs: Date.now() - startTime,
-          error: `AI credit gate denied: ${gate.reason}`,
+          error: creditDeniedError(gate.reason, gate.refusal),
         };
       }
       holdId = gate.holdId;
+      walletId = gate.walletId;
     }
 
     // 7. Compose execution input — executeWorkflow writes workflow_runs and
@@ -252,7 +257,7 @@ export async function executePageWebhookTrigger(
     // execution, whether it succeeds, fails, or throws.
     let result: WorkflowExecutionResult;
     try {
-      result = await executeWorkflow(input);
+      result = await executeWorkflow(input, { creditSpend: { spend, walletId } });
     } finally {
       if (holdId) void releaseHold(holdId).catch(() => {});
     }

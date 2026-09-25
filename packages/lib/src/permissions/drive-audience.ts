@@ -5,7 +5,7 @@ import { driveMembers, driveRoles } from '@pagespace/db/schema/members';
 import { orgMembers, type OrgRole } from '@pagespace/db/schema/organizations';
 import { ORGS_ENABLED } from '../organizations/orgs-enabled';
 import { decideDriveAudience, type DriveAudienceMember, type DriveAudienceRow } from './org-drive-resolution';
-import type { DriveMemberRole } from './org-access';
+import { driveMembershipRow } from './drive-member-role';
 
 
 /** Chunk size for id IN lists (Postgres bind parameter limit). */
@@ -40,8 +40,11 @@ export async function listDriveAudiences(driveIds: string[]): Promise<Map<string
       .from(driveMembers)
       .where(and(inArray(driveMembers.driveId, chunk), isNotNull(driveMembers.acceptedAt)));
     for (const row of rows) {
+      // A GUEST row (a redeemed page share link) is no membership: never in the drive's audience.
+      const membership = driveMembershipRow(row);
+      if (membership === null) continue;
       const list = rowsByDrive.get(row.driveId) ?? [];
-      list.push({ userId: row.userId, role: row.role as DriveMemberRole, customRoleId: row.customRoleId, source: row.source });
+      list.push({ userId: row.userId, ...membership });
       rowsByDrive.set(row.driveId, list);
     }
   }

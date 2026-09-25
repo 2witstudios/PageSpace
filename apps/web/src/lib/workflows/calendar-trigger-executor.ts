@@ -10,7 +10,8 @@ import type { CalendarTrigger } from '@pagespace/db/schema/calendar-triggers';
 import { executeWorkflow, type WorkflowExecutionResult, type WorkflowExecutionInput } from './workflow-executor';
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
-import { PERSONAL_SPEND } from '@pagespace/lib/billing/spend-target';
+import { automationSpend } from '@pagespace/lib/billing/spend-target';
+import { creditDeniedError } from '@/lib/workflows/workflow-credit-gate';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -76,19 +77,21 @@ export async function executeCalendarTrigger(
       .select({ subscriptionTier: users.subscriptionTier })
       .from(users)
       .where(eq(users.id, trigger.scheduledById));
+    //    SPEND-6: a trigger has no person present; it spends the workflow's drive wallet
+    //    or is skipped, never the scheduling user's credits or allowance.
+    const spend = automationSpend(workflow.driveId);
     const gate = await canConsumeAI(
       trigger.scheduledById,
       (schedulingUser?.subscriptionTier ?? 'free') as SubscriptionTier,
-      // Automations spend the drive wallet only (SPEND-6) once lane C4 lands; until then
-      // the run bills the person it has always billed, named here explicitly.
-      { spend: PERSONAL_SPEND, skipDailyCap: true },
+      { spend, skipDailyCap: true },
     );
     if (!gate.allowed) {
       logger.info('Calendar trigger: skipped (credit gate denied)', {
         triggerId: trigger.id,
         reason: gate.reason,
+        refusal: gate.refusal?.reason,
       });
-      return { success: false, durationMs: Date.now() - startTime, error: `AI credit gate denied: ${gate.reason}` };
+      return { success: false, durationMs: Date.now() - startTime, error: creditDeniedError(gate.reason, gate.refusal) };
     }
     const holdId = gate.holdId;
 
@@ -118,7 +121,7 @@ export async function executeCalendarTrigger(
     // so the user's spendable balance is accurate immediately after execution.
     let result: WorkflowExecutionResult;
     try {
-      result = await executeWorkflow(input);
+      result = await executeWorkflow(input, { creditSpend: { spend, walletId: gate.walletId } });
     } finally {
       if (holdId) void releaseHold(holdId).catch(() => {});
     }

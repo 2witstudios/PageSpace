@@ -20,6 +20,7 @@ import { drives } from '@pagespace/db/schema/core';
 import { driveMembers, driveRoles } from '@pagespace/db/schema/members';
 import { driveJoinRequests } from '@pagespace/db/schema/drive-join-requests';
 import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
+import { activityLogs } from '@pagespace/db/schema/monitoring';
 import {
   answerDriveJoinRequest,
   listPendingDriveJoinRequests,
@@ -30,6 +31,10 @@ import { syncDriveOrgMembership, syncOrgMemberAccess, syncOrgMembership } from '
 import { getDriveRecipientUserIds } from '../drive-member-service';
 import { listAccessibleDrives } from '../drive-service';
 import { getUserDriveAccess, usersShareDrive } from '../../permissions/permissions';
+import { changeDriveVisibility, changeOrgDriveLead, moveDriveOutOfOrg } from '../org-drive-service';
+import { orgDriveServiceDeps } from '../org-drive-service-deps';
+import { leaveOrganization } from '../../organizations/leave';
+import { deleteOrganization } from '../../organizations/deletion';
 
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
@@ -50,6 +55,9 @@ let defaultRoleId: string;
 
 /** Children before parents, users last: CI shares one database across suites. */
 async function cleanup() {
+  // Lead changes, leaves and org deletion write activity events on the drive and by these people.
+  const ours = await db.select({ id: drives.id }).from(drives).where(or(eq(drives.orgId, northwind), inArray(drives.ownerId, userIds)));
+  await db.delete(activityLogs).where(or(inArray(activityLogs.userId, userIds), inArray(activityLogs.resourceId, [northwind, ...ours.map((d) => d.id)])));
   await db.delete(drives).where(or(eq(drives.orgId, northwind), inArray(drives.ownerId, userIds)));
   await db.delete(orgMembers).where(eq(orgMembers.orgId, northwind));
   await db.delete(organizations).where(eq(organizations.id, northwind));
@@ -265,5 +273,118 @@ describe('listPendingDriveJoinRequests', () => {
     expect(await listPendingDriveJoinRequests(priya, research)).toMatchObject({ ok: true });
     expect(await listPendingDriveJoinRequests(nina, research)).toMatchObject({ ok: false, code: 'NOT_APPROVER' });
     expect(await listPendingDriveJoinRequests(chris, research)).toMatchObject({ ok: false, code: 'REQUEST_NOT_FOUND' });
+  });
+});
+
+describe('a pending request closes when what it asked for is gone', () => {
+  const statusOf = async (requestId: string) => {
+    const [row] = await db.select().from(driveJoinRequests).where(eq(driveJoinRequests.id, requestId));
+    return row;
+  };
+  const pendingFor = async (approverId: string) => {
+    const listed = await listPendingDriveJoinRequests(approverId, research);
+    return listed.ok ? listed.requests.map((r) => r.userId) : listed.code;
+  };
+  const expectClosed = async (requestId: string) => {
+    const row = await statusOf(requestId);
+    expect(row).toMatchObject({ status: 'withdrawn', decidedBy: null });
+    expect(row.decidedAt).not.toBeNull();
+  };
+
+  it('DRV-6 (partial) the drive leaving Restricted for Open closes it, off the approver list', async () => {
+    const { request } = await requestAs(lena);
+
+    expect(await changeDriveVisibility(priya, research, { orgVisibility: 'OPEN' }, orgDriveServiceDeps)).toMatchObject({ ok: true, changed: true });
+
+    await expectClosed(request.id);
+    expect(await pendingFor(marcus)).toEqual([]);
+  });
+
+  it('DRV-6 (partial) the drive leaving Restricted for Private closes it, and a return to Restricted does not revive it', async () => {
+    const { request } = await requestAs(lena);
+
+    await changeDriveVisibility(priya, research, { orgVisibility: 'PRIVATE' }, orgDriveServiceDeps);
+    await expectClosed(request.id);
+    await changeDriveVisibility(priya, research, { orgVisibility: 'RESTRICTED' }, orgDriveServiceDeps);
+
+    await expectClosed(request.id);
+    expect(await answerDriveJoinRequest(marcus, research, request.id, 'approve')).toMatchObject({ ok: false, code: 'NOT_PENDING' });
+    expect(await rowsOf(lena)).toHaveLength(0);
+  });
+
+  it('DRV-6 (partial) the requester leaving the org closes their request, and the lead no longer sees their name or email; another request stays', async () => {
+    const lenaRequest = (await requestAs(lena)).request;
+    const ninaRequest = (await requestAs(nina)).request;
+
+    expect(await leaveOrganization(lena, northwind)).toMatchObject({ ok: true });
+
+    await expectClosed(lenaRequest.id);
+    expect((await statusOf(ninaRequest.id)).status).toBe('pending');
+    expect(await pendingFor(marcus)).toEqual([nina]);
+  });
+
+  it('DRV-6 (partial) the drive moving out of the org closes every request on it', async () => {
+    const { request } = await requestAs(lena);
+
+    expect(await moveDriveOutOfOrg(priya, research, { implicitMembers: 'remove' }, orgDriveServiceDeps)).toMatchObject({ ok: true });
+
+    await expectClosed(request.id);
+  });
+
+  it('DRV-6 (partial) the requester becoming the lead closes their request; another requester\'s stays with the new lead', async () => {
+    const lenaRequest = (await requestAs(lena)).request;
+    const ninaRequest = (await requestAs(nina)).request;
+
+    expect(await changeOrgDriveLead(priya, research, { newLeadId: lena }, orgDriveServiceDeps)).toMatchObject({ ok: true, changed: true });
+
+    await expectClosed(lenaRequest.id);
+    expect((await statusOf(ninaRequest.id)).status).toBe('pending');
+    const forNewLead = await listPendingDriveJoinRequests(lena, research);
+    expect(forNewLead.ok && forNewLead.requests.map((r) => r.userId)).toEqual([nina]);
+  });
+
+  it('DRV-6 (partial) a requester who became a member another way drops off the approver list at once, and the next transition closes the request', async () => {
+    const lenaRequest = (await requestAs(lena)).request;
+    const ninaRequest = (await requestAs(nina)).request;
+    // The lead invited Lena directly and she accepted (a path that never looks at join requests).
+    await db.insert(driveMembers).values({ driveId: research, userId: lena, role: 'MEMBER', invitedBy: marcus, acceptedAt: new Date() });
+
+    expect(await pendingFor(marcus)).toEqual([nina]);
+    expect((await statusOf(lenaRequest.id)).status).toBe('pending');
+
+    await changeOrgDriveLead(priya, research, { newLeadId: jono }, orgDriveServiceDeps);
+    await expectClosed(lenaRequest.id);
+    expect((await statusOf(ninaRequest.id)).status).toBe('pending');
+  });
+
+  it('DRV-6 (partial) a pending invitation is no membership: its holder\'s request stays on the list and open through a transition', async () => {
+    const { request } = await requestAs(lena);
+    await db.insert(driveMembers).values({ driveId: research, userId: lena, role: 'MEMBER', invitedBy: marcus });
+
+    expect(await pendingFor(marcus)).toEqual([lena]);
+    await changeOrgDriveLead(priya, research, { newLeadId: jono }, orgDriveServiceDeps);
+    expect((await statusOf(request.id)).status).toBe('pending');
+  });
+
+  it('DRV-6 (partial) deleting the org closes the requests on its drives', async () => {
+    const { request } = await requestAs(lena);
+
+    expect(await deleteOrganization({ actorId: jono, orgId: northwind, choices: [{ driveId: research, action: 'trash' }], now: new Date() }))
+      .toMatchObject({ ok: true });
+
+    await expectClosed(request.id);
+  });
+});
+
+describe('the join-request approver list is no existence oracle for a Private drive', () => {
+  it('DRV-7 (partial) a plain org member gets the same answer for a Private drive of their org as for a drive that does not exist', async () => {
+    await db.update(drives).set({ orgVisibility: 'PRIVATE' }).where(eq(drives.id, research));
+
+    const forPrivate = await listPendingDriveJoinRequests(nina, research);
+    const forMissing = await listPendingDriveJoinRequests(nina, createId());
+
+    expect(forPrivate).toEqual(forMissing);
+    expect(forPrivate).toMatchObject({ ok: false, code: 'REQUEST_NOT_FOUND', status: 404 });
+    expect(await listPendingDriveJoinRequests(marcus, research)).toMatchObject({ ok: true });
   });
 });

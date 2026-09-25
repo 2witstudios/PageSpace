@@ -9,8 +9,8 @@
  */
 
 import {
-  getStorageQuotaForDrive,
-  checkStorageQuotaForDrive,
+  resolveUploadQuotaTarget,
+  checkUploadQuotaTarget,
   reserveConcurrentUploadSlot,
   chargeStorageForStore,
   shouldChargeForStore,
@@ -60,16 +60,18 @@ export async function presignAttachment(args: PresignAttachmentArgs): Promise<Or
   const { userId, target, request, contentHash, filename, mimeType, fileSize } = args;
 
   // WAL-9, O-9: a channel attachment in an org drive is checked against the org's quota; a DM
-  // attachment has no drive and stays on the uploader's.
+  // attachment has no drive and stays on the uploader's. Resolved once, so the org's usage is
+  // read once per request (#2719 review P2-2).
   const fileDriveId = attachmentFileDriveId(target);
-  const quota = await getStorageQuotaForDrive(userId, fileDriveId);
-  if (!quota) return { status: 500, body: { error: 'Could not retrieve storage quota' } };
+  const quotaTarget = await resolveUploadQuotaTarget(userId, fileDriveId);
+  if (!quotaTarget) return { status: 500, body: { error: 'Could not retrieve storage quota' } };
+  const { quota } = quotaTarget;
 
   const validation = validateAttachmentPresign({ contentHash, mimeType, fileSize, tier: quota.tier });
   if (!validation.ok) return { status: validation.status, body: { error: validation.error } };
   const canonicalHash = validation.canonicalHash;
 
-  const quotaCheck = await checkStorageQuotaForDrive(userId, fileDriveId, fileSize);
+  const quotaCheck = await checkUploadQuotaTarget(quotaTarget, fileSize);
   if (!quotaCheck.allowed) {
     return { status: 413, body: { error: quotaCheck.reason, storageInfo: quotaCheck.quota } };
   }

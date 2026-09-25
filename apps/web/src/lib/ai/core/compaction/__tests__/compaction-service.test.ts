@@ -96,6 +96,16 @@ describe('runCompaction', () => {
     expect(call.source).toBe('compaction');
   });
 
+  it('SPEND-6 (partial) a compaction settles on the wallet the turn it belongs to reserved on', async () => {
+    await runCompaction({ ...BASE_PARAMS, walletId: 'w-product' });
+    expect(mockTrackUsage.mock.calls[0][0].walletId).toBe('w-product');
+  });
+
+  it('a compaction whose turn named no wallet passes none (the personal-root settle, as before wallets)', async () => {
+    await runCompaction(BASE_PARAMS);
+    expect(mockTrackUsage.mock.calls[0][0].walletId).toBeUndefined();
+  });
+
   it('never throws even when generateText throws', async () => {
     mockGenerateText.mockRejectedValue(new Error('LLM down'));
     await expect(runCompaction(BASE_PARAMS)).resolves.not.toThrow();

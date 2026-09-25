@@ -24,13 +24,14 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, asc, eq, inArray, sql } from '@pagespace/db/operators';
+import { and, asc, eq, inArray, notInArray, sql } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { driveMembers, driveRoles } from '@pagespace/db/schema/members';
 import { orgMembers } from '@pagespace/db/schema/organizations';
 import { createSignedBroadcastHeaders } from '../auth/broadcast-auth';
 import { loggers } from '../logging/logger-config';
 import { kickForDriveMembershipRevocation } from '../permissions/revocation-kick';
+import { DRIVE_MEMBERSHIP_ROLES, driveMembershipRole } from '../permissions/drive-member-role';
 import {
   chunk,
   planDriveOrgMembership,
@@ -183,13 +184,14 @@ async function loadExistingRows(tx: Tx, driveIds: string[], userId?: string): Pr
           id: driveMembers.id,
           driveId: driveMembers.driveId,
           userId: driveMembers.userId,
+          role: driveMembers.role,
           source: driveMembers.source,
           customRoleId: driveMembers.customRoleId,
           acceptedAt: driveMembers.acceptedAt,
         })
         .from(driveMembers)
         .where(userId ? and(inArray(driveMembers.driveId, ids), eq(driveMembers.userId, userId)) : inArray(driveMembers.driveId, ids))
-      ).map(({ acceptedAt, ...row }) => ({ ...row, accepted: acceptedAt !== null })),
+      ).map(({ acceptedAt, role, ...row }) => ({ ...row, role: driveMembershipRole(role), accepted: acceptedAt !== null })),
     );
   }
   return rows;
@@ -212,11 +214,26 @@ async function applyPlans(tx: Tx, plans: DriveOrgMembershipPlan[], admittedBy: s
   }
   // After the deletes, so an admitted joiner's stale org row is gone before their direct row lands.
   // A conflict means a row appeared under the drive lock's plan, which it cannot: nothing is overwritten.
-  for (const batch of chunk(plans.flatMap((p) => p.admissions), WRITE_CHUNK)) {
+  const admissions = plans.flatMap((p) => p.admissions);
+  for (const batch of chunk(admissions.filter((a) => a.upgradesRowId === undefined), WRITE_CHUNK)) {
     await tx
       .insert(driveMembers)
       .values(batch.map((a) => ({ driveId: a.driveId, userId: a.userId, role: 'MEMBER' as const, customRoleId: a.customRoleId, source: 'invite' as const, invitedBy: admittedBy, acceptedAt })))
       .onConflictDoNothing({ target: [driveMembers.driveId, driveMembers.userId] });
+  }
+  // A GUEST row (D-OW-24) becomes the admitted membership in place. The update re-checks in SQL that
+  // the row is still no membership, and a miss throws: the approval must not close as admitted.
+  for (const { upgradesRowId, customRoleId } of admissions) {
+    if (upgradesRowId === undefined) continue;
+    const upgraded = await tx
+      .update(driveMembers)
+      .set({ role: 'MEMBER', customRoleId, source: 'invite', invitedBy: admittedBy, acceptedAt })
+      .where(and(
+        eq(driveMembers.id, upgradesRowId),
+        notInArray(driveMembers.role, [...DRIVE_MEMBERSHIP_ROLES]),
+      ))
+      .returning({ id: driveMembers.id });
+    if (upgraded.length !== 1) throw new Error('Admission could not upgrade the joiner\'s non-membership row');
   }
   for (const ids of chunk(conversions, WRITE_CHUNK)) {
     await tx.update(driveMembers).set({ source: 'invite' }).where(and(inArray(driveMembers.id, ids), eq(driveMembers.source, 'org')));
