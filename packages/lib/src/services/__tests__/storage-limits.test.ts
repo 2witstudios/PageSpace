@@ -9,6 +9,9 @@ vi.mock('../storage-repository', () => ({
     findFilesByCreator: vi.fn(),
     userReferencesContentHash: vi.fn(),
     countFiles: vi.fn(),
+    findDriveOrgId: vi.fn(),
+    sumOrgFileBytes: vi.fn(),
+    findOrgDriveIds: vi.fn(),
     updateStorageInTx: vi.fn(),
     insertStorageEvent: vi.fn(),
     runTransaction: vi.fn(),
@@ -76,6 +79,8 @@ import {
   formatBytes,
   parseBytes,
   STORAGE_TIERS,
+  resolveUploadQuotaTarget,
+  checkUploadQuotaTarget,
 } from '../storage-limits';
 import { storageRepository } from '../storage-repository';
 import { reserveUploadSlot } from '../pending-uploads';
@@ -628,6 +633,90 @@ describe('storage-limits', () => {
 
     it('returns null for a zero / invalid byte size', () => {
       expect(computeStorageCreditOnUnlink({ ...base, sizeBytes: 0 })).toBeNull();
+    });
+  });
+
+  // #2719 review P2-2: presign and the direct attachment path read the org's derived usage
+  // (SUM over every file in the org) ONCE per request, then decide against that read.
+  describe('WAL-9 (partial) upload quota target: resolved once, checked without re-reading', () => {
+    const MB = 1024 * 1024;
+
+    it('resolves an org drive to the org payer and the org quota with one usage read', async () => {
+      vi.mocked(storageRepository.findDriveOrgId).mockResolvedValue('org-1');
+      vi.mocked(storageRepository.sumOrgFileBytes).mockResolvedValue(10 * MB);
+
+      const target = await resolveUploadQuotaTarget('user-1', 'drive-org');
+
+      expect(target?.payer).toEqual({ kind: 'org', orgId: 'org-1' });
+      expect(target?.quota).toMatchObject({ orgId: 'org-1', tier: 'business', usedBytes: 10 * MB });
+      expect(storageRepository.sumOrgFileBytes).toHaveBeenCalledTimes(1);
+      expect(storageRepository.findUserForStorage).not.toHaveBeenCalled();
+    });
+
+    it('resolves a personal drive to the uploader and their personal quota', async () => {
+      vi.mocked(storageRepository.findDriveOrgId).mockResolvedValue(null);
+      vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({ id: 'user-1', storageUsedBytes: 0, subscriptionTier: 'free' });
+
+      const target = await resolveUploadQuotaTarget('user-1', 'drive-own');
+
+      expect(target?.payer).toEqual({ kind: 'user', userId: 'user-1' });
+      expect(target?.quota).toMatchObject({ userId: 'user-1', tier: 'free' });
+      expect(storageRepository.sumOrgFileBytes).not.toHaveBeenCalled();
+    });
+
+    it('is null when the uploader of a personal upload does not exist', async () => {
+      vi.mocked(storageRepository.findDriveOrgId).mockResolvedValue(null);
+      vi.mocked(storageRepository.findUserForStorage).mockResolvedValue(undefined);
+
+      expect(await resolveUploadQuotaTarget('ghost', 'drive-own')).toBeNull();
+    });
+
+    it('checks an org target against the org without re-reading the payer or the org usage', async () => {
+      vi.mocked(storageRepository.findDriveOrgId).mockResolvedValue('org-1');
+      vi.mocked(storageRepository.sumOrgFileBytes).mockResolvedValue(10 * MB);
+      vi.mocked(storageRepository.findOrgDriveIds).mockResolvedValue(['drive-org']);
+      vi.mocked(storageRepository.countFiles).mockResolvedValue(3);
+      const target = await resolveUploadQuotaTarget('user-1', 'drive-org');
+      vi.clearAllMocks();
+      vi.mocked(storageRepository.findOrgDriveIds).mockResolvedValue(['drive-org']);
+      vi.mocked(storageRepository.countFiles).mockResolvedValue(3);
+
+      const result = await checkUploadQuotaTarget(target, 60 * MB);
+
+      expect(result.allowed).toBe(true);
+      expect(storageRepository.sumOrgFileBytes).not.toHaveBeenCalled();
+      expect(storageRepository.findDriveOrgId).not.toHaveBeenCalled();
+      expect(storageRepository.findUserForStorage).not.toHaveBeenCalled();
+      expect(storageRepository.findOrgDriveIds).toHaveBeenCalledWith('org-1');
+    });
+
+    it('refuses an org target whose remaining bytes cannot hold the file, before counting files', async () => {
+      vi.mocked(storageRepository.findDriveOrgId).mockResolvedValue('org-1');
+      vi.mocked(storageRepository.sumOrgFileBytes).mockResolvedValue(50 * 1024 * MB);
+      const target = await resolveUploadQuotaTarget('user-1', 'drive-org');
+
+      const result = await checkUploadQuotaTarget(target, MB);
+
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toMatch(/Insufficient storage/);
+      expect(storageRepository.countFiles).not.toHaveBeenCalled();
+    });
+
+    it('checks a personal target against the uploader with no second quota read', async () => {
+      vi.mocked(storageRepository.findDriveOrgId).mockResolvedValue(null);
+      vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({ id: 'user-1', storageUsedBytes: 500 * MB, subscriptionTier: 'free' });
+      const target = await resolveUploadQuotaTarget('user-1', 'drive-own');
+      vi.clearAllMocks();
+
+      const result = await checkUploadQuotaTarget(target, MB);
+
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toMatch(/Insufficient storage/);
+      expect(storageRepository.findUserForStorage).not.toHaveBeenCalled();
+    });
+
+    it('refuses a missing target as a missing uploader', async () => {
+      expect(await checkUploadQuotaTarget(null, MB)).toEqual({ allowed: false, reason: 'User not found' });
     });
   });
 });

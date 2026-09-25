@@ -210,7 +210,9 @@ describe('useFileDrop', () => {
         await result.current.handleFileDrop(event);
       });
 
-      expect(mockPost).toHaveBeenCalledWith('/api/storage/check', { fileSize: 100 });
+      // WAL-9 (partial), #2719 review P1-1: the pre-check names the drop's drive, so an org
+      // drive is checked against the org's quota, not the uploader's personal one.
+      expect(mockPost).toHaveBeenCalledWith('/api/storage/check', { fileSize: 100, driveId: 'drive-123' });
       expect(mockUpload).toHaveBeenCalledTimes(1);
       expect(onUploadComplete).toHaveBeenCalled();
     });

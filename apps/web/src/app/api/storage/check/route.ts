@@ -3,10 +3,12 @@ import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import {
-  checkStorageQuota,
+  resolveUploadQuotaTarget,
+  checkUploadQuotaTarget,
   getUserStorageQuota,
   STORAGE_TIERS
 } from '@pagespace/lib/services/storage-limits';
+import { getUserDrivePermissions } from '@pagespace/lib/permissions/permissions';
 import { countLiveUploadsForUser } from '@pagespace/lib/services/pending-uploads';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { safeParseBody } from '@/lib/validation/parse-body';
@@ -16,7 +18,20 @@ const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
 const storageCheckSchema = z.object({
   fileSize: z.number().positive('Invalid file size'),
+  driveId: z.string().min(1).optional(),
 });
+
+/**
+ * The drive whose quota a drop is checked against (WAL-9, #2719 review P1-1): the drop's drive,
+ * but only when the permissions seam says the caller may upload into it (drive-wide edit, as
+ * presign requires). A missing or inaccessible drive fails CLOSED to the caller's personal
+ * quota, and answers the same whether the drive does not exist or the caller cannot see it.
+ */
+async function quotaDriveId(userId: string, driveId: string | undefined): Promise<string | null> {
+  if (!driveId) return null;
+  const drivePerms = await getUserDrivePermissions(userId, driveId);
+  return drivePerms?.canEdit ? driveId : null;
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -31,10 +46,11 @@ export async function POST(request: NextRequest) {
       return parsed.response;
     }
 
-    const { fileSize } = parsed.data;
+    const { fileSize, driveId } = parsed.data;
 
-    // Check storage quota
-    const quotaCheck = await checkStorageQuota(userId, fileSize);
+    // The quota presign will check this upload against: an org drive's org, else the caller's.
+    const quotaTarget = await resolveUploadQuotaTarget(userId, await quotaDriveId(userId, driveId));
+    const quotaCheck = await checkUploadQuotaTarget(quotaTarget, fileSize);
     if (!quotaCheck.allowed) {
       return NextResponse.json({
         allowed: false,
@@ -44,11 +60,14 @@ export async function POST(request: NextRequest) {
       }, { status: 413 }); // Payload Too Large
     }
 
-    // Get user's storage tier
-    const quota = await getUserStorageQuota(userId);
-    if (!quota) {
+    // The per-user concurrency limit is the uploader's own tier, as presign's atomic reserve
+    // (reserveConcurrentUploadSlot) enforces it; the replica semaphore takes the target's tier,
+    // as presign's acquireUploadSlot does.
+    const personalQuota = quotaTarget?.payer.kind === 'user' ? quotaTarget.quota : await getUserStorageQuota(userId);
+    if (!quotaTarget || !personalQuota) {
       return NextResponse.json({ error: 'Could not retrieve storage quota' }, { status: 500 });
     }
+    const { quota } = quotaTarget;
 
     // Check if user can acquire an upload slot: the per-user tier limit reads
     // the same pending_uploads rows presign's atomic reserve enforces
@@ -64,7 +83,7 @@ export async function POST(request: NextRequest) {
       uploadSemaphore.canAcquireSlot(userId, quota.tier),
       countLiveUploadsForUser(userId),
     ]);
-    const canUpload = hasGlobalCapacity && liveUploads < STORAGE_TIERS[quota.tier].maxConcurrentUploads;
+    const canUpload = hasGlobalCapacity && liveUploads < STORAGE_TIERS[personalQuota.tier].maxConcurrentUploads;
     if (!canUpload) {
       return NextResponse.json({
         allowed: false,
