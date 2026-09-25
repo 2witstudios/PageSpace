@@ -112,8 +112,9 @@ async function teardown(w: World): Promise<void> {
   await db.delete(conversations).where(inArray(conversations.userId, w.userIds));
   await db.delete(creditHolds).where(inArray(creditHolds.userId, w.userIds));
   await db.delete(creditLedger).where(inArray(creditLedger.userId, w.userIds));
-  const children = db.select({ id: wallets.id }).from(wallets).where(eq(wallets.parentWalletId, w.poolId));
-  await db.delete(walletFundingLegs).where(inArray(walletFundingLegs.walletId, children));
+  // Funding legs cascade with their wallet: deleting a leg first would leave its wallet's
+  // top-up disagreeing with its legs, which the integration harness's invariant refuses.
+  // Child wallets before their parent.
   await db.delete(wallets).where(eq(wallets.parentWalletId, w.poolId));
   await db.delete(wallets).where(eq(wallets.id, w.poolId));
   await db.delete(wallets).where(inArray(wallets.userId, w.userIds));
@@ -426,7 +427,6 @@ describe('drive-wallet service (orgs on, real Postgres)', () => {
     } finally {
       await db.delete(creditHolds).where(eq(creditHolds.walletId, child.id));
       await db.delete(creditLedger).where(inArray(creditLedger.walletId, [child.id, root.id]));
-      await db.delete(walletFundingLegs).where(eq(walletFundingLegs.walletId, child.id));
       await db.delete(wallets).where(eq(wallets.id, child.id));
       await db.delete(drives).where(eq(drives.id, notes.id));
     }
@@ -469,7 +469,6 @@ describe('drive-wallet service (orgs on, real Postgres)', () => {
       expect((await walletRow(child.id)).topupRemainingCents).toBe(500);
     } finally {
       await db.delete(creditLedger).where(inArray(creditLedger.walletId, [child.id, root.id]));
-      await db.delete(walletFundingLegs).where(eq(walletFundingLegs.walletId, child.id));
       await db.delete(wallets).where(eq(wallets.id, child.id));
       await db.delete(drives).where(eq(drives.id, notes.id));
     }
