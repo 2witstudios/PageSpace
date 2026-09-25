@@ -431,4 +431,47 @@ describe('drive-wallet service (orgs on, real Postgres)', () => {
       await db.delete(drives).where(eq(drives.id, notes.id));
     }
   });
+  it('WAL-3 (partial) a top-up and a donation into the same drive wallet from the same root never deadlock: both lock the drive wallet, then its parent (the global order)', async () => {
+    if (!world) return;
+    // Dana's personal drive; ids chosen so her root sorts BEFORE the drive wallet, so an
+    // id-sorted lock order would take the parent first — the inversion of the global order.
+    const notes = await factories.createDrive(world.ids.dana, { name: 'Dana notes', slug: `notes-${createId()}` });
+    const [root] = await db.insert(wallets).values({ id: `a${createId()}`, userId: world.ids.dana, monthlyRemainingCents: 5_000 }).returning();
+    const [child] = await db.insert(wallets).values({
+      id: `z${createId()}`, ownerType: 'user', userId: world.ids.dana, subjectType: 'drive', subjectId: notes.id, parentWalletId: root.id, monthlyAllowanceCents: 1_000,
+    }).returning();
+    try {
+      // Hold the drive wallet so both writers queue behind it: Dana donating to her own drive
+      // first (it locks the drive wallet, then her root), then the top-up. A top-up that took
+      // her root first would hold it while waiting on the drive wallet the donation gets next —
+      // a cycle Postgres breaks by aborting one of them (40P01).
+      let release!: () => void;
+      let markLocked!: () => void;
+      const released = new Promise<void>((resolve) => { release = resolve; });
+      const locked = new Promise<void>((resolve) => { markLocked = resolve; });
+      const blocker = db.transaction(async (tx) => {
+        await tx.select({ id: wallets.id }).from(wallets).where(eq(wallets.id, child.id)).for('no key update');
+        markLocked();
+        await released;
+      });
+      await locked;
+      const donation = donateToDrive(world.ids.dana, notes.id, { amountCents: 200, idempotencyKey: createId() }, 'session');
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const topUp = topUpDriveWallet(world.ids.dana, notes.id, { amountCents: 300, idempotencyKey: createId() }, 'session');
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      release();
+      await blocker;
+
+      const [toppedUp, donated] = await Promise.allSettled([topUp, donation]);
+      expect(toppedUp).toMatchObject({ status: 'fulfilled', value: { ok: true, amountCents: 300 } });
+      expect(donated).toMatchObject({ status: 'fulfilled', value: { ok: true, amountCents: 200 } });
+      expect((await walletRow(root.id)).monthlyRemainingCents).toBe(4_500);
+      expect((await walletRow(child.id)).topupRemainingCents).toBe(500);
+    } finally {
+      await db.delete(creditLedger).where(inArray(creditLedger.walletId, [child.id, root.id]));
+      await db.delete(walletFundingLegs).where(eq(walletFundingLegs.walletId, child.id));
+      await db.delete(wallets).where(eq(wallets.id, child.id));
+      await db.delete(drives).where(eq(drives.id, notes.id));
+    }
+  }, 20_000);
 });

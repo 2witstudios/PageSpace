@@ -461,8 +461,11 @@ export async function topUpDriveWallet(
     const [prior] = await tx.select({ id: walletFundingLegs.id }).from(walletFundingLegs).where(eq(walletFundingLegs.sourceRef, sourceRef)).limit(1);
     if (prior) return { ok: true as const, legId: prior.id, amountCents: input.amountCents, paidDebtCents: 0, duplicate: true };
 
+    // The global wallet lock order (billing/wallet-legs): the drive (child) wallet, then its
+    // parent — here the payer, the org pool or the lead's personal root. An id sort could take
+    // the parent first and deadlock against a settle or a donation into the same wallet.
     const locked = new Map<string, typeof wallets.$inferSelect>();
-    for (const id of [payerId, target.id].sort()) {
+    for (const id of [target.id, payerId]) {
       const [row] = await tx.select().from(wallets).where(eq(wallets.id, id)).for('update');
       if (row) locked.set(id, row);
     }
