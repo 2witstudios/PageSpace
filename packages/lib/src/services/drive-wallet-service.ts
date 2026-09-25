@@ -458,9 +458,6 @@ export async function topUpDriveWallet(
   if (!payerId) return { ok: false, status: 409, code: 'no_org_pool', message: 'This organization has no pool to pay from' };
 
   return db.transaction(async (tx) => {
-    const [prior] = await tx.select({ id: walletFundingLegs.id }).from(walletFundingLegs).where(eq(walletFundingLegs.sourceRef, sourceRef)).limit(1);
-    if (prior) return { ok: true as const, legId: prior.id, amountCents: input.amountCents, paidDebtCents: 0, duplicate: true };
-
     // The global wallet lock order (billing/wallet-legs): the drive (child) wallet, then its
     // parent — here the payer, the org pool or the lead's personal root. An id sort could take
     // the parent first and deadlock against a settle or a donation into the same wallet.
@@ -472,6 +469,15 @@ export async function topUpDriveWallet(
     const payer = locked.get(payerId);
     const drive = locked.get(target.id);
     if (!payer || !drive) return { ok: false as const, status: 404 as const, code: 'no_wallet', message: 'The wallet was removed' };
+    // A replay is a duplicate, checked AFTER the drive wallet's lock: a request racing the same
+    // key waits on that lock and then sees the other's committed leg (the insert's ON CONFLICT
+    // below stays as the backstop), so a retry never fails and never moves money twice.
+    const duplicate = async () => {
+      const [prior] = await tx.select({ id: walletFundingLegs.id }).from(walletFundingLegs).where(eq(walletFundingLegs.sourceRef, sourceRef)).limit(1);
+      return prior ? { ok: true as const, legId: prior.id, amountCents: input.amountCents, paidDebtCents: 0, duplicate: true } : null;
+    };
+    const replay = await duplicate();
+    if (replay) return replay;
     // What in-flight calls reserve against the payer, read AFTER the locks so a hold placed
     // meanwhile is counted: its own holds and its children's, since a child wallet's
     // allocation draws on its parent (the org pool, or the lead's personal wallet) — the
@@ -500,7 +506,13 @@ export async function topUpDriveWallet(
         nonRefundable: plan.leg.nonRefundable,
         sourceRef,
       })
+      .onConflictDoNothing({ target: walletFundingLegs.sourceRef, where: sql`"sourceRef" IS NOT NULL` })
       .returning({ id: walletFundingLegs.id });
+    if (!leg) {
+      const raced = await duplicate();
+      if (raced) return raced;
+      throw new Error(`top-up ${sourceRef}: the leg neither inserted nor exists`);
+    }
     await tx
       .update(wallets)
       .set({ monthlyRemainingCents: plan.payer.monthlyRemainingCents, topupRemainingCents: plan.payer.topupRemainingCents })
@@ -742,6 +754,11 @@ async function ownConversation(userId: string, conversationId: string, globalDri
  * choice, the options, and the gate's own decision for a zero-cost preview (nothing reserved,
  * no refusal logged). `globalDriveId` is read only for a global conversation (see
  * ownConversation).
+ *
+ * For a GLOBAL conversation the preview is only as good as the drive the client names: the
+ * turn itself spends in a drive only when the server resolved it from a contextRef, and a
+ * legacy request without one spends personal credits and reads no stored choice (#2726). A
+ * client must therefore preview with the same drive its turns will carry in their contextRef.
  */
 export async function getConversationSpend(userId: string, conversationId: string, globalDriveId: string | null = null): Promise<ConversationSpendRead | WalletServiceError> {
   const conversation = await ownConversation(userId, conversationId, globalDriveId);

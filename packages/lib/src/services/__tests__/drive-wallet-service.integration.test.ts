@@ -473,4 +473,16 @@ describe('drive-wallet service (orgs on, real Postgres)', () => {
       await db.delete(drives).where(eq(drives.id, notes.id));
     }
   }, 20_000);
+  it('WAL-3 (partial) two top-ups racing with the same idempotency key land once: one moves the money, the other answers duplicate, neither fails', async () => {
+    if (!world) return;
+    const key = createId();
+    const [a, b] = await Promise.all([
+      topUpDriveWallet(world.ids.priya, world.productId, { amountCents: 1_000, idempotencyKey: key }, 'session'),
+      topUpDriveWallet(world.ids.priya, world.productId, { amountCents: 1_000, idempotencyKey: key }, 'session'),
+    ]);
+    expect([a, b].map((r) => r.ok)).toEqual([true, true]);
+    expect([a, b].filter((r) => r.ok && r.duplicate)).toHaveLength(1);
+    expect((await walletRow(world.poolId)).monthlyRemainingCents).toBe(POOL_CENTS - 1_000);
+    expect((await walletRow(world.productWalletId)).topupRemainingCents).toBe(1_000);
+  });
 });
