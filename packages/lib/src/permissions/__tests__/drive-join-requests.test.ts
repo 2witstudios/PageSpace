@@ -31,7 +31,8 @@ const accepted: RequesterRow = { role: 'MEMBER', source: 'invite', accepted: tru
 const pendingInvite: RequesterRow = { role: 'ADMIN', source: 'invite', accepted: false };
 const staleOrgRow: RequesterRow = { role: 'MEMBER', source: 'org', accepted: true };
 // D-OW-24: the accepted row a redeemed page share link leaves. Built through the same mapping the
-// loaders use, so this is exactly what a GUEST row reads as once master syncs the enum value in.
+// loaders use, so this is exactly what a GUEST row reads as (drive-join-request-service.integration
+// holds a real one).
 const guestRow: RequesterRow = { role: driveMembershipRole('GUEST'), source: 'invite', accepted: true };
 
 describe('decideJoinRequest', () => {

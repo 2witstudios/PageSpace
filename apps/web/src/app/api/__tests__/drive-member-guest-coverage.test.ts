@@ -13,7 +13,8 @@
  * in a ledgered file, changes the count and fails here until someone decides
  * what a GUEST means at that read and writes it down.
  *
- *   excludes — the file treats a GUEST row as absent (isGuestRole / role <> 'GUEST').
+ *   excludes — the file treats a GUEST row as absent (isGuestRole / role <> 'GUEST', or the one
+ *              role map on the org-wallets branch: driveMembershipRole / driveMembershipRow).
  *   upgrades — the file turns a GUEST row into a real membership (invites, drive links).
  *   neutral  — a GUEST row cannot gain anything at these reads; the reason says why.
  */
@@ -35,7 +36,9 @@ const SCAN_DIRS = [
 
 const ORM_READ_SITE = /(?:\.from|\.(?:left|inner|right|full)Join)\(\s*driveMembers\b|\bquery\.driveMembers\.find(?:First|Many)\(/g;
 const SQL_READ_SITE = /\b(?:JOIN|FROM)\s+drive_members\b/g;
-const GUEST_MENTION = /isGuestRole\(|'GUEST'/;
+// A file handles GUEST when it names it, or reads rows through the one role map
+// (permissions/drive-member-role.ts), which classifies GUEST as no membership.
+const GUEST_MENTION = /isGuestRole\(|holdsAcceptedGuestRow\(|'GUEST'|driveMembershipRole\(|driveMembershipRow\(|DRIVE_MEMBERSHIP_ROLES/;
 
 type Decision = 'excludes' | 'upgrades' | 'neutral';
 type Entry = { reads: number; decision: Decision; reason: string };
@@ -43,44 +46,24 @@ type Entry = { reads: number; decision: Decision; reason: string };
 const LEDGER = new Map<string, Entry>([
   // ── packages/lib/src ────────────────────────────────────────────────────
   ['packages/lib/src/permissions/permissions.ts', {
-    reads: 15, decision: 'excludes',
-    reason: 'Every "is a member" door: rule 4, custom roles, drive-root access, isUserDriveMember, getUserDriveAccess (guest keeps access only through a live page grant), getUserDrivePermissions (null), usersShareDrive, getDriveIdsForUser, both accessible-pages listings and resolvePagePermissionRow (batch + page viewers).',
+    reads: 6, decision: 'excludes',
+    reason: 'getDriveIdsForUser (a GUEST row reaches the drive only through its page grants) in both its dark and org-aware forms (the latter through driveMembershipRow), both usersShareDrive reads, and the batch page-permission and page-viewer joins, which resolvePagePermissionRow decides (no custom role, no rule 4 for a GUEST) after withEffectiveMembership re-reads each row through driveMembershipRow. Every other door (rule 4, custom roles, drive-root access, isUserDriveMember, getUserDriveAccess, getUserDrivePermissions, both accessible-pages listings) goes through loadEffectiveDriveMembership, which reads a GUEST row as none.',
   }],
   ['packages/lib/src/permissions/membership-queries.ts', {
-    reads: 1, decision: 'excludes',
-    reason: 'getMemberCustomRoleId returns null for a guest: a guest carries no custom role.',
-  }],
-  ['packages/lib/src/permissions/permission-mutations.ts', {
     reads: 2, decision: 'excludes',
-    reason: 'A guest who created a page may not share it by virtue of membership; its share right comes from its grant. The second read is ADMIN-only.',
+    reason: 'getMemberCustomRoleId returns null for a guest (a guest carries no custom role); holdsAcceptedGuestRow is the one read that asks for the GUEST row itself, for the callers that also admit page collaborators (the page-tree gate, the agent-binding granter).',
   }],
   ['packages/lib/src/services/drive-member-service.ts', {
-    reads: 9, decision: 'excludes',
-    reason: 'checkDriveAccess, member id lists, broadcast recipients, custom-role holders, the Members listing, isMemberOfDrive and member detail all leave guests out. Standard-role lookup filters by role already; updateMemberRole is a writer.',
+    reads: 3, decision: 'excludes',
+    reason: 'The Members listing and member detail leave guests out; updateMemberRole is a writer. checkDriveAccess, member id lists, broadcast recipients, custom-role holders and isMemberOfDrive go through loadEffectiveDriveMembership / listDriveAudience, which read a GUEST row as none.',
   }],
   ['packages/lib/src/services/drive-service.ts', {
-    reads: 3, decision: 'excludes',
-    reason: 'listAccessibleDrives reaches a guest drive only as a page collaborator (not token-scopable, no drive-wide create); getDriveAccess/getDriveAccessWithDrive report no membership. updateDriveLastAccessed is a write, not a read.',
+    reads: 2, decision: 'excludes',
+    reason: 'listAccessibleDrives reaches a guest drive only as a page collaborator (not token-scopable, no drive-wide create): the dark form filters GUEST, the org-aware form reads each row through driveMembershipRow. getDriveAccess/getDriveAccessWithDrive go through loadEffectiveDriveMembership.',
   }],
   ['packages/lib/src/services/app-shell-service.ts', {
-    reads: 3, decision: 'excludes',
-    reason: 'A guest drive is not promoted into the shell (its metadata and roster would leak), and guests are left off every roster sent to members. The per-caller role read is scoped to the already-filtered drive set.',
-  }],
-  ['packages/lib/src/services/drive-agent-service.ts', {
-    reads: 1, decision: 'excludes',
-    reason: 'A guest may not bind an agent to the drive at any role — an agent MEMBER reads the whole drive.',
-  }],
-  ['packages/lib/src/services/drive-role-service.ts', {
-    reads: 1, decision: 'excludes',
-    reason: 'A guest is not a member for the roles pages.',
-  }],
-  ['packages/lib/src/services/calendar-event-drive-service.ts', {
     reads: 2, decision: 'excludes',
-    reason: 'A guest of a drive an event is shared into is neither an event-drive member nor an attendee candidate.',
-  }],
-  ['packages/lib/src/services/agent-workspaces/agent-workspace-tenant.ts', {
-    reads: 1, decision: 'excludes',
-    reason: "resolveDriveMembership answers 'none' for a guest: no agent-workspace, sandbox or preview access.",
+    reason: 'Guests are left off every roster sent to members. The per-caller lastAccessedAt read is display-only and scoped to the drive set listMemberDrives already decided (which reads a GUEST row as no membership).',
   }],
   ['packages/lib/src/repositories/account-repository.ts', {
     reads: 2, decision: 'excludes',
@@ -90,94 +73,51 @@ const LEDGER = new Map<string, Entry>([
     reads: 1, decision: 'excludes',
     reason: "A guest drive is not one of the subject's drives: every listed drive has ALL its pages exported.",
   }],
-  ['packages/lib/src/agent-accounts/account-facts-repository.ts', {
-    reads: 1, decision: 'neutral',
-    reason: 'The only direct read is ADMIN-only (consenters); driveRole goes through getDriveAccess, which excludes guests.',
+  // ── the org-wallets resolver layer (the one role map) ─────────────────────
+  ['packages/lib/src/permissions/org-drive-membership.ts', {
+    reads: 5, decision: 'excludes',
+    reason: 'Every read goes through driveMembershipRow / driveMembershipRole (drive-member-role.ts), which classifies GUEST as no membership: the effective membership, explicit-scope authority, accepted rows for the relationship and spend-standing loaders, org-deletion member pairs, and the join-request row state.',
+  }],
+  ['packages/lib/src/permissions/member-drives.ts', {
+    reads: 4, decision: 'excludes',
+    reason: 'listMemberDrives, getAdministeredDriveIds and memberOfAnyDriveCondition read rows through driveMembershipRole or restrict to DRIVE_MEMBERSHIP_ROLES, so a GUEST drive is no member drive (commands, activity, discovery, pulse, visibility all use it).',
+  }],
+  ['packages/lib/src/permissions/drive-audience.ts', {
+    reads: 1, decision: 'excludes',
+    reason: 'A drive\'s audience (recipients, member ids, custom-role holders, isMemberOfDrive) reads each row through driveMembershipRow: a GUEST is never in it.',
+  }],
+  ['packages/lib/src/permissions/org-drive-directory.ts', {
+    reads: 1, decision: 'excludes',
+    reason: 'The org Drives directory reads each row through driveMembershipRole: a GUEST drive is not joined and stays requestable.',
+  }],
+  ['packages/lib/src/permissions/drive-join-request-closure.ts', {
+    reads: 1, decision: 'excludes',
+    reason: 'A requester holding a GUEST row is still a requester (driveMembershipRole): the row does not close their join request as already-a-member.',
+  }],
+  ['packages/lib/src/services/org-membership-sync.ts', {
+    reads: 1, decision: 'upgrades',
+    reason: 'The org sync reads rows through driveMembershipRole; admitting an org member who holds only a GUEST row upgrades that row in place, and a GUEST row is otherwise left alone.',
   }],
   // ── apps/web/src/app ────────────────────────────────────────────────────
-  ['apps/web/src/app/api/drives/[driveId]/pages/route.ts', {
-    reads: 2, decision: 'excludes',
-    reason: 'getPermittedPages is its own copy of rule 4; a guest gets only its explicit grants. The second read is ADMIN-only.',
-  }],
   ['apps/web/src/app/api/drives/[driveId]/assignees/route.ts', {
     reads: 1, decision: 'excludes',
     reason: 'Guests are not assignable members of the drive.',
   }],
-  ['apps/web/src/app/api/activity/summary/route.ts', {
-    reads: 1, decision: 'excludes',
-    reason: 'A guest drive does not feed the "pages updated" count.',
-  }],
-  ['apps/web/src/app/api/pulse/route.ts', {
-    reads: 1, decision: 'excludes',
-    reason: 'A guest drive is not one of the drives pulse summarises.',
-  }],
   ['apps/web/src/app/api/pulse/generate/route.ts', {
-    reads: 2, decision: 'excludes',
-    reason: 'A guest drive is not summarised, and the co-member roster sent to the model neither includes guests nor is built from a guest drive.',
+    reads: 1, decision: 'excludes',
+    reason: 'The co-member roster sent to the model leaves guests out. The drive set itself is getMemberDriveIds (a GUEST row is no membership).',
   }],
   ['apps/web/src/app/api/pulse/cron/route.ts', {
-    reads: 2, decision: 'excludes',
-    reason: 'Same two reads as pulse/generate.',
-  }],
-  ['apps/web/src/app/api/ai/page-agents/multi-drive/route.ts', {
-    reads: 1, decision: 'neutral',
-    reason: 'resolveEditableDriveIds admits only ADMIN and MEMBER rows; a GUEST row is not editable.',
+    reads: 1, decision: 'excludes',
+    reason: 'Same roster read as pulse/generate.',
   }],
   ['apps/web/src/app/api/users/messageable/route.ts', {
     reads: 2, decision: 'excludes',
     reason: "A guest does not see the drive's people as messageable, and they do not see the guest.",
   }],
-  ['apps/web/src/app/api/commands/route.ts', {
-    reads: 1, decision: 'excludes',
-    reason: "A guest drive's commands are not the guest's commands.",
-  }],
   ['apps/web/src/app/api/account/drives-status/route.ts', {
     reads: 2, decision: 'excludes',
     reason: 'The member count matches accountRepository (guests excluded); the transfer-target read is ADMIN-only.',
-  }],
-  ['apps/web/src/app/api/pages/bulk-copy/route.ts', {
-    reads: 1, decision: 'neutral',
-    reason: 'Writing into the target drive needs an OWNER/ADMIN role on the row; GUEST is neither.',
-  }],
-  ['apps/web/src/app/api/pages/bulk-move/route.ts', {
-    reads: 1, decision: 'neutral',
-    reason: 'Writing into the target drive needs an OWNER/ADMIN role on the row; GUEST is neither.',
-  }],
-  ['apps/web/src/app/api/pages/tree/route.ts', {
-    reads: 1, decision: 'neutral',
-    reason: 'The gate admits a guest on purpose; the tree is then cut to getUserAccessiblePagesInDrive, which yields only its explicit grants.',
-  }],
-  ['apps/web/src/app/api/sidebar/badges/route.ts', {
-    reads: 1, decision: 'neutral',
-    reason: 'Candidate filter; getBatchPagePermissions decides, and it excludes guests.',
-  }],
-  ['apps/web/src/app/api/messages/threads/route.ts', {
-    reads: 1, decision: 'neutral',
-    reason: 'Candidate filter; getBatchPagePermissions decides, and it excludes guests.',
-  }],
-  ['apps/web/src/app/api/inbox/route.ts', {
-    reads: 2, decision: 'neutral',
-    reason: 'Candidate filters; getBatchPagePermissions decides, and it excludes guests.',
-  }],
-  ['apps/web/src/app/api/channels/[pageId]/messages/route.ts', {
-    reads: 1, decision: 'neutral',
-    reason: 'Candidate recipients; getUsersWhoCanViewPage decides, and it excludes guests.',
-  }],
-  ['apps/web/src/app/api/drives/[driveId]/trash/route.ts', {
-    reads: 1, decision: 'neutral',
-    reason: 'ADMIN-only read.',
-  }],
-  ['apps/web/src/app/api/drives/[driveId]/permissions-tree/route.ts', {
-    reads: 1, decision: 'neutral',
-    reason: 'ADMIN-only read.',
-  }],
-  ['apps/web/src/app/api/account/handle-drive/route.ts', {
-    reads: 1, decision: 'neutral',
-    reason: 'Transfer target must be an accepted ADMIN.',
-  }],
-  ['apps/web/src/app/api/pages/[pageId]/route.ts', {
-    reads: 1, decision: 'neutral',
-    reason: 'Selects non-OWNER/ADMIN rows to kick when a page goes private; kicking a guest without a grant is correct.',
   }],
   ['apps/web/src/app/api/drives/[driveId]/backups/[backupId]/restore/route.ts', {
     reads: 1, decision: 'neutral',
@@ -188,42 +128,18 @@ const LEDGER = new Map<string, Entry>([
     reason: 'Platform-admin debug picker; grants nothing.',
   }],
   // ── apps/web/src/lib ────────────────────────────────────────────────────
-  ['apps/web/src/lib/users/visibility.ts', {
-    reads: 3, decision: 'excludes',
-    reason: 'A guest row opens no shared context: no profile lookup or name search across it, in either direction.',
-  }],
-  ['apps/web/src/lib/memory/discovery-service.ts', {
-    reads: 2, decision: 'excludes',
-    reason: 'Memory discovery does not mine a guest drive\'s conversations or activity.',
-  }],
-  ['apps/web/src/lib/ai/tools/activity-tools.ts', {
-    reads: 1, decision: 'excludes',
-    reason: 'A guest drive is not one of the drives the activity tool reads.',
-  }],
-  ['apps/web/src/lib/ai/tools/command-tools.ts', {
-    reads: 1, decision: 'excludes',
-    reason: "A guest drive's commands are not the guest's commands.",
-  }],
-  ['apps/web/src/lib/ai/tools/channel-tools.ts', {
-    reads: 1, decision: 'neutral',
-    reason: 'Candidate recipients; each is checked with canUserViewPage, which excludes guests.',
-  }],
   ['apps/web/src/lib/repositories/drive-invite-repository.ts', {
-    reads: 3, decision: 'upgrades',
-    reason: 'Accepting a drive invite upgrades a GUEST row in place (setWhere role = GUEST); any other existing row stays ALREADY_MEMBER.',
+    reads: 2, decision: 'upgrades',
+    reason: 'Accepting a drive invite upgrades a GUEST row in place (setWhere role = GUEST, an insert, not a counted read); any other existing row stays ALREADY_MEMBER. findExistingMember returns the raw row with its role for the pipe to decide; the pending-by-email read matches unaccepted rows only.',
   }],
   ['apps/web/src/lib/repositories/page-invite-repository.ts', {
     reads: 1, decision: 'neutral',
     reason: 'Page-invite acceptance leaves an existing row as it is when accepted. OPEN DECISION (PR body): it still CREATES a MEMBER row for a newcomer and promotes a pending row.',
   }],
-  ['apps/web/src/lib/auth/revoke-adapters.ts', {
-    reads: 1, decision: 'neutral',
-    reason: 'Returns the raw role; validateRevokeRequest admits only OWNER/ADMIN.',
-  }],
   // ── apps/web/src/services ───────────────────────────────────────────────
   ['apps/web/src/services/api/drive-backup-service.ts', {
-    reads: 2, decision: 'neutral',
-    reason: 'Snapshot copies every row faithfully (a guest stays a guest); the other read is ADMIN-only.',
+    reads: 1, decision: 'neutral',
+    reason: 'Snapshot copies every row faithfully (a guest stays a guest).',
   }],
   ['apps/web/src/services/api/rollback/preview.ts', {
     reads: 1, decision: 'neutral',
