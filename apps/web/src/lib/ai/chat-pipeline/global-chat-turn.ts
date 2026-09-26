@@ -32,7 +32,7 @@ import { requiresProSubscription, createSubscriptionRequiredResponse, createAdmi
 import { resolveProviderModel } from '@/lib/ai/core/ai-providers-config';
 import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
-import { PERSONAL_SPEND, driveSpend } from '@pagespace/lib/billing/spend-target';
+import { PERSONAL_SPEND, conversationSpend } from '@pagespace/lib/billing/spend-target';
 import { UNGATED_TURN_CREDIT, turnCreditAfterGate, type TurnCredit } from './turn-credit';
 import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
 import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
@@ -439,9 +439,11 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
       // The global assistant spends in the drive the person is in (SPEND-7) — only a drive
       // the SERVER resolved from contextRef, which is permission-checked. The legacy body's
       // locationContext is client-supplied and unchecked, so it never names a spend drive:
-      // without a contextRef the call spends personal credits (SPEND-8), as with no drive.
-      // The per-conversation chosen source has no storage yet, so none is named.
-      const locationSpend = contextRef ? driveSpend(locationContext?.currentDrive?.id) : PERSONAL_SPEND;
+      // without a contextRef the call spends personal credits (SPEND-8), as with no drive, and
+      // no stored choice is read against a client-supplied drive. With one, the conversation's
+      // stored source (SPEND-3) is read only if the caller owns it (the gate's shell filters on
+      // owner), since this runs before the conversation is resolved.
+      const locationSpend = contextRef ? conversationSpend(locationContext?.currentDrive?.id, conversationId) : PERSONAL_SPEND;
       credit = { spend: locationSpend };
       if (!isMeteringExempt(gateProvider) && !isSoloHelpRequest) {
         const creditGate = await canConsumeAI(userId, (gateUser?.subscriptionTier ?? 'free') as SubscriptionTier, {

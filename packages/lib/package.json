@@ -639,6 +639,11 @@
       "import": "./dist/billing/spend-target.js",
       "require": "./dist/billing/spend-target.js"
     },
+    "./billing/wallet-views": {
+      "types": "./dist/billing/wallet-views.d.ts",
+      "import": "./dist/billing/wallet-views.js",
+      "require": "./dist/billing/wallet-views.js"
+    },
     "./billing/credit-backfill": {
       "types": "./dist/billing/credit-backfill.d.ts",
       "import": "./dist/billing/credit-backfill.js",
@@ -1433,6 +1438,11 @@
       "types": "./dist/services/org-drive-service.d.ts",
       "import": "./dist/services/org-drive-service.js",
       "require": "./dist/services/org-drive-service.js"
+    },
+    "./services/drive-wallet-service": {
+      "types": "./dist/services/drive-wallet-service.d.ts",
+      "import": "./dist/services/drive-wallet-service.js",
+      "require": "./dist/services/drive-wallet-service.js"
     },
     "./services/drive-join-request-service": {
       "types": "./dist/services/drive-join-request-service.d.ts",
@@ -2493,6 +2503,11 @@
       "types": "./dist/permissions/org-access.d.ts",
       "import": "./dist/permissions/org-access.js",
       "require": "./dist/permissions/org-access.js"
+    },
+    "./permissions/wallet-access": {
+      "types": "./dist/permissions/wallet-access.d.ts",
+      "import": "./dist/permissions/wallet-access.js",
+      "require": "./dist/permissions/wallet-access.js"
     },
     "./compliance/retention/retention-engine": {
       "types": "./dist/compliance/retention/retention-engine.d.ts",

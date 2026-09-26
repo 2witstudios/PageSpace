@@ -17,6 +17,7 @@ import { createId } from '@paralleldrive/cuid2';
 import { db, pool } from '@pagespace/db/db';
 import { eq, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
+import { conversations } from '@pagespace/db/schema/conversations';
 import { drives } from '@pagespace/db/schema/core';
 import { creditHolds, creditLedger } from '@pagespace/db/schema/credits';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
@@ -27,7 +28,7 @@ import { requireDb } from '@pagespace/db/test/require-db';
 import { loggers } from '../../logging/logger-config';
 import { canConsumeAI } from '../credit-gate';
 import { consumeCredits } from '../credit-consume';
-import { PERSONAL_SPEND, driveSpend } from '../spend-target';
+import { PERSONAL_SPEND, conversationSpend, driveSpend } from '../spend-target';
 
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
@@ -108,6 +109,7 @@ async function build(input: { productAllocationCents: number; poolCents: number;
 }
 
 async function teardown(w: World): Promise<void> {
+  await db.delete(conversations).where(inArray(conversations.userId, w.userIds));
   await db.delete(aiUsageLogs).where(inArray(aiUsageLogs.userId, w.userIds));
   await db.delete(creditHolds).where(inArray(creditHolds.userId, w.userIds));
   await db.delete(creditLedger).where(inArray(creditLedger.userId, w.userIds));
@@ -319,5 +321,128 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
 
     expect(second.allowed).toBe(false);
     expect((await holdsOf(world.marcusId)).map((h) => h.walletId)).toEqual([world.productWalletId]);
+  });
+  // ---------------------------------------------------------------------------
+  // The stored choice (conversations.chosenWalletId, wallets.defaultSpendSource): a stored
+  // wallet that no longer resolves for this person refuses by name and charges nothing.
+  // ---------------------------------------------------------------------------
+
+  /** A drive conversation of `userId` in `driveId`, with `chosenWalletId` stored on it. */
+  async function conversationIn(driveId: string, userId: string, chosenWalletId: string | null): Promise<string> {
+    const [row] = await db
+      .insert(conversations)
+      .values({ userId, type: 'drive', contextId: driveId, chosenWalletId, updatedAt: new Date() })
+      .returning({ id: conversations.id });
+    return row.id;
+  }
+
+  /** Nothing moved: no hold, no ledger row, Marcus's own wallet and the pool untouched. */
+  async function expectNothingCharged(w: World): Promise<void> {
+    expect(await holdsOf(w.marcusId)).toEqual([]);
+    expect(await ledgerOf(w.marcusId)).toEqual([]);
+    expect((await walletRow(w.marcusWalletId)).monthlyRemainingCents).toBe(5_000);
+    expect((await walletRow(w.poolId)).monthlyRemainingCents).toBe(5_000);
+  }
+
+  it('SPEND-3 (partial) a conversation whose chosen wallet is valid spends exactly that wallet, turn after turn', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 5_000 });
+    const conversationId = await conversationIn(world.productId, world.marcusId, world.poolId);
+
+    const gate = await canConsumeAI(world.marcusId, 'free', { spend: conversationSpend(world.productId, conversationId) });
+
+    expect(gate).toMatchObject({ allowed: true, walletId: world.poolId, spendSource: 'seat_allowance' });
+  });
+
+  it('SPEND-4 (partial) X-6 (partial) a conversation whose chosen wallet was DELETED refuses by name and charges zero — no fallback to the personal root', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 5_000 });
+    const conversationId = await conversationIn(world.productId, world.marcusId, world.productWalletId);
+    // Even Marcus's own default names his own credits: the stale choice still wins and refuses.
+    await db.update(wallets).set({ defaultSpendSource: 'own_credits' }).where(eq(wallets.id, world.marcusWalletId));
+    await db.delete(wallets).where(eq(wallets.id, world.productWalletId));
+
+    const gate = await canConsumeAI(world.marcusId, 'free', { spend: conversationSpend(world.productId, conversationId) });
+
+    expect(gate).toEqual({
+      allowed: false,
+      reason: 'source_refused',
+      refusal: { source: null, reason: 'chosen_wallet_unavailable', options: ['seat_allowance', 'own_credits'] },
+    });
+    await expectNothingCharged(world);
+  });
+
+  it('SPEND-4 (partial) a chosen wallet that is someone else\'s personal wallet refuses the same way', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 5_000 });
+    const [jonoWallet] = await db.insert(wallets).values({ userId: world.jonoId, monthlyRemainingCents: 9_000 }).returning();
+    const conversationId = await conversationIn(world.productId, world.marcusId, jonoWallet.id);
+
+    const gate = await canConsumeAI(world.marcusId, 'free', { spend: conversationSpend(world.productId, conversationId) });
+
+    expect(gate).toMatchObject({ allowed: false, reason: 'source_refused', refusal: { source: null, reason: 'chosen_wallet_unavailable' } });
+    await expectNothingCharged(world);
+    expect((await walletRow(jonoWallet.id)).monthlyRemainingCents).toBe(9_000);
+  });
+
+  it('SPEND-4 (partial) X-6 (partial) an org member WITHOUT membership of a Restricted org drive cannot spend its wallet or a seat there — not by stored wallet id, not by naming the source', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 5_000 });
+    // Customer Research is Restricted: Marcus is in the org but has not joined it.
+    const research = await factories.createDrive(world.jonoId, { name: 'Customer Research', slug: `research-${createId()}`, orgId: world.orgId, orgVisibility: 'RESTRICTED' });
+    const [researchWallet] = await db.insert(wallets).values({
+      ownerType: 'org', orgId: world.orgId, subjectType: 'drive', subjectId: research.id, parentWalletId: world.poolId, monthlyAllowanceCents: 600,
+      // Its drive default names the drive wallet: a default is no key either.
+      defaultSpendSource: 'drive_wallet',
+    }).returning();
+
+    const byWalletId = await canConsumeAI(world.marcusId, 'free', { spend: conversationSpend(research.id, await conversationIn(research.id, world.marcusId, researchWallet.id)) });
+    expect(byWalletId).toMatchObject({ allowed: false, reason: 'source_refused', refusal: { source: null, reason: 'chosen_wallet_unavailable', options: ['own_credits'] } });
+
+    const byPoolId = await canConsumeAI(world.marcusId, 'free', { spend: conversationSpend(research.id, await conversationIn(research.id, world.marcusId, world.poolId)) });
+    expect(byPoolId).toMatchObject({ allowed: false, reason: 'source_refused', refusal: { source: null, reason: 'chosen_wallet_unavailable', options: ['own_credits'] } });
+
+    for (const source of ['drive_wallet', 'seat_allowance'] as const) {
+      const bySource = await canConsumeAI(world.marcusId, 'free', { spend: driveSpend(research.id, source) });
+      expect(bySource, source).toMatchObject({ allowed: false, reason: 'source_refused', refusal: { source, reason: 'source_unavailable', options: ['own_credits'] } });
+    }
+    await expectNothingCharged(world);
+    expect((await walletRow(researchWallet.id)).spentCents).toBe(0);
+  });
+
+  it('SPEND-4 (partial) a conversation with nothing chosen and no default refuses; it never defaults to a wallet', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 5_000 });
+    const conversationId = await conversationIn(world.productId, world.marcusId, null);
+
+    const gate = await canConsumeAI(world.marcusId, 'free', { spend: conversationSpend(world.productId, conversationId) });
+
+    expect(gate).toMatchObject({ allowed: false, reason: 'source_refused', refusal: { source: null, reason: 'no_source_chosen' } });
+    await expectNothingCharged(world);
+  });
+
+  it('SPEND-3 (partial) with nothing chosen the drive default preselects before the person\'s default', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 5_000 });
+    const conversationId = await conversationIn(world.productId, world.marcusId, null);
+    await db.update(wallets).set({ defaultSpendSource: 'own_credits' }).where(eq(wallets.id, world.marcusWalletId));
+
+    const personal = await canConsumeAI(world.marcusId, 'free', { spend: conversationSpend(world.productId, conversationId) });
+    expect(personal).toMatchObject({ allowed: true, walletId: world.marcusWalletId, spendSource: 'own_credits' });
+
+    await db.update(wallets).set({ defaultSpendSource: 'drive_wallet' }).where(eq(wallets.id, world.productWalletId));
+    const drive = await canConsumeAI(world.marcusId, 'free', { spend: conversationSpend(world.productId, conversationId) });
+    expect(drive).toMatchObject({ allowed: true, walletId: world.productWalletId, spendSource: 'drive_wallet' });
+  });
+  it('SPEND-3 (partial) a stored choice is read only from the caller\'s OWN conversation: naming someone else\'s conversation chooses nothing', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 5_000 });
+    // Jono's conversation in Product stores Product's wallet, a wallet Marcus may also spend.
+    const jonosConversation = await conversationIn(world.productId, world.jonoId, world.productWalletId);
+
+    const gate = await canConsumeAI(world.marcusId, 'free', { spend: conversationSpend(world.productId, jonosConversation) });
+
+    expect(gate).toMatchObject({ allowed: false, reason: 'source_refused', refusal: { source: null, reason: 'no_source_chosen' } });
+    await expectNothingCharged(world);
   });
 });

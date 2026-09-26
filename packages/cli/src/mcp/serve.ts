@@ -92,6 +92,9 @@ import {
   updateWorkflow,
   execInWorkspace,
   listWorkspaces,
+  getConversationSpendSource,
+  getDriveWallet,
+  listMyWallets,
   createRegistry,
   getOperation,
   listOperations,
@@ -207,6 +210,10 @@ const ALL_OPERATIONS: readonly Operation[] = [
   updateWorkflow,
   execInWorkspace,
   listWorkspaces,
+  // Wallet READS only ([D-OW-26]): no wallet write is an SDK operation, so none can be a tool.
+  getConversationSpendSource,
+  getDriveWallet,
+  listMyWallets,
 ];
 
 /** Pure: assembles the full operation registry. Rejects duplicate names at construction (`createRegistry`). */

@@ -471,3 +471,19 @@ export {
   workspacesListHandler,
 } from './commands/workspaces.js';
 export type { ExtractExecArgsResult } from './commands/workspaces.js';
+
+// Wallet READ verbs (X-1, [D-OW-26]) — thin projections over the wallets.* SDK reads.
+export {
+  extractConversationSourceArgs,
+  extractDriveWalletArgs,
+  renderConversationSource,
+  creditsLabel,
+  renderDriveWallet,
+  renderMyWallets,
+  renderResolvedSpend,
+  sourceLabel,
+  walletsDriveHandler,
+  walletsListHandler,
+  walletsSourceHandler,
+} from './commands/wallets.js';
+export type { ExtractWalletArgsResult } from './commands/wallets.js';

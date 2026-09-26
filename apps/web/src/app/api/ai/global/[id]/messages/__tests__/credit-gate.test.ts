@@ -369,7 +369,7 @@ import { POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import type { SessionAuthResult } from '@/lib/auth';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
-import { PERSONAL_SPEND, driveSpend } from '@pagespace/lib/billing/spend-target';
+import { PERSONAL_SPEND, conversationSpend } from '@pagespace/lib/billing/spend-target';
 import { resolveRequestContext } from '@/lib/ai/core/resolve-request-context';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { streamText } from 'ai';
@@ -506,17 +506,18 @@ describe('POST /api/ai/global/[id]/messages — prepaid credit gate', () => {
 
     expect(resolveRequestContext).not.toHaveBeenCalled();
     expect(canConsumeAI).toHaveBeenCalledTimes(1);
+    // No stored choice is read against a client-supplied drive either: the target is plain personal.
     expect(vi.mocked(canConsumeAI).mock.calls[0][2].spend).toEqual(PERSONAL_SPEND);
   });
 
-  it('SPEND-7 (partial) with a contextRef the spend drive is the server-resolved drive, never the one the client claims', async () => {
+  it('SPEND-7 (partial) SPEND-3 (partial) with a contextRef the spend drive is the server-resolved drive, never the one the client claims, and the turn names its conversation', async () => {
     await POST(
       makeRequest({ contextRef: { routeType: 'drive', driveId: 'drive-client-claimed' }, locationContext: CLIENT_CLAIMED_DRIVE }),
       makeContext(),
     );
 
     expect(resolveRequestContext).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(canConsumeAI).mock.calls[0][2].spend).toEqual(driveSpend('drive-server-resolved'));
+    expect(vi.mocked(canConsumeAI).mock.calls[0][2].spend).toEqual(conversationSpend('drive-server-resolved', 'conv-1'));
   });
 
 });

@@ -78,7 +78,13 @@ export type RefusalReason =
   | 'source_empty'
   | 'source_paused'
   | 'source_unavailable'
-  | 'guest_drive_wallet_off';
+  | 'guest_drive_wallet_off'
+  /**
+   * The wallet stored as this conversation's choice is not one this person may spend in
+   * this drive now (deleted, another person's, a seat after leaving the org, another
+   * drive's wallet). Refused rather than treated as "nothing chosen" (SPEND-4).
+   */
+  | 'chosen_wallet_unavailable';
 
 export type SkipReason = 'drive_wallet_empty' | 'drive_wallet_paused' | 'no_drive_wallet';
 
@@ -145,6 +151,11 @@ function optionsExcept(input: ResolveSpendSourceInput, excluded: SpendSourceKind
     if (leg) options.push({ source, walletId: leg.walletId });
   }
   return options;
+}
+
+/** Every source this consumer may spend that covers the call, in source order (the refusal card's options). */
+export function coveredSpendOptions(input: ResolveSpendSourceInput): SpendOption[] {
+  return optionsExcept(input, null);
 }
 
 function refuse(source: SpendSourceKind | null, reason: RefusalReason, options: SpendOption[]): SpendResolution {

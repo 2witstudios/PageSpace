@@ -15,6 +15,7 @@
 
 import {
   childSpendableCents,
+  coveredSpendOptions,
   entitlementTierFor,
   resolveSpendSource,
   type DriveSpendRule,
@@ -51,7 +52,17 @@ import type { SubscriptionTier } from './subscription-tiers';
  */
 export type SpendTarget =
   | { kind: 'personal' }
-  | { kind: 'drive'; driveId: string; chosen: SpendSourceKind | null }
+  | {
+      kind: 'drive';
+      driveId: string;
+      chosen: SpendSourceKind | null;
+      /**
+       * The conversation the call answers, whose stored choice (conversations.chosenWalletId)
+       * the gate resolves (SPEND-3). Absent or null for a call with no conversation; the
+       * drive's and the person's defaults still apply.
+       */
+      conversationId?: string | null;
+    }
   | { kind: 'automation'; driveId: string };
 
 /** The personal root wallet: no drive (SPEND-8). */
@@ -64,6 +75,18 @@ export const PERSONAL_SPEND: SpendTarget = Object.freeze({ kind: 'personal' });
  */
 export function driveSpend(driveId: string | null | undefined, chosen: SpendSourceKind | null = null): SpendTarget {
   return typeof driveId === 'string' && driveId.length > 0 ? { kind: 'drive', driveId, chosen } : PERSONAL_SPEND;
+}
+
+/**
+ * The target for a turn of `conversationId` running in a session of `driveId`: the gate
+ * reads the conversation's stored choice (SPEND-3). `driveId` must be SERVER-resolved (the
+ * conversation's or page's drive), never a drive id the client sent. No drive is personal.
+ */
+export function conversationSpend(driveId: string | null | undefined, conversationId: string | null | undefined): SpendTarget {
+  const target = driveSpend(driveId);
+  return target.kind === 'drive' && typeof conversationId === 'string' && conversationId.length > 0
+    ? { ...target, conversationId }
+    : target;
 }
 
 /**
@@ -100,7 +123,7 @@ export function automationRunUnreserved(input: {
  */
 export function resolvedSpend(target: SpendTarget, source: SpendSourceKind | undefined): SpendTarget {
   if (target.kind !== 'drive' || source === undefined) return target;
-  return { kind: 'drive', driveId: target.driveId, chosen: source };
+  return { ...target, chosen: source };
 }
 
 /**
@@ -273,6 +296,70 @@ export function preselectSoleSource(chosen: SpendSourceKind | null, legs: CallSp
 }
 
 // ---------------------------------------------------------------------------
+// The stored choice (SPEND-3): conversations.chosenWalletId, wallets.defaultSpendSource
+// ---------------------------------------------------------------------------
+
+/**
+ * What is stored about the source for a call, as the shell read it:
+ *   - `chosenWalletId`: the conversation's explicit choice (conversations.chosenWalletId);
+ *     null when nothing was chosen for it.
+ *   - `driveDefault`: the drive wallet's defaultSpendSource; null when none is set.
+ *   - `personalDefault`: the person's own default, on their personal root wallet.
+ */
+export interface StoredSpendChoice {
+  chosenWalletId: string | null;
+  driveDefault: SpendSourceKind | null;
+  personalDefault: SpendSourceKind | null;
+}
+
+export const NO_STORED_CHOICE: StoredSpendChoice = Object.freeze({ chosenWalletId: null, driveDefault: null, personalDefault: null });
+
+/**
+ * The source a stored wallet id is for THIS person in THIS drive: the drive wallet, the
+ * seat on the org pool (only a leg when they hold a seat), or their own personal wallet.
+ * Anything else — a deleted wallet, someone else's, another drive's, a seat they no longer
+ * hold — is null. The legs are what the shell loaded for this person through the
+ * permissions module, so an id can only map to a wallet they may spend now.
+ */
+export function sourceOfWallet(walletId: string, legs: CallSpendLegs): SpendSourceKind | null {
+  if (walletId === PERSONAL_ROOT_NOT_YET_CREATED) return null;
+  if (legs.driveWallet?.walletId === walletId) return 'drive_wallet';
+  if (legs.seatAllowance?.walletId === walletId) return 'seat_allowance';
+  if (legs.personal?.walletId === walletId) return 'own_credits';
+  return null;
+}
+
+export type ChosenSource =
+  | { kind: 'source'; source: SpendSourceKind; via: 'turn' | 'conversation' | 'drive_default' | 'personal_default' }
+  | { kind: 'none' }
+  /** A stored choice that names no wallet this person may spend: refused, never replaced. */
+  | { kind: 'invalid'; chosenWalletId: string };
+
+/**
+ * The source for a call, in order (SPEND-3): the source this turn already resolved (a
+ * follow-on call), the conversation's explicit choice, the drive's default, the person's
+ * default. A default names a KIND and is skipped where this person may not spend that kind
+ * (a guest and the drive wallet); a stored choice names a WALLET and is never skipped — if
+ * it resolves to nothing the answer is `invalid`, so the gate refuses rather than moving the
+ * conversation onto another source (SPEND-4).
+ */
+export function chooseSource(turnSource: SpendSourceKind | null, stored: StoredSpendChoice, legs: CallSpendLegs): ChosenSource {
+  if (turnSource !== null) return { kind: 'source', source: turnSource, via: 'turn' };
+  if (stored.chosenWalletId !== null) {
+    const source = sourceOfWallet(stored.chosenWalletId, legs);
+    return source === null ? { kind: 'invalid', chosenWalletId: stored.chosenWalletId } : { kind: 'source', source, via: 'conversation' };
+  }
+  const available = availableSources(legs);
+  if (stored.driveDefault !== null && available.includes(stored.driveDefault)) {
+    return { kind: 'source', source: stored.driveDefault, via: 'drive_default' };
+  }
+  if (stored.personalDefault !== null && available.includes(stored.personalDefault)) {
+    return { kind: 'source', source: stored.personalDefault, via: 'personal_default' };
+  }
+  return { kind: 'none' };
+}
+
+// ---------------------------------------------------------------------------
 // The decision (SPEND-1, SPEND-4, WAL-8)
 // ---------------------------------------------------------------------------
 
@@ -280,7 +367,10 @@ export function preselectSoleSource(chosen: SpendSourceKind | null, legs: CallSp
 export const ORG_ENTITLEMENT_TIER: SubscriptionTier = 'business';
 
 export interface CallSpendInput extends CallSpendLegs {
+  /** The source this turn already resolved, for a follow-on call; null for a turn's first call. */
   chosen: SpendSourceKind | null;
+  /** What is stored for this conversation and person (SPEND-3); none when omitted. */
+  stored?: StoredSpendChoice;
   userOverride: UserSpendOverride;
   reservationCents: number;
   /** The tier of the wallet's ROOT owner: the org for org drives, the drive owner for a personal drive (WAL-8, D-OW-14). */
@@ -358,15 +448,30 @@ export function personalRootDecision(consumerTier: SubscriptionTier): CallSpendD
  * (`fallbackApplied`). An empty chosen source refuses and charges zero (SPEND-4).
  */
 export function decideCallSpend(input: CallSpendInput): CallSpendDecision {
-  const resolution = resolveSpendSource({
+  // A stored choice is a PERSON's (SPEND-3): an automation has none to honour and spends its
+  // drive wallet or skips (SPEND-6), whatever a conversation or a default says.
+  const choice: ChosenSource = input.actor.kind === 'automation'
+    ? { kind: 'none' }
+    : chooseSource(input.chosen, input.stored ?? NO_STORED_CHOICE, input);
+  const sourceInput = {
     actor: input.actor,
     driveWallet: input.driveWallet,
     seatAllowance: input.seatAllowance,
     personal: input.personal,
-    chosen: preselectSoleSource(input.chosen, input),
+    chosen: null,
     driveRule: input.driveRule,
     userOverride: input.userOverride,
     reservationCents: input.reservationCents,
+  };
+  const overridden = input.userOverride.alwaysOwnCredits || input.userOverride.alwaysOwnCreditsInDrive;
+  if (choice.kind === 'invalid' && !overridden) {
+    // A stored choice that no longer resolves is refused by name, charges nothing, and takes
+    // no fallback and no preselection: the person re-chooses from the options (SPEND-4).
+    return { kind: 'refuse', source: null, reason: 'chosen_wallet_unavailable', options: coveredSpendOptions(sourceInput), chargeCents: 0 };
+  }
+  const resolution = resolveSpendSource({
+    ...sourceInput,
+    chosen: choice.kind === 'source' ? choice.source : preselectSoleSource(null, input),
   });
   if (resolution.kind !== 'spend') return resolution;
   return {

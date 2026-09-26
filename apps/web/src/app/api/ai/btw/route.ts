@@ -8,7 +8,7 @@ import { conversations } from '@pagespace/db/schema/conversations';
 import { users } from '@pagespace/db/schema/auth';
 import { canAccessConversation } from '@pagespace/lib/permissions/conversation-access';
 import { canConsumeAI, resolveEntitlementTier } from '@pagespace/lib/billing/credit-gate';
-import { driveSpend } from '@pagespace/lib/billing/spend-target';
+import { conversationSpend } from '@pagespace/lib/billing/spend-target';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
@@ -67,8 +67,8 @@ export async function POST(request: Request) {
     const consumerTier = (user?.subscriptionTier ?? 'free') as SubscriptionTier;
     // A side question spends in the session of the conversation it asks about (SPEND-7):
     // a page or drive conversation's drive, or personal credits for a global one (SPEND-8).
-    // The per-conversation chosen source has no storage yet, so none is named here.
-    const spend = driveSpend(await conversationSessionDriveId(conversation));
+    // It spends the source stored on that conversation (SPEND-3), or refuses (SPEND-4).
+    const spend = conversationSpend(await conversationSessionDriveId(conversation), conversationId);
     // Entitlement exactly as a chat turn decides it: an admin-only provider is a
     // role block, a paid-tier model is a tier block (a downgraded user's stored
     // model must not keep running here) — for the tier of whoever funds the call (WAL-8).

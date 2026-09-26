@@ -270,6 +270,13 @@ describe('POST /api/ai/chat - prepaid credit gate', () => {
     expect(streamText).not.toHaveBeenCalled();
   });
 
+  it('SPEND-3 (partial) SPEND-7 (partial) a page turn spends in the page\'s drive and names its conversation, never a source', async () => {
+    await POST(createChatRequest());
+    expect(vi.mocked(canConsumeAI).mock.calls[0]?.[2]?.spend).toEqual({
+      kind: 'drive', driveId: 'drive_A', chosen: null, conversationId: expect.any(String),
+    });
+  });
+
   it('does not block with a 402 when the gate allows', async () => {
     vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'ok' });
 

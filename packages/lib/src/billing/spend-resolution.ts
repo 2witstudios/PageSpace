@@ -16,18 +16,20 @@
 import { db } from '@pagespace/db/db';
 import { and, eq, gt, inArray, isNull, or, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
+import { conversations } from '@pagespace/db/schema/conversations';
 import { creditHolds } from '@pagespace/db/schema/credits';
 import { wallets, personalRootWalletOf } from '@pagespace/db/schema/wallets';
 import { ORGS_ENABLED } from '../organizations/orgs-enabled';
-import { loadDriveSpendStanding } from '../permissions/spend-standing';
+import { loadDriveSpendStanding, sharedSpendLegsFor } from '../permissions/spend-standing';
 import { loggers } from '../logging/logger-config';
 import { notifyLeadOfAutomationSkip } from './automation-skip-notifier';
 import { spendableCentsFor } from './credit-balance';
-import { effectiveSpendPolicy, type FallbackRule, type SpendLeg, type WalletStatus } from './wallet-core';
+import { effectiveSpendPolicy, type FallbackRule, type SpendLeg, type SpendSourceKind, type WalletStatus } from './wallet-core';
 import {
   ORG_ENTITLEMENT_TIER,
   PERSONAL_ROOT_NOT_YET_CREATED,
   automationSpendInput,
+  availableSources,
   decideCallSpend,
   personalRootDecision,
   personActor,
@@ -37,10 +39,12 @@ import {
   walletSpendableCents,
   type CallSpendDecision,
   type SpendTarget,
+  type StoredSpendChoice,
   type WalletBalanceFacts,
   type WalletHoldTotal,
 } from './spend-target';
 import { toSubscriptionTier, type SubscriptionTier } from './subscription-tiers';
+import { ensurePersonalRootWalletId } from './personal-wallet';
 
 const WALLET_FACTS = {
   id: wallets.id,
@@ -54,9 +58,15 @@ const WALLET_FACTS = {
   monthlyPeriodStart: wallets.monthlyPeriodStart,
   monthlyPeriodEnd: wallets.monthlyPeriodEnd,
   fallbackRule: wallets.fallbackRule,
+  defaultSpendSource: wallets.defaultSpendSource,
 } as const;
 
-type WalletRow = WalletBalanceFacts & { monthlyPeriodStart: Date | null; monthlyPeriodEnd: Date | null; fallbackRule: FallbackRule | null };
+type WalletRow = WalletBalanceFacts & {
+  monthlyPeriodStart: Date | null;
+  monthlyPeriodEnd: Date | null;
+  fallbackRule: FallbackRule | null;
+  defaultSpendSource: SpendSourceKind | null;
+};
 
 async function walletById(id: string): Promise<WalletRow | null> {
   const [row] = await db.select(WALLET_FACTS).from(wallets).where(eq(wallets.id, id)).limit(1);
@@ -108,6 +118,23 @@ async function liveHoldTotals(walletIds: string[], now: Date): Promise<WalletHol
     ))
     .groupBy(wallets.id, wallets.parentWalletId);
   return rows.map((r) => ({ walletId: r.walletId, parentWalletId: r.parentWalletId, reservedCents: Number(r.reservedCents) }));
+}
+
+/**
+ * The wallet `userId` stored as this conversation's choice (SPEND-3), or null when nothing was
+ * chosen, the call has no conversation, or the conversation is not theirs (a choice is one
+ * person's, and a caller-supplied id may not have been vetted yet when the gate runs). Whether
+ * the id is one this person may spend is decided against their legs (spend-target
+ * `sourceOfWallet`), never by the row.
+ */
+async function chosenWalletOf(userId: string, conversationId: string | null | undefined): Promise<string | null> {
+  if (typeof conversationId !== 'string' || conversationId.length === 0) return null;
+  const [row] = await db
+    .select({ chosenWalletId: conversations.chosenWalletId })
+    .from(conversations)
+    .where(and(eq(conversations.id, conversationId), eq(conversations.userId, userId)))
+    .limit(1);
+  return row?.chosenWalletId ?? null;
 }
 
 async function tierOf(userId: string): Promise<SubscriptionTier> {
@@ -233,10 +260,20 @@ export async function resolveCallSpend(input: {
     isOrgMember: standing?.isOrgMember ?? false,
   });
 
-  const driveWallet = standing ? await driveWalletOf(standing.driveId) : null;
-  // A seat is the per-consumer leg on the org pool (WAL-2): only an org member holds one (DRV-8).
-  const pool = standing?.orgId && standing.isOrgMember ? await orgPoolOf(standing.orgId) : null;
+  // Which shared legs this person may draw at all is decided by the permissions module from
+  // their effective drive membership, NOT by the actor's guest flag: an org member with no
+  // membership of a Restricted or Private org drive gets no drive-wallet leg and no seat
+  // there, so no source, default or stored wallet id can reach either (review P1-2).
+  const shared = sharedSpendLegsFor(standing);
+  const driveWallet = standing && shared.driveWallet ? await driveWalletOf(standing.driveId) : null;
+  // A seat is the per-consumer leg on the org pool (WAL-2): only an org member of the drive holds one (DRV-8).
+  const pool = standing?.orgId && shared.seat ? await orgPoolOf(standing.orgId) : null;
   const personal = await personalRootOf(userId);
+  const stored: StoredSpendChoice = {
+    chosenWalletId: await chosenWalletOf(userId, target.conversationId),
+    driveDefault: driveWallet?.defaultSpendSource ?? null,
+    personalDefault: personal?.defaultSpendSource ?? null,
+  };
 
   const { leg: driveLeg, holds } = await driveWalletLeg(
     driveWallet,
@@ -283,6 +320,7 @@ export async function resolveCallSpend(input: {
     // storage yet, so it is off everywhere.
     driveRule: { fallback, guestsMaySpendDriveWallet: false },
     chosen: target.chosen,
+    stored,
     // SPEND-5's "always my own credits" has no storage yet; both switches read off.
     userOverride: { alwaysOwnCredits: false, alwaysOwnCreditsInDrive: false },
     reservationCents: input.reservationCents,
@@ -298,8 +336,56 @@ export async function resolveCallSpend(input: {
       decision: decision.kind,
       source: decision.kind === 'refuse' ? decision.source : null,
       reason: decision.reason,
+      chosenWalletId: stored.chosenWalletId,
       options: decision.kind === 'refuse' ? decision.options.map((o) => o.source) : [],
     });
   }
   return decision;
+}
+
+/** One source a person may pick for a call, named by the wallet it spends. */
+export interface SpendChoice {
+  source: SpendSourceKind;
+  walletId: string;
+}
+
+/**
+ * The sources `userId` may pick in a session of `driveId` (null: no drive, SPEND-8), each
+ * with the wallet it spends — the ids a conversation may store as its choice (SPEND-3). The
+ * same legs the gate reads, opened by the same permissions rule (sharedSpendLegsFor), with
+ * no balances: whether a source can cover a call is the gate's question, asked per call.
+ * The personal root wallet is created bare if missing, so own credits always has an id (the
+ * gate grants into a bare row exactly as it always has).
+ */
+export async function listSpendChoices(userId: string, driveId: string | null): Promise<SpendChoice[]> {
+  const personalId = await ensurePersonalRootWalletId(db, userId);
+  const own: SpendChoice = { source: 'own_credits', walletId: personalId };
+  if (!ORGS_ENABLED || driveId === null) return [own];
+
+  const standing = await loadDriveSpendStanding(userId, driveId);
+  const shared = sharedSpendLegsFor(standing);
+  const driveWallet = standing && shared.driveWallet ? await driveWalletOf(standing.driveId) : null;
+  const pool = standing?.orgId && shared.seat ? await orgPoolOf(standing.orgId) : null;
+  const actor = personActor(userId, {
+    orgId: standing?.orgId ?? null,
+    isDriveMember: standing?.isDriveMember ?? false,
+    isOrgMember: standing?.isOrgMember ?? false,
+  });
+  const legs = {
+    actor,
+    driveWallet: driveWallet ? walletLeg(driveWallet.id, driveWallet.status, 0) : null,
+    seatAllowance: pool ? walletLeg(pool.id, pool.status, 0) : null,
+    personal: walletLeg(personalId, 'active', 0),
+    // D-OW-4: guests may not spend a drive wallet until the per-drive switch has storage.
+    driveRule: { fallback: 'refuse' as const, guestsMaySpendDriveWallet: false },
+  };
+  const ids: Record<SpendSourceKind, string | undefined> = {
+    drive_wallet: driveWallet?.id,
+    seat_allowance: pool?.id,
+    own_credits: personalId,
+  };
+  return availableSources(legs).flatMap((source) => {
+    const walletId = ids[source];
+    return walletId ? [{ source, walletId }] : [];
+  });
 }

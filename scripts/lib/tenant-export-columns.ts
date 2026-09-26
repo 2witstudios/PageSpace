@@ -280,6 +280,10 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
       'rev', 'planPageId', 'lastMessageAt',
       'createdAt', 'updatedAt', 'isActive', 'isShared',
     ],
+    excluded: {
+      chosenWalletId:
+        'The wallet chosen for this conversation (SPEND-3) is an id in the SOURCE instance\'s `wallets` table, which the bundle does not carry. Carried, it would name no wallet in the tenant and the credit gate would refuse every call in the conversation (a stale choice fails closed); left out, it lands as NULL, which means "nothing chosen" and preselects from the defaults exactly as a new conversation does.',
+    },
     // `planPageId` travels, but like `agentPageId` it is nulled by the exporter
     // when the plan page is outside the bundle (tenant-export.ts) — a binding
     // may point into a drive the migration does not carry.

@@ -82,6 +82,7 @@ import {
 } from '../commands/tasks.js';
 import { trashListHandler } from '../commands/trash.js';
 import { workspacesExecHandler, workspacesListHandler } from '../commands/workspaces.js';
+import { walletsDriveHandler, walletsListHandler, walletsSourceHandler } from '../commands/wallets.js';
 import { whoamiHandler } from '../commands/whoami.js';
 import { tokensCreateHandler } from '../commands/keys/create.js';
 import { keysDescribeHandler } from '../commands/keys/describe.js';
@@ -195,6 +196,10 @@ const OTHER_ROUTES: readonly RouteEntry[] = [
   { path: ['channels', 'send'], handler: channelsSendHandler, summary: 'Send a channel message' },
   { path: ['workspaces', 'list'], handler: workspacesListHandler, summary: 'List your agent workspaces (each has one sandbox)' },
   { path: ['workspaces', 'exec'], handler: workspacesExecHandler, summary: "Run a shell command in a workspace's sandbox" },
+  // Wallet READS only ([D-OW-26]): a key never moves money or changes a spend source.
+  { path: ['wallets', 'drive'], handler: walletsDriveHandler, summary: "Show a drive's wallet: remaining credits and your own cap" },
+  { path: ['wallets', 'list'], handler: walletsListHandler, summary: 'List the wallets you spend from and fund (unscoped key)' },
+  { path: ['wallets', 'source'], handler: walletsSourceHandler, summary: 'Show which wallet a conversation spends from (unscoped key)' },
 ];
 
 const HELP_DESCRIPTOR = { path: ['help'], summary: 'Show this help message' };

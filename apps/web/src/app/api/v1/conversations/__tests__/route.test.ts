@@ -132,7 +132,7 @@ const existingConversation = {
   createdAt: new Date('2024-01-15T10:00:00.000Z'),
   updatedAt: new Date('2024-01-15T10:00:00.000Z'),
   isShared: false,
-  agentPageId: null, rev: 0,
+  agentPageId: null, chosenWalletId: null, rev: 0,
   planPageId: null,
   lastMessageAt: null,
 };

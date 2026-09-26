@@ -1,0 +1,3 @@
+ALTER TABLE "conversations" ADD COLUMN "chosenWalletId" text;--> statement-breakpoint
+ALTER TABLE "wallets" ADD COLUMN "defaultSpendSource" text;--> statement-breakpoint
+ALTER TABLE "wallets" ADD CONSTRAINT "wallets_default_spend_source_valid" CHECK ("wallets"."defaultSpendSource" IS NULL OR ("wallets"."defaultSpendSource" IN ('drive_wallet', 'seat_allowance', 'own_credits') AND NOT ("wallets"."ownerType" = 'org' AND "wallets"."subjectType" IS NULL)));
