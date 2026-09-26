@@ -2171,6 +2171,13 @@
       "when": 1790369345958,
       "tag": "0310_purple_caretaker",
       "breakpoints": true
+    },
+    {
+      "idx": 311,
+      "version": "7",
+      "when": 1790466459906,
+      "tag": "0311_fancy_juggernaut",
+      "breakpoints": true
     }
   ]
 }
