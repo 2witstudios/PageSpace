@@ -169,10 +169,10 @@ export interface OrgSubscriptionCandidate {
  * second. Only a live subscription stamped with THIS org and carrying the base price
  * qualifies; among several, the oldest, so the choice is deterministic.
  */
-export function pickAdoptableOrgSubscription(
-  candidates: ReadonlyArray<OrgSubscriptionCandidate>,
+export function pickAdoptableOrgSubscription<C extends OrgSubscriptionCandidate>(
+  candidates: ReadonlyArray<C>,
   input: { orgId: string; prices: OrgBusinessPrices },
-): OrgSubscriptionCandidate | null {
+): C | null {
   const matches = candidates
     .filter(
       (s) =>
@@ -212,9 +212,15 @@ export type SeatQuantitySyncPlan =
 /**
  * A-8: bring the seat item to max(0, seats − 5). The key carries the stored revision,
  * so replaying THIS change is deduplicated while reaching the same quantity again
- * after another change (0 → 2 → 0 → 2) is a new request Stripe must apply.
+ * after another change (0 → 2 → 0 → 2) is a new request Stripe must apply. The
+ * proration choice is part of the request, so it is part of the key.
  */
-export function planSeatQuantitySync(input: { orgId: string; stored: StoredSeatItem; seats: number }): SeatQuantitySyncPlan {
+export function planSeatQuantitySync(input: {
+  orgId: string;
+  stored: StoredSeatItem;
+  seats: number;
+  prorationBehavior?: 'create_prorations' | 'none';
+}): SeatQuantitySyncPlan {
   const quantity = orgExtraSeatQuantity(input.seats);
   if (quantity === input.stored.extraSeatQuantity) return { kind: 'noop', quantity };
   return {
@@ -226,6 +232,7 @@ export function planSeatQuantitySync(input: { orgId: string; stored: StoredSeatI
       itemId: input.stored.seatItemId,
       revision: input.stored.seatRevision,
       quantity,
+      prorationBehavior: input.prorationBehavior ?? 'create_prorations',
     }),
   };
 }

@@ -193,4 +193,10 @@ describe('planSeatQuantitySync — raising or lowering the extra-seat quantity',
     const later = planSeatQuantitySync({ orgId: ORG, stored: { ...stored, seatRevision: 2 }, seats: 7 });
     expect(later.kind === 'update' && first.kind === 'update' && later.idempotencyKey !== first.idempotencyKey).toBe(true);
   });
+
+  it('A-8 the proration choice is part of the request, so a prorated and an unprorated change derive different keys', () => {
+    const prorated = planSeatQuantitySync({ orgId: ORG, stored, seats: 7 });
+    const unprorated = planSeatQuantitySync({ orgId: ORG, stored, seats: 7, prorationBehavior: 'none' });
+    expect(prorated.kind === 'update' && unprorated.kind === 'update' && prorated.idempotencyKey !== unprorated.idempotencyKey).toBe(true);
+  });
 });
