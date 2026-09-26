@@ -2489,6 +2489,11 @@
       "import": "./dist/permissions/app-permissions.js",
       "require": "./dist/permissions/app-permissions.js"
     },
+    "./permissions/guest-role": {
+      "types": "./dist/permissions/guest-role.d.ts",
+      "import": "./dist/permissions/guest-role.js",
+      "require": "./dist/permissions/guest-role.js"
+    },
     "./permissions/membership-queries": {
       "types": "./dist/permissions/membership-queries.d.ts",
       "import": "./dist/permissions/membership-queries.js",
@@ -3520,6 +3525,9 @@
       ],
       "permissions/app-permissions": [
         "./dist/permissions/app-permissions.d.ts"
+      ],
+      "permissions/guest-role": [
+        "./dist/permissions/guest-role.d.ts"
       ],
       "permissions/membership-queries": [
         "./dist/permissions/membership-queries.d.ts"

@@ -1,7 +1,7 @@
 /**
  * Pool refill, allocation reset, funding legs and donations against a real Postgres
  * (Spec MON-3, WAL-3, WAL-4; D-OW-12, D-OW-13). No mocks: the real shell, the real
- * permissions check, migration 0307's wallet_funding_legs.
+ * permissions check, migration 0318's wallet_funding_legs.
  *
  * Requires DATABASE_URL → a migrated Postgres; fails loudly without one (requireDb).
  * Deletes every row it creates in dependency order — ledger, child wallets, root

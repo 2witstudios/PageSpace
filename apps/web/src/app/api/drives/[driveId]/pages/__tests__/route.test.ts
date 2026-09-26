@@ -60,6 +60,7 @@ vi.mock('@pagespace/db/operators', () => ({
   inArray: vi.fn((_col: unknown, _vals: unknown[]) => ({ type: 'inArray' })),
   asc: vi.fn((_col: unknown) => ({ type: 'asc' })),
   isNotNull: vi.fn((_col: unknown) => ({ type: 'isNotNull' })),
+  ne: vi.fn((a: unknown, b: unknown) => ({ _ne: true, a, b })),
   sql: Object.assign(
     (strings: TemplateStringsArray, ..._values: unknown[]) => ({ strings, _values, type: 'sql' }),
     { join: vi.fn(() => ({ type: 'sql.join' })) }
@@ -115,6 +116,7 @@ vi.mock('@pagespace/lib/permissions/drive-relationship-loader', () => ({
 // ---------- imports (after mocks) ----------
 
 import { GET } from '../route';
+import { ne } from '@pagespace/db/operators';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { buildTree } from '@pagespace/lib/content/tree-utils'
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -330,6 +332,14 @@ describe('GET /api/drives/[driveId]/pages', () => {
 
       expect(response.status).toBe(200);
       expect(body).toEqual([]);
+    });
+
+    it('does not give a GUEST row (redeemed page share link) rule-4 reads: the membership read excludes GUEST', async () => {
+      mockSelectDistinctWhere.mockResolvedValue([]);
+
+      await GET(createRequest() as never, createContext(mockDriveId));
+
+      expect(ne).toHaveBeenCalledWith('dm.role', 'GUEST');
     });
 
     it('should fetch permitted pages and ancestors when member has some permissions', async () => {

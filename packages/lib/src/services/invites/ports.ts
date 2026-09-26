@@ -38,7 +38,7 @@ export interface AcceptancePorts {
   findExistingMembership: (input: {
     driveId: string;
     userId: string;
-  }) => Promise<{ acceptedAt: Date | null } | null>;
+  }) => Promise<{ acceptedAt: Date | null; role: string } | null>;
   consumeInviteAndCreateMember: (input: {
     invite: Invite;
     userId: string;

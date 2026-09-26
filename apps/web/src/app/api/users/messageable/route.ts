@@ -53,11 +53,13 @@ export async function GET(request: Request) {
     // invitation is not an established shared context — the invitee must not
     // resolve the members' identities, nor they the invitee's. Same rule as
     // callerCanViewUser in lib/users/visibility.ts, and as usersShareDrive,
-    // which gates opening the DM itself.
+    // which gates opening the DM itself. A GUEST row (redeemed page share link)
+    // is not a shared context either, on both sides: a guest does not see the
+    // drive's people, and they do not see the guest.
     const memberDrives = await db
       .select({ driveId: driveMembers.driveId })
       .from(driveMembers)
-      .where(and(eq(driveMembers.userId, userId), isNotNull(driveMembers.acceptedAt)));
+      .where(and(eq(driveMembers.userId, userId), isNotNull(driveMembers.acceptedAt), ne(driveMembers.role, 'GUEST')));
 
     const myDriveIds = Array.from(
       new Set<string>([
@@ -80,7 +82,8 @@ export async function GET(request: Request) {
           and(
             inArray(driveMembers.driveId, myDriveIds),
             ne(driveMembers.userId, userId),
-            isNotNull(driveMembers.acceptedAt)
+            isNotNull(driveMembers.acceptedAt),
+            ne(driveMembers.role, 'GUEST')
           )
         );
 

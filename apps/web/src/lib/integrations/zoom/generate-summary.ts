@@ -8,7 +8,9 @@ const SYSTEM_PROMPT =
 
 export async function generateTranscriptSummary(
   userId: string,
-  transcriptPlainText: string
+  transcriptPlainText: string,
+  /** The wallet the enrichment's credit hold reserved (SPEND-6: the target drive's wallet). */
+  walletId?: string,
 ): Promise<string> {
   try {
     const provider = await createAIProvider(userId, {});
@@ -35,6 +37,7 @@ export async function generateTranscriptSummary(
         ? (result.usage.inputTokens ?? 0) + (result.usage.outputTokens ?? 0)
         : undefined,
       success: true,
+      walletId,
       metadata: { feature: 'zoom_summary' },
     }));
 

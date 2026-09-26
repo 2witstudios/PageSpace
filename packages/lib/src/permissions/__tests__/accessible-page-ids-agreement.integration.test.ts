@@ -129,6 +129,24 @@ describe('accessible_page_ids_for_user agrees with getUserAccessLevel (integrati
           await factories.createPagePermission(privatePage2.id, u, { canView: true });
         },
       },
+      {
+        label: 'guest with one grant',
+        setup: async (u) => {
+          await factories.createDriveMember(drive.id, u, { role: 'GUEST' });
+          await factories.createPagePermission(open2.id, u, { canView: true });
+        },
+      },
+      {
+        label: 'guest with no grant',
+        setup: async (u) => { await factories.createDriveMember(drive.id, u, { role: 'GUEST' }); },
+      },
+      {
+        label: 'guest carrying a custom role that would grant drive-wide',
+        setup: async (u) => {
+          await factories.createDriveMember(drive.id, u, { role: 'GUEST', customRoleId: await role({ [privatePage.id]: ON }, ON) });
+          await factories.createPagePermission(open.id, u, { canView: true });
+        },
+      },
     ];
 
     for (const c of cases) {
