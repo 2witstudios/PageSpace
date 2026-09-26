@@ -33,6 +33,7 @@ import { users } from '@pagespace/db/schema/auth';
 import { organizations, orgSubscriptions, type OrgSubscription } from '@pagespace/db/schema/organizations';
 import { countOrgSeats } from '@pagespace/lib/organizations/repository';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { isBillingEnabled } from '@pagespace/lib/deployment-mode';
 import { stripe as appStripe } from '@/lib/stripe';
 import { stripeConfig } from '@/lib/stripe-config';
 import {
@@ -388,4 +389,53 @@ export function defaultOrgBillingDeps(): OrgBillingDeps {
     prices: () => ({ basePriceId: stripeConfig.orgPriceIds.businessBase, seatPriceId: stripeConfig.orgPriceIds.extraSeat }),
     countSeats: countOrgSeats,
   };
+}
+
+// ---------------------------------------------------------------------------
+// What routes return
+// ---------------------------------------------------------------------------
+
+/** What a route may show about the org's subscription: never a Stripe id. */
+export interface OrgSubscriptionSummary {
+  status: string;
+  trialEnd: string | null;
+  currentPeriodEnd: string | null;
+  extraSeatQuantity: number;
+}
+
+export function orgSubscriptionSummary(linkage: OrgSubscriptionLinkage): OrgSubscriptionSummary {
+  return {
+    status: linkage.status,
+    trialEnd: linkage.trialEnd?.toISOString() ?? null,
+    currentPeriodEnd: linkage.currentPeriodEnd?.toISOString() ?? null,
+    extraSeatQuantity: linkage.extraSeatQuantity,
+  };
+}
+
+/**
+ * The org's billing state right after it is created (SEAT-8: creating an org starts
+ * Business with a trial):
+ *   - `not_billed` where billing is off (onprem, tenant) — no Stripe call is made;
+ *   - `subscribed` with the trial the org just started;
+ *   - `pending` when Stripe could not be reached: the org exists without a
+ *     subscription, nothing half-written, and POST /api/orgs/[orgId]/billing/subscription
+ *     provisions it on retry.
+ */
+export type OrgBillingStart =
+  | { state: 'not_billed' }
+  | { state: 'subscribed'; subscription: OrgSubscriptionSummary }
+  | { state: 'pending' };
+
+export async function startOrgBusinessTrial(
+  orgId: string,
+  deps: OrgBillingDeps = defaultOrgBillingDeps(),
+): Promise<OrgBillingStart> {
+  if (!isBillingEnabled()) return { state: 'not_billed' };
+  try {
+    const { linkage } = await ensureOrgBusinessSubscription(orgId, deps);
+    return { state: 'subscribed', subscription: orgSubscriptionSummary(linkage) };
+  } catch (error) {
+    loggers.api.error('org business trial could not start; the org is left unsubscribed and retryable', error as Error, { orgId });
+    return { state: 'pending' };
+  }
 }

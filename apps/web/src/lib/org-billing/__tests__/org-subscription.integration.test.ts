@@ -11,7 +11,7 @@
  * Requires DATABASE_URL → a migrated Postgres; fails loudly without one (requireDb).
  * Deletes every row it creates, children first, users last.
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import { db } from '@pagespace/db/db';
 import { eq, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
@@ -20,12 +20,19 @@ import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { createOrganization } from '@pagespace/lib/organizations/repository';
 import { ORG_ID_METADATA_KEY, type OrgBusinessPrices } from '@pagespace/lib/billing/org-subscription-core';
-import { ensureOrgBusinessSubscription, ensureOrgStripeCustomer, syncOrgSeatQuantity, type OrgBillingDeps } from '../org-subscription';
+import {
+  ensureOrgBusinessSubscription,
+  ensureOrgStripeCustomer,
+  startOrgBusinessTrial,
+  syncOrgSeatQuantity,
+  type OrgBillingDeps,
+} from '../org-subscription';
 import { FakeOrgStripe } from './fake-org-stripe';
 
 const PRICES: OrgBusinessPrices = { basePriceId: 'price_base_test', seatPriceId: 'price_seat_test' };
 
 let dbAvailable = false;
+const originalMode = process.env.DEPLOYMENT_MODE;
 const orgIds: string[] = [];
 const userIds: string[] = [];
 
@@ -63,6 +70,11 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
       requireDb('org-subscription.integration.test.ts', error);
       dbAvailable = false;
     }
+  });
+
+  afterEach(() => {
+    if (originalMode === undefined) delete process.env.DEPLOYMENT_MODE;
+    else process.env.DEPLOYMENT_MODE = originalMode;
   });
 
   afterAll(async () => {
@@ -291,5 +303,36 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
     const unconfigured: OrgBillingDeps = { ...deps, prices: () => ({ basePriceId: '', seatPriceId: PRICES.seatPriceId }) };
     await expect(ensureOrgBusinessSubscription(orgId, unconfigured)).rejects.toMatchObject({ code: 'prices_not_configured' });
     expect(stripe.writes).toEqual({ createCustomer: 0, createSubscription: 0, createSubscriptionItem: 0, updateSubscriptionItemQuantity: 0 });
+  });
+
+  it('SEAT-8 (partial) starting the trial on org creation: a cloud org is subscribed and trialing, with no Stripe id in what the route sees', async () => {
+    if (!dbAvailable) return;
+    process.env.DEPLOYMENT_MODE = 'cloud';
+    const { orgId, deps } = await northwind(1);
+    const start = await startOrgBusinessTrial(orgId, deps);
+    expect(start).toMatchObject({ state: 'subscribed', subscription: { status: 'trialing', extraSeatQuantity: 0 } });
+    expect(JSON.stringify(start)).not.toMatch(/cus_|sub_|si_/);
+  });
+
+  it('SEAT-8 (partial) where billing is off (onprem, tenant) no org is billed and Stripe is never called', async () => {
+    if (!dbAvailable) return;
+    for (const mode of ['onprem', 'tenant']) {
+      process.env.DEPLOYMENT_MODE = mode;
+      const { orgId, deps, stripe } = await northwind(1);
+      expect(await startOrgBusinessTrial(orgId, deps)).toEqual({ state: 'not_billed' });
+      expect(stripe.writes.createCustomer + stripe.reads.findCustomerByOrgId).toBe(0);
+      expect(await rowsFor(orgId)).toHaveLength(0);
+    }
+  });
+
+  it('SEAT-8 (partial) a Stripe outage while the org is created leaves it pending and unsubscribed, and a later call provisions it', async () => {
+    if (!dbAvailable) return;
+    process.env.DEPLOYMENT_MODE = 'cloud';
+    const { orgId, deps, stripe } = await northwind(1);
+    stripe.failNext('createCustomer', Object.assign(new Error('Stripe is unavailable'), { type: 'StripeAPIError' }));
+    expect(await startOrgBusinessTrial(orgId, deps)).toEqual({ state: 'pending' });
+    expect((await orgRow(orgId)).stripeCustomerId).toBeNull();
+    expect(await rowsFor(orgId)).toHaveLength(0);
+    expect((await ensureOrgBusinessSubscription(orgId, deps)).linkage.status).toBe('trialing');
   });
 });
