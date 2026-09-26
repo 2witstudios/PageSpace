@@ -2098,78 +2098,92 @@
     {
       "idx": 299,
       "version": "7",
-      "when": 1790038078778,
-      "tag": "0299_aromatic_smiling_tiger",
+      "when": 1790169270562,
+      "tag": "0308_member_role_guest",
       "breakpoints": true
     },
     {
       "idx": 300,
       "version": "7",
-      "when": 1790038079778,
-      "tag": "0300_quick_falcon",
+      "when": 1790169279445,
+      "tag": "0309_accessible_page_ids_excludes_guest",
       "breakpoints": true
     },
     {
       "idx": 301,
       "version": "7",
-      "when": 1790038080778,
-      "tag": "0301_wallets_drop_user_primary_key",
+      "when": 1790169280445,
+      "tag": "0310_aromatic_smiling_tiger",
       "breakpoints": true
     },
     {
       "idx": 302,
       "version": "7",
-      "when": 1790038081778,
-      "tag": "0302_wallets_owner_subject_parent_and_wallet_ids",
+      "when": 1790169281445,
+      "tag": "0311_quick_falcon",
       "breakpoints": true
     },
     {
       "idx": 303,
       "version": "7",
-      "when": 1790038082778,
-      "tag": "0303_wallets_lock_and_require_wallet_ids",
+      "when": 1790169282445,
+      "tag": "0312_wallets_drop_user_primary_key",
       "breakpoints": true
     },
     {
       "idx": 304,
       "version": "7",
-      "when": 1790038083778,
-      "tag": "0304_wallets_backfill_wallet_ids",
+      "when": 1790169283445,
+      "tag": "0313_wallets_owner_subject_parent_and_wallet_ids",
       "breakpoints": true
     },
     {
       "idx": 305,
       "version": "7",
-      "when": 1790038084778,
-      "tag": "0305_wallet_ids_required",
+      "when": 1790169284445,
+      "tag": "0314_wallets_lock_and_require_wallet_ids",
       "breakpoints": true
     },
     {
       "idx": 306,
       "version": "7",
-      "when": 1790168679179,
-      "tag": "0306_fuzzy_adam_destine",
+      "when": 1790169285445,
+      "tag": "0315_wallets_backfill_wallet_ids",
       "breakpoints": true
     },
     {
       "idx": 307,
       "version": "7",
-      "when": 1790168679180,
-      "tag": "0307_wallet_funding_legs",
+      "when": 1790169286445,
+      "tag": "0316_wallet_ids_required",
+      "breakpoints": true
+    },
+    {
+      "idx": 308,
+      "version": "7",
+      "when": 1790169287445,
+      "tag": "0317_fuzzy_adam_destine",
       "breakpoints": true
     },
     {
       "idx": 309,
       "version": "7",
-      "when": 1790195490864,
-      "tag": "0309_automation_skip_notices",
+      "when": 1790169288445,
+      "tag": "0318_wallet_funding_legs",
       "breakpoints": true
     },
     {
       "idx": 310,
       "version": "7",
+      "when": 1790195490864,
+      "tag": "0319_automation_skip_notices",
+      "breakpoints": true
+    },
+    {
+      "idx": 311,
+      "version": "7",
       "when": 1790369345958,
-      "tag": "0310_purple_caretaker",
+      "tag": "0320_purple_caretaker",
       "breakpoints": true
     }
   ]

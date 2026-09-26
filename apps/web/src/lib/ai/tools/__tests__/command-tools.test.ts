@@ -72,7 +72,7 @@ vi.mock('@pagespace/db/schema/core', () => ({
 }));
 
 vi.mock('@pagespace/db/schema/members', () => ({
-  driveMembers: { driveId: 'driveId', userId: 'userId', acceptedAt: 'acceptedAt' },
+  driveMembers: { driveId: 'driveId', userId: 'userId', acceptedAt: 'acceptedAt', role: 'role' },
 }));
 
 // The one member-drive set (org-aware; owned drives plus accepted rows while dark).
@@ -377,6 +377,10 @@ describe('command-tools', () => {
       expect(result.total).toBe(1);
       expect(result.commands[0].trigger).toBe('my-cmd');
       expect(result.commands[0].scope).toBe('user');
+      // A GUEST row (redeemed page share link) does not make a drive's commands the caller's:
+      // the drive set is getMemberDriveIds, which reads a GUEST row as no membership
+      // (member-drives.integration.test.ts proves it on real Postgres).
+      expect(getMemberDriveIds).toHaveBeenCalledWith('user-1', { includeTrashed: false });
     });
 
     it('returns empty list when no commands exist', async () => {

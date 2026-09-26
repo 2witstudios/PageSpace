@@ -267,7 +267,8 @@ async function buildAndPersistPulse(
     .where(and(
       inArray(driveMembers.driveId, driveIds),
       ne(driveMembers.userId, userId),
-      isNotNull(driveMembers.acceptedAt)
+      isNotNull(driveMembers.acceptedAt),
+      ne(driveMembers.role, 'GUEST')
     )) : [];
   // Decrypt PII at the edge so the team roster in the prompt is plaintext —
   // batched once per unique stored value (the same user repeats across

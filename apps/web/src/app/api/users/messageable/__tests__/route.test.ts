@@ -29,6 +29,7 @@ vi.mock('@pagespace/db/schema/members', () => ({
     driveId: 'driveMembers.driveId',
     userId: 'driveMembers.userId',
     acceptedAt: 'driveMembers.acceptedAt',
+    role: 'driveMembers.role',
   },
   userProfiles: {},
 }));
@@ -89,6 +90,14 @@ function containsAcceptedGate(predicate: unknown): boolean {
   );
 }
 
+function containsGuestExclusion(predicate: unknown): boolean {
+  if (predicate === null || typeof predicate !== 'object') return false;
+  if ('ne' in predicate && Array.isArray(predicate.ne) && predicate.ne[0] === driveMembers.role && predicate.ne[1] === 'GUEST') return true;
+  return Object.values(predicate).some((v) =>
+    Array.isArray(v) ? v.some(containsGuestExclusion) : containsGuestExclusion(v)
+  );
+}
+
 function fromLeftJoinWhere(rows: unknown[]) {
   return {
     from: vi.fn().mockReturnValue({
@@ -140,6 +149,25 @@ describe('GET /api/users/messageable', () => {
     expect(memberReads).toHaveLength(2);
     for (const read of memberReads) {
       expect(containsAcceptedGate(read.predicate)).toBe(true);
+    }
+  });
+
+  // A GUEST row (redeemed page share link) is not a shared context either: a
+  // guest must not resolve the drive's people, nor they the guest.
+  it('excludes GUEST rows from both drive_members reads', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(fromWhere([])) // owned drives
+      .mockReturnValueOnce(fromWhere([{ driveId: 'drive_1' }])) // member drives
+      .mockReturnValueOnce(fromWhere([])) // other owners
+      .mockReturnValueOnce(fromWhere([])) // other members
+      .mockReturnValueOnce(fromWhere([])); // relationships
+
+    await GET(new Request('http://localhost/api/users/messageable'));
+
+    const memberReads = queries.filter((q) => q.table === driveMembers);
+    expect(memberReads).toHaveLength(2);
+    for (const read of memberReads) {
+      expect(containsGuestExclusion(read.predicate)).toBe(true);
     }
   });
 

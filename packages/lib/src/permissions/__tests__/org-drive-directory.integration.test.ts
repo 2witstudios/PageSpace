@@ -25,6 +25,8 @@ import { answerDriveJoinRequest, requestToJoinDrive } from '../../services/drive
 import { getDriveMemberUserIds, getDriveRecipientUserIds } from '../../services/drive-member-service';
 import { getDriveAccess, listAccessibleDrives } from '../../services/drive-service';
 import { syncDriveOrgMembership } from '../../services/org-membership-sync';
+import { countOrgSeats } from '../../organizations/repository';
+import { accountRepository } from '../../repositories/account-repository';
 
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
@@ -202,3 +204,46 @@ describe('drive recipient lists', () => {
     expect(recipients).toContain(lena);
   });
 });
+
+describe('D-OW-24 a GUEST row (a redeemed page share link) is no membership', () => {
+  const guestRow = (driveId: string, userId: string) =>
+    ({ driveId, userId, role: 'GUEST' as const, source: 'invite' as const, acceptedAt: new Date() });
+  const rowOn = (driveId: string, userId: string) => and(eq(driveMembers.driveId, driveId), eq(driveMembers.userId, userId));
+
+  it('not joined in the directory (still requestable), not listed, not a member, recipient or co-member, and no seat; the same row as MEMBER is all of those', async () => {
+    // Lena (org member) redeemed a page link in Research (Restricted); Nina one in Finance (Private).
+    await db.insert(driveMembers).values([guestRow(d.research, lena), guestRow(d.finance, nina)]);
+    const seatsBefore = await countOrgSeats(northwind);
+
+    // (c) the directory
+    expect((await directoryOf(lena))?.Research).toEqual({ visibility: 'RESTRICTED', joined: false, joinRequest: null, canRequest: true });
+    expect(await directoryOf(nina)).not.toHaveProperty('Finance');
+    // (a) access and listing
+    expect(await getDriveAccess(d.research, lena)).toMatchObject({ isMember: false, role: null });
+    expect(await getDriveAccess(d.finance, nina)).toMatchObject({ isMember: false, role: null });
+    expect((await listAccessibleDrives(lena)).map((x) => x.id)).not.toContain(d.research);
+    expect((await listAccessibleDrives(nina)).map((x) => x.id)).not.toContain(d.finance);
+    // (d) recipients, member lists and co-membership (Chris holds a real row on Research)
+    expect(await getDriveRecipientUserIds(d.research)).not.toContain(lena);
+    expect(await getDriveMemberUserIds(d.research)).not.toContain(lena);
+    expect(await getDriveRecipientUserIds(d.finance)).not.toContain(nina);
+    expect(await usersShareDrive(lena, chris)).toBe(false);
+    expect(await usersShareDrive(chris, lena)).toBe(false);
+    // (e) seats and the account-deletion member count
+    expect(await countOrgSeats(northwind)).toBe(seatsBefore);
+    expect(await accountRepository.getDriveMemberCount(d.research)).toBe(1);
+
+    // Positive control: the very same row as a MEMBER is every one of those things.
+    await db.update(driveMembers).set({ role: 'MEMBER' }).where(rowOn(d.research, lena));
+    expect((await directoryOf(lena))?.Research).toMatchObject({ joined: true, canRequest: false });
+    expect(await getDriveAccess(d.research, lena)).toMatchObject({ isMember: true, role: 'MEMBER' });
+    expect((await listAccessibleDrives(lena)).map((x) => x.id)).toContain(d.research);
+    expect(await getDriveRecipientUserIds(d.research)).toContain(lena);
+    expect(await getDriveMemberUserIds(d.research)).toContain(lena);
+    expect(await usersShareDrive(lena, chris)).toBe(true);
+    expect(await accountRepository.getDriveMemberCount(d.research)).toBe(2);
+    // A drive row never holds an org seat, member or guest.
+    expect(await countOrgSeats(northwind)).toBe(seatsBefore);
+  });
+});
+

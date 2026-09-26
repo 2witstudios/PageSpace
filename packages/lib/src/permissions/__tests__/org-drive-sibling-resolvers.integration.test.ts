@@ -79,7 +79,9 @@ const DENY: PermissionLevel = { canView: false, canEdit: false, canShare: false,
 /**
  * Northwind plus the shapes only the siblings need: Tomás holds PENDING invitations (acceptedAt
  * null), as ADMIN on Finance and as MEMBER on Marcus's personal drive; Zed is a stranger used as the
- * revoke target; every person holds an inheriting MCP key scoped to every drive.
+ * revoke target; every person holds an inheriting MCP key scoped to every drive. Gus redeemed page
+ * links (D-OW-24): a GUEST row plus a page grant on Marcus's personal drive and on Product (Open),
+ * and a bare GUEST row on Research (Restricted) — no membership anywhere, only his grants.
  */
 async function matrixFixture() {
   const f = await northwind();
@@ -91,7 +93,14 @@ async function matrixFixture() {
   // Lu's only link to Marcus's personal drive is a page share that has EXPIRED: it opens nothing and lists nothing.
   await factories.createPagePermission(f.pages.personalPage.id, f.people.lu.id, { expiresAt: new Date(Date.now() - 60_000) });
 
-  const people = { ...f.people, tomas };
+  const gus = await createUser('Gus Guest');
+  await factories.createDriveMember(f.drives.personal.id, gus.id, { source: 'invite', role: 'GUEST' });
+  await factories.createPagePermission(f.pages.personalPage.id, gus.id);
+  await factories.createDriveMember(f.drives.product.id, gus.id, { source: 'invite', role: 'GUEST' });
+  await factories.createPagePermission(f.pages.productPage.id, gus.id);
+  await factories.createDriveMember(f.drives.research.id, gus.id, { source: 'invite', role: 'GUEST' });
+
+  const people = { ...f.people, tomas, gus };
   const tokens = new Map<string, string>();
   for (const person of Object.values(people)) {
     const [token] = await db.insert(mcpTokens).values({
@@ -261,7 +270,7 @@ describe('B7b: every human drive resolver answers with one org-aware membership 
     await pool.end();
   });
 
-  it('while ORGS_ENABLED is false every routed sibling returns exactly the pre-B7b result, except the three named fixes: a pending invitation manages no roles, a drive-wide custom role opens no private page, and a role entry that denies view grants nothing', async () => {
+  it('while ORGS_ENABLED is false every routed sibling returns exactly the pre-B7b result, except the four named fixes: a pending invitation manages no roles, a drive-wide custom role opens no private page, a role entry that denies view grants nothing, and a GUEST row is no membership (D-OW-24)', async () => {
     const m = await matrixFixture();
     flags.orgsEnabled = false;
     const everyone = Object.entries(m.people);
@@ -310,6 +319,8 @@ describe('B7b: every human drive resolver answers with one org-aware membership 
 
     const hiring = m.pages.productPrivatePage.id;
     const boardDeck = m.boardDeck.id;
+    const researchPage = m.pages.researchPage.id;
+    const [research, personal, product] = [m.drives.research.name, m.drives.personal.name, m.drives.product.name];
     expect(differences.sort()).toEqual([
       // Tomás's pending ADMIN (Finance) and MEMBER (Marcus Notes) invitations passed the roles gate.
       `checkDriveAccessForRoles tomas ${m.drives.finance.name}`,
@@ -319,6 +330,26 @@ describe('B7b: every human drive resolver answers with one org-aware membership 
       `getUsersWhoCanViewPage ${m.drives.product.name} ${hiring}`,
       // The Contributor role hides the Board deck but sets canEdit on it: Marcus could edit what he cannot view (#2672).
       `getBatchPagePermissions marcus ${m.drives.product.name} ${boardDeck}`,
+      // D-OW-24 (master #2723): the frozen siblings predate GUEST and read Gus's GUEST rows as
+      // memberships — drive membership, drive-wide permissions, the roles gate, workspaces, and a
+      // rule-4 read of every non-private page he was never given (Research's page, Product's Board deck).
+      ...[research, personal, product].flatMap((d) => [
+        `checkDriveAccess gus ${d}`,
+        `checkDriveAccessForRoles gus ${d}`,
+        `getUserDrivePermissions gus ${d}`,
+        `isUserDriveMember gus ${d}`,
+        `resolveDriveMembership gus ${d}`,
+      ]),
+      'getDriveIdsForUser gus',
+      `getUserDriveAccess gus ${research}`,
+      ...[research, product].flatMap((d) => [
+        `getUserAccessiblePagesInDrive gus ${d}`,
+        `getUserAccessiblePagesInDriveWithDetails gus ${d}`,
+      ]),
+      `getBatchPagePermissions gus ${research} ${researchPage}`,
+      `getBatchPagePermissions gus ${product} ${boardDeck}`,
+      `getUsersWhoCanViewPage ${research} ${researchPage}`,
+      `getUsersWhoCanViewPage ${product} ${boardDeck}`,
     ].sort());
     expect(compared).toBeGreaterThan(1000);
 
@@ -329,6 +360,15 @@ describe('B7b: every human drive resolver answers with one org-aware membership 
     expect(await legacyGetUsersWhoCanViewPage(hiring, [m.people.marcus.id])).toEqual(new Set([m.people.marcus.id]));
     expect((await legacyGetBatchPagePermissions(m.people.marcus.id, [boardDeck])).get(boardDeck)).toEqual({ canView: false, canEdit: true, canShare: false, canDelete: false });
     expect((await getBatchPagePermissions(m.people.marcus.id, [boardDeck])).get(boardDeck)).toEqual(DENY);
+    // The GUEST fix, by value: the legacy answer was a membership; the live one is only Gus's grants.
+    const gus = m.people.gus.id;
+    expect(await legacyIsUserDriveMember(gus, m.drives.product.id)).toBe(true);
+    expect(await isUserDriveMember(gus, m.drives.product.id)).toBe(false);
+    expect((await legacyGetBatchPagePermissions(gus, [boardDeck])).get(boardDeck)?.canView).toBe(true);
+    expect((await getBatchPagePermissions(gus, [boardDeck, m.pages.productPage.id])).get(boardDeck)).toEqual(DENY);
+    expect((await getBatchPagePermissions(gus, [m.pages.productPage.id])).get(m.pages.productPage.id)?.canView).toBe(true);
+    expect(await isUserMemberOfAnyEventDrive(gus, { id: createId(), driveId: m.drives.product.id })).toBe(false);
+    expect(await resolveDriveMembership({ userId: gus, driveId: m.drives.personal.id })).toBe('none');
     // Not vacuous while dark: stale org rows still open drives exactly as before orgs.
     expect(await isUserDriveMember(m.people.marcus.id, m.drives.finance.id)).toBe(true);
     expect(await isUserDriveMember(m.people.priya.id, m.drives.research.id)).toBe(false);

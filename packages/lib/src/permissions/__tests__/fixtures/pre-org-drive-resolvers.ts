@@ -2,7 +2,8 @@
  * FROZEN COPY of the four human drive resolvers as they were before org access was wired in
  * (pu/org-wallets at b2852bcfc: permissions.ts getUserAccessLevel, drive-service.ts
  * listAccessibleDrives, getDriveAccess, getDriveAccessWithDrive; re-copied from master at 12ef8f23b
- * when the master sync brought #2627's drive-wide canEdit rule), with only the export names
+ * when the master sync brought #2627's drive-wide canEdit rule, and again from master at 3a3353e5d
+ * when sync 4 brought #2723's GUEST role), with only the export names
  * prefixed `legacy` and the imports adjusted. Do not edit or "fix" these bodies: they are the
  * reference the dark-flag equivalence test compares the live resolvers against, byte for byte.
  */
@@ -13,6 +14,7 @@ import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 import { loggers } from '../../../logging/logger-config';
 import { parseUserId, parsePageId } from '../../../validators/id-validators';
 import { fetchCustomRolePermissions, resolveCustomRolePermissions, resolveDriveWideCanEdit } from '../../membership-queries';
+import { isGuestRole } from '../../guest-role';
 import type { PermissionLevel } from '../../permissions';
 import { getDriveById, type DriveAccessInfo, type DriveAccessWithDrive, type DriveWithAccess, type ListDrivesOptions } from '../../../services/drive-service';
 
@@ -99,7 +101,8 @@ export async function legacyGetUserAccessLevel(
         ))
         .limit(1);
 
-      if (membership.length > 0) {
+      // A GUEST holds pages, not the drive: no drive-root access.
+      if (membership.length > 0 && !isGuestRole(membership[0].role)) {
         const isAdmin = membership[0].role === 'ADMIN';
         // The single drive-wide canEdit rule (#2627): a custom role bounds a
         // MEMBER to what its driveWidePermissions grant; an unresolvable or
@@ -149,7 +152,9 @@ export async function legacyGetUserAccessLevel(
         ))
         .limit(1);
 
-      if (memberRow.length > 0) {
+      // A GUEST row is not a membership here: it gets neither a custom role nor
+      // rule 4 below, only its explicit page_permissions grants.
+      if (memberRow.length > 0 && !isGuestRole(memberRow[0].role)) {
         memberRole = memberRow[0].role;
         memberCustomRoleId = memberRow[0].customRoleId;
 
@@ -240,14 +245,16 @@ export async function legacyListAccessibleDrives(
       : and(eq(drives.ownerId, userId), eq(drives.isTrashed, false)),
   });
 
-  // 2. Get drives where user is a member (including last access time)
-  const memberDrives = await db
+  // 2. Get drives where user is a member (including last access time). A GUEST
+  // row is not a membership: its drive is reached, like any page collaborator's,
+  // through step 3 — never token-scopable, never drive-wide create.
+  const memberDrives = (await db
     .selectDistinct({ driveId: driveMembers.driveId, role: driveMembers.role, customRoleId: driveMembers.customRoleId, lastAccessedAt: driveMembers.lastAccessedAt })
     .from(driveMembers)
     .where(and(
       eq(driveMembers.userId, userId),
       isNotNull(driveMembers.acceptedAt),
-    ));
+    ))).filter((d) => !isGuestRole(d.role));
 
   // 3. Get drives where user has page-level permissions
   // Skip this if tokenScopable is true (only owned + member drives can be scoped to tokens)
@@ -368,7 +375,8 @@ export async function legacyGetDriveAccess(
     ))
     .limit(1);
 
-  if (membership.length > 0) {
+  // A GUEST (redeemed page share link) is a page collaborator, not a member.
+  if (membership.length > 0 && !isGuestRole(membership[0].role)) {
     const role = membership[0].role as 'ADMIN' | 'MEMBER';
     return {
       isOwner: false,
@@ -416,7 +424,8 @@ export async function legacyGetDriveAccessWithDrive(
     ))
     .limit(1);
 
-  if (membership.length > 0) {
+  // A GUEST (redeemed page share link) is a page collaborator, not a member.
+  if (membership.length > 0 && !isGuestRole(membership[0].role)) {
     const role = membership[0].role as 'ADMIN' | 'MEMBER';
     return {
       drive,

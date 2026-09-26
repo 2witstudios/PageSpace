@@ -869,11 +869,13 @@ export async function executeAskAgent(
         // Awaited (not fire-and-forget): trackAIUsage persists the usage log and
         // debits the balance inside the returned promise, so awaiting here keeps the
         // sub-agent charge durable if the tool returns into a serverless freeze.
-        // No holdId: this nested call runs inside an already-gated parent request;
-        // the parent's hold covers its own settle, and these sub-agent decrements
-        // draw the balance directly (no separate reservation to release). They draw
-        // the wallet the PARENT turn's gate named (walletId), because an agent's spend
-        // belongs to the session it runs in, not the drive the agent lives in (SPEND-7).
+        // No holdId: every caller gates before invoking this engine (a nested call
+        // runs inside an already-gated parent request; the channel mention responder
+        // takes its own hold per reply via acquireUserCreditHold and releases it when
+        // this returns); this decrement draws the balance directly, so there is no
+        // reservation to settle here. It draws the wallet the CALLER's gate named
+        // (walletId), because an agent's spend belongs to the session it runs in, not
+        // the drive the agent lives in (SPEND-7).
         await AIMonitoring.trackUsage({
           userId,
           provider: resolvedProvider,

@@ -60,6 +60,7 @@ vi.mock('@pagespace/db/operators', () => ({
   inArray: vi.fn((_col: unknown, _vals: unknown[]) => ({ type: 'inArray' })),
   asc: vi.fn((_col: unknown) => ({ type: 'asc' })),
   isNotNull: vi.fn((_col: unknown) => ({ type: 'isNotNull' })),
+  ne: vi.fn((a: unknown, b: unknown) => ({ _ne: true, a, b })),
   sql: Object.assign(
     (strings: TemplateStringsArray, ..._values: unknown[]) => ({ strings, _values, type: 'sql' }),
     { join: vi.fn(() => ({ type: 'sql.join' })) }
@@ -330,6 +331,16 @@ describe('GET /api/drives/[driveId]/pages', () => {
 
       expect(response.status).toBe(200);
       expect(body).toEqual([]);
+    });
+
+    it('does not give a GUEST row (redeemed page share link) rule-4 reads: the page set is getUserAccessiblePagesInDrive', async () => {
+      vi.mocked(getUserAccessiblePagesInDrive).mockResolvedValue([]);
+
+      await GET(createRequest() as never, createContext(mockDriveId));
+
+      // No drive_members read of this route's own: getUserAccessiblePagesInDrive gives a GUEST
+      // row only its explicit grants (share-link-guest.integration.test.ts, real Postgres).
+      expect(getUserAccessiblePagesInDrive).toHaveBeenCalledWith(mockUserId, mockDriveId);
     });
 
     it('should fetch permitted pages and ancestors when member has some permissions', async () => {

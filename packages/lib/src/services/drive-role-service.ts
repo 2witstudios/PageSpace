@@ -122,6 +122,8 @@ export async function checkDriveAccessForRoles(
   // NULL) grants nothing, and a pending ADMIN invitation manages no roles (#2672).
   const membership = await loadEffectiveDriveMembership(userId, drive);
 
+  // A GUEST (redeemed page share link) is not a member and sees no roles: the effective
+  // membership reads a GUEST row as none (driveMembershipRow).
   if (!membership) {
     return {
       isOwner: false,

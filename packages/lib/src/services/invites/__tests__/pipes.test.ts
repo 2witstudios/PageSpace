@@ -104,7 +104,7 @@ describe('acceptInviteForExistingUser', () => {
     const ports = buildStubPorts({
       findExistingMembership: vi
         .fn()
-        .mockResolvedValue({ acceptedAt: new Date('2026-04-01') }),
+        .mockResolvedValue({ acceptedAt: new Date('2026-04-01'), role: 'MEMBER' }),
     });
     const result = await acceptInviteForExistingUser(ports)(baseInput());
     expect(result).toEqual({ ok: false, error: 'ALREADY_MEMBER' });
@@ -114,7 +114,16 @@ describe('acceptInviteForExistingUser', () => {
 
   it('given the user has a pending (unaccepted) membership, should still proceed to consume', async () => {
     const ports = buildStubPorts({
-      findExistingMembership: vi.fn().mockResolvedValue({ acceptedAt: null }),
+      findExistingMembership: vi.fn().mockResolvedValue({ acceptedAt: null, role: 'MEMBER' }),
+    });
+    const result = await acceptInviteForExistingUser(ports)(baseInput());
+    expect(result.ok).toBe(true);
+    expect(ports.consumeInviteAndCreateMember).toHaveBeenCalledOnce();
+  });
+
+  it('given the user is a GUEST of the drive (redeemed page link), should proceed to consume so the invite upgrades them', async () => {
+    const ports = buildStubPorts({
+      findExistingMembership: vi.fn().mockResolvedValue({ acceptedAt: new Date('2026-04-01'), role: 'GUEST' }),
     });
     const result = await acceptInviteForExistingUser(ports)(baseInput());
     expect(result.ok).toBe(true);

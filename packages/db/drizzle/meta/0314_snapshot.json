@@ -25584,7 +25584,8 @@
       "values": [
         "OWNER",
         "ADMIN",
-        "MEMBER"
+        "MEMBER",
+        "GUEST"
       ]
     },
     "public.pulse_summary_type": {

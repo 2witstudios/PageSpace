@@ -4,8 +4,17 @@ import { users, mcpTokens } from './auth';
 import { drives, pages } from './core';
 import { createId } from '@paralleldrive/cuid2';
 
-// Drive member roles
-export const memberRole = pgEnum('MemberRole', ['OWNER', 'ADMIN', 'MEMBER']);
+// Drive member roles. GUEST is the row a page share link creates: it carries the
+// pages the guest was given and nothing drive-wide (no rule-4 reads, no channel
+// posting, not a member for listings, DMs or seats).
+export const memberRole = pgEnum('MemberRole', ['OWNER', 'ADMIN', 'MEMBER', 'GUEST']);
+
+// The roles a grant can carry everywhere EXCEPT drive_members. GUEST is only ever
+// written to drive_members (by redeemPageShareLink); the other columns that share
+// the MemberRole enum — agent memberships, MCP token scopes, drive share links,
+// pending invites — are typed without it, so it cannot flow through them.
+export type GrantableMemberRole = 'OWNER' | 'ADMIN' | 'MEMBER';
+
 // How a drive_members row came to exist (D-OW-6): 'invite' is a person added to the drive
 // directly (including guests, DRV-8); 'org' is a row materialized from org membership and
 // maintained by the org membership sync. Existing rows are all invites.
@@ -81,7 +90,7 @@ export const driveAgentMembers = pgTable('drive_agent_members', {
   id:             text('id').primaryKey().$defaultFn(() => createId()),
   driveId:        text('driveId').notNull().references(() => drives.id, { onDelete: 'cascade' }),
   agentPageId:    text('agentPageId').notNull().references(() => pages.id, { onDelete: 'cascade' }),
-  role:           memberRole('role').default('MEMBER').notNull(),
+  role:           memberRole('role').$type<GrantableMemberRole>().default('MEMBER').notNull(),
   customRoleId:   text('customRoleId').references(() => driveRoles.id, { onDelete: 'set null' }),
   includeContext: boolean('includeContext').default(false).notNull(), // Whether to inject this drive's drivePrompt into the agent's system prompt
   addedBy:        text('addedBy').references(() => users.id, { onDelete: 'set null' }),
@@ -191,7 +200,7 @@ export const mcpTokenDrives = pgTable('mcp_token_drives', {
   // NULL = inherit: the token acts with its OWNER's access in this drive.
   // An explicit role is an opt-in downgrade/override and means exactly what
   // the same role means for a human drive member.
-  role:         memberRole('role'),
+  role:         memberRole('role').$type<GrantableMemberRole>(),
   customRoleId: text('customRoleId').references(() => driveRoles.id, { onDelete: 'set null' }),
   addedBy:      text('addedBy').references(() => users.id, { onDelete: 'set null' }),
   createdAt:    timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),

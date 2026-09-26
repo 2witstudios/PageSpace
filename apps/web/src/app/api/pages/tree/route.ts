@@ -4,6 +4,7 @@ import { buildTree } from '@pagespace/lib/content/tree-utils';
 import { db } from '@pagespace/db/db'
 import { and, eq, asc } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core'
+import { holdsAcceptedGuestRow } from '@pagespace/lib/permissions/membership-queries';
 import { isDriveMemberRelationship } from '@pagespace/lib/permissions/drive-relationship';
 import { loadDriveRelationship } from '@pagespace/lib/permissions/drive-relationship-loader';
 import { loggers } from '@pagespace/lib/logging/logger-config'
@@ -63,7 +64,12 @@ export async function POST(request: Request) {
     } else {
       // The drive's lead or an effective member (the org-aware membership reads ACCEPTED rows
       // only, so a pending invitee does not read the page tree of a drive they have not joined).
-      if (!relationship || !isDriveMemberRelationship(relationship)) {
+      // A GUEST row (redeemed page share link) is no membership but passes this gate on purpose:
+      // the tree below is cut to getUserAccessiblePagesInDrive, which gives a guest only the
+      // pages they hold explicit grants on.
+      const admitted = relationship !== null
+        && (isDriveMemberRelationship(relationship) || await holdsAcceptedGuestRow(driveId, userId));
+      if (!admitted) {
         return NextResponse.json({ error: 'Access denied' }, { status: 403 });
       }
     }

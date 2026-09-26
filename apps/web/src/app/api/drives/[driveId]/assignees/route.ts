@@ -3,7 +3,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log'
 import { getUserDriveAccess, canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db'
-import { eq, and, isNotNull } from '@pagespace/db/operators'
+import { eq, and, isNotNull, ne } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { pages, drives } from '@pagespace/db/schema/core'
 import { driveMembers, userProfiles } from '@pagespace/db/schema/members';
@@ -79,7 +79,8 @@ export async function GET(
       .leftJoin(userProfiles, eq(driveMembers.userId, userProfiles.userId))
       .where(and(
         eq(driveMembers.driveId, driveId),
-        isNotNull(driveMembers.acceptedAt)
+        isNotNull(driveMembers.acceptedAt),
+        ne(driveMembers.role, 'GUEST')
       ));
 
     // Fetch AI agents in the drive

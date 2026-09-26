@@ -8,6 +8,8 @@ vi.mock('../../logging/logger-config', () => ({
 
 import { loggers } from '../../logging/logger-config';
 import { DRIVE_MEMBERSHIP_ROLES, driveMembershipRole, driveMembershipRow } from '../drive-member-role';
+import { isGuestRole } from '../guest-role';
+import { memberRole } from '@pagespace/db/schema/members';
 
 beforeEach(() => vi.mocked(loggers.api.warn).mockClear());
 
@@ -30,6 +32,15 @@ describe('driveMembershipRole', () => {
 
   it('D-OW-24 a GUEST row (a redeemed page share link) is no drive membership', () => {
     expect(driveMembershipRole('GUEST')).toBeNull();
+  });
+
+  it('D-OW-24 agrees with master\'s isGuestRole on every value of the MemberRole enum: a role is no membership exactly when it is GUEST', () => {
+    // The enum as the database defines it (master's 0308 added GUEST): nothing is left out.
+    expect([...memberRole.enumValues].sort()).toEqual(['ADMIN', 'GUEST', 'MEMBER', 'OWNER']);
+    for (const role of memberRole.enumValues) {
+      expect(driveMembershipRole(role) === null, role).toBe(isGuestRole(role));
+    }
+    expect(loggers.api.warn).not.toHaveBeenCalled();
   });
 
   it('fails closed on a role nobody classified: no membership and a warning, never a throw', () => {
