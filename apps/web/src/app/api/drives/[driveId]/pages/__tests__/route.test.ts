@@ -116,7 +116,6 @@ vi.mock('@pagespace/lib/permissions/drive-relationship-loader', () => ({
 // ---------- imports (after mocks) ----------
 
 import { GET } from '../route';
-import { ne } from '@pagespace/db/operators';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { buildTree } from '@pagespace/lib/content/tree-utils'
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -334,12 +333,14 @@ describe('GET /api/drives/[driveId]/pages', () => {
       expect(body).toEqual([]);
     });
 
-    it('does not give a GUEST row (redeemed page share link) rule-4 reads: the membership read excludes GUEST', async () => {
-      mockSelectDistinctWhere.mockResolvedValue([]);
+    it('does not give a GUEST row (redeemed page share link) rule-4 reads: the page set is getUserAccessiblePagesInDrive', async () => {
+      vi.mocked(getUserAccessiblePagesInDrive).mockResolvedValue([]);
 
       await GET(createRequest() as never, createContext(mockDriveId));
 
-      expect(ne).toHaveBeenCalledWith('dm.role', 'GUEST');
+      // No drive_members read of this route's own: getUserAccessiblePagesInDrive gives a GUEST
+      // row only its explicit grants (share-link-guest.integration.test.ts, real Postgres).
+      expect(getUserAccessiblePagesInDrive).toHaveBeenCalledWith(mockUserId, mockDriveId);
     });
 
     it('should fetch permitted pages and ancestors when member has some permissions', async () => {

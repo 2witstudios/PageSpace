@@ -164,7 +164,9 @@ describe('redeemPageShareLink → GUEST (integration)', () => {
 
     // Member service: access, id lists, broadcast recipients, the Members page.
     expect((await checkDriveAccess(drive.id, redeemer.id)).isMember).toBe(false);
-    expect(await getDriveMemberUserIds(drive.id)).toEqual([member.id]);
+    // On the org-wallets branch the drive's member ids are its audience: the lead plus every
+    // effective member (listDriveAudience). The guest is in neither.
+    expect((await getDriveMemberUserIds(drive.id)).sort()).toEqual([owner.id, member.id].sort());
     expect((await getDriveRecipientUserIds(drive.id)).sort()).toEqual([owner.id, member.id].sort());
     expect((await listDriveMembers(drive.id)).map((m) => m.userId)).toEqual([member.id]);
     expect(await isMemberOfDrive(drive.id, redeemer.id)).toBe(false);

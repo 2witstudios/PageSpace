@@ -75,6 +75,18 @@ export async function getMemberCustomRoleId(driveId: string, userId: string): Pr
   return result[0].customRoleId ?? null;
 }
 
+// True when the user's ACCEPTED drive_members row in this drive is a GUEST row (a redeemed page
+// share link). The membership resolvers read that row as no membership (driveMembershipRole); a
+// caller that also admits page collaborators reads it here to tell a guest apart from them.
+export async function holdsAcceptedGuestRow(driveId: string, userId: string): Promise<boolean> {
+  const result = await db
+    .select({ role: driveMembers.role })
+    .from(driveMembers)
+    .where(and(eq(driveMembers.driveId, driveId), eq(driveMembers.userId, userId), isNotNull(driveMembers.acceptedAt)))
+    .limit(1);
+  return result.length > 0 && isGuestRole(result[0].role);
+}
+
 // Returns true only when the custom role exists and belongs to the specified drive.
 export async function customRoleBelongsToDrive(customRoleId: string, driveId: string): Promise<boolean> {
   const result = await db

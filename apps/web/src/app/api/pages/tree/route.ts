@@ -2,10 +2,9 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { buildTree } from '@pagespace/lib/content/tree-utils';
 import { db } from '@pagespace/db/db'
-import { and, eq, asc, isNotNull } from '@pagespace/db/operators'
+import { and, eq, asc } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core'
-import { driveMembers } from '@pagespace/db/schema/members'
-import { isGuestRole } from '@pagespace/lib/permissions/guest-role';
+import { holdsAcceptedGuestRow } from '@pagespace/lib/permissions/membership-queries';
 import { isDriveMemberRelationship } from '@pagespace/lib/permissions/drive-relationship';
 import { loadDriveRelationship } from '@pagespace/lib/permissions/drive-relationship-loader';
 import { loggers } from '@pagespace/lib/logging/logger-config'
@@ -15,19 +14,6 @@ import { getUserAccessiblePagesInDrive } from '@pagespace/lib/permissions/permis
 import { hasAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
-
-/** An ACCEPTED GUEST drive_members row: the user redeemed a page share link in this drive. */
-async function holdsAcceptedGuestRow(userId: string, driveId: string): Promise<boolean> {
-  const row = await db.query.driveMembers.findFirst({
-    where: and(
-      eq(driveMembers.driveId, driveId),
-      eq(driveMembers.userId, userId),
-      isNotNull(driveMembers.acceptedAt),
-    ),
-    columns: { role: true },
-  });
-  return isGuestRole(row?.role);
-}
 
 const requestSchema = z.object({
   driveId: z.string().min(1, 'Drive ID is required'),
@@ -82,7 +68,7 @@ export async function POST(request: Request) {
       // the tree below is cut to getUserAccessiblePagesInDrive, which gives a guest only the
       // pages they hold explicit grants on.
       const admitted = relationship !== null
-        && (isDriveMemberRelationship(relationship) || await holdsAcceptedGuestRow(userId, driveId));
+        && (isDriveMemberRelationship(relationship) || await holdsAcceptedGuestRow(driveId, userId));
       if (!admitted) {
         return NextResponse.json({ error: 'Access denied' }, { status: 403 });
       }

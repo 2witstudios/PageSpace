@@ -66,7 +66,6 @@ vi.mock('@pagespace/db/schema/social', () => ({
 }));
 
 import { GET } from '../route';
-import { ne } from '@pagespace/db/operators';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { accessiblePageIds } from '@pagespace/lib/permissions/accessible-page-ids';
 
@@ -103,7 +102,10 @@ describe('GET /api/activity/summary', () => {
   it('does not count a GUEST drive (redeemed page share link) among the member drives', async () => {
     await GET(new Request('https://example.com/api/activity/summary'));
 
-    expect(ne).toHaveBeenCalledWith('role', 'GUEST');
+    // The count is scoped to accessiblePageIds, never a drive_members read of this route's own;
+    // its SQL function gives a GUEST row only its explicit grants (drizzle/0309), which
+    // accessible-page-ids-agreement.integration.test.ts proves on real Postgres.
+    expect(accessiblePageIds).toHaveBeenCalledWith('user_1');
   });
 
   it('does not log audit event when query throws', async () => {

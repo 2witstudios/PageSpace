@@ -15,9 +15,8 @@ import { drives, pages } from '@pagespace/db/schema/core';
 import { driveAgentMembers, driveMembers } from '@pagespace/db/schema/members';
 import { canUserEditPage, getUserDriveAccess, isDriveOwnerOrAdmin } from '../permissions/permissions';
 import { loadEffectiveDriveMembership } from '../permissions/org-drive-membership';
-import { customRoleBelongsToDrive, fetchCustomRolePermissions } from '../permissions/membership-queries';
+import { customRoleBelongsToDrive, fetchCustomRolePermissions, holdsAcceptedGuestRow } from '../permissions/membership-queries';
 import type { CustomRolePerms } from '../permissions/membership-queries';
-import { isGuestRole } from '../permissions/guest-role';
 import { isHomeDrive, homeDriveActionError } from './drive-guards';
 import { isDriveLead } from '../permissions/drive-relationship';
 
@@ -74,13 +73,6 @@ async function resolveGranterAccess(
   // is capped to MEMBER with the drive's default role).
   const membership = await loadEffectiveDriveMembership(userId, { id: driveId, ...drive });
 
-  // A GUEST (redeemed page share link) may not bind an agent to the drive at
-  // any role: an agent MEMBER reads the whole drive, which would turn one shared
-  // page back into the drive-wide access GUEST exists to withhold.
-  if (membership && isGuestRole(membership.role)) {
-    return { canGrant: false, maxRole: 'MEMBER', customRoleId: null, driveKind };
-  }
-
   if (membership) {
     return {
       canGrant: true,
@@ -88,6 +80,15 @@ async function resolveGranterAccess(
       customRoleId: membership.customRoleId ?? null,
       driveKind,
     };
+  }
+
+  // A GUEST (redeemed page share link) may not bind an agent to the drive at
+  // any role: an agent MEMBER reads the whole drive, which would turn one shared
+  // page back into the drive-wide access GUEST exists to withhold. The effective
+  // membership above reads a GUEST row as none, so the row itself is read here,
+  // before the page-collaborator fallback below admits the guest through its grant.
+  if (await holdsAcceptedGuestRow(driveId, userId)) {
+    return { canGrant: false, maxRole: 'MEMBER', customRoleId: null, driveKind };
   }
 
   // Page-level collaborator only (no drive membership): may grant, capped at MEMBER.
