@@ -74,12 +74,12 @@ function statementVerbs(rawSql: string): string[] {
     .map((statement) => statement.split(/\s+/).slice(0, 2).join(' ').toUpperCase());
 }
 
-const rename = readMigration(300);
-const dropPk = readMigration(301);
-const expand = readMigration(302);
-const lockAndRequire = readMigration(303);
-const backfill = readMigration(304);
-const required = readMigration(305);
+const rename = readMigration(311);
+const dropPk = readMigration(312);
+const expand = readMigration(313);
+const lockAndRequire = readMigration(314);
+const backfill = readMigration(315);
+const required = readMigration(316);
 
 const journal = JSON.parse(
   readFileSync(path.join(MIGRATIONS_DIR, 'meta/_journal.json'), 'utf8'),
@@ -93,8 +93,8 @@ describe('drizzle/0311–0316 — credit_balances becomes wallets (static)', () 
     expect(duplicates).toEqual([]);
   });
 
-  it('X-5 (partial): the six migrations are journal entries 300–305, in order', () => {
-    for (const [idx, m] of [[300, rename], [301, dropPk], [302, expand], [303, lockAndRequire], [304, backfill], [305, required]] as const) {
+  it('X-5 (partial): the six migrations are journal entries 302–307, in order', () => {
+    for (const [idx, m] of [[302, rename], [303, dropPk], [304, expand], [305, lockAndRequire], [306, backfill], [307, required]] as const) {
       expect(journal.entries.find((e) => e.idx === idx)?.tag).toBe(path.basename(m.file, '.sql'));
     }
   });
@@ -760,7 +760,7 @@ describeLive('0311–0316 against a real Postgres', () => {
     try {
       await seedCorpus(s);
       // The chain as #2698 shipped it, without the new migration.
-      const withoutNew = [...allMigrations.slice(0, 303), allMigrations[304], allMigrations[305]];
+      const withoutNew = [...allMigrations.slice(0, 305), allMigrations[306], allMigrations[307]];
       await s.migrate(withoutNew);
       const before = await fullSnapshot(s);
 

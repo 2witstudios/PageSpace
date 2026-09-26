@@ -109,13 +109,14 @@ export async function listAccessibleDrives(
   // 2. Get drives where user is a member (including last access time). A GUEST
   // row is not a membership: its drive is reached, like any page collaborator's,
   // through step 3 — never token-scopable, never drive-wide create.
-  const memberDrives = (await db
+  const memberRows = await db
     .selectDistinct({ driveId: driveMembers.driveId, role: driveMembers.role, customRoleId: driveMembers.customRoleId, lastAccessedAt: driveMembers.lastAccessedAt })
     .from(driveMembers)
     .where(and(
       eq(driveMembers.userId, userId),
       isNotNull(driveMembers.acceptedAt),
-    ))).filter((d) => !isGuestRole(d.role));
+    ));
+  const memberDrives = memberRows.filter((d) => !isGuestRole(d.role));
 
   // 3. Get drives where user has page-level permissions
   // Skip this if tokenScopable is true (only owned + member drives can be scoped to tokens)
