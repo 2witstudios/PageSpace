@@ -163,7 +163,7 @@ describe('agent-mention-responder credit gate', () => {
     expect(mentionLogger.error).not.toHaveBeenCalled();
   });
 
-  it('SPEND-6 given a mention outside any drive, should never gate a person and never run the agent', async () => {
+  it('SPEND-6 (partial) given a mention outside any drive, should never gate a person and never run the agent', async () => {
     await triggerMentionedAgentResponses({ ...params, driveId: undefined });
 
     expect(mockCanConsumeAI).not.toHaveBeenCalled();

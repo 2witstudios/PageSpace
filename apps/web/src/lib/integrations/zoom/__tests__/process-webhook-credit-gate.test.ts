@@ -200,7 +200,7 @@ describe('processZoomWebhook AI enrichment credit gate', () => {
     expect(createdMetadata()).toMatchObject({ aiEnrichmentSkipped: 'gate_error' });
   });
 
-  it('SPEND-6 given wallets are live and the gate reserved no drive wallet, should skip the enrichment rather than bill the owner', async () => {
+  it('SPEND-6 (partial) given wallets are live and the gate reserved no drive wallet, should skip the enrichment rather than bill the owner', async () => {
     walletsLive.orgs = true;
     mockCanConsumeAI.mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'hold-3' });
 
@@ -215,7 +215,7 @@ describe('processZoomWebhook AI enrichment credit gate', () => {
     expect(createdMetadata()).toMatchObject({ aiEnrichmentSkipped: 'no_drive_wallet' });
   });
 
-  it('SPEND-6 given wallets are live and a drive wallet reserved, should enrich on that wallet', async () => {
+  it('SPEND-6 (partial) given wallets are live and a drive wallet reserved, should enrich on that wallet', async () => {
     walletsLive.orgs = true;
     mockCanConsumeAI.mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'hold-4', walletId: 'w-drive-1' });
 
