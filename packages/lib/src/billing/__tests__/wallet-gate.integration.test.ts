@@ -15,10 +15,11 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
 import { db, pool } from '@pagespace/db/db';
-import { eq, inArray } from '@pagespace/db/operators';
+import { and, eq, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { drives } from '@pagespace/db/schema/core';
+import { driveMembers } from '@pagespace/db/schema/members';
 import { creditHolds, creditLedger } from '@pagespace/db/schema/credits';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
@@ -408,6 +409,28 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     }
     await expectNothingCharged(world);
     expect((await walletRow(researchWallet.id)).spentCents).toBe(0);
+  });
+
+  it('D-OW-24 an org member holding only a GUEST row (a redeemed page share link) on a Restricted drive cannot spend its wallet or a seat there; the same row as MEMBER can', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 5_000 });
+    const research = await factories.createDrive(world.jonoId, { name: 'Customer Research', slug: `research-${createId()}`, orgId: world.orgId, orgVisibility: 'RESTRICTED' });
+    const [researchWallet] = await db.insert(wallets).values({
+      ownerType: 'org', orgId: world.orgId, subjectType: 'drive', subjectId: research.id, parentWalletId: world.poolId, monthlyAllowanceCents: 600,
+    }).returning();
+    await factories.createDriveMember(research.id, world.marcusId, { source: 'invite', role: 'GUEST' });
+
+    for (const source of ['drive_wallet', 'seat_allowance'] as const) {
+      const bySource = await canConsumeAI(world.marcusId, 'free', { spend: driveSpend(research.id, source) });
+      expect(bySource, source).toMatchObject({ allowed: false, reason: 'source_refused', refusal: { source, reason: 'source_unavailable', options: ['own_credits'] } });
+    }
+    await expectNothingCharged(world);
+    expect((await walletRow(researchWallet.id)).spentCents).toBe(0);
+
+    // Positive control: the same row as a MEMBER opens the drive wallet.
+    await db.update(driveMembers).set({ role: 'MEMBER' }).where(and(eq(driveMembers.driveId, research.id), eq(driveMembers.userId, world.marcusId)));
+    const asMember = await canConsumeAI(world.marcusId, 'free', { spend: driveSpend(research.id, 'drive_wallet') });
+    expect(asMember).toMatchObject({ allowed: true, walletId: researchWallet.id });
   });
 
   it('SPEND-4 (partial) a conversation with nothing chosen and no default refuses; it never defaults to a wallet', async () => {
