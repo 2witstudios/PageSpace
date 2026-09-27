@@ -10,9 +10,12 @@ import type { MemoryGated, MemoryGateRefusal } from '../memory-credit-gate';
 export const memoryGate = {
   refuseWith: null as MemoryGateRefusal | null,
   holds: [] as Array<{ userId: string; modelCalls: number }>,
+  /** Ordered log a test can append to; the double appends 'release' when a hold is freed. */
+  events: [] as string[],
   reset(): void {
     this.refuseWith = null;
     this.holds = [];
+    this.events = [];
   },
 };
 
@@ -23,5 +26,9 @@ export async function fakeWithMemoryCreditHold<T>(
 ): Promise<MemoryGated<T>> {
   memoryGate.holds.push({ userId, modelCalls });
   if (memoryGate.refuseWith) return { ran: false, reason: memoryGate.refuseWith };
-  return { ran: true, value: await run() };
+  try {
+    return { ran: true, value: await run() };
+  } finally {
+    memoryGate.events.push('release');
+  }
 }

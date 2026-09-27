@@ -357,4 +357,25 @@ describe('runDiscoveryPasses', () => {
       },
     });
   });
+
+  it('keeps the hold until every pass has settled, even when one pass throws', async () => {
+    setupDb(messages(10));
+    const { createAIProvider } = await import('@/lib/ai/core/provider-factory');
+    vi.mocked(createAIProvider).mockRejectedValueOnce(new Error('provider lookup failed'));
+    mockGenerateObject.mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      memoryGate.events.push('model-done');
+      return { object: { claims: [{ claim: 'c', evidence: 'e', occurrencesInWindow: 1 }] }, usage: { inputTokens: 10, outputTokens: 5 } };
+    });
+
+    const { runDiscoveryPasses } = await import('../discovery-service');
+    const result = await runDiscoveryPasses('user-with-data');
+
+    assert({
+      given: 'one pass whose provider throws while the other two are still calling the model',
+      should: 'release the hold only after both surviving calls finish, and keep their claims',
+      actual: { events: memoryGate.events, claims: result.claims.length },
+      expected: { events: ['model-done', 'model-done', 'release'], claims: 2 },
+    });
+  });
 });

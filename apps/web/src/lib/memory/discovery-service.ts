@@ -427,7 +427,9 @@ export async function runDiscoveryPasses(userId: string): Promise<DiscoveryResul
   // it onto every claim it returns, so the model's own tag never decides which
   // page a claim lands in. All three run under one credit hold, taken before
   // any model is built: a refused user gets no pass at all, never some fields.
-  const gated = await withMemoryCreditHold(userId, DISCOVERY_PASS_COUNT, () => Promise.all([
+  // allSettled, not all: one pass throwing must not end the hold's run while
+  // its siblings are still calling the model, or they would debit unreserved.
+  const gated = await withMemoryCreditHold(userId, DISCOVERY_PASS_COUNT, () => Promise.allSettled([
     runDiscoveryPass(
       userId,
       'worldview',
@@ -462,7 +464,11 @@ export async function runDiscoveryPasses(userId: string): Promise<DiscoveryResul
     return { claims: [], creditRefusal: gated.reason };
   }
 
-  const [bioClaims, communicationClaims, rulesClaims] = gated.value;
+  const [bioClaims, communicationClaims, rulesClaims] = gated.value.map((pass) => {
+    if (pass.status === 'fulfilled') return pass.value;
+    loggers.api.warn('Memory discovery pass failed', { userId, error: pass.reason });
+    return [];
+  });
 
   const allClaims = [...bioClaims, ...communicationClaims, ...rulesClaims];
 
