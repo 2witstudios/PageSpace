@@ -608,6 +608,38 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     expect(await seatChargedCents(w, w.marcusId)).toBe(100);
   });
 
+  it('WAL-2 (partial) only SETTLED spend on the seat counts against it: the same member\'s settled drive-wallet and own-credits spend leave the allowance whole', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+    const w = world;
+    // 100¢ settled on Product's wallet and 100¢ on his own credits: 200¢ of Marcus's spend, none of it the seat.
+    for (const source of ['drive_wallet', 'drive_wallet', 'own_credits', 'own_credits'] as const) {
+      const gate = await canConsumeAI(w.marcusId, 'pro', { spend: driveSpend(w.productId, source) });
+      expect(gate, source).toMatchObject({ allowed: true });
+      const [log] = await db.insert(aiUsageLogs).values({ userId: w.marcusId, provider: 'openrouter', model: 'm', cost: 2 * COST_25C }).returning({ id: aiUsageLogs.id });
+      expect(await consumeCredits({ aiUsageLogId: log.id, userId: w.marcusId, costDollars: 2 * COST_25C, holdId: gate.holdId, walletId: gate.walletId })).toBe('settled');
+    }
+    expect((await ledgerOf(w.marcusId)).filter((r) => r.entryType === 'usage' && r.walletId !== w.poolId)).toHaveLength(4);
+
+    for (let call = 1; call <= 4; call += 1) {
+      expect(await seatCall(w, w.marcusId, undefined, 'pro'), `seat call ${call}`).toMatchObject({ allowed: true, walletId: w.poolId });
+    }
+    expect(await seatChargedCents(w, w.marcusId)).toBe(100);
+  });
+
+  it('WAL-2 (partial) a seat stream\'s own budget is bounded by what is left of the allowance, not by the pool', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+    const w = world;
+    await seatCall(w, w.marcusId);
+    await seatCall(w, w.marcusId);
+
+    const gate = await canConsumeAI(w.marcusId, 'pro', { spend: driveSpend(w.productId, 'seat_allowance') });
+
+    // 50¢ of 100¢ spent: after this call's 25¢ reservation the stream may spend 25¢ more, never the pool's ~9,000.
+    expect(gate).toMatchObject({ allowed: true, walletId: w.poolId, balanceSnapshot: { netSpendableCents: 25 } });
+  });
+
   it('WAL-2 (partial) two members each get their own seat allowance on the same pool', async () => {
     if (!dbAvailable) return;
     world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
