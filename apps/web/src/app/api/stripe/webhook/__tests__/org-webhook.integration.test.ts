@@ -363,7 +363,16 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
     expect(await poolOf(org.orgId)).toBeNull();
 
     // An org's invoice tagged for ANOTHER org: refused, the customer's org is not funded either.
-    const mismatch = invoiceObject({ ...tagged, customer: org.customerId, metadata: orgMetadata('org_someone_else'), subscriptionId: org.subscriptionId });
+    const mismatch = invoiceObject({
+      customer: org.customerId,
+      subscriptionId: org.subscriptionId,
+      metadata: orgMetadata('org_someone_else'),
+      seats: 2,
+      paid: true,
+      billingReason: 'subscription_cycle',
+      periodStart: 1_800_000_000,
+    });
+    expect(mismatch.amount_paid).toBeGreaterThan(0);
     expect(await deliver(eventPayload('invoice.paid', mismatch))).toBe(200);
     expect(await poolOf(org.orgId)).toBeNull();
   });
