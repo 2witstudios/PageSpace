@@ -115,6 +115,11 @@ export async function runCompaction(params: RunCompactionParams): Promise<void> 
       console.warn('[compaction] provider unavailable:', providerResult.error);
       return;
     }
+    // What actually runs: the factory can substitute the metered default when the compaction
+    // model does not fit the requested provider, so admission and the settle key on this,
+    // never on the requested (possibly exempt) provider.
+    const runProvider = providerResult.provider;
+    const runModel = providerResult.modelName;
 
     const previousSummary = plan.previousSummary ?? currentState?.summary ?? null;
     const messagesToSummarize = plan.messagesToSummarize;
@@ -136,9 +141,9 @@ export async function runCompaction(params: RunCompactionParams): Promise<void> 
     // no charge, and the stored summary and pointer stay exactly as they were, so the
     // conversation keeps working from the context it already had.
     const admission = callAdmission({
-      meteringExempt: isMeteringExempt(provider),
+      meteringExempt: isMeteringExempt(runProvider),
       spend,
-      estCostCents: estimateChatHoldCentsForModel(compactionModel, {
+      estCostCents: estimateChatHoldCentsForModel(runModel, {
         inputTokens: estimateTokens(JSON.stringify(transcriptMessages)) + (previousSummary ? estimateTokens(previousSummary) : 0),
       }),
     });
@@ -165,8 +170,8 @@ export async function runCompaction(params: RunCompactionParams): Promise<void> 
       holdHandedOff = true;
       await AIMonitoring.trackUsage({
         userId,
-        provider,
-        model: compactionModel,
+        provider: runProvider,
+        model: runModel,
         inputTokens: totalInputTokens,
         outputTokens: totalOutputTokens,
         conversationId,
