@@ -27,6 +27,7 @@ import { spendableCentsFor } from './credit-balance';
 import { effectiveSpendPolicy, type FallbackRule, type SpendLeg, type SpendSourceKind, type WalletStatus } from './wallet-core';
 import {
   ORG_ENTITLEMENT_TIER,
+  ORG_SPEND_POLICY_UNTIL_POLICY_STORE,
   PERSONAL_ROOT_NOT_YET_CREATED,
   automationSpendInput,
   availableSources,
@@ -35,6 +36,7 @@ import {
   personActor,
   reservedAgainstCents,
   resolvesDriveWallets,
+  seatAllowanceLeg,
   walletLeg,
   walletSpendableCents,
   type CallSpendDecision,
@@ -45,6 +47,7 @@ import {
 } from './spend-target';
 import { toSubscriptionTier, type SubscriptionTier } from './subscription-tiers';
 import { ensurePersonalRootWalletId } from './personal-wallet';
+import { loadSeatCapFacts } from './seat-allowance';
 
 const WALLET_FACTS = {
   id: wallets.id,
@@ -280,12 +283,25 @@ export async function resolveCallSpend(input: {
     now,
     [pool?.id, personal?.id].filter((id): id is string => typeof id === 'string'),
   );
+  // WAL-2: a seat is the pool capped per consumer — never more than what is left of this
+  // person's monthly allowance this pool period (D-OW-12). The gate re-checks it under the lock.
   const seatLeg: SpendLeg | null = pool
-    ? walletLeg(pool.id, statusOf(pool), walletSpendableCents({
-        wallet: pool,
-        ownReservedCents: reservedAgainstCents(holds, pool.id, { includeChildren: true }),
-        parent: null,
-      }))
+    ? seatAllowanceLeg({
+        poolId: pool.id,
+        status: statusOf(pool),
+        poolSpendableCents: walletSpendableCents({
+          wallet: pool,
+          ownReservedCents: reservedAgainstCents(holds, pool.id, { includeChildren: true }),
+          parent: null,
+        }),
+        ...(await loadSeatCapFacts(db, {
+          poolId: pool.id,
+          poolPeriodStart: pool.monthlyPeriodStart,
+          userId,
+          policySeatAllowanceCents: effectiveSpendPolicy(ORG_SPEND_POLICY_UNTIL_POLICY_STORE, null).seatAllowanceCents,
+          now,
+        })),
+      })
     : null;
   // The personal leg reads as the gate will fund it (a missing row is lazily granted the
   // tier allowance there), net of what is already reserved against it.
@@ -300,7 +316,7 @@ export async function resolveCallSpend(input: {
   // a call off its chosen source until an org says so. A personal drive's own rule stands.
   const driveFallback = driveWallet?.fallbackRule ?? undefined;
   const fallback: FallbackRule = standing?.orgId
-    ? effectiveSpendPolicy({ seatAllowanceCents: null, fallback: 'refuse' }, { fallback: driveFallback }).fallback
+    ? effectiveSpendPolicy(ORG_SPEND_POLICY_UNTIL_POLICY_STORE, { fallback: driveFallback }).fallback
     : driveFallback ?? 'refuse';
 
   // WAL-8 / D-OW-14: the wallet's ROOT owner's tier governs a shared leg — the org inside

@@ -52,7 +52,7 @@ import { formatCreditCount } from '../billing/money-model';
 import { toSubscriptionTier } from '../billing/subscription-tiers';
 import { planDeleteWallet, planTopUp, planWalletPatch, type DeleteBlocker, type WalletPatchInput } from '../billing/wallet-admin';
 import { donateToDriveWallet } from '../billing/wallet-funding-shell';
-import { utcDayStartMs, utcMonthStartMs, type SpendSourceKind } from '../billing/wallet-core';
+import { userConsumerKey, utcDayStartMs, utcMonthStartMs, type SpendSourceKind } from '../billing/wallet-core';
 import {
   capRemainingCents,
   projectDriveWallet,
@@ -88,8 +88,8 @@ function refuseCredential(credential: WalletCredential, write: WalletWrite): Wal
   return refusal ? { ok: false, status: 403, code: refusal.code, message: refusal.message } : null;
 }
 
-/** The consumer key a person's cap is stored under on a wallet (WAL-7). */
-export const userConsumerKey = (userId: string): string => `user:${userId}`;
+/** The consumer key a person's cap is stored under on a wallet (WAL-7); defined once in wallet-core. */
+export { userConsumerKey };
 
 // ---------------------------------------------------------------------------
 // Access

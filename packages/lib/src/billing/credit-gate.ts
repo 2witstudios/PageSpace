@@ -49,13 +49,15 @@ import { isSubscriptionTier } from './subscription-tiers';
 import { ensurePersonalRootWalletId } from './personal-wallet';
 import { ORGS_ENABLED } from '../organizations/orgs-enabled';
 import {
+  ORG_SPEND_POLICY_UNTIL_POLICY_STORE,
   personalRootDecision,
   resolvesDriveWallets,
   walletSpendableCents,
   type SpendTarget,
   type WalletBalanceFacts,
 } from './spend-target';
-import type { RefusalReason, SkipReason, SpendSourceKind } from './wallet-core';
+import { seatCapCheck, type RefusalReason, type SkipReason, type SpendSourceKind } from './wallet-core';
+import { loadSeatCapFacts } from './seat-allowance';
 import type { SubscriptionTier } from '../services/subscription-utils';
 
 // The partial unique index credit_ledger_stripe_ref_unique is defined WHERE
@@ -773,6 +775,7 @@ const SHARED_WALLET_FACTS = {
   spentCents: wallets.spentCents,
   topupRemainingCents: wallets.topupRemainingCents,
   debtCents: wallets.debtCents,
+  monthlyPeriodStart: wallets.monthlyPeriodStart,
 } as const;
 
 /**
@@ -802,7 +805,7 @@ async function gateSharedWallet(
     // Lock order is CHILD, then parent — the order settlement uses — so a gate and a
     // settle on the same drive wallet can never wait on each other in a cycle. A root
     // wallet's own paths lock only the root.
-    const lock = async (id: string): Promise<WalletBalanceFacts | null> => {
+    const lock = async (id: string): Promise<(WalletBalanceFacts & { monthlyPeriodStart: Date | null }) | null> => {
       const rows = await tx.select(SHARED_WALLET_FACTS).from(wallets).where(eq(wallets.id, id)).for('update');
       return rows[0] ?? null;
     };
@@ -810,6 +813,24 @@ async function gateSharedWallet(
     if (!wallet) return refused('source_unavailable');
     const parent = wallet.parentWalletId ? await lock(wallet.parentWalletId) : null;
     if (wallet.status === 'paused') return refused('source_paused');
+
+    // WAL-2: a seat never takes more than this consumer's monthly allowance of the pool.
+    // Read and decided HERE, inside the transaction that inserts the hold and under the
+    // pool's row lock, so one consumer's simultaneous calls serialize: each sees the holds
+    // of the ones before it, and only as many as the allowance covers pass.
+    let seatRemainingCents: number | null = null;
+    if (chosen.source === 'seat_allowance') {
+      const seat = await loadSeatCapFacts(tx, {
+        poolId: wallet.id,
+        poolPeriodStart: wallet.monthlyPeriodStart,
+        userId,
+        policySeatAllowanceCents: ORG_SPEND_POLICY_UNTIL_POLICY_STORE.seatAllowanceCents,
+        now,
+      });
+      const cap = seatCapCheck({ capCents: seat.capCents, usage: seat.usage, reservationCents: estCost });
+      if (!cap.allowed) return refused('source_cap_reached');
+      seatRemainingCents = cap.monthlyRemainingCents;
+    }
 
     // Holds reserved against this wallet and (for a drive wallet) against its parent by
     // everything else, plus this caller's own in-flight calls on any wallet.
@@ -867,7 +888,8 @@ async function gateSharedWallet(
       walletId: wallet.id,
       spendSource: chosen.source,
       entitlementTier: chosen.entitlementTier,
-      balanceSnapshot: { netSpendableCents: spendable - estCost },
+      // A seat's per-stream budget is also bounded by what is left of its allowance.
+      balanceSnapshot: { netSpendableCents: Math.min(spendable, seatRemainingCents ?? spendable) - estCost },
     };
   });
 }

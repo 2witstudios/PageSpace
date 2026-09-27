@@ -23,13 +23,17 @@ import { driveMembers } from '@pagespace/db/schema/members';
 import { creditHolds, creditLedger } from '@pagespace/db/schema/credits';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
-import { wallets } from '@pagespace/db/schema/wallets';
+import { walletConsumerCaps, wallets } from '@pagespace/db/schema/wallets';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { loggers } from '../../logging/logger-config';
 import { canConsumeAI } from '../credit-gate';
 import { consumeCredits } from '../credit-consume';
 import { PERSONAL_SPEND, conversationSpend, driveSpend } from '../spend-target';
+import { DEFAULT_SEAT_ALLOWANCE_CENTS } from '../wallet-core';
+import { applyOrgPoolRefill, donateToDriveWallet } from '../wallet-funding-shell';
+import { reconcileOpenRouterCosts } from '../cost-reconcile';
+import { expectWalletLegInvariant } from '../../test/wallet-leg-invariant';
 
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
@@ -69,7 +73,7 @@ async function build(input: { productAllocationCents: number; poolCents: number;
   const jono = await factories.createUser({ name: 'Jono', subscriptionTier: 'free' });
   const marcus = await factories.createUser({ name: 'Marcus Oyelaran', subscriptionTier: 'free' });
   const chris = await factories.createUser({ name: 'Chris Rowe', subscriptionTier: 'free' });
-  const [org] = await db.insert(organizations).values({ name: 'Northwind Labs', slug: `northwind-${createId()}`, ownerId: jono.id }).returning();
+  const [org] = await db.insert(organizations).values({ name: 'Northwind Labs', slug: `northwind-${createId()}`, ownerId: jono.id, stripeCustomerId: `cus_${createId()}` }).returning();
   await db.insert(orgMembers).values([
     { orgId: org.id, userId: jono.id, role: 'OWNER' },
     { orgId: org.id, userId: marcus.id, role: 'MEMBER' },
@@ -78,7 +82,14 @@ async function build(input: { productAllocationCents: number; poolCents: number;
   await factories.createDriveMember(product.id, marcus.id, { source: 'org' });
   await factories.createDriveMember(product.id, chris.id, { source: 'invite' });
 
-  const [poolWallet] = await db.insert(wallets).values({ ownerType: 'org', orgId: org.id, monthlyRemainingCents: input.poolCents }).returning();
+  // The pool refilled ten days ago: its period (the seat cap's clock, D-OW-12) started then.
+  const [poolWallet] = await db.insert(wallets).values({
+    ownerType: 'org',
+    orgId: org.id,
+    monthlyRemainingCents: input.poolCents,
+    monthlyPeriodStart: new Date(Date.now() - 10 * 86_400_000),
+    monthlyPeriodEnd: new Date(Date.now() + 20 * 86_400_000),
+  }).returning();
   const [productWallet] = await db.insert(wallets).values({
     ownerType: 'org',
     orgId: org.id,
@@ -115,6 +126,7 @@ async function teardown(w: World): Promise<void> {
   await db.delete(creditHolds).where(inArray(creditHolds.userId, w.userIds));
   await db.delete(creditLedger).where(inArray(creditLedger.userId, w.userIds));
   // Child wallets before their parent (parentWalletId has no cascade), then the rest.
+  await db.delete(walletConsumerCaps).where(eq(walletConsumerCaps.walletId, w.poolId));
   await db.delete(wallets).where(eq(wallets.parentWalletId, w.poolId));
   await db.delete(wallets).where(eq(wallets.id, w.poolId));
   await db.delete(wallets).where(inArray(wallets.userId, w.userIds));
@@ -467,5 +479,248 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
 
     expect(gate).toMatchObject({ allowed: false, reason: 'source_refused', refusal: { source: null, reason: 'no_source_chosen' } });
     await expectNothingCharged(world);
+  });
+
+  // ---------------------------------------------------------------------------
+  // WAL-2: a seat is the per-consumer monthly cap on the pool's own leg. With a full pool,
+  // one member still spends no more than their own allowance this pool period.
+  // ---------------------------------------------------------------------------
+
+  /** $0.1666667 at the 1.5× markup charges exactly 25¢ (25,000 millicents): one reservation's worth. */
+  const COST_25C = 0.1666667;
+
+  /**
+   * Gate a seat call for `userId`, then settle it at 25¢. Returns the gate answer. With a
+   * `generationId` the usage log waits for the cost-reconcile cron, as an OpenRouter call does.
+   */
+  async function seatCall(w: World, userId: string, generationId?: string) {
+    const gate = await canConsumeAI(userId, 'free', { spend: driveSpend(w.productId, 'seat_allowance') });
+    if (!gate.allowed) return gate;
+    const reconcile = generationId
+      ? { timestamp: new Date(Date.now() - 10 * 60_000), reconcileStatus: 'pending', reconcileAttempts: 0, metadata: { generationIds: [generationId] } }
+      : {};
+    const [log] = await db.insert(aiUsageLogs).values({ userId, provider: 'openrouter', model: 'm', cost: COST_25C, ...reconcile }).returning({ id: aiUsageLogs.id });
+    const status = await consumeCredits({ aiUsageLogId: log.id, userId, costDollars: COST_25C, holdId: gate.holdId, walletId: gate.walletId });
+    expect(status).toBe('settled');
+    return gate;
+  }
+
+  /** What `userId` has been charged on the pool (usage rows), in whole cents. */
+  async function seatChargedCents(w: World, userId: string): Promise<number> {
+    const rows = await db.select().from(creditLedger).where(and(eq(creditLedger.walletId, w.poolId), eq(creditLedger.userId, userId), eq(creditLedger.entryType, 'usage')));
+    return rows.reduce((sum, r) => sum - (r.appliedCents ?? 0), 0);
+  }
+
+  async function addLena(w: World): Promise<string> {
+    const lena = await factories.createUser({ name: 'Lena Schulz', subscriptionTier: 'free' });
+    w.userIds.push(lena.id);
+    await db.insert(orgMembers).values({ orgId: w.orgId, userId: lena.id, role: 'MEMBER' });
+    await factories.createDriveMember(w.productId, lena.id, { source: 'org' });
+    return lena.id;
+  }
+
+  it('WAL-2 (partial) with a FULL pool one member spends no more than their monthly seat allowance, then is refused by the cap and charged nothing', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+    const w = world;
+    expect(DEFAULT_SEAT_ALLOWANCE_CENTS).toBe(100);
+
+    // 100¢ allowance at 25¢ a call: four calls fit exactly, the fifth does not.
+    for (let call = 1; call <= 4; call += 1) {
+      expect(await seatCall(w, w.marcusId), `call ${call}`).toMatchObject({ allowed: true, walletId: w.poolId, spendSource: 'seat_allowance' });
+    }
+    const ledgerBefore = (await ledgerOf(w.marcusId)).length;
+
+    const fifth = await canConsumeAI(w.marcusId, 'free', { spend: driveSpend(w.productId, 'seat_allowance') });
+
+    expect(fifth).toEqual({
+      allowed: false,
+      reason: 'source_refused',
+      refusal: { source: 'seat_allowance', reason: 'source_cap_reached', options: ['drive_wallet', 'own_credits'] },
+    });
+    expect(await holdsOf(w.marcusId)).toEqual([]);
+    expect((await ledgerOf(w.marcusId)).length).toBe(ledgerBefore);
+    expect(await seatChargedCents(w, w.marcusId)).toBe(100);
+    // The pool paid exactly the allowance and holds the rest; Marcus's own credits are untouched.
+    expect((await walletRow(w.poolId)).monthlyRemainingCents).toBe(900_000 - 100);
+    expect((await walletRow(w.marcusWalletId)).monthlyRemainingCents).toBe(5_000);
+  });
+
+  it('WAL-2 (partial) calls in flight count against the seat allowance: concurrent reservations cannot pass the cap together', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+    const w = world;
+
+    const gates = await Promise.all(Array.from({ length: 6 }, () => canConsumeAI(w.marcusId, 'pro', { spend: driveSpend(w.productId, 'seat_allowance') })));
+
+    expect(gates.filter((g) => g.allowed)).toHaveLength(4);
+    expect(gates.filter((g) => !g.allowed).every((g) => g.refusal?.reason === 'source_cap_reached')).toBe(true);
+    const held = await holdsOf(w.marcusId);
+    expect(held.reduce((sum, h) => sum + h.estCents, 0)).toBe(100);
+  });
+
+  it('WAL-2 (partial) two SIMULTANEOUS seat calls against an allowance with room for one: exactly one passes', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+    const w = world;
+    // 75¢ already spent of 100¢: room for one 25¢ reservation.
+    for (let call = 0; call < 3; call += 1) await seatCall(w, w.marcusId);
+
+    const both = await Promise.all([0, 1].map(() => canConsumeAI(w.marcusId, 'pro', { spend: driveSpend(w.productId, 'seat_allowance') })));
+
+    expect(both.filter((g) => g.allowed)).toHaveLength(1);
+    expect(both.find((g) => !g.allowed)).toMatchObject({ reason: 'source_refused', refusal: { source: 'seat_allowance', reason: 'source_cap_reached' } });
+    expect((await holdsOf(w.marcusId)).map((h) => [h.walletId, h.estCents])).toEqual([[w.poolId, 25]]);
+  });
+
+  it('WAL-2 (partial) the cap is decided under the pool lock: spend landing after the unlocked resolution saw room is still refused', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+    const w = world;
+    for (let call = 0; call < 3; call += 1) await seatCall(w, w.marcusId);
+    // The resolution sees 25¢ of room and names the seat; before the gate locks the pool,
+    // another of Marcus's calls settles its last 25¢ onto the pool.
+    afterResolution.run = async () => {
+      afterResolution.run = null;
+      await seatCall(w, w.marcusId);
+    };
+
+    const gate = await canConsumeAI(w.marcusId, 'pro', { spend: driveSpend(w.productId, 'seat_allowance') });
+
+    expect(gate).toEqual({ allowed: false, reason: 'source_refused', refusal: { source: 'seat_allowance', reason: 'source_cap_reached', options: [] } });
+    expect(await holdsOf(w.marcusId)).toEqual([]);
+    expect(await seatChargedCents(w, w.marcusId)).toBe(100);
+  });
+
+  it('WAL-2 (partial) two members each get their own seat allowance on the same pool', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+    const w = world;
+    const lenaId = await addLena(w);
+
+    for (let call = 0; call < 4; call += 1) await seatCall(w, w.marcusId);
+    const marcusCapped = await canConsumeAI(w.marcusId, 'free', { spend: driveSpend(w.productId, 'seat_allowance') });
+    expect(marcusCapped).toMatchObject({ allowed: false, refusal: { reason: 'source_cap_reached' } });
+
+    // Marcus's spent cap is his alone: Lena's allowance is whole.
+    for (let call = 1; call <= 4; call += 1) {
+      expect(await seatCall(w, lenaId), `Lena call ${call}`).toMatchObject({ allowed: true, walletId: w.poolId });
+    }
+    const lenaCapped = await canConsumeAI(lenaId, 'free', { spend: driveSpend(w.productId, 'seat_allowance') });
+    expect(lenaCapped).toMatchObject({ allowed: false, refusal: { reason: 'source_cap_reached' } });
+
+    expect(await seatChargedCents(w, w.marcusId)).toBe(100);
+    expect(await seatChargedCents(w, lenaId)).toBe(100);
+    expect((await walletRow(w.poolId)).monthlyRemainingCents).toBe(900_000 - 200);
+  });
+
+  it('WAL-2 (partial) D-OW-12 the seat allowance resets on the POOL refill date, not on the member\'s personal renewal', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+    const w = world;
+    for (let call = 0; call < 4; call += 1) await seatCall(w, w.marcusId);
+    expect(await canConsumeAI(w.marcusId, 'free', { spend: driveSpend(w.productId, 'seat_allowance') })).toMatchObject({ allowed: false, refusal: { reason: 'source_cap_reached' } });
+
+    // Marcus's own plan renews now: his personal period moves, and his seat stays spent.
+    await db.update(wallets).set({ monthlyPeriodStart: new Date(), monthlyPeriodEnd: new Date(Date.now() + 30 * 86_400_000) }).where(eq(wallets.id, w.marcusWalletId));
+    expect(await canConsumeAI(w.marcusId, 'free', { spend: driveSpend(w.productId, 'seat_allowance') })).toMatchObject({ allowed: false, refusal: { reason: 'source_cap_reached' } });
+
+    // The org's invoice is paid for a period starting now: the pool refills and its clock moves.
+    const [org] = await db.select().from(organizations).where(eq(organizations.id, w.orgId));
+    const startS = Math.floor(Date.now() / 1000) + 1;
+    const refill = await applyOrgPoolRefill({
+      id: `in_${createId()}`,
+      customer: org.stripeCustomerId,
+      billing_reason: 'subscription_cycle',
+      amount_paid: 5000,
+      subtotal: 5000,
+      parent: { subscription_details: { subscription: `sub_${createId()}` } },
+      lines: { data: [{ amount: 5000, period: { start: startS, end: startS + 30 * 86_400 } }] },
+    }, { active: true });
+    expect(refill).toMatchObject({ kind: 'granted', walletId: w.poolId });
+    expect((await walletRow(w.poolId)).monthlyPeriodStart?.getTime()).toBe(startS * 1000);
+    // Wait out the one second to the new period's start, so the refill is in force.
+    await new Promise((resolve) => setTimeout(resolve, Math.max(0, startS * 1000 - Date.now() + 5)));
+
+    expect(await seatCall(w, w.marcusId)).toMatchObject({ allowed: true, walletId: w.poolId, spendSource: 'seat_allowance' });
+  });
+
+  it('WAL-2 (partial) a seat allowance of zero refuses by the cap and charges nothing, even with a full pool', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+    const w = world;
+    await db.insert(walletConsumerCaps).values({ walletId: w.poolId, consumerKey: `user:${w.marcusId}`, monthlyCapCents: 0 });
+
+    const gate = await canConsumeAI(w.marcusId, 'free', { spend: driveSpend(w.productId, 'seat_allowance') });
+
+    expect(gate).toEqual({
+      allowed: false,
+      reason: 'source_refused',
+      refusal: { source: 'seat_allowance', reason: 'source_cap_reached', options: ['drive_wallet', 'own_credits'] },
+    });
+    expect(await holdsOf(w.marcusId)).toEqual([]);
+    expect(await ledgerOf(w.marcusId)).toEqual([]);
+    expect((await walletRow(w.poolId)).monthlyRemainingCents).toBe(900_000);
+    expect((await walletRow(w.marcusWalletId)).monthlyRemainingCents).toBe(5_000);
+    // A per-consumer cap governs that consumer only.
+    expect(await seatCall(w, await addLena(w))).toMatchObject({ allowed: true, walletId: w.poolId });
+  });
+
+  it('WAL-2 (partial) a per-consumer cap on the pool leg is that member\'s allowance, above or below the default', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+    const w = world;
+    await db.insert(walletConsumerCaps).values({ walletId: w.poolId, consumerKey: `user:${w.marcusId}`, monthlyCapCents: 50 });
+
+    expect(await seatCall(w, w.marcusId)).toMatchObject({ allowed: true });
+    expect(await seatCall(w, w.marcusId)).toMatchObject({ allowed: true });
+    expect(await canConsumeAI(w.marcusId, 'free', { spend: driveSpend(w.productId, 'seat_allowance') })).toMatchObject({ allowed: false, refusal: { reason: 'source_cap_reached' } });
+    expect(await seatChargedCents(w, w.marcusId)).toBe(50);
+  });
+
+  it('WAL-2 (partial) cost-reconcile corrections count against the allowance in BOTH directions: a refund gives room back, an undercharge takes it', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+    const w = world;
+    const gen = { refunded: `gen-seat-refund-${createId()}`, undercharged: `gen-seat-under-${createId()}` };
+    await seatCall(w, w.marcusId, gen.refunded);
+    await seatCall(w, w.marcusId, gen.undercharged);
+    await seatCall(w, w.marcusId);
+    await seatCall(w, w.marcusId);
+    const capped = () => canConsumeAI(w.marcusId, 'pro', { spend: driveSpend(w.productId, 'seat_allowance') });
+    expect(await capped()).toMatchObject({ allowed: false, refusal: { reason: 'source_cap_reached' } });
+
+    // The first call really cost nothing: its 25¢ comes back to the pool and to Marcus's allowance.
+    await reconcileOpenRouterCosts({ fetcher: async (id) => (id === gen.refunded ? { totalCost: 0 } : 'not_found') });
+    const roomAgain = await capped();
+    expect(roomAgain).toMatchObject({ allowed: true, walletId: w.poolId });
+    await db.delete(creditHolds).where(eq(creditHolds.id, roomAgain.holdId ?? ''));
+
+    // The second really cost twice as much: the extra 25¢ is taken from the allowance again.
+    await reconcileOpenRouterCosts({ fetcher: async (id) => (id === gen.undercharged ? { totalCost: 2 * COST_25C } : 'not_found') });
+    expect(await capped()).toMatchObject({ allowed: false, refusal: { reason: 'source_cap_reached' } });
+    // The pool moved by exactly what the ledger says Marcus took from it, corrections included.
+    const pool = await walletRow(w.poolId);
+    const taken = (await db.select().from(creditLedger).where(and(eq(creditLedger.walletId, w.poolId), eq(creditLedger.userId, w.marcusId))))
+      .reduce((sum, r) => sum - (r.appliedCents ?? 0), 0);
+    expect(pool.monthlyRemainingCents + pool.topupRemainingCents - pool.debtCents).toBe(900_000 - taken);
+  });
+
+  it('WAL-2 (partial) the funding-legs invariant holds after capped seat spends beside drive-wallet spends on donated legs', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 0, poolCents: 900_000 });
+    const w = world;
+    // Product has no allocation: its only money is Marcus's donation leg.
+    expect(await donateToDriveWallet({ donorUserId: w.marcusId, targetWalletId: w.productWalletId, amountCents: 200, donationId: createId() })).toMatchObject({ kind: 'donated' });
+
+    for (let call = 0; call < 5; call += 1) await seatCall(w, w.marcusId);
+    const drive = await canConsumeAI(w.marcusId, 'free', { spend: driveSpend(w.productId, 'drive_wallet') });
+    expect(drive).toMatchObject({ allowed: true, walletId: w.productWalletId });
+    const [log] = await db.insert(aiUsageLogs).values({ userId: w.marcusId, provider: 'openrouter', model: 'm', cost: COST_25C }).returning({ id: aiUsageLogs.id });
+    await consumeCredits({ aiUsageLogId: log.id, userId: w.marcusId, costDollars: COST_25C, holdId: drive.holdId, walletId: drive.walletId });
+
+    expect(await seatChargedCents(w, w.marcusId)).toBe(100);
+    expect((await walletRow(w.productWalletId)).topupRemainingCents).toBe(175);
+    await expectWalletLegInvariant([w.productWalletId]);
   });
 });
