@@ -51,11 +51,19 @@ export function creditGatePayload(reason: GateResult['reason']): {
 }
 
 /**
+ * WAL-2: a seat refused by the member's monthly allowance is not a source that "cannot cover"
+ * the call — the org pool may be full. Say what ran out.
+ */
+const SEAT_CAP_REACHED_MESSAGE = "You've used your seat allowance for this billing period. Choose another source to continue.";
+
+/**
  * Convenience: the standard JSON response for a denied gate result. A refused source
  * (SPEND-4) also carries the refused source, why, and the sources the person may pick.
  */
 export function creditGateErrorResponse(reason: GateResult['reason'], refusal?: SpendRefusal): NextResponse {
-  const { status, error, message } = creditGatePayload(reason);
+  const payload = creditGatePayload(reason);
+  const { status, error } = payload;
+  const message = refusal?.reason === 'source_cap_reached' ? SEAT_CAP_REACHED_MESSAGE : payload.message;
   return NextResponse.json(
     refusal
       ? { error, message, source: refusal.source, refusalReason: refusal.reason, options: refusal.options }
