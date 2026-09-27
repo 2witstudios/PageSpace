@@ -204,7 +204,17 @@ describe('runCompaction', () => {
       expect(mockGenerateText).not.toHaveBeenCalled();
     });
 
+    it('SPEND-1 (partial) an exempt provider the factory swapped for a metered one is gated and settled as the provider that actually runs', async () => {
+      // COMPACTION_MODEL incompatible with the requested exempt provider: the factory runs
+      // the metered default instead, so the call must reserve and must not settle as exempt.
+      mockCreateAIProvider.mockResolvedValue({ model: {} as never, provider: 'openrouter', modelName: 'openai/gpt-5.4-nano' });
+      await runCompaction({ ...BASE_PARAMS, provider: 'glm' });
+      expect(mockGate).toHaveBeenCalledOnce();
+      expect(mockTrackUsage.mock.calls[0][0]).toMatchObject({ provider: 'openrouter', model: 'openai/gpt-5.4-nano', holdId: 'hold-1' });
+    });
+
     it('a flat-rate (metering-exempt) provider reserves nothing, as its turn did not', async () => {
+      mockCreateAIProvider.mockResolvedValue({ model: {} as never, provider: 'glm', modelName: 'glm-4.6' });
       await runCompaction({ ...BASE_PARAMS, provider: 'glm' });
       expect(mockGate).not.toHaveBeenCalled();
       expect(mockGenerateText).toHaveBeenCalledOnce();
