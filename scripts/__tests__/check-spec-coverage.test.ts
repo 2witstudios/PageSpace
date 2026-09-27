@@ -179,14 +179,17 @@ describe('coverage gate: a bare ID in the enclosing describe chain upgrades a pa
     ])).toEqual([]);
   });
 
-  it('fails the gate end to end, even when the ID is allowlisted and every test passed', () => {
+  it('fails the gate end to end on the upgrade alone: a NON-allowlisted ID every other rule counts as covered', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'spec-coverage-upgraded-'));
     try {
       fs.mkdirSync(path.join(root, 'docs/specs'), { recursive: true });
       fs.mkdirSync(path.join(root, 'packages/lib/test-results'), { recursive: true });
       fs.mkdirSync(path.join(root, 'scripts'), { recursive: true });
       fs.writeFileSync(path.join(root, 'docs/specs/organizations-wallets.md'), '- MON-95 A fake requirement.\n');
-      fs.writeFileSync(path.join(root, 'scripts/spec-coverage-allowlist.txt'), 'MON-95\n');
+      // Empty allowlist: MON-95 is in scope, and the bare describe over a passing test makes every
+      // OTHER rule count it as covered (no MISSING, no stale allowlist entry, no malformed marker,
+      // no .fails). Only the describe-chain rule can fail this run.
+      fs.writeFileSync(path.join(root, 'scripts/spec-coverage-allowlist.txt'), '');
       fs.mkdirSync(path.join(root, 'packages/lib/src'), { recursive: true });
       fs.writeFileSync(path.join(root, 'packages/lib/src/seam.test.ts'), "describe('the gate (MON-95)', () => { it('MON-95 (partial) the seam', () => {}); });\n");
       fs.writeFileSync(
@@ -194,8 +197,14 @@ describe('coverage gate: a bare ID in the enclosing describe chain upgrades a pa
         JSON.stringify({ testResults: [{ name: path.join(root, 'packages/lib/src/seam.test.ts'), assertionResults: [{ ancestorTitles: ['the gate (MON-95)'], title: 'MON-95 (partial) the seam', fullName: 'the gate (MON-95) MON-95 (partial) the seam', status: 'passed' }] }] }),
       );
       const lines: string[] = [];
-      expect(run(root, parseArgs(['--offline']), (l) => lines.push(l))).toBe(1);
-      expect(lines.join('\n')).toContain('FAIL: bare MON-95 in the describe chain of a partial claim in packages/lib/src/seam.test.ts');
+      const exit = run(root, parseArgs(['--offline']), (l) => lines.push(l));
+      const out = lines.join('\n');
+      // The other rules really do pass this fixture: MON-95 reads as covered, nothing else fails.
+      expect(out).toContain('covered 1/1, allowlisted-missing 0, MISSING 0');
+      expect(out.match(/^FAIL:/gm)).toEqual(['FAIL:']);
+      expect(out).toContain('FAIL: bare MON-95 in the describe chain of a partial claim in packages/lib/src/seam.test.ts');
+      expect(out).toContain('spec-coverage: FAILED');
+      expect(exit).toBe(1);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
