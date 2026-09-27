@@ -490,7 +490,7 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
       expect((await rowsFor(orgId))[0].status).toBe('active');
     });
 
-    it('SEAT-8 (Codex P2) a lost create whose subscription ended before the retry does not earn a second trial', async () => {
+    it('SEAT-8 (partial) Codex P2: a lost create whose subscription ended before the retry does not earn a second trial', async () => {
       if (!dbAvailable) return;
       const { orgId, deps, stripe } = await northwind(1);
       stripe.loseNextResponse('createSubscription');

@@ -86,7 +86,7 @@ describe('orgStripeIdempotencyKey — derived from the org, the operation and th
   });
 });
 
-describe('orgTrialDays — SEAT-8 trial on creation, never a second trial', () => {
+describe('orgTrialDays — SEAT-8 (partial) trial on creation, never a second trial', () => {
   it('SEAT-8 (partial) a first Business subscription for the org starts with the trial', () => {
     expect(orgTrialDays({ hadSubscription: false })).toBe(ORG_BUSINESS_TRIAL_DAYS);
     expect(ORG_BUSINESS_TRIAL_DAYS).toBe(14);
