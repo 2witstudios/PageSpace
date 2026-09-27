@@ -1,7 +1,7 @@
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
-import { canConsumeAI, type GateOptions } from '@pagespace/lib/billing/credit-gate';
+import { canConsumeAI, type CreditGateResult, type GateOptions } from '@pagespace/lib/billing/credit-gate';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import type { GateReason } from '@pagespace/lib/billing/credit-core';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
@@ -23,12 +23,7 @@ type UserCreditHold =
  * settle on that same wallet (AIMonitoring.trackUsage `walletId`).
  */
 export async function acquireUserCreditHold(userId: string, opts: GateOptions): Promise<UserCreditHold> {
-  const [user] = await db
-    .select({ subscriptionTier: users.subscriptionTier })
-    .from(users)
-    .where(eq(users.id, userId));
-
-  const gate = await canConsumeAI(userId, (user?.subscriptionTier ?? 'free') as SubscriptionTier, opts);
+  const gate = await gateUserCall(userId, opts);
   if (!gate.allowed) return { allowed: false, reason: gate.reason };
 
   const holdId = gate.holdId;
@@ -42,4 +37,19 @@ export async function acquireUserCreditHold(userId: string, opts: GateOptions): 
       void releaseHold(holdId).catch(() => {});
     },
   };
+}
+
+/**
+ * The credit gate for `userId` at their stored tier, for a call made outside a request route
+ * that settles against its own hold: the caller hands `holdId` and `walletId` to
+ * AIMonitoring.trackUsage, which settles the reservation once, and releases the hold itself on
+ * any path that never reaches that settle.
+ */
+export async function gateUserCall(userId: string, opts: GateOptions): Promise<CreditGateResult> {
+  const [user] = await db
+    .select({ subscriptionTier: users.subscriptionTier })
+    .from(users)
+    .where(eq(users.id, userId));
+
+  return canConsumeAI(userId, (user?.subscriptionTier ?? 'free') as SubscriptionTier, opts);
 }

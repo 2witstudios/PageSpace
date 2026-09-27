@@ -23,10 +23,25 @@ vi.mock('@pagespace/lib/monitoring/ai-context-calculator', () => ({
   estimateTokens: vi.fn((t: string) => Math.ceil(t.length / 4)),
 }));
 
+vi.mock('@pagespace/lib/monitoring/chat-pricing', () => ({
+  estimateChatHoldCentsForModel: vi.fn(() => 5),
+}));
+
+vi.mock('@/lib/ai/core/user-credit-hold', () => ({
+  gateUserCall: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/billing/credit-consume', () => ({
+  releaseHold: vi.fn(async () => undefined),
+}));
+
 import { generateText } from 'ai';
 import { getState, upsertState } from '../compaction-repository';
 import { createAIProvider } from '@/lib/ai/core/provider-factory';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
+import { gateUserCall } from '@/lib/ai/core/user-credit-hold';
+import { releaseHold } from '@pagespace/lib/billing/credit-consume';
+import { automationSpend, conversationSpend } from '@pagespace/lib/billing/spend-target';
 import { runCompaction } from '../compaction-service';
 import type { CompactionPlan } from '@pagespace/lib/ai/context-window';
 
@@ -35,6 +50,8 @@ const mockUpsertState = vi.mocked(upsertState);
 const mockGenerateText = vi.mocked(generateText);
 const mockCreateAIProvider = vi.mocked(createAIProvider);
 const mockTrackUsage = vi.mocked(AIMonitoring.trackUsage);
+const mockGate = vi.mocked(gateUserCall);
+const mockReleaseHold = vi.mocked(releaseHold);
 
 function makePlan(overrides?: Partial<CompactionPlan>): CompactionPlan {
   return {
@@ -66,6 +83,7 @@ beforeEach(() => {
     text: 'Summary: user said hello, assistant responded.',
     usage: { inputTokens: 10, outputTokens: 20 },
   } as never);
+  mockGate.mockResolvedValue({ allowed: true, holdId: 'hold-1', walletId: 'w-turn' });
 });
 
 describe('runCompaction', () => {
@@ -77,6 +95,7 @@ describe('runCompaction', () => {
     provider: 'openrouter',
     model: 'gpt-4o',
     plan: makePlan(),
+    spend: { ...conversationSpend('drive-product', 'conv-1'), chosen: 'drive_wallet' as const },
   };
 
   it('calls generateText and upserts state on happy path', async () => {
@@ -96,14 +115,101 @@ describe('runCompaction', () => {
     expect(call.source).toBe('compaction');
   });
 
-  it('SPEND-6 (partial) a compaction settles on the wallet the turn it belongs to reserved on', async () => {
-    await runCompaction({ ...BASE_PARAMS, walletId: 'w-product' });
-    expect(mockTrackUsage.mock.calls[0][0].walletId).toBe('w-product');
-  });
+  describe('the credit gate (SPEND-1: one source chosen and reserved before the call)', () => {
+    it('SPEND-1 (partial) an exhausted actor\'s compaction is refused before the model: no model call, no charge, no summary persisted', async () => {
+      mockGate.mockResolvedValue({ allowed: false, reason: 'out_of_credits' });
+      await expect(runCompaction(BASE_PARAMS)).resolves.toBeUndefined();
+      expect(mockGate).toHaveBeenCalledOnce();
+      expect(mockGenerateText).not.toHaveBeenCalled();
+      expect(mockTrackUsage).not.toHaveBeenCalled();
+      expect(mockUpsertState).not.toHaveBeenCalled();
+      expect(mockReleaseHold).not.toHaveBeenCalled();
+    });
 
-  it('a compaction whose turn named no wallet passes none (the personal-root settle, as before wallets)', async () => {
-    await runCompaction(BASE_PARAMS);
-    expect(mockTrackUsage.mock.calls[0][0].walletId).toBeUndefined();
+    it('SPEND-1 (partial) a funded compaction reserves on the turn\'s own target before the model, then settles once on that hold and wallet', async () => {
+      await runCompaction(BASE_PARAMS);
+      expect(mockGate).toHaveBeenCalledOnce();
+      const [gateUser, gateOpts] = mockGate.mock.calls[0];
+      expect(gateUser).toBe('user-1');
+      expect(gateOpts.spend).toEqual(BASE_PARAMS.spend);
+      expect(gateOpts.estCostCents).toBeGreaterThan(0);
+      expect(mockGate.mock.invocationCallOrder[0]).toBeLessThan(mockGenerateText.mock.invocationCallOrder[0]);
+      expect(mockTrackUsage).toHaveBeenCalledOnce();
+      expect(mockTrackUsage.mock.calls[0][0]).toMatchObject({ holdId: 'hold-1', walletId: 'w-turn', source: 'compaction' });
+      // trackUsage took the hold: nothing else releases it.
+      expect(mockReleaseHold).not.toHaveBeenCalled();
+      expect(mockUpsertState).toHaveBeenCalledOnce();
+    });
+
+    it('SPEND-6 (partial) an automation turn\'s compaction reserves on the drive and, refused, never falls back to a person', async () => {
+      mockGate.mockResolvedValue({ allowed: false, reason: 'source_refused', refusal: { source: 'drive_wallet', reason: 'drive_wallet_empty', options: [] } });
+      await runCompaction({ ...BASE_PARAMS, spend: automationSpend('drive-product') });
+      expect(mockGate).toHaveBeenCalledOnce();
+      expect(mockGate.mock.calls[0][1].spend).toEqual(automationSpend('drive-product'));
+      expect(mockGenerateText).not.toHaveBeenCalled();
+      expect(mockTrackUsage).not.toHaveBeenCalled();
+      expect(mockUpsertState).not.toHaveBeenCalled();
+    });
+
+    it('SPEND-6 (partial) an automation turn\'s compaction settles on the wallet the gate reserved on', async () => {
+      mockGate.mockResolvedValue({ allowed: true, holdId: 'hold-a', walletId: 'w-product' });
+      await runCompaction({ ...BASE_PARAMS, spend: automationSpend('drive-product') });
+      expect(mockTrackUsage.mock.calls[0][0]).toMatchObject({ holdId: 'hold-a', walletId: 'w-product' });
+    });
+
+    it('a re-condense pass is part of the same reservation: two model calls, one settle', async () => {
+      mockGenerateText
+        .mockResolvedValueOnce({ text: 'x'.repeat(40000), usage: { inputTokens: 100, outputTokens: 8000 } } as never)
+        .mockResolvedValueOnce({ text: 'Short condensed.', usage: { inputTokens: 30, outputTokens: 10 } } as never);
+      await runCompaction(BASE_PARAMS);
+      expect(mockGate).toHaveBeenCalledOnce();
+      expect(mockGenerateText).toHaveBeenCalledTimes(2);
+      expect(mockTrackUsage).toHaveBeenCalledOnce();
+      expect(mockTrackUsage.mock.calls[0][0]).toMatchObject({ holdId: 'hold-1', inputTokens: 130, outputTokens: 8010 });
+    });
+
+    it('a model failure after the hold releases the reservation and persists nothing', async () => {
+      mockGenerateText.mockRejectedValue(new Error('LLM down'));
+      await runCompaction(BASE_PARAMS);
+      expect(mockTrackUsage).not.toHaveBeenCalled();
+      expect(mockReleaseHold).toHaveBeenCalledOnce();
+      expect(mockReleaseHold).toHaveBeenCalledWith('hold-1');
+      expect(mockUpsertState).not.toHaveBeenCalled();
+    });
+
+    it('a re-condense that fails after the first pass settles the spend already made, once, and persists nothing', async () => {
+      mockGenerateText
+        .mockResolvedValueOnce({ text: 'x'.repeat(40000), usage: { inputTokens: 100, outputTokens: 8000 } } as never)
+        .mockRejectedValueOnce(new Error('LLM down'));
+      await runCompaction(BASE_PARAMS);
+      expect(mockTrackUsage).toHaveBeenCalledOnce();
+      expect(mockTrackUsage.mock.calls[0][0]).toMatchObject({ holdId: 'hold-1', walletId: 'w-turn', inputTokens: 100, outputTokens: 8000 });
+      expect(mockReleaseHold).not.toHaveBeenCalled();
+      expect(mockUpsertState).not.toHaveBeenCalled();
+    });
+
+    it('a gate that cannot be checked calls no model and persists nothing', async () => {
+      mockGate.mockRejectedValue(new Error('db down'));
+      await expect(runCompaction(BASE_PARAMS)).resolves.toBeUndefined();
+      expect(mockGenerateText).not.toHaveBeenCalled();
+      expect(mockTrackUsage).not.toHaveBeenCalled();
+      expect(mockUpsertState).not.toHaveBeenCalled();
+    });
+
+    it('takes no hold when there is nothing to summarize or no provider', async () => {
+      await runCompaction({ ...BASE_PARAMS, plan: makePlan({ messagesToSummarize: [] }) });
+      mockCreateAIProvider.mockResolvedValue({ error: 'No provider', status: 503 });
+      await runCompaction(BASE_PARAMS);
+      expect(mockGate).not.toHaveBeenCalled();
+      expect(mockGenerateText).not.toHaveBeenCalled();
+    });
+
+    it('a flat-rate (metering-exempt) provider reserves nothing, as its turn did not', async () => {
+      await runCompaction({ ...BASE_PARAMS, provider: 'glm' });
+      expect(mockGate).not.toHaveBeenCalled();
+      expect(mockGenerateText).toHaveBeenCalledOnce();
+      expect(mockTrackUsage.mock.calls[0][0].holdId).toBeUndefined();
+    });
   });
 
   it('never throws even when generateText throws', async () => {
