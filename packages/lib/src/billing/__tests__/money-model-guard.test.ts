@@ -5,6 +5,7 @@ import { REPO_ROOT, listSourceFiles } from '../../__tests__/seams/walk';
 import {
   CREDIT_FIGURE,
   FOUNDER_PLAN,
+  KNOWN_LIMITS,
   findConversionsInSource,
   findCopyHits,
   isMoneyName,
@@ -77,6 +78,20 @@ describe('MON-5 (partial) no second credit or cents conversion outside money-mod
     ['a balance name', 'const d = wallet.balance / 100;'],
     ['a subtotal name', 'const d = invoice.subtotal / 100;'],
     ['a budget name', 'const d = monthlyBudget / 100;'],
+    ['1e-2 as the factor', 'const d = cents * 1e-2;'],
+    ['a renamed CENTS_PER_DOLLAR import', "import { CENTS_PER_DOLLAR as K } from '@pagespace/lib/billing/money-model';"],
+    ['a hundred over a money value', 'const perCent = 100 / costCents;'],
+    // Stripe totals: the field says no unit, the object does.
+    ['a Stripe invoice total', 'const d = invoice.total / 100;'],
+    ['an upcoming invoice total', "format(upcomingInvoice?.total / 100, 'usd');"],
+    ['a Stripe invoice tax', 'const d = invoice.tax / 100;'],
+    ['a charge amount', 'const d = charge.amount / 100;'],
+    // Review 5330569519 P2-N1: shapes the P3-2 fix had let through.
+    ['a difference with an unnamed term', 'const d = (amountPaid - refunded) / 100;'],
+    ['a sum with an unnamed term', 'const c = Math.round((costDollars + overhead) * 100);'],
+    ['a ternary with a literal branch', 'const c = (isTrial ? 0 : costDollars) * 100;'],
+    ['a name with "share" mid-word', 'const d = revenueShareCents / 100;'],
+    ['a per-seat share in cents', 'const d = perSeatShareCents / 100;'],
   ])('MON-5 (partial) the rule flags %s', (_label, code) => {
     expect(flagged(code)).toBe(true);
   });
@@ -103,6 +118,10 @@ describe('MON-5 (partial) no second credit or cents conversion outside money-mod
     ['a cost fraction', 'const pct = Math.round(costFraction * 100);'],
     ['CENTS_PER_DOLLAR interpolated into SQL', 'sql`SUM(${aiUsageLogs.cost} * ${CENTS_PER_DOLLAR})`'],
     ['CENTS_PER_DOLLAR imported', "import { CENTS_PER_DOLLAR, centsFromDollars } from '@pagespace/lib/billing/money-model';"],
+    ['a 10% discount (0.1 is not a hundredth)', 'const off = priceCents * 0.1;'],
+    ['a millicent scale (0.001 is not a hundredth)', 'const m = amountCents * 0.001;'],
+    ['an invoice count', 'const pct = (overdue / invoice.count) * 100;'],
+    ['an unrelated total', 'const pct = Math.round((completed / total) * 100);'],
   ])('MON-5 (partial) the rule ignores %s', (_label, code) => {
     expect(flagged(code)).toBe(false);
   });
@@ -119,13 +138,24 @@ describe('MON-5 (partial) no second credit or cents conversion outside money-mod
     expect(isMoneyName('costShare')).toBe(false);
   });
 
-  it.each([
-    ['a destructured rename', 'const { remainingCents: r } = view;\nconst d = r / 100;'],
-    ['a value split across a variable', 'const n = walletRemainingCents(x);\nconst d = n / 100;'],
-    ['a named hundred', 'const d = cents / HUNDRED;'],
-    ['SQL in a quoted string', "sql.raw('SELECT balance_cents / 100 FROM wallets');"],
-  ])('MON-5 (partial) known limit, not caught: %s', (_label, code) => {
-    // Pinned so a widening shows up here; the guard is (partial) and MON-5 stays allowlisted.
+  it('MON-5 (partial) the scanner documents its known limits, each with a shape, an example and why', () => {
+    expect(KNOWN_LIMITS.length).toBeGreaterThanOrEqual(7);
+    for (const limit of KNOWN_LIMITS) {
+      expect(limit.shape.length, limit.shape).toBeGreaterThan(0);
+      expect(limit.why.length, limit.shape).toBeGreaterThan(0);
+    }
+    expect(KNOWN_LIMITS.map((l) => l.shape)).toEqual(
+      expect.arrayContaining([
+        'a destructured or aliased operand',
+        'a value split across a variable',
+        'a divisor spelled as a named constant',
+      ]),
+    );
+  });
+
+  it.each(KNOWN_LIMITS.map((l) => [l.shape, l.example]))('MON-5 (partial) KNOWN LIMIT, not caught: %s', (_shape, code) => {
+    // The guard's real reach: each of these slips, on purpose written down. Closing one
+    // turns this red — move its example into the "flags" table and drop it from KNOWN_LIMITS.
     expect(flagged(code)).toBe(false);
   });
 

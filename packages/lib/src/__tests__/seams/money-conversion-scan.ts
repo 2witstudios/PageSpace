@@ -43,8 +43,9 @@ export const MONEY_WORDS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Words that make a name unitless whatever else it says: `LOW_BALANCE_THRESHOLD_PCT`,
- * `costShare`, `costFraction` are ratios, and a ratio times 100 is a percentage.
+ * Words that make a name unitless when they END it: `LOW_BALANCE_THRESHOLD_PCT`,
+ * `costShare`, `costFraction` are ratios, and a ratio times 100 is a percentage. Only the
+ * last word counts, so `revenueShareCents` and `perSeatShareCents` stay money.
  */
 export const UNITLESS_WORDS: ReadonlySet<string> = new Set([
   'pct', 'percent', 'percentage', 'ratio', 'share', 'fraction', 'bps',
@@ -62,8 +63,28 @@ export function identWords(ident: string): string[] {
 
 export function isMoneyName(ident: string): boolean {
   const words = identWords(ident);
-  if (words.some((w) => UNITLESS_WORDS.has(w))) return false;
+  if (words.length > 0 && UNITLESS_WORDS.has(words[words.length - 1])) return false;
   return words.some((w) => MONEY_WORDS.has(w));
+}
+
+/**
+ * Stripe objects whose `total` / `tax` fields are money in minor units, although the
+ * field name says no unit: `invoice.total / 100` is a conversion. A rule-level word list,
+ * matched on the object's words (`upcomingInvoice`, `charge`, `refund` …).
+ */
+export const STRIPE_MONEY_OBJECTS: ReadonlySet<string> = new Set([
+  'invoice', 'invoices', 'charge', 'charges', 'payment', 'refund', 'refunds', 'coupon', 'quote', 'upcoming',
+]);
+const STRIPE_UNITLESS_MONEY_FIELDS: ReadonlySet<string> = new Set(['total', 'tax']);
+
+/** `invoice.total`, `upcomingInvoice?.tax`: a Stripe money object's total or tax field. */
+function isStripeMoneyField(names: readonly string[]): boolean {
+  for (let k = 1; k < names.length; k++) {
+    const field = identWords(names[k]);
+    if (field.length === 0 || !STRIPE_UNITLESS_MONEY_FIELDS.has(field[field.length - 1])) continue;
+    if (identWords(names[k - 1]).some((w) => STRIPE_MONEY_OBJECTS.has(w))) return true;
+  }
+  return false;
 }
 
 /**
@@ -304,7 +325,7 @@ export function operandDim(raw: string): number {
       i += 1;
     }
   }
-  if (names.some(isMoneyName)) return 1;
+  if (names.some(isMoneyName) || isStripeMoneyField(names)) return 1;
   for (let k = calls.length - 1; k >= 0; k--) {
     for (const { piece } of splitTopLevel(calls[k], (s, x) => (s[x] === ',' ? 1 : 0))) {
       const d = exprDim(piece);
@@ -314,35 +335,60 @@ export function operandDim(raw: string): number {
   return 0;
 }
 
-/** Net money dimension of a product chain: money numerators minus money divisors. */
-function productDim(text: string): number {
+/** One factor of a product chain: its text and whether it divides. */
+export interface Factor {
+  text: string;
+  div: boolean;
+}
+
+const stripUnary = (t: string) => t.trim().replace(/^[+\-!~]+/, '').trim();
+
+/** `( … )` wrapping the whole text. */
+function isParenGroup(text: string): boolean {
+  const t = text.trim();
+  return t.startsWith('(') && matchRight(t, 0) === t.length - 1;
+}
+
+/**
+ * Net money dimension of a chain of factors: money numerators minus money divisors.
+ * One precise exception, the growth shape: a group divided by one of its OWN terms,
+ * `(revenue - prev) / prev`, is a ratio of like values and contributes nothing.
+ */
+export function factorsDim(factors: readonly Factor[]): number {
   let dim = 0;
-  for (const { piece, sep } of splitTopLevel(text, productSeparator)) {
-    const d = operandDim(piece);
-    dim += sep === '/' ? -d : d;
+  for (let i = 0; i < factors.length; i++) {
+    const f = factors[i];
+    const next = factors[i + 1];
+    if (!f.div && next?.div && isParenGroup(f.text)) {
+      const inner = f.text.trim().slice(1, -1);
+      const terms = splitTopLevel(inner, termSeparator).map(({ piece }) => stripUnary(piece));
+      if (terms.includes(stripUnary(next.text))) {
+        i += 1;
+        continue;
+      }
+    }
+    const d = operandDim(f.text);
+    dim += f.div ? -d : d;
   }
   return dim;
 }
 
-/** A term that carries no unit of its own: a number, null/undefined, a boolean, a masked string. */
-const LITERAL_TERM = /^\s*(?:[+-]?\d[\d_.]*(?:e[+-]?\d+)?|null|undefined|true|false|(['"`])\s*\1)?\s*$/;
+/** Net money dimension of a product chain written as one text. */
+function productDim(text: string): number {
+  return factorsDim(splitTopLevel(text, productSeparator).map(({ piece, sep }) => ({ text: piece, div: sep === '/' })));
+}
 
 /**
- * Money dimension of an expression. A term that is a bare literal (`row.cost ?? 0`) does
- * not count. When the others mix a money term with a non-money one — `(revenue - prev)`,
- * where `prev` names no unit — the unit is unknown and the group counts as 0, so a
- * growth percentage is not taken for a conversion.
+ * Money dimension of an expression: that of its first money-carrying term, so a group
+ * mixing a money term with an unnamed one — `(amountPaid - refunded)`,
+ * `(isTrial ? 0 : costDollars)` — still carries money.
  */
 export function exprDim(text: string): number {
-  let found = 0;
-  let unknown = false;
   for (const { piece } of splitTopLevel(text, termSeparator)) {
-    if (LITERAL_TERM.test(piece)) continue;
     const d = productDim(piece);
-    if (d === 0) unknown = true;
-    else if (found === 0) found = d;
+    if (d !== 0) return d;
   }
-  return unknown ? 0 : found;
+  return 0;
 }
 
 /** Skip whitespace leftwards from `i`; the index of the first non-space char, or -1. */
@@ -364,35 +410,47 @@ function mulDivAt(s: string, i: number): '*' | '/' | null {
   return c;
 }
 
+/** What a literal hundred multiplies or divides: its chain's factors, in source order. */
+export interface HundredChain {
+  factors: Factor[];
+  /** Index of the hundred itself in `factors`. */
+  hundred: number;
+}
+
 /**
- * The chain a literal `100` at [start, end) sits in, as signed operand dimensions, or
- * null when the 100 is not a factor or divisor of anything.
+ * The chain a literal `100` at [start, end) sits in, or null when the 100 is not a factor
+ * or divisor of anything. A compound assignment (`target /= 100`) is a two-factor chain.
  */
-export function chainDimAt(s: string, start: number, end: number): number | null {
-  let dim = 0;
-  let found = false;
-  // Compound assignment: `target /= 100`, `target *= 100` — the target is the operand.
+export function chainAt(s: string, start: number, end: number): HundredChain | null {
+  const hundredText = s.slice(start, end);
   const eqIdx = skipWsLeft(s, start - 1);
   if (s[eqIdx] === '=' && (s[eqIdx - 1] === '*' || s[eqIdx - 1] === '/') && s[eqIdx - 2] !== s[eqIdx - 1]) {
     const targetEnd = skipWsLeft(s, eqIdx - 2);
     const targetStart = operandStartLeft(s, targetEnd);
-    return targetStart < 0 ? null : operandDim(s.slice(targetStart, targetEnd + 1));
+    if (targetStart < 0) return null;
+    return {
+      factors: [{ text: s.slice(targetStart, targetEnd + 1), div: false }, { text: hundredText, div: s[eqIdx - 1] === '/' }],
+      hundred: 1,
+    };
   }
+  const left: Factor[] = [];
+  let found = false;
   // Leftwards: `… op a op 100`. The operator before each operand decides its role.
   let opIdx = skipWsLeft(s, start - 1);
   let op = mulDivAt(s, opIdx);
+  const hundredDiv = op === '/';
   while (op) {
     found = true;
     const operandEnd = skipWsLeft(s, opIdx - 1);
     const operandStart = operandStartLeft(s, operandEnd);
     if (operandStart < 0) break;
-    const d = operandDim(s.slice(operandStart, operandEnd + 1));
     const beforeIdx = skipWsLeft(s, operandStart - 1);
     const before = mulDivAt(s, beforeIdx);
-    dim += before === '/' ? -d : d;
+    left.unshift({ text: s.slice(operandStart, operandEnd + 1), div: before === '/' });
     opIdx = beforeIdx;
     op = before;
   }
+  const right: Factor[] = [];
   // Rightwards: `100 op b op c …`.
   let p = skipWsRight(s, end);
   op = mulDivAt(s, p);
@@ -401,12 +459,42 @@ export function chainDimAt(s: string, start: number, end: number): number | null
     const operandStart = skipWsRight(s, p + 1);
     const operandEnd = operandEndRight(s, operandStart);
     if (operandEnd < 0) break;
-    const d = operandDim(s.slice(operandStart, operandEnd));
-    dim += op === '/' ? -d : d;
+    right.push({ text: s.slice(operandStart, operandEnd), div: op === '/' });
     p = skipWsRight(s, operandEnd);
     op = mulDivAt(s, p);
   }
-  return found ? dim : null;
+  if (!found) return null;
+  return { factors: [...left, { text: hundredText, div: hundredDiv }, ...right], hundred: left.length };
+}
+
+/** Net money dimension of the chain a hundred sits in (kept for callers and tests). */
+export function chainDimAt(s: string, start: number, end: number): number | null {
+  const chain = chainAt(s, start, end);
+  return chain ? factorsDim(chain.factors) : null;
+}
+
+/**
+ * The percent idiom, the one negative-dimension shape that is not a conversion: a
+ * parenthesised ratio with money only in its divisor, times a hundred —
+ * `(used / allowance) * 100`. Every other negative chain (`100 / costCents`) is flagged.
+ */
+function isPercentIdiom(chain: HundredChain): boolean {
+  if (chain.factors[chain.hundred].div) return false;
+  return chain.factors.every((f, i) => {
+    if (i === chain.hundred) return true;
+    const d = operandDim(f.text);
+    const contribution = f.div ? -d : d;
+    return contribution >= 0 || (!f.div && isParenGroup(f.text));
+  });
+}
+
+/** Whether the hundred at [start, end) converts money. */
+export function isConversionAt(s: string, start: number, end: number): boolean {
+  const chain = chainAt(s, start, end);
+  if (!chain) return false;
+  const dim = factorsDim(chain.factors);
+  if (dim > 0) return true;
+  return dim < 0 && !isPercentIdiom(chain);
 }
 
 export interface ConversionHit {
@@ -414,8 +502,11 @@ export interface ConversionHit {
   text: string;
 }
 
-/** The literal ways to write a hundred (or its inverse): `100`, `100.0`, `1e2`, `0.01`. */
-const HUNDRED_LITERAL = /(?<![\w$.])(?:100(?:\.0+)?|1e2|0\.0*1)(?![\w$.])/g;
+/** The literal ways to write a hundred (or its inverse): `100`, `100.0`, `1e2`, `1e-2`, `0.01`. */
+const HUNDRED_LITERAL = /(?<![\w$.])(?:100(?:\.0+)?|1e2|1e-2|0\.01)(?![\w$.])/g;
+
+/** Renaming the SQL constant on import (`CENTS_PER_DOLLAR as K`) would hide every use. */
+const CENTS_PER_DOLLAR_ALIAS = /\bCENTS_PER_DOLLAR\s+as\b/g;
 
 /** `import { … } from '…'` and `export { … } from '…'` (a name listed there is not a use). */
 const IMPORT_EXPORT_FROM = /\b(?:import|export)\s+(?:type\s+)?\{[^}]*\}\s*from\s*['"][^'"\n]*['"]/g;
@@ -428,13 +519,54 @@ const IMPORT_EXPORT_FROM = /\b(?:import|export)\s+(?:type\s+)?\{[^}]*\}\s*from\s
 const CENTS_PER_DOLLAR_USE = /(?<!\$\{\s*)\bCENTS_PER_DOLLAR\b(?!\s*\})/g;
 
 /**
- * Every second conversion in one source text (1-based lines, trimmed source line text).
- *
- * Known limits (the tests say so): a value renamed or destructured away from its money
- * name (`const { remainingCents: r } = v; r / 100`), a conversion split across a
- * variable or a helper in another file, a divisor spelled some other way (`HUNDRED`,
- * `/ 10 / 10`), and SQL inside a quoted string, which is masked.
+ * KNOWN LIMITS — what this scanner cannot see. It reads one file's text and judges a
+ * value by the NAME it is written with at the point of conversion, so a conversion slips
+ * whenever the money name is gone by then. These are not exceptions (there are none):
+ * they are the edge of what a text scan can know. money-model-guard.test.ts asserts
+ * every example below is NOT flagged, so this list stays the scanner's true reach, and
+ * a change that closes one shows up as a failing "known limit" test to move into the
+ * "flags" table. The durable fix is a type (a branded Cents that cannot be divided
+ * outside money-model), filed separately; until then MON-5 stays "(partial)".
  */
+export const KNOWN_LIMITS: ReadonlyArray<{ shape: string; example: string; why: string }> = [
+  {
+    shape: 'a destructured or aliased operand',
+    example: 'const { remainingCents: r } = view;\nconst d = r / 100;',
+    why: 'the money name is on the left of the rename; the division sees only `r`',
+  },
+  {
+    shape: 'a value split across a variable',
+    example: 'const n = walletRemainingCents(x);\nconst d = n / 100;',
+    why: 'the scanner does not follow a binding back to its initializer',
+  },
+  {
+    shape: 'a conversion inside a helper, called with cents from elsewhere',
+    example: 'export const toDollars = (v: number) => v / 100;',
+    why: 'the parameter has no money name; the caller in another file is never linked',
+  },
+  {
+    shape: 'a divisor spelled as a named constant',
+    example: 'const HUNDRED = 100;\nconst d = cents / HUNDRED;',
+    why: 'only the literal forms (100, 100.0, 1e2, 1e-2, 0.01) and CENTS_PER_DOLLAR are known',
+  },
+  {
+    shape: 'a hundred split into steps',
+    example: 'const d = cents / 10 / 10;',
+    why: 'no single factor is a hundred',
+  },
+  {
+    shape: 'SQL inside a quoted string',
+    example: "sql.raw('SELECT balance_cents / 100 FROM wallets');",
+    why: 'quoted strings are masked (template text is scanned, so write SQL in a sql`` template)',
+  },
+  {
+    shape: 'an operand with no name at all',
+    example: 'const d = rows[0][2] / 100;',
+    why: 'an index path carries no word to judge',
+  },
+];
+
+/** Every second conversion in one source text (1-based lines, trimmed source line text). See KNOWN_LIMITS. */
 export function findConversionsInSource(src: string): ConversionHit[] {
   const masked = maskSource(src);
   const lines = src.split('\n');
@@ -448,11 +580,9 @@ export function findConversionsInSource(src: string): ConversionHit[] {
   };
   for (const m of masked.matchAll(HUNDRED_LITERAL)) {
     const start = m.index ?? 0;
-    const dim = chainDimAt(masked, start, start + m[0].length);
-    // A positive net dimension is money scaled by a hundred. A negative one is a money
-    // divisor under a non-money numerator (`used / allowance * 100`): a percentage.
-    if (dim !== null && dim > 0) hit(start);
+    if (isConversionAt(masked, start, start + m[0].length)) hit(start);
   }
+  for (const m of masked.matchAll(CENTS_PER_DOLLAR_ALIAS)) hit(m.index ?? 0);
   const code = masked.replace(IMPORT_EXPORT_FROM, (m) => m.replace(/[^\n]/g, ' '));
   for (const m of code.matchAll(CENTS_PER_DOLLAR_USE)) hit(m.index ?? 0);
   return hits.sort((a, b) => a.line - b.line);
