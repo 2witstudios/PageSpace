@@ -127,6 +127,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { runPageChatTurn } from './page-chat-turn';
 import { runGlobalChatTurn } from './global-chat-turn';
+import { createTurnTimer, type TurnTimer } from '@/lib/ai/core/turn-timing';
 
 /**
  * Which public URL the turn arrived on. It decides the AUTH OPTIONS and the
@@ -231,6 +232,7 @@ export async function handleChatTurn(
     body,
     surface: opts.surface,
     urlConversationId: opts.urlConversationId,
+    receivedAt: startTime,
   });
 }
 
@@ -256,6 +258,7 @@ export async function dispatchChatTurn({
   body,
   surface,
   urlConversationId,
+  receivedAt,
 }: {
   request: Request;
   auth: AuthResult;
@@ -263,16 +266,51 @@ export async function dispatchChatTurn({
   body: Record<string, unknown>;
   surface: ChatTurnSurface;
   urlConversationId?: string;
+  /** When the HTTP request reached the handler, so TTFT includes auth and body parse. */
+  receivedAt?: number;
+}): Promise<Response> {
+  // Time-to-first-token instrumentation for whichever strategy runs. Owned HERE so both
+  // strategies share one start point and one end: a turn that returns without handing a
+  // stream to the pump (refusal, /help, error) ends its timer in the `finally` below; a
+  // turn that did hand one off is ended by the pump when the stream drains.
+  const timer = createTurnTimer({ receivedAt: receivedAt ?? Date.now() });
+  timer.mark('authenticated');
+  timer.annotate({ surface, userId: auth.userId });
+  try {
+    return await selectAndRunTurn({ request, auth, browserSessionId, body, surface, urlConversationId, timer });
+  } finally {
+    timer.endUnlessHandedOff('no_generation');
+  }
+}
+
+async function selectAndRunTurn({
+  request,
+  auth,
+  browserSessionId,
+  body,
+  surface,
+  urlConversationId,
+  timer,
+}: {
+  request: Request;
+  auth: AuthResult;
+  browserSessionId: string;
+  body: Record<string, unknown>;
+  surface: ChatTurnSurface;
+  urlConversationId?: string;
+  timer: TurnTimer;
 }): Promise<Response> {
   const isPageSurface = surface === 'page-chat';
 
   if (!isPageSurface) {
+    timer.annotate({ strategy: 'global' });
     return runGlobalChatTurn({
       request,
       auth,
       browserSessionId,
       body,
       urlConversationId,
+      timer,
     });
   }
 
@@ -340,6 +378,7 @@ export async function dispatchChatTurn({
             return sessionOnly.error;
           }
         }
+        timer.annotate({ strategy: 'global' });
         return runGlobalChatTurn({
           request,
           auth,
@@ -348,12 +387,14 @@ export async function dispatchChatTurn({
           // No URL segment on this surface — the body id is the only source,
           // and it is the one that just resolved.
           urlConversationId: undefined,
+          timer,
         });
       }
     }
   }
 
-  return runPageChatTurn({ request, auth, browserSessionId, body });
+  timer.annotate({ strategy: 'page' });
+  return runPageChatTurn({ request, auth, browserSessionId, body, timer });
 }
 
 /**
