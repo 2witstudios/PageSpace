@@ -13,6 +13,7 @@ import { subscriptions } from '@pagespace/db/schema/subscriptions';
 import type { SQL } from '@pagespace/db/operators';
 import { computeBalanceDrift, isNegativeMargin } from '@pagespace/lib/billing/credit-core';
 import { BALANCE_DRIFT_TOLERANCE_CENTS, NEGATIVE_MARGIN_FLOOR_BPS } from '@pagespace/lib/billing/credit-pricing';
+import { CENTS_PER_DOLLAR } from '@pagespace/lib/billing/money-model';
 import { getTierFromPrice, STRIPE_PRICE_TO_TIER } from './stripe/price-config';
 import { stripe } from './stripe/client';
 import { TIERS, type SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
@@ -530,7 +531,7 @@ function getBackendProvider(uiProvider: string): string {
 
 const realCostSum = sql<number>`ROUND(COALESCE(SUM(
   CASE
-    WHEN ${aiUsageLogs.cost} IS NOT NULL THEN ${aiUsageLogs.cost}::numeric * 100
+    WHEN ${aiUsageLogs.cost} IS NOT NULL THEN ${aiUsageLogs.cost}::numeric * ${CENTS_PER_DOLLAR}
     ELSE ${creditLedger.realCostCents}
   END
 ), 0))::int`;

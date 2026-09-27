@@ -14,6 +14,12 @@ import {
   centsFromCredits,
   dollarsFromCents,
   providerDollarsCoveredByCents,
+  chargedCentsFromProviderDollars,
+  chargedMillicentsFromProviderDollars,
+  exactCentsFromDollars,
+  centsFromDollars,
+  centsFromMillicents,
+  CENTS_PER_DOLLAR,
   formatDollars,
   formatCreditCount,
   creditsFromDollars,
@@ -236,6 +242,43 @@ describe('MON-5 one definition of a credit', () => {
     expect(providerDollarsCoveredByCents(21)).toBe(0.14);
     expect(providerDollarsCoveredByCents(23)).toBe(0.15333333333333332);
     expect(providerDollarsCoveredByCents(27)).toBe(0.18);
+  });
+});
+
+describe('MON-5 (partial) every dollars→cents step goes through money-model', () => {
+  it('MON-5 (partial) CENTS_PER_DOLLAR is the one stated cents-per-dollar, for SQL that multiplies in the database', () => {
+    expect(CENTS_PER_DOLLAR).toBe(100);
+  });
+
+  it('MON-5 (partial) exactCentsFromDollars leaves rounding to the caller; centsFromDollars rounds to the nearest cent', () => {
+    expect(exactCentsFromDollars(0.125)).toBe(12.5);
+    expect(exactCentsFromDollars(1.5)).toBe(150);
+    expect(centsFromDollars(0.125)).toBe(13);
+    expect(centsFromDollars(12.34)).toBe(1234);
+    // The billing-off daily ceiling floors a float SUM of provider dollars.
+    expect(Math.floor(exactCentsFromDollars(0.019))).toBe(1);
+  });
+
+  it('MON-5 (partial) chargedCentsFromProviderDollars applies the markup, then converts, with no rounding', () => {
+    // At 1.5×: $0.10 of provider cost is charged 15¢; $0.001 is 0.15¢ (a TTS hold ceils it to 1¢).
+    expect(chargedCentsFromProviderDollars(0.1, 15000)).toBeCloseTo(15, 10);
+    expect(chargedCentsFromProviderDollars(0.001, 15000)).toBeCloseTo(0.15, 10);
+    expect(Math.round(chargedCentsFromProviderDollars(0.123456, 15000))).toBe(19);
+    // The default markup is MARKUP_BPS.
+    expect(chargedCentsFromProviderDollars(1)).toBeCloseTo(MARKUP_BPS / 100, 10);
+    // It inverts providerDollarsCoveredByCents.
+    expect(chargedCentsFromProviderDollars(providerDollarsCoveredByCents(25, 15000), 15000)).toBeCloseTo(25, 10);
+  });
+
+  it('MON-5 (partial) centsFromMillicents is the millicent accrual unit back in cents, unrounded', () => {
+    expect(centsFromMillicents(90_000)).toBe(90);
+    expect(centsFromMillicents(100)).toBe(0.1);
+    expect(centsFromMillicents(0)).toBe(0);
+  });
+
+  it('MON-5 (partial) chargedMillicentsFromProviderDollars is the same charge a thousand times finer', () => {
+    expect(Math.round(chargedMillicentsFromProviderDollars(0.000123, 15000))).toBe(18);
+    expect(Math.round(chargedMillicentsFromProviderDollars(0.1, 15000))).toBe(15000);
   });
 });
 

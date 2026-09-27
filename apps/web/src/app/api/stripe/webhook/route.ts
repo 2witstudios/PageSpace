@@ -4,6 +4,7 @@ import { eq, and, isNull, lte } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { subscriptions, stripeEvents } from '@pagespace/db/schema/subscriptions';
 import { stripe, Stripe, getTierFromPrice } from '@/lib/stripe';
+import { unitAmountCentsFromDecimal } from '@/lib/stripe/price-config';
 import type { SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { deriveTierFromSubscriptions } from '@pagespace/lib/billing/subscription-tier-sync';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -425,9 +426,7 @@ function tierFromInvoice(invoice: Stripe.Invoice): SubscriptionTier | undefined 
   const priceData = line?.pricing?.price_details?.price;
   const priceId = typeof priceData === 'string' ? priceData : priceData?.id;
   if (!priceId) return undefined;
-  const unitAmount = line?.pricing?.unit_amount_decimal
-    ? Math.round(parseFloat(line.pricing.unit_amount_decimal) * 100)
-    : null;
+  const unitAmount = unitAmountCentsFromDecimal(line?.pricing?.unit_amount_decimal);
   const tier = getTierFromPrice(priceId, unitAmount);
   return tier === 'free' ? undefined : tier;
 }

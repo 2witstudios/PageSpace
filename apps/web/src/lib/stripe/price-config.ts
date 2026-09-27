@@ -30,6 +30,19 @@ export const LEGACY_PRICE_AMOUNTS: Record<number, SubscriptionTier> = {
 };
 
 /**
+ * A Stripe `unit_amount_decimal` (an invoice line's `pricing.unit_amount_decimal`) as
+ * whole cents for {@link getTierFromPrice}'s amount fallback. Stripe states it in the
+ * currency's minor unit already — a $50 line reads "5000" — so it is rounded, never
+ * multiplied: the `* 100` this replaces turned $50 into 500,000 and the fallback never
+ * matched (MON-5: a second conversion). Null when absent or unparseable.
+ */
+export function unitAmountCentsFromDecimal(decimal: string | null | undefined): number | null {
+  if (!decimal) return null;
+  const cents = Number.parseFloat(decimal);
+  return Number.isFinite(cents) ? Math.round(cents) : null;
+}
+
+/**
  * Determine subscription tier from a Stripe price.
  *
  * @param priceId - The Stripe price ID

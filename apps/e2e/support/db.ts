@@ -19,6 +19,7 @@ import { generateCSRFToken } from '../../../packages/lib/src/auth/csrf-utils';
 import { hashToken } from '../../../packages/lib/src/auth/token-utils';
 
 import type { SubscriptionTier as Tier } from '@pagespace/lib/billing/subscription-tiers';
+import { centsFromDollars } from '@pagespace/lib/billing/money-model';
 
 export type { Tier };
 
@@ -285,7 +286,7 @@ export async function seedPendingReconcileCall(
     amountCents: -opts.chargedCents,
     appliedCents: -opts.chargedCents,
     chargeMillicents: opts.chargedCents * 1000,
-    realCostCents: Math.round(opts.billedCostDollars * 100),
+    realCostCents: centsFromDollars(opts.billedCostDollars),
     aiUsageLogId: log.id,
   });
 
