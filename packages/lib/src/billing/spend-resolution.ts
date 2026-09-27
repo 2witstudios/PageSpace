@@ -18,7 +18,7 @@ import { and, eq, gt, inArray, isNull, or, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { creditHolds } from '@pagespace/db/schema/credits';
-import { wallets, personalRootWalletOf } from '@pagespace/db/schema/wallets';
+import { driveSpendOverrides, wallets, personalRootWalletOf } from '@pagespace/db/schema/wallets';
 import { ORGS_ENABLED } from '../organizations/orgs-enabled';
 import { loadDriveSpendStanding, sharedSpendLegsFor } from '../permissions/spend-standing';
 import { loggers } from '../logging/logger-config';
@@ -62,6 +62,7 @@ const WALLET_FACTS = {
   monthlyPeriodEnd: wallets.monthlyPeriodEnd,
   fallbackRule: wallets.fallbackRule,
   defaultSpendSource: wallets.defaultSpendSource,
+  alwaysOwnCredits: wallets.alwaysOwnCredits,
 } as const;
 
 type WalletRow = WalletBalanceFacts & {
@@ -69,6 +70,7 @@ type WalletRow = WalletBalanceFacts & {
   monthlyPeriodEnd: Date | null;
   fallbackRule: FallbackRule | null;
   defaultSpendSource: SpendSourceKind | null;
+  alwaysOwnCredits: boolean;
 };
 
 async function walletById(id: string): Promise<WalletRow | null> {
@@ -138,6 +140,16 @@ async function chosenWalletOf(userId: string, conversationId: string | null | un
     .where(and(eq(conversations.id, conversationId), eq(conversations.userId, userId)))
     .limit(1);
   return row?.chosenWalletId ?? null;
+}
+
+/** SPEND-5: whether `userId` turned "Always my own credits" on for `driveId`. */
+async function alwaysOwnCreditsInDrive(userId: string, driveId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ userId: driveSpendOverrides.userId })
+    .from(driveSpendOverrides)
+    .where(and(eq(driveSpendOverrides.userId, userId), eq(driveSpendOverrides.driveId, driveId)))
+    .limit(1);
+  return row !== undefined;
 }
 
 async function tierOf(userId: string): Promise<SubscriptionTier> {
@@ -337,8 +349,13 @@ export async function resolveCallSpend(input: {
     driveRule: { fallback, guestsMaySpendDriveWallet: false },
     chosen: target.chosen,
     stored,
-    // SPEND-5's "always my own credits" has no storage yet; both switches read off.
-    userOverride: { alwaysOwnCredits: false, alwaysOwnCreditsInDrive: false },
+    // SPEND-5 "Always my own credits": the global switch on the person's own root wallet and
+    // the switch for this drive. Either makes the call own credits or a refusal; it opens no
+    // other wallet, so it cannot widen what this person may spend or pass a seat's cap.
+    userOverride: {
+      alwaysOwnCredits: personal?.alwaysOwnCredits ?? false,
+      alwaysOwnCreditsInDrive: await alwaysOwnCreditsInDrive(userId, target.driveId),
+    },
     reservationCents: input.reservationCents,
     walletOwnerTier,
     consumerTier,

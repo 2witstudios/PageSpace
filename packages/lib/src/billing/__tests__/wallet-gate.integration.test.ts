@@ -23,7 +23,7 @@ import { driveMembers } from '@pagespace/db/schema/members';
 import { creditHolds, creditLedger } from '@pagespace/db/schema/credits';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
-import { walletConsumerCaps, wallets } from '@pagespace/db/schema/wallets';
+import { driveSpendOverrides, walletConsumerCaps, wallets } from '@pagespace/db/schema/wallets';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { loggers } from '../../logging/logger-config';
@@ -121,6 +121,7 @@ async function build(input: { productAllocationCents: number; poolCents: number;
 }
 
 async function teardown(w: World): Promise<void> {
+  await db.delete(driveSpendOverrides).where(inArray(driveSpendOverrides.userId, w.userIds));
   await db.delete(conversations).where(inArray(conversations.userId, w.userIds));
   await db.delete(aiUsageLogs).where(inArray(aiUsageLogs.userId, w.userIds));
   await db.delete(creditHolds).where(inArray(creditHolds.userId, w.userIds));
@@ -810,6 +811,118 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
       await expectNothingCharged(w);
     } finally {
       await teardownPersonalDrive(side);
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // SPEND-5: "Always my own credits", one global switch and one per drive. Either is absolute
+  // (own credits or refuse), and it only ever narrows: it opens no wallet and passes no cap.
+  // ---------------------------------------------------------------------------
+
+  const alwaysOwnCredits = (w: World, on: boolean) =>
+    db.update(wallets).set({ alwaysOwnCredits: on }).where(eq(wallets.id, w.marcusWalletId));
+  const alwaysOwnCreditsIn = (w: World, driveId: string) =>
+    db.insert(driveSpendOverrides).values({ userId: w.marcusId, driveId });
+
+  it('SPEND-5 (partial) the GLOBAL switch on: a call that chose the seat or the drive wallet spends own credits; off: it spends what it chose', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 5_000 });
+    const w = world;
+    await alwaysOwnCredits(w, true);
+
+    for (const source of ['seat_allowance', 'drive_wallet'] as const) {
+      const gate = await canConsumeAI(w.marcusId, 'free', { spend: driveSpend(w.productId, source) });
+      expect(gate, source).toMatchObject({ allowed: true, walletId: w.marcusWalletId, spendSource: 'own_credits', entitlementTier: 'free' });
+      // The override is the person's own rule, not a drive rule moving the call: no fallback.
+      expect(gate.fallback, source).toBeUndefined();
+    }
+    expect((await holdsOf(w.marcusId)).map((h) => h.walletId)).toEqual([w.marcusWalletId, w.marcusWalletId]);
+
+    await alwaysOwnCredits(w, false);
+    // Pro: the free tier's in-flight cap would count the two calls above.
+    const off = await canConsumeAI(w.marcusId, 'pro', { spend: driveSpend(w.productId, 'seat_allowance') });
+    expect(off).toMatchObject({ allowed: true, walletId: w.poolId, spendSource: 'seat_allowance' });
+  });
+
+  it('SPEND-5 (partial) the PER-DRIVE switch holds in its drive only: own credits in Product, the chosen drive wallet in another drive', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 5_000 });
+    const w = world;
+    const side = await personalDrive(w, { allocationCents: 1_000, fallbackRule: null });
+    try {
+      await alwaysOwnCreditsIn(w, w.productId);
+
+      const inProduct = await canConsumeAI(w.marcusId, 'free', { spend: driveSpend(w.productId, 'drive_wallet') });
+      expect(inProduct).toMatchObject({ allowed: true, walletId: w.marcusWalletId, spendSource: 'own_credits' });
+
+      const elsewhere = await canConsumeAI(w.marcusId, 'free', { spend: driveSpend(side.driveId, 'drive_wallet') });
+      expect(elsewhere).toMatchObject({ allowed: true, walletId: side.walletId, spendSource: 'drive_wallet' });
+    } finally {
+      await db.delete(driveSpendOverrides).where(eq(driveSpendOverrides.userId, w.marcusId));
+      await teardownPersonalDrive(side);
+    }
+  });
+
+  it('SPEND-5 (partial) an override never widens: with own credits empty it refuses by name and offers nothing — not the funded drive wallet, not the seat, not the drive\'s fallback', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 5_000 });
+    const w = world;
+    const side = await personalDrive(w, { allocationCents: 1_000, fallbackRule: 'own_credits' });
+    try {
+      await db.update(wallets).set({ monthlyRemainingCents: 0 }).where(eq(wallets.id, w.marcusWalletId));
+      await alwaysOwnCredits(w, true);
+
+      for (const [driveId, source] of [[w.productId, 'seat_allowance'], [w.productId, 'drive_wallet'], [side.driveId, 'drive_wallet']] as const) {
+        const gate = await canConsumeAI(w.marcusId, 'free', { spend: driveSpend(driveId, source) });
+        expect(gate, `${driveId} ${source}`).toEqual({ allowed: false, reason: 'source_refused', refusal: { source: 'own_credits', reason: 'source_empty', options: [] } });
+      }
+      expect(await holdsOf(w.marcusId)).toEqual([]);
+      expect(await ledgerOf(w.marcusId)).toEqual([]);
+      expect((await walletRow(w.poolId)).monthlyRemainingCents).toBe(5_000);
+      expect((await walletRow(side.walletId)).spentCents).toBe(0);
+    } finally {
+      await teardownPersonalDrive(side);
+    }
+  });
+
+  it('SPEND-5 (partial) an override for a drive the person cannot spend in opens nothing there: a guest still has only their own credits', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 5_000 });
+    const w = world;
+    // Chris is a guest in Product: no drive wallet (D-OW-4), no seat (DRV-8). His override changes nothing he can reach.
+    await db.insert(driveSpendOverrides).values({ userId: w.chrisId, driveId: w.productId });
+    try {
+      const gate = await canConsumeAI(w.chrisId, 'free', { spend: driveSpend(w.productId, 'drive_wallet') });
+      expect(gate).toMatchObject({ allowed: true, spendSource: 'own_credits' });
+      expect(gate.walletId).not.toBe(w.productWalletId);
+      expect(gate.walletId).not.toBe(w.poolId);
+      expect((await holdsOf(w.chrisId)).every((h) => h.walletId !== w.productWalletId && h.walletId !== w.poolId)).toBe(true);
+    } finally {
+      await db.delete(driveSpendOverrides).where(eq(driveSpendOverrides.userId, w.chrisId));
+    }
+  });
+
+  it('SPEND-5 (partial) WAL-2 (partial) an override never passes the seat cap: a capped member who turns it on spends their own credits, and the pool pays nothing more', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+    const w = world;
+    for (let call = 0; call < 4; call += 1) await seatCall(w, w.marcusId);
+    await alwaysOwnCredits(w, true);
+
+    const gate = await canConsumeAI(w.marcusId, 'free', { spend: driveSpend(w.productId, 'seat_allowance') });
+
+    expect(gate).toMatchObject({ allowed: true, walletId: w.marcusWalletId, spendSource: 'own_credits' });
+    expect(await seatChargedCents(w, w.marcusId)).toBe(100);
+    expect((await holdsOf(w.marcusId)).map((h) => h.walletId)).toEqual([w.marcusWalletId]);
+  });
+
+  it('SPEND-5 (partial) the global switch can live only on a personal root wallet', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 5_000 });
+    const w = world;
+    for (const walletId of [w.poolId, w.productWalletId]) {
+      const error = await db.update(wallets).set({ alwaysOwnCredits: true }).where(eq(wallets.id, walletId)).then(() => null, (e: unknown) => e);
+      expect((error as { cause?: { code?: string } } | null)?.cause?.code, walletId).toBe('23514');
     }
   });
 });
