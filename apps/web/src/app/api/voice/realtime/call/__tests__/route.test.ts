@@ -397,7 +397,7 @@ describe('POST /api/voice/realtime/call', () => {
     });
   });
 
-  describe('the source the call spends (SPEND-1)', () => {
+  describe('the source the call spends', () => {
     it('SPEND-1 (partial) should carry the resolved drive to the handshake, which carries it to the meter', async () => {
       mockResolveVoiceSpend.mockResolvedValue({ kind: 'drive', driveId: 'drive-1' });
 
