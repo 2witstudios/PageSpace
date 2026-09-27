@@ -4,6 +4,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { createOrganization, listOrganizationsForUser } from '@pagespace/lib/organizations/repository';
 import { authenticateOrgRequest, ORG_READ_AUTH, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 import { orgCreateSchema } from '@/lib/orgs/org-schemas';
+import { startOrgBusinessTrial } from '@/lib/org-billing/org-subscription';
 
 /** GET /api/orgs — the orgs the caller belongs to, with their role (ORG-2). */
 export async function GET(request: Request) {
@@ -25,7 +26,12 @@ export async function GET(request: Request) {
   }
 }
 
-/** POST /api/orgs — create an org; the caller becomes its Owner (ORG-1). */
+/**
+ * POST /api/orgs — create an org; the caller becomes its Owner (ORG-1) and the org
+ * starts Business on its trial (SEAT-8). The org is created even when Stripe cannot be
+ * reached: `billing.state` is then `pending` and
+ * POST /api/orgs/[orgId]/billing/subscription provisions it.
+ */
 export async function POST(request: Request) {
   const gate = await authenticateOrgRequest(request, ORG_WRITE_AUTH);
   if (!gate.ok) return gate.response;
@@ -50,8 +56,9 @@ export async function POST(request: Request) {
       resourceId: result.organization.id,
       details: { operation: 'create_organization' },
     });
+    const billing = await startOrgBusinessTrial(result.organization.id);
     const { id, name, slug, avatarUrl, ownerId, createdAt } = result.organization;
-    return NextResponse.json({ organization: { id, name, slug, avatarUrl, ownerId, createdAt } }, { status: 201 });
+    return NextResponse.json({ organization: { id, name, slug, avatarUrl, ownerId, createdAt }, billing }, { status: 201 });
   } catch (error) {
     loggers.api.error('Error creating organization:', error as Error);
     return NextResponse.json({ error: 'Failed to create organization' }, { status: 500 });
