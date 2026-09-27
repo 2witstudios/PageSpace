@@ -9,7 +9,7 @@
  * Only the model is stubbed (no provider is ever reached); the route, the
  * candidate store, the gate, the holds and the credit ledger are all real.
  */
-import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi, type MockInstance } from 'vitest';
 import { createHash, randomUUID } from 'node:crypto';
 
 const { generateObjectMock, generateTextMock } = vi.hoisted(() => ({
@@ -38,6 +38,7 @@ vi.mock('@/lib/auth/cron-auth', () => ({
 
 import { db } from '@pagespace/db/db';
 import { and, eq, inArray } from '@pagespace/db/operators';
+import { users } from '@pagespace/db/schema/auth';
 import { sessions } from '@pagespace/db/schema/sessions';
 import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { creditBalances, creditHolds, creditLedger } from '@pagespace/db/schema/credits';
@@ -51,11 +52,23 @@ import { POST } from '../route';
 let dbAvailable = false;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * The cron processes EVERY active pro user in the database, with a 1s pause
+ * between users. On a shared or reused test database that is an unbounded
+ * number of pauses, so the pause is collapsed to 0ms, each test gets an
+ * explicit timeout, and every row this file creates is deleted after each test.
+ */
+const TEST_TIMEOUT_MS = 30_000;
+const CRON_USER_DELAY_MS = 1000;
+const createdUserIds: string[] = [];
+let setTimeoutSpy: MockInstance<typeof setTimeout> | undefined;
+
 // 100k in / 10k out on claude-sonnet-5 ($2 / $10 per M) ≈ $0.30 per call before markup.
 const USAGE = { inputTokens: 100_000, outputTokens: 10_000 };
 
 async function activeProUser(balance: { monthlyRemainingCents: number; debtCents: number }): Promise<string> {
   const user = await factories.createUser({ subscriptionTier: 'pro' });
+  createdUserIds.push(user.id);
   const now = new Date();
   await db.insert(sessions).values({
     tokenHash: createHash('sha256').update(randomUUID()).digest('hex'),
@@ -127,6 +140,15 @@ async function settled(userIds: string[]): Promise<void> {
 }
 
 describe('memory cron credit gate (Postgres)', () => {
+  afterEach(async () => {
+    setTimeoutSpy?.mockRestore();
+    if (!dbAvailable || createdUserIds.length === 0) return;
+    const ids = createdUserIds.splice(0);
+    // ai_usage_logs has no FK to users; everything else cascades from the user row.
+    await db.delete(aiUsageLogs).where(inArray(aiUsageLogs.userId, ids));
+    await db.delete(users).where(inArray(users.id, ids));
+  });
+
   beforeAll(async () => {
     try {
       await db.select().from(creditBalances).limit(1);
@@ -138,6 +160,9 @@ describe('memory cron credit gate (Postgres)', () => {
   });
 
   beforeEach(() => {
+    const realSetTimeout = globalThis.setTimeout;
+    setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((handler: () => void, ms?: number) =>
+      realSetTimeout(handler, ms === CRON_USER_DELAY_MS ? 0 : ms)) as typeof setTimeout);
     generateObjectMock.mockReset();
     generateTextMock.mockReset();
     generateObjectMock.mockResolvedValue({ object: { claims: [] }, usage: USAGE });
@@ -164,11 +189,15 @@ describe('memory cron credit gate (Postgres)', () => {
     expect(usage).toEqual([]);
     expect(after.debtCents).toBe(500);
     expect(after.monthlyRemainingCents).toBe(0);
-    expect(candidatesAfter.map((c) => [c.id, c.status, c.occurrences])).toEqual(
-      candidatesBefore.map((c) => [c.id, c.status, c.occurrences]),
-    );
+    // Candidate state lives in promotedAt/rejectedAt: a refused pass must neither
+    // settle a candidate nor re-stage one (occurrences, lastSeenAt).
+    const snapshot = (rows: typeof candidatesBefore) =>
+      rows.map((c) => [c.id, c.promotedAt, c.rejectedAt, c.occurrences, c.lastSeenAt.getTime()]);
+    expect(candidatesBefore.length).toBeGreaterThan(0);
+    expect(snapshot(candidatesAfter)).toEqual(snapshot(candidatesBefore));
+    expect(candidatesAfter.every((c) => c.promotedAt === null && c.rejectedAt === null)).toBe(true);
     expect(await db.select().from(creditHolds).where(eq(creditHolds.userId, userId))).toEqual([]);
-  });
+  }, TEST_TIMEOUT_MS);
 
   it('a funded user alongside an exhausted one: the funded pass runs and settles each call once', async () => {
     if (!dbAvailable) return;
@@ -197,5 +226,5 @@ describe('memory cron credit gate (Postgres)', () => {
 
     expect(await usageRowsOf(exhausted)).toEqual([]);
     expect((await balanceOf(exhausted)).debtCents).toBe(500);
-  });
+  }, TEST_TIMEOUT_MS);
 });
