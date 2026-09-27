@@ -38,7 +38,16 @@ export const MONEY_WORDS: ReadonlySet<string> = new Set([
   'paid', 'fee', 'fees',
   'spend', 'spent',
   'allowance', 'allowances',
+  'balance', 'balances', 'subtotal', 'budget', 'budgets',
   'revenue', 'liability',
+]);
+
+/**
+ * Words that make a name unitless whatever else it says: `LOW_BALANCE_THRESHOLD_PCT`,
+ * `costShare`, `costFraction` are ratios, and a ratio times 100 is a percentage.
+ */
+export const UNITLESS_WORDS: ReadonlySet<string> = new Set([
+  'pct', 'percent', 'percentage', 'ratio', 'share', 'fraction', 'bps',
 ]);
 
 /** Split an identifier into lowercase words: `realCostCents` → real, cost, cents. */
@@ -52,7 +61,9 @@ export function identWords(ident: string): string[] {
 }
 
 export function isMoneyName(ident: string): boolean {
-  return identWords(ident).some((w) => MONEY_WORDS.has(w));
+  const words = identWords(ident);
+  if (words.some((w) => UNITLESS_WORDS.has(w))) return false;
+  return words.some((w) => MONEY_WORDS.has(w));
 }
 
 /**
@@ -313,13 +324,25 @@ function productDim(text: string): number {
   return dim;
 }
 
-/** Money dimension of an expression: that of its first money-carrying term. */
+/** A term that carries no unit of its own: a number, null/undefined, a boolean, a masked string. */
+const LITERAL_TERM = /^\s*(?:[+-]?\d[\d_.]*(?:e[+-]?\d+)?|null|undefined|true|false|(['"`])\s*\1)?\s*$/;
+
+/**
+ * Money dimension of an expression. A term that is a bare literal (`row.cost ?? 0`) does
+ * not count. When the others mix a money term with a non-money one — `(revenue - prev)`,
+ * where `prev` names no unit — the unit is unknown and the group counts as 0, so a
+ * growth percentage is not taken for a conversion.
+ */
 export function exprDim(text: string): number {
+  let found = 0;
+  let unknown = false;
   for (const { piece } of splitTopLevel(text, termSeparator)) {
+    if (LITERAL_TERM.test(piece)) continue;
     const d = productDim(piece);
-    if (d !== 0) return d;
+    if (d === 0) unknown = true;
+    else if (found === 0) found = d;
   }
-  return 0;
+  return unknown ? 0 : found;
 }
 
 /** Skip whitespace leftwards from `i`; the index of the first non-space char, or -1. */
@@ -348,6 +371,13 @@ function mulDivAt(s: string, i: number): '*' | '/' | null {
 export function chainDimAt(s: string, start: number, end: number): number | null {
   let dim = 0;
   let found = false;
+  // Compound assignment: `target /= 100`, `target *= 100` — the target is the operand.
+  const eqIdx = skipWsLeft(s, start - 1);
+  if (s[eqIdx] === '=' && (s[eqIdx - 1] === '*' || s[eqIdx - 1] === '/') && s[eqIdx - 2] !== s[eqIdx - 1]) {
+    const targetEnd = skipWsLeft(s, eqIdx - 2);
+    const targetStart = operandStartLeft(s, targetEnd);
+    return targetStart < 0 ? null : operandDim(s.slice(targetStart, targetEnd + 1));
+  }
   // Leftwards: `… op a op 100`. The operator before each operand decides its role.
   let opIdx = skipWsLeft(s, start - 1);
   let op = mulDivAt(s, opIdx);
@@ -384,35 +414,64 @@ export interface ConversionHit {
   text: string;
 }
 
-/** Every second conversion in one source text (1-based lines, trimmed source line text). */
+/** The literal ways to write a hundred (or its inverse): `100`, `100.0`, `1e2`, `0.01`. */
+const HUNDRED_LITERAL = /(?<![\w$.])(?:100(?:\.0+)?|1e2|0\.0*1)(?![\w$.])/g;
+
+/** `import { … } from '…'` and `export { … } from '…'` (a name listed there is not a use). */
+const IMPORT_EXPORT_FROM = /\b(?:import|export)\s+(?:type\s+)?\{[^}]*\}\s*from\s*['"][^'"\n]*['"]/g;
+
+/**
+ * money-model exports CENTS_PER_DOLLAR for SQL, where no function can run: the only
+ * use allowed elsewhere is a `${CENTS_PER_DOLLAR}` interpolation. Anywhere else it is
+ * a hand-rolled conversion that dodges the literal (`cents / CENTS_PER_DOLLAR`).
+ */
+const CENTS_PER_DOLLAR_USE = /(?<!\$\{\s*)\bCENTS_PER_DOLLAR\b(?!\s*\})/g;
+
+/**
+ * Every second conversion in one source text (1-based lines, trimmed source line text).
+ *
+ * Known limits (the tests say so): a value renamed or destructured away from its money
+ * name (`const { remainingCents: r } = v; r / 100`), a conversion split across a
+ * variable or a helper in another file, a divisor spelled some other way (`HUNDRED`,
+ * `/ 10 / 10`), and SQL inside a quoted string, which is masked.
+ */
 export function findConversionsInSource(src: string): ConversionHit[] {
   const masked = maskSource(src);
   const lines = src.split('\n');
   const hits: ConversionHit[] = [];
   const seen = new Set<number>();
-  const literal = /(?<![\w$.])100(?![\w$.])/g;
-  for (const m of masked.matchAll(literal)) {
-    const start = m.index ?? 0;
-    const dim = chainDimAt(masked, start, start + 3);
-    if (dim === null || dim === 0) continue;
-    const line = masked.slice(0, start).split('\n').length;
-    if (seen.has(line)) continue;
+  const hit = (offset: number) => {
+    const line = masked.slice(0, offset).split('\n').length;
+    if (seen.has(line)) return;
     seen.add(line);
     hits.push({ line, text: (lines[line - 1] ?? '').trim() });
+  };
+  for (const m of masked.matchAll(HUNDRED_LITERAL)) {
+    const start = m.index ?? 0;
+    const dim = chainDimAt(masked, start, start + m[0].length);
+    // A positive net dimension is money scaled by a hundred. A negative one is a money
+    // divisor under a non-money numerator (`used / allowance * 100`): a percentage.
+    if (dim !== null && dim > 0) hit(start);
   }
-  return hits;
+  const code = masked.replace(IMPORT_EXPORT_FROM, (m) => m.replace(/[^\n]/g, ' '));
+  for (const m of code.matchAll(CENTS_PER_DOLLAR_USE)) hit(m.index ?? 0);
+  return hits.sort((a, b) => a.line - b.line);
 }
 
 /**
- * MON-1 copy scan: a literal credit figure in published text ("5 credits",
- * "15/month in credits", "1,000 credits"). A figure interpolated from the money model
- * (`{MONTHLY_CREDITS.pro} credits`) has no digit before the word and never matches.
- * Lowercase only, so a heading like "11.3 Credits and Usage Limits" is not a figure.
+ * MON-1 copy scan: a literal credit figure in published text, in any case: "5 credits",
+ * "15/month in credits", "Start with 500 free credits", "1,500 AI credits", "1.5k
+ * credits", "Credits: 1500/month". Up to two words may sit between the number and
+ * "credits". A figure interpolated from the money model (`{MONTHLY_CREDITS.pro} credits`)
+ * has no digit before the word and never matches. A decimal counts only with a `k`
+ * suffix, so a section heading like "11.3 Credits and Usage Limits" is not a figure. The
+ * label form needs a capital C ("Credits: 1500"), so a code key `credits: 1_200` is not copy.
  */
-export const CREDIT_FIGURE = /(?<![\w.,$])\d[\d,]*(?:\s*\/\s*(?:mo|month))?\s+(?:in\s+)?credits?\b/g;
+export const CREDIT_FIGURE =
+  /(?<![\w.,$])\d[\d,]*(?:\.\d+[kK]|[kK])?(?:\s*\/\s*(?:mo|month))?(?:\s+[A-Za-z-]+){0,2}\s+(?:[Cc]redits?|CREDITS?)\b|\b(?:Credits?|CREDITS?)\s*:\s*\d/g;
 
 /** MON-1 / A-9 copy scan: the removed Founder plan, as a word ("NotFoundError" never matches). */
-export const FOUNDER_PLAN = /\bfounder\b/gi;
+export const FOUNDER_PLAN = /\bfounders?\b/gi;
 
 /** Lines of `src` (comments stripped, strings kept) where `pattern` matches. */
 export function findCopyHits(src: string, pattern: RegExp): ConversionHit[] {

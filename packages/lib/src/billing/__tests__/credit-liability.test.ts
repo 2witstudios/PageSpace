@@ -12,7 +12,7 @@ const group = (over: Partial<LiabilityGroup>): LiabilityGroup => ({
   ...over,
 });
 
-describe('liabilityWalletKind names the three wallet shapes (WAL-2)', () => {
+describe('liabilityWalletKind names the three wallet shapes', () => {
   it('MON-7 (partial) a user wallet with no subject and no parent is a personal root', () => {
     expect(liabilityWalletKind({ ownerType: 'user', hasSubject: false, hasParent: false })).toBe('personal_root');
   });

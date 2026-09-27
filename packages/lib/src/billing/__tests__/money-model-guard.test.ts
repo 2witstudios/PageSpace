@@ -67,6 +67,16 @@ describe('MON-5 (partial) no second credit or cents conversion outside money-mod
     ['a SQL COALESCE of a cost column', 'sql`ROUND(SUM(COALESCE(${aiUsageLogs.cost}, 0) * 100))`'],
     ['a continuation line that starts with *', 'const cents = costDollars\n  * 100;'],
     ['a divide on the next line', 'const dollars = walletRemainingCents(x)\n  / 100;'],
+    ['a compound multiply', 'costDollars *= 100;'],
+    ['a compound divide on a cents name', 'totalCents /= 100;'],
+    ['CENTS_PER_DOLLAR outside SQL', 'const dollars = cents / CENTS_PER_DOLLAR;'],
+    ['CENTS_PER_DOLLAR as a factor', 'const cents = CENTS_PER_DOLLAR * price;'],
+    ['100.0 as the literal', 'const d = amount / 100.0;'],
+    ['1e2 as the literal', 'const d = amount / 1e2;'],
+    ['0.01 as the factor', 'const d = amountCents * 0.01;'],
+    ['a balance name', 'const d = wallet.balance / 100;'],
+    ['a subtotal name', 'const d = invoice.subtotal / 100;'],
+    ['a budget name', 'const d = monthlyBudget / 100;'],
   ])('MON-5 (partial) the rule flags %s', (_label, code) => {
     expect(flagged(code)).toBe(true);
   });
@@ -87,6 +97,12 @@ describe('MON-5 (partial) no second credit or cents conversion outside money-mod
     ['markdown in a template', 'const md = `- **Business:** 100/month in credits`;'],
     ['a timer', 'setTimeout(flushSpend, 100);'],
     ['a longer literal', 'const x = costDollars * 1000;'],
+    ['a guarded percent of allowance', 'const pct = allowance > 0 ? (used / allowance) * 100 : 0;'],
+    ['a growth percentage over an unnamed base', 'const growth = ((revenue - prev) / prev) * 100;'],
+    ['a cost share', 'const pct = costShare * 100;'],
+    ['a cost fraction', 'const pct = Math.round(costFraction * 100);'],
+    ['CENTS_PER_DOLLAR interpolated into SQL', 'sql`SUM(${aiUsageLogs.cost} * ${CENTS_PER_DOLLAR})`'],
+    ['CENTS_PER_DOLLAR imported', "import { CENTS_PER_DOLLAR, centsFromDollars } from '@pagespace/lib/billing/money-model';"],
   ])('MON-5 (partial) the rule ignores %s', (_label, code) => {
     expect(flagged(code)).toBe(false);
   });
@@ -99,6 +115,18 @@ describe('MON-5 (partial) no second credit or cents conversion outside money-mod
     expect(isMoneyName('usedBytes')).toBe(false);
     expect(isMoneyName('feedbackCount')).toBe(false);
     expect(isMoneyName('percent_off')).toBe(false);
+    expect(isMoneyName('LOW_BALANCE_THRESHOLD_PCT')).toBe(false);
+    expect(isMoneyName('costShare')).toBe(false);
+  });
+
+  it.each([
+    ['a destructured rename', 'const { remainingCents: r } = view;\nconst d = r / 100;'],
+    ['a value split across a variable', 'const n = walletRemainingCents(x);\nconst d = n / 100;'],
+    ['a named hundred', 'const d = cents / HUNDRED;'],
+    ['SQL in a quoted string', "sql.raw('SELECT balance_cents / 100 FROM wallets');"],
+  ])('MON-5 (partial) known limit, not caught: %s', (_label, code) => {
+    // Pinned so a widening shows up here; the guard is (partial) and MON-5 stays allowlisted.
+    expect(flagged(code)).toBe(false);
   });
 
   it('MON-5 (partial) no file in any app, package, or script multiplies or divides a money value by 100', () => {
@@ -134,6 +162,11 @@ describe('MON-1 (partial) no published copy states a credit figure or names the 
     ['- **Pro:** 15/month in credits'],
     ['<li>1,000 credits for $10</li>'],
     ["const label = '900 credits a month';"],
+    ['Start with 500 free credits'],
+    ['Pro includes 1,500 AI credits a month'],
+    ['Credits: 1500/month'],
+    ['Pro: 1500 Credits'],
+    ['1.5k credits'],
   ])('MON-1 (partial) the figure rule flags %s', (line) => {
     expect(findCopyHits(line, CREDIT_FIGURE)).toHaveLength(1);
   });
@@ -143,12 +176,14 @@ describe('MON-1 (partial) no published copy states a credit figure or names the 
     ['<h3>11.3 Credits and Usage Limits</h3>'],
     ['// 5 credits in a comment'],
     ['`${formatCreditCount(cents)} credits`'],
+    ["wallet: { credits: 1_200, over: false },"],
   ])('MON-1 (partial) the figure rule ignores %s', (line) => {
     expect(findCopyHits(line, CREDIT_FIGURE)).toHaveLength(0);
   });
 
   it('MON-1 (partial) the Founder rule matches the word, not NotFoundError', () => {
     expect(findCopyHits('**Pro, Founder, and Business** unlock', FOUNDER_PLAN)).toHaveLength(1);
+    expect(findCopyHits('the Founders plan', FOUNDER_PLAN)).toHaveLength(1);
     expect(findCopyHits('throw new SheetTabNotFoundError(id);', FOUNDER_PLAN)).toHaveLength(0);
   });
 
