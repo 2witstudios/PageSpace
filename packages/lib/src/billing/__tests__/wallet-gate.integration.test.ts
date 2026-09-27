@@ -738,4 +738,78 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     expect((await walletRow(w.productWalletId)).topupRemainingCents).toBe(175);
     await expectWalletLegInvariant([w.productWalletId]);
   });
+
+  // ---------------------------------------------------------------------------
+  // SPEND-4: a fallback is never silent. On a personal drive the lead may set the drive's
+  // fallback rule; when it moves a call, the gate's answer says from which source to which.
+  // ---------------------------------------------------------------------------
+
+  /** Jono's personal drive "Side Project", its wallet under Jono's root, Marcus a member; the rule set by Jono. */
+  async function personalDrive(w: World, input: { allocationCents: number; fallbackRule: 'refuse' | 'own_credits' | null }) {
+    const [jonoRoot] = await db.insert(wallets).values({ userId: w.jonoId, monthlyRemainingCents: 9_000, monthlyPeriodStart: new Date(), monthlyPeriodEnd: new Date(Date.now() + 20 * 86_400_000) }).returning();
+    const side = await factories.createDrive(w.jonoId, { name: 'Side Project', slug: `side-${createId()}` });
+    await factories.createDriveMember(side.id, w.marcusId, { source: 'invite' });
+    const [sideWallet] = await db.insert(wallets).values({
+      userId: w.jonoId, subjectType: 'drive', subjectId: side.id, parentWalletId: jonoRoot.id,
+      monthlyAllowanceCents: input.allocationCents, fallbackRule: input.fallbackRule,
+    }).returning();
+    return { driveId: side.id, walletId: sideWallet.id, jonoRootId: jonoRoot.id };
+  }
+
+  async function teardownPersonalDrive(side: { driveId: string; walletId: string }): Promise<void> {
+    await db.delete(creditHolds).where(eq(creditHolds.walletId, side.walletId));
+    await db.delete(wallets).where(eq(wallets.id, side.walletId));
+    await db.delete(drives).where(eq(drives.id, side.driveId));
+  }
+
+  it('SPEND-4 (partial) a drive-rule fallback is reported with the source it moved FROM and TO, and holds on the source it moved to', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 5_000 });
+    const w = world;
+    const side = await personalDrive(w, { allocationCents: 0, fallbackRule: 'own_credits' });
+    const info = vi.spyOn(loggers.ai, 'info');
+    try {
+      const gate = await canConsumeAI(w.marcusId, 'free', { spend: driveSpend(side.driveId, 'drive_wallet') });
+
+      expect(gate).toMatchObject({ allowed: true, walletId: w.marcusWalletId, spendSource: 'own_credits' });
+      expect(gate.fallback).toEqual({ from: 'drive_wallet', to: 'own_credits' });
+      expect((await holdsOf(w.marcusId)).map((h) => h.walletId)).toEqual([w.marcusWalletId]);
+      // The switch is recorded too, never only implied by the wallet id.
+      expect(info).toHaveBeenCalledWith('spend source fell back', expect.objectContaining({
+        userId: w.marcusId, driveId: side.driveId, from: 'drive_wallet', to: 'own_credits',
+      }));
+    } finally {
+      await teardownPersonalDrive(side);
+    }
+  });
+
+  it('SPEND-4 (partial) a call that spends its chosen source carries no fallback', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 5_000 });
+    const w = world;
+    const side = await personalDrive(w, { allocationCents: 1_000, fallbackRule: 'own_credits' });
+    try {
+      const gate = await canConsumeAI(w.marcusId, 'free', { spend: driveSpend(side.driveId, 'drive_wallet') });
+
+      expect(gate).toMatchObject({ allowed: true, walletId: side.walletId, spendSource: 'drive_wallet' });
+      expect(gate.fallback).toBeUndefined();
+    } finally {
+      await teardownPersonalDrive(side);
+    }
+  });
+
+  it('SPEND-4 (partial) with the rule at refuse the same empty source is refused by name and charges nothing — no fallback', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 5_000 });
+    const w = world;
+    const side = await personalDrive(w, { allocationCents: 0, fallbackRule: 'refuse' });
+    try {
+      const gate = await canConsumeAI(w.marcusId, 'free', { spend: driveSpend(side.driveId, 'drive_wallet') });
+
+      expect(gate).toEqual({ allowed: false, reason: 'source_refused', refusal: { source: 'drive_wallet', reason: 'source_empty', options: ['own_credits'] } });
+      await expectNothingCharged(w);
+    } finally {
+      await teardownPersonalDrive(side);
+    }
+  });
 });

@@ -26,6 +26,7 @@ import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { subscriptions } from '@pagespace/db/schema/subscriptions';
 import { and, eq, gt, gte, inArray, or, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
+import { loggers } from '../logging/logger-config';
 import {
   evaluateGate,
   evaluateDailyCap,
@@ -208,6 +209,16 @@ export interface SpendRefusal {
 }
 
 /**
+ * SPEND-4: the drive's fallback rule moved the call off the source it named. `from` is the
+ * source the caller chose, `to` the source the hold was placed on. Present only when a
+ * fallback happened, so the caller must show the new source (the chip and strip).
+ */
+export interface SpendFallback {
+  from: SpendSourceKind;
+  to: SpendSourceKind;
+}
+
+/**
  * The gate's answer. On an allowed call it names the wallet the hold was placed on
  * (`walletId`, WAL-5), which the caller threads to settlement with the hold, the source it
  * spends, and the tier whose entitlements govern the call (WAL-8). A refused source carries
@@ -218,6 +229,8 @@ export interface CreditGateResult extends GateResult {
   spendSource?: SpendSourceKind;
   entitlementTier?: SubscriptionTier;
   refusal?: SpendRefusal;
+  /** Set only when a drive rule moved the call to another source (SPEND-4): never silent. */
+  fallback?: SpendFallback;
 }
 
 /** Normalize the caller-supplied daily ceiling: zero/negative/absent → null (off). */
@@ -384,17 +397,28 @@ export async function canConsumeAI(
       },
     };
   }
-  if (decision.source !== 'own_credits') {
-    return gateSharedWallet(userId, tier, opts, {
-      walletId: decision.walletId,
-      source: decision.source,
-      entitlementTier: decision.entitlementTier,
-    });
-  }
-  const personalResult = await gatePersonalRoot(userId, tier, opts);
-  return personalResult.allowed
-    ? { ...personalResult, spendSource: 'own_credits', entitlementTier: decision.entitlementTier }
-    : personalResult;
+  // SPEND-4: a fallback travels with the answer, from the source chosen to the one held.
+  const fallback: SpendFallback | undefined = decision.fallbackApplied && decision.fallbackFrom !== null
+    ? { from: decision.fallbackFrom, to: decision.source }
+    : undefined;
+  const result = decision.source !== 'own_credits'
+    ? await gateSharedWallet(userId, tier, opts, {
+        walletId: decision.walletId,
+        source: decision.source,
+        entitlementTier: decision.entitlementTier,
+      })
+    : await gatePersonalRoot(userId, tier, opts).then((personal): CreditGateResult => personal.allowed
+        ? { ...personal, spendSource: 'own_credits', entitlementTier: decision.entitlementTier }
+        : personal);
+  if (!result.allowed || fallback === undefined) return result;
+  loggers.ai.info('spend source fell back', {
+    userId,
+    driveId: opts.spend.kind === 'personal' ? null : opts.spend.driveId,
+    from: fallback.from,
+    to: fallback.to,
+    walletId: result.walletId,
+  });
+  return { ...result, fallback };
 }
 
 /**
