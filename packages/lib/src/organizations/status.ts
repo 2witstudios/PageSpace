@@ -16,7 +16,9 @@ import { organizations, orgSubscriptions } from '@pagespace/db/schema/organizati
 import { isBillingEnabled } from '../deployment-mode';
 import {
   deriveOrgStatus,
+  orgBillingNotice,
   orgStatusAllows,
+  type OrgBillingNotice,
   unsubscribedTrialEnd,
   type OrgCapabilityCheck,
   type OrgStatusResult,
@@ -28,7 +30,6 @@ export {
   ORG_LAPSED_MESSAGE,
   ORG_LAPSED_REFUSAL,
   type OrgLapsedRefusal,
-  orgBillingNotice,
   type OrgBillingNotice,
   type OrgCapabilityCheck,
   type OrgStatus,
@@ -82,6 +83,22 @@ export async function getOrgStatus(orgId: string, opts: { now?: Date; executor?:
 /** SEAT-9: may the org use its org-only capabilities right now? False only while lapsed. */
 export async function isOrgActive(orgId: string, opts: { now?: Date; executor?: Executor } = {}): Promise<boolean> {
   return (await getOrgStatus(orgId, opts)).status !== 'lapsed';
+}
+
+/**
+ * SEAT-9 / SEAT-6: the billing notice the org surfaces show this caller — Owner and Admins
+ * see plan detail (reactivate with the reason, a failed payment, the trial end), a member
+ * only the read-only notice while lapsed. Null where billing is off (onprem, tenant: the
+ * billing gate hides it entirely) and whenever there is nothing to show.
+ */
+export async function getOrgBillingNotice(
+  orgId: string,
+  role: 'OWNER' | 'ADMIN' | 'MEMBER',
+  opts: { now?: Date; executor?: Executor } = {},
+): Promise<OrgBillingNotice | null> {
+  if (!isBillingEnabled()) return null;
+  const read = await readOrgStatus(orgId, opts);
+  return orgBillingNotice({ result: read.result, role, trialEnd: read.trialEnd });
 }
 
 /** SEAT-9: the refusal an org-only capability returns (`{ ok: false, code: 'org_lapsed', message }`) or ok. */

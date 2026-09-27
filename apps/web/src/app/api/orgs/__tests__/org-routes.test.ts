@@ -61,6 +61,11 @@ vi.mock('@pagespace/lib/organizations/invitations', () => ({
   acceptInvitation: vi.fn(),
 }));
 vi.mock('@pagespace/lib/organizations/deletion', () => ({ deleteOrganization: vi.fn() }));
+// The notice's per-role decision is status-core's (unit-tested); here only that GET passes the caller's role through.
+vi.mock('@pagespace/lib/organizations/status', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@pagespace/lib/organizations/status')>()),
+  getOrgBillingNotice: vi.fn(async () => null),
+}));
 vi.mock('@/lib/orgs/org-invite-delivery', () => ({ deliverOrgInvite: vi.fn() }));
 vi.mock('@/lib/org-billing/org-subscription', () => ({ startOrgBusinessTrial: vi.fn(), endOrgSubscriptionPort: vi.fn(() => endSubscriptionPort) }));
 
@@ -72,6 +77,7 @@ import * as repository from '@pagespace/lib/organizations/repository';
 import * as membership from '@pagespace/lib/organizations/membership';
 import * as invitations from '@pagespace/lib/organizations/invitations';
 import { deleteOrganization } from '@pagespace/lib/organizations/deletion';
+import { getOrgBillingNotice } from '@pagespace/lib/organizations/status';
 import { deliverOrgInvite } from '@/lib/orgs/org-invite-delivery';
 import { startOrgBusinessTrial } from '@/lib/org-billing/org-subscription';
 
@@ -292,6 +298,24 @@ describe('org route role matrix', () => {
 
 describe('org route behaviour', () => {
   const asRole = (role: OrgRole | null) => vi.mocked(repository.findMembershipRole).mockResolvedValue(role);
+
+  it('SEAT-9 (partial) SEAT-6 (partial) GET /api/orgs/[orgId] carries the billing notice for the caller\'s own role, and nothing when there is none', async () => {
+    asRole('ADMIN');
+    vi.mocked(getOrgBillingNotice).mockResolvedValueOnce({ kind: 'reactivate', reason: 'unpaid', canManageBilling: true });
+    const admin = await orgRoute.GET(req('GET'), params({ orgId: ORG_ID }));
+    expect(getOrgBillingNotice).toHaveBeenLastCalledWith(ORG_ID, 'ADMIN');
+    expect((await admin.json()).billingNotice).toEqual({ kind: 'reactivate', reason: 'unpaid', canManageBilling: true });
+
+    asRole('MEMBER');
+    vi.mocked(getOrgBillingNotice).mockResolvedValueOnce({ kind: 'read_only', canManageBilling: false });
+    const member = await orgRoute.GET(req('GET'), params({ orgId: ORG_ID }));
+    expect(getOrgBillingNotice).toHaveBeenLastCalledWith(ORG_ID, 'MEMBER');
+    expect((await member.json()).billingNotice).toEqual({ kind: 'read_only', canManageBilling: false });
+
+    // Billing off (onprem, tenant) or nothing to say: no field at all.
+    const quiet = await orgRoute.GET(req('GET'), params({ orgId: ORG_ID }));
+    expect(await quiet.json()).not.toHaveProperty('billingNotice');
+  });
 
   it('ORG-1 (partial) POST /api/orgs makes the caller the Owner and never returns billing ids', async () => {
     const res = await orgsRoute.POST(req('POST', { name: 'Northwind Labs', slug: 'Northwind', avatarUrl: 'https://example.test/n.png' }));

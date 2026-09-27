@@ -22,7 +22,7 @@ import { users } from '@pagespace/db/schema/auth';
 import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
 import { wallets, walletFundingLegs } from '@pagespace/db/schema/wallets';
 import { creditLedger } from '@pagespace/db/schema/credits';
-import { stripeEvents } from '@pagespace/db/schema/subscriptions';
+import { stripeEvents, subscriptions } from '@pagespace/db/schema/subscriptions';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { createOrganization } from '@pagespace/lib/organizations/repository';
@@ -223,6 +223,49 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
       await db.delete(organizations).where(inArray(organizations.id, orgIds));
     }
     if (userIds.length > 0) await db.delete(users).where(inArray(users.id, userIds));
+  });
+
+  it("SEAT-7 org subscription webhooks are routed to the org before the personal-tier handler and are idempotent: each event delivered twice applies once and never touches the Owner's personal plan", async () => {
+    if (!dbAvailable) return;
+    const org = await northwind(7);
+    // The Owner is also a paying personal customer: the personal handler must never see the org's events.
+    const ownerCustomer = `cus_owd3_owner_${Math.random().toString(36).slice(2, 10)}`;
+    await db.update(users).set({ stripeCustomerId: ownerCustomer, subscriptionTier: 'pro' }).where(eq(users.id, org.ownerId));
+    const personalSubsBefore = await db.select().from(subscriptions).where(eq(subscriptions.userId, org.ownerId));
+
+    // customer.subscription.updated → mirrored onto org_subscriptions (the org's handler).
+    setStripeStatus(org, 'active');
+    const updated = eventPayload('customer.subscription.updated', { id: org.subscriptionId, object: 'subscription', customer: org.customerId, status: 'active', metadata: orgMetadata(org.orgId) });
+    expect(await deliver(updated)).toBe(200);
+    expect((await storedSub(org.orgId)).status).toBe('active');
+    const readsAfterUpdate = org.stripe.reads.retrieveSubscription;
+    const rowAfterUpdate = await storedSub(org.orgId);
+    expect(await deliver(updated)).toBe(200);
+    expect(org.stripe.reads.retrieveSubscription).toBe(readsAfterUpdate);
+    expect((await storedSub(org.orgId)).updatedAt).toEqual(rowAfterUpdate.updatedAt);
+
+    // invoice.paid → the org pool (the org's handler), once.
+    const paid = eventPayload(
+      'invoice.paid',
+      invoiceObject({ customer: org.customerId, subscriptionId: org.subscriptionId, metadata: orgMetadata(org.orgId), seats: 2, paid: true, billingReason: 'subscription_cycle', periodStart: 1_800_000_000 + 30 * DAY }),
+    );
+    expect(await deliver(paid)).toBe(200);
+    expect(await deliver(paid)).toBe(200);
+    const pool = await poolOf(org.orgId);
+    expect(await ledgerRows(pool!.id)).toHaveLength(1);
+
+    // customer.subscription.deleted → the ORG lapses; the personal handler would have set the Owner to free.
+    org.stripe.endSubscription(org.subscriptionId, 'canceled');
+    const deleted = eventPayload('customer.subscription.deleted', { id: org.subscriptionId, object: 'subscription', customer: org.customerId, status: 'canceled', metadata: orgMetadata(org.orgId) });
+    expect(await deliver(deleted)).toBe(200);
+    expect(await deliver(deleted)).toBe(200);
+    expect((await getOrgStatus(org.orgId)).status).toBe('lapsed');
+
+    // The personal-tier handler never ran: the Owner's tier, personal subscriptions and personal ledger are untouched.
+    const [owner] = await db.select({ tier: users.subscriptionTier, customer: users.stripeCustomerId }).from(users).where(eq(users.id, org.ownerId));
+    expect(owner).toEqual({ tier: 'pro', customer: ownerCustomer });
+    expect(await db.select().from(subscriptions).where(eq(subscriptions.userId, org.ownerId))).toEqual(personalSubsBefore);
+    expect(await db.select().from(creditLedger).where(and(eq(creditLedger.userId, org.ownerId), sql`${creditLedger.walletId} <> ${pool!.id}`))).toHaveLength(0);
   });
 
   it('SEAT-7 (partial) MON-3 (partial) replaying the same org invoice.paid event is a no-op: one grant, no second Stripe read, no second write', async () => {

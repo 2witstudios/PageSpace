@@ -24,7 +24,8 @@ import { wallets, walletFundingLegs } from '@pagespace/db/schema/wallets';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { createOrRotateInvitation, resendInvitation } from '../invitations';
-import { ORG_LAPSED_MESSAGE, getOrgStatus, isOrgActive } from '../status';
+import { ORG_LAPSED_MESSAGE, getOrgBillingNotice, getOrgStatus, isOrgActive } from '../status';
+import { ORG_UNSUBSCRIBED_TRIAL_MS } from '../status-core';
 import { createOrgDrive, moveDriveOutOfOrg, moveDriveToOrg, type OrgDriveServiceDeps } from '../../services/org-drive-service';
 import { createDriveWallet, getDriveWallet, updateDriveWallet, topUpDriveWallet } from '../../services/drive-wallet-service';
 import { resolveCallSpend } from '../../billing/spend-resolution';
@@ -292,6 +293,29 @@ describe('SEAT-9 lapse gates (orgs on, real Postgres)', () => {
     // The drive wallet's stored status is untouched: the pause is a read of the lapse, not a write.
     const [stored] = await db.select({ status: wallets.status }).from(wallets).where(eq(wallets.id, w.productWalletId));
     expect(stored.status).toBe('active');
+  });
+
+  it('SEAT-9 (partial) SEAT-6 (partial) the banner data: Owner and Admins see why and can reactivate, a member sees only read-only; a new unsubscribed org shows its trial to managers only', async () => {
+    if (!world) return;
+    const w = world;
+    const [org] = await db.select({ createdAt: organizations.createdAt }).from(organizations).where(eq(organizations.id, w.orgId));
+    // No subscription row yet (Stripe was unreachable at creation): on the creation trial.
+    expect(await getOrgStatus(w.orgId)).toEqual({ status: 'trialing', reason: null });
+    expect(await getOrgBillingNotice(w.orgId, 'OWNER')).toEqual({
+      kind: 'trial',
+      trialEnd: new Date(org.createdAt.getTime() + ORG_UNSUBSCRIBED_TRIAL_MS).toISOString(),
+      canManageBilling: true,
+    });
+    expect(await getOrgBillingNotice(w.orgId, 'MEMBER')).toBeNull();
+
+    await setSubscription(w.orgId, 'unpaid');
+    expect(await getOrgBillingNotice(w.orgId, 'OWNER')).toEqual({ kind: 'reactivate', reason: 'unpaid', canManageBilling: true });
+    expect(await getOrgBillingNotice(w.orgId, 'ADMIN')).toEqual({ kind: 'reactivate', reason: 'unpaid', canManageBilling: true });
+    expect(await getOrgBillingNotice(w.orgId, 'MEMBER')).toEqual({ kind: 'read_only', canManageBilling: false });
+
+    // Hidden entirely where billing is off (SEAT-6's existing billing gate).
+    process.env.DEPLOYMENT_MODE = 'onprem';
+    expect(await getOrgBillingNotice(w.orgId, 'OWNER')).toBeNull();
   });
 
   it('SEAT-9 (partial) where billing is off (onprem, tenant) an org never lapses, whatever row is stored', async () => {
