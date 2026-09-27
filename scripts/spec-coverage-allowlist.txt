@@ -106,9 +106,10 @@ SPEND-2
 # the person's default, proven against Postgres; the Settings surface that sets the default is UI-10.
 SPEND-3
 # SPEND-4 (partial, ow-c2, ow-fix-spend-controls): empty chosen source refuses, names it, offers the rest,
-# charges zero; a drive-rule fallback reaches the gate result ({from,to}) and the chat stream
-# (data-spend-fallback). Unproven: the chip and strip rendering it (UI-8), and overshoot on a fallback call
-# landing per WAL-6(b) (settle does not yet receive fallbackFrom).
+# charges zero (a spent seat allowance says so in the 402); a drive-rule fallback reaches the gate result
+# ({from,to}) and both chat streams (data-spend-fallback). Unproven: a client component rendering the fallback
+# part and cause.refusal (UI-8); the non-chat surfaces (v1/chat/completions, btw, consult, mentions) drop
+# gate.fallback, so their fallback is logged only; overshoot on a fallback call landing per WAL-6(b).
 SPEND-4
 # SPEND-6 (partial, ow-c2): automations resolve to the drive wallet or skip, never a person; wiring every
 # automation kind and logging the skip are unproven until C4.
@@ -142,9 +143,14 @@ UI-11
 # until C3/C5 spend and refill against them.
 WAL-1
 # WAL-2 (partial, ow-c1, ow-fix-spend-controls): one pool per org, one wallet per subject and a drive wallet
-# under a parent are enforced by the schema; the seat is the pool capped per consumer per pool period
-# (gate + resolution, under the pool row lock). Unproven by one bare-ID test: the drive-wallet-parent clause
-# for personal drives alongside the seat cap; the org's own seat-allowance amount waits for the POL-7 store.
+# under a parent are enforced by the schema; the seat is the pool capped per consumer per pool period, decided
+# at ADMISSION under the pool row lock. Unproven / not yet bounded (Review 5330574819): the cap bounds admission,
+# not spend — concurrent chat streams each get their own budget (min(pool, allowance left) − reservation), so
+# together they can overshoot the allowance once, and surfaces with no mid-stream abort (v1/chat/completions,
+# btw, consult, channel mentions, image generation) can overshoot by one call's actual cost; the overshoot is
+# pool debt (WAL-6) and every later call that period is refused. A hold past its 15-minute TTL, a deferred
+# settle claim, or releaseHold without the pool lock are briefly invisible to the cap. The org's own
+# seat-allowance amount waits for the POL-7 store.
 WAL-2
 # WAL-3 (partial, ow-c2): allocation draws against the parent as spend happens and legs last until spent,
 # as pure math; persisted wallets and ledger rows are unproven until C1/C3.
