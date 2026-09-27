@@ -191,7 +191,7 @@ describe('the stored spend source', () => {
   });
 });
 
-describe('"Always my own credits" (SPEND-5)', () => {
+describe('"Always my own credits" storage', () => {
   it('SPEND-5 (partial): the global switch is a NOT NULL boolean, off by default, that a CHECK allows only on a personal root wallet', () => {
     const column = getTableColumns(wallets).alwaysOwnCredits;
     expect(column.columnType).toBe('PgBoolean');

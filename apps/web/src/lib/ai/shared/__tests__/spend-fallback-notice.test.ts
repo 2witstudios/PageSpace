@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { spendFallbackNoticeText } from '../spend-fallback-notice';
 
-describe('the spend fallback notice (SPEND-4)', () => {
+describe('the spend fallback notice', () => {
   it.each([
     [{ from: 'drive_wallet', to: 'own_credits' }, "Spent from your own credits — the drive wallet couldn't cover this call."],
     [{ from: 'drive_wallet', to: 'seat_allowance' }, "Spent from your seat allowance — the drive wallet couldn't cover this call."],

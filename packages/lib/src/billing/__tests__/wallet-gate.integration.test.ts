@@ -23,7 +23,7 @@ import { driveMembers } from '@pagespace/db/schema/members';
 import { creditHolds, creditLedger } from '@pagespace/db/schema/credits';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
-import { driveSpendOverrides, walletConsumerCaps, wallets } from '@pagespace/db/schema/wallets';
+import { driveSpendOverrides, personalRootWalletOf, walletConsumerCaps, wallets } from '@pagespace/db/schema/wallets';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { loggers } from '../../logging/logger-config';
@@ -33,6 +33,7 @@ import { PERSONAL_SPEND, conversationSpend, driveSpend } from '../spend-target';
 import { DEFAULT_SEAT_ALLOWANCE_CENTS } from '../wallet-core';
 import { applyOrgPoolRefill, donateToDriveWallet } from '../wallet-funding-shell';
 import { reconcileOpenRouterCosts } from '../cost-reconcile';
+import { createDriveWallet } from '../../services/drive-wallet-service';
 import { expectWalletLegInvariant } from '../../test/wallet-leg-invariant';
 
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
@@ -1014,6 +1015,74 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     } finally {
       await db.delete(driveSpendOverrides).where(eq(driveSpendOverrides.userId, w.marcusId));
       await teardownPersonalDrive(side);
+    }
+  });
+
+  it('WAL-2 an org pool is an org-owned wallet with no subject and no parent; a seat is the per-consumer monthly cap on the pool\'s own leg, not a separate row; a drive wallet has its drive as subject and the org pool (org drive) or the owner\'s personal wallet (personal drive) as parent', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 5_000 });
+    const w = world;
+    // A second org, whose pool only the real refill creates.
+    const [acme] = await db.insert(organizations).values({ name: 'Acme', slug: `acme-${createId()}`, ownerId: w.jonoId, stripeCustomerId: `cus_${createId()}` }).returning();
+    const drivesMade: string[] = [];
+    try {
+      await db.insert(orgMembers).values([
+        { orgId: acme.id, userId: w.jonoId, role: 'OWNER' },
+        { orgId: acme.id, userId: w.marcusId, role: 'MEMBER' },
+        { orgId: acme.id, userId: w.chrisId, role: 'MEMBER' },
+      ]);
+      const startS = Math.floor(Date.now() / 1000) - 86_400;
+      expect(await applyOrgPoolRefill({
+        id: `in_${createId()}`, customer: acme.stripeCustomerId, billing_reason: 'subscription_cycle', amount_paid: 5000, subtotal: 5000,
+        parent: { subscription_details: { subscription: `sub_${createId()}` } },
+        lines: { data: [{ amount: 5000, period: { start: startS, end: startS + 30 * 86_400 } }] },
+      }, { active: true })).toMatchObject({ kind: 'granted' });
+
+      // The org pool: owned by the org, no subject, no parent — one row.
+      const acmeWallets = () => db.select().from(wallets).where(eq(wallets.orgId, acme.id));
+      const [pool] = await acmeWallets();
+      expect(pool).toMatchObject({ ownerType: 'org', orgId: acme.id, userId: null, subjectType: null, subjectId: null, parentWalletId: null });
+
+      // A drive wallet on an org drive: its drive as subject, the pool as parent.
+      const orgDrive = await factories.createDrive(w.jonoId, { name: 'Acme Product', slug: `acme-product-${createId()}`, orgId: acme.id, orgVisibility: 'OPEN' });
+      drivesMade.push(orgDrive.id);
+      await factories.createDriveMember(orgDrive.id, w.marcusId, { source: 'org' });
+      await factories.createDriveMember(orgDrive.id, w.chrisId, { source: 'org' });
+      expect(await createDriveWallet(w.jonoId, orgDrive.id, { allocationCents: 1_000 }, 'session')).toMatchObject({ ok: true });
+      const [orgDriveWallet] = await db.select().from(wallets).where(and(eq(wallets.subjectType, 'drive'), eq(wallets.subjectId, orgDrive.id)));
+      expect(orgDriveWallet).toMatchObject({ ownerType: 'org', orgId: acme.id, parentWalletId: pool.id });
+
+      // A drive wallet on a personal drive: its drive as subject, the owner's personal wallet as parent.
+      const personal = await factories.createDrive(w.jonoId, { name: 'Jono Notes', slug: `jono-notes-${createId()}` });
+      drivesMade.push(personal.id);
+      expect(await createDriveWallet(w.jonoId, personal.id, { allocationCents: 1_000 }, 'session')).toMatchObject({ ok: true });
+      const [personalDriveWallet] = await db.select().from(wallets).where(and(eq(wallets.subjectType, 'drive'), eq(wallets.subjectId, personal.id)));
+      const [jonoRoot] = await db.select().from(wallets).where(personalRootWalletOf(w.jonoId));
+      expect(personalDriveWallet).toMatchObject({ ownerType: 'user', userId: w.jonoId, parentWalletId: jonoRoot.id });
+
+      // A seat spends the pool's own leg — no seat row is ever created — capped per consumer per month.
+      const seat = (userId: string) => canConsumeAI(userId, 'pro', { spend: driveSpend(orgDrive.id, 'seat_allowance') });
+      const settle = async (userId: string, gate: Awaited<ReturnType<typeof seat>>) => {
+        const [log] = await db.insert(aiUsageLogs).values({ userId, provider: 'openrouter', model: 'm', cost: COST_25C }).returning({ id: aiUsageLogs.id });
+        await consumeCredits({ aiUsageLogId: log.id, userId, costDollars: COST_25C, holdId: gate.holdId, walletId: gate.walletId });
+      };
+      for (let call = 1; call <= 4; call += 1) {
+        const gate = await seat(w.marcusId);
+        expect(gate, `Marcus call ${call}`).toMatchObject({ allowed: true, walletId: pool.id, spendSource: 'seat_allowance' });
+        await settle(w.marcusId, gate);
+      }
+      expect(await seat(w.marcusId)).toMatchObject({ allowed: false, refusal: { source: 'seat_allowance', reason: 'source_cap_reached' } });
+      const chrisGate = await seat(w.chrisId);
+      expect(chrisGate).toMatchObject({ allowed: true, walletId: pool.id });
+      await settle(w.chrisId, chrisGate);
+      expect((await acmeWallets()).map((row) => row.id).sort()).toEqual([pool.id, orgDriveWallet.id].sort());
+    } finally {
+      await db.delete(creditHolds).where(inArray(creditHolds.userId, w.userIds));
+      await db.delete(creditLedger).where(inArray(creditLedger.userId, w.userIds));
+      await db.delete(wallets).where(and(eq(wallets.subjectType, 'drive'), inArray(wallets.subjectId, drivesMade)));
+      await db.delete(wallets).where(eq(wallets.orgId, acme.id));
+      await db.delete(drives).where(inArray(drives.id, drivesMade));
+      await db.delete(organizations).where(eq(organizations.id, acme.id));
     }
   });
 });

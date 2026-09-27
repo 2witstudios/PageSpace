@@ -143,17 +143,6 @@ UI-11
 # suite proves owner/subject/parent/status shapes; top-up "never expires" on child wallets is unproven
 # until C3/C5 spend and refill against them.
 WAL-1
-# WAL-2 (partial, ow-c1, ow-fix-spend-controls): one pool per org, one wallet per subject and a drive wallet
-# under a parent are enforced by the schema; the seat is the pool capped per consumer per pool period, decided
-# at ADMISSION under the pool row lock. Unproven / not yet bounded (Review 5330574819): the cap bounds admission,
-# not spend — concurrent chat streams each get their own budget (min(pool, allowance left) − reservation), so
-# together they can overshoot the allowance once, and surfaces with no mid-stream abort (v1/chat/completions,
-# btw, consult, channel mentions, image generation) can overshoot by one call's actual cost; the overshoot is
-# pool debt (WAL-6) and every later call that period is refused. A hold past its 15-minute TTL, a deferred
-# settle claim, or releaseHold without the pool lock are briefly invisible to the cap. A per-consumer daily cap binds
-# when set; no daily default is applied (D20.5's 10 credits is below one reservation). The org's own
-# seat-allowance amount waits for the POL-7 store.
-WAL-2
 # WAL-3 (partial, ow-c2): allocation draws against the parent as spend happens and legs last until spent,
 # as pure math; persisted wallets and ledger rows are unproven until C1/C3.
 # (partial, ow-c5): persisted funding legs draw FIFO and last until spent, and allocations reset on the

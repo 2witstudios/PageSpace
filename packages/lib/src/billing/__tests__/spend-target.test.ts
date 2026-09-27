@@ -152,7 +152,7 @@ describe('spend-target: wallet rows to legs', () => {
   });
 });
 
-describe('spend-target: the seat leg is capped per consumer (WAL-2)', () => {
+describe('spend-target: the seat leg is capped per consumer', () => {
   const noSpend = { periodChargedMillicents: 0, periodReservedCents: 0, dayChargedMillicents: 0 };
 
   it('WAL-2 (partial) a full pool through a seat spends only what is left of that consumer\'s cap, and says the cap binds', () => {

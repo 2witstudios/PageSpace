@@ -13,7 +13,7 @@ const allowed = (over: Partial<CreditGateResult> = {}): CreditGateResult => ({
   ...over,
 });
 
-describe('turn credit: a drive-rule fallback reaches the turn and the stream (SPEND-4)', () => {
+describe('turn credit: a drive-rule fallback reaches the turn and the stream', () => {
   it('SPEND-4 (partial) the turn keeps the fallback the gate reported, from and to', () => {
     const credit = turnCreditAfterGate(driveSpend('d-side', 'drive_wallet'), allowed({ fallback: { from: 'drive_wallet', to: 'own_credits' } }));
 

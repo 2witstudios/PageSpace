@@ -630,7 +630,7 @@ describe('evaluateCaps', () => {
   });
 });
 
-describe('seat allowance — the per-consumer monthly cap on the org pool (WAL-2)', () => {
+describe('seat allowance — the per-consumer monthly cap on the org pool', () => {
   it('WAL-2 (partial) the seat allowance is never unlimited: with nothing set it is the D20.5 monthly default', () => {
     expect(DEFAULT_SEAT_ALLOWANCE_CENTS).toBe(DEFAULT_CONSUMER_CAPS.monthlyCents);
     expect(DEFAULT_SEAT_ALLOWANCE_CENTS).toBeGreaterThan(0);
@@ -681,7 +681,7 @@ describe('seat allowance — the per-consumer monthly cap on the org pool (WAL-2
     ['a set daily cap binds within the monthly allowance', c(100), c(50), usage(30_000, 0, 30_000), c(25), { allowed: false, reason: 'daily_cap_exceeded', dailyRemainingCents: c(20), monthlyRemainingCents: c(70) }],
     ['earlier days do not count against today', c(100), c(50), usage(60_000, 0, 10_000), c(25), { allowed: true, dailyRemainingCents: c(40), monthlyRemainingCents: c(40) }],
     ['calls in flight count against today too', c(100), c(50), usage(0, c(40), 0), c(25), { allowed: false, reason: 'daily_cap_exceeded' }],
-    ['no daily cap set is no daily limit (WAL-7: unset is unlimited within the leg)', c(100), null, usage(70_000, 0, 70_000), c(25), { allowed: true, dailyRemainingCents: null }],
+    ['no daily cap set is no daily limit (unset is unlimited within the leg)', c(100), null, usage(70_000, 0, 70_000), c(25), { allowed: true, dailyRemainingCents: null }],
   ] as const)('WAL-2 (partial) WAL-7 (partial) seatCapCheck with a per-consumer DAILY cap: %s', (_label, capCents, dailyCapCents, seatUsage, reservationCents, expected) => {
     expect(seatCapCheck({ capCents, dailyCapCents, usage: seatUsage, reservationCents })).toMatchObject(expected);
   });
