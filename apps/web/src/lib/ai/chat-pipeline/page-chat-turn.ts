@@ -41,7 +41,7 @@ import {
 import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { conversationSpend } from '@pagespace/lib/billing/spend-target';
-import { UNGATED_TURN_CREDIT, turnCreditAfterGate, type TurnCredit } from './turn-credit';
+import { UNGATED_TURN_CREDIT, spendFallbackPart, turnCreditAfterGate, type TurnCredit } from './turn-credit';
 import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
 import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
 import { makeOnStepFinishHandler } from '@/lib/ai/core/step-finish-handler';
@@ -1778,6 +1778,11 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
           // point can ever reach the model. Skip straight to onFinish rather than relying on the
           // already-aborted signal to short-circuit streamText's underlying fetch.
           if (lifecycle!.preAborted) return;
+
+          // SPEND-4: a turn the drive's rule moved to another source says so before anything
+          // else, from and to, so the new source is shown — the gate never switches silently.
+          const fallbackPart = spendFallbackPart(credit, serverAssistantMessageId!);
+          if (fallbackPart) writer.write(fallbackPart);
 
           // Execution feedback (UX spec §7): announce one command indicator
           // per resolved plan ("Using /foo" / "Skipped /foo — reason") as
