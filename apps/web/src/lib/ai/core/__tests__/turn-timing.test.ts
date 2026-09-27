@@ -56,6 +56,22 @@ describe('createTurnTimer', () => {
     expect(timer.summary().firstTokenMs).toBeNull();
   });
 
+  it('counts a tool call delivered whole (no argument streaming) as the first token', () => {
+    const timer = createTurnTimer({ receivedAt: Date.now() });
+    timer.modelRequest();
+    vi.advanceTimersByTime(800);
+    timer.observeChunk({
+      type: 'tool-input-available',
+      toolCallId: 'call-1',
+      toolName: 'finish',
+      input: {},
+    } as UIMessageChunk);
+
+    expect(timer.summary().firstTokenMs).toBe(800);
+    vi.advanceTimersByTime(600_000);
+    expect(loggers.ai.warn).not.toHaveBeenCalled();
+  });
+
   it('names the phase a stuck turn is waiting in, while it is still stuck', () => {
     const timer = createTurnTimer({ receivedAt: Date.now() });
     timer.mark('credit_gate');

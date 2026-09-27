@@ -28,12 +28,19 @@ const SLOW_TURN_THRESHOLDS_MS = [10_000, 30_000, 60_000, 120_000, 300_000];
 /** A turn slower than this to its first token logs at warn rather than info. */
 const SLOW_FIRST_TOKEN_MS = 10_000;
 
-/** Chunks that mean the MODEL has started answering — not our own framing or data parts. */
+/**
+ * Chunks that mean the MODEL has started answering — not our own framing or data parts.
+ * `tool-input-available` matters: a provider that sends a tool call whole (no argument
+ * streaming) emits only that chunk, and agent turns often open with a tool call.
+ */
 const MODEL_OUTPUT_CHUNK_TYPES = new Set<string>([
+  'text-start',
   'text-delta',
+  'reasoning-start',
   'reasoning-delta',
   'tool-input-start',
   'tool-input-delta',
+  'tool-input-available',
 ]);
 
 export interface TurnTimingSummary {
