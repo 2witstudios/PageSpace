@@ -638,7 +638,9 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   push an out-of-credit balance into debt. They now reserve credits first like every other AI call;
   with no credits they simply don't run, and nothing about your conversation or your Memory pages
   changes. A live voice call with a page agent now spends from the same source as typing to that
-  agent in its drive, instead of always from your own credits.
+  agent in its drive, instead of always from your own credits — including images it makes during
+  the call. If the call cannot tell which drive pays for it, it does not start and you are not
+  charged. Voice calls with the global assistant still use your own credits.
 
 - **Agents answering an @mention in a channel now check credits first** — an agent's reply to a
   channel mention used to run even when there were no credits to pay for it. Each reply is now
