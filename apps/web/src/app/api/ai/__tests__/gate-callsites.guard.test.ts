@@ -213,6 +213,19 @@ describe('AI gate call-site guards', () => {
 });
 
 // ─── Every module that runs a model, not only routes ─────────────────────────────────────
+//
+// What this proves, exactly: in apps/web/src, every FILE that imports an AI SDK entry point or
+// fetches a provider's API either calls a gate itself or is pinned to ONE caller file that
+// calls a gate and imports it; in apps/realtime/src, every file that opens the OpenAI
+// Realtime socket or imports an AI SDK entry point is pinned the same way, and the pinned
+// caller takes its meter's hold before it attaches. KNOWN_LIMITS below is what it does NOT
+// prove; it is pinned so a limit cannot quietly grow or be forgotten.
+const KNOWN_LIMITS = [
+  'per file, not per call: a second, ungated model call inside a file that already calls a gate passes',
+  'a pinned module is checked against ONE caller that gates and imports it; any other caller of it is not checked',
+  'scans apps/web/src and apps/realtime/src only: packages/* and the other apps are not scanned (none runs a model today)',
+  'a gate call is matched by name: the guard does not prove it runs before the model call, only that the file makes it',
+] as const;
 
 const SRC_DIR = join(process.cwd(), 'src');
 
@@ -273,7 +286,7 @@ const GATED_BY_CALLER: Record<string, { gatedIn: string; reason: string }> = {
   },
   'src/lib/ai/tools/agent-communication-tools.ts': {
     gatedIn: 'src/lib/channels/agent-mention-responder.ts',
-    reason: 'executeAskAgent runs inside a gated caller: a channel mention (acquireMentionCreditHold) or a chat turn, consult or v1 completion whose own hold is live while the tool runs; it settles on that caller\'s walletId',
+    reason: 'executeAskAgent\'s only caller is the channel mention responder, which takes acquireMentionCreditHold (automationSpend on the drive) before it; it settles on that hold\'s walletId',
   },
   'src/lib/integrations/zoom/extract-action-items.ts': {
     gatedIn: 'src/lib/integrations/zoom/process-webhook.ts',
@@ -332,6 +345,11 @@ describe('AI gate call-site guards: every module that runs a model', () => {
     }
   });
 
+  it('its known limits are exactly these, each stated', () => {
+    expect(KNOWN_LIMITS).toHaveLength(4);
+    for (const limit of KNOWN_LIMITS) expect(limit.length).toBeGreaterThan(40);
+  });
+
   it('the module scan sees the model calls it must (guard is not vacuous)', () => {
     const rels = modelModules.map(({ rel }) => rel);
     for (const expected of [
@@ -343,5 +361,55 @@ describe('AI gate call-site guards: every module that runs a model', () => {
     ]) {
       expect(rels, expected).toContain(expected);
     }
+  });
+});
+
+// ─── apps/realtime: the Realtime voice transport ─────────────────────────────────────────
+
+const REALTIME_SRC = join(process.cwd(), '..', 'realtime', 'src');
+const realtimeRel = (file: string) => relative(join(process.cwd(), '..', '..'), file).split(sep).join('/');
+
+/** Opens the OpenAI Realtime socket, or runs a model through the AI SDK. */
+const runsRealtimeModel = (src: string) => /['"`]wss:\/\/api\.openai\.com\/v1\/realtime/.test(src) || runsModel(src);
+
+/**
+ * apps/realtime modules that run a model, each pinned to the caller that takes the meter's
+ * hold (canConsumeAI inside startCallMeter) before the socket attaches.
+ */
+const REALTIME_GATED_BY_CALLER: Record<string, { gatedIn: string; reason: string }> = {
+  'apps/realtime/src/voice/realtime-call-session.ts': {
+    gatedIn: 'apps/realtime/src/voice/attach-handler.ts',
+    reason: 'the Realtime socket is attached only by the attach handler, after startMeter took the opening hold on the call\'s resolved spend; every later window re-holds through canConsumeAI or ends the call',
+  },
+};
+
+describe('AI gate call-site guards: apps/realtime', () => {
+  const modules = allSourceFiles(REALTIME_SRC).map((path) => ({ rel: realtimeRel(path), src: stripComments(readFileSync(path, 'utf8')) }));
+  const bySrc = new Map(modules.map(({ rel, src }) => [rel, src]));
+
+  it('SPEND-1 (partial) every apps/realtime module that runs a model is pinned to a caller that meters it first', () => {
+    const offenders = modules
+      .filter(({ rel, src }) => runsRealtimeModel(src) && !MODULE_GATE.test(src) && !(rel in REALTIME_GATED_BY_CALLER))
+      .map(({ rel }) => rel);
+    expect(offenders).toEqual([]);
+    expect(modules.filter(({ src }) => runsRealtimeModel(src)).map(({ rel }) => rel)).toEqual(Object.keys(REALTIME_GATED_BY_CALLER));
+  });
+
+  it('the pinned caller takes the meter\'s hold BEFORE it attaches the socket, and the meter gates through canConsumeAI', () => {
+    for (const [rel, { gatedIn, reason }] of Object.entries(REALTIME_GATED_BY_CALLER)) {
+      const caller = bySrc.get(gatedIn);
+      expect(caller, gatedIn).toBeDefined();
+      const moduleName = rel.replace(/^.*\//, '').replace(/\.tsx?$/, '');
+      expect(new RegExp(`['"][^'"]*/${moduleName}['"]`).test(caller!), `${gatedIn} does not import ${rel}`).toBe(true);
+      const meterAt = caller!.indexOf('deps.startMeter(');
+      const attachAt = caller!.indexOf('deps.attach(');
+      expect(meterAt, 'startMeter call').toBeGreaterThan(-1);
+      expect(attachAt, 'attach call').toBeGreaterThan(meterAt);
+      expect(reason.length).toBeGreaterThan(20);
+    }
+    const meter = bySrc.get('apps/realtime/src/voice/call-metering.ts');
+    expect(meter).toBeDefined();
+    expect(meter).toMatch(/gate = canConsumeAI/);
+    expect(meter!.indexOf('await gate(userId')).toBeGreaterThan(-1);
   });
 });
