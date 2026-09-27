@@ -3,7 +3,7 @@ import { relations } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
 import { drives, pages } from './core';
-import { driveRoles, memberRole } from './members';
+import { driveRoles, memberRole, type GrantableMemberRole } from './members';
 
 export type ShareLinkPermission = 'VIEW' | 'EDIT' | 'SHARE' | 'DELETE';
 
@@ -11,7 +11,7 @@ export const driveShareLinks = pgTable('drive_share_links', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   driveId: text('drive_id').notNull().references(() => drives.id, { onDelete: 'cascade' }),
   token: text('token').unique().notNull(),
-  role: memberRole('role').notNull().default('MEMBER'),
+  role: memberRole('role').$type<GrantableMemberRole>().notNull().default('MEMBER'),
   customRoleId: text('custom_role_id').references(() => driveRoles.id, { onDelete: 'set null' }),
   createdBy: text('created_by').notNull().references(() => users.id, { onDelete: 'cascade' }),
   createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),

@@ -1,6 +1,6 @@
 {
-  "id": "63627262-210e-4b66-ab90-0f5cbfc88e11",
-  "prevId": "cbdc9f2a-1d44-4f01-8163-b717fbd3b6dd",
+  "id": "85177c65-2505-490f-822a-25c21fb78a1f",
+  "prevId": "b5cbcb5d-c3bc-4172-975f-bba6f4590aec",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -6308,6 +6308,12 @@
         },
         "source": {
           "name": "source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "wallet_id": {
+          "name": "wallet_id",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -18151,118 +18157,6 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.wallets": {
-      "name": "wallets",
-      "schema": "",
-      "columns": {
-        "userId": {
-          "name": "userId",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "monthlyRemainingCents": {
-          "name": "monthlyRemainingCents",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "monthlyAllowanceCents": {
-          "name": "monthlyAllowanceCents",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "topupRemainingCents": {
-          "name": "topupRemainingCents",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "debtCents": {
-          "name": "debtCents",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "pendingMillicents": {
-          "name": "pendingMillicents",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "monthlyPeriodStart": {
-          "name": "monthlyPeriodStart",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "monthlyPeriodEnd": {
-          "name": "monthlyPeriodEnd",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "updatedAt": {
-          "name": "updatedAt",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "wallets_userId_users_id_fk": {
-          "name": "wallets_userId_users_id_fk",
-          "tableFrom": "wallets",
-          "tableTo": "users",
-          "columnsFrom": [
-            "userId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "credit_balances_monthly_remaining_nonneg": {
-          "name": "credit_balances_monthly_remaining_nonneg",
-          "value": "\"wallets\".\"monthlyRemainingCents\" >= 0"
-        },
-        "credit_balances_monthly_allowance_nonneg": {
-          "name": "credit_balances_monthly_allowance_nonneg",
-          "value": "\"wallets\".\"monthlyAllowanceCents\" >= 0"
-        },
-        "credit_balances_topup_remaining_nonneg": {
-          "name": "credit_balances_topup_remaining_nonneg",
-          "value": "\"wallets\".\"topupRemainingCents\" >= 0"
-        },
-        "credit_balances_debt_cents_nonneg": {
-          "name": "credit_balances_debt_cents_nonneg",
-          "value": "\"wallets\".\"debtCents\" >= 0"
-        },
-        "credit_balances_pending_millicents_range": {
-          "name": "credit_balances_pending_millicents_range",
-          "value": "\"wallets\".\"pendingMillicents\" >= 0 AND \"wallets\".\"pendingMillicents\" < 1000"
-        },
-        "credit_balances_period_order": {
-          "name": "credit_balances_period_order",
-          "value": "\"wallets\".\"monthlyPeriodStart\" IS NULL OR \"wallets\".\"monthlyPeriodEnd\" IS NULL OR \"wallets\".\"monthlyPeriodStart\" <= \"wallets\".\"monthlyPeriodEnd\""
-        }
-      },
-      "isRLSEnabled": false
-    },
     "public.credit_holds": {
       "name": "credit_holds",
       "schema": "",
@@ -18275,6 +18169,12 @@
         },
         "userId": {
           "name": "userId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "walletId": {
+          "name": "walletId",
           "type": "text",
           "primaryKey": false,
           "notNull": true
@@ -18321,6 +18221,21 @@
           "method": "btree",
           "with": {}
         },
+        "credit_holds_wallet_idx": {
+          "name": "credit_holds_wallet_idx",
+          "columns": [
+            {
+              "expression": "walletId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "credit_holds_expires_idx": {
           "name": "credit_holds_expires_idx",
           "columns": [
@@ -18344,6 +18259,19 @@
           "tableTo": "users",
           "columnsFrom": [
             "userId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "credit_holds_walletId_wallets_id_fk": {
+          "name": "credit_holds_walletId_wallets_id_fk",
+          "tableFrom": "credit_holds",
+          "tableTo": "wallets",
+          "columnsFrom": [
+            "walletId"
           ],
           "columnsTo": [
             "id"
@@ -18375,6 +18303,12 @@
         },
         "userId": {
           "name": "userId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "walletId": {
+          "name": "walletId",
           "type": "text",
           "primaryKey": false,
           "notNull": true
@@ -18489,6 +18423,27 @@
           "method": "btree",
           "with": {}
         },
+        "credit_ledger_wallet_idx": {
+          "name": "credit_ledger_wallet_idx",
+          "columns": [
+            {
+              "expression": "walletId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "createdAt",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "credit_ledger_usage_log_unique": {
           "name": "credit_ledger_usage_log_unique",
           "columns": [
@@ -18572,12 +18527,602 @@
           ],
           "onDelete": "cascade",
           "onUpdate": "no action"
+        },
+        "credit_ledger_walletId_wallets_id_fk": {
+          "name": "credit_ledger_walletId_wallets_id_fk",
+          "tableFrom": "credit_ledger",
+          "tableTo": "wallets",
+          "columnsFrom": [
+            "walletId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.wallet_consumer_caps": {
+      "name": "wallet_consumer_caps",
+      "schema": "",
+      "columns": {
+        "walletId": {
+          "name": "walletId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "consumerKey": {
+          "name": "consumerKey",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "dailyCapCents": {
+          "name": "dailyCapCents",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "monthlyCapCents": {
+          "name": "monthlyCapCents",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updatedAt": {
+          "name": "updatedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "wallet_consumer_caps_walletId_wallets_id_fk": {
+          "name": "wallet_consumer_caps_walletId_wallets_id_fk",
+          "tableFrom": "wallet_consumer_caps",
+          "tableTo": "wallets",
+          "columnsFrom": [
+            "walletId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "wallet_consumer_caps_pkey": {
+          "name": "wallet_consumer_caps_pkey",
+          "columns": [
+            "walletId",
+            "consumerKey"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "wallet_consumer_caps_consumer_key_nonempty": {
+          "name": "wallet_consumer_caps_consumer_key_nonempty",
+          "value": "length(\"wallet_consumer_caps\".\"consumerKey\") > 0"
+        },
+        "wallet_consumer_caps_daily_nonneg": {
+          "name": "wallet_consumer_caps_daily_nonneg",
+          "value": "\"wallet_consumer_caps\".\"dailyCapCents\" IS NULL OR \"wallet_consumer_caps\".\"dailyCapCents\" >= 0"
+        },
+        "wallet_consumer_caps_monthly_nonneg": {
+          "name": "wallet_consumer_caps_monthly_nonneg",
+          "value": "\"wallet_consumer_caps\".\"monthlyCapCents\" IS NULL OR \"wallet_consumer_caps\".\"monthlyCapCents\" >= 0"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.wallet_funding_legs": {
+      "name": "wallet_funding_legs",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "walletId": {
+          "name": "walletId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "funderKind": {
+          "name": "funderKind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "funderUserId": {
+          "name": "funderUserId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "funderOrgId": {
+          "name": "funderOrgId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "originalCents": {
+          "name": "originalCents",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "remainingCents": {
+          "name": "remainingCents",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "nonRefundable": {
+          "name": "nonRefundable",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sourceRef": {
+          "name": "sourceRef",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "wallet_funding_legs_wallet_order_idx": {
+          "name": "wallet_funding_legs_wallet_order_idx",
+          "columns": [
+            {
+              "expression": "walletId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "createdAt",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "wallet_funding_legs_source_ref_unique": {
+          "name": "wallet_funding_legs_source_ref_unique",
+          "columns": [
+            {
+              "expression": "sourceRef",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"sourceRef\" IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "wallet_funding_legs_walletId_wallets_id_fk": {
+          "name": "wallet_funding_legs_walletId_wallets_id_fk",
+          "tableFrom": "wallet_funding_legs",
+          "tableTo": "wallets",
+          "columnsFrom": [
+            "walletId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "wallet_funding_legs_funderUserId_users_id_fk": {
+          "name": "wallet_funding_legs_funderUserId_users_id_fk",
+          "tableFrom": "wallet_funding_legs",
+          "tableTo": "users",
+          "columnsFrom": [
+            "funderUserId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "wallet_funding_legs_funderOrgId_organizations_id_fk": {
+          "name": "wallet_funding_legs_funderOrgId_organizations_id_fk",
+          "tableFrom": "wallet_funding_legs",
+          "tableTo": "organizations",
+          "columnsFrom": [
+            "funderOrgId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "wallet_funding_legs_funder_kind_valid": {
+          "name": "wallet_funding_legs_funder_kind_valid",
+          "value": "\"wallet_funding_legs\".\"funderKind\" IN ('owner', 'donation')"
+        },
+        "wallet_funding_legs_original_positive": {
+          "name": "wallet_funding_legs_original_positive",
+          "value": "\"wallet_funding_legs\".\"originalCents\" > 0"
+        },
+        "wallet_funding_legs_remaining_range": {
+          "name": "wallet_funding_legs_remaining_range",
+          "value": "\"wallet_funding_legs\".\"remainingCents\" >= 0 AND \"wallet_funding_legs\".\"remainingCents\" <= \"wallet_funding_legs\".\"originalCents\""
+        },
+        "wallet_funding_legs_donation_non_refundable": {
+          "name": "wallet_funding_legs_donation_non_refundable",
+          "value": "\"wallet_funding_legs\".\"funderKind\" <> 'donation' OR \"wallet_funding_legs\".\"nonRefundable\""
+        },
+        "wallet_funding_legs_donation_not_from_org": {
+          "name": "wallet_funding_legs_donation_not_from_org",
+          "value": "\"wallet_funding_legs\".\"funderKind\" <> 'donation' OR \"wallet_funding_legs\".\"funderOrgId\" IS NULL"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.wallets": {
+      "name": "wallets",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "('w' || substr(md5(random()::text || clock_timestamp()::text), 1, 23))"
+        },
+        "ownerType": {
+          "name": "ownerType",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'user'"
+        },
+        "userId": {
+          "name": "userId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "orgId": {
+          "name": "orgId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "subjectType": {
+          "name": "subjectType",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "subjectId": {
+          "name": "subjectId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "parentWalletId": {
+          "name": "parentWalletId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "monthlyRemainingCents": {
+          "name": "monthlyRemainingCents",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "monthlyAllowanceCents": {
+          "name": "monthlyAllowanceCents",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "spentCents": {
+          "name": "spentCents",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "topupRemainingCents": {
+          "name": "topupRemainingCents",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "debtCents": {
+          "name": "debtCents",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "pendingMillicents": {
+          "name": "pendingMillicents",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "monthlyPeriodStart": {
+          "name": "monthlyPeriodStart",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "monthlyPeriodEnd": {
+          "name": "monthlyPeriodEnd",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'active'"
+        },
+        "donationsEnabled": {
+          "name": "donationsEnabled",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "fallbackRule": {
+          "name": "fallbackRule",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updatedAt": {
+          "name": "updatedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "wallets_personal_root_unique": {
+          "name": "wallets_personal_root_unique",
+          "columns": [
+            {
+              "expression": "userId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"ownerType\" = 'user' AND \"subjectType\" IS NULL AND \"parentWalletId\" IS NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "wallets_org_pool_unique": {
+          "name": "wallets_org_pool_unique",
+          "columns": [
+            {
+              "expression": "orgId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"ownerType\" = 'org' AND \"subjectType\" IS NULL AND \"parentWalletId\" IS NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "wallets_subject_unique": {
+          "name": "wallets_subject_unique",
+          "columns": [
+            {
+              "expression": "subjectType",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "subjectId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"subjectId\" IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "wallets_parent_idx": {
+          "name": "wallets_parent_idx",
+          "columns": [
+            {
+              "expression": "parentWalletId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "wallets_userId_users_id_fk": {
+          "name": "wallets_userId_users_id_fk",
+          "tableFrom": "wallets",
+          "tableTo": "users",
+          "columnsFrom": [
+            "userId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "wallets_orgId_organizations_id_fk": {
+          "name": "wallets_orgId_organizations_id_fk",
+          "tableFrom": "wallets",
+          "tableTo": "organizations",
+          "columnsFrom": [
+            "orgId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "wallets_parentWalletId_wallets_id_fk": {
+          "name": "wallets_parentWalletId_wallets_id_fk",
+          "tableFrom": "wallets",
+          "tableTo": "wallets",
+          "columnsFrom": [
+            "parentWalletId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "wallets_owner_type_valid": {
+          "name": "wallets_owner_type_valid",
+          "value": "\"wallets\".\"ownerType\" IN ('user', 'org')"
+        },
+        "wallets_owner_matches_type": {
+          "name": "wallets_owner_matches_type",
+          "value": "(\"wallets\".\"ownerType\" = 'user' AND \"wallets\".\"userId\" IS NOT NULL AND \"wallets\".\"orgId\" IS NULL) OR (\"wallets\".\"ownerType\" = 'org' AND \"wallets\".\"orgId\" IS NOT NULL AND \"wallets\".\"userId\" IS NULL)"
+        },
+        "wallets_subject_type_valid": {
+          "name": "wallets_subject_type_valid",
+          "value": "\"wallets\".\"subjectType\" IS NULL OR \"wallets\".\"subjectType\" IN ('drive', 'agent_page')"
+        },
+        "wallets_subject_complete": {
+          "name": "wallets_subject_complete",
+          "value": "(\"wallets\".\"subjectType\" IS NULL) = (\"wallets\".\"subjectId\" IS NULL)"
+        },
+        "wallets_not_own_parent": {
+          "name": "wallets_not_own_parent",
+          "value": "\"wallets\".\"parentWalletId\" IS NULL OR \"wallets\".\"parentWalletId\" <> \"wallets\".\"id\""
+        },
+        "wallets_status_valid": {
+          "name": "wallets_status_valid",
+          "value": "\"wallets\".\"status\" IN ('active', 'paused', 'over')"
+        },
+        "wallets_fallback_rule_valid": {
+          "name": "wallets_fallback_rule_valid",
+          "value": "\"wallets\".\"fallbackRule\" IS NULL OR \"wallets\".\"fallbackRule\" IN ('refuse', 'seat_allowance', 'own_credits')"
+        },
+        "wallets_monthly_remaining_nonneg": {
+          "name": "wallets_monthly_remaining_nonneg",
+          "value": "\"wallets\".\"monthlyRemainingCents\" >= 0"
+        },
+        "wallets_monthly_allowance_nonneg": {
+          "name": "wallets_monthly_allowance_nonneg",
+          "value": "\"wallets\".\"monthlyAllowanceCents\" >= 0"
+        },
+        "wallets_spent_cents_nonneg": {
+          "name": "wallets_spent_cents_nonneg",
+          "value": "\"wallets\".\"spentCents\" >= 0"
+        },
+        "wallets_topup_remaining_nonneg": {
+          "name": "wallets_topup_remaining_nonneg",
+          "value": "\"wallets\".\"topupRemainingCents\" >= 0"
+        },
+        "wallets_debt_cents_nonneg": {
+          "name": "wallets_debt_cents_nonneg",
+          "value": "\"wallets\".\"debtCents\" >= 0"
+        },
+        "wallets_pending_millicents_range": {
+          "name": "wallets_pending_millicents_range",
+          "value": "\"wallets\".\"pendingMillicents\" >= 0 AND \"wallets\".\"pendingMillicents\" < 1000"
+        },
+        "wallets_period_order": {
+          "name": "wallets_period_order",
+          "value": "\"wallets\".\"monthlyPeriodStart\" IS NULL OR \"wallets\".\"monthlyPeriodEnd\" IS NULL OR \"wallets\".\"monthlyPeriodStart\" <= \"wallets\".\"monthlyPeriodEnd\""
+        }
+      },
       "isRLSEnabled": false
     },
     "public.commands": {
@@ -24582,37 +25127,37 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "agent_account_approvals_accountId_agent_accounts_id_fk": {
           "name": "agent_account_approvals_accountId_agent_accounts_id_fk",
           "tableFrom": "agent_account_approvals",
+          "tableTo": "agent_accounts",
           "columnsFrom": [
             "accountId"
           ],
-          "tableTo": "agent_accounts",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         },
         "agent_account_approvals_approvedByUserId_users_id_fk": {
           "name": "agent_account_approvals_approvedByUserId_users_id_fk",
           "tableFrom": "agent_account_approvals",
+          "tableTo": "users",
           "columnsFrom": [
             "approvedByUserId"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -24674,50 +25219,50 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "agent_account_bindings_accountId_agent_accounts_id_fk": {
           "name": "agent_account_bindings_accountId_agent_accounts_id_fk",
           "tableFrom": "agent_account_bindings",
+          "tableTo": "agent_accounts",
           "columnsFrom": [
             "accountId"
           ],
-          "tableTo": "agent_accounts",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         },
         "agent_account_bindings_agentPageId_pages_id_fk": {
           "name": "agent_account_bindings_agentPageId_pages_id_fk",
           "tableFrom": "agent_account_bindings",
+          "tableTo": "pages",
           "columnsFrom": [
             "agentPageId"
           ],
-          "tableTo": "pages",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         },
         "agent_account_bindings_boundByUserId_users_id_fk": {
           "name": "agent_account_bindings_boundByUserId_users_id_fk",
           "tableFrom": "agent_account_bindings",
+          "tableTo": "users",
           "columnsFrom": [
             "boundByUserId"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {
@@ -24800,50 +25345,50 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "agent_account_delegations_accountId_agent_accounts_id_fk": {
           "name": "agent_account_delegations_accountId_agent_accounts_id_fk",
           "tableFrom": "agent_account_delegations",
+          "tableTo": "agent_accounts",
           "columnsFrom": [
             "accountId"
           ],
-          "tableTo": "agent_accounts",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         },
         "agent_account_delegations_agentPageId_pages_id_fk": {
           "name": "agent_account_delegations_agentPageId_pages_id_fk",
           "tableFrom": "agent_account_delegations",
+          "tableTo": "pages",
           "columnsFrom": [
             "agentPageId"
           ],
-          "tableTo": "pages",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         },
         "agent_account_delegations_delegatedByUserId_users_id_fk": {
           "name": "agent_account_delegations_delegatedByUserId_users_id_fk",
           "tableFrom": "agent_account_delegations",
+          "tableTo": "users",
           "columnsFrom": [
             "delegatedByUserId"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -25027,9 +25572,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "agent_accounts_owner_agent_page_id_idx": {
           "name": "agent_accounts_owner_agent_page_id_idx",
@@ -25042,9 +25587,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "agent_accounts_owner_drive_id_idx": {
           "name": "agent_accounts_owner_drive_id_idx",
@@ -25057,50 +25602,50 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "agent_accounts_ownerUserId_users_id_fk": {
           "name": "agent_accounts_ownerUserId_users_id_fk",
           "tableFrom": "agent_accounts",
+          "tableTo": "users",
           "columnsFrom": [
             "ownerUserId"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         },
         "agent_accounts_ownerAgentPageId_pages_id_fk": {
           "name": "agent_accounts_ownerAgentPageId_pages_id_fk",
           "tableFrom": "agent_accounts",
+          "tableTo": "pages",
           "columnsFrom": [
             "ownerAgentPageId"
           ],
-          "tableTo": "pages",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         },
         "agent_accounts_ownerDriveId_drives_id_fk": {
           "name": "agent_accounts_ownerDriveId_drives_id_fk",
           "tableFrom": "agent_accounts",
+          "tableTo": "drives",
           "columnsFrom": [
             "ownerDriveId"
           ],
-          "tableTo": "drives",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -25132,6 +25677,169 @@
           "value": "\"agent_accounts\".\"credentialVersion\" >= 0 AND \"agent_accounts\".\"policyVersion\" >= 1"
         }
       },
+      "isRLSEnabled": false
+    },
+    "public.drive_join_requests": {
+      "name": "drive_join_requests",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "driveId": {
+          "name": "driveId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "userId": {
+          "name": "userId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "DriveJoinRequestStatus",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        },
+        "message": {
+          "name": "message",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "requestedAt": {
+          "name": "requestedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "(now() at time zone 'utc')"
+        },
+        "decidedAt": {
+          "name": "decidedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "decidedBy": {
+          "name": "decidedBy",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "drive_join_requests_one_pending_key": {
+          "name": "drive_join_requests_one_pending_key",
+          "columns": [
+            {
+              "expression": "driveId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "userId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"drive_join_requests\".\"status\" = 'pending'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "drive_join_requests_drive_status_idx": {
+          "name": "drive_join_requests_drive_status_idx",
+          "columns": [
+            {
+              "expression": "driveId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "drive_join_requests_user_id_idx": {
+          "name": "drive_join_requests_user_id_idx",
+          "columns": [
+            {
+              "expression": "userId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "drive_join_requests_driveId_drives_id_fk": {
+          "name": "drive_join_requests_driveId_drives_id_fk",
+          "tableFrom": "drive_join_requests",
+          "tableTo": "drives",
+          "columnsFrom": [
+            "driveId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "drive_join_requests_userId_users_id_fk": {
+          "name": "drive_join_requests_userId_users_id_fk",
+          "tableFrom": "drive_join_requests",
+          "tableTo": "users",
+          "columnsFrom": [
+            "userId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "drive_join_requests_decidedBy_users_id_fk": {
+          "name": "drive_join_requests_decidedBy_users_id_fk",
+          "tableFrom": "drive_join_requests",
+          "tableTo": "users",
+          "columnsFrom": [
+            "decidedBy"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
       "isRLSEnabled": false
     }
   },
@@ -25218,7 +25926,8 @@
       "values": [
         "OWNER",
         "ADMIN",
-        "MEMBER"
+        "MEMBER",
+        "GUEST"
       ]
     },
     "public.pulse_summary_type": {
@@ -25738,6 +26447,16 @@
         "revoked",
         "unsupported",
         "failed"
+      ]
+    },
+    "public.DriveJoinRequestStatus": {
+      "name": "DriveJoinRequestStatus",
+      "schema": "public",
+      "values": [
+        "pending",
+        "approved",
+        "denied",
+        "withdrawn"
       ]
     }
   },

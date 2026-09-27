@@ -18,6 +18,7 @@ import { decideExplicitDriveScope, decideListedDriveRole, type ExplicitScopeAuth
 import { driveMembershipRow } from '../permissions/drive-member-role';
 import { ORGS_ENABLED } from '../organizations/orgs-enabled';
 import { isDriveLead } from '../permissions/drive-relationship';
+import { isGuestRole } from '../permissions/guest-role';
 
 // ============================================================================
 // Types
@@ -105,14 +106,17 @@ export async function listAccessibleDrives(
       : and(eq(drives.ownerId, userId), eq(drives.isTrashed, false)),
   });
 
-  // 2. Get drives where user is a member (including last access time)
-  const memberDrives = await db
+  // 2. Get drives where user is a member (including last access time). A GUEST
+  // row is not a membership: its drive is reached, like any page collaborator's,
+  // through step 3 — never token-scopable, never drive-wide create.
+  const memberRows = await db
     .selectDistinct({ driveId: driveMembers.driveId, role: driveMembers.role, customRoleId: driveMembers.customRoleId, lastAccessedAt: driveMembers.lastAccessedAt })
     .from(driveMembers)
     .where(and(
       eq(driveMembers.userId, userId),
       isNotNull(driveMembers.acceptedAt),
     ));
+  const memberDrives = memberRows.filter((d) => !isGuestRole(d.role));
 
   // 3. Get drives where user has page-level permissions
   // Skip this if tokenScopable is true (only owned + member drives can be scoped to tokens)

@@ -42,7 +42,7 @@ vi.mock('@pagespace/db/schema/monitoring', () => ({
   },
 }));
 vi.mock('@pagespace/db/schema/members', () => ({
-  driveMembers: { userId: 'userId', driveId: 'driveId', acceptedAt: 'acceptedAt' },
+  driveMembers: { userId: 'userId', driveId: 'driveId', acceptedAt: 'acceptedAt', role: 'role' },
 }));
 vi.mock('@pagespace/db/schema/conversations', () => ({
   conversations: { id: 'id', type: 'type', userId: 'userId', contextId: 'contextId' },

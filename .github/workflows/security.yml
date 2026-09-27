@@ -292,6 +292,19 @@ jobs:
           DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
           NODE_ENV: test
 
+      # A GUEST drive_members row (a redeemed page share link) must carry only
+      # its page grants. These suites also run in ci.yml's unit and
+      # test:integration steps; naming them here means an exclude-list edit
+      # there cannot leave the guest boundary with no runner.
+      - name: Run page-share-link GUEST boundary tests
+        run: |
+          bun run --filter '@pagespace/lib' test:db -- \
+            src/permissions/__tests__/share-link-guest.integration.test.ts \
+            src/permissions/__tests__/accessible-page-ids-agreement.integration.test.ts
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
+          NODE_ENV: test
+
       - name: Run auth service tests (magic link, passkey)
         run: |
           bun run --filter '@pagespace/lib' test:db -- \

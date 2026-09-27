@@ -31,6 +31,7 @@ import { canConsumeAI } from '../credit-gate';
 import { consumeCredits } from '../credit-consume';
 import { automationSpend } from '../spend-target';
 import { notifyLeadOfAutomationSkip } from '../automation-skip-notifier';
+import { destinationDriveSpend, lookupDriveBillingFacts } from '../sandbox-payer';
 
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
@@ -278,5 +279,73 @@ describe('automations spend the drive wallet only (orgs on, real Postgres)', () 
     expect((await walletRow(world.marcusWalletId)).monthlyRemainingCents).toBe(5_000);
     const ledger = await ledgerOf(world.marcusId);
     expect(ledger.map((r) => [r.entryType, r.walletId])).toEqual([['usage', world.productWalletId]]);
+  });
+
+  describe('the destination drive\'s payer pays for a person-less run (point-guard ruling on #2731: Zoom enrichment)', () => {
+    /** What process-webhook does: the payer seam on the destination drive, then the gate. Marcus set the automation up. */
+    async function gateForDestination(w: World, driveId: string) {
+      const drive = await lookupDriveBillingFacts(driveId);
+      if (!drive) throw new Error('destination drive not found');
+      const billing = destinationDriveSpend(drive, driveId, w.marcusId);
+      const gate = await canConsumeAI(billing.userId, 'free', { spend: billing.spend, skipDailyCap: true });
+      return { billing, gate };
+    }
+
+    it('SPEND-6 (partial) an org destination: its drive wallet holds and settles the run; the person who set it up is untouched', async () => {
+      if (!dbAvailable) return;
+      world = await build({ productAllocationCents: 1_000 });
+
+      const { billing, gate } = await gateForDestination(world, world.productId);
+      expect(billing.spend).toEqual({ kind: 'automation', driveId: world.productId });
+      expect(gate).toMatchObject({ allowed: true, walletId: world.productWalletId, spendSource: 'drive_wallet' });
+      if (!gate.allowed) throw new Error('expected an allowed gate');
+
+      const [log] = await db.insert(aiUsageLogs).values({ userId: billing.userId, provider: 'anthropic', model: 'm', cost: 0.1 }).returning({ id: aiUsageLogs.id });
+      expect(await consumeCredits({ aiUsageLogId: log.id, userId: billing.userId, costDollars: 0.1, holdId: gate.holdId, walletId: gate.walletId })).toBe('settled');
+      expect((await ledgerOf(world.marcusId)).map((r) => [r.entryType, r.walletId])).toEqual([['usage', world.productWalletId]]);
+      expect((await walletRow(world.productWalletId)).spentCents).toBe(15);
+      expect((await walletRow(world.marcusWalletId)).monthlyRemainingCents).toBe(5_000);
+    });
+
+    it.each([
+      ['empty', { productAllocationCents: 0 } as const, 'drive_wallet_empty'],
+      ['paused', { productAllocationCents: 1_000, productStatus: 'paused' } as const, 'drive_wallet_paused'],
+      ['missing', { productAllocationCents: null } as const, 'no_drive_wallet'],
+    ])('SPEND-6 (partial) an org destination whose wallet is %s: skipped, the lead told once a period, never the person who set it up', async (_label, input, reason) => {
+      if (!dbAvailable) return;
+      world = await build(input);
+
+      const first = await gateForDestination(world, world.productId);
+      const second = await gateForDestination(world, world.productId);
+
+      for (const { gate } of [first, second]) {
+        expect(gate).toMatchObject({ allowed: false, reason: 'source_refused', refusal: { source: 'drive_wallet', reason } });
+      }
+      expect(await holdsOf(world.marcusId)).toEqual([]);
+      expect(await ledgerOf(world.marcusId)).toEqual([]);
+      expect((await walletRow(world.marcusWalletId)).monthlyRemainingCents).toBe(5_000);
+      const notices = await skipNoticesTo(world.jonoId);
+      expect(notices).toHaveLength(1);
+      expect(notices[0]).toMatchObject({ driveId: world.productId, metadata: { reason } });
+      expect(await skipNoticesTo(world.marcusId)).toEqual([]);
+    });
+
+    it('SPEND-6 (partial) the person\'s own personal drive: their own wallet holds and settles the run, as before wallets, with orgs on', async () => {
+      if (!dbAvailable) return;
+      world = await build({ productAllocationCents: 1_000 });
+
+      const { billing, gate } = await gateForDestination(world, world.marcusDriveId);
+      expect(billing).toEqual({ userId: world.marcusId, spend: { kind: 'personal' } });
+      expect(gate).toMatchObject({ allowed: true, walletId: world.marcusWalletId });
+      if (!gate.allowed) throw new Error('expected an allowed gate');
+      expect((await holdsOf(world.marcusId)).map((h) => h.walletId)).toEqual([world.marcusWalletId]);
+
+      const [log] = await db.insert(aiUsageLogs).values({ userId: billing.userId, provider: 'anthropic', model: 'm', cost: 0.1 }).returning({ id: aiUsageLogs.id });
+      expect(await consumeCredits({ aiUsageLogId: log.id, userId: billing.userId, costDollars: 0.1, holdId: gate.holdId, walletId: gate.walletId })).toBe('settled');
+      expect((await ledgerOf(world.marcusId)).map((r) => [r.entryType, r.walletId])).toEqual([['usage', world.marcusWalletId]]);
+      expect((await walletRow(world.marcusWalletId)).monthlyRemainingCents).toBe(5_000 - 15);
+      expect((await walletRow(world.productWalletId)).spentCents).toBe(0);
+      expect(await skipNoticesTo(world.jonoId)).toEqual([]);
+    });
   });
 });

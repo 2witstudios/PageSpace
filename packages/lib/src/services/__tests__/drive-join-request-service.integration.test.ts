@@ -143,6 +143,28 @@ describe('requestToJoinDrive', () => {
   });
 });
 
+describe('D-OW-24 a GUEST row (a redeemed page share link) is no membership for a join request', () => {
+  it('its holder is not ALREADY_MEMBER: they may request, the row grants nothing meanwhile, and approval upgrades that row in place; a real member is ALREADY_MEMBER', async () => {
+    await db.insert(driveMembers).values({ driveId: research, userId: lena, role: 'GUEST', source: 'invite', acceptedAt: new Date() });
+    expect(await membershipFootprint(lena)).toEqual({ ...NOTHING, rows: 1 });
+
+    const asked = await requestToJoinDrive(lena, research);
+    expect(asked).toMatchObject({ ok: true, created: true });
+    if (!asked.ok) throw new Error('expected the request to open');
+    expect(await membershipFootprint(lena)).toEqual({ ...NOTHING, rows: 1 });
+
+    const answered = await answerDriveJoinRequest(marcus, research, asked.request.id, 'approve');
+    expect(answered).toMatchObject({ ok: true, action: 'approve', admitted: true });
+    const rows = await rowsOf(lena);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ role: 'MEMBER', customRoleId: defaultRoleId });
+    expect(await membershipFootprint(lena)).toEqual({ rows: 1, resolves: true, listed: true, recipient: true, sharesDriveWithLead: true });
+
+    // Positive control: now that the row IS a membership, a request is refused as ALREADY_MEMBER.
+    expect(await requestToJoinDrive(lena, research)).toMatchObject({ ok: false, code: 'ALREADY_MEMBER' });
+  });
+});
+
 describe('answerDriveJoinRequest', () => {
   it('DRV-6 (partial) the lead approves: the requester gets an accepted direct row with the drive default role, resolves, is listed and is a recipient', async () => {
     const { request } = await requestAs(lena);
