@@ -14,6 +14,7 @@ import {
   isVitestJsonReport,
   loadTestOutcomes,
   malformedPartialMarkers,
+  partialClaimsUpgradedByChain,
   securityOnlyWarnings,
   nameCarriesId,
   nameCarriesPartialId,
@@ -135,6 +136,66 @@ describe('coverage gate: malformed partial markers fail loudly', () => {
       const lines: string[] = [];
       expect(run(root, parseArgs(['--offline']), (l) => lines.push(l))).toBe(1);
       expect(lines.join('\n')).toContain('FAIL: malformed partial marker in packages/lib/src/seam.test.ts: "MON-90 (Partial) the seam"');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// Every ID in these self-tests is FAKE (MON-9x, SEAT-9x, X-9x: Spec-shaped, absent from the Spec),
+// and no test title below names one: a real ID in a self-test title would itself count as coverage.
+describe('coverage gate: a bare ID in the enclosing describe chain upgrades a partial claim', () => {
+  const t = (title: string, ancestors: string[] = [], passed = true) => ({ runner: 'vitest' as const, file: 'a.test.ts', title, ancestors, passed });
+
+  it('flags a partial test whose enclosing describe names the same ID bare, naming the file, the ID, the test and the describe', () => {
+    expect(partialClaimsUpgradedByChain([t('MON-95 (partial) the seam', ['the gate (MON-95)'])])).toEqual([
+      { file: 'a.test.ts', id: 'MON-95', test: 'MON-95 (partial) the seam', bareIn: 'the gate (MON-95)' },
+    ]);
+  });
+
+  it('inspects the WHOLE enclosing chain, not just the nearest describe', () => {
+    expect(partialClaimsUpgradedByChain([t('SEAT-96 (partial) leaf', ['SEAT-96 outer suite', 'middle suite', 'inner suite'])])).toHaveLength(1);
+  });
+
+  it('flags a partial claim made by a describe when the test (or another describe in the chain) names the ID bare', () => {
+    expect(partialClaimsUpgradedByChain([t('X-97 counted in full', ['X-97 (partial) suite'])])).toHaveLength(1);
+    expect(partialClaimsUpgradedByChain([t('plain test', ['X-97 (partial) outer', 'inner X-97'])])).toHaveLength(1);
+  });
+
+  it('flags a title that marks an ID partial and also names it bare', () => {
+    expect(partialClaimsUpgradedByChain([t('MON-98 (partial) first half; MON-98 second half')])).toHaveLength(1);
+  });
+
+  it('flags it whatever the test\'s outcome (a skipped or failing test is the same title bug)', () => {
+    expect(partialClaimsUpgradedByChain([t('MON-95 (partial) x', ['suite MON-95'], false)])).toHaveLength(1);
+  });
+
+  it('accepts partial claims under ID-free describes, a bare ID in a chain with no partial claim for it, and a different ID bare above', () => {
+    expect(partialClaimsUpgradedByChain([
+      t('MON-95 (partial) a', ['ordinary suite', 'another']),
+      t('MON-95 covered in full', ['MON-95 suite']),
+      t('MON-95 (partial) b', ['suite for SEAT-96']),
+      t('MON-95 (partial) c', ['MON-95 (partial) suite']),
+    ])).toEqual([]);
+  });
+
+  it('fails the gate end to end, even when the ID is allowlisted and every test passed', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'spec-coverage-upgraded-'));
+    try {
+      fs.mkdirSync(path.join(root, 'docs/specs'), { recursive: true });
+      fs.mkdirSync(path.join(root, 'packages/lib/test-results'), { recursive: true });
+      fs.mkdirSync(path.join(root, 'scripts'), { recursive: true });
+      fs.writeFileSync(path.join(root, 'docs/specs/organizations-wallets.md'), '- MON-95 A fake requirement.\n');
+      fs.writeFileSync(path.join(root, 'scripts/spec-coverage-allowlist.txt'), 'MON-95\n');
+      fs.mkdirSync(path.join(root, 'packages/lib/src'), { recursive: true });
+      fs.writeFileSync(path.join(root, 'packages/lib/src/seam.test.ts'), "describe('the gate (MON-95)', () => { it('MON-95 (partial) the seam', () => {}); });\n");
+      fs.writeFileSync(
+        path.join(root, 'packages/lib/test-results/vitest-results.json'),
+        JSON.stringify({ testResults: [{ name: path.join(root, 'packages/lib/src/seam.test.ts'), assertionResults: [{ ancestorTitles: ['the gate (MON-95)'], title: 'MON-95 (partial) the seam', fullName: 'the gate (MON-95) MON-95 (partial) the seam', status: 'passed' }] }] }),
+      );
+      const lines: string[] = [];
+      expect(run(root, parseArgs(['--offline']), (l) => lines.push(l))).toBe(1);
+      expect(lines.join('\n')).toContain('FAIL: bare MON-95 in the describe chain of a partial claim in packages/lib/src/seam.test.ts');
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
