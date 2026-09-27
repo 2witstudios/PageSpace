@@ -236,7 +236,7 @@ describe('compactField — the credit gate (SPEND-1)', () => {
     await compactField('user-1', 'bio', 'x'.repeat(3500));
 
     expect(mockReserve).toHaveBeenCalledOnce();
-    expect(mockReserve.mock.calls[0][0]).toBe('user-1');
+    expect(mockReserve).toHaveBeenCalledWith('user-1', expect.objectContaining({ provider: 'anthropic' }));
     expect(mockReserve.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(generateText).mock.invocationCallOrder[0]);
     expect(AIMonitoring.trackUsage).toHaveBeenCalledOnce();
     expect(vi.mocked(AIMonitoring.trackUsage).mock.calls[0][0]).toMatchObject({ holdId: 'hold-m', walletId: 'w-root', source: 'memory' });
