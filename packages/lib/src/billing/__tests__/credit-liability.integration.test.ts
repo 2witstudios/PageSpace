@@ -41,7 +41,7 @@ async function root(values: typeof wallets.$inferInsert): Promise<string> {
 
 const scope = () => inArray(wallets.id, [...created.rootWallets, ...created.childWallets]);
 
-describe('MON-7 credit liability against Postgres', () => {
+describe('credit liability against Postgres', () => {
   beforeAll(async () => {
     try {
       await db.select({ id: walletFundingLegs.id }).from(walletFundingLegs).limit(1);
