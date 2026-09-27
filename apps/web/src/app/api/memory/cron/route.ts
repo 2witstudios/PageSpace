@@ -26,6 +26,13 @@
  *       verbatim evidence of ones settled 90+ days ago. Runs on EVERY exit
  *       path, including the failure ones.
  *
+ * Credits: discovery, evaluation and compaction each take a credit hold BEFORE
+ * building a model (see @/lib/memory/memory-credit-gate), and every call
+ * settles once through AIMonitoring.trackUsage → consumeCredits. A refused step
+ * runs no model, charges nothing and writes nothing; the user's pass carries on
+ * without it (candidates stay pending, pages stay as they are) and the refusal
+ * is reported in `creditSkipped`. One user's refusal never touches another's.
+ *
  * Paying users only — gated on MEMORY_PAYING_TIERS, the same constant the
  * settings UI uses, so the two cannot disagree about who gets Memory.
  *
@@ -49,6 +56,7 @@ import {
   applyIntegrationDecisions,
 } from '@/lib/memory/integration-service';
 import { checkAndCompactIfNeeded } from '@/lib/memory/compaction-service';
+import type { MemoryGateRefusal } from '@/lib/memory/memory-credit-gate';
 import {
   upsertCandidates,
   findPromotableCandidates,
@@ -141,6 +149,7 @@ export async function POST(request: Request) {
       compacted: 0,
       pruned: 0,
       errors: [] as string[],
+      creditSkipped: [] as string[],
     };
 
     for (const userId of usersToProcess) {
@@ -153,6 +162,9 @@ export async function POST(request: Request) {
         if (userResult.updated) results.updated++;
         if (userResult.compacted) results.compacted++;
         results.pruned += userResult.pruned;
+        results.creditSkipped.push(
+          ...userResult.creditRefusals.map((r) => `${userId}: ${r.step}: ${r.reason}`)
+        );
 
         if (usersToProcess.indexOf(userId) < usersToProcess.length - 1) {
           await new Promise((resolve) => setTimeout(resolve, DELAY_BETWEEN_USERS_MS));
@@ -174,12 +186,14 @@ export async function POST(request: Request) {
       compacted: results.compacted,
       pruned: results.pruned,
       errors: results.errors.length,
+      creditSkipped: results.creditSkipped.length,
     });
 
     return NextResponse.json({
       message: 'Memory processing complete',
       ...results,
       errors: results.errors.length > 0 ? results.errors : undefined,
+      creditSkipped: results.creditSkipped.length > 0 ? results.creditSkipped : undefined,
     });
   } catch (error) {
     loggers.api.error('Memory cron: Fatal error', { error });
@@ -206,6 +220,9 @@ async function runRetention(userId: string): Promise<number> {
   return pruned;
 }
 
+/** A memory step the credit gate refused, and why. */
+type CreditRefusal = { step: 'discovery' | 'evaluation' | 'compaction'; reason: MemoryGateRefusal };
+
 async function processUserMemory(
   userId: string
 ): Promise<{
@@ -214,9 +231,16 @@ async function processUserMemory(
   updated: boolean;
   compacted: boolean;
   pruned: number;
+  creditRefusals: CreditRefusal[];
 }> {
-  // Step 1: Run discovery passes
+  const creditRefusals: CreditRefusal[] = [];
+
+  // Step 1: Run discovery passes. A refusal returns no claims, so there is
+  // nothing to stage; the steps below gate themselves and refuse too.
   const discoveryResult = await runDiscoveryPasses(userId);
+  if (discoveryResult.creditRefusal) {
+    creditRefusals.push({ step: 'discovery', reason: discoveryResult.creditRefusal });
+  }
   const discovered = discoveryResult.claims.length;
 
   // Step 2: Stage what was discovered. An empty discovery is NOT a reason to
@@ -239,6 +263,7 @@ async function processUserMemory(
       updated: false,
       compacted: false,
       pruned,
+      creditRefusals,
     };
   }
 
@@ -252,6 +277,9 @@ async function processUserMemory(
   // unparseable response). Leave every candidate pending — settling them here
   // would permanently retire a user's whole ready set over a transient outage.
   if (!evaluation.ok) {
+    if (evaluation.creditRefusal) {
+      creditRefusals.push({ step: 'evaluation', reason: evaluation.creditRefusal });
+    }
     loggers.api.warn('Memory cron: evaluation failed, candidates left pending', {
       userId,
       reason: evaluation.reason,
@@ -264,6 +292,7 @@ async function processUserMemory(
       updated: false,
       compacted: false,
       pruned,
+      creditRefusals,
     };
   }
 
@@ -318,6 +347,9 @@ async function processUserMemory(
   if (applyResult.updated) {
     const compactionResult = await checkAndCompactIfNeeded(userId);
     compacted = compactionResult.compacted;
+    if (compactionResult.creditRefusal) {
+      creditRefusals.push({ step: 'compaction', reason: compactionResult.creditRefusal });
+    }
   }
 
   // Step 8: Prune stale candidates
@@ -346,6 +378,7 @@ async function processUserMemory(
     updated: applyResult.updated,
     compacted,
     pruned,
+    creditRefusals,
   };
 }
 

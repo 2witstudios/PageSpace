@@ -156,16 +156,11 @@ describe('memory cron credit gate (Postgres)', () => {
     const after = await balanceOf(userId);
     const usage = await usageRowsOf(userId);
     const candidatesAfter = await db.select().from(personalizationCandidates).where(eq(personalizationCandidates.userId, userId));
-    console.info('[repro] exhausted user', {
-      status: res.status,
-      modelCalls: generateObjectMock.mock.calls.length + generateTextMock.mock.calls.length,
-      debtBefore: 500,
-      debtAfter: after.debtCents,
-      usageRows: usage.length,
-      body,
-    });
 
     expect(res.status).toBe(200);
+    expect(body.creditSkipped).toEqual(
+      expect.arrayContaining([`${userId}: discovery: out_of_credits`, `${userId}: evaluation: out_of_credits`]),
+    );
     expect(usage).toEqual([]);
     expect(after.debtCents).toBe(500);
     expect(after.monthlyRemainingCents).toBe(0);

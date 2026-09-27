@@ -18,8 +18,9 @@ import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
 import { BACKGROUND_HEAVY_PROVIDER, BACKGROUND_HEAVY_MODEL } from '@/lib/ai/core/ai-providers-config';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { AIMonitoring, discardUsageOutcome } from '@pagespace/lib/monitoring/ai-monitoring';
+import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { z } from 'zod';
+import { withMemoryCreditHold, type MemoryGateRefusal } from './memory-credit-gate';
 
 export type MemoryField = 'bio' | 'writingStyle' | 'rules';
 
@@ -67,7 +68,12 @@ export interface DiscoveredClaim {
 
 export interface DiscoveryResult {
   claims: DiscoveredClaim[];
+  /** Set when the credit gate refused the passes: no model ran, nothing was charged. */
+  creditRefusal?: MemoryGateRefusal;
 }
+
+/** One focused pass per memory field; the credit hold is sized for all of them. */
+const DISCOVERY_PASS_COUNT = 3;
 
 interface ConversationMessage {
   role: string;
@@ -336,7 +342,8 @@ async function runDiscoveryPass(
       maxRetries: 2,
     });
 
-    discardUsageOutcome(AIMonitoring.trackUsage({
+    // Awaited so the debit lands while the pass's credit hold is still held.
+    await AIMonitoring.trackUsage({
       userId,
       provider: providerResult.provider,
       model: providerResult.modelName,
@@ -348,7 +355,7 @@ async function runDiscoveryPass(
         : undefined,
       success: true,
       metadata: { feature: 'memory_discovery', pass: passName },
-    }));
+    });
 
     // Resolve each cited index to the real message timestamp. The transcript is
     // chronological, so index 0 is the OLDEST message in the window, and an
@@ -418,8 +425,9 @@ export async function runDiscoveryPasses(userId: string): Promise<DiscoveryResul
 
   // Run three focused passes in parallel. Each pass owns its field and stamps
   // it onto every claim it returns, so the model's own tag never decides which
-  // page a claim lands in.
-  const [bioClaims, communicationClaims, rulesClaims] = await Promise.all([
+  // page a claim lands in. All three run under one credit hold, taken before
+  // any model is built: a refused user gets no pass at all, never some fields.
+  const gated = await withMemoryCreditHold(userId, DISCOVERY_PASS_COUNT, () => Promise.all([
     runDiscoveryPass(
       userId,
       'worldview',
@@ -444,7 +452,17 @@ export async function runDiscoveryPasses(userId: string): Promise<DiscoveryResul
       fullContext,
       messageDates
     ),
-  ]);
+  ]));
+
+  if (!gated.ran) {
+    loggers.api.info('Memory discovery: skipped (credit gate refused)', {
+      userId,
+      reason: gated.reason,
+    });
+    return { claims: [], creditRefusal: gated.reason };
+  }
+
+  const [bioClaims, communicationClaims, rulesClaims] = gated.value;
 
   const allClaims = [...bioClaims, ...communicationClaims, ...rulesClaims];
 
