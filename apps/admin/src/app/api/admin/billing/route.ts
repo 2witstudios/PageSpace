@@ -163,6 +163,8 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
       }
       rows.push(['liability', 'total', String(liability.userCount), '', '', '', '', '', '', '', '', '', centsToDollars(liability.totalLiabilityCents)]);
       rows.push(['liability', 'monthly_remaining', '', '', '', '', '', '', '', '', '', '', centsToDollars(liability.monthlyRemainingCents)]);
+      rows.push(['liability', 'org_pool_monthly_remaining', String(liability.orgPoolCount), '', '', '', '', '', '', '', '', '', centsToDollars(liability.orgPoolMonthlyRemainingCents)]);
+      rows.push(['liability', 'starter_grant_remaining', '', '', '', '', '', '', '', '', '', '', centsToDollars(liability.starterGrantRemainingCents)]);
       rows.push(['liability', 'topup_remaining', '', '', '', '', '', '', '', '', '', '', centsToDollars(liability.topupRemainingCents)]);
       rows.push(['holds', 'live', String(holds.holdCount), '', '', '', '', '', '', '', '', '', centsToDollars(holds.heldCents)]);
 

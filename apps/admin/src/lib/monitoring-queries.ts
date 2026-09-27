@@ -14,6 +14,7 @@ import type { SQL } from '@pagespace/db/operators';
 import { computeBalanceDrift, isNegativeMargin } from '@pagespace/lib/billing/credit-core';
 import { BALANCE_DRIFT_TOLERANCE_CENTS, NEGATIVE_MARGIN_FLOOR_BPS } from '@pagespace/lib/billing/credit-pricing';
 import { CENTS_PER_DOLLAR } from '@pagespace/lib/billing/money-model';
+import { readCreditLiability } from '@pagespace/lib/billing/credit-liability-query';
 import { getTierFromPrice, STRIPE_PRICE_TO_TIER } from './stripe/price-config';
 import { stripe } from './stripe/client';
 import { TIERS, type SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
@@ -896,11 +897,12 @@ export interface CreditRevenue {
   monthlyGrantCents: number;
   monthlyGrantCount: number;
   /**
-   * Included-credit liability (Spec MON-7): monthly grants still outstanding —
-   * granted credit value not yet spent, summed over every balance. Point-in-time,
-   * not range-scoped, and distinct from cash: a grant is a promise of credit value
-   * the platform still owes, never revenue. Top-up balances are cash-backed and are
-   * NOT in this figure (see CreditLiability.topupRemainingCents).
+   * Included-credit liability (Spec MON-7): grants still outstanding — the monthly
+   * bucket of every personal root wallet AND every org pool (credit-liability.ts says
+   * which wallet kinds count and why a drive wallet's allocation never does).
+   * Point-in-time, not range-scoped, and distinct from cash: a grant is a promise of
+   * credit value the platform still owes, never revenue. Top-up balances are NOT in
+   * this figure (see CreditLiability.topupRemainingCents).
    */
   includedCreditLiabilityCents: number;
 }
@@ -911,10 +913,17 @@ export interface SubscriptionsByTierRow {
 }
 
 export interface CreditLiability {
+  /** Grants outstanding: personal roots' and org pools' monthly buckets. */
   monthlyRemainingCents: number;
+  /** Of which org pools (MON-3 refills). */
+  orgPoolMonthlyRemainingCents: number;
+  /** Of which free-tier accounts: the unpaid starter grant, shown apart from paid grants. */
+  starterGrantRemainingCents: number;
+  /** Purchased or moved-in credit on every wallet: root top-ups and drive-wallet legs. */
   topupRemainingCents: number;
   totalLiabilityCents: number;
   userCount: number;
+  orgPoolCount: number;
 }
 
 export interface LiveHolds {
@@ -1112,22 +1121,17 @@ export async function getCreditRevenue(
     }
   }
 
-  // MON-7: outstanding monthly grants = unspent granted credit value across all
-  // balances. Read from the balances (the ledger nets grants against usage there),
-  // not from the range-scoped grant rows above, so it is a liability, not a flow.
-  const outstanding = await db
-    .select({
-      includedCreditLiabilityCents: sql<number>`COALESCE(SUM(${wallets.monthlyRemainingCents}), 0)::double precision`,
-    })
-    .from(wallets)
-    .where(isPersonalRootWallet());
+  // MON-7: outstanding grants = unspent granted credit value on personal roots and org
+  // pools. Read from the wallets (the ledger nets grants against usage there), not from
+  // the range-scoped grant rows above, so it is a liability, not a flow.
+  const liability = await readCreditLiability();
 
   return {
     topupCents,
     topupCount,
     monthlyGrantCents,
     monthlyGrantCount,
-    includedCreditLiabilityCents: outstanding[0]?.includedCreditLiabilityCents ?? 0,
+    includedCreditLiabilityCents: liability.includedCreditLiabilityCents,
   };
 }
 
@@ -1183,23 +1187,17 @@ export async function getActiveSubscriptionsByTier(): Promise<SubscriptionsByTie
   return (Object.keys(counts) as SubscriptionTier[]).map((tier) => ({ tier, count: counts[tier] }));
 }
 
+/** Outstanding credit liability across every wallet kind, point-in-time (MON-7). */
 export async function getCreditLiability(): Promise<CreditLiability> {
-  const rows = await db
-    .select({
-      monthlyRemainingCents: sql<number>`COALESCE(SUM(${wallets.monthlyRemainingCents}), 0)::double precision`,
-      topupRemainingCents: sql<number>`COALESCE(SUM(${wallets.topupRemainingCents}), 0)::double precision`,
-      userCount: count(),
-    })
-    .from(wallets)
-    .where(isPersonalRootWallet());
-
-  const monthlyRemainingCents = rows[0]?.monthlyRemainingCents ?? 0;
-  const topupRemainingCents = rows[0]?.topupRemainingCents ?? 0;
+  const r = await readCreditLiability();
   return {
-    monthlyRemainingCents,
-    topupRemainingCents,
-    totalLiabilityCents: monthlyRemainingCents + topupRemainingCents,
-    userCount: rows[0]?.userCount ?? 0,
+    monthlyRemainingCents: r.includedCreditLiabilityCents,
+    orgPoolMonthlyRemainingCents: r.orgPoolIncludedCents,
+    starterGrantRemainingCents: r.starterGrantIncludedCents,
+    topupRemainingCents: r.topupRemainingCents,
+    totalLiabilityCents: r.totalLiabilityCents,
+    userCount: r.userCount,
+    orgPoolCount: r.orgPoolCount,
   };
 }
 
