@@ -58,9 +58,10 @@ export function isMoneyName(ident: string): boolean {
 /**
  * Blank comments and single/double-quoted string contents with spaces, keeping every
  * offset and newline. Template-literal text is kept (SQL is written there), and code
- * inside `${…}` is scanned as code, comments included.
+ * inside `${…}` is scanned as code, comments included. `keepStrings` blanks comments
+ * only — for scanning published copy, which lives in strings.
  */
-export function maskSource(src: string): string {
+export function maskSource(src: string, opts: { keepStrings?: boolean } = {}): string {
   const out = src.split('');
   const blank = (i: number) => {
     if (out[i] !== '\n') out[i] = ' ';
@@ -92,8 +93,14 @@ export function maskSource(src: string): string {
     if (c === '"' || c === "'") {
       i += 1;
       while (i < src.length && src[i] !== c && src[i] !== '\n') {
-        if (src[i] === '\\') blank(i++);
-        if (i < src.length && src[i] !== '\n') blank(i++);
+        if (src[i] === '\\') {
+          if (!opts.keepStrings) blank(i);
+          i += 1;
+        }
+        if (i < src.length && src[i] !== '\n') {
+          if (!opts.keepStrings) blank(i);
+          i += 1;
+        }
       }
       i += 1;
       continue;
@@ -393,5 +400,29 @@ export function findConversionsInSource(src: string): ConversionHit[] {
     seen.add(line);
     hits.push({ line, text: (lines[line - 1] ?? '').trim() });
   }
+  return hits;
+}
+
+/**
+ * MON-1 copy scan: a literal credit figure in published text ("5 credits",
+ * "15/month in credits", "1,000 credits"). A figure interpolated from the money model
+ * (`{MONTHLY_CREDITS.pro} credits`) has no digit before the word and never matches.
+ * Lowercase only, so a heading like "11.3 Credits and Usage Limits" is not a figure.
+ */
+export const CREDIT_FIGURE = /(?<![\w.,$])\d[\d,]*(?:\s*\/\s*(?:mo|month))?\s+(?:in\s+)?credits?\b/g;
+
+/** MON-1 / A-9 copy scan: the removed Founder plan, as a word ("NotFoundError" never matches). */
+export const FOUNDER_PLAN = /\bfounder\b/gi;
+
+/** Lines of `src` (comments stripped, strings kept) where `pattern` matches. */
+export function findCopyHits(src: string, pattern: RegExp): ConversionHit[] {
+  const masked = maskSource(src, { keepStrings: true });
+  const lines = src.split('\n');
+  const hits: ConversionHit[] = [];
+  masked.split('\n').forEach((line, i) => {
+    pattern.lastIndex = 0;
+    if (pattern.test(line)) hits.push({ line: i + 1, text: (lines[i] ?? '').trim() });
+  });
+  pattern.lastIndex = 0;
   return hits;
 }

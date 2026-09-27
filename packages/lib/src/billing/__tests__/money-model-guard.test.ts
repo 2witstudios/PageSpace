@@ -2,7 +2,13 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { REPO_ROOT, listSourceFiles } from '../../__tests__/seams/walk';
-import { findConversionsInSource, isMoneyName } from '../../__tests__/seams/money-conversion-scan';
+import {
+  CREDIT_FIGURE,
+  FOUNDER_PLAN,
+  findConversionsInSource,
+  findCopyHits,
+  isMoneyName,
+} from '../../__tests__/seams/money-conversion-scan';
 
 /**
  * MON-5 "A test greps for any second conversion and fails on it."
@@ -105,5 +111,54 @@ describe('MON-5 (partial) no second credit or cents conversion outside money-mod
       hits,
       `Second credit/cents conversion(s) found — route them through ${MONEY_MODEL}:\n${hits.join('\n')}`,
     ).toEqual([]);
+  });
+});
+
+/**
+ * MON-1 "No other file may state an allowance, a pack size, or a credit-to-money
+ * conversion" and D-OW-18 (copy refers to the pricing page rather than stating numbers),
+ * for the text people read: no literal credit figure in any app's source or the email
+ * templates, and no mention of the removed Founder plan (A-9) in marketing or email copy.
+ * Figures interpolated from the money model pass; comments are skipped.
+ */
+const COPY_ROOTS = ['apps', 'packages/lib/src/email-templates', 'packages/lib/emails'] as const;
+const FOUNDER_COPY_ROOTS = ['apps/marketing', 'packages/lib/src/email-templates', 'packages/lib/emails'] as const;
+const copyHits = (roots: readonly string[], pattern: RegExp) =>
+  listSourceFiles(roots).flatMap((f) =>
+    findCopyHits(readFileSync(join(REPO_ROOT, f), 'utf8'), pattern).map((h) => `${f}:${h.line}: ${h.text}`),
+  );
+
+describe('MON-1 (partial) no published copy states a credit figure or names the Founder plan', () => {
+  it.each([
+    ['- **Free:** 5 credits to start'],
+    ['- **Pro:** 15/month in credits'],
+    ['<li>1,000 credits for $10</li>'],
+    ["const label = '900 credits a month';"],
+  ])('MON-1 (partial) the figure rule flags %s', (line) => {
+    expect(findCopyHits(line, CREDIT_FIGURE)).toHaveLength(1);
+  });
+
+  it.each([
+    ['<li>{MONTHLY_CREDITS.pro} credits a month</li>'],
+    ['<h3>11.3 Credits and Usage Limits</h3>'],
+    ['// 5 credits in a comment'],
+    ['`${formatCreditCount(cents)} credits`'],
+  ])('MON-1 (partial) the figure rule ignores %s', (line) => {
+    expect(findCopyHits(line, CREDIT_FIGURE)).toHaveLength(0);
+  });
+
+  it('MON-1 (partial) the Founder rule matches the word, not NotFoundError', () => {
+    expect(findCopyHits('**Pro, Founder, and Business** unlock', FOUNDER_PLAN)).toHaveLength(1);
+    expect(findCopyHits('throw new SheetTabNotFoundError(id);', FOUNDER_PLAN)).toHaveLength(0);
+  });
+
+  it('MON-1 (partial) no app or email template states a literal credit figure', () => {
+    const hits = copyHits(COPY_ROOTS, CREDIT_FIGURE);
+    expect(hits, `Credit figure(s) in copy — derive them from money-model/credit-copy or link the pricing page:\n${hits.join('\n')}`).toEqual([]);
+  });
+
+  it('MON-1 (partial) no marketing page or email names the removed Founder plan', () => {
+    const hits = copyHits(FOUNDER_COPY_ROOTS, FOUNDER_PLAN);
+    expect(hits, `Founder plan named in copy (removed, A-9):\n${hits.join('\n')}`).toEqual([]);
   });
 });
