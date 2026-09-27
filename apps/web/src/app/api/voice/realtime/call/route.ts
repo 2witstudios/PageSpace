@@ -17,8 +17,8 @@
  * whole lifetime, on the socket the realtime server holds; a credit hold taken
  * at handshake time could only ever be a guess at a call that has not happened
  * yet. Metering belongs to the process that sees the usage events. What this
- * route does decide is WHERE the call spends: the bound conversation's drive,
- * carried to the realtime server on the signed attach (SPEND-1).
+ * route does decide is WHERE the call spends (resolveVoiceSpend), before OpenAI
+ * is contacted, carried to the realtime server on the signed attach (SPEND-1).
  */
 
 import { NextResponse } from 'next/server';
@@ -35,7 +35,8 @@ import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth
 import { resolveRealtimeModel } from '@/lib/ai/realtime/session';
 import { runCallHandshake } from '@/lib/ai/realtime/call-handshake';
 import { loadVoiceBinding } from '@/lib/ai/realtime/binding-loader';
-import { voiceBindingDeps } from '@/lib/ai/realtime/voice-runtime-deps';
+import { voiceBindingDeps, voiceSpendDeps } from '@/lib/ai/realtime/voice-runtime-deps';
+import { resolveVoiceSpend } from '@/lib/ai/realtime/voice-spend';
 import { voiceLocationContextSchema } from '@pagespace/lib/realtime/voice-bridge-contract';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
@@ -115,6 +116,34 @@ export async function POST(request: Request) {
       typeof conversationIdRaw === 'string' && conversationIdRaw.length > 0
         ? conversationIdRaw
         : undefined;
+    const agentPageIdRaw = (body as { agentPageId?: unknown } | undefined)?.agentPageId;
+    const agentPageId =
+      typeof agentPageIdRaw === 'string' && agentPageIdRaw.length > 0 ? agentPageIdRaw : undefined;
+
+    // Where the call spends, decided BEFORE OpenAI is contacted (SPEND-1): the drive of the
+    // conversation (a page agent's thread spends in its page's drive, as its typed turns do),
+    // or personal credits for a Global Assistant call (SPEND-8). The body's agentPageId only
+    // names the page of a fresh thread with no row yet, and only counts after the caller's
+    // own view check. A call that belongs to a drive it cannot resolve is refused by name —
+    // it never falls back to the caller's own credits (SPEND-4).
+    const spend = await resolveVoiceSpend(voiceSpendDeps(auth), {
+      userId,
+      ...(conversationId === undefined ? {} : { conversationId }),
+      ...(agentPageId === undefined ? {} : { agentPageId }),
+    });
+    if (spend.kind === 'refused') {
+      loggers.ai.info('Realtime voice call refused: no spend source', { userId, reason: spend.reason });
+      return NextResponse.json(
+        {
+          error: 'Voice call refused',
+          code: spend.reason,
+          message: spend.reason === 'voice_conversation_forbidden'
+            ? 'You do not have access to this conversation.'
+            : 'This call could not tell which drive pays for it, so it was not started and nothing was charged.',
+        },
+        { status: spend.reason === 'voice_conversation_forbidden' ? 403 : 409 }
+      );
+    }
 
     // Voice starts on a conversation that already exists, so the conversation is
     // what says which assistant is being talked to, what it was told to be, and
@@ -162,9 +191,8 @@ export async function POST(request: Request) {
         seed: binding.seed,
         instructions: binding.instructions,
         ...(binding.assistant === undefined ? {} : { assistant: binding.assistant }),
-        // Where the call spends (SPEND-1): the bound conversation's drive, resolved from
-        // that authorized read, never from the body. None → personal credits (SPEND-8).
-        ...(binding.spendDriveId === undefined ? {} : { spendDriveId: binding.spendDriveId }),
+        // Where the call spends (resolved above), carried to the meter on the signed attach.
+        ...(spend.kind === 'drive' ? { spendDriveId: spend.driveId } : {}),
         ...(typeof timezoneRaw === 'string' && timezoneRaw.length > 0
           ? { timezone: timezoneRaw }
           : {}),

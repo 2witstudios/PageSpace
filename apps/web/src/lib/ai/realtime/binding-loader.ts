@@ -61,8 +61,6 @@ export type AgentPage = {
    * every other surface — the allowlist applied, the switch ignored.
    */
   readonly sandboxEnabled: boolean;
-  /** The drive the agent page lives in: where a call bound to its conversation spends (SPEND-1). */
-  readonly driveId: string;
 };
 
 export type BindingLoaderDeps = {
@@ -111,13 +109,6 @@ export type VoiceBinding = {
    */
   readonly tools: readonly RealtimeTool[];
   readonly assistant?: VoiceAssistant;
-  /**
-   * The drive the call spends in (SPEND-1): the bound page agent's drive, from the same
-   * authorized read as everything else here — a typed turn on that agent's page spends in
-   * that page's drive, and a spoken one is the same conversation. Absent for an unbound or
-   * Global Assistant call, which spends the caller's personal credits (SPEND-8).
-   */
-  readonly spendDriveId?: string;
 };
 
 /**
@@ -229,7 +220,6 @@ export const loadVoiceBinding = async (
         agentTitle: agent.title,
         enabledTools: agent.enabledTools,
       },
-      spendDriveId: agent.driveId,
     };
   } catch (error) {
     // Degrading to no history and the default persona is strictly better than

@@ -38,6 +38,7 @@ import { canPrincipalViewPage, type AuthResult } from '@/lib/auth';
 import { buildRealtimeToolSet, type ToolAllowlist } from './tools';
 import { buildVoiceCallContext, type VoiceSystemContextDeps } from './system-context';
 import type { BindingLoaderDeps, SeedConversation, AgentPage } from './binding-loader';
+import type { VoiceSpendDeps } from './voice-spend';
 import type {
   TranscriptPersistenceDeps,
   TranscriptConversation,
@@ -82,7 +83,6 @@ const loadAgentPage = async (pageId: string): Promise<AgentPage | undefined> => 
       systemPrompt: pages.systemPrompt,
       enabledTools: pages.enabledTools,
       sandboxEnabled: pages.sandboxEnabled,
-      driveId: pages.driveId,
     })
     .from(pages)
     .where(eq(pages.id, pageId));
@@ -94,7 +94,6 @@ const loadAgentPage = async (pageId: string): Promise<AgentPage | undefined> => 
         systemPrompt: row.systemPrompt,
         enabledTools: Array.isArray(row.enabledTools) ? (row.enabledTools as string[]) : null,
         sandboxEnabled: Boolean(row.sandboxEnabled),
-        driveId: row.driveId,
       }
     : undefined;
 };
@@ -179,6 +178,20 @@ export const voiceBindingDeps = (auth: AuthResult): BindingLoaderDeps => ({
   buildCallContext: (request) =>
     buildVoiceCallContext(voiceSystemContextDeps(auth), request),
   logger: loggers.ai,
+});
+
+/** Where a call spends (SPEND-1): the conversation read and the caller's own page check. */
+export const voiceSpendDeps = (auth: AuthResult): VoiceSpendDeps => ({
+  loadConversation,
+  canAccess: (userId, conversation) => canAccessConversation(userId, conversation),
+  loadPage: async (pageId) => {
+    const [row] = await db
+      .select({ id: pages.id, type: pages.type, driveId: pages.driveId })
+      .from(pages)
+      .where(eq(pages.id, pageId));
+    return row;
+  },
+  canViewPage: (pageId) => canPrincipalViewPage(auth, pageId),
 });
 
 export const voiceTranscriptDeps: TranscriptPersistenceDeps = {

@@ -120,6 +120,15 @@ describe('connectVoiceCall — the handshake', () => {
     });
   });
 
+  it('SPEND-1 (partial) given a page agent\'s thread, should name its agent page so the server can resolve the drive of a fresh thread', async () => {
+    const h = harness({ target: { conversationId: 'conv-1', type: 'page', contextId: 'agent1', agentPageId: 'agent1' } });
+
+    await connectVoiceCall(h.deps);
+
+    const [, init] = h.fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toMatchObject({ conversationId: 'conv-1', agentPageId: 'agent1' });
+  });
+
   it('given a location and timezone, should forward both for the tools', async () => {
     const locationContext = {
       currentPage: { id: 'p1', title: 'Notes', type: 'DOCUMENT', path: '/notes' },
