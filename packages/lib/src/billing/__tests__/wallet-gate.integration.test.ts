@@ -493,8 +493,8 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
    * Gate a seat call for `userId`, then settle it at 25¢. Returns the gate answer. With a
    * `generationId` the usage log waits for the cost-reconcile cron, as an OpenRouter call does.
    */
-  async function seatCall(w: World, userId: string, generationId?: string) {
-    const gate = await canConsumeAI(userId, 'free', { spend: driveSpend(w.productId, 'seat_allowance') });
+  async function seatCall(w: World, userId: string, generationId?: string, tier: 'free' | 'pro' = 'free') {
+    const gate = await canConsumeAI(userId, tier, { spend: driveSpend(w.productId, 'seat_allowance') });
     if (!gate.allowed) return gate;
     const reconcile = generationId
       ? { timestamp: new Date(Date.now() - 10 * 60_000), reconcileStatus: 'pending', reconcileAttempts: 0, metadata: { generationIds: [generationId] } }
@@ -601,7 +601,8 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     }
 
     for (let call = 1; call <= 4; call += 1) {
-      expect(await seatCall(w, w.marcusId), `seat call ${call}`).toMatchObject({ allowed: true, walletId: w.poolId });
+      // Pro: the free tier's in-flight cap would count the drive calls; the seat cap must not.
+      expect(await seatCall(w, w.marcusId, undefined, 'pro'), `seat call ${call}`).toMatchObject({ allowed: true, walletId: w.poolId });
     }
     expect(await seatChargedCents(w, w.marcusId)).toBe(100);
   });
