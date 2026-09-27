@@ -326,6 +326,7 @@ describe('runDiscoveryPasses', () => {
 describe('runDiscoveryPasses — the credit gate (SPEND-1)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockReserve.mockImplementation(async () => ({ allowed: true as const, holdId: 'hold-m', walletId: 'w-root', release: mockReleaseMemoryHold }));
     mockGenerateObject.mockResolvedValue({
       object: { claims: [{ claim: 'c', evidence: 'e', occurrencesInWindow: 2 }] },
       usage: { inputTokens: 10, outputTokens: 5 },
@@ -343,8 +344,6 @@ describe('runDiscoveryPasses — the credit gate (SPEND-1)', () => {
     expect(result.claims).toEqual([]);
     expect(mockGenerateObject).not.toHaveBeenCalled();
     expect(AIMonitoring.trackUsage).not.toHaveBeenCalled();
-    mockReserve.mockReset();
-    mockReserve.mockImplementation(async () => ({ allowed: true as const, holdId: 'hold-m', walletId: 'w-root', release: mockReleaseMemoryHold }));
   });
 
   it('SPEND-8 (partial) each funded discovery pass reserves before its model call and settles once on that hold and wallet', async () => {
