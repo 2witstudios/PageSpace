@@ -108,6 +108,16 @@ export interface CommandExecutionPart {
 }
 
 /**
+ * SPEND-4: the drive's fallback rule moved this reply to another source (`data-spend-fallback`,
+ * written first by the chat turn). `data` is validated by the notice, not trusted here.
+ */
+export interface SpendFallbackPart {
+  type: 'data-spend-fallback';
+  id?: string;
+  data: unknown;
+}
+
+/**
  * A run of 1+ consecutive non-diff tool calls, rendered through one
  * persistent component (ToolRunGroup/CompactToolRunGroup) regardless of
  * length. Diff-producing tool calls (see tool-calls/tool-significance.ts)
@@ -130,7 +140,7 @@ export interface ToolRunGroupPart {
 /**
  * Union type for processed message parts
  */
-export type GroupedPart = TextGroupPart | FileGroupPart | ProcessedToolPart | CommandExecutionPart | ToolRunGroupPart;
+export type GroupedPart = TextGroupPart | FileGroupPart | ProcessedToolPart | CommandExecutionPart | SpendFallbackPart | ToolRunGroupPart;
 
 /**
  * Valid tool states for type checking
@@ -164,6 +174,11 @@ export function isFileGroupPart(part: GroupedPart): part is FileGroupPart {
  */
 export function isProcessedToolPart(part: GroupedPart): part is ProcessedToolPart {
   return part.type !== 'tool-run-group' && part.type.startsWith('tool-');
+}
+
+/** Type guard for SpendFallbackPart (SPEND-4). */
+export function isSpendFallbackPart(part: GroupedPart): part is SpendFallbackPart {
+  return part.type === 'data-spend-fallback';
 }
 
 /**
