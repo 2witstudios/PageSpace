@@ -37,6 +37,19 @@ interface StripeConfig {
     founder: string;
     legacyBusiness: string;
   };
+  /**
+   * The ORGANIZATION plan's two prices (SEAT-2, A-8): the Business base
+   * ($50/month, 5 seats included) and the extra seat ($10/month per seat beyond
+   * 5), billed as two items of one org subscription. Ids only — every money
+   * amount the product shows or grants comes from the money-model module and
+   * the tier table, never from these prices (MON-5). An empty id means the
+   * price does not exist in that mode yet, and org provisioning refuses to run
+   * (fails closed) rather than guess.
+   */
+  orgPriceIds: {
+    businessBase: string;
+    extraSeat: string;
+  };
 }
 
 const config: Record<'test' | 'live', StripeConfig> = {
@@ -50,6 +63,10 @@ const config: Record<'test' | 'live', StripeConfig> = {
       founder: 'price_1SdbhePCGvbSozobuNjSn5j0',    // $50/month, removed tier (A-9)
       legacyBusiness: 'price_1SdbhfPCGvbSozobpTMXfqkX', // $100/month personal Business, grandfathered (A-9)
     },
+    orgPriceIds: {
+      businessBase: 'price_1UK59APCGvbSozobgDCKr4zB', // $50/month org base, 5 seats included (D-OW-20)
+      extraSeat: 'price_1UK59APCGvbSozobTxuoHMeP',    // $10/month per extra seat (D-OW-20)
+    },
   },
   live: {
     publishableKey: 'pk_live_51S2LlQPRnBcvXFso7Y3yM21QcIuHM3b6Iz1VdOZ7d51aVaZvITRSs7M5KVpKF3jih2p2t59xwlR4Jr8DwIydW9Ht00KeOaUd35',
@@ -60,6 +77,11 @@ const config: Record<'test' | 'live', StripeConfig> = {
     grandfatheredPriceIds: {
       founder: 'price_1SdfbbPRnBcvXFsofn7L1leP',    // $50/month, removed tier (A-9)
       legacyBusiness: 'price_1SdfbePRnBcvXFsoCvpJsSxw', // $100/month personal Business, grandfathered (A-9)
+    },
+    // Not created in live mode yet: org provisioning refuses while these are empty.
+    orgPriceIds: {
+      businessBase: '',
+      extraSeat: '',
     },
   },
 };

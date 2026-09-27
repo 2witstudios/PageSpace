@@ -21,10 +21,11 @@
  *   for the per-drive audit event the caller writes.
  */
 import { db } from '@pagespace/db/db';
-import { and, eq, inArray } from '@pagespace/db/operators';
+import { and, eq, inArray, sql } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
-import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
+import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
+import { isLiveOrgSubscriptionStatus, orgBillingLockKey } from '../billing/org-subscription-core';
 import { resolveOrgDeletionAccessLoss } from '../permissions/org-deletion-access';
 import { revokeOrgDriveGrantsForMembers } from './leave';
 import { publishDriveAccessEvents, type OrgMembershipSyncPorts } from '../services/org-membership-sync';
@@ -115,9 +116,22 @@ export type DeleteOrganizationResult =
   | { ok: false; status: 403; reason: 'not_owner' }
   | { ok: false; status: 400; reason: Exclude<OrgDeletionRefusal, 'not_owner'>; driveIds: string[] };
 
+/** The org's live Business subscription, as the delete hands it to {@link DeleteOrganizationDeps.endSubscription}. */
+export interface EndedOrgSubscription {
+  orgId: string;
+  stripeSubscriptionId: string;
+}
+
 export interface DeleteOrganizationDeps {
   /** Realtime ports for the post-commit events; defaults to the org-membership publisher's. */
   ports?: OrgMembershipSyncPorts;
+  /**
+   * Ends the org's live Stripe subscription (SEAT-1). Called inside the delete's
+   * transaction, before the org row goes: a throw rolls the whole delete back, so an org
+   * is never deleted while Stripe keeps billing it. Without it, an org with a live
+   * subscription cannot be deleted at all.
+   */
+  endSubscription?: (subscription: EndedOrgSubscription) => Promise<void>;
 }
 
 type RevokedRow = { userId: string; driveId: string };
@@ -133,6 +147,11 @@ export async function deleteOrganization(
 ): Promise<DeleteOrganizationResult> {
   const toKick: RevokedRow[] = [];
   const result = await db.transaction(async (tx): Promise<DeleteOrganizationResult> => {
+    // The billing lock FIRST (before the org row lock, the order provisioning takes them
+    // in): a provisioning in flight finishes and its subscription is seen and ended
+    // below, or it starts after and finds the org gone. Never a live Stripe
+    // subscription left for a deleted org.
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${orgBillingLockKey(input.orgId)}, 0))`);
     const [org] = await tx
       .select({ ownerId: organizations.ownerId })
       .from(organizations)
@@ -213,6 +232,18 @@ export async function deleteOrganization(
         removedRows: [...toKick, ...orgRows],
       });
       toKick.splice(0, toKick.length, ...lost);
+    }
+
+    // org_subscriptions.orgId RESTRICTS the org delete: the subscription ends first (SEAT-1).
+    const [subscription] = await tx
+      .delete(orgSubscriptions)
+      .where(eq(orgSubscriptions.orgId, input.orgId))
+      .returning({ stripeSubscriptionId: orgSubscriptions.stripeSubscriptionId, status: orgSubscriptions.status });
+    if (subscription && isLiveOrgSubscriptionStatus(subscription.status)) {
+      if (!deps.endSubscription) {
+        throw new Error(`Organization ${input.orgId} has a live subscription and no way to end it was given; refusing to delete`);
+      }
+      await deps.endSubscription({ orgId: input.orgId, stripeSubscriptionId: subscription.stripeSubscriptionId });
     }
 
     await tx.delete(organizations).where(eq(organizations.id, input.orgId));

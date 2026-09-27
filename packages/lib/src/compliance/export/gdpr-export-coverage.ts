@@ -345,6 +345,10 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     'integration_audit_log',
     'oauth_clients',
     'subscriptions',
+    // An ORG's Business subscription (Spec SEAT-1): the org's Stripe linkage, keyed on
+    // the org and naming no person. The same answer as `subscriptions` — a billing
+    // record whose Stripe-side copy is the org's to obtain from Stripe.
+    'org_subscriptions',
     // `wallets` is the table credit_balances became (X-5): the personal root wallet is
     // the same billing row it always was, now alongside org and drive wallets.
     'wallets',
