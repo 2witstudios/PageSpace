@@ -13,8 +13,11 @@ const SYSTEM_PROMPT =
 export async function extractActionItems(
   userId: string,
   transcriptPlainText: string,
-  /** The wallet the enrichment's credit hold reserved (SPEND-6: the target drive's wallet). */
-  walletId?: string,
+  /**
+   * Who the usage is recorded against and the wallet the enrichment's credit hold reserved
+   * (process-webhook's payer seam on the destination drive). Omitted: the user, their own root.
+   */
+  billing?: { userId: string; walletId?: string },
 ): Promise<ActionItem[]> {
   try {
     const provider = await createAIProvider(userId, {});
@@ -31,7 +34,7 @@ export async function extractActionItems(
     });
 
     discardUsageOutcome(AIMonitoring.trackUsage({
-      userId,
+      userId: billing?.userId ?? userId,
       provider: provider.provider,
       model: provider.modelName,
       source: 'integration',
@@ -41,7 +44,7 @@ export async function extractActionItems(
         ? (result.usage.inputTokens ?? 0) + (result.usage.outputTokens ?? 0)
         : undefined,
       success: true,
-      walletId,
+      walletId: billing?.walletId,
       metadata: { feature: 'zoom_action_items' },
     }));
 

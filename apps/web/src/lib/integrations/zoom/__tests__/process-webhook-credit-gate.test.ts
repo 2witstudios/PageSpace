@@ -20,6 +20,7 @@ const {
   mockCreatePage,
   mockSelectWhere,
   walletsLive,
+  mockLookupDrive,
 } = vi.hoisted(() => ({
   mockCanConsumeAI: vi.fn(),
   mockReleaseHold: vi.fn(),
@@ -29,6 +30,7 @@ const {
   mockCreatePage: vi.fn(),
   mockSelectWhere: vi.fn(),
   walletsLive: { orgs: false, billing: true },
+  mockLookupDrive: vi.fn(),
 }));
 
 vi.mock('@pagespace/db/db', () => ({
@@ -48,6 +50,11 @@ vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({
   get ORGS_ENABLED() { return walletsLive.orgs; },
 }));
 vi.mock('@pagespace/lib/deployment-mode', () => ({ isBillingEnabled: () => walletsLive.billing }));
+// The destination drive's billing facts; the payer decision (destinationDriveSpend) stays real.
+vi.mock('@pagespace/lib/billing/sandbox-payer', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@pagespace/lib/billing/sandbox-payer')>()),
+  lookupDriveBillingFacts: mockLookupDrive,
+}));
 vi.mock('@pagespace/lib/billing/credit-consume', () => ({ releaseHold: mockReleaseHold }));
 vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
   AIMonitoring: { trackUsage: mockTrackUsage },
@@ -111,6 +118,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   walletsLive.orgs = false;
   walletsLive.billing = true;
+  // Default destination: an org drive (Northwind's Product), led by someone else.
+  mockLookupDrive.mockResolvedValue({ ownerId: 'user-lead', orgId: 'org-northwind' });
   mockSelectWhere.mockResolvedValue([{ subscriptionTier: 'free' }]);
   mockCreatePage.mockResolvedValue({ success: true, page: { id: 'page-1' } });
   mockCreateAIProvider.mockResolvedValue({ model: {}, provider: 'pagespace', modelName: 'm' });
@@ -224,6 +233,50 @@ describe('processZoomWebhook AI enrichment credit gate', () => {
     expect(mockGenerateText).toHaveBeenCalledTimes(2);
     expect(mockTrackUsage.mock.calls.map(([usage]) => usage.walletId)).toEqual(['w-drive-1', 'w-drive-1']);
     expect(createdMetadata()).not.toHaveProperty('aiEnrichmentSkipped');
+  });
+
+  it('SPEND-6 (partial) given an org destination, should gate the run as the connection owner on the drive wallet, never their own credits', async () => {
+    mockCanConsumeAI.mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'hold-5', walletId: 'w-drive-1' });
+
+    await processZoomWebhook(event, connection);
+
+    expect(mockLookupDrive).toHaveBeenCalledWith('drive-1');
+    expect(mockCanConsumeAI.mock.calls[0][0]).toBe('user-1');
+    expect(mockCanConsumeAI.mock.calls[0][2].spend).toEqual(DRIVE_AUTOMATION);
+    expect(mockTrackUsage.mock.calls.map(([usage]) => [usage.userId, usage.walletId])).toEqual([['user-1', 'w-drive-1'], ['user-1', 'w-drive-1']]);
+  });
+
+  it('SPEND-6 (partial) given a personal destination, should gate and bill its owner\'s own wallet (the payer seam), as master does on the owner\'s own drive', async () => {
+    mockLookupDrive.mockResolvedValue({ ownerId: 'user-1', orgId: null });
+    mockCanConsumeAI.mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'hold-6', walletId: 'w-user-1-root' });
+
+    await processZoomWebhook(event, connection);
+
+    expect(mockCanConsumeAI.mock.calls[0][0]).toBe('user-1');
+    expect(mockCanConsumeAI.mock.calls[0][2].spend).toEqual({ kind: 'personal' });
+    expect(mockTrackUsage.mock.calls.map(([usage]) => [usage.userId, usage.walletId])).toEqual([['user-1', 'w-user-1-root'], ['user-1', 'w-user-1-root']]);
+    expect(createdMetadata()).not.toHaveProperty('aiEnrichmentSkipped');
+  });
+
+  it('SPEND-6 (partial) given a personal destination owned by someone else, should gate and bill that drive\'s owner, not the connection owner', async () => {
+    mockLookupDrive.mockResolvedValue({ ownerId: 'user-owner', orgId: null });
+    mockCanConsumeAI.mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'hold-7', walletId: 'w-owner-root' });
+
+    await processZoomWebhook(event, connection);
+
+    expect(mockCanConsumeAI.mock.calls[0][0]).toBe('user-owner');
+    expect(mockTrackUsage.mock.calls.map(([usage]) => usage.userId)).toEqual(['user-owner', 'user-owner']);
+  });
+
+  it('given the destination drive cannot be read, should still create the page without enrichment and record a gate error', async () => {
+    mockLookupDrive.mockResolvedValue(null);
+
+    await processZoomWebhook(event, connection);
+
+    expect(mockCanConsumeAI).not.toHaveBeenCalled();
+    expect(mockGenerateText).not.toHaveBeenCalled();
+    expect(mockCreatePage).toHaveBeenCalledTimes(1);
+    expect(createdMetadata()).toMatchObject({ aiEnrichmentSkipped: 'gate_error' });
   });
 
   it('given no AI enrichment is enabled, should not gate or reserve anything', async () => {

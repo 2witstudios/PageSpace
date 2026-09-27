@@ -6,7 +6,8 @@ import type { GateReason } from '@pagespace/lib/billing/credit-core';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { pageService } from '@/services/api';
 import { acquireUserCreditHold } from '@/lib/ai/core/user-credit-hold';
-import { automationRunUnreserved, automationSpend } from '@pagespace/lib/billing/spend-target';
+import { automationRunUnreserved } from '@pagespace/lib/billing/spend-target';
+import { destinationDriveSpend, lookupDriveBillingFacts } from '@pagespace/lib/billing/sandbox-payer';
 import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
 import { isBillingEnabled } from '@pagespace/lib/deployment-mode';
 import { getRecordings, downloadTranscript } from './zoom-api-client';
@@ -126,9 +127,9 @@ export async function processZoomWebhook(
 
   // AI enrichment (fail-safe — never blocks page creation). It passes the credit
   // gate first; a refusal still creates the page, just without the summary/action
-  // items, and records why. A webhook trigger has no person present, so it spends
-  // the target drive's wallet or is skipped, never the connection owner's credits
-  // (SPEND-6), as the Zoom trigger executor does.
+  // items, and records why. A webhook trigger has no person present (SPEND-6), so
+  // the DESTINATION drive's payer pays, never the connecting user as such
+  // (destinationDriveSpend: an org drive's wallet, or a personal drive's owner).
   const enrichment = await enrichTranscript(connection, connection.targetDriveId, plainText);
   const { summary, actionItems } = enrichment;
 
@@ -196,9 +197,9 @@ interface TranscriptEnrichment {
  * debits its own real usage on the wallet the hold reserved, so the hold is
  * released exactly once when they settle, whether they succeeded or not.
  *
- * SPEND-6: the enrichment is a trigger, so it names the target drive as consumer
- * (automationSpend) and never falls back to the connection owner's wallet: with no
- * drive wallet reserved while wallets are live, it is skipped before any model call.
+ * SPEND-6: the enrichment is a trigger, so the destination drive's payer pays
+ * (destinationDriveSpend): an org drive's wallet, never the connection owner's, and with no
+ * drive wallet reserved while wallets are live it is skipped before any model call.
  */
 async function enrichTranscript(
   connection: ZoomConnection,
@@ -210,11 +211,14 @@ async function enrichTranscript(
 
   // A gate that cannot be checked (DB outage, lock timeout) must not block the
   // page either: skip the enrichment — no model call, no charge — and say why.
-  const spend = automationSpend(targetDriveId);
+  let billing: ReturnType<typeof destinationDriveSpend>;
   let hold: Awaited<ReturnType<typeof acquireUserCreditHold>>;
   try {
-    hold = await acquireUserCreditHold(connection.userId, {
-      spend,
+    const drive = await lookupDriveBillingFacts(targetDriveId);
+    if (!drive) throw new Error(`destination drive ${targetDriveId} not found`);
+    billing = destinationDriveSpend(drive, targetDriveId, connection.userId);
+    hold = await acquireUserCreditHold(billing.userId, {
+      spend: billing.spend,
       estCostCents: CREDIT_HOLD_ESTIMATE_CENTS * aiCalls,
       skipDailyCap: true,
     });
@@ -237,7 +241,7 @@ async function enrichTranscript(
     if (automationRunUnreserved({
       orgsEnabled: ORGS_ENABLED,
       billingEnabled: isBillingEnabled(),
-      target: spend,
+      target: billing.spend,
       walletId: hold.walletId,
     })) {
       loggers.api.warn('Zoom webhook: AI enrichment skipped (no drive wallet reserved)', {
@@ -246,9 +250,10 @@ async function enrichTranscript(
       });
       return { summary: '', actionItems: [], skippedReason: 'no_drive_wallet' };
     }
+    const settleOn = { userId: billing.userId, walletId: hold.walletId };
     const [summary, actionItems] = await Promise.all([
-      connection.includeAiSummary ? generateTranscriptSummary(connection.userId, plainText, hold.walletId) : Promise.resolve(''),
-      connection.includeActionItems ? extractActionItems(connection.userId, plainText, hold.walletId) : Promise.resolve([]),
+      connection.includeAiSummary ? generateTranscriptSummary(connection.userId, plainText, settleOn) : Promise.resolve(''),
+      connection.includeActionItems ? extractActionItems(connection.userId, plainText, settleOn) : Promise.resolve([]),
     ]);
     return { summary, actionItems };
   } finally {
