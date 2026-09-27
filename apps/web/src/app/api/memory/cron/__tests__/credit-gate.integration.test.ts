@@ -32,6 +32,32 @@ vi.mock('@/lib/ai/core/provider-factory', () => ({
   isProviderError: (r: unknown) => typeof r === 'object' && r !== null && 'error' in r,
 }));
 
+// Page writes snapshot content to object storage (the pre-write snapshot and the
+// version history), which this environment has no credentials for. Only those two
+// storage calls are stubbed; the page row, its revision and every credit table stay
+// real. The version row is skipped with its upload: nothing here reads history.
+vi.mock('@pagespace/lib/services/page-version-service', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@pagespace/lib/services/page-version-service')>()),
+  createPageVersion: vi.fn(async () => ({
+    id: 'test-version',
+    contentRef: 'test-ref',
+    contentSize: 0,
+    compressed: false,
+    storedSize: 0,
+    compressionRatio: 1,
+  })),
+}));
+vi.mock('@pagespace/lib/services/page-content-store', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@pagespace/lib/services/page-content-store')>()),
+  writePageContent: vi.fn(async (content: string, format: string) => ({
+    ref: `${format}:test-${content.length}`,
+    size: content.length,
+    compressed: false,
+    storedSize: content.length,
+    compressionRatio: 1,
+  })),
+}));
+
 vi.mock('@/lib/auth/cron-auth', () => ({
   validateSignedCronRequest: () => null,
 }));
@@ -46,7 +72,10 @@ import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { personalizationCandidates } from '@pagespace/db/schema/personalization';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
+import { pages } from '@pagespace/db/schema/core';
+import { provisionMemoryPages } from '@pagespace/lib/memory/memory-pages';
 import { upsertCandidates } from '@/lib/memory/candidate-service';
+import { checkAndCompactIfNeeded } from '@/lib/memory/compaction-service';
 import { POST } from '../route';
 
 let dbAvailable = false;
@@ -107,6 +136,19 @@ async function activeProUser(balance: { monthlyRemainingCents: number; debtCents
     monthlyPeriodEnd: new Date(now.getTime() + 20 * DAY_MS),
   });
   return user.id;
+}
+
+/** A Home drive with the three memory pages, the bio page already over its 3000-char budget. */
+async function withOverBudgetBio(userId: string): Promise<string> {
+  const home = await factories.createDrive(userId, { kind: 'HOME' });
+  const { bioPageId } = await db.transaction((tx) => provisionMemoryPages(userId, home.id, tx));
+  await db.update(pages).set({ content: 'x'.repeat(3500) }).where(eq(pages.id, bioPageId));
+  return bioPageId;
+}
+
+async function pageContent(pageId: string): Promise<string | null> {
+  const [page] = await db.select({ content: pages.content }).from(pages).where(eq(pages.id, pageId));
+  return page?.content ?? null;
 }
 
 async function balanceOf(userId: string) {
@@ -226,5 +268,53 @@ describe('memory cron credit gate (Postgres)', () => {
 
     expect(await usageRowsOf(exhausted)).toEqual([]);
     expect((await balanceOf(exhausted)).debtCents).toBe(500);
+  }, TEST_TIMEOUT_MS);
+
+  it('a funded user with an over-budget page: compaction runs under the hold and each call settles once', async () => {
+    if (!dbAvailable) return;
+    const funded = await activeProUser({ monthlyRemainingCents: 10_000, debtCents: 0 });
+    const bioPageId = await withOverBudgetBio(funded);
+    generateTextMock.mockImplementation(async ({ system }: { system: string }) =>
+      system.includes('compacting')
+        ? { text: 'A short bio.', usage: USAGE }
+        : { text: '{"rules": "Prefer TypeScript.", "usedInsights": [0]}', usage: USAGE },
+    );
+
+    const res = await POST(new Request('http://web:3000/api/memory/cron', { method: 'POST' }));
+    const body = await res.json();
+    await settled([funded]);
+
+    const usage = await usageRowsOf(funded);
+    // Three discovery passes, the evaluator, and one compaction.
+    expect(usage.map((u) => (u.metadata as { feature: string }).feature).sort()).toEqual([
+      'memory_compaction', 'memory_discovery', 'memory_discovery', 'memory_discovery', 'memory_integration',
+    ]);
+    const ledger = await db
+      .select()
+      .from(creditLedger)
+      .where(and(inArray(creditLedger.aiUsageLogId, usage.map((u) => u.id)), eq(creditLedger.entryType, 'usage')));
+    expect(ledger).toHaveLength(5);
+    expect(new Set(ledger.map((l) => l.aiUsageLogId)).size).toBe(5);
+    const after = await balanceOf(funded);
+    expect(10_000 - after.monthlyRemainingCents).toBe(-ledger.reduce((sum, l) => sum + l.amountCents, 0));
+    expect(await pageContent(bioPageId)).toBe('A short bio.');
+    expect(body.creditSkipped).toBeUndefined();
+    expect(await db.select().from(creditHolds).where(eq(creditHolds.userId, funded))).toEqual([]);
+  }, TEST_TIMEOUT_MS);
+
+  it('a user in debt with an over-budget page: compaction runs no model, charges nothing, and leaves the page as it was', async () => {
+    if (!dbAvailable) return;
+    const userId = await activeProUser({ monthlyRemainingCents: 0, debtCents: 500 });
+    const bioPageId = await withOverBudgetBio(userId);
+
+    const result = await checkAndCompactIfNeeded(userId);
+    await settled([userId]);
+
+    expect(result).toEqual({ compacted: false, fields: [], creditRefusal: 'out_of_credits' });
+    expect(generateTextMock).not.toHaveBeenCalled();
+    expect(await usageRowsOf(userId)).toEqual([]);
+    expect((await balanceOf(userId)).debtCents).toBe(500);
+    expect(await pageContent(bioPageId)).toBe('x'.repeat(3500));
+    expect(await db.select().from(creditHolds).where(eq(creditHolds.userId, userId))).toEqual([]);
   }, TEST_TIMEOUT_MS);
 });
