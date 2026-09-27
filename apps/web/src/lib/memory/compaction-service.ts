@@ -13,6 +13,7 @@ import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factor
 import { BACKGROUND_HEAVY_PROVIDER, BACKGROUND_HEAVY_MODEL } from '@/lib/ai/core/ai-providers-config';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { AIMonitoring, discardUsageOutcome } from '@pagespace/lib/monitoring/ai-monitoring';
+import { reserveMemoryCall } from './memory-credit';
 import { getCurrentPersonalizationPages, updatePersonalizationPage } from './integration-service';
 
 import { MAX_FIELD_LENGTH, compactionTarget, type MemoryField } from './budgets';
@@ -109,6 +110,18 @@ export async function compactField(
     return content;
   }
 
+  // Reserve before the model (SPEND-1). Refused: the page keeps its content, as when the
+  // provider is unavailable, and nothing is charged.
+  const reservation = await reserveMemoryCall(userId, {
+    provider: providerResult.provider,
+    model: providerResult.modelName,
+    inputChars: content.length,
+  });
+  if (!reservation.allowed) {
+    loggers.api.info('Memory compaction: skipped, credit gate refused', { userId, field, reason: reservation.reason });
+    return content;
+  }
+
   try {
     const systemPrompt = COMPACTION_PROMPTS[field];
 
@@ -129,13 +142,19 @@ Compact this by deleting anything that does not change AI behaviour. Output only
       ],
       temperature: 0.3,
       maxRetries: 2,
+    }).catch((error: unknown) => {
+      reservation.release();
+      throw error;
     });
 
+    // Settles the reservation once (trackUsage takes the hold).
     discardUsageOutcome(AIMonitoring.trackUsage({
       userId,
       provider: providerResult.provider,
       model: providerResult.modelName,
       source: 'memory',
+      holdId: reservation.holdId,
+      walletId: reservation.walletId,
       inputTokens: result.usage?.inputTokens,
       outputTokens: result.usage?.outputTokens,
       totalTokens: result.usage

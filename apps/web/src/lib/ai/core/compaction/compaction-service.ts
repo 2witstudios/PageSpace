@@ -10,7 +10,7 @@ import { estimateTokens } from '@pagespace/lib/monitoring/ai-context-calculator'
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
 import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
-import { followOnAdmission } from '@pagespace/lib/billing/follow-on-spend';
+import { callAdmission } from '@pagespace/lib/billing/call-admission';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import type { SpendTarget } from '@pagespace/lib/billing/spend-target';
 import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
@@ -135,9 +135,9 @@ export async function runCompaction(params: RunCompactionParams): Promise<void> 
     // or paused wallet, an exhausted balance) skips the compaction entirely: no model call,
     // no charge, and the stored summary and pointer stay exactly as they were, so the
     // conversation keeps working from the context it already had.
-    const admission = followOnAdmission({
+    const admission = callAdmission({
       meteringExempt: isMeteringExempt(provider),
-      turnSpend: spend,
+      spend,
       estCostCents: estimateChatHoldCentsForModel(compactionModel, {
         inputTokens: estimateTokens(JSON.stringify(transcriptMessages)) + (previousSummary ? estimateTokens(previousSummary) : 0),
       }),

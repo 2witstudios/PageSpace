@@ -639,10 +639,10 @@
       "import": "./dist/billing/spend-target.js",
       "require": "./dist/billing/spend-target.js"
     },
-    "./billing/follow-on-spend": {
-      "types": "./dist/billing/follow-on-spend.d.ts",
-      "import": "./dist/billing/follow-on-spend.js",
-      "require": "./dist/billing/follow-on-spend.js"
+    "./billing/call-admission": {
+      "types": "./dist/billing/call-admission.d.ts",
+      "import": "./dist/billing/call-admission.js",
+      "require": "./dist/billing/call-admission.js"
     },
     "./billing/wallet-views": {
       "types": "./dist/billing/wallet-views.d.ts",
@@ -2838,8 +2838,8 @@
       "billing/spend-target": [
         "./dist/billing/spend-target.d.ts"
       ],
-      "billing/follow-on-spend": [
-        "./dist/billing/follow-on-spend.d.ts"
+      "billing/call-admission": [
+        "./dist/billing/call-admission.d.ts"
       ],
       "billing/credit-backfill": [
         "./dist/billing/credit-backfill.d.ts"

@@ -83,7 +83,7 @@ beforeEach(() => {
     text: 'Summary: user said hello, assistant responded.',
     usage: { inputTokens: 10, outputTokens: 20 },
   } as never);
-  mockGate.mockResolvedValue({ allowed: true, holdId: 'hold-1', walletId: 'w-turn' });
+  mockGate.mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'hold-1', walletId: 'w-turn' });
 });
 
 describe('runCompaction', () => {
@@ -152,7 +152,7 @@ describe('runCompaction', () => {
     });
 
     it('SPEND-6 (partial) an automation turn\'s compaction settles on the wallet the gate reserved on', async () => {
-      mockGate.mockResolvedValue({ allowed: true, holdId: 'hold-a', walletId: 'w-product' });
+      mockGate.mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'hold-a', walletId: 'w-product' });
       await runCompaction({ ...BASE_PARAMS, spend: automationSpend('drive-product') });
       expect(mockTrackUsage.mock.calls[0][0]).toMatchObject({ holdId: 'hold-a', walletId: 'w-product' });
     });

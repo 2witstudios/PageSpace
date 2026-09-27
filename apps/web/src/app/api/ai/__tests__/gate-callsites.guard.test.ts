@@ -45,6 +45,12 @@ function gateCallSlices(src: string): string[] {
 // cover helpers that run a model handed to them.
 const MODEL_CALL = /(?<!function\s)\b(?:createAIProvider|streamText|generateText|generateObject|streamObject|embedMany|embed)\s*\(/;
 const GATE_CALL = 'canConsumeAI(';
+/**
+ * A route's model call is gated when it, or a module it imports directly, calls the gate —
+ * canConsumeAI itself, or reserveMemoryCall, which each memory service calls before its own
+ * model call and which reserves through canConsumeAI (memory-credit.ts, unit-tested).
+ */
+const ROUTE_GATE_CALLS = [GATE_CALL, 'reserveMemoryCall('];
 
 /** Resolve an `@/lib/...` or relative import to its source file, or undefined. */
 function resolveImport(specifier: string, fromFile: string): string | undefined {
@@ -86,8 +92,9 @@ function routeAndDirectImports(file: string): Array<{ path: string; src: string 
  * `@/lib/workflows/workflow-credit-gate`, and a new ungated route fails outright.
  */
 const UNGATED_BY_DESIGN: Record<string, string> = {
-  '/api/memory/cron/route.ts':
-    'HMAC-signed system cron (validateSignedCronRequest), not user-reachable, so no user fan-out; runs only for paying tiers (MEMORY_PAYING_TIERS), once per user per day; every model call still records and debits usage via AIMonitoring.trackUsage (source: memory)',
+  // Empty. The memory cron was here ("records and debits usage"), which meant no balance
+  // check and no hold, so an out-of-credit person was pushed into debt every night. Each
+  // memory model call now reserves the person's own credits first (reserveMemoryCall).
 };
 
 function ungatedModelRoutes(): string[] {
@@ -95,7 +102,7 @@ function ungatedModelRoutes(): string[] {
   for (const file of ROUTE_FILES) {
     const scanned = routeAndDirectImports(file);
     const invokesModel = scanned.some(({ src }) => MODEL_CALL.test(src));
-    const gated = scanned.some(({ src }) => src.includes(GATE_CALL));
+    const gated = scanned.some(({ src }) => ROUTE_GATE_CALLS.some((gate) => src.includes(gate)));
     if (invokesModel && !gated) offenders.push(apiRelPath(file));
   }
   return offenders;
@@ -111,7 +118,7 @@ describe('AI gate call-site guards', () => {
 
   it('the ungated list is exactly these routes, each with a reason', () => {
     // Pinned literally: growing the list must fail here and be argued in review.
-    expect(Object.keys(UNGATED_BY_DESIGN)).toEqual(['/api/memory/cron/route.ts']);
+    expect(Object.keys(UNGATED_BY_DESIGN)).toEqual([]);
     for (const reason of Object.values(UNGATED_BY_DESIGN)) {
       expect(reason.length).toBeGreaterThan(20);
     }
@@ -120,6 +127,14 @@ describe('AI gate call-site guards', () => {
   it('every listed route is still ungated (a fixed route must leave the list)', () => {
     const stillUngated = new Set(ungatedModelRoutes());
     expect(Object.keys(UNGATED_BY_DESIGN).filter((rel) => !stillUngated.has(rel))).toEqual([]);
+  });
+
+  it('SPEND-1 (partial) the memory cron runs a model and is gated (it left the ungated list)', () => {
+    const cron = ROUTE_FILES.find((f) => apiRelPath(f) === '/api/memory/cron/route.ts');
+    expect(cron).toBeDefined();
+    const scanned = routeAndDirectImports(cron!);
+    expect(scanned.some(({ src }) => MODEL_CALL.test(src))).toBe(true);
+    expect(ungatedModelRoutes()).not.toContain('/api/memory/cron/route.ts');
   });
 
   it('the model-call scan sees the /btw side-question stream (guard is not vacuous)', () => {
@@ -194,5 +209,139 @@ describe('AI gate call-site guards', () => {
     // A row billed on OpenRouter cost but missing its generation id can never be
     // reconciled against the authoritative /generation cost — capture must travel together.
     expect(offenders).toEqual([]);
+  });
+});
+
+// ─── Every module that runs a model, not only routes ─────────────────────────────────────
+
+const SRC_DIR = join(process.cwd(), 'src');
+
+function allSourceFiles(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === '__tests__' || entry.name === 'test') continue;
+      out.push(...allSourceFiles(full));
+    } else if (/\.tsx?$/.test(entry.name) && !/\.(test|spec)\.tsx?$/.test(entry.name) && !entry.name.endsWith('.d.ts')) {
+      out.push(full);
+    }
+  }
+  return out;
+}
+
+/** Relative to apps/web, forward slashes. */
+const webRelPath = (file: string) => relative(process.cwd(), file).split(sep).join('/');
+
+/** The AI SDK entry points that run a model. */
+const MODEL_ENTRY_POINTS = new Set([
+  'streamText', 'generateText', 'generateObject', 'streamObject', 'embed', 'embedMany',
+  'generateImage', 'experimental_generateImage', 'experimental_transcribe', 'experimental_generateSpeech',
+]);
+
+/**
+ * Runs a model: imports an AI SDK entry point as a value (a call can hide behind an injected
+ * parameter, as the /btw side question's `streamText: stream = streamText` does, so the
+ * import is the signal, not the call), or calls a provider's HTTP API directly.
+ */
+function runsModel(src: string): boolean {
+  for (const match of src.matchAll(/import\s*\{([^}]*)\}\s*from\s*['"]ai['"]/g)) {
+    const names = match[1].split(',').map((n) => n.trim()).filter((n) => n && !n.startsWith('type '));
+    if (names.some((n) => MODEL_ENTRY_POINTS.has(n.split(/\s+as\s+/)[0].trim()))) return true;
+  }
+  // Free lookups (the model list, a generation's recorded cost) run no model.
+  return /fetch\(\s*['"`]https:\/\/(?:api\.openai\.com|openrouter\.ai\/api)\/v1\/(?!models\b|generation\b)/.test(src);
+}
+
+/** The credit gate or one of its wrappers — each reserves through canConsumeAI before the call. */
+const MODULE_GATE = /\b(?:canConsumeAI|gateUserCall|reserveMemoryCall|acquire(?:User|Workflow|Mention)CreditHold)\(/;
+
+/**
+ * Modules that run a model without calling the gate themselves because EVERY caller gates
+ * first. Each names the one file that takes that gate and imports the module; the guard
+ * checks both, so an entry cannot outlive the gate it relies on. Pinned exactly: a new
+ * module that runs a model either gates its own call or is argued onto this list in review.
+ */
+const GATED_BY_CALLER: Record<string, { gatedIn: string; reason: string }> = {
+  'src/lib/ai/btw/side-question.ts': {
+    gatedIn: 'src/app/api/ai/btw/route.ts',
+    reason: 'runs only from POST /api/ai/btw, which gates with canConsumeAI and settles the hold once',
+  },
+  'src/lib/ai/core/image-generation.ts': {
+    gatedIn: 'src/lib/ai/tools/image-generation-tools.ts',
+    reason: 'runs only from the generate_image tool, which gates with canConsumeAI on its turn\'s spend before generating',
+  },
+  'src/lib/ai/tools/agent-communication-tools.ts': {
+    gatedIn: 'src/lib/channels/agent-mention-responder.ts',
+    reason: 'executeAskAgent runs inside a gated caller: a channel mention (acquireMentionCreditHold) or a chat turn, consult or v1 completion whose own hold is live while the tool runs; it settles on that caller\'s walletId',
+  },
+  'src/lib/integrations/zoom/extract-action-items.ts': {
+    gatedIn: 'src/lib/integrations/zoom/process-webhook.ts',
+    reason: 'called only from processZoomWebhook, which reserves the destination drive\'s payer (acquireUserCreditHold) before either enrichment call',
+  },
+  'src/lib/integrations/zoom/generate-summary.ts': {
+    gatedIn: 'src/lib/integrations/zoom/process-webhook.ts',
+    reason: 'called only from processZoomWebhook, which reserves the destination drive\'s payer (acquireUserCreditHold) before either enrichment call',
+  },
+  'src/lib/workflows/workflow-executor.ts': {
+    gatedIn: 'src/lib/workflows/workflow-credit-gate.ts',
+    reason: 'every run is admitted by acquireWorkflowCreditHold or carries the creditSpend its trigger executor reserved with canConsumeAI; a run with neither fails closed (automationRunUnreserved)',
+  },
+};
+
+const moduleSources = () => allSourceFiles(SRC_DIR).map((path) => ({ rel: webRelPath(path), src: stripComments(readFileSync(path, 'utf8')) }));
+
+describe('AI gate call-site guards: every module that runs a model', () => {
+  const modules = moduleSources();
+  const modelModules = modules.filter(({ src }) => runsModel(src));
+
+  it('SPEND-1 (partial) every module that runs a model gates the call itself or is pinned to the gate its callers take', () => {
+    const offenders = modelModules
+      .filter(({ rel, src }) => !MODULE_GATE.test(src) && !(rel in GATED_BY_CALLER))
+      .map(({ rel }) => rel);
+    expect(offenders).toEqual([]);
+  });
+
+  it('the gated-by-caller list is exactly these modules, each still running a model with no gate of its own', () => {
+    expect(Object.keys(GATED_BY_CALLER).sort()).toEqual([
+      'src/lib/ai/btw/side-question.ts',
+      'src/lib/ai/core/image-generation.ts',
+      'src/lib/ai/tools/agent-communication-tools.ts',
+      'src/lib/integrations/zoom/extract-action-items.ts',
+      'src/lib/integrations/zoom/generate-summary.ts',
+      'src/lib/workflows/workflow-executor.ts',
+    ]);
+    const bySrc = new Map(modules.map(({ rel, src }) => [rel, src]));
+    for (const rel of Object.keys(GATED_BY_CALLER)) {
+      const src = bySrc.get(rel);
+      expect(src, rel).toBeDefined();
+      expect(runsModel(src!), `${rel} no longer runs a model: remove it`).toBe(true);
+      expect(MODULE_GATE.test(src!), `${rel} now gates itself: remove it`).toBe(false);
+    }
+  });
+
+  it('each pinned module\'s caller takes the gate and imports the module', () => {
+    const bySrc = new Map(modules.map(({ rel, src }) => [rel, src]));
+    for (const [rel, { gatedIn, reason }] of Object.entries(GATED_BY_CALLER)) {
+      const caller = bySrc.get(gatedIn);
+      expect(caller, gatedIn).toBeDefined();
+      expect(MODULE_GATE.test(caller!), `${gatedIn} takes no gate`).toBe(true);
+      const moduleName = rel.replace(/^.*\//, '').replace(/\.tsx?$/, '');
+      expect(new RegExp(`['"][^'"]*/${moduleName}['"]`).test(caller!), `${gatedIn} does not import ${rel}`).toBe(true);
+      expect(reason.length).toBeGreaterThan(20);
+    }
+  });
+
+  it('the module scan sees the model calls it must (guard is not vacuous)', () => {
+    const rels = modelModules.map(({ rel }) => rel);
+    for (const expected of [
+      'src/lib/ai/chat-pipeline/page-chat-turn.ts',
+      'src/lib/ai/core/compaction/compaction-service.ts',
+      'src/lib/memory/discovery-service.ts',
+      'src/lib/ai/btw/side-question.ts',
+      'src/app/api/voice/synthesize/route.ts',
+    ]) {
+      expect(rels, expected).toContain(expected);
+    }
   });
 });
