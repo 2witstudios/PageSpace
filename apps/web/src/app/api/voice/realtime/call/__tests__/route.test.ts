@@ -393,4 +393,23 @@ describe('POST /api/voice/realtime/call', () => {
       );
     });
   });
+
+  describe('the drive the call spends in (SPEND-1)', () => {
+    it('SPEND-1 (partial) should hand the bound conversation\'s drive to the handshake, which carries it to the meter', async () => {
+      mockLoadVoiceBinding.mockResolvedValue({ seed: [], instructions: 'x', tools: TOOLS, spendDriveId: 'drive-1' });
+
+      await POST(callRequest({ sdp: 'v=0 offer', conversationId: 'conv1' }));
+
+      expect(mockRunCallHandshake).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ spendDriveId: 'drive-1' }));
+    });
+
+    it('SPEND-1 (partial) should never take the drive from the request body', async () => {
+      mockLoadVoiceBinding.mockResolvedValue({ seed: [], instructions: 'x', tools: TOOLS });
+
+      await POST(callRequest({ sdp: 'v=0 offer', conversationId: 'conv1', spendDriveId: 'someone-elses-drive' }));
+
+      const [, input] = mockRunCallHandshake.mock.calls[0] as unknown[];
+      expect(input).not.toHaveProperty('spendDriveId');
+    });
+  });
 });

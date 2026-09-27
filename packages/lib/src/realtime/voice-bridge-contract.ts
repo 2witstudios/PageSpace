@@ -241,6 +241,12 @@ export type VoiceAssistant = z.infer<typeof voiceAssistantSchema>;
  * handed the realtime default persona on a call the UI presents as talking to
  * a specific assistant. Both are optional because an unbound call is a real,
  * supported state — it has no assistant to be.
+ *
+ * `spendDriveId` is the drive the call spends in (SPEND-1): the drive of the page agent the
+ * bound conversation belongs to, resolved web-side from that same authorized read, the way a
+ * typed turn on that page spends in the page's drive. Never taken from the browser. Absent
+ * for an unbound or Global Assistant call, which spends the caller's personal credits
+ * (SPEND-8). The realtime server meters every window on it (call-metering.ts).
  */
 export const realtimeAttachPayloadSchema = z.object({
   callId: realtimeCallIdSchema,
@@ -255,6 +261,7 @@ export const realtimeAttachPayloadSchema = z.object({
   seed: z.array(realtimeSeedEventSchema).default([]),
   instructions: z.string().min(1).optional(),
   assistant: voiceAssistantSchema.optional(),
+  spendDriveId: z.string().min(1).optional(),
 });
 
 export type RealtimeAttachPayload = z.infer<typeof realtimeAttachPayloadSchema>;

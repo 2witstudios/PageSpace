@@ -82,6 +82,7 @@ const loadAgentPage = async (pageId: string): Promise<AgentPage | undefined> => 
       systemPrompt: pages.systemPrompt,
       enabledTools: pages.enabledTools,
       sandboxEnabled: pages.sandboxEnabled,
+      driveId: pages.driveId,
     })
     .from(pages)
     .where(eq(pages.id, pageId));
@@ -93,6 +94,7 @@ const loadAgentPage = async (pageId: string): Promise<AgentPage | undefined> => 
         systemPrompt: row.systemPrompt,
         enabledTools: Array.isArray(row.enabledTools) ? (row.enabledTools as string[]) : null,
         sandboxEnabled: Boolean(row.sandboxEnabled),
+        driveId: row.driveId,
       }
     : undefined;
 };

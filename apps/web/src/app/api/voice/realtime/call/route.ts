@@ -16,7 +16,9 @@
  * NOT metered here. A realtime call's cost accrues per `response.done` over its
  * whole lifetime, on the socket the realtime server holds; a credit hold taken
  * at handshake time could only ever be a guess at a call that has not happened
- * yet. Metering belongs to the process that sees the usage events.
+ * yet. Metering belongs to the process that sees the usage events. What this
+ * route does decide is WHERE the call spends: the bound conversation's drive,
+ * carried to the realtime server on the signed attach (SPEND-1).
  */
 
 import { NextResponse } from 'next/server';
@@ -160,6 +162,9 @@ export async function POST(request: Request) {
         seed: binding.seed,
         instructions: binding.instructions,
         ...(binding.assistant === undefined ? {} : { assistant: binding.assistant }),
+        // Where the call spends (SPEND-1): the bound conversation's drive, resolved from
+        // that authorized read, never from the body. None → personal credits (SPEND-8).
+        ...(binding.spendDriveId === undefined ? {} : { spendDriveId: binding.spendDriveId }),
         ...(typeof timezoneRaw === 'string' && timezoneRaw.length > 0
           ? { timezone: timezoneRaw }
           : {}),

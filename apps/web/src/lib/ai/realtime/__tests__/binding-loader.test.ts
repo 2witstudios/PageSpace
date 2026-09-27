@@ -34,6 +34,7 @@ const agentPage = (over: Partial<AgentPage> = {}): AgentPage => ({
   systemPrompt: null,
   enabledTools: null,
   sandboxEnabled: false,
+  driveId: 'drive-1',
   ...over,
 });
 
@@ -313,5 +314,42 @@ describe('loadVoiceBinding — the instructions', () => {
     expect(seed).toEqual([]);
     expect(d.buildCallContext).toHaveBeenCalledWith({ userId: 'u1' });
     expect(instructions).toContain('# THIS IS A VOICE CALL');
+  });
+});
+
+describe('loadVoiceBinding — the drive the call spends in (SPEND-1)', () => {
+  it('SPEND-1 (partial) given a page agent\'s conversation, should spend in that agent page\'s drive, as a typed turn on it does', async () => {
+    const { deps: d } = deps({ loadConversation: vi.fn(async () => pageConversation()) });
+
+    const binding = await loadVoiceBinding(d, { userId: 'u1', conversationId: 'conv1' });
+
+    expect(binding.spendDriveId).toBe('drive-1');
+  });
+
+  it('SPEND-8 (partial) given a Global Assistant conversation, should name no drive (personal credits)', async () => {
+    const { deps: d } = deps();
+
+    expect((await loadVoiceBinding(d, { userId: 'u1', conversationId: 'conv1' })).spendDriveId).toBeUndefined();
+  });
+
+  it('SPEND-8 (partial) given an unbound call, should name no drive', async () => {
+    const { deps: d } = deps();
+
+    expect((await loadVoiceBinding(d, { userId: 'u1' })).spendDriveId).toBeUndefined();
+  });
+
+  it('given a conversation the caller cannot read, should name no drive — nothing about it is trusted', async () => {
+    const { deps: d } = deps({ loadConversation: vi.fn(async () => pageConversation()), canAccess: vi.fn(async () => false) });
+
+    expect((await loadVoiceBinding(d, { userId: 'intruder', conversationId: 'conv1' })).spendDriveId).toBeUndefined();
+  });
+
+  it('given a conversation on a non-agent page, should name no drive', async () => {
+    const { deps: d } = deps({
+      loadConversation: vi.fn(async () => pageConversation({ contextId: 'doc1' })),
+      loadAgentPage: vi.fn(async () => agentPage({ id: 'doc1', type: 'DOCUMENT' })),
+    });
+
+    expect((await loadVoiceBinding(d, { userId: 'u1', conversationId: 'conv1' })).spendDriveId).toBeUndefined();
   });
 });
