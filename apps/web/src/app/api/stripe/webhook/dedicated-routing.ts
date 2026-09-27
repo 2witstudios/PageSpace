@@ -41,9 +41,20 @@ import {
   classifySubscriptionKind,
   type StripeSubscriptionKind,
 } from '@pagespace/lib/services/app-hosting/dedicated-tier';
+import { ORG_SUBSCRIPTION_KIND } from '@pagespace/lib/billing/org-subscription-core';
 
 /** Stripe metadata, narrowed to what the classifier reads. */
 type MetadataBag = Record<string, string> | null | undefined;
+
+/**
+ * The org Business subscription's kind (D1) is KNOWN, not a typo: it classifies as
+ * `unknown` here (not dedicated) and the route's org fork, which reads the CUSTOMER,
+ * takes it before the account path (org-handlers.ts). Only a kind neither fork knows
+ * is worth a warning.
+ */
+function isUnrecognisedKind(kind: StripeSubscriptionKind, metadata: MetadataBag): boolean {
+  return kind === 'unknown' && metadata?.kind !== ORG_SUBSCRIPTION_KIND;
+}
 
 /**
  * Classify one subscription, logging an unrecognised `kind` on the way past.
@@ -57,7 +68,7 @@ export function routeSubscription(
   eventId: string,
 ): StripeSubscriptionKind {
   const kind = classifySubscriptionKind(subscription.metadata as MetadataBag);
-  if (kind === 'unknown') {
+  if (isUnrecognisedKind(kind, subscription.metadata as MetadataBag)) {
     loggers.api.warn(
       'Stripe subscription carries an unrecognised metadata kind; handling it as an account plan',
       { eventId, subscriptionId: subscription.id, kind: subscription.metadata?.kind },
@@ -84,7 +95,7 @@ export function routeInvoice(invoice: Stripe.Invoice, eventId: string): StripeSu
   const parent = invoice.parent;
   const metadata = parent?.subscription_details?.metadata as MetadataBag;
   const kind = classifySubscriptionKind(metadata);
-  if (kind === 'unknown') {
+  if (isUnrecognisedKind(kind, metadata)) {
     loggers.api.warn(
       'Stripe invoice carries an unrecognised subscription metadata kind; handling it as an account plan',
       { eventId, invoiceId: invoice.id, kind: metadata?.kind },

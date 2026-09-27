@@ -93,8 +93,12 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 
 const mockApplyStripeFunding = vi.hoisted(() => vi.fn());
 vi.mock('@pagespace/lib/billing/credit-funding', () => ({ applyStripeFunding: mockApplyStripeFunding }));
-vi.mock('@pagespace/lib/billing/wallet-funding-shell', () => ({
-  applyOrgPoolRefill: vi.fn().mockResolvedValue({ kind: 'not_org' }),
+// Every customer here is a person's: the org fork (org-handlers) declines every event.
+vi.mock('../org-handlers', () => ({
+  routeOrgSubscriptionEvent: vi.fn().mockResolvedValue(false),
+  routeOrgInvoicePaid: vi.fn().mockResolvedValue(false),
+  routeOrgInvoicePaymentFailed: vi.fn().mockResolvedValue(false),
+  orgForStripeCustomer: vi.fn().mockResolvedValue(null),
 }));
 vi.mock('@/lib/billing/send-payment-receipt-email', () => ({
   sendSubscriptionReceiptEmail: vi.fn(),
