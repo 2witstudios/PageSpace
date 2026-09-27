@@ -394,7 +394,7 @@ describe('POST /api/voice/realtime/call', () => {
     });
   });
 
-  describe('the drive the call spends in (SPEND-1)', () => {
+  describe('the drive the call spends in', () => {
     it('SPEND-1 (partial) should hand the bound conversation\'s drive to the handshake, which carries it to the meter', async () => {
       mockLoadVoiceBinding.mockResolvedValue({ seed: [], instructions: 'x', tools: TOOLS, spendDriveId: 'drive-1' });
 

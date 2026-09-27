@@ -189,7 +189,7 @@ describe('applyIntegrationDecisions', () => {
   });
 });
 
-describe('evaluateAndIntegrate — the credit gate (SPEND-1)', () => {
+describe('evaluateAndIntegrate — the credit gate', () => {
   const candidate = {
     id: 'cand-1',
     userId: 'user-1',

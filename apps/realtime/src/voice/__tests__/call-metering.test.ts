@@ -575,7 +575,7 @@ describe('startCallMeter — stopping', () => {
   });
 });
 
-describe('startCallMeter — the source a call spends (SPEND-1)', () => {
+describe('startCallMeter — the source a call spends', () => {
   beforeEach(() => vi.clearAllMocks());
 
   const DRIVE_TARGET = { kind: 'drive' as const, driveId: 'drive-1', chosen: null, conversationId: 'conv1' };

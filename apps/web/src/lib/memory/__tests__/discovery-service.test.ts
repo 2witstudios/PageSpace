@@ -323,7 +323,7 @@ describe('runDiscoveryPasses', () => {
   });
 });
 
-describe('runDiscoveryPasses — the credit gate (SPEND-1)', () => {
+describe('runDiscoveryPasses — the credit gate', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockReserve.mockImplementation(async () => ({ allowed: true as const, holdId: 'hold-m', walletId: 'w-root', release: mockReleaseMemoryHold }));

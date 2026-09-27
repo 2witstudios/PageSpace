@@ -205,7 +205,7 @@ describe('checkAndCompactIfNeeded', () => {
   });
 });
 
-describe('compactField — the credit gate (SPEND-1)', () => {
+describe('compactField — the credit gate', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     const { createAIProvider } = await import('@/lib/ai/core/provider-factory');

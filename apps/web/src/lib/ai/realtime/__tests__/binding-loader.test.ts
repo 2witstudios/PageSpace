@@ -317,7 +317,7 @@ describe('loadVoiceBinding — the instructions', () => {
   });
 });
 
-describe('loadVoiceBinding — the drive the call spends in (SPEND-1)', () => {
+describe('loadVoiceBinding — the drive the call spends in', () => {
   it('SPEND-1 (partial) given a page agent\'s conversation, should spend in that agent page\'s drive, as a typed turn on it does', async () => {
     const { deps: d } = deps({ loadConversation: vi.fn(async () => pageConversation()) });
 

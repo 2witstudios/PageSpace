@@ -115,7 +115,7 @@ describe('runCompaction', () => {
     expect(call.source).toBe('compaction');
   });
 
-  describe('the credit gate (SPEND-1: one source chosen and reserved before the call)', () => {
+  describe('the credit gate: one source chosen and reserved before the call', () => {
     it('SPEND-1 (partial) an exhausted actor\'s compaction is refused before the model: no model call, no charge, no summary persisted', async () => {
       mockGate.mockResolvedValue({ allowed: false, reason: 'out_of_credits' });
       await expect(runCompaction(BASE_PARAMS)).resolves.toBeUndefined();

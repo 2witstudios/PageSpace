@@ -428,7 +428,7 @@ describe('runCallHandshake — the bound assistant', () => {
   });
 });
 
-describe('runCallHandshake — the drive the call spends in (SPEND-1)', () => {
+describe('runCallHandshake — the drive the call spends in', () => {
   it('SPEND-1 (partial) given the bound conversation\'s drive, should carry it to the realtime server that meters the call', async () => {
     const { deps, calls } = harness();
 
