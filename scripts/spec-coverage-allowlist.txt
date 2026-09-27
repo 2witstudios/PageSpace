@@ -77,7 +77,6 @@ POL-8
 POL-9
 POL-10
 POL-11
-SEAT-1
 # SEAT-2 (tier table: Free, Pro, Business $50 with 5 seats + $10/extra seat; Business is the org
 # plan — buying it creates the org — and is not sold to a lone user) re-added per review
 # 5230424182 on #2657: the tier table, prices and lone-user refusal are proven, so those tests are
