@@ -652,6 +652,13 @@ describe('startCallMeter — the source a call spends', () => {
     expect(h.track.mock.calls[0][0]).toMatchObject({ holdId: 'hold-1', walletId: 'w-drive' });
   });
 
+  it('SPEND-4 (partial) the meter exposes the pinned source every window spends, for the call\'s tools to inherit', async () => {
+    const gate = driveGate();
+    const { options } = harness({ spend: DRIVE_TARGET, gate: gate as unknown as CallMeterOptions['gate'] });
+    const meter = await startedMeter(options);
+    expect(meter.spend).toEqual({ ...DRIVE_TARGET, chosen: 'drive_wallet' });
+  });
+
   it('SPEND-8 (partial) a call with no drive spends personal credits', async () => {
     const { options, h } = harness();
     await startedMeter(options);

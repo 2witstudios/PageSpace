@@ -48,6 +48,7 @@ function fakeMeter(): CallMeter & { stops: MeterStopReason[] } {
     }),
     billedDollars: 0,
     stopped: false,
+    spend: { kind: 'personal' },
   };
 }
 

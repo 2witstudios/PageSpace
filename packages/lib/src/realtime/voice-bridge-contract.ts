@@ -289,6 +289,20 @@ export type RealtimeAttachPayload = z.infer<typeof realtimeAttachPayloadSchema>;
  * bound agent instead of as the person who started the call — see
  * `voiceAssistantSchema` for why echoing it is not a new trust assumption.
  */
+/**
+ * The source a call spends, echoed on each tool dispatch so a tool that gates its own model
+ * call (generate_image) spends where the call does (SPEND-1): the drive the web tier resolved
+ * for the call, and the source its opening hold pinned. Absent for a call on the caller's
+ * personal credits. It rides the same HMAC as `userId`, so echoing it adds no trust
+ * assumption.
+ */
+export const voiceToolSpendSchema = z.object({
+  driveId: z.string().min(1),
+  chosen: z.enum(['drive_wallet', 'seat_allowance', 'own_credits']).nullable(),
+});
+
+export type VoiceToolSpend = z.infer<typeof voiceToolSpendSchema>;
+
 export const voiceToolDispatchSchema = z.object({
   kind: z.literal('tool'),
   callId: realtimeCallIdSchema,
@@ -299,6 +313,7 @@ export const voiceToolDispatchSchema = z.object({
   timezone: z.string().min(1).optional(),
   locationContext: voiceLocationContextSchema.optional(),
   assistant: voiceAssistantSchema.optional(),
+  spend: voiceToolSpendSchema.optional(),
 });
 
 /**

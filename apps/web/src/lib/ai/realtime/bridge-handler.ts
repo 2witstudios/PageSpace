@@ -104,6 +104,7 @@ export const handleVoiceBridgeRequest = async (
           ? {}
           : { locationContext: request.locationContext }),
         ...(request.assistant === undefined ? {} : { assistant: request.assistant }),
+        ...(request.spend === undefined ? {} : { spend: request.spend }),
       },
       deps.model,
     );

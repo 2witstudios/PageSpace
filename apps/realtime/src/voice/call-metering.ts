@@ -84,6 +84,11 @@ export type CallMeter = {
   /** Everything billed so far, across every settle. */
   readonly billedDollars: number;
   readonly stopped: boolean;
+  /**
+   * The source every window reserves on: the call's target with the source its opening
+   * hold resolved pinned. The call's tools spend it too (SPEND-1).
+   */
+  readonly spend: SpendTarget;
 };
 
 export type CallMeterOptions = {
@@ -368,6 +373,7 @@ export const startCallMeter = async (
     get stopped() {
       return stopped;
     },
+    spend: windowSpend,
   };
 
   return { ok: true, meter };
