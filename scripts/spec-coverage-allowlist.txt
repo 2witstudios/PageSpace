@@ -106,10 +106,11 @@ SPEND-2
 # the person's default, proven against Postgres; the Settings surface that sets the default is UI-10.
 SPEND-3
 # SPEND-4 (partial, ow-c2, ow-fix-spend-controls): empty chosen source refuses, names it, offers the rest,
-# charges zero (a spent seat allowance says so in the 402); a drive-rule fallback reaches the gate result
-# ({from,to}) and both chat streams (data-spend-fallback). Unproven: a client component rendering the fallback
-# part and cause.refusal (UI-8); the non-chat surfaces (v1/chat/completions, btw, consult, mentions) drop
-# gate.fallback, so their fallback is logged only; overshoot on a fallback call landing per WAL-6(b).
+# charges zero (a seat refused by its allowance says so in the 402); a drive-rule fallback reaches the gate
+# result ({from,to}), both chat streams (data-spend-fallback) and both chat renderers (SpendFallbackNotice).
+# Unproven: the header chip and strip (UI-8); the non-chat surfaces (v1/chat/completions, btw, consult,
+# mentions) drop gate.fallback, so their fallback is logged only; overshoot on a fallback call landing per
+# WAL-6(b).
 SPEND-4
 # SPEND-6 (partial, ow-c2): automations resolve to the drive wallet or skip, never a person; wiring every
 # automation kind and logging the skip are unproven until C4.
@@ -149,7 +150,8 @@ WAL-1
 # together they can overshoot the allowance once, and surfaces with no mid-stream abort (v1/chat/completions,
 # btw, consult, channel mentions, image generation) can overshoot by one call's actual cost; the overshoot is
 # pool debt (WAL-6) and every later call that period is refused. A hold past its 15-minute TTL, a deferred
-# settle claim, or releaseHold without the pool lock are briefly invisible to the cap. The org's own
+# settle claim, or releaseHold without the pool lock are briefly invisible to the cap. A per-consumer daily cap binds
+# when set; no daily default is applied (D20.5's 10 credits is below one reservation). The org's own
 # seat-allowance amount waits for the POL-7 store.
 WAL-2
 # WAL-3 (partial, ow-c2): allocation draws against the parent as spend happens and legs last until spent,
