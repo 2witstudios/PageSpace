@@ -130,9 +130,11 @@ export async function mirrorOrgSubscription(
       currentPeriodEnd: fetched.currentPeriodEnd === null ? null : new Date(fetched.currentPeriodEnd * 1000),
       cancelAtPeriodEnd: fetched.cancelAtPeriodEnd,
     };
-    const before = deriveOrgStatus({ billingEnabled, subscription: stored, now }).status;
+    // orgCreatedAt only matters with no subscription row; here there always is one.
+    const orgCreatedAt = stored.createdAt;
+    const before = deriveOrgStatus({ billingEnabled, subscription: stored, orgCreatedAt, now }).status;
     await tx.update(orgSubscriptions).set(next).where(eq(orgSubscriptions.id, stored.id));
-    const after = deriveOrgStatus({ billingEnabled, subscription: next, now }).status;
+    const after = deriveOrgStatus({ billingEnabled, subscription: next, orgCreatedAt, now }).status;
     return { kind: 'applied', orgId, stripeStatus: fetched.status, before, after, transition: orgLapseTransition(before, after) };
   });
 
