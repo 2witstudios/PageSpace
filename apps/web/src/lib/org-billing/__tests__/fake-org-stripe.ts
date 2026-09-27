@@ -9,17 +9,30 @@
  *     customers from search until `indexSearch()` runs.
  *   - LOST RESPONSES: `loseNextResponse(op)` lets Stripe EXECUTE the write and then
  *     throws a connection error, as a timeout after the request landed would.
+ *   - IN-FLIGHT KEYS: a second request with a key whose first request is still running is
+ *     refused, as Stripe refuses it ("another request with this key is in progress").
  *
  * Every write is counted, so a test can assert that a replay created nothing.
  */
 import type { OrgBillingStripe, OrgStripeSubscription } from '../org-subscription';
-import type { OrgBusinessSubscriptionParams, OrgCustomerParams } from '@pagespace/lib/billing/org-subscription-core';
+import type {
+  OrgBusinessSubscriptionParams,
+  OrgCustomerCreateParams,
+  OrgCustomerDetails,
+} from '@pagespace/lib/billing/org-subscription-core';
 
-type WriteOp = 'createCustomer' | 'createSubscription' | 'createSubscriptionItem' | 'updateSubscriptionItemQuantity' | 'cancelSubscription';
+type WriteOp =
+  | 'createCustomer'
+  | 'updateCustomer'
+  | 'createSubscription'
+  | 'createSubscriptionItem'
+  | 'updateSubscriptionItemQuantity'
+  | 'cancelSubscription';
 
 interface Customer {
   id: string;
-  params: OrgCustomerParams;
+  params: OrgCustomerCreateParams;
+  details: OrgCustomerDetails | null;
   created: number;
 }
 
@@ -28,12 +41,13 @@ export class FakeOrgStripe implements OrgBillingStripe {
   subscriptions = new Map<string, OrgStripeSubscription>();
   writes: Record<WriteOp, number> = {
     createCustomer: 0,
+    updateCustomer: 0,
     createSubscription: 0,
     createSubscriptionItem: 0,
     updateSubscriptionItemQuantity: 0,
     cancelSubscription: 0,
   };
-  reads = { findCustomerByOrgId: 0, listCustomerSubscriptions: 0 };
+  reads = { findCustomerByOrgId: 0, listCustomerSubscriptions: 0, retrieveSubscription: 0 };
   /** Every idempotency key a write was sent with, in order. */
   keysSeen: string[] = [];
   searchLag = false;
@@ -41,6 +55,7 @@ export class FakeOrgStripe implements OrgBillingStripe {
   writeDelayMs = 0;
 
   private idempotent = new Map<string, { params: string; result: unknown }>();
+  private inFlight = new Set<string>();
   private searchable = new Set<string>();
   private lose = new Set<WriteOp>();
   private fail = new Map<WriteOp, Error>();
@@ -72,6 +87,20 @@ export class FakeOrgStripe implements OrgBillingStripe {
 
   private async write<T>(op: WriteOp, key: string, params: unknown, run: () => T): Promise<T> {
     this.keysSeen.push(key);
+    if (this.inFlight.has(key)) {
+      throw Object.assign(new Error('There is currently another in-progress request using this Idempotent Key.'), {
+        type: 'StripeIdempotencyError',
+      });
+    }
+    this.inFlight.add(key);
+    try {
+      return await this.execute(op, key, params, run);
+    } finally {
+      this.inFlight.delete(key);
+    }
+  }
+
+  private async execute<T>(op: WriteOp, key: string, params: unknown, run: () => T): Promise<T> {
     if (this.writeDelayMs > 0) await new Promise((r) => setTimeout(r, this.writeDelayMs));
     const failure = this.fail.get(op);
     if (failure) {
@@ -98,13 +127,42 @@ export class FakeOrgStripe implements OrgBillingStripe {
     return result;
   }
 
-  async createCustomer(params: OrgCustomerParams, idempotencyKey: string): Promise<{ id: string }> {
+  async createCustomer(params: OrgCustomerCreateParams, idempotencyKey: string): Promise<{ id: string }> {
     return this.write('createCustomer', idempotencyKey, params, () => {
       const id = this.nextId('cus');
-      this.customers.set(id, { id, params, created: (this.clock += 1) });
+      this.customers.set(id, { id, params, details: null, created: (this.clock += 1) });
       if (!this.searchLag) this.searchable.add(id);
       return { id };
     });
+  }
+
+  async updateCustomer(customerId: string, details: OrgCustomerDetails, idempotencyKey: string): Promise<void> {
+    await this.write('updateCustomer', idempotencyKey, { customerId, details }, () => {
+      const customer = this.customers.get(customerId);
+      if (!customer) throw new Error(`No such customer: '${customerId}'`);
+      customer.details = { ...details };
+      return null;
+    });
+  }
+
+  async retrieveSubscription(subscriptionId: string): Promise<OrgStripeSubscription> {
+    this.reads.retrieveSubscription += 1;
+    const sub = this.subscriptions.get(subscriptionId);
+    if (!sub) throw new Error(`No such subscription: '${subscriptionId}'`);
+    return structuredClone(sub);
+  }
+
+  /** Test helper: end a subscription in Stripe (a cardless trial ending, an expired incomplete). */
+  endSubscription(subscriptionId: string, status: 'canceled' | 'incomplete_expired' = 'canceled'): void {
+    const sub = this.subscriptions.get(subscriptionId);
+    if (sub) sub.status = status;
+  }
+
+  /** Test helper: live subscriptions Stripe holds for this customer. */
+  liveSubscriptions(customerId: string): OrgStripeSubscription[] {
+    return [...this.subscriptions.values()].filter(
+      (s) => s.customerId === customerId && s.status !== 'canceled' && s.status !== 'incomplete_expired',
+    );
   }
 
   async findCustomerByOrgId(orgId: string): Promise<string | null> {

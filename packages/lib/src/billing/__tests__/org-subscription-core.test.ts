@@ -6,7 +6,12 @@ import {
   ORG_SUBSCRIPTION_KIND,
   isLiveOrgSubscriptionStatus,
   orgBusinessSubscriptionParams,
-  orgCustomerParams,
+  orgBillingLockKey,
+  orgCustomerCreateKey,
+  orgCustomerCreateParams,
+  orgCustomerDetails,
+  orgSubscriptionCreateKey,
+  orgSubscriptionHistory,
   orgExtraSeatQuantity,
   orgStripeIdempotencyKey,
   orgSubscriptionItems,
@@ -123,15 +128,56 @@ describe('orgBusinessSubscriptionParams — the Business subscription Stripe is 
   });
 });
 
-describe('orgCustomerParams — the org customer is the org\'s, never a person\'s', () => {
-  it('SEAT-1 (partial) names the org and tags it with the org id, never a userId', () => {
-    const params = orgCustomerParams({ orgId: ORG, name: 'Northwind Labs', billingEmail: 'jono@northwind.test' });
-    expect(params).toEqual({
+describe('the org customer — the org\'s, never a person\'s, and never two', () => {
+  it('SEAT-1 (partial) the create request carries only what never changes: the org id tag, never a userId', () => {
+    expect(orgCustomerCreateParams({ orgId: ORG })).toEqual({ metadata: { [ORG_ID_METADATA_KEY]: ORG, kind: 'organization' } });
+  });
+
+  it('SEAT-1 (partial) name and billing email are set separately, after the create returns', () => {
+    expect(orgCustomerDetails({ name: 'Northwind Labs', billingEmail: 'jono@northwind.test' })).toEqual({
       name: 'Northwind Labs',
       email: 'jono@northwind.test',
-      metadata: { [ORG_ID_METADATA_KEY]: ORG, kind: 'organization' },
     });
-    expect(Object.keys(params.metadata)).not.toContain('userId');
+    expect(orgCustomerDetails({ name: 'Northwind Labs', billingEmail: null })).toEqual({ name: 'Northwind Labs' });
+  });
+
+  it('SEAT-1 (P1-A) the customer.create key depends on the org alone: a rename or an owner email change between attempts replays the first create', () => {
+    const key = orgCustomerCreateKey(ORG);
+    expect(key).toBe(orgCustomerCreateKey(ORG));
+    expect(key.startsWith(`pagespace-org:${ORG}:customer.create:`)).toBe(true);
+    expect(orgCustomerCreateKey('org_other')).not.toBe(key);
+  });
+});
+
+describe('the subscription generation — a new subscription after an ended one is a new request (P1-B)', () => {
+  const params = orgBusinessSubscriptionParams({ orgId: ORG, customerId: 'cus_org', seats: 1, prices: PRICES, trialDays: 0 });
+
+  it('SEAT-1 (partial) the same attempt replays: same params and same previous subscription derive the same key', () => {
+    expect(orgSubscriptionCreateKey(ORG, params, 'sub_b')).toBe(orgSubscriptionCreateKey(ORG, params, 'sub_b'));
+  });
+
+  it('SEAT-1 (partial) identical params after a different previous subscription derive a different key, so Stripe cannot replay the dead one', () => {
+    expect(orgSubscriptionCreateKey(ORG, params, 'sub_b')).not.toBe(orgSubscriptionCreateKey(ORG, params, 'sub_a'));
+    expect(orgSubscriptionCreateKey(ORG, params, null)).not.toBe(orgSubscriptionCreateKey(ORG, params, 'sub_a'));
+  });
+
+  it('SEAT-8 (partial) the org\'s Stripe history counts every subscription stamped with it, ended ones included; the newest is the previous generation', () => {
+    const history = orgSubscriptionHistory(
+      [
+        candidate({ id: 'sub_old', status: 'canceled', created: 100 }),
+        candidate({ id: 'sub_new', status: 'incomplete_expired', created: 200 }),
+        candidate({ id: 'sub_other', created: 300, metadata: { [ORG_ID_METADATA_KEY]: 'org_other' } }),
+      ],
+      { orgId: ORG },
+    );
+    expect(history).toEqual({ hadSubscription: true, previousSubscriptionId: 'sub_new' });
+    expect(orgSubscriptionHistory([], { orgId: ORG })).toEqual({ hadSubscription: false, previousSubscriptionId: null });
+  });
+});
+
+describe('orgBillingLockKey', () => {
+  it('one lock key per org, shared by provisioning and the org delete', () => {
+    expect(orgBillingLockKey(ORG)).toBe(`org_billing:${ORG}`);
   });
 });
 

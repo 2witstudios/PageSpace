@@ -21,11 +21,11 @@
  *   for the per-drive audit event the caller writes.
  */
 import { db } from '@pagespace/db/db';
-import { and, eq, inArray } from '@pagespace/db/operators';
+import { and, eq, inArray, sql } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
 import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
-import { isLiveOrgSubscriptionStatus } from '../billing/org-subscription-core';
+import { isLiveOrgSubscriptionStatus, orgBillingLockKey } from '../billing/org-subscription-core';
 import { resolveOrgDeletionAccessLoss } from '../permissions/org-deletion-access';
 import { revokeOrgDriveGrantsForMembers } from './leave';
 import { publishDriveAccessEvents, type OrgMembershipSyncPorts } from '../services/org-membership-sync';
@@ -147,6 +147,11 @@ export async function deleteOrganization(
 ): Promise<DeleteOrganizationResult> {
   const toKick: RevokedRow[] = [];
   const result = await db.transaction(async (tx): Promise<DeleteOrganizationResult> => {
+    // The billing lock FIRST (before the org row lock, the order provisioning takes them
+    // in): a provisioning in flight finishes and its subscription is seen and ended
+    // below, or it starts after and finds the org gone. Never a live Stripe
+    // subscription left for a deleted org.
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${orgBillingLockKey(input.orgId)}, 0))`);
     const [org] = await tx
       .select({ ownerId: organizations.ownerId })
       .from(organizations)

@@ -29,7 +29,7 @@ import {
   ORG_ID_METADATA_KEY,
   ORG_SUBSCRIPTION_KIND,
   orgBusinessSubscriptionParams,
-  orgStripeIdempotencyKey,
+  orgSubscriptionCreateKey,
   type OrgBusinessPrices,
 } from '@pagespace/lib/billing/org-subscription-core';
 import { stripeConfig, stripeMode } from '@/lib/stripe-config';
@@ -50,7 +50,10 @@ const orgIds: string[] = [];
 const userIds: string[] = [];
 const customerIds = new Set<string>();
 
-async function testOrg(seats: number): Promise<{ orgId: string; ownerId: string; email: string; deps: OrgBillingDeps }> {
+async function testOrg(
+  initialSeats: number,
+): Promise<{ orgId: string; ownerId: string; email: string; deps: OrgBillingDeps; seats: { count: number } }> {
+  const seats = { count: initialSeats };
   const email = `jono+${RUN.replace(/\W/g, '')}${orgIds.length}@northwind.test`;
   const owner = await factories.createUser({ email, name: 'Jono' });
   userIds.push(owner.id);
@@ -61,7 +64,7 @@ async function testOrg(seats: number): Promise<{ orgId: string; ownerId: string;
   });
   if (!created.ok) throw new Error(`org create failed: ${created.reason}`);
   orgIds.push(created.organization.id);
-  return { orgId: created.organization.id, ownerId: owner.id, email, deps: { stripe: stripeOrgBilling(client), prices: () => PRICES, countSeats: async () => seats } };
+  return { orgId: created.organization.id, ownerId: owner.id, email, deps: { stripe: stripeOrgBilling(client), prices: () => PRICES, countSeats: async () => seats.count }, seats };
 }
 
 async function seatQuantityInStripe(subscriptionId: string): Promise<number | undefined> {
@@ -104,7 +107,7 @@ describe.skipIf(!TEST_KEY)('org Business subscription against the Stripe TEST AP
   });
 
   it('SEAT-1 SEAT-8 (partial) A-8 a new org gets its own customer and a trialing Business subscription: base ×1, seat item ×0, cancel if no card at trial end; add a 6th seat → 1, a 7th → 2', async () => {
-    const { orgId, deps } = await testOrg(1);
+    const { orgId, deps, seats } = await testOrg(1);
     const result = await ensureOrgBusinessSubscription(orgId, deps);
     customerIds.add(result.linkage.stripeCustomerId);
 
@@ -133,9 +136,11 @@ describe.skipIf(!TEST_KEY)('org Business subscription against the Stripe TEST AP
     expect(org.stripeCustomerId).toBe(customer.id);
     expect(org.stripeSubscriptionId).toBe(sub.id);
 
-    expect(await syncOrgSeatQuantity(orgId, 6, {}, deps)).toEqual({ kind: 'updated', quantity: 1 });
+    seats.count = 6;
+    expect(await syncOrgSeatQuantity(orgId, {}, deps)).toEqual({ kind: 'updated', quantity: 1 });
     expect(await seatQuantityInStripe(sub.id)).toBe(1);
-    expect(await syncOrgSeatQuantity(orgId, 7, {}, deps)).toEqual({ kind: 'updated', quantity: 2 });
+    seats.count = 7;
+    expect(await syncOrgSeatQuantity(orgId, {}, deps)).toEqual({ kind: 'updated', quantity: 2 });
     expect(await seatQuantityInStripe(sub.id)).toBe(2);
   });
 
@@ -166,7 +171,7 @@ describe.skipIf(!TEST_KEY)('org Business subscription against the Stripe TEST AP
     const first = await ensureOrgBusinessSubscription(orgId, deps);
     customerIds.add(first.linkage.stripeCustomerId);
     const params = orgBusinessSubscriptionParams({ orgId, customerId: first.linkage.stripeCustomerId, seats: 1, prices: PRICES, trialDays: 14 });
-    const replayed = await client.subscriptions.create(params, { idempotencyKey: orgStripeIdempotencyKey(orgId, 'subscription.create', params) });
+    const replayed = await client.subscriptions.create(params, { idempotencyKey: orgSubscriptionCreateKey(orgId, params, null) });
     expect(replayed.id).toBe(first.linkage.stripeSubscriptionId);
     const subs = await client.subscriptions.list({ customer: first.linkage.stripeCustomerId, status: 'all', limit: 10 });
     expect(subs.data).toHaveLength(1);

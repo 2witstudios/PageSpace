@@ -7,14 +7,23 @@
  *     and replayed calls. Three layers, each sufficient on its own for its window:
  *       1. a per-org advisory lock serializes every provisioning step, and the stored
  *          linkage is read under it, so a second caller sees the first caller's result;
- *       2. every Stripe write carries an idempotency key derived from the org, the
- *          operation and the request, so a write whose RESPONSE was lost is replayed
- *          by Stripe (24 hours) instead of executed twice;
+ *       2. every Stripe write carries an idempotency key derived from the org and the
+ *          operation, so a write whose RESPONSE was lost is replayed by Stripe (24
+ *          hours) instead of executed twice. customer.create is keyed on the org ALONE
+ *          (its details are set by a separate update), so a rename between attempts
+ *          still replays the first create; subscription.create is keyed on the request
+ *          AND the previous subscription id, so a new subscription after an ended one
+ *          is never a replay of the dead one;
  *       3. before creating, Stripe is asked what already exists for the org (customer
  *          search by org id; the customer's subscriptions), so an object Stripe made
  *          but the database never recorded is adopted even after the key window.
  *   - The customer id commits on its own before the subscription is attempted, so a
  *     subscription failure never loses the customer.
+ *   - A stored subscription is re-read from Stripe before it is reported, so a trial
+ *     Stripe canceled (no card) is seen as ended even before the webhook mirror (D3)
+ *     updates the row, and the org can subscribe again.
+ *   - The org delete takes the same lock (packages/lib deletion.ts), so provisioning and
+ *     a delete never interleave: provisioning re-checks the org under the lock.
  *
  * FAILURE: a Stripe error or outage throws out of the locked transaction, which rolls
  * back only that step's write. What committed before it stays (the customer id); what
@@ -39,16 +48,23 @@ import { stripeConfig } from '@/lib/stripe-config';
 import {
   ORG_ID_METADATA_KEY,
   isLiveOrgSubscriptionStatus,
+  orgBillingLockKey,
   orgBusinessSubscriptionParams,
-  orgCustomerParams,
+  orgCustomerCreateKey,
+  orgCustomerCreateParams,
+  orgCustomerDetails,
+  orgExtraSeatQuantity,
   orgStripeIdempotencyKey,
+  orgSubscriptionCreateKey,
+  orgSubscriptionHistory,
   orgSubscriptionItems,
   orgTrialDays,
   pickAdoptableOrgSubscription,
   planSeatQuantitySync,
   type OrgBusinessPrices,
   type OrgBusinessSubscriptionParams,
-  type OrgCustomerParams,
+  type OrgCustomerCreateParams,
+  type OrgCustomerDetails,
   type OrgSubscriptionCandidate,
 } from '@pagespace/lib/billing/org-subscription-core';
 
@@ -65,9 +81,11 @@ export type SeatProrationBehavior = 'create_prorations' | 'none';
 
 /** The Stripe operations the shell performs — narrow, so tests supply an in-memory Stripe. */
 export interface OrgBillingStripe {
-  createCustomer(params: OrgCustomerParams, idempotencyKey: string): Promise<{ id: string }>;
+  createCustomer(params: OrgCustomerCreateParams, idempotencyKey: string): Promise<{ id: string }>;
+  updateCustomer(customerId: string, details: OrgCustomerDetails, idempotencyKey: string): Promise<void>;
   findCustomerByOrgId(orgId: string): Promise<string | null>;
   createSubscription(params: OrgBusinessSubscriptionParams, idempotencyKey: string): Promise<OrgStripeSubscription>;
+  retrieveSubscription(subscriptionId: string): Promise<OrgStripeSubscription>;
   listCustomerSubscriptions(customerId: string): Promise<OrgStripeSubscription[]>;
   createSubscriptionItem(
     params: { subscriptionId: string; priceId: string; quantity: number },
@@ -88,7 +106,12 @@ export interface OrgBillingDeps {
   countSeats: (orgId: string) => Promise<number>;
 }
 
-export type OrgBillingErrorCode = 'org_not_found' | 'prices_not_configured' | 'not_an_org_business_subscription';
+export type OrgBillingErrorCode =
+  | 'org_not_found'
+  | 'prices_not_configured'
+  | 'not_an_org_business_subscription'
+  /** Stripe answered a create with a subscription that is already over; never stored as live. */
+  | 'subscription_not_live';
 
 export class OrgBillingError extends Error {
   constructor(
@@ -125,7 +148,7 @@ type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 /** Serializes every billing step for one org, across processes. Held until the transaction ends. */
 async function lockOrgBilling(tx: Tx, orgId: string): Promise<void> {
-  const key = `org_billing:${orgId}`;
+  const key = orgBillingLockKey(orgId);
   await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${key}, 0))`);
 }
 
@@ -175,11 +198,15 @@ export async function ensureOrgStripeCustomer(
     let customerId = await deps.stripe.findCustomerByOrgId(orgId);
     const created = customerId === null;
     if (customerId === null) {
-      const [owner] = await tx.select({ email: users.email }).from(users).where(eq(users.id, org.ownerId)).limit(1);
-      const params = orgCustomerParams({ orgId, name: org.name, billingEmail: owner?.email ?? null });
-      const customer = await deps.stripe.createCustomer(params, orgStripeIdempotencyKey(orgId, 'customer.create', params));
+      // Keyed on the org alone: a retry replays the first create whatever changed since.
+      const customer = await deps.stripe.createCustomer(orgCustomerCreateParams({ orgId }), orgCustomerCreateKey(orgId));
       customerId = customer.id;
     }
+    // Name and billing email as they are NOW, set after the create (absolute values, so a
+    // replay is harmless and a rename between attempts simply wins).
+    const [owner] = await tx.select({ email: users.email }).from(users).where(eq(users.id, org.ownerId)).limit(1);
+    const details = orgCustomerDetails({ name: org.name, billingEmail: owner?.email ?? null });
+    await deps.stripe.updateCustomer(customerId, details, orgStripeIdempotencyKey(orgId, 'customer.update', { customerId, details }));
     await tx
       .update(organizations)
       .set({ stripeCustomerId: customerId })
@@ -220,11 +247,29 @@ async function storeSubscription(
   return row;
 }
 
+/** Mirror what Stripe says now about the stored subscription onto its row. */
+async function refreshStored(tx: Tx, orgId: string, sub: OrgStripeSubscription): Promise<OrgSubscription> {
+  const [row] = await tx
+    .update(orgSubscriptions)
+    .set({
+      status: sub.status,
+      trialEnd: fromUnix(sub.trialEnd),
+      currentPeriodStart: fromUnix(sub.currentPeriodStart),
+      currentPeriodEnd: fromUnix(sub.currentPeriodEnd),
+      cancelAtPeriodEnd: sub.cancelAtPeriodEnd,
+    })
+    .where(eq(orgSubscriptions.orgId, orgId))
+    .returning();
+  return row;
+}
+
 /**
  * SEAT-1, SEAT-8, A-8: the org's Business subscription — the base price plus the
  * extra-seat item at max(0, seats − 5), with the trial on the org's first
- * subscription. Idempotent: an org that already has a live subscription gets it back
- * without a Stripe call; one Stripe has but the database lost is adopted.
+ * subscription (and never again: Stripe's history counts). Idempotent: an org that
+ * already has a live subscription gets it back with no Stripe write (one status read);
+ * one Stripe has but the database lost is adopted; one that ended is followed by a new
+ * subscription whose create key names the ended one.
  */
 export async function ensureOrgBusinessSubscription(
   orgId: string,
@@ -235,12 +280,19 @@ export async function ensureOrgBusinessSubscription(
 
   return db.transaction(async (tx) => {
     await lockOrgBilling(tx, orgId);
-    const [stored] = await tx.select().from(orgSubscriptions).where(eq(orgSubscriptions.orgId, orgId)).limit(1);
+    // The org may have been deleted while this call waited for the lock: never create a
+    // Stripe subscription for an org that is gone (the delete holds the same lock).
+    const [org] = await tx.select({ id: organizations.id }).from(organizations).where(eq(organizations.id, orgId)).limit(1);
+    if (!org) throw new OrgBillingError('org_not_found', `Organization ${orgId} not found`);
+
+    let [stored] = await tx.select().from(orgSubscriptions).where(eq(orgSubscriptions.orgId, orgId)).limit(1);
     if (stored && isLiveOrgSubscriptionStatus(stored.status)) {
-      return { kind: 'existing' as const, linkage: toLinkage(stored, customerId) };
+      stored = await refreshStored(tx, orgId, await deps.stripe.retrieveSubscription(stored.stripeSubscriptionId));
+      if (isLiveOrgSubscriptionStatus(stored.status)) return { kind: 'existing' as const, linkage: toLinkage(stored, customerId) };
     }
 
-    const existing = pickAdoptableOrgSubscription(await deps.stripe.listCustomerSubscriptions(customerId), { orgId, prices });
+    const history = await deps.stripe.listCustomerSubscriptions(customerId);
+    const existing = pickAdoptableOrgSubscription(history, { orgId, prices });
     let sub: OrgStripeSubscription;
     let kind: 'created' | 'adopted';
     if (existing) {
@@ -248,14 +300,22 @@ export async function ensureOrgBusinessSubscription(
       kind = 'adopted';
     } else {
       const seats = await deps.countSeats(orgId);
+      const seen = orgSubscriptionHistory(history, { orgId });
       const params = orgBusinessSubscriptionParams({
         orgId,
         customerId,
         seats,
         prices,
-        trialDays: orgTrialDays({ hadSubscription: stored !== undefined }),
+        // One trial per org: a stored row OR any subscription Stripe ever had for it.
+        trialDays: orgTrialDays({ hadSubscription: stored !== undefined || seen.hadSubscription }),
       });
-      sub = await deps.stripe.createSubscription(params, orgStripeIdempotencyKey(orgId, 'subscription.create', params));
+      // The generation this subscription follows: Stripe's newest for the org (it also
+      // sees a lost create that has since ended), else the stored one, else none.
+      const previous = seen.previousSubscriptionId ?? stored?.stripeSubscriptionId ?? null;
+      sub = await deps.stripe.createSubscription(params, orgSubscriptionCreateKey(orgId, params, previous));
+      if (!isLiveOrgSubscriptionStatus(sub.status)) {
+        throw new OrgBillingError('subscription_not_live', `Stripe returned subscription ${sub.id} already ${sub.status}`);
+      }
       kind = 'created';
     }
 
@@ -263,13 +323,17 @@ export async function ensureOrgBusinessSubscription(
     if (!items) {
       throw new OrgBillingError('not_an_org_business_subscription', `Subscription ${sub.id} has no Business base item`);
     }
-    // An adopted subscription made outside this path may lack the seat item; add it at 0.
-    const seatItem =
-      items.seatItem ??
-      (await deps.stripe.createSubscriptionItem(
-        { subscriptionId: sub.id, priceId: prices.seatPriceId, quantity: 0 },
-        orgStripeIdempotencyKey(orgId, 'seat-item.create', { subscriptionId: sub.id, priceId: prices.seatPriceId }),
-      ));
+    // An adopted subscription made outside this path may lack the seat item: add it at
+    // the org's current extra-seat quantity, never 0 (that would under-bill until the next
+    // membership change).
+    let seatItem = items.seatItem;
+    if (!seatItem) {
+      const quantity = orgExtraSeatQuantity(await deps.countSeats(orgId));
+      seatItem = await deps.stripe.createSubscriptionItem(
+        { subscriptionId: sub.id, priceId: prices.seatPriceId, quantity },
+        orgStripeIdempotencyKey(orgId, 'seat-item.create', { subscriptionId: sub.id, priceId: prices.seatPriceId, quantity }),
+      );
+    }
 
     const row = await storeSubscription(tx, orgId, sub, prices, seatItem, items.baseItemId);
     loggers.api.info('org business subscription linked', { orgId, subscriptionId: sub.id, kind, status: sub.status });
@@ -278,14 +342,15 @@ export async function ensureOrgBusinessSubscription(
 }
 
 /**
- * A-8: set the extra-seat quantity to max(0, seats − 5) for `seats` seats. Seat
- * accounting (SEAT-3..5) decides the count and when to call; raising defaults to a
- * prorated change (SEAT-4), and a caller freeing seats at period end passes
- * `prorationBehavior: 'none'` (SEAT-5). A replay of the same change is a no-op.
+ * A-8: bring the extra-seat quantity to max(0, seats − 5) for the org's CURRENT seat
+ * count (SEAT-3's count, `deps.countSeats`), read under the billing lock — so two
+ * concurrent changes apply in lock order and the last one always reflects the latest
+ * count, never a stale lower one. Seat accounting (D2) decides when to call; raising
+ * defaults to a prorated change (SEAT-4), and a caller freeing seats at period end
+ * passes `prorationBehavior: 'none'` (SEAT-5). A replay of the same change is a no-op.
  */
 export async function syncOrgSeatQuantity(
   orgId: string,
-  seats: number,
   opts: { prorationBehavior?: SeatProrationBehavior } = {},
   deps: OrgBillingDeps = defaultOrgBillingDeps(),
 ): Promise<SeatSyncResult> {
@@ -295,6 +360,7 @@ export async function syncOrgSeatQuantity(
     const [stored] = await tx.select().from(orgSubscriptions).where(eq(orgSubscriptions.orgId, orgId)).limit(1);
     if (!stored || !isLiveOrgSubscriptionStatus(stored.status)) return { kind: 'no_subscription' as const };
 
+    const seats = await deps.countSeats(orgId);
     const plan = planSeatQuantitySync({
       orgId,
       stored: { seatItemId: stored.stripeSeatItemId, extraSeatQuantity: stored.extraSeatQuantity, seatRevision: stored.seatRevision },
@@ -394,6 +460,12 @@ export function stripeOrgBilling(client: Stripe): OrgBillingStripe {
       if (!isLiveOrgSubscriptionStatus(current.status)) return { status: current.status };
       const canceled = await client.subscriptions.cancel(subscriptionId, {}, { idempotencyKey });
       return { status: canceled.status };
+    },
+    async updateCustomer(customerId, details, idempotencyKey) {
+      await client.customers.update(customerId, details, { idempotencyKey });
+    },
+    async retrieveSubscription(subscriptionId) {
+      return toOrgStripeSubscription(await client.subscriptions.retrieve(subscriptionId));
     },
     async updateSubscriptionItemQuantity(params, idempotencyKey) {
       const item = await client.subscriptionItems.update(

@@ -62,6 +62,7 @@ export function orgExtraSeatQuantity(seats: number): number {
 
 export type OrgStripeOperation =
   | 'customer.create'
+  | 'customer.update'
   | 'subscription.create'
   | 'subscription.cancel'
   | 'seat-item.create'
@@ -103,19 +104,40 @@ export function isLiveOrgSubscriptionStatus(status: string): boolean {
   return !ENDED_STATUSES.has(status);
 }
 
-export interface OrgCustomerParams {
-  name: string;
-  email?: string;
+/** The customer.create request: only what never changes for an org, so a retry is always the same request. */
+export interface OrgCustomerCreateParams {
   metadata: Record<string, string>;
 }
 
-/** SEAT-1: the org's own customer — named for the org and tagged with its id, never a userId. */
-export function orgCustomerParams(input: { orgId: string; name: string; billingEmail?: string | null }): OrgCustomerParams {
-  return {
-    name: input.name,
-    ...(input.billingEmail ? { email: input.billingEmail } : {}),
-    metadata: { [ORG_ID_METADATA_KEY]: input.orgId, kind: ORG_CUSTOMER_KIND },
-  };
+/** Name and billing email, set on the customer after it exists (they can change between attempts). */
+export interface OrgCustomerDetails {
+  name: string;
+  email?: string;
+}
+
+/** SEAT-1: the org's own customer — tagged with the org id, never a userId. */
+export function orgCustomerCreateParams(input: { orgId: string }): OrgCustomerCreateParams {
+  return { metadata: { [ORG_ID_METADATA_KEY]: input.orgId, kind: ORG_CUSTOMER_KIND } };
+}
+
+export function orgCustomerDetails(input: { name: string; billingEmail?: string | null }): OrgCustomerDetails {
+  return { name: input.name, ...(input.billingEmail ? { email: input.billingEmail } : {}) };
+}
+
+/**
+ * The customer.create key depends on the ORG ALONE. A create whose response was lost
+ * is replayed by Stripe on every retry, whatever changed meanwhile (the org renamed,
+ * the Owner's email changed) — the details are reconciled by an update after the create
+ * returns, never by a new key. A key that hashed the details would let a rename during
+ * Stripe's search lag create a second customer (review P1-A on #2733).
+ */
+export function orgCustomerCreateKey(orgId: string): string {
+  return orgStripeIdempotencyKey(orgId, 'customer.create', orgCustomerCreateParams({ orgId }));
+}
+
+/** The per-org advisory lock key taken by provisioning, seat changes and the org delete. */
+export function orgBillingLockKey(orgId: string): string {
+  return `org_billing:${orgId}`;
 }
 
 export interface OrgBusinessSubscriptionParams {
@@ -158,6 +180,21 @@ export function orgBusinessSubscriptionParams(input: {
   };
 }
 
+/**
+ * The subscription.create key: the request AND the subscription generation it follows
+ * (the org's previous subscription id, null for the first). A retry of the same attempt
+ * replays; a new subscription after an ended one is a new request even when its
+ * parameters are identical — otherwise Stripe would replay the dead subscription's
+ * create for 24 hours and the org could never re-subscribe (review P1-B on #2733).
+ */
+export function orgSubscriptionCreateKey(
+  orgId: string,
+  params: OrgBusinessSubscriptionParams,
+  previousSubscriptionId: string | null,
+): string {
+  return orgStripeIdempotencyKey(orgId, 'subscription.create', { params, previousSubscriptionId });
+}
+
 /** A Stripe subscription, narrowed to what adoption and linkage read. */
 export interface OrgSubscriptionCandidate {
   id: string;
@@ -187,6 +224,21 @@ export function pickAdoptableOrgSubscription<C extends OrgSubscriptionCandidate>
     )
     .sort((a, b) => a.created - b.created || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   return matches[0] ?? null;
+}
+
+/**
+ * The org's subscription history in Stripe: every subscription stamped with the org,
+ * ENDED ones included. Any at all means the org already had its trial (SEAT-8); the
+ * newest is the generation a new subscription follows.
+ */
+export function orgSubscriptionHistory(
+  candidates: ReadonlyArray<OrgSubscriptionCandidate>,
+  input: { orgId: string },
+): { hadSubscription: boolean; previousSubscriptionId: string | null } {
+  const mine = candidates
+    .filter((s) => s.metadata?.[ORG_ID_METADATA_KEY] === input.orgId)
+    .sort((a, b) => b.created - a.created || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
+  return { hadSubscription: mine.length > 0, previousSubscriptionId: mine[0]?.id ?? null };
 }
 
 export interface OrgSubscriptionItemLinkage {

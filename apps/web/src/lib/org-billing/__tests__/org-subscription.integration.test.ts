@@ -38,7 +38,16 @@ const originalMode = process.env.DEPLOYMENT_MODE;
 const orgIds: string[] = [];
 const userIds: string[] = [];
 
-async function northwind(seats = 1): Promise<{ orgId: string; ownerId: string; deps: OrgBillingDeps; stripe: FakeOrgStripe }> {
+interface Northwind {
+  orgId: string;
+  ownerId: string;
+  deps: OrgBillingDeps;
+  stripe: FakeOrgStripe;
+  /** SEAT-3's count as the org would report it now. */
+  seats: { count: number };
+}
+
+async function northwind(initialSeats = 1): Promise<Northwind> {
   const owner = await factories.createUser({ email: `jono+${Date.now()}${Math.random().toString(36).slice(2, 8)}@northwind.test`, name: 'Jono' });
   userIds.push(owner.id);
   const slug = `northwind-${Math.random().toString(36).slice(2, 10)}`;
@@ -46,12 +55,13 @@ async function northwind(seats = 1): Promise<{ orgId: string; ownerId: string; d
   if (!created.ok) throw new Error(`org create failed: ${created.reason}`);
   orgIds.push(created.organization.id);
   const stripe = new FakeOrgStripe();
+  const seats = { count: initialSeats };
   const deps: OrgBillingDeps = {
     stripe,
     prices: () => PRICES,
-    countSeats: async () => seats,
+    countSeats: async () => seats.count,
   };
-  return { orgId: created.organization.id, ownerId: owner.id, deps, stripe };
+  return { orgId: created.organization.id, ownerId: owner.id, deps, stripe, seats };
 }
 
 async function rowsFor(orgId: string) {
@@ -100,7 +110,7 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
     const [customer] = [...stripe.customers.values()];
     // The org's own customer: named for the org, tagged with the org id — not the Owner's personal customer.
     expect(customer.params.metadata).toEqual({ [ORG_ID_METADATA_KEY]: orgId, kind: 'organization' });
-    expect(customer.params.name).toBe('Northwind Labs');
+    expect(customer.details?.name).toBe('Northwind Labs');
     const [owner] = await db.select({ stripeCustomerId: users.stripeCustomerId }).from(users).where(eq(users.id, ownerId));
     expect(owner.stripeCustomerId).toBeNull();
 
@@ -137,7 +147,7 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
     expect((await rowsFor(orgId))[0].extraSeatQuantity).toBe(2);
   });
 
-  it('SEAT-1 a replayed call on a provisioned org touches Stripe not at all and changes nothing', async () => {
+  it('SEAT-1 a replayed call on a provisioned org makes no Stripe write — one status read only — and changes nothing', async () => {
     if (!dbAvailable) return;
     const { orgId, deps, stripe } = await northwind(1);
     const first = await ensureOrgBusinessSubscription(orgId, deps);
@@ -150,7 +160,7 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
     expect(replay.kind).toBe('existing');
     expect(replay.linkage.stripeSubscriptionId).toBe(first.linkage.stripeSubscriptionId);
     expect(stripe.writes).toEqual(writesAfterFirst);
-    expect(stripe.reads).toEqual(readsAfterFirst);
+    expect(stripe.reads).toEqual({ ...readsAfterFirst, retrieveSubscription: readsAfterFirst.retrieveSubscription + 1 });
     expect(stripe.customers.size).toBe(1);
     expect(stripe.subscriptions.size).toBe(1);
     expect(await rowsFor(orgId)).toHaveLength(1);
@@ -264,14 +274,17 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
 
   it('A-8 adding a 6th seat raises the extra-seat quantity to 1; 7 seats to 2; back to 5 seats to 0; a replay is a no-op', async () => {
     if (!dbAvailable) return;
-    const { orgId, deps, stripe } = await northwind(1);
+    const { orgId, deps, stripe, seats } = await northwind(1);
     const { linkage } = await ensureOrgBusinessSubscription(orgId, deps);
 
-    expect(await syncOrgSeatQuantity(orgId, 6, {}, deps)).toEqual({ kind: 'updated', quantity: 1 });
+    seats.count = 6;
+    expect(await syncOrgSeatQuantity(orgId, {}, deps)).toEqual({ kind: 'updated', quantity: 1 });
     expect(stripe.seatQuantity(linkage.stripeSubscriptionId, PRICES.seatPriceId)).toBe(1);
-    expect(await syncOrgSeatQuantity(orgId, 7, {}, deps)).toEqual({ kind: 'updated', quantity: 2 });
-    expect(await syncOrgSeatQuantity(orgId, 7, {}, deps)).toEqual({ kind: 'noop', quantity: 2 });
-    expect(await syncOrgSeatQuantity(orgId, 5, { prorationBehavior: 'none' }, deps)).toEqual({ kind: 'updated', quantity: 0 });
+    seats.count = 7;
+    expect(await syncOrgSeatQuantity(orgId, {}, deps)).toEqual({ kind: 'updated', quantity: 2 });
+    expect(await syncOrgSeatQuantity(orgId, {}, deps)).toEqual({ kind: 'noop', quantity: 2 });
+    seats.count = 5;
+    expect(await syncOrgSeatQuantity(orgId, { prorationBehavior: 'none' }, deps)).toEqual({ kind: 'updated', quantity: 0 });
     expect(stripe.seatQuantity(linkage.stripeSubscriptionId, PRICES.seatPriceId)).toBe(0);
     expect(stripe.writes.updateSubscriptionItemQuantity).toBe(3);
     const [row] = await rowsFor(orgId);
@@ -280,21 +293,23 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
 
   it('A-8 a seat change whose response was lost is replayed with the same key and applied once', async () => {
     if (!dbAvailable) return;
-    const { orgId, deps, stripe } = await northwind(1);
+    const { orgId, deps, stripe, seats } = await northwind(1);
     const { linkage } = await ensureOrgBusinessSubscription(orgId, deps);
     stripe.loseNextResponse('updateSubscriptionItemQuantity');
-    await expect(syncOrgSeatQuantity(orgId, 8, {}, deps)).rejects.toThrow();
+    seats.count = 8;
+    await expect(syncOrgSeatQuantity(orgId, {}, deps)).rejects.toThrow();
     expect((await rowsFor(orgId))[0].extraSeatQuantity).toBe(0);
 
-    expect(await syncOrgSeatQuantity(orgId, 8, {}, deps)).toEqual({ kind: 'updated', quantity: 3 });
+    expect(await syncOrgSeatQuantity(orgId, {}, deps)).toEqual({ kind: 'updated', quantity: 3 });
     expect(stripe.writes.updateSubscriptionItemQuantity).toBe(1);
     expect(stripe.seatQuantity(linkage.stripeSubscriptionId, PRICES.seatPriceId)).toBe(3);
   });
 
   it('A-8 syncing seats for an org with no subscription does nothing and says so', async () => {
     if (!dbAvailable) return;
-    const { orgId, deps, stripe } = await northwind(1);
-    expect(await syncOrgSeatQuantity(orgId, 9, {}, deps)).toEqual({ kind: 'no_subscription' });
+    const { orgId, deps, stripe, seats } = await northwind(1);
+    seats.count = 9;
+    expect(await syncOrgSeatQuantity(orgId, {}, deps)).toEqual({ kind: 'no_subscription' });
     expect(stripe.writes.updateSubscriptionItemQuantity).toBe(0);
   });
 
@@ -397,6 +412,164 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
       const result = await deleteOrganization({ actorId: ownerId, orgId, choices: [], now: new Date() }, { ports: noKick });
       expect(result.ok).toBe(true);
       expect(stripe.writes.cancelSubscription).toBe(0);
+      expect(await rowsFor(orgId)).toHaveLength(0);
+    });
+  });
+
+  describe('review 5328226999 on #2733', () => {
+    it('SEAT-1 (P1-A) a customer create whose response was lost, then an org rename and an owner email change while search cannot see it: exactly ONE customer, carrying the new details', async () => {
+      if (!dbAvailable) return;
+      const { orgId, ownerId, deps, stripe } = await northwind(1);
+      stripe.searchLag = true;
+      stripe.loseNextResponse('createCustomer');
+      await expect(ensureOrgStripeCustomer(orgId, deps)).rejects.toThrow(/connection to Stripe/);
+
+      await db.update(organizations).set({ name: 'Northwind Labs Inc' }).where(eq(organizations.id, orgId));
+      await db.update(users).set({ email: `billing+${ownerId}@northwind.test` }).where(eq(users.id, ownerId));
+
+      const again = await ensureOrgStripeCustomer(orgId, deps);
+      expect(stripe.customers.size).toBe(1);
+      expect(stripe.writes.createCustomer).toBe(1);
+      const [customer] = [...stripe.customers.values()];
+      expect(again.customerId).toBe(customer.id);
+      expect(customer.details).toEqual({ name: 'Northwind Labs Inc', email: `billing+${ownerId}@northwind.test` });
+    });
+
+    it('SEAT-1 (P1-B) re-subscribing within 24h after an ended subscription creates a NEW live subscription instead of replaying the dead one', async () => {
+      if (!dbAvailable) return;
+      const { orgId, deps, stripe } = await northwind(1);
+      // Each end is mirrored on the row as a webhook would (D3), so this isolates the KEY.
+      const end = async (id: string, status: 'canceled' | 'incomplete_expired') => {
+        stripe.endSubscription(id, status);
+        await db.update(orgSubscriptions).set({ status }).where(eq(orgSubscriptions.orgId, orgId));
+      };
+      const a = await ensureOrgBusinessSubscription(orgId, deps);
+      await end(a.linkage.stripeSubscriptionId, 'canceled');
+      const b = await ensureOrgBusinessSubscription(orgId, deps);
+      expect(b.linkage.stripeSubscriptionId).not.toBe(a.linkage.stripeSubscriptionId);
+      // B (no trial, same seats, same customer) ends inside Stripe's key window.
+      await end(b.linkage.stripeSubscriptionId, 'incomplete_expired');
+
+      const c = await ensureOrgBusinessSubscription(orgId, deps);
+      expect(c.kind).toBe('created');
+      expect(c.linkage.stripeSubscriptionId).not.toBe(b.linkage.stripeSubscriptionId);
+      expect(stripe.liveSubscriptions(a.linkage.stripeCustomerId).map((x) => x.id)).toEqual([c.linkage.stripeSubscriptionId]);
+      const [row] = await rowsFor(orgId);
+      expect(row.stripeSubscriptionId).toBe(c.linkage.stripeSubscriptionId);
+    });
+
+    it('SEAT-1 (P1-B) a create that Stripe answers with an ended subscription is never stored as live', async () => {
+      if (!dbAvailable) return;
+      const { orgId, deps, stripe } = await northwind(1);
+      const real = stripe.createSubscription.bind(stripe);
+      stripe.createSubscription = async (params, key) => ({ ...(await real(params, key)), status: 'incomplete_expired' });
+      await expect(ensureOrgBusinessSubscription(orgId, deps)).rejects.toMatchObject({ code: 'subscription_not_live' });
+      expect(await rowsFor(orgId)).toHaveLength(0);
+    });
+
+    it('SEAT-1 (Codex P1 / P2-3) a stored trial that Stripe already canceled is refreshed from Stripe, and the org can subscribe again (no second trial)', async () => {
+      if (!dbAvailable) return;
+      const { orgId, deps, stripe } = await northwind(1);
+      const first = await ensureOrgBusinessSubscription(orgId, deps);
+      stripe.endSubscription(first.linkage.stripeSubscriptionId); // cardless trial ended; no webhook yet (D3)
+
+      const again = await ensureOrgBusinessSubscription(orgId, deps);
+      expect(again.kind).toBe('created');
+      expect(again.linkage.stripeSubscriptionId).not.toBe(first.linkage.stripeSubscriptionId);
+      expect(stripe.subscriptions.get(again.linkage.stripeSubscriptionId)?.trialEnd).toBeNull();
+    });
+
+    it('SEAT-1 a stored subscription still live in Stripe has its mirrored status refreshed (trialing → active)', async () => {
+      if (!dbAvailable) return;
+      const { orgId, deps, stripe } = await northwind(1);
+      const first = await ensureOrgBusinessSubscription(orgId, deps);
+      const sub = stripe.subscriptions.get(first.linkage.stripeSubscriptionId);
+      if (sub) sub.status = 'active';
+      const again = await ensureOrgBusinessSubscription(orgId, deps);
+      expect(again).toMatchObject({ kind: 'existing', linkage: { status: 'active' } });
+      expect((await rowsFor(orgId))[0].status).toBe('active');
+    });
+
+    it('SEAT-8 (Codex P2) a lost create whose subscription ended before the retry does not earn a second trial', async () => {
+      if (!dbAvailable) return;
+      const { orgId, deps, stripe } = await northwind(1);
+      stripe.loseNextResponse('createSubscription');
+      await expect(ensureOrgBusinessSubscription(orgId, deps)).rejects.toThrow();
+      const [lost] = [...stripe.subscriptions.values()];
+      stripe.endSubscription(lost.id);
+      stripe.expireIdempotencyKeys();
+
+      const retry = await ensureOrgBusinessSubscription(orgId, deps);
+      expect(retry.linkage.stripeSubscriptionId).not.toBe(lost.id);
+      expect(stripe.subscriptions.get(retry.linkage.stripeSubscriptionId)?.trialEnd).toBeNull();
+    });
+
+    it('A-8 (Codex P2) repairing an adopted subscription that lacks the seat item creates it at the org\'s current quantity, not 0', async () => {
+      if (!dbAvailable) return;
+      const { orgId, deps, stripe, seats } = await northwind(8);
+      stripe.loseNextResponse('createSubscription');
+      await expect(ensureOrgBusinessSubscription(orgId, deps)).rejects.toThrow();
+      const [sub] = [...stripe.subscriptions.values()];
+      sub.items = sub.items.filter((i) => i.priceId === PRICES.basePriceId); // made without the seat item
+      seats.count = 8;
+
+      const adopted = await ensureOrgBusinessSubscription(orgId, deps);
+      expect(adopted.kind).toBe('adopted');
+      expect(stripe.seatQuantity(sub.id, PRICES.seatPriceId)).toBe(3);
+      expect((await rowsFor(orgId))[0].extraSeatQuantity).toBe(3);
+    });
+
+    it('A-8 (P2-2) the seat count is taken under the billing lock: two concurrent changes end at the LATER count', async () => {
+      if (!dbAvailable) return;
+      const { orgId, deps, stripe, seats } = await northwind(1);
+      const { linkage } = await ensureOrgBusinessSubscription(orgId, deps);
+      stripe.writeDelayMs = 30;
+      seats.count = 9;
+      const first = syncOrgSeatQuantity(orgId, {}, deps);
+      await new Promise((r) => setTimeout(r, 5));
+      seats.count = 7; // a member left while the first change was in flight
+      const second = syncOrgSeatQuantity(orgId, {}, deps);
+      await Promise.all([first, second]);
+      expect(stripe.seatQuantity(linkage.stripeSubscriptionId, PRICES.seatPriceId)).toBe(2);
+      expect((await rowsFor(orgId))[0].extraSeatQuantity).toBe(2);
+    });
+
+    it('SEAT-1 (P2-1) an org delete racing an in-flight provisioning never leaves a live Stripe subscription for a deleted org', async () => {
+      if (!dbAvailable) return;
+      const { orgId, ownerId, deps, stripe } = await northwind(1);
+      await ensureOrgStripeCustomer(orgId, deps);
+      const customerId = (await orgRow(orgId)).stripeCustomerId as string;
+      stripe.writeDelayMs = 60;
+      const provisioning = ensureOrgBusinessSubscription(orgId, deps).catch((e: unknown) => e);
+      await new Promise((r) => setTimeout(r, 15));
+      const deleted = await deleteOrganization(
+        { actorId: ownerId, orgId, choices: [], now: new Date() },
+        { ports: { broadcast: async () => {}, kick: async () => {} }, endSubscription: endOrgSubscriptionPort(deps) },
+      );
+      await provisioning;
+      expect(deleted.ok).toBe(true);
+      expect(await orgRow(orgId)).toBeUndefined();
+      expect(stripe.liveSubscriptions(customerId)).toHaveLength(0);
+    });
+
+    it('SEAT-1 (Codex P2) Stripe canceled but the delete transaction failed: the org stays, and the retried delete completes without a second cancel', async () => {
+      if (!dbAvailable) return;
+      const { orgId, ownerId, deps, stripe } = await northwind(1);
+      const { linkage } = await ensureOrgBusinessSubscription(orgId, deps);
+      const port = endOrgSubscriptionPort(deps);
+      const noKick = { broadcast: async () => {}, kick: async () => {} };
+      await expect(
+        deleteOrganization(
+          { actorId: ownerId, orgId, choices: [], now: new Date() },
+          { ports: noKick, endSubscription: async (sub) => { await port(sub); throw new Error('connection lost after the cancel'); } },
+        ),
+      ).rejects.toThrow(/connection lost/);
+      expect(await orgRow(orgId)).toBeDefined();
+      expect(stripe.subscriptions.get(linkage.stripeSubscriptionId)?.status).toBe('canceled');
+
+      const retry = await deleteOrganization({ actorId: ownerId, orgId, choices: [], now: new Date() }, { ports: noKick, endSubscription: port });
+      expect(retry.ok).toBe(true);
+      expect(stripe.writes.cancelSubscription).toBe(1);
       expect(await rowsFor(orgId)).toHaveLength(0);
     });
   });
