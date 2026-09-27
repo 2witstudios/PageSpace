@@ -5,6 +5,7 @@ import { findOrganizationById, updateOrganization } from '@pagespace/lib/organiz
 import { deleteOrganization } from '@pagespace/lib/organizations/deletion';
 import { authorizeOrgRequest, ORG_READ_AUTH, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 import { orgDeleteSchema, orgUpdateSchema } from '@/lib/orgs/org-schemas';
+import { endOrgSubscriptionPort } from '@/lib/org-billing/org-subscription';
 
 type Context = { params: Promise<{ orgId: string }> };
 
@@ -76,8 +77,13 @@ export async function DELETE(request: Request, context: Context) {
     if (!parsed.success) {
       return NextResponse.json({ error: 'Invalid request body', issues: parsed.error.issues }, { status: 400 });
     }
-    // The service re-checks the caller is still the Owner under the org row lock.
-    const result = await deleteOrganization({ actorId: gate.userId, orgId, choices: parsed.data.drives, now: new Date() });
+    // The service re-checks the caller is still the Owner under the org row lock, and ends
+    // the org's live Stripe subscription inside its transaction (a Stripe failure refuses
+    // the delete rather than leave a deleted org billed).
+    const result = await deleteOrganization(
+      { actorId: gate.userId, orgId, choices: parsed.data.drives, now: new Date() },
+      { endSubscription: endOrgSubscriptionPort() },
+    );
     if (!result.ok) {
       if (result.status === 404) return NextResponse.json({ error: 'Organization not found' }, { status: 404 });
       if (result.status === 403) return NextResponse.json({ error: 'Only the Owner can delete this organization' }, { status: 403 });

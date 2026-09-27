@@ -77,6 +77,8 @@ export interface OrgBillingStripe {
     params: { itemId: string; quantity: number; prorationBehavior: SeatProrationBehavior },
     idempotencyKey: string,
   ): Promise<{ id: string; quantity: number }>;
+  /** Cancel now; a subscription that is already over is left as it is. */
+  cancelSubscription(subscriptionId: string, idempotencyKey: string): Promise<{ status: string }>;
 }
 
 export interface OrgBillingDeps {
@@ -314,6 +316,23 @@ export async function syncOrgSeatQuantity(
   });
 }
 
+/**
+ * The org delete's `endSubscription` port (ORG-6 meets SEAT-1): cancel the org's live
+ * Stripe subscription immediately, keyed so a retried delete replays the cancel. Runs
+ * inside the delete's transaction; a throw rolls the delete back.
+ */
+export function endOrgSubscriptionPort(
+  deps: OrgBillingDeps = defaultOrgBillingDeps(),
+): (subscription: { orgId: string; stripeSubscriptionId: string }) => Promise<void> {
+  return async ({ orgId, stripeSubscriptionId }) => {
+    const { status } = await deps.stripe.cancelSubscription(
+      stripeSubscriptionId,
+      orgStripeIdempotencyKey(orgId, 'subscription.cancel', { subscriptionId: stripeSubscriptionId }),
+    );
+    loggers.api.info('org subscription canceled with the org', { orgId, subscriptionId: stripeSubscriptionId, status });
+  };
+}
+
 // ---------------------------------------------------------------------------
 // The real Stripe
 // ---------------------------------------------------------------------------
@@ -369,6 +388,12 @@ export function stripeOrgBilling(client: Stripe): OrgBillingStripe {
         { idempotencyKey },
       );
       return { id: item.id, quantity: item.quantity ?? 0 };
+    },
+    async cancelSubscription(subscriptionId, idempotencyKey) {
+      const current = await client.subscriptions.retrieve(subscriptionId);
+      if (!isLiveOrgSubscriptionStatus(current.status)) return { status: current.status };
+      const canceled = await client.subscriptions.cancel(subscriptionId, {}, { idempotencyKey });
+      return { status: canceled.status };
     },
     async updateSubscriptionItemQuantity(params, idempotencyKey) {
       const item = await client.subscriptionItems.update(

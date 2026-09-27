@@ -60,7 +60,12 @@ export function orgExtraSeatQuantity(seats: number): number {
   return Math.max(0, seats - TIER_PLAN_LIMITS.business.includedSeats);
 }
 
-export type OrgStripeOperation = 'customer.create' | 'subscription.create' | 'seat-item.create' | 'seat-quantity.update';
+export type OrgStripeOperation =
+  | 'customer.create'
+  | 'subscription.create'
+  | 'subscription.cancel'
+  | 'seat-item.create'
+  | 'seat-quantity.update';
 
 function stableJson(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';

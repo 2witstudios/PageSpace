@@ -22,6 +22,7 @@ import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schem
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { createOrganization } from '@pagespace/lib/organizations/repository';
+import { deleteOrganization } from '@pagespace/lib/organizations/deletion';
 import { centsFromDollars, tierListPriceCents } from '@pagespace/lib/billing/money-model';
 import { TIER_PLAN_LIMITS } from '@pagespace/lib/billing/subscription-tiers';
 import {
@@ -32,7 +33,13 @@ import {
   type OrgBusinessPrices,
 } from '@pagespace/lib/billing/org-subscription-core';
 import { stripeConfig, stripeMode } from '@/lib/stripe-config';
-import { ensureOrgBusinessSubscription, stripeOrgBilling, syncOrgSeatQuantity, type OrgBillingDeps } from '../org-subscription';
+import {
+  endOrgSubscriptionPort,
+  ensureOrgBusinessSubscription,
+  stripeOrgBilling,
+  syncOrgSeatQuantity,
+  type OrgBillingDeps,
+} from '../org-subscription';
 
 const TEST_KEY = process.env.STRIPE_TEST_SECRET_KEY;
 const RUN = `ow-d1 test ${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
@@ -43,7 +50,7 @@ const orgIds: string[] = [];
 const userIds: string[] = [];
 const customerIds = new Set<string>();
 
-async function testOrg(seats: number): Promise<{ orgId: string; email: string; deps: OrgBillingDeps }> {
+async function testOrg(seats: number): Promise<{ orgId: string; ownerId: string; email: string; deps: OrgBillingDeps }> {
   const email = `jono+${RUN.replace(/\W/g, '')}${orgIds.length}@northwind.test`;
   const owner = await factories.createUser({ email, name: 'Jono' });
   userIds.push(owner.id);
@@ -54,7 +61,7 @@ async function testOrg(seats: number): Promise<{ orgId: string; email: string; d
   });
   if (!created.ok) throw new Error(`org create failed: ${created.reason}`);
   orgIds.push(created.organization.id);
-  return { orgId: created.organization.id, email, deps: { stripe: stripeOrgBilling(client), prices: () => PRICES, countSeats: async () => seats } };
+  return { orgId: created.organization.id, ownerId: owner.id, email, deps: { stripe: stripeOrgBilling(client), prices: () => PRICES, countSeats: async () => seats } };
 }
 
 async function seatQuantityInStripe(subscriptionId: string): Promise<number | undefined> {
@@ -163,5 +170,18 @@ describe.skipIf(!TEST_KEY)('org Business subscription against the Stripe TEST AP
     expect(replayed.id).toBe(first.linkage.stripeSubscriptionId);
     const subs = await client.subscriptions.list({ customer: first.linkage.stripeCustomerId, status: 'all', limit: 10 });
     expect(subs.data).toHaveLength(1);
+  });
+
+  it('SEAT-1 (partial) deleting the org cancels its subscription in Stripe inside the delete, and a second cancel of the ended subscription is not attempted', async () => {
+    const { orgId, ownerId, deps } = await testOrg(1);
+    const { linkage } = await ensureOrgBusinessSubscription(orgId, deps);
+    customerIds.add(linkage.stripeCustomerId);
+    const noKick = { broadcast: async () => {}, kick: async () => {} };
+
+    const deleted = await deleteOrganization({ actorId: ownerId, orgId, choices: [], now: new Date() }, { ports: noKick, endSubscription: endOrgSubscriptionPort(deps) });
+    expect(deleted.ok).toBe(true);
+    expect((await client.subscriptions.retrieve(linkage.stripeSubscriptionId)).status).toBe('canceled');
+    // The port on an already-ended subscription leaves it alone rather than erroring.
+    await expect(endOrgSubscriptionPort(deps)({ orgId, stripeSubscriptionId: linkage.stripeSubscriptionId })).resolves.toBeUndefined();
   });
 });

@@ -15,7 +15,7 @@
 import type { OrgBillingStripe, OrgStripeSubscription } from '../org-subscription';
 import type { OrgBusinessSubscriptionParams, OrgCustomerParams } from '@pagespace/lib/billing/org-subscription-core';
 
-type WriteOp = 'createCustomer' | 'createSubscription' | 'createSubscriptionItem' | 'updateSubscriptionItemQuantity';
+type WriteOp = 'createCustomer' | 'createSubscription' | 'createSubscriptionItem' | 'updateSubscriptionItemQuantity' | 'cancelSubscription';
 
 interface Customer {
   id: string;
@@ -26,7 +26,13 @@ interface Customer {
 export class FakeOrgStripe implements OrgBillingStripe {
   customers = new Map<string, Customer>();
   subscriptions = new Map<string, OrgStripeSubscription>();
-  writes: Record<WriteOp, number> = { createCustomer: 0, createSubscription: 0, createSubscriptionItem: 0, updateSubscriptionItemQuantity: 0 };
+  writes: Record<WriteOp, number> = {
+    createCustomer: 0,
+    createSubscription: 0,
+    createSubscriptionItem: 0,
+    updateSubscriptionItemQuantity: 0,
+    cancelSubscription: 0,
+  };
   reads = { findCustomerByOrgId: 0, listCustomerSubscriptions: 0 };
   /** Every idempotency key a write was sent with, in order. */
   keysSeen: string[] = [];
@@ -162,6 +168,17 @@ export class FakeOrgStripe implements OrgBillingStripe {
         }
       }
       throw new Error(`No such subscription item: '${params.itemId}'`);
+    });
+  }
+
+  async cancelSubscription(subscriptionId: string, idempotencyKey: string): Promise<{ status: string }> {
+    const sub = this.subscriptions.get(subscriptionId);
+    if (!sub) throw new Error(`No such subscription: '${subscriptionId}'`);
+    // Stripe refuses to cancel what is already over; the shell must not ask.
+    if (sub.status === 'canceled' || sub.status === 'incomplete_expired') return { status: sub.status };
+    return this.write('cancelSubscription', idempotencyKey, { subscriptionId }, () => {
+      sub.status = 'canceled';
+      return { status: sub.status };
     });
   }
 

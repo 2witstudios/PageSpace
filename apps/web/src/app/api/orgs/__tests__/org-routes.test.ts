@@ -11,6 +11,7 @@ import type { SessionAuthResult, AuthError } from '@/lib/auth';
 import type { OrgRole } from '@pagespace/db/schema/organizations';
 
 const flags = vi.hoisted(() => ({ orgsEnabled: true }));
+const endSubscriptionPort = vi.hoisted(() => async () => {});
 
 vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({
   get ORGS_ENABLED() {
@@ -61,7 +62,7 @@ vi.mock('@pagespace/lib/organizations/invitations', () => ({
 }));
 vi.mock('@pagespace/lib/organizations/deletion', () => ({ deleteOrganization: vi.fn() }));
 vi.mock('@/lib/orgs/org-invite-delivery', () => ({ deliverOrgInvite: vi.fn() }));
-vi.mock('@/lib/org-billing/org-subscription', () => ({ startOrgBusinessTrial: vi.fn() }));
+vi.mock('@/lib/org-billing/org-subscription', () => ({ startOrgBusinessTrial: vi.fn(), endOrgSubscriptionPort: vi.fn(() => endSubscriptionPort) }));
 
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -402,7 +403,7 @@ describe('org route behaviour', () => {
     expect(deleteOrganization).toHaveBeenCalledWith(expect.objectContaining({
       orgId: ORG_ID,
       choices: [{ driveId: 'd_product', action: 'transfer', toUserId: 'user_priya' }],
-    }));
+    }), expect.anything());
     for (const step of steps) {
       expect(auditRequest).toHaveBeenCalledWith(expect.any(Request), expect.objectContaining({
         resourceType: 'drive',
@@ -412,12 +413,19 @@ describe('org route behaviour', () => {
     }
   });
 
+  it('SEAT-1 (partial) DELETE /api/orgs/[orgId] hands the service the port that ends the org\'s Stripe subscription', async () => {
+    asRole('OWNER');
+    const res = await orgRoute.DELETE(req('DELETE', { drives: [] }), params({ orgId: ORG_ID }));
+    expect(res.status).toBe(200);
+    expect(deleteOrganization).toHaveBeenCalledWith(expect.objectContaining({ orgId: ORG_ID }), { endSubscription: endSubscriptionPort });
+  });
+
   it('ORG-6 (partial) DELETE /api/orgs/[orgId] passes the caller so the service can re-check ownership, and maps its refusal', async () => {
     asRole('OWNER');
     vi.mocked(deleteOrganization).mockResolvedValue({ ok: false, status: 403, reason: 'not_owner' });
     const res = await orgRoute.DELETE(req('DELETE', { drives: [] }), params({ orgId: ORG_ID }));
     expect(res.status).toBe(403);
-    expect(deleteOrganization).toHaveBeenCalledWith(expect.objectContaining({ actorId: CALLER, orgId: ORG_ID }));
+    expect(deleteOrganization).toHaveBeenCalledWith(expect.objectContaining({ actorId: CALLER, orgId: ORG_ID }), expect.anything());
   });
 
   it('ORG-6 (partial) DELETE /api/orgs/[orgId] reports the drives that block the delete', async () => {

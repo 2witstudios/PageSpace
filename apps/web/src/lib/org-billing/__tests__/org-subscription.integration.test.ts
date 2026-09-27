@@ -19,10 +19,12 @@ import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schem
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { createOrganization } from '@pagespace/lib/organizations/repository';
+import { deleteOrganization } from '@pagespace/lib/organizations/deletion';
 import { ORG_ID_METADATA_KEY, type OrgBusinessPrices } from '@pagespace/lib/billing/org-subscription-core';
 import {
   ensureOrgBusinessSubscription,
   ensureOrgStripeCustomer,
+  endOrgSubscriptionPort,
   startOrgBusinessTrial,
   syncOrgSeatQuantity,
   type OrgBillingDeps,
@@ -302,7 +304,7 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
     await expect(ensureOrgBusinessSubscription('org_does_not_exist', deps)).rejects.toMatchObject({ code: 'org_not_found' });
     const unconfigured: OrgBillingDeps = { ...deps, prices: () => ({ basePriceId: '', seatPriceId: PRICES.seatPriceId }) };
     await expect(ensureOrgBusinessSubscription(orgId, unconfigured)).rejects.toMatchObject({ code: 'prices_not_configured' });
-    expect(stripe.writes).toEqual({ createCustomer: 0, createSubscription: 0, createSubscriptionItem: 0, updateSubscriptionItemQuantity: 0 });
+    expect(Object.values(stripe.writes).every((n) => n === 0)).toBe(true);
   });
 
   it('SEAT-8 (partial) starting the trial on org creation: a cloud org is subscribed and trialing, with no Stripe id in what the route sees', async () => {
@@ -334,5 +336,68 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
     expect((await orgRow(orgId)).stripeCustomerId).toBeNull();
     expect(await rowsFor(orgId)).toHaveLength(0);
     expect((await ensureOrgBusinessSubscription(orgId, deps)).linkage.status).toBe('trialing');
+  });
+
+  describe('deleting an org that has a subscription (ORG-6 meets SEAT-1)', () => {
+    const noKick = { broadcast: async () => {}, kick: async () => {} };
+
+    it('SEAT-1 (partial) cancels the live Stripe subscription and removes its row with the org, so nothing keeps billing a deleted org', async () => {
+      if (!dbAvailable) return;
+      const { orgId, ownerId, deps, stripe } = await northwind(1);
+      const { linkage } = await ensureOrgBusinessSubscription(orgId, deps);
+
+      const result = await deleteOrganization(
+        { actorId: ownerId, orgId, choices: [], now: new Date() },
+        { ports: noKick, endSubscription: endOrgSubscriptionPort(deps) },
+      );
+
+      expect(result.ok).toBe(true);
+      expect(stripe.subscriptions.get(linkage.stripeSubscriptionId)?.status).toBe('canceled');
+      expect(await rowsFor(orgId)).toHaveLength(0);
+      expect(await orgRow(orgId)).toBeUndefined();
+    });
+
+    it('SEAT-1 (partial) a Stripe failure while canceling refuses the whole delete: the org, its row and its subscription all stay, and a retry completes', async () => {
+      if (!dbAvailable) return;
+      const { orgId, ownerId, deps, stripe } = await northwind(1);
+      const { linkage } = await ensureOrgBusinessSubscription(orgId, deps);
+      stripe.failNext('cancelSubscription', Object.assign(new Error('Stripe is unavailable'), { type: 'StripeAPIError' }));
+
+      await expect(
+        deleteOrganization({ actorId: ownerId, orgId, choices: [], now: new Date() }, { ports: noKick, endSubscription: endOrgSubscriptionPort(deps) }),
+      ).rejects.toThrow(/unavailable/);
+      expect(await orgRow(orgId)).toBeDefined();
+      expect(await rowsFor(orgId)).toHaveLength(1);
+      expect(stripe.subscriptions.get(linkage.stripeSubscriptionId)?.status).toBe('trialing');
+
+      const retry = await deleteOrganization(
+        { actorId: ownerId, orgId, choices: [], now: new Date() },
+        { ports: noKick, endSubscription: endOrgSubscriptionPort(deps) },
+      );
+      expect(retry.ok).toBe(true);
+      expect(stripe.subscriptions.get(linkage.stripeSubscriptionId)?.status).toBe('canceled');
+    });
+
+    it('SEAT-1 (partial) a caller with no way to end the subscription cannot delete a subscribed org (fails closed, nothing changes)', async () => {
+      if (!dbAvailable) return;
+      const { orgId, ownerId, deps } = await northwind(1);
+      await ensureOrgBusinessSubscription(orgId, deps);
+      await expect(deleteOrganization({ actorId: ownerId, orgId, choices: [], now: new Date() }, { ports: noKick })).rejects.toThrow(
+        /subscription/,
+      );
+      expect(await orgRow(orgId)).toBeDefined();
+      expect(await rowsFor(orgId)).toHaveLength(1);
+    });
+
+    it('an org whose subscription already ended is deleted without a Stripe call', async () => {
+      if (!dbAvailable) return;
+      const { orgId, ownerId, deps, stripe } = await northwind(1);
+      await ensureOrgBusinessSubscription(orgId, deps);
+      await db.update(orgSubscriptions).set({ status: 'canceled' }).where(eq(orgSubscriptions.orgId, orgId));
+      const result = await deleteOrganization({ actorId: ownerId, orgId, choices: [], now: new Date() }, { ports: noKick });
+      expect(result.ok).toBe(true);
+      expect(stripe.writes.cancelSubscription).toBe(0);
+      expect(await rowsFor(orgId)).toHaveLength(0);
+    });
   });
 });
