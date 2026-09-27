@@ -851,9 +851,9 @@ async function gateSharedWallet(
         policySeatAllowanceCents: ORG_SPEND_POLICY_UNTIL_POLICY_STORE.seatAllowanceCents,
         now,
       });
-      const cap = seatCapCheck({ capCents: seat.capCents, usage: seat.usage, reservationCents: estCost });
+      const cap = seatCapCheck({ capCents: seat.capCents, dailyCapCents: seat.dailyCapCents, usage: seat.usage, reservationCents: estCost });
       if (!cap.allowed) return refused('source_cap_reached');
-      seatRemainingCents = cap.monthlyRemainingCents;
+      seatRemainingCents = Math.min(cap.monthlyRemainingCents ?? Number.MAX_SAFE_INTEGER, cap.dailyRemainingCents ?? Number.MAX_SAFE_INTEGER);
     }
 
     // Holds reserved against this wallet and (for a drive wallet) against its parent by

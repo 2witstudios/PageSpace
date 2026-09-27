@@ -754,6 +754,25 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     expect(pool.monthlyRemainingCents + pool.topupRemainingCents - pool.debtCents).toBe(900_000 - taken);
   });
 
+  it('WAL-2 (partial) WAL-7 (partial) a daily cap set on a member\'s seat binds per UTC day inside the monthly allowance', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+    const w = world;
+    await db.insert(walletConsumerCaps).values({ walletId: w.poolId, consumerKey: `user:${w.marcusId}`, dailyCapCents: 50, monthlyCapCents: 100 });
+
+    expect(await seatCall(w, w.marcusId)).toMatchObject({ allowed: true });
+    expect(await seatCall(w, w.marcusId)).toMatchObject({ allowed: true });
+    const third = await canConsumeAI(w.marcusId, 'pro', { spend: driveSpend(w.productId, 'seat_allowance') });
+    expect(third).toEqual({ allowed: false, reason: 'source_refused', refusal: { source: 'seat_allowance', reason: 'source_cap_reached', options: ['drive_wallet', 'own_credits'] } });
+
+    // Yesterday's 50¢ no longer counts against today, but still counts against the month.
+    await db.update(creditLedger).set({ createdAt: new Date(Date.now() - 36 * 3_600_000) }).where(and(eq(creditLedger.userId, w.marcusId), eq(creditLedger.walletId, w.poolId)));
+    expect(await seatCall(w, w.marcusId)).toMatchObject({ allowed: true });
+    expect(await seatCall(w, w.marcusId)).toMatchObject({ allowed: true });
+    expect(await canConsumeAI(w.marcusId, 'pro', { spend: driveSpend(w.productId, 'seat_allowance') })).toMatchObject({ allowed: false, refusal: { reason: 'source_cap_reached' } });
+    expect(await seatChargedCents(w, w.marcusId)).toBe(100);
+  });
+
   it('WAL-2 (partial) the funding-legs invariant holds after capped seat spends beside drive-wallet spends on donated legs', async () => {
     if (!dbAvailable) return;
     world = await build({ productAllocationCents: 0, poolCents: 900_000 });

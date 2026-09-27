@@ -45,7 +45,7 @@ describe('creditGateErrorResponse', () => {
     const body = await res.json();
     expect(res.status).toBe(402);
     expect(body).toMatchObject({ error: 'spend_source_refused', source: 'seat_allowance', refusalReason: 'source_cap_reached', options: ['own_credits'] });
-    expect(body.message).toBe("You've used your seat allowance for this billing period. Choose another source to continue.");
+    expect(body.message).toBe("You've reached the limit of your seat allowance. Choose another source to continue.");
   });
 
   it('SPEND-4 (partial) any other refused source keeps the general refusal copy', async () => {

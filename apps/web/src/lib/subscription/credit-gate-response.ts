@@ -54,7 +54,7 @@ export function creditGatePayload(reason: GateResult['reason']): {
  * WAL-2: a seat refused by the member's monthly allowance is not a source that "cannot cover"
  * the call — the org pool may be full. Say what ran out.
  */
-const SEAT_CAP_REACHED_MESSAGE = "You've used your seat allowance for this billing period. Choose another source to continue.";
+const SEAT_CAP_REACHED_MESSAGE = "You've reached the limit of your seat allowance. Choose another source to continue.";
 
 /**
  * Convenience: the standard JSON response for a denied gate result. A refused source

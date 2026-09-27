@@ -656,7 +656,7 @@ describe('seat allowance — the per-consumer monthly cap on the org pool (WAL-2
     expect(seatSpentCents(millicents)).toBe(expected);
   });
 
-  const usage = (periodChargedMillicents: number, periodReservedCents = 0) => ({ periodChargedMillicents, periodReservedCents });
+  const usage = (periodChargedMillicents: number, periodReservedCents = 0, dayChargedMillicents = 0) => ({ periodChargedMillicents, periodReservedCents, dayChargedMillicents });
 
   it.each([
     ['within the cap', c(100), usage(40_000), c(25), { allowed: true, monthlyRemainingCents: c(60) }],
@@ -665,7 +665,7 @@ describe('seat allowance — the per-consumer monthly cap on the org pool (WAL-2
     ['this consumer\'s calls in flight count like spend', c(100), usage(40_000, c(50)), c(25), { allowed: false, reason: 'monthly_cap_exceeded', monthlyRemainingCents: c(10) }],
     ['a cap of zero refuses any call', 0, usage(0), c(25), { allowed: false, reason: 'monthly_cap_exceeded', monthlyRemainingCents: 0 }],
   ] as const)('WAL-2 (partial) seatCapCheck: %s', (_label, capCents, seatUsage, reservationCents, expected) => {
-    expect(seatCapCheck({ capCents, usage: seatUsage, reservationCents })).toMatchObject(expected);
+    expect(seatCapCheck({ capCents, dailyCapCents: null, usage: seatUsage, reservationCents })).toMatchObject(expected);
   });
 
   it.each([
@@ -674,7 +674,21 @@ describe('seat allowance — the per-consumer monthly cap on the org pool (WAL-2
     ['a spent cap leaves nothing, whatever the pool holds', c(9000), c(100), usage(100_000), 0],
     ['a zero cap leaves nothing', c(9000), 0, usage(0), 0],
   ] as const)('WAL-2 (partial) seatLegSpendableCents: %s', (_label, poolSpendableCents, capCents, seatUsage, expected) => {
-    expect(seatLegSpendableCents({ poolSpendableCents, capCents, usage: seatUsage })).toBe(expected);
+    expect(seatLegSpendableCents({ poolSpendableCents, capCents, dailyCapCents: null, usage: seatUsage })).toBe(expected);
+  });
+
+  it.each([
+    ['a set daily cap binds within the monthly allowance', c(100), c(50), usage(30_000, 0, 30_000), c(25), { allowed: false, reason: 'daily_cap_exceeded', dailyRemainingCents: c(20), monthlyRemainingCents: c(70) }],
+    ['earlier days do not count against today', c(100), c(50), usage(60_000, 0, 10_000), c(25), { allowed: true, dailyRemainingCents: c(40), monthlyRemainingCents: c(40) }],
+    ['calls in flight count against today too', c(100), c(50), usage(0, c(40), 0), c(25), { allowed: false, reason: 'daily_cap_exceeded' }],
+    ['no daily cap set is no daily limit (WAL-7: unset is unlimited within the leg)', c(100), null, usage(70_000, 0, 70_000), c(25), { allowed: true, dailyRemainingCents: null }],
+  ] as const)('WAL-2 (partial) WAL-7 (partial) seatCapCheck with a per-consumer DAILY cap: %s', (_label, capCents, dailyCapCents, seatUsage, reservationCents, expected) => {
+    expect(seatCapCheck({ capCents, dailyCapCents, usage: seatUsage, reservationCents })).toMatchObject(expected);
+  });
+
+  it('WAL-2 (partial) WAL-7 (partial) the seat leg is bounded by the smaller of what is left today and this period', () => {
+    expect(seatLegSpendableCents({ poolSpendableCents: c(9000), capCents: c(100), dailyCapCents: c(50), usage: usage(40_000, 0, 30_000) })).toBe(c(20));
+    expect(seatLegSpendableCents({ poolSpendableCents: c(9000), capCents: c(100), dailyCapCents: c(50), usage: usage(90_000, 0, 0) })).toBe(c(10));
   });
 
   it('WAL-2 (partial) D-OW-12 the seat period is the pool\'s refill date, never the person\'s renewal; no refill yet is the UTC month', () => {

@@ -617,28 +617,44 @@ export function seatSpentCents(chargedMillicents: number): number {
 export interface SeatUsage {
   /** SUM(chargeMillicents) of their usage and reconcile rows on the pool since the period start. */
   periodChargedMillicents: number;
-  /** Their live holds on the pool (calls in flight), counted like spend. */
+  /** Their live holds on the pool (calls in flight), counted like spend — this period and today. */
   periodReservedCents: number;
+  /** The same SUM since the start of today, UTC (WAL-7's daily window, D20.3). */
+  dayChargedMillicents: number;
 }
 
-/** The seat cap against this call's reservation: spend plus in-flight holds plus this call ≤ cap. */
-export function seatCapCheck(input: { capCents: number; usage: SeatUsage; reservationCents: number }): CapsResult {
+/**
+ * The seat caps against this call's reservation: spend plus in-flight holds plus this call must
+ * fit the monthly allowance and, when the consumer has one set, their daily cap (WAL-7; unset is
+ * no daily limit). In-flight holds are hours old at most, so they count against today as well.
+ */
+export function seatCapCheck(input: {
+  capCents: number;
+  dailyCapCents: number | null;
+  usage: SeatUsage;
+  reservationCents: number;
+}): CapsResult {
   return evaluateCaps({
-    caps: { dailyCents: null, monthlyCents: input.capCents },
+    caps: { dailyCents: input.dailyCapCents, monthlyCents: input.capCents },
     usage: {
-      dailySpentCents: 0,
+      dailySpentCents: seatSpentCents(input.usage.dayChargedMillicents),
       monthlySpentCents: seatSpentCents(input.usage.periodChargedMillicents),
-      dailyReservedCents: 0,
+      dailyReservedCents: input.usage.periodReservedCents,
       monthlyReservedCents: input.usage.periodReservedCents,
     },
     reservationCents: input.reservationCents,
   });
 }
 
-/** What a consumer may still spend through their seat: the pool's spendable, bounded by what is left of their cap. */
-export function seatLegSpendableCents(input: { poolSpendableCents: number; capCents: number; usage: SeatUsage }): number {
-  const cap = seatCapCheck({ capCents: input.capCents, usage: input.usage, reservationCents: 0 });
-  return legSpendableCents(input.poolSpendableCents, { dailyRemainingCents: null, monthlyRemainingCents: cap.monthlyRemainingCents });
+/** What a consumer may still spend through their seat: the pool's spendable, bounded by what is left of their caps. */
+export function seatLegSpendableCents(input: {
+  poolSpendableCents: number;
+  capCents: number;
+  dailyCapCents: number | null;
+  usage: SeatUsage;
+}): number {
+  const cap = seatCapCheck({ capCents: input.capCents, dailyCapCents: input.dailyCapCents, usage: input.usage, reservationCents: 0 });
+  return legSpendableCents(input.poolSpendableCents, cap);
 }
 
 /** D-OW-12: a seat's cap resets on the pool's refill date, never on the person's own renewal. */

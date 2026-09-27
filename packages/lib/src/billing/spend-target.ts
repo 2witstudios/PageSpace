@@ -272,10 +272,16 @@ export function seatAllowanceLeg(input: {
   status: WalletStatus;
   poolSpendableCents: number;
   capCents: number;
+  dailyCapCents: number | null;
   usage: SeatUsage;
 }): SpendLeg {
   const pool = walletLeg(input.poolId, input.status, input.poolSpendableCents);
-  const spendableCents = seatLegSpendableCents({ poolSpendableCents: pool.spendableCents, capCents: input.capCents, usage: input.usage });
+  const spendableCents = seatLegSpendableCents({
+    poolSpendableCents: pool.spendableCents,
+    capCents: input.capCents,
+    dailyCapCents: input.dailyCapCents,
+    usage: input.usage,
+  });
   return { ...pool, spendableCents, capReached: spendableCents < pool.spendableCents };
 }
 

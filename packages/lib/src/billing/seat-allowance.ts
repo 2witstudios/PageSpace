@@ -31,13 +31,19 @@ import type { db } from '@pagespace/db/db';
 import { and, eq, gt, gte, inArray, sql } from '@pagespace/db/operators';
 import { creditHolds, creditLedger } from '@pagespace/db/schema/credits';
 import { walletConsumerCaps } from '@pagespace/db/schema/wallets';
-import { seatAllowanceCents, seatPeriodStartMs, userConsumerKey, type SeatUsage } from './wallet-core';
+import { seatAllowanceCents, seatPeriodStartMs, userConsumerKey, utcDayStartMs, type SeatUsage } from './wallet-core';
 
 type Reader = Pick<typeof db, 'select'>;
 
 export interface SeatCapFacts {
   /** This consumer's monthly seat allowance on the pool, whole cents (never unlimited). */
   capCents: number;
+  /**
+   * Their daily cap on the pool leg when one is set (wallet_consumer_caps.dailyCapCents);
+   * null = no daily limit (WAL-7: unset is unlimited within the leg). No default is applied:
+   * D20.5's 10-credit day is below one call's reservation and would refuse every seat call.
+   */
+  dailyCapCents: number | null;
   usage: SeatUsage;
 }
 
@@ -55,12 +61,17 @@ export async function loadSeatCapFacts(
 ): Promise<SeatCapFacts> {
   const periodStart = new Date(seatPeriodStartMs({ poolPeriodStartMs: input.poolPeriodStart?.getTime() ?? null, nowMs: input.now.getTime() }));
   const [cap] = await executor
-    .select({ monthlyCapCents: walletConsumerCaps.monthlyCapCents })
+    .select({ monthlyCapCents: walletConsumerCaps.monthlyCapCents, dailyCapCents: walletConsumerCaps.dailyCapCents })
     .from(walletConsumerCaps)
     .where(and(eq(walletConsumerCaps.walletId, input.poolId), eq(walletConsumerCaps.consumerKey, userConsumerKey(input.userId))))
     .limit(1);
+  // The day window never reaches back before the period: a refill mid-day starts both afresh.
+  const dayStart = new Date(Math.max(periodStart.getTime(), utcDayStartMs(input.now.getTime())));
   const [charged] = await executor
-    .select({ millicents: sql<string>`coalesce(sum(${creditLedger.chargeMillicents}), 0)` })
+    .select({
+      millicents: sql<string>`coalesce(sum(${creditLedger.chargeMillicents}), 0)`,
+      dayMillicents: sql<string>`coalesce(sum(${creditLedger.chargeMillicents}) FILTER (WHERE ${creditLedger.createdAt} >= ${dayStart}), 0)`,
+    })
     .from(creditLedger)
     .where(and(
       eq(creditLedger.userId, input.userId),
@@ -81,9 +92,11 @@ export async function loadSeatCapFacts(
       consumerMonthlyCapCents: cap?.monthlyCapCents ?? null,
       policySeatAllowanceCents: input.policySeatAllowanceCents,
     }),
+    dailyCapCents: cap?.dailyCapCents ?? null,
     usage: {
       periodChargedMillicents: Number(charged?.millicents ?? 0),
       periodReservedCents: Number(held?.cents ?? 0),
+      dayChargedMillicents: Number(charged?.dayMillicents ?? 0),
     },
   };
 }

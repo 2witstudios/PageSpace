@@ -153,20 +153,20 @@ describe('spend-target: wallet rows to legs', () => {
 });
 
 describe('spend-target: the seat leg is capped per consumer (WAL-2)', () => {
-  const noSpend = { periodChargedMillicents: 0, periodReservedCents: 0 };
+  const noSpend = { periodChargedMillicents: 0, periodReservedCents: 0, dayChargedMillicents: 0 };
 
   it('WAL-2 (partial) a full pool through a seat spends only what is left of that consumer\'s cap, and says the cap binds', () => {
-    const leg = seatAllowanceLeg({ poolId: 'w-pool', status: 'active', poolSpendableCents: c(9000), capCents: c(100), usage: { periodChargedMillicents: 60_000, periodReservedCents: 0 } });
+    const leg = seatAllowanceLeg({ poolId: 'w-pool', status: 'active', poolSpendableCents: c(9000), capCents: c(100), dailyCapCents: null, usage: { periodChargedMillicents: 60_000, periodReservedCents: 0, dayChargedMillicents: 0 } });
     expect(leg).toEqual({ walletId: 'w-pool', status: 'active', spendableCents: c(40), capReached: true });
   });
 
   it('WAL-2 (partial) where the pool, not the cap, is the bound the leg is not cap-limited', () => {
-    const leg = seatAllowanceLeg({ poolId: 'w-pool', status: 'active', poolSpendableCents: c(30), capCents: c(100), usage: noSpend });
+    const leg = seatAllowanceLeg({ poolId: 'w-pool', status: 'active', poolSpendableCents: c(30), capCents: c(100), dailyCapCents: null, usage: noSpend });
     expect(leg).toEqual({ walletId: 'w-pool', status: 'active', spendableCents: c(30), capReached: false });
   });
 
   it('WAL-2 (partial) a spent cap refuses the seat by the cap, charges nothing, and offers the rest', () => {
-    const seat = seatAllowanceLeg({ poolId: 'w-pool', status: 'active', poolSpendableCents: c(9000), capCents: c(100), usage: { periodChargedMillicents: 100_000, periodReservedCents: 0 } });
+    const seat = seatAllowanceLeg({ poolId: 'w-pool', status: 'active', poolSpendableCents: c(9000), capCents: c(100), dailyCapCents: null, usage: { periodChargedMillicents: 100_000, periodReservedCents: 0, dayChargedMillicents: 0 } });
     const decision = decideCallSpend({
       actor: { kind: 'person', userId: 'u-marcus', isGuest: false },
       driveWallet: walletLeg('w-product', 'active', c(1200)),
