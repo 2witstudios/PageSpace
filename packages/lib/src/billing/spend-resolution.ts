@@ -214,8 +214,8 @@ async function resolveAutomationSpend(input: {
       driveId: input.driveId,
       walletId: decision.walletId,
       reason: decision.reason,
-      orgLapsed,
     });
+    if (orgLapsed) loggers.ai.info('automation run skipped: org lapsed', { driveId: input.driveId, orgId: standing?.orgId ?? null });
     if (standing) {
       try {
         await notifyLeadOfAutomationSkip({

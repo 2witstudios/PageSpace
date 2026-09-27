@@ -29,7 +29,8 @@
  */
 import { db } from '@pagespace/db/db';
 import { eq, sql } from '@pagespace/db/operators';
-import { organizations, orgSubscriptions } from '@pagespace/db/schema/organizations';
+import { orgSubscriptions } from '@pagespace/db/schema/organizations';
+import { findOrgIdByStripeCustomerId } from '@pagespace/lib/organizations/repository';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { isBillingEnabled } from '@pagespace/lib/deployment-mode';
 import { applyOrgPoolRefill, type OrgPoolRefillOutcome } from '@pagespace/lib/billing/wallet-funding-shell';
@@ -63,13 +64,7 @@ function customerIdOf(customer: string | { id?: string | null } | null | undefin
 
 /** The org whose Stripe customer this is, or null. */
 export async function orgForStripeCustomer(customerId: string | null): Promise<string | null> {
-  if (!customerId) return null;
-  const [org] = await db
-    .select({ id: organizations.id })
-    .from(organizations)
-    .where(eq(organizations.stripeCustomerId, customerId))
-    .limit(1);
-  return org?.id ?? null;
+  return customerId ? findOrgIdByStripeCustomerId(customerId) : null;
 }
 
 /** SEAT-7: whose event is this — an org's, a person's, or an org-tagged event we must not apply. */

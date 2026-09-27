@@ -90,7 +90,7 @@ describe('deriveOrgStatus', () => {
 });
 
 describe('orgStatusAllows', () => {
-  it('SEAT-9 (partial) only a lapsed org is refused, with the SEAT-9 message and a stable code', () => {
+  it('SEAT-9 (partial) only a lapsed org is refused, with the lapse refusal message and a stable code', () => {
     expect(orgStatusAllows({ status: 'active', reason: null })).toEqual({ ok: true });
     expect(orgStatusAllows({ status: 'trialing', reason: null })).toEqual({ ok: true });
     expect(orgStatusAllows({ status: 'past_due', reason: null })).toEqual({ ok: true });

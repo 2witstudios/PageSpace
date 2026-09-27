@@ -139,7 +139,7 @@ async function footprint(w: World) {
   };
 }
 
-describe('SEAT-9 lapse gates (orgs on, real Postgres)', () => {
+describe('org lapse gates (orgs on, real Postgres)', () => {
   beforeAll(async () => {
     try {
       await db.select({ id: orgSubscriptions.id }).from(orgSubscriptions).limit(1);
@@ -162,7 +162,7 @@ describe('SEAT-9 lapse gates (orgs on, real Postgres)', () => {
     world = null;
   });
 
-  it('SEAT-9 (partial) a lapsed org refuses an invite with the SEAT-9 message and writes nothing; reactivated, the same invite goes through', async () => {
+  it('SEAT-9 (partial) a lapsed org refuses an invite with the lapse refusal message and writes nothing; reactivated, the same invite goes through', async () => {
     if (!world) return;
     const w = world;
     await setSubscription(w.orgId, 'canceled');

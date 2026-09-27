@@ -495,7 +495,7 @@ describe('org route behaviour', () => {
     expect((await invitationsRoute.POST(req('POST', { email: 'dana@northwind.test' }), params({ orgId: ORG_ID }))).status).toBe(403);
   });
 
-  it('SEAT-9 (partial) a lapsed org\'s invite and resend answer 402 with the SEAT-9 message and the org_lapsed code', async () => {
+  it('SEAT-9 (partial) a lapsed org\'s invite and resend answer 402 with the lapse refusal message and the org_lapsed code', async () => {
     asRole('ADMIN');
     const lapsed = { ok: false as const, status: 402 as const, reason: 'org_lapsed' as const, message: ORG_LAPSED_MESSAGE };
     vi.mocked(invitations.createOrRotateInvitation).mockResolvedValue(lapsed);

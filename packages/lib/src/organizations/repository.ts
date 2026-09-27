@@ -51,6 +51,19 @@ export async function retryOnDeadlock<T>(work: () => Promise<T>, attempts = 3): 
   }
 }
 
+/**
+ * The org whose own Stripe customer this is (SEAT-1: one per org, never a person's), or
+ * null. The Stripe webhook's org routing reads it here, so no API route reads the org table.
+ */
+export async function findOrgIdByStripeCustomerId(customerId: string): Promise<string | null> {
+  const [org] = await db
+    .select({ id: organizations.id })
+    .from(organizations)
+    .where(eq(organizations.stripeCustomerId, customerId))
+    .limit(1);
+  return org?.id ?? null;
+}
+
 export async function findMembershipRole(orgId: string, userId: string): Promise<OrgRole | null> {
   const [row] = await db
     .select({ role: orgMembers.role })

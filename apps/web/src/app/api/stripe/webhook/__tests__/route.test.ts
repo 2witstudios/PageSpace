@@ -1520,7 +1520,7 @@ describe('POST /api/stripe/webhook', () => {
     });
   });
 
-  describe('SEAT-7 org fork: org events before the personal handlers', () => {
+  describe('org fork: org events before the personal handlers', () => {
     const post = async (event: unknown) => {
       mockStripeWebhooksConstructEvent.mockReturnValue(event);
       const request = new Request('https://example.com/api/stripe/webhook', {
@@ -1574,7 +1574,7 @@ describe('POST /api/stripe/webhook', () => {
       expect(mockTxInsertValues).not.toHaveBeenCalled();
     });
 
-    it("SEAT-1 checkout completed on an ORG's customer is never linked to the paying person", async () => {
+    it("SEAT-1 (partial) checkout completed on an ORG's customer is never linked to the paying person", async () => {
       mockOrgForStripeCustomer.mockResolvedValueOnce('org_northwind');
       const session = mockCheckoutSession({ mode: 'subscription', customer: 'cus_org', customerEmail: 'jono@northwind.test' });
       const response = await post(mockStripeEvent('checkout.session.completed', session));
