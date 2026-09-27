@@ -56,7 +56,6 @@ import {
   applyIntegrationDecisions,
 } from '@/lib/memory/integration-service';
 import { checkAndCompactIfNeeded } from '@/lib/memory/compaction-service';
-import { writeWeeklyDigest } from '@/lib/memory/digest-service';
 import type { MemoryGateRefusal } from '@/lib/memory/memory-credit-gate';
 import {
   upsertCandidates,
@@ -352,8 +351,6 @@ async function processUserMemory(
       creditRefusals.push({ step: 'compaction', reason: compactionResult.creditRefusal });
     }
   }
-
-  await writeWeeklyDigest(userId);
 
   // Step 8: Prune stale candidates
   const pruned = await runRetention(userId);
