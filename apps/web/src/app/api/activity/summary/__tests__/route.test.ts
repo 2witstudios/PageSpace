@@ -55,7 +55,7 @@ vi.mock('@pagespace/db/schema/core', () => ({
   drives: { id: 'id', ownerId: 'ownerId' },
 }));
 vi.mock('@pagespace/db/schema/members', () => ({
-  driveMembers: { driveId: 'driveId', userId: 'userId' },
+  driveMembers: { driveId: 'driveId', userId: 'userId', role: 'role' },
 }));
 vi.mock('@pagespace/db/schema/tasks', () => ({
   taskItems: { assigneeId: 'assigneeId', userId: 'userId', status: 'status', dueDate: 'dueDate', completedAt: 'completedAt' },
@@ -97,6 +97,15 @@ describe('GET /api/activity/summary', () => {
       expect.any(Request),
       expect.objectContaining({ eventType: 'data.read', userId: 'user_1', resourceType: 'activity_summary', resourceId: 'user_1' })
     );
+  });
+
+  it('does not count a GUEST drive (redeemed page share link) among the member drives', async () => {
+    await GET(new Request('https://example.com/api/activity/summary'));
+
+    // The count is scoped to accessiblePageIds, never a drive_members read of this route's own;
+    // its SQL function gives a GUEST row only its explicit grants (drizzle/0309), which
+    // accessible-page-ids-agreement.integration.test.ts proves on real Postgres.
+    expect(accessiblePageIds).toHaveBeenCalledWith('user_1');
   });
 
   it('does not log audit event when query throws', async () => {

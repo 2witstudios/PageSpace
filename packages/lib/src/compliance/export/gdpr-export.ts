@@ -27,6 +27,7 @@ import { emailNotificationPreferences } from '@pagespace/db/schema/email-notific
 import { decryptUserRow } from '../../auth/user-repository';
 import { agentAccounts, agentAccountApprovals, agentAccountBindings, agentAccountDelegations } from '@pagespace/db/schema/agent-accounts';
 import { getClickHouseGdprClient } from '../../observability/clickhouse-client';
+import { isGuestRole } from '../../permissions/guest-role';
 import {
   collectChUserSystemLogs,
   collectChUserApiMetrics,
@@ -613,13 +614,18 @@ export async function collectUserDrives(database: DB, userId: string): Promise<U
     .innerJoin(drives, eq(driveMembers.driveId, drives.id))
     .where(eq(driveMembers.userId, userId));
 
-  const members: UserDriveExport[] = memberDrives.map(d => ({
-    id: d.id,
-    name: d.name,
-    slug: d.slug,
-    role: d.role,
-    createdAt: d.createdAt,
-  }));
+  // A GUEST row (redeemed page share link) is not a drive the subject belongs
+  // to: every drive listed here has its pages, sheets and tags exported below,
+  // and a guest was given single pages of it, not its content.
+  const members: UserDriveExport[] = memberDrives
+    .filter((d): d is typeof d & { role: UserDriveExport['role'] } => !isGuestRole(d.role))
+    .map(d => ({
+      id: d.id,
+      name: d.name,
+      slug: d.slug,
+      role: d.role,
+      createdAt: d.createdAt,
+    }));
 
   // Deduplicate (owner is also a member)
   const seen = new Set(owned.map(d => d.id));

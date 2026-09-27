@@ -27,7 +27,8 @@ import {
   type ListDrivesOptions,
 } from '../../services/drive-service';
 import { checkGrantAuthority, parseScopeList, scopeSetToDriveScopes, type GrantAuthority } from '../../auth/oauth/scopes';
-import { cleanupNorthwind, northwind, type Fixture } from './fixtures/northwind-org-drives';
+import { cleanupNorthwind, createUser, northwind, type Fixture } from './fixtures/northwind-org-drives';
+import { factories } from '@pagespace/db/test/factories';
 import {
   legacyGetDriveAccess,
   legacyGetDriveAccessWithDrive,
@@ -129,6 +130,46 @@ describe('org access in the human drive resolvers (integration)', () => {
     expect(await listedIds(f.people.fred.id)).toEqual([f.drives.research.id]);
 
     expect(await auditRowsFor([f.drives.product.id, f.drives.research.id, f.drives.finance.id])).toEqual([]);
+  });
+
+  it('D-OW-24 a GUEST row (a redeemed page share link) resolves exactly as master\'s frozen resolvers do, dark and on a personal drive once orgs are on: it opens its granted page and nothing drive-wide', async () => {
+    const f = await northwind();
+    // Gus redeemed page links: a GUEST row plus a page grant on Marcus's personal drive and on
+    // Product (OPEN), and a bare GUEST row on Research (RESTRICTED), whose page he was never given.
+    const gus = await createUser('Gus Guest');
+    await factories.createDriveMember(f.drives.personal.id, gus.id, { source: 'invite', role: 'GUEST' });
+    await factories.createPagePermission(f.pages.personalPage.id, gus.id);
+    await factories.createDriveMember(f.drives.product.id, gus.id, { source: 'invite', role: 'GUEST' });
+    await factories.createPagePermission(f.pages.productPage.id, gus.id);
+    await factories.createDriveMember(f.drives.research.id, gus.id, { source: 'invite', role: 'GUEST' });
+
+    const driveIds = Object.values(f.drives).map((d) => d.id);
+    const pageIds = Object.values(f.pages).map((p) => p.id);
+    flags.orgsEnabled = false;
+    expect(await expectResolversMatchLegacy([gus.id], driveIds, pageIds)).toBe((6 + 8) + 6 * 2 + LIST_OPTIONS.length);
+
+    // Not vacuous: the GUEST row is really there, and it is no membership anywhere.
+    const noMembership = { isOwner: false, isAdmin: false, isMember: false, role: null, customRoleId: null };
+    for (const drive of [f.drives.personal, f.drives.product, f.drives.research]) {
+      expect(await getDriveAccess(drive.id, gus.id), drive.name).toEqual(noMembership);
+      expect(await getUserAccessLevel(gus.id, drive.id), `${drive.name} root`).toBeNull();
+    }
+    // The granted pages open; a non-private page of the same drives that a MEMBER reads by rule 4 does not.
+    expect(await getUserAccessLevel(gus.id, f.pages.personalPage.id)).toMatchObject({ canView: true });
+    expect(await getUserAccessLevel(gus.id, f.pages.productPage.id)).toMatchObject({ canView: true });
+    expect(await getUserAccessLevel(gus.id, f.pages.researchPage.id)).toBeNull();
+    expect(await getUserAccessLevel(f.people.eve.id, f.pages.researchPage.id)).toMatchObject({ canView: true });
+
+    // Orgs on: Gus is in no org, so the org drives stay closed beyond his grants, and the personal
+    // drive still resolves exactly as master's resolvers do.
+    flags.orgsEnabled = true;
+    for (const target of [f.drives.personal.id, f.pages.personalPage.id, f.pages.personalPrivatePage.id]) {
+      expect(await getUserAccessLevel(gus.id, target)).toEqual(await legacyGetUserAccessLevel(gus.id, target));
+    }
+    expect(await getDriveAccess(f.drives.personal.id, gus.id)).toEqual(await legacyGetDriveAccess(f.drives.personal.id, gus.id));
+    expect(await getDriveAccess(f.drives.product.id, gus.id)).toEqual(noMembership);
+    expect(await getUserAccessLevel(gus.id, f.pages.researchPage.id)).toBeNull();
+    expect(await listedIds(gus.id)).not.toContain(f.drives.research.id);
   });
 
   it('while ORGS_ENABLED is true personal drives still resolve exactly as before', async () => {

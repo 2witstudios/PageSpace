@@ -48,6 +48,7 @@ import { PageType } from '../utils/enums';
 import { loadPagePayload } from './page-payload-service';
 import { decryptUserRow } from '../auth/user-repository';
 import { listMemberDrives, type MemberDrive } from '../permissions/member-drives';
+import { isGuestRole } from '../permissions/guest-role';
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -200,7 +201,8 @@ async function fetchDriveMembers(
     .from(driveMembers)
     .where(inArray(driveMembers.driveId, driveIds));
 
-  return rows.map((row) => ({
+  // Guests are not drive members, so they are not on any drive's roster.
+  return rows.filter((row) => !isGuestRole(row.role)).map((row) => ({
     id: row.id,
     driveId: row.driveId,
     userId: row.userId,

@@ -11,8 +11,9 @@ import { loggers } from '../logging/logger-config';
  *   grants and nothing drive-wide, so for every membership decision (join requests, admission, the
  *   directory, recipients, resolvers) a GUEST row reads as no membership (null).
  *
- * GUEST is classified before the enum value exists on this branch, so the decision is already
- * right when master's migration brings it in. Two guards keep the next value from passing silently:
+ * Master's 0308 (#2723) added GUEST to the enum; master's own per-site checks use isGuestRole
+ * (guest-role.ts), and the two agree on every enum value (drive-member-role.test.ts). Two guards
+ * keep the next value from passing silently:
  * - compile time (exhaustiveness): MEMBERSHIP_OF must name every value of the database enum, so
  *   adding one to memberRole without classifying it here is a type error;
  * - run time (fail closed): a role nobody classified, or a row with no role, reads as NO membership
@@ -22,7 +23,7 @@ import { loggers } from '../logging/logger-config';
 
 type StoredDriveMemberRole = (typeof memberRole.enumValues)[number];
 
-const MEMBERSHIP_OF: Readonly<Record<StoredDriveMemberRole | 'GUEST', DriveMemberRole | null>> = {
+const MEMBERSHIP_OF: Readonly<Record<StoredDriveMemberRole, DriveMemberRole | null>> = {
   OWNER: 'OWNER',
   ADMIN: 'ADMIN',
   MEMBER: 'MEMBER',

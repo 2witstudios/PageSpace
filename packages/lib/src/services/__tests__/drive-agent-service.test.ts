@@ -32,6 +32,8 @@ vi.mock('../../permissions/permissions', () => ({
 vi.mock('../../permissions/membership-queries', () => ({
   customRoleBelongsToDrive: vi.fn(),
   fetchCustomRolePermissions: vi.fn(),
+  // Real-Postgres proof of the GUEST read: share-link-guest.integration.test.ts.
+  holdsAcceptedGuestRow: vi.fn(async () => false),
 }));
 
 // ---------------------------------------------------------------------------
@@ -51,7 +53,7 @@ import { eq, ne } from '@pagespace/db/operators';
 import { driveAgentMembers } from '@pagespace/db/schema/members';
 import { pages } from '@pagespace/db/schema/core';
 import { canUserEditPage, getUserDriveAccess, isDriveOwnerOrAdmin } from '../../permissions/permissions';
-import { customRoleBelongsToDrive, fetchCustomRolePermissions } from '../../permissions/membership-queries';
+import { customRoleBelongsToDrive, fetchCustomRolePermissions, holdsAcceptedGuestRow } from '../../permissions/membership-queries';
 
 const USER = 'user_aaaaaaaaaaaaaaaaaaaaaa';
 const AGENT = 'agent_bbbbbbbbbbbbbbbbbbbbbb';
@@ -193,6 +195,23 @@ describe('addAgentToDrive', () => {
     const res = await addAgentToDrive({ actingUserId: USER, agentPageId: AGENT, driveId: DRIVE });
     expect(res.ok).toBe(true);
     expect(captured[0]).toMatchObject({ role: 'MEMBER' });
+  });
+
+  it('D-OW-24 refuses a GUEST granter (redeemed page share link) even though its page grant opens the drive', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect(AI_CHAT_PAGE))                 // agent lookup
+      .mockReturnValueOnce(stubSelect([{ ownerId: 'someone_else' }])) // drive lookup
+      .mockReturnValueOnce(stubSelect([]));                           // the effective membership reads a GUEST row as none
+    vi.mocked(canUserEditPage).mockResolvedValue(true);
+    vi.mocked(getUserDriveAccess).mockResolvedValue(true); // its page grant
+    vi.mocked(holdsAcceptedGuestRow).mockResolvedValueOnce(true);
+    const captured: Record<string, unknown>[] = [];
+    stubInsert(captured);
+
+    const res = await addAgentToDrive({ actingUserId: USER, agentPageId: AGENT, driveId: DRIVE });
+    expect(res).toMatchObject({ ok: false, status: 403 });
+    expect(holdsAcceptedGuestRow).toHaveBeenCalledWith(DRIVE, USER);
+    expect(captured).toEqual([]);
   });
 
   it('rejects a request to grant ADMIN when the granter is only a MEMBER', async () => {

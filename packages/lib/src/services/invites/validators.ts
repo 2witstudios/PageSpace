@@ -80,7 +80,7 @@ export interface RevokeAuthorizedInvite {
   driveId: string;
 }
 
-const isRevokeRole = (role: Role): boolean => role === 'OWNER' || role === 'ADMIN';
+const isRevokeRole = (role: Role | 'GUEST'): boolean => role === 'OWNER' || role === 'ADMIN';
 
 export const validateRevokeRequest = ({
   invite,

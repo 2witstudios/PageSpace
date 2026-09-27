@@ -73,6 +73,11 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
 vi.mock('@pagespace/lib/permissions/drive-relationship-loader', () => ({
   loadDriveRelationship: vi.fn(),
 }));
+// A GUEST row (redeemed page share link) is no membership, but master's #2723 admits it to the
+// tree gate; the lib read that finds it is proven on real Postgres (share-link-guest suite).
+vi.mock('@pagespace/lib/permissions/membership-queries', () => ({
+  holdsAcceptedGuestRow: vi.fn(async () => false),
+}));
 
 import { POST } from '../route';
 import { authenticateRequestWithOptions, checkMCPDriveScope } from '@/lib/auth';
@@ -81,6 +86,7 @@ import { db } from '@pagespace/db/db';
 import { getUserAccessiblePagesInDrive } from '@pagespace/lib/permissions/permissions';
 import type { DriveRelationship } from '@pagespace/lib/permissions/drive-relationship';
 import { loadDriveRelationship } from '@pagespace/lib/permissions/drive-relationship-loader';
+import { holdsAcceptedGuestRow } from '@pagespace/lib/permissions/membership-queries';
 
 const LEAD: DriveRelationship = { isOwner: true, membership: null };
 const NONE: DriveRelationship = { isOwner: false, membership: null };
@@ -236,6 +242,26 @@ describe('POST /api/pages/tree', () => {
 
       expect(response.status).toBe(403);
       expect(db.query.driveMembers.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('D-OW-24 a GUEST (redeemed page share link) reads the tree, cut to its explicit grants', async () => {
+      // @ts-expect-error - partial mock data
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue({ id: mockDriveId, ownerId: 'other_user' });
+      vi.mocked(loadDriveRelationship).mockResolvedValue(NONE);
+      vi.mocked(holdsAcceptedGuestRow).mockResolvedValueOnce(true);
+      vi.mocked(db.query.pages.findMany).mockResolvedValue([
+        // @ts-expect-error - partial mock data
+        { id: 'page_shared', parentId: null, position: 0 },
+        // @ts-expect-error - partial mock data
+        { id: 'page_other', parentId: null, position: 1 },
+      ]);
+      vi.mocked(getUserAccessiblePagesInDrive).mockResolvedValue(['page_shared']);
+
+      const response = await POST(createRequest({ driveId: mockDriveId }));
+
+      expect(response.status).toBe(200);
+      expect(holdsAcceptedGuestRow).toHaveBeenCalledWith(mockDriveId, mockUserId);
+      expect(buildTree).toHaveBeenCalledWith([{ id: 'page_shared', parentId: null, position: 0 }]);
     });
 
     it('returns 403 when user is neither owner nor member', async () => {

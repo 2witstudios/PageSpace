@@ -2,9 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { PgDialect } from 'drizzle-orm/pg-core';
 
 /**
- * D-OW-24: a GUEST row (a redeemed page share link) is no drive membership. The GUEST enum value
- * does not exist on this branch yet, so no real row can be written; these tests pin the SQL and the
- * row filter that keep a GUEST out once it does. The real-database parity with listMemberDrives is
+ * D-OW-24: a GUEST row (a redeemed page share link) is no drive membership. These tests pin the SQL
+ * and the row filter that keep a GUEST out. Real GUEST rows (master's 0308 added the enum value) are
+ * read through getMemberDriveIds on real Postgres by activity-tools.test.ts, and through the
+ * directory, recipients and join-request suites; the parity with listMemberDrives is
  * drive-gate-primitives.integration.test.ts.
  */
 
