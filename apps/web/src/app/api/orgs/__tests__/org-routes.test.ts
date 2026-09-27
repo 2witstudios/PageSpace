@@ -83,6 +83,7 @@ import * as transferRoute from '../[orgId]/transfer-ownership/route';
 import * as invitationsRoute from '../[orgId]/invitations/route';
 import * as invitationRoute from '../[orgId]/invitations/[invitationId]/route';
 import * as resendRoute from '../[orgId]/invitations/[invitationId]/resend/route';
+import { ORG_LAPSED_MESSAGE } from '@pagespace/lib/organizations/status-core';
 import * as acceptRoute from '../invitations/accept/route';
 
 const ORG_ID = 'org_northwind';
@@ -468,6 +469,21 @@ describe('org route behaviour', () => {
     expect((await invitationsRoute.POST(req('POST', { email: 'dana@northwind.test', role: 'OWNER' }), params({ orgId: ORG_ID }))).status).toBe(400);
     vi.mocked(isEmailVerified).mockResolvedValue(false);
     expect((await invitationsRoute.POST(req('POST', { email: 'dana@northwind.test' }), params({ orgId: ORG_ID }))).status).toBe(403);
+  });
+
+  it('SEAT-9 (partial) a lapsed org\'s invite and resend answer 402 with the SEAT-9 message and the org_lapsed code', async () => {
+    asRole('ADMIN');
+    const lapsed = { ok: false as const, status: 402 as const, reason: 'org_lapsed' as const, message: ORG_LAPSED_MESSAGE };
+    vi.mocked(invitations.createOrRotateInvitation).mockResolvedValue(lapsed);
+    vi.mocked(invitations.resendInvitation).mockResolvedValue(lapsed);
+    for (const res of [
+      await invitationsRoute.POST(req('POST', { email: 'lena@northwind.test' }), params({ orgId: ORG_ID })),
+      await resendRoute.POST(req('POST'), params({ orgId: ORG_ID, invitationId: 'inv_1' })),
+    ]) {
+      expect(res.status).toBe(402);
+      expect(await res.json()).toEqual({ error: ORG_LAPSED_MESSAGE, code: 'org_lapsed' });
+    }
+    expect(deliverOrgInvite).not.toHaveBeenCalled();
   });
 
   it('ORG-3 (partial) re-inviting after expiry rotates the open invite (route answers 200 and emails the new link)', async () => {

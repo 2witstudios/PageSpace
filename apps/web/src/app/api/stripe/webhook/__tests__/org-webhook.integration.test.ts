@@ -211,8 +211,8 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
     const walletIds = ownedWallets.map((w) => w.id);
     if (walletIds.length > 0) {
       await db.delete(creditLedger).where(inArray(creditLedger.walletId, walletIds));
-      await db.delete(walletFundingLegs).where(inArray(walletFundingLegs.walletId, walletIds));
-      // Children (drive wallets) before their parent pool.
+      // Funding legs cascade with their wallet (deleting a leg first would break D-OW-13's
+      // invariant under an armed harness). Children (drive wallets) before their parent pool.
       await db.delete(wallets).where(and(inArray(wallets.id, walletIds), sql`${wallets.parentWalletId} is not null`));
       await db.delete(wallets).where(inArray(wallets.id, walletIds));
     }

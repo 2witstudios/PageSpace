@@ -31,6 +31,7 @@ import { rewriteCanvasAssets, rewriteInterPageLinksForDrive, extractAndStripOgMe
 import { buildRobotsTxt, buildSitemapXml, buildNotFoundHtml, resolveFaviconTags } from '@pagespace/lib/canvas/site-files';
 import { resolvePrimaryPublishedHost } from '@pagespace/lib/canvas/primary-host';
 import { mirrorPublishedPageToHosts, mirror404ToHosts, getActiveDomainRecords } from './custom-domain-mirror';
+import { checkOrgActive } from '@pagespace/lib/organizations/status';
 
 export const PUBLISH_HOST = 'pagespace.site';
 const FAVICON_BASE_URL = 'https://pagespace.ai';
@@ -48,6 +49,17 @@ export class PublishError extends Error {
     this.name = 'PublishError';
     this.statusCode = statusCode;
   }
+}
+
+/**
+ * SEAT-9: publishing from an org drive is an org-only capability. A lapsed org's drive
+ * cannot publish or re-publish (402 with the SEAT-9 message); what is already published
+ * stays up and can be unpublished — nothing is deleted. A personal drive has no org.
+ */
+async function assertOrgMayPublish(orgId: string | null | undefined): Promise<void> {
+  if (!orgId) return;
+  const active = await checkOrgActive(orgId);
+  if (!active.ok) throw new PublishError(active.message, active.status);
 }
 
 /**
@@ -264,7 +276,7 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
   // ------------------------------------------------------------------
   const drive = await db.query.drives.findFirst({
     where: eq(drives.id, driveId),
-    columns: { id: true, slug: true, publishSubdomain: true, kind: true, homePageId: true, publishDefaultOgImageUrl: true, publishFaviconUrl: true },
+    columns: { id: true, slug: true, publishSubdomain: true, kind: true, homePageId: true, publishDefaultOgImageUrl: true, publishFaviconUrl: true, orgId: true },
   });
 
   if (!drive) {
@@ -274,6 +286,8 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
   if (isHomeDrive(drive)) {
     throw new PublishError('Cannot publish from a Home drive', 403);
   }
+
+  await assertOrgMayPublish(drive.orgId);
 
   // Resolve the drive's publish subdomain. The subdomain is a property of the
   // DRIVE, never of an individual publish request: once allocated it is always
@@ -597,10 +611,11 @@ export async function changePublishSubdomain(
 ): Promise<{ oldSubdomain: string | null; newSubdomain: string }> {
   const drive = await db.query.drives.findFirst({
     where: eq(drives.id, driveId),
-    columns: { id: true, publishSubdomain: true, kind: true },
+    columns: { id: true, publishSubdomain: true, kind: true, orgId: true },
   });
   if (!drive) throw new PublishError('Drive not found', 404);
   if (isHomeDrive(drive)) throw new PublishError('Cannot change subdomain of a Home drive', 403);
+  await assertOrgMayPublish(drive.orgId);
 
   const oldSubdomain = drive.publishSubdomain;
 
