@@ -72,7 +72,8 @@ async function seatQuantityInStripe(subscriptionId: string): Promise<number | un
   return sub.items.data.find((i) => i.price.id === PRICES.seatPriceId)?.quantity;
 }
 
-describe.skipIf(!TEST_KEY)('org Business subscription against the Stripe TEST API', () => {
+// Real network: one test makes up to ~9 Stripe calls, so the 5 s default is too tight.
+describe.skipIf(!TEST_KEY)('org Business subscription against the Stripe TEST API', { timeout: 30_000 }, () => {
   beforeAll(async () => {
     if (!TEST_KEY?.startsWith('sk_test_')) throw new Error('STRIPE_TEST_SECRET_KEY must be a Stripe TEST key (sk_test_…); refusing to run');
     expect(stripeMode).toBe('test');
