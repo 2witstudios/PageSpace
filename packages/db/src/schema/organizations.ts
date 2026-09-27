@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, jsonb, pgEnum, index, uniqueIndex, unique } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, jsonb, pgEnum, index, uniqueIndex, unique, integer, boolean } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
@@ -85,10 +85,46 @@ export const orgInvitations = pgTable('org_invitations', {
     .where(sql`${table.acceptedAt} IS NULL`),
 }));
 
+/**
+ * The org's Business subscription (Spec SEAT-1, SEAT-8, A-8), one row per org. The
+ * org's Stripe CUSTOMER stays on `organizations.stripeCustomerId` (the pool refill
+ * finds the org by it); this row is the subscription and its two items: the base
+ * price and the extra-seat price whose quantity is max(0, seats − 5).
+ *
+ * `orgId` RESTRICTS the org delete, like `drives.orgId`: deleting the org must end its
+ * Stripe subscription first, or the row would vanish while Stripe keeps billing.
+ * `extraSeatQuantity` is what Stripe was last set to; `seatRevision` counts applied
+ * quantity changes and is part of each change's idempotency key.
+ */
+export const orgSubscriptions = pgTable('org_subscriptions', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  orgId: text('orgId').notNull().unique().references(() => organizations.id, { onDelete: 'restrict' }),
+  stripeSubscriptionId: text('stripeSubscriptionId').notNull().unique(),
+  stripeBasePriceId: text('stripeBasePriceId').notNull(),
+  stripeBaseItemId: text('stripeBaseItemId').notNull(),
+  stripeSeatPriceId: text('stripeSeatPriceId').notNull(),
+  stripeSeatItemId: text('stripeSeatItemId').notNull(),
+  extraSeatQuantity: integer('extraSeatQuantity').default(0).notNull(),
+  seatRevision: integer('seatRevision').default(0).notNull(),
+  // Stripe's subscription status: trialing, active, past_due, canceled, unpaid, incomplete, …
+  status: text('status').notNull(),
+  trialEnd: timestamp('trialEnd', { mode: 'date' }),
+  currentPeriodStart: timestamp('currentPeriodStart', { mode: 'date' }),
+  currentPeriodEnd: timestamp('currentPeriodEnd', { mode: 'date' }),
+  cancelAtPeriodEnd: boolean('cancelAtPeriodEnd').default(false).notNull(),
+  createdAt: timestamp('createdAt', { mode: 'date' }).default(utcNow).notNull(),
+  updatedAt: timestamp('updatedAt', { mode: 'date' }).default(utcNow).notNull().$onUpdate(() => new Date()),
+});
+
 export const organizationsRelations = relations(organizations, ({ one, many }) => ({
   owner: one(users, { fields: [organizations.ownerId], references: [users.id] }),
   members: many(orgMembers),
   invitations: many(orgInvitations),
+  subscription: one(orgSubscriptions, { fields: [organizations.id], references: [orgSubscriptions.orgId] }),
+}));
+
+export const orgSubscriptionsRelations = relations(orgSubscriptions, ({ one }) => ({
+  organization: one(organizations, { fields: [orgSubscriptions.orgId], references: [organizations.id] }),
 }));
 
 export const orgMembersRelations = relations(orgMembers, ({ one }) => ({
@@ -108,3 +144,5 @@ export type OrgMember = typeof orgMembers.$inferSelect;
 export type NewOrgMember = typeof orgMembers.$inferInsert;
 export type OrgInvitation = typeof orgInvitations.$inferSelect;
 export type NewOrgInvitation = typeof orgInvitations.$inferInsert;
+export type OrgSubscription = typeof orgSubscriptions.$inferSelect;
+export type NewOrgSubscription = typeof orgSubscriptions.$inferInsert;
