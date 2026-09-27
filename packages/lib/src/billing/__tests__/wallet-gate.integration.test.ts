@@ -592,6 +592,20 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     expect(await seatChargedCents(w, w.marcusId)).toBe(100);
   });
 
+  it('WAL-2 (partial) only calls in flight on the SEAT count against it: the same member\'s drive-wallet calls in flight leave the allowance whole', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+    const w = world;
+    for (let call = 0; call < 4; call += 1) {
+      expect(await canConsumeAI(w.marcusId, 'pro', { spend: driveSpend(w.productId, 'drive_wallet') })).toMatchObject({ allowed: true, walletId: w.productWalletId });
+    }
+
+    for (let call = 1; call <= 4; call += 1) {
+      expect(await seatCall(w, w.marcusId), `seat call ${call}`).toMatchObject({ allowed: true, walletId: w.poolId });
+    }
+    expect(await seatChargedCents(w, w.marcusId)).toBe(100);
+  });
+
   it('WAL-2 (partial) two members each get their own seat allowance on the same pool', async () => {
     if (!dbAvailable) return;
     world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
