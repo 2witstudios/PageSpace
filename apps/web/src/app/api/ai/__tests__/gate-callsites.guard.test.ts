@@ -8,6 +8,7 @@
 import { describe, it, expect } from 'vitest';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
+import ts from 'typescript';
 
 // vitest runs with cwd = apps/web; the AI routes live under src/app/api.
 const WEB_DIR = process.cwd();
@@ -198,6 +199,87 @@ function uncoveredModelCallSites(
     .filter((file) => !covered(file, new Set()));
 }
 
+/** The AI SDK / provider entry points MODEL_CALL matches, as callee names for the AST scan. */
+const MODEL_CALLEES = new Set(['createAIProvider', 'streamText', 'generateText', 'generateObject', 'streamObject', 'embedMany', 'embed']);
+
+/** Gate wrappers that take the step to run as a callback: the hold covers exactly that callback. */
+const CALLBACK_GATES = new Set(['withMemoryCreditHold']);
+
+/**
+ * Closes the file-level blind spot for callback gates. In a file that gates through a
+ * callback wrapper, the file-level rule is satisfied by the wrapper call alone, so a second
+ * model call added OUTSIDE the callback would pass. Here every model call in such a file
+ * must run inside a gate callback: lexically within it, or within a NON-exported named
+ * function whose every reference in the file is itself under the gate (recursively). An
+ * exported function, a top-level call or a recursion cycle is outside the gate.
+ */
+function modelCallsOutsideCallbackGate(fileName: string, source: string): string[] {
+  const file = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, fileName.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+
+  const calleeName = (call: ts.CallExpression): string | undefined => {
+    const callee = call.expression;
+    if (ts.isIdentifier(callee)) return callee.text;
+    if (ts.isPropertyAccessExpression(callee)) return callee.name.text;
+    return undefined;
+  };
+  const hasExportModifier = (node: ts.Node) =>
+    ts.canHaveModifiers(node) && (ts.getModifiers(node) ?? []).some((m) => m.kind === ts.SyntaxKind.ExportKeyword);
+
+  const exportedNames = new Set<string>();
+  const references = new Map<string, ts.Identifier[]>();
+  const modelCalls: ts.CallExpression[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isExportSpecifier(node)) exportedNames.add((node.propertyName ?? node.name).text);
+    if (ts.isFunctionDeclaration(node) && node.name && hasExportModifier(node)) exportedNames.add(node.name.text);
+    if (ts.isVariableStatement(node) && hasExportModifier(node)) {
+      for (const decl of node.declarationList.declarations) if (ts.isIdentifier(decl.name)) exportedNames.add(decl.name.text);
+    }
+    if (ts.isIdentifier(node)) {
+      const isDeclarationName =
+        (ts.isFunctionDeclaration(node.parent) || ts.isVariableDeclaration(node.parent)) && node.parent.name === node;
+      if (!isDeclarationName) references.set(node.text, [...(references.get(node.text) ?? []), node]);
+    }
+    if (ts.isCallExpression(node) && MODEL_CALLEES.has(calleeName(node) ?? '')) modelCalls.push(node);
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+
+  const enclosingFunction = (node: ts.Node): ts.SignatureDeclaration | undefined => {
+    for (let at = node.parent; at; at = at.parent) {
+      if (ts.isFunctionDeclaration(at) || ts.isFunctionExpression(at) || ts.isArrowFunction(at) || ts.isMethodDeclaration(at)) return at;
+    }
+    return undefined;
+  };
+  const isGateCallback = (fn: ts.Node) =>
+    ts.isCallExpression(fn.parent) &&
+    CALLBACK_GATES.has(calleeName(fn.parent) ?? '') &&
+    fn.parent.arguments.some((arg) => arg === fn);
+  const functionName = (fn: ts.SignatureDeclaration): string | undefined => {
+    if (ts.isFunctionDeclaration(fn)) return fn.name?.text;
+    if (ts.isVariableDeclaration(fn.parent) && ts.isIdentifier(fn.parent.name)) return fn.parent.name.text;
+    return undefined;
+  };
+
+  const underGate = (node: ts.Node, visiting: Set<string>): boolean => {
+    for (let fn = enclosingFunction(node); fn; fn = enclosingFunction(fn)) {
+      if (isGateCallback(fn)) return true;
+      const name = functionName(fn);
+      if (name === undefined) continue;
+      if (exportedNames.has(name) || visiting.has(name)) return false;
+      const refs = references.get(name) ?? [];
+      visiting.add(name);
+      const covered = refs.length > 0 && refs.every((ref) => underGate(ref, visiting));
+      visiting.delete(name);
+      return covered;
+    }
+    return false;
+  };
+
+  return modelCalls
+    .filter((call) => !underGate(call, new Set()))
+    .map((call) => `${calleeName(call)} @ line ${file.getLineAndCharacterOfPosition(call.getStart()).line + 1}`);
+}
+
 const PRODUCTION_SOURCES = new Map(
   productionFiles(SRC_DIR).map((file) => [file, stripComments(readFileSync(file, 'utf8'))] as const),
 );
@@ -275,6 +357,66 @@ describe('AI gate call-site guards', () => {
       }
     }
     expect(offenders).toEqual([]);
+  });
+
+  it('inside a callback-gated file, every model call runs inside the gate callback', () => {
+    // The file-level rule above cannot see a second call added outside the hold in a file
+    // that already calls withMemoryCreditHold — exactly where a fourth memory pass would go.
+    const offenders: Record<string, string[]> = {};
+    for (const [file] of PRODUCTION_SOURCES) {
+      const raw = readFileSync(file, 'utf8');
+      if (![...CALLBACK_GATES].some((gate) => new RegExp(`\\b${gate}\\s*\\(`).test(stripComments(raw)))) continue;
+      const outside = modelCallsOutsideCallbackGate(file, raw);
+      if (outside.length > 0) offenders[webRelPath(file)] = outside;
+    }
+    expect(offenders).toEqual({});
+  });
+
+  it('the callback-gate scan covers the memory services (not vacuous)', () => {
+    const scanned = [...PRODUCTION_SOURCES.keys()]
+      .filter((file) => /\bwithMemoryCreditHold\s*\(/.test(PRODUCTION_SOURCES.get(file) ?? ''))
+      .map(webRelPath);
+    expect(scanned).toEqual(expect.arrayContaining([
+      'src/lib/memory/discovery-service.ts',
+      'src/lib/memory/integration-service.ts',
+      'src/lib/memory/compaction-service.ts',
+    ]));
+  });
+
+  describe('callback-gate rule (fixtures)', () => {
+    const scan = (src: string) => modelCallsOutsideCallbackGate('fixture.ts', src);
+
+    it('passes calls inside the callback, directly or through private helpers', () => {
+      expect(scan(`
+        async function pass() { return generateObject({}); }
+        async function provider() { return createAIProvider(u, {}); }
+        export async function run(u: string) {
+          return withMemoryCreditHold(u, 2, async () => { await provider(); return Promise.allSettled([pass(), generateText({})]); });
+        }
+      `)).toEqual([]);
+    });
+
+    it('flags an exported function that calls a model outside the hold (review G3)', () => {
+      expect(scan(`
+        export async function run(u: string) { return withMemoryCreditHold(u, 1, () => generateText({})); }
+        export const irvScratch = async () => (await import('ai')).generateText({});
+      `)).toEqual(['generateText @ line 3']);
+    });
+
+    it('flags a private helper that is also called outside the hold', () => {
+      expect(scan(`
+        async function pass() { return generateObject({}); }
+        export async function run(u: string) { await pass(); return withMemoryCreditHold(u, 1, () => pass()); }
+      `)).toEqual(['generateObject @ line 2']);
+    });
+
+    it('flags a private helper that is exported by name', () => {
+      expect(scan(`
+        async function pass() { return generateObject({}); }
+        export async function run(u: string) { return withMemoryCreditHold(u, 1, () => pass()); }
+        export { pass };
+      `)).toEqual(['generateObject @ line 2']);
+    });
   });
 
   describe('coverage rule (fixtures)', () => {
