@@ -101,8 +101,13 @@ describe('memory cron model calls reserve first (real Postgres)', () => {
 
     expect(result).toBe('Ada writes tersely.');
     expect(mockGenerateText).toHaveBeenCalledOnce();
-    // The usage settles off the response path (discardUsageOutcome): wait for it.
-    await vi.waitFor(async () => expect(await usageRows(world as World)).toHaveLength(1), { timeout: 10_000, interval: 100 });
+    // The usage settles off the response path (discardUsageOutcome), and its ledger row is
+    // claimed 'pending' before the charge commits: wait for the settled row.
+    await vi.waitFor(async () => {
+      const rows = await usageRows(world as World);
+      expect(rows).toHaveLength(1);
+      expect(rows[0].consumeStatus).not.toBe('pending');
+    }, { timeout: 10_000, interval: 100 });
     const [row] = await usageRows(world);
     expect(row.walletId).toBe(world.walletId);
     const charged = -(row.appliedCents ?? 0);
