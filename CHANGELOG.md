@@ -633,6 +633,13 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Every AI call now checks your credits before it runs** — conversation summarising (when a long chat
+  is condensed) and the nightly Memory update used to run first and charge afterwards, which could
+  push an out-of-credit balance into debt. They now reserve credits first like every other AI call;
+  with no credits they simply don't run, and nothing about your conversation or your Memory pages
+  changes. A live voice call with a page agent now spends from the same source as typing to that
+  agent in its drive, instead of always from your own credits.
+
 - **Agents answering an @mention in a channel now check credits first** — an agent's reply to a
   channel mention used to run even when there were no credits to pay for it. Each reply is now
   checked before the agent starts; if there is nothing to pay with, the agent does not reply and
