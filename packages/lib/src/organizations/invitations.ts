@@ -17,6 +17,8 @@ import { generateToken, hashToken } from '../auth/token-utils';
 import { decryptUserRow } from '../auth/user-repository';
 import { normalizeEmail } from '../encryption/blind-index';
 import { isEmailAMember, isUniqueViolation, retryOnDeadlock } from './repository';
+import { checkOrgActive, type OrgLapsedRefusal } from './status';
+import type { ORG_LAPSED_CODE } from './status-core';
 import {
   publishOrgMembershipSyncEvents,
   syncOrgMemberAccess,
@@ -104,14 +106,23 @@ export async function lockOrgInviteAddress(tx: Tx, orgId: string, email: string)
   await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${key}, 0))`);
 }
 
+/** SEAT-9: a lapsed org cannot invite (or re-send an invite); nothing already issued is touched. */
+export type OrgInviteLapsed = { ok: false; status: 402; reason: typeof ORG_LAPSED_CODE; message: string };
+
+function lapsedRefusal(check: OrgLapsedRefusal): OrgInviteLapsed {
+  return { ok: false, status: 402, reason: check.code, message: check.message };
+}
+
 export type IssueInvitationResult =
   | { ok: true; invitation: PublicOrgInvitation; token: string; rotated: boolean }
   | { ok: false; status: 409; reason: 'already_member' | 'already_invited' }
+  | OrgInviteLapsed
   | DeliveryFailed;
 
 type Issued =
   | { ok: true; invitation: OrgInvitation; token: string; previous: OrgInvitation | null }
-  | { ok: false; status: 409; reason: 'already_member' | 'already_invited' };
+  | { ok: false; status: 409; reason: 'already_member' | 'already_invited' }
+  | OrgInviteLapsed;
 
 /**
  * Invite an address, rotating an expired open invite in place. If delivery fails the
@@ -130,6 +141,9 @@ export async function createOrRotateInvitation(input: {
   try {
     issued = await db.transaction(async (tx): Promise<Issued> => {
       await lockOrgInviteAddress(tx, input.orgId, input.email);
+      // SEAT-9: inviting is an org-only capability; a lapsed org is refused before any write.
+      const active = await checkOrgActive(input.orgId, { executor: tx, now: input.now });
+      if (!active.ok) return lapsedRefusal(active);
       const isExistingMember = await isEmailAMember(input.orgId, input.email, tx);
       const [openInvite] = await tx
         .select()
@@ -206,6 +220,7 @@ export async function listOpenInvitations(orgId: string): Promise<PublicOrgInvit
 export type ResendInvitationResult =
   | { ok: true; invitation: PublicOrgInvitation; token: string }
   | { ok: false; status: 404; reason: 'not_found' }
+  | OrgInviteLapsed
   | DeliveryFailed;
 
 /**
@@ -221,6 +236,9 @@ export async function resendInvitation(input: {
 }): Promise<ResendInvitationResult> {
   const { token, hash } = generateToken(ORG_INVITE_TOKEN_PREFIX);
   const rotated = await db.transaction(async (tx) => {
+    // SEAT-9: a re-sent invite is an invite; the pending one keeps its link and its seat.
+    const active = await checkOrgActive(input.orgId, { executor: tx, now: input.now });
+    if (!active.ok) return lapsedRefusal(active);
     const [previous] = await tx
       .select()
       .from(orgInvitations)
@@ -241,6 +259,7 @@ export async function resendInvitation(input: {
     return { previous, invitation };
   });
   if (!rotated) return { ok: false, status: 404, reason: 'not_found' };
+  if ('ok' in rotated) return rotated;
 
   try {
     await input.deliver(toPublic(rotated.invitation), token);

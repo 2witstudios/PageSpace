@@ -20,6 +20,8 @@ import { conversations } from '@pagespace/db/schema/conversations';
 import { creditHolds } from '@pagespace/db/schema/credits';
 import { wallets, personalRootWalletOf } from '@pagespace/db/schema/wallets';
 import { ORGS_ENABLED } from '../organizations/orgs-enabled';
+import { isOrgActive } from '../organizations/status';
+import { orgLegStatus } from '../organizations/status-core';
 import { loadDriveSpendStanding, sharedSpendLegsFor } from '../permissions/spend-standing';
 import { loggers } from '../logging/logger-config';
 import { notifyLeadOfAutomationSkip } from './automation-skip-notifier';
@@ -142,12 +144,17 @@ async function tierOf(userId: string): Promise<SubscriptionTier> {
   return toSubscriptionTier(row?.tier);
 }
 
-function statusOf(row: WalletRow): WalletStatus {
-  return row.status;
+function statusOf(row: WalletRow, orgLapsed = false): WalletStatus {
+  return orgLegStatus(row.status, orgLapsed);
+}
+
+/** SEAT-9: whether the drive's org is lapsed (a personal drive has no org and never is). */
+async function orgLapsedFor(orgId: string | null | undefined): Promise<boolean> {
+  return typeof orgId === 'string' ? !(await isOrgActive(orgId)) : false;
 }
 
 /** The drive wallet as a leg, net of every hold against it and (through the parent) its siblings. */
-async function driveWalletLeg(driveWallet: WalletRow | null, now: Date, extraHoldWalletIds: string[] = []): Promise<{
+async function driveWalletLeg(driveWallet: WalletRow | null, now: Date, extraHoldWalletIds: string[] = [], orgLapsed = false): Promise<{
   leg: SpendLeg | null;
   holds: WalletHoldTotal[];
 }> {
@@ -157,7 +164,7 @@ async function driveWalletLeg(driveWallet: WalletRow | null, now: Date, extraHol
     now,
   );
   const leg: SpendLeg | null = driveWallet
-    ? walletLeg(driveWallet.id, statusOf(driveWallet), walletSpendableCents({
+    ? walletLeg(driveWallet.id, statusOf(driveWallet, orgLapsed), walletSpendableCents({
         wallet: driveWallet,
         ownReservedCents: reservedAgainstCents(holds, driveWallet.id, { includeChildren: false }),
         parent: parent
@@ -185,7 +192,9 @@ async function resolveAutomationSpend(input: {
 }): Promise<CallSpendDecision> {
   const standing = await loadDriveSpendStanding(input.userId, input.driveId);
   const driveWallet = standing ? await driveWalletOf(standing.driveId) : null;
-  const { leg } = await driveWalletLeg(driveWallet, input.now);
+  // SEAT-9: a lapsed org's drive wallet reads as paused, so the run SKIPS — never a person.
+  const orgLapsed = await orgLapsedFor(standing?.orgId);
+  const { leg } = await driveWalletLeg(driveWallet, input.now, [], orgLapsed);
   // WAL-8: the drive wallet's root owner governs — the org inside org drives, the drive
   // owner (whose personal wallet funds the drive wallet) on a personal drive.
   const walletOwnerTier: SubscriptionTier = standing?.orgId
@@ -205,6 +214,7 @@ async function resolveAutomationSpend(input: {
       driveId: input.driveId,
       walletId: decision.walletId,
       reason: decision.reason,
+      orgLapsed,
     });
     if (standing) {
       try {
@@ -269,6 +279,8 @@ export async function resolveCallSpend(input: {
   // A seat is the per-consumer leg on the org pool (WAL-2): only an org member of the drive holds one (DRV-8).
   const pool = standing?.orgId && shared.seat ? await orgPoolOf(standing.orgId) : null;
   const personal = await personalRootOf(userId);
+  // SEAT-9: while the org is lapsed its legs (drive wallet, seat) read as paused; own credits stay.
+  const orgLapsed = await orgLapsedFor(standing?.orgId);
   const stored: StoredSpendChoice = {
     chosenWalletId: await chosenWalletOf(userId, target.conversationId),
     driveDefault: driveWallet?.defaultSpendSource ?? null,
@@ -279,9 +291,10 @@ export async function resolveCallSpend(input: {
     driveWallet,
     now,
     [pool?.id, personal?.id].filter((id): id is string => typeof id === 'string'),
+    orgLapsed,
   );
   const seatLeg: SpendLeg | null = pool
-    ? walletLeg(pool.id, statusOf(pool), walletSpendableCents({
+    ? walletLeg(pool.id, statusOf(pool, orgLapsed), walletSpendableCents({
         wallet: pool,
         ownReservedCents: reservedAgainstCents(holds, pool.id, { includeChildren: true }),
         parent: null,
@@ -338,6 +351,7 @@ export async function resolveCallSpend(input: {
       reason: decision.reason,
       chosenWalletId: stored.chosenWalletId,
       options: decision.kind === 'refuse' ? decision.options.map((o) => o.source) : [],
+      orgLapsed,
     });
   }
   return decision;
@@ -371,10 +385,11 @@ export async function listSpendChoices(userId: string, driveId: string | null): 
     isDriveMember: standing?.isDriveMember ?? false,
     isOrgMember: standing?.isOrgMember ?? false,
   });
+  const orgLapsed = await orgLapsedFor(standing?.orgId);
   const legs = {
     actor,
-    driveWallet: driveWallet ? walletLeg(driveWallet.id, driveWallet.status, 0) : null,
-    seatAllowance: pool ? walletLeg(pool.id, pool.status, 0) : null,
+    driveWallet: driveWallet ? walletLeg(driveWallet.id, statusOf(driveWallet, orgLapsed), 0) : null,
+    seatAllowance: pool ? walletLeg(pool.id, statusOf(pool, orgLapsed), 0) : null,
     personal: walletLeg(personalId, 'active', 0),
     // D-OW-4: guests may not spend a drive wallet until the per-drive switch has storage.
     driveRule: { fallback: 'refuse' as const, guestsMaySpendDriveWallet: false },

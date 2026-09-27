@@ -12,11 +12,12 @@
  */
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
-import { orgSubscriptions } from '@pagespace/db/schema/organizations';
+import { organizations, orgSubscriptions } from '@pagespace/db/schema/organizations';
 import { isBillingEnabled } from '../deployment-mode';
 import {
   deriveOrgStatus,
   orgStatusAllows,
+  unsubscribedTrialEnd,
   type OrgCapabilityCheck,
   type OrgStatusResult,
   type OrgSubscriptionState,
@@ -25,6 +26,8 @@ import {
 export {
   ORG_LAPSED_CODE,
   ORG_LAPSED_MESSAGE,
+  ORG_LAPSED_REFUSAL,
+  type OrgLapsedRefusal,
   orgBillingNotice,
   type OrgBillingNotice,
   type OrgCapabilityCheck,
@@ -35,25 +38,40 @@ export {
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type Executor = typeof db | Tx;
 
-export type OrgStatusRead = Readonly<{ result: OrgStatusResult; subscription: OrgSubscriptionState | null }>;
+export type OrgStatusRead = Readonly<{
+  result: OrgStatusResult;
+  subscription: OrgSubscriptionState | null;
+  /** When the trial ends: the subscription's, or the creation trial's while there is no subscription. */
+  trialEnd: Date | null;
+}>;
 
-/** The org's billing status and the stored subscription it was derived from. */
+/**
+ * The org's billing status and the stored subscription it was derived from. An org that
+ * does not exist reads as lapsed (fail closed); callers check existence themselves.
+ */
 export async function readOrgStatus(orgId: string, opts: { now?: Date; executor?: Executor } = {}): Promise<OrgStatusRead> {
   const billingEnabled = isBillingEnabled();
-  if (!billingEnabled) return { result: { status: 'active', reason: null }, subscription: null };
+  if (!billingEnabled) return { result: { status: 'active', reason: null }, subscription: null, trialEnd: null };
   const executor = opts.executor ?? db;
   const [row] = await executor
     .select({
+      orgCreatedAt: organizations.createdAt,
       status: orgSubscriptions.status,
       trialEnd: orgSubscriptions.trialEnd,
       currentPeriodEnd: orgSubscriptions.currentPeriodEnd,
       cancelAtPeriodEnd: orgSubscriptions.cancelAtPeriodEnd,
     })
-    .from(orgSubscriptions)
-    .where(eq(orgSubscriptions.orgId, orgId))
+    .from(organizations)
+    .leftJoin(orgSubscriptions, eq(orgSubscriptions.orgId, organizations.id))
+    .where(eq(organizations.id, orgId))
     .limit(1);
-  const subscription = row ?? null;
-  return { result: deriveOrgStatus({ billingEnabled, subscription, now: opts.now ?? new Date() }), subscription };
+  if (!row) return { result: { status: 'lapsed', reason: 'no_subscription' }, subscription: null, trialEnd: null };
+  const subscription: OrgSubscriptionState | null =
+    row.status === null
+      ? null
+      : { status: row.status, trialEnd: row.trialEnd, currentPeriodEnd: row.currentPeriodEnd, cancelAtPeriodEnd: row.cancelAtPeriodEnd ?? false };
+  const result = deriveOrgStatus({ billingEnabled, subscription, orgCreatedAt: row.orgCreatedAt, now: opts.now ?? new Date() });
+  return { result, subscription, trialEnd: subscription ? subscription.trialEnd : unsubscribedTrialEnd(row.orgCreatedAt) };
 }
 
 /** The org's status: active | trialing | past_due | lapsed (with why). */
