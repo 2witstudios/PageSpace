@@ -925,4 +925,44 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
       expect((error as { cause?: { code?: string } } | null)?.cause?.code, walletId).toBe('23514');
     }
   });
+
+  it('SPEND-5 "Always my own credits" is an absolute per-user override, per drive and as one global switch: stored, read by the gate, own credits or refuse, never another wallet', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 5_000 });
+    const w = world;
+    const side = await personalDrive(w, { allocationCents: 1_000, fallbackRule: 'own_credits' });
+    const inSide = () => canConsumeAI(w.marcusId, 'pro', { spend: driveSpend(side.driveId, 'drive_wallet') });
+    const inProduct = () => canConsumeAI(w.marcusId, 'pro', { spend: driveSpend(w.productId, 'seat_allowance') });
+    try {
+      // Both off: each call spends the source it chose.
+      expect(await inProduct()).toMatchObject({ allowed: true, walletId: w.poolId });
+      expect(await inSide()).toMatchObject({ allowed: true, walletId: side.walletId });
+      await db.delete(creditHolds).where(eq(creditHolds.userId, w.marcusId));
+
+      // Per drive: on for Product only.
+      await alwaysOwnCreditsIn(w, w.productId);
+      expect(await inProduct()).toMatchObject({ allowed: true, walletId: w.marcusWalletId, spendSource: 'own_credits' });
+      expect(await inSide()).toMatchObject({ allowed: true, walletId: side.walletId, spendSource: 'drive_wallet' });
+      await db.delete(creditHolds).where(eq(creditHolds.userId, w.marcusId));
+      await db.delete(driveSpendOverrides).where(eq(driveSpendOverrides.userId, w.marcusId));
+
+      // Global: on everywhere.
+      await alwaysOwnCredits(w, true);
+      expect(await inProduct()).toMatchObject({ allowed: true, walletId: w.marcusWalletId, spendSource: 'own_credits' });
+      expect(await inSide()).toMatchObject({ allowed: true, walletId: w.marcusWalletId, spendSource: 'own_credits' });
+      await db.delete(creditHolds).where(eq(creditHolds.userId, w.marcusId));
+
+      // Absolute: with own credits empty it refuses, offers nothing, and never falls back.
+      await db.update(wallets).set({ monthlyRemainingCents: 0 }).where(eq(wallets.id, w.marcusWalletId));
+      for (const gate of [await inProduct(), await inSide()]) {
+        expect(gate).toEqual({ allowed: false, reason: 'source_refused', refusal: { source: 'own_credits', reason: 'source_empty', options: [] } });
+      }
+      expect(await holdsOf(w.marcusId)).toEqual([]);
+      expect((await walletRow(w.poolId)).monthlyRemainingCents).toBe(5_000);
+      expect((await walletRow(side.walletId)).spentCents).toBe(0);
+    } finally {
+      await db.delete(driveSpendOverrides).where(eq(driveSpendOverrides.userId, w.marcusId));
+      await teardownPersonalDrive(side);
+    }
+  });
 });
