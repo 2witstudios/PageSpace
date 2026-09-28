@@ -17,11 +17,20 @@ describe('computeSandboxEligibilityByDrive', () => {
     expect(result.get('drive-1')).toBe(true);
   });
 
-  it('WAL-9 (partial) marks an ORG drive ineligible even when its lead is on a paying tier — the org pays, and org compute billing is pending', () => {
+  it("WAL-9 (partial) marks an ORG drive eligible on the org's tier even when its lead is free-tier — the org pays", () => {
     const result = computeSandboxEligibilityByDrive(
       [{ id: 'drive-1', ownerId: 'owner-1', orgId: 'org-northwind' }],
-      [{ id: 'owner-1', subscriptionTier: 'pro' }],
+      [{ id: 'owner-1', subscriptionTier: 'free' }],
       editorOf('drive-1'),
+    );
+    expect(result.get('drive-1')).toBe(true);
+  });
+
+  it('WAL-9 (partial) an ORG drive still needs the requester to hold edit access', () => {
+    const result = computeSandboxEligibilityByDrive(
+      [{ id: 'drive-1', ownerId: 'owner-1', orgId: 'org-northwind' }],
+      [{ id: 'owner-1', subscriptionTier: 'free' }],
+      editorOf('some-other-drive'),
     );
     expect(result.get('drive-1')).toBe(false);
   });

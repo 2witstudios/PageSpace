@@ -29,9 +29,13 @@ import {
   type Ed25519Sign,
 } from './control-instruction.js';
 import { encodeControlInstruction } from './encode-control-instruction.js';
+import type { ComputeCharge } from '@pagespace/lib/billing/compute-charge';
 
-/** What `open` placed. `payerId` is fixed at open, so a mid-session ownership change cannot move the charge. */
-export type BrowserMeterHold = { readonly holdId: string | null; readonly payerId: string };
+/**
+ * What `open` placed. `charge` is fixed at open, so a mid-session ownership change cannot move
+ * the charge — an org drive's session keeps charging the org pool it was held on (WAL-9).
+ */
+export type BrowserMeterHold = { readonly holdId: string | null; readonly charge: ComputeCharge };
 
 export type BrowserMeter<B> = {
   /** Places the hold for whoever pays for this session; refuses when they cannot. */
@@ -197,7 +201,7 @@ export const createBrowserSessionClient = <B>({
     opened.settledAt = now;
     const held = await meter.open(opened.billing);
     if (!held.ok) {
-      opened.hold = { holdId: null, payerId: opened.hold.payerId };
+      opened.hold = { holdId: null, charge: opened.hold.charge };
       live.delete(sessionId);
       await substrate.destroy(sessionId);
       return held.reason;

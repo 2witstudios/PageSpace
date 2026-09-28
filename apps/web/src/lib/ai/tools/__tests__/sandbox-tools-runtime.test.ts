@@ -64,7 +64,7 @@ import type { AgentSessionRecord } from '@pagespace/lib/services/agent-workspace
 
 function makeDeps(overrides: Partial<ResolveSandboxActorContextDeps> = {}): ResolveSandboxActorContextDeps {
   return {
-    findDrive: async () => ({ ownerId: 'tenant-1' }),
+    findDrive: async () => ({ ownerId: 'tenant-1', orgId: null }),
     findPageDriveId: async () => undefined,
     findUser: async () => ({ subscriptionTier: 'pro' }),
     getActorInfo: async () => ({ actorEmail: 'u1@example.com', actorDisplayName: 'User One' }),
@@ -114,13 +114,31 @@ describe('resolveSandboxActorContext', () => {
         locationContext: { currentDrive: { id: 'd1', name: 'Drive 1', slug: 'drive-1' } },
       };
       const resolve = createResolveSandboxActorContext(
-        makeDeps({ findDrive: async () => ({ ownerId: 'owner-1' }) }),
+        makeDeps({ findDrive: async () => ({ ownerId: 'owner-1', orgId: null }) }),
       );
       const result = await resolve(context);
       expect('error' in result).toBe(false);
       if ('error' in result) return;
       expect(result.driveId).toBe('d1');
       expect(result.tenantId).toBe('owner-1');
+    });
+
+    it("WAL-9 (partial) an ORG drive's quota tier is the org's, not the free-tier lead's own plan", async () => {
+      const context: ToolExecutionContext = {
+        ...basePageContext,
+        locationContext: { currentDrive: { id: 'd1', name: 'Drive 1', slug: 'drive-1' } },
+      };
+      const resolve = createResolveSandboxActorContext(
+        makeDeps({
+          findDrive: async () => ({ ownerId: 'free-lead', orgId: 'org-northwind' }),
+          findUser: async () => ({ subscriptionTier: 'free' }),
+        }),
+      );
+      const result = await resolve(context);
+      if ('error' in result) throw new Error(result.error);
+      expect(result.tier).toBe('business');
+      // The Sprite tenant stays the lead: tenancy is isolation, not billing.
+      expect(result.tenantId).toBe('free-lead');
     });
 
     it("should resolve the quota tier from the PAYER (drive owner), not the actor (review #2326)", async () => {
@@ -135,7 +153,7 @@ describe('resolveSandboxActorContext', () => {
       const tierLookups: string[] = [];
       const resolve = createResolveSandboxActorContext(
         makeDeps({
-          findDrive: async () => ({ ownerId: 'owner-1' }),
+          findDrive: async () => ({ ownerId: 'owner-1', orgId: null }),
           findUser: async (userId) => {
             tierLookups.push(userId);
             return userId === 'owner-1'
@@ -199,7 +217,7 @@ describe('resolveSandboxActorContext', () => {
           findPageDriveId: async (pageId) => pageId === 'page-agent-1' ? 'drive-from-page' : undefined,
           findDrive: async (driveId) => {
             seenDriveIds.push(driveId);
-            return { ownerId: 'tenant-from-page-drive' };
+            return { ownerId: 'tenant-from-page-drive', orgId: null };
           },
         }),
       );
@@ -290,7 +308,7 @@ describe('resolveSandboxActorContext', () => {
           findSessionForConversation: async () => ({ driveId: 'd-session', ownerId: 'session-owner' }),
           findDrive: async (driveId) => {
             consultedDrives.push(driveId);
-            return { ownerId: 'session-drive-owner' };
+            return { ownerId: 'session-drive-owner', orgId: null };
           },
         }),
       );

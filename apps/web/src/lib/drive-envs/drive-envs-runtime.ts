@@ -18,6 +18,7 @@ import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
+import { computeTierForDrive } from '@pagespace/lib/billing/sandbox-eligibility';
 import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import {
   ensureDriveEnvSandbox,
@@ -111,13 +112,15 @@ async function findDriveEnvRecord(envId: string): Promise<DriveEnvRecord | null>
  * under a different tenant than the one it already provisioned under.
  */
 export async function resolveDriveEnvPayer(driveId: string): Promise<DriveEnvPayer | null> {
-  const drive = await db.query.drives.findFirst({ where: eq(drives.id, driveId), columns: { ownerId: true } });
+  const drive = await db.query.drives.findFirst({ where: eq(drives.id, driveId), columns: { ownerId: true, orgId: true } });
   if (!drive) return null;
   const owner = await db.query.users.findFirst({
     where: eq(users.id, drive.ownerId),
     columns: { subscriptionTier: true },
   });
-  return { payerId: drive.ownerId, tier: toSubscriptionTier(owner?.subscriptionTier) };
+  // `payerId` is the Sprite TENANT (key folding), which stays the lead; the TIER an env's
+  // eligibility and allowance follow is the org's for an org drive (WAL-9), whose pool pays.
+  return { payerId: drive.ownerId, tier: computeTierForDrive(drive, toSubscriptionTier(owner?.subscriptionTier)) };
 }
 
 // ---------------------------------------------------------------------------

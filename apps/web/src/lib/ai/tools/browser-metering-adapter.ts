@@ -4,10 +4,10 @@
  *
  *  - the payer is `resolveSessionPayer` (the drive's payer, else the session's
  *    owner — never the acting user of a shared agent), the rule the sandbox
- *    and storage charge streams share. An org drive's payer is the org, which
- *    this path cannot debit yet: the browser is refused by name
- *    (`org_billing_pending`) and nobody is billed, until the C3 lane lands;
- *  - the hold is `defaultSandboxBillingDeps.gate` (the payer's balance and
+ *    and storage charge streams share. An org drive's payer is the org: the
+ *    browser is held and settled on the org POOL (WAL-9), recorded under the
+ *    session's owner, and a missing, paused or empty pool refuses it by name;
+ *  - the hold is `defaultSandboxBillingDeps.gate` (the charge's wallet and
  *    tier, the machine in-flight ceiling), placed BEFORE any browser starts;
  *  - the settlement is every elapsed interval of the session's lifetime at the browser's REAL
  *    shape (2 vCPU / 2 GB on Sprites), priced by `calculateMachineCostDollars`
@@ -20,6 +20,8 @@ import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { calculateMachineCostDollars } from '@pagespace/lib/monitoring/machine-pricing';
 import { MACHINE_MARKUP_BPS } from '@pagespace/lib/billing/credit-pricing';
 import { defaultSandboxBillingDeps } from '@pagespace/lib/services/sandbox/sandbox-billing';
+import { ORG_COMPUTE_REFUSAL_MESSAGES, isOrgComputeRefusal } from '@pagespace/lib/billing/compute-charge';
+import { computeSettleWalletId } from '@pagespace/lib/billing/compute-gate';
 import type { BrowserMeter } from '@pagespace/browser-worker/browser-session-client';
 
 export type BrowserBilling = {
@@ -30,37 +32,50 @@ export type BrowserBilling = {
   readonly conversationId: string;
 };
 
-type BillingPrimitives = Pick<typeof defaultSandboxBillingDeps, 'resolvePayerId' | 'gate' | 'releaseHold'> & {
+type BillingPrimitives = Pick<typeof defaultSandboxBillingDeps, 'resolveCharge' | 'gate' | 'releaseHold'> & {
   readonly trackUsage: typeof AIMonitoring.trackUsage;
+  /** The wallet the charge settles on: the org pool (null when gone), undefined for a person. */
+  readonly settleWalletId: typeof computeSettleWalletId;
 };
 
 const realPrimitives: BillingPrimitives = {
-  resolvePayerId: defaultSandboxBillingDeps.resolvePayerId,
+  resolveCharge: defaultSandboxBillingDeps.resolveCharge,
   gate: defaultSandboxBillingDeps.gate,
   releaseHold: defaultSandboxBillingDeps.releaseHold,
   trackUsage: (input) => AIMonitoring.trackUsage(input),
+  settleWalletId: computeSettleWalletId,
 };
 
 export function createBrowserMeter(primitives: BillingPrimitives = realPrimitives): BrowserMeter<BrowserBilling> {
   return {
     open: async ({ driveId, ownerId }) => {
-      const payer = await primitives.resolvePayerId({ driveId, ownerId });
-      // WAL-9 interim: refuse an org payer before any hold — never bill a person for it.
-      if (!payer.ok) return { ok: false, reason: payer.refusal.code };
-      const { userId: payerId } = payer;
-      const gated = await primitives.gate({ payerId });
-      if (!gated.allowed) return { ok: false, reason: gated.reason ?? 'The browser could not be started: insufficient credits.' };
-      return { ok: true, hold: { holdId: gated.holdId ?? null, payerId } };
+      const charge = await primitives.resolveCharge({ driveId, ownerId });
+      const gated = await primitives.gate({ charge });
+      if (!gated.allowed) {
+        // WAL-9: a missing, paused or empty org pool is named — never a fallback to a person.
+        const orgRefusal = gated.orgRefusal;
+        if (orgRefusal !== undefined && isOrgComputeRefusal(orgRefusal)) return { ok: false, reason: ORG_COMPUTE_REFUSAL_MESSAGES[orgRefusal] };
+        return { ok: false, reason: gated.reason ?? 'The browser could not be started: insufficient credits.' };
+      }
+      return { ok: true, hold: { holdId: gated.holdId ?? null, charge } };
     },
     close: async ({ billing, hold, activeSeconds, shape, substrate }) => {
-      // The payer fixed at open: an ownership change mid-session must not move the charge.
-      const { payerId } = hold;
+      // The charge fixed at open: an ownership change mid-session must not move it.
+      const { charge } = hold;
       if (activeSeconds <= 0) {
         if (hold.holdId !== null) await primitives.releaseHold(hold.holdId);
         return;
       }
+      // Settle on the wallet the hold named. An org pool gone since the hold settles nothing
+      // (the hold is released) — never onto the recorded person's wallet.
+      const walletId = await primitives.settleWalletId(charge);
+      if (walletId === null) {
+        if (hold.holdId !== null) await primitives.releaseHold(hold.holdId);
+        return;
+      }
       await primitives.trackUsage({
-        userId: payerId,
+        userId: charge.userId,
+        walletId,
         provider: substrate,
         model: 'browser-machine',
         source: 'terminal',

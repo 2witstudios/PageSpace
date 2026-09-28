@@ -47,8 +47,6 @@ import type { LookupDriveBillingFacts } from '../../billing/sandbox-payer';
 export type CodeExecutionDenialReason =
   | 'kill_switch_off'
   | 'tier_ineligible'
-  /** WAL-9 interim: the payer is an org, which compute cannot charge until C3 (see `ORG_BILLING_PENDING`). */
-  | 'org_billing_pending'
   | 'no_drive_access'
   | 'insufficient_role'
   | 'no_agent_access'
@@ -181,10 +179,9 @@ async function authorizeSandboxTierEligibility(
     { driveId: driveId ?? null, ownerId: ownerId ?? userId },
     { lookupDriveBillingFacts: deps.lookupDriveBillingFacts, getUserSubscriptionTier: deps.getUserSubscriptionTier },
   );
-  // WAL-9 interim: an org drive's compute bills the org, which no charge path can debit until
-  // the C3 lane lands. Refused here, before any machine starts or any hold is taken.
-  if (!payerTier.ok) return deny(payerTier.refusal.code);
-  return isSandboxAvailable(payerTier.tier) ? { ok: true } : deny('tier_ineligible');
+  // WAL-9: an org drive's session runs on the org's tier and bills the org pool; whether the
+  // pool can pay is the charge site's hold, not eligibility.
+  return isSandboxAvailable(payerTier) ? { ok: true } : deny('tier_ineligible');
 }
 
 export async function canRunCode({
