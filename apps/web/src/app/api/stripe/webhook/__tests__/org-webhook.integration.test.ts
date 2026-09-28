@@ -73,9 +73,13 @@ const signer = new Stripe('sk_test_signer_only_no_network');
 // Arm D-OW-13 on every connection this file's pool opens, registered before its first
 // query. A connection whose SET failed is remembered and thrown in beforeAll, never
 // swallowed, so a broken harness fails loudly instead of checking nothing.
+// The sessions also run in a NON-UTC zone on purpose: the stripe_events claim lease must
+// not depend on the database session's TimeZone (review ow-irv-2739 P3-1), and the
+// concurrent-delivery test reclaims the lease early if it does.
+const SESSION_TIME_ZONE = 'America/Chicago';
 let armFailure: unknown = null;
 appPool.on('connect', (client) => {
-  client.query(`SET ${WALLET_LEG_INVARIANT_GUC} = 'on'`).catch((error: unknown) => {
+  client.query(`SET ${WALLET_LEG_INVARIANT_GUC} = 'on'; SET TIME ZONE '${SESSION_TIME_ZONE}'`).catch((error: unknown) => {
     armFailure = error;
   });
 });
@@ -219,9 +223,10 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
     const clients = await Promise.all(Array.from({ length: Math.max(appPool.totalCount, 1) }, () => appPool.connect()));
     try {
       const armed = await Promise.all(
-        clients.map(async (c) => (await c.query<{ armed: string | null }>(`SELECT current_setting('${WALLET_LEG_INVARIANT_GUC}', true) AS armed`)).rows[0]?.armed),
+        clients.map(async (c) => (await c.query<{ armed: string | null; tz: string }>(`SELECT current_setting('${WALLET_LEG_INVARIANT_GUC}', true) AS armed, current_setting('TimeZone') AS tz`)).rows[0]),
       );
-      if (armed.some((a) => a !== 'on')) throw new Error(`wallet-leg invariant is not armed on every connection: ${JSON.stringify(armed)}`);
+      if (armed.some((a) => a?.armed !== 'on')) throw new Error(`wallet-leg invariant is not armed on every connection: ${JSON.stringify(armed)}`);
+      if (armed.some((a) => a?.tz !== SESSION_TIME_ZONE)) throw new Error(`session TimeZone is not ${SESSION_TIME_ZONE} on every connection: ${JSON.stringify(armed)}`);
     } finally {
       for (const c of clients) c.release();
     }

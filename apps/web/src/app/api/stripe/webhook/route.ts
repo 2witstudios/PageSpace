@@ -64,7 +64,9 @@ export async function POST(request: NextRequest) {
     try {
       const insertedRows = await db
         .insert(stripeEvents)
-        .values({ id: event.id, type: event.type })
+        // createdAt is the lease anchor: written from the same clock the lease cutoff is read
+        // against, never the column's session-local now() (a non-UTC session would age it by hours).
+        .values({ id: event.id, type: event.type, createdAt: now })
         .onConflictDoNothing({ target: stripeEvents.id })
         .returning({ id: stripeEvents.id });
 

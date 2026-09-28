@@ -1513,9 +1513,11 @@ describe('POST /api/stripe/webhook', () => {
 
       await POST(request);
 
+      // createdAt (the claim-lease anchor) is written by the app clock, not the column's session-local default.
       expect(mockInsertValues).toHaveBeenCalledWith({
         id: event.id,
         type: event.type,
+        createdAt: expect.any(Date),
       });
     });
   });
