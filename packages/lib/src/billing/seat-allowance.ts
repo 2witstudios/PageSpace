@@ -78,14 +78,18 @@ export async function loadSeatCapFacts(
     .from(walletConsumerCaps)
     .where(and(eq(walletConsumerCaps.walletId, input.poolId), eq(walletConsumerCaps.consumerKey, userConsumerKey(input.userId))))
     .limit(1);
-  // The day window never reaches back before the period: a refill mid-day starts both afresh.
-  const dayStart = new Date(Math.max(periodStart.getTime(), utcDayStartMs(input.now.getTime())));
+  // The day is the UTC day, whatever the period (WAL-7: daily caps are UTC). A refill lands at
+  // any time of day and restarts only the PERIOD; spend earlier the same UTC day still counts
+  // against the daily cap, so a refill never grants a second daily allowance (point-guard
+  // ruling on review P2-1, IRV-R7). The rows read reach back to whichever window starts first.
+  const dayStart = new Date(utcDayStartMs(input.now.getTime()));
+  const rowsFrom = new Date(Math.min(periodStart.getTime(), dayStart.getTime()));
   // Every seat charge counts in the window of the CALL it belongs to: a reconcile correction
   // is dated by the call's usage row, not by when the cron ran, so a refund for yesterday's
   // (or last period's) call never opens room today. And each call nets to at least zero, so no
   // correction, however large, can push a window below what was really spent in it.
   // (Review 5340856661 P2-1: IRV-C1, IRV-C2.) A correction's own row is never older than its
-  // call's, so the period filter on the rows themselves loses nothing that belongs here.
+  // call's, so filtering the rows themselves from the earlier window start loses nothing.
   const callAt = sql`coalesce((SELECT u."createdAt" FROM ${creditLedger} u WHERE u."aiUsageLogId" = ${creditLedger.aiUsageLogId} AND u."entryType" = 'usage' LIMIT 1), ${creditLedger.createdAt})`;
   const calls = executor
     .select({
@@ -97,7 +101,7 @@ export async function loadSeatCapFacts(
       eq(creditLedger.userId, input.userId),
       eq(creditLedger.walletId, input.poolId),
       inArray(creditLedger.entryType, ['usage', 'adjustment']),
-      gte(creditLedger.createdAt, periodStart),
+      gte(creditLedger.createdAt, rowsFrom),
     ))
     .groupBy(sql`coalesce(${creditLedger.aiUsageLogId}, ${creditLedger.id})`)
     .as('calls');
@@ -112,7 +116,7 @@ export async function loadSeatCapFacts(
   const inDay = sql`${creditLedger.createdAt} >= ${dayStart}`;
   const [absorbed] = await executor
     .select({
-      period: sql<string>`coalesce(sum(${creditLedger.chargeMillicents}) FILTER (WHERE ${creditLedger.entryType} = ${SEAT_OVERSHOOT_ENTRY.month}), 0)`,
+      period: sql<string>`coalesce(sum(${creditLedger.chargeMillicents}) FILTER (WHERE ${creditLedger.entryType} = ${SEAT_OVERSHOOT_ENTRY.month} AND ${creditLedger.createdAt} >= ${periodStart}), 0)`,
       day: sql<string>`coalesce(sum(${creditLedger.chargeMillicents}) FILTER (WHERE ${creditLedger.entryType} = ${SEAT_OVERSHOOT_ENTRY.day} AND ${inDay}), 0)`,
     })
     .from(creditLedger)
@@ -120,7 +124,7 @@ export async function loadSeatCapFacts(
       eq(creditLedger.userId, input.userId),
       eq(creditLedger.walletId, input.poolId),
       inArray(creditLedger.entryType, [SEAT_OVERSHOOT_ENTRY.month, SEAT_OVERSHOOT_ENTRY.day]),
-      gte(creditLedger.createdAt, periodStart),
+      gte(creditLedger.createdAt, rowsFrom),
     ));
   const [held] = await executor
     .select({ cents: sql<string>`coalesce(sum(${creditHolds.estCents}), 0)` })

@@ -975,6 +975,73 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     expect(await spendUntilRefused(w, w.marcusId)).toBe(4);
   });
 
+  /** The pool refills at `at`: its period starts there (D-OW-12). */
+  const refillAt = (w: World, at: Date) => db.update(wallets).set({ monthlyPeriodStart: at }).where(eq(wallets.id, w.poolId));
+  /** Keep the test's "earlier today" inside today: not in the first seconds after UTC midnight. */
+  const clearOfMidnight = async () => { if (Date.now() - utcToday() < 10_000) await new Promise((r) => setTimeout(r, 10_000)); };
+
+  it('WAL-7 (partial) WAL-2 (partial) IRV-R7: a pool refill MID-DAY restarts the month, not the day — no second daily allowance', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+    const w = world;
+    await db.insert(walletConsumerCaps).values({ walletId: w.poolId, consumerKey: `user:${w.marcusId}`, dailyCapCents: 50, monthlyCapCents: 1_000 });
+    await clearOfMidnight();
+    // Earlier today: the whole 50¢ daily cap.
+    await seatCallCosting(w, w.marcusId, COST_25C);
+    await seatCallCosting(w, w.marcusId, COST_25C);
+    await db.update(creditLedger).set({ createdAt: new Date(Date.now() - 5_000) }).where(and(eq(creditLedger.userId, w.marcusId), eq(creditLedger.walletId, w.poolId)));
+
+    // The pool refills later the same UTC day.
+    await refillAt(w, new Date(Date.now() - 2_000));
+
+    // The new period is empty, but today is still spent: refused by the DAILY cap, not a fresh 50¢.
+    const counted = await seatCounted(w, w.marcusId);
+    expect(counted.usage.periodChargedMillicents).toBe(0);
+    expect(counted.usage.dayChargedMillicents).toBe(50_000);
+    expect(await seatGate(w, w.marcusId)).toMatchObject({ allowed: false, refusal: { reason: 'source_cap_reached' } });
+  });
+
+  it('WAL-7 (partial) WAL-2 (partial) a refill exactly AT UTC midnight: yesterday counts in neither window, today in both', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+    const w = world;
+    await db.insert(walletConsumerCaps).values({ walletId: w.poolId, consumerKey: `user:${w.marcusId}`, dailyCapCents: 50, monthlyCapCents: 100 });
+    // Yesterday: 50¢, the whole daily cap. The pool then refills exactly at today's UTC midnight.
+    await seatCallCosting(w, w.marcusId, COST_25C);
+    await seatCallCosting(w, w.marcusId, COST_25C);
+    await nextDay(w, w.marcusId);
+    await refillAt(w, new Date(utcToday()));
+
+    // Today: the daily 50¢ — two calls — and the month holds only today's spend.
+    expect(await spendUntilRefused(w, w.marcusId)).toBe(2);
+    const counted = await seatCounted(w, w.marcusId);
+    expect(counted.usage.dayChargedMillicents).toBe(50_000);
+    expect(counted.usage.periodChargedMillicents).toBe(50_000);
+  });
+
+  it('WAL-7 (partial) WAL-2 (partial) a call gated before a mid-day refill and settled after it counts in the NEW period and in today', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+    const w = world;
+    await db.insert(walletConsumerCaps).values({ walletId: w.poolId, consumerKey: `user:${w.marcusId}`, dailyCapCents: 100, monthlyCapCents: 100 });
+    await clearOfMidnight();
+    // Call A settles before the refill; call B is admitted before it and settles after.
+    await seatCallCosting(w, w.marcusId, COST_25C);
+    const gateB = await seatGate(w, w.marcusId);
+    expect(gateB).toMatchObject({ allowed: true, walletId: w.poolId });
+    await db.update(creditLedger).set({ createdAt: new Date(Date.now() - 5_000) }).where(and(eq(creditLedger.userId, w.marcusId), eq(creditLedger.walletId, w.poolId)));
+    await refillAt(w, new Date(Date.now() - 2_000));
+    const [logB] = await db.insert(aiUsageLogs).values({ userId: w.marcusId, provider: 'openrouter', model: 'm', cost: COST_25C }).returning({ id: aiUsageLogs.id });
+    expect(await consumeCredits({ aiUsageLogId: logB.id, userId: w.marcusId, costDollars: COST_25C, holdId: gateB.holdId, walletId: gateB.walletId })).toBe('settled');
+
+    // The period holds B only (its charge entered the ledger after the refill); today holds A and B.
+    const counted = await seatCounted(w, w.marcusId);
+    expect(counted.usage.periodChargedMillicents).toBe(25_000);
+    expect(counted.usage.dayChargedMillicents).toBe(50_000);
+    // Today has 50¢ left of its 100¢, the month 75¢: the day binds — two more calls.
+    expect(await spendUntilRefused(w, w.marcusId)).toBe(2);
+  });
+
   it('WAL-2 (partial) WAL-7 (partial) a seat stream\'s own budget is bounded by what is left of the DAILY cap when it is the smaller', async () => {
     if (!dbAvailable) return;
     world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
