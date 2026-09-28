@@ -169,7 +169,15 @@ interface BillingResponse {
   debtByUser: DebtRow[];
   revenue: { topupCents: number; topupCount: number; monthlyGrantCents: number; monthlyGrantCount: number; includedCreditLiabilityCents: number };
   subscriptionsByTier: SubscriptionTierRow[];
-  liability: { monthlyRemainingCents: number; topupRemainingCents: number; totalLiabilityCents: number; userCount: number };
+  liability: {
+    monthlyRemainingCents: number;
+    orgPoolMonthlyRemainingCents: number;
+    starterGrantRemainingCents: number;
+    topupRemainingCents: number;
+    totalLiabilityCents: number;
+    userCount: number;
+    orgPoolCount: number;
+  };
   holds: { holdCount: number; heldCents: number };
   alerts: { balanceDrift: BalanceDriftRow[]; negativeMargin: NegativeMarginRow[] };
   tokens: { summary: TokenTotals; byModel: TokenModelRow[]; byPeriod: TokenPeriodRow[]; byUser: TokenUserRow[] };
@@ -200,7 +208,7 @@ function OverviewTab({ data }: { data: BillingResponse }) {
       <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
         <StatCard label="Top-up revenue" value={usd(revenue.topupCents)} icon={Banknote} hint={`${num(revenue.topupCount)} purchases — real cash from Stripe top-ups in range`} />
         <StatCard label="Allowance grants" value={usd(revenue.monthlyGrantCents)} icon={HandCoins} hint={`${num(revenue.monthlyGrantCount)} grants in range — not cash revenue`} />
-        <StatCard label="Included credit liability" value={usd(revenue.includedCreditLiabilityCents)} icon={Scale} hint="Outstanding monthly grants — credit value still owed, not cash. Point-in-time" />
+        <StatCard label="Included credit liability" value={usd(revenue.includedCreditLiabilityCents)} icon={Scale} hint={`Outstanding grants on personal wallets and org pools — credit value still owed, not cash. Org pools ${usd(liability.orgPoolMonthlyRemainingCents)} · free starter grants ${usd(liability.starterGrantRemainingCents)}. Point-in-time`} />
         <StatCard label="Provider cost (what we paid)" value={usd(summary.realCostCents)} icon={Coins} />
         <StatCard label="Charged to users (credits)" value={usd(summary.chargedCents)} hint={`Credits applied: ${usd(summary.appliedCents)}`} />
         <StatCard
@@ -213,7 +221,7 @@ function OverviewTab({ data }: { data: BillingResponse }) {
           label="Outstanding liability"
           value={usd(liability.totalLiabilityCents)}
           icon={Scale}
-          hint={`Monthly ${usd(liability.monthlyRemainingCents)} · Top-up ${usd(liability.topupRemainingCents)} · ${num(liability.userCount)} users`}
+          hint={`Grants ${usd(liability.monthlyRemainingCents)} · Top-up and drive-wallet funds ${usd(liability.topupRemainingCents)} · ${num(liability.userCount)} users · ${num(liability.orgPoolCount)} org pools`}
         />
         <StatCard label="Live holds" value={usd(holds.heldCents)} hint={`${num(holds.holdCount)} open holds`} />
         <StatCard

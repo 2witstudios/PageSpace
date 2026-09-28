@@ -4,6 +4,7 @@ import { eq, and, isNull, lte } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { subscriptions, stripeEvents } from '@pagespace/db/schema/subscriptions';
 import { stripe, Stripe, getTierFromPrice } from '@/lib/stripe';
+import { tierFromInvoiceLine } from '@/lib/stripe/price-config';
 import type { SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { deriveTierFromSubscriptions } from '@pagespace/lib/billing/subscription-tier-sync';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -422,13 +423,7 @@ async function withFundingRetry(eventId: string, run: () => Promise<void>) {
 function tierFromInvoice(invoice: Stripe.Invoice): SubscriptionTier | undefined {
   const lines = invoice.lines?.data ?? [];
   const line = lines.find((l) => l.pricing?.price_details?.price) ?? lines[0];
-  const priceData = line?.pricing?.price_details?.price;
-  const priceId = typeof priceData === 'string' ? priceData : priceData?.id;
-  if (!priceId) return undefined;
-  const unitAmount = line?.pricing?.unit_amount_decimal
-    ? Math.round(parseFloat(line.pricing.unit_amount_decimal) * 100)
-    : null;
-  const tier = getTierFromPrice(priceId, unitAmount);
+  const tier = tierFromInvoiceLine(line);
   return tier === 'free' ? undefined : tier;
 }
 

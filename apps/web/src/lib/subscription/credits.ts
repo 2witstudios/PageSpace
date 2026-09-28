@@ -9,6 +9,7 @@ export {
   centsFromCredits,
   creditsFromDollars,
   dollarsFromCents,
+  centsFromDollars,
   formatCreditCount,
   formatDollars,
   creditPackPriceCents,

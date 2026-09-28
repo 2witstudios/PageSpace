@@ -39,12 +39,30 @@ DRV-7
 # until B4/B7, Wave C and Wave F.
 DRV-8
 DRV-9
+# MON-1 re-added per Review 2 (page x78t4kownl6t4ko29lv2xvhu, "removed, but not proven"): the
+# money-model tests prove the one module; ow-fix-money-defs adds the copy guard (no literal credit
+# figure in any app or email template, no Founder plan in marketing or email copy) and the
+# second-conversion guard. Unproven: no test scans docs/, the CHANGELOG or legal copy for an
+# allowance, and the Terms figures wait for the D-OW-18 migration commit. Titles are "MON-1 (partial)".
+MON-1
 # MON-3 (the org pool refill: (Business base + extra-seat items) paid × ratio) re-added per review
 # 5230424182 on #2657, and kept after ow-c5 (#2718, independent review ow-irv-2718 P1-1): the pool now
 # refills from an org invoice.paid, sized from what each line paid net of its discounts and capped at
 # amount_paid (tests titled "MON-3 (partial)"), but it sums EVERY line of the org subscription; limiting
 # the refill to the Business base and extra-seat prices needs those prices, which Phase 3 D1 defines.
 MON-3
+# MON-5 re-added per Review 2 ("removed on a false cover": the guard missed call results and
+# non-"cents" operands, live second conversions existed, and cli wallets.test.ts carried a stray
+# "MON-5" token). ow-fix-money-defs closes the guard hole (mutants M9b/M9c now red) and routes every
+# live conversion through money-model; each test proves one clause and is titled "MON-5 (partial)".
+# A single test proving every clause (one definition, consumed by the lib/web/marketing/admin/CLI
+# formatters, the removed helpers gone, the grep) is still owed before the reviewer can agree.
+MON-5
+# MON-7 re-added per Review 2 ("removed; now wrong": liability summed personal roots only).
+# ow-fix-money-defs proves the liability clause on Postgres (org pools counted, a pool's allocation
+# never counted twice, "MON-7 (partial)"); the margin-as-charged-versus-cost clause has no test
+# naming MON-7 yet.
+MON-7
 # ORG-1 (name, slug, avatar, one human Owner; ownership is transferable), ORG-2 (Owner/Admin/Member;
 # many orgs per user; a user in no org sees no org UI) and ORG-3 (email invites with expiry, resend,
 # revoke, acceptance for new and existing accounts; a pending invite counts as a seat) re-added per

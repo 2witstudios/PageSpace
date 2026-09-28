@@ -30,6 +30,40 @@ export const LEGACY_PRICE_AMOUNTS: Record<number, SubscriptionTier> = {
 };
 
 /**
+ * A Stripe `unit_amount_decimal` (an invoice line's `pricing.unit_amount_decimal`) as
+ * whole cents for {@link getTierFromPrice}'s amount fallback. Stripe states it in the
+ * currency's minor unit already — a $50 line reads "5000" — so it is rounded, never
+ * multiplied: the `* 100` this replaces turned $50 into 500,000 and the fallback never
+ * matched (MON-5: a second conversion). Null when absent or unparseable.
+ */
+export function unitAmountCentsFromDecimal(decimal: string | null | undefined): number | null {
+  if (!decimal) return null;
+  const cents = Number.parseFloat(decimal);
+  return Number.isFinite(cents) ? Math.round(cents) : null;
+}
+
+/** The part of a Stripe invoice line tier detection reads (a `Stripe.InvoiceLineItem` fits). */
+export interface InvoiceLinePricing {
+  pricing?: {
+    price_details?: { price?: string | { id: string } | null } | null;
+    unit_amount_decimal?: string | null;
+  } | null;
+}
+
+/**
+ * The tier a paid invoice line bills: its price id, with the line's own amount (already
+ * cents) as the fallback for an id we do not map. Undefined when the line names no
+ * price. The webhook's grant tier and the invoices list's plan name both read this.
+ */
+export function tierFromInvoiceLine(line: InvoiceLinePricing | undefined): SubscriptionTier | undefined {
+  const priceData = line?.pricing?.price_details?.price;
+  // In Stripe v20, price can be a string ID or expanded Price object
+  const priceId = typeof priceData === 'string' ? priceData : priceData?.id;
+  if (!priceId) return undefined;
+  return getTierFromPrice(priceId, unitAmountCentsFromDecimal(line?.pricing?.unit_amount_decimal));
+}
+
+/**
  * Determine subscription tier from a Stripe price.
  *
  * @param priceId - The Stripe price ID

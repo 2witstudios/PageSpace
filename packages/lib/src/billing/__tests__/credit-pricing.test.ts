@@ -126,7 +126,7 @@ describe('TIER_ALLOWANCE_REFILLS', () => {
     expect(TIER_ALLOWANCE_REFILLS.business).toBe(true);
   });
 
-  it('MON-1 credit-pricing no longer tabulates an allowance — the money model derives it', async () => {
+  it('MON-1 (partial) credit-pricing no longer tabulates an allowance — the money model derives it', async () => {
     const pricing: Record<string, unknown> = await import('../credit-pricing');
     expect(pricing.TIER_MONTHLY_ALLOWANCE_CENTS).toBeUndefined();
   });

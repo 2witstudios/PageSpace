@@ -235,6 +235,34 @@ describe('Invoices API', () => {
       expect(body.invoices[0].description).toBe('Custom Description');
     });
 
+    it.each([
+      ['5000', 'Business Plan'],
+      ['1500', 'Pro Plan'],
+    ])('MON-5 (partial) an unmapped legacy price with unit_amount_decimal %s (already cents) is named %s', async (decimal, name) => {
+      mockStripeInvoicesList.mockResolvedValue({
+        data: [{
+          ...mockInvoice(),
+          lines: {
+            data: [{
+              description: 'Legacy plan',
+              amount: Number(decimal),
+              parent: { subscription_item_details: { subscription: 'sub_legacy' } },
+              pricing: { price_details: { price: 'price_legacy_unmapped' }, unit_amount_decimal: decimal },
+            }],
+          },
+        }],
+        has_more: false,
+      });
+
+      const request = new Request('https://example.com/api/stripe/invoices', {
+        method: 'GET',
+      }) as unknown as import('next/server').NextRequest;
+
+      const body = await (await GET(request)).json();
+
+      expect(body.invoices[0].description).toBe(name);
+    });
+
     it('should pass pagination params to Stripe', async () => {
       const request = new Request('https://example.com/api/stripe/invoices?limit=5&starting_after=in_prev', {
         method: 'GET',

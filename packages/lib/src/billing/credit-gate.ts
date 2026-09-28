@@ -45,7 +45,7 @@ import {
   dailyExposureCapForTier,
 } from './credit-pricing';
 import { readSpendableCents } from './credit-balance';
-import { tierAllowanceCents } from './money-model';
+import { exactCentsFromDollars, tierAllowanceCents } from './money-model';
 import { isSubscriptionTier } from './subscription-tiers';
 import { ensurePersonalRootWalletId } from './personal-wallet';
 import { ORGS_ENABLED } from '../organizations/orgs-enabled';
@@ -352,7 +352,7 @@ export async function canConsumeAI(
         .select({ costUsd: sql<number>`coalesce(sum(${aiUsageLogs.cost}), 0)` })
         .from(aiUsageLogs)
         .where(and(eq(aiUsageLogs.userId, userId), gte(aiUsageLogs.timestamp, dayStart)));
-      const spentCents = Math.floor(Number(agg[0]?.costUsd ?? 0) * 100);
+      const spentCents = Math.floor(exactCentsFromDollars(Number(agg[0]?.costUsd ?? 0)));
       const cap = evaluateDailyCap({
         dailyChargedCents: spentCents + reserved,
         estCostCents: estCost,
