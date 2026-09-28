@@ -400,10 +400,44 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
     expect(await poolOf(org.orgId)).toBeNull();
     expect(await db.select().from(creditLedger).where(eq(creditLedger.userId, person.id))).toHaveLength(0);
 
-    // Marcus's own invoice: the personal path, never Northwind's pool.
-    const personal = { ...tagged, id: `in_owd3_${Math.random().toString(36).slice(2, 12)}`, parent: { type: 'subscription_details', subscription_details: { metadata: {}, subscription: 'sub_owd3_personal' } } };
+    // Marcus's own Pro invoice ($15, the personal Pro price; unit_amount_decimal is CENTS):
+    // the personal path funds HIS wallet, and never Northwind's pool.
+    const proCents = tierListPriceCents('pro');
+    const personal = {
+      id: `in_owd3_${Math.random().toString(36).slice(2, 12)}`,
+      object: 'invoice',
+      currency: 'usd',
+      customer: person.stripeCustomerId!,
+      amount_paid: proCents,
+      subtotal: proCents,
+      billing_reason: 'subscription_cycle',
+      period_start: 1_800_000_000 - 30 * DAY,
+      period_end: 1_800_000_000,
+      livemode: false,
+      parent: { type: 'subscription_details', subscription_details: { metadata: {}, subscription: 'sub_owd3_personal' } },
+      lines: {
+        object: 'list',
+        data: [
+          {
+            amount: proCents,
+            discount_amounts: [],
+            quantity: 1,
+            pricing: { price_details: { price: stripeConfig.priceIds.pro }, unit_amount_decimal: String(proCents) },
+            period: { start: 1_800_000_000, end: 1_800_000_000 + 30 * DAY },
+          },
+        ],
+      },
+    };
     expect(await deliver(eventPayload('invoice.paid', personal))).toBe(200);
     expect(await poolOf(org.orgId)).toBeNull();
+    const personalRows = await db.select().from(creditLedger).where(eq(creditLedger.stripeRef, personal.id));
+    expect(personalRows.length).toBeGreaterThan(0);
+    const [marcusRoot] = await db.select({ id: wallets.id }).from(wallets).where(and(eq(wallets.userId, person.id), isNull(wallets.subjectType), isNull(wallets.parentWalletId)));
+    for (const row of personalRows) {
+      expect(row.userId).toBe(person.id);
+      expect(row.walletId).toBe(marcusRoot.id);
+    }
+    expect(personalRows.reduce((sum, r) => sum + r.amountCents, 0)).toBeGreaterThan(0);
 
     // An org's invoice tagged for ANOTHER org: refused, the customer's org is not funded either.
     const mismatch = invoiceObject({
