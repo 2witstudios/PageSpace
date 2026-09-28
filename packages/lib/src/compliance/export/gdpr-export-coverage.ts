@@ -417,6 +417,8 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     'Delivery ledger for transactional email (send/bounce/complaint outcomes). The CONTENT of every such message is exported under the notifications category; this table is the transport outcome, held for deliverability and abuse handling.',
   contact_submissions:
     'Submissions to the public contact form, which accepts an arbitrary email address with no authenticated account behind it — there is no reliable link to a user id, so a row cannot be attributed to the subject without guessing.',
+  billing_epochs:
+    'Deployment-wide instants a billing rule went live (0323; e.g. when organization compute billing began, so accrual from before it is forgiven). One row per rule, keyed by a fixed name and a timestamp — it references no user, org, drive or wallet and holds no personal data, so there is nothing in it to attribute to a subject.',
   feedback_submissions:
     'Product feedback the subject volunteered, retained as a controller record for the legitimate interest of acting on it; the subject holds their own copy of what they wrote at the moment they wrote it.',
   data_subject_requests:
