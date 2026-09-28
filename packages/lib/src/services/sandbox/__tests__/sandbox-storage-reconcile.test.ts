@@ -172,6 +172,8 @@ function makeDeps(over: Partial<ReconcileSandboxStorageDeps> = {}): {
       return 'advanced';
     },
     now: () => new Date('2026-07-01T00:00:00.000Z'),
+    // Org compute billing went live long before every default watermark: nothing forgiven.
+    orgComputeBillingEpoch: async () => new Date(0),
     ...over,
   };
   return { deps, chargeCalls, agentSessionAdvanceCalls, driveEnvAdvanceCalls, publishedAppAdvanceCalls };
@@ -255,7 +257,7 @@ describe('reconcileSandboxStorage', () => {
     await reconcileSandboxStorage(deps);
 
     expect(lookup).toHaveBeenCalledWith('drive-9');
-    expect(chargeCalls[0]).toMatchObject({ payerId: 'owner-of-drive-9', driveId: 'drive-9' });
+    expect(chargeCalls[0]).toMatchObject({ charge: { kind: 'user', userId: 'owner-of-drive-9' }, driveId: 'drive-9' });
   });
 
   it('bills a global-assistant session (null driveId) straight to its ownerId, with no drive lookup and no driveId on the charge', async () => {
@@ -271,7 +273,7 @@ describe('reconcileSandboxStorage', () => {
     assert({
       given: 'a global-assistant agent-session Sprite (no backing drive)',
       should: 'charge the session ownerId directly, with driveId omitted from the charge',
-      actual: { charged: result.charged, payerId: chargeCalls[0]?.payerId, driveId: chargeCalls[0]?.driveId },
+      actual: { charged: result.charged, payerId: chargeCalls[0]?.charge.userId, driveId: chargeCalls[0]?.driveId },
       expected: { charged: 1, payerId: 'global-owner-1', driveId: undefined },
     });
   });
@@ -304,19 +306,72 @@ describe('reconcileSandboxStorage', () => {
     expect(agentSessionAdvanceCalls).toEqual([]);
   });
 
-  it('WAL-9 (partial) skips ORG-drive storage by name for every kind — no wallet is charged, no watermark moves, never the lead', async () => {
-    const { deps, chargeCalls, agentSessionAdvanceCalls, driveEnvAdvanceCalls } = makeDeps({
-      listAgentSessionSprites: async () => [agentSession({ driveId: 'org-drive' })],
+  it("WAL-9 (partial) charges ORG-drive storage to the org pool for every kind — a session recorded under its owner, an env and an app under the lead", async () => {
+    const { deps, chargeCalls } = makeDeps({
+      listAgentSessionSprites: async () => [agentSession({ driveId: 'org-drive', ownerId: 'session-owner-1' })],
       listDriveEnvSprites: async () => [driveEnv({ driveId: 'org-drive' })],
+      listPublishedAppRootfs: async () => [publishedAppRootfs({ driveId: 'org-drive' })],
       lookupDriveBillingFacts: async () => ({ ownerId: 'lead-marcus', orgId: 'org-northwind' }),
     });
 
     const result = await reconcileSandboxStorage(deps);
 
-    expect(result).toMatchObject({ processed: 2, charged: 0, skipped: 2, orgBillingPending: 2 });
+    expect(result).toMatchObject({ processed: 3, charged: 3, skipped: 0, orgBacklogForgiven: 0 });
+    expect(chargeCalls.map((call) => [call.subjectKind, call.charge])).toEqual([
+      ['session', { kind: 'org', orgId: 'org-northwind', userId: 'session-owner-1' }],
+      ['env', { kind: 'org', orgId: 'org-northwind', userId: 'lead-marcus' }],
+      ['hosting', { kind: 'org', orgId: 'org-northwind', userId: 'lead-marcus' }],
+    ]);
+  });
+
+  it('WAL-9 (partial) on the FIRST org-billed tick, forgives the pre-epoch backlog: nothing charged, the watermark moves to the tick, counted by name', async () => {
+    const tick = new Date('2026-07-01T00:00:00.000Z');
+    const { deps, chargeCalls, driveEnvAdvanceCalls, agentSessionAdvanceCalls } = makeDeps({
+      listAgentSessionSprites: async () => [agentSession({ driveId: 'org-drive', storageLastBilledAt: new Date('2026-05-01T00:00:00.000Z') })],
+      listDriveEnvSprites: async () => [driveEnv({ driveId: 'org-drive', storageLastBilledAt: new Date('2026-05-01T00:00:00.000Z') })],
+      lookupDriveBillingFacts: async () => ({ ownerId: 'lead-marcus', orgId: 'org-northwind' }),
+      orgComputeBillingEpoch: async (tickStart) => tickStart,
+    });
+
+    const result = await reconcileSandboxStorage(deps);
+
     expect(chargeCalls).toEqual([]);
-    expect(agentSessionAdvanceCalls).toEqual([]);
-    expect(driveEnvAdvanceCalls).toEqual([]);
+    expect(result).toMatchObject({ charged: 0, skipped: 0, failed: 0, orgBacklogForgiven: 2, billableRows: 0 });
+    expect(agentSessionAdvanceCalls).toEqual([{ workspaceId: 'session-1', billedThrough: tick }]);
+    expect(driveEnvAdvanceCalls).toEqual([{ envId: 'env-1', billedThrough: tick }]);
+  });
+
+  it('WAL-9 (partial) a later tick with a pre-epoch watermark charges only from the epoch', async () => {
+    const epoch = new Date('2026-06-30T23:00:00.000Z');
+    const full = makeDeps({
+      listAgentSessionSprites: async () => [agentSession({ driveId: 'org-drive', storageLastBilledAt: epoch })],
+      lookupDriveBillingFacts: async () => ({ ownerId: 'lead-marcus', orgId: 'org-northwind' }),
+    });
+    await reconcileSandboxStorage(full.deps);
+    const fromEpoch = full.chargeCalls[0]?.costDollars;
+
+    const { deps, chargeCalls } = makeDeps({
+      listAgentSessionSprites: async () => [agentSession({ driveId: 'org-drive', storageLastBilledAt: new Date('2026-05-01T00:00:00.000Z') })],
+      lookupDriveBillingFacts: async () => ({ ownerId: 'lead-marcus', orgId: 'org-northwind' }),
+      orgComputeBillingEpoch: async () => epoch,
+    });
+    const result = await reconcileSandboxStorage(deps);
+
+    expect(fromEpoch).toBeGreaterThan(0);
+    expect(chargeCalls[0]?.costDollars).toBe(fromEpoch);
+    expect(result).toMatchObject({ charged: 1, orgBacklogForgiven: 1 });
+  });
+
+  it('a PERSONAL row with an old watermark is never forgiven — the epoch is asked only for org rows', async () => {
+    const epochAsked = vi.fn(async (tickStart: Date) => tickStart);
+    const { deps, chargeCalls } = makeDeps({
+      listAgentSessionSprites: async () => [agentSession({ storageLastBilledAt: new Date('2026-06-01T00:00:00.000Z') })],
+      orgComputeBillingEpoch: epochAsked,
+    });
+    const result = await reconcileSandboxStorage(deps);
+    expect(chargeCalls).toHaveLength(1);
+    expect(result).toMatchObject({ orgBacklogForgiven: 0 });
+    expect(epochAsked).not.toHaveBeenCalled();
   });
 
   it('given chargeStorage succeeds but the FOLLOWING watermark advance throws, counts the money as charged (never under-reported) and flags the row distinguishably', async () => {
@@ -448,7 +503,7 @@ describe('reconcileSandboxStorage', () => {
       should: "charge the DRIVE OWNER, attributed to the env's drive and named as an env subject",
       actual: {
         charged: result.charged,
-        payerId: chargeCalls[0]?.payerId,
+        payerId: chargeCalls[0]?.charge.userId,
         driveId: chargeCalls[0]?.driveId,
         subjectKind: chargeCalls[0]?.subjectKind,
         subjectId: chargeCalls[0]?.subjectId,
@@ -521,7 +576,7 @@ describe('reconcileSandboxStorage', () => {
       should: "charge the DRIVE OWNER, attributed to the app's drive and named as a hosting subject",
       actual: {
         charged: result.charged,
-        payerId: chargeCalls[0]?.payerId,
+        payerId: chargeCalls[0]?.charge.userId,
         driveId: chargeCalls[0]?.driveId,
         subjectKind: chargeCalls[0]?.subjectKind,
         subjectId: chargeCalls[0]?.subjectId,
@@ -637,7 +692,7 @@ describe('reconcileSandboxStorage', () => {
       actual: {
         processed: result.processed,
         charged: result.charged,
-        payers: chargeCalls.map((call) => [call.subjectKind, call.subjectId, call.payerId]),
+        payers: chargeCalls.map((call) => [call.subjectKind, call.subjectId, call.charge.userId]),
       },
       expected: {
         processed: 2,
@@ -1034,7 +1089,7 @@ describe('reconcileSandboxStorage', () => {
       actual: {
         charged: result.charged,
         failed: result.failed,
-        payers: chargeCalls.map((call) => [call.subjectId, call.payerId]),
+        payers: chargeCalls.map((call) => [call.subjectId, call.charge.userId]),
       },
       expected: {
         charged: 2,
@@ -1131,7 +1186,7 @@ describe('reconcileSandboxStorage', () => {
       expected: { calls: ['drive-a', 'drive-b'], charged: 4 },
     });
     // Every row still gets the right payer despite the sharing.
-    expect(chargeCalls.map((call) => [call.subjectId, call.payerId])).toEqual([
+    expect(chargeCalls.map((call) => [call.subjectId, call.charge.userId])).toEqual([
       ['s1', 'owner-of-drive-a'],
       ['s2', 'owner-of-drive-a'],
       ['e1', 'owner-of-drive-a'],

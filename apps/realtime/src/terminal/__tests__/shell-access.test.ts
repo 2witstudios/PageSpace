@@ -45,7 +45,7 @@ function buildDeps(overrides: Partial<ShellCheckAuthDeps> = {}): {
     },
     resolvePayer: async () => {
       calls.resolvePayer += 1;
-      return { payer: { ok: true, userId: 'payer-1' }, driveId: 'drive-1' };
+      return { charge: { kind: 'user' as const, userId: 'payer-1' }, driveId: 'drive-1' };
     },
     getUser: async () => {
       calls.getUser += 1;
@@ -176,49 +176,37 @@ describe('buildShellCheckAuth — access half', () => {
         ? {
             ok: result.ok,
             sessionKey: result.sessionKey,
-            payerId: result.payerId,
+            charge: result.charge,
             driveId: result.driveId,
             resolver: typeof result.resolveSandbox,
           }
         : result,
-      expected: { ok: true, sessionKey: 'shell:shl-1', payerId: 'payer-1', driveId: 'drive-1', resolver: 'function' },
+      expected: { ok: true, sessionKey: 'shell:shl-1', charge: { kind: 'user', userId: 'payer-1' }, driveId: 'drive-1', resolver: 'function' },
     });
   });
 
-  it('WAL-9 (partial) refuses an org-drive session by name before any slot, user read or sandbox — nobody is billed', async () => {
-    const denials: string[] = [];
-    let slotsAcquired = 0;
-    const { deps, calls } = buildDeps({
-      resolvePayer: async () => ({
-        payer: {
-          ok: false,
-          refusal: { code: 'org_billing_pending', orgId: 'org-northwind', message: 'org billing pending' },
-        },
-        driveId: 'drive-1',
-      }),
-      acquireSlot: () => {
-        slotsAcquired += 1;
+  it("WAL-9 (partial) an org-drive session carries the org charge and takes the slot on the ORG's tier — a free-tier requester is not refused", async () => {
+    const tiers: string[] = [];
+    const orgCharge = { kind: 'org' as const, orgId: 'org-northwind', userId: 'session-owner-1' };
+    const { deps } = buildDeps({
+      resolvePayer: async () => ({ charge: orgCharge, driveId: 'drive-1' }),
+      getUser: async () => ({ subscriptionTier: 'free', email: null }),
+      acquireSlot: ({ tier }) => {
+        tiers.push(tier);
         return true;
-      },
-      logDenied: (reason) => {
-        denials.push(reason);
       },
     });
     const checkAuth = buildShellCheckAuth(deps);
 
-    const result = await checkAuth({ userId: 'user-1', shellId: 'shl-1' });
+    const result = await checkAuth({ userId: 'free-requester', shellId: 'shl-1' });
+    if (!result.ok) throw new Error(`expected allow, got ${result.reason}`);
+    await result.resolveSandbox();
 
     assert({
-      given: 'a session whose drive belongs to an org',
-      should: 'refuse with org_billing_pending and touch no payer, slot or sandbox',
-      actual: { result, denials, slotsAcquired, getUser: calls.getUser, ensure: calls.ensureSessionSandbox },
-      expected: {
-        result: { ok: false, reason: 'org_billing_pending' },
-        denials: ['org_billing_pending'],
-        slotsAcquired: 0,
-        getUser: 0,
-        ensure: 0,
-      },
+      given: 'a session whose drive belongs to an org, opened by a free-tier member',
+      should: 'carry the org charge and reserve the slot on the org tier',
+      actual: { charge: result.charge, tiers },
+      expected: { charge: orgCharge, tiers: ['business'] },
     });
   });
 
@@ -228,7 +216,7 @@ describe('buildShellCheckAuth — access half', () => {
         allowed: true,
         session: { workspaceId: 'ses-1', ownerId: 'owner-1', driveId: null },
       }),
-      resolvePayer: async () => ({ payer: { ok: true, userId: 'owner-1' }, driveId: null }),
+      resolvePayer: async () => ({ charge: { kind: 'user' as const, userId: 'owner-1' }, driveId: null }),
     });
     const checkAuth = buildShellCheckAuth(deps);
 
@@ -237,8 +225,8 @@ describe('buildShellCheckAuth — access half', () => {
     assert({
       given: 'a global-assistant session (no agent page)',
       should: 'authorize with a null billing drive and the owner as payer',
-      actual: result.ok ? { driveId: result.driveId, payerId: result.payerId } : result,
-      expected: { driveId: null, payerId: 'owner-1' },
+      actual: result.ok ? { driveId: result.driveId, charge: result.charge } : result,
+      expected: { driveId: null, charge: { kind: 'user', userId: 'owner-1' } },
     });
   });
 

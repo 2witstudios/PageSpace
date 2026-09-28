@@ -7,6 +7,9 @@ import type { PublishedApp } from '@pagespace/db/schema/published-apps';
 
 const NOW = new Date('2026-08-20T12:00:00.000Z');
 const ago = (ms: number) => new Date(NOW.getTime() - ms);
+/** Org compute billing went live well before every default window, so nothing is forgiven by default. */
+const EPOCH = ago(86_400_000);
+const ORG_CHARGE = { kind: 'org' as const, orgId: 'org-northwind', userId: 'lead-marcus' };
 
 function runningApp(over: Partial<PublishedApp> = {}): PublishedApp {
   return {
@@ -45,7 +48,7 @@ function makeDeps(over: Partial<AwakeMeterDeps> = {}) {
 
   const deps: AwakeMeterDeps = {
     isEnabled: () => true,
-    billing: { resolvePayerId: async () => ({ ok: true as const, userId: 'payer-1' }), gate, trackUsage, releaseHold },
+    billing: { resolveCharge: async () => ({ kind: 'user' as const, userId: 'payer-1' }), gate, trackUsage, releaseHold },
     listRunningApps: async () => [runningApp()],
     findStopBoundary,
     writeSettle,
@@ -54,6 +57,7 @@ function makeDeps(over: Partial<AwakeMeterDeps> = {}) {
     park,
     dailyAwakeCapSeconds: () => 0,
     now: () => NOW,
+    orgComputeBillingEpoch: async () => EPOCH,
     ...over,
   };
   return { deps, trackUsage, gate, releaseHold, writeSettle, stampWindowStart, closeAtBoundary, park, findStopBoundary };
@@ -92,7 +96,7 @@ describe('meterAwakePublishedApps — the ordinary settle', () => {
     const run = await meter(deps);
 
     expect(trackUsage).toHaveBeenCalledWith({
-      payerId: 'payer-1',
+      charge: { kind: 'user', userId: 'payer-1' },
       holdId: 'hold-1',
       activeSeconds: 600,
       driveId: 'drive-1',
@@ -167,7 +171,7 @@ describe('meterAwakePublishedApps — the ordinary settle', () => {
 
     await meter(deps);
 
-    expect(gate).toHaveBeenCalledWith({ payerId: 'payer-1' });
+    expect(gate).toHaveBeenCalledWith({ charge: { kind: 'user', userId: 'payer-1' } });
   });
 
   it('given the re-gate REFUSES, should ADVANCE THE WATERMARK BEFORE parking — the span is already charged', async () => {
@@ -326,7 +330,7 @@ describe('meterAwakePublishedApps — a running row with no window', () => {
     const { deps, stampWindowStart } = makeDeps({
       listRunningApps: async () => [runningApp({ awakeBilledThrough: null })],
     });
-    deps.billing.resolvePayerId = async () => null;
+    deps.billing.resolveCharge = async () => null;
 
     const run = await meter(deps);
 
@@ -340,7 +344,7 @@ describe('meterAwakePublishedApps — attribution and isolation', () => {
     // Never substitute a payer: a misdirected charge cannot be taken back, a
     // skipped tick corrects itself.
     const { deps, trackUsage, writeSettle } = makeDeps();
-    deps.billing.resolvePayerId = async () => null;
+    deps.billing.resolveCharge = async () => null;
 
     const run = await meter(deps);
 
@@ -356,23 +360,65 @@ describe('meterAwakePublishedApps — attribution and isolation', () => {
     });
   });
 
-  it('WAL-9 (partial) given an ORG drive on a settle, should charge nobody, move no watermark, and count it by name', async () => {
-    const { deps, trackUsage, writeSettle } = makeDeps();
-    deps.billing.resolvePayerId = async () => ({ ok: false as const, refusal: { code: 'org_billing_pending' as const, orgId: 'org-northwind', message: 'org billing pending' } });
+  it('WAL-9 (partial) given an ORG drive, should settle the span on the org charge and re-gate on the same charge', async () => {
+    const { deps, trackUsage, gate } = makeDeps();
+    deps.billing.resolveCharge = async () => ORG_CHARGE;
+
+    await meter(deps);
+
+    expect(trackUsage).toHaveBeenCalledWith(expect.objectContaining({ charge: ORG_CHARGE, holdId: 'hold-1', activeSeconds: 600 }));
+    expect(gate).toHaveBeenCalledWith({ charge: ORG_CHARGE });
+  });
+
+  it('WAL-9 (partial) an EMPTY org pool at the re-gate parks the app after advancing the charged span — no person is gated', async () => {
+    const { deps, gate, park, writeSettle } = makeDeps();
+    deps.billing.resolveCharge = async () => ORG_CHARGE;
+    gate.mockResolvedValue({ allowed: false, reason: 'org_wallet_empty', orgRefusal: 'org_wallet_empty' });
+
+    await meter(deps);
+
+    expect(writeSettle).toHaveBeenCalled();
+    expect(park).toHaveBeenCalledWith('app-1', 'insolvent');
+  });
+
+  it("WAL-9 (partial) an org app's awake backlog from before org billing is forgiven on its first org-billed tick — nothing charged, the watermark moves to now, counted by name", async () => {
+    const { deps, trackUsage, writeSettle, releaseHold } = makeDeps({
+      listRunningApps: async () => [runningApp({ awakeBilledThrough: ago(3 * 3_600_000) })],
+      orgComputeBillingEpoch: async () => NOW,
+    });
+    deps.billing.resolveCharge = async () => ORG_CHARGE;
 
     const run = await meter(deps);
 
-    assert({
-      given: 'a running app whose drive belongs to an org',
-      should: 'debit no wallet and leave the window for the org charge that replaces this',
-      actual: {
-        orgBillingPending: run.orgBillingPending,
-        unresolved: run.unresolvedPayer,
-        charges: trackUsage.mock.calls.length,
-        advances: writeSettle.mock.calls.length,
-      },
-      expected: { orgBillingPending: 1, unresolved: 0, charges: 0, advances: 0 },
+    expect(trackUsage).not.toHaveBeenCalled();
+    expect(releaseHold).toHaveBeenCalledWith('hold-1');
+    expect(writeSettle).toHaveBeenCalledWith(expect.objectContaining({ billedThrough: NOW, billedSeconds: 0 }));
+    expect(run.orgBacklogForgiven).toBe(1);
+  });
+
+  it('WAL-9 (partial) a later tick bills only the span after the epoch, the pre-epoch part forgiven', async () => {
+    const { deps, trackUsage } = makeDeps({
+      listRunningApps: async () => [runningApp({ awakeBilledThrough: ago(3 * 3_600_000) })],
+      orgComputeBillingEpoch: async () => ago(600_000),
     });
+    deps.billing.resolveCharge = async () => ORG_CHARGE;
+
+    const run = await meter(deps);
+
+    expect(trackUsage).toHaveBeenCalledWith(expect.objectContaining({ charge: ORG_CHARGE, activeSeconds: 600 }));
+    expect(run.orgBacklogForgiven).toBe(1);
+  });
+
+  it('a PERSONAL app with an old watermark is never forgiven — the epoch is only for org rows', async () => {
+    const { deps, trackUsage } = makeDeps({
+      listRunningApps: async () => [runningApp({ awakeBilledThrough: ago(1_800_000) })],
+      orgComputeBillingEpoch: async () => NOW,
+    });
+
+    const run = await meter(deps);
+
+    expect(trackUsage).toHaveBeenCalledWith(expect.objectContaining({ activeSeconds: 1800 }));
+    expect(run.orgBacklogForgiven).toBe(0);
   });
 
   it('ISOLATES one bad row — the rest of the fleet is still billed', async () => {

@@ -63,7 +63,7 @@ function makeAuthSuccess(sessionKey = 'shell:shl-1') {
   return {
     ok: true as const,
     sessionKey,
-    payerId: 'owner-1',
+    charge: { kind: 'user' as const, userId: 'owner-1' },
     agentPageId: 'page-1',
     sprite,
     resolveSandbox: vi.fn(async () => ({

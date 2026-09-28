@@ -45,7 +45,7 @@ vi.mock('@pagespace/lib/services/sandbox/quota', () => ({
 }));
 vi.mock('@pagespace/lib/services/sandbox/sandbox-billing', () => ({
   defaultSandboxBillingDeps: {
-    resolvePayerId: vi.fn(),
+    resolveCharge: vi.fn(),
     gate: vi.fn(),
     trackUsage: vi.fn(),
     releaseHold: vi.fn(),

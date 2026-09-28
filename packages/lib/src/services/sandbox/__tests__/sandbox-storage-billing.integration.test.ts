@@ -216,7 +216,7 @@ describe.skipIf(dbSkipExplicitlyAllowed())('environment persistence billing — 
       should: "charge the DRIVE's owner for one GB-month, attributed to the env's drive and to the env itself",
       actual: {
         charged: result.charged,
-        payerId: charges[0]?.payerId,
+        payerId: charges[0]?.charge.userId,
         driveId: charges[0]?.driveId,
         subjectKind: charges[0]?.subjectKind,
         subjectId: charges[0]?.subjectId,
@@ -232,7 +232,7 @@ describe.skipIf(dbSkipExplicitlyAllowed())('environment persistence billing — 
       },
     });
     // `createdBy` is audit only: it must not be reachable as a payer.
-    expect(charges.map((charge) => charge.payerId)).not.toContain(envCreatorId);
+    expect(charges.map((charge) => charge.charge.userId)).not.toContain(envCreatorId);
     // The window is closed in the table, so the next run bills from here.
     expect(await readBilledAt(envId)).toEqual(NOW);
   });
