@@ -1,4 +1,4 @@
-import { describe, it, vi, beforeEach } from 'vitest';
+import { describe, it, vi, beforeEach, expect } from 'vitest';
 import { assert } from './riteway';
 
 /**
@@ -88,6 +88,15 @@ const mockGenerateObject = vi.fn();
 vi.mock('ai', () => ({
   generateObject: (...args: unknown[]) => mockGenerateObject(...args),
 }));
+
+const { mockReserve, mockReleaseMemoryHold } = vi.hoisted(() => {
+  const mockReleaseMemoryHold = vi.fn();
+  return {
+    mockReleaseMemoryHold,
+    mockReserve: vi.fn(async () => ({ allowed: true as const, holdId: 'hold-m', walletId: 'w-root', release: mockReleaseMemoryHold })),
+  };
+});
+vi.mock('../memory-credit', () => ({ reserveMemoryCall: mockReserve }));
 
 /**
  * Stand in for the two query shapes this module uses:
@@ -311,5 +320,59 @@ describe('runDiscoveryPasses', () => {
       actual: result.claims,
       expected: [],
     });
+  });
+});
+
+describe('runDiscoveryPasses — the credit gate', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockReserve.mockImplementation(async () => ({ allowed: true as const, holdId: 'hold-m', walletId: 'w-root', release: mockReleaseMemoryHold }));
+    mockGenerateObject.mockResolvedValue({
+      object: { claims: [{ claim: 'c', evidence: 'e', occurrencesInWindow: 2 }] },
+      usage: { inputTokens: 10, outputTokens: 5 },
+    });
+  });
+
+  it('SPEND-1 (partial) an exhausted person\'s discovery calls no model, charges nothing, and stages no claims', async () => {
+    setupDb(messages(10));
+    mockReserve.mockResolvedValue({ allowed: false, reason: 'out_of_credits' } as never);
+    const { AIMonitoring } = await import('@pagespace/lib/monitoring/ai-monitoring');
+    const { runDiscoveryPasses } = await import('../discovery-service');
+
+    const result = await runDiscoveryPasses('user-1');
+
+    expect(result.claims).toEqual([]);
+    expect(mockGenerateObject).not.toHaveBeenCalled();
+    expect(AIMonitoring.trackUsage).not.toHaveBeenCalled();
+  });
+
+  it('SPEND-8 (partial) each funded discovery pass reserves before its model call and settles once on that hold and wallet', async () => {
+    setupDb(messages(10));
+    const { AIMonitoring } = await import('@pagespace/lib/monitoring/ai-monitoring');
+    const { runDiscoveryPasses } = await import('../discovery-service');
+
+    await runDiscoveryPasses('user-1');
+
+    const passes = mockGenerateObject.mock.calls.length;
+    expect(passes).toBeGreaterThan(0);
+    expect(mockReserve).toHaveBeenCalledTimes(passes);
+    expect(AIMonitoring.trackUsage).toHaveBeenCalledTimes(passes);
+    for (const [usage] of vi.mocked(AIMonitoring.trackUsage).mock.calls) {
+      expect(usage).toMatchObject({ holdId: 'hold-m', walletId: 'w-root', source: 'memory' });
+    }
+    expect(mockReleaseMemoryHold).not.toHaveBeenCalled();
+  });
+
+  it('a pass whose model call fails releases its reservation', async () => {
+    setupDb(messages(10));
+    mockGenerateObject.mockRejectedValue(new Error('down'));
+    const { AIMonitoring } = await import('@pagespace/lib/monitoring/ai-monitoring');
+    const { runDiscoveryPasses } = await import('../discovery-service');
+
+    const result = await runDiscoveryPasses('user-1');
+
+    expect(result.claims).toEqual([]);
+    expect(AIMonitoring.trackUsage).not.toHaveBeenCalled();
+    expect(mockReleaseMemoryHold).toHaveBeenCalledTimes(mockGenerateObject.mock.calls.length);
   });
 });

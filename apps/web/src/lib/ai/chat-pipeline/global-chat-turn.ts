@@ -1167,6 +1167,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
           systemPrompt: finalSystemPrompt,
           tools: finalTools as Record<string, unknown>,
           user: { id: userId, role: auth.role ?? null },
+          spend: credit.spend,
         });
 
         // Limit visual-content injection to the last MAX_MESSAGES_WITH_IMAGES items;

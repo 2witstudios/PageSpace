@@ -37,7 +37,7 @@
  */
 
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
-import { PERSONAL_SPEND } from '@pagespace/lib/billing/spend-target';
+import { PERSONAL_SPEND, resolvedSpend, type SpendTarget } from '@pagespace/lib/billing/spend-target';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import {
   REALTIME_IDLE_TIMEOUT_SECONDS,
@@ -84,6 +84,11 @@ export type CallMeter = {
   /** Everything billed so far, across every settle. */
   readonly billedDollars: number;
   readonly stopped: boolean;
+  /**
+   * The source every window reserves on: the call's target with the source its opening
+   * hold resolved pinned. The call's tools spend it too (SPEND-1).
+   */
+  readonly spend: SpendTarget;
 };
 
 export type CallMeterOptions = {
@@ -92,6 +97,14 @@ export type CallMeterOptions = {
   readonly conversationId?: string;
   readonly tier: SubscriptionTier;
   readonly model: string;
+  /**
+   * Where the call spends (SPEND-1): the drive of the conversation it is bound to, resolved
+   * by the web tier from that conversation and never from the browser, or the caller's
+   * personal credits for a call with no drive (SPEND-8, the default). Every window reserves
+   * on the source the opening hold resolved and settles on its own hold's wallet; a source
+   * that runs dry ends the call rather than moving to another (SPEND-4).
+   */
+  readonly spend?: SpendTarget;
   /** Called when a limit is hit and the call must be torn down. */
   readonly onLimit: (reason: MeterStopReason, message: string) => void;
   readonly idleTimeoutMs?: number;
@@ -128,6 +141,7 @@ export const startCallMeter = async (
     conversationId,
     tier,
     model,
+    spend = PERSONAL_SPEND,
     onLimit,
     idleTimeoutMs = REALTIME_IDLE_TIMEOUT_SECONDS * 1000,
     maxDurationMs = REALTIME_MAX_SESSION_SECONDS * 1000,
@@ -143,8 +157,7 @@ export const startCallMeter = async (
   } = options;
 
   const opening = await gate(userId, tier, {
-    // A realtime voice call is not a drive session: it spends the caller's personal wallet (SPEND-8).
-    spend: PERSONAL_SPEND,
+    spend,
     estCostCents: REALTIME_SESSION_HOLD_ESTIMATE_CENTS,
     // Per-USER concurrency. The registry's own cap is per-DEPLOYMENT and cannot
     // express this one: two users at the global limit is fine, one user holding
@@ -156,6 +169,11 @@ export const startCallMeter = async (
   }
 
   let holdId = opening.holdId;
+  // The wallet the current hold was placed on (WAL-5), settled against with it.
+  let walletId = opening.walletId;
+  // Later windows name the source the opening hold resolved, so a call never switches
+  // wallets part-way through (SPEND-4).
+  const windowSpend = resolvedSpend(spend, opening.spendSource);
   let pending: RealtimeUsage | undefined;
   let billedDollars = 0;
   let stopped = false;
@@ -193,7 +211,9 @@ export const startCallMeter = async (
       const costDollars = calculateRealtimeCostDollars(model, usage);
       billedDollars += costDollars;
       const settledHoldId = holdId;
+      const settledWalletId = walletId;
       holdId = undefined;
+      walletId = undefined;
 
       try {
         const settle = await track({
@@ -205,6 +225,7 @@ export const startCallMeter = async (
           duration: nowFn() - startedAt,
           success: true,
           ...(settledHoldId === undefined ? {} : { holdId: settledHoldId }),
+          ...(settledWalletId === undefined ? {} : { walletId: settledWalletId }),
           ...(conversationId === undefined ? {} : { conversationId }),
           inputTokens: usage.input_tokens ?? 0,
           outputTokens: usage.output_tokens ?? 0,
@@ -255,7 +276,7 @@ export const startCallMeter = async (
     if (stopped || holdId !== undefined) return;
 
     const next = await gate(userId, tier, {
-      spend: PERSONAL_SPEND,
+      spend: windowSpend,
       estCostCents: REALTIME_SESSION_HOLD_ESTIMATE_CENTS,
       maxInFlight: REALTIME_MAX_INFLIGHT,
     });
@@ -269,6 +290,7 @@ export const startCallMeter = async (
       return;
     }
     holdId = next.holdId;
+    walletId = next.walletId;
   };
 
   /** Settles never overlap: each one chains onto the last. */
@@ -351,6 +373,7 @@ export const startCallMeter = async (
     get stopped() {
       return stopped;
     },
+    spend: windowSpend,
   };
 
   return { ok: true, meter };

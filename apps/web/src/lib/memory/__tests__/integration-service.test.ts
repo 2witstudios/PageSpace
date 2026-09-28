@@ -1,4 +1,4 @@
-import { describe, it, vi } from 'vitest';
+import { describe, it, vi, beforeEach, expect } from 'vitest';
 import { assert } from './riteway';
 
 /**
@@ -53,6 +53,15 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { api: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } },
 }));
 vi.mock('ai', () => ({ generateText: vi.fn() }));
+
+const { mockReserve, mockReleaseMemoryHold } = vi.hoisted(() => {
+  const mockReleaseMemoryHold = vi.fn();
+  return {
+    mockReleaseMemoryHold,
+    mockReserve: vi.fn(async () => ({ allowed: true as const, holdId: 'hold-m', walletId: 'w-root', release: mockReleaseMemoryHold })),
+  };
+});
+vi.mock('../memory-credit', () => ({ reserveMemoryCall: mockReserve }));
 
 describe('screenRewrite — deletion guard', () => {
   it('rejects a rewrite that drops more than 40% of the page', async () => {
@@ -177,5 +186,68 @@ describe('applyIntegrationDecisions', () => {
       actual: result.rejected.map((r) => r.field),
       expected: ['writingStyle'],
     });
+  });
+});
+
+describe('evaluateAndIntegrate — the credit gate', () => {
+  const candidate = {
+    id: 'cand-1',
+    userId: 'user-1',
+    field: 'bio',
+    claim: 'Prefers terse answers',
+    occurrences: 3,
+    firstSeenAt: new Date('2026-09-01T00:00:00Z'),
+  } as never;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const { createAIProvider } = await import('@/lib/ai/core/provider-factory');
+    vi.mocked(createAIProvider).mockResolvedValue({ model: {}, provider: 'anthropic', modelName: 'm' } as never);
+    const { generateText } = await import('ai');
+    vi.mocked(generateText).mockResolvedValue({
+      text: JSON.stringify({ bio: 'Prefers terse answers.', writingStyle: null, rules: null, usedInsights: [0] }),
+      usage: { inputTokens: 10, outputTokens: 5 },
+    } as never);
+  });
+
+  it('SPEND-1 (partial) an exhausted person\'s evaluation calls no model, charges nothing, and reaches no decision (candidates stay pending)', async () => {
+    mockReserve.mockResolvedValueOnce({ allowed: false, reason: 'out_of_credits' } as never);
+    const { generateText } = await import('ai');
+    const { AIMonitoring } = await import('@pagespace/lib/monitoring/ai-monitoring');
+    const { evaluateAndIntegrate } = await import('../integration-service');
+
+    const outcome = await evaluateAndIntegrate('user-1', [candidate], { bio: 'Existing bio.' });
+
+    expect(outcome.ok).toBe(false);
+    expect(generateText).not.toHaveBeenCalled();
+    expect(AIMonitoring.trackUsage).not.toHaveBeenCalled();
+  });
+
+  it('SPEND-8 (partial) a funded evaluation reserves before the model and settles once on that hold and wallet', async () => {
+    const { generateText } = await import('ai');
+    const { AIMonitoring } = await import('@pagespace/lib/monitoring/ai-monitoring');
+    const { evaluateAndIntegrate } = await import('../integration-service');
+
+    const outcome = await evaluateAndIntegrate('user-1', [candidate], { bio: 'Existing bio.' });
+
+    expect(outcome).toMatchObject({ ok: true, usedCandidateIds: ['cand-1'] });
+    expect(mockReserve).toHaveBeenCalledOnce();
+    expect(mockReserve.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(generateText).mock.invocationCallOrder[0]);
+    expect(AIMonitoring.trackUsage).toHaveBeenCalledOnce();
+    expect(vi.mocked(AIMonitoring.trackUsage).mock.calls[0][0]).toMatchObject({ holdId: 'hold-m', walletId: 'w-root', source: 'memory' });
+    expect(mockReleaseMemoryHold).not.toHaveBeenCalled();
+  });
+
+  it('a model failure after the reservation releases it and reaches no decision', async () => {
+    const { generateText } = await import('ai');
+    vi.mocked(generateText).mockRejectedValueOnce(new Error('down'));
+    const { AIMonitoring } = await import('@pagespace/lib/monitoring/ai-monitoring');
+    const { evaluateAndIntegrate } = await import('../integration-service');
+
+    const outcome = await evaluateAndIntegrate('user-1', [candidate], { bio: 'Existing bio.' });
+
+    expect(outcome.ok).toBe(false);
+    expect(AIMonitoring.trackUsage).not.toHaveBeenCalled();
+    expect(mockReleaseMemoryHold).toHaveBeenCalledOnce();
   });
 });

@@ -528,6 +528,7 @@ export async function POST(request: Request): Promise<Response> {
         systemPrompt: systemPrompt + (callerSystemPrompt ? `\n\n${callerSystemPrompt}` : '') + toolDiscoveryPrompt,
         tools: finalTools as Record<string, unknown>,
         user: { id: authResult.userId, role: gateUser?.role ?? null },
+        spend,
       });
       v1ScheduleCompaction = prepared.scheduleCompaction;
       ({ modelMessages: compactedModelMessages } = await finishModelRequest({ prepared, tools: finalTools }));

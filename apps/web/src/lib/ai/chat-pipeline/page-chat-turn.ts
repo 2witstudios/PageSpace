@@ -1683,6 +1683,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       systemPrompt: systemPrompt,
       tools: filteredTools as Record<string, unknown>,
       user: user ? { id: user.id, role: user.role } : null,
+      spend: credit.spend,
     });
     const { scheduleCompaction } = prepared;
     const { modelMessages, stableBoundaryIndex } = await finishModelRequest({

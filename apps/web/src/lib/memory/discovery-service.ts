@@ -19,6 +19,7 @@ import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factor
 import { BACKGROUND_HEAVY_PROVIDER, BACKGROUND_HEAVY_MODEL } from '@/lib/ai/core/ai-providers-config';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { AIMonitoring, discardUsageOutcome } from '@pagespace/lib/monitoring/ai-monitoring';
+import { reserveMemoryCall } from './memory-credit';
 import { z } from 'zod';
 
 export type MemoryField = 'bio' | 'writingStyle' | 'rules';
@@ -315,6 +316,18 @@ async function runDiscoveryPass(
     return [];
   }
 
+  // Reserve before the model (SPEND-1). Refused: this pass finds nothing, as when the
+  // provider is unavailable, and nothing is charged.
+  const reservation = await reserveMemoryCall(userId, {
+    provider: providerResult.provider,
+    model: providerResult.modelName,
+    inputChars: systemPrompt.length + conversationContext.length,
+  });
+  if (!reservation.allowed) {
+    loggers.api.info(`Memory discovery ${passName} pass skipped: credit gate refused`, { reason: reservation.reason });
+    return [];
+  }
+
   try {
     const result = await generateObject({
       model: providerResult.model,
@@ -328,13 +341,19 @@ async function runDiscoveryPass(
       ],
       temperature: 0.3,
       maxRetries: 2,
+    }).catch((error: unknown) => {
+      reservation.release();
+      throw error;
     });
 
+    // Settles the reservation once (trackUsage takes the hold).
     discardUsageOutcome(AIMonitoring.trackUsage({
       userId,
       provider: providerResult.provider,
       model: providerResult.modelName,
       source: 'memory',
+      holdId: reservation.holdId,
+      walletId: reservation.walletId,
       inputTokens: result.usage?.inputTokens,
       outputTokens: result.usage?.outputTokens,
       totalTokens: result.usage

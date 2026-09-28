@@ -94,6 +94,27 @@ describe('handleVoiceBridgeRequest — validation', () => {
   });
 });
 
+describe('handleVoiceBridgeRequest — the source a voice tool spends', () => {
+  it('SPEND-1 (partial) given the call\'s drive source on the dispatch, the tool runs with that source as its credit spend', async () => {
+    let seen: unknown;
+    const recording = {
+      description: 'Read a page.',
+      inputSchema: z.object({ pageId: z.string() }),
+      execute: (_args: unknown, options: { experimental_context?: unknown }) => {
+        seen = options.experimental_context;
+        return { title: 'Notes' };
+      },
+    } as unknown as Tool;
+    await handleVoiceBridgeRequest(
+      deps({ toolDeps: () => ({ tools: { read_page: recording }, logger: { warn: vi.fn(), error: vi.fn() } }) }),
+      toolBody({ conversationId: 'conv1', spend: { driveId: 'drive-1', chosen: 'drive_wallet' } }),
+    );
+    expect((seen as { creditSpend?: unknown }).creditSpend).toEqual({
+      spend: { kind: 'drive', driveId: 'drive-1', chosen: 'drive_wallet', conversationId: 'conv1' },
+    });
+  });
+});
+
 describe('handleVoiceBridgeRequest — tool dispatch', () => {
   it('given a tool call, should run it and answer with a string output', async () => {
     const result = await handleVoiceBridgeRequest(deps(), toolBody());

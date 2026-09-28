@@ -113,8 +113,15 @@ SEC-1
 SEC-2
 SEC-3
 SEC-4
-# SPEND-1 (partial, ow-c2): resolveSpendSource picks exactly one source; that every AI call in a drive
-# goes through it before the call is unproven until C3.
+# SPEND-1 (partial, ow-c2, C3, ow-fix-ungated-ai): every chat turn, /btw, consult, v1, image, pulse,
+# workflow, trigger and mention call gates first; context compaction and the memory cron now reserve
+# before their model call; a realtime voice call resolves its drive before connecting (a page
+# conversation's drive, a fresh page-agent thread's agent page after a view check) and refuses by
+# name rather than charge personal credits inside a drive, and its tools spend the call's source.
+# The module guard proves this per FILE (apps/web and apps/realtime), checks one gating caller per
+# pinned module, and lists its known limits. Still partial: Global Assistant voice and TTS spend
+# personal credits (no server-trusted drive); Zoom enrichment's payer is the #2731 ruling; the
+# gate's silent fallback (SPEND-4) is open in ow-fix-spend-controls.
 SPEND-1
 # SPEND-2 (partial, ow-c6): GET /api/wallets/conversations/[id] answers the stored choice, the options and
 # the gate's own decision before the first message (the data the chip shows); the chip itself is UI-8.

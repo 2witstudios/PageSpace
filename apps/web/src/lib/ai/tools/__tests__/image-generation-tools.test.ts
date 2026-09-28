@@ -77,6 +77,7 @@ import { imageGenerationTools } from '../image-generation-tools';
 import { ImageGenerationError } from '@/lib/ai/core/image-generation';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { filterToolsForReadOnly, isWriteTool } from '@/lib/ai/core/tool-filtering';
+import { buildVoiceToolContext } from '@/lib/ai/realtime/tool-dispatch';
 
 const run = (input: Record<string, unknown>, ctx: Partial<ToolExecutionContext>) =>
   imageGenerationTools.generate_image.execute!(input as never, {
@@ -124,6 +125,20 @@ describe('generate_image destination', () => {
   const inDrive = (id: string) => ({
     locationContext: { currentDrive: { id, name: 'Work', slug: 'work' } },
   }) as Partial<ToolExecutionContext>;
+
+  it('SPEND-1 (partial) an image made during an in-drive voice call reserves on the call\'s drive source, never the person\'s own credits', async () => {
+    okGeneration();
+    const voice = buildVoiceToolContext(
+      { name: 'generate_image', argumentsJson: '{}', userId: 'u1', callId: 'rtc_1', conversationId: 'conv1', spend: { driveId: 'drive-work', chosen: 'drive_wallet' } },
+      'gpt-realtime-2.1',
+    );
+
+    await run({ prompt: 'a diagram' }, { ...voice, isAdmin: true, subscriptionTier: 'pro' });
+
+    expect(canConsumeAI).toHaveBeenCalledOnce();
+    const opts = canConsumeAI.mock.calls[0][2] as { spend: unknown };
+    expect(opts.spend).toEqual({ kind: 'drive', driveId: 'drive-work', chosen: 'drive_wallet', conversationId: 'conv1' });
+  });
 
   it('files into the workspace currently in view', async () => {
     okGeneration();

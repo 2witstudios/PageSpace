@@ -16,7 +16,7 @@ import {
   type HandshakeLogger,
 } from '../call-handshake';
 import { CLIENT_SECRETS_URL, REALTIME_CALLS_URL } from '../session';
-import { VOICE_BRIDGE_ROUTES } from '@pagespace/lib/realtime/voice-bridge-contract';
+import { VOICE_BRIDGE_ROUTES, realtimeAttachPayloadSchema } from '@pagespace/lib/realtime/voice-bridge-contract';
 
 const SECRET = 'ek_call_secret';
 const CALL_ID = 'rtc_u0_EBNOwQshLeDzYP6HmPHHV';
@@ -425,6 +425,28 @@ describe('runCallHandshake — the bound assistant', () => {
     const payload = JSON.parse(String(handoff?.init.body)) as Record<string, unknown>;
     expect(payload).not.toHaveProperty('assistant');
     expect(payload).not.toHaveProperty('instructions');
+  });
+});
+
+describe('runCallHandshake — the drive the call spends in', () => {
+  it('SPEND-1 (partial) given the bound conversation\'s drive, should carry it to the realtime server that meters the call', async () => {
+    const { deps, calls } = harness();
+
+    await runCallHandshake(deps, { offerSdp: OFFER_SDP, userId: 'u1', conversationId: 'conv1', spendDriveId: 'drive-1' });
+
+    const handoff = calls.find((c) => c.url.includes(VOICE_BRIDGE_ROUTES.attach));
+    const payload = JSON.parse(String(handoff?.init.body)) as Record<string, unknown>;
+    expect(payload.spendDriveId).toBe('drive-1');
+    expect(realtimeAttachPayloadSchema.parse(payload).spendDriveId).toBe('drive-1');
+  });
+
+  it('SPEND-8 (partial) given no drive, should omit the key: the call spends personal credits', async () => {
+    const { deps, calls } = harness();
+
+    await run(deps, 'conv1');
+
+    const handoff = calls.find((c) => c.url.includes(VOICE_BRIDGE_ROUTES.attach));
+    expect(JSON.parse(String(handoff?.init.body))).not.toHaveProperty('spendDriveId');
   });
 });
 

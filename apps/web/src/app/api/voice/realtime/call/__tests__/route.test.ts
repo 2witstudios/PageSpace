@@ -46,7 +46,9 @@ vi.mock('@/lib/ai/realtime/call-handshake', () => ({ runCallHandshake: mockRunCa
 vi.mock('@/lib/ai/realtime/binding-loader', () => ({ loadVoiceBinding: mockLoadVoiceBinding }));
 // A FACTORY, not a value: the binding deps take the caller's auth principal,
 // because the active-plan lookup behind them needs a principal-aware page check.
-vi.mock('@/lib/ai/realtime/voice-runtime-deps', () => ({ voiceBindingDeps: () => ({}) }));
+vi.mock('@/lib/ai/realtime/voice-runtime-deps', () => ({ voiceBindingDeps: () => ({}), voiceSpendDeps: () => ({}) }));
+const { mockResolveVoiceSpend } = vi.hoisted(() => ({ mockResolveVoiceSpend: vi.fn() }));
+vi.mock('@/lib/ai/realtime/voice-spend', () => ({ resolveVoiceSpend: mockResolveVoiceSpend }));
 vi.mock('@/lib/ai/core/ai-tools', () => ({ buildPageSpaceTools: () => ({}) }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -69,6 +71,7 @@ function callRequest(body: unknown) {
 
 describe('POST /api/voice/realtime/call', () => {
   beforeEach(() => {
+    mockResolveVoiceSpend.mockResolvedValue({ kind: 'personal' });
     vi.clearAllMocks();
     vi.unstubAllEnvs();
     mockAuth.mockResolvedValue({ userId: 'u1' });
@@ -391,6 +394,43 @@ describe('POST /api/voice/realtime/call', () => {
           assistant: expect.objectContaining({ agentPageId: 'someone-elses-agent' }),
         }),
       );
+    });
+  });
+
+  describe('the source the call spends', () => {
+    it('SPEND-1 (partial) should carry the resolved drive to the handshake, which carries it to the meter', async () => {
+      mockResolveVoiceSpend.mockResolvedValue({ kind: 'drive', driveId: 'drive-1' });
+
+      await POST(callRequest({ sdp: 'v=0 offer', conversationId: 'conv1' }));
+
+      expect(mockRunCallHandshake).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ spendDriveId: 'drive-1' }));
+    });
+
+    it('SPEND-1 (partial) should resolve from the conversation and the named agent page, never take a drive from the body', async () => {
+      await POST(callRequest({ sdp: 'v=0 offer', conversationId: 'conv1', agentPageId: 'agent1', spendDriveId: 'someone-elses-drive' }));
+
+      expect(mockResolveVoiceSpend).toHaveBeenCalledWith(expect.anything(), { userId: 'u1', conversationId: 'conv1', agentPageId: 'agent1' });
+      const [, input] = mockRunCallHandshake.mock.calls[0] as unknown[];
+      expect(input).not.toHaveProperty('spendDriveId');
+    });
+
+    it('SPEND-4 (partial) a call whose drive cannot be resolved is refused by name before OpenAI is contacted — never billed personally', async () => {
+      mockResolveVoiceSpend.mockResolvedValue({ kind: 'refused', reason: 'voice_spend_unresolved' });
+
+      const response = await POST(callRequest({ sdp: 'v=0 offer', conversationId: 'fresh', agentPageId: 'agent1' }));
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ code: 'voice_spend_unresolved' });
+      expect(mockRunCallHandshake).not.toHaveBeenCalled();
+    });
+
+    it('a conversation the caller cannot read is refused with 403 before OpenAI is contacted', async () => {
+      mockResolveVoiceSpend.mockResolvedValue({ kind: 'refused', reason: 'voice_conversation_forbidden' });
+
+      const response = await POST(callRequest({ sdp: 'v=0 offer', conversationId: 'conv1' }));
+
+      expect(response.status).toBe(403);
+      expect(mockRunCallHandshake).not.toHaveBeenCalled();
     });
   });
 });

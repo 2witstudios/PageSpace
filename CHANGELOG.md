@@ -633,6 +633,14 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Every AI call now checks your credits before it runs** — conversation summarising (when a long chat
+  is condensed) and the nightly Memory update used to run first and charge afterwards, which could
+  push an out-of-credit balance into debt. They now reserve credits first like every other AI call;
+  with no credits they simply don't run, and nothing about your conversation or your Memory pages
+  changes. A live voice call with a page agent now spends from the same source as typing to that
+  agent in its drive, instead of always from your own credits — including images it makes during
+  the call. If the call cannot tell which drive pays for it, it does not start and you are not
+  charged. Voice calls with the global assistant still use your own credits.
 - **Published pricing figures match the plans** — the "Credits Replace Daily Limits" blog post no
   longer lists per-plan credit amounts from before the credit count change, and no longer names the
   retired Founder plan; it points to the pricing page for current amounts, packs and the top-up range.
