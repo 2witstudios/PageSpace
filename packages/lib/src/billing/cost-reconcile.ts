@@ -24,7 +24,7 @@ import { and, eq, lt, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
 import { computeCostDrift } from './credit-core';
 import { centsFromDollars } from './money-model';
-import { chargeWallet, refundWalletCharge } from './credit-consume';
+import { chargeWallet, recordSeatOvershoot, refundWalletCharge } from './credit-consume';
 import {
   MARKUP_BPS,
   COST_RECONCILE_TOLERANCE_CENTS,
@@ -195,6 +195,8 @@ async function applyCorrection(
         return false;
       }
       appliedCents = -charged.appliedCents || 0; // negative: decremented
+      // WAL-2: an undercharge on a seat is charged like a settle, so it is capped like one.
+      await recordSeatOvershoot(tx, { walletId, userId, chargeMc: drift.deltaChargeMillicents, aiUsageLogId, claimLedgerId: ledgerId });
     } else if (drift.deltaChargeMillicents < 0) {
       // Overcharge → refund to where the call's cents came from (credit-consume
       // refundWalletCharge): debt first, then the top-up on a root wallet; on a drive

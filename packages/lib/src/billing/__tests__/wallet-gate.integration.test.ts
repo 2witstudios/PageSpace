@@ -31,6 +31,7 @@ import { canConsumeAI } from '../credit-gate';
 import { consumeCredits } from '../credit-consume';
 import { PERSONAL_SPEND, conversationSpend, driveSpend } from '../spend-target';
 import { DEFAULT_SEAT_ALLOWANCE_CENTS } from '../wallet-core';
+import { loadSeatCapFacts } from '../seat-allowance';
 import { applyOrgPoolRefill, donateToDriveWallet } from '../wallet-funding-shell';
 import { reconcileOpenRouterCosts } from '../cost-reconcile';
 import { createDriveWallet } from '../../services/drive-wallet-service';
@@ -639,6 +640,92 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
 
     // 50¢ of 100¢ spent: after this call's 25¢ reservation the stream may spend 25¢ more, never the pool's ~9,000.
     expect(gate).toMatchObject({ allowed: true, walletId: w.poolId, balanceSnapshot: { netSpendableCents: 25 } });
+  });
+
+  /** Gate one seat call at the 25¢ estimate, then settle it at `costDollars` — its REAL cost. */
+  async function seatCallCosting(w: World, userId: string, costDollars: number) {
+    const gate = await canConsumeAI(userId, 'pro', { spend: driveSpend(w.productId, 'seat_allowance') });
+    expect(gate).toMatchObject({ allowed: true, walletId: w.poolId });
+    const [log] = await db.insert(aiUsageLogs).values({ userId, provider: 'openrouter', model: 'm', cost: costDollars }).returning({ id: aiUsageLogs.id });
+    expect(await consumeCredits({ aiUsageLogId: log.id, userId, costDollars, holdId: gate.holdId, walletId: gate.walletId })).toBe('settled');
+    return log.id;
+  }
+
+  /** What the gate counts against `userId`'s seat right now: the same read, the same period. */
+  async function seatCounted(w: World, userId: string) {
+    const pool = await walletRow(w.poolId);
+    return loadSeatCapFacts(db, { poolId: w.poolId, poolPeriodStart: pool.monthlyPeriodStart, userId, policySeatAllowanceCents: null, now: new Date() });
+  }
+
+  it('WAL-2 (partial) WAL-6 (partial) a real charge that beats the estimate at the cap: the pool pays it, the member ends the period AT the cap, never over it', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+    const w = world;
+    for (let call = 1; call <= 3; call += 1) await seatCallCosting(w, w.marcusId, COST_25C);
+
+    // 75¢ of 100¢ spent. The fourth call is admitted on its 25¢ estimate and really costs 50¢.
+    const logId = await seatCallCosting(w, w.marcusId, 2 * COST_25C);
+
+    // The model ran, so the pool pays all 50¢ (WAL-6b/c): 75 + 50 = 125¢ out of the pool.
+    const pool = await walletRow(w.poolId);
+    expect(pool.monthlyRemainingCents).toBe(900_000 - 125);
+    expect(pool.debtCents).toBe(0);
+    // 25¢ of it went past Marcus's cap (125 − 100): recorded as the pool's absorbed overshoot.
+    const overshoot = (await ledgerOf(w.marcusId)).filter((r) => r.entryType === 'seat_overshoot');
+    expect(overshoot.map((r) => [r.walletId, r.aiUsageLogId, r.chargeMillicents, r.amountCents])).toEqual([[w.poolId, logId, 25_000, 0]]);
+    // So the seat reads exactly its cap, not 125¢ ...
+    expect((await seatCounted(w, w.marcusId)).usage.periodChargedMillicents).toBe(100_000);
+    // ... the next call is refused by the cap and charges nothing, and his own credits are untouched.
+    expect(await canConsumeAI(w.marcusId, 'pro', { spend: driveSpend(w.productId, 'seat_allowance') })).toMatchObject({ allowed: false, refusal: { reason: 'source_cap_reached' } });
+    expect((await walletRow(w.marcusWalletId)).monthlyRemainingCents).toBe(5_000);
+  });
+
+  it('WAL-2 (partial) WAL-7 (partial) a real charge that beats the estimate past a DAILY cap ends the day at the daily cap', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+    const w = world;
+    await db.insert(walletConsumerCaps).values({ walletId: w.poolId, consumerKey: `user:${w.marcusId}`, dailyCapCents: 50, monthlyCapCents: 100 });
+    await seatCallCosting(w, w.marcusId, COST_25C);
+
+    // 25¢ of today's 50¢ spent; admitted on 25¢, really 50¢: today reaches 75¢, 25¢ past the daily cap.
+    await seatCallCosting(w, w.marcusId, 2 * COST_25C);
+
+    const counted = await seatCounted(w, w.marcusId);
+    expect(counted.usage.dayChargedMillicents).toBe(50_000);
+    expect(counted.usage.periodChargedMillicents).toBe(50_000);
+    expect((await walletRow(w.poolId)).monthlyRemainingCents).toBe(900_000 - 75);
+    expect(await canConsumeAI(w.marcusId, 'pro', { spend: driveSpend(w.productId, 'seat_allowance') })).toMatchObject({ allowed: false, refusal: { reason: 'source_cap_reached' } });
+  });
+
+  it('WAL-2 (partial) a cost-reconcile undercharge at the cap is capped like a settle: the pool pays it, the seat still reads its cap', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+    const w = world;
+    const gen = `gen-seat-past-cap-${createId()}`;
+    await seatCall(w, w.marcusId, gen);
+    for (let call = 2; call <= 4; call += 1) await seatCall(w, w.marcusId);
+
+    // At the cap (4 × 25¢ = 100¢). The first call really cost twice as much. The reconciler works in
+    // whole real-cost cents: billed round(16.66667) = 17¢, actual round(33.33334) = 33¢, delta 16¢,
+    // charged at 1.5× = 24¢ — taking the seat to 124¢, 24¢ past its cap.
+    await reconcileOpenRouterCosts({ fetcher: async (id) => (id === gen ? { totalCost: 2 * COST_25C } : 'not_found') });
+
+    expect((await walletRow(w.poolId)).monthlyRemainingCents).toBe(900_000 - 124);
+    expect((await ledgerOf(w.marcusId)).filter((r) => r.entryType === 'seat_overshoot').map((r) => r.chargeMillicents)).toEqual([24_000]);
+    expect((await seatCounted(w, w.marcusId)).usage.periodChargedMillicents).toBe(100_000);
+  });
+
+  it('WAL-2 (partial) WAL-7 (partial) a seat stream\'s own budget is bounded by what is left of the DAILY cap when it is the smaller', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+    const w = world;
+    await db.insert(walletConsumerCaps).values({ walletId: w.poolId, consumerKey: `user:${w.marcusId}`, dailyCapCents: 60, monthlyCapCents: 100 });
+    await seatCall(w, w.marcusId);
+
+    const gate = await canConsumeAI(w.marcusId, 'pro', { spend: driveSpend(w.productId, 'seat_allowance') });
+
+    // 25¢ spent: 35¢ left today, 75¢ this month. After the 25¢ reservation the stream may spend 35 − 25 = 10¢, not 75 − 25 = 50¢.
+    expect(gate).toMatchObject({ allowed: true, walletId: w.poolId, balanceSnapshot: { netSpendableCents: 10 } });
   });
 
   it('WAL-2 (partial) two members each get their own seat allowance on the same pool', async () => {

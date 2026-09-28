@@ -25,8 +25,9 @@ import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { and, eq, isNull, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
 import { chargeMillicents, accruePending, allocateSpend, applyPaymentToDebt } from './credit-core';
-import { allocateWalletSpend, settleOvershoot, DEFAULT_OVERSHOOT_CHOICE } from './wallet-core';
-import { childWalletFunds, type WalletBalanceFacts } from './spend-target';
+import { allocateWalletSpend, settleOvershoot, seatOvershootMillicents, DEFAULT_OVERSHOOT_CHOICE } from './wallet-core';
+import { childWalletFunds, ORG_SPEND_POLICY_UNTIL_POLICY_STORE, type WalletBalanceFacts } from './spend-target';
+import { loadSeatCapFacts, SEAT_OVERSHOOT_ENTRY } from './seat-allowance';
 import { drawWalletFundingLegs, creditWalletFundingLegs } from './wallet-legs';
 import { parseWalletDraws, addWalletDraws, planWalletRefund, type WalletDraws } from './wallet-draws';
 import { MARKUP_BPS } from './credit-pricing';
@@ -125,6 +126,8 @@ async function decrementAndSettle(
   // silently drop the charge and hide it from both backfill sweeps.
   if (!settled) return false;
 
+  await recordSeatOvershoot(tx, { walletId, userId, chargeMc, aiUsageLogId, claimLedgerId: ledgerId });
+
   await tx
     .update(creditLedger)
     .set({
@@ -165,6 +168,65 @@ async function decrementAndSettle(
     await tx.delete(creditHolds).where(eq(creditHolds.id, holdId));
   }
   return true;
+}
+
+/**
+ * WAL-2 at settle: a seat charge that went past the consumer's caps records the excess as
+ * the pool's absorbed overshoot (a `seat_overshoot` row), so the consumer's seat spend ends
+ * the period AT their cap, never over it. The gate admits against an estimate; the real cost
+ * can exceed it, and that excess cannot be refused after the model ran. The pool has already
+ * paid it in `chargeWallet` (WAL-6b/c: the funder absorbs overshoot, never the consumer);
+ * this only moves it off the consumer's count. Runs in the charge's transaction, after
+ * `chargeWallet` took the pool's row lock — the lock the gate decides the cap under — so a
+ * settle and a gate on the same pool serialize. A no-op on any wallet that is not an org
+ * pool (a seat is the pool's own leg; drive wallets and personal roots have no seat).
+ * The day and period are judged at the claim's time (`claimLedgerId`), the moment the
+ * charge entered the ledger, else now. Returns the millicents recorded.
+ */
+export async function recordSeatOvershoot(
+  tx: Tx,
+  input: { walletId: string; userId: string; chargeMc: number; aiUsageLogId: string | null; claimLedgerId: string | null },
+): Promise<number> {
+  if (input.chargeMc <= 0) return 0;
+  const [pool] = await tx
+    .select({ ownerType: wallets.ownerType, parentWalletId: wallets.parentWalletId, subjectType: wallets.subjectType, monthlyPeriodStart: wallets.monthlyPeriodStart })
+    .from(wallets)
+    .where(eq(wallets.id, input.walletId))
+    .for('update');
+  if (!pool || pool.ownerType !== 'org' || pool.parentWalletId !== null || pool.subjectType !== null) return 0;
+  const [claim] = input.claimLedgerId
+    ? await tx.select({ createdAt: creditLedger.createdAt }).from(creditLedger).where(eq(creditLedger.id, input.claimLedgerId))
+    : [];
+  const at = claim?.createdAt ?? new Date();
+  const seat = await loadSeatCapFacts(tx, {
+    poolId: input.walletId,
+    poolPeriodStart: pool.monthlyPeriodStart,
+    userId: input.userId,
+    policySeatAllowanceCents: ORG_SPEND_POLICY_UNTIL_POLICY_STORE.seatAllowanceCents,
+    now: at,
+  });
+  const overMc = seatOvershootMillicents({ capCents: seat.capCents, dailyCapCents: seat.dailyCapCents, usage: seat.usage, chargeMillicents: input.chargeMc });
+  if (overMc <= 0) return 0;
+  await tx.insert(creditLedger).values({
+    userId: input.userId,
+    walletId: input.walletId,
+    entryType: SEAT_OVERSHOOT_ENTRY,
+    bucket: 'monthly',
+    // Money already moved on the usage (and debt) rows; this row only re-attributes it.
+    amountCents: 0,
+    appliedCents: 0,
+    chargeMillicents: overMc,
+    aiUsageLogId: input.aiUsageLogId,
+    consumeStatus: 'applied',
+    createdAt: at,
+  });
+  loggers.ai.info('seat charge past the consumer cap absorbed by the pool', {
+    poolId: input.walletId,
+    userId: input.userId,
+    aiUsageLogId: input.aiUsageLogId,
+    overshootMillicents: overMc,
+  });
+  return overMc;
 }
 
 export interface WalletSettlement {

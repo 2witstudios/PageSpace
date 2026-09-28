@@ -5,9 +5,10 @@
  * taken from the pool this period is read from the ledger, the append-only record the money
  * already moves through, so there is no second counter to drift from it:
  *
- *   SUM(credit_ledger.chargeMillicents)
+ *   SUM(credit_ledger.chargeMillicents, a seat_overshoot row negated)
  *     WHERE walletId = the pool AND userId = the consumer
- *       AND entryType IN ('usage', 'adjustment') AND createdAt >= the pool's period start
+ *       AND entryType IN ('usage', 'adjustment', 'seat_overshoot')
+ *       AND createdAt >= the pool's period start
  *
  * - `usage` rows carry each settled call's full intended charge, including any part that
  *   overshot into pool debt (the pool still pays it). A claimed-but-unsettled row is
@@ -18,6 +19,10 @@
  * - the overshoot `adjustment` row written beside a usage row carries NO chargeMillicents
  *   (its cents are already in the usage row's charge), so the SUM skips it and never counts
  *   the overshoot twice.
+ * - a `seat_overshoot` row (written at settle, under the pool lock) carries the millicents of
+ *   a call that went past the consumer's caps: the pool paid them (WAL-6b/c), so they come
+ *   OFF the consumer's count. A consumer's settled seat spend therefore never ends past
+ *   their cap (see seatOvershootMillicents).
  * - grants, top-ups and donations are money INTO wallets, never a consumer's draw.
  *
  * Plus this consumer's live holds on the pool (calls in flight), counted like spend.
@@ -34,6 +39,9 @@ import { walletConsumerCaps } from '@pagespace/db/schema/wallets';
 import { seatAllowanceCents, seatPeriodStartMs, userConsumerKey, utcDayStartMs, type SeatUsage } from './wallet-core';
 
 type Reader = Pick<typeof db, 'select'>;
+
+/** The ledger entry for a seat call's cost past the consumer's caps, absorbed by the pool. */
+export const SEAT_OVERSHOOT_ENTRY = 'seat_overshoot';
 
 export interface SeatCapFacts {
   /** This consumer's monthly seat allowance on the pool, whole cents (never unlimited). */
@@ -67,16 +75,17 @@ export async function loadSeatCapFacts(
     .limit(1);
   // The day window never reaches back before the period: a refill mid-day starts both afresh.
   const dayStart = new Date(Math.max(periodStart.getTime(), utcDayStartMs(input.now.getTime())));
+  const signed = sql`CASE WHEN ${creditLedger.entryType} = ${SEAT_OVERSHOOT_ENTRY} THEN -${creditLedger.chargeMillicents} ELSE ${creditLedger.chargeMillicents} END`;
   const [charged] = await executor
     .select({
-      millicents: sql<string>`coalesce(sum(${creditLedger.chargeMillicents}), 0)`,
-      dayMillicents: sql<string>`coalesce(sum(${creditLedger.chargeMillicents}) FILTER (WHERE ${creditLedger.createdAt} >= ${dayStart}), 0)`,
+      millicents: sql<string>`coalesce(sum(${signed}), 0)`,
+      dayMillicents: sql<string>`coalesce(sum(${signed}) FILTER (WHERE ${creditLedger.createdAt} >= ${dayStart}), 0)`,
     })
     .from(creditLedger)
     .where(and(
       eq(creditLedger.userId, input.userId),
       eq(creditLedger.walletId, input.poolId),
-      inArray(creditLedger.entryType, ['usage', 'adjustment']),
+      inArray(creditLedger.entryType, ['usage', 'adjustment', SEAT_OVERSHOOT_ENTRY]),
       gte(creditLedger.createdAt, periodStart),
     ));
   const [held] = await executor

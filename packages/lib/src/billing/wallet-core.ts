@@ -646,6 +646,26 @@ export function seatCapCheck(input: {
   });
 }
 
+/**
+ * WAL-2 at SETTLE: the part of a just-settled seat charge that went past the consumer's caps.
+ * Admission reserves an estimate, and a call's real cost can exceed it; the pool still pays
+ * that excess (WAL-6b/c: overshoot lands on the funder, never on the consumer), but it is the
+ * pool's absorbed overshoot, not the consumer's seat spend. It is the larger of the monthly
+ * and (when set) daily excess over the settled sums, which already include this charge, and
+ * never more than this charge — an earlier call's excess is that call's to record.
+ */
+export function seatOvershootMillicents(input: {
+  capCents: number;
+  dailyCapCents: number | null;
+  usage: Pick<SeatUsage, 'periodChargedMillicents' | 'dayChargedMillicents'>;
+  chargeMillicents: number;
+}): number {
+  const monthlyExcess = input.usage.periodChargedMillicents - input.capCents * MILLICENTS_PER_CENT;
+  const dailyExcess = input.dailyCapCents === null ? 0 : input.usage.dayChargedMillicents - input.dailyCapCents * MILLICENTS_PER_CENT;
+  const excess = Math.max(0, monthlyExcess, dailyExcess);
+  return Number.isFinite(excess) ? Math.min(Math.max(0, input.chargeMillicents), excess) : Math.max(0, input.chargeMillicents);
+}
+
 /** What a consumer may still spend through their seat: the pool's spendable, bounded by what is left of their caps. */
 export function seatLegSpendableCents(input: {
   poolSpendableCents: number;
