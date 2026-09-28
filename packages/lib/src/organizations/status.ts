@@ -59,6 +59,7 @@ export async function readOrgStatus(orgId: string, opts: { now?: Date; executor?
       orgCreatedAt: organizations.createdAt,
       status: orgSubscriptions.status,
       trialEnd: orgSubscriptions.trialEnd,
+      currentPeriodStart: orgSubscriptions.currentPeriodStart,
       currentPeriodEnd: orgSubscriptions.currentPeriodEnd,
       cancelAtPeriodEnd: orgSubscriptions.cancelAtPeriodEnd,
     })
@@ -70,7 +71,7 @@ export async function readOrgStatus(orgId: string, opts: { now?: Date; executor?
   const subscription: OrgSubscriptionState | null =
     row.status === null
       ? null
-      : { status: row.status, trialEnd: row.trialEnd, currentPeriodEnd: row.currentPeriodEnd, cancelAtPeriodEnd: row.cancelAtPeriodEnd ?? false };
+      : { status: row.status, trialEnd: row.trialEnd, currentPeriodStart: row.currentPeriodStart, currentPeriodEnd: row.currentPeriodEnd, cancelAtPeriodEnd: row.cancelAtPeriodEnd ?? false };
   const result = deriveOrgStatus({ billingEnabled, subscription, orgCreatedAt: row.orgCreatedAt, now: opts.now ?? new Date() });
   return { result, subscription, trialEnd: subscription ? subscription.trialEnd : unsubscribedTrialEnd(row.orgCreatedAt) };
 }

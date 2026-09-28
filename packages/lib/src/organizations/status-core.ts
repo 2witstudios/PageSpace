@@ -49,8 +49,21 @@ export interface OrgSubscriptionState {
   /** Stripe's subscription status. */
   status: string;
   trialEnd: Date | null;
+  /**
+   * Start of the subscription's latest billing period. A subscription that never left its
+   * trial still has the trial as its period (it started before `trialEnd`); once paid,
+   * Stripe starts a new period at or after the trial end. That is how a canceled row
+   * tells "never paid" from "paid, then canceled" — `trialEnd` alone survives both.
+   */
+  currentPeriodStart: Date | null;
   currentPeriodEnd: Date | null;
   cancelAtPeriodEnd: boolean;
+}
+
+/** The subscription ended inside its trial: it had a trial, the trial is over, and its last period is the trial period. */
+function endedInTrial(sub: OrgSubscriptionState, now: Date): boolean {
+  if (sub.trialEnd === null || sub.trialEnd.getTime() > now.getTime()) return false;
+  return sub.currentPeriodStart !== null && sub.currentPeriodStart.getTime() < sub.trialEnd.getTime();
 }
 
 /**
@@ -102,11 +115,10 @@ export function deriveOrgStatus(input: {
       return trialOver ? { status: 'lapsed', reason: 'trial_expired' } : { status: 'trialing', reason: null };
     case 'canceled':
     case 'incomplete_expired':
-      // A trial Stripe canceled at its end (no card) is a trial that expired.
-      return {
-        status: 'lapsed',
-        reason: sub.trialEnd !== null && sub.trialEnd.getTime() <= input.now.getTime() ? 'trial_expired' : 'canceled',
-      };
+      // A trial Stripe canceled at its end (no card) is a trial that expired; a subscription
+      // that was paid past its trial and later canceled is a cancellation (it keeps its
+      // historical trialEnd, so the period — not trialEnd — decides).
+      return { status: 'lapsed', reason: endedInTrial(sub, input.now) ? 'trial_expired' : 'canceled' };
     case 'unpaid':
     case 'paused':
       return { status: 'lapsed', reason: 'unpaid' };

@@ -20,6 +20,7 @@ function sub(status: string, over: Partial<OrgSubscriptionState> = {}): OrgSubsc
   return {
     status,
     trialEnd: null,
+    currentPeriodStart: new Date(NOW.getTime() - 10 * DAY),
     currentPeriodEnd: new Date(NOW.getTime() + 20 * DAY),
     cancelAtPeriodEnd: false,
     ...over,
@@ -76,12 +77,38 @@ describe('deriveOrgStatus', () => {
     }
   });
 
-  it('SEAT-9 (partial) a canceled trial (no card at trial end) is lapsed as trial_expired', () => {
+  it('SEAT-9 (partial) trial → canceled (no card at trial end): the last period is the trial, so it is lapsed as trial_expired', () => {
     const trialEnd = new Date(NOW.getTime() - DAY);
-    expect(deriveOrgStatus({ billingEnabled: true, subscription: sub('canceled', { trialEnd }), orgCreatedAt: OLD_ORG, now: NOW })).toEqual({
-      status: 'lapsed',
-      reason: 'trial_expired',
-    });
+    // Stripe canceled it at the end of its only period, the trial.
+    const trialPeriod = { trialEnd, currentPeriodStart: new Date(trialEnd.getTime() - ORG_BUSINESS_TRIAL_DAYS * DAY), currentPeriodEnd: trialEnd };
+    for (const status of ['canceled', 'incomplete_expired']) {
+      expect(deriveOrgStatus({ billingEnabled: true, subscription: sub(status, trialPeriod), orgCreatedAt: OLD_ORG, now: NOW })).toEqual({
+        status: 'lapsed',
+        reason: 'trial_expired',
+      });
+    }
+  });
+
+  it('SEAT-9 (partial) trial → paid → canceled keeps its historical trialEnd but is lapsed as canceled, not trial_expired', () => {
+    const trialEnd = new Date(NOW.getTime() - 90 * DAY);
+    // Paid periods follow the trial; Stripe starts the first one exactly at trialEnd.
+    const firstPaid = { trialEnd, currentPeriodStart: trialEnd, currentPeriodEnd: new Date(trialEnd.getTime() + 30 * DAY) };
+    const laterPaid = { trialEnd, currentPeriodStart: new Date(NOW.getTime() - 30 * DAY), currentPeriodEnd: NOW };
+    for (const period of [firstPaid, laterPaid]) {
+      expect(deriveOrgStatus({ billingEnabled: true, subscription: sub('canceled', period), orgCreatedAt: OLD_ORG, now: NOW })).toEqual({
+        status: 'lapsed',
+        reason: 'canceled',
+      });
+    }
+  });
+
+  it('SEAT-9 (partial) a canceled row with no known period, or canceled before its trial ended, is lapsed as canceled', () => {
+    const trialEnd = new Date(NOW.getTime() - DAY);
+    expect(deriveOrgStatus({ billingEnabled: true, subscription: sub('canceled', { trialEnd, currentPeriodStart: null }), orgCreatedAt: OLD_ORG, now: NOW }).reason).toBe('canceled');
+    const futureTrialEnd = new Date(NOW.getTime() + 5 * DAY);
+    expect(
+      deriveOrgStatus({ billingEnabled: true, subscription: sub('canceled', { trialEnd: futureTrialEnd, currentPeriodStart: new Date(NOW.getTime() - 9 * DAY) }), orgCreatedAt: OLD_ORG, now: NOW }).reason,
+    ).toBe('canceled');
   });
 
   it('SEAT-9 (partial) an unrecognised Stripe status fails closed to lapsed', () => {
