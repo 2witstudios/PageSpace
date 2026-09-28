@@ -226,7 +226,12 @@ describe('MON-5 (partial) one definition of a credit', () => {
     expect(formatDollars(1050)).toBe('$10.50');
     expect(formatDollars(0)).toBe('$0');
   });
+});
 
+// Outside the 'MON-5 …' describe on purpose: a bare MON-5 in the enclosing describe would claim
+// MON-5 in full for this test and silently upgrade its partial marker (the spec-coverage gate
+// fails on that; see partialClaimsUpgradedByChain).
+describe('the provider cost a charge covers', () => {
   it('MON-5 (partial) providerDollarsCoveredByCents takes charged cents back through the markup to the provider cost they cover', () => {
     // At the 1.5× default: 150¢ charged covers $1.00 of provider cost; 3¢ covers $0.02.
     expect(providerDollarsCoveredByCents(150)).toBe(1);

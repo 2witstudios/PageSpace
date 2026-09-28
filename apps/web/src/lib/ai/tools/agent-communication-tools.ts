@@ -9,6 +9,7 @@ import { pages, drives } from '@pagespace/db/schema/core';
 import { conversations as conversationsTable, messages as unifiedMessages } from '@pagespace/db/schema/conversations';
 import { users } from '@pagespace/db/schema/auth';
 import { prepareHistoryForModel, finishModelRequest } from '@/lib/ai/core/context-assembly';
+import { PERSONAL_SPEND } from '@pagespace/lib/billing/spend-target';
 import { runCompaction } from '@/lib/ai/core/compaction/compaction-service';
 import { canActorViewPage, canActorAccessDrive, canActorConsultAgent, filterDriveIdsByAppTokenScope, filterDriveIdsByMcpScope, isMcpScoped, resolveActingAgentId } from './actor-permissions';
 import { listAgentDrives, getAgentContextDrives } from '@pagespace/lib/services/drive-agent-service';
@@ -815,6 +816,10 @@ export async function executeAskAgent(
           systemPrompt,
           tools: executionTools,
           user: { id: userId, role: callerUserRole },
+          // A compaction of this conversation spends where the call that runs this agent
+          // spends (SPEND-7): its gate reserves on the caller's target, a mention's drive
+          // wallet or nothing (SPEND-6). With no gated caller it is personal (SPEND-8).
+          spend: executionContext?.creditSpend?.spend ?? PERSONAL_SPEND,
         });
         const { modelMessages: agentModelMessages } = await finishModelRequest({ prepared, tools: executionTools as ToolSet });
 
@@ -852,15 +857,10 @@ export async function executeAskAgent(
         // Fire-and-forget compaction: after() is unavailable inside tool execution,
         // so we launch directly — the parent stream is still open but this is safe
         // as a detached promise (no response coupling).
+        // runCompaction gates and reserves on the caller's spend target before its own model
+        // call, and skips (persisting nothing) when that source cannot cover it.
         if (prepared.pendingCompaction) {
-          // The compaction is part of this turn's spend: it settles on the wallet the turn
-          // was gated on (a mention reply's drive wallet), never the caller's own (SPEND-6).
-          const compactionWalletId = executionContext?.creditSpend?.walletId;
-          void runCompaction(
-            compactionWalletId
-              ? { ...prepared.pendingCompaction, walletId: compactionWalletId }
-              : prepared.pendingCompaction,
-          );
+          void runCompaction(prepared.pendingCompaction);
         }
 
         // Bill the requesting user for the sub-agent run. Use totalUsage so all
@@ -871,7 +871,7 @@ export async function executeAskAgent(
         // sub-agent charge durable if the tool returns into a serverless freeze.
         // No holdId: every caller gates before invoking this engine (a nested call
         // runs inside an already-gated parent request; the channel mention responder
-        // takes its own hold per reply via acquireUserCreditHold and releases it when
+        // takes its own hold per reply via acquireMentionCreditHold and releases it when
         // this returns); this decrement draws the balance directly, so there is no
         // reservation to settle here. It draws the wallet the CALLER's gate named
         // (walletId), because an agent's spend belongs to the session it runs in, not

@@ -48,6 +48,7 @@ function fakeMeter(): CallMeter & { stops: MeterStopReason[] } {
     }),
     billedDollars: 0,
     stopped: false,
+    spend: { kind: 'personal' },
   };
 }
 
@@ -497,6 +498,24 @@ describe('handleRealtimeAttachRequest — metering and the runtime', () => {
         conversationId: 'conv1',
       }),
     );
+  });
+
+  it('SPEND-1 (partial) given the drive the web tier resolved for the bound conversation, should meter on that drive\'s conversation target', async () => {
+    const startMeter = vi.fn(async (_options: CallMeterOptions) => ({ ok: true as const, meter: fakeMeter() }));
+
+    await handleRealtimeAttachRequest(deps({ startMeter }), JSON.stringify({ ...VALID, spendDriveId: 'drive-1' }));
+
+    expect(startMeter).toHaveBeenCalledWith(
+      expect.objectContaining({ spend: { kind: 'drive', driveId: 'drive-1', chosen: null, conversationId: 'conv1' } }),
+    );
+  });
+
+  it('SPEND-8 (partial) given no drive, should meter on the caller\'s personal credits', async () => {
+    const startMeter = vi.fn(async (_options: CallMeterOptions) => ({ ok: true as const, meter: fakeMeter() }));
+
+    await handleRealtimeAttachRequest(deps({ startMeter }), JSON.stringify(VALID));
+
+    expect(startMeter).toHaveBeenCalledWith(expect.objectContaining({ spend: { kind: 'personal' } }));
   });
 
   it('given the attach fails AFTER the hold was taken, should stop the meter so the hold is released', async () => {

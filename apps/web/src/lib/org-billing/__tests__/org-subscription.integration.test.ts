@@ -353,7 +353,7 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
     expect((await ensureOrgBusinessSubscription(orgId, deps)).linkage.status).toBe('trialing');
   });
 
-  describe('deleting an org that has a subscription (ORG-6 meets SEAT-1)', () => {
+  describe('deleting an org that has a subscription (ORG-6 meets the org subscription)', () => {
     const noKick = { broadcast: async () => {}, kick: async () => {} };
 
     it('SEAT-1 (partial) cancels the live Stripe subscription and removes its row with the org, so nothing keeps billing a deleted org', async () => {
