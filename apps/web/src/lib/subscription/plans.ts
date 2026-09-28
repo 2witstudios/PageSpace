@@ -181,7 +181,7 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
     ...planTerms('pro'),
     limits: planLimits('pro'),
     features: [
-      { name: monthlyCreditsPhrase('pro'), included: true, description: '3x more than Free' },
+      { name: monthlyCreditsPhrase('pro'), included: true, description: 'Refills every month; unused credits carry over' },
       { name: 'Buy more credits anytime', included: true },
       { name: 'Standard + Pro AI models', included: true, description: 'Advanced AI reasoning' },
       { name: storagePhrase('pro'), included: true, description: '4x more than Free' },
@@ -205,7 +205,7 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
     ...planTerms('business'),
     limits: planLimits('business'),
     features: [
-      { name: monthlyCreditsPhrase('business'), included: true, description: '20x more than Free' },
+      { name: monthlyCreditsPhrase('business'), included: true, description: 'One shared pool for the organization, larger with every extra seat' },
       { name: 'Buy more credits anytime', included: true },
       { name: 'Standard + Pro AI models', included: true, description: 'Maximum AI reasoning' },
       { name: storagePhrase('business'), included: true, description: '100x more than Free' },

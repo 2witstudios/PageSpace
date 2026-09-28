@@ -17,6 +17,15 @@
 // Type-only import (erased at compile time, zero runtime cost) — usage-source.ts
 // is itself a pure, zero-I/O module, so this doesn't break the invariant above.
 import type { AIUsageSource } from '../monitoring/usage-source';
+// The ONE definition of a credit (MON-5): the conversions below are pure functions of
+// their arguments. money-model's own env knobs (MARKUP_BPS, top-up bounds) are never read
+// here — markupBps is always passed in.
+import {
+  centsFromDollars,
+  chargedCentsFromProviderDollars,
+  chargedMillicentsFromProviderDollars,
+  dollarsFromCents,
+} from './money-model';
 
 export interface Balance {
   monthlyCents: number;
@@ -35,7 +44,7 @@ export interface Balance {
  */
 export function markupCents(realCostDollars: number, markupBps: number): number {
   if (!Number.isFinite(realCostDollars) || realCostDollars <= 0) return 0;
-  return Math.round(realCostDollars * (markupBps / 10000) * 100);
+  return Math.round(chargedCentsFromProviderDollars(realCostDollars, markupBps));
 }
 
 /**
@@ -47,7 +56,7 @@ export function markupCents(realCostDollars: number, markupBps: number): number 
  */
 export function chargeMillicents(realCostDollars: number, markupBps: number): number {
   if (!Number.isFinite(realCostDollars) || realCostDollars <= 0) return 0;
-  return Math.round(realCostDollars * (markupBps / 10000) * 100_000);
+  return Math.round(chargedMillicentsFromProviderDollars(realCostDollars, markupBps));
 }
 
 export interface AccrualResult {
@@ -490,7 +499,7 @@ export interface CostDriftResult {
  * {@link chargeMillicents} (which rejects negatives) and re-signed. Pure.
  */
 export function computeCostDrift(input: CostDriftInput, markupBps: number): CostDriftResult {
-  const authCents = Math.round(Math.max(0, input.authoritativeRealCostDollars) * 100);
+  const authCents = centsFromDollars(Math.max(0, input.authoritativeRealCostDollars));
   const billed = Math.round(input.billedRealCostCents);
   const delta = authCents - billed;
   const absDelta = Math.abs(delta);
@@ -500,7 +509,7 @@ export function computeCostDrift(input: CostDriftInput, markupBps: number): Cost
   const shouldCorrect = absDelta > tol;
 
   const deltaChargeMillicents =
-    Math.sign(delta) * chargeMillicents(Math.abs(delta) / 100, markupBps);
+    Math.sign(delta) * chargeMillicents(dollarsFromCents(Math.abs(delta)), markupBps);
 
   return { shouldCorrect, deltaRealCostCents: delta, deltaChargeMillicents };
 }

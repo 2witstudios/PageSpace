@@ -17,6 +17,7 @@ const mockSql = vi.hoisted(() => {
   return tag;
 });
 const mockPricesRetrieve = vi.hoisted(() => vi.fn());
+const mockReadCreditLiability = vi.hoisted(() => vi.fn());
 
 // Chainable db mock whose terminal resolves to the next queued result set.
 const makeChain = vi.hoisted(() => () => {
@@ -101,6 +102,10 @@ vi.mock('@pagespace/lib/billing/credit-pricing', () => ({
   NEGATIVE_MARGIN_FLOOR_BPS: 0,
 }));
 
+vi.mock('@pagespace/lib/billing/credit-liability-query', () => ({
+  readCreditLiability: mockReadCreditLiability,
+}));
+
 vi.mock('@pagespace/lib/auth/user-repository', () => ({
   decryptUserDisplayFields: vi.fn(async (rows: unknown[]) => rows),
 }));
@@ -113,9 +118,22 @@ vi.mock('../stripe/client', () => ({
 import { stripeConfig } from '../stripe-config';
 import {
   getActiveSubscriptionsByTier,
+  getCreditLiability,
   getCreditRevenue,
   getErrorAnalytics,
 } from '../monitoring-queries';
+
+const liabilityReport = (over: Record<string, number> = {}) => ({
+  includedCreditLiabilityCents: 0,
+  personalIncludedCents: 0,
+  starterGrantIncludedCents: 0,
+  orgPoolIncludedCents: 0,
+  topupRemainingCents: 0,
+  totalLiabilityCents: 0,
+  userCount: 0,
+  orgPoolCount: 0,
+  ...over,
+});
 
 function resetQueue(...sets: unknown[][]) {
   resultQueue.length = 0;
@@ -187,13 +205,11 @@ describe('getActiveSubscriptionsByTier', () => {
 
 describe('getCreditRevenue', () => {
   it('splits top-up cash from monthly grants and exposes NO combined total', async () => {
-    resetQueue(
-      [
-        { entryType: 'topup_purchase', cents: 500, count: 2 },
-        { entryType: 'monthly_grant', cents: 1500, count: 3 },
-      ],
-      [{ includedCreditLiabilityCents: 900 }],
-    );
+    resetQueue([
+      { entryType: 'topup_purchase', cents: 500, count: 2 },
+      { entryType: 'monthly_grant', cents: 1500, count: 3 },
+    ]);
+    mockReadCreditLiability.mockResolvedValueOnce(liabilityReport({ includedCreditLiabilityCents: 900 }));
 
     const result = await getCreditRevenue();
 
@@ -207,35 +223,58 @@ describe('getCreditRevenue', () => {
     expect(result).not.toHaveProperty('totalCents');
   });
 
-  it('MON-7 reports included credit liability = outstanding monthly grants, separate from cash and from the grant flow', async () => {
-    // Range flow: $15 granted this range. Balances: $9 of granted value still unspent
-    // across all users. The liability is the unspent $9, not the $15 flow and not top-up cash.
-    resetQueue(
-      [
-        { entryType: 'topup_purchase', cents: 2500, count: 1 },
-        { entryType: 'monthly_grant', cents: 1500, count: 1 },
-      ],
-      [{ includedCreditLiabilityCents: 900 }],
+  it('MON-7 (partial) reports included credit liability = grants outstanding on personal roots AND org pools, separate from cash and from the grant flow', async () => {
+    // Range flow: $15 granted this range. Wallets: 900 unspent on personal roots plus a
+    // 4,800 org pool. The liability is the unspent 5,700, not the flow and not top-up cash.
+    resetQueue([
+      { entryType: 'topup_purchase', cents: 2500, count: 1 },
+      { entryType: 'monthly_grant', cents: 1500, count: 1 },
+    ]);
+    mockReadCreditLiability.mockResolvedValueOnce(
+      liabilityReport({ includedCreditLiabilityCents: 5700, personalIncludedCents: 900, orgPoolIncludedCents: 4800, topupRemainingCents: 2500 }),
     );
 
     const result = await getCreditRevenue();
 
-    expect(result.includedCreditLiabilityCents).toBe(900);
+    expect(result.includedCreditLiabilityCents).toBe(5700);
     expect(result.includedCreditLiabilityCents).not.toBe(result.monthlyGrantCents);
     expect(result.includedCreditLiabilityCents).not.toBe(result.topupCents);
-    // Read from the balances table (unspent monthly remaining), never from top-up balances.
-    const balanceSelect = (mockSelect.mock.calls as unknown[][])[1]?.[0] as Record<string, unknown> | undefined;
-    expect(balanceSelect).toHaveProperty('includedCreditLiabilityCents');
-    expect(mockSql).toHaveBeenCalledWith(expect.anything(), 'CB_MONTHLY');
-    // WAL-2 (partial): only personal root wallets (the former credit_balances rows) count
-    // as users' included-credit liability, never a drive or org wallet.
-    expect(whereCalls).toContainEqual({ personalRoot: true });
+    // One read, over every wallet kind: no personal-root filter narrows it (Review 2).
+    expect(mockReadCreditLiability).toHaveBeenCalledWith();
+    expect(whereCalls).not.toContainEqual({ personalRoot: true });
   });
 
-  it('MON-7 reports zero liability when no balance rows exist', async () => {
-    resetQueue([], []);
+  it('MON-7 (partial) reports zero liability when no wallets exist', async () => {
+    resetQueue([]);
+    mockReadCreditLiability.mockResolvedValueOnce(liabilityReport());
     const result = await getCreditRevenue();
     expect(result.includedCreditLiabilityCents).toBe(0);
+  });
+});
+
+describe('getCreditLiability', () => {
+  it('MON-7 (partial) carries the org pool and starter-grant parts and the total across every wallet', async () => {
+    mockReadCreditLiability.mockResolvedValueOnce(
+      liabilityReport({
+        includedCreditLiabilityCents: 6200,
+        personalIncludedCents: 1400,
+        starterGrantIncludedCents: 500,
+        orgPoolIncludedCents: 4800,
+        topupRemainingCents: 400,
+        totalLiabilityCents: 6600,
+        userCount: 2,
+        orgPoolCount: 1,
+      }),
+    );
+    expect(await getCreditLiability()).toEqual({
+      monthlyRemainingCents: 6200,
+      orgPoolMonthlyRemainingCents: 4800,
+      starterGrantRemainingCents: 500,
+      topupRemainingCents: 400,
+      totalLiabilityCents: 6600,
+      userCount: 2,
+      orgPoolCount: 1,
+    });
   });
 });
 

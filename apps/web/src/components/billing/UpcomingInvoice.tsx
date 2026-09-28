@@ -1,5 +1,6 @@
 'use client';
 
+import { dollarsFromCents } from '@/lib/subscription/credits';
 import { Calendar, Receipt } from 'lucide-react';
 
 interface UpcomingInvoiceProps {
@@ -20,7 +21,7 @@ export function UpcomingInvoice({ invoice }: UpcomingInvoiceProps) {
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
       currency: currency.toUpperCase(),
-    }).format(amount / 100);
+    }).format(dollarsFromCents(amount));
   };
 
   const formatDate = (dateString: string) => {

@@ -24,7 +24,7 @@ import { tierAllowanceCents, formatCreditCount, FREE_STARTER_CREDITS, MONEY_MODE
 // money-model.test.ts. This file only proves the WIRING: MONTHLY_CREDIT_CENTS and
 // every phrase built on it agree with tierAllowanceCents(tier)'s own default.
 
-describe('MON-5 the web formatter, the marketing mirror, and admin consume one credit definition', () => {
+describe('MON-5 (partial) the web formatter, the marketing mirror, and admin consume one credit definition', () => {
   it('MON-2 MONTHLY_CREDIT_CENTS per tier equals tierAllowanceCents(tier)\'s own default, and MONTHLY_CREDITS is its count', () => {
     for (const tier of TIERS) {
       expect(MONTHLY_CREDIT_CENTS[tier], tier).toBe(tierAllowanceCents(tier));
