@@ -615,11 +615,11 @@ export function seatSpentCents(chargedMillicents: number): number {
 
 /** One consumer's seat spend in the pool's current period. */
 export interface SeatUsage {
-  /** SUM(chargeMillicents) of their usage and reconcile rows on the pool since the period start, net of the period's absorbed overshoot. */
+  /** Their settled seat spend this period (usage + reconcile rows, per call, dated by the call), as min(gross, the cap now). */
   periodChargedMillicents: number;
   /** Their live holds on the pool (calls in flight), counted like spend — this period and today. */
   periodReservedCents: number;
-  /** The same SUM since the start of today, UTC (WAL-7's daily window, D20.3), net of the DAY's absorbed overshoot. */
+  /** The same since the start of today, UTC (WAL-7's daily window, D20.3), as min(gross, the daily cap now). */
   dayChargedMillicents: number;
 }
 
@@ -652,6 +652,19 @@ export interface SeatWindowCharge {
   grossMillicents: number;
   /** SUM of this window's own seat-overshoot rows: the part of that spend the pool took off the count. */
   absorbedMillicents: number;
+}
+
+/**
+ * One window's seat count: its gross settled spend judged against the cap in force now,
+ * min(gross, cap) and never below zero (null cap: no limit, the gross). Deciding a cap on this
+ * is deciding it on gross — both refuse at gross >= cap and agree below it — so nothing stored
+ * from an earlier cap can widen admission. A non-finite gross passes through, and the caps'
+ * read (seatSpentCents) fails closed on it.
+ */
+export function seatCountedMillicents(input: { capCents: number | null; grossMillicents: number }): number {
+  if (!Number.isFinite(input.grossMillicents)) return input.grossMillicents;
+  const gross = Math.max(0, input.grossMillicents);
+  return input.capCents === null ? gross : Math.min(gross, input.capCents * MILLICENTS_PER_CENT);
 }
 
 /**

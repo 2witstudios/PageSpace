@@ -25,7 +25,7 @@ import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { and, eq, isNull, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
 import { chargeMillicents, accruePending, allocateSpend, applyPaymentToDebt } from './credit-core';
-import { allocateWalletSpend, settleOvershoot, seatOvershootDeltaMillicents, DEFAULT_OVERSHOOT_CHOICE } from './wallet-core';
+import { allocateWalletSpend, settleOvershoot, seatOvershootDeltaMillicents, seatPeriodStartMs, DEFAULT_OVERSHOOT_CHOICE } from './wallet-core';
 import { childWalletFunds, ORG_SPEND_POLICY_UNTIL_POLICY_STORE, type WalletBalanceFacts } from './spend-target';
 import { loadSeatCapFacts, SEAT_OVERSHOOT_ENTRY } from './seat-allowance';
 import { drawWalletFundingLegs, creditWalletFundingLegs } from './wallet-legs';
@@ -178,14 +178,15 @@ async function decrementAndSettle(
  * consumer's count, so the count ends AT the cap, never over it. Called after every seat
  * charge (settle, reconcile undercharge) and every refund (reconcile overcharge), which gives
  * back forgiveness that no longer applies. The month and the day each get their own signed
- * row and each is subtracted from its own window only, so a day's overshoot never forgives
- * the month and a month's never the day (review 5340219245, IRV-A7 / IRV-A4).
+ * row, so a day's overshoot never stands for the month's nor the month's for the day's
+ * (review 5340219245, IRV-A7 / IRV-A4). These rows are the attribution record only: the caps
+ * judge gross against the cap in force (loadSeatCapFacts), never these rows.
  *
  * Runs in the charge's transaction after the pool's row lock was taken (chargeWallet /
  * refundWalletCharge; re-taken here, a no-op in the same transaction) — the lock the gate
  * decides the cap under — so a settle and a gate on the same pool serialize. A no-op on any
- * wallet that is not an org pool (a seat is the pool's own leg). The day and period are judged
- * at the claim's time (`claimLedgerId`), the moment the charge entered the ledger, else now.
+ * wallet that is not an org pool (a seat is the pool's own leg). The day and period are those
+ * of the CALL (its usage row's time), so a correction is attributed where the call counts.
  * Returns the signed millicents recorded per window.
  */
 export async function recordSeatOvershoot(
@@ -199,10 +200,17 @@ export async function recordSeatOvershoot(
     .where(eq(wallets.id, input.walletId))
     .for('update');
   if (!pool || pool.ownerType !== 'org' || pool.parentWalletId !== null || pool.subjectType !== null) return none;
-  const [claim] = input.claimLedgerId
+  // The call's own time: its usage row (a reconcile correction belongs to the call it
+  // corrects, not to when the cron ran), else the claim, else now.
+  const [call] = input.aiUsageLogId
+    ? await tx.select({ createdAt: creditLedger.createdAt }).from(creditLedger).where(and(eq(creditLedger.aiUsageLogId, input.aiUsageLogId), eq(creditLedger.entryType, 'usage')))
+    : [];
+  const [claim] = !call && input.claimLedgerId
     ? await tx.select({ createdAt: creditLedger.createdAt }).from(creditLedger).where(eq(creditLedger.id, input.claimLedgerId))
     : [];
-  const at = claim?.createdAt ?? new Date();
+  const at = call?.createdAt ?? claim?.createdAt ?? new Date();
+  // A call from a period the pool has already closed has no open window to attribute to.
+  if (at.getTime() < seatPeriodStartMs({ poolPeriodStartMs: pool.monthlyPeriodStart?.getTime() ?? null, nowMs: Date.now() })) return none;
   const seat = await loadSeatCapFacts(tx, {
     poolId: input.walletId,
     poolPeriodStart: pool.monthlyPeriodStart,

@@ -5,11 +5,11 @@
  * taken from the pool this period is read from the ledger, the append-only record the money
  * already moves through, so there is no second counter to drift from it:
  *
- *   SUM(credit_ledger.chargeMillicents)   -- gross, per window
+ *   SUM over calls of max(0, SUM(credit_ledger.chargeMillicents))   -- gross, per window
  *     WHERE walletId = the pool AND userId = the consumer
- *       AND entryType IN ('usage', 'adjustment') AND createdAt >= the window start
- *   minus that window's OWN seat-overshoot rows ('seat_overshoot_month' for the period,
- *   'seat_overshoot_day' for today)
+ *       AND entryType IN ('usage', 'adjustment')
+ *     grouped by call (aiUsageLogId), each call dated by its usage row
+ *   judged against the cap in force now
  *
  * - `usage` rows carry each settled call's full intended charge, including any part that
  *   overshot into pool debt (the pool still pays it). A claimed-but-unsettled row is
@@ -20,12 +20,11 @@
  * - the overshoot `adjustment` row written beside a usage row carries NO chargeMillicents
  *   (its cents are already in the usage row's charge), so the SUM skips it and never counts
  *   the overshoot twice.
- * - a seat-overshoot row (written at settle and at reconcile, under the pool lock) carries
- *   a SIGNED change to what one window's cap forgave: the pool paid the spend past the cap
- *   (WAL-6b/c), so it comes OFF the consumer's count in THAT window only, and a refund takes
- *   back forgiveness that no longer applies. Each window's count is therefore min(gross, cap)
- *   (see seatOvershootDeltaMillicents): a day's overshoot never forgives the month, nor the
- *   month's the day.
+ * - a seat-overshoot row (written at settle and at reconcile, under the pool lock) records a
+ *   SIGNED change to what one window's cap absorbed: the pool paid the spend past the cap
+ *   (WAL-6b/c). These rows are the attribution record (the consumer's count is min(gross,
+ *   cap), the rest is the pool's); the caps never read them, so no stale or wrong row can
+ *   widen admission.
  * - grants, top-ups and donations are money INTO wallets, never a consumer's draw.
  *
  * Plus this consumer's live holds on the pool (calls in flight), counted like spend.
@@ -39,7 +38,7 @@ import type { db } from '@pagespace/db/db';
 import { and, eq, gt, gte, inArray, sql } from '@pagespace/db/operators';
 import { creditHolds, creditLedger } from '@pagespace/db/schema/credits';
 import { walletConsumerCaps } from '@pagespace/db/schema/wallets';
-import { seatAllowanceCents, seatPeriodStartMs, userConsumerKey, utcDayStartMs, type SeatUsage, type SeatWindowCharge } from './wallet-core';
+import { seatAllowanceCents, seatCountedMillicents, seatPeriodStartMs, userConsumerKey, utcDayStartMs, type SeatUsage, type SeatWindowCharge } from './wallet-core';
 
 type Reader = Pick<typeof db, 'select'>;
 
@@ -81,20 +80,46 @@ export async function loadSeatCapFacts(
     .limit(1);
   // The day window never reaches back before the period: a refill mid-day starts both afresh.
   const dayStart = new Date(Math.max(periodStart.getTime(), utcDayStartMs(input.now.getTime())));
-  const isSpend = sql`${creditLedger.entryType} IN ('usage', 'adjustment')`;
-  const inDay = sql`${creditLedger.createdAt} >= ${dayStart}`;
-  const [charged] = await executor
+  // Every seat charge counts in the window of the CALL it belongs to: a reconcile correction
+  // is dated by the call's usage row, not by when the cron ran, so a refund for yesterday's
+  // (or last period's) call never opens room today. And each call nets to at least zero, so no
+  // correction, however large, can push a window below what was really spent in it.
+  // (Review 5340856661 P2-1: IRV-C1, IRV-C2.) A correction's own row is never older than its
+  // call's, so the period filter on the rows themselves loses nothing that belongs here.
+  const callAt = sql`coalesce((SELECT u."createdAt" FROM ${creditLedger} u WHERE u."aiUsageLogId" = ${creditLedger.aiUsageLogId} AND u."entryType" = 'usage' LIMIT 1), ${creditLedger.createdAt})`;
+  const calls = executor
     .select({
-      gross: sql<string>`coalesce(sum(${creditLedger.chargeMillicents}) FILTER (WHERE ${isSpend}), 0)`,
-      absorbed: sql<string>`coalesce(sum(${creditLedger.chargeMillicents}) FILTER (WHERE ${creditLedger.entryType} = ${SEAT_OVERSHOOT_ENTRY.month}), 0)`,
-      dayGross: sql<string>`coalesce(sum(${creditLedger.chargeMillicents}) FILTER (WHERE ${isSpend} AND ${inDay}), 0)`,
-      dayAbsorbed: sql<string>`coalesce(sum(${creditLedger.chargeMillicents}) FILTER (WHERE ${creditLedger.entryType} = ${SEAT_OVERSHOOT_ENTRY.day} AND ${inDay}), 0)`,
+      at: sql<Date>`min(${callAt})`.as('call_at'),
+      millicents: sql<string>`greatest(0, coalesce(sum(${creditLedger.chargeMillicents}), 0))`.as('call_millicents'),
     })
     .from(creditLedger)
     .where(and(
       eq(creditLedger.userId, input.userId),
       eq(creditLedger.walletId, input.poolId),
-      inArray(creditLedger.entryType, ['usage', 'adjustment', SEAT_OVERSHOOT_ENTRY.month, SEAT_OVERSHOOT_ENTRY.day]),
+      inArray(creditLedger.entryType, ['usage', 'adjustment']),
+      gte(creditLedger.createdAt, periodStart),
+    ))
+    .groupBy(sql`coalesce(${creditLedger.aiUsageLogId}, ${creditLedger.id})`)
+    .as('calls');
+  const [gross] = await executor
+    .select({
+      period: sql<string>`coalesce(sum(${calls.millicents}) FILTER (WHERE ${calls.at} >= ${periodStart}), 0)`,
+      day: sql<string>`coalesce(sum(${calls.millicents}) FILTER (WHERE ${calls.at} >= ${dayStart}), 0)`,
+    })
+    .from(calls);
+  // What the pool absorbed per window: attribution records only. The caps never read them
+  // (see below), so a stale or wrong one can never widen admission.
+  const inDay = sql`${creditLedger.createdAt} >= ${dayStart}`;
+  const [absorbed] = await executor
+    .select({
+      period: sql<string>`coalesce(sum(${creditLedger.chargeMillicents}) FILTER (WHERE ${creditLedger.entryType} = ${SEAT_OVERSHOOT_ENTRY.month}), 0)`,
+      day: sql<string>`coalesce(sum(${creditLedger.chargeMillicents}) FILTER (WHERE ${creditLedger.entryType} = ${SEAT_OVERSHOOT_ENTRY.day} AND ${inDay}), 0)`,
+    })
+    .from(creditLedger)
+    .where(and(
+      eq(creditLedger.userId, input.userId),
+      eq(creditLedger.walletId, input.poolId),
+      inArray(creditLedger.entryType, [SEAT_OVERSHOOT_ENTRY.month, SEAT_OVERSHOOT_ENTRY.day]),
       gte(creditLedger.createdAt, periodStart),
     ));
   const [held] = await executor
@@ -105,18 +130,24 @@ export async function loadSeatCapFacts(
       eq(creditHolds.walletId, input.poolId),
       gt(creditHolds.expiresAt, input.now),
     ));
-  const period = { grossMillicents: Number(charged?.gross ?? 0), absorbedMillicents: Number(charged?.absorbed ?? 0) };
-  const day = { grossMillicents: Number(charged?.dayGross ?? 0), absorbedMillicents: Number(charged?.dayAbsorbed ?? 0) };
+  const period = { grossMillicents: Number(gross?.period ?? 0), absorbedMillicents: Number(absorbed?.period ?? 0) };
+  const day = { grossMillicents: Number(gross?.day ?? 0), absorbedMillicents: Number(absorbed?.day ?? 0) };
+  const capCents = seatAllowanceCents({
+    consumerMonthlyCapCents: cap?.monthlyCapCents ?? null,
+    policySeatAllowanceCents: input.policySeatAllowanceCents,
+  });
+  const dailyCapCents = cap?.dailyCapCents ?? null;
   return {
-    capCents: seatAllowanceCents({
-      consumerMonthlyCapCents: cap?.monthlyCapCents ?? null,
-      policySeatAllowanceCents: input.policySeatAllowanceCents,
-    }),
-    dailyCapCents: cap?.dailyCapCents ?? null,
+    capCents,
+    dailyCapCents,
+    // The caps judge GROSS against the cap in force NOW, shown as min(gross, cap): the same
+    // decision as gross (both refuse at gross >= cap), and never computed from a stored
+    // absorbed figure, so raising or lowering a cap takes effect at once (review 5340856661
+    // P2-2, IRV-C3). A cap lowered below what is spent reads as full: no room, never negative.
     usage: {
-      periodChargedMillicents: period.grossMillicents - period.absorbedMillicents,
+      periodChargedMillicents: seatCountedMillicents({ capCents, grossMillicents: period.grossMillicents }),
       periodReservedCents: Number(held?.cents ?? 0),
-      dayChargedMillicents: day.grossMillicents - day.absorbedMillicents,
+      dayChargedMillicents: seatCountedMillicents({ capCents: dailyCapCents, grossMillicents: day.grossMillicents }),
     },
     windows: { period, day },
   };

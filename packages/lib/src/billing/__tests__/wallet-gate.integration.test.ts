@@ -826,6 +826,121 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     expect(await seatGate(w, w.marcusId)).toMatchObject({ allowed: false, refusal: { reason: 'source_cap_reached' } });
   });
 
+  /** A seat call gated at its 25¢ estimate and billed at `costDollars`, waiting for the cost-reconcile cron under `generationId`. */
+  async function reconcilableSeatCall(w: World, userId: string, costDollars: number, generationId: string) {
+    const gate = await seatGate(w, userId);
+    expect(gate).toMatchObject({ allowed: true, walletId: w.poolId });
+    const [log] = await db.insert(aiUsageLogs).values({ userId, provider: 'openrouter', model: 'm', cost: costDollars, timestamp: new Date(Date.now() - 10 * 60_000), reconcileStatus: 'pending', reconcileAttempts: 0, metadata: { generationIds: [generationId] } }).returning({ id: aiUsageLogs.id });
+    expect(await consumeCredits({ aiUsageLogId: log.id, userId, costDollars, holdId: gate.holdId, walletId: gate.walletId })).toBe('settled');
+    return log.id;
+  }
+  /** Gate-and-settle 25¢ seat calls until the gate refuses (at most `max`); returns how many passed. */
+  async function spendUntilRefused(w: World, userId: string, max = 10): Promise<number> {
+    let passed = 0;
+    while (passed < max && (await seatGate(w, userId)).allowed) {
+      await db.delete(creditHolds).where(eq(creditHolds.userId, userId));
+      await seatCallCosting(w, userId, COST_25C);
+      passed += 1;
+    }
+    return passed;
+  }
+  const utcToday = () => { const d = new Date(); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()); };
+
+  it('WAL-2 (partial) WAL-7 (partial) IRV-C1: a reconcile refund for YESTERDAY\'s call counts in yesterday, never opening room past today\'s daily cap', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+    const w = world;
+    await db.insert(walletConsumerCaps).values({ walletId: w.poolId, consumerKey: `user:${w.marcusId}`, dailyCapCents: 50, monthlyCapCents: 1_000 });
+    const gen = `gen-c1-${createId()}`;
+    // Yesterday: a 25¢-estimate call billed 75¢ — 25¢ past yesterday's 50¢ daily cap.
+    await reconcilableSeatCall(w, w.marcusId, 3 * COST_25C, gen);
+    await nextDay(w, w.marcusId);
+
+    // Today the cron reconciles it down: billed real cost round(3 × 16.66667 = 50.00001) = 50¢, actually 7¢: 43¢ real × 1.5 = 64_500 mc
+    // back (the pool is credited round(64.5) = 65¢). Yesterday nets 75_000 − 64_500 = 10_500 mc, under its 50¢ cap.
+    await reconcileOpenRouterCosts({ fetcher: async (id) => (id === gen ? { totalCost: 0.07 } : 'not_found') });
+
+    // Today still has exactly its own 50¢: two 25¢ calls, then refused — not three.
+    expect(await spendUntilRefused(w, w.marcusId)).toBe(2);
+    expect((await seatCounted(w, w.marcusId)).usage.dayChargedMillicents).toBe(50_000);
+    // The refund gave yesterday's forgiveness back IN yesterday: every day-overshoot row is dated before today.
+    const dayRows = (await ledgerOf(w.marcusId)).filter((r) => r.entryType === 'seat_overshoot_day');
+    expect(dayRows.map((r) => r.chargeMillicents)).toEqual([25_000, -25_000]);
+    expect(dayRows.every((r) => r.createdAt.getTime() < utcToday())).toBe(true);
+  });
+
+  it('WAL-2 (partial) IRV-C2: a reconcile refund for a call from the CLOSED period never opens room in the new period', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+    const w = world;
+    const gen = `gen-c2-${createId()}`;
+    // Last period: a call billed 50¢. Then the pool refills.
+    await reconcilableSeatCall(w, w.marcusId, 2 * COST_25C, gen);
+    await db.update(creditLedger).set({ createdAt: new Date(Date.now() - 3_600_000) }).where(and(eq(creditLedger.userId, w.marcusId), eq(creditLedger.walletId, w.poolId)));
+    await db.update(wallets).set({ monthlyPeriodStart: new Date(Date.now() - 60_000) }).where(eq(wallets.id, w.poolId));
+
+    // After the refill the cron refunds it: billed 33¢ real, actually 7¢, 26¢ × 1.5 = 39¢ back to the pool.
+    await reconcileOpenRouterCosts({ fetcher: async (id) => (id === gen ? { totalCost: 0.07 } : 'not_found') });
+
+    // The new period has exactly its own 100¢: four 25¢ calls, then refused — not five.
+    const before = (await walletRow(w.poolId)).monthlyRemainingCents;
+    expect(await spendUntilRefused(w, w.marcusId)).toBe(4);
+    expect(before - (await walletRow(w.poolId)).monthlyRemainingCents).toBe(100);
+    expect((await ledgerOf(w.marcusId)).filter((r) => r.entryType.startsWith('seat_overshoot'))).toEqual([]);
+  });
+
+  it('WAL-2 (partial) IRV-C3: an admin RAISING the cap takes effect at once on gross — concurrent calls fit only what the new cap leaves', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+    const w = world;
+    await db.insert(walletConsumerCaps).values({ walletId: w.poolId, consumerKey: `user:${w.marcusId}`, monthlyCapCents: 100 });
+    for (let call = 1; call <= 3; call += 1) await seatCallCosting(w, w.marcusId, COST_25C);
+    await seatCallCosting(w, w.marcusId, 2 * COST_25C);
+    // 125¢ gross against 100¢: 25¢ absorbed, the seat reads 100¢.
+    expect((await seatCounted(w, w.marcusId)).usage.periodChargedMillicents).toBe(100_000);
+
+    await db.update(walletConsumerCaps).set({ monthlyCapCents: 150 }).where(eq(walletConsumerCaps.walletId, w.poolId));
+
+    // The count is the real 125¢ against the new 150¢: 25¢ left, so of two simultaneous 25¢ calls exactly one passes.
+    expect((await seatCounted(w, w.marcusId)).usage.periodChargedMillicents).toBe(125_000);
+    const gates = await Promise.all([seatGate(w, w.marcusId), seatGate(w, w.marcusId)]);
+    expect(gates.filter((g) => g.allowed)).toHaveLength(1);
+    expect(gates.find((g) => !g.allowed)).toMatchObject({ refusal: { reason: 'source_cap_reached' } });
+    // And its stream may spend nothing past the reservation: 150 − 125 − 25 = 0.
+    expect(gates.find((g) => g.allowed)).toMatchObject({ balanceSnapshot: { netSpendableCents: 0 } });
+  });
+
+  it('WAL-2 (partial) a cap LOWERED below what is already spent leaves no room — never negative — until the pool refills', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+    const w = world;
+    await db.insert(walletConsumerCaps).values({ walletId: w.poolId, consumerKey: `user:${w.marcusId}`, monthlyCapCents: 100 });
+    for (let call = 1; call <= 3; call += 1) await seatCallCosting(w, w.marcusId, COST_25C);
+
+    await db.update(walletConsumerCaps).set({ monthlyCapCents: 50 }).where(eq(walletConsumerCaps.walletId, w.poolId));
+
+    // 75¢ spent against 50¢: the seat reads full (50¢), not 75¢ and not negative room; refused.
+    expect((await seatCounted(w, w.marcusId)).usage.periodChargedMillicents).toBe(50_000);
+    expect(await seatGate(w, w.marcusId)).toMatchObject({ allowed: false, refusal: { reason: 'source_cap_reached' } });
+    // Not forever: the next refill starts a period with the new cap whole — two 25¢ calls.
+    await db.update(creditLedger).set({ createdAt: new Date(Date.now() - 3_600_000) }).where(and(eq(creditLedger.userId, w.marcusId), eq(creditLedger.walletId, w.poolId)));
+    await db.update(wallets).set({ monthlyPeriodStart: new Date(Date.now() - 60_000) }).where(eq(wallets.id, w.poolId));
+    expect(await spendUntilRefused(w, w.marcusId)).toBe(2);
+  });
+
+  it('WAL-2 (partial) a correction larger than its call nets that call to zero — it never manufactures room for other calls', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+    const w = world;
+    const logId = await seatCallCosting(w, w.marcusId, COST_25C);
+    // A correction row of −60¢ against that 25¢ call (a malformed or double refund).
+    await db.insert(creditLedger).values({ userId: w.marcusId, walletId: w.poolId, entryType: 'adjustment', bucket: 'monthly', amountCents: 60, chargeMillicents: -60_000, aiUsageLogId: logId, consumeStatus: 'applied', appliedCents: 0 });
+
+    // That call counts 0, not −35¢: the 100¢ allowance holds exactly four more 25¢ calls.
+    expect((await seatCounted(w, w.marcusId)).usage.periodChargedMillicents).toBe(0);
+    expect(await spendUntilRefused(w, w.marcusId)).toBe(4);
+  });
+
   it('WAL-2 (partial) WAL-7 (partial) a seat stream\'s own budget is bounded by what is left of the DAILY cap when it is the smaller', async () => {
     if (!dbAvailable) return;
     world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });

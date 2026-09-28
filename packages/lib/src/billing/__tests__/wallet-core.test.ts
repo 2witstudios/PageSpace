@@ -26,6 +26,7 @@ import {
   seatSpentCents,
   seatCapCheck,
   seatOvershootDeltaMillicents,
+  seatCountedMillicents,
   seatLegSpendableCents,
   seatPeriodStartMs,
   type ResolveSpendSourceInput,
@@ -690,6 +691,17 @@ describe('seat allowance — the per-consumer monthly cap on the org pool', () =
   it('WAL-2 (partial) WAL-7 (partial) the seat leg is bounded by the smaller of what is left today and this period', () => {
     expect(seatLegSpendableCents({ poolSpendableCents: c(9000), capCents: c(100), dailyCapCents: c(50), usage: usage(40_000, 0, 30_000) })).toBe(c(20));
     expect(seatLegSpendableCents({ poolSpendableCents: c(9000), capCents: c(100), dailyCapCents: c(50), usage: usage(90_000, 0, 0) })).toBe(c(10));
+  });
+
+  it.each([
+    ['below the cap it is the gross', c(100), 75_000, 75_000],
+    ['past the cap it reads the cap', c(100), 125_000, 100_000],
+    ['a cap raised past the gross reads the gross — nothing stored from the old cap', c(150), 125_000, 125_000],
+    ['a cap lowered below the gross reads the cap: no room, never negative', c(50), 75_000, 50_000],
+    ['never below zero', c(100), -35_000, 0],
+    ['no cap is the gross', null, 70_000, 70_000],
+  ] as const)('WAL-2 (partial) WAL-7 (partial) seatCountedMillicents judges gross against the cap in force now: %s', (_label, capCents, grossMillicents, expected) => {
+    expect(seatCountedMillicents({ capCents, grossMillicents })).toBe(expected);
   });
 
   const win = (grossMillicents: number, absorbedMillicents: number) => ({ grossMillicents, absorbedMillicents });
