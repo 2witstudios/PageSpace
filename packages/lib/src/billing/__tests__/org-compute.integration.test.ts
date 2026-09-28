@@ -425,7 +425,9 @@ describe('the org compute billing epoch', () => {
       reconcileSandboxStorageSerialized(storageDeps(w, () => TICK_1)),
       reconcileSandboxStorageSerialized(storageDeps(w, () => TICK_1)),
     ]);
-    const forgiven = runs.reduce((sum, r) => sum + ('result' in r && r.result ? r.result.orgBacklogForgiven : 0), 0);
+    // Whether the second run found the lock busy or ran after the first released it, the backlog
+    // is forgiven once: a later run sees the watermark already moved past the epoch.
+    const forgiven = runs.reduce((sum, r) => sum + (r.outcome === 'reconciled' ? r.orgBacklogForgiven : 0), 0);
     expect(forgiven).toBe(1);
     expect(await ledgerOnWallet(w.poolId)).toEqual([]);
   });
