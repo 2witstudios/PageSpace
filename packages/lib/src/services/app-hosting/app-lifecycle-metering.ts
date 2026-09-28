@@ -587,6 +587,31 @@ export interface SettleAndCloseResult {
 }
 
 /**
+ * The hold a window settles against, on the wallet `charge` settles on — never across a payer
+ * change (review 5343636479 P1-1). When the drive moved into or out of an org since the hold was
+ * placed, the stale hold (on the OLD payer's wallet) is released and a fresh one acquired on the
+ * new payer's; if that wallet cannot cover it, the span settles unreserved on the right wallet
+ * (it was already consumed) and the meter's own re-gate parks the app. Never settles the old hold.
+ */
+export async function holdForCharge(
+  row: PublishedApp,
+  charge: ComputeCharge,
+  billing: AppBillingDeps,
+): Promise<string | undefined> {
+  const holdId = row.awakeHoldId ?? undefined;
+  if (holdId === undefined || (await billing.holdMatchesCharge({ holdId, charge }))) return holdId;
+  loggers.ai.warn('Published-app payer changed mid-window: the old hold is released and re-acquired on the new payer\'s wallet', {
+    publishedAppId: row.id,
+    driveId: row.driveId,
+    staleHoldId: holdId,
+    chargeKind: charge.kind,
+  });
+  await billing.releaseHold(holdId);
+  const gate = await billing.gate({ charge });
+  return gate.allowed ? gate.holdId : undefined;
+}
+
+/**
  * The seconds of a closing window that are actually billed: all of them for a personal charge;
  * for an org charge, only those after org compute billing went live (WAL-9) — the span before
  * the epoch, which the interim refusal left on the row, is forgiven and logged with what it
@@ -679,7 +704,7 @@ async function settleAndClose(
       try {
         const settle = await deps.billing.trackUsage({
           charge,
-          holdId: row.awakeHoldId ?? undefined,
+          holdId: await holdForCharge(row, charge, deps.billing),
           activeSeconds,
           driveId: row.driveId,
           publishedAppId: row.id,
@@ -853,7 +878,7 @@ async function settleAbandonedTail(
   try {
     const settle = await deps.billing.trackUsage({
       charge,
-      holdId: row.awakeHoldId ?? undefined,
+      holdId: await holdForCharge(row, charge, deps.billing),
       activeSeconds,
       driveId: row.driveId,
       publishedAppId: row.id,

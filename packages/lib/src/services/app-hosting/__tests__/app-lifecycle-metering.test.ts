@@ -89,6 +89,7 @@ function appRow(over: Partial<PublishedApp> = {}): PublishedApp {
 function makeDeps(over: Partial<AppLifecycleMeteringDeps> = {}): {
   deps: AppLifecycleMeteringDeps;
   gate: ReturnType<typeof vi.fn>;
+  holdMatchesCharge: ReturnType<typeof vi.fn>;
   trackUsage: ReturnType<typeof vi.fn>;
   releaseHold: ReturnType<typeof vi.fn>;
   startMachine: ReturnType<typeof vi.fn>;
@@ -98,6 +99,8 @@ function makeDeps(over: Partial<AppLifecycleMeteringDeps> = {}): {
   const gate = vi.fn<AppBillingDeps['gate']>(async () => ({ allowed: true, holdId: 'hold-1' }));
   const trackUsage = vi.fn(async () => ({ persisted: true, creditsSettled: true }));
   const releaseHold = vi.fn(async () => {});
+  // The window's hold is on the charge's wallet unless a test moves the payer mid-window.
+  const holdMatchesCharge = vi.fn<AppBillingDeps['holdMatchesCharge']>(async () => true);
   const startMachine = vi.fn(async () => {});
   const stopMachine = vi.fn(async () => {});
   // Acquires by default. A test that wants the meter to be mid-tick overrides it
@@ -110,6 +113,7 @@ function makeDeps(over: Partial<AppLifecycleMeteringDeps> = {}): {
       gate,
       trackUsage,
       releaseHold,
+      holdMatchesCharge,
     },
     startMachine,
     stopMachine,
@@ -121,7 +125,7 @@ function makeDeps(over: Partial<AppLifecycleMeteringDeps> = {}): {
     orgComputeBillingEpoch: async () => new Date(0),
     ...over,
   };
-  return { deps, gate, trackUsage, releaseHold, startMachine, stopMachine, serializeSettle };
+  return { deps, gate, trackUsage, releaseHold, holdMatchesCharge, startMachine, stopMachine, serializeSettle };
 }
 
 function seed(row: PublishedApp | null, returning: unknown[][] = []) {
@@ -691,6 +695,35 @@ describe('stopPublishedApp', () => {
     await stopPublishedApp('app-1', 'idle', deps);
 
     expect(trackUsage).toHaveBeenCalledWith(expect.objectContaining({ charge: orgCharge, activeSeconds: 600 }));
+  });
+
+  it("WAL-9 (partial) a drive that moved into an org mid-wake: the stale hold is RELEASED and a fresh one taken on the org charge — never settled across the change", async () => {
+    const orgCharge = { kind: 'org' as const, orgId: 'org-northwind', userId: 'lead-marcus' };
+    const { deps, gate, trackUsage, releaseHold, holdMatchesCharge } = makeDeps();
+    deps.billing.resolveCharge = async () => orgCharge;
+    holdMatchesCharge.mockResolvedValue(false);
+    gate.mockResolvedValue({ allowed: true, holdId: 'hold-on-pool' });
+    seed(running());
+
+    await stopPublishedApp('app-1', 'idle', deps);
+
+    expect(holdMatchesCharge).toHaveBeenCalledWith({ holdId: 'hold-1', charge: orgCharge });
+    expect(releaseHold).toHaveBeenCalledWith('hold-1');
+    expect(gate).toHaveBeenCalledWith({ charge: orgCharge });
+    expect(trackUsage).toHaveBeenCalledWith(expect.objectContaining({ charge: orgCharge, holdId: 'hold-on-pool' }));
+  });
+
+  it('WAL-9 (partial) when the new payer cannot cover a re-acquired hold, the consumed span still settles on the NEW payer, unreserved — never the old hold', async () => {
+    const { deps, gate, trackUsage, releaseHold, holdMatchesCharge } = makeDeps();
+    deps.billing.resolveCharge = async () => ({ kind: 'user', userId: 'lead-marcus' });
+    holdMatchesCharge.mockResolvedValue(false);
+    gate.mockResolvedValue({ allowed: false, reason: 'out_of_credits' });
+    seed(running());
+
+    await stopPublishedApp('app-1', 'idle', deps);
+
+    expect(releaseHold).toHaveBeenCalledWith('hold-1');
+    expect(trackUsage).toHaveBeenCalledWith(expect.objectContaining({ charge: { kind: 'user', userId: 'lead-marcus' }, holdId: undefined }));
   });
 
   it('given nothing to bill, should RELEASE the hold rather than settle against it', async () => {

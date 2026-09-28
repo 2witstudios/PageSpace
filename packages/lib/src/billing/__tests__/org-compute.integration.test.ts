@@ -45,6 +45,7 @@ import {
 } from '../../services/app-hosting/app-lifecycle-metering';
 import { ORG_COMPUTE_EPOCH_KEY, stampOrgComputeBillingEpoch } from '../org-compute-epoch';
 import { consumeCredits } from '../credit-consume';
+import { AIMonitoring } from '../../monitoring/ai-monitoring';
 
 const originalMode = process.env.DEPLOYMENT_MODE;
 let dbAvailable = false;
@@ -545,6 +546,102 @@ describe('published apps in an org drive', () => {
 
     expect((await ledgerOnWallet(w.soloWalletId)).filter((r) => r.entryType === 'usage')).toHaveLength(1);
     expect(await ledgerOnWallet(w.poolId)).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// The payer changes mid-window (review 5343636479 P1-1): never settle across the change
+// ---------------------------------------------------------------------------------------------
+
+describe('a payer change while an app is awake', () => {
+  it("WAL-9 (partial) a drive moved INTO an org mid-wake settles on the ORG POOL — the person's wallet is untouched and the stale hold released", async () => {
+    const w = (world = await build({ poolCents: FUNDED }));
+    await stampOrgComputeBillingEpoch(new Date('2026-01-01T00:00:00.000Z'));
+    const appId = await seedStoppedApp(w, w.soloDriveId);
+    await db.update(publishedApps).set({ ownerId: w.soloId }).where(eq(publishedApps.id, appId));
+    const c = clock('2026-09-28T10:00:00.000Z');
+    const started = { count: 0 };
+
+    await wakePublishedApp(appId, appDeps(c, started));
+    const [staleHold] = await holdsOnWallet(w.soloWalletId);
+    expect(staleHold).toBeDefined();
+    const soloBefore = await walletRow(w.soloWalletId);
+    const poolBefore = await walletRow(w.poolId);
+
+    await db.update(drives).set({ orgId: w.orgId }).where(eq(drives.id, w.soloDriveId));
+    c.advance(3_600_000);
+    const stopped = await stopPublishedApp(appId, 'idle', appDeps(c, started));
+
+    expect(stopped).toMatchObject({ outcome: 'stopped', billedSeconds: 3600 });
+    const usage = (await ledgerOnWallet(w.poolId)).filter((r) => r.entryType === 'usage');
+    expect(usage).toHaveLength(1);
+    expect(usage[0]).toMatchObject({ spendKind: 'compute', consumeStatus: 'applied' });
+    expect(drawnMillicents(poolBefore, await walletRow(w.poolId))).toBe(usage[0].chargeMillicents);
+    expect(await ledgerOnWallet(w.soloWalletId)).toEqual([]);
+    expect(await walletRow(w.soloWalletId)).toEqual(soloBefore);
+    expect(await db.select().from(creditHolds).where(eq(creditHolds.id, staleHold.id))).toEqual([]);
+    expect(await holdsOnWallet(w.poolId)).toEqual([]);
+  });
+
+  it("WAL-9 (partial) a drive moved OUT of an org mid-wake settles on its owner's own wallet — the org pool is untouched", async () => {
+    const w = (world = await build({ poolCents: FUNDED }));
+    await stampOrgComputeBillingEpoch(new Date('2026-01-01T00:00:00.000Z'));
+    const appId = await seedStoppedApp(w, w.orgDriveId);
+    const c = clock('2026-09-28T10:00:00.000Z');
+    const started = { count: 0 };
+
+    await wakePublishedApp(appId, appDeps(c, started));
+    expect(await holdsOnWallet(w.poolId)).toHaveLength(1);
+    const poolBefore = await walletRow(w.poolId);
+
+    await db.update(drives).set({ orgId: null }).where(eq(drives.id, w.orgDriveId));
+    c.advance(3_600_000);
+    await stopPublishedApp(appId, 'idle', appDeps(c, started));
+
+    expect((await ledgerOnWallet(w.leadWalletId)).filter((r) => r.entryType === 'usage')).toHaveLength(1);
+    expect(await ledgerOnWallet(w.poolId)).toEqual([]);
+    expect(await walletRow(w.poolId)).toEqual(poolBefore);
+    expect(await holdsOnWallet(w.poolId)).toEqual([]);
+  });
+
+  it('a settle whose charge names a different wallet than its hold is REFUSED by consumeCredits — neither wallet charged, the call closed so no sweep bills it', async () => {
+    const w = (world = await build({ poolCents: FUNDED }));
+    const [hold] = await db.insert(creditHolds).values({ userId: w.leadId, walletId: w.leadWalletId, estCents: 50, expiresAt: new Date(Date.now() + 600_000), spendKind: 'compute' }).returning();
+    const [log] = await db.insert(aiUsageLogs).values({ id: createId(), userId: w.leadId, provider: 'fly', model: 'x', cost: 0.5, source: 'terminal', timestamp: new Date() }).returning();
+    const leadBefore = await walletRow(w.leadWalletId);
+    const poolBefore = await walletRow(w.poolId);
+
+    const status = await consumeCredits({ aiUsageLogId: log.id, userId: w.leadId, costDollars: 0.5, holdId: hold.id, walletId: w.poolId, spendKind: 'compute' });
+
+    expect(status).toBe('refused');
+    expect(await walletRow(w.leadWalletId)).toEqual(leadBefore);
+    expect(await walletRow(w.poolId)).toEqual(poolBefore);
+    const [claim] = await db.select().from(creditLedger).where(eq(creditLedger.aiUsageLogId, log.id));
+    expect(claim).toMatchObject({ consumeStatus: 'skipped', chargeMillicents: 0, amountCents: 0 });
+    expect(claim.consumeError).toMatch(/hold_wallet_mismatch/);
+    expect(await db.select().from(creditHolds).where(eq(creditHolds.id, hold.id))).toEqual([]);
+  });
+
+  it('AIMonitoring.trackUsage refuses a mismatched hold BEFORE writing anything — no usage row, no ledger row, the window stays open', async () => {
+    const w = (world = await build({ poolCents: FUNDED }));
+    const [hold] = await db.insert(creditHolds).values({ userId: w.leadId, walletId: w.leadWalletId, estCents: 50, expiresAt: new Date(Date.now() + 600_000), spendKind: 'compute' }).returning();
+
+    const outcome = await AIMonitoring.trackUsage({
+      userId: w.leadId,
+      walletId: w.poolId,
+      holdId: hold.id,
+      provider: 'fly',
+      model: 'published-app-awake',
+      source: 'terminal',
+      providerCostDollars: 0.5,
+      success: true,
+      costSource: 'list_price',
+      spendKind: 'compute',
+    });
+
+    expect(outcome).toEqual({ persisted: false, creditsSettled: false });
+    expect(await db.select().from(aiUsageLogs).where(inArray(aiUsageLogs.userId, w.userIds))).toEqual([]);
+    expect(await db.select().from(creditLedger).where(inArray(creditLedger.userId, w.userIds))).toEqual([]);
   });
 });
 

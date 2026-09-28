@@ -13,8 +13,11 @@ const gate = vi.hoisted(() => ({
   hasSpendableOrgPool: vi.fn(),
 }));
 vi.mock('../credit-gate', () => gate);
+const consume = vi.hoisted(() => ({ holdWalletId: vi.fn() }));
+vi.mock('../credit-consume', () => consume);
+vi.mock('../personal-wallet', () => ({ ensurePersonalRootWalletId: vi.fn(async (_db: unknown, userId: string) => `root-of-${userId}`) }));
 
-import { computeSettleWalletId, gateComputeCharge, hasSpendableComputeBalance, resolveComputeChargeTier } from '../compute-gate';
+import { computeSettleWalletId, gateComputeCharge, hasSpendableComputeBalance, holdMatchesCharge, resolveComputeChargeTier } from '../compute-gate';
 import type { ComputeCharge } from '../compute-charge';
 
 const ORG: ComputeCharge = { kind: 'org', orgId: 'org-1', userId: 'member-1' };
@@ -27,6 +30,7 @@ function tierRow(tier: string | null) {
 beforeEach(() => {
   mockDb.select.mockReset();
   for (const fn of Object.values(gate)) fn.mockReset();
+  consume.holdWalletId.mockReset();
 });
 
 describe('gateComputeCharge', () => {
@@ -68,10 +72,42 @@ describe('computeSettleWalletId', () => {
     expect(gate.findOrgPoolWalletId).toHaveBeenCalledWith('org-1');
   });
 
-  it('a gone pool answers null (do not settle), a personal charge undefined (the personal root)', async () => {
+  it("a gone pool answers null (do not settle); a personal charge names the person's own root explicitly", async () => {
     gate.findOrgPoolWalletId.mockResolvedValue(null);
     expect(await computeSettleWalletId(ORG)).toBeNull();
-    expect(await computeSettleWalletId(PERSON)).toBeUndefined();
+    expect(await computeSettleWalletId(PERSON)).toBe('root-of-owner-1');
+  });
+
+  it('names no wallet where billing is off — nothing moves money there', async () => {
+    const mode = process.env.DEPLOYMENT_MODE;
+    process.env.DEPLOYMENT_MODE = 'onprem';
+    try {
+      expect(await computeSettleWalletId(ORG)).toBeUndefined();
+      expect(await computeSettleWalletId(PERSON)).toBeUndefined();
+    } finally {
+      process.env.DEPLOYMENT_MODE = mode;
+    }
+  });
+});
+
+describe('holdMatchesCharge', () => {
+  it('WAL-9 (partial) a hold on the PERSON does not match an org charge (a drive moved into an org mid-run)', async () => {
+    consume.holdWalletId.mockResolvedValue('root-of-member-1');
+    gate.findOrgPoolWalletId.mockResolvedValue('pool-1');
+    expect(await holdMatchesCharge({ holdId: 'h', charge: ORG })).toBe(false);
+  });
+
+  it('WAL-9 (partial) a hold on the ORG POOL does not match a personal charge (a drive moved out of an org mid-run)', async () => {
+    consume.holdWalletId.mockResolvedValue('pool-1');
+    expect(await holdMatchesCharge({ holdId: 'h', charge: PERSON })).toBe(false);
+  });
+
+  it('matches a hold on the charge\'s own wallet, and a hold that no longer exists conflicts with nothing', async () => {
+    consume.holdWalletId.mockResolvedValue('pool-1');
+    gate.findOrgPoolWalletId.mockResolvedValue('pool-1');
+    expect(await holdMatchesCharge({ holdId: 'h', charge: ORG })).toBe(true);
+    consume.holdWalletId.mockResolvedValue(null);
+    expect(await holdMatchesCharge({ holdId: 'gone', charge: PERSON })).toBe(true);
   });
 });
 

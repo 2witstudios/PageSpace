@@ -21,7 +21,10 @@ vi.mock('../../../billing/credit-gate', () => ({
 }));
 
 const mockReleaseHold = vi.hoisted(() => vi.fn());
-vi.mock('../../../billing/credit-consume', () => ({ releaseHold: mockReleaseHold }));
+const mockHoldWalletId = vi.hoisted(() => vi.fn());
+vi.mock('../../../billing/credit-consume', () => ({ releaseHold: mockReleaseHold, holdWalletId: mockHoldWalletId }));
+// A personal charge settles on the person's personal root, named explicitly (P1-1).
+vi.mock('../../../billing/personal-wallet', () => ({ ensurePersonalRootWalletId: vi.fn(async (_db: unknown, userId: string) => `root-of-${userId}`) }));
 
 const mockTrackUsage = vi.hoisted(() => vi.fn());
 vi.mock('../../../monitoring/ai-monitoring', () => ({ AIMonitoring: { trackUsage: mockTrackUsage } }));
@@ -270,10 +273,10 @@ describe('defaultSandboxBillingDeps.trackUsage — org charge', () => {
     expect(mockTrackUsage).not.toHaveBeenCalled();
   });
 
-  it('a personal charge settles with no wallet override (the personal root)', async () => {
+  it("WAL-9 (partial) a personal charge names the person's personal root explicitly — a hold left on another wallet can never win", async () => {
     mockTrackUsage.mockResolvedValue({ persisted: true, creditsSettled: true });
     await defaultSandboxBillingDeps.trackUsage({ charge: { kind: 'user', userId: 'owner-1' }, activeSeconds: 60 });
-    expect(mockTrackUsage.mock.calls[0][0].walletId).toBeUndefined();
+    expect(mockTrackUsage.mock.calls[0][0].walletId).toBe('root-of-owner-1');
     expect(mockFindOrgPoolWalletId).not.toHaveBeenCalled();
   });
 });

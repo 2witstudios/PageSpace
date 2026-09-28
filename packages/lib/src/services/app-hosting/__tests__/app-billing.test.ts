@@ -24,7 +24,10 @@ vi.mock('../../../billing/credit-gate', () => ({
 }));
 
 const mockReleaseHold = vi.hoisted(() => vi.fn());
-vi.mock('../../../billing/credit-consume', () => ({ releaseHold: mockReleaseHold }));
+const mockHoldWalletId = vi.hoisted(() => vi.fn());
+vi.mock('../../../billing/credit-consume', () => ({ releaseHold: mockReleaseHold, holdWalletId: mockHoldWalletId }));
+// A personal charge settles on the person's personal root, named explicitly (P1-1).
+vi.mock('../../../billing/personal-wallet', () => ({ ensurePersonalRootWalletId: vi.fn(async (_db: unknown, userId: string) => `root-of-${userId}`) }));
 
 const mockTrackUsage = vi.hoisted(() => vi.fn());
 vi.mock('../../../monitoring/ai-monitoring', () => ({ AIMonitoring: { trackUsage: mockTrackUsage } }));

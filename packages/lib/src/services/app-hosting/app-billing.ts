@@ -34,7 +34,7 @@ import {
 } from '../../billing/credit-pricing';
 import { resolveEnvCharge, lookupDriveBillingFacts } from '../../billing/sandbox-payer';
 import type { ComputeCharge, OrgComputeGateRefusal } from '../../billing/compute-charge';
-import { computeSettleWalletId, gateComputeCharge, UNSETTLED_COMPUTE } from '../../billing/compute-gate';
+import { computeSettleWalletId, gateComputeCharge, holdMatchesCharge, UNSETTLED_COMPUTE } from '../../billing/compute-gate';
 import { AIMonitoring, type UsageTrackingOutcome } from '../../monitoring/ai-monitoring';
 import { chargeMillicents } from '../../billing/credit-core';
 import { calculateMachineCostDollars, PUBLISHED_APP_GUEST_SHAPE } from '../../monitoring/machine-pricing';
@@ -82,6 +82,13 @@ export interface AppBillingDeps {
   }) => Promise<UsageTrackingOutcome>;
   /** Releases a reservation without billing — every exit that never settles. */
   releaseHold: (holdId: string) => Promise<void>;
+  /**
+   * Whether a window's hold reserves on the wallet `charge` settles on. False when the payer
+   * changed since the hold was placed (a drive moved into or out of an org while the app was
+   * awake): the caller releases it and re-acquires on the right wallet rather than settling
+   * across the change (review 5343636479 P1-1).
+   */
+  holdMatchesCharge: (input: { holdId: string; charge: ComputeCharge }) => Promise<boolean>;
 }
 
 export const defaultAppBillingDeps: AppBillingDeps = {
@@ -163,6 +170,8 @@ export const defaultAppBillingDeps: AppBillingDeps = {
   async releaseHold(holdId) {
     await releaseCreditHold(holdId);
   },
+
+  holdMatchesCharge: (input) => holdMatchesCharge(input),
 };
 
 /**

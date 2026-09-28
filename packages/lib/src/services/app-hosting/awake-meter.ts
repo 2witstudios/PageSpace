@@ -53,6 +53,7 @@ import {
   utcDayOf,
 } from './app-metering-core';
 import {
+  holdForCharge,
   closeAppWindowAtBoundary,
   defaultAppLifecycleMeteringDeps,
   passThroughSettleLock,
@@ -491,7 +492,9 @@ async function meterOneApp(
   const settle = plan.activeSeconds > 0
     ? await deps.billing.trackUsage({
         charge,
-        holdId: row.awakeHoldId ?? undefined,
+        // Never across a payer change: a drive moved into or out of an org mid-window has its
+        // stale hold released and re-acquired on the new payer's wallet (P1-1).
+        holdId: await holdForCharge(row, charge, deps.billing),
         activeSeconds: plan.activeSeconds,
         driveId: row.driveId,
         publishedAppId: row.id,

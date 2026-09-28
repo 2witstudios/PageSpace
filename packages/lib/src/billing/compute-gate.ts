@@ -23,6 +23,9 @@ import {
   type GateOptions,
 } from './credit-gate';
 import { PERSONAL_SPEND } from './spend-target';
+import { holdWalletId } from './credit-consume';
+import { ensurePersonalRootWalletId } from './personal-wallet';
+import { isBillingEnabled } from '../deployment-mode';
 import { toSubscriptionTier, type SubscriptionTier } from './subscription-tiers';
 import type { UsageTrackingOutcome } from '../monitoring/ai-monitoring';
 import { computeChargeTier, orgComputeRefusalOf, type ComputeCharge, type OrgComputeGateRefusal } from './compute-charge';
@@ -79,12 +82,28 @@ export async function gateComputeCharge(charge: ComputeCharge, opts: ComputeGate
 }
 
 /**
- * The wallet a compute charge settles against: the org pool for an org charge (null when the
- * pool no longer exists — the caller must NOT settle), undefined for a personal charge (the
- * settle charges the person's personal root, as it always has).
+ * The wallet a compute charge settles against — ALWAYS named explicitly, so a hold left on a
+ * different wallet (the payer changed mid-run) is refused at settle rather than winning
+ * (review 5343636479 P1-1): the org pool for an org charge (null when the pool no longer
+ * exists — the caller must NOT settle), the person's personal root for a personal charge.
+ * Undefined only where billing is off: no wallet moves money there.
  */
 export async function computeSettleWalletId(charge: ComputeCharge): Promise<string | null | undefined> {
-  return charge.kind === 'org' ? findOrgPoolWalletId(charge.orgId) : undefined;
+  if (!isBillingEnabled()) return undefined;
+  if (charge.kind === 'org') return findOrgPoolWalletId(charge.orgId);
+  return ensurePersonalRootWalletId(db, charge.userId);
+}
+
+/**
+ * Whether `holdId` reserves on the wallet `charge` settles on. A hold that no longer exists
+ * conflicts with nothing (the settle names its wallet explicitly). Read-only for an org
+ * charge; a personal charge's root is created on demand, as its settle would.
+ */
+export async function holdMatchesCharge(input: { holdId: string; charge: ComputeCharge }): Promise<boolean> {
+  if (!isBillingEnabled()) return true;
+  const held = await holdWalletId(input.holdId);
+  if (held === null) return true;
+  return held === (await computeSettleWalletId(input.charge));
 }
 
 /**

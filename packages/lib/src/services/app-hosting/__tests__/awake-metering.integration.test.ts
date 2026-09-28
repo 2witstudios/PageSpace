@@ -594,6 +594,7 @@ describe.skipIf(dbSkipExplicitlyAllowed())('stopPublishedApp — the final settl
         // that resolved with nothing would exercise the lost-charge path instead.
         trackUsage: async () => ({ persisted: true, creditsSettled: true }),
         releaseHold: async () => {},
+        holdMatchesCharge: async () => true,
       },
       startMachine: async () => {},
       stopMachine: async () => {},
@@ -684,6 +685,7 @@ describe.skipIf(dbSkipExplicitlyAllowed())('stopPublishedApp — the final settl
           gate: async () => ({ allowed: true, holdId: 'hold-x' }),
           trackUsage: async () => ({ persisted: false, creditsSettled: false }),
           releaseHold: async () => {},
+          holdMatchesCharge: async () => true,
         },
       }),
     );

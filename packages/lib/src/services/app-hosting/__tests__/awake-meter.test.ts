@@ -40,6 +40,7 @@ function makeDeps(over: Partial<AwakeMeterDeps> = {}) {
   // test can hand it a refusal (which carries `reason` and no `holdId`).
   const gate = vi.fn<AppBillingDeps['gate']>(async () => ({ allowed: true, holdId: 'hold-next' }));
   const releaseHold = vi.fn(async () => {});
+  const holdMatchesCharge = vi.fn<AppBillingDeps['holdMatchesCharge']>(async () => true);
   const writeSettle = vi.fn<AwakeMeterDeps['writeSettle']>(async () => 'advanced');
   const stampWindowStart = vi.fn(async () => 'stamped' as const);
   const closeAtBoundary = vi.fn(async () => ({ billedSeconds: 600, failed: false }));
@@ -48,7 +49,7 @@ function makeDeps(over: Partial<AwakeMeterDeps> = {}) {
 
   const deps: AwakeMeterDeps = {
     isEnabled: () => true,
-    billing: { resolveCharge: async () => ({ kind: 'user' as const, userId: 'payer-1' }), gate, trackUsage, releaseHold },
+    billing: { resolveCharge: async () => ({ kind: 'user' as const, userId: 'payer-1' }), gate, trackUsage, releaseHold, holdMatchesCharge },
     listRunningApps: async () => [runningApp()],
     findStopBoundary,
     writeSettle,
@@ -60,7 +61,7 @@ function makeDeps(over: Partial<AwakeMeterDeps> = {}) {
     orgComputeBillingEpoch: async () => EPOCH,
     ...over,
   };
-  return { deps, trackUsage, gate, releaseHold, writeSettle, stampWindowStart, closeAtBoundary, park, findStopBoundary };
+  return { deps, trackUsage, gate, releaseHold, holdMatchesCharge, writeSettle, stampWindowStart, closeAtBoundary, park, findStopBoundary };
 }
 
 /** Narrow the run to its metered shape — `disabled` carries no counters. */
@@ -407,6 +408,18 @@ describe('meterAwakePublishedApps — attribution and isolation', () => {
 
     expect(trackUsage).toHaveBeenCalledWith(expect.objectContaining({ charge: ORG_CHARGE, activeSeconds: 600 }));
     expect(run.orgBacklogForgiven).toBe(1);
+  });
+
+  it('WAL-9 (partial) a payer change mid-window: the stale hold is released and re-acquired on the new charge before the settle', async () => {
+    const { deps, trackUsage, gate, releaseHold, holdMatchesCharge } = makeDeps();
+    deps.billing.resolveCharge = async () => ORG_CHARGE;
+    holdMatchesCharge.mockResolvedValue(false);
+    gate.mockResolvedValueOnce({ allowed: true, holdId: 'hold-on-pool' });
+
+    await meter(deps);
+
+    expect(releaseHold).toHaveBeenCalledWith('hold-1');
+    expect(trackUsage).toHaveBeenCalledWith(expect.objectContaining({ charge: ORG_CHARGE, holdId: 'hold-on-pool' }));
   });
 
   it('a PERSONAL app with an old watermark is never forgiven — the epoch is only for org rows', async () => {

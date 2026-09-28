@@ -8,7 +8,8 @@ import { sql, and, eq, gte, lte } from '@pagespace/db/operators';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import type { SpendKind } from '@pagespace/db/schema/credits';
 import { writeAiUsage } from '../logging/logger-database';
-import { consumeCredits, releaseHold } from '../billing/credit-consume';
+import { consumeCredits, holdWalletId, releaseHold } from '../billing/credit-consume';
+import { isBillingEnabled } from '../deployment-mode';
 import { CACHE_READ_DISCOUNT_FACTOR_BPS } from '../billing/credit-pricing';
 import { loggers } from '../logging/logger-config';
 import { normalizeUsageSource, type AIUsageSource } from './usage-source';
@@ -1411,6 +1412,25 @@ export async function trackAIUsage(data: AIUsageData): Promise<UsageTrackingOutc
     // log AND the charge — and with no aiUsageLogs row the reconcile cron's orphan
     // sweep has nothing to recover from. Awaiting makes the write durable before
     // the request returns. Still never throws into the AI request (see catch).
+    // FAIL CLOSED (review 5343636479 P1-1): a charge that names a wallet other than the
+    // one its hold reserves on is refused BEFORE anything is written — no usage row (so no
+    // sweep can bill it later), no charge to either wallet. The caller keeps its window
+    // open; a meter whose payer changed mid-window releases and re-acquires the hold on the
+    // right wallet first (app-lifecycle-metering, awake-meter), so this is the backstop.
+    // Only where money moves: a billing-off deployment charges no wallet at all.
+    if (isBillingEnabled() && data.holdId && data.walletId !== undefined) {
+      const held = await holdWalletId(data.holdId).catch(() => null);
+      if (held !== null && held !== data.walletId) {
+        loggers.ai.error('AI usage settle REFUSED: the charge names a different wallet than its hold — nothing written, nothing charged', new Error('hold wallet mismatch'), {
+          holdId: data.holdId,
+          holdWalletId: held,
+          requestedWalletId: data.walletId,
+          model: data.model,
+          source: data.source,
+        });
+        return { persisted: false, creditsSettled: false };
+      }
+    }
     try {
       const aiUsageLogId = await writeAiUsage({
         userId: data.userId,

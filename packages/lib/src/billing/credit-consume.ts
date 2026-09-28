@@ -445,42 +445,92 @@ async function settleOnChildWallet(
  *                 claimed, the orphan sweep if it was not. NOT a lost charge, and
  *                 nothing upstream should re-bill the window on it: the sweep will
  *                 settle it, and re-billing would charge the payer twice.
+ *  - `refused`    the caller named a wallet other than the one its hold reserves on. Nothing
+ *                 was charged to EITHER wallet: the call is closed with a zero, terminal
+ *                 claim row (so no sweep ever bills it) and the hold is released. A control,
+ *                 not a log line (review 5343636479 P1-1).
  *  - `unbillable` the cost was not a finite non-negative number, so there is
  *                 nothing to settle and nothing to recover. A programming/upstream
  *                 error, reported rather than folded into `deferred` so it cannot
  *                 be mistaken for work a cron will finish.
  */
-export type CreditSettleStatus = 'settled' | 'deferred' | 'unbillable';
+export type CreditSettleStatus = 'settled' | 'deferred' | 'unbillable' | 'refused';
+
+/** The wallet a hold reserves on, or null when the hold no longer exists (settled, released, expired). */
+export async function holdWalletId(holdId: string): Promise<string | null> {
+  const [hold] = await db.select({ walletId: creditHolds.walletId }).from(creditHolds).where(eq(creditHolds.id, holdId));
+  return hold?.walletId ?? null;
+}
 
 /**
  * The wallet a call settles on (WAL-5). The gate's hold names the wallet the call was
- * admitted against, so while the hold is present IT decides: a caller's `walletId` that
- * disagrees is refused (logged, never charged) and the charge settles where the hold was
- * placed — a hold on one wallet is never settled on another, and the drive hold is never
- * deleted by a settle on the personal root. Refusing by writing nothing would not help:
- * the orphan sweep re-bills an unclaimed call to the payer's personal root, the same
- * wrong wallet. With no hold (the reconcile cron, an expired hold), the caller's wallet,
- * else the payer's personal root, as before wallets.
+ * admitted against. When the caller ALSO names the wallet it means to charge and the two
+ * disagree, the settle FAILS CLOSED (review 5343636479 P1-1): neither wallet is charged.
+ * Letting the hold win (#2726) turned a payer that changed mid-run — a drive moved into or
+ * out of an org while its app was awake — into a charge on the wrong party, a person
+ * paying for an org's compute, with only a log line as a trace. Callers whose payer can
+ * change mid-run release and re-acquire the hold on the right wallet before settling
+ * (app-lifecycle-metering, awake-meter); anything that still reaches here mismatched is
+ * refused, not re-routed. With no hold (the reconcile cron, an expired hold), the caller's
+ * wallet, else the payer's personal root, as before wallets.
  */
-async function settleWalletId(input: ConsumeCreditsInput): Promise<string> {
+async function settleWalletId(
+  input: ConsumeCreditsInput,
+): Promise<{ walletId: string } | { mismatch: { holdWalletId: string; requestedWalletId: string } }> {
   if (input.holdId) {
-    const [hold] = await db
-      .select({ walletId: creditHolds.walletId })
-      .from(creditHolds)
-      .where(eq(creditHolds.id, input.holdId));
-    if (hold) {
-      if (input.walletId !== undefined && input.walletId !== hold.walletId) {
-        loggers.ai.error('credit settle wallet does not match its hold', {
-          holdId: input.holdId,
-          holdWalletId: hold.walletId,
-          requestedWalletId: input.walletId,
-          aiUsageLogId: input.aiUsageLogId,
-        });
+    const held = await holdWalletId(input.holdId);
+    if (held !== null) {
+      if (input.walletId !== undefined && input.walletId !== held) {
+        return { mismatch: { holdWalletId: held, requestedWalletId: input.walletId } };
       }
-      return hold.walletId;
+      return { walletId: held };
     }
   }
-  return input.walletId ?? ensurePersonalRootWalletId(db, input.userId);
+  return { walletId: input.walletId ?? (await ensurePersonalRootWalletId(db, input.userId)) };
+}
+
+/**
+ * Close a call whose charge named a different wallet than its hold, charging NEITHER: a
+ * terminal zero claim (consumeStatus 'skipped', chargeMillicents 0, the reason in
+ * consumeError) so neither backfill sweep ever settles it, and the hold released. The
+ * intended real cost stays on the row for the audit trail.
+ */
+async function refuseMismatchedSettle(
+  input: ConsumeCreditsInput,
+  mismatch: { holdWalletId: string; requestedWalletId: string },
+  realCostCents: number,
+  markupBps: number,
+): Promise<CreditSettleStatus> {
+  loggers.ai.error('credit settle REFUSED: the charge names a different wallet than its hold — neither wallet charged', new Error('hold wallet mismatch'), {
+    holdId: input.holdId,
+    holdWalletId: mismatch.holdWalletId,
+    requestedWalletId: mismatch.requestedWalletId,
+    aiUsageLogId: input.aiUsageLogId,
+    userId: input.userId,
+  });
+  await db
+    .insert(creditLedger)
+    .values({
+      userId: input.userId,
+      walletId: mismatch.requestedWalletId,
+      entryType: 'usage',
+      bucket: 'monthly',
+      amountCents: 0,
+      appliedCents: 0,
+      chargeMillicents: 0,
+      aiUsageLogId: input.aiUsageLogId,
+      realCostCents,
+      markupBps,
+      consumeStatus: 'skipped',
+      consumeError: `hold_wallet_mismatch: hold on ${mismatch.holdWalletId}, charge named ${mismatch.requestedWalletId}`,
+      spendKind: input.spendKind ?? 'ai',
+    })
+    .onConflictDoNothing({
+      target: creditLedger.aiUsageLogId,
+      where: sql`${creditLedger.aiUsageLogId} IS NOT NULL AND ${creditLedger.entryType} = 'usage'`,
+    });
+  if (input.holdId) await db.delete(creditHolds).where(eq(creditHolds.id, input.holdId));
+  return 'refused';
 }
 
 export async function consumeCredits(input: ConsumeCreditsInput): Promise<CreditSettleStatus> {
@@ -515,7 +565,9 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<Credit
   let ledgerId: string;
   let walletId: string;
   try {
-    walletId = await settleWalletId(input);
+    const resolved = await settleWalletId(input);
+    if ('mismatch' in resolved) return await refuseMismatchedSettle(input, resolved.mismatch, realCostCents, markupBps);
+    walletId = resolved.walletId;
     const claimed = await db
       .insert(creditLedger)
       .values({
