@@ -5,10 +5,11 @@
  * taken from the pool this period is read from the ledger, the append-only record the money
  * already moves through, so there is no second counter to drift from it:
  *
- *   SUM(credit_ledger.chargeMillicents, a seat_overshoot row negated)
+ *   SUM(credit_ledger.chargeMillicents)   -- gross, per window
  *     WHERE walletId = the pool AND userId = the consumer
- *       AND entryType IN ('usage', 'adjustment', 'seat_overshoot')
- *       AND createdAt >= the pool's period start
+ *       AND entryType IN ('usage', 'adjustment') AND createdAt >= the window start
+ *   minus that window's OWN seat-overshoot rows ('seat_overshoot_month' for the period,
+ *   'seat_overshoot_day' for today)
  *
  * - `usage` rows carry each settled call's full intended charge, including any part that
  *   overshot into pool debt (the pool still pays it). A claimed-but-unsettled row is
@@ -19,10 +20,12 @@
  * - the overshoot `adjustment` row written beside a usage row carries NO chargeMillicents
  *   (its cents are already in the usage row's charge), so the SUM skips it and never counts
  *   the overshoot twice.
- * - a `seat_overshoot` row (written at settle, under the pool lock) carries the millicents of
- *   a call that went past the consumer's caps: the pool paid them (WAL-6b/c), so they come
- *   OFF the consumer's count. A consumer's settled seat spend therefore never ends past
- *   their cap (see seatOvershootMillicents).
+ * - a seat-overshoot row (written at settle and at reconcile, under the pool lock) carries
+ *   a SIGNED change to what one window's cap forgave: the pool paid the spend past the cap
+ *   (WAL-6b/c), so it comes OFF the consumer's count in THAT window only, and a refund takes
+ *   back forgiveness that no longer applies. Each window's count is therefore min(gross, cap)
+ *   (see seatOvershootDeltaMillicents): a day's overshoot never forgives the month, nor the
+ *   month's the day.
  * - grants, top-ups and donations are money INTO wallets, never a consumer's draw.
  *
  * Plus this consumer's live holds on the pool (calls in flight), counted like spend.
@@ -36,12 +39,12 @@ import type { db } from '@pagespace/db/db';
 import { and, eq, gt, gte, inArray, sql } from '@pagespace/db/operators';
 import { creditHolds, creditLedger } from '@pagespace/db/schema/credits';
 import { walletConsumerCaps } from '@pagespace/db/schema/wallets';
-import { seatAllowanceCents, seatPeriodStartMs, userConsumerKey, utcDayStartMs, type SeatUsage } from './wallet-core';
+import { seatAllowanceCents, seatPeriodStartMs, userConsumerKey, utcDayStartMs, type SeatUsage, type SeatWindowCharge } from './wallet-core';
 
 type Reader = Pick<typeof db, 'select'>;
 
-/** The ledger entry for a seat call's cost past the consumer's caps, absorbed by the pool. */
-export const SEAT_OVERSHOOT_ENTRY = 'seat_overshoot';
+/** The ledger entries for a seat's spend past one cap, absorbed by the pool: one per cap window. */
+export const SEAT_OVERSHOOT_ENTRY = { month: 'seat_overshoot_month', day: 'seat_overshoot_day' } as const;
 
 export interface SeatCapFacts {
   /** This consumer's monthly seat allowance on the pool, whole cents (never unlimited). */
@@ -52,7 +55,10 @@ export interface SeatCapFacts {
    * D20.5's 10-credit day is below one call's reservation and would refuse every seat call.
    */
   dailyCapCents: number | null;
+  /** Settled spend net of each window's own absorbed overshoot, plus holds: what the caps judge. */
   usage: SeatUsage;
+  /** Each window's gross settled spend and what the pool absorbed of it (the settle-side facts). */
+  windows: { period: SeatWindowCharge; day: SeatWindowCharge };
 }
 
 export async function loadSeatCapFacts(
@@ -75,17 +81,20 @@ export async function loadSeatCapFacts(
     .limit(1);
   // The day window never reaches back before the period: a refill mid-day starts both afresh.
   const dayStart = new Date(Math.max(periodStart.getTime(), utcDayStartMs(input.now.getTime())));
-  const signed = sql`CASE WHEN ${creditLedger.entryType} = ${SEAT_OVERSHOOT_ENTRY} THEN -${creditLedger.chargeMillicents} ELSE ${creditLedger.chargeMillicents} END`;
+  const isSpend = sql`${creditLedger.entryType} IN ('usage', 'adjustment')`;
+  const inDay = sql`${creditLedger.createdAt} >= ${dayStart}`;
   const [charged] = await executor
     .select({
-      millicents: sql<string>`coalesce(sum(${signed}), 0)`,
-      dayMillicents: sql<string>`coalesce(sum(${signed}) FILTER (WHERE ${creditLedger.createdAt} >= ${dayStart}), 0)`,
+      gross: sql<string>`coalesce(sum(${creditLedger.chargeMillicents}) FILTER (WHERE ${isSpend}), 0)`,
+      absorbed: sql<string>`coalesce(sum(${creditLedger.chargeMillicents}) FILTER (WHERE ${creditLedger.entryType} = ${SEAT_OVERSHOOT_ENTRY.month}), 0)`,
+      dayGross: sql<string>`coalesce(sum(${creditLedger.chargeMillicents}) FILTER (WHERE ${isSpend} AND ${inDay}), 0)`,
+      dayAbsorbed: sql<string>`coalesce(sum(${creditLedger.chargeMillicents}) FILTER (WHERE ${creditLedger.entryType} = ${SEAT_OVERSHOOT_ENTRY.day} AND ${inDay}), 0)`,
     })
     .from(creditLedger)
     .where(and(
       eq(creditLedger.userId, input.userId),
       eq(creditLedger.walletId, input.poolId),
-      inArray(creditLedger.entryType, ['usage', 'adjustment', SEAT_OVERSHOOT_ENTRY]),
+      inArray(creditLedger.entryType, ['usage', 'adjustment', SEAT_OVERSHOOT_ENTRY.month, SEAT_OVERSHOOT_ENTRY.day]),
       gte(creditLedger.createdAt, periodStart),
     ));
   const [held] = await executor
@@ -96,6 +105,8 @@ export async function loadSeatCapFacts(
       eq(creditHolds.walletId, input.poolId),
       gt(creditHolds.expiresAt, input.now),
     ));
+  const period = { grossMillicents: Number(charged?.gross ?? 0), absorbedMillicents: Number(charged?.absorbed ?? 0) };
+  const day = { grossMillicents: Number(charged?.dayGross ?? 0), absorbedMillicents: Number(charged?.dayAbsorbed ?? 0) };
   return {
     capCents: seatAllowanceCents({
       consumerMonthlyCapCents: cap?.monthlyCapCents ?? null,
@@ -103,9 +114,10 @@ export async function loadSeatCapFacts(
     }),
     dailyCapCents: cap?.dailyCapCents ?? null,
     usage: {
-      periodChargedMillicents: Number(charged?.millicents ?? 0),
+      periodChargedMillicents: period.grossMillicents - period.absorbedMillicents,
       periodReservedCents: Number(held?.cents ?? 0),
-      dayChargedMillicents: Number(charged?.dayMillicents ?? 0),
+      dayChargedMillicents: day.grossMillicents - day.absorbedMillicents,
     },
+    windows: { period, day },
   };
 }

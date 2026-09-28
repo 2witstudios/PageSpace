@@ -25,7 +25,7 @@ import {
   seatAllowanceCents,
   seatSpentCents,
   seatCapCheck,
-  seatOvershootMillicents,
+  seatOvershootDeltaMillicents,
   seatLegSpendableCents,
   seatPeriodStartMs,
   type ResolveSpendSourceInput,
@@ -692,16 +692,17 @@ describe('seat allowance — the per-consumer monthly cap on the org pool', () =
     expect(seatLegSpendableCents({ poolSpendableCents: c(9000), capCents: c(100), dailyCapCents: c(50), usage: usage(90_000, 0, 0) })).toBe(c(10));
   });
 
+  const win = (grossMillicents: number, absorbedMillicents: number) => ({ grossMillicents, absorbedMillicents });
   it.each([
-    ['a charge that ends inside the allowance absorbs nothing', c(100), null, 90_000, 90_000, 30_000, 0],
-    ['a charge that crosses the allowance absorbs only the part past it: 25¢ left, 50¢ charged, 25¢ is the pool\'s', c(100), null, 125_000, 125_000, 50_000, 25_000],
-    ['never more than this charge: an earlier call\'s excess is not re-recorded', c(100), null, 180_000, 180_000, 30_000, 30_000],
-    ['the daily cap binds at settle too, inside the month', c(100), c(50), 70_000, 70_000, 30_000, 20_000],
-    ['the larger of the daily and monthly excess', c(100), c(50), 130_000, 60_000, 40_000, 30_000],
-    ['no daily cap set is no daily excess', c(100), null, 70_000, 70_000, 30_000, 0],
-    ['a non-finite sum fails closed: the whole charge is the pool\'s', c(100), null, Number.NaN, 0, 30_000, 30_000],
-  ] as const)('WAL-2 (partial) WAL-7 (partial) seatOvershootMillicents at settle: %s', (_label, capCents, dailyCapCents, periodChargedMillicents, dayChargedMillicents, chargeMillicents, expected) => {
-    expect(seatOvershootMillicents({ capCents, dailyCapCents, usage: { periodChargedMillicents, dayChargedMillicents }, chargeMillicents })).toBe(expected);
+    ['spend inside the cap absorbs nothing', c(100), win(90_000, 0), 0],
+    ['a charge that crosses the cap absorbs only the part past it: 125¢ against 100¢ is 25¢', c(100), win(125_000, 0), 25_000],
+    ['past the cap, only the NEW excess: 25¢ already absorbed, 155¢ gross absorbs 30¢ more', c(100), win(155_000, 25_000), 30_000],
+    ['a refund gives back forgiveness that no longer applies: 86¢ gross, 25¢ absorbed → −25¢', c(100), win(86_000, 25_000), -25_000],
+    ['a refund that stays past the cap keeps only the new excess: 111¢ gross, 25¢ absorbed → −14¢', c(100), win(111_000, 25_000), -14_000],
+    ['no cap on the window (an unset daily cap) keeps nothing absorbed', null, win(70_000, 0), 0],
+    ['a non-finite sum changes nothing here (the gate read fails closed on it)', c(100), win(Number.NaN, 0), 0],
+  ] as const)('WAL-2 (partial) WAL-7 (partial) seatOvershootDeltaMillicents keeps one window\'s absorbed at max(0, gross − cap): %s', (_label, capCents, window, expected) => {
+    expect(seatOvershootDeltaMillicents({ capCents, window })).toBe(expected);
   });
 
   it('WAL-2 (partial) D-OW-12 the seat period is the pool\'s refill date, never the person\'s renewal; no refill yet is the UTC month', () => {

@@ -615,11 +615,11 @@ export function seatSpentCents(chargedMillicents: number): number {
 
 /** One consumer's seat spend in the pool's current period. */
 export interface SeatUsage {
-  /** SUM(chargeMillicents) of their usage and reconcile rows on the pool since the period start. */
+  /** SUM(chargeMillicents) of their usage and reconcile rows on the pool since the period start, net of the period's absorbed overshoot. */
   periodChargedMillicents: number;
   /** Their live holds on the pool (calls in flight), counted like spend — this period and today. */
   periodReservedCents: number;
-  /** The same SUM since the start of today, UTC (WAL-7's daily window, D20.3). */
+  /** The same SUM since the start of today, UTC (WAL-7's daily window, D20.3), net of the DAY's absorbed overshoot. */
   dayChargedMillicents: number;
 }
 
@@ -646,24 +646,33 @@ export function seatCapCheck(input: {
   });
 }
 
+/** One cap window's settled seat spend: every charged millicent, and how much of it the pool absorbed. */
+export interface SeatWindowCharge {
+  /** SUM(chargeMillicents) of the consumer's usage and reconcile rows in the window: what was spent. */
+  grossMillicents: number;
+  /** SUM of this window's own seat-overshoot rows: the part of that spend the pool took off the count. */
+  absorbedMillicents: number;
+}
+
 /**
- * WAL-2 at SETTLE: the part of a just-settled seat charge that went past the consumer's caps.
- * Admission reserves an estimate, and a call's real cost can exceed it; the pool still pays
- * that excess (WAL-6b/c: overshoot lands on the funder, never on the consumer), but it is the
- * pool's absorbed overshoot, not the consumer's seat spend. It is the larger of the monthly
- * and (when set) daily excess over the settled sums, which already include this charge, and
- * never more than this charge — an earlier call's excess is that call's to record.
+ * WAL-2 / WAL-7 at SETTLE, one cap window at a time. Admission reserves an estimate and a
+ * call's real cost can exceed it; the pool still pays the excess (WAL-6b/c: overshoot lands
+ * on the funder, never on the consumer), but the excess is the pool's absorbed overshoot, not
+ * the consumer's seat spend. A window's absorbed amount is kept at exactly
+ * max(0, gross − cap): this returns the SIGNED change that restores that after a charge
+ * (positive, the new excess) or a refund (negative, forgiveness that no longer applies — a
+ * refund never frees more room than was really spent). The consumer's count, gross − absorbed,
+ * is then min(gross, cap): at the cap, never over it, and never under what was really spent
+ * below it.
+ *
+ * Each window answers for itself, so a DAILY overshoot never forgives the MONTH and a monthly
+ * one never forgives the DAY (review 5340219245, IRV-A7). No cap (a null daily cap) keeps
+ * nothing absorbed. A non-finite sum changes nothing here; the gate's read fails closed on it.
  */
-export function seatOvershootMillicents(input: {
-  capCents: number;
-  dailyCapCents: number | null;
-  usage: Pick<SeatUsage, 'periodChargedMillicents' | 'dayChargedMillicents'>;
-  chargeMillicents: number;
-}): number {
-  const monthlyExcess = input.usage.periodChargedMillicents - input.capCents * MILLICENTS_PER_CENT;
-  const dailyExcess = input.dailyCapCents === null ? 0 : input.usage.dayChargedMillicents - input.dailyCapCents * MILLICENTS_PER_CENT;
-  const excess = Math.max(0, monthlyExcess, dailyExcess);
-  return Number.isFinite(excess) ? Math.min(Math.max(0, input.chargeMillicents), excess) : Math.max(0, input.chargeMillicents);
+export function seatOvershootDeltaMillicents(input: { capCents: number | null; window: SeatWindowCharge }): number {
+  const target = input.capCents === null ? 0 : Math.max(0, input.window.grossMillicents - input.capCents * MILLICENTS_PER_CENT);
+  const delta = target - input.window.absorbedMillicents;
+  return Number.isFinite(delta) ? delta : 0;
 }
 
 /** What a consumer may still spend through their seat: the pool's spendable, bounded by what is left of their caps. */

@@ -15,7 +15,7 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
 import { db, pool } from '@pagespace/db/db';
-import { and, eq, inArray } from '@pagespace/db/operators';
+import { and, eq, inArray, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { drives } from '@pagespace/db/schema/core';
@@ -671,8 +671,8 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     expect(pool.monthlyRemainingCents).toBe(900_000 - 125);
     expect(pool.debtCents).toBe(0);
     // 25¢ of it went past Marcus's cap (125 − 100): recorded as the pool's absorbed overshoot.
-    const overshoot = (await ledgerOf(w.marcusId)).filter((r) => r.entryType === 'seat_overshoot');
-    expect(overshoot.map((r) => [r.walletId, r.aiUsageLogId, r.chargeMillicents, r.amountCents])).toEqual([[w.poolId, logId, 25_000, 0]]);
+    const overshoot = (await ledgerOf(w.marcusId)).filter((r) => r.entryType.startsWith('seat_overshoot'));
+    expect(overshoot.map((r) => [r.entryType, r.walletId, r.aiUsageLogId, r.chargeMillicents, r.amountCents])).toEqual([['seat_overshoot_month', w.poolId, logId, 25_000, 0]]);
     // So the seat reads exactly its cap, not 125¢ ...
     expect((await seatCounted(w, w.marcusId)).usage.periodChargedMillicents).toBe(100_000);
     // ... the next call is refused by the cap and charges nothing, and his own credits are untouched.
@@ -692,7 +692,9 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
 
     const counted = await seatCounted(w, w.marcusId);
     expect(counted.usage.dayChargedMillicents).toBe(50_000);
-    expect(counted.usage.periodChargedMillicents).toBe(50_000);
+    // The DAY's overshoot never forgives the month: 25 + 50 = 75¢ gross, under the 100¢ monthly cap.
+    expect(counted.usage.periodChargedMillicents).toBe(75_000);
+    expect((await ledgerOf(w.marcusId)).filter((r) => r.entryType.startsWith('seat_overshoot')).map((r) => [r.entryType, r.chargeMillicents])).toEqual([['seat_overshoot_day', 25_000]]);
     expect((await walletRow(w.poolId)).monthlyRemainingCents).toBe(900_000 - 75);
     expect(await canConsumeAI(w.marcusId, 'pro', { spend: driveSpend(w.productId, 'seat_allowance') })).toMatchObject({ allowed: false, refusal: { reason: 'source_cap_reached' } });
   });
@@ -711,8 +713,117 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     await reconcileOpenRouterCosts({ fetcher: async (id) => (id === gen ? { totalCost: 2 * COST_25C } : 'not_found') });
 
     expect((await walletRow(w.poolId)).monthlyRemainingCents).toBe(900_000 - 124);
-    expect((await ledgerOf(w.marcusId)).filter((r) => r.entryType === 'seat_overshoot').map((r) => r.chargeMillicents)).toEqual([24_000]);
+    expect((await ledgerOf(w.marcusId)).filter((r) => r.entryType.startsWith('seat_overshoot')).map((r) => [r.entryType, r.chargeMillicents])).toEqual([['seat_overshoot_month', 24_000]]);
     expect((await seatCounted(w, w.marcusId)).usage.periodChargedMillicents).toBe(100_000);
+  });
+
+  /** Move every seat row Marcus has on the pool one UTC day into the past: "the next day". */
+  async function nextDay(w: World, userId: string) {
+    await db.update(creditLedger).set({ createdAt: sql`${creditLedger.createdAt} - interval '1 day'` }).where(and(eq(creditLedger.userId, userId), eq(creditLedger.walletId, w.poolId)));
+  }
+  const seatGate = (w: World, userId: string) => canConsumeAI(userId, 'pro', { spend: driveSpend(w.productId, 'seat_allowance') });
+  const overshootRows = async (userId: string) => (await ledgerOf(userId)).filter((r) => r.entryType.startsWith('seat_overshoot')).map((r) => [r.entryType, r.chargeMillicents]);
+
+  it('WAL-2 (partial) WAL-7 (partial) IRV-A7: a DAILY overshoot never forgives the MONTH — the next day admits only what the monthly cap has left', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+    const w = world;
+    await db.insert(walletConsumerCaps).values({ walletId: w.poolId, consumerKey: `user:${w.marcusId}`, dailyCapCents: 50, monthlyCapCents: 100 });
+    // Day 1: 25¢, then a 25¢-estimate call that really costs 50¢ — 75¢ gross.
+    await seatCallCosting(w, w.marcusId, COST_25C);
+    await seatCallCosting(w, w.marcusId, 2 * COST_25C);
+    expect((await seatCounted(w, w.marcusId)).usage.periodChargedMillicents).toBe(75_000);
+    await nextDay(w, w.marcusId);
+
+    // Day 2: 25¢ of the month is left, so ONE 25¢ call passes and the next is refused.
+    await seatCallCosting(w, w.marcusId, COST_25C);
+    expect(await seatGate(w, w.marcusId)).toMatchObject({ allowed: false, refusal: { reason: 'source_cap_reached' } });
+
+    // 100¢ gross against the 100¢ monthly cap — not the 125¢ the shared forgiveness allowed.
+    expect((await walletRow(w.poolId)).monthlyRemainingCents).toBe(900_000 - 100);
+    expect((await seatCounted(w, w.marcusId)).usage.periodChargedMillicents).toBe(100_000);
+  });
+
+  it('WAL-2 (partial) WAL-7 (partial) a MONTHLY overshoot never forgives the DAY', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+    const w = world;
+    await db.insert(walletConsumerCaps).values({ walletId: w.poolId, consumerKey: `user:${w.marcusId}`, dailyCapCents: 80, monthlyCapCents: 100 });
+    for (let call = 1; call <= 3; call += 1) await seatCallCosting(w, w.marcusId, COST_25C);
+    await nextDay(w, w.marcusId);
+
+    // Today: a 25¢-estimate call that really costs 50¢ — the month reaches 125¢ (25¢ past), today only 50¢ of 80¢.
+    await seatCallCosting(w, w.marcusId, 2 * COST_25C);
+
+    const counted = await seatCounted(w, w.marcusId);
+    expect(counted.usage.periodChargedMillicents).toBe(100_000);
+    expect(counted.usage.dayChargedMillicents).toBe(50_000);
+    expect(await overshootRows(w.marcusId)).toEqual([['seat_overshoot_month', 25_000]]);
+  });
+
+  it('WAL-2 (partial) WAL-7 (partial) one call past BOTH caps is forgiven once in each window, never twice in either', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+    const w = world;
+    await db.insert(walletConsumerCaps).values({ walletId: w.poolId, consumerKey: `user:${w.marcusId}`, dailyCapCents: 50, monthlyCapCents: 100 });
+    await seatCallCosting(w, w.marcusId, COST_25C);
+    await seatCallCosting(w, w.marcusId, COST_25C);
+    await nextDay(w, w.marcusId);
+    await seatCallCosting(w, w.marcusId, COST_25C);
+
+    // Month 75¢, today 25¢. A 25¢-estimate call that really costs 50¢: month 125¢, today 75¢ — 25¢ past each.
+    await seatCallCosting(w, w.marcusId, 2 * COST_25C);
+
+    const counted = await seatCounted(w, w.marcusId);
+    expect(counted.usage.periodChargedMillicents).toBe(100_000);
+    expect(counted.usage.dayChargedMillicents).toBe(50_000);
+    expect((await overshootRows(w.marcusId)).sort()).toEqual([['seat_overshoot_day', 25_000], ['seat_overshoot_month', 25_000]]);
+    expect((await walletRow(w.poolId)).monthlyRemainingCents).toBe(900_000 - 125);
+  });
+
+  it('WAL-2 (partial) WAL-7 (partial) a month of daily overshoots leaves the member at the monthly cap, never past it', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+    const w = world;
+    await db.update(wallets).set({ monthlyPeriodStart: new Date(Date.now() - 40 * 86_400_000) }).where(eq(wallets.id, w.poolId));
+    await db.insert(walletConsumerCaps).values({ walletId: w.poolId, consumerKey: `user:${w.marcusId}`, dailyCapCents: 50, monthlyCapCents: 100 });
+
+    // Every day: a 25¢ call, then a 25¢-estimate call that really costs 50¢ — each only when the gate admits it.
+    for (let day = 1; day <= 30; day += 1) {
+      for (const cost of [COST_25C, 2 * COST_25C]) {
+        if ((await seatGate(w, w.marcusId)).allowed === false) continue;
+        await db.delete(creditHolds).where(eq(creditHolds.userId, w.marcusId));
+        await seatCallCosting(w, w.marcusId, cost);
+      }
+      await nextDay(w, w.marcusId);
+    }
+
+    // Day 1: 25 + 50 = 75¢. Day 2: 25¢ left of the month — one 25¢ call. Then nothing, for 28 days.
+    expect((await walletRow(w.poolId)).monthlyRemainingCents).toBe(900_000 - 100);
+    expect((await seatCounted(w, w.marcusId)).usage.periodChargedMillicents).toBe(100_000);
+    expect(await seatGate(w, w.marcusId)).toMatchObject({ allowed: false, refusal: { reason: 'source_cap_reached' } });
+  });
+
+  it('WAL-2 (partial) IRV-A4: a reconcile refund on a call that overshot gives the forgiveness back — the seat is not re-opened past the cap', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+    const w = world;
+    const gen = `gen-seat-refund-past-cap-${createId()}`;
+    for (let call = 1; call <= 3; call += 1) await seatCallCosting(w, w.marcusId, COST_25C);
+    // The 4th: a 25¢-estimate call billed 50¢, waiting for the cost-reconcile cron.
+    const gate = await seatGate(w, w.marcusId);
+    const [log] = await db.insert(aiUsageLogs).values({ userId: w.marcusId, provider: 'openrouter', model: 'm', cost: 2 * COST_25C, timestamp: new Date(Date.now() - 10 * 60_000), reconcileStatus: 'pending', reconcileAttempts: 0, metadata: { generationIds: [gen] } }).returning({ id: aiUsageLogs.id });
+    await consumeCredits({ aiUsageLogId: log.id, userId: w.marcusId, costDollars: 2 * COST_25C, holdId: gate.holdId, walletId: gate.walletId });
+    expect(await overshootRows(w.marcusId)).toEqual([['seat_overshoot_month', 25_000]]);
+
+    // It really cost 7¢: billed round(33.33334) = 33¢ real, delta 26¢ real × 1.5 = a 39¢ refund. Gross 125 − 39 = 86¢.
+    await reconcileOpenRouterCosts({ fetcher: async (id) => (id === gen ? { totalCost: 0.07 } : 'not_found') });
+
+    // Under the cap again, so nothing stays absorbed: the 25¢ forgiveness is given back and the seat reads the true 86¢.
+    expect(await overshootRows(w.marcusId)).toEqual([['seat_overshoot_month', 25_000], ['seat_overshoot_month', -25_000]]);
+    expect((await seatCounted(w, w.marcusId)).usage.periodChargedMillicents).toBe(86_000);
+    // 14¢ left: a 25¢ reservation does not fit.
+    expect(await seatGate(w, w.marcusId)).toMatchObject({ allowed: false, refusal: { reason: 'source_cap_reached' } });
   });
 
   it('WAL-2 (partial) WAL-7 (partial) a seat stream\'s own budget is bounded by what is left of the DAILY cap when it is the smaller', async () => {
