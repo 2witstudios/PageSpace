@@ -2895,6 +2895,9 @@
       "billing/org-subscription-core": [
         "./dist/billing/org-subscription-core.d.ts"
       ],
+      "test/wallet-leg-invariant": [
+        "./dist/test/wallet-leg-invariant.d.ts"
+      ],
       "organizations/status": [
         "./dist/organizations/status.d.ts"
       ],
