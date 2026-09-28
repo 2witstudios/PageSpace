@@ -820,7 +820,9 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     await reconcileOpenRouterCosts({ fetcher: async (id) => (id === gen ? { totalCost: 0.07 } : 'not_found') });
 
     // Under the cap again, so nothing stays absorbed: the 25¢ forgiveness is given back and the seat reads the true 86¢.
-    expect(await overshootRows(w.marcusId)).toEqual([['seat_overshoot_month', 25_000], ['seat_overshoot_month', -25_000]]);
+    // Both rows carry the call's own time, so their order is not fixed: compare as a set.
+    expect((await overshootRows(w.marcusId)).map(([, mc]) => mc).sort((x, y) => Number(y) - Number(x))).toEqual([25_000, -25_000]);
+    expect((await overshootRows(w.marcusId)).every(([t]) => t === 'seat_overshoot_month')).toBe(true);
     expect((await seatCounted(w, w.marcusId)).usage.periodChargedMillicents).toBe(86_000);
     // 14¢ left: a 25¢ reservation does not fit.
     expect(await seatGate(w, w.marcusId)).toMatchObject({ allowed: false, refusal: { reason: 'source_cap_reached' } });
@@ -865,7 +867,7 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     expect((await seatCounted(w, w.marcusId)).usage.dayChargedMillicents).toBe(50_000);
     // The refund gave yesterday's forgiveness back IN yesterday: every day-overshoot row is dated before today.
     const dayRows = (await ledgerOf(w.marcusId)).filter((r) => r.entryType === 'seat_overshoot_day');
-    expect(dayRows.map((r) => r.chargeMillicents)).toEqual([25_000, -25_000]);
+    expect(dayRows.map((r) => Number(r.chargeMillicents)).sort((x, y) => y - x)).toEqual([25_000, -25_000]);
     expect(dayRows.every((r) => r.createdAt.getTime() < utcToday())).toBe(true);
   });
 
