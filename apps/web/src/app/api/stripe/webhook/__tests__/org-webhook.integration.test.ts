@@ -225,7 +225,7 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
     if (userIds.length > 0) await db.delete(users).where(inArray(users.id, userIds));
   });
 
-  it("SEAT-7 org subscription webhooks are routed to the org before the personal-tier handler and are idempotent: each event delivered twice applies once and never touches the Owner's personal plan", async () => {
+  it("SEAT-7 (partial) org subscription webhooks are routed to the org before the personal-tier handler and are idempotent: each event delivered twice applies once and never touches the Owner's personal plan", async () => {
     if (!dbAvailable) return;
     const org = await northwind(7);
     // The Owner is also a paying personal customer: the personal handler must never see the org's events.

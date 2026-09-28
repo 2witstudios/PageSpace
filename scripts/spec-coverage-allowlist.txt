@@ -106,6 +106,14 @@ SEAT-3
 SEAT-4
 SEAT-5
 SEAT-6
+# SEAT-7 (org subscription webhooks are idempotent and routed before the personal-tier handler) re-added
+# per review ow-irv-2739 (REQUEST CHANGES, P1-1) on #2739, head 96a7eaf8a: the integration test that
+# carried the bare title seeds the Owner with a DIFFERENT personal customer, so the personal handlers are
+# no-ops on org events whether they run before or after the org fork (mutation M6 stays green). The
+# "before the personal-tier handler" ordering is proven only by mocked route tests, and concurrent
+# delivery only by a separate test, so every SEAT-7 test is titled "SEAT-7 (partial)". Unproven in one
+# test: the ordering clause against a user whose stripeCustomerId IS the org's customer.
+SEAT-7
 SEAT-8
 SEAT-9
 SEC-1
