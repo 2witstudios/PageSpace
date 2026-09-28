@@ -14,6 +14,8 @@ import type { SQL } from '@pagespace/db/operators';
 import { decryptUserDisplayFields } from '@pagespace/lib/auth/user-repository';
 import { computeBalanceDrift, isNegativeMargin } from '@pagespace/lib/billing/credit-core';
 import { BALANCE_DRIFT_TOLERANCE_CENTS, NEGATIVE_MARGIN_FLOOR_BPS } from '@pagespace/lib/billing/credit-pricing';
+import { CENTS_PER_DOLLAR } from '@pagespace/lib/billing/money-model';
+import { readCreditLiability } from '@pagespace/lib/billing/credit-liability-query';
 import { getTierFromPrice } from '@/lib/stripe/price-config';
 import { TIERS, type SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { isClickHouseEnabled, getClickHouseClient } from '@pagespace/lib/observability/clickhouse-client';
@@ -694,7 +696,7 @@ export function computeMarginPct(realCostCents: number, chargedCents: number): n
 // unchanged; only purged rows newly contribute their retained cost.
 const realCostSum = sql<number>`ROUND(COALESCE(SUM(
   CASE
-    WHEN ${aiUsageLogs.cost} IS NOT NULL THEN ${aiUsageLogs.cost}::numeric * 100
+    WHEN ${aiUsageLogs.cost} IS NOT NULL THEN ${aiUsageLogs.cost}::numeric * ${CENTS_PER_DOLLAR}
     ELSE ${creditLedger.realCostCents}
   END
 ), 0))::int`;
@@ -1115,7 +1117,9 @@ export interface SubscriptionsByTierRow {
 }
 
 export interface CreditLiability {
+  /** Grants outstanding: personal roots' and org pools' monthly buckets (MON-7). */
   monthlyRemainingCents: number;
+  /** Purchased or moved-in credit on every wallet: root top-ups and drive-wallet legs. */
   topupRemainingCents: number;
   totalLiabilityCents: number;
   userCount: number;
@@ -1376,27 +1380,17 @@ export async function getActiveSubscriptionsByTier(): Promise<SubscriptionsByTie
 }
 
 /**
- * Outstanding prepaid liability: the sum of every user's spendable balance
- * (monthly + top-up remaining) — credit value we owe service against.
- * Point-in-time, not windowed.
+ * Outstanding prepaid liability across every wallet kind — personal roots, org pools,
+ * and drive-wallet funding legs (credit-liability.ts decides what counts) — credit
+ * value we owe service against. Point-in-time, not windowed.
  */
 export async function getCreditLiability(): Promise<CreditLiability> {
-  const rows = await db
-    .select({
-      monthlyRemainingCents: sql<number>`COALESCE(SUM(${wallets.monthlyRemainingCents}), 0)::double precision`,
-      topupRemainingCents: sql<number>`COALESCE(SUM(${wallets.topupRemainingCents}), 0)::double precision`,
-      userCount: count(),
-    })
-    .from(wallets)
-    .where(isPersonalRootWallet());
-
-  const monthlyRemainingCents = rows[0]?.monthlyRemainingCents ?? 0;
-  const topupRemainingCents = rows[0]?.topupRemainingCents ?? 0;
+  const r = await readCreditLiability();
   return {
-    monthlyRemainingCents,
-    topupRemainingCents,
-    totalLiabilityCents: monthlyRemainingCents + topupRemainingCents,
-    userCount: rows[0]?.userCount ?? 0,
+    monthlyRemainingCents: r.includedCreditLiabilityCents,
+    topupRemainingCents: r.topupRemainingCents,
+    totalLiabilityCents: r.totalLiabilityCents,
+    userCount: r.userCount,
   };
 }
 

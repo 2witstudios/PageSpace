@@ -23,6 +23,7 @@ import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { and, eq, lt, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
 import { computeCostDrift } from './credit-core';
+import { centsFromDollars } from './money-model';
 import { chargeWallet, refundWalletCharge } from './credit-consume';
 import {
   MARKUP_BPS,
@@ -248,7 +249,7 @@ async function reconcileRow(row: PendingRow, fetcher: GenerationFetcher, now: Da
 
   const drift = computeCostDrift(
     {
-      billedRealCostCents: Math.round((row.cost ?? 0) * 100),
+      billedRealCostCents: centsFromDollars(row.cost ?? 0),
       authoritativeRealCostDollars: total,
       toleranceCents: COST_RECONCILE_TOLERANCE_CENTS,
       toleranceBps: COST_RECONCILE_TOLERANCE_BPS,

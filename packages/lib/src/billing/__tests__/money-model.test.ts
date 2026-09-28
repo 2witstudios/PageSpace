@@ -14,6 +14,12 @@ import {
   centsFromCredits,
   dollarsFromCents,
   providerDollarsCoveredByCents,
+  chargedCentsFromProviderDollars,
+  chargedMillicentsFromProviderDollars,
+  exactCentsFromDollars,
+  centsFromDollars,
+  centsFromMillicents,
+  CENTS_PER_DOLLAR,
   formatDollars,
   formatCreditCount,
   creditsFromDollars,
@@ -48,14 +54,14 @@ afterEach(() => {
   process.env = { ...ORIGINAL_ENV };
 });
 
-describe('MON-1 one module defines the money model', () => {
-  it('MON-1 exports MARKUP_BPS (moved from credit-pricing) with the 1.5× default and env override', async () => {
+describe('MON-1 (partial) one module defines the money model', () => {
+  it('MON-1 (partial) exports MARKUP_BPS (moved from credit-pricing) with the 1.5× default and env override', async () => {
     expect(MARKUP_BPS).toBe(15000);
     const over = await loadWithEnv({ CREDIT_MARKUP_BPS: '12000' });
     expect(over.MARKUP_BPS).toBe(12000);
   });
 
-  it('MON-1 credit-pricing re-exports the SAME MARKUP_BPS, not a second definition', () => {
+  it('MON-1 (partial) credit-pricing re-exports the SAME MARKUP_BPS, not a second definition', () => {
     expect(CREDIT_PRICING_MARKUP_BPS).toBe(MARKUP_BPS);
   });
 
@@ -65,7 +71,7 @@ describe('MON-1 one module defines the money model', () => {
     expect(INCLUDED_CREDIT_RATIO_BPS.business).toBe(6000);
   });
 
-  it('MON-1 the ratio table is keyed by the canonical vocabulary; free derives nothing (0)', () => {
+  it('MON-1 (partial) the ratio table is keyed by the canonical vocabulary; free derives nothing (0)', () => {
     expect(Object.keys(INCLUDED_CREDIT_RATIO_BPS).sort()).toEqual([...TIERS].sort());
     expect(INCLUDED_CREDIT_RATIO_BPS.free).toBe(0);
   });
@@ -174,8 +180,8 @@ describe('MON-8 the free starter grant is a plain credit count, not derived from
   });
 });
 
-describe('MON-5 one definition of a credit', () => {
-  it('MON-5 a credit is CREDITS_PER_DOLLAR⁻¹ of a dollar: creditsFromCents / centsFromCredits round-trip', () => {
+describe('MON-5 (partial) one definition of a credit', () => {
+  it('MON-5 (partial) a credit is CREDITS_PER_DOLLAR⁻¹ of a dollar: creditsFromCents / centsFromCredits round-trip', () => {
     expect(creditsFromCents(100)).toBe(CREDITS_PER_DOLLAR);
     expect(centsFromCredits(CREDITS_PER_DOLLAR)).toBe(100);
     for (const cents of [0, 1, 500, 1500, 123456]) {
@@ -183,7 +189,7 @@ describe('MON-5 one definition of a credit', () => {
     }
   });
 
-  it('MON-5 centsFromCredits returns an exact integer for every whole credit count 0..10,000', () => {
+  it('MON-5 (partial) centsFromCredits returns an exact integer for every whole credit count 0..10,000', () => {
     // Divide-then-multiply drifts: (7 / 100) * 100 is 7.000000000000001. Stripe rejects
     // a non-integer amount, and integer cents columns and equality checks break on it.
     // At the A-11 rate one credit is exactly one cent, so the oracle is the input itself
@@ -198,7 +204,7 @@ describe('MON-5 one definition of a credit', () => {
     expect(centsFromCredits(7)).toBe(7);
   });
 
-  it('MON-5 creditsFromCents returns an exact integer for every whole cent amount 0..10,000', () => {
+  it('MON-5 (partial) creditsFromCents returns an exact integer for every whole cent amount 0..10,000', () => {
     expect(CREDITS_PER_DOLLAR).toBe(100);
     for (let cents = 0; cents <= 10_000; cents++) {
       const credits = creditsFromCents(cents);
@@ -214,7 +220,7 @@ describe('MON-5 one definition of a credit', () => {
     expect(formatCreditCount(1000)).toBe('1,000');
   });
 
-  it('MON-5 dollarsFromCents is the single cents→dollars conversion', () => {
+  it('MON-5 (partial) dollarsFromCents is the single cents→dollars conversion', () => {
     expect(dollarsFromCents(1050)).toBe(10.5);
     expect(formatDollars(1000)).toBe('$10');
     expect(formatDollars(1050)).toBe('$10.50');
@@ -244,8 +250,45 @@ describe('the provider cost a charge covers', () => {
   });
 });
 
-describe('MON-5 formatCreditCount renders an integer count with thousands separators', () => {
-  it('MON-5 formats the canvas numbers: 900, 1,200, 3,000, 9,000, 192', () => {
+describe('MON-5 (partial) every dollars→cents step goes through money-model', () => {
+  it('MON-5 (partial) CENTS_PER_DOLLAR is the one stated cents-per-dollar, for SQL that multiplies in the database', () => {
+    expect(CENTS_PER_DOLLAR).toBe(100);
+  });
+
+  it('MON-5 (partial) exactCentsFromDollars leaves rounding to the caller; centsFromDollars rounds to the nearest cent', () => {
+    expect(exactCentsFromDollars(0.125)).toBe(12.5);
+    expect(exactCentsFromDollars(1.5)).toBe(150);
+    expect(centsFromDollars(0.125)).toBe(13);
+    expect(centsFromDollars(12.34)).toBe(1234);
+    // The billing-off daily ceiling floors a float SUM of provider dollars.
+    expect(Math.floor(exactCentsFromDollars(0.019))).toBe(1);
+  });
+
+  it('MON-5 (partial) chargedCentsFromProviderDollars applies the markup, then converts, with no rounding', () => {
+    // At 1.5×: $0.10 of provider cost is charged 15¢; $0.001 is 0.15¢ (a TTS hold ceils it to 1¢).
+    expect(chargedCentsFromProviderDollars(0.1, 15000)).toBeCloseTo(15, 10);
+    expect(chargedCentsFromProviderDollars(0.001, 15000)).toBeCloseTo(0.15, 10);
+    expect(Math.round(chargedCentsFromProviderDollars(0.123456, 15000))).toBe(19);
+    // The default markup is MARKUP_BPS.
+    expect(chargedCentsFromProviderDollars(1)).toBeCloseTo(MARKUP_BPS / 100, 10);
+    // It inverts providerDollarsCoveredByCents.
+    expect(chargedCentsFromProviderDollars(providerDollarsCoveredByCents(25, 15000), 15000)).toBeCloseTo(25, 10);
+  });
+
+  it('MON-5 (partial) centsFromMillicents is the millicent accrual unit back in cents, unrounded', () => {
+    expect(centsFromMillicents(90_000)).toBe(90);
+    expect(centsFromMillicents(100)).toBe(0.1);
+    expect(centsFromMillicents(0)).toBe(0);
+  });
+
+  it('MON-5 (partial) chargedMillicentsFromProviderDollars is the same charge a thousand times finer', () => {
+    expect(Math.round(chargedMillicentsFromProviderDollars(0.000123, 15000))).toBe(18);
+    expect(Math.round(chargedMillicentsFromProviderDollars(0.1, 15000))).toBe(15000);
+  });
+});
+
+describe('MON-5 (partial) formatCreditCount renders an integer count with thousands separators', () => {
+  it('MON-5 (partial) formats the canvas numbers: 900, 1,200, 3,000, 9,000, 192', () => {
     expect(formatCreditCount(centsFromCredits(900))).toBe('900');
     expect(formatCreditCount(centsFromCredits(1200))).toBe('1,200');
     expect(formatCreditCount(centsFromCredits(3000))).toBe('3,000');
@@ -254,7 +297,7 @@ describe('MON-5 formatCreditCount renders an integer count with thousands separa
     expect(formatCreditCount(0)).toBe('0');
   });
 
-  it('MON-5 never shows decimals: fractional credits round to the nearest whole credit', () => {
+  it('MON-5 (partial) never shows decimals: fractional credits round to the nearest whole credit', () => {
     // 0.4 credits → "0"; 0.6 → "1"; 1,499.5 → "1,500" (half away from zero).
     expect(formatCreditCount(0.4)).toBe('0');
     expect(formatCreditCount(0.6)).toBe('1');
