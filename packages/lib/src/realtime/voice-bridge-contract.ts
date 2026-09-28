@@ -241,6 +241,12 @@ export type VoiceAssistant = z.infer<typeof voiceAssistantSchema>;
  * handed the realtime default persona on a call the UI presents as talking to
  * a specific assistant. Both are optional because an unbound call is a real,
  * supported state — it has no assistant to be.
+ *
+ * `spendDriveId` is the drive the call spends in (SPEND-1): the drive of the page agent the
+ * bound conversation belongs to, resolved web-side from that same authorized read, the way a
+ * typed turn on that page spends in the page's drive. Never taken from the browser. Absent
+ * for an unbound or Global Assistant call, which spends the caller's personal credits
+ * (SPEND-8). The realtime server meters every window on it (call-metering.ts).
  */
 export const realtimeAttachPayloadSchema = z.object({
   callId: realtimeCallIdSchema,
@@ -255,6 +261,7 @@ export const realtimeAttachPayloadSchema = z.object({
   seed: z.array(realtimeSeedEventSchema).default([]),
   instructions: z.string().min(1).optional(),
   assistant: voiceAssistantSchema.optional(),
+  spendDriveId: z.string().min(1).optional(),
 });
 
 export type RealtimeAttachPayload = z.infer<typeof realtimeAttachPayloadSchema>;
@@ -282,6 +289,20 @@ export type RealtimeAttachPayload = z.infer<typeof realtimeAttachPayloadSchema>;
  * bound agent instead of as the person who started the call — see
  * `voiceAssistantSchema` for why echoing it is not a new trust assumption.
  */
+/**
+ * The source a call spends, echoed on each tool dispatch so a tool that gates its own model
+ * call (generate_image) spends where the call does (SPEND-1): the drive the web tier resolved
+ * for the call, and the source its opening hold pinned. Absent for a call on the caller's
+ * personal credits. It rides the same HMAC as `userId`, so echoing it adds no trust
+ * assumption.
+ */
+export const voiceToolSpendSchema = z.object({
+  driveId: z.string().min(1),
+  chosen: z.enum(['drive_wallet', 'seat_allowance', 'own_credits']).nullable(),
+});
+
+export type VoiceToolSpend = z.infer<typeof voiceToolSpendSchema>;
+
 export const voiceToolDispatchSchema = z.object({
   kind: z.literal('tool'),
   callId: realtimeCallIdSchema,
@@ -292,6 +313,7 @@ export const voiceToolDispatchSchema = z.object({
   timezone: z.string().min(1).optional(),
   locationContext: voiceLocationContextSchema.optional(),
   assistant: voiceAssistantSchema.optional(),
+  spend: voiceToolSpendSchema.optional(),
 });
 
 /**

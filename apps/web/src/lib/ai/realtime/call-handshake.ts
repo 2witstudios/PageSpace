@@ -144,6 +144,11 @@ export type HandshakeInput = {
   readonly instructions?: string;
   /** The bound page agent, for tool execution. Absent for the Global Assistant. */
   readonly assistant?: VoiceAssistant;
+  /**
+   * The drive the call spends in, from the same authorized conversation read (SPEND-1).
+   * Absent for a call with no drive, which spends personal credits (SPEND-8).
+   */
+  readonly spendDriveId?: string;
 };
 
 /** Upstream calls are short; a hung one must not hold the request open. */
@@ -256,6 +261,7 @@ const handOff = async (
     seed: [...(input.seed ?? [])],
     ...(input.instructions === undefined ? {} : { instructions: input.instructions }),
     ...(input.assistant === undefined ? {} : { assistant: input.assistant }),
+    ...(input.spendDriveId === undefined ? {} : { spendDriveId: input.spendDriveId }),
   };
   const body = JSON.stringify(payload);
 

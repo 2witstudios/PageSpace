@@ -30,7 +30,9 @@
  * test runner itself can say what ran. So coverage is never decided from test SOURCE: an ID
  * counts only when a test named with it reports `passed` in a real CI run.
  * A title that names an ID only as `<ID> (partial)` (see `PARTIAL_MARKER`) is listed for
- * traceability but never counts: the test proves part of the requirement, not all of it.
+ * traceability but never counts: the test proves part of the requirement, not all of it. A bare
+ * ID anywhere in a partial test's enclosing describe chain would silently upgrade it, so the gate
+ * fails on that too (see `partialClaimsUpgradedByChain`).
  * See `loadTestOutcomes` / `parseVitestJsonReport` / `parsePlaywrightJsonReport`.
  *
  * If no Playwright results are found (the e2e job did not run, was skipped, or failed before
@@ -464,6 +466,44 @@ export function malformedPartialMarkers(tests: readonly TestOutcome[]): Malforme
   return [...found.values()].sort((a, b) => a.file.localeCompare(b.file) || a.name.localeCompare(b.name));
 }
 
+export interface UpgradedPartialClaim {
+  file: string;
+  id: string;
+  /** The test's own title. */
+  test: string;
+  /** The title in the chain (an enclosing describe, or the test's own) that names the ID bare. */
+  bareIn: string;
+}
+
+/**
+ * THE DESCRIBE-CHAIN TRAP. A test's claim is read from its WHOLE chain — its own title and every
+ * enclosing describe (`hitsFromTestOutcomes` counts describe-level IDs) — so one bare ID anywhere
+ * in that chain claims the ID in full for every test beneath it. A test that says `<ID> (partial)`
+ * under `describe('… (<ID>)')` is therefore counted as full coverage while its author claimed
+ * part: the partial marker is silently upgraded. It bit #2736 twice.
+ *
+ * Flags every test whose chain marks an ID `<ID> (partial)` somewhere and names the same ID bare
+ * somewhere (another describe, the test's own title, or the same title twice). It reads the chain
+ * the RUNNER reported (Vitest `ancestorTitles`, Playwright suite titles), so `describe.each`,
+ * `.skip`/`.only`/`.todo` chains and nested describes are all covered with their real, interpolated
+ * titles, and it flags regardless of outcome: a skipped test carries the same title bug. The fix is
+ * to drop the ID from the enclosing describe (the tests keep their own markers) or, if the
+ * requirement really is proven in full, to drop the marker.
+ */
+export function partialClaimsUpgradedByChain(tests: readonly TestOutcome[]): UpgradedPartialClaim[] {
+  const found = new Map<string, UpgradedPartialClaim>();
+  for (const t of tests) {
+    const chain = [...t.ancestors, t.title];
+    const specShaped = new Set(chain.flatMap((name) => name.match(new RegExp(REQUIREMENT_ID_PATTERN.source, 'g')) ?? []));
+    for (const id of specShaped) {
+      if (!chain.some((name) => nameCarriesPartialId(name, id))) continue;
+      const bareIn = chain.find((name) => nameCarriesId(name, id));
+      if (bareIn !== undefined) found.set(`${t.file}\0${id}\0${t.title}`, { file: t.file, id, test: t.title, bareIn });
+    }
+  }
+  return [...found.values()].sort((a, b) => a.file.localeCompare(b.file) || a.id.localeCompare(b.id) || a.test.localeCompare(b.test));
+}
+
 /**
  * Vitest reports `it.fails(...)` as `passed` exactly when its body FAILS, and its JSON reporter
  * carries no flag saying so. So any Vitest file that contributes an ID must not use `.fails` at
@@ -613,10 +653,11 @@ export function run(root: string, opts: CliOptions, log: (line: string) => void 
   const failsFiles = failsModifierFiles(root, hitsByFile, tests);
   const securityWarnings = securityOnlyWarnings(root, tests, [...report.missing, ...report.allowlistedMissing]);
   const malformedMarkers = malformedPartialMarkers(tests);
-  const ok = reportPasses(report) && failsFiles.length === 0 && malformedMarkers.length === 0;
+  const upgradedPartials = partialClaimsUpgradedByChain(tests);
+  const ok = reportPasses(report) && failsFiles.length === 0 && malformedMarkers.length === 0 && upgradedPartials.length === 0;
 
   if (opts.json) {
-    log(JSON.stringify({ origin: spec.origin, ok, sawVitest, sawPlaywright, resultFiles: resultFiles.length, failsFiles, malformedMarkers, securityWarnings, ...report, rows: report.rows }, null, 2));
+    log(JSON.stringify({ origin: spec.origin, ok, sawVitest, sawPlaywright, resultFiles: resultFiles.length, failsFiles, malformedMarkers, upgradedPartials, securityWarnings, ...report, rows: report.rows }, null, 2));
     return ok ? 0 : 1;
   }
 
@@ -649,6 +690,9 @@ export function run(root: string, opts: CliOptions, log: (line: string) => void 
   }
   for (const m of malformedMarkers) {
     log(`FAIL: malformed partial marker in ${m.file}: "${m.name}" — write exactly "<ID> (partial)" (one ASCII space, lowercase, no inner spaces)`);
+  }
+  for (const u of upgradedPartials) {
+    log(`FAIL: bare ${u.id} in the describe chain of a partial claim in ${u.file}: test "${u.test}" is marked "${u.id} (partial)" but "${u.bareIn}" names ${u.id} bare, which claims it in full for every test beneath — drop the ID from the enclosing describe (or the marker, if it really is proven in full)`);
   }
   if (failsFiles.length > 0) {
     log(`FAIL: these files contribute Spec IDs but use \`.fails\` (Vitest reports it as passed when its body fails): ${failsFiles.join(', ')}`);

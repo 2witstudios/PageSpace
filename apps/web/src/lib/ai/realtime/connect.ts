@@ -370,6 +370,9 @@ export const connectVoiceCall = async (
       body: JSON.stringify({
         sdp: offer.sdp,
         conversationId: deps.target.conversationId,
+        // Names the page of a fresh page-agent thread (no row until its first message),
+        // so the server can resolve the drive the call spends in (SPEND-1).
+        ...(deps.target.agentPageId === undefined ? {} : { agentPageId: deps.target.agentPageId }),
         ...(deps.timezone === undefined ? {} : { timezone: deps.timezone }),
         ...(deps.locationContext === undefined
           ? {}

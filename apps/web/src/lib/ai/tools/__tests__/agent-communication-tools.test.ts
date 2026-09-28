@@ -1082,6 +1082,7 @@ describe('agent-communication-tools', () => {
           userId: 'user-123',
           provider: 'openai',
           model: 'openai/gpt-5.4-nano',
+          spend: { kind: 'personal' as const },
           plan: {
             reason: 'over-soft-threshold' as const,
             cutBeforeIndex: 0,
@@ -1114,7 +1115,7 @@ describe('agent-communication-tools', () => {
         expect(runCompaction).toHaveBeenCalledWith(pendingCompaction);
       });
 
-      it('SPEND-6 (partial) the compaction a mention reply schedules settles on the drive wallet the reply was gated on, never the sender', async () => {
+      it('SPEND-6 (partial) the compaction a mention reply schedules is gated on the drive the reply was gated on, never the sender', async () => {
         const pendingCompaction = {
           conversationId: 'channel:channel-1:agent:agent-1',
           source: 'page' as const,
@@ -1122,6 +1123,7 @@ describe('agent-communication-tools', () => {
           userId: 'user-123',
           provider: 'openai',
           model: 'openai/gpt-5.4-nano',
+          spend: { kind: 'automation' as const, driveId: 'drive-1' },
           plan: {
             reason: 'over-soft-threshold' as const,
             cutBeforeIndex: 0,
@@ -1152,7 +1154,18 @@ describe('agent-communication-tools', () => {
           },
         );
 
-        expect(runCompaction).toHaveBeenCalledWith({ ...pendingCompaction, walletId: 'w-drive-1' });
+        // History preparation names the reply's own target, so the compaction it plans
+        // reserves on the drive wallet (runCompaction gates on it) or does not run.
+        expect(vi.mocked(prepareHistoryForModel).mock.calls[0][0].spend).toEqual({ kind: 'automation', driveId: 'drive-1' });
+        expect(runCompaction).toHaveBeenCalledWith(pendingCompaction);
+      });
+
+      it('SPEND-8 (partial) an ask_agent call with no gated caller plans its compaction on personal credits', async () => {
+        await executeAskAgent(
+          { agentPath: '/test/agent', agentId: 'agent-1', question: 'Test question' },
+          { toolCallId: '1', messages: [], experimental_context: { userId: 'user-123' } as ToolExecutionContext },
+        );
+        expect(vi.mocked(prepareHistoryForModel).mock.calls[0][0].spend).toEqual({ kind: 'personal' });
       });
     });
 

@@ -203,6 +203,10 @@ export const startVoiceCallRuntime = (
       ...(timezone === undefined ? {} : { timezone }),
       ...(locationContext === undefined ? {} : { locationContext }),
       ...(assistant === undefined ? {} : { assistant }),
+      // A tool that gates its own model call spends where this call spends (SPEND-1).
+      ...(meter.spend.kind === 'drive'
+        ? { spend: { driveId: meter.spend.driveId, chosen: meter.spend.chosen } }
+        : {}),
     });
 
     const dispatched = response.ok && response.kind === 'tool';

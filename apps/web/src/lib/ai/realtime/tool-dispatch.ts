@@ -64,6 +64,7 @@
 import type { Tool, ToolSet } from 'ai';
 import type { z } from 'zod';
 import type { ToolExecutionContext } from '../core/types';
+import { PERSONAL_SPEND, conversationSpend, resolvedSpend } from '@pagespace/lib/billing/spend-target';
 import {
   clipToolName,
   formatInvalidParametersError,
@@ -72,6 +73,7 @@ import {
 import type {
   VoiceAssistant,
   VoiceLocationContext,
+  VoiceToolSpend,
 } from '@pagespace/lib/realtime/voice-bridge-contract';
 
 /**
@@ -236,6 +238,11 @@ export type RealtimeToolDispatchRequest = {
    * and for an unbound call, which act as the user.
    */
   readonly assistant?: VoiceAssistant;
+  /**
+   * The source the call spends (the drive the web tier resolved and the source its opening
+   * hold pinned). Absent for a call on the caller's personal credits.
+   */
+  readonly spend?: VoiceToolSpend;
 };
 
 /**
@@ -307,6 +314,14 @@ export const buildVoiceToolContext = (
         },
         enabledTools: request.assistant.enabledTools,
       }),
+  // The call's own source, as a typed turn hands its tools the turn's (SPEND-1): a tool
+  // that gates its own model call (generate_image) spends where the call spends, never
+  // the person's credits inside a drive.
+  creditSpend: {
+    spend: request.spend === undefined
+      ? PERSONAL_SPEND
+      : resolvedSpend(conversationSpend(request.spend.driveId, request.conversationId), request.spend.chosen ?? undefined),
+  },
   aiProvider: 'openai_voice',
   aiModel: model,
   requestOrigin: 'user',
