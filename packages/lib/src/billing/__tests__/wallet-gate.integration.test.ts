@@ -889,6 +889,40 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     expect((await ledgerOf(w.marcusId)).filter((r) => r.entryType.startsWith('seat_overshoot'))).toEqual([]);
   });
 
+  it('WAL-2 (partial) an UNDERCHARGE reconciled after the refill for a call from the closed period is not billed against the new period', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+    const w = world;
+    const gen = `gen-c2-under-${createId()}`;
+    // Last period: a call billed 25¢. Then the pool refills.
+    await reconcilableSeatCall(w, w.marcusId, COST_25C, gen);
+    await db.update(creditLedger).set({ createdAt: new Date(Date.now() - 3_600_000) }).where(and(eq(creditLedger.userId, w.marcusId), eq(creditLedger.walletId, w.poolId)));
+    await db.update(wallets).set({ monthlyPeriodStart: new Date(Date.now() - 60_000) }).where(eq(wallets.id, w.poolId));
+
+    // After the refill it reconciles UP: billed 17¢ real, actually 33¢ (2 × 16.66667), 16¢ × 1.5 = 24¢ more. The pool pays it,
+    // but it belongs to last period's call: the new period still has its whole 100¢ — four 25¢ calls.
+    await reconcileOpenRouterCosts({ fetcher: async (id) => (id === gen ? { totalCost: 2 * COST_25C } : 'not_found') });
+    expect((await seatCounted(w, w.marcusId)).usage.periodChargedMillicents).toBe(0);
+    expect(await spendUntilRefused(w, w.marcusId)).toBe(4);
+  });
+
+  it('WAL-2 (partial) WAL-7 (partial) an admin RAISING the DAILY cap takes effect at once on today\'s gross', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+    const w = world;
+    await db.insert(walletConsumerCaps).values({ walletId: w.poolId, consumerKey: `user:${w.marcusId}`, dailyCapCents: 50, monthlyCapCents: 1_000 });
+    await seatCallCosting(w, w.marcusId, COST_25C);
+    await seatCallCosting(w, w.marcusId, 2 * COST_25C);
+    // Today: 75¢ gross against 50¢ — 25¢ absorbed, the day reads 50¢.
+    expect((await seatCounted(w, w.marcusId)).usage.dayChargedMillicents).toBe(50_000);
+
+    await db.update(walletConsumerCaps).set({ dailyCapCents: 100 }).where(eq(walletConsumerCaps.walletId, w.poolId));
+
+    // The day is the real 75¢ against the new 100¢: exactly one more 25¢ call, not two.
+    expect((await seatCounted(w, w.marcusId)).usage.dayChargedMillicents).toBe(75_000);
+    expect(await spendUntilRefused(w, w.marcusId)).toBe(1);
+  });
+
   it('WAL-2 (partial) IRV-C3: an admin RAISING the cap takes effect at once on gross — concurrent calls fit only what the new cap leaves', async () => {
     if (!dbAvailable) return;
     world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });

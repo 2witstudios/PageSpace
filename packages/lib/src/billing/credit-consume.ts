@@ -25,7 +25,7 @@ import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { and, eq, isNull, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
 import { chargeMillicents, accruePending, allocateSpend, applyPaymentToDebt } from './credit-core';
-import { allocateWalletSpend, settleOvershoot, seatOvershootDeltaMillicents, seatPeriodStartMs, DEFAULT_OVERSHOOT_CHOICE } from './wallet-core';
+import { allocateWalletSpend, settleOvershoot, seatOvershootDeltaMillicents, DEFAULT_OVERSHOOT_CHOICE } from './wallet-core';
 import { childWalletFunds, ORG_SPEND_POLICY_UNTIL_POLICY_STORE, type WalletBalanceFacts } from './spend-target';
 import { loadSeatCapFacts, SEAT_OVERSHOOT_ENTRY } from './seat-allowance';
 import { drawWalletFundingLegs, creditWalletFundingLegs } from './wallet-legs';
@@ -209,8 +209,6 @@ export async function recordSeatOvershoot(
     ? await tx.select({ createdAt: creditLedger.createdAt }).from(creditLedger).where(eq(creditLedger.id, input.claimLedgerId))
     : [];
   const at = call?.createdAt ?? claim?.createdAt ?? new Date();
-  // A call from a period the pool has already closed has no open window to attribute to.
-  if (at.getTime() < seatPeriodStartMs({ poolPeriodStartMs: pool.monthlyPeriodStart?.getTime() ?? null, nowMs: Date.now() })) return none;
   const seat = await loadSeatCapFacts(tx, {
     poolId: input.walletId,
     poolPeriodStart: pool.monthlyPeriodStart,
