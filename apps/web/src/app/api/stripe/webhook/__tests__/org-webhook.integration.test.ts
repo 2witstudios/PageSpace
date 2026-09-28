@@ -11,12 +11,17 @@
  * replaced subscription never overwrites the current one; lapse is entered and left by
  * the mirror alone and never touches a credit.
  *
+ * Runs ARMED for the funding-legs invariant (D-OW-13), like lib's integration setup: every
+ * connection of this file's pool turns the check on and the commit-time trigger is
+ * installed, so ANY refill, mirror or fixture write that leaves a drive wallet's
+ * topupRemainingCents != SUM(legs) fails its own transaction.
+ *
  * Requires DATABASE_URL → a migrated Postgres (requireDb). Deletes every row it creates:
  * ledger, wallets and legs, org_subscriptions, members, orgs, then users.
  */
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import Stripe from 'stripe';
-import { db } from '@pagespace/db/db';
+import { db, pool as appPool } from '@pagespace/db/db';
 import { and, eq, inArray, isNull, or, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
@@ -34,6 +39,7 @@ import { TIER_PLAN_LIMITS } from '@pagespace/lib/billing/subscription-tiers';
 import { stripeConfig } from '@/lib/stripe-config';
 import { ensureOrgBusinessSubscription, type OrgBillingDeps, type OrgBillingStripe } from '@/lib/org-billing/org-subscription';
 import { FakeOrgStripe } from '@/lib/org-billing/__tests__/fake-org-stripe';
+import { WALLET_LEG_INVARIANT_GUC, expectWalletLegInvariant, installWalletLegInvariantTrigger } from '@pagespace/lib/test/wallet-leg-invariant';
 
 // The webhook reads the subscription through stripeOrgBilling(appStripe); here it reads
 // the in-memory Stripe of the org under test instead. Everything else is the real module.
@@ -63,6 +69,16 @@ const orgIds: string[] = [];
 const userIds: string[] = [];
 const eventIds: string[] = [];
 const signer = new Stripe('sk_test_signer_only_no_network');
+
+// Arm D-OW-13 on every connection this file's pool opens, registered before its first
+// query. A connection whose SET failed is remembered and thrown in beforeAll, never
+// swallowed, so a broken harness fails loudly instead of checking nothing.
+let armFailure: unknown = null;
+appPool.on('connect', (client) => {
+  client.query(`SET ${WALLET_LEG_INVARIANT_GUC} = 'on'`).catch((error: unknown) => {
+    armFailure = error;
+  });
+});
 
 interface Org {
   orgId: string;
@@ -160,15 +176,20 @@ async function storedSub(orgId: string) {
   return row;
 }
 
-/** D-OW-13 for the org's non-root wallets: topupRemainingCents == SUM(legs.remainingCents). */
-async function expectLegInvariant(orgId: string): Promise<void> {
-  const broken = await db.execute(sql`
-    select w.id from wallets w
-    left join wallet_funding_legs l on l."walletId" = w.id
-    where w."orgId" = ${orgId} and (w."parentWalletId" is not null or w."subjectType" is not null)
-    group by w.id, w."topupRemainingCents"
-    having w."topupRemainingCents" <> coalesce(sum(l."remainingCents"), 0)`);
-  expect(broken.rows).toEqual([]);
+/**
+ * An org drive wallet under the pool holding `topupCents` on one owner leg. Wallet and leg
+ * are written in ONE transaction: the armed trigger checks D-OW-13 at commit, and a wallet
+ * committed before its leg would (rightly) be refused.
+ */
+async function seedDriveWallet(orgId: string, poolId: string, topupCents: number) {
+  return db.transaction(async (tx) => {
+    const [driveWallet] = await tx
+      .insert(wallets)
+      .values({ ownerType: 'org', orgId, subjectType: 'drive', subjectId: `drv_owd3_${Math.random().toString(36).slice(2, 10)}`, parentWalletId: poolId, topupRemainingCents: topupCents, monthlyAllowanceCents: 1200, monthlyRemainingCents: 1200 })
+      .returning();
+    await tx.insert(walletFundingLegs).values({ walletId: driveWallet.id, funderKind: 'owner', funderOrgId: orgId, originalCents: topupCents, remainingCents: topupCents, nonRefundable: false });
+    return driveWallet;
+  });
 }
 
 function setStripeStatus(org: Org, status: string, extra: Partial<{ trialEnd: number | null }> = {}): void {
@@ -191,6 +212,20 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
     process.env.STRIPE_WEBHOOK_SECRET = WEBHOOK_SECRET;
     // constructEvent is a local HMAC check; the app client needs a key to exist, never a real one here.
     if (!process.env.STRIPE_SECRET_KEY) process.env.STRIPE_SECRET_KEY = 'sk_test_signature_only';
+    if (!dbAvailable) return;
+    await installWalletLegInvariantTrigger(appPool);
+    // Prove the arming on EVERY connection the pool holds (checked out at once, so no idle
+    // one is skipped), rather than trust the hook ran.
+    const clients = await Promise.all(Array.from({ length: Math.max(appPool.totalCount, 1) }, () => appPool.connect()));
+    try {
+      const armed = await Promise.all(
+        clients.map(async (c) => (await c.query<{ armed: string | null }>(`SELECT current_setting('${WALLET_LEG_INVARIANT_GUC}', true) AS armed`)).rows[0]?.armed),
+      );
+      if (armed.some((a) => a !== 'on')) throw new Error(`wallet-leg invariant is not armed on every connection: ${JSON.stringify(armed)}`);
+    } finally {
+      for (const c of clients) c.release();
+    }
+    if (armFailure) throw armFailure;
   });
 
   afterEach(() => {
@@ -296,6 +331,8 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
     const pool = await poolOf(org.orgId);
     expect(pool?.monthlyRemainingCents).toBe(expected);
     expect(await ledgerRows(pool!.id)).toHaveLength(1);
+    // A funded drive wallet under the pool, so the replay has a non-root wallet to keep whole.
+    const driveWallet = await seedDriveWallet(org.orgId, pool!.id, 300);
     const readsAfterFirst = org.stripe.reads.retrieveSubscription;
     const rowAfterFirst = await storedSub(org.orgId);
 
@@ -304,7 +341,7 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
     expect(await ledgerRows(pool!.id)).toHaveLength(1);
     expect(org.stripe.reads.retrieveSubscription).toBe(readsAfterFirst);
     expect((await storedSub(org.orgId)).updatedAt).toEqual(rowAfterFirst.updatedAt);
-    await expectLegInvariant(org.orgId);
+    await expectWalletLegInvariant([driveWallet.id]);
   });
 
   it('SEAT-7 (partial) two CONCURRENT deliveries of the same event cannot both apply: one runs, the other is told to retry, and the retry is acked', async () => {
@@ -496,11 +533,7 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
       ),
     ).toBe(200);
     const pool = (await poolOf(org.orgId))!;
-    const [driveWallet] = await db
-      .insert(wallets)
-      .values({ ownerType: 'org', orgId: org.orgId, subjectType: 'drive', subjectId: `drv_owd3_${Math.random().toString(36).slice(2, 10)}`, parentWalletId: pool.id, topupRemainingCents: 500, monthlyAllowanceCents: 1200, monthlyRemainingCents: 1200 })
-      .returning();
-    await db.insert(walletFundingLegs).values({ walletId: driveWallet.id, funderKind: 'owner', funderOrgId: org.orgId, originalCents: 500, remainingCents: 500, nonRefundable: false });
+    const driveWallet = await seedDriveWallet(org.orgId, pool.id, 500);
     const snapshotOf = async () =>
       (await db.select().from(wallets).where(eq(wallets.orgId, org.orgId))).map((w) => ({ id: w.id, m: w.monthlyRemainingCents, t: w.topupRemainingCents, d: w.debtCents, s: w.status })).sort((a, b) => a.id.localeCompare(b.id));
     const legsOf = async () => (await db.select().from(walletFundingLegs).where(eq(walletFundingLegs.walletId, driveWallet.id))).map((l) => l.remainingCents);
@@ -522,7 +555,7 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
     expect(await getOrgStatus(org.orgId)).toEqual({ status: 'lapsed', reason: 'unpaid' });
     expect(await snapshotOf()).toEqual(walletsBefore);
     expect(await legsOf()).toEqual(legsBefore);
-    await expectLegInvariant(org.orgId);
+    await expectWalletLegInvariant([driveWallet.id]);
 
     // The card works again: the paid invoice lifts the lapse, and the credits are exactly where they were plus the new grant.
     setStripeStatus(org, 'active');
@@ -533,7 +566,7 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
     expect(driveAfter.topupRemainingCents).toBe(500);
     expect(driveAfter.monthlyRemainingCents).toBe(1200);
     expect(await legsOf()).toEqual(legsBefore);
-    await expectLegInvariant(org.orgId);
+    await expectWalletLegInvariant([driveWallet.id]);
   });
 
   it('SEAT-9 (partial) a canceled subscription lapses the org; a late event about that ENDED subscription never lapses its replacement', async () => {
