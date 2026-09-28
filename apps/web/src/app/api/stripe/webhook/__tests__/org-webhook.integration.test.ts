@@ -422,6 +422,31 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
     expect(afterOlder?.monthlyRemainingCents).toBe(rows[0].amountCents + rows[1].amountCents);
   });
 
+  it('MON-3 (partial) an OLDER invoice for fewer seats paid late adds its credits once but never steps the current allowance back (ow-irv-2739 P3-2)', async () => {
+    if (!dbAvailable) return;
+    const org = await northwind(7);
+    const october = 1_800_000_000 + 30 * DAY;
+    const november = october + 30 * DAY;
+    const base = { customer: org.customerId, subscriptionId: org.subscriptionId, metadata: orgMetadata(org.orgId), paid: true, billingReason: 'subscription_cycle' as const };
+    // Seats grew between the periods: October billed 1 extra seat, November 4.
+    expect(await deliver(eventPayload('invoice.paid', invoiceObject({ ...base, seats: 4, periodStart: november })))).toBe(200);
+    const afterNewer = (await poolOf(org.orgId))!;
+    expect(await deliver(eventPayload('invoice.paid', invoiceObject({ ...base, seats: 1, periodStart: october })))).toBe(200);
+    const afterOlder = (await poolOf(org.orgId))!;
+
+    const rows = await ledgerRows(afterOlder.id);
+    expect(rows).toHaveLength(2);
+    const [novemberGrant, octoberGrant] = [rows.find((r) => r.amountCents === afterNewer.monthlyAllowanceCents), rows.find((r) => r.amountCents !== afterNewer.monthlyAllowanceCents)];
+    // Non-vacuity: the two periods really grant different amounts.
+    expect(novemberGrant).toBeDefined();
+    expect(octoberGrant).toBeDefined();
+    expect(octoberGrant!.amountCents).toBeLessThan(novemberGrant!.amountCents);
+    // The current (November) allowance stands; October's credits are added, once.
+    expect(afterOlder.monthlyAllowanceCents).toBe(afterNewer.monthlyAllowanceCents);
+    expect(afterOlder.monthlyRemainingCents).toBe(novemberGrant!.amountCents + octoberGrant!.amountCents);
+    expect(afterOlder.monthlyPeriodStart?.getTime()).toBe(november * 1000);
+  });
+
   it("SEAT-7 (partial) a person's invoice never funds an org pool, and an org-tagged invoice on a person's customer funds nobody", async () => {
     if (!dbAvailable) return;
     const org = await northwind(7);
