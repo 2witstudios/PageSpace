@@ -16,11 +16,14 @@
  * rather than through a role: a role can be granted, and "may spend this person's
  * money" is not something a role should be able to grant.
  *
- * AN ORG DRIVE'S APP CANNOT BE BOUGHT YET (WAL-9 interim). Its hosting bills the
- * org, and this purchase can only charge a person's card, so POST refuses with the
- * named `org_billing_pending` (409) rather than committing the lead's card to the
- * org's bill; the org Stripe customer (Phase 3) and the C3 lane replace it. Cancel
- * stays open: it can only stop a charge, never start one.
+ * AN ORG DRIVE'S APP CANNOT BE BOUGHT AS DEDICATED YET (WAL-9). Its hosting bills
+ * the org, and this purchase is a Stripe subscription on a PERSON's card — not a
+ * wallet debit, so the org-pool charging every metered compute site now uses
+ * (`billing/compute-gate.ts`) cannot stand in for it. POST refuses with the named
+ * `org_billing_pending` (409) rather than committing the lead's card to the org's
+ * bill, until the org's own Stripe customer (Phase 3) can be billed. A METERED org
+ * app is unaffected: it runs and bills the org pool. Cancel stays open: it can only
+ * stop a charge, never start one.
  *
  * Dark behind `APP_HOSTING_ENABLED`, and inert where `isBillingEnabled()` is false
  * (tenant, onprem) — both checked inside `isDedicatedTierPurchasable()`, before any
