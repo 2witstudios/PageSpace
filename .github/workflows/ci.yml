@@ -538,21 +538,7 @@ jobs:
       # process — the Next build worker — so each run shows how close the build
       # is to the heap ceiling above.
       - name: Run ESLint
-        run: |
-          # TEMPORARY heap probe for #2740 — reverted before merge. Output path is
-          # derived from __filename because turbo strict env strips unknown vars.
-          cat > "$RUNNER_TEMP/heap-probe.cjs" <<'PROBE'
-          const v8 = require('v8'); const fs = require('fs');
-          let peak = 0, peakTotal = 0;
-          const lim = v8.getHeapStatistics().heap_size_limit;
-          const sample = () => { const s = v8.getHeapStatistics(); if (s.used_heap_size > peak) peak = s.used_heap_size; if (s.total_heap_size > peakTotal) peakTotal = s.total_heap_size; };
-          setInterval(sample, 100).unref();
-          process.on('exit', () => { sample(); if (peak > 256 * 2 ** 20) fs.appendFileSync(__filename + '.out', `pid=${process.pid} peak_used=${(peak / 2 ** 20).toFixed(0)}MB peak_committed=${(peakTotal / 2 ** 20).toFixed(0)}MB limit=${(lim / 2 ** 20).toFixed(0)}MB cmd=${process.argv.slice(1).join(' ').slice(0, 140)}\n`); });
-          PROBE
-          export NODE_OPTIONS="$NODE_OPTIONS --require $RUNNER_TEMP/heap-probe.cjs"
-          /usr/bin/time -v bun run lint
-          echo "=== HEAP PROBE (processes with >256MB peak heap) ==="
-          sort -t= -k3 -n "$RUNNER_TEMP/heap-probe.cjs.out" || true
+        run: /usr/bin/time -v bun run lint
 
       - name: Run TypeScript check
         run: bun run typecheck
