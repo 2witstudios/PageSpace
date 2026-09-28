@@ -16,6 +16,7 @@ import {
   applyPaymentToDebt,
   classifyStripeEvent,
   computeBackfillActions,
+  orphanSpendKind,
   computeCostDrift,
   computeBalanceDrift,
   isNegativeMargin,
@@ -565,6 +566,31 @@ describe('classifyStripeEvent', () => {
   });
 });
 
+describe('computeBackfillActions — orphan wallet and spend kind', () => {
+  it("WAL-9 (partial) an orphaned org-pool compute charge re-settles on the recorded wallet with its compute kind — never the person's own wallet", () => {
+    const [action] = computeBackfillActions(
+      [],
+      [{ aiUsageLogId: 'aul_org', userId: 'lead', costDollars: 0.02, source: 'terminal', walletId: 'pool-1', metadata: { spendKind: 'compute' } }],
+      {},
+    );
+    expect(action).toEqual({ kind: 'apply_orphan', aiUsageLogId: 'aul_org', userId: 'lead', costDollars: 0.02, walletId: 'pool-1', spendKind: 'compute' });
+  });
+
+  it('an orphan that named no wallet keeps charging the personal root, as an AI call', () => {
+    const [action] = computeBackfillActions([], [{ aiUsageLogId: 'a', userId: 'u', costDollars: 1, walletId: null, metadata: {} }], {});
+    expect(action).toEqual({ kind: 'apply_orphan', aiUsageLogId: 'a', userId: 'u', costDollars: 1, spendKind: 'ai' });
+  });
+});
+
+describe('orphanSpendKind', () => {
+  it('reads only the explicit compute marker', () => {
+    expect(orphanSpendKind({ spendKind: 'compute' })).toBe('compute');
+    expect(orphanSpendKind({ spendKind: 'other' })).toBe('ai');
+    expect(orphanSpendKind(null)).toBe('ai');
+    expect(orphanSpendKind('compute')).toBe('ai');
+  });
+});
+
 describe('computeBackfillActions', () => {
   it('plans a retry for each pending ledger row and an apply for each orphan usage row', () => {
     const actions = computeBackfillActions(
@@ -575,7 +601,7 @@ describe('computeBackfillActions', () => {
     expect(actions).toEqual([
       { kind: 'retry_pending', ledgerId: 'led_1' },
       { kind: 'retry_pending', ledgerId: 'led_2' },
-      { kind: 'apply_orphan', aiUsageLogId: 'aul_1', userId: 'u1', costDollars: 0.5 },
+      { kind: 'apply_orphan', aiUsageLogId: 'aul_1', userId: 'u1', costDollars: 0.5, spendKind: 'ai' },
     ]);
   });
 
@@ -594,7 +620,7 @@ describe('computeBackfillActions', () => {
       { terminal: 20000 }, // a distinct value from the general markup, so passthrough is provable
     );
     expect(actions).toEqual([
-      { kind: 'apply_orphan', aiUsageLogId: 'aul_term', userId: 'u1', costDollars: 0.02, markupBpsOverride: 20000 },
+      { kind: 'apply_orphan', aiUsageLogId: 'aul_term', userId: 'u1', costDollars: 0.02, markupBpsOverride: 20000, spendKind: 'ai' },
     ]);
   });
 
@@ -610,8 +636,8 @@ describe('computeBackfillActions', () => {
       { terminal: 20000, voice: 18000 },
     );
     expect(actions).toEqual([
-      { kind: 'apply_orphan', aiUsageLogId: 'aul_term', userId: 'u1', costDollars: 0.02, markupBpsOverride: 20000 },
-      { kind: 'apply_orphan', aiUsageLogId: 'aul_voice', userId: 'u1', costDollars: 0.02, markupBpsOverride: 18000 },
+      { kind: 'apply_orphan', aiUsageLogId: 'aul_term', userId: 'u1', costDollars: 0.02, markupBpsOverride: 20000, spendKind: 'ai' },
+      { kind: 'apply_orphan', aiUsageLogId: 'aul_voice', userId: 'u1', costDollars: 0.02, markupBpsOverride: 18000, spendKind: 'ai' },
     ]);
   });
 
@@ -625,8 +651,8 @@ describe('computeBackfillActions', () => {
       { terminal: 20000 },
     );
     expect(actions).toEqual([
-      { kind: 'apply_orphan', aiUsageLogId: 'aul_chat', userId: 'u1', costDollars: 0.5 },
-      { kind: 'apply_orphan', aiUsageLogId: 'aul_none', userId: 'u2', costDollars: 0.5 },
+      { kind: 'apply_orphan', aiUsageLogId: 'aul_chat', userId: 'u1', costDollars: 0.5, spendKind: 'ai' },
+      { kind: 'apply_orphan', aiUsageLogId: 'aul_none', userId: 'u2', costDollars: 0.5, spendKind: 'ai' },
     ]);
     expect(actions[0]).not.toHaveProperty('markupBpsOverride');
     expect(actions[1]).not.toHaveProperty('markupBpsOverride');

@@ -20,7 +20,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { creditHolds, creditLedger } from '@pagespace/db/schema/credits';
+import { creditHolds, creditLedger, type SpendKind } from '@pagespace/db/schema/credits';
 import { wallets, personalRootWalletOf, PERSONAL_ROOT_WALLET_ARBITER } from '@pagespace/db/schema/wallets';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { subscriptions } from '@pagespace/db/schema/subscriptions';
@@ -195,6 +195,11 @@ export interface GateOptions {
    * reserves on exactly the wallet this resolves to and never switches (SPEND-4).
    */
   spend: SpendTarget;
+  /**
+   * What the hold reserves FOR: an AI call (the default) or compute (WAL-9). Written on the
+   * hold row, so a compute hold on an org pool never counts toward a seat.
+   */
+  spendKind?: SpendKind;
 }
 
 /**
@@ -351,7 +356,7 @@ export async function canConsumeAI(
       const walletId = await ensurePersonalRootWalletId(tx, userId);
       const inserted = await tx
         .insert(creditHolds)
-        .values({ userId, walletId, estCents: estCost, expiresAt })
+        .values({ userId, walletId, estCents: estCost, expiresAt, spendKind: opts.spendKind ?? 'ai' })
         .returning({ id: creditHolds.id });
       return { allowed: true, reason: 'unlimited', holdId: inserted[0]?.id };
     });
@@ -735,7 +740,7 @@ async function gatePersonalRoot(
     // reconcile sweep to expire.
     const inserted = await tx
       .insert(creditHolds)
-      .values({ userId, walletId: bal.id, estCents: estCost, expiresAt })
+      .values({ userId, walletId: bal.id, estCents: estCost, expiresAt, spendKind: opts.spendKind ?? 'ai' })
       .returning({ id: creditHolds.id });
 
     // Net spendable after ALL holds (existing `reserved` + this call's `estCost`) and
@@ -862,7 +867,7 @@ async function gateSharedWallet(
 
     const inserted = await tx
       .insert(creditHolds)
-      .values({ userId, walletId: wallet.id, estCents: estCost, expiresAt })
+      .values({ userId, walletId: wallet.id, estCents: estCost, expiresAt, spendKind: opts.spendKind ?? 'ai' })
       .returning({ id: creditHolds.id });
 
     return {

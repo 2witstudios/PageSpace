@@ -6,6 +6,7 @@
 import { db } from '@pagespace/db/db';
 import { sql, and, eq, gte, lte } from '@pagespace/db/operators';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
+import type { SpendKind } from '@pagespace/db/schema/credits';
 import { writeAiUsage } from '../logging/logger-database';
 import { consumeCredits, releaseHold } from '../billing/credit-consume';
 import { CACHE_READ_DISCOUNT_FACTOR_BPS } from '../billing/credit-pricing';
@@ -1229,6 +1230,11 @@ export interface AIUsageData {
   // user. Absent for un-gated calls, which charge the personal root wallet.
   walletId?: string;
 
+  // What the spend is FOR: an AI call (the default) or compute (WAL-9). Written on the
+  // ledger rows and stamped into metadata.spendKind, so the orphan recovery re-settles
+  // with the same kind; compute on an org pool never counts toward a seat.
+  spendKind?: SpendKind;
+
   // Override the cost provenance stamped into metadata.costSource (which the admin
   // panel reads to classify coverage). Defaults to 'openrouter' when a finite
   // providerCostDollars is given, else 'estimate'. Voice routes pass 'list_price'
@@ -1448,7 +1454,13 @@ export async function trackAIUsage(data: AIUsageData): Promise<UsageTrackingOutc
           // when present (OpenRouter calls); the cron reads these to fetch authoritative
           // /generation costs and correct billing drift.
           ...(generationIds.length > 0 ? { generationIds } : {}),
+          // Explicit for the orphan recovery: a usage row whose settle never landed is
+          // re-settled with this kind (credit-backfill), never guessed from its source.
+          ...(data.spendKind === 'compute' ? { spendKind: 'compute' } : {}),
         },
+        // WAL-5: the wallet this call is charged to, recorded WITH the usage row so the
+        // orphan recovery re-settles on it — never re-derived onto the person's own wallet.
+        ...(data.walletId !== undefined ? { walletId: data.walletId } : {}),
         reconcileStatus,
       });
       // `writeAiUsage` CATCHES its own failure and returns null rather than
@@ -1500,6 +1512,7 @@ export async function trackAIUsage(data: AIUsageData): Promise<UsageTrackingOutc
           costDollars: cost,
           holdId: data.holdId,
           walletId: data.walletId,
+          spendKind: data.spendKind,
           // Scope the live balance push so the per-conversation usage monitor
           // refreshes the right view; the navbar widget updates regardless.
           conversationId: data.conversationId,

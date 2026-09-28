@@ -38,11 +38,10 @@ import { db } from '@pagespace/db/db';
 import { and, eq, isNull, or, sql } from '@pagespace/db/operators';
 import { publishedApps } from '@pagespace/db/schema/published-apps';
 import { customDomains } from '@pagespace/db/schema/custom-domains';
-import { hasSpendableBalance } from '../../billing/credit-gate';
-import { resolveTier } from '../../billing/credit-balance';
+import { hasSpendableComputeBalance } from '../../billing/compute-gate';
 import { loggers } from '../../logging/logger-config';
 import { defaultAppBillingDeps } from './app-billing';
-import type { UserPayerResult } from '../../billing/sandbox-payer';
+import type { ComputeCharge } from '../../billing/compute-charge';
 import { isAppHostingEnabled, resolveHitStampIntervalSeconds } from './app-hosting-env';
 import {
   DAILY_CAP_PARK_REASON,
@@ -79,14 +78,15 @@ export interface AppRouterDeps {
    * (the drive's payer, via `resolveEnvPayer`). Null means unresolvable (a stale
    * read of a drive mid-delete); the caller refuses rather than substituting a
    * payer or falling back to a denormalized column the meter does not charge.
-   * An org drive answers the named `org_billing_pending` refusal (WAL-9 interim,
-   * until the C3 lane), and the router refuses it the same way.
+   * An org drive's charge is the org pool (WAL-9), whose balance is what is asked.
    */
-  resolvePayerId: (input: { driveId: string }) => Promise<UserPayerResult | null>;
-  /** The payer's subscription tier — the allowance the balance is judged against. */
-  resolveTier: (userId: string) => Promise<string>;
-  /** Whether the payer can still spend. */
-  hasSpendableBalance: (userId: string, tier: string) => Promise<boolean>;
+  resolveCharge: (input: { driveId: string }) => Promise<ComputeCharge | null>;
+  /**
+   * Whether the charge's wallet can still spend: the payer's personal balance
+   * (judged against their tier), or the org pool (missing or paused = no).
+   * Read-only — this edge never holds.
+   */
+  hasSpendableBalance: (charge: ComputeCharge) => Promise<boolean>;
   /**
    * Record that this app was just served — the idle reaper's only evidence of
    * demand. Throttled inside; see {@link stampAppHit}.
@@ -176,10 +176,8 @@ export const defaultAppRouterDeps: AppRouterDeps = {
   // and the wake gate — not an equivalent, the identical function — so a drift
   // between "who the router asks" and "who the meter charges" is structurally
   // impossible rather than merely kept in sync by convention.
-  resolvePayerId: defaultAppBillingDeps.resolvePayerId,
-  resolveTier: (userId) => resolveTier(userId),
-  hasSpendableBalance: (userId, tier) =>
-    hasSpendableBalance(userId, tier as Parameters<typeof hasSpendableBalance>[1]),
+  resolveCharge: defaultAppBillingDeps.resolveCharge,
+  hasSpendableBalance: hasSpendableComputeBalance,
   stampHit: stampAppHit,
   wake: (publishedAppId) => wakePublishedAppSerialized(publishedAppId),
 };
@@ -268,8 +266,6 @@ function refusalForWake(wake: WakePublishedAppRunResult, driveId: string, envId:
         case 'disabled':
           return { kind: 'unavailable', reason: 'hosting_disabled', driveId, envId };
         case 'unresolved_payer':
-        // WAL-9 interim: the org pays and nothing can charge it yet (C3 lane).
-        case 'org_billing_pending':
           // No honest payer, so no start. Refusing costs one visitor a page;
           // serving would bill a machine to somebody who may not own the drive.
           return { kind: 'unavailable', reason: 'failed', driveId, envId };
@@ -341,15 +337,11 @@ async function decideForRow(app: PublishedAppRouteRow, deps: AppRouterDeps): Pro
   // than a hope. `decideAppRoute` still re-checks the tier itself, so the skip
   // here can never quietly become the policy.
   if (app.tier === 'metered') {
-    const payer = await deps.resolvePayerId({ driveId: app.driveId });
-    // An unresolvable drive — or an org payer, which nothing can charge until the C3
-    // lane (WAL-9 interim) — fails CLOSED here: the router has no person to ask, so it
+    const charge = await deps.resolveCharge({ driveId: app.driveId });
+    // An unresolvable drive fails CLOSED here: the router has nobody to ask, so it
     // refuses exactly as the wake gate does, rather than assuming a balance nobody can
-    // vouch for or asking the lead's.
-    const payerId = payer?.ok ? payer.userId : null;
-    const balanceOk = payerId
-      ? await deps.hasSpendableBalance(payerId, await deps.resolveTier(payerId))
-      : false;
+    // vouch for. An org drive asks the ORG POOL (WAL-9), never the lead's balance.
+    const balanceOk = charge ? await deps.hasSpendableBalance(charge) : false;
     if (!balanceOk) {
       return decideAppRoute({ app: routable, balanceOk: false, replayState: 'pending' });
     }

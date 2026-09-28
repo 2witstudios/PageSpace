@@ -65,6 +65,8 @@ export const defaultSandboxBillingDeps: SandboxBillingDeps = {
       provider: 'sprites',
       model: 'terminal-machine',
       source: 'terminal',
+      // Compute, not an AI call: never a seat draw on an org pool (WAL-9).
+      spendKind: 'compute',
       // The referenced agent page — purely descriptive per-agent grouping,
       // never the payer source (resolved from the session by `resolveCharge`
       // above).

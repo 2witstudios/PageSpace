@@ -424,11 +424,38 @@ export interface OrphanUsageRow {
    * `computeBackfillActions`).
    */
   source?: AIUsageSource | string | null;
+  /**
+   * The wallet the call was charged to, recorded on the usage row (WAL-5). Re-settled there,
+   * so an org pool's compute is never re-billed to the recorded person's own wallet. Null on
+   * rows that named none (they charge the personal root, as before wallets).
+   */
+  walletId?: string | null;
+  /** The usage row's metadata, whose explicit `spendKind: 'compute'` is carried to the re-settle. */
+  metadata?: unknown;
 }
 
 export type BackfillAction =
   | { kind: 'retry_pending'; ledgerId: string }
-  | { kind: 'apply_orphan'; aiUsageLogId: string; userId: string; costDollars: number; markupBpsOverride?: number };
+  | {
+      kind: 'apply_orphan';
+      aiUsageLogId: string;
+      userId: string;
+      costDollars: number;
+      markupBpsOverride?: number;
+      walletId?: string;
+      spendKind: 'ai' | 'compute';
+    };
+
+/**
+ * What an orphan usage row's spend was FOR, read from the EXPLICIT marker its writer stamped
+ * (`metadata.spendKind`, AIMonitoring.trackUsage) — never inferred from its source. Anything
+ * else is 'ai', which every row written before compute was marked was.
+ */
+export function orphanSpendKind(metadata: unknown): 'ai' | 'compute' {
+  return typeof metadata === 'object' && metadata !== null && (metadata as { spendKind?: unknown }).spendKind === 'compute'
+    ? 'compute'
+    : 'ai';
+}
 
 /**
  * Plan the reconcile work: retry every unsettled ('pending') ledger row, then
@@ -463,6 +490,8 @@ export function computeBackfillActions(
         userId: row.userId,
         costDollars: row.costDollars,
         ...(markupBpsOverride !== undefined ? { markupBpsOverride } : {}),
+        ...(typeof row.walletId === 'string' && row.walletId.length > 0 ? { walletId: row.walletId } : {}),
+        spendKind: orphanSpendKind(row.metadata),
       };
     }),
   ];

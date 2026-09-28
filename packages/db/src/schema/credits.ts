@@ -5,6 +5,21 @@ import { users } from './auth';
 import { wallets } from './wallets';
 
 /**
+ * What a hold or ledger row's money is FOR (point-guard ruling on ow-c7b): an AI call ('ai') or
+ * compute ('compute': sandbox runtime, terminal, browsers, environments, published apps, machine
+ * storage — WAL-9). Compute in an org drive is the ORG's spend on its pool, not a consumer's draw
+ * on a seat, so the seat reads (seat-allowance `loadSeatCapFacts`, credit-consume
+ * `recordSeatOvershoot`) test this column and count only 'ai'. Every row written before the
+ * column existed was AI spend, hence the default.
+ *
+ * No CHECK constraint, deliberately: validating one scans the whole (hot, growing) ledger under
+ * an ACCESS EXCLUSIVE lock at deploy, whereas a NOT NULL column with a constant default is a
+ * metadata-only change on PostgreSQL 11+. The type is enforced by `SpendKind` at every writer.
+ */
+export const SPEND_KINDS = ['ai', 'compute'] as const;
+export type SpendKind = (typeof SPEND_KINDS)[number];
+
+/**
  * creditLedger — append-only audit/provenance. One row per grant, purchase, or
  * usage decrement. The unique indexes are the correctness backbone:
  *   - one USAGE decrement per aiUsageLogId  (each AI call billed exactly once)
@@ -37,6 +52,8 @@ export const creditLedger = pgTable('credit_ledger', {
   // 'adjustment' for the same aiUsageLogId; this key (the sorted-joined OpenRouter
   // generation ids) does. Set only on reconcile adjustment rows; NULL everywhere else.
   reconcileGenerationKey: text('reconcileGenerationKey'),
+  /** AI spend or compute spend — see {@link SPEND_KINDS}. Compute never counts toward a seat. */
+  spendKind: text('spendKind').$type<SpendKind>().default('ai').notNull(),
   createdAt: timestamp('createdAt', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   userIdx: index('credit_ledger_user_idx').on(table.userId, table.createdAt),
@@ -74,6 +91,8 @@ export const creditHolds = pgTable('credit_holds', {
   walletId: text('walletId').notNull().references(() => wallets.id, { onDelete: 'cascade' }),
   estCents: integer('estCents').notNull(),
   aiUsageLogId: text('aiUsageLogId'),
+  /** AI spend or compute spend — see {@link SPEND_KINDS}. A compute hold never counts toward a seat. */
+  spendKind: text('spendKind').$type<SpendKind>().default('ai').notNull(),
   createdAt: timestamp('createdAt', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
   expiresAt: timestamp('expiresAt', { mode: 'date', withTimezone: true }).notNull(),
 }, (table) => ({
@@ -85,6 +104,19 @@ export const creditHolds = pgTable('credit_holds', {
   expiresIdx: index('credit_holds_expires_idx').on(table.expiresAt),
   estNonNeg: check('credit_holds_est_cents_nonneg', sql`${table.estCents} >= 0`),
 }));
+
+/**
+ * billing_epochs — instants a billing rule went live on THIS deployment, stamped once by the first
+ * code path that needs one and never moved (INSERT … ON CONFLICT DO NOTHING).
+ *
+ * 'org_compute': when org drives' compute (WAL-9) began charging the org pool. Before it, every
+ * compute meter refused an org payer and left the row's watermark behind; accrual from before the
+ * epoch is forgiven, never charged (`billing/org-compute-epoch-core.ts`).
+ */
+export const billingEpochs = pgTable('billing_epochs', {
+  key: text('key').primaryKey(),
+  startedAt: timestamp('startedAt', { mode: 'date', withTimezone: true }).notNull(),
+});
 
 export const creditLedgerRelations = relations(creditLedger, ({ one }) => ({
   user: one(users, {

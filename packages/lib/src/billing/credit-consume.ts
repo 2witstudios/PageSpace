@@ -19,7 +19,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { creditLedger, creditHolds } from '@pagespace/db/schema/credits';
+import { creditLedger, creditHolds, type SpendKind } from '@pagespace/db/schema/credits';
 import { wallets } from '@pagespace/db/schema/wallets';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { and, eq, isNull, sql } from '@pagespace/db/operators';
@@ -68,6 +68,12 @@ export interface ConsumeCreditsInput {
    * here so its 1.5× substrate floor holds independent of AI markup changes.
    */
   markupBpsOverride?: number;
+  /**
+   * What the charge is FOR: an AI call (default) or compute (WAL-9). Written on the usage
+   * claim and its debt row; the seat reads count only 'ai', so an org pool's compute is
+   * never a consumer's seat draw.
+   */
+  spendKind?: SpendKind;
 }
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -116,6 +122,7 @@ async function decrementAndSettle(
   chargeMc: number,
   aiUsageLogId: string | null,
   holdId: string | null = null,
+  spendKind: SpendKind = 'ai',
 ): Promise<boolean> {
   const settled = await chargeWallet(tx, walletId, chargeMc, aiUsageLogId);
 
@@ -152,6 +159,7 @@ async function decrementAndSettle(
       amountCents: -settled.debt.cents,
       aiUsageLogId,
       consumeStatus: 'applied',
+      spendKind,
     });
   }
 
@@ -521,6 +529,7 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<Credit
         realCostCents,
         markupBps,
         consumeStatus: 'pending',
+        spendKind: input.spendKind ?? 'ai',
       })
       // The unique index on aiUsageLogId is partial (WHERE aiUsageLogId IS NOT NULL
       // AND entryType = 'usage'); Postgres can only infer it as the conflict arbiter
@@ -596,6 +605,7 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<Credit
         chargeMc,
         input.aiUsageLogId,
         input.holdId ?? null,
+        input.spendKind ?? 'ai',
       );
     });
     // A committed transaction that decremented NOTHING (no balance row yet) left
@@ -665,6 +675,7 @@ export async function settlePendingLedgerRow(ledgerId: string): Promise<void> {
           chargeMillicents: number | null;
           aiUsageLogId: string | null;
           consumeStatus: string;
+          spendKind: SpendKind;
         }
       | undefined;
     if (!row || row.consumeStatus !== 'pending') return;
@@ -673,7 +684,8 @@ export async function settlePendingLedgerRow(ledgerId: string): Promise<void> {
     // precision on those legacy rows only).
     const chargeMc = row.chargeMillicents ?? Math.abs(row.amountCents) * 1000;
     // Settle against the wallet the claim named (WAL-5), never re-derived from the user.
-    await decrementAndSettle(tx, ledgerId, row.userId, row.walletId, chargeMc, row.aiUsageLogId);
+    // The debt row keeps the claim's kind, so compute debt never reads as a seat draw.
+    await decrementAndSettle(tx, ledgerId, row.userId, row.walletId, chargeMc, row.aiUsageLogId, null, row.spendKind);
     settledUserId = row.userId;
   });
   // A pending row settled this run (cron retry): push the user's fresh balance so a

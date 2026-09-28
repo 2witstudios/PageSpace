@@ -103,6 +103,39 @@ export function planAwakeSettle({ billedThrough, now }: AwakeWindowInput): Awake
 }
 
 /**
+ * An ORG row's awake settle, with the span from before org compute billing went live forgiven
+ * (WAL-9; `billing/org-compute-epoch-core.ts`): the interim refusal left org apps' watermarks
+ * behind while nothing could bill an org. Pure.
+ *
+ * `forgiven` is null when the watermark is at or after the epoch (a normal settle). Otherwise it
+ * names the forgiven span and the seconds that WOULD have been billed for it (the same clamp a
+ * normal settle applies), and `plan` is the settle from the epoch — a zero-second settle to
+ * `now` when nothing after the epoch has elapsed yet, so the watermark still moves past the
+ * forgiven span on the first org-billed tick.
+ */
+export function planOrgAwakeSettle(input: { billedThrough: Date; now: Date; epoch: Date }): {
+  plan: Extract<AwakeSettlePlan, { action: 'settle' }> | { action: 'skip' };
+  forgiven: { from: Date; through: Date; wouldHaveBilledSeconds: number } | null;
+} {
+  const { billedThrough, now, epoch } = input;
+  if (billedThrough.getTime() >= epoch.getTime()) {
+    const plan = planAwakeSettle({ billedThrough, now });
+    return { plan: plan.action === 'settle' ? plan : { action: 'skip' }, forgiven: null };
+  }
+  const through = new Date(Math.min(epoch.getTime(), now.getTime()));
+  const backlog = planAwakeSettle({ billedThrough, now: through });
+  const fromEpoch = planAwakeSettle({ billedThrough: through, now });
+  return {
+    plan: fromEpoch.action === 'settle' ? fromEpoch : { action: 'settle', activeSeconds: 0, billedThrough: now, clamped: false },
+    forgiven: {
+      from: billedThrough,
+      through,
+      wouldHaveBilledSeconds: backlog.action === 'settle' ? backlog.activeSeconds : 0,
+    },
+  };
+}
+
+/**
  * The awake boundary a mirrored event marks, or null for an event that is not a
  * boundary at all.
  *

@@ -128,6 +128,11 @@ export async function backfillCredits(): Promise<BackfillResult> {
         // Recover the per-source markup (e.g. terminal's own floor) that the
         // original call never got to apply — see computeBackfillActions.
         source: aiUsageLogs.source,
+        // WAL-5 / WAL-9: the wallet the call was charged to and what it was for, recorded
+        // with the usage row, so recovery settles exactly there — an org pool's compute
+        // never lands on the recorded person's own wallet, nor counts toward their seat.
+        walletId: aiUsageLogs.walletId,
+        metadata: aiUsageLogs.metadata,
       })
       .from(aiUsageLogs)
       .leftJoin(creditLedger, eq(creditLedger.aiUsageLogId, aiUsageLogs.id))
@@ -150,6 +155,8 @@ export async function backfillCredits(): Promise<BackfillResult> {
         userId: o.userId,
         costDollars: o.cost ?? 0,
         source: o.source,
+        walletId: o.walletId,
+        metadata: o.metadata,
       })),
       MARKUP_BPS_OVERRIDES_BY_SOURCE,
     );
@@ -165,6 +172,8 @@ export async function backfillCredits(): Promise<BackfillResult> {
             userId: action.userId,
             costDollars: action.costDollars,
             markupBpsOverride: action.markupBpsOverride,
+            walletId: action.walletId,
+            spendKind: action.spendKind,
           });
           orphanCount++;
         }

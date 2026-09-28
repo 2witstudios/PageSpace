@@ -28,7 +28,7 @@ import type { UsageTrackingOutcome } from '../monitoring/ai-monitoring';
 import { computeChargeTier, orgComputeRefusalOf, type ComputeCharge, type OrgComputeGateRefusal } from './compute-charge';
 
 /** A compute site's reservation bounds; `maxInFlight` may follow the charge's tier. */
-export interface ComputeGateOptions extends Omit<GateOptions, 'spend' | 'maxInFlight'> {
+export interface ComputeGateOptions extends Omit<GateOptions, 'spend' | 'maxInFlight' | 'spendKind'> {
   maxInFlight?: number | ((tier: SubscriptionTier) => number);
 }
 
@@ -62,7 +62,8 @@ export async function resolveComputeChargeTier(charge: ComputeCharge): Promise<S
 export async function gateComputeCharge(charge: ComputeCharge, opts: ComputeGateOptions): Promise<ComputeGateResult> {
   const tier = await resolveComputeChargeTier(charge);
   const maxInFlight = typeof opts.maxInFlight === 'function' ? opts.maxInFlight(tier) : opts.maxInFlight;
-  const bounds = { ...opts, maxInFlight };
+  // Every compute hold is marked compute, so an org pool's compute never counts toward a seat.
+  const bounds = { ...opts, maxInFlight, spendKind: 'compute' as const };
   if (charge.kind === 'org') {
     const result = await canConsumeOrgPool(charge.userId, charge.orgId, bounds);
     const orgRefusal = orgComputeRefusalOf(result);

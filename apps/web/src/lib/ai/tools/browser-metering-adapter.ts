@@ -79,6 +79,8 @@ export function createBrowserMeter(primitives: BillingPrimitives = realPrimitive
         provider: substrate,
         model: 'browser-machine',
         source: 'terminal',
+        // Compute, not an AI call: never a seat draw on an org pool (WAL-9).
+        spendKind: 'compute',
         pageId: billing.agentPageId ?? undefined,
         driveId: billing.driveId ?? undefined,
         providerCostDollars: calculateMachineCostDollars({ activeSeconds, shape }),
