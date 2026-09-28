@@ -4,7 +4,7 @@ import { eq } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { stripe, Stripe } from '@/lib/stripe';
-import { getTierFromPrice } from '@/lib/stripe/price-config';
+import { tierFromInvoiceLine } from '@/lib/stripe/price-config';
 import { PLANS } from '@/lib/subscription/plans';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -27,18 +27,9 @@ function getInvoiceDescription(invoice: Stripe.Invoice): string {
   const targetLine = subscriptionLines.find(line => line.amount > 0)
     || subscriptionLines[0];
 
-  const priceData = targetLine?.pricing?.price_details?.price;
-  // In Stripe v20, price can be a string ID or expanded Price object
-  const priceId = typeof priceData === 'string' ? priceData : priceData?.id;
-  if (priceId) {
-    // Parse unit_amount_decimal to get cents for fallback tier detection
-    const unitAmount = targetLine.pricing?.unit_amount_decimal
-      ? Math.round(parseFloat(targetLine.pricing.unit_amount_decimal) * 100)
-      : null;
-    const tier = getTierFromPrice(priceId, unitAmount);
-    if (tier !== 'free') {
-      return PLANS[tier].displayName;
-    }
+  const tier = tierFromInvoiceLine(targetLine);
+  if (tier && tier !== 'free') {
+    return PLANS[tier].displayName;
   }
 
   return invoice.description || invoice.lines.data[0]?.description || 'Subscription';

@@ -172,7 +172,7 @@ describe('POST /api/stripe/create-credit-topup', () => {
   });
 
   it.each([502, 803, 1003, 32_766])(
-    'MON-5 a custom top-up of %i credits sends Stripe an exact integer amount',
+    'MON-5 (partial) a custom top-up of %i credits sends Stripe an exact integer amount',
     async (credits) => {
       // These counts drift under divide-then-multiply ((502 / 100) * 100 !== 502) and sit
       // inside the default custom top-up bounds, so they reach checkout.

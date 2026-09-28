@@ -92,7 +92,7 @@ describe('wallets argv', () => {
 });
 
 describe('wallets rendering', () => {
-  it('X-1 (partial) prints the server\'s credit count verbatim and never converts cents itself (MON-5: one conversion)', () => {
+  it('X-1 (partial) prints the server\'s credit count verbatim and never converts cents itself (one conversion)', () => {
     // The cents and the count deliberately disagree: only the server's count may reach the screen.
     const text = renderDriveWallet('d1', { ...DRIVE_WALLET, wallet: { ...DRIVE_WALLET.wallet, remainingCents: 5, remainingCredits: '7' } });
     expect(text).toContain('remaining: 7 credits');

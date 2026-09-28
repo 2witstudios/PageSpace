@@ -251,7 +251,6 @@ describe('ai-providers-config', () => {
 
     it('returns the catalog default for paid tiers', () => {
       expect(getDefaultModelForTier('openai', 'pro')).toBe(getDefaultModel('openai'));
-      expect(getDefaultModelForTier('openai', 'founder')).toBe(getDefaultModel('openai'));
       expect(getDefaultModelForTier('openai', 'business')).toBe(getDefaultModel('openai'));
     });
 

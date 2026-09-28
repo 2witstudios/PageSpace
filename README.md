@@ -248,8 +248,8 @@ Each item in a drive is a typed page with a specific role:
 - **Custom integrations**: Register your own webhook-backed tool providers alongside the built-ins
 
 ### Metered AI Billing
-- **Pay for what you use**: Every plan includes a monthly credit allowance metered against real AI
-  usage, not a flat per-seat price
+- **Pay for what you use**: Every plan includes credits (a one-time starter grant on Free, a monthly
+  allowance on paid plans) metered against real AI usage, not a flat per-seat price
 - **Metered on model cost**: Credits are consumed on actual provider cost, with a live usage
   breakdown by model, feature, and cloud machine
 - **Buy more anytime**: Stripe-backed subscriptions, with credit top-ups available on any plan

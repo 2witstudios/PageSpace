@@ -30,6 +30,7 @@ import { childWalletFunds, type WalletBalanceFacts } from './spend-target';
 import { drawWalletFundingLegs, creditWalletFundingLegs } from './wallet-legs';
 import { parseWalletDraws, addWalletDraws, planWalletRefund, type WalletDraws } from './wallet-draws';
 import { MARKUP_BPS } from './credit-pricing';
+import { centsFromDollars } from './money-model';
 import { emitCreditsUpdated } from './credit-emit';
 import { ensurePersonalRootWalletId } from './personal-wallet';
 import { loggers } from '../logging/logger-config';
@@ -497,7 +498,7 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<Credit
   const nominalCents = Math.round(chargeMc / 1000);
   // Signed (negative) for the usage row; `|| 0` avoids storing -0 for a sub-cent charge.
   const amountCents = -nominalCents || 0;
-  const realCostCents = Math.max(0, Math.round(input.costDollars * 100));
+  const realCostCents = Math.max(0, centsFromDollars(input.costDollars));
 
   // 1. Idempotent claim — one usage ledger row per aiUsageLogId, against the wallet the
   // gate reserved on (WAL-5), or the payer's personal root wallet when the call named

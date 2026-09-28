@@ -50,8 +50,15 @@ import { TIER_PLAN_LIMITS, isSubscriptionTier, type SubscriptionTier } from './s
 /** Markup applied to real provider cost, in basis points. 15000 = 1.5×. */
 export const MARKUP_BPS = envInt('CREDIT_MARKUP_BPS', 15000);
 
-/** One dollar is 100 cents. Stated once; every cents↔dollars conversion goes through here. */
-const CENTS_PER_DOLLAR = 100;
+/**
+ * One dollar is 100 cents. Stated once; every cents↔dollars conversion goes through here.
+ * Exported for SQL that multiplies in the database (`${cost} * ${CENTS_PER_DOLLAR}`), where
+ * no function can run; everything else calls the helpers below.
+ */
+export const CENTS_PER_DOLLAR = 100;
+
+/** Sub-cent accrual unit: a thousandth of a cent (credit-core `pendingMillicents`). */
+const MILLICENTS_PER_CENT = 1000;
 
 /** The purchase and display rate: a dollar of credit value is this many credits (A-11). */
 export const CREDITS_PER_DOLLAR = 100;
@@ -193,9 +200,40 @@ export function providerDollarsCoveredByCents(cents: number, markupBps: number =
   return (cents * 10_000) / (markupBps * CENTS_PER_DOLLAR);
 }
 
+/**
+ * Dollars → cents with NO rounding, for a caller whose rounding is its own rule: a hold
+ * that ceils, a billing-off ceiling that floors a float SUM, a floor that ceils after a
+ * markup. Everyone else wants {@link centsFromDollars}.
+ */
+export function exactCentsFromDollars(dollars: number): number {
+  return dollars * CENTS_PER_DOLLAR;
+}
+
 /** Dollars → whole cents (real money), rounded to the nearest cent. */
 export function centsFromDollars(dollars: number): number {
-  return Math.round(dollars * CENTS_PER_DOLLAR);
+  return Math.round(exactCentsFromDollars(dollars));
+}
+
+/**
+ * Real provider cost, in dollars → the cents of credit value it is CHARGED at settle:
+ * the markup, then the conversion, unrounded (credit-core's markupCents rounds it; a
+ * TTS hold ceils it). The inverse of {@link providerDollarsCoveredByCents}.
+ */
+export function chargedCentsFromProviderDollars(realCostDollars: number, markupBps: number = MARKUP_BPS): number {
+  return exactCentsFromDollars(realCostDollars * (markupBps / 10_000));
+}
+
+/** Millicents (the accrual unit) → cents, unrounded. */
+export function centsFromMillicents(millicents: number): number {
+  return millicents / MILLICENTS_PER_CENT;
+}
+
+/**
+ * The same charge in millicents (a thousandth of a cent), unrounded — the fine unit
+ * settle accrues so a sub-cent call is never billed nothing (credit-core chargeMillicents).
+ */
+export function chargedMillicentsFromProviderDollars(realCostDollars: number, markupBps: number = MARKUP_BPS): number {
+  return realCostDollars * (markupBps / 10_000) * (CENTS_PER_DOLLAR * MILLICENTS_PER_CENT);
 }
 
 const creditCountFormat = new Intl.NumberFormat('en-US', {

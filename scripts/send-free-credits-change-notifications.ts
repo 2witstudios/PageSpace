@@ -99,7 +99,6 @@ const NOTIFICATION_TYPE = 'PRODUCT_UPDATE' as const;
  */
 const IDEMPOTENCY_PREFIX = 'free-credits-change-2026-09';
 
-/** Whole cents → credit units for display ("5", "3.2"). Mirrors apps/web's formatCreditCount. */
 // Credit and dollar strings come from the one money model (MON-5): a credit count
 // with no currency symbol, and a dollar price for the real top-up minimum.
 const formatCredits = formatCreditCount;
@@ -194,7 +193,7 @@ async function main(): Promise<number> {
     console.warn('  ⚠️  COMPANY_POSTAL_ADDRESS is empty — the footer will carry no postal address.\n');
   }
 
-  // The pages this email links to must be DEPLOYED (with the new "5 credits to
+  // The pages this email links to must be DEPLOYED (with the new "credits to
   // start" copy) before we mail a link to them. An anonymous probe follows the
   // auth redirect; a 2xx sign-in page proves the deploy carries the route.
   if (opts.live) {

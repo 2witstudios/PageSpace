@@ -4,6 +4,7 @@ import { stripe, Stripe } from '@/lib/stripe';
 import { getUserFriendlyStripeError } from '@/lib/stripe-errors';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { dollarsFromCents } from '@pagespace/lib/billing/money-model';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 
@@ -118,7 +119,7 @@ export async function POST(request: NextRequest) {
       savingsFormatted = new Intl.NumberFormat('en-US', {
         style: 'currency',
         currency: coupon.currency || 'usd',
-      }).format(coupon.amount_off / 100);
+      }).format(dollarsFromCents(coupon.amount_off));
     }
 
     const savings = originalAmount - discountedAmount;

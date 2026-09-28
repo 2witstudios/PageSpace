@@ -599,13 +599,13 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   the Android shell never hands its native bridge to a third-party site or a wildcard host.
 
 - **Free plan credits are now a one-time starter grant instead of a monthly allowance** — new
-  free accounts still get 5 credits to try AI with, granted once on their first AI call, but
+  free accounts still get a starter grant of credits to try AI with, granted once on their first AI call, but
   that grant no longer refills or accumulates month over month. Credits you already have never
   expire, and nothing is taken away: free accounts that had built up a balance keep it. To keep
   going after the starter credits are spent, buy a top-up pack (top-ups never expire) or upgrade
   to a paid plan, which includes a monthly allowance that rolls over. The credits card, the plan
   comparison, the out-of-credits message, and the pricing, FAQ, terms, and docs pages now say
-  "5 credits to start" for Free rather than "5/month", and free accounts no longer show a
+  that the Free grant is "to start" rather than "per month", and free accounts no longer show a
   "Renews" date. Free accounts receive a one-time email explaining the change, quoting the
   exact balance they keep and pointing to top-ups and the Pro plan; anyone who has turned
   product-update email off is skipped, and the notice carries a one-click unsubscribe link.
@@ -632,6 +632,18 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   OpenRouter's live data, and a handful of models OpenRouter no longer serves were removed.
 
 ### Fixed
+
+- **Published pricing figures match the plans** — the "Credits Replace Daily Limits" blog post no
+  longer lists per-plan credit amounts from before the credit count change, and no longer names the
+  retired Founder plan; it points to the pricing page for current amounts, packs and the top-up range.
+  The Business plan card no longer claims "20x more than Free".
+- **Admin billing counts organization credit** — "Included credit liability" and "Outstanding
+  liability" now include organization credit pools and credit moved into drive wallets, counted
+  once; a pool's allocation to a drive wallet is not counted twice. The free starter grant is shown
+  separately.
+- **Stripe plan detection by amount works again** — when an invoice carries a price the app does
+  not recognise, its amount is read as the cents Stripe sends, so a $15 or $50 price resolves to
+  Pro or Business instead of never matching.
 
 - **Agents answering an @mention in a channel now check credits first** — an agent's reply to a
   channel mention used to run even when there were no credits to pay for it. Each reply is now

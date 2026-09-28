@@ -20,6 +20,7 @@ const mockSql = vi.hoisted(() => {
   return tag;
 });
 const mockGetTierFromPrice = vi.hoisted(() => vi.fn());
+const mockReadCreditLiability = vi.hoisted(() => vi.fn());
 
 // Chainable db mock whose terminal resolves to the next queued result set.
 const makeChain = vi.hoisted(() => () => {
@@ -44,6 +45,7 @@ const makeChain = vi.hoisted(() => () => {
 const mockSelect = vi.hoisted(() => vi.fn(() => makeChain()));
 
 vi.mock('@pagespace/db/db', () => ({ db: { select: mockSelect } }));
+vi.mock('@pagespace/lib/billing/credit-liability-query', () => ({ readCreditLiability: mockReadCreditLiability }));
 
 vi.mock('@pagespace/db/schema/monitoring', () => ({
   aiUsageLogs: {
@@ -306,24 +308,25 @@ describe('getActiveSubscriptionsByTier', () => {
 });
 
 describe('getCreditLiability', () => {
-  it('sums monthly + top-up remaining into total liability', async () => {
-    resetQueue([{ monthlyRemainingCents: 400, topupRemainingCents: 600, userCount: 12 }]);
+  it('MON-7 (partial) reads every wallet kind through the one liability reader: grants, top-ups and legs', async () => {
+    mockReadCreditLiability.mockResolvedValueOnce({
+      includedCreditLiabilityCents: 5200,
+      personalIncludedCents: 400,
+      starterGrantIncludedCents: 0,
+      orgPoolIncludedCents: 4800,
+      topupRemainingCents: 600,
+      totalLiabilityCents: 5800,
+      userCount: 12,
+      orgPoolCount: 1,
+    });
     const result = await getCreditLiability();
     expect(result).toEqual({
-      monthlyRemainingCents: 400,
+      monthlyRemainingCents: 5200,
       topupRemainingCents: 600,
-      totalLiabilityCents: 1000,
+      totalLiabilityCents: 5800,
       userCount: 12,
     });
-    // WAL-2 (partial): liability and its user count are over personal root wallets (the
-    // former credit_balances rows) — one per user, never a drive or org wallet.
-    expect(whereCalls).toEqual([PERSONAL_ROOT]);
-  });
-
-  it('defaults to zero on an empty balances table', async () => {
-    resetQueue([]);
-    const result = await getCreditLiability();
-    expect(result).toEqual({ monthlyRemainingCents: 0, topupRemainingCents: 0, totalLiabilityCents: 0, userCount: 0 });
+    expect(mockReadCreditLiability).toHaveBeenCalledWith();
   });
 });
 
