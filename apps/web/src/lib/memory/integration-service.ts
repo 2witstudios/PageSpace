@@ -31,7 +31,7 @@ import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factor
 import { BACKGROUND_HEAVY_PROVIDER, BACKGROUND_HEAVY_MODEL } from '@/lib/ai/core/ai-providers-config';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { AIMonitoring, discardUsageOutcome } from '@pagespace/lib/monitoring/ai-monitoring';
-import { reserveMemoryCall } from './memory-credit';
+import { reserveMemoryCall, type MemoryGateRefusal } from './memory-credit';
 import { readMemoryPages } from '@pagespace/lib/memory/memory-pages';
 import {
   applyPageMutation,
@@ -199,7 +199,12 @@ export type EvaluationOutcome =
       /** IDs of the candidates the evaluator actually used. */
       usedCandidateIds: string[];
     }
-  | { ok: false; reason: string };
+  | {
+      ok: false;
+      reason: string;
+      /** Set when the credit gate refused: no model ran, nothing was charged. */
+      creditRefusal?: MemoryGateRefusal;
+    };
 
 /**
  * Evaluate promoted candidates and decide how to integrate.
@@ -344,7 +349,7 @@ Return JSON with the full new content for each field that should change. Use nul
     });
     if (!reservation.allowed) {
       loggers.api.info('Memory integration: skipped, credit gate refused', { userId, reason: reservation.reason });
-      return { ok: false, reason: 'credit gate refused' };
+      return { ok: false, reason: `credit gate refused: ${reservation.reason}`, creditRefusal: reservation.reason };
     }
 
     const result = await generateText({

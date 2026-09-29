@@ -633,6 +633,12 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Memory now checks your AI credits before it learns** — the nightly Memory pass (learning
+  from your conversations and tidying your profile pages) used to run and charge you even when
+  your balance was used up, so you could go into debt without opening PageSpace. Now each step
+  checks your credits before the AI runs. When you're out of credits that night's learning is
+  skipped: nothing is charged, your profile pages stay exactly as they were, and anything Memory
+  was about to add waits for the next night.
 - **Every AI call now checks your credits before it runs** — conversation summarising (when a long chat
   is condensed) and the nightly Memory update used to run first and charge afterwards, which could
   push an out-of-credit balance into debt. They now reserve credits first like every other AI call;

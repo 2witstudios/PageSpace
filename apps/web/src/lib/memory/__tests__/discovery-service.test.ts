@@ -139,6 +139,7 @@ function messages(count: number) {
 describe('runDiscoveryPasses', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockReserve.mockImplementation(async () => ({ allowed: true as const, holdId: 'hold-m', walletId: 'w-root', release: mockReleaseMemoryHold }));
   });
 
   it('returns no claims when there is too little conversation to read', async () => {
@@ -321,6 +322,109 @@ describe('runDiscoveryPasses', () => {
       expected: [],
     });
   });
+
+  it('takes no credit hold when there is too little conversation to read', async () => {
+    setupDb([]);
+    const { runDiscoveryPasses } = await import('../discovery-service');
+
+    await runDiscoveryPasses('user-with-no-data');
+
+    assert({
+      given: 'a user with nothing to discover',
+      should: 'not reserve credits for model calls that will never run',
+      actual: mockReserve.mock.calls.length,
+      expected: 0,
+    });
+  });
+
+  it('reserves once per pass — three holds, one per model call', async () => {
+    setupDb(messages(10));
+    mockGenerateObject.mockResolvedValue({ object: { claims: [] }, usage: { inputTokens: 10, outputTokens: 5 } });
+
+    const { runDiscoveryPasses } = await import('../discovery-service');
+    await runDiscoveryPasses('user-funded');
+
+    assert({
+      given: 'a user with enough conversation to read',
+      should: 'take one hold for each of the three passes, on that user',
+      actual: mockReserve.mock.calls.map(([userId]) => userId),
+      expected: ['user-funded', 'user-funded', 'user-funded'],
+    });
+  });
+
+  it('runs no model and charges nothing when the credit gate refuses', async () => {
+    setupDb(messages(10));
+    mockReserve.mockResolvedValue({ allowed: false, reason: 'out_of_credits' } as never);
+    const { AIMonitoring } = await import('@pagespace/lib/monitoring/ai-monitoring');
+
+    const { runDiscoveryPasses } = await import('../discovery-service');
+    const result = await runDiscoveryPasses('user-in-debt');
+
+    assert({
+      given: 'a user whose balance the gate refuses',
+      should: 'return no claims, say why, and never call a model or hold anything',
+      actual: {
+        result,
+        modelCalls: mockGenerateObject.mock.calls.length,
+        charges: vi.mocked(AIMonitoring.trackUsage).mock.calls.length,
+        releases: mockReleaseMemoryHold.mock.calls.length,
+      },
+      expected: {
+        result: { claims: [], creditRefusal: 'out_of_credits' },
+        modelCalls: 0,
+        charges: 0,
+        releases: 0,
+      },
+    });
+  });
+
+  it('settles each surviving pass on its own hold, even when a sibling pass throws', async () => {
+    setupDb(messages(10));
+    const { createAIProvider } = await import('@/lib/ai/core/provider-factory');
+    vi.mocked(createAIProvider).mockRejectedValueOnce(new Error('provider lookup failed'));
+    mockGenerateObject.mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return { object: { claims: [{ claim: 'c', evidence: 'e', occurrencesInWindow: 1 }] }, usage: { inputTokens: 10, outputTokens: 5 } };
+    });
+    const { AIMonitoring } = await import('@pagespace/lib/monitoring/ai-monitoring');
+
+    const { runDiscoveryPasses } = await import('../discovery-service');
+    const result = await runDiscoveryPasses('user-with-data');
+
+    assert({
+      given: 'one pass whose provider throws while the other two are still calling the model',
+      should: 'reserve and settle exactly once for each surviving call, and keep their claims',
+      actual: {
+        reserves: mockReserve.mock.calls.length,
+        settledHolds: vi.mocked(AIMonitoring.trackUsage).mock.calls.map(([usage]) => usage.holdId),
+        releases: mockReleaseMemoryHold.mock.calls.length,
+        claims: result.claims.length,
+      },
+      expected: { reserves: 2, settledHolds: ['hold-m', 'hold-m'], releases: 0, claims: 2 },
+    });
+  });
+
+  it('a refusal on one pass keeps the paid-for passes\' claims and reports the refusal', async () => {
+    setupDb(messages(10));
+    mockReserve.mockResolvedValueOnce({ allowed: false, reason: 'out_of_credits' } as never);
+    mockGenerateObject.mockResolvedValue({ object: { claims: [{ claim: 'c', evidence: 'e', occurrencesInWindow: 1 }] }, usage: { inputTokens: 10, outputTokens: 5 } });
+    const { AIMonitoring } = await import('@pagespace/lib/monitoring/ai-monitoring');
+
+    const { runDiscoveryPasses } = await import('../discovery-service');
+    const result = await runDiscoveryPasses('user-running-low');
+
+    assert({
+      given: 'credit for two of the three passes',
+      should: 'run and settle only the two, keep their claims, and name the refusal',
+      actual: {
+        modelCalls: mockGenerateObject.mock.calls.length,
+        charges: vi.mocked(AIMonitoring.trackUsage).mock.calls.length,
+        claims: result.claims.length,
+        creditRefusal: result.creditRefusal,
+      },
+      expected: { modelCalls: 2, charges: 2, claims: 2, creditRefusal: 'out_of_credits' },
+    });
+  });
 });
 
 describe('runDiscoveryPasses — the credit gate', () => {
@@ -341,7 +445,7 @@ describe('runDiscoveryPasses — the credit gate', () => {
 
     const result = await runDiscoveryPasses('user-1');
 
-    expect(result.claims).toEqual([]);
+    expect(result).toEqual({ claims: [], creditRefusal: 'out_of_credits' });
     expect(mockGenerateObject).not.toHaveBeenCalled();
     expect(AIMonitoring.trackUsage).not.toHaveBeenCalled();
   });

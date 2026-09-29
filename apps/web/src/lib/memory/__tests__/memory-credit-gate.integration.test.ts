@@ -5,8 +5,8 @@
  *
  * REAL: the credit gate (canConsumeAI via reserveMemoryCall), holds, settlement
  * (AIMonitoring.trackUsage → consumeCredits). Faked: the model and its provider. The call
- * under test is compactField, which returns the page content it would write; its callers
- * write only what it returns.
+ * under test is compactField, which returns the page content it would write (or the credit
+ * refusal that stopped it); its callers write only what it returns.
  *
  * Requires DATABASE_URL → a migrated Postgres. Deletes every row it creates.
  */
@@ -87,7 +87,7 @@ describe('memory cron model calls reserve first (real Postgres)', () => {
 
     const result = await compactField(world.userId, 'bio', ORIGINAL);
 
-    expect(result).toBe(ORIGINAL);
+    expect(result).toEqual({ creditRefusal: 'out_of_credits' });
     expect(mockGenerateText).not.toHaveBeenCalled();
     expect(await usageRows(world)).toEqual([]);
     expect(await liveHolds(world)).toEqual([]);
@@ -99,7 +99,7 @@ describe('memory cron model calls reserve first (real Postgres)', () => {
 
     const result = await compactField(world.userId, 'bio', ORIGINAL);
 
-    expect(result).toBe('Ada writes tersely.');
+    expect(result).toEqual({ content: 'Ada writes tersely.' });
     expect(mockGenerateText).toHaveBeenCalledOnce();
     // The usage settles off the response path (discardUsageOutcome), and its ledger row is
     // claimed 'pending' before the charge commits: wait for the settled row.
