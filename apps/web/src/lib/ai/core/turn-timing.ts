@@ -29,6 +29,19 @@ const SLOW_TURN_THRESHOLDS_MS = [10_000, 30_000, 60_000, 120_000, 300_000];
 const SLOW_FIRST_TOKEN_MS = 10_000;
 
 /**
+ * Every line this module logs goes through here. The dispatcher ends the timer in a
+ * `finally`, so a throw would replace the turn's real response or error: instrumentation
+ * must never cost a turn.
+ */
+const log = (level: 'debug' | 'info' | 'warn', message: string, meta: Record<string, unknown>) => {
+  try {
+    loggers.ai[level](message, meta);
+  } catch {
+    // Swallowed: see above.
+  }
+};
+
+/**
  * Chunks that mean the MODEL has started answering — not our own framing or data parts.
  * `tool-input-available` matters: a provider that sends a tool call whole (no argument
  * streaming) emits only that chunk, and agent turns often open with a tool call.
@@ -111,7 +124,7 @@ export const createTurnTimer = ({
     if (threshold === undefined) return;
     watchdog = setTimeout(() => {
       if (ended || firstTokenAt !== null) return;
-      loggers.ai.warn('AI turn slow: no first token yet', {
+      log('warn', 'AI turn slow: no first token yet', {
         ...fields,
         elapsedMs: sinceReceived(),
         // Where it is stuck: the last completed phase, and whether the model was reached.
@@ -134,9 +147,9 @@ export const createTurnTimer = ({
     const elapsedMs = sinceReceived();
     const meta = { ...fields, outcome, elapsedMs, lastPhase, ...summary() };
     if (elapsedMs >= SLOW_FIRST_TOKEN_MS || outcome === 'error') {
-      loggers.ai.warn('AI turn ended with no model output', meta);
+      log('warn', 'AI turn ended with no model output', meta);
     } else {
-      loggers.ai.debug('AI turn ended with no model output', meta);
+      log('debug', 'AI turn ended with no model output', meta);
     }
   };
 
@@ -161,9 +174,9 @@ export const createTurnTimer = ({
       stopWatchdog();
       const s = summary();
       if ((s.firstTokenMs ?? 0) >= SLOW_FIRST_TOKEN_MS) {
-        loggers.ai.warn('AI turn first token', { ...fields, ...s });
+        log('warn', 'AI turn first token', { ...fields, ...s });
       } else {
-        loggers.ai.info('AI turn first token', { ...fields, ...s });
+        log('info', 'AI turn first token', { ...fields, ...s });
       }
     },
     handOff: () => {

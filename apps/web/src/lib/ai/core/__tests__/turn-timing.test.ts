@@ -132,4 +132,26 @@ describe('createTurnTimer', () => {
     vi.advanceTimersByTime(600_000);
     expect(warnMessages()).toEqual(['AI turn ended with no model output']);
   });
+  // The dispatcher ends the timer in a `finally`: a throw from here would replace the turn's
+  // real response (a 200 stream, a 404) or its real error with a logging failure.
+  it('given the logger throws, should never let instrumentation fail the turn', () => {
+    const boom = () => {
+      throw new Error('logger down');
+    };
+    vi.mocked(loggers.ai.warn).mockImplementation(boom);
+    vi.mocked(loggers.ai.info).mockImplementation(boom);
+    vi.mocked(loggers.ai.debug).mockImplementation(boom);
+
+    const stuck = createTurnTimer({ receivedAt: Date.now() });
+    expect(() => vi.advanceTimersByTime(600_000)).not.toThrow();
+    expect(() => stuck.end('error')).not.toThrow();
+
+    const quick = createTurnTimer({ receivedAt: Date.now() });
+    expect(() => quick.endUnlessHandedOff('no_generation')).not.toThrow();
+
+    const answered = createTurnTimer({ receivedAt: Date.now() });
+    answered.modelRequest();
+    expect(() => answered.observeChunk(textDelta)).not.toThrow();
+    expect(answered.summary().firstTokenMs).toBe(0);
+  });
 });
