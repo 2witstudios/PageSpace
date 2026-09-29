@@ -14,7 +14,8 @@
 # Attribution uses the CLIENT side of each socket: `ss -tnp` on the runner maps
 # every established connection to :5432 to the pid that owns it, and that pid's
 # cwd is the package directory vitest/turbo launched it from. The server-side
-# count (pg_stat_activity) is recorded alongside as the authoritative total.
+# count (pg_stat_activity) is recorded alongside as the authoritative total;
+# "?" is a pid that exited between `ss` and the /proc lookup.
 set -u
 
 mode="${1:?usage: start|report <outfile>}"
@@ -31,6 +32,9 @@ case "$mode" in
         | grep -o 'pid=[0-9]*' | cut -d= -f2 \
         | while read -r pid; do
             cwd="$(sudo readlink "/proc/$pid/cwd" 2>/dev/null || echo '?')"
+            # docker-proxy (cwd /) relays every connection into the service
+            # container, so it mirrors the real clients one-for-one; skip it.
+            [ "$cwd" = "/" ] && continue
             echo "${cwd#"$GITHUB_WORKSPACE"/}"
           done | sort | uniq -c | awk '{printf "%s=%s ", $2, $1}')"
       echo "$ts server=$server $by_pkg" >> "$out"
