@@ -33,6 +33,7 @@ import {
   type OrgDriveRefusal,
 } from '../organizations/org-drive-ownership';
 import { retryOnDeadlock } from '../organizations/repository';
+import { checkOrgActive, type OrgLapsedRefusal } from '../organizations/status';
 import { removeFormerLeadOwnerRow } from '../permissions/org-drive-membership';
 import { getActorInfo, logActivityWithTx } from '../monitoring/activity-logger';
 import { reattributeDriveStorageInTx, type StorageReattributionResult } from './storage-limits';
@@ -73,9 +74,11 @@ export type MoveDriveResult =
   /** `orgId` is the org the drive moved into, or out of. */
   | { ok: true; drive: DriveRow; orgId: string; storageReattribution: StorageReattribution }
   | OrgDriveRefusal
+  | OrgLapsedRefusal
   | DriveNotFound;
 
-export type CreateOrgDriveResult = { ok: true; drive: DriveRow } | OrgDriveRefusal;
+/** A lapsed org (SEAT-9) refuses a new drive and a move in; moving a drive OUT stays open. */
+export type CreateOrgDriveResult = { ok: true; drive: DriveRow } | OrgDriveRefusal | OrgLapsedRefusal;
 
 const driveNotFound = (): DriveNotFound => ({
   ok: false,
@@ -129,6 +132,10 @@ export async function moveDriveToOrg(
     const actorOrgRole = orgExists ? await deps.getOrgRole(tx, input.orgId, actorId) : null;
     const verdict = decideMoveDriveIntoOrg({ drive, actorId, actorOrgRole });
     if (!verdict.ok) return verdict;
+    // SEAT-9: judged after the permission verdict, so only someone who may move the drive in
+    // learns the org's billing state; read under the org row lock taken above.
+    const active = await checkOrgActive(input.orgId, { executor: tx });
+    if (!active.ok) return active;
 
     const slug = await freeOrgSlug(tx, input.orgId, drive.slug);
     const [moved] = await tx
@@ -216,6 +223,9 @@ export async function createOrgDrive(
     const creationPolicy = orgExists ? await deps.getOrgDriveCreationPolicy(tx, input.orgId) : 'members';
     const verdict = decideCreateDriveInOrg({ actorOrgRole, creationPolicy });
     if (!verdict.ok) return verdict;
+    // SEAT-9: creating org drives is an org-only capability (after the permission verdict, as above).
+    const active = await checkOrgActive(input.orgId, { executor: tx });
+    if (!active.ok) return active;
 
     const slug = await freeOrgSlug(tx, input.orgId, slugify(input.name));
     const [created] = await tx
