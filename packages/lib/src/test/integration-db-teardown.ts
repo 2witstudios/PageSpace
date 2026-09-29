@@ -9,15 +9,18 @@
  * clients already". Release the pool when each file finishes.
  */
 import { afterAll } from 'vitest';
-import * as appDb from '@pagespace/db/db';
 import { releaseAppPool } from './release-app-pool';
 
 afterAll(async () => {
+  // Imported HERE, not at the top of the file: a static import would load the
+  // real `@pagespace/db/db` into every file before that file's vi.mock() is
+  // registered. By afterAll the test file's own import has run, so this
+  // resolves to the same module instance it used (real pool or mock).
   // A suite may vi.mock('@pagespace/db/db') with only `db`; reading a missing
   // export off a vitest mock throws, so look it up defensively.
-  let pool: typeof appDb.pool | undefined;
+  let pool: Parameters<typeof releaseAppPool>[0];
   try {
-    pool = appDb.pool;
+    pool = (await import('@pagespace/db/db')).pool;
   } catch {
     pool = undefined;
   }

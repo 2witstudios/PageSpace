@@ -26,8 +26,17 @@ case "$mode" in
     : > "$out"
     while true; do
       ts="$(date -u +%H:%M:%S.%N | cut -c1-12)"
-      server="$(PGPASSWORD=postgres PGCONNECT_TIMEOUT=2 psql -h localhost -U postgres -d postgres -Atc \
-        "select count(*) from pg_stat_activity where backend_type = 'client backend'" 2>/dev/null || echo FULL)"
+      # server= is the pg_stat_activity count, or FULL only when psql was refused
+      # with 53300 "too many clients", or ERR for any other failure (timeout,
+      # service not up) — those say nothing about connection exhaustion.
+      if res="$(PGPASSWORD=postgres PGCONNECT_TIMEOUT=2 psql -h localhost -U postgres -d postgres -Atc \
+        "select count(*) from pg_stat_activity where backend_type = 'client backend'" 2>&1)"; then
+        server="$res"
+      elif echo "$res" | grep -q 'too many clients'; then
+        server=FULL
+      else
+        server=ERR
+      fi
       by_pkg="$(sudo ss -Htnp state established '( dport = :5432 )' 2>/dev/null \
         | grep -o 'pid=[0-9]*' | cut -d= -f2 \
         | while read -r pid; do
@@ -48,10 +57,18 @@ case "$mode" in
     fi
     samples="$(wc -l < "$out")"
     full="$(grep -c 'server=FULL' "$out" || true)"
-    peak_line="$(grep -v 'server=FULL' "$out" | sort -t= -k2 -n | tail -1)"
-    peak="$(echo "$peak_line" | sed -E 's/.*server=([0-9]+).*/\1/')"
+    errs="$(grep -c 'server=ERR' "$out" || true)"
+    ok_samples="$(grep -E ' server=[0-9]+( |$)' "$out" || true)"
     max_conn="$(PGPASSWORD=postgres psql -h localhost -U postgres -d postgres -Atc 'show max_connections' 2>/dev/null || echo '?')"
-    echo "samples: $samples   max_connections: $max_conn   peak client backends: $peak   samples where the sampler itself could not connect: $full"
+    if [ -n "$ok_samples" ]; then
+      peak_line="$(echo "$ok_samples" | sort -t= -k2 -n | tail -1)"
+      peak="$(echo "$peak_line" | sed -E 's/.*server=([0-9]+).*/\1/')"
+    else
+      peak_line="none"
+      peak="no successful samples"
+    fi
+    echo "samples: $samples   max_connections: $max_conn   peak client backends: $peak"
+    echo "sampler refused with 53300 (server=FULL): $full   sampler query failed for another reason (server=ERR): $errs"
     echo "peak sample: $peak_line"
     echo
     echo "per-package peak (client sockets held at once):"
@@ -60,7 +77,7 @@ case "$mode" in
       | sort -rn
     echo
     echo "10 busiest samples:"
-    grep -v 'server=FULL' "$out" | sort -t= -k2 -n | tail -10
+    [ -n "$ok_samples" ] && echo "$ok_samples" | sort -t= -k2 -n | tail -10
     echo
     echo "timeline (every 20th sample):"
     awk 'NR % 20 == 1' "$out"
