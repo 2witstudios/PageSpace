@@ -20,6 +20,10 @@ jobs:
     name: Auth Baseline Load Test
     runs-on: ubuntu-latest
 
+    env:
+      # Builds apps/web — see the NODE_OPTIONS note on the lint job in ci.yml.
+      NODE_OPTIONS: --max-old-space-size=6144
+
     services:
       postgres:
         image: postgres:16
