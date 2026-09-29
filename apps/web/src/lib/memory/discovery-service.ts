@@ -19,7 +19,7 @@ import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factor
 import { BACKGROUND_HEAVY_PROVIDER, BACKGROUND_HEAVY_MODEL } from '@/lib/ai/core/ai-providers-config';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { AIMonitoring, discardUsageOutcome } from '@pagespace/lib/monitoring/ai-monitoring';
-import { reserveMemoryCall } from './memory-credit';
+import { reserveMemoryCall, type MemoryGateRefusal } from './memory-credit';
 import { z } from 'zod';
 
 export type MemoryField = 'bio' | 'writingStyle' | 'rules';
@@ -68,7 +68,12 @@ export interface DiscoveredClaim {
 
 export interface DiscoveryResult {
   claims: DiscoveredClaim[];
+  /** Set when the credit gate refused a pass: that pass ran no model and was not charged. */
+  creditRefusal?: MemoryGateRefusal;
 }
+
+/** One pass's result: its claims, or the credit refusal that kept its model from running. */
+type PassOutcome = { claims: DiscoveredClaim[] } | { creditRefusal: MemoryGateRefusal };
 
 interface ConversationMessage {
   role: string;
@@ -303,7 +308,7 @@ async function runDiscoveryPass(
   conversationContext: string,
   /** Same order as the numbered transcript, so a cited index resolves to a real timestamp. */
   messageDates: Date[]
-): Promise<DiscoveredClaim[]> {
+): Promise<PassOutcome> {
   const providerResult = await createAIProvider(userId, {
     selectedProvider: BACKGROUND_HEAVY_PROVIDER,
     selectedModel: BACKGROUND_HEAVY_MODEL,
@@ -313,7 +318,7 @@ async function runDiscoveryPass(
     loggers.api.warn(`Memory discovery ${passName} pass failed: provider error`, {
       error: providerResult.error,
     });
-    return [];
+    return { claims: [] };
   }
 
   // Reserve before the model (SPEND-1). Refused: this pass finds nothing, as when the
@@ -325,7 +330,7 @@ async function runDiscoveryPass(
   });
   if (!reservation.allowed) {
     loggers.api.info(`Memory discovery ${passName} pass skipped: credit gate refused`, { reason: reservation.reason });
-    return [];
+    return { creditRefusal: reservation.reason };
   }
 
   try {
@@ -373,14 +378,16 @@ async function runDiscoveryPass(
     // The model's own `field` tag is discarded in favour of `field`, the field
     // this pass is responsible for. The model can omit or mislabel it, and a
     // claim filed into the wrong page is worse than one not filed at all.
-    return result.object.claims.map(({ field: _modelTag, ...claim }) => ({
-      ...claim,
-      field,
-      evidenceAt: messageDates[claim.evidenceMessageIndex] ?? oldest,
-    }));
+    return {
+      claims: result.object.claims.map(({ field: _modelTag, ...claim }) => ({
+        ...claim,
+        field,
+        evidenceAt: messageDates[claim.evidenceMessageIndex] ?? oldest,
+      })),
+    };
   } catch (error) {
     loggers.api.warn(`Memory discovery ${passName} pass failed`, { error });
-    return [];
+    return { claims: [] };
   }
 }
 
@@ -431,8 +438,11 @@ export async function runDiscoveryPasses(userId: string): Promise<DiscoveryResul
 
   // Run three focused passes in parallel. Each pass owns its field and stamps
   // it onto every claim it returns, so the model's own tag never decides which
-  // page a claim lands in.
-  const [bioClaims, communicationClaims, rulesClaims] = await Promise.all([
+  // page a claim lands in. Each pass reserves its own credits before its model
+  // runs (reserveMemoryCall) and settles that reservation once; a refused pass
+  // runs no model, is not charged and contributes no claims. allSettled, not
+  // all: one pass throwing must not discard its siblings' paid-for claims.
+  const passes = await Promise.allSettled([
     runDiscoveryPass(
       userId,
       'worldview',
@@ -459,6 +469,19 @@ export async function runDiscoveryPasses(userId: string): Promise<DiscoveryResul
     ),
   ]);
 
+  let creditRefusal: MemoryGateRefusal | undefined;
+  const [bioClaims, communicationClaims, rulesClaims] = passes.map((pass) => {
+    if (pass.status === 'rejected') {
+      loggers.api.warn('Memory discovery pass failed', { userId, error: pass.reason });
+      return [];
+    }
+    if ('creditRefusal' in pass.value) {
+      creditRefusal ??= pass.value.creditRefusal;
+      return [];
+    }
+    return pass.value.claims;
+  });
+
   const allClaims = [...bioClaims, ...communicationClaims, ...rulesClaims];
 
   loggers.api.info('Memory discovery passes complete', {
@@ -470,5 +493,9 @@ export async function runDiscoveryPasses(userId: string): Promise<DiscoveryResul
     },
   });
 
+  if (creditRefusal) {
+    loggers.api.info('Memory discovery: credit gate refused a pass', { userId, reason: creditRefusal });
+    return { claims: allClaims, creditRefusal };
+  }
   return { claims: allClaims };
 }

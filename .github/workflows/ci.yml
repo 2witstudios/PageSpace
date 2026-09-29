@@ -16,6 +16,10 @@ jobs:
     name: Unit Tests
     runs-on: ubuntu-latest
 
+    env:
+      # This job builds apps/web — see the NODE_OPTIONS note on the lint job.
+      NODE_OPTIONS: --max-old-space-size=6144
+
     services:
       postgres:
         image: postgres:17-alpine
@@ -407,6 +411,8 @@ jobs:
           --health-retries 5
 
     env:
+      # This job builds apps/web — see the NODE_OPTIONS note on the lint job.
+      NODE_OPTIONS: --max-old-space-size=6144
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
       # Secrets the app validates for length at boot (packages/lib/src/config/env-validation.ts).
       # Fixed test values — nothing here is a real credential.
@@ -560,6 +566,13 @@ jobs:
     name: Lint & TypeScript Check
     runs-on: ubuntu-latest
 
+    env:
+      # Next's production build of apps/web peaks just under Node's default ~4GB
+      # heap, so it OOMs on runner luck ("Ineffective mark-compacts near heap
+      # limit"). 6144 leaves ~50% headroom and fits the 16GB public ubuntu-latest
+      # runner. turbo's strict env mode passes NODE_OPTIONS through by default.
+      NODE_OPTIONS: --max-old-space-size=6144
+
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -570,8 +583,12 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      # `turbo lint` builds apps/web (android/ios lint depend on ^build). GNU
+      # time's "Maximum resident set size" is the peak RSS of the largest child
+      # process — the Next build worker — so each run shows how close the build
+      # is to the heap ceiling above.
       - name: Run ESLint
-        run: bun run lint
+        run: /usr/bin/time -v bun run lint
 
       - name: Run TypeScript check
         run: bun run typecheck
