@@ -93,7 +93,7 @@ const { mockReserve, mockReleaseMemoryHold } = vi.hoisted(() => {
   const mockReleaseMemoryHold = vi.fn();
   return {
     mockReleaseMemoryHold,
-    mockReserve: vi.fn(async () => ({ allowed: true as const, holdId: 'hold-m', walletId: 'w-root', release: mockReleaseMemoryHold })),
+    mockReserve: vi.fn(async (_userId: string, _call: { provider: string; model: string; inputChars: number }) => ({ allowed: true as const, holdId: 'hold-m', walletId: 'w-root', release: mockReleaseMemoryHold })),
   };
 });
 vi.mock('../memory-credit', () => ({ reserveMemoryCall: mockReserve }));
