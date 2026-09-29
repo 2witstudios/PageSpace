@@ -192,3 +192,25 @@ export const createTurnTimer = ({
     summary,
   };
 };
+
+/**
+ * Run a turn and end its timer unless the turn handed a stream to the pump (which then
+ * owns the end). Both strategies catch their own failures and answer a 5xx `Response`, so
+ * the outcome is read from the status as well as from a rejection: a failure is `error`
+ * (always logged at warn), anything else that never reached the model is `no_generation`.
+ * Ending is idempotent, so an outer and an inner wrapper around one timer are harmless.
+ */
+export const endTurnAfter = async (
+  timer: TurnTimer,
+  run: () => Promise<Response>,
+): Promise<Response> => {
+  let response: Response;
+  try {
+    response = await run();
+  } catch (error) {
+    timer.endUnlessHandedOff('error');
+    throw error;
+  }
+  timer.endUnlessHandedOff(response.status >= 500 ? 'error' : 'no_generation');
+  return response;
+};

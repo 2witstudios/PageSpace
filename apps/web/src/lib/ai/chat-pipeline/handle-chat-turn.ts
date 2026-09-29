@@ -127,7 +127,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { runPageChatTurn } from './page-chat-turn';
 import { runGlobalChatTurn } from './global-chat-turn';
-import { createTurnTimer, type TurnTimer } from '@/lib/ai/core/turn-timing';
+import { createTurnTimer, endTurnAfter, type TurnTimer } from '@/lib/ai/core/turn-timing';
 
 /**
  * Which public URL the turn arrived on. It decides the AUTH OPTIONS and the
@@ -155,6 +155,19 @@ export async function handleChatTurn(
   opts: HandleChatTurnOptions,
 ): Promise<Response> {
   const startTime = Date.now();
+  // Armed at entry, before auth and body parse, so the watchdog can report a turn that is
+  // stuck in either of them; `dispatchChatTurn` takes it over from here.
+  const timer = createTurnTimer({ receivedAt: startTime });
+  timer.annotate({ surface: opts.surface });
+  return endTurnAfter(timer, () => authenticateAndDispatch(request, opts, timer, startTime));
+}
+
+async function authenticateAndDispatch(
+  request: Request,
+  opts: HandleChatTurnOptions,
+  timer: TurnTimer,
+  startTime: number,
+): Promise<Response> {
   const isPageSurface = opts.surface === 'page-chat';
   const log = isPageSurface ? loggers.ai : loggers.api;
 
@@ -202,6 +215,7 @@ export async function handleChatTurn(
     }
     return auth.error;
   }
+  timer.mark('authenticated');
 
   // 3. Body size guard — before parsing, as on both routes.
   const contentLength = parseInt(request.headers.get('content-length') || '0', 10);
@@ -232,7 +246,7 @@ export async function handleChatTurn(
     body,
     surface: opts.surface,
     urlConversationId: opts.urlConversationId,
-    receivedAt: startTime,
+    timer,
   });
 }
 
@@ -258,7 +272,7 @@ export async function dispatchChatTurn({
   body,
   surface,
   urlConversationId,
-  receivedAt,
+  timer: entryTimer,
 }: {
   request: Request;
   auth: AuthResult;
@@ -266,21 +280,22 @@ export async function dispatchChatTurn({
   body: Record<string, unknown>;
   surface: ChatTurnSurface;
   urlConversationId?: string;
-  /** When the HTTP request reached the handler, so TTFT includes auth and body parse. */
-  receivedAt?: number;
+  /**
+   * The timer `handleChatTurn` armed at request entry, so TTFT and the watchdog cover
+   * auth and body parse. A caller that authenticated by other means passes none.
+   */
+  timer?: TurnTimer;
 }): Promise<Response> {
   // Time-to-first-token instrumentation for whichever strategy runs. Owned HERE so both
   // strategies share one start point and one end: a turn that returns without handing a
-  // stream to the pump (refusal, /help, error) ends its timer in the `finally` below; a
-  // turn that did hand one off is ended by the pump when the stream drains.
-  const timer = createTurnTimer({ receivedAt: receivedAt ?? Date.now() });
-  timer.mark('authenticated');
+  // stream to the pump (refusal, /help, error) is ended by `endTurnAfter`; a turn that did
+  // hand one off is ended by the pump when the stream drains.
+  const timer = entryTimer ?? createTurnTimer({ receivedAt: Date.now() });
+  if (!entryTimer) timer.mark('authenticated');
   timer.annotate({ surface, userId: auth.userId });
-  try {
-    return await selectAndRunTurn({ request, auth, browserSessionId, body, surface, urlConversationId, timer });
-  } finally {
-    timer.endUnlessHandedOff('no_generation');
-  }
+  return endTurnAfter(timer, () =>
+    selectAndRunTurn({ request, auth, browserSessionId, body, surface, urlConversationId, timer }),
+  );
 }
 
 async function selectAndRunTurn({
