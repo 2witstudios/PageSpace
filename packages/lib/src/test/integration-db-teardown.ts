@@ -1,5 +1,6 @@
 /**
- * Integration-only setup file (vitest.integration.config.ts).
+ * Setup file for every packages/lib run that shares one process across files:
+ * vitest.integration.config.ts AND the unit vitest.config.ts (singleFork).
  *
  * Every integration file runs in an isolated module registry, so each one
  * builds its own `@pagespace/db` pool — up to DB_POOL_MAX (10) connections with
