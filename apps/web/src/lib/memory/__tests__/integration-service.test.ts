@@ -218,9 +218,11 @@ describe('evaluateAndIntegrate — the credit gate', () => {
 
     const outcome = await evaluateAndIntegrate('user-1', [candidate], { bio: 'Existing bio.' });
 
-    expect(outcome.ok).toBe(false);
+    // Not ok, naming the refusal, so the cron leaves every candidate pending and reports it.
+    expect(outcome).toEqual({ ok: false, reason: 'credit gate refused: out_of_credits', creditRefusal: 'out_of_credits' });
     expect(generateText).not.toHaveBeenCalled();
     expect(AIMonitoring.trackUsage).not.toHaveBeenCalled();
+    expect(mockReleaseMemoryHold).not.toHaveBeenCalled();
   });
 
   it('SPEND-8 (partial) a funded evaluation reserves before the model and settles once on that hold and wallet', async () => {
