@@ -78,6 +78,11 @@ describe('wallet-access: the credential ([D-OW-26])', () => {
     }
   });
 
+  it('SPEND-5 (partial) an MCP/CLI token may not turn "Always my own credits" on or off', () => {
+    expect(credentialRefusalFor('mcp', 'set_spend_override')).toMatchObject({ code: 'mcp_token_cannot_change_spend_source' });
+    expect(credentialRefusalFor('session', 'set_spend_override')).toBeNull();
+  });
+
   it('SPEND-3 (partial) an MCP/CLI token may not change a conversation\'s source or the personal default', () => {
     for (const write of ['set_conversation_source', 'set_default_source'] as const) {
       expect(credentialRefusalFor('mcp', write)).toMatchObject({ code: 'mcp_token_cannot_change_spend_source' });

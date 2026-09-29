@@ -360,6 +360,9 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     // (0319, SPEND-6): a per-drive throttle stamp. The notice itself is exported under
     // `notifications`.
     'automation_skip_notices',
+    // SPEND-5 "Always my own credits" in one drive (0322): a per-drive switch beside the
+    // global one on the personal root wallet (`wallets` above); decided with the wallets under X-2.
+    'drive_spend_overrides',
     'credit_holds',
     'credit_ledger',
   ),

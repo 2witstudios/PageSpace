@@ -18,12 +18,16 @@ import {
   coveredSpendOptions,
   entitlementTierFor,
   resolveSpendSource,
+  seatLegSpendableCents,
+  DEFAULT_SEAT_ALLOWANCE_CENTS,
   type DriveSpendRule,
   type RefusalReason,
   type SkipReason,
   type SpendActor,
   type SpendLeg,
   type SpendOption,
+  type SeatUsage,
+  type SpendPolicy,
   type SpendSourceKind,
   type UserSpendOverride,
   type WalletFunds,
@@ -258,6 +262,29 @@ export function walletLeg(walletId: string, status: WalletStatus, spendableCents
   return { walletId, status, spendableCents: Math.max(0, whole(spendableCents)) };
 }
 
+/**
+ * A person's seat as a leg (WAL-2): the org pool, but never more than what is left of that
+ * consumer's monthly allowance this pool period. `capReached` says the cap, not the pool,
+ * is the bound, so an uncovered seat refuses by name (`source_cap_reached`).
+ */
+export function seatAllowanceLeg(input: {
+  poolId: string;
+  status: WalletStatus;
+  poolSpendableCents: number;
+  capCents: number;
+  dailyCapCents: number | null;
+  usage: SeatUsage;
+}): SpendLeg {
+  const pool = walletLeg(input.poolId, input.status, input.poolSpendableCents);
+  const spendableCents = seatLegSpendableCents({
+    poolSpendableCents: pool.spendableCents,
+    capCents: input.capCents,
+    dailyCapCents: input.dailyCapCents,
+    usage: input.usage,
+  });
+  return { ...pool, spendableCents, capReached: spendableCents < pool.spendableCents };
+}
+
 // ---------------------------------------------------------------------------
 // Chosen source (SPEND-1, SPEND-2, SPEND-4)
 // ---------------------------------------------------------------------------
@@ -362,6 +389,16 @@ export function chooseSource(turnSource: SpendSourceKind | null, stored: StoredS
 // ---------------------------------------------------------------------------
 // The decision (SPEND-1, SPEND-4, WAL-8)
 // ---------------------------------------------------------------------------
+
+/**
+ * POL-7: the org's spend policy until the org policy store lands. The strictest reading:
+ * no fallback moves a call off its chosen source, and each seat is capped at the default
+ * allowance (WAL-2) — never unlimited. A drive may only be stricter (effectiveSpendPolicy).
+ */
+export const ORG_SPEND_POLICY_UNTIL_POLICY_STORE: SpendPolicy = Object.freeze({
+  seatAllowanceCents: DEFAULT_SEAT_ALLOWANCE_CENTS,
+  fallback: 'refuse',
+});
 
 /** SEAT-8: there is no free org tier, so an org-rooted wallet carries Business entitlement. */
 export const ORG_ENTITLEMENT_TIER: SubscriptionTier = 'business';

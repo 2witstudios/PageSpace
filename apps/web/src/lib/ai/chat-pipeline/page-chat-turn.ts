@@ -42,6 +42,7 @@ import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { conversationSpend } from '@pagespace/lib/billing/spend-target';
 import { UNGATED_TURN_CREDIT, turnCreditAfterGate, type TurnCredit } from './turn-credit';
+import { writeTurnPreamble } from './turn-preamble';
 import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
 import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
 import { makeOnStepFinishHandler } from '@/lib/ai/core/step-finish-handler';
@@ -82,8 +83,6 @@ import { buildAssistantPersistencePayload } from '@/lib/ai/core/persistAssistant
 import { processMentionsInMessage, buildMentionSystemPrompt } from '@/lib/ai/core/mention-processor';
 import {
   buildCommandPromptSection,
-  commandExecutionDataFromPlan,
-  COMMAND_EXECUTION_PART_TYPE,
   isSoloBuiltinCommand,
   type CommandExecutionPlan,
 } from '@/lib/ai/core/command-processor';
@@ -1780,19 +1779,9 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
           // already-aborted signal to short-circuit streamText's underlying fetch.
           if (lifecycle!.preAborted) return;
 
-          // Execution feedback (UX spec §7): announce one command indicator
-          // per resolved plan ("Using /foo" / "Skipped /foo — reason") as
-          // the first parts of the assistant message, in the same order the
-          // chips appeared in the user's message. Persisted with the message
-          // via onFinish so transcripts keep showing which commands informed
-          // the answer.
-          commandPlans.forEach((plan, index) => {
-            writer.write({
-              type: COMMAND_EXECUTION_PART_TYPE,
-              id: `${serverAssistantMessageId}-command-${index}`,
-              data: commandExecutionDataFromPlan(plan),
-            });
-          });
+          // SPEND-4 fallback part, then the command execution indicators (UX spec §7):
+          // the preamble both turns write before the model runs (turn-preamble.ts).
+          writeTurnPreamble(writer, { messageId: serverAssistantMessageId!, credit, commandPlans });
           // Resolve once outside the per-attempt factory (the factory is synchronous).
           // Gate tools on the CONCRETE backend model id (resolvedModelName), not the
           // PageSpace alias in currentModel — vision/tool detection pattern-matches the

@@ -26,13 +26,14 @@ import { orgMembers } from '@pagespace/db/schema/organizations';
 import {
   wallets,
   walletConsumerCaps,
+  driveSpendOverrides,
   walletFundingLegs,
   personalRootWalletOf,
   type SpendSourceKindValue,
 } from '@pagespace/db/schema/wallets';
 import { isBillingEnabled } from '../deployment-mode';
 import { ORGS_ENABLED } from '../organizations/orgs-enabled';
-import { getDriveIdsForUser } from '../permissions/permissions';
+import { getDriveIdsForUser, getUserDriveAccess } from '../permissions/permissions';
 import { loadDriveWalletStanding, type DriveWalletStanding } from '../permissions/spend-standing';
 import {
   credentialRefusalFor,
@@ -53,7 +54,7 @@ import { toSubscriptionTier } from '../billing/subscription-tiers';
 import { planDeleteWallet, planTopUp, planWalletPatch, type DeleteBlocker, type WalletPatchInput } from '../billing/wallet-admin';
 import { donateToDriveWallet } from '../billing/wallet-funding-shell';
 import { checkOrgActive } from '../organizations/status';
-import { utcDayStartMs, utcMonthStartMs, type SpendSourceKind } from '../billing/wallet-core';
+import { userConsumerKey, utcDayStartMs, utcMonthStartMs, type SpendSourceKind } from '../billing/wallet-core';
 import {
   capRemainingCents,
   projectDriveWallet,
@@ -89,8 +90,8 @@ function refuseCredential(credential: WalletCredential, write: WalletWrite): Wal
   return refusal ? { ok: false, status: 403, code: refusal.code, message: refusal.message } : null;
 }
 
-/** The consumer key a person's cap is stored under on a wallet (WAL-7). */
-export const userConsumerKey = (userId: string): string => `user:${userId}`;
+/** The consumer key a person's cap is stored under on a wallet (WAL-7); defined once in wallet-core. */
+export { userConsumerKey };
 
 // ---------------------------------------------------------------------------
 // Access
@@ -722,6 +723,54 @@ export async function setPersonalDefaultSource(
   const walletId = await ensurePersonalRootWalletId(db, userId);
   await db.update(wallets).set({ defaultSpendSource: source }).where(and(eq(wallets.id, walletId), personalRootWalletOf(userId)));
   return { ok: true, defaultSpendSource: source };
+}
+
+// ---------------------------------------------------------------------------
+// "Always my own credits" (SPEND-5)
+// ---------------------------------------------------------------------------
+
+/** The person's two switches as the gate reads them: global, and for `driveId`. */
+export async function getAlwaysOwnCredits(
+  userId: string,
+  driveId: string | null,
+): Promise<{ ok: true; alwaysOwnCredits: boolean; alwaysOwnCreditsInDrive: boolean }> {
+  const [root] = await db.select({ on: wallets.alwaysOwnCredits }).from(wallets).where(personalRootWalletOf(userId)).limit(1);
+  const [inDrive] = driveId
+    ? await db
+        .select({ userId: driveSpendOverrides.userId })
+        .from(driveSpendOverrides)
+        .where(and(eq(driveSpendOverrides.userId, userId), eq(driveSpendOverrides.driveId, driveId)))
+        .limit(1)
+    : [];
+  return { ok: true, alwaysOwnCredits: root?.on ?? false, alwaysOwnCreditsInDrive: inDrive !== undefined };
+}
+
+/**
+ * Turn "Always my own credits" on or off (SPEND-5): the one global switch (`driveId` null, on
+ * the person's own root wallet) or the switch for one drive. It only ever narrows what a call
+ * spends, but a per-drive switch is still set only for a drive the person can open (the
+ * permissions module decides), so the table never names a drive to someone outside it.
+ * Session only ([D-OW-26]): a token cannot change what an account spends from.
+ */
+export async function setAlwaysOwnCredits(
+  userId: string,
+  input: { driveId: string | null; enabled: boolean },
+  credential: WalletCredential,
+): Promise<{ ok: true; driveId: string | null; enabled: boolean } | WalletServiceError> {
+  const refused = refuseCredential(credential, 'set_spend_override');
+  if (refused) return refused;
+  if (input.driveId === null) {
+    const walletId = await ensurePersonalRootWalletId(db, userId);
+    await db.update(wallets).set({ alwaysOwnCredits: input.enabled }).where(and(eq(wallets.id, walletId), personalRootWalletOf(userId)));
+    return { ok: true, driveId: null, enabled: input.enabled };
+  }
+  if (!(await getUserDriveAccess(userId, input.driveId))) return notFound();
+  if (input.enabled) {
+    await db.insert(driveSpendOverrides).values({ userId, driveId: input.driveId }).onConflictDoNothing();
+  } else {
+    await db.delete(driveSpendOverrides).where(and(eq(driveSpendOverrides.userId, userId), eq(driveSpendOverrides.driveId, input.driveId)));
+  }
+  return { ok: true, driveId: input.driveId, enabled: input.enabled };
 }
 
 // ---------------------------------------------------------------------------

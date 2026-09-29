@@ -37,6 +37,11 @@ export interface SpendLeg {
   walletId: string;
   status: WalletStatus;
   spendableCents: number;
+  /**
+   * True when the consumer's cap, not the wallet's money, is what bounds `spendableCents`
+   * (a seat's monthly allowance, WAL-2): an uncovered leg then refuses `source_cap_reached`.
+   */
+  capReached?: boolean;
 }
 
 export type SpendActor =
@@ -79,6 +84,11 @@ export type RefusalReason =
   | 'source_paused'
   | 'source_unavailable'
   | 'guest_drive_wallet_off'
+  /**
+   * The source's wallet holds money, but this consumer's cap on it is spent for the period
+   * (a seat's monthly allowance, WAL-2). Named apart from `source_empty`: the pool is not empty.
+   */
+  | 'source_cap_reached'
   /**
    * The wallet stored as this conversation's choice is not one this person may spend in
    * this drive now (deleted, another person's, a seat after leaving the org, another
@@ -158,6 +168,12 @@ export function coveredSpendOptions(input: ResolveSpendSourceInput): SpendOption
   return optionsExcept(input, null);
 }
 
+/** Why a leg that does not cover the call refuses: paused, its consumer cap spent, or empty. */
+function refusalFor(leg: SpendLeg): RefusalReason {
+  if (leg.status === 'paused') return 'source_paused';
+  return leg.capReached === true ? 'source_cap_reached' : 'source_empty';
+}
+
 function refuse(source: SpendSourceKind | null, reason: RefusalReason, options: SpendOption[]): SpendResolution {
   return { kind: 'refuse', source, reason, options, chargeCents: 0 };
 }
@@ -209,7 +225,7 @@ export function resolveSpendSource(input: ResolveSpendSourceInput): SpendResolut
       return { kind: 'spend', source: fallback, walletId: fallbackLeg.walletId, fallbackApplied: true, fallbackFrom: chosen };
     }
   }
-  return refuse(chosen, found.leg.status === 'paused' ? 'source_paused' : 'source_empty', offered());
+  return refuse(chosen, refusalFor(found.leg), offered());
 }
 
 // ---------------------------------------------------------------------------
@@ -464,6 +480,11 @@ export function renewWalletAllocation(wallet: WalletFunds, allocationCents: numb
 // Per-consumer caps (WAL-7)
 // ---------------------------------------------------------------------------
 
+/** The consumer key a person's caps are stored under on a wallet (wallet_consumer_caps.consumerKey). */
+export function userConsumerKey(userId: string): string {
+  return `user:${userId}`;
+}
+
 /** Whole cents; null means unlimited within the wallet. */
 export interface ConsumerCaps {
   dailyCents: number | null;
@@ -555,6 +576,137 @@ export function capAlertThresholdsCrossed(input: {
   return CAP_ALERT_THRESHOLDS.filter(
     (t) => input.beforeCents * PERCENT < cap * t && input.afterCents * PERCENT >= cap * t,
   );
+}
+
+// ---------------------------------------------------------------------------
+// Seat allowance (WAL-2): the per-consumer monthly cap on the org pool's own leg
+// ---------------------------------------------------------------------------
+
+/**
+ * The org's seat allowance until the org policy store (POL-7) lands: D20.5's monthly
+ * per-consumer default. A seat is never unlimited — a seat with no cap lets any one member
+ * spend the whole pool.
+ */
+export const DEFAULT_SEAT_ALLOWANCE_CENTS: number = DEFAULT_CONSUMER_CAPS.monthlyCents ?? 0;
+
+/**
+ * One consumer's seat allowance on the pool: their own monthly cap on the pool leg
+ * (wallet_consumer_caps) when one is set, else the org's seat allowance, else the default.
+ * A non-finite or negative value fails closed to zero.
+ */
+export function seatAllowanceCents(input: {
+  consumerMonthlyCapCents: number | null;
+  policySeatAllowanceCents: number | null;
+}): number {
+  return wholeNonNegative(input.consumerMonthlyCapCents ?? input.policySeatAllowanceCents ?? DEFAULT_SEAT_ALLOWANCE_CENTS);
+}
+
+const MILLICENTS_PER_CENT = 1000;
+
+/**
+ * A consumer's charged seat spend this period, from the ledger's summed millicents (usage
+ * plus signed reconcile corrections). Rounded UP so the cap never under-counts; a net
+ * refund below zero is nothing spent; a non-finite sum fails closed as everything spent.
+ */
+export function seatSpentCents(chargedMillicents: number): number {
+  if (!Number.isFinite(chargedMillicents)) return Number.MAX_SAFE_INTEGER;
+  return Math.max(0, Math.ceil(chargedMillicents / MILLICENTS_PER_CENT));
+}
+
+/** One consumer's seat spend in the pool's current period. */
+export interface SeatUsage {
+  /** Their settled seat spend this period (usage + reconcile rows, per call, dated by the call), as min(gross, the cap now). */
+  periodChargedMillicents: number;
+  /** Their live holds on the pool (calls in flight), counted like spend — this period and today. */
+  periodReservedCents: number;
+  /** The same since the start of today, UTC (WAL-7's daily window, D20.3), as min(gross, the daily cap now). */
+  dayChargedMillicents: number;
+}
+
+/**
+ * The seat caps against this call's reservation: spend plus in-flight holds plus this call must
+ * fit the monthly allowance and, when the consumer has one set, their daily cap (WAL-7; unset is
+ * no daily limit). In-flight holds are hours old at most, so they count against today as well.
+ */
+export function seatCapCheck(input: {
+  capCents: number;
+  dailyCapCents: number | null;
+  usage: SeatUsage;
+  reservationCents: number;
+}): CapsResult {
+  return evaluateCaps({
+    caps: { dailyCents: input.dailyCapCents, monthlyCents: input.capCents },
+    usage: {
+      dailySpentCents: seatSpentCents(input.usage.dayChargedMillicents),
+      monthlySpentCents: seatSpentCents(input.usage.periodChargedMillicents),
+      dailyReservedCents: input.usage.periodReservedCents,
+      monthlyReservedCents: input.usage.periodReservedCents,
+    },
+    reservationCents: input.reservationCents,
+  });
+}
+
+/** One cap window's settled seat spend: every charged millicent, and how much of it the pool absorbed. */
+export interface SeatWindowCharge {
+  /** SUM(chargeMillicents) of the consumer's usage and reconcile rows in the window: what was spent. */
+  grossMillicents: number;
+  /** SUM of this window's own seat-overshoot rows: the part of that spend the pool took off the count. */
+  absorbedMillicents: number;
+}
+
+/**
+ * One window's seat count: its gross settled spend judged against the cap in force now,
+ * min(gross, cap) and never below zero (null cap: no limit, the gross). Deciding a cap on this
+ * is deciding it on gross — both refuse at gross >= cap and agree below it — so nothing stored
+ * from an earlier cap can widen admission. A non-finite gross passes through, and the caps'
+ * read (seatSpentCents) fails closed on it.
+ */
+export function seatCountedMillicents(input: { capCents: number | null; grossMillicents: number }): number {
+  if (!Number.isFinite(input.grossMillicents)) return input.grossMillicents;
+  const gross = Math.max(0, input.grossMillicents);
+  return input.capCents === null ? gross : Math.min(gross, input.capCents * MILLICENTS_PER_CENT);
+}
+
+/**
+ * WAL-2 / WAL-7 at SETTLE, one cap window at a time. Admission reserves an estimate and a
+ * call's real cost can exceed it; the pool still pays the excess (WAL-6b/c: overshoot lands
+ * on the funder, never on the consumer), but the excess is the pool's absorbed overshoot, not
+ * the consumer's seat spend. A window's absorbed amount is kept at exactly
+ * max(0, gross − cap): this returns the SIGNED change that restores that after a charge
+ * (positive, the new excess) or a refund (negative, forgiveness that no longer applies — a
+ * refund never frees more room than was really spent). The consumer's count, gross − absorbed,
+ * is then min(gross, cap): at the cap, never over it, and never under what was really spent
+ * below it.
+ *
+ * Each window answers for itself, so a DAILY overshoot never forgives the MONTH and a monthly
+ * one never forgives the DAY (review 5340219245, IRV-A7). No cap (a null daily cap) keeps
+ * nothing absorbed. A non-finite sum changes nothing here; the gate's read fails closed on it.
+ */
+export function seatOvershootDeltaMillicents(input: { capCents: number | null; window: SeatWindowCharge }): number {
+  const target = input.capCents === null ? 0 : Math.max(0, input.window.grossMillicents - input.capCents * MILLICENTS_PER_CENT);
+  const delta = target - input.window.absorbedMillicents;
+  return Number.isFinite(delta) ? delta : 0;
+}
+
+/** What a consumer may still spend through their seat: the pool's spendable, bounded by what is left of their caps. */
+export function seatLegSpendableCents(input: {
+  poolSpendableCents: number;
+  capCents: number;
+  dailyCapCents: number | null;
+  usage: SeatUsage;
+}): number {
+  const cap = seatCapCheck({ capCents: input.capCents, dailyCapCents: input.dailyCapCents, usage: input.usage, reservationCents: 0 });
+  return legSpendableCents(input.poolSpendableCents, cap);
+}
+
+/** D-OW-12: a seat's cap resets on the pool's refill date, never on the person's own renewal. */
+export function seatPeriodStartMs(input: { poolPeriodStartMs: number | null; nowMs: number }): number {
+  return governingAllocationPeriodStartMs({
+    rootOwner: 'org',
+    poolPeriodStartMs: input.poolPeriodStartMs,
+    personalPeriodStartMs: null,
+    nowMs: input.nowMs,
+  });
 }
 
 // ---------------------------------------------------------------------------

@@ -86,7 +86,9 @@ export type WalletCredential = 'session' | 'mcp';
 export type WalletWrite =
   | Exclude<WalletAction, 'view' | 'view_spend_by_member'>
   | 'set_conversation_source'
-  | 'set_default_source';
+  | 'set_default_source'
+  /** SPEND-5 "Always my own credits", globally or for one drive. */
+  | 'set_spend_override';
 
 export interface CredentialRefusal {
   code: 'mcp_token_cannot_move_money' | 'mcp_token_cannot_change_spend_source';
@@ -103,7 +105,7 @@ export interface CredentialRefusal {
  */
 export function credentialRefusalFor(credential: WalletCredential, write: WalletWrite): CredentialRefusal | null {
   if (credential === 'session') return null;
-  if (write === 'set_conversation_source' || write === 'set_default_source') {
+  if (write === 'set_conversation_source' || write === 'set_default_source' || write === 'set_spend_override') {
     return { code: 'mcp_token_cannot_change_spend_source', message: 'An access token cannot change what a conversation or account spends from; sign in to change it' };
   }
   return { code: 'mcp_token_cannot_move_money', message: 'An access token cannot move money or change a wallet; sign in to do this' };

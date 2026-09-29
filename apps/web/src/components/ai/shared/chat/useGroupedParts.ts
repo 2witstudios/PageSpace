@@ -75,6 +75,13 @@ export function useGroupedParts(parts: UIMessage['parts'] | undefined): GroupedP
         flushToolRun();
         const dataPart = part as { type: 'data-command-execution'; id?: string; data?: unknown };
         groups.push({ type: 'data-command-execution', id: dataPart.id, data: dataPart.data });
+      } else if (part.type === 'data-spend-fallback') {
+        // SPEND-4: the reply fell back to another source — shown standalone, above the reply.
+        flushTextGroup();
+        flushFileGroup();
+        flushToolRun();
+        const dataPart = part as { type: 'data-spend-fallback'; id?: string; data?: unknown };
+        groups.push({ type: 'data-spend-fallback', id: dataPart.id, data: dataPart.data });
       } else if (part.type === 'file') {
         flushTextGroup();
         flushToolRun();

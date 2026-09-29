@@ -137,12 +137,13 @@ SPEND-2
 # re-resolved by the gate on every call (a stale id refuses), and preselection follows the drive default then
 # the person's default, proven against Postgres; the Settings surface that sets the default is UI-10.
 SPEND-3
-# SPEND-4 (partial, ow-c2): empty chosen source refuses, names it, offers the rest, charges zero, and
-# falls back only by drive rule, as pure logic; the chip and strip showing the new source are unproven (UI-8).
+# SPEND-4 (partial, ow-c2, ow-fix-spend-controls): empty chosen source refuses, names it, offers the rest,
+# charges zero (a seat refused by its allowance says so in the 402); a drive-rule fallback reaches the gate
+# result ({from,to}), both chat streams (data-spend-fallback) and both chat renderers (SpendFallbackNotice).
+# Unproven: the header chip and strip (UI-8); the non-chat surfaces (v1/chat/completions, btw, consult,
+# mentions) drop gate.fallback, so their fallback is logged only; overshoot on a fallback call landing per
+# WAL-6(b).
 SPEND-4
-# SPEND-5 (partial, ow-c2): both override switches are absolute in resolveSpendSource; storing them per
-# drive and globally is unproven.
-SPEND-5
 # SPEND-6 (partial, ow-c2): automations resolve to the drive wallet or skip, never a person; wiring every
 # automation kind and logging the skip are unproven until C4.
 SPEND-6
@@ -174,9 +175,6 @@ UI-11
 # suite proves owner/subject/parent/status shapes; top-up "never expires" on child wallets is unproven
 # until C3/C5 spend and refill against them.
 WAL-1
-# WAL-2 (partial, ow-c1): one pool per org, one wallet per subject and a drive wallet under a parent
-# are enforced by the schema; creating the pool, drive wallets and seat caps is C5/C6.
-WAL-2
 # WAL-3 (partial, ow-c2): allocation draws against the parent as spend happens and legs last until spent,
 # as pure math; persisted wallets and ledger rows are unproven until C1/C3.
 # (partial, ow-c5): persisted funding legs draw FIFO and last until spent, and allocations reset on the

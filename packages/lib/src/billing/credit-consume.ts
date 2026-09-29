@@ -25,8 +25,9 @@ import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { and, eq, isNull, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
 import { chargeMillicents, accruePending, allocateSpend, applyPaymentToDebt } from './credit-core';
-import { allocateWalletSpend, settleOvershoot, DEFAULT_OVERSHOOT_CHOICE } from './wallet-core';
-import { childWalletFunds, type WalletBalanceFacts } from './spend-target';
+import { allocateWalletSpend, settleOvershoot, seatOvershootDeltaMillicents, DEFAULT_OVERSHOOT_CHOICE } from './wallet-core';
+import { childWalletFunds, ORG_SPEND_POLICY_UNTIL_POLICY_STORE, type WalletBalanceFacts } from './spend-target';
+import { loadSeatCapFacts, SEAT_OVERSHOOT_ENTRY } from './seat-allowance';
 import { drawWalletFundingLegs, creditWalletFundingLegs } from './wallet-legs';
 import { parseWalletDraws, addWalletDraws, planWalletRefund, type WalletDraws } from './wallet-draws';
 import { MARKUP_BPS } from './credit-pricing';
@@ -125,6 +126,8 @@ async function decrementAndSettle(
   // silently drop the charge and hide it from both backfill sweeps.
   if (!settled) return false;
 
+  await recordSeatOvershoot(tx, { walletId, userId, aiUsageLogId, claimLedgerId: ledgerId });
+
   await tx
     .update(creditLedger)
     .set({
@@ -165,6 +168,82 @@ async function decrementAndSettle(
     await tx.delete(creditHolds).where(eq(creditHolds.id, holdId));
   }
   return true;
+}
+
+/**
+ * WAL-2 / WAL-7 at settle: keep what the pool absorbed of a consumer's seat spend at exactly
+ * max(0, gross − cap), per cap window. The gate admits against an estimate; the real cost can
+ * exceed it, and that excess cannot be refused after the model ran. The pool has already paid
+ * it (WAL-6b/c: the funder absorbs overshoot, never the consumer); this only moves it off the
+ * consumer's count, so the count ends AT the cap, never over it. Called after every seat
+ * charge (settle, reconcile undercharge) and every refund (reconcile overcharge), which gives
+ * back forgiveness that no longer applies. The month and the day each get their own signed
+ * row, so a day's overshoot never stands for the month's nor the month's for the day's
+ * (review 5340219245, IRV-A7 / IRV-A4). These rows are the attribution record only: the caps
+ * judge gross against the cap in force (loadSeatCapFacts), never these rows.
+ *
+ * Runs in the charge's transaction after the pool's row lock was taken (chargeWallet /
+ * refundWalletCharge; re-taken here, a no-op in the same transaction) — the lock the gate
+ * decides the cap under — so a settle and a gate on the same pool serialize. A no-op on any
+ * wallet that is not an org pool (a seat is the pool's own leg). The day and period are those
+ * of the CALL (its usage row's time), so a correction is attributed where the call counts.
+ * Returns the signed millicents recorded per window.
+ */
+export async function recordSeatOvershoot(
+  tx: Tx,
+  input: { walletId: string; userId: string; aiUsageLogId: string | null; claimLedgerId: string | null },
+): Promise<{ monthMc: number; dayMc: number }> {
+  const none = { monthMc: 0, dayMc: 0 };
+  const [pool] = await tx
+    .select({ ownerType: wallets.ownerType, parentWalletId: wallets.parentWalletId, subjectType: wallets.subjectType, monthlyPeriodStart: wallets.monthlyPeriodStart })
+    .from(wallets)
+    .where(eq(wallets.id, input.walletId))
+    .for('update');
+  if (!pool || pool.ownerType !== 'org' || pool.parentWalletId !== null || pool.subjectType !== null) return none;
+  // The call's own time: its usage row (a reconcile correction belongs to the call it
+  // corrects, not to when the cron ran), else the claim, else now.
+  const [call] = input.aiUsageLogId
+    ? await tx.select({ createdAt: creditLedger.createdAt }).from(creditLedger).where(and(eq(creditLedger.aiUsageLogId, input.aiUsageLogId), eq(creditLedger.entryType, 'usage')))
+    : [];
+  const [claim] = !call && input.claimLedgerId
+    ? await tx.select({ createdAt: creditLedger.createdAt }).from(creditLedger).where(eq(creditLedger.id, input.claimLedgerId))
+    : [];
+  const at = call?.createdAt ?? claim?.createdAt ?? new Date();
+  const seat = await loadSeatCapFacts(tx, {
+    poolId: input.walletId,
+    poolPeriodStart: pool.monthlyPeriodStart,
+    userId: input.userId,
+    policySeatAllowanceCents: ORG_SPEND_POLICY_UNTIL_POLICY_STORE.seatAllowanceCents,
+    now: at,
+  });
+  const recorded = {
+    monthMc: seatOvershootDeltaMillicents({ capCents: seat.capCents, window: seat.windows.period }),
+    dayMc: seatOvershootDeltaMillicents({ capCents: seat.dailyCapCents, window: seat.windows.day }),
+  };
+  const rows = ([['month', recorded.monthMc], ['day', recorded.dayMc]] as const)
+    .filter(([, mc]) => mc !== 0)
+    .map(([window, mc]) => ({
+      userId: input.userId,
+      walletId: input.walletId,
+      entryType: SEAT_OVERSHOOT_ENTRY[window],
+      bucket: 'monthly',
+      // Money already moved on the usage (and debt) rows; this row only re-attributes it.
+      amountCents: 0,
+      appliedCents: 0,
+      chargeMillicents: mc,
+      aiUsageLogId: input.aiUsageLogId,
+      consumeStatus: 'applied',
+      createdAt: at,
+    }));
+  if (rows.length === 0) return none;
+  await tx.insert(creditLedger).values(rows);
+  loggers.ai.info('seat spend past the consumer cap re-attributed to the pool', {
+    poolId: input.walletId,
+    userId: input.userId,
+    aiUsageLogId: input.aiUsageLogId,
+    ...recorded,
+  });
+  return recorded;
 }
 
 export interface WalletSettlement {
