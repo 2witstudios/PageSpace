@@ -1,4 +1,5 @@
 import { PERSONAL_SPEND, automationSpend, type SpendTarget } from './spend-target';
+import { computeChargeFor, type ComputeCharge } from './compute-charge';
 
 /**
  * Who a bill lands on (Spec WAL-9): a person, or an organization. An org drive's storage,
@@ -42,19 +43,12 @@ export function destinationDriveSpend(
 }
 
 /**
- * The interim refusal for an org payer at a compute charge site (WAL-9).
- *
- * An org drive's sandbox runtime, environments, published apps and machine storage bill the
- * org's pool wallet. Today every compute charge path (`canConsumeAI` holds, the ledger accrual
- * behind `AIMonitoring.trackUsage`, Stripe for dedicated hosting) can only debit a PERSON'S
- * wallet, so a charge site handed an org payer REFUSES by this name — it never bills the drive
- * lead instead, not even temporarily (point-guard ruling on C7, 2026-09-23). Orgs are dark
- * (ORGS_ENABLED false), so no live drive reaches it.
- *
- * REPLACED BY: the C3 lane (board leaf ir4t1nhxws049e3ay4qeuqig, "credit gate takes actor,
- * drive, chosen wallet; holds per wallet"), whose wallet-keyed holds and settlement let these
- * sites charge the org pool directly. The orchestrator filed the wiring follow-up; when it
- * lands, every caller of `requireUserPayer` is a site to convert, and this refusal goes away.
+ * The refusal for an org payer at the ONE charge site that still cannot bill an org: dedicated
+ * published-app hosting, which is a Stripe subscription item on the payer's card, not a wallet
+ * debit. Every WALLET compute site (sandbox runtime, terminal, browsers, environments,
+ * published-app awake time, machine storage) charges the org pool through `compute-gate.ts`
+ * (WAL-9) and no longer uses this. A dedicated purchase for an org drive is refused by name;
+ * it never commits the lead's card for the org's app.
  */
 export const ORG_BILLING_PENDING = 'org_billing_pending' as const;
 
@@ -65,7 +59,7 @@ export interface OrgBillingPendingRefusal {
 }
 
 export const ORG_BILLING_PENDING_MESSAGE =
-  "This drive belongs to an organization, and organization billing for compute isn't available yet.";
+  "This drive belongs to an organization, and dedicated hosting can't be billed to an organization yet.";
 
 export type UserPayerResult = { ok: true; userId: string } | { ok: false; refusal: OrgBillingPendingRefusal };
 
@@ -161,4 +155,15 @@ export interface ResolveEnvPayerInput {
 export async function resolveEnvPayer(input: ResolveEnvPayerInput): Promise<BillingPayer | null> {
   const facts = await input.lookupDriveBillingFacts(input.driveId);
   return facts ? payerForDrive(facts) : null;
+}
+
+/**
+ * resolveEnvCharge — the compute charge for an ENVIRONMENT or a published app (which hangs off
+ * one): the drive's payer via {@link resolveEnvPayer}, with the same no-fallback rule. An org
+ * drive charges the org POOL, recorded under the drive's lead — the only person an env has, and
+ * no person runs an accrual — never the lead's own wallet. Null = unresolvable: callers skip.
+ */
+export async function resolveEnvCharge(input: ResolveEnvPayerInput): Promise<ComputeCharge | null> {
+  const facts = await input.lookupDriveBillingFacts(input.driveId);
+  return facts ? computeChargeFor(payerForDrive(facts), facts.ownerId) : null;
 }

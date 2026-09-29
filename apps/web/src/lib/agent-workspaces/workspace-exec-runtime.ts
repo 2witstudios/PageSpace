@@ -15,6 +15,7 @@ import { drives } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+import { computeTierForDrive } from '@pagespace/lib/billing/sandbox-eligibility';
 import {
   runBashInSandbox,
   type BashToolResult,
@@ -38,7 +39,7 @@ export async function resolveWorkspaceExecActorContext(
 ): Promise<SandboxActorContext | { error: string }> {
   const [drive, actorInfo] = await Promise.all([
     session.driveId
-      ? db.query.drives.findFirst({ where: eq(drives.id, session.driveId), columns: { ownerId: true } })
+      ? db.query.drives.findFirst({ where: eq(drives.id, session.driveId), columns: { ownerId: true, orgId: true } })
       : Promise.resolve(undefined),
     getActorInfo(userId),
   ]);
@@ -59,7 +60,8 @@ export async function resolveWorkspaceExecActorContext(
     requestOrigin: 'user',
     actorEmail: actorInfo.actorEmail,
     actorDisplayName: actorInfo.actorDisplayName,
-    tier: toSubscriptionTier(payer?.subscriptionTier),
+    // WAL-9: an org drive's compute runs on the org's tier, not the lead's own plan.
+    tier: computeTierForDrive(drive, toSubscriptionTier(payer?.subscriptionTier)),
   };
 }
 

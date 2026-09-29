@@ -4,6 +4,7 @@ import type { OpenPtyShellArgs, PtyShell } from './sprites-shell';
 import type { SpriteInstanceLike } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import type { TaskHoldController } from '@pagespace/lib/services/sandbox/sandbox-client/sprite-tasks';
 import type { SandboxBillingDeps } from '@pagespace/lib/services/sandbox/tool-runners';
+import { ORG_COMPUTE_REFUSAL_MESSAGES, isOrgComputeRefusal, type ComputeCharge } from '@pagespace/lib/billing/compute-charge';
 import { parseShellConnectPayload } from './validation';
 import { clampShellDimensions, type ShellConnectPayload } from '@pagespace/lib/agent-workspaces/shells-contract';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -100,8 +101,11 @@ export type ShellCheckAuthResult =
   | {
       ok: true;
       sessionKey: string;
-      /** The session's resolved payer — metering attribution, present regardless of whether `billing` is wired. */
-      payerId: string;
+      /**
+       * What the session's runtime charges — metering attribution, present regardless of whether
+       * `billing` is wired. An org drive's session charges the org pool (WAL-9), never a person.
+       */
+      charge: ComputeCharge;
       /** Billing attribution scope: the session's drive, or null (owner-attributed) for a global-assistant session. */
       driveId: string | null;
       /**
@@ -363,7 +367,7 @@ function endShellSession(
     session.taskHold.end();
     session.taskHold = undefined;
   }
-  if (deps.billing && session.payerId && session.connectedAt !== undefined) {
+  if (deps.billing && session.charge && session.connectedAt !== undefined) {
     const activeSeconds = Math.max(0, (Date.now() - session.connectedAt) / 1000);
     // Fire-and-forget by necessity: teardown has no next tick to retry on, so this
     // is the last chance to bill the tail and there is nothing to keep open. The
@@ -373,7 +377,7 @@ function endShellSession(
     // anyone could act on it.
     void deps.billing
       .trackUsage({
-        payerId: session.payerId,
+        charge: session.charge,
         holdId: session.holdId,
         activeSeconds,
         driveId: session.driveId,
@@ -583,8 +587,8 @@ async function settleAccruedWindow(
   sessionKey: string,
   { stopClock = false }: { stopClock?: boolean } = {},
 ): Promise<boolean> {
-  if (!session.payerId || session.connectedAt === undefined) return true;
-  const payerId = session.payerId;
+  if (!session.charge || session.connectedAt === undefined) return true;
+  const charge = session.charge;
   const holdId = session.holdId;
   const windowStart = session.connectedAt;
   session.connectedAt = Date.now();
@@ -592,7 +596,7 @@ async function settleAccruedWindow(
   const activeSeconds = Math.max(0, (session.connectedAt - windowStart) / 1000);
   try {
     const settle = await billing.trackUsage({
-      payerId,
+      charge,
       holdId,
       activeSeconds,
       driveId: session.driveId,
@@ -638,7 +642,7 @@ async function settleAccruedWindow(
       // unrecoverable, and it must not be the one silent site in the file.
       void billing
         .trackUsage({
-          payerId,
+          charge,
           holdId,
           activeSeconds,
           driveId: session.driveId,
@@ -685,7 +689,7 @@ async function settleAccruedWindow(
     return true;
   }
   try {
-    const gate = await billing.gate({ payerId });
+    const gate = await billing.gate({ charge });
     if (!gate.allowed) return false;
     // Re-check liveness: the session may have ended while the gate ran, and a
     // hold assigned to a dead session would leak until its TTL expiry.
@@ -709,12 +713,12 @@ async function settleAccruedWindow(
  * (ten minutes) away, and a session that resumed nine minutes before its next
  * tick would have those nine minutes billed as free.
  *
- * Idempotent, and inert for an unmetered session (no `payerId`) or one whose
+ * Idempotent, and inert for an unmetered session (no `charge`) or one whose
  * clock is already running — `connectedAt` is only ever `undefined` here because
  * a quiesce stopped it.
  */
 export function resumeBillingClock(session: TerminalSession): void {
-  if (!session.payerId) return;
+  if (!session.charge) return;
   if (session.connectedAt !== undefined) return;
   session.connectedAt = Date.now();
 }
@@ -908,7 +912,7 @@ export interface ShellTarget {
 }
 
 export interface EnsureShellSessionRequest {
-  /** The ALREADY-GRANTED access verdict for this target — `sessionKey`, `payerId`, `driveId`, and the uncalled `resolveSandbox` thunk. */
+  /** The ALREADY-GRANTED access verdict for this target — `sessionKey`, `charge`, `driveId`, and the uncalled `resolveSandbox` thunk. */
   access: ShellAccessGranted;
   target: ShellTarget;
   /** Who this session is being started FOR — the re-auth tick's identity while nobody is attached. */
@@ -1076,14 +1080,18 @@ export async function ensureShellSession(
       // replica until the process restarts.
       let gateResult: Awaited<ReturnType<SandboxBillingDeps['gate']>>;
       try {
-        gateResult = await billing.gate({ payerId: access.payerId });
+        gateResult = await billing.gate({ charge: access.charge });
       } catch (error) {
         releaseSlot();
         throw error;
       }
       if (!gateResult.allowed) {
         releaseSlot();
-        return { kind: 'failed', reason: 'insolvent' };
+        // WAL-9: an org pool that is missing, paused or empty says so — nothing was opened.
+        const orgRefusal = gateResult.orgRefusal;
+        return orgRefusal !== undefined && isOrgComputeRefusal(orgRefusal)
+          ? { kind: 'failed', reason: 'insolvent', message: ORG_COMPUTE_REFUSAL_MESSAGES[orgRefusal] }
+          : { kind: 'failed', reason: 'insolvent' };
       }
       holdId = gateResult.holdId;
     }
@@ -1144,7 +1152,7 @@ export async function ensureShellSession(
       lastViewerUserId: userId,
       spriteExecId: attachSessionId,
       releaseSlot,
-      payerId: access.payerId,
+      charge: access.charge,
       holdId,
       connectedAt,
       // First-class attribution (Terminal Epic 3 usage-breakdown fix): the
@@ -1473,7 +1481,7 @@ export function connectFailureMessage(failure: Extract<EnsureShellSessionResult,
         ? 'Your plan\'s limit for running sandboxes is already in use — stop one before starting another.'
         : `Shell access denied: ${failure.message ?? 'unknown'}`;
     case 'insolvent':
-      return 'Insufficient credits to open a shell session.';
+      return failure.message ?? 'Insufficient credits to open a shell session.';
     case 'open_failed':
       return 'Failed to open shell session';
   }

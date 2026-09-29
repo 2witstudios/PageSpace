@@ -312,7 +312,10 @@ describe('a drive-wallet settle and the funding legs (real Postgres)', () => {
     expect(usage.walletId).toBe(world.driveWalletId);
   });
 
-  it('WAL-5 (partial) a settle naming a different wallet than its hold is refused on that wallet and settles where the hold was placed', async () => {
+  // Review 5343636479 P1-1 reverses #2726 here: letting the hold win is how an org's compute
+  // landed on a person when the payer changed mid-run. A mismatch now fails CLOSED — neither
+  // wallet is charged, the call is closed with a zero terminal claim, the hold is released.
+  it('WAL-5 (partial) a settle naming a different wallet than its hold is REFUSED — neither wallet is charged, the legs untouched, the hold released', async () => {
     if (!dbAvailable) return;
     world = await build({ ownerLegCents: 500 });
     const holdId = await holdOn(world.adaId, world.driveWalletId);
@@ -327,14 +330,17 @@ describe('a drive-wallet settle and the funding legs (real Postgres)', () => {
       markupBpsOverride: AT_COST_BPS,
     });
 
-    expect(status).toBe('settled');
+    expect(status).toBe('refused');
     expect((await walletRow(world.adaRootId)).monthlyRemainingCents).toBe(5_000);
-    expect(await legInvariant(world.driveWalletId)).toEqual({ topupRemainingCents: 350, legsTotal: 350 });
-    expect(error).toHaveBeenCalledWith('credit settle wallet does not match its hold', expect.objectContaining({
-      holdId,
-      holdWalletId: world.driveWalletId,
-      requestedWalletId: world.adaRootId,
-    }));
+    expect(await legInvariant(world.driveWalletId)).toEqual({ topupRemainingCents: 500, legsTotal: 500 });
+    expect(await db.select().from(creditHolds).where(eq(creditHolds.id, holdId))).toEqual([]);
+    const [claim] = await db.select().from(creditLedger).where(eq(creditLedger.userId, world.adaId));
+    expect(claim).toMatchObject({ consumeStatus: 'skipped', chargeMillicents: 0, amountCents: 0 });
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining('REFUSED'),
+      expect.any(Error),
+      expect.objectContaining({ holdId, holdWalletId: world.driveWalletId, requestedWalletId: world.adaRootId }),
+    );
   });
 
   it('a settle and the owner donating to their own drive wallet (whose parent is the donor root) never deadlock', async () => {

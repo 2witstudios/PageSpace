@@ -192,21 +192,33 @@ describe('canRunCode', () => {
     expect(result).toEqual({ ok: false, reason: 'tier_ineligible' });
   });
 
-  it('WAL-9 (partial) given a drive that belongs to an ORG, should deny with org_billing_pending — never on the lead\'s tier', async () => {
+  it("WAL-9 (partial) given a drive that belongs to an ORG, should allow on the ORG's tier — even with a free-tier lead and actor, and without reading either's plan", async () => {
     const tierLookups: string[] = [];
     const result = await canRunCode({
-      userId: 'pro-actor',
+      userId: 'free-actor',
       driveId: 'd1',
       deps: makeDeps({
-        lookupDriveBillingFacts: async () => ({ ownerId: 'pro-lead', orgId: 'org-northwind' }),
+        lookupDriveBillingFacts: async () => ({ ownerId: 'free-lead', orgId: 'org-northwind' }),
         getUserSubscriptionTier: async (userId) => {
           tierLookups.push(userId);
-          return 'pro';
+          return 'free';
         },
       }),
     });
-    expect(result).toEqual({ ok: false, reason: 'org_billing_pending' });
+    expect(result).toEqual({ ok: true });
     expect(tierLookups).toEqual([]);
+  });
+
+  it('WAL-9 (partial) an ORG drive still enforces drive edit access — the org tier grants the machine, not the membership', async () => {
+    const result = await canRunCode({
+      userId: 'viewer',
+      driveId: 'd1',
+      deps: makeDeps({
+        lookupDriveBillingFacts: async () => ({ ownerId: 'lead', orgId: 'org-northwind' }),
+        getUserDrivePermissions: async () => ({ ...adminPerms, isAdmin: false, canEdit: false }),
+      }),
+    });
+    expect(result).toEqual({ ok: false, reason: 'insufficient_role' });
   });
 
   it('given no driveId (global assistant) and a free-tier session owner, should deny with tier_ineligible', async () => {

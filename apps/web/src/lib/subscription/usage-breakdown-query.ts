@@ -24,11 +24,14 @@ import type { SubscriptionTier } from '@pagespace/lib/services/subscription-util
  * usage rows whose AI log has been purged by retention, which is acceptable for a
  * "recent usage" view.
  *
- * `byAgentSession` needs no separate drive-ownership filter: `creditLedger.userId` IS
- * the PAYER (`resolveSessionPayer` in sandbox-payer.ts always resolves to the
- * session's own drive owner, falling back to the session's own owner only when
- * unresolvable), so every row this query returns for `userId` is already scoped to
- * a session they own or a run they footed the bill for directly.
+ * `byAgentSession` needs no separate drive-ownership filter: `creditLedger.userId` is
+ * the person a row is RECORDED under — the payer for a personal drive
+ * (`resolveSessionPayer` in sandbox-payer.ts), so every such row is a session they
+ * own or a run they footed the bill for directly. KNOWN GAP (WAL-9, filed on ow-c7b):
+ * an ORG drive's compute is charged to the org pool but recorded under a person (the
+ * session owner, or the drive lead for an env/app accrual), and wallet-aware AI spend
+ * (C3) is recorded under its consumer, and this query does not filter by wallet — so
+ * those rows appear here too.
  */
 export async function getUserUsageBreakdown(
   userId: string,

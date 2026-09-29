@@ -57,13 +57,13 @@ const H = vi.hoisted(() => {
   const creditLedger = cols('creditLedger', [
     'id', 'userId', 'walletId', 'entryType', 'bucket', 'amountCents', 'appliedCents', 'chargeMillicents',
     'aiUsageLogId', 'realCostCents', 'markupBps', 'stripeRef', 'paidCents', 'consumeStatus',
-    'reconcileGenerationKey', 'createdAt',
+    'reconcileGenerationKey', 'spendKind', 'createdAt',
   ]);
-  const creditHolds = cols('creditHolds', ['id', 'userId', 'walletId', 'estCents', 'aiUsageLogId', 'createdAt', 'expiresAt']);
+  const creditHolds = cols('creditHolds', ['id', 'userId', 'walletId', 'estCents', 'aiUsageLogId', 'spendKind', 'createdAt', 'expiresAt']);
   const users = cols('users', ['id', 'stripeCustomerId', 'subscriptionTier']);
   const subscriptions = cols('subscriptions', ['id', 'userId', 'status', 'gifted', 'stripePriceId']);
   const aiUsageLogs = cols('aiUsageLogs', [
-    'id', 'userId', 'cost', 'timestamp', 'success', 'provider', 'source',
+    'id', 'userId', 'cost', 'timestamp', 'success', 'provider', 'source', 'walletId',
     'metadata', 'reconcileStatus', 'reconcileAttempts', 'reconciledAt',
   ]);
 

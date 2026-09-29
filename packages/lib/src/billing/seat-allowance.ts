@@ -6,7 +6,7 @@
  * already moves through, so there is no second counter to drift from it:
  *
  *   SUM over calls of max(0, SUM(credit_ledger.chargeMillicents))   -- gross, per window
- *     WHERE walletId = the pool AND userId = the consumer
+ *     WHERE walletId = the pool AND userId = the consumer AND spendKind = 'ai'
  *       AND entryType IN ('usage', 'adjustment')
  *     grouped by call (aiUsageLogId), each call dated by its usage row
  *   judged against the cap in force now
@@ -36,11 +36,25 @@
 
 import type { db } from '@pagespace/db/db';
 import { and, eq, gt, gte, inArray, sql } from '@pagespace/db/operators';
-import { creditHolds, creditLedger } from '@pagespace/db/schema/credits';
+import { creditHolds, creditLedger, type SpendKind } from '@pagespace/db/schema/credits';
 import { walletConsumerCaps } from '@pagespace/db/schema/wallets';
 import { seatAllowanceCents, seatCountedMillicents, seatPeriodStartMs, userConsumerKey, utcDayStartMs, type SeatUsage, type SeatWindowCharge } from './wallet-core';
 
 type Reader = Pick<typeof db, 'select'>;
+
+/**
+ * The ONLY spend a seat counts: AI calls (point-guard ruling on ow-c7b, #2741). COMPUTE on the
+ * org pool — sandbox runtime, the terminal, browsers, environments, published apps, machine
+ * storage — is DELIBERATELY EXCLUDED from every seat read: it is the ORG's spend (WAL-9:
+ * wallets do not change compute billing), not a consumer's draw on the pool (WAL-2), and its
+ * rows name a person only because credit rows must — a cron accrual (env/app storage, app
+ * awake time) is recorded under the DRIVE LEAD, so counting compute would eat a person's AI
+ * allowance for infrastructure they never ran, and write seat-overshoot rows against them.
+ * Tested by an explicit predicate on the row (credit_ledger.spendKind, credit_holds.spendKind),
+ * never by which code path wrote it. Known gap, filed: with compute excluded, a member's
+ * compute on the pool has no per-consumer cap.
+ */
+export const SEAT_COUNTED_SPEND_KIND: SpendKind = 'ai';
 
 /** The ledger entries for a seat's spend past one cap, absorbed by the pool: one per cap window. */
 export const SEAT_OVERSHOOT_ENTRY = { month: 'seat_overshoot_month', day: 'seat_overshoot_day' } as const;
@@ -101,6 +115,8 @@ export async function loadSeatCapFacts(
       eq(creditLedger.userId, input.userId),
       eq(creditLedger.walletId, input.poolId),
       inArray(creditLedger.entryType, ['usage', 'adjustment']),
+      // Compute is not a seat draw — see SEAT_COUNTED_SPEND_KIND.
+      eq(creditLedger.spendKind, SEAT_COUNTED_SPEND_KIND),
       gte(creditLedger.createdAt, rowsFrom),
     ))
     .groupBy(sql`coalesce(${creditLedger.aiUsageLogId}, ${creditLedger.id})`)
@@ -132,6 +148,8 @@ export async function loadSeatCapFacts(
     .where(and(
       eq(creditHolds.userId, input.userId),
       eq(creditHolds.walletId, input.poolId),
+      // A compute hold in flight is not a seat draw either — see SEAT_COUNTED_SPEND_KIND.
+      eq(creditHolds.spendKind, SEAT_COUNTED_SPEND_KIND),
       gt(creditHolds.expiresAt, input.now),
     ));
   const period = { grossMillicents: Number(gross?.period ?? 0), absorbedMillicents: Number(absorbed?.period ?? 0) };

@@ -4,6 +4,7 @@ import {
   METER_AWAKE_LOCK_KEY,
   msToSeconds,
   planAwakeSettle,
+  planOrgAwakeSettle,
   planDailyAwakeCap,
   planIdleStop,
   utcDayOf,
@@ -542,5 +543,28 @@ describe('METER_AWAKE_LOCK_KEY', () => {
     // stop-settle silently stops serializing against the heartbeat, which is the
     // double-charge PR #2493 flagged.
     expect(METER_AWAKE_LOCK_KEY).toBe('meter-published-apps-awake');
+  });
+});
+
+describe('planOrgAwakeSettle', () => {
+  const T = (iso: string) => new Date(iso);
+
+  it("WAL-9 (partial) an org app's first org-billed tick forgives the pre-epoch span, bills nothing and still moves the watermark to now", () => {
+    const epoch = T('2026-09-28T12:00:00Z');
+    const result = planOrgAwakeSettle({ billedThrough: T('2026-09-28T11:00:00Z'), now: epoch, epoch });
+    expect(result.plan).toEqual({ action: 'settle', activeSeconds: 0, billedThrough: epoch, clamped: false });
+    expect(result.forgiven).toEqual({ from: T('2026-09-28T11:00:00Z'), through: epoch, wouldHaveBilledSeconds: 3600 });
+  });
+
+  it('a later tick with a pre-epoch watermark bills only from the epoch', () => {
+    const result = planOrgAwakeSettle({ billedThrough: T('2026-09-28T11:00:00Z'), now: T('2026-09-28T12:10:00Z'), epoch: T('2026-09-28T12:00:00Z') });
+    expect(result.plan).toMatchObject({ action: 'settle', activeSeconds: 600 });
+    expect(result.forgiven?.wouldHaveBilledSeconds).toBe(3600);
+  });
+
+  it('a watermark at or after the epoch settles normally, nothing forgiven', () => {
+    const result = planOrgAwakeSettle({ billedThrough: T('2026-09-28T12:00:00Z'), now: T('2026-09-28T12:05:00Z'), epoch: T('2026-09-28T12:00:00Z') });
+    expect(result.plan).toMatchObject({ action: 'settle', activeSeconds: 300 });
+    expect(result.forgiven).toBeNull();
   });
 });

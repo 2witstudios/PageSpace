@@ -6,6 +6,7 @@ import {
   type GitSandboxRunDeps,
 } from '../git-tool-runners';
 import type { SandboxActorContext, SandboxRunDeps } from '../tool-runners';
+import type { ComputeCharge } from '../../../billing/compute-charge';
 import type { ExecutableSandbox, SandboxRunResult } from '../sandbox-client/types';
 import { SANDBOX_ROOT } from '../sandbox-paths';
 import { assert } from './riteway';
@@ -458,19 +459,19 @@ describe('opportunistic storage measurement', () => {
  */
 function makeBilling(over: Partial<NonNullable<SandboxRunDeps['billing']>> = {}): {
   billing: NonNullable<SandboxRunDeps['billing']>;
-  resolvePayerIdCalls: Array<{ driveId: string | null; ownerId: string }>;
-  gateCalls: Array<{ payerId: string }>;
-  trackUsageCalls: Array<{ payerId: string; holdId?: string; activeSeconds: number; pageId?: string; driveId?: string; workspaceId?: string }>;
+  resolveChargeCalls: Array<{ driveId: string | null; ownerId: string }>;
+  gateCalls: Array<{ charge: ComputeCharge }>;
+  trackUsageCalls: Array<{ charge: ComputeCharge; holdId?: string; activeSeconds: number; pageId?: string; driveId?: string; workspaceId?: string }>;
   releaseHoldCalls: string[];
 } {
-  const resolvePayerIdCalls: Array<{ driveId: string | null; ownerId: string }> = [];
-  const gateCalls: Array<{ payerId: string }> = [];
-  const trackUsageCalls: Array<{ payerId: string; holdId?: string; activeSeconds: number; pageId?: string; driveId?: string; workspaceId?: string }> = [];
+  const resolveChargeCalls: Array<{ driveId: string | null; ownerId: string }> = [];
+  const gateCalls: Array<{ charge: ComputeCharge }> = [];
+  const trackUsageCalls: Array<{ charge: ComputeCharge; holdId?: string; activeSeconds: number; pageId?: string; driveId?: string; workspaceId?: string }> = [];
   const releaseHoldCalls: string[] = [];
   const billing: NonNullable<SandboxRunDeps['billing']> = {
-    resolvePayerId: async (input) => {
-      resolvePayerIdCalls.push(input);
-      return { ok: true, userId: input.ownerId };
+    resolveCharge: async (input) => {
+      resolveChargeCalls.push(input);
+      return { kind: 'user', userId: input.ownerId };
     },
     gate: async (input) => {
       gateCalls.push(input);
@@ -485,7 +486,7 @@ function makeBilling(over: Partial<NonNullable<SandboxRunDeps['billing']>> = {})
     },
     ...over,
   };
-  return { billing, resolvePayerIdCalls, gateCalls, trackUsageCalls, releaseHoldCalls };
+  return { billing, resolveChargeCalls, gateCalls, trackUsageCalls, releaseHoldCalls };
 }
 
 /** Mirrors `tool-runners.test.ts`'s `makeBillingSession` fake. */
@@ -508,7 +509,7 @@ describe('runGitInSandbox — machine billing (issue #2315: git/gh tools were ne
 
     await runGitInSandbox({ cmd: 'git', args: ['status'], ctx: makeCtx(), deps });
 
-    expect(gateCalls).toEqual([{ payerId: 'owner-42' }]);
+    expect(gateCalls).toEqual([{ charge: { kind: 'user', userId: 'owner-42' } }]);
     // The gate ran before acquisition — proven by acquisition having happened
     // at all (a denied gate, tested below, never reaches it).
     expect(slots.acquired).toBe(1);
@@ -531,7 +532,7 @@ describe('runGitInSandbox — machine billing (issue #2315: git/gh tools were ne
 
     expect(result).toMatchObject({ success: true });
     expect(trackUsageCalls).toEqual([
-      { payerId: 'owner-42', holdId: 'hold-1', activeSeconds: 3, pageId: undefined, driveId: 'd1', workspaceId: 'ws-1' },
+      { charge: { kind: 'user', userId: 'owner-42' }, holdId: 'hold-1', activeSeconds: 3, pageId: undefined, driveId: 'd1', workspaceId: 'ws-1' },
     ]);
     expect(releaseHoldCalls).toEqual([]);
   });

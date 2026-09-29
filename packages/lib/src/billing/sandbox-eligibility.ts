@@ -20,12 +20,9 @@
  */
 
 import { getDeploymentMode, type DeploymentMode } from '../deployment-mode';
-import {
-  requireUserPayer,
-  resolveSessionPayer,
-  type LookupDriveBillingFacts,
-  type OrgBillingPendingRefusal,
-} from './sandbox-payer';
+import { resolveSessionPayer, type LookupDriveBillingFacts } from './sandbox-payer';
+import { computeChargeFor, computeChargeTier } from './compute-charge';
+import { ORG_ENTITLEMENT_TIER } from './spend-target';
 import type { SubscriptionTier } from './subscription-tiers';
 
 /** Tiers for which the sandbox (Sprite compute, code execution, terminal) is available. */
@@ -119,25 +116,34 @@ export interface ResolveSandboxPayerTierDeps {
   getUserSubscriptionTier: (userId: string) => Promise<SubscriptionTier>;
 }
 
-export type SandboxPayerTierResult =
-  | { ok: true; tier: SubscriptionTier }
-  | { ok: false; refusal: OrgBillingPendingRefusal };
-
 /**
- * Resolves the session's payer (§ `resolveSessionPayer`), then that payer's tier. An org drive's
- * session is billed to the org, which no compute charge path can debit yet: it is refused by
- * name (`org_billing_pending`, replaced by the C3 lane) and never falls back to a person's tier.
+ * Resolves the session's payer (§ `resolveSessionPayer`), then the tier its compute follows: an
+ * org drive's session runs on the ORG's entitlement (SEAT-8, WAL-9) — whatever the lead's or the
+ * member's own plan — and is billed to the org pool; a personal session on its payer's own tier.
+ * An org payer never falls back to a person's tier.
  */
 export async function resolveSandboxPayerTier(
   input: ResolveSandboxPayerTierInput,
   deps: ResolveSandboxPayerTierDeps,
-): Promise<SandboxPayerTierResult> {
+): Promise<SubscriptionTier> {
   const payer = await resolveSessionPayer({
     driveId: input.driveId,
     ownerId: input.ownerId,
     lookupDriveBillingFacts: deps.lookupDriveBillingFacts,
   });
-  const user = requireUserPayer(payer);
-  if (!user.ok) return user;
-  return { ok: true, tier: await deps.getUserSubscriptionTier(user.userId) };
+  if (payer.kind === 'org') return computeChargeTier(computeChargeFor(payer, input.ownerId), 'free');
+  return deps.getUserSubscriptionTier(payer.userId);
+}
+
+/**
+ * The tier a drive's compute follows, for the sites that already hold the drive row and the
+ * paying person's stored tier (quota ceilings, env allowance, slot eligibility): the ORG's
+ * entitlement for an org drive (WAL-9, SEAT-8) — never the lead's own plan — else `ownerTier`.
+ * A driveless (global-assistant) session passes no drive and keeps its owner's tier.
+ */
+export function computeTierForDrive(
+  drive: { orgId: string | null } | null | undefined,
+  ownerTier: SubscriptionTier,
+): SubscriptionTier {
+  return drive?.orgId ? ORG_ENTITLEMENT_TIER : ownerTier;
 }

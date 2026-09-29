@@ -21,6 +21,9 @@ import type { TerminalSession } from '../terminal-session-map';
 import type { PtyShell, OpenPtyShellArgs } from '../sprites-shell';
 import { assert } from './riteway';
 import { SANDBOX_ROOT } from '@pagespace/lib/services/sandbox/sandbox-paths';
+import { ORG_COMPUTE_REFUSAL_MESSAGES, type ComputeCharge } from '@pagespace/lib/billing/compute-charge';
+
+const OWNER_CHARGE: ComputeCharge = { kind: 'user', userId: 'owner-1' };
 
 /**
  * Fire the `onSessionId` callback the handler handed to `openShell` — i.e. do
@@ -106,7 +109,8 @@ function makeAuthSuccess(over: Partial<{
   args: string[];
   commandOverride: string | null;
   cwd: string;
-  payerId: string;
+  /** null models an UNMETERED session (no charge resolved). */
+  charge: ComputeCharge | null;
   /** null models a GLOBAL-ASSISTANT session: no agent page, so usage attributes to the owner alone. */
   driveId: string | null;
 }> = {}) {
@@ -128,7 +132,7 @@ function makeAuthSuccess(over: Partial<{
   return {
     ok: true as const,
     sessionKey: over.sessionKey ?? 'shell:shl-1',
-    payerId: over.payerId ?? 'owner-1',
+    charge: over.charge === null ? undefined : (over.charge ?? OWNER_CHARGE),
     driveId: over.driveId === undefined ? 'drive-1' : over.driveId,
     resolveSandbox: vi.fn(async () => sandbox),
     sprite,
@@ -1585,14 +1589,14 @@ describe('buildShellHandlers', () => {
       expect(sessionMap.getByKey('shell:shl-1')).toBeDefined();
     });
 
-    it('places a hold for the resolved payerId BEFORE opening the shell', async () => {
+    it('places a hold for the resolved charge BEFORE opening the shell', async () => {
       const billing = makeBilling();
       const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
       await onConnect(validPayload);
 
-      expect(billing.gate).toHaveBeenCalledWith({ payerId: 'owner-1' });
+      expect(billing.gate).toHaveBeenCalledWith({ charge: OWNER_CHARGE });
       expect(openShell).toHaveBeenCalled();
-      expect(sessionMap.getByKey('shell:shl-1')).toMatchObject({ holdId: 'hold-1', payerId: 'owner-1' });
+      expect(sessionMap.getByKey('shell:shl-1')).toMatchObject({ holdId: 'hold-1', charge: OWNER_CHARGE });
     });
 
     it('given the gate denies, emits shell:error, releases the slot, and never opens a shell', async () => {
@@ -1759,7 +1763,7 @@ describe('buildShellHandlers', () => {
 
       expect(billing.trackUsage).toHaveBeenCalledTimes(1);
       const call = billing.trackUsage.mock.calls[0][0];
-      expect(call).toMatchObject({ payerId: 'owner-1', holdId: 'hold-1' });
+      expect(call).toMatchObject({ charge: OWNER_CHARGE, holdId: 'hold-1' });
       expect(call.pageId).toBeUndefined();
       // First-class attribution: no drive to group under, but the session id
       // still rides top-level (never JSON-forensics-only).
@@ -1779,7 +1783,7 @@ describe('buildShellHandlers', () => {
       expect(billing.trackUsage).toHaveBeenCalledTimes(1);
       const call = billing.trackUsage.mock.calls[0][0];
       // No pageId: a session is drive-scoped, not page-anchored — usage has no page grouping.
-      expect(call).toMatchObject({ payerId: 'owner-1', holdId: 'hold-1' });
+      expect(call).toMatchObject({ charge: OWNER_CHARGE, holdId: 'hold-1' });
       expect((call as { pageId?: string }).pageId).toBeUndefined();
       // First-class drive/session attribution (Terminal Epic 3 usage-breakdown fix).
       expect(call.driveId).toBe('drive-1');
@@ -1804,7 +1808,7 @@ describe('buildShellHandlers', () => {
       expect(calls.length).toBeGreaterThanOrEqual(1);
       expect(calls.reduce((s, c) => s + c.activeSeconds, 0)).toBeCloseTo(DETACHED_IDLE_MS / 1000, 0);
       for (const call of calls) {
-        expect(call.payerId).toBe('owner-1');
+        expect(call.charge).toEqual(OWNER_CHARGE);
         // No page grouping: a session is drive-scoped, not page-anchored.
         expect(call.pageId).toBeUndefined();
         expect(call.driveId).toBe('drive-1');
@@ -1827,7 +1831,7 @@ describe('buildShellHandlers', () => {
 
         expect(billing.trackUsage).toHaveBeenCalledTimes(1);
         const first = billing.trackUsage.mock.calls[0][0];
-        expect(first).toMatchObject({ payerId: 'owner-1', holdId: 'hold-1' });
+        expect(first).toMatchObject({ charge: OWNER_CHARGE, holdId: 'hold-1' });
         expect((first as { pageId?: string }).pageId).toBeUndefined();
         expect(first.driveId).toBe('drive-1');
         expect(first.workspaceId).toBe('conv-1');
@@ -2141,7 +2145,7 @@ describe('buildShellHandlers', () => {
 
       it('given a session with no resolved payer, heartbeats settle nothing (an unmetered session is not billable)', async () => {
         const billing = makeBilling();
-        checkAuth = vi.fn().mockResolvedValue(makeAuthSuccess({ payerId: '' })) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
+        checkAuth = vi.fn().mockResolvedValue(makeAuthSuccess({ charge: null })) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
         const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
         await onConnect(validPayload);
 
@@ -2937,9 +2941,9 @@ describe('ensureShellSession — headless start', () => {
       actual: {
         gated: billing.gate.mock.calls.map(([args]) => args),
         clockRunning: session?.connectedAt !== undefined,
-        payerId: session?.payerId,
+        charge: session?.charge,
       },
-      expected: { gated: [{ payerId: 'owner-1' }], clockRunning: true, payerId: 'owner-1' },
+      expected: { gated: [{ charge: OWNER_CHARGE }], clockRunning: true, charge: OWNER_CHARGE },
     });
   });
 
@@ -3180,6 +3184,29 @@ describe('ensureShellSession — headless start', () => {
     });
   });
 
+  it('WAL-9 (partial) given an ORG drive whose pool is empty, should refuse with the org message, open nothing and hand the slot back', async () => {
+    const orgCharge: ComputeCharge = { kind: 'org', orgId: 'org-northwind', userId: 'owner-1' };
+    const access = makeAuthSuccess({ charge: orgCharge });
+    const billing = makeBilling({ gate: vi.fn().mockResolvedValue({ allowed: false, reason: 'org_wallet_empty', orgRefusal: 'org_wallet_empty' }) });
+
+    const result = await ensureShellSession(
+      { sessionMap, openShell, checkAuth, persistSpriteExecId, billing },
+      headlessRequest(access),
+    );
+
+    assert({
+      given: 'an org drive whose pool cannot cover a new session',
+      should: 'refuse naming the org wallet, before opening a shell, releasing the slot once',
+      actual: { result, gated: billing.gate.mock.calls.map(([args]) => args), opened: openShell.mock.calls.length, slotReleased: access.releaseSlot.mock.calls.length },
+      expected: {
+        result: { kind: 'failed', reason: 'insolvent', message: ORG_COMPUTE_REFUSAL_MESSAGES.org_wallet_empty },
+        gated: [{ charge: orgCharge }],
+        opened: 0,
+        slotReleased: 1,
+      },
+    });
+  });
+
   it('given openShell throwing, should release the slot and the hold exactly once', async () => {
     const access = makeAuthSuccess();
     const billing = makeBilling();
@@ -3279,6 +3306,15 @@ describe('connectFailureMessage', () => {
       should: 'tell the user what to do about it',
       actual: connectFailureMessage({ kind: 'failed', reason: 'insolvent' }),
       expected: 'Insufficient credits to open a shell session.',
+    });
+  });
+
+  it('WAL-9 (partial) given an org wallet refusal, should show the org message instead of the credits line', () => {
+    assert({
+      given: 'a create refused because the org pool is paused',
+      should: 'tell the user the organization wallet is paused',
+      actual: connectFailureMessage({ kind: 'failed', reason: 'insolvent', message: ORG_COMPUTE_REFUSAL_MESSAGES.org_wallet_paused }),
+      expected: ORG_COMPUTE_REFUSAL_MESSAGES.org_wallet_paused,
     });
   });
 

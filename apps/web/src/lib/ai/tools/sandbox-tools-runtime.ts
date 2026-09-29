@@ -52,6 +52,7 @@ import { gateSandboxToolCall } from '@pagespace/lib/services/sandbox/tool-gate';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+import { computeTierForDrive } from '@pagespace/lib/billing/sandbox-eligibility';
 import { createSandboxTools, type ResolveSandboxContext, type SandboxGate } from './sandbox-tools';
 import {
   findSessionForConversation,
@@ -424,7 +425,7 @@ function stampTurnId(context: ToolExecutionContext | undefined): string | undefi
  * function can be unit-tested without a real database connection.
  */
 export interface ResolveSandboxActorContextDeps {
-  findDrive: (driveId: string) => Promise<{ ownerId: string } | undefined>;
+  findDrive: (driveId: string) => Promise<{ ownerId: string; orgId: string | null } | undefined>;
   findPageDriveId: (pageId: string) => Promise<string | undefined>;
   findUser: (userId: string) => Promise<{ subscriptionTier: string | null } | undefined>;
   getActorInfo: (userId: string) => Promise<{ actorEmail: string; actorDisplayName?: string }>;
@@ -436,7 +437,7 @@ export interface ResolveSandboxActorContextDeps {
 
 const defaultResolveDeps: ResolveSandboxActorContextDeps = {
   findDrive: (driveId) =>
-    db.query.drives.findFirst({ where: eq(drives.id, driveId), columns: { ownerId: true } }),
+    db.query.drives.findFirst({ where: eq(drives.id, driveId), columns: { ownerId: true, orgId: true } }),
   findPageDriveId: async (pageId) => {
     const row = await db.query.pages.findFirst({
       where: eq(pages.id, pageId),
@@ -540,7 +541,8 @@ export function createResolveSandboxActorContext(
       actorDisplayName: actorInfo.actorDisplayName,
       aiProvider: context?.aiProvider,
       aiModel: context?.aiModel,
-      tier: toSubscriptionTier(payerRow?.subscriptionTier),
+      // WAL-9: an org drive's compute runs on the org's tier, not the lead's own plan.
+      tier: computeTierForDrive(drive, toSubscriptionTier(payerRow?.subscriptionTier)),
       turnId,
     };
 

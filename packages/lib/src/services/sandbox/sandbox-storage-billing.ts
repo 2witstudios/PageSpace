@@ -60,6 +60,8 @@ import { publishedApps } from '@pagespace/db/schema/published-apps';
 import { lookupDriveBillingFacts } from '../../billing/sandbox-payer';
 import { MACHINE_MARKUP_BPS } from '../../billing/credit-pricing';
 import { AIMonitoring } from '../../monitoring/ai-monitoring';
+import { computeSettleWalletId, UNSETTLED_COMPUTE } from '../../billing/compute-gate';
+import { stampOrgComputeBillingEpoch } from '../../billing/org-compute-epoch';
 import { SANDBOX_STORAGE_MODELS } from '../../monitoring/usage-source';
 import {
   reconcileSandboxStorage,
@@ -193,9 +195,15 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
    * credit-ledger outage no longer looks identical to a successful charge, and the
    * reconcile can hold the watermark instead of closing the window over lost spend.
    */
-  chargeStorage({ payerId, driveId, subjectKind, subjectId, costDollars, gbMonths }) {
+  async chargeStorage({ charge, driveId, subjectKind, subjectId, costDollars, gbMonths }) {
+    // WAL-9: an org drive's storage lands on the org pool, recorded under the person the
+    // charge names. A pool that no longer exists charges nothing (the window stays open) —
+    // never the recorded person's wallet.
+    const walletId = await computeSettleWalletId(charge);
+    if (walletId === null) return UNSETTLED_COMPUTE;
     return AIMonitoring.trackUsage({
-      userId: payerId,
+      userId: charge.userId,
+      walletId,
       provider: 'sprites',
       // The billed unit, named in the meter line itself. Sessions keep the
       // string they have always written (renaming it would split one meter's
@@ -218,6 +226,8 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
       // One feature bucket for both: this is sandbox persistence either way, and
       // splitting the source would fragment the usage breakdown's totals.
       source: 'terminal',
+      // Compute, not an AI call: never a seat draw on an org pool (WAL-9).
+      spendKind: 'compute',
       // No pageId: a session is a drive-level workspace, not page-anchored, so
       // there is no page to group its storage under. `trackUsage` treats a
       // missing pageId as unattributed-to-a-page, not an error.
@@ -308,6 +318,7 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
   },
 
   now: () => new Date(),
+  orgComputeBillingEpoch: stampOrgComputeBillingEpoch,
 };
 
 /**

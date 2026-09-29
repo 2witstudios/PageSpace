@@ -11,6 +11,7 @@ import {
   payerForDrive,
   resolveSessionPayer,
   resolveEnvPayer,
+  resolveEnvCharge,
   requireUserPayer,
   lookupDriveBillingFacts,
   ORG_BILLING_PENDING,
@@ -67,6 +68,22 @@ describe('resolveEnvPayer', () => {
   });
 });
 
+describe('resolveEnvCharge', () => {
+  it("WAL-9 (partial) an env or app in an org drive charges the org pool, recorded under the drive lead — never the lead's wallet", async () => {
+    const charge = await resolveEnvCharge({ driveId: 'd1', lookupDriveBillingFacts: async () => inOrg('lead-marcus', 'org-northwind') });
+    expect(charge).toEqual({ kind: 'org', orgId: 'org-northwind', userId: 'lead-marcus' });
+  });
+
+  it('a personal drive charges its owner', async () => {
+    const charge = await resolveEnvCharge({ driveId: 'd1', lookupDriveBillingFacts: async () => personal('owner-1') });
+    expect(charge).toEqual({ kind: 'user', userId: 'owner-1' });
+  });
+
+  it('returns NULL when the drive cannot be resolved — callers skip, never substitute', async () => {
+    expect(await resolveEnvCharge({ driveId: 'gone', lookupDriveBillingFacts: async () => null })).toBeNull();
+  });
+});
+
 describe('resolveSessionPayer', () => {
   it('bills the session owner directly for a global-assistant session (driveId null), with no lookup', async () => {
     const lookup = vi.fn();
@@ -109,7 +126,7 @@ describe('resolveSessionPayer', () => {
   });
 });
 
-describe('requireUserPayer (the interim until org wallets can be charged)', () => {
+describe('requireUserPayer (dedicated hosting only: a Stripe card purchase cannot be made for an org)', () => {
   it('passes a person through', () => {
     expect(requireUserPayer({ kind: 'user', userId: 'owner-1' })).toEqual({ ok: true, userId: 'owner-1' });
   });

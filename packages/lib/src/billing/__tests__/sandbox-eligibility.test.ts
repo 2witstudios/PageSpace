@@ -8,6 +8,8 @@ import {
   isSandboxTierEligible,
   resolveEffectiveSandboxTier,
   resolveEffectiveSandboxTierForMode,
+  resolveSandboxPayerTier,
+  computeTierForDrive,
 } from '../sandbox-eligibility';
 import { TIERS, type SubscriptionTier } from '../subscription-tiers';
 import type { DeploymentMode } from '../../deployment-mode';
@@ -114,6 +116,37 @@ describe('isSandboxAvailable — the gate', () => {
     vi.stubEnv('DEPLOYMENT_MODE', 'onprem');
     expect(isSandboxAvailable('free')).toBe(false);
     expect(isSandboxAvailable('pro')).toBe(true);
+  });
+});
+
+describe('resolveSandboxPayerTier', () => {
+  it("WAL-9 (partial) an org drive's session runs on the org's tier, never the lead's or the owner's own plan", async () => {
+    const getUserSubscriptionTier = vi.fn(async (): Promise<SubscriptionTier> => 'free');
+    const tier = await resolveSandboxPayerTier(
+      { driveId: 'd-org', ownerId: 'free-member' },
+      { lookupDriveBillingFacts: async () => ({ ownerId: 'free-lead', orgId: 'org-1' }), getUserSubscriptionTier },
+    );
+    expect(tier).toBe('business');
+    expect(getUserSubscriptionTier).not.toHaveBeenCalled();
+  });
+
+  it("a personal drive's session runs on its owner's tier", async () => {
+    const tier = await resolveSandboxPayerTier(
+      { driveId: 'd1', ownerId: 'member' },
+      { lookupDriveBillingFacts: async () => ({ ownerId: 'owner', orgId: null }), getUserSubscriptionTier: async (id) => (id === 'owner' ? 'pro' : 'free') },
+    );
+    expect(tier).toBe('pro');
+  });
+});
+
+describe('computeTierForDrive', () => {
+  it("WAL-9 (partial) an org drive's compute follows the org's tier, not the lead's", () => {
+    expect(computeTierForDrive({ orgId: 'org-1' }, 'free')).toBe('business');
+  });
+
+  it("a personal drive, or no drive, keeps the owner's tier", () => {
+    expect(computeTierForDrive({ orgId: null }, 'pro')).toBe('pro');
+    expect(computeTierForDrive(undefined, 'free')).toBe('free');
   });
 });
 

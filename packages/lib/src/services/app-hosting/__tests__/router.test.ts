@@ -43,13 +43,12 @@ vi.mock('@pagespace/db/operators', () => ({
 // file goes through an injected dep, so pulling in the real credit gate would drag
 // the whole ledger schema into a suite that never calls it. Their own semantics are
 // covered in `billing/__tests__/credit-gate.test.ts`.
-vi.mock('../../../billing/credit-gate', () => ({ hasSpendableBalance: vi.fn() }));
-vi.mock('../../../billing/credit-balance', () => ({ resolveTier: vi.fn() }));
+vi.mock('../../../billing/compute-gate', () => ({ hasSpendableComputeBalance: vi.fn() }));
 // Same reasoning: `app-billing`'s default payer resolver drags in the whole
 // credit/monitoring stack to build. Asserted BEHAVIOURALLY (does the router's
 // default binding delegate to it with the right args), which needs a mock, not
 // the real module.
-vi.mock('../app-billing', () => ({ defaultAppBillingDeps: { resolvePayerId: vi.fn() } }));
+vi.mock('../app-billing', () => ({ defaultAppBillingDeps: { resolveCharge: vi.fn() } }));
 
 import {
   defaultAppRouterDeps,
@@ -60,8 +59,7 @@ import {
 import { db } from '@pagespace/db/db';
 import { publishedApps } from '@pagespace/db/schema/published-apps';
 import { customDomains } from '@pagespace/db/schema/custom-domains';
-import { hasSpendableBalance } from '../../../billing/credit-gate';
-import { resolveTier } from '../../../billing/credit-balance';
+import { hasSpendableComputeBalance } from '../../../billing/compute-gate';
 import { defaultAppBillingDeps } from '../app-billing';
 import { isAppHostingEnabled } from '../app-hosting-env';
 import { resolveAppReplaySecret, resolvePublishedAppsApex } from '../routing-env';
@@ -88,8 +86,7 @@ function deps(overrides: Partial<AppRouterDeps> = {}): AppRouterDeps {
     replaySecret: () => SECRET,
     findAppBySubdomain: async () => row(),
     findAppByCustomHost: async () => null,
-    resolvePayerId: async ({ driveId }) => (driveId === 'drive_payer' ? { ok: true as const, userId: 'user_payer' } : null),
-    resolveTier: async () => 'pro',
+    resolveCharge: async ({ driveId }) => (driveId === 'drive_payer' ? { kind: 'user' as const, userId: 'user_payer' } : null),
     hasSpendableBalance: async () => true,
     stampHit: async () => {},
     wake: async () => ({ outcome: 'woken', app: {} as never }),
@@ -163,48 +160,43 @@ describe('resolveAppRoute — hostname resolution', () => {
 });
 
 describe('resolveAppRoute — the balance is asked about the SAME payer the meter charges', () => {
-  it("given a metered app, should resolve the payer from the row's driveId, not published_apps.ownerId", async () => {
-    const resolvePayerId = vi.fn(async ({ driveId }: { driveId: string }) =>
-      driveId === 'drive_xyz' ? { ok: true as const, userId: 'user_drive_owner' } : null,
+  it("given a metered app, should resolve the charge from the row's driveId, not published_apps.ownerId, and ask ITS balance", async () => {
+    const resolveCharge = vi.fn(async ({ driveId }: { driveId: string }) =>
+      driveId === 'drive_xyz' ? { kind: 'user' as const, userId: 'user_drive_owner' } : null,
     );
     const hasSpendableBalance = vi.fn(async () => true);
-    const resolveTier = vi.fn(async () => 'pro');
     await resolveAppRoute(
       'acme.pagespace.io',
-      deps({
-        findAppBySubdomain: async () => row({ driveId: 'drive_xyz' }),
-        resolvePayerId,
-        resolveTier,
-        hasSpendableBalance,
-      }),
+      deps({ findAppBySubdomain: async () => row({ driveId: 'drive_xyz' }), resolveCharge, hasSpendableBalance }),
     );
-    expect(resolvePayerId).toHaveBeenCalledWith({ driveId: 'drive_xyz' });
-    expect(resolveTier).toHaveBeenCalledWith('user_drive_owner');
-    expect(hasSpendableBalance).toHaveBeenCalledWith('user_drive_owner', 'pro');
+    expect(resolveCharge).toHaveBeenCalledWith({ driveId: 'drive_xyz' });
+    expect(hasSpendableBalance).toHaveBeenCalledWith({ kind: 'user', userId: 'user_drive_owner' });
   });
 
   it('given an unresolvable drive, should refuse (fail closed) rather than serve on an unverified balance', async () => {
-    const resolveTier = vi.fn(async () => 'pro');
     const hasSpendableBalance = vi.fn(async () => true);
     const decision = await resolveAppRoute(
       'acme.pagespace.io',
-      deps({ resolvePayerId: async () => null, resolveTier, hasSpendableBalance }),
+      deps({ resolveCharge: async () => null, hasSpendableBalance }),
     );
     expect(decision).toEqual({ kind: 'parked', reason: 'out_of_credits', driveId: 'drive_payer', envId: 'env_1' });
-    expect(resolveTier).not.toHaveBeenCalled();
     expect(hasSpendableBalance).not.toHaveBeenCalled();
   });
 
-  it('WAL-9 (partial) given an ORG drive, should fail closed without asking any person\'s balance', async () => {
-    const resolveTier = vi.fn(async () => 'pro');
+  it("WAL-9 (partial) given an ORG drive, should ask the ORG POOL's balance — never a person's — and serve when it can pay", async () => {
+    const orgCharge = { kind: 'org' as const, orgId: 'org-northwind', userId: 'lead-marcus' };
     const hasSpendableBalance = vi.fn(async () => true);
+    const decision = await resolveAppRoute('acme.pagespace.io', deps({ resolveCharge: async () => orgCharge, hasSpendableBalance }));
+    expect(hasSpendableBalance).toHaveBeenCalledWith(orgCharge);
+    expect(decision.kind).toBe('replay');
+  });
+
+  it('WAL-9 (partial) given an ORG drive whose pool cannot pay (empty, paused or missing), should park', async () => {
     const decision = await resolveAppRoute(
       'acme.pagespace.io',
-      deps({ resolvePayerId: async () => ({ ok: false as const, refusal: { code: 'org_billing_pending' as const, orgId: 'org-northwind', message: 'org billing pending' } }), resolveTier, hasSpendableBalance }),
+      deps({ resolveCharge: async () => ({ kind: 'org', orgId: 'org-northwind', userId: 'lead-marcus' }), hasSpendableBalance: async () => false }),
     );
     expect(decision).toEqual({ kind: 'parked', reason: 'out_of_credits', driveId: 'drive_payer', envId: 'env_1' });
-    expect(resolveTier).not.toHaveBeenCalled();
-    expect(hasSpendableBalance).not.toHaveBeenCalled();
   });
 
   it('given an insolvent payer, should park rather than replay', async () => {
@@ -217,17 +209,14 @@ describe('resolveAppRoute — the balance is asked about the SAME payer the mete
 
   it('given a DEDICATED app, should never touch the ledger at all', async () => {
     const hasSpendableBalance = vi.fn(async () => false);
-    const resolveTier = vi.fn(async () => 'pro');
     const decision = await resolveAppRoute(
       'acme.pagespace.io',
       deps({
         findAppBySubdomain: async () => row({ tier: 'dedicated' }),
-        resolveTier,
         hasSpendableBalance,
       }),
     );
     expect(decision.kind).toBe('replay');
-    expect(resolveTier).not.toHaveBeenCalled();
     expect(hasSpendableBalance).not.toHaveBeenCalled();
   });
 
@@ -330,34 +319,18 @@ describe('defaultAppRouterDeps — the real edge is wired to the real readers', 
     expect(defaultAppRouterDeps.replaySecret).toBe(resolveAppReplaySecret);
   });
 
-  // `resolveTier` and `hasSpendableBalance` are wrapped in arrows for the tier
-  // cast, so identity cannot be asserted for them — and unwrapping them just to
-  // make `toBe` work would delete the thing being checked. Asserted behaviourally
-  // instead: the wrapper must delegate to the real module, with its own arguments.
-  it('delegates the balance read to the read-only twin, with the arguments it was given', async () => {
-    vi.mocked(hasSpendableBalance).mockResolvedValue(true);
-
-    const answer = await defaultAppRouterDeps.hasSpendableBalance('user_payer', 'metered');
-
-    expect(hasSpendableBalance).toHaveBeenCalledWith('user_payer', 'metered');
-    expect(answer).toBe(true);
-  });
-
-  it('delegates the tier lookup, and returns what it answers', async () => {
-    vi.mocked(resolveTier).mockResolvedValue('pro');
-
-    const tier = await defaultAppRouterDeps.resolveTier('user_payer');
-
-    expect(resolveTier).toHaveBeenCalledWith('user_payer');
-    expect(tier).toBe('pro');
+  // The read-only, charge-aware twin (compute-gate): a person's funded balance, or the org
+  // pool's for an org drive — never a holding read, and never a person for an org.
+  it('binds the balance read to the read-only compute twin by identity', () => {
+    expect(defaultAppRouterDeps.hasSpendableBalance).toBe(hasSpendableComputeBalance);
   });
 
   // The identical function `app-billing.ts` hands the meter and the wake gate —
   // not an equivalent bound the same way, the same reference — so "the router
   // asks the wrong payer" is structurally impossible rather than a convention
   // that can drift.
-  it('resolves the payer through the IDENTICAL function the meter and wake gate use', () => {
-    expect(defaultAppRouterDeps.resolvePayerId).toBe(defaultAppBillingDeps.resolvePayerId);
+  it('resolves the charge through the IDENTICAL function the meter and wake gate use', () => {
+    expect(defaultAppRouterDeps.resolveCharge).toBe(defaultAppBillingDeps.resolveCharge);
   });
 
   // The row reader is module-private, so it is pinned by what it queries: the

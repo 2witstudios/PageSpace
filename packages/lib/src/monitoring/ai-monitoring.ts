@@ -6,8 +6,10 @@
 import { db } from '@pagespace/db/db';
 import { sql, and, eq, gte, lte } from '@pagespace/db/operators';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
+import type { SpendKind } from '@pagespace/db/schema/credits';
 import { writeAiUsage } from '../logging/logger-database';
-import { consumeCredits, releaseHold } from '../billing/credit-consume';
+import { consumeCredits, holdWalletId, releaseHold } from '../billing/credit-consume';
+import { isBillingEnabled } from '../deployment-mode';
 import { CACHE_READ_DISCOUNT_FACTOR_BPS } from '../billing/credit-pricing';
 import { loggers } from '../logging/logger-config';
 import { normalizeUsageSource, type AIUsageSource } from './usage-source';
@@ -1229,6 +1231,11 @@ export interface AIUsageData {
   // user. Absent for un-gated calls, which charge the personal root wallet.
   walletId?: string;
 
+  // What the spend is FOR: an AI call (the default) or compute (WAL-9). Written on the
+  // ledger rows and stamped into metadata.spendKind, so the orphan recovery re-settles
+  // with the same kind; compute on an org pool never counts toward a seat.
+  spendKind?: SpendKind;
+
   // Override the cost provenance stamped into metadata.costSource (which the admin
   // panel reads to classify coverage). Defaults to 'openrouter' when a finite
   // providerCostDollars is given, else 'estimate'. Voice routes pass 'list_price'
@@ -1405,6 +1412,25 @@ export async function trackAIUsage(data: AIUsageData): Promise<UsageTrackingOutc
     // log AND the charge — and with no aiUsageLogs row the reconcile cron's orphan
     // sweep has nothing to recover from. Awaiting makes the write durable before
     // the request returns. Still never throws into the AI request (see catch).
+    // FAIL CLOSED (review 5343636479 P1-1): a charge that names a wallet other than the
+    // one its hold reserves on is refused BEFORE anything is written — no usage row (so no
+    // sweep can bill it later), no charge to either wallet. The caller keeps its window
+    // open; a meter whose payer changed mid-window releases and re-acquires the hold on the
+    // right wallet first (app-lifecycle-metering, awake-meter), so this is the backstop.
+    // Only where money moves: a billing-off deployment charges no wallet at all.
+    if (isBillingEnabled() && data.holdId && data.walletId !== undefined) {
+      const held = await holdWalletId(data.holdId).catch(() => null);
+      if (held !== null && held !== data.walletId) {
+        loggers.ai.error('AI usage settle REFUSED: the charge names a different wallet than its hold — nothing written, nothing charged', new Error('hold wallet mismatch'), {
+          holdId: data.holdId,
+          holdWalletId: held,
+          requestedWalletId: data.walletId,
+          model: data.model,
+          source: data.source,
+        });
+        return { persisted: false, creditsSettled: false };
+      }
+    }
     try {
       const aiUsageLogId = await writeAiUsage({
         userId: data.userId,
@@ -1448,7 +1474,13 @@ export async function trackAIUsage(data: AIUsageData): Promise<UsageTrackingOutc
           // when present (OpenRouter calls); the cron reads these to fetch authoritative
           // /generation costs and correct billing drift.
           ...(generationIds.length > 0 ? { generationIds } : {}),
+          // Explicit for the orphan recovery: a usage row whose settle never landed is
+          // re-settled with this kind (credit-backfill), never guessed from its source.
+          ...(data.spendKind === 'compute' ? { spendKind: 'compute' } : {}),
         },
+        // WAL-5: the wallet this call is charged to, recorded WITH the usage row so the
+        // orphan recovery re-settles on it — never re-derived onto the person's own wallet.
+        ...(data.walletId !== undefined ? { walletId: data.walletId } : {}),
         reconcileStatus,
       });
       // `writeAiUsage` CATCHES its own failure and returns null rather than
@@ -1500,6 +1532,7 @@ export async function trackAIUsage(data: AIUsageData): Promise<UsageTrackingOutc
           costDollars: cost,
           holdId: data.holdId,
           walletId: data.walletId,
+          spendKind: data.spendKind,
           // Scope the live balance push so the per-conversation usage monitor
           // refreshes the right view; the navbar widget updates regardless.
           conversationId: data.conversationId,

@@ -196,7 +196,8 @@ async function applyCorrection(
       }
       appliedCents = -charged.appliedCents || 0; // negative: decremented
       // WAL-2: an undercharge on a seat is charged like a settle, so it is capped like one.
-      await recordSeatOvershoot(tx, { walletId, userId, aiUsageLogId, claimLedgerId: ledgerId });
+      // The cost reconcile corrects OpenRouter AI calls only: always an AI charge.
+      await recordSeatOvershoot(tx, { walletId, userId, aiUsageLogId, claimLedgerId: ledgerId, spendKind: 'ai' });
     } else if (drift.deltaChargeMillicents < 0) {
       // Overcharge → refund to where the call's cents came from (credit-consume
       // refundWalletCharge): debt first, then the top-up on a root wallet; on a drive
@@ -204,7 +205,8 @@ async function applyCorrection(
       const refundCents = Math.round(Math.abs(drift.deltaChargeMillicents) / 1000);
       appliedCents = await refundWalletCharge(tx, walletId, refundCents, aiUsageLogId); // positive: credited back
       // WAL-2: a refund on a seat gives back forgiveness that no longer applies, window by window.
-      await recordSeatOvershoot(tx, { walletId, userId, aiUsageLogId, claimLedgerId: ledgerId });
+      // The cost reconcile corrects OpenRouter AI calls only: always an AI charge.
+      await recordSeatOvershoot(tx, { walletId, userId, aiUsageLogId, claimLedgerId: ledgerId, spendKind: 'ai' });
     }
 
     await tx.update(creditLedger).set({ appliedCents }).where(eq(creditLedger.id, ledgerId));

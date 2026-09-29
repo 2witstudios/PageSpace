@@ -48,7 +48,7 @@ import type { ExecutableSandbox, SandboxRunResult } from './sandbox-client/types
 import { LocalEnvUnsupportedError } from './sandbox-host';
 import type { CodeExecutionAuditInput, CodeExecutionAnomaly } from './audit';
 import type { UsageTrackingOutcome } from '../../monitoring/ai-monitoring';
-import { ORG_BILLING_PENDING_MESSAGE, type UserPayerResult } from '../../billing/sandbox-payer';
+import { ORG_COMPUTE_REFUSAL_MESSAGES, isOrgComputeRefusal, type ComputeCharge, type OrgComputeGateRefusal } from '../../billing/compute-charge';
 
 /** Largest file body a single `writeFile` may submit, in bytes. */
 export const MAX_WRITE_BYTES = 1024 * 1024;
@@ -120,13 +120,20 @@ export interface SandboxBillingDeps {
    * else the session's own owner), never the caller's surface drive or agent
    * page. The one seam payer resolution goes through; see `sandbox-payer.ts`'s
    * `resolveSessionPayer` — the same rule `storageBillingTarget` applies for
-   * storage attribution. An org drive's payer is the org, which this charge
-   * path cannot debit yet: it answers the named `org_billing_pending` refusal
-   * (replaced by the C3 lane's wallet-keyed holds), never a person to bill.
+   * storage attribution. An org drive's payer is the org: the charge is its POOL
+   * wallet (WAL-9), recorded under the session's owner — never that person's wallet.
    */
-  resolvePayerId: (input: { driveId: string | null; ownerId: string }) => Promise<UserPayerResult>;
-  /** Places a flat-estimate hold for this payer before the machine run begins. */
-  gate: (input: { payerId: string }) => Promise<{ allowed: boolean; holdId?: string; reason?: string }>;
+  resolveCharge: (input: { driveId: string | null; ownerId: string }) => Promise<ComputeCharge>;
+  /**
+   * Places a flat-estimate hold on the charge's wallet before the machine run begins.
+   * `orgRefusal` names why an org pool refused (missing, paused, empty).
+   */
+  gate: (input: { charge: ComputeCharge }) => Promise<{
+    allowed: boolean;
+    holdId?: string;
+    reason?: string;
+    orgRefusal?: OrgComputeGateRefusal;
+  }>;
   /**
    * Settles the hold to the real active-window cost. Only called on a
    * successful run. `pageId` is the AI-tool-runner path's calling-surface
@@ -141,7 +148,8 @@ export interface SandboxBillingDeps {
    * hold correctly and lets the seam's own ERROR log stand.
    */
   trackUsage: (input: {
-    payerId: string;
+    /** The charge the hold was placed for — settled against the same wallet. */
+    charge: ComputeCharge;
     holdId?: string;
     activeSeconds: number;
     /** The referenced agent page, for the per-agent usage-breakdown grouping — purely descriptive, never the payer source. */
@@ -367,7 +375,7 @@ export function safeLogWarn(
 // error-level line for every free-tier user hitting their own plan ceiling is
 // noise that trains the on-call to ignore this logger.
 const AUTHZ_DENY_REASONS = new Set([
-  'no_drive_access', 'insufficient_role', 'no_agent_access', 'tier_ineligible', 'org_billing_pending', 'kill_switch_off', 'no_machine',
+  'no_drive_access', 'insufficient_role', 'no_agent_access', 'tier_ineligible', 'org_wallet_unavailable', 'org_wallet_paused', 'org_wallet_empty', 'kill_switch_off', 'no_machine',
   'session_runtime_exceeded', 'session_limit_reached',
   // A legacy conversation that predates sessions has no working context to run
   // in — an expected refusal (not an infra fault), so it belongs here rather
@@ -390,8 +398,10 @@ export interface SandboxReconnectPrincipal {
 export type SandboxToolDenialReason =
   | 'kill_switch_off'
   | 'tier_ineligible'
-  /** WAL-9 interim: the drive's payer is an org, which compute cannot charge until the C3 lane lands. */
-  | 'org_billing_pending'
+  /** WAL-9: the drive's org pays, and its pool wallet is missing, paused, or cannot cover the run. Nothing started. */
+  | 'org_wallet_unavailable'
+  | 'org_wallet_paused'
+  | 'org_wallet_empty'
   | 'no_drive_access'
   | 'insufficient_role'
   | 'no_agent_access'
@@ -481,7 +491,9 @@ export type EditFileToolResult =
 export const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
   kill_switch_off: 'Code execution is disabled.',
   tier_ineligible: 'Running code requires a Pro plan or above.',
-  org_billing_pending: ORG_BILLING_PENDING_MESSAGE,
+  org_wallet_unavailable: ORG_COMPUTE_REFUSAL_MESSAGES.org_wallet_unavailable,
+  org_wallet_paused: ORG_COMPUTE_REFUSAL_MESSAGES.org_wallet_paused,
+  org_wallet_empty: ORG_COMPUTE_REFUSAL_MESSAGES.org_wallet_empty,
   no_drive_access: 'You do not have access to run code in this drive.',
   insufficient_role: 'Running code requires edit access to this drive.',
   no_agent_access: 'This agent is not permitted to run code in this drive.',
@@ -685,16 +697,17 @@ export async function withMachineBilling<S>(
   if (billingSession && 'deny' in billingSession) return fail(billingSession.deny);
   if (!billingSession) return run();
 
-  const payer = await billing.resolvePayerId({
+  const charge = await billing.resolveCharge({
     driveId: billingSession.driveId,
     ownerId: billingSession.ownerId,
   });
-  // WAL-9 interim: an org payer is refused before any hold or run — never billed to a person.
-  // The C3 lane replaces this with a hold on the org's wallet.
-  if (!payer.ok) return fail(payer.refusal.code);
-  const payerId = payer.userId;
-  const gate = await billing.gate({ payerId });
-  if (!gate.allowed) return fail('credit_exhausted');
+  // WAL-9: an org drive's run is held on the org pool. A missing, paused or empty pool
+  // refuses here, before any machine is touched, and names the org state — it never
+  // falls back to holding on a person's wallet.
+  const gate = await billing.gate({ charge });
+  if (!gate.allowed) {
+    return fail(gate.orgRefusal !== undefined && isOrgComputeRefusal(gate.orgRefusal) ? gate.orgRefusal : 'credit_exhausted');
+  }
 
   const holdId = gate.holdId;
   const startedAt = deps.now().getTime();
@@ -704,7 +717,7 @@ export async function withMachineBilling<S>(
     if (result.success) {
       const activeSeconds = Math.max(0, (deps.now().getTime() - startedAt) / 1000);
       const settle = await billing.trackUsage({
-        payerId,
+        charge,
         holdId,
         activeSeconds,
         // Purely descriptive (which agent page this run was for) — never the

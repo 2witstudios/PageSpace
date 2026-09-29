@@ -50,11 +50,11 @@ const setup = async (options: { readonly refuse?: boolean; readonly refuseAfter?
       opens += 1;
       return options.refuse === true || (options.refuseAfter !== undefined && opens > options.refuseAfter)
         ? { ok: false, reason: 'Out of credits.' }
-        : { ok: true, hold: { holdId: `hold-${opens}`, payerId: billing.payerId } };
+        : { ok: true, hold: { holdId: `hold-${opens}`, charge: { kind: 'user', userId: billing.payerId } } };
     },
     close: async ({ billing, hold, activeSeconds, shape, substrate: label }) => {
       meterCalls.push(['close', billing.payerId, hold.holdId, activeSeconds, shape, label]);
-      expect(hold.payerId).toBe(billing.payerId);
+      expect(hold.charge).toEqual({ kind: 'user', userId: billing.payerId });
     },
   };
   const client = createBrowserSessionClient<Billing>({ substrate, controlPublicKey, sign, meter, clock: () => now, idleTimeoutMs: 60_000, settleIntervalMs: 120_000 });

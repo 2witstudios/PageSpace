@@ -1,5 +1,6 @@
 import type { PtyShell } from './sprites-shell';
 import type { TaskHoldController } from '@pagespace/lib/services/sandbox/sandbox-client/sprite-tasks';
+import type { ComputeCharge } from '@pagespace/lib/billing/compute-charge';
 
 export const MAX_SCROLLBACK_BYTES = 64 * 1024;
 export const DETACHED_IDLE_MS = 30 * 60 * 1000;
@@ -101,12 +102,13 @@ export type TerminalSession = {
   resumedAtCreate: boolean;
   /**
    * Terminal Epic 3 metering (optional — set only when a `billing` seam is
-   * wired). `payerId` + `connectedAt` identify who pays for the window that
+   * wired). `charge` + `connectedAt` identify who pays for the window that
    * started at `connectedAt` (rebased by each heartbeat settle); `holdId` is the
    * window's reservation when the gate placed one — settle records usage either
    * way, the hold is just the pre-authorization.
    */
-  payerId?: string;
+  /** The wallet this session's windows are held and settled on — the org pool for an org drive (WAL-9). */
+  charge?: ComputeCharge;
   holdId?: string;
   connectedAt?: number;
   /**

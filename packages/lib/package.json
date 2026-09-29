@@ -714,6 +714,16 @@
       "import": "./dist/billing/sandbox-payer.js",
       "require": "./dist/billing/sandbox-payer.js"
     },
+    "./billing/compute-charge": {
+      "types": "./dist/billing/compute-charge.d.ts",
+      "import": "./dist/billing/compute-charge.js",
+      "require": "./dist/billing/compute-charge.js"
+    },
+    "./billing/compute-gate": {
+      "types": "./dist/billing/compute-gate.d.ts",
+      "import": "./dist/billing/compute-gate.js",
+      "require": "./dist/billing/compute-gate.js"
+    },
     "./billing/sandbox-eligibility": {
       "types": "./dist/billing/sandbox-eligibility.d.ts",
       "import": "./dist/billing/sandbox-eligibility.js",

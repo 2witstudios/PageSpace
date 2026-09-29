@@ -35,7 +35,10 @@ type RouteContext = { params: Promise<{ workspaceId: string }> };
 const DENIAL_STATUS: Record<SandboxToolDenialReason, number> = {
   kill_switch_off: 403,
   tier_ineligible: 403,
-  org_billing_pending: 403,
+  // WAL-9: the org pool is missing or paused (the org must act), or cannot cover the run.
+  org_wallet_unavailable: 402,
+  org_wallet_paused: 402,
+  org_wallet_empty: 402,
   no_drive_access: 403,
   insufficient_role: 403,
   no_agent_access: 403,

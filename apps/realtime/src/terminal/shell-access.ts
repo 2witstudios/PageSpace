@@ -32,7 +32,7 @@ import type { AgentSessionAccessSubject } from '@pagespace/lib/agent-workspaces/
 import type { ShellDTO } from '@pagespace/lib/agent-workspaces/shells-contract';
 import type { SpriteInstanceLike } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
-import type { UserPayerResult } from '@pagespace/lib/billing/sandbox-payer';
+import { computeChargeTier, type ComputeCharge } from '@pagespace/lib/billing/compute-charge';
 import type { ShellCheckAuthFn } from './shell-handler';
 
 /**
@@ -64,11 +64,10 @@ export interface ShellCheckAuthDeps {
    * under. Payer = the session's own DRIVE's payer (`resolveSessionPayer`),
    * falling back to the session's own owner when there is no drive (a
    * global-assistant session) or the drive has vanished. An org drive's payer
-   * is the org (WAL-9), which the terminal's credit hold cannot debit yet: it
-   * answers the named `org_billing_pending` refusal, never a person — replaced
-   * by the C3 lane's wallet-keyed holds.
+   * is the org (WAL-9): the charge is its POOL wallet, recorded under the
+   * session's owner — never that person's wallet.
    */
-  resolvePayer: (session: AgentSessionAccessSubject) => Promise<{ payer: UserPayerResult; driveId: string | null }>;
+  resolvePayer: (session: AgentSessionAccessSubject) => Promise<{ charge: ComputeCharge; driveId: string | null }>;
   /** A user row's tier + email, or undefined when the row is missing. Called for the requester (audit email) and, when different, the payer (slot-eligibility tier). */
   getUser: (userId: string) => Promise<{ subscriptionTier: string | null; email: string | null } | undefined>;
   resolveActorEmail: (email: string | null | undefined) => Promise<string>;
@@ -127,13 +126,9 @@ export function buildShellCheckAuth(deps: ShellCheckAuthDeps): ShellCheckAuthFn 
       return { ok: false, reason: access.reason };
     }
 
-    const { payer, driveId } = await deps.resolvePayer(access.session);
-    // WAL-9 interim: refused before any slot, hold or sandbox — never billed to a person.
-    if (!payer.ok) {
-      deps.logDenied(payer.refusal.code, { userId, shellId, workspaceId: shell.workspaceId });
-      return { ok: false, reason: payer.refusal.code };
-    }
-    const payerId = payer.userId;
+    // WAL-9: an org drive's session charges the org pool. Whether the pool can pay is the
+    // billing gate's hold at PTY start, which refuses a missing, paused or empty pool by name.
+    const { charge, driveId } = await deps.resolvePayer(access.session);
 
     // Decrypt the actor email BEFORE anything is reserved (a decrypt throw here
     // must not leak a reserved slot — same ordering the predecessor had).
@@ -144,8 +139,9 @@ export function buildShellCheckAuth(deps: ShellCheckAuthDeps): ShellCheckAuthFn 
     // Pro-owned drive runs on the drive owner's plan. The slot itself is
     // still counted against the REQUESTER (`userId`), keeping per-actor
     // concurrency accounting separate from payer-based entitlement.
-    const payerRow = payerId === userId ? userRow : await deps.getUser(payerId);
-    const tier = (payerRow?.subscriptionTier ?? 'free') as SubscriptionTier;
+    // An org charge runs on the org's tier (SEAT-8), whatever the lead's or requester's plan.
+    const payerRow = charge.kind === 'org' || charge.userId === userId ? userRow : await deps.getUser(charge.userId);
+    const tier = computeChargeTier(charge, (payerRow?.subscriptionTier ?? 'free') as SubscriptionTier);
     const actorEmail = await deps.resolveActorEmail(userRow?.email);
 
     return {
@@ -154,7 +150,7 @@ export function buildShellCheckAuth(deps: ShellCheckAuthDeps): ShellCheckAuthFn 
       // what lets the caller look up a live session before deciding whether
       // any sandbox work is warranted at all.
       sessionKey: deps.buildSessionKey({ shellId }),
-      payerId,
+      charge,
       /** Billing attribution scope: the session's drive, or null for an owner-attributed global-assistant session. A session is not page-anchored, so there is no pageId to attribute. */
       driveId: access.session.driveId,
 

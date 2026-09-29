@@ -9,6 +9,13 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Sandboxes, environments and published apps run in organization drives** — compute in a drive
+  that belongs to an organization is now billed to the organization's credit pool, not to the
+  person who started it or the drive's lead. Before, it was refused. If the organization's pool is
+  empty, paused, or not set up, the run is refused before anything starts and nothing is charged.
+  The message says which of the three it is and that an org Owner or Admin can fix it. A published
+  app parks the same way. Usage from before organization billing started is never charged. Buying
+  dedicated hosting for an organization's app is still unavailable.
 - **Give an agent its own account** — in an agent's settings (Accounts), or in your personal
   settings for your global assistant, add an API key for a site so the agent can call that site's
   API for you. The agent refers to the account by name and never sees the key: PageSpace keeps it in

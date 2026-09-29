@@ -20,7 +20,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { creditHolds, creditLedger } from '@pagespace/db/schema/credits';
+import { creditHolds, creditLedger, type SpendKind } from '@pagespace/db/schema/credits';
 import { wallets, personalRootWalletOf, PERSONAL_ROOT_WALLET_ARBITER } from '@pagespace/db/schema/wallets';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { subscriptions } from '@pagespace/db/schema/subscriptions';
@@ -50,9 +50,11 @@ import { isSubscriptionTier } from './subscription-tiers';
 import { ensurePersonalRootWalletId } from './personal-wallet';
 import { ORGS_ENABLED } from '../organizations/orgs-enabled';
 import {
+  ORG_ENTITLEMENT_TIER,
   ORG_SPEND_POLICY_UNTIL_POLICY_STORE,
   personalRootDecision,
   resolvesDriveWallets,
+  rootAvailableCents,
   walletSpendableCents,
   type SpendTarget,
   type WalletBalanceFacts,
@@ -196,6 +198,11 @@ export interface GateOptions {
    * reserves on exactly the wallet this resolves to and never switches (SPEND-4).
    */
   spend: SpendTarget;
+  /**
+   * What the hold reserves FOR: an AI call (the default) or compute (WAL-9). Written on the
+   * hold row, so a compute hold on an org pool never counts toward a seat.
+   */
+  spendKind?: SpendKind;
 }
 
 /**
@@ -364,7 +371,7 @@ export async function canConsumeAI(
       const walletId = await ensurePersonalRootWalletId(tx, userId);
       const inserted = await tx
         .insert(creditHolds)
-        .values({ userId, walletId, estCents: estCost, expiresAt })
+        .values({ userId, walletId, estCents: estCost, expiresAt, spendKind: opts.spendKind ?? 'ai' })
         .returning({ id: creditHolds.id });
       return { allowed: true, reason: 'unlimited', holdId: inserted[0]?.id };
     });
@@ -759,7 +766,7 @@ async function gatePersonalRoot(
     // reconcile sweep to expire.
     const inserted = await tx
       .insert(creditHolds)
-      .values({ userId, walletId: bal.id, estCents: estCost, expiresAt })
+      .values({ userId, walletId: bal.id, estCents: estCost, expiresAt, spendKind: opts.spendKind ?? 'ai' })
       .returning({ id: creditHolds.id });
 
     // Net spendable after ALL holds (existing `reserved` + this call's `estCost`) and
@@ -815,7 +822,9 @@ async function gateSharedWallet(
   userId: string,
   tier: SubscriptionTier,
   opts: GateOptions,
-  chosen: { walletId: string; source: SpendSourceKind; entitlementTier: SubscriptionTier },
+  // `source` is null for a charge that names no spend source at all: an org drive's compute,
+  // held on the org pool as the org's own spend (canConsumeOrgPool, WAL-9).
+  chosen: { walletId: string; source: SpendSourceKind | null; entitlementTier: SubscriptionTier },
 ): Promise<CreditGateResult> {
   const now = new Date();
   const { estCost, maxInFlight, expiresAt, dailyCap, dayStart } = callBounds(tier, opts, now);
@@ -903,14 +912,14 @@ async function gateSharedWallet(
 
     const inserted = await tx
       .insert(creditHolds)
-      .values({ userId, walletId: wallet.id, estCents: estCost, expiresAt })
+      .values({ userId, walletId: wallet.id, estCents: estCost, expiresAt, spendKind: opts.spendKind ?? 'ai' })
       .returning({ id: creditHolds.id });
 
     return {
       ...result,
       holdId: inserted[0]?.id,
       walletId: wallet.id,
-      spendSource: chosen.source,
+      spendSource: chosen.source ?? undefined,
       entitlementTier: chosen.entitlementTier,
       // A seat's per-stream budget is also bounded by what is left of its allowance.
       balanceSnapshot: { netSpendableCents: Math.min(spendable, seatRemainingCents ?? spendable) - estCost },
@@ -961,4 +970,71 @@ export async function hasSpendableBalance(
   if (!isBillingEnabled()) return true;
   const spendable = await readSpendableCents(userId, tier);
   return spendable > RESERVE_FLOOR_CENTS;
+}
+
+/** The org pool row (WAL-2): the org-owned wallet with no subject and no parent. One per org. */
+function orgPoolWhere(orgId: string) {
+  return and(
+    eq(wallets.ownerType, 'org'),
+    eq(wallets.orgId, orgId),
+    sql`${wallets.subjectType} IS NULL`,
+    sql`${wallets.parentWalletId} IS NULL`,
+  );
+}
+
+/** The org's pool wallet id, or null when the org has none (never funded, or deleted). */
+export async function findOrgPoolWalletId(orgId: string): Promise<string | null> {
+  const [row] = await db.select({ id: wallets.id }).from(wallets).where(orgPoolWhere(orgId)).limit(1);
+  return row?.id ?? null;
+}
+
+/**
+ * canConsumeOrgPool — the compute gate for an ORG payer (WAL-9): a hold on the org's POOL
+ * wallet, recorded under `userId` (who ran it, or the drive lead for an accrual), taken before
+ * any machine starts. The caller settles against the same pool (compute-gate's
+ * `computeSettleWalletId`), once.
+ *
+ * Never a person's wallet: a missing pool refuses `source_unavailable`, a paused pool
+ * `source_paused`, a pool that cannot cover the reservation `out_of_credits` — and each
+ * refusal reserves and charges nothing. There is no branch that reaches `gatePersonalRoot`.
+ * Not a seat either (source null): compute is the org's spend, not a consumer's draw on the
+ * pool, so no seat cap applies at admission.
+ *
+ * The org's entitlement tier (SEAT-8, business) sets the per-call bounds, as the org is the
+ * payer; the per-person daily cap still binds `userId`, as it does whichever wallet pays.
+ *
+ * Billing-disabled deployments (tenant/onprem) have no money to move: the call takes the same
+ * unmetered path `canConsumeAI` gives every payer there, so a caller ceiling still binds.
+ */
+export async function canConsumeOrgPool(
+  userId: string,
+  orgId: string,
+  opts: Omit<GateOptions, 'spend'>,
+): Promise<CreditGateResult> {
+  if (!isBillingEnabled()) {
+    return canConsumeAI(userId, ORG_ENTITLEMENT_TIER, { ...opts, spend: { kind: 'personal' } });
+  }
+  const walletId = await findOrgPoolWalletId(orgId);
+  if (walletId === null) {
+    return { allowed: false, reason: 'source_refused', refusal: { source: null, reason: 'source_unavailable', options: [] } };
+  }
+  return gateSharedWallet(userId, ORG_ENTITLEMENT_TIER, { ...opts, spend: { kind: 'personal' } }, {
+    walletId,
+    source: null,
+    entitlementTier: ORG_ENTITLEMENT_TIER,
+  });
+}
+
+/**
+ * The READ-ONLY twin of {@link canConsumeOrgPool}, for the published-app serving edge's
+ * balance-check-before-wake (see {@link hasSpendableBalance} for why that edge must never hold):
+ * could the org pool fund a wake right now? A missing or paused pool cannot; otherwise the pool's
+ * monthly + top-up − debt must clear the reserve floor. In-flight holds are not netted, exactly
+ * as the personal read does not net them.
+ */
+export async function hasSpendableOrgPool(orgId: string): Promise<boolean> {
+  if (!isBillingEnabled()) return true;
+  const [pool] = await db.select(SHARED_WALLET_FACTS).from(wallets).where(orgPoolWhere(orgId)).limit(1);
+  if (!pool || pool.status === 'paused') return false;
+  return rootAvailableCents(pool, 0) > RESERVE_FLOOR_CENTS;
 }

@@ -63,6 +63,7 @@ import {
 } from '../app-lifecycle-metering';
 import { METER_AWAKE_LOCK_KEY } from '../app-metering-core';
 import { resolveDailyAwakeSecondsCap } from '../app-hosting-env';
+import type { AppBillingDeps } from '../app-billing';
 import type { PublishedApp } from '@pagespace/db/schema/published-apps';
 
 const NOW = new Date('2026-08-20T12:00:00.000Z');
@@ -88,15 +89,18 @@ function appRow(over: Partial<PublishedApp> = {}): PublishedApp {
 function makeDeps(over: Partial<AppLifecycleMeteringDeps> = {}): {
   deps: AppLifecycleMeteringDeps;
   gate: ReturnType<typeof vi.fn>;
+  holdMatchesCharge: ReturnType<typeof vi.fn>;
   trackUsage: ReturnType<typeof vi.fn>;
   releaseHold: ReturnType<typeof vi.fn>;
   startMachine: ReturnType<typeof vi.fn>;
   stopMachine: ReturnType<typeof vi.fn>;
   serializeSettle: ReturnType<typeof vi.fn>;
 } {
-  const gate = vi.fn(async () => ({ allowed: true, holdId: 'hold-1' }));
+  const gate = vi.fn<AppBillingDeps['gate']>(async () => ({ allowed: true, holdId: 'hold-1' }));
   const trackUsage = vi.fn(async () => ({ persisted: true, creditsSettled: true }));
   const releaseHold = vi.fn(async () => {});
+  // The window's hold is on the charge's wallet unless a test moves the payer mid-window.
+  const holdMatchesCharge = vi.fn<AppBillingDeps['holdMatchesCharge']>(async () => true);
   const startMachine = vi.fn(async () => {});
   const stopMachine = vi.fn(async () => {});
   // Acquires by default. A test that wants the meter to be mid-tick overrides it
@@ -105,10 +109,11 @@ function makeDeps(over: Partial<AppLifecycleMeteringDeps> = {}): {
   const deps: AppLifecycleMeteringDeps = {
     isEnabled: () => true,
     billing: {
-      resolvePayerId: async () => ({ ok: true as const, userId: 'payer-1' }),
+      resolveCharge: async () => ({ kind: 'user' as const, userId: 'payer-1' }),
       gate,
       trackUsage,
       releaseHold,
+      holdMatchesCharge,
     },
     startMachine,
     stopMachine,
@@ -116,9 +121,11 @@ function makeDeps(over: Partial<AppLifecycleMeteringDeps> = {}): {
     serializeSettle: serializeSettle as unknown as AppLifecycleMeteringDeps['serializeSettle'],
     dailyAwakeCapSeconds: () => 0,
     now: () => NOW,
+    // Org compute billing went live long before every default window.
+    orgComputeBillingEpoch: async () => new Date(0),
     ...over,
   };
-  return { deps, gate, trackUsage, releaseHold, startMachine, stopMachine, serializeSettle };
+  return { deps, gate, trackUsage, releaseHold, holdMatchesCharge, startMachine, stopMachine, serializeSettle };
 }
 
 function seed(row: PublishedApp | null, returning: unknown[][] = []) {
@@ -165,24 +172,36 @@ describe('wakePublishedApp', () => {
     expect(mockDb.__state.updateSets[0]).toMatchObject({ status: 'parked' });
   });
 
-  it('WAL-9 (partial) given an ORG drive, should refuse the wake by name and neither gate, start nor charge anyone', async () => {
+  it('WAL-9 (partial) given an ORG drive, should hold the wake on the org charge before starting the machine', async () => {
+    const orgCharge = { kind: 'org' as const, orgId: 'org-northwind', userId: 'lead-marcus' };
     const { deps, gate, startMachine } = makeDeps();
-    deps.billing.resolvePayerId = async () => ({ ok: false as const, refusal: { code: 'org_billing_pending' as const, orgId: 'org-northwind', message: 'org billing pending' } });
+    deps.billing.resolveCharge = async () => orgCharge;
+    seed(appRow(), [[appRow({ status: 'running' })]]);
+
+    await wakePublishedApp('app-1', deps);
+
+    expect(gate).toHaveBeenCalledWith({ charge: orgCharge });
+    expect(startMachine).toHaveBeenCalled();
+  });
+
+  it('WAL-9 (partial) given an ORG drive whose pool is EMPTY, should park the app and never start a machine — no person is gated', async () => {
+    const { deps, gate, startMachine } = makeDeps();
+    deps.billing.resolveCharge = async () => ({ kind: 'org', orgId: 'org-northwind', userId: 'lead-marcus' });
+    gate.mockResolvedValue({ allowed: false, reason: 'org_wallet_empty', orgRefusal: 'org_wallet_empty' });
     seed(appRow());
 
     assert({
-      given: 'a published app whose owning drive belongs to an org',
-      should: 'refuse with org_billing_pending before any hold',
-      actual: await wakePublishedApp('app-1', deps),
-      expected: { outcome: 'refused', reason: 'org_billing_pending' },
+      given: 'an org drive whose pool cannot cover a wake',
+      should: 'park under the org reason and start nothing',
+      actual: { result: await wakePublishedApp('app-1', deps), started: startMachine.mock.calls.length },
+      expected: { result: { outcome: 'parked', reason: 'org_wallet_empty' }, started: 0 },
     });
-    expect(gate).not.toHaveBeenCalled();
-    expect(startMachine).not.toHaveBeenCalled();
+    expect(gate).toHaveBeenCalledTimes(1);
   });
 
   it('given an unresolvable drive, should refuse the wake rather than bill somebody else', async () => {
     const { deps, gate, startMachine } = makeDeps();
-    deps.billing.resolvePayerId = async () => null;
+    deps.billing.resolveCharge = async () => null;
     seed(appRow());
 
     assert({
@@ -281,14 +300,14 @@ describe('wakePublishedApp', () => {
   it('does not even resolve a payer for a dedicated wake', async () => {
     // The payer lookup exists to answer "who is charged", and nobody is charged
     // per-second here — so an app whose drive is mid-delete still wakes.
-    const resolvePayerId = vi.fn(async () => null);
+    const resolveCharge = vi.fn(async () => null);
     const { deps } = makeDeps();
     const row = appRow({ tier: 'dedicated' });
     seed(row, [[{ ...row, status: 'running' }]]);
 
-    const result = await wakePublishedApp('app-1', { ...deps, billing: { ...deps.billing, resolvePayerId } });
+    const result = await wakePublishedApp('app-1', { ...deps, billing: { ...deps.billing, resolveCharge } });
 
-    expect(resolvePayerId).not.toHaveBeenCalled();
+    expect(resolveCharge).not.toHaveBeenCalled();
     expect(result.outcome).toBe('woken');
   });
 
@@ -366,7 +385,7 @@ describe('wakePublishedApp — the abandoned tail a failed close left behind', (
     // 10:00 -> 10:10 is 600s. Billing to `now` (12:00) would charge 7200s — two
     // hours of a machine that was STOPPED.
     expect(trackUsage).toHaveBeenCalledWith({
-      payerId: 'payer-1',
+      charge: { kind: 'user', userId: 'payer-1' },
       holdId: 'hold-stranded',
       activeSeconds: 600,
       driveId: 'drive-1',
@@ -496,7 +515,7 @@ describe('stopPublishedApp', () => {
       expected: { outcome: 'stopped', billed: 3600 },
     });
     expect(trackUsage).toHaveBeenCalledWith({
-      payerId: 'payer-1',
+      charge: { kind: 'user', userId: 'payer-1' },
       holdId: 'hold-1',
       activeSeconds: 3600,
       driveId: 'drive-1',
@@ -646,13 +665,65 @@ describe('stopPublishedApp', () => {
 
   it('given an unresolvable drive at settle time, should skip the charge and RELEASE the hold', async () => {
     const { deps, trackUsage, releaseHold } = makeDeps();
-    deps.billing.resolvePayerId = async () => null;
+    deps.billing.resolveCharge = async () => null;
     seed(running());
 
     await stopPublishedApp('app-1', 'idle', deps);
 
     expect(trackUsage).not.toHaveBeenCalled();
     expect(releaseHold).toHaveBeenCalledWith('hold-1');
+  });
+
+  it("WAL-9 (partial) stopping an ORG app whose whole window predates org billing forgives it — nothing charged, the hold released", async () => {
+    const { deps, trackUsage, releaseHold } = makeDeps({ orgComputeBillingEpoch: async () => NOW });
+    deps.billing.resolveCharge = async () => ({ kind: 'org', orgId: 'org-northwind', userId: 'lead-marcus' });
+    seed(running());
+
+    const result = await stopPublishedApp('app-1', 'idle', deps);
+
+    expect(trackUsage).not.toHaveBeenCalled();
+    expect(releaseHold).toHaveBeenCalledWith('hold-1');
+    expect(result).toMatchObject({ outcome: 'stopped', billedSeconds: 0 });
+  });
+
+  it('WAL-9 (partial) stopping an ORG app bills only the span after the epoch, on the org charge', async () => {
+    const orgCharge = { kind: 'org' as const, orgId: 'org-northwind', userId: 'lead-marcus' };
+    const { deps, trackUsage } = makeDeps({ orgComputeBillingEpoch: async () => new Date(NOW.getTime() - 600_000) });
+    deps.billing.resolveCharge = async () => orgCharge;
+    seed(running());
+
+    await stopPublishedApp('app-1', 'idle', deps);
+
+    expect(trackUsage).toHaveBeenCalledWith(expect.objectContaining({ charge: orgCharge, activeSeconds: 600 }));
+  });
+
+  it("WAL-9 (partial) a drive that moved into an org mid-wake: the stale hold is RELEASED and a fresh one taken on the org charge — never settled across the change", async () => {
+    const orgCharge = { kind: 'org' as const, orgId: 'org-northwind', userId: 'lead-marcus' };
+    const { deps, gate, trackUsage, releaseHold, holdMatchesCharge } = makeDeps();
+    deps.billing.resolveCharge = async () => orgCharge;
+    holdMatchesCharge.mockResolvedValue(false);
+    gate.mockResolvedValue({ allowed: true, holdId: 'hold-on-pool' });
+    seed(running());
+
+    await stopPublishedApp('app-1', 'idle', deps);
+
+    expect(holdMatchesCharge).toHaveBeenCalledWith({ holdId: 'hold-1', charge: orgCharge });
+    expect(releaseHold).toHaveBeenCalledWith('hold-1');
+    expect(gate).toHaveBeenCalledWith({ charge: orgCharge });
+    expect(trackUsage).toHaveBeenCalledWith(expect.objectContaining({ charge: orgCharge, holdId: 'hold-on-pool' }));
+  });
+
+  it('WAL-9 (partial) when the new payer cannot cover a re-acquired hold, the consumed span still settles on the NEW payer, unreserved — never the old hold', async () => {
+    const { deps, gate, trackUsage, releaseHold, holdMatchesCharge } = makeDeps();
+    deps.billing.resolveCharge = async () => ({ kind: 'user', userId: 'lead-marcus' });
+    holdMatchesCharge.mockResolvedValue(false);
+    gate.mockResolvedValue({ allowed: false, reason: 'out_of_credits' });
+    seed(running());
+
+    await stopPublishedApp('app-1', 'idle', deps);
+
+    expect(releaseHold).toHaveBeenCalledWith('hold-1');
+    expect(trackUsage).toHaveBeenCalledWith(expect.objectContaining({ charge: { kind: 'user', userId: 'lead-marcus' }, holdId: undefined }));
   });
 
   it('given nothing to bill, should RELEASE the hold rather than settle against it', async () => {

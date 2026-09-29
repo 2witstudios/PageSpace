@@ -45,7 +45,9 @@ import {
   type FlapsTransport,
   type MachineEvent,
 } from '../fly/flaps-client';
-import { defaultAppBillingDeps, type AppBillingDeps } from './app-billing';
+import { awakeChargeMillicents, defaultAppBillingDeps, type AppBillingDeps } from './app-billing';
+import { stampOrgComputeBillingEpoch } from '../../billing/org-compute-epoch';
+import type { ComputeCharge } from '../../billing/compute-charge';
 import {
   findStopBoundarySince,
   mirrorFlyMachineEvents,
@@ -55,6 +57,7 @@ import {
   METER_AWAKE_LOCK_KEY,
   latestActivityAt,
   planAwakeSettle,
+  planOrgAwakeSettle,
   planDailyAwakeCap,
   utcDayOf,
 } from './app-metering-core';
@@ -85,6 +88,8 @@ export interface AppLifecycleMeteringDeps {
   /** The per-app daily awake budget in seconds, read at call time. 0 disables it. */
   dailyAwakeCapSeconds: () => number;
   now: () => Date;
+  /** The org compute billing epoch (WAL-9): an org app's awake time before it is forgiven. */
+  orgComputeBillingEpoch: (tickStart: Date) => Promise<Date>;
 }
 
 /**
@@ -132,6 +137,7 @@ export const defaultAppLifecycleMeteringDeps: AppLifecycleMeteringDeps = {
   serializeSettle: (fn) => serializeUnderMeterLock()(fn),
   dailyAwakeCapSeconds: resolveDailyAwakeSecondsCap,
   now: () => new Date(),
+  orgComputeBillingEpoch: stampOrgComputeBillingEpoch,
 };
 
 export type WakeRefusal =
@@ -142,12 +148,7 @@ export type WakeRefusal =
   /** The row is not in a state a wake may leave — already running, destroying, failed. */
   | 'not_wakeable'
   /** The owning drive could not be resolved, so there is no honest payer. Nothing is started. */
-  | 'unresolved_payer'
-  /**
-   * WAL-9 interim: the owning drive is an org drive, and org compute billing is not wired yet.
-   * Nothing is started and nobody is charged; the C3 lane replaces this with a hold on the org.
-   */
-  | 'org_billing_pending';
+  | 'unresolved_payer';
 
 export type WakePublishedAppResult =
   | { outcome: 'woken'; app: PublishedApp; holdId?: string }
@@ -223,17 +224,16 @@ export async function wakePublishedApp(
   // exists to answer "who is charged", and nobody is charged per-second here.
   let holdId: string | undefined;
   if (isCreditMetered(row.tier)) {
-    const payer = await deps.billing.resolvePayerId({ driveId: row.driveId });
+    const charge = await deps.billing.resolveCharge({ driveId: row.driveId });
     // No fallback, by design: an app is drive-owned, and `published_apps.ownerId`
     // is a denormalized cascade handle, not an answer to "who pays". Billing a
     // machine to somebody who may not own the drive is a money movement that cannot
     // be taken back; refusing the wake costs one request a parked page.
-    if (!payer) return { outcome: 'refused', reason: 'unresolved_payer' };
-    // WAL-9 interim: an org drive's app bills the org, which nothing can debit yet.
-    if (!payer.ok) return { outcome: 'refused', reason: payer.refusal.code };
-    const payerId = payer.userId;
+    if (!charge) return { outcome: 'refused', reason: 'unresolved_payer' };
 
-    const gate = await deps.billing.gate({ payerId });
+    // WAL-9: an org drive's app holds on the org pool. A missing, paused or empty pool
+    // parks the app under that reason, exactly as an exhausted person's does.
+    const gate = await deps.billing.gate({ charge });
     if (!gate.allowed) {
       await parkPublishedApp(row, gate.reason ?? 'insufficient_credits');
       return { outcome: 'parked', reason: gate.reason ?? 'insufficient_credits' };
@@ -587,6 +587,63 @@ export interface SettleAndCloseResult {
 }
 
 /**
+ * The hold a window settles against, on the wallet `charge` settles on — never across a payer
+ * change (review 5343636479 P1-1). When the drive moved into or out of an org since the hold was
+ * placed, the stale hold (on the OLD payer's wallet) is released and a fresh one acquired on the
+ * new payer's; if that wallet cannot cover it, the span settles unreserved on the right wallet
+ * (it was already consumed) and the meter's own re-gate parks the app. Never settles the old hold.
+ */
+export async function holdForCharge(
+  row: PublishedApp,
+  charge: ComputeCharge,
+  billing: AppBillingDeps,
+): Promise<string | undefined> {
+  const holdId = row.awakeHoldId ?? undefined;
+  if (holdId === undefined || (await billing.holdMatchesCharge({ holdId, charge }))) return holdId;
+  loggers.ai.warn('Published-app payer changed mid-window: the old hold is released and re-acquired on the new payer\'s wallet', {
+    publishedAppId: row.id,
+    driveId: row.driveId,
+    staleHoldId: holdId,
+    chargeKind: charge.kind,
+  });
+  await billing.releaseHold(holdId);
+  const gate = await billing.gate({ charge });
+  return gate.allowed ? gate.holdId : undefined;
+}
+
+/**
+ * The seconds of a closing window that are actually billed: all of them for a personal charge;
+ * for an org charge, only those after org compute billing went live (WAL-9) — the span before
+ * the epoch, which the interim refusal left on the row, is forgiven and logged with what it
+ * would have cost. Never charged, and never to a person.
+ */
+async function billableAwakeSeconds(
+  row: PublishedApp,
+  charge: ComputeCharge,
+  windowEnd: Date,
+  activeSeconds: number,
+  deps: AppLifecycleMeteringDeps,
+): Promise<number> {
+  if (charge.kind !== 'org' || row.awakeBilledThrough === null) return activeSeconds;
+  const org = planOrgAwakeSettle({ billedThrough: row.awakeBilledThrough, now: windowEnd, epoch: await deps.orgComputeBillingEpoch(deps.now()) });
+  if (org.forgiven) {
+    const wouldHaveChargedMillicents = awakeChargeMillicents(org.forgiven.wouldHaveBilledSeconds);
+    loggers.ai.warn('Published-app awake: org backlog from before org compute billing forgiven — not charged', {
+      subjectKind: 'published_app_awake',
+      publishedAppId: row.id,
+      driveId: row.driveId,
+      orgId: charge.orgId,
+      forgivenFrom: org.forgiven.from.toISOString(),
+      forgivenThrough: org.forgiven.through.toISOString(),
+      forgivenSeconds: org.forgiven.wouldHaveBilledSeconds,
+      wouldHaveChargedMillicents,
+      wouldHaveChargedCents: Math.round(wouldHaveChargedMillicents / 1000),
+    });
+  }
+  return org.plan.action === 'settle' ? org.plan.activeSeconds : 0;
+}
+
+/**
  * Settle the tail of an awake window and close it — the shared ending for the stop
  * seam and for the heartbeat's mirror-driven repair.
  *
@@ -612,11 +669,14 @@ async function settleAndClose(
   const plan = planAwakeSettle({ billedThrough: row.awakeBilledThrough, now: billedThrough });
   let billedSeconds = 0;
   if (plan.action === 'settle') {
-    const payer = await deps.billing.resolvePayerId({ driveId: row.driveId });
-    // WAL-9 interim: an org payer (a drive moved into an org while its app was awake) is
-    // skipped like an unresolvable one — never billed to a person.
-    const payerId = payer?.ok ? payer.userId : null;
-    if (payerId) {
+    // WAL-9: an org drive's window settles on the org pool — never onto the lead.
+    const charge = await deps.billing.resolveCharge({ driveId: row.driveId });
+    const activeSeconds = charge ? await billableAwakeSeconds(row, charge, billedThrough, plan.activeSeconds, deps) : 0;
+    if (charge && activeSeconds <= 0) {
+      // A window wholly before org compute billing went live: forgiven above. Nothing is
+      // charged, and the reservation is returned rather than settled.
+      if (row.awakeHoldId) await deps.billing.releaseHold(row.awakeHoldId);
+    } else if (charge) {
       // The window is NOT closed on a failed settle: leaving it open means the next
       // heartbeat retries the whole span, where closing it would silently lose the
       // app's last awake window. The status still moves either way — the machine
@@ -643,9 +703,9 @@ async function settleAndClose(
       let settled = false;
       try {
         const settle = await deps.billing.trackUsage({
-          payerId,
-          holdId: row.awakeHoldId ?? undefined,
-          activeSeconds: plan.activeSeconds,
+          charge,
+          holdId: await holdForCharge(row, charge, deps.billing),
+          activeSeconds,
           driveId: row.driveId,
           publishedAppId: row.id,
         });
@@ -660,29 +720,29 @@ async function settleAndClose(
           loggers.ai.error(
             'Published-app final settle did not persist a usage row — the awake window stays open for the next tick to retry',
             new Error('final settle was not persisted'),
-            { publishedAppId: row.id, driveId: row.driveId, activeSeconds: plan.activeSeconds },
+            { publishedAppId: row.id, driveId: row.driveId, activeSeconds },
           );
         }
       } catch (error) {
         loggers.ai.error(
           'Published-app final settle failed — the awake window stays open for the next tick to retry',
           error instanceof Error ? error : new Error(String(error)),
-          { publishedAppId: row.id, driveId: row.driveId, activeSeconds: plan.activeSeconds },
+          { publishedAppId: row.id, driveId: row.driveId, activeSeconds },
         );
       }
       if (!settled) {
         await closeStatusOnly(row, nextStatus, stampedStopAt, reason);
         return { billedSeconds: 0, failed: true };
       }
-      billedSeconds = plan.activeSeconds;
+      billedSeconds = activeSeconds;
     } else {
       // Unresolvable drive: skip the charge rather than misattribute it, exactly
       // as the storage reconcile does. The hold is still released below — it
       // reserves against a window nobody will ever settle.
-      loggers.ai.warn('Published-app final settle skipped: no person pays for the owning drive', {
+      loggers.ai.warn('Published-app final settle skipped: the owning drive cannot be resolved', {
         publishedAppId: row.id,
         driveId: row.driveId,
-        reason: payer && !payer.ok ? payer.refusal.code : 'unresolved_payer',
+        reason: 'unresolved_payer',
       });
       if (row.awakeHoldId) await deps.billing.releaseHold(row.awakeHoldId);
     }
@@ -790,30 +850,36 @@ async function settleAbandonedTail(
     return;
   }
 
-  const payer = await deps.billing.resolvePayerId({ driveId: row.driveId });
-  if (!payer?.ok) {
-    // Unresolvable drive, or an org payer (WAL-9 interim, until the C3 lane) — never
-    // substitute a payer. The watermark is already claimed off the row above, so there
-    // is no later retry that could recover this span; say so at ERROR rather than warn.
+  const charge = await deps.billing.resolveCharge({ driveId: row.driveId });
+  if (!charge) {
+    // Unresolvable drive — never substitute a payer. The watermark is already claimed
+    // off the row above, so there is no later retry that could recover this span; say
+    // so at ERROR rather than warn.
     loggers.ai.error(
-      'Published-app abandoned tail could not be billed: no person pays for the owning drive — this span is lost',
+      'Published-app abandoned tail could not be billed: the owning drive cannot be resolved — this span is lost',
       new Error('abandoned tail payer unresolved'),
       {
         publishedAppId: row.id,
         driveId: row.driveId,
         activeSeconds: plan.activeSeconds,
-        reason: payer ? payer.refusal.code : 'unresolved_payer',
+        reason: 'unresolved_payer',
       },
     );
     return;
   }
-  const payerId = payer.userId;
+  // WAL-9: an org tail from before org compute billing went live is forgiven (logged), and
+  // its reservation returned rather than settled.
+  const activeSeconds = await billableAwakeSeconds(row, charge, row.lastStopAt, plan.activeSeconds, deps);
+  if (activeSeconds <= 0) {
+    if (row.awakeHoldId) await deps.billing.releaseHold(row.awakeHoldId);
+    return;
+  }
 
   try {
     const settle = await deps.billing.trackUsage({
-      payerId,
-      holdId: row.awakeHoldId ?? undefined,
-      activeSeconds: plan.activeSeconds,
+      charge,
+      holdId: await holdForCharge(row, charge, deps.billing),
+      activeSeconds,
       driveId: row.driveId,
       publishedAppId: row.id,
     });
@@ -821,14 +887,14 @@ async function settleAbandonedTail(
       loggers.ai.error(
         'Published-app abandoned tail did not persist on the retry either — this span is lost',
         new Error('abandoned tail settle was not persisted'),
-        { publishedAppId: row.id, driveId: row.driveId, activeSeconds: plan.activeSeconds },
+        { publishedAppId: row.id, driveId: row.driveId, activeSeconds },
       );
     }
   } catch (error) {
     loggers.ai.error(
       'Published-app abandoned tail settle threw on the retry — this span is lost',
       error instanceof Error ? error : new Error(String(error)),
-      { publishedAppId: row.id, driveId: row.driveId, activeSeconds: plan.activeSeconds },
+      { publishedAppId: row.id, driveId: row.driveId, activeSeconds },
     );
   }
 }

@@ -15,7 +15,7 @@ vi.mock('@pagespace/db/schema/credits', () => ({
   creditHolds: { id: 'ch.id', expiresAt: 'ch.expiresAt' },
 }));
 vi.mock('@pagespace/db/schema/monitoring', () => ({
-  aiUsageLogs: { id: 'aul.id', userId: 'aul.userId', cost: 'aul.cost', success: 'aul.success', timestamp: 'aul.timestamp', source: 'aul.source' },
+  aiUsageLogs: { id: 'aul.id', userId: 'aul.userId', cost: 'aul.cost', success: 'aul.success', timestamp: 'aul.timestamp', source: 'aul.source', walletId: 'aul.walletId', metadata: 'aul.metadata' },
 }));
 const mockEq = vi.hoisted(() => vi.fn((a, b) => ({ op: 'eq', a, b })));
 const mockGt = vi.hoisted(() => vi.fn((a, b) => ({ op: 'gt', a, b })));
@@ -97,7 +97,7 @@ describe('backfillCredits', () => {
     expect(mockSettlePending).toHaveBeenCalledWith('led_1');
     expect(mockSettlePending).toHaveBeenCalledWith('led_2');
     expect(mockConsumeCredits).toHaveBeenCalledTimes(1);
-    expect(mockConsumeCredits).toHaveBeenCalledWith({ aiUsageLogId: 'aul_9', userId: 'u9', costDollars: 0.5 });
+    expect(mockConsumeCredits).toHaveBeenCalledWith({ aiUsageLogId: 'aul_9', userId: 'u9', costDollars: 0.5, walletId: undefined, spendKind: 'ai' });
     expect(result).toEqual({ retried: 2, orphans: 1, expiredHolds: 0 });
   });
 
@@ -196,7 +196,7 @@ describe('backfillCredits', () => {
 
     const result = await backfillCredits();
 
-    expect(mockConsumeCredits).toHaveBeenCalledWith({ aiUsageLogId: 'aul_err', userId: 'u7', costDollars: 0.25 });
+    expect(mockConsumeCredits).toHaveBeenCalledWith({ aiUsageLogId: 'aul_err', userId: 'u7', costDollars: 0.25, walletId: undefined, spendKind: 'ai' });
     expect(result.orphans).toBe(1);
   });
 
@@ -225,7 +225,15 @@ describe('backfillCredits', () => {
       userId: 'u_term',
       costDollars: 0.02,
       markupBpsOverride: MACHINE_MARKUP_BPS,
+      walletId: undefined,
+      spendKind: 'ai',
     });
+  });
+
+  it("WAL-9 (partial) re-settles an orphaned org compute charge on its recorded wallet, as compute — never the recorded person's own wallet", async () => {
+    queuePass([], [{ aiUsageLogId: 'aul_org', userId: 'u_lead', cost: 0.02, source: 'terminal', walletId: 'pool-1', metadata: { spendKind: 'compute' } }]);
+    await backfillCredits();
+    expect(mockConsumeCredits).toHaveBeenCalledWith(expect.objectContaining({ aiUsageLogId: 'aul_org', userId: 'u_lead', walletId: 'pool-1', spendKind: 'compute' }));
   });
 
   it('does not apply a markup override to a non-terminal orphan (unchanged behavior)', async () => {
