@@ -908,6 +908,31 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     expect(await spendUntilRefused(w, w.marcusId)).toBe(4);
   });
 
+  it('WAL-2 (partial) WAL-7 (partial) IRV-M1: an UNDERCHARGE reconciled today for a call made before BOTH windows (2 days ago, pool refilled since) counts in neither', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+    const w = world;
+    await db.insert(walletConsumerCaps).values({ walletId: w.poolId, consumerKey: `user:${w.marcusId}`, dailyCapCents: 50, monthlyCapCents: 100 });
+    const gen = `gen-irv-m1-${createId()}`;
+    // A 25¢ seat call two UTC days ago — before today's midnight — and the pool refilled an hour ago, so the call
+    // sits before BOTH windows (and before the rows the read reaches back to: min(period start, UTC midnight)).
+    await reconcilableSeatCall(w, w.marcusId, COST_25C, gen);
+    await nextDay(w, w.marcusId);
+    await nextDay(w, w.marcusId);
+    await refillAt(w, new Date(Date.now() - 3_600_000));
+
+    // Today the cron reconciles it UP: billed round(16.66667) = 17¢ real, actually round(66.66668) = 67¢ — 50¢ real
+    // × 1.5 = 75¢ (75_000 mc) more. The pool pays it, but it belongs to the two-day-old call, not to this period or today.
+    await reconcileOpenRouterCosts({ fetcher: async (id) => (id === gen ? { totalCost: 4 * COST_25C } : 'not_found') });
+
+    expect((await walletRow(w.poolId)).monthlyRemainingCents).toBe(900_000 - 25 - 75);
+    const counted = await seatCounted(w, w.marcusId);
+    expect(counted.usage.periodChargedMillicents).toBe(0);
+    expect(counted.usage.dayChargedMillicents).toBe(0);
+    // Today keeps its whole 50¢ daily cap: exactly two 25¢ calls, then refused.
+    expect(await spendUntilRefused(w, w.marcusId)).toBe(2);
+  });
+
   it('WAL-2 (partial) WAL-7 (partial) an admin RAISING the DAILY cap takes effect at once on today\'s gross', async () => {
     if (!dbAvailable) return;
     world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
