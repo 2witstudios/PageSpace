@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { toErrorCause } from '../toErrorCause';
+import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
 
 describe('toErrorCause', () => {
   it('given the out_of_credits code (402), should classify as out_of_credits, non-retryable', () => {
@@ -121,5 +122,15 @@ describe('toErrorCause', () => {
     const cause = toErrorCause(402, { error: 'spend_source_refused', source: 'drive_wallet', refusalReason: 'source_empty', options: 'own_credits' });
     expect(cause).toMatchObject({ code: 'spend_source_refused', httpStatus: 402, retryable: false });
     expect(cause.refusal).toBeUndefined();
+  });
+
+  it('SPEND-4 (partial) WAL-2 (partial) a seat refused by its cap survives the whole trip — the 402 the route sends, read back by the client, names the source and why, never "Something went wrong"', async () => {
+    const response = creditGateErrorResponse('source_refused', { source: 'seat_allowance', reason: 'source_cap_reached', options: ['drive_wallet', 'own_credits'] });
+
+    const cause = toErrorCause(response.status, await response.json());
+
+    expect(cause.code).toBe('spend_source_refused');
+    expect(cause.httpStatus).toBe(402);
+    expect(cause.refusal).toEqual({ source: 'seat_allowance', reason: 'source_cap_reached', options: ['drive_wallet', 'own_credits'] });
   });
 });

@@ -21,6 +21,14 @@ import {
   governingAllocationPeriodStartMs,
   isAllocationResetDue,
   entitlementTierFor,
+  DEFAULT_SEAT_ALLOWANCE_CENTS,
+  seatAllowanceCents,
+  seatSpentCents,
+  seatCapCheck,
+  seatOvershootDeltaMillicents,
+  seatCountedMillicents,
+  seatLegSpendableCents,
+  seatPeriodStartMs,
   type ResolveSpendSourceInput,
   type SpendLeg,
   type SpendResolution,
@@ -621,6 +629,99 @@ describe('evaluateCaps', () => {
     ['no cap', null, c(0), c(500), []],
   ] as const)('WAL-7 (partial) funder alert thresholds: %s', (_label, capCents, beforeCents, afterCents, expected) => {
     expect(capAlertThresholdsCrossed({ capCents, beforeCents, afterCents })).toEqual(expected);
+  });
+});
+
+describe('seat allowance — the per-consumer monthly cap on the org pool', () => {
+  it('WAL-2 (partial) the seat allowance is never unlimited: with nothing set it is the D20.5 monthly default', () => {
+    expect(DEFAULT_SEAT_ALLOWANCE_CENTS).toBe(DEFAULT_CONSUMER_CAPS.monthlyCents);
+    expect(DEFAULT_SEAT_ALLOWANCE_CENTS).toBeGreaterThan(0);
+    expect(seatAllowanceCents({ consumerMonthlyCapCents: null, policySeatAllowanceCents: null })).toBe(DEFAULT_SEAT_ALLOWANCE_CENTS);
+  });
+
+  it.each([
+    ['a per-consumer cap on the pool governs that consumer', c(40), c(250), c(40)],
+    ['with no per-consumer cap the org seat allowance governs', null, c(250), c(250)],
+    ['a zero cap is a cap of zero, not unset', 0, c(250), 0],
+    ['a non-finite cap fails closed to zero', Number.NaN, c(250), 0],
+    ['a negative cap fails closed to zero', -5, c(250), 0],
+  ] as const)('WAL-2 (partial) seatAllowanceCents: %s', (_label, consumerMonthlyCapCents, policySeatAllowanceCents, expected) => {
+    expect(seatAllowanceCents({ consumerMonthlyCapCents, policySeatAllowanceCents })).toBe(expected);
+  });
+
+  it.each([
+    ['whole cents', 15_000, 15],
+    ['a sub-cent remainder rounds UP (the cap never under-counts)', 15_001, 16],
+    ['a net refund below zero counts as nothing spent', -3_000, 0],
+    ['a non-finite sum fails closed as the whole cap spent', Number.NaN, Number.MAX_SAFE_INTEGER],
+  ] as const)('WAL-2 (partial) seatSpentCents: %s', (_label, millicents, expected) => {
+    expect(seatSpentCents(millicents)).toBe(expected);
+  });
+
+  const usage = (periodChargedMillicents: number, periodReservedCents = 0, dayChargedMillicents = 0) => ({ periodChargedMillicents, periodReservedCents, dayChargedMillicents });
+
+  it.each([
+    ['within the cap', c(100), usage(40_000), c(25), { allowed: true, monthlyRemainingCents: c(60) }],
+    ['exactly reaching the cap is allowed', c(100), usage(75_000), c(25), { allowed: true, monthlyRemainingCents: c(25) }],
+    ['one cent past the cap refuses', c(100), usage(76_000), c(25), { allowed: false, reason: 'monthly_cap_exceeded', monthlyRemainingCents: c(24) }],
+    ['this consumer\'s calls in flight count like spend', c(100), usage(40_000, c(50)), c(25), { allowed: false, reason: 'monthly_cap_exceeded', monthlyRemainingCents: c(10) }],
+    ['a cap of zero refuses any call', 0, usage(0), c(25), { allowed: false, reason: 'monthly_cap_exceeded', monthlyRemainingCents: 0 }],
+  ] as const)('WAL-2 (partial) seatCapCheck: %s', (_label, capCents, seatUsage, reservationCents, expected) => {
+    expect(seatCapCheck({ capCents, dailyCapCents: null, usage: seatUsage, reservationCents })).toMatchObject(expected);
+  });
+
+  it.each([
+    ['a full pool is bounded by what is left of the cap', c(9000), c(100), usage(30_000), c(70)],
+    ['a nearly empty pool is bounded by the pool', c(20), c(100), usage(0), c(20)],
+    ['a spent cap leaves nothing, whatever the pool holds', c(9000), c(100), usage(100_000), 0],
+    ['a zero cap leaves nothing', c(9000), 0, usage(0), 0],
+  ] as const)('WAL-2 (partial) seatLegSpendableCents: %s', (_label, poolSpendableCents, capCents, seatUsage, expected) => {
+    expect(seatLegSpendableCents({ poolSpendableCents, capCents, dailyCapCents: null, usage: seatUsage })).toBe(expected);
+  });
+
+  it.each([
+    ['a set daily cap binds within the monthly allowance', c(100), c(50), usage(30_000, 0, 30_000), c(25), { allowed: false, reason: 'daily_cap_exceeded', dailyRemainingCents: c(20), monthlyRemainingCents: c(70) }],
+    ['earlier days do not count against today', c(100), c(50), usage(60_000, 0, 10_000), c(25), { allowed: true, dailyRemainingCents: c(40), monthlyRemainingCents: c(40) }],
+    ['calls in flight count against today too', c(100), c(50), usage(0, c(40), 0), c(25), { allowed: false, reason: 'daily_cap_exceeded' }],
+    ['no daily cap set is no daily limit (unset is unlimited within the leg)', c(100), null, usage(70_000, 0, 70_000), c(25), { allowed: true, dailyRemainingCents: null }],
+  ] as const)('WAL-2 (partial) WAL-7 (partial) seatCapCheck with a per-consumer DAILY cap: %s', (_label, capCents, dailyCapCents, seatUsage, reservationCents, expected) => {
+    expect(seatCapCheck({ capCents, dailyCapCents, usage: seatUsage, reservationCents })).toMatchObject(expected);
+  });
+
+  it('WAL-2 (partial) WAL-7 (partial) the seat leg is bounded by the smaller of what is left today and this period', () => {
+    expect(seatLegSpendableCents({ poolSpendableCents: c(9000), capCents: c(100), dailyCapCents: c(50), usage: usage(40_000, 0, 30_000) })).toBe(c(20));
+    expect(seatLegSpendableCents({ poolSpendableCents: c(9000), capCents: c(100), dailyCapCents: c(50), usage: usage(90_000, 0, 0) })).toBe(c(10));
+  });
+
+  it.each([
+    ['below the cap it is the gross', c(100), 75_000, 75_000],
+    ['past the cap it reads the cap', c(100), 125_000, 100_000],
+    ['a cap raised past the gross reads the gross — nothing stored from the old cap', c(150), 125_000, 125_000],
+    ['a cap lowered below the gross reads the cap: no room, never negative', c(50), 75_000, 50_000],
+    ['never below zero', c(100), -35_000, 0],
+    ['no cap is the gross', null, 70_000, 70_000],
+  ] as const)('WAL-2 (partial) WAL-7 (partial) seatCountedMillicents judges gross against the cap in force now: %s', (_label, capCents, grossMillicents, expected) => {
+    expect(seatCountedMillicents({ capCents, grossMillicents })).toBe(expected);
+  });
+
+  const win = (grossMillicents: number, absorbedMillicents: number) => ({ grossMillicents, absorbedMillicents });
+  it.each([
+    ['spend inside the cap absorbs nothing', c(100), win(90_000, 0), 0],
+    ['a charge that crosses the cap absorbs only the part past it: 125¢ against 100¢ is 25¢', c(100), win(125_000, 0), 25_000],
+    ['past the cap, only the NEW excess: 25¢ already absorbed, 155¢ gross absorbs 30¢ more', c(100), win(155_000, 25_000), 30_000],
+    ['a refund gives back forgiveness that no longer applies: 86¢ gross, 25¢ absorbed → −25¢', c(100), win(86_000, 25_000), -25_000],
+    ['a refund that stays past the cap keeps only the new excess: 111¢ gross, 25¢ absorbed → −14¢', c(100), win(111_000, 25_000), -14_000],
+    ['no cap on the window (an unset daily cap) keeps nothing absorbed', null, win(70_000, 0), 0],
+    ['a non-finite sum changes nothing here (the gate read fails closed on it)', c(100), win(Number.NaN, 0), 0],
+  ] as const)('WAL-2 (partial) WAL-7 (partial) seatOvershootDeltaMillicents keeps one window\'s absorbed at max(0, gross − cap): %s', (_label, capCents, window, expected) => {
+    expect(seatOvershootDeltaMillicents({ capCents, window })).toBe(expected);
+  });
+
+  it('WAL-2 (partial) D-OW-12 the seat period is the pool\'s refill date, never the person\'s renewal; no refill yet is the UTC month', () => {
+    const now = Date.UTC(2026, 8, 17);
+    const poolRefill = Date.UTC(2026, 8, 9);
+    expect(seatPeriodStartMs({ poolPeriodStartMs: poolRefill, nowMs: now })).toBe(poolRefill);
+    expect(seatPeriodStartMs({ poolPeriodStartMs: null, nowMs: now })).toBe(Date.UTC(2026, 8, 1));
   });
 });
 

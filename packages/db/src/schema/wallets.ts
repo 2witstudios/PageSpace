@@ -101,6 +101,12 @@ export const wallets = pgTable('wallets', {
   // has more than one source the gate refuses until one is chosen (SPEND-4). Meaningless on
   // an org pool, which no one spends "by default" — the CHECK refuses one there.
   defaultSpendSource: text('defaultSpendSource').$type<SpendSourceKindValue>(),
+  // SPEND-5 "Always my own credits", the ONE global switch (D20.7). Set only on a PERSONAL
+  // ROOT wallet (the person's own Settings, like defaultSpendSource); the CHECK refuses it
+  // anywhere else. When on, every call this person makes spends their own credits or is
+  // refused — never a drive wallet or a seat, never a fallback. The per-drive switch is a
+  // row in drive_spend_overrides.
+  alwaysOwnCredits: boolean('alwaysOwnCredits').default(false).notNull(),
   createdAt: timestamp('createdAt', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date', withTimezone: true }).defaultNow().notNull().$onUpdate(() => new Date()),
 }, (table) => ({
@@ -142,6 +148,11 @@ export const wallets = pgTable('wallets', {
     // A known kind, and never on an org pool: no one spends a pool "by default" (the seat is
     // a source, the pool is not a place a default can live).
     sql`${table.defaultSpendSource} IS NULL OR (${table.defaultSpendSource} IN ('drive_wallet', 'seat_allowance', 'own_credits') AND NOT (${table.ownerType} = 'org' AND ${table.subjectType} IS NULL))`,
+  ),
+
+  alwaysOwnCreditsOnPersonalRoot: check(
+    'wallets_always_own_credits_personal_root',
+    sql`NOT ${table.alwaysOwnCredits} OR (${table.ownerType} = 'user' AND ${table.subjectType} IS NULL AND ${table.parentWalletId} IS NULL)`,
   ),
 
   // The credit_balances invariants, carried over unchanged: a single bad write can't
@@ -224,6 +235,20 @@ export const automationSkipNotices = pgTable('automation_skip_notices', {
   driveId: text('driveId').primaryKey().references(() => drives.id, { onDelete: 'cascade' }),
   lastNotifiedAt: timestamp('lastNotifiedAt', { mode: 'date' }).notNull(),
 });
+
+/**
+ * driveSpendOverrides — SPEND-5 "Always my own credits" in ONE drive (D17.2): a row means the
+ * switch is on for (userId, driveId); no row means off. It only ever narrows what a call may
+ * spend (own credits or refuse), so it grants nothing and needs no role. Both sides cascade:
+ * the switch is the person's, about that drive.
+ */
+export const driveSpendOverrides = pgTable('drive_spend_overrides', {
+  userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  driveId: text('driveId').notNull().references(() => drives.id, { onDelete: 'cascade' }),
+  createdAt: timestamp('createdAt', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.userId, table.driveId], name: 'drive_spend_overrides_pkey' }),
+}));
 
 /** Mirrors wallet-core `FundingLeg['funder']`: the wallet owner's own top-up, or a donation (WAL-4). */
 export const FUNDING_LEG_KINDS = ['owner', 'donation'] as const;

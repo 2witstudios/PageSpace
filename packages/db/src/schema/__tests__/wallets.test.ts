@@ -12,6 +12,7 @@ import * as schemaModule from '../../schema';
 import {
   wallets,
   walletConsumerCaps,
+  driveSpendOverrides,
   personalRootWalletOf,
   isPersonalRootWallet,
   PERSONAL_ROOT_WALLET_ARBITER,
@@ -59,7 +60,7 @@ describe('wallets', () => {
 
   it('WAL-1 (partial): carries owner, optional subject, optional parent, allocation, spent, top-up, debt, UTC period, status', () => {
     expect(Object.keys(columns).sort()).toEqual([
-      'createdAt', 'debtCents', 'defaultSpendSource', 'donationsEnabled', 'fallbackRule', 'id', 'monthlyAllowanceCents',
+      'alwaysOwnCredits', 'createdAt', 'debtCents', 'defaultSpendSource', 'donationsEnabled', 'fallbackRule', 'id', 'monthlyAllowanceCents',
       'monthlyPeriodEnd', 'monthlyPeriodStart', 'monthlyRemainingCents', 'orgId', 'ownerType',
       'parentWalletId', 'pendingMillicents', 'spentCents', 'status', 'subjectId', 'subjectType',
       'topupRemainingCents', 'updatedAt', 'userId',
@@ -79,6 +80,7 @@ describe('wallets', () => {
 
   it('WAL-1 (partial): keeps every credit_balances non-negativity CHECK, plus the wallet shape CHECKs', () => {
     expect(checkNames(wallets)).toEqual([
+      'wallets_always_own_credits_personal_root',
       'wallets_debt_cents_nonneg',
       'wallets_default_spend_source_valid',
       'wallets_fallback_rule_valid',
@@ -186,5 +188,27 @@ describe('the stored spend source', () => {
     // No FK on purpose: a deleted wallet must leave the id behind so the gate refuses it,
     // where ON DELETE SET NULL would silently move the conversation to a preselected source.
     expect(getTableConfig(conversations).foreignKeys.some((f) => f.reference().columns.some((c) => c.name === 'chosenWalletId'))).toBe(false);
+  });
+});
+
+describe('"Always my own credits" storage', () => {
+  it('SPEND-5 (partial): the global switch is a NOT NULL boolean, off by default, that a CHECK allows only on a personal root wallet', () => {
+    const column = getTableColumns(wallets).alwaysOwnCredits;
+    expect(column.columnType).toBe('PgBoolean');
+    expect(column.notNull).toBe(true);
+    expect(column.default).toBe(false);
+    const check = getTableConfig(wallets).checks.find((c) => c.name === 'wallets_always_own_credits_personal_root');
+    expect(check && dialect.sqlToQuery(check.value).sql).toBe(
+      `NOT "wallets"."alwaysOwnCredits" OR ("wallets"."ownerType" = 'user' AND "wallets"."subjectType" IS NULL AND "wallets"."parentWalletId" IS NULL)`,
+    );
+  });
+
+  it('SPEND-5 (partial): the per-drive switch is a (userId, driveId) row that cascades with the person and with the drive', () => {
+    const config = getTableConfig(driveSpendOverrides);
+    expect(config.name).toBe('drive_spend_overrides');
+    expect(config.primaryKeys.map((pk) => pk.columns.map((c) => c.name))).toEqual([['userId', 'driveId']]);
+    expect(foreignKeyOn(driveSpendOverrides, 'userId')).toEqual({ onDelete: 'cascade', target: 'users' });
+    expect(foreignKeyOn(driveSpendOverrides, 'driveId')).toEqual({ onDelete: 'cascade', target: 'drives' });
+    expect(Object.keys(getTableColumns(driveSpendOverrides)).sort()).toEqual(['createdAt', 'driveId', 'userId']);
   });
 });

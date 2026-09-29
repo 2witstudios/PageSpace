@@ -53,6 +53,7 @@ const refusalReasonSchema = z.enum([
   'source_paused',
   'source_unavailable',
   'guest_drive_wallet_off',
+  'source_cap_reached',
   'chosen_wallet_unavailable',
 ]);
 /** `SkipReason` (`packages/lib/src/billing/wallet-core.ts`). */

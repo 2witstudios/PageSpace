@@ -202,11 +202,16 @@ export async function applyOrgPoolRefill(invoice: OrgInvoice, opts: OrgPoolRefil
       period.startMs !== null &&
       period.endMs !== null &&
       (pool.monthlyPeriodStart === null || pool.monthlyPeriodStart.getTime() < period.startMs);
+    // The allowance describes the pool's CURRENT period, so only an invoice for that period
+    // (or a later one) sets it; an older invoice settled late still adds its credits above,
+    // but a seat change between the two periods must not step the allowance back.
+    const setsAllowance =
+      pool.monthlyPeriodStart === null || (period.startMs !== null && period.startMs >= pool.monthlyPeriodStart.getTime());
     await tx
       .update(wallets)
       .set({
         monthlyRemainingCents: refill.monthlyRemainingCents,
-        monthlyAllowanceCents: refill.monthlyAllowanceCents,
+        ...(setsAllowance ? { monthlyAllowanceCents: refill.monthlyAllowanceCents } : {}),
         debtCents: refill.debtCents,
         ...(periodMovesForward && period.startMs !== null && period.endMs !== null
           ? { monthlyPeriodStart: new Date(period.startMs), monthlyPeriodEnd: new Date(period.endMs) }

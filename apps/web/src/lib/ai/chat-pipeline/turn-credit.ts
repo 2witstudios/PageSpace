@@ -1,4 +1,4 @@
-import type { CreditGateResult } from '@pagespace/lib/billing/credit-gate';
+import type { CreditGateResult, SpendFallback } from '@pagespace/lib/billing/credit-gate';
 import { PERSONAL_SPEND, resolvedSpend, type SpendTarget } from '@pagespace/lib/billing/spend-target';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 
@@ -10,11 +10,14 @@ import type { SubscriptionTier } from '@pagespace/lib/services/subscription-util
  *     the shape `ToolExecutionContext.creditSpend` carries.
  *   - `walletId`: the wallet the hold was placed on, settled against with it (WAL-5).
  *   - `entitlementTier`: the tier of whoever funds the call, for the pro-model gate (WAL-8).
+ *   - `fallback`: set only when the drive's rule moved the turn off the source it named
+ *     (SPEND-4): the turn tells the client, never switching silently.
  */
 export interface TurnCredit {
   spend: SpendTarget;
   walletId?: string;
   entitlementTier?: SubscriptionTier;
+  fallback?: SpendFallback;
 }
 
 /** A turn that has not gated (yet, or at all: a flat-rate provider, a solo /help). */
@@ -26,5 +29,29 @@ export function turnCreditAfterGate(spend: SpendTarget, gate: CreditGateResult):
     spend: resolvedSpend(spend, gate.spendSource),
     walletId: gate.walletId,
     entitlementTier: gate.entitlementTier,
+    ...(gate.fallback ? { fallback: gate.fallback } : {}),
+  };
+}
+
+/** The assistant-message data part that tells the client a turn fell back (SPEND-4). */
+export const SPEND_FALLBACK_PART_TYPE = 'data-spend-fallback' as const;
+
+export interface SpendFallbackPart {
+  type: typeof SPEND_FALLBACK_PART_TYPE;
+  id: string;
+  data: SpendFallback & { walletId: string | null };
+}
+
+/**
+ * The part a turn writes first when its gate fell back — the source it moved from and to,
+ * and the wallet actually held — so the chip and strip can show the new source. Null when
+ * the turn spent the source it named.
+ */
+export function spendFallbackPart(credit: TurnCredit, messageId: string): SpendFallbackPart | null {
+  if (!credit.fallback) return null;
+  return {
+    type: SPEND_FALLBACK_PART_TYPE,
+    id: `${messageId}-spend-fallback`,
+    data: { from: credit.fallback.from, to: credit.fallback.to, walletId: credit.walletId ?? null },
   };
 }

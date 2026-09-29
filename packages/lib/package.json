@@ -749,6 +749,26 @@
       "import": "./dist/billing/org-subscription-core.js",
       "require": "./dist/billing/org-subscription-core.js"
     },
+    "./test/wallet-leg-invariant": {
+      "types": "./dist/test/wallet-leg-invariant.d.ts",
+      "import": "./dist/test/wallet-leg-invariant.js",
+      "require": "./dist/test/wallet-leg-invariant.js"
+    },
+    "./organizations/status": {
+      "types": "./dist/organizations/status.d.ts",
+      "import": "./dist/organizations/status.js",
+      "require": "./dist/organizations/status.js"
+    },
+    "./organizations/status-core": {
+      "types": "./dist/organizations/status-core.d.ts",
+      "import": "./dist/organizations/status-core.js",
+      "require": "./dist/organizations/status-core.js"
+    },
+    "./billing/org-webhook-core": {
+      "types": "./dist/billing/org-webhook-core.d.ts",
+      "import": "./dist/billing/org-webhook-core.js",
+      "require": "./dist/billing/org-webhook-core.js"
+    },
     "./billing/wallet-funding-shell": {
       "types": "./dist/billing/wallet-funding-shell.d.ts",
       "import": "./dist/billing/wallet-funding-shell.js",
@@ -2892,6 +2912,18 @@
       ],
       "billing/org-subscription-core": [
         "./dist/billing/org-subscription-core.d.ts"
+      ],
+      "test/wallet-leg-invariant": [
+        "./dist/test/wallet-leg-invariant.d.ts"
+      ],
+      "organizations/status": [
+        "./dist/organizations/status.d.ts"
+      ],
+      "organizations/status-core": [
+        "./dist/organizations/status-core.d.ts"
+      ],
+      "billing/org-webhook-core": [
+        "./dist/billing/org-webhook-core.d.ts"
       ],
       "billing/wallet-funding-shell": [
         "./dist/billing/wallet-funding-shell.d.ts"

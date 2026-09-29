@@ -12,13 +12,18 @@ import { resolveWebhookMetadataTierForControlPlane } from './control-plane-tier'
 import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import { userEmailMatch } from '@pagespace/lib/auth/user-repository';
 import { applyStripeFunding } from '@pagespace/lib/billing/credit-funding';
-import { applyOrgPoolRefill } from '@pagespace/lib/billing/wallet-funding-shell';
 import { getCreditPack } from '@pagespace/lib/billing/credit-pricing';
 import { emitCreditsUpdated } from '@/lib/subscription/credit-balance';
 import { sendSubscriptionReceiptEmail, sendTopupReceiptEmail } from '@/lib/billing/send-payment-receipt-email';
 import { classifyDedupeOutcome, DEFAULT_LEASE_MS, type DedupeOutcome } from './dedupe';
 import { invoiceSubscriptionId, routeInvoice, routeSubscription } from './dedicated-routing';
 import { handleDedicatedSubscriptionEvent } from './dedicated-handlers';
+import {
+  orgForStripeCustomer,
+  routeOrgInvoicePaid,
+  routeOrgInvoicePaymentFailed,
+  routeOrgSubscriptionEvent,
+} from './org-handlers';
 
 export async function POST(request: NextRequest) {
   try {
@@ -59,7 +64,9 @@ export async function POST(request: NextRequest) {
     try {
       const insertedRows = await db
         .insert(stripeEvents)
-        .values({ id: event.id, type: event.type })
+        // createdAt is the lease anchor: written from the same clock the lease cutoff is read
+        // against, never the column's session-local now() (a non-UTC session would age it by hours).
+        .values({ id: event.id, type: event.type, createdAt: now })
         .onConflictDoNothing({ target: stripeEvents.id })
         .returning({ id: stripeEvents.id });
 
@@ -170,6 +177,12 @@ export async function POST(request: NextRequest) {
             );
             break;
           }
+          // ORG BEFORE PERSON (SEAT-7): an org customer's subscription is mirrored onto
+          // org_subscriptions and never reaches the personal tier handler; an org-tagged
+          // one on no org's customer is logged and applied nowhere (org-handlers.ts).
+          // Retryable, the owner lookup included: a throw outside the wrapper would mark
+          // the event processed and lose it.
+          if (await withFundingRetry(event.id, () => routeOrgSubscriptionEvent(subscription, event.id))) break;
           await handleSubscriptionChange(subscription);
           break;
         }
@@ -190,6 +203,9 @@ export async function POST(request: NextRequest) {
             );
             break;
           }
+          // Same org fork: an org subscription ending lapses the ORG (SEAT-9) and never
+          // sets a person's tier to free.
+          if (await withFundingRetry(event.id, () => routeOrgSubscriptionEvent(subscription, event.id))) break;
           await handleSubscriptionDeleted(subscription);
           break;
         }
@@ -261,6 +277,9 @@ export async function POST(request: NextRequest) {
             });
             break;
           }
+          // An org's failed payment mirrors its subscription (past_due keeps the org
+          // working and tells Owner and Admins; Stripe's dunning decides the lapse).
+          if (await withFundingRetry(event.id, () => routeOrgInvoicePaymentFailed(invoice, event.id))) break;
           await handlePaymentFailed(invoice);
           break;
         }
@@ -283,14 +302,13 @@ export async function POST(request: NextRequest) {
             });
             break;
           }
+          // ORG BEFORE PERSON (SEAT-7, MON-3): an org customer's invoice refills that
+          // org's pool and never the personal path; an org-tagged invoice on no org's
+          // customer funds nobody. A person's invoice (no org customer) never reaches the
+          // org path, so it can never fund an org pool. Once per invoice (ledger
+          // stripeRef); a failure rethrows so Stripe redelivers.
+          if (await withFundingRetry(event.id, () => routeOrgInvoicePaid(invoice, event.id))) break;
           await withFundingRetry(event.id, async () => {
-            // An ORG customer's invoice refills that org's pool (MON-3) and never the
-            // personal path: the org's Stripe customer is no person's, so the personal
-            // handlers would find nobody. Once per invoice (ledger stripeRef), and a
-            // failure rethrows so Stripe redelivers. Phase 3 wires the org
-            // subscription itself; until an org has a stripeCustomerId this is a no-op.
-            const pool = await applyOrgPoolRefill(invoice);
-            if (pool.kind !== 'not_org') return;
             await handleInvoicePaid(invoice);
             // Grant the monthly credit on each renewal. The grant is sized from what
             // this invoice actually PAID (invoice.amount_paid × the tier's included-
@@ -402,9 +420,9 @@ export async function POST(request: NextRequest) {
  * idempotent customer-link upsert, and acts only for mode 'subscription' — a credit-pack
  * top-up is mode 'payment'; its provisioning POST swallows its own errors).
  */
-async function withFundingRetry(eventId: string, run: () => Promise<void>) {
+async function withFundingRetry<T>(eventId: string, run: () => Promise<T>): Promise<T> {
   try {
-    await run();
+    return await run();
   } catch (err) {
     await db.delete(stripeEvents).where(eq(stripeEvents.id, eventId));
     throw err;
@@ -590,7 +608,13 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
     const customerId = session.customer as string;
     const customerEmail = session.customer_details?.email;
 
-    if (customerEmail) {
+    // An org's customer is never linked to a person (SEAT-1, SEAT-7): the payer's email
+    // would otherwise make the ORG's customer that person's, and the personal handlers
+    // would then read the org's subscription as the person's plan.
+    const customerOrgId = await orgForStripeCustomer(customerId);
+    if (customerOrgId) {
+      loggers.api.info('Checkout completed for an org customer; not linking it to a person', { customerId, orgId: customerOrgId });
+    } else if (customerEmail) {
       // Update user with stripe customer ID
       await db.update(users)
         .set({

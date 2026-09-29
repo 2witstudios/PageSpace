@@ -1,6 +1,6 @@
 {
-  "id": "2bbc1840-302e-47f2-bdde-a17243927471",
-  "prevId": "35685637-dfd1-48ee-9286-bd164adb30e8",
+  "id": "31f8fd3c-e866-4a8d-b023-5075296db298",
+  "prevId": "dd101236-97fb-4707-a1de-480f6772774f",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -18795,6 +18795,73 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.drive_spend_overrides": {
+      "name": "drive_spend_overrides",
+      "schema": "",
+      "columns": {
+        "userId": {
+          "name": "userId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "driveId": {
+          "name": "driveId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "drive_spend_overrides_userId_users_id_fk": {
+          "name": "drive_spend_overrides_userId_users_id_fk",
+          "tableFrom": "drive_spend_overrides",
+          "tableTo": "users",
+          "columnsFrom": [
+            "userId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "drive_spend_overrides_driveId_drives_id_fk": {
+          "name": "drive_spend_overrides_driveId_drives_id_fk",
+          "tableFrom": "drive_spend_overrides",
+          "tableTo": "drives",
+          "columnsFrom": [
+            "driveId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "drive_spend_overrides_pkey": {
+          "name": "drive_spend_overrides_pkey",
+          "columns": [
+            "userId",
+            "driveId"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.wallet_consumer_caps": {
       "name": "wallet_consumer_caps",
       "schema": "",
@@ -19188,6 +19255,13 @@
           "primaryKey": false,
           "notNull": false
         },
+        "alwaysOwnCredits": {
+          "name": "alwaysOwnCredits",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
         "createdAt": {
           "name": "createdAt",
           "type": "timestamp with time zone",
@@ -19350,6 +19424,10 @@
         "wallets_default_spend_source_valid": {
           "name": "wallets_default_spend_source_valid",
           "value": "\"wallets\".\"defaultSpendSource\" IS NULL OR (\"wallets\".\"defaultSpendSource\" IN ('drive_wallet', 'seat_allowance', 'own_credits') AND NOT (\"wallets\".\"ownerType\" = 'org' AND \"wallets\".\"subjectType\" IS NULL))"
+        },
+        "wallets_always_own_credits_personal_root": {
+          "name": "wallets_always_own_credits_personal_root",
+          "value": "NOT \"wallets\".\"alwaysOwnCredits\" OR (\"wallets\".\"ownerType\" = 'user' AND \"wallets\".\"subjectType\" IS NULL AND \"wallets\".\"parentWalletId\" IS NULL)"
         },
         "wallets_monthly_remaining_nonneg": {
           "name": "wallets_monthly_remaining_nonneg",

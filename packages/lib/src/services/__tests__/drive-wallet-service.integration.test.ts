@@ -21,7 +21,7 @@ import { drives } from '@pagespace/db/schema/core';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { creditHolds, creditLedger } from '@pagespace/db/schema/credits';
 import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
-import { wallets, walletFundingLegs } from '@pagespace/db/schema/wallets';
+import { wallets, walletFundingLegs, driveSpendOverrides, personalRootWalletOf } from '@pagespace/db/schema/wallets';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { CONSUMER_WALLET_FIELDS } from '../../billing/wallet-views';
@@ -34,6 +34,8 @@ import {
   donateToDrive,
   listMyWallets,
   setPersonalDefaultSource,
+  setAlwaysOwnCredits,
+  getAlwaysOwnCredits,
   getConversationSpend,
   setConversationSpend,
 } from '../drive-wallet-service';
@@ -109,6 +111,7 @@ async function build(): Promise<World> {
 }
 
 async function teardown(w: World): Promise<void> {
+  await db.delete(driveSpendOverrides).where(inArray(driveSpendOverrides.userId, w.userIds));
   await db.delete(conversations).where(inArray(conversations.userId, w.userIds));
   await db.delete(creditHolds).where(inArray(creditHolds.userId, w.userIds));
   await db.delete(creditLedger).where(inArray(creditLedger.userId, w.userIds));
@@ -291,6 +294,36 @@ describe('drive-wallet service (orgs on, real Postgres)', () => {
     expect((await listMyWallets(world.ids.marcus, 'session')).personal.defaultSpendSource).toBe('seat_allowance');
     await setPersonalDefaultSource(world.ids.marcus, null, 'session');
     expect((await listMyWallets(world.ids.marcus, 'session')).personal.defaultSpendSource).toBeNull();
+  });
+
+  it('SPEND-5 (partial) the person turns "Always my own credits" on and off, globally and for one drive, and reads it back', async () => {
+    if (!world) return;
+    const w = world;
+    expect(await getAlwaysOwnCredits(w.ids.marcus, w.productId)).toEqual({ ok: true, alwaysOwnCredits: false, alwaysOwnCreditsInDrive: false });
+
+    expect(await setAlwaysOwnCredits(w.ids.marcus, { driveId: null, enabled: true }, 'session')).toEqual({ ok: true, driveId: null, enabled: true });
+    expect(await setAlwaysOwnCredits(w.ids.marcus, { driveId: w.productId, enabled: true }, 'session')).toEqual({ ok: true, driveId: w.productId, enabled: true });
+    // Idempotent: turning an on switch on again changes nothing.
+    expect(await setAlwaysOwnCredits(w.ids.marcus, { driveId: w.productId, enabled: true }, 'session')).toMatchObject({ ok: true });
+    expect(await getAlwaysOwnCredits(w.ids.marcus, w.productId)).toEqual({ ok: true, alwaysOwnCredits: true, alwaysOwnCreditsInDrive: true });
+    expect((await db.select().from(wallets).where(personalRootWalletOf(w.ids.marcus)))[0]).toMatchObject({ alwaysOwnCredits: true });
+
+    await setAlwaysOwnCredits(w.ids.marcus, { driveId: null, enabled: false }, 'session');
+    await setAlwaysOwnCredits(w.ids.marcus, { driveId: w.productId, enabled: false }, 'session');
+    expect(await getAlwaysOwnCredits(w.ids.marcus, w.productId)).toEqual({ ok: true, alwaysOwnCredits: false, alwaysOwnCreditsInDrive: false });
+    expect(await db.select().from(driveSpendOverrides).where(eq(driveSpendOverrides.userId, w.ids.marcus))).toEqual([]);
+  });
+
+  it('SPEND-5 (partial) a per-drive switch can be set only for a drive the person can open; a token cannot set either switch ([D-OW-26])', async () => {
+    if (!world) return;
+    const w = world;
+    // Customer Research is Restricted and Marcus has not joined it.
+    expect(await setAlwaysOwnCredits(w.ids.marcus, { driveId: w.researchId, enabled: true }, 'session')).toMatchObject({ ok: false, status: 404 });
+    expect(await setAlwaysOwnCredits(w.ids.marcus, { driveId: `drive_${createId()}`, enabled: true }, 'session')).toMatchObject({ ok: false, status: 404 });
+    expect(await setAlwaysOwnCredits(w.ids.marcus, { driveId: null, enabled: true }, 'mcp')).toMatchObject({ ok: false, status: 403, code: 'mcp_token_cannot_change_spend_source' });
+    expect(await setAlwaysOwnCredits(w.ids.marcus, { driveId: w.productId, enabled: true }, 'mcp')).toMatchObject({ ok: false, status: 403, code: 'mcp_token_cannot_change_spend_source' });
+    expect(await db.select().from(driveSpendOverrides).where(eq(driveSpendOverrides.userId, w.ids.marcus))).toEqual([]);
+    expect((await db.select().from(wallets).where(personalRootWalletOf(w.ids.marcus)))[0]?.alwaysOwnCredits ?? false).toBe(false);
   });
 
   it('SPEND-2 (partial) SPEND-3 (partial) a conversation\'s source is chosen explicitly, persists, and the preview shows what the gate would spend', async () => {
