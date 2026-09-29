@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 // ============================================================================
 // The shared chat-pipeline entry — epic "Agent-Session Single Source of Truth",
@@ -233,5 +234,65 @@ describe('handleChatTurn — one entry, conversation-keyed strategy', () => {
 
     expect(res.status).toBe(500);
     expect(await res.json()).toEqual({ error: 'Failed to process chat request. Please try again.' });
+  });
+});
+
+// Time-to-first-token instrumentation: the turn timer is owned by this entry, so
+// what it can see (a stall in auth) and how a turn that never reached the model
+// is classified (a failure vs an ordinary refusal) is decided here.
+describe('handleChatTurn — turn timing', () => {
+  const endedLine = (level: 'warn' | 'debug') =>
+    vi.mocked(loggers.ai[level]).mock.calls.find(([message]) => message === 'AI turn ended with no model output');
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('given authentication stalls, should warn that the turn is stuck before it was authenticated', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    authenticateRequestWithOptions.mockReturnValue(new Promise(() => {}));
+
+    void handle(post({ messages: [] }), { surface: 'page-chat' });
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(loggers.ai.warn).toHaveBeenCalledWith(
+      'AI turn slow: no first token yet',
+      expect.objectContaining({ lastPhase: 'received', waitingOn: 'preflight' }),
+    );
+  });
+
+  it('given authentication fails, should still end the turn with a timing record', async () => {
+    authenticateRequestWithOptions.mockResolvedValue({ error: new Response(null, { status: 401 }) });
+
+    const res = await handle(post({ messages: [] }), { surface: 'page-chat' });
+
+    expect(res.status).toBe(401);
+    expect(endedLine('debug')?.[1]).toMatchObject({ outcome: 'no_generation', lastPhase: 'received' });
+  });
+
+  it('given the strategy answers a 500, should end the turn as an error', async () => {
+    runPageChatTurn.mockResolvedValueOnce(new Response('boom', { status: 500 }));
+
+    const res = await handle(post({ chatId: 'page-1', messages: [] }), { surface: 'page-chat' });
+
+    expect(res.status).toBe(500);
+    expect(endedLine('warn')?.[1]).toMatchObject({ outcome: 'error', lastPhase: 'authenticated' });
+  });
+
+  it('given the strategy throws, should end the turn as an error and rethrow the original error', async () => {
+    const failure = new Error('strategy blew up');
+    runGlobalChatTurn.mockRejectedValueOnce(failure);
+
+    await expect(handle(post({ messages: [] }), { surface: 'global-messages' })).rejects.toBe(failure);
+    expect(endedLine('warn')?.[1]).toMatchObject({ outcome: 'error' });
+  });
+
+  it('given the strategy refuses the turn quickly, should end it quietly as no generation', async () => {
+    runPageChatTurn.mockResolvedValueOnce(new Response('nope', { status: 403 }));
+
+    await handle(post({ chatId: 'page-1', messages: [] }), { surface: 'page-chat' });
+
+    expect(endedLine('debug')?.[1]).toMatchObject({ outcome: 'no_generation' });
+    expect(endedLine('warn')).toBeUndefined();
   });
 });

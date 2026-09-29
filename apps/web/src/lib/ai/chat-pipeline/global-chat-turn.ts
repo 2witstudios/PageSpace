@@ -40,7 +40,7 @@ import type { SubscriptionTier } from '@pagespace/lib/services/subscription-util
 import { broadcastChatUserMessage } from '@/lib/websocket';
 import { broadcastGlobalConversationAdded } from '@/lib/websocket/socket-utils';
 import { type StreamLifecycleHandle } from '@/lib/ai/core/stream-lifecycle';
-import { pumpAndRespond } from '@/lib/ai/chat-pipeline/pump-and-respond';
+import { pumpAndRespond, type TurnTimer } from '@/lib/ai/chat-pipeline/pump-and-respond';
 import { startChatGeneration } from './start-chat-generation';
 import { takeOverConversationStreams } from '@/lib/ai/core/stream-takeover';
 import { startGenerationExclusive } from '@/lib/ai/core/start-generation-exclusive';
@@ -146,6 +146,8 @@ export interface GlobalChatTurnContext {
    * on the `/api/ai/chat` surface, where the body is the only source.
    */
   urlConversationId?: string;
+  /** Time-to-first-token instrumentation, started when the request arrived. */
+  timer: TurnTimer;
 }
 
 /**
@@ -193,6 +195,7 @@ interface GlobalChatRequestBody {
 
 export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Response> {
   const startTime = Date.now();
+  const turnTimer = ctx.timer;
   let lifecycle: StreamLifecycleHandle | undefined;
   let activeStreamId: string | undefined;
   // Set once the assistant placeholder row has received a terminal write (onFinish). The outer
@@ -457,6 +460,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
     // `abortSignal.aborted` before deciding to retry, so an abort raised here
     // terminates the run rather than being read as a transient failure.
     const creditAbortController = holdId ? new AbortController() : null;
+    turnTimer.mark('credit_gate');
 
 
     // Resolve existing conversation or auto-create on first message (lazy creation).
@@ -686,6 +690,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
     if (isProviderError(providerResult)) {
       return createProviderErrorResponse(providerResult);
     }
+    turnTimer.mark('provider_ready');
 
     const { model, provider: currentProvider, modelName: currentModel } = providerResult;
 
@@ -752,6 +757,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
     // reader for durable messages is now the same seam the page chat uses, and
     // the query stops being spelled out a second time here.
     const dbMessages = await messageRepository.getMessagesByConversationId(conversationId);
+    turnTimer.mark('history_loaded');
 
     // Convert database messages to UI format
     const conversationHistory = await Promise.all(dbMessages.map(msg =>
@@ -1004,6 +1010,8 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
       nonCoreToolNames: nonCoreToolNamesPrompt,
     });
 
+    turnTimer.mark('system_prompt');
+
     let finalTools: ToolSet = {
       ...coreTools,
       tool_search: createToolSearchTool(
@@ -1210,6 +1218,13 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
       wasTruncated: contextCalculation.wasTruncated,
     });
 
+    turnTimer.mark('history_prepared');
+    turnTimer.annotate({
+      contextTokens: contextCalculation.totalTokens,
+      systemPromptTokens: contextCalculation.systemPromptTokens,
+      toolDefinitionTokens: contextCalculation.toolDefinitionTokens,
+    });
+
     const serverAssistantMessageId = createId();
     cleanupContext = { conversationId, serverAssistantMessageId, userId };
 
@@ -1261,6 +1276,8 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
       isShared: conversation.isShared === true,
       scope: { kind: 'global', userId },
     });
+    turnTimer.mark('generation_started');
+    turnTimer.annotate({ conversationId, messageId: serverAssistantMessageId, provider: currentProvider, model: currentModel });
 
     // Bind the terminal write to the abort itself. onAbort (below) already calls finish(true),
     // but it only fires while a streamText is live — and a cross-instance abort now WAITS for
@@ -1333,6 +1350,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
           logger: loggers.api,
           toSentMessages,
           buildStreamText: (messages) => {
+            turnTimer.modelRequest();
             const messagesWithContext = toSentMessages(messages);
             // Apply cache breakpoints: A) last message, B) summary/elision boundary.
             const cachedMessages = withCacheBreakpoints(messagesWithContext, stableBoundaryIndex);
@@ -1543,6 +1561,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
               retryAttempts: agentRun?.attempts,
               retryOutcome: agentRun?.finalOutcome,
               retryTerminalReason: agentRun?.terminalReason,
+              timing: turnTimer.summary(),
             }
           });
         } catch (trackingError) {
@@ -1579,7 +1598,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
     holdHandedOff = true;
 
 
-    return pumpAndRespond({ sdkStream, lifecycle: lifecycle!, streamId, request, channelId, conversationId });
+    return pumpAndRespond({ sdkStream, lifecycle: lifecycle!, streamId, request, channelId, conversationId, timer: turnTimer });
 
   } catch (error) {
     if (activeStreamId !== undefined) {
