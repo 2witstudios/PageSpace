@@ -13,7 +13,7 @@ import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factor
 import { BACKGROUND_HEAVY_PROVIDER, BACKGROUND_HEAVY_MODEL } from '@/lib/ai/core/ai-providers-config';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { AIMonitoring, discardUsageOutcome } from '@pagespace/lib/monitoring/ai-monitoring';
-import { reserveMemoryCall } from './memory-credit';
+import { reserveMemoryCall, type MemoryGateRefusal } from './memory-credit';
 import { getCurrentPersonalizationPages, updatePersonalizationPage } from './integration-service';
 
 import { MAX_FIELD_LENGTH, compactionTarget, type MemoryField } from './budgets';
@@ -86,14 +86,17 @@ export function needsCompaction(
   return content.length > MAX_FIELD_LENGTH[field];
 }
 
+/** A field's compaction: its (possibly unchanged) content, or the credit refusal that stopped it. */
+type CompactionOutcome = { content: string } | { creditRefusal: MemoryGateRefusal };
+
 /**
- * Compact a single personalization field.
+ * Compact a single personalization field under its own credit reservation.
  */
 export async function compactField(
   userId: string,
   field: MemoryField,
   content: string
-): Promise<string> {
+): Promise<CompactionOutcome> {
   const compactTo = compactionTarget(field);
 
   const providerResult = await createAIProvider(userId, {
@@ -107,7 +110,7 @@ export async function compactField(
       field,
       error: providerResult.error,
     });
-    return content;
+    return { content };
   }
 
   // Reserve before the model (SPEND-1). Refused: the page keeps its content, as when the
@@ -119,7 +122,7 @@ export async function compactField(
   });
   if (!reservation.allowed) {
     loggers.api.info('Memory compaction: skipped, credit gate refused', { userId, field, reason: reservation.reason });
-    return content;
+    return { creditRefusal: reservation.reason };
   }
 
   try {
@@ -171,7 +174,7 @@ Compact this by deleting anything that does not change AI behaviour. Output only
         userId,
         field,
       });
-      return content;
+      return { content };
     }
 
     if (compactedContent.length >= content.length) {
@@ -181,7 +184,7 @@ Compact this by deleting anything that does not change AI behaviour. Output only
         originalLength: content.length,
         compactedLength: compactedContent.length,
       });
-      return content;
+      return { content };
     }
 
     loggers.api.info('Memory compaction: field compacted', {
@@ -192,14 +195,14 @@ Compact this by deleting anything that does not change AI behaviour. Output only
       reduction: `${Math.round((1 - compactedContent.length / content.length) * 100)}%`,
     });
 
-    return compactedContent;
+    return { content: compactedContent };
   } catch (error) {
     loggers.api.error('Memory compaction: generation error', {
       userId,
       field,
       error,
     });
-    return content;
+    return { content };
   }
 }
 
@@ -208,7 +211,7 @@ Compact this by deleting anything that does not change AI behaviour. Output only
  */
 export async function checkAndCompactIfNeeded(
   userId: string
-): Promise<{ compacted: boolean; fields: MemoryField[] }> {
+): Promise<{ compacted: boolean; fields: MemoryField[]; creditRefusal?: MemoryGateRefusal }> {
   const current = await getCurrentPersonalizationPages(userId);
 
   const fieldsToCompact: MemoryField[] = [];
@@ -232,7 +235,15 @@ export async function checkAndCompactIfNeeded(
 
   for (const field of fieldsToCompact) {
     const originalContent = current[field] ?? '';
-    const compactedContent = await compactField(userId, field, originalContent);
+    // Each field's model call reserves its own credits first (reserveMemoryCall). A
+    // refusal compacts and writes nothing for that field, and stops the remaining
+    // fields: their pages stay exactly as the user and the evaluator left them, and
+    // the next run tries again. Fields already compacted were paid for and keep.
+    const outcome = await compactField(userId, field, originalContent);
+    if ('creditRefusal' in outcome) {
+      return { compacted: compactedFields.length > 0, fields: compactedFields, creditRefusal: outcome.creditRefusal };
+    }
+    const compactedContent = outcome.content;
 
     if (compactedContent === originalContent) continue;
 
