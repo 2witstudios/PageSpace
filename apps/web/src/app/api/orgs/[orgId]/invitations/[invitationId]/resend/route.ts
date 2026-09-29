@@ -5,6 +5,7 @@ import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/l
 import { resendInvitation } from '@pagespace/lib/organizations/invitations';
 import { authorizeOrgRequest, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 import { deliverOrgInvite } from '@/lib/orgs/org-invite-delivery';
+import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
 
 /**
  * POST /api/orgs/[orgId]/invitations/[invitationId]/resend — Owner and Admins
@@ -49,6 +50,7 @@ export async function POST(
         loggers.api.error('Failed to resend organization invitation email', result.cause as Error, { orgId });
         return NextResponse.json({ error: 'Failed to send the invitation email' }, { status: 502 });
       }
+      if (result.reason === 'org_lapsed') return orgLapsedResponse(result.message);
       return NextResponse.json({ error: 'Invitation not found' }, { status: 404 });
     }
 

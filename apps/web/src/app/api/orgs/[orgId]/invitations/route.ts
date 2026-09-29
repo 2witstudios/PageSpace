@@ -4,6 +4,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 import { createOrRotateInvitation, listOpenInvitations } from '@pagespace/lib/organizations/invitations';
+import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
 import { authorizeOrgRequest, ORG_READ_AUTH, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 import { inviteCreateSchema } from '@/lib/orgs/org-schemas';
 import { deliverOrgInvite } from '@/lib/orgs/org-invite-delivery';
@@ -75,6 +76,7 @@ export async function POST(request: Request, context: Context) {
         loggers.api.error('Failed to send organization invitation email', result.cause as Error, { orgId });
         return NextResponse.json({ error: 'Failed to send the invitation email' }, { status: 502 });
       }
+      if (result.reason === 'org_lapsed') return orgLapsedResponse(result.message);
       const error =
         result.reason === 'already_member'
           ? 'That person is already a member of this organization'

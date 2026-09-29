@@ -18,7 +18,8 @@ export const ORG_WRITE_AUTH = { allow: ['session'] as const, requireCSRF: true }
 type AuthOptions = typeof ORG_READ_AUTH | typeof ORG_WRITE_AUTH;
 
 export type OrgGate =
-  | { ok: true; userId: string }
+  /** `role` is the caller's org role, set by authorizeOrgRequest (not by authenticateOrgRequest). */
+  | { ok: true; userId: string; role?: OrgRole }
   | { ok: false; response: Response };
 
 /** 404 exactly as an unknown route would answer, so dark orgs reveal nothing. */
@@ -55,5 +56,5 @@ export async function authorizeOrgRequest(
     });
     return { ok: false, response: NextResponse.json({ error }, { status: decision.status }) };
   }
-  return { ok: true, userId: gate.userId };
+  return { ok: true, userId: gate.userId, role: decision.role };
 }

@@ -130,12 +130,22 @@ vi.mock('@pagespace/lib/billing/credit-funding', () => ({
   applyStripeFunding: mockApplyStripeFunding,
 }));
 
-// The org pool refill shell (MON-3) is tested against Postgres in
-// packages/lib/src/billing/__tests__/wallet-funding.integration.test.ts; here only the
-// fork: an org customer's invoice goes to the pool and never to the personal path.
-const mockApplyOrgPoolRefill = vi.hoisted(() => vi.fn());
-vi.mock('@pagespace/lib/billing/wallet-funding-shell', () => ({
-  applyOrgPoolRefill: mockApplyOrgPoolRefill,
+// The org fork (SEAT-7): org-handlers resolves whose event it is and handles an org's.
+// It is tested against Postgres in org-webhook.integration.test.ts; here only the fork:
+// an org's event (route fn → true) never reaches the personal path, a person's
+// (→ false) takes it unchanged.
+const { mockRouteOrgSubscriptionEvent, mockRouteOrgInvoicePaid, mockRouteOrgInvoicePaymentFailed, mockOrgForStripeCustomer } =
+  vi.hoisted(() => ({
+    mockRouteOrgSubscriptionEvent: vi.fn(),
+    mockRouteOrgInvoicePaid: vi.fn(),
+    mockRouteOrgInvoicePaymentFailed: vi.fn(),
+    mockOrgForStripeCustomer: vi.fn(),
+  }));
+vi.mock('../org-handlers', () => ({
+  routeOrgSubscriptionEvent: mockRouteOrgSubscriptionEvent,
+  routeOrgInvoicePaid: mockRouteOrgInvoicePaid,
+  routeOrgInvoicePaymentFailed: mockRouteOrgInvoicePaymentFailed,
+  orgForStripeCustomer: mockOrgForStripeCustomer,
 }));
 
 // The receipt sender does its own I/O (Resend, optional Stripe payment-intent lookup)
@@ -288,8 +298,11 @@ const mockUser = (overrides: Partial<{
 describe('POST /api/stripe/webhook', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // Default: the customer is no org's, so the personal path owns every invoice.
-    mockApplyOrgPoolRefill.mockResolvedValue({ kind: 'not_org' });
+    // Default: the customer is no org's, so the personal path owns every event.
+    mockRouteOrgSubscriptionEvent.mockResolvedValue(false);
+    mockRouteOrgInvoicePaid.mockResolvedValue(false);
+    mockRouteOrgInvoicePaymentFailed.mockResolvedValue(false);
+    mockOrgForStripeCustomer.mockResolvedValue(null);
 
     // Set required environment variable
     process.env.STRIPE_WEBHOOK_SECRET = 'whsec_test_secret';
@@ -804,8 +817,8 @@ describe('POST /api/stripe/webhook', () => {
       expect(mockApplyStripeFunding).toHaveBeenCalledWith(event, { tier: undefined });
     });
 
-    it('MON-3 (partial) an org customer invoice.paid refills the org pool and never reaches the personal funding path', async () => {
-      mockApplyOrgPoolRefill.mockResolvedValueOnce({ kind: 'granted', orgId: 'org_1', walletId: 'w_pool', allowanceCents: 4800 });
+    it('MON-3 (partial) SEAT-7 (partial) an org customer invoice.paid goes to the org fork and never reaches the personal funding path', async () => {
+      mockRouteOrgInvoicePaid.mockResolvedValueOnce(true);
       const invoice = mockInvoice({ amountPaid: 8000 });
       const event = mockStripeEvent('invoice.paid', invoice);
       mockStripeWebhooksConstructEvent.mockReturnValue(event);
@@ -819,12 +832,13 @@ describe('POST /api/stripe/webhook', () => {
       const response = await POST(request);
 
       expect(response.status).toBe(200);
-      expect(mockApplyOrgPoolRefill).toHaveBeenCalledTimes(1);
-      expect(mockApplyOrgPoolRefill).toHaveBeenCalledWith(invoice);
+      expect(mockRouteOrgInvoicePaid).toHaveBeenCalledTimes(1);
+      expect(mockRouteOrgInvoicePaid).toHaveBeenCalledWith(invoice, event.id);
       expect(mockApplyStripeFunding).not.toHaveBeenCalled();
+      expect(mockSendSubscriptionReceiptEmail).not.toHaveBeenCalled();
     });
 
-    it('a personal customer invoice.paid asks the pool path first, then funds the personal wallet', async () => {
+    it('SEAT-7 (partial) a personal customer invoice.paid asks the org fork first, then funds the personal wallet', async () => {
       const event = mockStripeEvent('invoice.paid', mockInvoice({ amountPaid: 1500 }));
       mockStripeWebhooksConstructEvent.mockReturnValue(event);
 
@@ -837,12 +851,12 @@ describe('POST /api/stripe/webhook', () => {
       const response = await POST(request);
 
       expect(response.status).toBe(200);
-      expect(mockApplyOrgPoolRefill).toHaveBeenCalledTimes(1);
+      expect(mockRouteOrgInvoicePaid).toHaveBeenCalledTimes(1);
       expect(mockApplyStripeFunding).toHaveBeenCalledTimes(1);
     });
 
-    it('returns 500 (retryable) when the org pool refill throws on invoice.paid', async () => {
-      mockApplyOrgPoolRefill.mockRejectedValueOnce(new Error('db boom'));
+    it('returns 500 (retryable) when the org fork throws on invoice.paid, and clears the claim so Stripe redelivers', async () => {
+      mockRouteOrgInvoicePaid.mockRejectedValueOnce(new Error('db boom'));
       const event = mockStripeEvent('invoice.paid', mockInvoice());
       mockStripeWebhooksConstructEvent.mockReturnValue(event);
 
@@ -856,6 +870,7 @@ describe('POST /api/stripe/webhook', () => {
 
       expect(response.status).toBe(500);
       expect(mockApplyStripeFunding).not.toHaveBeenCalled();
+      expect(mockDeleteWhere).toHaveBeenCalled();
     });
 
     it('returns 500 (retryable) when funding throws on invoice.paid', async () => {
@@ -1498,10 +1513,75 @@ describe('POST /api/stripe/webhook', () => {
 
       await POST(request);
 
+      // createdAt (the claim-lease anchor) is written by the app clock, not the column's session-local default.
       expect(mockInsertValues).toHaveBeenCalledWith({
         id: event.id,
         type: event.type,
+        createdAt: expect.any(Date),
       });
+    });
+  });
+
+  describe('org fork: org events before the personal handlers', () => {
+    const post = async (event: unknown) => {
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest;
+      return POST(request);
+    };
+
+    it("SEAT-7 (partial) an org's customer.subscription.updated is handled by the org fork and never writes a person's tier", async () => {
+      mockRouteOrgSubscriptionEvent.mockResolvedValueOnce(true);
+      const subscription = mockSubscription({ customer: 'cus_org' });
+      const event = mockStripeEvent('customer.subscription.updated', subscription);
+      const response = await post(event);
+      expect(response.status).toBe(200);
+      expect(mockRouteOrgSubscriptionEvent).toHaveBeenCalledWith(subscription, event.id);
+      expect(mockTxInsertValues).not.toHaveBeenCalled();
+      expect(mockUpdateSet).not.toHaveBeenCalledWith(expect.objectContaining({ subscriptionTier: expect.anything() }));
+    });
+
+    it("SEAT-7 (partial) SEAT-9 (partial) an org's customer.subscription.deleted never downgrades a person to free", async () => {
+      mockRouteOrgSubscriptionEvent.mockResolvedValueOnce(true);
+      const response = await post(mockStripeEvent('customer.subscription.deleted', mockSubscription({ customer: 'cus_org', status: 'canceled' })));
+      expect(response.status).toBe(200);
+      expect(mockUpdateSet).not.toHaveBeenCalledWith(expect.objectContaining({ subscriptionTier: 'free' }));
+    });
+
+    it("SEAT-7 (partial) a person's subscription event asks the org fork, then takes the personal path unchanged", async () => {
+      const response = await post(mockStripeEvent('customer.subscription.updated', mockSubscription()));
+      expect(response.status).toBe(200);
+      expect(mockRouteOrgSubscriptionEvent).toHaveBeenCalledTimes(1);
+      expect(mockTxInsertValues).toHaveBeenCalled();
+    });
+
+    it("SEAT-7 (partial) an org's invoice.payment_failed goes to the org fork, not the personal log path", async () => {
+      mockRouteOrgInvoicePaymentFailed.mockResolvedValueOnce(true);
+      const invoice = mockInvoice();
+      const event = mockStripeEvent('invoice.payment_failed', invoice);
+      const response = await post(event);
+      expect(response.status).toBe(200);
+      expect(mockRouteOrgInvoicePaymentFailed).toHaveBeenCalledWith(invoice, event.id);
+      expect(mockSelectWhere).not.toHaveBeenCalled();
+    });
+
+    it('SEAT-7 (partial) a failure in the org fork (owner lookup included) is retryable: 500 and the claim is cleared', async () => {
+      mockRouteOrgSubscriptionEvent.mockRejectedValueOnce(new Error('pool timeout'));
+      const response = await post(mockStripeEvent('customer.subscription.updated', mockSubscription({ customer: 'cus_org' })));
+      expect(response.status).toBe(500);
+      expect(mockDeleteWhere).toHaveBeenCalled();
+      expect(mockTxInsertValues).not.toHaveBeenCalled();
+    });
+
+    it("SEAT-1 (partial) checkout completed on an ORG's customer is never linked to the paying person", async () => {
+      mockOrgForStripeCustomer.mockResolvedValueOnce('org_northwind');
+      const session = mockCheckoutSession({ mode: 'subscription', customer: 'cus_org', customerEmail: 'jono@northwind.test' });
+      const response = await post(mockStripeEvent('checkout.session.completed', session));
+      expect(response.status).toBe(200);
+      expect(mockUpdateSet).not.toHaveBeenCalledWith(expect.objectContaining({ stripeCustomerId: 'cus_org' }));
     });
   });
 });

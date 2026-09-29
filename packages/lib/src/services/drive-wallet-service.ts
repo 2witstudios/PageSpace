@@ -53,6 +53,7 @@ import { formatCreditCount } from '../billing/money-model';
 import { toSubscriptionTier } from '../billing/subscription-tiers';
 import { planDeleteWallet, planTopUp, planWalletPatch, type DeleteBlocker, type WalletPatchInput } from '../billing/wallet-admin';
 import { donateToDriveWallet } from '../billing/wallet-funding-shell';
+import { checkOrgActive } from '../organizations/status';
 import { userConsumerKey, utcDayStartMs, utcMonthStartMs, type SpendSourceKind } from '../billing/wallet-core';
 import {
   capRemainingCents,
@@ -119,6 +120,18 @@ async function walletAccess(userId: string, driveId: string, credential: WalletC
 
 function requireAction(access: WalletAccess, action: WalletAction): WalletServiceError | null {
   return mayTakeWalletAction(access.viewer, action, { orgDrive: access.orgDrive }) ? null : forbidden(action);
+}
+
+/**
+ * SEAT-9: the org pool and its allocations are an org-only capability. While the drive's
+ * org is lapsed every wallet WRITE on an org drive is refused (allocate, rules, pause,
+ * delete, top up, donate) — nothing moves, so no credit is deleted or reallocated; reads
+ * stay open. A personal drive's wallet has no org and is never affected.
+ */
+async function requireOrgActiveForWrite(access: WalletAccess): Promise<WalletServiceError | null> {
+  if (access.standing.orgId === null) return null;
+  const active = await checkOrgActive(access.standing.orgId);
+  return active.ok ? null : { ok: false, status: active.status, code: active.code, message: active.message };
 }
 
 // ---------------------------------------------------------------------------
@@ -310,7 +323,7 @@ export async function createDriveWallet(
   if (refused) return refused;
   const access = await walletAccess(userId, driveId, credential);
   if (!access.ok) return access;
-  const denied = requireAction(access, 'create');
+  const denied = requireAction(access, 'create') ?? (await requireOrgActiveForWrite(access));
   if (denied) return denied;
   const plan = planWalletPatch({ allocationCents: input.allocationCents }, { status: 'active', debtCents: 0 });
   if (plan.kind === 'refuse') return { ok: false, status: 400, code: plan.reason, message: 'The allocation must be a whole, non-negative number of cents' };
@@ -365,6 +378,8 @@ export async function updateDriveWallet(
   if (refused) return refused;
   const access = await walletAccess(userId, driveId, credential);
   if (!access.ok) return access;
+  const lapsed = await requireOrgActiveForWrite(access);
+  if (lapsed) return lapsed;
 
   const outcome = await db.transaction(async (tx): Promise<WalletServiceError | null> => {
     const [row] = await tx
@@ -394,7 +409,7 @@ export async function deleteDriveWallet(userId: string, driveId: string, credent
   if (refused) return refused;
   const access = await walletAccess(userId, driveId, credential);
   if (!access.ok) return access;
-  const denied = requireAction(access, 'delete');
+  const denied = requireAction(access, 'delete') ?? (await requireOrgActiveForWrite(access));
   if (denied) return denied;
 
   return db.transaction(async (tx): Promise<{ ok: true } | WalletServiceError> => {
@@ -445,7 +460,7 @@ export async function topUpDriveWallet(
   if (refused) return refused;
   const access = await walletAccess(userId, driveId, credential);
   if (!access.ok) return access;
-  const denied = requireAction(access, 'top_up');
+  const denied = requireAction(access, 'top_up') ?? (await requireOrgActiveForWrite(access));
   if (denied) return denied;
   if (!isBillingEnabled()) return { ok: false, status: 409, code: 'billing_disabled', message: 'Billing is not enabled on this deployment' };
 
@@ -563,7 +578,7 @@ export async function donateToDrive(
   if (refused) return refused;
   const access = await walletAccess(userId, driveId, credential);
   if (!access.ok) return access;
-  const denied = requireAction(access, 'donate');
+  const denied = requireAction(access, 'donate') ?? (await requireOrgActiveForWrite(access));
   if (denied) return denied;
   const target = await driveWalletRow(db, driveId);
   if (!target) return { ok: false, status: 404, code: 'no_wallet', message: 'This drive has no wallet' };
