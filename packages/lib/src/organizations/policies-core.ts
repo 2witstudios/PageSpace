@@ -121,7 +121,8 @@ const SPECS: { [K in OrgPolicyKey]: FieldSpec<OrgPolicies[K]> } = {
   publishWeb: { default: true, strictest: false, normalize: bool },
   customDomains: { default: true, strictest: false, normalize: bool },
   whoCanInvite: { default: 'admins', strictest: 'admins', normalize: oneOf(ACTOR_POLICIES) },
-  whoCanCreateDrives: { default: 'admins', strictest: 'admins', normalize: oneOf(ACTOR_POLICIES) },
+  // Every member may create org drives today (DRV-3 without a policy), so that is the default; a damaged value is admins only.
+  whoCanCreateDrives: { default: 'members', strictest: 'admins', normalize: oneOf(ACTOR_POLICIES) },
   openDriveRoleFloor: { default: 'view', strictest: 'edit', normalize: oneOf(OPEN_ROLE_FLOORS) },
   seatAllowanceCents: { default: DEFAULT_SEAT_ALLOWANCE_CENTS, strictest: 0, normalize: wholeCents },
   walletFallback: { default: 'refuse', strictest: 'refuse', normalize: oneOf(WALLET_FALLBACKS) },

@@ -25,6 +25,7 @@ export default defineConfig({
       'src/services/__tests__/org-drive-visibility-lead.integration.test.ts',
       'src/permissions/__tests__/org-drive-directory.integration.test.ts',
       'src/organizations/__tests__/policies.integration.test.ts',
+      'src/services/__tests__/org-drive-policy.integration.test.ts',
       'src/organizations/__tests__/invite-policy.integration.test.ts',
       'src/permissions/__tests__/guest-admission.integration.test.ts',
       'src/permissions/__tests__/guest-holds.integration.test.ts',
