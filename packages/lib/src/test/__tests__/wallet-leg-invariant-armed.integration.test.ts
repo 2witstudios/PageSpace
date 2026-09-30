@@ -1,7 +1,7 @@
 /**
  * Proves the lib integration harness is ARMED for the funding-legs invariant (D-OW-13):
  * this file sets no GUC and installs nothing itself, so it only passes when
- * integration-db-teardown.ts did both — a deleted SET or install line fails here instead of
+ * integration-wallet-arming.ts did both — a deleted SET or install line fails here instead of
  * silently turning the catch-all off.
  *
  * Integration config only (vitest.integration.config.ts, CI's lib `test:integration` step):
