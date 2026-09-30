@@ -93,6 +93,15 @@
 # renewal. Idempotent per period, so a repeated or overlapping tick resets once.
 15 * * * * cron-curl GET __WEB_URL__/api/cron/reset-wallet-allocations >> /var/log/cron/reset-wallet-allocations.log 2>&1
 
+# Org seat release - Every 15 minutes
+# Removing an org member frees their seat at PERIOD END (SEAT-5): nothing is written to Stripe
+# when they leave, so a re-add inside the period reuses the paid seat. This tick finds org
+# subscriptions whose period ends within the hour and sets the extra-seat quantity to the seats
+# actually held (lowered without proration, or restored when Stripe bills fewer than are held),
+# so the renewal invoice bills the right count. Four ticks fit the window, so one failed run is
+# retried before the boundary. Idempotent; a replayed write carries the same idempotency key.
+*/15 * * * * flock -n /run/release-org-seats.lock cron-curl GET __WEB_URL__/api/cron/release-org-seats >> /var/log/cron/release-org-seats.log 2>&1 || echo "$(date -u) tick skipped (lock held) or request failed" >> /var/log/cron/release-org-seats.log
+
 # Machine storage reconcile - Hourly
 # Bills each Terminal Machine's persistent storage from its last persisted
 # measurement (see machine-storage-reconcile.ts in @pagespace/lib); watermarks

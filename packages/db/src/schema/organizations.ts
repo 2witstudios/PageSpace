@@ -38,6 +38,10 @@ export const organizations = pgTable('organizations', {
   policies: jsonb('policies').$type<Record<string, unknown>>().default(sql`'{}'::jsonb`).notNull(),
   stripeCustomerId: text('stripeCustomerId').unique(),
   stripeSubscriptionId: text('stripeSubscriptionId'),
+  // SEAT-4: whether inviting past the purchased seat count raises the Stripe extra-seat quantity
+  // (true) or is refused (false). A BILLING setting, not an access policy: it is deliberately not
+  // in `policies`. Off by default, so nothing is ever bought without the Owner saying so.
+  seatAutoAdd: boolean('seatAutoAdd').default(false).notNull(),
   createdAt: timestamp('createdAt', { mode: 'date' }).default(utcNow).notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).default(utcNow).notNull().$onUpdate(() => new Date()),
 }, (table) => ({
