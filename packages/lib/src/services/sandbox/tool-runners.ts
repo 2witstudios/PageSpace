@@ -375,7 +375,7 @@ export function safeLogWarn(
 // error-level line for every free-tier user hitting their own plan ceiling is
 // noise that trains the on-call to ignore this logger.
 const AUTHZ_DENY_REASONS = new Set([
-  'no_drive_access', 'insufficient_role', 'no_agent_access', 'tier_ineligible', 'org_wallet_unavailable', 'org_wallet_paused', 'org_wallet_empty', 'kill_switch_off', 'no_machine',
+  'no_drive_access', 'insufficient_role', 'no_agent_access', 'org_policy', 'tier_ineligible', 'org_wallet_unavailable', 'org_wallet_paused', 'org_wallet_empty', 'kill_switch_off', 'no_machine',
   'session_runtime_exceeded', 'session_limit_reached',
   // A legacy conversation that predates sessions has no working context to run
   // in — an expected refusal (not an infra fault), so it belongs here rather
@@ -405,6 +405,8 @@ export type SandboxToolDenialReason =
   | 'no_drive_access'
   | 'insufficient_role'
   | 'no_agent_access'
+  /** POL-10: the drive's org has turned cloud sandboxes off. Nothing started. */
+  | 'org_policy'
   | 'no_machine'
   | 'session_runtime_exceeded'
   | 'credit_exhausted'
@@ -497,6 +499,7 @@ export const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
   no_drive_access: 'You do not have access to run code in this drive.',
   insufficient_role: 'Running code requires edit access to this drive.',
   no_agent_access: 'This agent is not permitted to run code in this drive.',
+  org_policy: "This organization doesn't allow cloud sandboxes.",
   no_machine: 'No machine is configured for this run.',
   session_runtime_exceeded:
     "This session's sandbox has been running continuously for too long. Wait for it to go idle, or switch to a different session.",

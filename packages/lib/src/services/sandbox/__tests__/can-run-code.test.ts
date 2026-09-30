@@ -64,9 +64,55 @@ function makeDeps(overrides: Partial<CanRunCodeDeps> = {}): CanRunCodeDeps {
     getUserSubscriptionTier: async () => 'pro',
     getAgentAccessLevel: async () => agentEditPerms,
     isCodeExecutionEnabled: () => true,
+    getDriveOrgPolicies: async () => null,
     ...overrides,
   };
 }
+
+import { DEFAULT_ORG_POLICIES } from '../../../organizations/policies-core';
+
+describe('POL-10 (partial) the org cloud-sandbox switch', () => {
+  const policies = (cloudSandbox: boolean) => async () => ({ ...DEFAULT_ORG_POLICIES, cloudSandbox });
+
+  it('refuses a drive member when the org has cloud sandboxes off', async () => {
+    const result = await canRunCode({ userId: 'u1', driveId: 'd1', deps: makeDeps({ getDriveOrgPolicies: policies(false) }) });
+    expect(result).toEqual({ ok: false, reason: 'org_policy' });
+  });
+
+  it('refuses an agent-origin run the same way', async () => {
+    const result = await canRunCode({
+      userId: 'u1', driveId: 'd1', requestOrigin: 'agent', agentPageId: 'a1',
+      deps: makeDeps({ getDriveOrgPolicies: policies(false) }),
+    });
+    expect(result).toEqual({ ok: false, reason: 'org_policy' });
+  });
+
+  it('allows when the org leaves it on', async () => {
+    const result = await canRunCode({ userId: 'u1', driveId: 'd1', deps: makeDeps({ getDriveOrgPolicies: policies(true) }) });
+    expect(result.ok).toBe(true);
+  });
+
+  it('a drive with no org is unrestricted', async () => {
+    const result = await canRunCode({ userId: 'u1', driveId: 'd1', deps: makeDeps({ getDriveOrgPolicies: async () => null }) });
+    expect(result.ok).toBe(true);
+  });
+
+  it('a caller with no access to the drive is told about access, never about the policy', async () => {
+    const result = await canRunCode({
+      userId: 'u1', driveId: 'd1',
+      deps: makeDeps({ getUserDrivePermissions: async () => null, getDriveOrgPolicies: policies(false) }),
+    });
+    expect(result).toEqual({ ok: false, reason: 'no_drive_access' });
+  });
+
+  it('a policy read that throws fails closed', async () => {
+    const result = await canRunCode({
+      userId: 'u1', driveId: 'd1',
+      deps: makeDeps({ getDriveOrgPolicies: async () => { throw new Error('db down'); } }),
+    });
+    expect(result.ok).toBe(false);
+  });
+});
 
 describe('canRunCode', () => {
   it('given an admin drive member in cloud with the kill-switch on, should allow', async () => {

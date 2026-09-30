@@ -349,7 +349,7 @@ describe('executeWorkflow', () => {
     test.each(['cron', 'taskTriggers', 'calendarTriggers', 'webhookTriggers'] as const)('POL-9 autonomy OFF skips a %s run before any credit is reserved or model built, finalizing it cancelled with the policy message', async (table) => {
       setupSelectChain([mockAgent], [mockDrive]);
       off();
-      const admit = vi.fn(async () => ({ admitted: true as const }));
+      const admit = vi.fn(async () => ({ admitted: true as const, release: vi.fn() }));
 
       const result = await executeWorkflow(fire(table), { admit });
 
