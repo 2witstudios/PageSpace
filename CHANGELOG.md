@@ -17,6 +17,13 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   policy is turned back on. With guests set to require approval, a person invited from outside, or who
   opens a share link, waits in an approval queue and holds no access until an Owner or Admin approves.
   Policies take effect immediately and only ever apply to the organization's own drives.
+- **Organization policies for members, AI, compute and services** — an organization Owner or Admin can
+  choose who may invite members and create drives, which AI models and providers its drives may use, whether
+  agents may run on their own (mentions, schedules, triggers) or be added from other drives, whether cloud
+  sandboxes, persistent environments and published apps are allowed, and which services a drive may connect.
+  Each applies the moment it changes and only to the organization's own drives. Nothing is deleted when a
+  policy turns something off: agents, environments, apps and connections are paused and come back when it is
+  turned on again, and a model the organization does not allow is refused rather than replaced by another.
 - **Organization seats follow your members** — an organization's Business plan includes 5 seats, and
   each accepted member or pending invitation takes one; guests, agents and apps never do. Inviting
   past your purchased seats either adds a seat automatically (billed pro rata) when the Owner has
