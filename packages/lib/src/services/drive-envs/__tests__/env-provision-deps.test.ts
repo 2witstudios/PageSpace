@@ -39,6 +39,7 @@ vi.mock('../../sandbox/can-run-code', () => ({
 }));
 
 import { buildEnvProvisionDeps, ensureDriveEnvSandbox } from '../env-provision-deps';
+import { DEFAULT_ORG_POLICIES } from '../../../organizations/policies-core';
 import { makeLocalRecord } from './fakes';
 import { deriveDriveEnvSpriteKey } from '../../../drive-envs/env-sprite-key';
 import { deriveAgentSessionSpriteKey } from '../../../agent-workspaces/workspace-sprite-key';
@@ -212,11 +213,29 @@ describe('ensureDriveEnvSandbox', () => {
       deps: {
         store: { ...noopStore, findById: async () => null, findLocalByEnvId: async () => null },
         host: noopHost,
+        getDriveOrgPolicies: async () => null,
         resolvePayer: async () => ({ payerId: DRIVE_OWNER_ID, tier: 'pro' }),
       },
     });
 
     expect(result).toEqual({ ok: false, reason: 'provision_failed', detail: 'env_not_found' });
+  });
+
+  it('POL-10 (partial): an org that turned persistent environments off stops an EXISTING env from starting, before any host call', async () => {
+    const provision = vi.fn(async () => ({ sandboxId: 'pgs-should-never-exist', spriteInstanceId: 'inst-x' }));
+    const result = await ensureDriveEnvSandbox({
+      envId: ENV_ID,
+      intent: 'ensure',
+      requesterId: REQUESTER_ID,
+      deps: {
+        store: { ...noopStore, findById: async () => envRow, findLocalByEnvId: async () => null },
+        host: { ...noopHost, provision } as never,
+        getDriveOrgPolicies: async () => ({ ...DEFAULT_ORG_POLICIES, persistentEnvironments: false }),
+        resolvePayer: async () => ({ payerId: DRIVE_OWNER_ID, tier: 'pro' }),
+      },
+    });
+    expect(result).toEqual({ ok: false, reason: 'provision_failed', detail: 'org_policy' });
+    expect(provision).not.toHaveBeenCalled();
   });
 
   it('given a vanished DRIVE, should fail closed rather than fold under another tenant', async () => {
@@ -230,6 +249,7 @@ describe('ensureDriveEnvSandbox', () => {
       deps: {
         store: { ...noopStore, findById: async () => envRow, findLocalByEnvId: async () => null },
         host: noopHost,
+        getDriveOrgPolicies: async () => null,
         resolvePayer: async () => {
           resolved += 1;
           return null;
@@ -291,6 +311,7 @@ describe('ensureDriveEnvSandbox', () => {
         deps: {
           store: { ...noopStore, findById: async () => localRow, findLocalByEnvId: async () => input.sibling },
           host: host.host,
+          getDriveOrgPolicies: async () => null,
           resolvePayer: async () => ({ payerId: DRIVE_OWNER_ID, tier: 'pro' }),
           liveConnection: input.liveConnection ?? (() => 'connected'),
           localEnvsEnabled: input.flag ?? true,
@@ -453,6 +474,7 @@ describe('ensureDriveEnvSandbox', () => {
         deps: {
           store: { ...noopStore, findById: async () => envRow, findLocalByEnvId: async () => null },
           host: host.host,
+          getDriveOrgPolicies: async () => null,
           resolvePayer: async () => ({ payerId: DRIVE_OWNER_ID, tier: 'pro' }),
         },
       });

@@ -46,6 +46,8 @@ import type { DriveEnvRecord, DriveEnvStore } from './drive-envs-store';
 import { isLocalEnvsEnabled } from './local-envs-enabled';
 import { gateLocalEnv, noLiveConnections, resolveDriveActorRole, type LiveConnectionReader, type LocalEnvGateVerdict } from './local-env-gate';
 import type { ActorRole } from '../../env-bridge/decide-bind';
+import type { OrgPolicies } from '../../organizations/policies-core';
+import { environmentsDecision } from '../../organizations/org-action-decisions';
 
 /**
  * The env's PAYER — the drive's OWNER — and their tier.
@@ -187,6 +189,8 @@ export interface EnsureDriveEnvSandboxDeps {
    * tenant — see `DriveEnvPayer`.
    */
   resolvePayer: (driveId: string) => Promise<DriveEnvPayer | null>;
+  /** POL-10: the drive's org policies, read live at every provision/start; null when the drive has no org. Required, never defaulted. */
+  getDriveOrgPolicies: (driveId: string) => Promise<OrgPolicies | null>;
   /**
    * LOCAL envs only (C1). This replica's bridge-socket registry reading; absent
    * until the socket route (t07) exists, so status derives from the heartbeat.
@@ -275,6 +279,11 @@ export async function ensureDriveEnvSandbox({
 }): Promise<EnsureSpriteHolderSandboxResult> {
   const row = await deps.store.findById(envId);
   if (!row) return { ok: false, reason: 'provision_failed', detail: 'env_not_found' };
+  // POL-10: an org that turned persistent environments off stops them STARTING, not just being created.
+  // The row is kept (suspend, never delete); turning the policy back on lets it start again.
+  if (!environmentsDecision(await deps.getDriveOrgPolicies(row.driveId)).ok) {
+    return { ok: false, reason: 'provision_failed', detail: 'org_policy' };
+  }
   // C1: a LOCAL env never reaches the Sprite host. The pure planners decide
   // (via the gate), and t09 replaces the flat refusal that stood here with the
   // real local host — keeping every typed verdict for every case that still

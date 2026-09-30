@@ -49,6 +49,7 @@ import {
 } from '@pagespace/lib/services/drive-envs/drive-envs';
 import type { DriveEnvDTO } from '@pagespace/lib/drive-envs/env-contract';
 import type { RevokeLocalDriveEnvResult } from '@pagespace/lib/services/drive-envs/local-env-revoke';
+import { getDrivePolicies } from '@pagespace/lib/organizations/policy-reader';
 import { getSandboxHost } from '@/lib/agent-workspaces/sandbox-host-runtime';
 import { createHash, createPublicKey, randomBytes, verify as nodeVerify } from 'crypto';
 import { createId } from '@paralleldrive/cuid2';
@@ -204,6 +205,9 @@ async function localEnvIdentityServiceDeps(): Promise<LocalEnvIdentityServiceDep
   };
 }
 
+/** POL-10: the drive's org policies, read live (null = personal drive, unrestricted). */
+const driveOrgPolicies = async (driveId: string) => (await getDrivePolicies(driveId))?.policies ?? null;
+
 export async function createEnvInDrive(input: {
   driveId: string;
   name: string;
@@ -220,6 +224,7 @@ export async function createEnvInDrive(input: {
     deps: {
       store,
       resolvePayer: resolveDriveEnvPayer,
+      getDriveOrgPolicies: driveOrgPolicies,
       now: () => new Date(),
       identity: input.local ? envBridgeIdentity() : undefined,
     },
@@ -302,6 +307,7 @@ export async function ensureEnvSandboxForSession(input: {
       store,
       host,
       resolvePayer: resolveDriveEnvPayer,
+      getDriveOrgPolicies: driveOrgPolicies,
       liveConnection,
       resolveLocalHost: localHostResolver,
     },
@@ -371,7 +377,7 @@ export async function rebuildEnv(input: { envId: string; requesterId: string }):
           // `create` arm — through the same CAS every other provisioner runs.
           intent: 'ensure',
           requesterId: input.requesterId,
-          deps: { store, host, resolvePayer: resolveDriveEnvPayer, liveConnection },
+          deps: { store, host, resolvePayer: resolveDriveEnvPayer, getDriveOrgPolicies: driveOrgPolicies, liveConnection },
         }),
     },
   });

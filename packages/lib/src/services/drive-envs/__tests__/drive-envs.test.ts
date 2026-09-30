@@ -11,6 +11,7 @@ import {
   type DeleteDriveEnvDeps,
   type RebuildDriveEnvDeps,
 } from '../drive-envs';
+import { DEFAULT_ORG_POLICIES } from '../../../organizations/policies-core';
 import { isUniqueViolation } from '../drive-envs-store';
 import { driveEnvDtoSchema } from '../../../drive-envs/env-contract';
 import { getDriveEnvLimit } from '../../sandbox/quota';
@@ -25,6 +26,7 @@ function makeCreateDeps(
 ): CreateDriveEnvDeps {
   return {
     store: store.store,
+    getDriveOrgPolicies: async () => null,
     resolvePayer: async () => ({ payerId: PAYER_ID, tier: 'pro' }),
     now: () => NOW,
     ...over,
@@ -37,6 +39,26 @@ function makeDeleteDeps(
 ): DeleteDriveEnvDeps {
   return { store: store.store, host: host.host, now: () => NOW };
 }
+
+describe('POL-10 (partial) persistent environments follow the org policy', () => {
+  const off = async () => ({ ...DEFAULT_ORG_POLICIES, persistentEnvironments: false });
+
+  it('refuses to create an environment when the org turns them off, and writes nothing', async () => {
+    const store = makeDriveEnvStore();
+    const create = vi.spyOn(store.store, 'createIfUnderLimit');
+    const result = await createDriveEnv({ driveId: DRIVE_ID, name: 'staging', createdBy: 'u', deps: makeCreateDeps(store, { getDriveOrgPolicies: off }) });
+    expect(result).toMatchObject({ ok: false, reason: 'org_policy' });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('creates normally when the org allows them, or the drive has no org', async () => {
+    for (const read of [async () => ({ ...DEFAULT_ORG_POLICIES, persistentEnvironments: true }), async () => null]) {
+      const store = makeDriveEnvStore();
+      const result = await createDriveEnv({ driveId: DRIVE_ID, name: 'staging', createdBy: 'u', deps: makeCreateDeps(store, { getDriveOrgPolicies: read }) });
+      expect(result.ok).toBe(true);
+    }
+  });
+});
 
 describe('createDriveEnv', () => {
   it('should mint a row WITHOUT provisioning — envs provision lazily, on the first session inside one', async () => {
@@ -58,7 +80,7 @@ describe('createDriveEnv', () => {
       driveId: DRIVE_ID,
       name: 'staging',
       createdBy: null,
-      deps: makeCreateDeps(store, { resolvePayer: async () => null }),
+      deps: makeCreateDeps(store, { getDriveOrgPolicies: async () => null, resolvePayer: async () => null }),
     });
 
     expect(result).toEqual({ ok: false, reason: 'drive_not_found' });
@@ -86,7 +108,7 @@ describe('createDriveEnv', () => {
       driveId: DRIVE_ID,
       name: 'staging',
       createdBy: null,
-      deps: makeCreateDeps(store, { resolvePayer: async () => ({ payerId: PAYER_ID, tier: 'free' }) }),
+      deps: makeCreateDeps(store, { getDriveOrgPolicies: async () => null, resolvePayer: async () => ({ payerId: PAYER_ID, tier: 'free' }) }),
     });
 
     expect(result.ok).toBe(false);
