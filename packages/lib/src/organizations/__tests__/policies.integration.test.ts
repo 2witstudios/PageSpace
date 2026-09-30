@@ -179,6 +179,25 @@ describe('suspend, never delete', () => {
     expect((await listPolicySuspensions(orgId)).every((l) => l.total === 0)).toBe(true);
   });
 
+  it('POL-1 (partial) a link an admin deactivates WHILE it is suspended stays inactive after the policy is turned back on', async () => {
+    const live = await link(w.orgDrive);
+    await updateOrgPolicies({ orgId, actorId: w.owner, patch: { publicShareLinks: false } });
+    await db.update(driveShareLinks).set({ isActive: false }).where(eq(driveShareLinks.id, live));
+
+    await updateOrgPolicies({ orgId, actorId: w.owner, patch: { publicShareLinks: true } });
+
+    expect(await marker(driveShareLinks, live)).toEqual({ m: null, active: false });
+  });
+
+  it('POL-1 (partial) guests off then approve restores every suspended guest row: approve gates NEW invites only', async () => {
+    const [row] = await db.insert(driveMembers).values({ driveId: w.orgDrive, userId: w.guest, role: 'MEMBER', acceptedAt: new Date() }).returning({ id: driveMembers.id });
+    await updateOrgPolicies({ orgId, actorId: w.owner, patch: { guests: 'off' } });
+    const m = async () => (await db.select({ m: driveMembers.suspendedByPolicy }).from(driveMembers).where(eq(driveMembers.id, row.id)))[0].m;
+    expect(await m()).toBe('guests');
+    await updateOrgPolicies({ orgId, actorId: w.owner, patch: { guests: 'approve' } });
+    expect(await m()).toBeNull();
+  });
+
   it('POL-1 (partial) re-applying the same policy changes nothing and writes no audit row', async () => {
     await link(w.orgDrive);
     await updateOrgPolicies({ orgId, actorId: w.owner, patch: { publicShareLinks: false } });

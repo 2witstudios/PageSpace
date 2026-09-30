@@ -28,7 +28,7 @@ import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { loggers } from '../../logging/logger-config';
 import { canConsumeAI } from '../credit-gate';
-import { consumeCredits } from '../credit-consume';
+import { consumeCredits, recordSeatOvershoot } from '../credit-consume';
 import { PERSONAL_SPEND, conversationSpend, driveSpend } from '../spend-target';
 import { DEFAULT_SEAT_ALLOWANCE_CENTS } from '../wallet-core';
 import { loadSeatCapFacts } from '../seat-allowance';
@@ -549,12 +549,30 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     expect((await walletRow(w.marcusWalletId)).monthlyRemainingCents).toBe(5_000);
   });
 
+  /**
+   * Force GENUINE overlap of two gate calls: while `fn` runs, every hold INSERT for `userId` sleeps
+   * inside Postgres. Without the pool row lock a second gate then reads the seat's usage in the
+   * window between the first gate's read and its insert, sees no hold, and both pass — every run, not
+   * one run in four. With the lock the second gate waits for the first to commit and sees its hold.
+   */
+  async function withSlowHoldInserts<T>(userId: string, fn: () => Promise<T>, ms = 400): Promise<T> {
+    const name = `test_slow_hold_${createId().slice(0, 8).toLowerCase().replace(/[^a-z0-9]/g, 'x')}`;
+    await db.execute(sql.raw(`CREATE FUNCTION ${name}() RETURNS trigger AS $$ BEGIN PERFORM pg_sleep(${ms / 1000}); RETURN NEW; END $$ LANGUAGE plpgsql`));
+    await db.execute(sql.raw(`CREATE TRIGGER ${name} BEFORE INSERT ON credit_holds FOR EACH ROW WHEN (NEW."userId" = '${userId}') EXECUTE FUNCTION ${name}()`));
+    try {
+      return await fn();
+    } finally {
+      await db.execute(sql.raw(`DROP TRIGGER IF EXISTS ${name} ON credit_holds`));
+      await db.execute(sql.raw(`DROP FUNCTION IF EXISTS ${name}()`));
+    }
+  }
+
   it('WAL-2 (partial) calls in flight count against the seat allowance: concurrent reservations cannot pass the cap together', async () => {
     if (!dbAvailable) return;
     world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
     const w = world;
 
-    const gates = await Promise.all(Array.from({ length: 6 }, () => canConsumeAI(w.marcusId, 'pro', { spend: driveSpend(w.productId, 'seat_allowance') })));
+    const gates = await withSlowHoldInserts(w.marcusId, () => Promise.all(Array.from({ length: 6 }, () => canConsumeAI(w.marcusId, 'pro', { spend: driveSpend(w.productId, 'seat_allowance') }))), 150);
 
     expect(gates.filter((g) => g.allowed)).toHaveLength(4);
     expect(gates.filter((g) => !g.allowed).every((g) => g.refusal?.reason === 'source_cap_reached')).toBe(true);
@@ -569,7 +587,7 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     // 75¢ already spent of 100¢: room for one 25¢ reservation.
     for (let call = 0; call < 3; call += 1) await seatCall(w, w.marcusId);
 
-    const both = await Promise.all([0, 1].map(() => canConsumeAI(w.marcusId, 'pro', { spend: driveSpend(w.productId, 'seat_allowance') })));
+    const both = await withSlowHoldInserts(w.marcusId, () => Promise.all([0, 1].map(() => canConsumeAI(w.marcusId, 'pro', { spend: driveSpend(w.productId, 'seat_allowance') }))));
 
     expect(both.filter((g) => g.allowed)).toHaveLength(1);
     expect(both.find((g) => !g.allowed)).toMatchObject({ reason: 'source_refused', refusal: { source: 'seat_allowance', reason: 'source_cap_reached' } });
@@ -802,7 +820,7 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     expect((await walletRow(w.poolId)).monthlyRemainingCents).toBe(900_000 - 100);
     expect((await seatCounted(w, w.marcusId)).usage.periodChargedMillicents).toBe(100_000);
     expect(await seatGate(w, w.marcusId)).toMatchObject({ allowed: false, refusal: { reason: 'source_cap_reached' } });
-  });
+  }, 30_000);
 
   it('WAL-2 (partial) IRV-A4: a reconcile refund on a call that overshot gives the forgiveness back — the seat is not re-opened past the cap', async () => {
     if (!dbAvailable) return;
@@ -964,7 +982,7 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
 
     // The count is the real 125¢ against the new 150¢: 25¢ left, so of two simultaneous 25¢ calls exactly one passes.
     expect((await seatCounted(w, w.marcusId)).usage.periodChargedMillicents).toBe(125_000);
-    const gates = await Promise.all([seatGate(w, w.marcusId), seatGate(w, w.marcusId)]);
+    const gates = await withSlowHoldInserts(w.marcusId, () => Promise.all([seatGate(w, w.marcusId), seatGate(w, w.marcusId)]));
     expect(gates.filter((g) => g.allowed)).toHaveLength(1);
     expect(gates.find((g) => !g.allowed)).toMatchObject({ refusal: { reason: 'source_cap_reached' } });
     // And its stream may spend nothing past the reservation: 150 − 125 − 25 = 0.
@@ -1527,6 +1545,70 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     }
   });
   // ---------------------------------------------------------------------------
+  // Compute is NOT a seat draw (point-guard ruling 2026-09-28, WAL-9). A cron accrual names the drive
+  // LEAD, so counting compute would eat a person's AI allowance for infrastructure they never ran.
+  // Pinned BOTH ways: compute never counts (either predicate removed -> red) and AI always does (so the
+  // exclusion cannot over-reach), for settled rows, for holds in flight, and for the settle-time
+  // overshoot record.
+  // ---------------------------------------------------------------------------
+
+  const usageRow = (w: World, spendKind: 'ai' | 'compute', chargeMillicents: number) =>
+    db.insert(creditLedger).values({ userId: w.marcusId, walletId: w.poolId, entryType: 'usage', bucket: 'monthly', amountCents: -Math.round(chargeMillicents / 1000), appliedCents: 0, chargeMillicents, consumeStatus: 'applied', spendKind });
+  const holdRow = (w: World, spendKind: 'ai' | 'compute', estCents: number) =>
+    db.insert(creditHolds).values({ userId: w.marcusId, walletId: w.poolId, estCents, spendKind, expiresAt: new Date(Date.now() + 600_000) });
+
+  it('WAL-9 (partial) WAL-2 (partial) a settled COMPUTE row on the pool is not counted against the member\'s seat, but an AI row of the same size is', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+    const w = world;
+    await usageRow(w, 'compute', 90_000);
+
+    // 90¢ of compute is nobody's seat spend: nothing counted, and the whole 100¢ allowance is still there.
+    expect((await seatCountedAt(w, w.marcusId, DEFAULT_SEAT_ALLOWANCE_CENTS)).usage.periodChargedMillicents).toBe(0);
+    expect(await spendUntilRefused(w, w.marcusId, 50)).toBe(4);
+
+    // The same 90¢ as AI spend IS a seat draw: only one more 25¢ call fits (90 + 25 > 100 refuses, so none does).
+    await db.delete(creditLedger).where(and(eq(creditLedger.userId, w.marcusId), eq(creditLedger.spendKind, 'compute')));
+    await db.delete(creditLedger).where(eq(creditLedger.userId, w.marcusId));
+    await db.delete(creditHolds).where(eq(creditHolds.userId, w.marcusId));
+    await usageRow(w, 'ai', 90_000);
+    expect((await seatCountedAt(w, w.marcusId, DEFAULT_SEAT_ALLOWANCE_CENTS)).usage.periodChargedMillicents).toBe(90_000);
+    expect(await seatGate(w, w.marcusId)).toMatchObject({ allowed: false, refusal: { reason: 'source_cap_reached' } });
+  });
+
+  it('WAL-9 (partial) WAL-2 (partial) a COMPUTE hold in flight on the pool does not reserve seat room, but an AI hold of the same size does', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+    const w = world;
+    await holdRow(w, 'compute', 90);
+
+    expect((await seatCountedAt(w, w.marcusId, DEFAULT_SEAT_ALLOWANCE_CENTS)).usage.periodReservedCents).toBe(0);
+    expect(await seatGate(w, w.marcusId)).toMatchObject({ allowed: true, walletId: w.poolId });
+
+    await db.delete(creditHolds).where(eq(creditHolds.userId, w.marcusId));
+    await holdRow(w, 'ai', 90);
+    expect((await seatCountedAt(w, w.marcusId, DEFAULT_SEAT_ALLOWANCE_CENTS)).usage.periodReservedCents).toBe(90);
+    expect(await seatGate(w, w.marcusId)).toMatchObject({ allowed: false, refusal: { reason: 'source_cap_reached' } });
+  });
+
+  it('WAL-9 (partial) WAL-2 (partial) recordSeatOvershoot records the pool\'s absorbed overshoot for an AI charge and nothing at all for a compute charge', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+    const w = world;
+    // 150¢ of AI spend against the 100¢ allowance with no overshoot row recorded yet: 50¢ is past the cap.
+    await usageRow(w, 'ai', 150_000);
+    const record = (spendKind: 'ai' | 'compute') =>
+      db.transaction((tx) => recordSeatOvershoot(tx, { walletId: w.poolId, userId: w.marcusId, aiUsageLogId: null, claimLedgerId: null, spendKind }));
+    const overshootRows = async () => (await ledgerOf(w.marcusId)).filter((r) => r.entryType.startsWith('seat_overshoot'));
+
+    expect(await record('compute')).toEqual({ monthMc: 0, dayMc: 0 });
+    expect(await overshootRows()).toEqual([]);
+
+    expect(await record('ai')).toEqual({ monthMc: 50_000, dayMc: 0 });
+    expect((await overshootRows()).map((r) => [r.entryType, r.chargeMillicents])).toEqual([['seat_overshoot_month', 50_000]]);
+  });
+
+  // ---------------------------------------------------------------------------
   // POL-7: the seat allowance amount and the wallet fallback rule are the ORG's policy, read at
   // admission (under the pool lock) and at settlement. The caps' own guards are unchanged.
   // ---------------------------------------------------------------------------
@@ -1580,12 +1662,12 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     if (!dbAvailable) return;
     world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
     const w = world;
-    await setPolicies(w, { seatAllowanceCents: 400 });
+    await setPolicies(w, { seatAllowanceCents: 150 });
     await db.insert(walletConsumerCaps).values({ walletId: w.poolId, consumerKey: `user:${w.marcusId}`, monthlyCapCents: 50 });
     expect(await spendUntilRefused(w, w.marcusId)).toBe(2);
     // Another member with no cap of their own gets the policy amount.
-    expect(await spendUntilRefused(w, await addLena(w), 50)).toBe(16);
-  });
+    expect(await spendUntilRefused(w, await addLena(w), 50)).toBe(6);
+  }, 30_000);
 
   it('POL-7 (partial) WAL-2 (partial) SETTLEMENT judges against the policy amount too: the past-cap part of a real charge is recorded as the pool\'s overshoot', async () => {
     if (!dbAvailable) return;

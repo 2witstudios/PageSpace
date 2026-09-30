@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { DEFAULT_SEAT_ALLOWANCE_CENTS } from '../../billing/wallet-core';
 import {
   DEFAULT_ORG_POLICIES,
+  MAX_SEAT_ALLOWANCE_CENTS,
   ORG_POLICY_KEYS,
   SUSPENSION_KINDS,
   driveSpendPolicy,
@@ -63,6 +64,15 @@ describe('parseOrgPolicies', () => {
     expect(parseOrgPolicies({}).seatAllowanceCents).toBeGreaterThan(0);
     expect(parseOrgPolicies({ seatAllowanceCents: null }).seatAllowanceCents).toBe(0);
     expect(validateOrgPoliciesPatch({ seatAllowanceCents: null }).ok).toBe(false);
+  });
+
+  it('POL-7 (partial) a seat allowance has a ceiling: values past it are refused on write and read as 0 if stored, so a huge number is not unlimited by another name', () => {
+    expect(validateOrgPoliciesPatch({ seatAllowanceCents: MAX_SEAT_ALLOWANCE_CENTS }).ok).toBe(true);
+    for (const huge of [MAX_SEAT_ALLOWANCE_CENTS + 1, 1e12, Number.MAX_SAFE_INTEGER, 1e300, Infinity, NaN]) {
+      expect(validateOrgPoliciesPatch({ seatAllowanceCents: huge }).ok, String(huge)).toBe(false);
+      expect(parseOrgPolicies({ seatAllowanceCents: huge }).seatAllowanceCents, String(huge)).toBe(0);
+    }
+    expect(parseOrgPolicies({ seatAllowanceCents: MAX_SEAT_ALLOWANCE_CENTS }).seatAllowanceCents).toBe(MAX_SEAT_ALLOWANCE_CENTS);
     expect(parseOrgPolicies({ seatAllowanceCents: 250 }).seatAllowanceCents).toBe(250);
     expect(parseOrgPolicies({ seatAllowanceCents: -5 }).seatAllowanceCents).toBe(0);
     expect(parseOrgPolicies({ seatAllowanceCents: 1.5 }).seatAllowanceCents).toBe(0);

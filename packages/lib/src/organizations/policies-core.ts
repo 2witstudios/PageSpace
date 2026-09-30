@@ -100,12 +100,19 @@ const allowlist = (raw: unknown): string[] | null | undefined => {
 };
 
 /**
- * Whole non-negative cents. There is NO unlimited seat allowance: the credit gate already reads a missing
+ * The most a seat allowance may be set to: 10,000,000 cents ($100,000 a month per member). A ceiling
+ * exists so "a very large number" is not "unlimited by another name": the cap arithmetic multiplies
+ * cents into millicents, and an unbounded value would walk toward 2^53 there.
+ */
+export const MAX_SEAT_ALLOWANCE_CENTS = 10_000_000;
+
+/**
+ * Whole non-negative cents, at most MAX_SEAT_ALLOWANCE_CENTS. There is NO unlimited seat allowance: the credit gate already reads a missing
  * allowance as the default (seatAllowanceCents in wallet-core), so accepting null here would only promise
  * an "unlimited" that the gate never delivers. A raise is an explicit number.
  */
 const wholeCents = (raw: unknown): number | undefined =>
-  typeof raw === 'number' && Number.isSafeInteger(raw) && raw >= 0 ? raw : undefined;
+  typeof raw === 'number' && Number.isSafeInteger(raw) && raw >= 0 && raw <= MAX_SEAT_ALLOWANCE_CENTS ? raw : undefined;
 
 const SPECS: { [K in OrgPolicyKey]: FieldSpec<OrgPolicies[K]> } = {
   // The default keeps org-drive invites working as they do today; a drive admin can already invite anyone.
