@@ -35,7 +35,13 @@ export default defineConfig({
       'src/agent-accounts/__tests__/plane-client.integration.test.ts',
       'src/agent-accounts/__tests__/adversarial/http-executor-end-to-end.integration.test.ts',
     ],
-    setupFiles: ['./src/test/setup.ts'],
+    // integration-db-teardown ends each file's `@pagespace/db` pool. This run is
+    // ONE long-lived fork (singleFork below) that re-evaluates the module per
+    // file, so without it every DB-touching file leaves its pool's connections
+    // open for the 10-minute idle timeout. Measured: ~70 held at once by the end
+    // of the run, alongside apps/web's forks on the same 100-slot CI Postgres —
+    // the 53300 "too many clients" failures on #2737 and #2741.
+    setupFiles: ['./src/test/setup.ts', './src/test/integration-db-teardown.ts'],
     // Run test files sequentially to avoid database race conditions
     fileParallelism: false,
     // Use forks pool for process-level module isolation between test files.
