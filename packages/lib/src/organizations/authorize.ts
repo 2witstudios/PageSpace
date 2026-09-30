@@ -6,12 +6,9 @@
  */
 import type { OrgRole } from '@pagespace/db/schema/organizations';
 import { findMembershipRole } from './repository';
+import { ORG_ROLE_RANK } from './org-roles';
 
-export const ORG_ROLE_RANK: Readonly<Record<OrgRole, number>> = {
-  MEMBER: 1,
-  ADMIN: 2,
-  OWNER: 3,
-};
+export { ORG_ROLE_RANK };
 
 export type OrgAuthorization =
   | { ok: true; role: OrgRole }
