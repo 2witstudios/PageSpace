@@ -93,6 +93,12 @@ vi.mock('../custom-domain-mirror', () => ({
   getActiveDomainRecords: vi.fn().mockResolvedValue([]),
 }));
 
+// SEAT-9 and POL-4: publishing from an org drive asks the org's billing status and its publishing policy.
+const checkOrgActive = vi.hoisted(() => vi.fn());
+const getOrgPolicies = vi.hoisted(() => vi.fn());
+vi.mock('@pagespace/lib/organizations/status', () => ({ checkOrgActive }));
+vi.mock('@pagespace/lib/organizations/policy-reader', () => ({ getOrgPolicies }));
+
 vi.mock('@pagespace/lib/services/drive-guards', () => ({
   isHomeDrive: vi.fn().mockReturnValue(false),
 }));
@@ -123,6 +129,7 @@ vi.mock('@pagespace/lib/utils/utils', () => ({
 }));
 
 import { db } from '@pagespace/db/db';
+import { DEFAULT_ORG_POLICIES } from '@pagespace/lib/organizations/policies-core';
 import { putPublishedArtifact, putPublishedSiteFile, publishedArtifactExists, deletePublishedArtifact, copyPublishedArtifact, isPublishConfigured } from '../published-storage';
 import { publishCanvasPage, publishHomePageAtRoot, clearPublishedHomeRoot, regeneratePublishedSiteFiles, syncPublishedHomeRoot, republishDriveCanonical, PublishError } from '../publish-page';
 import { allocatePublishSubdomain } from '@pagespace/lib/services/drive-service';
@@ -144,6 +151,51 @@ describe('publishCanvasPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(isPublishConfigured).mockReturnValue(true);
+    checkOrgActive.mockResolvedValue({ ok: true });
+    getOrgPolicies.mockResolvedValue({ ...DEFAULT_ORG_POLICIES });
+  });
+
+  describe('the org publishing policy (POL-4)', () => {
+    const orgDrive = () =>
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+        id: 'drive-1', slug: 'my-drive', publishSubdomain: 'my-drive', kind: 'STANDARD', homePageId: 'other-page', orgId: 'org-1',
+      }));
+    const canvas = () =>
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({ id: 'page-1', type: 'CANVAS', title: 'Welcome', content: '<div>hi</div>', driveId: 'drive-1' }));
+
+    it('POL-4 (partial) X-6 (partial) publishing OFF refuses a publish from an org drive with 403 and the policy message, and writes nothing', async () => {
+      canvas();
+      orgDrive();
+      vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
+      getOrgPolicies.mockResolvedValue({ ...DEFAULT_ORG_POLICIES, publishWeb: false });
+
+      const attempt = publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' });
+
+      await expect(attempt).rejects.toMatchObject({ name: 'PublishError', statusCode: 403, message: expect.stringContaining('publishing to the web') });
+      expect(getOrgPolicies).toHaveBeenCalledWith('org-1');
+      expect(putPublishedArtifact).not.toHaveBeenCalled();
+      expect(putPublishedSiteFile).not.toHaveBeenCalled();
+    });
+
+    it('POL-4 (partial) publishing ON publishes from an org drive as before', async () => {
+      canvas();
+      orgDrive();
+      vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
+      expect((await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' })).subdomain).toBe('my-drive');
+    });
+
+    it('POL-4 (partial) a lapsed org is still refused first (402), and a personal drive never reads any org policy', async () => {
+      canvas();
+      orgDrive();
+      checkOrgActive.mockResolvedValue({ ok: false, status: 402, message: 'lapsed', code: 'org_lapsed' });
+      await expect(publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' })).rejects.toMatchObject({ statusCode: 402 });
+
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({ id: 'drive-1', slug: 'my-drive', publishSubdomain: 'my-drive', kind: 'STANDARD', homePageId: 'other-page' }));
+      vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
+      getOrgPolicies.mockClear();
+      await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' });
+      expect(getOrgPolicies).not.toHaveBeenCalled();
+    });
   });
 
   it('given a non-home canvas page with an existing subdomain, publishes at its slug only', async () => {
