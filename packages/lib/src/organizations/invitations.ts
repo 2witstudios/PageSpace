@@ -19,6 +19,7 @@ import { normalizeEmail } from '../encryption/blind-index';
 import { isEmailAMember, isUniqueViolation, retryOnDeadlock } from './repository';
 import { checkOrgActive, type OrgLapsedRefusal } from './status';
 import type { ORG_LAPSED_CODE } from './status-core';
+import { admitSeat, type SeatAdmission, type SeatBillingPort } from './seat-service';
 import {
   publishOrgMembershipSyncEvents,
   syncOrgMemberAccess,
@@ -113,16 +114,21 @@ function lapsedRefusal(check: OrgLapsedRefusal): OrgInviteLapsed {
   return { ok: false, status: 402, reason: check.code, message: check.message };
 }
 
+/** SEAT-4: no seat can be granted — auto-add is off and every purchased seat is taken. */
+export type OrgInviteSeatRefusal = Extract<SeatAdmission, { ok: false }>;
+
 export type IssueInvitationResult =
   | { ok: true; invitation: PublicOrgInvitation; token: string; rotated: boolean }
   | { ok: false; status: 409; reason: 'already_member' | 'already_invited' }
   | OrgInviteLapsed
+  | OrgInviteSeatRefusal
   | DeliveryFailed;
 
 type Issued =
   | { ok: true; invitation: OrgInvitation; token: string; previous: OrgInvitation | null }
   | { ok: false; status: 409; reason: 'already_member' | 'already_invited' }
-  | OrgInviteLapsed;
+  | OrgInviteLapsed
+  | OrgInviteSeatRefusal;
 
 /**
  * Invite an address, rotating an expired open invite in place. If delivery fails the
@@ -134,8 +140,12 @@ export async function createOrRotateInvitation(input: {
   email: string;
   role: InvitableRole;
   invitedBy: string;
+  /** The inviter's org role, for the wording of a seat refusal. */
+  actorRole?: OrgRole;
   now: Date;
   deliver: InviteDelivery;
+  /** Stripe's seat item, for an auto-add raise (SEAT-4). Only a raise needs it. */
+  seatBilling?: SeatBillingPort;
 }): Promise<IssueInvitationResult> {
   let issued: Issued;
   try {
@@ -160,6 +170,12 @@ export async function createOrRotateInvitation(input: {
         .for('update');
       const decision = decideInviteCreation({ isExistingMember, openInvite: openInvite ?? null, now: input.now });
       if (decision.action === 'refuse') return { ok: false, status: 409, reason: decision.reason };
+
+      // SEAT-3/4/5: a new or rotated invite holds a seat. Decided under the org's billing lock,
+      // after the address is known to need one and before anything is written; an auto-add
+      // raise and this invite commit or roll back together.
+      const seat = await admitSeat(tx, { orgId: input.orgId, actorRole: input.actorRole ?? 'MEMBER' }, input.seatBilling);
+      if (!seat.ok) return seat;
 
       const { token, hash } = generateToken(ORG_INVITE_TOKEN_PREFIX);
       const expiresAt = inviteExpiryFrom(input.now);

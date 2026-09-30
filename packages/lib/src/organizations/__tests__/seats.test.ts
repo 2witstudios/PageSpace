@@ -84,9 +84,12 @@ describe('decideSeatRelease', () => {
     expect(decideSeatRelease({ ...base, held: 6, currentPeriodEnd: inWindow, now: NOW })).toEqual({ action: 'release', toExtra: 1 });
   });
 
-  it('SEAT-5 (partial) never lowers below the seats held, and never raises', () => {
+  it('SEAT-5 (partial) never lowers below the seats held: exactly what is held is left alone', () => {
     expect(decideSeatRelease({ ...base, held: 7, currentPeriodEnd: inWindow, now: NOW })).toEqual({ action: 'keep', reason: 'nothing_unused' });
-    expect(decideSeatRelease({ ...base, held: 9, currentPeriodEnd: inWindow, now: NOW })).toEqual({ action: 'keep', reason: 'nothing_unused' });
+  });
+
+  it('SEAT-5 (partial) a Stripe quantity BELOW the seats held is restored at the boundary, never left as a free seat', () => {
+    expect(decideSeatRelease({ ...base, held: 9, currentPeriodEnd: inWindow, now: NOW })).toEqual({ action: 'restore', toExtra: 4 });
   });
 
   it('SEAT-5 (partial) a period end already passed (stale row) still releases, for the period that follows', () => {

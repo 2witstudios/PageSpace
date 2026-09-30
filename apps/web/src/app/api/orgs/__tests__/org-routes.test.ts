@@ -67,6 +67,7 @@ vi.mock('@pagespace/lib/organizations/status', async (importOriginal) => ({
   getOrgBillingNotice: vi.fn(async () => null),
 }));
 vi.mock('@/lib/orgs/org-invite-delivery', () => ({ deliverOrgInvite: vi.fn() }));
+vi.mock('@/lib/org-billing/seat-billing', () => ({ defaultSeatBilling: vi.fn(() => ({ setSeatQuantity: vi.fn(), readSeatQuantity: vi.fn() })) }));
 vi.mock('@/lib/org-billing/org-subscription', () => ({ startOrgBusinessTrial: vi.fn(), endOrgSubscriptionPort: vi.fn(() => endSubscriptionPort) }));
 
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
@@ -508,6 +509,18 @@ describe('org route behaviour', () => {
       expect(await res.json()).toEqual({ error: ORG_LAPSED_MESSAGE, code: 'org_lapsed' });
     }
     expect(deliverOrgInvite).not.toHaveBeenCalled();
+  });
+
+  it('SEAT-4 (partial) a refused seat answers 402 with the seats_full code and the message, audits it, sends no email, and passes the inviter\'s role to the service', async () => {
+    asRole('ADMIN');
+    const refusal = { ok: false as const, status: 402 as const, reason: 'seats_full' as const, message: 'All 5 seats in this organization are taken.', purchased: 5, held: 5 };
+    vi.mocked(invitations.createOrRotateInvitation).mockResolvedValue(refusal);
+    const res = await invitationsRoute.POST(req('POST', { email: 'lena@northwind.test' }), params({ orgId: ORG_ID }));
+    expect(res.status).toBe(402);
+    expect(await res.json()).toEqual({ error: refusal.message, code: 'seats_full' });
+    expect(deliverOrgInvite).not.toHaveBeenCalled();
+    expect(invitations.createOrRotateInvitation).toHaveBeenCalledWith(expect.objectContaining({ actorRole: 'ADMIN', seatBilling: expect.any(Object) }));
+    expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'authz.access.denied', details: expect.objectContaining({ reason: 'seats_full', purchased: 5, held: 5 }) }));
   });
 
   it('ORG-3 (partial) re-inviting after expiry rotates the open invite (route answers 200 and emails the new link)', async () => {

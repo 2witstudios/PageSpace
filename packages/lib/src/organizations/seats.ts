@@ -27,7 +27,7 @@
  * INVARIANT: zero I/O. The service (seat-service.ts) reads, locks and calls Stripe.
  */
 
-import { orgRole } from '@pagespace/db/schema/organizations';
+import type { OrgRole } from '@pagespace/db/schema/organizations';
 
 /**
  * How long before the billing period's end a freed seat is handed back. The renewal invoice
@@ -82,9 +82,15 @@ export function decideSeatAdmission(input: {
 
 export type SeatReleaseDecision =
   | { action: 'release'; toExtra: number }
+  /** Stripe bills fewer extra seats than are held (a lost write, or seats granted before the subscription existed): bring it up before the renewal. */
+  | { action: 'restore'; toExtra: number }
   | { action: 'keep'; reason: 'mid_period' | 'nothing_unused' | 'ending' | 'no_period' };
 
-/** SEAT-5: hand back paid-for seats nobody holds, but only at the period boundary. */
+/**
+ * SEAT-5: hand back paid-for seats nobody holds, but only at the period boundary. Also the
+ * boundary's reconciliation: `purchasedExtra` here is what STRIPE bills (the service reads
+ * it), so a quantity below the seats actually held is restored rather than left as a free seat.
+ */
 export function decideSeatRelease(input: {
   held: number;
   included: number;
@@ -103,19 +109,19 @@ export function decideSeatRelease(input: {
   // has passed, so the release is for the period that follows.
   if (input.currentPeriodEnd.getTime() - input.now.getTime() > lead) return { action: 'keep', reason: 'mid_period' };
   const needed = Math.max(0, input.held - input.included);
-  if (needed >= input.purchasedExtra) return { action: 'keep', reason: 'nothing_unused' };
-  return { action: 'release', toExtra: needed };
+  if (needed === input.purchasedExtra) return { action: 'keep', reason: 'nothing_unused' };
+  return needed < input.purchasedExtra ? { action: 'release', toExtra: needed } : { action: 'restore', toExtra: needed };
 }
 
 /**
  * What the person who tried to invite sees when no seat can be granted (SEAT-4). No price and
- * no credit figure (MON-5). An Owner is told how to fix it; an Admin is told to ask the Owner,
- * who is also notified (seat-service).
+ * no credit figure (MON-5). An Owner is told how to fix it; an Admin is told to ask the Owner (the
+ * refusal is audited by the route; an in-app Owner notification needs a NotificationType value).
  */
-export function seatRefusalMessage(input: { purchased: number; held: number; actorRole: (typeof orgRole.enumValues)[number] }): string {
+export function seatRefusalMessage(input: { purchased: number; held: number; actorRole: OrgRole }): string {
   const plural = input.purchased === 1 ? 'seat' : 'seats';
   const state = `All ${input.purchased} ${plural} in this organization are taken (members and pending invitations).`;
   return input.actorRole === 'OWNER'
     ? `${state} Turn on automatic seat purchase in billing to add seats as you invite, or revoke an invitation or remove a member to free one.`
-    : `${state} Ask the organization Owner to turn on automatic seat purchase, or to free a seat; the Owner has been told.`;
+    : `${state} Ask the organization Owner to turn on automatic seat purchase or to free a seat.`;
 }
