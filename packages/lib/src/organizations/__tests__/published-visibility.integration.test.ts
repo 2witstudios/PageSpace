@@ -222,6 +222,24 @@ describe('the retry sweep', () => {
     expect(publicKeys(w.site)).toHaveLength(3);
   });
 
+  it('POL-4 (partial) a site that must stay hidden is never restored by the sweep, not even for a moment: no copy out of suspended/ happens', async () => {
+    await set({ publishWeb: false });
+    await reconcileOrgPublishedVisibility(w.orgId, w.store);
+    const copies: string[] = [];
+    const realCopy = w.store.copy.bind(w.store);
+    w.store.copy = async (from, to) => {
+      copies.push(`${from} -> ${to}`);
+      await realCopy(from, to);
+    };
+
+    const out = await reconcileAllPublishedVisibility(w.store);
+
+    expect(copies.filter((c) => c.startsWith('suspended/'))).toEqual([]);
+    expect(out.some((o) => o.action === 'restored')).toBe(false);
+    expect(publicKeys(w.site)).toEqual([]);
+    expect(parkedKeys(w.site)).toHaveLength(3);
+  });
+
   it('POL-4 (partial) something that reappeared in a hidden site\'s public prefix is parked again by the sweep', async () => {
     await set({ publishWeb: false });
     await reconcileOrgPublishedVisibility(w.orgId, w.store);

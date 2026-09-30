@@ -130,25 +130,26 @@ export async function listOrgsRestrictingPublishing(executor: Executor = db): Pr
 }
 
 /**
- * The retry sweep. (1) Every org that restricts publishing is reconciled, re-parking anything that reappeared.
- * (2) Every prefix sitting in `suspended/` is checked against its owner's LIVE policy and restored if it should
- * be visible again, which is what finishes a restore whose object-store call failed after the policy changed.
+ * The retry sweep. (1) Every prefix sitting in `suspended/` is checked against its owner's LIVE policy and restored
+ * only if it should be visible again, which is what finishes a restore whose object-store call failed after the
+ * policy changed; a prefix that should stay hidden is left alone (never restored and re-parked). (2) Every org that
+ * restricts publishing is reconciled, re-parking anything that reappeared in a hidden site's public prefix.
  */
 export async function reconcileAllPublishedVisibility(store: PublishedObjectStore, executor: Executor = db): Promise<PrefixOutcome[]> {
   const outcomes: PrefixOutcome[] = [];
   const seen = new Set<string>();
-  for (const orgId of await listOrgsRestrictingPublishing(executor)) {
-    for (const o of await reconcileOrgPublishedVisibility(orgId, store, executor)) {
-      outcomes.push(o);
-      seen.add(o.prefix);
-    }
-  }
   for (const prefix of await store.listPrefixes(PARKED_PREFIX)) {
-    if (seen.has(prefix)) continue;
     const owner = await resolvePrefixOwner(prefix, executor);
     if (!owner) continue;
     const visible = !owner.orgId || prefixVisible(await getOrgPolicies(owner.orgId, executor), owner.kind);
-    if (visible) outcomes.push(await reconcilePrefix(store, prefix, true));
+    if (!visible) continue;
+    outcomes.push(await reconcilePrefix(store, prefix, true));
+    seen.add(prefix);
+  }
+  for (const orgId of await listOrgsRestrictingPublishing(executor)) {
+    for (const o of await reconcileOrgPublishedVisibility(orgId, store, executor)) {
+      if (!seen.has(o.prefix)) outcomes.push(o);
+    }
   }
   return outcomes;
 }
