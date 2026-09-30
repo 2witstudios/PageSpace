@@ -89,6 +89,7 @@ function deps(overrides: Partial<AppRouterDeps> = {}): AppRouterDeps {
     resolveCharge: async ({ driveId }) => (driveId === 'drive_payer' ? { kind: 'user' as const, userId: 'user_payer' } : null),
     hasSpendableBalance: async () => true,
     stampHit: async () => {},
+    publishedAppsAllowed: async () => true,
     wake: async () => ({ outcome: 'woken', app: {} as never }),
     ...overrides,
   };
@@ -103,6 +104,37 @@ describe('resolveAppRoute — the kill switch is checked before the database', (
     );
     expect(decision).toEqual({ kind: 'unavailable', reason: 'hosting_disabled' });
     expect(findAppBySubdomain).not.toHaveBeenCalled();
+  });
+});
+
+describe('POL-10 (partial) resolveAppRoute — an org that turned published apps off serves nothing', () => {
+  it('answers unavailable/org_policy with the drive ids, before any balance read or wake', async () => {
+    const hasSpendableBalance = vi.fn(async () => true);
+    const wake = vi.fn(async () => ({ outcome: 'woken' as const, app: {} as never }));
+    const stampHit = vi.fn(async () => {});
+    const decision = await resolveAppRoute(
+      'acme.pagespace.io',
+      deps({ publishedAppsAllowed: async () => false, hasSpendableBalance, wake, stampHit }),
+    );
+    expect(decision).toEqual({ kind: 'unavailable', reason: 'org_policy', driveId: 'drive_payer', envId: 'env_1' });
+    expect(hasSpendableBalance).not.toHaveBeenCalled();
+    expect(wake).not.toHaveBeenCalled();
+    expect(stampHit).not.toHaveBeenCalled();
+  });
+
+  it('asks about the APP\'s drive, and serves normally when allowed', async () => {
+    const publishedAppsAllowed = vi.fn(async () => true);
+    const decision = await resolveAppRoute('acme.pagespace.io', deps({ publishedAppsAllowed }));
+    expect(publishedAppsAllowed).toHaveBeenCalledWith('drive_payer');
+    expect(decision.kind).toBe('replay');
+  });
+
+  it('a wake that the wake gate refuses for policy is the same answer (not a failure, not a retry)', async () => {
+    const decision = await resolveAppRoute(
+      'acme.pagespace.io',
+      deps({ findAppBySubdomain: async () => row({ status: 'stopped' }), wake: async () => ({ outcome: 'refused', reason: 'org_policy' }) }),
+    );
+    expect(decision).toEqual({ kind: 'unavailable', reason: 'org_policy', driveId: 'drive_payer', envId: 'env_1' });
   });
 });
 

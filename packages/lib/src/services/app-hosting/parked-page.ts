@@ -33,7 +33,8 @@ export function statusCodeFor(decision: AppRouteDecision): number {
     case 'parked':
       return 402;
     case 'unavailable':
-      return 503;
+      // POL-10: the org turned published apps off. Not transient, so not a 503 a monitor retries.
+      return decision.reason === 'org_policy' ? 403 : 503;
     case 'not_found':
       return 404;
   }
@@ -41,7 +42,7 @@ export function statusCodeFor(decision: AppRouteDecision): number {
 
 /** Seconds for `Retry-After`, or null when the outcome is not "come back later". */
 export function retryAfterFor(decision: AppRouteDecision): number | null {
-  if (decision.kind !== 'unavailable') return null;
+  if (decision.kind !== 'unavailable' || decision.reason === 'org_policy') return null;
   // A deploy is seconds-to-a-minute; a failed or destroying app is minutes at
   // best and is waiting on a human or a reconciler, so back the caller further
   // off rather than letting a monitor hammer a state no retry can change.
@@ -124,6 +125,13 @@ function copyFor(decision: AppRouteDecision): PageCopy {
           };
     }
     case 'unavailable':
+      if (decision.reason === 'org_policy') {
+        return {
+          title: 'App not available',
+          heading: 'This app is not available',
+          body: 'The organization that owns it has turned published apps off. Nothing has been deleted.',
+        };
+      }
       return decision.reason === 'deploying'
         ? {
             title: 'App starting',

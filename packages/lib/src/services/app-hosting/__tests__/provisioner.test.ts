@@ -109,6 +109,7 @@ function deps(overrides: Partial<ProvisionerDeps> = {}): ProvisionerDeps {
       callLog.push('fly:mintDeployToken');
       return 'FlyV1 fm2_aaa,fm2_bbb';
     },
+    publishedAppsAllowed: async () => true,
     ...overrides,
   };
 }
@@ -433,6 +434,23 @@ describe('createPublishedApp — row before Fly', () => {
     });
 
     expect(result).toEqual({ ok: false, reason: 'env_not_found' });
+    expect(callLog).not.toContain('db:insert');
+    expect(callLog.filter((c) => c.startsWith('fly:'))).toEqual([]);
+  });
+
+  it('POL-10 (partial): given an org that turned published apps off, should create nothing - no row, no Fly app', async () => {
+    mockSelectQueue([{ rows: [{ id: 'env1', driveId: 'drive1' }], label: 'db:select:env' }]);
+    const allowed = vi.fn(async () => false);
+    const result = await createPublishedApp({
+      envId: 'env1',
+      driveId: 'drive1',
+      ownerId: 'user1',
+      subdomain: 'acme',
+      orgSlug: 'pagespace',
+      deps: deps({ publishedAppsAllowed: allowed }),
+    });
+    expect(result).toEqual({ ok: false, reason: 'org_policy' });
+    expect(allowed).toHaveBeenCalledWith('drive1');
     expect(callLog).not.toContain('db:insert');
     expect(callLog.filter((c) => c.startsWith('fly:'))).toEqual([]);
   });

@@ -49,6 +49,8 @@ import {
   type WakePublishedAppRunResult,
 } from './app-lifecycle-metering';
 import { derivePublishedAppReplayKey } from './app-replay-key';
+import { getDrivePolicies } from '../../organizations/policy-reader';
+import { publishedAppsDecision } from '../../organizations/org-action-decisions';
 import { resolveAppReplaySecret, resolvePublishedAppsApex } from './routing-env';
 import {
   decideAppRoute,
@@ -92,6 +94,11 @@ export interface AppRouterDeps {
    * demand. Throttled inside; see {@link stampAppHit}.
    */
   stampHit: (publishedAppId: string) => Promise<void>;
+  /**
+   * POL-10: may published apps run in this drive's org right now? Read live on every request
+   * (no cache), so turning the policy off stops traffic at once; the row and machine are kept.
+   */
+  publishedAppsAllowed: (driveId: string) => Promise<boolean>;
   /**
    * Start a STOPPED app's machine through the metering seam, opening an awake
    * window — see {@link resolveAppRoute} for why the edge, and only the edge, can
@@ -179,6 +186,8 @@ export const defaultAppRouterDeps: AppRouterDeps = {
   resolveCharge: defaultAppBillingDeps.resolveCharge,
   hasSpendableBalance: hasSpendableComputeBalance,
   stampHit: stampAppHit,
+  publishedAppsAllowed: async (driveId) =>
+    publishedAppsDecision((await getDrivePolicies(driveId))?.policies ?? null).ok,
   wake: (publishedAppId) => wakePublishedAppSerialized(publishedAppId),
 };
 
@@ -265,6 +274,8 @@ function refusalForWake(wake: WakePublishedAppRunResult, driveId: string, envId:
           return { kind: 'unavailable', reason: 'deploying', driveId, envId };
         case 'disabled':
           return { kind: 'unavailable', reason: 'hosting_disabled', driveId, envId };
+        case 'org_policy':
+          return { kind: 'unavailable', reason: 'org_policy', driveId, envId };
         case 'unresolved_payer':
           // No honest payer, so no start. Refusing costs one visitor a page;
           // serving would bill a machine to somebody who may not own the drive.
@@ -320,6 +331,12 @@ async function decideForRow(app: PublishedAppRouteRow, deps: AppRouterDeps): Pro
     driveId: app.driveId,
     envId: app.envId,
   };
+
+  // POL-10: an org that turned published apps off serves nothing, and nothing is woken. Asked
+  // before the balance and before any wake, so a refused app costs no ledger read and no start.
+  if (!(await deps.publishedAppsAllowed(app.driveId))) {
+    return { kind: 'unavailable', reason: 'org_policy', driveId: app.driveId, envId: app.envId };
+  }
 
   // Decide as far as the ROW alone allows, with the balance optimistically OK.
   // Anything already refused at this point — parked, destroying, failed, an

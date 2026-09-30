@@ -28,6 +28,9 @@ import { resolveEnvInDrive } from '@/lib/drive-envs/drive-envs-runtime';
 import { createPublishedApp, destroyPublishedApp } from '@pagespace/lib/services/app-hosting/provisioner';
 import { resolvePublishedAppsOrgSlug } from '@pagespace/lib/services/app-hosting/app-hosting-env';
 import { allocateUniqueSubdomainWithRetry, subdomainCollisionPrefix } from '@pagespace/lib/services/subdomain-allocation';
+import { getDrivePolicies } from '@pagespace/lib/organizations/policy-reader';
+import { publishedAppsDecision } from '@pagespace/lib/organizations/org-action-decisions';
+import { orgPolicyRefusalResponse } from '@/lib/orgs/org-policy-refusal-response';
 import { snapshotEnvFilesystem } from '@/lib/app-hosting/env-snapshot';
 import { ensureBuildableSource, describeUnbuildableSourceReason } from '@/lib/app-hosting/publish-source-check';
 import { enqueuePublishBuild } from '@/lib/app-hosting/publish-build-enqueue';
@@ -86,6 +89,12 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
 
     const env = await resolveEnvInDrive(envId, driveId);
     if (!env) return NextResponse.json({ error: 'Environment not found' }, { status: 404 });
+
+    // POL-10: an org that turned published apps off refuses the publish here, before the buildability
+    // check, the snapshot and any upload. createPublishedApp asks again (the decision is the provisioner's
+    // too); this is the early, cheap answer.
+    const appsPolicy = publishedAppsDecision((await getDrivePolicies(driveId))?.policies ?? null);
+    if (!appsPolicy.ok) return orgPolicyRefusalResponse(appsPolicy);
 
     // The subdomain is allocated once, on FIRST publish only — createPublishedApp
     // ignores it on a retry/re-publish of an existing row (see its docblock: a
@@ -190,6 +199,9 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
       });
 
       if (!created.ok) {
+        if (created.reason === 'org_policy') {
+          return orgPolicyRefusalResponse({ code: 'org_policy', policy: 'publishedApps', status: 403, message: "This organization doesn't allow published apps." });
+        }
         const status =
           created.reason === 'fly_error'
             ? 502

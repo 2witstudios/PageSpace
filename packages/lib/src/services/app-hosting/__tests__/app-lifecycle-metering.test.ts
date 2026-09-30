@@ -121,6 +121,7 @@ function makeDeps(over: Partial<AppLifecycleMeteringDeps> = {}): {
     serializeSettle: serializeSettle as unknown as AppLifecycleMeteringDeps['serializeSettle'],
     dailyAwakeCapSeconds: () => 0,
     now: () => NOW,
+    publishedAppsAllowed: async () => true,
     // Org compute billing went live long before every default window.
     orgComputeBillingEpoch: async () => new Date(0),
     ...over,
@@ -143,6 +144,15 @@ beforeEach(() => {
 });
 
 describe('wakePublishedApp', () => {
+  it('POL-10 (partial): an org that turned published apps off refuses the wake before the gate and before Fly', async () => {
+    const { deps, gate, startMachine } = makeDeps({ publishedAppsAllowed: async () => false });
+    seed(appRow());
+    const result = await wakePublishedApp('app-1', deps);
+    expect(result).toEqual({ outcome: 'refused', reason: 'org_policy' });
+    expect(gate).not.toHaveBeenCalled();
+    expect(startMachine).not.toHaveBeenCalled();
+  });
+
   it('given the kill switch is off, should refuse and read NOTHING', async () => {
     const { deps, gate } = makeDeps({ isEnabled: () => false });
     seed(appRow());

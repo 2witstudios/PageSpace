@@ -103,7 +103,7 @@ export interface RoutableApp {
 export type AppRouteDecision =
   | { kind: 'replay'; flyAppName: string; state: string; timeoutMs: number }
   | { kind: 'parked'; reason: 'out_of_credits' | 'parked_status' | 'daily_cap'; driveId?: string; envId?: string }
-  | { kind: 'unavailable'; reason: 'deploying' | 'failed' | 'destroying' | 'hosting_disabled'; driveId?: string; envId?: string }
+  | { kind: 'unavailable'; reason: 'deploying' | 'failed' | 'destroying' | 'hosting_disabled' | 'org_policy'; driveId?: string; envId?: string }
   | { kind: 'not_found'; reason: 'unknown_host' | 'apex' | 'custom_host' | 'no_such_app' };
 
 /** A hostname resolved against the published-apps apex. */

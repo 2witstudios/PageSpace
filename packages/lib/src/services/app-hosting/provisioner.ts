@@ -18,6 +18,8 @@
  * denial value rather than throwing, so the feature is genuinely dark when off.
  */
 
+import { getDrivePolicies } from '../../organizations/policy-reader';
+import { publishedAppsDecision } from '../../organizations/org-action-decisions';
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
 import {
@@ -59,6 +61,8 @@ export interface ProvisionerDeps {
   createFlyApp: (input: { appName: string; orgSlug: string; network: string }) => Promise<void>;
   deleteFlyApp: (appName: string) => Promise<void>;
   mintFlyDeployToken: (appName: string, expiry: string) => Promise<string>;
+  /** POL-10: may published apps be created in this drive's org right now? Read live. */
+  publishedAppsAllowed: (driveId: string) => Promise<boolean>;
 }
 
 function defaultTransport(): FlapsTransport {
@@ -72,6 +76,8 @@ export const defaultProvisionerDeps: ProvisionerDeps = {
   deleteFlyApp: (appName) => flapsDeleteApp(defaultTransport(), appName),
   mintFlyDeployToken: (appName, expiry) =>
     flapsCreateDeployToken(defaultTransport(), appName, expiry),
+  publishedAppsAllowed: async (driveId) =>
+    publishedAppsDecision((await getDrivePolicies(driveId))?.policies ?? null).ok,
 };
 
 export interface CreatePublishedAppInput {
@@ -96,6 +102,8 @@ export type CreatePublishedAppResult =
         | 'fly_error'
         | 'env_not_found'
         | 'env_drive_mismatch'
+        /** POL-10: the drive's organization has turned published apps off. Nothing was created. */
+        | 'org_policy'
         /**
          * Another publish won the insert race and its row was gone again before
          * this call could read it — so the env may well still be publishable.
@@ -154,6 +162,7 @@ export async function createPublishedApp(
     .limit(1);
   if (!env) return { ok: false, reason: 'env_not_found' };
   if (env.driveId !== input.driveId) return { ok: false, reason: 'env_drive_mismatch' };
+  if (!(await deps.publishedAppsAllowed(env.driveId))) return { ok: false, reason: 'org_policy' };
 
   // The WHOLE row, in one read. An earlier cut selected {id, status} here and
   // re-read the full row on the no-op path, which returned `app: undefined` — typed
