@@ -1526,4 +1526,108 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
       await db.delete(organizations).where(eq(organizations.id, acme.id));
     }
   });
+  // ---------------------------------------------------------------------------
+  // POL-7: the seat allowance amount and the wallet fallback rule are the ORG's policy, read at
+  // admission (under the pool lock) and at settlement. The caps' own guards are unchanged.
+  // ---------------------------------------------------------------------------
+
+  const setPolicies = (w: World, policies: Record<string, unknown>) =>
+    db.update(organizations).set({ policies }).where(eq(organizations.id, w.orgId));
+  /** What the seat reads for `userId` against an explicit policy allowance: the gate's own read. */
+  async function seatCountedAt(w: World, userId: string, policySeatAllowanceCents: number) {
+    const poolRow = await walletRow(w.poolId);
+    return loadSeatCapFacts(db, { poolId: w.poolId, poolPeriodStart: poolRow.monthlyPeriodStart, userId, policySeatAllowanceCents, now: new Date() });
+  }
+
+  it('POL-7 (partial) with no policy stored the seat allowance is the default amount — a member is capped, never unlimited', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+    const w = world;
+    expect((await db.select({ p: organizations.policies }).from(organizations).where(eq(organizations.id, w.orgId)))[0].p).toEqual({});
+
+    expect(await spendUntilRefused(w, w.marcusId, 50)).toBe(DEFAULT_SEAT_ALLOWANCE_CENTS / 25);
+    expect(await seatGate(w, w.marcusId)).toMatchObject({ allowed: false, refusal: { reason: 'source_cap_reached' } });
+    // Whatever is stored, an allowance is never unlimited: garbage reads as zero room, not as no cap.
+    await setPolicies(w, { seatAllowanceCents: 'lots' });
+    expect(await seatGate(w, w.marcusId)).toMatchObject({ allowed: false, refusal: { reason: 'source_cap_reached' } });
+    await setPolicies(w, { seatAllowanceCents: null });
+    expect(await seatGate(w, w.marcusId)).toMatchObject({ allowed: false, refusal: { reason: 'source_cap_reached' } });
+  });
+
+  it('POL-7 (partial) an org policy RAISING the allowance opens room at the very next admission, no restart', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+    const w = world;
+    expect(await spendUntilRefused(w, w.marcusId)).toBe(4);
+    await setPolicies(w, { seatAllowanceCents: 200 });
+    // 100¢ spent of a new 200¢ allowance: exactly four more 25¢ calls.
+    expect(await spendUntilRefused(w, w.marcusId)).toBe(4);
+  });
+
+  it('POL-7 (partial) an org policy LOWERED below what is already spent leaves no room — never negative — until the pool refills', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+    const w = world;
+    for (let call = 1; call <= 3; call += 1) await seatCallCosting(w, w.marcusId, COST_25C);
+    await setPolicies(w, { seatAllowanceCents: 50 });
+
+    // 75¢ spent against 50¢: the seat reads its cap (50¢), not 75¢ and not negative room.
+    expect((await seatCountedAt(w, w.marcusId, 50)).usage.periodChargedMillicents).toBe(50_000);
+    expect(await seatGate(w, w.marcusId)).toMatchObject({ allowed: false, refusal: { reason: 'source_cap_reached' } });
+  });
+
+  it('POL-7 (partial) a per-consumer cap on the pool leg still beats the org policy amount', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+    const w = world;
+    await setPolicies(w, { seatAllowanceCents: 400 });
+    await db.insert(walletConsumerCaps).values({ walletId: w.poolId, consumerKey: `user:${w.marcusId}`, monthlyCapCents: 50 });
+    expect(await spendUntilRefused(w, w.marcusId)).toBe(2);
+    // Another member with no cap of their own gets the policy amount.
+    expect(await spendUntilRefused(w, await addLena(w), 50)).toBe(16);
+  });
+
+  it('POL-7 (partial) WAL-2 (partial) SETTLEMENT judges against the policy amount too: the past-cap part of a real charge is recorded as the pool\'s overshoot', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+    const w = world;
+    await setPolicies(w, { seatAllowanceCents: 200 });
+    for (let call = 1; call <= 7; call += 1) await seatCallCosting(w, w.marcusId, COST_25C);
+
+    // 175¢ of 200¢ spent. The eighth call is admitted on its 25¢ estimate and really costs 50¢.
+    const logId = await seatCallCosting(w, w.marcusId, 2 * COST_25C);
+
+    const overshoot = (await ledgerOf(w.marcusId)).filter((r) => r.entryType.startsWith('seat_overshoot'));
+    expect(overshoot.map((r) => [r.entryType, r.aiUsageLogId, r.chargeMillicents])).toEqual([['seat_overshoot_month', logId, 25_000]]);
+    expect((await seatCountedAt(w, w.marcusId, 200)).usage.periodChargedMillicents).toBe(200_000);
+    expect((await walletRow(w.poolId)).monthlyRemainingCents).toBe(900_000 - 225);
+  });
+
+  it('POL-7 (partial) the wallet fallback rule comes from the org policy: default refuses, a stated rule applies, and a drive can only restate it or refuse', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 0, poolCents: 900_000 });
+    const w = world;
+    const chooseDriveWallet = () => canConsumeAI(w.marcusId, 'free', { spend: driveSpend(w.productId, 'drive_wallet') });
+    const driveRule = (fallbackRule: 'refuse' | 'seat_allowance' | 'own_credits' | null) =>
+      db.update(wallets).set({ fallbackRule }).where(eq(wallets.id, w.productWalletId));
+
+    // No policy: the empty drive wallet refuses; nothing is charged anywhere.
+    expect(await chooseDriveWallet()).toMatchObject({ allowed: false, refusal: { source: 'drive_wallet', reason: 'source_empty' } });
+
+    await setPolicies(w, { walletFallback: 'seat_allowance' });
+    const moved = await chooseDriveWallet();
+    expect(moved).toMatchObject({ allowed: true, walletId: w.poolId, spendSource: 'seat_allowance', fallback: { from: 'drive_wallet', to: 'seat_allowance' } });
+    await db.delete(creditHolds).where(eq(creditHolds.userId, w.marcusId));
+
+    // A drive that restates the org rule keeps it; one that says refuse refuses; one that swaps it refuses.
+    await driveRule('seat_allowance');
+    expect(await chooseDriveWallet()).toMatchObject({ allowed: true, spendSource: 'seat_allowance' });
+    await db.delete(creditHolds).where(eq(creditHolds.userId, w.marcusId));
+    await driveRule('refuse');
+    expect(await chooseDriveWallet()).toMatchObject({ allowed: false, refusal: { reason: 'source_empty' } });
+    await driveRule('own_credits');
+    expect(await chooseDriveWallet()).toMatchObject({ allowed: false, refusal: { reason: 'source_empty' } });
+    // The person's own credits were never touched by any of it.
+    expect((await walletRow(w.marcusWalletId)).monthlyRemainingCents).toBe(5_000);
+  });
 });
