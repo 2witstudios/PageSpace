@@ -83,9 +83,6 @@ ORG-4
 # through requireOrgRole, titled "ORG-5 (partial)"; CLI and MCP use it in Wave G (X-1).
 ORG-5
 POL-1
-POL-2
-POL-3
-POL-4
 POL-5
 POL-6
 POL-8

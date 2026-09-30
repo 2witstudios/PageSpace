@@ -492,10 +492,10 @@ describe('POST /api/drives/[driveId]/domains', () => {
     const res = await POST(makeReq({ hostname: 'pagespace.ai' }), ctx());
     expect(res.status).toBe(409);
   });
-describe('POST /api/drives/[driveId]/domains under the org policies (POL-4)', () => {
+describe('POST /api/drives/[driveId]/domains under the org policies', () => {
   const orgPolicies = (over: Partial<typeof DEFAULT_ORG_POLICIES>) => ({ orgId: 'org-1', policies: { ...DEFAULT_ORG_POLICIES, ...over } });
 
-  it('POL-4 (partial) X-6 (partial) custom domains OFF refuses the add with the policy named, before anything is stored', async () => {
+  it('POL-4 X-6 (partial) custom domains OFF refuses the add with the policy named, before anything is stored', async () => {
     getDrivePolicies.mockResolvedValue(orgPolicies({ customDomains: false }));
     mockPostSelects();
     const res = await POST(makeReq({ hostname: 'acme.com' }), ctx());

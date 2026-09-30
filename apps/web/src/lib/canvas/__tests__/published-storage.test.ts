@@ -532,7 +532,7 @@ describe('copyObjectToPublishBucket', () => {
 });
 
 
-describe('the policy write guard (POL-4)', () => {
+describe('the policy write guard', () => {
   beforeEach(() => {
     send.mockReset();
     send.mockResolvedValue({});
@@ -571,7 +571,7 @@ describe('the policy write guard (POL-4)', () => {
   });
 });
 
-describe('createPublishedObjectStore (POL-4)', () => {
+describe('createPublishedObjectStore', () => {
   beforeEach(() => {
     send.mockReset();
     process.env.PUBLISH_BUCKET = 'test-bucket';

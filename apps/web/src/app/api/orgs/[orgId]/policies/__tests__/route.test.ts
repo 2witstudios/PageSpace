@@ -131,7 +131,7 @@ describe('policies routes', () => {
     expect((await GET(req('GET'), ctx)).status).toBe(404);
     expect((await PATCH(req('PATCH', '', { guests: 'off' }), ctx)).status).toBe(404);
   });
-  describe('published sites follow the publishing policies (POL-4)', () => {
+  describe('published sites follow the publishing policies', () => {
     const changedPublishing = () =>
       vi.mocked(updateOrgPolicies).mockResolvedValue({
         ok: true,

@@ -153,7 +153,7 @@ describe('prefix ownership and the write guard', () => {
 });
 
 describe('reconcile', () => {
-  it('POL-4 (partial) X-6 (partial) publishing OFF parks every object of the org\'s site and domains, never the personal drive\'s or the shared assets, and deletes nothing', async () => {
+  it('POL-4 X-6 (partial) publishing OFF parks every object of the org\'s site and domains, never the personal drive\'s or the shared assets, and deletes nothing', async () => {
     const before = new Map(w.store.objects);
     await set({ publishWeb: false });
     const out = await reconcileOrgPublishedVisibility(w.orgId, w.store);

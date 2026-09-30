@@ -9,6 +9,14 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Organization sharing policies** — an organization Owner or Admin can turn public share links,
+  publishing to the web, custom domains and guests from outside the organization off, or (for guests)
+  require approval. Turning one off pauses what already exists instead of deleting it: share links stop
+  working and read as if they never existed, published sites stop being served, and guests lose access
+  to the organization's drives, all listed for the Owner and Admins and all restored exactly when the
+  policy is turned back on. With guests set to require approval, a person invited from outside, or who
+  opens a share link, waits in an approval queue and holds no access until an Owner or Admin approves.
+  Policies take effect immediately and only ever apply to the organization's own drives.
 - **Organization seats follow your members** — an organization's Business plan includes 5 seats, and
   each accepted member or pending invitation takes one; guests, agents and apps never do. Inviting
   past your purchased seats either adds a seat automatically (billed pro rata) when the Owner has

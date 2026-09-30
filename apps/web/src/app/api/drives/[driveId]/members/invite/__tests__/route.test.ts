@@ -317,6 +317,13 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       expect(response.status).toBe(403);
     });
 
+    it('audits a refused inviter as an access denial naming the drive (nothing is created)', async () => {
+      vi.mocked(loadDriveRelationship).mockResolvedValue(NONE);
+      const response = await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
+      expect(response.status).toBe(403);
+      expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'authz.access.denied', resourceId: mockDriveId, details: { operation: 'invite', reason: 'not_drive_admin' } }));
+    });
+
     it('returns 403 when inviter is a pending admin (acceptedAt IS NULL)', async () => {
       // The org-aware relationship reads ACCEPTED rows only, so a pending ADMIN invitation is no
       // membership (proven against Postgres in drive-gate-primitives.integration.test.ts).
@@ -1125,10 +1132,10 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
     });
   });
 
-  describe('the org guests policy (POL-2)', () => {
+  describe('the org guests policy', () => {
     const adminWhoCanInvite = () => vi.mocked(loadDriveRelationship).mockResolvedValue({ isOwner: true, membership: null });
 
-    it('POL-2 (partial) X-6 (partial) guests OFF refuses an outsider by user id with 403 naming the policy, and creates nothing', async () => {
+    it('POL-2 X-6 (partial) guests OFF refuses an outsider by user id with 403 naming the policy, and creates nothing', async () => {
       adminWhoCanInvite();
       decideOrgDriveAdmission.mockResolvedValue({ decision: 'refuse', orgId: 'org_1' });
 
@@ -1140,7 +1147,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       expect(requestGuestApproval).not.toHaveBeenCalled();
     });
 
-    it('POL-2 (partial) guests APPROVE queues an outsider added by user id: 202, the request stored with what was asked, NOTHING granted', async () => {
+    it('POL-2 guests APPROVE queues an outsider added by user id: 202, the request stored with what was asked, NOTHING granted', async () => {
       decideOrgDriveAdmission.mockResolvedValue({ decision: 'hold', orgId: 'org_1' });
 
       const res = await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
@@ -1159,7 +1166,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       expect(recordOrgAuditEvent).toHaveBeenCalledWith(expect.objectContaining({ eventType: 'org.guest.requested', orgId: 'org_1' }));
     });
 
-    it('POL-2 (partial) guests ON (or a personal drive) adds them exactly as before', async () => {
+    it('POL-2 guests ON (or a personal drive) adds them exactly as before', async () => {
       const res = await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
       expect(res.status).toBe(200);
       expect(driveInviteRepository.createAcceptedMemberWithPermissions).toHaveBeenCalled();

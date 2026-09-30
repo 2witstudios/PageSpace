@@ -136,7 +136,7 @@ describe('the policy reader', () => {
 });
 
 describe('suspend, never delete', () => {
-  it('POL-1 (partial) public share links off suspends every live link in the org, lists them, and deletes nothing', async () => {
+  it('POL-1 (partial) POL-3 public share links off suspends every live link in the org, lists them, and deletes nothing', async () => {
     const live = await link(w.orgDrive);
     const livePage = await pageLink(w.orgPage);
     const inactive = await link(w.orgDrive, { isActive: false });

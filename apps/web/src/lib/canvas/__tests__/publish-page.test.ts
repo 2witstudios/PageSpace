@@ -155,7 +155,7 @@ describe('publishCanvasPage', () => {
     getOrgPolicies.mockResolvedValue({ ...DEFAULT_ORG_POLICIES });
   });
 
-  describe('the org publishing policy (POL-4)', () => {
+  describe('the org publishing policy', () => {
     const orgDrive = () =>
       vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
         id: 'drive-1', slug: 'my-drive', publishSubdomain: 'my-drive', kind: 'STANDARD', homePageId: 'other-page', orgId: 'org-1',
@@ -163,7 +163,7 @@ describe('publishCanvasPage', () => {
     const canvas = () =>
       vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({ id: 'page-1', type: 'CANVAS', title: 'Welcome', content: '<div>hi</div>', driveId: 'drive-1' }));
 
-    it('POL-4 (partial) X-6 (partial) publishing OFF refuses a publish from an org drive with 403 and the policy message, and writes nothing', async () => {
+    it('POL-4 X-6 (partial) publishing OFF refuses a publish from an org drive with 403 and the policy message, and writes nothing', async () => {
       canvas();
       orgDrive();
       vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
