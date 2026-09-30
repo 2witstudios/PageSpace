@@ -95,7 +95,12 @@ export type SecurityEventType =
   | 'credential.grant.denied'
   | 'credential.operation.executed'
   | 'credential.operation.failed'
-  | 'credential.operation.unknown';
+  | 'credential.operation.unknown'
+  // Org-scoped events (Spec AUD-1). details.orgId is the org dimension every query filters on; the
+  // family is defined in lib audit/org-audit.ts.
+  | 'org.policy.changed'
+  | 'org.policy.suspended'
+  | 'org.policy.restored';
 
 /**
  * Single source of truth for the security_audit_log table shape (#890 Phase 1).

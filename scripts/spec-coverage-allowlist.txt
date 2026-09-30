@@ -88,9 +88,6 @@ POL-3
 POL-4
 POL-5
 POL-6
-# POL-7 (partial, lane ow-c2 wallet-core): effectiveSpendPolicy proves "a drive may only be stricter" as pure
-# math; the stored policy and the credit gate reading it are unproven until E1/C3.
-POL-7
 POL-8
 POL-9
 POL-10

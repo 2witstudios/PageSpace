@@ -26,7 +26,8 @@ import { and, eq, isNull, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
 import { chargeMillicents, accruePending, allocateSpend, applyPaymentToDebt } from './credit-core';
 import { allocateWalletSpend, settleOvershoot, seatOvershootDeltaMillicents, DEFAULT_OVERSHOOT_CHOICE } from './wallet-core';
-import { childWalletFunds, ORG_SPEND_POLICY_UNTIL_POLICY_STORE, type WalletBalanceFacts } from './spend-target';
+import { childWalletFunds, type WalletBalanceFacts } from './spend-target';
+import { readOrgSpendPolicy } from '../organizations/policy-reader';
 import { loadSeatCapFacts, SEAT_COUNTED_SPEND_KIND, SEAT_OVERSHOOT_ENTRY } from './seat-allowance';
 import { drawWalletFundingLegs, creditWalletFundingLegs } from './wallet-legs';
 import { parseWalletDraws, addWalletDraws, planWalletRefund, type WalletDraws } from './wallet-draws';
@@ -213,11 +214,13 @@ export async function recordSeatOvershoot(
   // SEAT_COUNTED_SPEND_KIND): its overshoot is nobody's seat attribution to record.
   if (input.spendKind !== SEAT_COUNTED_SPEND_KIND) return none;
   const [pool] = await tx
-    .select({ ownerType: wallets.ownerType, parentWalletId: wallets.parentWalletId, subjectType: wallets.subjectType, monthlyPeriodStart: wallets.monthlyPeriodStart })
+    .select({ orgId: wallets.orgId, ownerType: wallets.ownerType, parentWalletId: wallets.parentWalletId, subjectType: wallets.subjectType, monthlyPeriodStart: wallets.monthlyPeriodStart })
     .from(wallets)
     .where(eq(wallets.id, input.walletId))
     .for('update');
-  if (!pool || pool.ownerType !== 'org' || pool.parentWalletId !== null || pool.subjectType !== null) return none;
+  if (!pool || pool.ownerType !== 'org' || !pool.orgId || pool.parentWalletId !== null || pool.subjectType !== null) return none;
+  // POL-7: the allowance in force is the org's policy, read in this settle transaction under the pool lock.
+  const orgPolicy = await readOrgSpendPolicy(tx, pool.orgId);
   // The call's own time: its usage row (a reconcile correction belongs to the call it
   // corrects, not to when the cron ran), else the claim, else now.
   const [call] = input.aiUsageLogId
@@ -231,7 +234,7 @@ export async function recordSeatOvershoot(
     poolId: input.walletId,
     poolPeriodStart: pool.monthlyPeriodStart,
     userId: input.userId,
-    policySeatAllowanceCents: ORG_SPEND_POLICY_UNTIL_POLICY_STORE.seatAllowanceCents,
+    policySeatAllowanceCents: orgPolicy.seatAllowanceCents,
     now: at,
   });
   const recorded = {

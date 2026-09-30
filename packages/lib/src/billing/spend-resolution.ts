@@ -29,7 +29,6 @@ import { spendableCentsFor } from './credit-balance';
 import { effectiveSpendPolicy, type FallbackRule, type SpendLeg, type SpendSourceKind, type WalletStatus } from './wallet-core';
 import {
   ORG_ENTITLEMENT_TIER,
-  ORG_SPEND_POLICY_UNTIL_POLICY_STORE,
   PERSONAL_ROOT_NOT_YET_CREATED,
   automationSpendInput,
   availableSources,
@@ -50,6 +49,7 @@ import {
 import { toSubscriptionTier, type SubscriptionTier } from './subscription-tiers';
 import { ensurePersonalRootWalletId } from './personal-wallet';
 import { loadSeatCapFacts } from './seat-allowance';
+import { readOrgSpendPolicy } from '../organizations/policy-reader';
 
 const WALLET_FACTS = {
   id: wallets.id,
@@ -310,7 +310,9 @@ export async function resolveCallSpend(input: {
   );
   // WAL-2: a seat is the pool capped per consumer — never more than what is left of this
   // person's monthly allowance this pool period (D-OW-12). The gate re-checks it under the lock.
-  const seatLeg: SpendLeg | null = pool
+  // POL-7: both the allowance and the fallback come from the org's policy row, read now.
+  const orgPolicy = standing?.orgId ? await readOrgSpendPolicy(db, standing.orgId) : null;
+  const seatLeg: SpendLeg | null = pool && orgPolicy
     ? seatAllowanceLeg({
         poolId: pool.id,
         status: statusOf(pool, orgLapsed),
@@ -323,7 +325,7 @@ export async function resolveCallSpend(input: {
           poolId: pool.id,
           poolPeriodStart: pool.monthlyPeriodStart,
           userId,
-          policySeatAllowanceCents: effectiveSpendPolicy(ORG_SPEND_POLICY_UNTIL_POLICY_STORE, null).seatAllowanceCents,
+          policySeatAllowanceCents: orgPolicy.seatAllowanceCents,
           now,
         })),
       })
@@ -336,12 +338,12 @@ export async function resolveCallSpend(input: {
     spendableCentsFor(personal, consumerTier) - (personal ? reservedAgainstCents(holds, personal.id, { includeChildren: true }) : 0),
   );
 
-  // POL-7: an org drive's rule may only be stricter than its org's. The org policy reader
-  // (E1) has not landed, so the org rule is the strictest one, `refuse`: no fallback moves
-  // a call off its chosen source until an org says so. A personal drive's own rule stands.
+  // POL-7: an org drive's rule may only be stricter than its org's (effectiveSpendPolicy): it applies
+  // when it restates the org rule or is `refuse`, and any other value resolves to `refuse`. A personal
+  // drive's own rule stands.
   const driveFallback = driveWallet?.fallbackRule ?? undefined;
-  const fallback: FallbackRule = standing?.orgId
-    ? effectiveSpendPolicy(ORG_SPEND_POLICY_UNTIL_POLICY_STORE, { fallback: driveFallback }).fallback
+  const fallback: FallbackRule = orgPolicy
+    ? effectiveSpendPolicy(orgPolicy, { fallback: driveFallback }).fallback
     : driveFallback ?? 'refuse';
 
   // WAL-8 / D-OW-14: the wallet's ROOT owner's tier governs a shared leg — the org inside

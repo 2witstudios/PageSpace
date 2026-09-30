@@ -51,7 +51,6 @@ import { ensurePersonalRootWalletId } from './personal-wallet';
 import { ORGS_ENABLED } from '../organizations/orgs-enabled';
 import {
   ORG_ENTITLEMENT_TIER,
-  ORG_SPEND_POLICY_UNTIL_POLICY_STORE,
   personalRootDecision,
   resolvesDriveWallets,
   rootAvailableCents,
@@ -61,6 +60,7 @@ import {
 } from './spend-target';
 import { seatCapCheck, type RefusalReason, type SkipReason, type SpendSourceKind } from './wallet-core';
 import { loadSeatCapFacts } from './seat-allowance';
+import { readOrgSpendPolicy } from '../organizations/policy-reader';
 import type { SubscriptionTier } from '../services/subscription-utils';
 
 // The partial unique index credit_ledger_stripe_ref_unique is defined WHERE
@@ -807,6 +807,7 @@ const SHARED_WALLET_FACTS = {
   topupRemainingCents: wallets.topupRemainingCents,
   debtCents: wallets.debtCents,
   monthlyPeriodStart: wallets.monthlyPeriodStart,
+  orgId: wallets.orgId,
 } as const;
 
 /**
@@ -838,7 +839,7 @@ async function gateSharedWallet(
     // Lock order is CHILD, then parent — the order settlement uses — so a gate and a
     // settle on the same drive wallet can never wait on each other in a cycle. A root
     // wallet's own paths lock only the root.
-    const lock = async (id: string): Promise<(WalletBalanceFacts & { monthlyPeriodStart: Date | null }) | null> => {
+    const lock = async (id: string): Promise<(WalletBalanceFacts & { monthlyPeriodStart: Date | null; orgId: string | null }) | null> => {
       const rows = await tx.select(SHARED_WALLET_FACTS).from(wallets).where(eq(wallets.id, id)).for('update');
       return rows[0] ?? null;
     };
@@ -853,11 +854,15 @@ async function gateSharedWallet(
     // of the ones before it, and only as many as the allowance covers pass.
     let seatRemainingCents: number | null = null;
     if (chosen.source === 'seat_allowance') {
+      // POL-7: the allowance in force is the org's policy, read here in the same transaction as the
+      // hold. A seat is always the org pool, so a pool with no org is not a seat.
+      if (!wallet.orgId) return refused('source_unavailable');
+      const orgPolicy = await readOrgSpendPolicy(tx, wallet.orgId);
       const seat = await loadSeatCapFacts(tx, {
         poolId: wallet.id,
         poolPeriodStart: wallet.monthlyPeriodStart,
         userId,
-        policySeatAllowanceCents: ORG_SPEND_POLICY_UNTIL_POLICY_STORE.seatAllowanceCents,
+        policySeatAllowanceCents: orgPolicy.seatAllowanceCents,
         now,
       });
       const cap = seatCapCheck({ capCents: seat.capCents, dailyCapCents: seat.dailyCapCents, usage: seat.usage, reservationCents: estCost });
