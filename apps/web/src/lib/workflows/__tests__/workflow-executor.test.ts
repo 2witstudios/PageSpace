@@ -167,6 +167,10 @@ vi.mock('@/lib/ai/core/integration-tool-resolver', () => ({
   resolvePageAgentIntegrationTools: mockResolvePageAgentIntegrationTools,
 }));
 
+// POL-9: the executor asks the drive's org whether agents may run on their own; the default here is no org.
+const getDrivePolicies = vi.hoisted(() => vi.fn());
+vi.mock('@pagespace/lib/organizations/policy-reader', () => ({ getDrivePolicies }));
+
 vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
   AIMonitoring: { trackUsage: vi.fn() },
 }));
@@ -188,6 +192,7 @@ import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factor
 import { messageRepository } from '@/lib/repositories/message-repository';
 import { createId } from '@paralleldrive/cuid2';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
+import { DEFAULT_ORG_POLICIES } from '@pagespace/lib/organizations/policies-core';
 
 const createInputFixture = (overrides: Partial<WorkflowExecutionInput> = {}): WorkflowExecutionInput => ({
   workflowId: 'wf_1',
@@ -250,6 +255,7 @@ describe('executeWorkflow', () => {
     mockCreateConversationInSession.mockResolvedValue(undefined);
     mockCreateConversation.mockResolvedValue('created');
     mockEndSession.mockResolvedValue({ ok: true });
+    getDrivePolicies.mockResolvedValue(null);
     vi.mocked(isProviderError).mockReturnValue(false);
     vi.mocked(createAIProvider).mockResolvedValue(mockProviderResult as never);
     mockResolvePageAgentIntegrationTools.mockResolvedValue({});
@@ -331,6 +337,42 @@ describe('executeWorkflow', () => {
     expect(vi.mocked(createAIProvider)).toHaveBeenCalledWith(input.createdBy, expect.anything(), { driveId: input.driveId });
     expect(result.success).toBe(false);
     expect(result.error).toContain("doesn't allow that AI model");
+  });
+
+  describe('the org autonomy policy (POL-9)', () => {
+    const off = () => getDrivePolicies.mockResolvedValue({ orgId: 'org-1', policies: { ...DEFAULT_ORG_POLICIES, agentsAutonomous: false } });
+    const fire = (table: 'cron' | 'manual' | 'taskTriggers' | 'calendarTriggers' | 'webhookTriggers') => {
+      const base = createInputFixture();
+      return { ...base, source: { table, id: table === 'cron' || table === 'manual' ? null : 'trig-1', triggerAt: table === 'manual' ? null : new Date() } as WorkflowExecutionInput['source'] };
+    };
+
+    test.each(['cron', 'taskTriggers', 'calendarTriggers', 'webhookTriggers'] as const)('POL-9 autonomy OFF skips a %s run before any credit is reserved or model built, finalizing it cancelled with the policy message', async (table) => {
+      setupSelectChain([mockAgent], [mockDrive]);
+      off();
+      const admit = vi.fn(async () => ({ admitted: true as const }));
+
+      const result = await executeWorkflow(fire(table), { admit });
+
+      expect(result).toMatchObject({ success: false, skipped: true });
+      expect(result.error).toContain("doesn't let agents run on their own");
+      expect(admit).not.toHaveBeenCalled();
+      expect(vi.mocked(createAIProvider)).not.toHaveBeenCalled();
+    });
+
+    test('POL-9 a MANUAL run (a person pressed run) is never blocked by the autonomy policy', async () => {
+      setupSelectChain([mockAgent], [mockDrive]);
+      off();
+      const result = await executeWorkflow(fire('manual'));
+      expect(result.skipped).toBeUndefined();
+      expect(vi.mocked(createAIProvider)).toHaveBeenCalled();
+    });
+
+    test('POL-9 autonomy ON, or a drive with no org, runs the automatic source as before; the policy is read every run', async () => {
+      setupSelectChain([mockAgent], [mockDrive]);
+      const result = await executeWorkflow(fire('cron'));
+      expect(result.skipped).toBeUndefined();
+      expect(getDrivePolicies).toHaveBeenCalledWith(createInputFixture().driveId);
+    });
   });
 
   test('usage tracking is awaited — the usage write is durable before executeWorkflow resolves', async () => {
