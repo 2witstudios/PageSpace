@@ -91,10 +91,14 @@ const guestRowsOf = (executor: Executor, orgId: string) =>
  */
 export async function suspendOrgGuests(executor: Executor, orgId: string): Promise<GuestHoldItem[]> {
   const parked: GuestHoldItem[] = [];
+  // Each row is handled once: if a removal ever did not take, the loop must end rather than re-read the same
+  // rows forever.
+  const handled = new Set<string>();
   for (;;) {
-    const rows = await executor.select().from(driveMembers).where(guestRowsOf(executor, orgId)).orderBy(asc(driveMembers.id)).limit(GUEST_HOLD_BATCH);
+    const rows = (await executor.select().from(driveMembers).where(guestRowsOf(executor, orgId)).orderBy(asc(driveMembers.id)).limit(GUEST_HOLD_BATCH)).filter((r) => !handled.has(r.id));
     if (rows.length === 0) return parked;
     for (const row of rows) {
+      handled.add(row.id);
       const grants = await executor
         .select()
         .from(pagePermissions)
@@ -131,8 +135,9 @@ export async function suspendOrgGuests(executor: Executor, orgId: string): Promi
  */
 export async function restoreOrgGuests(executor: Executor, orgId: string): Promise<GuestHoldItem[]> {
   const restored: GuestHoldItem[] = [];
+  const handled = new Set<string>();
   for (;;) {
-    const holds = await executor
+    const holds = (await executor
       .select()
       .from(orgGuestHolds)
       .where(and(
@@ -141,9 +146,10 @@ export async function restoreOrgGuests(executor: Executor, orgId: string): Promi
         inArray(orgGuestHolds.driveId, orgDriveIds(executor, orgId)),
       ))
       .orderBy(asc(orgGuestHolds.id))
-      .limit(GUEST_HOLD_BATCH);
+      .limit(GUEST_HOLD_BATCH)).filter((h) => !handled.has(h.id));
     if (holds.length === 0) return restored;
     for (const hold of holds) {
+      handled.add(hold.id);
       const snapshot = hold.parked;
       if (snapshot?.member) {
         await executor.insert(driveMembers).values(revive(snapshot.member as typeof driveMembers.$inferInsert, MEMBER_DATE_COLUMNS)).onConflictDoNothing({ target: [driveMembers.driveId, driveMembers.userId] });
