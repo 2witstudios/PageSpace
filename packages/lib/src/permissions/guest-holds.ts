@@ -14,7 +14,9 @@
  */
 import { db } from '@pagespace/db/db';
 import { and, asc, eq, inArray, sql } from '@pagespace/db/operators';
+import { users } from '@pagespace/db/schema/auth';
 import { drives, pages } from '@pagespace/db/schema/core';
+import { decryptField } from '../encryption/field-crypto';
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 import { orgMembers } from '@pagespace/db/schema/organizations';
 import {
@@ -258,4 +260,43 @@ export async function claimPendingGuestApproval(input: { orgId: string; holdId: 
     .where(and(eq(orgGuestHolds.id, input.holdId), eq(orgGuestHolds.orgId, input.orgId), eq(orgGuestHolds.state, 'pending_approval')))
     .returning();
   return row ? { ...toItem(row), orgId: row.orgId, request: row.request, requestedBy: row.requestedBy } : null;
+}
+
+export interface PendingGuestApprovalView extends GuestHoldItem {
+  driveName: string;
+  /** The person asking to be admitted, by name; null for an invitee who has no account yet (then `email` is set). */
+  requesterName: string | null;
+  /** What was asked for, without internals: the role and whether page grants were requested. */
+  request: { role: 'MEMBER' | 'ADMIN' | null; pageGrants: number; viaLink: boolean };
+}
+
+/**
+ * The approval queue as an Owner or Admin reviews it: which drive, who is asking, what for. Bounded; `total` is the
+ * whole queue. Names are decrypted at the edge. Drive names are visible to org Owners and Admins, who resolve to
+ * every org drive anyway (ORG-4, D-OW-25); the caller must already have established that role.
+ */
+export async function listPendingGuestApprovalViews(orgId: string, limit: number, executor: Executor = db): Promise<{ total: number; items: PendingGuestApprovalView[] }> {
+  const where = and(eq(orgGuestHolds.orgId, orgId), eq(orgGuestHolds.state, 'pending_approval'));
+  const [rows, [counted]] = await Promise.all([
+    executor
+      .select({ hold: orgGuestHolds, driveName: drives.name, userName: users.name })
+      .from(orgGuestHolds)
+      .innerJoin(drives, eq(drives.id, orgGuestHolds.driveId))
+      .leftJoin(users, eq(users.id, orgGuestHolds.userId))
+      .where(where)
+      .orderBy(asc(orgGuestHolds.createdAt), asc(orgGuestHolds.id))
+      .limit(limit),
+    executor.select({ total: sql<number>`count(*)::int` }).from(orgGuestHolds).where(where),
+  ]);
+  const items: PendingGuestApprovalView[] = [];
+  for (const r of rows) {
+    const req = r.hold.request;
+    items.push({
+      ...toItem(r.hold),
+      driveName: r.driveName,
+      requesterName: r.hold.userId ? ((await decryptField(r.userName)) ?? null) : null,
+      request: { role: req.role ?? null, pageGrants: req.permissions?.length ?? (req.pageId ? 1 : 0), viaLink: r.hold.origin !== 'invite' },
+    });
+  }
+  return { total: counted?.total ?? 0, items };
 }

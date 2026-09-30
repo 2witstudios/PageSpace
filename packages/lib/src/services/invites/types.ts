@@ -45,7 +45,9 @@ export type InviteAcceptanceErrorCode =
   | 'TOKEN_CONSUMED'
   | 'EMAIL_MISMATCH'
   | 'ALREADY_MEMBER'
-  | 'ACCOUNT_SUSPENDED';
+  | 'ACCOUNT_SUSPENDED'
+  // POL-2: the org's guests policy is OFF, so an outsider cannot accept. The invitation is not consumed.
+  | 'GUEST_POLICY';
 
 export type AcceptInviteResult = Result<AcceptedInviteData, InviteAcceptanceErrorCode>;
 

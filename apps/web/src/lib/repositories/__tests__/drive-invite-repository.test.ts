@@ -18,6 +18,10 @@ const mockDeleteChain = vi.hoisted(() => ({ where: vi.fn() }));
 const mockUsersFindFirst = vi.hoisted(() => vi.fn());
 const mockTransaction = vi.hoisted(() => vi.fn());
 
+// POL-2: acceptance asks the org's guests policy inside the transaction; these unit tests are about a drive with no org.
+const decideOrgDriveAdmission = vi.hoisted(() => vi.fn());
+vi.mock('@pagespace/lib/permissions/guest-admission', () => ({ decideOrgDriveAdmission }));
+
 vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn(() => mockSelectChain),
@@ -477,6 +481,10 @@ describe('driveInviteRepository.createPendingInvite', () => {
 });
 
 describe('driveInviteRepository.consumeInviteAndCreateMembership', () => {
+  beforeEach(() => {
+    decideOrgDriveAdmission.mockResolvedValue({ decision: 'allow', orgId: null });
+  });
+
   const setupTx = ({
     consumeReturning,
     insertReturning,
@@ -536,6 +544,24 @@ describe('driveInviteRepository.consumeInviteAndCreateMembership', () => {
         acceptedAt: baseInput.acceptedAt,
       })
     );
+  });
+
+  it('POL-2 (partial) guests OFF: acceptance is refused with GUEST_POLICY BEFORE the invitation is consumed and nothing is inserted', async () => {
+    const { txUpdateSet, txInsertValues } = setupTx({ consumeReturning: [{ id: 'inv_1' }], insertReturning: [{ id: 'mem_new' }] });
+    decideOrgDriveAdmission.mockResolvedValue({ decision: 'refuse', orgId: 'org_1' });
+
+    const result = await driveInviteRepository.consumeInviteAndCreateMembership(baseInput);
+
+    expect(result).toEqual({ ok: false, reason: 'GUEST_POLICY' });
+    expect(txUpdateSet).not.toHaveBeenCalled();
+    expect(txInsertValues).not.toHaveBeenCalled();
+    expect(decideOrgDriveAdmission).toHaveBeenCalledWith({ driveId: 'drive_1', userId: 'user_new' }, expect.anything());
+  });
+
+  it('POL-2 (partial) guests APPROVE: an invitation that was approved when it was sent is not asked twice and is accepted', async () => {
+    setupTx({ consumeReturning: [{ id: 'inv_1' }], insertReturning: [{ id: 'mem_new' }] });
+    decideOrgDriveAdmission.mockResolvedValue({ decision: 'hold', orgId: 'org_1' });
+    expect(await driveInviteRepository.consumeInviteAndCreateMembership(baseInput)).toEqual({ ok: true, memberId: 'mem_new' });
   });
 
   it('given the conditional consume matches zero rows (already consumed), returns ok=false reason=TOKEN_CONSUMED and skips the insert', async () => {

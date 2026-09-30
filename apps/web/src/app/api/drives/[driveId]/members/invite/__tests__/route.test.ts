@@ -100,6 +100,14 @@ vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   DISTRIBUTED_RATE_LIMITS: { DRIVE_INVITE: { maxAttempts: 3, windowMs: 900000 } },
 }));
 
+// POL-2: the invite handlers ask the org's guests policy before adding an outsider. Default: no org, allowed.
+const decideOrgDriveAdmission = vi.hoisted(() => vi.fn());
+const requestGuestApproval = vi.hoisted(() => vi.fn());
+const recordOrgAuditEvent = vi.hoisted(() => vi.fn());
+vi.mock('@pagespace/lib/permissions/guest-admission', () => ({ decideOrgDriveAdmission }));
+vi.mock('@pagespace/lib/permissions/guest-holds', () => ({ requestGuestApproval }));
+vi.mock('@pagespace/lib/audit/org-audit', () => ({ recordOrgAuditEvent }));
+
 import { POST } from '../route';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
@@ -183,6 +191,9 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
     vi.mocked(isEmailVerified).mockResolvedValue(true);
+    decideOrgDriveAdmission.mockResolvedValue({ decision: 'allow', orgId: null });
+    requestGuestApproval.mockResolvedValue({ holdId: 'hold_1' });
+    recordOrgAuditEvent.mockResolvedValue(undefined);
 
     vi.mocked(driveInviteRepository.findDriveById).mockResolvedValue(mockDrive as never);
     vi.mocked(loadDriveRelationship).mockImplementation(async (userId, drive) =>
@@ -1114,4 +1125,90 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
     });
   });
 
+  describe('the org guests policy (POL-2)', () => {
+    const adminWhoCanInvite = () => vi.mocked(loadDriveRelationship).mockResolvedValue({ isOwner: true, membership: null });
+
+    it('POL-2 (partial) X-6 (partial) guests OFF refuses an outsider by user id with 403 naming the policy, and creates nothing', async () => {
+      adminWhoCanInvite();
+      decideOrgDriveAdmission.mockResolvedValue({ decision: 'refuse', orgId: 'org_1' });
+
+      const res = await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
+
+      expect(res.status).toBe(403);
+      expect(await res.json()).toMatchObject({ code: 'org_policy', policy: 'guests' });
+      expect(driveInviteRepository.createAcceptedMemberWithPermissions).not.toHaveBeenCalled();
+      expect(requestGuestApproval).not.toHaveBeenCalled();
+    });
+
+    it('POL-2 (partial) guests APPROVE queues an outsider added by user id: 202, the request stored with what was asked, NOTHING granted', async () => {
+      decideOrgDriveAdmission.mockResolvedValue({ decision: 'hold', orgId: 'org_1' });
+
+      const res = await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
+
+      expect(res.status).toBe(202);
+      expect(await res.json()).toMatchObject({ kind: 'pending_approval', holdId: 'hold_1' });
+      expect(requestGuestApproval).toHaveBeenCalledWith(expect.objectContaining({
+        orgId: 'org_1',
+        driveId: mockDriveId,
+        userId: mockInvitedUserId,
+        origin: 'invite',
+        request: expect.objectContaining({ role: 'MEMBER', invitedBy: mockUserId, permissions: userIdBody.permissions }),
+        requestedBy: mockUserId,
+      }));
+      expect(driveInviteRepository.createAcceptedMemberWithPermissions).not.toHaveBeenCalled();
+      expect(recordOrgAuditEvent).toHaveBeenCalledWith(expect.objectContaining({ eventType: 'org.guest.requested', orgId: 'org_1' }));
+    });
+
+    it('POL-2 (partial) guests ON (or a personal drive) adds them exactly as before', async () => {
+      const res = await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
+      expect(res.status).toBe(200);
+      expect(driveInviteRepository.createAcceptedMemberWithPermissions).toHaveBeenCalled();
+      expect(requestGuestApproval).not.toHaveBeenCalled();
+    });
+
+    it('POL-2 (partial) an already-accepted member whose role is being changed is not an admission: the policy is not consulted', async () => {
+      vi.mocked(driveInviteRepository.findExistingMember).mockResolvedValue({ id: 'mem_1', role: 'MEMBER', acceptedAt: new Date() } as never);
+      decideOrgDriveAdmission.mockResolvedValue({ decision: 'refuse', orgId: 'org_1' });
+      const res = await POST(buildPost(mockDriveId, { userId: mockInvitedUserId, role: 'ADMIN' }), createContext(mockDriveId));
+      expect(res.status).toBe(200);
+      expect(decideOrgDriveAdmission).not.toHaveBeenCalled();
+    });
+
+    it('POL-2 (partial) a GUEST row being upgraded to a member IS an admission and is asked', async () => {
+      vi.mocked(driveInviteRepository.findExistingMember).mockResolvedValue({ id: 'mem_1', role: 'GUEST', acceptedAt: new Date() } as never);
+      decideOrgDriveAdmission.mockResolvedValue({ decision: 'refuse', orgId: 'org_1' });
+      const res = await POST(buildPost(mockDriveId, { userId: mockInvitedUserId, role: 'MEMBER' }), createContext(mockDriveId));
+      expect(res.status).toBe(403);
+    });
+
+    it('POL-2 (partial) an invitation by email to an address with no account is asked BEFORE it is stored or sent: refused means no row and no email', async () => {
+      decideOrgDriveAdmission.mockResolvedValue({ decision: 'refuse', orgId: 'org_1' });
+
+      const res = await POST(buildPost(mockDriveId, { email: 'new.person@example.com', role: 'MEMBER' }), createContext(mockDriveId));
+
+      expect(res.status).toBe(403);
+      expect(driveInviteRepository.createPendingInvite).not.toHaveBeenCalled();
+      expect(sendPendingDriveInvitationEmail).not.toHaveBeenCalled();
+      expect(decideOrgDriveAdmission).toHaveBeenCalledWith({ driveId: mockDriveId, userId: null });
+    });
+
+    it('POL-2 (partial) an emailed invitation under APPROVE is queued by email (202): no invitation row, no email until approved', async () => {
+      decideOrgDriveAdmission.mockResolvedValue({ decision: 'hold', orgId: 'org_1' });
+
+      const res = await POST(buildPost(mockDriveId, { email: 'New.Person@Example.com', role: 'MEMBER', expiryDays: 7 }), createContext(mockDriveId));
+
+      expect(res.status).toBe(202);
+      expect(requestGuestApproval).toHaveBeenCalledWith(expect.objectContaining({ orgId: 'org_1', email: 'new.person@example.com', origin: 'invite', request: expect.objectContaining({ role: 'MEMBER', expiryDays: 7 }) }));
+      expect(driveInviteRepository.createPendingInvite).not.toHaveBeenCalled();
+      expect(sendPendingDriveInvitationEmail).not.toHaveBeenCalled();
+    });
+
+    it('POL-2 (partial) an address that belongs to a verified user goes through the user path, where the decision is made with their id', async () => {
+      vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue({ id: mockInvitedUserId, emailVerified: new Date(), suspendedAt: null } as never);
+      decideOrgDriveAdmission.mockResolvedValue({ decision: 'refuse', orgId: 'org_1' });
+      const res = await POST(buildPost(mockDriveId, { email: 'existing@example.com', role: 'MEMBER' }), createContext(mockDriveId));
+      expect(res.status).toBe(403);
+      expect(decideOrgDriveAdmission).toHaveBeenCalledWith({ driveId: mockDriveId, userId: mockInvitedUserId });
+    });
+  });
 });

@@ -151,7 +151,7 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
     ],
     excluded: {
       suspendedByPolicy:
-        "Set by an ORGANIZATION's guests policy (POL-1). Organizations do not travel in a tenant bundle, so a marker carried across would name a policy that does not exist at the destination and leave the row suspended with nothing able to restore it. The row arrives in force.",
+        "DEPRECATED and unused: milestone 1 marked guest rows here, but guests are now PARKED in org_guest_holds (a marker cannot remove page access). A parked guest is not in drive_members at all, so a guest the org suspended does not travel and does not gain access by moving. See docs/security/org-policy-suspension.md.",
     },
   },
 
