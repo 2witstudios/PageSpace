@@ -60,7 +60,10 @@ export function createBrowserMeter(primitives: BillingPrimitives = realPrimitive
       return { ok: true, hold: { holdId: gated.holdId ?? null, charge } };
     },
     close: async ({ billing, hold, activeSeconds, shape, substrate }) => {
-      // The charge fixed at open: an ownership change mid-session must not move it.
+      // The charge of the hold this interval was opened under. The client's renewal settles an interval
+      // with the hold it carries and then RE-OPENS, which resolves the payer afresh, so a drive that moves
+      // into or out of an org changes who pays from the next interval while each interval still settles on
+      // the payer that held it (a settle on any other wallet would be refused).
       const { charge } = hold;
       if (activeSeconds <= 0) {
         if (hold.holdId !== null) await primitives.releaseHold(hold.holdId);

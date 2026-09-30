@@ -4,7 +4,7 @@ import type { OpenPtyShellArgs, PtyShell } from './sprites-shell';
 import type { SpriteInstanceLike } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import type { TaskHoldController } from '@pagespace/lib/services/sandbox/sandbox-client/sprite-tasks';
 import type { SandboxBillingDeps } from '@pagespace/lib/services/sandbox/tool-runners';
-import { ORG_COMPUTE_REFUSAL_MESSAGES, isOrgComputeRefusal, type ComputeCharge } from '@pagespace/lib/billing/compute-charge';
+import { ORG_COMPUTE_REFUSAL_MESSAGES, isOrgComputeRefusal, sameCharge, type ComputeCharge } from '@pagespace/lib/billing/compute-charge';
 import { parseShellConnectPayload } from './validation';
 import { clampShellDimensions, type ShellConnectPayload } from '@pagespace/lib/agent-workspaces/shells-contract';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -106,6 +106,8 @@ export type ShellCheckAuthResult =
        * `billing` is wired. An org drive's session charges the org pool (WAL-9), never a person.
        */
       charge: ComputeCharge;
+      /** The session's owner: the person an org charge is recorded under, and the input the payer is re-resolved from at each heartbeat settle. */
+      ownerId: string;
       /** Billing attribution scope: the session's drive, or null (owner-attributed) for a global-assistant session. */
       driveId: string | null;
       /**
@@ -564,6 +566,32 @@ function evictViewer(
 }
 
 /**
+ * Re-resolve the session's payer and adopt it when it differs from the charge the window just
+ * settled on (a drive moved into or out of an org, or changed hands). Adopts nothing when the
+ * session has no owner to resolve from, the drive cannot be resolved, or the read fails: a
+ * transient billing read must never end a live PTY, so the session keeps the charge it has and
+ * the next heartbeat looks again.
+ */
+async function rechargeAfterDrift(billing: SandboxBillingDeps, session: TerminalSession, sessionKey: string): Promise<void> {
+  const { ownerId } = session;
+  if (!session.charge || !ownerId) return;
+  try {
+    const next = await billing.resolveCharge({ driveId: session.driveId ?? null, ownerId });
+    if (sameCharge(session.charge, next)) return;
+    loggers.realtime.warn('Shell session payer changed mid-session: the next window is held and settled on the new payer', {
+      sessionKey,
+      from: session.charge.kind,
+      to: next.kind,
+    });
+    session.charge = next;
+  } catch (error) {
+    loggers.realtime.error('Shell session payer re-resolve failed; keeping the current payer', error instanceof Error ? error : new Error(String(error)), {
+      sessionKey,
+    });
+  }
+}
+
+/**
  * Heartbeat settle for a live metered session: settles the window accrued since
  * `connectedAt` against the current hold, rebases the window start to now, and
  * places a fresh hold for the next interval. The rebase happens SYNCHRONOUSLY
@@ -580,7 +608,7 @@ function evictViewer(
  * session down. Infra errors keep the session alive (fail-open): killing a
  * live PTY over a transient billing outage is worse than a delayed settle.
  */
-async function settleAccruedWindow(
+export async function settleAccruedWindow(
   billing: SandboxBillingDeps,
   sessionMap: TerminalSessionMap,
   session: TerminalSession,
@@ -662,6 +690,13 @@ async function settleAccruedWindow(
     return true;
   }
   if (sessionMap.getByKey(sessionKey) !== session) return true;
+  // WAL-9: who pays is re-read at every window boundary, never fixed for the session's life. The
+  // window just settled went to the payer it opened under (the tail belongs to whoever owed it,
+  // on the hold that payer's wallet carried); if the drive moved into or out of an org since, the
+  // NEXT window opens on the new payer, and the hold is placed there below. Without this an open
+  // PTY, which can stay attached indefinitely, keeps billing the old payer for the new one's
+  // compute. The old hold was consumed by the settle above, so there is none to release.
+  await rechargeAfterDrift(billing, session, sessionKey);
   // The shell quiesced: its exec socket is deliberately down and its Sprite is
   // free to pause (the task hold was released with it — see
   // `startTaskHoldHeartbeat`). A paused sandbox costs us nothing, so billing the
@@ -689,7 +724,7 @@ async function settleAccruedWindow(
     return true;
   }
   try {
-    const gate = await billing.gate({ charge });
+    const gate = await billing.gate({ charge: session.charge ?? charge });
     if (!gate.allowed) return false;
     // Re-check liveness: the session may have ended while the gate ran, and a
     // hold assigned to a dead session would leak until its TTL expiry.
@@ -1153,6 +1188,7 @@ export async function ensureShellSession(
       spriteExecId: attachSessionId,
       releaseSlot,
       charge: access.charge,
+      ownerId: access.ownerId,
       holdId,
       connectedAt,
       // First-class attribution (Terminal Epic 3 usage-breakdown fix): the

@@ -209,6 +209,15 @@ WAL-6
 # alert delivery and the kill switch control are unproven until C3/C6.
 WAL-7
 WAL-8
+# WAL-9 (partial, ow-c7b; payer drift ow-compute-payer-drift): org-drive compute holds and settles on the org
+# pool once, as compute, never on a person (sandbox runs, terminal, browsers, environments, published apps,
+# machine storage), and a payer that changes mid-run is followed (apps, terminal heartbeat, browser renewal);
+# every test is titled "WAL-9 (partial)". NOT proven, which is why it stays here: per-member compute drawn
+# from the org pool is UNCAPPED (compute is excluded from seats on purpose, a filed follow-up with its own
+# scope; the per-person daily and in-flight bounds still apply, counted over org compute only); DEDICATED
+# HOSTING keeps refusing an org payer (a Stripe subscription on a person's card, not a wallet debit, so the
+# pool cannot stand in); cron storage accrual settles on the pool with no hold or gate, so it can put a
+# paused or empty pool into debt; the personal usage breakdown still lists org compute under the recorded person.
 WAL-9
 # X-1 (partial, ow-c6): wallet READS are mirrored for CLI/MCP; per [D-OW-26] a token may not move money or
 # change a spend source, so wallet writes are session-only by ruling. Orgs, members, drives, policies: Wave G.

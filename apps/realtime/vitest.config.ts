@@ -6,6 +6,8 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['src/**/*.{test,spec}.{js,ts}'],
+    // Real-Postgres tests run only under vitest.integration.config.ts (`bun run test:integration`).
+    exclude: ['**/node_modules/**', 'src/**/*.integration.test.ts'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html', 'json-summary'],

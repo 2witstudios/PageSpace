@@ -151,6 +151,7 @@ export function buildShellCheckAuth(deps: ShellCheckAuthDeps): ShellCheckAuthFn 
       // any sandbox work is warranted at all.
       sessionKey: deps.buildSessionKey({ shellId }),
       charge,
+      ownerId: access.session.ownerId,
       /** Billing attribution scope: the session's drive, or null for an owner-attributed global-assistant session. A session is not page-anchored, so there is no pageId to attribute. */
       driveId: access.session.driveId,
 

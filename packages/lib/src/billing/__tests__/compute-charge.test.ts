@@ -6,6 +6,7 @@ import {
   isOrgComputeRefusal,
   ORG_COMPUTE_REFUSAL_MESSAGES,
   type ComputeCharge,
+  sameCharge,
 } from '../compute-charge';
 import { ORG_ENTITLEMENT_TIER } from '../spend-target';
 
@@ -72,5 +73,25 @@ describe('ORG_COMPUTE_REFUSAL_MESSAGES', () => {
     expect(isOrgComputeRefusal('org_wallet_paused')).toBe(true);
     expect(isOrgComputeRefusal('org_wallet_unavailable')).toBe(true);
     expect(isOrgComputeRefusal('credit_exhausted')).toBe(false);
+  });
+});
+
+describe('sameCharge', () => {
+  const org = (orgId: string, userId: string) => ({ kind: 'org', orgId, userId }) as const;
+  const user = (userId: string) => ({ kind: 'user', userId }) as const;
+
+  it('WAL-9 (partial) two org charges are the same payer whoever they are recorded under, and differ when the org differs', () => {
+    expect(sameCharge(org('o1', 'lead'), org('o1', 'member'))).toBe(true);
+    expect(sameCharge(org('o1', 'lead'), org('o2', 'lead'))).toBe(false);
+  });
+
+  it('WAL-9 (partial) two personal charges are the same payer only for the same person', () => {
+    expect(sameCharge(user('p1'), user('p1'))).toBe(true);
+    expect(sameCharge(user('p1'), user('p2'))).toBe(false);
+  });
+
+  it('WAL-9 (partial) an org charge and a personal charge are never the same payer, in either order, even when the person is the one recorded', () => {
+    expect(sameCharge(org('o1', 'p1'), user('p1'))).toBe(false);
+    expect(sameCharge(user('p1'), org('o1', 'p1'))).toBe(false);
   });
 });

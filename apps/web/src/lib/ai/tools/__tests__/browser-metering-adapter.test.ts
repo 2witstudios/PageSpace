@@ -87,3 +87,31 @@ describe('createBrowserMeter.close', () => {
     expect(p.trackUsage).toHaveBeenCalledWith(expect.objectContaining({ userId: 'owner-1', walletId: undefined }));
   });
 });
+
+describe('a drive that moves while a browser session is open (WAL-9)', () => {
+  it("WAL-9 (partial) the client's renewal settles the interval on the OLD hold's payer, then re-opens on whoever the drive resolves to now: the next interval is held and settled on the org pool", async () => {
+    const person: ComputeCharge = { kind: 'user', userId: 'owner-1' };
+    const p = primitives(person, undefined, undefined);
+    const meter = createBrowserMeter(p.deps);
+
+    // The session opens on the person.
+    const first = await meter.open(billing);
+    if (!first.ok) throw new Error('expected a hold');
+    // Interval 1 ends: the client settles it with the hold it carries (the person's), THEN re-opens.
+    await meter.close({ billing, hold: first.hold, activeSeconds: 300, shape, substrate: 'sprites' });
+    expect(p.trackUsage).toHaveBeenLastCalledWith(expect.objectContaining({ userId: 'owner-1', walletId: undefined, holdId: 'hold-1' }));
+
+    // The drive moves into an org: the re-open resolves the payer afresh.
+    p.resolveCharge.mockResolvedValue(orgCharge);
+    p.settle.mockResolvedValue('pool-wallet-1');
+    p.gate.mockResolvedValue({ allowed: true, holdId: 'hold-2' });
+    const second = await meter.open(billing);
+    expect(second).toEqual({ ok: true, hold: { holdId: 'hold-2', charge: orgCharge } });
+    if (!second.ok) throw new Error('expected a hold');
+    expect(p.gate).toHaveBeenLastCalledWith({ charge: orgCharge });
+
+    // Interval 2 is settled on the org pool, recorded under the session owner.
+    await meter.close({ billing, hold: second.hold, activeSeconds: 300, shape, substrate: 'sprites' });
+    expect(p.trackUsage).toHaveBeenLastCalledWith(expect.objectContaining({ userId: 'session-owner-1', walletId: 'pool-wallet-1', holdId: 'hold-2' }));
+  });
+});

@@ -61,6 +61,7 @@ import {
 } from './spend-target';
 import { seatCapCheck, type RefusalReason, type SkipReason, type SpendSourceKind } from './wallet-core';
 import { loadSeatCapFacts } from './seat-allowance';
+import { holdsInScope, ledgerRowsInScope, personBoundScopeFor, type PersonBoundScope } from './person-bound-scope';
 import type { SubscriptionTier } from '../services/subscription-utils';
 
 // The partial unique index credit_ledger_stripe_ref_unique is defined WHERE
@@ -296,7 +297,7 @@ function callBounds(tier: SubscriptionTier, opts: GateOptions, now: Date): CallB
 async function dailyCapDenial(
   tx: GateTx,
   userId: string,
-  input: { dailyCap: number | null; dayStart: Date; estCost: number; userReserved: number },
+  input: { dailyCap: number | null; dayStart: Date; estCost: number; userReserved: number; scope: PersonBoundScope },
 ): Promise<CreditGateResult | null> {
   if (input.dailyCap === null) return null;
   const chargedAgg = await tx
@@ -306,6 +307,9 @@ async function dailyCapDenial(
       eq(creditLedger.userId, userId),
       inArray(creditLedger.entryType, ['usage', 'adjustment']),
       gte(creditLedger.createdAt, input.dayStart),
+      // Which of the person's rows this gate's bound counts (person-bound-scope): org-paid compute
+      // is not the person's AI spend, and the org pool's compute gate counts only it.
+      ledgerRowsInScope(input.scope),
     ));
   const dailyChargedCents = Math.max(0, Math.floor(Number(chargedAgg[0]?.chargedMc ?? 0) / 1000));
   // Add this user's still-active hold reservations to the settled total: a burst of
@@ -708,11 +712,14 @@ async function gatePersonalRoot(
       ? sql`(${creditHolds.walletId} = ${bal.id} OR ${creditHolds.walletId} IN (SELECT ${wallets.id} FROM ${wallets} WHERE ${wallets.parentWalletId} = ${bal.id}))`
       : sql`false`;
     const heldByUser = sql`${creditHolds.userId} = ${userId}`;
+    // The person's in-flight and reserved counts are scoped (person-bound-scope): a personal-root
+    // gate is never the org pool's compute gate, so org-paid compute holds are not this caller's.
+    const heldByUserInScope = sql`(${heldByUser} AND ${holdsInScope('person')})`;
     const holdAgg = await tx
       .select({
         reserved: sql<number>`coalesce(sum(${creditHolds.estCents}) FILTER (WHERE ${heldAgainstWallet}), 0)`,
-        inFlight: sql<number>`count(*) FILTER (WHERE ${heldByUser})`,
-        userReserved: sql<number>`coalesce(sum(${creditHolds.estCents}) FILTER (WHERE ${heldByUser}), 0)`,
+        inFlight: sql<number>`count(*) FILTER (WHERE ${heldByUserInScope})`,
+        userReserved: sql<number>`coalesce(sum(${creditHolds.estCents}) FILTER (WHERE ${heldByUserInScope}), 0)`,
       })
       .from(creditHolds)
       .where(and(or(heldByUser, heldAgainstWallet), gt(creditHolds.expiresAt, now)));
@@ -758,7 +765,7 @@ async function gatePersonalRoot(
     // rows don't count) — rather than appliedCents, so an in-debt user who keeps spending
     // real provider money is still bounded. Same transaction → consistent read. NO hold
     // is inserted on a cap denial.
-    const capDenied = await dailyCapDenial(tx, userId, { dailyCap, dayStart, estCost, userReserved });
+    const capDenied = await dailyCapDenial(tx, userId, { dailyCap, dayStart, estCost, userReserved, scope: 'person' });
     if (capDenied) return capDenied;
 
     // Reserve this call's estimated spend AND register it as one in-flight call.
@@ -828,6 +835,8 @@ async function gateSharedWallet(
 ): Promise<CreditGateResult> {
   const now = new Date();
   const { estCost, maxInFlight, expiresAt, dailyCap, dayStart } = callBounds(tier, opts, now);
+  // Which of the person's rows this gate's per-person bounds count (person-bound-scope).
+  const boundScope = personBoundScopeFor({ spendKind: opts.spendKind, source: chosen.source });
   const refused = (reason: RefusalReason): CreditGateResult => ({
     allowed: false,
     reason: 'source_refused',
@@ -871,6 +880,8 @@ async function gateSharedWallet(
     const heldByUser = sql`${creditHolds.userId} = ${userId}`;
     const heldOnWallet = sql`${creditHolds.walletId} = ${wallet.id}`;
     const heldOnChildren = sql`${creditHolds.walletId} IN (SELECT ${wallets.id} FROM ${wallets} WHERE ${wallets.parentWalletId} = ${wallet.id})`;
+    // The person's in-flight and reserved counts, in this gate's person-bound scope.
+    const heldByUserInScope = sql`(${heldByUser} AND ${holdsInScope(boundScope)})`;
     const heldAgainstParent = parentId
       ? sql`${creditHolds.walletId} <> ${wallet.id} AND (${creditHolds.walletId} = ${parentId} OR ${creditHolds.walletId} IN (SELECT ${wallets.id} FROM ${wallets} WHERE ${wallets.parentWalletId} = ${parentId}))`
       : sql`false`;
@@ -878,8 +889,8 @@ async function gateSharedWallet(
       .select({
         own: sql<number>`coalesce(sum(${creditHolds.estCents}) FILTER (WHERE ${heldOnWallet} OR ${heldOnChildren}), 0)`,
         parentReserved: sql<number>`coalesce(sum(${creditHolds.estCents}) FILTER (WHERE ${heldAgainstParent}), 0)`,
-        inFlight: sql<number>`count(*) FILTER (WHERE ${heldByUser})`,
-        userReserved: sql<number>`coalesce(sum(${creditHolds.estCents}) FILTER (WHERE ${heldByUser}), 0)`,
+        inFlight: sql<number>`count(*) FILTER (WHERE ${heldByUserInScope})`,
+        userReserved: sql<number>`coalesce(sum(${creditHolds.estCents}) FILTER (WHERE ${heldByUserInScope}), 0)`,
       })
       .from(creditHolds)
       .where(and(or(heldByUser, heldOnWallet, heldOnChildren, heldAgainstParent), gt(creditHolds.expiresAt, now)));
@@ -907,7 +918,7 @@ async function gateSharedWallet(
     });
     if (!result.allowed) return result;
 
-    const capDenied = await dailyCapDenial(tx, userId, { dailyCap, dayStart, estCost, userReserved });
+    const capDenied = await dailyCapDenial(tx, userId, { dailyCap, dayStart, estCost, userReserved, scope: boundScope });
     if (capDenied) return capDenied;
 
     const inserted = await tx

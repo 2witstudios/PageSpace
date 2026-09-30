@@ -109,6 +109,12 @@ export type TerminalSession = {
    */
   /** The wallet this session's windows are held and settled on — the org pool for an org drive (WAL-9). */
   charge?: ComputeCharge;
+  /**
+   * The session's own owner: who an org charge is RECORDED under, and what the payer is
+   * re-resolved with at each settle (`billing.resolveCharge`), so a drive that moves into or out
+   * of an org while the session is open changes who pays from the next window (WAL-9).
+   */
+  ownerId?: string;
   holdId?: string;
   connectedAt?: number;
   /**
