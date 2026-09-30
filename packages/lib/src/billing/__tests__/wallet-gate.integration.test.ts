@@ -1603,7 +1603,24 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     expect((await walletRow(w.poolId)).monthlyRemainingCents).toBe(900_000 - 225);
   });
 
-  it('POL-7 (partial) the wallet fallback rule comes from the org policy: default refuses, a stated rule applies, and a drive can only restate it or refuse', async () => {
+  it('POL-7 an org fallback rule of own credits moves an empty drive wallet onto the person\'s own credits, shows it, and a drive swapping it back to seat allowance refuses', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 0, poolCents: 900_000 });
+    const w = world;
+    const chooseDriveWallet = () => canConsumeAI(w.marcusId, 'free', { spend: driveSpend(w.productId, 'drive_wallet') });
+    await setPolicies(w, { walletFallback: 'own_credits' });
+
+    const moved = await chooseDriveWallet();
+    expect(moved).toMatchObject({ allowed: true, walletId: w.marcusWalletId, spendSource: 'own_credits', fallback: { from: 'drive_wallet', to: 'own_credits' } });
+    await db.delete(creditHolds).where(eq(creditHolds.userId, w.marcusId));
+
+    // A drive rule that swaps the org's own-credits fallback for seat allowance would spend org money: refuse.
+    await db.update(wallets).set({ fallbackRule: 'seat_allowance' }).where(eq(wallets.id, w.productWalletId));
+    expect(await chooseDriveWallet()).toMatchObject({ allowed: false, refusal: { source: 'drive_wallet', reason: 'source_empty' } });
+    expect((await walletRow(w.poolId)).monthlyRemainingCents).toBe(900_000);
+  });
+
+  it('POL-7 the wallet fallback rule comes from the org policy: default refuses, seat allowance applies, and a drive can only restate it or refuse', async () => {
     if (!dbAvailable) return;
     world = await build({ productAllocationCents: 0, poolCents: 900_000 });
     const w = world;

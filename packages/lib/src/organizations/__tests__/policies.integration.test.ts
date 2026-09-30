@@ -235,6 +235,19 @@ describe('suspend, never delete', () => {
     expect(await state(rowOf(w.orgDrive, w.guest))).toBeNull();
   });
 
+  it('POL-1 (partial) guests off never suspends the drive lead, even a legacy lead who is outside the org', async () => {
+    const [{ id: ledDrive }] = await db.insert(drives).values({ name: 'Legacy', slug: `legacy-${run}`, ownerId: w.outsider, orgId, orgVisibility: 'OPEN', updatedAt: new Date() }).returning({ id: drives.id });
+    created.driveIds.push(ledDrive);
+    const [lead] = await db.insert(driveMembers).values({ driveId: ledDrive, userId: w.outsider, role: 'OWNER', acceptedAt: new Date() }).returning({ id: driveMembers.id });
+    const [other] = await db.insert(driveMembers).values({ driveId: ledDrive, userId: w.guest, role: 'MEMBER', acceptedAt: new Date() }).returning({ id: driveMembers.id });
+
+    await updateOrgPolicies({ orgId, actorId: w.owner, patch: { guests: 'off' } });
+
+    const m = async (id: string) => (await db.select({ m: driveMembers.suspendedByPolicy }).from(driveMembers).where(eq(driveMembers.id, id)))[0].m;
+    expect(await m(lead.id)).toBeNull();
+    expect(await m(other.id)).toBe('guests');
+  });
+
   it('POL-1 (partial) an integrations allowlist suspends drive connections to other providers and widening it restores them', async () => {
     const mkProvider = async (slug: string) => {
       const [p] = await db.insert(integrationProviders).values({ slug: `${slug}-${run}`, name: slug, providerType: 'builtin', config: {} }).returning({ id: integrationProviders.id });

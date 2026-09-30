@@ -164,17 +164,17 @@ describe('spend policy', () => {
     });
   });
 
-  it('POL-7 (partial) a drive rule equal to the org rule applies', () => {
+  it('POL-7 a drive rule equal to the org rule applies', () => {
     const org = { ...DEFAULT_ORG_POLICIES, walletFallback: 'seat_allowance' as const };
     expect(driveSpendPolicy(org, { fallback: 'seat_allowance' }).fallback).toBe('seat_allowance');
   });
 
-  it('POL-7 (partial) a drive rule of refuse applies', () => {
+  it('POL-7 a drive rule of refuse applies', () => {
     const org = { ...DEFAULT_ORG_POLICIES, walletFallback: 'own_credits' as const };
     expect(driveSpendPolicy(org, { fallback: 'refuse' }).fallback).toBe('refuse');
   });
 
-  it('POL-7 (partial) a drive rule that swaps seat allowance and own credits resolves to refuse', () => {
+  it('POL-7 a drive rule that swaps seat allowance and own credits resolves to refuse', () => {
     const seat = { ...DEFAULT_ORG_POLICIES, walletFallback: 'seat_allowance' as const };
     const own = { ...DEFAULT_ORG_POLICIES, walletFallback: 'own_credits' as const };
     expect(driveSpendPolicy(seat, { fallback: 'own_credits' }).fallback).toBe('refuse');
