@@ -8,6 +8,8 @@ import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
 import { authorizeOrgRequest, ORG_READ_AUTH, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 import { inviteCreateSchema } from '@/lib/orgs/org-schemas';
 import { deliverOrgInvite } from '@/lib/orgs/org-invite-delivery';
+import { orgRefusalResponse } from '@/lib/orgs/org-refusal-response';
+import { defaultSeatBilling } from '@/lib/org-billing/seat-billing';
 
 type Context = { params: Promise<{ orgId: string }> };
 
@@ -34,8 +36,10 @@ export async function GET(request: Request, context: Context) {
 
 /**
  * POST /api/orgs/[orgId]/invitations — invite by email; Owner and Admins (ORG-3).
- * An expired open invite for the address is rotated in place. Seat limits and
- * auto-add (SEAT-4) and the who-can-invite policy (POL-5) land in later waves.
+ * An expired open invite for the address is rotated in place. A new invite holds a seat
+ * (SEAT-3): inside the purchased count it is free, past it auto-add raises the Stripe quantity
+ * pro rata and otherwise the invite is REFUSED with 402 `seats_full` and a message naming
+ * what to do (SEAT-4). The who-can-invite policy (POL-5) lands in a later wave.
  */
 export async function POST(request: Request, context: Context) {
   const { orgId } = await context.params;
@@ -67,6 +71,8 @@ export async function POST(request: Request, context: Context) {
       email,
       role,
       invitedBy: gate.userId,
+      actorRole: gate.role,
+      seatBilling: defaultSeatBilling(),
       now: new Date(),
       deliver: (_invitation, token) => deliverOrgInvite({ orgId, inviterId: gate.userId, email, role, token }),
     });
@@ -77,6 +83,17 @@ export async function POST(request: Request, context: Context) {
         return NextResponse.json({ error: 'Failed to send the invitation email' }, { status: 502 });
       }
       if (result.reason === 'org_lapsed') return orgLapsedResponse(result.message);
+      if (result.reason === 'seats_full') {
+        // The Owner finds this refusal in the audit trail even when an Admin hit it.
+        auditRequest(request, {
+          eventType: 'authz.access.denied',
+          userId: gate.userId,
+          resourceType: 'organization',
+          resourceId: orgId,
+          details: { reason: 'seats_full', operation: 'create_org_invitation', purchased: result.purchased, held: result.held },
+        });
+        return orgRefusalResponse({ status: result.status, message: result.message, code: result.reason });
+      }
       const error =
         result.reason === 'already_member'
           ? 'That person is already a member of this organization'

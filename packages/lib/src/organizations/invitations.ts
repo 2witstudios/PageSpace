@@ -19,6 +19,7 @@ import { normalizeEmail } from '../encryption/blind-index';
 import { isEmailAMember, isUniqueViolation, retryOnDeadlock } from './repository';
 import { checkOrgActive, type OrgLapsedRefusal } from './status';
 import type { ORG_LAPSED_CODE } from './status-core';
+import { admitSeat, type SeatAdmission, type SeatBillingPort } from './seat-service';
 import {
   publishOrgMembershipSyncEvents,
   syncOrgMemberAccess,
@@ -113,16 +114,21 @@ function lapsedRefusal(check: OrgLapsedRefusal): OrgInviteLapsed {
   return { ok: false, status: 402, reason: check.code, message: check.message };
 }
 
+/** SEAT-4: no seat can be granted — auto-add is off and every purchased seat is taken. */
+export type OrgInviteSeatRefusal = Extract<SeatAdmission, { ok: false }>;
+
 export type IssueInvitationResult =
   | { ok: true; invitation: PublicOrgInvitation; token: string; rotated: boolean }
   | { ok: false; status: 409; reason: 'already_member' | 'already_invited' }
   | OrgInviteLapsed
+  | OrgInviteSeatRefusal
   | DeliveryFailed;
 
 type Issued =
   | { ok: true; invitation: OrgInvitation; token: string; previous: OrgInvitation | null }
   | { ok: false; status: 409; reason: 'already_member' | 'already_invited' }
-  | OrgInviteLapsed;
+  | OrgInviteLapsed
+  | OrgInviteSeatRefusal;
 
 /**
  * Invite an address, rotating an expired open invite in place. If delivery fails the
@@ -134,8 +140,12 @@ export async function createOrRotateInvitation(input: {
   email: string;
   role: InvitableRole;
   invitedBy: string;
+  /** The inviter's org role, for the wording of a seat refusal. */
+  actorRole?: OrgRole;
   now: Date;
   deliver: InviteDelivery;
+  /** Stripe's seat item, for an auto-add raise (SEAT-4). Only a raise needs it. */
+  seatBilling?: SeatBillingPort;
 }): Promise<IssueInvitationResult> {
   let issued: Issued;
   try {
@@ -160,6 +170,12 @@ export async function createOrRotateInvitation(input: {
         .for('update');
       const decision = decideInviteCreation({ isExistingMember, openInvite: openInvite ?? null, now: input.now });
       if (decision.action === 'refuse') return { ok: false, status: 409, reason: decision.reason };
+
+      // SEAT-3/4/5: a new or rotated invite holds a seat. Decided under the org's billing lock,
+      // after the address is known to need one and before anything is written; an auto-add
+      // raise and this invite commit or roll back together.
+      const seat = await admitSeat(tx, { orgId: input.orgId, actorRole: input.actorRole ?? 'MEMBER' }, input.seatBilling);
+      if (!seat.ok) return seat;
 
       const { token, hash } = generateToken(ORG_INVITE_TOKEN_PREFIX);
       const expiresAt = inviteExpiryFrom(input.now);
@@ -221,9 +237,15 @@ export type ResendInvitationResult =
   | { ok: true; invitation: PublicOrgInvitation; token: string }
   | { ok: false; status: 404; reason: 'not_found' }
   | OrgInviteLapsed
+  | OrgInviteSeatRefusal
   | DeliveryFailed;
 
 /**
+ * A resend of an EXPIRED invite gives it a fresh expiry, so it holds a seat again (an expired
+ * invite is not counted): it is admitted like a new invite, under the same locks in the same
+ * order (address, invite row, billing), and refused with `seats_full` when no seat can be
+ * granted. Resending a LIVE invite changes nothing about seats: it already holds one.
+ *
  * Resend issues a new link with a fresh expiry, and the old link stops working, but
  * only once the new one has been delivered: if delivery fails the previous token and
  * expiry are restored, so the link the person already has keeps working.
@@ -231,11 +253,23 @@ export type ResendInvitationResult =
 export async function resendInvitation(input: {
   orgId: string;
   invitationId: string;
+  /** The resender's org role, for the wording of a seat refusal. */
+  actorRole?: OrgRole;
   now: Date;
   deliver: InviteDelivery;
+  /** Stripe's seat item, for an auto-add raise when the resent invite was expired (SEAT-4). */
+  seatBilling?: SeatBillingPort;
 }): Promise<ResendInvitationResult> {
   const { token, hash } = generateToken(ORG_INVITE_TOKEN_PREFIX);
   const rotated = await db.transaction(async (tx) => {
+    // The address lock first, as creation and acceptance take it, so a resend and a fresh invite
+    // for the same address serialize (the billing lock below is always taken after it).
+    const [peek] = await tx
+      .select({ email: orgInvitations.email })
+      .from(orgInvitations)
+      .where(and(eq(orgInvitations.id, input.invitationId), eq(orgInvitations.orgId, input.orgId), isNull(orgInvitations.acceptedAt)))
+      .limit(1);
+    if (peek) await lockOrgInviteAddress(tx, input.orgId, peek.email);
     // SEAT-9: a re-sent invite is an invite; the pending one keeps its link and its seat.
     const active = await checkOrgActive(input.orgId, { executor: tx, now: input.now });
     if (!active.ok) return lapsedRefusal(active);
@@ -251,6 +285,10 @@ export async function resendInvitation(input: {
       )
       .for('update');
     if (!previous) return null;
+    if (!isLiveInvite(previous, input.now)) {
+      const seat = await admitSeat(tx, { orgId: input.orgId, actorRole: input.actorRole ?? 'MEMBER' }, input.seatBilling);
+      if (!seat.ok) return seat;
+    }
     const [invitation] = await tx
       .update(orgInvitations)
       .set({ tokenHash: hash, expiresAt: inviteExpiryFrom(input.now) })

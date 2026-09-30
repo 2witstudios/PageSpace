@@ -1,5 +1,5 @@
 {
-  "id": "25f4a8c3-52ac-4947-9013-679e8a1a335e",
+  "id": "bafeadd9-7345-49bf-a3f5-36d0ae294f08",
   "prevId": "31f8fd3c-e866-4a8d-b023-5075296db298",
   "version": "7",
   "dialect": "postgresql",
@@ -3040,31 +3040,9 @@
           "type": "timestamp",
           "primaryKey": false,
           "notNull": false
-        },
-        "suspendedByPolicy": {
-          "name": "suspendedByPolicy",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
         }
       },
       "indexes": {
-        "drive_members_suspended_by_policy_idx": {
-          "name": "drive_members_suspended_by_policy_idx",
-          "columns": [
-            {
-              "expression": "driveId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "where": "\"drive_members\".\"suspendedByPolicy\" IS NOT NULL",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
         "drive_members_drive_id_idx": {
           "name": "drive_members_drive_id_idx",
           "columns": [
@@ -13382,12 +13360,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "suspended_by_policy": {
-          "name": "suspended_by_policy",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "connected_by": {
           "name": "connected_by",
           "type": "text",
@@ -13469,22 +13441,6 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "integration_connections_suspended_by_policy_idx": {
-          "name": "integration_connections_suspended_by_policy_idx",
-          "columns": [
-            {
-              "expression": "drive_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "where": "\"integration_connections\".\"suspended_by_policy\" IS NOT NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -17370,12 +17326,6 @@
           "primaryKey": false,
           "notNull": true,
           "default": 0
-        },
-        "suspended_by_policy": {
-          "name": "suspended_by_policy",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
         }
       },
       "indexes": {
@@ -17390,22 +17340,6 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "drive_share_links_suspended_by_policy_idx": {
-          "name": "drive_share_links_suspended_by_policy_idx",
-          "columns": [
-            {
-              "expression": "drive_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "where": "\"drive_share_links\".\"suspended_by_policy\" IS NOT NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -17571,12 +17505,6 @@
           "primaryKey": false,
           "notNull": true,
           "default": 0
-        },
-        "suspended_by_policy": {
-          "name": "suspended_by_policy",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
         }
       },
       "indexes": {
@@ -17591,22 +17519,6 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "page_share_links_suspended_by_policy_idx": {
-          "name": "page_share_links_suspended_by_policy_idx",
-          "columns": [
-            {
-              "expression": "page_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "where": "\"page_share_links\".\"suspended_by_policy\" IS NOT NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -18299,12 +18211,6 @@
           "notNull": true,
           "default": true
         },
-        "suspended_by_policy": {
-          "name": "suspended_by_policy",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "published_by": {
           "name": "published_by",
           "type": "text",
@@ -18337,22 +18243,6 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "published_pages_suspended_by_policy_idx": {
-          "name": "published_pages_suspended_by_policy_idx",
-          "columns": [
-            {
-              "expression": "drive_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "where": "\"published_pages\".\"suspended_by_policy\" IS NOT NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -20241,12 +20131,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "suspended_by_policy": {
-          "name": "suspended_by_policy",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp",
@@ -20282,22 +20166,6 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "custom_domains_suspended_by_policy_idx": {
-          "name": "custom_domains_suspended_by_policy_idx",
-          "columns": [
-            {
-              "expression": "drive_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "where": "\"custom_domains\".\"suspended_by_policy\" IS NOT NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -25577,6 +25445,13 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "seatAutoAdd": {
+          "name": "seatAutoAdd",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
         },
         "createdAt": {
           "name": "createdAt",

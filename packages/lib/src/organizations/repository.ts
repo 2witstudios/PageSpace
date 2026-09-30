@@ -146,13 +146,17 @@ export async function isEmailAMember(
 }
 
 /**
- * Seats held by the org (SEAT-3 input): accepted members plus LIVE pending
- * invites. An expired invite never holds a seat. Guests, agents and apps are not
- * org_members rows, so they never count. The Stripe quantity is Wave C.
+ * The parts of the seat count (SEAT-3): accepted members and LIVE pending invites. An
+ * expired invite never holds a seat. Guests, agents and apps are not org_members rows, so
+ * they never count; this reads only org_members and org_invitations. It takes an executor so
+ * seat admission reads it inside its locked transaction.
  */
-export async function countOrgSeats(orgId: string): Promise<number> {
-  const [members] = await db.select({ n: count() }).from(orgMembers).where(eq(orgMembers.orgId, orgId));
-  const [invites] = await db
+export async function countOrgSeatParts(
+  orgId: string,
+  executor: Pick<typeof db, 'select'> = db,
+): Promise<{ members: number; pendingInvites: number }> {
+  const [members] = await executor.select({ n: count() }).from(orgMembers).where(eq(orgMembers.orgId, orgId));
+  const [invites] = await executor
     .select({ n: count() })
     .from(orgInvitations)
     .where(
@@ -162,7 +166,13 @@ export async function countOrgSeats(orgId: string): Promise<number> {
         sql`${orgInvitations.expiresAt} > (now() at time zone 'utc')`,
       ),
     );
-  return Number(members?.n ?? 0) + Number(invites?.n ?? 0);
+  return { members: Number(members?.n ?? 0), pendingInvites: Number(invites?.n ?? 0) };
+}
+
+/** Seats held by the org: members plus live pending invites (see countOrgSeatParts). */
+export async function countOrgSeats(orgId: string): Promise<number> {
+  const { members, pendingInvites } = await countOrgSeatParts(orgId);
+  return members + pendingInvites;
 }
 
 export type CreateOrganizationResult =

@@ -97,8 +97,15 @@ POL-11
 # 5230424182 on #2657: the tier table, prices and lone-user refusal are proven, so those tests are
 # titled "SEAT-2 (partial)"; "buying it creates the org" is unproven until Wave C creates orgs.
 SEAT-2
-# SEAT-3: B3's countOrgSeats counts accepted members plus live invites only ("SEAT-3 (partial)");
-# the Stripe quantity is Wave C.
+# SEAT-3/4/5 (lane ow-d2, D2): every test is titled "(partial)" and all three stay here for a reviewer
+# to decide. Proven against real Postgres: the seat count (members + live invites; a real share-link
+# GUEST redeemer and a drive agent never count), the extra-seat quantity raise on invite with auto-add
+# on, the refusal with its message on auto-add off, concurrent invites serialised on the billing lock,
+# a lost Stripe response replayed by the same key, removal making no Stripe call, re-add reusing the
+# paid seat, and period-end release/restore. NOT proven, which is why none is claimed in full: an APP
+# never counting (no app-membership row is created in these tests), "pro rata" against Stripe itself
+# (the fake records the proration parameter; the real test-mode Stripe run needs sk_test, which CI
+# does not hold), and an in-app Owner notification of a refusal (needs a NotificationType value).
 SEAT-3
 SEAT-4
 SEAT-5
