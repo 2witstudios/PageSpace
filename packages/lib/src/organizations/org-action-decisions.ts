@@ -9,9 +9,7 @@
 import type { OrgRole } from '@pagespace/db/schema/organizations';
 import { ORG_ROLE_RANK } from './org-roles';
 import type { ActorPolicy, OrgPolicies, OrgPolicyKey } from './policies-core';
-import { ORG_POLICY_CODE, type PolicyDecision, type PolicyRefusal } from './sharing-decisions';
-
-const refuse = (policy: OrgPolicyKey, message: string): PolicyRefusal => ({ ok: false, code: ORG_POLICY_CODE, policy, status: 403, message });
+import { policyRefusal as refuse, type PolicyDecision } from './sharing-decisions';
 
 const MIN_ROLE: Readonly<Record<ActorPolicy, OrgRole>> = { admins: 'ADMIN', members: 'MEMBER' };
 

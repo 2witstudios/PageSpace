@@ -17,6 +17,9 @@ import { generateToken, hashToken } from '../auth/token-utils';
 import { decryptUserRow } from '../auth/user-repository';
 import { normalizeEmail } from '../encryption/blind-index';
 import { isEmailAMember, isUniqueViolation, retryOnDeadlock } from './repository';
+import { getOrgPolicies } from './policy-reader';
+import { orgActorDecision } from './org-action-decisions';
+import { policyRefusal, type PolicyRefusal } from './sharing-decisions';
 import { checkOrgActive, type OrgLapsedRefusal } from './status';
 import type { ORG_LAPSED_CODE } from './status-core';
 import { admitSeat, type SeatAdmission, type SeatBillingPort } from './seat-service';
@@ -114,6 +117,20 @@ function lapsedRefusal(check: OrgLapsedRefusal): OrgInviteLapsed {
   return { ok: false, status: 402, reason: check.code, message: check.message };
 }
 
+/**
+ * POL-5: may this person invite, under the org's who-can-invite policy (read now, inside the transaction)? Only an Owner
+ * or Admin may hand out the Admin role, whatever the policy says.
+ */
+async function inviterRefusal(tx: Tx, orgId: string, actorRole: OrgRole, role: OrgRole): Promise<PolicyRefusal | null> {
+  const policies = await getOrgPolicies(orgId, tx);
+  const who = orgActorDecision(policies.whoCanInvite, actorRole, 'invite');
+  if (!who.ok) return who;
+  if (role === 'ADMIN' && actorRole === 'MEMBER') {
+    return policyRefusal('whoCanInvite', 'Only Owners and Admins can invite someone as an Admin.');
+  }
+  return null;
+}
+
 /** SEAT-4: no seat can be granted — auto-add is off and every purchased seat is taken. */
 export type OrgInviteSeatRefusal = Extract<SeatAdmission, { ok: false }>;
 
@@ -121,6 +138,7 @@ export type IssueInvitationResult =
   | { ok: true; invitation: PublicOrgInvitation; token: string; rotated: boolean }
   | { ok: false; status: 409; reason: 'already_member' | 'already_invited' }
   | OrgInviteLapsed
+  | PolicyRefusal
   | OrgInviteSeatRefusal
   | DeliveryFailed;
 
@@ -128,6 +146,7 @@ type Issued =
   | { ok: true; invitation: OrgInvitation; token: string; previous: OrgInvitation | null }
   | { ok: false; status: 409; reason: 'already_member' | 'already_invited' }
   | OrgInviteLapsed
+  | PolicyRefusal
   | OrgInviteSeatRefusal;
 
 /**
@@ -140,8 +159,8 @@ export async function createOrRotateInvitation(input: {
   email: string;
   role: InvitableRole;
   invitedBy: string;
-  /** The inviter's org role, for the wording of a seat refusal. */
-  actorRole?: OrgRole;
+  /** The inviter's org role: what the who-can-invite policy (POL-5) is judged on, and the wording of a seat refusal. */
+  actorRole: OrgRole;
   now: Date;
   deliver: InviteDelivery;
   /** Stripe's seat item, for an auto-add raise (SEAT-4). Only a raise needs it. */
@@ -154,6 +173,9 @@ export async function createOrRotateInvitation(input: {
       // SEAT-9: inviting is an org-only capability; a lapsed org is refused before any write.
       const active = await checkOrgActive(input.orgId, { executor: tx, now: input.now });
       if (!active.ok) return lapsedRefusal(active);
+      // POL-5: who may invite, read here in the same transaction and before anything is written.
+      const refusal = await inviterRefusal(tx, input.orgId, input.actorRole, input.role);
+      if (refusal) return refusal;
       const isExistingMember = await isEmailAMember(input.orgId, input.email, tx);
       const [openInvite] = await tx
         .select()
@@ -174,7 +196,7 @@ export async function createOrRotateInvitation(input: {
       // SEAT-3/4/5: a new or rotated invite holds a seat. Decided under the org's billing lock,
       // after the address is known to need one and before anything is written; an auto-add
       // raise and this invite commit or roll back together.
-      const seat = await admitSeat(tx, { orgId: input.orgId, actorRole: input.actorRole ?? 'MEMBER' }, input.seatBilling);
+      const seat = await admitSeat(tx, { orgId: input.orgId, actorRole: input.actorRole }, input.seatBilling);
       if (!seat.ok) return seat;
 
       const { token, hash } = generateToken(ORG_INVITE_TOKEN_PREFIX);
@@ -237,6 +259,7 @@ export type ResendInvitationResult =
   | { ok: true; invitation: PublicOrgInvitation; token: string }
   | { ok: false; status: 404; reason: 'not_found' }
   | OrgInviteLapsed
+  | PolicyRefusal
   | OrgInviteSeatRefusal
   | DeliveryFailed;
 
@@ -253,8 +276,8 @@ export type ResendInvitationResult =
 export async function resendInvitation(input: {
   orgId: string;
   invitationId: string;
-  /** The resender's org role, for the wording of a seat refusal. */
-  actorRole?: OrgRole;
+  /** The resender's org role: what the who-can-invite policy (POL-5) is judged on, and the wording of a seat refusal. */
+  actorRole: OrgRole;
   now: Date;
   deliver: InviteDelivery;
   /** Stripe's seat item, for an auto-add raise when the resent invite was expired (SEAT-4). */
@@ -285,8 +308,11 @@ export async function resendInvitation(input: {
       )
       .for('update');
     if (!previous) return null;
+    // POL-5: a re-sent invite is an invite. Judged on the role the invitation carries.
+    const refusal = await inviterRefusal(tx, input.orgId, input.actorRole, previous.role);
+    if (refusal) return refusal;
     if (!isLiveInvite(previous, input.now)) {
-      const seat = await admitSeat(tx, { orgId: input.orgId, actorRole: input.actorRole ?? 'MEMBER' }, input.seatBilling);
+      const seat = await admitSeat(tx, { orgId: input.orgId, actorRole: input.actorRole }, input.seatBilling);
       if (!seat.ok) return seat;
     }
     const [invitation] = await tx

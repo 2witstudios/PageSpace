@@ -17,6 +17,7 @@ describe('shareLinkCreationDecision', () => {
     expect(shareLinkCreationDecision(policies({ publicShareLinks: false }))).toEqual({
       ok: false,
       code: ORG_POLICY_CODE,
+      reason: ORG_POLICY_CODE,
       policy: 'publicShareLinks',
       status: 403,
       message: expect.stringContaining('share links'),

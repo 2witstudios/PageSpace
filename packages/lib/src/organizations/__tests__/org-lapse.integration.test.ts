@@ -169,13 +169,13 @@ describe('org lapse gates (orgs on, real Postgres)', () => {
     expect(await isOrgActive(w.orgId)).toBe(false);
     const email = `lena-${createId()}@northwind.test`;
 
-    const refused = await createOrRotateInvitation({ orgId: w.orgId, email, role: 'MEMBER', invitedBy: w.ids.priya, now: new Date(), deliver });
+    const refused = await createOrRotateInvitation({ actorRole: 'OWNER', orgId: w.orgId, email, role: 'MEMBER', invitedBy: w.ids.priya, now: new Date(), deliver });
     expect(refused).toEqual({ ok: false, status: 402, reason: 'org_lapsed', message: ORG_LAPSED_MESSAGE });
     expect(deliver).not.toHaveBeenCalled();
     expect(await db.select().from(orgInvitations).where(eq(orgInvitations.orgId, w.orgId))).toHaveLength(0);
 
     await setSubscription(w.orgId, 'active');
-    const accepted = await createOrRotateInvitation({ orgId: w.orgId, email, role: 'MEMBER', invitedBy: w.ids.priya, now: new Date(), deliver });
+    const accepted = await createOrRotateInvitation({ actorRole: 'OWNER', orgId: w.orgId, email, role: 'MEMBER', invitedBy: w.ids.priya, now: new Date(), deliver });
     expect(accepted.ok).toBe(true);
     expect(deliver).toHaveBeenCalledTimes(1);
   });
@@ -183,12 +183,12 @@ describe('org lapse gates (orgs on, real Postgres)', () => {
   it('SEAT-9 (partial) a pending invite survives the lapse untouched: resend is refused and its link is not rotated', async () => {
     if (!world) return;
     const w = world;
-    const issued = await createOrRotateInvitation({ orgId: w.orgId, email: `tomas-${createId()}@northwind.test`, role: 'MEMBER', invitedBy: w.ids.jono, now: new Date(), deliver });
+    const issued = await createOrRotateInvitation({ actorRole: 'OWNER', orgId: w.orgId, email: `tomas-${createId()}@northwind.test`, role: 'MEMBER', invitedBy: w.ids.jono, now: new Date(), deliver });
     if (!issued.ok) throw new Error('fixture invite failed');
     const [before] = await db.select().from(orgInvitations).where(eq(orgInvitations.id, issued.invitation.id));
 
     await setSubscription(w.orgId, 'unpaid');
-    const resent = await resendInvitation({ orgId: w.orgId, invitationId: issued.invitation.id, now: new Date(), deliver });
+    const resent = await resendInvitation({ actorRole: 'OWNER', orgId: w.orgId, invitationId: issued.invitation.id, now: new Date(), deliver });
     expect(resent).toEqual({ ok: false, status: 402, reason: 'org_lapsed', message: ORG_LAPSED_MESSAGE });
     const [after] = await db.select().from(orgInvitations).where(eq(orgInvitations.id, issued.invitation.id));
     expect(after.tokenHash).toBe(before.tokenHash);
@@ -325,7 +325,7 @@ describe('org lapse gates (orgs on, real Postgres)', () => {
     for (const mode of ['onprem', 'tenant']) {
       process.env.DEPLOYMENT_MODE = mode;
       expect(await getOrgStatus(w.orgId)).toEqual({ status: 'active', reason: null });
-      const invite = await createOrRotateInvitation({ orgId: w.orgId, email: `aisha-${mode}-${createId()}@northwind.test`, role: 'MEMBER', invitedBy: w.ids.jono, now: new Date(), deliver });
+      const invite = await createOrRotateInvitation({ actorRole: 'OWNER', orgId: w.orgId, email: `aisha-${mode}-${createId()}@northwind.test`, role: 'MEMBER', invitedBy: w.ids.jono, now: new Date(), deliver });
       expect(invite.ok).toBe(true);
     }
   });

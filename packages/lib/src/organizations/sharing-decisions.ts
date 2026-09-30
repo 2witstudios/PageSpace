@@ -14,13 +14,18 @@ export const ORG_POLICY_CODE = 'org_policy' as const;
 export type PolicyRefusal = {
   ok: false;
   code: typeof ORG_POLICY_CODE;
+  /** The same value as `code`, so a refusal fits result unions that discriminate on `reason`. */
+  reason: typeof ORG_POLICY_CODE;
   policy: OrgPolicyKey;
   status: 403;
   message: string;
 };
 export type PolicyDecision = { ok: true } | PolicyRefusal;
 
-const refuse = (policy: OrgPolicyKey, message: string): PolicyRefusal => ({ ok: false, code: ORG_POLICY_CODE, policy, status: 403, message });
+const refuse = (policy: OrgPolicyKey, message: string): PolicyRefusal => ({ ok: false, code: ORG_POLICY_CODE, reason: ORG_POLICY_CODE, policy, status: 403, message });
+
+/** The one constructor for an org-policy refusal, shared by every policy decision module. */
+export const policyRefusal = refuse;
 
 export const SHARE_LINKS_OFF_MESSAGE = "This organization doesn't allow public share links. Existing links are paused, not deleted.";
 export const PUBLISHING_OFF_MESSAGE = "This organization doesn't allow publishing to the web. Existing published pages are paused, not deleted.";
