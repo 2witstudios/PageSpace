@@ -438,7 +438,7 @@ describe('createPublishedApp — row before Fly', () => {
     expect(callLog.filter((c) => c.startsWith('fly:'))).toEqual([]);
   });
 
-  it('POL-10 (partial): given an org that turned published apps off, should create nothing - no row, no Fly app', async () => {
+  it('POL-10 given an org that turned published apps off, should create nothing - no row, no Fly app', async () => {
     mockSelectQueue([{ rows: [{ id: 'env1', driveId: 'drive1' }], label: 'db:select:env' }]);
     const allowed = vi.fn(async () => false);
     const result = await createPublishedApp({

@@ -680,7 +680,7 @@ describe('POST /api/drives/[driveId]/integrations', () => {
       vi.mocked(findDriveConnection).mockResolvedValue(null);
     });
 
-    it('POL-11 (partial): refuses 403 org_policy for a service off the org allowlist - nothing is stored, no credential is taken', async () => {
+    it('POL-11 refuses 403 org_policy for a service off the org allowlist - nothing is stored, no credential is taken', async () => {
       vi.mocked(getDrivePolicies).mockResolvedValue({ orgId: 'org-1', policies: { ...DEFAULT_ORG_POLICIES, integrationsAllowlist: ['slack'] } });
       const request = new Request('https://example.com/api/drives/d/integrations', {
         method: 'POST',
@@ -693,7 +693,7 @@ describe('POST /api/drives/[driveId]/integrations', () => {
       expect(createConnection).not.toHaveBeenCalled();
     });
 
-    it('POL-11 (partial): an allowed service still connects', async () => {
+    it('POL-11 an allowed service still connects', async () => {
       vi.mocked(getDrivePolicies).mockResolvedValue({ orgId: 'org-1', policies: { ...DEFAULT_ORG_POLICIES, integrationsAllowlist: ['linear'] } });
       vi.mocked(encryptCredentials).mockResolvedValue({ apiKey: 'enc_xyz' });
       // @ts-expect-error - partial mock data

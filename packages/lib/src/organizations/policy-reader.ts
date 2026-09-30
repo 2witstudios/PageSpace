@@ -5,7 +5,7 @@
  * No caching, by design: every call reads the row, so a change applies immediately in every process.
  */
 import { db } from '@pagespace/db/db';
-import { eq } from '@pagespace/db/operators';
+import { eq, or, sql } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { organizations } from '@pagespace/db/schema/organizations';
 import type { SpendPolicy } from '../billing/wallet-core';
@@ -21,6 +21,20 @@ type Executor = typeof db | Tx;
 export async function getOrgPolicies(orgId: string, executor: Executor = db): Promise<OrgPolicies> {
   const [row] = await executor.select({ policies: organizations.policies }).from(organizations).where(eq(organizations.id, orgId)).limit(1);
   return parseOrgPolicies(row?.policies);
+}
+
+/**
+ * The orgs whose STORED policies set any of these keys, each with its parsed policies. A narrowing for sweeps
+ * (an org that never set the key is at the default and needs no work); the parse, not the stored shape, decides
+ * what the value is. The only place, besides the writer's locked read, that touches the column.
+ */
+export async function listOrgsSettingPolicyKeys(keys: readonly string[], executor: Executor = db): Promise<Array<{ orgId: string; policies: OrgPolicies }>> {
+  if (keys.length === 0) return [];
+  const rows = await executor
+    .select({ id: organizations.id, policies: organizations.policies })
+    .from(organizations)
+    .where(or(...keys.map((key) => sql`${organizations.policies} ? ${key}`)));
+  return rows.map((r) => ({ orgId: r.id, policies: parseOrgPolicies(r.policies) }));
 }
 
 /**

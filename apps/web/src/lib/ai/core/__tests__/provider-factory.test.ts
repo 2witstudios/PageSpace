@@ -116,10 +116,10 @@ describe('provider-factory', () => {
   });
 
   describe('createAIProvider', () => {
-    describe('the org model and provider allowlists (POL-8)', () => {
+    describe('the org model and provider allowlists', () => {
       const orgPolicies = (over: Partial<typeof DEFAULT_ORG_POLICIES>) => ({ orgId: 'org-1', policies: { ...DEFAULT_ORG_POLICIES, ...over } });
 
-      it('POL-8 a model the org does not allow is REFUSED 403 with the policy named, and no provider client is built', async () => {
+      it('POL-8 (partial) a model the org does not allow is REFUSED 403 with the policy named, and no provider client is built', async () => {
         process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
         getDrivePolicies.mockResolvedValue(orgPolicies({ modelAllowlist: ['some/other-model'] }));
 
@@ -131,14 +131,14 @@ describe('provider-factory', () => {
         expect(getDrivePolicies).toHaveBeenCalledWith('drive-1');
       });
 
-      it('POL-8 a provider the org does not allow is refused, independently of the model list', async () => {
+      it('POL-8 (partial) a provider the org does not allow is refused, independently of the model list', async () => {
         process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
         getDrivePolicies.mockResolvedValue(orgPolicies({ providerAllowlist: ['google'] }));
         const result = await createAIProvider('user-123', {}, { driveId: 'drive-1' });
         expect(isProviderError(result) && result.policy).toBe('providerAllowlist');
       });
 
-      it('POL-8 an allowed model runs, and an empty allowlist allows none', async () => {
+      it('POL-8 (partial) an allowed model runs, and an empty allowlist allows none', async () => {
         process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
         getDrivePolicies.mockResolvedValue(orgPolicies({ modelAllowlist: ['z-ai/glm-5.3-flash'] }));
         expect(isProviderError(await createAIProvider('user-123', {}, { driveId: 'drive-1' }))).toBe(false);
@@ -146,7 +146,7 @@ describe('provider-factory', () => {
         expect(isProviderError(await createAIProvider('user-123', {}, { driveId: 'drive-1' }))).toBe(true);
       });
 
-      it('POL-8 a disallowed SELECTION is refused, never silently replaced by an allowed default (the resolver would have swapped it)', async () => {
+      it('POL-8 (partial) a disallowed SELECTION is refused, never silently replaced by an allowed default (the resolver would have swapped it)', async () => {
         process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
         // The default is allowed; the asked-for model is not in the catalog, so the resolver substitutes the default.
         getDrivePolicies.mockResolvedValue(orgPolicies({ modelAllowlist: ['z-ai/glm-5.3-flash'] }));
@@ -157,14 +157,14 @@ describe('provider-factory', () => {
         expect(createOpenRouter).not.toHaveBeenCalled();
       });
 
-      it('POL-8 no drive, or a drive with no org, is never restricted and reads no policy when no drive is named', async () => {
+      it('POL-8 (partial) no drive, or a drive with no org, is never restricted and reads no policy when no drive is named', async () => {
         process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
         expect(isProviderError(await createAIProvider('user-123', {}))).toBe(false);
         expect(getDrivePolicies).not.toHaveBeenCalled();
         expect(isProviderError(await createAIProvider('user-123', {}, { driveId: 'personal-drive' }))).toBe(false);
       });
 
-      it('POL-8 the allowlist is read on every call: a change applies to the next call without a restart', async () => {
+      it('POL-8 (partial) the allowlist is read on every call: a change applies to the next call without a restart', async () => {
         process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
         getDrivePolicies.mockResolvedValue(orgPolicies({ modelAllowlist: ['x/y'] }));
         expect(isProviderError(await createAIProvider('user-123', {}, { driveId: 'drive-1' }))).toBe(true);

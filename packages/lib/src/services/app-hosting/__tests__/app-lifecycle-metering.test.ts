@@ -144,7 +144,7 @@ beforeEach(() => {
 });
 
 describe('wakePublishedApp', () => {
-  it('POL-10 (partial): an org that turned published apps off refuses the wake before the gate and before Fly', async () => {
+  it('POL-10 an org that turned published apps off refuses the wake before the gate and before Fly', async () => {
     const { deps, gate, startMachine } = makeDeps({ publishedAppsAllowed: async () => false });
     seed(appRow());
     const result = await wakePublishedApp('app-1', deps);

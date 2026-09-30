@@ -159,7 +159,7 @@ describe('addAgentToDrive', () => {
     expect(captured[0]).toMatchObject({ role: 'ADMIN', driveId: DRIVE, agentPageId: AGENT, addedBy: USER });
   });
 
-  describe('POL-9 (partial) cross-drive agents', () => {
+  describe('cross-drive agents under the org policy', () => {
     const owner = () => {
       vi.mocked(canUserEditPage).mockResolvedValue(true);
       const captured: Record<string, unknown>[] = [];
@@ -167,7 +167,7 @@ describe('addAgentToDrive', () => {
       return captured;
     };
 
-    it('refuses an agent from another drive when the org turns cross-drive agents off, and writes nothing', async () => {
+    it('POL-9 refuses an agent from another drive when the org turns cross-drive agents off, and writes nothing', async () => {
       vi.mocked(getDrivePolicies).mockResolvedValue({ policies: { crossDriveAgents: false } } as never);
       vi.mocked(db.select)
         .mockReturnValueOnce(stubSelect(FOREIGN_AGENT_PAGE))
@@ -178,7 +178,7 @@ describe('addAgentToDrive', () => {
       expect(captured).toHaveLength(0);
     });
 
-    it('allows it while the policy is on', async () => {
+    it('POL-9 allows it while the policy is on', async () => {
       vi.mocked(getDrivePolicies).mockResolvedValue({ policies: { crossDriveAgents: true } } as never);
       vi.mocked(db.select)
         .mockReturnValueOnce(stubSelect(FOREIGN_AGENT_PAGE))
@@ -189,7 +189,7 @@ describe('addAgentToDrive', () => {
       expect(captured).toHaveLength(1);
     });
 
-    it('an agent from THIS drive is not cross-drive, whatever the policy', async () => {
+    it('POL-9 an agent from THIS drive is not cross-drive, whatever the policy', async () => {
       vi.mocked(getDrivePolicies).mockResolvedValue({ policies: { crossDriveAgents: false } } as never);
       vi.mocked(db.select)
         .mockReturnValueOnce(stubSelect(AI_CHAT_PAGE))

@@ -204,7 +204,7 @@ describe('POST /api/ai/page-agents/consult — prepaid credit gate', () => {
     expect(vi.mocked(canConsumeAI).mock.calls[0]?.[2]?.spend).toEqual({ kind: 'drive', driveId: 'drive-1', chosen: null, conversationId: 'conv-1' });
   });
 
-  it('POL-8 the agent\'s drive is named to the provider factory, and an org-policy refusal is a 403 naming the policy, not a 500', async () => {
+  it('POL-8 (partial) the agent\'s drive is named to the provider factory, and an org-policy refusal is a 403 naming the policy, not a 500', async () => {
     vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'ok' });
     await POST(makeRequest());
     expect(vi.mocked(createAIProvider).mock.calls.at(-1)?.[2]).toEqual({ driveId: 'drive-1' });

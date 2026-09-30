@@ -272,7 +272,7 @@ describe('POST /api/v1/chat/completions', () => {
     });
   });
 
-  test('POL-8 the page\'s drive is named to the provider factory, and an org-policy refusal is a 403 naming the policy (not a 500, not a substitution)', async () => {
+  test('POL-8 (partial) the page\'s drive is named to the provider factory, and an org-policy refusal is a 403 naming the policy (not a 500, not a substitution)', async () => {
     const { createAIProvider } = await import('@/lib/ai/core/provider-factory');
     vi.mocked(createAIProvider).mockResolvedValueOnce({ error: "This organization doesn't allow that AI model.", status: 403, code: 'org_policy', policy: 'modelAllowlist' } as never);
 

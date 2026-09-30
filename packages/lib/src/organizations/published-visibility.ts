@@ -9,13 +9,11 @@
  *  - reconcileAllPublishedVisibility: the sweep that retries anything a failed object-store call left behind.
  */
 import { db } from '@pagespace/db/db';
-import { eq, inArray, sql } from '@pagespace/db/operators';
+import { eq, inArray } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { customDomains } from '@pagespace/db/schema/custom-domains';
-import { organizations } from '@pagespace/db/schema/organizations';
 import { loggers } from '../logging/logger-config';
-import { getOrgPolicies } from './policy-reader';
-import { parseOrgPolicies } from './policies-core';
+import { getOrgPolicies, listOrgsSettingPolicyKeys } from './policy-reader';
 import {
   PARKED_PREFIX,
   PUBLISHED_PREFIX,
@@ -119,14 +117,8 @@ export async function reconcileOrgPublishedVisibility(orgId: string, store: Publ
 
 /** Orgs whose stored policies restrict publishing or domains (a key is set; the live parse decides). */
 export async function listOrgsRestrictingPublishing(executor: Executor = db): Promise<string[]> {
-  const rows = await executor
-    .select({ id: organizations.id, policies: organizations.policies })
-    .from(organizations)
-    .where(sql`${organizations.policies} ? 'publishWeb' OR ${organizations.policies} ? 'customDomains'`);
-  return rows.filter((r) => {
-    const p = parseOrgPolicies(r.policies);
-    return !p.publishWeb || !p.customDomains;
-  }).map((r) => r.id);
+  const orgs = await listOrgsSettingPolicyKeys(['publishWeb', 'customDomains'], executor);
+  return orgs.filter((o) => !o.policies.publishWeb || !o.policies.customDomains).map((o) => o.orgId);
 }
 
 /**

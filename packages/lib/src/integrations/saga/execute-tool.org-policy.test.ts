@@ -32,42 +32,42 @@ function run(opts: { conn: ReturnType<typeof connection>; policies: OrgPolicies 
   return { result, logAudit, getDriveOrgPolicies };
 }
 
-describe('POL-11 (partial) integration calls follow the org allowlist', () => {
-  it('refuses a provider that is off the allowlist, and audits the refusal', async () => {
+describe('integration calls follow the org allowlist', () => {
+  it('POL-11 refuses a provider that is off the allowlist, and audits the refusal', async () => {
     const { result, logAudit } = run({ conn: connection(), policies: policies(['slack']) });
     expect(await result).toMatchObject({ success: false, errorType: 'validation', error: expect.stringContaining("doesn't allow that service") });
     expect(logAudit).toHaveBeenCalledWith(expect.objectContaining({ success: false, errorType: 'INTEGRATION_ORG_POLICY' }));
   });
 
-  it('an empty allowlist allows nothing (never everything)', async () => {
+  it('POL-11 an empty allowlist allows nothing (never everything)', async () => {
     const { result } = run({ conn: connection(), policies: policies([]) });
     expect(await result).toMatchObject({ success: false, error: expect.stringContaining("doesn't allow that service") });
   });
 
-  it('refuses a SUSPENDED connection even when the provider is allowed again (marker not yet reconciled)', async () => {
+  it('POL-11 refuses a SUSPENDED connection even when the provider is allowed again (marker not yet reconciled)', async () => {
     const { result } = run({ conn: connection({ suspendedByPolicy: 'integrations' }), policies: policies(['github']) });
     expect(await result).toMatchObject({ success: false, error: expect.stringContaining('right now') });
   });
 
-  it('refuses a suspended connection in a drive with no org too (a marker is never ignored)', async () => {
+  it('POL-11 refuses a suspended connection in a drive with no org too (a marker is never ignored)', async () => {
     const { result } = run({ conn: connection({ suspendedByPolicy: 'integrations' }), policies: null });
     expect(await result).toMatchObject({ success: false, error: expect.stringContaining('right now') });
   });
 
-  it('allows a listed provider, a null allowlist, and a drive with no org: the call proceeds past the policy', async () => {
+  it('POL-11 allows a listed provider, a null allowlist, and a drive with no org: the call proceeds past the policy', async () => {
     for (const p of [policies(['github']), policies(null), null]) {
       const { result } = run({ conn: connection(), policies: p });
       expect(await result).toMatchObject({ success: false, error: 'Provider config not found' });
     }
   });
 
-  it('judges the drive the call runs IN, so a connection of another drive cannot carry a call past this org', async () => {
+  it('POL-11 judges the drive the call runs IN, so a connection of another drive cannot carry a call past this org', async () => {
     const { result, getDriveOrgPolicies } = run({ conn: connection({ driveId: 'other-drive' }), policies: policies(['slack']), requestDriveId: 'drive-1' });
     expect(await result).toMatchObject({ success: false, error: expect.stringContaining("doesn't allow that service") });
     expect(getDriveOrgPolicies).toHaveBeenCalledWith('drive-1');
   });
 
-  it('a call with no drive at all, on a personal connection, reads no policy', async () => {
+  it('POL-11 a call with no drive at all, on a personal connection, reads no policy', async () => {
     const { result, getDriveOrgPolicies } = run({ conn: connection({ driveId: null }), policies: policies([]), requestDriveId: null });
     expect(await result).toMatchObject({ error: 'Provider config not found' });
     expect(getDriveOrgPolicies).not.toHaveBeenCalled();

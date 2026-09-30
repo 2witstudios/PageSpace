@@ -501,7 +501,7 @@ describe('POST /api/ai/global/[id]/messages — prepaid credit gate', () => {
     expect(resolveOrCreateConversation).not.toHaveBeenCalled();
   });
 
-  it('POL-8 the provider factory is named the SERVER-resolved drive with a contextRef, and no drive at all for a client-claimed one', async () => {
+  it('POL-8 (partial) the provider factory is named the SERVER-resolved drive with a contextRef, and no drive at all for a client-claimed one', async () => {
     const { createAIProvider } = await import('@/lib/ai/core/provider-factory');
     await POST(makeRequest({ contextRef: { routeType: 'drive', driveId: 'drive-client-claimed' }, locationContext: CLIENT_CLAIMED_DRIVE }), makeContext());
     expect(vi.mocked(createAIProvider).mock.calls.at(-1)?.[2]).toEqual({ driveId: 'drive-server-resolved' });

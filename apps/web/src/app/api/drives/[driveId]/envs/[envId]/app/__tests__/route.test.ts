@@ -103,8 +103,8 @@ beforeEach(() => {
   updateReturning.mockReset().mockResolvedValue([{ id: PUBLISHED_APP_ID, status: 'building' }]);
 });
 
-describe('POL-10 (partial) POST /app — an org that turned published apps off', () => {
-  it('refuses 403 org_policy before the buildability check, the snapshot or the provisioner', async () => {
+describe('POST /app — an org that turned published apps off', () => {
+  it('POL-10 refuses 403 org_policy before the buildability check, the snapshot or the provisioner', async () => {
     vi.mocked(getDrivePolicies).mockResolvedValue({ policies: { ...DEFAULT_ORG_POLICIES, publishedApps: false } } as never);
     const response = await POST(postReq(), envParams);
     expect(response.status).toBe(403);
@@ -114,7 +114,7 @@ describe('POL-10 (partial) POST /app — an org that turned published apps off',
     expect(createPublishedApp).not.toHaveBeenCalled();
   });
 
-  it('maps the provisioner\'s own org_policy refusal the same way', async () => {
+  it('POL-10 maps the provisioner\'s own org_policy refusal the same way', async () => {
     vi.mocked(ensureBuildableSource).mockResolvedValue({ ok: true });
     vi.mocked(snapshotEnvFilesystem).mockResolvedValue({ ok: true, tarPath: '/t.tar.gz', cleanup: vi.fn() } as never);
     vi.mocked(createPublishedApp).mockResolvedValue({ ok: false, reason: 'org_policy' } as never);

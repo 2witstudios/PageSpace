@@ -354,7 +354,7 @@ describe('POST /api/agents/[agentId]/integrations default bundle', () => {
     mockCreateGrant.mockImplementation(async (_db: unknown, input: Record<string, unknown>) => ({ id: 'grant-1', ...input }));
   });
 
-  it('POL-11 (partial): refuses 403 org_policy to grant a connection the org allowlist suspended, creating nothing', async () => {
+  it('POL-11 refuses 403 org_policy to grant a connection the org allowlist suspended, creating nothing', async () => {
     mockGetConnectionWithProvider.mockResolvedValue({ ...githubConnection, suspendedByPolicy: 'integrations' });
     const response = await POST(postRequest({ connectionId: 'conn-1' }), { params: Promise.resolve({ agentId: mockAgentId }) });
     expect(response.status).toBe(403);

@@ -341,18 +341,18 @@ describe('getAgentAccessiblePagesInDrive', () => {
 // POL-9 (partial): an agent attached from another drive is read against the LIVE org policy
 // ---------------------------------------------------------------------------
 
-describe('POL-9 (partial) cross-drive agent memberships follow the live org policy', () => {
+describe('cross-drive agent memberships follow the live org policy', () => {
   const HOME = 'drive_homeeeeeeeeeeeeeeeeeeee';
   const policies = (crossDriveAgents: boolean) => ({ policies: { crossDriveAgents } }) as never;
   beforeEach(() => vi.clearAllMocks());
 
-  it('an agent from another drive keeps its access while the org allows cross-drive agents', async () => {
+  it('POL-9 an agent from another drive keeps its access while the org allows cross-drive agents', async () => {
     vi.mocked(getDrivePolicies).mockResolvedValue(policies(true));
     vi.mocked(db.select).mockReturnValueOnce(stubMembership([{ role: 'ADMIN', customRoleId: null }], HOME));
     expect(await hasAgentDriveAdminRole(AGENT_PAGE_ID, DRIVE_ID)).toBe(true);
   });
 
-  it('the same membership stops acting the moment the org turns cross-drive agents off', async () => {
+  it('POL-9 the same membership stops acting the moment the org turns cross-drive agents off', async () => {
     vi.mocked(getDrivePolicies).mockResolvedValue(policies(false));
     vi.mocked(db.select).mockReturnValueOnce(stubMembership([{ role: 'ADMIN', customRoleId: null }], HOME));
     expect(await hasAgentDriveMembership(AGENT_PAGE_ID, DRIVE_ID)).toBe(false);
@@ -360,14 +360,14 @@ describe('POL-9 (partial) cross-drive agent memberships follow the live org poli
     expect(await getAgentAccessiblePagesInDrive(AGENT_PAGE_ID, DRIVE_ID)).toEqual([]);
   });
 
-  it('an agent in its own home drive is never affected, and the policy is not even read', async () => {
+  it('POL-9 an agent in its own home drive is never affected, and the policy is not even read', async () => {
     vi.mocked(getDrivePolicies).mockResolvedValue(policies(false));
     vi.mocked(db.select).mockReturnValueOnce(stubMembership([{ role: 'MEMBER', customRoleId: null }], DRIVE_ID));
     expect(await hasAgentDriveMembership(AGENT_PAGE_ID, DRIVE_ID)).toBe(true);
     expect(getDrivePolicies).not.toHaveBeenCalled();
   });
 
-  it('a drive with no org (personal) is unrestricted', async () => {
+  it('POL-9 a drive with no org (personal) is unrestricted', async () => {
     vi.mocked(getDrivePolicies).mockResolvedValue(null);
     vi.mocked(db.select).mockReturnValueOnce(stubMembership([{ role: 'MEMBER', customRoleId: null }], HOME));
     expect(await hasAgentDriveMembership(AGENT_PAGE_ID, DRIVE_ID)).toBe(true);

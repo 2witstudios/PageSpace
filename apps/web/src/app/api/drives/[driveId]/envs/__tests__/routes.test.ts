@@ -173,7 +173,7 @@ describe('POST /envs — who may CREATE one', () => {
     expect(createEnvInDrive).toHaveBeenCalledWith({ driveId: DRIVE_ID, name: 'dev', createdBy: USER_ID });
   });
 
-  it('POL-10 (partial): given an org that turned persistent environments off, should answer 403 org_policy', async () => {
+  it('POL-10 given an org that turned persistent environments off, should answer 403 org_policy', async () => {
     vi.mocked(createEnvInDrive).mockResolvedValue({ ok: false, reason: 'org_policy', message: "This organization doesn't allow persistent environments." } as never);
     const response = await createEnv(jsonReq({ name: 'dev', substrate: 'sprite' }), params);
     expect(response.status).toBe(403);

@@ -512,7 +512,7 @@ describe('GET /api/user/integrations/callback', () => {
       expect(url.searchParams.get('error')).toBe('access_denied');
     });
 
-    it('POL-11 (partial): refuses, stores nothing and re-activates nothing when the org no longer allows the service', async () => {
+    it('POL-11 refuses, stores nothing and re-activates nothing when the org no longer allows the service', async () => {
       vi.mocked(getDrivePolicies).mockResolvedValueOnce({ orgId: 'org-1', policies: { ...DEFAULT_ORG_POLICIES, integrationsAllowlist: ['slack'] } });
       mockGetDriveAccess.mockResolvedValueOnce({ isOwner: false, isAdmin: true });
       mockFindDriveConnection.mockResolvedValueOnce({ id: 'suspended-conn' });

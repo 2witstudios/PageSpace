@@ -490,6 +490,21 @@ describe('POST /api/drives', () => {
       expect(createDrive).not.toHaveBeenCalled();
     });
 
+    it('POL-5 an org that lets only Owners and Admins create drives: the refusal is relayed 403 with its code and nothing is created', async () => {
+      vi.mocked(createOrgDrive).mockResolvedValue({
+        ok: false,
+        code: 'POLICY_FORBIDS_CREATE',
+        status: 403,
+        message: 'Only organization Owners and Admins can create drives in this organization.',
+      });
+
+      const response = await post({ name: 'Engineering', orgId: 'org-northwind' });
+
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({ code: 'POLICY_FORBIDS_CREATE', error: expect.stringContaining('Owners and Admins') });
+      expect(createDrive).not.toHaveBeenCalled();
+    });
+
     it('DRV-4 (partial) a chosen visibility is passed through and an unknown one is a 400', async () => {
       vi.mocked(createOrgDrive).mockResolvedValue({ ok: true, drive: { ...orgDriveRow, orgVisibility: 'PRIVATE' } });
 

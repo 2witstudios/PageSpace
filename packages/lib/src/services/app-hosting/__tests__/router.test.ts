@@ -107,8 +107,8 @@ describe('resolveAppRoute — the kill switch is checked before the database', (
   });
 });
 
-describe('POL-10 (partial) resolveAppRoute — an org that turned published apps off serves nothing', () => {
-  it('answers unavailable/org_policy with the drive ids, before any balance read or wake', async () => {
+describe('resolveAppRoute — an org that turned published apps off serves nothing', () => {
+  it('POL-10 answers unavailable/org_policy with the drive ids, before any balance read or wake', async () => {
     const hasSpendableBalance = vi.fn(async () => true);
     const wake = vi.fn(async () => ({ outcome: 'woken' as const, app: {} as never }));
     const stampHit = vi.fn(async () => {});
@@ -122,14 +122,14 @@ describe('POL-10 (partial) resolveAppRoute — an org that turned published apps
     expect(stampHit).not.toHaveBeenCalled();
   });
 
-  it('asks about the APP\'s drive, and serves normally when allowed', async () => {
+  it('POL-10 asks about the APP\'s drive, and serves normally when allowed', async () => {
     const publishedAppsAllowed = vi.fn(async () => true);
     const decision = await resolveAppRoute('acme.pagespace.io', deps({ publishedAppsAllowed }));
     expect(publishedAppsAllowed).toHaveBeenCalledWith('drive_payer');
     expect(decision.kind).toBe('replay');
   });
 
-  it('a wake that the wake gate refuses for policy is the same answer (not a failure, not a retry)', async () => {
+  it('POL-10 a wake that the wake gate refuses for policy is the same answer (not a failure, not a retry)', async () => {
     const decision = await resolveAppRoute(
       'acme.pagespace.io',
       deps({ findAppBySubdomain: async () => row({ status: 'stopped' }), wake: async () => ({ outcome: 'refused', reason: 'org_policy' }) }),

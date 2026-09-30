@@ -40,10 +40,10 @@ function makeDeleteDeps(
   return { store: store.store, host: host.host, now: () => NOW };
 }
 
-describe('POL-10 (partial) persistent environments follow the org policy', () => {
+describe('persistent environments follow the org policy', () => {
   const off = async () => ({ ...DEFAULT_ORG_POLICIES, persistentEnvironments: false });
 
-  it('refuses to create an environment when the org turns them off, and writes nothing', async () => {
+  it('POL-10 refuses to create an environment when the org turns them off, and writes nothing', async () => {
     const store = makeDriveEnvStore();
     const create = vi.spyOn(store.store, 'createIfUnderLimit');
     const result = await createDriveEnv({ driveId: DRIVE_ID, name: 'staging', createdBy: 'u', deps: makeCreateDeps(store, { getDriveOrgPolicies: off }) });
@@ -51,7 +51,7 @@ describe('POL-10 (partial) persistent environments follow the org policy', () =>
     expect(create).not.toHaveBeenCalled();
   });
 
-  it('creates normally when the org allows them, or the drive has no org', async () => {
+  it('POL-10 creates normally when the org allows them, or the drive has no org', async () => {
     for (const read of [async () => ({ ...DEFAULT_ORG_POLICIES, persistentEnvironments: true }), async () => null]) {
       const store = makeDriveEnvStore();
       const result = await createDriveEnv({ driveId: DRIVE_ID, name: 'staging', createdBy: 'u', deps: makeCreateDeps(store, { getDriveOrgPolicies: read }) });

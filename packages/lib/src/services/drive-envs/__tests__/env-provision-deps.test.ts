@@ -221,7 +221,7 @@ describe('ensureDriveEnvSandbox', () => {
     expect(result).toEqual({ ok: false, reason: 'provision_failed', detail: 'env_not_found' });
   });
 
-  it('POL-10 (partial): an org that turned persistent environments off stops an EXISTING env from starting, before any host call', async () => {
+  it('POL-10 an org that turned persistent environments off stops an EXISTING env from starting, before any host call', async () => {
     const provision = vi.fn(async () => ({ sandboxId: 'pgs-should-never-exist', spriteInstanceId: 'inst-x' }));
     const result = await ensureDriveEnvSandbox({
       envId: ENV_ID,

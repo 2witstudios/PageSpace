@@ -326,7 +326,7 @@ describe('executeWorkflow', () => {
     expect(result.error).toContain('AI provider error');
   });
 
-  test('POL-8 the workflow\'s drive is named to the provider factory, and an org-policy refusal fails the run with the policy message', async () => {
+  test('POL-8 (partial) the workflow\'s drive is named to the provider factory, and an org-policy refusal fails the run with the policy message', async () => {
     setupSelectChain([mockAgent], [mockDrive]);
     vi.mocked(isProviderError).mockReturnValue(true);
     vi.mocked(createAIProvider).mockResolvedValue({ error: "This organization doesn't allow that AI model.", status: 403, code: 'org_policy', policy: 'modelAllowlist' } as never);
