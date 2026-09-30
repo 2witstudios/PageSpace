@@ -9,6 +9,13 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Organization seats follow your members** — an organization's Business plan includes 5 seats, and
+  each accepted member or pending invitation takes one; guests, agents and apps never do. Inviting
+  past your purchased seats either adds a seat automatically (billed pro rata) when the Owner has
+  turned on automatic seat purchase, or is refused with a message saying how to free one. Removing
+  a member keeps their paid seat until the billing period ends, so adding someone back in the same
+  period costs nothing; at period end unused seats are released from the next invoice. Automatic
+  seat purchase is off until an Owner turns it on. No credits are added or removed by any seat change.
 - **Sandboxes, environments and published apps run in organization drives** — compute in a drive
   that belongs to an organization is now billed to the organization's credit pool, not to the
   person who started it or the drive's lead. Before, it was refused. If the organization's pool is

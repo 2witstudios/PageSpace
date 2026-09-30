@@ -297,15 +297,18 @@ describe('seat accounting (real Postgres)', () => {
   });
 
   describe('concurrency', () => {
-    it('SEAT-4 (partial) two invites at once for the LAST purchased seat: exactly one takes it, the other is refused (auto-add off)', async () => {
-      // 5 held, 6 purchased (one extra seat already bought), auto-add off: one seat left.
-      const f = await buildOrg({ members: 5, extra: 1, autoAdd: false });
-      const stripe = new RecordingSeatStripe(50);
-      const results = await Promise.all([invite(f, stripe), invite(f, stripe)]);
-      expect(results.filter((r) => r.ok)).toHaveLength(1);
-      expect(results.filter((r) => !r.ok && r.reason === 'seats_full')).toHaveLength(1);
-      expect(await countOrgSeats(f.orgId)).toBe(6);
-      expect(stripe.calls).toEqual([]);
+    it('SEAT-4 (partial) two invites at once for the LAST purchased seat: exactly one takes it, the other is refused (auto-add off), round after round', async () => {
+      // 5 held, 6 purchased (one extra seat already bought), auto-add off: one seat left. With no
+      // Stripe call in this path the race window is narrow, so each round is a fresh org.
+      for (let round = 0; round < 12; round += 1) {
+        const f = await buildOrg({ members: 5, extra: 1, autoAdd: false });
+        const stripe = new RecordingSeatStripe(50);
+        const results = await Promise.all([invite(f, stripe), invite(f, stripe)]);
+        expect(results.filter((r) => r.ok), `round ${round}`).toHaveLength(1);
+        expect(results.filter((r) => !r.ok && r.reason === 'seats_full')).toHaveLength(1);
+        expect(await countOrgSeats(f.orgId)).toBe(6);
+        expect(stripe.calls).toEqual([]);
+      }
     });
 
     it('SEAT-4 (partial) two invites at once past the purchased count (auto-add on) raise to one then two — never both to one', async () => {

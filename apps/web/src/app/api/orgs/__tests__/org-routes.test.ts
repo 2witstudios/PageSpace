@@ -124,6 +124,7 @@ const organization = {
   policies: {},
   stripeCustomerId: 'cus_secret',
   stripeSubscriptionId: null,
+  seatAutoAdd: false,
   createdAt: NOW,
   updatedAt: NOW,
 };
