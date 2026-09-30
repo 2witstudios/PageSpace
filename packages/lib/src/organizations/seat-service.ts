@@ -68,7 +68,16 @@ type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 const INCLUDED = TIER_PLAN_LIMITS.business.includedSeats;
 
+/**
+ * How long a seat decision may WAIT for the billing lock. The holder makes a Stripe call inside
+ * its transaction (D1's pattern), so a waiter can legitimately queue behind a slow one; the app
+ * pool's 5s lock_timeout / 15s statement_timeout would turn that queue into a 500 on a correct
+ * invite. Raised for THIS transaction only (set_config is_local), never on the pool.
+ */
+export const SEAT_LOCK_WAIT_MS = 30_000;
+
 async function lockOrgBilling(tx: Tx, orgId: string): Promise<void> {
+  await tx.execute(sql`select set_config('lock_timeout', ${`${SEAT_LOCK_WAIT_MS}ms`}, true), set_config('statement_timeout', ${`${SEAT_LOCK_WAIT_MS}ms`}, true)`);
   await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${orgBillingLockKey(orgId)}, 0))`);
 }
 

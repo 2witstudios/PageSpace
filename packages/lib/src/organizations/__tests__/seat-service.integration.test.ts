@@ -414,6 +414,17 @@ describe('seat accounting (real Postgres)', () => {
     });
   });
 
+  describe('a slow Stripe call under the billing lock', () => {
+    it('SEAT-4 (partial) a second invite queues behind a Stripe call slower than the app pool\'s 5s lock_timeout and succeeds, instead of failing with a lock timeout', async () => {
+      const f = await buildOrg({ members: 5, autoAdd: true });
+      const stripe = new RecordingSeatStripe(6_500);
+      const results = await Promise.all([invite(f, stripe), invite(f, stripe)]);
+      expect(results.every((r) => r.ok)).toBe(true);
+      expect(stripe.calls.map((c) => c.quantity).sort()).toEqual([1, 2]);
+      expect(await storedExtra(f.orgId)).toBe(2);
+    }, 60_000);
+  });
+
   describe('mid-flight failure and recovery', () => {
     it('SEAT-4 (partial) a Stripe failure leaves no invite and no stored change; the next attempt succeeds', async () => {
       const f = await buildOrg({ members: 5, autoAdd: true });
