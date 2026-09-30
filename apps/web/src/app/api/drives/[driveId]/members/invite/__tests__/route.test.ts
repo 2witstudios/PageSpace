@@ -1166,6 +1166,16 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       expect(requestGuestApproval).not.toHaveBeenCalled();
     });
 
+    it('POL-2 (partial) guests ON on an ORG drive (decision allow, org named) adds them at once: nothing is queued', async () => {
+      decideOrgDriveAdmission.mockResolvedValue({ decision: 'allow', orgId: 'org_1' });
+
+      const res = await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
+
+      expect(res.status).toBe(200);
+      expect(driveInviteRepository.createAcceptedMemberWithPermissions).toHaveBeenCalled();
+      expect(requestGuestApproval).not.toHaveBeenCalled();
+    });
+
     it('POL-2 (partial) an already-accepted member whose role is being changed is not an admission: the policy is not consulted', async () => {
       vi.mocked(driveInviteRepository.findExistingMember).mockResolvedValue({ id: 'mem_1', role: 'MEMBER', acceptedAt: new Date() } as never);
       decideOrgDriveAdmission.mockResolvedValue({ decision: 'refuse', orgId: 'org_1' });
