@@ -22,6 +22,7 @@ import {
 } from './policies-core';
 import { getOrgPolicies } from './policy-reader';
 import { applySuspension, type PolicySuspensionItem } from './policy-suspension';
+import { kickSuspendedGuests } from '../permissions/guest-holds';
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type Executor = typeof db | Tx;
@@ -79,6 +80,11 @@ export async function updateOrgPolicies(input: { orgId: string; actorId: string;
   if (!done) return { ok: false, reason: 'not_found' };
 
   const { after, changes, outcome } = done;
+  // Realtime: a parked guest must stop receiving events in the drive's rooms now, not at their next reconnect.
+  // Best effort and never throws; the per-event permission recheck is the enforcement either way.
+  await kickSuspendedGuests(
+    outcome.suspended.filter((i) => i.kind === 'guests' && i.userId).map((i) => ({ holdId: i.id, driveId: i.driveId, userId: i.userId ?? null, email: null, origin: 'invite' as const, createdAt: new Date() })),
+  );
   let auditRecorded = true;
   if (changes.length > 0) {
     try {

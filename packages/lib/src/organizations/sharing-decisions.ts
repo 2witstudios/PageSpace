@@ -26,6 +26,14 @@ export const SHARE_LINKS_OFF_MESSAGE = "This organization doesn't allow public s
 export const PUBLISHING_OFF_MESSAGE = "This organization doesn't allow publishing to the web. Existing published pages are paused, not deleted.";
 export const CUSTOM_DOMAINS_OFF_MESSAGE = "This organization doesn't allow custom domains. Existing domains are paused, not deleted.";
 
+export const GUESTS_OFF_MESSAGE = "This organization doesn't allow guests from outside it. People who are not members cannot be added to its drives.";
+export const GUESTS_HELD_MESSAGE = 'This organization requires an Owner or Admin to approve guests from outside it. The request is waiting for approval and nothing has been granted yet.';
+
+/** POL-2: the refusal a guest admission answers when the policy is off. */
+export function guestsOffRefusal(): PolicyRefusal {
+  return refuse('guests', GUESTS_OFF_MESSAGE);
+}
+
 /** POL-3: may a public share link be created in this drive? */
 export function shareLinkCreationDecision(policies: OrgPolicies | null): PolicyDecision {
   return policies === null || policies.publicShareLinks ? { ok: true } : refuse('publicShareLinks', SHARE_LINKS_OFF_MESSAGE);

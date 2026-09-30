@@ -11,7 +11,8 @@
  * what is forbidden and unmarked, then clears what is marked by that kind and no longer forbidden.
  * Run twice it changes nothing, and it heals a partial earlier run.
  *
- * Guests live in permissions/guest-suspension.ts because they are drive_members rows.
+ * Guests are not marked: a marker cannot remove page access, so they are PARKED in org_guest_holds by
+ * permissions/guest-holds.ts (see its header), which owns the drive_members and page_permissions reads and writes.
  */
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import { db } from '@pagespace/db/db';
@@ -22,7 +23,7 @@ import { integrationConnections, integrationProviders } from '@pagespace/db/sche
 import type { SuspensionKind } from '@pagespace/db/schema/organizations';
 import { publishedPages } from '@pagespace/db/schema/published-pages';
 import { driveShareLinks, pageShareLinks } from '@pagespace/db/schema/share-links';
-import { listSuspendedOrgGuests, restoreOrgGuests, suspendOrgGuests } from '../permissions/guest-suspension';
+import { listSuspendedOrgGuests, restoreOrgGuests, suspendOrgGuests } from '../permissions/guest-holds';
 import { suspensionTargets, type OrgPolicies } from './policies-core';
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -34,7 +35,7 @@ export const SUSPENDED_RESOURCE_TYPES = [
   'published_page',
   'custom_domain',
   'integration_connection',
-  'drive_member',
+  'guest_hold',
 ] as const;
 export type SuspendedResourceType = (typeof SUSPENDED_RESOURCE_TYPES)[number];
 
@@ -211,7 +212,7 @@ export async function applySuspension(executor: Executor, orgId: string, policie
         add(await reconcileIntegrations(executor, orgId, targets.integrations.restrictTo));
         break;
       case 'guests': {
-        const toGuest = (r: { memberRowId: string; driveId: string; userId: string }): PolicySuspensionItem => ({ kind: 'guests', resourceType: 'drive_member', id: r.memberRowId, driveId: r.driveId, userId: r.userId });
+        const toGuest = (r: { holdId: string; driveId: string; userId: string | null }): PolicySuspensionItem => ({ kind: 'guests', resourceType: 'guest_hold', id: r.holdId, driveId: r.driveId, ...(r.userId ? { userId: r.userId } : {}) });
         if (targets.guests) add({ suspended: (await suspendOrgGuests(executor, orgId)).map(toGuest), restored: [] });
         else add({ suspended: [], restored: (await restoreOrgGuests(executor, orgId)).map(toGuest) });
         break;
@@ -271,9 +272,9 @@ export async function listPolicySuspensions(orgId: string, limit: number = SUSPE
     listTable('integrations', 'integration_connection', countOf(executor.select({ n }).from(integrationConnections).where(ic)), executor.select({ id: integrationConnections.id, driveId: integrationConnections.driveId }).from(integrationConnections).where(ic).orderBy(integrationConnections.id).limit(limit)),
     Promise.resolve<SuspendedListing>({
       kind: 'guests',
-      resourceType: 'drive_member',
+      resourceType: 'guest_hold',
       total: guests.total,
-      items: guests.items.map((g) => ({ kind: 'guests', resourceType: 'drive_member', id: g.memberRowId, driveId: g.driveId, userId: g.userId })),
+      items: guests.items.map((g) => ({ kind: 'guests', resourceType: 'guest_hold', id: g.holdId, driveId: g.driveId, ...(g.userId ? { userId: g.userId } : {}) })),
     }),
   ]);
 }

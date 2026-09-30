@@ -76,7 +76,8 @@ export const driveMembers = pgTable('drive_members', {
   invitedAt: timestamp('invitedAt', { mode: 'date' }).defaultNow().notNull(),
   acceptedAt: timestamp('acceptedAt', { mode: 'date' }),
   lastAccessedAt: timestamp('lastAccessedAt', { mode: 'date' }),
-  // Set by the org's guests policy (POL-1) on a guest row; the row stays and grants nothing while set.
+  // DEPRECATED, unused: milestone 1 marked guest rows here, but a marker cannot make a row grant nothing (page grants
+  // are read without it), so guests are PARKED in org_guest_holds instead. Kept, not dropped, so no data is lost.
   suspendedByPolicy: text('suspendedByPolicy').$type<SuspensionKind>(),
 }, (table) => {
   return {
