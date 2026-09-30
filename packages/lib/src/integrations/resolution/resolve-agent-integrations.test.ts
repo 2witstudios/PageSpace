@@ -114,6 +114,24 @@ describe('resolveAgentIntegrations', () => {
   });
 });
 
+describe('POL-11 (partial) connections the org allowlist suspended are not offered', () => {
+  it('drops a suspended connection from an agent\'s grants, and keeps an unsuspended one', async () => {
+    const suspended = makeGrant({ id: 'g-s', connection: { ...makeGrant().connection!, suspendedByPolicy: 'integrations' } });
+    const deps = createDeps({ listGrantsByAgent: vi.fn().mockResolvedValue([suspended, makeGrant({ id: 'g-ok' })]) });
+    const result = await resolveAgentIntegrations(deps, 'agent-1');
+    expect(result.map((g) => g.id)).toEqual(['g-ok']);
+  });
+
+  it('drops suspended drive and user connections from the global assistant', async () => {
+    const deps = createDeps({
+      listUserConnections: vi.fn().mockResolvedValue([makeConnection({ id: 'u-s', suspendedByPolicy: 'integrations' })]),
+      listDriveConnections: vi.fn().mockResolvedValue([makeConnection({ id: 'd-s', providerId: 'p2', suspendedByPolicy: 'integrations' }), makeConnection({ id: 'd-ok', providerId: 'p3' })]),
+    });
+    const result = await resolveGlobalAssistantIntegrations(deps, 'user-1', 'drive-1', 'ADMIN');
+    expect(result.map((g) => g.connectionId)).toEqual(['d-ok']);
+  });
+});
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // GLOBAL ASSISTANT RESOLUTION
 // ═══════════════════════════════════════════════════════════════════════════════
