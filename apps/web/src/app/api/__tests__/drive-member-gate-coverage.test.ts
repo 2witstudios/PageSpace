@@ -132,6 +132,10 @@ const EXEMPT = new Map<string, Exemption>([
     ormReads: 1,
     reason: 'loadDriveMemberRowState reads the requester\'s row pending included, for the Restricted-drive join decisions only: a pending invitation is theirs to accept, so it blocks a request and an admission. It returns `accepted` with the row, and the decision grants nothing from an unaccepted one.',
   }],
+  ['packages/lib/src/permissions/guest-suspension.ts', {
+    ormReads: 2,
+    reason: 'listSuspendedOrgGuests reads the rows the guests policy suspended (a bounded page and its count) for the Owner/Admin list behind requireOrgRole; pending rows are included on purpose because the list names what the policy is holding. Display only: it grants nothing, and the suspend/restore writers in the same file are UPDATEs.',
+  }],
   ['packages/lib/src/permissions/org-drive-directory.ts', {
     ormReads: 1,
     reason: 'The org Drives directory reads the viewer\'s OWN rows pending included, so decideDriveDirectoryEntry can tell a pending invitation (not joined, not requestable) from no row; an unaccepted row never counts as joined. Display for the viewer, behind the org-member gate.',

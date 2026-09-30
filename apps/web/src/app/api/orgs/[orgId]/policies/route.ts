@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getOrgPolicies, updateOrgPolicies } from '@pagespace/lib/organizations/policies';
 import { validateOrgPoliciesPatch } from '@pagespace/lib/organizations/policies-core';
 import { checkOrgActive } from '@pagespace/lib/organizations/status';
@@ -17,7 +18,9 @@ export async function GET(request: Request, context: Context) {
   const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_READ_AUTH);
   if (!gate.ok) return gate.response;
   try {
-    return NextResponse.json({ policies: await getOrgPolicies(orgId) });
+    const policies = await getOrgPolicies(orgId);
+    auditRequest(request, { eventType: 'data.read', userId: gate.userId, resourceType: 'organization_policies', resourceId: orgId, details: { orgId } });
+    return NextResponse.json({ policies });
   } catch (error) {
     loggers.api.error('Error reading organization policies:', error as Error);
     return NextResponse.json({ error: 'Failed to read policies' }, { status: 500 });
@@ -33,7 +36,8 @@ const countByKind = (items: readonly { kind: string }[]): Record<string, number>
 /**
  * PATCH /api/orgs/[orgId]/policies — Owner and Admins change policies. A change applies immediately;
  * anything it newly forbids is suspended, never deleted, and listed (GET .../policies/suspended and the
- * audit log). A lapsed org cannot change policies (SEAT-9).
+ * audit log). A lapsed org cannot change policies (SEAT-9). The change itself is audited in lib
+ * (updateOrgPolicies writes org.policy.changed with the org dimension), not here, so it is written once.
  */
 export async function PATCH(request: Request, context: Context) {
   const { orgId } = await context.params;

@@ -25,6 +25,7 @@ vi.mock('@pagespace/lib/organizations/policy-suspension', () => ({ listPolicySus
 vi.mock('@pagespace/lib/organizations/status', () => ({ checkOrgActive: vi.fn() }));
 
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { findMembershipRole } from '@pagespace/lib/organizations/repository';
 import { getOrgPolicies, updateOrgPolicies } from '@pagespace/lib/organizations/policies';
 import { listPolicySuspensions } from '@pagespace/lib/organizations/policy-suspension';
@@ -83,6 +84,9 @@ describe('policies routes', () => {
     expect(res.status).toBe(200);
     expect((await res.json()).policies).toEqual(DEFAULT_ORG_POLICIES);
     expect((await GET_SUSPENDED(req('GET', '/suspended'), ctx)).status).toBe(200);
+    // Both reads are audited as data reads by the acting Admin, with the org as the dimension.
+    expect(auditRequest).toHaveBeenCalledTimes(2);
+    expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'data.read', userId: 'user_priya', resourceId: ORG_ID, details: { orgId: ORG_ID } }));
   });
 
   it('POL-1 (partial) a change is stored for the acting Admin and reports what it suspended by count', async () => {

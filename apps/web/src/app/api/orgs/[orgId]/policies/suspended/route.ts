@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { listPolicySuspensions } from '@pagespace/lib/organizations/policy-suspension';
 import { authorizeOrgRequest, ORG_READ_AUTH } from '@/lib/orgs/org-route-auth';
 
@@ -16,7 +17,9 @@ export async function GET(request: Request, context: Context) {
   const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_READ_AUTH);
   if (!gate.ok) return gate.response;
   try {
-    return NextResponse.json({ suspended: await listPolicySuspensions(orgId) });
+    const suspended = await listPolicySuspensions(orgId);
+    auditRequest(request, { eventType: 'data.read', userId: gate.userId, resourceType: 'organization_policy_suspensions', resourceId: orgId, details: { orgId } });
+    return NextResponse.json({ suspended });
   } catch (error) {
     loggers.api.error('Error listing policy suspensions:', error as Error);
     return NextResponse.json({ error: 'Failed to list suspensions' }, { status: 500 });
