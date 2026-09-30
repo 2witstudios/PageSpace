@@ -76,6 +76,16 @@ jobs:
       - name: Create scratch Admin database
         run: PGPASSWORD=postgres psql -h localhost -U postgres -d postgres -c 'CREATE DATABASE pagespace_admin_test'
 
+      # Postgres connection headroom is measured, not assumed. Every step below
+      # shares this one service (max_connections is the image default, 100), and
+      # exhausting it fails fixture inserts with SQLSTATE 53300 — which in the
+      # billing integration suites looks exactly like a dropped credit settle.
+      # The sampler records the server-side client count about twice a second and
+      # attributes each socket to the package holding it; "Postgres connection
+      # report" below prints the peak on every run, pass or fail.
+      - name: Start Postgres connection sampler
+        run: nohup scripts/ci-pg-connection-sampler.sh start "$RUNNER_TEMP/pg-connections.log" > /dev/null 2>&1 &
+
       # packages/editor's cross-DOM parse-equality suite drives a REAL Chromium
       # and compares its ProseMirror parse against happy-dom's over the construct
       # corpus. Several `parseHTML` functions in the frozen collab schema read the
@@ -336,6 +346,10 @@ jobs:
       # against the same tree. See docs/2.0-architecture/agent-sessions-evidence.md.
       - name: Check evidence manifest
         run: bun run scripts/check-evidence-manifest.ts
+
+      - name: Postgres connection report
+        if: always()
+        run: scripts/ci-pg-connection-sampler.sh report "$RUNNER_TEMP/pg-connections.log"
 
       - name: Coverage report
         if: always()
