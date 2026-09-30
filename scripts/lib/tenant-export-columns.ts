@@ -149,6 +149,10 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
       'id', 'driveId', 'userId', 'role', 'customRoleId', 'source', 'invitedBy',
       'invitedAt', 'acceptedAt', 'lastAccessedAt',
     ],
+    excluded: {
+      suspendedByPolicy:
+        "Set by an ORGANIZATION's guests policy (POL-1). Organizations do not travel in a tenant bundle, so a marker carried across would name a policy that does not exist at the destination and leave the row suspended with nothing able to restore it. The row arrives in force.",
+    },
   },
 
   pages: {
