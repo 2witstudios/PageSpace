@@ -74,4 +74,17 @@ describe('POST /api/drives/[driveId]/share-links', () => {
     expect(res.status).toBe(403);
     expect(json.error).toMatch(/home/i);
   });
+  it('POL-3 (partial) returns 403 naming the policy (not a 500, not a 404) when the org has turned public share links off', async () => {
+    vi.mocked(createDriveShareLink).mockResolvedValue({
+      ok: false,
+      error: 'POLICY_FORBIDDEN',
+      message: "This organization doesn't allow public share links.",
+    } as never);
+
+    const res = await POST(buildPost('drive-org'), createContext('drive-org'));
+    const json = await res.json();
+
+    expect(res.status).toBe(403);
+    expect(json).toEqual({ error: "This organization doesn't allow public share links.", code: 'org_policy', policy: 'publicShareLinks' });
+  });
 });

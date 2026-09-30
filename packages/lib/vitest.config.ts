@@ -25,6 +25,7 @@ export default defineConfig({
       'src/services/__tests__/org-drive-visibility-lead.integration.test.ts',
       'src/permissions/__tests__/org-drive-directory.integration.test.ts',
       'src/organizations/__tests__/policies.integration.test.ts',
+      'src/permissions/__tests__/share-link-policy.integration.test.ts',
       'src/organizations/__tests__/seat-policy-combined.integration.test.ts',
       'src/permissions/__tests__/org-drive-resolvers.integration.test.ts',
       'src/permissions/__tests__/org-drive-sibling-resolvers.integration.test.ts',

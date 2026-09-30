@@ -6,10 +6,13 @@ import { users } from '@pagespace/db/schema/auth';
 import { decryptField } from '../encryption/field-crypto';
 import { driveShareLinks, pageShareLinks } from '@pagespace/db/schema/share-links';
 import type { DriveShareLink, ShareLinkPermission } from '@pagespace/db/schema/share-links';
+import type { SuspensionKind } from '@pagespace/db/schema/organizations';
 import { createId } from '@paralleldrive/cuid2';
 import { generateToken } from '../auth/token-utils';
 import { EnforcedAuthContext } from './enforced-context';
 import { isDriveOwnerOrAdmin, canUserSharePage, isUserDriveMember } from './permissions';
+import { getDrivePolicies } from '../organizations/policy-reader';
+import { shareLinkCreationDecision, shareLinkUsable } from '../organizations/sharing-decisions';
 
 // ============================================================================
 // Result types
@@ -22,9 +25,13 @@ export type ShareLinkError =
   | 'INVALID_PERMISSIONS'
   | 'HOME_DRIVE';
 
+/** POL-3: the org's public-share-links policy is off. Carries the policy's own message for the caller to show. */
+export type ShareLinkPolicyRefusal = { ok: false; error: 'POLICY_FORBIDDEN'; message: string };
+
 export type ShareLinkResult<T> =
   | { ok: true; data: T }
-  | { ok: false; error: ShareLinkError };
+  | { ok: false; error: ShareLinkError }
+  | ShareLinkPolicyRefusal;
 
 export interface DriveShareLinkView {
   id: string;
@@ -87,6 +94,11 @@ function isValidShareLink(link: {
   return true;
 }
 
+/** POL-3, read at the moment of redemption: the marker AND the live policy of the link's drive's org. */
+async function linkUsableNow(driveId: string, link: { suspendedByPolicy: SuspensionKind | null }): Promise<boolean> {
+  return shareLinkUsable((await getDrivePolicies(driveId))?.policies ?? null, link);
+}
+
 // ============================================================================
 // Drive share link functions
 // ============================================================================
@@ -104,6 +116,10 @@ export async function createDriveShareLink(
     columns: { kind: true },
   });
   if (drive?.kind === 'HOME') return { ok: false, error: 'HOME_DRIVE' };
+
+  // POL-3: an org that turned public share links off creates none, read now, not cached.
+  const creation = shareLinkCreationDecision((await getDrivePolicies(driveId))?.policies ?? null);
+  if (!creation.ok) return { ok: false, error: 'POLICY_FORBIDDEN', message: creation.message };
 
   // ADMIN ceiling: customRoleId is meaningless for admins and must never be stored.
   const role = opts.role ?? 'MEMBER';
@@ -209,6 +225,7 @@ export async function redeemDriveShareLink(
       expiresAt: driveShareLinks.expiresAt,
       useCount: driveShareLinks.useCount,
       createdBy: driveShareLinks.createdBy,
+      suspendedByPolicy: driveShareLinks.suspendedByPolicy,
       driveName: drives.name,
     })
     .from(driveShareLinks)
@@ -221,6 +238,10 @@ export async function redeemDriveShareLink(
   }
 
   const link = rows[0];
+
+  // POL-3: a suspended link, or any link of an org that has turned public share links off, answers exactly as a
+  // link that does not exist: the holder learns nothing about the org, the drive or why.
+  if (!(await linkUsableNow(link.driveId, link))) return { ok: false, error: 'NOT_FOUND' };
 
   const alreadyMember = await isUserDriveMember(ctx.userId, link.driveId);
   if (alreadyMember) return { ok: false, error: 'ALREADY_MEMBER', driveId: link.driveId };
@@ -293,6 +314,8 @@ export async function createPageShareLink(
       columns: { kind: true },
     });
     if (driveRow?.kind === 'HOME') return { ok: false, error: 'HOME_DRIVE' };
+    const creation = shareLinkCreationDecision((await getDrivePolicies(pageRow.driveId))?.policies ?? null);
+    if (!creation.ok) return { ok: false, error: 'POLICY_FORBIDDEN', message: creation.message };
   }
 
   const { token } = generateToken('ps_share');
@@ -376,6 +399,7 @@ export async function redeemPageShareLink(
       isActive: pageShareLinks.isActive,
       expiresAt: pageShareLinks.expiresAt,
       useCount: pageShareLinks.useCount,
+      suspendedByPolicy: pageShareLinks.suspendedByPolicy,
     })
     .from(pageShareLinks)
     .innerJoin(pages, eq(pageShareLinks.pageId, pages.id))
@@ -386,6 +410,8 @@ export async function redeemPageShareLink(
   if (!row || !isValidShareLink(row)) {
     return { ok: false, error: 'NOT_FOUND' };
   }
+  // POL-3: indistinguishable from a link that does not exist.
+  if (!(await linkUsableNow(row.driveId, row))) return { ok: false, error: 'NOT_FOUND' };
 
   const link = row;
 
@@ -465,6 +491,7 @@ export async function resolveShareToken(rawToken: string): Promise<ShareTokenInf
       isActive: driveShareLinks.isActive,
       expiresAt: driveShareLinks.expiresAt,
       useCount: driveShareLinks.useCount,
+      suspendedByPolicy: driveShareLinks.suspendedByPolicy,
       driveName: drives.name,
       creatorName: users.name,
     })
@@ -478,6 +505,8 @@ export async function resolveShareToken(rawToken: string): Promise<ShareTokenInf
   if (driveRows.length > 0) {
     const row = driveRows[0];
     if (!isValidShareLink(row)) return null;
+    // POL-3: the landing page would otherwise name the drive and its creator to anyone holding a paused link.
+    if (!(await linkUsableNow(row.driveId, row))) return null;
     return {
       type: 'drive',
       linkId: row.id,
@@ -504,6 +533,7 @@ export async function resolveShareToken(rawToken: string): Promise<ShareTokenInf
       expiresAt: pageShareLinks.expiresAt,
       useCount: pageShareLinks.useCount,
       pageTitle: pages.title,
+      suspendedByPolicy: pageShareLinks.suspendedByPolicy,
       driveName: drives.name,
       creatorName: users.name,
     })
@@ -518,6 +548,7 @@ export async function resolveShareToken(rawToken: string): Promise<ShareTokenInf
     const row = pageRows[0];
     if (!isValidShareLink(row) || !row.driveId) return null;
     const pageDriveId = row.driveId;
+    if (!(await linkUsableNow(pageDriveId, row))) return null;
     return {
       type: 'page',
       linkId: row.id,

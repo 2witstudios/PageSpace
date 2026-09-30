@@ -74,4 +74,17 @@ describe('POST /api/pages/[pageId]/share-links', () => {
     expect(res.status).toBe(403);
     expect(json.error).toMatch(/home/i);
   });
+  it('POL-3 (partial) returns 403 naming the policy (not a 500, not a 404) when the org has turned public share links off', async () => {
+    vi.mocked(createPageShareLink).mockResolvedValue({
+      ok: false,
+      error: 'POLICY_FORBIDDEN',
+      message: "This organization doesn't allow public share links.",
+    } as never);
+
+    const res = await POST(buildPost('page-org'), createContext('page-org'));
+    const json = await res.json();
+
+    expect(res.status).toBe(403);
+    expect(json).toEqual({ error: "This organization doesn't allow public share links.", code: 'org_policy', policy: 'publicShareLinks' });
+  });
 });

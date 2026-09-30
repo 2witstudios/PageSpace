@@ -6,6 +6,7 @@
  */
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
+import { drives } from '@pagespace/db/schema/core';
 import { organizations } from '@pagespace/db/schema/organizations';
 import type { SpendPolicy } from '../billing/wallet-core';
 import { orgPolicySpendPolicy, parseOrgPolicies, type OrgPolicies } from './policies-core';
@@ -30,4 +31,15 @@ export async function getOrgPolicies(orgId: string, executor: Executor = db): Pr
 export async function readOrgSpendPolicy(executor: Executor, orgId: string): Promise<SpendPolicy & { seatAllowanceCents: number }> {
   const policies = await getOrgPolicies(orgId, executor);
   return { ...orgPolicySpendPolicy(policies), seatAllowanceCents: policies.seatAllowanceCents };
+}
+
+/**
+ * The policies that govern what happens INSIDE a drive, read at the moment of the decision: the drive's org and
+ * that org's policies, or null when the drive has no org (a personal drive, which no org policy restricts) or
+ * does not exist (the caller's own not-found handling stands).
+ */
+export async function getDrivePolicies(driveId: string, executor: Executor = db): Promise<{ orgId: string; policies: OrgPolicies } | null> {
+  const [drive] = await executor.select({ orgId: drives.orgId }).from(drives).where(eq(drives.id, driveId)).limit(1);
+  if (!drive?.orgId) return null;
+  return { orgId: drive.orgId, policies: await getOrgPolicies(drive.orgId, executor) };
 }

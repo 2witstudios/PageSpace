@@ -41,6 +41,9 @@ vi.mock('@pagespace/db/schema/auth', () => ({
   users: {},
 }));
 
+// POL-3: the share-link service reads the drive's org policies; these unit tests are about a drive with no org.
+vi.mock('../../organizations/policy-reader', () => ({ getDrivePolicies: vi.fn().mockResolvedValue(null) }));
+
 vi.mock('../permissions', () => ({
   isDriveOwnerOrAdmin: vi.fn().mockResolvedValue(true),
   canUserSharePage: vi.fn().mockResolvedValue(true),
