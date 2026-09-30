@@ -524,6 +524,18 @@ describe('org route behaviour', () => {
     expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'authz.access.denied', details: expect.objectContaining({ reason: 'seats_full', purchased: 5, held: 5 }) }));
   });
 
+  it('SEAT-4 (partial) resending an expired invite into a full org answers 402 seats_full, audits it, sends no email, and passes the resender\'s role and the Stripe port', async () => {
+    asRole('ADMIN');
+    const refusal = { ok: false as const, status: 402 as const, reason: 'seats_full' as const, message: 'All 5 seats in this organization are taken.', purchased: 5, held: 5 };
+    vi.mocked(invitations.resendInvitation).mockResolvedValue(refusal);
+    const res = await resendRoute.POST(req('POST'), params({ orgId: ORG_ID, invitationId: 'inv_1' }));
+    expect(res.status).toBe(402);
+    expect(await res.json()).toEqual({ error: refusal.message, code: 'seats_full' });
+    expect(deliverOrgInvite).not.toHaveBeenCalled();
+    expect(invitations.resendInvitation).toHaveBeenCalledWith(expect.objectContaining({ actorRole: 'ADMIN', seatBilling: expect.any(Object) }));
+    expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'authz.access.denied', details: expect.objectContaining({ reason: 'seats_full', operation: 'resend_org_invitation' }) }));
+  });
+
   it('ORG-3 (partial) re-inviting after expiry rotates the open invite (route answers 200 and emails the new link)', async () => {
     asRole('ADMIN');
     vi.mocked(invitations.createOrRotateInvitation).mockImplementation(async ({ deliver }) => {

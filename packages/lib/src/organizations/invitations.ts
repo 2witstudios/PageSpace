@@ -237,9 +237,15 @@ export type ResendInvitationResult =
   | { ok: true; invitation: PublicOrgInvitation; token: string }
   | { ok: false; status: 404; reason: 'not_found' }
   | OrgInviteLapsed
+  | OrgInviteSeatRefusal
   | DeliveryFailed;
 
 /**
+ * A resend of an EXPIRED invite gives it a fresh expiry, so it holds a seat again (an expired
+ * invite is not counted): it is admitted like a new invite, under the same locks in the same
+ * order (address, invite row, billing), and refused with `seats_full` when no seat can be
+ * granted. Resending a LIVE invite changes nothing about seats: it already holds one.
+ *
  * Resend issues a new link with a fresh expiry, and the old link stops working, but
  * only once the new one has been delivered: if delivery fails the previous token and
  * expiry are restored, so the link the person already has keeps working.
@@ -247,11 +253,23 @@ export type ResendInvitationResult =
 export async function resendInvitation(input: {
   orgId: string;
   invitationId: string;
+  /** The resender's org role, for the wording of a seat refusal. */
+  actorRole?: OrgRole;
   now: Date;
   deliver: InviteDelivery;
+  /** Stripe's seat item, for an auto-add raise when the resent invite was expired (SEAT-4). */
+  seatBilling?: SeatBillingPort;
 }): Promise<ResendInvitationResult> {
   const { token, hash } = generateToken(ORG_INVITE_TOKEN_PREFIX);
   const rotated = await db.transaction(async (tx) => {
+    // The address lock first, as creation and acceptance take it, so a resend and a fresh invite
+    // for the same address serialize (the billing lock below is always taken after it).
+    const [peek] = await tx
+      .select({ email: orgInvitations.email })
+      .from(orgInvitations)
+      .where(and(eq(orgInvitations.id, input.invitationId), eq(orgInvitations.orgId, input.orgId), isNull(orgInvitations.acceptedAt)))
+      .limit(1);
+    if (peek) await lockOrgInviteAddress(tx, input.orgId, peek.email);
     // SEAT-9: a re-sent invite is an invite; the pending one keeps its link and its seat.
     const active = await checkOrgActive(input.orgId, { executor: tx, now: input.now });
     if (!active.ok) return lapsedRefusal(active);
@@ -267,6 +285,10 @@ export async function resendInvitation(input: {
       )
       .for('update');
     if (!previous) return null;
+    if (!isLiveInvite(previous, input.now)) {
+      const seat = await admitSeat(tx, { orgId: input.orgId, actorRole: input.actorRole ?? 'MEMBER' }, input.seatBilling);
+      if (!seat.ok) return seat;
+    }
     const [invitation] = await tx
       .update(orgInvitations)
       .set({ tokenHash: hash, expiresAt: inviteExpiryFrom(input.now) })

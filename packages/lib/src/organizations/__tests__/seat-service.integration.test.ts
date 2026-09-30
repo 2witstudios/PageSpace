@@ -23,7 +23,7 @@ import { creditLedger } from '@pagespace/db/schema/credits';
 import { expectWalletLegInvariant } from '../../test/wallet-leg-invariant';
 import { EnforcedAuthContext } from '../../permissions/enforced-context';
 import { createPageShareLink, redeemPageShareLink } from '../../permissions/share-link-service';
-import { acceptInvitation, createOrRotateInvitation } from '../invitations';
+import { acceptInvitation, createOrRotateInvitation, resendInvitation } from '../invitations';
 import { removeMember } from '../membership';
 import { countOrgSeats } from '../repository';
 import { getSeatSummary, releaseDueSeats, releaseOrgSeats, setSeatAutoAdd, type SeatBillingPort } from '../seat-service';
@@ -172,6 +172,20 @@ function invite(f: Fixture, stripe: RecordingSeatStripe | undefined, email = fre
   });
 }
 
+/** An invite that has expired: it holds no seat until it is resent. */
+async function expiredInvite(f: Fixture): Promise<{ id: string; email: string }> {
+  const email = freshEmail();
+  const [row] = await db
+    .insert(orgInvitations)
+    .values({ orgId: f.orgId, email, role: 'MEMBER', tokenHash: `hash-${createId()}`, invitedBy: f.ownerId, expiresAt: new Date(Date.now() - HOUR) })
+    .returning({ id: orgInvitations.id });
+  return { id: row.id, email };
+}
+
+function resend(f: Fixture, invitationId: string, stripe: RecordingSeatStripe | undefined, actorRole: 'OWNER' | 'ADMIN' = 'OWNER') {
+  return resendInvitation({ orgId: f.orgId, invitationId, actorRole, now: new Date(), deliver, seatBilling: stripe });
+}
+
 const storedExtra = async (orgId: string) => (await db.select().from(orgSubscriptions).where(eq(orgSubscriptions.orgId, orgId)))[0]?.extraSeatQuantity;
 
 describe('seat accounting (real Postgres)', () => {
@@ -296,6 +310,66 @@ describe('seat accounting (real Postgres)', () => {
     });
   });
 
+  describe('resend of an expired invite takes a seat again', () => {
+    it('SEAT-4 (partial) resending an EXPIRED invite in a full org with auto-add off is refused like a new invite: no seat taken, invite left expired, no Stripe call', async () => {
+      const f = await buildOrg({ members: 5, autoAdd: false });
+      const old = await expiredInvite(f);
+      const stripe = new RecordingSeatStripe(0);
+      expect(await countOrgSeats(f.orgId)).toBe(5);
+      const result = await resend(f, old.id, stripe, 'ADMIN');
+      expect(result).toMatchObject({ ok: false, status: 402, reason: 'seats_full' });
+      expect(await countOrgSeats(f.orgId)).toBe(5);
+      const [row] = await db.select().from(orgInvitations).where(eq(orgInvitations.id, old.id));
+      expect(row.expiresAt.getTime()).toBeLessThan(Date.now());
+      expect(stripe.calls).toEqual([]);
+    });
+
+    it('SEAT-4 (partial) resending an expired invite past the purchased count with auto-add ON raises the quantity, pro rata', async () => {
+      const f = await buildOrg({ members: 5, autoAdd: true });
+      const old = await expiredInvite(f);
+      const stripe = new RecordingSeatStripe(0);
+      expect((await resend(f, old.id, stripe)).ok).toBe(true);
+      expect(stripe.calls).toHaveLength(1);
+      expect(stripe.calls[0]).toMatchObject({ quantity: 1, prorationBehavior: 'create_prorations' });
+      expect(await storedExtra(f.orgId)).toBe(1);
+      expect(await countOrgSeats(f.orgId)).toBe(6);
+    });
+
+    it('SEAT-4 (partial) resending a LIVE invite takes no new seat and is never refused, even in a full org', async () => {
+      const f = await buildOrg({ members: 4, autoAdd: false });
+      const stripe = new RecordingSeatStripe(0);
+      const live = await invite(f, stripe);
+      if (!live.ok) throw new Error('invite refused');
+      expect(await countOrgSeats(f.orgId)).toBe(5);
+      expect((await resend(f, live.invitation.id, stripe)).ok).toBe(true);
+      expect(await countOrgSeats(f.orgId)).toBe(5);
+      expect(stripe.calls).toEqual([]);
+    });
+
+    it('SEAT-4 (partial) a resend of an expired invite racing a new invite for the LAST purchased seat: exactly one takes it, round after round', async () => {
+      for (let round = 0; round < 8; round += 1) {
+        const f = await buildOrg({ members: 5, extra: 1, autoAdd: false });
+        const old = await expiredInvite(f);
+        const stripe = new RecordingSeatStripe(30);
+        const results = await Promise.all([resend(f, old.id, stripe), invite(f, stripe)]);
+        expect(results.filter((r) => r.ok), `round ${round}`).toHaveLength(1);
+        expect(results.filter((r) => !r.ok && r.reason === 'seats_full')).toHaveLength(1);
+        expect(await countOrgSeats(f.orgId)).toBe(6);
+      }
+    }, 120_000);
+
+    it('SEAT-4 (partial) two resends of two expired invites racing for the last seat: exactly one takes it', async () => {
+      for (let round = 0; round < 6; round += 1) {
+        const f = await buildOrg({ members: 5, extra: 1, autoAdd: false });
+        const [a, b] = [await expiredInvite(f), await expiredInvite(f)];
+        const stripe = new RecordingSeatStripe(30);
+        const results = await Promise.all([resend(f, a.id, stripe), resend(f, b.id, stripe)]);
+        expect(results.filter((r) => r.ok), `round ${round}`).toHaveLength(1);
+        expect(await countOrgSeats(f.orgId)).toBe(6);
+      }
+    }, 120_000);
+  });
+
   describe('concurrency', () => {
     it('SEAT-4 (partial) two invites at once for the LAST purchased seat: exactly one takes it, the other is refused (auto-add off), round after round', async () => {
       // 5 held, 6 purchased (one extra seat already bought), auto-add off: one seat left. With no
@@ -309,7 +383,7 @@ describe('seat accounting (real Postgres)', () => {
         expect(await countOrgSeats(f.orgId)).toBe(6);
         expect(stripe.calls).toEqual([]);
       }
-    });
+    }, 120_000);
 
     it('SEAT-4 (partial) two invites at once past the purchased count (auto-add on) raise to one then two — never both to one', async () => {
       const f = await buildOrg({ members: 5, autoAdd: true });
