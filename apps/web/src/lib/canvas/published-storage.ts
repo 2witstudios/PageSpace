@@ -11,6 +11,8 @@ import {
   ListObjectsV2Command,
 } from '@aws-sdk/client-s3';
 import { getS3Client, getS3Bucket } from '@/lib/presigned-url';
+import { assertPrefixWritable } from '@pagespace/lib/organizations/published-visibility';
+import { PARKED_PREFIX, PUBLISHED_PREFIX, parkedKeyOf, type PublishedObjectStore } from '@pagespace/lib/organizations/published-visibility-core';
 
 const CONTENT_HASH_RE = /^[0-9a-f]{64}$/i;
 const THUMBNAIL_SOURCE_KEY_RE = /^cache\/[0-9a-f]+\/thumbnail\.webp$/i;
@@ -155,6 +157,8 @@ export async function putPublishedArtifact(params: {
 }): Promise<{ key: string }> {
   const key = buildPublishedKey(params.subdomain, params.path);
 
+  // POL-4: a site the org's policy hides is never written to: a republish must not undo the pause.
+  await assertPrefixWritable(params.subdomain);
   await getPublishClient().send(
     new PutObjectCommand({
       Bucket: getPublishBucket(),
@@ -206,6 +210,7 @@ export async function putPublishedSiteFile(params: {
 }): Promise<{ key: string }> {
   const key = buildSiteFileKey(params.prefix, params.file);
 
+  await assertPrefixWritable(params.prefix);
   await getPublishClient().send(
     new PutObjectCommand({
       Bucket: getPublishBucket(),
@@ -253,12 +258,21 @@ export async function publishedArtifactExists(key: string): Promise<boolean> {
  * Delete a previously-published artifact by its storage key.
  */
 export async function deletePublishedArtifact(key: string): Promise<void> {
-  await getPublishClient().send(
-    new DeleteObjectCommand({
-      Bucket: getPublishBucket(),
-      Key: key,
-    }),
-  );
+  const client = getPublishClient();
+  const bucket = getPublishBucket();
+  await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+  // POL-4: if the site is paused the object lives under suspended/. Unpublishing must delete THAT copy too, or
+  // restoring the site would bring a page back that its author had taken down.
+  const parked = parkedKeyOf(key);
+  if (parked) await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: parked }));
+}
+
+/** The prefix (drive subdomain or custom-domain host) a `published/<prefix>/...` key belongs to. */
+function prefixOfPublishedKey(key: string): string | null {
+  if (!key.startsWith(PUBLISHED_PREFIX)) return null;
+  const rest = key.slice(PUBLISHED_PREFIX.length);
+  const slash = rest.indexOf('/');
+  return slash > 0 ? rest.slice(0, slash) : null;
 }
 
 /**
@@ -272,6 +286,8 @@ export async function deletePublishedArtifact(key: string): Promise<void> {
  * correctly regardless of what the source object's stored metadata says.
  */
 export async function copyPublishedArtifact(fromKey: string, toKey: string): Promise<void> {
+  const toPrefix = prefixOfPublishedKey(toKey);
+  if (toPrefix) await assertPrefixWritable(toPrefix);
   const bucket = getPublishBucket();
   await getPublishClient().send(
     new CopyObjectCommand({
@@ -292,6 +308,8 @@ export async function copyPublishedArtifact(fromKey: string, toKey: string): Pro
  * `application/xml`, and 404.html must be `text/html`.
  */
 export async function copyPublishedSiteFileArtifact(fromKey: string, toKey: string): Promise<void> {
+  const toPrefix = prefixOfPublishedKey(toKey);
+  if (toPrefix) await assertPrefixWritable(toPrefix);
   const bucket = getPublishBucket();
   await getPublishClient().send(
     new CopyObjectCommand({
@@ -437,10 +455,9 @@ export async function copyAssetToPublishBucket(params: {
  *
  * No-op when the prefix contains no objects (idempotent).
  */
-export async function clearPublishedPrefix(hostPrefix: string): Promise<void> {
+async function clearKeyPrefix(prefix: string): Promise<void> {
   const bucket = getPublishBucket();
   const client = getPublishClient();
-  const prefix = `published/${hostPrefix}/`;
 
   let continuationToken: string | undefined;
 
@@ -468,4 +485,55 @@ export async function clearPublishedPrefix(hostPrefix: string): Promise<void> {
 
     continuationToken = listResult.IsTruncated ? listResult.NextContinuationToken : undefined;
   } while (continuationToken);
+}
+
+/**
+ * Delete every object under `published/<hostPrefix>/` AND under its parked twin `suspended/<hostPrefix>/`: a
+ * removed domain or drive must not leave a paused copy behind to be restored later (POL-4).
+ */
+export async function clearPublishedPrefix(hostPrefix: string): Promise<void> {
+  await clearKeyPrefix(`${PUBLISHED_PREFIX}${hostPrefix}/`);
+  await clearKeyPrefix(`${PARKED_PREFIX}${hostPrefix}/`);
+}
+
+/**
+ * The publish bucket as the visibility reconciler's object store (POL-4): paginated list, immediate sub-prefixes,
+ * server-side COPY that keeps each object's stored content type, and delete. The move itself (copy, then delete,
+ * both copies kept on a mid-way failure) is movePrefix in lib; this is only the S3 surface.
+ */
+export function createPublishedObjectStore(): PublishedObjectStore {
+  return {
+    async listKeys(prefix) {
+      const client = getPublishClient();
+      const bucket = getPublishBucket();
+      const keys: string[] = [];
+      let token: string | undefined;
+      do {
+        const page = await client.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix, ContinuationToken: token }));
+        for (const obj of page.Contents ?? []) if (obj.Key) keys.push(obj.Key);
+        token = page.IsTruncated ? page.NextContinuationToken : undefined;
+      } while (token);
+      return keys;
+    },
+    async listPrefixes(root) {
+      const client = getPublishClient();
+      const bucket = getPublishBucket();
+      const names: string[] = [];
+      let token: string | undefined;
+      do {
+        const page = await client.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: root, Delimiter: '/', ContinuationToken: token }));
+        for (const p of page.CommonPrefixes ?? []) if (p.Prefix) names.push(p.Prefix.slice(root.length).replace(/\/$/, ''));
+        token = page.IsTruncated ? page.NextContinuationToken : undefined;
+      } while (token);
+      return names;
+    },
+    exists: (key) => publishedArtifactExists(key),
+    async copy(fromKey, toKey) {
+      const bucket = getPublishBucket();
+      await getPublishClient().send(new CopyObjectCommand({ Bucket: bucket, CopySource: `${bucket}/${fromKey}`, Key: toKey, MetadataDirective: 'COPY' }));
+    },
+    async remove(key) {
+      await getPublishClient().send(new DeleteObjectCommand({ Bucket: getPublishBucket(), Key: key }));
+    },
+  };
 }
