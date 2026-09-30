@@ -5,14 +5,29 @@ import { driveAgentMembers } from '@pagespace/db/schema/members';
 import { resolveRolePermissions } from './resolve-role-permissions';
 import { fetchCustomRolePermissions, resolveCustomRolePermissions } from './membership-queries';
 import type { PermissionLevel, PageWithPermissions } from './permissions';
+import { getDrivePolicies } from '../organizations/policy-reader';
+import { crossDriveAgentsDecision } from '../organizations/org-action-decisions';
 
+/**
+ * The agent's membership in a drive, or null. POL-9: a membership held by an agent whose home is
+ * ANOTHER drive is read against the drive's LIVE org policy here, where every agent access decision
+ * starts, so turning cross-drive agents off stops agents already attached (no row is deleted; turning
+ * it back on restores them). An agent in its own home drive is never affected.
+ */
 async function fetchAgentMembership(agentPageId: string, driveId: string) {
   const rows = await db
-    .select()
+    .select({ membership: driveAgentMembers, homeDriveId: pages.driveId })
     .from(driveAgentMembers)
+    .innerJoin(pages, eq(pages.id, driveAgentMembers.agentPageId))
     .where(and(eq(driveAgentMembers.agentPageId, agentPageId), eq(driveAgentMembers.driveId, driveId)))
     .limit(1);
-  return rows[0] ?? null;
+  const row = rows[0];
+  if (!row) return null;
+  if (row.homeDriveId !== driveId) {
+    const drivePolicies = await getDrivePolicies(driveId);
+    if (!crossDriveAgentsDecision(drivePolicies?.policies ?? null).ok) return null;
+  }
+  return row.membership;
 }
 
 async function fetchPageDriveAndPrivacy(
@@ -62,12 +77,7 @@ export async function getAgentAccessLevel(
 }
 
 export async function hasAgentDriveMembership(agentPageId: string, driveId: string): Promise<boolean> {
-  const row = await db
-    .select({ id: driveAgentMembers.id })
-    .from(driveAgentMembers)
-    .where(and(eq(driveAgentMembers.agentPageId, agentPageId), eq(driveAgentMembers.driveId, driveId)))
-    .limit(1);
-  return row.length > 0;
+  return (await fetchAgentMembership(agentPageId, driveId)) !== null;
 }
 
 /**
