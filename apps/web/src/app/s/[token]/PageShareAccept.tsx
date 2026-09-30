@@ -39,7 +39,12 @@ export function PageShareAccept({ token, info }: PageShareAcceptProps) {
           return;
         }
 
-        const data = (await res.json()) as { type: string; pageId: string; driveId: string };
+        const data = (await res.json()) as { type: string; pageId?: string; driveId?: string; status?: string; message?: string };
+        // POL-2: the org requires an Owner or Admin to approve guests; nothing is granted yet, so stay here and say so.
+        if (data.status === 'pending_approval') {
+          setError(data.message ?? 'Your request is waiting for approval.');
+          return;
+        }
         router.push(`/dashboard/${data.driveId}/${data.pageId}`);
       } catch (err) {
         if ((err as Error).name === 'AbortError') return;

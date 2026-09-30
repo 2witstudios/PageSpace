@@ -21,7 +21,9 @@ import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
 import { driveShareLinks, pageShareLinks } from '@pagespace/db/schema/share-links';
 import type { SessionClaims } from '../../auth/session-service';
 import { EnforcedAuthContext } from '../enforced-context';
-import { createDriveShareLink, createPageShareLink, redeemDriveShareLink, redeemPageShareLink, resolveShareToken } from '../share-link-service';
+import { completeApprovedLinkAdmission, createDriveShareLink, createPageShareLink, redeemDriveShareLink, redeemPageShareLink, resolveShareToken } from '../share-link-service';
+import { claimPendingGuestApproval, listPendingGuestApprovals } from '../guest-holds';
+import { getUserAccessLevel } from '../permissions';
 
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 vi.mock('../../audit/org-audit', () => ({ recordOrgAuditEvent: vi.fn(async () => {}) }));
@@ -201,5 +203,106 @@ describe('redemption and preview', () => {
     expect((await redeemDriveShareLink(ctxFor(await newUser()), drive.rawToken)).ok).toBe(true);
     const members = await db.select().from(driveMembers).where(and(eq(driveMembers.driveId, w.orgDrive)));
     expect(members.length).toBeGreaterThan(0);
+  });
+});
+
+describe('guests policy at redemption (POL-2)', () => {
+  const setGuests = (guests: 'off' | 'approve' | 'on') => updateOrgPolicies({ orgId: w.orgId, actorId: w.owner, patch: { guests } });
+  const orgMemberUser = async () => {
+    const id = await newUser();
+    await db.insert(orgMembers).values({ orgId: w.orgId, userId: id, role: 'MEMBER' });
+    return id;
+  };
+  const memberRow = (userId: string) => db.select().from(driveMembers).where(and(eq(driveMembers.driveId, w.orgDrive), eq(driveMembers.userId, userId)));
+
+  it('POL-2 (partial) X-6 (partial) guests OFF: an outsider redeeming either link kind is refused like a missing link and nothing is created', async () => {
+    const { drive, page } = await makeLinks();
+    await setGuests('off');
+    const outsider = await newUser();
+
+    expect(await redeemDriveShareLink(ctxFor(outsider), drive.rawToken)).toEqual({ ok: false, error: 'NOT_FOUND' });
+    expect(await redeemPageShareLink(ctxFor(outsider), page.rawToken)).toEqual({ ok: false, error: 'NOT_FOUND' });
+    expect(await memberRow(outsider)).toEqual([]);
+    expect(await db.$count(pagePermissions, eq(pagePermissions.userId, outsider))).toBe(0);
+    expect((await listPendingGuestApprovals(w.orgId, 10)).total).toBe(0);
+  });
+
+  it('POL-2 (partial) guests OFF does not stop an org MEMBER redeeming: they are not a guest', async () => {
+    const { page } = await makeLinks();
+    await setGuests('off');
+    expect((await redeemPageShareLink(ctxFor(await orgMemberUser()), page.rawToken)).ok).toBe(true);
+  });
+
+  it('POL-2 (partial) guests APPROVE: the outsider is queued, told so, and holds NO access — no row, no grant, no page access', async () => {
+    const { drive, page } = await makeLinks();
+    await setGuests('approve');
+    const outsider = await newUser();
+
+    expect(await redeemDriveShareLink(ctxFor(outsider), drive.rawToken)).toEqual({ ok: false, error: 'PENDING_APPROVAL', driveId: w.orgDrive });
+    expect(await redeemPageShareLink(ctxFor(outsider), page.rawToken)).toEqual({ ok: false, error: 'PENDING_APPROVAL' });
+
+    expect(await memberRow(outsider)).toEqual([]);
+    expect(await getUserAccessLevel(outsider, w.orgPage)).toBeNull();
+    const queue = await listPendingGuestApprovals(w.orgId, 10);
+    // One queue row per person and drive: the page request refreshes the drive request (the later one wins).
+    expect(queue.total).toBe(1);
+    expect(queue.items[0]).toMatchObject({ userId: outsider, driveId: w.orgDrive });
+  });
+
+  it('POL-2 (partial) approving a queued DRIVE-link redeemer admits them with the link\'s role; a queued PAGE-link redeemer becomes a GUEST with the page grant', async () => {
+    const { drive, page } = await makeLinks();
+    await setGuests('approve');
+    const driveGuest = await newUser();
+    await redeemDriveShareLink(ctxFor(driveGuest), drive.rawToken);
+    const claimedDrive = await claimPendingGuestApproval({ orgId: w.orgId, holdId: (await listPendingGuestApprovals(w.orgId, 10)).items[0].holdId });
+    if (!claimedDrive) throw new Error('expected a queued request');
+
+    const admitted = await completeApprovedLinkAdmission(claimedDrive);
+    expect(admitted).toMatchObject({ ok: true, userId: driveGuest, driveId: w.orgDrive, role: 'MEMBER' });
+    expect((await memberRow(driveGuest))[0]).toMatchObject({ role: 'MEMBER' });
+
+    const pageGuest = await newUser();
+    await redeemPageShareLink(ctxFor(pageGuest), page.rawToken);
+    const claimedPage = await claimPendingGuestApproval({ orgId: w.orgId, holdId: (await listPendingGuestApprovals(w.orgId, 10)).items[0].holdId });
+    if (!claimedPage) throw new Error('expected a queued request');
+    expect(await completeApprovedLinkAdmission(claimedPage)).toMatchObject({ ok: true, role: 'GUEST' });
+    expect((await memberRow(pageGuest))[0].role).toBe('GUEST');
+    expect((await getUserAccessLevel(pageGuest, w.orgPage))?.canView).toBe(true);
+  });
+
+  it('POL-2 (partial) approval re-checks the offer and the policy: a link revoked meanwhile, or guests turned OFF meanwhile, admits no one', async () => {
+    const { drive } = await makeLinks();
+    await setGuests('approve');
+    const a = await newUser();
+    const b = await newUser();
+    await redeemDriveShareLink(ctxFor(a), drive.rawToken);
+    await redeemDriveShareLink(ctxFor(b), drive.rawToken);
+    const [first, second] = (await listPendingGuestApprovals(w.orgId, 10)).items;
+    const claim = async (id: string) => {
+      const c = await claimPendingGuestApproval({ orgId: w.orgId, holdId: id });
+      if (!c) throw new Error('expected a queued request');
+      return c;
+    };
+
+    await db.update(driveShareLinks).set({ isActive: false }).where(eq(driveShareLinks.id, drive.id));
+    expect(await completeApprovedLinkAdmission(await claim(first.holdId))).toEqual({ ok: false, error: 'LINK_GONE' });
+
+    await db.update(driveShareLinks).set({ isActive: true }).where(eq(driveShareLinks.id, drive.id));
+    await setGuests('off');
+    expect(await completeApprovedLinkAdmission(await claim(second.holdId))).toEqual({ ok: false, error: 'POLICY_OFF' });
+    expect(await memberRow(a)).toEqual([]);
+    expect(await memberRow(b)).toEqual([]);
+  });
+
+  it('POL-2 (partial) guests ON admits an outsider at once, as before', async () => {
+    const { drive } = await makeLinks();
+    expect((await redeemDriveShareLink(ctxFor(await newUser()), drive.rawToken)).ok).toBe(true);
+  });
+
+  it('POL-2 (partial) a drive link to a PERSONAL drive is never held: no org, no guest policy', async () => {
+    const link = await createDriveShareLink(ctxFor(w.outsider), w.personalDrive, {});
+    if (!link.ok) throw new Error('setup');
+    await setGuests('off');
+    expect((await redeemDriveShareLink(ctxFor(await newUser()), link.data.rawToken)).ok).toBe(true);
   });
 });

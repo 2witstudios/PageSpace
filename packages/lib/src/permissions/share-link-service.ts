@@ -12,6 +12,8 @@ import { generateToken } from '../auth/token-utils';
 import { EnforcedAuthContext } from './enforced-context';
 import { isDriveOwnerOrAdmin, canUserSharePage, isUserDriveMember } from './permissions';
 import { getDrivePolicies } from '../organizations/policy-reader';
+import { decideOrgDriveAdmission } from './guest-admission';
+import { requestGuestApproval, type ClaimedGuestApproval } from './guest-holds';
 import { shareLinkCreationDecision, shareLinkUsable } from '../organizations/sharing-decisions';
 
 // ============================================================================
@@ -23,7 +25,9 @@ export type ShareLinkError =
   | 'NOT_FOUND'
   | 'ALREADY_MEMBER'
   | 'INVALID_PERMISSIONS'
-  | 'HOME_DRIVE';
+  | 'HOME_DRIVE'
+  /** POL-2: the org's guests policy is `approve`; the redeemer is queued and nothing has been granted. */
+  | 'PENDING_APPROVAL';
 
 /** POL-3: the org's public-share-links policy is off. Carries the policy's own message for the caller to show. */
 export type ShareLinkPolicyRefusal = { ok: false; error: 'POLICY_FORBIDDEN'; message: string };
@@ -97,6 +101,86 @@ function isValidShareLink(link: {
 /** POL-3, read at the moment of redemption: the marker AND the live policy of the link's drive's org. */
 async function linkUsableNow(driveId: string, link: { suspendedByPolicy: SuspensionKind | null }): Promise<boolean> {
   return shareLinkUsable((await getDrivePolicies(driveId))?.policies ?? null, link);
+}
+
+/**
+ * Create (or refresh) the drive membership a drive share link grants. Shared by redemption and by the approval of a
+ * queued redeemer, so a person admitted after approval gets exactly what an immediate redeemer gets.
+ */
+async function insertDriveLinkMember(
+  userId: string,
+  link: { driveId: string; role: DriveShareLink['role']; customRoleId: string | null },
+): Promise<{ memberId: string; customRoleId: string | null }> {
+  // Defense-in-depth: older links may pre-date the ADMIN gate; keep ADMIN+null invariant.
+  const customRoleId = link.role === 'ADMIN' ? null : link.customRoleId;
+
+  const [inserted] = await db.insert(driveMembers).values({
+    id: createId(),
+    driveId: link.driveId,
+    userId,
+    role: link.role,
+    customRoleId,
+    acceptedAt: new Date(),
+  }).onConflictDoUpdate({
+    target: [driveMembers.driveId, driveMembers.userId],
+    set: {
+      acceptedAt: new Date(),
+      // Never downgrade an existing ADMIN via a MEMBER share link.
+      role: sql`CASE WHEN ${driveMembers.role} = 'ADMIN' THEN ${driveMembers.role} ELSE EXCLUDED.role END`,
+      // Re-redeem applies the link's role template; existing ADMINs keep NULL to preserve ADMIN+null invariant.
+      customRoleId: sql`CASE WHEN ${driveMembers.role} = 'ADMIN' THEN NULL ELSE EXCLUDED."customRoleId" END`,
+    },
+  }).returning({ id: driveMembers.id });
+  return { memberId: inserted.id, customRoleId };
+}
+
+/**
+ * Make `userId` a GUEST of the page's drive carrying the page grant the link gives: a row that holds that page and
+ * nothing drive-wide (see isGuestRole). An existing row — a pending invite, a real membership, an earlier guest
+ * row — is left exactly as it is: redeeming a page link must never accept an invite nor change a role.
+ */
+async function insertPageLinkGuest(
+  userId: string,
+  link: { driveId: string; pageId: string; permissions: ShareLinkPermission[] },
+): Promise<void> {
+  await db.insert(driveMembers).values({
+    id: createId(),
+    driveId: link.driveId,
+    userId,
+    role: 'GUEST',
+    acceptedAt: new Date(),
+  }).onConflictDoNothing({
+    target: [driveMembers.driveId, driveMembers.userId],
+  });
+
+  const canView   = link.permissions.includes('VIEW');
+  const canEdit   = link.permissions.includes('EDIT');
+  const canShare  = link.permissions.includes('SHARE');
+  const canDelete = link.permissions.includes('DELETE');
+
+  await db
+    .insert(pagePermissions)
+    .values({
+      id: createId(),
+      pageId: link.pageId,
+      userId,
+      canView,
+      canEdit,
+      canShare,
+      canDelete,
+      grantedBy: null,
+      grantedAt: new Date(),
+    })
+    .onConflictDoUpdate({
+      target: [pagePermissions.pageId, pagePermissions.userId],
+      set: {
+        canView:   sql`${pagePermissions.canView}   OR EXCLUDED."canView"`,
+        canEdit:   sql`${pagePermissions.canEdit}   OR EXCLUDED."canEdit"`,
+        canShare:  sql`${pagePermissions.canShare}  OR EXCLUDED."canShare"`,
+        canDelete: sql`${pagePermissions.canDelete} OR EXCLUDED."canDelete"`,
+        grantedAt: new Date(),
+      },
+    });
 }
 
 // ============================================================================
@@ -213,6 +297,7 @@ export async function redeemDriveShareLink(
 ): Promise<
   | { ok: true; data: DriveShareLinkRedemption }
   | { ok: false; error: 'ALREADY_MEMBER'; driveId: string }
+  | { ok: false; error: 'PENDING_APPROVAL'; driveId: string }
   | { ok: false; error: 'NOT_FOUND' }
 > {
   const rows = await db
@@ -246,26 +331,23 @@ export async function redeemDriveShareLink(
   const alreadyMember = await isUserDriveMember(ctx.userId, link.driveId);
   if (alreadyMember) return { ok: false, error: 'ALREADY_MEMBER', driveId: link.driveId };
 
-  // Defense-in-depth: older links may pre-date the ADMIN gate; keep ADMIN+null invariant.
-  const customRoleId = link.role === 'ADMIN' ? null : link.customRoleId;
+  // POL-2: an outsider redeeming a link to an org drive is a guest. Off answers like a link that does not exist;
+  // approve queues them and grants nothing; on proceeds. Asked here, where the membership would be created.
+  const admission = await decideOrgDriveAdmission({ driveId: link.driveId, userId: ctx.userId });
+  if (admission.decision === 'refuse') return { ok: false, error: 'NOT_FOUND' };
+  if (admission.decision === 'hold' && admission.orgId) {
+    await requestGuestApproval({
+      orgId: admission.orgId,
+      driveId: link.driveId,
+      userId: ctx.userId,
+      origin: 'drive_link',
+      request: { linkId: link.id, role: link.role === 'ADMIN' ? 'ADMIN' : 'MEMBER', customRoleId: link.customRoleId },
+      requestedBy: link.createdBy,
+    });
+    return { ok: false, error: 'PENDING_APPROVAL', driveId: link.driveId };
+  }
 
-  const [inserted] = await db.insert(driveMembers).values({
-    id: createId(),
-    driveId: link.driveId,
-    userId: ctx.userId,
-    role: link.role,
-    customRoleId,
-    acceptedAt: new Date(),
-  }).onConflictDoUpdate({
-    target: [driveMembers.driveId, driveMembers.userId],
-    set: {
-      acceptedAt: new Date(),
-      // Never downgrade an existing ADMIN via a MEMBER share link.
-      role: sql`CASE WHEN ${driveMembers.role} = 'ADMIN' THEN ${driveMembers.role} ELSE EXCLUDED.role END`,
-      // Re-redeem applies the link's role template; existing ADMINs keep NULL to preserve ADMIN+null invariant.
-      customRoleId: sql`CASE WHEN ${driveMembers.role} = 'ADMIN' THEN NULL ELSE EXCLUDED."customRoleId" END`,
-    },
-  }).returning({ id: driveMembers.id });
+  const { memberId, customRoleId } = await insertDriveLinkMember(ctx.userId, link);
 
   await db
     .update(driveShareLinks)
@@ -277,7 +359,7 @@ export async function redeemDriveShareLink(
     data: {
       driveId: link.driveId,
       linkId: link.id,
-      memberId: inserted.id,
+      memberId,
       driveName: link.driveName,
       role: link.role,
       customRoleId,
@@ -422,48 +504,24 @@ export async function redeemPageShareLink(
     .limit(1);
   const alreadyHasAccess = existingPerms.length > 0 && existingPerms[0].canView;
 
-  // A page link makes the redeemer a GUEST: a row that carries the page grant
-  // below and nothing drive-wide (see isGuestRole). An existing row — a pending
-  // invite, a real membership, an earlier guest row — is left exactly as it is:
-  // redeeming a page link must never accept an invite nor change a role.
-  await db.insert(driveMembers).values({
-    id: createId(),
-    driveId: link.driveId,
-    userId: ctx.userId,
-    role: 'GUEST',
-    acceptedAt: new Date(),
-  }).onConflictDoNothing({
-    target: [driveMembers.driveId, driveMembers.userId],
-  });
-
-  const canView   = link.permissions.includes('VIEW');
-  const canEdit   = link.permissions.includes('EDIT');
-  const canShare  = link.permissions.includes('SHARE');
-  const canDelete = link.permissions.includes('DELETE');
-
-  await db
-    .insert(pagePermissions)
-    .values({
-      id: createId(),
-      pageId: link.pageId,
+  // POL-2: an outsider redeeming a page link to an org drive is a guest (D-OW-24). Off answers like a link that does
+  // not exist; approve queues them and grants nothing; on proceeds.
+  const admission = await decideOrgDriveAdmission({ driveId: link.driveId, userId: ctx.userId });
+  if (admission.decision === 'refuse') return { ok: false, error: 'NOT_FOUND' };
+  if (admission.decision === 'hold' && admission.orgId) {
+    await requestGuestApproval({
+      orgId: admission.orgId,
+      driveId: link.driveId,
       userId: ctx.userId,
-      canView,
-      canEdit,
-      canShare,
-      canDelete,
-      grantedBy: null,
-      grantedAt: new Date(),
-    })
-    .onConflictDoUpdate({
-      target: [pagePermissions.pageId, pagePermissions.userId],
-      set: {
-        canView:   sql`${pagePermissions.canView}   OR EXCLUDED."canView"`,
-        canEdit:   sql`${pagePermissions.canEdit}   OR EXCLUDED."canEdit"`,
-        canShare:  sql`${pagePermissions.canShare}  OR EXCLUDED."canShare"`,
-        canDelete: sql`${pagePermissions.canDelete} OR EXCLUDED."canDelete"`,
-        grantedAt: new Date(),
-      },
+      origin: 'page_link',
+      request: { linkId: link.id, pageId: link.pageId },
+      requestedBy: null,
     });
+    return { ok: false, error: 'PENDING_APPROVAL' };
+  }
+
+  // A page link makes the redeemer a GUEST: a row that carries the page grant and nothing drive-wide.
+  await insertPageLinkGuest(ctx.userId, link);
 
   if (!alreadyHasAccess) {
     await db
@@ -474,6 +532,62 @@ export async function redeemPageShareLink(
 
   return { ok: true, data: { pageId: link.pageId, driveId: link.driveId, linkId: link.id } };
 }
+
+// ============================================================================
+// Approved guests (POL-2): replay a queued link redemption
+// ============================================================================
+
+export type ApprovedLinkAdmission =
+  | { ok: true; driveId: string; userId: string; memberId: string | null; role: DriveShareLink['role'] | 'GUEST'; customRoleId: string | null; driveName: string; createdBy: string | null }
+  | { ok: false; error: 'NOT_A_LINK_REQUEST' | 'LINK_GONE' | 'POLICY_OFF' };
+
+/**
+ * An Owner or Admin approved a queued link redeemer: admit them exactly as the redemption would have, provided the
+ * offer still stands. The link must still exist, be live and not suspended, and the org's policies must still allow
+ * the admission (guests not off, public share links not off); otherwise nothing is granted and the caller is told
+ * why. The queue row is already claimed by the caller; nothing here can admit the same request twice.
+ */
+export async function completeApprovedLinkAdmission(claim: ClaimedGuestApproval): Promise<ApprovedLinkAdmission> {
+  const linkId = claim.request.linkId;
+  if (!claim.userId || !linkId || (claim.origin !== 'drive_link' && claim.origin !== 'page_link')) return { ok: false, error: 'NOT_A_LINK_REQUEST' };
+
+  const policies = (await getDrivePolicies(claim.driveId))?.policies ?? null;
+  if (policies?.guests === 'off') return { ok: false, error: 'POLICY_OFF' };
+
+  if (claim.origin === 'drive_link') {
+    const [link] = await db
+      .select({
+        id: driveShareLinks.id, driveId: driveShareLinks.driveId, role: driveShareLinks.role, customRoleId: driveShareLinks.customRoleId,
+        isActive: driveShareLinks.isActive, expiresAt: driveShareLinks.expiresAt, suspendedByPolicy: driveShareLinks.suspendedByPolicy,
+        createdBy: driveShareLinks.createdBy, driveName: drives.name,
+      })
+      .from(driveShareLinks)
+      .innerJoin(drives, eq(drives.id, driveShareLinks.driveId))
+      .where(and(eq(driveShareLinks.id, linkId), eq(driveShareLinks.driveId, claim.driveId)))
+      .limit(1);
+    if (!link || !isValidShareLink(link) || !shareLinkUsable(policies, link)) return { ok: false, error: 'LINK_GONE' };
+    const { memberId, customRoleId } = await insertDriveLinkMember(claim.userId, link);
+    await db.update(driveShareLinks).set({ useCount: sql`${driveShareLinks.useCount} + 1` }).where(eq(driveShareLinks.id, link.id));
+    return { ok: true, driveId: link.driveId, userId: claim.userId, memberId, role: link.role, customRoleId, driveName: link.driveName, createdBy: link.createdBy };
+  }
+
+  const [link] = await db
+    .select({
+      id: pageShareLinks.id, pageId: pageShareLinks.pageId, driveId: pages.driveId, permissions: pageShareLinks.permissions,
+      isActive: pageShareLinks.isActive, expiresAt: pageShareLinks.expiresAt, suspendedByPolicy: pageShareLinks.suspendedByPolicy,
+      driveName: drives.name,
+    })
+    .from(pageShareLinks)
+    .innerJoin(pages, eq(pages.id, pageShareLinks.pageId))
+    .innerJoin(drives, eq(drives.id, pages.driveId))
+    .where(and(eq(pageShareLinks.id, linkId), eq(pages.driveId, claim.driveId)))
+    .limit(1);
+  if (!link || !isValidShareLink(link) || !shareLinkUsable(policies, link)) return { ok: false, error: 'LINK_GONE' };
+  await insertPageLinkGuest(claim.userId, link);
+  await db.update(pageShareLinks).set({ useCount: sql`${pageShareLinks.useCount} + 1` }).where(eq(pageShareLinks.id, link.id));
+  return { ok: true, driveId: link.driveId, userId: claim.userId, memberId: null, role: 'GUEST', customRoleId: null, driveName: link.driveName, createdBy: null };
+}
+
 
 // ============================================================================
 // Token resolution (for landing page display)
