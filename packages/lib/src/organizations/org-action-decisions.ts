@@ -66,6 +66,25 @@ export const environmentsDecision = (policies: OrgPolicies | null): PolicyDecisi
 export const publishedAppsDecision = (policies: OrgPolicies | null): PolicyDecision =>
   switchDecision(policies, 'publishedApps', "This organization doesn't allow published apps.");
 
+/**
+ * POL-11, read where a connection is USED: may this connection act now? Either refuses: the provider is off the
+ * org's allowlist, or the connection carries a suspension marker (set when it fell off the list). Both are checked
+ * at the moment of use, so a connection whose marker is missing or stale is still refused, and one whose policy was
+ * just widened but not yet reconciled stays refused until it is restored.
+ */
+export function integrationUsable(
+  policies: OrgPolicies | null,
+  providerSlug: string,
+  connection: { suspendedByPolicy?: unknown },
+): PolicyDecision {
+  const listed = integrationDecision(policies, providerSlug);
+  if (!listed.ok) return listed;
+  if (connection.suspendedByPolicy !== null && connection.suspendedByPolicy !== undefined) {
+    return refuse('integrationsAllowlist', "This organization doesn't allow that service right now. Ask an Owner or Admin which services are allowed.");
+  }
+  return { ok: true };
+}
+
 /** POL-11: may a drive connect or use this service (an integration provider slug)? `null` allowlist = any. */
 export function integrationDecision(policies: OrgPolicies | null, providerSlug: string): PolicyDecision {
   if (policies === null || policies.integrationsAllowlist === null || policies.integrationsAllowlist.includes(providerSlug)) return { ok: true };
