@@ -9,7 +9,7 @@ import { pages, drives } from '@pagespace/db/schema/core';
 import { conversations as conversationsTable, messages as unifiedMessages } from '@pagespace/db/schema/conversations';
 import { users } from '@pagespace/db/schema/auth';
 import { prepareHistoryForModel, finishModelRequest } from '@/lib/ai/core/context-assembly';
-import { PERSONAL_SPEND } from '@pagespace/lib/billing/spend-target';
+import { PERSONAL_SPEND, spendDriveId } from '@pagespace/lib/billing/spend-target';
 import { runCompaction } from '@/lib/ai/core/compaction/compaction-service';
 import { canActorViewPage, canActorAccessDrive, canActorConsultAgent, filterDriveIdsByAppTokenScope, filterDriveIdsByMcpScope, isMcpScoped, resolveActingAgentId } from './actor-permissions';
 import { listAgentDrives, getAgentContextDrives } from '@pagespace/lib/services/drive-agent-service';
@@ -45,7 +45,7 @@ const MAX_AGENT_DEPTH = 2;
  * Get configured AI model for agent using the centralized provider factory
  * Handles provider-specific setup and fallbacks
  */
-async function getConfiguredModel(userId: string, agentConfig: { aiProvider?: string | null; aiModel?: string | null }) {
+async function getConfiguredModel(userId: string, agentConfig: { aiProvider?: string | null; aiModel?: string | null }, driveId: string | null) {
   const { aiProvider, aiModel } = agentConfig;
 
   // Use default provider/model if agent doesn't have specific configuration
@@ -57,7 +57,8 @@ async function getConfiguredModel(userId: string, agentConfig: { aiProvider?: st
     selectedModel,
   };
 
-  const providerResult = await createAIProvider(userId, providerRequest);
+  // POL-8: the org of the drive this call runs in (its spend drive); none for personal spend.
+  const providerResult = await createAIProvider(userId, providerRequest, { driveId });
 
   if (isProviderError(providerResult)) {
     throw new Error(providerResult.error);
@@ -705,7 +706,7 @@ export async function executeAskAgent(
           await getConfiguredModel(userId, {
             aiProvider: targetAgent.aiProvider,
             aiModel: targetAgent.aiModel
-          });
+          }, spendDriveId(executionContext?.creditSpend?.spend ?? PERSONAL_SPEND));
         
         // 9. Filter tools for agent. Nested calls inherit the top-level caller's MCP
         // drive scope via nestedContext below, so a scoped token must not be able to

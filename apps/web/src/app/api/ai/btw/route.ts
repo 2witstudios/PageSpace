@@ -68,7 +68,8 @@ export async function POST(request: Request) {
     // A side question spends in the session of the conversation it asks about (SPEND-7):
     // a page or drive conversation's drive, or personal credits for a global one (SPEND-8).
     // It spends the source stored on that conversation (SPEND-3), or refuses (SPEND-4).
-    const spend = conversationSpend(await conversationSessionDriveId(conversation), conversationId);
+    const sessionDriveId = await conversationSessionDriveId(conversation);
+    const spend = conversationSpend(sessionDriveId, conversationId);
     // Entitlement exactly as a chat turn decides it: an admin-only provider is a
     // role block, a paid-tier model is a tier block (a downgraded user's stored
     // model must not keep running here) — for the tier of whoever funds the call (WAL-8).
@@ -103,7 +104,7 @@ export async function POST(request: Request) {
       walletId = gate.walletId;
     }
 
-    const provider = await createAIProvider(userId, {}, { user: user ?? null });
+    const provider = await createAIProvider(userId, {}, { user: user ?? null, driveId: sessionDriveId });
     if ('error' in provider) return NextResponse.json({ error: provider.error }, { status: provider.status });
 
     const startTime = Date.now();

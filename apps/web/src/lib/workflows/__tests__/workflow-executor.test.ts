@@ -320,6 +320,19 @@ describe('executeWorkflow', () => {
     expect(result.error).toContain('AI provider error');
   });
 
+  test('POL-8 the workflow\'s drive is named to the provider factory, and an org-policy refusal fails the run with the policy message', async () => {
+    setupSelectChain([mockAgent], [mockDrive]);
+    vi.mocked(isProviderError).mockReturnValue(true);
+    vi.mocked(createAIProvider).mockResolvedValue({ error: "This organization doesn't allow that AI model.", status: 403, code: 'org_policy', policy: 'modelAllowlist' } as never);
+    const input = createInputFixture();
+
+    const result = await executeWorkflow(input);
+
+    expect(vi.mocked(createAIProvider)).toHaveBeenCalledWith(input.createdBy, expect.anything(), { driveId: input.driveId });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("doesn't allow that AI model");
+  });
+
   test('usage tracking is awaited — the usage write is durable before executeWorkflow resolves', async () => {
     // trackAIUsage's contract is explicit: it must be awaited so the usage log
     // (and the billing settle it drives) is durable before the caller returns.

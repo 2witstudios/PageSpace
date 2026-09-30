@@ -619,7 +619,7 @@ async function runExecution(
       selectedModel,
     };
 
-    const providerResult = await createAIProvider(input.createdBy, providerRequest);
+    const providerResult = await createAIProvider(input.createdBy, providerRequest, { driveId: input.driveId });
 
     if (isProviderError(providerResult)) {
       return { success: false, durationMs: Date.now() - startTime, error: `AI provider error: ${providerResult.error}` };

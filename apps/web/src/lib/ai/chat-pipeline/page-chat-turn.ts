@@ -1223,7 +1223,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     };
 
     // Thread the already-loaded user row through the factory so it skips redundant DB selects.
-    const providerResult = await createAIProvider(userId, providerRequest, { user: user ?? null });
+    const providerResult = await createAIProvider(userId, providerRequest, { user: user ?? null, driveId: page.driveId });
 
     if (isProviderError(providerResult)) {
       return createProviderErrorResponse(providerResult);

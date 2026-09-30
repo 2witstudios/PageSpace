@@ -203,9 +203,9 @@ export async function POST(request: Request): Promise<Response> {
   const providerResult = await createAIProvider(authResult.userId, {
     selectedProvider: page.aiProvider ?? undefined,
     selectedModel: page.aiModel ?? undefined,
-  });
+  }, { driveId: page.driveId });
   if (isProviderError(providerResult)) {
-    return NextResponse.json({ error: providerResult.error }, { status: providerResult.status });
+    return NextResponse.json({ error: providerResult.error, ...(providerResult.code ? { code: providerResult.code, policy: providerResult.policy } : {}) }, { status: providerResult.status });
   }
 
   // The resolved provider that will ACTUALLY run (post catalog-substitution): an

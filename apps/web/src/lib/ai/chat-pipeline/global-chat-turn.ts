@@ -699,7 +699,8 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
       selectedModel,
     };
 
-    const providerResult = await createAIProvider(userId, providerRequest);
+    // POL-8: the org of the drive the turn runs in (the same server-resolved drive the spend uses; none without a contextRef).
+    const providerResult = await createAIProvider(userId, providerRequest, { driveId: contextRef ? (locationContext?.currentDrive?.id ?? null) : null });
 
     if (isProviderError(providerResult)) {
       return createProviderErrorResponse(providerResult);

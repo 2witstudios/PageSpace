@@ -58,6 +58,11 @@ vi.mock('@/lib/fetch-bridge', () => ({
   getFetchBridge: vi.fn(() => ({ isUserConnected: vi.fn(() => false) })),
 }));
 
+// POL-8: the factory asks the drive's org policies when a drive is named; the default here is "no org".
+const getDrivePolicies = vi.hoisted(() => vi.fn());
+vi.mock('@pagespace/lib/organizations/policy-reader', () => ({ getDrivePolicies }));
+
+import { DEFAULT_ORG_POLICIES } from '@pagespace/lib/organizations/policies-core';
 import {
   createAIProvider,
   isProviderError,
@@ -94,6 +99,7 @@ describe('provider-factory', () => {
     vi.clearAllMocks();
     mockOpenRouterChat.mockImplementation((model: string) => ({ modelId: model }));
     vi.mocked(isOnPrem).mockReturnValue(false);
+    getDrivePolicies.mockResolvedValue(null);
     mockDb.where.mockResolvedValue([
       { id: 'user-123', currentAiProvider: null, currentAiModel: null },
     ]);
@@ -110,6 +116,63 @@ describe('provider-factory', () => {
   });
 
   describe('createAIProvider', () => {
+    describe('the org model and provider allowlists (POL-8)', () => {
+      const orgPolicies = (over: Partial<typeof DEFAULT_ORG_POLICIES>) => ({ orgId: 'org-1', policies: { ...DEFAULT_ORG_POLICIES, ...over } });
+
+      it('POL-8 a model the org does not allow is REFUSED 403 with the policy named, and no provider client is built', async () => {
+        process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+        getDrivePolicies.mockResolvedValue(orgPolicies({ modelAllowlist: ['some/other-model'] }));
+
+        const result = await createAIProvider('user-123', {}, { driveId: 'drive-1' });
+
+        expect(isProviderError(result)).toBe(true);
+        if (isProviderError(result)) expect(result).toMatchObject({ status: 403, code: 'org_policy', policy: 'modelAllowlist' });
+        expect(createOpenRouter).not.toHaveBeenCalled();
+        expect(getDrivePolicies).toHaveBeenCalledWith('drive-1');
+      });
+
+      it('POL-8 a provider the org does not allow is refused, independently of the model list', async () => {
+        process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+        getDrivePolicies.mockResolvedValue(orgPolicies({ providerAllowlist: ['google'] }));
+        const result = await createAIProvider('user-123', {}, { driveId: 'drive-1' });
+        expect(isProviderError(result) && result.policy).toBe('providerAllowlist');
+      });
+
+      it('POL-8 an allowed model runs, and an empty allowlist allows none', async () => {
+        process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+        getDrivePolicies.mockResolvedValue(orgPolicies({ modelAllowlist: ['z-ai/glm-5.3-flash'] }));
+        expect(isProviderError(await createAIProvider('user-123', {}, { driveId: 'drive-1' }))).toBe(false);
+        getDrivePolicies.mockResolvedValue(orgPolicies({ modelAllowlist: [] }));
+        expect(isProviderError(await createAIProvider('user-123', {}, { driveId: 'drive-1' }))).toBe(true);
+      });
+
+      it('POL-8 a disallowed SELECTION is refused, never silently replaced by an allowed default (the resolver would have swapped it)', async () => {
+        process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+        // The default is allowed; the asked-for model is not in the catalog, so the resolver substitutes the default.
+        getDrivePolicies.mockResolvedValue(orgPolicies({ modelAllowlist: ['z-ai/glm-5.3-flash'] }));
+
+        const result = await createAIProvider('user-123', { selectedProvider: 'zai', selectedModel: 'not/allowed-model' }, { driveId: 'drive-1' });
+
+        expect(isProviderError(result) && result.code).toBe('org_policy');
+        expect(createOpenRouter).not.toHaveBeenCalled();
+      });
+
+      it('POL-8 no drive, or a drive with no org, is never restricted and reads no policy when no drive is named', async () => {
+        process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+        expect(isProviderError(await createAIProvider('user-123', {}))).toBe(false);
+        expect(getDrivePolicies).not.toHaveBeenCalled();
+        expect(isProviderError(await createAIProvider('user-123', {}, { driveId: 'personal-drive' }))).toBe(false);
+      });
+
+      it('POL-8 the allowlist is read on every call: a change applies to the next call without a restart', async () => {
+        process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+        getDrivePolicies.mockResolvedValue(orgPolicies({ modelAllowlist: ['x/y'] }));
+        expect(isProviderError(await createAIProvider('user-123', {}, { driveId: 'drive-1' }))).toBe(true);
+        getDrivePolicies.mockResolvedValue(orgPolicies({ modelAllowlist: null }));
+        expect(isProviderError(await createAIProvider('user-123', {}, { driveId: 'drive-1' }))).toBe(false);
+      });
+    });
+
     describe('default routing', () => {
       it('routes the unset default through OpenRouter with the default model', async () => {
         process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
