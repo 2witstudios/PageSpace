@@ -1216,4 +1216,40 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
       expect(settled.metadata).toMatchObject({ abortedStep: { inputTokens: 1000, outputTokens: 50, capped: false } });
     });
   });
+  describe('turn timing marks', () => {
+    it('persists the preflight marks on the usage row, in the order the steps complete', async () => {
+      await POST(makeRequest(), makeContext());
+      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+      await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: mockResponseMessage });
+
+      const calls = vi.mocked(AIMonitoring.trackUsage).mock.calls;
+      expect(calls).toHaveLength(1);
+      const timing = (calls[0][0].metadata as { timing?: { marks: Record<string, number> } }).timing;
+      expect(timing).toBeDefined();
+      const names = Object.keys(timing!.marks);
+      // Conditional steps (drive prompt, page tree, drive summary, MCP drive access) may be
+      // absent for this fixture (this file does not mock the integration resolver, so
+      // `integrations_ready` is skipped by its caught failure); the rest must appear, each after the step it follows.
+      const inOrder = [
+        'credit_gate',
+        'provider_ready',
+        'history_loaded',
+        'history_converted',
+        'personalization',
+        'home_drive_resolved',
+        'sandbox_eligibility',
+        'agent_awareness_built',
+        'commands_loaded',
+        'active_plan_loaded',
+        'system_prompt',
+        'integrations_import',
+        'history_compacted',
+        'model_messages_built',
+        'history_prepared',
+        'display_name_ready',
+        'generation_started',
+      ];
+      expect(names.filter((name) => inOrder.includes(name))).toEqual(inOrder);
+    });
+  });
 });
