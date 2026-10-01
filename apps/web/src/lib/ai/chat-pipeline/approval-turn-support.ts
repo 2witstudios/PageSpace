@@ -9,7 +9,7 @@
  */
 
 import { NextResponse } from 'next/server';
-import type { ModelMessage, ToolSet } from 'ai';
+import type { ModelMessage, ToolSet, UIMessage } from 'ai';
 import type { ApplyToolApprovalResult, ApprovedToolExecution, ApprovedToolOutcome } from '@/lib/ai/core/approval-resume';
 import { runApprovedToolExecutions } from '@/lib/ai/approvals/run-approved-executions';
 import { toolApprovalRepository } from '@/lib/repositories/tool-approval-repository';
@@ -73,7 +73,7 @@ export async function executeApprovedCallsAndReassemble<T extends AssembledModel
   toolOptions: { abortSignal?: AbortSignal; experimental_context: unknown };
   record: (execution: ApprovedToolExecution, outcome: ApprovedToolOutcome) => Promise<unknown>;
   loadHistory: () => Promise<Parameters<typeof args.assemble>[0]>;
-  assemble: (history: import('ai').UIMessage[]) => Promise<T>;
+  assemble: (history: UIMessage[]) => Promise<T>;
   logger: { info: (msg: string, meta?: Record<string, unknown>) => void; warn: (msg: string, meta?: Record<string, unknown>) => void };
   logContext: Record<string, unknown>;
 }): Promise<T> {

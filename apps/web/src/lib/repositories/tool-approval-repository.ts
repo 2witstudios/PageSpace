@@ -18,7 +18,7 @@ export type ToolApprovalOutcome = 'ok' | 'error' | 'denied' | 'stale' | 'running
  * turn that claimed it is presumed dead. A run that outlives it and still
  * reports is not lost — `recordOutcome` wins over `stale` (truth over guess).
  */
-export const STALE_RUNNING_AFTER_MS = 15 * 60 * 1000;
+const STALE_RUNNING_AFTER_MS = 15 * 60 * 1000;
 
 export interface ToolApprovalGrantRow extends ToolApprovalGrant {
   id: string;
@@ -66,8 +66,9 @@ export const toolApprovalRepository = {
   },
 
   /**
-   * The turn is about to RUN an approved call: `outcome NULL → running`. Lost
-   * (false) means a dismiss already closed it as stale, or it was denied — the
+   * The turn is about to RUN an approved call: `approved AND outcome NULL →
+   * running`. Lost (false) means a dismiss already closed it as stale, or it was
+   * denied (even one whose denial outcome was never written) — the
    * caller must not execute. This is the arbiter that keeps a stale-close and
    * an execution from both happening to one approval.
    */
@@ -75,7 +76,7 @@ export const toolApprovalRepository = {
     const rows = await db
       .update(aiToolApprovalDecisions)
       .set({ outcome: 'running', executedAt: new Date() })
-      .where(and(eq(aiToolApprovalDecisions.approvalId, approvalId), isNull(aiToolApprovalDecisions.outcome)))
+      .where(and(eq(aiToolApprovalDecisions.approvalId, approvalId), eq(aiToolApprovalDecisions.approved, true), isNull(aiToolApprovalDecisions.outcome)))
       .returning({ approvalId: aiToolApprovalDecisions.approvalId });
     return rows.length > 0;
   },

@@ -34,7 +34,7 @@ import { isWriteTool } from '../core/tool-filtering';
 import { FINISH_TOOL_NAME } from '../tools/finish-tool';
 import { ASK_USER_TOOL_NAME } from '../tools/ask-user-tools';
 
-export const TOOL_APPROVAL_MODES = ['ask', 'auto'] as const;
+const TOOL_APPROVAL_MODES = ['ask', 'auto'] as const;
 export type ToolApprovalMode = (typeof TOOL_APPROVAL_MODES)[number];
 export const DEFAULT_TOOL_APPROVAL_MODE: ToolApprovalMode = 'ask';
 
@@ -42,14 +42,14 @@ export const isToolApprovalMode = (value: unknown): value is ToolApprovalMode =>
   typeof value === 'string' && (TOOL_APPROVAL_MODES as readonly string[]).includes(value);
 
 /** The search-mode dispatcher: its INPUT names the tool that actually runs. */
-export const EXECUTE_TOOL_NAME = 'execute_tool';
+const EXECUTE_TOOL_NAME = 'execute_tool';
 const TOOL_SEARCH_TOOL_NAME = 'tool_search';
 
 /**
  * Tools that never prompt whatever the mode: the loop's own scaffolding.
  * `ask_user` is execute-less (it IS a pause) and `finish` only ends the turn.
  */
-export const NEVER_GATED_TOOL_NAMES: ReadonlySet<string> = new Set([
+const NEVER_GATED_TOOL_NAMES: ReadonlySet<string> = new Set([
   FINISH_TOOL_NAME,
   ASK_USER_TOOL_NAME,
   TOOL_SEARCH_TOOL_NAME,
@@ -62,7 +62,7 @@ export const NEVER_GATED_TOOL_NAMES: ReadonlySet<string> = new Set([
  * `sanitizeToolNamesForProvider` before the model sees them; the policy runs on
  * the sanitized set, so both spellings are recognised.
  */
-export const isMcpToolName = (toolName: string): boolean =>
+const isMcpToolName = (toolName: string): boolean =>
   toolName.startsWith('mcp__') || toolName.startsWith('mcp:');
 
 export interface ToolApprovalGrant {

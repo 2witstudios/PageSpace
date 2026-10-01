@@ -41,6 +41,7 @@ vi.mock('@pagespace/db/schema/tool-approvals', () => ({
   },
   aiToolApprovalDecisions: {
     approvalId: 'decisions.approvalId',
+    approved: 'decisions.approved',
     outcome: 'decisions.outcome',
     approved: 'decisions.approved',
     reason: 'decisions.reason',
@@ -159,14 +160,17 @@ describe('markExecuted', () => {
 });
 
 describe('outcome claims (the arbiter of what happened to an approved call)', () => {
-  it('claimExecutionStart: given the row is undecided-on-outcome (NULL), should move it to running and report won', async () => {
+  it('claimExecutionStart: given an APPROVED row undecided-on-outcome (NULL), should move it to running and report won', async () => {
     mockUpdateChain.returning.mockResolvedValue([{ approvalId: 'ap1' }]);
     expect(await toolApprovalRepository.claimExecutionStart('ap1')).toBe(true);
     expect(mockUpdateChain.set).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'running', executedAt: expect.any(Date) }));
+    // `approved = true` is part of the claim: a denied decision whose outcome
+    // was never written must not be startable.
     expect(mockUpdateChain.where).toHaveBeenCalledWith({
       kind: 'and',
       conditions: [
         { kind: 'eq', field: 'decisions.approvalId', value: 'ap1' },
+        { kind: 'eq', field: 'decisions.approved', value: true },
         { kind: 'isNull', field: 'decisions.outcome' },
       ],
     });

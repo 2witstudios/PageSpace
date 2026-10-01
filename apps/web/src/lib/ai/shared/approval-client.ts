@@ -24,7 +24,7 @@ interface ApprovalCarryingPart {
   approval?: { id?: unknown; approved?: unknown; reason?: unknown };
 }
 
-export const isToolPartType = (part: { type: string }): boolean => part.type.startsWith('tool-');
+const isToolPartType = (part: { type: string }): boolean => part.type.startsWith('tool-');
 
 export const isPendingApprovalPart = (part: { type: string; state?: string }): boolean =>
   isToolPartType(part) && part.state === 'approval-requested';
