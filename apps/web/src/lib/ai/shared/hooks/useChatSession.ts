@@ -482,9 +482,11 @@ export const useChatSession = ({
         ...patchesRef.current.filter((patch) => patch.toolCallId !== toolCallId),
         { kind: 'approval', toolCallId, approval: { id: approvalId, approved, ...(reason ? { reason } : {}) } },
       ];
-      if (approved && scope && scope !== 'once') {
-        approvalScopesRef.current = { ...approvalScopesRef.current, [approvalId]: scope };
-      }
+      // The latest answer for this approval decides its grant: a re-answer as "once" or a
+      // denial drops a grant an earlier answer recorded.
+      const { [approvalId]: _previousScope, ...otherScopes } = approvalScopesRef.current;
+      approvalScopesRef.current =
+        approved && scope && scope !== 'once' ? { ...otherScopes, [approvalId]: scope } : otherScopes;
 
       const patched = composeMessages(targetConversationId);
 
@@ -493,12 +495,14 @@ export const useChatSession = ({
       if (!toolApprovalsComplete({ messages: patched })) return { dispatched: false };
 
       const toolApprovalScopes = approvalScopesRef.current;
-      approvalScopesRef.current = {};
       await dispatch(
         targetConversationId,
         { ...(options?.body ?? {}), ...(Object.keys(toolApprovalScopes).length > 0 ? { toolApprovalScopes } : {}) },
         patched,
       );
+      // Cleared only once the resume is accepted: a failed POST is reverted and re-answered,
+      // and that re-answer must still carry the grants the earlier answers chose.
+      approvalScopesRef.current = {};
       return { dispatched: true };
     },
     [composeMessages, dispatch],

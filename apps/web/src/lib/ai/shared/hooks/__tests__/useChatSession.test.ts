@@ -510,6 +510,52 @@ describe('useChatSession — tool approval resume', () => {
     expect(body.toolApprovalScopes).toEqual({ 'ap-1': 'always' });
   });
 
+  it('given the resume POST fails, keeps the "always" grant of an earlier sibling answer for the re-answer', async () => {
+    const base = [message([paused('call-1', 'ap-1'), paused('call-2', 'ap-2')])];
+    const { result } = mount({ getBaseMessages: () => base });
+    fetchWithAuth.mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: 'stale' }), { status: 409, headers: { 'content-type': 'application/json' } }),
+    );
+
+    await act(async () => {
+      await result.current.addToolApprovalResponse({
+        toolCallId: 'call-1', approvalId: 'ap-1', approved: true, scope: 'always', conversationId: 'conv-1',
+      });
+      await expect(
+        result.current.addToolApprovalResponse({
+          toolCallId: 'call-2', approvalId: 'ap-2', approved: true, conversationId: 'conv-1',
+        }),
+      ).rejects.toThrow();
+    });
+
+    await act(async () => {
+      const retry = await result.current.addToolApprovalResponse({
+        toolCallId: 'call-2', approvalId: 'ap-2', approved: true, conversationId: 'conv-1',
+      });
+      expect(retry).toEqual({ dispatched: true });
+    });
+    expect(fetchWithAuth).toHaveBeenCalledTimes(2);
+    expect(requestBody(1).toolApprovalScopes).toEqual({ 'ap-1': 'always' });
+  });
+
+  it('a re-answer that narrows a call to "once" or a denial drops its earlier grant', async () => {
+    const base = [message([paused('call-1', 'ap-1'), paused('call-2', 'ap-2')])];
+    const { result } = mount({ getBaseMessages: () => base });
+
+    await act(async () => {
+      await result.current.addToolApprovalResponse({
+        toolCallId: 'call-1', approvalId: 'ap-1', approved: true, scope: 'always', conversationId: 'conv-1',
+      });
+      await result.current.addToolApprovalResponse({
+        toolCallId: 'call-1', approvalId: 'ap-1', approved: false, conversationId: 'conv-1',
+      });
+      await result.current.addToolApprovalResponse({
+        toolCallId: 'call-2', approvalId: 'ap-2', approved: true, conversationId: 'conv-1',
+      });
+    });
+    expect(requestBody().toolApprovalScopes).toBeUndefined();
+  });
+
   it('an approval answer never touches a part that is not paused', async () => {
     const base = [message([{ type: 'tool-trash_page', toolCallId: 'call-1', state: 'output-available', output: { ok: true } }])];
     const { result } = mount({ getBaseMessages: () => base });
