@@ -171,6 +171,8 @@ vi.mock('@pagespace/db/operators', () => ({
   notInArray: vi.fn((col, values) => ({ type: 'notInArray', col, values })),
   ne: vi.fn((field, value) => ({ type: 'ne', field, value })),
   ilike: vi.fn((col, pattern) => ({ type: 'ilike', col, pattern })),
+  gt: vi.fn((col, value) => ({ type: 'gt', col, value })),
+  lte: vi.fn((col, value) => ({ type: 'lte', col, value })),
   sql: vi.fn((strings, ...values) => ({ type: 'sql', strings, values })),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
@@ -226,7 +228,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { createTaskTriggerWorkflow } from '@/lib/workflows/task-trigger-helpers';
 import { getUserTimezone } from '@/lib/ai/core/personalization-utils';
 import { db } from '@pagespace/db/db';
-import { inArray, ilike } from '@pagespace/db/operators';
+import { inArray, notInArray, ilike, gt, lte, sql } from '@pagespace/db/operators';
 import { broadcastTaskEvent } from '@/lib/websocket';
 
 const assert = ({ given, should, actual, expected }: {
@@ -319,6 +321,11 @@ beforeEach(() => {
     // resetAllMocks() also wipes the @pagespace/db/operators factory mocks; inArray's
     // return value is inspected directly by the bounded-query regression test below.
     vi.mocked(inArray).mockImplementation(((col: unknown, values: unknown) => ({ type: 'inArray', col, values })) as never);
+    vi.mocked(notInArray).mockImplementation(((col: unknown, values: unknown) => ({ type: 'notInArray', col, values })) as never);
+    vi.mocked(gt).mockImplementation(((col: unknown, value: unknown) => ({ type: 'gt', col, value })) as never);
+    vi.mocked(lte).mockImplementation(((col: unknown, value: unknown) => ({ type: 'lte', col, value })) as never);
+    // The perStatus rank column is built with sql`...`.as('rank'); and `false` for an empty done set.
+    vi.mocked(sql).mockImplementation((() => ({ as: () => ({}) })) as never);
     // Re-set up db.insert to default chain
     vi.mocked(db.insert).mockReturnValue({
       values: vi.fn(() => ({
@@ -652,6 +659,99 @@ beforeEach(() => {
 
       expect(response.status).toBe(200);
       expect(vi.mocked(ilike).mock.calls[0]?.[1]).toBe('%100\\% done%');
+    });
+
+    describe('statusGroup / perStatus paging', () => {
+      const mockTaskList = { id: mockTaskListId, title: 'My Tasks', status: 'pending', updatedAt: new Date() };
+      const statusConfigs = [
+        { slug: 'pending', group: 'todo' },
+        { slug: 'blocked', group: 'in_progress' },
+        { slug: 'completed', group: 'done' },
+        { slug: 'shipped', group: 'done' },
+      ];
+      const childRows = [{ id: 'p-1', pageId: 'p-1' }];
+
+      const arrange = (phase1: unknown) => {
+        vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId } as never);
+        vi.mocked(canUserViewPage).mockResolvedValue(true);
+        vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(mockTaskList as never);
+        vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue(statusConfigs as never);
+        vi.mocked(db.query.taskItems.findMany).mockImplementation(((args: { where?: { values?: string[] } }) =>
+          Promise.resolve((args.where?.values ?? []).map(id => ({
+            id, position: 0, page: { id, title: id, isTrashed: false, position: 0 },
+          })))) as never);
+        vi.mocked(db.select)
+          .mockImplementationOnce(() => makeSelectChain(childRows) as never) // childPages
+          .mockImplementationOnce(() => makeSelectChain(childRows) as never) // backfill existingRows
+          .mockImplementationOnce(() => phase1 as never)
+          .mockImplementation(() => makeSelectChain([]) as never); // trigger / sub-task counts
+      };
+
+      it('statusGroup=active excludes every done-group status in SQL', async () => {
+        arrange(makeSelectChain([{ id: 'task-1' }]));
+
+        const response = await GET(createRequest('?statusGroup=active'), { params: mockParams });
+
+        expect(response.status).toBe(200);
+        expect(vi.mocked(notInArray).mock.calls[0]?.[1]).toEqual(['completed', 'shipped']);
+        expect(vi.mocked(inArray).mock.calls.some(c => JSON.stringify(c[1]) === JSON.stringify(['completed', 'shipped']))).toBe(false);
+      });
+
+      it('statusGroup=completed keeps only done-group statuses in SQL', async () => {
+        arrange(makeSelectChain([{ id: 'task-1' }]));
+
+        await GET(createRequest('?statusGroup=completed'), { params: mockParams });
+
+        expect(vi.mocked(inArray).mock.calls.some(c => JSON.stringify(c[1]) === JSON.stringify(['completed', 'shipped']))).toBe(true);
+        expect(vi.mocked(notInArray)).not.toHaveBeenCalled();
+      });
+
+      it('perStatus windows the rank per column and hydrates only ranks inside the page', async () => {
+        const ranked = makeSelectChain([]);
+        ranked.as = vi.fn(() => ({ id: 'ranked.id', rank: 'ranked.rank' }));
+        const outer = makeSelectChain([
+          { id: 'todo-1', rank: 1 },
+          { id: 'done-1', rank: 1 },
+          { id: 'todo-2', rank: 2 },
+          { id: 'todo-3', rank: 3 }, // limit+1 probe row: beyond the page
+        ]);
+        arrange(null); // seeds auth/config mocks; its select queue is replaced below
+        vi.mocked(db.select).mockReset();
+        vi.mocked(db.select)
+          .mockImplementationOnce(() => makeSelectChain(childRows) as never)
+          .mockImplementationOnce(() => makeSelectChain(childRows) as never)
+          .mockImplementationOnce(() => ranked as never)
+          .mockImplementationOnce(() => outer as never)
+          .mockImplementation(() => makeSelectChain([]) as never);
+
+        const response = await GET(createRequest('?perStatus=true&limit=2&offset=0'), { params: mockParams });
+        const body = await response.json();
+
+        expect(response.status).toBe(200);
+        expect(vi.mocked(gt).mock.calls[0]?.[1]).toBe(0);
+        expect(vi.mocked(lte).mock.calls[0]?.[1]).toBe(3);
+        expect(body.tasks.map((t: { id: string }) => t.id).sort()).toEqual(['done-1', 'todo-1', 'todo-2']);
+        expect(body.hasMore).toBe(true);
+      });
+
+      it('perStatus reports hasMore=false when no column has rows past the page', async () => {
+        const ranked = makeSelectChain([]);
+        ranked.as = vi.fn(() => ({ id: 'ranked.id', rank: 'ranked.rank' }));
+        arrange(null);
+        vi.mocked(db.select).mockReset();
+        vi.mocked(db.select)
+          .mockImplementationOnce(() => makeSelectChain(childRows) as never)
+          .mockImplementationOnce(() => makeSelectChain(childRows) as never)
+          .mockImplementationOnce(() => ranked as never)
+          .mockImplementationOnce(() => makeSelectChain([{ id: 'a', rank: 1 }, { id: 'b', rank: 2 }]) as never)
+          .mockImplementation(() => makeSelectChain([]) as never);
+
+        const response = await GET(createRequest('?perStatus=true&limit=2&offset=2'), { params: mockParams });
+        const body = await response.json();
+
+        expect(vi.mocked(gt).mock.calls[0]?.[1]).toBe(2);
+        expect(body.hasMore).toBe(false);
+      });
     });
 
     it('tiebreaks the phase-1 order by taskItems.id (regression: non-deterministic paging when positions collide)', async () => {
