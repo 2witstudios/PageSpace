@@ -619,6 +619,12 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Memory now checks your AI credits before it learns** — the nightly Memory pass (learning
+  from your conversations and tidying your profile pages) used to run and charge you even when
+  your balance was used up, so you could go into debt without opening PageSpace. Now each step
+  checks your credits before the AI runs. When you're out of credits that night's learning is
+  skipped: nothing is charged, your profile pages stay exactly as they were, and anything Memory
+  was about to add waits for the next night.
 - **Agent mentions and Zoom summaries now check your AI credits first** — @mentioning an agent in
   a channel, and the AI summary and action items on a recorded Zoom meeting's page, used to run
   and charge you even when your balance was used up, so you could go into debt. Now they check

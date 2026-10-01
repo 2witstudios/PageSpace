@@ -1,5 +1,6 @@
 import { describe, it, vi } from 'vitest';
 import { assert } from './riteway';
+import { memoryGate } from './memory-gate-double';
 
 /**
  * Integration Service Tests
@@ -39,15 +40,11 @@ vi.mock('@/lib/ai/core/ai-providers-config', () => ({
   BACKGROUND_HEAVY_MODEL: 'anthropic/claude-sonnet-5',
 }));
 vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
-  AIMonitoring: { trackUsage: vi.fn() },
-  // These are pure-telemetry call sites: they hand the tracking promise to a NAMED
-  // discard rather than leaving it to float, so the mocked module has to provide it.
-  discardUsageOutcome: (tracking: Promise<unknown>) => {
-    void Promise.resolve(tracking).then(
-      () => undefined,
-      () => undefined,
-    );
-  },
+  // Awaited inside the credit hold, so the debit lands before the hold is released.
+  AIMonitoring: { trackUsage: vi.fn(async () => ({ persisted: true, creditsSettled: true })) },
+}));
+vi.mock('../memory-credit-gate', async () => ({
+  withMemoryCreditHold: (await import('./memory-gate-double')).fakeWithMemoryCreditHold,
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { api: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } },
@@ -176,6 +173,70 @@ describe('applyIntegrationDecisions', () => {
       should: 'expose the field as a discrete value',
       actual: result.rejected.map((r) => r.field),
       expected: ['writingStyle'],
+    });
+  });
+});
+
+describe('evaluateAndIntegrate — credit gate', () => {
+  const candidate = {
+    id: 'cand-1',
+    field: 'rules',
+    claim: 'Prefer TypeScript',
+    occurrences: 2,
+    firstSeenAt: new Date('2026-09-01T00:00:00.000Z'),
+  } as never;
+
+  it('reserves one hold for the evaluator before building a model', async () => {
+    vi.clearAllMocks();
+    memoryGate.reset();
+    const { createAIProvider } = await import('@/lib/ai/core/provider-factory');
+    vi.mocked(createAIProvider).mockResolvedValue({ model: {}, provider: 'anthropic', modelName: 'm' } as never);
+    const { generateText } = await import('ai');
+    vi.mocked(generateText).mockResolvedValue({
+      text: '{"rules": null, "usedInsights": [0]}',
+      usage: { inputTokens: 10, outputTokens: 5 },
+    } as never);
+
+    const { evaluateAndIntegrate } = await import('../integration-service');
+    const result = await evaluateAndIntegrate('user-funded', [candidate], {});
+
+    assert({
+      given: 'a funded user with a ready candidate',
+      should: 'take a one-call hold and reach a decision',
+      actual: { holds: memoryGate.holds, result },
+      expected: {
+        holds: [{ userId: 'user-funded', modelCalls: 1 }],
+        result: { ok: true, updates: {}, usedCandidateIds: ['cand-1'] },
+      },
+    });
+  });
+
+  it('reaches no decision, builds no model and charges nothing when the gate refuses', async () => {
+    vi.clearAllMocks();
+    memoryGate.reset();
+    memoryGate.refuseWith = 'out_of_credits';
+    const { createAIProvider } = await import('@/lib/ai/core/provider-factory');
+    const { generateText } = await import('ai');
+    const { AIMonitoring } = await import('@pagespace/lib/monitoring/ai-monitoring');
+
+    const { evaluateAndIntegrate } = await import('../integration-service');
+    const result = await evaluateAndIntegrate('user-in-debt', [candidate], {});
+
+    assert({
+      given: 'a user whose balance the gate refuses',
+      should: 'return a not-ok outcome naming the refusal, so the caller leaves every candidate pending',
+      actual: {
+        result,
+        providersBuilt: vi.mocked(createAIProvider).mock.calls.length,
+        modelCalls: vi.mocked(generateText).mock.calls.length,
+        charges: vi.mocked(AIMonitoring.trackUsage).mock.calls.length,
+      },
+      expected: {
+        result: { ok: false, reason: 'credit gate refused: out_of_credits', creditRefusal: 'out_of_credits' },
+        providersBuilt: 0,
+        modelCalls: 0,
+        charges: 0,
+      },
     });
   });
 });

@@ -1,5 +1,6 @@
 import { describe, it, vi, beforeEach } from 'vitest';
 import { assert } from './riteway';
+import { memoryGate } from './memory-gate-double';
 
 /**
  * Discovery Service Tests
@@ -64,15 +65,11 @@ vi.mock('@/lib/ai/core/ai-providers-config', () => ({
   BACKGROUND_HEAVY_MODEL: 'anthropic/claude-sonnet-5',
 }));
 vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
-  AIMonitoring: { trackUsage: vi.fn() },
-  // These are pure-telemetry call sites: they hand the tracking promise to a NAMED
-  // discard rather than leaving it to float, so the mocked module has to provide it.
-  discardUsageOutcome: (tracking: Promise<unknown>) => {
-    void Promise.resolve(tracking).then(
-      () => undefined,
-      () => undefined,
-    );
-  },
+  // Awaited inside the credit hold, so the debit lands before the hold is released.
+  AIMonitoring: { trackUsage: vi.fn(async () => ({ persisted: true, creditsSettled: true })) },
+}));
+vi.mock('../memory-credit-gate', async () => ({
+  withMemoryCreditHold: (await import('./memory-gate-double')).fakeWithMemoryCreditHold,
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { api: { info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() } },
@@ -124,6 +121,7 @@ function messages(count: number) {
 describe('runDiscoveryPasses', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    memoryGate.reset();
   });
 
   it('returns no claims when there is too little conversation to read', async () => {
@@ -301,6 +299,83 @@ describe('runDiscoveryPasses', () => {
       should: 'return no claims rather than throwing',
       actual: result.claims,
       expected: [],
+    });
+  });
+
+  it('takes no credit hold when there is too little conversation to read', async () => {
+    setupDb([]);
+    const { runDiscoveryPasses } = await import('../discovery-service');
+
+    await runDiscoveryPasses('user-with-no-data');
+
+    assert({
+      given: 'a user with nothing to discover',
+      should: 'not reserve credits for model calls that will never run',
+      actual: memoryGate.holds,
+      expected: [],
+    });
+  });
+
+  it('reserves one hold sized for all three passes before any model is built', async () => {
+    setupDb(messages(10));
+    mockGenerateObject.mockResolvedValue({ object: { claims: [] }, usage: { inputTokens: 10, outputTokens: 5 } });
+
+    const { runDiscoveryPasses } = await import('../discovery-service');
+    await runDiscoveryPasses('user-funded');
+
+    assert({
+      given: 'a user with enough conversation to read',
+      should: 'take a single hold covering the three passes',
+      actual: memoryGate.holds,
+      expected: [{ userId: 'user-funded', modelCalls: 3 }],
+    });
+  });
+
+  it('runs no model and charges nothing when the credit gate refuses', async () => {
+    setupDb(messages(10));
+    memoryGate.refuseWith = 'out_of_credits';
+    const { createAIProvider } = await import('@/lib/ai/core/provider-factory');
+    const { AIMonitoring } = await import('@pagespace/lib/monitoring/ai-monitoring');
+
+    const { runDiscoveryPasses } = await import('../discovery-service');
+    const result = await runDiscoveryPasses('user-in-debt');
+
+    assert({
+      given: 'a user whose balance the gate refuses',
+      should: 'return no claims, say why, and never build or call a model',
+      actual: {
+        result,
+        providersBuilt: vi.mocked(createAIProvider).mock.calls.length,
+        modelCalls: mockGenerateObject.mock.calls.length,
+        charges: vi.mocked(AIMonitoring.trackUsage).mock.calls.length,
+      },
+      expected: {
+        result: { claims: [], creditRefusal: 'out_of_credits' },
+        providersBuilt: 0,
+        modelCalls: 0,
+        charges: 0,
+      },
+    });
+  });
+
+  it('keeps the hold until every pass has settled, even when one pass throws', async () => {
+    setupDb(messages(10));
+    const { createAIProvider } = await import('@/lib/ai/core/provider-factory');
+    vi.mocked(createAIProvider).mockRejectedValueOnce(new Error('provider lookup failed'));
+    mockGenerateObject.mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      memoryGate.events.push('model-done');
+      return { object: { claims: [{ claim: 'c', evidence: 'e', occurrencesInWindow: 1 }] }, usage: { inputTokens: 10, outputTokens: 5 } };
+    });
+
+    const { runDiscoveryPasses } = await import('../discovery-service');
+    const result = await runDiscoveryPasses('user-with-data');
+
+    assert({
+      given: 'one pass whose provider throws while the other two are still calling the model',
+      should: 'release the hold only after both surviving calls finish, and keep their claims',
+      actual: { events: memoryGate.events, claims: result.claims.length },
+      expected: { events: ['model-done', 'model-done', 'release'], claims: 2 },
     });
   });
 });

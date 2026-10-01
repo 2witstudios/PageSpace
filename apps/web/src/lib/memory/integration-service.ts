@@ -30,7 +30,7 @@ import { generateText } from 'ai';
 import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
 import { BACKGROUND_HEAVY_PROVIDER, BACKGROUND_HEAVY_MODEL } from '@/lib/ai/core/ai-providers-config';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { AIMonitoring, discardUsageOutcome } from '@pagespace/lib/monitoring/ai-monitoring';
+import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { readMemoryPages } from '@pagespace/lib/memory/memory-pages';
 import {
   applyPageMutation,
@@ -38,6 +38,7 @@ import {
 } from '@/services/api/page-mutation-service';
 
 import { MAX_FIELD_LENGTH, type MemoryField } from './budgets';
+import { withMemoryCreditHold, type MemoryGateRefusal } from './memory-credit-gate';
 
 export type { MemoryField };
 
@@ -198,7 +199,12 @@ export type EvaluationOutcome =
       /** IDs of the candidates the evaluator actually used. */
       usedCandidateIds: string[];
     }
-  | { ok: false; reason: string };
+  | {
+      ok: false;
+      reason: string;
+      /** Set when the credit gate refused: no model ran, nothing was charged. */
+      creditRefusal?: MemoryGateRefusal;
+    };
 
 /**
  * Evaluate promoted candidates and decide how to integrate.
@@ -279,6 +285,31 @@ Return JSON with this structure:
 
 Remember: You are writing the COMPLETE page, not just additions. Preserve what matters, remove what doesn't.`;
 
+  // Taken BEFORE the model is built. A refusal is an evaluator that never
+  // reached a decision: the caller leaves every candidate pending and writes
+  // no page, exactly as for a provider outage.
+  const gated = await withMemoryCreditHold(userId, 1, () =>
+    runEvaluator(userId, candidates, byField, current, EVALUATOR_SYSTEM_PROMPT)
+  );
+
+  if (!gated.ran) {
+    loggers.api.info('Memory integration: skipped (credit gate refused)', {
+      userId,
+      reason: gated.reason,
+    });
+    return { ok: false, reason: `credit gate refused: ${gated.reason}`, creditRefusal: gated.reason };
+  }
+  return gated.value;
+}
+
+/** The evaluator's model call. Only ever run under the caller's credit hold. */
+async function runEvaluator(
+  userId: string,
+  candidates: typeof personalizationCandidates.$inferSelect[],
+  byField: Record<MemoryField, typeof candidates>,
+  current: Record<MemoryField, string>,
+  systemPrompt: string
+): Promise<EvaluationOutcome> {
   const providerResult = await createAIProvider(userId, {
     selectedProvider: BACKGROUND_HEAVY_PROVIDER,
     selectedModel: BACKGROUND_HEAVY_MODEL,
@@ -328,7 +359,7 @@ ${current.rules || '(empty)'}
 
     const result = await generateText({
       model: providerResult.model,
-      system: EVALUATOR_SYSTEM_PROMPT,
+      system: systemPrompt,
       messages: [
         {
           role: 'user',
@@ -345,7 +376,8 @@ Return JSON with the full new content for each field that should change. Use nul
       maxRetries: 2,
     });
 
-    discardUsageOutcome(AIMonitoring.trackUsage({
+    // Awaited so the debit lands while the evaluator's credit hold is still held.
+    await AIMonitoring.trackUsage({
       userId,
       provider: providerResult.provider,
       model: providerResult.modelName,
@@ -357,7 +389,7 @@ Return JSON with the full new content for each field that should change. Use nul
         : undefined,
       success: true,
       metadata: { feature: 'memory_integration' },
-    }));
+    });
 
     const text = result.text.trim();
     const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
