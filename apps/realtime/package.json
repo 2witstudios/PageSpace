@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
     "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {

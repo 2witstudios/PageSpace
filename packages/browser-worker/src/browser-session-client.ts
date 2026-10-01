@@ -32,8 +32,10 @@ import { encodeControlInstruction } from './encode-control-instruction.js';
 import type { ComputeCharge } from '@pagespace/lib/billing/compute-charge';
 
 /**
- * What `open` placed. `charge` is fixed at open, so a mid-session ownership change cannot move
- * the charge — an org drive's session keeps charging the org pool it was held on (WAL-9).
+ * What `open` placed. `charge` is the payer this INTERVAL was held on, and it settles there: the
+ * renewal settles the elapsed interval with this hold and then calls `open` again, which resolves
+ * the payer afresh, so a drive that moves into or out of an org changes who pays from the next
+ * interval on (WAL-9).
  */
 export type BrowserMeterHold = { readonly holdId: string | null; readonly charge: ComputeCharge };
 

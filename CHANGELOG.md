@@ -38,6 +38,10 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   The message says which of the three it is and that an org Owner or Admin can fix it. A published
   app parks the same way. Usage from before organization billing started is never charged. Buying
   dedicated hosting for an organization's app is still unavailable.
+  Moving a drive into or out of an organization while a terminal is open changes who pays from the
+  next ten-minute settle, and the window the move fell in stays with whoever owed it. An
+  organization's app is no longer refused because the lead spent a lot on AI that day: daily and
+  in-flight limits count AI and organization compute separately.
 - **Give an agent its own account** — in an agent's settings (Accounts), or in your personal
   settings for your global assistant, add an API key for a site so the agent can call that site's
   API for you. The agent refers to the account by name and never sees the key: PageSpace keeps it in

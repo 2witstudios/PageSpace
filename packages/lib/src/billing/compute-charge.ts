@@ -41,6 +41,17 @@ export function computeChargeFor(payer: BillingPayer, recordedUserId: string): C
 }
 
 /**
+ * Whether two charges are the same PAYER: same org pool, or same person. `userId` on an org
+ * charge is only who the rows are recorded under, so it never makes two org charges differ.
+ * A long-lived meter compares its charge with the one the drive resolves to NOW to see that the
+ * drive moved into or out of an org (or changed hands) since the window opened.
+ */
+export function sameCharge(a: ComputeCharge, b: ComputeCharge): boolean {
+  if (a.kind === 'org') return b.kind === 'org' && a.orgId === b.orgId;
+  return b.kind === 'user' && a.userId === b.userId;
+}
+
+/**
  * The tier a compute charge's entitlements and ceilings follow: the org's (SEAT-8: there is no
  * free org tier) for an org charge, the paying person's own otherwise. `personalTier` is the
  * tier read for `charge.userId`; it is ignored for an org charge, so a free-tier member running
