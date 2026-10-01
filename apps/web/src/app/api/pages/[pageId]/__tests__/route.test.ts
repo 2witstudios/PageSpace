@@ -526,6 +526,23 @@ describe('PATCH /api/pages/[pageId]', () => {
       expect(broadcastPageEvent).toHaveBeenCalledTimes(1);
     });
 
+    it('broadcasts content update when all content is deleted (empty string)', async () => {
+      vi.mocked(pageService.updatePage).mockResolvedValue({
+        ...successResult,
+        updatedFields: ['content'],
+      });
+
+      await PATCH(createRequest({ content: '' }), { params: mockParams });
+
+      expect(createPageEventPayload).toHaveBeenCalledWith(
+        mockDriveId,
+        mockPageId,
+        'content-updated',
+        expect.objectContaining({ title: 'Test Page' })
+      );
+      expect(broadcastPageEvent).toHaveBeenCalledTimes(1);
+    });
+
     it('does NOT broadcast on service failure', async () => {
       vi.mocked(pageService.updatePage).mockResolvedValue({
         success: false,
