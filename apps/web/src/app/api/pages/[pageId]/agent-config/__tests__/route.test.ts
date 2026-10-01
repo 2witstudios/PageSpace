@@ -27,6 +27,7 @@ const {
   mockGetActorInfo,
   mockLoggers,
   mockResolveEnvInDrive,
+  mockIsDriveOwnerOrAdmin,
   MockPageRevisionMismatchError,
 } = vi.hoisted(() => {
   class _MockPageRevisionMismatchError extends Error {
@@ -55,6 +56,7 @@ const {
       api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     },
     mockResolveEnvInDrive: vi.fn(),
+    mockIsDriveOwnerOrAdmin: vi.fn(),
     MockPageRevisionMismatchError: _MockPageRevisionMismatchError,
   };
 });
@@ -75,6 +77,7 @@ vi.mock('@/lib/auth', () => ({
   canPrincipalEditPage: (...args: unknown[]) => mockCanUserEditPage(...args),
   isScopedMCPAuth: (auth: { tokenType?: string; allowedDriveIds?: string[] }) =>
     auth?.tokenType === 'mcp' && (auth.allowedDriveIds?.length ?? 0) > 0,
+  isSessionAuthResult: (auth: { tokenType?: string }) => auth?.tokenType === 'session',
 }));
 
 vi.mock('@/lib/ai/core/ai-tools', () => ({
@@ -106,6 +109,7 @@ vi.mock('@/lib/drive-envs/drive-envs-runtime', () => ({
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
     canUserEditPage: (...args: unknown[]) => mockCanUserEditPage(...args),
     getUserAccessiblePagesInDrive: (...args: unknown[]) => mockGetUserAccessiblePagesInDrive(...args),
+    isDriveOwnerOrAdmin: (...args: unknown[]) => mockIsDriveOwnerOrAdmin(...args),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
     loggers: mockLoggers,
@@ -835,6 +839,49 @@ describe('PATCH /api/pages/[pageId]/agent-config', () => {
 
       expect(response.status).toBe(428);
       expect(body.currentRevision).toBe(10);
+    });
+  });
+
+  describe('toolApprovalMode', () => {
+    it('returns 400 for a mode that is neither "ask" nor "auto" (was silently ignored)', async () => {
+      const response = await PATCH(createPatchRequest({ toolApprovalMode: 'never' }), mockParams);
+      expect(response.status).toBe(400);
+      expect(mockApplyPageMutation).not.toHaveBeenCalled();
+    });
+
+    it('lets any editor set "ask"', async () => {
+      const response = await PATCH(createPatchRequest({ toolApprovalMode: 'ask' }), mockParams);
+      expect(response.status).toBe(200);
+      expect(mockApplyPageMutation).toHaveBeenCalledWith(
+        expect.objectContaining({ updates: expect.objectContaining({ toolApprovalMode: 'ask' }) })
+      );
+    });
+
+    it('returns 403 when an editor who is not drive owner/admin switches the shared agent to "auto"', async () => {
+      mockIsDriveOwnerOrAdmin.mockResolvedValue(false);
+      const response = await PATCH(createPatchRequest({ toolApprovalMode: 'auto' }), mockParams);
+      const body = await response.json();
+      expect(response.status).toBe(403);
+      expect(body.error).toContain('drive owner or an admin');
+      expect(mockIsDriveOwnerOrAdmin).toHaveBeenCalledWith(mockUserId, mockDriveId);
+      expect(mockApplyPageMutation).not.toHaveBeenCalled();
+    });
+
+    it('returns 403 for "auto" from an MCP token even when its user is the drive owner', async () => {
+      mockIsDriveOwnerOrAdmin.mockResolvedValue(true);
+      mockAuthenticateRequest.mockResolvedValue({ ...mockWebAuth(mockUserId), tokenType: 'mcp' });
+      const response = await PATCH(createPatchRequest({ toolApprovalMode: 'auto' }), mockParams);
+      expect(response.status).toBe(403);
+      expect(mockApplyPageMutation).not.toHaveBeenCalled();
+    });
+
+    it('lets a drive owner/admin on a session switch to "auto"', async () => {
+      mockIsDriveOwnerOrAdmin.mockResolvedValue(true);
+      const response = await PATCH(createPatchRequest({ toolApprovalMode: 'auto' }), mockParams);
+      expect(response.status).toBe(200);
+      expect(mockApplyPageMutation).toHaveBeenCalledWith(
+        expect.objectContaining({ updates: expect.objectContaining({ toolApprovalMode: 'auto' }) })
+      );
     });
   });
 

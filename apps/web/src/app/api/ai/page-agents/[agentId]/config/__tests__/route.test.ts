@@ -25,6 +25,7 @@ vi.mock('@/lib/auth', () => ({
   checkMCPDriveScope: vi.fn(),
   isScopedMCPAuth: (auth: { tokenType?: string; allowedDriveIds?: string[] }) =>
     auth?.tokenType === 'mcp' && (auth.allowedDriveIds?.length ?? 0) > 0,
+  isSessionAuthResult: (auth: { tokenType?: string }) => auth?.tokenType === 'session',
   canPrincipalEditPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserEditPage } = await import('@pagespace/lib/permissions/permissions');
     return canUserEditPage(auth.userId, pageId);
@@ -34,6 +35,7 @@ vi.mock('@/lib/auth', () => ({
 // Mock permissions (boundary)
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
     canUserEditPage: vi.fn(),
+    isDriveOwnerOrAdmin: vi.fn(),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
     loggers: {
@@ -103,7 +105,7 @@ vi.mock('@/lib/drive-envs/drive-envs-runtime', () => ({
 
 import { pageAgentRepository } from '@/lib/repositories/page-agent-repository';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
-import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
+import { canUserEditPage, isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
 import { resolveEnvInDrive } from '@/lib/drive-envs/drive-envs-runtime';
@@ -596,6 +598,60 @@ describe('PUT /api/ai/page-agents/[agentId]/config', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toContain('Failed to update');
+    });
+  });
+
+  describe('toolApprovalMode', () => {
+    beforeEach(() => {
+      vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(false);
+    });
+
+    it('returns 400 for a mode that is neither "ask" nor "auto"', async () => {
+      const response = await PUT(createRequest(mockAgentId, { toolApprovalMode: 'never' }), createContext(mockAgentId));
+      expect(response.status).toBe(400);
+      expect(applyPageMutation).not.toHaveBeenCalled();
+    });
+
+    it('lets any editor set "ask"', async () => {
+      const response = await PUT(createRequest(mockAgentId, { toolApprovalMode: 'ask' }), createContext(mockAgentId));
+      expect(response.status).toBe(200);
+      expect(applyPageMutation).toHaveBeenCalledWith(
+        expect.objectContaining({ updates: expect.objectContaining({ toolApprovalMode: 'ask' }) })
+      );
+    });
+
+    it('returns 403 when an editor who is not drive owner/admin switches the shared agent to "auto"', async () => {
+      const response = await PUT(createRequest(mockAgentId, { toolApprovalMode: 'auto' }), createContext(mockAgentId));
+      const body = await response.json();
+      expect(response.status).toBe(403);
+      expect(body.error).toContain('drive owner or an admin');
+      expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith(mockUserId, mockDriveId);
+      expect(applyPageMutation).not.toHaveBeenCalled();
+    });
+
+    it('returns 403 for "auto" from an MCP token even when its user is the drive owner', async () => {
+      vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(true);
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
+        userId: mockUserId,
+        tokenType: 'mcp',
+        tokenVersion: 0,
+        tokenId: 'tok_1',
+        role: 'user',
+        adminRoleVersion: 0,
+        allowedDriveIds: [],
+      } as unknown as SessionAuthResult);
+      const response = await PUT(createRequest(mockAgentId, { toolApprovalMode: 'auto' }), createContext(mockAgentId));
+      expect(response.status).toBe(403);
+      expect(applyPageMutation).not.toHaveBeenCalled();
+    });
+
+    it('lets a drive owner/admin on a session switch to "auto"', async () => {
+      vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(true);
+      const response = await PUT(createRequest(mockAgentId, { toolApprovalMode: 'auto' }), createContext(mockAgentId));
+      expect(response.status).toBe(200);
+      expect(applyPageMutation).toHaveBeenCalledWith(
+        expect.objectContaining({ updates: expect.objectContaining({ toolApprovalMode: 'auto' }) })
+      );
     });
   });
 });

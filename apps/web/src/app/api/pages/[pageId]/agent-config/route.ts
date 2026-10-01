@@ -12,6 +12,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
+import { authorizeToolApprovalModeChange } from '@/lib/ai/approvals/tool-approval-mode-authority';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -236,10 +237,16 @@ export async function PATCH(
     }
 
     if (toolApprovalMode !== undefined) {
-      // 'ask' pauses gated writes for the owner's approval; 'auto' never pauses.
-      if (toolApprovalMode === 'ask' || toolApprovalMode === 'auto') {
-        updateData.toolApprovalMode = toolApprovalMode;
+      // 'ask' pauses gated writes for approval; 'auto' never pauses — and, on a
+      // shared agent, only a drive owner/admin in a session may choose it.
+      const change = await authorizeToolApprovalModeChange(auth, page.driveId, toolApprovalMode);
+      if (!change.ok) {
+        if (change.status === 403) {
+          auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'agent_config', resourceId: pageId, details: { reason: 'tool_approval_auto_requires_drive_admin', method: 'PATCH' }, riskScore: 0.5 });
+        }
+        return NextResponse.json({ error: change.error }, { status: change.status });
       }
+      updateData.toolApprovalMode = change.mode;
     }
 
     if (sandboxEnabled !== undefined) {

@@ -12,6 +12,7 @@ import { pageAgentRepository, type AgentConfigUpdate } from '@/lib/repositories/
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
 import { resolveEnvInDrive } from '@/lib/drive-envs/drive-envs-runtime';
+import { authorizeToolApprovalModeChange } from '@/lib/ai/approvals/tool-approval-mode-authority';
 
 const REMOVED_TOOL_NAMES = new Set(['import_from_github']);
 
@@ -192,13 +193,14 @@ export async function PUT(
     }
 
     if (toolApprovalMode !== undefined) {
-      if (toolApprovalMode !== 'ask' && toolApprovalMode !== 'auto') {
-        return NextResponse.json(
-          { error: 'toolApprovalMode must be "ask" or "auto"' },
-          { status: 400 }
-        );
+      const change = await authorizeToolApprovalModeChange(auth, agent.driveId, toolApprovalMode);
+      if (!change.ok) {
+        if (change.status === 403) {
+          auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'page_agent', resourceId: agentId, details: { reason: 'tool_approval_auto_requires_drive_admin', method: 'PUT' }, riskScore: 0.5 });
+        }
+        return NextResponse.json({ error: change.error }, { status: change.status });
       }
-      updateData.toolApprovalMode = toolApprovalMode;
+      updateData.toolApprovalMode = change.mode;
       updatedFields.push('toolApprovalMode');
     }
     if (sandboxEnabled !== undefined) {
