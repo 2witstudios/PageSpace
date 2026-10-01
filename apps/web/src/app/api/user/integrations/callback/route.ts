@@ -1,4 +1,6 @@
 import { NextResponse } from 'next/server';
+import { getDrivePolicies } from '@pagespace/lib/organizations/policy-reader';
+import { integrationDecision } from '@pagespace/lib/organizations/org-action-decisions';
 import { z } from 'zod';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { db } from '@pagespace/db/db';
@@ -137,6 +139,12 @@ export async function GET(request: Request) {
       if (!access.isOwner && !access.isAdmin) {
         loggers.auth.warn('OAuth callback: user lacks admin access to drive', { userId, driveId });
         return NextResponse.redirect(new URL(`${defaultReturn}?error=access_denied`, baseUrl));
+      }
+
+      // POL-11: the allowlist may have changed between the redirect and the callback; ask again where the
+      // connection is written (this also keeps a suspended connection from being re-activated through OAuth).
+      if (!integrationDecision((await getDrivePolicies(driveId))?.policies ?? null, provider.slug).ok) {
+        return NextResponse.redirect(new URL(`${defaultReturn}?error=org_policy`, baseUrl));
       }
 
       const existing = await findDriveConnection(db, driveId, providerId);

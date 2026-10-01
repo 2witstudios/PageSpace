@@ -71,6 +71,10 @@
       "types": "./dist/schema/organizations.d.ts",
       "default": "./dist/schema/organizations.js"
     },
+    "./schema/org-guest-holds": {
+      "types": "./dist/schema/org-guest-holds.d.ts",
+      "default": "./dist/schema/org-guest-holds.js"
+    },
     "./schema/drive-join-requests": {
       "types": "./dist/schema/drive-join-requests.d.ts",
       "default": "./dist/schema/drive-join-requests.js"

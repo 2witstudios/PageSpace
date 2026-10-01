@@ -23,6 +23,8 @@ vi.mock('@pagespace/lib/organizations/repository', () => ({ findMembershipRole: 
 vi.mock('@pagespace/lib/organizations/policies', () => ({ getOrgPolicies: vi.fn(), updateOrgPolicies: vi.fn() }));
 vi.mock('@pagespace/lib/organizations/policy-suspension', () => ({ listPolicySuspensions: vi.fn() }));
 vi.mock('@pagespace/lib/organizations/status', () => ({ checkOrgActive: vi.fn() }));
+vi.mock('@pagespace/lib/organizations/published-visibility', () => ({ reconcileOrgPublishedVisibility: vi.fn() }));
+vi.mock('@/lib/canvas/published-storage', () => ({ createPublishedObjectStore: () => ({ store: true }), isPublishConfigured: vi.fn() }));
 
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -30,6 +32,8 @@ import { findMembershipRole } from '@pagespace/lib/organizations/repository';
 import { getOrgPolicies, updateOrgPolicies } from '@pagespace/lib/organizations/policies';
 import { listPolicySuspensions } from '@pagespace/lib/organizations/policy-suspension';
 import { checkOrgActive } from '@pagespace/lib/organizations/status';
+import { reconcileOrgPublishedVisibility } from '@pagespace/lib/organizations/published-visibility';
+import { isPublishConfigured } from '@/lib/canvas/published-storage';
 import { DEFAULT_ORG_POLICIES } from '@pagespace/lib/organizations/policies-core';
 import { GET, PATCH } from '../route';
 import { GET as GET_SUSPENDED } from '../suspended/route';
@@ -52,6 +56,8 @@ beforeEach(() => {
   vi.mocked(authenticateRequestWithOptions).mockResolvedValue(session('user_priya'));
   vi.mocked(getOrgPolicies).mockResolvedValue({ ...DEFAULT_ORG_POLICIES });
   vi.mocked(checkOrgActive).mockResolvedValue({ ok: true });
+  vi.mocked(isPublishConfigured).mockReturnValue(true);
+  vi.mocked(reconcileOrgPublishedVisibility).mockResolvedValue([]);
   vi.mocked(listPolicySuspensions).mockResolvedValue([]);
   vi.mocked(updateOrgPolicies).mockResolvedValue({
     ok: true,
@@ -124,5 +130,52 @@ describe('policies routes', () => {
     as('OWNER');
     expect((await GET(req('GET'), ctx)).status).toBe(404);
     expect((await PATCH(req('PATCH', '', { guests: 'off' }), ctx)).status).toBe(404);
+  });
+  describe('published sites follow the publishing policies', () => {
+    const changedPublishing = () =>
+      vi.mocked(updateOrgPolicies).mockResolvedValue({
+        ok: true,
+        policies: { ...DEFAULT_ORG_POLICIES, publishWeb: false },
+        changes: [{ key: 'publishWeb', from: true, to: false }],
+        suspended: [],
+        restored: [],
+        auditRecorded: true,
+      });
+
+    it('POL-4 (partial) a change to publishing moves the org\'s sites in the bucket right away and reports what moved', async () => {
+      as('ADMIN');
+      changedPublishing();
+      vi.mocked(reconcileOrgPublishedVisibility).mockResolvedValue([
+        { prefix: 'a', action: 'parked', objects: 3 },
+        { prefix: 'b', action: 'parked', objects: 1 },
+        { prefix: 'c', action: 'failed', objects: 0 },
+      ]);
+      const res = await PATCH(req('PATCH', '', { publishWeb: false }), ctx);
+      expect(reconcileOrgPublishedVisibility).toHaveBeenCalledWith(ORG_ID, { store: true });
+      expect((await res.json()).publishedVisibility).toEqual({ parked: 2, restored: 0, failed: 1 });
+    });
+
+    it('POL-4 (partial) a change to an unrelated policy never touches the bucket', async () => {
+      as('ADMIN');
+      await PATCH(req('PATCH', '', { publicShareLinks: false }), ctx);
+      expect(reconcileOrgPublishedVisibility).not.toHaveBeenCalled();
+    });
+
+    it('POL-4 (partial) a bucket failure never undoes the policy: still 200, reported, left for the sweep', async () => {
+      as('ADMIN');
+      changedPublishing();
+      vi.mocked(reconcileOrgPublishedVisibility).mockRejectedValue(new Error('bucket down'));
+      const res = await PATCH(req('PATCH', '', { publishWeb: false }), ctx);
+      expect(res.status).toBe(200);
+      expect((await res.json()).publishedVisibility).toEqual({ parked: 0, restored: 0, failed: -1 });
+    });
+
+    it('POL-4 (partial) with no publish bucket configured there is nothing to move', async () => {
+      as('ADMIN');
+      changedPublishing();
+      vi.mocked(isPublishConfigured).mockReturnValue(false);
+      await PATCH(req('PATCH', '', { publishWeb: false }), ctx);
+      expect(reconcileOrgPublishedVisibility).not.toHaveBeenCalled();
+    });
   });
 });

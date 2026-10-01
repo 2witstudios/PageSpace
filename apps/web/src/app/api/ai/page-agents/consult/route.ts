@@ -138,7 +138,7 @@ function formatToolExecutionResults(steps: unknown[]): string {
  * Get configured AI model for agent using the centralized provider factory
  * Handles provider-specific setup and fallbacks
  */
-async function getConfiguredModel(userId: string, agentConfig: { aiProvider?: string | null; aiModel?: string | null }) {
+async function getConfiguredModel(userId: string, agentConfig: { aiProvider?: string | null; aiModel?: string | null }, driveId: string | null) {
   const { aiProvider, aiModel } = agentConfig;
 
   // Use default provider/model if agent doesn't have specific configuration
@@ -150,10 +150,12 @@ async function getConfiguredModel(userId: string, agentConfig: { aiProvider?: st
     selectedModel,
   };
 
-  const providerResult = await createAIProvider(userId, providerRequest);
+  // POL-8: the org of the drive the consultation runs in (the agent's, where its spend is attributed).
+  const providerResult = await createAIProvider(userId, providerRequest, { driveId });
 
   if (isProviderError(providerResult)) {
-    throw new Error(providerResult.error);
+    // An org-policy refusal keeps its status and policy so the route can answer 403 (POL-8), not a 500.
+    throw Object.assign(new Error(providerResult.error), providerResult.code ? { orgPolicy: { status: providerResult.status, code: providerResult.code, policy: providerResult.policy } } : {});
   }
 
   return providerResult;
@@ -505,11 +507,15 @@ export async function POST(request: Request) {
       const providerResult = await getConfiguredModel(userId, {
         aiProvider: agent.aiProvider,
         aiModel: agent.aiModel
-      });
+      }, agent.driveId);
       model = providerResult.model;
       resolvedProvider = providerResult.provider;
       resolvedModelName = providerResult.modelName;
     } catch (providerError) {
+      const refused = (providerError as { orgPolicy?: { status: number; code: string; policy?: string } }).orgPolicy;
+      if (refused) {
+        return NextResponse.json({ error: (providerError as Error).message, code: refused.code, policy: refused.policy }, { status: refused.status });
+      }
       loggers.api.error('Agent consultation provider setup error:', providerError as Error);
       return NextResponse.json(
         { error: `Failed to configure AI provider: ${providerError instanceof Error ? providerError.message : String(providerError)}` },

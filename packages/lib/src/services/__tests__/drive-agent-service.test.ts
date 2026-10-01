@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('@pagespace/db/db', () => ({
   db: { select: vi.fn(), insert: vi.fn(), delete: vi.fn(), update: vi.fn() },
 }));
+vi.mock('../../organizations/policy-reader', () => ({ getDrivePolicies: vi.fn() }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((_a: unknown, _b: unknown) => 'eq'),
   and: vi.fn((...args: unknown[]) => ({ and: args })),
@@ -49,6 +50,7 @@ import {
   setAgentDriveIncludeContext,
 } from '../drive-agent-service';
 import { db } from '@pagespace/db/db';
+import { getDrivePolicies } from '../../organizations/policy-reader';
 import { eq, ne } from '@pagespace/db/operators';
 import { driveAgentMembers } from '@pagespace/db/schema/members';
 import { pages } from '@pagespace/db/schema/core';
@@ -85,7 +87,8 @@ function stubInsert(captured: Record<string, unknown>[], opts: { throwCode?: str
   } as unknown as ReturnType<typeof db.insert>);
 }
 
-const AI_CHAT_PAGE = [{ id: AGENT, type: 'AI_CHAT' }];
+const AI_CHAT_PAGE = [{ id: AGENT, type: 'AI_CHAT', driveId: DRIVE }];
+const FOREIGN_AGENT_PAGE = [{ id: AGENT, type: 'AI_CHAT', driveId: 'drive_elsewhereeeeeeeeeeeeee' }];
 
 describe('addAgentToDrive', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -154,6 +157,49 @@ describe('addAgentToDrive', () => {
     const res = await addAgentToDrive({ actingUserId: USER, agentPageId: AGENT, driveId: DRIVE });
     expect(res.ok).toBe(true);
     expect(captured[0]).toMatchObject({ role: 'ADMIN', driveId: DRIVE, agentPageId: AGENT, addedBy: USER });
+  });
+
+  describe('cross-drive agents under the org policy', () => {
+    const owner = () => {
+      vi.mocked(canUserEditPage).mockResolvedValue(true);
+      const captured: Record<string, unknown>[] = [];
+      stubInsert(captured);
+      return captured;
+    };
+
+    it('POL-9 refuses an agent from another drive when the org turns cross-drive agents off, and writes nothing', async () => {
+      vi.mocked(getDrivePolicies).mockResolvedValue({ policies: { crossDriveAgents: false } } as never);
+      vi.mocked(db.select)
+        .mockReturnValueOnce(stubSelect(FOREIGN_AGENT_PAGE))
+        .mockReturnValueOnce(stubSelect([{ ownerId: USER }]));
+      const captured = owner();
+      const res = await addAgentToDrive({ actingUserId: USER, agentPageId: AGENT, driveId: DRIVE });
+      expect(res).toMatchObject({ ok: false, status: 403 });
+      expect(captured).toHaveLength(0);
+    });
+
+    it('POL-9 allows it while the policy is on', async () => {
+      vi.mocked(getDrivePolicies).mockResolvedValue({ policies: { crossDriveAgents: true } } as never);
+      vi.mocked(db.select)
+        .mockReturnValueOnce(stubSelect(FOREIGN_AGENT_PAGE))
+        .mockReturnValueOnce(stubSelect([{ ownerId: USER }]));
+      const captured = owner();
+      const res = await addAgentToDrive({ actingUserId: USER, agentPageId: AGENT, driveId: DRIVE });
+      expect(res.ok).toBe(true);
+      expect(captured).toHaveLength(1);
+    });
+
+    it('POL-9 an agent from THIS drive is not cross-drive, whatever the policy', async () => {
+      vi.mocked(getDrivePolicies).mockResolvedValue({ policies: { crossDriveAgents: false } } as never);
+      vi.mocked(db.select)
+        .mockReturnValueOnce(stubSelect(AI_CHAT_PAGE))
+        .mockReturnValueOnce(stubSelect([{ ownerId: USER }]));
+      const captured = owner();
+      const res = await addAgentToDrive({ actingUserId: USER, agentPageId: AGENT, driveId: DRIVE });
+      expect(res.ok).toBe(true);
+      expect(getDrivePolicies).not.toHaveBeenCalled();
+      expect(captured).toHaveLength(1);
+    });
   });
 
   it('defaults includeContext to false when not provided', async () => {

@@ -64,6 +64,9 @@ vi.mock('@pagespace/db/schema/share-links', () => ({
     expiresAt: 'psl.expiresAt', isActive: 'psl.isActive', useCount: 'psl.useCount',
   },
 }));
+// POL-3: the share-link service reads the drive's org policies; these unit tests are about a drive with no org.
+vi.mock('../../organizations/policy-reader', () => ({ getDrivePolicies: vi.fn().mockResolvedValue(null) }));
+
 vi.mock('../permissions', () => ({
   isDriveOwnerOrAdmin: vi.fn(),
   canUserSharePage: vi.fn(),
@@ -317,7 +320,7 @@ describe('redeemDriveShareLink', () => {
 
   it('returns NOT_FOUND for expired token', async () => {
     const past = new Date(Date.now() - 1000);
-    makeSelectChain([{ id: LINK_ID, driveId: DRIVE_ID, role: 'MEMBER', isActive: true, expiresAt: past }]);
+    makeSelectChain([{ id: LINK_ID, driveId: DRIVE_ID, role: 'MEMBER', isActive: true, suspendedByPolicy: null, expiresAt: past }]);
 
     const result = await redeemDriveShareLink(makeCtx(), 'some-token');
 
@@ -333,7 +336,7 @@ describe('redeemDriveShareLink', () => {
   });
 
   it('returns ALREADY_MEMBER with driveId without mutation when user is already a member', async () => {
-    makeSelectChain([{ id: LINK_ID, driveId: DRIVE_ID, role: 'MEMBER', isActive: true, expiresAt: null }]);
+    makeSelectChain([{ id: LINK_ID, driveId: DRIVE_ID, role: 'MEMBER', isActive: true, suspendedByPolicy: null, expiresAt: null }]);
     vi.mocked(isUserDriveMember).mockResolvedValue(true);
 
     const result = await redeemDriveShareLink(makeCtx(), 'some-token');
@@ -349,7 +352,7 @@ describe('redeemDriveShareLink', () => {
       where: vi.fn().mockReturnThis(),
       limit: vi.fn().mockResolvedValue([{
         id: LINK_ID, driveId: DRIVE_ID, role: 'MEMBER',
-        isActive: true, expiresAt: null, driveName: 'Test Drive',
+        isActive: true, suspendedByPolicy: null, expiresAt: null, driveName: 'Test Drive',
         createdBy: 'creator-user-id',
       }]),
     }));
@@ -379,7 +382,7 @@ describe('redeemDriveShareLink', () => {
       where: vi.fn().mockReturnThis(),
       limit: vi.fn().mockResolvedValue([{
         id: LINK_ID, driveId: DRIVE_ID, role: 'MEMBER',
-        isActive: true, expiresAt: null, driveName: 'Admin Drive',
+        isActive: true, suspendedByPolicy: null, expiresAt: null, driveName: 'Admin Drive',
         createdBy: 'creator-id',
       }]),
     }));
@@ -530,7 +533,7 @@ describe('redeemPageShareLink', () => {
         if (callCount === 1) {
           return Promise.resolve([{
             id: LINK_ID, pageId: PAGE_ID, driveId: DRIVE_ID,
-            permissions: ['VIEW'], isActive: true, expiresAt: null,
+            permissions: ['VIEW'], isActive: true, suspendedByPolicy: null, expiresAt: null,
           }]);
         }
         return Promise.resolve([]);
@@ -576,7 +579,7 @@ describe('redeemPageShareLink', () => {
         if (callCount === 1) {
           return Promise.resolve([{
             id: LINK_ID, pageId: PAGE_ID, driveId: DRIVE_ID,
-            permissions: ['VIEW', 'SHARE', 'DELETE'], isActive: true, expiresAt: null,
+            permissions: ['VIEW', 'SHARE', 'DELETE'], isActive: true, suspendedByPolicy: null, expiresAt: null,
           }]);
         }
         return Promise.resolve([]);
@@ -620,7 +623,7 @@ describe('redeemPageShareLink', () => {
         if (callCount === 1) {
           return Promise.resolve([{
             id: LINK_ID, pageId: PAGE_ID, driveId: DRIVE_ID,
-            permissions: ['VIEW', 'EDIT'], isActive: true, expiresAt: null,
+            permissions: ['VIEW', 'EDIT'], isActive: true, suspendedByPolicy: null, expiresAt: null,
           }]);
         }
         return Promise.resolve([]);
@@ -664,7 +667,7 @@ describe('redeemPageShareLink', () => {
         if (callCount === 1) {
           return Promise.resolve([{
             id: LINK_ID, pageId: PAGE_ID, driveId: DRIVE_ID,
-            permissions: ['VIEW'], isActive: true, expiresAt: null,
+            permissions: ['VIEW'], isActive: true, suspendedByPolicy: null, expiresAt: null,
           }]);
         }
         // existingPerms query returns a row with canView=true
@@ -706,7 +709,7 @@ describe('resolveShareToken', () => {
 
   it('returns null for expired token without throwing', async () => {
     makeSelectChain([{
-      id: LINK_ID, driveId: DRIVE_ID, isActive: true,
+      id: LINK_ID, driveId: DRIVE_ID, isActive: true, suspendedByPolicy: null,
       expiresAt: new Date(Date.now() - 1000), driveName: 'My Drive', creatorName: 'Bob',
     }]);
 
@@ -726,7 +729,7 @@ describe('resolveShareToken', () => {
         if (callCount === 1) {
           return Promise.resolve([{
             id: LINK_ID, driveId: DRIVE_ID, role: 'MEMBER',
-            isActive: true, expiresAt: null, useCount: 5,
+            isActive: true, suspendedByPolicy: null, expiresAt: null, useCount: 5,
             driveName: 'My Drive', creatorName: 'Alice',
           }]);
         }
@@ -753,7 +756,7 @@ describe('resolveShareToken', () => {
         if (callCount === 1) return Promise.resolve([]);
         return Promise.resolve([{
           id: LINK_ID, pageId: PAGE_ID, driveId: DRIVE_ID,
-          permissions: ['VIEW'], isActive: true, expiresAt: null,
+          permissions: ['VIEW'], isActive: true, suspendedByPolicy: null, expiresAt: null,
           useCount: 2, pageTitle: 'My Page', driveName: 'My Drive', creatorName: 'Bob',
         }]);
       }),

@@ -13,7 +13,7 @@ import type {
 
 export type ConsumeMembershipReason = Extract<
   InviteAcceptanceErrorCode,
-  'TOKEN_CONSUMED' | 'ALREADY_MEMBER'
+  'TOKEN_CONSUMED' | 'ALREADY_MEMBER' | 'GUEST_POLICY'
 >;
 
 export type ConsumeMembershipResult =

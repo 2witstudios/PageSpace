@@ -86,6 +86,10 @@ export async function POST(
     if (result.error === 'UNAUTHORIZED') {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
+    // POL-3: the org has turned public share links off; the body names the rule.
+    if (result.error === 'POLICY_FORBIDDEN') {
+      return NextResponse.json({ error: result.message, code: 'org_policy', policy: 'publicShareLinks' }, { status: 403 });
+    }
     if (result.error === 'HOME_DRIVE') {
       return NextResponse.json(
         { error: 'Your Home drive is private and cannot be shared.' },

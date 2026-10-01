@@ -44,7 +44,12 @@ export function DriveShareAccept({ token, info }: DriveShareAcceptProps) {
           return;
         }
 
-        const data = (await res.json()) as { type: string; driveId: string };
+        const data = (await res.json()) as { type: string; driveId?: string; status?: string; message?: string };
+        // POL-2: the org requires an Owner or Admin to approve guests; nothing is granted yet, so stay here and say so.
+        if (data.status === 'pending_approval') {
+          if (!controller.signal.aborted) setError(data.message ?? 'Your request is waiting for approval.');
+          return;
+        }
         router.push(`/dashboard/${data.driveId}`);
       } catch (err) {
         if ((err as Error).name === 'AbortError') return;

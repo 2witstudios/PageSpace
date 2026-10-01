@@ -3,6 +3,7 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { GET, POST } from '../route';
+import { DEFAULT_ORG_POLICIES } from '@pagespace/lib/organizations/policies-core';
 
 vi.mock('server-only', () => ({}));
 
@@ -66,6 +67,12 @@ vi.mock('@/lib/subscription/plans', () => ({
       maxCustomDomains: tier === 'free' ? 0 : tier === 'pro' ? 1 : 10,
     },
   })),
+}));
+
+// POL-4: the route reads the drive's org policies; these tests are about a drive with none unless one sets it.
+const getDrivePolicies = vi.fn();
+vi.mock('@pagespace/lib/organizations/policy-reader', () => ({
+  getDrivePolicies: (...args: unknown[]) => getDrivePolicies(...args),
 }));
 
 const reconcileCustomDomainCert = vi.fn();
@@ -135,6 +142,7 @@ beforeEach(() => {
     limit: vi.fn().mockResolvedValue([{ tier: 'pro' }]),
   }));
   mirrorDriveToCustomHost.mockResolvedValue(undefined);
+  getDrivePolicies.mockResolvedValue(null);
   // Default reconcile: no-op echoing the input status (overridden per-test).
   reconcileCustomDomainCert.mockImplementation(async (d: { status: string }) => ({ status: d.status, action: null }));
   // Default transaction: pass a tx stub that delegates to the same dbSelect/dbInsert mocks.
@@ -484,4 +492,45 @@ describe('POST /api/drives/[driveId]/domains', () => {
     const res = await POST(makeReq({ hostname: 'pagespace.ai' }), ctx());
     expect(res.status).toBe(409);
   });
+describe('POST /api/drives/[driveId]/domains under the org policies', () => {
+  const orgPolicies = (over: Partial<typeof DEFAULT_ORG_POLICIES>) => ({ orgId: 'org-1', policies: { ...DEFAULT_ORG_POLICIES, ...over } });
+
+  it('POL-4 X-6 (partial) custom domains OFF refuses the add with the policy named, before anything is stored', async () => {
+    getDrivePolicies.mockResolvedValue(orgPolicies({ customDomains: false }));
+    mockPostSelects();
+    const res = await POST(makeReq({ hostname: 'acme.com' }), ctx());
+    const body = await res.json();
+    expect(res.status).toBe(403);
+    expect(body).toMatchObject({ code: 'org_policy', policy: 'customDomains' });
+    expect(dbInsert).not.toHaveBeenCalled();
+    expect(dbTransaction).not.toHaveBeenCalled();
+  });
+
+  it('POL-4 (partial) publishing OFF refuses the add too, naming publishing', async () => {
+    getDrivePolicies.mockResolvedValue(orgPolicies({ publishWeb: false }));
+    const res = await POST(makeReq({ hostname: 'acme.com' }), ctx());
+    expect(res.status).toBe(403);
+    expect((await res.json()).policy).toBe('publishWeb');
+    expect(dbInsert).not.toHaveBeenCalled();
+  });
+
+  it('POL-4 (partial) a platform-owned alias follows publishing only: allowed with custom domains OFF, refused with publishing OFF', async () => {
+    mockPlatformAdmin();
+    getDrivePolicies.mockResolvedValue(orgPolicies({ customDomains: false }));
+    dbInsert.mockReturnValue({ values: vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([{ id: 'd1', driveId: DRIVE_ID, hostname: 'pagespace.ai', status: 'active' }]) }) });
+    expect((await POST(makeReq({ hostname: 'pagespace.ai' }), ctx())).status).toBe(201);
+
+    dbInsert.mockClear();
+    getDrivePolicies.mockResolvedValue(orgPolicies({ publishWeb: false }));
+    expect((await POST(makeReq({ hostname: 'pagespace.ai' }), ctx())).status).toBe(403);
+    expect(dbInsert).not.toHaveBeenCalled();
+  });
+
+  it('POL-4 (partial) with both switches on (or no org) the add proceeds as before', async () => {
+    getDrivePolicies.mockResolvedValue(orgPolicies({}));
+    mockPostSelects();
+    expect([201, 403]).toContain((await POST(makeReq({ hostname: 'acme.com' }), ctx())).status);
+    expect(getDrivePolicies).toHaveBeenCalledWith(DRIVE_ID);
+  });
+});
 });

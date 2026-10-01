@@ -452,6 +452,8 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     'An org invitation naming the inviter and the invited address; the counterparty is another person, which is the same Art 15(4) boundary that excludes pending_invites. The invitation carries no content of the subject\'s own beyond an address and a role offered to it.',
   drive_join_requests:
     'Temporary under Spec X-2: the subject\'s own requests to join Restricted org drives (D-OW-22), with an optional note they wrote; removed by the Phase 6 GDPR/backups leaf yfmlkdchehmberwthwu6g7vt before Wave F, which adds the collector beside the one for org_members; the ORGS_ENABLED export precondition fails while this exclusion exists.',
+  org_guest_holds:
+    'Temporary under Spec X-2: the subject\'s own queued request to join an org drive as a guest, or the snapshot of the access an org policy parked (their own member row and page grants), plus an invitee address; removed by the Phase 6 GDPR/backups leaf yfmlkdchehmberwthwu6g7vt before Wave F, which adds the collector beside the one for org_members. Account deletion already removes it: userId cascades.',
 };
 
 /** Every table the registry has a decision for. */

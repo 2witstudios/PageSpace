@@ -28,6 +28,8 @@
  * Everything is dark behind `APP_HOSTING_ENABLED`, checked before any read.
  */
 
+import { getDrivePolicies } from '../../organizations/policy-reader';
+import { publishedAppsDecision } from '../../organizations/org-action-decisions';
 import { and, eq, sql } from '@pagespace/db/operators';
 import { db, getAdvisoryLockPool } from '@pagespace/db/db';
 import { withAdvisoryLock, type AdvisoryLockPool } from '@pagespace/db/advisory-lock';
@@ -88,6 +90,8 @@ export interface AppLifecycleMeteringDeps {
   /** The per-app daily awake budget in seconds, read at call time. 0 disables it. */
   dailyAwakeCapSeconds: () => number;
   now: () => Date;
+  /** POL-10: may published apps run in this drive's org right now? Read live; a wake that is refused never reaches Fly. */
+  publishedAppsAllowed: (driveId: string) => Promise<boolean>;
   /** The org compute billing epoch (WAL-9): an org app's awake time before it is forgiven. */
   orgComputeBillingEpoch: (tickStart: Date) => Promise<Date>;
 }
@@ -137,6 +141,8 @@ export const defaultAppLifecycleMeteringDeps: AppLifecycleMeteringDeps = {
   serializeSettle: (fn) => serializeUnderMeterLock()(fn),
   dailyAwakeCapSeconds: resolveDailyAwakeSecondsCap,
   now: () => new Date(),
+  publishedAppsAllowed: async (driveId) =>
+    publishedAppsDecision((await getDrivePolicies(driveId))?.policies ?? null).ok,
   orgComputeBillingEpoch: stampOrgComputeBillingEpoch,
 };
 
@@ -148,7 +154,9 @@ export type WakeRefusal =
   /** The row is not in a state a wake may leave — already running, destroying, failed. */
   | 'not_wakeable'
   /** The owning drive could not be resolved, so there is no honest payer. Nothing is started. */
-  | 'unresolved_payer';
+  | 'unresolved_payer'
+  /** POL-10: the owning drive's organization has turned published apps off. Nothing is started. */
+  | 'org_policy';
 
 export type WakePublishedAppResult =
   | { outcome: 'woken'; app: PublishedApp; holdId?: string }
@@ -180,6 +188,7 @@ export async function wakePublishedApp(
     .limit(1);
   if (!row) return { outcome: 'refused', reason: 'not_found' };
   if (!row.machineId) return { outcome: 'refused', reason: 'no_machine' };
+  if (!(await deps.publishedAppsAllowed(row.driveId))) return { outcome: 'refused', reason: 'org_policy' };
   // Judged against the SAME pure planner the transition itself uses, with the
   // columns as they will be after the write. Asking here means a wake that the
   // status machine would refuse never reaches Fly — otherwise we would start a

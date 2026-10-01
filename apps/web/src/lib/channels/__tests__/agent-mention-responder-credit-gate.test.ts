@@ -18,6 +18,10 @@ const { mockCanConsumeAI, mockReleaseHold, mockSelectWhere, mentionLogger } = vi
   mentionLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
+// POL-9: the responder asks the channel drive's org whether agents may reply on their own; no org in these tests.
+const getDrivePolicies = vi.hoisted(() => vi.fn());
+vi.mock('@pagespace/lib/organizations/policy-reader', () => ({ getDrivePolicies }));
+
 vi.mock('@pagespace/lib/billing/credit-gate', () => ({ canConsumeAI: mockCanConsumeAI }));
 vi.mock('@pagespace/lib/billing/credit-consume', () => ({ releaseHold: mockReleaseHold }));
 vi.mock('@pagespace/db/db', () => ({
@@ -128,6 +132,8 @@ const params = {
   driveSlug: 'workspace',
 };
 
+import { DEFAULT_ORG_POLICIES } from '@pagespace/lib/organizations/policies-core';
+
 describe('agent-mention-responder credit gate', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -169,6 +175,25 @@ describe('agent-mention-responder credit gate', () => {
     expect(mockCanConsumeAI).not.toHaveBeenCalled();
     expect(mockAskAgentExecute).not.toHaveBeenCalled();
     expect(mockSendChannelExecute).not.toHaveBeenCalled();
+  });
+
+  it('POL-9 given the org turned autonomous agents off, should reserve nothing, run nothing and post nothing', async () => {
+    mockCanConsumeAI.mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'hold-1', walletId: 'w-drive-1' });
+    getDrivePolicies.mockResolvedValue({ orgId: 'org-1', policies: { ...DEFAULT_ORG_POLICIES, agentsAutonomous: false } });
+
+    await triggerMentionedAgentResponses(params);
+
+    expect(getDrivePolicies).toHaveBeenCalledWith('drive-1');
+    expect(mockCanConsumeAI).not.toHaveBeenCalled();
+    expect(mockAskAgentExecute).not.toHaveBeenCalled();
+    expect(mockSendChannelExecute).not.toHaveBeenCalled();
+  });
+
+  it('POL-9 given autonomy is ON (or there is no org), should reply as before; the policy is read on every mention', async () => {
+    mockCanConsumeAI.mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'hold-1', walletId: 'w-drive-1' });
+    getDrivePolicies.mockResolvedValue({ orgId: 'org-1', policies: { ...DEFAULT_ORG_POLICIES } });
+    await triggerMentionedAgentResponses(params);
+    expect(mockAskAgentExecute).toHaveBeenCalledTimes(1);
   });
 
   it('given a funded drive wallet, should run the agent on that wallet, post its reply and release the hold once', async () => {

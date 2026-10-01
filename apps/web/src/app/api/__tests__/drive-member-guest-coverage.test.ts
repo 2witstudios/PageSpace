@@ -86,9 +86,9 @@ const LEDGER = new Map<string, Entry>([
     reads: 1, decision: 'excludes',
     reason: 'A drive\'s audience (recipients, member ids, custom-role holders, isMemberOfDrive) reads each row through driveMembershipRow: a GUEST is never in it.',
   }],
-  ['packages/lib/src/permissions/guest-suspension.ts', {
-    reads: 2, decision: 'neutral',
-    reason: 'The Owner/Admin list of rows the guests policy suspended (a page and its count): it exists to name GUEST and outside-member rows, so it must not exclude them, and it is a display that grants nothing.',
+  ['packages/lib/src/permissions/guest-holds.ts', {
+    reads: 1, decision: 'neutral',
+    reason: 'suspendOrgGuests exists to find GUEST and outside-member rows and park them, so it must not exclude them; it only removes access (a writer under the policy transaction) and grants nothing.',
   }],
   ['packages/lib/src/permissions/org-drive-directory.ts', {
     reads: 1, decision: 'excludes',

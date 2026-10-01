@@ -32,6 +32,8 @@ import { buildRobotsTxt, buildSitemapXml, buildNotFoundHtml, resolveFaviconTags 
 import { resolvePrimaryPublishedHost } from '@pagespace/lib/canvas/primary-host';
 import { mirrorPublishedPageToHosts, mirror404ToHosts, getActiveDomainRecords } from './custom-domain-mirror';
 import { checkOrgActive } from '@pagespace/lib/organizations/status';
+import { getOrgPolicies } from '@pagespace/lib/organizations/policy-reader';
+import { publishingDecision } from '@pagespace/lib/organizations/sharing-decisions';
 
 export const PUBLISH_HOST = 'pagespace.site';
 const FAVICON_BASE_URL = 'https://pagespace.ai';
@@ -52,7 +54,7 @@ export class PublishError extends Error {
 }
 
 /**
- * SEAT-9: publishing from an org drive is an org-only capability. A lapsed org's drive
+ * SEAT-9 and POL-4: publishing from an org drive is an org-only capability, and the org may turn it off. A lapsed org's drive
  * cannot publish or re-publish (402 with the SEAT-9 message); what is already published
  * stays up and can be unpublished — nothing is deleted. A personal drive has no org.
  */
@@ -60,6 +62,10 @@ async function assertOrgMayPublish(orgId: string | null | undefined): Promise<vo
   if (!orgId) return;
   const active = await checkOrgActive(orgId);
   if (!active.ok) throw new PublishError(active.message, active.status);
+  // POL-4: the org's publishing policy, read now (no cache). Off refuses a publish or a subdomain change with
+  // the policy's own message; what is already published is paused in the bucket, never deleted.
+  const decision = publishingDecision(await getOrgPolicies(orgId));
+  if (!decision.ok) throw new PublishError(decision.message, decision.status);
 }
 
 /**

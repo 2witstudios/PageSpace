@@ -16,7 +16,6 @@ import { users } from '@pagespace/db/schema/auth';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { customDomains } from '@pagespace/db/schema/custom-domains';
 import { integrationConnections, integrationProviders } from '@pagespace/db/schema/integrations';
-import { driveMembers } from '@pagespace/db/schema/members';
 import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
 import { publishedPages } from '@pagespace/db/schema/published-pages';
 import { driveShareLinks, pageShareLinks } from '@pagespace/db/schema/share-links';
@@ -137,7 +136,7 @@ describe('the policy reader', () => {
 });
 
 describe('suspend, never delete', () => {
-  it('POL-1 (partial) public share links off suspends every live link in the org, lists them, and deletes nothing', async () => {
+  it('POL-1 (partial) POL-3 public share links off suspends every live link in the org, lists them, and deletes nothing', async () => {
     const live = await link(w.orgDrive);
     const livePage = await pageLink(w.orgPage);
     const inactive = await link(w.orgDrive, { isActive: false });
@@ -189,15 +188,6 @@ describe('suspend, never delete', () => {
     expect(await marker(driveShareLinks, live)).toEqual({ m: null, active: false });
   });
 
-  it('POL-1 (partial) guests off then approve restores every suspended guest row: approve gates NEW invites only', async () => {
-    const [row] = await db.insert(driveMembers).values({ driveId: w.orgDrive, userId: w.guest, role: 'MEMBER', acceptedAt: new Date() }).returning({ id: driveMembers.id });
-    await updateOrgPolicies({ orgId, actorId: w.owner, patch: { guests: 'off' } });
-    const m = async () => (await db.select({ m: driveMembers.suspendedByPolicy }).from(driveMembers).where(eq(driveMembers.id, row.id)))[0].m;
-    expect(await m()).toBe('guests');
-    await updateOrgPolicies({ orgId, actorId: w.owner, patch: { guests: 'approve' } });
-    expect(await m()).toBeNull();
-  });
-
   it('POL-1 (partial) re-applying the same policy changes nothing and writes no audit row', async () => {
     await link(w.orgDrive);
     await updateOrgPolicies({ orgId, actorId: w.owner, patch: { publicShareLinks: false } });
@@ -226,45 +216,6 @@ describe('suspend, never delete', () => {
     await updateOrgPolicies({ orgId, actorId: w.owner, patch: { publishWeb: true, customDomains: true } });
     expect((await db.select().from(publishedPages).where(eq(publishedPages.id, pub.id)))[0].suspendedByPolicy).toBeNull();
     expect((await db.select().from(customDomains).where(eq(customDomains.id, dom.id)))[0].suspendedByPolicy).toBeNull();
-  });
-
-  it('POL-1 (partial) guests off suspends outside members of org drives, never org members or the drive lead, and restores them', async () => {
-    const rows = await db.insert(driveMembers).values([
-      { driveId: w.orgDrive, userId: w.guest, role: 'MEMBER', acceptedAt: new Date() },
-      { driveId: w.privateDrive, userId: w.guest, role: 'GUEST', acceptedAt: new Date() },
-      { driveId: w.orgDrive, userId: w.member, role: 'MEMBER', acceptedAt: new Date() },
-      { driveId: w.personalDrive, userId: w.guest, role: 'MEMBER', acceptedAt: new Date() },
-    ]).returning({ id: driveMembers.id, driveId: driveMembers.driveId, userId: driveMembers.userId });
-    const rowOf = (driveId: string, userId: string) => rows.find((r) => r.driveId === driveId && r.userId === userId)!.id;
-    const state = async (id: string) => (await db.select({ m: driveMembers.suspendedByPolicy }).from(driveMembers).where(eq(driveMembers.id, id)))[0].m;
-
-    const off = await updateOrgPolicies({ orgId, actorId: w.owner, patch: { guests: 'off' } });
-    if (!off.ok) throw new Error('expected ok');
-    expect(off.suspended.map((s) => s.id).sort()).toEqual([rowOf(w.orgDrive, w.guest), rowOf(w.privateDrive, w.guest)].sort());
-    expect(await state(rowOf(w.orgDrive, w.member))).toBeNull();
-    // A personal drive is not the org's: its members are untouched.
-    expect(await state(rowOf(w.personalDrive, w.guest))).toBeNull();
-    // The rows were not deleted.
-    expect(await state(rowOf(w.orgDrive, w.guest))).toBe('guests');
-
-    // 'approve' is a different rule for NEW invites; it lifts the suspension only by leaving 'off'.
-    const back = await updateOrgPolicies({ orgId, actorId: w.owner, patch: { guests: 'approve' } });
-    if (!back.ok) throw new Error('expected ok');
-    expect(back.restored).toHaveLength(2);
-    expect(await state(rowOf(w.orgDrive, w.guest))).toBeNull();
-  });
-
-  it('POL-1 (partial) guests off never suspends the drive lead, even a legacy lead who is outside the org', async () => {
-    const [{ id: ledDrive }] = await db.insert(drives).values({ name: 'Legacy', slug: `legacy-${run}`, ownerId: w.outsider, orgId, orgVisibility: 'OPEN', updatedAt: new Date() }).returning({ id: drives.id });
-    created.driveIds.push(ledDrive);
-    const [lead] = await db.insert(driveMembers).values({ driveId: ledDrive, userId: w.outsider, role: 'OWNER', acceptedAt: new Date() }).returning({ id: driveMembers.id });
-    const [other] = await db.insert(driveMembers).values({ driveId: ledDrive, userId: w.guest, role: 'MEMBER', acceptedAt: new Date() }).returning({ id: driveMembers.id });
-
-    await updateOrgPolicies({ orgId, actorId: w.owner, patch: { guests: 'off' } });
-
-    const m = async (id: string) => (await db.select({ m: driveMembers.suspendedByPolicy }).from(driveMembers).where(eq(driveMembers.id, id)))[0].m;
-    expect(await m(lead.id)).toBeNull();
-    expect(await m(other.id)).toBe('guests');
   });
 
   it('POL-1 (partial) an integrations allowlist suspends drive connections to other providers and widening it restores them', async () => {

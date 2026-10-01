@@ -100,7 +100,10 @@ export type SecurityEventType =
   // family is defined in lib audit/org-audit.ts.
   | 'org.policy.changed'
   | 'org.policy.suspended'
-  | 'org.policy.restored';
+  | 'org.policy.restored'
+  | 'org.guest.requested'
+  | 'org.guest.approved'
+  | 'org.guest.declined';
 
 /**
  * Single source of truth for the security_audit_log table shape (#890 Phase 1).

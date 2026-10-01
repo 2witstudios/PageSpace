@@ -7,6 +7,7 @@ import { authorizeOrgRequest, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 import { deliverOrgInvite } from '@/lib/orgs/org-invite-delivery';
 import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
 import { orgRefusalResponse } from '@/lib/orgs/org-refusal-response';
+import { orgPolicyRefusalResponse } from '@/lib/orgs/org-policy-refusal-response';
 import { defaultSeatBilling } from '@/lib/org-billing/seat-billing';
 
 /**
@@ -20,7 +21,8 @@ export async function POST(
   context: { params: Promise<{ orgId: string; invitationId: string }> },
 ) {
   const { orgId, invitationId } = await context.params;
-  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_WRITE_AUTH);
+  // Any member reaches the service: who may invite (and so resend) is the org's policy (POL-5), decided there.
+  const gate = await authorizeOrgRequest(request, orgId, 'MEMBER', ORG_WRITE_AUTH);
   if (!gate.ok) return gate.response;
   try {
     const limit = await checkDistributedRateLimit(
@@ -37,7 +39,7 @@ export async function POST(
     const result = await resendInvitation({
       orgId,
       invitationId,
-      actorRole: gate.role,
+      actorRole: gate.role ?? 'MEMBER',
       seatBilling: defaultSeatBilling(),
       now: new Date(),
       deliver: (invitation, token) =>
@@ -56,6 +58,7 @@ export async function POST(
         return NextResponse.json({ error: 'Failed to send the invitation email' }, { status: 502 });
       }
       if (result.reason === 'org_lapsed') return orgLapsedResponse(result.message);
+      if (result.reason === 'org_policy') return orgPolicyRefusalResponse(result);
       if (result.reason === 'seats_full') {
         auditRequest(request, {
           eventType: 'authz.access.denied',

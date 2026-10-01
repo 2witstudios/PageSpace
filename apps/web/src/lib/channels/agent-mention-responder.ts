@@ -38,6 +38,8 @@ import {
   type ImageFilePart,
   type RecentImageFileCandidate,
 } from '@/lib/channels/build-recent-image-file-parts';
+import { getDrivePolicies } from '@pagespace/lib/organizations/policy-reader';
+import { agentsAutonomousDecision } from '@pagespace/lib/organizations/org-action-decisions';
 
 const channelMentionLogger = loggers.ai.child({ module: 'channel-agent-mentions' });
 
@@ -604,6 +606,14 @@ export async function triggerMentionedAgentResponses(
 
     const mentionedAgents = await resolveMentionedAgents(params.content);
     if (mentionedAgents.length === 0) {
+      return;
+    }
+
+    // POL-9: an agent that answers a mention replies on its own. An org that turned autonomous runs off gets no reply,
+    // checked here before any eligibility query, credit hold or model call; read now, every mention, no cache.
+    const autonomy = agentsAutonomousDecision(params.driveId ? ((await getDrivePolicies(params.driveId))?.policies ?? null) : null);
+    if (!autonomy.ok) {
+      channelMentionLogger.info('Agent mention reply skipped by org policy', { channelId: params.channelId, driveId: params.driveId, policy: autonomy.policy });
       return;
     }
 

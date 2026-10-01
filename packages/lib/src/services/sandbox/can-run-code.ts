@@ -43,6 +43,8 @@ import type { DrivePermissionLevel, PermissionLevel } from '../../permissions/pe
 import { resolveSandboxPayerTier, isSandboxAvailable } from '../../billing/sandbox-eligibility';
 import type { SubscriptionTier } from '../../billing/subscription-tiers';
 import type { LookupDriveBillingFacts } from '../../billing/sandbox-payer';
+import type { OrgPolicies } from '../../organizations/policies-core';
+import { sandboxDecision } from '../../organizations/org-action-decisions';
 
 export type CodeExecutionDenialReason =
   | 'kill_switch_off'
@@ -50,6 +52,7 @@ export type CodeExecutionDenialReason =
   | 'no_drive_access'
   | 'insufficient_role'
   | 'no_agent_access'
+  | 'org_policy'
   | 'error';
 
 export type CanRunCodeResult =
@@ -72,6 +75,8 @@ export interface CanRunCodeDeps {
     targetPageId: string,
   ) => Promise<PermissionLevel | null>;
   isCodeExecutionEnabled: () => boolean;
+  /** POL-10: the drive's org policies, read live; null when the drive has no org (unrestricted). */
+  getDriveOrgPolicies: (driveId: string) => Promise<OrgPolicies | null>;
 }
 
 export interface CanRunCodeInput {
@@ -131,6 +136,8 @@ const defaultDeps: CanRunCodeDeps = {
       m.getAgentAccessLevel(agentPageId, targetPageId),
     ),
   isCodeExecutionEnabled,
+  getDriveOrgPolicies: (driveId) =>
+    import('../../organizations/policy-reader').then(async (m) => (await m.getDrivePolicies(driveId))?.policies ?? null),
 };
 
 const deny = (reason: CodeExecutionDenialReason): CanRunCodeResult => ({
@@ -218,6 +225,10 @@ export async function canRunCode({
     // escalating through an agent that holds drive edit access.
     const userResult = await authorizeUser(userId, driveId, deps);
     if (!userResult.ok) return userResult;
+
+    // POL-10: the org's cloud-sandbox switch, read live where the run is authorized. After the
+    // access gate so a caller with no access to the drive never learns its policy.
+    if (!sandboxDecision(await deps.getDriveOrgPolicies(driveId)).ok) return deny('org_policy');
 
     // Agent-origin runs additionally require the agent page itself to hold
     // drive edit access — both the actor and the agent must be entitled.

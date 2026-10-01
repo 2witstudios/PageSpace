@@ -1,4 +1,7 @@
 import { NextResponse } from 'next/server';
+import { getDrivePolicies } from '@pagespace/lib/organizations/policy-reader';
+import { integrationDecision } from '@pagespace/lib/organizations/org-action-decisions';
+import { orgPolicyRefusalResponse } from '@/lib/orgs/org-policy-refusal-response';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
@@ -125,6 +128,11 @@ export async function POST(
     if (provider.driveId && provider.driveId !== driveId) {
       return NextResponse.json({ error: 'Provider not available for this drive' }, { status: 404 });
     }
+
+    // POL-11: an org that limits which services its drives may connect refuses the rest, before any OAuth
+    // redirect or credential is taken. (The callback and every use of the connection ask again.)
+    const serviceDecision = integrationDecision((await getDrivePolicies(driveId))?.policies ?? null, provider.slug);
+    if (!serviceDecision.ok) return orgPolicyRefusalResponse(serviceDecision);
 
     const existing = await findDriveConnection(db, driveId, providerId);
     if (existing) {

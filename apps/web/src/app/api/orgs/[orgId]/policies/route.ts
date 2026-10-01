@@ -4,6 +4,8 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getOrgPolicies, updateOrgPolicies } from '@pagespace/lib/organizations/policies';
 import { validateOrgPoliciesPatch } from '@pagespace/lib/organizations/policies-core';
 import { checkOrgActive } from '@pagespace/lib/organizations/status';
+import { reconcileOrgPublishedVisibility } from '@pagespace/lib/organizations/published-visibility';
+import { createPublishedObjectStore, isPublishConfigured } from '@/lib/canvas/published-storage';
 import { authorizeOrgRequest, ORG_READ_AUTH, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 
 type Context = { params: Promise<{ orgId: string }> };
@@ -53,12 +55,28 @@ export async function PATCH(request: Request, context: Context) {
 
     const result = await updateOrgPolicies({ orgId, actorId: gate.userId, patch: parsed.patch });
     if (!result.ok) return NextResponse.json({ error: 'Organization not found' }, { status: 404 });
+
+    // POL-4: published sites live in a public bucket the edge serves without asking the database, so a change to
+    // publishing or domains takes effect by MOVING the objects (park or restore), not by a marker. A failure here
+    // never undoes the policy: it is reported, and the reconcile sweep retries it.
+    let publishedVisibility: { parked: number; restored: number; failed: number } | null = null;
+    if (result.changes.some((c) => c.key === 'publishWeb' || c.key === 'customDomains') && isPublishConfigured()) {
+      try {
+        const outcomes = await reconcileOrgPublishedVisibility(orgId, createPublishedObjectStore());
+        const n = (action: string) => outcomes.filter((o) => o.action === action).length;
+        publishedVisibility = { parked: n('parked'), restored: n('restored'), failed: n('failed') };
+      } catch (error) {
+        loggers.api.error('Published visibility reconcile failed after a policy change:', error as Error);
+        publishedVisibility = { parked: 0, restored: 0, failed: -1 };
+      }
+    }
     return NextResponse.json({
       policies: result.policies,
       changed: result.changes.map((c) => c.key),
       suspended: countByKind(result.suspended),
       restored: countByKind(result.restored),
       auditRecorded: result.auditRecorded,
+      ...(publishedVisibility ? { publishedVisibility } : {}),
     });
   } catch (error) {
     loggers.api.error('Error updating organization policies:', error as Error);

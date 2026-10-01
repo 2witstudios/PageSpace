@@ -1,4 +1,5 @@
 import './instrument';
+import { getDrivePolicies } from '@pagespace/lib/organizations/policy-reader';
 import * as Sentry from '@sentry/node';
 import { createServer, IncomingMessage, ServerResponse } from 'http';
 import type { Duplex } from 'stream';
@@ -299,7 +300,13 @@ async function ensureShellSessionSandbox({ workspaceId, userId }: { workspaceId:
           envId,
           intent,
           requesterId: userId,
-          deps: { store: await dbDriveEnvStorePromise, host, resolvePayer: resolveDriveEnvPayer },
+          deps: {
+            store: await dbDriveEnvStorePromise,
+            host,
+            resolvePayer: resolveDriveEnvPayer,
+            // POL-10: the org's persistent-environments switch, read live at every start (same reader the web tier binds).
+            getDriveOrgPolicies: async (id) => (await getDrivePolicies(id))?.policies ?? null,
+          },
         }),
       checkConcurrency: async ({ ownerId, alreadyProvisioned }) => {
         // Tier of the PAYER — the session's tenant (drive owner, else session

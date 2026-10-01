@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
+// POL-9: the responder asks the channel drive's org whether agents may reply on their own; no org in these tests.
+vi.mock('@pagespace/lib/organizations/policy-reader', () => ({ getDrivePolicies: vi.fn() }));
+
 vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {

@@ -132,6 +132,9 @@ export async function moveDriveToOrg(
     const actorOrgRole = orgExists ? await deps.getOrgRole(tx, input.orgId, actorId) : null;
     const verdict = decideMoveDriveIntoOrg({ drive, actorId, actorOrgRole });
     if (!verdict.ok) return verdict;
+    // POL-5: moving a drive in makes it an org drive, so it is judged by the same who-can-create policy as creating one.
+    const creation = decideCreateDriveInOrg({ actorOrgRole, creationPolicy: await deps.getOrgDriveCreationPolicy(tx, input.orgId) });
+    if (!creation.ok) return creation;
     // SEAT-9: judged after the permission verdict, so only someone who may move the drive in
     // learns the org's billing state; read under the org row lock taken above.
     const active = await checkOrgActive(input.orgId, { executor: tx });

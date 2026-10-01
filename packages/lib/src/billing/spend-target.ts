@@ -79,6 +79,11 @@ export function driveSpend(driveId: string | null | undefined, chosen: SpendSour
   return typeof driveId === 'string' && driveId.length > 0 ? { kind: 'drive', driveId, chosen } : PERSONAL_SPEND;
 }
 
+/** The drive a call runs in (personal: none). Org policies about a call (POL-8, POL-9) follow this drive. */
+export function spendDriveId(target: SpendTarget): string | null {
+  return target.kind === 'personal' ? null : target.driveId;
+}
+
 /**
  * The target for a turn of `conversationId` running in a session of `driveId`: the gate
  * reads the conversation's stored choice (SPEND-3). `driveId` must be SERVER-resolved (the

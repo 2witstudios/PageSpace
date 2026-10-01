@@ -95,11 +95,14 @@ vi.mock('@pagespace/lib/integrations/repositories/connection-repository', () => 
   updateConnectionStatus: mockUpdateConnectionStatus,
 }));
 
+vi.mock('@pagespace/lib/organizations/policy-reader', () => ({ getDrivePolicies: vi.fn(async () => null) }));
 vi.mock('@pagespace/lib/services/drive-service', () => ({
   getDriveAccess: mockGetDriveAccess,
 }));
 
 import { GET } from '../route';
+import { getDrivePolicies } from '@pagespace/lib/organizations/policy-reader';
+import { DEFAULT_ORG_POLICIES } from '@pagespace/lib/organizations/policies-core';
 import { builtinProviders } from '@pagespace/lib/integrations/providers/builtin-providers';
 
 // Test fixtures
@@ -507,6 +510,18 @@ describe('GET /api/user/integrations/callback', () => {
       expect(response.status).toBe(307);
       const url = getRedirectUrl(response);
       expect(url.searchParams.get('error')).toBe('access_denied');
+    });
+
+    it('POL-11 refuses, stores nothing and re-activates nothing when the org no longer allows the service', async () => {
+      vi.mocked(getDrivePolicies).mockResolvedValueOnce({ orgId: 'org-1', policies: { ...DEFAULT_ORG_POLICIES, integrationsAllowlist: ['slack'] } });
+      mockGetDriveAccess.mockResolvedValueOnce({ isOwner: false, isAdmin: true });
+      mockFindDriveConnection.mockResolvedValueOnce({ id: 'suspended-conn' });
+      const response = await GET(createCallbackRequest({ code: 'auth-code', state: 'valid-state' }));
+
+      expect(getRedirectUrl(response).searchParams.get('error')).toBe('org_policy');
+      expect(mockCreateConnection).not.toHaveBeenCalled();
+      expect(mockUpdateConnectionCredentials).not.toHaveBeenCalled();
+      expect(mockUpdateConnectionStatus).not.toHaveBeenCalled();
     });
 
     it('creates drive-scoped connection for admin users', async () => {

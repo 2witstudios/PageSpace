@@ -2839,10 +2839,45 @@
       "import": "./dist/audit/org-audit.js",
       "require": "./dist/audit/org-audit.js"
     },
-    "./permissions/guest-suspension": {
-      "types": "./dist/permissions/guest-suspension.d.ts",
-      "import": "./dist/permissions/guest-suspension.js",
-      "require": "./dist/permissions/guest-suspension.js"
+    "./organizations/org-action-decisions": {
+      "types": "./dist/organizations/org-action-decisions.d.ts",
+      "import": "./dist/organizations/org-action-decisions.js",
+      "require": "./dist/organizations/org-action-decisions.js"
+    },
+    "./organizations/org-roles": {
+      "types": "./dist/organizations/org-roles.d.ts",
+      "import": "./dist/organizations/org-roles.js",
+      "require": "./dist/organizations/org-roles.js"
+    },
+    "./organizations/sharing-decisions": {
+      "types": "./dist/organizations/sharing-decisions.d.ts",
+      "import": "./dist/organizations/sharing-decisions.js",
+      "require": "./dist/organizations/sharing-decisions.js"
+    },
+    "./organizations/policy-reader": {
+      "types": "./dist/organizations/policy-reader.d.ts",
+      "import": "./dist/organizations/policy-reader.js",
+      "require": "./dist/organizations/policy-reader.js"
+    },
+    "./organizations/published-visibility": {
+      "types": "./dist/organizations/published-visibility.d.ts",
+      "import": "./dist/organizations/published-visibility.js",
+      "require": "./dist/organizations/published-visibility.js"
+    },
+    "./organizations/published-visibility-core": {
+      "types": "./dist/organizations/published-visibility-core.d.ts",
+      "import": "./dist/organizations/published-visibility-core.js",
+      "require": "./dist/organizations/published-visibility-core.js"
+    },
+    "./permissions/guest-holds": {
+      "types": "./dist/permissions/guest-holds.d.ts",
+      "import": "./dist/permissions/guest-holds.js",
+      "require": "./dist/permissions/guest-holds.js"
+    },
+    "./permissions/guest-admission": {
+      "types": "./dist/permissions/guest-admission.d.ts",
+      "import": "./dist/permissions/guest-admission.js",
+      "require": "./dist/permissions/guest-admission.js"
     }
   },
   "typesVersions": {
@@ -3702,8 +3737,29 @@
       "audit/org-audit": [
         "./dist/audit/org-audit.d.ts"
       ],
-      "permissions/guest-suspension": [
-        "./dist/permissions/guest-suspension.d.ts"
+      "organizations/org-action-decisions": [
+        "./dist/organizations/org-action-decisions.d.ts"
+      ],
+      "organizations/org-roles": [
+        "./dist/organizations/org-roles.d.ts"
+      ],
+      "organizations/sharing-decisions": [
+        "./dist/organizations/sharing-decisions.d.ts"
+      ],
+      "organizations/policy-reader": [
+        "./dist/organizations/policy-reader.d.ts"
+      ],
+      "organizations/published-visibility": [
+        "./dist/organizations/published-visibility.d.ts"
+      ],
+      "organizations/published-visibility-core": [
+        "./dist/organizations/published-visibility-core.d.ts"
+      ],
+      "permissions/guest-holds": [
+        "./dist/permissions/guest-holds.d.ts"
+      ],
+      "permissions/guest-admission": [
+        "./dist/permissions/guest-admission.d.ts"
       ]
     }
   },

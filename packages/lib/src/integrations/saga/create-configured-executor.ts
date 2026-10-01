@@ -9,6 +9,7 @@
 
 import type { db as defaultDb } from '@pagespace/db/db';
 import { getConnectionWithProvider } from '../repositories/connection-repository';
+import { getDrivePolicies } from '../../organizations/policy-reader';
 import { logAuditEntry } from '../repositories/audit-repository';
 import { createToolExecutor, type ExecuteToolDependencies } from './execute-tool';
 
@@ -30,6 +31,7 @@ export function createConfiguredToolExecutor({
   return createToolExecutor({
     loadConnection: (connectionId) =>
       getConnectionWithProvider(db, connectionId) as Promise<LoadConnectionResult>,
+    getDriveOrgPolicies: async (id) => (await getDrivePolicies(id, db))?.policies ?? null,
     logAudit: async (entry) => {
       await logAuditEntry(db, {
         driveId: entry.driveId ?? driveId,

@@ -31,6 +31,7 @@ import {
 import { isLocalEnvsEnabled } from '@pagespace/lib/services/drive-envs/local-envs-enabled';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { orgPolicyRefusalResponse } from '@/lib/orgs/org-policy-refusal-response';
 import { createDriveEnvRequestSchema } from '@pagespace/lib/drive-envs/env-contract';
 import { createEnvInDrive, listEnvsInDrive, toDriveEnvDTO } from '@/lib/drive-envs/drive-envs-runtime';
 
@@ -118,6 +119,9 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
       }
       if (result.reason === 'name_taken') {
         return NextResponse.json({ error: 'An environment with this name already exists' }, { status: 409 });
+      }
+      if (result.reason === 'org_policy') {
+        return orgPolicyRefusalResponse({ code: 'org_policy', policy: 'persistentEnvironments', status: 403, message: result.message });
       }
       // Quota. The two denials get DIFFERENT statuses because they have
       // different remedies: an ineligible tier is a forbidden feature (403),
