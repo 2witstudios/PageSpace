@@ -6,6 +6,7 @@
  * writes) live in the executor; `now` is injected for determinism.
  */
 import { restoreFields } from './page-mutation-plan';
+import { withoutApprovalsOff } from './operations';
 import type { ActivityLogForRollback } from './types';
 import type { ActivityOperation } from '@pagespace/lib/monitoring/activity-logger';
 import type {
@@ -140,9 +141,11 @@ export function planAgentRedo(
   if (!targetValues) {
     throw new Error('No agent values to apply');
   }
-  const updateData = restoreFields(agentFields, targetValues);
+  const { values: updateData, droppedApprovalsOff } = withoutApprovalsOff(restoreFields(agentFields, targetValues));
   if (Object.keys(updateData).length === 0) {
-    throw new Error('No agent values to apply');
+    throw new Error(droppedApprovalsOff
+      ? 'Redo cannot turn tool approvals off; the drive owner or an admin can set this in agent settings'
+      : 'No agent values to apply');
   }
   return { updateData };
 }

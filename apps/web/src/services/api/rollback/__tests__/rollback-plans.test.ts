@@ -187,6 +187,15 @@ describe('planAgentRollback', () => {
   it('throws on null previousValues', () => {
     assert({ given: 'null previousValues', should: 'throw', actual: thrown(() => planAgentRollback(act({ previousValues: null }), AGENT_FIELDS)), expected: 'No agent config values to restore' });
   });
+  it('restores toolApprovalMode "ask" — undo may always make an agent safer', () => {
+    assert({ given: 'a previous toolApprovalMode of ask', should: 'restore it', actual: planAgentRollback(act({ previousValues: { toolApprovalMode: 'ask' } }), [...AGENT_FIELDS, 'toolApprovalMode']), expected: { updateData: { toolApprovalMode: 'ask' } } });
+  });
+  it('never restores toolApprovalMode "auto" — turning approvals off needs the drive owner/admin, not an undo', () => {
+    assert({ given: 'a previous toolApprovalMode of auto alongside another field', should: 'restore only the other field', actual: planAgentRollback(act({ previousValues: { toolApprovalMode: 'auto', systemPrompt: 'old' } }), [...AGENT_FIELDS, 'toolApprovalMode']), expected: { updateData: { systemPrompt: 'old' } } });
+  });
+  it('explains why an undo that would only turn approvals off does nothing', () => {
+    assert({ given: 'only a previous toolApprovalMode of auto', should: 'throw a clear reason', actual: thrown(() => planAgentRollback(act({ previousValues: { toolApprovalMode: 'auto' } }), [...AGENT_FIELDS, 'toolApprovalMode'])), expected: 'Undo cannot turn tool approvals off; the drive owner or an admin can set this in agent settings' });
+  });
 });
 
 describe('planMemberRollback', () => {

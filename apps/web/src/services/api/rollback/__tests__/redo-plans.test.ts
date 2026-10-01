@@ -116,6 +116,15 @@ describe('planAgentRedo', () => {
   it('throws with no whitelisted values', () => {
     assert({ given: 'target values with nothing whitelisted', should: 'throw', actual: thrown(() => planAgentRedo(act(), { other: 1 }, AGENT_FIELDS)), expected: 'No agent values to apply' });
   });
+  it('re-applies toolApprovalMode "ask"', () => {
+    assert({ given: 'a target toolApprovalMode of ask', should: 'apply it', actual: planAgentRedo(act(), { toolApprovalMode: 'ask' }, [...AGENT_FIELDS, 'toolApprovalMode']), expected: { updateData: { toolApprovalMode: 'ask' } } });
+  });
+  it('never re-applies toolApprovalMode "auto"', () => {
+    assert({ given: 'a target toolApprovalMode of auto alongside another field', should: 'apply only the other field', actual: planAgentRedo(act(), { toolApprovalMode: 'auto', systemPrompt: 'new' }, [...AGENT_FIELDS, 'toolApprovalMode']), expected: { updateData: { systemPrompt: 'new' } } });
+  });
+  it('explains why a redo that would only turn approvals off does nothing', () => {
+    assert({ given: 'only a target toolApprovalMode of auto', should: 'throw a clear reason', actual: thrown(() => planAgentRedo(act(), { toolApprovalMode: 'auto' }, [...AGENT_FIELDS, 'toolApprovalMode'])), expected: 'Redo cannot turn tool approvals off; the drive owner or an admin can set this in agent settings' });
+  });
 });
 
 describe('planMemberRedo', () => {
