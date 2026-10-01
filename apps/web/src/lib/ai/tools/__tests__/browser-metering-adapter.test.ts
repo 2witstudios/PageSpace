@@ -88,7 +88,7 @@ describe('createBrowserMeter.close', () => {
   });
 });
 
-describe('a drive that moves while a browser session is open (WAL-9)', () => {
+describe('a drive that moves while a browser session is open', () => {
   it("WAL-9 (partial) the client's renewal settles the interval on the OLD hold's payer, then re-opens on whoever the drive resolves to now: the next interval is held and settled on the org pool", async () => {
     const person: ComputeCharge = { kind: 'user', userId: 'owner-1' };
     const p = primitives(person, undefined, undefined);
