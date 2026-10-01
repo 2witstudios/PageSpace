@@ -339,7 +339,7 @@ describe('executeWorkflow', () => {
     expect(result.error).toContain("doesn't allow that AI model");
   });
 
-  describe('the org autonomy policy (POL-9)', () => {
+  describe('the org autonomy policy', () => {
     const off = () => getDrivePolicies.mockResolvedValue({ orgId: 'org-1', policies: { ...DEFAULT_ORG_POLICIES, agentsAutonomous: false } });
     const fire = (table: 'cron' | 'manual' | 'taskTriggers' | 'calendarTriggers' | 'webhookTriggers') => {
       const base = createInputFixture();
