@@ -63,7 +63,9 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   is still waiting, type past it and the request is treated as denied. "Always allow" grants are
   yours to revoke from the composer's Tools menu, where a single switch also turns the whole thing
   off ("Auto") for your global assistant; each page agent has the same choice in its settings under
-  Action Approval. Runs with nobody watching — workflows, triggers, channel mentions and the
+  Action Approval, where only a drive owner or admin can switch a shared agent to Auto. Approvals
+  are answered from the app itself — an external client using your MCP token cannot approve on
+  your behalf. Runs with nobody watching — workflows, triggers, channel mentions and the
   worker sessions an approved spawn starts — never pause. Voice calls have no approval card, so
   while approvals are on, a call simply doesn't offer the actions that would ask (anything you've
   set to "Always allow" still works by voice).

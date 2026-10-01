@@ -11,7 +11,7 @@ import { Loader2, Bot, FolderTree, Shield, Copy, Check, Code2, Wrench, TerminalS
 import { toast } from 'sonner';
 import { useSWRConfig } from 'swr';
 import { useForm, useFormState, Controller } from 'react-hook-form';
-import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { patch, fetchWithAuth, ApiRequestError } from '@/lib/auth/auth-fetch';
 import Link from 'next/link';
 import { AI_PROVIDERS, getVisibleProviders } from '@/lib/ai/core/ai-providers-config';
 import { getRoleColorClasses } from '@/lib/utils';
@@ -527,7 +527,9 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
       onSaved?.();
     } catch (error) {
       console.error('Error saving agent configuration:', error);
-      toast.error('Failed to save configuration');
+      // A refusal (e.g. only a drive owner/admin may turn Action Approval off)
+      // says why; anything else stays generic.
+      toast.error(error instanceof ApiRequestError && error.status === 403 ? error.message : 'Failed to save configuration');
     } finally {
       setIsSaving(false);
       onSavingChange?.(false);
@@ -1232,7 +1234,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
               )}
             />
             <p className="text-xs text-muted-foreground">
-              Only chats with a person in them can pause. Workflows, triggers, channel mentions and worker sessions always run as Auto.
+              Only chats with a person in them can pause. Workflows, triggers, channel mentions and worker sessions always run as Auto. Only a drive owner or admin can switch an agent to Auto.
             </p>
           </CardContent>
         </Card>

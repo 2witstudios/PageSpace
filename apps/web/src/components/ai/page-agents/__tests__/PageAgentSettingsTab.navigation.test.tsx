@@ -7,7 +7,8 @@ vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }));
 
-vi.mock('@/lib/auth/auth-fetch', () => ({
+vi.mock('@/lib/auth/auth-fetch', async (importOriginal) => ({
+  ApiRequestError: (await importOriginal<typeof import('@/lib/auth/auth-fetch')>()).ApiRequestError,
   fetchWithAuth: vi.fn(),
   patch: vi.fn(),
 }));
