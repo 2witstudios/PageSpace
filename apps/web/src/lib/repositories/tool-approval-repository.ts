@@ -119,6 +119,16 @@ export const toolApprovalRepository = {
   },
 
   /** Record a denial's outcome on a decision claimed in the same step. Idempotent (a plain update). */
+  /** The decision as recorded — what a part left behind by a failed persist must be brought back in line with. */
+  async getDecision(approvalId: string): Promise<{ approved: boolean; reason: string | null } | null> {
+    const [row] = await db
+      .select({ approved: aiToolApprovalDecisions.approved, reason: aiToolApprovalDecisions.reason })
+      .from(aiToolApprovalDecisions)
+      .where(eq(aiToolApprovalDecisions.approvalId, approvalId))
+      .limit(1);
+    return row ?? null;
+  },
+
   async markExecuted(approvalId: string, outcome: ToolApprovalOutcome): Promise<void> {
     await db
       .update(aiToolApprovalDecisions)

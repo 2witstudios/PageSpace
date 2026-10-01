@@ -33,13 +33,34 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { ai: { warn: vi.fn(), error: vi.fn(), debug: vi.fn(), trace: vi.fn(), info: vi.fn() } },
 }));
 
-const { saveGlobal, claimDecision, addGrant, markExecuted, claimStale, recordOutcome } = vi.hoisted(() => ({
+// Every part write must happen under the per-message lock: the mock tracks the
+// keys taken and whether each save ran while the lock was held.
+const lockLog = vi.hoisted(() => ({ keys: [] as string[], held: 0, savesOutsideLock: 0, busy: false }));
+vi.mock('@/lib/ai/core/assistant-message-lock', () => ({
+  AssistantMessageBusyError: class AssistantMessageBusyError extends Error {},
+  withAssistantMessageLock: async <T,>(messageId: string, fn: () => Promise<T>): Promise<T> => {
+    if (lockLog.busy) {
+      const { AssistantMessageBusyError } = await import('@/lib/ai/core/assistant-message-lock');
+      throw new AssistantMessageBusyError(messageId);
+    }
+    lockLog.keys.push(messageId);
+    lockLog.held += 1;
+    try {
+      return await fn();
+    } finally {
+      lockLog.held -= 1;
+    }
+  },
+}));
+
+const { saveGlobal, claimDecision, addGrant, markExecuted, claimStale, recordOutcome, getDecision } = vi.hoisted(() => ({
   saveGlobal: vi.fn().mockResolvedValue(undefined),
   claimDecision: vi.fn(),
   addGrant: vi.fn().mockResolvedValue(undefined),
   markExecuted: vi.fn().mockResolvedValue(undefined),
   claimStale: vi.fn(),
   recordOutcome: vi.fn(),
+  getDecision: vi.fn(),
 }));
 const uiMessagesById = vi.hoisted(() => new Map<string, UIMessage>());
 
@@ -54,11 +75,14 @@ vi.mock('@/lib/ai/core/message-utils', async (importOriginal) => {
 vi.mock('@/lib/repositories/message-repository', () => ({
   messageRepository: {
     savePageMessage: vi.fn(),
-    saveGlobalMessage: (args: Record<string, unknown>) => saveGlobal(args).then(() => ({ saved: true, rev: 1 })),
+    saveGlobalMessage: (args: Record<string, unknown>) => {
+      if (lockLog.held === 0) lockLog.savesOutsideLock += 1;
+      return saveGlobal(args).then(() => ({ saved: true, rev: 1 }));
+    },
   },
 }));
 vi.mock('@/lib/repositories/tool-approval-repository', () => ({
-  toolApprovalRepository: { claimDecision, addGrant, markExecuted, claimStale, recordOutcome },
+  toolApprovalRepository: { claimDecision, addGrant, markExecuted, claimStale, recordOutcome, getDecision },
 }));
 
 import {
@@ -85,6 +109,12 @@ const base = { messageId: 'msg-1', conversationId: 'conv-1', userId: 'user-1' };
 
 beforeEach(() => {
   limitQueue = [];
+  lockLog.keys = [];
+  lockLog.held = 0;
+  lockLog.savesOutsideLock = 0;
+  lockLog.busy = false;
+  getDecision.mockReset();
+  getDecision.mockResolvedValue(null);
   uiMessagesById.clear();
   saveGlobal.mockClear();
   addGrant.mockClear();
@@ -275,12 +305,73 @@ describe('recordApprovedToolOutcome', () => {
     expect(recordOutcome).toHaveBeenCalledWith('ap1', 'error');
   });
 
-  it('is a no-op for a part that is not in approval-responded (second report, or never approved)', async () => {
+  it('records the truth even when the part never left approval-requested (a claim won but its persist failed): row first, then the part', async () => {
     const r = row([requested('tc1', 'ap1')]);
     limitQueue = [[r]];
     const result = await recordApprovedToolOutcomeOnGlobalMessage({ conversationId: 'conv-1', messageId: 'msg-1', toolCallId: 'tc1', approvalId: 'ap1', outcome: { ok: true, output: 1 } });
+    expect(result.recorded).toBe(true);
+    expect(recordOutcome).toHaveBeenCalledWith('ap1', 'ok');
+    expect(savedParts()[0]).toMatchObject({ state: 'output-available', output: 1, approval: { id: 'ap1', approved: true } });
+  });
+
+  it('a second report of a part that already holds its result changes nothing', async () => {
+    recordOutcome.mockResolvedValue(false);
+    const done = { ...(responded('tc1', 'ap1', true) as unknown as Record<string, unknown>), state: 'output-available', output: 1 } as unknown as Part;
+    limitQueue = [[row([done])]];
+    const result = await recordApprovedToolOutcomeOnGlobalMessage({ conversationId: 'conv-1', messageId: 'msg-1', toolCallId: 'tc1', approvalId: 'ap1', outcome: { ok: true, output: 2 } });
     expect(result.recorded).toBe(false);
     expect(saveGlobal).not.toHaveBeenCalled();
-    expect(recordOutcome).not.toHaveBeenCalled();
+  });
+});
+
+describe('every part writer is serialized per message (no lost update between writers)', () => {
+  it('apply, dismiss and record each fetch and persist the row inside the lock keyed by the message id', async () => {
+    limitQueue = [[row([requested('tc1', 'ap1')])], [{ id: 'msg-1' }]];
+    await applyToolApprovalResponsesToGlobalMessage({ ...base, responses: [{ toolCallId: 'tc1', approvalId: 'ap1', approved: true }] });
+    limitQueue = [[row([requested('tc2', 'ap2')])]];
+    await dismissPendingToolApprovalsForGlobalConversation({ conversationId: 'conv-1', userId: 'user-1' });
+    limitQueue = [[row([responded('tc3', 'ap3', true)])]];
+    await recordApprovedToolOutcomeOnGlobalMessage({ conversationId: 'conv-1', messageId: 'msg-1', toolCallId: 'tc3', approvalId: 'ap3', outcome: { ok: true, output: 1 } });
+    expect(lockLog.keys).toEqual(['msg-1', 'msg-1', 'msg-1']);
+    expect(saveGlobal).toHaveBeenCalledTimes(3);
+    expect(lockLog.savesOutsideLock).toBe(0);
+  });
+
+  it('a dismiss re-reads the row under the lock, so a result recorded after its first read is never overwritten', async () => {
+    // First read (to find the row) sees A still approval-responded; by the time
+    // the dismiss holds the lock, A's running turn has recorded output-available.
+    const before = row([responded('tcA', 'apA', true), responded('tcB', 'apB', true)]);
+    const recordedA = { ...(responded('tcA', 'apA', true) as unknown as Record<string, unknown>), state: 'output-available', output: { ran: true } } as unknown as Part;
+    limitQueue = [[before], [{ ...before }]];
+    uiMessagesById.set('msg-1', { id: 'msg-1', role: 'assistant', parts: [responded('tcA', 'apA', true), responded('tcB', 'apB', true)] });
+    const convert = (await import('@/lib/ai/core/message-utils')).convertGlobalAssistantMessageToUIMessage as unknown as ReturnType<typeof vi.fn>;
+    convert.mockImplementationOnce(async () => ({ id: 'msg-1', role: 'assistant', parts: [responded('tcA', 'apA', true), responded('tcB', 'apB', true)] }));
+    convert.mockImplementationOnce(async () => ({ id: 'msg-1', role: 'assistant', parts: [recordedA, responded('tcB', 'apB', true)] }));
+    const result = await dismissPendingToolApprovalsForGlobalConversation({ conversationId: 'conv-1', userId: 'user-1' });
+    expect(result).toEqual({ denied: 1 });
+    expect(claimStale).toHaveBeenCalledTimes(1);
+    expect(claimStale).toHaveBeenCalledWith('apB');
+    const parts = savedParts();
+    expect(parts[0]).toMatchObject({ state: 'output-available', output: { ran: true } });
+    expect(parts[1]).toMatchObject({ state: 'output-denied', approval: { reason: STALE_APPROVAL_REASON } });
+  });
+
+  it('a lost claim on a part still approval-requested re-syncs the part from the decision row, so the card can never be stuck', async () => {
+    claimDecision.mockResolvedValue(null);
+    getDecision.mockResolvedValue({ approved: false, reason: 'no thanks' });
+    limitQueue = [[row([requested('tc1', 'ap1')])], [{ id: 'msg-1' }]];
+    const result = await applyToolApprovalResponsesToGlobalMessage({ ...base, responses: [{ toolCallId: 'tc1', approvalId: 'ap1', approved: true }] });
+    expect(result).toEqual({ kind: 'already_resolved' });
+    expect(getDecision).toHaveBeenCalledWith('ap1');
+    expect(savedParts()[0]).toMatchObject({ state: 'output-denied', approval: { id: 'ap1', approved: false, reason: 'no thanks' } });
+  });
+});
+
+describe('a message held past the lock wait', () => {
+  it('answers busy and claims nothing, so the user can simply answer again', async () => {
+    lockLog.busy = true;
+    const result = await applyToolApprovalResponsesToGlobalMessage({ ...base, responses: [{ toolCallId: 'tc1', approvalId: 'ap1', approved: true }] });
+    expect(result).toEqual({ kind: 'busy' });
+    expect(claimDecision).not.toHaveBeenCalled();
   });
 });

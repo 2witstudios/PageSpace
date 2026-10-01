@@ -9,6 +9,7 @@ import {
   type AssistantMessageAdapter,
   type FetchedAssistantMessage,
 } from '@/lib/ai/core/assistant-message-adapter';
+import { withAssistantMessageLock, AssistantMessageBusyError } from '@/lib/ai/core/assistant-message-lock';
 
 /**
  * Tool-approval RESUME — the server half of the human-in-the-loop gate.
@@ -31,6 +32,11 @@ import {
  * `toolApprovalRepository.claimDecision` first — one row per approval id, insert
  * on conflict do nothing. Two tabs approving, or an approve racing the typed
  * message that denies, resolve to exactly one winner; losers change nothing.
+ *
+ * ONE WRITER AT A TIME. The decision row is per call, but the parts array is
+ * persisted whole. Every writer here (and ask_user's) runs its fetch → claims →
+ * persist under {@link withAssistantMessageLock} for that message, so no writer
+ * can restore a snapshot taken before another writer's result.
  *
  * TRUST BOUNDARY. From the client we keep only `{toolCallId, approvalId,
  * approved, reason}`; the approval id must equal the one the server persisted
@@ -77,7 +83,9 @@ export type ApplyToolApprovalResult =
   /** The row is no longer the newest message — the card is stale; nothing executes. */
   | { kind: 'stale' }
   /** Every response named an id that was already decided (or did not match the row). */
-  | { kind: 'already_resolved' };
+  | { kind: 'already_resolved' }
+  /** Another write to this message held it past the lock wait — nothing was claimed; answer again. */
+  | { kind: 'busy' };
 
 type ApprovalToolPart = {
   type: string;
@@ -135,7 +143,18 @@ async function applyToolApprovalResponses(
   },
 ): Promise<ApplyToolApprovalResult> {
   if (args.responses.length === 0) return { kind: 'already_resolved' };
+  try {
+    return await withAssistantMessageLock(args.messageId, () => applyLocked(adapter, args));
+  } catch (error) {
+    if (error instanceof AssistantMessageBusyError) return { kind: 'busy' };
+    throw error;
+  }
+}
 
+async function applyLocked(
+  adapter: AssistantMessageAdapter,
+  args: Parameters<typeof applyToolApprovalResponses>[1],
+): Promise<ApplyToolApprovalResult> {
   const fetched = await adapter.fetchById(args.messageId);
   if (!fetched) return { kind: 'not_found' };
 
@@ -155,6 +174,7 @@ async function applyToolApprovalResponses(
 
   let parts = fetched.message.parts;
   let changed = false;
+  let resynced = false;
   const approved: ApprovedToolExecution[] = [];
   let denied = 0;
 
@@ -182,7 +202,14 @@ async function applyToolApprovalResponses(
       reason: response.reason ?? null,
       scope,
     });
-    if (!won) continue;
+    if (!won) {
+      const synced = await partFromDecision(part, response.approvalId);
+      if (synced) {
+        parts = replacePart(parts, part.toolCallId, synced);
+        resynced = true;
+      }
+      continue;
+    }
 
     const approval: ToolApproval = {
       id: response.approvalId,
@@ -213,10 +240,27 @@ async function applyToolApprovalResponses(
     changed = true;
   }
 
-  if (!changed) return { kind: 'already_resolved' };
+  if (changed || resynced) await fetched.persist(buildAssistantPersistencePayload(args.messageId, parts));
+  return changed ? { kind: 'applied', approved, denied } : { kind: 'already_resolved' };
+}
 
-  await fetched.persist(buildAssistantPersistencePayload(args.messageId, parts));
-  return { kind: 'applied', approved, denied };
+/**
+ * A claim was lost but the part still reads `approval-requested`: the winner
+ * decided but its persist never landed (it threw, or the process died). Left
+ * alone the card is stuck for good — every answer loses the claim again — so
+ * the part is brought in line with the decision row. `null` when there is no
+ * row to follow (the response simply did not match).
+ */
+async function partFromDecision(part: ApprovalToolPart, approvalId: string): Promise<ApprovalToolPart | null> {
+  const decision = await toolApprovalRepository.getDecision(approvalId);
+  if (!decision) return null;
+  return decision.approved
+    ? { ...withoutOutput(part), state: 'approval-responded', approval: { id: approvalId, approved: true } }
+    : {
+        ...withoutOutput(part),
+        state: 'output-denied',
+        approval: { id: approvalId, approved: false, ...(decision.reason ? { reason: decision.reason } : {}) },
+      };
 }
 
 /**
@@ -234,10 +278,26 @@ async function dismissPendingToolApprovals(
   adapter: AssistantMessageAdapter,
   args: { conversationId: string; userId: string },
 ): Promise<{ denied: number }> {
-  const fetched = await adapter.fetchLastAssistant();
-  if (!fetched) return { denied: 0 };
+  const last = await adapter.fetchLastAssistant();
+  if (!last || !last.message.parts.some(isPendingApprovalPart)) return { denied: 0 };
+  // Re-read under the lock: the first read only finds the row.
+  return withAssistantMessageLock(last.message.id, async () => {
+    const fetched = await adapter.fetchById(last.message.id);
+    return fetched ? dismissLocked(fetched, args) : { denied: 0 };
+  });
+}
 
+const isPendingApprovalPart = (part: { type: string }): boolean =>
+  isToolPart(part) &&
+  (part.state === 'approval-requested' || part.state === 'approval-responded') &&
+  Boolean(part.approval?.id);
+
+async function dismissLocked(
+  fetched: FetchedAssistantMessage,
+  args: { conversationId: string; userId: string },
+): Promise<{ denied: number }> {
   let parts = fetched.message.parts;
+  let resynced = false;
   let denied = 0;
   for (const part of fetched.message.parts) {
     if (!isToolPart(part)) continue;
@@ -262,7 +322,14 @@ async function dismissPendingToolApprovals(
         reason,
         scope: null,
       });
-      if (!won) continue;
+      if (!won) {
+        const synced = await partFromDecision(part, approvalId);
+        if (synced) {
+          parts = replacePart(parts, part.toolCallId, synced);
+          resynced = true;
+        }
+        continue;
+      }
       await toolApprovalRepository.markExecuted(approvalId, 'denied');
     }
     parts = replacePart(parts, part.toolCallId, {
@@ -273,44 +340,47 @@ async function dismissPendingToolApprovals(
     denied += 1;
   }
 
-  if (denied === 0) return { denied: 0 };
-  await fetched.persist(buildAssistantPersistencePayload(fetched.message.id, parts));
+  if (denied > 0 || resynced) await fetched.persist(buildAssistantPersistencePayload(fetched.message.id, parts));
   return { denied };
 }
 
 export type ApprovedToolOutcome = { ok: true; output: unknown } | { ok: false; errorText: string };
 
 /**
- * The turn ran (or failed to run) an approved call: make the result durable on
- * the original row. `recordOutcome` is the arbiter — it wins only over a
- * `running` or `stale` row, so a second report is a no-op, and a part a dismiss
- * closed as stale while the call was still running is REWRITTEN with the real
- * result: the audit never says "did not run" for a write that ran.
+ * The turn ran (or failed to run) an approved call: make the result durable.
+ * The decision row first — `recordOutcome` wins only over a `running` or
+ * `stale` row, so a second report is a no-op — then the part, whatever state
+ * it was left in: `approval-responded`, closed as stale while the call was
+ * still running, or even `approval-requested` if an earlier persist failed.
+ * The audit never says "did not run" for a write that ran, and the model
+ * always sees the result.
  */
 async function recordApprovedToolOutcome(
   adapter: AssistantMessageAdapter,
   args: { messageId: string; toolCallId: string; approvalId: string; outcome: ApprovedToolOutcome },
 ): Promise<{ recorded: boolean; message: FetchedAssistantMessage | null }> {
-  const fetched = await adapter.fetchById(args.messageId);
-  if (!fetched) return { recorded: false, message: null };
+  return withAssistantMessageLock(args.messageId, async () => {
+    if (!(await toolApprovalRepository.recordOutcome(args.approvalId, args.outcome.ok ? 'ok' : 'error'))) {
+      return { recorded: false, message: null };
+    }
+    const fetched = await adapter.fetchById(args.messageId);
+    if (!fetched) return { recorded: true, message: null };
 
-  const part = (fetched.message.parts as Array<{ type: string }>).find(
-    (candidate) => isToolPart(candidate) && candidate.toolCallId === args.toolCallId,
-  ) as ApprovalToolPart | undefined;
-  const staleClosed = part?.state === 'output-denied' && part.approval?.reason === STALE_APPROVAL_REASON;
-  if (!part || (part.state !== 'approval-responded' && !staleClosed)) return { recorded: false, message: fetched };
-  if (!(await toolApprovalRepository.recordOutcome(args.approvalId, args.outcome.ok ? 'ok' : 'error'))) {
-    return { recorded: false, message: fetched };
-  }
+    const part = (fetched.message.parts as Array<{ type: string }>).find(
+      (candidate) => isToolPart(candidate) && candidate.toolCallId === args.toolCallId,
+    ) as ApprovalToolPart | undefined;
+    if (!part || part.state === 'output-available' || part.state === 'output-error') {
+      return { recorded: true, message: fetched };
+    }
 
-  const approval: ToolApproval = { ...(part.approval ?? { id: args.approvalId }), approved: true };
-  if (staleClosed) delete approval.reason;
-  const next: ApprovalToolPart = args.outcome.ok
-    ? { ...withoutOutput(part), state: 'output-available', output: args.outcome.output, approval }
-    : { ...withoutOutput(part), state: 'output-error', errorText: args.outcome.errorText, approval };
-  const parts = replacePart(fetched.message.parts, args.toolCallId, next);
-  await fetched.persist(buildAssistantPersistencePayload(args.messageId, parts));
-  return { recorded: true, message: fetched };
+    const approval: ToolApproval = { id: part.approval?.id ?? args.approvalId, approved: true };
+    const next: ApprovalToolPart = args.outcome.ok
+      ? { ...withoutOutput(part), state: 'output-available', output: args.outcome.output, approval }
+      : { ...withoutOutput(part), state: 'output-error', errorText: args.outcome.errorText, approval };
+    const parts = replacePart(fetched.message.parts, args.toolCallId, next);
+    await fetched.persist(buildAssistantPersistencePayload(args.messageId, parts));
+    return { recorded: true, message: fetched };
+  });
 }
 
 // --- Page (page-agent) conversations -------------------------------------

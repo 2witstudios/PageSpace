@@ -7,6 +7,7 @@ import {
   globalAdapter,
   type AssistantMessageAdapter,
 } from '@/lib/ai/core/assistant-message-adapter';
+import { withAssistantMessageLock } from '@/lib/ai/core/assistant-message-lock';
 
 const ASK_USER_PART_TYPE = `tool-${ASK_USER_TOOL_NAME}`;
 const DISMISSED_REASON = 'User replied in chat instead of selecting an option.';
@@ -92,14 +93,17 @@ async function applyAskUserResults(
 ): Promise<{ merged: boolean }> {
   if (results.length === 0) return { merged: false };
 
-  const fetched = await adapter.fetchById(messageId);
-  if (!fetched) return { merged: false };
+  // Same row the tool-approval writers patch — one writer at a time.
+  return withAssistantMessageLock(messageId, async () => {
+    const fetched = await adapter.fetchById(messageId);
+    if (!fetched) return { merged: false };
 
-  const { parts, changed } = mergeResultsIntoParts(fetched.message.parts, results);
-  if (!changed) return { merged: false };
+    const { parts, changed } = mergeResultsIntoParts(fetched.message.parts, results);
+    if (!changed) return { merged: false };
 
-  await fetched.persist(buildAssistantPersistencePayload(messageId, parts));
-  return { merged: true };
+    await fetched.persist(buildAssistantPersistencePayload(messageId, parts));
+    return { merged: true };
+  });
 }
 
 /**
@@ -109,21 +113,28 @@ async function applyAskUserResults(
  * answered free-form in chat and does not re-ask.
  */
 async function dismissPendingAskUser(adapter: AssistantMessageAdapter): Promise<void> {
-  const fetched = await adapter.fetchLastAssistant();
-  if (!fetched) return;
+  const last = await adapter.fetchLastAssistant();
+  if (!last || pendingAskUserToolCallIds(last.message.parts).length === 0) return;
 
-  const pendingIds = pendingAskUserToolCallIds(fetched.message.parts);
-  if (pendingIds.length === 0) return;
+  // Re-read under the lock: the tool-approval dismiss runs alongside this one
+  // on the same row, and a snapshot from before it would undo its write.
+  await withAssistantMessageLock(last.message.id, async () => {
+    const fetched = await adapter.fetchById(last.message.id);
+    if (!fetched) return;
 
-  const results: ClientAskUserResult[] = pendingIds.map((toolCallId) => ({
-    toolCallId,
-    output: { dismissed: true, reason: DISMISSED_REASON },
-  }));
+    const pendingIds = pendingAskUserToolCallIds(fetched.message.parts);
+    if (pendingIds.length === 0) return;
 
-  const { parts, changed } = mergeResultsIntoParts(fetched.message.parts, results);
-  if (!changed) return;
+    const results: ClientAskUserResult[] = pendingIds.map((toolCallId) => ({
+      toolCallId,
+      output: { dismissed: true, reason: DISMISSED_REASON },
+    }));
 
-  await fetched.persist(buildAssistantPersistencePayload(fetched.message.id, parts));
+    const { parts, changed } = mergeResultsIntoParts(fetched.message.parts, results);
+    if (!changed) return;
+
+    await fetched.persist(buildAssistantPersistencePayload(fetched.message.id, parts));
+  });
 }
 
 // --- Page (page-agent) conversations -------------------------------------

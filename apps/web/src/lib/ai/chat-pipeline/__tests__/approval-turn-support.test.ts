@@ -6,7 +6,7 @@ import { assert } from '@/lib/ai/core/__tests__/riteway';
 vi.mock('@/lib/repositories/tool-approval-repository', () => ({ toolApprovalRepository: {} }));
 vi.mock('@/lib/ai/approvals/run-approved-executions', () => ({ runApprovedToolExecutions: vi.fn() }));
 
-import { headlessApprovalResponseRefusal } from '../approval-turn-support';
+import { approvalResumeRefusal, headlessApprovalResponseRefusal } from '../approval-turn-support';
 
 describe('headlessApprovalResponseRefusal', () => {
   it('lets a browser session answer its approval cards', () => {
@@ -36,6 +36,18 @@ describe('headlessApprovalResponseRefusal', () => {
       });
     },
   );
+});
+
+describe('approvalResumeRefusal', () => {
+  it('maps a lock timeout to a retryable 503 — nothing was claimed', async () => {
+    const refusal = approvalResumeRefusal({ kind: 'busy' });
+    assert({
+      given: 'a busy message',
+      should: 'answer 503 approval_busy',
+      actual: { status: refusal?.status, code: (await refusal?.json())?.code },
+      expected: { status: 503, code: 'approval_busy' },
+    });
+  });
 });
 
 describe('page chat (which admits MCP tokens) refuses headless approval responses before applying them', () => {

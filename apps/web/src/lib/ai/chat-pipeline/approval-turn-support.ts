@@ -44,6 +44,11 @@ export function approvalResumeRefusal(applied: ApplyToolApprovalResult): NextRes
         { error: 'This approval is no longer current — the conversation has moved on.', code: 'approval_stale' },
         { status: 409 },
       );
+    case 'busy':
+      return NextResponse.json(
+        { error: 'This conversation is busy saving another change — please answer again.', code: 'approval_busy' },
+        { status: 503 },
+      );
     case 'already_resolved':
       return NextResponse.json({ error: 'This approval was already answered.', code: 'approval_already_resolved' }, { status: 409 });
     case 'applied':

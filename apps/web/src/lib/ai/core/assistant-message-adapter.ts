@@ -26,16 +26,11 @@ import type { AssistantPersistencePayload } from '@/lib/ai/core/persistAssistant
  * global backend, its non-null userId) — so the shared orchestration below
  * never needs to know the row's shape or carry state between fetch and save.
  *
- * KNOWN LIMITATION: fetch → merge → persist is an unlocked read-modify-write,
- * not a transaction. Two requests racing on the SAME pending toolCallId (a
- * double-submit, or answering in one tab while a dismiss-triggering message
- * arrives from another) can interleave and the later write wins, silently
- * dropping the earlier one. Not fixed here: doing so correctly requires
- * threading a transaction/row-lock through the message repository's save
- * methods (apps/web/src/lib/repositories/message-repository.ts), which are
- * shared by many unrelated AI features — broader blast radius than this
- * narrow, low-probability, self-healing race (the user can just answer
- * again) justifies in isolation.
+ * fetch → merge → persist rewrites the WHOLE parts array, so it is only safe
+ * under `withAssistantMessageLock` (assistant-message-lock.ts): every writer —
+ * ask_user apply/dismiss and tool-approval apply/dismiss/record — takes that
+ * per-message lock and re-fetches inside it, so no writer can restore a
+ * snapshot taken before another writer's result.
  */
 export interface FetchedAssistantMessage {
   message: UIMessage;

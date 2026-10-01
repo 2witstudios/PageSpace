@@ -42,6 +42,8 @@ vi.mock('@pagespace/db/schema/tool-approvals', () => ({
   aiToolApprovalDecisions: {
     approvalId: 'decisions.approvalId',
     outcome: 'decisions.outcome',
+    approved: 'decisions.approved',
+    reason: 'decisions.reason',
     executedAt: 'decisions.executedAt',
   },
 }));
@@ -215,5 +217,21 @@ describe('outcome claims (the arbiter of what happened to an approved call)', ()
     });
     mockUpdateChain.returning.mockResolvedValue([]);
     expect(await toolApprovalRepository.recordOutcome('ap1', 'error')).toBe(false);
+  });
+});
+
+describe('getDecision', () => {
+  it('given a recorded decision, should read approved + reason for that approval id only', async () => {
+    const limit = vi.fn().mockResolvedValue([{ approved: false, reason: 'no thanks' }]);
+    mockSelectChain.where.mockReturnValueOnce({ limit });
+    const decision = await toolApprovalRepository.getDecision('ap1');
+    expect(decision).toEqual({ approved: false, reason: 'no thanks' });
+    expect(mockSelectChain.where).toHaveBeenCalledWith({ kind: 'eq', field: 'decisions.approvalId', value: 'ap1' });
+    expect(limit).toHaveBeenCalledWith(1);
+  });
+
+  it('given no decision row, should return null', async () => {
+    mockSelectChain.where.mockReturnValueOnce({ limit: vi.fn().mockResolvedValue([]) });
+    expect(await toolApprovalRepository.getDecision('ap1')).toBeNull();
   });
 });
