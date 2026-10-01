@@ -85,6 +85,6 @@ export async function executeApprovedCallsAndReassemble<T extends AssembledModel
     record: args.record,
     logger: args.logger,
   });
-  args.logger.info('approved tool calls executed', { ...args.logContext, ran: outcome.ran, failed: outcome.failed, skipped: outcome.skipped });
+  args.logger.info('approved tool calls executed', { ...args.logContext, ran: outcome.ran, failed: outcome.failed, skipped: outcome.skipped, aborted: outcome.aborted });
   return args.assemble(await args.loadHistory());
 }

@@ -16,6 +16,10 @@
  * Starting is itself a claim (`claimStart`): a call a dismiss already closed as
  * stale — or that another writer decided — is SKIPPED, not run and not recorded.
  * That claim is what makes "did not run" and "ran" mutually exclusive.
+ *
+ * An aborted turn (takeover, stop) claims nothing more: the remaining calls are
+ * left unclaimed for the dismiss to close as stale, never started behind the
+ * back of whoever took over.
  */
 
 import type { ToolSet } from 'ai';
@@ -39,6 +43,8 @@ export interface RunApprovedExecutionsResult {
   failed: number;
   /** Lost the start claim: closed as stale or otherwise decided before the turn got here. */
   skipped: number;
+  /** Never claimed: the turn was aborted first, so the dismiss closes them as stale. */
+  aborted: number;
 }
 
 const errorText = (error: unknown): string =>
@@ -48,10 +54,18 @@ export async function runApprovedToolExecutions(args: RunApprovedExecutionsArgs)
   let ran = 0;
   let failed = 0;
   let skipped = 0;
+  let aborted = 0;
 
   // Sequential, in approval order: two approved writes may depend on each other
   // (create then edit), and the model issued them in this order.
-  for (const execution of args.executions) {
+  for (const [index, execution] of args.executions.entries()) {
+    if (args.toolOptions.abortSignal?.aborted) {
+      aborted = args.executions.length - index;
+      args.logger?.warn('approved tool executions left unclaimed: turn aborted', {
+        unclaimed: args.executions.slice(index).map((e) => e.toolCallId),
+      });
+      break;
+    }
     if (!(await args.claimStart(execution))) {
       skipped += 1;
       args.logger?.warn('approved tool execution skipped: start claim lost (closed as stale or already decided)', {
@@ -101,5 +115,5 @@ export async function runApprovedToolExecutions(args: RunApprovedExecutionsArgs)
     await args.record(execution, outcome);
   }
 
-  return { ran, failed, skipped };
+  return { ran, failed, skipped, aborted };
 }

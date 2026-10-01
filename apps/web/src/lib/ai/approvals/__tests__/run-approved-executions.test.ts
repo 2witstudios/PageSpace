@@ -35,7 +35,7 @@ describe('runApprovedToolExecutions', () => {
       trash_page: { description: 'd', inputSchema: z.object({ pageId: z.string() }), execute },
     });
     const result = await run([exec()]);
-    expect(result).toEqual({ ran: 1, failed: 0, skipped: 0 });
+    expect(result).toEqual({ ran: 1, failed: 0, skipped: 0, aborted: 0 });
     expect(execute).toHaveBeenCalledWith(
       { pageId: 'p1' },
       expect.objectContaining({ toolCallId: 'tc1', experimental_context: ctx, messages: [] }),
@@ -45,7 +45,7 @@ describe('runApprovedToolExecutions', () => {
 
   it('records output-error when the tool is no longer in the set (read-only flipped between pause and resume)', async () => {
     const { run, recorded } = harness({});
-    expect(await run([exec()])).toEqual({ ran: 0, failed: 1, skipped: 0 });
+    expect(await run([exec()])).toEqual({ ran: 0, failed: 1, skipped: 0, aborted: 0 });
     expect(recorded[0][1]).toEqual({ ok: false, errorText: expect.stringContaining('no longer available') });
   });
 
@@ -54,7 +54,7 @@ describe('runApprovedToolExecutions', () => {
     const { run, recorded } = harness({
       trash_page: { description: 'd', inputSchema: z.object({ pageId: z.string().min(5) }), execute },
     });
-    expect(await run([exec()])).toEqual({ ran: 0, failed: 1, skipped: 0 });
+    expect(await run([exec()])).toEqual({ ran: 0, failed: 1, skipped: 0, aborted: 0 });
     expect(execute).not.toHaveBeenCalled();
     expect(recorded[0][1]).toEqual({ ok: false, errorText: expect.stringContaining('no longer validates') });
   });
@@ -71,7 +71,7 @@ describe('runApprovedToolExecutions', () => {
       rename_page: { description: 'd', inputSchema: z.object({}), execute: async () => 'ok' },
     });
     const result = await run([exec(), exec({ approvalId: 'ap2', toolCallId: 'tc2', toolName: 'rename_page', input: {} })]);
-    expect(result).toEqual({ ran: 1, failed: 1, skipped: 0 });
+    expect(result).toEqual({ ran: 1, failed: 1, skipped: 0, aborted: 0 });
     expect(recorded.map(([, o]) => o)).toEqual([{ ok: false, errorText: 'boom' }, { ok: true, output: 'ok' }]);
   });
 
@@ -97,8 +97,48 @@ describe('runApprovedToolExecutions', () => {
       async (e) => e.approvalId !== 'ap-lost',
     );
     const result = await run([exec({ approvalId: 'ap-lost', toolCallId: 'tc-lost' }), exec()]);
-    expect(result).toEqual({ ran: 1, failed: 0, skipped: 1 });
+    expect(result).toEqual({ ran: 1, failed: 0, skipped: 1, aborted: 0 });
     expect(execute).toHaveBeenCalledTimes(1);
     expect(recorded.map(([e]) => e.approvalId)).toEqual(['ap1']);
+  });
+
+  it('stops claiming once the turn is aborted (takeover/stop): later calls are left unclaimed for the dismiss to close as stale', async () => {
+    const controller = new AbortController();
+    const claimStart = vi.fn(async () => true);
+    const recorded: ApprovedToolExecution[] = [];
+    const execute = vi.fn(async () => {
+      controller.abort();
+      return 'ok';
+    });
+    const result = await runApprovedToolExecutions({
+      executions: [exec(), exec({ approvalId: 'ap2', toolCallId: 'tc2' }), exec({ approvalId: 'ap3', toolCallId: 'tc3' })],
+      tools: { trash_page: { description: 'd', inputSchema: z.object({ pageId: z.string() }), execute } },
+      claimStart,
+      toolOptions: { experimental_context: {}, abortSignal: controller.signal },
+      record: async (e) => {
+        recorded.push(e);
+      },
+    });
+    expect(result).toEqual({ ran: 1, failed: 0, skipped: 0, aborted: 2 });
+    expect(claimStart).toHaveBeenCalledTimes(1);
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(recorded.map((e) => e.approvalId)).toEqual(['ap1']);
+  });
+
+  it('claims nothing when the signal is already aborted', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const claimStart = vi.fn(async () => true);
+    const execute = vi.fn();
+    const result = await runApprovedToolExecutions({
+      executions: [exec()],
+      tools: { trash_page: { description: 'd', inputSchema: z.object({ pageId: z.string() }), execute } },
+      claimStart,
+      toolOptions: { experimental_context: {}, abortSignal: controller.signal },
+      record: async () => undefined,
+    });
+    expect(result).toEqual({ ran: 0, failed: 0, skipped: 0, aborted: 1 });
+    expect(claimStart).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
   });
 });
