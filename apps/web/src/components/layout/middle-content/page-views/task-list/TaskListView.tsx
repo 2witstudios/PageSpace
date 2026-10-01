@@ -13,6 +13,7 @@ import { type Editor } from '@tiptap/react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import useSWRInfinite from 'swr/infinite';
+import { useDebounce } from '@/hooks/useDebounce';
 import { mutate as globalMutate } from 'swr';
 import { formatDistanceToNow } from 'date-fns';
 import { useAuth } from '@/hooks/useAuth';
@@ -399,6 +400,8 @@ function TaskListView({ page }: TaskListViewProps) {
 
   const [filter, setFilter] = useTaskListPageFilter(page.id);
   const [search, setSearch] = useState('');
+  // What the API sees: typing shouldn't refetch per keystroke. Cmd+F stays client-side.
+  const debouncedSearch = useDebounce(search, 300);
   const [newTaskTitle, setNewTaskTitle] = useState('');
   // Two search inputs exist at once — the narrow toolbar's and the wide one —
   // with CSS hiding whichever does not apply. Cmd+F must land on the one the
@@ -494,9 +497,11 @@ function TaskListView({ page }: TaskListViewProps) {
   const tasksKeyPrefix = `/api/pages/${page.id}/tasks`;
   const getTasksPageKey = (pageIndex: number, previousPageData: TaskListData | null) => {
     if (previousPageData && !previousPageData.hasMore) return null;
-    // Active / Completed filter in the query so the page holds matching tasks: filtering
-    // client-side let completed rows fill the page and hide active ones behind Load More.
-    const groupParam = filter === 'all' ? '' : `&statusGroup=${filter}`;
+    // Active / Completed filter and toolbar search go in the query so the page holds
+    // matching tasks: filtering client-side let non-matching rows fill the page and hide
+    // matches behind Load More.
+    const groupParam = (filter === 'all' ? '' : `&statusGroup=${filter}`)
+      + (debouncedSearch ? `&search=${encodeURIComponent(debouncedSearch)}` : '');
     if (viewMode === 'kanban') {
       // Column-aware paging: limit/offset count per status, not across the whole list.
       return `${tasksKeyPrefix}?perStatus=true&limit=${KANBAN_COLUMN_PAGE_SIZE}&offset=${pageIndex * KANBAN_COLUMN_PAGE_SIZE}${groupParam}`;
@@ -679,7 +684,7 @@ function TaskListView({ page }: TaskListViewProps) {
   // so a previously-expanded load doesn't linger in a state inconsistent with a
   // fresh filter (cached pages are reused instantly if the user re-expands).
   //
-  // Deliberately keyed on `search` (the toolbar filter box), not `activeSearch`: the
+  // Deliberately keyed on `debouncedSearch` (the toolbar filter box), not `activeSearch`: the
   // in-page Cmd+F Find bar (`findQuery`) fires this on every keystroke while typing,
   // which would truncate `data.tasks` back to page 1 mid-search — silently hiding
   // matches on already-loaded pages 2+ and under-reporting the match count to
@@ -699,7 +704,7 @@ function TaskListView({ page }: TaskListViewProps) {
     // would be worse than the inconsistency. Find's own inability to see nested
     // rows is the filed follow-up.
     setExpandedPaths(EMPTY_EXPANDED);
-  }, [filter, search, viewMode, setSize]);
+  }, [filter, debouncedSearch, viewMode, setSize]);
 
   // Filter tasks
   const filteredTasks = useMemo(() => data?.tasks.filter(task => {

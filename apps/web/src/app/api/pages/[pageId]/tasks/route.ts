@@ -175,6 +175,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   // frontend's Load More) without a separate COUNT(*) query. In perStatus mode the
   // window is per column instead — rank within status — so `hasMore` means "some
   // column has rows beyond this window", which is what the board's Load More needs.
+  // A page is then up to limit × (number of statuses) rows; limit is capped, and a
+  // list's status vocabulary is small.
   let boundedTaskIds: string[];
   let hasMore: boolean;
   if (perStatus) {
@@ -187,12 +189,21 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
       .innerJoin(pages, eq(pages.id, taskItems.pageId))
       .where(filterConditions)
       .as('ranked');
-    const rankedRows = await db
-      .select({ id: ranked.id, rank: ranked.rank })
-      .from(ranked)
-      .where(and(gt(ranked.rank, offset), lte(ranked.rank, offset + limit + 1)));
-    hasMore = rankedRows.some(r => r.rank > offset + limit);
-    boundedTaskIds = rankedRows.filter(r => r.rank <= offset + limit).map(r => r.id);
+    const pageEnd = offset + limit;
+    const [rankedRows, beyondPage] = await Promise.all([
+      db
+        .select({ id: ranked.id })
+        .from(ranked)
+        .where(and(gt(ranked.rank, offset), lte(ranked.rank, pageEnd))),
+      // One row proves some column continues past this page — no probe row per column.
+      db
+        .select({ id: ranked.id })
+        .from(ranked)
+        .where(gt(ranked.rank, pageEnd))
+        .limit(1),
+    ]);
+    hasMore = beyondPage.length > 0;
+    boundedTaskIds = rankedRows.map(r => r.id);
   } else {
     const orderedIdRows = await db
       .select({ id: taskItems.id })
