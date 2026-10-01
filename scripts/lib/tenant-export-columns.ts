@@ -369,9 +369,17 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
  */
 export const TENANT_EXPORT_EXCLUDED_TABLES: Readonly<Record<string, string>> = {
   /**
-   * Tool approvals (human-in-the-loop gate). The MODE travels — it is a column
-   * on `pages` (carried above) and on the user's assistant config — but the
-   * consent state does not.
+   * Tool approvals (human-in-the-loop gate). A page agent's MODE travels — it
+   * is a column on `pages`, which the bundle carries. The global assistant's
+   * mode does not: `global_assistant_config` is not in `TABLE_IMPORT_ORDER`, so
+   * a migrated user's global assistant starts at the default, "ask". The
+   * consent state below does not travel either.
+   *
+   * `ai_tool_approval_grants` is a DELIBERATE EXCEPTION to this region's rule
+   * above: its rows describe the user (their standing consents), not the
+   * source instance, and a user would notice their absence as extra prompts.
+   * It is excluded anyway because consent is not portable between instances
+   * and the cost of dropping it is only ever more prompts, never fewer.
    */
   ai_tool_approval_grants:
     'The subject\'s standing "allow this tool" consents on the SOURCE deployment. Consent given to one instance is not consent given to another: a migrated tenant starts with no grants and asks once more, which is the safe direction (more prompts, never fewer). Conversation-scoped rows also name conversations by id, and re-asking is cheaper than proving every id survived the move.',
