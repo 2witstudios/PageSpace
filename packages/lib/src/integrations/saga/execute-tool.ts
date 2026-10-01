@@ -20,6 +20,8 @@ import { executeHttpRequest, type ExecuteResult } from '../execution/http-execut
 import { decryptCredentials } from '../credentials/encrypt-credentials';
 import { checkIntegrationRateLimit } from '../rate-limit/integration-rate-limiter';
 import { calculateEffectiveRateLimit } from '../rate-limit/calculate-limit';
+import type { OrgPolicies } from '../../organizations/policies-core';
+import { integrationUsable } from '../../organizations/org-action-decisions';
 
 /**
  * Dependencies that can be injected for testing.
@@ -27,6 +29,8 @@ import { calculateEffectiveRateLimit } from '../rate-limit/calculate-limit';
 export interface ExecuteToolDependencies {
   loadConnection: (connectionId: string) => Promise<ConnectionWithProvider | null>;
   logAudit: (entry: AuditEntry) => Promise<void>;
+  /** POL-11: the org policies of a drive, read live at every call; null when the drive has no org. Required, never defaulted. */
+  getDriveOrgPolicies: (driveId: string) => Promise<OrgPolicies | null>;
 }
 
 interface ConnectionWithProvider {
@@ -34,6 +38,9 @@ interface ConnectionWithProvider {
   providerId: string;
   name: string;
   status: string;
+  driveId?: string | null;
+  /** POL-11: set when the org's integration allowlist suspended this connection. */
+  suspendedByPolicy?: string | null;
   credentials: unknown;
   baseUrlOverride?: string | null;
   configOverrides?: { rateLimit?: { requestsPerMinute: number } } | null;
@@ -102,6 +109,30 @@ export const executeToolSaga = async (
       return {
         success: false,
         error: `Integration is ${connection.status}`,
+        errorType: 'validation',
+      };
+    }
+
+    // POL-11: the org's service allowlist, judged where the call is about to happen. The drive is the one the
+    // call runs IN (a personal connection used inside an org drive is that org's business); a call with no drive
+    // context falls back to the connection's own drive, and a wholly personal call is unrestricted.
+    const policyDriveId = request.driveId ?? connection.driveId ?? null;
+    const orgPolicies = policyDriveId ? await deps.getDriveOrgPolicies(policyDriveId) : null;
+    const integrationRefusal = integrationUsable(orgPolicies, connection.provider?.slug ?? '', connection);
+    if (!integrationRefusal.ok) {
+      await deps.logAudit({
+        connectionId: request.connectionId,
+        toolName: request.toolName,
+        driveId: request.driveId,
+        success: false,
+        errorType: 'INTEGRATION_ORG_POLICY',
+        errorMessage: integrationRefusal.message,
+        durationMs: Date.now() - startTime,
+      });
+
+      return {
+        success: false,
+        error: integrationRefusal.message,
         errorType: 'validation',
       };
     }

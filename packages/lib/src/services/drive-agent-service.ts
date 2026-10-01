@@ -19,6 +19,8 @@ import { customRoleBelongsToDrive, fetchCustomRolePermissions, holdsAcceptedGues
 import type { CustomRolePerms } from '../permissions/membership-queries';
 import { isHomeDrive, homeDriveActionError } from './drive-guards';
 import { isDriveLead } from '../permissions/drive-relationship';
+import { getDrivePolicies } from '../organizations/policy-reader';
+import { crossDriveAgentsDecision } from '../organizations/org-action-decisions';
 
 export type AgentDriveRole = 'MEMBER' | 'ADMIN';
 
@@ -105,7 +107,7 @@ export async function addAgentToDrive(input: AddAgentToDriveInput): Promise<AddA
   const { actingUserId, agentPageId, driveId, requestedRole, requestedCustomRoleId, includeContext } = input;
 
   const [agentPage] = await db
-    .select({ id: pages.id, type: pages.type })
+    .select({ id: pages.id, type: pages.type, driveId: pages.driveId })
     .from(pages)
     .where(eq(pages.id, agentPageId))
     .limit(1);
@@ -137,6 +139,12 @@ export async function addAgentToDrive(input: AddAgentToDriveInput): Promise<AddA
   // (drive-side invite and agent-side settings) share the guard.
   if (isHomeDrive({ kind: granter.driveKind })) {
     return { ok: false, status: 403, error: homeDriveActionError({ kind: granter.driveKind }, 'invite')! };
+  }
+
+  // POL-9: an agent from another drive needs the target drive's org to allow cross-drive agents.
+  if (agentPage.driveId !== driveId) {
+    const refusal = crossDriveAgentsDecision((await getDrivePolicies(driveId))?.policies ?? null);
+    if (!refusal.ok) return { ok: false, status: 403, error: refusal.message };
   }
 
   let effectiveRole: AgentDriveRole;

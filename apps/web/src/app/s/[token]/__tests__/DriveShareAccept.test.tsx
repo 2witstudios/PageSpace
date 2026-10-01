@@ -125,4 +125,17 @@ describe('DriveShareAccept', () => {
     await waitFor(() => expect(screen.getByRole('link', { name: /go to dashboard/i })).toBeInTheDocument());
     expect(pushMock).not.toHaveBeenCalled();
   });
+  it('POL-2 (partial) Given the org holds guests for approval (202 pending_approval), should say so and NOT navigate anywhere', async () => {
+    vi.mocked(useAuth).mockReturnValue({ isAuthenticated: true, isLoading: false } as ReturnType<typeof useAuth>);
+    vi.mocked(useCSRFToken).mockReturnValue({ ...csrfBase, csrfToken: 'csrf' });
+    vi.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 202,
+      json: async () => ({ status: 'pending_approval', message: 'Waiting for an Owner or Admin to approve.' }),
+    } as Response);
+
+    render(<DriveShareAccept token="tok" info={INFO} />);
+    await waitFor(() => expect(screen.getByText(/waiting for an owner or admin to approve/i)).toBeInTheDocument());
+    expect(pushMock).not.toHaveBeenCalled();
+  });
 });

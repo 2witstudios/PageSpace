@@ -29,6 +29,8 @@ export interface ConnectionWithProviderForResolution {
   id: string;
   name: string;
   status: string;
+  /** POL-11: set while the org's integration allowlist suspends this connection; its tools are not offered. */
+  suspendedByPolicy?: string | null;
   providerId: string;
   visibility: 'private' | 'owned_drives' | 'all_drives' | null;
   provider: {
@@ -56,6 +58,7 @@ export async function resolveAgentIntegrations(
   return grants.filter((grant) => {
     if (!grant.connection) return false;
     if (grant.connection.status !== 'active') return false;
+    if (grant.connection.suspendedByPolicy) return false;
     if (!grant.connection.provider?.config) return false;
     return true;
   });
@@ -95,6 +98,7 @@ export async function resolveGlobalAssistantIntegrations(
 
   for (const conn of userConnections) {
     if (conn.status !== 'active') continue;
+    if (conn.suspendedByPolicy) continue;
     if (!conn.provider?.config) continue;
 
     // Check visibility in current drive context
@@ -127,6 +131,7 @@ export async function resolveGlobalAssistantIntegrations(
 
     for (const conn of driveConnections) {
       if (conn.status !== 'active') continue;
+      if (conn.suspendedByPolicy) continue;
       if (!conn.provider?.config) continue;
 
       // Apply drive-specific integration filter

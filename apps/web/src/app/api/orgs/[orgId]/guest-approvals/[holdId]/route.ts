@@ -1,0 +1,119 @@
+import { NextResponse } from 'next/server';
+import { z } from 'zod/v4';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { recordOrgAuditEvent } from '@pagespace/lib/audit/org-audit';
+import { getOrgPolicies } from '@pagespace/lib/organizations/policy-reader';
+import { GUESTS_OFF_MESSAGE } from '@pagespace/lib/organizations/sharing-decisions';
+import { claimPendingGuestApproval, requestGuestApproval, type ClaimedGuestApproval } from '@pagespace/lib/permissions/guest-holds';
+import { completeApprovedLinkAdmission } from '@pagespace/lib/permissions/share-link-service';
+import { emitAcceptanceSideEffects, type AcceptedInviteData } from '@pagespace/lib/services/invites';
+import { buildAcceptancePorts } from '@/lib/auth/invite-acceptance-adapters';
+import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
+import { handleEmailPath, handleUserIdPath } from '@/lib/drive-invites/invite-handlers';
+import { authorizeOrgRequest, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
+
+type Context = { params: Promise<{ orgId: string; holdId: string }> };
+
+const decisionSchema = z.object({ decision: z.enum(['approve', 'decline']) });
+
+const LINK_REFUSALS = {
+  NOT_A_LINK_REQUEST: 'This request cannot be approved.',
+  LINK_GONE: 'The share link this person used no longer exists or has been turned off, so there is nothing to approve.',
+  POLICY_OFF: GUESTS_OFF_MESSAGE,
+} as const;
+
+/** Put a request back on the queue when approving it failed for a reason that is not the approver's. */
+async function requeue(claim: ClaimedGuestApproval): Promise<void> {
+  await requestGuestApproval({
+    orgId: claim.orgId,
+    driveId: claim.driveId,
+    ...(claim.userId ? { userId: claim.userId } : { email: claim.email ?? undefined }),
+    origin: claim.origin,
+    request: claim.request,
+    requestedBy: claim.requestedBy,
+  });
+}
+
+const audit = (claim: ClaimedGuestApproval, eventType: 'org.guest.approved' | 'org.guest.declined', actorId: string) =>
+  recordOrgAuditEvent({
+    orgId: claim.orgId,
+    eventType,
+    actorId,
+    resourceType: 'drive',
+    resourceId: claim.driveId,
+    driveId: claim.driveId,
+    details: { holdId: claim.holdId, origin: claim.origin, target: claim.userId ? 'user' : 'email', ...(claim.userId ? { targetUserId: claim.userId } : {}) },
+  }).catch((error) => loggers.api.error('Guest decision made but its audit event was not recorded', error as Error));
+
+/**
+ * POST /api/orgs/[orgId]/guest-approvals/[holdId] (Spec POL-2) — an Owner or Admin approves or declines a queued
+ * guest. Approving admits them through the SAME code the original action would have run (the invite handlers, or the
+ * link redemption), so an approved guest gets exactly what an immediate one would. A request of another org, one
+ * already decided, or one that does not exist all answer the same 404.
+ */
+export async function POST(request: Request, context: Context) {
+  const { orgId, holdId } = await context.params;
+  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_WRITE_AUTH);
+  if (!gate.ok) return gate.response;
+  try {
+    const parsed = decisionSchema.safeParse(await request.json().catch(() => null));
+    if (!parsed.success) return NextResponse.json({ error: 'Invalid request body', issues: parsed.error.issues }, { status: 400 });
+
+    // Approving while guests are OFF would admit someone the policy forbids: refuse before touching the queue.
+    if (parsed.data.decision === 'approve' && (await getOrgPolicies(orgId)).guests === 'off') {
+      return NextResponse.json({ error: GUESTS_OFF_MESSAGE, code: 'org_policy', policy: 'guests' }, { status: 403 });
+    }
+
+    const claim = await claimPendingGuestApproval({ orgId, holdId });
+    if (!claim) return NextResponse.json({ error: 'Request not found' }, { status: 404 });
+
+    if (parsed.data.decision === 'decline') {
+      await audit(claim, 'org.guest.declined', gate.userId);
+      return NextResponse.json({ decided: 'declined' });
+    }
+
+    if (claim.origin === 'invite') {
+      const drive = await driveInviteRepository.findDriveById(claim.driveId);
+      if (!drive) return NextResponse.json({ error: 'Request not found' }, { status: 404 });
+      const req = claim.request;
+      const inviterUserId = req.invitedBy ?? gate.userId;
+      const role = req.role ?? 'MEMBER';
+      const permissions = req.permissions ?? [];
+      const summary = { id: drive.id, name: drive.name, ownerId: drive.ownerId };
+      const response = claim.userId
+        ? await handleUserIdPath({ request, body: { userId: claim.userId, role, customRoleId: req.customRoleId ?? null, permissions }, drive: summary, driveId: claim.driveId, inviterUserId, skipGuestPolicy: true })
+        : await handleEmailPath({ request, body: { email: claim.email ?? '', role, customRoleId: req.customRoleId ?? null, permissions, expiryDays: req.expiryDays ?? null }, drive: summary, driveId: claim.driveId, inviterUserId, skipGuestPolicy: true });
+      if (!response.ok) {
+        // The invite could not be carried out (an address that has since been invited, a suspended account, ...).
+        // The request goes back on the queue rather than vanishing, and the approver is told why.
+        await requeue(claim);
+        return response;
+      }
+      await audit(claim, 'org.guest.approved', gate.userId);
+      return NextResponse.json({ decided: 'approved', result: await response.json().catch(() => null) });
+    }
+
+    const admitted = await completeApprovedLinkAdmission(claim);
+    if (!admitted.ok) {
+      return NextResponse.json({ error: LINK_REFUSALS[admitted.error], reason: admitted.error }, { status: 409 });
+    }
+    if (admitted.memberId && admitted.role !== 'GUEST') {
+      const ports = buildAcceptancePorts(request);
+      const data: AcceptedInviteData = {
+        memberId: admitted.memberId,
+        driveId: admitted.driveId,
+        driveName: admitted.driveName,
+        role: admitted.role,
+        customRoleId: admitted.customRoleId,
+        invitedUserId: admitted.userId,
+        inviterUserId: admitted.createdBy ?? gate.userId,
+      };
+      await emitAcceptanceSideEffects(ports, data, 0).catch((error) => loggers.api.error('Guest approved; side effects failed', error as Error));
+    }
+    await audit(claim, 'org.guest.approved', gate.userId);
+    return NextResponse.json({ decided: 'approved', driveId: admitted.driveId });
+  } catch (error) {
+    loggers.api.error('Error deciding a guest approval:', error as Error);
+    return NextResponse.json({ error: 'Failed to decide the request' }, { status: 500 });
+  }
+}

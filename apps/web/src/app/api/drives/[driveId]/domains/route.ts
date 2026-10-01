@@ -20,6 +20,8 @@ import { reconcileCustomDomainCert } from '@/lib/canvas/reconcile-cert';
 import { mirrorDriveToCustomHost } from '@/lib/canvas/custom-domain-mirror';
 import { renderDomainNotFoundOverride } from '@/lib/canvas/publish-page';
 import { CUSTOM_DOMAINS_UNAVAILABLE_MESSAGE } from '@/lib/subscription/plan-refusal-copy';
+import { getDrivePolicies } from '@pagespace/lib/organizations/policy-reader';
+import { customDomainsDecision, publishingDecision } from '@pagespace/lib/organizations/sharing-decisions';
 
 /** Statuses whose cert is still advancing — worth a lazy reconcile on read. */
 const CERT_NON_TERMINAL = new Set(['verified', 'provisioning']);
@@ -142,6 +144,16 @@ export async function POST(
     // flow and the subscription-tier cap entirely — it isn't a customer-facing
     // custom domain slot.
     const wantsPlatformDomain = isAdmin && PLATFORM_OWNED_DOMAINS.includes(hostname);
+
+    // POL-4: an org that turned publishing off takes no domain (the domain would serve nothing it may publish),
+    // and one that turned custom domains off takes no domain of its own. A platform-owned alias follows
+    // publishing only. Read now; a personal drive has no org policies.
+    const orgPolicies = (await getDrivePolicies(driveId))?.policies ?? null;
+    const publishing = publishingDecision(orgPolicies);
+    const domainDecision = publishing.ok && !wantsPlatformDomain ? customDomainsDecision(orgPolicies) : publishing;
+    if (!domainDecision.ok) {
+      return NextResponse.json({ error: domainDecision.message, code: domainDecision.code, policy: domainDecision.policy }, { status: domainDecision.status });
+    }
 
     const validation = validateCustomDomain(hostname, { allowPlatformDomain: wantsPlatformDomain });
     if (!validation.valid) {

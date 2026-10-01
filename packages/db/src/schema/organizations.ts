@@ -27,6 +27,16 @@ export const ORG_ROLES = ['OWNER', 'ADMIN', 'MEMBER'] as const;
 export const orgRole = pgEnum('OrgRole', ORG_ROLES);
 export type OrgRole = (typeof ORG_ROLES)[number];
 
+/**
+ * The rule that suspended a row (Spec POL-1): a NULL `suspendedByPolicy` column means the row is in force.
+ * Suspension is a marker beside the row's own state, never a change to it (no delete, no isActive flip), so
+ * turning the policy back on clears exactly what it suspended and nothing else. The columns live on
+ * drive_share_links, page_share_links, published_pages, custom_domains, integration_connections and
+ * drive_members; the pure decisions are in lib organizations/policies-core.ts.
+ */
+export const SUSPENSION_KINDS = ['publicShareLinks', 'publishedPages', 'customDomains', 'guests', 'integrations'] as const;
+export type SuspensionKind = (typeof SUSPENSION_KINDS)[number];
+
 export const organizations = pgTable('organizations', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   name: text('name').notNull(),

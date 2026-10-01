@@ -149,6 +149,10 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
       'id', 'driveId', 'userId', 'role', 'customRoleId', 'source', 'invitedBy',
       'invitedAt', 'acceptedAt', 'lastAccessedAt',
     ],
+    excluded: {
+      suspendedByPolicy:
+        "DEPRECATED and unused: milestone 1 marked guest rows here, but guests are now PARKED in org_guest_holds (a marker cannot remove page access). A parked guest is not in drive_members at all, so a guest the org suspended does not travel and does not gain access by moving. See docs/security/org-policy-suspension.md.",
+    },
   },
 
   pages: {

@@ -18,6 +18,8 @@ import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
+import { getDrivePolicies } from '@pagespace/lib/organizations/policy-reader';
+import { modelDecision } from '@pagespace/lib/organizations/org-action-decisions';
 import { getManagedProviderKey } from './ai-utils';
 import { ONPREM_ALLOWED_PROVIDERS, resolveProviderModel } from './ai-providers-config';
 
@@ -39,6 +41,13 @@ export interface UserProviderRow {
 export interface ProviderFactoryOptions {
   /** Pre-loaded user row. When provided the factory skips its own DB select. */
   user?: UserProviderRow | null;
+  /**
+   * The drive this call runs in (POL-8). When it belongs to an org, that org's model and provider allowlists
+   * are enforced here, at the one place every provider is constructed: the call is REFUSED, never
+   * quietly swapped for a default. Omit it only where there is no drive (the global assistant without a
+   * drive, background services for one person), which no org policy restricts.
+   */
+  driveId?: string | null;
 }
 
 export interface ProviderResult {
@@ -50,6 +59,9 @@ export interface ProviderResult {
 export interface ProviderError {
   error: string;
   status: number;
+  /** Set when an org policy refused the call (POL-8), with the policy's key. */
+  code?: 'org_policy';
+  policy?: string;
 }
 
 function notConfigured(provider: string): ProviderError {
@@ -83,6 +95,18 @@ export async function createAIProvider(
   );
   const currentProvider = resolved.provider;
   const currentModel = resolved.model;
+
+  // POL-8: the org's model and provider allowlists, read now (no cache). BOTH the pair that will run and the pair
+  // that was asked for must be allowed: an allowlist that let the resolver swap a refused selection for the
+  // default would run a model the org never allowed, and call it a success.
+  if (options?.driveId) {
+    const policies = (await getDrivePolicies(options.driveId))?.policies ?? null;
+    const asked = selectedModel || selectedProvider ? { modelId: selectedModel ?? currentModel, provider: selectedProvider ?? currentProvider } : null;
+    for (const use of [{ modelId: currentModel, provider: currentProvider }, ...(asked ? [asked] : [])]) {
+      const decision = modelDecision(policies, use);
+      if (!decision.ok) return { error: decision.message, status: decision.status, code: decision.code, policy: decision.policy };
+    }
+  }
 
   // Deployment policy: on-prem only permits the local/BAA-eligible providers.
   if (

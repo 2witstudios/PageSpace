@@ -272,6 +272,17 @@ describe('POST /api/v1/chat/completions', () => {
     });
   });
 
+  test('POL-8 (partial) the page\'s drive is named to the provider factory, and an org-policy refusal is a 403 naming the policy (not a 500, not a substitution)', async () => {
+    const { createAIProvider } = await import('@/lib/ai/core/provider-factory');
+    vi.mocked(createAIProvider).mockResolvedValueOnce({ error: "This organization doesn't allow that AI model.", status: 403, code: 'org_policy', policy: 'modelAllowlist' } as never);
+
+    const response = await POST(makeRequest(validBody));
+    const body = await response.json();
+
+    expect(vi.mocked(createAIProvider).mock.calls.at(-1)?.[2]).toEqual({ driveId: 'drive-abc' });
+    expect({ status: response.status, code: body.code, policy: body.policy }).toEqual({ status: 403, code: 'org_policy', policy: 'modelAllowlist' });
+  });
+
   test('SPEND-3 (partial) a thread names its conversation so the gate reads its stored source; a stateless call names none', async () => {
     await POST(makeRequest({ ...validBody, conversation_id: 'conv-abc' }));
     expect(vi.mocked(canConsumeAI).mock.calls[0]?.[2]?.spend).toEqual({ kind: 'drive', driveId: 'drive-abc', chosen: null, conversationId: 'conv-abc' });

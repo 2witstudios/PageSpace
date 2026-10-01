@@ -47,6 +47,8 @@ import { issueEnrollmentCode, verifyEnrollmentCode, type RandomBytes, type Enrol
 import { issueChallenge, verifyChallengeResponse, type ChallengeDenyReason } from '../../env-bridge/challenge';
 import { decodeBase64, type Ed25519Verify, type HashBytes } from '../../env-bridge/grant';
 import { getEnvBridgeTokenPolicy, type EnvBridgeTokenPolicy } from '../../auth/token-lifecycle-policy';
+import type { OrgPolicies } from '../../organizations/policies-core';
+import { environmentsDecision } from '../../organizations/org-action-decisions';
 
 /**
  * Row → `DriveEnvStatus`, as a pure function (the ONE place the mapping exists)
@@ -148,6 +150,8 @@ export interface CreateDriveEnvDeps {
    */
   resolvePayer: (driveId: string) => Promise<{ payerId: string; tier: SubscriptionTier } | null>;
   now: () => Date;
+  /** POL-10: the drive's org policies, read live; null when the drive has no org (unrestricted). Required, never defaulted: the org's switch must not be skippable. */
+  getDriveOrgPolicies: (driveId: string) => Promise<OrgPolicies | null>;
   /** Required only for a LOCAL create (the one-time code needs randomness and a hash). */
   identity?: Pick<LocalEnvIdentityDeps, 'random' | 'hash' | 'newEnrollmentId'>;
 }
@@ -165,6 +169,8 @@ export type CreateDriveEnvResult =
   | { ok: false; reason: 'drive_not_found' }
   /** `(driveId, name)` is taken — the database refused, which is how concurrent creates are resolved. */
   | { ok: false; reason: 'name_taken' }
+  /** POL-10: the drive's organization does not allow persistent environments. */
+  | { ok: false; reason: 'org_policy'; message: string }
   /** The payer's tier forbids environments, or they are at their ceiling. `limit` is the ceiling that applied. */
   | { ok: false; reason: 'quota_exceeded'; denial: DriveEnvAllowanceDenialReason; limit: number };
 
@@ -217,6 +223,9 @@ export async function createDriveEnv({
   if (local && !deps.identity) throw new Error('createDriveEnv: a local env needs identity deps (random, hash, newEnrollmentId)');
   const payer = await deps.resolvePayer(driveId);
   if (!payer) return { ok: false, reason: 'drive_not_found' };
+
+  const policy = environmentsDecision(await deps.getDriveOrgPolicies(driveId));
+  if (!policy.ok) return { ok: false, reason: 'org_policy', message: policy.message };
 
   const allowance = await checkDriveEnvAllowance({
     payerId: payer.payerId,

@@ -13,6 +13,7 @@ import { loadEffectiveDriveMembership } from '../permissions/org-drive-membershi
 import { closeStaleDriveJoinRequests } from '../permissions/drive-join-request-closure';
 import { publishDriveAccessEvents, publishOrgMembershipSyncEvents, syncDriveOrgMembership, type OrgMembershipSyncPorts } from './org-membership-sync';
 import type { OrgDriveServiceDeps } from './org-drive-service';
+import { getOrgPolicies } from '../organizations/policy-reader';
 
 export const orgDriveServiceDeps: OrgDriveServiceDeps = {
   // The decision stays requireOrgRole's (ORG-5); only the membership read is bound to the move's
@@ -50,9 +51,8 @@ export const orgDriveServiceDeps: OrgDriveServiceDeps = {
     };
   },
 
-  // TODO(lyt8275djmdcwlwm8wvk2xa5): read POL-5 through the org policy reader when Wave E lands.
-  // Until then every org member may create org drives, which is DRV-3 without a policy.
-  getOrgDriveCreationPolicy: async () => 'members',
+  // POL-5: who may create org drives is the org's policy, read now inside the creating transaction.
+  getOrgDriveCreationPolicy: async (tx, orgId) => (await getOrgPolicies(orgId, tx)).whoCanCreateDrives,
 };
 
 /**

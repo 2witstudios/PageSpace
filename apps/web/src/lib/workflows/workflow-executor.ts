@@ -37,6 +37,8 @@ import { frameWebhookPayloadPrompt } from '@/lib/webhooks/webhook-payload-framin
 import { DETERMINISTIC_TOOL_ALLOWLIST, getDeterministicTools } from '@/lib/ai/core/deterministic-tools';
 import type { z } from 'zod';
 import { capStepToolPayloads } from '@/lib/ai/core/cap-step-tool-payloads';
+import { getDrivePolicies } from '@pagespace/lib/organizations/policy-reader';
+import { agentsAutonomousDecision } from '@pagespace/lib/organizations/org-action-decisions';
 
 export type WorkflowRunSource =
   | { table: 'cron'; id: null; triggerAt: Date | null }
@@ -182,8 +184,14 @@ export async function executeWorkflow(
   let release: (() => void) | undefined;
 
   try {
-    const admission = options.admit ? await options.admit() : undefined;
-    if (admission && !admission.admitted) {
+    // POL-9: an org can turn agents' autonomous runs off. A run with no person asking (every source but a manual
+    // run) in an org drive is skipped before any credit is reserved or any model is built; the run row is finalized
+    // as cancelled with the policy's message. Read now, every run: no cache, no restart.
+    const autonomy = input.source.table === 'manual' ? { ok: true as const } : agentsAutonomousDecision((await getDrivePolicies(input.driveId))?.policies ?? null);
+    const admission = autonomy.ok && options.admit ? await options.admit() : undefined;
+    if (!autonomy.ok) {
+      result = { success: false, skipped: true, durationMs: Date.now() - startTime, error: autonomy.message };
+    } else if (admission && !admission.admitted) {
       result = { success: false, skipped: true, durationMs: Date.now() - startTime, error: admission.error };
     } else {
       release = admission?.release;
@@ -619,7 +627,7 @@ async function runExecution(
       selectedModel,
     };
 
-    const providerResult = await createAIProvider(input.createdBy, providerRequest);
+    const providerResult = await createAIProvider(input.createdBy, providerRequest, { driveId: input.driveId });
 
     if (isProviderError(providerResult)) {
       return { success: false, durationMs: Date.now() - startTime, error: `AI provider error: ${providerResult.error}` };

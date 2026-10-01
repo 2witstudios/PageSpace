@@ -9,6 +9,7 @@ import { authorizeOrgRequest, ORG_READ_AUTH, ORG_WRITE_AUTH } from '@/lib/orgs/o
 import { inviteCreateSchema } from '@/lib/orgs/org-schemas';
 import { deliverOrgInvite } from '@/lib/orgs/org-invite-delivery';
 import { orgRefusalResponse } from '@/lib/orgs/org-refusal-response';
+import { orgPolicyRefusalResponse } from '@/lib/orgs/org-policy-refusal-response';
 import { defaultSeatBilling } from '@/lib/org-billing/seat-billing';
 
 type Context = { params: Promise<{ orgId: string }> };
@@ -35,15 +36,17 @@ export async function GET(request: Request, context: Context) {
 }
 
 /**
- * POST /api/orgs/[orgId]/invitations — invite by email; Owner and Admins (ORG-3).
+ * POST /api/orgs/[orgId]/invitations — invite by email (ORG-3); who may is the org's policy (POL-5): Owner and
+ * Admins by default, every member when the org says so.
  * An expired open invite for the address is rotated in place. A new invite holds a seat
  * (SEAT-3): inside the purchased count it is free, past it auto-add raises the Stripe quantity
  * pro rata and otherwise the invite is REFUSED with 402 `seats_full` and a message naming
- * what to do (SEAT-4). The who-can-invite policy (POL-5) lands in a later wave.
+ * what to do (SEAT-4).
  */
 export async function POST(request: Request, context: Context) {
   const { orgId } = await context.params;
-  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_WRITE_AUTH);
+  // Any member reaches the service: who may invite is the org's policy (POL-5), decided there.
+  const gate = await authorizeOrgRequest(request, orgId, 'MEMBER', ORG_WRITE_AUTH);
   if (!gate.ok) return gate.response;
   try {
     if (!(await isEmailVerified(gate.userId))) {
@@ -71,7 +74,7 @@ export async function POST(request: Request, context: Context) {
       email,
       role,
       invitedBy: gate.userId,
-      actorRole: gate.role,
+      actorRole: gate.role ?? 'MEMBER',
       seatBilling: defaultSeatBilling(),
       now: new Date(),
       deliver: (_invitation, token) => deliverOrgInvite({ orgId, inviterId: gate.userId, email, role, token }),
@@ -83,6 +86,7 @@ export async function POST(request: Request, context: Context) {
         return NextResponse.json({ error: 'Failed to send the invitation email' }, { status: 502 });
       }
       if (result.reason === 'org_lapsed') return orgLapsedResponse(result.message);
+      if (result.reason === 'org_policy') return orgPolicyRefusalResponse(result);
       if (result.reason === 'seats_full') {
         // The Owner finds this refusal in the audit trail even when an Admin hit it.
         auditRequest(request, {

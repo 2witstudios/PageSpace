@@ -222,11 +222,11 @@ const ROUTES: RouteCase[] = [
     call: () => transferRoute.POST(req('POST', { toUserId: 'user_priya' }), params({ orgId: ORG_ID })) },
   { name: 'GET /api/orgs/[orgId]/invitations', csrf: false, minRole: 'ADMIN', successStatus: 200, service: () => invitations.listOpenInvitations,
     call: () => invitationsRoute.GET(req('GET'), params({ orgId: ORG_ID })) },
-  { name: 'POST /api/orgs/[orgId]/invitations', csrf: true, minRole: 'ADMIN', successStatus: 201, service: () => invitations.createOrRotateInvitation,
+  { name: 'POST /api/orgs/[orgId]/invitations', csrf: true, minRole: 'MEMBER', successStatus: 201, service: () => invitations.createOrRotateInvitation,
     call: () => invitationsRoute.POST(req('POST', { email: 'marcus@northwind.test' }), params({ orgId: ORG_ID })) },
   { name: 'DELETE /api/orgs/[orgId]/invitations/[invitationId]', csrf: true, minRole: 'ADMIN', successStatus: 200, service: () => invitations.revokeInvitation,
     call: () => invitationRoute.DELETE(req('DELETE'), params({ orgId: ORG_ID, invitationId: 'inv_1' })) },
-  { name: 'POST /api/orgs/[orgId]/invitations/[invitationId]/resend', csrf: true, minRole: 'ADMIN', successStatus: 200, service: () => invitations.resendInvitation,
+  { name: 'POST /api/orgs/[orgId]/invitations/[invitationId]/resend', csrf: true, minRole: 'MEMBER', successStatus: 200, service: () => invitations.resendInvitation,
     call: () => resendRoute.POST(req('POST'), params({ orgId: ORG_ID, invitationId: 'inv_1' })) },
   { name: 'POST /api/orgs/invitations/accept', csrf: true, minRole: null, successStatus: 200, service: () => invitations.acceptInvitation,
     call: () => acceptRoute.POST(req('POST', { token: 'ps_orginv_t' })) },
@@ -486,6 +486,22 @@ describe('org route behaviour', () => {
     expect((await resendRoute.POST(req('POST'), params({ orgId: ORG_ID, invitationId: 'inv_1' }))).status).toBe(502);
     // Compensation lives in the service (proven against Postgres), never a second route write.
     expect(invitations.revokeInvitation).not.toHaveBeenCalled();
+  });
+
+  it('POL-5 (partial) the route reaches the service for a plain Member with their ROLE, and the service\'s policy refusal is answered 403 naming the policy (create and resend)', async () => {
+    const refusal = { ok: false as const, status: 403 as const, code: 'org_policy' as const, reason: 'org_policy' as const, policy: 'whoCanInvite' as const, message: 'This organization lets only Owners and Admins invite people.' };
+    vi.mocked(invitations.createOrRotateInvitation).mockResolvedValue(refusal);
+    vi.mocked(invitations.resendInvitation).mockResolvedValue(refusal);
+    vi.mocked(repository.findMembershipRole).mockResolvedValue('MEMBER');
+
+    const created = await invitationsRoute.POST(req('POST', { email: 'marcus@northwind.test' }), params({ orgId: ORG_ID }));
+    const resent = await resendRoute.POST(req('POST'), params({ orgId: ORG_ID, invitationId: 'inv_1' }));
+
+    expect(created.status).toBe(403);
+    expect(await created.json()).toEqual({ error: refusal.message, code: 'org_policy', policy: 'whoCanInvite' });
+    expect(resent.status).toBe(403);
+    expect(invitations.createOrRotateInvitation).toHaveBeenCalledWith(expect.objectContaining({ actorRole: 'MEMBER' }));
+    expect(invitations.resendInvitation).toHaveBeenCalledWith(expect.objectContaining({ actorRole: 'MEMBER' }));
   });
 
   it('ORG-3 (partial) inviting refuses an existing member, an unverified inviter, and an OWNER role', async () => {

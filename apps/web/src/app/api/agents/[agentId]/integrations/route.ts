@@ -10,6 +10,7 @@ import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { listGrantsByAgent, createGrant, findGrant } from '@pagespace/lib/integrations/repositories/grant-repository';
 import { getConnectionWithProvider } from '@pagespace/lib/integrations/repositories/connection-repository';
 import type { ToolDefinition, ToolBundle } from '@pagespace/lib/integrations/types';
+import { orgPolicyRefusalResponse } from '@/lib/orgs/org-policy-refusal-response';
 import { broadcastAgentGrantChanged } from '@/lib/websocket/socket-utils';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const };
@@ -207,6 +208,12 @@ export async function POST(
     }
     if (!isUserConnection && !isDriveMember) {
       return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+    }
+
+    // POL-11: a connection the org's service allowlist suspended cannot be granted. Asked after the access
+    // check, so someone who cannot see the connection learns nothing about its org's policy.
+    if (connection.suspendedByPolicy) {
+      return orgPolicyRefusalResponse({ code: 'org_policy', policy: 'integrationsAllowlist', status: 403, message: "This organization doesn't allow that service right now. Ask an Owner or Admin which services are allowed." });
     }
 
     // Check for existing grant

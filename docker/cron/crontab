@@ -208,3 +208,11 @@
 # this is the check on it. It COMPARES AND ALERTS; it never moves money (a scraped
 # gauge is not evidence of a charge). Inert with no FLY_PROMETHEUS_ORG_SLUG.
 30 3 * * 1 flock -n /run/reconcile-app-awake-seconds.lock cron-curl GET __WEB_URL__/api/cron/reconcile-app-awake-seconds >> /var/log/cron/reconcile-app-awake-seconds.log 2>&1 || echo "$(date -u) tick skipped (lock held) or request failed" >> /var/log/cron/reconcile-app-awake-seconds.log
+
+# Published-site visibility reconcile - Every 10 minutes (POL-4)
+# An org can turn publishing or custom domains off; its published sites are then MOVED (not deleted) to a
+# non-public prefix in the publish bucket, and moved back when the policy is turned on. The move runs right
+# after the policy change; this sweep finishes whatever an object-store failure left behind, and re-parks anything
+# that reappeared. It reads the live policy, so a tick with nothing to do lists and changes nothing. Inert with no
+# PUBLISH_BUCKET.
+*/10 * * * * flock -n /run/reconcile-published-visibility.lock cron-curl GET __WEB_URL__/api/cron/reconcile-published-visibility >> /var/log/cron/reconcile-published-visibility.log 2>&1 || echo "$(date -u) tick skipped (lock held) or request failed" >> /var/log/cron/reconcile-published-visibility.log

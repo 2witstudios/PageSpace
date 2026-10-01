@@ -11,6 +11,7 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
+vi.mock('@pagespace/lib/organizations/policy-reader', () => ({ getDrivePolicies: vi.fn() }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ audit: vi.fn(), auditRequest: vi.fn() }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() } },
@@ -67,6 +68,8 @@ vi.mock('@/lib/app-hosting/published-app-dto', () => ({
 }));
 
 import { POST } from '../route';
+import { getDrivePolicies } from '@pagespace/lib/organizations/policy-reader';
+import { DEFAULT_ORG_POLICIES } from '@pagespace/lib/organizations/policies-core';
 import { authenticateRequestWithOptions, isPrincipalDriveOwnerOrAdmin } from '@/lib/auth';
 import { resolveEnvInDrive } from '@/lib/drive-envs/drive-envs-runtime';
 import { createPublishedApp } from '@pagespace/lib/services/app-hosting/provisioner';
@@ -91,12 +94,34 @@ const appRow = { id: PUBLISHED_APP_ID, envId: ENV_ID, subdomain: 'staging-abc' }
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(getDrivePolicies).mockResolvedValue({ policies: DEFAULT_ORG_POLICIES } as never);
   vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: USER_ID } as never);
   vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValue(true);
   vi.mocked(resolveEnvInDrive).mockResolvedValue(envRow as never);
   vi.mocked(findPublishedAppByEnvId).mockResolvedValue(null);
   vi.mocked(createPublishedApp).mockResolvedValue({ ok: true, app: appRow } as never);
   updateReturning.mockReset().mockResolvedValue([{ id: PUBLISHED_APP_ID, status: 'building' }]);
+});
+
+describe('POST /app — an org that turned published apps off', () => {
+  it('POL-10 refuses 403 org_policy before the buildability check, the snapshot or the provisioner', async () => {
+    vi.mocked(getDrivePolicies).mockResolvedValue({ policies: { ...DEFAULT_ORG_POLICIES, publishedApps: false } } as never);
+    const response = await POST(postReq(), envParams);
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ code: 'org_policy', policy: 'publishedApps' });
+    expect(ensureBuildableSource).not.toHaveBeenCalled();
+    expect(snapshotEnvFilesystem).not.toHaveBeenCalled();
+    expect(createPublishedApp).not.toHaveBeenCalled();
+  });
+
+  it('POL-10 maps the provisioner\'s own org_policy refusal the same way', async () => {
+    vi.mocked(ensureBuildableSource).mockResolvedValue({ ok: true });
+    vi.mocked(snapshotEnvFilesystem).mockResolvedValue({ ok: true, tarPath: '/t.tar.gz', cleanup: vi.fn() } as never);
+    vi.mocked(createPublishedApp).mockResolvedValue({ ok: false, reason: 'org_policy' } as never);
+    const response = await POST(postReq(), envParams);
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ code: 'org_policy' });
+  });
 });
 
 describe('POST /app — the up-front buildability refusal (D1)', () => {

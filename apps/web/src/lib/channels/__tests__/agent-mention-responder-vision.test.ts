@@ -4,6 +4,9 @@ import { assert } from '@/lib/ai/core/__tests__/riteway';
 // SPEND-6: each mentioned agent's reply is gated on the channel's drive wallet
 // (mention-credit-gate, unit-tested on its own). This suite covers other behaviour,
 // so the gate admits every reply here.
+// POL-9: the responder asks the channel drive's org whether agents may reply on their own; no org in these tests.
+vi.mock('@pagespace/lib/organizations/policy-reader', () => ({ getDrivePolicies: vi.fn() }));
+
 vi.mock('@/lib/channels/mention-credit-gate', () => ({
   acquireMentionCreditHold: async () => ({
     allowed: true,

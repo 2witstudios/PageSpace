@@ -5,6 +5,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalEditPage, canPrincipalViewPage } from '@/lib/auth';
 import { isPublishConfigured } from '@/lib/canvas/published-storage';
 import { publishCanvasPage, clearPublishedHomeRoot, regeneratePublishedSiteFiles, PublishError, PUBLISH_HOST } from '@/lib/canvas/publish-page';
+import { PublishHiddenError } from '@pagespace/lib/organizations/published-visibility';
 import { deletePageFromCustomHosts, getActiveDomainRecords } from '@/lib/canvas/custom-domain-mirror';
 import { resolvePrimaryPublishedHost } from '@pagespace/lib/canvas/primary-host';
 import { db } from '@pagespace/db/db';
@@ -252,7 +253,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       return NextResponse.json({ error: error.issues }, { status: 400 });
     }
     const message = error instanceof Error ? error.message : 'Failed to publish page';
-    const statusCode = error instanceof PublishError ? error.statusCode : 500;
+    // POL-4: a write refused because the org's policy hides this site answers 403, like the up-front refusal.
+    const statusCode = error instanceof PublishError || error instanceof PublishHiddenError ? error.statusCode : 500;
     return NextResponse.json({ error: message }, { status: statusCode });
   }
 }

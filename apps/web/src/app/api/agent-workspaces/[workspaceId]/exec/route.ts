@@ -42,6 +42,7 @@ const DENIAL_STATUS: Record<SandboxToolDenialReason, number> = {
   no_drive_access: 403,
   insufficient_role: 403,
   no_agent_access: 403,
+  org_policy: 403,
   local_bind_denied: 403,
   credit_exhausted: 402,
   concurrency_limit: 429,
