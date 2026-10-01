@@ -36,15 +36,18 @@ export const aiToolApprovalGrants = pgTable('ai_tool_approval_grants', {
   userToolAlwaysIdx: uniqueIndex('ai_tool_approval_grants_user_tool_always_idx')
     .on(table.userId, table.toolName)
     .where(sql`conversation_id IS NULL`),
-  userIdx: index('ai_tool_approval_grants_user_idx').on(table.userId),
+  // user_id lookups ride the unique indexes' leading column; this one serves the
+  // conversation-delete cascade.
+  conversationIdx: index('ai_tool_approval_grants_conversation_idx').on(table.conversationId),
 }));
 
 /**
  * One row per approval id: the ATOMIC CLAIM and the audit log.
  *
- * WHY A TABLE AND NOT THE MESSAGE ROW. The ask_user resume is an unlocked
- * fetch→merge→persist (documented in `core/ask-user-resume.ts`); its worst case is
- * a dropped answer. For approvals the worst case is EXECUTING A WRITE TWICE — two
+ * WHY A TABLE AND NOT THE MESSAGE ROW. The message row is persisted whole, under
+ * a per-message lock held only by the server's own writers; a decision has to be
+ * exactly-once across tabs and processes, because for approvals the worst case
+ * is EXECUTING A WRITE TWICE — two
  * tabs approving the same call, or an approve racing a typed message that denies
  * it. `INSERT … ON CONFLICT (approval_id) DO NOTHING RETURNING` decides exactly
  * one winner without threading a transaction through the shared message
@@ -79,5 +82,6 @@ export const aiToolApprovalDecisions = pgTable('ai_tool_approval_decisions', {
   outcome: text('outcome', { enum: ['ok', 'error', 'denied', 'stale', 'running'] }),
 }, (table) => ({
   conversationIdx: index('ai_tool_approval_decisions_conversation_idx').on(table.conversationId),
-  messageIdx: index('ai_tool_approval_decisions_message_idx').on(table.messageId),
+  // The GDPR export and the user-delete cascade filter by user.
+  userIdx: index('ai_tool_approval_decisions_user_idx').on(table.userId),
 }));

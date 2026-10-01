@@ -1,5 +1,5 @@
 {
-  "id": "981565af-d10b-4394-a361-0da538ff690e",
+  "id": "2b425781-0bc8-464b-a3f4-bab800301ad7",
   "prevId": "240c5f9b-7134-49bc-9d82-524563792ae7",
   "version": "7",
   "dialect": "postgresql",
@@ -24770,11 +24770,11 @@
           "method": "btree",
           "with": {}
         },
-        "ai_tool_approval_decisions_message_idx": {
-          "name": "ai_tool_approval_decisions_message_idx",
+        "ai_tool_approval_decisions_user_idx": {
+          "name": "ai_tool_approval_decisions_user_idx",
           "columns": [
             {
-              "expression": "message_id",
+              "expression": "user_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -24906,11 +24906,11 @@
           "method": "btree",
           "with": {}
         },
-        "ai_tool_approval_grants_user_idx": {
-          "name": "ai_tool_approval_grants_user_idx",
+        "ai_tool_approval_grants_conversation_idx": {
+          "name": "ai_tool_approval_grants_conversation_idx",
           "columns": [
             {
-              "expression": "user_id",
+              "expression": "conversation_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
