@@ -1,4 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+const toastError = vi.hoisted(() => vi.fn());
+vi.mock('sonner', () => ({ toast: { error: toastError } }));
+
 import { renderHook, act } from '@testing-library/react';
 import { useRespondToApproval, type UseRespondToApprovalOptions } from '../useRespondToApproval';
 import { useAskUserAnsweringStore } from '@/stores/useAskUserAnsweringStore';
@@ -6,6 +10,7 @@ import { conversationMessagesActions } from '@/hooks/conversationMessagesActions
 import { useConversationMessagesStore } from '@/stores/useConversationMessagesStore';
 import type { RenderedMessage } from '@/lib/ai/streams/selectRenderedMessages';
 import type { UIMessage } from 'ai';
+import { toErrorCause } from '@/lib/ai/shared/toErrorCause';
 
 const pausedMessage = (messageId: string, toolCallIds: string[]): RenderedMessage => ({
   mode: 'confirmed',
@@ -40,6 +45,7 @@ describe('useRespondToApproval', () => {
     useAskUserAnsweringStore.setState({ answeringToolCallIds: new Set() });
     useConversationMessagesStore.setState({ byConversationId: {} });
     vi.restoreAllMocks();
+    toastError.mockClear();
   });
 
   it('exposes the paused calls on the last message as approvable', () => {
@@ -140,5 +146,50 @@ describe('useRespondToApproval', () => {
     });
     expect(addToolApprovalResponse).not.toHaveBeenCalled();
     expect(releasePendingSend).toHaveBeenCalledTimes(1);
+  });
+
+  it('given the send rejects, releases the pendingSend and shows the error', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const releasePendingSend = vi.fn();
+    const addToolApprovalResponse = vi.fn().mockRejectedValue(new Error('network down'));
+    const { result } = renderHook(() => useRespondToApproval(baseOptions({ addToolApprovalResponse, releasePendingSend })));
+    await act(async () => {
+      result.current.respond('tc1', { approvalId: 'ap-tc1', approved: true });
+      await flush();
+    });
+    expect(releasePendingSend).toHaveBeenCalledTimes(1);
+    expect(toastError).toHaveBeenCalledTimes(1);
+  });
+
+  it('given buildBody throws, reverts, releases the pendingSend, clears the claim, and shows the error', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const revertSpy = vi.spyOn(conversationMessagesActions, 'revertToolApprovalResponse');
+    const releasePendingSend = vi.fn();
+    const addToolApprovalResponse = vi.fn();
+    const buildBody = () => {
+      throw new Error('no provider');
+    };
+    const { result } = renderHook(() => useRespondToApproval(baseOptions({ addToolApprovalResponse, releasePendingSend, buildBody })));
+    await act(async () => {
+      result.current.respond('tc1', { approvalId: 'ap-tc1', approved: true });
+      await flush();
+    });
+    expect(addToolApprovalResponse).not.toHaveBeenCalled();
+    expect(revertSpy).toHaveBeenCalledTimes(1);
+    expect(releasePendingSend).toHaveBeenCalledTimes(1);
+    expect(toastError).toHaveBeenCalledTimes(1);
+    expect(useAskUserAnsweringStore.getState().answeringToolCallIds.has('tc1')).toBe(false);
+  });
+
+  it("given a 409, shows the server's message rather than a generic error", async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const cause = toErrorCause(409, { error: 'This approval was already answered.', code: 'approval_already_resolved' });
+    const addToolApprovalResponse = vi.fn().mockRejectedValue(new Error(cause.message, { cause }));
+    const { result } = renderHook(() => useRespondToApproval(baseOptions({ addToolApprovalResponse })));
+    await act(async () => {
+      result.current.respond('tc1', { approvalId: 'ap-tc1', approved: true });
+      await flush();
+    });
+    expect(toastError).toHaveBeenCalledWith('This approval was already answered.');
   });
 });

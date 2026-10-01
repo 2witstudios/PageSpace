@@ -95,4 +95,18 @@ describe('toErrorCause', () => {
     const cause = toErrorCause(429, { error: 'unrecognized', message: 'raw upstream body' });
     expect(cause.message).not.toBe('raw upstream body');
   });
+
+  // The approval gate's 409 is backend-authored (`approval-turn-support.ts`): `{ error: <copy>, code }`.
+  it.each([
+    ['approval_already_resolved', 'This approval was already answered.'],
+    ['approval_stale', 'This approval is no longer current — the conversation has moved on.'],
+  ])('given a 409 with the %s code, should surface the server copy, non-retryable', (code, copy) => {
+    const cause = toErrorCause(409, { error: copy, code });
+    expect(cause).toEqual({ code: 'unknown', httpStatus: 409, message: copy, retryable: false });
+  });
+
+  it('given a 409 without an approval code, should ignore an arbitrary server message', () => {
+    const cause = toErrorCause(409, { error: 'raw upstream body', code: 'something_else' });
+    expect(cause.message).not.toBe('raw upstream body');
+  });
 });

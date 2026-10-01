@@ -1,4 +1,7 @@
 import { useCallback, useMemo } from 'react';
+import { toast } from 'sonner';
+import { isAIErrorCause } from '@/lib/ai/shared/aiErrorCause';
+import { parseLegacyErrorMessage } from '@/lib/ai/shared/parseLegacyErrorMessage';
 import { selectAnswerableApprovalToolCallIds } from '@/lib/ai/streams/selectAnswerableApprovalToolCallIds';
 import type { RenderedMessage } from '@/lib/ai/streams/selectRenderedMessages';
 import { useAskUserAnsweringStore } from '@/stores/useAskUserAnsweringStore';
@@ -55,9 +58,10 @@ export interface UseRespondToApprovalResult {
  * its pendingSend.
  *
  * A 409 from the server (`approval_already_resolved` / `approval_stale`) means
- * another tab, or the user typing past the card, decided first. The revert puts
- * the card back for a moment; the realtime `message_updated` for the row the
- * winner persisted then brings the real state. Nothing to refetch by hand.
+ * another tab, or the user typing past the card, decided first. The server's own
+ * copy is toasted (see `toErrorCause`), and the revert puts the card back only if
+ * it still shows this tab's answer; the realtime `message_updated` for the row
+ * the winner persisted then brings the real state. Nothing to refetch by hand.
  */
 export function useRespondToApproval(options: UseRespondToApprovalOptions): UseRespondToApprovalResult {
   const {
@@ -122,6 +126,12 @@ export function useRespondToApproval(options: UseRespondToApprovalOptions): UseR
           if (conversationId && messageId) {
             conversationMessagesActions.revertToolApprovalResponse(conversationId, { messageId, toolCallId, approval });
           }
+          // Swallowed here, so wrapSend's own failure handling never runs: release and say why.
+          releasePendingSend();
+          const cause = err instanceof Error && isAIErrorCause(err.cause)
+            ? err.cause
+            : parseLegacyErrorMessage(err instanceof Error ? err.message : String(err));
+          toast.error(cause.message);
           console.error('Failed to submit tool approval:', err);
         } finally {
           useAskUserAnsweringStore.getState().clearAnswering(toolCallId);
