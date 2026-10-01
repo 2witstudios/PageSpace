@@ -706,28 +706,30 @@ beforeEach(() => {
         expect(vi.mocked(notInArray)).not.toHaveBeenCalled();
       });
 
-      it('perStatus windows the rank per column and reports hasMore from a one-row existence probe', async () => {
+      it('perStatus windows the rank per column and reports hasMore from the row just past the page', async () => {
         const ranked = makeSelectChain([]);
         ranked.as = vi.fn(() => ({ id: 'ranked.id', rank: 'ranked.rank' }));
-        const inPage = makeSelectChain([{ id: 'todo-1' }, { id: 'done-1' }, { id: 'todo-2' }]);
-        const beyondPage = makeSelectChain([{ id: 'todo-3' }]); // a column continues past the page
+        const rows = makeSelectChain([
+          { id: 'todo-1', rank: 1 },
+          { id: 'done-1', rank: 1 },
+          { id: 'todo-2', rank: 2 },
+          { id: 'todo-3', rank: 3 }, // one row past the page: some column continues
+        ]);
         arrange(null); // seeds auth/config mocks; its select queue is replaced below
         vi.mocked(db.select).mockReset();
         vi.mocked(db.select)
           .mockImplementationOnce(() => makeSelectChain(childRows) as never)
           .mockImplementationOnce(() => makeSelectChain(childRows) as never)
           .mockImplementationOnce(() => ranked as never)
-          .mockImplementationOnce(() => inPage as never)
-          .mockImplementationOnce(() => beyondPage as never)
+          .mockImplementationOnce(() => rows as never)
           .mockImplementation(() => makeSelectChain([]) as never);
 
         const response = await GET(createRequest('?perStatus=true&limit=2&offset=0'), { params: mockParams });
         const body = await response.json();
 
         expect(response.status).toBe(200);
-        expect(vi.mocked(gt).mock.calls.map(c => c[1])).toEqual([0, 2]);
-        expect(vi.mocked(lte).mock.calls[0]?.[1]).toBe(2);
-        expect(beyondPage.limit).toHaveBeenCalledWith(1);
+        expect(vi.mocked(gt).mock.calls[0]?.[1]).toBe(0);
+        expect(vi.mocked(lte).mock.calls[0]?.[1]).toBe(3);
         expect(body.tasks.map((t: { id: string }) => t.id).sort()).toEqual(['done-1', 'todo-1', 'todo-2']);
         expect(body.hasMore).toBe(true);
       });
@@ -741,14 +743,13 @@ beforeEach(() => {
           .mockImplementationOnce(() => makeSelectChain(childRows) as never)
           .mockImplementationOnce(() => makeSelectChain(childRows) as never)
           .mockImplementationOnce(() => ranked as never)
-          .mockImplementationOnce(() => makeSelectChain([{ id: 'a' }, { id: 'b' }]) as never)
-          .mockImplementationOnce(() => makeSelectChain([]) as never)
+          .mockImplementationOnce(() => makeSelectChain([{ id: 'a', rank: 3 }, { id: 'b', rank: 4 }]) as never)
           .mockImplementation(() => makeSelectChain([]) as never);
 
         const response = await GET(createRequest('?perStatus=true&limit=2&offset=2'), { params: mockParams });
         const body = await response.json();
 
-        expect(vi.mocked(gt).mock.calls.map(c => c[1])).toEqual([2, 4]);
+        expect(vi.mocked(gt).mock.calls[0]?.[1]).toBe(2);
         expect(body.hasMore).toBe(false);
       });
     });

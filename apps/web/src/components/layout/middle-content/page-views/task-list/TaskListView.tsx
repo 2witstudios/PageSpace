@@ -500,13 +500,14 @@ function TaskListView({ page }: TaskListViewProps) {
     // Active / Completed filter and toolbar search go in the query so the page holds
     // matching tasks: filtering client-side let non-matching rows fill the page and hide
     // matches behind Load More.
-    const groupParam = (filter === 'all' ? '' : `&statusGroup=${filter}`)
-      + (debouncedSearch ? `&search=${encodeURIComponent(debouncedSearch)}` : '');
-    if (viewMode === 'kanban') {
-      // Column-aware paging: limit/offset count per status, not across the whole list.
-      return `${tasksKeyPrefix}?perStatus=true&limit=${KANBAN_COLUMN_PAGE_SIZE}&offset=${pageIndex * KANBAN_COLUMN_PAGE_SIZE}${groupParam}`;
-    }
-    return `${tasksKeyPrefix}?limit=${TASKS_PAGE_SIZE}&offset=${pageIndex * TASKS_PAGE_SIZE}${groupParam}`;
+    const kanban = viewMode === 'kanban';
+    const pageSize = kanban ? KANBAN_COLUMN_PAGE_SIZE : TASKS_PAGE_SIZE;
+    const params = new URLSearchParams({ limit: String(pageSize), offset: String(pageIndex * pageSize) });
+    // Kanban pages per column: limit/offset count per status, not across the whole list.
+    if (kanban) params.set('perStatus', 'true');
+    if (filter !== 'all') params.set('statusGroup', filter);
+    if (debouncedSearch) params.set('search', debouncedSearch);
+    return `${tasksKeyPrefix}?${params}`;
   };
   const {
     data: taskPages,
@@ -679,9 +680,10 @@ function TaskListView({ page }: TaskListViewProps) {
 
   const activeSearch = isFindOpen ? findQuery : search;
 
-  // Filter/search are applied client-side over whatever pages have been loaded so
-  // far. Changing either resets "Load More" progress back to just the first page,
-  // so a previously-expanded load doesn't linger in a state inconsistent with a
+  // The server applies the Active/Completed filter and toolbar search when paging; the
+  // client filter below stays for instant feedback during the search debounce, optimistic
+  // status moves, and Cmd+F Find. Changing the filter or toolbar search resets "Load
+  // More" progress back to just the first page, so a previously-expanded load doesn't linger in a state inconsistent with a
   // fresh filter (cached pages are reused instantly if the user re-expands).
   //
   // Deliberately keyed on `debouncedSearch` (the toolbar filter box), not `activeSearch`: the

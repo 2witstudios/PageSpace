@@ -150,18 +150,19 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   // ordering rail — #2143), filtered, bounded set of task ids — this is what keeps
   // the query from pulling every task into memory (the OOM crash this route caused).
   // Phase 2 hydrates only those ids' relations.
-  const positionExpr = pages.position;
+  const positionOrder = sortOrder === 'desc' ? desc(pages.position) : asc(pages.position);
 
   // The Active / Completed tabs filter in SQL so a page of results is a page of
   // matching tasks — filtering after the fetch let completed rows crowd active ones
   // out of the first page. A slug no config classifies counts as active, matching the
   // client's isCompletedStatus.
   const doneSlugs = statusConfigs.filter(c => c.group === 'done').map(c => c.slug);
-  const statusGroupCondition = statusGroup === 'active'
-    ? (doneSlugs.length > 0 ? notInArray(taskItems.status, doneSlugs) : undefined)
-    : statusGroup === 'completed'
-      ? (doneSlugs.length > 0 ? inArray(taskItems.status, doneSlugs) : sql`false`)
-      : undefined;
+  let statusGroupCondition;
+  if (statusGroup === 'active' && doneSlugs.length > 0) {
+    statusGroupCondition = notInArray(taskItems.status, doneSlugs);
+  } else if (statusGroup === 'completed') {
+    statusGroupCondition = doneSlugs.length > 0 ? inArray(taskItems.status, doneSlugs) : sql`false`;
+  }
 
   const filterConditions = and(
     inArray(taskItems.pageId, childPageIds),
@@ -183,27 +184,21 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     const ranked = db
       .select({
         id: taskItems.id,
-        rank: sql<number>`row_number() over (partition by ${taskItems.status} order by ${positionExpr} ${sortOrder === 'desc' ? sql`desc` : sql`asc`}, ${taskItems.id})`.as('rank'),
+        rank: sql<number>`row_number() over (partition by ${taskItems.status} order by ${positionOrder}, ${taskItems.id})`.as('rank'),
       })
       .from(taskItems)
       .innerJoin(pages, eq(pages.id, taskItems.pageId))
       .where(filterConditions)
       .as('ranked');
     const pageEnd = offset + limit;
-    const [rankedRows, beyondPage] = await Promise.all([
-      db
-        .select({ id: ranked.id })
-        .from(ranked)
-        .where(and(gt(ranked.rank, offset), lte(ranked.rank, pageEnd))),
-      // One row proves some column continues past this page — no probe row per column.
-      db
-        .select({ id: ranked.id })
-        .from(ranked)
-        .where(gt(ranked.rank, pageEnd))
-        .limit(1),
-    ]);
-    hasMore = beyondPage.length > 0;
-    boundedTaskIds = rankedRows.map(r => r.id);
+    // One window pass: the row just past the page (rank pageEnd + 1) in any column is the
+    // `hasMore` signal, costing at most one extra row per column.
+    const rankedRows = await db
+      .select({ id: ranked.id, rank: ranked.rank })
+      .from(ranked)
+      .where(and(gt(ranked.rank, offset), lte(ranked.rank, pageEnd + 1)));
+    hasMore = rankedRows.some(r => r.rank > pageEnd);
+    boundedTaskIds = rankedRows.filter(r => r.rank <= pageEnd).map(r => r.id);
   } else {
     const orderedIdRows = await db
       .select({ id: taskItems.id })
@@ -214,7 +209,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
       // sharing a position (e.g. a read-then-write race in POST's nextPosition, or backfilled
       // pages that never got a distinct one) have no guaranteed stable order across repeated
       // LIMIT/OFFSET calls, so paging (offset=0, then offset=100) can skip or duplicate rows.
-      .orderBy(sortOrder === 'desc' ? desc(positionExpr) : asc(positionExpr), asc(taskItems.id))
+      .orderBy(positionOrder, asc(taskItems.id))
       .limit(limit + 1)
       .offset(offset);
     hasMore = orderedIdRows.length > limit;
