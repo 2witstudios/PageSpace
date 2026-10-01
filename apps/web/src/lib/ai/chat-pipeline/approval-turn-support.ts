@@ -13,6 +13,23 @@ import type { ModelMessage, ToolSet } from 'ai';
 import type { ApplyToolApprovalResult, ApprovedToolExecution, ApprovedToolOutcome } from '@/lib/ai/core/approval-resume';
 import { runApprovedToolExecutions } from '@/lib/ai/approvals/run-approved-executions';
 import { toolApprovalRepository } from '@/lib/repositories/tool-approval-repository';
+import { isInteractiveApprovalTurn } from '@/lib/ai/approvals/approval-policy';
+import type { AuthResult } from '@/lib/auth';
+
+/**
+ * Only a browser session may answer an approval card. A headless principal
+ * (MCP, OAuth, service) never sees a card, and accepting its answer would let
+ * an external client approve a write — or mint an account-wide "always" grant
+ * that then skips the gate in the user's own browser turns, beyond the token's
+ * drive scope. `null` means "a human is answering — carry on".
+ */
+export function headlessApprovalResponseRefusal(auth: Pick<AuthResult, 'tokenType'>): NextResponse | null {
+  if (isInteractiveApprovalTurn(auth)) return null;
+  return NextResponse.json(
+    { error: 'Tool approvals can only be answered from a signed-in browser session.', code: 'approval_requires_session' },
+    { status: 403 },
+  );
+}
 
 /**
  * A resume that cannot proceed answers before any generation starts (nothing to

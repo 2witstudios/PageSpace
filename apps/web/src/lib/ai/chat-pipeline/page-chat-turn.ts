@@ -159,7 +159,7 @@ import {
 } from '@/lib/ai/core/approval-resume';
 import { applyApprovalPolicy, isInteractiveApprovalTurn, isToolApprovalMode, DEFAULT_TOOL_APPROVAL_MODE, type ApprovalPolicyContext } from '@/lib/ai/approvals/approval-policy';
 import { gatedIntegrationToolNames } from '@/lib/ai/approvals/integration-approval';
-import { approvalResumeRefusal, executeApprovedCallsAndReassemble } from '@/lib/ai/chat-pipeline/approval-turn-support';
+import { approvalResumeRefusal, headlessApprovalResponseRefusal, executeApprovedCallsAndReassemble } from '@/lib/ai/chat-pipeline/approval-turn-support';
 import { loadToolApprovalGrants } from '@/lib/ai/approvals/load-approval-context';
 import type { ContextRef } from '@/lib/ai/shared/buildContextRef';
 import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
@@ -1094,6 +1094,9 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       // the approved calls run inside execute() with the real tool context.
       const approvalResponses = extractClientToolApprovalResponses(userMessage);
       if (approvalResponses.length > 0) {
+        // This route admits MCP tokens; only a browser session may answer a card.
+        const headlessRefusal = headlessApprovalResponseRefusal(authResult);
+        if (headlessRefusal) return headlessRefusal;
         const applied = await applyToolApprovalResponsesToPageMessage({
           messageId: userMessage.id,
           pageId: chatId as string,
