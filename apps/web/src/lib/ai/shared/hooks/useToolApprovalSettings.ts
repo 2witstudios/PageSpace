@@ -1,5 +1,6 @@
 import { useCallback } from 'react';
 import useSWR from 'swr';
+import { toast } from 'sonner';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 export type ToolApprovalMode = 'ask' | 'auto';
@@ -42,6 +43,7 @@ export function useToolApprovalSettings(options: { enabled?: boolean } = {}) {
 
   const mode: ToolApprovalMode = config.data?.config.toolApprovalMode ?? 'ask';
 
+  // Both writes are optimistic with rollback; a failure toasts here so callers can fire and forget.
   const setMode = useCallback(
     async (next: ToolApprovalMode) => {
       await config.mutate(
@@ -55,7 +57,10 @@ export function useToolApprovalSettings(options: { enabled?: boolean } = {}) {
           return (await response.json()) as { config: { toolApprovalMode?: ToolApprovalMode } };
         },
         { optimisticData: { config: { ...(config.data?.config ?? {}), toolApprovalMode: next } }, rollbackOnError: true, revalidate: false },
-      );
+      ).catch((error: unknown) => {
+        console.error(error);
+        toast.error("Couldn't save the approval setting. Please try again.");
+      });
     },
     [config],
   );
@@ -74,7 +79,10 @@ export function useToolApprovalSettings(options: { enabled?: boolean } = {}) {
           return { grants: remaining };
         },
         { optimisticData: { grants: remaining }, rollbackOnError: true, revalidate: false },
-      );
+      ).catch((error: unknown) => {
+        console.error(error);
+        toast.error("Couldn't revoke that tool. Please try again.");
+      });
     },
     [grants],
   );
@@ -85,7 +93,7 @@ export function useToolApprovalSettings(options: { enabled?: boolean } = {}) {
     grants: grants.data?.grants ?? [],
     setMode,
     revokeGrant,
-    /** Re-read the grants (e.g. after an "Always allow" click elsewhere on the page). */
+    /** Re-read the grants — the Tools menu calls this on open, so an "Always allow" click in the chat shows up there. */
     refreshGrants: grants.mutate,
   };
 }

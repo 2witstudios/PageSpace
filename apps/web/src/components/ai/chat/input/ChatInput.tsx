@@ -417,6 +417,7 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
           onToolApprovalModeToggle={(ask) => void toolApprovalSettings.setMode(ask ? 'ask' : 'auto')}
           trustedTools={showToolApprovalSettings ? toolApprovalSettings.grants : undefined}
           onRevokeTrustedTool={(grantId) => void toolApprovalSettings.revokeGrant(grantId)}
+          onToolsOpen={showToolApprovalSettings ? () => void toolApprovalSettings.refreshGrants() : undefined}
           showPageTree={showPageTree}
           onShowPageTreeToggle={toggleShowPageTree}
           mcpRunningServers={mcpRunningServers}

@@ -33,6 +33,8 @@ export interface InputFooterProps {
   onToolApprovalModeToggle?: (ask: boolean) => void;
   trustedTools?: Array<{ id: string; toolName: string; conversationId: string | null }>;
   onRevokeTrustedTool?: (grantId: string) => void;
+  /** Called each time the Tools menu opens. */
+  onToolsOpen?: () => void;
   /** Whether to show workspace page tree context to AI */
   showPageTree?: boolean;
   /** Callback when page tree context is toggled */
@@ -97,6 +99,7 @@ export function InputFooter({
   onToolApprovalModeToggle,
   trustedTools,
   onRevokeTrustedTool,
+  onToolsOpen,
   showPageTree = false,
   onShowPageTreeToggle,
   mcpRunningServers = 0,
@@ -141,6 +144,7 @@ export function InputFooter({
           onToolApprovalModeToggle={onToolApprovalModeToggle}
           trustedTools={trustedTools}
           onRevokeTrustedTool={onRevokeTrustedTool}
+          onOpen={onToolsOpen}
           showPageTree={showPageTree}
           onShowPageTreeToggle={onShowPageTreeToggle}
           mcpRunningServers={mcpRunningServers}

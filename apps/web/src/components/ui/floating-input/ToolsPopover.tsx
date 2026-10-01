@@ -40,6 +40,8 @@ export interface ToolsPopoverProps {
   trustedTools?: Array<{ id: string; toolName: string; conversationId: string | null }>;
   /** Revoke one grant by id. */
   onRevokeTrustedTool?: (grantId: string) => void;
+  /** Called each time the menu opens (e.g. to re-read the trusted tools). */
+  onOpen?: () => void;
   /** Whether to show workspace page tree context to AI */
   showPageTree?: boolean;
   /** Callback when page tree context is toggled */
@@ -87,6 +89,7 @@ export function ToolsPopover({
   onToolApprovalModeToggle,
   trustedTools = [],
   onRevokeTrustedTool,
+  onOpen,
   showPageTree = false,
   onShowPageTreeToggle,
   mcpRunningServers = 0,
@@ -114,7 +117,7 @@ export function ToolsPopover({
   ].filter(Boolean).length;
 
   return (
-    <Popover>
+    <Popover onOpenChange={(open) => { if (open) onOpen?.(); }}>
       <PopoverTrigger asChild>
         <Button
           variant="ghost"
