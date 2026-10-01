@@ -37,10 +37,9 @@ const parseInput = (value: unknown): Record<string, unknown> | null => {
 
 const MAX_PREVIEW_CHARS = 1200;
 
-const previewOf = (params: Record<string, unknown> | null): string | null => {
+const inputTextOf = (params: Record<string, unknown> | null): string | null => {
   if (!params || Object.keys(params).length === 0) return null;
-  const text = JSON.stringify(params, null, 2);
-  return text.length > MAX_PREVIEW_CHARS ? `${text.slice(0, MAX_PREVIEW_CHARS)}\n…` : text;
+  return JSON.stringify(params, null, 2);
 };
 
 /**
@@ -68,7 +67,11 @@ export const ToolApprovalCard: React.FC<ToolApprovalCardProps> = ({ part }) => {
   );
   const label = formatToolName(effectiveName);
   const title = describeToolCall(effectiveName, params, label);
-  const preview = useMemo(() => previewOf(params), [params]);
+  const inputText = useMemo(() => inputTextOf(params), [params]);
+  const isLongInput = inputText !== null && inputText.length > MAX_PREVIEW_CHARS;
+  // The user approves what they can read: a long input is cut only until they ask for all of it.
+  const [showFullInput, setShowFullInput] = useState(false);
+  const preview = inputText && isLongInput && !showFullInput ? `${inputText.slice(0, MAX_PREVIEW_CHARS)}\n…` : inputText;
 
   const [denying, setDenying] = useState(false);
   const [reason, setReason] = useState('');
@@ -113,7 +116,21 @@ export const ToolApprovalCard: React.FC<ToolApprovalCardProps> = ({ part }) => {
       </p>
 
       {preview && (
-        <pre className="max-h-48 overflow-auto rounded-md bg-muted/50 p-2 text-[12px] leading-snug">{preview}</pre>
+        <div className="space-y-1">
+          <pre className={cn('overflow-auto rounded-md bg-muted/50 p-2 text-[12px] leading-snug', showFullInput ? 'max-h-96' : 'max-h-48')}>
+            {preview}
+          </pre>
+          {isLongInput && (
+            <button
+              type="button"
+              className="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+              aria-expanded={showFullInput}
+              onClick={() => setShowFullInput((open) => !open)}
+            >
+              {showFullInput ? 'Show less' : `Show all (${inputText.length.toLocaleString()} characters)`}
+            </button>
+          )}
+        </div>
       )}
 
       {!denying ? (

@@ -49,6 +49,26 @@ describe('ToolApprovalCard', () => {
     expect(container.textContent).not.toContain('tool_name');
   });
 
+  it('a long input is cut in the preview with a toggle that renders ALL of it, as text', () => {
+    const body = `${'a'.repeat(1500)}<b>END-MARKER</b>`;
+    const { getByRole, container } = renderWith(pausedPart({ input: { pageId: 'p1', body } }));
+    const pre = () => container.querySelector('pre')?.textContent ?? '';
+    expect(pre()).not.toContain('END-MARKER');
+
+    const toggle = getByRole('button', { name: /show all/i });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(toggle);
+
+    expect(pre()).toContain('<b>END-MARKER</b>');
+    expect(container.querySelector('pre b')).toBeNull();
+    expect(getByRole('button', { name: /show less/i }).getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('a short input has no toggle', () => {
+    const { queryByRole } = renderWith(pausedPart());
+    expect(queryByRole('button', { name: /show all/i })).toBeNull();
+  });
+
   it('without a provider (history / other viewers) renders read-only: buttons disabled, waiting note shown', () => {
     const { getByText } = render(<ToolApprovalCard part={pausedPart()} />);
     expect((getByText('Allow once').closest('button') as HTMLButtonElement).disabled).toBe(true);
