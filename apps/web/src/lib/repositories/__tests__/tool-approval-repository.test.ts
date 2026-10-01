@@ -43,7 +43,6 @@ vi.mock('@pagespace/db/schema/tool-approvals', () => ({
     approvalId: 'decisions.approvalId',
     approved: 'decisions.approved',
     outcome: 'decisions.outcome',
-    approved: 'decisions.approved',
     reason: 'decisions.reason',
     executedAt: 'decisions.executedAt',
   },
