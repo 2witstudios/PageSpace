@@ -8,7 +8,6 @@ import { SideQuestionCard } from '@/components/ai/btw/SideQuestionCard';
 import { useImageAttachments } from '@/lib/ai/shared/hooks/useImageAttachments';
 import { hasVisionCapability } from '@/lib/ai/core/vision-models';
 import { Loader2, Plus } from 'lucide-react';
-import { ProviderModelSelector } from '@/components/ai/chat/input/ProviderModelSelector';
 import { CompactMessageRenderer, AISelector, AiUsageMonitor, TasksDropdown, PlanChip } from '@/components/ai/shared';
 import { UndoAiChangesDialog, VirtualizedMessageList } from '@/components/ai/shared/chat';
 import {
@@ -1021,15 +1020,6 @@ const SidebarChatTab: React.FC = () => {
           }}
         />
 
-        <div className="px-1">
-          <ProviderModelSelector
-            provider={currentProvider}
-            model={currentModel}
-            onChange={setProviderSettings}
-            disabled={status === 'streaming'}
-          />
-        </div>
-
         <ChatInput
           ref={chatInputRef}
           value={input}
@@ -1049,8 +1039,10 @@ const SidebarChatTab: React.FC = () => {
           // (`driveId`/`crossDrive` above) is deliberately left as it was.
           commandDriveId={commandDriveIdFor(selectedAgent, locationContext?.currentDrive?.id)}
           crossDrive={true}
-          hideModelSelector={true}
           variant="sidebar"
+          selectedProvider={currentProvider}
+          selectedModel={currentModel}
+          onProviderModelChange={setProviderSettings}
           attachments={attachments}
           onAddFiles={addFiles}
           onRemoveFile={removeFile}
