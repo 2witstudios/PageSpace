@@ -16,9 +16,11 @@
  *    integration tool whose provider category is not `read`. Reads, `tool_search`,
  *    `finish`, `ask_user` never prompt.
  *  - Modes: `ask` (default, on by default) | `auto` (no prompts).
- *  - Non-interactive turns run as `auto`: worker dispatch (depth > 0), workflows,
- *    triggers, channel mentions. There is nobody to ask, and the interactive spawn
- *    or the automation setup was the consent.
+ *  - Non-interactive turns run as `auto`: any principal that is not a browser
+ *    session (dispatched workers authenticate as `service`; MCP and OAuth have
+ *    no card to click), plus workflows, triggers and channel mentions. There is
+ *    nobody to ask, and the interactive spawn or the automation setup was the
+ *    consent. See `isInteractiveApprovalTurn`.
  *  - Grants: "allow for this conversation" (conversationId set) and "always allow"
  *    (conversationId null), per user per tool.
  *
@@ -72,10 +74,11 @@ export interface ToolApprovalGrant {
 export interface ApprovalPolicyContext {
   mode: ToolApprovalMode;
   /**
-   * A human is present to answer: a browser session drove this turn and it is
-   * not a dispatched worker turn (`X-Agent-Dispatch-Depth === 0`). Anything
-   * else — workflow, trigger, channel mention, spawn_session/send_session
-   * workers — is non-interactive and runs as `auto`.
+   * A human is present to answer: the turn's authenticated principal is a
+   * browser session (`isInteractiveApprovalTurn`). Decided from the principal
+   * alone — never from `X-Agent-Dispatch-Depth`. Anything else (service-
+   * authenticated dispatched workers, MCP, OAuth; workflows, triggers and
+   * channel mentions) is non-interactive and runs as `auto`.
    */
   interactive: boolean;
   conversationId: string | null;
