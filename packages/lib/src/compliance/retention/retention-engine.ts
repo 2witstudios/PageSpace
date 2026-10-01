@@ -138,10 +138,14 @@ export async function cleanupExpiredAiUsageLogs(database: DB): Promise<CleanupRe
  *    `editedAt` is only set on content edits). This matches the existing
  *    `purgeInactiveMessages` semantics.
  *
- * ── CASCADE (migrations 0249/0250) ─────────────────────────────────────────
- * The `conversations` delete below is not a leaf. Two FKs cascade from it:
- * `messages.conversationId` (always did) and `ai_stream_sessions
- * .conversation_id` (0250). Purging one soft-deleted conversation therefore
+ * ── CASCADE (migrations 0249/0250/0320) ────────────────────────────────────
+ * The `conversations` delete below is not a leaf. Four FKs cascade from it:
+ * `messages.conversationId` (always did), `ai_stream_sessions
+ * .conversation_id` (0250), and — from 0320 — `ai_tool_approval_decisions
+ * .conversation_id` (each Allow/Deny record) and the conversation-scoped rows of
+ * `ai_tool_approval_grants.conversation_id` ("allow for this conversation";
+ * user-wide grants have a NULL conversation and are untouched). Purging one
+ * soft-deleted conversation therefore
  * also purges its per-generation stream checkpoints — message CONTENT
  * (`parts`) that nothing in this codebase had ever deleted before 0250. That
  * is strictly MORE deletion than before, and it is the intended direction:
@@ -170,7 +174,7 @@ export async function cleanupSoftDeletedChatRecords(database: DB): Promise<Clean
     .where(and(eq(messages.isActive, false), lt(messages.createdAt, cutoff)))
     .returning({ id: messages.id });
 
-  // Cascades into messages and ai_stream_sessions — sequenced last.
+  // Cascades into messages, ai_stream_sessions and the tool-approval tables — sequenced last.
   const convos = await database
     .delete(conversations)
     .where(and(eq(conversations.isActive, false), lt(conversations.updatedAt, cutoff)))

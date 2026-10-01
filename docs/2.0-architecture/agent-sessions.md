@@ -544,7 +544,7 @@ that drifts into double generation and double billing.
 
 **What "one pipeline" does NOT mean, and this section used to imply.** It names the ENTRY.
 It says nothing about the two strategy functions, and they are neither small nor DRY:
-`runPageChatTurn` is ~2,080 lines in one function and `runGlobalChatTurn` ~1,460, with
+`runPageChatTurn` is ~2,250 lines in one function and `runGlobalChatTurn` ~1,580, with
 **176 substantive lines of 40+ characters byte-identical between them** — measured, and
 clustered rather than scattered, in the epilogue (stream construction, `onFinish`,
 terminal persist, hold settle, telemetry), which is also where the billing settle,
@@ -736,6 +736,23 @@ error.
 losing them. It is worth naming because a search-mode agent LOOKS like an agent with page
 tools only — which is how #2460 was first misread — and because a deferral reported as a
 block would send the next reader after the wrong fix.
+
+### 3f. Tool approvals pause and resume a turn
+
+A gated tool call (writes, MCP tools, non-read integration tools — `approval-policy.ts`)
+pauses an interactive turn with the AI SDK's own `needsApproval`: the assistant message
+ends with a tool part in `approval-requested`. Only a browser-session principal is
+interactive; service-authenticated workers, MCP and OAuth turns run as `auto`.
+
+The user's answer re-POSTs the same chat URL with that message trailing. The resume
+(`core/approval-resume.ts`) writes the decision onto the ORIGINAL row, exactly once per
+approval id (`ai_tool_approval_decisions`, insert-on-conflict-do-nothing). The turn then
+runs the approved calls itself, in order, with its real tool context
+(`approvals/run-approved-executions.ts`): each start is an atomic claim, an aborted turn
+claims nothing more, and every call that starts ends in a recorded result on that row.
+The model request is then re-assembled so the continuation sees the results, and the SDK
+never runs its own execute-on-resume. Standing grants ("this conversation" / "always")
+live in `ai_tool_approval_grants`.
 
 ## 4. Vocabulary
 
