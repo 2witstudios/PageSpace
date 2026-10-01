@@ -151,7 +151,6 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   // the query from pulling every task into memory (the OOM crash this route caused).
   // Phase 2 hydrates only those ids' relations.
   const positionExpr = pages.position;
-  const positionOrder = [sortOrder === 'desc' ? desc(positionExpr) : asc(positionExpr), asc(taskItems.id)];
 
   // The Active / Completed tabs filter in SQL so a page of results is a page of
   // matching tasks — filtering after the fetch let completed rows crowd active ones
@@ -172,46 +171,44 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     search ? ilike(pages.title, `%${escapeLikePattern(search)}%`) : undefined,
   );
 
-  // Requesting limit+1 rows and slicing lets the response report `hasMore` (for the
+  // Requesting one row past the page lets the response report `hasMore` (for the
   // frontend's Load More) without a separate COUNT(*) query. In perStatus mode the
   // window is per column instead — rank within status — so `hasMore` means "some
   // column has rows beyond this window", which is what the board's Load More needs.
-  const orderedIdRows = perStatus
-    ? await (() => {
-        const ranked = db
-          .select({
-            id: taskItems.id,
-            rank: sql<number>`row_number() over (partition by ${taskItems.status} order by ${positionExpr} ${sortOrder === 'desc' ? sql`desc` : sql`asc`}, ${taskItems.id})`.as('rank'),
-          })
-          .from(taskItems)
-          .innerJoin(pages, eq(pages.id, taskItems.pageId))
-          .where(filterConditions)
-          .as('ranked');
-        return db
-          .select({ id: ranked.id, rank: ranked.rank })
-          .from(ranked)
-          .where(and(gt(ranked.rank, offset), lte(ranked.rank, offset + limit + 1)));
-      })()
-    : await db
-        .select({ id: taskItems.id })
-        .from(taskItems)
-        .innerJoin(pages, eq(pages.id, taskItems.pageId))
-        .where(filterConditions)
-        // taskItems.id is a tiebreaker, not a sort key the user chose: without it, two tasks
-        // sharing a position (e.g. a read-then-write race in POST's nextPosition, or backfilled
-        // pages that never got a distinct one) have no guaranteed stable order across repeated
-        // LIMIT/OFFSET calls, so paging (offset=0, then offset=100) can skip or duplicate rows.
-        .orderBy(...positionOrder)
-        .limit(limit + 1)
-        .offset(offset);
-  const perStatusRows = orderedIdRows as { id: string; rank?: number }[];
-  const hasMore = perStatus
-    ? perStatusRows.some(r => (r.rank ?? 0) > offset + limit)
-    : orderedIdRows.length > limit;
-  const boundedTaskIds = (perStatus
-    ? perStatusRows.filter(r => (r.rank ?? 0) <= offset + limit)
-    : perStatusRows.slice(0, limit)
-  ).map(r => r.id);
+  let boundedTaskIds: string[];
+  let hasMore: boolean;
+  if (perStatus) {
+    const ranked = db
+      .select({
+        id: taskItems.id,
+        rank: sql<number>`row_number() over (partition by ${taskItems.status} order by ${positionExpr} ${sortOrder === 'desc' ? sql`desc` : sql`asc`}, ${taskItems.id})`.as('rank'),
+      })
+      .from(taskItems)
+      .innerJoin(pages, eq(pages.id, taskItems.pageId))
+      .where(filterConditions)
+      .as('ranked');
+    const rankedRows = await db
+      .select({ id: ranked.id, rank: ranked.rank })
+      .from(ranked)
+      .where(and(gt(ranked.rank, offset), lte(ranked.rank, offset + limit + 1)));
+    hasMore = rankedRows.some(r => r.rank > offset + limit);
+    boundedTaskIds = rankedRows.filter(r => r.rank <= offset + limit).map(r => r.id);
+  } else {
+    const orderedIdRows = await db
+      .select({ id: taskItems.id })
+      .from(taskItems)
+      .innerJoin(pages, eq(pages.id, taskItems.pageId))
+      .where(filterConditions)
+      // taskItems.id is a tiebreaker, not a sort key the user chose: without it, two tasks
+      // sharing a position (e.g. a read-then-write race in POST's nextPosition, or backfilled
+      // pages that never got a distinct one) have no guaranteed stable order across repeated
+      // LIMIT/OFFSET calls, so paging (offset=0, then offset=100) can skip or duplicate rows.
+      .orderBy(sortOrder === 'desc' ? desc(positionExpr) : asc(positionExpr), asc(taskItems.id))
+      .limit(limit + 1)
+      .offset(offset);
+    hasMore = orderedIdRows.length > limit;
+    boundedTaskIds = orderedIdRows.slice(0, limit).map(r => r.id);
+  }
 
   if (boundedTaskIds.length === 0) {
     return emptyTasksResponse();
