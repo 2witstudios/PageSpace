@@ -192,4 +192,46 @@ describe('useRespondToApproval', () => {
     });
     expect(toastError).toHaveBeenCalledWith('This approval was already answered.');
   });
+
+  describe('awaitingToolCallIds', () => {
+    const withParts = (parts: Array<{ toolCallId: string; state: string; approved?: boolean }>): RenderedMessage => ({
+      mode: 'confirmed',
+      message: {
+        id: 'm1',
+        role: 'assistant',
+        parts: parts.map(({ toolCallId, state, approved }) => ({
+          type: 'tool-trash_page',
+          toolCallId,
+          state,
+          input: {},
+          approval: approved === undefined ? { id: `ap-${toolCallId}` } : { id: `ap-${toolCallId}`, approved },
+        })),
+      } as unknown as UIMessage,
+    });
+
+    it('lists an approved call on the last message while a sibling still waits for an answer (nothing has run yet)', () => {
+      const renderedMessages = [withParts([
+        { toolCallId: 'tc1', state: 'approval-responded', approved: true },
+        { toolCallId: 'tc2', state: 'approval-requested' },
+      ])];
+      const { result } = renderHook(() => useRespondToApproval(baseOptions({ renderedMessages })));
+      expect(result.current.awaitingToolCallIds).toEqual(new Set(['tc1']));
+    });
+
+    it('is empty once every call on the turn is answered (the turn resumes)', () => {
+      const renderedMessages = [withParts([
+        { toolCallId: 'tc1', state: 'approval-responded', approved: true },
+        { toolCallId: 'tc2', state: 'approval-responded', approved: false },
+      ])];
+      const { result } = renderHook(() => useRespondToApproval(baseOptions({ renderedMessages })));
+      expect(result.current.awaitingToolCallIds).toEqual(new Set());
+    });
+
+    it('never lists an approved call on an older message', () => {
+      const older = withParts([{ toolCallId: 'tc1', state: 'approval-responded', approved: true }]);
+      const renderedMessages = [{ ...older, message: { ...older.message, id: 'm0' } }, pausedMessage('m1', ['tc9'])];
+      const { result } = renderHook(() => useRespondToApproval(baseOptions({ renderedMessages })));
+      expect(result.current.awaitingToolCallIds).toEqual(new Set());
+    });
+  });
 });

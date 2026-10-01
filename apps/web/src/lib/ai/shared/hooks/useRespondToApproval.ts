@@ -3,6 +3,7 @@ import { toast } from 'sonner';
 import { isAIErrorCause } from '@/lib/ai/shared/aiErrorCause';
 import { parseLegacyErrorMessage } from '@/lib/ai/shared/parseLegacyErrorMessage';
 import { selectAnswerableApprovalToolCallIds } from '@/lib/ai/streams/selectAnswerableApprovalToolCallIds';
+import { isPendingApprovalPart, isRespondedApprovalPart } from '@/lib/ai/shared/approval-client';
 import type { RenderedMessage } from '@/lib/ai/streams/selectRenderedMessages';
 import { useAskUserAnsweringStore } from '@/stores/useAskUserAnsweringStore';
 import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
@@ -44,6 +45,11 @@ export interface UseRespondToApprovalOptions {
 export interface UseRespondToApprovalResult {
   /** toolCallIds of paused tool parts currently answerable on THIS surface. */
   approvableToolCallIds: ReadonlySet<string>;
+  /**
+   * toolCallIds of APPROVED calls on the last message that cannot run yet: a sibling
+   * on the same turn is still waiting for an answer, so nothing has been resumed.
+   */
+  awaitingToolCallIds: ReadonlySet<string>;
   respond: (toolCallId: string, decision: ToolApprovalDecision) => void;
 }
 
@@ -85,6 +91,17 @@ export function useRespondToApproval(options: UseRespondToApprovalOptions): UseR
     () => selectAnswerableApprovalToolCallIds({ renderedMessages, answeringToolCallIds, isConversationBusy }),
     [renderedMessages, answeringToolCallIds, isConversationBusy],
   );
+
+  const awaitingToolCallIds = useMemo(() => {
+    const ids = new Set<string>();
+    const last = stableMessages[stableMessages.length - 1];
+    const parts = (last?.role === 'assistant' ? last.parts : []) as Array<{ type: string; state?: string; toolCallId?: string; approval?: { approved?: unknown } }>;
+    if (!parts.some(isPendingApprovalPart)) return ids;
+    for (const part of parts) {
+      if (isRespondedApprovalPart(part) && part.approval?.approved === true && part.toolCallId) ids.add(part.toolCallId);
+    }
+    return ids;
+  }, [stableMessages]);
 
   const respond = useCallback(
     (toolCallId: string, decision: ToolApprovalDecision) => {
@@ -141,5 +158,5 @@ export function useRespondToApproval(options: UseRespondToApprovalOptions): UseR
     [approvableToolCallIds, stableMessages, conversationId, wrapSend, releasePendingSend, buildBody, addToolApprovalResponse],
   );
 
-  return { approvableToolCallIds, respond };
+  return { approvableToolCallIds, awaitingToolCallIds, respond };
 }

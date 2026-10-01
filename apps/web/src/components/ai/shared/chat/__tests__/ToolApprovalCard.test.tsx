@@ -6,7 +6,7 @@
  * the decision it stands for — the effective tool through execute_tool included.
  */
 import { describe, it, expect, vi } from 'vitest';
-import { render, fireEvent } from '@testing-library/react';
+import { render, fireEvent, screen } from '@testing-library/react';
 import { ToolApprovalCard } from '../approvals/ToolApprovalCard';
 import { ToolApprovalProvider } from '../approvals/ToolApprovalContext';
 
@@ -20,10 +20,12 @@ const pausedPart = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-const renderWith = (part: ReturnType<typeof pausedPart>, approvable = true, respond = vi.fn()) => ({
+const renderWith = (part: ReturnType<typeof pausedPart>, approvable = true, respond = vi.fn(), awaiting: string[] = []) => ({
   respond,
   ...render(
-    <ToolApprovalProvider value={{ approvableToolCallIds: new Set(approvable ? [part.toolCallId as string] : []), respond }}>
+    <ToolApprovalProvider
+      value={{ approvableToolCallIds: new Set(approvable ? [part.toolCallId as string] : []), awaitingToolCallIds: new Set(awaiting), respond }}
+    >
       <ToolApprovalCard part={part} />
     </ToolApprovalProvider>,
   ),
@@ -107,5 +109,41 @@ describe('ToolApprovalCard', () => {
     expect(approved.queryByText('Allow once')).toBeNull();
     const denied = renderWith(pausedPart({ state: 'approval-responded', approval: { id: 'ap1', approved: false } }));
     expect(denied.container.textContent).toContain('Denied');
+  });
+
+  it('an approved call still waiting on its sibling approvals says so, not "running"', () => {
+    const part = pausedPart({ state: 'approval-responded', approval: { id: 'ap1', approved: true } });
+    const { container } = renderWith(part, false, vi.fn(), ['tc1']);
+    expect(container.textContent).toContain('Approved · waiting for the other approvals');
+    expect(container.textContent).not.toContain('running');
+  });
+
+  it('warns that sending a message instead of answering denies the request', () => {
+    renderWith(pausedPart());
+    expect(screen.getByText(/sending a message instead will deny/i)).toBeTruthy();
+  });
+
+  it('Deny moves focus to a labelled reason box', () => {
+    renderWith(pausedPart());
+    fireEvent.click(screen.getByText('Deny').closest('button') as HTMLButtonElement);
+    const reason = screen.getByRole('textbox', { name: /reason for denying/i });
+    expect(document.activeElement).toBe(reason);
+  });
+
+  it('announces the card and its state changes through one polite live region', () => {
+    const respond = vi.fn();
+    const part = pausedPart();
+    const { rerender } = renderWith(part, true, respond);
+    const status = screen.getByRole('status');
+    expect(status.getAttribute('aria-live')).toBe('polite');
+    expect(status.textContent).toMatch(/approval needed/i);
+
+    rerender(
+      <ToolApprovalProvider value={{ approvableToolCallIds: new Set(), awaitingToolCallIds: new Set(), respond }}>
+        <ToolApprovalCard part={pausedPart({ state: 'approval-responded', approval: { id: 'ap1', approved: false } })} />
+      </ToolApprovalProvider>,
+    );
+    expect(screen.getByRole('status')).toBe(status);
+    expect(status.textContent).toMatch(/denied/i);
   });
 });

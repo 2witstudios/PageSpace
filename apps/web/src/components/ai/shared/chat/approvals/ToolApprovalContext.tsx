@@ -4,6 +4,8 @@ import type { ToolApprovalDecision } from '@/lib/ai/shared/hooks/useRespondToApp
 export interface ToolApprovalContextValue {
   /** toolCallIds of paused tool parts answerable in THIS chat instance (last message, chat idle). */
   approvableToolCallIds: ReadonlySet<string>;
+  /** Approved calls whose turn has not resumed yet because a sibling approval is still unanswered. */
+  awaitingToolCallIds?: ReadonlySet<string>;
   respond: (toolCallId: string, decision: ToolApprovalDecision) => void;
 }
 
