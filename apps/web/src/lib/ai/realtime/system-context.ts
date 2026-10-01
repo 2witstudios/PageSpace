@@ -38,9 +38,13 @@ import { buildVoiceInstructions } from './instructions';
 import type { PersonalizationInfo } from '../core/system-prompt';
 import { buildBuiltinSkillCatalog } from '../core/skill-catalog';
 import { filterToolsForSandboxEnablement } from '../core/tool-filtering';
+import type { ApprovalPolicyContext } from '../approvals/approval-policy';
 import {
+  FAIL_SAFE_VOICE_APPROVAL_POLICY,
   buildRealtimeToolExposure,
+  withoutToolsNeedingApproval,
   toRealtimeTools,
+  type VoiceApprovalScope,
   type RealtimeToolExposure,
   type ToolAllowlist,
 } from './tools';
@@ -86,6 +90,12 @@ export type VoiceSystemContextDeps = {
   readonly loadActivePlan: (conversationId: string, userId: string) => Promise<string>;
   /** The caller's own bio, style and rules, when they enabled them. */
   readonly loadPersonalization: (userId: string) => Promise<PersonalizationInfo | null>;
+  /**
+   * The tool-approval mode and grants for this call's binding. In `ask` mode
+   * the gated tools are stripped (a call has no approval card). A throw is
+   * treated as `ask` with no grants.
+   */
+  readonly loadApprovalPolicy: (scope: VoiceApprovalScope) => Promise<ApprovalPolicyContext>;
   readonly logger: {
     readonly warn: (message: string, meta?: Record<string, unknown>) => void;
   };
@@ -120,6 +130,28 @@ const softly = async <T>(
       error: error instanceof Error ? error.message : 'unknown',
     });
     return whenMissing;
+  }
+};
+
+/**
+ * The call's approval policy, failing SAFE: a loader that throws yields `ask`
+ * with no grants — never `auto`, which would hand the call every gated tool.
+ */
+const loadVoiceApprovalPolicySafely = async (
+  deps: VoiceSystemContextDeps,
+  request: VoiceSystemContextRequest,
+): Promise<ApprovalPolicyContext> => {
+  try {
+    return await deps.loadApprovalPolicy({
+      userId: request.userId,
+      ...(request.agent === undefined ? {} : { agentPageId: request.agent.pageId }),
+      ...(request.conversationId === undefined ? {} : { conversationId: request.conversationId }),
+    });
+  } catch (error) {
+    deps.logger.warn('Realtime voice approval policy could not be loaded; hiding gated tools', {
+      error: error instanceof Error ? error.message : 'unknown',
+    });
+    return FAIL_SAFE_VOICE_APPROVAL_POLICY;
   }
 };
 
@@ -191,9 +223,17 @@ export const buildVoiceCallContext = async (
   // BEFORE the exposure, for the same reason the allowlist is applied before it:
   // filtering afterwards would leave the stripped tools discoverable through
   // `tool_search` and callable through `execute_tool`.
-  const registry = request.agent
+  const sandboxed = request.agent
     ? (filterToolsForSandboxEnablement(deps.buildTools(), request.agent.sandboxEnabled) as ToolSet)
     : deps.buildTools();
+  // The approval gate, also BEFORE the exposure and for the same reason. In
+  // `ask` mode a tool that would pause on text is not offered on a call at all
+  // — there is no card to pause on. The bridge applies the same filter to what
+  // it will run (`voiceToolDispatchDeps`).
+  const registry = withoutToolsNeedingApproval(
+    sandboxed,
+    await loadVoiceApprovalPolicySafely(deps, request),
+  );
   const exposure = buildRealtimeToolExposure(registry, allowlist);
   // The PRE-split names, not `Object.keys(exposure.tools)`. After the split that
   // object holds the core tools and the two scaffolding tools, so gating on its

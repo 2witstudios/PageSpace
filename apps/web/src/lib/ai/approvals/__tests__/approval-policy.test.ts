@@ -8,6 +8,7 @@ import {
   isApprovalGatedTool,
   isToolApprovalMode,
   resolveEffectiveToolName,
+  withoutApprovalGatedTools,
   type ApprovalPolicyContext,
 } from '../approval-policy';
 
@@ -289,5 +290,61 @@ describe('applyApprovalPolicy', () => {
     const out = applyApprovalPolicy(tools, interactiveAsk({ grants: [{ toolName: 'trash_page', conversationId: null }] }));
     const needs = await (out.trash_page.needsApproval as (i: unknown, o: unknown) => Promise<boolean>)({}, { toolCallId: 'c', messages: [] });
     assert({ given: 'an always-allow grant', should: 'not need approval', actual: needs, expected: false });
+  });
+});
+
+describe('withoutApprovalGatedTools (surfaces with no approval card, e.g. voice)', () => {
+  const stub = { description: 'x', inputSchema: z.object({}), execute: async () => ({}) } as Tool;
+  const tools: ToolSet = {
+    read_page: stub,
+    trash_page: stub,
+    bash: stub,
+    mcp__srv__do: stub,
+    int__github__create_issue: stub,
+    tool_search: stub,
+    execute_tool: stub,
+  };
+  const keys = (ctx: ApprovalPolicyContext) => Object.keys(withoutApprovalGatedTools(tools, ctx)).sort();
+
+  it('drops every gated tool in ask mode and keeps reads and scaffolding', () => {
+    assert({
+      given: 'ask mode with no grants',
+      should: 'keep only ungated tools',
+      actual: keys(interactiveAsk({ gatedIntegrationToolNames: new Set(['int__github__create_issue']) })),
+      expected: ['execute_tool', 'read_page', 'tool_search'],
+    });
+  });
+
+  it('returns the same object in auto mode', () => {
+    assert({
+      given: 'auto mode',
+      should: 'return the input set untouched',
+      actual: withoutApprovalGatedTools(tools, interactiveAsk({ mode: 'auto' })) === tools,
+      expected: true,
+    });
+  });
+
+  it('keeps a tool with a standing grant', () => {
+    assert({
+      given: 'an "always" grant for bash',
+      should: 'keep bash and still drop the other gated tools',
+      actual: keys(interactiveAsk({ grants: [{ toolName: 'bash', conversationId: null }] })),
+      expected: ['bash', 'execute_tool', 'int__github__create_issue', 'read_page', 'tool_search'],
+    });
+  });
+
+  it('honours a conversation grant only in its own conversation', () => {
+    assert({
+      given: 'a grant for another conversation',
+      should: 'drop the tool',
+      actual: keys(interactiveAsk({ grants: [{ toolName: 'bash', conversationId: 'conv-other' }] })).includes('bash'),
+      expected: false,
+    });
+    assert({
+      given: 'a grant for this conversation',
+      should: 'keep the tool',
+      actual: keys(interactiveAsk({ grants: [{ toolName: 'bash', conversationId: 'conv-1' }] })).includes('bash'),
+      expected: true,
+    });
   });
 });

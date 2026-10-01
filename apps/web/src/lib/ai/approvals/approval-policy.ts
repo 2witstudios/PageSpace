@@ -211,3 +211,40 @@ export function applyApprovalPolicy<TOOLS extends ToolSet>(
   }
   return changed ? (out as TOOLS) : tools;
 }
+
+// ─── Surfaces with no approval card ───────────────────────────────────────────
+
+/**
+ * Remove every tool that {@link decideApproval} would pause on, for a surface
+ * that has no way to show the pause — a realtime VOICE call has no approval
+ * card, so a tool that would `ask` on text is simply not offered (owner
+ * decision, 2026-09). The decision per tool is the SAME `decideApproval` the
+ * text gate uses, so voice and text agree on what needs a person: `auto` mode
+ * returns the input untouched, standing grants keep their tool, and
+ * never-gated scaffolding (`tool_search`, `execute_tool`, `finish`) stays.
+ *
+ * MUST run BEFORE the search-mode split: `execute_tool` and `tool_search` are
+ * built from the set they are handed, so filtering afterwards would leave a
+ * gated tool discoverable and runnable through the dispatcher.
+ *
+ * The context's `interactive` is honoured as given — a voice call has a person
+ * on it, so its caller passes `true`.
+ */
+export function withoutApprovalGatedTools<TOOLS extends ToolSet>(
+  tools: TOOLS,
+  ctx: ApprovalPolicyContext,
+): TOOLS {
+  if (!ctx.interactive || ctx.mode === 'auto') return tools;
+  const out: ToolSet = {};
+  let changed = false;
+  for (const [name, tool] of Object.entries(tools)) {
+    // `input: undefined` — the outer name IS the tool here (no dispatcher input
+    // to resolve), and `execute_tool` by its own name is never gated.
+    if (decideApproval({ toolName: name, input: undefined }, ctx) === 'ask') {
+      changed = true;
+      continue;
+    }
+    out[name] = tool;
+  }
+  return changed ? (out as TOOLS) : tools;
+}

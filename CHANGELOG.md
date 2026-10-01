@@ -64,7 +64,9 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   yours to revoke from the composer's Tools menu, where a single switch also turns the whole thing
   off ("Auto") for your global assistant; each page agent has the same choice in its settings under
   Action Approval. Runs with nobody watching — workflows, triggers, channel mentions and the
-  worker sessions an approved spawn starts — never pause.
+  worker sessions an approved spawn starts — never pause. Voice calls have no approval card, so
+  while approvals are on, a call simply doesn't offer the actions that would ask (anything you've
+  set to "Always allow" still works by voice).
 - **Multi-question prompts from the assistant have Back and Next buttons** — when the assistant
   asks several questions at once, you could only switch between them by tapping the small
   numbered tabs or pressing the arrow keys, which is awkward on a phone. Each question now has a

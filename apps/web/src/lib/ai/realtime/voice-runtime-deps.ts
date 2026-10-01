@@ -35,7 +35,8 @@ import { buildActivePlanPrompt, getActivePlan } from '@/lib/ai/core/plan-binding
 import { getUserPersonalization } from '@/lib/ai/core/personalization-utils';
 import { readMessageText } from '@/lib/ai/core/message-utils';
 import { canPrincipalViewPage, type AuthResult } from '@/lib/auth';
-import { buildRealtimeToolSet, type ToolAllowlist } from './tools';
+import { loadVoiceApprovalPolicy } from '@/lib/ai/approvals/load-approval-context';
+import { buildRealtimeToolSet, withoutToolsNeedingApproval, type ToolAllowlist } from './tools';
 import { buildVoiceCallContext, type VoiceSystemContextDeps } from './system-context';
 import type { BindingLoaderDeps, SeedConversation, AgentPage } from './binding-loader';
 import type {
@@ -151,6 +152,7 @@ export const voiceSystemContextDeps = (auth: AuthResult): VoiceSystemContextDeps
       ),
     ),
   loadPersonalization: (userId) => getUserPersonalization(userId),
+  loadApprovalPolicy: (scope) => loadVoiceApprovalPolicy(scope, loggers.ai),
   logger: loggers.ai,
 });
 
@@ -250,17 +252,34 @@ export const voiceTranscriptDeps: TranscriptPersistenceDeps = {
  * be — mirroring the exposure side and the global text path.
  */
 export const voiceToolDispatchDeps = async (
-  assistant?: { agentPageId: string; enabledTools: readonly string[] | null },
+  assistant: { agentPageId: string; enabledTools: readonly string[] | null } | undefined,
+  scope: { userId: string; conversationId?: string },
 ): Promise<RealtimeToolDispatchDeps> => {
   const allowlist: ToolAllowlist = assistant?.enabledTools ?? null;
   // Fail CLOSED on a page that cannot be read: an agent whose row is gone is
   // not an agent whose sandbox access we can vouch for.
-  const sandboxEnabled = assistant
-    ? ((await loadAgentPage(assistant.agentPageId))?.sandboxEnabled ?? false)
-    : true;
+  const [agentPage, approvalPolicy] = await Promise.all([
+    assistant ? loadAgentPage(assistant.agentPageId) : Promise.resolve(undefined),
+    loadVoiceApprovalPolicy(
+      {
+        userId: scope.userId,
+        ...(assistant === undefined ? {} : { agentPageId: assistant.agentPageId }),
+        ...(scope.conversationId === undefined ? {} : { conversationId: scope.conversationId }),
+      },
+      loggers.ai,
+    ),
+  ]);
+  const sandboxEnabled = assistant ? (agentPage?.sandboxEnabled ?? false) : true;
+  // The SAME approval filter the handshake applied to what it advertised
+  // (`buildVoiceCallContext`): in `ask` mode a gated tool is not in the set this
+  // hop can resolve — directly or through `execute_tool` — so a call the model
+  // was never offered cannot run here either.
   return {
     tools: buildRealtimeToolSet(
-      filterToolsForSandboxEnablement(buildPageSpaceTools(), sandboxEnabled) as ToolSet,
+      withoutToolsNeedingApproval(
+        filterToolsForSandboxEnablement(buildPageSpaceTools(), sandboxEnabled) as ToolSet,
+        approvalPolicy,
+      ),
       allowlist,
     ),
     logger: loggers.ai,

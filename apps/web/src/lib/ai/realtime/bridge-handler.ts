@@ -37,9 +37,15 @@ export type VoiceBridgeDeps = {
    * its allowlist: the per-agent sandbox switch is part of the same decision and
    * is read server-side from the agent's own row (issue #2460), so it may be
    * async. Undefined for an unbound (Global Assistant) call.
+   *
+   * The SCOPE (who is calling, in which conversation) is what the tool-approval
+   * filter is read for: in `ask` mode the gated tools are not executable on a
+   * call, minus whatever the user's grants allow — the same filter the
+   * handshake applied to what it advertised.
    */
   readonly toolDeps: (
     assistant: VoiceAssistant | undefined,
+    scope: { readonly userId: string; readonly conversationId?: string },
   ) => RealtimeToolDispatchDeps | Promise<RealtimeToolDispatchDeps>;
   readonly transcriptDeps: TranscriptPersistenceDeps;
   /** Resolved from env at the edge, for tool-call attribution. */
@@ -90,7 +96,12 @@ export const handleVoiceBridgeRequest = async (
     // off the execution context. An agent with no allowlist configured is
     // `null` — unrestricted — and the Global Assistant has no agent at all.
     const outcome = await dispatchRealtimeToolCall(
-      await deps.toolDeps(request.assistant),
+      await deps.toolDeps(request.assistant, {
+        userId: request.userId,
+        ...(request.conversationId === undefined
+          ? {}
+          : { conversationId: request.conversationId }),
+      }),
       {
         name: request.name,
         argumentsJson: request.argumentsJson,

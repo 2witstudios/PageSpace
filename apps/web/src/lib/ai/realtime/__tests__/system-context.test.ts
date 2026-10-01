@@ -28,6 +28,7 @@ const promptOf = async (
 ): Promise<string> => (await buildVoiceCallContext(deps, request)).instructions;
 import { buildPageSpaceTools } from '../../core/ai-tools';
 import { buildRealtimeToolExposure } from '../tools';
+import type { ApprovalPolicyContext } from '../../approvals/approval-policy';
 
 const fakeTool = (description = 'A tool.'): Tool =>
   ({
@@ -52,6 +53,20 @@ const agent = (over: Partial<BoundAgent> = {}): BoundAgent => ({
   ...over,
 });
 
+const autoPolicy: ApprovalPolicyContext = {
+  mode: 'auto',
+  interactive: true,
+  conversationId: null,
+  grants: [],
+};
+const askPolicy = (over: Partial<ApprovalPolicyContext> = {}): ApprovalPolicyContext => ({
+  mode: 'ask',
+  interactive: true,
+  conversationId: null,
+  grants: [],
+  ...over,
+});
+
 function deps(over: Partial<VoiceSystemContextDeps> = {}) {
   const warn = vi.fn();
   const base: VoiceSystemContextDeps = {
@@ -59,6 +74,9 @@ function deps(over: Partial<VoiceSystemContextDeps> = {}) {
     loadAgentMemory: vi.fn(async () => '\n\n<<MEMORY>>'),
     loadActivePlan: vi.fn(async () => '\n\n<<PLAN>>'),
     loadPersonalization: vi.fn(async () => ({ enabled: true, bio: 'Ships release notes.' })),
+    // `auto` by default: most cases here are about exposure and prompt shape,
+    // not the approval gate, which has its own describe block below.
+    loadApprovalPolicy: vi.fn(async () => autoPolicy),
     logger: { warn },
     ...over,
   };
@@ -124,6 +142,92 @@ describe('buildVoiceCallContext — the per-agent sandbox switch', () => {
 
     // Mirrors the global text path, which applies no per-agent switch either.
     expect(context.tools.map((tool) => tool.name)).toContain('execute_tool');
+  });
+});
+
+/**
+ * A call has no approval card. In `ask` mode the tools the text gate would
+ * pause on are not offered at all — neither upfront nor through the discovery
+ * pair — so the model is never told about a tool it cannot run.
+ */
+describe('buildVoiceCallContext — the tool-approval gate', () => {
+  const exposedFor = async (
+    policy: ApprovalPolicyContext | Error,
+    request: Parameters<typeof buildVoiceCallContext>[1] = { userId: 'u1' },
+  ) => {
+    const loadApprovalPolicy = vi.fn(async () => {
+      if (policy instanceof Error) throw policy;
+      return policy;
+    });
+    const { deps: d, warn } = deps({ loadApprovalPolicy });
+    const context = await buildVoiceCallContext(d, request);
+    return {
+      names: context.tools.map((tool) => tool.name),
+      listed: catalog(context.instructions),
+      loadApprovalPolicy,
+      warn,
+    };
+  };
+
+  it('given ask mode, should offer no gated tool, upfront or deferred', async () => {
+    const { names, listed } = await exposedFor(askPolicy());
+
+    expect(names).toContain('read_page');
+    expect(names).not.toContain('create_task');
+    expect(names).not.toContain('spawn_session');
+    // Both deferred tools were gated, so there is nothing left to discover.
+    expect(names).not.toContain('execute_tool');
+    expect(listed).not.toContain('spawn_session');
+  });
+
+  it('given auto mode, should offer everything', async () => {
+    const { names, listed } = await exposedFor(autoPolicy);
+
+    expect(names).toContain('execute_tool');
+    expect(listed).toContain('create_task');
+    expect(listed).toContain('spawn_session');
+  });
+
+  it('given ask mode and a standing grant, should keep exactly that tool', async () => {
+    const { listed } = await exposedFor(
+      askPolicy({ grants: [{ toolName: 'spawn_session', conversationId: null }] }),
+    );
+
+    expect(listed).toContain('spawn_session');
+    expect(listed).not.toContain('create_task');
+  });
+
+  it('given a grant for ANOTHER conversation, should not keep the tool', async () => {
+    const { names } = await exposedFor(
+      askPolicy({
+        conversationId: 'conv1',
+        grants: [{ toolName: 'spawn_session', conversationId: 'conv-other' }],
+      }),
+    );
+
+    expect(names).not.toContain('execute_tool');
+  });
+
+  it('given the policy cannot be loaded, should fail SAFE to ask with no grants', async () => {
+    const { names, warn } = await exposedFor(new Error('db down'));
+
+    expect(names).toContain('read_page');
+    expect(names).not.toContain('execute_tool');
+    expect(warn).toHaveBeenCalled();
+  });
+
+  it("should read the policy for the call's own agent and conversation", async () => {
+    const { loadApprovalPolicy } = await exposedFor(autoPolicy, {
+      userId: 'u1',
+      conversationId: 'conv1',
+      agent: agent({ sandboxEnabled: true }),
+    });
+
+    expect(loadApprovalPolicy).toHaveBeenCalledWith({
+      userId: 'u1',
+      agentPageId: 'agent1',
+      conversationId: 'conv1',
+    });
   });
 });
 

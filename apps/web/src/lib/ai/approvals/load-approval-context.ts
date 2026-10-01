@@ -11,11 +11,14 @@
  */
 
 import { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
+import { pages } from '@pagespace/db/schema/core';
 import { getConfig as getGlobalAssistantConfig } from '@pagespace/lib/integrations/repositories/config-repository';
 import { toolApprovalRepository } from '@/lib/repositories/tool-approval-repository';
 import {
   DEFAULT_TOOL_APPROVAL_MODE,
   isToolApprovalMode,
+  type ApprovalPolicyContext,
   type ToolApprovalGrant,
   type ToolApprovalMode,
 } from './approval-policy';
@@ -56,4 +59,43 @@ export async function loadToolApprovalGrants(
     });
     return [];
   }
+}
+
+/** A page agent's mode (`pages.toolApprovalMode`); `ask` when missing or unreadable. */
+export async function loadPageToolApprovalMode(pageId: string, logger: WarnLogger): Promise<ToolApprovalMode> {
+  try {
+    const [row] = await db
+      .select({ toolApprovalMode: pages.toolApprovalMode })
+      .from(pages)
+      .where(eq(pages.id, pageId));
+    return isToolApprovalMode(row?.toolApprovalMode) ? row.toolApprovalMode : DEFAULT_TOOL_APPROVAL_MODE;
+  } catch (error) {
+    logger.warn('tool approvals: could not read the page agent mode; proceeding in ask mode', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return DEFAULT_TOOL_APPROVAL_MODE;
+  }
+}
+
+/**
+ * The approval context for a VOICE call — the mode and grants the text turn on
+ * the same binding would read: the bound page agent's mode, else the Global
+ * Assistant's; this user's standing grants, plus the conversation's own when
+ * the call is bound to one. Grants are read only in `ask` mode, the only mode
+ * where they matter. Never throws: every read fails safe (`ask`, no grants).
+ *
+ * `interactive: true` — a person is on the call. Voice has no approval card,
+ * so the caller STRIPS what would ask (`withoutApprovalGatedTools`) instead of
+ * wrapping it with `needsApproval`.
+ */
+export async function loadVoiceApprovalPolicy(
+  scope: { userId: string; agentPageId?: string; conversationId?: string },
+  logger: WarnLogger,
+): Promise<ApprovalPolicyContext> {
+  const conversationId = scope.conversationId ?? null;
+  const mode = scope.agentPageId
+    ? await loadPageToolApprovalMode(scope.agentPageId, logger)
+    : await loadGlobalToolApprovalMode(scope.userId, logger);
+  const grants = mode === 'ask' ? await loadToolApprovalGrants(scope.userId, conversationId, logger) : [];
+  return { mode, interactive: true, conversationId, grants };
 }
