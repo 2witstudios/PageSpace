@@ -83,7 +83,7 @@ describe('useRespondToApproval', () => {
       result.current.respond('tc1', { approvalId: 'ap-tc1', approved: true });
       await flush();
     });
-    expect(revertSpy).toHaveBeenCalledWith('conv-1', { messageId: 'm1', toolCallId: 'tc1' });
+    expect(revertSpy).toHaveBeenCalledWith('conv-1', { messageId: 'm1', toolCallId: 'tc1', approval: { id: 'ap-tc1', approved: true } });
     expect(useAskUserAnsweringStore.getState().answeringToolCallIds.has('tc1')).toBe(false);
   });
 

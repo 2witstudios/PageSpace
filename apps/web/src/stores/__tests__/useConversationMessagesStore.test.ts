@@ -281,13 +281,13 @@ describe('useConversationMessagesStore', () => {
       { type: 'toolApprovalResponse', payload: { messageId: 'm1', toolCallId: 'tc1', approval: { id: 'ap1', approved: true } } },
     ]);
 
-    revertToolApprovalResponse('c1', { messageId: 'm1', toolCallId: 'tc1' });
+    revertToolApprovalResponse('c1', { messageId: 'm1', toolCallId: 'tc1', approval: { id: 'ap1', approved: true } });
     expect(getEntry('c1').messages[0].parts[0]).toEqual({ type: 'tool-trash_page', toolCallId: 'tc1', state: 'approval-requested', input: {}, approval: { id: 'ap1' } });
   });
 
   it('given revertToolApprovalResponse for an untracked conversation, should leave the store untouched', () => {
     const before = useConversationMessagesStore.getState().byConversationId;
-    useConversationMessagesStore.getState().revertToolApprovalResponse('nope', { messageId: 'm1', toolCallId: 'tc1' });
+    useConversationMessagesStore.getState().revertToolApprovalResponse('nope', { messageId: 'm1', toolCallId: 'tc1', approval: { id: 'ap1', approved: true } });
     expect(useConversationMessagesStore.getState().byConversationId).toBe(before);
   });
 

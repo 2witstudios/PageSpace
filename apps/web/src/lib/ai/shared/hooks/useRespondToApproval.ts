@@ -120,7 +120,7 @@ export function useRespondToApproval(options: UseRespondToApprovalOptions): UseR
           if (!dispatched) releasePendingSend();
         } catch (err) {
           if (conversationId && messageId) {
-            conversationMessagesActions.revertToolApprovalResponse(conversationId, { messageId, toolCallId });
+            conversationMessagesActions.revertToolApprovalResponse(conversationId, { messageId, toolCallId, approval });
           }
           console.error('Failed to submit tool approval:', err);
         } finally {

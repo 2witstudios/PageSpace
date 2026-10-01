@@ -36,20 +36,38 @@ describe('applyToolApprovalResponse', () => {
 describe('revertToolApprovalResponse', () => {
   it('returns the part to approval-requested and keeps only the approval id', () => {
     const answered = applyToolApprovalResponse([msg('m1', [paused('a', 'ap-a')])], { messageId: 'm1', toolCallId: 'a', approval: { id: 'ap-a', approved: true, reason: 'ok' } });
-    const out = revertToolApprovalResponse(answered, { messageId: 'm1', toolCallId: 'a' });
+    const out = revertToolApprovalResponse(answered, { messageId: 'm1', toolCallId: 'a', approval: { id: 'ap-a', approved: true, reason: 'ok' } });
     expect(out[0].parts[0]).toEqual({ type: 'tool-trash_page', toolCallId: 'a', state: 'approval-requested', input: { pageId: 'p' }, approval: { id: 'ap-a' } });
   });
 
-  it('a part with no approval record reverts without inventing one', () => {
-    const out = revertToolApprovalResponse([msg('m1', [{ type: 'tool-trash_page', toolCallId: 'a', state: 'approval-responded' }])], { messageId: 'm1', toolCallId: 'a' });
-    expect(out[0].parts[0]).toEqual({ type: 'tool-trash_page', toolCallId: 'a', state: 'approval-requested' });
+  it('given the part carries a DIFFERENT answer than the one this tab applied (another tab answered first), leaves it alone', () => {
+    const list = [msg('m1', [{ ...paused('a', 'ap-a'), state: 'approval-responded', approval: { id: 'ap-a', approved: false, reason: 'no' } }])];
+    expect(revertToolApprovalResponse(list, { messageId: 'm1', toolCallId: 'a', approval: { id: 'ap-a', approved: true } })).toBe(list);
+  });
+
+  it('given the part carries a different approval id (a re-issued request), leaves it alone', () => {
+    const list = [msg('m1', [{ ...paused('a', 'ap-b'), state: 'approval-responded', approval: { id: 'ap-b', approved: true } }])];
+    expect(revertToolApprovalResponse(list, { messageId: 'm1', toolCallId: 'a', approval: { id: 'ap-a', approved: true } })).toBe(list);
+  });
+
+  /**
+   * Known limit: another tab's answer that is IDENTICAL to ours (same id, same
+   * approved, same reason) cannot be told apart from our own optimistic flip by
+   * value, so it is reverted. That only reopens the card until the realtime
+   * update for the executed call (output-*) lands, and a click in the meantime
+   * is refused by the server with a 409 again — no answer is lost or doubled.
+   */
+  it('given an identical answer, reverts (indistinguishable from our own flip — see the note above)', () => {
+    const answered = applyToolApprovalResponse([msg('m1', [paused('a', 'ap-a')])], { messageId: 'm1', toolCallId: 'a', approval: { id: 'ap-a', approved: true } });
+    const out = revertToolApprovalResponse(answered, { messageId: 'm1', toolCallId: 'a', approval: { id: 'ap-a', approved: true } });
+    expect(out[0].parts[0]).toMatchObject({ state: 'approval-requested', approval: { id: 'ap-a' } });
   });
 
   it.each(['approval-requested', 'output-available', 'output-error', 'output-denied'])(
     'leaves a part in %s alone (newer server truth arrived before the 409) — returns the input reference',
     (state) => {
       const list = [msg('m1', [{ ...paused('a', 'ap-a'), state, approval: { id: 'ap-a', approved: true } }])];
-      expect(revertToolApprovalResponse(list, { messageId: 'm1', toolCallId: 'a' })).toBe(list);
+      expect(revertToolApprovalResponse(list, { messageId: 'm1', toolCallId: 'a', approval: { id: 'ap-a', approved: true } })).toBe(list);
     },
   );
 });

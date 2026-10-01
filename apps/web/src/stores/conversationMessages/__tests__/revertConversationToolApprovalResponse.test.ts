@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import type { UIMessage } from 'ai';
 import { applyConversationToolApprovalResponse } from '../applyConversationToolApprovalResponse';
 import { revertConversationToolApprovalResponse } from '../revertConversationToolApprovalResponse';
+import { applyConfirmedMessage } from '../applyConfirmedMessage';
 import type { ConversationMessagesById } from '../seedEmpty';
 
 const paused = (toolCallId: string) => ({ type: 'tool-trash_page', toolCallId, state: 'approval-requested', input: {}, approval: { id: `ap-${toolCallId}` } });
@@ -13,7 +14,7 @@ describe('revertConversationToolApprovalResponse', () => {
   it('puts the part back to approval-requested AND retracts the recorded mutation, so a racing load cannot replay the withdrawn answer', () => {
     const initial: ConversationMessagesById = { c1: entry([assistantMsg('a1', 'tc1')]) };
     const answered = applyConversationToolApprovalResponse(initial, { conversationId: 'c1', payload });
-    const result = revertConversationToolApprovalResponse(answered, { conversationId: 'c1', payload: { messageId: 'a1', toolCallId: 'tc1' } });
+    const result = revertConversationToolApprovalResponse(answered, { conversationId: 'c1', payload: { messageId: 'a1', toolCallId: 'tc1', approval: payload.approval } });
     expect(result.c1.messages[0].parts[0]).toMatchObject({ state: 'approval-requested', approval: { id: 'ap-tc1' } });
     expect(result.c1.pendingMutationsSinceLoad).toEqual([]);
   });
@@ -25,15 +26,35 @@ describe('revertConversationToolApprovalResponse', () => {
       applyConversationToolApprovalResponse(initial, { conversationId: 'c1', payload }),
       { conversationId: 'c1', payload: other },
     );
-    const result = revertConversationToolApprovalResponse(answered, { conversationId: 'c1', payload: { messageId: 'a1', toolCallId: 'tc1' } });
+    const result = revertConversationToolApprovalResponse(answered, { conversationId: 'c1', payload: { messageId: 'a1', toolCallId: 'tc1', approval: payload.approval } });
     expect(result.c1.pendingMutationsSinceLoad).toEqual([{ type: 'toolApprovalResponse', payload: other }]);
     expect(result.c1.messages[1].parts[0]).toMatchObject({ state: 'approval-responded' });
   });
 
+  it("given another tab's server-saved answer lands (realtime) between our optimistic apply and our 409, leaves that answer alone", () => {
+    const initial: ConversationMessagesById = { c1: entry([assistantMsg('a1', 'tc1')]) };
+    const answered = applyConversationToolApprovalResponse(initial, { conversationId: 'c1', payload });
+    const otherTabDenied = {
+      id: 'a1',
+      role: 'assistant',
+      parts: [{ ...paused('tc1'), state: 'approval-responded', approval: { id: 'ap-tc1', approved: false, reason: 'not that one' } }],
+    } as unknown as UIMessage;
+    const withServerTruth = applyConfirmedMessage(answered, { conversationId: 'c1', message: otherTabDenied });
+
+    const result = revertConversationToolApprovalResponse(withServerTruth, {
+      conversationId: 'c1',
+      payload: { messageId: 'a1', toolCallId: 'tc1', approval: payload.approval },
+    });
+    expect(result.c1.messages[0].parts[0]).toMatchObject({
+      state: 'approval-responded',
+      approval: { id: 'ap-tc1', approved: false, reason: 'not that one' },
+    });
+  });
+
   it('no-ops for an untracked conversation and leaves other conversations by reference', () => {
-    expect(revertConversationToolApprovalResponse({}, { conversationId: 'c1', payload: { messageId: 'a1', toolCallId: 'tc1' } })).toEqual({});
+    expect(revertConversationToolApprovalResponse({}, { conversationId: 'c1', payload: { messageId: 'a1', toolCallId: 'tc1', approval: payload.approval } })).toEqual({});
     const initial: ConversationMessagesById = { c1: entry([assistantMsg('a1', 'tc1')]), other: entry([assistantMsg('a2', 'tc2')]) };
-    const result = revertConversationToolApprovalResponse(initial, { conversationId: 'c1', payload: { messageId: 'a1', toolCallId: 'tc1' } });
+    const result = revertConversationToolApprovalResponse(initial, { conversationId: 'c1', payload: { messageId: 'a1', toolCallId: 'tc1', approval: payload.approval } });
     expect(result.other).toBe(initial.other);
   });
 });
