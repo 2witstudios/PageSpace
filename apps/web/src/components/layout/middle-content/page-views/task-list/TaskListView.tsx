@@ -131,6 +131,9 @@ const fetcher = async (url: string) => {
 // Matches DEFAULT_LIMIT in the GET route's query-spec.ts; must stay <= that route's
 // MAX_LIMIT (200) or every "Load More" page would silently get clamped down server-side.
 const TASKS_PAGE_SIZE = 100;
+// Kanban pages per column (see the route's perStatus mode), so the board's first page
+// is up to this many cards in every column — ~8 columns stays near the table's bound.
+const KANBAN_COLUMN_PAGE_SIZE = 25;
 
 /**
  * The task filter box, rendered in both toolbars.
@@ -491,7 +494,14 @@ function TaskListView({ page }: TaskListViewProps) {
   const tasksKeyPrefix = `/api/pages/${page.id}/tasks`;
   const getTasksPageKey = (pageIndex: number, previousPageData: TaskListData | null) => {
     if (previousPageData && !previousPageData.hasMore) return null;
-    return `${tasksKeyPrefix}?limit=${TASKS_PAGE_SIZE}&offset=${pageIndex * TASKS_PAGE_SIZE}`;
+    // Active / Completed filter in the query so the page holds matching tasks: filtering
+    // client-side let completed rows fill the page and hide active ones behind Load More.
+    const groupParam = filter === 'all' ? '' : `&statusGroup=${filter}`;
+    if (viewMode === 'kanban') {
+      // Column-aware paging: limit/offset count per status, not across the whole list.
+      return `${tasksKeyPrefix}?perStatus=true&limit=${KANBAN_COLUMN_PAGE_SIZE}&offset=${pageIndex * KANBAN_COLUMN_PAGE_SIZE}${groupParam}`;
+    }
+    return `${tasksKeyPrefix}?limit=${TASKS_PAGE_SIZE}&offset=${pageIndex * TASKS_PAGE_SIZE}${groupParam}`;
   };
   const {
     data: taskPages,
@@ -689,7 +699,7 @@ function TaskListView({ page }: TaskListViewProps) {
     // would be worse than the inconsistency. Find's own inability to see nested
     // rows is the filed follow-up.
     setExpandedPaths(EMPTY_EXPANDED);
-  }, [filter, search, setSize]);
+  }, [filter, search, viewMode, setSize]);
 
   // Filter tasks
   const filteredTasks = useMemo(() => data?.tasks.filter(task => {

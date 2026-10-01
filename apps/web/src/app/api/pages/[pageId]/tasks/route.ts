@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db'
-import { eq, and, desc, asc, inArray, count, isNotNull, ilike } from '@pagespace/db/operators'
+import { eq, and, desc, asc, inArray, notInArray, count, isNotNull, ilike, gt, lte, sql } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { taskLists, taskItems, taskStatusConfigs, taskAssignees } from '@pagespace/db/schema/tasks';
 import { taskTriggers } from '@pagespace/db/schema/task-triggers';
@@ -105,7 +105,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
 
   // Parse query params for filtering + pagination bounds
   const url = new URL(req.url);
-  const { status, assigneeId, search, sortOrder, limit, offset } = parseTaskQuerySpec(url.searchParams);
+  const { status, statusGroup, perStatus, assigneeId, search, sortOrder, limit, offset } = parseTaskQuerySpec(url.searchParams);
 
   // Fetch status configs for this task list
   // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
@@ -150,28 +150,68 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   // ordering rail — #2143), filtered, bounded set of task ids — this is what keeps
   // the query from pulling every task into memory (the OOM crash this route caused).
   // Phase 2 hydrates only those ids' relations.
-  // Requesting limit+1 rows and slicing lets the response report `hasMore` (for the
-  // frontend's Load More) without a separate COUNT(*) query.
   const positionExpr = pages.position;
-  const orderedIdRows = await db
-    .select({ id: taskItems.id })
-    .from(taskItems)
-    .innerJoin(pages, eq(pages.id, taskItems.pageId))
-    .where(and(
-      inArray(taskItems.pageId, childPageIds),
-      status ? eq(taskItems.status, status) : undefined,
-      assigneeId ? eq(taskItems.assigneeId, assigneeId) : undefined,
-      search ? ilike(pages.title, `%${escapeLikePattern(search)}%`) : undefined,
-    ))
-    // taskItems.id is a tiebreaker, not a sort key the user chose: without it, two tasks
-    // sharing a position (e.g. a read-then-write race in POST's nextPosition, or backfilled
-    // pages that never got a distinct one) have no guaranteed stable order across repeated
-    // LIMIT/OFFSET calls, so paging (offset=0, then offset=100) can skip or duplicate rows.
-    .orderBy(sortOrder === 'desc' ? desc(positionExpr) : asc(positionExpr), asc(taskItems.id))
-    .limit(limit + 1)
-    .offset(offset);
-  const hasMore = orderedIdRows.length > limit;
-  const boundedTaskIds = orderedIdRows.slice(0, limit).map(r => r.id);
+  const positionOrder = [sortOrder === 'desc' ? desc(positionExpr) : asc(positionExpr), asc(taskItems.id)];
+
+  // The Active / Completed tabs filter in SQL so a page of results is a page of
+  // matching tasks — filtering after the fetch let completed rows crowd active ones
+  // out of the first page. A slug no config classifies counts as active, matching the
+  // client's isCompletedStatus.
+  const doneSlugs = statusConfigs.filter(c => c.group === 'done').map(c => c.slug);
+  const statusGroupCondition = statusGroup === 'active'
+    ? (doneSlugs.length > 0 ? notInArray(taskItems.status, doneSlugs) : undefined)
+    : statusGroup === 'completed'
+      ? (doneSlugs.length > 0 ? inArray(taskItems.status, doneSlugs) : sql`false`)
+      : undefined;
+
+  const filterConditions = and(
+    inArray(taskItems.pageId, childPageIds),
+    status ? eq(taskItems.status, status) : undefined,
+    statusGroupCondition,
+    assigneeId ? eq(taskItems.assigneeId, assigneeId) : undefined,
+    search ? ilike(pages.title, `%${escapeLikePattern(search)}%`) : undefined,
+  );
+
+  // Requesting limit+1 rows and slicing lets the response report `hasMore` (for the
+  // frontend's Load More) without a separate COUNT(*) query. In perStatus mode the
+  // window is per column instead — rank within status — so `hasMore` means "some
+  // column has rows beyond this window", which is what the board's Load More needs.
+  const orderedIdRows = perStatus
+    ? await (() => {
+        const ranked = db
+          .select({
+            id: taskItems.id,
+            rank: sql<number>`row_number() over (partition by ${taskItems.status} order by ${positionExpr} ${sortOrder === 'desc' ? sql`desc` : sql`asc`}, ${taskItems.id})`.as('rank'),
+          })
+          .from(taskItems)
+          .innerJoin(pages, eq(pages.id, taskItems.pageId))
+          .where(filterConditions)
+          .as('ranked');
+        return db
+          .select({ id: ranked.id, rank: ranked.rank })
+          .from(ranked)
+          .where(and(gt(ranked.rank, offset), lte(ranked.rank, offset + limit + 1)));
+      })()
+    : await db
+        .select({ id: taskItems.id })
+        .from(taskItems)
+        .innerJoin(pages, eq(pages.id, taskItems.pageId))
+        .where(filterConditions)
+        // taskItems.id is a tiebreaker, not a sort key the user chose: without it, two tasks
+        // sharing a position (e.g. a read-then-write race in POST's nextPosition, or backfilled
+        // pages that never got a distinct one) have no guaranteed stable order across repeated
+        // LIMIT/OFFSET calls, so paging (offset=0, then offset=100) can skip or duplicate rows.
+        .orderBy(...positionOrder)
+        .limit(limit + 1)
+        .offset(offset);
+  const perStatusRows = orderedIdRows as { id: string; rank?: number }[];
+  const hasMore = perStatus
+    ? perStatusRows.some(r => (r.rank ?? 0) > offset + limit)
+    : orderedIdRows.length > limit;
+  const boundedTaskIds = (perStatus
+    ? perStatusRows.filter(r => (r.rank ?? 0) <= offset + limit)
+    : perStatusRows.slice(0, limit)
+  ).map(r => r.id);
 
   if (boundedTaskIds.length === 0) {
     return emptyTasksResponse();
