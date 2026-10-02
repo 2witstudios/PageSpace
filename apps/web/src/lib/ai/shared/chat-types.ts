@@ -29,6 +29,7 @@ export interface ProviderSettings {
     | 'bytedance'
     | 'aion-labs'
     | 'amazon'
+    | 'apodex'
     | 'arcee-ai'
     | 'cohere'
     | 'dots-studio'

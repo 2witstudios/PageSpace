@@ -74,6 +74,7 @@ export const ALL_PROVIDER_NAMES = [
   'bytedance',
   'aion-labs',
   'amazon',
+  'apodex',
   'arcee-ai',
   'cohere',
   'dots-studio',
