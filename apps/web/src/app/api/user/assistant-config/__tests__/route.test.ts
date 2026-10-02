@@ -123,3 +123,34 @@ describe('PUT /api/user/assistant-config audit', () => {
     );
   });
 });
+
+describe('PUT /api/user/assistant-config — tool approvals', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAuth();
+    mockUpdateConfig.mockResolvedValue({ ...mockConfig, toolApprovalMode: 'auto' });
+    mockGetOrCreateConfig.mockResolvedValue(mockConfig);
+  });
+
+  it('persists toolApprovalMode and echoes it back', async () => {
+    const request = new Request('http://localhost/api/user/assistant-config', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ toolApprovalMode: 'auto' }),
+    });
+    const response = await PUT(request);
+    expect(mockUpdateConfig).toHaveBeenCalledWith(expect.anything(), mockUserId, { toolApprovalMode: 'auto' });
+    expect((await response.json()).config.toolApprovalMode).toBe('auto');
+  });
+
+  it('rejects a mode that is neither ask nor auto', async () => {
+    const request = new Request('http://localhost/api/user/assistant-config', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ toolApprovalMode: 'deny' }),
+    });
+    expect((await PUT(request)).status).toBe(400);
+    expect(mockUpdateConfig).not.toHaveBeenCalled();
+  });
+
+  it('GET reports ask when the row predates the column', async () => {
+    const response = await GET(new Request('http://localhost/api/user/assistant-config'));
+    expect((await response.json()).config.toolApprovalMode).toBe('ask');
+  });
+});

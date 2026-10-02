@@ -54,6 +54,8 @@ export const WRITE_TOOLS = new Set([
   'create_task',
   'delete_task',
   'reorder_task',
+  // Adds a status config to a TASK_LIST (and lazily creates the list row).
+  'create_task_status',
   // Channel operations
   'send_channel_message',
   'delete_channel_message',
@@ -64,6 +66,13 @@ export const WRITE_TOOLS = new Set([
   'rsvp_calendar_event',
   'invite_calendar_attendees',
   'remove_calendar_attendee',
+  // Change which drives' members can see an event — a visibility/sharing write.
+  'share_event_with_drive',
+  'unshare_event_from_drive',
+  // Form targets: provisioning mints a PUBLIC append token for a sheet, and the
+  // status tool pauses/resumes/archives it — both change what strangers can do.
+  'provision_form_target',
+  'update_form_target_status',
   // Workflow (cron) operations
   'create_workflow',
   'update_workflow',
@@ -147,6 +156,96 @@ export const WRITE_TOOLS = new Set([
   // Browser operations that can change the page or submit to the web (G6a).
   // browser_read and browser_screenshot only observe and stay available.
   ...BROWSER_MUTATING_TOOL_NAMES,
+]);
+
+/**
+ * The reviewed complement of `WRITE_TOOLS`: every registered tool that is NOT a
+ * write. Membership means "safe in read-only mode and runs without an approval
+ * card in `ask` mode" — it observes, or it changes only the conversation's own
+ * bookkeeping/presentation (plan binding, pane layout), never user content,
+ * permissions, sharing, or anything outside PageSpace.
+ *
+ * `isApprovalGatedTool` and `filterToolsForReadOnly` are default-OPEN: a write
+ * tool missing from `WRITE_TOOLS` silently skips both. This set exists so that
+ * cannot happen by omission — `tool-write-classification.test.ts` requires
+ * every tool `buildPageSpaceTools()` can register to be in exactly one of the
+ * two sets, so a new tool fails CI until someone decides which it is.
+ */
+export const READ_TOOLS: ReadonlySet<string> = new Set([
+  // Drives, pages, sheets, search
+  'list_drives',
+  'list_pages',
+  'read_page',
+  'list_trash',
+  'read_sheet',
+  'regex_search',
+  'glob_search',
+  'multi_drive_search',
+  // Members, roles, agents, models, commands, skills, activity
+  'list_drive_members',
+  'list_collaborators',
+  'list_drive_roles',
+  'get_drive_role',
+  'list_agents',
+  'multi_drive_list_agents',
+  'list_conversations',
+  'read_conversation',
+  'list_models',
+  'list_commands',
+  'load_skill',
+  'get_activity',
+  // Tasks
+  'get_assigned_tasks',
+  // Calendar
+  'list_calendar_events',
+  'get_calendar_event',
+  'check_calendar_availability',
+  'list_event_drives',
+  // Workflows
+  'list_workflows',
+  // Web (GET-only, SSRF-guarded) and agent-account listing
+  'web_search',
+  'web_fetch',
+  'list_accounts',
+  // Conversation bookkeeping — see plan-tools.ts: metadata, not user content.
+  'set_plan',
+  'clear_plan',
+  // Pane layout of the conversation's own workspace. Presentation only: what a
+  // pane shows is never modified, and close_pane leaves the conversation/page
+  // and any shell intact.
+  'open_page_pane',
+  'list_panes',
+  'resize_pane',
+  'move_pane',
+  'close_pane',
+  'arrange_panes',
+  // Session/shell reads (see SESSION_FAMILY_TOOL_NAMES)
+  'list_sessions',
+  'read_session',
+  'read_shell',
+  // Sandbox reads
+  'readFile',
+  'git_status',
+  'git_diff',
+  'git_log',
+  'git_show',
+  'git_blame',
+  'gh_pr_list',
+  'gh_pr_view',
+  'gh_pr_diff',
+  'gh_pr_checks',
+  'gh_pr_thread_list',
+  'gh_run_list',
+  'gh_run_view',
+  'gh_workflow_list',
+  'gh_issue_list',
+  'gh_issue_view',
+  'gh_repo_view',
+  'gh_repo_list',
+  'gh_search',
+  'gh_label_list',
+  // Browser observation (G6a); the mutating verbs are in WRITE_TOOLS.
+  ...BROWSER_TOOL_NAMES.filter((name) => !BROWSER_MUTATING_TOOL_NAMES.includes(name)),
 ]);
 
 // Web search tools (excluded when web search is disabled)

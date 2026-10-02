@@ -57,6 +57,21 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 // persistence payload built from the merged message is genuinely exercised.
 // vi.hoisted: vi.mock factories are hoisted above all other top-level code, so
 // these mocks must be created through vi.hoisted to be visible inside them.
+// ask_user and tool-approval writers patch the same assistant row; every
+// persist must run under the per-message lock (tracked here).
+const lockLog = vi.hoisted(() => ({ keys: [] as string[], held: 0, savesOutsideLock: 0 }));
+vi.mock('@/lib/ai/core/assistant-message-lock', () => ({
+  withAssistantMessageLock: async <T,>(messageId: string, fn: () => Promise<T>): Promise<T> => {
+    lockLog.keys.push(messageId);
+    lockLog.held += 1;
+    try {
+      return await fn();
+    } finally {
+      lockLog.held -= 1;
+    }
+  },
+}));
+
 const { saveMessageToDatabase, saveGlobalAssistantMessageToDatabase } = vi.hoisted(() => ({
   saveMessageToDatabase: vi.fn().mockResolvedValue(undefined),
   saveGlobalAssistantMessageToDatabase: vi.fn().mockResolvedValue(undefined),
@@ -84,8 +99,10 @@ vi.mock('@/lib/ai/core/message-utils', async (importOriginal) => {
 // same spies these tests always asserted on.
 vi.mock('@/lib/repositories/message-repository', () => ({
   messageRepository: {
-    savePageMessage: (args: Record<string, unknown>) =>
-      saveMessageToDatabase(args).then(() => ({ saved: true, rev: 1 })),
+    savePageMessage: (args: Record<string, unknown>) => {
+      if (lockLog.held === 0) lockLog.savesOutsideLock += 1;
+      return saveMessageToDatabase(args).then(() => ({ saved: true, rev: 1 }));
+    },
     saveGlobalMessage: (args: Record<string, unknown>) =>
       saveGlobalAssistantMessageToDatabase(args).then(() => ({ saved: true, rev: 1 })),
   },
@@ -321,5 +338,24 @@ describe('dismissPendingAskUserForPageConversation', () => {
 
     expect(saveMessageToDatabase).toHaveBeenCalledTimes(1);
     expect(saveMessageToDatabase.mock.calls[0][0].status).toBe('interrupted');
+  });
+});
+
+describe('ask_user writers share the per-message lock with the tool-approval writers', () => {
+  it('apply and dismiss persist only while holding the lock keyed by the message id', async () => {
+    lockLog.keys = [];
+    lockLog.savesOutsideLock = 0;
+    const row = dbRow([pendingPart('q1')]);
+    selectRows = [row];
+    await dismissPendingAskUserForPageConversation({ pageId: 'page-1', conversationId: 'conv-1' });
+    selectRows = [dbRow([pendingPart('q2')])];
+    await applyAskUserResultsToPageMessage({
+      messageId: row.id,
+      pageId: 'page-1',
+      conversationId: 'conv-1',
+      results: [{ toolCallId: 'q2', output: { answers: [{ header: 'Auth', question: 'Which?', selectedLabel: 'OAuth' }] } }],
+    });
+    expect(lockLog.keys).toEqual([row.id, row.id]);
+    expect(lockLog.savesOutsideLock).toBe(0);
   });
 });

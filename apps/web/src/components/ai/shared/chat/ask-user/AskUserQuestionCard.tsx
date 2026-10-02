@@ -10,7 +10,7 @@ import type { AskUserInput, AskUserAnswer } from '@/lib/ai/tools/ask-user-tools'
 interface ToolPart {
   type: string;
   toolCallId?: string;
-  state?: 'input-streaming' | 'input-available' | 'output-available' | 'output-error' | 'done' | 'streaming';
+  state?: 'input-streaming' | 'input-available' | 'approval-requested' | 'approval-responded' | 'output-available' | 'output-error' | 'output-denied' | 'done' | 'streaming';
   input?: unknown;
   output?: unknown;
 }

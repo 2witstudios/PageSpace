@@ -8,7 +8,8 @@ vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }));
 
-vi.mock('@/lib/auth/auth-fetch', () => ({
+vi.mock('@/lib/auth/auth-fetch', async (importOriginal) => ({
+  ApiRequestError: (await importOriginal<typeof import('@/lib/auth/auth-fetch')>()).ApiRequestError,
   fetchWithAuth: vi.fn(),
   patch: vi.fn(),
 }));
@@ -136,5 +137,21 @@ describe('PageAgentSettingsTab dirty tracking', () => {
       ),
     );
     await waitFor(() => expect(onDirtyChange).toHaveBeenCalledWith(false));
+  });
+});
+
+describe('PageAgentSettingsTab save refusals', () => {
+  it('shows the server\'s reason when a save is refused (403), not a generic failure', async () => {
+    const { patch, ApiRequestError } = await import('@/lib/auth/auth-fetch');
+    const { toast } = await import('sonner');
+    const reason = 'Only a drive owner or admin can turn approvals off for this agent.';
+    (patch as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new ApiRequestError(reason, 403));
+    const user = userEvent.setup();
+    const { container } = render(<Harness onDirtyChange={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: /behavior/i }));
+    await user.click(screen.getAllByRole('combobox')[0]);
+    await user.click(await screen.findByRole('option', { name: /anthropic/i }));
+    fireEvent.submit(container.querySelector('form')!);
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(reason));
   });
 });

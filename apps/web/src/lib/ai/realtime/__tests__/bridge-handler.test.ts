@@ -207,7 +207,7 @@ describe('handleVoiceBridgeRequest — the bound assistant', () => {
 
     await handleVoiceBridgeRequest(deps({ toolDeps }), toolBody({ assistant }));
 
-    expect(toolDeps).toHaveBeenCalledWith(assistant);
+    expect(toolDeps).toHaveBeenCalledWith(assistant, { userId: 'u1' });
   });
 
   it('given NO assistant, should build it unrestricted rather than blocked', async () => {
@@ -220,7 +220,20 @@ describe('handleVoiceBridgeRequest — the bound assistant', () => {
 
     await handleVoiceBridgeRequest(deps({ toolDeps }), toolBody());
 
-    expect(toolDeps).toHaveBeenCalledWith(undefined);
+    expect(toolDeps).toHaveBeenCalledWith(undefined, { userId: 'u1' });
+  });
+
+  it("should scope the executable set to the caller and conversation, which the approval gate is read for", async () => {
+    // In `ask` mode the gated tools are stripped from this set, minus the
+    // user's grants — standing ones and this conversation's own.
+    const toolDeps = vi.fn(() => ({
+      tools: { read_page: tool(() => ({ title: 'Notes' })) },
+      logger: { warn: vi.fn(), error: vi.fn() },
+    }));
+
+    await handleVoiceBridgeRequest(deps({ toolDeps }), toolBody({ conversationId: 'conv1' }));
+
+    expect(toolDeps).toHaveBeenCalledWith(undefined, { userId: 'u1', conversationId: 'conv1' });
   });
 
   it('should reach the tool as the AGENT, not merely as the user who started the call', async () => {

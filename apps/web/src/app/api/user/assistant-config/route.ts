@@ -16,6 +16,8 @@ const updateConfigSchema = z.object({
     enabledIntegrations: z.array(z.string()).optional(),
   })).optional(),
   inheritDriveIntegrations: z.boolean().optional(),
+  /** Tool approvals: 'ask' pauses gated writes for the user; 'auto' never pauses. */
+  toolApprovalMode: z.enum(['ask', 'auto']).optional(),
 });
 
 /**
@@ -36,6 +38,7 @@ export async function GET(request: Request) {
         enabledUserIntegrations: config.enabledUserIntegrations,
         driveOverrides: config.driveOverrides,
         inheritDriveIntegrations: config.inheritDriveIntegrations,
+        toolApprovalMode: config.toolApprovalMode ?? 'ask',
         createdAt: config.createdAt,
         updatedAt: config.updatedAt,
       },
@@ -76,6 +79,10 @@ export async function PUT(request: Request) {
       updateData.inheritDriveIntegrations = validation.data.inheritDriveIntegrations;
     }
 
+    if (validation.data.toolApprovalMode !== undefined) {
+      updateData.toolApprovalMode = validation.data.toolApprovalMode;
+    }
+
     // Merge driveOverrides with existing
     if (validation.data.driveOverrides !== undefined) {
       const existing = await getOrCreateConfig(db, auth.userId);
@@ -95,6 +102,7 @@ export async function PUT(request: Request) {
         enabledUserIntegrations: config.enabledUserIntegrations,
         driveOverrides: config.driveOverrides,
         inheritDriveIntegrations: config.inheritDriveIntegrations,
+        toolApprovalMode: config.toolApprovalMode ?? 'ask',
         updatedAt: config.updatedAt,
       },
     });

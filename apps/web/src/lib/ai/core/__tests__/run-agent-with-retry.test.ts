@@ -155,6 +155,30 @@ describe('runAgentWithRetry', () => {
     });
   });
 
+  it('a needsApproval pause (tool-approval-request on the response) is terminal awaiting-user-input: one attempt, one envelope, no error part', async () => {
+    const paused = {
+      role: 'assistant',
+      content: [
+        { type: 'tool-call', toolCallId: 'c1', toolName: 'trash_page', input: {} },
+        { type: 'tool-approval-request', approvalId: 'ap1', toolCallId: 'c1' },
+      ],
+    } as unknown as ModelMessage;
+    const { result, chunks } = await run([{ finishReason: 'tool-calls', responseMessages: [paused] }]);
+    assert({
+      given: 'a first attempt that paused for tool approval',
+      should: 'not retry, end terminal awaiting-user-input, and write no error part',
+      actual: {
+        attempts: result.attempts,
+        finalOutcome: result.finalOutcome,
+        reason: result.terminalReason,
+        starts: chunks.filter((c) => c.type === 'start').length,
+        finishes: chunks.filter((c) => c.type === 'finish').length,
+        errors: chunks.filter((c) => c.type === 'error').length,
+      },
+      expected: { attempts: 1, finalOutcome: 'terminal', reason: 'awaiting-user-input', starts: 1, finishes: 1, errors: 0 },
+    });
+  });
+
   it('wraps all attempts in exactly one start/finish envelope', async () => {
     const { chunks } = await run([
       { finishReason: 'error', throwOnPipe: true },

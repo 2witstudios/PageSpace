@@ -11,7 +11,7 @@ import { Loader2, Bot, FolderTree, Shield, Copy, Check, Code2, Wrench, TerminalS
 import { toast } from 'sonner';
 import { useSWRConfig } from 'swr';
 import { useForm, useFormState, Controller } from 'react-hook-form';
-import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { patch, fetchWithAuth, ApiRequestError } from '@/lib/auth/auth-fetch';
 import Link from 'next/link';
 import { AI_PROVIDERS, getVisibleProviders } from '@/lib/ai/core/ai-providers-config';
 import { getRoleColorClasses } from '@/lib/utils';
@@ -41,6 +41,7 @@ interface AgentConfig {
   includePageTree?: boolean;
   pageTreeScope?: 'children' | 'drive';
   toolExposureMode?: 'upfront' | 'search';
+  toolApprovalMode?: 'ask' | 'auto';
   sandboxEnabled?: boolean;
   defaultEnvId?: string | null;
 }
@@ -124,6 +125,7 @@ interface FormData {
   includePageTree: boolean;
   pageTreeScope: 'children' | 'drive';
   toolExposureMode: 'upfront' | 'search';
+  toolApprovalMode: 'ask' | 'auto';
   sandboxEnabled: boolean;
   defaultEnvId: string | null;
 }
@@ -237,6 +239,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
       includePageTree: config?.includePageTree ?? false,
       pageTreeScope: config?.pageTreeScope ?? 'children',
       toolExposureMode: config?.toolExposureMode ?? 'upfront',
+      toolApprovalMode: config?.toolApprovalMode ?? 'ask',
       sandboxEnabled: config?.sandboxEnabled ?? false,
       defaultEnvId: config?.defaultEnvId ?? null,
     }
@@ -317,6 +320,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
       includePageTree: config.includePageTree ?? false,
       pageTreeScope: config.pageTreeScope ?? 'children',
       toolExposureMode: config.toolExposureMode ?? 'upfront',
+      toolApprovalMode: config.toolApprovalMode ?? 'ask',
       sandboxEnabled: config.sandboxEnabled ?? false,
       defaultEnvId: config.defaultEnvId ?? null,
     });
@@ -440,6 +444,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
       if (dirtyFields.includePageTree) dirtyPatch.includePageTree = data.includePageTree;
       if (dirtyFields.pageTreeScope) dirtyPatch.pageTreeScope = data.pageTreeScope;
       if (dirtyFields.toolExposureMode) dirtyPatch.toolExposureMode = data.toolExposureMode;
+      if (dirtyFields.toolApprovalMode) dirtyPatch.toolApprovalMode = data.toolApprovalMode;
       if (dirtyFields.sandboxEnabled) dirtyPatch.sandboxEnabled = data.sandboxEnabled;
       if (dirtyFields.defaultEnvId) dirtyPatch.defaultEnvId = data.defaultEnvId;
       const requestData = {
@@ -522,7 +527,9 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
       onSaved?.();
     } catch (error) {
       console.error('Error saving agent configuration:', error);
-      toast.error('Failed to save configuration');
+      // A refusal (e.g. only a drive owner/admin may turn Action Approval off)
+      // says why; anything else stays generic.
+      toast.error(error instanceof ApiRequestError && error.status === 403 ? error.message : 'Failed to save configuration');
     } finally {
       setIsSaving(false);
       onSavingChange?.(false);
@@ -1184,6 +1191,50 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
             />
             <p className="text-xs text-muted-foreground">
               Search mode keeps the context small when many tools are enabled. The agent&apos;s tool selection above still applies — it can never reach a tool that isn&apos;t enabled.
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <Wrench className="h-5 w-5" />
+              <div>
+                <CardTitle className="text-lg">Action Approval</CardTitle>
+                <CardDescription>
+                  Whether this agent pauses for your approval before it changes anything.
+                </CardDescription>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <Controller
+              name="toolApprovalMode"
+              control={control}
+              render={({ field }) => (
+                <Select value={field.value} onValueChange={field.onChange}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="ask">
+                      <div className="flex flex-col">
+                        <span>Ask before actions</span>
+                        <span className="text-xs text-muted-foreground">Edits, creates, deletions, messages and commands wait for Allow or Deny in the chat</span>
+                      </div>
+                    </SelectItem>
+                    <SelectItem value="auto">
+                      <div className="flex flex-col">
+                        <span>Auto</span>
+                        <span className="text-xs text-muted-foreground">Run everything the agent is allowed to do without asking</span>
+                      </div>
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              )}
+            />
+            <p className="text-xs text-muted-foreground">
+              Only chats with a person in them can pause. Workflows, triggers, channel mentions and worker sessions always run as Auto. Only a drive owner or admin can switch an agent to Auto.
             </p>
           </CardContent>
         </Card>

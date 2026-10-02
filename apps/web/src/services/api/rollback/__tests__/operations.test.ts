@@ -143,6 +143,7 @@ describe('operations — AGENT_CONFIG_ROLLBACK_FIELDS', () => {
         'toolExposureMode',
         'sandboxEnabled',
         'userScopedAccess',
+        'toolApprovalMode',
       ],
     });
   });

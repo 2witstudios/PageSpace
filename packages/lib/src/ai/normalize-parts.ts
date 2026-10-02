@@ -53,6 +53,10 @@ export interface NormalizableMessage {
  * - `state: 'output-available'` → one `tool-call` + one `tool-result`
  * - `state: 'input-available'`  → one `tool-call` (result not yet available)
  * - `state: 'output-error'`     → one `tool-call` + one `tool-result` (errorText as result)
+ * - `state: 'output-denied'`    → one `tool-call` + one `tool-result` (the user's refusal, so a
+ *                                  summary records that the write did NOT happen)
+ * - `state: 'approval-requested' | 'approval-responded'` → one `tool-call` (awaiting the user;
+ *                                  no result exists yet)
  * - `state: 'input-streaming'`  → dropped (incomplete; never reaches summarizer)
  * - Already-canonical parts     → pass through unchanged
  * - Non-tool parts              → pass through unchanged
@@ -92,7 +96,7 @@ export function normalizeMessageParts<M extends NormalizableMessage>(messages: M
         continue;
       }
 
-      if (state === 'input-available') {
+      if (state === 'input-available' || state === 'approval-requested' || state === 'approval-responded') {
         normalizedParts.push({
           type: 'tool-call',
           toolCallId: part.toolCallId,
@@ -126,6 +130,21 @@ export function normalizeMessageParts<M extends NormalizableMessage>(messages: M
           toolCallId: part.toolCallId,
           toolName,
           result: part.errorText ?? '[error]',
+        });
+        changed = true;
+      } else if (state === 'output-denied') {
+        const reason = (part as { approval?: { reason?: unknown } }).approval?.reason;
+        normalizedParts.push({
+          type: 'tool-call',
+          toolCallId: part.toolCallId,
+          toolName,
+          args: part.input,
+        });
+        normalizedParts.push({
+          type: 'tool-result',
+          toolCallId: part.toolCallId,
+          toolName,
+          result: typeof reason === 'string' && reason.length > 0 ? `[denied by user: ${reason}]` : '[denied by user]',
         });
         changed = true;
       } else {

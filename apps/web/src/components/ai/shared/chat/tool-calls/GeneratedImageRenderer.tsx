@@ -6,7 +6,7 @@ import { ImageOff, Loader2 } from 'lucide-react';
 import { usePageNavigation } from '@/hooks/usePageNavigation';
 
 export interface GeneratedImageToolPart {
-  state?: 'input-streaming' | 'input-available' | 'output-available' | 'output-error' | 'done' | 'streaming';
+  state?: 'input-streaming' | 'input-available' | 'approval-requested' | 'approval-responded' | 'output-available' | 'output-error' | 'output-denied' | 'done' | 'streaming';
   input?: unknown;
   output?: unknown;
   errorText?: string;

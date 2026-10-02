@@ -9,6 +9,7 @@
  * executor, not baked into the plan.
  */
 import { restoreFields } from './page-mutation-plan';
+import { withoutApprovalsOff } from './operations';
 import type { ActivityLogForRollback } from './types';
 
 type Values = Record<string, unknown>;
@@ -197,9 +198,11 @@ export function planAgentRollback(
     throw new Error('Page ID not found in activity');
   }
   const previousValues = activity.previousValues || {};
-  const updateData = restoreFields(agentFields, previousValues);
+  const { values: updateData, droppedApprovalsOff } = withoutApprovalsOff(restoreFields(agentFields, previousValues));
   if (Object.keys(updateData).length === 0) {
-    throw new Error('No agent config values to restore');
+    throw new Error(droppedApprovalsOff
+      ? 'Undo cannot turn tool approvals off; the drive owner or an admin can set this in agent settings'
+      : 'No agent config values to restore');
   }
   return { updateData };
 }

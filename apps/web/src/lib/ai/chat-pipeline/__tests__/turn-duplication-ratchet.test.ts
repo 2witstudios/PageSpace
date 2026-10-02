@@ -65,7 +65,16 @@ const SPEC = path.join(repoRoot(), 'docs/2.0-architecture/agent-sessions.md');
  * settle, telemetry) is where most of it lives and is the extraction that
  * would pay first; see the entry's docblock.
  */
-const RECORDED_IDENTICAL_LINES = 158;
+// 158 → 177 (Tool Approvals epic): the 19 new identical lines are the mechanical
+// seams of the approval gate — imports, the `approvedExecutions` /
+// `assembleModelRequest` / `loadConversationHistory` / `toolExecutionContext`
+// declarations, and the two one-line calls into `approval-turn-support.ts`,
+// where the actual logic (refusal mapping, approved-call execution + re-assembly)
+// lives ONCE. Listed by `git diff` of this constant's commit; none is a copied
+// decision or effect. 177 → 176: the page turn imports the headless-approval
+// refusal (page chat admits MCP tokens; global chat is session-only), so the
+// two approval-turn-support import lines no longer match.
+const RECORDED_IDENTICAL_LINES = 176;
 
 /** Substantive lines: no blanks, no comments, trimmed. */
 const substantiveLines = (file: string): string[] =>

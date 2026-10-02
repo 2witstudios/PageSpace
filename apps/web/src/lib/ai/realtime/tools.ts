@@ -20,6 +20,12 @@ import { applyToolExposureMode } from '../tools/tool-exposure';
 import { filterToolsForAgentAllowlist } from '../core/tool-filtering';
 import { listEligibleSkills } from '../core/skill-catalog';
 import type { RealtimeTool } from './session';
+import {
+  DEFAULT_TOOL_APPROVAL_MODE,
+  withoutApprovalGatedTools,
+  type ApprovalPolicyContext,
+} from '../approvals/approval-policy';
+import { gatedIntegrationToolNames } from '../approvals/integration-approval';
 
 /**
  * A bound page agent's saved tool allowlist (`pages.enabledTools`), or null for
@@ -224,3 +230,40 @@ export function toRealtimeTools(tools: ToolSet): readonly RealtimeTool[] {
 export function buildRealtimeToolSet(tools: ToolSet, allowlist: ToolAllowlist = null): ToolSet {
   return buildRealtimeToolExposure(tools, allowlist).tools;
 }
+
+/**
+ * Drop every tool the text gate would pause on, for a call in `ask` mode.
+ *
+ * A voice call has no approval card, so a gated tool cannot be offered and
+ * then paused — it is not offered at all, and cannot be dispatched (owner
+ * decision on PR #2629's review). The per-tool decision is the text gate's own
+ * `decideApproval`, via `withoutApprovalGatedTools`, so voice and text agree:
+ * `auto` keeps everything, a standing grant keeps its tool, and the gated
+ * integration names are derived the same way the text turns derive them.
+ *
+ * Applied to the REGISTRY, before {@link buildRealtimeToolExposure}, by BOTH
+ * the exposure (handshake) and the executable set (bridge) — so the model is
+ * never told about a tool it cannot run, and a forged call cannot reach one
+ * through `execute_tool`, whose dispatch map is built from what it is handed.
+ */
+export function withoutToolsNeedingApproval(tools: ToolSet, policy: ApprovalPolicyContext): ToolSet {
+  return withoutApprovalGatedTools(tools, {
+    ...policy,
+    gatedIntegrationToolNames: gatedIntegrationToolNames(Object.keys(tools)),
+  });
+}
+
+/** The policy a voice call falls back to when its own could not be read: `ask`, no grants. */
+export const FAIL_SAFE_VOICE_APPROVAL_POLICY: ApprovalPolicyContext = {
+  mode: DEFAULT_TOOL_APPROVAL_MODE,
+  interactive: true,
+  conversationId: null,
+  grants: [],
+};
+
+/** What a call's approval policy is read for: who, which agent (if bound), which conversation (if any). */
+export type VoiceApprovalScope = {
+  readonly userId: string;
+  readonly agentPageId?: string;
+  readonly conversationId?: string;
+};

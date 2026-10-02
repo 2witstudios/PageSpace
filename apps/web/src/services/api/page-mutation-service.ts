@@ -155,6 +155,7 @@ export async function applyPageMutation({
     includePageTree: currentPage.includePageTree,
     pageTreeScope: currentPage.pageTreeScope,
     toolExposureMode: currentPage.toolExposureMode,
+    toolApprovalMode: currentPage.toolApprovalMode,
     userScopedAccess: currentPage.userScopedAccess,
   });
 
@@ -189,6 +190,9 @@ export async function applyPageMutation({
     toolExposureMode: updates.toolExposureMode !== undefined
       ? (updates.toolExposureMode === null ? null : String(updates.toolExposureMode))
       : currentPage.toolExposureMode,
+    toolApprovalMode: updates.toolApprovalMode !== undefined
+      ? (updates.toolApprovalMode === null ? null : String(updates.toolApprovalMode))
+      : currentPage.toolApprovalMode,
     userScopedAccess: updates.userScopedAccess !== undefined
       ? Boolean(updates.userScopedAccess)
       : currentPage.userScopedAccess,

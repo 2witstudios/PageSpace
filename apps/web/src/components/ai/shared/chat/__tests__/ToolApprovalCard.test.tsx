@@ -1,0 +1,149 @@
+/**
+ * ToolApprovalCard tests — the human-in-the-loop gate's one interactive surface.
+ *
+ * Read-only without a provider (history views, other viewers), disabled when the
+ * provider does not list the call as answerable, and each button hands the hook
+ * the decision it stands for — the effective tool through execute_tool included.
+ */
+import { describe, it, expect, vi } from 'vitest';
+import { render, fireEvent, screen } from '@testing-library/react';
+import { ToolApprovalCard } from '../approvals/ToolApprovalCard';
+import { ToolApprovalProvider } from '../approvals/ToolApprovalContext';
+
+const pausedPart = (over: Record<string, unknown> = {}) => ({
+  type: 'tool-trash_page',
+  toolName: 'trash_page',
+  toolCallId: 'tc1',
+  state: 'approval-requested',
+  input: { pageId: 'p1' },
+  approval: { id: 'ap1' },
+  ...over,
+});
+
+const renderWith = (part: ReturnType<typeof pausedPart>, approvable = true, respond = vi.fn(), awaiting: string[] = []) => ({
+  respond,
+  ...render(
+    <ToolApprovalProvider
+      value={{ approvableToolCallIds: new Set(approvable ? [part.toolCallId as string] : []), awaitingToolCallIds: new Set(awaiting), respond }}
+    >
+      <ToolApprovalCard part={part} />
+    </ToolApprovalProvider>,
+  ),
+});
+
+describe('ToolApprovalCard', () => {
+  it('names the tool and shows its parameters', () => {
+    const { getByText, container } = renderWith(pausedPart());
+    expect(getByText('Approval needed')).toBeTruthy();
+    expect(container.textContent).toContain('Move to Trash');
+    expect(container.querySelector('pre')?.textContent).toContain('"pageId": "p1"');
+  });
+
+  it('unwraps execute_tool to the dispatched tool for the label and preview', () => {
+    const part = pausedPart({
+      type: 'tool-execute_tool',
+      toolName: 'execute_tool',
+      input: { tool_name: 'create_task', parameters: { title: 'Ship it' } },
+    });
+    const { container } = renderWith(part);
+    expect(container.textContent).toContain('Create Task');
+    expect(container.textContent).toContain('Ship it');
+    expect(container.textContent).not.toContain('tool_name');
+  });
+
+  it('a long input is cut in the preview with a toggle that renders ALL of it, as text', () => {
+    const body = `${'a'.repeat(1500)}<b>END-MARKER</b>`;
+    const { getByRole, container } = renderWith(pausedPart({ input: { pageId: 'p1', body } }));
+    const pre = () => container.querySelector('pre')?.textContent ?? '';
+    expect(pre()).not.toContain('END-MARKER');
+
+    const toggle = getByRole('button', { name: /show all/i });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(toggle);
+
+    expect(pre()).toContain('<b>END-MARKER</b>');
+    expect(container.querySelector('pre b')).toBeNull();
+    expect(getByRole('button', { name: /show less/i }).getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('a short input has no toggle', () => {
+    const { queryByRole } = renderWith(pausedPart());
+    expect(queryByRole('button', { name: /show all/i })).toBeNull();
+  });
+
+  it('without a provider (history / other viewers) renders read-only: buttons disabled, waiting note shown', () => {
+    const { getByText } = render(<ToolApprovalCard part={pausedPart()} />);
+    expect((getByText('Allow once').closest('button') as HTMLButtonElement).disabled).toBe(true);
+    expect(getByText('Waiting for a response…')).toBeTruthy();
+  });
+
+  it('with a provider that does not list the call as answerable, buttons stay disabled', () => {
+    const { getByText, respond } = renderWith(pausedPart(), false);
+    const allow = getByText('Allow once').closest('button') as HTMLButtonElement;
+    expect(allow.disabled).toBe(true);
+    fireEvent.click(allow);
+    expect(respond).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['Allow once', { approved: true, scope: 'once' }],
+    ['Allow for this conversation', { approved: true, scope: 'conversation' }],
+    ['Always allow Move to Trash', { approved: true, scope: 'always' }],
+  ])('%s hands the hook the matching decision', (label, expected) => {
+    const { getByText, respond } = renderWith(pausedPart());
+    fireEvent.click(getByText(label).closest('button') as HTMLButtonElement);
+    expect(respond).toHaveBeenCalledWith('tc1', { approvalId: 'ap1', ...expected });
+  });
+
+  it('Deny asks for an optional reason, then denies with it (trimmed, omitted when blank)', () => {
+    const { getByText, getByPlaceholderText, respond } = renderWith(pausedPart());
+    fireEvent.click(getByText('Deny').closest('button') as HTMLButtonElement);
+    fireEvent.change(getByPlaceholderText(/Why not\?/), { target: { value: '  keep it  ' } });
+    fireEvent.click(getByText('Deny').closest('button') as HTMLButtonElement);
+    expect(respond).toHaveBeenCalledWith('tc1', { approvalId: 'ap1', approved: false, reason: 'keep it' });
+  });
+
+  it('renders an answered call as a status line, never buttons', () => {
+    const approved = renderWith(pausedPart({ state: 'approval-responded', approval: { id: 'ap1', approved: true } }));
+    expect(approved.container.textContent).toContain('Approved · running');
+    expect(approved.queryByText('Allow once')).toBeNull();
+    const denied = renderWith(pausedPart({ state: 'approval-responded', approval: { id: 'ap1', approved: false } }));
+    expect(denied.container.textContent).toContain('Denied');
+  });
+
+  it('an approved call still waiting on its sibling approvals says so, not "running"', () => {
+    const part = pausedPart({ state: 'approval-responded', approval: { id: 'ap1', approved: true } });
+    const { container } = renderWith(part, false, vi.fn(), ['tc1']);
+    expect(container.textContent).toContain('Approved · waiting for the other approvals');
+    expect(container.textContent).not.toContain('running');
+  });
+
+  it('warns that sending a message instead of answering denies the request', () => {
+    renderWith(pausedPart());
+    expect(screen.getByText(/sending a message instead will deny/i)).toBeTruthy();
+  });
+
+  it('Deny moves focus to a labelled reason box', () => {
+    renderWith(pausedPart());
+    fireEvent.click(screen.getByText('Deny').closest('button') as HTMLButtonElement);
+    const reason = screen.getByRole('textbox', { name: /reason for denying/i });
+    expect(document.activeElement).toBe(reason);
+  });
+
+  it('announces the card and its state changes through one polite live region', () => {
+    const respond = vi.fn();
+    const part = pausedPart();
+    const { rerender } = renderWith(part, true, respond);
+    const status = screen.getByRole('status');
+    expect(status.getAttribute('aria-live')).toBe('polite');
+    expect(status.textContent).toMatch(/approval needed/i);
+
+    rerender(
+      <ToolApprovalProvider value={{ approvableToolCallIds: new Set(), awaitingToolCallIds: new Set(), respond }}>
+        <ToolApprovalCard part={pausedPart({ state: 'approval-responded', approval: { id: 'ap1', approved: false } })} />
+      </ToolApprovalProvider>,
+    );
+    expect(screen.getByRole('status')).toBe(status);
+    expect(status.textContent).toMatch(/denied/i);
+  });
+});

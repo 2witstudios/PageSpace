@@ -315,6 +315,10 @@
       "types": "./dist/schema/dev-preview-grants.d.ts",
       "default": "./dist/schema/dev-preview-grants.js"
     },
+    "./schema/tool-approvals": {
+      "types": "./dist/schema/tool-approvals.d.ts",
+      "default": "./dist/schema/tool-approvals.js"
+    },
     "./schema/drive-env-local": {
       "types": "./dist/schema/drive-env-local.d.ts",
       "default": "./dist/schema/drive-env-local.js"

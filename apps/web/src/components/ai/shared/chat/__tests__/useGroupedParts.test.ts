@@ -419,3 +419,18 @@ describe('useGroupedParts', () => {
     expect(isToolRunGroupPart(result.current[3])).toBe(true);
   });
 });
+
+describe('useGroupedParts — tool approvals', () => {
+  it('given a paused (approval-requested) call between two ordinary calls, should keep it standalone and never fold it into a run', () => {
+    const parts = asMessageParts([
+      { type: 'tool-read_page', toolCallId: 'a', toolName: 'read_page', state: 'output-available', input: {}, output: {} },
+      { type: 'tool-trash_page', toolCallId: 'b', toolName: 'trash_page', state: 'approval-requested', input: {}, approval: { id: 'ap-b' } },
+      { type: 'tool-read_page', toolCallId: 'c', toolName: 'read_page', state: 'output-available', input: {}, output: {} },
+    ]);
+    const { result } = renderHook(() => useGroupedParts(parts));
+    const paused = result.current.find((g) => isProcessedToolPart(g) && g.toolCallId === 'b');
+    expect(paused).toBeTruthy();
+    expect((paused as { state: string }).state).toBe('approval-requested');
+    expect(result.current.some((g) => isToolRunGroupPart(g) && g.parts.some((p) => p.toolCallId === 'b'))).toBe(false);
+  });
+});

@@ -49,7 +49,13 @@ import { buildSessionToolsDeps } from '@/lib/ai/tools/session-tools-runtime';
 
 let dbAvailable = false;
 
-async function createAgent(enabledTools: string[] | null, sandboxEnabled: boolean) {
+async function createAgent(
+  enabledTools: string[] | null,
+  sandboxEnabled: boolean,
+  // `auto` unless a case is about approvals: the sandbox-switch cases must see
+  // the switch alone, not the approval gate stripping the same write tools.
+  toolApprovalMode: 'ask' | 'auto' = 'auto',
+) {
   const owner = await factories.createUser();
   const drive = await factories.createDrive(owner.id);
   const agent = await factories.createPage(drive.id, {
@@ -57,6 +63,7 @@ async function createAgent(enabledTools: string[] | null, sandboxEnabled: boolea
     title: 'Scraper Runner',
     enabledTools,
     sandboxEnabled,
+    toolApprovalMode,
   });
   return { owner, agent };
 }
@@ -179,9 +186,12 @@ describe('describeAgentToolSurface against a real agent row (issue #2460)', () =
     // from the kill switch `beforeAll` stubs. A static import here evaluated the
     // registry before the stub and turned the fixture guard red — the same trap
     // the header describes, arriving by a different door.
-    const dispatchDeps = async (assistant: { agentPageId: string; enabledTools: string[] }) => {
+    const dispatchDeps = async (
+      assistant: { agentPageId: string; enabledTools: string[] },
+      userId = 'no-such-user',
+    ) => {
       const { voiceToolDispatchDeps } = await import('@/lib/ai/realtime/voice-runtime-deps');
-      return voiceToolDispatchDeps(assistant);
+      return voiceToolDispatchDeps(assistant, { userId });
     };
 
     /**
@@ -244,6 +254,44 @@ describe('describeAgentToolSurface against a real agent row (issue #2460)', () =
       });
 
       expect(await searchable(deps.tools, 'select:spawn_shell')).toEqual([]);
+    });
+
+    /**
+     * The APPROVAL gate on the execute side. A call has no approval card, so in
+     * `ask` mode a gated tool is not in the corpus at all — a forged
+     * `execute_tool` call for it has nothing to dispatch to.
+     */
+    it('given the agent in ask mode, the corpus does not contain a gated tool', async () => {
+      if (!dbAvailable) return;
+
+      const { owner, agent } = await createAgent(['read_page', 'spawn_shell'], true, 'ask');
+
+      const deps = await dispatchDeps(
+        { agentPageId: agent.id, enabledTools: ['read_page', 'spawn_shell'] },
+        owner.id,
+      );
+
+      expect(await searchable(deps.tools, 'select:spawn_shell')).toEqual([]);
+      expect(Object.keys(deps.tools)).toContain('read_page');
+    });
+
+    it('given ask mode and a standing "always" grant, the corpus keeps that tool', async () => {
+      if (!dbAvailable) return;
+
+      const { owner, agent } = await createAgent(['read_page', 'spawn_shell'], true, 'ask');
+      const { toolApprovalRepository } = await import('@/lib/repositories/tool-approval-repository');
+      await toolApprovalRepository.addGrant({
+        userId: owner.id,
+        toolName: 'spawn_shell',
+        conversationId: null,
+      });
+
+      const deps = await dispatchDeps(
+        { agentPageId: agent.id, enabledTools: ['read_page', 'spawn_shell'] },
+        owner.id,
+      );
+
+      expect(await searchable(deps.tools, 'select:spawn_shell')).toEqual(['spawn_shell']);
     });
   });
 

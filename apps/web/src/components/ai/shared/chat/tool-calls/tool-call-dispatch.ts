@@ -19,7 +19,7 @@ export interface DispatchToolPart {
   type: string;
   toolName?: string;
   toolCallId?: string;
-  state?: 'input-streaming' | 'input-available' | 'output-available' | 'output-error' | 'done' | 'streaming';
+  state?: 'input-streaming' | 'input-available' | 'approval-requested' | 'approval-responded' | 'output-available' | 'output-error' | 'output-denied' | 'done' | 'streaming';
   input?: unknown;
   output?: unknown;
   errorText?: string;
@@ -30,6 +30,8 @@ export type ToolCallDispatchResult<TPart extends DispatchToolPart> =
   | { kind: 'task'; part: TPart }
   | { kind: 'agent'; part: TPart }
   | { kind: 'question'; part: TPart }
+  /** A paused (needsApproval) call, or one answered and awaiting execution — whatever the tool. */
+  | { kind: 'approval'; part: TPart; toolName: string }
   | { kind: 'image'; part: TPart }
   | { kind: 'generic'; part: TPart; toolName: string };
 
@@ -73,6 +75,15 @@ export function dispatchToolCall<TPart extends DispatchToolPart>(
   }
 
   if (isHiddenTool(toolName)) return { kind: 'hidden' };
+
+  // The approval gate outranks every per-tool renderer: a paused create_task or
+  // ask_agent needs the Allow/Deny card, not its usual result card. The
+  // ORIGINAL part is kept (not the execute_tool-unwrapped one) so the card and
+  // the resume see the toolCallId/approval the server persisted; the card
+  // unwraps the effective tool for display itself.
+  if (part.state === 'approval-requested' || part.state === 'approval-responded') {
+    return { kind: 'approval', part, toolName };
+  }
 
   if (taskToolNames.has(toolName)) return { kind: 'task', part: resolvedPart };
   if (toolName === 'ask_agent') return { kind: 'agent', part: resolvedPart };

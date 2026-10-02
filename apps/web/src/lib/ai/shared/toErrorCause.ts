@@ -24,6 +24,13 @@ const KNOWN_CODES = new Set<AIErrorCause['code']>([
   'daily_cap_exceeded',
 ]);
 
+/**
+ * The approval gate's 409 codes (`approval-turn-support.ts`). Like KNOWN_CODES,
+ * a backend-authored contract — `{ error: <user-facing copy>, code }` — so its
+ * copy is trusted; any other 409 body is not.
+ */
+const APPROVAL_CONFLICT_CODES = new Set(['approval_already_resolved', 'approval_stale']);
+
 const stringField = (body: unknown, key: string): string | undefined => {
   if (typeof body !== 'object' || body === null) return undefined;
   const value = (body as Record<string, unknown>)[key];
@@ -62,6 +69,10 @@ export const toErrorCause = (httpStatus: number, body: unknown): AIErrorCause =>
   if (rawCode && KNOWN_CODES.has(rawCode as AIErrorCause['code'])) {
     const serverMessage = stringField(body, 'message');
     return buildErrorCause(rawCode as AIErrorCause['code'], httpStatus, serverMessage);
+  }
+
+  if (httpStatus === 409 && APPROVAL_CONFLICT_CODES.has(stringField(body, 'code') ?? '')) {
+    return buildErrorCause('unknown', httpStatus, rawCode, false);
   }
 
   if (httpStatus === 401) return buildErrorCause('auth', httpStatus, undefined, false);

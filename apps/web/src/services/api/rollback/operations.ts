@@ -90,4 +90,26 @@ export const AGENT_CONFIG_ROLLBACK_FIELDS = [
   // that decides whether they can.
   'sandboxEnabled',
   'userScopedAccess',
+  // Written by the agent-config routes, not update_agent_config. Undo/redo may
+  // restore "ask" but never "auto": see withoutApprovalsOff.
+  'toolApprovalMode',
 ] as const;
+
+/**
+ * Drop a restore of toolApprovalMode to anything but "ask".
+ *
+ * Turning a shared agent's approvals off requires a drive owner/admin in a
+ * session (`authorizeToolApprovalModeChange`). Undo/redo is open to any page
+ * editor, so letting it write "auto" back would walk around that gate. "ask"
+ * only makes the agent safer and is always restorable.
+ */
+export function withoutApprovalsOff(values: Record<string, unknown>): {
+  values: Record<string, unknown>;
+  droppedApprovalsOff: boolean;
+} {
+  if (!('toolApprovalMode' in values) || values.toolApprovalMode === 'ask') {
+    return { values, droppedApprovalsOff: false };
+  }
+  const { toolApprovalMode: _dropped, ...rest } = values;
+  return { values: rest, droppedApprovalsOff: true };
+}

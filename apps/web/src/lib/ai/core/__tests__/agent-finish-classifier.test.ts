@@ -244,3 +244,40 @@ describe('classifyAttempt', () => {
     });
   });
 });
+
+describe('classifyAttempt — tool approval pause', () => {
+  const assistantAwaitingApproval = (toolName = 'trash_page'): ModelMessage => ({
+    role: 'assistant',
+    content: [
+      { type: 'tool-call', toolCallId: 'c1', toolName, input: {} },
+      { type: 'tool-approval-request', approvalId: 'ap1', toolCallId: 'c1' },
+    ],
+  }) as unknown as ModelMessage;
+
+  it('a tool-calls finish carrying a tool-approval-request is terminal:awaiting-user-input, not a retry', () => {
+    assert({
+      given: 'a step that paused on needsApproval',
+      should: 'be terminal awaiting-user-input',
+      actual: classifyAttempt(base({ finishReason: 'tool-calls', responseMessages: [assistantAwaitingApproval()], stepCount: 3 })),
+      expected: { kind: 'terminal', reason: 'awaiting-user-input' },
+    });
+  });
+
+  it('the finish tool still wins over an approval request in the same turn', () => {
+    assert({
+      given: 'finish called alongside a paused call',
+      should: 'be clean',
+      actual: classifyAttempt(base({ finishReason: 'tool-calls', responseMessages: [assistantAwaitingApproval(), assistantToolCall(FINISH, 'c2')] })),
+      expected: { kind: 'clean' },
+    });
+  });
+
+  it('an ordinary tool-calls finish without a request is still classified as before', () => {
+    assert({
+      given: 'a tool call with no approval request below the step cap',
+      should: 'be tool-calls-no-finish',
+      actual: classifyAttempt(base({ finishReason: 'tool-calls', responseMessages: [assistantToolCall('read_page')] })),
+      expected: { kind: 'terminal', reason: 'tool-calls-no-finish' },
+    });
+  });
+});

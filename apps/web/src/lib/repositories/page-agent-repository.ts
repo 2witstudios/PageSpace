@@ -134,6 +134,7 @@ export const pageAgentRepository = {
       aiProvider: agent.aiProvider,
       aiModel: agent.aiModel,
       toolExposureMode: agent.toolExposureMode,
+      toolApprovalMode: agent.toolApprovalMode,
       // Coerced rather than passed through: the column is NOT NULL with a
       // default, but this shape is what decides whether the sandbox family is
       // offered, and `undefined` reaching a Boolean gate is the kind of
@@ -203,6 +204,7 @@ export interface AgentDetails {
   aiProvider: string | null;
   aiModel: string | null;
   toolExposureMode: 'upfront' | 'search' | null;
+  toolApprovalMode: 'ask' | 'auto' | null;
   sandboxEnabled: boolean;
   defaultEnvId: string | null;
   isTrashed: boolean;
@@ -219,6 +221,7 @@ export interface AgentConfigUpdate {
   includePageTree?: boolean;
   pageTreeScope?: 'children' | 'drive';
   toolExposureMode?: 'upfront' | 'search';
+  toolApprovalMode?: 'ask' | 'auto';
   /**
    * The per-agent sandbox switch. Writable here for the same reason it is
    * writable from `update_agent_config` (issue #2460): a door that can store a
