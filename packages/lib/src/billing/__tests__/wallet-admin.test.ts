@@ -26,6 +26,11 @@ describe('wallet-admin: a change to a drive wallet', () => {
     expect(planWalletPatch({ paused: false }, { status: 'paused', debtCents: 5 })).toMatchObject({ set: { status: 'over' } });
   });
 
+  it('WAL-6 (partial) the overshoot choice is the FUNDER\'s: it takes the allocate authority, and null restores the default', () => {
+    expect(planWalletPatch({ overshootChoice: 'wallet_debt' }, current)).toEqual({ kind: 'patch', actions: ['allocate'], set: { overshootChoice: 'wallet_debt' } });
+    expect(planWalletPatch({ overshootChoice: null }, current)).toEqual({ kind: 'patch', actions: ['allocate'], set: { overshootChoice: null } });
+  });
+
   it('null clears a rule or the default; an empty change is refused', () => {
     expect(planWalletPatch({ fallbackRule: null, defaultSpendSource: null }, current)).toMatchObject({ set: { fallbackRule: null, defaultSpendSource: null } });
     expect(planWalletPatch({}, current)).toEqual({ kind: 'refuse', reason: 'nothing_to_change' });

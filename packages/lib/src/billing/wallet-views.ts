@@ -20,7 +20,7 @@
 
 import type { WalletViewer } from '../permissions/wallet-access';
 import { formatCreditCount } from './money-model';
-import type { FallbackRule, SpendSourceKind, WalletStatus } from './wallet-core';
+import { walletStatusFor, type FallbackRule, type OvershootFunderChoice, type SpendSourceKind, type WalletStatus } from './wallet-core';
 
 export interface DriveWalletRowFacts {
   id: string;
@@ -35,6 +35,17 @@ export interface DriveWalletRowFacts {
   fallbackRule: FallbackRule | null;
   donationsEnabled: boolean;
   defaultSpendSource: SpendSourceKind | null;
+  /** WAL-6c: the funder's overshoot choice; null is the default (absorb into the parent). */
+  overshootChoice: OvershootFunderChoice | null;
+}
+
+/**
+ * WAL-6e: the status a wallet SHOWS — the kill switch wins, and any debt it carries reads "over"
+ * — derived from the row on every read, so it can never lag the debt (an overshoot raises debt
+ * in the settle, a refill or top-up clears it; neither has to remember to restamp a status).
+ */
+export function displayedWalletStatus(w: { status: WalletStatus; debtCents: number }): WalletStatus {
+  return walletStatusFor({ paused: w.status === 'paused', debtCents: w.debtCents });
 }
 
 /** The viewer's own cap on this wallet (WAL-7) and their spend in the current UTC windows. */
@@ -141,6 +152,8 @@ export interface LeadWalletView extends Omit<ConsumerWalletView, 'viewer'> {
   periodStart: string | null;
   periodEnd: string | null;
   fallbackRule: FallbackRule | null;
+  /** WAL-6c: where this wallet's overshoot lands; null is the default (absorb into the parent). */
+  overshootChoice: OvershootFunderChoice | null;
   spendByConsumer: ConsumerSpend[];
 }
 
@@ -156,7 +169,7 @@ function consumerFields(facts: DriveWalletFacts): Omit<ConsumerWalletView, 'view
   return {
     walletId: w.id,
     driveId: w.driveId,
-    status: w.status,
+    status: displayedWalletStatus(w),
     remainingCents: walletRemainingCents(w),
     remainingCredits: formatCreditCount(walletRemainingCents(w)),
     myCap: capRemainingCents(facts.myCap),
@@ -176,6 +189,7 @@ function leadFields(facts: DriveWalletFacts): Omit<LeadWalletView, 'viewer'> {
     periodStart: w.monthlyPeriodStart?.toISOString() ?? null,
     periodEnd: w.monthlyPeriodEnd?.toISOString() ?? null,
     fallbackRule: w.fallbackRule,
+    overshootChoice: w.overshootChoice,
     spendByConsumer: facts.spendByConsumer.map((s) => ({ consumerKey: s.consumerKey, userId: s.userId, spentCents: whole(s.spentCents) })),
   };
 }

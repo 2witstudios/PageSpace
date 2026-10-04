@@ -461,6 +461,46 @@ export function shouldNotifyFunderOfDebt(input: {
   return input.lastNotifiedAtMs === null || input.lastNotifiedAtMs < input.periodStartMs;
 }
 
+/** The shape of a wallet as the debt notice reads it (WAL-6e). */
+export interface DebtNoticeWallet {
+  ownerType: 'user' | 'org';
+  parentWalletId: string | null;
+  subjectType: string | null;
+  debtCents: number;
+}
+
+/**
+ * WAL-6e: whose debt notice a settle that left `debtWallet` in debt raises, if any. The FUNDER
+ * is told — never the consumer who spent:
+ *   - a child (drive or agent) wallet carrying its own debt (the funder chose wallet_debt): the
+ *     funder is whoever owns its PARENT, the wallet that funds its allocation;
+ *   - an org POOL in debt (it absorbed a drive's overshoot, a seat's, or org compute's): the org;
+ *   - a PERSONAL root in debt is a funder's notice only when it absorbed a CHILD wallet's
+ *     overshoot (someone spent the person's drive wallet). A person past their own credits is
+ *     the consumer and the funder at once: that debt is the account's own balance, shown as it
+ *     always was, and raises no notice.
+ */
+export function debtNoticeFunder(input: {
+  debtWallet: DebtNoticeWallet;
+  /** The wallet the call charged: a child when the debt came from a drive or agent wallet. */
+  chargedWalletIsChild: boolean;
+}): 'parent' | 'self' | null {
+  const wallet = input.debtWallet;
+  if (wholeNonNegative(wallet.debtCents) === 0) return null;
+  if (wallet.parentWalletId !== null) return 'parent';
+  if (wallet.ownerType === 'org') return 'self';
+  return input.chargedWalletIsChild ? 'self' : null;
+}
+
+/**
+ * WAL-6e: the period a debt notice is once per — the debt-carrying wallet's own period when it
+ * has begun, else the UTC calendar month (D20).
+ */
+export function debtNoticePeriodStartMs(input: { walletPeriodStartMs: number | null; nowMs: number }): number {
+  const start = input.walletPeriodStartMs;
+  return start !== null && start <= input.nowMs ? start : utcMonthStartMs(input.nowMs);
+}
+
 /**
  * WAL-6d: the next allocation lands. Wallet debt is netted from it and cleared (debt
  * beyond the allocation is not carried further, as personal debt is forgiven at renewal

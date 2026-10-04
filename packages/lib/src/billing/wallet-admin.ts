@@ -8,7 +8,7 @@
 
 import type { WalletAction } from '../permissions/wallet-access';
 import { allocateSpend, applyPaymentToDebt, type Balance } from './credit-core';
-import { walletStatusFor, type FallbackRule, type SpendSourceKind, type WalletStatus } from './wallet-core';
+import { walletStatusFor, type FallbackRule, type OvershootFunderChoice, type SpendSourceKind, type WalletStatus } from './wallet-core';
 
 /** Money columns are Postgres `integer`: no amount may exceed it. */
 export const MAX_WALLET_CENTS = 2_147_483_647;
@@ -30,6 +30,8 @@ export interface WalletPatchInput {
   donationsEnabled?: boolean;
   /** SPEND-3: what a new conversation in this drive preselects; null clears it. */
   defaultSpendSource?: SpendSourceKind | null;
+  /** WAL-6c: where this wallet's overshoot lands, the funder's choice; null restores the default. */
+  overshootChoice?: OvershootFunderChoice | null;
 }
 
 export interface WalletPatchSet {
@@ -38,6 +40,7 @@ export interface WalletPatchSet {
   fallbackRule?: FallbackRule | null;
   donationsEnabled?: boolean;
   defaultSpendSource?: SpendSourceKind | null;
+  overshootChoice?: OvershootFunderChoice | null;
 }
 
 export type WalletPatchPlan =
@@ -67,6 +70,13 @@ export function planWalletPatch(input: WalletPatchInput, current: { status: Wall
   if (input.defaultSpendSource !== undefined) {
     actions.add('set_rules');
     set.defaultSpendSource = input.defaultSpendSource;
+  }
+  if (input.overshootChoice !== undefined) {
+    // WAL-6c: who absorbs this wallet's overshoot is the FUNDER's call, so it takes the money
+    // authority that moves the funder's money (allocate): the org admins on an org drive, the
+    // lead on a personal drive (wallet-access).
+    actions.add('allocate');
+    set.overshootChoice = input.overshootChoice;
   }
   if (actions.size === 0) return { kind: 'refuse', reason: 'nothing_to_change' };
   return { kind: 'patch', actions: [...actions], set };

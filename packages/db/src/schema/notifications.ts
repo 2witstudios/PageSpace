@@ -24,6 +24,9 @@ export const notificationType = pgEnum('NotificationType', [
   // An automation in the lead's drive was skipped because the drive wallet could not cover
   // it (SPEND-6). In-app only, at most once per period per drive (automation_skip_notices).
   'AUTOMATION_SKIPPED',
+  // A shared wallet carries debt from actual-cost overshoot (WAL-6e): its funder is told, in-app
+  // only, at most once per period of that wallet (wallet_debt_notices).
+  'WALLET_DEBT',
   // Product announcements (SDK/CLI launch and the like). Broadcast-only: never
   // raised as an in-app notification, but it needs an enum value so recipients
   // can opt out through the same email_notification_preferences mechanism.

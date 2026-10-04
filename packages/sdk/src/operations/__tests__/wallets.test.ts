@@ -84,6 +84,7 @@ describe('wallets.getDriveWallet', () => {
       ['spendByConsumer', []],
       ['spentCents', 5],
       ['fallbackRule', null],
+      ['overshootChoice', 'wallet_debt'],
     ] as const) {
       const leaked = { ...driveWalletBody, wallet: { ...consumerWallet, [field]: value } };
       expect(parse(getDriveWallet, leaked), field).toBeInstanceOf(ResponseValidationError);

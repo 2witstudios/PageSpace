@@ -230,6 +230,20 @@ describe('drive-wallet service (orgs on, real Postgres)', () => {
     expect(await topUpDriveWallet(world.ids.dana, world.productId, { amountCents: 100, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: false, status: 403 });
   });
 
+  it('WAL-6 (partial) where an org drive\'s overshoot lands is the FUNDER\'s choice: the lead cannot set it, an org admin can, and null restores the default', async () => {
+    if (!world) return;
+    expect(await updateDriveWallet(world.ids.dana, world.productId, { overshootChoice: 'wallet_debt' }, 'session')).toMatchObject({ ok: false, status: 403, code: 'insufficient_role' });
+    expect((await walletRow(world.productWalletId)).overshootChoice).toBeNull();
+
+    expect(await updateDriveWallet(world.ids.priya, world.productId, { overshootChoice: 'wallet_debt' }, 'session')).toMatchObject({ ok: true, wallet: { overshootChoice: 'wallet_debt' } });
+    expect((await walletRow(world.productWalletId)).overshootChoice).toBe('wallet_debt');
+    // A token may never move the funder's money decisions.
+    expect(await updateDriveWallet(world.ids.priya, world.productId, { overshootChoice: null }, 'mcp')).toMatchObject({ ok: false, status: 403 });
+
+    expect(await updateDriveWallet(world.ids.priya, world.productId, { overshootChoice: null }, 'session')).toMatchObject({ ok: true, wallet: { overshootChoice: null } });
+    expect((await walletRow(world.productWalletId)).overshootChoice).toBeNull();
+  });
+
   it('UI-9 (partial) WAL-3 (partial) an org admin allocates and tops up from the pool; the top-up is an owner leg and a ledger pair', async () => {
     if (!world) return;
     expect(await updateDriveWallet(world.ids.priya, world.productId, { allocationCents: 150_000 }, 'session')).toMatchObject({ ok: true, wallet: { allocationCents: 150_000 } });

@@ -23,7 +23,8 @@ import { driveMembers } from '@pagespace/db/schema/members';
 import { creditHolds, creditLedger, type SpendKind } from '@pagespace/db/schema/credits';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
-import { driveSpendOverrides, personalRootWalletOf, walletConsumerCaps, wallets } from '@pagespace/db/schema/wallets';
+import { driveSpendOverrides, personalRootWalletOf, walletConsumerCaps, walletDebtNotices, wallets } from '@pagespace/db/schema/wallets';
+import { notifications } from '@pagespace/db/schema/notifications';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { loggers } from '../../logging/logger-config';
@@ -125,6 +126,7 @@ async function build(input: { productAllocationCents: number; poolCents: number;
 }
 
 async function teardown(w: World): Promise<void> {
+  await db.delete(notifications).where(inArray(notifications.userId, w.userIds));
   await db.delete(driveSpendOverrides).where(inArray(driveSpendOverrides.userId, w.userIds));
   await db.delete(conversations).where(inArray(conversations.userId, w.userIds));
   await db.delete(aiUsageLogs).where(inArray(aiUsageLogs.userId, w.userIds));
@@ -296,6 +298,92 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     expect([marcusRow.monthlyRemainingCents, marcusRow.debtCents]).toEqual([5_000, 0]);
     const debt = (await ledgerOf(world.marcusId)).filter((r) => r.entryType === 'adjustment');
     expect(debt.map((r) => [r.walletId, r.amountCents])).toEqual([[world.poolId, -90]]);
+  });
+
+  /**
+   * Gate Marcus on Product's wallet and settle at `costDollars`: more than the allocation left
+   * overshoots. Each call first restores the allocation's room, so a later call is admitted again.
+   */
+  async function driveWalletCall(w: World, costDollars: number) {
+    await db.update(wallets).set({ spentCents: 0 }).where(eq(wallets.id, w.productWalletId));
+    const gate = await canConsumeAI(w.marcusId, 'free', { spend: driveSpend(w.productId, 'drive_wallet') });
+    expect(gate.allowed).toBe(true);
+    const [log] = await db.insert(aiUsageLogs).values({ userId: w.marcusId, provider: 'openrouter', model: 'm', cost: costDollars }).returning({ id: aiUsageLogs.id });
+    expect(await consumeCredits({ aiUsageLogId: log.id, userId: w.marcusId, costDollars, holdId: gate.holdId, walletId: gate.walletId })).toBe('settled');
+  }
+  const debtNoticesFor = (userId: string) =>
+    db.select().from(notifications).where(and(eq(notifications.userId, userId), eq(notifications.type, 'WALLET_DEBT')));
+  async function addOrgAdmin(w: World): Promise<string> {
+    const ana = await factories.createUser({ name: 'Ana Admin', subscriptionTier: 'free' });
+    w.userIds.push(ana.id);
+    await db.insert(orgMembers).values({ orgId: w.orgId, userId: ana.id, role: 'ADMIN' });
+    return ana.id;
+  }
+
+  it('WAL-6 (partial) a drive wallet whose funder chose wallet_debt carries its own overshoot — never the pool, never the consumer', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 60, poolCents: 5_000 });
+    await db.update(wallets).set({ overshootChoice: 'wallet_debt' }).where(eq(wallets.id, world.productWalletId));
+
+    await driveWalletCall(world, 1);
+
+    // 150¢: the 60¢ allocation from the pool, then 90¢ uncovered — carried by Product itself.
+    const product = await walletRow(world.productWalletId);
+    const poolRow = await walletRow(world.poolId);
+    expect([product.spentCents, product.debtCents]).toEqual([60, 90]);
+    expect([poolRow.monthlyRemainingCents, poolRow.debtCents]).toEqual([5_000 - 60, 0]);
+    expect((await walletRow(world.marcusWalletId)).debtCents).toBe(0);
+    const debt = (await ledgerOf(world.marcusId)).filter((r) => r.entryType === 'adjustment');
+    expect(debt.map((r) => [r.walletId, r.amountCents])).toEqual([[world.productWalletId, -90]]);
+  });
+
+  it('WAL-6 (partial) the funder of a wallet in debt is told ONCE per period, in-app: the org Owner and Admins, never the member who spent', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 60, poolCents: 5_000 });
+    const w = world;
+    const anaId = await addOrgAdmin(w);
+
+    // Two overshooting calls in one pool period: the pool carries the debt (the default), and its
+    // funders hear about it once.
+    await driveWalletCall(w, 1);
+    await driveWalletCall(w, 1);
+
+    for (const funder of [w.jonoId, anaId]) {
+      const notices = await debtNoticesFor(funder);
+      expect(notices).toHaveLength(1);
+      expect(notices[0]).toMatchObject({ type: 'WALLET_DEBT', isRead: false, metadata: { walletId: w.poolId } });
+    }
+    expect(await debtNoticesFor(w.marcusId)).toEqual([]);
+    expect(await debtNoticesFor(w.chrisId)).toEqual([]);
+
+    // A new period (the last notice predates the pool's period start): the next overshoot tells them again.
+    const poolPeriodStart = (await walletRow(w.poolId)).monthlyPeriodStart as Date;
+    await db.update(walletDebtNotices).set({ lastNotifiedAt: new Date(poolPeriodStart.getTime() - 60_000) }).where(eq(walletDebtNotices.walletId, w.poolId));
+    await driveWalletCall(w, 1);
+    expect(await debtNoticesFor(w.jonoId)).toHaveLength(2);
+  });
+
+  it('WAL-6 (partial) a drive wallet carrying its own debt: its funder (the pool\'s Owner) is told about THAT wallet and drive', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 60, poolCents: 5_000 });
+    await db.update(wallets).set({ overshootChoice: 'wallet_debt' }).where(eq(wallets.id, world.productWalletId));
+
+    await driveWalletCall(world, 1);
+
+    expect(await debtNoticesFor(world.jonoId)).toEqual([expect.objectContaining({ metadata: { walletId: world.productWalletId }, driveId: world.productId })]);
+    expect(await debtNoticesFor(world.marcusId)).toEqual([]);
+  });
+
+  it('WAL-6 (partial) a person overshooting their OWN credits is no funder\'s notice: nobody is told', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 60, poolCents: 5_000 });
+    const gate = await canConsumeAI(world.marcusId, 'free', { spend: driveSpend(world.productId, 'own_credits') });
+    expect(gate).toMatchObject({ allowed: true, walletId: world.marcusWalletId });
+    const [log] = await db.insert(aiUsageLogs).values({ userId: world.marcusId, provider: 'openrouter', model: 'm', cost: 40 }).returning({ id: aiUsageLogs.id });
+    expect(await consumeCredits({ aiUsageLogId: log.id, userId: world.marcusId, costDollars: 40, holdId: gate.holdId, walletId: gate.walletId })).toBe('settled');
+
+    expect((await walletRow(world.marcusWalletId)).debtCents).toBeGreaterThan(0);
+    for (const userId of world.userIds) expect(await debtNoticesFor(userId)).toEqual([]);
   });
 
   it('WAL-5 (partial) a seat spends the org pool; WAL-8 (partial) a free member on an org leg carries the org tier', async () => {

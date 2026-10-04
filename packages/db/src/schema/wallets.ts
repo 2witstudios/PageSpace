@@ -56,6 +56,15 @@ export const WALLET_FALLBACK_RULES = ['refuse', 'seat_allowance', 'own_credits']
 export type WalletFallbackRuleValue = (typeof WALLET_FALLBACK_RULES)[number];
 
 /**
+ * WAL-6c. Mirrors wallet-core `OvershootFunderChoice`: where a CHILD wallet's actual-cost
+ * overshoot lands, chosen by its funder — absorbed into the parent's debt (the org pool or the
+ * owner's balance, D20.2, the default when unset) or carried as this wallet's own debt, netted
+ * from its next allocation.
+ */
+export const OVERSHOOT_FUNDER_CHOICES = ['absorb_to_parent', 'wallet_debt'] as const;
+export type OvershootFunderChoiceValue = (typeof OVERSHOOT_FUNDER_CHOICES)[number];
+
+/**
  * SPEND-1/SPEND-3. Mirrors wallet-core `SpendSourceKind`: the three sources an AI call
  * inside a drive can spend from. Stored as a DEFAULT (wallets.defaultSpendSource), never as
  * the source of a call: the call's own source is the wallet chosen for its conversation.
@@ -107,6 +116,10 @@ export const wallets = pgTable('wallets', {
   // refused — never a drive wallet or a seat, never a fallback. The per-drive switch is a
   // row in drive_spend_overrides.
   alwaysOwnCredits: boolean('alwaysOwnCredits').default(false).notNull(),
+  // WAL-6c: the funder's overshoot choice for a CHILD wallet (OVERSHOOT_FUNDER_CHOICES). NULL is
+  // the default, absorb into the parent's debt (D20.2); the CHECK refuses it on a root wallet,
+  // which has no parent to absorb into.
+  overshootChoice: text('overshootChoice').$type<OvershootFunderChoiceValue>(),
   createdAt: timestamp('createdAt', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date', withTimezone: true }).defaultNow().notNull().$onUpdate(() => new Date()),
 }, (table) => ({
@@ -141,6 +154,10 @@ export const wallets = pgTable('wallets', {
   fallbackRuleValid: check(
     'wallets_fallback_rule_valid',
     sql`${table.fallbackRule} IS NULL OR ${table.fallbackRule} IN ('refuse', 'seat_allowance', 'own_credits')`,
+  ),
+  overshootChoiceValid: check(
+    'wallets_overshoot_choice_valid',
+    sql`${table.overshootChoice} IS NULL OR (${table.overshootChoice} IN ('absorb_to_parent', 'wallet_debt') AND ${table.parentWalletId} IS NOT NULL)`,
   ),
 
   defaultSpendSourceValid: check(
@@ -233,6 +250,19 @@ export const walletConsumerCaps = pgTable('wallet_consumer_caps', {
  */
 export const automationSkipNotices = pgTable('automation_skip_notices', {
   driveId: text('driveId').primaryKey().references(() => drives.id, { onDelete: 'cascade' }),
+  lastNotifiedAt: timestamp('lastNotifiedAt', { mode: 'date' }).notNull(),
+});
+
+/**
+ * walletDebtNotices — when a debt-carrying wallet's funder was last told it is over (WAL-6e),
+ * so the notice goes out at most once per period of that wallet. One row per wallet; it goes
+ * with its wallet.
+ *
+ * `lastNotifiedAt` is timestamp WITHOUT time zone holding UTC wall-clock, written only as
+ * `(now() at time zone 'utc')`, so the period boundary never follows a session time zone.
+ */
+export const walletDebtNotices = pgTable('wallet_debt_notices', {
+  walletId: text('walletId').primaryKey().references(() => wallets.id, { onDelete: 'cascade' }),
   lastNotifiedAt: timestamp('lastNotifiedAt', { mode: 'date' }).notNull(),
 });
 

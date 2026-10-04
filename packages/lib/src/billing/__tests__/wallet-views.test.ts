@@ -29,6 +29,7 @@ const facts = (over: Partial<DriveWalletFacts> = {}): DriveWalletFacts => ({
     fallbackRule: null,
     donationsEnabled: true,
     defaultSpendSource: null,
+    overshootChoice: null,
   },
   myCap: { dailyCapCents: c(10), monthlyCapCents: null, spentTodayCents: c(4), spentThisMonthCents: c(50) },
   spendByConsumer: [
@@ -40,7 +41,30 @@ const facts = (over: Partial<DriveWalletFacts> = {}): DriveWalletFacts => ({
   ...over,
 });
 
-const SECRET_KEYS = ['pool', 'spendByConsumer', 'allocationCents', 'spentCents', 'debtCents', 'fallbackRule', 'parentWalletId', 'topupRemainingCents'];
+const SECRET_KEYS = ['pool', 'spendByConsumer', 'allocationCents', 'spentCents', 'debtCents', 'fallbackRule', 'overshootChoice', 'parentWalletId', 'topupRemainingCents'];
+
+describe('wallet-views: the over state', () => {
+  const withWallet = (status: 'active' | 'paused' | 'over', debtCents: number) =>
+    facts({ wallet: { ...facts().wallet, status, debtCents } });
+
+  it('WAL-6 (partial) a wallet carrying debt SHOWS over to everyone who can see it, whatever status is stored', () => {
+    for (const viewer of ['member', 'guest', 'lead', 'org_admin'] as const) {
+      expect(projectDriveWallet(viewer, withWallet('active', 90)).status).toBe('over');
+    }
+  });
+
+  it('the kill switch wins over debt, and a stored over with its debt cleared shows active', () => {
+    expect(projectDriveWallet('lead', withWallet('paused', 90)).status).toBe('paused');
+    expect(projectDriveWallet('lead', withWallet('over', 0)).status).toBe('active');
+  });
+
+  it('WAL-6 (partial) the funder\'s overshoot choice is shown to the lead and the org admins, never to a consumer', () => {
+    const chosen = facts({ wallet: { ...facts().wallet, overshootChoice: 'wallet_debt' } });
+    expect(projectDriveWallet('lead', chosen)).toMatchObject({ overshootChoice: 'wallet_debt' });
+    expect(projectDriveWallet('org_admin', chosen)).toMatchObject({ overshootChoice: 'wallet_debt' });
+    expect(projectDriveWallet('member', chosen)).not.toHaveProperty('overshootChoice');
+  });
+});
 
 describe('wallet-views: the numbers', () => {
   it('UI-12 (partial) every amount a consumer sees also carries its credit count from the money model\'s one formatter, so no client converts', () => {

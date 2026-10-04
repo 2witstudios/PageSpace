@@ -119,6 +119,7 @@ describe('notification-email-service', () => {
     'TASK_ASSIGNED',
     'PRODUCT_UPDATE',
     'AUTOMATION_SKIPPED',
+    'WALLET_DEBT',
   ] as const)('sends no per-event email for %s (named silent in the template switch)', async (type) => {
     await sendNotificationEmail({ userId: 'user-1', type, metadata: {} });
 

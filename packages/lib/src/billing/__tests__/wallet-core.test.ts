@@ -33,6 +33,8 @@ import {
   type SpendLeg,
   type SpendResolution,
   type WalletFunds,
+  debtNoticeFunder,
+  debtNoticePeriodStartMs,
 } from '../wallet-core';
 
 // Northwind Labs fixture (Sequence Spec Part 2): Product's wallet holds 1,200 credits,
@@ -764,6 +766,33 @@ describe('entitlement with several funders (D-OW-14)', () => {
     ['own credits use the consumer tier', 'own_credits', 'free'],
   ] as const)('D-OW-14 %s', (_label, source, expected) => {
     expect(entitlementTierFor({ source, walletOwnerTier: 'business', consumerTier: 'free' })).toBe(expected);
+  });
+});
+
+describe('the funder\'s debt notice', () => {
+  const wallet = (over: Partial<{ ownerType: 'user' | 'org'; parentWalletId: string | null; subjectType: string | null; debtCents: number }>) =>
+    ({ ownerType: 'org' as const, parentWalletId: null, subjectType: null, debtCents: 90, ...over });
+
+  it('WAL-6 (partial) a child wallet carrying its own debt tells its PARENT\'s owner, an org pool tells the org', () => {
+    expect(debtNoticeFunder({ debtWallet: wallet({ parentWalletId: 'pool', subjectType: 'drive' }), chargedWalletIsChild: true })).toBe('parent');
+    expect(debtNoticeFunder({ debtWallet: wallet({}), chargedWalletIsChild: true })).toBe('self');
+    expect(debtNoticeFunder({ debtWallet: wallet({}), chargedWalletIsChild: false })).toBe('self');
+  });
+
+  it('WAL-6 (partial) a personal root tells its owner only when it absorbed a drive wallet\'s overshoot, never for their own credits', () => {
+    expect(debtNoticeFunder({ debtWallet: wallet({ ownerType: 'user' }), chargedWalletIsChild: true })).toBe('self');
+    expect(debtNoticeFunder({ debtWallet: wallet({ ownerType: 'user' }), chargedWalletIsChild: false })).toBeNull();
+  });
+
+  it('a wallet with no debt raises no notice', () => {
+    expect(debtNoticeFunder({ debtWallet: wallet({ debtCents: 0 }), chargedWalletIsChild: true })).toBeNull();
+  });
+
+  it('the notice period is the wallet\'s own once begun, else the UTC calendar month', () => {
+    const now = Date.UTC(2026, 9, 20, 12);
+    expect(debtNoticePeriodStartMs({ walletPeriodStartMs: Date.UTC(2026, 9, 3), nowMs: now })).toBe(Date.UTC(2026, 9, 3));
+    expect(debtNoticePeriodStartMs({ walletPeriodStartMs: null, nowMs: now })).toBe(Date.UTC(2026, 9, 1));
+    expect(debtNoticePeriodStartMs({ walletPeriodStartMs: Date.UTC(2026, 10, 3), nowMs: now })).toBe(Date.UTC(2026, 9, 1));
   });
 });
 

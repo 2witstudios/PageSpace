@@ -57,6 +57,7 @@ import { checkOrgActive } from '../organizations/status';
 import { userConsumerKey, utcDayStartMs, utcMonthStartMs, type SpendSourceKind } from '../billing/wallet-core';
 import {
   capRemainingCents,
+  displayedWalletStatus,
   projectDriveWallet,
   walletRemainingCents,
   type ConsumerSpend,
@@ -152,6 +153,7 @@ const WALLET_ROW = {
   fallbackRule: wallets.fallbackRule,
   donationsEnabled: wallets.donationsEnabled,
   defaultSpendSource: wallets.defaultSpendSource,
+  overshootChoice: wallets.overshootChoice,
 } as const;
 
 async function driveWalletRow(executor: Pick<typeof db, 'select'>, driveId: string) {
@@ -289,6 +291,7 @@ async function readView(userId: string, access: WalletAccess): Promise<DriveWall
       fallbackRule: row.fallbackRule,
       donationsEnabled: row.donationsEnabled,
       defaultSpendSource: row.defaultSpendSource,
+      overshootChoice: row.overshootChoice,
     },
     myCap: await myCapFacts(row.id, userId),
     spendByConsumer: seesSpend ? await spendByConsumer(row.id, row.monthlyPeriodStart) : [],
@@ -374,7 +377,7 @@ export async function updateDriveWallet(
   credential: WalletCredential,
 ): Promise<DriveWalletRead | WalletServiceError> {
   // Every field of a change is a write (allocate, pause, rules): a token may make none of them.
-  const refused = refuseCredential(credential, input.allocationCents !== undefined ? 'allocate' : input.paused !== undefined ? 'pause' : 'set_rules');
+  const refused = refuseCredential(credential, input.allocationCents !== undefined || input.overshootChoice !== undefined ? 'allocate' : input.paused !== undefined ? 'pause' : 'set_rules');
   if (refused) return refused;
   const access = await walletAccess(userId, driveId, credential);
   if (!access.ok) return access;
@@ -683,7 +686,7 @@ export async function listMyWallets(userId: string, credential: WalletCredential
     for (const row of rows) {
       if (!row.subjectId) continue;
       const remaining = walletRemainingCents(row);
-      result.driveWallets.push({ driveId: row.subjectId, walletId: row.id, status: row.status, remainingCents: remaining, remainingCredits: formatCreditCount(remaining) });
+      result.driveWallets.push({ driveId: row.subjectId, walletId: row.id, status: displayedWalletStatus(row), remainingCents: remaining, remainingCredits: formatCreditCount(remaining) });
       if (row.parentWalletId === personalId) result.funds.driveWallets.push({ driveId: row.subjectId, walletId: row.id });
     }
   }
