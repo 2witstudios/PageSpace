@@ -25,6 +25,7 @@ vi.mock('@pagespace/db/operators', () => ({
   or: vi.fn((...args: unknown[]) => ({ or: args })),
   inArray: vi.fn((field: unknown, values: unknown) => ({ field, values })),
   isNotNull: vi.fn((field: unknown) => ({ isNotNull: field })),
+  ne: vi.fn((a: unknown, b: unknown) => ({ _ne: true, a, b })),
 }));
 vi.mock('@pagespace/db/schema/commands', () => ({
   commands: { id: 'id', userId: 'userId', driveId: 'driveId', trigger: 'trigger', enabled: 'enabled' },

@@ -131,7 +131,8 @@ export async function GET(req: Request) {
       db.select({ driveId: drives.id }).from(drives).where(eq(drives.ownerId, userId)),
       db.select({ driveId: driveMembers.driveId }).from(driveMembers).where(and(
         eq(driveMembers.userId, userId),
-        isNotNull(driveMembers.acceptedAt)
+        isNotNull(driveMembers.acceptedAt),
+        ne(driveMembers.role, 'GUEST')
       )),
     ]);
 

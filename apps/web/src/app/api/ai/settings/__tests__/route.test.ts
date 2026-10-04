@@ -260,8 +260,8 @@ describe('AI settings route', () => {
       const response = await GET(makeRequest('GET'));
       const body = await response.json();
 
-      expect(body.currentProvider).toBe('zai');
-      expect(body.currentModel).toBe('z-ai/glm-5.3-flash');
+      expect(body.currentProvider).toBe('openai');
+      expect(body.currentModel).toBe('openai/gpt-6-luna');
       expect(body.userSubscriptionTier).toBe('free');
     });
 
@@ -280,8 +280,8 @@ describe('AI settings route', () => {
       const response = await GET(makeRequest('GET'));
       const body = await response.json();
 
-      expect(body.currentProvider).toBe('zai');
-      expect(body.currentModel).toBe('z-ai/glm-5.3-flash');
+      expect(body.currentProvider).toBe('openai');
+      expect(body.currentModel).toBe('openai/gpt-6-luna');
     });
 
     it('leaves a runtime-discovered local model untouched', async () => {
@@ -471,7 +471,7 @@ describe('AI settings route', () => {
 
       const response = await PATCH(makeRequest('PATCH', {
         provider: 'glm',
-        model: 'glm-4.5-air',
+        model: 'glm-5.3-flash',
       }));
       const body = await response.json();
 
@@ -487,13 +487,13 @@ describe('AI settings route', () => {
 
       const response = await PATCH(makeRequest('PATCH', {
         provider: 'glm',
-        model: 'glm-4.5-air',
+        model: 'glm-5.3-flash',
       }));
 
       expect(response.status).toBe(200);
       expect(aiSettingsRepository.updateProviderSettings).toHaveBeenCalledWith(mockUserId, {
         provider: 'glm',
-        model: 'glm-4.5-air',
+        model: 'glm-5.3-flash',
       });
     });
   });

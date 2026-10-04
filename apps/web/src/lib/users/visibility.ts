@@ -17,7 +17,9 @@ import { connections } from '@pagespace/db/schema/social';
 import type { PublicProfileRow } from './enumeration-safe';
 
 /**
- * Drive ids the user owns or is an ACCEPTED member of.
+ * Drive ids the user owns or is an ACCEPTED member of. A GUEST row (redeemed
+ * page share link) is not a membership: it opens no shared context with the
+ * drive's people, in either direction.
  *
  * `driveMembers` reads used for an authorization decision must gate on
  * `isNotNull(acceptedAt)` (repo convention — see drive-member-gate-coverage):
@@ -30,7 +32,7 @@ async function getUserDriveIds(userId: string): Promise<string[]> {
     db
       .select({ driveId: driveMembers.driveId })
       .from(driveMembers)
-      .where(and(eq(driveMembers.userId, userId), isNotNull(driveMembers.acceptedAt))),
+      .where(and(eq(driveMembers.userId, userId), isNotNull(driveMembers.acceptedAt), ne(driveMembers.role, 'GUEST'))),
   ]);
   return Array.from(
     new Set<string>([...owned.map((d) => d.id), ...member.map((m) => m.driveId)]),
@@ -73,6 +75,7 @@ export async function callerCanViewUser(
         eq(driveMembers.userId, targetId),
         inArray(driveMembers.driveId, callerDriveIds),
         isNotNull(driveMembers.acceptedAt),
+        ne(driveMembers.role, 'GUEST'),
       ),
     )
     .limit(1);
@@ -142,6 +145,7 @@ export async function searchRelatedProfilesByName(
             and(
               eq(driveMembers.userId, userProfiles.userId),
               isNotNull(driveMembers.acceptedAt),
+              ne(driveMembers.role, 'GUEST'),
               inArray(driveMembers.driveId, callerDriveIds),
             ),
           ),

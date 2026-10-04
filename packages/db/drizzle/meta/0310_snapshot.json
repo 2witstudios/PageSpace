@@ -1,6 +1,6 @@
 {
-  "id": "99c61762-1de6-4043-b923-eb229cc67e99",
-  "prevId": "930826f0-6659-45fc-a8d0-fb00df75f222",
+  "id": "6b3e35a3-f34c-40bb-ae2c-b7597a2030a6",
+  "prevId": "240c5f9b-7134-49bc-9d82-524563792ae7",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -25147,7 +25147,8 @@
       "values": [
         "OWNER",
         "ADMIN",
-        "MEMBER"
+        "MEMBER",
+        "GUEST"
       ]
     },
     "public.pulse_summary_type": {

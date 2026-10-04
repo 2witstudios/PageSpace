@@ -36,7 +36,6 @@ CREATE TABLE "agent_signup_challenges" (
 	"id" text PRIMARY KEY NOT NULL,
 	"challengeHash" text NOT NULL,
 	"difficultyBits" integer NOT NULL,
-	"issuedToIp" text,
 	"expiresAt" timestamp NOT NULL,
 	"consumedAt" timestamp,
 	"createdAt" timestamp DEFAULT now() NOT NULL,
@@ -52,4 +51,5 @@ CREATE INDEX "agent_claims_agent_user_id_idx" ON "agent_claims" USING btree ("ag
 CREATE INDEX "agent_claims_owner_user_id_idx" ON "agent_claims" USING btree ("ownerUserId");--> statement-breakpoint
 CREATE INDEX "agent_claims_expires_at_idx" ON "agent_claims" USING btree ("expiresAt");--> statement-breakpoint
 CREATE INDEX "agent_identities_owner_user_id_idx" ON "agent_identities" USING btree ("ownerUserId");--> statement-breakpoint
+CREATE INDEX "agent_identities_created_at_idx" ON "agent_identities" USING btree ("createdAt");--> statement-breakpoint
 CREATE INDEX "agent_signup_challenges_expires_at_idx" ON "agent_signup_challenges" USING btree ("expiresAt");

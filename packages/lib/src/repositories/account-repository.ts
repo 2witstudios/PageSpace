@@ -66,11 +66,12 @@ export const accountRepository = {
   },
 
   /**
-   * Get member count for a drive
+   * Get member count for a drive. GUEST rows (redeemed page share links) are
+   * not members, so a drive shared only with guests counts as solo.
    */
   getDriveMemberCount: async (driveId: string): Promise<number> => {
     const result = await db
-      .select({ count: sql<number>`count(*)` })
+      .select({ count: sql<number>`count(*) filter (where ${driveMembers.role} <> 'GUEST')` })
       .from(driveMembers)
       .where(eq(driveMembers.driveId, driveId));
 
@@ -116,8 +117,9 @@ export const accountRepository = {
       const soloDriveIds: string[] = [];
 
       for (const drive of ownedDrives) {
+        // GUEST rows are not members (see getDriveMemberCount).
         const [{ count }] = await tx
-          .select({ count: sql<number>`count(*)` })
+          .select({ count: sql<number>`count(*) filter (where ${driveMembers.role} <> 'GUEST')` })
           .from(driveMembers)
           .where(eq(driveMembers.driveId, drive.id));
 

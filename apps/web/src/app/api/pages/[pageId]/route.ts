@@ -145,7 +145,8 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
     }
 
     // Broadcast content update (for document synchronization)
-    if (safeBody.content) {
+    // `!== undefined`, not truthiness: deleting all text saves '' and must still broadcast.
+    if (safeBody.content !== undefined) {
       await broadcastPageEvent(
         createPageEventPayload(driveId, pageId, 'content-updated', {
           title: result.page.title ?? undefined,
@@ -212,7 +213,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
     // Track page update
     trackPageOperation(userId, 'update', pageId, {
       updatedFields: result.updatedFields,
-      hasContentUpdate: !!safeBody.content,
+      hasContentUpdate: safeBody.content !== undefined,
       hasTitleUpdate: !!safeBody.title
     });
 

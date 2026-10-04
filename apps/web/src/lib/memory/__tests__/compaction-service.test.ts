@@ -1,5 +1,6 @@
 import { describe, it, vi, beforeEach } from 'vitest';
 import { assert } from './riteway';
+import { memoryGate } from './memory-gate-double';
 
 /**
  * Compaction Service Tests
@@ -44,15 +45,11 @@ vi.mock('@/lib/ai/core/ai-providers-config', () => ({
   BACKGROUND_HEAVY_MODEL: 'anthropic/claude-sonnet-5',
 }));
 vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
-  AIMonitoring: { trackUsage: vi.fn() },
-  // These are pure-telemetry call sites: they hand the tracking promise to a NAMED
-  // discard rather than leaving it to float, so the mocked module has to provide it.
-  discardUsageOutcome: (tracking: Promise<unknown>) => {
-    void Promise.resolve(tracking).then(
-      () => undefined,
-      () => undefined,
-    );
-  },
+  // Awaited inside the credit hold, so the debit lands before the hold is released.
+  AIMonitoring: { trackUsage: vi.fn(async () => ({ persisted: true, creditsSettled: true })) },
+}));
+vi.mock('../memory-credit-gate', async () => ({
+  withMemoryCreditHold: (await import('./memory-gate-double')).fakeWithMemoryCreditHold,
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { api: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } },
@@ -158,6 +155,7 @@ describe('budget coherence across the three consumers', () => {
 describe('checkAndCompactIfNeeded', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    memoryGate.reset();
     updatePersonalizationPage.mockResolvedValue({ written: true });
   });
 
@@ -192,6 +190,60 @@ describe('checkAndCompactIfNeeded', () => {
       should: 'report nothing as compacted',
       actual: { compacted: result.compacted, fields: result.fields },
       expected: { compacted: false, fields: [] },
+    });
+  });
+
+  it('reserves one hold sized for every over-budget field, then writes each compaction', async () => {
+    readMemoryPages.mockResolvedValue({ bio: 'x'.repeat(3500), rules: 'y'.repeat(3500) });
+    const { generateText } = await import('ai');
+    vi.mocked(generateText).mockResolvedValue({
+      text: 'short',
+      usage: { inputTokens: 10, outputTokens: 5 },
+    } as never);
+    const { createAIProvider } = await import('@/lib/ai/core/provider-factory');
+    vi.mocked(createAIProvider).mockResolvedValue({ model: {}, provider: 'anthropic', modelName: 'm' } as never);
+
+    const { checkAndCompactIfNeeded } = await import('../compaction-service');
+    const result = await checkAndCompactIfNeeded('user-funded');
+
+    assert({
+      given: 'two pages over budget and a funded user',
+      should: 'take one two-call hold and compact both',
+      actual: { holds: memoryGate.holds, result },
+      expected: {
+        holds: [{ userId: 'user-funded', modelCalls: 2 }],
+        result: { compacted: true, fields: ['bio', 'rules'] },
+      },
+    });
+  });
+
+  it('compacts nothing and writes nothing when the credit gate refuses', async () => {
+    readMemoryPages.mockResolvedValue({ bio: 'x'.repeat(3500) });
+    memoryGate.refuseWith = 'out_of_credits';
+    const { generateText } = await import('ai');
+    const { createAIProvider } = await import('@/lib/ai/core/provider-factory');
+    const { AIMonitoring } = await import('@pagespace/lib/monitoring/ai-monitoring');
+
+    const { checkAndCompactIfNeeded } = await import('../compaction-service');
+    const result = await checkAndCompactIfNeeded('user-in-debt');
+
+    assert({
+      given: 'an over-budget page and a user whose balance the gate refuses',
+      should: 'leave the page untouched, run no model, charge nothing, and say why',
+      actual: {
+        result,
+        writes: updatePersonalizationPage.mock.calls.length,
+        providersBuilt: vi.mocked(createAIProvider).mock.calls.length,
+        modelCalls: vi.mocked(generateText).mock.calls.length,
+        charges: vi.mocked(AIMonitoring.trackUsage).mock.calls.length,
+      },
+      expected: {
+        result: { compacted: false, fields: [], creditRefusal: 'out_of_credits' },
+        writes: 0,
+        providersBuilt: 0,
+        modelCalls: 0,
+        charges: 0,
+      },
     });
   });
 });

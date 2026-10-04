@@ -55,6 +55,7 @@ vi.mock('@/lib/auth', () => ({
 import { db } from '@pagespace/db/db';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { sql } from '@pagespace/db/operators';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string, tokenVersion = 0): SessionAuthResult => ({
@@ -160,6 +161,16 @@ describe('GET /api/account/drives-status', () => {
       memberCount: 1,
     });
     expect(body.multiMemberDrives).toEqual([]);
+  });
+
+  it('counts members without GUEST rows (redeemed page share links), as account deletion does', async () => {
+    vi.mocked(db.query.drives.findMany).mockResolvedValue([mockDrive({ id: 'drive_solo', name: 'My Solo Drive' })]);
+    setupSelectMocks(1);
+
+    await GET(new Request('https://example.com/api/account/drives-status'));
+
+    const countSql = vi.mocked(sql).mock.calls.map(([strings]) => strings.join('?'));
+    expect(countSql).toContain("count(*) filter (where ? <> 'GUEST')");
   });
 
   it('should categorize multi-member drive correctly', async () => {

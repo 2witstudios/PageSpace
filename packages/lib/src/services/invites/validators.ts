@@ -80,7 +80,7 @@ export interface RevokeAuthorizedInvite {
   driveId: string;
 }
 
-const isRevokeRole = (role: Role): boolean => role === 'OWNER' || role === 'ADMIN';
+const isRevokeRole = (role: Role | 'GUEST'): boolean => role === 'OWNER' || role === 'ADMIN';
 
 export const validateRevokeRequest = ({
   invite,
@@ -89,7 +89,7 @@ export const validateRevokeRequest = ({
 }: {
   invite: RevokeAuthorizedInvite | null;
   requestedDriveId: string;
-  actorMembership: { role: Role; acceptedAt: Date | null } | null;
+  actorMembership: { role: Role | 'GUEST'; acceptedAt: Date | null } | null;
 }): Result<RevokeAuthorizedInvite, RevokeErrorCode> => {
   if (invite === null || invite.driveId !== requestedDriveId) {
     return { ok: false, error: 'NOT_FOUND' };

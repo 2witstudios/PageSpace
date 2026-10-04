@@ -1,1 +1,0 @@
-ALTER TABLE "agent_signup_challenges" DROP COLUMN "issuedToIp";

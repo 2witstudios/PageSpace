@@ -65,6 +65,11 @@ on:
       - 'packages/lib/src/services/app-hosting/**'
       - 'packages/lib/src/services/fly/**'
       - 'packages/db/src/schema/published-apps.ts'
+      # The browser worker's egress proxy is the network boundary under an
+      # agent-driven Chromium (SSRF, rebinding, header allowlists). Without this
+      # entry a PR touching only the proxy got no Security Tests and no CodeQL
+      # (CodeQL alert 350 surfaced on master only, blocking unrelated PRs).
+      - 'packages/browser-worker/**'
   pull_request:
     # BASE branches, not head. This branch listed itself here and it bought
     # nothing: its PR targets `master`, which is already listed, so the suite
@@ -137,6 +142,11 @@ on:
       - 'packages/lib/src/services/app-hosting/**'
       - 'packages/lib/src/services/fly/**'
       - 'packages/db/src/schema/published-apps.ts'
+      # The browser worker's egress proxy is the network boundary under an
+      # agent-driven Chromium (SSRF, rebinding, header allowlists). Without this
+      # entry a PR touching only the proxy got no Security Tests and no CodeQL
+      # (CodeQL alert 350 surfaced on master only, blocking unrelated PRs).
+      - 'packages/browser-worker/**'
   # Allow manual trigger
   workflow_dispatch:
   # Run on schedule for continuous security monitoring
@@ -282,6 +292,19 @@ jobs:
           DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
           NODE_ENV: test
 
+      # A GUEST drive_members row (a redeemed page share link) must carry only
+      # its page grants. These suites also run in ci.yml's unit and
+      # test:integration steps; naming them here means an exclude-list edit
+      # there cannot leave the guest boundary with no runner.
+      - name: Run page-share-link GUEST boundary tests
+        run: |
+          bun run --filter '@pagespace/lib' test:db -- \
+            src/permissions/__tests__/share-link-guest.integration.test.ts \
+            src/permissions/__tests__/accessible-page-ids-agreement.integration.test.ts
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
+          NODE_ENV: test
+
       - name: Run auth service tests (magic link, passkey)
         run: |
           bun run --filter '@pagespace/lib' test:db -- \
@@ -387,7 +410,7 @@ jobs:
           fetch-depth: 0
 
       - name: TruffleHog Secret Scan
-        uses: trufflesecurity/trufflehog@v3.97.5
+        uses: trufflesecurity/trufflehog@v3.97.9
         with:
           path: ./
           base: ${{ github.event.before }}
@@ -424,13 +447,13 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v4.38.1
+        uses: github/codeql-action/init@v4.38.2
         with:
           languages: javascript-typescript
           queries: security-extended
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v4.38.1
+        uses: github/codeql-action/analyze@v4.38.2
         with:
           category: "/language:javascript-typescript"
 

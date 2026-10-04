@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { buildTree } from '@pagespace/lib/content/tree-utils';
 import { db } from '@pagespace/db/db'
-import { and, eq, inArray, asc, sql, isNotNull } from '@pagespace/db/operators'
+import { and, eq, inArray, asc, sql, isNotNull, ne } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core'
 import { pagePermissions, driveMembers } from '@pagespace/db/schema/members'
 import { taskItems } from '@pagespace/db/schema/tasks';
@@ -24,7 +24,8 @@ async function getPermittedPages(driveId: string, userId: string) {
     .where(and(
       eq(driveMembers.driveId, driveId),
       eq(driveMembers.userId, userId),
-      isNotNull(driveMembers.acceptedAt)
+      isNotNull(driveMembers.acceptedAt),
+      ne(driveMembers.role, 'GUEST')
     ))
     .limit(1);
 

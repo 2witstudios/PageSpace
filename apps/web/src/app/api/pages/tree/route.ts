@@ -64,7 +64,10 @@ export async function POST(request: Request) {
 
       if (!isOwner) {
         // Authz read: pending invitee (acceptedAt IS NULL) must not read the
-        // page tree of a drive they have not joined. Closes Review C2.
+        // page tree of a drive they have not joined. Closes Review C2. A GUEST
+        // row (redeemed page share link) passes this gate on purpose: the tree
+        // below is cut to getUserAccessiblePagesInDrive, which gives a guest
+        // only the pages they hold explicit grants on.
         const membership = await db.query.driveMembers.findFirst({
           where: and(
             eq(driveMembers.driveId, driveId),

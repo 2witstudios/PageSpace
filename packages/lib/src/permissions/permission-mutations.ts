@@ -18,6 +18,7 @@ import { GrantInputSchema, RevokeInputSchema, type PermissionFlags } from './sch
 import { logPermissionActivity, getActorInfo } from '../monitoring/activity-logger';
 import { isHomeDrive, homeDriveActionError } from '../services/drive-guards';
 import { kickForPagePermissionRevocation } from './revocation-kick';
+import { isGuestRole } from './guest-role';
 
 // ============================================================================
 // Error Types
@@ -131,7 +132,7 @@ async function getPageIfCanShare(
   // Check if user is the page creator AND still has active drive membership
   if (page.createdBy === userId) {
     const creatorMembership = await db
-      .select({ id: driveMembers.id })
+      .select({ id: driveMembers.id, role: driveMembers.role })
       .from(driveMembers)
       .where(
         and(
@@ -142,7 +143,8 @@ async function getPageIfCanShare(
       )
       .limit(1);
 
-    if (creatorMembership.length > 0) {
+    // A GUEST's share rights come only from its explicit page grant.
+    if (creatorMembership.length > 0 && !isGuestRole(creatorMembership[0].role)) {
       return {
         ok: true,
         page: { pageId: page.id, driveId: page.driveId, driveKind: page.driveKind },

@@ -50,7 +50,7 @@ vi.mock('@pagespace/db/schema/core', () => ({
   drives: { id: 'id', ownerId: 'ownerId' },
 }));
 vi.mock('@pagespace/db/schema/members', () => ({
-  driveMembers: { driveId: 'driveId', userId: 'userId' },
+  driveMembers: { driveId: 'driveId', userId: 'userId', role: 'role' },
 }));
 vi.mock('@pagespace/db/schema/tasks', () => ({
   taskItems: { assigneeId: 'assigneeId', userId: 'userId', status: 'status', dueDate: 'dueDate', completedAt: 'completedAt' },
@@ -61,6 +61,7 @@ vi.mock('@pagespace/db/schema/social', () => ({
 }));
 
 import { GET } from '../route';
+import { ne } from '@pagespace/db/operators';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 const mockWebAuth = (userId: string): SessionAuthResult => ({
@@ -91,6 +92,12 @@ describe('GET /api/activity/summary', () => {
       expect.any(Request),
       expect.objectContaining({ eventType: 'data.read', userId: 'user_1', resourceType: 'activity_summary', resourceId: 'user_1' })
     );
+  });
+
+  it('does not count a GUEST drive (redeemed page share link) among the member drives', async () => {
+    await GET(new Request('https://example.com/api/activity/summary'));
+
+    expect(ne).toHaveBeenCalledWith('role', 'GUEST');
   });
 
   it('does not log audit event when query throws', async () => {

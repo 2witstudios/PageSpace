@@ -44,6 +44,7 @@ async function getMemberDriveIds(userId: string): Promise<string[]> {
       and(
         eq(driveMembers.userId, userId),
         isNotNull(driveMembers.acceptedAt),
+        ne(driveMembers.role, 'GUEST'),
         eq(drives.isTrashed, false)
       )
     );

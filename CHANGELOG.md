@@ -7,6 +7,10 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 - /btw side questions now work on every chat surface (dashboard assistant, right-sidebar chat, agent console) and /btw appears in the / command picker on all of them.
 
+### Changed
+
+- **Right-sidebar chat input is a single compact card** — attach, tools, model picker and one send/stop button now share one toolbar row under the text box instead of stacking a separate model selector above it. While a reply is streaming, a queue button appears next to Stop once you've typed something, so you can still queue a follow-up on phones.
+
 ### Added
 
 - **AI agents can sign up as themselves** — an agent with a shell (Claude Code, Codex, a ChatGPT
@@ -614,6 +618,14 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   the hero demo), the code editor and terminal fallbacks, and the iOS/Android status bar and
   splash colors all use the same new floor so nothing looks darker than the page around it.
 
+- **The default AI model is now OpenAI's GPT-6 Luna** — cheap, a 1M-token context window, and on the
+  free-tier allowlist. New accounts pick it up automatically; anyone with an explicit model already
+  selected keeps that choice. The OpenRouter catalog was refreshed again: GPT-6 / GPT-6.1 (Luna, Sol,
+  Astra), Claude Opus 5.5 / Sonnet 5.5 / Fable 5.1, Gemini 3.8 Flash, Grok 4.7, DeepSeek V4.1 Flash,
+  Qwen3.8 Max, Muse Spark 1.3, GLM 5.3 Prime / FlashX and more are now selectable, and pricing was
+  re-synced with OpenRouter. The admin GLM Coder Plan list now shows only GLM-5.3 and GLM-5.3 Flash,
+  the models the plan currently offers.
+
 - **The default AI model is now Z.ai's GLM-5.3 Flash** — cheaper per token and a larger context
   window than the previous default (OpenAI's GPT-5.6 Luna), and still on the free-tier allowlist.
   New accounts pick it up automatically; anyone with an explicit model already selected keeps that
@@ -623,6 +635,24 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Memory now checks your AI credits before it learns** — the nightly Memory pass (learning
+  from your conversations and tidying your profile pages) used to run and charge you even when
+  your balance was used up, so you could go into debt without opening PageSpace. Now each step
+  checks your credits before the AI runs. When you're out of credits that night's learning is
+  skipped: nothing is charged, your profile pages stay exactly as they were, and anything Memory
+  was about to add waits for the next night.
+- **Agent mentions and Zoom summaries now check your AI credits first** — @mentioning an agent in
+  a channel, and the AI summary and action items on a recorded Zoom meeting's page, used to run
+  and charge you even when your balance was used up, so you could go into debt. Now they check
+  your credits before the AI runs. When you're out of credits, a mentioned agent doesn't reply.
+  A Zoom meeting still gets its page, just without the summary and action items.
+- **A page share link now opens only that page** — opening a link to one page used to make you a
+  full member of its drive, so you could read every other non-private page there and post in its
+  channels. Now you join as a guest: you see only the pages that were shared with you. Guests do
+  not appear on the drive's Members page, cannot message the drive's members through it, and do not
+  count as members when the owner deletes their account. Opening a page link no longer accepts a
+  pending drive invitation or changes an existing member's role. A drive link or an invitation
+  still makes a guest a full member.
 - **Workflows no longer run when you are out of AI credits** — pressing Run on a workflow,
   a scheduled workflow, and a task's due-date or completion trigger now check your AI credit
   balance before the agent starts, as calendar, Zoom and webhook triggers already did. Previously

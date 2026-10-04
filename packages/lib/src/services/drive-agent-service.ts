@@ -16,6 +16,7 @@ import { driveAgentMembers, driveMembers } from '@pagespace/db/schema/members';
 import { canUserEditPage, getUserDriveAccess, isDriveOwnerOrAdmin } from '../permissions/permissions';
 import { customRoleBelongsToDrive, fetchCustomRolePermissions } from '../permissions/membership-queries';
 import type { CustomRolePerms } from '../permissions/membership-queries';
+import { isGuestRole } from '../permissions/guest-role';
 import { isHomeDrive, homeDriveActionError } from './drive-guards';
 
 export type AgentDriveRole = 'MEMBER' | 'ADMIN';
@@ -76,6 +77,13 @@ async function resolveGranterAccess(
       isNotNull(driveMembers.acceptedAt),
     ))
     .limit(1);
+
+  // A GUEST (redeemed page share link) may not bind an agent to the drive at
+  // any role: an agent MEMBER reads the whole drive, which would turn one shared
+  // page back into the drive-wide access GUEST exists to withhold.
+  if (membership && isGuestRole(membership.role)) {
+    return { canGrant: false, maxRole: 'MEMBER', customRoleId: null, driveKind };
+  }
 
   if (membership) {
     return {

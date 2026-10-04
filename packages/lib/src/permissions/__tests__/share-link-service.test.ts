@@ -517,7 +517,7 @@ describe('redeemPageShareLink', () => {
     expect(result).toEqual({ ok: false, error: 'NOT_FOUND' });
   });
 
-  it('auto-creates drive membership when user is not yet a member', async () => {
+  it('creates a GUEST membership row, and never overwrites an existing row', async () => {
     let callCount = 0;
     mockDb.select.mockImplementation(() => ({
       from: vi.fn().mockReturnThis(),
@@ -536,7 +536,12 @@ describe('redeemPageShareLink', () => {
         return Promise.resolve([]);
       }),
     }));
-    mockDb.insert.mockReturnValue({
+    const memberInsert = {
+      values: vi.fn().mockReturnThis(),
+      onConflictDoNothing: vi.fn().mockResolvedValue(undefined),
+      onConflictDoUpdate: vi.fn().mockResolvedValue(undefined),
+    };
+    mockDb.insert.mockReturnValueOnce(memberInsert).mockReturnValue({
       values: vi.fn().mockReturnThis(),
       returning: vi.fn().mockResolvedValue([{ id: 'new-pp-id' }]),
       onConflictDoNothing: vi.fn().mockResolvedValue(undefined),
@@ -552,6 +557,10 @@ describe('redeemPageShareLink', () => {
       expect(result.data.linkId).toBe(LINK_ID);
     }
     expect(mockDb.insert).toHaveBeenCalledTimes(2);
+    expect(memberInsert.values).toHaveBeenCalledWith(expect.objectContaining({ driveId: DRIVE_ID, role: 'GUEST' }));
+    // A pending invite or a real membership is left exactly as it is.
+    expect(memberInsert.onConflictDoNothing).toHaveBeenCalledOnce();
+    expect(memberInsert.onConflictDoUpdate).not.toHaveBeenCalled();
   });
 
   it('maps SHARE and DELETE permissions from link into pagePermissions insert', async () => {

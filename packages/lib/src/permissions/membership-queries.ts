@@ -2,6 +2,7 @@ import { db } from '@pagespace/db/db';
 import { eq, and, isNotNull, inArray } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { driveRoles, driveMembers } from '@pagespace/db/schema/members';
+import { isGuestRole } from './guest-role';
 
 export type CustomRolePerms = Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>;
 export type PagePerm = { canView: boolean; canEdit: boolean; canShare: boolean };
@@ -49,14 +50,15 @@ export async function fetchCustomRolePermissions(
   };
 }
 
-// Returns the customRoleId assigned to the user in this drive, or null if none / not a member.
+// Returns the customRoleId assigned to the user in this drive, or null if none / not a member / a guest.
 export async function getMemberCustomRoleId(driveId: string, userId: string): Promise<string | null> {
   const result = await db
-    .select({ customRoleId: driveMembers.customRoleId })
+    .select({ customRoleId: driveMembers.customRoleId, role: driveMembers.role })
     .from(driveMembers)
     .where(and(eq(driveMembers.driveId, driveId), eq(driveMembers.userId, userId), isNotNull(driveMembers.acceptedAt)))
     .limit(1);
-  return result.length > 0 ? (result[0].customRoleId ?? null) : null;
+  if (result.length === 0 || isGuestRole(result[0].role)) return null;
+  return result[0].customRoleId ?? null;
 }
 
 // Returns true only when the custom role exists and belongs to the specified drive.

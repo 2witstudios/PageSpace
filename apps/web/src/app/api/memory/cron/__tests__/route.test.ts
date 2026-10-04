@@ -57,7 +57,7 @@ const mockGetCurrentPersonalization = vi.fn();
 const mockCheckAndCompactIfNeeded = vi.fn();
 
 vi.mock('@/lib/memory/discovery-service', () => ({
-  runDiscoveryPasses: () => mockRunDiscoveryPasses(),
+  runDiscoveryPasses: (...args: unknown[]) => mockRunDiscoveryPasses(...args),
 }));
 
 vi.mock('@/lib/memory/integration-service', () => ({
@@ -67,7 +67,7 @@ vi.mock('@/lib/memory/integration-service', () => ({
 }));
 
 vi.mock('@/lib/memory/compaction-service', () => ({
-  checkAndCompactIfNeeded: () => mockCheckAndCompactIfNeeded(),
+  checkAndCompactIfNeeded: (...args: unknown[]) => mockCheckAndCompactIfNeeded(...args),
 }));
 
 // Candidate lifecycle. These record WHICH ids were settled, which is the whole
@@ -501,6 +501,120 @@ describe('memory cron route', () => {
           redacted: mockRedactSettledEvidence.mock.calls.length,
         },
         expected: { pruned: 1, redacted: 1 },
+      });
+    });
+  });
+
+  describe('credit refusals', () => {
+    const candidate = (id: string, userId: string) => ({
+      id,
+      userId,
+      field: 'rules',
+      claim: `claim ${id}`,
+      claimKey: `claim ${id}`,
+      evidence: 'e',
+      occurrences: 2,
+      firstSeenAt: new Date('2026-03-01T00:00:00.000Z'),
+      lastSeenAt: new Date('2026-03-02T00:00:00.000Z'),
+      promotedAt: null,
+      rejectedAt: null,
+    });
+
+    it("records one user's refusal and still runs every other user's pass", async () => {
+      // user-broke is first, so a refusal that threw or returned early would
+      // stop user-funded from ever being reached.
+      mockDbSelect.mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          innerJoin: vi.fn().mockReturnValue({
+            where: vi.fn().mockReturnValue({
+              groupBy: vi.fn().mockResolvedValue([
+                { userId: 'user-broke', subscriptionTier: 'pro' },
+                { userId: 'user-funded', subscriptionTier: 'pro' },
+              ]),
+            }),
+          }),
+          where: vi.fn().mockResolvedValue([]),
+        }),
+      });
+      mockRunDiscoveryPasses.mockImplementation(async (userId: string) =>
+        userId === 'user-broke' ? { claims: [], creditRefusal: 'out_of_credits' } : { claims: [] }
+      );
+      mockFindPromotableCandidates.mockImplementation(async (userId: string) => [candidate(`${userId}-c1`, userId)]);
+      mockEvaluateAndIntegrate.mockImplementation(async (userId: string) =>
+        userId === 'user-broke'
+          ? { ok: false, reason: 'credit gate refused: out_of_credits', creditRefusal: 'out_of_credits' }
+          : { ok: true, updates: { rules: 'new rules' }, usedCandidateIds: ['user-funded-c1'] }
+      );
+      mockGetCurrentPersonalization.mockResolvedValue({});
+      mockApplyIntegrationDecisions.mockResolvedValue({ updated: true, fields: ['rules'], rejected: [] });
+      mockCheckAndCompactIfNeeded.mockResolvedValue({ compacted: false, fields: [] });
+      mockPruneStaleCandidates.mockResolvedValue(0);
+      mockRedactSettledEvidence.mockResolvedValue(0);
+
+      const { POST } = await import('../route');
+      const response = await POST(createSignedCronRequest());
+      const body = await response.json();
+
+      assert({
+        given: 'one user out of credits and one funded user',
+        should: "record the refusal, leave the refused user's candidates pending, and complete the funded pass",
+        actual: {
+          status: response.status,
+          processed: body.processed,
+          errors: body.errors,
+          creditSkipped: body.creditSkipped,
+          applied: mockApplyIntegrationDecisions.mock.calls.map(([userId]) => userId),
+          promoted: mockMarkCandidatesPromoted.mock.calls,
+          retention: mockPruneStaleCandidates.mock.calls.map(([userId]) => userId),
+        },
+        expected: {
+          status: 200,
+          processed: 2,
+          errors: undefined,
+          creditSkipped: ['user-broke: discovery: out_of_credits', 'user-broke: evaluation: out_of_credits'],
+          applied: ['user-funded'],
+          promoted: [[['user-funded-c1']]],
+          retention: ['user-broke', 'user-funded'],
+        },
+      });
+    });
+
+    it('records a refused compaction without undoing the landed page write', async () => {
+      mockDbSelect.mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          innerJoin: vi.fn().mockReturnValue({
+            where: vi.fn().mockReturnValue({
+              groupBy: vi.fn().mockResolvedValue([{ userId: 'user-1', subscriptionTier: 'pro' }]),
+            }),
+          }),
+          where: vi.fn().mockResolvedValue([]),
+        }),
+      });
+      mockRunDiscoveryPasses.mockResolvedValue({ claims: [] });
+      mockFindPromotableCandidates.mockResolvedValue([candidate('c1', 'user-1')]);
+      mockEvaluateAndIntegrate.mockResolvedValue({ ok: true, updates: { rules: 'r' }, usedCandidateIds: ['c1'] });
+      mockGetCurrentPersonalization.mockResolvedValue({});
+      mockApplyIntegrationDecisions.mockResolvedValue({ updated: true, fields: ['rules'], rejected: [] });
+      mockCheckAndCompactIfNeeded.mockResolvedValue({ compacted: false, fields: [], creditRefusal: 'out_of_credits' });
+      mockPruneStaleCandidates.mockResolvedValue(0);
+      mockRedactSettledEvidence.mockResolvedValue(0);
+
+      const { POST } = await import('../route');
+      const body = await (await POST(createSignedCronRequest())).json();
+
+      assert({
+        given: 'an evaluator write that landed and a compaction the gate refused',
+        should: 'keep the promotion, report no compaction, and name the refused step',
+        actual: {
+          promoted: mockMarkCandidatesPromoted.mock.calls,
+          compacted: body.compacted,
+          creditSkipped: body.creditSkipped,
+        },
+        expected: {
+          promoted: [[['c1']]],
+          compacted: 0,
+          creditSkipped: ['user-1: compaction: out_of_credits'],
+        },
       });
     });
   });

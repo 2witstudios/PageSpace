@@ -5,6 +5,7 @@ import { drives } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
 import { isDriveOwnerOrAdmin, isUserDriveMember } from '../permissions/permissions';
 import { getDriveRecipientUserIds } from './drive-member-service';
+import { isGuestRole } from '../permissions/guest-role';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -298,7 +299,7 @@ export async function isUserMemberOfAnyEventDrive(
 
   const sharedDriveIds = sharedRows.map((r) => r.driveId);
   const [sharedMembers, sharedOwners] = await Promise.all([
-    db.select({ userId: driveMembers.userId })
+    db.select({ userId: driveMembers.userId, role: driveMembers.role })
       .from(driveMembers)
       .where(and(inArray(driveMembers.driveId, sharedDriveIds), isNotNull(driveMembers.acceptedAt))),
     db.select({ ownerId: drives.ownerId })
@@ -306,7 +307,8 @@ export async function isUserMemberOfAnyEventDrive(
       .where(inArray(drives.id, sharedDriveIds)),
   ]);
 
-  return sharedMembers.some((m) => m.userId === userId) ||
+  // A GUEST (redeemed page share link) is not a member of the shared drive.
+  return sharedMembers.some((m) => m.userId === userId && !isGuestRole(m.role)) ||
     sharedOwners.some((d) => d.ownerId === userId);
 }
 
@@ -335,14 +337,14 @@ export async function getAllMemberUserIdsForEvent(
   if (sharedRows.length > 0) {
     const sharedDriveIds = sharedRows.map((r) => r.driveId);
     const [sharedMembers, sharedOwners] = await Promise.all([
-      db.select({ userId: driveMembers.userId })
+      db.select({ userId: driveMembers.userId, role: driveMembers.role })
         .from(driveMembers)
         .where(and(inArray(driveMembers.driveId, sharedDriveIds), isNotNull(driveMembers.acceptedAt))),
       db.select({ ownerId: drives.ownerId })
         .from(drives)
         .where(inArray(drives.id, sharedDriveIds)),
     ]);
-    for (const { userId } of sharedMembers) result.add(userId);
+    for (const { userId, role } of sharedMembers) if (!isGuestRole(role)) result.add(userId);
     for (const { ownerId } of sharedOwners) result.add(ownerId);
   }
 
