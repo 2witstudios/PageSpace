@@ -32,7 +32,8 @@ import { computeChargeFor, type ComputeCharge } from '@pagespace/lib/billing/com
 import { chargeMillicents } from '@pagespace/lib/billing/credit-core';
 import { MACHINE_MARKUP_BPS } from '@pagespace/lib/billing/credit-pricing';
 import { calculateMachineCostDollars } from '@pagespace/lib/monitoring/machine-pricing';
-import { settleAccruedWindow } from '../shell-handler';
+import { claimBillingWindow, settleAccruedWindow } from '../shell-handler';
+import { DEFAULT_SEAT_ALLOWANCE_CENTS } from '@pagespace/lib/billing/wallet-core';
 import type { TerminalSession, TerminalSessionMap } from '../terminal-session-map';
 
 const originalMode = process.env.DEPLOYMENT_MODE;
@@ -122,6 +123,7 @@ async function openSession(w: World, charge: ComputeCharge): Promise<{ session: 
     sessionKey: 'k1',
     charge,
     ownerId: w.ownerId,
+    actorId: w.ownerId,
     holdId: gate.holdId,
     connectedAt: T0,
     driveId: w.driveId,
@@ -233,5 +235,62 @@ describe('an open terminal session whose drive moves', () => {
     expect((await usageOn(w.ownerWalletId)).map((r) => r.chargeMillicents)).toEqual([windowMc(600), windowMc(600)]);
     expect(await usageOn(w.poolId)).toEqual([]);
     expect(session.charge).toEqual({ kind: 'user', userId: w.ownerId });
+  });
+});
+
+/**
+ * Review #2760 P1: a live PTY is shared with the drive's members, so the person who joins it runs
+ * compute in it. The window moves to them — gated first against THEIR OWN cap — and the window so
+ * far stays with the actor who opened it. The session's owner is never who a joiner's compute is
+ * capped against.
+ */
+describe('a member joining a live terminal window', () => {
+  async function addBen(w: World, capped: boolean): Promise<string> {
+    const ben = await factories.createUser({ name: 'Ben (drive-mate)', subscriptionTier: 'free' });
+    w.userIds.push(ben.id);
+    await db.insert(orgMembers).values({ orgId: w.orgId, userId: ben.id, role: 'MEMBER' });
+    if (capped) {
+      const cents = DEFAULT_SEAT_ALLOWANCE_CENTS;
+      await db.insert(creditLedger).values({ userId: ben.id, walletId: w.poolId, entryType: 'usage', bucket: 'monthly', amountCents: -cents, appliedCents: -cents, chargeMillicents: cents * 1000, consumeStatus: 'applied', spendKind: 'ai' });
+    }
+    return ben.id;
+  }
+  const ledgerOf = async (userId: string) => (await db.select().from(creditLedger).where(eq(creditLedger.userId, userId))).filter((r) => r.entryType === 'usage' && r.spendKind === 'compute');
+
+  it('WAL-2 (partial) terminal: Ben, at his cap, joining Priya\'s live PTY is refused with the cap message — the window stays Priya\'s, untouched, and nothing is charged to anyone', async () => {
+    const w = (world = await build('org'));
+    const benId = await addBen(w, true);
+    const { session, map } = await openSession(w, computeChargeFor({ kind: 'org', orgId: w.orgId }, w.ownerId));
+    const before = { charge: session.charge, holdId: session.holdId, connectedAt: session.connectedAt, actorId: session.actorId };
+
+    vi.setSystemTime(T0 + 3 * MIN);
+    const claim = await claimBillingWindow(defaultSandboxBillingDeps, map, session, benId);
+
+    expect(claim).toMatchObject({ ok: false, message: expect.stringMatching(/used your allowance/) });
+    expect({ charge: session.charge, holdId: session.holdId, connectedAt: session.connectedAt, actorId: session.actorId }).toEqual(before);
+    expect(await db.select().from(creditHolds).where(eq(creditHolds.userId, benId))).toEqual([]);
+    expect(await ledgerOf(w.ownerId)).toEqual([]);
+    expect(await ledgerOf(benId)).toEqual([]);
+  });
+
+  it('WAL-2 (partial) terminal: Ben, under his cap, joining takes the window — Priya pays exactly the window she opened, Ben holds and pays from then on', async () => {
+    const w = (world = await build('org'));
+    const benId = await addBen(w, false);
+    const { session, map } = await openSession(w, computeChargeFor({ kind: 'org', orgId: w.orgId }, w.ownerId));
+
+    vi.setSystemTime(T0 + 3 * MIN);
+    expect(await claimBillingWindow(defaultSandboxBillingDeps, map, session, benId)).toEqual({ ok: true });
+
+    // Priya's 3-minute window settled to her; the next window is Ben's, held on the pool under him.
+    const priya = await ledgerOf(w.ownerId);
+    expect(priya.map((r) => r.chargeMillicents)).toEqual([windowMc(180)]);
+    expect(session.charge).toEqual({ kind: 'org', orgId: w.orgId, userId: benId });
+    expect(session.actorId).toBe(benId);
+    expect((await db.select().from(creditHolds).where(eq(creditHolds.userId, benId))).map((h) => [h.walletId, h.spendKind])).toEqual([[w.poolId, 'compute']]);
+
+    // The next heartbeat settles Ben's 5 minutes to Ben, never to Priya.
+    expect(await heartbeat(T0 + 8 * MIN, map, session)).toBe(true);
+    expect((await ledgerOf(benId)).map((r) => r.chargeMillicents)).toEqual([windowMc(300)]);
+    expect(await ledgerOf(w.ownerId)).toHaveLength(1);
   });
 });

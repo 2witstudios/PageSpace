@@ -210,6 +210,31 @@ describe('buildShellCheckAuth — access half', () => {
     });
   });
 
+  it('WAL-2 (partial) review #2760 P1: the payer is resolved for the REQUESTER — the person opening the shell runs its compute, so their cap binds, never the session owner\'s', async () => {
+    const asked: Array<{ ownerId: string; actorId: string }> = [];
+    const { deps } = buildDeps({
+      resolvePayer: async (session, actorId) => {
+        asked.push({ ownerId: session.ownerId, actorId });
+        return { charge: { kind: 'org' as const, orgId: 'org-northwind', userId: actorId }, driveId: 'drive-1' };
+      },
+    });
+    const checkAuth = buildShellCheckAuth(deps);
+
+    const result = await checkAuth({ userId: 'ben-drive-mate', shellId: 'shl-1' });
+    if (!result.ok) throw new Error(`expected allow, got ${result.reason}`);
+
+    assert({
+      given: 'a drive-mate opening a shell in a session someone else owns',
+      should: 'resolve and record the charge under the drive-mate, the window\'s actor',
+      actual: { asked, actorId: result.actorId, charged: result.charge },
+      expected: {
+        asked: [{ ownerId: sessionSubject.ownerId, actorId: 'ben-drive-mate' }],
+        actorId: 'ben-drive-mate',
+        charged: { kind: 'org', orgId: 'org-northwind', userId: 'ben-drive-mate' },
+      },
+    });
+  });
+
   it('surfaces a null driveId (a global-assistant session) so billing attributes to the owner', async () => {
     const { deps } = buildDeps({
       checkSessionAccess: async () => ({

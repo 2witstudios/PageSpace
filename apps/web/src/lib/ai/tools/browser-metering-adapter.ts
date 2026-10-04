@@ -28,6 +28,11 @@ export type BrowserBilling = {
   readonly driveId: string | null;
   /** The session's owner (the drive owner, or the acting user for a driveless context). */
   readonly ownerId: string;
+  /**
+   * The person driving the browser: an org drive's charge is recorded under, and capped against,
+   * them — never the owner (WAL-2: the person who causes compute pays from their own allowance).
+   */
+  readonly actorId: string;
   readonly agentPageId: string | null;
   readonly conversationId: string;
 };
@@ -48,8 +53,8 @@ const realPrimitives: BillingPrimitives = {
 
 export function createBrowserMeter(primitives: BillingPrimitives = realPrimitives): BrowserMeter<BrowserBilling> {
   return {
-    open: async ({ driveId, ownerId }) => {
-      const charge = await primitives.resolveCharge({ driveId, ownerId });
+    open: async ({ driveId, ownerId, actorId }) => {
+      const charge = await primitives.resolveCharge({ driveId, ownerId, actorId });
       const gated = await primitives.gate({ charge });
       if (!gated.allowed) {
         // WAL-9: a missing, paused or empty org pool is named — never a fallback to a person.

@@ -106,8 +106,10 @@ export type ShellCheckAuthResult =
        * `billing` is wired. An org drive's session charges the org pool (WAL-9), never a person.
        */
       charge: ComputeCharge;
-      /** The session's owner: the person an org charge is recorded under, and the input the payer is re-resolved from at each heartbeat settle. */
+      /** The session's owner: the payer's no-drive fallback, re-resolved from at each heartbeat settle. */
       ownerId: string;
+      /** The person connecting, who runs the compute: an org charge is recorded under and capped against them (WAL-2). */
+      actorId: string;
       /** Billing attribution scope: the session's drive, or null (owner-attributed) for a global-assistant session. */
       driveId: string | null;
       /**
@@ -573,10 +575,10 @@ function evictViewer(
  * the next heartbeat looks again.
  */
 async function rechargeAfterDrift(billing: SandboxBillingDeps, session: TerminalSession, sessionKey: string): Promise<void> {
-  const { ownerId } = session;
-  if (!session.charge || !ownerId) return;
+  const { ownerId, actorId } = session;
+  if (!session.charge || !ownerId || !actorId) return;
   try {
-    const next = await billing.resolveCharge({ driveId: session.driveId ?? null, ownerId });
+    const next = await billing.resolveCharge({ driveId: session.driveId ?? null, ownerId, actorId });
     if (sameCharge(session.charge, next)) return;
     loggers.realtime.warn('Shell session payer changed mid-session: the next window is held and settled on the new payer', {
       sessionKey,
@@ -739,6 +741,67 @@ export async function settleAccruedWindow(
     });
   }
   return true;
+}
+
+/**
+ * WAL-2 (fe9db1nm review P1): compute is charged to, and capped against, THE PERSON WHO CAUSES
+ * IT. A live PTY is shared — any member of the drive may attach to it, or have the web tier type
+ * into it on their behalf — so when a person other than the window's actor joins, the window
+ * moves to them:
+ *   1. their OWN charge is gated first; a refusal (their cap reached, the pool empty or paused)
+ *      refuses the join and changes nothing — so a member at their cap cannot run compute in
+ *      ANY session, their own or a drive-mate's;
+ *   2. the window so far is settled to the actor who opened it (`settleAccruedWindow`);
+ *   3. the next window is held on, and recorded under, the joiner.
+ * While several people share one PTY, the last to join pays for the window from then on.
+ * If the settle in (2) fails, the window stays with its opener (rolled back for the next
+ * heartbeat) and the joiner's hold is released: a transient billing outage never ends a live PTY,
+ * and the joiner was still gated against their own cap. A billing READ failure refuses the join:
+ * an unanswerable cap is not a pass. Inert for an unmetered session or the window's own actor.
+ */
+export async function claimBillingWindow(
+  billing: SandboxBillingDeps,
+  sessionMap: TerminalSessionMap,
+  session: TerminalSession,
+  actorId: string,
+): Promise<{ ok: true } | { ok: false; message?: string }> {
+  if (!session.charge || !session.ownerId || session.actorId === actorId) return { ok: true };
+  const sessionKey = session.sessionKey;
+  let next: ComputeCharge;
+  let held: Awaited<ReturnType<SandboxBillingDeps['gate']>>;
+  try {
+    next = await billing.resolveCharge({ driveId: session.driveId ?? null, ownerId: session.ownerId, actorId });
+    held = await billing.gate({ charge: next });
+  } catch (error) {
+    loggers.realtime.error('Shell billing window could not be claimed for a joining actor', error instanceof Error ? error : new Error(String(error)), {
+      sessionKey,
+    });
+    return { ok: false };
+  }
+  if (!held.allowed) {
+    const orgRefusal = held.orgRefusal;
+    return { ok: false, ...(orgRefusal !== undefined && isOrgComputeRefusal(orgRefusal) ? { message: ORG_COMPUTE_REFUSAL_MESSAGES[orgRefusal] } : {}) };
+  }
+  const release = () => {
+    if (held.holdId) void billing.releaseHold(held.holdId).catch(() => {});
+  };
+  if (session.connectedAt !== undefined) {
+    await settleAccruedWindow(billing, sessionMap, session, sessionKey, { stopClock: true });
+    // A failed settle rolled the window back onto its opener; keep it there.
+    if (session.connectedAt !== undefined) {
+      release();
+      return { ok: true };
+    }
+  }
+  if (sessionMap.getByKey(sessionKey) !== session) {
+    release();
+    return { ok: true };
+  }
+  session.charge = next;
+  session.actorId = actorId;
+  session.holdId = held.holdId;
+  session.connectedAt = Date.now();
+  return { ok: true };
 }
 
 /**
@@ -1189,6 +1252,7 @@ export async function ensureShellSession(
       releaseSlot,
       charge: access.charge,
       ownerId: access.ownerId,
+      actorId: access.actorId,
       holdId,
       connectedAt,
       // First-class attribution (Terminal Epic 3 usage-breakdown fix): the
@@ -1720,6 +1784,15 @@ export function buildShellHandlers({
    * connection in `connectingConnectionIds` for the whole of it — every path out
    * of here either binds a session (and settles any abandonment) or binds nothing.
    */
+  /** Claim the live session's billing window for a joining viewer; on refusal, tell their pane why. */
+  async function joinBillingWindow(session: TerminalSession, connectionId: string, userId: string): Promise<boolean> {
+    if (!billing) return true;
+    const claim = await claimBillingWindow(billing, sessionMap, session, userId);
+    if (claim.ok) return true;
+    socket.emit('shell:error', { message: claim.message ?? 'Shell access denied: insolvent', connectionId });
+    return false;
+  }
+
   async function establishConnection(value: ShellConnectPayload, connectionId: string) {
     // Dimensions were clamped by the contract schema on parse.
     const { shellId, cols, rows } = value;
@@ -1748,6 +1821,10 @@ export function buildShellHandlers({
       // Gone already: decline rather than attach. Attaching would take the session
       // away from whoever has it (a live pane, or a pending reap) on behalf of a
       // socket that no longer exists — see `abandoned`.
+      if (abandoned(connectionId)) return;
+      // WAL-2: joining a live PTY is running compute in it — gated against the JOINER's own cap,
+      // and the window moves to them (claimBillingWindow). Refused: nothing is attached.
+      if (!(await joinBillingWindow(plan.session, connectionId, userId))) return;
       if (abandoned(connectionId)) return;
       attachToLiveSession(plan.session, connectionId, userId);
       return;
@@ -1804,6 +1881,8 @@ export function buildShellHandlers({
       // double-mount's loser, or a racer that got there first). Same rule as the
       // reattach path above: a pane that has left must not take the session the
       // creator is watching. The creator settles its own abandonment.
+      if (abandoned(connectionId)) return;
+      if (!(await joinBillingWindow(outcome.session, connectionId, userId))) return;
       if (abandoned(connectionId)) return;
       attachToLiveSession(outcome.session, connectionId, userId);
       return;

@@ -694,6 +694,43 @@ describe('buildShellHandlers', () => {
       expect(socket.emit).toHaveBeenCalledWith('shell:ready', { connectionId: 'sock1', resumed: false });
     });
 
+    it('WAL-2 (partial) review #2760 P1: a drive-mate at their cap joining a live PTY is refused with the cap message and never attached; under their cap they take the window', async () => {
+      const ownerAuth = { ...makeAuthSuccess({ charge: { kind: 'org', orgId: 'org-1', userId: 'user1' } }), ownerId: 'user1', actorId: 'user1' };
+      checkAuth.mockResolvedValueOnce(ownerAuth);
+      const gate = vi.fn()
+        .mockResolvedValueOnce({ allowed: true, holdId: 'hold-owner' })
+        .mockResolvedValueOnce({ allowed: false, reason: 'org_member_cap_reached', orgRefusal: 'org_member_cap_reached' })
+        .mockResolvedValueOnce({ allowed: true, holdId: 'hold-mate' });
+      const billing = {
+        ...makeBilling({ gate }),
+        resolveCharge: vi.fn(async ({ actorId }: { actorId: string }) => ({ kind: 'org' as const, orgId: 'org-1', userId: actorId })),
+      };
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
+      await onConnect(validPayload);
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Ben, at his cap, tabs into the same live PTY: refused, nothing attached, the window untouched.
+      checkAuth.mockResolvedValueOnce({ ...makeAuthSuccess(), ownerId: 'user1', actorId: 'user2' });
+      const benSocket = makeSocket('ben-sock', 'user2');
+      await buildShellHandlers({ sessionMap, openShell, checkAuth, socket: benSocket, persistSpriteExecId, billing }).onConnect(validPayload);
+
+      expect(billing.resolveCharge).toHaveBeenLastCalledWith(expect.objectContaining({ actorId: 'user2' }));
+      expect(benSocket.emit).toHaveBeenCalledWith('shell:error', expect.objectContaining({ message: expect.stringMatching(/used your allowance/) }));
+      expect(benSocket.emit).not.toHaveBeenCalledWith('shell:ready', expect.anything());
+      const live = sessionMap.getByKey('shell:shl-1');
+      expect([live?.actorId, live?.holdId]).toEqual(['user1', 'hold-owner']);
+
+      // Under his cap now: he joins and the window is his.
+      checkAuth.mockResolvedValueOnce({ ...makeAuthSuccess(), ownerId: 'user1', actorId: 'user2' });
+      const benAgain = makeSocket('ben-sock-2', 'user2');
+      await buildShellHandlers({ sessionMap, openShell, checkAuth, socket: benAgain, persistSpriteExecId, billing }).onConnect(validPayload);
+
+      expect(benAgain.emit).toHaveBeenCalledWith('shell:ready', expect.anything());
+      expect([live?.actorId, live?.holdId, live?.charge]).toEqual(['user2', 'hold-mate', { kind: 'org', orgId: 'org-1', userId: 'user2' }]);
+      // The window Priya opened was settled to her, on her own hold.
+      expect(billing.trackUsage).toHaveBeenCalledWith(expect.objectContaining({ charge: { kind: 'org', orgId: 'org-1', userId: 'user1' }, holdId: 'hold-owner' }));
+    });
+
     it('given a denied user with a live session, should refuse and NOT reattach (auth gates the fast path)', async () => {
       const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);

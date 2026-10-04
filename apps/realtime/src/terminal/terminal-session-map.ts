@@ -110,11 +110,17 @@ export type TerminalSession = {
   /** The wallet this session's windows are held and settled on — the org pool for an org drive (WAL-9). */
   charge?: ComputeCharge;
   /**
-   * The session's own owner: who an org charge is RECORDED under, and what the payer is
-   * re-resolved with at each settle (`billing.resolveCharge`), so a drive that moves into or out
-   * of an org while the session is open changes who pays from the next window (WAL-9).
+   * The session's own owner: the payer's fallback when the session has no drive, re-resolved
+   * with at each settle (`billing.resolveCharge`), so a drive that moves into or out of an org
+   * while the session is open changes who pays from the next window (WAL-9).
    */
   ownerId?: string;
+  /**
+   * THE PERSON WHO CAUSES the current window's compute (WAL-2): who an org charge is recorded
+   * under and capped against. Set by the connect that opened the window, and moved to whoever
+   * then attaches to or types into the live PTY (`claimBillingWindow`), never the session owner.
+   */
+  actorId?: string;
   holdId?: string;
   connectedAt?: number;
   /**

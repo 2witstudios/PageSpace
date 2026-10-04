@@ -121,9 +121,13 @@ export interface SandboxBillingDeps {
    * page. The one seam payer resolution goes through; see `sandbox-payer.ts`'s
    * `resolveSessionPayer` — the same rule `storageBillingTarget` applies for
    * storage attribution. An org drive's payer is the org: the charge is its POOL
-   * wallet (WAL-9), recorded under the session's owner — never that person's wallet.
+   * wallet (WAL-9), recorded under `actorId` — THE PERSON WHO CAUSES the run (the user whose
+   * chat turn or command runs, the attacher of a terminal), never the session's owner, so the
+   * per-member cap binds whoever is actually spending (WAL-2). A drive session is shared with
+   * the drive's members: charging its owner would let a member at their cap keep running in a
+   * drive-mate's session. Required, so no caller can silently default to the owner.
    */
-  resolveCharge: (input: { driveId: string | null; ownerId: string }) => Promise<ComputeCharge>;
+  resolveCharge: (input: { driveId: string | null; ownerId: string; actorId: string }) => Promise<ComputeCharge>;
   /**
    * Places a flat-estimate hold on the charge's wallet before the machine run begins.
    * `orgRefusal` names why an org pool refused (missing, paused, empty).
@@ -706,6 +710,8 @@ export async function withMachineBilling<S>(
   const charge = await billing.resolveCharge({
     driveId: billingSession.driveId,
     ownerId: billingSession.ownerId,
+    // The person whose turn runs this tool, not the session's owner: a drive session is shared.
+    actorId: ctx.userId,
   });
   // WAL-9: an org drive's run is held on the org pool. A missing, paused or empty pool
   // refuses here, before any machine is touched, and names the org state — it never

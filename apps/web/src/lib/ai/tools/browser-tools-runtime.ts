@@ -119,7 +119,7 @@ const operate: OperateBrowser = async ({ ctx, operation }) => {
     session: {
       sessionId,
       allowedOrigins: null,
-      billing: { driveId: ctx.driveId ?? null, ownerId, agentPageId: ctx.agentPageId ?? null, conversationId: ctx.conversationId },
+      billing: { driveId: ctx.driveId ?? null, ownerId, actorId: ctx.userId, agentPageId: ctx.agentPageId ?? null, conversationId: ctx.conversationId },
     },
     agentId,
     operation,

@@ -27,10 +27,11 @@ export const defaultSandboxBillingDeps: SandboxBillingDeps = {
   // same drive-payer-else-session-owner rule `storageBillingTarget` applies
   // for the storage charge stream, so both streams bill one payer for one
   // session regardless of which conversation/drive the caller happened to be
-  // in when the run started. An org drive's session charges the ORG POOL (WAL-9), recorded under the session's own
-  // owner — never that person's wallet.
-  async resolveCharge({ driveId, ownerId }) {
-    return computeChargeFor(await resolveSessionPayer({ driveId, ownerId, lookupDriveBillingFacts }), ownerId);
+  // in when the run started. An org drive's session charges the ORG POOL (WAL-9), recorded under
+  // the ACTOR — the person who caused the run, whose per-member cap it counts toward — never the
+  // session's owner (a drive session is shared) and never anyone's own wallet.
+  async resolveCharge({ driveId, ownerId, actorId }) {
+    return computeChargeFor(await resolveSessionPayer({ driveId, ownerId, lookupDriveBillingFacts }), actorId);
   },
 
   async gate({ charge }) {

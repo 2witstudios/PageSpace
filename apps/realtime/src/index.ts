@@ -47,6 +47,7 @@ import { openPtyShell } from './terminal/sprites-shell';
 import { getRealtimeSpritesSdk } from './terminal/realtime-sprites-client';
 import {
   buildShellHandlers,
+  claimBillingWindow,
   composeSocketKey,
   connectFailureMessage,
   ensureShellSession,
@@ -433,17 +434,18 @@ const shellCheckAuth = buildShellCheckAuth({
     if (!allowedToRunCode) return { allowed: false, reason: 'code_execution_denied' };
     return { allowed: true, session: subject };
   },
-  resolvePayer: async (session) => {
+  resolvePayer: async (session, actorId) => {
     // Payer = the session's DRIVE's payer through the one seam (WAL-9: the org pool for an org
-    // drive, recorded under the session owner); a global-assistant session (or a vanished
-    // drive) attributes to the session owner instead.
+    // drive, recorded under and capped against the ACTOR connecting — never the session owner,
+    // since a drive session is shared); a global-assistant session (or a vanished drive)
+    // attributes to the session owner instead.
     const facts = session.driveId === null ? null : await lookupDriveBillingFacts(session.driveId);
     const payer = await resolveSessionPayer({
       driveId: session.driveId,
       ownerId: session.ownerId,
       lookupDriveBillingFacts: async () => facts,
     });
-    return { charge: computeChargeFor(payer, session.ownerId), driveId: facts ? session.driveId : null };
+    return { charge: computeChargeFor(payer, actorId), driveId: facts ? session.driveId : null };
   },
   getUser: async (userId) => {
     const [userRow] = await db
@@ -598,6 +600,12 @@ const shellIoDeps = {
   reauthorizeViewer: async ({ shellId, userId }: { shellId: string; userId: string }) => {
     const decision = await shellCheckAuth({ userId, shellId });
     return decision.ok;
+  },
+  // WAL-2: typing on someone's behalf runs compute as them — their cap, their window.
+  claimBillingWindow: async (session: TerminalSession, userId: string) => {
+    const billing = shellSessionDeps.billing;
+    if (!billing) return true;
+    return (await claimBillingWindow(billing, agentTerminalSessionMap, session, userId)).ok;
   },
 };
 
