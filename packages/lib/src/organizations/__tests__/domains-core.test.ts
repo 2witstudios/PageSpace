@@ -185,7 +185,7 @@ describe('decideAutoJoin', () => {
     expect(decideAutoJoin({ ...eligible, hasOpenInvite: true })).toEqual({ action: 'skip', reason: 'invited' });
   });
 
-  it('SEC-1 (partial) a lapsed org admits nobody (SEAT-9)', () => {
+  it('SEC-1 (partial) a lapsed org admits nobody', () => {
     expect(decideAutoJoin({ ...eligible, orgActive: false })).toEqual({ action: 'refuse', reason: 'org_lapsed' });
   });
 });

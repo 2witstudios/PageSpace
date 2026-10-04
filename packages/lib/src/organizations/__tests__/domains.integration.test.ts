@@ -427,7 +427,7 @@ describe('verified email domains (real Postgres)', () => {
       expect(await countOrgSeats(org.id)).toBe(seatsBefore + 1);
     });
 
-    it('SEC-1 (partial) a full org with automatic seat purchase off refuses cleanly with the SEAT-4 message: no member, no seat, an audit row', async () => {
+    it('SEC-1 (partial) a full org with automatic seat purchase off refuses cleanly with the seat-refusal message: no member, no seat, an audit row', async () => {
       const { org, jono } = await northwind({ members: 5 });
       const { domain } = await verifiedDomain(org.id, jono.id);
       const marcus = await person(`marcus@${domain}`);

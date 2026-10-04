@@ -24,8 +24,34 @@ vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
 
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { recordOrgAuditEvent } from '@pagespace/lib/audit/org-audit';
+import { resetAuditDbBindingForTests } from '@pagespace/lib/audit/audit-db-binding';
+import { resetDefaultSecurityAuditForTests } from '@pagespace/lib/audit/security-audit';
 import { GET } from '../route';
 import { GET as EXPORT } from '../export/route';
+
+/**
+ * The audit binding is pinned to the MAIN database for this suite, the way the lib audit suites pin it.
+ * CI sets ADMIN_DATABASE_URL, which resolves the binding to the dedicated trust plane: writes then go to
+ * security_audit_ingest and reach the chained security_audit_log only when the processor's chainer drains
+ * them (a worker this suite does not run), so a read straight after a write would see nothing. In
+ * production the org log is therefore eventually consistent at the chainer's cadence; here it is read on
+ * the main-db chain, where the append is synchronous.
+ */
+const AUDIT_ENV = ['ADMIN_DATABASE_URL', 'ADMIN_DB_BREAK_GLASS', 'AUDIT_TRUST_PLANE_REQUIRED'] as const;
+function pinAuditToMainDb(): () => void {
+  const saved = new Map<string, string | undefined>(AUDIT_ENV.map((key) => [key, process.env[key]]));
+  for (const key of AUDIT_ENV) delete process.env[key];
+  resetAuditDbBindingForTests();
+  resetDefaultSecurityAuditForTests();
+  return () => {
+    for (const [key, value] of saved) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    resetAuditDbBindingForTests();
+    resetDefaultSecurityAuditForTests();
+  };
+}
 
 const created = { orgs: [] as string[], users: [] as string[] };
 const session = (userId: string): SessionAuthResult => ({ userId, tokenVersion: 0, tokenType: 'session', sessionId: 'sess', role: 'user', adminRoleVersion: 0 });
@@ -49,8 +75,11 @@ const exportCsv = (orgId: string, query = '') => EXPORT(new Request(`https://exa
 
 describe('org audit log routes (real Postgres, real chain)', () => {
   let dbAvailable = false;
+  let restoreAudit: () => void = () => {};
 
   beforeAll(async () => {
+    // First, before anything resolves the audit binding (see pinAuditToMainDb).
+    restoreAudit = pinAuditToMainDb();
     try {
       await db.select({ id: organizations.id }).from(organizations).limit(1);
       dbAvailable = true;
@@ -61,6 +90,7 @@ describe('org audit log routes (real Postgres, real chain)', () => {
   });
 
   afterAll(async () => {
+    restoreAudit();
     if (!dbAvailable) return;
     const orgIds = created.orgs.splice(0);
     if (orgIds.length > 0) {

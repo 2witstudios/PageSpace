@@ -24,7 +24,7 @@ describe('the org audit catalog', () => {
     for (const type of all) expect(categoryOfOrgEvent(type)).not.toBeNull();
   });
 
-  it('AUD-1 (partial) org power used on a drive (the ORG-4 row) is filed as private-drive access; anything else outside the catalog is not an org event', () => {
+  it('AUD-1 (partial) org power used on a drive (the row an Owner or Admin opening a Private drive writes) is filed as private-drive access; anything else outside the catalog is not an org event', () => {
     expect(categoryOfOrgEvent('authz.access.granted')).toBe('private_drive_access');
     expect(categoryOfOrgEvent('data.read')).toBeNull();
     expect(categoryOfOrgEvent('auth.login.success')).toBeNull();
