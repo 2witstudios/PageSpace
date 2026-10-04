@@ -10,11 +10,14 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 ### Changed
 
 - **Your allowance of an organization's credits covers compute too** — sandbox runs, terminals and
-  browsers you start in an organization's drives now count toward your monthly allowance of the
-  organization's credits, together with your AI use. Once it is used up, new compute there is refused with
-  a message saying so (nothing is started or charged), until the organization's next billing period or an
-  Owner or Admin raises your allowance. A drive's environments and published apps (their storage, wakes
-  and awake time) stay the organization's own spend and never count against anyone's allowance.
+  browsers you use in an organization's drives count toward your monthly allowance of the organization's
+  credits, together with your AI use, whoever's session you are working in: compute is charged to the
+  person who runs it. Environments and published apps you create there count toward your allowance too
+  (their storage, wakes and running time). Once your allowance is used up, new compute is refused with a
+  message saying so, you cannot create a new environment or publish a new app, and your published apps
+  show visitors a "This app is paused" page until it renews (a daily allowance at midnight UTC, a monthly
+  one with the organization's next billing period) or an Owner or Admin raises it. If you leave the
+  organization, your environments and apps keep running and their costs move to the drive's lead.
 - **Complimentary paid plans refill on their renewal date** — an account on a paid plan with no Stripe
   subscription behind it now gets its monthly credits on its renewal date (within the hour), instead of
   at its next AI request after the date passed. The renewal date no longer drifts later each month.
