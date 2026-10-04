@@ -853,15 +853,17 @@ export async function findOrgPoolWalletId(orgId: string): Promise<string | null>
 
 /**
  * canConsumeOrgPool — the compute gate for an ORG payer (WAL-9): a hold on the org's POOL
- * wallet, recorded under `userId` (who ran it, or the drive lead for an accrual), taken before
- * any machine starts. The caller settles against the same pool (compute-gate's
+ * wallet, recorded under `userId` — the person who CAUSES the compute (WAL-2, review P1, D-OW-28):
+ * the actor for compute a person runs, the creator for an environment's or app's accruals — taken
+ * before any machine starts. The caller settles against the same pool (compute-gate's
  * `computeSettleWalletId`), once.
  *
  * Never a person's wallet: a missing pool refuses `source_unavailable`, a paused pool
  * `source_paused`, a pool that cannot cover the reservation `out_of_credits` — and each
  * refusal reserves and charges nothing. There is no branch that reaches `gatePersonalRoot`.
- * Not a seat either (source null): compute is the org's spend, not a consumer's draw on the
- * pool, so no seat cap applies at admission.
+ * It IS capped per member: `userId`'s seat allowance binds here, read under the pool's row lock in
+ * the hold's transaction (gateSharedWallet), and again at settlement — refused
+ * `source_cap_reached` when that person's allowance cannot cover the reservation.
  *
  * The org's entitlement tier (SEAT-8, business) sets the per-call bounds, as the org is the
  * payer; the per-person daily cap still binds `userId`, as it does whichever wallet pays.

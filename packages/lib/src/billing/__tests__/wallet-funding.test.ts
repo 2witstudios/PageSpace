@@ -386,8 +386,8 @@ describe('wallet-funding purity', () => {
 describe('wallet-funding: the comped personal root roll', () => {
   // A comped Pro account renews on the 3rd at 08:30 UTC; nothing from Stripe will ever refill it.
   const END = Date.UTC(2026, 8, 3, 8, 30);
-  const comped = (periodEndMs: number | null, nowMs: number, over: Partial<{ tier: string; hasRenewalCapableSubscription: boolean }> = {}) =>
-    planPersonalRootRoll({ tier: 'pro', hasRenewalCapableSubscription: false, periodEndMs, nowMs, ...over });
+  const comped = (periodEndMs: number | null, nowMs: number, over: Partial<{ tier: string; hasRenewalCapableSubscription: boolean; periodStartMs: number | null }> = {}) =>
+    planPersonalRootRoll({ tier: 'pro', hasRenewalCapableSubscription: false, periodStartMs: null, periodEndMs, nowMs, ...over });
 
   it('is not due while the period runs, for a tier that never refills, or where invoice.paid owns the renewal', () => {
     expect(comped(END, END - 1)).toEqual({ due: false });
@@ -410,6 +410,44 @@ describe('wallet-funding: the comped personal root roll', () => {
   it('a month-end renewal clamps to the shorter month in UTC (Jan 31 → Feb 28), never spilling into March', () => {
     const jan31 = Date.UTC(2026, 0, 31, 23, 30);
     expect(comped(jan31, jan31 + 60_000)).toEqual({ due: true, periodStartMs: jan31, periodEndMs: Date.UTC(2026, 1, 28, 23, 30) });
+  });
+
+  it('review P3-2: a month-end anchor survives the clamp — Jan 31 → Feb 28 → Mar 31 → Apr 30 → May 31, never drifting to the 28th', () => {
+    // Each roll is fed the period the previous one stamped, exactly as the sweep stores it.
+    let start = Date.UTC(2026, 0, 1, 9);
+    let end = Date.UTC(2026, 0, 31, 9);
+    const ends: string[] = [];
+    for (let i = 0; i < 4; i += 1) {
+      const plan = comped(end, end + 60_000, { periodStartMs: start });
+      if (!plan.due) throw new Error('expected a roll');
+      expect(plan.periodStartMs).toBe(end);
+      start = plan.periodStartMs;
+      end = plan.periodEndMs;
+      ends.push(new Date(end).toISOString().slice(0, 10));
+    }
+    expect(ends).toEqual(['2026-02-28', '2026-03-31', '2026-04-30', '2026-05-31']);
+  });
+
+  it('review P3-2: in a leap year the anchor clamps to Feb 29 and comes back to the 31st', () => {
+    const jan31 = Date.UTC(2028, 0, 31, 9);
+    const first = comped(jan31, jan31 + 60_000, { periodStartMs: Date.UTC(2027, 11, 31, 9) });
+    expect(first).toEqual({ due: true, periodStartMs: jan31, periodEndMs: Date.UTC(2028, 1, 29, 9) });
+    if (!first.due) return;
+    const second = comped(first.periodEndMs, first.periodEndMs + 60_000, { periodStartMs: first.periodStartMs });
+    expect(second).toEqual({ due: true, periodStartMs: Date.UTC(2028, 1, 29, 9), periodEndMs: Date.UTC(2028, 2, 31, 9) });
+  });
+
+  it('review P3-2: a genuine 28th or 29th anchor stays where it is', () => {
+    const feb28 = Date.UTC(2026, 1, 28, 9);
+    expect(comped(feb28, feb28 + 60_000, { periodStartMs: Date.UTC(2026, 0, 28, 9) })).toMatchObject({ periodEndMs: Date.UTC(2026, 2, 28, 9) });
+    const jan29 = Date.UTC(2026, 0, 29, 9);
+    expect(comped(jan29, jan29 + 60_000, { periodStartMs: Date.UTC(2025, 11, 29, 9) })).toMatchObject({ periodEndMs: Date.UTC(2026, 1, 28, 9) });
+  });
+
+  it('review P3-2: months unattended still roll once, onto the anchored period containing now', () => {
+    const jan31 = Date.UTC(2026, 0, 31, 9);
+    expect(comped(jan31, Date.UTC(2026, 4, 15), { periodStartMs: Date.UTC(2025, 11, 31, 9) }))
+      .toEqual({ due: true, periodStartMs: Date.UTC(2026, 3, 30, 9), periodEndMs: Date.UTC(2026, 4, 31, 9) });
   });
 
   it('a row never stamped (created bare by a top-up) starts its first period now', () => {

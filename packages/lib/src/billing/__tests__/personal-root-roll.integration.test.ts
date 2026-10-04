@@ -152,6 +152,24 @@ describe('the comped personal root roll lives in the period sweep, never in the 
     expect((await rootOf(userId)).monthlyRemainingCents).toBe(tierAllowanceCents('business'));
   });
 
+  it('review P3-3: on onprem and tenant (billing off) the sweep rolls nothing and writes no grant', async () => {
+    if (!dbAvailable) return;
+    for (const mode of ['onprem', 'tenant'] as const) {
+      process.env.DEPLOYMENT_MODE = mode;
+      const userId = await person('pro');
+      const end = new Date(Date.now() - DAY);
+      await root(userId, { remainingCents: 0, start: new Date(end.getTime() - 30 * DAY), end });
+
+      const result = await resetDuePeriods({ now: new Date() });
+
+      expect(result.roots, mode).toEqual({ scanned: 0, reset: 0, failed: 0 });
+      const after = await rootOf(userId);
+      expect(after.monthlyRemainingCents, mode).toBe(0);
+      expect(after.monthlyPeriodEnd!.getTime(), mode).toBe(end.getTime());
+      expect(await grantsOf(userId), mode).toEqual([]);
+    }
+  });
+
   it('the period is the UTC calendar month even when the process runs in another time zone', async () => {
     if (!dbAvailable) return;
     // 00:30 UTC on 1 Oct is still 30 Sep in Chicago: a local-time month add would end the new period on

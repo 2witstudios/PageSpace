@@ -118,6 +118,16 @@ describe('Logger log level methods', () => {
     anyLogger.config.format = 'pretty';
   });
 
+  it('review P3-4: error() never writes a Drizzle error\'s bound params, in the message or the stack it persists', async () => {
+    const { DrizzleQueryError } = await import('drizzle-orm/errors');
+    anyLogger.config.format = 'json';
+    logger.error('claim failed', new DrizzleQueryError('insert into "credit_ledger" values ($1)', ['sk_live_SECRET'], new Error('boom')));
+    const line = String(consoleErrorSpy.mock.calls[0][0]);
+    expect(line).not.toContain('sk_live_SECRET');
+    expect(JSON.parse(line).error.message).toBe('Failed query: insert into "credit_ledger" values ($1)\nparams: [redacted]');
+    anyLogger.config.format = 'pretty';
+  });
+
   it('error() with plain metadata calls console.error', () => {
     logger.error('error message', { extra: 'data' });
     expect(consoleErrorSpy).toHaveBeenCalled();

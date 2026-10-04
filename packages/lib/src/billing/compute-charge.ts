@@ -103,7 +103,7 @@ export const ORG_COMPUTE_REFUSAL_MESSAGES: Readonly<Record<OrgComputeRefusal, st
   org_wallet_empty:
     "This drive belongs to an organization whose wallet can't cover this run, so nothing was started. An org Owner or Admin can add credits.",
   org_member_cap_reached:
-    "You've used your allowance of this organization's credits for now, so nothing was started. It renews with the organization's next billing period; an org Owner or Admin can raise your allowance.",
+    "You've used your allowance of this organization's credits for now, so nothing was started. A daily allowance renews at midnight UTC and a monthly one with the organization's next billing period; an org Owner or Admin can raise your allowance.",
 });
 
 const ORG_COMPUTE_REFUSALS: readonly string[] = Object.keys(ORG_COMPUTE_REFUSAL_MESSAGES);

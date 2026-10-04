@@ -350,6 +350,10 @@ const REFILLING_TIERS = Object.entries(TIER_ALLOWANCE_REFILLS).filter(([, refill
 export async function rollDuePersonalRoots(opts: { now: Date; batchSize?: number }): Promise<ResetSweepResult> {
   const batch = opts.batchSize ?? RESET_BATCH;
   const result: ResetSweepResult = { scanned: 0, reset: 0, failed: 0 };
+  // Review P3-3: no credit grants where billing is off — onprem, and tenant, which bills through
+  // the control plane (isBillingEnabled is the billing guard; CLAUDE.md). The gate's lazy roll never
+  // granted there, so the sweep writes no grant there either.
+  if (!isBillingEnabled()) return result;
   const renewable = sql`EXISTS (SELECT 1 FROM ${subscriptions} WHERE ${subscriptions.userId} = ${wallets.userId} AND ${inArray(subscriptions.status, RENEWAL_CAPABLE_STATUSES)})`;
   let cursor = '';
 
@@ -394,6 +398,7 @@ async function rollOneRoot(userId: string, now: Date): Promise<boolean> {
         id: wallets.id,
         monthlyRemainingCents: wallets.monthlyRemainingCents,
         debtCents: wallets.debtCents,
+        monthlyPeriodStart: wallets.monthlyPeriodStart,
         monthlyPeriodEnd: wallets.monthlyPeriodEnd,
       })
       .from(wallets)
@@ -410,6 +415,7 @@ async function rollOneRoot(userId: string, now: Date): Promise<boolean> {
     const plan = planPersonalRootRoll({
       tier,
       hasRenewalCapableSubscription: subscribed !== undefined,
+      periodStartMs: locked.monthlyPeriodStart?.getTime() ?? null,
       periodEndMs: locked.monthlyPeriodEnd?.getTime() ?? null,
       nowMs: now.getTime(),
     });

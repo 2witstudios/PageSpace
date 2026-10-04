@@ -7,7 +7,7 @@ import { hostname } from 'os';
 import { createId } from '@paralleldrive/cuid2';
 import type { LogInput } from './logger-types';
 import { scrubPII } from '../compliance/pii-scrubber';
-import { errorCauseChain, formatCauseChain, type ErrorCauseLink } from './error-cause';
+import { errorCauseChain, formatCauseChain, redactQueryParams, type ErrorCauseLink } from './error-cause';
 import { fireSiemErrorHook, type SiemErrorPayload } from './siem-error-hook';
 import { createShutdownHandler } from './graceful-shutdown';
 
@@ -238,10 +238,13 @@ class Logger {
       // The cause chain rides on the entry AND on the stack: the stack is the field every sink
       // (the database writer's errorStack included) already persists.
       const cause = errorCauseChain(error).map((link) => ({ ...link, message: scrubPII(link.message) ?? '[scrub_failed]' }));
-      const stack = cause.length > 0 ? `${error.stack ?? `${error.name}: ${error.message}`}\n${formatCauseChain(cause)}` : error.stack;
+      // Bound query params never reach a sink (review P3-4): a DrizzleQueryError's message — and the
+      // stack, which repeats it — carry them verbatim.
+      const ownStack = redactQueryParams(error.stack);
+      const stack = cause.length > 0 ? `${ownStack ?? `${error.name}: ${redactQueryParams(error.message)}`}\n${formatCauseChain(cause)}` : ownStack;
       entry.error = {
         name: error.name,
-        message: scrubPII(error.message) ?? '[scrub_failed]',
+        message: scrubPII(redactQueryParams(error.message)) ?? '[scrub_failed]',
         stack: scrubPII(stack),
         ...(cause.length > 0 ? { cause } : {}),
       };

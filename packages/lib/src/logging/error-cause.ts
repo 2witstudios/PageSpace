@@ -20,6 +20,25 @@ export interface ErrorCauseLink {
 
 const MAX_CAUSE_DEPTH = 5;
 
+const PARAMS_MARKER = '\nparams: ';
+const STACK_FRAME = '\n    at ';
+
+/**
+ * Drop the bound values from a Drizzle query error's text (review P3-4). DrizzleQueryError's message
+ * is `Failed query: <sql>\nparams: <values>`, and a value may be a secret or span lines, so
+ * everything from the params marker to the first stack frame (or the end) is replaced: the SQL
+ * shape stays, the values never reach a log line. Text without the marker is returned unchanged.
+ */
+export function redactQueryParams(text: string): string;
+export function redactQueryParams(text: string | undefined): string | undefined;
+export function redactQueryParams(text: string | undefined): string | undefined {
+  if (text === undefined) return undefined;
+  const at = text.indexOf(PARAMS_MARKER);
+  if (at < 0) return text;
+  const frame = text.indexOf(STACK_FRAME, at);
+  return `${text.slice(0, at)}${PARAMS_MARKER}[redacted]${frame < 0 ? '' : text.slice(frame)}`;
+}
+
 /** The causes under `error`, outermost first (the error itself excluded); [] when there are none. */
 export function errorCauseChain(error: unknown, maxDepth = MAX_CAUSE_DEPTH): ErrorCauseLink[] {
   const chain: ErrorCauseLink[] = [];
@@ -29,10 +48,10 @@ export function errorCauseChain(error: unknown, maxDepth = MAX_CAUSE_DEPTH): Err
     seen.add(cause);
     if (cause instanceof Error) {
       const code = (cause as { code?: unknown }).code;
-      chain.push({ name: cause.name, message: cause.message, ...(typeof code === 'string' ? { code } : {}) });
+      chain.push({ name: cause.name, message: redactQueryParams(cause.message), ...(typeof code === 'string' ? { code } : {}) });
       cause = (cause as { cause?: unknown }).cause;
     } else {
-      chain.push({ name: 'NonError', message: String(cause) });
+      chain.push({ name: 'NonError', message: redactQueryParams(String(cause)) });
       break;
     }
   }
@@ -47,10 +66,10 @@ export function formatCauseChain(chain: readonly ErrorCauseLink[]): string {
 /**
  * The metadata a catch logs for `error` at any level (warn and debug take no Error argument):
  * the message under the `error` key every caller already used, plus the cause chain when there is
- * one, messages PII-scrubbed as the logger scrubs an Error's own.
+ * one, messages PII-scrubbed as the logger scrubs an Error's own and stripped of bound query params.
  */
 export function errorLogFields(error: unknown): { error: string; cause?: ErrorCauseLink[] } {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = redactQueryParams(error instanceof Error ? error.message : String(error));
   const cause = errorCauseChain(error).map((link) => ({ ...link, message: scrubPII(link.message) ?? '[scrub_failed]' }));
   return { error: scrubPII(message) ?? '[scrub_failed]', ...(cause.length > 0 ? { cause } : {}) };
 }

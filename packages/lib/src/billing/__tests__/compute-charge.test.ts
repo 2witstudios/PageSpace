@@ -91,6 +91,9 @@ describe('ORG_COMPUTE_REFUSAL_MESSAGES', () => {
     expect(ORG_COMPUTE_REFUSAL_MESSAGES.org_wallet_paused).toMatch(/paused/i);
     expect(ORG_COMPUTE_REFUSAL_MESSAGES.org_wallet_unavailable).toMatch(/organization/i);
     for (const message of Object.values(ORG_COMPUTE_REFUSAL_MESSAGES)) expect(message).toMatch(/Owner or Admin/);
+    // Codex review: the member cap may be the DAILY one, so the message names both resets.
+    expect(ORG_COMPUTE_REFUSAL_MESSAGES.org_member_cap_reached).toMatch(/daily allowance renews at midnight UTC/);
+    expect(ORG_COMPUTE_REFUSAL_MESSAGES.org_member_cap_reached).toMatch(/monthly one with the organization's next billing period/);
   });
 
   it('isOrgComputeRefusal recognizes exactly the org wallet states and the member cap', () => {

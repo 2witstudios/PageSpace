@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { DrizzleQueryError } from 'drizzle-orm/errors';
 import { errorCauseChain, errorLogFields, formatCauseChain } from '../error-cause';
 
 /** `new Error(message, { cause })` without the ES2022 lib this package does not target. */
@@ -55,5 +56,22 @@ describe('errorLogFields', () => {
   it('is just the message for an error with no cause, and a string for a non-Error', () => {
     expect(errorLogFields(new Error('plain'))).toEqual({ error: 'plain' });
     expect(errorLogFields('boom')).toEqual({ error: 'boom' });
+  });
+});
+
+describe('bound query parameters never reach a log line (review P3-4)', () => {
+  const pg = Object.assign(new Error('relation "wallets_x" does not exist'), { code: '42P01' });
+  const secretQuery = () => new DrizzleQueryError('select "id" from "wallets_x" where "token" = $1 and "note" = $2', ['sk_live_SECRET', 'line one\nsk_live_SECOND'], pg);
+
+  it('keeps the SQL shape and the cause chain, and drops every bound value — even one spanning lines', () => {
+    const fields = errorLogFields(secretQuery());
+    expect(fields.error).toBe('Failed query: select "id" from "wallets_x" where "token" = $1 and "note" = $2\nparams: [redacted]');
+    expect(fields.cause).toEqual([{ name: 'Error', message: 'relation "wallets_x" does not exist', code: '42P01' }]);
+    expect(JSON.stringify(fields)).not.toContain('sk_live');
+  });
+
+  it('a Drizzle error nested in a chain is redacted too', () => {
+    const outer = withCause('settle failed', secretQuery());
+    expect(JSON.stringify(errorCauseChain(outer))).not.toContain('sk_live');
   });
 });

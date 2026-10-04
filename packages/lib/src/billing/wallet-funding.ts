@@ -338,11 +338,26 @@ export function addOneMonth(from: Date): Date {
   return d;
 }
 
+/**
+ * `months` calendar months after `base`, on day `anchorDay` clamped to that month's length, at
+ * `base`'s UTC time of day. Every period is placed on the ORIGINAL anchor, never chained from the
+ * previous clamped date, so a 31st renewal reads Feb 28 → Mar 31, not Feb 28 → Mar 28 forever.
+ */
+function anchoredMonthMs(base: Date, months: number, anchorDay: number): number {
+  const monthIndex = base.getUTCMonth() + months;
+  const year = base.getUTCFullYear() + Math.floor(monthIndex / 12);
+  const month = ((monthIndex % 12) + 12) % 12;
+  const lastDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  return Date.UTC(year, month, Math.min(anchorDay, lastDay), base.getUTCHours(), base.getUTCMinutes(), base.getUTCSeconds(), base.getUTCMilliseconds());
+}
+
 export interface PersonalRootRollInput {
   /** The owner's stored plan tier (users.subscriptionTier), unchecked. */
   tier: string;
   /** Whether any subscription could still deliver an invoice (RENEWAL_CAPABLE_STATUSES). */
   hasRenewalCapableSubscription: boolean;
+  /** The root's stored period start; with the end it recovers the renewal's anchor day. */
+  periodStartMs: number | null;
   /** The root's stored period end; null when none was ever stamped (a row created bare by a top-up). */
   periodEndMs: number | null;
   nowMs: number;
@@ -358,8 +373,9 @@ export type PersonalRootRollPlan = { due: false } | { due: true; periodStartMs: 
  * renewal lands; Free's allowance is a one-time starter grant and never refills; an unknown tier
  * has no allowance at all.
  *
- * The new period starts exactly at the stored period END and runs one calendar month in UTC
- * (addOneMonth), so the renewal date never drifts by how late the sweep ran. An account left
+ * The new period starts exactly at the stored period END and runs one calendar month in UTC on the
+ * renewal's anchor day (clamped per month, never chained from a clamped date), so the renewal date
+ * never drifts — not by how late the sweep ran, and not by a short month. An account left
  * unattended for several periods rolls ONCE, onto the period containing now: one allowance, not
  * one per missed month (as the gate's lazy roll behaved). A row never stamped starts now.
  *
@@ -373,9 +389,17 @@ export function planPersonalRootRoll(input: PersonalRootRollInput): PersonalRoot
     return { due: true, periodStartMs: input.nowMs, periodEndMs: addOneMonth(new Date(input.nowMs)).getTime() };
   }
   if (input.periodEndMs > input.nowMs) return { due: false };
-  let start = new Date(input.periodEndMs);
-  for (let next = addOneMonth(start); next.getTime() <= input.nowMs; next = addOneMonth(start)) start = next;
-  return { due: true, periodStartMs: start.getTime(), periodEndMs: addOneMonth(start).getTime() };
+  // The renewal's anchor day (review P3-2). A stored period is two consecutive anchored dates, each
+  // the anchor clamped to its month, and no two consecutive months are both shorter than an
+  // anchor day, so the later of the two days IS the anchor (Jan 31 → Feb 28 reads 31).
+  const end = new Date(input.periodEndMs);
+  const anchorDay = input.periodStartMs === null
+    ? end.getUTCDate()
+    : Math.max(end.getUTCDate(), new Date(input.periodStartMs).getUTCDate());
+  let k = 0;
+  while (anchoredMonthMs(end, k + 1, anchorDay) <= input.nowMs) k += 1;
+  const periodStartMs = k === 0 ? input.periodEndMs : anchoredMonthMs(end, k, anchorDay);
+  return { due: true, periodStartMs, periodEndMs: anchoredMonthMs(end, k + 1, anchorDay) };
 }
 
 // ---------------------------------------------------------------------------
