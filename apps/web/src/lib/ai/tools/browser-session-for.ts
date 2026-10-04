@@ -8,7 +8,7 @@ import { deriveBrowserSessionId } from '@pagespace/browser-worker/derive-browser
 import type { SandboxActorContext } from '@pagespace/lib/services/sandbox/tool-runners';
 import type { BrowserBilling } from './browser-metering-adapter';
 
-export function browserSessionFor(ctx: SandboxActorContext): { sessionId: string; agentId: string; billing: BrowserBilling } {
+export function browserSessionFor(ctx: Pick<SandboxActorContext, 'userId' | 'tenantId' | 'driveId' | 'ownerId' | 'conversationId' | 'agentPageId'>): { sessionId: string; agentId: string; billing: BrowserBilling } {
   const ownerId = ctx.ownerId ?? ctx.userId;
   const agentId = ctx.agentPageId ?? `global:${ctx.userId}`;
   const sessionId = deriveBrowserSessionId({ tenantId: ctx.tenantId, ownerId, agentId, conversationId: ctx.conversationId });
