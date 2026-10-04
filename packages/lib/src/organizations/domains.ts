@@ -32,6 +32,7 @@ import {
 } from '../services/org-membership-sync';
 import {
   DOMAIN_EMAIL_PROOF_TTL_MS,
+  MAX_ORG_DOMAINS,
   adminMailboxAddress,
   decideAutoJoin,
   decideDomainVerification,
@@ -57,7 +58,8 @@ export type PublicOrgDomain = Omit<OrgDomain, 'emailTokenHash'>;
 const toPublic = ({ emailTokenHash: _hash, ...rest }: OrgDomain): PublicOrgDomain => rest;
 
 export async function listOrgDomains(orgId: string): Promise<PublicOrgDomain[]> {
-  const rows = await db.select().from(orgDomains).where(eq(orgDomains.orgId, orgId)).orderBy(asc(orgDomains.createdAt)).limit(200);
+  // Every claim: addOrgDomain never lets an org hold more than the list returns.
+  const rows = await db.select().from(orgDomains).where(eq(orgDomains.orgId, orgId)).orderBy(asc(orgDomains.createdAt)).limit(MAX_ORG_DOMAINS);
   return rows.map(toPublic);
 }
 
@@ -78,16 +80,26 @@ async function lockDomain(tx: Tx, domain: string): Promise<void> {
 export type AddOrgDomainResult =
   | { ok: true; domain: PublicOrgDomain }
   | { ok: false; status: 400; reason: 'invalid_domain' | 'public_email_domain' }
-  | { ok: false; status: 409; reason: 'already_added' | 'claimed_by_another_org' };
+  | { ok: false; status: 409; reason: 'already_added' | 'claimed_by_another_org' | 'domain_limit_reached' };
 
 /** A pending claim. Refused when another org already holds the domain verified (it could never be proven). */
-export async function addOrgDomain(input: { orgId: string; domain: string; actorId: string }): Promise<AddOrgDomainResult> {
+export async function addOrgDomain(
+  input: { orgId: string; domain: string; actorId: string },
+  /** Test seam: runs inside the transaction after the org's claims are counted, before the insert. */
+  hooks: { afterCount?: () => Promise<void> } = {},
+): Promise<AddOrgDomainResult> {
   const normalized = normalizeDomain(input.domain);
   if (!normalized.ok) return { ok: false, status: 400, reason: normalized.reason };
   const { domain } = normalized;
   let row: OrgDomain;
   try {
-    const result = await db.transaction(async (tx): Promise<OrgDomain | 'claimed'> => {
+    const result = await db.transaction(async (tx): Promise<OrgDomain | 'claimed' | 'full'> => {
+      // The org's claim count is decided under a per-org lock (taken before the domain lock, the one
+      // order), so two adds at once cannot both take the last place.
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`org_domains_of:${input.orgId}`}, 0))`);
+      const [{ held }] = await tx.select({ held: sql<number>`count(*)::int` }).from(orgDomains).where(eq(orgDomains.orgId, input.orgId));
+      if (held >= MAX_ORG_DOMAINS) return 'full';
+      await hooks.afterCount?.();
       await lockDomain(tx, domain);
       const owner = await verifiedOwnerOf(tx, domain);
       if (owner !== null && owner !== input.orgId) return 'claimed';
@@ -98,6 +110,7 @@ export async function addOrgDomain(input: { orgId: string; domain: string; actor
       return inserted;
     });
     if (result === 'claimed') return { ok: false, status: 409, reason: 'claimed_by_another_org' };
+    if (result === 'full') return { ok: false, status: 409, reason: 'domain_limit_reached' };
     row = result;
   } catch (error) {
     if (isUniqueViolation(error)) return { ok: false, status: 409, reason: 'already_added' };

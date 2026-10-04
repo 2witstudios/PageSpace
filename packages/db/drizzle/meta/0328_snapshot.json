@@ -1,5 +1,5 @@
 {
-  "id": "1e0ebfda-cfa3-4ef9-b393-df38ad7bcad9",
+  "id": "0921575b-9d66-4dda-b35e-f089b564a7d2",
   "prevId": "af7b2cf7-5c10-4eff-92b7-834e1b08896e",
   "version": "7",
   "dialect": "postgresql",
@@ -12587,6 +12587,28 @@
             }
           ],
           "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "idx_security_audit_org_chain_seq": {
+          "name": "idx_security_audit_org_chain_seq",
+          "columns": [
+            {
+              "expression": "(\"details\" ->> 'orgId')",
+              "asc": true,
+              "isExpression": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "chain_seq",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "(\"security_audit_log\".\"details\" ->> 'orgId') IS NOT NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}

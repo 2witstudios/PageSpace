@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { addOrgDomain, listOrgDomains } from '@pagespace/lib/organizations/domains';
-import { dnsRecordName, dnsRecordValue } from '@pagespace/lib/organizations/domains-core';
+import { MAX_ORG_DOMAINS, dnsRecordName, dnsRecordValue } from '@pagespace/lib/organizations/domains-core';
 import { authorizeOrgRequest, ORG_READ_AUTH, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 import { domainAddSchema } from '@/lib/orgs/org-schemas';
 
@@ -13,6 +13,7 @@ const DOMAIN_ERRORS = {
   public_email_domain: 'A shared email provider cannot be verified for an organization.',
   already_added: 'This domain is already added to the organization.',
   claimed_by_another_org: 'Another organization has already verified this domain.',
+  domain_limit_reached: `An organization can hold at most ${MAX_ORG_DOMAINS} domains. Remove one you no longer need first.`,
 } as const;
 
 /** The DNS record an Admin publishes for a claim, beside the claim itself. */

@@ -45,6 +45,7 @@ import {
   type LegRefundPlan,
 } from './wallet-funding';
 import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
+import { drives } from '@pagespace/db/schema/core';
 
 
 const STRIPE_REF_ARBITER = {
@@ -414,7 +415,7 @@ export async function refundFundingLeg(legId: string, cents: number): Promise<Le
 export type DonationOutcome =
   | { kind: 'donated'; legId: string; amountCents: number; paidDebtCents: number }
   | { kind: 'duplicate'; legId: string | null }
-  | { kind: 'refused'; reason: DonationRefusal | 'wallet_not_found' | 'billing_disabled' };
+  | { kind: 'refused'; reason: DonationRefusal | 'wallet_not_found' | 'billing_disabled' | 'drive_moved' };
 
 export interface DonateInput {
   donorUserId: string;
@@ -422,6 +423,14 @@ export interface DonateInput {
   amountCents: number;
   /** Idempotency key minted by the caller (the route) per donate action. */
   donationId: string;
+  /**
+   * The drive the caller decided access for, and its org then. When given, the donation's transaction
+   * first share-locks the drive row (a move holds it FOR UPDATE) and refuses `drive_moved` if the org
+   * changed, so the donation and its org audit event belong to the drive's org at commit.
+   */
+  expectedDrive?: { driveId: string; orgId: string | null };
+  /** Test seam: runs inside the transaction once the drive row is held. */
+  afterDriveLock?: () => Promise<void>;
 }
 
 /**
@@ -448,6 +457,12 @@ export async function donateToDriveWallet(input: DonateInput): Promise<DonationO
 
   const sourceRef = `donation:${input.donationId}`;
   return db.transaction(async (tx): Promise<DonationOutcome> => {
+    if (input.expectedDrive) {
+      // Before any wallet row: the drive row, then wallets, the order a move takes them in.
+      const [drive] = await tx.select({ orgId: drives.orgId }).from(drives).where(eq(drives.id, input.expectedDrive.driveId)).for('share');
+      if (!drive || drive.orgId !== input.expectedDrive.orgId) return { kind: 'refused', reason: 'drive_moved' };
+      await input.afterDriveLock?.();
+    }
     const [donorRow] = await tx.select({ id: wallets.id }).from(wallets).where(personalRootWalletOf(input.donorUserId)).limit(1);
     if (!donorRow) return { kind: 'refused', reason: 'insufficient_funds' };
 

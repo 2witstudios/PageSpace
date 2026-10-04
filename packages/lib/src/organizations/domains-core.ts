@@ -32,6 +32,12 @@ const DOMAIN_TXT_VALUE_PREFIX = 'pagespace-domain-verification=';
 export const DOMAIN_ADMIN_MAILBOXES = ['admin', 'administrator', 'hostmaster', 'postmaster', 'webmaster'] as const;
 export type DomainAdminMailbox = (typeof DOMAIN_ADMIN_MAILBOXES)[number];
 
+/**
+ * The most domain claims (pending or verified) one org may hold. The list returns all of them in one
+ * response, so a claim is never accepted that the list could not show (with its DNS token and id).
+ */
+export const MAX_ORG_DOMAINS = 200;
+
 /** How long a mailed proof link stays valid. */
 export const DOMAIN_EMAIL_PROOF_TTL_MS = 48 * 60 * 60 * 1000;
 

@@ -21,7 +21,7 @@ import {
   bigserial,
   type ExtraConfigColumn,
 } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
+import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
 
@@ -212,7 +212,8 @@ type SecurityAuditLogIndexColumns = Record<
   | 'eventHash'
   | 'chainSeq'
   | 'riskScore'
-  | 'sessionId',
+  | 'sessionId'
+  | 'details',
   Partial<ExtraConfigColumn>
 >;
 
@@ -237,6 +238,11 @@ const securityAuditLogIndexes = (table: SecurityAuditLogIndexColumns) => ({
   riskScoreIdx: index('idx_security_audit_risk_score').on(table.riskScore),
   // Session tracking
   sessionIdx: index('idx_security_audit_session').on(table.sessionId, table.timestamp),
+  // The org audit log (AUD-3): one org's rows, newest first by chain_seq (the keyset the log and its
+  // CSV export page by). Partial: only rows that carry an org dimension, a small slice of the log.
+  orgChainSeqIdx: index('idx_security_audit_org_chain_seq')
+    .on(sql`(${table.details} ->> 'orgId')`, table.chainSeq)
+    .where(sql`(${table.details} ->> 'orgId') IS NOT NULL`),
 });
 
 export const defineSecurityAuditLogTable = (opts: { crossPlaneUserFk: boolean }) =>

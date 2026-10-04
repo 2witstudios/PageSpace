@@ -53,6 +53,7 @@ export default defineConfig({
       'src/organizations/__tests__/domains.integration.test.ts',
       'src/audit/__tests__/org-audit-query.integration.test.ts',
       'src/audit/__tests__/org-audit-coverage.integration.test.ts',
+      'src/services/__tests__/drive-wallet-attribution.integration.test.ts',
       'src/agent-accounts/executor/__tests__/pinned-https-client.integration.test.ts',
       'src/agent-accounts/__tests__/agent-account-repository.integration.test.ts',
       'src/agent-accounts/__tests__/plane-client.integration.test.ts',

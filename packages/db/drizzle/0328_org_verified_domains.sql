@@ -28,4 +28,5 @@ ALTER TABLE "org_domains" ADD CONSTRAINT "org_domains_createdBy_users_id_fk" FOR
 ALTER TABLE "org_member_departures" ADD CONSTRAINT "org_member_departures_orgId_organizations_id_fk" FOREIGN KEY ("orgId") REFERENCES "public"."organizations"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "org_member_departures" ADD CONSTRAINT "org_member_departures_userId_users_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 CREATE UNIQUE INDEX "org_domains_verified_domain_key" ON "org_domains" USING btree ("domain") WHERE "org_domains"."verifiedAt" IS NOT NULL;--> statement-breakpoint
-CREATE INDEX "org_member_departures_user_id_idx" ON "org_member_departures" USING btree ("userId");
+CREATE INDEX "org_member_departures_user_id_idx" ON "org_member_departures" USING btree ("userId");--> statement-breakpoint
+CREATE INDEX "idx_security_audit_org_chain_seq" ON "security_audit_log" USING btree (("details" ->> 'orgId'),"chain_seq") WHERE ("security_audit_log"."details" ->> 'orgId') IS NOT NULL;

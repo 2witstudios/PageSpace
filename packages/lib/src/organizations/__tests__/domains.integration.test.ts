@@ -38,7 +38,7 @@ import {
   verifyOrgDomainByDns,
   type TxtResolver,
 } from '../domains';
-import { dnsRecordName, dnsRecordValue } from '../domains-core';
+import { MAX_ORG_DOMAINS, dnsRecordName, dnsRecordValue } from '../domains-core';
 import { removeMember } from '../membership';
 import { acceptInvitation, createOrRotateInvitation } from '../invitations';
 import { leaveOrganization } from '../leave';
@@ -252,6 +252,43 @@ describe('verified email domains (real Postgres)', () => {
       expect(result.ok).toBe(false);
       const [row] = await db.select().from(orgDomains).where(eq(orgDomains.id, added.domain.id));
       expect(row.emailTokenHash).toBeNull();
+    });
+
+    it('SEC-1 (partial) an org holds at most as many claims as the list returns: the last place is taken, the next is refused, and the list shows every claim', async () => {
+      const { org, jono } = await northwind();
+      const base = createId();
+      await db.insert(orgDomains).values(Array.from({ length: MAX_ORG_DOMAINS - 1 }, (_, i) => ({
+        orgId: org.id, domain: `filler-${i}-${base}.com`, dnsToken: `t${i}`, createdAt: new Date(Date.now() - (MAX_ORG_DOMAINS - i) * 1000),
+      })));
+      const last = await addOrgDomain({ orgId: org.id, domain: freshDomain(), actorId: jono.id });
+      expect(last.ok).toBe(true);
+      expect(await addOrgDomain({ orgId: org.id, domain: freshDomain(), actorId: jono.id })).toEqual({ ok: false, status: 409, reason: 'domain_limit_reached' });
+      const listed = await listOrgDomains(org.id);
+      expect(listed).toHaveLength(MAX_ORG_DOMAINS);
+      // The newest claim, the one at the boundary, is in the list with its token.
+      expect(listed.map((d) => d.id)).toContain(last.ok ? last.domain.id : '');
+    });
+
+    it('SEC-1 (partial) two adds racing for the last place: one is taken, the other refused', async () => {
+      const { org, jono } = await northwind();
+      const base = createId();
+      await db.insert(orgDomains).values(Array.from({ length: MAX_ORG_DOMAINS - 1 }, (_, i) => ({ orgId: org.id, domain: `filler-${i}-${base}.com`, dnsToken: `t${i}` })));
+      // Each add, having counted, waits for the other to count too (up to 750ms): without the per-org
+      // lock both count the same free place.
+      let counted = 0;
+      const release: Array<() => void> = [];
+      const afterCount = async () => {
+        counted += 1;
+        if (counted >= 2) return release.splice(0).forEach((go) => go());
+        await new Promise<void>((resolve) => { release.push(resolve); setTimeout(resolve, 750); });
+      };
+      const results = await Promise.all([
+        addOrgDomain({ orgId: org.id, domain: freshDomain(), actorId: jono.id }, { afterCount }),
+        addOrgDomain({ orgId: org.id, domain: freshDomain(), actorId: jono.id }, { afterCount }),
+      ]);
+      expect(results.filter((r) => r.ok)).toHaveLength(1);
+      expect(results.filter((r) => !r.ok)).toEqual([{ ok: false, status: 409, reason: 'domain_limit_reached' }]);
+      expect((await db.select().from(orgDomains).where(eq(orgDomains.orgId, org.id)))).toHaveLength(MAX_ORG_DOMAINS);
     });
 
     it('SEC-1 (partial) a shared mailbox provider can never be claimed', async () => {
