@@ -579,6 +579,10 @@ export const AI_PRICING = {
 
   'xiaomi/mimo-v2.6-flash': { input: 0.14, output: 0.28 },
 
+  // Free-tier catalog model (#2758). Priced at $0 explicitly: an id missing here is
+  // "unknown" to chat-pricing and would hold and abort-guard at the fallback cost.
+  'apodex/apodex-1.1-mini:free': { input: 0, output: 0 },
+
   // Default/Unknown models
   'default': { input: 0, output: 0 }
 } as const;
@@ -1099,6 +1103,8 @@ export const MODEL_CONTEXT_WINDOWS = {
   'inclusionai/ling-3.0-flash-sante:free': 262144,
   'xiaomi/mimo-v2.6-pro': 1050000,
   'xiaomi/mimo-v2.6-flash': 1050000,
+  // Window unpublished at catalog time; the map's own default, not a measured value.
+  'apodex/apodex-1.1-mini:free': 200000,
 
   // Default
   'default': 200000 // Updated default for newer models

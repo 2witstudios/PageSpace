@@ -22,6 +22,7 @@ import {
   validateAgentModelSelection,
   resolveProviderModel,
 } from '../ai-providers-config';
+import { AI_PRICING } from '@pagespace/lib/monitoring/ai-monitoring';
 
 describe('ai-providers-config', () => {
   describe('catalog shape', () => {
@@ -73,6 +74,15 @@ describe('ai-providers-config', () => {
     it('does not offer model ids delisted by OpenRouter', () => {
       expect(AI_PROVIDERS.anthropic.models).not.toHaveProperty('anthropic/claude-3.5-haiku');
       expect(AI_PROVIDERS.anthropic.models).not.toHaveProperty('anthropic/claude-opus-4.6-fast');
+    });
+    it('prices every selectable model, so a free model is never metered at the unknown-model fallback', () => {
+      // An id missing from AI_PRICING is "unknown" to chat-pricing: its hold estimate and the
+      // mid-stream abort guard both use the conservative fallback cost, so a free model would
+      // reserve and count real money. Every listed model needs a row, even a $0 one.
+      const unpriced = Object.values(AI_PROVIDERS)
+        .flatMap((provider) => Object.keys(provider.models))
+        .filter((model) => !Object.prototype.hasOwnProperty.call(AI_PRICING, model));
+      expect(unpriced).toEqual([]);
     });
   });
 
