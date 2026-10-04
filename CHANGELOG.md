@@ -9,10 +9,25 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Changed
 
+- **Your allowance of an organization's credits covers compute too** — sandbox runs, terminals and
+  browsers you start in an organization's drives now count toward your monthly allowance of the
+  organization's credits, together with your AI use. Once it is used up, new compute there is refused with
+  a message saying so (nothing is started or charged), until the organization's next billing period or an
+  Owner or Admin raises your allowance. A drive's environments and published apps (their storage, wakes
+  and awake time) stay the organization's own spend and never count against anyone's allowance.
+- **Complimentary paid plans refill on their renewal date** — an account on a paid plan with no Stripe
+  subscription behind it now gets its monthly credits on its renewal date (within the hour), instead of
+  at its next AI request after the date passed. The renewal date no longer drifts later each month.
 - **Right-sidebar chat input is a single compact card** — attach, tools, model picker and one send/stop button now share one toolbar row under the text box instead of stacking a separate model selector above it. While a reply is streaming, a queue button appears next to Stop once you've typed something, so you can still queue a follow-up on phones.
 
 ### Added
 
+- **Wallet debt notices, and who absorbs a drive's overspend** — when spending in an organization's drive
+  runs past what its wallet held, the organization's Owner and Admins get an in-app notification, at most
+  once per billing period, and the wallet shows as over until its debt is cleared. An Owner or Admin can
+  choose whether a drive wallet's overspend is absorbed by the organization's pool (the default) or carried
+  by the drive wallet and taken out of its next allocation. The person who was spending is never charged
+  for it.
 - **Organization sharing policies** — an organization Owner or Admin can turn public share links,
   publishing to the web, custom domains and guests from outside the organization off, or (for guests)
   require approval. Turning one off pauses what already exists instead of deleting it: share links stop
@@ -678,6 +693,9 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Apodex 1.1 Mini (free) no longer reserves credits as if it were a paid model** — the free model was
+  missing from the price list, so each call held and counted a paid model's estimated cost against your
+  balance mid-reply. It is now priced as free.
 - **Memory now checks your AI credits before it learns** — the nightly Memory pass (learning
   from your conversations and tidying your profile pages) used to run and charge you even when
   your balance was used up, so you could go into debt without opening PageSpace. Now each step
