@@ -433,6 +433,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
           });
         })
       : null;
+    turnTimer.mark('location_resolved');
     const pageContext = contextRef
       ? locationContextToPageContext(resolvedLocation)
       : legacyPageContext;
@@ -447,6 +448,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       : pageContextToLocationContext(legacyPageContext);
 
     const mcpScopeError = await checkMCPPageScope(authResult, chatId);
+    turnTimer.mark('mcp_scope_checked');
     if (mcpScopeError) {
       auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'ai_chat', resourceId: chatId, details: { reason: 'mcp_page_scope_denied', method: 'POST' }, riskScore: 0.5 });
       return mcpScopeError;
@@ -490,6 +492,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       chatId: maskedChatId,
     });
     const canView = await canPrincipalViewPage(authResult, chatId);
+    turnTimer.mark('view_permission_checked');
     permissionLogger.debug('Page AI view permission evaluated', {
       userId: maskedUserId,
       chatId: maskedChatId,
@@ -535,6 +538,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
 
     // Get page configuration for custom agent settings (needed early for message saving)
     const [page] = await db.select().from(pages).where(eq(pages.id, chatId));
+    turnTimer.mark('page_row_loaded');
     if (!page) {
       loggers.ai.warn('AI Chat API: Page not found', { chatId });
       return NextResponse.json({ error: 'Page not found' }, { status: 404 });
@@ -583,6 +587,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
         loggers.ai.error('AI Page Chat API: Failed to fetch drive prompt', error as Error);
         // Continue without drive prompt on error
       }
+      turnTimer.mark('drive_prompt_loaded');
     }
 
     // Fetch context from any other drives this agent is a member of with
@@ -610,6 +615,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       loggers.ai.error('AI Page Chat API: Failed to fetch member-drive context', error as Error);
       // Continue without member-drive context on error
     }
+    turnTimer.mark('member_drive_context_loaded');
 
     loggers.ai.debug('AI Page Chat API: Using custom agent configuration', {
       hasCustomSystemPrompt: !!customSystemPrompt,
@@ -706,6 +712,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
         }
       }
     }
+    turnTimer.mark('conversation_authorized');
 
     // Auto-generate conversationId if not provided (seamless UX)
     conversationId = requestConversationId || createId();
@@ -735,6 +742,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // request leaves an orphaned conversation/message that the client never receives
     // back and that reappears (duplicated) once the user tops up and retries.
     const [user] = await db.select().from(users).where(eq(users.id, userId));
+    turnTimer.mark('user_loaded');
 
     // Prepaid credit gate: block out-of-credits users before persisting their
     // message or invoking any model. Safe in billing-disabled deployments (returns
@@ -825,6 +833,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
         { status: 500 },
       );
     }
+    turnTimer.mark('conversation_ensured');
 
     // Save user's message immediately to database (database-first approach)
     const userMessage = messages[messages.length - 1]; // Last message is the new user message
@@ -870,6 +879,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
           commandPlans = await planCommandExecutions(messageContent, userId!, {
             driveId: page.driveId,
           });
+          turnTimer.mark('commands_planned');
           if (commandPlans.length > 0) {
             commandSystemPrompt = buildCommandPromptSection(commandPlans);
             for (const plan of commandPlans) {
@@ -971,6 +981,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
             return { proceed: true };
           },
         });
+        turnTimer.mark('user_message_persisted');
 
         // Fire-and-forget: title derivation must never fail or delay the chat
         // response, matching how createConversation above is treated as
@@ -1128,6 +1139,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
 
     // Subscription gate: free users are limited to the free-model allowlist.
     const { requiresProSubscription, createSubscriptionRequiredResponse, createAdminRestrictedResponse } = await import('@/lib/subscription/rate-limit-middleware');
+    turnTimer.mark('subscription_module_loaded');
 
     const isAdminUser = user?.role === 'admin';
 
@@ -1243,6 +1255,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
 
     // Update user's current provider/model if changed (thread the loaded row to skip a DB select).
     await updateUserProviderSettings(userId, selectedProvider, selectedModel, { user: user ?? null });
+    turnTimer.mark('provider_settings_updated');
 
     // Parse read-only mode (defaults to false for full access)
     const readOnlyMode = isReadOnly === true;
@@ -1300,6 +1313,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     const sandboxTierEligible = sandboxEnabled
       ? await resolveSandboxToolEligibilityForConversation(conversationId, 'page', userId)
       : false;
+    turnTimer.mark('sandbox_eligibility');
     filteredTools = filterToolsForSandboxEnablement(filteredTools, sandboxEnabled) as ToolSet;
     // The tier gate strips only the COMPUTE tools — a free payer keeps the
     // chat-only session family (sessions/chat are free on every plan).
@@ -1360,6 +1374,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       eligibleSkills.length > 0 || allowedToolNames.includes('load_skill')
         ? await loadUserCommandCatalog(userId!, page.driveId ?? null, allowedToolNames)
         : { catalogPrompt: '', searchEntries: [] };
+    turnTimer.mark('commands_loaded');
     const exposure = applyToolExposureMode(filteredTools, toolExposureMode, ALWAYS_UPFRONT_TOOLS, [
       ...eligibleSkills,
       ...userCommandCatalog.searchEntries,
@@ -1379,12 +1394,14 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // INTEGRATION TOOLS: Resolve and merge integration tools for this agent
     try {
       const { resolvePageAgentIntegrationTools } = await import('@/lib/ai/core/integration-tool-resolver');
+      turnTimer.mark('integrations_import');
       const integrationTools = await resolvePageAgentIntegrationTools({
         agentId: chatId,
         userId,
         driveId: page.driveId,
         currentTools: preExposureTools,
       });
+      turnTimer.mark('integrations_ready');
       if (Object.keys(integrationTools).length > 0) {
         filteredTools = mergeToolSets(filteredTools, integrationTools);
         loggers.ai.info('AI Chat API: Merged integration tools', {
@@ -1536,6 +1553,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
 
     // Fetch user personalization for AI system prompt injection
     const personalization = await getUserPersonalization(userId);
+    turnTimer.mark('personalization');
     if (personalization) {
       loggers.ai.debug('AI Chat API: User personalization loaded', {
         hasPersonalization: true,
@@ -1552,6 +1570,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // into the system prompt, so that string stays byte-identical across turns.
     const hasTurnLocation = Boolean(turnLocation?.currentPage || turnLocation?.currentDrive);
     const locationHomeDriveId = await resolveHomeDriveHint(userId, hasTurnLocation, getAllowedDriveIds(authResult));
+    turnTimer.mark('home_drive_resolved');
 
     const locationPrompt = buildLocationTurnPrompt(turnLocation ? {
       currentPage: turnLocation.currentPage,
@@ -1579,11 +1598,11 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // page in ANOTHER drive — so the principal-aware check is required here. A
     // user-level check would leak an out-of-scope plan's title and id to a token
     // that may not reach that drive.
-    const activePlanPrompt = buildActivePlanPrompt(
-      await getActivePlan(conversationId, userId, (pageId) =>
-        canPrincipalViewPage(authResult, pageId),
-      ),
+    const planPointer = await getActivePlan(conversationId, userId, (pageId) =>
+      canPrincipalViewPage(authResult, pageId),
     );
+    turnTimer.mark('active_plan_loaded');
+    const activePlanPrompt = buildActivePlanPrompt(planPointer);
 
 
     // Build timestamp system prompt for temporal awareness
@@ -1598,6 +1617,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
         pageId: chatId,
         driveId: page.driveId,
       });
+      turnTimer.mark('page_tree_loaded');
       if (pageTreeContext) {
         pageTreePrompt = `\n\n## WORKSPACE STRUCTURE\n\nHere is the ${page.pageTreeScope === 'drive' ? 'complete workspace' : 'page subtree'} structure:\n\n${pageTreeContext}`;
         loggers.ai.debug('AI Chat API: Page tree context included', {
@@ -1614,6 +1634,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     let agentMemoryPrompt = '';
     if (page.type === 'AI_CHAT') {
       const memoryContent = await getAgentMemoryContext(chatId, userId);
+      turnTimer.mark('agent_memory_loaded');
       agentMemoryPrompt = buildAgentMemorySection(memoryContent);
     }
 
@@ -1646,6 +1667,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // so this turn's model context reflects it — fired early above to
     // overlap with the independent setup between there and here.
     if (askUserSyncPromise) await askUserSyncPromise;
+    turnTimer.mark('ask_user_synced');
 
     const pageId = chatId as string;
     // Reads the UNIFIED `messages` table (epic "Agent-Session Single Source of
@@ -1661,6 +1683,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // summarized into a durable compaction. 'interrupted' rows stay included — they are
     // terminal, real partial output. See Server Stream Durability epic PR 2.
     const dbMessages = await messageRepository.getPageConversationMessages(pageId, conversationId);
+    turnTimer.mark('history_loaded');
 
     const conversationHistory: UIMessage[] = await Promise.all(dbMessages.map(msg =>
       convertDbMessageToUIMessage({
@@ -1678,6 +1701,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
         status: msg.status,
       })
     ));
+    turnTimer.mark('history_converted');
 
     loggers.ai.debug('AI Chat API: Loaded conversation from database', {
       messageCount: conversationHistory.length,
@@ -1699,6 +1723,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       user: user ? { id: user.id, role: user.role } : null,
       spend: credit.spend,
     });
+    turnTimer.mark('history_compacted');
     const { scheduleCompaction } = prepared;
     const { modelMessages, stableBoundaryIndex } = await finishModelRequest({
       prepared,
@@ -1723,6 +1748,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     activeStreamId = streamId;
 
     const [userProfile] = await userProfilePromise;
+    turnTimer.mark('display_name_ready');
     const displayName = userProfile?.displayName ?? user?.name ?? 'Someone';
 
     // Reuse the row the conversationId validation above already fetched. A conversation

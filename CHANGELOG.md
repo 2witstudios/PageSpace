@@ -7,6 +7,10 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 - /btw side questions now work on every chat surface (dashboard assistant, right-sidebar chat, agent console) and /btw appears in the / command picker on all of them.
 
+### Changed
+
+- **Right-sidebar chat input is a single compact card** — attach, tools, model picker and one send/stop button now share one toolbar row under the text box instead of stacking a separate model selector above it. While a reply is streaming, a queue button appears next to Stop once you've typed something, so you can still queue a follow-up on phones.
+
 ### Added
 
 - **Organization sharing policies** — an organization Owner or Admin can turn public share links,
@@ -656,6 +660,14 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   darker, matching the app). The admin app, the marketing site (including
   the hero demo), the code editor and terminal fallbacks, and the iOS/Android status bar and
   splash colors all use the same new floor so nothing looks darker than the page around it.
+
+- **The default AI model is now OpenAI's GPT-6 Luna** — cheap, a 1M-token context window, and on the
+  free-tier allowlist. New accounts pick it up automatically; anyone with an explicit model already
+  selected keeps that choice. The OpenRouter catalog was refreshed again: GPT-6 / GPT-6.1 (Luna, Sol,
+  Astra), Claude Opus 5.5 / Sonnet 5.5 / Fable 5.1, Gemini 3.8 Flash, Grok 4.7, DeepSeek V4.1 Flash,
+  Qwen3.8 Max, Muse Spark 1.3, GLM 5.3 Prime / FlashX and more are now selectable, and pricing was
+  re-synced with OpenRouter. The admin GLM Coder Plan list now shows only GLM-5.3 and GLM-5.3 Flash,
+  the models the plan currently offers.
 
 - **The default AI model is now Z.ai's GLM-5.3 Flash** — cheaper per token and a larger context
   window than the previous default (OpenAI's GPT-5.6 Luna), and still on the free-tier allowlist.

@@ -39,10 +39,8 @@ describe('ai-providers-config', () => {
       expect(AI_PROVIDERS).toHaveProperty('glm');
       expect(AI_PROVIDERS.glm.name).toBe('Z.ai (Admin)');
       expect(AI_PROVIDERS.glm.models).toHaveProperty('glm-5.3');
-      expect(AI_PROVIDERS.glm.models).toHaveProperty('glm-5.1');
-      expect(AI_PROVIDERS.glm.models).toHaveProperty('glm-5-turbo');
-      expect(AI_PROVIDERS.glm.models).toHaveProperty('glm-4.7');
-      expect(AI_PROVIDERS.glm.models).toHaveProperty('glm-4.5-air');
+      expect(AI_PROVIDERS.glm.models).toHaveProperty('glm-5.3-flash');
+      expect(AI_PROVIDERS.glm.models).not.toHaveProperty('glm-5.1');
     });
 
     it('includes the public zai provider with OpenRouter z-ai/ models', () => {
@@ -80,6 +78,7 @@ describe('ai-providers-config', () => {
 
   describe('FREE_TIER_MODELS', () => {
     it('contains the curated free allowlist', () => {
+      expect(FREE_TIER_MODELS.has('openai/gpt-6-luna')).toBe(true);
       expect(FREE_TIER_MODELS.has('openai/gpt-5.6-luna')).toBe(true);
       expect(FREE_TIER_MODELS.has('openai/gpt-5.4-nano')).toBe(true);
       expect(FREE_TIER_MODELS.has('openai/gpt-5.4-mini')).toBe(true);
@@ -184,7 +183,7 @@ describe('ai-providers-config', () => {
     });
 
     it('keeps the admin glm provider when the model is a valid glm model', () => {
-      expect(resolveProviderModel('glm', 'glm-4.7')).toEqual({ provider: 'glm', model: 'glm-4.7' });
+      expect(resolveProviderModel('glm', 'glm-5.3-flash')).toEqual({ provider: 'glm', model: 'glm-5.3-flash' });
     });
 
     it('SUBSTITUTES the metered default when glm is paired with an invalid model (the P1 gate-bypass)', () => {
@@ -232,7 +231,7 @@ describe('ai-providers-config', () => {
 
   describe('getDefaultModel', () => {
     it('returns the first model of a vendor', () => {
-      expect(getDefaultModel('openai')).toBe('openai/gpt-5.6-sol-pro');
+      expect(getDefaultModel('openai')).toBe('openai/gpt-6-luna');
     });
 
     it('returns DEFAULT_MODEL for an unknown provider', () => {
@@ -242,11 +241,11 @@ describe('ai-providers-config', () => {
 
   describe('getDefaultModelForTier', () => {
     it('returns the first tier-accessible model for free users when the catalog default is paid', () => {
-      const defaultModel = getDefaultModel('openai');
+      const defaultModel = getDefaultModel('anthropic');
       expect(isModelAllowedForTier(defaultModel, 'free')).toBe(false);
-      const tierDefault = getDefaultModelForTier('openai', 'free');
+      const tierDefault = getDefaultModelForTier('anthropic', 'free');
       expect(isModelAllowedForTier(tierDefault, 'free')).toBe(true);
-      expect(AI_PROVIDERS.openai.models).toHaveProperty(tierDefault);
+      expect(AI_PROVIDERS.anthropic.models).toHaveProperty(tierDefault);
     });
 
     it('returns the catalog default for paid tiers', () => {

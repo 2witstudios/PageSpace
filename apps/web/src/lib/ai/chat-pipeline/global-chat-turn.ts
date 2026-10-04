@@ -791,6 +791,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
         status: msg.status,
       })
     ));
+    turnTimer.mark('history_converted');
 
     loggers.api.debug('Global Assistant Chat API: Loaded conversation history from database', {
       messageCount: conversationHistory.length,
@@ -842,6 +843,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
       getUserPersonalization(userId),
       getUserTimezone(userId),
     ]);
+    turnTimer.mark('personalization');
     if (personalization) {
       loggers.api.debug('Global Assistant: User personalization loaded', {
         hasPersonalization: true,
@@ -862,6 +864,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
     // ceiling is always empty here. Passed explicitly anyway so this stays correct
     // by construction if the allowed auth methods ever widen.
     const locationHomeDriveId = await resolveHomeDriveHint(userId, hasLocation, getAllowedDriveIds(auth));
+    turnTimer.mark('home_drive_resolved');
 
     const locationPrompt = buildLocationTurnPrompt(locationContext ? {
       currentPage: locationContext.currentPage,
@@ -894,6 +897,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
         loggers.api.error('Global Assistant Chat API: Failed to fetch drive prompt', error as Error);
         // Continue without drive prompt on error
       }
+      turnTimer.mark('drive_prompt_loaded');
     }
 
     // The Global Assistant's own guidance — the exploration rules and the
@@ -923,6 +927,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
       'global',
       userId,
     );
+    turnTimer.mark('sandbox_eligibility');
 
     // Build agent awareness prompt - lists visible AI agents for consultation
     // `canDelegate` mirrors the session-tool gate: spawn_session registers
@@ -936,6 +941,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
     const agentAwarenessPrompt = await buildAgentAwarenessPrompt(userId, {
       canDelegate: !readOnlyMode,
     });
+    turnTimer.mark('agent_awareness_built');
 
     // Build page tree context if enabled
     let pageTreePrompt = '';
@@ -946,6 +952,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
           scope: 'drive',
           driveId: locationContext.currentDrive.id,
         });
+        turnTimer.mark('page_tree_loaded');
         if (treeContext) {
           pageTreePrompt = `\n\n## WORKSPACE STRUCTURE\n\nHere is the complete workspace structure:\n\n${treeContext}`;
           loggers.api.debug('Global Assistant: Page tree context included', {
@@ -956,6 +963,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
       } else {
         // Dashboard context: show drive list summary
         const driveSummary = await getDriveListSummary(userId);
+        turnTimer.mark('drive_summary_loaded');
         if (driveSummary) {
           pageTreePrompt = `\n\n## ACCESSIBLE WORKSPACES\n\n${driveSummary}`;
           loggers.api.debug('Global Assistant: Drive list summary included', {
@@ -1000,6 +1008,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
       locationContext?.currentDrive?.id ?? null,
       availableToolNames
     );
+    turnTimer.mark('commands_loaded');
     const skillCatalogPrompt = buildBuiltinSkillCatalog(availableToolNames);
 
     // Active plan pointer. Same volatility class as the skill catalog: it
@@ -1007,7 +1016,9 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
     // navigation, so it is cache-stable per conversation. It has to be here
     // rather than in the volatile block — the compaction summary is lossy, and
     // this pointer is precisely what the agent needs after a summary.
-    const activePlanPrompt = buildActivePlanPrompt(await getActivePlan(conversationId, userId));
+    const activePlan = await getActivePlan(conversationId, userId);
+    turnTimer.mark('active_plan_loaded');
+    const activePlanPrompt = buildActivePlanPrompt(activePlan);
 
     const nonCoreToolNamesPrompt = buildNonCoreToolNamesPrompt(Object.keys(nonCoreTools));
     const finalSystemPrompt = buildAgentSystemPrompt({
@@ -1056,10 +1067,12 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
     // INTEGRATION TOOLS: Resolve and merge integration tools for global assistant
     try {
       const { resolveGlobalAssistantIntegrationTools } = await import('@/lib/ai/core/integration-tool-resolver');
+      turnTimer.mark('integrations_import');
       let currentDriveId = locationContext?.currentDrive?.id || null;
       let userDriveRole: 'OWNER' | 'ADMIN' | 'MEMBER' | null = null;
       if (currentDriveId) {
         const access = await getDriveAccess(currentDriveId, userId);
+        turnTimer.mark('drive_access_checked');
         if (!access.isMember) {
           // User is not a member of this drive — do not resolve drive-scoped integrations
           currentDriveId = null;
@@ -1076,6 +1089,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
         // which never contains sandbox git/gh tool names directly.
         currentTools: filteredAllTools,
       });
+      turnTimer.mark('integrations_ready');
       if (Object.keys(integrationTools).length > 0) {
         finalTools = mergeToolSets(finalTools, integrationTools);
         loggers.api.info('Global Assistant: Merged integration tools', {
@@ -1178,6 +1192,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
           user: { id: userId, role: auth.role ?? null },
           spend: credit.spend,
         });
+        turnTimer.mark('history_compacted');
 
         // Limit visual-content injection to the last MAX_MESSAGES_WITH_IMAGES items;
         // the earlier head is kept intact so the full prepared context reaches the model.
@@ -1205,6 +1220,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
           tail: processedTail,
           tools: finalTools,
         });
+        turnTimer.mark('model_messages_built');
 
         return {
           modelMessages,
@@ -1254,6 +1270,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
 
     const channelId = globalChannelId(userId);
     const displayName = await resolveDisplayName(userId);
+    turnTimer.mark('display_name_ready');
 
     if (conversationIsNew) {
       broadcastGlobalConversationAdded(channelId, {

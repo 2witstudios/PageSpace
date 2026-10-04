@@ -520,7 +520,7 @@ export function computeMarginPct(realCostCents: number, chargedCents: number): n
 const CLOUD_VENDOR_PROVIDERS = new Set<string>([
   'openai', 'anthropic', 'google', 'xai', 'deepseek', 'qwen', 'mistral',
   'moonshot', 'minimax', 'meta', 'bytedance', 'inception', 'writer', 'zai',
-  'aion-labs', 'amazon', 'arcee-ai', 'cohere', 'dots-studio', 'ibm-granite',
+  'aion-labs', 'amazon', 'apodex', 'arcee-ai', 'cohere', 'dots-studio', 'ibm-granite',
   'inclusionai', 'kwaipilot', 'liquid', 'meituan', 'nex-agi', 'nvidia',
   'poolside', 'rekaai', 'relace', 'sakana', 'sao10k', 'stepfun', 'tencent',
   'thedrummer', 'thinkingmachines', 'upstage', 'xiaomi',
