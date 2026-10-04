@@ -280,10 +280,13 @@ describe('withAdvisoryLock — a checked-out lock connection always has an error
       expect(client.listeners).toHaveLength(1);
       // What pg.Client does when its backend is terminated while checked out.
       client.listeners.forEach((l) => l(new Error('terminating connection due to administrator command')));
+      // Whatever a driver emits is logged, Error or not.
+      client.listeners.forEach((l) => l('socket hang up' as unknown as Error));
       return 'done';
     });
     expect(result).toEqual({ outcome: 'acquired', result: 'done' });
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('errored while checked out'), '"k"', expect.stringContaining('administrator command'));
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('errored while checked out'), '"k"', 'socket hang up');
     // Back to the pool healthy: our listener is gone (pg-pool re-adds its own idle one).
     expect(client.listeners).toHaveLength(0);
     errorSpy.mockRestore();
@@ -322,6 +325,17 @@ describe('withBlockingAdvisoryLock', () => {
     // Busy connection 0 was back in the pool before attempt 1 connected, and so on.
     expect(released).toEqual([0, 1, 2]);
     expect(sleep.mock.calls.map((c) => c[0])).toEqual([10, 20]);
+  });
+
+  it('without an injected sleep it really waits between attempts', async () => {
+    const clients = [
+      makeClient({ query: vi.fn().mockResolvedValueOnce({ rows: [{ acquired: false }] }) }),
+      makeClient({ query: vi.fn().mockResolvedValueOnce({ rows: [{ acquired: true }] }).mockResolvedValueOnce({ rows: [] }) }),
+    ];
+    const started = Date.now();
+    const result = await withBlockingAdvisoryLock({ connect: vi.fn(async () => clients.shift()!) }, 'k', async () => 'done', { timeoutMs: 5_000 });
+    expect(result).toEqual({ outcome: 'acquired', result: 'done' });
+    expect(Date.now() - started).toBeGreaterThanOrEqual(5);
   });
 
   it('past the deadline it is lock_busy and fn never runs', async () => {

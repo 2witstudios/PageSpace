@@ -782,6 +782,63 @@ describe('buildShellHandlers', () => {
       expect(shell.write.mock.calls.map((c) => c[0])).toEqual(['b', 'c']);
     });
 
+    it('WAL-2 (partial) a typist refused WITHOUT an org reason (a personal payer out of credits) is told plainly, on their own pane, and typing on is refused from the memo', async () => {
+      const gate = vi.fn()
+        .mockResolvedValueOnce({ allowed: true, holdId: 'hold-owner' })
+        .mockResolvedValue({ allowed: false, reason: 'out_of_credits' });
+      const { ben, benSocket } = await priyaOpensBenAttaches(gate);
+
+      ben.onInput({ data: 'ls\n', connectionId: 'ben-sock' });
+      await vi.advanceTimersByTimeAsync(0);
+      ben.onInput({ data: 'pwd\n', connectionId: 'ben-sock' });
+      await vi.advanceTimersByTimeAsync(0);
+
+      const refusals = benSocket.emit.mock.calls.filter((c) => c[0] === 'shell:error').map((c) => c[1]);
+      expect(refusals).toEqual([
+        { message: expect.stringMatching(/could not be charged to you/), recoverable: true },
+        { message: expect.stringMatching(/could not be charged to you/), recoverable: true },
+      ]);
+      expect(gate).toHaveBeenCalledTimes(2);
+      expect(shell.write).not.toHaveBeenCalled();
+    });
+
+    it('WAL-2 (partial) a typist\'s queued input is dropped if their session goes away while the claim waits', async () => {
+      let releaseGate = (_v: unknown) => {};
+      const gate = vi.fn()
+        .mockResolvedValueOnce({ allowed: true, holdId: 'hold-owner' })
+        .mockImplementationOnce(() => new Promise((resolve) => { releaseGate = resolve; }));
+      const { ben, live } = await priyaOpensBenAttaches(gate);
+
+      ben.onInput({ data: 'a' });
+      ben.onInput({ data: 'b' });
+      await vi.advanceTimersByTimeAsync(0);
+      // Ben's pane closes while his claim is in flight: his binding goes, his queued keystrokes with it.
+      ben.onDisconnect({ connectionId: 'ben-sock' });
+      releaseGate({ allowed: true, holdId: 'hold-mate' });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(shell.write).not.toHaveBeenCalledWith('a');
+      expect(shell.write).not.toHaveBeenCalledWith('b');
+      expect(live).toBeDefined();
+    });
+
+    it('input from a socket with no signed-in user moves no window', async () => {
+      const gate = vi.fn().mockResolvedValueOnce({ allowed: true, holdId: 'hold-owner' });
+      const { live } = await priyaOpensBenAttaches(gate);
+      checkAuth.mockResolvedValueOnce({ ...makeAuthSuccess(), ownerId: 'user1', actorId: 'user1' });
+      const anon = makeSocket('anon-sock', 'user1');
+      const handlers = buildShellHandlers({ sessionMap, openShell, checkAuth, socket: anon, persistSpriteExecId, billing: { ...makeBilling({ gate }), resolveCharge: vi.fn() } });
+      await handlers.onConnect(validPayload);
+      (anon.data as { user?: unknown }).user = undefined;
+
+      handlers.onInput({ data: 'echo\n' });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(gate).toHaveBeenCalledTimes(1);
+      expect(live?.actorId).toBe('user1');
+      expect(shell.write).toHaveBeenCalledWith('echo\n');
+    });
+
     it('WAL-2 (partial) review #2760 P2-3: THE TYPIST PAYS — a drive-mate\'s first keystroke takes the window (the opener\'s settles to the opener), keystrokes land in order, and the window moves back when the opener types again', async () => {
       const gate = vi.fn()
         .mockResolvedValueOnce({ allowed: true, holdId: 'hold-owner' })
