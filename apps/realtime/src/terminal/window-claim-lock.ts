@@ -21,7 +21,17 @@ import { errorLogFields } from '@pagespace/lib/logging/error-cause';
 export type WindowClaimLockResult<T> = { acquired: true; result: T } | { acquired: false };
 export type WindowClaimLock = <T>(sessionKey: string, fn: () => Promise<T>) => Promise<WindowClaimLockResult<T>>;
 
-/** A claim is a gate read plus a settle: seconds at worst. Past this the claim is refused, not queued forever. */
+/**
+ * A claim is a gate read plus a settle: seconds at worst. Past this the claim is refused (the
+ * typist is told to retry), never queued forever. The wait holds no pool connection
+ * (withBlockingAdvisoryLock retries a try-lock with backoff), so a burst of waiting typists cannot
+ * starve the advisory-lock pool (re-review 5408117045 P3-1).
+ *
+ * A SLOW claim delays every other claim on the SAME terminal for up to this long (P3-3). The claim
+ * itself is not cut short: abandoning it mid-settle would leave the window half-moved, so the bound
+ * is on the waiters, who are refused with the retry message instead. Claims on other terminals use
+ * other keys and are unaffected.
+ */
 export const WINDOW_CLAIM_LOCK_TIMEOUT_MS = 10_000;
 
 export const windowClaimLockKey = (sessionKey: string): string => `terminal-window-claim:${sessionKey}`;

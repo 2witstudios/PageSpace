@@ -34,7 +34,8 @@ import { MACHINE_MARKUP_BPS } from '@pagespace/lib/billing/credit-pricing';
 import { calculateMachineCostDollars } from '@pagespace/lib/monitoring/machine-pricing';
 import { claimBillingWindow, settleAccruedWindow } from '../shell-handler';
 import { pgWindowClaimLock, windowClaimLockKey } from '../window-claim-lock';
-import { withBlockingAdvisoryLock } from '@pagespace/db/advisory-lock';
+import { withAdvisoryLock, withBlockingAdvisoryLock } from '@pagespace/db/advisory-lock';
+import { sql } from '@pagespace/db/operators';
 import { DEFAULT_SEAT_ALLOWANCE_CENTS } from '@pagespace/lib/billing/wallet-core';
 import type { TerminalSession, TerminalSessionMap } from '../terminal-session-map';
 
@@ -361,5 +362,64 @@ describe('two typists claiming one live PTY at the same instant (re-review P2-1)
       holder.release();
     }
   });
-});
 
+  /** The backend holding `key`'s advisory lock right now (pg_locks splits the int8 key into classid/objid). */
+  async function lockHolderPid(key: string): Promise<number | null> {
+    const res = await db.execute(sql`SELECT pid FROM pg_locks WHERE locktype = 'advisory' AND granted AND objid::bigint = (hashtext(${key})::bigint & 4294967295)`);
+    const row = (res.rows as Array<{ pid: number }>)[0];
+    return row ? Number(row.pid) : null;
+  }
+  const terminate = (pid: number) => db.execute(sql`SELECT pg_terminate_backend(${pid})`);
+  const settle = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  it('re-review 5408117045 P1: the lock connection\'s backend killed WHILE THE CLAIM RUNS — the process lives, the claim finishes, and no lock or connection leaks', async () => {
+    vi.useRealTimers();
+    const key = windowClaimLockKey('k-killed-in-fn');
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const result = await pgWindowClaimLock('k-killed-in-fn', async () => {
+        const pid = await lockHolderPid(key);
+        expect(pid).not.toBeNull();
+        await terminate(pid!);
+        // Give pg.Client time to see the socket close and emit 'error' — with no listener this kills the worker.
+        await settle(300);
+        return 'claimed';
+      });
+      expect(result).toEqual({ acquired: true, result: 'claimed' });
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('errored while checked out'), JSON.stringify(key), expect.any(String));
+      // The backend's death released the lock; the dead connection was destroyed, not pooled.
+      expect(await lockHolderPid(key)).toBeNull();
+      expect(await pgWindowClaimLock('k-killed-in-fn', async () => 'next')).toEqual({ acquired: true, result: 'next' });
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it('re-review 5408117045 P1: the HOLDER killed while another claim waits — the waiter gets the lock, nobody crashes, nothing is left held', async () => {
+    vi.useRealTimers();
+    const key = windowClaimLockKey('k-killed-holder');
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      let releaseHolder = () => {};
+      const holderGate = new Promise<void>((resolve) => { releaseHolder = resolve; });
+      const holder = withAdvisoryLock(getAdvisoryLockPool(), key, async () => {
+        await holderGate;
+        return 'holder';
+      });
+      await settle(100);
+      const pid = await lockHolderPid(key);
+      expect(pid).not.toBeNull();
+
+      const waiter = pgWindowClaimLock('k-killed-holder', async () => 'waiter');
+      await settle(100);
+      await terminate(pid!);
+
+      expect(await waiter).toEqual({ acquired: true, result: 'waiter' });
+      releaseHolder();
+      expect(await holder).toEqual({ outcome: 'acquired', result: 'holder' });
+      expect(await lockHolderPid(key)).toBeNull();
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+});
