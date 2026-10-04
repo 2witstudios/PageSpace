@@ -314,7 +314,7 @@ describe('environments in an org drive', () => {
     expect(await db.select().from(creditLedger).where(inArray(creditLedger.userId, empty.userIds))).toEqual([]);
   });
 
-  it("WAL-9 (partial) an org env's storage (after the epoch) is charged to the ORG POOL once, as compute, recorded under the lead — never the creator or the lead's wallet", async () => {
+  it("WAL-9 (partial) an org env's storage (after the epoch) is charged to the ORG POOL once, as a drive accrual, recorded under the lead — never the creator or the lead's wallet", async () => {
     const w = (world = await build({ poolCents: FUNDED }));
     const now = new Date('2026-09-28T12:00:00.000Z');
     await stampOrgComputeBillingEpoch(new Date('2026-09-27T00:00:00.000Z'));
@@ -326,7 +326,7 @@ describe('environments in an org drive', () => {
     const usage = (await ledgerOnWallet(w.poolId)).filter((r) => r.entryType === 'usage');
     expect(result).toMatchObject({ charged: 1, orgBacklogForgiven: 0 });
     expect(usage).toHaveLength(1);
-    expect(usage[0]).toMatchObject({ userId: w.leadId, spendKind: 'compute' });
+    expect(usage[0]).toMatchObject({ userId: w.leadId, spendKind: 'drive_compute' });
     expect(await envWatermark(envId)).toEqual(now);
     expect(await personalSnapshot(w)).toEqual(people);
   });
@@ -492,7 +492,7 @@ function appDeps(c: ReturnType<typeof clock>, started: { count: number }): AppLi
 }
 
 describe('published apps in an org drive', () => {
-  it('WAL-9 (partial) a funded org app wakes on a hold against the ORG POOL, and its stop settles once there as compute', async () => {
+  it('WAL-9 (partial) a funded org app wakes on a hold against the ORG POOL, and its stop settles once there as a drive accrual', async () => {
     const w = (world = await build({ poolCents: FUNDED }));
     await stampOrgComputeBillingEpoch(new Date('2026-01-01T00:00:00.000Z'));
     const appId = await seedStoppedApp(w, w.orgDriveId);
@@ -512,7 +512,7 @@ describe('published apps in an org drive', () => {
 
     const usage = (await ledgerOnWallet(w.poolId)).filter((r) => r.entryType === 'usage');
     expect(usage).toHaveLength(1);
-    expect(usage[0]).toMatchObject({ userId: w.leadId, spendKind: 'compute' });
+    expect(usage[0]).toMatchObject({ userId: w.leadId, spendKind: 'drive_compute' });
     expect(drawnMillicents(poolBefore, await walletRow(w.poolId))).toBe(usage[0].chargeMillicents);
     expect(await holdsOnWallet(w.poolId)).toEqual([]);
     expect(await personalSnapshot(w)).toEqual(people);
@@ -575,7 +575,7 @@ describe('a payer change while an app is awake', () => {
     expect(stopped).toMatchObject({ outcome: 'stopped', billedSeconds: 3600 });
     const usage = (await ledgerOnWallet(w.poolId)).filter((r) => r.entryType === 'usage');
     expect(usage).toHaveLength(1);
-    expect(usage[0]).toMatchObject({ spendKind: 'compute', consumeStatus: 'applied' });
+    expect(usage[0]).toMatchObject({ spendKind: 'drive_compute', consumeStatus: 'applied' });
     expect(drawnMillicents(poolBefore, await walletRow(w.poolId))).toBe(usage[0].chargeMillicents);
     expect(await ledgerOnWallet(w.soloWalletId)).toEqual([]);
     expect(await walletRow(w.soloWalletId)).toEqual(soloBefore);

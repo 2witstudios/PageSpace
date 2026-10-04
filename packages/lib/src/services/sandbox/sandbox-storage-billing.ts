@@ -61,6 +61,7 @@ import { lookupDriveBillingFacts } from '../../billing/sandbox-payer';
 import { MACHINE_MARKUP_BPS } from '../../billing/credit-pricing';
 import { AIMonitoring } from '../../monitoring/ai-monitoring';
 import { computeSettleWalletId, UNSETTLED_COMPUTE } from '../../billing/compute-gate';
+import { computeSpendKind } from '../../billing/compute-charge';
 import { stampOrgComputeBillingEpoch } from '../../billing/org-compute-epoch';
 import { SANDBOX_STORAGE_MODELS } from '../../monitoring/usage-source';
 import {
@@ -226,8 +227,9 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
       // One feature bucket for both: this is sandbox persistence either way, and
       // splitting the source would fragment the usage breakdown's totals.
       source: 'terminal',
-      // Compute, not an AI call: never a seat draw on an org pool (WAL-9).
-      spendKind: 'compute',
+      // A session's storage is its person's draw on an org pool; an env's or app's is a drive
+      // accrual (resolveEnvCharge) that never counts toward a seat — the charge says which.
+      spendKind: computeSpendKind(charge),
       // No pageId: a session is a drive-level workspace, not page-anchored, so
       // there is no page to group its storage under. `trackUsage` treats a
       // missing pageId as unattributed-to-a-page, not an error.

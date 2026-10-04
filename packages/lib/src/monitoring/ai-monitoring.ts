@@ -1567,7 +1567,7 @@ export async function trackAIUsage(data: AIUsageData): Promise<UsageTrackingOutc
           ...(generationIds.length > 0 ? { generationIds } : {}),
           // Explicit for the orphan recovery: a usage row whose settle never landed is
           // re-settled with this kind (credit-backfill), never guessed from its source.
-          ...(data.spendKind === 'compute' ? { spendKind: 'compute' } : {}),
+          ...(data.spendKind !== undefined && data.spendKind !== 'ai' ? { spendKind: data.spendKind } : {}),
         },
         // WAL-5: the wallet this call is charged to, recorded WITH the usage row so the
         // orphan recovery re-settles on it — never re-derived onto the person's own wallet.

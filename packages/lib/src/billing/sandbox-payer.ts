@@ -1,5 +1,5 @@
 import { PERSONAL_SPEND, automationSpend, type SpendTarget } from './spend-target';
-import { computeChargeFor, type ComputeCharge } from './compute-charge';
+import { driveAccrualChargeFor, type ComputeCharge } from './compute-charge';
 
 /**
  * Who a bill lands on (Spec WAL-9): a person, or an organization. An org drive's storage,
@@ -165,5 +165,5 @@ export async function resolveEnvPayer(input: ResolveEnvPayerInput): Promise<Bill
  */
 export async function resolveEnvCharge(input: ResolveEnvPayerInput): Promise<ComputeCharge | null> {
   const facts = await input.lookupDriveBillingFacts(input.driveId);
-  return facts ? computeChargeFor(payerForDrive(facts), facts.ownerId) : null;
+  return facts ? driveAccrualChargeFor(payerForDrive(facts), facts.ownerId) : null;
 }

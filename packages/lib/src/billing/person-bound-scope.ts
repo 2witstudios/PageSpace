@@ -7,7 +7,7 @@
  * the drive lead for an accrual nobody ran), so counting it in that person's bounds lets the
  * lead's unrelated AI spend refuse an org app's wake, and an org accrual eat the lead's own AI
  * headroom — the same "person named on a row the org paid" problem the seat reads fixed with
- * `spendKind` (seat-allowance's SEAT_COUNTED_SPEND_KIND).
+ * `spendKind` (seat-allowance's SEAT_COUNTED_SPEND_KINDS).
  *
  * Two scopes, never mixed, so nothing is uncapped and nothing is double-counted:
  *   - 'person'      every row EXCEPT org-paid compute. A person's AI, and their own personal-wallet
@@ -16,8 +16,9 @@
  *                   THEY ran on the pool, not by their AI, so the per-person bound on org
  *                   compute stays (this is not the per-member pool cap, which is a separate scope).
  *
- * Org-paid compute = a row of kind 'compute' on an org POOL wallet (the org-owned root: no
- * subject, no parent). A row with no wallet is never org-paid.
+ * Org-paid compute = a row of a compute kind ('compute' a person ran, or a 'drive_compute'
+ * accrual) on an org POOL wallet (the org-owned root: no subject, no parent). A row with no
+ * wallet is never org-paid.
  *
  * INVARIANT: zero I/O; these are SQL fragments the gate composes into its own queries.
  */
@@ -30,12 +31,17 @@ export type PersonBoundScope = 'person' | 'org_compute';
 
 const orgPoolWalletIds = sql`(SELECT ${wallets.id} FROM ${wallets} WHERE ${wallets.ownerType} = 'org' AND ${wallets.subjectType} IS NULL AND ${wallets.parentWalletId} IS NULL)`;
 
-const isOrgPaidComputeLedgerRow = sql`(${creditLedger.spendKind} = 'compute' AND coalesce(${creditLedger.walletId} IN ${orgPoolWalletIds}, false))`;
-const isOrgPaidComputeHold = sql`(${creditHolds.spendKind} = 'compute' AND coalesce(${creditHolds.walletId} IN ${orgPoolWalletIds}, false))`;
+const isOrgPaidComputeLedgerRow = sql`(${creditLedger.spendKind} IN ('compute', 'drive_compute') AND coalesce(${creditLedger.walletId} IN ${orgPoolWalletIds}, false))`;
+const isOrgPaidComputeHold = sql`(${creditHolds.spendKind} IN ('compute', 'drive_compute') AND coalesce(${creditHolds.walletId} IN ${orgPoolWalletIds}, false))`;
+
+/** The spend kinds that are compute, whoever ran it. */
+export function isComputeSpendKind(spendKind: SpendKind | undefined): boolean {
+  return spendKind === 'compute' || spendKind === 'drive_compute';
+}
 
 /** The scope the gate applies for a call of `spendKind` paid from `source` (null source = the org pool's own compute). */
 export function personBoundScopeFor(input: { spendKind?: SpendKind; source: string | null }): PersonBoundScope {
-  return input.spendKind === 'compute' && input.source === null ? 'org_compute' : 'person';
+  return isComputeSpendKind(input.spendKind) && input.source === null ? 'org_compute' : 'person';
 }
 
 /** The ledger rows one person's bounds count in `scope`. */

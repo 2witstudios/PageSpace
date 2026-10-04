@@ -319,8 +319,8 @@ describe('reconcileSandboxStorage', () => {
     expect(result).toMatchObject({ processed: 3, charged: 3, skipped: 0, orgBacklogForgiven: 0 });
     expect(chargeCalls.map((call) => [call.subjectKind, call.charge])).toEqual([
       ['session', { kind: 'org', orgId: 'org-northwind', userId: 'session-owner-1' }],
-      ['env', { kind: 'org', orgId: 'org-northwind', userId: 'lead-marcus' }],
-      ['hosting', { kind: 'org', orgId: 'org-northwind', userId: 'lead-marcus' }],
+      ['env', { kind: 'org', orgId: 'org-northwind', userId: 'lead-marcus', accrual: true }],
+      ['hosting', { kind: 'org', orgId: 'org-northwind', userId: 'lead-marcus', accrual: true }],
     ]);
   });
 

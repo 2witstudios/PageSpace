@@ -375,7 +375,7 @@ export function safeLogWarn(
 // error-level line for every free-tier user hitting their own plan ceiling is
 // noise that trains the on-call to ignore this logger.
 const AUTHZ_DENY_REASONS = new Set([
-  'no_drive_access', 'insufficient_role', 'no_agent_access', 'org_policy', 'tier_ineligible', 'org_wallet_unavailable', 'org_wallet_paused', 'org_wallet_empty', 'kill_switch_off', 'no_machine',
+  'no_drive_access', 'insufficient_role', 'no_agent_access', 'org_policy', 'tier_ineligible', 'org_wallet_unavailable', 'org_wallet_paused', 'org_wallet_empty', 'org_member_cap_reached', 'kill_switch_off', 'no_machine',
   'session_runtime_exceeded', 'session_limit_reached',
   // A legacy conversation that predates sessions has no working context to run
   // in — an expected refusal (not an infra fault), so it belongs here rather
@@ -402,6 +402,8 @@ export type SandboxToolDenialReason =
   | 'org_wallet_unavailable'
   | 'org_wallet_paused'
   | 'org_wallet_empty'
+  /** WAL-2: the member has used their allowance of the org pool (AI and compute share it). Nothing started. */
+  | 'org_member_cap_reached'
   | 'no_drive_access'
   | 'insufficient_role'
   | 'no_agent_access'
@@ -496,6 +498,7 @@ export const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
   org_wallet_unavailable: ORG_COMPUTE_REFUSAL_MESSAGES.org_wallet_unavailable,
   org_wallet_paused: ORG_COMPUTE_REFUSAL_MESSAGES.org_wallet_paused,
   org_wallet_empty: ORG_COMPUTE_REFUSAL_MESSAGES.org_wallet_empty,
+  org_member_cap_reached: ORG_COMPUTE_REFUSAL_MESSAGES.org_member_cap_reached,
   no_drive_access: 'You do not have access to run code in this drive.',
   insufficient_role: 'Running code requires edit access to this drive.',
   no_agent_access: 'This agent is not permitted to run code in this drive.',

@@ -5,18 +5,23 @@ import { users } from './auth';
 import { wallets } from './wallets';
 
 /**
- * What a hold or ledger row's money is FOR (point-guard ruling on ow-c7b): an AI call ('ai') or
- * compute ('compute': sandbox runtime, terminal, browsers, environments, published apps, machine
- * storage — WAL-9). Compute in an org drive is the ORG's spend on its pool, not a consumer's draw
- * on a seat, so the seat reads (seat-allowance `loadSeatCapFacts`, credit-consume
- * `recordSeatOvershoot`) test this column and count only 'ai'. Every row written before the
- * column existed was AI spend, hence the default.
+ * What a hold or ledger row's money is FOR (point-guard ruling on ow-c7b; fe9db1nm):
+ *   - 'ai'            an AI call.
+ *   - 'compute'       compute a PERSON ran (WAL-9): sandbox runtime, the terminal, browsers, their
+ *                     session's machine storage. On an org pool it is that member's draw on the
+ *                     pool, so it counts toward their per-consumer cap with their AI (WAL-2).
+ *   - 'drive_compute' compute NO person ran: a drive's environment/app storage, published-app wakes
+ *                     and awake time. On an org drive it is recorded under the drive LEAD only
+ *                     because a row must name a person, so it never counts toward anyone's seat.
+ * The seat reads (seat-allowance `loadSeatCapFacts`, credit-consume `recordSeatOvershoot`) test
+ * this column against SEAT_COUNTED_SPEND_KINDS. Every row written before the column existed was
+ * AI spend, hence the default; compute rows written before 'drive_compute' existed carry 'compute'.
  *
  * No CHECK constraint, deliberately: validating one scans the whole (hot, growing) ledger under
  * an ACCESS EXCLUSIVE lock at deploy, whereas a NOT NULL column with a constant default is a
  * metadata-only change on PostgreSQL 11+. The type is enforced by `SpendKind` at every writer.
  */
-export const SPEND_KINDS = ['ai', 'compute'] as const;
+export const SPEND_KINDS = ['ai', 'compute', 'drive_compute'] as const;
 export type SpendKind = (typeof SPEND_KINDS)[number];
 
 /**
@@ -52,7 +57,7 @@ export const creditLedger = pgTable('credit_ledger', {
   // 'adjustment' for the same aiUsageLogId; this key (the sorted-joined OpenRouter
   // generation ids) does. Set only on reconcile adjustment rows; NULL everywhere else.
   reconcileGenerationKey: text('reconcileGenerationKey'),
-  /** AI spend or compute spend — see {@link SPEND_KINDS}. Compute never counts toward a seat. */
+  /** AI spend, person-run compute or a drive accrual — see {@link SPEND_KINDS}. A drive accrual never counts toward a seat. */
   spendKind: text('spendKind').$type<SpendKind>().default('ai').notNull(),
   createdAt: timestamp('createdAt', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
@@ -91,7 +96,7 @@ export const creditHolds = pgTable('credit_holds', {
   walletId: text('walletId').notNull().references(() => wallets.id, { onDelete: 'cascade' }),
   estCents: integer('estCents').notNull(),
   aiUsageLogId: text('aiUsageLogId'),
-  /** AI spend or compute spend — see {@link SPEND_KINDS}. A compute hold never counts toward a seat. */
+  /** AI spend, person-run compute or a drive accrual — see {@link SPEND_KINDS}. A drive accrual hold never counts toward a seat. */
   spendKind: text('spendKind').$type<SpendKind>().default('ai').notNull(),
   createdAt: timestamp('createdAt', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
   expiresAt: timestamp('expiresAt', { mode: 'date', withTimezone: true }).notNull(),

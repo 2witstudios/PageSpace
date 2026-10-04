@@ -20,7 +20,7 @@ import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { calculateMachineCostDollars } from '@pagespace/lib/monitoring/machine-pricing';
 import { MACHINE_MARKUP_BPS } from '@pagespace/lib/billing/credit-pricing';
 import { defaultSandboxBillingDeps } from '@pagespace/lib/services/sandbox/sandbox-billing';
-import { ORG_COMPUTE_REFUSAL_MESSAGES, isOrgComputeRefusal } from '@pagespace/lib/billing/compute-charge';
+import { ORG_COMPUTE_REFUSAL_MESSAGES, computeSpendKind, isOrgComputeRefusal } from '@pagespace/lib/billing/compute-charge';
 import { computeSettleWalletId } from '@pagespace/lib/billing/compute-gate';
 import type { BrowserMeter } from '@pagespace/browser-worker/browser-session-client';
 
@@ -82,8 +82,8 @@ export function createBrowserMeter(primitives: BillingPrimitives = realPrimitive
         provider: substrate,
         model: 'browser-machine',
         source: 'terminal',
-        // Compute, not an AI call: never a seat draw on an org pool (WAL-9).
-        spendKind: 'compute',
+        // Compute the session's person ran: on an org pool it counts toward their seat (fe9db1nm).
+        spendKind: computeSpendKind(charge),
         pageId: billing.agentPageId ?? undefined,
         driveId: billing.driveId ?? undefined,
         providerCostDollars: calculateMachineCostDollars({ activeSeconds, shape }),

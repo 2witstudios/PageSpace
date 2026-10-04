@@ -28,7 +28,7 @@ import { chargeMillicents, accruePending, allocateSpend, applyPaymentToDebt } fr
 import { allocateWalletSpend, settleOvershoot, seatOvershootDeltaMillicents, DEFAULT_OVERSHOOT_CHOICE } from './wallet-core';
 import { childWalletFunds, type WalletBalanceFacts } from './spend-target';
 import { readOrgSpendPolicy } from '../organizations/policy-reader';
-import { loadSeatCapFacts, SEAT_COUNTED_SPEND_KIND, SEAT_OVERSHOOT_ENTRY } from './seat-allowance';
+import { isSeatCountedSpendKind, loadSeatCapFacts, SEAT_OVERSHOOT_ENTRY } from './seat-allowance';
 import { drawWalletFundingLegs, creditWalletFundingLegs } from './wallet-legs';
 import { parseWalletDraws, addWalletDraws, planWalletRefund, type WalletDraws } from './wallet-draws';
 import { MARKUP_BPS } from './credit-pricing';
@@ -205,14 +205,15 @@ export async function recordSeatOvershoot(
     userId: string;
     aiUsageLogId: string | null;
     claimLedgerId: string | null;
-    /** What the charge was for. COMPUTE is never a seat draw (SEAT_COUNTED_SPEND_KIND), so it records nothing. */
+    /** What the charge was for. A DRIVE accrual is never a seat draw (SEAT_COUNTED_SPEND_KINDS), so it records nothing. */
     spendKind: SpendKind;
   },
 ): Promise<{ monthMc: number; dayMc: number }> {
   const none = { monthMc: 0, dayMc: 0 };
-  // Compute on the pool is the org's spend, not a consumer's (see seat-allowance's
-  // SEAT_COUNTED_SPEND_KIND): its overshoot is nobody's seat attribution to record.
-  if (input.spendKind !== SEAT_COUNTED_SPEND_KIND) return none;
+  // A drive accrual on the pool is nobody's draw (see seat-allowance's SEAT_COUNTED_SPEND_KINDS):
+  // its overshoot is no consumer's seat attribution to record. AI and the compute a member ran are
+  // bound here at settlement exactly as the gate bound them at admission (fe9db1nm).
+  if (!isSeatCountedSpendKind(input.spendKind)) return none;
   const [pool] = await tx
     .select({ orgId: wallets.orgId, ownerType: wallets.ownerType, parentWalletId: wallets.parentWalletId, subjectType: wallets.subjectType, monthlyPeriodStart: wallets.monthlyPeriodStart })
     .from(wallets)

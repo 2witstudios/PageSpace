@@ -804,6 +804,15 @@ async function gatePersonalRoot(
   return result;
 }
 
+/**
+ * Whether a hold on the org pool is compute a member ran ('compute' with no spend source: the org
+ * pool's own compute, canConsumeOrgPool), which counts toward that member's seat allowance. A
+ * drive accrual ('drive_compute') and every AI call through a chosen source are decided elsewhere.
+ */
+function isMemberComputeOnPool(source: SpendSourceKind | null, spendKind: SpendKind | undefined): boolean {
+  return source === null && spendKind === 'compute';
+}
+
 const SHARED_WALLET_FACTS = {
   id: wallets.id,
   status: wallets.status,
@@ -860,9 +869,12 @@ async function gateSharedWallet(
     // WAL-2: a seat never takes more than this consumer's monthly allowance of the pool.
     // Read and decided HERE, inside the transaction that inserts the hold and under the
     // pool's row lock, so one consumer's simultaneous calls serialize: each sees the holds
-    // of the ones before it, and only as many as the allowance covers pass.
+    // of the ones before it, and only as many as the allowance covers pass. The same cap binds
+    // compute a member runs on the pool (fe9db1nm): it is their draw on the pool too, so a
+    // member past their allowance cannot keep draining the pool through a sandbox. A drive
+    // accrual ('drive_compute') names the lead only because a row must, and is never capped here.
     let seatRemainingCents: number | null = null;
-    if (chosen.source === 'seat_allowance') {
+    if (chosen.source === 'seat_allowance' || isMemberComputeOnPool(chosen.source, opts.spendKind)) {
       // POL-7: the allowance in force is the org's policy, read here in the same transaction as the
       // hold. A seat is always the org pool, so a pool with no org is not a seat.
       if (!wallet.orgId) return refused('source_unavailable');

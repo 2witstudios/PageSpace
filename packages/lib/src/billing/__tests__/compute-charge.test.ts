@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   computeChargeFor,
   computeChargeTier,
+  computeSpendKind,
+  driveAccrualChargeFor,
   orgComputeRefusalOf,
   isOrgComputeRefusal,
   ORG_COMPUTE_REFUSAL_MESSAGES,
@@ -18,6 +20,24 @@ describe('computeChargeFor', () => {
 
   it('WAL-9 (partial) a personal payer charges that person, whoever ran it', () => {
     expect(computeChargeFor({ kind: 'user', userId: 'owner-1' }, 'member-ana')).toEqual({ kind: 'user', userId: 'owner-1' });
+  });
+});
+
+describe('driveAccrualChargeFor and computeSpendKind', () => {
+  it('WAL-2 (partial) a drive accrual on an org drive is the org pool\'s, recorded under the lead, and marked so it never counts toward the lead\'s seat', () => {
+    const charge = driveAccrualChargeFor({ kind: 'org', orgId: 'org-northwind' }, 'lead-jono');
+    expect(charge).toEqual({ kind: 'org', orgId: 'org-northwind', userId: 'lead-jono', accrual: true });
+    expect(computeSpendKind(charge)).toBe('drive_compute');
+  });
+
+  it('WAL-2 (partial) compute a member ran on an org pool is kind compute: their seat draw', () => {
+    expect(computeSpendKind(computeChargeFor({ kind: 'org', orgId: 'org-northwind' }, 'member-ana'))).toBe('compute');
+  });
+
+  it('a personal payer\'s accrual is that person\'s own compute, exactly as before', () => {
+    const charge = driveAccrualChargeFor({ kind: 'user', userId: 'owner-1' }, 'owner-1');
+    expect(charge).toEqual({ kind: 'user', userId: 'owner-1' });
+    expect(computeSpendKind(charge)).toBe('compute');
   });
 });
 
@@ -41,6 +61,11 @@ describe('orgComputeRefusalOf', () => {
   it('names a paused org pool', () => {
     expect(orgComputeRefusalOf({ allowed: false, reason: 'source_refused', refusal: { source: null, reason: 'source_paused', options: [] } }))
       .toBe('org_wallet_paused');
+  });
+
+  it('WAL-2 (partial) names the member\'s used-up allowance of the pool, not an empty pool', () => {
+    expect(orgComputeRefusalOf({ allowed: false, reason: 'source_refused', refusal: { source: null, reason: 'source_cap_reached', options: [] } }))
+      .toBe('org_member_cap_reached');
   });
 
   it('names an org pool that cannot cover the reservation', () => {
@@ -68,7 +93,8 @@ describe('ORG_COMPUTE_REFUSAL_MESSAGES', () => {
     for (const message of Object.values(ORG_COMPUTE_REFUSAL_MESSAGES)) expect(message).toMatch(/Owner or Admin/);
   });
 
-  it('isOrgComputeRefusal recognizes exactly the three org wallet states', () => {
+  it('isOrgComputeRefusal recognizes exactly the org wallet states and the member cap', () => {
+    expect(isOrgComputeRefusal('org_member_cap_reached')).toBe(true);
     expect(isOrgComputeRefusal('org_wallet_empty')).toBe(true);
     expect(isOrgComputeRefusal('org_wallet_paused')).toBe(true);
     expect(isOrgComputeRefusal('org_wallet_unavailable')).toBe(true);

@@ -28,7 +28,7 @@ import { ensurePersonalRootWalletId } from './personal-wallet';
 import { isBillingEnabled } from '../deployment-mode';
 import { toSubscriptionTier, type SubscriptionTier } from './subscription-tiers';
 import type { UsageTrackingOutcome } from '../monitoring/ai-monitoring';
-import { computeChargeTier, orgComputeRefusalOf, type ComputeCharge, type OrgComputeGateRefusal } from './compute-charge';
+import { computeChargeTier, computeSpendKind, orgComputeRefusalOf, type ComputeCharge, type OrgComputeGateRefusal } from './compute-charge';
 
 /** A compute site's reservation bounds; `maxInFlight` may follow the charge's tier. */
 export interface ComputeGateOptions extends Omit<GateOptions, 'spend' | 'maxInFlight' | 'spendKind'> {
@@ -65,8 +65,9 @@ export async function resolveComputeChargeTier(charge: ComputeCharge): Promise<S
 export async function gateComputeCharge(charge: ComputeCharge, opts: ComputeGateOptions): Promise<ComputeGateResult> {
   const tier = await resolveComputeChargeTier(charge);
   const maxInFlight = typeof opts.maxInFlight === 'function' ? opts.maxInFlight(tier) : opts.maxInFlight;
-  // Every compute hold is marked compute, so an org pool's compute never counts toward a seat.
-  const bounds = { ...opts, maxInFlight, spendKind: 'compute' as const };
+  // Every compute hold is marked compute, and a drive accrual as one ('drive_compute'), so only
+  // the compute a member ran counts toward their seat on an org pool (seat-allowance).
+  const bounds = { ...opts, maxInFlight, spendKind: computeSpendKind(charge) };
   if (charge.kind === 'org') {
     const result = await canConsumeOrgPool(charge.userId, charge.orgId, bounds);
     const orgRefusal = orgComputeRefusalOf(result);

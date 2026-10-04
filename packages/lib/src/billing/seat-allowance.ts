@@ -6,7 +6,7 @@
  * already moves through, so there is no second counter to drift from it:
  *
  *   SUM over calls of max(0, SUM(credit_ledger.chargeMillicents))   -- gross, per window
- *     WHERE walletId = the pool AND userId = the consumer AND spendKind = 'ai'
+ *     WHERE walletId = the pool AND userId = the consumer AND spendKind IN ('ai', 'compute')
  *       AND entryType IN ('usage', 'adjustment')
  *     grouped by call (aiUsageLogId), each call dated by its usage row
  *   judged against the cap in force now
@@ -43,18 +43,24 @@ import { seatAllowanceCents, seatCountedMillicents, seatPeriodStartMs, userConsu
 type Reader = Pick<typeof db, 'select'>;
 
 /**
- * The ONLY spend a seat counts: AI calls (point-guard ruling on ow-c7b, #2741). COMPUTE on the
- * org pool — sandbox runtime, the terminal, browsers, environments, published apps, machine
- * storage — is DELIBERATELY EXCLUDED from every seat read: it is the ORG's spend (WAL-9:
- * wallets do not change compute billing), not a consumer's draw on the pool (WAL-2), and its
- * rows name a person only because credit rows must — a cron accrual (env/app storage, app
- * awake time) is recorded under the DRIVE LEAD, so counting compute would eat a person's AI
- * allowance for infrastructure they never ran, and write seat-overshoot rows against them.
- * Tested by an explicit predicate on the row (credit_ledger.spendKind, credit_holds.spendKind),
- * never by which code path wrote it. Known gap, filed: with compute excluded, a member's
- * compute on the pool has no per-consumer cap.
+ * The spend a seat counts: what a member draws on the pool (WAL-2) — their AI calls and the
+ * compute THEY ran ('compute': sandbox runtime, the terminal, browsers, their session's storage).
+ * One cap on everything one consumer takes from the pool, so compute cannot reopen the pool drain
+ * the seat cap closed for AI (fe9db1nm).
+ *
+ * A DRIVE accrual ('drive_compute': env/app storage, published-app wakes and awake time) is NOT a
+ * seat draw: no person ran it, and its rows name the drive LEAD only because credit rows must, so
+ * counting it would eat the lead's allowance for infrastructure they never ran (the reason compute
+ * was excluded outright by the 2026-09-28 ruling on ow-c7b, #2741). Tested by an explicit
+ * predicate on the row (credit_ledger.spendKind, credit_holds.spendKind), never by which code path
+ * wrote it.
  */
-export const SEAT_COUNTED_SPEND_KIND: SpendKind = 'ai';
+export const SEAT_COUNTED_SPEND_KINDS: readonly SpendKind[] = ['ai', 'compute'];
+
+/** Whether a charge of `spendKind` on an org pool is a member's seat draw. */
+export function isSeatCountedSpendKind(spendKind: SpendKind): boolean {
+  return SEAT_COUNTED_SPEND_KINDS.includes(spendKind);
+}
 
 /** The ledger entries for a seat's spend past one cap, absorbed by the pool: one per cap window. */
 export const SEAT_OVERSHOOT_ENTRY = { month: 'seat_overshoot_month', day: 'seat_overshoot_day' } as const;
@@ -115,8 +121,8 @@ export async function loadSeatCapFacts(
       eq(creditLedger.userId, input.userId),
       eq(creditLedger.walletId, input.poolId),
       inArray(creditLedger.entryType, ['usage', 'adjustment']),
-      // Compute is not a seat draw — see SEAT_COUNTED_SPEND_KIND.
-      eq(creditLedger.spendKind, SEAT_COUNTED_SPEND_KIND),
+      // A drive accrual is not a seat draw — see SEAT_COUNTED_SPEND_KINDS.
+      inArray(creditLedger.spendKind, [...SEAT_COUNTED_SPEND_KINDS]),
       gte(creditLedger.createdAt, rowsFrom),
     ))
     .groupBy(sql`coalesce(${creditLedger.aiUsageLogId}, ${creditLedger.id})`)
@@ -148,8 +154,8 @@ export async function loadSeatCapFacts(
     .where(and(
       eq(creditHolds.userId, input.userId),
       eq(creditHolds.walletId, input.poolId),
-      // A compute hold in flight is not a seat draw either — see SEAT_COUNTED_SPEND_KIND.
-      eq(creditHolds.spendKind, SEAT_COUNTED_SPEND_KIND),
+      // A drive accrual's hold in flight is not a seat draw either — see SEAT_COUNTED_SPEND_KINDS.
+      inArray(creditHolds.spendKind, [...SEAT_COUNTED_SPEND_KINDS]),
       gt(creditHolds.expiresAt, input.now),
     ));
   const period = { grossMillicents: Number(gross?.period ?? 0), absorbedMillicents: Number(absorbed?.period ?? 0) };

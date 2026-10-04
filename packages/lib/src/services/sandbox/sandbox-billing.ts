@@ -14,7 +14,7 @@ import {
   MACHINE_MARKUP_BPS,
 } from '../../billing/credit-pricing';
 import { resolveSessionPayer, lookupDriveBillingFacts } from '../../billing/sandbox-payer';
-import { computeChargeFor } from '../../billing/compute-charge';
+import { computeChargeFor, computeSpendKind } from '../../billing/compute-charge';
 import { computeSettleWalletId, gateComputeCharge, UNSETTLED_COMPUTE } from '../../billing/compute-gate';
 import { AIMonitoring } from '../../monitoring/ai-monitoring';
 import { calculateMachineCostDollars } from '../../monitoring/machine-pricing';
@@ -65,8 +65,8 @@ export const defaultSandboxBillingDeps: SandboxBillingDeps = {
       provider: 'sprites',
       model: 'terminal-machine',
       source: 'terminal',
-      // Compute, not an AI call: never a seat draw on an org pool (WAL-9).
-      spendKind: 'compute',
+      // Compute the session's person ran: on an org pool it counts toward their seat (fe9db1nm).
+      spendKind: computeSpendKind(charge),
       // The referenced agent page — purely descriptive per-agent grouping,
       // never the payer source (resolved from the session by `resolveCharge`
       // above).

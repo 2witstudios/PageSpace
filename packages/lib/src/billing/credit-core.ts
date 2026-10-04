@@ -17,6 +17,7 @@
 // Type-only import (erased at compile time, zero runtime cost) — usage-source.ts
 // is itself a pure, zero-I/O module, so this doesn't break the invariant above.
 import type { AIUsageSource } from '../monitoring/usage-source';
+import type { SpendKind } from '@pagespace/db/schema/credits';
 // The ONE definition of a credit (MON-5): the conversions below are pure functions of
 // their arguments. money-model's own env knobs (MARKUP_BPS, top-up bounds) are never read
 // here — markupBps is always passed in.
@@ -430,7 +431,7 @@ export interface OrphanUsageRow {
    * rows that named none (they charge the personal root, as before wallets).
    */
   walletId?: string | null;
-  /** The usage row's metadata, whose explicit `spendKind: 'compute'` is carried to the re-settle. */
+  /** The usage row's metadata, whose explicit compute `spendKind` is carried to the re-settle. */
   metadata?: unknown;
 }
 
@@ -443,7 +444,7 @@ export type BackfillAction =
       costDollars: number;
       markupBpsOverride?: number;
       walletId?: string;
-      spendKind: 'ai' | 'compute';
+      spendKind: SpendKind;
     };
 
 /**
@@ -451,10 +452,9 @@ export type BackfillAction =
  * (`metadata.spendKind`, AIMonitoring.trackUsage) — never inferred from its source. Anything
  * else is 'ai', which every row written before compute was marked was.
  */
-export function orphanSpendKind(metadata: unknown): 'ai' | 'compute' {
-  return typeof metadata === 'object' && metadata !== null && (metadata as { spendKind?: unknown }).spendKind === 'compute'
-    ? 'compute'
-    : 'ai';
+export function orphanSpendKind(metadata: unknown): SpendKind {
+  const marked = typeof metadata === 'object' && metadata !== null ? (metadata as { spendKind?: unknown }).spendKind : undefined;
+  return marked === 'compute' || marked === 'drive_compute' ? marked : 'ai';
 }
 
 /**
