@@ -115,9 +115,10 @@ function copyFor(decision: AppRouteDecision): PageCopy {
       // buy something that changes nothing.
       // [D-OW-28] A funded organization whose app's PUBLISHER has used their allowance of its
       // credits: nobody needs to top the organization up. It DOES return on its own: the hourly
-      // period sweep un-parks it once the allowance renews (app-unpark), at the latest at the pool's
-      // next refill — the date shown — and the creator, the drive lead or an org admin can un-park
-      // it sooner once there is room (review 5407898542 P1c).
+      // period sweep un-parks it once the allowance renews (app-unpark). The date shown is when the
+      // pool's refill is next DUE — not a deadline, since a late or failed org invoice delays it
+      // (re-review P3-2) — and the creator, the drive lead or an org admin can un-park it sooner
+      // once there is room (review 5407898542 P1c).
       if (decision.reason === 'member_cap') {
         const by = refillDateText(decision.returnsBy);
         return {
@@ -125,7 +126,7 @@ function copyFor(decision: AppRouteDecision): PageCopy {
           heading: 'This app is paused',
           body:
             'The person who published it has used their allowance of their organization\'s credits, so it has been paused rather than left running. ' +
-            `It returns automatically when that allowance renews — ${by ? `by ${by} at the latest, when the organization's credits refill` : "at the latest when the organization's credits next refill"} — ` +
+            `It returns automatically when that allowance renews, after the organization's credits refill${by ? ` (next due ${by})` : ''}, ` +
             'or sooner if an organization admin un-parks it. Nothing has been lost.',
           manageHref,
         };

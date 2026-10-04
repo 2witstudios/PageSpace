@@ -4,6 +4,9 @@ import type { OpenPtyShellArgs, PtyShell } from './sprites-shell';
 import type { SpriteInstanceLike } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import type { TaskHoldController } from '@pagespace/lib/services/sandbox/sandbox-client/sprite-tasks';
 import type { SandboxBillingDeps } from '@pagespace/lib/services/sandbox/tool-runners';
+import { inProcessWindowClaimLock, type WindowClaimLock, type WindowClaimLockResult } from './window-claim-lock';
+
+type ClaimResult = { ok: true } | { ok: false; message?: string };
 import { ORG_COMPUTE_REFUSAL_MESSAGES, isOrgComputeRefusal, sameCharge, type ComputeCharge } from '@pagespace/lib/billing/compute-charge';
 import { parseShellConnectPayload } from './validation';
 import { clampShellDimensions, type ShellConnectPayload } from '@pagespace/lib/agent-workspaces/shells-contract';
@@ -234,6 +237,11 @@ export type ShellSessionDeps = {
   persistSpriteExecId: (args: { shellId: string; spriteExecId: string }) => Promise<void>;
   /** Metering seam — see module doc. Omitted -> unmetered. */
   billing?: SandboxBillingDeps;
+  /**
+   * The lock billing-window claims run under (re-review P2-1). Production passes the cross-process
+   * Postgres advisory lock (`pgWindowClaimLock`); omitted -> the in-process per-session chain.
+   */
+  windowClaimLock?: WindowClaimLock;
   /**
    * Best-effort: persists a bounded tail of this session's scrollback on
    * teardown (issue #2205), so a `read_shell` after the PTY has died can still
@@ -759,9 +767,12 @@ export const TYPIST_REFUSAL_MEMO_MS = 10_000;
  * So a window is CUT at every change of typist and each segment is charged wholly to the one
  * person typing in it — never split, never estimated by keystroke counts. Time between keystrokes
  * (a command running) belongs to whoever typed last: the command's author.
- * If the settle in (2) fails, the window stays with its actor (rolled back for the next heartbeat)
- * and the typist's hold is released: a transient billing outage never ends a live PTY, and the
- * typist was still gated against their own cap. A billing READ failure refuses the input: an
+ * If the settle in (2) fails, the window stays with its actor (rolled back for the next heartbeat),
+ * the typist's hold is released and their input is refused (recoverable): a transient billing
+ * outage never ends a live PTY, and never runs one person's input on another's window.
+ * Claims on one session are SERIALIZED (`lock`; production passes the cross-process Postgres
+ * advisory lock, `pgWindowClaimLock`), so two typists racing each other become two segments in
+ * turn — never two holds on one window (re-review P2-1). A billing READ failure refuses the input: an
  * unanswerable cap is not a pass. Inert for an unmetered session or the window's own actor.
  */
 export async function claimBillingWindow(
@@ -769,9 +780,37 @@ export async function claimBillingWindow(
   sessionMap: TerminalSessionMap,
   session: TerminalSession,
   actorId: string,
+  lock: WindowClaimLock = inProcessWindowClaimLock,
 ): Promise<{ ok: true } | { ok: false; message?: string }> {
   if (!session.charge || !session.ownerId || session.actorId === actorId) return { ok: true };
+  // Re-entrant claims on ONE session run one at a time (re-review P2-1): read-window → settle →
+  // hold → write-window under the session's lock, so a second typist sees the first's window.
+  let locked: WindowClaimLockResult<ClaimResult>;
+  try {
+    locked = await lock(session.sessionKey, () => claimBillingWindowLocked(billing, sessionMap, session, actorId));
+  } catch (error) {
+    loggers.realtime.error('Shell billing window claim failed', error instanceof Error ? error : new Error(String(error)), {
+      sessionKey: session.sessionKey,
+    });
+    return { ok: false, message: CLAIM_RETRY_MESSAGE };
+  }
+  return locked.acquired ? locked.result : { ok: false, message: CLAIM_RETRY_MESSAGE };
+}
+
+/** Said when a claim could not run (lock not taken, settle failed): the input was NOT sent. */
+const CLAIM_RETRY_MESSAGE = 'Billing for this terminal is briefly busy, so your input was not sent. Try again.';
+
+async function claimBillingWindowLocked(
+  billing: SandboxBillingDeps,
+  sessionMap: TerminalSessionMap,
+  session: TerminalSession,
+  actorId: string,
+): Promise<{ ok: true } | { ok: false; message?: string }> {
   const sessionKey = session.sessionKey;
+  // Asked again under the lock: a claim that ran while this one waited may have ended the
+  // session, or already moved the window to this very actor (their other connection).
+  if (sessionMap.getByKey(sessionKey) !== session) return { ok: false };
+  if (!session.charge || !session.ownerId || session.actorId === actorId) return { ok: true };
   let next: ComputeCharge;
   let held: Awaited<ReturnType<SandboxBillingDeps['gate']>>;
   try {
@@ -792,15 +831,16 @@ export async function claimBillingWindow(
   };
   if (session.connectedAt !== undefined) {
     await settleAccruedWindow(billing, sessionMap, session, sessionKey, { stopClock: true });
-    // A failed settle rolled the window back onto its opener; keep it there.
+    // A failed settle rolled the window back onto its actor; keep it there, and do NOT pass
+    // this typist's input — it would run on someone else's window (re-review P2-1).
     if (session.connectedAt !== undefined) {
       release();
-      return { ok: true };
+      return { ok: false, message: CLAIM_RETRY_MESSAGE };
     }
   }
   if (sessionMap.getByKey(sessionKey) !== session) {
     release();
-    return { ok: true };
+    return { ok: false };
   }
   session.charge = next;
   session.actorId = actorId;
@@ -1614,6 +1654,7 @@ export function buildShellHandlers({
   billing,
   createTaskHold,
   persistColdTail,
+  windowClaimLock,
 }: ShellHandlerDeps): ShellHandlers {
   /** Bundled once per handler build — see `SessionEndDeps`. Every teardown-path call threads this through instead of `billing` alone. */
   const sessionEndDeps: SessionEndDeps = { billing, persistColdTail };
@@ -1840,7 +1881,7 @@ export function buildShellHandlers({
       refuseInput(connectionId, memo.message);
       return false;
     }
-    const claim = await claimBillingWindow(billing, sessionMap, session, typist);
+    const claim = await claimBillingWindow(billing, sessionMap, session, typist, windowClaimLock);
     if (claim.ok) {
       typingRefusedUntil.delete(connectionId);
       return true;

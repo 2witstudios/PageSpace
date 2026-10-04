@@ -154,3 +154,49 @@ export async function withAdvisoryLock<T>(
     await unlockAndRelease(client, lockKey);
   }
 }
+
+/** Postgres SQLSTATE for a lock wait cut short by `lock_timeout`. */
+const LOCK_NOT_AVAILABLE = '55P03';
+
+/**
+ * `withAdvisoryLock`, but WAITING for the lock (up to `timeoutMs`) instead of giving up at once —
+ * for work that must happen in turn rather than be skipped when someone else holds the key (a
+ * terminal's billing-window claims, review #2760 re-review P2-1). Cross-process: the lock is a
+ * Postgres session lock on its own pooled connection, so two realtime instances serialize too.
+ *
+ * `lock_busy` means the wait timed out; `fn` never ran. The connection's `lock_timeout` is reset
+ * before `fn` runs, and a connection whose lock query failed is destroyed rather than pooled.
+ * Never rejects for lock machinery; `fn`'s own rejection propagates after the lock is released.
+ */
+export async function withBlockingAdvisoryLock<T>(
+  pool: AdvisoryLockPool,
+  lockKey: string,
+  fn: () => Promise<T>,
+  { timeoutMs }: { timeoutMs: number },
+): Promise<WithAdvisoryLockResult<T>> {
+  let client: AdvisoryLockClient;
+  try {
+    client = await pool.connect();
+  } catch (error) {
+    return { outcome: 'connection_error', error };
+  }
+
+  try {
+    await client.query(`SET lock_timeout = ${Math.max(1, Math.floor(timeoutMs))}`);
+    await client.query('SELECT pg_advisory_lock(hashtext($1))', [lockKey]);
+    await client.query('RESET lock_timeout');
+  } catch (error) {
+    // Either way the connection carries a session setting (and possibly a half-finished lock
+    // wait), so it is destroyed, never pooled.
+    releaseQuietly(client, lockKey, new Error(`withBlockingAdvisoryLock(${JSON.stringify(lockKey)}): lock wait ended without the lock`));
+    const code = (error as { code?: unknown }).code;
+    return code === LOCK_NOT_AVAILABLE ? { outcome: 'lock_busy' } : { outcome: 'connection_error', error };
+  }
+
+  try {
+    const result = await fn();
+    return { outcome: 'acquired', result };
+  } finally {
+    await unlockAndRelease(client, lockKey);
+  }
+}

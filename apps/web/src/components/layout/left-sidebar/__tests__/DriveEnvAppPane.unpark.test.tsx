@@ -60,6 +60,18 @@ describe('DriveEnvAppPane — the creator can resume (un-park) their parked app'
     expect(screen.queryByRole('button', { name: /Resume/ })).toBeNull();
   });
 
+  it('WAL-2 (partial) re-review P3-1: a drive Admin the server would refuse is NOT offered Resume on a parked app', () => {
+    appState.app = { ...parkedOnCap, viewerCanUnpark: false };
+    renderPane(true);
+    expect(screen.queryByRole('button', { name: /Resume/ })).toBeNull();
+  });
+
+  it('a drive owner/admin still resumes a STOPPED app without asking the un-park authority', () => {
+    appState.app = { ...parkedOnCap, status: 'stopped', lastError: null, viewerCanUnpark: false };
+    renderPane(true);
+    expect(screen.getByRole('button', { name: /Resume/ })).toBeTruthy();
+  });
+
   it('the creator is offered no Stop or Resume on an app that is not parked', () => {
     appState.app = { ...parkedOnCap, status: 'stopped', lastError: null, viewerCanUnpark: false };
     renderPane(false);

@@ -743,6 +743,45 @@ describe('buildShellHandlers', () => {
       expect(shell.write).not.toHaveBeenCalledWith('ls\n');
     });
 
+    it('WAL-2 (partial) re-review P2-1: if settling the window so far FAILS, the typist\'s input is refused (retry message), their hold released, and the window stays put — never their input on someone else\'s window', async () => {
+      const gate = vi.fn()
+        .mockResolvedValueOnce({ allowed: true, holdId: 'hold-owner' })
+        .mockResolvedValueOnce({ allowed: true, holdId: 'hold-mate' });
+      const { billing, ben, benSocket, live } = await priyaOpensBenAttaches(gate);
+      billing.trackUsage.mockRejectedValueOnce(new Error('ledger down'));
+
+      ben.onInput({ data: 'make\n' });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(shell.write).not.toHaveBeenCalledWith('make\n');
+      expect(benSocket.emit).toHaveBeenCalledWith('shell:error', expect.objectContaining({ message: expect.stringMatching(/briefly busy/), recoverable: true }));
+      expect(billing.releaseHold).toHaveBeenCalledWith('hold-mate');
+      expect([live?.actorId, live?.holdId]).toEqual(['user1', 'hold-owner']);
+    });
+
+    it('WAL-2 (partial) re-review P2-1: two typists on DIFFERENT connections typing at once take the window in turn — one live hold, every earlier hold settled', async () => {
+      const gate = vi.fn()
+        .mockResolvedValueOnce({ allowed: true, holdId: 'hold-owner' })
+        .mockResolvedValueOnce({ allowed: true, holdId: 'hold-ben' })
+        .mockResolvedValueOnce({ allowed: true, holdId: 'hold-chloe' });
+      const { billing, ben, live } = await priyaOpensBenAttaches(gate);
+      checkAuth.mockResolvedValueOnce({ ...makeAuthSuccess(), ownerId: 'user1', actorId: 'user3' });
+      const chloe = buildShellHandlers({ sessionMap, openShell, checkAuth, socket: makeSocket('chloe-sock', 'user3'), persistSpriteExecId, billing });
+      await chloe.onConnect(validPayload);
+
+      ben.onInput({ data: 'b' });
+      chloe.onInput({ data: 'c' });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(live?.actorId).toBe('user3');
+      expect(live?.holdId).toBe('hold-chloe');
+      // Each superseded hold was consumed by its own window's settle — none left dangling.
+      const settledHolds = billing.trackUsage.mock.calls.map((c) => (c[0] as { holdId?: string }).holdId);
+      expect(settledHolds).toEqual(['hold-owner', 'hold-ben']);
+      expect(billing.releaseHold).not.toHaveBeenCalled();
+      expect(shell.write.mock.calls.map((c) => c[0])).toEqual(['b', 'c']);
+    });
+
     it('WAL-2 (partial) review #2760 P2-3: THE TYPIST PAYS — a drive-mate\'s first keystroke takes the window (the opener\'s settles to the opener), keystrokes land in order, and the window moves back when the opener types again', async () => {
       const gate = vi.fn()
         .mockResolvedValueOnce({ allowed: true, holdId: 'hold-owner' })

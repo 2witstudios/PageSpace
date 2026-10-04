@@ -30,6 +30,7 @@ import {
 import { getSandboxSessionSecret } from '@pagespace/lib/services/sandbox/machine-session-manager';
 import { defaultSandboxBillingDeps } from '@pagespace/lib/services/sandbox/sandbox-billing';
 import { makeResolveShellPayer } from './terminal/shell-payer';
+import { pgWindowClaimLock } from './terminal/window-claim-lock';
 import { computeTierForDrive } from '@pagespace/lib/billing/sandbox-eligibility';
 import { acquireCodeExecutionSlot, releaseCodeExecutionSlot } from '@pagespace/lib/services/sandbox/quota';
 import { createSpritesSandboxClient, createSpriteHandleCache, type SpritesSdk } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
@@ -492,6 +493,8 @@ const shellSessionDeps: ShellSessionDeps = {
     await store.recordColdTail({ id: shellId, tail, hasOutput, endedAt });
   },
   billing: defaultSandboxBillingDeps,
+  // re-review P2-1: billing-window claims serialize per session ACROSS realtime instances.
+  windowClaimLock: pgWindowClaimLock,
   // Sprites Tasks API hold (leaf 5-1): while an agent is running or a
   // viewer attached, a short-expiry platform task (refreshed on a
   // heartbeat, deleted on exit) keeps the sprite from cold-pausing mid-run;
@@ -593,7 +596,7 @@ const shellIoDeps = {
   claimBillingWindow: async (session: TerminalSession, userId: string) => {
     const billing = shellSessionDeps.billing;
     if (!billing) return true;
-    return (await claimBillingWindow(billing, agentTerminalSessionMap, session, userId)).ok;
+    return (await claimBillingWindow(billing, agentTerminalSessionMap, session, userId, pgWindowClaimLock)).ok;
   },
 };
 

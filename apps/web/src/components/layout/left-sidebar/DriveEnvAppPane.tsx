@@ -112,8 +112,10 @@ export function DriveEnvAppPane({
   });
 
   const path = appPath(driveId, envId);
-  // The server decides who may un-park (permissions/app-unpark-authority) and says so on the row.
-  const canUnpark = canManage || app?.viewerCanUnpark === true;
+  // The server decides who may un-park (permissions/app-unpark-authority) and says so on the row —
+  // for owners and admins too: a drive Admin who is not the lead, an org Owner/Admin or the creator
+  // is refused, so they are not offered the button (re-review P3-1).
+  const canUnpark = app?.viewerCanUnpark === true;
 
   const publish = useCallback(async () => {
     setPublishing(true);
@@ -261,7 +263,7 @@ function AppPaneBody({
 }: {
   app: DriveEnvAppDTO;
   canManage: boolean;
-  /** May resume a PARKED app (un-park): `canManage`, or the app's creator. */
+  /** May resume a PARKED app (un-park): the server's `viewerCanUnpark`, never inferred from `canManage`. */
   canUnpark: boolean;
   isOwner: boolean;
   actioning: boolean;
@@ -315,7 +317,7 @@ function AppPaneBody({
 
       {canManage && (
         <div className="flex flex-wrap gap-1.5">
-          {(app.status === 'stopped' || app.status === 'parked') && (
+          {(app.status === 'stopped' || (app.status === 'parked' && canUnpark)) && (
             <Button size="sm" variant="outline" disabled={actioning} onClick={onResume}>
               <Play className="mr-1 size-3" /> Resume
             </Button>

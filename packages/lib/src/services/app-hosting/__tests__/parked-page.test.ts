@@ -92,10 +92,12 @@ describe('[D-OW-28] an app paused on its publisher\'s allowance', () => {
     expect(statusCodeFor({ kind: 'parked', reason: 'member_cap' })).toBe(402);
   });
 
-  it('WAL-2 (partial) says the truth: it returns automatically by the next refill date, or sooner if an admin un-parks it', () => {
+  it('WAL-2 (partial) says the truth: it returns automatically after the refill, names when that is next DUE (not a deadline), or sooner if an admin un-parks it', () => {
     const html = renderAppRouterPage({ kind: 'parked', reason: 'member_cap', driveId: 'd1', envId: 'e1', returnsBy: '2026-11-04T00:00:00.000Z' }, 'acme.pagespace.io');
     expect(html).toContain('It returns automatically when that allowance renews');
-    expect(html).toContain('by November 4, 2026 at the latest');
+    expect(html).toMatch(/after the organization(&#39;|')s credits refill \(next due November 4, 2026\)/);
+    // A late or failed org invoice delays the refill: the page promises no deadline (re-review P3-2).
+    expect(html).not.toContain('at the latest');
     expect(html).toContain('or sooner if an organization admin un-parks it');
     // The old, false promise is gone.
     expect(html).not.toMatch(/open it in PageSpace to bring it back/);
@@ -103,7 +105,7 @@ describe('[D-OW-28] an app paused on its publisher\'s allowance', () => {
 
   it('WAL-2 (partial) with no readable refill date it still promises the automatic return, without inventing a date', () => {
     const html = renderAppRouterPage({ kind: 'parked', reason: 'member_cap', driveId: 'd1', envId: 'e1' }, 'acme.pagespace.io');
-    expect(html).toMatch(/at the latest when the organization(&#39;|')s credits next refill/);
+    expect(html).toMatch(/after the organization(&#39;|')s credits refill, or sooner/);
     expect(html).not.toMatch(/by \w+ \d+, \d{4}/);
   });
 });

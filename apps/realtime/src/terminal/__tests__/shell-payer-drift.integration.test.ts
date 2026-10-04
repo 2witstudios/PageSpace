@@ -15,9 +15,9 @@
  *
  * Requires DATABASE_URL → a migrated Postgres. Every row it creates is deleted.
  */
-import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
-import { db } from '@pagespace/db/db';
+import { db, getAdvisoryLockPool, pool as dbPool } from '@pagespace/db/db';
 import { eq, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
@@ -33,6 +33,8 @@ import { chargeMillicents } from '@pagespace/lib/billing/credit-core';
 import { MACHINE_MARKUP_BPS } from '@pagespace/lib/billing/credit-pricing';
 import { calculateMachineCostDollars } from '@pagespace/lib/monitoring/machine-pricing';
 import { claimBillingWindow, settleAccruedWindow } from '../shell-handler';
+import { pgWindowClaimLock, windowClaimLockKey } from '../window-claim-lock';
+import { withBlockingAdvisoryLock } from '@pagespace/db/advisory-lock';
 import { DEFAULT_SEAT_ALLOWANCE_CENTS } from '@pagespace/lib/billing/wallet-core';
 import type { TerminalSession, TerminalSessionMap } from '../terminal-session-map';
 
@@ -152,6 +154,11 @@ beforeEach(() => {
   process.env.DEPLOYMENT_MODE = 'cloud';
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(T0);
+});
+
+afterAll(async () => {
+  await getAdvisoryLockPool().end();
+  await dbPool.end();
 });
 
 afterEach(async () => {
@@ -294,3 +301,65 @@ describe('a member joining a live terminal window', () => {
     expect(await ledgerOf(w.ownerId)).toHaveLength(1);
   });
 });
+
+describe('two typists claiming one live PTY at the same instant (re-review P2-1)', () => {
+  async function addMember(w: World, name: string): Promise<string> {
+    const user = await factories.createUser({ name, subscriptionTier: 'free' });
+    w.userIds.push(user.id);
+    await db.insert(orgMembers).values({ orgId: w.orgId, userId: user.id, role: 'MEMBER' });
+    return user.id;
+  }
+  const usageOf = async (userId: string) =>
+    (await db.select().from(creditLedger).where(eq(creditLedger.userId, userId))).filter((r) => r.entryType === 'usage' && r.spendKind === 'compute');
+  const holdsOf = async (userIds: string[]) => db.select().from(creditHolds).where(inArray(creditHolds.userId, userIds));
+
+  it('WAL-2 (partial) B and C claim A\'s window together, each on its own connection: they take it IN TURN — no leaked hold, each window settled once, each segment charged to its typist', async () => {
+    const w = (world = await build('org'));
+    const [benId, chloeId] = [await addMember(w, 'Ben'), await addMember(w, 'Chloe')];
+    const { session, map } = await openSession(w, computeChargeFor({ kind: 'org', orgId: w.orgId }, w.ownerId));
+
+    vi.setSystemTime(T0 + 3 * MIN);
+    const [rb, rc] = await Promise.all([
+      claimBillingWindow(defaultSandboxBillingDeps, map, session, benId, pgWindowClaimLock),
+      claimBillingWindow(defaultSandboxBillingDeps, map, session, chloeId, pgWindowClaimLock),
+    ]);
+
+    // Both claims ran, one after the other: neither reports success for a window it does not hold.
+    expect([rb, rc]).toEqual([{ ok: true }, { ok: true }]);
+    const last = session.actorId;
+    const first = last === benId ? chloeId : benId;
+    expect([benId, chloeId]).toContain(last);
+
+    // Exactly ONE live hold — the window's own, under its actor. Nothing orphaned.
+    const holds = await holdsOf([w.ownerId, benId, chloeId]);
+    expect(holds.map((h) => [h.id, h.userId])).toEqual([[session.holdId, last]]);
+
+    // A's window settled exactly once, to A; the first claimant's (instant) window exactly once, to
+    // them; the last claimant's is still open and has settled nothing.
+    expect((await usageOf(w.ownerId)).map((r) => r.chargeMillicents)).toEqual([windowMc(180)]);
+    expect(await usageOf(first)).toHaveLength(1);
+    expect(await usageOf(last)).toEqual([]);
+
+    // The next heartbeat settles the open window to the person typing in it.
+    expect(await heartbeat(T0 + 8 * MIN, map, session)).toBe(true);
+    expect((await usageOf(last)).map((r) => r.chargeMillicents)).toEqual([windowMc(300)]);
+    expect(await usageOf(w.ownerId)).toHaveLength(1);
+  });
+
+  it('the lock is real Postgres and BOUNDED: a claim waiting on another connection\'s lock gives up at the timeout without running', async () => {
+    vi.useRealTimers();
+    const holder = await getAdvisoryLockPool().connect();
+    try {
+      await holder.query('SELECT pg_advisory_lock(hashtext($1))', [windowClaimLockKey('k-held')]);
+      const fn = vi.fn(async () => 'ran');
+      const started = Date.now();
+      expect(await withBlockingAdvisoryLock(getAdvisoryLockPool(), windowClaimLockKey('k-held'), fn, { timeoutMs: 200 })).toEqual({ outcome: 'lock_busy' });
+      expect(fn).not.toHaveBeenCalled();
+      expect(Date.now() - started).toBeLessThan(5_000);
+    } finally {
+      await holder.query('SELECT pg_advisory_unlock(hashtext($1))', [windowClaimLockKey('k-held')]);
+      holder.release();
+    }
+  });
+});
+

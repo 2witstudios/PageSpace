@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { withAdvisoryLock, type AdvisoryLockPool } from './advisory-lock';
+import { withAdvisoryLock, withBlockingAdvisoryLock, type AdvisoryLockPool } from './advisory-lock';
 
 function makeClient(overrides: Partial<{ query: ReturnType<typeof vi.fn>; release: ReturnType<typeof vi.fn> }> = {}) {
   return {
@@ -258,5 +258,43 @@ describe('withAdvisoryLock', () => {
     expect(client.query).toHaveBeenCalledTimes(2);
     expect(client.release).toHaveBeenCalledTimes(1);
     expect(client.release.mock.calls[0][0]).toBeUndefined();
+  });
+});
+
+describe('withBlockingAdvisoryLock', () => {
+  it('WAITS for the lock (pg_advisory_lock under a lock_timeout), resets the timeout, runs fn, then unlocks', async () => {
+    const client = makeClient({ query: vi.fn().mockResolvedValue({ rows: [] }) });
+    const pool: AdvisoryLockPool = { connect: vi.fn(async () => client) };
+
+    const result = await withBlockingAdvisoryLock(pool, 'k', async () => 'done', { timeoutMs: 2500 });
+
+    expect(result).toEqual({ outcome: 'acquired', result: 'done' });
+    expect(client.query.mock.calls.map((c) => c[0])).toEqual([
+      'SET lock_timeout = 2500',
+      'SELECT pg_advisory_lock(hashtext($1))',
+      'RESET lock_timeout',
+      'SELECT pg_advisory_unlock(hashtext($1))',
+    ]);
+    expect(client.release).toHaveBeenCalledWith();
+  });
+
+  it('a wait cut short by lock_timeout (55P03) is lock_busy: fn never runs and the connection is destroyed', async () => {
+    const timedOut = Object.assign(new Error('canceling statement due to lock timeout'), { code: '55P03' });
+    const client = makeClient({ query: vi.fn().mockResolvedValueOnce({ rows: [] }).mockRejectedValueOnce(timedOut) });
+    const pool: AdvisoryLockPool = { connect: vi.fn(async () => client) };
+    const fn = vi.fn(async () => 'unreachable');
+
+    expect(await withBlockingAdvisoryLock(pool, 'k', fn, { timeoutMs: 10 })).toEqual({ outcome: 'lock_busy' });
+    expect(fn).not.toHaveBeenCalled();
+    expect(client.release.mock.calls[0][0]).toBeInstanceOf(Error);
+  });
+
+  it('any other lock-query failure is a connection_error, also destroyed; a failed connect never runs fn', async () => {
+    const client = makeClient({ query: vi.fn().mockRejectedValueOnce(new Error('reset')) });
+    const fn = vi.fn(async () => 'unreachable');
+    expect(await withBlockingAdvisoryLock({ connect: vi.fn(async () => client) }, 'k', fn, { timeoutMs: 10 })).toMatchObject({ outcome: 'connection_error' });
+    expect(client.release.mock.calls[0][0]).toBeInstanceOf(Error);
+    expect(await withBlockingAdvisoryLock({ connect: vi.fn(async () => { throw new Error('exhausted'); }) }, 'k', fn, { timeoutMs: 10 })).toMatchObject({ outcome: 'connection_error' });
+    expect(fn).not.toHaveBeenCalled();
   });
 });

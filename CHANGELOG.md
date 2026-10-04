@@ -14,12 +14,12 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   credits, together with your AI use, whoever's session you are working in: compute is charged to the
   person who runs it. In a shared terminal that is whoever is typing: joining a teammate's terminal to
   watch costs you nothing, and once your allowance is used up your keystrokes there are refused with a
-  message saying so. Environments and published apps you create there count toward your allowance too
+  message saying so. When two people type at the same moment, each is charged for their own turn. Environments and published apps you create there count toward your allowance too
   (their storage, wakes and running time). Once your allowance is used up, new compute is refused with a
   message saying so, you cannot create a new environment or publish a new app, and your published apps
   show visitors a "This app is paused" page. A paused app comes back by itself within the hour after your
-  allowance renews (a daily allowance at midnight UTC, a monthly one at the latest when the organization's
-  credits refill, the date the paused page shows), and you, the drive's lead or an organization Owner or
+  allowance renews (a daily allowance at midnight UTC, a monthly one after the organization's credits
+  refill; the paused page shows when that refill is next due), and you, the drive's lead or an organization Owner or
   Admin can resume it sooner from the app pane once there is room again (for example after an Owner or
   Admin raises your allowance). If you leave the organization, your environments and apps keep running
   and their costs move to the drive's lead; if you are removed from one drive, the same happens for that
