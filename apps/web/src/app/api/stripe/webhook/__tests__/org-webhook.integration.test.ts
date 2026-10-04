@@ -56,6 +56,8 @@ vi.mock('@/lib/org-billing/org-subscription', async (importOriginal) => {
 });
 
 import { POST } from '../route';
+import { queryOrgAuditEvents } from '@pagespace/lib/audit/org-audit-query';
+import { parseOrgAuditFilter } from '@pagespace/lib/audit/org-audit-query-core';
 
 const WEBHOOK_SECRET = 'whsec_ow_d3_local_test_secret';
 const PRICES: OrgBusinessPrices = { basePriceId: stripeConfig.orgPriceIds.businessBase, seatPriceId: stripeConfig.orgPriceIds.extraSeat };
@@ -306,6 +308,39 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
     expect(owner).toEqual({ tier: 'pro', customer: ownerCustomer });
     expect(await db.select().from(subscriptions).where(eq(subscriptions.userId, org.ownerId))).toEqual(personalSubsBefore);
     expect(await db.select().from(creditLedger).where(and(eq(creditLedger.userId, org.ownerId), sql`${creditLedger.walletId} <> ${pool!.id}`))).toHaveLength(0);
+  });
+
+  it('AUD-1 (partial) billing events reach the org audit log once per real change: provisioning, each status change, the pool refill; a redelivery writes nothing', async () => {
+    if (!dbAvailable) return;
+    const org = await northwind(7);
+    const billingTypes = async () => {
+      const parsed = parseOrgAuditFilter({ category: 'billing', limit: '100' });
+      if (!parsed.ok) throw new Error(parsed.error);
+      return (await queryOrgAuditEvents(org.orgId, parsed.filter)).entries.map((e) => [e.eventType, e.details.to ?? null]);
+    };
+    // Provisioning wrote the subscription's start.
+    expect(await billingTypes()).toEqual([['org.billing.subscription_changed', 'trialing']]);
+
+    setStripeStatus(org, 'active');
+    const updated = eventPayload('customer.subscription.updated', { id: org.subscriptionId, object: 'subscription', customer: org.customerId, status: 'active', metadata: orgMetadata(org.orgId) });
+    expect(await deliver(updated)).toBe(200);
+    expect(await deliver(updated)).toBe(200);
+    const paid = eventPayload(
+      'invoice.paid',
+      invoiceObject({ customer: org.customerId, subscriptionId: org.subscriptionId, metadata: orgMetadata(org.orgId), seats: 2, paid: true, billingReason: 'subscription_cycle', periodStart: 1_800_000_000 + 30 * DAY }),
+    );
+    expect(await deliver(paid)).toBe(200);
+    expect(await deliver(paid)).toBe(200);
+    org.stripe.endSubscription(org.subscriptionId, 'canceled');
+    const deleted = eventPayload('customer.subscription.deleted', { id: org.subscriptionId, object: 'subscription', customer: org.customerId, status: 'canceled', metadata: orgMetadata(org.orgId) });
+    expect(await deliver(deleted)).toBe(200);
+
+    expect(await billingTypes()).toEqual([
+      ['org.billing.subscription_changed', 'canceled'],
+      ['org.billing.pool_refilled', null],
+      ['org.billing.subscription_changed', 'active'],
+      ['org.billing.subscription_changed', 'trialing'],
+    ]);
   });
 
   it('SEAT-7 (partial) MON-3 (partial) replaying the same org invoice.paid event is a no-op: one grant, no second Stripe read, no second write', async () => {

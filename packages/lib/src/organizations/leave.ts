@@ -26,6 +26,7 @@ import { orgMembers, organizations, type OrgRole } from '@pagespace/db/schema/or
 import { getActorInfo, logActivityWithTx } from '../monitoring/activity-logger';
 import { parseScopeList } from '../auth/oauth/scopes';
 import { closeStaleDriveJoinRequests } from '../permissions/drive-join-request-closure';
+import { recordLeaveEvents } from './org-events';
 
 /** A Drizzle transaction handle. */
 export type LeaveTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -346,7 +347,12 @@ export async function leaveOrganization(
   tx?: LeaveTx,
   options: LeaveOrganizationOptions = {},
 ): Promise<LeaveOrganizationResult> {
-  if (!tx) return db.transaction((own) => leaveOrganization(userId, orgId, own, options));
+  if (!tx) {
+    const result = await db.transaction((own) => leaveOrganization(userId, orgId, own, options));
+    // Inside a caller's transaction (removal, account deletion) the caller records the event once it commits.
+    if (result.ok) await recordLeaveEvents({ orgId, userId, actorId: userId, eventType: 'org.member.left', reason: options.reason, reassigned: result.reassigned });
+    return result;
+  }
 
   const [membership] = await tx
     .select({ id: orgMembers.id, role: orgMembers.role })
@@ -416,11 +422,16 @@ export class LeaveOrganizationRefusedError extends Error {
  * first refusal (an Owner), so the caller's transaction rolls back: account deletion must not
  * proceed half-cascaded.
  */
+export interface LeftOrganization {
+  orgId: string;
+  reassigned: LeadReassignment[];
+}
+
 export async function leaveAllOrganizations(
   userId: string,
   tx: LeaveTx,
   options: LeaveOrganizationOptions = {},
-): Promise<LeadReassignment[]> {
+): Promise<LeftOrganization[]> {
   const memberships = await tx
     .select({ orgId: orgMembers.orgId })
     .from(orgMembers)
@@ -429,11 +440,11 @@ export async function leaveAllOrganizations(
     // transaction rolls back whatever earlier orgs already applied).
     .orderBy(orgMembers.joinedAt, orgMembers.id);
 
-  const reassigned: LeadReassignment[] = [];
+  const left: LeftOrganization[] = [];
   for (const { orgId } of memberships) {
     const result = await leaveOrganization(userId, orgId, tx, options);
     if (!result.ok) throw new LeaveOrganizationRefusedError(orgId, result.reason);
-    reassigned.push(...result.reassigned);
+    left.push({ orgId, reassigned: result.reassigned });
   }
-  return reassigned;
+  return left;
 }

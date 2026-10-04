@@ -11,12 +11,13 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
-import { inArray } from '@pagespace/db/operators';
+import { desc, inArray, sql } from '@pagespace/db/operators';
+import { securityAuditLog } from '@pagespace/db/schema/security-audit';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { users } from '@pagespace/db/schema/auth';
 import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
-import { resetAuditDbBindingForTests } from '../audit-db-binding';
+import { resetAuditDbBindingForTests, resolveAuditDbBinding } from '../audit-db-binding';
 import { resetDefaultSecurityAuditForTests, securityAudit } from '../security-audit';
 import { recordOrgAuditEvent } from '../org-audit';
 import { parseOrgAuditFilter, type OrgAuditFilter } from '../org-audit-query-core';
@@ -151,9 +152,21 @@ describe('org audit log on the real chain', () => {
     expect(lines.some((line) => line.includes(a.orgId))).toBe(false);
   });
 
-  it('AUD-2 (partial) the chain still verifies after org events are written through it', async () => {
+  it('AUD-2 org events are rows of the existing security audit chain (no table of their own), hash-linked like every other row, and the chain still verifies', async () => {
     const a = await org('Northwind');
     await recordOrgAuditEvent({ orgId: a.orgId, eventType: 'org.member.role_changed', actorId: a.owner.id, resourceType: 'user', resourceId: a.outsider.id, details: { from: 'MEMBER', to: 'ADMIN' } });
+    // The row is in security_audit_log itself, chained to its predecessor, carrying the org dimension.
+    const [row] = await resolveAuditDbBinding().db
+      .select()
+      .from(securityAuditLog)
+      .where(sql`${securityAuditLog.details}->>'orgId' = ${a.orgId}`)
+      .orderBy(desc(securityAuditLog.chainSeq))
+      .limit(1);
+    expect(row).toMatchObject({ eventType: 'org.member.role_changed', userId: a.owner.id, resourceId: a.outsider.id });
+    expect(row.previousHash).toMatch(/^[0-9a-f]{64}$|^genesis$/);
+    expect(row.eventHash).toMatch(/^[0-9a-f]{64}$/);
+    // And the org log reads that same row, not a copy.
+    expect((await queryOrgAuditEvents(a.orgId, filter())).entries.map((e) => e.eventType)).toEqual(['org.member.role_changed']);
     const result = await verifySecurityAuditChain({ fromTimestamp: startedAt, stopOnFirstBreak: true });
     expect(result.breakPoint).toBeNull();
     expect(result.isValid).toBe(true);

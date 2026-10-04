@@ -9,6 +9,13 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Organization audit log** — an organization Owner or Admin can read the organization's audit log:
+  membership and ownership changes, seats, invitations, policy changes, verified domains, drive
+  visibility, join requests, drives created in or moved into and out of the organization, lead changes,
+  an Owner or Admin opening a Private drive, drive wallet changes, top-ups, donations and billing events.
+  It filters by event type or category, by drive and by time, and exports to CSV (values that would run
+  as a spreadsheet formula are written as plain text). The log is part of the existing tamper-evident
+  security audit trail, and it only ever shows the organization's own events.
 - **Verified email domains for organizations** — an organization Owner or Admin can add the
   organization's email domain and prove it is theirs, either with a DNS TXT record or with a link sent
   to an administrative mailbox of the domain (admin@, postmaster@ and the like). Once verified, people

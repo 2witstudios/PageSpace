@@ -120,6 +120,7 @@ export type SecurityEventType =
   | 'org.drive.join_requested'
   | 'org.drive.join_approved'
   | 'org.drive.join_declined'
+  | 'org.drive.join_withdrawn'
   | 'org.wallet.allocation_changed'
   | 'org.wallet.topped_up'
   | 'org.wallet.donated'

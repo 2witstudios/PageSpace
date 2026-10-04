@@ -40,6 +40,7 @@ export async function POST(
       orgId,
       invitationId,
       actorRole: gate.role ?? 'MEMBER',
+      actorId: gate.userId,
       seatBilling: defaultSeatBilling(),
       now: new Date(),
       deliver: (invitation, token) =>

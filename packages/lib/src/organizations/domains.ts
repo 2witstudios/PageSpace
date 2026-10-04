@@ -45,7 +45,7 @@ import {
 import { lockOrgInviteAddress } from './invitations';
 import { ORGS_ENABLED } from './orgs-enabled';
 import { isUniqueViolation, retryOnDeadlock } from './repository';
-import { admitSeat, type SeatAdmission, type SeatBillingPort } from './seat-service';
+import { admitSeat, recordSeatAdmissionEvents, type SeatAdmission, type SeatBillingPort } from './seat-service';
 import { checkOrgActive } from './status';
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -363,6 +363,7 @@ export async function autoJoinVerifiedDomainOrg(
   if (!verified) return { kind: 'skipped', reason: 'no_verified_domain' };
   const orgId = verified.orgId;
 
+  let admission = null as SeatAdmission | null;
   const outcome = await retryOnDeadlock(() => db.transaction(async (tx): Promise<JoinOutcome> => {
     // The invite-acceptance lock order: address, org row, then (inside admitSeat) billing.
     await lockOrgInviteAddress(tx, orgId, email);
@@ -409,6 +410,7 @@ export async function autoJoinVerifiedDomainOrg(
 
     // The joiner takes a seat like an invite does; no inviter, so the refusal reads for a member.
     const seat: SeatAdmission = await admitSeat(tx, { orgId, actorRole: 'MEMBER' }, input.seatBilling);
+    admission = seat;
     if (!seat.ok) return { result: { kind: 'refused', orgId, reason: 'seats_full', message: seat.message }, sync: null, domain };
 
     await tx.insert(orgMembers).values({ orgId, userId: input.userId, role: 'MEMBER' });
@@ -420,6 +422,7 @@ export async function autoJoinVerifiedDomainOrg(
   if (outcome.sync) await deps.publishSyncEvents(outcome.sync);
   const { result } = outcome;
   if (result.kind === 'joined') {
+    if (admission) await recordSeatAdmissionEvents({ orgId: result.orgId, actorId: input.userId, admission, operation: 'auto_join' });
     await recordOrgAuditEventAfterCommit({
       orgId: result.orgId,
       eventType: 'org.member.auto_joined',

@@ -44,6 +44,7 @@ import {
   type DonationRefusal,
   type LegRefundPlan,
 } from './wallet-funding';
+import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
 
 
 const STRIPE_REF_ARBITER = {
@@ -223,6 +224,14 @@ export async function applyOrgPoolRefill(invoice: OrgInvoice, opts: OrgPoolRefil
 
   if (result.kind === 'duplicate') return { kind: 'duplicate', orgId: org.id };
   loggers.api.info('org pool refill applied', { orgId: org.id, stripeRef, allowanceCents: grant.allowanceCents, basis: grant.basis });
+  // AUD-1: a billing event. Once per invoice: a redelivery is a duplicate above and writes nothing.
+  await recordOrgAuditEventAfterCommit({
+    orgId: org.id,
+    eventType: 'org.billing.pool_refilled',
+    resourceType: 'wallet',
+    resourceId: result.walletId,
+    details: { invoiceId: stripeRef, allowanceCents: grant.allowanceCents, paidCents: grant.paidCents, basis: grant.basis },
+  });
   return { kind: 'granted', orgId: org.id, walletId: result.walletId, allowanceCents: grant.allowanceCents };
 }
 

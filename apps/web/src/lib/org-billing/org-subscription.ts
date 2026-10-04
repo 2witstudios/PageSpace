@@ -67,6 +67,7 @@ import {
   type OrgCustomerDetails,
   type OrgSubscriptionCandidate,
 } from '@pagespace/lib/billing/org-subscription-core';
+import { recordOrgAuditEventAfterCommit } from '@pagespace/lib/audit/org-audit';
 
 /** A Stripe subscription as the shell reads it. Unix seconds throughout. */
 export interface OrgStripeSubscription extends OrgSubscriptionCandidate {
@@ -278,7 +279,7 @@ export async function ensureOrgBusinessSubscription(
   const prices = configuredPrices(deps);
   const { customerId } = await ensureOrgStripeCustomer(orgId, deps);
 
-  return db.transaction(async (tx) => {
+  const result = await db.transaction(async (tx) => {
     await lockOrgBilling(tx, orgId);
     // The org may have been deleted while this call waited for the lock: never create a
     // Stripe subscription for an org that is gone (the delete holds the same lock).
@@ -339,6 +340,17 @@ export async function ensureOrgBusinessSubscription(
     loggers.api.info('org business subscription linked', { orgId, subscriptionId: sub.id, kind, status: sub.status });
     return { kind, linkage: toLinkage(row, customerId) };
   });
+  if (result.kind !== 'existing') {
+    // AUD-1: the org's subscription began (a trial at creation, or a re-provision after one ended).
+    await recordOrgAuditEventAfterCommit({
+      orgId,
+      eventType: 'org.billing.subscription_changed',
+      resourceType: 'org_subscription',
+      resourceId: orgId,
+      details: { source: 'provisioning', kind: result.kind, to: result.linkage.status },
+    });
+  }
+  return result;
 }
 
 /**

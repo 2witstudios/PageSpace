@@ -36,7 +36,7 @@ import { updateOrgPolicies } from '../policies';
 import type { SeatBillingPort } from '../seat-service';
 
 vi.mock('../orgs-enabled', () => ({ ORGS_ENABLED: true }));
-vi.mock('../../audit/org-audit', () => ({ recordOrgAuditEvent: vi.fn(async () => {}) }));
+vi.mock('../../audit/org-audit', () => ({ recordOrgAuditEvent: vi.fn(async () => {}), recordOrgAuditEventAfterCommit: vi.fn(async () => true) }));
 
 const SLOW_STRIPE_MS = 2_000;
 const COST_25C = 0.1666667;

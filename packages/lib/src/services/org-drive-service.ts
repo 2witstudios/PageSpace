@@ -37,6 +37,7 @@ import { checkOrgActive, type OrgLapsedRefusal } from '../organizations/status';
 import { removeFormerLeadOwnerRow } from '../permissions/org-drive-membership';
 import { getActorInfo, logActivityWithTx } from '../monitoring/activity-logger';
 import { reattributeDriveStorageInTx, type StorageReattributionResult } from './storage-limits';
+import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
 
 export type OrgDriveTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -164,6 +165,15 @@ export async function moveDriveToOrg(
   if (!outcome.ok) return outcome;
   const { publish, ...moved } = outcome;
   await publish();
+  await recordOrgAuditEventAfterCommit({
+    orgId: input.orgId,
+    driveId,
+    eventType: 'org.drive.moved_in',
+    actorId,
+    resourceType: 'drive',
+    resourceId: driveId,
+    details: { orgVisibility: moved.drive.orgVisibility },
+  });
   return { ...moved, orgId: input.orgId };
 }
 
@@ -212,6 +222,15 @@ export async function moveDriveOutOfOrg(
   if (!outcome.ok) return outcome;
   const { publish, ...rest } = outcome;
   await publish();
+  await recordOrgAuditEventAfterCommit({
+    orgId: rest.orgId,
+    driveId,
+    eventType: 'org.drive.moved_out',
+    actorId,
+    resourceType: 'drive',
+    resourceId: driveId,
+    details: { implicitMembers: input.implicitMembers },
+  });
   return rest;
 }
 
@@ -251,6 +270,15 @@ export async function createOrgDrive(
   if (!outcome.ok) return outcome;
   const { publish, ...created } = outcome;
   await publish();
+  await recordOrgAuditEventAfterCommit({
+    orgId: input.orgId,
+    driveId: created.drive.id,
+    eventType: 'org.drive.created',
+    actorId,
+    resourceType: 'drive',
+    resourceId: created.drive.id,
+    details: { orgVisibility: created.drive.orgVisibility },
+  });
   return created;
 }
 
@@ -316,6 +344,17 @@ export async function changeDriveVisibility(
   if (!outcome.ok) return outcome;
   const { publish, ...changed } = outcome;
   await publish();
+  if (changed.changed && changed.drive.orgId !== null) {
+    await recordOrgAuditEventAfterCommit({
+      orgId: changed.drive.orgId,
+      driveId,
+      eventType: 'org.drive.visibility_changed',
+      actorId,
+      resourceType: 'drive',
+      resourceId: driveId,
+      details: { from: changed.from, to: changed.to },
+    });
+  }
   return changed;
 }
 
@@ -390,5 +429,16 @@ export async function changeOrgDriveLead(
   if (!outcome.ok) return outcome;
   const { publish, ...changed } = outcome;
   await publish();
+  if (changed.changed && changed.drive.orgId !== null) {
+    await recordOrgAuditEventAfterCommit({
+      orgId: changed.drive.orgId,
+      driveId,
+      eventType: 'org.drive.lead_changed',
+      actorId,
+      resourceType: 'drive',
+      resourceId: driveId,
+      details: { fromUserId: changed.fromUserId, toUserId: changed.toUserId, reason: 'lead_changed' },
+    });
+  }
   return changed;
 }

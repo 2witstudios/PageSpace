@@ -312,7 +312,7 @@ describe('verified email domains (real Postgres)', () => {
       expect(rows).toContain(product.id);
       expect(rows).not.toContain(research.id);
       expect(rows).not.toContain(finance.id);
-      expect(audit.events.at(-1)).toMatchObject({ orgId: org.id, eventType: 'org.member.auto_joined', actorId: lena.id, details: { domain, role: 'MEMBER' } });
+      expect(audit.events[audit.events.length - 1]).toMatchObject({ orgId: org.id, eventType: 'org.member.auto_joined', actorId: lena.id, details: { domain, role: 'MEMBER' } });
 
       // Idempotent: a second sign-in changes nothing.
       expect(await autoJoinVerifiedDomainOrg({ userId: lena.id, now: new Date() })).toEqual({ kind: 'skipped', reason: 'already_member' });
@@ -329,7 +329,7 @@ describe('verified email domains (real Postgres)', () => {
       expect(await membership(org.id, marcus.id)).toBeNull();
       expect(await countOrgSeats(org.id)).toBe(5);
       expect(await db.select().from(orgDomainJoins).where(eq(orgDomainJoins.userId, marcus.id))).toEqual([]);
-      expect(audit.events.at(-1)).toMatchObject({ orgId: org.id, eventType: 'org.member.auto_join_refused', details: { reason: 'seats_full' } });
+      expect(audit.events[audit.events.length - 1]).toMatchObject({ orgId: org.id, eventType: 'org.member.auto_join_refused', details: { reason: 'seats_full' } });
 
       // A later sign-in after a seat frees joins: a refusal is not remembered as a join.
       const [someone] = await db.select({ userId: orgMembers.userId }).from(orgMembers).where(and(eq(orgMembers.orgId, org.id), eq(orgMembers.role, 'MEMBER'))).limit(1);
@@ -395,7 +395,7 @@ describe('verified email domains (real Postgres)', () => {
 
       expect(await removeOrgDomain({ orgId: org.id, domainId: claim.id, actorId: jono.id })).toBe(true);
       expect(await membership(org.id, lena.id)).toEqual({ role: 'MEMBER' });
-      expect(audit.events.at(-1)).toMatchObject({ eventType: 'org.domain.removed', details: { domain: claim.domain, wasVerified: true } });
+      expect(audit.events[audit.events.length - 1]).toMatchObject({ eventType: 'org.domain.removed', details: { domain: claim.domain, wasVerified: true } });
       const marcus = await person(`marcus@${claim.domain}`);
       expect(await autoJoinVerifiedDomainOrg({ userId: marcus.id, now: new Date() })).toEqual({ kind: 'skipped', reason: 'no_verified_domain' });
 

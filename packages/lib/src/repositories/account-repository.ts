@@ -14,6 +14,7 @@ import { organizations } from '@pagespace/db/schema/organizations';
 import { deleteConversationsForDrive } from './conversation-cleanup';
 import { decryptUserRow } from '../auth/user-repository';
 import { leaveAllOrganizations, reassignLedOrgDrives } from '../organizations/leave';
+import { recordLeaveEvents } from '../organizations/org-events';
 import { createAnonymizedActorEmail } from '../compliance/anonymize';
 
 export interface UserAccount {
@@ -120,16 +121,22 @@ export const accountRepository = {
    * the erasure has anonymized the user's activity.
    */
   deleteUser: async (userId: string): Promise<void> => {
-    await db.transaction(async (tx) => {
+    const left = await db.transaction(async (tx) => {
       const options = {
         reason: 'account_deleted' as const,
         actor: { actorEmail: createAnonymizedActorEmail(userId), actorDisplayName: 'Deleted User' },
       };
-      await leaveAllOrganizations(userId, tx, options);
+      const orgsLeft = await leaveAllOrganizations(userId, tx, options);
       // A lead who is somehow no longer a member of the drive's org still must not take it.
       await reassignLedOrgDrives(userId, tx, options);
       await tx.delete(users).where(eq(users.id, userId));
+      return orgsLeft;
     });
+    // AUD-1, once committed. No actor: the account no longer exists to be named (the audit row's user
+    // reference would point at a deleted user); the person is the event's resource.
+    for (const { orgId, reassigned } of left) {
+      await recordLeaveEvents({ orgId, userId, eventType: 'org.member.left', reason: 'account_deleted', reassigned });
+    }
   },
 
   /**

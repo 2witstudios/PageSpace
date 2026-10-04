@@ -64,6 +64,7 @@ import {
   type DriveWalletView,
   type PoolFacts,
 } from '../billing/wallet-views';
+import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
 
 export interface WalletServiceError {
   ok: false;
@@ -308,6 +309,25 @@ export async function getDriveWallet(userId: string, driveId: string, credential
 // Create, change, delete (UI-9)
 // ---------------------------------------------------------------------------
 
+/** AUD-1: a change to an ORG drive's wallet, once committed. A personal drive's wallet is no org's business. */
+async function recordOrgWalletEvent(
+  standing: { orgId: string | null; driveId: string },
+  userId: string,
+  eventType: 'org.wallet.allocation_changed' | 'org.wallet.topped_up' | 'org.wallet.donated',
+  details: Record<string, unknown>,
+): Promise<void> {
+  if (standing.orgId === null) return;
+  await recordOrgAuditEventAfterCommit({
+    orgId: standing.orgId,
+    driveId: standing.driveId,
+    eventType,
+    actorId: userId,
+    resourceType: 'drive_wallet',
+    resourceId: standing.driveId,
+    details,
+  });
+}
+
 /**
  * Create the drive's wallet under its parent (WAL-2): the org pool for an org drive, the
  * lead's personal wallet for a personal drive. Its allocation period follows the parent's
@@ -363,6 +383,7 @@ export async function createDriveWallet(
     return { ok: false, status: 409, code: 'no_org_pool', message: 'This organization has no pool to allocate from yet' };
   }
   if (created === 'exists') return { ok: false, status: 409, code: 'wallet_exists', message: 'This drive already has a wallet' };
+  await recordOrgWalletEvent(standing, userId, 'org.wallet.allocation_changed', { operation: 'create', allocationCents: input.allocationCents });
   return readView(userId, access);
 }
 
@@ -381,6 +402,7 @@ export async function updateDriveWallet(
   const lapsed = await requireOrgActiveForWrite(access);
   if (lapsed) return lapsed;
 
+  let applied: Record<string, unknown> = {};
   const outcome = await db.transaction(async (tx): Promise<WalletServiceError | null> => {
     const [row] = await tx
       .select({ id: wallets.id, status: wallets.status, debtCents: wallets.debtCents })
@@ -397,9 +419,11 @@ export async function updateDriveWallet(
       if (denied) return denied;
     }
     await tx.update(wallets).set(plan.set).where(eq(wallets.id, row.id));
+    applied = { ...plan.set };
     return null;
   });
   if (outcome) return outcome;
+  await recordOrgWalletEvent(access.standing, userId, 'org.wallet.allocation_changed', { operation: 'update', changes: applied });
   return readView(userId, access);
 }
 
@@ -412,7 +436,7 @@ export async function deleteDriveWallet(userId: string, driveId: string, credent
   const denied = requireAction(access, 'delete') ?? (await requireOrgActiveForWrite(access));
   if (denied) return denied;
 
-  return db.transaction(async (tx): Promise<{ ok: true } | WalletServiceError> => {
+  const deleted = await db.transaction(async (tx): Promise<{ ok: true } | WalletServiceError> => {
     const [row] = await tx
       .select({ id: wallets.id, topupRemainingCents: wallets.topupRemainingCents, debtCents: wallets.debtCents })
       .from(wallets)
@@ -440,6 +464,8 @@ export async function deleteDriveWallet(userId: string, driveId: string, credent
     await tx.delete(wallets).where(eq(wallets.id, row.id));
     return { ok: true };
   });
+  if (deleted.ok) await recordOrgWalletEvent(access.standing, userId, 'org.wallet.allocation_changed', { operation: 'delete' });
+  return deleted;
 }
 
 // ---------------------------------------------------------------------------
@@ -473,7 +499,7 @@ export async function topUpDriveWallet(
     : await ensurePersonalRootWalletId(db, standing.ownerId);
   if (!payerId) return { ok: false, status: 409, code: 'no_org_pool', message: 'This organization has no pool to pay from' };
 
-  return db.transaction(async (tx) => {
+  const result = await db.transaction(async (tx) => {
     // The global wallet lock order (billing/wallet-legs): the drive (child) wallet, then its
     // parent — here the payer, the org pool or the lead's personal root. An id sort could take
     // the parent first and deadlock against a settle or a donation into the same wallet.
@@ -565,6 +591,10 @@ export async function topUpDriveWallet(
     ]);
     return { ok: true as const, legId: leg.id, amountCents: plan.amountCents, paidDebtCents: plan.target.paidDebtCents, duplicate: false };
   });
+  if (result.ok && !result.duplicate) {
+    await recordOrgWalletEvent(standing, userId, 'org.wallet.topped_up', { amountCents: result.amountCents, paidDebtCents: result.paidDebtCents, legId: result.legId });
+  }
+  return result;
 }
 
 /** Donate from the caller's own balance to the drive's wallet (WAL-4); the donation shell re-checks visibility. */
@@ -584,7 +614,10 @@ export async function donateToDrive(
   if (!target) return { ok: false, status: 404, code: 'no_wallet', message: 'This drive has no wallet' };
 
   const outcome = await donateToDriveWallet({ donorUserId: userId, targetWalletId: target.id, amountCents: input.amountCents, donationId: input.idempotencyKey });
-  if (outcome.kind === 'donated') return { ok: true, legId: outcome.legId, amountCents: outcome.amountCents, paidDebtCents: outcome.paidDebtCents, duplicate: false };
+  if (outcome.kind === 'donated') {
+    await recordOrgWalletEvent(access.standing, userId, 'org.wallet.donated', { amountCents: outcome.amountCents, paidDebtCents: outcome.paidDebtCents, legId: outcome.legId });
+    return { ok: true, legId: outcome.legId, amountCents: outcome.amountCents, paidDebtCents: outcome.paidDebtCents, duplicate: false };
+  }
   if (outcome.kind === 'duplicate') return { ok: true, legId: outcome.legId, amountCents: input.amountCents, paidDebtCents: 0, duplicate: true };
   switch (outcome.reason) {
     case 'insufficient_funds':
