@@ -2,14 +2,16 @@
  * Contract tests for /api/cron/reset-wallet-allocations: HMAC gating, the period sweep
  * (comped personal roots, then child allocations) runs with the current time, its counts
  * reach the response and the audit event, and a failed wallet of either kind makes the run
- * a 500. The resets themselves (D-OW-12, exactly once) are tested against Postgres in
+ * a 500; after the resets, member-cap-parked apps are released and a failed release is a 500 too.
+ * The resets themselves (D-OW-12, exactly once) are tested against Postgres in
  * packages/lib/src/billing/__tests__/wallet-funding.integration.test.ts and
  * personal-root-roll.integration.test.ts.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-const { mockReset, mockAudit, mockLogError } = vi.hoisted(() => ({
+const { mockReset, mockUnpark, mockAudit, mockLogError } = vi.hoisted(() => ({
   mockReset: vi.fn(),
+  mockUnpark: vi.fn(),
   mockAudit: vi.fn(),
   mockLogError: vi.fn(),
 }));
@@ -20,6 +22,10 @@ vi.mock('@/lib/auth/cron-auth', () => ({
 
 vi.mock('@pagespace/lib/billing/wallet-funding-shell', () => ({
   resetDuePeriods: mockReset,
+}));
+
+vi.mock('@pagespace/lib/services/app-hosting/app-unpark', () => ({
+  releaseMemberCapParks: mockUnpark,
 }));
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
@@ -48,12 +54,14 @@ function makeRequest(): Request {
 }
 
 const ROOTS = { scanned: 1, reset: 1, failed: 0 };
+const UNPARK = { outcome: 'swept', examined: 2, unparked: 1, stillCapped: 1, policyHeld: 0, failed: 0 };
 
 describe('/api/cron/reset-wallet-allocations', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(validateSignedCronRequest).mockReturnValue(null);
     mockReset.mockResolvedValue({ roots: ROOTS, allocations: { scanned: 4, reset: 2, failed: 0 } });
+    mockUnpark.mockResolvedValue(UNPARK);
   });
 
   it('refuses an unsigned request without touching a wallet', async () => {
@@ -61,19 +69,34 @@ describe('/api/cron/reset-wallet-allocations', () => {
     const response = await GET(makeRequest());
     expect(response.status).toBe(401);
     expect(mockReset).not.toHaveBeenCalled();
+    expect(mockUnpark).not.toHaveBeenCalled();
   });
 
   it('WAL-3 (partial) runs the period sweep now — comped roots, then allocations — and reports and audits both counts', async () => {
     const before = Date.now();
     const response = await GET(makeRequest());
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ success: true, scanned: 4, reset: 2, failed: 0, roots: ROOTS });
+    expect(await response.json()).toEqual({ success: true, scanned: 4, reset: 2, failed: 0, roots: ROOTS, appUnpark: UNPARK });
     const now: Date = mockReset.mock.calls[0][0].now;
     expect(now.getTime()).toBeGreaterThanOrEqual(before);
     expect(mockAudit).toHaveBeenCalledWith(expect.objectContaining({
       resourceId: 'reset_wallet_allocations',
-      details: { scanned: 4, reset: 2, failed: 0, roots: ROOTS },
+      details: { scanned: 4, reset: 2, failed: 0, roots: ROOTS, appUnpark: UNPARK },
     }));
+  });
+
+  it('WAL-2 (partial) releases member-cap-parked apps AFTER the periods roll, so a refill this tick un-parks this tick', async () => {
+    const response = await GET(makeRequest());
+    expect(response.status).toBe(200);
+    expect(mockUnpark).toHaveBeenCalledTimes(1);
+    expect(mockUnpark.mock.invocationCallOrder[0]).toBeGreaterThan(mockReset.mock.invocationCallOrder[0]);
+  });
+
+  it('a parked app that failed to release makes the run a 500', async () => {
+    mockUnpark.mockResolvedValue({ ...UNPARK, failed: 1 });
+    const response = await GET(makeRequest());
+    expect(response.status).toBe(500);
+    expect(mockLogError).toHaveBeenCalled();
   });
 
   it('a personal root that failed to roll makes the run a 500', async () => {

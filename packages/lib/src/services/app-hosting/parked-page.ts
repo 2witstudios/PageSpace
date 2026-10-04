@@ -97,6 +97,14 @@ function manageHrefFor(driveId: string | undefined, envId: string | undefined): 
   return envId ? `${base}?env=${encodeURIComponent(envId)}` : base;
 }
 
+/** "November 4, 2026" (UTC) for an ISO instant, or null when absent or unreadable. */
+function refillDateText(iso: string | undefined): string | null {
+  if (!iso) return null;
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return null;
+  return at.toLocaleDateString('en-US', { timeZone: 'UTC', year: 'numeric', month: 'long', day: 'numeric' });
+}
+
 function copyFor(decision: AppRouteDecision): PageCopy {
   switch (decision.kind) {
     case 'parked': {
@@ -106,16 +114,19 @@ function copyFor(decision: AppRouteDecision): PageCopy {
       // midnight UTC. Saying "it ran out of credits" there would send the owner to
       // buy something that changes nothing.
       // [D-OW-28] A funded organization whose app's PUBLISHER has used their allowance of its
-      // credits: nobody needs to top the organization up. Parked apps stay parked until resumed,
-      // so this says how it comes back rather than promising it returns on its own.
+      // credits: nobody needs to top the organization up. It DOES return on its own: the hourly
+      // period sweep un-parks it once the allowance renews (app-unpark), at the latest at the pool's
+      // next refill — the date shown — and the creator, the drive lead or an org admin can un-park
+      // it sooner once there is room (review 5407898542 P1c).
       if (decision.reason === 'member_cap') {
+        const by = refillDateText(decision.returnsBy);
         return {
           title: 'App paused',
           heading: 'This app is paused',
           body:
-            'The person who published it has used their allowance of their organization\'s credits, so it has been stopped rather than left running. ' +
-            'It can be started again once that allowance renews (a daily allowance at midnight UTC, a monthly one with the organization\'s next billing period), ' +
-            'or sooner if an organization Owner or Admin raises it. If this is your app, open it in PageSpace to bring it back. Nothing has been lost.',
+            'The person who published it has used their allowance of their organization\'s credits, so it has been paused rather than left running. ' +
+            `It returns automatically when that allowance renews — ${by ? `by ${by} at the latest, when the organization's credits refill` : "at the latest when the organization's credits next refill"} — ` +
+            'or sooner if an organization admin un-parks it. Nothing has been lost.',
           manageHref,
         };
       }

@@ -852,6 +852,12 @@ export async function findOrgPoolWalletId(orgId: string): Promise<string | null>
   return row?.id ?? null;
 }
 
+/** When the org's pool refills next (its period end, D-OW-12), or null when it has no pool or no period. */
+export async function findOrgPoolPeriodEnd(orgId: string): Promise<Date | null> {
+  const [row] = await db.select({ end: wallets.monthlyPeriodEnd }).from(wallets).where(orgPoolWhere(orgId)).limit(1);
+  return row?.end ?? null;
+}
+
 /**
  * canConsumeOrgPool — the compute gate for an ORG payer (WAL-9): a hold on the org's POOL
  * wallet, recorded under `userId` — the person who CAUSES the compute (WAL-2, review P1, D-OW-28):

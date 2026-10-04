@@ -105,7 +105,9 @@ export type SecurityEventType =
   | 'org.guest.approved'
   | 'org.guest.declined'
   // [D-OW-28] A departing member's environment or published app handed to the drive lead's cap.
-  | 'org.compute.reattributed';
+  | 'org.compute.reattributed'
+  // A parked published app taken back to `stopped` by its creator, the drive lead or an org Owner/Admin.
+  | 'org.app.unparked';
 
 /**
  * Single source of truth for the security_audit_log table shape (#890 Phase 1).

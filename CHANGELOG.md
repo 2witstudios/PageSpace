@@ -15,9 +15,12 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   person who runs it. Environments and published apps you create there count toward your allowance too
   (their storage, wakes and running time). Once your allowance is used up, new compute is refused with a
   message saying so, you cannot create a new environment or publish a new app, and your published apps
-  show visitors a "This app is paused" page until it renews (a daily allowance at midnight UTC, a monthly
-  one with the organization's next billing period) or an Owner or Admin raises it. If you leave the
-  organization, your environments and apps keep running and their costs move to the drive's lead.
+  show visitors a "This app is paused" page. A paused app comes back by itself within the hour after your
+  allowance renews (a daily allowance at midnight UTC, a monthly one at the latest when the organization's
+  credits refill, the date the paused page shows), and you, the drive's lead or an organization Owner or
+  Admin can resume it sooner from the app pane once there is room again (for example after an Owner or
+  Admin raises your allowance). If you leave the organization, your environments and apps keep running
+  and their costs move to the drive's lead.
 - **Complimentary paid plans refill on their renewal date** — an account on a paid plan with no Stripe
   subscription behind it now gets its monthly credits on its renewal date (within the hour), instead of
   at its next AI request after the date passed. The renewal date no longer drifts later each month.

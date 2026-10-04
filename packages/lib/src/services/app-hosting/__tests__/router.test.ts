@@ -93,6 +93,7 @@ function deps(overrides: Partial<AppRouterDeps> = {}): AppRouterDeps {
     stampHit: async () => {},
     publishedAppsAllowed: async () => true,
     wake: async () => ({ outcome: 'woken', app: {} as never }),
+    memberCapReturnsBy: async () => null,
     ...overrides,
   };
 }
@@ -561,6 +562,30 @@ describe('resolveAppRoute — a STOPPED app is woken through the metering seam',
       }),
     );
     expect(memberCap).toEqual({ kind: 'parked', reason: 'member_cap', driveId: 'drive_payer', envId: 'env_1' });
+
+    // The paused page names the date it comes back by: the drive's pool refill (review 5407898542 P1c).
+    const refill = new Date('2026-11-04T00:00:00.000Z');
+    const dated = await resolveAppRoute(
+      'acme.pagespace.io',
+      deps({
+        findAppBySubdomain: async () => stopped(),
+        wake: async () => ({ outcome: 'parked', reason: 'org_member_cap_reached' }),
+        memberCapReturnsBy: async (driveId) => (driveId === 'drive_payer' ? refill : null),
+      }),
+    );
+    expect(dated).toEqual({ kind: 'parked', reason: 'member_cap', driveId: 'drive_payer', envId: 'env_1', returnsBy: refill.toISOString() });
+    // A failed read drops only the date, never the page.
+    const undated = await resolveAppRoute(
+      'acme.pagespace.io',
+      deps({
+        findAppBySubdomain: async () => stopped(),
+        wake: async () => ({ outcome: 'parked', reason: 'org_member_cap_reached' }),
+        memberCapReturnsBy: async () => {
+          throw new Error('db down');
+        },
+      }),
+    );
+    expect(undated).toEqual({ kind: 'parked', reason: 'member_cap', driveId: 'drive_payer', envId: 'env_1' });
 
     expect({ outOfCredits, dailyCap }).toEqual({
       outOfCredits: { kind: 'parked', reason: 'out_of_credits', driveId: 'drive_payer', envId: 'env_1' },

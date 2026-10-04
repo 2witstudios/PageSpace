@@ -8,7 +8,9 @@
  *
  * Read/write split: any drive member sees status/URL/logs; publish, stop,
  * resume and unpublish are OWNER/ADMIN only (`canManage`, the same flag that
- * already gates rename/rebuild/delete on the row above). Buying or cancelling
+ * already gates rename/rebuild/delete on the row above) — except that a PARKED
+ * app's Resume (the un-park) is also offered to the app's creator, whom the
+ * server's un-park authority admits (creator, lead, org Owner/Admin). Buying or cancelling
  * the always-on tier is stricter still — OWNER only (`isOwner`) — because that
  * spends the drive's money, not just its compute.
  *
@@ -42,6 +44,7 @@ import { useAppHostingCapability } from '@/hooks/drive-envs/useAppHostingCapabil
 import { useEditingSession } from '@/stores/useEditingSession';
 import { StripeProvider } from '@/components/billing/StripeProvider';
 import { useBillingVisibility } from '@/hooks/useBillingVisibility';
+import { useAuthStore } from '@/stores/useAuthStore';
 import { PaymentElement, useElements, useStripe } from '@stripe/react-stripe-js';
 
 const STATUS_COPY: Record<PublishedAppStatus, { label: string; tone: 'default' | 'secondary' | 'destructive' | 'outline' }> = {
@@ -69,7 +72,11 @@ export function statusCopyFor(status: PublishedAppStatus): { label: string; tone
  * Why a parked app stopped. Where billing is hidden (the iOS app, Guideline
  * 3.1.1) it says what happened without pointing at a purchase.
  */
-export function parkedNoticeFor(showBilling: boolean): string {
+export function parkedNoticeFor(showBilling: boolean, lastError: string | null = null): string {
+  // [D-OW-28] Paused on its creator's allowance of the org's credits: nothing to buy, and it comes back by itself.
+  if (lastError === 'parked: org_member_cap_reached') {
+    return "Paused — its creator has used their allowance of the organization's credits. It returns automatically when that allowance renews; once there is room again, its creator, the drive lead or an org admin can resume it sooner.";
+  }
   return showBilling
     ? 'Paused — this app ran out of credits or hit its daily limit. Top up credits or switch to the always-on plan below, then resume it.'
     : 'Paused — this app ran out of credits or hit its daily limit.';
@@ -106,6 +113,8 @@ export function DriveEnvAppPane({
   });
 
   const path = appPath(driveId, envId);
+  const viewerId = useAuthStore((state) => state.user?.id ?? null);
+  const canUnpark = canManage || (app?.costOwnerId != null && app.costOwnerId === viewerId);
 
   const publish = useCallback(async () => {
     setPublishing(true);
@@ -197,6 +206,7 @@ export function DriveEnvAppPane({
             <AppPaneBody
               app={app}
               canManage={canManage}
+              canUnpark={canUnpark}
               isOwner={isOwner}
               actioning={actioning}
               onPublishAgain={publish}
@@ -238,6 +248,7 @@ export function DriveEnvAppPane({
 function AppPaneBody({
   app,
   canManage,
+  canUnpark,
   isOwner,
   actioning,
   onPublishAgain,
@@ -251,6 +262,8 @@ function AppPaneBody({
 }: {
   app: DriveEnvAppDTO;
   canManage: boolean;
+  /** May resume a PARKED app (un-park): `canManage`, or the app's creator. */
+  canUnpark: boolean;
   isOwner: boolean;
   actioning: boolean;
   onPublishAgain: () => void;
@@ -281,7 +294,7 @@ function AppPaneBody({
 
       {app.status === 'parked' && (
         <div className="rounded-md border border-destructive/30 bg-destructive/5 p-2 text-destructive">
-          {parkedNoticeFor(showBilling)}
+          {parkedNoticeFor(showBilling, app.lastError)}
         </div>
       )}
 
@@ -292,6 +305,14 @@ function AppPaneBody({
       )}
 
       <div className="text-muted-foreground">Tier: {app.tier === 'dedicated' ? 'Always-on' : 'Metered (pay per awake time)'}</div>
+
+      {canUnpark && !canManage && app.status === 'parked' && (
+        <div className="flex flex-wrap gap-1.5">
+          <Button size="sm" variant="outline" disabled={actioning} onClick={onResume}>
+            <Play className="mr-1 size-3" /> Resume
+          </Button>
+        </div>
+      )}
 
       {canManage && (
         <div className="flex flex-wrap gap-1.5">

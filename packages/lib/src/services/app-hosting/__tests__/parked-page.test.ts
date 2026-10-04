@@ -83,13 +83,28 @@ describe('retryAfterFor — back a caller off by how long the state will last', 
 // say "its owner has been able to see why"; two of the four producers of that
 // state are route-level outages logged server-side and surfaced to nobody.
 describe('[D-OW-28] an app paused on its publisher\'s allowance', () => {
-  it('is a clear paused page that blames the allowance, not the balance, and promises no return on its own', () => {
+  it('is a clear paused page that blames the allowance, not the balance', () => {
     const html = renderAppRouterPage({ kind: 'parked', reason: 'member_cap', driveId: 'd1', envId: 'e1' }, 'acme.pagespace.io');
     expect(html).toContain('This app is paused');
     expect(html).toMatch(/used their allowance of their organization(&#39;|')s credits/);
     expect(html).not.toContain('ran out of credits');
-    expect(html).not.toMatch(/comes back on its own|available again tomorrow/);
+    expect(html).not.toMatch(/available again tomorrow/);
     expect(statusCodeFor({ kind: 'parked', reason: 'member_cap' })).toBe(402);
+  });
+
+  it('WAL-2 (partial) says the truth: it returns automatically by the next refill date, or sooner if an admin un-parks it', () => {
+    const html = renderAppRouterPage({ kind: 'parked', reason: 'member_cap', driveId: 'd1', envId: 'e1', returnsBy: '2026-11-04T00:00:00.000Z' }, 'acme.pagespace.io');
+    expect(html).toContain('It returns automatically when that allowance renews');
+    expect(html).toContain('by November 4, 2026 at the latest');
+    expect(html).toContain('or sooner if an organization admin un-parks it');
+    // The old, false promise is gone.
+    expect(html).not.toMatch(/open it in PageSpace to bring it back/);
+  });
+
+  it('WAL-2 (partial) with no readable refill date it still promises the automatic return, without inventing a date', () => {
+    const html = renderAppRouterPage({ kind: 'parked', reason: 'member_cap', driveId: 'd1', envId: 'e1' }, 'acme.pagespace.io');
+    expect(html).toMatch(/at the latest when the organization(&#39;|')s credits next refill/);
+    expect(html).not.toMatch(/by \w+ \d+, \d{4}/);
   });
 });
 

@@ -22,6 +22,8 @@ export interface PublishedAppDTO {
   url: string;
   flyAppName: string;
   lastError: string | null;
+  /** [D-OW-28] Whose allowance the app counts against (its creator), null = the drive lead. Lets the creator un-park it. */
+  costOwnerId: string | null;
   createdAt: Date;
 }
 
@@ -36,6 +38,7 @@ export function toPublishedAppDTO(app: PublishedApp): PublishedAppDTO {
     url: `https://${app.subdomain}.${apex}`,
     flyAppName: app.flyAppName,
     lastError: app.lastError,
+    costOwnerId: app.costOwnerId,
     createdAt: app.createdAt,
   };
 }

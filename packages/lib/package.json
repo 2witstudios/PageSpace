@@ -1074,6 +1074,11 @@
       "import": "./dist/services/app-hosting/app-lifecycle-metering.js",
       "require": "./dist/services/app-hosting/app-lifecycle-metering.js"
     },
+    "./services/app-hosting/app-unpark": {
+      "types": "./dist/services/app-hosting/app-unpark.d.ts",
+      "import": "./dist/services/app-hosting/app-unpark.js",
+      "require": "./dist/services/app-hosting/app-unpark.js"
+    },
     "./services/app-hosting/app-machine-events": {
       "types": "./dist/services/app-hosting/app-machine-events.d.ts",
       "import": "./dist/services/app-hosting/app-machine-events.js",
