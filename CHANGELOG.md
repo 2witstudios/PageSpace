@@ -22,7 +22,8 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   credits refill, the date the paused page shows), and you, the drive's lead or an organization Owner or
   Admin can resume it sooner from the app pane once there is room again (for example after an Owner or
   Admin raises your allowance). If you leave the organization, your environments and apps keep running
-  and their costs move to the drive's lead.
+  and their costs move to the drive's lead; if you are removed from one drive, the same happens for that
+  drive's environments and apps within the hour.
 - **Complimentary paid plans refill on their renewal date** — an account on a paid plan with no Stripe
   subscription behind it now gets its monthly credits on its renewal date (within the hour), instead of
   at its next AI request after the date passed. The renewal date no longer drifts later each month.

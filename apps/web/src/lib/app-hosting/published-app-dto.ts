@@ -22,12 +22,12 @@ export interface PublishedAppDTO {
   url: string;
   flyAppName: string;
   lastError: string | null;
-  /** [D-OW-28] Whose allowance the app counts against (its creator), null = the drive lead. Lets the creator un-park it. */
-  costOwnerId: string | null;
+  /** Whether the person asking may un-park this app (permissions/app-unpark-authority); false unless it is parked. */
+  viewerCanUnpark: boolean;
   createdAt: Date;
 }
 
-export function toPublishedAppDTO(app: PublishedApp): PublishedAppDTO {
+export function toPublishedAppDTO(app: PublishedApp, viewerCanUnpark = false): PublishedAppDTO {
   const apex = resolvePublishedAppsApex();
   return {
     id: app.id,
@@ -38,7 +38,7 @@ export function toPublishedAppDTO(app: PublishedApp): PublishedAppDTO {
     url: `https://${app.subdomain}.${apex}`,
     flyAppName: app.flyAppName,
     lastError: app.lastError,
-    costOwnerId: app.costOwnerId,
+    viewerCanUnpark,
     createdAt: app.createdAt,
   };
 }

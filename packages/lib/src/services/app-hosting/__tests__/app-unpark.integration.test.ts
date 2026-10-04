@@ -25,6 +25,7 @@ import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { DEFAULT_SEAT_ALLOWANCE_CENTS } from '../../../billing/wallet-core';
 import { defaultAppRouterDeps } from '../router';
+import { canUnparkPublishedApp } from '../../../permissions/app-unpark-authority';
 import { defaultAppUnparkDeps, MEMBER_CAP_PARK_ERROR, releaseMemberCapParks, unparkPublishedApp, type AppUnparkDeps } from '../app-unpark';
 
 const audit = vi.hoisted(() => ({ events: [] as Array<Record<string, unknown>> }));
@@ -211,6 +212,13 @@ describe('a parked app has a way back', () => {
       expect.objectContaining({ eventType: 'org.app.unparked', orgId: w.orgId, actorId, resourceType: 'published_app', resourceId: w.appId, driveId: w.driveId }),
     ]);
     expect(await holdsOf(w)).toEqual([]);
+  });
+
+  it('WAL-2 (partial) the pane asks the same authority: the creator, lead and org admin may un-park, a plain member may not', async () => {
+    if (!dbAvailable) return;
+    const w = (world = await build());
+    const app = { driveId: w.driveId, costOwnerId: w.creatorId };
+    expect(await Promise.all([w.creatorId, w.leadId, w.orgAdminId, w.memberId].map((id) => canUnparkPublishedApp(id, app)))).toEqual([true, true, true, false]);
   });
 
   it('WAL-2 (partial) a plain member may not un-park it: refused, still parked, nothing audited', async () => {

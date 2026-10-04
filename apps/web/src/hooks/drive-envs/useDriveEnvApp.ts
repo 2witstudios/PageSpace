@@ -19,8 +19,8 @@ export interface DriveEnvAppDTO {
   tier: 'metered' | 'dedicated';
   flyAppName: string;
   lastError: string | null;
-  /** Whose allowance the app counts against (its creator); null = the drive lead. */
-  costOwnerId: string | null;
+  /** Whether the viewer may un-park it (its creator, the drive lead or an org Owner/Admin); false unless parked. */
+  viewerCanUnpark: boolean;
   createdAt: string;
 }
 

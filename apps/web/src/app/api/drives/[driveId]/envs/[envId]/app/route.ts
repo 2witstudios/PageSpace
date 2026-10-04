@@ -30,6 +30,7 @@ import { resolvePublishedAppsOrgSlug } from '@pagespace/lib/services/app-hosting
 import { allocateUniqueSubdomainWithRetry, subdomainCollisionPrefix } from '@pagespace/lib/services/subdomain-allocation';
 import { getDrivePolicies } from '@pagespace/lib/organizations/policy-reader';
 import { publishedAppsDecision } from '@pagespace/lib/organizations/org-action-decisions';
+import { canUnparkPublishedApp } from '@pagespace/lib/permissions/app-unpark-authority';
 import { orgPolicyRefusalResponse } from '@/lib/orgs/org-policy-refusal-response';
 import { snapshotEnvFilesystem } from '@/lib/app-hosting/env-snapshot';
 import { ensureBuildableSource, describeUnbuildableSourceReason } from '@/lib/app-hosting/publish-source-check';
@@ -61,7 +62,11 @@ export async function GET(request: Request, context: { params: Promise<{ driveId
     }
 
     const app = await findPublishedAppByEnvId(envId);
-    return NextResponse.json({ app: app ? toPublishedAppDTO(app) : null });
+    if (!app) return NextResponse.json({ app: null });
+    // Asked only of a parked app: whether this viewer may un-park it (its creator, the lead, an org
+    // Owner/Admin), so the pane offers Resume to exactly the people the actions route admits.
+    const viewerCanUnpark = app.status === 'parked' ? await canUnparkPublishedApp(auth.userId, app) : false;
+    return NextResponse.json({ app: toPublishedAppDTO(app, viewerCanUnpark) });
   } catch (error) {
     loggers.api.error('Failed to read published app', error instanceof Error ? error : new Error(String(error)));
     return NextResponse.json({ error: 'Failed to read published app' }, { status: 500 });

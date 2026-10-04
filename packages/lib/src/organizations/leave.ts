@@ -345,6 +345,8 @@ export interface ComputeReattribution {
   driveId: string;
   /** Who it was attributed to: the member who left. */
   formerCostOwnerId: string;
+  /** Why, when it is not a departure from the org: removed from the drive (review #2760 P3-4). */
+  reason?: 'removed_from_drive';
 }
 
 /**
@@ -361,7 +363,7 @@ export async function recordComputeReattributions(items: readonly ComputeReattri
       resourceType: item.kind,
       resourceId: item.id,
       driveId: item.driveId,
-      details: { formerCostOwnerId: item.formerCostOwnerId, costOwner: 'drive_lead' },
+      details: { formerCostOwnerId: item.formerCostOwnerId, costOwner: 'drive_lead', ...(item.reason ? { reason: item.reason } : {}) },
     });
   }
 }

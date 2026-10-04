@@ -1074,6 +1074,11 @@
       "import": "./dist/services/app-hosting/app-lifecycle-metering.js",
       "require": "./dist/services/app-hosting/app-lifecycle-metering.js"
     },
+    "./organizations/creator-reattribution": {
+      "types": "./dist/organizations/creator-reattribution.d.ts",
+      "import": "./dist/organizations/creator-reattribution.js",
+      "require": "./dist/organizations/creator-reattribution.js"
+    },
     "./services/app-hosting/app-unpark": {
       "types": "./dist/services/app-hosting/app-unpark.d.ts",
       "import": "./dist/services/app-hosting/app-unpark.js",
@@ -2448,6 +2453,11 @@
       "types": "./dist/permissions/permissions.d.ts",
       "import": "./dist/permissions/permissions.js",
       "require": "./dist/permissions/permissions.js"
+    },
+    "./permissions/app-unpark-authority": {
+      "types": "./dist/permissions/app-unpark-authority.d.ts",
+      "import": "./dist/permissions/app-unpark-authority.js",
+      "require": "./dist/permissions/app-unpark-authority.js"
     },
     "./permissions/drive-relationship": {
       "types": "./dist/permissions/drive-relationship.d.ts",

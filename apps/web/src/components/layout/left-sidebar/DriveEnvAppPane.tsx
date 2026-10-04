@@ -44,7 +44,6 @@ import { useAppHostingCapability } from '@/hooks/drive-envs/useAppHostingCapabil
 import { useEditingSession } from '@/stores/useEditingSession';
 import { StripeProvider } from '@/components/billing/StripeProvider';
 import { useBillingVisibility } from '@/hooks/useBillingVisibility';
-import { useAuthStore } from '@/stores/useAuthStore';
 import { PaymentElement, useElements, useStripe } from '@stripe/react-stripe-js';
 
 const STATUS_COPY: Record<PublishedAppStatus, { label: string; tone: 'default' | 'secondary' | 'destructive' | 'outline' }> = {
@@ -113,8 +112,8 @@ export function DriveEnvAppPane({
   });
 
   const path = appPath(driveId, envId);
-  const viewerId = useAuthStore((state) => state.user?.id ?? null);
-  const canUnpark = canManage || (app?.costOwnerId != null && app.costOwnerId === viewerId);
+  // The server decides who may un-park (permissions/app-unpark-authority) and says so on the row.
+  const canUnpark = canManage || app?.viewerCanUnpark === true;
 
   const publish = useCallback(async () => {
     setPublishing(true);

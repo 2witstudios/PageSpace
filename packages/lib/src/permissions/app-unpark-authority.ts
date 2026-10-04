@@ -11,6 +11,7 @@
 import { db } from '@pagespace/db/db';
 import { and, eq } from '@pagespace/db/operators';
 import { orgMembers } from '@pagespace/db/schema/organizations';
+import { drives } from '@pagespace/db/schema/core';
 import { ORGS_ENABLED } from '../organizations/orgs-enabled';
 import { isDriveLead, type RelationshipDrive } from './drive-relationship';
 import { loadEffectiveDriveMembership } from './org-drive-membership';
@@ -59,4 +60,18 @@ export async function loadAppUnparkAuthority(
   }
   const isDriveMember = costOwnerId === userId && (isDriveLead(userId, drive) || (await loadEffectiveDriveMembership(userId, drive)) !== null);
   return decideAppUnparkAuthority({ orgsEnabled: ORGS_ENABLED, userId, drive, orgRole, costOwnerId, isDriveMember });
+}
+
+/**
+ * Whether `userId` may un-park this app — what the app pane asks to offer its Resume button to a
+ * creator who does not manage the drive. False for a vanished drive.
+ */
+export async function canUnparkPublishedApp(userId: string, app: { driveId: string; costOwnerId: string | null }): Promise<boolean> {
+  const [drive] = await db
+    .select({ id: drives.id, ownerId: drives.ownerId, orgId: drives.orgId, orgVisibility: drives.orgVisibility })
+    .from(drives)
+    .where(eq(drives.id, app.driveId))
+    .limit(1);
+  if (!drive) return false;
+  return (await loadAppUnparkAuthority(userId, drive, app.costOwnerId)).allowed;
 }

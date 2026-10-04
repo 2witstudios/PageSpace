@@ -1,8 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 
-const { viewer, appState, post } = vi.hoisted(() => ({
-  viewer: { id: 'marcus' as string | null },
+const { appState, post } = vi.hoisted(() => ({
   appState: { app: null as Record<string, unknown> | null },
   post: vi.fn(),
 }));
@@ -12,9 +11,6 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
   post,
   del: vi.fn(),
   ApiRequestError: class extends Error {},
-}));
-vi.mock('@/stores/useAuthStore', () => ({
-  useAuthStore: (select: (state: { user: { id: string } | null }) => unknown) => select({ user: viewer.id ? { id: viewer.id } : null }),
 }));
 vi.mock('@/hooks/drive-envs/useDriveEnvApp', () => ({
   useDriveEnvApp: () => ({ app: appState.app, isLoading: false, mutate: vi.fn() }),
@@ -36,7 +32,8 @@ const parkedOnCap = {
   url: 'https://demo.example',
   flyAppName: 'pgs-app-1',
   lastError: 'parked: org_member_cap_reached',
-  costOwnerId: 'marcus',
+  // The server's answer for this viewer (permissions/app-unpark-authority): Marcus created it.
+  viewerCanUnpark: true,
   createdAt: '2026-10-01T00:00:00.000Z',
 };
 
@@ -47,7 +44,6 @@ const renderPane = (canManage: boolean) => {
 
 describe('DriveEnvAppPane — the creator can resume (un-park) their parked app', () => {
   beforeEach(() => {
-    viewer.id = 'marcus';
     appState.app = { ...parkedOnCap };
     post.mockReset().mockResolvedValue({});
   });
@@ -59,13 +55,13 @@ describe('DriveEnvAppPane — the creator can resume (un-park) their parked app'
   });
 
   it('WAL-2 (partial) a plain member who did not create it is offered no Resume', () => {
-    viewer.id = 'pat';
+    appState.app = { ...parkedOnCap, viewerCanUnpark: false };
     renderPane(false);
     expect(screen.queryByRole('button', { name: /Resume/ })).toBeNull();
   });
 
   it('the creator is offered no Stop or Resume on an app that is not parked', () => {
-    appState.app = { ...parkedOnCap, status: 'stopped', lastError: null };
+    appState.app = { ...parkedOnCap, status: 'stopped', lastError: null, viewerCanUnpark: false };
     renderPane(false);
     expect(screen.queryByRole('button', { name: /Resume/ })).toBeNull();
   });
