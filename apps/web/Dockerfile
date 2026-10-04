@@ -83,9 +83,13 @@ ENV NEXT_TELEMETRY_DISABLED=1
 # Build dependent packages first (db + lib must compile before web)
 RUN bun run --filter '@pagespace/db' build && bun run --filter '@pagespace/lib' build && bun run --filter '@pagespace/editor' build && bun run --filter '@pagespace/browser-worker' build
 
-# Build with development env to ensure Tailwind v4 processes correctly
-# Increased memory for Scribe.js and other heavy dependencies
-RUN cd apps/web && NODE_OPTIONS="--max-old-space-size=4096" bun run build
+# Build with development env to ensure Tailwind v4 processes correctly.
+# Next's production build of apps/web peaks just under Node's ~4GB default heap and
+# OOMs on builder luck; the default matches CI's ceiling (ci.yml, #2740) and fits the
+# 16GB ubuntu-latest runner docker-images.yml builds on. A self-hosted builder with
+# less memory can lower it: --build-arg WEB_BUILD_MAX_OLD_SPACE_MB=<mb>.
+ARG WEB_BUILD_MAX_OLD_SPACE_MB=6144
+RUN cd apps/web && NODE_OPTIONS="--max-old-space-size=${WEB_BUILD_MAX_OLD_SPACE_MB}" bun run build
 
 # Reset NODE_ENV for production runtime
 ENV NODE_ENV=production
