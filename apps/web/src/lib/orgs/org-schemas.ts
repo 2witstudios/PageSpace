@@ -46,3 +46,13 @@ export const orgDeleteSchema = z.object({
     .max(5000)
     .default([]),
 });
+
+// SEC-1: the domain is normalized and judged in lib (normalizeDomain); this only bounds the input.
+export const domainAddSchema = z.object({ domain: z.string().trim().min(1).max(253) });
+
+export const domainVerifySchema = z.discriminatedUnion('method', [
+  z.object({ method: z.literal('dns') }),
+  z.object({ method: z.literal('email'), mailbox: z.enum(['admin', 'administrator', 'hostmaster', 'postmaster', 'webmaster']) }),
+]);
+
+export const domainProofConfirmSchema = z.object({ token: z.string().min(1).max(256) });

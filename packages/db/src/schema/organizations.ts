@@ -130,6 +130,55 @@ export const orgSubscriptions = pgTable('org_subscriptions', {
   updatedAt: timestamp('updatedAt', { mode: 'date' }).default(utcNow).notNull().$onUpdate(() => new Date()),
 });
 
+/**
+ * Verified email domains (Spec SEC-1, D-OW-1). An org CLAIMS a domain by adding it; the claim
+ * proves control by a DNS TXT record carrying `dnsToken`, or by a link mailed to one of the
+ * domain's administrative mailboxes (lib organizations/domains-core.ts names them). Any number of
+ * orgs may hold a pending claim on one domain, each with its own token; only one may hold it
+ * VERIFIED (the partial unique key), and the first to prove control takes it.
+ *
+ * Un-verifying clears `verifiedAt` and stops future auto-joins. It never removes anyone: an
+ * auto-join is an ordinary membership from then on.
+ */
+export const ORG_DOMAIN_VERIFICATION_METHODS = ['dns', 'email'] as const;
+export type OrgDomainVerificationMethod = (typeof ORG_DOMAIN_VERIFICATION_METHODS)[number];
+
+export const orgDomains = pgTable('org_domains', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  orgId: text('orgId').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+  // Lowercase ASCII (punycode), no trailing dot; normalizeDomain in lib is the only writer.
+  domain: text('domain').notNull(),
+  // The public challenge published in DNS. Not a secret: it proves nothing without the DNS write.
+  dnsToken: text('dnsToken').notNull(),
+  // The mailed link's token, hashed like every other token; the raw value lives only in the email.
+  emailTokenHash: text('emailTokenHash').unique(),
+  emailTokenExpiresAt: timestamp('emailTokenExpiresAt', { mode: 'date' }),
+  emailSentTo: text('emailSentTo'),
+  verifiedAt: timestamp('verifiedAt', { mode: 'date' }),
+  verifiedMethod: text('verifiedMethod').$type<OrgDomainVerificationMethod>(),
+  createdBy: text('createdBy').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('createdAt', { mode: 'date' }).default(utcNow).notNull(),
+}, (table) => ({
+  orgDomainKey: unique('org_domains_org_domain_key').on(table.orgId, table.domain),
+  // One org owns a verified domain. A second org's proof is refused, never a second owner.
+  verifiedDomainKey: uniqueIndex('org_domains_verified_domain_key').on(table.domain).where(sql`${table.verifiedAt} IS NOT NULL`),
+}));
+
+/**
+ * One row per person an org's verified domain auto-joined (SEC-1). It outlives the membership on
+ * purpose: a person who leaves or is removed is never re-added by their next sign-in.
+ */
+export const orgDomainJoins = pgTable('org_domain_joins', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  orgId: text('orgId').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+  userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  domain: text('domain').notNull(),
+  joinedAt: timestamp('joinedAt', { mode: 'date' }).default(utcNow).notNull(),
+}, (table) => ({
+  orgUserKey: unique('org_domain_joins_org_user_key').on(table.orgId, table.userId),
+  userIdx: index('org_domain_joins_user_id_idx').on(table.userId),
+}));
+
 export const organizationsRelations = relations(organizations, ({ one, many }) => ({
   owner: one(users, { fields: [organizations.ownerId], references: [users.id] }),
   members: many(orgMembers),
@@ -158,5 +207,6 @@ export type OrgMember = typeof orgMembers.$inferSelect;
 export type NewOrgMember = typeof orgMembers.$inferInsert;
 export type OrgInvitation = typeof orgInvitations.$inferSelect;
 export type NewOrgInvitation = typeof orgInvitations.$inferInsert;
+export type OrgDomain = typeof orgDomains.$inferSelect;
 export type OrgSubscription = typeof orgSubscriptions.$inferSelect;
 export type NewOrgSubscription = typeof orgSubscriptions.$inferInsert;

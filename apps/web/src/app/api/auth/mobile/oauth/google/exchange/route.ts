@@ -67,6 +67,7 @@ import { getClientIP } from '@/lib/auth';
 import { createSessionCookie } from '@/lib/auth/cookie-config';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
 import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
+import { autoJoinVerifiedDomainAfterSignIn } from '@/lib/orgs/domain-auto-join';
 
 const oauthExchangeSchema = z.object({
   idToken: z.string().min(1, 'ID token is required'),
@@ -265,6 +266,9 @@ export async function POST(req: Request) {
       email: maskEmail(user.email),
       provider: user.provider,
     });
+
+    // SEC-1: a new account on an org's verified email domain joins it (seat permitting). Never throws.
+    await autoJoinVerifiedDomainAfterSignIn(user.id);
 
     // Provision the user's Home drive (idempotent). Non-fatal: a failure is
     // retried lazily on the next login through any auth path.

@@ -30,6 +30,7 @@ import {
   consumeAllInvitesForEmail,
   type NativeInviteAcceptanceResult,
 } from '@/lib/auth/native-invite-acceptance';
+import { autoJoinVerifiedDomainAfterSignIn } from '@/lib/orgs/domain-auto-join';
 
 /**
  * Magic-link redemption has one core and two doors.
@@ -443,6 +444,9 @@ async function redeemMagicLink({
     // Continue with login — the session is valid; user can re-attempt invite.
   }
   const invitedDriveId = inviteResult?.invitedDriveId ?? null;
+
+  // SEC-1: a new account on an org's verified email domain joins it (seat permitting). Never throws.
+  await autoJoinVerifiedDomainAfterSignIn(userId);
 
   // Provision the Home drive unconditionally — idempotent, and run BEFORE the
   // redirect branches so every login provisions, including page/connection

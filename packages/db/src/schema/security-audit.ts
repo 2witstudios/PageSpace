@@ -103,7 +103,14 @@ export type SecurityEventType =
   | 'org.policy.restored'
   | 'org.guest.requested'
   | 'org.guest.approved'
-  | 'org.guest.declined';
+  | 'org.guest.declined'
+  // Verified email domains and auto-join (SEC-1).
+  | 'org.domain.added'
+  | 'org.domain.verification_sent'
+  | 'org.domain.verified'
+  | 'org.domain.removed'
+  | 'org.member.auto_joined'
+  | 'org.member.auto_join_refused';
 
 /**
  * Single source of truth for the security_audit_log table shape (#890 Phase 1).

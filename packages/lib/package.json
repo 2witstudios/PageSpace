@@ -149,6 +149,16 @@
       "import": "./dist/organizations/invitations.js",
       "require": "./dist/organizations/invitations.js"
     },
+    "./organizations/domains": {
+      "types": "./dist/organizations/domains.d.ts",
+      "import": "./dist/organizations/domains.js",
+      "require": "./dist/organizations/domains.js"
+    },
+    "./organizations/domains-core": {
+      "types": "./dist/organizations/domains-core.d.ts",
+      "import": "./dist/organizations/domains-core.js",
+      "require": "./dist/organizations/domains-core.js"
+    },
     "./organizations/seat-service": {
       "types": "./dist/organizations/seat-service.d.ts",
       "import": "./dist/organizations/seat-service.js",
