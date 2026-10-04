@@ -135,4 +135,50 @@ describe('reconcileMissedGrants concurrency (Postgres)', () => {
       await db.delete(users).where(eq(users.id, user.id));
     }
   }, 30_000);
+
+  it('MON-2 (partial) WAL-5 (partial) the reconcile threads the money model\'s active flag: a PAID missed grant reconciles at paid × 60%, the ratio actually applied', async () => {
+    if (!dbAvailable) return;
+    const user = await factories.createUser({ subscriptionTier: 'pro' });
+    const priceId = `price_mgr_ratio_${createId()}`;
+    const priceTier = (p: string) => (p === priceId ? ('pro' as const) : ('free' as const));
+    const paidCents = 1500;
+    try {
+      const now = new Date();
+      await db.insert(subscriptions).values({
+        userId: user.id,
+        stripeSubscriptionId: `sub_${createId()}`,
+        stripePriceId: priceId,
+        status: 'active',
+        currentPeriodStart: now,
+        currentPeriodEnd: new Date(now.getTime() + 30 * 86_400_000),
+      });
+      const [wallet] = await db.insert(wallets).values({ ownerType: 'user', userId: user.id }).returning({ id: wallets.id });
+      const ledgerId = createId();
+      await db.insert(creditLedger).values({
+        id: ledgerId,
+        userId: user.id,
+        walletId: wallet.id,
+        entryType: 'missed_grant',
+        bucket: 'monthly',
+        amountCents: 0,
+        paidCents,
+        stripeRef: `in_${createId()}`,
+        consumeStatus: 'applied',
+      });
+
+      const result = await reconcileMissedGrants({ priceTier, active: true });
+
+      expect(result.reconciled).toBeGreaterThanOrEqual(1);
+      // 60% of the 1,500¢ paid, never the whole payment the inactive ratio (100%) would give.
+      const [balance] = await db.select().from(wallets).where(personalRootWalletOf(user.id));
+      expect(balance.monthlyRemainingCents).toBe(900);
+      const [row] = await db.select().from(creditLedger).where(eq(creditLedger.id, ledgerId));
+      expect(row).toMatchObject({ entryType: 'monthly_grant', amountCents: 900 });
+    } finally {
+      await db.delete(creditLedger).where(eq(creditLedger.userId, user.id));
+      await db.delete(wallets).where(eq(wallets.userId, user.id));
+      await db.delete(subscriptions).where(eq(subscriptions.userId, user.id));
+      await db.delete(users).where(eq(users.id, user.id));
+    }
+  }, 30_000);
 });
