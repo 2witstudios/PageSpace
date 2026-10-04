@@ -20,7 +20,7 @@ import { db } from '@pagespace/db/db';
 import { and, eq, gt, gte, inArray, isNull, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { conversations } from '@pagespace/db/schema/conversations';
-import { pages } from '@pagespace/db/schema/core';
+import { drives, pages } from '@pagespace/db/schema/core';
 import { creditHolds, creditLedger } from '@pagespace/db/schema/credits';
 import { orgMembers } from '@pagespace/db/schema/organizations';
 import {
@@ -64,6 +64,7 @@ import {
   type DriveWalletView,
   type PoolFacts,
 } from '../billing/wallet-views';
+import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
 
 export interface WalletServiceError {
   ok: false;
@@ -309,6 +310,56 @@ export async function getDriveWallet(userId: string, driveId: string, credential
 // ---------------------------------------------------------------------------
 
 /**
+ * Seams for the concurrency tests only: `afterAccess` runs between the access decision and the write's
+ * transaction (where a drive move can land), `afterDriveLock` inside the transaction once the drive row is
+ * held. Production passes neither.
+ */
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+export interface WalletWriteHooks {
+  afterAccess?: () => Promise<void>;
+  afterDriveLock?: () => Promise<void>;
+}
+
+const driveMoved = (): WalletServiceError => ({
+  ok: false,
+  status: 409,
+  code: 'drive_moved',
+  message: 'This drive moved into or out of an organization while the change was being made; try again',
+});
+
+/**
+ * Inside a wallet write's transaction, FIRST (before any wallet row, so the lock order is drive then
+ * wallets, as a move takes it): share-lock the drive row, which a move into or out of an org holds FOR
+ * UPDATE, and confirm its org is still the one access was decided on. So the write, its funder and its
+ * org audit event all belong to the drive's org at commit, never to the org it just left.
+ */
+async function lockDriveOrgStanding(tx: Tx, driveId: string, expectedOrgId: string | null): Promise<WalletServiceError | null> {
+  const [drive] = await tx.select({ orgId: drives.orgId }).from(drives).where(eq(drives.id, driveId)).for('share');
+  if (!drive) return notFound();
+  return drive.orgId === expectedOrgId ? null : driveMoved();
+}
+
+/** AUD-1: a change to an ORG drive's wallet, once committed. A personal drive's wallet is no org's business. */
+async function recordOrgWalletEvent(
+  standing: { orgId: string | null; driveId: string },
+  userId: string,
+  eventType: 'org.wallet.allocation_changed' | 'org.wallet.topped_up' | 'org.wallet.donated',
+  details: Record<string, unknown>,
+): Promise<void> {
+  if (standing.orgId === null) return;
+  await recordOrgAuditEventAfterCommit({
+    orgId: standing.orgId,
+    driveId: standing.driveId,
+    eventType,
+    actorId: userId,
+    resourceType: 'drive_wallet',
+    resourceId: standing.driveId,
+    details,
+  });
+}
+
+/**
  * Create the drive's wallet under its parent (WAL-2): the org pool for an org drive, the
  * lead's personal wallet for a personal drive. Its allocation period follows the parent's
  * (D-OW-12); the reset sweep keeps it there.
@@ -318,6 +369,7 @@ export async function createDriveWallet(
   driveId: string,
   input: { allocationCents: number },
   credential: WalletCredential,
+  hooks: WalletWriteHooks = {},
 ): Promise<DriveWalletRead | WalletServiceError> {
   const refused = refuseCredential(credential, 'create');
   if (refused) return refused;
@@ -329,7 +381,11 @@ export async function createDriveWallet(
   if (plan.kind === 'refuse') return { ok: false, status: 400, code: plan.reason, message: 'The allocation must be a whole, non-negative number of cents' };
 
   const { standing } = access;
+  await hooks.afterAccess?.();
   const created = await db.transaction(async (tx) => {
+    const moved = await lockDriveOrgStanding(tx, driveId, standing.orgId);
+    if (moved) return moved;
+    await hooks.afterDriveLock?.();
     let parent: { id: string; monthlyPeriodStart: Date | null; monthlyPeriodEnd: Date | null } | null;
     if (standing.orgId !== null) {
       parent = await orgPoolRow(tx, standing.orgId);
@@ -359,10 +415,12 @@ export async function createDriveWallet(
       .returning({ id: wallets.id });
     return inserted.length > 0 ? ('created' as const) : ('exists' as const);
   });
+  if (typeof created === 'object') return created;
   if (created === 'no_parent') {
     return { ok: false, status: 409, code: 'no_org_pool', message: 'This organization has no pool to allocate from yet' };
   }
   if (created === 'exists') return { ok: false, status: 409, code: 'wallet_exists', message: 'This drive already has a wallet' };
+  await recordOrgWalletEvent(standing, userId, 'org.wallet.allocation_changed', { operation: 'create', allocationCents: input.allocationCents });
   return readView(userId, access);
 }
 
@@ -372,6 +430,7 @@ export async function updateDriveWallet(
   driveId: string,
   input: WalletPatchInput,
   credential: WalletCredential,
+  hooks: WalletWriteHooks = {},
 ): Promise<DriveWalletRead | WalletServiceError> {
   // Every field of a change is a write (allocate, pause, rules): a token may make none of them.
   const refused = refuseCredential(credential, input.allocationCents !== undefined ? 'allocate' : input.paused !== undefined ? 'pause' : 'set_rules');
@@ -381,7 +440,12 @@ export async function updateDriveWallet(
   const lapsed = await requireOrgActiveForWrite(access);
   if (lapsed) return lapsed;
 
+  let applied: Record<string, unknown> = {};
+  await hooks.afterAccess?.();
   const outcome = await db.transaction(async (tx): Promise<WalletServiceError | null> => {
+    const moved = await lockDriveOrgStanding(tx, driveId, access.standing.orgId);
+    if (moved) return moved;
+    await hooks.afterDriveLock?.();
     const [row] = await tx
       .select({ id: wallets.id, status: wallets.status, debtCents: wallets.debtCents })
       .from(wallets)
@@ -397,14 +461,21 @@ export async function updateDriveWallet(
       if (denied) return denied;
     }
     await tx.update(wallets).set(plan.set).where(eq(wallets.id, row.id));
+    applied = { ...plan.set };
     return null;
   });
   if (outcome) return outcome;
+  await recordOrgWalletEvent(access.standing, userId, 'org.wallet.allocation_changed', { operation: 'update', changes: applied });
   return readView(userId, access);
 }
 
 /** Delete a drive wallet that never moved money; anything else is paused instead (wallet-admin). */
-export async function deleteDriveWallet(userId: string, driveId: string, credential: WalletCredential): Promise<{ ok: true } | WalletServiceError> {
+export async function deleteDriveWallet(
+  userId: string,
+  driveId: string,
+  credential: WalletCredential,
+  hooks: WalletWriteHooks = {},
+): Promise<{ ok: true } | WalletServiceError> {
   const refused = refuseCredential(credential, 'delete');
   if (refused) return refused;
   const access = await walletAccess(userId, driveId, credential);
@@ -412,7 +483,11 @@ export async function deleteDriveWallet(userId: string, driveId: string, credent
   const denied = requireAction(access, 'delete') ?? (await requireOrgActiveForWrite(access));
   if (denied) return denied;
 
-  return db.transaction(async (tx): Promise<{ ok: true } | WalletServiceError> => {
+  await hooks.afterAccess?.();
+  const deleted = await db.transaction(async (tx): Promise<{ ok: true } | WalletServiceError> => {
+    const moved = await lockDriveOrgStanding(tx, driveId, access.standing.orgId);
+    if (moved) return moved;
+    await hooks.afterDriveLock?.();
     const [row] = await tx
       .select({ id: wallets.id, topupRemainingCents: wallets.topupRemainingCents, debtCents: wallets.debtCents })
       .from(wallets)
@@ -440,6 +515,8 @@ export async function deleteDriveWallet(userId: string, driveId: string, credent
     await tx.delete(wallets).where(eq(wallets.id, row.id));
     return { ok: true };
   });
+  if (deleted.ok) await recordOrgWalletEvent(access.standing, userId, 'org.wallet.allocation_changed', { operation: 'delete' });
+  return deleted;
 }
 
 // ---------------------------------------------------------------------------
@@ -455,6 +532,7 @@ export async function topUpDriveWallet(
   driveId: string,
   input: { amountCents: number; idempotencyKey: string },
   credential: WalletCredential,
+  hooks: WalletWriteHooks = {},
 ): Promise<{ ok: true; legId: string; amountCents: number; paidDebtCents: number; duplicate: boolean } | WalletServiceError> {
   const refused = refuseCredential(credential, 'top_up');
   if (refused) return refused;
@@ -473,7 +551,12 @@ export async function topUpDriveWallet(
     : await ensurePersonalRootWalletId(db, standing.ownerId);
   if (!payerId) return { ok: false, status: 409, code: 'no_org_pool', message: 'This organization has no pool to pay from' };
 
-  return db.transaction(async (tx) => {
+  await hooks.afterAccess?.();
+  const result = await db.transaction(async (tx) => {
+    // The payer was chosen from the drive's org; a move since then would fund it from the wrong one.
+    const moved = await lockDriveOrgStanding(tx, driveId, standing.orgId);
+    if (moved) return moved;
+    await hooks.afterDriveLock?.();
     // The global wallet lock order (billing/wallet-legs): the drive (child) wallet, then its
     // parent — here the payer, the org pool or the lead's personal root. An id sort could take
     // the parent first and deadlock against a settle or a donation into the same wallet.
@@ -565,6 +648,10 @@ export async function topUpDriveWallet(
     ]);
     return { ok: true as const, legId: leg.id, amountCents: plan.amountCents, paidDebtCents: plan.target.paidDebtCents, duplicate: false };
   });
+  if (result.ok && !result.duplicate) {
+    await recordOrgWalletEvent(standing, userId, 'org.wallet.topped_up', { amountCents: result.amountCents, paidDebtCents: result.paidDebtCents, legId: result.legId });
+  }
+  return result;
 }
 
 /** Donate from the caller's own balance to the drive's wallet (WAL-4); the donation shell re-checks visibility. */
@@ -573,6 +660,7 @@ export async function donateToDrive(
   driveId: string,
   input: { amountCents: number; idempotencyKey: string },
   credential: WalletCredential,
+  hooks: WalletWriteHooks = {},
 ): Promise<{ ok: true; legId: string | null; amountCents: number; paidDebtCents: number; duplicate: boolean } | WalletServiceError> {
   const refused = refuseCredential(credential, 'donate');
   if (refused) return refused;
@@ -583,12 +671,26 @@ export async function donateToDrive(
   const target = await driveWalletRow(db, driveId);
   if (!target) return { ok: false, status: 404, code: 'no_wallet', message: 'This drive has no wallet' };
 
-  const outcome = await donateToDriveWallet({ donorUserId: userId, targetWalletId: target.id, amountCents: input.amountCents, donationId: input.idempotencyKey });
-  if (outcome.kind === 'donated') return { ok: true, legId: outcome.legId, amountCents: outcome.amountCents, paidDebtCents: outcome.paidDebtCents, duplicate: false };
+  await hooks.afterAccess?.();
+  const outcome = await donateToDriveWallet({
+    donorUserId: userId,
+    targetWalletId: target.id,
+    amountCents: input.amountCents,
+    donationId: input.idempotencyKey,
+    // Re-checked under the drive row's lock inside the donation's transaction (see lockDriveOrgStanding).
+    expectedDrive: { driveId, orgId: access.standing.orgId },
+    afterDriveLock: hooks.afterDriveLock,
+  });
+  if (outcome.kind === 'donated') {
+    await recordOrgWalletEvent(access.standing, userId, 'org.wallet.donated', { amountCents: outcome.amountCents, paidDebtCents: outcome.paidDebtCents, legId: outcome.legId });
+    return { ok: true, legId: outcome.legId, amountCents: outcome.amountCents, paidDebtCents: outcome.paidDebtCents, duplicate: false };
+  }
   if (outcome.kind === 'duplicate') return { ok: true, legId: outcome.legId, amountCents: input.amountCents, paidDebtCents: 0, duplicate: true };
   switch (outcome.reason) {
     case 'insufficient_funds':
       return { ok: false, status: 402, code: outcome.reason, message: 'Your balance cannot cover this donation' };
+    case 'drive_moved':
+      return driveMoved();
     case 'donations_disabled':
       return { ok: false, status: 409, code: outcome.reason, message: 'This drive does not accept donations' };
     case 'billing_disabled':

@@ -54,7 +54,7 @@ describe('/api/orgs/[orgId]/billing/seats', () => {
     mockSet.mockResolvedValue(true);
     const res = await PATCH(patch({ autoAdd: true }), ctx);
     expect(res.status).toBe(200);
-    expect(mockSet).toHaveBeenCalledWith('org_1', true);
+    expect(mockSet).toHaveBeenCalledWith('org_1', true, 'u1');
     expect(mockAudit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ details: { operation: 'set_seat_auto_add', autoAdd: true } }));
     expect((await PATCH(patch({ autoAdd: 'yes' }), ctx)).status).toBe(400);
     expect((await PATCH(patch({ autoAdd: true, extra: 1 }), ctx)).status).toBe(400);

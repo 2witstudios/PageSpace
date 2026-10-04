@@ -71,6 +71,13 @@
       "when": 1784826780946,
       "tag": "0009_old_magneto",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1791132617571,
+      "tag": "0010_security_audit_org_index",
+      "breakpoints": true
     }
   ]
 }

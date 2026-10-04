@@ -26,6 +26,8 @@ vi.mock('../../audit/org-audit', () => ({
     if (audit.failNext) throw new Error('audit chain unavailable');
     audit.events.push(event);
   }),
+  // Other mutations' org events (membership, drives) are not what this suite asserts.
+  recordOrgAuditEventAfterCommit: vi.fn(async () => true),
 }));
 
 import { getOrgPolicies, updateOrgPolicies } from '../policies';

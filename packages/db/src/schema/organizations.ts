@@ -130,6 +130,85 @@ export const orgSubscriptions = pgTable('org_subscriptions', {
   updatedAt: timestamp('updatedAt', { mode: 'date' }).default(utcNow).notNull().$onUpdate(() => new Date()),
 });
 
+/**
+ * Verified email domains (Spec SEC-1, D-OW-1). An org CLAIMS a domain by adding it; the claim
+ * proves control by a DNS TXT record carrying `dnsToken`, or by a link mailed to one of the
+ * domain's administrative mailboxes (lib organizations/domains-core.ts names them). Any number of
+ * orgs may hold a pending claim on one domain, each with its own token; only one may hold it
+ * VERIFIED (the partial unique key), and the first to prove control takes it.
+ *
+ * Un-verifying clears `verifiedAt` and stops future auto-joins. It never removes anyone: an
+ * auto-join is an ordinary membership from then on.
+ */
+export const ORG_DOMAIN_VERIFICATION_METHODS = ['dns', 'email'] as const;
+export type OrgDomainVerificationMethod = (typeof ORG_DOMAIN_VERIFICATION_METHODS)[number];
+
+export const orgDomains = pgTable('org_domains', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  orgId: text('orgId').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+  // Lowercase ASCII (punycode), no trailing dot; normalizeDomain in lib is the only writer.
+  domain: text('domain').notNull(),
+  // The public challenge published in DNS. Not a secret: it proves nothing without the DNS write.
+  dnsToken: text('dnsToken').notNull(),
+  // The mailed link's token, hashed like every other token; the raw value lives only in the email.
+  emailTokenHash: text('emailTokenHash').unique(),
+  emailTokenExpiresAt: timestamp('emailTokenExpiresAt', { mode: 'date' }),
+  emailSentTo: text('emailSentTo'),
+  verifiedAt: timestamp('verifiedAt', { mode: 'date' }),
+  verifiedMethod: text('verifiedMethod').$type<OrgDomainVerificationMethod>(),
+  createdBy: text('createdBy').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('createdAt', { mode: 'date' }).default(utcNow).notNull(),
+}, (table) => ({
+  orgDomainKey: unique('org_domains_org_domain_key').on(table.orgId, table.domain),
+  // One org owns a verified domain. A second org's proof is refused, never a second owner.
+  verifiedDomainKey: uniqueIndex('org_domains_verified_domain_key').on(table.domain).where(sql`${table.verifiedAt} IS NOT NULL`),
+}));
+
+/**
+ * One row per person who has LEFT an org, however they joined it (invitation, verified-domain
+ * auto-join, or a row written directly) and however they went (they left, an Admin removed them, or
+ * their account went). Written by the org's one departure function (lib organizations/leave.ts
+ * leaveOrganization), in the same transaction as the membership delete, and read by verified-domain
+ * auto-join (SEC-1): an address on the org's domain never brings back someone who left or was removed.
+ * An explicit invitation still can; that is a person choosing to let them back in.
+ *
+ * A later departure overwrites the row (the latest one is what the org knows). The row goes with the
+ * org and with the account.
+ */
+export const ORG_DEPARTURE_REASONS = ['left', 'removed', 'account_deleted'] as const;
+export type OrgDepartureReason = (typeof ORG_DEPARTURE_REASONS)[number];
+
+export const orgMemberDepartures = pgTable('org_member_departures', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  orgId: text('orgId').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+  userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  reason: text('reason').$type<OrgDepartureReason>().notNull(),
+  departedAt: timestamp('departedAt', { mode: 'date' }).default(utcNow).notNull(),
+}, (table) => ({
+  orgUserKey: unique('org_member_departures_org_user_key').on(table.orgId, table.userId),
+  userIdx: index('org_member_departures_user_id_idx').on(table.userId),
+}));
+
+/**
+ * [D-OW-27] The post-erasure suppression of a departed member, per org: when someone who left or was
+ * removed deletes their account, their org_member_departures rows go with the user row, so this keeps
+ * the minimum that stops a new account with the same address being auto-joined back by a verified
+ * domain (SEC-1): a KEYED blind index of the normalized email (HMAC-SHA256 under the server's index key,
+ * lib encryption/blind-index emailBlindIndex), never the email itself, which no one can recover from it.
+ *
+ * Deliberately no user reference: nothing cascades into it, so the account's deletion cannot remove it,
+ * and there is no CHECK to trip on a SET NULL. It goes with the org; an org Admin can clear one by
+ * typing the address. A do-not-contact style record, kept after erasure (see the GDPR registry).
+ */
+export const orgDepartureSuppressions = pgTable('org_departure_suppressions', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  orgId: text('orgId').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+  emailHash: text('emailHash').notNull(),
+  createdAt: timestamp('createdAt', { mode: 'date' }).default(utcNow).notNull(),
+}, (table) => ({
+  orgEmailKey: unique('org_departure_suppressions_org_email_key').on(table.orgId, table.emailHash),
+}));
+
 export const organizationsRelations = relations(organizations, ({ one, many }) => ({
   owner: one(users, { fields: [organizations.ownerId], references: [users.id] }),
   members: many(orgMembers),
@@ -158,5 +237,6 @@ export type OrgMember = typeof orgMembers.$inferSelect;
 export type NewOrgMember = typeof orgMembers.$inferInsert;
 export type OrgInvitation = typeof orgInvitations.$inferSelect;
 export type NewOrgInvitation = typeof orgInvitations.$inferInsert;
+export type OrgDomain = typeof orgDomains.$inferSelect;
 export type OrgSubscription = typeof orgSubscriptions.$inferSelect;
 export type NewOrgSubscription = typeof orgSubscriptions.$inferInsert;

@@ -46,6 +46,7 @@ import { stripeOrgBilling, type OrgBillingStripe } from '@/lib/org-billing/org-s
 import { stripe as appStripe, type Stripe } from '@/lib/stripe';
 import { stripeConfig } from '@/lib/stripe-config';
 import { invoiceSubscriptionId } from './dedicated-routing';
+import { recordOrgAuditEventAfterCommit } from '@pagespace/lib/audit/org-audit';
 
 export interface OrgWebhookDeps {
   /** Only the read: the mirror re-fetches the subscription, it never writes to Stripe. */
@@ -94,7 +95,17 @@ function logUnapplied(route: Exclude<BillingOwnerRoute, { kind: 'org' } | { kind
 }
 
 export type OrgMirrorOutcome =
-  | { kind: 'applied'; orgId: string; stripeStatus: string; before: OrgStatus; after: OrgStatus; transition: OrgLapseTransition | null }
+  | {
+      kind: 'applied';
+      orgId: string;
+      stripeStatus: string;
+      cancelAtPeriodEnd: boolean;
+      /** What org_subscriptions held before this mirror: a change is an AUD-1 billing event. */
+      previous: { stripeStatus: string; cancelAtPeriodEnd: boolean };
+      before: OrgStatus;
+      after: OrgStatus;
+      transition: OrgLapseTransition | null;
+    }
   | { kind: 'ignored'; orgId: string; reason: 'no_row' | 'ignore_other_subscription' };
 
 /**
@@ -130,9 +141,37 @@ export async function mirrorOrgSubscription(
     const before = deriveOrgStatus({ billingEnabled, subscription: stored, orgCreatedAt, now }).status;
     await tx.update(orgSubscriptions).set(next).where(eq(orgSubscriptions.id, stored.id));
     const after = deriveOrgStatus({ billingEnabled, subscription: next, orgCreatedAt, now }).status;
-    return { kind: 'applied', orgId, stripeStatus: fetched.status, before, after, transition: orgLapseTransition(before, after) };
+    return {
+      kind: 'applied',
+      orgId,
+      stripeStatus: fetched.status,
+      cancelAtPeriodEnd: fetched.cancelAtPeriodEnd,
+      previous: { stripeStatus: stored.status, cancelAtPeriodEnd: stored.cancelAtPeriodEnd },
+      before,
+      after,
+      transition: orgLapseTransition(before, after),
+    };
   });
 
+  if (outcome.kind === 'applied' && (outcome.previous.stripeStatus !== outcome.stripeStatus || outcome.previous.cancelAtPeriodEnd !== outcome.cancelAtPeriodEnd)) {
+    // AUD-1: a billing event, only when something changed (a redelivered event mirrors the same state).
+    await recordOrgAuditEventAfterCommit({
+      orgId,
+      eventType: 'org.billing.subscription_changed',
+      resourceType: 'org_subscription',
+      resourceId: orgId,
+      details: {
+        source: 'stripe_webhook',
+        eventId,
+        from: outcome.previous.stripeStatus,
+        to: outcome.stripeStatus,
+        cancelAtPeriodEnd: outcome.cancelAtPeriodEnd,
+        orgStatusBefore: outcome.before,
+        orgStatusAfter: outcome.after,
+        ...(outcome.transition ? { transition: outcome.transition } : {}),
+      },
+    });
+  }
   if (outcome.kind === 'ignored') {
     loggers.api.info('Stripe org subscription event not mirrored', { eventId, orgId, subscriptionId, reason: outcome.reason });
   } else if (outcome.transition !== null) {

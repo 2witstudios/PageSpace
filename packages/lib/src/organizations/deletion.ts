@@ -31,6 +31,7 @@ import { revokeOrgDriveGrantsForMembers } from './leave';
 import { publishDriveAccessEvents, type OrgMembershipSyncPorts } from '../services/org-membership-sync';
 import type { AffectedUser } from '../services/org-membership-sync-core';
 import { closeStaleDriveJoinRequests } from '../permissions/drive-join-request-closure';
+import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
 
 export type DriveDeletionChoice =
   | { driveId: string; action: 'transfer'; toUserId: string }
@@ -146,6 +147,7 @@ export async function deleteOrganization(
   deps: DeleteOrganizationDeps = {},
 ): Promise<DeleteOrganizationResult> {
   const toKick: RevokedRow[] = [];
+  let subscriptionEnded = false;
   const result = await db.transaction(async (tx): Promise<DeleteOrganizationResult> => {
     // The billing lock FIRST (before the org row lock, the order provisioning takes them
     // in): a provisioning in flight finishes and its subscription is seen and ended
@@ -244,11 +246,27 @@ export async function deleteOrganization(
         throw new Error(`Organization ${input.orgId} has a live subscription and no way to end it was given; refusing to delete`);
       }
       await deps.endSubscription({ orgId: input.orgId, stripeSubscriptionId: subscription.stripeSubscriptionId });
+      subscriptionEnded = true;
     }
 
     await tx.delete(organizations).where(eq(organizations.id, input.orgId));
     return { ok: true, steps: plan.steps };
   });
+  if (result.ok) {
+    // AUD-1: the last event under this org, naming where each drive went (ids only) and whether its
+    // subscription was ended.
+    await recordOrgAuditEventAfterCommit({
+      orgId: input.orgId,
+      eventType: 'org.deleted',
+      actorId: input.actorId,
+      resourceType: 'organization',
+      resourceId: input.orgId,
+      details: {
+        drives: result.steps.map((step) => ({ driveId: step.driveId, destination: step.destination, ownerId: step.ownerId })),
+        subscriptionEnded,
+      },
+    });
+  }
   // Once committed, and best effort: each person gets one member_removed event naming the drives
   // they lost (the sidebar and picker refresh on it) and a room kick per drive, 20 at a time.
   if (result.ok && toKick.length > 0) {

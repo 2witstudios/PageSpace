@@ -22,6 +22,7 @@ import {
   consumeAllInvitesForEmail,
   consumeAnyInviteIfPresent,
 } from '@/lib/auth/native-invite-acceptance';
+import { autoJoinVerifiedDomainAfterSignIn } from '@/lib/orgs/domain-auto-join';
 
 const verifySchema = z.object({
   email: z.email(),
@@ -277,6 +278,9 @@ export async function POST(req: Request) {
         });
       }
     }
+
+    // SEC-1: a new account on an org's verified email domain joins it (seat permitting). Never throws.
+    await autoJoinVerifiedDomainAfterSignIn(userId);
 
     let deviceTokenValue: string | undefined;
     if (deviceId) {

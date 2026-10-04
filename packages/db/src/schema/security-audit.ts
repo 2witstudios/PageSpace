@@ -21,7 +21,7 @@ import {
   bigserial,
   type ExtraConfigColumn,
 } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
+import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
 
@@ -97,13 +97,49 @@ export type SecurityEventType =
   | 'credential.operation.failed'
   | 'credential.operation.unknown'
   // Org-scoped events (Spec AUD-1). details.orgId is the org dimension every query filters on; the
-  // family is defined in lib audit/org-audit.ts.
+  // family is defined in lib audit/org-audit.ts and catalogued by category in audit/org-audit-query-core.ts.
+  | 'org.created'
+  | 'org.updated'
+  | 'org.deleted'
+  | 'org.ownership.transferred'
+  | 'org.member.joined'
+  | 'org.member.role_changed'
+  | 'org.member.removed'
+  | 'org.member.left'
+  | 'org.invite.created'
+  | 'org.invite.resent'
+  | 'org.invite.revoked'
+  | 'org.seat.auto_add_changed'
+  | 'org.seat.quantity_changed'
+  | 'org.seat.refused'
+  | 'org.drive.created'
+  | 'org.drive.moved_in'
+  | 'org.drive.moved_out'
+  | 'org.drive.lead_changed'
+  | 'org.drive.visibility_changed'
+  | 'org.drive.join_requested'
+  | 'org.drive.join_approved'
+  | 'org.drive.join_declined'
+  | 'org.drive.join_withdrawn'
+  | 'org.wallet.allocation_changed'
+  | 'org.wallet.topped_up'
+  | 'org.wallet.donated'
+  | 'org.billing.subscription_changed'
+  | 'org.billing.pool_refilled'
   | 'org.policy.changed'
   | 'org.policy.suspended'
   | 'org.policy.restored'
   | 'org.guest.requested'
   | 'org.guest.approved'
-  | 'org.guest.declined';
+  | 'org.guest.declined'
+  // Verified email domains and auto-join (SEC-1).
+  | 'org.domain.added'
+  | 'org.domain.verification_sent'
+  | 'org.domain.verified'
+  | 'org.domain.removed'
+  | 'org.member.auto_joined'
+  | 'org.member.auto_join_refused'
+  | 'org.member.suppression_cleared';
 
 /**
  * Single source of truth for the security_audit_log table shape (#890 Phase 1).
@@ -177,7 +213,8 @@ type SecurityAuditLogIndexColumns = Record<
   | 'eventHash'
   | 'chainSeq'
   | 'riskScore'
-  | 'sessionId',
+  | 'sessionId'
+  | 'details',
   Partial<ExtraConfigColumn>
 >;
 
@@ -202,6 +239,11 @@ const securityAuditLogIndexes = (table: SecurityAuditLogIndexColumns) => ({
   riskScoreIdx: index('idx_security_audit_risk_score').on(table.riskScore),
   // Session tracking
   sessionIdx: index('idx_security_audit_session').on(table.sessionId, table.timestamp),
+  // The org audit log (AUD-3): one org's rows, newest first by chain_seq (the keyset the log and its
+  // CSV export page by). Partial: only rows that carry an org dimension, a small slice of the log.
+  orgChainSeqIdx: index('idx_security_audit_org_chain_seq')
+    .on(sql`(${table.details} ->> 'orgId')`, table.chainSeq)
+    .where(sql`(${table.details} ->> 'orgId') IS NOT NULL`),
 });
 
 export const defineSecurityAuditLogTable = (opts: { crossPlaneUserFk: boolean }) =>

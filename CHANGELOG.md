@@ -9,6 +9,23 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Organization audit log** — an organization Owner or Admin can read the organization's audit log:
+  membership and ownership changes, seats, invitations, policy changes, verified domains, drive
+  visibility, join requests, drives created in or moved into and out of the organization, lead changes,
+  an Owner or Admin opening a Private drive, drive wallet changes, top-ups, donations and billing events.
+  It filters by event type or category, by drive and by time, and exports to CSV (values that would run
+  as a spreadsheet formula are written as plain text). The log is part of the existing tamper-evident
+  security audit trail, and it only ever shows the organization's own events.
+- **Verified email domains for organizations** — an organization Owner or Admin can add the
+  organization's email domain and prove it is theirs, either with a DNS TXT record or with a link sent
+  to an administrative mailbox of the domain (admin@, postmaster@ and the like). Once verified, people
+  who create a PageSpace account with a verified address on that domain join the organization as members
+  automatically, taking a seat: if every seat is taken and automatic seat purchase is off they are not
+  added, and the Owner finds the refusal in the audit trail. Joining opens the organization's Open drives
+  only, never a Restricted or Private one. Only one organization can hold a domain, shared providers such
+  as gmail.com cannot be claimed, existing accounts and guests are never swept in, and someone who leaves
+  or is removed is not re-added, even after deleting their account and signing up again (the organization
+  keeps only a one-way fingerprint of the address, which an Owner or Admin can clear). Removing a domain stops future joins and removes nobody.
 - **Organization sharing policies** — an organization Owner or Admin can turn public share links,
   publishing to the web, custom domains and guests from outside the organization off, or (for guests)
   require approval. Turning one off pauses what already exists instead of deleting it: share links stop

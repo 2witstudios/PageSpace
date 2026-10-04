@@ -25,6 +25,7 @@ import {
   consumeAllInvitesForEmail,
   consumeAnyInviteIfPresent,
 } from '@/lib/auth/native-invite-acceptance';
+import { autoJoinVerifiedDomainAfterSignIn } from '@/lib/orgs/domain-auto-join';
 
 const client = new OAuth2Client();
 
@@ -224,6 +225,9 @@ export async function POST(req: Request) {
 
       loggers.auth.info('New user created via native Google OAuth', { userId: user.id, platform });
     }
+
+    // SEC-1: a new account on an org's verified email domain joins it (seat permitting). Never throws.
+    await autoJoinVerifiedDomainAfterSignIn(user.id);
 
     await provisionHomeDriveIfNeeded(user.id).catch((error) => {
       loggers.auth.error('Failed to provision Home drive', error as Error, {

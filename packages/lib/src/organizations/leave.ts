@@ -16,16 +16,18 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, asc, eq, inArray, isNotNull, isNull, ne, not, or } from '@pagespace/db/operators';
+import { and, asc, eq, inArray, isNotNull, isNull, ne, not, or, sql } from '@pagespace/db/operators';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { driveAgentMembers, driveMembers, mcpTokenDrives } from '@pagespace/db/schema/members';
 import { mcpTokens } from '@pagespace/db/schema/auth';
 import { oauthAccessTokens, oauthRefreshTokens } from '@pagespace/db/schema/oauth';
 import { driveShareLinks, pageShareLinks } from '@pagespace/db/schema/share-links';
-import { orgMembers, organizations, type OrgRole } from '@pagespace/db/schema/organizations';
+import { orgMemberDepartures, orgMembers, organizations, type OrgDepartureReason, type OrgRole } from '@pagespace/db/schema/organizations';
 import { getActorInfo, logActivityWithTx } from '../monitoring/activity-logger';
 import { parseScopeList } from '../auth/oauth/scopes';
 import { closeStaleDriveJoinRequests } from '../permissions/drive-join-request-closure';
+import { recordLeaveEvents } from './org-events';
+import { recordDepartureSuppression } from './departure-suppression';
 
 /** A Drizzle transaction handle. */
 export type LeaveTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -333,6 +335,8 @@ export type LeaveOrganizationResult =
 export interface LeaveOrganizationOptions {
   reason?: LeadReassignmentReason;
   actor?: LeaveActor;
+  /** How the membership ended, as org_member_departures records it; default 'left' ('account_deleted' with that reason). */
+  departure?: OrgDepartureReason;
 }
 
 /**
@@ -346,7 +350,12 @@ export async function leaveOrganization(
   tx?: LeaveTx,
   options: LeaveOrganizationOptions = {},
 ): Promise<LeaveOrganizationResult> {
-  if (!tx) return db.transaction((own) => leaveOrganization(userId, orgId, own, options));
+  if (!tx) {
+    const result = await db.transaction((own) => leaveOrganization(userId, orgId, own, options));
+    // Inside a caller's transaction (removal, account deletion) the caller records the event once it commits.
+    if (result.ok) await recordLeaveEvents({ orgId, userId, actorId: userId, eventType: 'org.member.left', reason: options.reason, reassigned: result.reassigned });
+    return result;
+  }
 
   const [membership] = await tx
     .select({ id: orgMembers.id, role: orgMembers.role })
@@ -389,6 +398,20 @@ export async function leaveOrganization(
   });
 
   await tx.delete(orgMembers).where(eq(orgMembers.id, membership.id));
+  // SEC-1: the org remembers that this person left, however they had joined, in the same transaction
+  // as the delete. This is the ONE place a membership ends (a seam test keeps it that way), so a
+  // verified domain can never auto-join someone back who left or was removed.
+  const departure: OrgDepartureReason = options.departure ?? (options.reason === 'account_deleted' ? 'account_deleted' : 'left');
+  await tx
+    .insert(orgMemberDepartures)
+    .values({ orgId, userId, reason: departure })
+    .onConflictDoUpdate({
+      target: [orgMemberDepartures.orgId, orgMemberDepartures.userId],
+      set: { reason: departure, departedAt: sql`(now() at time zone 'utc')` },
+    });
+  // [D-OW-27] and the mailbox, keyed and hashed, in the same transaction: a second account on it (or a
+  // +subaddress of it) is not auto-joined back either. Removed and voluntary leavers alike.
+  await recordDepartureSuppression(tx, orgId, userId);
   // DRV-6: the leaver's pending join requests on the org's drives ask for nothing now (nor does one
   // by a reassigned drive's new lead); approvers stop seeing them.
   await closeStaleDriveJoinRequests(tx, driveRows.map((d) => d.id));
@@ -416,11 +439,16 @@ export class LeaveOrganizationRefusedError extends Error {
  * first refusal (an Owner), so the caller's transaction rolls back: account deletion must not
  * proceed half-cascaded.
  */
+export interface LeftOrganization {
+  orgId: string;
+  reassigned: LeadReassignment[];
+}
+
 export async function leaveAllOrganizations(
   userId: string,
   tx: LeaveTx,
   options: LeaveOrganizationOptions = {},
-): Promise<LeadReassignment[]> {
+): Promise<LeftOrganization[]> {
   const memberships = await tx
     .select({ orgId: orgMembers.orgId })
     .from(orgMembers)
@@ -429,11 +457,11 @@ export async function leaveAllOrganizations(
     // transaction rolls back whatever earlier orgs already applied).
     .orderBy(orgMembers.joinedAt, orgMembers.id);
 
-  const reassigned: LeadReassignment[] = [];
+  const left: LeftOrganization[] = [];
   for (const { orgId } of memberships) {
     const result = await leaveOrganization(userId, orgId, tx, options);
     if (!result.ok) throw new LeaveOrganizationRefusedError(orgId, result.reason);
-    reassigned.push(...result.reassigned);
+    left.push({ orgId, reassigned: result.reassigned });
   }
-  return reassigned;
+  return left;
 }

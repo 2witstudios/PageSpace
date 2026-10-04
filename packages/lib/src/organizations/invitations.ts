@@ -22,7 +22,8 @@ import { orgActorDecision } from './org-action-decisions';
 import { policyRefusal, type PolicyRefusal } from './sharing-decisions';
 import { checkOrgActive, type OrgLapsedRefusal } from './status';
 import type { ORG_LAPSED_CODE } from './status-core';
-import { admitSeat, type SeatAdmission, type SeatBillingPort } from './seat-service';
+import { admitSeat, recordSeatAdmissionEvents, type SeatAdmission, type SeatBillingPort } from './seat-service';
+import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
 import {
   publishOrgMembershipSyncEvents,
   syncOrgMemberAccess,
@@ -167,6 +168,7 @@ export async function createOrRotateInvitation(input: {
   seatBilling?: SeatBillingPort;
 }): Promise<IssueInvitationResult> {
   let issued: Issued;
+  let seat = null as SeatAdmission | null;
   try {
     issued = await db.transaction(async (tx): Promise<Issued> => {
       await lockOrgInviteAddress(tx, input.orgId, input.email);
@@ -196,7 +198,7 @@ export async function createOrRotateInvitation(input: {
       // SEAT-3/4/5: a new or rotated invite holds a seat. Decided under the org's billing lock,
       // after the address is known to need one and before anything is written; an auto-add
       // raise and this invite commit or roll back together.
-      const seat = await admitSeat(tx, { orgId: input.orgId, actorRole: input.actorRole }, input.seatBilling);
+      seat = await admitSeat(tx, { orgId: input.orgId, actorRole: input.actorRole }, input.seatBilling);
       if (!seat.ok) return seat;
 
       const { token, hash } = generateToken(ORG_INVITE_TOKEN_PREFIX);
@@ -220,6 +222,8 @@ export async function createOrRotateInvitation(input: {
     if (isUniqueViolation(error)) return { ok: false, status: 409, reason: 'already_invited' };
     throw error;
   }
+  // A raise is bought (and a refusal decided) whatever happens to the email below.
+  if (seat) await recordSeatAdmissionEvents({ orgId: input.orgId, actorId: input.invitedBy, admission: seat, operation: 'invite' });
   if (!issued.ok) return issued;
 
   const { invitation, token, previous } = issued;
@@ -242,6 +246,14 @@ export async function createOrRotateInvitation(input: {
     }
     return { ok: false, status: 502, reason: 'delivery_failed', cause };
   }
+  await recordOrgAuditEventAfterCommit({
+    orgId: input.orgId,
+    eventType: 'org.invite.created',
+    actorId: input.invitedBy,
+    resourceType: 'organization_invitation',
+    resourceId: invitation.id,
+    details: { role: invitation.role, rotated: previous !== null },
+  });
   return { ok: true, invitation: toPublic(invitation), token, rotated: previous !== null };
 }
 
@@ -278,12 +290,15 @@ export async function resendInvitation(input: {
   invitationId: string;
   /** The resender's org role: what the who-can-invite policy (POL-5) is judged on, and the wording of a seat refusal. */
   actorRole: OrgRole;
+  /** Who resent it: the audit actor (AUD-1). */
+  actorId?: string;
   now: Date;
   deliver: InviteDelivery;
   /** Stripe's seat item, for an auto-add raise when the resent invite was expired (SEAT-4). */
   seatBilling?: SeatBillingPort;
 }): Promise<ResendInvitationResult> {
   const { token, hash } = generateToken(ORG_INVITE_TOKEN_PREFIX);
+  let seat = null as SeatAdmission | null;
   const rotated = await db.transaction(async (tx) => {
     // The address lock first, as creation and acceptance take it, so a resend and a fresh invite
     // for the same address serialize (the billing lock below is always taken after it).
@@ -312,7 +327,7 @@ export async function resendInvitation(input: {
     const refusal = await inviterRefusal(tx, input.orgId, input.actorRole, previous.role);
     if (refusal) return refusal;
     if (!isLiveInvite(previous, input.now)) {
-      const seat = await admitSeat(tx, { orgId: input.orgId, actorRole: input.actorRole }, input.seatBilling);
+      seat = await admitSeat(tx, { orgId: input.orgId, actorRole: input.actorRole }, input.seatBilling);
       if (!seat.ok) return seat;
     }
     const [invitation] = await tx
@@ -322,6 +337,7 @@ export async function resendInvitation(input: {
       .returning();
     return { previous, invitation };
   });
+  if (seat) await recordSeatAdmissionEvents({ orgId: input.orgId, actorId: input.actorId, admission: seat, operation: 'resend' });
   if (!rotated) return { ok: false, status: 404, reason: 'not_found' };
   if ('ok' in rotated) return rotated;
 
@@ -340,10 +356,18 @@ export async function resendInvitation(input: {
       );
     return { ok: false, status: 502, reason: 'delivery_failed', cause };
   }
+  await recordOrgAuditEventAfterCommit({
+    orgId: input.orgId,
+    eventType: 'org.invite.resent',
+    actorId: input.actorId,
+    resourceType: 'organization_invitation',
+    resourceId: rotated.invitation.id,
+    details: { wasExpired: !isLiveInvite(rotated.previous, input.now) },
+  });
   return { ok: true, invitation: toPublic(rotated.invitation), token };
 }
 
-export async function revokeInvitation(input: { orgId: string; invitationId: string }): Promise<boolean> {
+export async function revokeInvitation(input: { orgId: string; invitationId: string; actorId?: string }): Promise<boolean> {
   const deleted = await db
     .delete(orgInvitations)
     .where(
@@ -354,7 +378,15 @@ export async function revokeInvitation(input: { orgId: string; invitationId: str
       ),
     )
     .returning({ id: orgInvitations.id });
-  return deleted.length > 0;
+  if (deleted.length === 0) return false;
+  await recordOrgAuditEventAfterCommit({
+    orgId: input.orgId,
+    eventType: 'org.invite.revoked',
+    actorId: input.actorId,
+    resourceType: 'organization_invitation',
+    resourceId: input.invitationId,
+  });
+  return true;
 }
 
 export type AcceptInvitationResult =
@@ -461,5 +493,15 @@ export async function acceptInvitation(
     };
   }));
   if (outcome.sync) await deps.publishSyncEvents(outcome.sync);
+  if (outcome.result.ok && outcome.result.joined) {
+    await recordOrgAuditEventAfterCommit({
+      orgId: outcome.result.orgId,
+      eventType: 'org.member.joined',
+      actorId: input.userId,
+      resourceType: 'user',
+      resourceId: input.userId,
+      details: { role: outcome.result.role, via: 'invitation' },
+    });
+  }
   return outcome.result;
 }
