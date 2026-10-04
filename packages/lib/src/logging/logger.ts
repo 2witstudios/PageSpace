@@ -7,7 +7,7 @@ import { hostname } from 'os';
 import { createId } from '@paralleldrive/cuid2';
 import type { LogInput } from './logger-types';
 import { scrubPII } from '../compliance/pii-scrubber';
-import { errorCauseChain, formatCauseChain, redactQueryParams, type ErrorCauseLink } from './error-cause';
+import { errorCauseChain, formatCauseChain, loggableMessage, loggableStack, type ErrorCauseLink } from './error-cause';
 import { fireSiemErrorHook, type SiemErrorPayload } from './siem-error-hook';
 import { createShutdownHandler } from './graceful-shutdown';
 
@@ -240,11 +240,13 @@ class Logger {
       const cause = errorCauseChain(error).map((link) => ({ ...link, message: scrubPII(link.message) ?? '[scrub_failed]' }));
       // Bound query params never reach a sink (review P3-4): a DrizzleQueryError's message — and the
       // stack, which repeats it — carry them verbatim.
-      const ownStack = redactQueryParams(error.stack);
-      const stack = cause.length > 0 ? `${ownStack ?? `${error.name}: ${redactQueryParams(error.message)}`}\n${formatCauseChain(cause)}` : ownStack;
+      // A SQLSTATE class 22 error quotes the offending value, so its message is withheld (review
+      // 5407898542 P3-1) — on the error itself and on every cause.
+      const ownStack = loggableStack(error);
+      const stack = cause.length > 0 ? `${ownStack ?? `${error.name}: ${loggableMessage(error)}`}\n${formatCauseChain(cause)}` : ownStack;
       entry.error = {
         name: error.name,
-        message: scrubPII(redactQueryParams(error.message)) ?? '[scrub_failed]',
+        message: scrubPII(loggableMessage(error)) ?? '[scrub_failed]',
         stack: scrubPII(stack),
         ...(cause.length > 0 ? { cause } : {}),
       };

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { DrizzleQueryError } from 'drizzle-orm/errors';
-import { errorCauseChain, errorLogFields, formatCauseChain } from '../error-cause';
+import { errorCauseChain, errorLogFields, formatCauseChain, VALUE_ECHO_WITHHELD } from '../error-cause';
 
 /** `new Error(message, { cause })` without the ES2022 lib this package does not target. */
 const withCause = (message: string, cause: unknown): Error => Object.assign(new Error(message), { cause });
@@ -73,5 +73,27 @@ describe('bound query parameters never reach a log line (review P3-4)', () => {
   it('a Drizzle error nested in a chain is redacted too', () => {
     const outer = withCause('settle failed', secretQuery());
     expect(JSON.stringify(errorCauseChain(outer))).not.toContain('sk_live');
+  });
+});
+
+describe('a value-echoing SQLSTATE class 22 message never reaches a log line (review #2760 P3-1)', () => {
+  // What Postgres says for `select $1::int` with a secret bound: the message quotes the value.
+  const castError = () => Object.assign(new Error('invalid input syntax for type integer: "sk_live_SECRET2"'), { name: 'error', code: '22P02' });
+
+  it('withholds a class-22 cause\'s message and keeps its name and SQLSTATE', () => {
+    const secret = new DrizzleQueryError('select $1::int', ['sk_live_SECRET2'], castError());
+    const fields = errorLogFields(secret);
+    expect(fields.cause).toEqual([{ name: 'error', message: VALUE_ECHO_WITHHELD, code: '22P02' }]);
+    expect(formatCauseChain(errorCauseChain(secret))).toBe(`Caused by: error: ${VALUE_ECHO_WITHHELD} [22P02]`);
+    expect(JSON.stringify(fields)).not.toContain('sk_live');
+  });
+
+  it('withholds a class-22 error\'s own message when it is logged directly', () => {
+    expect(errorLogFields(castError()).error).toBe(VALUE_ECHO_WITHHELD);
+  });
+
+  it('leaves every other class alone — a 53300 is still read as an outage', () => {
+    const pg = Object.assign(new Error('sorry, too many clients already'), { code: '53300' });
+    expect(errorLogFields(withCause('Failed query: x', pg)).cause).toEqual([{ name: 'Error', message: 'sorry, too many clients already', code: '53300' }]);
   });
 });

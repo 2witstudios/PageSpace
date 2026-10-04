@@ -128,6 +128,19 @@ describe('Logger log level methods', () => {
     anyLogger.config.format = 'pretty';
   });
 
+  it('review #2760 P3-1: error() never writes a value a SQLSTATE class 22 error quotes — not in the message, the stack or a cause', async () => {
+    const { DrizzleQueryError } = await import('drizzle-orm/errors');
+    anyLogger.config.format = 'json';
+    const cast = () => Object.assign(new Error('invalid input syntax for type integer: "sk_live_SECRET2"'), { name: 'error', code: '22P02' });
+    logger.error('lookup failed', new DrizzleQueryError('select $1::int', ['sk_live_SECRET2'], cast()));
+    logger.error('lookup failed', cast());
+    const lines = consoleErrorSpy.mock.calls.map((c) => String(c[0]));
+    expect(lines).toHaveLength(2);
+    for (const line of lines) expect(line).not.toContain('sk_live_SECRET2');
+    expect(JSON.parse(lines[0]).error.stack).toContain('[22P02]');
+    anyLogger.config.format = 'pretty';
+  });
+
   it('error() with plain metadata calls console.error', () => {
     logger.error('error message', { extra: 'data' });
     expect(consoleErrorSpy).toHaveBeenCalled();

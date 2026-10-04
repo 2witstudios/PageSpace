@@ -39,6 +39,31 @@ export function redactQueryParams(text: string | undefined): string | undefined 
   return `${text.slice(0, at)}${PARAMS_MARKER}[redacted]${frame < 0 ? '' : text.slice(frame)}`;
 }
 
+/**
+ * SQLSTATE class 22 (data exception) — review 5407898542 P3-1. Postgres quotes the offending VALUE
+ * in these messages (`invalid input syntax for type integer: "<value>"`), so for a bound parameter
+ * the message IS the parameter. Its message is withheld; the name and SQLSTATE stay, which is what
+ * tells a cast failure from an outage.
+ */
+export function isValueEchoingCode(code: unknown): boolean {
+  return typeof code === 'string' && code.startsWith('22');
+}
+
+export const VALUE_ECHO_WITHHELD = 'data exception (message withheld: Postgres quotes the offending value)';
+
+/** An error's message as it may be logged: bound params stripped, a class-22 message withheld. */
+export function loggableMessage(error: Error): string {
+  return isValueEchoingCode((error as { code?: unknown }).code) ? VALUE_ECHO_WITHHELD : redactQueryParams(error.message);
+}
+
+/** An error's stack as it may be logged: its message line(s) replaced as {@link loggableMessage} says. */
+export function loggableStack(error: Error): string | undefined {
+  if (error.stack === undefined) return undefined;
+  if (!isValueEchoingCode((error as { code?: unknown }).code)) return redactQueryParams(error.stack);
+  const frame = error.stack.indexOf(STACK_FRAME);
+  return `${error.name}: ${VALUE_ECHO_WITHHELD}${frame < 0 ? '' : error.stack.slice(frame)}`;
+}
+
 /** The causes under `error`, outermost first (the error itself excluded); [] when there are none. */
 export function errorCauseChain(error: unknown, maxDepth = MAX_CAUSE_DEPTH): ErrorCauseLink[] {
   const chain: ErrorCauseLink[] = [];
@@ -48,7 +73,7 @@ export function errorCauseChain(error: unknown, maxDepth = MAX_CAUSE_DEPTH): Err
     seen.add(cause);
     if (cause instanceof Error) {
       const code = (cause as { code?: unknown }).code;
-      chain.push({ name: cause.name, message: redactQueryParams(cause.message), ...(typeof code === 'string' ? { code } : {}) });
+      chain.push({ name: cause.name, message: loggableMessage(cause), ...(typeof code === 'string' ? { code } : {}) });
       cause = (cause as { cause?: unknown }).cause;
     } else {
       chain.push({ name: 'NonError', message: redactQueryParams(String(cause)) });
@@ -66,10 +91,11 @@ export function formatCauseChain(chain: readonly ErrorCauseLink[]): string {
 /**
  * The metadata a catch logs for `error` at any level (warn and debug take no Error argument):
  * the message under the `error` key every caller already used, plus the cause chain when there is
- * one, messages PII-scrubbed as the logger scrubs an Error's own and stripped of bound query params.
+ * one, messages PII-scrubbed as the logger scrubs an Error's own, stripped of bound query params, and
+ * withheld for a value-echoing SQLSTATE class 22.
  */
 export function errorLogFields(error: unknown): { error: string; cause?: ErrorCauseLink[] } {
-  const message = redactQueryParams(error instanceof Error ? error.message : String(error));
+  const message = error instanceof Error ? loggableMessage(error) : redactQueryParams(String(error));
   const cause = errorCauseChain(error).map((link) => ({ ...link, message: scrubPII(link.message) ?? '[scrub_failed]' }));
   return { error: scrubPII(message) ?? '[scrub_failed]', ...(cause.length > 0 ? { cause } : {}) };
 }
