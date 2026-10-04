@@ -1,6 +1,6 @@
 {
-  "id": "d9abd0d7-73e3-48e7-bc5e-62f914eee83f",
-  "prevId": "af7b2cf7-5c10-4eff-92b7-834e1b08896e",
+  "id": "872bdc47-2220-409c-b989-194b27462621",
+  "prevId": "77f4b3a2-4eab-47f8-bfcd-d9b195435f0a",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -12587,6 +12587,28 @@
             }
           ],
           "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "idx_security_audit_org_chain_seq": {
+          "name": "idx_security_audit_org_chain_seq",
+          "columns": [
+            {
+              "expression": "(\"details\" ->> 'orgId')",
+              "asc": true,
+              "isExpression": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "chain_seq",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "(\"security_audit_log\".\"details\" ->> 'orgId') IS NOT NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -25223,6 +25245,207 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.org_departure_suppressions": {
+      "name": "org_departure_suppressions",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "orgId": {
+          "name": "orgId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "emailHash": {
+          "name": "emailHash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "(now() at time zone 'utc')"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "org_departure_suppressions_orgId_organizations_id_fk": {
+          "name": "org_departure_suppressions_orgId_organizations_id_fk",
+          "tableFrom": "org_departure_suppressions",
+          "tableTo": "organizations",
+          "columnsFrom": [
+            "orgId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "org_departure_suppressions_org_email_key": {
+          "name": "org_departure_suppressions_org_email_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "orgId",
+            "emailHash"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.org_domains": {
+      "name": "org_domains",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "orgId": {
+          "name": "orgId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "domain": {
+          "name": "domain",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "dnsToken": {
+          "name": "dnsToken",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "emailTokenHash": {
+          "name": "emailTokenHash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "emailTokenExpiresAt": {
+          "name": "emailTokenExpiresAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "emailSentTo": {
+          "name": "emailSentTo",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "verifiedAt": {
+          "name": "verifiedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "verifiedMethod": {
+          "name": "verifiedMethod",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "createdBy": {
+          "name": "createdBy",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "(now() at time zone 'utc')"
+        }
+      },
+      "indexes": {
+        "org_domains_verified_domain_key": {
+          "name": "org_domains_verified_domain_key",
+          "columns": [
+            {
+              "expression": "domain",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"org_domains\".\"verifiedAt\" IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "org_domains_orgId_organizations_id_fk": {
+          "name": "org_domains_orgId_organizations_id_fk",
+          "tableFrom": "org_domains",
+          "tableTo": "organizations",
+          "columnsFrom": [
+            "orgId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "org_domains_createdBy_users_id_fk": {
+          "name": "org_domains_createdBy_users_id_fk",
+          "tableFrom": "org_domains",
+          "tableTo": "users",
+          "columnsFrom": [
+            "createdBy"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "org_domains_emailTokenHash_unique": {
+          "name": "org_domains_emailTokenHash_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "emailTokenHash"
+          ]
+        },
+        "org_domains_org_domain_key": {
+          "name": "org_domains_org_domain_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "orgId",
+            "domain"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.org_invitations": {
       "name": "org_invitations",
       "schema": "",
@@ -25359,6 +25582,102 @@
           "nullsNotDistinct": false,
           "columns": [
             "tokenHash"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.org_member_departures": {
+      "name": "org_member_departures",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "orgId": {
+          "name": "orgId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "userId": {
+          "name": "userId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "reason": {
+          "name": "reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "departedAt": {
+          "name": "departedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "(now() at time zone 'utc')"
+        }
+      },
+      "indexes": {
+        "org_member_departures_user_id_idx": {
+          "name": "org_member_departures_user_id_idx",
+          "columns": [
+            {
+              "expression": "userId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "org_member_departures_orgId_organizations_id_fk": {
+          "name": "org_member_departures_orgId_organizations_id_fk",
+          "tableFrom": "org_member_departures",
+          "tableTo": "organizations",
+          "columnsFrom": [
+            "orgId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "org_member_departures_userId_users_id_fk": {
+          "name": "org_member_departures_userId_users_id_fk",
+          "tableFrom": "org_member_departures",
+          "tableTo": "users",
+          "columnsFrom": [
+            "userId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "org_member_departures_org_user_key": {
+          "name": "org_member_departures_org_user_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "orgId",
+            "userId"
           ]
         }
       },

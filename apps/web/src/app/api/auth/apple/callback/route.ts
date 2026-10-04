@@ -30,6 +30,7 @@ import {
   consumeAllInvitesForEmail,
   consumeAnyInviteIfPresent,
 } from '@/lib/auth/native-invite-acceptance';
+import { autoJoinVerifiedDomainAfterSignIn } from '@/lib/orgs/domain-auto-join';
 
 // Apple sends name info as JSON in the 'user' field (only on first authorization)
 const appleUserSchema = z.object({
@@ -211,6 +212,9 @@ export async function POST(req: Request) {
       });
       loggers.auth.info('New user created via Apple OAuth', { userId: user.id });
     }
+
+    // SEC-1: a new account on an org's verified email domain joins it (seat permitting). Never throws.
+    await autoJoinVerifiedDomainAfterSignIn(user.id);
 
     // Provision the Home drive (idempotent)
     let isNewlyProvisioned = false;

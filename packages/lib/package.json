@@ -149,6 +149,36 @@
       "import": "./dist/organizations/invitations.js",
       "require": "./dist/organizations/invitations.js"
     },
+    "./organizations/domains": {
+      "types": "./dist/organizations/domains.d.ts",
+      "import": "./dist/organizations/domains.js",
+      "require": "./dist/organizations/domains.js"
+    },
+    "./organizations/domains-core": {
+      "types": "./dist/organizations/domains-core.d.ts",
+      "import": "./dist/organizations/domains-core.js",
+      "require": "./dist/organizations/domains-core.js"
+    },
+    "./audit/org-audit-query": {
+      "types": "./dist/audit/org-audit-query.d.ts",
+      "import": "./dist/audit/org-audit-query.js",
+      "require": "./dist/audit/org-audit-query.js"
+    },
+    "./audit/org-audit-query-core": {
+      "types": "./dist/audit/org-audit-query-core.d.ts",
+      "import": "./dist/audit/org-audit-query-core.js",
+      "require": "./dist/audit/org-audit-query-core.js"
+    },
+    "./organizations/departure-suppression": {
+      "types": "./dist/organizations/departure-suppression.d.ts",
+      "import": "./dist/organizations/departure-suppression.js",
+      "require": "./dist/organizations/departure-suppression.js"
+    },
+    "./audit/audit-db-binding": {
+      "types": "./dist/audit/audit-db-binding.d.ts",
+      "import": "./dist/audit/audit-db-binding.js",
+      "require": "./dist/audit/audit-db-binding.js"
+    },
     "./organizations/seat-service": {
       "types": "./dist/organizations/seat-service.d.ts",
       "import": "./dist/organizations/seat-service.js",
@@ -3797,6 +3827,7 @@
     "@simplewebauthn/server": "^13.2.2",
     "diff-match-patch": "^1.0.5",
     "drizzle-orm": "^0.45.2",
+    "free-email-domains": "1.12.18",
     "google-auth-library": "^10.3.0",
     "html-to-docx": "^1.8.0",
     "marked": "^17.0.1",

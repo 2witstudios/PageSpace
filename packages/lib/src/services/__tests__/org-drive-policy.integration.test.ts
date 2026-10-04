@@ -13,7 +13,7 @@ import { drives } from '@pagespace/db/schema/core';
 import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
 
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
-vi.mock('../../audit/org-audit', () => ({ recordOrgAuditEvent: vi.fn(async () => {}) }));
+vi.mock('../../audit/org-audit', () => ({ recordOrgAuditEvent: vi.fn(async () => {}), recordOrgAuditEventAfterCommit: vi.fn(async () => true) }));
 
 import { createOrgDrive, moveDriveToOrg, type OrgDriveServiceDeps } from '../org-drive-service';
 import { orgDriveServiceDeps } from '../org-drive-service-deps';

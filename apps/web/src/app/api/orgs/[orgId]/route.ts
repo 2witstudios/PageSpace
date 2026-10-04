@@ -52,7 +52,7 @@ export async function PATCH(request: Request, context: Context) {
     if (!parsed.success) {
       return NextResponse.json({ error: 'Invalid request body', issues: parsed.error.issues }, { status: 400 });
     }
-    const result = await updateOrganization(orgId, parsed.data);
+    const result = await updateOrganization(orgId, parsed.data, gate.userId);
     if (!result.ok) {
       return result.reason === 'slug_taken'
         ? NextResponse.json({ error: 'That organization URL is already taken' }, { status: 409 })

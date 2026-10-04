@@ -41,6 +41,7 @@ import { isBillingEnabled } from '../deployment-mode';
 import { isLiveOrgSubscriptionStatus, orgBillingLockKey, planSeatQuantitySync } from '../billing/org-subscription-core';
 import { TIER_PLAN_LIMITS } from '../billing/subscription-tiers';
 import { loggers } from '../logging/logger-config';
+import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
 import { countOrgSeatParts } from './repository';
 import {
   SEAT_RELEASE_LEAD_MS,
@@ -87,7 +88,8 @@ async function loadLiveSubscription(tx: Tx, orgId: string) {
 }
 
 export type SeatAdmission =
-  | { ok: true; raised: boolean }
+  /** `quantity` is the extra-seat quantity Stripe now bills, set when this admission raised it. */
+  | { ok: true; raised: boolean; quantity?: number }
   | { ok: false; status: 402; reason: typeof SEAT_REFUSED_CODE; message: string; purchased: number; held: number };
 
 /**
@@ -148,7 +150,7 @@ export async function admitSeat(
     .set({ extraSeatQuantity: item.quantity, seatRevision: plan.nextRevision })
     .where(eq(orgSubscriptions.orgId, input.orgId));
   loggers.api.info('org extra-seat quantity raised for an invite', { orgId: input.orgId, quantity: item.quantity, held: held + 1 });
-  return { ok: true, raised: true };
+  return { ok: true, raised: true, quantity: item.quantity };
 }
 
 export type SeatReleaseOutcome =
@@ -163,6 +165,24 @@ export type SeatReleaseOutcome =
  * held. Outside the lead window it reads nothing and writes nothing.
  */
 export async function releaseOrgSeats(
+  input: { orgId: string; now: Date; leadMs?: number },
+  port: SeatBillingPort,
+): Promise<SeatReleaseOutcome> {
+  const outcome = await releaseOrgSeatsInTx(input, port);
+  if (outcome.kind === 'released' || outcome.kind === 'restored') {
+    // AUD-1: the period boundary changed what Stripe bills (a system action, no actor).
+    await recordOrgAuditEventAfterCommit({
+      orgId: input.orgId,
+      eventType: 'org.seat.quantity_changed',
+      resourceType: 'organization',
+      resourceId: input.orgId,
+      details: { reason: outcome.kind === 'released' ? 'period_end_release' : 'period_end_restore', quantity: outcome.quantity },
+    });
+  }
+  return outcome;
+}
+
+function releaseOrgSeatsInTx(
   input: { orgId: string; now: Date; leadMs?: number },
   port: SeatBillingPort,
 ): Promise<SeatReleaseOutcome> {
@@ -251,9 +271,43 @@ export async function releaseDueSeats(input: { now: Date; leadMs?: number }, por
 }
 
 /** SEAT-4's switch. Returns false when the org does not exist. */
-export async function setSeatAutoAdd(orgId: string, autoAdd: boolean): Promise<boolean> {
+export async function setSeatAutoAdd(orgId: string, autoAdd: boolean, actorId?: string): Promise<boolean> {
   const updated = await db.update(organizations).set({ seatAutoAdd: autoAdd }).where(eq(organizations.id, orgId)).returning({ id: organizations.id });
-  return updated.length > 0;
+  if (updated.length === 0) return false;
+  await recordOrgAuditEventAfterCommit({
+    orgId,
+    eventType: 'org.seat.auto_add_changed',
+    actorId,
+    resourceType: 'organization',
+    resourceId: orgId,
+    details: { autoAdd },
+  });
+  return true;
+}
+
+/**
+ * AUD-1 seat events of an admission, once the invite (or join) that took the seat has committed: the
+ * raise when one was bought, or the refusal when none could be granted.
+ */
+export async function recordSeatAdmissionEvents(input: {
+  orgId: string;
+  actorId?: string;
+  admission: SeatAdmission;
+  /** What took (or tried to take) the seat: 'invite', 'resend', 'auto_join'. */
+  operation: string;
+}): Promise<void> {
+  const { admission } = input;
+  if (admission.ok && !admission.raised) return;
+  await recordOrgAuditEventAfterCommit({
+    orgId: input.orgId,
+    eventType: admission.ok ? 'org.seat.quantity_changed' : 'org.seat.refused',
+    actorId: input.actorId,
+    resourceType: 'organization',
+    resourceId: input.orgId,
+    details: admission.ok
+      ? { reason: input.operation, quantity: admission.quantity ?? null }
+      : { operation: input.operation, purchased: admission.purchased, held: admission.held },
+  });
 }
 
 export interface SeatSummary {

@@ -13,7 +13,7 @@ export async function DELETE(
   const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_WRITE_AUTH);
   if (!gate.ok) return gate.response;
   try {
-    const revoked = await revokeInvitation({ orgId, invitationId });
+    const revoked = await revokeInvitation({ orgId, invitationId, actorId: gate.userId });
     if (!revoked) return NextResponse.json({ error: 'Invitation not found' }, { status: 404 });
     auditRequest(request, {
       eventType: 'data.delete',

@@ -549,6 +549,7 @@
         "@simplewebauthn/server": "^13.2.2",
         "diff-match-patch": "^1.0.5",
         "drizzle-orm": "^0.45.2",
+        "free-email-domains": "1.12.18",
         "google-auth-library": "^10.3.0",
         "html-to-docx": "^1.8.0",
         "marked": "^17.0.1",
@@ -2961,6 +2962,8 @@
     "frac": ["frac@1.1.2", "", {}, "sha512-w/XBfkibaTl3YDqASwfDUqkna4Z2p9cFSr1aHDt0WoMTECnRfBOv2WArlZILlqgWlmdIlALXGpM2AOhEk5W3IA=="],
 
     "framer-motion": ["framer-motion@12.39.0", "", { "dependencies": { "motion-dom": "^12.39.0", "motion-utils": "^12.39.0", "tslib": "^2.4.0" }, "peerDependencies": { "@emotion/is-prop-valid": "*", "react": "^18.0.0 || ^19.0.0", "react-dom": "^18.0.0 || ^19.0.0" }, "optionalPeers": ["@emotion/is-prop-valid", "react", "react-dom"] }, "sha512-+vnLfzrv0MzjLzNl+nvNvR7jdg3q4cxxjz/YvzfifHl0TREtL00cs1RoMTxs+1PzLiEqZGV6gYsBY0oEAYZ24w=="],
+
+    "free-email-domains": ["free-email-domains@1.12.18", "", {}, "sha512-P3TOQWfgO0BKLqjGtd9nzKRHOUBu7oHqRnTMOKl4pT6nbuNPR/S9FP6f2FGL0N8q9JjFA78CxZR9XipkfCbquw=="],
 
     "fresh": ["fresh@2.0.0", "", {}, "sha512-Rx/WycZ60HOaqLKAi6cHRKKI7zxWbJ31MhntmtwMoaTeF7XFH9hhBp8vITaMidfljRQ6eYWCKkaTK+ykVJHP2A=="],
 

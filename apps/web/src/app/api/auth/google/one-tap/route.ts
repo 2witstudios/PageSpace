@@ -26,6 +26,7 @@ import {
   consumeAllInvitesForEmail,
   consumeAnyInviteIfPresent,
 } from '@/lib/auth/native-invite-acceptance';
+import { autoJoinVerifiedDomainAfterSignIn } from '@/lib/orgs/domain-auto-join';
 
 const oneTapSchema = z.object({
   credential: z.string().min(1, 'Credential is required'),
@@ -224,6 +225,9 @@ export async function POST(req: Request) {
         userId: user.id,
       });
     }
+
+    // SEC-1: a new account on an org's verified email domain joins it (seat permitting). Never throws.
+    await autoJoinVerifiedDomainAfterSignIn(user.id);
 
     // Provision the Home drive (idempotent) for new or existing users
     let provisionedDrive: ProvisionHomeDriveResult | null = null;

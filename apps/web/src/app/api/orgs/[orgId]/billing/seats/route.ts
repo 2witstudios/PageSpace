@@ -44,7 +44,7 @@ export async function PATCH(request: Request, context: Context) {
     return NextResponse.json({ error: 'Invalid request body', issues: parsed.error.issues }, { status: 400 });
   }
   try {
-    if (!(await setSeatAutoAdd(orgId, parsed.data.autoAdd))) {
+    if (!(await setSeatAutoAdd(orgId, parsed.data.autoAdd, gate.userId))) {
       return NextResponse.json({ error: 'Organization not found' }, { status: 404 });
     }
     auditRequest(request, {

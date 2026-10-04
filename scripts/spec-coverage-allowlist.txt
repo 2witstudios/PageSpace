@@ -22,8 +22,6 @@
 #     partially proven ID stays on this list, with a comment naming what is still unproven.
 # One ID per line; `#` starts a comment.
 AUD-1
-AUD-2
-AUD-3
 DRV-3
 # DRV-5 (Open: every org member resolves as an implicit member with the drive's default role; sidebar,
 # picker and accessible-drives include it): B4's org-membership-sync tests prove the materialized rows

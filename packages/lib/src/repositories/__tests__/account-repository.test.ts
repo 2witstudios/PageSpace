@@ -46,6 +46,11 @@ vi.mock('../../organizations/leave', () => ({
   reassignLedOrgDrives: vi.fn().mockResolvedValue([]),
   recordComputeReattributions: vi.fn().mockResolvedValue(undefined),
 }));
+// [D-OW-27] The suppression write is proven against Postgres in organizations/__tests__/
+// departure-suppression.integration.test.ts; here only its place in deleteUser.
+vi.mock('../../organizations/departure-suppression', () => ({
+  recordDepartureSuppressions: vi.fn().mockResolvedValue(0),
+}));
 vi.mock('../conversation-cleanup', () => ({
   deleteConversationsForDrive: vi.fn().mockResolvedValue({ conversations: 0, messages: 0 }),
 }));
@@ -58,6 +63,7 @@ import { accountRepository } from '../account-repository';
 import { db } from '@pagespace/db/db';
 import { deleteConversationsForDrive } from '../conversation-cleanup';
 import { leaveAllOrganizations, reassignLedOrgDrives } from '../../organizations/leave';
+import { recordDepartureSuppressions } from '../../organizations/departure-suppression';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -229,6 +235,10 @@ describe('accountRepository.deleteUser', () => {
     const deleteOrder = tx.delete.mock.invocationCallOrder[0];
     expect(vi.mocked(leaveAllOrganizations).mock.invocationCallOrder[0]).toBeLessThan(deleteOrder);
     expect(vi.mocked(reassignLedOrgDrives).mock.invocationCallOrder[0]).toBeLessThan(deleteOrder);
+    // [D-OW-27] the suppression is written in the same transaction, after leaving, before the row goes.
+    expect(recordDepartureSuppressions).toHaveBeenCalledWith(tx, 'user-1');
+    expect(vi.mocked(leaveAllOrganizations).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(recordDepartureSuppressions).mock.invocationCallOrder[0]);
+    expect(vi.mocked(recordDepartureSuppressions).mock.invocationCallOrder[0]).toBeLessThan(deleteOrder);
   });
 
   it('O-7 does not delete the users row when leaving an org is refused', async () => {

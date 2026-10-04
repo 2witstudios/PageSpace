@@ -136,6 +136,10 @@ const EXEMPT = new Map<string, Exemption>([
     ormReads: 1,
     reason: 'suspendOrgGuests reads the org\'s guest rows (pending included, on purpose) to snapshot each into org_guest_holds and remove it from the live tables: a writer that REMOVES access, run inside the policy transaction. It grants nothing; restore re-inserts from the snapshot.',
   }],
+  ['packages/lib/src/permissions/org-guest-footprint.ts', {
+    ormReads: 1,
+    reason: 'isOrgGuest asks whether a NON-member holds any row on the org\'s drives (pending included, on purpose: an invited outsider is a guest too) so verified-domain auto-join (SEC-1) can REFUSE to make them a member. It only ever withholds; it grants nothing.',
+  }],
   ['packages/lib/src/permissions/org-drive-directory.ts', {
     ormReads: 1,
     reason: 'The org Drives directory reads the viewer\'s OWN rows pending included, so decideDriveDirectoryEntry can tell a pending invitation (not joined, not requestable) from no row; an unaccepted row never counts as joined. Display for the viewer, behind the org-member gate.',

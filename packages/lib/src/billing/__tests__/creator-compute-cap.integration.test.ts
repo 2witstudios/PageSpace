@@ -38,6 +38,10 @@ vi.mock('../../audit/org-audit', () => ({
   recordOrgAuditEvent: vi.fn(async (event: Record<string, unknown>) => {
     audit.events.push(event);
   }),
+  recordOrgAuditEventAfterCommit: vi.fn(async (event: Record<string, unknown>) => {
+    audit.events.push(event);
+    return true;
+  }),
 }));
 
 let dbAvailable = false;
@@ -207,7 +211,9 @@ describe('environments and apps are capped against the member who created them (
     expect([(await envRow(w)).costOwnerId, (await appRow(w)).costOwnerId, (await appRow(w)).status]).toEqual([null, null, 'stopped']);
     // The next charge is the lead's, capped against the lead.
     expect(await wakeCharge(w)).toEqual({ kind: 'org', orgId: w.orgId, userId: w.leadId, accrual: true });
-    expect(audit.events).toEqual([
+    // The leave itself is recorded too (AUD-1, #2759); the re-attributions are their own events.
+    expect(audit.events.map((e) => e.eventType)).toContain('org.member.left');
+    expect(audit.events.filter((e) => e.eventType === 'org.compute.reattributed')).toEqual([
       expect.objectContaining({ orgId: w.orgId, eventType: 'org.compute.reattributed', resourceType: 'drive_env', resourceId: w.envId, driveId: w.driveId, details: { formerCostOwnerId: w.marcusId, costOwner: 'drive_lead' } }),
       expect.objectContaining({ orgId: w.orgId, eventType: 'org.compute.reattributed', resourceType: 'published_app', resourceId: w.appId, driveId: w.driveId }),
     ]);

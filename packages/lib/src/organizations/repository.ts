@@ -19,6 +19,7 @@ import {
 } from '@pagespace/db/schema/organizations';
 import { decryptUserRows, userEmailMatch } from '../auth/user-repository';
 import { decideOrgOwnerCandidate, loadOrgPrincipalKind } from './owner-candidate';
+import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
 
 const UNIQUE_VIOLATION = '23505';
 
@@ -200,6 +201,16 @@ export async function createOrganization(input: {
       await tx.insert(orgMembers).values({ orgId: org.id, userId: input.ownerId, role: 'OWNER' });
       return { ok: true, organization: org };
     });
+    if (result.ok) {
+      await recordOrgAuditEventAfterCommit({
+        orgId: result.organization.id,
+        eventType: 'org.created',
+        actorId: input.ownerId,
+        resourceType: 'organization',
+        resourceId: result.organization.id,
+        details: { slug: result.organization.slug },
+      });
+    }
     return result;
   } catch (error) {
     if (isUniqueViolation(error)) return { ok: false, reason: 'slug_taken' };
@@ -214,10 +225,20 @@ export type UpdateOrganizationResult =
 export async function updateOrganization(
   orgId: string,
   patch: { name?: string; slug?: string; avatarUrl?: string | null },
+  actorId?: string,
 ): Promise<UpdateOrganizationResult> {
   try {
     const [organization] = await db.update(organizations).set(patch).where(eq(organizations.id, orgId)).returning();
-    return organization ? { ok: true, organization } : { ok: false, reason: 'not_found' };
+    if (!organization) return { ok: false, reason: 'not_found' };
+    await recordOrgAuditEventAfterCommit({
+      orgId,
+      eventType: 'org.updated',
+      actorId,
+      resourceType: 'organization',
+      resourceId: orgId,
+      details: { fields: Object.keys(patch).sort() },
+    });
+    return { ok: true, organization };
   } catch (error) {
     if (isUniqueViolation(error)) return { ok: false, reason: 'slug_taken' };
     throw error;

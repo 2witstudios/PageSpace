@@ -455,6 +455,12 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     'An org invitation naming the inviter and the invited address; the counterparty is another person, which is the same Art 15(4) boundary that excludes pending_invites. The invitation carries no content of the subject\'s own beyond an address and a role offered to it.',
   drive_join_requests:
     'Temporary under Spec X-2: the subject\'s own requests to join Restricted org drives (D-OW-22), with an optional note they wrote; removed by the Phase 6 GDPR/backups leaf yfmlkdchehmberwthwu6g7vt before Wave F, which adds the collector beside the one for org_members; the ORGS_ENABLED export precondition fails while this exclusion exists.',
+  org_domains:
+    'An org\'s domain claim (SEC-1): the domain, its public DNS challenge and the hash of a mailed proof link. Organization configuration, not the subject\'s data; the one personal field is createdBy, an attribution the org\'s audit trail also carries. Account deletion nulls it (ON DELETE SET NULL).',
+  org_departure_suppressions:
+    'PERMANENT, deliberate post-erasure suppression record [D-OW-27], like a do-not-contact list: when a member who left or was removed from an org deletes their account, the org keeps only a KEYED blind index (HMAC-SHA256 under the server index key) of their normalized email, so a new account with that address is not auto-joined back by a verified domain (SEC-1). It holds no user id and no recoverable email, so it cannot be tied to a data subject or exported to one; account deletion WRITES it (the retained minimum) rather than removing it. It goes with the org, and an org Admin can clear it by typing the address.',
+  org_member_departures:
+    'Temporary under Spec X-2: the record that the subject was once a member of an org and left or was removed (with how), kept so a verified email domain never auto-joins them back (SEC-1); removed by the Phase 6 GDPR/backups leaf yfmlkdchehmberwthwu6g7vt before Wave F, which adds the collector beside the one for org_members. Account deletion already removes it: userId cascades.',
   org_guest_holds:
     'Temporary under Spec X-2: the subject\'s own queued request to join an org drive as a guest, or the snapshot of the access an org policy parked (their own member row and page grants), plus an invitee address; removed by the Phase 6 GDPR/backups leaf yfmlkdchehmberwthwu6g7vt before Wave F, which adds the collector beside the one for org_members. Account deletion already removes it: userId cascades.',
 };

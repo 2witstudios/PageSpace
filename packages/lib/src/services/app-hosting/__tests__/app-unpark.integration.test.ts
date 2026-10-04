@@ -33,6 +33,10 @@ vi.mock('../../../audit/org-audit', () => ({
   recordOrgAuditEvent: vi.fn(async (event: Record<string, unknown>) => {
     audit.events.push(event);
   }),
+  recordOrgAuditEventAfterCommit: vi.fn(async (event: Record<string, unknown>) => {
+    audit.events.push(event);
+    return true;
+  }),
 }));
 
 vi.mock('../../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));

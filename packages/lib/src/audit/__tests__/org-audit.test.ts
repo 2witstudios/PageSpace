@@ -2,9 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const logEvent = vi.hoisted(() => vi.fn());
 vi.mock('../security-audit', () => ({ securityAudit: { logEvent } }));
-vi.mock('../../logging/logger-config', () => ({ loggers: { security: { info: vi.fn(), error: vi.fn() } } }));
+const securityError = vi.hoisted(() => vi.fn());
+vi.mock('../../logging/logger-config', () => ({ loggers: { security: { info: vi.fn(), error: securityError } } }));
 
-import { recordOrgAuditEvent } from '../org-audit';
+import { recordOrgAuditEvent, recordOrgAuditEventAfterCommit } from '../org-audit';
 
 beforeEach(() => {
   logEvent.mockReset();
@@ -31,5 +32,18 @@ describe('recordOrgAuditEvent', () => {
   it('AUD-2 (partial) a rejected append is seen by the caller, never swallowed', async () => {
     logEvent.mockRejectedValue(new Error('chain down'));
     await expect(recordOrgAuditEvent({ orgId: 'o', eventType: 'org.policy.restored', resourceType: 'organization', resourceId: 'o' })).rejects.toThrow('chain down');
+  });
+});
+
+describe('recordOrgAuditEventAfterCommit', () => {
+  it('AUD-2 (partial) writes the same chain row and reports true', async () => {
+    expect(await recordOrgAuditEventAfterCommit({ orgId: 'org_1', eventType: 'org.member.joined', actorId: 'u1', resourceType: 'user', resourceId: 'u1' })).toBe(true);
+    expect(logEvent).toHaveBeenCalledWith(expect.objectContaining({ eventType: 'org.member.joined', details: { orgId: 'org_1' } }));
+  });
+
+  it('AUD-2 (partial) a refused append after the change committed is logged loudly and reported, never thrown into a change that already happened', async () => {
+    logEvent.mockRejectedValue(new Error('chain down'));
+    expect(await recordOrgAuditEventAfterCommit({ orgId: 'org_1', eventType: 'org.member.left', resourceType: 'user', resourceId: 'u1' })).toBe(false);
+    expect(securityError).toHaveBeenCalledWith(expect.stringContaining('not recorded'), expect.objectContaining({ eventType: 'org.member.left', orgId: 'org_1', error: 'chain down' }));
   });
 });

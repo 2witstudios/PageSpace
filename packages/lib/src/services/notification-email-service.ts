@@ -5,6 +5,7 @@ import { emailNotificationPreferences, emailNotificationLog } from '@pagespace/d
 import { sendEmail, resolveAppUrl } from './email-service';
 import { DriveInvitationEmail } from '../email-templates/DriveInvitationEmail';
 import { OrgInvitationEmail } from '../email-templates/OrgInvitationEmail';
+import { DomainVerificationEmail } from '../email-templates/DomainVerificationEmail';
 import { ConnectionInvitationEmail } from '../email-templates/ConnectionInvitationEmail';
 import { PageShareInvitationEmail } from '../email-templates/PageShareInvitationEmail';
 import { DirectMessageEmail } from '../email-templates/DirectMessageEmail';
@@ -355,6 +356,30 @@ export async function sendOrgInvitationEmail(input: {
       roleLabel: input.role === 'ADMIN' ? 'an Admin' : 'a Member',
       expiresInDays: input.expiresInDays,
       acceptUrl: input.inviteUrl,
+    }),
+  });
+}
+
+/**
+ * The domain-ownership proof for a verified email domain (SEC-1), sent to one of the domain's
+ * administrative mailboxes. Errors propagate so the caller can withdraw the stored token.
+ */
+export async function sendDomainVerificationEmail(input: {
+  recipientEmail: string;
+  orgName: string;
+  domain: string;
+  expiresInHours: number;
+  verifyUrl: string;
+}): Promise<void> {
+  const safeOrgName = stripHeaderControls(input.orgName) || 'an organization';
+  await sendEmail({
+    to: input.recipientEmail,
+    subject: `Verify ${input.domain} for ${safeOrgName} on PageSpace`,
+    react: DomainVerificationEmail({
+      orgName: safeOrgName,
+      domain: input.domain,
+      expiresInHours: input.expiresInHours,
+      verifyUrl: input.verifyUrl,
     }),
   });
 }

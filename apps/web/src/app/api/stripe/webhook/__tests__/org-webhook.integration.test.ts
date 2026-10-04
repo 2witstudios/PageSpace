@@ -56,6 +56,10 @@ vi.mock('@/lib/org-billing/org-subscription', async (importOriginal) => {
 });
 
 import { POST } from '../route';
+import { queryOrgAuditEvents } from '@pagespace/lib/audit/org-audit-query';
+import { resetAuditDbBindingForTests } from '@pagespace/lib/audit/audit-db-binding';
+import { resetDefaultSecurityAuditForTests } from '@pagespace/lib/audit/security-audit';
+import { parseOrgAuditFilter } from '@pagespace/lib/audit/org-audit-query-core';
 
 const WEBHOOK_SECRET = 'whsec_ow_d3_local_test_secret';
 const PRICES: OrgBusinessPrices = { basePriceId: stripeConfig.orgPriceIds.businessBase, seatPriceId: stripeConfig.orgPriceIds.extraSeat };
@@ -203,8 +207,38 @@ function setStripeStatus(org: Org, status: string, extra: Partial<{ trialEnd: nu
   if ('trialEnd' in extra) sub.trialEnd = extra.trialEnd ?? null;
 }
 
+/**
+ * The audit binding is pinned to the MAIN database for this suite, the way the lib audit suites pin it.
+ * CI sets ADMIN_DATABASE_URL, which resolves the binding to the dedicated trust plane: writes then go to
+ * security_audit_ingest and reach the chained security_audit_log only when the processor's chainer drains
+ * them (a worker this suite does not run), so a read straight after a write would see nothing. In
+ * production the org log is therefore eventually consistent at the chainer's cadence; here it is read on
+ * the main-db chain, where the append is synchronous.
+ *
+ * Pinned FIRST in beforeAll, before anything resolves the binding: lib's dist modules required from the
+ * route under test are a separate module instance from the one this file imports, so a reset after a
+ * binding was cached could not reach them.
+ */
+const AUDIT_ENV = ['ADMIN_DATABASE_URL', 'ADMIN_DB_BREAK_GLASS', 'AUDIT_TRUST_PLANE_REQUIRED'] as const;
+function pinAuditToMainDb(): () => void {
+  const saved = new Map<string, string | undefined>(AUDIT_ENV.map((key) => [key, process.env[key]]));
+  for (const key of AUDIT_ENV) delete process.env[key];
+  resetAuditDbBindingForTests();
+  resetDefaultSecurityAuditForTests();
+  return () => {
+    for (const [key, value] of saved) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    resetAuditDbBindingForTests();
+    resetDefaultSecurityAuditForTests();
+  };
+}
+
 describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-memory Stripe)', () => {
+  let restoreAudit: () => void = () => {};
   beforeAll(async () => {
+    restoreAudit = pinAuditToMainDb();
     try {
       await db.select({ id: orgSubscriptions.id }).from(orgSubscriptions).limit(1);
       dbAvailable = true;
@@ -238,6 +272,7 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
   });
 
   afterAll(async () => {
+    restoreAudit();
     const restore = (k: string, v: string | undefined) => (v === undefined ? delete process.env[k] : (process.env[k] = v));
     restore('DEPLOYMENT_MODE', env.mode);
     restore('STRIPE_WEBHOOK_SECRET', env.secret);
@@ -306,6 +341,39 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
     expect(owner).toEqual({ tier: 'pro', customer: ownerCustomer });
     expect(await db.select().from(subscriptions).where(eq(subscriptions.userId, org.ownerId))).toEqual(personalSubsBefore);
     expect(await db.select().from(creditLedger).where(and(eq(creditLedger.userId, org.ownerId), sql`${creditLedger.walletId} <> ${pool!.id}`))).toHaveLength(0);
+  });
+
+  it('AUD-1 (partial) billing events reach the org audit log once per real change: provisioning, each status change, the pool refill; a redelivery writes nothing', async () => {
+    if (!dbAvailable) return;
+    const org = await northwind(7);
+    const billingTypes = async () => {
+      const parsed = parseOrgAuditFilter({ category: 'billing', limit: '100' });
+      if (!parsed.ok) throw new Error(parsed.error);
+      return (await queryOrgAuditEvents(org.orgId, parsed.filter)).entries.map((e) => [e.eventType, e.details.to ?? null]);
+    };
+    // Provisioning wrote the subscription's start.
+    expect(await billingTypes()).toEqual([['org.billing.subscription_changed', 'trialing']]);
+
+    setStripeStatus(org, 'active');
+    const updated = eventPayload('customer.subscription.updated', { id: org.subscriptionId, object: 'subscription', customer: org.customerId, status: 'active', metadata: orgMetadata(org.orgId) });
+    expect(await deliver(updated)).toBe(200);
+    expect(await deliver(updated)).toBe(200);
+    const paid = eventPayload(
+      'invoice.paid',
+      invoiceObject({ customer: org.customerId, subscriptionId: org.subscriptionId, metadata: orgMetadata(org.orgId), seats: 2, paid: true, billingReason: 'subscription_cycle', periodStart: 1_800_000_000 + 30 * DAY }),
+    );
+    expect(await deliver(paid)).toBe(200);
+    expect(await deliver(paid)).toBe(200);
+    org.stripe.endSubscription(org.subscriptionId, 'canceled');
+    const deleted = eventPayload('customer.subscription.deleted', { id: org.subscriptionId, object: 'subscription', customer: org.customerId, status: 'canceled', metadata: orgMetadata(org.orgId) });
+    expect(await deliver(deleted)).toBe(200);
+
+    expect(await billingTypes()).toEqual([
+      ['org.billing.subscription_changed', 'canceled'],
+      ['org.billing.pool_refilled', null],
+      ['org.billing.subscription_changed', 'active'],
+      ['org.billing.subscription_changed', 'trialing'],
+    ]);
   });
 
   it('SEAT-7 (partial) MON-3 (partial) replaying the same org invoice.paid event is a no-op: one grant, no second Stripe read, no second write', async () => {
