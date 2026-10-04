@@ -20,6 +20,7 @@ import { accountRepository } from '../../repositories/account-repository';
 import { addOrgDomain, autoJoinVerifiedDomainOrg, verifyOrgDomainByDns } from '../domains';
 import { dnsRecordName, dnsRecordValue } from '../domains-core';
 import { removeMember } from '../membership';
+import { leaveOrganization } from '../leave';
 import { clearDepartureSuppression } from '../departure-suppression';
 
 vi.mock('../orgs-enabled', () => ({ ORGS_ENABLED: true }));
@@ -142,5 +143,71 @@ describe('[D-OW-27] departed members stay suppressed after deleting their accoun
     const { email } = await danaRemovedThenDeleted(w);
     expect(await clearDepartureSuppression({ orgId: other.orgId, email, actorId: other.jono.id })).toBe(false);
     expect(await db.select().from(orgDepartureSuppressions).where(eq(orgDepartureSuppressions.orgId, w.orgId))).toHaveLength(1);
+  });
+
+  /** Dana joins by the domain and is removed by Jono; she KEEPS her account. */
+  async function danaRemoved(w: { orgId: string; jono: { id: string }; domain: string }) {
+    const dana = await person(`dana@${w.domain}`);
+    expect((await autoJoinVerifiedDomainOrg({ userId: dana.id, now: new Date() })).kind).toBe('joined');
+    expect((await removeMember({ orgId: w.orgId, actorId: w.jono.id, targetId: dana.id })).ok).toBe(true);
+    return dana;
+  }
+
+  it('SEC-1 (partial) case A: removed, account deleted, back as a +subaddress of the same mailbox: refused', async () => {
+    const w = await northwind();
+    await danaRemovedThenDeleted(w);
+    const tagged = await person(`dana+pagespace@${w.domain}`);
+    expect(await autoJoinVerifiedDomainOrg({ userId: tagged.id, now: new Date() })).toEqual({ kind: 'skipped', reason: 'departure_suppressed' });
+  });
+
+  it('SEC-1 (partial) case B: removed, KEEPS the account (refused as previously departed), opens a second account on the same mailbox: refused, written at departure', async () => {
+    const w = await northwind();
+    const dana = await danaRemoved(w);
+    expect(await autoJoinVerifiedDomainOrg({ userId: dana.id, now: new Date() })).toEqual({ kind: 'skipped', reason: 'previously_departed' });
+    // The suppression exists while the first account still does.
+    expect(await db.select().from(orgDepartureSuppressions).where(eq(orgDepartureSuppressions.orgId, w.orgId))).toHaveLength(1);
+    const second = await person(`dana+2@${w.domain}`);
+    expect(await autoJoinVerifiedDomainOrg({ userId: second.id, now: new Date() })).toEqual({ kind: 'skipped', reason: 'departure_suppressed' });
+  });
+
+  it('SEC-1 (partial) a voluntary leaver is suppressed the same way', async () => {
+    const w = await northwind();
+    const dana = await person(`dana@${w.domain}`);
+    expect((await autoJoinVerifiedDomainOrg({ userId: dana.id, now: new Date() })).kind).toBe('joined');
+    expect((await leaveOrganization(dana.id, w.orgId)).ok).toBe(true);
+    const second = await person(`dana+again@${w.domain}`);
+    expect(await autoJoinVerifiedDomainOrg({ userId: second.id, now: new Date() })).toEqual({ kind: 'skipped', reason: 'departure_suppressed' });
+  });
+
+  it('SEC-1 (partial) a +subaddress in mixed case with surrounding whitespace is still refused; dana.x@ (dots are not folded) is admitted', async () => {
+    const w = await northwind();
+    await danaRemoved(w);
+    const shouted = await person(`  Dana+X@${w.domain.toUpperCase()}  `);
+    expect(await autoJoinVerifiedDomainOrg({ userId: shouted.id, now: new Date() })).toEqual({ kind: 'skipped', reason: 'departure_suppressed' });
+    const dotted = await person(`dana.x@${w.domain}`);
+    expect(await autoJoinVerifiedDomainOrg({ userId: dotted.id, now: new Date() })).toMatchObject({ kind: 'joined' });
+  });
+
+  it('SEC-1 (partial) the Admin clears with the plain address, and a +subaddress account is admitted after', async () => {
+    const w = await northwind();
+    await danaRemoved(w);
+    expect(await clearDepartureSuppression({ orgId: w.orgId, email: `dana@${w.domain}`, actorId: w.jono.id })).toBe(true);
+    const second = await person(`dana+2@${w.domain}`);
+    expect(await autoJoinVerifiedDomainOrg({ userId: second.id, now: new Date() })).toMatchObject({ kind: 'joined' });
+  });
+
+  it('SEC-1 (partial) a suppression is org-scoped: when the domain moves to another org, it does not refuse a join there', async () => {
+    const a = await northwind();
+    await danaRemoved(a);
+    // Org A gives the domain up; org B proves it.
+    const [claimA] = await db.select().from(orgDomains).where(eq(orgDomains.orgId, a.orgId));
+    await db.delete(orgDomains).where(eq(orgDomains.id, claimA.id));
+    const b = await northwind();
+    const claimB = await addOrgDomain({ orgId: b.orgId, domain: a.domain, actorId: b.jono.id });
+    if (!claimB.ok) throw new Error(`claim: ${claimB.reason}`);
+    const proof = async (name: string) => (name === dnsRecordName(a.domain) ? [[dnsRecordValue(claimB.domain.dnsToken)]] : []);
+    expect((await verifyOrgDomainByDns({ orgId: b.orgId, domainId: claimB.domain.id, actorId: b.jono.id, now: new Date(), resolveTxt: proof })).ok).toBe(true);
+    const second = await person(`dana+2@${a.domain}`);
+    expect(await autoJoinVerifiedDomainOrg({ userId: second.id, now: new Date() })).toMatchObject({ kind: 'joined', orgId: b.orgId });
   });
 });

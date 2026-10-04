@@ -10,6 +10,7 @@ import {
   isAdminMailboxAddress,
   normalizeDomain,
   PUBLIC_EMAIL_DOMAINS,
+  suppressionAddress,
   txtRecordsProve,
 } from '../domains-core';
 
@@ -69,6 +70,19 @@ describe('emailDomain', () => {
 
   it('SEC-1 (partial) matches the exact domain only: a subdomain address is not on the parent domain', () => {
     expect(emailDomain('a@eng.northwind.com')).toBe('eng.northwind.com');
+  });
+});
+
+describe('suppressionAddress', () => {
+  it.each([
+    ['dana@northwind.com', 'dana@northwind.com'],
+    ['  Dana+X@NorthWind.COM  ', 'dana@northwind.com'],
+    ['dana+pagespace@northwind.com', 'dana@northwind.com'],
+    ['dana+a+b@northwind.com', 'dana@northwind.com'],
+    ['dana.x@northwind.com', 'dana.x@northwind.com'],
+    ['d.a.n.a+tag@northwind.com', 'd.a.n.a@northwind.com'],
+  ])('SEC-1 (partial) [D-OW-27] %j is suppressed as %j: +subaddress dropped, dots kept', (input, expected) => {
+    expect(suppressionAddress(input)).toBe(expected);
   });
 });
 

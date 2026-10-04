@@ -167,7 +167,9 @@ describe('org audit log on the real chain', () => {
     expect(row.eventHash).toMatch(/^[0-9a-f]{64}$/);
     // And the org log reads that same row, not a copy.
     expect((await queryOrgAuditEvents(a.orgId, filter())).entries.map((e) => e.eventType)).toEqual(['org.member.role_changed']);
-    const result = await verifySecurityAuditChain({ fromTimestamp: startedAt, stopOnFirstBreak: true });
+    // Bounded on both sides: another suite on the shared DB (the ORG-4 dedupe suite fakes Date into 2031)
+    // may have left rows dated in the future, which are not this run's and not in its chain order.
+    const result = await verifySecurityAuditChain({ fromTimestamp: startedAt, toTimestamp: new Date(), stopOnFirstBreak: true });
     expect(result.breakPoint).toBeNull();
     expect(result.isValid).toBe(true);
     expect(result.entriesVerified).toBeGreaterThan(0);

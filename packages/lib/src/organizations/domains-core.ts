@@ -85,6 +85,22 @@ export function emailDomain(email: string): string | null {
   return normalized.reason === 'public_email_domain' ? email.slice(at + 1).trim().toLowerCase() : null;
 }
 
+/**
+ * [D-OW-27] The address a departure suppression is keyed on, and ONLY that (users.emailBidx keeps
+ * normalizeEmail): trimmed, lowercased, and with any `+subaddress` dropped from the local part (the
+ * first `+` up to the `@`), so `dana+anything@` is the mailbox `dana@` it delivers to. Dots are NOT
+ * folded: `dana.x@` is a different address on most mail servers. Other subaddress delimiters (`-` on
+ * some Postfix/qmail setups) and aliases cannot be closed by any normalization (see the runbook).
+ */
+export function suppressionAddress(email: string): string {
+  const normalized = email.trim().toLowerCase();
+  const at = normalized.lastIndexOf('@');
+  if (at <= 0) return normalized;
+  const local = normalized.slice(0, at);
+  const plus = local.indexOf('+');
+  return `${plus >= 0 ? local.slice(0, plus) : local}${normalized.slice(at)}`;
+}
+
 export const dnsRecordName = (domain: string): string => `${DOMAIN_TXT_PREFIX}.${domain}`;
 export const dnsRecordValue = (token: string): string => `${DOMAIN_TXT_VALUE_PREFIX}${token}`;
 

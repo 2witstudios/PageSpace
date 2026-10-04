@@ -304,7 +304,8 @@ describe('every org mutation writes its event', () => {
     expect(missing).toEqual([]);
     for (const type of beforeDelete) expect(all.has(type)).toBe(true);
 
-    const chain = await verifySecurityAuditChain({ fromTimestamp: startedAt, stopOnFirstBreak: true });
+    // Bounded on both sides: rows another suite dated in the future (fake clocks) are not this run's.
+    const chain = await verifySecurityAuditChain({ fromTimestamp: startedAt, toTimestamp: new Date(), stopOnFirstBreak: true });
     expect(chain.breakPoint).toBeNull();
     expect(chain.isValid).toBe(true);
   }, 120_000);

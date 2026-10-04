@@ -4,11 +4,15 @@
  * only a KEYED blind index of their email: never the address, which cannot be recovered from it.
  * Verified-domain auto-join refuses a new account whose address matches; an org Admin can clear one.
  *
- * ONE NORMALIZATION: emailBlindIndex (lib encryption/blind-index) trims and lowercases, the same
- * function and key the users table's email index uses. Plus-addressing and dots are NOT folded:
- * whether `a+x@` or `a.b@` reaches the same mailbox is the mail server's business, so folding could
- * suppress a different person. A departed member would need a verified mailbox of that form on the
- * org's own domain, which the org controls.
+ * ONE NORMALIZATION, for suppression only: suppressionAddress (domains-core) trims, lowercases and drops
+ * any `+subaddress`, so `dana+2@` is the mailbox `dana@`; dots are NOT folded. The same function keys the
+ * write (at departure and, as a backstop, at account deletion), the auto-join check and the Admin clear.
+ * The hash is the server's blind-index HMAC (computeBlindIndex, the users table's key) over a
+ * suppression-only domain-separated value, so a suppression never equals a users.emailBidx.
+ *
+ * WRITTEN AT DEPARTURE: leaveOrganization records it in the departure's own transaction, for removed
+ * and voluntary leavers alike, so a person who keeps their account cannot come back through a second
+ * account on the same mailbox either. Residual (runbook): other subaddress delimiters and aliases.
  *
  * Without a usable index key (ENCRYPTION_KEY unset or short) nothing is recorded or matched: a record
  * that is not keyed would be a recoverable email, which this table must never hold.
@@ -18,27 +22,52 @@ import { and, eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { orgDepartureSuppressions, orgMemberDepartures } from '@pagespace/db/schema/organizations';
 import { decryptUserRow, getUserIndexKey } from '../auth/user-repository';
-import { emailBlindIndex } from '../encryption/blind-index';
+import { computeBlindIndex } from '../encryption/blind-index';
+import { suppressionAddress } from './domains-core';
 import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
 import { loggers } from '../logging/logger-config';
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type Executor = typeof db | Tx;
 
-/** The keyed hash of an address, or null when no index key is configured. */
+const SUPPRESSION_DOMAIN = 'org-departure-suppression:v1:';
+
+/** The keyed hash of an address's suppressed mailbox, or null when no index key is configured. */
 export function departureSuppressionHash(email: string): string | null {
   const key = getUserIndexKey();
-  return key ? emailBlindIndex(email, key) : null;
+  return key ? computeBlindIndex(`${SUPPRESSION_DOMAIN}${suppressionAddress(email)}`, key) : null;
+}
+
+async function emailOf(executor: Executor, userId: string): Promise<string | null> {
+  const [row] = await executor.select({ email: users.email }).from(users).where(eq(users.id, userId)).limit(1);
+  if (!row) return null;
+  return (await decryptUserRow(row)).email;
 }
 
 /**
- * Inside the account deletion's transaction, BEFORE the user row is deleted (and after the person has
- * left every org): one suppression per org they ever departed. Returns how many orgs it covers.
+ * Inside a departure's transaction (leaveOrganization): suppress the leaver's mailbox in that org, so no
+ * account on it is auto-joined back, whichever account and whatever +subaddress.
+ */
+export async function recordDepartureSuppression(tx: Tx, orgId: string, userId: string): Promise<boolean> {
+  const email = await emailOf(tx, userId);
+  if (email === null) return false;
+  const emailHash = departureSuppressionHash(email);
+  if (emailHash === null) {
+    loggers.security.error('[D-OW-27] no blind-index key: a departure suppression was not recorded', { orgId, userId });
+    return false;
+  }
+  await tx.insert(orgDepartureSuppressions).values({ orgId, emailHash }).onConflictDoNothing({ target: [orgDepartureSuppressions.orgId, orgDepartureSuppressions.emailHash] });
+  return true;
+}
+
+/**
+ * Backstop inside the account deletion's transaction, BEFORE the user row is deleted (and after the
+ * person has left every org): one suppression per org they ever departed. Departures already wrote
+ * theirs; this is idempotent and covers an address changed since. Returns how many orgs it covers.
  */
 export async function recordDepartureSuppressions(tx: Tx, userId: string): Promise<number> {
-  const [row] = await tx.select({ email: users.email }).from(users).where(eq(users.id, userId)).limit(1);
-  if (!row) return 0;
-  const { email } = await decryptUserRow(row);
+  const email = await emailOf(tx, userId);
+  if (email === null) return 0;
   const emailHash = departureSuppressionHash(email);
   if (emailHash === null) {
     loggers.security.error('[D-OW-27] no blind-index key: a departed member\'s suppression was not recorded', { userId });

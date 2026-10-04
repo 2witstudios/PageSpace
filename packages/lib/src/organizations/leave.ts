@@ -27,6 +27,7 @@ import { getActorInfo, logActivityWithTx } from '../monitoring/activity-logger';
 import { parseScopeList } from '../auth/oauth/scopes';
 import { closeStaleDriveJoinRequests } from '../permissions/drive-join-request-closure';
 import { recordLeaveEvents } from './org-events';
+import { recordDepartureSuppression } from './departure-suppression';
 
 /** A Drizzle transaction handle. */
 export type LeaveTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -408,6 +409,9 @@ export async function leaveOrganization(
       target: [orgMemberDepartures.orgId, orgMemberDepartures.userId],
       set: { reason: departure, departedAt: sql`(now() at time zone 'utc')` },
     });
+  // [D-OW-27] and the mailbox, keyed and hashed, in the same transaction: a second account on it (or a
+  // +subaddress of it) is not auto-joined back either. Removed and voluntary leavers alike.
+  await recordDepartureSuppression(tx, orgId, userId);
   // DRV-6: the leaver's pending join requests on the org's drives ask for nothing now (nor does one
   // by a reassigned drive's new lead); approvers stop seeing them.
   await closeStaleDriveJoinRequests(tx, driveRows.map((d) => d.id));
