@@ -56,3 +56,6 @@ export const domainVerifySchema = z.discriminatedUnion('method', [
 ]);
 
 export const domainProofConfirmSchema = z.object({ token: z.string().min(1).max(256) });
+
+// [D-OW-27] The address an Admin types to clear a departed member's suppression; never stored or echoed.
+export const suppressionClearSchema = z.object({ email: z.string().trim().pipe(z.email().max(254)) });

@@ -189,6 +189,26 @@ export const orgMemberDepartures = pgTable('org_member_departures', {
   userIdx: index('org_member_departures_user_id_idx').on(table.userId),
 }));
 
+/**
+ * [D-OW-27] The post-erasure suppression of a departed member, per org: when someone who left or was
+ * removed deletes their account, their org_member_departures rows go with the user row, so this keeps
+ * the minimum that stops a new account with the same address being auto-joined back by a verified
+ * domain (SEC-1): a KEYED blind index of the normalized email (HMAC-SHA256 under the server's index key,
+ * lib encryption/blind-index emailBlindIndex), never the email itself, which no one can recover from it.
+ *
+ * Deliberately no user reference: nothing cascades into it, so the account's deletion cannot remove it,
+ * and there is no CHECK to trip on a SET NULL. It goes with the org; an org Admin can clear one by
+ * typing the address. A do-not-contact style record, kept after erasure (see the GDPR registry).
+ */
+export const orgDepartureSuppressions = pgTable('org_departure_suppressions', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  orgId: text('orgId').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+  emailHash: text('emailHash').notNull(),
+  createdAt: timestamp('createdAt', { mode: 'date' }).default(utcNow).notNull(),
+}, (table) => ({
+  orgEmailKey: unique('org_departure_suppressions_org_email_key').on(table.orgId, table.emailHash),
+}));
+
 export const organizationsRelations = relations(organizations, ({ one, many }) => ({
   owner: one(users, { fields: [organizations.ownerId], references: [users.id] }),
   members: many(orgMembers),

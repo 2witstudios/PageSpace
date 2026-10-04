@@ -131,6 +131,7 @@ describe('decideAutoJoin', () => {
     domainVerifiedAt: T0,
     isMember: false,
     previouslyDeparted: false,
+    departureSuppressed: false,
     hasOpenInvite: false,
     isOrgGuest: false,
     orgActive: true,
@@ -159,6 +160,10 @@ describe('decideAutoJoin', () => {
 
   it('SEC-1 (partial) anyone who left or was removed is never re-added by their address, even on a domain verified the whole time', () => {
     expect(decideAutoJoin({ ...eligible, previouslyDeparted: true })).toEqual({ action: 'skip', reason: 'previously_departed' });
+  });
+
+  it('SEC-1 (partial) [D-OW-27] a new account whose address matches a departed member\'s suppression is never auto-joined', () => {
+    expect(decideAutoJoin({ ...eligible, departureSuppressed: true })).toEqual({ action: 'skip', reason: 'departure_suppressed' });
   });
 
   it('SEC-1 (partial) a member is left alone, and an open invite keeps the role the inviter chose', () => {

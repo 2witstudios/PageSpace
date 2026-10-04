@@ -25,6 +25,7 @@ export const ORG_AUDIT_CATEGORIES = {
   membership: [
     'org.created', 'org.updated', 'org.deleted', 'org.ownership.transferred', 'org.member.joined',
     'org.member.auto_joined', 'org.member.auto_join_refused', 'org.member.role_changed', 'org.member.removed', 'org.member.left',
+    'org.member.suppression_cleared',
   ],
   seats: ['org.seat.auto_add_changed', 'org.seat.quantity_changed', 'org.seat.refused'],
   invites: ['org.invite.created', 'org.invite.resent', 'org.invite.revoked'],

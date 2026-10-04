@@ -169,6 +169,11 @@
       "import": "./dist/audit/org-audit-query-core.js",
       "require": "./dist/audit/org-audit-query-core.js"
     },
+    "./organizations/departure-suppression": {
+      "types": "./dist/organizations/departure-suppression.d.ts",
+      "import": "./dist/organizations/departure-suppression.js",
+      "require": "./dist/organizations/departure-suppression.js"
+    },
     "./organizations/seat-service": {
       "types": "./dist/organizations/seat-service.d.ts",
       "import": "./dist/organizations/seat-service.js",

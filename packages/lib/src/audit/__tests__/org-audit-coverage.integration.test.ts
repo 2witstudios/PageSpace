@@ -48,6 +48,8 @@ import { answerDriveJoinRequest, requestToJoinDrive, withdrawDriveJoinRequest } 
 import { createDriveWallet, donateToDrive, topUpDriveWallet, updateDriveWallet } from '../../services/drive-wallet-service';
 import { applyOrgPoolRefill } from '../../billing/wallet-funding-shell';
 import { hashToken } from '../../auth/token-utils';
+import { accountRepository } from '../../repositories/account-repository';
+import { clearDepartureSuppression } from '../../organizations/departure-suppression';
 
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
@@ -277,6 +279,9 @@ describe('every org mutation writes its event', () => {
 
     // ── leaving: removal, a chosen leave, ownership, and the org's deletion ──────────
     expect((await removeMember({ orgId, actorId: jono.id, targetId: dana.id })).ok).toBe(true);
+    // [D-OW-27] Dana deletes her account: her address stays suppressed until an Admin clears it.
+    await accountRepository.deleteUser(dana.id);
+    expect(await clearDepartureSuppression({ orgId, email: dana.email, actorId: jono.id })).toBe(true);
     expect((await leaveOrganization(tomas.id, orgId)).ok).toBe(true);
     expect((await transferOwnership({ orgId, actorId: jono.id, targetId: priya.id })).ok).toBe(true);
 

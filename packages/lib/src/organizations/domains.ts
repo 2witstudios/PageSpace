@@ -25,6 +25,7 @@ import { decryptUserRow } from '../auth/user-repository';
 import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
 import { loggers } from '../logging/logger-config';
 import { isOrgGuest } from '../permissions/org-guest-footprint';
+import { isDepartureSuppressed } from './departure-suppression';
 import {
   publishOrgMembershipSyncEvents,
   syncOrgMemberAccess,
@@ -428,6 +429,7 @@ export async function autoJoinVerifiedDomainOrg(
       domainVerifiedAt: claim?.verifiedAt ?? null,
       isMember,
       previouslyDeparted: departed !== undefined,
+      departureSuppressed: await isDepartureSuppressed(tx, orgId, email),
       hasOpenInvite: openInvite !== undefined,
       isOrgGuest: isMember ? false : await isOrgGuest(orgId, input.userId, tx),
       orgActive: (await checkOrgActive(orgId, { executor: tx, now: input.now })).ok,

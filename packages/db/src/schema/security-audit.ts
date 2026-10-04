@@ -138,7 +138,8 @@ export type SecurityEventType =
   | 'org.domain.verified'
   | 'org.domain.removed'
   | 'org.member.auto_joined'
-  | 'org.member.auto_join_refused';
+  | 'org.member.auto_join_refused'
+  | 'org.member.suppression_cleared';
 
 /**
  * Single source of truth for the security_audit_log table shape (#890 Phase 1).

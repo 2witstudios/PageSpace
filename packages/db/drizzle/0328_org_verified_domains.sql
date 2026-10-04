@@ -1,3 +1,11 @@
+CREATE TABLE "org_departure_suppressions" (
+	"id" text PRIMARY KEY NOT NULL,
+	"orgId" text NOT NULL,
+	"emailHash" text NOT NULL,
+	"createdAt" timestamp DEFAULT (now() at time zone 'utc') NOT NULL,
+	CONSTRAINT "org_departure_suppressions_org_email_key" UNIQUE("orgId","emailHash")
+);
+--> statement-breakpoint
 CREATE TABLE "org_domains" (
 	"id" text PRIMARY KEY NOT NULL,
 	"orgId" text NOT NULL,
@@ -23,6 +31,7 @@ CREATE TABLE "org_member_departures" (
 	CONSTRAINT "org_member_departures_org_user_key" UNIQUE("orgId","userId")
 );
 --> statement-breakpoint
+ALTER TABLE "org_departure_suppressions" ADD CONSTRAINT "org_departure_suppressions_orgId_organizations_id_fk" FOREIGN KEY ("orgId") REFERENCES "public"."organizations"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "org_domains" ADD CONSTRAINT "org_domains_orgId_organizations_id_fk" FOREIGN KEY ("orgId") REFERENCES "public"."organizations"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "org_domains" ADD CONSTRAINT "org_domains_createdBy_users_id_fk" FOREIGN KEY ("createdBy") REFERENCES "public"."users"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "org_member_departures" ADD CONSTRAINT "org_member_departures_orgId_organizations_id_fk" FOREIGN KEY ("orgId") REFERENCES "public"."organizations"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint

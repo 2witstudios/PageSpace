@@ -24,7 +24,8 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   added, and the Owner finds the refusal in the audit trail. Joining opens the organization's Open drives
   only, never a Restricted or Private one. Only one organization can hold a domain, shared providers such
   as gmail.com cannot be claimed, existing accounts and guests are never swept in, and someone who leaves
-  is not re-added. Removing a domain stops future joins and removes nobody.
+  or is removed is not re-added, even after deleting their account and signing up again (the organization
+  keeps only a one-way fingerprint of the address, which an Owner or Admin can clear). Removing a domain stops future joins and removes nobody.
 - **Organization sharing policies** — an organization Owner or Admin can turn public share links,
   publishing to the web, custom domains and guests from outside the organization off, or (for guests)
   require approval. Turning one off pauses what already exists instead of deleting it: share links stop

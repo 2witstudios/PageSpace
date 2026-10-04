@@ -134,7 +134,8 @@ export type AutoJoinSkipReason =
   | 'already_member'
   | 'invited'
   | 'org_guest'
-  | 'previously_departed';
+  | 'previously_departed'
+  | 'departure_suppressed';
 
 export type AutoJoinDecision =
   | { action: 'join' }
@@ -153,6 +154,8 @@ export function decideAutoJoin(input: {
   isMember: boolean;
   /** They were a member of this org once and left or were removed, however they had joined. */
   previouslyDeparted: boolean;
+  /** [D-OW-27] Their address matches a departed member whose account was deleted (a keyed hash). */
+  departureSuppressed: boolean;
   hasOpenInvite: boolean;
   isOrgGuest: boolean;
   orgActive: boolean;
@@ -161,6 +164,7 @@ export function decideAutoJoin(input: {
   if (!input.emailVerified) return { action: 'skip', reason: 'email_not_verified' };
   if (input.isMember) return { action: 'skip', reason: 'already_member' };
   if (input.previouslyDeparted) return { action: 'skip', reason: 'previously_departed' };
+  if (input.departureSuppressed) return { action: 'skip', reason: 'departure_suppressed' };
   if (input.userCreatedAt.getTime() < input.domainVerifiedAt.getTime()) return { action: 'skip', reason: 'account_predates_verification' };
   if (input.isOrgGuest) return { action: 'skip', reason: 'org_guest' };
   if (input.hasOpenInvite) return { action: 'skip', reason: 'invited' };
