@@ -159,6 +159,16 @@
       "import": "./dist/organizations/domains-core.js",
       "require": "./dist/organizations/domains-core.js"
     },
+    "./audit/org-audit-query": {
+      "types": "./dist/audit/org-audit-query.d.ts",
+      "import": "./dist/audit/org-audit-query.js",
+      "require": "./dist/audit/org-audit-query.js"
+    },
+    "./audit/org-audit-query-core": {
+      "types": "./dist/audit/org-audit-query-core.d.ts",
+      "import": "./dist/audit/org-audit-query-core.js",
+      "require": "./dist/audit/org-audit-query-core.js"
+    },
     "./organizations/seat-service": {
       "types": "./dist/organizations/seat-service.d.ts",
       "import": "./dist/organizations/seat-service.js",

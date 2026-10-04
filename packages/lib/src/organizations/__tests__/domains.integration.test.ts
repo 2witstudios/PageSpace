@@ -47,8 +47,9 @@ vi.mock('../orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
 const audit = vi.hoisted(() => ({ events: [] as Array<Record<string, unknown>> }));
 vi.mock('../../audit/org-audit', () => ({
-  recordOrgAuditEvent: async (event: Record<string, unknown>) => {
+  recordOrgAuditEventAfterCommit: async (event: Record<string, unknown>) => {
     audit.events.push(event);
+    return true;
   },
 }));
 

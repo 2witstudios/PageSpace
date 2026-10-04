@@ -22,7 +22,7 @@ import { users } from '@pagespace/db/schema/auth';
 import { orgDomainJoins, orgDomains, orgInvitations, orgMembers, organizations, type OrgDomain } from '@pagespace/db/schema/organizations';
 import { generateToken, hashToken } from '../auth/token-utils';
 import { decryptUserRow } from '../auth/user-repository';
-import { recordOrgAuditEvent } from '../audit/org-audit';
+import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
 import { loggers } from '../logging/logger-config';
 import { isOrgGuest } from '../permissions/org-guest-footprint';
 import {
@@ -103,7 +103,7 @@ export async function addOrgDomain(input: { orgId: string; domain: string; actor
     if (isUniqueViolation(error)) return { ok: false, status: 409, reason: 'already_added' };
     throw error;
   }
-  await recordOrgAuditEvent({
+  await recordOrgAuditEventAfterCommit({
     orgId: input.orgId,
     eventType: 'org.domain.added',
     actorId: input.actorId,
@@ -160,7 +160,7 @@ async function verifyClaim(input: {
     throw error;
   }
   if (outcome.ok && !outcome.alreadyVerified) {
-    await recordOrgAuditEvent({
+    await recordOrgAuditEventAfterCommit({
       orgId: outcome.domain.orgId,
       eventType: 'org.domain.verified',
       actorId: input.actorId,
@@ -261,7 +261,7 @@ export async function sendDomainProofEmail(input: {
       .where(and(eq(orgDomains.id, stored.claim.id), eq(orgDomains.emailTokenHash, hash)));
     return { ok: false, status: 502, reason: 'delivery_failed', cause };
   }
-  await recordOrgAuditEvent({
+  await recordOrgAuditEventAfterCommit({
     orgId: input.orgId,
     eventType: 'org.domain.verification_sent',
     actorId: input.actorId,
@@ -306,7 +306,7 @@ export async function removeOrgDomain(input: { orgId: string; domainId: string; 
     .where(and(eq(orgDomains.id, input.domainId), eq(orgDomains.orgId, input.orgId)))
     .returning();
   if (!removed) return false;
-  await recordOrgAuditEvent({
+  await recordOrgAuditEventAfterCommit({
     orgId: input.orgId,
     eventType: 'org.domain.removed',
     actorId: input.actorId,
@@ -420,7 +420,7 @@ export async function autoJoinVerifiedDomainOrg(
   if (outcome.sync) await deps.publishSyncEvents(outcome.sync);
   const { result } = outcome;
   if (result.kind === 'joined') {
-    await recordOrgAuditEvent({
+    await recordOrgAuditEventAfterCommit({
       orgId: result.orgId,
       eventType: 'org.member.auto_joined',
       actorId: input.userId,
@@ -430,7 +430,7 @@ export async function autoJoinVerifiedDomainOrg(
     });
   } else if (result.kind === 'refused') {
     // The Owner finds a refused join in the audit trail; the person simply is not added.
-    await recordOrgAuditEvent({
+    await recordOrgAuditEventAfterCommit({
       orgId: result.orgId,
       eventType: 'org.member.auto_join_refused',
       actorId: input.userId,

@@ -35,3 +35,24 @@ export async function recordOrgAuditEvent(event: OrgAuditEvent): Promise<void> {
   loggers.security.info(`[Audit] ${entry.eventType}`, { ...entry });
   await securityAudit.logEvent(entry);
 }
+
+/**
+ * For a mutation that has ALREADY committed: write its org event, and if the chain refuses the append,
+ * log it loudly and report false instead of failing a change that has happened. Callers that can still
+ * refuse the change (before commit) use recordOrgAuditEvent and let it throw.
+ */
+export async function recordOrgAuditEventAfterCommit(event: OrgAuditEvent): Promise<boolean> {
+  try {
+    await recordOrgAuditEvent(event);
+    return true;
+  } catch (error) {
+    loggers.security.error('[Audit] org event was not recorded after its change committed', {
+      eventType: event.eventType,
+      orgId: event.orgId,
+      resourceType: event.resourceType,
+      resourceId: event.resourceId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
+}
