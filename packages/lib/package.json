@@ -529,6 +529,11 @@
       "import": "./dist/logging/logger-config.js",
       "require": "./dist/logging/logger-config.js"
     },
+    "./logging/error-cause": {
+      "types": "./dist/logging/error-cause.d.ts",
+      "import": "./dist/logging/error-cause.js",
+      "require": "./dist/logging/error-cause.js"
+    },
     "./logging/logger-database": {
       "types": "./dist/logging/logger-database.d.ts",
       "import": "./dist/logging/logger-database.js",
@@ -2914,6 +2919,9 @@
       ],
       "logging/logger-config": [
         "./dist/logging/logger-config.d.ts"
+      ],
+      "logging/error-cause": [
+        "./dist/logging/error-cause.d.ts"
       ],
       "logging/logger-database": [
         "./dist/logging/logger-database.d.ts"

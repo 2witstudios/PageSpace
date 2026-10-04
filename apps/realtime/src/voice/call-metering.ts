@@ -53,6 +53,7 @@ import {
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { addUsage, hasUnattributedTokens, isUsageEmpty } from './usage-accumulator';
+import { errorLogFields } from '@pagespace/lib/logging/error-cause';
 
 /**
  * How often an in-progress call flushes what it has spent.
@@ -354,7 +355,7 @@ export const startCallMeter = async (
           loggers.realtime.warn('Realtime voice hold release failed; it will expire on its TTL', {
             callId,
             userId,
-            error: error instanceof Error ? error.message : 'unknown',
+            ...errorLogFields(error),
           });
         });
       }

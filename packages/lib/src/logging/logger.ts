@@ -7,6 +7,7 @@ import { hostname } from 'os';
 import { createId } from '@paralleldrive/cuid2';
 import type { LogInput } from './logger-types';
 import { scrubPII } from '../compliance/pii-scrubber';
+import { errorCauseChain, formatCauseChain, type ErrorCauseLink } from './error-cause';
 import { fireSiemErrorHook, type SiemErrorPayload } from './siem-error-hook';
 import { createShutdownHandler } from './graceful-shutdown';
 
@@ -43,6 +44,8 @@ export interface LogEntry {
     name: string;
     message: string;
     stack?: string;
+    /** The error's `.cause` chain (e.g. the pg error Drizzle wraps), outermost first. */
+    cause?: ErrorCauseLink[];
   };
   performance?: {
     duration: number;
@@ -232,10 +235,15 @@ class Logger {
     }
 
     if (error) {
+      // The cause chain rides on the entry AND on the stack: the stack is the field every sink
+      // (the database writer's errorStack included) already persists.
+      const cause = errorCauseChain(error).map((link) => ({ ...link, message: scrubPII(link.message) ?? '[scrub_failed]' }));
+      const stack = cause.length > 0 ? `${error.stack ?? `${error.name}: ${error.message}`}\n${formatCauseChain(cause)}` : error.stack;
       entry.error = {
         name: error.name,
         message: scrubPII(error.message) ?? '[scrub_failed]',
-        stack: scrubPII(error.stack),
+        stack: scrubPII(stack),
+        ...(cause.length > 0 ? { cause } : {}),
       };
     }
 

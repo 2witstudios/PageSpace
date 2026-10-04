@@ -41,6 +41,7 @@ import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { PULSE_SYSTEM_PROMPT } from '../pulse-prompt';
+import { errorLogFields } from '@pagespace/lib/logging/error-cause';
 
 export async function POST(req: Request) {
   const authError = validateSignedCronRequest(req);
@@ -123,7 +124,7 @@ export async function POST(req: Request) {
         }
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
-        loggers.api.error(`Pulse cron: Failed for user ${userId}`, { error: errorMsg });
+        loggers.api.error(`Pulse cron: Failed for user ${userId}`, errorLogFields(error));
         errors.push(`${userId}: ${errorMsg}`);
       }
     }

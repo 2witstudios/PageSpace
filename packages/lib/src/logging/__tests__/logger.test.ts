@@ -29,6 +29,10 @@ vi.mock('../siem-error-hook', () => ({
 // Import after mocks are set up
 import { LogLevel, logger, type LogContext } from '../logger';
 
+/** `new Error(message, { cause })` without the ES2022 lib this package does not target. */
+const withCause = (message: string, cause: unknown): Error => Object.assign(new Error(message), { cause });
+
+
 // Helper: cast to access private methods for white-box testing
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyLogger = any;
@@ -101,6 +105,17 @@ describe('Logger log level methods', () => {
   it('error() with Error object calls console.error', () => {
     logger.error('error message', new Error('boom'));
     expect(consoleErrorSpy).toHaveBeenCalled();
+  });
+
+  it('pk862snl: error() logs the cause chain — the driver error Drizzle wraps on .cause — in the entry and its stack', () => {
+    anyLogger.config.format = 'json';
+    const pg = Object.assign(new Error('sorry, too many clients already'), { code: '53300' });
+    logger.error('settle failed', withCause('Failed query: update "wallets"', pg));
+    const entry = JSON.parse(String(consoleErrorSpy.mock.calls[0][0]));
+    expect(entry.error.cause).toEqual([{ name: 'Error', message: 'sorry, too many clients already', code: '53300' }]);
+    // The stack is what the database log writer persists: the chain rides along with it.
+    expect(entry.error.stack).toContain('Caused by: Error: sorry, too many clients already [53300]');
+    anyLogger.config.format = 'pretty';
   });
 
   it('error() with plain metadata calls console.error', () => {

@@ -14,6 +14,7 @@ import { CACHE_READ_DISCOUNT_FACTOR_BPS } from '../billing/credit-pricing';
 import { loggers } from '../logging/logger-config';
 import { normalizeUsageSource, type AIUsageSource } from './usage-source';
 import { isMeteringExempt } from '../ai/model-defaults';
+import { errorLogFields } from '../logging/error-cause';
 
 /**
  * Providers NOT served through OpenRouter. Everything else is a cloud vendor
@@ -1630,7 +1631,7 @@ export async function trackAIUsage(data: AIUsageData): Promise<UsageTrackingOutc
           pageId: data.pageId,
           markupBpsOverride: data.markupBpsOverride,
         }).catch((error) => {
-          loggers.ai.debug('credit consume failed', { error: (error as Error).message });
+          loggers.ai.warn('credit consume failed', errorLogFields(error));
           return 'deferred' as const;
         });
         if (settle !== 'settled') {
@@ -1677,9 +1678,7 @@ export async function trackAIUsage(data: AIUsageData): Promise<UsageTrackingOutc
       return USAGE_TRACKING_LOST;
     }
   } catch (error) {
-    loggers.ai.debug('AI usage calculation failed', {
-      error: (error as Error).message
-    });
+    loggers.ai.warn('AI usage calculation failed', errorLogFields(error));
     // Same reasoning as the inner catch above: a stranded hold outlives its TTL
     // suppressing the payer's balance for nothing, and nothing on this path could
     // have confirmed a charge against it.

@@ -37,6 +37,7 @@ import { emitCreditsUpdated } from './credit-emit';
 import { ensurePersonalRootWalletId } from './personal-wallet';
 import { loggers } from '../logging/logger-config';
 import { notifyFunderOfWalletDebt } from './wallet-debt-notifier';
+import { errorLogFields } from '../logging/error-cause';
 
 export interface ConsumeCreditsInput {
   aiUsageLogId: string;
@@ -705,8 +706,8 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<Credit
     ledgerId = claimed[0].id;
   } catch (error) {
     // No ledger row persisted; the cron's orphan sweep will reconcile.
-    loggers.ai.debug('credit claim failed', {
-      error: (error as Error).message,
+    loggers.ai.warn('credit claim failed', {
+      ...errorLogFields(error),
       aiUsageLogId: input.aiUsageLogId,
     });
     return 'deferred';
@@ -742,8 +743,8 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<Credit
       // The claim row exists but never reached a terminal status, so the backfill
       // cron's pending sweep owns it from here.
       zeroChargeSettled = false;
-      loggers.ai.debug('credit zero-charge settle failed', {
-        error: (error as Error).message,
+      loggers.ai.warn('credit zero-charge settle failed', {
+        ...errorLogFields(error),
         aiUsageLogId: input.aiUsageLogId,
       });
     }
@@ -782,8 +783,8 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<Credit
     await noticeDebt(applied, walletId);
   } catch (error) {
     // Leave the row 'pending' for the backfill cron to retry. Never throw.
-    loggers.ai.debug('credit consume failed', {
-      error: (error as Error).message,
+    loggers.ai.warn('credit consume failed', {
+      ...errorLogFields(error),
       aiUsageLogId: input.aiUsageLogId,
     });
     return 'deferred';
@@ -812,7 +813,7 @@ export async function releaseHold(holdId: string): Promise<void> {
     // The credits push is a billing-UI concern — skip it when billing is off.
     if (userId && isBillingEnabled()) void emitCreditsUpdated(userId);
   } catch (error) {
-    loggers.ai.debug('credit hold release failed', { error: (error as Error).message, holdId });
+    loggers.ai.warn('credit hold release failed', { ...errorLogFields(error), holdId });
   }
 }
 

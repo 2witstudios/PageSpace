@@ -65,6 +65,7 @@ import {
 } from './app-metering-core';
 import { planTransition } from './provisioner-core';
 import { isCreditMetered } from './dedicated-tier';
+import { errorLogFields } from '../../logging/error-cause';
 
 export interface AppLifecycleMeteringDeps {
   isEnabled: () => boolean;
@@ -990,7 +991,7 @@ async function mirrorRecentFlyEvents(
     loggers.ai.warn('Published-app Fly event window could not be read for mirroring', {
       publishedAppId: ref.publishedAppId,
       machineId: ref.machineId,
-      error: error instanceof Error ? error.message : String(error),
+      ...errorLogFields(error),
     });
   }
 }

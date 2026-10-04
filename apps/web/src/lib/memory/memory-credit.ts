@@ -24,6 +24,7 @@ import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
 import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { gateUserCall } from '@/lib/ai/core/user-credit-hold';
+import { errorLogFields } from '@pagespace/lib/logging/error-cause';
 
 /**
  * Why a memory model call did not run:
@@ -75,7 +76,7 @@ export async function reserveMemoryCall(
   } catch (error) {
     loggers.api.warn('Memory: credit gate could not be evaluated, call skipped', {
       userId,
-      error: error instanceof Error ? error.message : String(error),
+      ...errorLogFields(error),
     });
     return { allowed: false, reason: 'gate_error' };
   }

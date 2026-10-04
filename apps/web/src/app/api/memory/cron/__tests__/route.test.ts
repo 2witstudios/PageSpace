@@ -354,6 +354,25 @@ describe('memory cron route', () => {
 
     beforeEach(setupOneUser);
 
+    it('pk862snl: a user that fails on a Postgres FATAL logs the driver error Drizzle wrapped, not only "Failed query"', async () => {
+      const fatal = Object.assign(new Error('sorry, too many clients already'), { code: '53300' });
+      mockRunDiscoveryPasses.mockRejectedValue(Object.assign(new Error('Failed query: select "id" from "credit_holds"'), { cause: fatal }));
+      const { loggers } = await import('@pagespace/lib/logging/logger-config');
+
+      const { POST } = await import('../route');
+      await POST(createSignedCronRequest());
+
+      assert({
+        given: 'a Drizzle error whose cause is a Postgres FATAL',
+        should: 'log the cause chain with its SQLSTATE beside the outer message',
+        actual: vi.mocked(loggers.api.error).mock.calls.find(([message]) => String(message).startsWith('Memory cron: Error processing user'))?.[1],
+        expected: {
+          error: 'Failed query: select "id" from "credit_holds"',
+          cause: [{ name: 'Error', message: 'sorry, too many clients already', code: '53300' }],
+        },
+      });
+    });
+
     it('leaves every candidate pending when evaluation never reached a decision', async () => {
       // A provider outage must not retire a user's whole ready set. Before the
       // fix, an empty update object was indistinguishable from "declined all".
