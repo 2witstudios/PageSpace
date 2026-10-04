@@ -69,9 +69,9 @@ describe('resolveEnvPayer', () => {
 });
 
 describe('resolveEnvCharge', () => {
-  it("WAL-9 (partial) an env or app in an org drive charges the org pool, recorded under the drive lead — never the lead's wallet", async () => {
+  it("WAL-9 (partial) an env or app in an org drive charges the org pool, recorded under the drive lead as a drive accrual (never the lead's seat) — never the lead's wallet", async () => {
     const charge = await resolveEnvCharge({ driveId: 'd1', lookupDriveBillingFacts: async () => inOrg('lead-marcus', 'org-northwind') });
-    expect(charge).toEqual({ kind: 'org', orgId: 'org-northwind', userId: 'lead-marcus' });
+    expect(charge).toEqual({ kind: 'org', orgId: 'org-northwind', userId: 'lead-marcus', accrual: true });
   });
 
   it('a personal drive charges its owner', async () => {

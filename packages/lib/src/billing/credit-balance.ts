@@ -2,9 +2,9 @@
  * credit-balance — read-only view of a user's prepaid AI-credit balance for the
  * dashboard widget and the `GET /api/credits` endpoint.
  *
- * This is the DISPLAY layer; it never mutates. The authoritative spend decision and
- * the gate-driven periodic rollover live in `./credit-gate` (the imperative shell that
- * owns the clock and the row lock). Here we only mirror the gate's semantics for presentation:
+ * This is the DISPLAY layer; it never mutates. The authoritative spend decision lives
+ * in `./credit-gate`, and a comped account's periodic rollover in the period sweep
+ * (`./wallet-funding-shell` rollDuePersonalRoots). Here we only mirror the gate's semantics for presentation:
  *   - free tier (a ONE-TIME starter grant, TIER_ALLOWANCE_REFILLS.free === false) is
  *     shown its stored remaining only, and no renewal date — nothing will ever be
  *     added to the monthly bucket again;

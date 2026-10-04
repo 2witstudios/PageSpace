@@ -11,6 +11,7 @@ import {
   refillPool,
   invoiceServicePeriodMs,
   planAllocationReset,
+  planPersonalRootRoll,
   orderFundingLegs,
   drawFundingLegs,
   planLegRefund,
@@ -379,5 +380,50 @@ describe('wallet-funding purity', () => {
   it('imports no db, no Stripe, no env, and reads no clock', () => {
     const src = readFileSync(fileURLToPath(new URL('../wallet-funding.ts', import.meta.url)), 'utf8');
     expect(src).not.toMatch(/@pagespace\/db|stripe['"]|process\.env|Date\.now\(|new Date\(\)/);
+  });
+});
+
+describe('wallet-funding: the comped personal root roll', () => {
+  // A comped Pro account renews on the 3rd at 08:30 UTC; nothing from Stripe will ever refill it.
+  const END = Date.UTC(2026, 8, 3, 8, 30);
+  const comped = (periodEndMs: number | null, nowMs: number, over: Partial<{ tier: string; hasRenewalCapableSubscription: boolean }> = {}) =>
+    planPersonalRootRoll({ tier: 'pro', hasRenewalCapableSubscription: false, periodEndMs, nowMs, ...over });
+
+  it('is not due while the period runs, for a tier that never refills, or where invoice.paid owns the renewal', () => {
+    expect(comped(END, END - 1)).toEqual({ due: false });
+    expect(comped(END - 86_400_000, END, { tier: 'free' })).toEqual({ due: false });
+    expect(comped(END - 86_400_000, END, { tier: 'normal' })).toEqual({ due: false });
+    expect(comped(END - 86_400_000, END, { hasRenewalCapableSubscription: true })).toEqual({ due: false });
+  });
+
+  it('rolls exactly at the stored UTC period end, onto the next calendar month at the same UTC instant', () => {
+    expect(comped(END, END)).toEqual({ due: true, periodStartMs: END, periodEndMs: Date.UTC(2026, 9, 3, 8, 30) });
+    // An hour (or a day) of cron latency never moves the clock: the period still starts at the end.
+    expect(comped(END, END + 3_600_000)).toEqual({ due: true, periodStartMs: END, periodEndMs: Date.UTC(2026, 9, 3, 8, 30) });
+  });
+
+  it('after months unattended it rolls ONCE onto the period containing now — one allowance, never one per missed month', () => {
+    const now = Date.UTC(2026, 11, 20);
+    expect(comped(END, now)).toEqual({ due: true, periodStartMs: Date.UTC(2026, 11, 3, 8, 30), periodEndMs: Date.UTC(2027, 0, 3, 8, 30) });
+  });
+
+  it('a month-end renewal clamps to the shorter month in UTC (Jan 31 → Feb 28), never spilling into March', () => {
+    const jan31 = Date.UTC(2026, 0, 31, 23, 30);
+    expect(comped(jan31, jan31 + 60_000)).toEqual({ due: true, periodStartMs: jan31, periodEndMs: Date.UTC(2026, 1, 28, 23, 30) });
+  });
+
+  it('a row never stamped (created bare by a top-up) starts its first period now', () => {
+    const now = Date.UTC(2026, 8, 20, 12);
+    expect(comped(null, now)).toEqual({ due: true, periodStartMs: now, periodEndMs: Date.UTC(2026, 9, 20, 12) });
+  });
+
+  it('a period resets exactly once: the plan applied is never due again inside the period it stamped', () => {
+    const now = Date.UTC(2026, 8, 3, 9);
+    const first = comped(END, now);
+    expect(first.due).toBe(true);
+    if (!first.due) return;
+    for (const later of [now, now + 3_600_000, first.periodEndMs - 1]) {
+      expect(comped(first.periodEndMs, later)).toEqual({ due: false });
+    }
   });
 });

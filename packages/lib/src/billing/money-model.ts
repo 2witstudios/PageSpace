@@ -149,8 +149,8 @@ export function tierListPriceCents(tier: SubscriptionTier): number {
 }
 
 /**
- * The grant a tier receives when there is no invoice to size it from: the gate's
- * own period roll for comped/no-subscription paid accounts, the lazy-init of a
+ * The grant a tier receives when there is no invoice to size it from: the period
+ * sweep's roll for comped/no-subscription paid accounts, the lazy-init of a
  * brand-new balance row, and display of an account that has never been granted.
  * Paid tiers derive from the list price; free is the starter grant; an
  * unknown/legacy value (e.g. a stale `users.subscriptionTier`) is treated as free so

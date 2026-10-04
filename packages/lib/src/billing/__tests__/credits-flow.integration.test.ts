@@ -1359,25 +1359,24 @@ describe('credits flow — monthly reset', () => {
     expect(balanceOf('u3')!.monthlyRemainingCents).toBe(0); // gate does NOT refill; invoice.paid does
   });
 
-  it('paid user with expired window and NO live subscription (comped account) gets the gate-driven roll — no invoice will ever arrive', async () => {
+  it('paid user with expired window and NO live subscription (comped account) is NOT rolled by the gate — the period sweep owns that reset (ew9v06jeb)', async () => {
     seedUser('u5', 'cus_5', 'business');
-    // A dead subscription must not block the roll — it can never deliver an invoice.
     store.subscriptions.push({ id: 'sub_u5_old', userId: 'u5', status: 'incomplete_expired' });
+    const periodEnd = new Date(Date.now() - 24 * 60 * 60 * 1000);
     store.wallets.push({
       id: `w_seed_${store.wallets.length + 1}`, ownerType: 'user', orgId: null, subjectType: null, subjectId: null, parentWalletId: null,
       userId: 'u5', monthlyRemainingCents: 0, monthlyAllowanceCents: 10000,
       topupRemainingCents: 0, pendingMillicents: 0,
       monthlyPeriodStart: new Date(Date.now() - 40 * 24 * 60 * 60 * 1000),
-      monthlyPeriodEnd: new Date(Date.now() - 24 * 60 * 60 * 1000),
+      monthlyPeriodEnd: periodEnd,
       updatedAt: new Date(),
     });
 
     const gate = await canConsumeAI('u5', 'business', { spend: PERSONAL_SPEND });
-    expect(gate).toMatchObject({ allowed: true, reason: 'ok' });
-    expect(balanceOf('u5')!.monthlyRemainingCents).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.business); // refilled at the paid tier's allowance
-    expect(balanceOf('u5')!.monthlyPeriodEnd!.getTime()).toBeGreaterThan(Date.now()); // window advanced
-    // The grant is ledgered under the gate-reset ref, distinguishable from free resets.
-    expect(ledgerOf('u5').some((r) => r.entryType === 'monthly_grant' && String(r.stripeRef).startsWith('gate-reset-'))).toBe(true);
+    expect(gate).toEqual({ allowed: false, reason: 'out_of_credits' });
+    expect(balanceOf('u5')!.monthlyRemainingCents).toBe(0);
+    expect(balanceOf('u5')!.monthlyPeriodEnd!.getTime()).toBe(periodEnd.getTime());
+    expect(ledgerOf('u5').filter((r) => r.entryType === 'monthly_grant')).toHaveLength(0);
   });
 
   it('paid user with expired window, a live subscription, and carry credits CAN spend (rollover — carry is always spendable)', async () => {
