@@ -743,21 +743,26 @@ export async function settleAccruedWindow(
   return true;
 }
 
+/** How long a refused typist's input is refused without another gate read (review 5407898542 P2-3). */
+export const TYPIST_REFUSAL_MEMO_MS = 10_000;
+
 /**
- * WAL-2 (fe9db1nm review P1): compute is charged to, and capped against, THE PERSON WHO CAUSES
- * IT. A live PTY is shared — any member of the drive may attach to it, or have the web tier type
- * into it on their behalf — so when a person other than the window's actor joins, the window
- * moves to them:
- *   1. their OWN charge is gated first; a refusal (their cap reached, the pool empty or paused)
- *      refuses the join and changes nothing — so a member at their cap cannot run compute in
- *      ANY session, their own or a drive-mate's;
- *   2. the window so far is settled to the actor who opened it (`settleAccruedWindow`);
- *   3. the next window is held on, and recorded under, the joiner.
- * While several people share one PTY, the last to join pays for the window from then on.
- * If the settle in (2) fails, the window stays with its opener (rolled back for the next
- * heartbeat) and the joiner's hold is released: a transient billing outage never ends a live PTY,
- * and the joiner was still gated against their own cap. A billing READ failure refuses the join:
- * an unanswerable cap is not a pass. Inert for an unmetered session or the window's own actor.
+ * WAL-2 (fe9db1nm review P1; review 5407898542 P2-3): compute is charged to, and capped against,
+ * THE PERSON WHO CAUSES IT — in a shared PTY, THE TYPIST. Any member of the drive may attach to a
+ * live PTY, and watching moves nothing; the window moves when someone OTHER than its actor sends
+ * input (a keystroke over the socket, `onInput`, or a web-tier send on their behalf, shell-io):
+ *   1. the typist's OWN charge is gated first; a refusal (their cap reached, the pool empty or
+ *      paused) refuses the input and changes nothing — so a member at their cap cannot run compute
+ *      in ANY session, their own or a drive-mate's;
+ *   2. the window so far is settled to its actor (`settleAccruedWindow`);
+ *   3. the next window is held on, and recorded under, the typist.
+ * So a window is CUT at every change of typist and each segment is charged wholly to the one
+ * person typing in it — never split, never estimated by keystroke counts. Time between keystrokes
+ * (a command running) belongs to whoever typed last: the command's author.
+ * If the settle in (2) fails, the window stays with its actor (rolled back for the next heartbeat)
+ * and the typist's hold is released: a transient billing outage never ends a live PTY, and the
+ * typist was still gated against their own cap. A billing READ failure refuses the input: an
+ * unanswerable cap is not a pass. Inert for an unmetered session or the window's own actor.
  */
 export async function claimBillingWindow(
   billing: SandboxBillingDeps,
@@ -1784,12 +1789,64 @@ export function buildShellHandlers({
    * connection in `connectingConnectionIds` for the whole of it — every path out
    * of here either binds a session (and settles any abandonment) or binds nothing.
    */
-  /** Claim the live session's billing window for a joining viewer; on refusal, tell their pane why. */
-  async function joinBillingWindow(session: TerminalSession, connectionId: string, userId: string): Promise<boolean> {
+  /** Deliver accepted input to the PTY. */
+  function writeInput(session: TerminalSession, data: string) {
+    // Input is activity for the task hold: a typed prompt is work in
+    // progress even before the agent's first byte of output.
+    session.lastInputAt = Date.now();
+    // A keystroke also RESUMES a quiesced shell (sprites-shell.ts's `write`
+    // pays back the swallowed watchdog trip), which wakes the Sprite and
+    // re-takes the platform hold — so the payer starts consuming a sandbox
+    // again, and the billing clock has to start with it. Done here, at the
+    // instant of the keystroke, rather than at the next heartbeat: that is
+    // ten minutes away (`SETTLE_HEARTBEAT_MS`), and every one of those
+    // minutes would otherwise be billed as free.
+    resumeBillingClock(session);
+    session.command.write(data);
+  }
+
+  /**
+   * Input waiting on a typist's billing claim, per connection, so keystrokes are written in the
+   * order they were typed while the claim's gate is in flight (review 5407898542 P2-3).
+   */
+  const pendingInput = new Map<string, Promise<void>>();
+  /** A refused typist's input is refused without re-asking the gate until this instant. */
+  const typingRefusedUntil = new Map<string, { until: number; message?: string }>();
+
+  /** Whether `typist` sending input would move the window: a metered session someone else holds. */
+  function typingMovesWindow(session: TerminalSession, typist: string): boolean {
+    return billing !== undefined && session.charge !== undefined && typist !== '' && session.actorId !== typist;
+  }
+
+  function refuseInput(connectionId: string, message: string | undefined) {
+    socket.emit('shell:error', {
+      message: message ?? 'Shell input refused: compute could not be charged to you',
+      // The PTY never saw it, so the binding is still good (see the oversized-input refusal).
+      recoverable: true,
+      ...(connectionId !== socket.id ? { connectionId } : {}),
+    });
+  }
+
+  /**
+   * The typist takes the window before their input reaches the PTY (claimBillingWindow). Refused:
+   * the input is dropped and the pane told why, and for TYPIST_REFUSAL_MEMO_MS further input from
+   * that connection is refused without another gate read — a capped person typing is not a query
+   * per keystroke.
+   */
+  async function claimTypingWindow(session: TerminalSession, connectionId: string, typist: string): Promise<boolean> {
     if (!billing) return true;
-    const claim = await claimBillingWindow(billing, sessionMap, session, userId);
-    if (claim.ok) return true;
-    socket.emit('shell:error', { message: claim.message ?? 'Shell access denied: insolvent', connectionId });
+    const memo = typingRefusedUntil.get(connectionId);
+    if (memo && Date.now() < memo.until) {
+      refuseInput(connectionId, memo.message);
+      return false;
+    }
+    const claim = await claimBillingWindow(billing, sessionMap, session, typist);
+    if (claim.ok) {
+      typingRefusedUntil.delete(connectionId);
+      return true;
+    }
+    typingRefusedUntil.set(connectionId, { until: Date.now() + TYPIST_REFUSAL_MEMO_MS, ...(claim.message ? { message: claim.message } : {}) });
+    refuseInput(connectionId, claim.message);
     return false;
   }
 
@@ -1822,10 +1879,8 @@ export function buildShellHandlers({
       // away from whoever has it (a live pane, or a pending reap) on behalf of a
       // socket that no longer exists — see `abandoned`.
       if (abandoned(connectionId)) return;
-      // WAL-2: joining a live PTY is running compute in it — gated against the JOINER's own cap,
-      // and the window moves to them (claimBillingWindow). Refused: nothing is attached.
-      if (!(await joinBillingWindow(plan.session, connectionId, userId))) return;
-      if (abandoned(connectionId)) return;
+      // WAL-2 (review 5407898542 P2-3): watching a live PTY moves no money — the window moves to
+      // whoever TYPES (onInput / claimTypingWindow), gated against their own cap then.
       attachToLiveSession(plan.session, connectionId, userId);
       return;
     }
@@ -1881,8 +1936,6 @@ export function buildShellHandlers({
       // double-mount's loser, or a racer that got there first). Same rule as the
       // reattach path above: a pane that has left must not take the session the
       // creator is watching. The creator settles its own abandonment.
-      if (abandoned(connectionId)) return;
-      if (!(await joinBillingWindow(outcome.session, connectionId, userId))) return;
       if (abandoned(connectionId)) return;
       attachToLiveSession(outcome.session, connectionId, userId);
       return;
@@ -1978,20 +2031,26 @@ export function buildShellHandlers({
         });
         return;
       }
-      {
-        // Input is activity for the task hold: a typed prompt is work in
-        // progress even before the agent's first byte of output.
-        session.lastInputAt = Date.now();
-        // A keystroke also RESUMES a quiesced shell (sprites-shell.ts's `write`
-        // pays back the swallowed watchdog trip), which wakes the Sprite and
-        // re-takes the platform hold — so the payer starts consuming a sandbox
-        // again, and the billing clock has to start with it. Done here, at the
-        // instant of the keystroke, rather than at the next heartbeat: that is
-        // ten minutes away (`SETTLE_HEARTBEAT_MS`), and every one of those
-        // minutes would otherwise be billed as free.
-        resumeBillingClock(session);
-        session.command.write(p.data);
+      // WAL-2 (review 5407898542 P2-3): THE TYPIST PAYS. Input from someone other than the
+      // window's actor first moves the window to them (gated on their own cap); input queued behind
+      // that claim waits for it, so keystrokes reach the PTY in the order they were typed.
+      const typist = socket.data.user?.id ?? '';
+      const queued = pendingInput.get(connectionId);
+      if (queued || typingMovesWindow(session, typist)) {
+        const data = p.data;
+        const run = (queued ?? Promise.resolve()).then(async () => {
+          if (sessionMap.getBySocket(socketKey(connectionId)) !== session) return;
+          if (typingMovesWindow(session, typist) && !(await claimTypingWindow(session, connectionId, typist))) return;
+          if (sessionMap.getBySocket(socketKey(connectionId)) !== session) return;
+          writeInput(session, data);
+        });
+        pendingInput.set(connectionId, run);
+        void run.finally(() => {
+          if (pendingInput.get(connectionId) === run) pendingInput.delete(connectionId);
+        });
+        return;
       }
+      writeInput(session, p.data);
     },
 
     onResize(payload: unknown) {

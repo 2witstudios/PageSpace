@@ -19,7 +19,7 @@ import { drives } from '@pagespace/db/schema/core';
 import { creditHolds, creditLedger } from '@pagespace/db/schema/credits';
 import { driveEnvs } from '@pagespace/db/schema/drive-envs';
 import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
-import { publishedApps } from '@pagespace/db/schema/published-apps';
+import { appHostingReclaims, publishedApps } from '@pagespace/db/schema/published-apps';
 import { walletConsumerCaps, wallets } from '@pagespace/db/schema/wallets';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
@@ -106,6 +106,8 @@ async function teardown(w: World): Promise<void> {
   await db.delete(creditHolds).where(inArray(creditHolds.userId, w.userIds));
   await db.delete(creditLedger).where(inArray(creditLedger.userId, w.userIds));
   await db.delete(publishedApps).where(eq(publishedApps.id, w.appId));
+  // Deleting an app row enqueues its Fly name for reclaim (the AFTER DELETE trigger): ours too.
+  await db.delete(appHostingReclaims).where(eq(appHostingReclaims.publishedAppId, w.appId));
   await db.delete(driveEnvs).where(eq(driveEnvs.id, w.envId));
   await db.delete(walletConsumerCaps).where(eq(walletConsumerCaps.walletId, w.poolId));
   await db.delete(wallets).where(eq(wallets.id, w.poolId));

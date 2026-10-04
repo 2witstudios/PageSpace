@@ -22,13 +22,15 @@ import { creditHolds, creditLedger } from '@pagespace/db/schema/credits';
 import { driveEnvs } from '@pagespace/db/schema/drive-envs';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
-import { publishedApps } from '@pagespace/db/schema/published-apps';
+import { appHostingReclaims, publishedApps } from '@pagespace/db/schema/published-apps';
 import { walletConsumerCaps, wallets } from '@pagespace/db/schema/wallets';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { admitDriveComputeCreator } from '../compute-gate';
 import { defaultAppBillingDeps } from '../../services/app-hosting/app-billing';
 import { leaveOrganization } from '../../organizations/leave';
+import { createDbDriveEnvStore } from '../../services/drive-envs/drive-envs-store';
+import { createPublishedApp, defaultProvisionerDeps } from '../../services/app-hosting/provisioner';
 import { DEFAULT_SEAT_ALLOWANCE_CENTS } from '../wallet-core';
 
 const audit = vi.hoisted(() => ({ events: [] as Array<Record<string, unknown>> }));
@@ -50,6 +52,9 @@ interface World {
   envId: string;
   appId: string;
   userIds: string[];
+  /** Envs and apps a test created through the real create/publish paths. */
+  extraEnvIds: string[];
+  extraAppIds: string[];
 }
 let world: World | null = null;
 
@@ -88,15 +93,18 @@ async function build(): Promise<World> {
     imageDigest: 'sha256:abc',
     updatedAt: new Date(),
   } as never);
-  return { orgId: org.id, driveId: drive.id, poolId: poolWallet.id, leadId: lead.id, marcusId: marcus.id, envId, appId, userIds: [lead.id, marcus.id] };
+  return { orgId: org.id, driveId: drive.id, poolId: poolWallet.id, leadId: lead.id, marcusId: marcus.id, envId, appId, userIds: [lead.id, marcus.id], extraEnvIds: [], extraAppIds: [] };
 }
 
 async function teardown(w: World): Promise<void> {
   await db.delete(aiUsageLogs).where(inArray(aiUsageLogs.userId, w.userIds));
   await db.delete(creditHolds).where(inArray(creditHolds.userId, w.userIds));
   await db.delete(creditLedger).where(inArray(creditLedger.userId, w.userIds));
-  await db.delete(publishedApps).where(eq(publishedApps.id, w.appId));
-  await db.delete(driveEnvs).where(eq(driveEnvs.id, w.envId));
+  const appIds = [w.appId, ...w.extraAppIds];
+  await db.delete(publishedApps).where(inArray(publishedApps.id, appIds));
+  // Deleting an app row enqueues its Fly name for reclaim (the AFTER DELETE trigger): ours too.
+  await db.delete(appHostingReclaims).where(inArray(appHostingReclaims.publishedAppId, appIds));
+  await db.delete(driveEnvs).where(inArray(driveEnvs.id, [w.envId, ...w.extraEnvIds]));
   await db.delete(walletConsumerCaps).where(eq(walletConsumerCaps.walletId, w.poolId));
   await db.delete(wallets).where(eq(wallets.id, w.poolId));
   await db.delete(drives).where(eq(drives.orgId, w.orgId));
@@ -207,6 +215,41 @@ describe('environments and apps are capped against the member who created them (
     audit.events.length = 0;
     expect(await leaveOrganization(w.leadId, w.orgId)).toMatchObject({ ok: false });
     expect(audit.events).toEqual([]);
+  });
+
+  it('WAL-2 (partial) creating an env through the real store records its CREATOR as the cost owner, not the lead', async () => {
+    if (!dbAvailable) return;
+    const w = (world = await build());
+    const store = await createDbDriveEnvStore();
+
+    const created = await store.createIfUnderLimit({ driveId: w.driveId, name: `marcus-${createId()}`, createdBy: w.marcusId, now: new Date(), payerId: w.leadId, maxEnvs: 99 });
+
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    w.extraEnvIds.push(created.env.id);
+    expect((await db.select().from(driveEnvs).where(eq(driveEnvs.id, created.env.id)))[0].costOwnerId).toBe(w.marcusId);
+  });
+
+  it('WAL-2 (partial) publishing through the real provisioner records the PUBLISHER as the app\'s cost owner, not the lead', async () => {
+    if (!dbAvailable) return;
+    const w = (world = await build());
+    const envId = createId();
+    w.extraEnvIds.push(envId);
+    await db.insert(driveEnvs).values({ id: envId, driveId: w.driveId, name: `env-${envId}`, createdBy: w.marcusId, costOwnerId: w.marcusId, sandboxId: `sbx-${envId}` });
+
+    const published = await createPublishedApp({
+      envId,
+      driveId: w.driveId,
+      ownerId: w.marcusId,
+      subdomain: `stamp-${envId}`.toLowerCase(),
+      orgSlug: 'acme',
+      deps: { ...defaultProvisionerDeps, isEnabled: () => true, resolveNetwork: () => 'published-apps', createFlyApp: async () => {}, publishedAppsAllowed: async () => true },
+    });
+
+    expect(published.ok).toBe(true);
+    if (!published.ok) return;
+    w.extraAppIds.push(published.app.id);
+    expect((await db.select().from(publishedApps).where(eq(publishedApps.id, published.app.id)))[0].costOwnerId).toBe(w.marcusId);
   });
 
   /** Force GENUINE overlap: every hold INSERT for `userId` sleeps inside Postgres while `fn` runs. */

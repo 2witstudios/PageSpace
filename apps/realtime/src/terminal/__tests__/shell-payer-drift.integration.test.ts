@@ -257,7 +257,7 @@ describe('a member joining a live terminal window', () => {
   }
   const ledgerOf = async (userId: string) => (await db.select().from(creditLedger).where(eq(creditLedger.userId, userId))).filter((r) => r.entryType === 'usage' && r.spendKind === 'compute');
 
-  it('WAL-2 (partial) terminal: Ben, at his cap, joining Priya\'s live PTY is refused with the cap message — the window stays Priya\'s, untouched, and nothing is charged to anyone', async () => {
+  it('WAL-2 (partial) terminal: Ben, at his cap, typing into Priya\'s live PTY is refused with the cap message — the window stays Priya\'s, untouched, and nothing is charged to anyone', async () => {
     const w = (world = await build('org'));
     const benId = await addBen(w, true);
     const { session, map } = await openSession(w, computeChargeFor({ kind: 'org', orgId: w.orgId }, w.ownerId));
@@ -273,7 +273,7 @@ describe('a member joining a live terminal window', () => {
     expect(await ledgerOf(benId)).toEqual([]);
   });
 
-  it('WAL-2 (partial) terminal: Ben, under his cap, joining takes the window — Priya pays exactly the window she opened, Ben holds and pays from then on', async () => {
+  it('WAL-2 (partial) terminal: Ben, under his cap, typing takes the window — Priya pays exactly the window she opened, Ben holds and pays from then on', async () => {
     const w = (world = await build('org'));
     const benId = await addBen(w, false);
     const { session, map } = await openSession(w, computeChargeFor({ kind: 'org', orgId: w.orgId }, w.ownerId));

@@ -12,7 +12,9 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 - **Your allowance of an organization's credits covers compute too** — sandbox runs, terminals and
   browsers you use in an organization's drives count toward your monthly allowance of the organization's
   credits, together with your AI use, whoever's session you are working in: compute is charged to the
-  person who runs it. Environments and published apps you create there count toward your allowance too
+  person who runs it. In a shared terminal that is whoever is typing: joining a teammate's terminal to
+  watch costs you nothing, and once your allowance is used up your keystrokes there are refused with a
+  message saying so. Environments and published apps you create there count toward your allowance too
   (their storage, wakes and running time). Once your allowance is used up, new compute is refused with a
   message saying so, you cannot create a new environment or publish a new app, and your published apps
   show visitors a "This app is paused" page. A paused app comes back by itself within the hour after your

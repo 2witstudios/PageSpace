@@ -29,8 +29,7 @@ import {
 } from '@pagespace/lib/services/sandbox/containment';
 import { getSandboxSessionSecret } from '@pagespace/lib/services/sandbox/machine-session-manager';
 import { defaultSandboxBillingDeps } from '@pagespace/lib/services/sandbox/sandbox-billing';
-import { lookupDriveBillingFacts, resolveSessionPayer } from '@pagespace/lib/billing/sandbox-payer';
-import { computeChargeFor } from '@pagespace/lib/billing/compute-charge';
+import { makeResolveShellPayer } from './terminal/shell-payer';
 import { computeTierForDrive } from '@pagespace/lib/billing/sandbox-eligibility';
 import { acquireCodeExecutionSlot, releaseCodeExecutionSlot } from '@pagespace/lib/services/sandbox/quota';
 import { createSpritesSandboxClient, createSpriteHandleCache, type SpritesSdk } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
@@ -434,19 +433,8 @@ const shellCheckAuth = buildShellCheckAuth({
     if (!allowedToRunCode) return { allowed: false, reason: 'code_execution_denied' };
     return { allowed: true, session: subject };
   },
-  resolvePayer: async (session, actorId) => {
-    // Payer = the session's DRIVE's payer through the one seam (WAL-9: the org pool for an org
-    // drive, recorded under and capped against the ACTOR connecting — never the session owner,
-    // since a drive session is shared); a global-assistant session (or a vanished drive)
-    // attributes to the session owner instead.
-    const facts = session.driveId === null ? null : await lookupDriveBillingFacts(session.driveId);
-    const payer = await resolveSessionPayer({
-      driveId: session.driveId,
-      ownerId: session.ownerId,
-      lookupDriveBillingFacts: async () => facts,
-    });
-    return { charge: computeChargeFor(payer, actorId), driveId: facts ? session.driveId : null };
-  },
+  // WAL-2: the session's drive's payer, recorded under and capped against the ACTOR connecting.
+  resolvePayer: makeResolveShellPayer(),
   getUser: async (userId) => {
     const [userRow] = await db
       .select({ subscriptionTier: users.subscriptionTier, email: users.email })
