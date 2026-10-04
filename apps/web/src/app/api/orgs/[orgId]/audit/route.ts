@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 import { parseOrgAuditFilter } from '@pagespace/lib/audit/org-audit-query-core';
 import { queryOrgAuditEvents } from '@pagespace/lib/audit/org-audit-query';
 import { authorizeOrgRequest, ORG_READ_AUTH } from '@/lib/orgs/org-route-auth';
@@ -21,6 +22,10 @@ export async function GET(request: Request, context: Context) {
   try {
     const parsed = parseOrgAuditFilter(orgAuditFilterInput(new URL(request.url)));
     if (!parsed.ok) return NextResponse.json({ error: parsed.error }, { status: 400 });
+    const limit = await checkDistributedRateLimit(`org_audit_read:${orgId}:${gate.userId}`, DISTRIBUTED_RATE_LIMITS.API);
+    if (!limit.allowed) {
+      return NextResponse.json({ error: 'Too many requests. Please try again later.' }, { status: 429, headers: { 'Retry-After': String(limit.retryAfter ?? 60) } });
+    }
     const page = await queryOrgAuditEvents(orgId, parsed.filter);
     auditRequest(request, { eventType: 'data.read', userId: gate.userId, resourceType: 'organization_audit_log', resourceId: orgId, details: { count: page.entries.length } });
     return NextResponse.json(page);

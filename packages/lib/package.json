@@ -3794,6 +3794,7 @@
     "@simplewebauthn/server": "^13.2.2",
     "diff-match-patch": "^1.0.5",
     "drizzle-orm": "^0.45.2",
+    "free-email-domains": "1.12.18",
     "google-auth-library": "^10.3.0",
     "html-to-docx": "^1.8.0",
     "marked": "^17.0.1",

@@ -52,7 +52,17 @@ describe('the sign-in seam', () => {
     }
   });
 
-  it('SEC-1 (partial) no other route provisions an account or verifies an address without being listed here', () => {
+  /**
+   * What makes a route a sign-in seam: it provisions an account's Home drive, marks an address
+   * verified, or CREATES an account (directly or through the lib helpers that do). A new route with any
+   * of these must call the hook, or be exempted here with the reason it needs no join.
+   */
+  const SEAM_MARKERS = /provisionHomeDriveIfNeeded\(|markEmailVerified(ForAddress)?\(|createUser\(|insert\(users\)|createOrLinkOAuthUser\(|verifySignupRegistration\(|buildMagicLinkPorts\(/;
+  const EXEMPT: Record<string, string> = {
+    'auth/magic-link/send/route.ts': 'creates an UNVERIFIED account and emails the link; the join runs when the link is redeemed (auth/magic-link/verify)',
+  };
+
+  it('SEC-1 (partial) no route creates an account, provisions one or verifies an address without the seam (or a stated exemption)', () => {
     const found: string[] = [];
     const walk = (dir: string) => {
       for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -60,12 +70,12 @@ describe('the sign-in seam', () => {
         if (entry.isDirectory()) {
           if (entry.name !== '__tests__') walk(full);
         } else if (entry.name === 'route.ts') {
-          const source = fs.readFileSync(full, 'utf8');
-          if (/provisionHomeDriveIfNeeded\(|markEmailVerified(ForAddress)?\(/.test(source)) found.push(path.relative(API, full));
+          if (SEAM_MARKERS.test(fs.readFileSync(full, 'utf8'))) found.push(path.relative(API, full));
         }
       }
     };
     walk(API);
-    expect(found.sort()).toEqual([...SIGN_IN_PATHS].sort());
+    expect(found.filter((rel) => !(rel in EXEMPT)).sort()).toEqual([...SIGN_IN_PATHS].sort());
+    for (const rel of Object.keys(EXEMPT)) expect(found).toContain(rel);
   });
 });

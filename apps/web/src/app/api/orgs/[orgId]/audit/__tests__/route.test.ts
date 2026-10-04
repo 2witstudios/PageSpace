@@ -22,7 +22,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 vi.mock('@pagespace/lib/organizations/repository', () => ({ findMembershipRole: vi.fn() }));
 vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   checkDistributedRateLimit: vi.fn(),
-  DISTRIBUTED_RATE_LIMITS: { EMAIL_RESEND: 'EMAIL_RESEND' },
+  DISTRIBUTED_RATE_LIMITS: { EMAIL_RESEND: 'EMAIL_RESEND', API: 'API' },
 }));
 vi.mock('@pagespace/lib/audit/org-audit-query', () => ({ queryOrgAuditEvents: vi.fn(), exportOrgAuditCsv: vi.fn() }));
 
@@ -113,6 +113,14 @@ describe('org audit routes', () => {
     expect(exportFilter).not.toHaveProperty('before');
     expect(exportFilter).toMatchObject({ driveId: 'drive_finance' });
     expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'data.export', resourceType: 'organization_audit_log' }));
+  });
+
+  it('AUD-3 (partial) reads of the log are rate limited per admin per org too', async () => {
+    as('ADMIN');
+    vi.mocked(checkDistributedRateLimit).mockResolvedValueOnce({ allowed: false, retryAfter: 30 });
+    expect((await GET(req(''), ctx)).status).toBe(429);
+    expect(checkDistributedRateLimit).toHaveBeenCalledWith(`org_audit_read:${ORG_ID}:user_priya`, 'API');
+    expect(queryOrgAuditEvents).not.toHaveBeenCalled();
   });
 
   it('AUD-3 (partial) exports are rate limited per admin per org', async () => {

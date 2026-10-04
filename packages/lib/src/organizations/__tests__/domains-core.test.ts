@@ -9,6 +9,7 @@ import {
   emailDomain,
   isAdminMailboxAddress,
   normalizeDomain,
+  PUBLIC_EMAIL_DOMAINS,
   txtRecordsProve,
 } from '../domains-core';
 
@@ -39,6 +40,18 @@ describe('normalizeDomain', () => {
     ['*.northwind.com', 'a wildcard'],
   ])('SEC-1 (partial) refuses %j (%s)', (input) => {
     expect(normalizeDomain(input)).toEqual({ ok: false, reason: 'invalid_domain' });
+  });
+
+  it.each([
+    'yahoo.co.uk', 'yahoo.fr', 'yahoo.de', 'hotmail.co.uk', 'hotmail.fr', 'outlook.de', 'outlook.fr', 'live.co.uk', 'gmx.at', 'gmx.ch',
+    'naver.com', 'rediffmail.com', 'zohomail.com', 'comcast.net', 't-online.de', 'orange.fr', 'free.fr', 'libero.it', 'wp.pl',
+  ])('SEC-1 (partial) refuses %s: country variants and ISPs come from the maintained provider dataset', (domain) => {
+    expect(normalizeDomain(domain)).toEqual({ ok: false, reason: 'public_email_domain' });
+  });
+
+  it('SEC-1 (partial) the dataset is the maintained one, not a hand list, and an organization\'s own domain is not on it', () => {
+    expect(PUBLIC_EMAIL_DOMAINS.size).toBeGreaterThan(10_000);
+    expect(normalizeDomain('northwind.com')).toEqual({ ok: true, domain: 'northwind.com' });
   });
 
   it('SEC-1 (partial) refuses a shared mailbox provider: verifying gmail.com would auto-join strangers', () => {
@@ -117,7 +130,7 @@ describe('decideAutoJoin', () => {
     userCreatedAt: later(1000),
     domainVerifiedAt: T0,
     isMember: false,
-    alreadyAutoJoined: false,
+    previouslyDeparted: false,
     hasOpenInvite: false,
     isOrgGuest: false,
     orgActive: true,
@@ -144,8 +157,8 @@ describe('decideAutoJoin', () => {
     expect(decideAutoJoin({ ...eligible, isOrgGuest: true })).toEqual({ action: 'skip', reason: 'org_guest' });
   });
 
-  it('SEC-1 (partial) someone the domain already joined once is never re-added after leaving or removal', () => {
-    expect(decideAutoJoin({ ...eligible, alreadyAutoJoined: true })).toEqual({ action: 'skip', reason: 'already_auto_joined' });
+  it('SEC-1 (partial) anyone who left or was removed is never re-added by their address, even on a domain verified the whole time', () => {
+    expect(decideAutoJoin({ ...eligible, previouslyDeparted: true })).toEqual({ action: 'skip', reason: 'previously_departed' });
   });
 
   it('SEC-1 (partial) a member is left alone, and an open invite keeps the role the inviter chose', () => {

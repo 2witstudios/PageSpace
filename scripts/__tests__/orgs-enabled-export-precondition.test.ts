@@ -20,7 +20,7 @@ interface ExportExclusions {
 /** The temporary org exclusions still present; empty once Phase 6 has removed them. */
 function temporaryOrgExclusions({ gdprExcludedTables, tenantDriveExcludedColumns }: ExportExclusions): string[] {
   const found: string[] = [];
-  for (const table of ['organizations', 'org_members', 'drive_join_requests', 'org_domain_joins']) {
+  for (const table of ['organizations', 'org_members', 'drive_join_requests', 'org_member_departures']) {
     const reason = gdprExcludedTables[table];
     if (reason !== undefined && /\bX-2\b/.test(reason) && /temporary/i.test(reason)) {
       found.push(`gdpr EXCLUDED_TABLES.${table}`);

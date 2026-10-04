@@ -19,7 +19,7 @@ import { randomBytes } from 'node:crypto';
 import { db } from '@pagespace/db/db';
 import { and, asc, eq, gt, isNotNull, isNull, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
-import { orgDomainJoins, orgDomains, orgInvitations, orgMembers, organizations, type OrgDomain } from '@pagespace/db/schema/organizations';
+import { orgDomains, orgInvitations, orgMemberDepartures, orgMembers, organizations, type OrgDomain } from '@pagespace/db/schema/organizations';
 import { generateToken, hashToken } from '../auth/token-utils';
 import { decryptUserRow } from '../auth/user-repository';
 import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
@@ -120,6 +120,17 @@ export type VerifyOrgDomainResult =
   | { ok: false; status: 409; reason: 'claimed_by_another_org' }
   | { ok: false; status: 422; reason: 'proof_not_found' | 'link_expired' };
 
+/**
+ * Seams for the concurrency tests only. `afterOwnerRead` runs inside the verification transaction,
+ * after the domain's current owner is read and before the claim is written, so a test can hold one
+ * verification open while another runs. `afterTokenLookup` runs between a mailed token's lookup and
+ * the locked re-check, where a newer link can replace it. Production passes neither.
+ */
+export interface DomainVerificationHooks {
+  afterOwnerRead?: (seen: { claimOrgId: string; verifiedByOrgId: string | null }) => Promise<void>;
+  afterTokenLookup?: () => Promise<void>;
+}
+
 /** Make a claim the domain's verified owner, under the domain's lock, if the proof holds. */
 async function verifyClaim(input: {
   claimId: string;
@@ -128,7 +139,7 @@ async function verifyClaim(input: {
   method: 'dns' | 'email';
   actorId: string;
   now: Date;
-}): Promise<VerifyOrgDomainResult> {
+}, hooks: DomainVerificationHooks = {}): Promise<VerifyOrgDomainResult> {
   let outcome: VerifyOrgDomainResult;
   try {
     outcome = await db.transaction(async (tx): Promise<VerifyOrgDomainResult> => {
@@ -137,11 +148,9 @@ async function verifyClaim(input: {
       await lockDomain(tx, peek.domain);
       const [claim] = await tx.select().from(orgDomains).where(eq(orgDomains.id, input.claimId)).for('update');
       if (!claim || (input.orgId !== undefined && claim.orgId !== input.orgId)) return { ok: false, status: 404, reason: 'not_found' };
-      const decision = decideDomainVerification({
-        claim,
-        verifiedByOrgId: await verifiedOwnerOf(tx, claim.domain),
-        proven: input.proven(claim),
-      });
+      const verifiedByOrgId = await verifiedOwnerOf(tx, claim.domain);
+      await hooks.afterOwnerRead?.({ claimOrgId: claim.orgId, verifiedByOrgId });
+      const decision = decideDomainVerification({ claim, verifiedByOrgId, proven: input.proven(claim) });
       if (decision.action === 'already_verified') return { ok: true, domain: toPublic(claim), alreadyVerified: true };
       if (decision.action === 'refuse') {
         return decision.reason === 'claimed_by_another_org'
@@ -195,7 +204,7 @@ export async function verifyOrgDomainByDns(input: {
   actorId: string;
   now: Date;
   resolveTxt?: TxtResolver;
-}): Promise<VerifyOrgDomainResult> {
+}, hooks: DomainVerificationHooks = {}): Promise<VerifyOrgDomainResult> {
   const [claim] = await db
     .select({ domain: orgDomains.domain, dnsToken: orgDomains.dnsToken })
     .from(orgDomains)
@@ -211,7 +220,7 @@ export async function verifyOrgDomainByDns(input: {
     method: 'dns',
     actorId: input.actorId,
     now: input.now,
-  });
+  }, hooks);
 }
 
 /** Sends the proof link; a throw withdraws the stored token. */
@@ -277,7 +286,10 @@ export async function sendDomainProofEmail(input: {
  * token is the proof; the account is who the audit names). The token is one-use (cleared on success)
  * and expires.
  */
-export async function confirmDomainProofEmail(input: { token: string; actorId: string; now: Date }): Promise<VerifyOrgDomainResult> {
+export async function confirmDomainProofEmail(
+  input: { token: string; actorId: string; now: Date },
+  hooks: DomainVerificationHooks = {},
+): Promise<VerifyOrgDomainResult> {
   const tokenHash = hashToken(input.token);
   const [claim] = await db
     .select({ id: orgDomains.id, expiresAt: orgDomains.emailTokenExpiresAt })
@@ -286,6 +298,7 @@ export async function confirmDomainProofEmail(input: { token: string; actorId: s
     .limit(1);
   if (!claim) return { ok: false, status: 404, reason: 'not_found' };
   if (!claim.expiresAt || claim.expiresAt.getTime() <= input.now.getTime()) return { ok: false, status: 422, reason: 'link_expired' };
+  await hooks.afterTokenLookup?.();
   return verifyClaim({
     claimId: claim.id,
     // Re-checked under the lock: the token must still be this claim's live token.
@@ -296,7 +309,7 @@ export async function confirmDomainProofEmail(input: { token: string; actorId: s
     method: 'email',
     actorId: input.actorId,
     now: input.now,
-  });
+  }, hooks);
 }
 
 /** Un-verify and forget a claim. Stops future auto-joins; nobody already in is removed. */
@@ -379,10 +392,11 @@ export async function autoJoinVerifiedDomainOrg(
       .from(orgMembers)
       .where(and(eq(orgMembers.orgId, orgId), eq(orgMembers.userId, input.userId)))
       .limit(1);
-    const [joinedBefore] = await tx
-      .select({ id: orgDomainJoins.id })
-      .from(orgDomainJoins)
-      .where(and(eq(orgDomainJoins.orgId, orgId), eq(orgDomainJoins.userId, input.userId)))
+    // Written by leaveOrganization for every way a membership ends (removed, left, account gone).
+    const [departed] = await tx
+      .select({ id: orgMemberDepartures.id })
+      .from(orgMemberDepartures)
+      .where(and(eq(orgMemberDepartures.orgId, orgId), eq(orgMemberDepartures.userId, input.userId)))
       .limit(1);
     const [openInvite] = await tx
       .select({ id: orgInvitations.id })
@@ -400,7 +414,7 @@ export async function autoJoinVerifiedDomainOrg(
       userCreatedAt: userRow.createdAt,
       domainVerifiedAt: claim?.verifiedAt ?? null,
       isMember,
-      alreadyAutoJoined: joinedBefore !== undefined,
+      previouslyDeparted: departed !== undefined,
       hasOpenInvite: openInvite !== undefined,
       isOrgGuest: isMember ? false : await isOrgGuest(orgId, input.userId, tx),
       orgActive: (await checkOrgActive(orgId, { executor: tx, now: input.now })).ok,
@@ -414,7 +428,6 @@ export async function autoJoinVerifiedDomainOrg(
     if (!seat.ok) return { result: { kind: 'refused', orgId, reason: 'seats_full', message: seat.message }, sync: null, domain };
 
     await tx.insert(orgMembers).values({ orgId, userId: input.userId, role: 'MEMBER' });
-    await tx.insert(orgDomainJoins).values({ orgId, userId: input.userId, domain });
     const sync = await deps.syncMemberAccess(orgId, input.userId, { tx });
     return { result: { kind: 'joined', orgId, seatRaised: seat.raised }, sync, domain };
   }));

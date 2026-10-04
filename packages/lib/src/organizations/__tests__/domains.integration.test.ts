@@ -22,7 +22,7 @@ import { driveMembers } from '@pagespace/db/schema/members';
 import { orgGuestHolds } from '@pagespace/db/schema/org-guest-holds';
 import {
   organizations,
-  orgDomainJoins,
+  orgMemberDepartures,
   orgDomains,
   orgInvitations,
   orgMembers,
@@ -40,7 +40,9 @@ import {
 } from '../domains';
 import { dnsRecordName, dnsRecordValue } from '../domains-core';
 import { removeMember } from '../membership';
-import { countOrgSeats } from '../repository';
+import { acceptInvitation, createOrRotateInvitation } from '../invitations';
+import { leaveOrganization } from '../leave';
+import { countOrgSeats, pgErrorCode } from '../repository';
 import type { SeatBillingPort } from '../seat-service';
 
 vi.mock('../orgs-enabled', () => ({ ORGS_ENABLED: true }));
@@ -148,7 +150,7 @@ async function teardownAll(): Promise<void> {
       await db.delete(pages).where(inArray(pages.driveId, driveIds));
       await db.delete(drives).where(inArray(drives.id, driveIds));
     }
-    await db.delete(orgDomainJoins).where(inArray(orgDomainJoins.orgId, orgIds));
+    await db.delete(orgMemberDepartures).where(inArray(orgMemberDepartures.orgId, orgIds));
     await db.delete(orgDomains).where(inArray(orgDomains.orgId, orgIds));
     await db.delete(orgInvitations).where(inArray(orgInvitations.orgId, orgIds));
     await db.delete(orgMembers).where(inArray(orgMembers.orgId, orgIds));
@@ -219,6 +221,26 @@ describe('verified email domains (real Postgres)', () => {
       expect(await confirmDomainProofEmail({ token: sent[0].token, actorId: jono.id, now: new Date() })).toEqual({ ok: false, status: 404, reason: 'not_found' });
     });
 
+    it('SEC-1 (partial) a link replaced while it is being confirmed no longer proves anything: the token is re-checked under the lock', async () => {
+      const { org, jono } = await northwind();
+      const added = await addOrgDomain({ orgId: org.id, domain: freshDomain(), actorId: jono.id });
+      if (!added.ok) throw new Error('add failed');
+      const sent: string[] = [];
+      const send = () => sendDomainProofEmail({
+        orgId: org.id, domainId: added.domain.id, mailbox: 'admin', actorId: jono.id, now: new Date(),
+        deliver: async ({ token }) => { sent.push(token); },
+      });
+      await send();
+      const [first] = sent;
+      // The first link passes the unlocked lookup; a newer link replaces it before the lock is taken.
+      const raced = await confirmDomainProofEmail({ token: first, actorId: jono.id, now: new Date() }, { afterTokenLookup: async () => { await send(); } });
+      expect(raced).toEqual({ ok: false, status: 422, reason: 'proof_not_found' });
+      expect((await listOrgDomains(org.id))[0].verifiedAt).toBeNull();
+      // The newer link is the one that works.
+      const confirmed = await confirmDomainProofEmail({ token: sent[1], actorId: jono.id, now: new Date() });
+      expect(confirmed.ok).toBe(true);
+    });
+
     it('SEC-1 (partial) a failed delivery withdraws the link it stored', async () => {
       const { org, jono } = await northwind();
       const added = await addOrgDomain({ orgId: org.id, domain: freshDomain(), actorId: jono.id });
@@ -269,7 +291,30 @@ describe('verified email domains (real Postgres)', () => {
         .toEqual({ ok: false, status: 409, reason: 'claimed_by_another_org' });
     });
 
-    it('SEC-1 (partial) two orgs proving at the same moment: exactly one holds the domain', async () => {
+    /**
+     * Two verifications genuinely in flight at once, on separate connections: each, having read the
+     * domain's current owner, waits (up to OVERLAP_MS) for the other to reach the same point before
+     * writing. Without serialization both read "nobody" and both try to write.
+     */
+    const OVERLAP_MS = 750;
+    function overlap() {
+      const seen: Array<string | null> = [];
+      const release: Array<() => void> = [];
+      const afterOwnerRead = async ({ verifiedByOrgId }: { claimOrgId: string; verifiedByOrgId: string | null }) => {
+        seen.push(verifiedByOrgId);
+        if (seen.length >= 2) {
+          release.splice(0).forEach((go) => go());
+          return;
+        }
+        await new Promise<void>((resolve) => {
+          release.push(resolve);
+          setTimeout(resolve, OVERLAP_MS);
+        });
+      };
+      return { seen, hooks: { afterOwnerRead } };
+    }
+
+    async function racingClaims() {
       const a = await northwind();
       const b = await northwind();
       const domain = freshDomain();
@@ -277,14 +322,40 @@ describe('verified email domains (real Postgres)', () => {
       const claimB = await addOrgDomain({ orgId: b.org.id, domain, actorId: b.jono.id });
       if (!claimA.ok || !claimB.ok) throw new Error('add failed');
       const both = dnsWith(domain, claimA.domain.dnsToken, claimB.domain.dnsToken);
+      const race = overlap();
       const results = await Promise.all([
-        verifyOrgDomainByDns({ orgId: a.org.id, domainId: claimA.domain.id, actorId: a.jono.id, now: new Date(), resolveTxt: both }),
-        verifyOrgDomainByDns({ orgId: b.org.id, domainId: claimB.domain.id, actorId: b.jono.id, now: new Date(), resolveTxt: both }),
+        verifyOrgDomainByDns({ orgId: a.org.id, domainId: claimA.domain.id, actorId: a.jono.id, now: new Date(), resolveTxt: both }, race.hooks),
+        verifyOrgDomainByDns({ orgId: b.org.id, domainId: claimB.domain.id, actorId: b.jono.id, now: new Date(), resolveTxt: both }, race.hooks),
       ]);
+      return { domain, results, seen: race.seen, winner: results.find((r) => r.ok) };
+    }
+
+    it('SEC-1 (partial) two orgs proving at the same moment: exactly one holds the domain, the other is refused', async () => {
+      const { domain, results } = await racingClaims();
       expect(results.filter((r) => r.ok)).toHaveLength(1);
       expect(results.filter((r) => !r.ok)).toEqual([{ ok: false, status: 409, reason: 'claimed_by_another_org' }]);
-      const verifiedRows = await db.select().from(orgDomains).where(eq(orgDomains.domain, domain));
-      expect(verifiedRows.filter((r) => r.verifiedAt !== null)).toHaveLength(1);
+      const rows = await db.select().from(orgDomains).where(eq(orgDomains.domain, domain));
+      expect(rows.filter((r) => r.verifiedAt !== null)).toHaveLength(1);
+    });
+
+    it('SEC-1 (partial) the domain lock serializes verifications: the second reads the first one\'s ownership, never a stale "nobody"', async () => {
+      const { seen, winner } = await racingClaims();
+      if (!winner?.ok) throw new Error('expected a winner');
+      // With the lock, the second verification can only read after the first committed.
+      expect(seen).toEqual([null, winner.domain.orgId]);
+    });
+
+    it('SEC-1 (partial) the database alone refuses a second verified owner, even when the lock is bypassed', async () => {
+      const a = await northwind();
+      const b = await northwind();
+      const domain = freshDomain();
+      const claimA = await addOrgDomain({ orgId: a.org.id, domain, actorId: a.jono.id });
+      const claimB = await addOrgDomain({ orgId: b.org.id, domain, actorId: b.jono.id });
+      if (!claimA.ok || !claimB.ok) throw new Error('add failed');
+      await db.update(orgDomains).set({ verifiedAt: new Date(), verifiedMethod: 'dns' }).where(eq(orgDomains.id, claimA.domain.id));
+      const second = db.update(orgDomains).set({ verifiedAt: new Date(), verifiedMethod: 'dns' }).where(eq(orgDomains.id, claimB.domain.id));
+      const error = await second.then(() => null, (e: unknown) => e);
+      expect(pgErrorCode(error)).toBe('23505');
     });
   });
 
@@ -328,7 +399,6 @@ describe('verified email domains (real Postgres)', () => {
       expect(result.kind === 'refused' && result.reason === 'seats_full' && result.message).toMatch(/All 5 seats in this organization are taken/);
       expect(await membership(org.id, marcus.id)).toBeNull();
       expect(await countOrgSeats(org.id)).toBe(5);
-      expect(await db.select().from(orgDomainJoins).where(eq(orgDomainJoins.userId, marcus.id))).toEqual([]);
       expect(audit.events[audit.events.length - 1]).toMatchObject({ orgId: org.id, eventType: 'org.member.auto_join_refused', details: { reason: 'seats_full' } });
 
       // A later sign-in after a seat frees joins: a refusal is not remembered as a join.
@@ -387,7 +457,7 @@ describe('verified email domains (real Postgres)', () => {
       expect(await countOrgSeats(org.id)).toBe(seats);
     });
 
-    it('SEC-1 (partial) un-verifying stops future joins and removes nobody; a removed member is never re-added by signing in', async () => {
+    it('SEC-1 (partial) un-verifying stops future joins and removes nobody', async () => {
       const { org, jono } = await northwind();
       const claim = await verifiedDomain(org.id, jono.id);
       const lena = await person(`lena@${claim.domain}`);
@@ -398,14 +468,48 @@ describe('verified email domains (real Postgres)', () => {
       expect(audit.events[audit.events.length - 1]).toMatchObject({ eventType: 'org.domain.removed', details: { domain: claim.domain, wasVerified: true } });
       const marcus = await person(`marcus@${claim.domain}`);
       expect(await autoJoinVerifiedDomainOrg({ userId: marcus.id, now: new Date() })).toEqual({ kind: 'skipped', reason: 'no_verified_domain' });
+    });
 
-      // Re-verified later, Lena (removed meanwhile) is still not swept back in.
-      await removeMember({ orgId: org.id, actorId: jono.id, targetId: lena.id });
-      const again = await verifiedDomain(org.id, jono.id, claim.domain);
-      const reSignIn = await autoJoinVerifiedDomainOrg({ userId: lena.id, now: new Date() });
-      expect(reSignIn.kind).toBe('skipped');
-      expect(await membership(org.id, lena.id)).toBeNull();
-      expect(again.verifiedAt).not.toBeNull();
+    /**
+     * Anyone who was a member once and went is never brought back by their address, whichever way they
+     * joined and whichever way they went. The domain stays verified the whole time and every account is
+     * newer than the verification, so nothing but the departure record stands in the way.
+     */
+    const JOINS = ['invitation', 'auto-join', 'direct row'] as const;
+    const DEPARTURES = ['removed by an Admin', 'left'] as const;
+    const pairs = JOINS.flatMap((join) => DEPARTURES.map((departure) => [join, departure] as const));
+
+    it.each(pairs)('SEC-1 (partial) joined by %s, then %s: the next sign-in never re-adds them', async (join, departure) => {
+      const { org, jono } = await northwind();
+      const claim = await verifiedDomain(org.id, jono.id);
+      const email = `dana-${createId()}@${claim.domain}`;
+      const dana = await person(email);
+
+      if (join === 'invitation') {
+        const tokens: string[] = [];
+        const invited = await createOrRotateInvitation({
+          orgId: org.id, email, role: 'MEMBER', invitedBy: jono.id, actorRole: 'OWNER', now: new Date(),
+          deliver: async (_i, token) => { tokens.push(token); },
+        });
+        if (!invited.ok) throw new Error(`invite: ${invited.reason}`);
+        // Her sign-in before accepting leaves the invite to her.
+        expect(await autoJoinVerifiedDomainOrg({ userId: dana.id, now: new Date() })).toEqual({ kind: 'skipped', reason: 'invited' });
+        expect(await acceptInvitation({ token: tokens[0], userId: dana.id, now: new Date() })).toMatchObject({ ok: true, joined: true });
+      } else if (join === 'auto-join') {
+        expect((await autoJoinVerifiedDomainOrg({ userId: dana.id, now: new Date() })).kind).toBe('joined');
+      } else {
+        await db.insert(orgMembers).values({ orgId: org.id, userId: dana.id, role: 'MEMBER' });
+      }
+      expect(await membership(org.id, dana.id)).toEqual({ role: 'MEMBER' });
+
+      if (departure === 'left') expect((await leaveOrganization(dana.id, org.id)).ok).toBe(true);
+      else expect((await removeMember({ orgId: org.id, actorId: jono.id, targetId: dana.id })).ok).toBe(true);
+      expect(await membership(org.id, dana.id)).toBeNull();
+      const [record] = await db.select().from(orgMemberDepartures).where(and(eq(orgMemberDepartures.orgId, org.id), eq(orgMemberDepartures.userId, dana.id)));
+      expect(record?.reason).toBe(departure === 'left' ? 'left' : 'removed');
+
+      expect(await autoJoinVerifiedDomainOrg({ userId: dana.id, now: new Date() })).toEqual({ kind: 'skipped', reason: 'previously_departed' });
+      expect(await membership(org.id, dana.id)).toBeNull();
     });
 
     it('SEC-1 (partial) a lapsed org admits nobody', async () => {

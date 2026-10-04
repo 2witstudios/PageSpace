@@ -19,7 +19,7 @@ vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({ ORGS_ENABLED: true
 vi.mock('@/lib/auth', () => ({ authenticateRequestWithOptions: vi.fn(), isAuthError: vi.fn() }));
 vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   checkDistributedRateLimit: vi.fn(async () => ({ allowed: true })),
-  DISTRIBUTED_RATE_LIMITS: { EMAIL_RESEND: 'EMAIL_RESEND' },
+  DISTRIBUTED_RATE_LIMITS: { EMAIL_RESEND: 'EMAIL_RESEND', API: 'API' },
 }));
 
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
@@ -111,6 +111,12 @@ describe('org audit log routes (real Postgres, real chain)', () => {
     expect(lines).toHaveLength(4);
     expect(text).toContain(`"'=HYPERLINK(""http://evil"")"`);
     expect(text).not.toContain(acme.owner.id);
+
+    // Both roles read both ways: the Owner reads the log, an Admin exports it.
+    signedInAs(north.owner.id);
+    expect((await get(north.orgId)).status).toBe(200);
+    signedInAs(north.admin.id);
+    expect((await exportCsv(north.orgId)).status).toBe(200);
 
     // Not to a plain member, and not across orgs: Northwind's Admin sees no Acme org at all.
     signedInAs(north.member.id);

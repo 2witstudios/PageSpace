@@ -165,18 +165,28 @@ export const orgDomains = pgTable('org_domains', {
 }));
 
 /**
- * One row per person an org's verified domain auto-joined (SEC-1). It outlives the membership on
- * purpose: a person who leaves or is removed is never re-added by their next sign-in.
+ * One row per person who has LEFT an org, however they joined it (invitation, verified-domain
+ * auto-join, or a row written directly) and however they went (they left, an Admin removed them, or
+ * their account went). Written by the org's one departure function (lib organizations/leave.ts
+ * leaveOrganization), in the same transaction as the membership delete, and read by verified-domain
+ * auto-join (SEC-1): an address on the org's domain never brings back someone who left or was removed.
+ * An explicit invitation still can; that is a person choosing to let them back in.
+ *
+ * A later departure overwrites the row (the latest one is what the org knows). The row goes with the
+ * org and with the account.
  */
-export const orgDomainJoins = pgTable('org_domain_joins', {
+export const ORG_DEPARTURE_REASONS = ['left', 'removed', 'account_deleted'] as const;
+export type OrgDepartureReason = (typeof ORG_DEPARTURE_REASONS)[number];
+
+export const orgMemberDepartures = pgTable('org_member_departures', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   orgId: text('orgId').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
   userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
-  domain: text('domain').notNull(),
-  joinedAt: timestamp('joinedAt', { mode: 'date' }).default(utcNow).notNull(),
+  reason: text('reason').$type<OrgDepartureReason>().notNull(),
+  departedAt: timestamp('departedAt', { mode: 'date' }).default(utcNow).notNull(),
 }, (table) => ({
-  orgUserKey: unique('org_domain_joins_org_user_key').on(table.orgId, table.userId),
-  userIdx: index('org_domain_joins_user_id_idx').on(table.userId),
+  orgUserKey: unique('org_member_departures_org_user_key').on(table.orgId, table.userId),
+  userIdx: index('org_member_departures_user_id_idx').on(table.userId),
 }));
 
 export const organizationsRelations = relations(organizations, ({ one, many }) => ({

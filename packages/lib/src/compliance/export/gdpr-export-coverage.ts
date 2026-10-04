@@ -454,8 +454,8 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     'Temporary under Spec X-2: the subject\'s own requests to join Restricted org drives (D-OW-22), with an optional note they wrote; removed by the Phase 6 GDPR/backups leaf yfmlkdchehmberwthwu6g7vt before Wave F, which adds the collector beside the one for org_members; the ORGS_ENABLED export precondition fails while this exclusion exists.',
   org_domains:
     'An org\'s domain claim (SEC-1): the domain, its public DNS challenge and the hash of a mailed proof link. Organization configuration, not the subject\'s data; the one personal field is createdBy, an attribution the org\'s audit trail also carries. Account deletion nulls it (ON DELETE SET NULL).',
-  org_domain_joins:
-    'Temporary under Spec X-2: the record that the subject\'s verified address auto-joined an org (SEC-1), kept so a person who leaves is never re-added; removed by the Phase 6 GDPR/backups leaf yfmlkdchehmberwthwu6g7vt before Wave F, which adds the collector beside the one for org_members. Account deletion already removes it: userId cascades.',
+  org_member_departures:
+    'Temporary under Spec X-2: the record that the subject was once a member of an org and left or was removed (with how), kept so a verified email domain never auto-joins them back (SEC-1); removed by the Phase 6 GDPR/backups leaf yfmlkdchehmberwthwu6g7vt before Wave F, which adds the collector beside the one for org_members. Account deletion already removes it: userId cascades.',
   org_guest_holds:
     'Temporary under Spec X-2: the subject\'s own queued request to join an org drive as a guest, or the snapshot of the access an org policy parked (their own member row and page grants), plus an invitee address; removed by the Phase 6 GDPR/backups leaf yfmlkdchehmberwthwu6g7vt before Wave F, which adds the collector beside the one for org_members. Account deletion already removes it: userId cascades.',
 };

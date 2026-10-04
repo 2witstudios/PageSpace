@@ -1,5 +1,5 @@
 {
-  "id": "280b4387-36ee-4764-816c-9429722941ed",
+  "id": "1e0ebfda-cfa3-4ef9-b393-df38ad7bcad9",
   "prevId": "af7b2cf7-5c10-4eff-92b7-834e1b08896e",
   "version": "7",
   "dialect": "postgresql",
@@ -25106,102 +25106,6 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.org_domain_joins": {
-      "name": "org_domain_joins",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "orgId": {
-          "name": "orgId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "userId": {
-          "name": "userId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "domain": {
-          "name": "domain",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "joinedAt": {
-          "name": "joinedAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "(now() at time zone 'utc')"
-        }
-      },
-      "indexes": {
-        "org_domain_joins_user_id_idx": {
-          "name": "org_domain_joins_user_id_idx",
-          "columns": [
-            {
-              "expression": "userId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "org_domain_joins_orgId_organizations_id_fk": {
-          "name": "org_domain_joins_orgId_organizations_id_fk",
-          "tableFrom": "org_domain_joins",
-          "tableTo": "organizations",
-          "columnsFrom": [
-            "orgId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "org_domain_joins_userId_users_id_fk": {
-          "name": "org_domain_joins_userId_users_id_fk",
-          "tableFrom": "org_domain_joins",
-          "tableTo": "users",
-          "columnsFrom": [
-            "userId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "org_domain_joins_org_user_key": {
-          "name": "org_domain_joins_org_user_key",
-          "nullsNotDistinct": false,
-          "columns": [
-            "orgId",
-            "userId"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "public.org_domains": {
       "name": "org_domains",
       "schema": "",
@@ -25478,6 +25382,102 @@
           "nullsNotDistinct": false,
           "columns": [
             "tokenHash"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.org_member_departures": {
+      "name": "org_member_departures",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "orgId": {
+          "name": "orgId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "userId": {
+          "name": "userId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "reason": {
+          "name": "reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "departedAt": {
+          "name": "departedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "(now() at time zone 'utc')"
+        }
+      },
+      "indexes": {
+        "org_member_departures_user_id_idx": {
+          "name": "org_member_departures_user_id_idx",
+          "columns": [
+            {
+              "expression": "userId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "org_member_departures_orgId_organizations_id_fk": {
+          "name": "org_member_departures_orgId_organizations_id_fk",
+          "tableFrom": "org_member_departures",
+          "tableTo": "organizations",
+          "columnsFrom": [
+            "orgId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "org_member_departures_userId_users_id_fk": {
+          "name": "org_member_departures_userId_users_id_fk",
+          "tableFrom": "org_member_departures",
+          "tableTo": "users",
+          "columnsFrom": [
+            "userId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "org_member_departures_org_user_key": {
+          "name": "org_member_departures_org_user_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "orgId",
+            "userId"
           ]
         }
       },

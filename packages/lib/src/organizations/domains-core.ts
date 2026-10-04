@@ -17,11 +17,13 @@
  * AUTO-JOIN. Only accounts created at or after the domain was verified, whose current address is on
  * that exact domain and is itself verified, join — as MEMBER, subject to a seat (seat-service). A
  * guest of the org (D-OW-24), a current member, someone with an open invite (it carries the role the
- * inviter chose), and someone the domain already joined once are left alone.
+ * inviter chose), and anyone who was a member once and left or was removed, however they had joined,
+ * are left alone.
  *
  * INVARIANT: zero I/O.
  */
 import { domainToASCII } from 'node:url';
+import freeEmailDomains from 'free-email-domains';
 
 export const DOMAIN_TXT_PREFIX = '_pagespace-verification';
 const DOMAIN_TXT_VALUE_PREFIX = 'pagespace-domain-verification=';
@@ -33,13 +35,20 @@ export type DomainAdminMailbox = (typeof DOMAIN_ADMIN_MAILBOXES)[number];
 /** How long a mailed proof link stays valid. */
 export const DOMAIN_EMAIL_PROOF_TTL_MS = 48 * 60 * 60 * 1000;
 
-/** Mailbox providers whose addresses belong to the public, not to an organization. */
-export const PUBLIC_EMAIL_DOMAINS: ReadonlySet<string> = new Set([
-  'gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.com', 'live.com', 'msn.com', 'yahoo.com', 'ymail.com',
-  'icloud.com', 'me.com', 'mac.com', 'aol.com', 'proton.me', 'protonmail.com', 'pm.me', 'gmx.com', 'gmx.net',
-  'gmx.de', 'web.de', 'mail.com', 'yandex.com', 'yandex.ru', 'mail.ru', 'zoho.com', 'fastmail.com', 'hey.com',
-  'qq.com', '163.com', '126.com', 'tutanota.com', 'tuta.io', 'hushmail.com', 'duck.com',
-]);
+/**
+ * Mailbox providers whose addresses belong to the public, not to an organization: the maintained
+ * free-email-domains dataset (HubSpot's published free-provider list, ~14k domains, pinned in
+ * package.json and refreshed by bumping it), plus a few providers kept here in case the dataset drops
+ * one. A provider on neither list can still be CLAIMED, but never verified in practice: proof needs its
+ * DNS or one of its administrative mailboxes, which no customer of the provider controls.
+ */
+const SUPPLEMENTARY_PUBLIC_EMAIL_DOMAINS = [
+  'gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.com', 'live.com', 'msn.com', 'yahoo.com', 'icloud.com',
+  'me.com', 'mac.com', 'aol.com', 'proton.me', 'protonmail.com', 'pm.me', 'gmx.com', 'gmx.net', 'web.de',
+  'yandex.com', 'mail.ru', 'zoho.com', 'fastmail.com', 'hey.com', 'qq.com', '163.com', 'duck.com',
+];
+
+export const PUBLIC_EMAIL_DOMAINS: ReadonlySet<string> = new Set([...freeEmailDomains, ...SUPPLEMENTARY_PUBLIC_EMAIL_DOMAINS]);
 
 const LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const TLD = /^(?:[a-z]{2,63}|xn--[a-z0-9-]{1,59})$/;
@@ -119,7 +128,7 @@ export type AutoJoinSkipReason =
   | 'already_member'
   | 'invited'
   | 'org_guest'
-  | 'already_auto_joined';
+  | 'previously_departed';
 
 export type AutoJoinDecision =
   | { action: 'join' }
@@ -136,7 +145,8 @@ export function decideAutoJoin(input: {
   userCreatedAt: Date;
   domainVerifiedAt: Date | null;
   isMember: boolean;
-  alreadyAutoJoined: boolean;
+  /** They were a member of this org once and left or were removed, however they had joined. */
+  previouslyDeparted: boolean;
   hasOpenInvite: boolean;
   isOrgGuest: boolean;
   orgActive: boolean;
@@ -144,7 +154,7 @@ export function decideAutoJoin(input: {
   if (input.domainVerifiedAt === null) return { action: 'skip', reason: 'domain_not_verified' };
   if (!input.emailVerified) return { action: 'skip', reason: 'email_not_verified' };
   if (input.isMember) return { action: 'skip', reason: 'already_member' };
-  if (input.alreadyAutoJoined) return { action: 'skip', reason: 'already_auto_joined' };
+  if (input.previouslyDeparted) return { action: 'skip', reason: 'previously_departed' };
   if (input.userCreatedAt.getTime() < input.domainVerifiedAt.getTime()) return { action: 'skip', reason: 'account_predates_verification' };
   if (input.isOrgGuest) return { action: 'skip', reason: 'org_guest' };
   if (input.hasOpenInvite) return { action: 'skip', reason: 'invited' };

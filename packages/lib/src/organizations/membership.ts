@@ -197,6 +197,7 @@ export async function removeMember(input: {
     // handed out is revoked (D-OW-8). The audit actor is the Admin who removed them.
     const left = await leaveOrganization(input.targetId, input.orgId, tx, {
       actor: await getActorInfo(input.actorId),
+      departure: 'removed',
     });
     if (!left.ok) return { ok: false, status: 404, reason: 'target_not_member' };
     reassigned = left.reassigned;
