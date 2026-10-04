@@ -323,7 +323,7 @@ describe('defaultReconcileSandboxStorageDeps.listDriveEnvSprites', () => {
     // No `ownerId`: `drive_envs` has none, and `createdBy` is audit-only —
     // selecting it would be the first step toward billing the creator.
     expect(Object.keys(selectedShape ?? {}).sort()).toEqual(
-      ['driveId', 'envId', 'lastActiveAt', 'measuredAt', 'measuredBytes', 'storageLastBilledAt'].sort(),
+      ['costOwnerId', 'driveId', 'envId', 'lastActiveAt', 'measuredAt', 'measuredBytes', 'storageLastBilledAt'].sort(),
     );
     assert({
       given: "the env row source's predicate",

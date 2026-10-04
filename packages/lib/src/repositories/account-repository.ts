@@ -13,7 +13,7 @@ import { driveMembers } from '@pagespace/db/schema/members';
 import { organizations } from '@pagespace/db/schema/organizations';
 import { deleteConversationsForDrive } from './conversation-cleanup';
 import { decryptUserRow } from '../auth/user-repository';
-import { leaveAllOrganizations, reassignLedOrgDrives } from '../organizations/leave';
+import { leaveAllOrganizations, reassignLedOrgDrives, recordComputeReattributions, type ComputeReattribution } from '../organizations/leave';
 import { createAnonymizedActorEmail } from '../compliance/anonymize';
 
 export interface UserAccount {
@@ -120,16 +120,21 @@ export const accountRepository = {
    * the erasure has anonymized the user's activity.
    */
   deleteUser: async (userId: string): Promise<void> => {
+    // [D-OW-28] The departing member's environments and apps go to each drive's lead; audited
+    // once the deletion commits.
+    const reattributed: ComputeReattribution[] = [];
     await db.transaction(async (tx) => {
       const options = {
         reason: 'account_deleted' as const,
         actor: { actorEmail: createAnonymizedActorEmail(userId), actorDisplayName: 'Deleted User' },
+        collectReattributed: reattributed,
       };
       await leaveAllOrganizations(userId, tx, options);
       // A lead who is somehow no longer a member of the drive's org still must not take it.
       await reassignLedOrgDrives(userId, tx, options);
       await tx.delete(users).where(eq(users.id, userId));
     });
+    await recordComputeReattributions(reattributed);
   },
 
   /**

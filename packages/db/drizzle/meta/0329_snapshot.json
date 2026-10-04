@@ -1,5 +1,5 @@
 {
-  "id": "926f36c4-84b1-4ae7-a689-0036a861fb5d",
+  "id": "d9abd0d7-73e3-48e7-bc5e-62f914eee83f",
   "prevId": "af7b2cf7-5c10-4eff-92b7-834e1b08896e",
   "version": "7",
   "dialect": "postgresql",
@@ -22467,6 +22467,12 @@
           "primaryKey": false,
           "notNull": true
         },
+        "costOwnerId": {
+          "name": "costOwnerId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "flyAppName": {
           "name": "flyAppName",
           "type": "text",
@@ -22646,6 +22652,21 @@
           "method": "btree",
           "with": {}
         },
+        "published_apps_cost_owner_idx": {
+          "name": "published_apps_cost_owner_idx",
+          "columns": [
+            {
+              "expression": "costOwnerId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "published_apps_status_idx": {
           "name": "published_apps_status_idx",
           "columns": [
@@ -22727,6 +22748,19 @@
             "id"
           ],
           "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "published_apps_costOwnerId_users_id_fk": {
+          "name": "published_apps_costOwnerId_users_id_fk",
+          "tableFrom": "published_apps",
+          "tableTo": "users",
+          "columnsFrom": [
+            "costOwnerId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },
@@ -24366,6 +24400,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "costOwnerId": {
+          "name": "costOwnerId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "spriteKey": {
           "name": "spriteKey",
           "type": "text",
@@ -24457,6 +24497,21 @@
           "method": "btree",
           "with": {}
         },
+        "drive_envs_cost_owner_idx": {
+          "name": "drive_envs_cost_owner_idx",
+          "columns": [
+            {
+              "expression": "costOwnerId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "drive_envs_drive_name_idx": {
           "name": "drive_envs_drive_name_idx",
           "columns": [
@@ -24521,6 +24576,19 @@
           "tableTo": "users",
           "columnsFrom": [
             "createdBy"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "drive_envs_costOwnerId_users_id_fk": {
+          "name": "drive_envs_costOwnerId_users_id_fk",
+          "tableFrom": "drive_envs",
+          "tableTo": "users",
+          "columnsFrom": [
+            "costOwnerId"
           ],
           "columnsTo": [
             "id"

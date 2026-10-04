@@ -53,7 +53,7 @@ import {
 } from './spend-target';
 import { seatCapCheck, type RefusalReason, type SkipReason, type SpendSourceKind } from './wallet-core';
 import { loadSeatCapFacts } from './seat-allowance';
-import { holdsInScope, ledgerRowsInScope, personBoundScopeFor, type PersonBoundScope } from './person-bound-scope';
+import { holdsInScope, isComputeSpendKind, ledgerRowsInScope, personBoundScopeFor, type PersonBoundScope } from './person-bound-scope';
 import { readOrgSpendPolicy } from '../organizations/policy-reader';
 import type { SubscriptionTier } from '../services/subscription-utils';
 
@@ -640,12 +640,13 @@ async function gatePersonalRoot(
 }
 
 /**
- * Whether a hold on the org pool is compute a member ran ('compute' with no spend source: the org
- * pool's own compute, canConsumeOrgPool), which counts toward that member's seat allowance. A
- * drive accrual ('drive_compute') and every AI call through a chosen source are decided elsewhere.
+ * Whether a hold on the org pool is compute (no spend source: the org pool's own compute,
+ * canConsumeOrgPool), which counts toward the seat allowance of the person it is recorded under:
+ * the person who ran it ('compute', review #2760 P1), or the env's cost owner for an env or app
+ * accrual ('drive_compute', [D-OW-28]). Every AI call through a chosen source is decided elsewhere.
  */
 function isMemberComputeOnPool(source: SpendSourceKind | null, spendKind: SpendKind | undefined): boolean {
-  return source === null && spendKind === 'compute';
+  return source === null && isComputeSpendKind(spendKind);
 }
 
 const SHARED_WALLET_FACTS = {
@@ -705,9 +706,9 @@ async function gateSharedWallet(
     // Read and decided HERE, inside the transaction that inserts the hold and under the
     // pool's row lock, so one consumer's simultaneous calls serialize: each sees the holds
     // of the ones before it, and only as many as the allowance covers pass. The same cap binds
-    // compute a member runs on the pool (fe9db1nm): it is their draw on the pool too, so a
-    // member past their allowance cannot keep draining the pool through a sandbox. A drive
-    // accrual ('drive_compute') names the lead only because a row must, and is never capped here.
+    // compute on the pool (fe9db1nm): what a member runs, and what the envs and apps they created
+    // accrue ([D-OW-28]) — their draw on the pool too, so a member past their allowance cannot keep
+    // draining the pool through a sandbox, an environment or a published app.
     let seatRemainingCents: number | null = null;
     if (chosen.source === 'seat_allowance' || isMemberComputeOnPool(chosen.source, opts.spendKind)) {
       // POL-7: the allowance in force is the org's policy, read here in the same transaction as the

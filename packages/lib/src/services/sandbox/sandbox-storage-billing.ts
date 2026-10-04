@@ -137,6 +137,7 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
       .select({
         envId: driveEnvs.id,
         driveId: driveEnvs.driveId,
+        costOwnerId: driveEnvs.costOwnerId,
         storageLastBilledAt: driveEnvs.storageLastBilledAt,
         measuredBytes: driveEnvs.storageMeasuredBytes,
         measuredAt: driveEnvs.storageMeasuredAt,
@@ -179,6 +180,8 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
       .select({
         publishedAppId: publishedApps.id,
         driveId: publishedApps.driveId,
+        // D-OW-28: an app's compute counts against its cost owner (its publisher, else the lead).
+        costOwnerId: publishedApps.costOwnerId,
         storageLastBilledAt: publishedApps.storageLastBilledAt,
         measuredBytes: publishedApps.imageSizeBytes,
         measuredAt: publishedApps.imageSizeMeasuredAt,

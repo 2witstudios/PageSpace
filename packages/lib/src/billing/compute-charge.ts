@@ -29,9 +29,10 @@ import type { SpendKind } from '@pagespace/db/schema/credits';
 export type ComputeCharge =
   | { kind: 'user'; userId: string }
   /**
-   * `accrual` marks a DRIVE accrual no person ran (env/app storage, wakes, awake time), recorded
-   * under the drive lead: it is never a seat draw. Absent = compute the recorded person ran, which
-   * counts toward their per-consumer cap on the pool (WAL-2, fe9db1nm).
+   * `accrual` marks an ENV or APP accrual (env/app storage, wakes, awake time), recorded under the
+   * env's cost owner — its creator, else the drive lead ([D-OW-28]). Absent = compute the recorded
+   * person ran. Both count toward the recorded person's per-consumer cap on the pool (WAL-2); the
+   * mark only labels the row ('drive_compute' vs 'compute').
    */
   | { kind: 'org'; orgId: string; userId: string; accrual?: true };
 
@@ -47,21 +48,21 @@ export function computeChargeFor(payer: BillingPayer, recordedUserId: string): C
 }
 
 /**
- * The charge for a DRIVE accrual no person ran — an environment's or published app's storage, a
- * wake, awake time — recorded under `leadId`, the only person an env has. For an org payer it is
- * marked an accrual, so it never counts toward the lead's seat; a personal payer is charged as
- * themselves exactly as {@link computeChargeFor} would.
+ * The charge for an ENV or APP accrual — an environment's or published app's storage, a wake,
+ * awake time — recorded under `costOwnerId`: the env's creator, or the drive lead for an env with
+ * none ([D-OW-28]). For an org payer it is marked an accrual and counts toward that person's cap;
+ * a personal payer is charged as themselves exactly as {@link computeChargeFor} would.
  */
-export function driveAccrualChargeFor(payer: BillingPayer, leadId: string): ComputeCharge {
+export function driveAccrualChargeFor(payer: BillingPayer, costOwnerId: string): ComputeCharge {
   return payer.kind === 'org'
-    ? { kind: 'org', orgId: payer.orgId, userId: leadId, accrual: true }
+    ? { kind: 'org', orgId: payer.orgId, userId: costOwnerId, accrual: true }
     : { kind: 'user', userId: payer.userId };
 }
 
 /**
- * What a charge's hold and ledger rows are FOR (SPEND_KINDS): a drive accrual on an org pool is
- * 'drive_compute', never a seat draw; everything else is 'compute' — on an org pool, the compute
- * the recorded member ran, counted toward their per-consumer cap with their AI.
+ * What a charge's hold and ledger rows are FOR (SPEND_KINDS): an env or app accrual on an org pool
+ * is 'drive_compute', everything else 'compute'. On an org pool both count toward the recorded
+ * person's per-consumer cap with their AI (WAL-2, [D-OW-28]); the kind labels which it was.
  */
 export function computeSpendKind(charge: ComputeCharge): SpendKind {
   return charge.kind === 'org' && charge.accrual === true ? 'drive_compute' : 'compute';

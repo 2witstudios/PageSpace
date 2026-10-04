@@ -38,6 +38,7 @@ import { db } from '@pagespace/db/db';
 import { and, eq, like, notInArray } from '@pagespace/db/operators';
 import { publishedApps, type PublishedApp } from '@pagespace/db/schema/published-apps';
 import { findPublishedAppByEnvId, toPublishedAppDTO } from '@/lib/app-hosting/published-app-dto';
+import { admitDriveComputeCreator } from '@pagespace/lib/billing/compute-gate';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -100,6 +101,14 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
     // ignores it on a retry/re-publish of an existing row (see its docblock: a
     // republish must not silently rename the app's live address).
     const existing = await findPublishedAppByEnvId(envId);
+
+    // [D-OW-28] A FIRST publish creates a billable app whose compute counts against the publisher's
+    // per-member cap; a member at their cap is refused before any snapshot or upload. A re-publish
+    // creates nothing new (the app keeps the cost owner it was published with).
+    if (!existing) {
+      const admitted = await admitDriveComputeCreator({ driveId, userId: auth.userId });
+      if (!admitted.allowed) return NextResponse.json({ error: admitted.message, code: 'org_member_cap_reached' }, { status: 402 });
+    }
 
     // Refuse BEFORE any tar/snapshot/upload work if a build for this app is
     // already queued or actively running. `singletonKey` on the pg-boss job

@@ -44,6 +44,7 @@ vi.mock('@pagespace/db/operators', () => ({
 vi.mock('../../organizations/leave', () => ({
   leaveAllOrganizations: vi.fn().mockResolvedValue([]),
   reassignLedOrgDrives: vi.fn().mockResolvedValue([]),
+  recordComputeReattributions: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('../conversation-cleanup', () => ({
   deleteConversationsForDrive: vi.fn().mockResolvedValue({ conversations: 0, messages: 0 }),

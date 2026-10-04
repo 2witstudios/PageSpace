@@ -10,9 +10,9 @@ import { wallets } from './wallets';
  *   - 'compute'       compute a PERSON ran (WAL-9): sandbox runtime, the terminal, browsers, their
  *                     session's machine storage. On an org pool it is that member's draw on the
  *                     pool, so it counts toward their per-consumer cap with their AI (WAL-2).
- *   - 'drive_compute' compute NO person ran: a drive's environment/app storage, published-app wakes
- *                     and awake time. On an org drive it is recorded under the drive LEAD only
- *                     because a row must name a person, so it never counts toward anyone's seat.
+ *   - 'drive_compute' an ENVIRONMENT's or published APP's accrual: its storage, wakes and awake
+ *                     time. On an org drive it is recorded under the env's cost owner — the member
+ *                     who created it, else the drive lead ([D-OW-28]) — and counts toward their cap.
  * The seat reads (seat-allowance `loadSeatCapFacts`, credit-consume `recordSeatOvershoot`) test
  * this column against SEAT_COUNTED_SPEND_KINDS. Every row written before the column existed was
  * AI spend, hence the default; compute rows written before 'drive_compute' existed carry 'compute'.
@@ -57,7 +57,7 @@ export const creditLedger = pgTable('credit_ledger', {
   // 'adjustment' for the same aiUsageLogId; this key (the sorted-joined OpenRouter
   // generation ids) does. Set only on reconcile adjustment rows; NULL everywhere else.
   reconcileGenerationKey: text('reconcileGenerationKey'),
-  /** AI spend, person-run compute or a drive accrual — see {@link SPEND_KINDS}. A drive accrual never counts toward a seat. */
+  /** AI spend, person-run compute or an env/app accrual — see {@link SPEND_KINDS}. Every kind counts toward the recorded person's seat. */
   spendKind: text('spendKind').$type<SpendKind>().default('ai').notNull(),
   createdAt: timestamp('createdAt', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
@@ -96,7 +96,7 @@ export const creditHolds = pgTable('credit_holds', {
   walletId: text('walletId').notNull().references(() => wallets.id, { onDelete: 'cascade' }),
   estCents: integer('estCents').notNull(),
   aiUsageLogId: text('aiUsageLogId'),
-  /** AI spend, person-run compute or a drive accrual — see {@link SPEND_KINDS}. A drive accrual hold never counts toward a seat. */
+  /** AI spend, person-run compute or an env/app accrual — see {@link SPEND_KINDS}. Every kind counts toward the recorded person's seat. */
   spendKind: text('spendKind').$type<SpendKind>().default('ai').notNull(),
   createdAt: timestamp('createdAt', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
   expiresAt: timestamp('expiresAt', { mode: 'date', withTimezone: true }).notNull(),

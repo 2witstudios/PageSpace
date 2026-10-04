@@ -1655,41 +1655,35 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
   const driveAccrual = (w: World, leadId: string) =>
     gateComputeCharge(driveAccrualChargeFor({ kind: 'org', orgId: w.orgId }, leadId), { estCostCents: 25, maxInFlight: 50 });
 
-  it('WAL-2 (partial) a settled person-run COMPUTE row on the pool counts against the member\'s seat like AI; a DRIVE accrual of the same size does not', async () => {
+  it('WAL-2 (partial) [D-OW-28] a settled COMPUTE row on the pool counts against the person it is recorded under like AI — what they ran, or what an env or app they created accrued', async () => {
     if (!dbAvailable) return;
-    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
-    const w = world;
-    await usageRow(w, 'drive_compute', 90_000);
+    for (const kind of ['compute', 'drive_compute'] as const) {
+      world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+      const w = world;
+      await usageRow(w, kind, 90_000);
 
-    // 90¢ of drive accrual recorded under Marcus is nobody's seat spend: the whole 100¢ allowance is there.
-    expect((await seatCountedAt(w, w.marcusId, DEFAULT_SEAT_ALLOWANCE_CENTS)).usage.periodChargedMillicents).toBe(0);
-    expect(await spendUntilRefused(w, w.marcusId, 50)).toBe(4);
-
-    // The same 90¢ as compute HE ran is his draw on the pool: no 25¢ call fits after it, AI or compute.
-    await db.delete(creditLedger).where(eq(creditLedger.userId, w.marcusId));
-    await db.delete(creditHolds).where(eq(creditHolds.userId, w.marcusId));
-    await usageRow(w, 'compute', 90_000);
-    expect((await seatCountedAt(w, w.marcusId, DEFAULT_SEAT_ALLOWANCE_CENTS)).usage.periodChargedMillicents).toBe(90_000);
-    expect(await seatGate(w, w.marcusId)).toMatchObject({ allowed: false, refusal: { reason: 'source_cap_reached' } });
-    expect(await memberCompute(w, w.marcusId)).toEqual({ allowed: false, reason: 'org_member_cap_reached', orgRefusal: 'org_member_cap_reached' });
-    expect(await holdsOf(w.marcusId)).toEqual([]);
+      expect((await seatCountedAt(w, w.marcusId, DEFAULT_SEAT_ALLOWANCE_CENTS)).usage.periodChargedMillicents, kind).toBe(90_000);
+      expect(await seatGate(w, w.marcusId), kind).toMatchObject({ allowed: false, refusal: { reason: 'source_cap_reached' } });
+      expect(await memberCompute(w, w.marcusId), kind).toEqual({ allowed: false, reason: 'org_member_cap_reached', orgRefusal: 'org_member_cap_reached' });
+      expect(await driveAccrual(w, w.marcusId), kind).toEqual({ allowed: false, reason: 'org_member_cap_reached', orgRefusal: 'org_member_cap_reached' });
+      expect(await holdsOf(w.marcusId), kind).toEqual([]);
+      await teardown(w);
+      world = null;
+    }
   });
-
-  it('WAL-2 (partial) a person-run COMPUTE hold in flight reserves seat room like an AI hold; a DRIVE accrual hold does not', async () => {
+  it('WAL-2 (partial) [D-OW-28] a COMPUTE hold in flight reserves seat room like an AI hold, whichever kind it is', async () => {
     if (!dbAvailable) return;
-    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
-    const w = world;
-    await holdRow(w, 'drive_compute', 90);
+    for (const kind of ['compute', 'drive_compute'] as const) {
+      world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+      const w = world;
+      await holdRow(w, kind, 90);
 
-    expect((await seatCountedAt(w, w.marcusId, DEFAULT_SEAT_ALLOWANCE_CENTS)).usage.periodReservedCents).toBe(0);
-    expect(await seatGate(w, w.marcusId)).toMatchObject({ allowed: true, walletId: w.poolId });
-
-    await db.delete(creditHolds).where(eq(creditHolds.userId, w.marcusId));
-    await holdRow(w, 'compute', 90);
-    expect((await seatCountedAt(w, w.marcusId, DEFAULT_SEAT_ALLOWANCE_CENTS)).usage.periodReservedCents).toBe(90);
-    expect(await seatGate(w, w.marcusId)).toMatchObject({ allowed: false, refusal: { reason: 'source_cap_reached' } });
+      expect((await seatCountedAt(w, w.marcusId, DEFAULT_SEAT_ALLOWANCE_CENTS)).usage.periodReservedCents, kind).toBe(90);
+      expect(await seatGate(w, w.marcusId), kind).toMatchObject({ allowed: false, refusal: { reason: 'source_cap_reached' } });
+      await teardown(w);
+      world = null;
+    }
   });
-
   it('WAL-2 (partial) AI and person-run compute share ONE allowance: a member at the cap through AI cannot start compute on the pool, and compute fills what AI left', async () => {
     if (!dbAvailable) return;
     world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
@@ -1706,18 +1700,17 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     expect((await walletRow(w.poolId)).monthlyRemainingCents).toBe(900_000 - 50);
   });
 
-  it('WAL-2 (partial) the drive LEAD\'s accruals never fill the lead\'s own seat: 300¢ of app accrual under Jono leaves his compute and seat whole', async () => {
+  it('WAL-2 (partial) [D-OW-28] accruals recorded under the drive LEAD (an env or app with no cost owner) fill the LEAD\'s seat: the lead is accountable for the drive', async () => {
     if (!dbAvailable) return;
     world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
     const w = world;
     await usageRow(w, 'drive_compute', 300_000, w.jonoId);
-    // A drive accrual is still admitted on the pool (no seat check) even with the lead far past 100¢.
-    expect(await driveAccrual(w, w.jonoId)).toMatchObject({ allowed: true, walletId: w.poolId });
 
-    expect(await memberCompute(w, w.jonoId)).toMatchObject({ allowed: true, walletId: w.poolId });
-    expect((await seatCountedAt(w, w.jonoId, DEFAULT_SEAT_ALLOWANCE_CENTS)).usage).toEqual({ periodChargedMillicents: 0, periodReservedCents: 25, dayChargedMillicents: 0 });
+    expect(await driveAccrual(w, w.jonoId)).toMatchObject({ allowed: false, orgRefusal: 'org_member_cap_reached' });
+    expect(await memberCompute(w, w.jonoId)).toMatchObject({ allowed: false, orgRefusal: 'org_member_cap_reached' });
+    // Never Marcus's: his allowance is whole.
+    expect(await memberCompute(w, w.marcusId)).toMatchObject({ allowed: true, walletId: w.poolId });
   });
-
   it('WAL-2 (partial) two SIMULTANEOUS person-run compute starts against an allowance with room for one: exactly one passes, decided under the pool lock', async () => {
     if (!dbAvailable) return;
     world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
@@ -1750,23 +1743,22 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     expect(await memberCompute(w, w.marcusId)).toMatchObject({ allowed: false, orgRefusal: 'org_member_cap_reached' });
   });
 
-  it('WAL-2 (partial) recordSeatOvershoot records the pool\'s absorbed overshoot for AI and person-run compute, and nothing for a drive accrual', async () => {
+  it('WAL-2 (partial) [D-OW-28] recordSeatOvershoot records the pool\'s absorbed overshoot whichever kind settles — AI, compute a person ran, or an env or app accrual', async () => {
     if (!dbAvailable) return;
     world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
     const w = world;
     // 150¢ of seat-counted spend against the 100¢ allowance with no overshoot row recorded yet: 50¢ is past the cap.
-    await usageRow(w, 'ai', 100_000);
-    await usageRow(w, 'compute', 50_000);
+    await usageRow(w, 'ai', 60_000);
+    await usageRow(w, 'compute', 40_000);
+    await usageRow(w, 'drive_compute', 50_000);
     const record = (spendKind: SpendKind) =>
       db.transaction((tx) => recordSeatOvershoot(tx, { walletId: w.poolId, userId: w.marcusId, aiUsageLogId: null, claimLedgerId: null, spendKind }));
 
-    expect(await record('drive_compute')).toEqual({ monthMc: 0, dayMc: 0 });
-    expect(await overshootRows(w.marcusId)).toEqual([]);
-
-    expect(await record('compute')).toEqual({ monthMc: 50_000, dayMc: 0 });
+    expect(await record('drive_compute')).toEqual({ monthMc: 50_000, dayMc: 0 });
     expect(await overshootRows(w.marcusId)).toEqual([['seat_overshoot_month', 50_000]]);
-    // Already recorded: the same facts settled again add nothing, whichever counted kind settles.
+    // Already recorded: the same facts settled again add nothing, whichever kind settles.
     expect(await record('ai')).toEqual({ monthMc: 0, dayMc: 0 });
+    expect(await record('compute')).toEqual({ monthMc: 0, dayMc: 0 });
   });
 
   // ---------------------------------------------------------------------------

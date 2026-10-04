@@ -105,6 +105,20 @@ function copyFor(decision: AppRouteDecision): PageCopy {
       // anything up, and the app returns by itself when the counter rolls over at
       // midnight UTC. Saying "it ran out of credits" there would send the owner to
       // buy something that changes nothing.
+      // [D-OW-28] A funded organization whose app's PUBLISHER has used their allowance of its
+      // credits: nobody needs to top the organization up. Parked apps stay parked until resumed,
+      // so this says how it comes back rather than promising it returns on its own.
+      if (decision.reason === 'member_cap') {
+        return {
+          title: 'App paused',
+          heading: 'This app is paused',
+          body:
+            'The person who published it has used their allowance of their organization\'s credits, so it has been stopped rather than left running. ' +
+            'It can be started again once that allowance renews (a daily allowance at midnight UTC, a monthly one with the organization\'s next billing period), ' +
+            'or sooner if an organization Owner or Admin raises it. If this is your app, open it in PageSpace to bring it back. Nothing has been lost.',
+          manageHref,
+        };
+      }
       return decision.reason === 'daily_cap'
         ? {
             title: 'App paused',

@@ -67,6 +67,7 @@ import {
   type RedeemLocalEnvChallengeResult,
   type ReissueLocalEnvEnrollmentCodeResult,
 } from '@pagespace/lib/services/drive-envs/drive-envs';
+import { admitDriveComputeCreator } from '@pagespace/lib/billing/compute-gate';
 
 export { toDriveEnvDTO };
 export type { DriveEnvDTO };
@@ -227,6 +228,8 @@ export async function createEnvInDrive(input: {
       getDriveOrgPolicies: driveOrgPolicies,
       now: () => new Date(),
       identity: input.local ? envBridgeIdentity() : undefined,
+      // [D-OW-28] A member at their cap of the org's credits cannot add a billable env.
+      admitCreator: admitDriveComputeCreator,
     },
   });
 }

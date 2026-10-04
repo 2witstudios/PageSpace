@@ -203,6 +203,7 @@ function driveEnv(over: Partial<DriveEnvStorageRow> = {}): DriveEnvStorageRow {
   return {
     envId: 'env-1',
     driveId: 'drive-1',
+    costOwnerId: null,
     storageLastBilledAt: new Date(new Date('2026-07-01T00:00:00.000Z').getTime() - MAX_BILLABLE_SPAN_MS),
     measuredBytes: 1_000_000_000, // 1 GB
     measuredAt: new Date('2026-06-30T23:00:00.000Z'),
@@ -220,6 +221,7 @@ function publishedAppRootfs(over: Partial<PublishedAppStorageRow> = {}): Publish
   return {
     publishedAppId: 'app-1',
     driveId: 'drive-1',
+    costOwnerId: null,
     storageLastBilledAt: new Date(new Date('2026-07-01T00:00:00.000Z').getTime() - MAX_BILLABLE_SPAN_MS),
     measuredBytes: 1_000_000_000, // 1 GB
     measuredAt: new Date('2026-06-30T23:00:00.000Z'),

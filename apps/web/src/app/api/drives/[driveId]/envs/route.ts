@@ -123,6 +123,10 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
       if (result.reason === 'org_policy') {
         return orgPolicyRefusalResponse({ code: 'org_policy', policy: 'persistentEnvironments', status: 403, message: result.message });
       }
+      if (result.reason === 'member_cap_reached') {
+        // [D-OW-28] The env's compute would count against this member's cap, and it is reached.
+        return NextResponse.json({ error: result.message, code: 'org_member_cap_reached' }, { status: 402 });
+      }
       // Quota. The two denials get DIFFERENT statuses because they have
       // different remedies: an ineligible tier is a forbidden feature (403),
       // a reached ceiling is a payment-required upgrade or a deletion (402) —

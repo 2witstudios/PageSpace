@@ -12,7 +12,7 @@ import { and, asc, eq, inArray } from '@pagespace/db/operators';
 import { organizations, orgMembers, type OrgRole } from '@pagespace/db/schema/organizations';
 import { decideOrgRole } from './authorize';
 import { loadOrgPrincipalKind, type OrgPrincipalKind } from './owner-candidate';
-import { leaveOrganization } from './leave';
+import { leaveOrganization, recordComputeReattributions, type ComputeReattribution } from './leave';
 import { revokeForDemotion } from './demotion';
 import { getActorInfo } from '../monitoring/activity-logger';
 
@@ -172,7 +172,9 @@ export async function removeMember(input: {
   actorId: string;
   targetId: string;
 }): Promise<MembershipDecision> {
-  return db.transaction(async (tx) => {
+  // [D-OW-28] Audited after the removal commits, never for a removal that rolled back.
+  const reattributed: ComputeReattribution[] = [];
+  const decision = await db.transaction(async (tx) => {
     const roles = await lockActorAndTargetRoles(tx, input.orgId, input.actorId, input.targetId);
     const decision = decideMemberRemoval({ ...input, ...roles });
     if (!decision.ok) return decision;
@@ -181,10 +183,13 @@ export async function removeMember(input: {
     // handed out is revoked (D-OW-8). The audit actor is the Admin who removed them.
     const left = await leaveOrganization(input.targetId, input.orgId, tx, {
       actor: await getActorInfo(input.actorId),
+      collectReattributed: reattributed,
     });
-    if (!left.ok) return { ok: false, status: 404, reason: 'target_not_member' };
+    if (!left.ok) return { ok: false as const, status: 404 as const, reason: 'target_not_member' as const };
     return decision;
   });
+  if (decision.ok) await recordComputeReattributions(reattributed, input.actorId);
+  return decision;
 }
 
 /**

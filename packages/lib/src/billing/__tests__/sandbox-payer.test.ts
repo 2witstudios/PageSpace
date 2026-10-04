@@ -69,18 +69,23 @@ describe('resolveEnvPayer', () => {
 });
 
 describe('resolveEnvCharge', () => {
-  it("WAL-9 (partial) an env or app in an org drive charges the org pool, recorded under the drive lead as a drive accrual (never the lead's seat) — never the lead's wallet", async () => {
-    const charge = await resolveEnvCharge({ driveId: 'd1', lookupDriveBillingFacts: async () => inOrg('lead-marcus', 'org-northwind') });
+  it("WAL-9 (partial) an env or app in an org drive charges the org pool, recorded under its CREATOR as an accrual — never anyone's wallet (D-OW-28)", async () => {
+    const charge = await resolveEnvCharge({ driveId: 'd1', costOwnerId: 'member-ana', lookupDriveBillingFacts: async () => inOrg('lead-marcus', 'org-northwind') });
+    expect(charge).toEqual({ kind: 'org', orgId: 'org-northwind', userId: 'member-ana', accrual: true });
+  });
+
+  it('with no cost owner (created before D-OW-28, or its creator left the org) it is recorded under the drive LEAD', async () => {
+    const charge = await resolveEnvCharge({ driveId: 'd1', costOwnerId: null, lookupDriveBillingFacts: async () => inOrg('lead-marcus', 'org-northwind') });
     expect(charge).toEqual({ kind: 'org', orgId: 'org-northwind', userId: 'lead-marcus', accrual: true });
   });
 
   it('a personal drive charges its owner', async () => {
-    const charge = await resolveEnvCharge({ driveId: 'd1', lookupDriveBillingFacts: async () => personal('owner-1') });
+    const charge = await resolveEnvCharge({ driveId: 'd1', costOwnerId: 'member-ana', lookupDriveBillingFacts: async () => personal('owner-1') });
     expect(charge).toEqual({ kind: 'user', userId: 'owner-1' });
   });
 
   it('returns NULL when the drive cannot be resolved — callers skip, never substitute', async () => {
-    expect(await resolveEnvCharge({ driveId: 'gone', lookupDriveBillingFacts: async () => null })).toBeNull();
+    expect(await resolveEnvCharge({ driveId: 'gone', costOwnerId: null, lookupDriveBillingFacts: async () => null })).toBeNull();
   });
 });
 

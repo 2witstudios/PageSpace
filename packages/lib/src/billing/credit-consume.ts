@@ -221,14 +221,13 @@ export async function recordSeatOvershoot(
     userId: string;
     aiUsageLogId: string | null;
     claimLedgerId: string | null;
-    /** What the charge was for. A DRIVE accrual is never a seat draw (SEAT_COUNTED_SPEND_KINDS), so it records nothing. */
+    /** What the charge was for. Every kind is a seat draw for the person it is recorded under (SEAT_COUNTED_SPEND_KINDS). */
     spendKind: SpendKind;
   },
 ): Promise<{ monthMc: number; dayMc: number }> {
   const none = { monthMc: 0, dayMc: 0 };
-  // A drive accrual on the pool is nobody's draw (see seat-allowance's SEAT_COUNTED_SPEND_KINDS):
-  // its overshoot is no consumer's seat attribution to record. AI and the compute a member ran are
-  // bound here at settlement exactly as the gate bound them at admission (fe9db1nm).
+  // AI, the compute a person ran, and the accruals of the envs and apps a member created are all
+  // bound here at settlement exactly as the gate bound them at admission (fe9db1nm, [D-OW-28]).
   if (!isSeatCountedSpendKind(input.spendKind)) return none;
   const [pool] = await tx
     .select({ orgId: wallets.orgId, ownerType: wallets.ownerType, parentWalletId: wallets.parentWalletId, subjectType: wallets.subjectType, monthlyPeriodStart: wallets.monthlyPeriodStart })

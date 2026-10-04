@@ -82,6 +82,17 @@ describe('retryAfterFor — back a caller off by how long the state will last', 
 // claim anything about the owner that is not true. The unavailable copy used to
 // say "its owner has been able to see why"; two of the four producers of that
 // state are route-level outages logged server-side and surfaced to nobody.
+describe('[D-OW-28] an app paused on its publisher\'s allowance', () => {
+  it('is a clear paused page that blames the allowance, not the balance, and promises no return on its own', () => {
+    const html = renderAppRouterPage({ kind: 'parked', reason: 'member_cap', driveId: 'd1', envId: 'e1' }, 'acme.pagespace.io');
+    expect(html).toContain('This app is paused');
+    expect(html).toMatch(/used their allowance of their organization(&#39;|')s credits/);
+    expect(html).not.toContain('ran out of credits');
+    expect(html).not.toMatch(/comes back on its own|available again tomorrow/);
+    expect(statusCodeFor({ kind: 'parked', reason: 'member_cap' })).toBe(402);
+  });
+});
+
 describe('the unavailable page does not promise the owner an explanation', () => {
   it('given a failed app, should not claim the owner can see the reason', () => {
     const html = renderAppRouterPage(failed, 'acme.pagespace.io');

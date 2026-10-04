@@ -304,6 +304,8 @@ export interface DriveEnvStorageRow {
   envId: string;
   /** The owning drive — NOT NULL, and the ONLY route to a payer. */
   driveId: string;
+  /** D-OW-28: whose cap this charge counts against — the env's creator; null = the drive lead. */
+  costOwnerId: string | null;
   storageLastBilledAt: Date;
   /** Last opportunistically-measured used bytes on the ENV Sprite; null when never measured. */
   measuredBytes: number | null;
@@ -346,6 +348,8 @@ export interface PublishedAppStorageRow {
   publishedAppId: string;
   /** The owning drive — NOT NULL, and the ONLY route to a payer. */
   driveId: string;
+  /** D-OW-28: whose cap this charge counts against — the env's creator; null = the drive lead. */
+  costOwnerId: string | null;
   storageLastBilledAt: Date;
   /** The pinned image's registry size, from `imageSizeBytes`; null until the first build lands. */
   measuredBytes: number | null;
@@ -693,7 +697,7 @@ function toEnvSubject(
     // directly would drop `this` for any deps implementation that is a real
     // object rather than a literal — billing every session correctly while every
     // env threw and counted as `failed`, every tick.
-    resolveCharge: () => resolveEnvCharge({ driveId: env.driveId, lookupDriveBillingFacts }),
+    resolveCharge: () => resolveEnvCharge({ driveId: env.driveId, costOwnerId: env.costOwnerId, lookupDriveBillingFacts }),
     advanceWatermark: (billedThrough) => deps.advanceDriveEnvWatermark({ envId: env.envId, billedThrough }),
     storageLastBilledAt: env.storageLastBilledAt,
     measuredBytes: env.measuredBytes,
@@ -715,7 +719,7 @@ function toHostingSubject(
     // The drive owner, with no fallback — identical to an env's, because a
     // published app hangs off an env and an env is drive-owned. The memoized
     // closure, not a bare deps reference (see `toEnvSubject`).
-    resolveCharge: () => resolveEnvCharge({ driveId: app.driveId, lookupDriveBillingFacts }),
+    resolveCharge: () => resolveEnvCharge({ driveId: app.driveId, costOwnerId: app.costOwnerId, lookupDriveBillingFacts }),
     advanceWatermark: (billedThrough) =>
       deps.advancePublishedAppWatermark({ publishedAppId: app.publishedAppId, billedThrough }),
     storageLastBilledAt: app.storageLastBilledAt,

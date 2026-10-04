@@ -22,7 +22,7 @@ function primitives(charge: ComputeCharge, gateAnswer: GateAnswer = { allowed: t
   return { deps, resolveCharge, gate, releaseHold, trackUsage, settle };
 }
 
-const billing = { driveId: 'drive-1', ownerId: 'session-owner-1', agentPageId: null, conversationId: 'conv-1' };
+const billing = { driveId: 'drive-1', ownerId: 'session-owner-1', actorId: 'session-owner-1', agentPageId: null, conversationId: 'conv-1' };
 const shape = { cpus: 2, memoryGB: 2 };
 const orgCharge: ComputeCharge = { kind: 'org', orgId: 'org-northwind', userId: 'session-owner-1' };
 

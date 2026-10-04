@@ -75,6 +75,8 @@ function row(overrides: Partial<PublishedAppRouteRow> = {}): PublishedAppRouteRo
     machineId: 'm-1',
     driveId: 'drive_payer',
     envId: 'env_1',
+    costOwnerId: null,
+    lastError: null,
     ...overrides,
   };
 }
@@ -201,7 +203,8 @@ describe('resolveAppRoute — the balance is asked about the SAME payer the mete
       'acme.pagespace.io',
       deps({ findAppBySubdomain: async () => row({ driveId: 'drive_xyz' }), resolveCharge, hasSpendableBalance }),
     );
-    expect(resolveCharge).toHaveBeenCalledWith({ driveId: 'drive_xyz' });
+    // [D-OW-28] With the app's cost owner (null = the drive lead), never published_apps.ownerId.
+    expect(resolveCharge).toHaveBeenCalledWith({ driveId: 'drive_xyz', costOwnerId: null });
     expect(hasSpendableBalance).toHaveBeenCalledWith({ kind: 'user', userId: 'user_drive_owner' });
   });
 
@@ -548,6 +551,16 @@ describe('resolveAppRoute — a STOPPED app is woken through the metering seam',
         wake: async () => ({ outcome: 'parked', reason: 'daily_awake_cap_exceeded' }),
       }),
     );
+
+    // [D-OW-28] The publisher's per-member cap refused: a funded pool, so not "out of credits".
+    const memberCap = await resolveAppRoute(
+      'acme.pagespace.io',
+      deps({
+        findAppBySubdomain: async () => stopped(),
+        wake: async () => ({ outcome: 'parked', reason: 'org_member_cap_reached' }),
+      }),
+    );
+    expect(memberCap).toEqual({ kind: 'parked', reason: 'member_cap', driveId: 'drive_payer', envId: 'env_1' });
 
     expect({ outOfCredits, dailyCap }).toEqual({
       outOfCredits: { kind: 'parked', reason: 'out_of_credits', driveId: 'drive_payer', envId: 'env_1' },

@@ -224,6 +224,8 @@ export async function createPublishedApp(
         envId: input.envId,
         driveId: input.driveId,
         ownerId: input.ownerId,
+        // [D-OW-28] The publisher's per-member cap carries this app's compute; null = the drive lead.
+        costOwnerId: input.ownerId,
         flyAppName,
         networkName: network,
         subdomain: input.subdomain,

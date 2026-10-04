@@ -160,10 +160,16 @@ export async function resolveEnvPayer(input: ResolveEnvPayerInput): Promise<Bill
 /**
  * resolveEnvCharge — the compute charge for an ENVIRONMENT or a published app (which hangs off
  * one): the drive's payer via {@link resolveEnvPayer}, with the same no-fallback rule. An org
- * drive charges the org POOL, recorded under the drive's lead — the only person an env has, and
- * no person runs an accrual — never the lead's own wallet. Null = unresolvable: callers skip.
+ * drive charges the org POOL — never anyone's own wallet — recorded under, and capped against,
+ * the resource's COST OWNER ([D-OW-28]: `drive_envs.costOwnerId` / `published_apps.costOwnerId`,
+ * the member who created it). With none (created before D-OW-28, or its creator left the org) it
+ * is the drive's LEAD, who is accountable for the drive. Null = unresolvable: callers skip.
  */
-export async function resolveEnvCharge(input: ResolveEnvPayerInput): Promise<ComputeCharge | null> {
+export async function resolveEnvCharge(input: ResolveEnvPayerInput & {
+  /** The env's or app's `costOwnerId`; null attributes to the drive lead. Required, so no caller forgets it. */
+  costOwnerId: string | null;
+}): Promise<ComputeCharge | null> {
   const facts = await input.lookupDriveBillingFacts(input.driveId);
-  return facts ? driveAccrualChargeFor(payerForDrive(facts), facts.ownerId) : null;
+  return facts ? driveAccrualChargeFor(payerForDrive(facts), input.costOwnerId ?? facts.ownerId) : null;
 }
+

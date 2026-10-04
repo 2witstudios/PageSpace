@@ -45,6 +45,7 @@ import type { ComputeCharge } from '../../billing/compute-charge';
 import { isAppHostingEnabled, resolveHitStampIntervalSeconds } from './app-hosting-env';
 import {
   DAILY_CAP_PARK_REASON,
+  MEMBER_CAP_PARK_REASON,
   wakePublishedAppSerialized,
   type WakePublishedAppRunResult,
 } from './app-lifecycle-metering';
@@ -82,7 +83,7 @@ export interface AppRouterDeps {
    * payer or falling back to a denormalized column the meter does not charge.
    * An org drive's charge is the org pool (WAL-9), whose balance is what is asked.
    */
-  resolveCharge: (input: { driveId: string }) => Promise<ComputeCharge | null>;
+  resolveCharge: (input: { driveId: string; costOwnerId: string | null }) => Promise<ComputeCharge | null>;
   /**
    * Whether the charge's wallet can still spend: the payer's personal balance
    * (judged against their tier), or the org pool (missing or paused = no).
@@ -126,6 +127,10 @@ export interface PublishedAppRouteRow {
   driveId: string;
   /** `published_apps.envId` — echoed onward exactly like `driveId`, see `RoutableApp.envId`. */
   envId: string;
+  /** [D-OW-28] Whose cap the app's compute counts against: its publisher, else (null) the drive lead. */
+  costOwnerId: string | null;
+  /** Why it was last parked (`parked: <reason>`), read only to name a member-cap park to a visitor. */
+  lastError: string | null;
 }
 
 const ROUTE_ROW_COLUMNS = {
@@ -136,6 +141,8 @@ const ROUTE_ROW_COLUMNS = {
   machineId: publishedApps.machineId,
   driveId: publishedApps.driveId,
   envId: publishedApps.envId,
+  costOwnerId: publishedApps.costOwnerId,
+  lastError: publishedApps.lastError,
 } as const;
 
 async function findAppBySubdomainRow(subdomain: string): Promise<PublishedAppRouteRow | null> {
@@ -253,7 +260,7 @@ function refusalForWake(wake: WakePublishedAppRunResult, driveId: string, envId:
       // owner (top up, versus wait for tomorrow).
       return {
         kind: 'parked',
-        reason: wake.reason === DAILY_CAP_PARK_REASON ? 'daily_cap' : 'out_of_credits',
+        reason: wake.reason === DAILY_CAP_PARK_REASON ? 'daily_cap' : wake.reason === MEMBER_CAP_PARK_REASON ? 'member_cap' : 'out_of_credits',
         driveId,
         envId,
       };
@@ -330,6 +337,7 @@ async function decideForRow(app: PublishedAppRouteRow, deps: AppRouterDeps): Pro
     hasMachine: app.machineId !== null,
     driveId: app.driveId,
     envId: app.envId,
+    parkedForMemberCap: app.lastError === `parked: ${MEMBER_CAP_PARK_REASON}`,
   };
 
   // POL-10: an org that turned published apps off serves nothing, and nothing is woken. Asked
@@ -354,7 +362,7 @@ async function decideForRow(app: PublishedAppRouteRow, deps: AppRouterDeps): Pro
   // than a hope. `decideAppRoute` still re-checks the tier itself, so the skip
   // here can never quietly become the policy.
   if (app.tier === 'metered') {
-    const charge = await deps.resolveCharge({ driveId: app.driveId });
+    const charge = await deps.resolveCharge({ driveId: app.driveId, costOwnerId: app.costOwnerId });
     // An unresolvable drive fails CLOSED here: the router has nobody to ask, so it
     // refuses exactly as the wake gate does, rather than assuming a balance nobody can
     // vouch for. An org drive asks the ORG POOL (WAL-9), never the lead's balance.

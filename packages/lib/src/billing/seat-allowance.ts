@@ -6,7 +6,7 @@
  * already moves through, so there is no second counter to drift from it:
  *
  *   SUM over calls of max(0, SUM(credit_ledger.chargeMillicents))   -- gross, per window
- *     WHERE walletId = the pool AND userId = the consumer AND spendKind IN ('ai', 'compute')
+ *     WHERE walletId = the pool AND userId = the consumer AND spendKind IN ('ai', 'compute', 'drive_compute')
  *       AND entryType IN ('usage', 'adjustment')
  *     grouped by call (aiUsageLogId), each call dated by its usage row
  *   judged against the cap in force now
@@ -43,19 +43,17 @@ import { seatAllowanceCents, seatCountedMillicents, seatPeriodStartMs, userConsu
 type Reader = Pick<typeof db, 'select'>;
 
 /**
- * The spend a seat counts: what a member draws on the pool (WAL-2) — their AI calls and the
- * compute THEY ran ('compute': sandbox runtime, the terminal, browsers, their session's storage).
- * One cap on everything one consumer takes from the pool, so compute cannot reopen the pool drain
- * the seat cap closed for AI (fe9db1nm).
- *
- * A DRIVE accrual ('drive_compute': env/app storage, published-app wakes and awake time) is NOT a
- * seat draw: no person ran it, and its rows name the drive LEAD only because credit rows must, so
- * counting it would eat the lead's allowance for infrastructure they never ran (the reason compute
- * was excluded outright by the 2026-09-28 ruling on ow-c7b, #2741). Tested by an explicit
- * predicate on the row (credit_ledger.spendKind, credit_holds.spendKind), never by which code path
- * wrote it.
+ * The spend a seat counts: everything a member draws on the pool (WAL-2), under one cap —
+ *   - their AI calls ('ai');
+ *   - the compute THEY ran ('compute': sandbox runtime, the terminal, browsers, their session's
+ *     storage), recorded under the person who caused it (review #2760 P1);
+ *   - the accruals of the environments and published apps they CREATED ('drive_compute': env/app
+ *     storage, wakes and awake time), recorded under the env's cost owner — the creator, or the
+ *     drive lead for an env with none (pre-D-OW-28, or its creator left the org) ([D-OW-28]).
+ * So compute cannot reopen the pool drain the seat cap closed for AI (fe9db1nm). Every kind
+ * counts: what differs between them is only WHO a row is recorded under, which the writer decides.
  */
-export const SEAT_COUNTED_SPEND_KINDS: readonly SpendKind[] = ['ai', 'compute'];
+export const SEAT_COUNTED_SPEND_KINDS: readonly SpendKind[] = ['ai', 'compute', 'drive_compute'];
 
 /** Whether a charge of `spendKind` on an org pool is a member's seat draw. */
 export function isSeatCountedSpendKind(spendKind: SpendKind): boolean {
@@ -121,7 +119,7 @@ export async function loadSeatCapFacts(
       eq(creditLedger.userId, input.userId),
       eq(creditLedger.walletId, input.poolId),
       inArray(creditLedger.entryType, ['usage', 'adjustment']),
-      // A drive accrual is not a seat draw — see SEAT_COUNTED_SPEND_KINDS.
+      // Every kind is a seat draw for the person the row is recorded under — see SEAT_COUNTED_SPEND_KINDS.
       inArray(creditLedger.spendKind, [...SEAT_COUNTED_SPEND_KINDS]),
       gte(creditLedger.createdAt, rowsFrom),
     ))
@@ -154,7 +152,7 @@ export async function loadSeatCapFacts(
     .where(and(
       eq(creditHolds.userId, input.userId),
       eq(creditHolds.walletId, input.poolId),
-      // A drive accrual's hold in flight is not a seat draw either — see SEAT_COUNTED_SPEND_KINDS.
+      // A hold in flight is a seat draw too, whatever it reserves for — see SEAT_COUNTED_SPEND_KINDS.
       inArray(creditHolds.spendKind, [...SEAT_COUNTED_SPEND_KINDS]),
       gt(creditHolds.expiresAt, input.now),
     ));

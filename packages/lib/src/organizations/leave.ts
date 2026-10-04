@@ -23,6 +23,9 @@ import { mcpTokens } from '@pagespace/db/schema/auth';
 import { oauthAccessTokens, oauthRefreshTokens } from '@pagespace/db/schema/oauth';
 import { driveShareLinks, pageShareLinks } from '@pagespace/db/schema/share-links';
 import { orgMembers, organizations, type OrgRole } from '@pagespace/db/schema/organizations';
+import { driveEnvs } from '@pagespace/db/schema/drive-envs';
+import { publishedApps } from '@pagespace/db/schema/published-apps';
+import { recordOrgAuditEvent } from '../audit/org-audit';
 import { getActorInfo, logActivityWithTx } from '../monitoring/activity-logger';
 import { parseScopeList } from '../auth/oauth/scopes';
 import { closeStaleDriveJoinRequests } from '../permissions/drive-join-request-closure';
@@ -327,12 +330,47 @@ export interface LeaveCascadeCounts extends OrgDriveGrantCounts {
 }
 
 export type LeaveOrganizationResult =
-  | { ok: true; revoked: LeaveCascadeCounts; reassigned: LeadReassignment[] }
+  | { ok: true; revoked: LeaveCascadeCounts; reassigned: LeadReassignment[]; computeReattributed: ComputeReattribution[] }
   | { ok: false; reason: LeaveRefusal };
+
+/**
+ * [D-OW-28] An environment or published app in one of the org's drives whose compute counted
+ * against the leaver's per-member cap, now handed to the drive's LEAD (its `costOwnerId` cleared):
+ * the lead is accountable for the drive, and the resource keeps running for everyone else in it.
+ */
+export interface ComputeReattribution {
+  orgId: string;
+  kind: 'drive_env' | 'published_app';
+  id: string;
+  driveId: string;
+  /** Who it was attributed to: the member who left. */
+  formerCostOwnerId: string;
+}
+
+/**
+ * [D-OW-28] Record each re-attribution as an `org.compute.reattributed` event. Called AFTER the
+ * leave's transaction commits (the audit chain is written outside it), so a rolled-back leave
+ * never leaves an event behind. Ids only, never names.
+ */
+export async function recordComputeReattributions(items: readonly ComputeReattribution[], actorId?: string): Promise<void> {
+  for (const item of items) {
+    await recordOrgAuditEvent({
+      orgId: item.orgId,
+      eventType: 'org.compute.reattributed',
+      ...(actorId ? { actorId } : {}),
+      resourceType: item.kind,
+      resourceId: item.id,
+      driveId: item.driveId,
+      details: { formerCostOwnerId: item.formerCostOwnerId, costOwner: 'drive_lead' },
+    });
+  }
+}
 
 export interface LeaveOrganizationOptions {
   reason?: LeadReassignmentReason;
   actor?: LeaveActor;
+  /** Collects every [D-OW-28] re-attribution a caller holding the transaction must audit after commit. */
+  collectReattributed?: ComputeReattribution[];
 }
 
 /**
@@ -346,7 +384,13 @@ export async function leaveOrganization(
   tx?: LeaveTx,
   options: LeaveOrganizationOptions = {},
 ): Promise<LeaveOrganizationResult> {
-  if (!tx) return db.transaction((own) => leaveOrganization(userId, orgId, own, options));
+  if (!tx) {
+    // Its own transaction: audit the re-attributions once that commits. A caller passing `tx`
+    // audits them itself, after ITS commit (removeMember, account deletion).
+    const result = await db.transaction((own) => leaveOrganization(userId, orgId, own, options));
+    if (result.ok) await recordComputeReattributions(result.computeReattributed);
+    return result;
+  }
 
   const [membership] = await tx
     .select({ id: orgMembers.id, role: orgMembers.role })
@@ -388,6 +432,25 @@ export async function leaveOrganization(
     actor: options.actor,
   });
 
+  // [D-OW-28] Their environments and apps in the org's drives keep running — deleting or pausing
+  // them would break the drive for everyone else — but their costs go to the drive's lead (a
+  // cleared costOwnerId), counted against the lead's cap from now on.
+  const envRows = await tx
+    .update(driveEnvs)
+    .set({ costOwnerId: null })
+    .where(and(eq(driveEnvs.costOwnerId, userId), inArray(driveEnvs.driveId, orgDriveIds)))
+    .returning({ id: driveEnvs.id, driveId: driveEnvs.driveId });
+  const appRows = await tx
+    .update(publishedApps)
+    .set({ costOwnerId: null })
+    .where(and(eq(publishedApps.costOwnerId, userId), inArray(publishedApps.driveId, orgDriveIds)))
+    .returning({ id: publishedApps.id, driveId: publishedApps.driveId });
+  const computeReattributed: ComputeReattribution[] = [
+    ...envRows.map((r) => ({ orgId, kind: 'drive_env' as const, id: r.id, driveId: r.driveId, formerCostOwnerId: userId })),
+    ...appRows.map((r) => ({ orgId, kind: 'published_app' as const, id: r.id, driveId: r.driveId, formerCostOwnerId: userId })),
+  ];
+  options.collectReattributed?.push(...computeReattributed);
+
   await tx.delete(orgMembers).where(eq(orgMembers.id, membership.id));
   // DRV-6: the leaver's pending join requests on the org's drives ask for nothing now (nor does one
   // by a reassigned drive's new lead); approvers stop seeing them.
@@ -401,6 +464,7 @@ export async function leaveOrganization(
       formerLeadOwnerRows: ownerRows.length,
     },
     reassigned,
+    computeReattributed,
   };
 }
 

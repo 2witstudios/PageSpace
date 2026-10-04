@@ -42,7 +42,7 @@ const identity: LocalEnvIdentityDeps = {
 
 function harness(now: Date = NOW) {
   const fake = makeDriveEnvStore([], () => now);
-  const deps = { store: fake.store, getDriveOrgPolicies: async () => null, resolvePayer: async () => ({ payerId: PAYER_ID, tier: 'pro' as const }), now: () => now, identity };
+  const deps = { store: fake.store, getDriveOrgPolicies: async () => null, resolvePayer: async () => ({ payerId: PAYER_ID, tier: 'pro' as const }), now: () => now, identity, admitCreator: async () => ({ allowed: true as const }) };
   return { fake, deps };
 }
 

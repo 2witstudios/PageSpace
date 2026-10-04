@@ -123,7 +123,7 @@ export interface AwakeMeterDeps {
    * inside the meter's own locked region; the default binding hands
    * `stopPublishedApp` a pass-through serializer for exactly that reason.
    */
-  park: (publishedAppId: string, reason: Extract<StopReason, 'insolvent' | 'daily_cap'>) => Promise<void>;
+  park: (publishedAppId: string, reason: Extract<StopReason, 'insolvent' | 'daily_cap' | 'member_cap'>) => Promise<void>;
   /** The per-app daily awake budget in seconds, read at call time. 0 disables it. */
   dailyAwakeCapSeconds: () => number;
   now: () => Date;
@@ -393,7 +393,7 @@ async function meterOneApp(
   // rather than an invented amount. A hold is placed with it so the very next tick
   // settles against a real reservation.
   if (row.awakeBilledThrough === null) {
-    const charge = await deps.billing.resolveCharge({ driveId: row.driveId });
+    const charge = await deps.billing.resolveCharge({ driveId: row.driveId, costOwnerId: row.costOwnerId });
     if (!charge) {
       result.unresolvedPayer += 1;
       return;
@@ -401,7 +401,8 @@ async function meterOneApp(
     // WAL-9: an org drive's app holds on the org pool; a refused pool parks it.
     const gate = await deps.billing.gate({ charge });
     if (!gate.allowed) {
-      await deps.park(row.id, 'insolvent');
+      // [D-OW-28] The publisher's per-member cap refused, not the pool: parked and said so.
+      await deps.park(row.id, gate.orgRefusal === 'org_member_cap_reached' ? 'member_cap' : 'insolvent');
       result.parked += 1;
       return;
     }
@@ -449,7 +450,7 @@ async function meterOneApp(
     return;
   }
 
-  const charge = await deps.billing.resolveCharge({ driveId: row.driveId });
+  const charge = await deps.billing.resolveCharge({ driveId: row.driveId, costOwnerId: row.costOwnerId });
   if (!charge) {
     // Leave the watermark alone so the span keeps accruing and is billed in full
     // once the drive resolves — or is torn down with the row. Never substitute a
@@ -603,7 +604,7 @@ async function meterOneApp(
       // Same rule as the cap park above, and for the same reason: parking on a
       // watermark that never moved double-charges the span already billed.
       if (!mayParkAfter(advanced)) return;
-      await deps.park(row.id, 'insolvent');
+      await deps.park(row.id, gate.orgRefusal === 'org_member_cap_reached' ? 'member_cap' : 'insolvent');
       result.parked += 1;
       return;
     }
