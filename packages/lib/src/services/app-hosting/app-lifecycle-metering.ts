@@ -65,6 +65,7 @@ import {
 } from './app-metering-core';
 import { planTransition } from './provisioner-core';
 import { isCreditMetered } from './dedicated-tier';
+import { errorLogFields } from '../../logging/error-cause';
 
 export interface AppLifecycleMeteringDeps {
   isEnabled: () => boolean;
@@ -233,7 +234,7 @@ export async function wakePublishedApp(
   // exists to answer "who is charged", and nobody is charged per-second here.
   let holdId: string | undefined;
   if (isCreditMetered(row.tier)) {
-    const charge = await deps.billing.resolveCharge({ driveId: row.driveId });
+    const charge = await deps.billing.resolveCharge({ driveId: row.driveId, costOwnerId: row.costOwnerId });
     // No fallback, by design: an app is drive-owned, and `published_apps.ownerId`
     // is a denormalized cascade handle, not an answer to "who pays". Billing a
     // machine to somebody who may not own the drive is a money movement that cannot
@@ -365,7 +366,14 @@ export async function wakePublishedAppSerialized(
  * stopping it — the two enforcement refusals — while `idle` and `operator` leave it
  * `stopped`, i.e. free to wake on the next request.
  */
-export type StopReason = 'idle' | 'insolvent' | 'daily_cap' | 'operator';
+export type StopReason = 'idle' | 'insolvent' | 'daily_cap' | 'member_cap' | 'operator';
+
+/**
+ * [D-OW-28] The `lastError` a park for the publisher's per-member cap writes — the reason the gate
+ * reports (`org_member_cap_reached`) — so the router can tell a visitor THIS app is paused because
+ * its publisher's allowance of the organization's credits is used up, not that a balance is empty.
+ */
+export const MEMBER_CAP_PARK_REASON = 'org_member_cap_reached';
 
 /**
  * The `lastError` a daily-cap park writes, and the reason the wake gate reports.
@@ -514,7 +522,7 @@ async function stopPublishedAppSerialized(
     }
   }
 
-  const nextStatus: 'stopped' | 'parked' = reason === 'insolvent' || reason === 'daily_cap' ? 'parked' : 'stopped';
+  const nextStatus: 'stopped' | 'parked' = reason === 'insolvent' || reason === 'daily_cap' || reason === 'member_cap' ? 'parked' : 'stopped';
   // Asked BEFORE the Fly call, against the same pure planner the write uses. A
   // dedicated app cannot be parked (`parked_is_metered_only`), and discovering
   // that after stopping its machine would leave a stopped machine on a `running`
@@ -679,7 +687,7 @@ async function settleAndClose(
   let billedSeconds = 0;
   if (plan.action === 'settle') {
     // WAL-9: an org drive's window settles on the org pool — never onto the lead.
-    const charge = await deps.billing.resolveCharge({ driveId: row.driveId });
+    const charge = await deps.billing.resolveCharge({ driveId: row.driveId, costOwnerId: row.costOwnerId });
     const activeSeconds = charge ? await billableAwakeSeconds(row, charge, billedThrough, plan.activeSeconds, deps) : 0;
     if (charge && activeSeconds <= 0) {
       // A window wholly before org compute billing went live: forgiven above. Nothing is
@@ -859,7 +867,7 @@ async function settleAbandonedTail(
     return;
   }
 
-  const charge = await deps.billing.resolveCharge({ driveId: row.driveId });
+  const charge = await deps.billing.resolveCharge({ driveId: row.driveId, costOwnerId: row.costOwnerId });
   if (!charge) {
     // Unresolvable drive — never substitute a payer. The watermark is already claimed
     // off the row above, so there is no later retry that could recover this span; say
@@ -937,7 +945,10 @@ function dailyAwakeCounterPatch(addSeconds: number, at: Date) {
  * whole daily budget" is invisible from every other column on the row.
  */
 function parkErrorPatch(reason: StopReason | undefined) {
-  return reason === 'daily_cap' ? { lastError: `parked: ${DAILY_CAP_PARK_REASON}` } : {};
+  if (reason === 'daily_cap') return { lastError: `parked: ${DAILY_CAP_PARK_REASON}` };
+  // [D-OW-28] Equally invisible from the balance: the pool is funded, the publisher's cap is not.
+  if (reason === 'member_cap') return { lastError: `parked: ${MEMBER_CAP_PARK_REASON}` };
+  return {};
 }
 
 /**
@@ -990,7 +1001,7 @@ async function mirrorRecentFlyEvents(
     loggers.ai.warn('Published-app Fly event window could not be read for mirroring', {
       publishedAppId: ref.publishedAppId,
       machineId: ref.machineId,
-      error: error instanceof Error ? error.message : String(error),
+      ...errorLogFields(error),
     });
   }
 }

@@ -18,6 +18,7 @@ import { consumeCredits, settlePendingLedgerRow } from './credit-consume';
 import { emitCreditsUpdated } from './credit-emit';
 import { loggers } from '../logging/logger-config';
 import type { AIUsageSource } from '../monitoring/usage-source';
+import { errorLogFields } from '../logging/error-cause';
 
 // Per-source markup floor for orphan recovery (see computeBackfillActions):
 // adding a second per-source floor is a one-line addition here, not a change
@@ -90,7 +91,7 @@ export async function backfillCredits(): Promise<BackfillResult> {
     const affected = [...new Set(swept.map((h) => h.userId))];
     void emitBalancesBestEffort(affected);
   } catch (error) {
-    loggers.ai.debug('credit hold expiry sweep failed', { error: (error as Error).message });
+    loggers.ai.warn('credit hold expiry sweep failed', errorLogFields(error));
   }
 
   let retried = 0;
@@ -178,8 +179,8 @@ export async function backfillCredits(): Promise<BackfillResult> {
           orphanCount++;
         }
       } catch (error) {
-        loggers.ai.debug('credit backfill action failed', {
-          error: (error as Error).message,
+        loggers.ai.warn('credit backfill action failed', {
+          ...errorLogFields(error),
           action,
         });
       }

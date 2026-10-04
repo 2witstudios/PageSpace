@@ -180,6 +180,13 @@ describe('POST /envs — who may CREATE one', () => {
     expect(await response.json()).toMatchObject({ code: 'org_policy', policy: 'persistentEnvironments' });
   });
 
+  it('WAL-2 (partial) [D-OW-28] given a creator at their cap of the org\'s credits, should answer 402 with the cap message', async () => {
+    vi.mocked(createEnvInDrive).mockResolvedValue({ ok: false, reason: 'member_cap_reached', message: 'You have used your allowance' } as never);
+    const response = await createEnv(jsonReq({ name: 'dev', substrate: 'sprite' }), params);
+    expect(response.status).toBe(402);
+    expect(await response.json()).toEqual({ error: 'You have used your allowance', code: 'org_member_cap_reached' });
+  });
+
   it('given a duplicate name, should answer 409', async () => {
     vi.mocked(createEnvInDrive).mockResolvedValue({ ok: false, reason: 'name_taken' } as never);
     const response = await createEnv(jsonReq({ name: 'staging' }), params);

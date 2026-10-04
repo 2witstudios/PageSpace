@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { SPEND_SOURCE_KINDS, WALLET_FALLBACK_RULES } from '@pagespace/db/schema/wallets';
+import { SPEND_SOURCE_KINDS, WALLET_FALLBACK_RULES, OVERSHOOT_FUNDER_CHOICES } from '@pagespace/db/schema/wallets';
 import {
   createDriveWallet,
   deleteDriveWallet,
@@ -42,6 +42,8 @@ const patchSchema = z.object({
   fallbackRule: z.enum(WALLET_FALLBACK_RULES).nullable().optional(),
   donationsEnabled: z.boolean().optional(),
   defaultSpendSource: z.enum(SPEND_SOURCE_KINDS).nullable().optional(),
+  // WAL-6c: where the wallet's overshoot lands (the funder's choice); null restores the default.
+  overshootChoice: z.enum(OVERSHOOT_FUNDER_CHOICES).nullable().optional(),
 }).strict();
 
 export async function GET(request: Request, context: RouteContext) {

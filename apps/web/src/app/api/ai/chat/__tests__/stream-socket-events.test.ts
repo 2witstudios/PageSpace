@@ -1707,4 +1707,56 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
       expect(settled.metadata).toMatchObject({ abortedStep: { outputTokens: 50, capped: false } });
     });
   });
+  describe('turn timing marks', () => {
+    it('persists the preflight marks on the usage row, in the order the steps complete', async () => {
+      await POST(makeRequest());
+      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+      await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: mockResponseMessage });
+
+      const calls = vi.mocked(AIMonitoring.trackUsage).mock.calls;
+      expect(calls).toHaveLength(1);
+      const timing = (calls[0][0].metadata as { timing?: { marks: Record<string, number> } }).timing;
+      expect(timing).toBeDefined();
+      const names = Object.keys(timing!.marks);
+      const inOrder = [
+        'location_resolved',
+        'mcp_scope_checked',
+        'view_permission_checked',
+        'permissions',
+        'page_row_loaded',
+        'page_loaded',
+        'conversation_authorized',
+        'user_loaded',
+        'credit_gate',
+        'conversation_ensured',
+        'user_message_persisted',
+        'message_saved',
+        'subscription_module_loaded',
+        'provider_ready',
+        'provider_settings_updated',
+        'sandbox_eligibility',
+        'command_catalog_loaded',
+        'integrations_import',
+        'integrations_ready',
+        'tools_ready',
+        'personalization',
+        'home_drive_resolved',
+        'active_plan_loaded',
+        'system_prompt',
+        'ask_user_synced',
+        'history_loaded',
+        'history_converted',
+        'history_compacted',
+        'history_prepared',
+        'display_name_ready',
+        'generation_started',
+      ].filter((name) => names.includes(name));
+      // Steps that ran in this fixture must appear in completion order; conditional steps
+      // (sandbox, command catalog) may be absent, but never out of place.
+      expect(names.filter((name) => inOrder.includes(name))).toEqual(inOrder);
+      for (const required of ['permissions', 'page_loaded', 'credit_gate', 'message_saved', 'provider_ready', 'tools_ready', 'system_prompt', 'history_prepared', 'generation_started']) {
+        expect(names).toContain(required);
+      }
+    });
+  });
 });

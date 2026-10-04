@@ -38,6 +38,14 @@ export interface AdvisoryLockClient {
   query(text: string, params?: unknown[]): Promise<{ rows: Record<string, unknown>[] }>;
   /** pg semantics: release(err) DESTROYS the connection instead of pooling it. */
   release(destroyWithError?: Error): void;
+  /**
+   * pg's EventEmitter surface. pg-pool REMOVES its idle 'error' listener on checkout, so a checked-out
+   * client whose backend dies (a Postgres restart or failover, pg_terminate_backend, an idle-session
+   * timeout, a dropped proxy connection) emits 'error' with nobody listening — and Node kills the
+   * process. Optional only so a plain mock satisfies the type; a real PoolClient always has both.
+   */
+  on?(event: 'error', listener: (error: Error) => void): unknown;
+  removeListener?(event: 'error', listener: (error: Error) => void): unknown;
 }
 
 export interface AdvisoryLockPool {
@@ -73,7 +81,29 @@ export type WithAdvisoryLockResult<T> =
  * format position could smuggle %-directives, and unescaped newlines could forge log lines
  * (CodeQL js/tainted-format-string, js/log-injection — PR #2097).
  */
-function releaseQuietly(client: AdvisoryLockClient, lockKey: string, destroyWithError?: Error): void {
+/**
+ * Listen for the checked-out client's 'error' for as long as this helper holds it (re-review
+ * 5408117045 P1). The error is LOGGED, not acted on: the next query on the dead connection fails,
+ * and every failure path below destroys the connection. Returns the detach for a HEALTHY release;
+ * a destroyed connection keeps the listener, since a dying client may still emit after release.
+ */
+function guardClientErrors(client: AdvisoryLockClient, lockKey: string): () => void {
+  const listener = (error: Error) => {
+    console.error(
+      '[withAdvisoryLock:%s] lock connection errored while checked out (backend gone?): %s',
+      JSON.stringify(lockKey),
+      error instanceof Error ? error.message : String(error),
+    );
+  };
+  client.on?.('error', listener);
+  return () => {
+    client.removeListener?.('error', listener);
+  };
+}
+
+function releaseQuietly(client: AdvisoryLockClient, lockKey: string, destroyWithError?: Error, detach?: () => void): void {
+  // Only a connection going BACK to the pool sheds the listener; pg-pool re-adds its own idle one.
+  if (destroyWithError === undefined) detach?.();
   try {
     client.release(destroyWithError);
   } catch (releaseError) {
@@ -92,9 +122,10 @@ function releaseQuietly(client: AdvisoryLockClient, lockKey: string, destroyWith
  * (every future try-lock sees lock_busy forever). Postgres releases session advisory locks
  * when the backend dies, so destroying is the safe exit. Never throws.
  */
-async function unlockAndRelease(client: AdvisoryLockClient, lockKey: string): Promise<void> {
+async function unlockAndRelease(client: AdvisoryLockClient, lockKey: string, detach: () => void): Promise<void> {
   try {
     await client.query('SELECT pg_advisory_unlock(hashtext($1))', [lockKey]);
+    detach();
     client.release();
   } catch (unlockError) {
     const err = unlockError instanceof Error ? unlockError : new Error(String(unlockError));
@@ -121,6 +152,7 @@ export async function withAdvisoryLock<T>(
   } catch (error) {
     return { outcome: 'connection_error', error };
   }
+  const detach = guardClientErrors(client, lockKey);
 
   // The try-lock query gets its own catch, separate from `fn`'s errors below: a query that
   // threw ON THIS CLIENT leaves the connection's protocol state indeterminate, so it is
@@ -139,7 +171,7 @@ export async function withAdvisoryLock<T>(
   }
 
   if (!lockResult.rows[0]?.acquired) {
-    releaseQuietly(client, lockKey);
+    releaseQuietly(client, lockKey, undefined, detach);
     return { outcome: 'lock_busy' };
   }
 
@@ -151,6 +183,47 @@ export async function withAdvisoryLock<T>(
     const result = await fn();
     return { outcome: 'acquired', result };
   } finally {
-    await unlockAndRelease(client, lockKey);
+    await unlockAndRelease(client, lockKey, detach);
   }
+}
+
+/** First and longest pause between try-lock attempts while waiting. */
+const WAIT_BACKOFF_START_MS = 10;
+const WAIT_BACKOFF_MAX_MS = 200;
+
+/**
+ * `withAdvisoryLock`, but WAITING for the lock (up to `timeoutMs`) instead of giving up at once —
+ * for work that must happen in turn rather than be skipped when someone else holds the key (a
+ * terminal's billing-window claims, review #2760 re-review P2-1). Cross-process: it is the same
+ * Postgres session lock, so two realtime instances serialize too.
+ *
+ * The wait holds NO connection (re-review 5408117045 P3-1): each attempt is one `withAdvisoryLock`
+ * try-lock, and between attempts the connection is back in the pool, with a backoff from 10ms
+ * doubling to 200ms. A burst of waiters therefore cannot starve the pool, which a server-side
+ * `pg_advisory_lock` wait (one parked connection per waiter) would. Not FIFO: whichever waiter
+ * tries first after the release wins.
+ *
+ * `lock_busy` means the deadline passed; `fn` never ran. `connection_error` is returned at once (no
+ * retry). `fn`'s own rejection propagates after the lock is released, as in `withAdvisoryLock`.
+ */
+export async function withBlockingAdvisoryLock<T>(
+  pool: AdvisoryLockPool,
+  lockKey: string,
+  fn: () => Promise<T>,
+  { timeoutMs, sleep = defaultSleep }: { timeoutMs: number; sleep?: (ms: number) => Promise<void> },
+): Promise<WithAdvisoryLockResult<T>> {
+  const deadline = Date.now() + Math.max(0, timeoutMs);
+  let backoff = WAIT_BACKOFF_START_MS;
+  for (;;) {
+    const attempt = await withAdvisoryLock(pool, lockKey, fn);
+    if (attempt.outcome !== 'lock_busy') return attempt;
+    const left = deadline - Date.now();
+    if (left <= 0) return { outcome: 'lock_busy' };
+    await sleep(Math.min(backoff, left));
+    backoff = Math.min(backoff * 2, WAIT_BACKOFF_MAX_MS);
+  }
+}
+
+function defaultSleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

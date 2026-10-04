@@ -585,6 +585,8 @@ describe('computeBackfillActions — orphan wallet and spend kind', () => {
 describe('orphanSpendKind', () => {
   it('reads only the explicit compute marker', () => {
     expect(orphanSpendKind({ spendKind: 'compute' })).toBe('compute');
+    // A drive accrual re-settles as one, so a recovered org app's storage never lands on the lead's seat.
+    expect(orphanSpendKind({ spendKind: 'drive_compute' })).toBe('drive_compute');
     expect(orphanSpendKind({ spendKind: 'other' })).toBe('ai');
     expect(orphanSpendKind(null)).toBe('ai');
     expect(orphanSpendKind('compute')).toBe('ai');

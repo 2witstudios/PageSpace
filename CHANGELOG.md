@@ -7,8 +7,36 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 - /btw side questions now work on every chat surface (dashboard assistant, right-sidebar chat, agent console) and /btw appears in the / command picker on all of them.
 
+### Changed
+
+- **Your allowance of an organization's credits covers compute too** — sandbox runs, terminals and
+  browsers you use in an organization's drives count toward your monthly allowance of the organization's
+  credits, together with your AI use, whoever's session you are working in: compute is charged to the
+  person who runs it. In a shared terminal that is whoever is typing: joining a teammate's terminal to
+  watch costs you nothing, and once your allowance is used up your keystrokes there are refused with a
+  message saying so. When two people type at the same moment, each is charged for their own turn. Environments and published apps you create there count toward your allowance too
+  (their storage, wakes and running time). Once your allowance is used up, new compute is refused with a
+  message saying so, you cannot create a new environment or publish a new app, and your published apps
+  show visitors a "This app is paused" page. A paused app comes back by itself within the hour after your
+  allowance renews (a daily allowance at midnight UTC, a monthly one after the organization's credits
+  refill; the paused page shows when that refill is next due), and you, the drive's lead or an organization Owner or
+  Admin can resume it sooner from the app pane once there is room again (for example after an Owner or
+  Admin raises your allowance). If you leave the organization, your environments and apps keep running
+  and their costs move to the drive's lead; if you are removed from one drive, the same happens for that
+  drive's environments and apps within the hour.
+- **Complimentary paid plans refill on their renewal date** — an account on a paid plan with no Stripe
+  subscription behind it now gets its monthly credits on its renewal date (within the hour), instead of
+  at its next AI request after the date passed. The renewal date no longer drifts later each month.
+- **Right-sidebar chat input is a single compact card** — attach, tools, model picker and one send/stop button now share one toolbar row under the text box instead of stacking a separate model selector above it. While a reply is streaming, a queue button appears next to Stop once you've typed something, so you can still queue a follow-up on phones.
+
 ### Added
 
+- **Wallet debt notices, and who absorbs a drive's overspend** — when spending in an organization's drive
+  runs past what its wallet held, the organization's Owner and Admins get an in-app notification, at most
+  once per billing period, and the wallet shows as over until its debt is cleared. An Owner or Admin can
+  choose whether a drive wallet's overspend is absorbed by the organization's pool (the default) or carried
+  by the drive wallet and taken out of its next allocation. The person who was spending is never charged
+  for it.
 - **Organization audit log** — an organization Owner or Admin can read the organization's audit log:
   membership and ownership changes, seats, invitations, policy changes, verified domains, drive
   visibility, join requests, drives created in or moved into and out of the organization, lead changes,
@@ -674,6 +702,14 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   the hero demo), the code editor and terminal fallbacks, and the iOS/Android status bar and
   splash colors all use the same new floor so nothing looks darker than the page around it.
 
+- **The default AI model is now OpenAI's GPT-6 Luna** — cheap, a 1M-token context window, and on the
+  free-tier allowlist. New accounts pick it up automatically; anyone with an explicit model already
+  selected keeps that choice. The OpenRouter catalog was refreshed again: GPT-6 / GPT-6.1 (Luna, Sol,
+  Astra), Claude Opus 5.5 / Sonnet 5.5 / Fable 5.1, Gemini 3.8 Flash, Grok 4.7, DeepSeek V4.1 Flash,
+  Qwen3.8 Max, Muse Spark 1.3, GLM 5.3 Prime / FlashX and more are now selectable, and pricing was
+  re-synced with OpenRouter. The admin GLM Coder Plan list now shows only GLM-5.3 and GLM-5.3 Flash,
+  the models the plan currently offers.
+
 - **The default AI model is now Z.ai's GLM-5.3 Flash** — cheaper per token and a larger context
   window than the previous default (OpenAI's GPT-5.6 Luna), and still on the free-tier allowlist.
   New accounts pick it up automatically; anyone with an explicit model already selected keeps that
@@ -683,6 +719,9 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Apodex 1.1 Mini (free) no longer reserves credits as if it were a paid model** — the free model was
+  missing from the price list, so each call held and counted a paid model's estimated cost against your
+  balance mid-reply. It is now priced as free.
 - **Memory now checks your AI credits before it learns** — the nightly Memory pass (learning
   from your conversations and tidying your profile pages) used to run and charge you even when
   your balance was used up, so you could go into debt without opening PageSpace. Now each step

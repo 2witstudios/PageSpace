@@ -125,6 +125,12 @@ export interface ShellIoDeps {
    * would keep a revoked user's session alive.
    */
   reauthorizeViewer?: (input: { shellId: string; userId: string }) => Promise<boolean>;
+  /**
+   * WAL-2: move a live session's billing window to an AUTHORIZED user typing into it on whose
+   * behalf the web tier sends (shell-handler `claimBillingWindow`): gated against their own cap,
+   * and refused — nothing written — when they are at it. Absent -> unmetered deployment.
+   */
+  claimBillingWindow?: (session: TerminalSession, userId: string) => Promise<boolean>;
 }
 
 /**
@@ -247,6 +253,17 @@ export async function handleShellSendRequest(
   // written on their behalf.
   if (!session) {
     return { status: 200, body: { success: true, live: false, delivered: false, ...(reason ? { reason } : {}) } };
+  }
+
+  // WAL-2: the person on whose behalf this input is typed runs the compute it starts. When that is
+  // not the window's actor, they must be authorized for this shell AND under their own cap before
+  // anything is written; the window then moves to them. A user at their cap cannot run compute
+  // in a drive-mate's session by typing into it.
+  if (deps.claimBillingWindow && payload.userId !== undefined && payload.userId !== session.actorId) {
+    const authorized = started ? true : await reauthorizeSafely(deps, payload.shellId, payload.userId);
+    if (!authorized || !(await deps.claimBillingWindow(session, payload.userId))) {
+      return { status: 200, body: { success: true, live: true, delivered: false, reason: 'insolvent' } };
+    }
   }
 
   session.lastInputAt = now();

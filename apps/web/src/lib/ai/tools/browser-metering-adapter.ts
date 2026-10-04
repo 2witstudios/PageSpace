@@ -20,7 +20,7 @@ import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { calculateMachineCostDollars } from '@pagespace/lib/monitoring/machine-pricing';
 import { MACHINE_MARKUP_BPS } from '@pagespace/lib/billing/credit-pricing';
 import { defaultSandboxBillingDeps } from '@pagespace/lib/services/sandbox/sandbox-billing';
-import { ORG_COMPUTE_REFUSAL_MESSAGES, isOrgComputeRefusal } from '@pagespace/lib/billing/compute-charge';
+import { ORG_COMPUTE_REFUSAL_MESSAGES, computeSpendKind, isOrgComputeRefusal } from '@pagespace/lib/billing/compute-charge';
 import { computeSettleWalletId } from '@pagespace/lib/billing/compute-gate';
 import type { BrowserMeter } from '@pagespace/browser-worker/browser-session-client';
 
@@ -28,6 +28,11 @@ export type BrowserBilling = {
   readonly driveId: string | null;
   /** The session's owner (the drive owner, or the acting user for a driveless context). */
   readonly ownerId: string;
+  /**
+   * The person driving the browser: an org drive's charge is recorded under, and capped against,
+   * them — never the owner (WAL-2: the person who causes compute pays from their own allowance).
+   */
+  readonly actorId: string;
   readonly agentPageId: string | null;
   readonly conversationId: string;
 };
@@ -48,8 +53,8 @@ const realPrimitives: BillingPrimitives = {
 
 export function createBrowserMeter(primitives: BillingPrimitives = realPrimitives): BrowserMeter<BrowserBilling> {
   return {
-    open: async ({ driveId, ownerId }) => {
-      const charge = await primitives.resolveCharge({ driveId, ownerId });
+    open: async ({ driveId, ownerId, actorId }) => {
+      const charge = await primitives.resolveCharge({ driveId, ownerId, actorId });
       const gated = await primitives.gate({ charge });
       if (!gated.allowed) {
         // WAL-9: a missing, paused or empty org pool is named — never a fallback to a person.
@@ -82,8 +87,8 @@ export function createBrowserMeter(primitives: BillingPrimitives = realPrimitive
         provider: substrate,
         model: 'browser-machine',
         source: 'terminal',
-        // Compute, not an AI call: never a seat draw on an org pool (WAL-9).
-        spendKind: 'compute',
+        // Compute the session's person ran: on an org pool it counts toward their seat (fe9db1nm).
+        spendKind: computeSpendKind(charge),
         pageId: billing.agentPageId ?? undefined,
         driveId: billing.driveId ?? undefined,
         providerCostDollars: calculateMachineCostDollars({ activeSeconds, shape }),

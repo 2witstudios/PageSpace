@@ -274,6 +274,52 @@ function sendBody(over: Record<string, unknown> = {}): string {
   return JSON.stringify({ shellId: 'sh', input: 'ls\n', ...over });
 }
 
+describe('handleShellSendRequest — whose compute a send is (review #2760 P1)', () => {
+  function metered(session: TerminalSession, claim: (userId: string) => boolean): { io: ShellIoDeps; claims: string[] } {
+    const claims: string[] = [];
+    const io: ShellIoDeps = {
+      ...deps({ 'k:sh': session }),
+      reauthorizeViewer: async () => true,
+      claimBillingWindow: async (_session, userId) => {
+        claims.push(userId);
+        return claim(userId);
+      },
+    };
+    return { io, claims };
+  }
+
+  it('WAL-2 (partial) a send on behalf of a drive-mate at their cap writes NOTHING and says so', async () => {
+    const { session, written } = writableSession();
+    session.actorId = 'priya-owner';
+    const { io, claims } = metered(session, () => false);
+
+    const result = await handleShellSendRequest(io, sendBody({ userId: 'ben-capped' }));
+
+    assert({
+      given: 'input typed on behalf of a member who is at their cap, into a window Priya opened',
+      should: 'claim the window for that member, be refused, and write nothing',
+      actual: { body: result.body, written, claims, actor: session.actorId },
+      expected: { body: { success: true, live: true, delivered: false, reason: 'insolvent' }, written: [], claims: ['ben-capped'], actor: 'priya-owner' },
+    });
+  });
+
+  it('WAL-2 (partial) the window\'s own actor typing again claims nothing; an under-cap member\'s send claims then writes', async () => {
+    const { session, written } = writableSession();
+    session.actorId = 'priya-owner';
+    const { io, claims } = metered(session, () => true);
+
+    await handleShellSendRequest(io, sendBody({ userId: 'priya-owner' }));
+    await handleShellSendRequest(io, sendBody({ userId: 'ben-under-cap' }));
+
+    assert({
+      given: 'a send by the window\'s actor, then one by an under-cap drive-mate',
+      should: 'claim only for the drive-mate, and deliver both',
+      actual: { claims, written },
+      expected: { claims: ['ben-under-cap'], written: ['ls\n', 'ls\n'] },
+    });
+  });
+});
+
 describe('handleShellSendRequest', () => {
   it('given a live PTY, should write the input to it and bump lastInputAt', async () => {
     const { session, written } = writableSession();

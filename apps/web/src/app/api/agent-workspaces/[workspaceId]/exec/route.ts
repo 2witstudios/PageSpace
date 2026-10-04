@@ -39,6 +39,8 @@ const DENIAL_STATUS: Record<SandboxToolDenialReason, number> = {
   org_wallet_unavailable: 402,
   org_wallet_paused: 402,
   org_wallet_empty: 402,
+  // WAL-2: the member's allowance of the pool is used up — the member waits, or an admin raises it.
+  org_member_cap_reached: 402,
   no_drive_access: 403,
   insufficient_role: 403,
   no_agent_access: 403,

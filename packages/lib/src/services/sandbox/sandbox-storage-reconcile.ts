@@ -304,6 +304,8 @@ export interface DriveEnvStorageRow {
   envId: string;
   /** The owning drive — NOT NULL, and the ONLY route to a payer. */
   driveId: string;
+  /** D-OW-28: whose cap this charge counts against — the env's creator; null = the drive lead. */
+  costOwnerId: string | null;
   storageLastBilledAt: Date;
   /** Last opportunistically-measured used bytes on the ENV Sprite; null when never measured. */
   measuredBytes: number | null;
@@ -346,6 +348,8 @@ export interface PublishedAppStorageRow {
   publishedAppId: string;
   /** The owning drive — NOT NULL, and the ONLY route to a payer. */
   driveId: string;
+  /** D-OW-28: whose cap this charge counts against — the env's creator; null = the drive lead. */
+  costOwnerId: string | null;
   storageLastBilledAt: Date;
   /** The pinned image's registry size, from `imageSizeBytes`; null until the first build lands. */
   measuredBytes: number | null;
@@ -661,6 +665,14 @@ function toSessionSubject(
     // Already memoized per tick by the caller, so this is a method call on a
     // closure rather than a bare deps reference — no `this` to lose.
     // An org drive's session charges the org pool, recorded under the session's owner.
+    //
+    // OWNER-keyed, deliberately, unlike the compute a session RUNS (charged to its actor) — review
+    // #2760 P3-2, open for the Decision Log. A session's disk outlives every run in it and has no
+    // single "actor": storage is a standing cost of the session, so it stays with the person whose
+    // session it is. The known cost: a capped member filling a drive-mate's session disk counts on
+    // the owner's seat. STORAGE IS SETTLED AFTER THE FACT (P3-3), here and for envs and apps below:
+    // there is nothing to refuse, so past a cap only an overshoot row is recorded and the pool
+    // absorbs it — bounded by the disk, and documented beside D-OW-28.
     resolveCharge: async () => {
       if ('ownerId' in target) return { kind: 'user', userId: target.ownerId };
       const facts = await lookupDriveBillingFacts(target.driveId);
@@ -685,15 +697,16 @@ function toEnvSubject(
     subjectId: env.envId,
     // Always attributed: an env's `driveId` is NOT NULL.
     attributionDriveId: env.driveId,
-    // The drive owner, with NO fallback — an env has no owner column to fall
+    // The drive's payer, with NO fallback — an env has no owner column to fall
     // back to, and inventing one would bill a machine to somebody who does not
-    // own it. See `resolveEnvCharge` (an org drive: the org pool, recorded under the lead).
+    // own it. See `resolveEnvCharge` (an org drive: the org pool, recorded under
+    // the env's creator, [D-OW-28] `costOwnerId`, else the lead).
     // The memoized closure, not a bare deps reference: `resolveEnvCharge`
     // invokes its input off its own object, so handing over `deps.lookupDriveBillingFacts`
     // directly would drop `this` for any deps implementation that is a real
     // object rather than a literal — billing every session correctly while every
     // env threw and counted as `failed`, every tick.
-    resolveCharge: () => resolveEnvCharge({ driveId: env.driveId, lookupDriveBillingFacts }),
+    resolveCharge: () => resolveEnvCharge({ driveId: env.driveId, costOwnerId: env.costOwnerId, lookupDriveBillingFacts }),
     advanceWatermark: (billedThrough) => deps.advanceDriveEnvWatermark({ envId: env.envId, billedThrough }),
     storageLastBilledAt: env.storageLastBilledAt,
     measuredBytes: env.measuredBytes,
@@ -715,7 +728,7 @@ function toHostingSubject(
     // The drive owner, with no fallback — identical to an env's, because a
     // published app hangs off an env and an env is drive-owned. The memoized
     // closure, not a bare deps reference (see `toEnvSubject`).
-    resolveCharge: () => resolveEnvCharge({ driveId: app.driveId, lookupDriveBillingFacts }),
+    resolveCharge: () => resolveEnvCharge({ driveId: app.driveId, costOwnerId: app.costOwnerId, lookupDriveBillingFacts }),
     advanceWatermark: (billedThrough) =>
       deps.advancePublishedAppWatermark({ publishedAppId: app.publishedAppId, billedThrough }),
     storageLastBilledAt: app.storageLastBilledAt,

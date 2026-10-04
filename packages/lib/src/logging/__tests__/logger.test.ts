@@ -29,6 +29,10 @@ vi.mock('../siem-error-hook', () => ({
 // Import after mocks are set up
 import { LogLevel, logger, type LogContext } from '../logger';
 
+/** `new Error(message, { cause })` without the ES2022 lib this package does not target. */
+const withCause = (message: string, cause: unknown): Error => Object.assign(new Error(message), { cause });
+
+
 // Helper: cast to access private methods for white-box testing
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyLogger = any;
@@ -101,6 +105,40 @@ describe('Logger log level methods', () => {
   it('error() with Error object calls console.error', () => {
     logger.error('error message', new Error('boom'));
     expect(consoleErrorSpy).toHaveBeenCalled();
+  });
+
+  it('pk862snl: error() logs the cause chain — the driver error Drizzle wraps on .cause — in the entry and its stack', () => {
+    anyLogger.config.format = 'json';
+    const pg = Object.assign(new Error('sorry, too many clients already'), { code: '53300' });
+    logger.error('settle failed', withCause('Failed query: update "wallets"', pg));
+    const entry = JSON.parse(String(consoleErrorSpy.mock.calls[0][0]));
+    expect(entry.error.cause).toEqual([{ name: 'Error', message: 'sorry, too many clients already', code: '53300' }]);
+    // The stack is what the database log writer persists: the chain rides along with it.
+    expect(entry.error.stack).toContain('Caused by: Error: sorry, too many clients already [53300]');
+    anyLogger.config.format = 'pretty';
+  });
+
+  it('review P3-4: error() never writes a Drizzle error\'s bound params, in the message or the stack it persists', async () => {
+    const { DrizzleQueryError } = await import('drizzle-orm/errors');
+    anyLogger.config.format = 'json';
+    logger.error('claim failed', new DrizzleQueryError('insert into "credit_ledger" values ($1)', ['sk_live_SECRET'], new Error('boom')));
+    const line = String(consoleErrorSpy.mock.calls[0][0]);
+    expect(line).not.toContain('sk_live_SECRET');
+    expect(JSON.parse(line).error.message).toBe('Failed query: insert into "credit_ledger" values ($1)\nparams: [redacted]');
+    anyLogger.config.format = 'pretty';
+  });
+
+  it('review #2760 P3-1: error() never writes a value a SQLSTATE class 22 error quotes — not in the message, the stack or a cause', async () => {
+    const { DrizzleQueryError } = await import('drizzle-orm/errors');
+    anyLogger.config.format = 'json';
+    const cast = () => Object.assign(new Error('invalid input syntax for type integer: "sk_live_SECRET2"'), { name: 'error', code: '22P02' });
+    logger.error('lookup failed', new DrizzleQueryError('select $1::int', ['sk_live_SECRET2'], cast()));
+    logger.error('lookup failed', cast());
+    const lines = consoleErrorSpy.mock.calls.map((c) => String(c[0]));
+    expect(lines).toHaveLength(2);
+    for (const line of lines) expect(line).not.toContain('sk_live_SECRET2');
+    expect(JSON.parse(lines[0]).error.stack).toContain('[22P02]');
+    anyLogger.config.format = 'pretty';
   });
 
   it('error() with plain metadata calls console.error', () => {

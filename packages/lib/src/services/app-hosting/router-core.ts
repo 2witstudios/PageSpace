@@ -85,6 +85,11 @@ export interface RoutableApp {
    * drive's root. Never authenticated at this edge, same caveat as `driveId`.
    */
   envId: string;
+  /**
+   * [D-OW-28] Whether a persisted park was for the publisher's per-member cap (the row's park
+   * reason), so a returning visitor is told THAT rather than that a balance ran out.
+   */
+  parkedForMemberCap?: boolean;
 }
 
 /**
@@ -102,7 +107,18 @@ export interface RoutableApp {
  */
 export type AppRouteDecision =
   | { kind: 'replay'; flyAppName: string; state: string; timeoutMs: number }
-  | { kind: 'parked'; reason: 'out_of_credits' | 'parked_status' | 'daily_cap'; driveId?: string; envId?: string }
+  | {
+      kind: 'parked';
+      reason: 'out_of_credits' | 'parked_status' | 'daily_cap' | 'member_cap';
+      driveId?: string;
+      envId?: string;
+      /**
+       * `member_cap` only: when the creator's allowance renews at the latest — the org pool's next
+       * refill (D-OW-12), ISO-8601 — which is when the hourly sweep un-parks the app by itself.
+       * Absent when it cannot be read; the page then says "the next refill" without a date.
+       */
+      returnsBy?: string;
+    }
   | { kind: 'unavailable'; reason: 'deploying' | 'failed' | 'destroying' | 'hosting_disabled' | 'org_policy'; driveId?: string; envId?: string }
   | { kind: 'not_found'; reason: 'unknown_host' | 'apex' | 'custom_host' | 'no_such_app' };
 
@@ -206,7 +222,7 @@ export function decideAppRoute(input: AppRouteInput): AppRouteDecision {
   const { app } = input;
   if (!app) return { kind: 'not_found', reason: 'no_such_app' };
 
-  if (app.status === 'parked') return { kind: 'parked', reason: 'parked_status', driveId: app.driveId, envId: app.envId };
+  if (app.status === 'parked') return { kind: 'parked', reason: app.parkedForMemberCap ? 'member_cap' : 'parked_status', driveId: app.driveId, envId: app.envId };
   if (app.status === 'destroying') return { kind: 'unavailable', reason: 'destroying', driveId: app.driveId, envId: app.envId };
   if (app.status === 'failed') return { kind: 'unavailable', reason: 'failed', driveId: app.driveId, envId: app.envId };
 

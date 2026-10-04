@@ -109,6 +109,14 @@ export const publishedApps = pgTable('published_apps', {
   ownerId: text('ownerId').notNull().references(() => users.id, { onDelete: 'cascade' }),
 
   /**
+   * D-OW-28: who this app's compute — its wakes, awake time and rootfs storage — is RECORDED under
+   * and CAPPED against on an org drive: the member who published it. NULL means the drive's lead,
+   * who is accountable for the drive: an app published before this column existed, or one whose
+   * publisher left the org (`leaveOrganization` clears it). Payment still goes through `driveId`.
+   */
+  costOwnerId: text('costOwnerId').references(() => users.id, { onDelete: 'set null' }),
+
+  /**
    * The Fly app name (`pgs-app-<id>`) — globally unique, and the ONLY handle that
    * can destroy the Fly app. This is the value the reclaim outbox rescues when the
    * row dies.
@@ -339,6 +347,8 @@ export const publishedApps = pgTable('published_apps', {
 }, (table) => ({
   driveIdx: index('published_apps_drive_idx').on(table.driveId),
   ownerIdx: index('published_apps_owner_idx').on(table.ownerId),
+  /** D-OW-28: a departing member's apps are found by this column and handed to the drive lead. */
+  costOwnerIdx: index('published_apps_cost_owner_idx').on(table.costOwnerId),
   // The claim query's access path: "oldest rows in these statuses, skip-locked".
   statusIdx: index('published_apps_status_idx').on(table.status, table.updatedAt),
   // The idle reaper's access path: "running rows, least recently hit first". The

@@ -559,6 +559,11 @@
       "import": "./dist/logging/logger-config.js",
       "require": "./dist/logging/logger-config.js"
     },
+    "./logging/error-cause": {
+      "types": "./dist/logging/error-cause.d.ts",
+      "import": "./dist/logging/error-cause.js",
+      "require": "./dist/logging/error-cause.js"
+    },
     "./logging/logger-database": {
       "types": "./dist/logging/logger-database.d.ts",
       "import": "./dist/logging/logger-database.js",
@@ -1098,6 +1103,16 @@
       "types": "./dist/services/app-hosting/app-lifecycle-metering.d.ts",
       "import": "./dist/services/app-hosting/app-lifecycle-metering.js",
       "require": "./dist/services/app-hosting/app-lifecycle-metering.js"
+    },
+    "./organizations/creator-reattribution": {
+      "types": "./dist/organizations/creator-reattribution.d.ts",
+      "import": "./dist/organizations/creator-reattribution.js",
+      "require": "./dist/organizations/creator-reattribution.js"
+    },
+    "./services/app-hosting/app-unpark": {
+      "types": "./dist/services/app-hosting/app-unpark.d.ts",
+      "import": "./dist/services/app-hosting/app-unpark.js",
+      "require": "./dist/services/app-hosting/app-unpark.js"
     },
     "./services/app-hosting/app-machine-events": {
       "types": "./dist/services/app-hosting/app-machine-events.d.ts",
@@ -2469,6 +2484,11 @@
       "import": "./dist/permissions/permissions.js",
       "require": "./dist/permissions/permissions.js"
     },
+    "./permissions/app-unpark-authority": {
+      "types": "./dist/permissions/app-unpark-authority.d.ts",
+      "import": "./dist/permissions/app-unpark-authority.js",
+      "require": "./dist/permissions/app-unpark-authority.js"
+    },
     "./permissions/drive-relationship": {
       "types": "./dist/permissions/drive-relationship.d.ts",
       "import": "./dist/permissions/drive-relationship.js",
@@ -2944,6 +2964,9 @@
       ],
       "logging/logger-config": [
         "./dist/logging/logger-config.d.ts"
+      ],
+      "logging/error-cause": [
+        "./dist/logging/error-cause.d.ts"
       ],
       "logging/logger-database": [
         "./dist/logging/logger-database.d.ts"

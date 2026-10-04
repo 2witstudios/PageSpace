@@ -132,6 +132,10 @@ export type SecurityEventType =
   | 'org.guest.requested'
   | 'org.guest.approved'
   | 'org.guest.declined'
+  // [D-OW-28] A departing member's environment or published app handed to the drive lead's cap.
+  | 'org.compute.reattributed'
+  // A parked published app taken back to `stopped` by its creator, the drive lead or an org Owner/Admin.
+  | 'org.app.unparked'
   // Verified email domains and auto-join (SEC-1).
   | 'org.domain.added'
   | 'org.domain.verification_sent'

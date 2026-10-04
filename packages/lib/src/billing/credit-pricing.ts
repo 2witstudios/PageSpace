@@ -56,6 +56,19 @@ export function allowanceRefills(tier: string): boolean {
 }
 
 /**
+ * Subscription statuses whose renewal invoice may still arrive: `invoice.paid`
+ * stays authoritative for these (any other roll would double-grant when the
+ * invoice lands or replays). `unpaid` is included — Stripe keeps its open invoices
+ * collectible, so a later payment still fires invoice.paid. Everything else —
+ * canceled, incomplete, incomplete_expired, or no subscription row at all
+ * (comped/founder accounts) — will never produce an invoice, so the period sweep
+ * (wallet-funding-shell rollDuePersonalRoots) is the only thing that rolls them.
+ * Exported so other surfaces that need a "live subscription" filter converge on
+ * one definition instead of drifting copies.
+ */
+export const RENEWAL_CAPABLE_STATUSES = ['active', 'trialing', 'past_due', 'unpaid'];
+
+/**
  * Whether `tier` gets a ONE-TIME starter grant: it has an allowance AND that
  * allowance does not refill. An unknown/legacy tier is neither — it must not be
  * pre-credited or granted anything. The single predicate the gate's starter-grant

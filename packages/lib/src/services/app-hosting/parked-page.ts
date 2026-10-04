@@ -97,6 +97,14 @@ function manageHrefFor(driveId: string | undefined, envId: string | undefined): 
   return envId ? `${base}?env=${encodeURIComponent(envId)}` : base;
 }
 
+/** "November 4, 2026" (UTC) for an ISO instant, or null when absent or unreadable. */
+function refillDateText(iso: string | undefined): string | null {
+  if (!iso) return null;
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return null;
+  return at.toLocaleDateString('en-US', { timeZone: 'UTC', year: 'numeric', month: 'long', day: 'numeric' });
+}
+
 function copyFor(decision: AppRouteDecision): PageCopy {
   switch (decision.kind) {
     case 'parked': {
@@ -105,6 +113,24 @@ function copyFor(decision: AppRouteDecision): PageCopy {
       // anything up, and the app returns by itself when the counter rolls over at
       // midnight UTC. Saying "it ran out of credits" there would send the owner to
       // buy something that changes nothing.
+      // [D-OW-28] A funded organization whose app's PUBLISHER has used their allowance of its
+      // credits: nobody needs to top the organization up. It DOES return on its own: the hourly
+      // period sweep un-parks it once the allowance renews (app-unpark). The date shown is when the
+      // pool's refill is next DUE — not a deadline, since a late or failed org invoice delays it
+      // (re-review P3-2) — and the creator, the drive lead or an org admin can un-park it sooner
+      // once there is room (review 5407898542 P1c).
+      if (decision.reason === 'member_cap') {
+        const by = refillDateText(decision.returnsBy);
+        return {
+          title: 'App paused',
+          heading: 'This app is paused',
+          body:
+            'The person who published it has used their allowance of their organization\'s credits, so it has been paused rather than left running. ' +
+            `It returns automatically when that allowance renews, after the organization's credits refill${by ? ` (next due ${by})` : ''}, ` +
+            'or sooner if an organization admin un-parks it. Nothing has been lost.',
+          manageHref,
+        };
+      }
       return decision.reason === 'daily_cap'
         ? {
             title: 'App paused',

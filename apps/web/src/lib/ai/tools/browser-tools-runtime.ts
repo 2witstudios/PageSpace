@@ -30,10 +30,10 @@ import { SpritesClient } from '@fly/sprites';
 import { createLocalChromiumSubstrate } from '@pagespace/browser-worker/local-chromium-substrate-adapter';
 import { createSpritesBrowserSubstrate, type SpriteHandle } from '@pagespace/browser-worker/sprites-substrate-adapter';
 import { createBrowserSessionClient, type BrowserSessionClient } from '@pagespace/browser-worker/browser-session-client';
-import { deriveBrowserSessionId } from '@pagespace/browser-worker/derive-browser-session-id';
 import type { BrowserSubstrate } from '@pagespace/browser-worker/browser-substrate';
 import { createBrowserTools, type OperateBrowser } from './browser-tools';
 import { createBrowserMeter, type BrowserBilling } from './browser-metering-adapter';
+import { browserSessionFor } from './browser-session-for';
 import { productionSandboxGate, resolveSandboxActorContext } from './sandbox-tools-runtime';
 
 const IDLE_SWEEP_INTERVAL_MS = 60_000;
@@ -112,18 +112,8 @@ export function isBrowserSubstrateConfigured(): boolean {
 const operate: OperateBrowser = async ({ ctx, operation }) => {
   const client = browserSessionClient();
   if (client === null) return { ok: false, refusal: { reason: 'unavailable', detail: 'The browser is not configured on this server.' } };
-  const ownerId = ctx.ownerId ?? ctx.userId;
-  const agentId = ctx.agentPageId ?? `global:${ctx.userId}`;
-  const sessionId = deriveBrowserSessionId({ tenantId: ctx.tenantId, ownerId, agentId, conversationId: ctx.conversationId });
-  return client.operate({
-    session: {
-      sessionId,
-      allowedOrigins: null,
-      billing: { driveId: ctx.driveId ?? null, ownerId, agentPageId: ctx.agentPageId ?? null, conversationId: ctx.conversationId },
-    },
-    agentId,
-    operation,
-  });
+  const { sessionId, agentId, billing } = browserSessionFor(ctx);
+  return client.operate({ session: { sessionId, allowedOrigins: null, billing }, agentId, operation });
 };
 
 /**

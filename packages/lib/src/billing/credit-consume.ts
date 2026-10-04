@@ -25,10 +25,10 @@ import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { and, eq, isNull, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
 import { chargeMillicents, accruePending, allocateSpend, applyPaymentToDebt } from './credit-core';
-import { allocateWalletSpend, settleOvershoot, seatOvershootDeltaMillicents, DEFAULT_OVERSHOOT_CHOICE } from './wallet-core';
+import { allocateWalletSpend, settleOvershoot, seatOvershootDeltaMillicents, DEFAULT_OVERSHOOT_CHOICE, type OvershootFunderChoice } from './wallet-core';
 import { childWalletFunds, type WalletBalanceFacts } from './spend-target';
 import { readOrgSpendPolicy } from '../organizations/policy-reader';
-import { loadSeatCapFacts, SEAT_COUNTED_SPEND_KIND, SEAT_OVERSHOOT_ENTRY } from './seat-allowance';
+import { isSeatCountedSpendKind, loadSeatCapFacts, SEAT_OVERSHOOT_ENTRY } from './seat-allowance';
 import { drawWalletFundingLegs, creditWalletFundingLegs } from './wallet-legs';
 import { parseWalletDraws, addWalletDraws, planWalletRefund, type WalletDraws } from './wallet-draws';
 import { MARKUP_BPS } from './credit-pricing';
@@ -36,6 +36,8 @@ import { centsFromDollars } from './money-model';
 import { emitCreditsUpdated } from './credit-emit';
 import { ensurePersonalRootWalletId } from './personal-wallet';
 import { loggers } from '../logging/logger-config';
+import { notifyFunderOfWalletDebt } from './wallet-debt-notifier';
+import { errorLogFields } from '../logging/error-cause';
 
 export interface ConsumeCreditsInput {
   aiUsageLogId: string;
@@ -112,7 +114,7 @@ async function recordUsageWallet(executor: Tx | typeof db, aiUsageLogId: string 
  * reconcile cron settles it once a balance is created. Shared by consumeCredits and
  * settlePendingLedgerRow.
  *
- * Returns whether the decrement actually landed. `false` is the balance-less case
+ * Returns what the decrement did, or null when it did not land: the balance-less case
  * above — a resolved transaction that settled NOTHING, which is exactly the shape
  * `consumeCredits` must not report to its caller as a completed settle.
  */
@@ -125,14 +127,14 @@ async function decrementAndSettle(
   aiUsageLogId: string | null,
   holdId: string | null = null,
   spendKind: SpendKind = 'ai',
-): Promise<boolean> {
+): Promise<SettleOutcome | null> {
   const settled = await chargeWallet(tx, walletId, chargeMc, aiUsageLogId);
 
   // No balance row yet (e.g. an existing user before the gate lazy-inits one).
   // Leave the ledger row 'pending' so the reconcile cron retries once a balance
   // exists — never mark a call 'applied' without decrementing it, which would
   // silently drop the charge and hide it from both backfill sweeps.
-  if (!settled) return false;
+  if (!settled) return null;
 
   await recordSeatOvershoot(tx, { walletId, userId, aiUsageLogId, claimLedgerId: ledgerId, spendKind });
 
@@ -176,7 +178,21 @@ async function decrementAndSettle(
   if (holdId) {
     await tx.delete(creditHolds).where(eq(creditHolds.id, holdId));
   }
-  return true;
+  return { debtWalletId: settled.debt?.walletId ?? null };
+}
+
+/** A decrement that landed; `debtWalletId` names the wallet left carrying overshoot, if any (WAL-6e). */
+interface SettleOutcome {
+  debtWalletId: string | null;
+}
+
+/**
+ * WAL-6e, after the settle COMMITTED: tell the funder of the wallet it left in debt, once per
+ * period. Never inside the settle transaction (a notice must not undo a charge) and never throws.
+ */
+async function noticeDebt(outcome: SettleOutcome | null, chargedWalletId: string): Promise<void> {
+  if (!outcome?.debtWalletId) return;
+  await notifyFunderOfWalletDebt({ debtWalletId: outcome.debtWalletId, chargedWalletId });
 }
 
 /**
@@ -205,14 +221,14 @@ export async function recordSeatOvershoot(
     userId: string;
     aiUsageLogId: string | null;
     claimLedgerId: string | null;
-    /** What the charge was for. COMPUTE is never a seat draw (SEAT_COUNTED_SPEND_KIND), so it records nothing. */
+    /** What the charge was for. Every kind is a seat draw for the person it is recorded under (SEAT_COUNTED_SPEND_KINDS). */
     spendKind: SpendKind;
   },
 ): Promise<{ monthMc: number; dayMc: number }> {
   const none = { monthMc: 0, dayMc: 0 };
-  // Compute on the pool is the org's spend, not a consumer's (see seat-allowance's
-  // SEAT_COUNTED_SPEND_KIND): its overshoot is nobody's seat attribution to record.
-  if (input.spendKind !== SEAT_COUNTED_SPEND_KIND) return none;
+  // AI, the compute a person ran, and the accruals of the envs and apps a member created are all
+  // bound here at settlement exactly as the gate bound them at admission (fe9db1nm, [D-OW-28]).
+  if (!isSeatCountedSpendKind(input.spendKind)) return none;
   const [pool] = await tx
     .select({ orgId: wallets.orgId, ownerType: wallets.ownerType, parentWalletId: wallets.parentWalletId, subjectType: wallets.subjectType, monthlyPeriodStart: wallets.monthlyPeriodStart })
     .from(wallets)
@@ -273,7 +289,7 @@ export interface WalletSettlement {
   debt: { walletId: string; cents: number } | null;
 }
 
-type LockedWallet = WalletBalanceFacts & { pendingMillicents: number };
+type LockedWallet = WalletBalanceFacts & { pendingMillicents: number; overshootChoice: OvershootFunderChoice | null };
 
 async function lockWallet(tx: Tx, walletId: string): Promise<LockedWallet | null> {
   const rows = await tx.select().from(wallets).where(eq(wallets.id, walletId)).for('update');
@@ -454,7 +470,7 @@ async function settleOnRootWallet(
  */
 async function settleOnChildWallet(
   tx: Tx,
-  bal: WalletBalanceFacts,
+  bal: LockedWallet,
   wholeCents: number,
   newPending: number,
 ): Promise<{ settlement: WalletSettlement; draws: Omit<WalletDraws, 'walletId' | 'totalCents'> }> {
@@ -484,8 +500,9 @@ async function settleOnChildWallet(
     overshootCents: legs.shortfallCents,
     chargedWalletId: bal.id,
     parentWalletId: parent ? parent.id : null,
-    // The funder's overshoot choice has no storage yet; the default applies (D20.2).
-    funderChoice: DEFAULT_OVERSHOOT_CHOICE,
+    // WAL-6c: the funder's stored choice for this wallet, read under its row lock; unset is the
+    // default, absorb into the parent's debt (D20.2).
+    funderChoice: bal.overshootChoice ?? DEFAULT_OVERSHOOT_CHOICE,
     fallbackFrom: null,
   });
 
@@ -688,8 +705,8 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<Credit
     ledgerId = claimed[0].id;
   } catch (error) {
     // No ledger row persisted; the cron's orphan sweep will reconcile.
-    loggers.ai.debug('credit claim failed', {
-      error: (error as Error).message,
+    loggers.ai.warn('credit claim failed', {
+      ...errorLogFields(error),
       aiUsageLogId: input.aiUsageLogId,
     });
     return 'deferred';
@@ -725,8 +742,8 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<Credit
       // The claim row exists but never reached a terminal status, so the backfill
       // cron's pending sweep owns it from here.
       zeroChargeSettled = false;
-      loggers.ai.debug('credit zero-charge settle failed', {
-        error: (error as Error).message,
+      loggers.ai.warn('credit zero-charge settle failed', {
+        ...errorLogFields(error),
         aiUsageLogId: input.aiUsageLogId,
       });
     }
@@ -738,7 +755,7 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<Credit
   // value: what we need to know is whether the decrement ran, and a driver/mock that
   // does not pass the callback's result back through would silently turn every
   // successful settle into a `deferred`.
-  let applied = false;
+  let applied: SettleOutcome | null = null;
   try {
     await db.transaction(async (tx) => {
       applied = await decrementAndSettle(
@@ -762,10 +779,11 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<Credit
       conversationId: input.conversationId,
       pageId: input.pageId,
     });
+    await noticeDebt(applied, walletId);
   } catch (error) {
     // Leave the row 'pending' for the backfill cron to retry. Never throw.
-    loggers.ai.debug('credit consume failed', {
-      error: (error as Error).message,
+    loggers.ai.warn('credit consume failed', {
+      ...errorLogFields(error),
       aiUsageLogId: input.aiUsageLogId,
     });
     return 'deferred';
@@ -794,7 +812,7 @@ export async function releaseHold(holdId: string): Promise<void> {
     // The credits push is a billing-UI concern — skip it when billing is off.
     if (userId && isBillingEnabled()) void emitCreditsUpdated(userId);
   } catch (error) {
-    loggers.ai.debug('credit hold release failed', { error: (error as Error).message, holdId });
+    loggers.ai.warn('credit hold release failed', { ...errorLogFields(error), holdId });
   }
 }
 
@@ -804,7 +822,8 @@ export async function releaseHold(holdId: string): Promise<void> {
  * atomically. A no-op if the row is missing or already applied — safe to retry.
  */
 export async function settlePendingLedgerRow(ledgerId: string): Promise<void> {
-  let settledUserId: string | null = null;
+  // Assigned inside the transaction callback; declared through `as` so the read after it is not narrowed to null.
+  let settled = null as { userId: string; walletId: string; outcome: SettleOutcome } | null;
   await db.transaction(async (tx) => {
     const rows = await tx
       .select()
@@ -829,10 +848,13 @@ export async function settlePendingLedgerRow(ledgerId: string): Promise<void> {
     const chargeMc = row.chargeMillicents ?? Math.abs(row.amountCents) * 1000;
     // Settle against the wallet the claim named (WAL-5), never re-derived from the user.
     // The debt row keeps the claim's kind, so compute debt never reads as a seat draw.
-    await decrementAndSettle(tx, ledgerId, row.userId, row.walletId, chargeMc, row.aiUsageLogId, null, row.spendKind);
-    settledUserId = row.userId;
+    const outcome = await decrementAndSettle(tx, ledgerId, row.userId, row.walletId, chargeMc, row.aiUsageLogId, null, row.spendKind);
+    if (outcome) settled = { userId: row.userId, walletId: row.walletId, outcome };
   });
   // A pending row settled this run (cron retry): push the user's fresh balance so a
   // call that never emitted at its own finish still reaches the navbar live.
-  if (settledUserId) void emitCreditsUpdated(settledUserId);
+  if (settled) {
+    void emitCreditsUpdated(settled.userId);
+    await noticeDebt(settled.outcome, settled.walletId);
+  }
 }

@@ -20,6 +20,7 @@ import type { BillingPayer } from './sandbox-payer';
 import type { CreditGateResult } from './credit-gate';
 import { ORG_ENTITLEMENT_TIER } from './spend-target';
 import type { SubscriptionTier } from './subscription-tiers';
+import type { SpendKind } from '@pagespace/db/schema/credits';
 
 /**
  * What one compute charge debits. `userId` is always a real person: the payer themselves for a
@@ -27,7 +28,13 @@ import type { SubscriptionTier } from './subscription-tiers';
  */
 export type ComputeCharge =
   | { kind: 'user'; userId: string }
-  | { kind: 'org'; orgId: string; userId: string };
+  /**
+   * `accrual` marks an ENV or APP accrual (env/app storage, wakes, awake time), recorded under the
+   * env's cost owner — its creator, else the drive lead ([D-OW-28]). Absent = compute the recorded
+   * person ran. Both count toward the recorded person's per-consumer cap on the pool (WAL-2); the
+   * mark only labels the row ('drive_compute' vs 'compute').
+   */
+  | { kind: 'org'; orgId: string; userId: string; accrual?: true };
 
 /**
  * The charge for `payer`, recorded under `recordedUserId` when the payer is an org. A personal
@@ -38,6 +45,27 @@ export function computeChargeFor(payer: BillingPayer, recordedUserId: string): C
   return payer.kind === 'org'
     ? { kind: 'org', orgId: payer.orgId, userId: recordedUserId }
     : { kind: 'user', userId: payer.userId };
+}
+
+/**
+ * The charge for an ENV or APP accrual — an environment's or published app's storage, a wake,
+ * awake time — recorded under `costOwnerId`: the env's creator, or the drive lead for an env with
+ * none ([D-OW-28]). For an org payer it is marked an accrual and counts toward that person's cap;
+ * a personal payer is charged as themselves exactly as {@link computeChargeFor} would.
+ */
+export function driveAccrualChargeFor(payer: BillingPayer, costOwnerId: string): ComputeCharge {
+  return payer.kind === 'org'
+    ? { kind: 'org', orgId: payer.orgId, userId: costOwnerId, accrual: true }
+    : { kind: 'user', userId: payer.userId };
+}
+
+/**
+ * What a charge's hold and ledger rows are FOR (SPEND_KINDS): an env or app accrual on an org pool
+ * is 'drive_compute', everything else 'compute'. On an org pool both count toward the recorded
+ * person's per-consumer cap with their AI (WAL-2, [D-OW-28]); the kind labels which it was.
+ */
+export function computeSpendKind(charge: ComputeCharge): SpendKind {
+  return charge.kind === 'org' && charge.accrual === true ? 'drive_compute' : 'compute';
 }
 
 /**
@@ -61,8 +89,11 @@ export function computeChargeTier(charge: ComputeCharge, personalTier: Subscript
   return charge.kind === 'org' ? ORG_ENTITLEMENT_TIER : personalTier;
 }
 
-/** Why an org pool refused a compute hold: missing, paused, or unable to cover it. */
-export type OrgComputeRefusal = 'org_wallet_unavailable' | 'org_wallet_paused' | 'org_wallet_empty';
+/**
+ * Why an org pool refused a compute hold: missing, paused, unable to cover it, or the member who
+ * asked has used their allowance of it (WAL-2: one per-consumer cap on AI and compute, fe9db1nm).
+ */
+export type OrgComputeRefusal = 'org_wallet_unavailable' | 'org_wallet_paused' | 'org_wallet_empty' | 'org_member_cap_reached';
 
 /** What the person who asked sees for each org pool refusal. Nothing was started or charged. */
 export const ORG_COMPUTE_REFUSAL_MESSAGES: Readonly<Record<OrgComputeRefusal, string>> = Object.freeze({
@@ -72,6 +103,8 @@ export const ORG_COMPUTE_REFUSAL_MESSAGES: Readonly<Record<OrgComputeRefusal, st
     "This drive belongs to an organization whose wallet is paused, so compute here is stopped and nothing was started. An org Owner or Admin can resume it.",
   org_wallet_empty:
     "This drive belongs to an organization whose wallet can't cover this run, so nothing was started. An org Owner or Admin can add credits.",
+  org_member_cap_reached:
+    "You've used your allowance of this organization's credits for now, so nothing was started. A daily allowance renews at midnight UTC and a monthly one with the organization's next billing period; an org Owner or Admin can raise your allowance.",
 });
 
 const ORG_COMPUTE_REFUSALS: readonly string[] = Object.keys(ORG_COMPUTE_REFUSAL_MESSAGES);
@@ -93,5 +126,6 @@ export function orgComputeRefusalOf(answer: CreditGateResult): OrgComputeGateRef
   if (answer.reason === 'daily_cap_exceeded') return 'daily_cap_exceeded';
   if (answer.refusal?.reason === 'source_unavailable') return 'org_wallet_unavailable';
   if (answer.refusal?.reason === 'source_paused') return 'org_wallet_paused';
+  if (answer.refusal?.reason === 'source_cap_reached') return 'org_member_cap_reached';
   return 'org_wallet_empty';
 }

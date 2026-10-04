@@ -12,7 +12,7 @@ import { and, asc, eq, inArray } from '@pagespace/db/operators';
 import { organizations, orgMembers, type OrgRole } from '@pagespace/db/schema/organizations';
 import { decideOrgRole } from './authorize';
 import { loadOrgPrincipalKind, type OrgPrincipalKind } from './owner-candidate';
-import { leaveOrganization, type LeadReassignment } from './leave';
+import { leaveOrganization, recordComputeReattributions, type ComputeReattribution, type LeadReassignment } from './leave';
 import { revokeForDemotion } from './demotion';
 import { getActorInfo } from '../monitoring/activity-logger';
 import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
@@ -188,6 +188,8 @@ export async function removeMember(input: {
   targetId: string;
 }): Promise<MembershipDecision> {
   let reassigned: LeadReassignment[] = [];
+  // [D-OW-28] Audited after the removal commits, never for a removal that rolled back.
+  const reattributed: ComputeReattribution[] = [];
   const result = await db.transaction(async (tx): Promise<MembershipDecision> => {
     const roles = await lockActorAndTargetRoles(tx, input.orgId, input.actorId, input.targetId);
     const decision = decideMemberRemoval({ ...input, ...roles });
@@ -198,6 +200,7 @@ export async function removeMember(input: {
     const left = await leaveOrganization(input.targetId, input.orgId, tx, {
       actor: await getActorInfo(input.actorId),
       departure: 'removed',
+      collectReattributed: reattributed,
     });
     if (!left.ok) return { ok: false, status: 404, reason: 'target_not_member' };
     reassigned = left.reassigned;
@@ -205,6 +208,7 @@ export async function removeMember(input: {
   });
   if (result.ok) {
     await recordLeaveEvents({ orgId: input.orgId, userId: input.targetId, actorId: input.actorId, eventType: 'org.member.removed', reassigned });
+    await recordComputeReattributions(reattributed, input.actorId);
   }
   return result;
 }

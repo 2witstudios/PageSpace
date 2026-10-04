@@ -44,7 +44,7 @@ function makeDeps(over: Partial<AwakeMeterDeps> = {}) {
   const writeSettle = vi.fn<AwakeMeterDeps['writeSettle']>(async () => 'advanced');
   const stampWindowStart = vi.fn(async () => 'stamped' as const);
   const closeAtBoundary = vi.fn(async () => ({ billedSeconds: 600, failed: false }));
-  const park = vi.fn(async (_id: string, _reason: 'insolvent' | 'daily_cap') => {});
+  const park = vi.fn(async (_id: string, _reason: 'insolvent' | 'daily_cap' | 'member_cap') => {});
   const findStopBoundary = vi.fn(async () => null);
 
   const deps: AwakeMeterDeps = {
@@ -325,6 +325,17 @@ describe('meterAwakePublishedApps — a running row with no window', () => {
     expect(run.parked).toBe(1);
     expect(park).toHaveBeenCalledWith('app-1', 'insolvent');
     expect(stampWindowStart).not.toHaveBeenCalled();
+  });
+
+  it('WAL-2 (partial) [D-OW-28] parks for the PUBLISHER\'S cap when that is what refused, so the app says so', async () => {
+    const { deps, gate, park } = makeDeps({
+      listRunningApps: async () => [runningApp({ awakeBilledThrough: null })],
+    });
+    gate.mockResolvedValue({ allowed: false, reason: 'org_member_cap_reached', orgRefusal: 'org_member_cap_reached' });
+
+    await meter(deps);
+
+    expect(park).toHaveBeenCalledWith('app-1', 'member_cap');
   });
 
   it('given an unresolvable drive, should count it and open no window', async () => {

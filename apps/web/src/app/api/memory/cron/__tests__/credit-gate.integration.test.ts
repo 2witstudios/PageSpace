@@ -79,6 +79,7 @@ import { provisionMemoryPages } from '@pagespace/lib/memory/memory-pages';
 import { upsertCandidates } from '@/lib/memory/candidate-service';
 import { checkAndCompactIfNeeded } from '@/lib/memory/compaction-service';
 import { POST } from '../route';
+import { withHoldAudit, type HoldAudit } from '@/test/hold-audit';
 
 let dbAvailable = false;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -185,6 +186,17 @@ async function settled(userIds: string[]): Promise<void> {
   }, { timeout: 5000, interval: 50 });
 }
 
+/**
+ * pa0ycktr: EXACTLY one hold per model call, and every hold placed is removed. "No hold is left"
+ * alone stays green if a call takes several holds and settles or releases each of them.
+ */
+function expectOneHoldPerCall(audit: HoldAudit, userId: string, calls: number): void {
+  const placed = audit.placed.get(userId) ?? [];
+  expect(placed, 'holds placed').toHaveLength(calls);
+  expect(new Set(placed).size).toBe(calls);
+  expect([...(audit.removed.get(userId) ?? [])].sort(), 'every hold placed is removed, and only those').toEqual([...placed].sort());
+}
+
 describe('memory cron credit gate (Postgres)', () => {
   afterEach(async () => {
     setTimeoutSpy?.mockRestore();
@@ -220,10 +232,11 @@ describe('memory cron credit gate (Postgres)', () => {
     const userId = await activeProUser({ monthlyRemainingCents: 0, debtCents: 500 });
     const candidatesBefore = await db.select().from(personalizationCandidates).where(eq(personalizationCandidates.userId, userId));
 
-    const res = await POST(new Request('http://web:3000/api/memory/cron', { method: 'POST' }));
+    const { result: res, audit } = await withHoldAudit([userId], () => POST(new Request('http://web:3000/api/memory/cron', { method: 'POST' })), () => settled([userId]));
     const body = await res.json();
-    await settled([userId]);
 
+    // A refused call places no hold at all.
+    expectOneHoldPerCall(audit, userId, 0);
     const after = await balanceOf(userId);
     const usage = await usageRowsOf(userId);
     const candidatesAfter = await db.select().from(personalizationCandidates).where(eq(personalizationCandidates.userId, userId));
@@ -250,13 +263,14 @@ describe('memory cron credit gate (Postgres)', () => {
     const exhausted = await activeProUser({ monthlyRemainingCents: 0, debtCents: 500 });
     const funded = await activeProUser({ monthlyRemainingCents: 10_000, debtCents: 0 });
 
-    const res = await POST(new Request('http://web:3000/api/memory/cron', { method: 'POST' }));
+    const { result: res, audit } = await withHoldAudit([exhausted, funded], () => POST(new Request('http://web:3000/api/memory/cron', { method: 'POST' })), () => settled([exhausted, funded]));
     expect(res.status).toBe(200);
-    await settled([exhausted, funded]);
 
     const fundedUsage = await usageRowsOf(funded);
-    // Three discovery passes plus the evaluator.
+    // Three discovery passes plus the evaluator: four model calls, four holds, each settled once.
     expect(fundedUsage).toHaveLength(4);
+    expectOneHoldPerCall(audit, funded, 4);
+    expectOneHoldPerCall(audit, exhausted, 0);
     const ledger = await db
       .select()
       .from(creditLedger)
@@ -284,12 +298,12 @@ describe('memory cron credit gate (Postgres)', () => {
         : { text: '{"rules": "Prefer TypeScript.", "usedInsights": [0]}', usage: USAGE },
     );
 
-    const res = await POST(new Request('http://web:3000/api/memory/cron', { method: 'POST' }));
+    const { result: res, audit } = await withHoldAudit([funded], () => POST(new Request('http://web:3000/api/memory/cron', { method: 'POST' })), () => settled([funded]));
     const body = await res.json();
-    await settled([funded]);
 
     const usage = await usageRowsOf(funded);
-    // Three discovery passes, the evaluator, and one compaction.
+    // Three discovery passes, the evaluator, and one compaction: five calls, five holds.
+    expectOneHoldPerCall(audit, funded, 5);
     expect(usage.map((u) => (u.metadata as { feature: string }).feature).sort()).toEqual([
       'memory_compaction', 'memory_discovery', 'memory_discovery', 'memory_discovery', 'memory_integration',
     ]);

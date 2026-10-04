@@ -18,9 +18,10 @@
  */
 
 import { allocateSpend, applyPaymentToDebt, computeMonthlyRefill, type Balance } from './credit-core';
+import { allowanceRefills } from './credit-pricing';
 import type { InvoiceGrant } from './invoice-grant';
 import { MONEY_MODEL_V2_ACTIVE, allowanceCentsForPaidCents, centsFromDollars, tierListPriceCents } from './money-model';
-import { TIER_PLAN_LIMITS } from './subscription-tiers';
+import { TIER_PLAN_LIMITS, isSubscriptionTier } from './subscription-tiers';
 import {
   allocateWalletSpend,
   type FundingLeg,
@@ -265,9 +266,10 @@ export function currentGoverningPeriodMs(governing: GoverningRoot, nowMs: number
  *
  * A child's allocation periods never overlap: when the child has a period end, a reset
  * is due only once the governing period starts at or after that end. A root whose
- * clock shifts earlier (the gate's lazy roll stamps the day the owner next spends; a
- * mid-period plan change) therefore makes the child wait for the next governing
- * boundary rather than hand it a second allocation for time it already had.
+ * clock shifts earlier (a mid-period plan change) therefore makes the child wait for
+ * the next governing boundary rather than hand it a second allocation for time it
+ * already had. A comped root is rolled by the same sweep, first, onto exactly the
+ * period this computes (planPersonalRootRoll), so its children reset once, in step.
  *
  * Idempotent by construction: once the wallet carries the governing period, the same
  * period is never due again, however many times this runs.
@@ -313,6 +315,91 @@ export function planAllocationReset(input: {
     debtCents: 0,
     status: walletStatusFor({ paused: input.wallet.paused, debtCents: 0 }),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Personal root roll for comped accounts (D-OW-12, ew9v06jeb)
+// ---------------------------------------------------------------------------
+
+/**
+ * One calendar month after `from`, clamped to the last valid day of the target
+ * month so a month-end start doesn't overflow. Naive `setUTCMonth(+1)` turns
+ * Jan 31 into Mar 3 (Feb has no 31st), which would make a "monthly" window longer
+ * than a month and delay the next allowance reset for users initialized near
+ * month end. Clamping maps Jan 31 -> Feb 28/29. Time-of-day is preserved.
+ */
+export function addOneMonth(from: Date): Date {
+  const d = new Date(from.getTime());
+  const day = d.getUTCDate();
+  d.setUTCDate(1); // avoid overflow while we shift the month
+  d.setUTCMonth(d.getUTCMonth() + 1);
+  const lastDayOfTarget = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+  d.setUTCDate(Math.min(day, lastDayOfTarget));
+  return d;
+}
+
+/**
+ * `months` calendar months after `base`, on day `anchorDay` clamped to that month's length, at
+ * `base`'s UTC time of day. Every period is placed on the ORIGINAL anchor, never chained from the
+ * previous clamped date, so a 31st renewal reads Feb 28 → Mar 31, not Feb 28 → Mar 28 forever.
+ */
+function anchoredMonthMs(base: Date, months: number, anchorDay: number): number {
+  const monthIndex = base.getUTCMonth() + months;
+  const year = base.getUTCFullYear() + Math.floor(monthIndex / 12);
+  const month = ((monthIndex % 12) + 12) % 12;
+  const lastDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  return Date.UTC(year, month, Math.min(anchorDay, lastDay), base.getUTCHours(), base.getUTCMinutes(), base.getUTCSeconds(), base.getUTCMilliseconds());
+}
+
+export interface PersonalRootRollInput {
+  /** The owner's stored plan tier (users.subscriptionTier), unchecked. */
+  tier: string;
+  /** Whether any subscription could still deliver an invoice (RENEWAL_CAPABLE_STATUSES). */
+  hasRenewalCapableSubscription: boolean;
+  /** The root's stored period start; with the end it recovers the renewal's anchor day. */
+  periodStartMs: number | null;
+  /** The root's stored period end; null when none was ever stamped (a row created bare by a top-up). */
+  periodEndMs: number | null;
+  nowMs: number;
+}
+
+export type PersonalRootRollPlan = { due: false } | { due: true; periodStartMs: number; periodEndMs: number };
+
+/**
+ * Whether a personal root wallet's monthly allowance rolls now, and onto which period. This is
+ * the ONE reset of a personal root that Stripe does not drive: a paid tier whose refill can never
+ * come from an invoice (comped/founder accounts — no renewal-capable subscription). With a live
+ * subscription invoice.paid is authoritative and rolling here would double-grant when a late
+ * renewal lands; Free's allowance is a one-time starter grant and never refills; an unknown tier
+ * has no allowance at all.
+ *
+ * The new period starts exactly at the stored period END and runs one calendar month in UTC on the
+ * renewal's anchor day (clamped per month, never chained from a clamped date), so the renewal date
+ * never drifts — not by how late the sweep ran, and not by a short month. An account left
+ * unattended for several periods rolls ONCE, onto the period containing now: one allowance, not
+ * one per missed month (as the gate's lazy roll behaved). A row never stamped starts now.
+ *
+ * Exactly once per period by construction: the stamped period contains now, so the same plan is
+ * never due again until that period ends.
+ */
+export function planPersonalRootRoll(input: PersonalRootRollInput): PersonalRootRollPlan {
+  if (!isSubscriptionTier(input.tier) || !allowanceRefills(input.tier)) return { due: false };
+  if (input.hasRenewalCapableSubscription) return { due: false };
+  if (input.periodEndMs === null) {
+    return { due: true, periodStartMs: input.nowMs, periodEndMs: addOneMonth(new Date(input.nowMs)).getTime() };
+  }
+  if (input.periodEndMs > input.nowMs) return { due: false };
+  // The renewal's anchor day (review P3-2). A stored period is two consecutive anchored dates, each
+  // the anchor clamped to its month, and no two consecutive months are both shorter than an
+  // anchor day, so the later of the two days IS the anchor (Jan 31 → Feb 28 reads 31).
+  const end = new Date(input.periodEndMs);
+  const anchorDay = input.periodStartMs === null
+    ? end.getUTCDate()
+    : Math.max(end.getUTCDate(), new Date(input.periodStartMs).getUTCDate());
+  let k = 0;
+  while (anchoredMonthMs(end, k + 1, anchorDay) <= input.nowMs) k += 1;
+  const periodStartMs = k === 0 ? input.periodEndMs : anchoredMonthMs(end, k, anchorDay);
+  return { due: true, periodStartMs, periodEndMs: anchoredMonthMs(end, k + 1, anchorDay) };
 }
 
 // ---------------------------------------------------------------------------

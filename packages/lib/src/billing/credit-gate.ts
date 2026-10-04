@@ -9,35 +9,28 @@
  * subscription — the `free-init-<userId>` ledger key makes it happen exactly once)
  * and then re-evaluated.
  *
- * Paid tiers WITHOUT a renewal-capable subscription (comped/founder accounts) get
- * their periodic top-up HERE: there's no invoice.paid to drive a refill, so when the
- * period has expired the gate ADDS the tier allowance to the carry balance (rollover)
- * and rolls the window forward. Which tiers refill at all is data
- * (TIER_ALLOWANCE_REFILLS): the free tier does NOT — its allowance is a single grant,
- * so an expired free window is simply left alone. This is the imperative shell, so
- * it owns the real clock; the period math stays trivial and the rollover itself
- * comes from the pure computeMonthlyRefill.
+ * The gate never rolls a period (ew9v06jeb, D-OW-12): invoice.paid renews a subscribed
+ * account, and the hourly period sweep (wallet-funding-shell rollDuePersonalRoots) renews a
+ * comped paid account no invoice will ever reach. One writer per reset, so a period can
+ * never be reset twice. Free's allowance is a single starter grant and never refills.
  */
 
 import { db } from '@pagespace/db/db';
 import { creditHolds, creditLedger, type SpendKind } from '@pagespace/db/schema/credits';
 import { wallets, personalRootWalletOf, PERSONAL_ROOT_WALLET_ARBITER } from '@pagespace/db/schema/wallets';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
-import { subscriptions } from '@pagespace/db/schema/subscriptions';
 import { and, eq, gt, gte, inArray, or, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
 import { loggers } from '../logging/logger-config';
 import {
   evaluateGate,
   evaluateDailyCap,
-  computeMonthlyRefill,
   reservationCents,
   holdExpiresAt,
   type GateResult,
 } from './credit-core';
 import {
   RESERVE_FLOOR_CENTS,
-  allowanceRefills,
   isOneTimeAllowanceTier,
   CREDIT_HOLD_ESTIMATE_CENTS,
   CREDIT_HOLD_TTL_SECONDS,
@@ -46,8 +39,8 @@ import {
 } from './credit-pricing';
 import { readSpendableCents } from './credit-balance';
 import { exactCentsFromDollars, tierAllowanceCents } from './money-model';
-import { isSubscriptionTier } from './subscription-tiers';
 import { ensurePersonalRootWalletId } from './personal-wallet';
+import { addOneMonth } from './wallet-funding';
 import { ORGS_ENABLED } from '../organizations/orgs-enabled';
 import {
   ORG_ENTITLEMENT_TIER,
@@ -60,7 +53,7 @@ import {
 } from './spend-target';
 import { seatCapCheck, type RefusalReason, type SkipReason, type SpendSourceKind } from './wallet-core';
 import { loadSeatCapFacts } from './seat-allowance';
-import { holdsInScope, ledgerRowsInScope, personBoundScopeFor, type PersonBoundScope } from './person-bound-scope';
+import { holdsInScope, isComputeSpendKind, ledgerRowsInScope, personBoundScopeFor, type PersonBoundScope } from './person-bound-scope';
 import { readOrgSpendPolicy } from '../organizations/policy-reader';
 import type { SubscriptionTier } from '../services/subscription-utils';
 
@@ -72,23 +65,8 @@ const STRIPE_REF_ARBITER = {
   where: sql`${creditLedger.stripeRef} IS NOT NULL`,
 } as const;
 
-/**
- * One calendar month after `from`, clamped to the last valid day of the target
- * month so a month-end start doesn't overflow. Naive `setUTCMonth(+1)` turns
- * Jan 31 into Mar 3 (Feb has no 31st), which would make a "monthly" window longer
- * than a month and delay the next allowance reset for users initialized near
- * month end. Clamping maps Jan 31 -> Feb 28/29. Time-of-day is preserved.
- * Exported for direct edge-case testing.
- */
-export function addOneMonth(from: Date): Date {
-  const d = new Date(from.getTime());
-  const day = d.getUTCDate();
-  d.setUTCDate(1); // avoid overflow while we shift the month
-  d.setUTCMonth(d.getUTCMonth() + 1);
-  const lastDayOfTarget = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
-  d.setUTCDate(Math.min(day, lastDayOfTarget));
-  return d;
-}
+// One calendar month after a date, clamped to the target month's last day (wallet-funding).
+export { addOneMonth };
 
 /**
  * Midnight UTC of the day containing `from`. Defines the window for the per-user/day
@@ -108,17 +86,8 @@ interface BalanceRow {
   monthlyPeriodEnd: Date | null;
 }
 
-/**
- * Subscription statuses whose renewal invoice may still arrive: `invoice.paid`
- * stays authoritative for these (a gate roll would double-grant when the invoice
- * lands or replays). `unpaid` is included — Stripe keeps its open invoices
- * collectible, so a later payment still fires invoice.paid. Everything else —
- * canceled, incomplete, incomplete_expired, or no subscription row at all
- * (comped/founder accounts) — will never produce an invoice, so the gate is the
- * only thing that can roll them. Exported so other surfaces that need a "live
- * subscription" filter converge on one definition instead of drifting copies.
- */
-export const RENEWAL_CAPABLE_STATUSES = ['active', 'trialing', 'past_due', 'unpaid'];
+// Subscription statuses whose renewal invoice may still arrive (credit-pricing).
+export { RENEWAL_CAPABLE_STATUSES } from './credit-pricing';
 
 /**
  * The ledger row for a tier's first-ever allowance grant. The stripeRef is
@@ -136,25 +105,6 @@ function starterGrantLedgerRow(userId: string, walletId: string, monthly: number
     stripeRef: `free-init-${userId}`,
     consumeStatus: 'applied',
   } as const;
-}
-
-/**
- * Whether ANY of the user's subscriptions could still deliver an invoice-driven
- * refill. Takes the executor so the reset transaction can RE-CHECK on `tx`
- * right before granting — a subscription created between the unlocked pre-check
- * and the grant (checkout completing concurrently with an AI request) would
- * otherwise double-grant when its first invoice.paid lands.
- */
-async function hasRenewalCapableSubscription(
-  executor: Pick<typeof db, 'select'>,
-  userId: string,
-): Promise<boolean> {
-  const rows = await executor
-    .select({ id: subscriptions.id })
-    .from(subscriptions)
-    .where(and(eq(subscriptions.userId, userId), inArray(subscriptions.status, RENEWAL_CAPABLE_STATUSES)))
-    .limit(1);
-  return rows.length > 0;
 }
 
 export interface GateOptions {
@@ -383,7 +333,7 @@ export async function canConsumeAI(
 
   // Name the wallet before anything else (SPEND-1). A refusal reserves nothing and charges
   // nothing (SPEND-4). Own credits are the personal root wallet, whose lifecycle (lazy
-  // init, starter grant, gate-driven refill) runs below exactly as before wallets; a drive
+  // init, starter grant) runs below; its renewal is invoice.paid's or the period sweep's; a drive
   // wallet or a seat on the org pool is reserved by gateSharedWallet.
   const reservation = reservationCents(opts.estCostCents ?? CREDIT_HOLD_ESTIMATE_CENTS);
   // The drive-wallet reads (and the permissions they go through) load only when a drive
@@ -460,8 +410,8 @@ export async function resolveEntitlementTier(
 }
 
 /**
- * The caller's personal root wallet: lazy-init, the one-time starter grant, the gate-driven
- * refill for renewal-less paid accounts, then the locked decision and hold. Unchanged from
+ * The caller's personal root wallet: lazy-init, the one-time starter grant, then the locked
+ * decision and hold. It never renews a period (the period sweep does). Unchanged from
  * before wallets except that the reservation it nets is what is held against THIS wallet
  * (and its child wallets, which draw their allocation from it), while the in-flight count
  * stays the caller's own calls.
@@ -490,131 +440,16 @@ async function gatePersonalRoot(
 
   let row = await readBalance();
 
-  // Gate-driven monthly reset for users whose refill can never come from Stripe.
-  // Only tiers that REFILL (TIER_ALLOWANCE_REFILLS) are eligible: the free tier's
-  // allowance is a one-time starter grant, so an expired or never-stamped free
-  // window is left alone and the user spends down what they have (plus top-ups).
-  // A refilling tier rolls here when its window has expired (monthlyPeriodEnd < now)
-  // or was never stamped (monthlyPeriodEnd IS NULL — e.g. a top-up funding row
-  // created bare before the user's first AI request), and ONLY when no
-  // renewal-capable subscription exists (comped/founder accounts — see
-  // hasRenewalCapableSubscription): with a live subscription, invoice.paid stays
-  // authoritative (keyed to the invoice stripeRef), because resetting here would
-  // over-grant if a renewal invoice is late or retried after the period end — the
-  // gate would refill, the user could spend, then the webhook would refill again.
-  // A paid user with a live subscription and an expired window is therefore
-  // (correctly) blocked until their renewal lands. The subscription lookup only
-  // runs on the rare expired-window path, never on the hot path.
-  //
-  // The unlocked `row` read above is only a cheap pre-check: it decides whether a
-  // reset is even worth attempting (don't open a transaction when the window is
-  // clearly still active). The authoritative balance read + refill computation happen
-  // INSIDE the transaction under `FOR UPDATE`, mirroring applyMonthlyRefill in
-  // credit-funding.ts. Computing the refill from this pre-transaction snapshot races
-  // any concurrent mutation committed between the read and the write: a concurrent
-  // settle would have its spend silently un-billed (the reset would overwrite the
-  // drawn-down balance with stale_remaining + allowance), and a concurrent
-  // debt-clearing top-up would have its debt collected twice (the reset re-nets the
-  // already-paid debt). Reading the row under the lock closes both interleavings.
-  const windowExpired = row !== null && (row.monthlyPeriodEnd === null || row.monthlyPeriodEnd < now);
-  // Only tiers in the canonical vocabulary may roll: callers pass users.subscriptionTier
-  // through unchecked casts, and a legacy/unknown value (e.g. 'normal') reaching
-  // computeMonthlyRefill would silently rewrite the account to the free allowance.
-  const tierHasAllowance = isSubscriptionTier(tier);
-  // Free never refills, so the (rare) subscription lookup is only ever reached by a
-  // refilling tier with an expired window.
-  if (
-    windowExpired &&
-    tierHasAllowance &&
-    allowanceRefills(tier) &&
-    !(await hasRenewalCapableSubscription(db, userId))
-  ) {
-    const newEnd = addOneMonth(now);
-    await db.transaction(async (tx) => {
-      // Lock the balance row and RE-READ the current monthly/debt values inside the
-      // transaction. The lock serialises concurrent resets for this user and forces
-      // us to observe any settle/top-up that committed since the unlocked pre-check.
-      const lockedRows = await tx
-        .select({
-          id: wallets.id,
-          monthlyRemainingCents: wallets.monthlyRemainingCents,
-          debtCents: wallets.debtCents,
-          monthlyPeriodEnd: wallets.monthlyPeriodEnd,
-        })
-        .from(wallets)
-        .where(personalRootWalletOf(userId))
-        .for('update');
-      const locked = lockedRows[0] ?? null;
-
-      // Re-check the reset predicate against the LOCKED row. A concurrent reset may
-      // have rolled the window forward (or the row may have vanished) between our
-      // unlocked pre-check and acquiring the lock; if the window is no longer expired,
-      // that other request already granted this period — skip to avoid a double grant.
-      if (!locked || !(locked.monthlyPeriodEnd === null || locked.monthlyPeriodEnd < now)) {
-        return;
-      }
-
-      // RE-CHECK the subscription state on the transaction right before
-      // granting. The unlocked pre-check races a concurrent checkout — if the
-      // customer.subscription.* webhook committed a renewal-capable row since,
-      // invoice.paid now owns this user's refill and granting here would double it.
-      // (Not fully serialized against the webhook's own transaction, but it shrinks
-      // the race from "any time since the pre-check" to the instant before commit.)
-      if (await hasRenewalCapableSubscription(tx, userId)) {
-        return;
-      }
-
-      // Compute the refill from the LOCKED, current balance so unspent credits roll
-      // over and outstanding debt is netted against the up-to-date carry (matching the
-      // paid invoice.paid path), not against the stale pre-transaction snapshot.
-      // No invoice on this path (comped / no-subscription paid account): the grant is
-      // derived from the tier's list price (MON-2).
-      const refill = computeMonthlyRefill(
-        tierAllowanceCents(tier),
-        locked.monthlyRemainingCents ?? 0,
-        locked.debtCents ?? 0,
-      );
-
-      await tx
-        .update(wallets)
-        .set({
-          monthlyRemainingCents: refill.monthlyRemainingCents,
-          monthlyAllowanceCents: refill.monthlyAllowanceCents,
-          // The renewal-equivalent for free/no-sub users: debt is netted against the
-          // carried balance before the allowance is added (refill.debtCents === 0).
-          debtCents: refill.debtCents,
-          monthlyPeriodStart: now,
-          monthlyPeriodEnd: newEnd,
-        })
-        .where(personalRootWalletOf(userId));
-
-      // Record the grant. We only reach here holding the lock with a confirmed-expired
-      // window, so this call owns the reset; onConflictDoNothing on the period-keyed
-      // stripeRef is a belt-and-suspenders guard against a same-instant duplicate key.
-      await tx
-        .insert(creditLedger)
-        .values({
-          userId,
-          walletId: locked.id,
-          entryType: 'monthly_grant',
-          bucket: 'monthly',
-          amountCents: refill.monthlyAllowanceCents,
-          // Historical free-tier rolls (before free became a one-time grant) were
-          // keyed 'free-reset-…'; only refilling tiers reach here now, so every new
-          // row gets the 'gate-reset-' prefix.
-          stripeRef: `gate-reset-${userId}-${now.toISOString()}`,
-          consumeStatus: 'applied',
-        })
-        .onConflictDoNothing(STRIPE_REF_ARBITER);
-    });
-    row = await readBalance();
-  }
+  // No period roll here (ew9v06jeb, D-OW-12): a personal root's allowance is renewed by
+  // invoice.paid, or — for a comped paid account no invoice will ever reach — by the hourly
+  // period sweep (wallet-funding-shell rollDuePersonalRoots), which is the ONLY reset. The gate
+  // spends what the wallet holds; an expired period with nothing left refuses until the sweep
+  // (or the invoice) lands, so a period can never be reset twice by two different writers.
 
   // Lazy-init from tier defaults so a balance row always exists before the
   // authoritative hold transaction below. A free user's very first request has no
-  // row yet; init it from the tier allowance and stamp a period window so the reset
-  // path above can later roll it (a free user with no Stripe invoice would otherwise
-  // never reset). onConflictDoNothing tolerates a concurrent init — the transaction
+  // row yet; init it from the tier allowance and stamp a period window, the clock the
+  // period sweep rolls a comped paid account on. onConflictDoNothing tolerates a concurrent init — the transaction
   // judges the REAL persisted balance under a row lock, never our assumed allowance,
   // so we can't allow when a racing request already drew the row down.
   if (!row) {
@@ -804,6 +639,16 @@ async function gatePersonalRoot(
   return result;
 }
 
+/**
+ * Whether a hold on the org pool is compute (no spend source: the org pool's own compute,
+ * canConsumeOrgPool), which counts toward the seat allowance of the person it is recorded under:
+ * the person who ran it ('compute', review #2760 P1), or the env's cost owner for an env or app
+ * accrual ('drive_compute', [D-OW-28]). Every AI call through a chosen source is decided elsewhere.
+ */
+function isMemberComputeOnPool(source: SpendSourceKind | null, spendKind: SpendKind | undefined): boolean {
+  return source === null && isComputeSpendKind(spendKind);
+}
+
 const SHARED_WALLET_FACTS = {
   id: wallets.id,
   status: wallets.status,
@@ -860,9 +705,12 @@ async function gateSharedWallet(
     // WAL-2: a seat never takes more than this consumer's monthly allowance of the pool.
     // Read and decided HERE, inside the transaction that inserts the hold and under the
     // pool's row lock, so one consumer's simultaneous calls serialize: each sees the holds
-    // of the ones before it, and only as many as the allowance covers pass.
+    // of the ones before it, and only as many as the allowance covers pass. The same cap binds
+    // compute on the pool (fe9db1nm): what a member runs, and what the envs and apps they created
+    // accrue ([D-OW-28]) — their draw on the pool too, so a member past their allowance cannot keep
+    // draining the pool through a sandbox, an environment or a published app.
     let seatRemainingCents: number | null = null;
-    if (chosen.source === 'seat_allowance') {
+    if (chosen.source === 'seat_allowance' || isMemberComputeOnPool(chosen.source, opts.spendKind)) {
       // POL-7: the allowance in force is the org's policy, read here in the same transaction as the
       // hold. A seat is always the org pool, so a pool with no org is not a seat.
       if (!wallet.orgId) return refused('source_unavailable');
@@ -1004,17 +852,25 @@ export async function findOrgPoolWalletId(orgId: string): Promise<string | null>
   return row?.id ?? null;
 }
 
+/** When the org's pool refills next (its period end, D-OW-12), or null when it has no pool or no period. */
+export async function findOrgPoolPeriodEnd(orgId: string): Promise<Date | null> {
+  const [row] = await db.select({ end: wallets.monthlyPeriodEnd }).from(wallets).where(orgPoolWhere(orgId)).limit(1);
+  return row?.end ?? null;
+}
+
 /**
  * canConsumeOrgPool — the compute gate for an ORG payer (WAL-9): a hold on the org's POOL
- * wallet, recorded under `userId` (who ran it, or the drive lead for an accrual), taken before
- * any machine starts. The caller settles against the same pool (compute-gate's
+ * wallet, recorded under `userId` — the person who CAUSES the compute (WAL-2, review P1, D-OW-28):
+ * the actor for compute a person runs, the creator for an environment's or app's accruals — taken
+ * before any machine starts. The caller settles against the same pool (compute-gate's
  * `computeSettleWalletId`), once.
  *
  * Never a person's wallet: a missing pool refuses `source_unavailable`, a paused pool
  * `source_paused`, a pool that cannot cover the reservation `out_of_credits` — and each
  * refusal reserves and charges nothing. There is no branch that reaches `gatePersonalRoot`.
- * Not a seat either (source null): compute is the org's spend, not a consumer's draw on the
- * pool, so no seat cap applies at admission.
+ * It IS capped per member: `userId`'s seat allowance binds here, read under the pool's row lock in
+ * the hold's transaction (gateSharedWallet), and again at settlement — refused
+ * `source_cap_reached` when that person's allowance cannot cover the reservation.
  *
  * The org's entitlement tier (SEAT-8, business) sets the per-call bounds, as the org is the
  * payer; the per-person daily cap still binds `userId`, as it does whichever wallet pays.

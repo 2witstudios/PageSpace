@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { withAdvisoryLock, type AdvisoryLockPool } from './advisory-lock';
+import { withAdvisoryLock, withBlockingAdvisoryLock, type AdvisoryLockPool } from './advisory-lock';
 
 function makeClient(overrides: Partial<{ query: ReturnType<typeof vi.fn>; release: ReturnType<typeof vi.fn> }> = {}) {
   return {
@@ -258,5 +258,100 @@ describe('withAdvisoryLock', () => {
     expect(client.query).toHaveBeenCalledTimes(2);
     expect(client.release).toHaveBeenCalledTimes(1);
     expect(client.release.mock.calls[0][0]).toBeUndefined();
+  });
+});
+
+describe('withAdvisoryLock — a checked-out lock connection always has an error listener (re-review 5408117045 P1)', () => {
+  function emitterClient(queries: Array<() => Promise<{ rows: Record<string, unknown>[] }>>) {
+    const listeners: Array<(e: Error) => void> = [];
+    return {
+      listeners,
+      query: vi.fn(async () => (queries.shift() ?? (async () => ({ rows: [] })))()),
+      release: vi.fn(),
+      on: vi.fn((_event: 'error', l: (e: Error) => void) => listeners.push(l)),
+      removeListener: vi.fn((_event: 'error', l: (e: Error) => void) => listeners.splice(listeners.indexOf(l), 1)),
+    };
+  }
+
+  it('listens from checkout until a healthy release, and a backend death mid-fn is logged, not thrown', async () => {
+    const client = emitterClient([async () => ({ rows: [{ acquired: true }] })]);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const result = await withAdvisoryLock({ connect: vi.fn(async () => client) }, 'k', async () => {
+      expect(client.listeners).toHaveLength(1);
+      // What pg.Client does when its backend is terminated while checked out.
+      client.listeners.forEach((l) => l(new Error('terminating connection due to administrator command')));
+      // Whatever a driver emits is logged, Error or not.
+      client.listeners.forEach((l) => l('socket hang up' as unknown as Error));
+      return 'done';
+    });
+    expect(result).toEqual({ outcome: 'acquired', result: 'done' });
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('errored while checked out'), '"k"', expect.stringContaining('administrator command'));
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('errored while checked out'), '"k"', 'socket hang up');
+    // Back to the pool healthy: our listener is gone (pg-pool re-adds its own idle one).
+    expect(client.listeners).toHaveLength(0);
+    errorSpy.mockRestore();
+  });
+
+  it('a lock_busy release sheds the listener; a DESTROYED connection keeps it, since a dying client may still emit', async () => {
+    const busy = emitterClient([async () => ({ rows: [{ acquired: false }] })]);
+    await withAdvisoryLock({ connect: vi.fn(async () => busy) }, 'k', async () => 'x');
+    expect(busy.listeners).toHaveLength(0);
+
+    const dying = emitterClient([async () => ({ rows: [{ acquired: true }] }), async () => { throw new Error('connection terminated'); }]);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    await withAdvisoryLock({ connect: vi.fn(async () => dying) }, 'k', async () => 'x');
+    expect(dying.release.mock.calls[0][0]).toBeInstanceOf(Error);
+    expect(dying.listeners).toHaveLength(1);
+    vi.mocked(console.error).mockRestore();
+  });
+});
+
+describe('withBlockingAdvisoryLock', () => {
+  it('waits WITHOUT holding a connection: each busy attempt hands its connection back, then it retries with backoff until it gets the lock', async () => {
+    const clients = [
+      makeClient({ query: vi.fn().mockResolvedValueOnce({ rows: [{ acquired: false }] }) }),
+      makeClient({ query: vi.fn().mockResolvedValueOnce({ rows: [{ acquired: false }] }) }),
+      makeClient({ query: vi.fn().mockResolvedValueOnce({ rows: [{ acquired: true }] }).mockResolvedValueOnce({ rows: [] }) }),
+    ];
+    const pool: AdvisoryLockPool = { connect: vi.fn(async () => clients.shift()!) };
+    const sleep = vi.fn(async (_ms: number) => {});
+    const released: number[] = [];
+    const all = [...clients];
+    all.forEach((c, i) => c.release.mockImplementation(() => released.push(i)));
+
+    const result = await withBlockingAdvisoryLock(pool, 'k', async () => 'done', { timeoutMs: 5_000, sleep });
+
+    expect(result).toEqual({ outcome: 'acquired', result: 'done' });
+    // Busy connection 0 was back in the pool before attempt 1 connected, and so on.
+    expect(released).toEqual([0, 1, 2]);
+    expect(sleep.mock.calls.map((c) => c[0])).toEqual([10, 20]);
+  });
+
+  it('without an injected sleep it really waits between attempts', async () => {
+    const clients = [
+      makeClient({ query: vi.fn().mockResolvedValueOnce({ rows: [{ acquired: false }] }) }),
+      makeClient({ query: vi.fn().mockResolvedValueOnce({ rows: [{ acquired: true }] }).mockResolvedValueOnce({ rows: [] }) }),
+    ];
+    const started = Date.now();
+    const result = await withBlockingAdvisoryLock({ connect: vi.fn(async () => clients.shift()!) }, 'k', async () => 'done', { timeoutMs: 5_000 });
+    expect(result).toEqual({ outcome: 'acquired', result: 'done' });
+    expect(Date.now() - started).toBeGreaterThanOrEqual(5);
+  });
+
+  it('past the deadline it is lock_busy and fn never runs', async () => {
+    const pool: AdvisoryLockPool = { connect: vi.fn(async () => makeClient({ query: vi.fn().mockResolvedValue({ rows: [{ acquired: false }] }) })) };
+    const fn = vi.fn(async () => 'unreachable');
+    expect(await withBlockingAdvisoryLock(pool, 'k', fn, { timeoutMs: 0 })).toEqual({ outcome: 'lock_busy' });
+    expect(fn).not.toHaveBeenCalled();
+  });
+
+  it('a connection_error is returned at once, not retried', async () => {
+    const connect = vi.fn(async () => {
+      throw new Error('exhausted');
+    });
+    const fn = vi.fn(async () => 'unreachable');
+    expect(await withBlockingAdvisoryLock({ connect }, 'k', fn, { timeoutMs: 5_000 })).toMatchObject({ outcome: 'connection_error' });
+    expect(connect).toHaveBeenCalledTimes(1);
+    expect(fn).not.toHaveBeenCalled();
   });
 });

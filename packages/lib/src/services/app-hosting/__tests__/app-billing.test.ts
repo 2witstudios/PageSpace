@@ -69,7 +69,7 @@ describe('defaultAppBillingDeps.resolveCharge', () => {
     assert({
       given: 'a published app whose drive resolves',
       should: 'pay from the drive owner',
-      actual: await defaultAppBillingDeps.resolveCharge({ driveId: 'drive-1' }),
+      actual: await defaultAppBillingDeps.resolveCharge({ driveId: 'drive-1', costOwnerId: null }),
       expected: { kind: 'user', userId: 'drive-owner-1' },
     });
   });
@@ -80,8 +80,8 @@ describe('defaultAppBillingDeps.resolveCharge', () => {
     assert({
       given: 'a published app whose drive belongs to an org',
       should: 'charge the org, recorded under the lead',
-      actual: await defaultAppBillingDeps.resolveCharge({ driveId: 'drive-1' }),
-      expected: { kind: 'org', orgId: 'org-northwind', userId: 'lead-marcus' },
+      actual: await defaultAppBillingDeps.resolveCharge({ driveId: 'drive-1', costOwnerId: null }),
+      expected: { kind: 'org', orgId: 'org-northwind', userId: 'lead-marcus', accrual: true },
     });
   });
 
@@ -94,7 +94,7 @@ describe('defaultAppBillingDeps.resolveCharge', () => {
     assert({
       given: 'a stale read of a drive mid-delete',
       should: 'resolve to null',
-      actual: await defaultAppBillingDeps.resolveCharge({ driveId: 'gone' }),
+      actual: await defaultAppBillingDeps.resolveCharge({ driveId: 'gone', costOwnerId: null }),
       expected: null,
     });
   });
@@ -285,11 +285,11 @@ describe('defaultAppBillingDeps.trackUsage', () => {
 });
 
 describe('defaultAppBillingDeps.trackUsage — org charge', () => {
-  it('WAL-9 (partial) settles the awake window on the ORG POOL, recorded under the lead, marked compute', async () => {
+  it('WAL-9 (partial) WAL-2 (partial) settles the awake window on the ORG POOL, recorded under the lead, marked a drive accrual (never the lead\'s seat)', async () => {
     mockFindOrgPoolWalletId.mockResolvedValue('pool-1');
     mockTrackUsage.mockResolvedValue({ persisted: true, creditsSettled: true });
-    await defaultAppBillingDeps.trackUsage({ charge: { kind: 'org', orgId: 'org-1', userId: 'lead' }, holdId: 'h', activeSeconds: 60, driveId: 'd', publishedAppId: 'a' });
-    expect(mockTrackUsage).toHaveBeenCalledWith(expect.objectContaining({ userId: 'lead', walletId: 'pool-1', spendKind: 'compute' }));
+    await defaultAppBillingDeps.trackUsage({ charge: { kind: 'org', orgId: 'org-1', userId: 'lead', accrual: true }, holdId: 'h', activeSeconds: 60, driveId: 'd', publishedAppId: 'a' });
+    expect(mockTrackUsage).toHaveBeenCalledWith(expect.objectContaining({ userId: 'lead', walletId: 'pool-1', spendKind: 'drive_compute' }));
   });
 
   it('WAL-9 (partial) an org pool gone since the wake settles nothing and keeps the window open — never onto the lead', async () => {

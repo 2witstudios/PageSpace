@@ -29,8 +29,8 @@ import {
 } from '@pagespace/lib/services/sandbox/containment';
 import { getSandboxSessionSecret } from '@pagespace/lib/services/sandbox/machine-session-manager';
 import { defaultSandboxBillingDeps } from '@pagespace/lib/services/sandbox/sandbox-billing';
-import { lookupDriveBillingFacts, resolveSessionPayer } from '@pagespace/lib/billing/sandbox-payer';
-import { computeChargeFor } from '@pagespace/lib/billing/compute-charge';
+import { makeResolveShellPayer } from './terminal/shell-payer';
+import { pgWindowClaimLock } from './terminal/window-claim-lock';
 import { computeTierForDrive } from '@pagespace/lib/billing/sandbox-eligibility';
 import { acquireCodeExecutionSlot, releaseCodeExecutionSlot } from '@pagespace/lib/services/sandbox/quota';
 import { createSpritesSandboxClient, createSpriteHandleCache, type SpritesSdk } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
@@ -47,6 +47,7 @@ import { openPtyShell } from './terminal/sprites-shell';
 import { getRealtimeSpritesSdk } from './terminal/realtime-sprites-client';
 import {
   buildShellHandlers,
+  claimBillingWindow,
   composeSocketKey,
   connectFailureMessage,
   ensureShellSession,
@@ -433,18 +434,8 @@ const shellCheckAuth = buildShellCheckAuth({
     if (!allowedToRunCode) return { allowed: false, reason: 'code_execution_denied' };
     return { allowed: true, session: subject };
   },
-  resolvePayer: async (session) => {
-    // Payer = the session's DRIVE's payer through the one seam (WAL-9: the org pool for an org
-    // drive, recorded under the session owner); a global-assistant session (or a vanished
-    // drive) attributes to the session owner instead.
-    const facts = session.driveId === null ? null : await lookupDriveBillingFacts(session.driveId);
-    const payer = await resolveSessionPayer({
-      driveId: session.driveId,
-      ownerId: session.ownerId,
-      lookupDriveBillingFacts: async () => facts,
-    });
-    return { charge: computeChargeFor(payer, session.ownerId), driveId: facts ? session.driveId : null };
-  },
+  // WAL-2: the session's drive's payer, recorded under and capped against the ACTOR connecting.
+  resolvePayer: makeResolveShellPayer(),
   getUser: async (userId) => {
     const [userRow] = await db
       .select({ subscriptionTier: users.subscriptionTier, email: users.email })
@@ -502,6 +493,8 @@ const shellSessionDeps: ShellSessionDeps = {
     await store.recordColdTail({ id: shellId, tail, hasOutput, endedAt });
   },
   billing: defaultSandboxBillingDeps,
+  // re-review P2-1: billing-window claims serialize per session ACROSS realtime instances.
+  windowClaimLock: pgWindowClaimLock,
   // Sprites Tasks API hold (leaf 5-1): while an agent is running or a
   // viewer attached, a short-expiry platform task (refreshed on a
   // heartbeat, deleted on exit) keeps the sprite from cold-pausing mid-run;
@@ -598,6 +591,12 @@ const shellIoDeps = {
   reauthorizeViewer: async ({ shellId, userId }: { shellId: string; userId: string }) => {
     const decision = await shellCheckAuth({ userId, shellId });
     return decision.ok;
+  },
+  // WAL-2: typing on someone's behalf runs compute as them — their cap, their window.
+  claimBillingWindow: async (session: TerminalSession, userId: string) => {
+    const billing = shellSessionDeps.billing;
+    if (!billing) return true;
+    return (await claimBillingWindow(billing, agentTerminalSessionMap, session, userId, pgWindowClaimLock)).ok;
   },
 };
 

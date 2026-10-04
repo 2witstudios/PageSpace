@@ -29,6 +29,7 @@ function makeCreateDeps(
     getDriveOrgPolicies: async () => null,
     resolvePayer: async () => ({ payerId: PAYER_ID, tier: 'pro' }),
     now: () => NOW,
+    admitCreator: async () => ({ allowed: true }),
     ...over,
   };
 }
@@ -71,6 +72,27 @@ describe('createDriveEnv', () => {
     expect(result.env.name).toBe('staging');
     expect(result.env.sandboxId).toBeNull();
     expect(result.env.spriteKey).toBeNull();
+  });
+
+  it('WAL-2 (partial) [D-OW-28] a creator at their cap of the org\'s credits is refused, and nothing is minted', async () => {
+    const store = makeDriveEnvStore();
+    const createIfUnderLimit = vi.spyOn(store.store, 'createIfUnderLimit');
+    const asked: Array<{ driveId: string; userId: string }> = [];
+    const result = await createDriveEnv({
+      driveId: DRIVE_ID,
+      name: 'staging',
+      createdBy: 'member-marcus',
+      deps: makeCreateDeps(store, {
+        admitCreator: async (input) => {
+          asked.push(input);
+          return { allowed: false, message: 'cap reached' };
+        },
+      }),
+    });
+
+    expect(result).toEqual({ ok: false, reason: 'member_cap_reached', message: 'cap reached' });
+    expect(asked).toEqual([{ driveId: DRIVE_ID, userId: 'member-marcus' }]);
+    expect(createIfUnderLimit).not.toHaveBeenCalled();
   });
 
   it('given a vanished drive, should fail closed rather than meter the request against anybody else', async () => {

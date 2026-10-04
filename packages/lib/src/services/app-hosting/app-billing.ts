@@ -33,7 +33,7 @@ import {
   PUBLISHED_APP_WAKE_HOLD_ESTIMATE_CENTS,
 } from '../../billing/credit-pricing';
 import { resolveEnvCharge, lookupDriveBillingFacts } from '../../billing/sandbox-payer';
-import type { ComputeCharge, OrgComputeGateRefusal } from '../../billing/compute-charge';
+import { computeSpendKind, type ComputeCharge, type OrgComputeGateRefusal } from '../../billing/compute-charge';
 import { computeSettleWalletId, gateComputeCharge, holdMatchesCharge, UNSETTLED_COMPUTE } from '../../billing/compute-gate';
 import { AIMonitoring, type UsageTrackingOutcome } from '../../monitoring/ai-monitoring';
 import { chargeMillicents } from '../../billing/credit-core';
@@ -45,10 +45,11 @@ export interface AppBillingDeps {
    * Who pays for this app's runtime — the OWNING DRIVE's payer, with no fallback.
    * Null means unresolvable (a stale read of a drive mid-delete): the caller
    * refuses the wake or skips the settle rather than billing anyone else. An org
-   * drive's payer is the org (WAL-9): the charge is its POOL wallet, recorded under
-   * the drive's lead — never the lead's own wallet.
+   * drive's payer is the org (WAL-9): the charge is its POOL wallet, recorded under and
+   * capped against the app's cost owner ([D-OW-28]: `published_apps.costOwnerId`, the member who
+   * published it, else the drive lead) — never anyone's own wallet.
    */
-  resolveCharge: (input: { driveId: string }) => Promise<ComputeCharge | null>;
+  resolveCharge: (input: { driveId: string; costOwnerId: string | null }) => Promise<ComputeCharge | null>;
   /**
    * Balance check + reservation, run BEFORE the machine is started. This is the
    * whole of hosting's credit enforcement: an exhausted payer is refused a wake
@@ -92,11 +93,11 @@ export interface AppBillingDeps {
 }
 
 export const defaultAppBillingDeps: AppBillingDeps = {
-  async resolveCharge({ driveId }) {
+  async resolveCharge({ driveId, costOwnerId }) {
     // Called through a closure rather than passed unbound: `resolveEnvCharge`
     // invokes its input off its own object, and handing over a bare method
     // reference would drop `this` for any non-literal deps implementation.
-    return resolveEnvCharge({ driveId, lookupDriveBillingFacts: (id) => lookupDriveBillingFacts(id) });
+    return resolveEnvCharge({ driveId, costOwnerId, lookupDriveBillingFacts: (id) => lookupDriveBillingFacts(id) });
   },
 
   async gate({ charge }) {
@@ -138,8 +139,8 @@ export const defaultAppBillingDeps: AppBillingDeps = {
       // the source would fragment the usage breakdown's totals for no gain the
       // model label does not already give.
       source: 'terminal',
-      // Compute, not an AI call: never a seat draw on an org pool (WAL-9).
-      spendKind: 'compute',
+      // A drive accrual on an org pool (charged via resolveEnvCharge): never a seat draw.
+      spendKind: computeSpendKind(charge),
       // No pageId — a published app serves an environment, not a page.
       pageId: undefined,
       // First-class drive attribution, so hosting spend can be grouped by drive

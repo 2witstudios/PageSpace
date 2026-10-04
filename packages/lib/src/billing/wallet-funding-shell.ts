@@ -5,11 +5,13 @@
  *   - applyOrgPoolRefill: an org invoice paid refills the org pool (MON-3), exactly
  *     once per invoice (the ledger's stripeRef unique index), rolling the pool's period
  *     forward to the invoice's service period — the date org allocations reset on.
- *   - resetDueAllocations: the period-reset sweep over CHILD wallets. Each resets on its
- *     governing root's period (pool refill for org, personal renewal for personal,
- *     D-OW-12). Root wallets are not touched here: invoice.paid refills them, and the
- *     gate's lazy roll for comped personal accounts (credit-gate.ts) is deliberately
- *     left where it is until C3 lands.
+ *   - resetDuePeriods: the hourly period sweep, the ONLY reset that is not an invoice
+ *     (D-OW-12, ew9v06jeb). First rollDuePersonalRoots renews the personal root of a
+ *     comped paid account (no renewal-capable subscription, so no invoice.paid will ever
+ *     come) once per period on its UTC renewal date — the roll the credit gate used to do
+ *     lazily. Then resetDueAllocations resets every CHILD wallet on its governing root's
+ *     period (pool refill for org, personal renewal for personal), so a child sees the
+ *     root's new period in the same run. Org pools and subscribed roots are invoice.paid's.
  *   - donateToDriveWallet: moves a one-off amount from the donor's personal root wallet
  *     into a drive wallet as its own non-refundable funding leg, with a ledger pair.
  *   - refundFundingLeg (and wallet-legs drawWalletFundingLegs, the settle's draw): the only
@@ -21,24 +23,30 @@
  *   - donation:    wallet_funding_legs.sourceRef = `donation:<donationId>`, and the
  *                  ledger pair `donation-out:<id>` / `donation-in:<id>`;
  *   - reset:       the wallet's own monthlyPeriodStart (the update only lands while the
- *                  stored period is older than the governing one).
+ *                  stored period is older than the governing one);
+ *   - root roll:   credit_ledger.stripeRef = `root-roll-<userId>-<new period start>`.
  */
 
 import { db } from '@pagespace/db/db';
 import { creditLedger, creditHolds } from '@pagespace/db/schema/credits';
 import { wallets, walletFundingLegs, personalRootWalletOf } from '@pagespace/db/schema/wallets';
 import { organizations } from '@pagespace/db/schema/organizations';
-import { and, asc, eq, gt, isNotNull, isNull, or, lt, sql } from '@pagespace/db/operators';
+import { users } from '@pagespace/db/schema/auth';
+import { subscriptions } from '@pagespace/db/schema/subscriptions';
+import { and, asc, eq, gt, inArray, isNotNull, isNull, lte, or, lt, sql } from '@pagespace/db/operators';
 import { alias } from 'drizzle-orm/pg-core';
 import { isBillingEnabled } from '../deployment-mode';
 import { getUserDriveAccess } from '../permissions/permissions';
 import { loggers } from '../logging/logger-config';
-import { MONEY_MODEL_V2_ACTIVE } from './money-model';
+import { MONEY_MODEL_V2_ACTIVE, tierAllowanceCents } from './money-model';
+import { computeMonthlyRefill } from './credit-core';
+import { RENEWAL_CAPABLE_STATUSES, TIER_ALLOWANCE_REFILLS } from './credit-pricing';
 import {
   orgPoolRefillGrant,
   refillPool,
   invoiceServicePeriodMs,
   planAllocationReset,
+  planPersonalRootRoll,
   planLegRefund,
   planDonation,
   type DonationRefusal,
@@ -311,6 +319,147 @@ export async function resetDueAllocations(opts: { now: Date; batchSize?: number 
     if (rows.length < batch) break;
   }
   return result;
+}
+
+/** What one hourly period sweep did: personal roots rolled first, then child allocations reset. */
+export interface PeriodSweepResult {
+  roots: ResetSweepResult;
+  allocations: ResetSweepResult;
+}
+
+/**
+ * The hourly period sweep (D-OW-12): roll every due comped personal root, THEN reset every due
+ * child allocation, in that order, so a child under a root rolled this run resets onto the root's
+ * new period in the same run rather than an hour later.
+ */
+export async function resetDuePeriods(opts: { now: Date; batchSize?: number }): Promise<PeriodSweepResult> {
+  const roots = await rollDuePersonalRoots(opts);
+  const allocations = await resetDueAllocations(opts);
+  return { roots, allocations };
+}
+
+/** The tiers whose allowance renews every period (TIER_ALLOWANCE_REFILLS). */
+const REFILLING_TIERS = Object.entries(TIER_ALLOWANCE_REFILLS).filter(([, refills]) => refills).map(([tier]) => tier);
+
+/**
+ * Roll every comped personal root whose period has ended (ew9v06jeb): a paid tier with no
+ * renewal-capable subscription, which no invoice.paid will ever renew. This is the reset the
+ * credit gate used to do lazily on the account's next call; the sweep is now its only writer.
+ *
+ * Candidates are read in pages by wallet id (a root still inside its period, a free or unknown
+ * tier, or a subscribed account is never selected). Each roll then re-reads the root under
+ * FOR UPDATE and re-plans against the locked row and the subscriptions read in the same
+ * transaction, so a settle or top-up committed since the page read is never overwritten and an
+ * account that just subscribed is left to its invoice. The grant row is inserted FIRST, keyed by
+ * the new period's start: a second sweep — concurrent or repeated — conflicts on that key and
+ * writes nothing, so a period is rolled exactly once.
+ *
+ * Instants, not wall-clock: `now` and the stored timestamptz columns compare as absolute times
+ * whatever the session's TimeZone, and the period math is UTC (planPersonalRootRoll).
+ */
+export async function rollDuePersonalRoots(opts: { now: Date; batchSize?: number }): Promise<ResetSweepResult> {
+  const batch = opts.batchSize ?? RESET_BATCH;
+  const result: ResetSweepResult = { scanned: 0, reset: 0, failed: 0 };
+  // Review P3-3: no credit grants where billing is off — onprem, and tenant, which bills through
+  // the control plane (isBillingEnabled is the billing guard; CLAUDE.md). The gate's lazy roll never
+  // granted there, so the sweep writes no grant there either.
+  if (!isBillingEnabled()) return result;
+  const renewable = sql`EXISTS (SELECT 1 FROM ${subscriptions} WHERE ${subscriptions.userId} = ${wallets.userId} AND ${inArray(subscriptions.status, RENEWAL_CAPABLE_STATUSES)})`;
+  let cursor = '';
+
+  for (;;) {
+    const rows = await db
+      .select({ id: wallets.id, userId: wallets.userId })
+      .from(wallets)
+      .innerJoin(users, eq(users.id, wallets.userId))
+      .where(and(
+        eq(wallets.ownerType, 'user'),
+        isNull(wallets.subjectType),
+        isNull(wallets.parentWalletId),
+        or(isNull(wallets.monthlyPeriodEnd), lte(wallets.monthlyPeriodEnd, opts.now)),
+        inArray(users.subscriptionTier, REFILLING_TIERS),
+        sql`NOT ${renewable}`,
+        gt(wallets.id, cursor),
+      ))
+      .orderBy(asc(wallets.id))
+      .limit(batch);
+    if (rows.length === 0) break;
+    cursor = rows[rows.length - 1].id;
+
+    for (const row of rows) {
+      result.scanned += 1;
+      if (row.userId === null) continue;
+      try {
+        if (await rollOneRoot(row.userId, opts.now)) result.reset += 1;
+      } catch (error) {
+        result.failed += 1;
+        loggers.api.error('personal root roll failed', error instanceof Error ? error : undefined, { walletId: row.id });
+      }
+    }
+    if (rows.length < batch) break;
+  }
+  return result;
+}
+
+async function rollOneRoot(userId: string, now: Date): Promise<boolean> {
+  return db.transaction(async (tx) => {
+    const [locked] = await tx
+      .select({
+        id: wallets.id,
+        monthlyRemainingCents: wallets.monthlyRemainingCents,
+        debtCents: wallets.debtCents,
+        monthlyPeriodStart: wallets.monthlyPeriodStart,
+        monthlyPeriodEnd: wallets.monthlyPeriodEnd,
+      })
+      .from(wallets)
+      .where(personalRootWalletOf(userId))
+      .for('update');
+    if (!locked) return false;
+    const [owner] = await tx.select({ tier: users.subscriptionTier }).from(users).where(eq(users.id, userId));
+    const [subscribed] = await tx
+      .select({ id: subscriptions.id })
+      .from(subscriptions)
+      .where(and(eq(subscriptions.userId, userId), inArray(subscriptions.status, RENEWAL_CAPABLE_STATUSES)))
+      .limit(1);
+    const tier = owner?.tier ?? '';
+    const plan = planPersonalRootRoll({
+      tier,
+      hasRenewalCapableSubscription: subscribed !== undefined,
+      periodStartMs: locked.monthlyPeriodStart?.getTime() ?? null,
+      periodEndMs: locked.monthlyPeriodEnd?.getTime() ?? null,
+      nowMs: now.getTime(),
+    });
+    if (!plan.due) return false;
+    const periodStart = new Date(plan.periodStartMs);
+    // No invoice on this path: the grant is the tier's list-price allowance (MON-2). Unspent
+    // allowance carries over and outstanding debt is netted against it, as invoice.paid does.
+    const refill = computeMonthlyRefill(tierAllowanceCents(tier), locked.monthlyRemainingCents ?? 0, locked.debtCents ?? 0);
+    const claimed = await tx
+      .insert(creditLedger)
+      .values({
+        userId,
+        walletId: locked.id,
+        entryType: 'monthly_grant',
+        bucket: 'monthly',
+        amountCents: refill.monthlyAllowanceCents,
+        stripeRef: `root-roll-${userId}-${periodStart.toISOString()}`,
+        consumeStatus: 'applied',
+      })
+      .onConflictDoNothing(STRIPE_REF_ARBITER)
+      .returning({ id: creditLedger.id });
+    if (claimed.length === 0) return false;
+    await tx
+      .update(wallets)
+      .set({
+        monthlyRemainingCents: refill.monthlyRemainingCents,
+        monthlyAllowanceCents: refill.monthlyAllowanceCents,
+        debtCents: refill.debtCents,
+        monthlyPeriodStart: periodStart,
+        monthlyPeriodEnd: new Date(plan.periodEndMs),
+      })
+      .where(eq(wallets.id, locked.id));
+    return true;
+  });
 }
 
 async function resetOne(

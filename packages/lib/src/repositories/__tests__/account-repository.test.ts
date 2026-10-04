@@ -44,6 +44,7 @@ vi.mock('@pagespace/db/operators', () => ({
 vi.mock('../../organizations/leave', () => ({
   leaveAllOrganizations: vi.fn().mockResolvedValue([]),
   reassignLedOrgDrives: vi.fn().mockResolvedValue([]),
+  recordComputeReattributions: vi.fn().mockResolvedValue(undefined),
 }));
 // [D-OW-27] The suppression write is proven against Postgres in organizations/__tests__/
 // departure-suppression.integration.test.ts; here only its place in deleteUser.

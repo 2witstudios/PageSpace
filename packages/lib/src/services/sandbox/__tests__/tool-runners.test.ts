@@ -1428,12 +1428,12 @@ function makeMutableClock(startMs: number) {
 
 function makeBilling(over: Partial<SandboxRunDeps['billing']> = {}): {
   billing: NonNullable<SandboxRunDeps['billing']>;
-  resolveChargeCalls: Array<{ driveId: string | null; ownerId: string }>;
+  resolveChargeCalls: Array<{ driveId: string | null; ownerId: string; actorId: string }>;
   gateCalls: Array<{ charge: ComputeCharge }>;
   trackUsageCalls: Array<{ charge: ComputeCharge; holdId?: string; activeSeconds: number; pageId?: string; driveId?: string; workspaceId?: string }>;
   releaseHoldCalls: string[];
 } {
-  const resolveChargeCalls: Array<{ driveId: string | null; ownerId: string }> = [];
+  const resolveChargeCalls: Array<{ driveId: string | null; ownerId: string; actorId: string }> = [];
   const gateCalls: Array<{ charge: ComputeCharge }> = [];
   const trackUsageCalls: Array<{ charge: ComputeCharge; holdId?: string; activeSeconds: number; pageId?: string; driveId?: string; workspaceId?: string }> = [];
   const releaseHoldCalls: string[] = [];
@@ -1680,7 +1680,8 @@ describe('runBashInSandbox — machine billing (Terminal Epic 3)', () => {
       deps,
     });
 
-    expect(resolveChargeCalls).toEqual([{ driveId: 'session-drive-1', ownerId: 'session-owner-1' }]);
+    // The recorded person is the ACTOR (the user whose turn runs the tool), never the session owner.
+    expect(resolveChargeCalls).toEqual([{ driveId: 'session-drive-1', ownerId: 'session-owner-1', actorId: 'u1' }]);
   });
 
   it('WAL-9 (partial) holds an ORG-drive run on the org pool charge, then settles that same charge once', async () => {
@@ -1817,7 +1818,7 @@ describe('runBashInSandbox — machine billing (Terminal Epic 3)', () => {
         return { exitCode: 0, stdout: 'ok', stderr: '' };
       },
     });
-    const resolveChargeCalls: Array<{ driveId: string | null; ownerId: string }> = [];
+    const resolveChargeCalls: Array<{ driveId: string | null; ownerId: string; actorId: string }> = [];
     const { billing, gateCalls, trackUsageCalls } = makeBilling({
       // Mirrors the real resolveSessionPayer rule: drive owner when set.
       resolveCharge: async (input) => {
@@ -1854,7 +1855,7 @@ describe('runBashInSandbox — machine billing (Terminal Epic 3)', () => {
 
     expect(result).toMatchObject({ success: true });
     // The payer was resolved from the SESSION's driveId, never the surface's.
-    expect(resolveChargeCalls).toEqual([{ driveId: 'session-own-drive', ownerId: 'session-own-owner' }]);
+    expect(resolveChargeCalls).toEqual([{ driveId: 'session-own-drive', ownerId: 'session-own-owner', actorId: 'u1' }]);
     expect(gateCalls).toEqual([{ charge: { kind: 'user', userId: 'owner-of-session-own-drive' } }]);
     expect(trackUsageCalls).toEqual([
       {

@@ -23,12 +23,14 @@ import {
   type GateOptions,
 } from './credit-gate';
 import { PERSONAL_SPEND } from './spend-target';
-import { holdWalletId } from './credit-consume';
+import { holdWalletId, releaseHold } from './credit-consume';
+import { lookupDriveBillingFacts, resolveEnvCharge } from './sandbox-payer';
+import { MACHINE_HOLD_ESTIMATE_CENTS } from './credit-pricing';
 import { ensurePersonalRootWalletId } from './personal-wallet';
 import { isBillingEnabled } from '../deployment-mode';
 import { toSubscriptionTier, type SubscriptionTier } from './subscription-tiers';
 import type { UsageTrackingOutcome } from '../monitoring/ai-monitoring';
-import { computeChargeTier, orgComputeRefusalOf, type ComputeCharge, type OrgComputeGateRefusal } from './compute-charge';
+import { ORG_COMPUTE_REFUSAL_MESSAGES, computeChargeTier, computeSpendKind, orgComputeRefusalOf, type ComputeCharge, type OrgComputeGateRefusal } from './compute-charge';
 
 /** A compute site's reservation bounds; `maxInFlight` may follow the charge's tier. */
 export interface ComputeGateOptions extends Omit<GateOptions, 'spend' | 'maxInFlight' | 'spendKind'> {
@@ -65,8 +67,9 @@ export async function resolveComputeChargeTier(charge: ComputeCharge): Promise<S
 export async function gateComputeCharge(charge: ComputeCharge, opts: ComputeGateOptions): Promise<ComputeGateResult> {
   const tier = await resolveComputeChargeTier(charge);
   const maxInFlight = typeof opts.maxInFlight === 'function' ? opts.maxInFlight(tier) : opts.maxInFlight;
-  // Every compute hold is marked compute, so an org pool's compute never counts toward a seat.
-  const bounds = { ...opts, maxInFlight, spendKind: 'compute' as const };
+  // Every compute hold is marked compute, an env or app accrual as 'drive_compute'; on an org pool
+  // both count toward the recorded person's seat (seat-allowance, [D-OW-28]).
+  const bounds = { ...opts, maxInFlight, spendKind: computeSpendKind(charge) };
   if (charge.kind === 'org') {
     const result = await canConsumeOrgPool(charge.userId, charge.orgId, bounds);
     const orgRefusal = orgComputeRefusalOf(result);
@@ -117,4 +120,28 @@ export const UNSETTLED_COMPUTE: UsageTrackingOutcome = Object.freeze({ persisted
 export async function hasSpendableComputeBalance(charge: ComputeCharge): Promise<boolean> {
   if (charge.kind === 'org') return hasSpendableOrgPool(charge.orgId);
   return hasSpendableBalance(charge.userId, await personalTier(charge.userId));
+}
+
+/**
+ * [D-OW-28] Whether `userId` may CREATE a billable environment or published app in `driveId`. Its
+ * compute will be recorded under, and capped against, them; a member already at their cap cannot
+ * add a resource that would only ever be refused or overshoot. Decided the way every compute
+ * admission is — a real hold for the creator's charge, taken under the pool row's lock in the
+ * gate's transaction (gateSharedWallet), then released at once: creating starts no machine, so
+ * nothing is reserved past the decision. Only the member's own cap refuses here (an empty or paused
+ * pool refuses the resource's first wake, as before). A personal drive, a deployment without
+ * billing, or an unresolvable drive admits: there is no per-member cap to apply.
+ */
+export async function admitDriveComputeCreator(input: { driveId: string; userId: string }): Promise<{ allowed: true } | { allowed: false; message: string }> {
+  if (!isBillingEnabled()) return { allowed: true };
+  const charge = await resolveEnvCharge({ driveId: input.driveId, costOwnerId: input.userId, lookupDriveBillingFacts: (id) => lookupDriveBillingFacts(id) });
+  if (!charge || charge.kind !== 'org') return { allowed: true };
+  const gate = await gateComputeCharge(charge, { estCostCents: MACHINE_HOLD_ESTIMATE_CENTS });
+  if (gate.allowed) {
+    if (gate.holdId) await releaseHold(gate.holdId);
+    return { allowed: true };
+  }
+  return gate.orgRefusal === 'org_member_cap_reached'
+    ? { allowed: false, message: ORG_COMPUTE_REFUSAL_MESSAGES.org_member_cap_reached }
+    : { allowed: true };
 }

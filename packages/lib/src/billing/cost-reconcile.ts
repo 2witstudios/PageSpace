@@ -34,6 +34,7 @@ import {
 } from './credit-pricing';
 import { emitCreditsUpdated } from './credit-emit';
 import { loggers } from '../logging/logger-config';
+import { errorLogFields } from '../logging/error-cause';
 
 const BATCH = 200;
 const MAX_PASSES = 50;
@@ -329,8 +330,8 @@ export async function reconcileOpenRouterCosts(
         }
         // 'pending': attempts bumped; retried next run.
       } catch (error) {
-        loggers.ai.debug('cost reconcile row failed', {
-          error: (error as Error).message,
+        loggers.ai.warn('cost reconcile row failed', {
+          ...errorLogFields(error),
           aiUsageLogId: row.id,
         });
       }

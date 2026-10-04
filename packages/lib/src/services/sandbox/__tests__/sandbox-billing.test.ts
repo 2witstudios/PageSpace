@@ -64,27 +64,27 @@ function mockDriveOwnerRow(row: { ownerId: string; orgId: string | null } | unde
 
 describe('defaultSandboxBillingDeps.resolveCharge', () => {
   it('charges the session ownerId directly for a global-assistant session (driveId null), with no DB lookup', async () => {
-    const result = await defaultSandboxBillingDeps.resolveCharge({ driveId: null, ownerId: 'owner-1' });
+    const result = await defaultSandboxBillingDeps.resolveCharge({ driveId: null, ownerId: 'owner-1', actorId: 'owner-1' });
     expect(result).toEqual({ kind: 'user', userId: 'owner-1' });
     expect(mockDb.select).not.toHaveBeenCalled();
   });
 
   it("resolves to the SESSION's ACTUAL drive owner via a direct drives read — never the session's own ownerId when a real owner resolves", async () => {
     mockDriveOwnerRow({ ownerId: 'real-owner', orgId: null });
-    const result = await defaultSandboxBillingDeps.resolveCharge({ driveId: 'session-drive-1', ownerId: 'session-owner-1' });
+    const result = await defaultSandboxBillingDeps.resolveCharge({ driveId: 'session-drive-1', ownerId: 'session-owner-1', actorId: 'member-ana' });
     expect(result).toEqual({ kind: 'user', userId: 'real-owner' });
   });
 
-  it("WAL-9 (partial) an ORG drive's session charges the org pool, recorded under the session owner — never the drive lead's wallet", async () => {
+  it("WAL-9 (partial) WAL-2 (partial) an ORG drive's session charges the org pool, recorded under the ACTOR running it — never the session owner, never the lead's wallet", async () => {
     mockDriveOwnerRow({ ownerId: 'lead-marcus', orgId: 'org-northwind' });
-    const result = await defaultSandboxBillingDeps.resolveCharge({ driveId: 'org-drive', ownerId: 'session-owner-1' });
-    expect(result).toEqual({ kind: 'org', orgId: 'org-northwind', userId: 'session-owner-1' });
+    const result = await defaultSandboxBillingDeps.resolveCharge({ driveId: 'org-drive', ownerId: 'session-owner-1', actorId: 'member-ana' });
+    expect(result).toEqual({ kind: 'org', orgId: 'org-northwind', userId: 'member-ana' });
     expect(mockCanConsumeAI).not.toHaveBeenCalled();
   });
 
   it('falls back to the session ownerId when the drive cannot be resolved (a stale read mid-delete)', async () => {
     mockDriveOwnerRow(undefined);
-    const result = await defaultSandboxBillingDeps.resolveCharge({ driveId: 'vanished-drive', ownerId: 'owner-1' });
+    const result = await defaultSandboxBillingDeps.resolveCharge({ driveId: 'vanished-drive', ownerId: 'owner-1', actorId: 'member-ana' });
     expect(result).toEqual({ kind: 'user', userId: 'owner-1' });
   });
 });

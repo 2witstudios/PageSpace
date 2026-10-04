@@ -14,7 +14,7 @@ import {
   MACHINE_MARKUP_BPS,
 } from '../../billing/credit-pricing';
 import { resolveSessionPayer, lookupDriveBillingFacts } from '../../billing/sandbox-payer';
-import { computeChargeFor } from '../../billing/compute-charge';
+import { computeChargeFor, computeSpendKind } from '../../billing/compute-charge';
 import { computeSettleWalletId, gateComputeCharge, UNSETTLED_COMPUTE } from '../../billing/compute-gate';
 import { AIMonitoring } from '../../monitoring/ai-monitoring';
 import { calculateMachineCostDollars } from '../../monitoring/machine-pricing';
@@ -27,10 +27,11 @@ export const defaultSandboxBillingDeps: SandboxBillingDeps = {
   // same drive-payer-else-session-owner rule `storageBillingTarget` applies
   // for the storage charge stream, so both streams bill one payer for one
   // session regardless of which conversation/drive the caller happened to be
-  // in when the run started. An org drive's session charges the ORG POOL (WAL-9), recorded under the session's own
-  // owner — never that person's wallet.
-  async resolveCharge({ driveId, ownerId }) {
-    return computeChargeFor(await resolveSessionPayer({ driveId, ownerId, lookupDriveBillingFacts }), ownerId);
+  // in when the run started. An org drive's session charges the ORG POOL (WAL-9), recorded under
+  // the ACTOR — the person who caused the run, whose per-member cap it counts toward — never the
+  // session's owner (a drive session is shared) and never anyone's own wallet.
+  async resolveCharge({ driveId, ownerId, actorId }) {
+    return computeChargeFor(await resolveSessionPayer({ driveId, ownerId, lookupDriveBillingFacts }), actorId);
   },
 
   async gate({ charge }) {
@@ -65,8 +66,8 @@ export const defaultSandboxBillingDeps: SandboxBillingDeps = {
       provider: 'sprites',
       model: 'terminal-machine',
       source: 'terminal',
-      // Compute, not an AI call: never a seat draw on an org pool (WAL-9).
-      spendKind: 'compute',
+      // Compute the session's person ran: on an org pool it counts toward their seat (fe9db1nm).
+      spendKind: computeSpendKind(charge),
       // The referenced agent page — purely descriptive per-agent grouping,
       // never the payer source (resolved from the session by `resolveCharge`
       // above).

@@ -80,7 +80,7 @@ const consumerWallet: ConsumerWalletView = {
 const { viewer: _consumerViewer, ...consumerFields } = consumerWallet;
 const leadWallet: LeadWalletView = {
   ...consumerFields, viewer: 'lead', allocationCents: 120_000, spentCents: 3_558, topupRemainingCents: 0, debtCents: 0,
-  periodStart: null, periodEnd: null, fallbackRule: null,
+  periodStart: null, periodEnd: null, fallbackRule: null, overshootChoice: null,
   spendByConsumer: [{ consumerKey: 'user:u-lena', userId: 'u-lena', spentCents: 1_337 }],
 };
 const { viewer: _leadViewer, ...leadFields } = leadWallet;
@@ -170,12 +170,21 @@ describe('POST / PATCH / DELETE /api/drives/[driveId]/wallet', () => {
     expect(createDriveWallet).not.toHaveBeenCalled();
   });
 
+  it('WAL-6 (partial) PATCH passes the funder\'s overshoot choice through, and null to restore the default', async () => {
+    vi.mocked(updateDriveWallet).mockResolvedValue({ ok: true, viewer: 'org_admin', actions: [], wallet: null });
+    for (const overshootChoice of ['wallet_debt', 'absorb_to_parent', null] as const) {
+      const res = await PATCH(req('PATCH', '', { overshootChoice }), context);
+      expect(res.status).toBe(200);
+      expect(updateDriveWallet).toHaveBeenLastCalledWith('u-marcus', DRIVE, { overshootChoice }, 'session');
+    }
+  });
+
   it('UI-9 (partial) PATCH passes only the validated fields; unknown fields and bad kinds are 400', async () => {
     vi.mocked(updateDriveWallet).mockResolvedValue({ ok: true, viewer: 'lead', actions: [], wallet: leadWallet });
     const res = await PATCH(req('PATCH', '', { paused: true, fallbackRule: null, defaultSpendSource: 'drive_wallet' }), context);
     expect(res.status).toBe(200);
     expect(updateDriveWallet).toHaveBeenCalledWith('u-marcus', DRIVE, { paused: true, fallbackRule: null, defaultSpendSource: 'drive_wallet' }, 'session');
-    for (const body of [{ defaultSpendSource: 'org_pool' }, { fallbackRule: 'anything' }, { status: 'active' }]) {
+    for (const body of [{ defaultSpendSource: 'org_pool' }, { fallbackRule: 'anything' }, { status: 'active' }, { overshootChoice: 'consumer' }]) {
       expect((await PATCH(req('PATCH', '', body), context)).status, JSON.stringify(body)).toBe(400);
     }
   });

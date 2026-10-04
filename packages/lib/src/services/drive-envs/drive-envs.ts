@@ -154,6 +154,13 @@ export interface CreateDriveEnvDeps {
   getDriveOrgPolicies: (driveId: string) => Promise<OrgPolicies | null>;
   /** Required only for a LOCAL create (the one-time code needs randomness and a hash). */
   identity?: Pick<LocalEnvIdentityDeps, 'random' | 'hash' | 'newEnrollmentId'>;
+  /**
+   * [D-OW-28] Whether the creating member may add a billable env: its compute counts against their
+   * per-member cap on an org drive, so a member at their cap is refused (compute-gate
+   * `admitDriveComputeCreator`). Required, never defaulted: the cap must not be skippable. Not
+   * asked for a LOCAL env (it runs on the member's own machine) or a create with no creator.
+   */
+  admitCreator: (input: { driveId: string; userId: string }) => Promise<{ allowed: true } | { allowed: false; message: string }>;
 }
 
 /** What a local create hands back ONCE: the code is shown to the user and never stored. */
@@ -172,7 +179,9 @@ export type CreateDriveEnvResult =
   /** POL-10: the drive's organization does not allow persistent environments. */
   | { ok: false; reason: 'org_policy'; message: string }
   /** The payer's tier forbids environments, or they are at their ceiling. `limit` is the ceiling that applied. */
-  | { ok: false; reason: 'quota_exceeded'; denial: DriveEnvAllowanceDenialReason; limit: number };
+  | { ok: false; reason: 'quota_exceeded'; denial: DriveEnvAllowanceDenialReason; limit: number }
+  /** [D-OW-28] The creating member is at their cap of the org's credits. Nothing was created. */
+  | { ok: false; reason: 'member_cap_reached'; message: string };
 
 /**
  * Create an environment: mint the row.
@@ -226,6 +235,11 @@ export async function createDriveEnv({
 
   const policy = environmentsDecision(await deps.getDriveOrgPolicies(driveId));
   if (!policy.ok) return { ok: false, reason: 'org_policy', message: policy.message };
+
+  if (!local && createdBy) {
+    const admitted = await deps.admitCreator({ driveId, userId: createdBy });
+    if (!admitted.allowed) return { ok: false, reason: 'member_cap_reached', message: admitted.message };
+  }
 
   const allowance = await checkDriveEnvAllowance({
     payerId: payer.payerId,

@@ -121,9 +121,13 @@ export interface SandboxBillingDeps {
    * page. The one seam payer resolution goes through; see `sandbox-payer.ts`'s
    * `resolveSessionPayer` — the same rule `storageBillingTarget` applies for
    * storage attribution. An org drive's payer is the org: the charge is its POOL
-   * wallet (WAL-9), recorded under the session's owner — never that person's wallet.
+   * wallet (WAL-9), recorded under `actorId` — THE PERSON WHO CAUSES the run (the user whose
+   * chat turn or command runs, the attacher of a terminal), never the session's owner, so the
+   * per-member cap binds whoever is actually spending (WAL-2). A drive session is shared with
+   * the drive's members: charging its owner would let a member at their cap keep running in a
+   * drive-mate's session. Required, so no caller can silently default to the owner.
    */
-  resolveCharge: (input: { driveId: string | null; ownerId: string }) => Promise<ComputeCharge>;
+  resolveCharge: (input: { driveId: string | null; ownerId: string; actorId: string }) => Promise<ComputeCharge>;
   /**
    * Places a flat-estimate hold on the charge's wallet before the machine run begins.
    * `orgRefusal` names why an org pool refused (missing, paused, empty).
@@ -375,7 +379,7 @@ export function safeLogWarn(
 // error-level line for every free-tier user hitting their own plan ceiling is
 // noise that trains the on-call to ignore this logger.
 const AUTHZ_DENY_REASONS = new Set([
-  'no_drive_access', 'insufficient_role', 'no_agent_access', 'org_policy', 'tier_ineligible', 'org_wallet_unavailable', 'org_wallet_paused', 'org_wallet_empty', 'kill_switch_off', 'no_machine',
+  'no_drive_access', 'insufficient_role', 'no_agent_access', 'org_policy', 'tier_ineligible', 'org_wallet_unavailable', 'org_wallet_paused', 'org_wallet_empty', 'org_member_cap_reached', 'kill_switch_off', 'no_machine',
   'session_runtime_exceeded', 'session_limit_reached',
   // A legacy conversation that predates sessions has no working context to run
   // in — an expected refusal (not an infra fault), so it belongs here rather
@@ -402,6 +406,8 @@ export type SandboxToolDenialReason =
   | 'org_wallet_unavailable'
   | 'org_wallet_paused'
   | 'org_wallet_empty'
+  /** WAL-2: the member has used their allowance of the org pool (AI and compute share it). Nothing started. */
+  | 'org_member_cap_reached'
   | 'no_drive_access'
   | 'insufficient_role'
   | 'no_agent_access'
@@ -496,6 +502,7 @@ export const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
   org_wallet_unavailable: ORG_COMPUTE_REFUSAL_MESSAGES.org_wallet_unavailable,
   org_wallet_paused: ORG_COMPUTE_REFUSAL_MESSAGES.org_wallet_paused,
   org_wallet_empty: ORG_COMPUTE_REFUSAL_MESSAGES.org_wallet_empty,
+  org_member_cap_reached: ORG_COMPUTE_REFUSAL_MESSAGES.org_member_cap_reached,
   no_drive_access: 'You do not have access to run code in this drive.',
   insufficient_role: 'Running code requires edit access to this drive.',
   no_agent_access: 'This agent is not permitted to run code in this drive.',
@@ -703,6 +710,8 @@ export async function withMachineBilling<S>(
   const charge = await billing.resolveCharge({
     driveId: billingSession.driveId,
     ownerId: billingSession.ownerId,
+    // The person whose turn runs this tool, not the session's owner: a drive session is shared.
+    actorId: ctx.userId,
   });
   // WAL-9: an org drive's run is held on the org pool. A missing, paused or empty pool
   // refuses here, before any machine is touched, and names the org state — it never

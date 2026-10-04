@@ -63,6 +63,7 @@ const getDrivePolicies = vi.hoisted(() => vi.fn());
 vi.mock('@pagespace/lib/organizations/policy-reader', () => ({ getDrivePolicies }));
 
 import { DEFAULT_ORG_POLICIES } from '@pagespace/lib/organizations/policies-core';
+import { DEFAULT_AI_MODEL, DEFAULT_AI_PROVIDER } from '@pagespace/lib/ai/model-defaults';
 import {
   createAIProvider,
   isProviderError,
@@ -140,7 +141,7 @@ describe('provider-factory', () => {
 
       it('POL-8 (partial) an allowed model runs, and an empty allowlist allows none', async () => {
         process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
-        getDrivePolicies.mockResolvedValue(orgPolicies({ modelAllowlist: ['z-ai/glm-5.3-flash'] }));
+        getDrivePolicies.mockResolvedValue(orgPolicies({ modelAllowlist: [DEFAULT_AI_MODEL] }));
         expect(isProviderError(await createAIProvider('user-123', {}, { driveId: 'drive-1' }))).toBe(false);
         getDrivePolicies.mockResolvedValue(orgPolicies({ modelAllowlist: [] }));
         expect(isProviderError(await createAIProvider('user-123', {}, { driveId: 'drive-1' }))).toBe(true);
@@ -149,9 +150,9 @@ describe('provider-factory', () => {
       it('POL-8 (partial) a disallowed SELECTION is refused, never silently replaced by an allowed default (the resolver would have swapped it)', async () => {
         process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
         // The default is allowed; the asked-for model is not in the catalog, so the resolver substitutes the default.
-        getDrivePolicies.mockResolvedValue(orgPolicies({ modelAllowlist: ['z-ai/glm-5.3-flash'] }));
+        getDrivePolicies.mockResolvedValue(orgPolicies({ modelAllowlist: [DEFAULT_AI_MODEL] }));
 
-        const result = await createAIProvider('user-123', { selectedProvider: 'zai', selectedModel: 'not/allowed-model' }, { driveId: 'drive-1' });
+        const result = await createAIProvider('user-123', { selectedProvider: DEFAULT_AI_PROVIDER, selectedModel: 'not/allowed-model' }, { driveId: 'drive-1' });
 
         expect(isProviderError(result) && result.code).toBe('org_policy');
         expect(createOpenRouter).not.toHaveBeenCalled();
@@ -182,8 +183,8 @@ describe('provider-factory', () => {
         expect(isProviderError(result)).toBe(false);
         if (!isProviderError(result)) {
           // DEFAULT_PROVIDER / DEFAULT_MODEL
-          expect(result.provider).toBe('zai');
-          expect(result.modelName).toBe('z-ai/glm-5.3-flash');
+          expect(result.provider).toBe('openai');
+          expect(result.modelName).toBe('openai/gpt-6-luna');
           expect(createOpenRouter).toHaveBeenCalled();
         }
       });
@@ -277,11 +278,11 @@ describe('provider-factory', () => {
 
         expect(isProviderError(result)).toBe(false);
         if (!isProviderError(result)) {
-          expect(result.provider).toBe('zai');
-          expect(result.modelName).toBe('z-ai/glm-5.3-flash');
+          expect(result.provider).toBe('openai');
+          expect(result.modelName).toBe('openai/gpt-6-luna');
         }
         // the arbitrary model is never sent — only the default is
-        expect(mockOpenRouterChat).toHaveBeenCalledWith('z-ai/glm-5.3-flash', expect.anything());
+        expect(mockOpenRouterChat).toHaveBeenCalledWith('openai/gpt-6-luna', expect.anything());
         expect(mockOpenRouterChat).not.toHaveBeenCalledWith('totally-unknown/model', expect.anything());
       });
 
@@ -296,7 +297,7 @@ describe('provider-factory', () => {
 
         expect(isProviderError(result)).toBe(false);
         if (!isProviderError(result)) {
-          expect(result.modelName).toBe('z-ai/glm-5.3-flash');
+          expect(result.modelName).toBe('openai/gpt-6-luna');
         }
         expect(mockOpenRouterChat).not.toHaveBeenCalledWith('openai/not-a-real-model', expect.anything());
       });

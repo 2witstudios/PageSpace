@@ -66,6 +66,7 @@ import {
   redactSettledEvidence,
   type MemoryField,
 } from '@/lib/memory/candidate-service';
+import { errorLogFields } from '@pagespace/lib/logging/error-cause';
 
 /**
  * Reuses the constant the settings UI gates on rather than restating it.
@@ -171,9 +172,8 @@ export async function POST(request: Request) {
         }
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
-        loggers.api.error(`Memory cron: Error processing user ${userId}`, {
-          error: errorMsg,
-        });
+        // The cause chain too: Drizzle wraps the driver error (e.g. a Postgres FATAL) on .cause.
+        loggers.api.error(`Memory cron: Error processing user ${userId}`, errorLogFields(error));
         results.errors.push(`${userId}: ${errorMsg}`);
       }
     }

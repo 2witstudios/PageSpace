@@ -9,7 +9,7 @@ const mockDb = vi.hoisted(() => ({
   update: vi.fn(),
   delete: vi.fn(),
 }));
-const mockAiLogger = vi.hoisted(() => ({ debug: vi.fn(), error: vi.fn() }));
+const mockAiLogger = vi.hoisted(() => ({ debug: vi.fn(), warn: vi.fn(), error: vi.fn() }));
 const mockEmitCreditsUpdated = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 
 vi.mock('@pagespace/db/db', () => ({ db: mockDb }));
@@ -337,7 +337,21 @@ describe('consumeCredits', () => {
     await expect(
       consumeCredits({ aiUsageLogId: 'aul_1', userId: 'u1', costDollars: 1 }),
     ).resolves.toBe('deferred');
-    expect(mockAiLogger.debug).toHaveBeenCalled();
+    expect(mockAiLogger.warn).toHaveBeenCalled();
+  });
+
+  it('pk862snl: a settle that fails on a Postgres FATAL logs the driver error Drizzle wrapped, at warn, not a bare "Failed query"', async () => {
+    mockDb.insert.mockReturnValue(claimReturning([{ id: 'led_1' }]));
+    const fatal = Object.assign(new Error('sorry, too many clients already'), { code: '53300' });
+    mockDb.transaction.mockRejectedValueOnce(Object.assign(new Error('Failed query: update "wallets"'), { cause: fatal }));
+
+    await expect(consumeCredits({ aiUsageLogId: 'aul_1', userId: 'u1', costDollars: 1 })).resolves.toBe('deferred');
+
+    expect(mockAiLogger.warn).toHaveBeenCalledWith('credit consume failed', expect.objectContaining({
+      error: 'Failed query: update "wallets"',
+      cause: [{ name: 'Error', message: 'sorry, too many clients already', code: '53300' }],
+      aiUsageLogId: 'aul_1',
+    }));
   });
 
   // ── The reported STATUS ─────────────────────────────────────────────────────
@@ -509,7 +523,7 @@ describe('releaseHold', () => {
   it('never throws if the delete fails', async () => {
     mockDb.delete.mockImplementation(() => { throw new Error('boom'); });
     await expect(releaseHold('hold_99')).resolves.toBeUndefined();
-    expect(mockAiLogger.debug).toHaveBeenCalled();
+    expect(mockAiLogger.warn).toHaveBeenCalledWith('credit hold release failed', { error: 'boom', holdId: 'hold_99' });
   });
 });
 

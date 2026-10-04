@@ -323,7 +323,7 @@ describe('defaultReconcileSandboxStorageDeps.listDriveEnvSprites', () => {
     // No `ownerId`: `drive_envs` has none, and `createdBy` is audit-only —
     // selecting it would be the first step toward billing the creator.
     expect(Object.keys(selectedShape ?? {}).sort()).toEqual(
-      ['driveId', 'envId', 'lastActiveAt', 'measuredAt', 'measuredBytes', 'storageLastBilledAt'].sort(),
+      ['costOwnerId', 'driveId', 'envId', 'lastActiveAt', 'measuredAt', 'measuredBytes', 'storageLastBilledAt'].sort(),
     );
     assert({
       given: "the env row source's predicate",
@@ -362,17 +362,30 @@ describe('defaultReconcileSandboxStorageDeps.listDriveEnvSprites', () => {
 });
 
 describe('defaultReconcileSandboxStorageDeps.chargeStorage — org charge', () => {
-  it('WAL-9 (partial) charges an org-drive subject to the ORG POOL wallet, recorded under the person the charge names, marked compute', async () => {
+  it('WAL-9 (partial) WAL-2 (partial) a SESSION\'s storage is its person\'s compute; an ENV\'s is a drive accrual that never counts toward the lead\'s seat', async () => {
     mockTrackUsage.mockResolvedValue({ persisted: true, creditsSettled: true });
     await defaultReconcileSandboxStorageDeps.chargeStorage({
-      charge: { kind: 'org', orgId: 'org-1', userId: 'lead-1' },
+      charge: { kind: 'org', orgId: 'org-1', userId: 'owner-1' },
+      driveId: 'drive-1',
+      subjectKind: 'session',
+      subjectId: 'ws-1',
+      costDollars: 0.05,
+      gbMonths: 0.2,
+    });
+    expect(mockTrackUsage.mock.calls[0][0]).toMatchObject({ userId: 'owner-1', walletId: 'pool-1', spendKind: 'compute' });
+  });
+
+  it('WAL-9 (partial) charges an org-drive subject to the ORG POOL wallet, recorded under the person the charge names, marked a drive accrual', async () => {
+    mockTrackUsage.mockResolvedValue({ persisted: true, creditsSettled: true });
+    await defaultReconcileSandboxStorageDeps.chargeStorage({
+      charge: { kind: 'org', orgId: 'org-1', userId: 'lead-1', accrual: true },
       driveId: 'drive-1',
       subjectKind: 'env',
       subjectId: 'env-1',
       costDollars: 0.05,
       gbMonths: 0.2,
     });
-    expect(mockTrackUsage.mock.calls[0][0]).toMatchObject({ userId: 'lead-1', walletId: 'pool-1', spendKind: 'compute' });
+    expect(mockTrackUsage.mock.calls[0][0]).toMatchObject({ userId: 'lead-1', walletId: 'pool-1', spendKind: 'drive_compute' });
   });
 
   it('WAL-9 (partial) an org pool that no longer exists charges nothing — the window stays open, never the person', async () => {

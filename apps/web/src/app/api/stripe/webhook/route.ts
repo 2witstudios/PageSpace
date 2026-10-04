@@ -24,6 +24,7 @@ import {
   routeOrgInvoicePaymentFailed,
   routeOrgSubscriptionEvent,
 } from './org-handlers';
+import { errorLogFields } from '@pagespace/lib/logging/error-cause';
 
 export async function POST(request: NextRequest) {
   try {
@@ -254,7 +255,7 @@ export async function POST(request: NextRequest) {
             } catch (error) {
               loggers.api.warn('Could not look up buyer for top-up receipt', {
                 eventId: event.id,
-                error: error instanceof Error ? error.message : String(error),
+                ...errorLogFields(error),
               });
             }
           }
@@ -355,7 +356,7 @@ export async function POST(request: NextRequest) {
           } catch (error) {
             loggers.api.warn('Could not look up refilled user for subscription receipt', {
               eventId: event.id,
-              error: error instanceof Error ? error.message : String(error),
+              ...errorLogFields(error),
             });
           }
           break;

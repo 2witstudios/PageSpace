@@ -636,6 +636,28 @@ and the call degrades to audio without tools or transcripts rather than dropping
 is unaffected either way; it runs inside `apps/realtime` against `@pagespace/lib` and
 crosses no process boundary.
 
+### 3d-bis. Realtime runs as ONE instance: a live terminal lives in exactly one process
+
+`apps/realtime` keeps every live terminal in memory: its PTY, its viewers and its billing
+window (`TerminalSession` in `terminal-session-map.ts`). Nothing about a live session is
+shared between processes, so **a terminal is served by exactly one realtime process**, and
+the deployment runs exactly one realtime instance (Fly `pagespace-realtime`,
+`min_machines_running = 1`, never scaled out; one `realtime` container per tenant).
+
+Two money rules depend on this:
+
+- **The heartbeat settle runs outside the window-claim lock.** It rebases the window
+  synchronously, before its first await, which is safe only because no other process can
+  move the same in-memory window.
+- **Typist claims serialize under a Postgres advisory lock keyed on the session**
+  (`terminal/window-claim-lock.ts`, PR #2760). This would hold across processes. But a second
+  instance would still own a *separate* `TerminalSession` for the same shell, a second PTY with
+  its own window, and nothing reconciles the two.
+
+**Before running more than one realtime instance**, route every connection for a given shell
+to one instance (sticky by shell id). Otherwise, move the billing window out of process memory
+and put the heartbeat settle under the same lock.
+
 ### 3e. A spawn never starts a crippled worker
 
 `pages.enabledTools` is an ALLOWLIST, not a grant. Downstream of it the page pipeline

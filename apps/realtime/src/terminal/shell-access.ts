@@ -64,10 +64,11 @@ export interface ShellCheckAuthDeps {
    * under. Payer = the session's own DRIVE's payer (`resolveSessionPayer`),
    * falling back to the session's own owner when there is no drive (a
    * global-assistant session) or the drive has vanished. An org drive's payer
-   * is the org (WAL-9): the charge is its POOL wallet, recorded under the
-   * session's owner — never that person's wallet.
+   * is the org (WAL-9): the charge is its POOL wallet, recorded under and capped
+   * against `actorId` — the person connecting, who is the one running compute —
+   * never the session's owner (a drive session is shared with drive members).
    */
-  resolvePayer: (session: AgentSessionAccessSubject) => Promise<{ charge: ComputeCharge; driveId: string | null }>;
+  resolvePayer: (session: AgentSessionAccessSubject, actorId: string) => Promise<{ charge: ComputeCharge; driveId: string | null }>;
   /** A user row's tier + email, or undefined when the row is missing. Called for the requester (audit email) and, when different, the payer (slot-eligibility tier). */
   getUser: (userId: string) => Promise<{ subscriptionTier: string | null; email: string | null } | undefined>;
   resolveActorEmail: (email: string | null | undefined) => Promise<string>;
@@ -128,7 +129,7 @@ export function buildShellCheckAuth(deps: ShellCheckAuthDeps): ShellCheckAuthFn 
 
     // WAL-9: an org drive's session charges the org pool. Whether the pool can pay is the
     // billing gate's hold at PTY start, which refuses a missing, paused or empty pool by name.
-    const { charge, driveId } = await deps.resolvePayer(access.session);
+    const { charge, driveId } = await deps.resolvePayer(access.session, userId);
 
     // Decrypt the actor email BEFORE anything is reserved (a decrypt throw here
     // must not leak a reserved slot — same ordering the predecessor had).
@@ -152,6 +153,7 @@ export function buildShellCheckAuth(deps: ShellCheckAuthDeps): ShellCheckAuthFn 
       sessionKey: deps.buildSessionKey({ shellId }),
       charge,
       ownerId: access.session.ownerId,
+      actorId: userId,
       /** Billing attribution scope: the session's drive, or null for an owner-attributed global-assistant session. A session is not page-anchored, so there is no pageId to attribute. */
       driveId: access.session.driveId,
 

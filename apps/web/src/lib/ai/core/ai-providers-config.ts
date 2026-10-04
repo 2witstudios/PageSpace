@@ -23,8 +23,8 @@ export const OPENROUTER_CACHE_TTL_SECONDS = 300;
 export const TIMESTAMP_BUCKET_MS = OPENROUTER_CACHE_TTL_SECONDS * 1000;
 
 /**
- * Default provider/model for new users and any unset fallback. Z.ai's GLM-5.3
- * Flash (via OpenRouter) is the product default and a member of the free allowlist.
+ * Default provider/model for new users and any unset fallback. OpenAI's GPT-6 Luna
+ * (via OpenRouter) is the product default and a member of the free allowlist.
  * Sourced from @pagespace/lib so apps (e.g. admin onboarding seed data) that can't
  * import this web module stay in lockstep with the web defaults.
  */
@@ -64,6 +64,7 @@ export const ADMIN_ONLY_PROVIDERS = new Set<string>(['glm']);
  * this curated set of cheaper models. `DEFAULT_MODEL` must be a member.
  */
 export const FREE_TIER_MODELS = new Set<string>([
+  'openai/gpt-6-luna',
   'openai/gpt-5.6-luna',
   'openai/gpt-5.4-nano',
   'openai/gpt-5.4-mini',
@@ -93,6 +94,9 @@ export const FREE_TIER_MODELS = new Set<string>([
   'minimax/minimax-m3:free',
   'minimax/minimax-m2.7:free',
   'z-ai/glm-5.3-flash',
+  'qwen/qwen3.8-27b:free',
+  'apodex/apodex-1.1-mini:free',
+  'inclusionai/ling-3.0-flash-sante:free',
 ]);
 
 /**
@@ -108,6 +112,17 @@ export const AI_PROVIDERS = {
   openai: {
     name: 'OpenAI',
     models: {
+      // GPT-6 Luna listed first: getDefaultModel(provider) returns the first entry,
+      // and it's the product default (DEFAULT_MODEL in model-defaults.ts) — keep the
+      // two in agreement.
+      'openai/gpt-6-luna': 'GPT-6 Luna',
+      'openai/gpt-6-luna-pro': 'GPT-6 Luna Pro',
+      'openai/gpt-6-sol': 'GPT-6 Sol',
+      'openai/gpt-6-sol-pro': 'GPT-6 Sol Pro',
+      'openai/gpt-6.1-sol': 'GPT-6.1 Sol',
+      'openai/gpt-6.1-sol-pro': 'GPT-6.1 Sol Pro',
+      'openai/gpt-6-astra': 'GPT-6 Astra',
+      'openai/gpt-6-astra-pro': 'GPT-6 Astra Pro',
       'openai/gpt-5.6-sol-pro': 'GPT-5.6 Sol Pro',
       'openai/gpt-5.6-sol': 'GPT-5.6 Sol',
       'openai/gpt-5.6-terra-pro': 'GPT-5.6 Terra Pro',
@@ -166,6 +181,9 @@ export const AI_PROVIDERS = {
   anthropic: {
     name: 'Anthropic',
     models: {
+      'anthropic/claude-opus-5.5': 'Claude Opus 5.5',
+      'anthropic/claude-sonnet-5.5': 'Claude Sonnet 5.5',
+      'anthropic/claude-fable-5.1': 'Claude Fable 5.1',
       'anthropic/claude-opus-5': 'Claude Opus 5',
       'anthropic/claude-opus-5-fast': 'Claude Opus 5 Fast',
       'anthropic/claude-sonnet-5': 'Claude Sonnet 5',
@@ -188,6 +206,7 @@ export const AI_PROVIDERS = {
   google: {
     name: 'Google',
     models: {
+      'google/gemini-3.8-flash': 'Gemini 3.8 Flash',
       'google/gemini-3.7-flash': 'Gemini 3.7 Flash',
       'google/gemini-3.6-flash': 'Gemini 3.6 Flash',
       'google/gemini-3.5-flash-lite': 'Gemini 3.5 Flash Lite',
@@ -214,6 +233,7 @@ export const AI_PROVIDERS = {
   xai: {
     name: 'xAI (Grok)',
     models: {
+      'x-ai/grok-4.7': 'Grok 4.7',
       'x-ai/grok-4.5': 'Grok 4.5',
       'x-ai/grok-4.3': 'Grok 4.3',
       'x-ai/grok-4.20': 'Grok 4.20',
@@ -225,6 +245,7 @@ export const AI_PROVIDERS = {
   deepseek: {
     name: 'DeepSeek',
     models: {
+      'deepseek/deepseek-v4.1-flash': 'DeepSeek V4.1 Flash',
       'deepseek/deepseek-v4-pro': 'DeepSeek V4 Pro',
       'deepseek/deepseek-v4-flash': 'DeepSeek V4 Flash',
       'deepseek/deepseek-v3.2': 'DeepSeek V3.2',
@@ -243,6 +264,10 @@ export const AI_PROVIDERS = {
   qwen: {
     name: 'Qwen',
     models: {
+      'qwen/qwen3.8-max-prime': 'Qwen3.8 Max Prime',
+      'qwen/qwen3.8-max-0902': 'Qwen3.8 Max (0902)',
+      'qwen/qwen3.8-omni-flash': 'Qwen3.8 Omni Flash',
+      'qwen/qwen3.8-27b:free': 'Qwen3.8 27B (free)',
       'qwen/qwen3.7-plus': 'Qwen3.7 Plus',
       'qwen/qwen3.7-max': 'Qwen3.7 Max',
       'qwen/qwen3.6-max-preview': 'Qwen3.6 Max (Preview)',
@@ -344,6 +369,8 @@ export const AI_PROVIDERS = {
   meta: {
     name: 'Meta',
     models: {
+      'meta/muse-spark-1.3': 'Muse Spark 1.3',
+      'meta/muse-spark-1.3-contributor': 'Muse Spark 1.3 Contributor',
       'meta/muse-spark-1.1': 'Muse Spark 1.1',
       'meta-llama/llama-4-maverick': 'Llama 4 Maverick',
       'meta-llama/llama-4-scout': 'Llama 4 Scout',
@@ -369,6 +396,7 @@ export const AI_PROVIDERS = {
   inception: {
     name: 'Inception',
     models: {
+      'inception/mercury-2.5': 'Mercury 2.5',
       'inception/mercury-2': 'Mercury 2',
     },
   },
@@ -384,11 +412,11 @@ export const AI_PROVIDERS = {
     // normally. Distinct from the admin-only `glm` provider below, which routes
     // directly to the Z.ai Coder Plan endpoint and is exempt from billing.
     models: {
-      // GLM-5.3 Flash listed first: getDefaultModel(provider) returns the first
-      // entry, and it's the product default (DEFAULT_MODEL in model-defaults.ts) —
-      // keep the two in agreement so switching to this provider in the UI lands on
-      // the actual default rather than an arbitrary older model.
+      // GLM-5.3 Flash listed first so switching to this provider in the UI lands on
+      // the newest cheap model rather than an arbitrary older one.
       'z-ai/glm-5.3-flash': 'GLM 5.3 Flash',
+      'z-ai/glm-5.3-prime': 'GLM 5.3 Prime',
+      'z-ai/glm-5.3-flashx': 'GLM 5.3 FlashX',
       'z-ai/glm-5.2': 'GLM-5.2',
       'z-ai/glm-5.1': 'GLM-5.1',
       'z-ai/glm-5-turbo': 'GLM-5 Turbo',
@@ -423,6 +451,12 @@ export const AI_PROVIDERS = {
       'amazon/nova-pro-v1': 'Nova Pro 1.0',
     },
   },
+  apodex: {
+    name: 'Apodex',
+    models: {
+      'apodex/apodex-1.1-mini:free': 'Apodex 1.1 Mini (free)',
+    },
+  },
   'arcee-ai': {
     name: 'Arcee AI',
     models: {
@@ -433,6 +467,8 @@ export const AI_PROVIDERS = {
   cohere: {
     name: 'Cohere',
     models: {
+      'cohere/command-a-plus': 'Command A+',
+      'cohere/command-a': 'Command A',
       'cohere/command-r-08-2024': 'Command R (08-2024)',
       'cohere/command-r-plus-08-2024': 'Command R+ (08-2024)',
       'cohere/north-mini-code:free': 'North Mini Code (free)',
@@ -455,6 +491,7 @@ export const AI_PROVIDERS = {
     models: {
       'inclusionai/ling-3.0-flash': 'Ling-3.0-flash',
       'inclusionai/ling-3.0-flash-fin:free': 'Ling 3.0 Flash Fin (free)',
+      'inclusionai/ling-3.0-flash-sante:free': 'Ling 3.0 Flash Sante (free)',
     },
   },
   kwaipilot: {
@@ -570,6 +607,8 @@ export const AI_PROVIDERS = {
   xiaomi: {
     name: 'Xiaomi',
     models: {
+      'xiaomi/mimo-v2.6-pro': 'MiMo-V2.6-Pro',
+      'xiaomi/mimo-v2.6-flash': 'MiMo-V2.6-Flash',
       'xiaomi/mimo-v2.5': 'MiMo-V2.5',
       'xiaomi/mimo-v2.5-pro': 'MiMo-V2.5-Pro',
     },
@@ -579,15 +618,13 @@ export const AI_PROVIDERS = {
     // Admin-only direct connection to the Z.ai Coder Plan endpoint
     // (api.z.ai/api/coding/paas/v4). Flat-rate subscription, so usage is logged but
     // NOT billed against the shared credit pool (see METERING_EXEMPT_PROVIDERS).
-    // Models officially supported by that endpoint; bare `glm-*` ids (no vendor prefix).
+    // Models the Coding Plan offers; bare `glm-*` ids (no vendor prefix). Z.ai routes
+    // requests for GLM-5.2/5.1 to GLM-5.3 and GLM-4.7 to GLM-5.3 Flash, so only the
+    // two current models are listed. Older ids stay in AI_PRICING/MODEL_CONTEXT_WINDOWS
+    // so historical usage rows still price.
     models: {
       'glm-5.3':     'GLM-5.3',
       'glm-5.3-flash': 'GLM-5.3 Flash',
-      'glm-5.2':     'GLM-5.2',
-      'glm-5.1':     'GLM-5.1',
-      'glm-5-turbo': 'GLM-5 Turbo',
-      'glm-4.7':     'GLM-4.7',
-      'glm-4.5-air': 'GLM-4.5 Air',
     },
   },
   ollama: {
@@ -617,7 +654,7 @@ export const AI_PROVIDERS = {
 const CLOUD_VENDOR_PROVIDERS = new Set<string>([
   'openai', 'anthropic', 'google', 'xai', 'deepseek', 'qwen', 'mistral',
   'moonshot', 'minimax', 'meta', 'bytedance', 'inception', 'writer', 'zai',
-  'aion-labs', 'amazon', 'arcee-ai', 'cohere', 'dots-studio', 'ibm-granite',
+  'aion-labs', 'amazon', 'apodex', 'arcee-ai', 'cohere', 'dots-studio', 'ibm-granite',
   'inclusionai', 'kwaipilot', 'liquid', 'meituan', 'nex-agi', 'nvidia',
   'poolside', 'rekaai', 'relace', 'sakana', 'sao10k', 'stepfun', 'tencent',
   'thedrummer', 'thinkingmachines', 'upstage', 'xiaomi',

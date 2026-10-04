@@ -694,6 +694,177 @@ describe('buildShellHandlers', () => {
       expect(socket.emit).toHaveBeenCalledWith('shell:ready', { connectionId: 'sock1', resumed: false });
     });
 
+    /** Priya opens a metered org PTY (gate #1); Ben's socket attaches to it. Returns Ben's handlers. */
+    async function priyaOpensBenAttaches(gate: ReturnType<typeof vi.fn>) {
+      const ownerAuth = { ...makeAuthSuccess({ charge: { kind: 'org', orgId: 'org-1', userId: 'user1' } }), ownerId: 'user1', actorId: 'user1' };
+      checkAuth.mockResolvedValueOnce(ownerAuth);
+      const billing = {
+        ...makeBilling({ gate }),
+        resolveCharge: vi.fn(async ({ actorId }: { actorId: string }) => ({ kind: 'org' as const, orgId: 'org-1', userId: actorId })),
+      };
+      const priya = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
+      await priya.onConnect(validPayload);
+      await vi.advanceTimersByTimeAsync(0);
+      checkAuth.mockResolvedValueOnce({ ...makeAuthSuccess(), ownerId: 'user1', actorId: 'user2' });
+      const benSocket = makeSocket('ben-sock', 'user2');
+      const ben = buildShellHandlers({ sessionMap, openShell, checkAuth, socket: benSocket, persistSpriteExecId, billing });
+      await ben.onConnect(validPayload);
+      return { billing, priya, ben, benSocket, live: sessionMap.getByKey('shell:shl-1') };
+    }
+
+    it('WAL-2 (partial) review #2760 P2-3: a drive-mate who only WATCHES a live PTY is attached with no gate read and moves nothing — the window stays its typist\'s', async () => {
+      const gate = vi.fn().mockResolvedValue({ allowed: true, holdId: 'hold-owner' });
+      const { billing, benSocket, live } = await priyaOpensBenAttaches(gate);
+
+      expect(benSocket.emit).toHaveBeenCalledWith('shell:ready', expect.anything());
+      expect(gate).toHaveBeenCalledTimes(1);
+      expect(billing.resolveCharge).not.toHaveBeenCalledWith(expect.objectContaining({ actorId: 'user2' }));
+      expect([live?.actorId, live?.holdId]).toEqual(['user1', 'hold-owner']);
+    });
+
+    it('WAL-2 (partial) review #2760 P2-3: a drive-mate at their cap TYPING into a live PTY is refused with the cap message, the PTY never sees it, and the window stays its typist\'s', async () => {
+      const gate = vi.fn()
+        .mockResolvedValueOnce({ allowed: true, holdId: 'hold-owner' })
+        .mockResolvedValue({ allowed: false, reason: 'org_member_cap_reached', orgRefusal: 'org_member_cap_reached' });
+      const { billing, ben, benSocket, live } = await priyaOpensBenAttaches(gate);
+
+      ben.onInput({ data: 'rm -rf build\n' });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(billing.resolveCharge).toHaveBeenLastCalledWith(expect.objectContaining({ actorId: 'user2' }));
+      expect(benSocket.emit).toHaveBeenCalledWith('shell:error', expect.objectContaining({ message: expect.stringMatching(/used your allowance/), recoverable: true }));
+      expect(shell.write).not.toHaveBeenCalledWith('rm -rf build\n');
+      expect([live?.actorId, live?.holdId]).toEqual(['user1', 'hold-owner']);
+
+      // Typing on is refused without another gate read while the refusal is fresh.
+      ben.onInput({ data: 'ls\n' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(gate).toHaveBeenCalledTimes(2);
+      expect(shell.write).not.toHaveBeenCalledWith('ls\n');
+    });
+
+    it('WAL-2 (partial) re-review P2-1: if settling the window so far FAILS, the typist\'s input is refused (retry message), their hold released, and the window stays put — never their input on someone else\'s window', async () => {
+      const gate = vi.fn()
+        .mockResolvedValueOnce({ allowed: true, holdId: 'hold-owner' })
+        .mockResolvedValueOnce({ allowed: true, holdId: 'hold-mate' });
+      const { billing, ben, benSocket, live } = await priyaOpensBenAttaches(gate);
+      billing.trackUsage.mockRejectedValueOnce(new Error('ledger down'));
+
+      ben.onInput({ data: 'make\n' });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(shell.write).not.toHaveBeenCalledWith('make\n');
+      expect(benSocket.emit).toHaveBeenCalledWith('shell:error', expect.objectContaining({ message: expect.stringMatching(/briefly busy/), recoverable: true }));
+      expect(billing.releaseHold).toHaveBeenCalledWith('hold-mate');
+      expect([live?.actorId, live?.holdId]).toEqual(['user1', 'hold-owner']);
+    });
+
+    it('WAL-2 (partial) re-review P2-1: two typists on DIFFERENT connections typing at once take the window in turn — one live hold, every earlier hold settled', async () => {
+      const gate = vi.fn()
+        .mockResolvedValueOnce({ allowed: true, holdId: 'hold-owner' })
+        .mockResolvedValueOnce({ allowed: true, holdId: 'hold-ben' })
+        .mockResolvedValueOnce({ allowed: true, holdId: 'hold-chloe' });
+      const { billing, ben, live } = await priyaOpensBenAttaches(gate);
+      checkAuth.mockResolvedValueOnce({ ...makeAuthSuccess(), ownerId: 'user1', actorId: 'user3' });
+      const chloe = buildShellHandlers({ sessionMap, openShell, checkAuth, socket: makeSocket('chloe-sock', 'user3'), persistSpriteExecId, billing });
+      await chloe.onConnect(validPayload);
+
+      ben.onInput({ data: 'b' });
+      chloe.onInput({ data: 'c' });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(live?.actorId).toBe('user3');
+      expect(live?.holdId).toBe('hold-chloe');
+      // Each superseded hold was consumed by its own window's settle — none left dangling.
+      const settledHolds = billing.trackUsage.mock.calls.map((c) => (c[0] as { holdId?: string }).holdId);
+      expect(settledHolds).toEqual(['hold-owner', 'hold-ben']);
+      expect(billing.releaseHold).not.toHaveBeenCalled();
+      expect(shell.write.mock.calls.map((c) => c[0])).toEqual(['b', 'c']);
+    });
+
+    it('WAL-2 (partial) a typist refused WITHOUT an org reason (a personal payer out of credits) is told plainly, on their own pane, and typing on is refused from the memo', async () => {
+      const gate = vi.fn()
+        .mockResolvedValueOnce({ allowed: true, holdId: 'hold-owner' })
+        .mockResolvedValue({ allowed: false, reason: 'out_of_credits' });
+      const { ben, benSocket } = await priyaOpensBenAttaches(gate);
+
+      ben.onInput({ data: 'ls\n', connectionId: 'ben-sock' });
+      await vi.advanceTimersByTimeAsync(0);
+      ben.onInput({ data: 'pwd\n', connectionId: 'ben-sock' });
+      await vi.advanceTimersByTimeAsync(0);
+
+      const refusals = benSocket.emit.mock.calls.filter((c) => c[0] === 'shell:error').map((c) => c[1]);
+      expect(refusals).toEqual([
+        { message: expect.stringMatching(/could not be charged to you/), recoverable: true },
+        { message: expect.stringMatching(/could not be charged to you/), recoverable: true },
+      ]);
+      expect(gate).toHaveBeenCalledTimes(2);
+      expect(shell.write).not.toHaveBeenCalled();
+    });
+
+    it('WAL-2 (partial) a typist\'s queued input is dropped if their session goes away while the claim waits', async () => {
+      let releaseGate = (_v: unknown) => {};
+      const gate = vi.fn()
+        .mockResolvedValueOnce({ allowed: true, holdId: 'hold-owner' })
+        .mockImplementationOnce(() => new Promise((resolve) => { releaseGate = resolve; }));
+      const { ben, live } = await priyaOpensBenAttaches(gate);
+
+      ben.onInput({ data: 'a' });
+      ben.onInput({ data: 'b' });
+      await vi.advanceTimersByTimeAsync(0);
+      // Ben's pane closes while his claim is in flight: his binding goes, his queued keystrokes with it.
+      ben.onDisconnect({ connectionId: 'ben-sock' });
+      releaseGate({ allowed: true, holdId: 'hold-mate' });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(shell.write).not.toHaveBeenCalledWith('a');
+      expect(shell.write).not.toHaveBeenCalledWith('b');
+      expect(live).toBeDefined();
+    });
+
+    it('input from a socket with no signed-in user moves no window', async () => {
+      const gate = vi.fn().mockResolvedValueOnce({ allowed: true, holdId: 'hold-owner' });
+      const { live } = await priyaOpensBenAttaches(gate);
+      checkAuth.mockResolvedValueOnce({ ...makeAuthSuccess(), ownerId: 'user1', actorId: 'user1' });
+      const anon = makeSocket('anon-sock', 'user1');
+      const handlers = buildShellHandlers({ sessionMap, openShell, checkAuth, socket: anon, persistSpriteExecId, billing: { ...makeBilling({ gate }), resolveCharge: vi.fn() } });
+      await handlers.onConnect(validPayload);
+      (anon.data as { user?: unknown }).user = undefined;
+
+      handlers.onInput({ data: 'echo\n' });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(gate).toHaveBeenCalledTimes(1);
+      expect(live?.actorId).toBe('user1');
+      expect(shell.write).toHaveBeenCalledWith('echo\n');
+    });
+
+    it('WAL-2 (partial) review #2760 P2-3: THE TYPIST PAYS — a drive-mate\'s first keystroke takes the window (the opener\'s settles to the opener), keystrokes land in order, and the window moves back when the opener types again', async () => {
+      const gate = vi.fn()
+        .mockResolvedValueOnce({ allowed: true, holdId: 'hold-owner' })
+        .mockResolvedValueOnce({ allowed: true, holdId: 'hold-mate' })
+        .mockResolvedValueOnce({ allowed: true, holdId: 'hold-owner-2' });
+      const { billing, priya, ben, live } = await priyaOpensBenAttaches(gate);
+
+      ben.onInput({ data: 'e' });
+      ben.onInput({ data: 'c' });
+      ben.onInput({ data: 'ho\n' });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(shell.write.mock.calls.map((c) => c[0])).toEqual(['e', 'c', 'ho\n']);
+      expect([live?.actorId, live?.holdId, live?.charge]).toEqual(['user2', 'hold-mate', { kind: 'org', orgId: 'org-1', userId: 'user2' }]);
+      // Priya's window was settled to her, on her own hold; Ben's three keystrokes cost ONE claim.
+      expect(billing.trackUsage).toHaveBeenCalledWith(expect.objectContaining({ charge: { kind: 'org', orgId: 'org-1', userId: 'user1' }, holdId: 'hold-owner' }));
+      expect(gate).toHaveBeenCalledTimes(2);
+
+      // Priya types again: the window is hers again, and Ben's segment settled to Ben.
+      priya.onInput({ data: 'pwd\n' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect([live?.actorId, live?.holdId]).toEqual(['user1', 'hold-owner-2']);
+      expect(billing.trackUsage).toHaveBeenCalledWith(expect.objectContaining({ charge: { kind: 'org', orgId: 'org-1', userId: 'user2' }, holdId: 'hold-mate' }));
+      expect(shell.write).toHaveBeenLastCalledWith('pwd\n');
+    });
+
     it('given a denied user with a live session, should refuse and NOT reattach (auth gates the fast path)', async () => {
       const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);

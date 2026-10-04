@@ -21,7 +21,7 @@ import { eq, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { creditHolds, creditLedger, type SpendKind } from '@pagespace/db/schema/credits';
 import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
-import { wallets } from '@pagespace/db/schema/wallets';
+import { walletConsumerCaps, wallets } from '@pagespace/db/schema/wallets';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { canConsumeAI } from '../credit-gate';
@@ -67,6 +67,7 @@ async function build(): Promise<World> {
 async function teardown(w: World): Promise<void> {
   await db.delete(creditHolds).where(inArray(creditHolds.userId, w.userIds));
   await db.delete(creditLedger).where(inArray(creditLedger.userId, w.userIds));
+  await db.delete(walletConsumerCaps).where(eq(walletConsumerCaps.walletId, w.poolId));
   await db.delete(wallets).where(eq(wallets.id, w.poolId));
   await db.delete(wallets).where(inArray(wallets.userId, w.userIds));
   await db.delete(orgMembers).where(eq(orgMembers.orgId, w.orgId));
@@ -135,6 +136,9 @@ describe('the daily exposure cap', () => {
 
   it("WAL-9 (partial) the org compute bound still binds that person's own org compute: over the ceiling on the pool refuses the next org run", async () => {
     const w = (world = await build());
+    // A monthly allowance far above the spend, so the per-member pool cap (WAL-2, which person-run
+    // compute now counts toward) has room and only the daily exposure bound can refuse.
+    await db.insert(walletConsumerCaps).values({ walletId: w.poolId, consumerKey: `user:${w.leadId}`, monthlyCapCents: 10 * OVER_MC });
     await spendToday(w, { walletId: w.poolId, spendKind: 'compute', mc: OVER_MC });
 
     expect(await orgGate(w)).toMatchObject({ allowed: false, reason: 'daily_cap_exceeded' });

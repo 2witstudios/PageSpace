@@ -24,6 +24,7 @@ import { isBillingEnabled } from '../deployment-mode';
 import { loggers } from '../logging/logger-config';
 import type { SubscriptionTier } from '../services/subscription-utils';
 import { getCreditBalance, resolveTier } from './credit-balance';
+import { errorLogFields } from '../logging/error-cause';
 
 export interface EmitCreditsOptions {
   /** Pre-resolved tier to avoid an extra users lookup when the caller already has it. */
@@ -85,8 +86,6 @@ export async function emitCreditsUpdated(
     // Best-effort: a failed balance read/broadcast must never escalate on the
     // fire-and-forget call path. Log defensively so a partial logger (e.g. a unit-test
     // mock) can't itself turn a swallowed error into a throw.
-    loggers?.ai?.debug?.('emitCreditsUpdated failed', {
-      error: error instanceof Error ? error.message : String(error),
-    });
+    loggers?.ai?.debug?.('emitCreditsUpdated failed', errorLogFields(error));
   }
 }

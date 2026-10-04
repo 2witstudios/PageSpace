@@ -42,6 +42,8 @@ export type NotificationType =
   | 'TASK_ASSIGNED'
   // In-app only (SPEND-6): no email is sent for it, but the column type is the db enum.
   | 'AUTOMATION_SKIPPED'
+  // In-app only (WAL-6e): the funder's once-per-period notice that a wallet is in debt.
+  | 'WALLET_DEBT'
   | 'PRODUCT_UPDATE';
 
 interface NotificationEmailData {
@@ -281,6 +283,7 @@ function getEmailTemplate(data: NotificationEmailData, user: { name: string; ema
     case 'TASK_ASSIGNED':
     case 'PRODUCT_UPDATE': // broadcast-only (email_broadcasts), never a per-event email
     case 'AUTOMATION_SKIPPED': // in-app only (SPEND-6): the drive lead's skip notice
+    case 'WALLET_DEBT': // in-app only (WAL-6e): the funder's debt notice
       return null;
 
     default: {

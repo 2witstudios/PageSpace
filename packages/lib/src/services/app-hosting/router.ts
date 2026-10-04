@@ -39,12 +39,14 @@ import { and, eq, isNull, or, sql } from '@pagespace/db/operators';
 import { publishedApps } from '@pagespace/db/schema/published-apps';
 import { customDomains } from '@pagespace/db/schema/custom-domains';
 import { hasSpendableComputeBalance } from '../../billing/compute-gate';
+import { errorLogFields } from '../../logging/error-cause';
 import { loggers } from '../../logging/logger-config';
 import { defaultAppBillingDeps } from './app-billing';
 import type { ComputeCharge } from '../../billing/compute-charge';
 import { isAppHostingEnabled, resolveHitStampIntervalSeconds } from './app-hosting-env';
 import {
   DAILY_CAP_PARK_REASON,
+  MEMBER_CAP_PARK_REASON,
   wakePublishedAppSerialized,
   type WakePublishedAppRunResult,
 } from './app-lifecycle-metering';
@@ -82,7 +84,7 @@ export interface AppRouterDeps {
    * payer or falling back to a denormalized column the meter does not charge.
    * An org drive's charge is the org pool (WAL-9), whose balance is what is asked.
    */
-  resolveCharge: (input: { driveId: string }) => Promise<ComputeCharge | null>;
+  resolveCharge: (input: { driveId: string; costOwnerId: string | null }) => Promise<ComputeCharge | null>;
   /**
    * Whether the charge's wallet can still spend: the payer's personal balance
    * (judged against their tier), or the org pool (missing or paused = no).
@@ -105,6 +107,12 @@ export interface AppRouterDeps {
    * do this.
    */
   wake: (publishedAppId: string) => Promise<WakePublishedAppRunResult>;
+  /**
+   * When an app parked on its creator's member cap comes back by itself at the latest: the drive's
+   * org pool's next refill, when every member's allowance renews (D-OW-12) and the hourly sweep
+   * un-parks it (app-unpark). Null for a drive with no org pool or period. Read only for that page.
+   */
+  memberCapReturnsBy: (driveId: string) => Promise<Date | null>;
 }
 
 /** The columns the routing decision reads. Narrower than the row on purpose. */
@@ -126,6 +134,10 @@ export interface PublishedAppRouteRow {
   driveId: string;
   /** `published_apps.envId` — echoed onward exactly like `driveId`, see `RoutableApp.envId`. */
   envId: string;
+  /** [D-OW-28] Whose cap the app's compute counts against: its publisher, else (null) the drive lead. */
+  costOwnerId: string | null;
+  /** Why it was last parked (`parked: <reason>`), read only to name a member-cap park to a visitor. */
+  lastError: string | null;
 }
 
 const ROUTE_ROW_COLUMNS = {
@@ -136,6 +148,8 @@ const ROUTE_ROW_COLUMNS = {
   machineId: publishedApps.machineId,
   driveId: publishedApps.driveId,
   envId: publishedApps.envId,
+  costOwnerId: publishedApps.costOwnerId,
+  lastError: publishedApps.lastError,
 } as const;
 
 async function findAppBySubdomainRow(subdomain: string): Promise<PublishedAppRouteRow | null> {
@@ -189,6 +203,15 @@ export const defaultAppRouterDeps: AppRouterDeps = {
   publishedAppsAllowed: async (driveId) =>
     publishedAppsDecision((await getDrivePolicies(driveId))?.policies ?? null).ok,
   wake: (publishedAppId) => wakePublishedAppSerialized(publishedAppId),
+  // Loaded on first use, like the payer lookup: the router's package graph stays free of the
+  // credit gate, and only a member-cap paused page ever asks.
+  memberCapReturnsBy: async (driveId) => {
+    const { lookupDriveBillingFacts } = await import('../../billing/sandbox-payer');
+    const facts = await lookupDriveBillingFacts(driveId);
+    if (!facts?.orgId) return null;
+    const { findOrgPoolPeriodEnd } = await import('../../billing/credit-gate');
+    return findOrgPoolPeriodEnd(facts.orgId);
+  },
 };
 
 /**
@@ -253,7 +276,7 @@ function refusalForWake(wake: WakePublishedAppRunResult, driveId: string, envId:
       // owner (top up, versus wait for tomorrow).
       return {
         kind: 'parked',
-        reason: wake.reason === DAILY_CAP_PARK_REASON ? 'daily_cap' : 'out_of_credits',
+        reason: wake.reason === DAILY_CAP_PARK_REASON ? 'daily_cap' : wake.reason === MEMBER_CAP_PARK_REASON ? 'member_cap' : 'out_of_credits',
         driveId,
         envId,
       };
@@ -314,12 +337,27 @@ export async function resolveAppRoute(
     // SAME gate/replay logic a subdomain hit gets — no shortcuts, no cache.
     const app = await deps.findAppByCustomHost(host.hostname);
     if (!app) return { kind: 'not_found', reason: 'custom_host' };
-    return decideForRow(app, deps);
+    return withReturnsBy(await decideForRow(app, deps), app.driveId, deps);
   }
 
   const app = await deps.findAppBySubdomain(host.subdomain);
   if (!app) return { kind: 'not_found', reason: 'no_such_app' };
-  return decideForRow(app, deps);
+  return withReturnsBy(await decideForRow(app, deps), app.driveId, deps);
+}
+
+/**
+ * A member-cap park names the date it comes back by (review 5407898542 P1c). A failed read only
+ * drops the date — the paused page is the one response that has to render when things are broken.
+ */
+async function withReturnsBy(decision: AppRouteDecision, driveId: string, deps: AppRouterDeps): Promise<AppRouteDecision> {
+  if (decision.kind !== 'parked' || decision.reason !== 'member_cap') return decision;
+  try {
+    const returnsBy = await deps.memberCapReturnsBy(driveId);
+    return returnsBy ? { ...decision, returnsBy: returnsBy.toISOString() } : decision;
+  } catch (error) {
+    loggers.ai.warn('Paused-page refill date could not be read; the page is served without it', { driveId, ...errorLogFields(error) });
+    return decision;
+  }
 }
 
 async function decideForRow(app: PublishedAppRouteRow, deps: AppRouterDeps): Promise<AppRouteDecision> {
@@ -330,6 +368,7 @@ async function decideForRow(app: PublishedAppRouteRow, deps: AppRouterDeps): Pro
     hasMachine: app.machineId !== null,
     driveId: app.driveId,
     envId: app.envId,
+    parkedForMemberCap: app.lastError === `parked: ${MEMBER_CAP_PARK_REASON}`,
   };
 
   // POL-10: an org that turned published apps off serves nothing, and nothing is woken. Asked
@@ -354,7 +393,7 @@ async function decideForRow(app: PublishedAppRouteRow, deps: AppRouterDeps): Pro
   // than a hope. `decideAppRoute` still re-checks the tier itself, so the skip
   // here can never quietly become the policy.
   if (app.tier === 'metered') {
-    const charge = await deps.resolveCharge({ driveId: app.driveId });
+    const charge = await deps.resolveCharge({ driveId: app.driveId, costOwnerId: app.costOwnerId });
     // An unresolvable drive fails CLOSED here: the router has nobody to ask, so it
     // refuses exactly as the wake gate does, rather than assuming a balance nobody can
     // vouch for. An org drive asks the ORG POOL (WAL-9), never the lead's balance.
