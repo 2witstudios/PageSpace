@@ -80,7 +80,7 @@ const consumerWallet: ConsumerWalletView = {
 const { viewer: _consumerViewer, ...consumerFields } = consumerWallet;
 const leadWallet: LeadWalletView = {
   ...consumerFields, viewer: 'lead', allocationCents: 120_000, spentCents: 3_558, topupRemainingCents: 0, debtCents: 0,
-  periodStart: null, periodEnd: null, fallbackRule: null,
+  periodStart: null, periodEnd: null, fallbackRule: null, overshootChoice: null,
   spendByConsumer: [{ consumerKey: 'user:u-lena', userId: 'u-lena', spentCents: 1_337 }],
 };
 const { viewer: _leadViewer, ...leadFields } = leadWallet;
