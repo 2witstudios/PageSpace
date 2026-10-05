@@ -168,7 +168,6 @@ async function memberRowsIn(driveIds: string[]): Promise<DriveMemberRow[]> {
 export async function listOrgGuests(orgId: string): Promise<OrgGuest[]> {
   const orgDrives = await liveOrgDrives(orgId);
   if (orgDrives.length === 0) return [];
-  const names = new Map(orgDrives.map((d) => [d.id, d.name]));
   const memberIds = new Set((await orgMemberRoles(orgId)).map((m) => m.userId));
   const rows: GuestRow[] = [];
   const ids = orgDrives.map((d) => d.id);
@@ -176,6 +175,7 @@ export async function listOrgGuests(orgId: string): Promise<OrgGuest[]> {
     const chunk = await db
       .select({
         driveId: driveMembers.driveId,
+        driveName: drives.name,
         userId: driveMembers.userId,
         acceptedAt: driveMembers.acceptedAt,
         source: driveMembers.source,
@@ -185,10 +185,11 @@ export async function listOrgGuests(orgId: string): Promise<OrgGuest[]> {
       })
       .from(driveMembers)
       .innerJoin(users, eq(users.id, driveMembers.userId))
+      .innerJoin(drives, eq(drives.id, driveMembers.driveId))
       .where(inArray(driveMembers.driveId, ids.slice(i, i + 500)))
       .limit(MAX_ROWS);
     const outsiders = chunk.filter((r) => !memberIds.has(r.userId));
-    for (const row of await decryptUserRows(outsiders)) rows.push({ ...row, driveName: names.get(row.driveId) ?? '' });
+    rows.push(...(await decryptUserRows(outsiders)));
   }
   return summarizeOrgGuests(rows, memberIds);
 }
@@ -202,17 +203,17 @@ export async function listOrgDriveUsage(orgId: string): Promise<OrgDriveUsage[]>
     memberRowsIn(driveIds),
     orgMemberRoles(orgId),
     db
-      .select({ driveId: files.driveId, bytes: sql<string | number>`COALESCE(SUM(${files.sizeBytes}), 0)` })
+      .select({ driveId: drives.id, bytes: sql<string | number>`COALESCE(SUM(${files.sizeBytes}), 0)` })
       .from(files)
       .innerJoin(drives, eq(drives.id, files.driveId))
       .where(eq(drives.orgId, orgId))
-      .groupBy(files.driveId),
+      .groupBy(drives.id),
   ]);
   return summarizeDriveUsage({
     driveIds,
     memberRows,
     orgMemberIds: new Set(roles.map((r) => r.userId)),
-    fileBytes: fileBytes.flatMap((f) => (f.driveId ? [{ driveId: f.driveId, bytes: Number(f.bytes) }] : [])),
+    fileBytes: fileBytes.map((f) => ({ driveId: f.driveId, bytes: Number(f.bytes) })),
   });
 }
 
@@ -252,17 +253,14 @@ export interface OrgTrashedDrive {
  * own drive list.
  */
 export async function listOrgTrashedDrives(orgId: string): Promise<OrgTrashedDrive[]> {
+  // `name` and `email` are the lead's, so decryptUserRows decrypts them; the drive's own name is driveName.
   const rows = await db
-    .select({ id: drives.id, name: drives.name, trashedAt: drives.trashedAt, leadId: drives.ownerId })
+    .select({ id: drives.id, driveName: drives.name, trashedAt: drives.trashedAt, leadId: drives.ownerId, name: users.name, email: users.email })
     .from(drives)
+    .innerJoin(users, eq(users.id, drives.ownerId))
     .where(and(eq(drives.orgId, orgId), eq(drives.isTrashed, true)))
     .limit(5000);
-  const leadIds = [...new Set(rows.map((r) => r.leadId))];
-  const leads = leadIds.length === 0
-    ? []
-    : await decryptUserRows(await db.select({ id: users.id, name: users.name, email: users.email }).from(users).where(inArray(users.id, leadIds)));
-  const leadName = new Map(leads.map((l) => [l.id, l.name ?? null]));
-  return rows
-    .map((r) => ({ id: r.id, name: r.name, trashedAt: r.trashedAt?.toISOString() ?? null, lead: { id: r.leadId, name: leadName.get(r.leadId) ?? null } }))
+  return (await decryptUserRows(rows))
+    .map((r) => ({ id: r.id, name: r.driveName, trashedAt: r.trashedAt?.toISOString() ?? null, lead: { id: r.leadId, name: r.name } }))
     .sort((a, b) => a.name.localeCompare(b.name));
 }

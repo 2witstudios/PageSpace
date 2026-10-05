@@ -23,21 +23,22 @@ import { listOrgDriveUsage, listOrgGuests, listOrgMemberActivity, listOrgTrashed
 
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
-let ok = false;
+// Reachability is settled before collection, so a DB-less run skips the suite (requireDb throws unless opted out).
+const ok = await db.select({ id: users.id }).from(users).limit(1).then(
+  () => true,
+  (error: unknown) => {
+    requireDb('org-read-models.integration.test.ts', error);
+    return false;
+  },
+);
 const ids = { users: [] as string[], orgId: '', drives: [] as string[], files: [] as string[], sessions: [] as string[] };
 const u = { jono: '', priya: '', marcus: '', chris: '', pia: '', lou: '' };
-const d = { product: '', finance: '', trashed: '' };
+const d = { product: '', finance: '', trashed: '', archive: '' };
+const archivedAt = new Date('2026-09-20T12:00:00Z');
 const marcusSeen = new Date('2026-10-04T09:30:00Z');
 
-describe('org read models (real Postgres)', () => {
+describe.skipIf(!ok)('org read models (real Postgres)', () => {
   beforeAll(async () => {
-    try {
-      await db.select({ id: users.id }).from(users).limit(1);
-      ok = true;
-    } catch (error) {
-      requireDb('org-read-models.integration.test.ts', error);
-      return;
-    }
     const make = (name: string, email: string) => factories.createUser({ name, email });
     const [jono, priya, marcus, chris, pia, lou] = await Promise.all([
       make('Jono Woodall', `jono-${createId()}@northwind.test`),
@@ -59,7 +60,8 @@ describe('org read models (real Postgres)', () => {
     const product = await factories.createDrive(jono.id, { name: 'Product', slug: `p-${createId()}`, orgId: org.id, orgVisibility: 'OPEN' });
     const finance = await factories.createDrive(jono.id, { name: 'Finance', slug: `f-${createId()}`, orgId: org.id, orgVisibility: 'PRIVATE' });
     const trashed = await factories.createDrive(jono.id, { name: 'Old', slug: `o-${createId()}`, orgId: org.id, isTrashed: true });
-    Object.assign(d, { product: product.id, finance: finance.id, trashed: trashed.id });
+    const archive = await factories.createDrive(priya.id, { name: 'Archive', slug: `a-${createId()}`, orgId: org.id, isTrashed: true, trashedAt: archivedAt });
+    Object.assign(d, { product: product.id, finance: finance.id, trashed: trashed.id, archive: archive.id });
     ids.drives = Object.values(d);
     await factories.createDriveMember(product.id, marcus.id, { source: 'org' });
     await factories.createDriveMember(product.id, chris.id, { source: 'invite' });
@@ -79,20 +81,17 @@ describe('org read models (real Postgres)', () => {
   });
 
   afterAll(async () => {
-    if (ok) {
-      await db.delete(sessions).where(inArray(sessions.id, ids.sessions));
-      await db.delete(files).where(inArray(files.id, ids.files));
-      await db.delete(driveMembers).where(inArray(driveMembers.driveId, ids.drives));
-      await db.delete(drives).where(inArray(drives.id, ids.drives));
-      await db.delete(orgMembers).where(eq(orgMembers.orgId, ids.orgId));
-      await db.delete(organizations).where(eq(organizations.id, ids.orgId));
-      await db.delete(users).where(inArray(users.id, ids.users));
-    }
+    await db.delete(sessions).where(inArray(sessions.id, ids.sessions));
+    await db.delete(files).where(inArray(files.id, ids.files));
+    await db.delete(driveMembers).where(inArray(driveMembers.driveId, ids.drives));
+    await db.delete(drives).where(inArray(drives.id, ids.drives));
+    await db.delete(orgMembers).where(eq(orgMembers.orgId, ids.orgId));
+    await db.delete(organizations).where(eq(organizations.id, ids.orgId));
+    await db.delete(users).where(inArray(users.id, ids.users));
     await pool.end();
   });
 
   it('UI-7 (partial) DRV-8 (partial): guests are the outsiders in live org drives, with each drive; stale rows and org members never appear', async () => {
-    if (!ok) return;
     const guests = await listOrgGuests(ids.orgId);
     expect(guests.map((g) => ({ userId: g.userId, name: g.name, drives: g.drives }))).toEqual([
       { userId: u.chris, name: 'Chris Rowe', drives: [{ id: d.product, name: 'Product', pending: false }] },
@@ -102,7 +101,6 @@ describe('org read models (real Postgres)', () => {
   });
 
   it('UI-7 (partial): per live drive, accepted people, guests among them, and stored bytes', async () => {
-    if (!ok) return;
     const usage = await listOrgDriveUsage(ids.orgId);
     expect(usage.sort((a, b) => a.driveId.localeCompare(b.driveId))).toEqual(
       [
@@ -113,7 +111,6 @@ describe('org read models (real Postgres)', () => {
   });
 
   it('UI-7 (partial): Owner and Admin reach every live org drive; a Member the drives they are in; last active is the latest live session', async () => {
-    if (!ok) return;
     const activity = Object.fromEntries((await listOrgMemberActivity(ids.orgId)).map((a) => [a.userId, a]));
     expect(activity[u.jono]).toEqual({ userId: u.jono, driveCount: 2, lastActiveAt: null });
     expect(activity[u.priya]).toEqual({ userId: u.priya, driveCount: 2, lastActiveAt: null });
@@ -122,13 +119,14 @@ describe('org read models (real Postgres)', () => {
   });
 
   it('UI-7 (partial): trashed org drives, Private ones included, whoever the viewer is (the admin Trashed tab)', async () => {
-    if (!ok) return;
     const trashed = await listOrgTrashedDrives(ids.orgId);
-    expect(trashed.map((t) => ({ id: t.id, name: t.name, lead: t.lead.name }))).toEqual([{ id: d.trashed, name: 'Old', lead: 'Jono Woodall' }]);
+    expect(trashed.map((t) => ({ id: t.id, name: t.name, trashedAt: t.trashedAt, lead: t.lead.name }))).toEqual([
+      { id: d.archive, name: 'Archive', trashedAt: archivedAt.toISOString(), lead: 'Priya Nair' },
+      { id: d.trashed, name: 'Old', trashedAt: null, lead: 'Jono Woodall' },
+    ]);
   });
 
   it('an org with no drives or members has no guests, usage, activity or trash', async () => {
-    if (!ok) return;
     const [empty] = await db.insert(organizations).values({ name: 'Empty', slug: `e-${createId()}`, ownerId: u.jono }).returning();
     try {
       expect(await listOrgGuests(empty.id)).toEqual([]);

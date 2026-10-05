@@ -24,6 +24,12 @@ describe('summarizeOrgGuests', () => {
     expect(summarizeOrgGuests([{ userId: 'u_left', name: 'Lou', email: 'lou@x', image: null, driveId: 'd', driveName: 'D', acceptedAt: new Date(), source: 'org' }], members)).toEqual([]);
   });
 
+  it('sorts a guest with no name by address, and one with neither by id', () => {
+    const row = (userId: string, name: string | null, email: string | null) => ({ userId, name, email, image: null, driveId: 'd', driveName: 'D', acceptedAt: new Date(), source: 'invite' as const });
+    const order = summarizeOrgGuests([row('u_zed', 'Zed', 'zed@x'), row('u_b', null, 'bea@x'), row('a_anon', null, null)], members).map((g) => g.userId);
+    expect(order).toEqual(['a_anon', 'u_b', 'u_zed']);
+  });
+
   it('is empty when every person in the drives is an org member', () => {
     expect(summarizeOrgGuests([{ userId: 'u_admin', name: 'A', email: 'a@x', image: null, driveId: 'd', driveName: 'D', acceptedAt: new Date(), source: 'org' as const }], members)).toEqual([]);
   });

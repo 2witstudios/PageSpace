@@ -7,7 +7,7 @@
  *
  * Requires DATABASE_URL; deletes every row it creates, users last, and ends the pool.
  */
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import { assert, describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
 import { db, pool } from '@pagespace/db/db';
 import { eq, inArray } from '@pagespace/db/operators';
@@ -24,18 +24,18 @@ import { driveMembers } from '@pagespace/db/schema/members';
 
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
-let ok = false;
+// Reachability is settled before collection, so a DB-less run skips the suite (requireDb throws unless opted out).
+const ok = await db.select({ id: wallets.id }).from(wallets).limit(1).then(
+  () => true,
+  (error: unknown) => {
+    requireDb('org-seat-caps.integration.test.ts', error);
+    return false;
+  },
+);
 const w = { orgId: '', poolId: '', jono: '', marcus: '', lena: '', userIds: [] as string[], emptyOrgId: '', driveId: '' };
 
-describe('org seat caps read model (real Postgres)', () => {
+describe.skipIf(!ok)('org seat caps read model (real Postgres)', () => {
   beforeAll(async () => {
-    try {
-      await db.select({ id: wallets.id }).from(wallets).limit(1);
-      ok = true;
-    } catch (error) {
-      requireDb('org-seat-caps.integration.test.ts', error);
-      return;
-    }
     const jono = await factories.createUser({ name: 'Jono Woodall' });
     const marcus = await factories.createUser({ name: 'Marcus Oyelaran' });
     const lena = await factories.createUser({ name: 'Lena Schulz' });
@@ -70,23 +70,20 @@ describe('org seat caps read model (real Postgres)', () => {
   });
 
   afterAll(async () => {
-    if (ok) {
-      await db.delete(creditHolds).where(inArray(creditHolds.userId, w.userIds));
-      await db.delete(creditLedger).where(inArray(creditLedger.userId, w.userIds));
-      await db.delete(walletConsumerCaps).where(eq(walletConsumerCaps.walletId, w.poolId));
-      await db.delete(driveMembers).where(eq(driveMembers.driveId, w.driveId));
-      await db.delete(drives).where(eq(drives.id, w.driveId));
-      await db.delete(wallets).where(eq(wallets.id, w.poolId));
-      await db.delete(orgMembers).where(inArray(orgMembers.orgId, [w.orgId, w.emptyOrgId]));
-      await db.delete(orgSubscriptions).where(eq(orgSubscriptions.orgId, w.orgId));
-      await db.delete(organizations).where(inArray(organizations.id, [w.orgId, w.emptyOrgId]));
-      await db.delete(users).where(inArray(users.id, w.userIds));
-    }
+    await db.delete(creditHolds).where(inArray(creditHolds.userId, w.userIds));
+    await db.delete(creditLedger).where(inArray(creditLedger.userId, w.userIds));
+    await db.delete(walletConsumerCaps).where(eq(walletConsumerCaps.walletId, w.poolId));
+    await db.delete(driveMembers).where(eq(driveMembers.driveId, w.driveId));
+    await db.delete(drives).where(eq(drives.id, w.driveId));
+    await db.delete(wallets).where(eq(wallets.id, w.poolId));
+    await db.delete(orgMembers).where(inArray(orgMembers.orgId, [w.orgId, w.emptyOrgId]));
+    await db.delete(orgSubscriptions).where(eq(orgSubscriptions.orgId, w.orgId));
+    await db.delete(organizations).where(inArray(organizations.id, [w.orgId, w.emptyOrgId]));
+    await db.delete(users).where(inArray(users.id, w.userIds));
     await pool.end();
   });
 
   it('UI-7 (partial) WAL-7 (partial): each member\'s caps, the monthly limit in force (a seat with no monthly cap draws the allowance, never unlimited), and what is left', async () => {
-    if (!ok) return;
     const read = await listOrgSeatCaps(w.orgId);
     expect(read.walletId).toBe(w.poolId);
     expect(read.seatAllowanceCents).toBe(150);
@@ -107,17 +104,16 @@ describe('org seat caps read model (real Postgres)', () => {
   });
 
   it('WAL-7 (partial): the list agrees with the gate: Marcus\'s seat choice remaining is the smaller of his monthly and daily remaining', async () => {
-    if (!ok) return;
     const read = await listOrgSeatCaps(w.orgId);
     const mine = read.seats.find((s) => s.userId === w.marcus);
     const choices = await listSpendChoices(w.marcus, w.driveId);
     const seat = choices.find((c) => c.source === 'seat_allowance');
-    expect(seat, JSON.stringify(choices)).toBeDefined();
-    expect(seat?.remainingCents).toBe(Math.min(mine?.monthlyRemainingCents ?? Infinity, mine?.dailyRemainingCents ?? Infinity));
+    assert(mine && seat, JSON.stringify({ mine, choices }));
+    const caps = [mine.monthlyRemainingCents, mine.dailyRemainingCents].filter((n): n is number => n !== null);
+    expect(seat.remainingCents).toBe(Math.min(...caps));
   });
 
   it('an org with no pool yet has no seat figures to show', async () => {
-    if (!ok) return;
     expect(await listOrgSeatCaps(w.emptyOrgId)).toEqual({ walletId: null, seatAllowanceCents: 100, seats: [] });
   });
 });

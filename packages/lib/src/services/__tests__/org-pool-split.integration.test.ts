@@ -21,19 +21,19 @@ import { getOrgPoolSplit } from '../drive-wallet-service';
 
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
-let ok = false;
+// Reachability is settled before collection, so a DB-less run skips the suite (requireDb throws unless opted out).
+const ok = await db.select({ id: wallets.id }).from(wallets).limit(1).then(
+  () => true,
+  (error: unknown) => {
+    requireDb('org-pool-split.integration.test.ts', error);
+    return false;
+  },
+);
 const w = { orgId: '', emptyOrgId: '', poolId: '', wallets: [] as string[], drives: [] as string[], userIds: [] as string[], product: '', eng: '', fin: '' };
 const periodEnd = new Date(Date.now() + 20 * 86_400_000);
 
-describe('org pool split read model (real Postgres)', () => {
+describe.skipIf(!ok)('org pool split read model (real Postgres)', () => {
   beforeAll(async () => {
-    try {
-      await db.select({ id: wallets.id }).from(wallets).limit(1);
-      ok = true;
-    } catch (error) {
-      requireDb('org-pool-split.integration.test.ts', error);
-      return;
-    }
     const jono = await factories.createUser({ name: 'Jono' });
     const marcus = await factories.createUser({ name: 'Marcus' });
     w.userIds = [jono.id, marcus.id];
@@ -66,21 +66,18 @@ describe('org pool split read model (real Postgres)', () => {
   });
 
   afterAll(async () => {
-    if (ok) {
-      await db.delete(creditLedger).where(inArray(creditLedger.userId, w.userIds));
-      await db.delete(wallets).where(inArray(wallets.id, w.wallets));
-      await db.delete(wallets).where(eq(wallets.id, w.poolId));
-      await db.delete(drives).where(inArray(drives.id, w.drives));
-      await db.delete(orgMembers).where(eq(orgMembers.orgId, w.orgId));
-      await db.delete(orgSubscriptions).where(eq(orgSubscriptions.orgId, w.orgId));
-      await db.delete(organizations).where(inArray(organizations.id, [w.orgId, w.emptyOrgId]));
-      await db.delete(users).where(inArray(users.id, w.userIds));
-    }
+    await db.delete(creditLedger).where(inArray(creditLedger.userId, w.userIds));
+    await db.delete(wallets).where(inArray(wallets.id, w.wallets));
+    await db.delete(wallets).where(eq(wallets.id, w.poolId));
+    await db.delete(drives).where(inArray(drives.id, w.drives));
+    await db.delete(orgMembers).where(eq(orgMembers.orgId, w.orgId));
+    await db.delete(orgSubscriptions).where(eq(orgSubscriptions.orgId, w.orgId));
+    await db.delete(organizations).where(inArray(organizations.id, [w.orgId, w.emptyOrgId]));
+    await db.delete(users).where(inArray(users.id, w.userIds));
     await pool.end();
   });
 
   it('UI-7 (partial) SPEND-10 (partial): the pool, what is unallocated, the seats and every drive wallet, plus drives with none', async () => {
-    if (!ok) return;
     const split = await getOrgPoolSplit(w.orgId);
     expect(split).toMatchObject({
       walletId: w.poolId,
@@ -100,7 +97,6 @@ describe('org pool split read model (real Postgres)', () => {
   });
 
   it('an org with no pool yet reports no pool', async () => {
-    if (!ok) return;
     expect(await getOrgPoolSplit(w.emptyOrgId)).toEqual({ walletId: null, availableCents: 0, unallocatedCents: 0, periodEnd: null, seats: { memberCount: 0, allowanceCents: 100, allocatedCents: 0, spentCents: 0 }, driveWallets: [], drivesWithoutWallet: [] });
   });
 });

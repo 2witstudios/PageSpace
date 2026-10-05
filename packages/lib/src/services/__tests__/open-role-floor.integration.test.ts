@@ -11,7 +11,7 @@
  * Locally:
  *     DATABASE_URL=... bun run --filter '@pagespace/lib' test:integration -- src/services/__tests__/open-role-floor.integration.test.ts
  */
-import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
+import { assert, describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
 import { factories } from '@pagespace/db/test/factories';
 import { db, pool } from '@pagespace/db/db';
@@ -82,7 +82,7 @@ const defaults = (driveId: string) => db.select().from(driveRoles).where(eq(driv
 
 const setFloorOk = async (floor: 'view' | 'edit') => {
   const r = await setFloor(floor);
-  if (!r.ok) throw new Error(`floor ${floor} refused: ${JSON.stringify(r)}`);
+  assert(r.ok, `floor ${floor} refused: ${JSON.stringify(r)}`);
 };
 
 describe('the org floor under an Open drive default role', () => {
@@ -148,7 +148,7 @@ describe('the org floor under an Open drive default role', () => {
     // Created: a new drive has no default role, so Open is refused and Restricted is not.
     expect(await createOrgDrive(w.owner, { name: 'Product', orgId: w.orgId }, deps)).toMatchObject({ ok: false, status: 403, code: 'POLICY_OPEN_ROLE_FLOOR' });
     const restricted = await createOrgDrive(w.owner, { name: 'Product', orgId: w.orgId, orgVisibility: 'RESTRICTED' }, deps);
-    if (!restricted.ok) throw new Error('restricted create');
+    assert(restricted.ok, 'restricted create');
     created.driveIds.push(restricted.drive.id);
 
     // Switched to Open: refused until its default meets the floor.
@@ -169,7 +169,7 @@ describe('the org floor under an Open drive default role', () => {
     await setFloorOk('edit');
     // New drive: the dialog sends defaultOrgDriveVisibility(floor), and the server admits it.
     const made = await createOrgDrive(w.owner, { name: 'Roadmaps', orgId: w.orgId, orgVisibility: defaultOrgDriveVisibility('edit') }, deps);
-    if (!made.ok) throw new Error(`create with the UI default refused: ${JSON.stringify(made)}`);
+    assert(made.ok, `create with the UI default refused: ${JSON.stringify(made)}`);
     created.driveIds.push(made.drive.id);
     expect(made.drive.orgVisibility).toBe('RESTRICTED');
     // Move a drive in: the dialog's default visibility is admitted too, whatever the drive's default role.
@@ -184,7 +184,7 @@ describe('the org floor under an Open drive default role', () => {
 
   it('DRV-4 (partial) under a VIEW floor the UI default is Open, and a new drive is created Open', async () => {
     const made = await createOrgDrive(w.owner, { name: 'Wiki', orgId: w.orgId, orgVisibility: defaultOrgDriveVisibility('view') }, deps);
-    if (!made.ok) throw new Error('create refused');
+    assert(made.ok, 'create refused');
     created.driveIds.push(made.drive.id);
     expect(made.drive.orgVisibility).toBe('OPEN');
   });
