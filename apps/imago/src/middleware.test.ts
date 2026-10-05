@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { NextRequest } from 'next/server';
 import { unstable_doesMiddlewareMatch } from 'next/experimental/testing/server';
+import { PHASE_DEVELOPMENT_SERVER } from 'next/constants';
 import nextConfig from '../next.config';
 import { config, middleware } from './middleware';
 import { NONCE_HEADER, buildAPICSPPolicy, buildCSPPolicy } from './middleware/security-headers';
@@ -356,7 +357,12 @@ describe('middleware() IMAGO_ENABLED gate', () => {
 
 describe('middleware config.matcher', () => {
   const matches = (url: string, headers: Record<string, string> = {}): boolean =>
-    unstable_doesMiddlewareMatch({ config, nextConfig, url, headers });
+    unstable_doesMiddlewareMatch({
+      config,
+      nextConfig: nextConfig(PHASE_DEVELOPMENT_SERVER),
+      url,
+      headers,
+    });
 
   test('pages and API routes under the basePath', () => {
     assert({
@@ -393,6 +399,13 @@ describe('middleware config.matcher', () => {
       given: 'a router prefetch',
       should: 'skip middleware',
       actual: matches('/imago/drive-1', { 'next-router-prefetch': '1' }),
+      expected: false,
+    });
+
+    assert({
+      given: 'a dev /api call proxied to apps/web',
+      should: 'skip middleware so apps/web answers with its own headers',
+      actual: matches('/api/auth/csrf'),
       expected: false,
     });
   });
