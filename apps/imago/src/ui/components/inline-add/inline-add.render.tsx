@@ -1,5 +1,5 @@
 import type { ReactNode, Ref } from 'react';
-import { Plus } from 'lucide-react';
+import { Icon } from '../icon/icon';
 import { inlineAddFieldClass, inlineAddRestClass } from './inline-add-class';
 
 export type InlineAddRenderProps = {
@@ -36,7 +36,7 @@ export function renderInlineAdd({
   if (!open)
     return (
       <button type="button" ref={restRef} className={inlineAddRestClass} onClick={startAdding}>
-        <Plus size={16} strokeWidth={1.5} aria-hidden="true" />
+        <Icon name="plus" />
         {label}
       </button>
     );
@@ -51,7 +51,9 @@ export function renderInlineAdd({
       onChange={(event) => typeDraft(event.currentTarget.value)}
       onBlur={leaveField}
       onKeyDown={(event) => {
-        if (event.nativeEvent.isComposing) return;
+        // Safari confirms a composition with an Enter whose isComposing is
+        // false; its keyCode is still 229.
+        if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
         if (event.key === 'Enter') {
           event.preventDefault();
           commitDraft();

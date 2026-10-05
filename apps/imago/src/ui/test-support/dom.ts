@@ -43,9 +43,12 @@ export const typeInto = (input: HTMLInputElement, value: string): void => {
   });
 };
 
-/** Presses a key on the focused-or-given element; returns whether it was cancelled. */
-export const press = (target: Element, key: string): boolean => {
-  const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
+/**
+ * Presses a key on the given element; returns whether it was cancelled.
+ * `keyCode` is for IME cases: Safari confirms a composition with 229.
+ */
+export const press = (target: Element, key: string, init: { readonly keyCode?: number } = {}): boolean => {
+  const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...init });
   act(() => {
     target.dispatchEvent(event);
   });
@@ -55,5 +58,15 @@ export const press = (target: Element, key: string): boolean => {
 export const click = (target: HTMLElement): void => {
   act(() => {
     target.click();
+  });
+};
+
+/**
+ * Moves focus off an element inside act(), so React has applied the blur's
+ * update before the test reads the DOM. A bare blur() leaves it pending.
+ */
+export const blur = (target: HTMLElement): void => {
+  act(() => {
+    target.blur();
   });
 };

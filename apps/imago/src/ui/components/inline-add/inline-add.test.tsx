@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
-import { click, mount, press, typeInto, unmountAll } from '../../test-support/dom';
+import { blur, click, mount, press, typeInto, unmountAll } from '../../test-support/dom';
 import { InlineAdd } from './inline-add';
 
 afterEach(unmountAll);
@@ -81,16 +81,29 @@ describe('InlineAdd', () => {
 
   test('leaving the field', () => {
     const empty = setup();
-    empty.open().blur();
+    blur(empty.open());
     const drafted = setup();
     const input = drafted.open();
     typeInto(input, 'Keep me');
-    input.blur();
+    blur(input);
     assert({
       given: 'focus leaving an empty field and a field with a draft',
       should: 'close the empty one and keep the draft open',
       actual: [empty.field() === null, drafted.field()?.value],
       expected: [true, 'Keep me'],
+    });
+  });
+
+  test('Enter confirming an IME composition in Safari', () => {
+    const { added, field, open } = setup();
+    const input = open();
+    typeInto(input, 'にほんご');
+    const prevented = press(input, 'Enter', { keyCode: 229 });
+    assert({
+      given: 'the Enter Safari sends to confirm a composition (keyCode 229, isComposing false)',
+      should: 'leave it to the IME: add nothing and keep the draft',
+      actual: { added, prevented, value: field()?.value },
+      expected: { added: [], prevented: false, value: 'にほんご' },
     });
   });
 });
