@@ -41,6 +41,7 @@ export const ORG_ERROR_COPY: Record<OrgApiErrorCode, string> = {
   use_leave: 'To remove yourself, leave the organization instead.',
   already_owner: 'That person is already the Owner.',
   not_member: 'You are not a member of this organization.',
+  owner_must_transfer: 'Transfer ownership to another member before you leave.',
 
   // invitations and seats
   already_member: 'That person is already a member.',
