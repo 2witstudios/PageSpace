@@ -48,4 +48,13 @@ describe('.env.example documentation for the imago dev topology', () => {
       });
     });
   }
+
+  test('apps/imago sign-in origin under next dev', () => {
+    assert({
+      given: 'apps/imago/.env.example',
+      should: "document NEXT_PUBLIC_WEB_APP_URL as apps/web's dev origin",
+      actual: /^#?\s*NEXT_PUBLIC_WEB_APP_URL=http:\/\/localhost:3000$/m.test(readEnvExample('imago')),
+      expected: true,
+    });
+  });
 });

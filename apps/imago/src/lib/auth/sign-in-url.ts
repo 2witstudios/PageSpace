@@ -77,6 +77,48 @@ export function signInLocation({
   return url.toString();
 }
 
+/** apps/web's own dev origin, used under next dev when NEXT_PUBLIC_WEB_APP_URL is unset. */
+export const DEFAULT_DEV_WEB_APP_URL = 'http://localhost:3000';
+
+/**
+ * The origin that serves classic's sign-in page, given the origin imago was
+ * served from. In production the edge serves /auth on imago's own origin, so
+ * sign-in stays same-origin. `next dev` proxies only /api to apps/web, so the
+ * page lives on apps/web's dev origin instead (localhost cookies ignore the
+ * port, so the session it sets reaches imago too).
+ *
+ * Dot access on purpose: Next inlines NODE_ENV and NEXT_PUBLIC_* into the edge
+ * and client bundles only when they are referenced literally.
+ */
+export function signInOrigin(origin: string): string {
+  if (process.env.NODE_ENV !== 'development') return origin;
+
+  const value = process.env.NEXT_PUBLIC_WEB_APP_URL || DEFAULT_DEV_WEB_APP_URL;
+  const url = parseURL(value);
+  if (url?.protocol !== 'http:' && url?.protocol !== 'https:') {
+    throw new Error(`NEXT_PUBLIC_WEB_APP_URL is not a valid http(s) URL: "${value}"`);
+  }
+  return url.origin;
+}
+
+const parseURL = (value: string): URL | null => {
+  try {
+    return new URL(value);
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * A browser pathname (`window.location.pathname`, which includes the basePath)
+ * made basePath-relative, as imagoReturnPath expects; null outside /imago.
+ */
+export function basePathRelative(pathname: string): string | null {
+  if (pathname === IMAGO_BASE_PATH) return '/';
+  if (!pathname.startsWith(`${IMAGO_BASE_PATH}/`)) return null;
+  return pathname.slice(IMAGO_BASE_PATH.length);
+}
+
 // A bare host with an optional port: no path, userinfo or scheme can ride in.
 const BARE_HOST = /^[a-z0-9.-]+(:\d{1,5})?$|^\[[0-9a-f:.]+\](:\d{1,5})?$/i;
 

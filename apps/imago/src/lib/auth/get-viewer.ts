@@ -3,7 +3,13 @@ import { cache } from 'react';
 import { cookies, headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { sessionService } from '@pagespace/lib/auth/session-service';
-import { PATHNAME_HEADER, SESSION_COOKIE, requestOrigin, signInLocation } from './sign-in-url';
+import {
+  PATHNAME_HEADER,
+  SESSION_COOKIE,
+  requestOrigin,
+  signInLocation,
+  signInOrigin,
+} from './sign-in-url';
 
 export type Viewer = {
   userId: string;
@@ -33,7 +39,7 @@ export const getViewer = cache(async (): Promise<Viewer> => {
   const requestHeaders = await headers();
   redirect(
     signInLocation({
-      origin: requestOrigin(requestHeaders),
+      origin: signInOrigin(requestOrigin(requestHeaders)),
       pathname: requestHeaders.get(PATHNAME_HEADER),
     }),
   );

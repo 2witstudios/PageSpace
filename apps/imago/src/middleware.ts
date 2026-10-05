@@ -1,6 +1,11 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { createSecureResponse } from '@/middleware/security-headers';
-import { PATHNAME_HEADER, SESSION_COOKIE, signInLocation } from '@/lib/auth/sign-in-url';
+import {
+  PATHNAME_HEADER,
+  SESSION_COOKIE,
+  signInLocation,
+  signInOrigin,
+} from '@/lib/auth/sign-in-url';
 import { isImagoEnabled } from '@/lib/imago-enabled';
 
 // Liveness probes run without a session, and while imago is switched off.
@@ -20,7 +25,7 @@ export function middleware(req: NextRequest): NextResponse {
   // Presence only: the edge cannot reach the database. getViewer() validates
   // the session in server code and sends invalid or revoked ones to sign-in.
   if (!isPublic && !req.cookies.get(SESSION_COOKIE)?.value) {
-    return NextResponse.redirect(signInLocation({ origin, pathname }));
+    return NextResponse.redirect(signInLocation({ origin: signInOrigin(origin), pathname }));
   }
 
   const isAPIRoute = pathname.startsWith('/api');

@@ -1,4 +1,4 @@
-import { beforeEach, describe, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { RequestCookies } from 'next/dist/server/web/spec-extension/cookies';
 import { isRedirectError } from 'next/dist/client/components/redirect-error';
@@ -45,6 +45,10 @@ const redirectTarget = async (): Promise<string | null> => {
 describe('getViewer() (unit)', () => {
   beforeEach(() => {
     seams.validateSession.mockReset();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   test('validation request', async () => {
@@ -98,6 +102,20 @@ describe('getViewer() (unit)', () => {
         target: 'https://pagespace.ai/auth/signin?next=%2Fimago%2Fdrive-1%2Ftasks',
         calls: 0,
       },
+    });
+  });
+
+  test('next dev', async () => {
+    vi.stubEnv('NODE_ENV', 'development');
+    vi.stubEnv('NEXT_PUBLIC_WEB_APP_URL', 'http://localhost:3000');
+    requestWith('session=ps_sess_revoked');
+    seams.validateSession.mockResolvedValue(null);
+
+    assert({
+      given: 'a rejected session under next dev',
+      should: "redirect to apps/web's origin, which serves the sign-in page",
+      actual: await redirectTarget(),
+      expected: 'http://localhost:3000/auth/signin?next=%2Fimago%2Fdrive-1%2Ftasks',
     });
   });
 });

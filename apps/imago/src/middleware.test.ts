@@ -124,6 +124,28 @@ describe('middleware() auth gate', () => {
     });
   });
 
+  test('next dev', () => {
+    vi.stubEnv('NODE_ENV', 'development');
+    vi.stubEnv('NEXT_PUBLIC_WEB_APP_URL', 'http://localhost:3000');
+    const { location } = redirectOf(
+      middleware(imagoRequest('/imago/drive-1/files', { session: null })),
+    );
+
+    assert({
+      given: 'next dev, where only /api is proxied to apps/web',
+      should: "send it to apps/web's origin, which serves the sign-in page",
+      actual: location?.origin,
+      expected: 'http://localhost:3000',
+    });
+
+    assert({
+      given: 'next dev',
+      should: 'still carry the requested imago path as next=',
+      actual: location?.searchParams.get('next'),
+      expected: '/imago/drive-1/files',
+    });
+  });
+
   test('the imago root', () => {
     const { location } = redirectOf(middleware(imagoRequest('/imago', { session: null })));
 
