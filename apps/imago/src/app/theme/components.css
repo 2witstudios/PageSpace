@@ -1,6 +1,8 @@
 /* Component-owned size tokens (myimago ADR 0028). Theme variables only;
    classes stay in the markup. */
 @theme {
+  /* Controls: buttons are 36px tall; icon buttons use the 32px step. */
+  --spacing-control: 36px;
   --spacing-avatar-xs: 20px;
   --spacing-checkbox: 16px;
   --spacing-avatar-sm: 28px;
