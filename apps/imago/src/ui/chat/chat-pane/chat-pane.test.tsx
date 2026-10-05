@@ -15,6 +15,7 @@ import {
   agentConversation,
   assistantWithTool,
   conversationsPage,
+  driveAgentsBody,
   messagesPage,
   pointers,
   userMessage,
@@ -30,6 +31,12 @@ const NEW_MESSAGES = `GET ${chatPaths.messages('p-imago', 'c-new')}`;
 const TURN = `POST ${chatPaths.turn}`;
 const ABORT = `POST ${chatPaths.abort}`;
 const TRAIL = `GET ${taskPaths.breadcrumbs('p1')}`;
+const DRIVE_AGENTS = `GET ${chatPaths.driveAgents('d1')}`;
+const SUPPORT_CONVERSATIONS = `GET ${chatPaths.conversations('a1', 0)}`;
+const SUPPORT_MESSAGES = `GET ${chatPaths.messages('a1', 'k1')}`;
+const NOTES_CONVERSATIONS = `GET ${chatPaths.conversations('a2', 0)}`;
+const PLANNER_CONVERSATIONS = `GET ${chatPaths.conversations('p-planner', 0)}`;
+const PLANNER_MESSAGES = `GET ${chatPaths.messages('p-planner', 'pc1')}`;
 
 const HISTORY: ChatMessage[] = [
   userMessage('m1', 'What does the roadmap say?'),
@@ -64,6 +71,19 @@ const chatWeb = (stream: FakeTurnStream, extra: Record<string, FakeRoute> = {}) 
     [MESSAGES]: () => Response.json(messagesPage(HISTORY)),
     [TURN]: () => stream.response(),
     [ABORT]: () => Response.json({ aborted: true }),
+    [DRIVE_AGENTS]: () =>
+      Response.json(
+        driveAgentsBody([
+          { id: 'a1', title: 'Support' },
+          { id: 'a2', title: 'Release notes' },
+        ]),
+      ),
+    [SUPPORT_CONVERSATIONS]: () => Response.json(conversationsPage([agentConversation('k1'), agentConversation('k0')])),
+    [SUPPORT_MESSAGES]: () =>
+      Response.json(messagesPage([userMessage('s1', 'Any open tickets?'), userMessage('s2', 'And the backlog?')], { conversationId: 'k1' })),
+    [PLANNER_CONVERSATIONS]: () => Response.json(conversationsPage([agentConversation('pc1')])),
+    [PLANNER_MESSAGES]: () =>
+      Response.json(messagesPage([userMessage('q1', 'Plan my week'), userMessage('q2', 'And next week')], { conversationId: 'pc1' })),
     [TRAIL]: () =>
       Response.json([
         { id: 'f1', title: 'Plans', type: 'FOLDER', parentId: null },
@@ -113,6 +133,37 @@ const type = (container: HTMLElement, text: string): void => {
   });
 };
 
+const picker = (container: HTMLElement): HTMLSelectElement => {
+  const element = container.querySelector('header select');
+  if (!(element instanceof HTMLSelectElement)) throw new Error('no agent picker');
+  return element;
+};
+
+/** Picks an agent in the header the way a viewer does: the select's value, then its change event. */
+const choose = (container: HTMLElement, value: string): void => {
+  act(() => {
+    picker(container).value = value;
+    picker(container).dispatchEvent(new Event('change', { bubbles: true }));
+  });
+};
+
+const pickerOffers = (container: HTMLElement) =>
+  [...picker(container).querySelectorAll('optgroup')].map((group) => [
+    group.label,
+    [...group.querySelectorAll('option')].map((option) => `${option.value}:${option.textContent}${option.disabled ? ':disabled' : ''}`),
+  ]);
+
+const drivesListed = (container: HTMLElement) => () => {
+  if (picker(container).querySelectorAll('optgroup').length !== 2) throw new Error('drive agents not listed');
+};
+
+const turnBody = (web: Web) =>
+  web.requests.filter((request) => `${request.method} ${request.url}` === TURN).at(-1)?.body as {
+    chatId: string;
+    conversationId: string;
+    contextRef: unknown;
+  };
+
 const items = (container: HTMLElement) => [...container.querySelectorAll<HTMLElement>('ol > li[data-role]')];
 
 const threadLoaded = (container: HTMLElement, count = 2) => () => {
@@ -131,13 +182,13 @@ describe('ChatPane', () => {
       should: 'open the most recent one: the user card, the reply as prose with its tool line and a page chip, under a roomy header naming Imago and the drive',
       actual: [
         container.querySelector('section')?.dataset.density,
-        container.querySelector('header')?.textContent,
+        [picker(container).value, picker(container).getAttribute('aria-label'), container.querySelector('header small')?.textContent],
         user?.dataset.role,
         reply?.querySelector('details summary')?.textContent?.includes('Read page'),
         chip?.getAttribute('href'),
         web.requests.filter((request) => request.url.startsWith('/api/ai/global')),
       ],
-      expected: ['roomy', 'Imago/Alpha in context', 'user', true, '/d1/files/p1', []],
+      expected: ['roomy', ['p-imago', 'Agent', 'Alpha in context'], 'user', true, '/d1/files/p1', []],
     });
   });
 
@@ -341,5 +392,199 @@ describe('ChatPane', () => {
       actual: [container.querySelector('[role="alert"]')?.textContent, field(container).value],
       expected: ['The reply failed. Try again.', 'Hello'],
     });
+  });
+
+  test('the agent selector', async () => {
+    const web = chatWeb(fakeTurnStream());
+    const { container } = mountPane(web);
+    await settle(threadLoaded(container));
+    await settle(drivesListed(container));
+    assert({
+      given: 'the chat header in a drive with two agents the server says the viewer can use',
+      should: 'offer the three Imago agents first, then the drive’s agents under its name, with Imago chosen',
+      actual: [pickerOffers(container), picker(container).value, web.count(DRIVE_AGENTS)],
+      expected: [
+        [
+          ['Imago', ['p-imago:Imago', 'p-planner:Planner', 'p-researcher:Researcher']],
+          ['Alpha', ['a1:Support', 'a2:Release notes']],
+        ],
+        'p-imago',
+        1,
+      ],
+    });
+  });
+
+  test('switching agent', async () => {
+    const stream = fakeTurnStream();
+    const web = chatWeb(stream);
+    const { container } = mountPane(web);
+    await settle(threadLoaded(container));
+    await settle(drivesListed(container));
+    type(container, 'Half a thought');
+
+    choose(container, 'a1');
+    await settle(() => {
+      if (items(container)[0]?.textContent?.includes('Any open tickets?') !== true) throw new Error('support thread not open');
+    });
+    const atSupport = [
+      picker(container).value,
+      getUiState().resources.chatAgent,
+      field(container).value,
+      field(container).getAttribute('aria-label'),
+    ];
+
+    choose(container, 'p-planner');
+    await settle(() => {
+      if (items(container)[0]?.textContent?.includes('Plan my week') !== true) throw new Error('planner thread not open');
+    });
+    press(field(container), 'Enter');
+    await settle(() => {
+      if (web.count(TURN) !== 1) throw new Error('not sent');
+    });
+
+    choose(container, 'p-imago');
+    await settle(() => {
+      if (items(container)[0]?.textContent?.includes('What does the roadmap say?') !== true) throw new Error('imago thread not open');
+    });
+
+    assert({
+      given: 'a draft typed with Imago, then Support chosen, then the planner chosen and the draft sent, then Imago again',
+      should: 'open each agent’s latest conversation in the same pane with the draft kept, send to the chosen agent, and return to Imago’s latest',
+      actual: [
+        atSupport,
+        [turnBody(web).chatId, turnBody(web).conversationId],
+        [getUiState().resources.chatAgent, picker(container).value],
+        web.writes().map((request) => `${request.method} ${request.url}`),
+      ],
+      expected: [
+        ['a1', { id: 'a1', title: 'Support' }, 'Half a thought', 'Message Support'],
+        ['p-planner', 'pc1'],
+        [null, 'p-imago'],
+        [TURN],
+      ],
+    });
+    stream.close();
+  });
+
+  test('opening an object changes only the context', async () => {
+    const stream = fakeTurnStream();
+    const web = chatWeb(stream);
+    const { container, control: host } = mountPane(web);
+    await settle(threadLoaded(container));
+    await settle(drivesListed(container));
+    choose(container, 'a1');
+    await settle(() => {
+      if (items(container)[0]?.textContent?.includes('Any open tickets?') !== true) throw new Error('support thread not open');
+    });
+    const lists = web.count(SUPPORT_CONVERSATIONS);
+
+    act(() => host.go?.('/d1/files/p1'));
+    await settle(() => {
+      if (container.querySelector('header small')?.textContent !== 'Roadmap in context') throw new Error('object not named');
+    });
+    type(container, 'Summarise it');
+    press(field(container), 'Enter');
+    await settle(() => {
+      if (web.count(TURN) !== 1) throw new Error('not sent');
+    });
+
+    assert({
+      given: 'Support chosen in its latest conversation, then a page opened in the object pane and a prompt sent',
+      should: 'keep the agent and the conversation, and change only the context the turn carries',
+      actual: [
+        [picker(container).value, getUiState().resources.chatAgent?.id],
+        [turnBody(web).chatId, turnBody(web).conversationId, turnBody(web).contextRef],
+        web.count(SUPPORT_CONVERSATIONS) === lists,
+        items(container)[0]?.textContent?.includes('Any open tickets?'),
+      ],
+      expected: [
+        ['a1', 'a1'],
+        ['a1', 'k1', { routeType: 'page', pageId: 'p1', driveId: 'd1' }],
+        true,
+        true,
+      ],
+    });
+    stream.close();
+  });
+
+  test('an agent the viewer lost access to', async () => {
+    const web = chatWeb(fakeTurnStream(), {
+      [SUPPORT_CONVERSATIONS]: () => Response.json({ error: 'Insufficient permissions to view this agent' }, { status: 403 }),
+      [NOTES_CONVERSATIONS]: () => Response.json({ error: 'AI agent not found' }, { status: 404 }),
+    });
+    const { container } = mountPane(web);
+    await settle(threadLoaded(container));
+    await settle(drivesListed(container));
+
+    choose(container, 'a1');
+    await settle(() => {
+      if (container.querySelector('[role="alert"]') === null) throw new Error('no notice');
+    });
+    await settle(threadLoaded(container));
+    type(container, 'Still there?');
+    const refused = [
+      container.querySelector('[role="alert"]')?.textContent,
+      picker(container).value,
+      getUiState().resources.chatAgent,
+      items(container)[0]?.textContent?.includes('What does the roadmap say?'),
+      control(container).disabled,
+    ];
+
+    choose(container, 'a2');
+    await settle(() => {
+      if (container.querySelector('[role="alert"]')?.textContent?.includes('Release notes') !== true) throw new Error('no notice');
+    });
+    const gone = [container.querySelector('[role="alert"]')?.textContent, picker(container).value];
+
+    choose(container, 'p-planner');
+    await settle(() => {
+      if (items(container)[0]?.textContent?.includes('Plan my week') !== true) throw new Error('planner thread not open');
+    });
+
+    assert({
+      given: 'an agent the server now refuses (403), then one it no longer has (404), then the planner chosen',
+      should: 'fall back to Imago with its latest conversation and a notice naming the lost agent each time, and clear the notice on the next choice',
+      actual: [refused, gone, container.querySelector('[role="alert"]')],
+      expected: [
+        ['You no longer have access to Support, so Imago is answering.', 'p-imago', null, true, false],
+        ['You no longer have access to Release notes, so Imago is answering.', 'p-imago'],
+        null,
+      ],
+    });
+  });
+
+  test('a conversation list that failed', async () => {
+    const stream = fakeTurnStream();
+    const web = chatWeb(stream, {
+      [CONVERSATIONS]: () => Response.json({ error: 'Failed to fetch conversations' }, { status: 500 }),
+      [NEW_CONVERSATION]: () => Response.json({ conversationId: 'c-new' }),
+      [NEW_MESSAGES]: () => Response.json(messagesPage([], { conversationId: 'c-new' })),
+    });
+    const { container } = mountPane(web);
+    await settle(() => {
+      if (container.querySelector('[role="alert"]') === null) throw new Error('no notice');
+    });
+    type(container, 'Hello');
+    const failed = [container.querySelector('[role="alert"]')?.textContent, control(container).disabled];
+    press(field(container), 'Enter');
+    stream.push({ type: 'start', messageId: 'a1' });
+    stream.push({ type: 'text-start', id: 't1' });
+    stream.push({ type: 'text-delta', id: 't1', delta: 'Hi there.' });
+    await settle(() => {
+      if (items(container).at(-1)?.textContent?.includes('Hi there.') !== true) throw new Error('no reply');
+    });
+
+    assert({
+      given: 'Imago’s conversation list failing to load, then a prompt sent',
+      should: 'say the chat could not load but keep Send enabled, then start a new conversation and stream the turn into it',
+      actual: [
+        failed,
+        web.writes().map((request) => `${request.method} ${request.url}`),
+        turnBody(web).conversationId,
+        getUiState().resources.chatConversationId,
+      ],
+      expected: [['This chat could not load. Try again in a moment.', false], [NEW_CONVERSATION, TURN], 'c-new', 'c-new'],
+    });
+    stream.close();
   });
 });
