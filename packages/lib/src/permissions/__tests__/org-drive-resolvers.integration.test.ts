@@ -225,7 +225,7 @@ describe('org access in the human drive resolvers (integration)', () => {
     expect(rows.some((r) => r.userId === f.people.omar.id)).toBe(false);
   });
 
-  it('DRV-5 (partial) an org member with no row resolves an OPEN drive with its default role and sees it listed; a private page stays closed', async () => {
+  it('DRV-5 (partial) POL-6 (partial) an org member with no row resolves an OPEN drive with its default role and sees it listed; a private page stays closed', async () => {
     const f = await northwind();
     flags.orgsEnabled = true;
     const { nina } = f.people;
@@ -244,10 +244,13 @@ describe('org access in the human drive resolvers (integration)', () => {
     expect(listed.find((d) => d.id === f.drives.personal.id)).toMatchObject({ role: 'ADMIN', orgId: null });
     expect(await listedIds(nina.id, { tokenScopable: true })).toEqual([f.drives.product.id, f.drives.personal.id].sort());
 
-    // Through the real loader: a default role that denies viewing closes an OPEN drive's pages to a
-    // row-less member, and a former lead's leftover OWNER row does not reopen them.
-    expect(await getUserAccessLevel(f.people.lu.id, f.pages.handbookPage.id)).toBeNull();
-    expect(await getUserAccessLevel(f.people.kai.id, f.pages.handbookPage.id)).toBeNull();
+    // Through the real loader: a default role that denies viewing would close an OPEN drive's pages to a
+    // row-less member, but that default is below Southwind's Open-drive floor (POL-6, the default view),
+    // which the resolver reads: both members view the page, and edit nothing. A former lead's leftover OWNER
+    // row adds nothing on top.
+    for (const member of [f.people.lu, f.people.kai]) {
+      expect(await getUserAccessLevel(member.id, f.pages.handbookPage.id), member.name).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
+    }
 
     // #2627 through the org path: the drive root still opens for view, but a default role without
     // drive-wide edit grants no edit there, and the listing's canCreatePages agrees with that answer.

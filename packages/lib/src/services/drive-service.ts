@@ -19,6 +19,7 @@ import { driveMembershipRow } from '../permissions/drive-member-role';
 import { ORGS_ENABLED } from '../organizations/orgs-enabled';
 import { isDriveLead } from '../permissions/drive-relationship';
 import { isGuestRole } from '../permissions/guest-role';
+import type { OpenRoleFloor } from '../organizations/policies-core';
 
 // ============================================================================
 // Types
@@ -178,13 +179,15 @@ export async function listAccessibleDrives(
   // and fail closed below. Batched: a single custom-role query at most.
   const ownedDriveIds = new Set(ownedDrives.map((drive) => drive.id));
   const canCreatePagesMap = await resolveDriveWideCanEdit([
-    ...ownedDrives.map((drive) => ({ driveId: drive.id, role: 'OWNER' as const, customRoleId: null })),
+    ...ownedDrives.map((drive) => ({ driveId: drive.id, role: 'OWNER' as const, customRoleId: null, openDriveFloor: null })),
+    // Dark (ORGS_ENABLED false): no org resolution, so no POL-6 floor.
     ...memberDrives
       .filter((d) => d.driveId && !ownedDriveIds.has(d.driveId))
       .map((d) => ({
         driveId: d.driveId as string,
         role: d.role as 'OWNER' | 'ADMIN' | 'MEMBER',
         customRoleId: memberCustomRoleIds.get(d.driveId as string) ?? null,
+        openDriveFloor: null,
       })),
   ]);
 
@@ -294,7 +297,12 @@ async function listAccessibleDrivesWithOrgs(
     sharedDrives.flatMap((drive, i) => {
       const membership = effective[i];
       return membership
-        ? [{ driveId: drive.id, role: membership.role === 'ADMIN' ? 'ADMIN' as const : 'MEMBER' as const, customRoleId: membership.customRoleId }]
+        ? [{
+          driveId: drive.id,
+          role: membership.role === 'ADMIN' ? 'ADMIN' as const : 'MEMBER' as const,
+          customRoleId: membership.customRoleId,
+          openDriveFloor: membership.openDriveFloor,
+        }]
         : [];
     }),
   );
@@ -383,16 +391,25 @@ export async function getDriveAccess(
   driveId: string,
   userId: string
 ): Promise<DriveAccessInfo> {
+  const { isOwner, isAdmin, isMember, role, customRoleId } = await getDriveAccessWithFloor(driveId, userId);
+  return { isOwner, isAdmin, isMember, role, customRoleId };
+}
+
+/** getDriveAccess plus the membership's POL-6 floor, for the drive-wide edit flag (getDriveWithAccess). */
+async function getDriveAccessWithFloor(
+  driveId: string,
+  userId: string
+): Promise<DriveAccessInfo & { openDriveFloor: OpenRoleFloor | null }> {
   const drive = await getDriveById(driveId);
 
   if (!drive) {
-    return { isOwner: false, isAdmin: false, isMember: false, role: null, customRoleId: null };
+    return { isOwner: false, isAdmin: false, isMember: false, role: null, customRoleId: null, openDriveFloor: null };
   }
 
   const isOwner = isDriveLead(userId, drive);
 
   if (isOwner) {
-    return { isOwner: true, isAdmin: true, isMember: true, role: 'OWNER', customRoleId: null };
+    return { isOwner: true, isAdmin: true, isMember: true, role: 'OWNER', customRoleId: null, openDriveFloor: null };
   }
 
   // Check membership; an org Owner/Admin and an implicit Open-drive member resolve here too.
@@ -407,10 +424,11 @@ export async function getDriveAccess(
       isMember: true,
       role,
       customRoleId: membership.customRoleId ?? null,
+      openDriveFloor: membership.openDriveFloor,
     };
   }
 
-  return { isOwner: false, isAdmin: false, isMember: false, role: null, customRoleId: null };
+  return { isOwner: false, isAdmin: false, isMember: false, role: null, customRoleId: null, openDriveFloor: null };
 }
 
 export interface DriveScopeToValidate {
@@ -562,7 +580,7 @@ export async function getDriveWithAccess(
     return null;
   }
 
-  const access = await getDriveAccess(driveId, userId);
+  const access = await getDriveAccessWithFloor(driveId, userId);
 
   if (!access.isOwner && !access.isMember) {
     return null;
@@ -573,6 +591,7 @@ export async function getDriveWithAccess(
       driveId,
       role: access.isOwner ? 'OWNER' : (access.role ?? 'MEMBER'),
       customRoleId: access.isMember && !access.isOwner ? access.customRoleId : null,
+      openDriveFloor: access.openDriveFloor,
     },
   ]);
 

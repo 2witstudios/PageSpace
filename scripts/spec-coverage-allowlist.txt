@@ -33,7 +33,13 @@ DRV-3
 # picker and accessible-drives include it): B4's org-membership-sync tests prove the materialized rows
 # (default role, accepted, drive lead excluded, idempotent), titled "DRV-5 (partial)"; resolution through
 # the permission resolver and inclusion in sidebar, picker and accessible-drives are unproven until B7/Wave F.
+# ow-pol6-resolver: implicit Open membership now resolves the same in every TS resolver AND the SQL twin
+# accessible_page_ids_for_user (0334, pulse/activity/page payloads), in one real-PG matrix; the sidebar and picker
+# surfaces are not re-verified there, so it stays.
 DRV-5
+# DRV-6 (Restricted: directory only, join request, lead or org Admin approves): ow-pol6-resolver closed one leak
+# (a stale source='org' row opened a RESTRICTED or PRIVATE drive's pages in the SQL twin; 0334, matrix cell
+# red before / green after). The directory, picker and join-request clauses are not proven by that lane.
 DRV-6
 DRV-7
 # DRV-8 (a guest is a drive member not in the org; guests hold no seat, see only the drives they were
@@ -82,6 +88,9 @@ MON-7
 ORG-1
 ORG-2
 ORG-3
+# ORG-4: ow-pol6-resolver made the SQL twin (0334) give org Owner/Admin power the same full access as the TS
+# resolvers, and audit it on a PRIVATE drive through the same deduped event (accessiblePageIds, loadPagePayload;
+# "ORG-4 (partial)" in org-admin-access-audit.integration). Other ORG-4 clauses were not re-verified there.
 ORG-4
 # ORG-5 (one shared org permission function used by web routes, CLI, and MCP): B3 routes all go
 # through requireOrgRole, titled "ORG-5 (partial)"; CLI and MCP use it in Wave G (X-1).
@@ -110,14 +119,6 @@ POL-1
 # agrees every clause is proven: several apps/web paths are proven against a mocked decision, and the merge with
 # #2761 (D-OW-30 "no subscription row = lapsed") is not yet re-verified on the merged tip.
 POL-2
-# POL-6 (default role in Open drives; read by the implicit-membership resolver; D-OW-11: the default is a drive
-# setting, the org sets only the floor). Enforced at every WRITE (point-guard ruling, no resolution overlay):
-# role create/update/delete/reorder, the page-permission path, backup restore, role rollback/redo, raising the
-# floor, a drive created/moved in/switched to Open; judged on the default's effective grants (drive-wide and
-# per-page; null drive-wide = member view); serialized with visibility changes (org then drive lock) and per drive;
-# org members follow the current default; a damaged floor fails closed to view. UNPROVEN: the implicit-membership
-# RESOLVER does not read the floor (resolution-time reading); filed as a follow-up by the orchestrator.
-POL-6
 # POL-8 (models available and provider allowlist): every model call is refused by the org allowlists in the one
 # provider factory and saving a disallowed model is refused, titled "POL-8 (partial)". Not claimed: the model
 # list offered to the pickers is the public catalog and is not org-filtered (UI lane), and the hidden agent-model

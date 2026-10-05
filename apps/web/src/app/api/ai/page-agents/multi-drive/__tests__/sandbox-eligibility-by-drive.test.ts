@@ -168,7 +168,8 @@ describe('computeSandboxEligibilityByDrive', () => {
 });
 
 describe('resolveEditableDriveIds', () => {
-  const member = (driveId: string, role: string, customRoleId: string | null = null) => ({ driveId, role, customRoleId });
+  const member = (driveId: string, role: string, customRoleId: string | null = null, openDriveFloor: 'view' | 'edit' | null = null) =>
+    ({ driveId, role, customRoleId, openDriveFloor });
 
   it('grants plain MEMBER and ADMIN memberships', () => {
     const result = resolveEditableDriveIds([member('d1', 'MEMBER'), member('d2', 'ADMIN')], []);
@@ -205,31 +206,51 @@ describe('resolveEditableDriveIds', () => {
     const result = resolveEditableDriveIds([member('d1', 'ADMIN', 'r-no')], roles);
     expect(result).toEqual(new Set(['d1']));
   });
+
+  it('POL-6 (partial) an implicit Open-drive member edits drive-wide under an edit floor, whatever the default role grants; a view floor adds no edit', () => {
+    const roles = [{ id: 'r-view', driveId: 'd1', driveWidePermissions: { canEdit: false } }];
+    expect(resolveEditableDriveIds([member('d1', 'MEMBER', 'r-view', 'edit')], roles)).toEqual(new Set(['d1']));
+    expect(resolveEditableDriveIds([member('d1', 'MEMBER', 'r-stale', 'edit')], [])).toEqual(new Set(['d1']));
+    expect(resolveEditableDriveIds([member('d1', 'MEMBER', 'r-view', 'view')], roles)).toEqual(new Set());
+    expect(resolveEditableDriveIds([member('d1', 'MEMBER', 'r-view', null)], roles)).toEqual(new Set());
+  });
 });
 
 describe('membershipRowsOf (B7c)', () => {
-  const rel = (role: 'OWNER' | 'ADMIN' | 'MEMBER', customRoleId: string | null = null, source: 'invite' | 'org' = 'invite'): DriveRelationship => ({
+  const rel = (
+    role: 'OWNER' | 'ADMIN' | 'MEMBER',
+    customRoleId: string | null = null,
+    source: 'invite' | 'org' = 'invite',
+    openDriveFloor: 'view' | 'edit' | null = null,
+  ): DriveRelationship => ({
     isOwner: false,
-    membership: { role, customRoleId, source, auditOrgAdminPrivateAccess: false },
+    membership: { role, customRoleId, source, auditOrgAdminPrivateAccess: false, openDriveFloor },
   });
 
   it('ORG-4 (partial) DRV-5 (partial) X-6 (partial) turns the org-aware relationships into the membership rows the edit rule reads: an org Admin is ADMIN, an implicit Open member carries the default role, a stale org row and the lead yield no row', () => {
     const relationships = new Map<string, DriveRelationship>([
       ['finance', rel('ADMIN', null, 'org')],
-      ['product', rel('MEMBER', 'default-role', 'org')],
+      ['product', rel('MEMBER', 'default-role', 'org', 'edit')],
       ['research', { isOwner: false, membership: null }],
       ['led', { isOwner: true, membership: null }],
     ]);
 
     expect(membershipRowsOf(relationships)).toEqual([
-      { driveId: 'finance', role: 'ADMIN', customRoleId: null },
-      { driveId: 'product', role: 'MEMBER', customRoleId: 'default-role' },
+      { driveId: 'finance', role: 'ADMIN', customRoleId: null, openDriveFloor: null },
+      { driveId: 'product', role: 'MEMBER', customRoleId: 'default-role', openDriveFloor: 'edit' },
     ]);
   });
 
   it('the implicit member\'s default role then bounds drive-wide edit exactly like an explicit custom role', () => {
-    const rows = membershipRowsOf(new Map([['product', rel('MEMBER', 'viewer', 'org')]]));
+    // Under the view floor (the default) a view-only default role grants no drive-wide edit.
+    const rows = membershipRowsOf(new Map([['product', rel('MEMBER', 'viewer', 'org', 'view')]]));
     const editable = resolveEditableDriveIds(rows, [{ id: 'viewer', driveId: 'product', driveWidePermissions: { canEdit: false } }]);
     expect(editable).toEqual(new Set());
+  });
+
+  it('POL-6 (partial) the implicit member\'s org floor reaches the edit rule: an edit floor lifts a view-only default role', () => {
+    const rows = membershipRowsOf(new Map([['product', rel('MEMBER', 'viewer', 'org', 'edit')]]));
+    const editable = resolveEditableDriveIds(rows, [{ id: 'viewer', driveId: 'product', driveWidePermissions: { canEdit: false } }]);
+    expect(editable).toEqual(new Set(['product']));
   });
 });

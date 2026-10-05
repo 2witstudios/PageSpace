@@ -108,7 +108,7 @@ export async function legacyGetUserAccessLevel(
         // MEMBER to what its driveWidePermissions grant; an unresolvable or
         // foreign-drive role fails closed.
         const canEditMap = await resolveDriveWideCanEdit([
-          { driveId: drive[0].id, role: isAdmin ? 'ADMIN' : 'MEMBER', customRoleId: membership[0].customRoleId },
+          { driveId: drive[0].id, role: isAdmin ? 'ADMIN' : 'MEMBER', customRoleId: membership[0].customRoleId, openDriveFloor: null },
         ]);
         return {
           canView: true,
@@ -311,13 +311,14 @@ export async function legacyListAccessibleDrives(
   // and fail closed below. Batched: a single custom-role query at most.
   const ownedDriveIds = new Set(ownedDrives.map((drive) => drive.id));
   const canCreatePagesMap = await resolveDriveWideCanEdit([
-    ...ownedDrives.map((drive) => ({ driveId: drive.id, role: 'OWNER' as const, customRoleId: null })),
+    ...ownedDrives.map((drive) => ({ driveId: drive.id, role: 'OWNER' as const, customRoleId: null, openDriveFloor: null })),
     ...memberDrives
       .filter((d) => d.driveId && !ownedDriveIds.has(d.driveId))
       .map((d) => ({
         driveId: d.driveId as string,
         role: d.role as 'OWNER' | 'ADMIN' | 'MEMBER',
         customRoleId: memberCustomRoleIds.get(d.driveId as string) ?? null,
+        openDriveFloor: null,
       })),
   ]);
 
