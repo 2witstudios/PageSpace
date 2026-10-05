@@ -140,7 +140,18 @@ describe('Members & seats', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Actions for Jono Woodall' }));
     await userEvent.click(await screen.findByRole('menuitem', { name: 'Seat caps' }));
     await userEvent.click(screen.getByRole('button', { name: 'Turn on default caps' }));
-    await waitFor(() => expect(mocks.setOrgSeatCap).toHaveBeenCalledWith('org_nw', 'u_jono', {}));
+    // Explicit defaults, so a stored {null,null} row can never swallow them (review P2-1).
+    await waitFor(() => expect(mocks.setOrgSeatCap).toHaveBeenCalledWith('org_nw', 'u_jono', { dailyCapCents: 50, monthlyCapCents: 1000 }));
+  });
+
+  it('WAL-7 (partial): emptying both fields on a capped seat removes the caps rather than storing an empty row', async () => {
+    render(<OrgMembersPage />);
+    await userEvent.click(screen.getByRole('button', { name: 'Actions for Marcus Oyelaran' }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Seat caps' }));
+    await userEvent.clear(screen.getByLabelText('Daily cap'));
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(mocks.clearOrgSeatCap).toHaveBeenCalledWith('org_nw', 'u_marcus'));
+    expect(mocks.setOrgSeatCap).not.toHaveBeenCalled();
   });
 
   it('SEAT-9 (partial) D-OW-33: while lapsed, inviting and giving seats pause; revoking still works; a cap may be lowered but not raised', async () => {

@@ -59,6 +59,7 @@ export function SeatCapsCard({ orgId, member, seat, seatAllowanceCents, lapsed, 
   const written = turningOnDefaults
     ? { dailyCapCents: DEFAULT_CONSUMER_CAPS.dailyCents, monthlyCapCents: DEFAULT_CONSUMER_CAPS.monthlyCents }
     : next;
+  const clearingCaps = !turningOnDefaults && next.dailyCapCents === null && next.monthlyCapCents === null;
   const saveAllowed = valid && seatCapChangeAllowed(lapsed, current, written, seatAllowanceCents);
   const removeAllowed = seatCapChangeAllowed(lapsed, current, { dailyCapCents: null, monthlyCapCents: null }, seatAllowanceCents);
 
@@ -114,7 +115,18 @@ export function SeatCapsCard({ orgId, member, seat, seatAllowanceCents, lapsed, 
             <Button variant="ghost" size="sm" disabled={saving || !removeAllowed} onClick={() => void run(() => clearOrgSeatCap(orgId, member.userId), `Caps removed for ${name}`)}>
               Remove caps
             </Button>
-            <Button size="sm" disabled={saving || !saveAllowed} onClick={() => void run(() => setOrgSeatCap(orgId, member.userId, turningOnDefaults ? {} : next), `Caps saved for ${name}`)}>
+            <Button
+              size="sm"
+              disabled={saving || !saveAllowed}
+              onClick={() =>
+                void run(
+                  // Both fields emptied on a capped seat: delete the row (no caps) rather than store {null,null},
+                  // which a later "turn on defaults" would keep. Turning on defaults sends them explicitly.
+                  () => (clearingCaps ? clearOrgSeatCap(orgId, member.userId) : setOrgSeatCap(orgId, member.userId, written)),
+                  clearingCaps ? `Caps removed for ${name}` : `Caps saved for ${name}`,
+                )
+              }
+            >
               {turningOnDefaults ? 'Turn on default caps' : 'Save'}
             </Button>
           </div>
