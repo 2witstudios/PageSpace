@@ -62,3 +62,24 @@ export const composeTree = (tree: TreeAnswer, loaded: LoadedChildren): readonly 
     .filter(([, load]) => load.at > tree.at)
     .sort(([, a], [, b]) => a.at - b.at)
     .reduce((pages, [parentId, load]) => mergeChildren(pages, parentId, load.children), tree.pages);
+
+/** `pages` with `pageId` titled `title`; the same tree when it does not hold the page. */
+export const renamePage = <P extends PageResponse & { readonly children?: readonly P[] }>(
+  pages: readonly P[],
+  pageId: string,
+  title: string,
+): readonly P[] => {
+  let changed = false;
+  const next = pages.map((page): P => {
+    if (page.id === pageId) {
+      changed = true;
+      return { ...page, title };
+    }
+    if (page.children === undefined) return page;
+    const below = renamePage(page.children, pageId, title);
+    if (below === page.children) return page;
+    changed = true;
+    return { ...page, children: below };
+  });
+  return changed ? next : pages;
+};

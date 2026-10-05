@@ -1,9 +1,9 @@
 'use client';
 
 import type { ReactNode } from 'react';
-import useSWR from 'swr';
 import { renderObjectPlaceholder } from '../../frame/shell/object-placeholder';
 import { DocumentView, type DocumentPage } from '../document-view/document-view';
+import { usePage } from '../page-object/page-object';
 
 export type PageViewProps = {
   readonly driveId: string;
@@ -13,12 +13,14 @@ export type PageViewProps = {
 /** The page as a document the view can draw, or null for any other page type. */
 export const documentOf = (data: unknown): DocumentPage | null => {
   if (typeof data !== 'object' || data === null) return null;
-  const { id, title, type, content } = data as Record<string, unknown>;
+  const { id, title, type, content, revision, contentMode } = data as Record<string, unknown>;
   if (type !== 'DOCUMENT' || typeof id !== 'string') return null;
   return {
     id,
     title: typeof title === 'string' ? title : '',
     content: typeof content === 'string' ? content : '',
+    revision: typeof revision === 'number' ? revision : 0,
+    contentMode: contentMode === 'markdown' ? 'markdown' : 'html',
   };
 };
 
@@ -29,7 +31,7 @@ export const documentOf = (data: unknown): DocumentPage | null => {
  * entry PageObject loaded, so it asks the server nothing more.
  */
 export function PageView({ driveId, pageId }: PageViewProps): ReactNode {
-  const { data } = useSWR<unknown>(`/api/pages/${encodeURIComponent(pageId)}`);
+  const { data } = usePage(pageId);
   const page = documentOf(data);
   if (page === null) return renderObjectPlaceholder('Page');
   return <DocumentView key={page.id} driveId={driveId} page={page} />;

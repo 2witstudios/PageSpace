@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useEffect, useRef, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useRef, type ReactNode } from 'react';
 import { getBrowserRealtimeClient, type RealtimeClient } from './realtime-client';
 
 const RealtimeContext = createContext<RealtimeClient | null>(null);
@@ -54,6 +54,17 @@ export function useSocketEvent<Args extends unknown[] = unknown[]>(
       socket.off(event, listener);
     };
   }, [realtime, event]);
+}
+
+/**
+ * Reads this tab's socket id when called, for a write that should not be
+ * echoed back as someone else's change (apps/web's X-Socket-ID); undefined
+ * while the socket has none.
+ */
+export function useSocketId(): () => string | undefined {
+  const realtime = useContext(RealtimeContext);
+  if (!realtime) throw new Error('useSocketId must be used inside <RealtimeProvider>');
+  return useCallback(() => realtime.socket().id, [realtime]);
 }
 
 /** realtime's event for joining a drive's room (apps/realtime/src/index.ts). */

@@ -19,6 +19,8 @@ import { fetchSocketToken } from './socket-token';
 /** The part of a socket.io Socket imago uses; tests stand a fake in for it. */
 export type RealtimeSocket = {
   connected: boolean;
+  /** socket.io's id for this connection; apps/web echoes it on events a request from this tab caused. */
+  id?: string;
   /** Sends an event to realtime (socket.io buffers it until the socket connects). */
   emit(event: string, ...args: unknown[]): unknown;
   on(event: string, listener: (...args: unknown[]) => void): unknown;

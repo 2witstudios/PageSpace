@@ -1,4 +1,5 @@
 import type { UiSlice, UiState } from '../../store/state';
+import type { DocumentPatch } from '../document-edit/document-saver';
 
 /**
  * A page the viewer asked for from the tree's + and the server has not yet
@@ -21,6 +22,18 @@ export type PendingFile = {
   readonly knownIds: readonly string[];
 };
 
+/** Text a document held when it closed and the server never got, with the revision it was made on. */
+export type DocumentDraft = { readonly patch: DocumentPatch; readonly revision: number };
+
+/**
+ * One open view of a document that holds unsaved text. A page can have two
+ * for a moment (a closing view's last save still out while it is reopened),
+ * and each ends only its own.
+ */
+export type DocumentEditor = { readonly pageId: string; readonly viewId: string };
+
+const sameEditor = (a: DocumentEditor, b: DocumentEditor): boolean => a.pageId === b.pageId && a.viewId === b.viewId;
+
 type FilesResources = {
   /** Pages expanded in the files tree. */
   readonly expandedFileIds: readonly string[];
@@ -30,12 +43,24 @@ type FilesResources = {
   readonly pendingFiles: readonly PendingFile[];
   /** Why the last create failed; null once another starts. */
   readonly fileCreateError: string | null;
+  /** Document views holding text the server does not have yet: SWR leaves their page alone meanwhile. */
+  readonly editingDocuments: readonly DocumentEditor[];
+  /** Unsaved text of documents that closed, by page id, restored when each opens again. */
+  readonly documentDrafts: Readonly<Record<string, DocumentDraft>>;
 };
 
 const withFiles = (state: UiState, files: Partial<FilesResources>): UiState => ({
   ...state,
   resources: { ...state.resources, ...files },
 });
+
+/** Whether a document holds unsaved text: its page must not be revalidated over it. */
+export const isEditingDocument = (state: UiState, pageId: string): boolean =>
+  state.resources.editingDocuments.some((editor) => editor.pageId === pageId);
+
+/** The draft a document closed with; undefined when it closed saved. */
+export const documentDraftOf = (state: UiState, pageId: string): DocumentDraft | undefined =>
+  Object.hasOwn(state.resources.documentDrafts, pageId) ? state.resources.documentDrafts[pageId] : undefined;
 
 const without = (pending: readonly PendingFile[], key: string): readonly PendingFile[] =>
   pending.filter((file) => file.key !== key);
@@ -51,6 +76,8 @@ export const filesPlugin = {
     fileFilter: '',
     pendingFiles: [],
     fileCreateError: null,
+    editingDocuments: [],
+    documentDrafts: {},
   }),
   transactions: {
     toggleFileFolder: (state: UiState, pageId: string): UiState => {
@@ -81,5 +108,28 @@ export const filesPlugin = {
       state.resources.pendingFiles.some((file) => file.key === key)
         ? withFiles(state, { pendingFiles: without(state.resources.pendingFiles, key) })
         : state,
+    /** A document now holds text the server does not have (classic's useEditingStore.startEditing). */
+    beginDocumentEdit: (state: UiState, editor: DocumentEditor): UiState =>
+      state.resources.editingDocuments.some((open) => sameEditor(open, editor))
+        ? state
+        : withFiles(state, { editingDocuments: [...state.resources.editingDocuments, editor] }),
+    /** The server has everything this view of the document holds again. */
+    endDocumentEdit: (state: UiState, editor: DocumentEditor): UiState =>
+      state.resources.editingDocuments.some((open) => sameEditor(open, editor))
+        ? withFiles(state, {
+            editingDocuments: state.resources.editingDocuments.filter((open) => !sameEditor(open, editor)),
+          })
+        : state,
+    /** A document closed holding text the server never got: keep it for when it opens again. */
+    keepDocumentDraft: (
+      state: UiState,
+      { pageId, draft }: { readonly pageId: string; readonly draft: DocumentDraft },
+    ): UiState => withFiles(state, { documentDrafts: { ...state.resources.documentDrafts, [pageId]: draft } }),
+    /** The reopened document holds its draft again. */
+    dropDocumentDraft: (state: UiState, pageId: string): UiState => {
+      if (documentDraftOf(state, pageId) === undefined) return state;
+      const { [pageId]: _taken, ...rest } = state.resources.documentDrafts;
+      return withFiles(state, { documentDrafts: rest });
+    },
   },
 } satisfies UiSlice;
