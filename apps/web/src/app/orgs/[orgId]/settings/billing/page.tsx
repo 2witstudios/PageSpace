@@ -12,7 +12,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Progress } from '@/components/ui/progress';
 import { Switch } from '@/components/ui/switch';
 import { useBillingVisibility } from '@/hooks/useBillingVisibility';
-import { useOrgAdminRead, useOrgSeats } from '@/hooks/useOrgs';
+import { useOrgAdminRead, useOrgSeats, useOrgWalletRealtime } from '@/hooks/useOrgs';
 import { OrgBadge } from '@/components/orgs/OrgBadge';
 import { goToOrgBillingPortal } from '@/components/orgs/OrgBillingBanner';
 import { OrgSettingsShell, type OrgSettingsContext } from '@/components/orgs/OrgSettingsShell';
@@ -43,6 +43,8 @@ function BillingBody({ orgId, orgName, role, notice }: OrgSettingsContext) {
   const pool = useOrgAdminRead<OrgPoolSplit>(orgReadKeys.pool(orgId), role).data;
   const invoices = useOrgAdminRead<{ invoices: OrgInvoice[]; hasMore: boolean }>(orgReadKeys.invoices(orgId), role).data?.invoices;
   const [savingAuto, setSavingAuto] = useState(false);
+  // X-4: drive wallet spend, status and the pool refresh live (wallet:changed).
+  useOrgWalletRealtime(orgId, pool?.driveWallets.map((w) => w.driveId) ?? []);
   const isOwner = orgRoleAtLeast(role, 'OWNER');
 
   if (orgErrorCode(seatsRead.error) === 'billing_unavailable') {

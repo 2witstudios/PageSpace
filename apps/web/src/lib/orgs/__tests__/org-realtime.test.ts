@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { orgChangeRefreshes } from '../org-realtime';
+import { orgChangeRefreshes, walletChangeRefreshes } from '../org-realtime';
 
 describe('orgChangeRefreshes', () => {
   const matches = (orgId: string | undefined, change: Parameters<typeof orgChangeRefreshes>[0]['change'], key: unknown) =>
@@ -24,5 +24,20 @@ describe('orgChangeRefreshes', () => {
 
   it('ignores non-string keys', () => {
     expect(matches('o1', 'policy', ['/api/orgs/o1'])).toBe(false);
+  });
+});
+
+describe('walletChangeRefreshes', () => {
+  const m = walletChangeRefreshes({ driveId: 'd1', walletId: 'w1', change: 'balance' }, 'o1', ['d1', 'd2']);
+
+  it('X-4 (partial): a wallet:changed for one of the org drives on screen refetches the pool split and seat caps', () => {
+    expect(m('/api/orgs/o1/pool')).toBe(true);
+    expect(m('/api/orgs/o1/seat-caps')).toBe(true);
+  });
+
+  it('leaves every other projection alone, and ignores drives not on screen', () => {
+    expect(m('/api/orgs/o1/members')).toBe(false);
+    expect(m('/api/orgs/o2/pool')).toBe(false);
+    expect(walletChangeRefreshes({ driveId: 'd9', walletId: 'w9', change: 'balance' }, 'o1', ['d1'])('/api/orgs/o1/pool')).toBe(false);
   });
 });

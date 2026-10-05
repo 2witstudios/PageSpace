@@ -7,7 +7,7 @@
 import { useEffect, useRef } from 'react';
 import useSWR, { useSWRConfig } from 'swr';
 import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
-import type { OrgChangedPayload } from '@pagespace/lib/realtime/org-wallet-events';
+import type { OrgChangedPayload, WalletChangedPayload } from '@pagespace/lib/realtime/org-wallet-events';
 import { orgRoleAtLeast } from '@pagespace/lib/organizations/org-roles';
 import { useSocketStore } from '@/stores/useSocketStore';
 import { useEditingStore } from '@/stores/useEditingStore';
@@ -22,7 +22,7 @@ import {
   type OrgSeats,
   type OrgSummary,
 } from '@/lib/orgs/org-api';
-import { orgChangeRefreshes } from '@/lib/orgs/org-realtime';
+import { orgChangeRefreshes, walletChangeRefreshes } from '@/lib/orgs/org-realtime';
 import type { OrgHubCounts } from '@/lib/orgs/org-hub';
 
 const SWR_OPTIONS = { revalidateOnFocus: false, isPaused: () => useEditingStore.getState().isAnyEditing() };
@@ -114,4 +114,42 @@ export function useOrgRealtime(viewedOrgId?: string) {
       unsubscribe();
     };
   }, [socket, mutate, viewedOrgId]);
+}
+
+/**
+ * X-4: refetch the pool split and seat caps when `wallet:changed` arrives for a drive this page shows. The
+ * server sends it to `drive:<id>:wallet`, joined on `join_drive` by people with a wallet view (org Owner and
+ * Admins on org drives). Rooms are shared by every hook on the socket, so this never leaves one.
+ */
+export function useOrgWalletRealtime(orgId: string, driveIds: readonly string[]) {
+  const socket = useSocketStore((state) => state.socket);
+  const { mutate } = useSWRConfig();
+  const deferred = useRef<((key: unknown) => boolean) | null>(null);
+  const key = driveIds.join(',');
+
+  useEffect(() => {
+    if (!ORGS_ENABLED || !socket || driveIds.length === 0) return;
+    for (const driveId of driveIds) socket.emit('join_drive', driveId);
+    const onChanged = (payload: WalletChangedPayload) => {
+      const matcher = walletChangeRefreshes(payload, orgId, driveIds);
+      if (useEditingStore.getState().isAnyEditing()) {
+        deferred.current = matcher;
+        return;
+      }
+      void mutate(matcher);
+    };
+    const unsubscribe = useEditingStore.subscribe((state) => {
+      if (!deferred.current || state.isAnyEditing()) return;
+      const replay = deferred.current;
+      deferred.current = null;
+      void mutate(replay);
+    });
+    socket.on('wallet:changed', onChanged);
+    return () => {
+      socket.off('wallet:changed', onChanged);
+      unsubscribe();
+    };
+    // driveIds is keyed by its joined value so a new array with the same drives does not re-subscribe.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [socket, mutate, orgId, key]);
 }

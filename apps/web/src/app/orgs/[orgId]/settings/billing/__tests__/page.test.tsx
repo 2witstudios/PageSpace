@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   setOrgSeatAutoAdd: vi.fn(),
   openOrgBillingPortal: vi.fn(),
   assign: vi.fn(),
+  useOrgWalletRealtime: vi.fn(),
 }));
 
 vi.mock('next/navigation', () => ({ useParams: () => ({ orgId: 'org_nw' }), useRouter: () => ({ push: vi.fn() }) }));
@@ -25,6 +26,7 @@ vi.mock('@/hooks/useOrgs', () => ({
     mutate: vi.fn(),
   }),
   useOrgRealtime: vi.fn(),
+  useOrgWalletRealtime: mocks.useOrgWalletRealtime,
   useOrgSeats: () => mocks.seats,
   useOrgAdminRead: (key: string) => ({ data: mocks.reads[key] }),
 }));
@@ -73,6 +75,11 @@ describe('Plan & seats', () => {
     expect(screen.getByText('Design System, Finance · no wallet, seat allowances only')).toBeTruthy();
     expect(screen.getByRole('link', { name: 'PDF' }).getAttribute('href')).toBe('https://stripe.test/in_1.pdf');
     expect(document.body.textContent).not.toMatch(/\$[\d,]+ credits/);
+  });
+
+  it('X-4 (partial): subscribes to wallet:changed for the drives whose wallets it shows', () => {
+    render(<OrgBillingPage />);
+    expect(mocks.useOrgWalletRealtime).toHaveBeenCalledWith('org_nw', ['d_eng', 'd_cr', 'd_prod']);
   });
 
   it('SEAT-4 (partial): the Owner turns automatic seats off', async () => {
