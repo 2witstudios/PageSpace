@@ -39,19 +39,38 @@ beforeEach(() => {
   setUiState(createInitialState());
 });
 
+// Waits end when the DOM reaches the state, not after a wall-clock budget: a
+// loaded CI runner renders slowly, and only vitest's own per-test timeout
+// bounds a wait. Teardown ends any wait still running.
+const realSetTimeout = globalThis.setTimeout;
+let running = true;
+
+beforeEach(() => {
+  running = true;
+});
+
 afterEach(() => {
+  running = false;
   unmountAll();
   vi.useRealTimers();
 });
 
-const settle = (check: () => void, timeout = 1000): Promise<void> =>
-  vi.waitFor(
-    async () => {
-      await act(async () => {});
+/** Resolves once `check` passes, flushing React and SWR between tries; fake timers move by the same step. */
+const settle = async (check: () => void): Promise<void> => {
+  for (;;) {
+    await act(async () => {});
+    try {
       check();
-    },
-    { timeout, interval: 5 },
-  );
+      return;
+    } catch (error) {
+      if (!running) throw error;
+    }
+    if (globalThis.setTimeout === realSetTimeout) await new Promise((resolve) => realSetTimeout(resolve, 5));
+    else await act(async () => {
+      await vi.advanceTimersByTimeAsync(5);
+    });
+  }
+};
 
 /** Newest first, as the route lists them: two today (one just after local midnight), one yesterday evening, one in September. */
 const LISTED = [
