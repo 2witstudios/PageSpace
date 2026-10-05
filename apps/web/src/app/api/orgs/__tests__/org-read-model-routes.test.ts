@@ -17,6 +17,9 @@ vi.mock('@/lib/auth', () => ({ authenticateRequestWithOptions: vi.fn(), isAuthEr
 vi.mock('@pagespace/lib/logging/logger-config', () => ({ loggers: { api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() } } }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 vi.mock('@pagespace/lib/organizations/repository', () => ({ findMembershipRole: vi.fn() }));
+vi.mock('@pagespace/lib/services/drive-wallet-service', () => ({
+  listOrgSeatCaps: vi.fn(async () => ({ walletId: 'w_pool', seatAllowanceCents: 150, seats: [] })),
+}));
 vi.mock('@pagespace/lib/permissions/org-read-models', () => ({
   listOrgGuests: vi.fn(async () => [{ userId: 'u_chris', name: 'Chris Rowe', email: 'chris@partner.co', image: null, drives: [] }]),
   listOrgDriveUsage: vi.fn(async () => [{ driveId: 'd1', memberCount: 12, guestCount: 1, storageBytes: 9 }]),
@@ -26,6 +29,8 @@ vi.mock('@pagespace/lib/permissions/org-read-models', () => ({
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { findMembershipRole } from '@pagespace/lib/organizations/repository';
 import { listOrgGuests, listOrgDriveUsage, listOrgMemberActivity } from '@pagespace/lib/permissions/org-read-models';
+import { listOrgSeatCaps } from '@pagespace/lib/services/drive-wallet-service';
+import { GET as getSeatCaps } from '../[orgId]/seat-caps/route';
 import { GET as getGuests } from '../[orgId]/guests/route';
 import { GET as getUsage } from '../[orgId]/drives/usage/route';
 import { GET as getActivity } from '../[orgId]/members/activity/route';
@@ -36,9 +41,10 @@ const session = (userId: string): SessionAuthResult => ({ userId, tokenVersion: 
 const as = (role: OrgRole | null) => vi.mocked(findMembershipRole).mockResolvedValue(role);
 
 const routes = [
-  { name: 'guests', get: getGuests, fn: listOrgGuests, key: 'guests' },
-  { name: 'drives/usage', get: getUsage, fn: listOrgDriveUsage, key: 'usage' },
-  { name: 'members/activity', get: getActivity, fn: listOrgMemberActivity, key: 'activity' },
+  { name: 'guests', get: getGuests, fn: listOrgGuests, keys: ['guests'] },
+  { name: 'drives/usage', get: getUsage, fn: listOrgDriveUsage, keys: ['usage'] },
+  { name: 'members/activity', get: getActivity, fn: listOrgMemberActivity, keys: ['activity'] },
+  { name: 'seat-caps', get: getSeatCaps, fn: listOrgSeatCaps, keys: ['walletId', 'seatAllowanceCents', 'seats'] },
 ] as const;
 
 beforeEach(() => {
@@ -48,7 +54,7 @@ beforeEach(() => {
   vi.mocked(authenticateRequestWithOptions).mockResolvedValue(session('u_priya'));
 });
 
-describe.each(routes)('GET /api/orgs/[orgId]/$name', ({ name, get, fn, key }) => {
+describe.each(routes)('GET /api/orgs/[orgId]/$name', ({ name, get, fn, keys }) => {
   const req = () => new Request(`https://example.test/api/orgs/${ORG}/${name}`);
 
   it('UI-7 (partial): an Admin or the Owner reads the model for the org in the path', async () => {
@@ -56,7 +62,7 @@ describe.each(routes)('GET /api/orgs/[orgId]/$name', ({ name, get, fn, key }) =>
       as(role);
       const res = await get(req(), ctx);
       expect(res.status).toBe(200);
-      expect(Object.keys(await res.json())).toEqual([key]);
+      expect(Object.keys(await res.json())).toEqual([...keys]);
     }
     expect(fn).toHaveBeenCalledWith(ORG);
   });

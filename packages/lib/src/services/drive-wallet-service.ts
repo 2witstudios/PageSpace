@@ -55,8 +55,9 @@ import { toSubscriptionTier } from '../billing/subscription-tiers';
 import { capChangeOnlyRestricts, planDeleteWallet, planTopUp, planWalletPatch, walletPatchOnlyRestricts, type DeleteBlocker, type WalletPatchInput } from '../billing/wallet-admin';
 import { donateToDriveWallet } from '../billing/wallet-funding-shell';
 import { checkOrgActive } from '../organizations/status';
-import { findMembershipRole, findOrganizationNames } from '../organizations/repository';
-import { planConsumerCapWrite, userConsumerKey, utcDayStartMs, utcMonthStartMs, type ConsumerCapWriteInput, type ConsumerCaps, type SpendSourceKind } from '../billing/wallet-core';
+import { findMembershipRole, findOrganizationNames, listOrgMembers } from '../organizations/repository';
+import { loadSeatCapFacts } from '../billing/seat-allowance';
+import { planConsumerCapWrite, seatCapCheck, userConsumerKey, utcDayStartMs, utcMonthStartMs, type ConsumerCapWriteInput, type ConsumerCaps, type SpendSourceKind } from '../billing/wallet-core';
 import { getOrgPolicies } from '../organizations/policy-reader';
 import {
   capRemainingCents,
@@ -897,6 +898,65 @@ export async function setSeatCap(
   });
   void announceOrgChange(orgId, 'seat_caps');
   return { ok: true, walletId: pool.id, caps: await capsOnWallet(pool.id) };
+}
+
+/** One member's seat as Members & seats shows it (WAL-7, D-OW-38 "seat allowance remaining"). */
+export interface OrgSeatCapView {
+  userId: string;
+  displayName: string;
+  /** The member's own caps on their seat; null = none set. */
+  dailyCapCents: number | null;
+  monthlyCapCents: number | null;
+  /** The monthly limit in force: their monthly cap, else the org's seat allowance (WAL-2: never unlimited). */
+  monthlyLimitCents: number;
+  /** What is left this period and today, after settled spend and holds in flight; daily null = no daily limit. */
+  monthlyRemainingCents: number;
+  dailyRemainingCents: number | null;
+}
+
+export interface OrgSeatCapsRead {
+  /** The org pool, or null before the org has one. */
+  walletId: string | null;
+  seatAllowanceCents: number;
+  seats: OrgSeatCapView[];
+}
+
+/**
+ * Every member's seat caps and what is left of them, read with the credit gate's own facts and check
+ * (loadSeatCapFacts, seatCapCheck at a zero reservation), so the page and the gate agree on one figure.
+ * Callers authorize (Owner or Admin: the org gate on GET /api/orgs/[orgId]/seat-caps).
+ */
+export async function listOrgSeatCaps(orgId: string, now: Date = new Date()): Promise<OrgSeatCapsRead> {
+  const policies = await getOrgPolicies(orgId);
+  const pool = await orgPoolRow(db, orgId);
+  if (!pool) return { walletId: null, seatAllowanceCents: policies.seatAllowanceCents, seats: [] };
+  const members = await listOrgMembers(orgId);
+  const seats: OrgSeatCapView[] = [];
+  for (const member of members) {
+    const facts = await loadSeatCapFacts(db, {
+      poolId: pool.id,
+      poolPeriodStart: pool.monthlyPeriodStart,
+      userId: member.userId,
+      policySeatAllowanceCents: policies.seatAllowanceCents,
+      now,
+    });
+    const [own] = await db
+      .select({ dailyCapCents: walletConsumerCaps.dailyCapCents, monthlyCapCents: walletConsumerCaps.monthlyCapCents })
+      .from(walletConsumerCaps)
+      .where(and(eq(walletConsumerCaps.walletId, pool.id), eq(walletConsumerCaps.consumerKey, userConsumerKey(member.userId))))
+      .limit(1);
+    const left = seatCapCheck({ capCents: facts.capCents, dailyCapCents: facts.dailyCapCents, usage: facts.usage, reservationCents: 0 });
+    seats.push({
+      userId: member.userId,
+      displayName: member.name || member.email,
+      dailyCapCents: own?.dailyCapCents ?? null,
+      monthlyCapCents: own?.monthlyCapCents ?? null,
+      monthlyLimitCents: facts.capCents,
+      monthlyRemainingCents: left.monthlyRemainingCents ?? facts.capCents,
+      dailyRemainingCents: left.dailyRemainingCents,
+    });
+  }
+  return { walletId: pool.id, seatAllowanceCents: policies.seatAllowanceCents, seats };
 }
 
 /** Donate from the caller's own balance to the drive's wallet (WAL-4); the donation shell re-checks visibility. */
