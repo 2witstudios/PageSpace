@@ -41,17 +41,19 @@ const selectorOf = (cls: string): string => `.${cls.replace(/[:/.]/g, (char) => 
 describe('postClass()', () => {
   test('flat rows, no bubble', () => {
     assert({
-      given: 'a lead post, a follow-up, and a lead that mentions the viewer',
-      should: 'sit flat on the canvas with a clear edge, space a lead from the group above, and fill only the mention with the accent edge',
+      given: 'a lead post, a follow-up, a lead that mentions the viewer, and the viewer’s post still sending',
+      should: 'sit flat on the canvas with a clear edge, space a lead from the group above, fill only the mention with the accent edge, and fade the sending post',
       actual: [
         postClass({ lead: true, mentioned: false }),
         postClass({ lead: false, mentioned: false }),
         postClass({ lead: true, mentioned: true }),
+        postClass({ lead: true, mentioned: false, pending: true }),
       ],
       expected: [
         'group flex gap-3 border-l-2 px-2 py-1 mt-3 rounded-lg border-l-transparent hover:bg-surface-overlay',
         'group flex gap-3 border-l-2 px-2 py-1 rounded-lg border-l-transparent hover:bg-surface-overlay',
         'group flex gap-3 border-l-2 px-2 py-1 mt-3 rounded-r-lg border-l-accent bg-accent-soft',
+        'group flex gap-3 border-l-2 px-2 py-1 mt-3 rounded-lg border-l-transparent hover:bg-surface-overlay opacity-60',
       ],
     });
   });
@@ -124,7 +126,7 @@ describe('thread parts', () => {
 
   test('every class resolves against the theme', async () => {
     const classes = [
-      ...[false, true].flatMap((lead) => [false, true].map((mentioned) => postClass({ lead, mentioned }))),
+      ...[false, true].flatMap((lead) => [false, true].map((mentioned) => postClass({ lead, mentioned, pending: true }))),
       mentionClass(false),
       mentionClass(true),
       reactionClass(false),

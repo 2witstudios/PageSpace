@@ -15,12 +15,21 @@ export const olderClass = 'self-center';
 /* PageSpace's channel rows: flat on the canvas, no bubble. A post that
    mentions the viewer is the one that is filled. Every row carries the edge,
    clear unless it is a mention, so the mention's accent never nudges its
-   face out of line. */
-export const postClass = ({ lead, mentioned }: { readonly lead: boolean; readonly mentioned: boolean }): string =>
+   face out of line. The viewer's post fades until it is stored. */
+export const postClass = ({
+  lead,
+  mentioned,
+  pending = false,
+}: {
+  readonly lead: boolean;
+  readonly mentioned: boolean;
+  readonly pending?: boolean;
+}): string =>
   cn(
     'group flex gap-3 border-l-2 px-2 py-1',
     lead && 'mt-3',
     mentioned ? 'rounded-r-lg border-l-accent bg-accent-soft' : 'rounded-lg border-l-transparent hover:bg-surface-overlay',
+    pending && 'opacity-60',
   );
 
 export const postAuthorClass = 'text-sm font-semibold text-ink';
