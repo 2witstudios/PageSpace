@@ -42,7 +42,7 @@ beforeEach(() => {
   spendState.choose.mockClear();
   toast.success.mockClear();
   toast.error.mockClear();
-  useSpendContextStore.setState({ entries: [], active: null, popoverOpen: false });
+  useSpendContextStore.setState({ entries: [], active: null });
 });
 
 describe('SpendSourcePopover: the header chip', () => {

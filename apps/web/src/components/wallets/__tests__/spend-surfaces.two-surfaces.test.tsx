@@ -17,11 +17,12 @@ const options = [
   { source: 'drive_wallet', walletId: 'w-product', label: 'Product wallet', driveName: 'Product', orgName: 'Northwind Labs', remainingCents: 192, remainingCredits: '192' },
   { source: 'own_credits', walletId: 'w-me', label: 'Your credits', driveName: null, orgName: null, remainingCents: 1482, remainingCredits: '1,482' },
 ];
+const labelFor = (conversationId: string) => `${conversationId} wallet`;
 const read = (conversationId: string) => ({
   conversationId,
   driveId: 'd-product',
   chosenWalletId: null,
-  options,
+  options: options.map((o) => (o.source === 'drive_wallet' ? { ...o, label: labelFor(conversationId) } : o)),
   resolved: { kind: 'spend', source: 'drive_wallet', walletId: 'w-product', fallbackApplied: false, fallbackFrom: null },
 });
 
@@ -41,7 +42,7 @@ const conversationOf = (url: string) => decodeURIComponent(url.split('/api/walle
 
 beforeEach(() => {
   vi.clearAllMocks();
-  useSpendContextStore.setState({ entries: [], active: null, popoverOpen: false });
+  useSpendContextStore.setState({ entries: [], active: null });
   api.fetchWithAuth.mockImplementation(async (url: string) => ({ ok: true, status: 200, json: async () => read(conversationOf(url)) }));
   api.put.mockImplementation(async (url: string, body: { walletId: string }) => ({ ...read(conversationOf(url)), chosenWalletId: body.walletId }));
 });
@@ -49,18 +50,20 @@ beforeEach(() => {
 const fresh = (ui: React.ReactNode) => render(<SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>{ui}</SWRConfig>);
 
 /** The page chat (registered first) and the sidebar chat (registered second, so it starts as the header's). */
-const TwoSurfaces = ({ pageChild, sidebarChild, header = false }: { pageChild?: React.ReactNode; sidebarChild?: React.ReactNode; header?: boolean }) => (
+const TwoSurfaces = ({ pageChild, sidebarChild, header = false, sidebarId = 'c-sidebar', withPage = true }: { pageChild?: React.ReactNode; sidebarChild?: React.ReactNode; header?: boolean; sidebarId?: string; withPage?: boolean }) => (
   <>
     {header && <AiBalanceWidget />}
-    <SpendSurfaceProvider conversationId="c-page" driveId="d-product" isGlobal={false}>
-      <div data-testid="page-chat">
-        <ComposerSpendStrip conversationId="c-page" driveId="d-product" isGlobal={false} hasMessages={false} />
-        {pageChild}
-      </div>
-    </SpendSurfaceProvider>
-    <SpendSurfaceProvider conversationId="c-sidebar" driveId="d-product" isGlobal={false}>
+    {withPage && (
+      <SpendSurfaceProvider conversationId="c-page" driveId="d-product" isGlobal={false}>
+        <div data-testid="page-chat">
+          <ComposerSpendStrip conversationId="c-page" driveId="d-product" isGlobal={false} hasMessages={false} />
+          {pageChild}
+        </div>
+      </SpendSurfaceProvider>
+    )}
+    <SpendSurfaceProvider conversationId={sidebarId} driveId="d-product" isGlobal={false}>
       <div data-testid="sidebar-chat">
-        <ComposerSpendStrip conversationId="c-sidebar" driveId="d-product" isGlobal={false} hasMessages={false} />
+        <ComposerSpendStrip conversationId={sidebarId} driveId="d-product" isGlobal={false} hasMessages={false} />
         {sidebarChild}
       </div>
     </SpendSurfaceProvider>
@@ -79,7 +82,10 @@ describe('spend controls with two chat surfaces mounted', () => {
   it('SPEND-4 (partial) the fallback notice\'s Change switches the conversation the reply belongs to', async () => {
     fresh(<TwoSurfaces pageChild={<SpendFallbackNotice data={{ from: 'drive_wallet', to: 'own_credits', walletId: 'w-me' }} />} />);
     const page = within(screen.getByTestId('page-chat'));
-    expect(await page.findByText("Used your own credits because Product wallet couldn't cover this.")).toBeTruthy();
+    // Before any focus the header's registry points at the sidebar (registered last): the notice
+    // must still name ITS conversation's wallet, so its binding is to its own surface (P3-A).
+    expect(useSpendContextStore.getState().active?.conversationId).toBe('c-sidebar');
+    expect(await page.findByText("Used your own credits because c-page wallet couldn't cover this.")).toBeTruthy();
     fireEvent.click(within(page.getByRole('status')).getByRole('button', { name: 'Change' }));
     fireEvent.click(await screen.findByRole('radio', { name: /Your credits/ }));
     await waitFor(() => expect(api.put).toHaveBeenCalledWith('/api/wallets/conversations/c-page', { walletId: 'w-me' }));
@@ -115,6 +121,56 @@ describe('spend controls with two chat surfaces mounted', () => {
     );
     expect(useSpendContextStore.getState().active?.conversationId).toBe('c-page');
   });
+  it('UI-8 (partial) an open header popover stays on the conversation it opened on when another surface changes its conversation (P2-A)', async () => {
+    const { rerender } = fresh(<TwoSurfaces header />);
+    act(() => {
+      fireEvent.pointerDown(screen.getByTestId('page-chat'));
+    });
+    fireEvent.click(await screen.findByTestId('spend-source-chip'));
+    expect(await screen.findByRole('radio', { name: /c-page wallet/ })).toBeTruthy();
+    // The sidebar moves to another conversation: it updates IN PLACE, focus order is unchanged.
+    rerender(<SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}><TwoSurfaces header sidebarId="c-sidebar-2" /></SWRConfig>);
+    expect(useSpendContextStore.getState().active?.conversationId).toBe('c-page');
+    expect(screen.queryByRole('radio', { name: /c-sidebar-2 wallet/ })).toBeNull();
+    fireEvent.click(screen.getByRole('radio', { name: /Your credits/ }));
+    await waitFor(() => expect(api.put).toHaveBeenCalledTimes(1));
+    expect(api.put).toHaveBeenCalledWith('/api/wallets/conversations/c-page', { walletId: 'w-me' });
+  });
+
+  it('UI-8 (partial) if the pinned conversation\'s surface unmounts, the open popover closes instead of switching another conversation (P2-A)', async () => {
+    const { rerender } = fresh(<TwoSurfaces header />);
+    act(() => {
+      fireEvent.pointerDown(screen.getByTestId('page-chat'));
+    });
+    fireEvent.click(await screen.findByTestId('spend-source-chip'));
+    expect(await screen.findByRole('radio', { name: /c-page wallet/ })).toBeTruthy();
+    rerender(<SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}><TwoSurfaces header withPage={false} /></SWRConfig>);
+    await waitFor(() => expect(screen.queryByRole('radio', { name: /Your credits/ })).toBeNull());
+    expect(api.put).not.toHaveBeenCalled();
+  });
+
+  it('UI-8 (partial) a surface re-registering (new conversation) does not jump to the front of the focus order; only focus does', () => {
+    const { rerender } = fresh(<TwoSurfaces />);
+    act(() => {
+      fireEvent.pointerDown(screen.getByTestId('page-chat'));
+    });
+    expect(useSpendContextStore.getState().active?.conversationId).toBe('c-page');
+    rerender(<SWRConfig value={{ provider: () => new Map() }}><TwoSurfaces sidebarId="c-sidebar-2" /></SWRConfig>);
+    expect(useSpendContextStore.getState().active?.conversationId).toBe('c-page');
+    expect(useSpendContextStore.getState().entries.map((e) => e.conversationId)).toEqual(['c-sidebar-2', 'c-page']);
+  });
+
+  it('SPEND-2 (partial) the sidebar keeps a compact strip after the first message below lg, where its sheet covers the header chip (P3-B)', async () => {
+    fresh(
+      <SpendSurfaceProvider conversationId="c-sidebar" driveId="d-product" isGlobal={false}>
+        <ComposerSpendStrip conversationId="c-sidebar" driveId="d-product" isGlobal={false} hasMessages persistentBelowLg />
+      </SpendSurfaceProvider>,
+    );
+    const strip = await screen.findByTestId('composer-spend-strip');
+    expect(strip.className).toContain('lg:hidden');
+    expect(strip.textContent).toContain('Spending from c-sidebar wallet');
+  });
+
 });
 
 describe('useConversationSpend.choose', () => {

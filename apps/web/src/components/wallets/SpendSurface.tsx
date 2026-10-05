@@ -18,13 +18,18 @@ const SpendSurfaceContext = createContext<SpendContext | null>(null);
 export function SpendSurfaceProvider({ conversationId, driveId, isGlobal, children }: { conversationId: string | null; driveId: string | null; isGlobal: boolean; children: ReactNode }) {
   const surfaceId = useId();
   const register = useSpendContextStore((s) => s.register);
+  const unregister = useSpendContextStore((s) => s.unregister);
   const focus = useSpendContextStore((s) => s.focus);
   const value = useMemo(() => (conversationId ? { conversationId, driveId, isGlobal } : null), [conversationId, driveId, isGlobal]);
 
+  // A changed conversation or drive updates this surface IN PLACE (register upserts); it does not
+  // move it to the front of the header's focus order — only focus or a click does (P2-A).
   useEffect(() => {
-    if (!ORGS_ENABLED || !value) return;
-    return register(surfaceId, value);
-  }, [register, surfaceId, value]);
+    if (!ORGS_ENABLED) return;
+    if (value) register(surfaceId, value);
+    else unregister(surfaceId);
+  }, [register, unregister, surfaceId, value]);
+  useEffect(() => () => unregister(surfaceId), [unregister, surfaceId]);
 
   return (
     <SpendSurfaceContext.Provider value={value}>

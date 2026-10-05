@@ -17,10 +17,20 @@ import { SpendSourceOptionsPanel } from './SpendSourcePopover';
  * Renders nothing with one source, once the conversation has messages, or while orgs are dark.
  * It reads and writes exactly the conversation it is given (its surface's), never the header's.
  */
-export function ComposerSpendStrip({ conversationId, driveId, isGlobal, hasMessages, className }: SpendContext & { hasMessages: boolean; className?: string }) {
+export function ComposerSpendStrip({ conversationId, driveId, isGlobal, hasMessages, persistentBelowLg = false, className }: SpendContext & {
+  hasMessages: boolean;
+  /**
+   * Keep the strip after the first message below lg. For a surface that covers the header chip
+   * there (the right sidebar is a modal sheet below lg), so the source stays switchable from
+   * inside it mid-conversation (review #2835 P3-B).
+   */
+  persistentBelowLg?: boolean;
+  className?: string;
+}) {
   const { spend, choose } = useConversationSpend(conversationId, { driveId, isGlobal });
   const [open, setOpen] = useState(false);
-  const strip = spend ? composerStripModel({ orgsEnabled: ORGS_ENABLED, options: spend.options, resolved: spend.resolved, hasMessages }) : null;
+  const stayBelowLg = persistentBelowLg && hasMessages;
+  const strip = spend ? composerStripModel({ orgsEnabled: ORGS_ENABLED, options: spend.options, resolved: spend.resolved, hasMessages: hasMessages && !stayBelowLg }) : null;
   if (!spend || !strip) return null;
 
   const resolvedWalletId = spend.resolved.kind === 'spend' ? spend.resolved.walletId : null;
@@ -30,6 +40,7 @@ export function ComposerSpendStrip({ conversationId, driveId, isGlobal, hasMessa
       data-testid="composer-spend-strip"
       className={cn(
         'flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs',
+        stayBelowLg && 'lg:hidden',
         strip.tone === 'refused' ? 'border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200' : 'bg-muted/60 text-foreground',
         className,
       )}

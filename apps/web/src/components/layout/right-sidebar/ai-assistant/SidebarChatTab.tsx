@@ -1022,6 +1022,8 @@ const SidebarChatTab: React.FC = () => {
             driveId={selectedAgent ? selectedAgent.driveId : locationContext?.currentDrive?.id ?? null}
             isGlobal={!selectedAgent}
             hasMessages={renderedMessages.length > 0}
+            // Below lg this sidebar is a modal sheet over the header chip: keep the strip.
+            persistentBelowLg
           />
         )}
         <ChatErrorBanner

@@ -32,12 +32,16 @@ interface SpendContextState {
   entries: SpendContextEntry[];
   /** The surface the header chip follows: the most recently focused one. */
   active: SpendContext | null;
-  /** Add or update a surface without changing focus order; returns its unregister. */
+  /**
+   * Add a surface (at the back of the focus order) or update it IN PLACE: a surface whose
+   * conversation or drive changes keeps its position, so only real focus moves it (review #2835
+   * P2-A). Returns its unregister.
+   */
   register: (surfaceId: string, context: SpendContext) => () => void;
+  /** Remove a surface (it unmounted, or has no conversation). */
+  unregister: (surfaceId: string) => void;
   /** Move a surface to the front: the person focused or clicked inside it. */
   focus: (surfaceId: string) => void;
-  popoverOpen: boolean;
-  setPopoverOpen: (open: boolean) => void;
 }
 
 const activeOf = (entries: SpendContextEntry[]): SpendContext | null => {
@@ -55,10 +59,11 @@ export const useSpendContextStore = create<SpendContextState>((set, get) => ({
       ? existing.map((e) => (e.surfaceId === surfaceId ? entry : e))
       : [...existing, entry];
     set({ entries, active: activeOf(entries) });
-    return () => {
-      const remaining = get().entries.filter((e) => e.surfaceId !== surfaceId);
-      set({ entries: remaining, active: activeOf(remaining) });
-    };
+    return () => get().unregister(surfaceId);
+  },
+  unregister: (surfaceId) => {
+    const remaining = get().entries.filter((e) => e.surfaceId !== surfaceId);
+    set({ entries: remaining, active: activeOf(remaining) });
   },
   focus: (surfaceId) => {
     const { entries } = get();
@@ -67,6 +72,4 @@ export const useSpendContextStore = create<SpendContextState>((set, get) => ({
     const reordered = [...entries.filter((e) => e.surfaceId !== surfaceId), entry];
     set({ entries: reordered, active: activeOf(reordered) });
   },
-  popoverOpen: false,
-  setPopoverOpen: (open) => set({ popoverOpen: open }),
 }));
