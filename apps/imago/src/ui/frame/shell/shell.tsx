@@ -8,6 +8,7 @@ import type { UiState } from '../../store/state';
 import { ChatPane } from '../../chat/chat-pane/chat-pane';
 import { FilesPane } from '../../files/files-pane/files-pane';
 import { MessagesPane } from '../../messages/messages-pane/messages-pane';
+import { CommandPalette } from '../../palette/palette/palette';
 import { TasksPane } from '../../tasks/tasks-pane/tasks-pane';
 import { AvatarMenu } from '../avatar-menu/avatar-menu';
 import { BrandChip } from '../brand-chip/brand-chip';
@@ -171,5 +172,6 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
       </section>
     ),
     chat: <ChatPane stage={stage} driveName={drive?.name} homeDriveId={homeDriveId} />,
+    palette: <CommandPalette stage={stage} homeDriveId={homeDriveId} drives={drives} />,
   });
 }

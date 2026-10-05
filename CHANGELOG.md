@@ -31,7 +31,10 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   match stay in view), and press + to create a document in the open folder, which appears at once
   and opens. An empty drive, a section that fails to load and an address that names nothing you can
   open each get their own designed screen inside the frame: a note about what will show up, a "Try
-  again" button that never shows the server's error text, or "not found" with a link back. Imago is
+  again" button that never shows the server's error text, or "not found" with a link back. Press ⌘K
+  (Ctrl-K on Windows and Linux) anywhere to search the open drive's pages by name, or tick "Include
+  all workspaces" to search every drive you can open; move with the arrow keys and press Enter to
+  jump straight to a page, channel, task list or agent, and Escape to go back where you were. Imago is
   a preview: chat and page editing are still on their way, and classic
   PageSpace is unchanged.
 

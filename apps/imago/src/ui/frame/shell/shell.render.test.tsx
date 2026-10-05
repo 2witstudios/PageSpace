@@ -16,6 +16,7 @@ const markup = (pathname: string, collapsedSections: readonly ListSection[] = []
       list: h('p', null, 'list'),
       object: h('p', null, 'object'),
       chat: h('p', null, 'chat'),
+      palette: h('p', null, 'palette'),
     }),
   );
 };

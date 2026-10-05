@@ -20,6 +20,8 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 const navigation = vi.hoisted(() => ({ pathname: '/drive-1' }));
 vi.mock('next/navigation', () => ({
   usePathname: () => navigation.pathname,
+  // The palette navigates through the router; its own suite proves where.
+  useRouter: () => ({ push: () => {} }),
 }));
 // The avatar menu's theme switcher needs the root layout's theme provider;
 // its own suites prove it. Here it only has to be in the menu.
@@ -523,6 +525,40 @@ describe('Shell', () => {
       should: 'keep one chat pane mounted, handed the current stage, its drive and the Home drive',
       actual: [chatMounts.count, pane?.dataset.drive, pane?.dataset.home, pane?.textContent],
       expected: [1, 'drive-2', 'home-1', 'Beta in context'],
+    });
+  });
+
+  test('⌘K over every stage', () => {
+    render();
+    const before = ['rail', 'list', 'object', 'chat'].map(slot);
+    const opened = ['/drive-1', '/drive-1/files/page-1', '/dm/conversation-1'].map((pathname) => {
+      navigate(pathname);
+      act(() => {
+        document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true }));
+      });
+      const palette = container.querySelector('[data-palette]');
+      const shown = [
+        palette?.parentElement === frame(),
+        palette?.querySelector('input')?.getAttribute('placeholder'),
+      ];
+      act(() => {
+        palette?.querySelector('input')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      });
+      return [...shown, container.querySelector('[data-palette]') === null];
+    });
+
+    assert({
+      given: 'Ctrl-K, then Escape, on the drive chat, a page and a DM',
+      should: 'open the palette over the frame searching the rail’s drive (Home from the DM), close it, and leave the panes mounted',
+      actual: [opened, ['rail', 'list', 'object', 'chat'].every((name, index) => slot(name) === before[index])],
+      expected: [
+        [
+          [true, 'Search Alpha…', true],
+          [true, 'Search Alpha…', true],
+          [true, 'Search Home…', true],
+        ],
+        true,
+      ],
     });
   });
 });
