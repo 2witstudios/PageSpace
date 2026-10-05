@@ -17,10 +17,11 @@
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
-import { MockLanguageModelV3 } from 'ai/test';
-import type { LanguageModelV3CallOptions } from '@ai-sdk/provider';
+import type { MockLanguageModelV3 } from 'ai/test';
 
-const capturedPrompts: LanguageModelV3CallOptions['prompt'][] = [];
+type CallOptions = Parameters<MockLanguageModelV3['doStream']>[0];
+
+const capturedPrompts: CallOptions['prompt'][] = [];
 
 vi.mock('@/lib/ai/core/provider-factory', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/ai/core/provider-factory')>();
@@ -29,7 +30,7 @@ vi.mock('@/lib/ai/core/provider-factory', async (importOriginal) => {
     ...actual,
     createAIProvider: vi.fn(async () => ({
       model: new Mock({
-        doStream: async (options: LanguageModelV3CallOptions) => {
+        doStream: async (options: CallOptions) => {
           capturedPrompts.push(options.prompt);
           return {
             stream: new ReadableStream({
@@ -70,8 +71,6 @@ import { provisionImagoAgents } from '@pagespace/lib/agents/provision-imago-agen
 import { ensureTestDb } from '@/test/ensure-test-db';
 import type { ContextRef } from '@/lib/ai/shared/buildContextRef';
 import { POST } from '@/app/api/ai/chat/route';
-
-void MockLanguageModelV3;
 
 const seededUserIds: string[] = [];
 
