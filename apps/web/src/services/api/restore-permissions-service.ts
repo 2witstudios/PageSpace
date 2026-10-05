@@ -1,6 +1,7 @@
 import { eq, and, inArray } from '@pagespace/db/operators';
 import { pagePermissions, driveMembers, driveRoles } from '@pagespace/db/schema/members';
 import { users } from '@pagespace/db/schema/auth';
+import { drives } from '@pagespace/db/schema/core';
 import { revokeAgentMembershipsGrantedBy } from '@pagespace/lib/services/drive-agent-service';
 
 type BackupPerm = {
@@ -131,7 +132,10 @@ export async function applyPermRestoreOps(
  * After `applyPermRestoreOps`: revoke the agent grants made by every member the
  * restore removed for good — deleted and not re-inserted from the backup — as
  * the member-removal route does, so their agents (Imago agents included) do not
- * stay in the drive. Members the backup brings back keep theirs.
+ * stay in the drive. Members the backup brings back keep theirs, and so does
+ * the drive owner: their access comes from `drives.ownerId`, not the member
+ * row, which is created lazily on their first visit and so is missing from a
+ * backup taken before it.
  */
 export async function revokeAgentGrantsOfRemovedMembers(
   tx: Parameters<typeof revokeAgentMembershipsGrantedBy>[0],
@@ -139,10 +143,11 @@ export async function revokeAgentGrantsOfRemovedMembers(
   memberOps: MemberOps,
   skippedMembers: readonly string[],
 ): Promise<void> {
+  const [drive] = await tx.select({ ownerId: drives.ownerId }).from(drives).where(eq(drives.id, driveId)).limit(1);
   const skipped = new Set(skippedMembers);
-  const restored = new Set(memberOps.toInsert.map((m) => m.userId).filter((userId) => !skipped.has(userId)));
+  const kept = new Set(memberOps.toInsert.map((m) => m.userId).filter((userId) => !skipped.has(userId)));
+  if (drive) kept.add(drive.ownerId);
   for (const userId of memberOps.toDelete) {
-    if (!restored.has(userId)) await revokeAgentMembershipsGrantedBy(tx, driveId, userId);
+    if (!kept.has(userId)) await revokeAgentMembershipsGrantedBy(tx, driveId, userId);
   }
 }
-
