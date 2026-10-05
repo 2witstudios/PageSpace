@@ -87,8 +87,8 @@ const LEDGER = new Map<string, Entry>([
     reason: 'A drive\'s audience (recipients, member ids, custom-role holders, isMemberOfDrive) reads each row through driveMembershipRow: a GUEST is never in it.',
   }],
   ['packages/lib/src/permissions/guest-holds.ts', {
-    reads: 3, decision: 'excludes',
-    reason: 'memberOutsiders and takeOutsider exist to FIND GUEST and outside-member rows and take them out (park or queue), so they include GUEST rows on purpose; they only remove access and grant nothing. The one read that lets access through, admitReentry\'s admitted-guest check, excludes GUEST (role <> \'GUEST\', accepted only): a page-link guest holds one page, not the drive, so a restored grant or a member upsert for them is asked like any outsider\'s. The page-move exemption in grantOutsiders (raw SQL) excludes GUEST the same way.',
+    reads: 4, decision: 'excludes',
+    reason: 'memberOutsiders and takeOutsider exist to FIND GUEST and outside-member rows and take them out (park or queue), so they include GUEST rows on purpose; they only remove access and grant nothing. The one read that lets access through, admitReentry\'s admitted-guest check, excludes GUEST (role <> \'GUEST\', accepted only): a page-link guest holds one page, not the drive, so a restored grant or a member upsert for them is asked like any outsider\'s. The page-move exemption in grantOutsiders (an ORM not-exists, so this ledger counts it; review #2762) excludes GUEST the same way and counts accepted rows only.',
   }],
   ['packages/lib/src/permissions/drive-member-labels.ts', {
     reads: 1, decision: 'neutral',

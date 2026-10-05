@@ -307,6 +307,18 @@ describe('approve mode replays exactly what was held (independent re-verify of #
     expect(await db.select().from(pagePermissions).where(eq(pagePermissions.userId, acceptedGuest))).toHaveLength(1);
   });
 
+  it('POL-2 (partial) X-6 (partial) pages moved in under approve: an outsider holding only a page-link GUEST row on the drive is queued like any outsider; the GUEST row does not exempt them (review #2762 M2b)', async () => {
+    await setGuests('approve');
+    const linkGuest = w.outsider;
+    // A redeemed page share link: accepted, but a GUEST holds one page, not the drive.
+    await db.insert(driveMembers).values({ driveId: w.orgDrive, userId: linkGuest, role: 'GUEST', source: 'invite', acceptedAt: new Date(), invitedBy: w.owner });
+    await db.insert(pagePermissions).values({ pageId: w.orgPage, userId: linkGuest, ...EDIT, grantedBy: w.owner });
+    await db.transaction((tx) => holdOrgGuestsUnderPolicy(tx, { orgId: w.orgId, driveId: w.orgDrive, pageIds: [w.orgPage] }));
+
+    expect(await db.select().from(pagePermissions).where(eq(pagePermissions.userId, linkGuest))).toEqual([]);
+    expect(await holds('pending_approval', linkGuest)).toHaveLength(1);
+  });
+
   it('POL-2 (partial) an approval admits exactly the invitation that was approved: another invitation to the same address is not admitted by it, and guests OFF withdraws every unused approval', async () => {
     await setGuests('approve');
     await db.transaction((tx) => markApprovedInvitation(tx, { orgId: w.orgId, driveId: w.orgDrive, email: 'x@example.com', approvedBy: w.owner, invite: { kind: 'page', id: 'pinv_approved' } }));
