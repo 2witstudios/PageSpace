@@ -41,6 +41,10 @@ COPY --from=deps /app .
 # NEXT_PUBLIC_* are inlined at build time; the runtime env cannot override them.
 ARG NEXT_PUBLIC_REALTIME_URL=""
 ENV NEXT_PUBLIC_REALTIME_URL=$NEXT_PUBLIC_REALTIME_URL
+# Classic's cookie domain (apps/web/Dockerfile): the theme cookie must carry the
+# same Domain in both apps, or imago leaves a host-only duplicate beside it.
+ARG NEXT_PUBLIC_COOKIE_DOMAIN=""
+ENV NEXT_PUBLIC_COOKIE_DOMAIN=$NEXT_PUBLIC_COOKIE_DOMAIN
 ENV NEXT_TELEMETRY_DISABLED=1
 
 RUN bun run --filter '@pagespace/db' build && bun run --filter '@pagespace/lib' build && bun run --filter '@pagespace/editor' build
