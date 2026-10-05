@@ -10,7 +10,7 @@ import { fakeWeb, type FakeRoute } from '@/ui/test-support/fake-web';
 import { channelMessage } from '../message-model/fixtures';
 import type { ChannelMessageResponse } from '../message-model/post';
 import { channelPaths } from './channel-api';
-import type { ThreadState } from './channel-thread-state';
+import type { ThreadState } from '../thread/thread-state';
 import { useChannelThread } from './use-channel-thread';
 
 declare global {

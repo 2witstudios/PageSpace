@@ -2,10 +2,10 @@
 
 import type { ChannelMessageResponse, ChannelReactionResponse, Post, PostReaction } from './post';
 
-const UNKNOWN_USER = 'Unknown user';
+export const UNKNOWN_USER = 'Unknown user';
 
 /** Each emoji once, in the order it was first used, with everyone who used it. */
-const reactionsOf = (rows: readonly ChannelReactionResponse[], viewerId: string): readonly PostReaction[] => {
+export const reactionsOf = (rows: readonly ChannelReactionResponse[], viewerId: string): readonly PostReaction[] => {
   const ordered = [...rows].sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
   const emojis = [...new Set(ordered.map((row) => row.emoji))];
   return emojis.map((emoji) => {

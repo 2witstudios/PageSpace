@@ -15,6 +15,7 @@ import {
   Hash,
   LayoutGrid,
   ListTodo,
+  Lock,
   Menu,
   MessageSquare,
   MessagesSquare,
@@ -70,6 +71,8 @@ export const icons = {
   // The rail's ⋯ overflow (DEC-6).
   activity: Activity,
   connections: Cable,
+  // A view-only thread's notice.
+  lock: Lock,
 } as const satisfies Readonly<Record<string, LucideIcon>>;
 
 export type IconName = keyof typeof icons;

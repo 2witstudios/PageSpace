@@ -36,6 +36,7 @@ const CHANNELS = `GET ${messagePaths.driveChannels('d1')}`;
 const MESSAGES = `GET ${channelPaths.messages('c1')}`;
 const OLDER = `GET ${channelPaths.messages('c1', '2026-10-04T09:00:00.000Z|m1')}`;
 const READ = `POST ${channelPaths.read('c1')}`;
+const PERMISSIONS = `GET ${channelPaths.permissions('c1')}`;
 
 const grace = { id: 'u2', name: 'Grace Hopper', image: null };
 const ada = { id: 'u1', name: 'Ada Lovelace', image: null };
@@ -69,6 +70,7 @@ const routes = (): Record<string, FakeRoute> => ({
       lastReadAt: '2026-10-05T10:00:00.000Z',
     }),
   [READ]: () => Response.json({ success: true, notificationsMarkedRead: 1 }),
+  [PERMISSIONS]: () => Response.json({ canView: true, canEdit: true, canShare: false, canDelete: false }),
 });
 
 const show = (table: Record<string, FakeRoute> = routes()) => {
@@ -232,6 +234,22 @@ describe('ChannelThread', () => {
       });
     });
 
+    test('a listed channel the server answers 404 for', async () => {
+      const { container, web } = show({ ...routes(), [MESSAGES]: () => Response.json({ error: 'Not found' }, { status: 404 }) });
+      await settle(() => {
+        if (!container.querySelector('[data-not-found]')) throw new Error('no not-found');
+        if (container.querySelector('h1')) throw new Error('still the thread');
+      });
+      // Well past the 20ms mark-read delay, with the drive's channels listing it.
+      await act(() => new Promise((resolve) => setTimeout(resolve, 150)));
+      assert({
+        given: 'a channel the drive lists but whose posts the server answers 404 for',
+        should: 'draw the not-found object and never POST its read mark',
+        actual: [notFound(container)[0], web.writes()],
+        expected: ['Channel not found', []],
+      });
+    });
+
     test('an id that is not one of the drive’s channels', async () => {
       const { container, web } = show({
         ...routes(),
@@ -338,9 +356,11 @@ const showLive = (extra: Record<string, FakeRoute> = {}) => {
   return { web, rt, container, field };
 };
 
+/** Posts on screen, and the composer or the view-only notice once the viewer's permission is known. */
 const loaded = (container: HTMLElement) =>
   settle(() => {
     if (container.querySelectorAll('ol > li').length === 0) throw new Error('posts not loaded');
+    if (!container.querySelector('textarea, [data-view-only]')) throw new Error('permission not known');
   });
 
 /** The rows after the loaded page's, with `(sending)` on a post not yet confirmed. */
@@ -448,6 +468,69 @@ describe('ChannelThread sending and receiving', () => {
       should: 'take the sending post back out, put the text back in the composer and say it was not sent',
       actual: [tail(container), field().value, container.querySelector('[role="alert"]')?.textContent],
       expected: [[], 'not allowed', 'Could not send your post. You need edit permission to send messages in this channel'],
+    });
+  });
+
+  test('a failed send after the viewer typed anew', async () => {
+    const post = deferred();
+    const { web, container, field } = showLive({ [SEND]: () => post.answer });
+    await loaded(container);
+    typeInto(field(), 'first try');
+    press(field(), 'Enter');
+    await settle(() => {
+      if (web.count(SEND) === 0) throw new Error('not sent');
+    });
+    typeInto(field(), 'something else');
+    post.release(Response.json({ error: 'Failed to send message' }, { status: 500 }));
+    await settle(() => {
+      if (!container.querySelector('[role="alert"]')) throw new Error('no error yet');
+    });
+
+    assert({
+      given: 'a send that fails only after the viewer has started typing a new message',
+      should: 'keep what they are typing, and still say the first was not sent',
+      actual: [tail(container), field().value, container.querySelector('[role="alert"]')?.textContent],
+      expected: [[], 'something else', 'Could not send your post. Failed to send message'],
+    });
+  });
+
+  test('a POST that fails after its echo arrived', async () => {
+    const post = deferred();
+    const { web, rt, container, field } = showLive({ [SEND]: () => post.answer });
+    await loaded(container);
+    typeInto(field(), 'stored anyway');
+    press(field(), 'Enter');
+    await settle(() => {
+      if (web.count(SEND) === 0) throw new Error('not sent');
+    });
+    const nonce = sentNonce(web);
+    rt.emit('new_message', stored(nonce, 'stored anyway'));
+    // The answer is lost after apps/web committed and broadcast the post.
+    post.release(Response.json({ error: 'Failed to send message' }, { status: 500 }));
+    await act(() => new Promise((resolve) => setTimeout(resolve, 30)));
+
+    assert({
+      given: 'the viewer’s post broadcast as stored, then its POST failing',
+      should: 'keep the stored post once, leave the composer empty and say nothing failed, so it is not sent twice',
+      actual: [tail(container), field().value, container.querySelector('[role="alert"]')],
+      expected: [['lead:Ada Lovelace:stored anyway'], '', null],
+    });
+  });
+
+  test('a member who may only read', async () => {
+    const { container } = showLive({
+      [PERMISSIONS]: () => Response.json({ canView: true, canEdit: false, canShare: false, canDelete: false }),
+    });
+    await loaded(container);
+    await settle(() => {
+      if (!container.querySelector('[data-view-only]')) throw new Error('no notice yet');
+    });
+
+    assert({
+      given: 'a channel member without edit permission',
+      should: 'show the view-only notice instead of the composer, as classic does',
+      actual: [container.querySelector('textarea'), container.querySelector('[data-view-only]')?.textContent],
+      expected: [null, 'View-only access: You need edit permission to send messages in this channel'],
     });
   });
 

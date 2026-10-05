@@ -25,11 +25,18 @@ import {
   threadClass,
   threadNoteClass,
   threadTitleClass,
+  viewOnlyClass,
 } from './thread-view-class';
 
+/** What the thread is: a drive's channel, or a DM with one person. */
+export type ThreadViewKind = 'channel' | 'dm';
+
 export type ThreadViewRenderProps = {
-  /** The channel's name, without a `#`. */
+  readonly kind: ThreadViewKind;
+  /** The channel's name, without a `#`, or the other person's in a DM. */
   readonly name: string;
+  /** The other person's picture in a DM. */
+  readonly image?: string | null;
   readonly viewerId: string;
   readonly status: 'loading' | 'error' | 'ready';
   readonly items: readonly PostItem[];
@@ -37,8 +44,50 @@ export type ThreadViewRenderProps = {
   readonly older: 'none' | 'idle' | 'loading' | 'error';
   /** Void action: loads the next older page. */
   readonly loadOlder: () => void;
-  /** The post composer, shown once the channel has loaded. */
+  /**
+   * Whether the viewer may post: if not, a view-only notice stands where the
+   * composer would. Undefined until apps/web says, when neither shows.
+   */
+  readonly canPost: boolean | undefined;
+  /** The post composer, shown once the thread has loaded. */
   readonly composer: Omit<PostComposerRenderProps, 'label'>;
+};
+
+/** What each kind of thread calls itself and its posts. */
+const words: Readonly<
+  Record<
+    ThreadViewKind,
+    {
+      readonly label: (name: string) => string;
+      readonly loading: string;
+      readonly error: string;
+      readonly empty: (name: string) => string;
+      readonly older: Readonly<Record<'idle' | 'loading' | 'error', string>>;
+      /** What stands where the composer would, for a viewer who may only read; a DM is always open to post. */
+      readonly viewOnly?: string;
+    }
+  >
+> = {
+  channel: {
+    label: (name) => `# ${name}`,
+    loading: 'Loading posts…',
+    error: 'Could not load this channel.',
+    empty: (name) => `No posts in ${name} yet.`,
+    older: { idle: 'Load earlier posts', loading: 'Loading earlier posts…', error: 'Could not load earlier posts. Retry' },
+    // Classic ChannelView's notice (getPermissionErrorMessage('send', 'channel')).
+    viewOnly: 'View-only access: You need edit permission to send messages in this channel',
+  },
+  dm: {
+    label: (name) => name,
+    loading: 'Loading messages…',
+    error: 'Could not load this conversation.',
+    empty: (name) => `No messages with ${name} yet.`,
+    older: {
+      idle: 'Load earlier messages',
+      loading: 'Loading earlier messages…',
+      error: 'Could not load earlier messages. Retry',
+    },
+  },
 };
 
 /* Text stays text: React escapes every run, and only the stored
@@ -141,13 +190,7 @@ const renderItem = (item: PostItem, viewerId: string): ReactNode => {
   return renderPost(item.post, item.lead, viewerId);
 };
 
-const olderLabel: Readonly<Record<'idle' | 'loading' | 'error', string>> = {
-  idle: 'Load earlier posts',
-  loading: 'Loading earlier posts…',
-  error: 'Could not load earlier posts. Retry',
-};
-
-const olderButton = (older: ThreadViewRenderProps['older'], loadOlder: () => void): ReactNode =>
+const olderButton = (kind: ThreadViewKind, older: ThreadViewRenderProps['older'], loadOlder: () => void): ReactNode =>
   older === 'none'
     ? null
     : renderButton({
@@ -155,48 +198,67 @@ const olderButton = (older: ThreadViewRenderProps['older'], loadOlder: () => voi
         className: olderClass,
         disabled: older === 'loading',
         onClick: loadOlder,
-        children: olderLabel[older],
+        children: words[kind].older[older],
       });
 
-const note = (props: ThreadViewRenderProps): ReactNode => {
-  if (props.status === 'loading')
+const note = ({ kind, status, name }: ThreadViewRenderProps): ReactNode => {
+  if (status === 'loading')
     return (
       <p role="status" className={threadNoteClass}>
-        Loading posts…
+        {words[kind].loading}
       </p>
     );
-  if (props.status === 'error')
+  if (status === 'error')
     return (
       <p role="alert" className={threadNoteClass}>
-        Could not load this channel.
+        {words[kind].error}
       </p>
     );
-  return <p className={threadNoteClass}>{`No posts in ${props.name} yet.`}</p>;
+  return <p className={threadNoteClass}>{words[kind].empty(name)}</p>;
 };
 
+const glyph = (kind: ThreadViewKind, name: string, image: string | null | undefined): ReactNode =>
+  kind === 'channel'
+    ? renderIcon({ name: 'hash', className: 'flex-none text-ink-faint' })
+    : // The name follows in the title: the face's own name would say it twice.
+      <span aria-hidden="true" className="contents">
+        {renderAvatar({ name, src: image ?? undefined, size: 'xs' })}
+      </span>;
+
+const composerOrNotice = ({ kind, name, canPost, composer }: ThreadViewRenderProps): ReactNode =>
+  canPost === undefined ? null : canPost ? (
+    renderPostComposer({ ...composer, label: `Message ${words[kind].label(name)}` })
+  ) : (
+    <p className={viewOnlyClass} data-view-only="">
+      {renderIcon({ name: 'lock', className: 'flex-none' })}
+      <span>{words[kind].viewOnly}</span>
+    </p>
+  );
+
 /**
- * A channel opened as the object: its flat posts oldest first, grouped and
- * divided by day, with where unread began, and the composer below. Mentions
- * and reactions show but do nothing. The viewer's posts not yet stored are
+ * A channel or a DM opened as the object: its flat posts oldest first,
+ * grouped and divided by day, with where unread began, and the composer
+ * below — or, for a viewer who may not post, a view-only notice. Mentions and
+ * reactions show but do nothing. The viewer's posts not yet stored are
  * marked busy until apps/web answers.
  */
 export function renderThreadView(props: ThreadViewRenderProps): ReactNode {
-  const { name, viewerId, status, items, older, loadOlder, composer } = props;
+  const { kind, name, image, viewerId, status, items, older, loadOlder } = props;
   return (
-    <section className={threadClass} aria-label={`# ${name}`}>
+    <section className={threadClass} aria-label={words[kind].label(name)}>
       <h1 className={threadTitleClass}>
-        {renderIcon({ name: 'hash', className: 'flex-none text-ink-faint' })}
+        {glyph(kind, name, image)}
         <span>{name}</span>
       </h1>
       {status === 'ready' && items.length > 0 ? (
         <>
-          {olderButton(older, loadOlder)}
+          {olderButton(kind, older, loadOlder)}
           <ol>{items.map((item) => renderItem(item, viewerId))}</ol>
         </>
       ) : (
         note(props)
       )}
-      {status === 'ready' ? renderPostComposer({ ...composer, label: `Message # ${name}` }) : null}
+      {status === 'ready' ? composerOrNotice(props) : null}
     </section>
   );
 }

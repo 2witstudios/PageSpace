@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
 import type { RealtimeClient, RealtimeSocket } from './realtime-client';
-import { RealtimeProvider, useChannelRoom, useDriveRoom, useSocketEvent } from './realtime-provider';
+import { CHANNEL_ROOM, DM_ROOM, RealtimeProvider, useDriveRoom, useRoom, useSocketEvent } from './realtime-provider';
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined;
@@ -333,9 +333,9 @@ describe('useDriveRoom', () => {
   });
 });
 
-describe('useChannelRoom', () => {
+describe('useRoom', () => {
   function Room({ pageId }: { pageId: string }) {
-    useChannelRoom(pageId);
+    useRoom(CHANNEL_ROOM, pageId);
     return null;
   }
 
@@ -413,6 +413,30 @@ describe('useChannelRoom', () => {
       should: 'not queue a leave for the next connection',
       actual: fake.sent,
       expected: [['join_channel', 'c1']],
+    });
+  });
+
+  test('a DM conversation’s room', () => {
+    function Conversation({ id }: { id: string }) {
+      useRoom(DM_ROOM, id);
+      return null;
+    }
+    const fake = fakeClient();
+    const root = mount(
+      <RealtimeProvider client={fake.client}>
+        <Conversation id="dm1" />
+      </RealtimeProvider>,
+    );
+    unmount(root);
+
+    assert({
+      given: 'a DM open, then closed',
+      should: 'join and leave its room with realtime’s DM events',
+      actual: fake.sent,
+      expected: [
+        ['join_dm_conversation', 'dm1'],
+        ['leave_dm_conversation', 'dm1'],
+      ],
     });
   });
 });

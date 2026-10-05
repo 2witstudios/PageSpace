@@ -7,6 +7,7 @@ import type { ReactElement, ReactNode } from 'react';
 import { ChannelThread } from '@/ui/messages/thread-view/channel-thread';
 import { PageObject } from '@/ui/files/page-object/page-object';
 import { ConversationObject } from '@/ui/messages/conversation-object/conversation-object';
+import { DmThread } from '@/ui/messages/thread-view/dm-thread';
 
 // getViewer() itself is proven against Postgres in
 // lib/auth/get-viewer.integration.test.ts; here it is every route's seam.
@@ -252,7 +253,13 @@ describe('the stage routes', () => {
           const thread = element as ReactElement;
           return [thread.type === ChannelThread, thread.props];
         }
-        if (route.object === 'page-object' || route.object === 'conversation-object') {
+        if (route.object === 'conversation-object') {
+          // The gate settles the id against the viewer's DMs; behind it, the DM thread for the viewer.
+          const gate = element as ReactElement<{ conversationId: string; children: ReactElement }>;
+          const { children, ...gateProps } = gate.props;
+          return [gate.type, gateProps, children.type === DmThread, children.props];
+        }
+        if (route.object === 'page-object') {
           // The gate settles what the id names in the browser; its suite proves the edges.
           const gate = element as ReactElement<{ children: ReactNode }>;
           const { children, ...gateProps } = gate.props;
@@ -264,7 +271,8 @@ describe('the stage routes', () => {
 
     assert({
       given: 'each stage route for a signed-in viewer',
-      should: 'render nothing for the stages with no object, the channel thread for the viewer on a channel, a page or conversation behind the gate that settles its id, and only the object’s placeholder otherwise',
+      should:
+        'render nothing for the stages with no object, the channel thread for the viewer on a channel, a page behind the gate that settles its id, the DM thread behind the gate that settles the conversation, and only the object’s placeholder otherwise',
       actual: rendered,
       expected: routes.map((route) => {
         if (route.object === 'channel-thread') {
@@ -274,7 +282,7 @@ describe('the stage routes', () => {
           return [PageObject, { driveId: 'drive-1', pageId: 'page-1' }, placeholder('Page')];
         }
         if (route.object === 'conversation-object') {
-          return [ConversationObject, { conversationId: 'c-1' }, placeholder('Conversation')];
+          return [ConversationObject, { conversationId: 'c-1' }, true, { conversationId: 'c-1', viewerId: 'user-1' }];
         }
         return route.object === null ? null : placeholder(route.object);
       }),

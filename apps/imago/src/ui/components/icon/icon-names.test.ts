@@ -19,6 +19,7 @@ import {
   Hash,
   LayoutGrid,
   ListTodo,
+  Lock,
   Menu,
   MessageSquare,
   MessagesSquare,
@@ -77,6 +78,7 @@ describe('icon names', () => {
         monitor: Monitor,
         activity: Activity,
         connections: Cable,
+        lock: Lock,
       },
     });
   });

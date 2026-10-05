@@ -2,10 +2,12 @@
 // routes apps/web already has. Access is decided there.
 
 import type { ApiClient } from '@/api/client';
+import { CHANNEL_ROOM } from '@/realtime/realtime-provider';
 import type { ChannelMessageResponse, ChannelMessagesResponse } from '../message-model/post';
 import { postsFrom } from '../message-model/posts-from-api';
-import { receivedFrom, type ReceivedPost } from '../message-model/received';
-import type { ChannelPage } from './channel-thread-state';
+import { liveChannelPost, receivedFrom, type ReceivedPost } from '../message-model/received';
+import type { ThreadPage } from '../thread/thread-state';
+import type { ThreadKind } from '../thread/use-thread';
 
 const segment = encodeURIComponent;
 
@@ -22,19 +24,31 @@ export const channelPaths = {
   send: (pageId: string) => `/api/channels/${segment(pageId)}/messages`,
   /** Moves the viewer's read watermark to now. */
   read: (pageId: string) => `/api/channels/${segment(pageId)}/read`,
+  /** What the viewer may do on the channel's page. */
+  permissions: (pageId: string) => `/api/pages/${segment(pageId)}/permissions/check`,
 };
 
 /** One page of a channel's posts, oldest first, as the viewer sees them. */
 export const fetchChannelPage = async (
   client: ApiClient,
   { pageId, viewerId, cursor }: { readonly pageId: string; readonly viewerId: string; readonly cursor?: string },
-): Promise<ChannelPage> => {
+): Promise<ThreadPage> => {
   const page = await client.apiFetch<ChannelMessagesResponse>(channelPaths.messages(pageId, cursor));
   return {
     posts: postsFrom(page.messages, viewerId),
     nextCursor: page.hasMore ? page.nextCursor : null,
     lastReadAt: page.lastReadAt ?? null,
   };
+};
+
+/**
+ * Whether the viewer may post in the channel: apps/web lets a member with
+ * edit permission post (the channel route's own check), as classic
+ * ChannelView reads it.
+ */
+export const fetchCanPost = async (client: ApiClient, pageId: string): Promise<boolean> => {
+  const permissions = await client.apiFetch<{ readonly canEdit: boolean }>(channelPaths.permissions(pageId));
+  return permissions.canEdit === true;
 };
 
 /** Marks the channel read for the viewer; apps/web then clears its unread everywhere. */
@@ -62,4 +76,20 @@ export const sendChannelPost = async (
     json: { content, clientNonce },
   });
   return receivedFrom(stored, viewerId);
+};
+
+/** realtime's event for a channel post (apps/web's channel messages route broadcasts it). */
+export const NEW_MESSAGE = 'new_message';
+
+/** A channel as an open thread: its posts, its read mark and its realtime room. */
+export const channelThread: ThreadKind = {
+  fetchPage: (client, { threadId, viewerId, cursor }) =>
+    fetchChannelPage(client, { pageId: threadId, viewerId, ...(cursor === undefined ? {} : { cursor }) }),
+  send: (client, { threadId, ...post }) => sendChannelPost(client, { pageId: threadId, ...post }),
+  markRead: markChannelRead,
+  loadMarksRead: false,
+  room: CHANNEL_ROOM,
+  event: NEW_MESSAGE,
+  live: (payload, { threadId, viewerId }) => liveChannelPost(payload, { pageId: threadId, viewerId }),
+  sendFailed: 'Could not send your post.',
 };
