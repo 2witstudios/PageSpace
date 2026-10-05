@@ -92,6 +92,7 @@ vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
 vi.mock('ai', () => ({ streamText: mocks.streamText }));
 
 import { POST } from '../route';
+import { readSpendFallbackHeaders } from '@pagespace/lib/billing/spend-fallback';
 
 const post = () => POST(new Request('http://test/api/ai/btw', {
   method: 'POST',
@@ -115,7 +116,7 @@ describe('POST /api/ai/btw credit gate', () => {
     mocks.gate.mockResolvedValue({ allowed: true, holdId: 'hold_1' });
     mocks.releaseHold.mockResolvedValue(undefined);
     mocks.trackUsage.mockResolvedValue({ status: 'recorded' });
-    mocks.streamText.mockReturnValue({ toTextStreamResponse: () => new Response('side') });
+    mocks.streamText.mockReturnValue({ toTextStreamResponse: (init?: ResponseInit) => new Response('side', init) });
     mocks.calculateCost.mockReturnValue(0.002);
     mocks.requiresPro.mockReturnValue(false);
     mocks.sessionDrive.mockResolvedValue('d1');
@@ -130,6 +131,17 @@ describe('POST /api/ai/btw credit gate', () => {
     const spend = { kind: 'drive', driveId: 'd1', chosen: null, conversationId: 'c1' };
     expect(mocks.gate).toHaveBeenCalledWith('u1', 'free', expect.objectContaining({ spend }));
     expect(mocks.entitlement).toHaveBeenCalledWith('u1', 'free', spend);
+  });
+
+  it('SPEND-4 (partial) a drive rule that moved the side question to another source is reported on its stream, from and to', async () => {
+    mocks.gate.mockResolvedValue({ allowed: true, holdId: 'hold_1', walletId: 'w-own', spendSource: 'own_credits', fallback: { from: 'seat_allowance', to: 'own_credits' } });
+    const response = await post();
+    expect(readSpendFallbackHeaders(response.headers)).toEqual({ from: 'seat_allowance', to: 'own_credits', walletId: 'w-own' });
+  });
+
+  it('SPEND-4 (partial) a side question that spent the source it named carries no fallback headers', async () => {
+    const response = await post();
+    expect(readSpendFallbackHeaders(response.headers)).toBeNull();
   });
 
   it('SPEND-8 (partial) a global conversation has no drive, so the side question spends personal credits', async () => {

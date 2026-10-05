@@ -23,6 +23,7 @@
  * module-level mutable state.
  */
 
+import type { SpendFallbackNotice } from '../billing/spend-fallback';
 import { z } from 'zod';
 
 /**
@@ -436,7 +437,10 @@ export type VoiceBridgeResponse =
     }
   | { readonly ok: false; readonly error: string };
 
-/** What the attach endpoint answers. Never echoes the secret. */
+/**
+ * What the attach endpoint answers. Never echoes the secret. `spendFallback` is set when the
+ * call's opening gate fell back to another source (SPEND-4), so the web tier tells the caller.
+ */
 export type RealtimeAttachResult =
-  | { readonly success: true; readonly callId: string }
+  | { readonly success: true; readonly callId: string; readonly spendFallback: SpendFallbackNotice | null }
   | { readonly success: false; readonly error: string };

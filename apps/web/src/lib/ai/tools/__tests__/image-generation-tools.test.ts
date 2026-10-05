@@ -137,7 +137,7 @@ describe('generate_image destination', () => {
 
     expect(canConsumeAI).toHaveBeenCalledOnce();
     const opts = canConsumeAI.mock.calls[0][2] as { spend: unknown };
-    expect(opts.spend).toEqual({ kind: 'drive', driveId: 'drive-work', chosen: 'drive_wallet', conversationId: 'conv1' });
+    expect(opts.spend).toEqual({ kind: 'drive', driveId: 'drive-work', chosen: 'drive_wallet', conversationId: 'conv1', followOn: true });
   });
 
   it('files into the workspace currently in view', async () => {

@@ -10,6 +10,8 @@ import {
   legSpendableCents,
   allocateWalletSpend,
   settleOvershoot,
+  walletSourceKind,
+  chosenSourceCharge,
   walletStatusFor,
   shouldNotifyFunderOfDebt,
   renewWalletAllocation,
@@ -79,7 +81,8 @@ const spend = (
   source: 'drive_wallet' | 'seat_allowance' | 'own_credits',
   walletId: string,
   fallbackFrom: 'drive_wallet' | 'seat_allowance' | 'own_credits' | null = null,
-): SpendResolution => ({ kind: 'spend', source, walletId, fallbackApplied: fallbackFrom !== null, fallbackFrom });
+  fallbackFromWalletId: string | null = null,
+): SpendResolution => ({ kind: 'spend', source, walletId, fallbackApplied: fallbackFrom !== null, fallbackFrom, fallbackFromWalletId });
 
 describe('resolveSpendSource — the chosen source', () => {
   it.each([
@@ -184,7 +187,14 @@ describe('resolveSpendSource — an empty chosen source', () => {
       resolveSpendSource(
         base({ driveWallet: productWallet(0), driveRule: { fallback, guestsMaySpendDriveWallet: false } }),
       ),
-    ).toEqual(spend(fallback, walletId, 'drive_wallet'));
+    ).toEqual(spend(fallback, walletId, 'drive_wallet', 'w-product'));
+  });
+
+  it('WAL-6 (partial) a fallback names the wallet it moved off, so the settle can land overshoot where that choice would have', () => {
+    const result = resolveSpendSource(
+      base({ chosen: 'seat_allowance', seatAllowance: marcusSeat(0), driveRule: { fallback: 'own_credits', guestsMaySpendDriveWallet: false } }),
+    );
+    expect(result).toEqual(spend('own_credits', 'w-marcus', 'seat_allowance', 'w-northwind-pool'));
   });
 
   it.each([
@@ -806,3 +816,23 @@ describe('wallet-core purity', () => {
     expect(src).not.toMatch(/new Date\(\s*\)/);
   });
 });
+
+describe('the chosen source a fallback moved off, from its wallet row (WAL-6b)', () => {
+  it.each([
+    ['a child wallet is a drive wallet', { ownerType: 'org', parentWalletId: 'w-pool' }, 'drive_wallet'],
+    ['a personal drive\'s wallet is a drive wallet too', { ownerType: 'user', parentWalletId: 'w-jono' }, 'drive_wallet'],
+    ['an org root is the pool a seat spends', { ownerType: 'org', parentWalletId: null }, 'seat_allowance'],
+    ['a person\'s root is their own credits', { ownerType: 'user', parentWalletId: null }, 'own_credits'],
+  ] as const)('walletSourceKind: %s', (_label, wallet, expected) => {
+    expect(walletSourceKind(wallet)).toBe(expected);
+  });
+
+  it('WAL-6 (partial) a fallback off a drive wallet with no funder choice set absorbs into its parent, the default (D20.2)', () => {
+    const chosen = chosenSourceCharge({ id: 'w-side', ownerType: 'user', parentWalletId: 'w-jono', overshootChoice: null });
+    expect(chosen).toEqual({ source: 'drive_wallet', walletId: 'w-side', parentWalletId: 'w-jono', funderChoice: 'absorb_to_parent' });
+    expect(settleOvershoot({
+      source: 'own_credits', overshootCents: 50, chargedWalletId: 'w-marcus', parentWalletId: null, funderChoice: 'absorb_to_parent', fallbackFrom: chosen,
+    })).toEqual({ kind: 'parent_debt', walletId: 'w-jono', cents: 50 });
+  });
+});
+

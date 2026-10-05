@@ -19,7 +19,7 @@ describe('turn credit: a drive-rule fallback reaches the turn and the stream', (
 
     expect(credit.fallback).toEqual({ from: 'drive_wallet', to: 'own_credits' });
     // Follow-on calls in the turn name the source actually held, never the one fallen back from.
-    expect(credit.spend).toEqual({ kind: 'drive', driveId: 'd-side', chosen: 'own_credits' });
+    expect(credit.spend).toEqual({ kind: 'drive', driveId: 'd-side', chosen: 'own_credits', followOn: true });
   });
 
   it('SPEND-4 (partial) a fallback becomes a data part the client receives, naming both sources', () => {

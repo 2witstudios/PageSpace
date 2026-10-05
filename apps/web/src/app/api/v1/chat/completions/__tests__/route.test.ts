@@ -4,6 +4,7 @@
 // undici, so on Node >=24 `new Request(url, { signal })` throws because the
 // jsdom AbortSignal fails undici's `instanceof AbortSignal` check. Running this
 // file under the node env keeps both on the same (undici) implementation.
+import { readSpendFallbackHeaders } from '@pagespace/lib/billing/spend-fallback';
 import { describe, test, beforeEach, vi } from 'vitest';
 import { assert } from '@/lib/ai/openai-api/__tests__/riteway';
 
@@ -289,6 +290,22 @@ describe('POST /api/v1/chat/completions', () => {
     vi.mocked(canConsumeAI).mockClear();
     await POST(makeRequest(validBody));
     expect(vi.mocked(canConsumeAI).mock.calls[0]?.[2]?.spend).toEqual({ kind: 'drive', driveId: 'drive-abc', chosen: null });
+  });
+
+  test('SPEND-4 (partial) a drive rule that moved the call to another source is reported on the stream response, from and to', async () => {
+    vi.mocked(canConsumeAI).mockResolvedValue({
+      allowed: true, reason: 'ok', holdId: 'h1', walletId: 'w-own', spendSource: 'own_credits',
+      fallback: { from: 'drive_wallet', to: 'own_credits' },
+    });
+    const response = await POST(makeRequest(validBody));
+    expect(response.status).toBe(200);
+    expect(readSpendFallbackHeaders(response.headers)).toEqual({ from: 'drive_wallet', to: 'own_credits', walletId: 'w-own' });
+  });
+
+  test('SPEND-4 (partial) a call that spent the source it named carries no fallback headers', async () => {
+    vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'h1', walletId: 'w-product', spendSource: 'drive_wallet' });
+    const response = await POST(makeRequest(validBody));
+    expect(readSpendFallbackHeaders(response.headers)).toBeNull();
   });
 
   test('proceeds to a 200 stream when the credit gate allows', async () => {

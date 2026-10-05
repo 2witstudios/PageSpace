@@ -236,7 +236,7 @@ export const handleRealtimeAttachRequest = async (
       agentPageId: assistant?.agentPageId,
       live: deps.registry.size,
     });
-    return { status: 200, body: { success: true, callId } };
+    return { status: 200, body: { success: true, callId, spendFallback: meter.spendFallback } };
   } catch (error) {
     const code = error instanceof RealtimeAttachError ? error.code : 'attach_failed';
     loggers.realtime.error(

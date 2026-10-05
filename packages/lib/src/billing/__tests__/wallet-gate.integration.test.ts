@@ -1415,6 +1415,48 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     }
   });
 
+  it('WAL-6 (partial) a fallback onto own credits records the chosen wallet on the hold, and its overshoot lands where that choice would have put it — never on the consumer', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 5_000 });
+    const w = world;
+    const side = await personalDrive(w, { allocationCents: 0, fallbackRule: 'own_credits' });
+    // Marcus's own credits cover the reservation but not the real cost.
+    await db.update(wallets).set({ monthlyRemainingCents: 100 }).where(eq(wallets.id, w.marcusWalletId));
+    try {
+      const gate = await canConsumeAI(w.marcusId, 'free', { spend: driveSpend(side.driveId, 'drive_wallet') });
+      expect(gate).toMatchObject({ allowed: true, walletId: w.marcusWalletId, fallback: { from: 'drive_wallet', to: 'own_credits' } });
+      expect((await holdsOf(w.marcusId)).map((h) => [h.walletId, h.fallbackFromWalletId])).toEqual([[w.marcusWalletId, side.walletId]]);
+
+      const [log] = await db.insert(aiUsageLogs).values({ userId: w.marcusId, provider: 'openrouter', model: 'm', cost: 1 }).returning({ id: aiUsageLogs.id });
+      expect(await consumeCredits({ aiUsageLogId: log.id, userId: w.marcusId, costDollars: 1, holdId: gate.holdId, walletId: gate.walletId })).toBe('settled');
+
+      // 150¢: Marcus's 100¢, then 50¢ uncovered. The chosen Side Project wallet absorbs into its
+      // parent by default (D20.2), so Jono's root carries the 50¢ — Marcus carries none.
+      const marcusRow = await walletRow(w.marcusWalletId);
+      expect([marcusRow.monthlyRemainingCents, marcusRow.debtCents]).toEqual([0, 0]);
+      expect((await walletRow(side.jonoRootId)).debtCents).toBe(50);
+      const debt = (await ledgerOf(w.marcusId)).filter((r) => r.entryType === 'adjustment');
+      expect(debt.map((r) => [r.walletId, r.amountCents])).toEqual([[side.jonoRootId, -50]]);
+    } finally {
+      await db.delete(creditLedger).where(eq(creditLedger.userId, w.marcusId));
+      await teardownPersonalDrive(side);
+    }
+  });
+
+  it('WAL-6 (partial) own credits the consumer CHOSE still carry their own overshoot', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 5_000 });
+    const w = world;
+    await db.update(wallets).set({ monthlyRemainingCents: 100 }).where(eq(wallets.id, w.marcusWalletId));
+    const gate = await canConsumeAI(w.marcusId, 'free', { spend: driveSpend(w.productId, 'own_credits') });
+    expect(gate).toMatchObject({ allowed: true, walletId: w.marcusWalletId });
+    expect(gate.fallback).toBeUndefined();
+    expect((await holdsOf(w.marcusId)).map((h) => h.fallbackFromWalletId)).toEqual([null]);
+    const [log] = await db.insert(aiUsageLogs).values({ userId: w.marcusId, provider: 'openrouter', model: 'm', cost: 1 }).returning({ id: aiUsageLogs.id });
+    await consumeCredits({ aiUsageLogId: log.id, userId: w.marcusId, costDollars: 1, holdId: gate.holdId, walletId: gate.walletId });
+    expect((await walletRow(w.marcusWalletId)).debtCents).toBe(50);
+  });
+
   // ---------------------------------------------------------------------------
   // SPEND-5: "Always my own credits", one global switch and one per drive. Either is absolute
   // (own credits or refuse), and it only ever narrows: it opens no wallet and passes no cap.

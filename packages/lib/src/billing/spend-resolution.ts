@@ -363,6 +363,7 @@ export async function resolveCallSpend(input: {
     // storage yet, so it is off everywhere.
     driveRule: { fallback, guestsMaySpendDriveWallet: false },
     chosen: target.chosen,
+    followOn: target.followOn === true,
     stored,
     // SPEND-5 "Always my own credits": the global switch on the person's own root wallet and
     // the switch for this drive. Either makes the call own credits or a refusal; it opens no

@@ -9,6 +9,7 @@ import { users } from '@pagespace/db/schema/auth';
 import { canAccessConversation } from '@pagespace/lib/permissions/conversation-access';
 import { canConsumeAI, resolveEntitlementTier } from '@pagespace/lib/billing/credit-gate';
 import { conversationSpend } from '@pagespace/lib/billing/spend-target';
+import { spendFallbackHeaders, spendFallbackNotice, type SpendFallbackNotice } from '@pagespace/lib/billing/spend-fallback';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
@@ -36,6 +37,8 @@ export async function POST(request: Request) {
   let holdId: string | undefined;
   // The wallet the hold was placed on, threaded to settlement with it (WAL-5).
   let walletId: string | undefined;
+  // SPEND-4: a drive rule that moved the call to another source, reported on the response.
+  let spendFallback: SpendFallbackNotice | null = null;
   let holdHandedOff = false;
   try {
     const auth = await authenticateRequestWithOptions(request, { allow: ['session'] as const, requireCSRF: true });
@@ -102,6 +105,7 @@ export async function POST(request: Request) {
       }
       holdId = gate.holdId;
       walletId = gate.walletId;
+      spendFallback = spendFallbackNotice(gate);
     }
 
     const provider = await createAIProvider(userId, {}, { user: user ?? null, driveId: sessionDriveId });
@@ -115,6 +119,7 @@ export async function POST(request: Request) {
       question: trimmedQuestion,
       snapshot,
       abortSignal: request.signal,
+      headers: spendFallbackHeaders(spendFallback),
       onSettle: async ({ outcome, usage, steps, interruptedStep, error }) => {
         // An abort cut the one step off before the provider reported usage: bill
         // the interrupted step by the shared policy, as an estimate. Its row is

@@ -111,6 +111,12 @@ export type SpendResolution =
       /** True only when a drive rule moved the call off the chosen source; the chip and strip must show it. */
       fallbackApplied: boolean;
       fallbackFrom: SpendSourceKind | null;
+      /**
+       * The wallet of the chosen source a fallback moved the call off, else null. The gate
+       * records it on the hold so the settle lands any overshoot where that choice would have
+       * put it, never on the consumer (WAL-6b).
+       */
+      fallbackFromWalletId: string | null;
     }
   | {
       kind: 'refuse';
@@ -204,7 +210,7 @@ export function resolveSpendSource(input: ResolveSpendSourceInput): SpendResolut
     if (!covers(wallet, input.reservationCents)) {
       return { kind: 'skip', reason: 'drive_wallet_empty', walletId: wallet.walletId, chargeCents: 0 };
     }
-    return { kind: 'spend', source: 'drive_wallet', walletId: wallet.walletId, fallbackApplied: false, fallbackFrom: null };
+    return { kind: 'spend', source: 'drive_wallet', walletId: wallet.walletId, fallbackApplied: false, fallbackFrom: null, fallbackFromWalletId: null };
   }
 
   const overridden = input.userOverride.alwaysOwnCredits || input.userOverride.alwaysOwnCreditsInDrive;
@@ -215,14 +221,21 @@ export function resolveSpendSource(input: ResolveSpendSourceInput): SpendResolut
   const offered = (): SpendOption[] => (overridden ? [] : optionsExcept(input, chosen));
   if (!('leg' in found)) return refuse(chosen, found.unavailable, offered());
   if (covers(found.leg, input.reservationCents)) {
-    return { kind: 'spend', source: chosen, walletId: found.leg.walletId, fallbackApplied: false, fallbackFrom: null };
+    return { kind: 'spend', source: chosen, walletId: found.leg.walletId, fallbackApplied: false, fallbackFrom: null, fallbackFromWalletId: null };
   }
 
   const fallback = input.driveRule.fallback;
   if (!overridden && fallback !== 'refuse' && fallback !== chosen) {
     const fallbackLeg = coveredLeg(input, fallback);
     if (fallbackLeg) {
-      return { kind: 'spend', source: fallback, walletId: fallbackLeg.walletId, fallbackApplied: true, fallbackFrom: chosen };
+      return {
+        kind: 'spend',
+        source: fallback,
+        walletId: fallbackLeg.walletId,
+        fallbackApplied: true,
+        fallbackFrom: chosen,
+        fallbackFromWalletId: found.leg.walletId,
+      };
     }
   }
   return refuse(chosen, refusalFor(found.leg), offered());
@@ -443,6 +456,30 @@ export function settleOvershoot(input: SettleOvershootInput): OvershootLanding {
     return { kind: 'parent_debt', walletId: input.parentWalletId, cents };
   }
   return { kind: 'wallet_debt', walletId: input.chargedWalletId, cents };
+}
+
+/**
+ * The source a wallet row IS, from its shape: a child wallet is a drive wallet; a root owned by
+ * an org is the pool a seat spends; a root owned by a person is their own credits.
+ */
+export function walletSourceKind(wallet: { ownerType: 'user' | 'org'; parentWalletId: string | null }): SpendSourceKind {
+  if (wallet.parentWalletId !== null) return 'drive_wallet';
+  return wallet.ownerType === 'org' ? 'seat_allowance' : 'own_credits';
+}
+
+/** The chosen source a fallback moved a call off, as the settle needs it (WAL-6b), from its wallet row. */
+export function chosenSourceCharge(wallet: {
+  id: string;
+  ownerType: 'user' | 'org';
+  parentWalletId: string | null;
+  overshootChoice: OvershootFunderChoice | null;
+}): ChosenSourceCharge {
+  return {
+    source: walletSourceKind(wallet),
+    walletId: wallet.id,
+    parentWalletId: wallet.parentWalletId,
+    funderChoice: wallet.overshootChoice ?? DEFAULT_OVERSHOOT_CHOICE,
+  };
 }
 
 /** WAL-6e / WAL-7: the kill switch wins; any debt shows "over". */

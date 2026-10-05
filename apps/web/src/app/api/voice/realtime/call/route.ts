@@ -21,6 +21,7 @@
  * is contacted, carried to the realtime server on the signed attach (SPEND-1).
  */
 
+import { spendFallbackHeaders } from '@pagespace/lib/billing/spend-fallback';
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { getManagedProviderKey } from '@/lib/ai/core/ai-utils';
@@ -274,12 +275,14 @@ export async function POST(request: Request) {
     // reports the cap THIS tier owns — correct unless a deployment sets
     // REALTIME_MAX_SESSION_SECONDS above 3600, at which point the socket's hour
     // binds first and the chain lands late rather than early.
+    // SPEND-4: the call's opening gate fell back to another source; the caller shows it.
     return NextResponse.json({
       callId: result.callId,
       answerSdp: result.answerSdp,
       attached: result.attached,
       maxDurationMs: REALTIME_MAX_SESSION_SECONDS * 1000,
-    });
+      spendFallback: result.spendFallback,
+    }, { headers: spendFallbackHeaders(result.spendFallback) });
   } catch (error) {
     loggers.ai.error('Realtime voice call error', error as Error);
     return NextResponse.json(

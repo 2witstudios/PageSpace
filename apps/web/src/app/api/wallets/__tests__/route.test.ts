@@ -66,7 +66,7 @@ const sourceRead: ConversationSpendRead = {
   driveId: 'd-product',
   chosenWalletId: 'w-pool',
   options: [{ source: 'seat_allowance', walletId: 'w-pool' }],
-  resolved: { kind: 'spend', source: 'seat_allowance', walletId: 'w-pool', fallbackApplied: false, fallbackFrom: null, entitlementTier: 'business' },
+  resolved: { kind: 'spend', source: 'seat_allowance', walletId: 'w-pool', fallbackApplied: false, fallbackFrom: null, fallbackFromWalletId: null, entitlementTier: 'business' },
 };
 
 const authFailure: AuthError = { error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }) };

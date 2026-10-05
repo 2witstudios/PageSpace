@@ -97,14 +97,14 @@ describe('spend-target: a conversation turn names its conversation', () => {
 
   it('SPEND-4 (partial) a follow-on call keeps the conversation and names the turn\'s resolved source', () => {
     expect(resolvedSpend(conversationSpend('d-product', 'c-1'), 'seat_allowance'))
-      .toEqual({ kind: 'drive', driveId: 'd-product', chosen: 'seat_allowance', conversationId: 'c-1' });
+      .toEqual({ kind: 'drive', driveId: 'd-product', chosen: 'seat_allowance', conversationId: 'c-1', followOn: true });
   });
 });
 
 describe('spend-target: follow-on calls in a turn', () => {
   it('SPEND-4 (partial) a tool call in a turn names exactly the source the turn resolved, never re-choosing', () => {
-    expect(resolvedSpend(driveSpend('d-product'), 'drive_wallet')).toEqual({ kind: 'drive', driveId: 'd-product', chosen: 'drive_wallet' });
-    expect(resolvedSpend(driveSpend('d-product', 'drive_wallet'), 'seat_allowance')).toEqual({ kind: 'drive', driveId: 'd-product', chosen: 'seat_allowance' });
+    expect(resolvedSpend(driveSpend('d-product'), 'drive_wallet')).toEqual({ kind: 'drive', driveId: 'd-product', chosen: 'drive_wallet', followOn: true });
+    expect(resolvedSpend(driveSpend('d-product', 'drive_wallet'), 'seat_allowance')).toEqual({ kind: 'drive', driveId: 'd-product', chosen: 'seat_allowance', followOn: true });
   });
 
   it('a turn the gate did not resolve (skipped for a flat-rate provider) passes its target through', () => {
@@ -260,12 +260,30 @@ describe('spend-target: decideCallSpend', () => {
     expect(decision).toMatchObject({ kind: 'spend', source: 'drive_wallet', entitlementTier: 'pro' });
   });
 
-  it('a fallback the drive rule allows is taken and says so', () => {
+  it('a fallback the drive rule allows is taken and says so, naming the wallet it moved off', () => {
     const decision = decideCallSpend(input({
       driveWallet: walletLeg('w-product', 'active', 0),
       driveRule: { fallback: 'seat_allowance', guestsMaySpendDriveWallet: false },
     }));
-    expect(decision).toMatchObject({ kind: 'spend', source: 'seat_allowance', fallbackApplied: true, fallbackFrom: 'drive_wallet' });
+    expect(decision).toMatchObject({
+      kind: 'spend', source: 'seat_allowance', fallbackApplied: true, fallbackFrom: 'drive_wallet', fallbackFromWalletId: 'w-product',
+    });
+  });
+
+  it.each([
+    ['the drive wallet the turn resolved', 'drive_wallet', { driveWallet: walletLeg('w-product', 'active', 0) }, 'seat_allowance'],
+    ['the seat the turn fell back onto', 'seat_allowance', { seatAllowance: walletLeg('w-northwind-pool', 'active', 0) }, 'own_credits'],
+  ] as const)(
+    'SPEND-4 (partial) a follow-on call in a turn never re-applies a fallback: when %s empties, it refuses by name and charges zero',
+    (_label, chosen, legs, fallback) => {
+      const decision = decideCallSpend(input({ chosen, followOn: true, ...legs, driveRule: { fallback, guestsMaySpendDriveWallet: false } }));
+      expect(decision).toMatchObject({ kind: 'refuse', source: chosen, reason: 'source_empty', chargeCents: 0 });
+    },
+  );
+
+  it('SPEND-4 (partial) a follow-on call whose resolved source still covers it spends that source, unchanged', () => {
+    const decision = decideCallSpend(input({ chosen: 'drive_wallet', followOn: true, driveRule: { fallback: 'own_credits', guestsMaySpendDriveWallet: false } }));
+    expect(decision).toMatchObject({ kind: 'spend', source: 'drive_wallet', walletId: 'w-product', fallbackApplied: false, fallbackFromWalletId: null });
   });
 });
 
@@ -415,6 +433,7 @@ describe('spend-target: automations', () => {
       walletId: 'w-product',
       fallbackApplied: false,
       fallbackFrom: null,
+      fallbackFromWalletId: null,
       entitlementTier: 'business',
     });
   });

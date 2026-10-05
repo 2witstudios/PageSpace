@@ -64,6 +64,12 @@ export type SpendTarget =
        * drive's and the person's defaults still apply.
        */
       conversationId?: string | null;
+      /**
+       * Set by {@link resolvedSpend}: this call follows a gated call in the same turn and names
+       * the source that turn resolved. It spends that source or refuses by name; it never falls
+       * back again (SPEND-4).
+       */
+      followOn?: true;
     }
   | { kind: 'automation'; driveId: string };
 
@@ -130,7 +136,7 @@ export function automationRunUnreserved(input: {
  */
 export function resolvedSpend(target: SpendTarget, source: SpendSourceKind | undefined): SpendTarget {
   if (target.kind !== 'drive' || source === undefined) return target;
-  return { ...target, chosen: source };
+  return { ...target, chosen: source, followOn: true };
 }
 
 /**
@@ -399,6 +405,8 @@ export const ORG_ENTITLEMENT_TIER: SubscriptionTier = 'business';
 export interface CallSpendInput extends CallSpendLegs {
   /** The source this turn already resolved, for a follow-on call; null for a turn's first call. */
   chosen: SpendSourceKind | null;
+  /** A follow-on call in a turn (SpendTarget `followOn`): no fallback, ever (SPEND-4). */
+  followOn?: boolean;
   /** What is stored for this conversation and person (SPEND-3); none when omitted. */
   stored?: StoredSpendChoice;
   userOverride: UserSpendOverride;
@@ -416,6 +424,8 @@ export type CallSpendDecision =
       walletId: string;
       fallbackApplied: boolean;
       fallbackFrom: SpendSourceKind | null;
+      /** The chosen source's wallet a fallback moved the call off, else null (WAL-6b, see resolveSpendSource). */
+      fallbackFromWalletId: string | null;
       /** The tier whose entitlements (the pro-model gate) apply to this call (WAL-8). */
       entitlementTier: SubscriptionTier;
     }
@@ -468,6 +478,7 @@ export function personalRootDecision(consumerTier: SubscriptionTier): CallSpendD
     walletId: PERSONAL_ROOT_NOT_YET_CREATED,
     fallbackApplied: false,
     fallbackFrom: null,
+    fallbackFromWalletId: null,
     entitlementTier: consumerTier,
   };
 }
@@ -489,7 +500,11 @@ export function decideCallSpend(input: CallSpendInput): CallSpendDecision {
     seatAllowance: input.seatAllowance,
     personal: input.personal,
     chosen: null,
-    driveRule: input.driveRule,
+    // A follow-on call names the source its turn already resolved (resolvedSpend): it spends
+    // that source or refuses by name, and never falls back again. A fallback moves only a
+    // turn's FIRST call, where the turn shows the new source (SPEND-4); a tool, a compaction or
+    // a voice window that re-applied one would switch wallets with nothing on screen.
+    driveRule: input.followOn === true ? { ...input.driveRule, fallback: 'refuse' as const } : input.driveRule,
     userOverride: input.userOverride,
     reservationCents: input.reservationCents,
   };
@@ -510,6 +525,7 @@ export function decideCallSpend(input: CallSpendInput): CallSpendDecision {
     walletId: resolution.walletId,
     fallbackApplied: resolution.fallbackApplied,
     fallbackFrom: resolution.fallbackFrom,
+    fallbackFromWalletId: resolution.fallbackFromWalletId,
     entitlementTier: entitlementTierFor({
       source: resolution.source,
       walletOwnerTier: input.walletOwnerTier,

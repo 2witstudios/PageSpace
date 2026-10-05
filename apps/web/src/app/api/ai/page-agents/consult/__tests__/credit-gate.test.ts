@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { readSpendFallbackHeaders } from '@pagespace/lib/billing/spend-fallback';
 import type { SessionAuthResult } from '@/lib/auth';
 
 // ============================================================================
@@ -227,6 +228,25 @@ describe('POST /api/ai/page-agents/consult — prepaid credit gate', () => {
 
     expect(canConsumeAI).toHaveBeenCalled();
     expect(response.status).not.toBe(402);
+  });
+
+  it('SPEND-4 (partial) a drive rule that moved the consultation to another source is in the answer and its headers, from and to', async () => {
+    vi.mocked(canConsumeAI).mockResolvedValue({
+      allowed: true, reason: 'ok', holdId: 'h1', walletId: 'w-own', spendSource: 'own_credits',
+      fallback: { from: 'drive_wallet', to: 'own_credits' },
+    });
+    const response = await POST(makeRequest());
+    const body = await response.json();
+    expect(response.status).toBe(200);
+    expect(body.spendFallback).toEqual({ from: 'drive_wallet', to: 'own_credits', walletId: 'w-own' });
+    expect(readSpendFallbackHeaders(response.headers)).toEqual(body.spendFallback);
+  });
+
+  it('SPEND-4 (partial) a consultation that spent the source it named answers spendFallback null', async () => {
+    vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'h1', walletId: 'w-product', spendSource: 'drive_wallet' });
+    const response = await POST(makeRequest());
+    expect((await response.json()).spendFallback).toBeNull();
+    expect(readSpendFallbackHeaders(response.headers)).toBeNull();
   });
 
   it('rejects a non-admin consulting an admin-only (glm) agent with 403 and never invokes the model', async () => {

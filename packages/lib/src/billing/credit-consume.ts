@@ -25,7 +25,7 @@ import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { and, eq, isNull, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
 import { chargeMillicents, accruePending, allocateSpend, applyPaymentToDebt } from './credit-core';
-import { allocateWalletSpend, settleOvershoot, seatOvershootDeltaMillicents, DEFAULT_OVERSHOOT_CHOICE, type OvershootFunderChoice } from './wallet-core';
+import { allocateWalletSpend, settleOvershoot, seatOvershootDeltaMillicents, chosenSourceCharge, walletSourceKind, DEFAULT_OVERSHOOT_CHOICE, type ChosenSourceCharge, type OvershootFunderChoice } from './wallet-core';
 import { childWalletFunds, type WalletBalanceFacts } from './spend-target';
 import { readOrgSpendPolicy } from '../organizations/policy-reader';
 import { isSeatCountedSpendKind, loadSeatCapFacts, SEAT_OVERSHOOT_ENTRY } from './seat-allowance';
@@ -128,7 +128,10 @@ async function decrementAndSettle(
   holdId: string | null = null,
   spendKind: SpendKind = 'ai',
 ): Promise<SettleOutcome | null> {
-  const settled = await chargeWallet(tx, walletId, chargeMc, aiUsageLogId);
+  // WAL-6b: the hold names the source a drive rule moved this call off, if it did; read before
+  // the hold is released below.
+  const fallbackFromWalletId = holdId ? await holdFallbackFromWalletId(tx, holdId) : null;
+  const settled = await chargeWallet(tx, walletId, chargeMc, aiUsageLogId, fallbackFromWalletId);
 
   // No balance row yet (e.g. an existing user before the gate lazy-inits one).
   // Leave the ledger row 'pending' so the reconcile cron retries once a balance
@@ -289,7 +292,30 @@ export interface WalletSettlement {
   debt: { walletId: string; cents: number } | null;
 }
 
-type LockedWallet = WalletBalanceFacts & { pendingMillicents: number; overshootChoice: OvershootFunderChoice | null };
+type LockedWallet = WalletBalanceFacts & {
+  pendingMillicents: number;
+  overshootChoice: OvershootFunderChoice | null;
+  ownerType: 'user' | 'org';
+};
+
+async function holdFallbackFromWalletId(tx: Tx, holdId: string): Promise<string | null> {
+  const [hold] = await tx.select({ id: creditHolds.fallbackFromWalletId }).from(creditHolds).where(eq(creditHolds.id, holdId));
+  return hold?.id ?? null;
+}
+
+/**
+ * WAL-6b: the chosen source a drive rule moved this call off, locked in the global order —
+ * the chosen wallet, then its parent — BEFORE the charged root is locked, so a settle that
+ * fell back and one spending that drive wallet take their locks in the same order. Null when
+ * the call did not fall back, or the chosen wallet is gone.
+ */
+async function lockFallbackFrom(tx: Tx, fallbackFromWalletId: string | null): Promise<ChosenSourceCharge | null> {
+  if (fallbackFromWalletId === null) return null;
+  const chosen = await lockWallet(tx, fallbackFromWalletId);
+  if (!chosen) return null;
+  if (chosen.parentWalletId) await lockWallet(tx, chosen.parentWalletId);
+  return chosenSourceCharge(chosen);
+}
 
 async function lockWallet(tx: Tx, walletId: string): Promise<LockedWallet | null> {
   const rows = await tx.select().from(wallets).where(eq(wallets.id, walletId)).for('update');
@@ -310,13 +336,16 @@ export async function chargeWallet(
   walletId: string,
   chargeMc: number,
   aiUsageLogId: string | null,
+  // WAL-6b: the chosen wallet a drive rule moved this call off (the hold's fallbackFromWalletId).
+  fallbackFromWalletId: string | null = null,
 ): Promise<WalletSettlement | null> {
+  const fallbackFrom = await lockFallbackFrom(tx, fallbackFromWalletId === walletId ? null : fallbackFromWalletId);
   const bal = await lockWallet(tx, walletId);
   if (!bal) return null;
   // Fold the sub-cent charge into the charged wallet's carried remainder, then spend the
   // whole cents.
   const accrual = accruePending(bal.pendingMillicents ?? 0, chargeMc);
-  if (!bal.parentWalletId) return settleOnRootWallet(tx, bal, accrual.wholeCents, accrual.newPending);
+  if (!bal.parentWalletId) return settleOnRootWallet(tx, bal, accrual.wholeCents, accrual.newPending, fallbackFrom);
 
   const { settlement, draws } = await settleOnChildWallet(tx, bal, accrual.wholeCents, accrual.newPending);
   if (aiUsageLogId) {
@@ -432,29 +461,43 @@ export async function refundWalletCharge(tx: Tx, walletId: string, refundCents: 
  */
 async function settleOnRootWallet(
   tx: Tx,
-  bal: WalletBalanceFacts,
+  bal: LockedWallet,
   wholeCents: number,
   newPending: number,
+  fallbackFrom: ChosenSourceCharge | null = null,
 ): Promise<WalletSettlement> {
   const spend = allocateSpend(
     { monthlyCents: bal.monthlyRemainingCents, topupCents: bal.topupRemainingCents },
     wholeCents,
   );
+  // WAL-6b: overshoot on own credits a drive rule fell back onto lands where the CHOSEN source
+  // would have put it (settleOvershoot); anything else stays on this root, as before.
+  const landing = settleOvershoot({
+    source: walletSourceKind(bal),
+    overshootCents: spend.shortfallCents,
+    chargedWalletId: bal.id,
+    parentWalletId: null,
+    funderChoice: DEFAULT_OVERSHOOT_CHOICE,
+    fallbackFrom,
+  });
+  const debtHere = landing.kind !== 'none' && landing.walletId === bal.id;
   await tx
     .update(wallets)
     .set({
       monthlyRemainingCents: spend.monthlyCents,
       topupRemainingCents: spend.topupCents,
       pendingMillicents: newPending,
-      ...(spend.shortfallCents > 0
-        ? { debtCents: sql`${wallets.debtCents} + ${spend.shortfallCents}` }
-        : {}),
+      ...(debtHere ? { debtCents: sql`${wallets.debtCents} + ${landing.cents}` } : {}),
     })
     .where(eq(wallets.id, bal.id));
+  if (landing.kind !== 'none' && !debtHere) {
+    // Locked already: lockFallbackFrom took the chosen wallet and its parent first.
+    await tx.update(wallets).set({ debtCents: sql`${wallets.debtCents} + ${landing.cents}` }).where(eq(wallets.id, landing.walletId));
+  }
   return {
     appliedCents: spend.appliedCents,
     bucket: spend.spentTopup > spend.spentMonthly ? 'topup' : 'monthly',
-    debt: spend.shortfallCents > 0 ? { walletId: bal.id, cents: spend.shortfallCents } : null,
+    debt: landing.kind === 'none' ? null : { walletId: landing.walletId, cents: landing.cents },
   };
 }
 

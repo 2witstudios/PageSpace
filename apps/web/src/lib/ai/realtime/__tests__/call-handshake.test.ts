@@ -152,7 +152,14 @@ describe('runCallHandshake — the happy path', () => {
       callId: CALL_ID,
       answerSdp: ANSWER_SDP,
       attached: true,
+      spendFallback: null,
     });
+  });
+
+  it('SPEND-4 (partial) carries the realtime server\'s report that the opening gate fell back, from and to', async () => {
+    const spendFallback = { from: 'drive_wallet', to: 'own_credits', walletId: 'w-own' };
+    const { deps } = harness({ handoff: () => response({ json: { success: true, callId: CALL_ID, spendFallback } }) });
+    expect(await run(deps)).toMatchObject({ ok: true, attached: true, spendFallback });
   });
 
   it('should mint with the model it was GIVEN, never a built-in default', async () => {

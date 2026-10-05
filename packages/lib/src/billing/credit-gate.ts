@@ -21,6 +21,7 @@ import { wallets, personalRootWalletOf, PERSONAL_ROOT_WALLET_ARBITER } from '@pa
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { and, eq, gt, gte, inArray, or, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
+import type { SpendFallback } from './spend-fallback';
 import { loggers } from '../logging/logger-config';
 import {
   evaluateGate,
@@ -169,12 +170,10 @@ export interface SpendRefusal {
 /**
  * SPEND-4: the drive's fallback rule moved the call off the source it named. `from` is the
  * source the caller chose, `to` the source the hold was placed on. Present only when a
- * fallback happened, so the caller must show the new source (the chip and strip).
+ * fallback happened, so the caller must show the new source (the chip and strip); every entry
+ * point reports it in the one shape of spend-fallback.
  */
-export interface SpendFallback {
-  from: SpendSourceKind;
-  to: SpendSourceKind;
-}
+export type { SpendFallback } from './spend-fallback';
 
 /**
  * The gate's answer. On an allowed call it names the wallet the hold was placed on
@@ -367,8 +366,9 @@ export async function canConsumeAI(
         walletId: decision.walletId,
         source: decision.source,
         entitlementTier: decision.entitlementTier,
+        fallbackFromWalletId: decision.fallbackFromWalletId,
       })
-    : await gatePersonalRoot(userId, tier, opts).then((personal): CreditGateResult => personal.allowed
+    : await gatePersonalRoot(userId, tier, opts, decision.fallbackFromWalletId).then((personal): CreditGateResult => personal.allowed
         ? { ...personal, spendSource: 'own_credits', entitlementTier: decision.entitlementTier }
         : personal);
   if (!result.allowed || fallback === undefined) return result;
@@ -420,6 +420,9 @@ async function gatePersonalRoot(
   userId: string,
   tier: SubscriptionTier,
   opts: GateOptions,
+  // WAL-6b: the chosen source's wallet when a drive rule fell back onto own credits, recorded
+  // on the hold so the settle lands overshoot where that choice would have (credit-consume).
+  fallbackFromWalletId: string | null = null,
 ): Promise<CreditGateResult> {
   const now = new Date();
 
@@ -608,7 +611,7 @@ async function gatePersonalRoot(
     // reconcile sweep to expire.
     const inserted = await tx
       .insert(creditHolds)
-      .values({ userId, walletId: bal.id, estCents: estCost, expiresAt, spendKind: opts.spendKind ?? 'ai' })
+      .values({ userId, walletId: bal.id, fallbackFromWalletId, estCents: estCost, expiresAt, spendKind: opts.spendKind ?? 'ai' })
       .returning({ id: creditHolds.id });
 
     // Net spendable after ALL holds (existing `reserved` + this call's `estCost`) and
@@ -677,7 +680,7 @@ async function gateSharedWallet(
   opts: GateOptions,
   // `source` is null for a charge that names no spend source at all: an org drive's compute,
   // held on the org pool as the org's own spend (canConsumeOrgPool, WAL-9).
-  chosen: { walletId: string; source: SpendSourceKind | null; entitlementTier: SubscriptionTier },
+  chosen: { walletId: string; source: SpendSourceKind | null; entitlementTier: SubscriptionTier; fallbackFromWalletId?: string | null },
 ): Promise<CreditGateResult> {
   const now = new Date();
   const { estCost, maxInFlight, expiresAt, dailyCap, dayStart } = callBounds(tier, opts, now);
@@ -776,7 +779,7 @@ async function gateSharedWallet(
 
     const inserted = await tx
       .insert(creditHolds)
-      .values({ userId, walletId: wallet.id, estCents: estCost, expiresAt, spendKind: opts.spendKind ?? 'ai' })
+      .values({ userId, walletId: wallet.id, fallbackFromWalletId: chosen.fallbackFromWalletId ?? null, estCents: estCost, expiresAt, spendKind: opts.spendKind ?? 'ai' })
       .returning({ id: creditHolds.id });
 
     return {

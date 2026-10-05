@@ -1,0 +1,2 @@
+ALTER TABLE "credit_holds" ADD COLUMN "fallbackFromWalletId" text;--> statement-breakpoint
+ALTER TABLE "credit_holds" ADD CONSTRAINT "credit_holds_fallbackFromWalletId_wallets_id_fk" FOREIGN KEY ("fallbackFromWalletId") REFERENCES "public"."wallets"("id") ON DELETE set null ON UPDATE no action;

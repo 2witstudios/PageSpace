@@ -684,6 +684,11 @@
       "import": "./dist/billing/credit-gate.js",
       "require": "./dist/billing/credit-gate.js"
     },
+    "./billing/spend-fallback": {
+      "types": "./dist/billing/spend-fallback.d.ts",
+      "import": "./dist/billing/spend-fallback.js",
+      "require": "./dist/billing/spend-fallback.js"
+    },
     "./billing/spend-target": {
       "types": "./dist/billing/spend-target.d.ts",
       "import": "./dist/billing/spend-target.js",

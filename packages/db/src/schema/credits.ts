@@ -94,6 +94,13 @@ export const creditHolds = pgTable('credit_holds', {
   userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
   // WAL-5: holds are per wallet — the wallet this reservation is against.
   walletId: text('walletId').notNull().references(() => wallets.id, { onDelete: 'cascade' }),
+  /**
+   * WAL-6b: set only when a drive's fallback rule moved the call off the source it chose — the
+   * chosen source's wallet. The settle lands any overshoot where THAT choice would have put it,
+   * so a fallback onto the consumer's own credits never leaves them the overshoot. Null when the
+   * call spends what it named; set null if that wallet is deleted before the settle.
+   */
+  fallbackFromWalletId: text('fallbackFromWalletId').references(() => wallets.id, { onDelete: 'set null' }),
   estCents: integer('estCents').notNull(),
   aiUsageLogId: text('aiUsageLogId'),
   /** AI spend, person-run compute or an env/app accrual — see {@link SPEND_KINDS}. Every kind counts toward the recorded person's seat. */

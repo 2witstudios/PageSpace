@@ -29,6 +29,7 @@
  * handshake is testable without a live call.
  */
 
+import { readSpendFallbackBody, type SpendFallbackNotice } from '@pagespace/lib/billing/spend-fallback';
 import {
   CLIENT_SECRETS_URL,
   REALTIME_CALLS_URL,
@@ -89,6 +90,11 @@ export type HandshakeSuccess = {
    * gets a working audio call with no server-side features — see `handOff`.
    */
   readonly attached: boolean;
+  /**
+   * The realtime server's report that the call's opening gate fell back to another source
+   * (SPEND-4), for the caller to show; null when it spent what it named or did not attach.
+   */
+  readonly spendFallback: SpendFallbackNotice | null;
 };
 
 export type HandshakeResult = HandshakeSuccess | HandshakeFailure;
@@ -195,7 +201,7 @@ export const parseCallId = (location: string | null): string | undefined => {
  * the call went ahead unmetered.
  */
 type HandoffOutcome =
-  | { readonly kind: 'attached' }
+  | { readonly kind: 'attached'; readonly spendFallback: SpendFallbackNotice | null }
   /** The tool/transcript/metering plane is unreachable. Degrade, do not fail. */
   | { readonly kind: 'degraded' }
   /** A policy said no: out of credit, or on the concurrency limit. */
@@ -294,7 +300,11 @@ const handOff = async (
           }
         : { kind: 'degraded' };
     }
-    return { kind: 'attached' };
+    const answer: unknown = await response.json().catch(() => undefined);
+    return {
+      kind: 'attached',
+      spendFallback: readSpendFallbackBody((answer as { spendFallback?: unknown } | undefined)?.spendFallback),
+    };
   } catch (error) {
     // An unreachable realtime server is an outage, not a refusal: nothing
     // decided anything about this call, so the caller keeps the degraded one.
@@ -441,5 +451,11 @@ export const runCallHandshake = async (
     };
   }
 
-  return { ok: true, callId, answerSdp, attached: outcome.kind === 'attached' };
+  return {
+    ok: true,
+    callId,
+    answerSdp,
+    attached: outcome.kind === 'attached',
+    spendFallback: outcome.kind === 'attached' ? outcome.spendFallback : null,
+  };
 };
