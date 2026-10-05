@@ -349,6 +349,28 @@ describe('ChatHistory', () => {
     });
   });
 
+  test('left open across midnight', async () => {
+    // 23:59:30 on Oct 5 in Los Angeles; the clock and its timers are fake from here.
+    vi.useRealTimers();
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    vi.setSystemTime(new Date('2026-10-06T06:59:30.000Z'));
+    const container = mountChat(historyWeb(fakeTurnStream()));
+    await settle(listed(container));
+    const before = groups(container).map(([label]) => label);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(31_000);
+    });
+    assert({
+      given: 'the history open at 23:59:30, then the clock passing local midnight with nothing else happening',
+      should: 'move every chat one day back',
+      actual: [before, groups(container).map(([label]) => label)],
+      expected: [
+        ['Today', 'Yesterday', 'Sep 18'],
+        ['Yesterday', 'Oct 4', 'Sep 18'],
+      ],
+    });
+  });
+
   test('a list that failed to load', async () => {
     let fail = true;
     const web = historyWeb(fakeTurnStream(), {

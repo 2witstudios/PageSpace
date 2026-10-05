@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { agentConversation } from '../chat-model/fixtures';
-import { historyDayLabel, historyDays } from './history-days';
+import { historyDayLabel, historyDays, untilNextDay } from './history-days';
 
 // Days are the viewer's, not UTC's: every case runs in a zone far from UTC,
 // where a UTC calendar would file the evening's chats under tomorrow.
@@ -64,6 +64,21 @@ describe('historyDayLabel()', () => {
       should: 'still file it under Today',
       actual: historyDayLabel('2026-10-06T05:00:00.000Z', NOW), // 22:00 PDT Oct 5
       expected: 'Today',
+    });
+  });
+});
+
+describe('untilNextDay()', () => {
+  test('to the next local midnight', () => {
+    assert({
+      given: '08:30 local, 23:59:30 local, and the night daylight saving ends (a 25-hour day)',
+      should: 'count to the next local midnight, not the next UTC one',
+      actual: [
+        untilNextDay(NOW),
+        untilNextDay(new Date('2026-10-06T06:59:30.000Z')),
+        untilNextDay(new Date('2026-11-01T07:00:00.000Z')), // 00:00 PDT Nov 1 → 00:00 PST Nov 2
+      ],
+      expected: [15.5 * 3_600_000, 30_000, 25 * 3_600_000],
     });
   });
 });

@@ -31,6 +31,10 @@ export const historyDayLabel = (iso: string, now: Date): string => {
   return at.getFullYear() === now.getFullYear() ? date : `${date}, ${at.getFullYear()}`;
 };
 
+/** Milliseconds from `now` to the viewer's next local midnight, when every label moves a day. */
+export const untilNextDay = (now: Date): number =>
+  new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime() - now.getTime();
+
 export type HistoryDay = {
   /** Sentence case: Today, Yesterday, Sep 18. */
   readonly label: string;

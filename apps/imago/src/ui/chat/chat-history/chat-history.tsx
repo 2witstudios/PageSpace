@@ -5,14 +5,14 @@
 // for its latest), grouped by the viewer's day. Picking one or New chat only
 // changes shell state, so the pane, its composer and the rail stay mounted.
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useUiState } from '@/ui/store/store';
 import type { UiState } from '@/ui/store/state';
 import { dispatch, transactions } from '@/ui/store/transactions';
 import { shownConversationId } from '../chat-plugin';
 import { useAgentConversations } from '../use-chat-data/use-chat-data';
 import { useChatAgent } from '../use-chat-agent/use-chat-agent';
-import { historyDays } from './history-days';
+import { historyDays, untilNextDay } from './history-days';
 import { renderChatHistory, type ChatHistoryList } from './chat-history.render';
 
 const selectConversation = (state: UiState) => state.resources.chatConversationId;
@@ -25,6 +25,13 @@ export function ChatHistory() {
   const chatConversationId = useUiState(selectConversation);
   const chatNew = useUiState(selectNew);
   const activeId = shownConversationId({ chatConversationId, chatNew }, conversations?.[0]?.id ?? null);
+
+  // The day labels move at the viewer's midnight even if nothing else re-renders the list.
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const timer = setTimeout(() => setNow(new Date()), untilNextDay(now));
+    return () => clearTimeout(timer);
+  }, [now]);
 
   // A turn starting or ending changes the list: a new chat's first send
   // creates its conversation, and every reply moves its chat to the top.
@@ -41,7 +48,7 @@ export function ChatHistory() {
     if (agents !== undefined && agentId === null) return { status: 'ready', days: [], hasMore: false, loadingMore: false };
     if (agentsError !== undefined || error !== undefined) return { status: 'error' };
     if (conversations === undefined) return { status: 'loading' };
-    return { status: 'ready', days: historyDays(conversations, new Date()), hasMore, loadingMore: isLoadingMore };
+    return { status: 'ready', days: historyDays(conversations, now), hasMore, loadingMore: isLoadingMore };
   })();
 
   return renderChatHistory({
