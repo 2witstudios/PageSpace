@@ -180,6 +180,31 @@ describe('readerExtensions()', () => {
       expected: [['/d2/files/p7'], true, true],
     });
   });
+
+  test('page mentions opened in a new tab', () => {
+    const opened: string[] = [];
+    const view = read(
+      '<p>See <a href="/dashboard/d2/p7" data-mention-type="page" data-page-id="p7" data-drive-id="d2">@Brief</a>.</p>',
+      (href) => opened.push(href),
+    );
+    const mention = view.querySelector('a[data-page-id="p7"]') as HTMLAnchorElement;
+    const modified = new MouseEvent('click', { bubbles: true, cancelable: true, metaKey: true });
+    // What imago did with the click, read once it has passed through; jsdom cannot then open a tab.
+    let preventedByImago: boolean | null = null;
+    const browser = (event: Event) => {
+      preventedByImago = event.defaultPrevented;
+      event.preventDefault();
+    };
+    document.addEventListener('click', browser);
+    mention.dispatchEvent(modified);
+    document.removeEventListener('click', browser);
+    assert({
+      given: 'a page mention middle-clicked or ⌘-clicked',
+      should: 'point at the page in imago (with its basePath), and leave a modified click to the browser',
+      actual: [mention.getAttribute('href'), opened, preventedByImago],
+      expected: ['/imago/d2/files/p7', [], false],
+    });
+  });
 });
 
 describe('mentionHrefOf()', () => {
