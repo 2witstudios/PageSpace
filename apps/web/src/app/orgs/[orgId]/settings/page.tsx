@@ -11,6 +11,7 @@ import { OrgPageContainer, OrgPageHeader } from '@/components/orgs/OrgPageHeader
 import { OrgMark } from '@/components/orgs/OrgMark';
 import { OrgBadge, OrgRoleBadge } from '@/components/orgs/OrgBadge';
 import { LeaveOrgDialog } from '@/components/orgs/LeaveOrgDialog';
+import { OrgBillingBanner } from '@/components/orgs/OrgBillingBanner';
 import { ORG_HUB_ICONS } from '@/components/orgs/org-hub-icons';
 import { orgHubSections, type OrgHubRow } from '@/lib/orgs/org-hub';
 import { orgErrorMessage } from '@/lib/orgs/org-error-copy';
@@ -58,7 +59,7 @@ export default function OrgSettingsPage() {
   const router = useRouter();
   const orgId = params.orgId as string;
   const { showBilling } = useBillingVisibility();
-  const { org, isLoading, error } = useOrg(orgId);
+  const { org, isLoading, error, mutate: refreshOrg } = useOrg(orgId);
   const { mutate: refreshMyOrgs } = useMyOrgs();
   const role = org?.viewer.role;
   const counts = useOrgHubCounts(orgId, role);
@@ -110,6 +111,8 @@ export default function OrgSettingsPage() {
           <OrgRoleBadge role={role} />
         </span>
       </div>
+
+      <OrgBillingBanner orgId={orgId} orgName={name} notice={org.billingNotice} onReactivated={() => void refreshOrg()} />
 
       <div className="space-y-8">
         {sections.map((section) => (

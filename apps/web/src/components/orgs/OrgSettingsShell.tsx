@@ -62,7 +62,7 @@ export function OrgSettingsShell({ title, description, wide = true, minRole = 'A
     return (
       <OrgPageContainer wide={wide}>
         <OrgPageHeader {...back} title={title} />
-        <p className="text-muted-foreground">Only the Owner or an Admin of {orgName} can see this page.</p>
+        <p className="text-muted-foreground">{minRole === 'OWNER' ? `Only the Owner of ${orgName} can see this page.` : `Only the Owner or an Admin of ${orgName} can see this page.`}</p>
       </OrgPageContainer>
     );
   }

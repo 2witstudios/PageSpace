@@ -27,6 +27,7 @@ vi.mock('@/hooks/useOrgs', () => ({
   useOrgRealtime: mocks.useOrgRealtime,
   useMyOrgs: mocks.useMyOrgs,
 }));
+vi.mock('next-themes', () => ({ useTheme: () => ({ resolvedTheme: 'light' }) }));
 vi.mock('@/hooks/useBillingVisibility', () => ({ useBillingVisibility: () => ({ showBilling: mocks.showBilling }) }));
 vi.mock('@/lib/orgs/org-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/orgs/org-api')>()),
@@ -104,6 +105,17 @@ describe('org settings hub', () => {
     await userEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Leave' }));
     await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith('Transfer ownership to another member before you leave.'));
     expect(mocks.push).not.toHaveBeenCalled();
+  });
+
+  it('SEAT-9 (partial): the hub shows the lapse banner: reactivate for an Admin, read-only for a Member', () => {
+    mocks.useOrg.mockReturnValue({ org: { ...org('ADMIN'), billingNotice: { kind: 'reactivate', reason: 'canceled', canManageBilling: true } }, isLoading: false });
+    const { unmount } = render(<OrgSettingsPage />);
+    expect(screen.getByRole('button', { name: 'Reactivate' })).toBeTruthy();
+    unmount();
+    mocks.useOrg.mockReturnValue({ org: { ...org('MEMBER'), billingNotice: { kind: 'read_only', canManageBilling: false } }, isLoading: false });
+    render(<OrgSettingsPage />);
+    expect(screen.getByText('Northwind Labs is read-only')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Reactivate' })).toBeNull();
   });
 
   it('subscribes to org:changed for this org', () => {
