@@ -1,5 +1,5 @@
 import { renderToStaticMarkup } from 'react-dom/server';
-import { beforeEach, describe, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
 
 // Request-scoped Next APIs have no request outside a server; the layout's own
@@ -32,8 +32,14 @@ const dataTheme = (html: string): string | undefined =>
   html.match(/<html[^>]*\sdata-theme="([^"]*)"/)?.[1];
 
 describe('RootLayout theme', () => {
+  // The layout renders only while imago is on (IMG-1.8's IMAGO_ENABLED gate).
   beforeEach(() => {
     request.cookie = undefined;
+    vi.stubEnv('IMAGO_ENABLED', 'true');
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   test('the classic theme cookie', async () => {
