@@ -4,7 +4,7 @@ import { afterEach, describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { ApiError } from '@/api/errors';
 import { click, mount, unmountAll } from '../../test-support/dom';
-import { ERROR_DETAIL, edgeOf, renderEmptyState, renderErrorState } from './edge-state.render';
+import { ERROR_DETAIL, edgeOf, renderEmptyState, renderErrorState, renderLoadingState } from './edge-state.render';
 
 afterEach(unmountAll);
 
@@ -21,6 +21,17 @@ describe('renderEmptyState()', () => {
         '<h2 class="m-0 text-md font-semibold text-ink">No task lists yet</h2>' +
         '<p class="m-0 text-sm text-ink-muted">Task lists in this drive show up here.</p>' +
         '</div>',
+    });
+  });
+});
+
+describe('renderLoadingState()', () => {
+  test('an object on its way', () => {
+    assert({
+      given: 'what is loading',
+      should: 'say so in one quiet status line',
+      actual: renderToStaticMarkup(renderLoadingState('Loading page…')),
+      expected: '<p role="status" class="p-4 text-sm text-ink-muted">Loading page…</p>',
     });
   });
 });

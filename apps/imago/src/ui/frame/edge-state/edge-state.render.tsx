@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { ApiError } from '@/api/errors';
 import { renderButton } from '../../components/button/button.render';
+import { edgeLoadingClass } from './edge-state-class';
 import { notFoundClass, notFoundDetailClass, notFoundTitleClass } from '../not-found/not-found-class';
 
 /**
@@ -24,6 +25,15 @@ export function renderEmptyState({ title, detail }: EmptyStateProps): ReactNode 
       <h2 className={notFoundTitleClass}>{title}</h2>
       <p className={notFoundDetailClass}>{detail}</p>
     </div>
+  );
+}
+
+/** An object still loading, e.g. "Loading page…". */
+export function renderLoadingState(text: string): ReactNode {
+  return (
+    <p role="status" className={edgeLoadingClass}>
+      {text}
+    </p>
   );
 }
 

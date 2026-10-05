@@ -52,6 +52,8 @@ export type FileTree = {
   /** Expands or collapses a page; expanding loads its children. */
   readonly toggle: (pageId: string) => void;
   readonly loadChildren: (pageId: string) => Promise<LoadResult>;
+  /** Void action: asks the server for the tree again after a failure. */
+  readonly retry: () => void;
 };
 
 const OFFLINE = 'Could not reach PageSpace';
@@ -169,5 +171,7 @@ export const useFileTree = (driveId: string | null): FileTree => {
     [data, byParent],
   );
 
-  return { nodes, error: error as unknown, isLoading, expandedIds, loadingIds, toggle, loadChildren };
+  const retry = useCallback(() => void mutate(), [mutate]);
+
+  return { nodes, error: error as unknown, isLoading, expandedIds, loadingIds, toggle, loadChildren, retry };
 };

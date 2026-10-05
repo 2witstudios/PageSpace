@@ -50,6 +50,12 @@ vi.mock('@/ui/tasks/tasks-pane/tasks-pane', () => ({
     h('div', { 'data-tasks-pane': driveId, 'data-selected': selectedPageId ?? '' }),
 }));
 
+// The files pane loads the drive's tree through SWR and realtime; its own
+// suite proves its edge states. Here it only shows what the shell handed it.
+vi.mock('@/ui/files/files-pane/files-pane', () => ({
+  FilesPane: ({ driveId }: { driveId: string }) => h('div', { 'data-files-pane': driveId }),
+}));
+
 const { Shell } = await import('./shell');
 
 let root: Root | null = null;
@@ -176,6 +182,21 @@ describe('Shell', () => {
         ['', '', 'conversation-1'],
         null,
       ],
+    });
+  });
+
+  test('the files section fills its list', () => {
+    render();
+    const seen = ['/drive-1/files', '/drive-1/files/page-1', '/drive-1/tasks'].map((pathname) => {
+      navigate(pathname);
+      return slot('list').querySelector<HTMLElement>('[data-files-pane]')?.dataset.filesPane ?? null;
+    });
+
+    assert({
+      given: 'the Files list, an open page, then Tasks',
+      should: 'put the drive’s files pane in the list slot, and only in Files',
+      actual: seen,
+      expected: ['drive-1', 'drive-1', null],
     });
   });
 

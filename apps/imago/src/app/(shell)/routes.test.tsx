@@ -5,6 +5,8 @@ import { assert } from 'riteway/vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { ReactElement, ReactNode } from 'react';
 import { ChannelThread } from '@/ui/messages/thread-view/channel-thread';
+import { PageObject } from '@/ui/files/page-object/page-object';
+import { ConversationObject } from '@/ui/messages/conversation-object/conversation-object';
 
 // getViewer() itself is proven against Postgres in
 // lib/auth/get-viewer.integration.test.ts; here it is every route's seam.
@@ -42,15 +44,17 @@ const props = () => ({ params: Promise.resolve({ driveId: 'drive-1', pageId: 'pa
 const routes: readonly { readonly path: string; readonly load: () => Promise<{ default: Page }>; readonly object: string | null }[] = [
   { path: '[driveId]', load: () => import('./[driveId]/page'), object: null },
   { path: '[driveId]/files', load: () => import('./[driveId]/files/page'), object: null },
-  { path: '[driveId]/files/[pageId]', load: () => import('./[driveId]/files/[pageId]/page'), object: 'Page' },
+  { path: '[driveId]/files/[pageId]', load: () => import('./[driveId]/files/[pageId]/page'), object: 'page-object' },
   { path: '[driveId]/messages', load: () => import('./[driveId]/messages/page'), object: null },
   { path: '[driveId]/messages/[pageId]', load: () => import('./[driveId]/messages/[pageId]/page'), object: 'channel-thread' },
   { path: '[driveId]/tasks', load: () => import('./[driveId]/tasks/page'), object: null },
   { path: '[driveId]/settings', load: () => import('./[driveId]/settings/page'), object: 'Drive settings' },
   { path: 'dm', load: () => import('./dm/page'), object: null },
-  { path: 'dm/[conversationId]', load: () => import('./dm/[conversationId]/page'), object: 'Conversation' },
+  { path: 'dm/[conversationId]', load: () => import('./dm/[conversationId]/page'), object: 'conversation-object' },
   { path: 'account', load: () => import('./account/page'), object: 'Account' },
 ];
+
+const placeholder = (label: string) => `<div class="p-4 text-ink-muted" data-object-placeholder="">${label}</div>`;
 
 const files = (dir: string): string[] =>
   readdirSync(dir).flatMap((name) => {
@@ -230,19 +234,31 @@ describe('the stage routes', () => {
           const thread = element as ReactElement;
           return [thread.type === ChannelThread, thread.props];
         }
+        if (route.object === 'page-object' || route.object === 'conversation-object') {
+          // The gate settles what the id names in the browser; its suite proves the edges.
+          const gate = element as ReactElement<{ children: ReactNode }>;
+          const { children, ...gateProps } = gate.props;
+          return [gate.type, gateProps, renderToStaticMarkup(children)];
+        }
         return element === null ? null : renderToStaticMarkup(element);
       }),
     );
 
     assert({
       given: 'each stage route for a signed-in viewer',
-      should: 'render nothing for the stages with no object, the channel thread for the viewer on a channel, and only the object’s placeholder otherwise',
+      should: 'render nothing for the stages with no object, the channel thread for the viewer on a channel, a page or conversation behind the gate that settles its id, and only the object’s placeholder otherwise',
       actual: rendered,
       expected: routes.map((route) => {
         if (route.object === 'channel-thread') {
           return [true, { driveId: 'drive-1', pageId: 'page-1', viewerId: 'user-1' }];
         }
-        return route.object === null ? null : `<div class="p-4 text-ink-muted" data-object-placeholder="">${route.object}</div>`;
+        if (route.object === 'page-object') {
+          return [PageObject, { driveId: 'drive-1', pageId: 'page-1' }, placeholder('Page')];
+        }
+        if (route.object === 'conversation-object') {
+          return [ConversationObject, { conversationId: 'c-1' }, placeholder('Conversation')];
+        }
+        return route.object === null ? null : placeholder(route.object);
       }),
     });
 
