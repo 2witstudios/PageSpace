@@ -12,7 +12,7 @@ import { pages } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { pagePermissions } from '@pagespace/db/schema/members';
 import { getDrivePolicies } from '../organizations/policy-reader';
-import { reinsertHeldAccess, type ClaimedGuestApproval } from './guest-holds';
+import { grantStillLive, reinsertHeldAccess, type ClaimedGuestApproval } from './guest-holds';
 
 export type ApprovedPageGrant =
   | { ok: true; driveId: string; userId: string; pageIds: string[] }
@@ -38,7 +38,8 @@ export async function completeApprovedPageGrant(claim: ClaimedGuestApproval): Pr
     const live = new Set(
       (asked.length === 0 ? [] : await tx.select({ id: pages.id }).from(pages).where(and(inArray(pages.id, asked.map((p) => p.pageId)), eq(pages.driveId, claim.driveId)))).map((p) => p.id),
     );
-    const grants = asked.filter((p) => live.has(p.pageId));
+    // A grant that expired while it waited gives nothing and is not written; one that has not keeps its expiry (N1).
+    const grants = asked.filter((p) => live.has(p.pageId) && grantStillLive(p.expiresAt));
     if (grants.length === 0 && !member && tokenScopes.length === 0) return { ok: false, error: 'PAGE_GONE' } as const;
     // Access the person already held before it was queued (a drive or pages moved into the org, a restore): their
     // member row and token scopes come back as they were.
@@ -48,7 +49,7 @@ export async function completeApprovedPageGrant(claim: ClaimedGuestApproval): Pr
     const invitedBy = claim.request.invitedBy ?? null;
     const sharer = invitedBy && (await tx.select({ id: users.id }).from(users).where(eq(users.id, invitedBy)).limit(1)).length > 0 ? invitedBy : null;
     for (const p of grants) {
-      const flags = { canView: p.canView, canEdit: p.canEdit, canShare: p.canShare, canDelete: p.canDelete ?? false };
+      const flags = { canView: p.canView, canEdit: p.canEdit, canShare: p.canShare, canDelete: p.canDelete ?? false, expiresAt: p.expiresAt ? new Date(p.expiresAt) : null };
       const grantedBy = sharer;
       await tx
         .insert(pagePermissions)

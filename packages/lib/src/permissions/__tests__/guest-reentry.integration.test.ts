@@ -32,7 +32,8 @@ import { leaveOrganization } from '../../organizations/leave';
 import { moveDriveToOrg, type OrgDriveServiceDeps } from '../../services/org-drive-service';
 import { orgDriveServiceDeps } from '../../services/org-drive-service-deps';
 import { getUserAccessLevel } from '../permissions';
-import { admitReentry, claimPendingGuestApproval } from '../guest-holds';
+import { admitReentry, claimPendingGuestApproval, consumeApprovedInvitation, holdOrgGuestsUnderPolicy, listPendingGuestApprovalViews, markApprovedInvitation } from '../guest-holds';
+import { lockOrgsOfDrivesForShare } from '../../organizations/policy-reader';
 import { completeApprovedPageGrant } from '../page-grant-admission';
 
 const deps: OrgDriveServiceDeps = { ...orgDriveServiceDeps, syncOrgMembership: async () => async () => {} };
@@ -138,7 +139,7 @@ describe('a drive moved into an org brings its outsiders under the guests policy
     expect(await getUserAccessLevel(w.outsider, page)).toBeNull();
     const [pending] = await holds('pending_approval');
     expect(pending).toMatchObject({ origin: 'page_grant', driveId: drive });
-    expect(pending.request.permissions).toEqual([{ pageId: page, ...EDIT }]);
+    expect(pending.request.permissions).toEqual([{ pageId: page, ...EDIT, expiresAt: null }]);
 
     const claim = await claimPendingGuestApproval({ orgId: w.orgId, holdId: pending.id });
     if (!claim) throw new Error('claim');
@@ -238,7 +239,7 @@ describe('admitReentry, asked by every restore, rollback and redo', () => {
     await setGuests('approve');
     expect(await ask(w.outsider)).toMatchObject({ outcome: 'held' });
     const [pending] = await holds('pending_approval');
-    expect(pending.request.permissions).toEqual([{ pageId: w.orgPage, ...EDIT }]);
+    expect(pending.request.permissions).toEqual([{ pageId: w.orgPage, ...EDIT, expiresAt: null }]);
 
     await setGuests('on');
     expect(await ask(w.outsider)).toEqual({ outcome: 'admit' });
@@ -249,5 +250,96 @@ describe('admitReentry, asked by every restore, rollback and redo', () => {
     await setGuests('approve');
     expect(await ask(w.outsider)).toEqual({ outcome: 'admit' });
     expect(await ask(w.outsider, { role: 'MEMBER' })).toMatchObject({ outcome: 'held' });
+  });
+});
+
+describe('approve mode replays exactly what was held (independent re-verify of #2762)', () => {
+  it('POL-2 (partial) a queued grant keeps its expiry and an already-expired one is never queued, so approving neither extends nor resurrects access', async () => {
+    await setGuests('approve');
+    const drive = await mkDrive(w.owner);
+    const expiredPage = (await factories.createPage(drive)).id;
+    const soonPage = (await factories.createPage(drive)).id;
+    const soon = new Date(Date.now() + 3_600_000);
+    await db.insert(pagePermissions).values([
+      { pageId: expiredPage, userId: w.outsider, ...EDIT, grantedBy: w.owner, expiresAt: new Date(Date.now() - 86_400_000) },
+      { pageId: soonPage, userId: w.outsider, ...EDIT, grantedBy: w.owner, expiresAt: soon },
+    ]);
+    await moveDriveToOrg(w.owner, drive, { orgId: w.orgId, orgVisibility: 'RESTRICTED' }, deps);
+
+    const [pending] = await holds('pending_approval');
+    expect(pending.request.permissions).toEqual([{ pageId: soonPage, ...EDIT, expiresAt: soon.toISOString() }]);
+    const claim = await claimPendingGuestApproval({ orgId: w.orgId, holdId: pending.id });
+    if (!claim) throw new Error('claim');
+    await completeApprovedPageGrant(claim);
+
+    expect(await getUserAccessLevel(w.outsider, expiredPage)).toBeNull();
+    const [kept] = await db.select().from(pagePermissions).where(and(eq(pagePermissions.userId, w.outsider), eq(pagePermissions.pageId, soonPage)));
+    expect(kept.expiresAt?.toISOString()).toBe(soon.toISOString());
+  });
+
+  it('POL-2 (partial) admitReentry never queues a grant that has already expired', async () => {
+    await setGuests('approve');
+    const outcome = await db.transaction((tx) => admitReentry(tx, {
+      driveId: w.orgDrive, userId: w.outsider, grants: [{ pageId: w.orgPage, ...EDIT, expiresAt: new Date(Date.now() - 1000) }], requestedBy: w.owner,
+    }));
+    expect(outcome).toEqual({ outcome: 'admit' });
+    expect(await holds('pending_approval')).toEqual([]);
+  });
+
+  it('POL-2 (partial) X-6 (partial) pages moved in under approve: an outsider with only a PENDING invitation row on the drive is queued, not let through; an accepted guest keeps the grant', async () => {
+    await setGuests('approve');
+    const [pendingGuest, acceptedGuest] = [w.outsider, await mkUser()];
+    await db.insert(driveMembers).values([
+      { driveId: w.orgDrive, userId: pendingGuest, role: 'MEMBER', acceptedAt: null, invitedBy: w.owner },
+      { driveId: w.orgDrive, userId: acceptedGuest, role: 'MEMBER', acceptedAt: new Date(), invitedBy: w.owner },
+    ]);
+    await db.insert(pagePermissions).values([
+      { pageId: w.orgPage, userId: pendingGuest, ...EDIT, grantedBy: w.owner },
+      { pageId: w.orgPage, userId: acceptedGuest, ...EDIT, grantedBy: w.owner },
+    ]);
+    await db.transaction((tx) => holdOrgGuestsUnderPolicy(tx, { orgId: w.orgId, driveId: w.orgDrive, pageIds: [w.orgPage] }));
+
+    expect(await db.select().from(pagePermissions).where(eq(pagePermissions.userId, pendingGuest))).toEqual([]);
+    expect(await holds('pending_approval', pendingGuest)).toHaveLength(1);
+    expect(await db.select().from(pagePermissions).where(eq(pagePermissions.userId, acceptedGuest))).toHaveLength(1);
+  });
+
+  it('POL-2 (partial) an approval admits exactly the invitation that was approved: another invitation to the same address is not admitted by it, and guests OFF withdraws every unused approval', async () => {
+    await setGuests('approve');
+    await db.transaction((tx) => markApprovedInvitation(tx, { orgId: w.orgId, driveId: w.orgDrive, email: 'x@example.com', approvedBy: w.owner, invite: { kind: 'page', id: 'pinv_approved' } }));
+    expect(await consumeApprovedInvitation(db, { driveId: w.orgDrive, invite: { kind: 'drive', id: 'dinv_other' } })).toBe(false);
+    expect(await consumeApprovedInvitation(db, { driveId: w.orgDrive, invite: { kind: 'drive', id: 'pinv_approved' } })).toBe(false);
+    expect(await consumeApprovedInvitation(db, { driveId: w.orgDrive, invite: { kind: 'page', id: 'pinv_approved' } })).toBe(true);
+    expect(await consumeApprovedInvitation(db, { driveId: w.orgDrive, invite: { kind: 'page', id: 'pinv_approved' } })).toBe(false);
+
+    await db.transaction((tx) => markApprovedInvitation(tx, { orgId: w.orgId, driveId: w.orgDrive, email: 'y@example.com', approvedBy: w.owner, invite: { kind: 'drive', id: 'dinv_y' } }));
+    await setGuests('off');
+    await setGuests('approve');
+    expect(await consumeApprovedInvitation(db, { driveId: w.orgDrive, invite: { kind: 'drive', id: 'dinv_y' } })).toBe(false);
+  });
+
+  it('POL-2 (partial) the approval queue shows what approving will replay: the held role, custom role, token scopes and the earliest expiry', async () => {
+    await setGuests('approve');
+    const { drive } = await personalDriveWithOutsider();
+    await db.update(driveMembers).set({ role: 'ADMIN' }).where(and(eq(driveMembers.driveId, drive), eq(driveMembers.userId, w.outsider)));
+    const soon = new Date(Date.now() + 3_600_000);
+    await db.update(pagePermissions).set({ expiresAt: soon }).where(eq(pagePermissions.userId, w.outsider));
+    await moveDriveToOrg(w.owner, drive, { orgId: w.orgId, orgVisibility: 'RESTRICTED' }, deps);
+
+    const { items } = await listPendingGuestApprovalViews(w.orgId, 10);
+    expect(items[0].request).toEqual({ role: 'ADMIN', customRoleId: null, pageGrants: 1, tokenScopes: 1, earliestExpiry: soon.toISOString(), viaLink: false });
+  });
+
+  it('POL-2 (partial) a multi-step write that share-locks the orgs it will touch up front makes a concurrent policy change wait for it instead of deadlocking', async () => {
+    let policySettled = false;
+    await db.transaction(async (tx) => {
+      await lockOrgsOfDrivesForShare(tx, { driveIds: [], pageIds: [w.orgPage] });
+      const change = updateOrgPolicies({ orgId: w.orgId, actorId: w.owner, patch: { guests: 'off' } }).finally(() => { policySettled = true; });
+      await new Promise((r) => setTimeout(r, 300));
+      expect(policySettled).toBe(false);
+      void change;
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(policySettled).toBe(true);
   });
 });

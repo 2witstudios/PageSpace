@@ -250,8 +250,10 @@ describe('the approval queue routes', () => {
   it('POL-2 (partial) approving an emailed invitation records that it was approved, so its acceptance under approve is not queued again', async () => {
     as('ADMIN');
     vi.mocked(claimPendingGuestApproval).mockResolvedValue(claim({ userId: null, email: 'new@example.com' }) as never);
+    vi.mocked(handleEmailPath).mockResolvedValue(new Response(JSON.stringify({ kind: 'invited', memberId: 'pinv_77' }), { status: 200 }));
     expect((await decide({ decision: 'approve' })).status).toBe(200);
-    expect(markApprovedInvitation).toHaveBeenCalledWith(expect.anything(), { orgId: ORG_ID, driveId: 'drive_1', email: 'new@example.com', approvedBy: 'user_priya' });
+    // Exactly the invitation the email path just stored, never "any invitation to this address" (re-verify N3).
+    expect(markApprovedInvitation).toHaveBeenCalledWith(expect.anything(), { orgId: ORG_ID, driveId: 'drive_1', email: 'new@example.com', approvedBy: 'user_priya', invite: { kind: 'drive', id: 'pinv_77' } });
   });
 
   it('POL-2 (partial) an approved page grant tells the person and refreshes open clients, like an immediate grant', async () => {

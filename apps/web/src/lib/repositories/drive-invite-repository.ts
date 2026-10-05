@@ -500,8 +500,8 @@ export const driveInviteRepository = {
         const admission = await decideOrgDriveAdmission({ driveId, userId }, tx);
         if (admission.decision === 'refuse') throw 'GUEST_POLICY';
         if (admission.decision === 'hold' && admission.orgId) {
-          const [invite] = await tx.select({ email: pendingInvites.email }).from(pendingInvites).where(eq(pendingInvites.id, inviteId)).limit(1);
-          const approved = invite ? await consumeApprovedInvitation(tx, { driveId, email: invite.email }) : false;
+          // Only THIS invitation's approval admits (re-verify N3), never another approval to the same address.
+          const approved = await consumeApprovedInvitation(tx, { driveId, invite: { kind: 'drive', id: inviteId } });
           if (!approved) {
             const consumedForQueue = await tx
               .update(pendingInvites)

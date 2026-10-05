@@ -91,9 +91,12 @@ ORG-5
 # re-added per Review 3+4 (page v3pbwr7hy45eu1t2w6qbxm3e, P2-7 "removed but not proven"). ow-policy-integrity:
 # the repository returns OrgRecord (no `policies`); an IMPORT seam allows only 16 named modules to import the
 # `organizations` table object (and no namespace import but page-content-store's), backed by the column and
-# whole-row checks; review mutant M11 is red; a change lists what it blocks (org.policy.blocked). Still unproven,
-# so titles stay "POL-1 (partial)": inside the 16 allowlisted modules a whole-row read is caught only by the regex
-# net (#2762 review P2-5), and audit rows list at most 200 ids (blocked items have counts but no list endpoint).
+# whole-row checks, and it also fails a re-export, a dynamic import( of the schema and a computed db.query[...]
+# key; review mutant M11 is red; a change lists what it blocks (org.policy.blocked). Still unproven, so titles stay
+# "POL-1 (partial)": raw SQL (db.execute(sql`select * from organizations`)) needs no import and works from ANY
+# module, and a dynamic import or computed key written in a shape the seam's patterns do not match would too; only a
+# DB view/grant or an AST lint closes that (follow-up filed by the orchestrator). Audit rows list at most 200 ids
+# (blocked items have counts but no list endpoint).
 POL-1
 # POL-2 (guests from outside: off, admins approve, on) re-added per Review 3+4 (page v3pbwr7hy45eu1t2w6qbxm3e,
 # P1-3 "removed but not proven"). ow-policy-integrity routes through decideOrgDriveAdmission, inside each write's

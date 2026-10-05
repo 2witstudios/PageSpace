@@ -26,6 +26,7 @@ import { messageRepository } from '@/lib/repositories/message-repository';
 import type { BumpedConversationRow } from '@/lib/repositories/conversation-rev';
 import { conversationPageId } from '@pagespace/lib/conversations/conversation-page';
 import type { ConversationAccessRow } from '@pagespace/lib/permissions/conversation-access';
+import { lockOrgsOfDrivesForShare } from '@pagespace/lib/organizations/policy-reader';
 
 /**
  * Preview of what will be undone
@@ -523,6 +524,12 @@ export async function executeAiUndo(
         .from(conversations)
         .where(eq(conversations.id, conversationId))
         .for('update');
+      // POL-2 (re-verify N6): the org rows of every drive these activities touch are share-locked BEFORE any of
+      // them writes, so a re-entering grant's policy check cannot deadlock with a concurrent policy change.
+      await lockOrgsOfDrivesForShare(tx, {
+        driveIds: preview.activitiesAffected.map((a) => a.driveId),
+        pageIds: preview.activitiesAffected.map((a) => a.pageId),
+      });
 
       // If mode includes changes, rollback activities in reverse chronological order
       if (mode === 'messages_and_changes') {

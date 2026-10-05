@@ -5,8 +5,8 @@
  * No caching, by design: every call reads the row, so a change applies immediately in every process.
  */
 import { db } from '@pagespace/db/db';
-import { eq, or, sql } from '@pagespace/db/operators';
-import { drives } from '@pagespace/db/schema/core';
+import { asc, eq, inArray, or, sql } from '@pagespace/db/operators';
+import { drives, pages } from '@pagespace/db/schema/core';
 import { organizations } from '@pagespace/db/schema/organizations';
 import type { SpendPolicy } from '../billing/wallet-core';
 import { orgPolicySpendPolicy, parseOrgPolicies, type OrgPolicies } from './policies-core';
@@ -66,4 +66,23 @@ export async function getDrivePolicies(driveId: string, executor: Executor = db,
   const [drive] = await executor.select({ orgId: drives.orgId }).from(drives).where(eq(drives.id, driveId)).limit(1);
   if (!drive?.orgId) return null;
   return { orgId: drive.orgId, policies: await getOrgPolicies(drive.orgId, executor, options) };
+}
+
+/**
+ * Hold, FOR SHARE and in id order, the org rows of every drive (and every page's drive) a multi-step write will touch,
+ * before it writes anything (re-verify N6). A rollback-to-point or AI undo replays many activities in one
+ * transaction, and each re-entering grant asks the guests policy under the org share lock; taking that lock only
+ * after earlier steps wrote can deadlock with a policy change (org FOR UPDATE, then its suspension). Taken first,
+ * the two simply queue.
+ */
+export async function lockOrgsOfDrivesForShare(executor: Tx, input: { driveIds: Array<string | null | undefined>; pageIds: Array<string | null | undefined> }): Promise<void> {
+  const driveIds = new Set(input.driveIds.filter((d): d is string => typeof d === 'string'));
+  const pageIds = [...new Set(input.pageIds.filter((p): p is string => typeof p === 'string'))];
+  if (pageIds.length > 0) {
+    for (const row of await executor.select({ driveId: pages.driveId }).from(pages).where(inArray(pages.id, pageIds))) driveIds.add(row.driveId);
+  }
+  if (driveIds.size === 0) return;
+  const orgIds = [...new Set((await executor.select({ orgId: drives.orgId }).from(drives).where(inArray(drives.id, [...driveIds]))).flatMap((d) => (d.orgId ? [d.orgId] : [])))].sort();
+  if (orgIds.length === 0) return;
+  await executor.select({ id: organizations.id }).from(organizations).where(inArray(organizations.id, orgIds)).orderBy(asc(organizations.id)).for('share');
 }

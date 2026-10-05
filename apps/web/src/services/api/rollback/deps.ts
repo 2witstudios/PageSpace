@@ -54,7 +54,7 @@ export interface RollbackDeps {
     driveId: string;
     userId: string;
     member?: Record<string, unknown> | null;
-    grants?: Array<{ pageId: string; canView: boolean; canEdit: boolean; canShare: boolean; canDelete: boolean }>;
+    grants?: Array<{ pageId: string; canView: boolean; canEdit: boolean; canShare: boolean; canDelete: boolean; expiresAt?: Date | string | null }>;
     requestedBy: string | null;
     memberRowIsRoleChange?: boolean;
   }) => Promise<ReentryDecision>;

@@ -42,12 +42,14 @@ async function pageDriveId(deps: RollbackDeps, pageId: string): Promise<string |
 }
 
 /** POL-2: may this page grant (re-)enter? Asked only when it gives some access. */
-async function admitGrant(deps: RollbackDeps, pageId: string, userId: string, values: { canView?: unknown; canEdit?: unknown; canShare?: unknown; canDelete?: unknown }): Promise<ReentryDecision> {
+async function admitGrant(deps: RollbackDeps, pageId: string, userId: string, values: { canView?: unknown; canEdit?: unknown; canShare?: unknown; canDelete?: unknown; expiresAt?: unknown }): Promise<ReentryDecision> {
   const flags = grantFlags(values);
   if (!flags.canView && !flags.canEdit && !flags.canShare && !flags.canDelete) return { outcome: 'admit' };
   const driveId = await pageDriveId(deps, pageId);
   if (!driveId) return { outcome: 'admit' };
-  return deps.admitReentry(deps.db, { driveId, userId, grants: [{ pageId, ...flags }], requestedBy: null });
+  // The grant's expiry travels with it, so a queued request never outlives it (re-verify N1).
+  const expiresAt = values.expiresAt instanceof Date || typeof values.expiresAt === 'string' ? values.expiresAt : null;
+  return deps.admitReentry(deps.db, { driveId, userId, grants: [{ pageId, ...flags, expiresAt }], requestedBy: null });
 }
 
 /** POL-2: may this member row (re-)enter? A row that already exists is a role change, not an admission. */

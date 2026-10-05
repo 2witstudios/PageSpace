@@ -109,11 +109,15 @@ export async function POST(request: Request, context: Context) {
         await requeue(claim);
         return response;
       }
-      // An emailed invitation is admitted later, at its acceptance: remember that THIS one was approved, so the
-      // acceptance does not ask again (an invitation nobody approved is queued there instead).
-      if (!claim.userId && claim.email) await markApprovedInvitation(db, { orgId, driveId: claim.driveId, email: claim.email, approvedBy: gate.userId });
+      const result = await response.json().catch(() => null) as { kind?: string; memberId?: string } | null;
+      // An emailed invitation is admitted later, at its acceptance: remember that THIS invitation (the pending
+      // invite the email path just stored, returned as `memberId`) was approved, so its acceptance does not ask again.
+      // Any other invitation to the same address is queued there instead.
+      if (!claim.userId && claim.email && result?.kind === 'invited' && result.memberId) {
+        await markApprovedInvitation(db, { orgId, driveId: claim.driveId, email: claim.email, approvedBy: gate.userId, invite: { kind: 'drive', id: result.memberId } });
+      }
       await audit(claim, 'org.guest.approved', gate.userId);
-      return NextResponse.json({ decided: 'approved', result: await response.json().catch(() => null) });
+      return NextResponse.json({ decided: 'approved', result });
     }
 
     if (claim.origin === 'page_grant') {
@@ -158,9 +162,12 @@ export async function POST(request: Request, context: Context) {
         await requeue(claim);
         return response;
       }
-      await markApprovedInvitation(db, { orgId, driveId: claim.driveId, email: claim.email, approvedBy: gate.userId });
+      const result = await response.json().catch(() => null) as { kind?: string; inviteId?: string } | null;
+      if (result?.kind === 'invited' && result.inviteId) {
+        await markApprovedInvitation(db, { orgId, driveId: claim.driveId, email: claim.email, approvedBy: gate.userId, invite: { kind: 'page', id: result.inviteId } });
+      }
       await audit(claim, 'org.guest.approved', gate.userId);
-      return NextResponse.json({ decided: 'approved', result: await response.json().catch(() => null) });
+      return NextResponse.json({ decided: 'approved', result });
     }
 
     const admitted = await completeApprovedLinkAdmission(claim);

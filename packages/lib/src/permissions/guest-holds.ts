@@ -120,7 +120,8 @@ const grantOutsiders = (executor: Executor, scope: GuestScope): Promise<Pair[]> 
       inArray(pages.driveId, scopeDriveIds(executor, scope)),
       scope.userId ? eq(pagePermissions.userId, scope.userId) : undefined,
       scope.pageIds ? inArray(pagePermissions.pageId, scope.pageIds) : undefined,
-      scope.pageIds ? sql`not exists (select 1 from ${driveMembers} m where m."driveId" = ${pages.driveId} and m."userId" = ${pagePermissions.userId})` : undefined,
+      // Only an ACCEPTED member row exempts (an admitted guest); a pending invitation admits nobody (re-verify N2).
+      scope.pageIds ? sql`not exists (select 1 from ${driveMembers} m where m."driveId" = ${pages.driveId} and m."userId" = ${pagePermissions.userId} and m."acceptedAt" is not null)` : undefined,
       outsiderOf(scope.orgId, sql`${pagePermissions.userId}`, sql`${pages.driveId}`),
     ))
     .orderBy(asc(pages.driveId), asc(pagePermissions.userId))
@@ -148,17 +149,32 @@ const tokenOutsiders = (executor: Executor, scope: GuestScope): Promise<Pair[]> 
 const asJson = <T>(rows: T): T => JSON.parse(JSON.stringify(rows)) as T;
 
 /** Union two page-grant lists by page; flags OR together, so merging never narrows what was held or asked. */
-function mergeGrants<G extends { pageId?: unknown; canView?: unknown; canEdit?: unknown; canShare?: unknown; canDelete?: unknown }>(a: G[], b: G[]): G[] {
+function mergeGrants<G extends { pageId?: unknown; canView?: unknown; canEdit?: unknown; canShare?: unknown; canDelete?: unknown; expiresAt?: string | null }>(a: G[], b: G[]): G[] {
   const byPage = new Map<string, G>();
   for (const g of [...a, ...b]) {
     const key = String(g.pageId);
     const prev = byPage.get(key);
+    // The later expiry wins; no expiry (null) is the latest of all.
+    const expiresAt = !prev ? g.expiresAt : (prev.expiresAt == null || g.expiresAt == null ? null : (prev.expiresAt > g.expiresAt ? prev.expiresAt : g.expiresAt));
     byPage.set(key, prev
-      ? { ...prev, canView: Boolean(prev.canView || g.canView), canEdit: Boolean(prev.canEdit || g.canEdit), canShare: Boolean(prev.canShare || g.canShare), canDelete: Boolean(prev.canDelete || g.canDelete) }
+      ? { ...prev, canView: Boolean(prev.canView || g.canView), canEdit: Boolean(prev.canEdit || g.canEdit), canShare: Boolean(prev.canShare || g.canShare), canDelete: Boolean(prev.canDelete || g.canDelete), expiresAt }
       : g);
   }
   return [...byPage.values()];
 }
+
+/** A grant's expiry as stored in a request (ISO), or null for none. */
+const isoExpiry = (value: unknown): string | null => {
+  if (value == null) return null;
+  const date = value instanceof Date ? value : new Date(String(value));
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+};
+
+/** A grant that has already expired gives nothing, so it is never queued (Review #2762 re-verify N1). */
+export const grantStillLive = (expiresAt: unknown, now = new Date()): boolean => {
+  const iso = isoExpiry(expiresAt);
+  return iso === null || new Date(iso).getTime() > now.getTime();
+};
 
 /** How an outsider's live access is taken out: parked until guests come back (off), or queued for approval (approve). */
 export type GuestTakeMode = 'suspend' | 'queue';
@@ -203,7 +219,13 @@ async function takeOutsider(executor: Executor, orgId: string, { driveId, userId
       ? await executor.update(orgGuestHolds).set({ parked }).where(eq(orgGuestHolds.id, existing.id)).returning()
       : await executor.insert(orgGuestHolds).values({ orgId, driveId, userId, state: 'suspended', origin: member ? 'invite' : 'page_grant', request: {}, parked }).returning();
   } else {
-    hold = await queueHeldAccess(executor, { orgId, driveId, userId, member: member ?? null, grants, tokenScopes, requestedBy: null });
+    const queued = await queueHeldAccess(executor, { orgId, driveId, userId, member: member ?? null, grants, tokenScopes, requestedBy: null });
+    // Only expired grants: nothing to ask for; they are still taken out of the live tables below.
+    if (!queued) {
+      if (grants.length > 0) await executor.delete(pagePermissions).where(inArray(pagePermissions.id, grants.map((g) => g.id)));
+      return null;
+    }
+    hold = queued;
   }
 
   if (grants.length > 0) await executor.delete(pagePermissions).where(inArray(pagePermissions.id, grants.map((g) => g.id)));
@@ -243,7 +265,11 @@ export async function takeOrgGuests(executor: Executor, scope: GuestScope, mode:
  * a `suspended` hold, then remove them from the live tables. A guest whose only access is a page grant is parked the
  * same way, with `member: null`. Returns what it parked. Call inside the transaction that stored the policy.
  */
-export const suspendOrgGuests = (executor: Executor, orgId: string): Promise<GuestHoldItem[]> => takeOrgGuests(executor, { orgId }, 'suspend');
+export async function suspendOrgGuests(executor: Executor, orgId: string): Promise<GuestHoldItem[]> {
+  // Guests off withdraws every approval not yet used: an invitation approved under `approve` admits nobody later.
+  await executor.delete(orgGuestHolds).where(and(eq(orgGuestHolds.orgId, orgId), eq(orgGuestHolds.state, 'approved')));
+  return takeOrgGuests(executor, { orgId }, 'suspend');
+}
 
 /**
  * The org's guests policy as it stands, read under the org row's share lock (the writer holds it FOR UPDATE), for a
@@ -269,19 +295,22 @@ export async function queueHeldAccess(
     driveId: string;
     userId: string;
     member: Record<string, unknown> | null;
-    grants: Array<{ pageId: string; canView: boolean; canEdit: boolean; canShare: boolean; canDelete: boolean; grantedBy?: string | null }>;
+    grants: Array<{ pageId: string; canView: boolean; canEdit: boolean; canShare: boolean; canDelete: boolean; grantedBy?: string | null; expiresAt?: Date | string | null }>;
     tokenScopes?: Array<Record<string, unknown>>;
     requestedBy: string | null;
   },
-): Promise<OrgGuestHold> {
+): Promise<OrgGuestHold | null> {
   const { orgId, driveId, userId } = input;
+  // An expired grant gives nothing: it is never queued, so approving can never bring it back to life (N1).
+  const live = input.grants.filter((g) => grantStillLive(g.expiresAt));
+  if (live.length === 0 && !input.member && (input.tokenScopes ?? []).length === 0) return null;
   const [existing] = await executor
     .select()
     .from(orgGuestHolds)
     .where(and(eq(orgGuestHolds.driveId, driveId), eq(orgGuestHolds.userId, userId), eq(orgGuestHolds.state, 'pending_approval')))
     .limit(1);
   const before = existing?.request ?? {};
-  const asked = input.grants.map((g) => ({ pageId: g.pageId, canView: g.canView, canEdit: g.canEdit, canShare: g.canShare, canDelete: g.canDelete }));
+  const asked = live.map((g) => ({ pageId: g.pageId, canView: g.canView, canEdit: g.canEdit, canShare: g.canShare, canDelete: g.canDelete, expiresAt: isoExpiry(g.expiresAt) }));
   const invitedBy = before.invitedBy ?? (input.member?.invitedBy as string | null | undefined) ?? input.grants[0]?.grantedBy ?? input.requestedBy ?? null;
   const request: GuestHoldRequest = {
     ...before,
@@ -311,7 +340,7 @@ export async function admitReentry(
     driveId: string;
     userId: string;
     member?: Record<string, unknown> | null;
-    grants?: Array<{ pageId: string; canView: boolean; canEdit: boolean; canShare: boolean; canDelete: boolean; grantedBy?: string | null }>;
+    grants?: Array<{ pageId: string; canView: boolean; canEdit: boolean; canShare: boolean; canDelete: boolean; grantedBy?: string | null; expiresAt?: Date | string | null }>;
     requestedBy: string | null;
     /** An upsert of the member row: when the person already has one, the write is a role change, not an admission. */
     memberRowIsRoleChange?: boolean;
@@ -345,6 +374,8 @@ export async function admitReentry(
     grants: input.grants ?? [],
     requestedBy: input.requestedBy,
   });
+  // Nothing live to ask for (only grants that have already expired): writing them gives no access.
+  if (!hold) return { outcome: 'admit' };
   return { outcome: 'held', holdId: hold.id, orgId: admission.orgId };
 }
 
@@ -353,27 +384,40 @@ export async function admitReentry(
 // ---------------------------------------------------------------------------
 
 /**
- * An Owner or Admin approved an outsider's emailed invitation and it was sent: remember it, so its acceptance under
- * `approve` admits the person instead of asking again. An invitation that was NOT approved (sent while guests were
- * on, or before the drive joined the org) has no such row and is queued at acceptance.
+ * An Owner or Admin approved an outsider's emailed invitation and it was sent: remember THAT invitation (its kind and
+ * pending-invite id), so its acceptance under `approve` admits the person instead of asking again. Any other
+ * invitation to the same address (sent while guests were on, before the drive joined the org, or with another role)
+ * has no marker and is queued at acceptance (re-verify N3). One marker per drive and address: a newer approval
+ * replaces an older one, which then queues (fails closed).
  */
-export async function markApprovedInvitation(executor: Executor, input: { orgId: string; driveId: string; email: string; approvedBy: string }): Promise<void> {
+export async function markApprovedInvitation(
+  executor: Executor,
+  input: { orgId: string; driveId: string; email: string; approvedBy: string; invite: { kind: 'drive' | 'page'; id: string } },
+): Promise<void> {
   const email = input.email.trim().toLowerCase();
+  const request: GuestHoldRequest = { approvedInvite: input.invite };
   const [existing] = await executor
     .select({ id: orgGuestHolds.id })
     .from(orgGuestHolds)
     .where(and(eq(orgGuestHolds.driveId, input.driveId), sql`lower(${orgGuestHolds.email}) = ${email}`, eq(orgGuestHolds.state, 'approved')))
     .limit(1);
-  if (existing) return;
-  await executor.insert(orgGuestHolds).values({ orgId: input.orgId, driveId: input.driveId, email, state: 'approved', origin: 'invite', request: {}, requestedBy: input.approvedBy });
+  if (existing) {
+    await executor.update(orgGuestHolds).set({ request, requestedBy: input.approvedBy }).where(eq(orgGuestHolds.id, existing.id));
+    return;
+  }
+  await executor.insert(orgGuestHolds).values({ orgId: input.orgId, driveId: input.driveId, email, state: 'approved', origin: 'invite', request, requestedBy: input.approvedBy });
 }
 
-/** Consume the approval of an emailed invitation to `driveId` for `email`; true when there was one. */
-export async function consumeApprovedInvitation(executor: Executor, input: { driveId: string; email: string }): Promise<boolean> {
-  const email = input.email.trim().toLowerCase();
+/** Consume the approval of exactly this pending invitation; true when it was the one approved. */
+export async function consumeApprovedInvitation(executor: Executor, input: { driveId: string; invite: { kind: 'drive' | 'page'; id: string } }): Promise<boolean> {
   const rows = await executor
     .delete(orgGuestHolds)
-    .where(and(eq(orgGuestHolds.driveId, input.driveId), sql`lower(${orgGuestHolds.email}) = ${email}`, eq(orgGuestHolds.state, 'approved')))
+    .where(and(
+      eq(orgGuestHolds.driveId, input.driveId),
+      eq(orgGuestHolds.state, 'approved'),
+      sql`${orgGuestHolds.request}->'approvedInvite'->>'kind' = ${input.invite.kind}`,
+      sql`${orgGuestHolds.request}->'approvedInvite'->>'id' = ${input.invite.id}`,
+    ))
     .returning({ id: orgGuestHolds.id });
   return rows.length > 0;
 }
@@ -567,8 +611,19 @@ export interface PendingGuestApprovalView extends GuestHoldItem {
   driveName: string;
   /** The person asking to be admitted, by name; null for an invitee who has no account yet (then `email` is set). */
   requesterName: string | null;
-  /** What was asked for, without internals: the role and whether page grants were requested. */
-  request: { role: 'MEMBER' | 'ADMIN' | null; pageGrants: number; viaLink: boolean };
+  /**
+   * What approving will REPLAY, without internals (re-verify N4): the drive role asked for, or the role and custom
+   * role of the member row the person held before it was queued; how many page grants and explicit-role token
+   * scopes come back; and the earliest expiry among those grants (null: none expires).
+   */
+  request: {
+    role: string | null;
+    customRoleId: string | null;
+    pageGrants: number;
+    tokenScopes: number;
+    earliestExpiry: string | null;
+    viaLink: boolean;
+  };
 }
 
 /**
@@ -596,7 +651,14 @@ export async function listPendingGuestApprovalViews(orgId: string, limit: number
       ...toItem(r.hold),
       driveName: r.driveName,
       requesterName: r.hold.userId ? ((await decryptField(r.userName)) ?? null) : null,
-      request: { role: req.role ?? null, pageGrants: req.permissions?.length ?? (req.pageId ? 1 : 0), viaLink: r.hold.origin === 'drive_link' || r.hold.origin === 'page_link' },
+      request: {
+        role: req.role ?? (typeof req.member?.role === 'string' ? req.member.role : null),
+        customRoleId: req.customRoleId ?? (typeof req.member?.customRoleId === 'string' ? req.member.customRoleId : null),
+        pageGrants: req.permissions?.length ?? (req.pageId ? 1 : 0),
+        tokenScopes: req.tokenScopes?.length ?? 0,
+        earliestExpiry: (req.permissions ?? []).map((p) => p.expiresAt).filter((e): e is string => typeof e === 'string').sort()[0] ?? null,
+        viaLink: r.hold.origin === 'drive_link' || r.hold.origin === 'page_link',
+      },
     });
   }
   return { total: counted?.total ?? 0, items };

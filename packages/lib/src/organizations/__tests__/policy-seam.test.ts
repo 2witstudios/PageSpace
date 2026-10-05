@@ -79,7 +79,18 @@ const WHOLE_SCHEMA_IMPORT = /import\s+\*\s+as\s+\w+\s+from\s+['"]@pagespace\/db(
  */
 const SCHEMA_NAMESPACE_IMPORTERS = ['packages/lib/src/services/page-content-store.ts'];
 
+/** A re-export of the table (`export { organizations … } from …`, or `export * from` the schema module). */
+const SCHEMA_REEXPORT = /export\s+(?:type\s+)?\{([^}]*)\}\s+from\s+['"](@pagespace\/db\/schema(?:\/organizations)?)['"]|export\s+\*\s+(?:as\s+\w+\s+)?from\s+['"]@pagespace\/db\/schema(?:\/organizations)?['"]/g;
+/** A dynamic import of the schema module (re-verify N5). */
+const DYNAMIC_SCHEMA_IMPORT = /import\(\s*['"`]@pagespace\/db(?:\/schema(?:\/organizations)?)?['"`]\s*\)/;
+/** A computed key on the relational query API, which could name `organizations` without the word (re-verify N5). */
+const COMPUTED_QUERY_KEY = /\.query\s*\[/;
+
 function importsOrganizationsTable(code: string): boolean {
+  for (const m of code.matchAll(SCHEMA_REEXPORT)) {
+    if (m[1] === undefined) return true; // export * re-exports everything, organizations included
+    if (m[1].split(',').map((n) => n.trim().replace(/^type\s+/, '').split(/\s+as\s+/)[0].trim()).includes('organizations')) return true;
+  }
   for (const m of code.matchAll(NAMED_SCHEMA_IMPORT)) {
     if (m[1]) continue; // `import type { … }` brings no value
     const names = m[2].split(',').map((n) => n.trim().replace(/^type\s+/, '').split(/\s+as\s+/)[0].trim());
@@ -97,7 +108,7 @@ describe('the organizations table import seam', () => {
         const rel = relative(REPO_ROOT, file);
         const code = stripComments(readFileSync(file, 'utf8'));
         if (importsOrganizationsTable(code)) importers.push(rel);
-        if (WHOLE_SCHEMA_IMPORT.test(code)) wholeSchema.push(rel);
+        if (WHOLE_SCHEMA_IMPORT.test(code) || DYNAMIC_SCHEMA_IMPORT.test(code) || COMPUTED_QUERY_KEY.test(code)) wholeSchema.push(rel);
       }
     }
     expect(importers.sort()).toEqual(ORGANIZATIONS_IMPORTERS);
@@ -112,6 +123,11 @@ describe('the organizations table import seam', () => {
     expect(WHOLE_SCHEMA_IMPORT.test("import * as orgs from '@pagespace/db/schema/organizations';")).toBe(true);
     expect(importsOrganizationsTable("import { organizations } from '@pagespace/db/schema';")).toBe(true);
     expect(WHOLE_SCHEMA_IMPORT.test("import { sheetRows } from '@pagespace/db/schema';")).toBe(false);
+    expect(importsOrganizationsTable("export { organizations as orgTableProbe } from '@pagespace/db/schema/organizations';")).toBe(true);
+    expect(importsOrganizationsTable("export * from '@pagespace/db/schema/organizations';")).toBe(true);
+    expect(importsOrganizationsTable("export { orgMembers } from '@pagespace/db/schema/organizations';")).toBe(false);
+    expect(DYNAMIC_SCHEMA_IMPORT.test("const m = await import('@pagespace/db/schema/organizations');")).toBe(true);
+    expect(COMPUTED_QUERY_KEY.test("db.query['organi' + 'zations'].findFirst()")).toBe(true);
   });
 });
 

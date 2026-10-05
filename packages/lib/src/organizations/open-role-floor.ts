@@ -88,11 +88,30 @@ async function floorState(tx: Executor, driveId: string): Promise<FloorState> {
  * visibility change or a move-in holds it FOR UPDATE, Review #2762 P2-2), then a per-drive advisory lock so two role
  * writes on one drive never interleave (two defaults, P3-3).
  */
+class OrgChangedUnderLock extends Error {}
+
 async function lockForRoleWrite(tx: Executor, driveId: string): Promise<void> {
-  const [current] = await tx.select({ orgId: drives.orgId }).from(drives).where(eq(drives.id, driveId)).limit(1);
-  if (current?.orgId) await tx.select({ id: organizations.id }).from(organizations).where(eq(organizations.id, current.orgId)).for('share');
-  await tx.select({ id: drives.id }).from(drives).where(eq(drives.id, driveId)).for('share');
-  await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`drive-roles:${driveId}`}, 0))`);
+  // The drive's org is read before its row is locked; a drive moved into an org at that moment would leave the org
+  // unlocked. So the org is re-read under the drive lock, and if it changed the locks are taken again in the same
+  // order inside a fresh savepoint (rolling a savepoint back releases the locks it took). Re-verify N9.
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const settled = await tx.transaction(async (sp) => {
+      const [current] = await sp.select({ orgId: drives.orgId }).from(drives).where(eq(drives.id, driveId)).limit(1);
+      if (current?.orgId) await sp.select({ id: organizations.id }).from(organizations).where(eq(organizations.id, current.orgId)).for('share');
+      const [locked] = await sp.select({ orgId: drives.orgId }).from(drives).where(eq(drives.id, driveId)).for('share');
+      // Throwing rolls the savepoint back, which releases the locks it took.
+      if ((locked?.orgId ?? null) !== (current?.orgId ?? null)) throw new OrgChangedUnderLock();
+      return true;
+    }).catch((error: unknown) => {
+      if (error instanceof OrgChangedUnderLock) return false;
+      throw error;
+    });
+    if (settled) {
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`drive-roles:${driveId}`}, 0))`);
+      return;
+    }
+  }
+  throw new Error(`The drive ${driveId} kept changing organization while a role write waited for it`);
 }
 
 /**
@@ -109,7 +128,7 @@ export async function guardOpenRoleFloor<T>(tx: Executor, driveId: string, write
   const result = await write();
   const after = await floorState(tx, driveId);
   if (after.governed && !after.meets && (before.meets || before.key !== after.key)) throw new OpenRoleFloorError(after.floor);
-  if (after.defaultId !== before.defaultId) await followDriveDefaultRole(tx, driveId, after.defaultId);
+  if (after.defaultId !== before.defaultId) await followDriveDefaultRole(tx, driveId, before.defaultId, after.defaultId);
   return result;
 }
 

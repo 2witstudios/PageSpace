@@ -16,6 +16,7 @@ import {
   type RollbackContext,
 } from './rollback-service';
 import type { ActivityActionPreview } from '@/types/activity-actions';
+import { lockOrgsOfDrivesForShare } from '@pagespace/lib/organizations/policy-reader';
 
 /**
  * Context for rollback-to-point operations
@@ -297,6 +298,12 @@ export async function executeRollbackToPoint(
     const deferredTriggers: Array<() => void> = [];
 
     await db.transaction(async (tx) => {
+      // POL-2 (re-verify N6): the org rows of every drive these activities touch are share-locked BEFORE any of
+      // them writes, so a re-entering grant's policy check cannot deadlock with a concurrent policy change.
+      await lockOrgsOfDrivesForShare(tx, {
+        driveIds: preview.activitiesAffected.map((a) => a.driveId),
+        pageIds: preview.activitiesAffected.map((a) => a.pageId),
+      });
       // Rollback activities in reverse chronological order (newest first)
       for (const activity of preview.activitiesAffected) {
         const activityPreview = activity.preview;

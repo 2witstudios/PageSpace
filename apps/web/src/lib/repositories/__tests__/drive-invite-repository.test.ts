@@ -568,7 +568,7 @@ describe('driveInviteRepository.consumeInviteAndCreateMembership', () => {
     decideOrgDriveAdmission.mockResolvedValue({ decision: 'hold', orgId: 'org_1' });
     consumeApprovedInvitation.mockResolvedValue(true);
     expect(await driveInviteRepository.consumeInviteAndCreateMembership(baseInput)).toEqual({ ok: true, memberId: 'mem_new' });
-    expect(consumeApprovedInvitation).toHaveBeenCalledWith(expect.anything(), { driveId: 'drive_1', email: 'invitee@example.com' });
+    expect(consumeApprovedInvitation).toHaveBeenCalledWith(expect.anything(), { driveId: 'drive_1', invite: { kind: 'drive', id: 'inv_1' } });
     expect(requestGuestApproval).not.toHaveBeenCalled();
   });
 

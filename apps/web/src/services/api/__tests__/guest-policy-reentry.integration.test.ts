@@ -128,12 +128,21 @@ describe('pages moved into an org drive', () => {
   const allow = { isDriveInScope: () => true, canAdministerDrive: async () => true, canEditPage: async () => true };
   const move = () => movePagesToDrive({ pageIds: [w.personalPage], targetDriveId: w.orgDrive, targetParentId: null, userId: w.owner, authorize: allow });
 
-  it('POL-2 (partial) X-6 (partial) guests OFF: a page shared with an outsider loses that share when it moves into the org drive (parked, not deleted)', async () => {
-    await db.insert(pagePermissions).values({ pageId: w.personalPage, userId: w.outsider, ...EDIT, grantedBy: w.owner });
+  it('POL-2 (partial) X-6 (partial) guests OFF: a page shared with an outsider loses that share when it moves into the org drive (parked, not deleted), and so do its child and grandchild', async () => {
+    const child = (await factories.createPage(w.personalDrive, { parentId: w.personalPage })).id;
+    const grandchild = (await factories.createPage(w.personalDrive, { parentId: child })).id;
+    await db.insert(pagePermissions).values([
+      { pageId: w.personalPage, userId: w.outsider, ...EDIT, grantedBy: w.owner },
+      { pageId: child, userId: w.outsider, ...EDIT, grantedBy: w.owner },
+      { pageId: grandchild, userId: w.outsider, ...EDIT, grantedBy: w.owner },
+    ]);
     await setGuests('off');
-    expect(await move()).toMatchObject({ success: true });
+    expect(await move()).toMatchObject({ success: true, descendantCount: 2 });
     expect(await getUserAccessLevel(w.outsider, w.personalPage)).toBeNull();
-    expect(await db.select().from(orgGuestHolds).where(and(eq(orgGuestHolds.userId, w.outsider), eq(orgGuestHolds.state, 'suspended')))).toHaveLength(1);
+    expect(await getUserAccessLevel(w.outsider, child)).toBeNull();
+    expect(await getUserAccessLevel(w.outsider, grandchild)).toBeNull();
+    const [hold] = await db.select().from(orgGuestHolds).where(and(eq(orgGuestHolds.userId, w.outsider), eq(orgGuestHolds.state, 'suspended')));
+    expect(hold.parked?.grants).toHaveLength(3);
   });
 
   it('POL-2 (partial) guests APPROVE: the moved share is queued for an Owner or Admin; ON: it stays', async () => {
@@ -141,7 +150,7 @@ describe('pages moved into an org drive', () => {
     await setGuests('approve');
     await move();
     expect(await grantsOf(w.outsider)).toEqual([]);
-    expect((await pendingFor(w.outsider))[0]?.request.permissions).toEqual([{ pageId: w.personalPage, ...EDIT }]);
+    expect((await pendingFor(w.outsider))[0]?.request.permissions).toEqual([{ pageId: w.personalPage, ...EDIT, expiresAt: null }]);
   });
 
   it('POL-2 (partial) guests ON keeps the moved share, and an org member\'s share is never touched', async () => {

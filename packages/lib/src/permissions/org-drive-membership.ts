@@ -1,5 +1,5 @@
 import { db } from '@pagespace/db/db';
-import { and, asc, eq, inArray, isNotNull } from '@pagespace/db/operators';
+import { and, asc, eq, inArray, isNotNull, isNull } from '@pagespace/db/operators';
 import type { OrgDriveVisibility } from '@pagespace/db/schema/core';
 import { driveMembers, driveRoles } from '@pagespace/db/schema/members';
 import { orgMembers, type OrgRole } from '@pagespace/db/schema/organizations';
@@ -309,16 +309,23 @@ export async function removeFormerLeadOwnerRow(
 /**
  * POL-6, D-OW-11 (independent review of #2762, P2-3): org members of an Open drive hold its CURRENT default role.
  * Their materialized rows (`source: 'org'`, role MEMBER) copied the default's id when they were synced, so when the
- * drive's default changes or is removed they follow it here, in the role write's transaction (null: the plain
- * member role). Invited rows keep the role they were given.
+ * drive's default changes or is removed, the rows that were ON THE PREVIOUS DEFAULT follow it here, in the role
+ * write's transaction (null: the plain member role). A custom role an admin assigned by hand is left alone
+ * (re-verify N8); invited rows keep the role they were given.
  */
 export async function followDriveDefaultRole(
   executor: Pick<typeof db, 'update'>,
   driveId: string,
+  previousDefaultId: string | null,
   defaultRoleId: string | null,
 ): Promise<void> {
   await executor
     .update(driveMembers)
     .set({ customRoleId: defaultRoleId })
-    .where(and(eq(driveMembers.driveId, driveId), eq(driveMembers.source, 'org'), eq(driveMembers.role, 'MEMBER')));
+    .where(and(
+      eq(driveMembers.driveId, driveId),
+      eq(driveMembers.source, 'org'),
+      eq(driveMembers.role, 'MEMBER'),
+      previousDefaultId === null ? isNull(driveMembers.customRoleId) : eq(driveMembers.customRoleId, previousDefaultId),
+    ));
 }

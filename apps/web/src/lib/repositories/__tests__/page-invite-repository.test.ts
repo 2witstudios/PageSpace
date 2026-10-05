@@ -36,15 +36,9 @@ vi.mock('@pagespace/db/schema/pending-page-invites', () => ({
 
 import { pageInviteRepository } from '../page-invite-repository';
 
-let lookups = 0;
-let holding = false;
 function setupTx() {
-  lookups = 0;
   const consumeSet = vi.fn().mockReturnValue({ where: vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([{ id: 'inv_1' }]) }) });
-  // First select: the invitation's email (asked only under approve); then the member-row lookup.
-  const memberLookup = vi.fn().mockImplementation(() => ({
-    from: vi.fn().mockReturnValue({ where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue(holding && lookups++ === 0 ? [{ email: 'guest@example.com' }] : []) }) }),
-  }));
+  const memberLookup = vi.fn().mockReturnValue({ from: vi.fn().mockReturnValue({ where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }) }) });
   const memberValues = vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([{ id: 'mem_1' }]) });
   const grantValues = vi.fn().mockResolvedValue(undefined);
   const insert = vi.fn()
@@ -82,19 +76,16 @@ describe('pageInviteRepository.consumeInviteAndGrantPage and the guests policy',
   });
 
   it('POL-2 (partial) guests APPROVE: an invitation an Owner or Admin approved (its marker consumed) is accepted', async () => {
-    holding = true;
     const { insert } = setupTx();
     decideOrgDriveAdmission.mockResolvedValue({ decision: 'hold', orgId: 'org_1' });
     consumeApprovedInvitation.mockResolvedValue(true);
 
     expect(await pageInviteRepository.consumeInviteAndGrantPage(input)).toEqual({ ok: true, memberId: 'mem_1' });
-    expect(consumeApprovedInvitation).toHaveBeenCalledWith(expect.anything(), { driveId: 'drive_1', email: 'guest@example.com' });
+    expect(consumeApprovedInvitation).toHaveBeenCalledWith(expect.anything(), { driveId: 'drive_1', invite: { kind: 'page', id: 'inv_1' } });
     expect(insert).toHaveBeenCalledTimes(2);
-    holding = false;
   });
 
   it('POL-2 (partial) guests APPROVE: an invitation nobody approved is queued as a page grant, spent, and grants nothing', async () => {
-    holding = true;
     const { consumeSet, insert } = setupTx();
     decideOrgDriveAdmission.mockResolvedValue({ decision: 'hold', orgId: 'org_1' });
     consumeApprovedInvitation.mockResolvedValue(false);
@@ -106,7 +97,6 @@ describe('pageInviteRepository.consumeInviteAndGrantPage and the guests policy',
       orgId: 'org_1', driveId: 'drive_1', userId: 'user_outside', origin: 'page_grant',
       request: { permissions: [{ pageId: 'page_1', canView: true, canEdit: false, canShare: false, canDelete: false }], invitedBy: 'inviter_1' },
     }), expect.anything());
-    holding = false;
   });
 
   it('POL-2 (partial) guests ON or a personal drive: the invitation is consumed and the page granted as before', async () => {

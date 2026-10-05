@@ -22,6 +22,7 @@ import {
   type OrgPolicyKey,
 } from './policies-core';
 import { getOrgPolicies } from './policy-reader';
+import { retryOnDeadlock } from './repository';
 import { applySuspension, type PolicySuspensionItem } from './policy-suspension';
 import { listPolicyBlockedItems, type PolicyBlockedItems } from './policy-blocked-items';
 import { openDrivesBelowFloor } from './open-role-floor';
@@ -76,7 +77,9 @@ function countsByKind(items: readonly PolicySuspensionItem[]): Record<string, nu
  */
 export async function updateOrgPolicies(input: { orgId: string; actorId: string; patch: OrgPoliciesPatch }): Promise<UpdateOrgPoliciesResult> {
   const { orgId, actorId, patch } = input;
-  const done = await db.transaction(async (tx) => {
+  // A policy change can be chosen as a deadlock victim by a concurrent multi-step write (re-verify N6); it rolls back
+  // whole, so it is simply run again.
+  const done = await retryOnDeadlock(() => db.transaction(async (tx) => {
     const [row] = await tx.select({ policies: organizations.policies }).from(organizations).where(eq(organizations.id, orgId)).for('update').limit(1);
     if (!row) return null;
     const before = parseOrgPolicies(row.policies);
@@ -93,7 +96,7 @@ export async function updateOrgPolicies(input: { orgId: string; actorId: string;
     await tx.update(organizations).set({ policies: stored }).where(eq(organizations.id, orgId));
     const changes: PolicyChange[] = ORG_POLICY_KEYS.filter((k) => !same(before[k], after[k])).map((key) => ({ key, from: before[key], to: after[key] }));
     return { refused: false as const, after, changes, outcome, blocked };
-  });
+  }));
   if (!done) return { ok: false, reason: 'not_found' };
   if (done.refused) return { ok: false, reason: 'open_role_floor', floor: done.floor, drives: done.drives };
 

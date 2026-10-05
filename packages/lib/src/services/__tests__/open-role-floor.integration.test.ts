@@ -26,6 +26,7 @@ vi.mock('../../audit/org-audit', () => ({ recordOrgAuditEvent: vi.fn(async () =>
 
 import { updateOrgPolicies } from '../../organizations/policies';
 import { OpenRoleFloorError, createDriveRole, deleteDriveRole, updateDriveRole } from '../drive-role-service';
+import { guardOpenRoleFloor } from '../../organizations/open-role-floor';
 import { changeDriveVisibility, createOrgDrive, moveDriveToOrg, type OrgDriveServiceDeps } from '../org-drive-service';
 import { orgDriveServiceDeps } from '../org-drive-service-deps';
 
@@ -248,5 +249,49 @@ describe('the org floor under an Open drive default role', () => {
   it('POL-6 (partial) two concurrent writes that each make a default leave exactly one default', async () => {
     await Promise.all([role(w.orgDrive, 'A', true, EDIT), role(w.orgDrive, 'B', true, EDIT)]);
     expect(await defaults(w.orgDrive)).toHaveLength(1);
+  });
+
+  it('POL-6 (partial) a custom role an admin assigned by hand to an org member is left alone when the default changes; only rows on the previous default follow', async () => {
+    const [m1, m2] = [(await factories.createUser()).id, (await factories.createUser()).id];
+    created.userIds.push(m1, m2);
+    await db.insert(orgMembers).values([{ orgId: w.orgId, userId: m1, role: 'MEMBER' }, { orgId: w.orgId, userId: m2, role: 'MEMBER' }]);
+    const r1 = await role(w.orgDrive, 'R1', true, EDIT);
+    const special = await role(w.orgDrive, 'Special', false, EDIT);
+    await db.insert(driveMembers).values([
+      { driveId: w.orgDrive, userId: m1, role: 'MEMBER', customRoleId: r1.id, source: 'org', acceptedAt: new Date() },
+      { driveId: w.orgDrive, userId: m2, role: 'MEMBER', customRoleId: special.id, source: 'org', acceptedAt: new Date() },
+    ]);
+    const r2 = await role(w.orgDrive, 'R2', true, EDIT);
+    const rowRole = async (u: string) => (await db.select({ c: driveMembers.customRoleId }).from(driveMembers).where(eq(driveMembers.userId, u)))[0]?.c;
+    expect(await rowRole(m1)).toBe(r2.id);
+    expect(await rowRole(m2)).toBe(special.id);
+  });
+
+  it('POL-6 (partial) a role write on a drive moved into an org at that moment holds the ORG row too: the org is re-read under the drive lock', async () => {
+    const personal = (await factories.createDrive(w.owner)).id;
+    created.driveIds.push(personal);
+    const mover = await pool.connect();
+    const probe = await pool.connect();
+    try {
+      // T2 moves the drive into the org: the drive row is locked and its orgId changed, not yet committed.
+      await mover.query('begin');
+      await mover.query('select id from drives where id = $1 for update', [personal]);
+      await mover.query(`update drives set "orgId" = $1, "orgVisibility" = 'RESTRICTED' where id = $2`, [w.orgId, personal]);
+
+      let orgHeldDuringWrite: boolean | null = null;
+      const guarded = db.transaction((tx) => guardOpenRoleFloor(tx, personal, async () => {
+        // A policy writer trying the org row now must find it held by this role write.
+        orgHeldDuringWrite = await probe.query('select id from organizations where id = $1 for update nowait', [w.orgId])
+          .then(() => false, (error: { code?: string }) => error.code === '55P03');
+      }));
+      await new Promise((r) => setTimeout(r, 200));
+      await mover.query('commit');
+      await guarded;
+      expect(orgHeldDuringWrite).toBe(true);
+    } finally {
+      await probe.query('rollback').catch(() => {});
+      mover.release();
+      probe.release();
+    }
   });
 });

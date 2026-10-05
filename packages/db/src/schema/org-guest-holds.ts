@@ -34,7 +34,8 @@ export type GuestHoldOrigin = (typeof GUEST_HOLD_ORIGINS)[number];
 export interface GuestHoldRequest {
   role?: 'MEMBER' | 'ADMIN';
   customRoleId?: string | null;
-  permissions?: Array<{ pageId: string; canView: boolean; canEdit: boolean; canShare: boolean; canDelete?: boolean }>;
+  /** `expiresAt` (ISO) carries a time-limited grant's expiry through the queue, so approving never extends it. */
+  permissions?: Array<{ pageId: string; canView: boolean; canEdit: boolean; canShare: boolean; canDelete?: boolean; expiresAt?: string | null }>;
   /** Explicit-role MCP token scopes the outsider's tokens held on the drive, replayed on approval. */
   tokenScopes?: Array<Record<string, unknown>>;
   /**
@@ -42,6 +43,8 @@ export interface GuestHoldRequest {
    * an org drive, a former member's rows): their drive_members row as it was, replayed with the grants on approval.
    */
   member?: Record<string, unknown> | null;
+  /** An `approved` marker: the ONE pending invitation an Owner or Admin approved (kind and id), never any other. */
+  approvedInvite?: { kind: 'drive' | 'page'; id: string };
   expiryDays?: number | null;
   linkId?: string;
   pageId?: string;

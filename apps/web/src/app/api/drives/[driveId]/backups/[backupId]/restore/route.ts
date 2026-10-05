@@ -142,7 +142,14 @@ export async function POST(
       // POL-2 (independent review of #2762, P1-3): a backup taken while the org allowed guests must not bring an
       // outsider back once it does not; each person the restore puts back is asked in this transaction.
       const admit: RestoreAdmission = async ({ userId, member, grants }) =>
-        (await admitReentry(tx, { driveId, userId, member, grants, requestedBy: auth.userId })).outcome;
+        (await admitReentry(tx, {
+          driveId,
+          userId,
+          member,
+          // Each grant keeps its expiry, so a queued one never outlives it and an expired one is never queued.
+          grants: grants.map((g) => ({ ...g, expiresAt: g.expiresAt instanceof Date || typeof g.expiresAt === 'string' ? g.expiresAt : null })),
+          requestedBy: auth.userId,
+        })).outcome;
       const { skippedMembers, skippedPermissions, refusedByGuestPolicy, queuedForApproval } = await guardOpenRoleFloor(tx, driveId, () => applyPermRestoreOps(
         permOps,
         memberOps,
