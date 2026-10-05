@@ -1,3 +1,5 @@
+import { dollarsFromCents } from '@pagespace/lib/billing/money-model';
+
 /** Dates on org surfaces, in UTC because billing periods and caps are UTC (D20). */
 const SHORT = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
 const LONG = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
@@ -19,4 +21,4 @@ export function formatOrgLongDate(iso: string | null | undefined): string | null
 const USD = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 
 /** Real money with cents ("$130.00"): invoices and amounts due. Never for credits (UI-12). */
-export const formatInvoiceAmount = (cents: number): string => USD.format(cents / 100);
+export const formatInvoiceAmount = (cents: number): string => USD.format(dollarsFromCents(cents));

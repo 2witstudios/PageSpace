@@ -6,6 +6,7 @@ import useSWR, { useSWRConfig } from 'swr';
 import { Info } from 'lucide-react';
 import { toast } from 'sonner';
 import { formatCreditCount } from '@pagespace/lib/billing/money-model';
+import { DEFAULT_SEAT_ALLOWANCE_CENTS } from '@pagespace/lib/billing/wallet-core';
 import type { OrgPolicies, OrgPoliciesPatch } from '@pagespace/lib/organizations/policies-core';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
@@ -232,7 +233,7 @@ function PoliciesBody({ orgId, orgName, role, lapsed }: OrgSettingsContext) {
         </Row>
         <Row
           title="Seat allowance"
-          description="Each member's monthly share of the org pool, spent inside org drives. 100 credits unless changed; there is no unlimited allowance. Personal drives still use their own credits."
+          description={`Each member's monthly share of the org pool, spent inside org drives. ${formatCreditCount(DEFAULT_SEAT_ALLOWANCE_CENTS)} credits unless changed; there is no unlimited allowance. Personal drives still use their own credits.`}
           hint={lapsed ? <PausedWhileUnpaid>Can be lowered. Raising it is paused while unpaid.</PausedWhileUnpaid> : !allowanceInput.ok ? <span className="text-xs text-destructive">Enter a whole number of credits.</span> : undefined}
         >
           <div className="flex items-center gap-2">

@@ -19,6 +19,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 vi.mock('@pagespace/lib/organizations/repository', () => ({ findMembershipRole: vi.fn() }));
 vi.mock('@pagespace/lib/services/drive-wallet-service', () => ({
   listOrgSeatCaps: vi.fn(async () => ({ walletId: 'w_pool', seatAllowanceCents: 150, seats: [] })),
+  getOrgPoolSplit: vi.fn(async () => ({ walletId: 'w_pool', availableCents: 0, unallocatedCents: 0, periodEnd: null, seats: { memberCount: 1, allowanceCents: 100, spentCents: 0 }, driveWallets: [], drivesWithoutWallet: [] })),
 }));
 vi.mock('@pagespace/lib/permissions/org-read-models', () => ({
   listOrgGuests: vi.fn(async () => [{ userId: 'u_chris', name: 'Chris Rowe', email: 'chris@partner.co', image: null, drives: [] }]),
@@ -29,7 +30,8 @@ vi.mock('@pagespace/lib/permissions/org-read-models', () => ({
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { findMembershipRole } from '@pagespace/lib/organizations/repository';
 import { listOrgGuests, listOrgDriveUsage, listOrgMemberActivity } from '@pagespace/lib/permissions/org-read-models';
-import { listOrgSeatCaps } from '@pagespace/lib/services/drive-wallet-service';
+import { getOrgPoolSplit, listOrgSeatCaps } from '@pagespace/lib/services/drive-wallet-service';
+import { GET as getPool } from '../[orgId]/pool/route';
 import { GET as getSeatCaps } from '../[orgId]/seat-caps/route';
 import { GET as getGuests } from '../[orgId]/guests/route';
 import { GET as getUsage } from '../[orgId]/drives/usage/route';
@@ -45,6 +47,7 @@ const routes = [
   { name: 'drives/usage', get: getUsage, fn: listOrgDriveUsage, keys: ['usage'] },
   { name: 'members/activity', get: getActivity, fn: listOrgMemberActivity, keys: ['activity'] },
   { name: 'seat-caps', get: getSeatCaps, fn: listOrgSeatCaps, keys: ['walletId', 'seatAllowanceCents', 'seats'] },
+  { name: 'pool', get: getPool, fn: getOrgPoolSplit, keys: ['walletId', 'availableCents', 'unallocatedCents', 'periodEnd', 'seats', 'driveWallets', 'drivesWithoutWallet'] },
 ] as const;
 
 beforeEach(() => {
