@@ -1,6 +1,7 @@
 // Saving a description as it is typed: one PATCH per pause, not per key, and
-// at once when the field is left or closed. Only the latest text is ever
-// sent; an edit made while a save is in flight waits for the next pause.
+// at once when the field is left or closed. One save is out at a time: a
+// flush while one is in flight waits for its answer, then sends only the
+// latest text, so an older save can never land after a newer one.
 
 import { ApiError } from '@/api/errors';
 
@@ -40,19 +41,29 @@ export const createContentSaver = ({
 }: ContentSaverOptions): ContentSaver => {
   let pending: string | null = null;
   let timer: TimerId | undefined;
+  let inFlight: Promise<void> | null = null;
 
-  const flush = async (): Promise<void> => {
-    cancel(timer);
-    timer = undefined;
-    if (pending === null) return;
-    const html = pending;
-    pending = null;
+  const send1 = async (html: string): Promise<void> => {
     try {
       await send(html);
       onResult({ ok: true });
     } catch (error) {
       onResult({ ok: false, refusal: error instanceof ApiError ? error.message : UNREACHABLE });
     }
+  };
+
+  const flush = async (): Promise<void> => {
+    cancel(timer);
+    timer = undefined;
+    // Wait out the save already out; whoever wakes first sends the latest text.
+    while (inFlight !== null) await inFlight;
+    if (pending === null) return;
+    const html = pending;
+    pending = null;
+    const saving = send1(html);
+    inFlight = saving;
+    await saving;
+    if (inFlight === saving) inFlight = null;
   };
 
   return {

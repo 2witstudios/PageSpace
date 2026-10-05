@@ -117,4 +117,88 @@ describe('createContentSaver()', () => {
       expected: [{ ok: false, refusal: 'Could not save the description' }],
     });
   });
+
+  test('a slow save, then a newer edit', async () => {
+    // A server that keeps the content of whichever PATCH lands last, and
+    // answers each request only when the test says so.
+    const clock = manualClock();
+    let stored = '';
+    let inFlight = 0;
+    let mostInFlight = 0;
+    const answers: (() => void)[] = [];
+    const results: SaveResult[] = [];
+    const saver = createContentSaver({
+      send: (html) => {
+        inFlight += 1;
+        mostInFlight = Math.max(mostInFlight, inFlight);
+        return new Promise<void>((resolve) => {
+          answers.push(() => {
+            stored = html;
+            inFlight -= 1;
+            resolve();
+          });
+        });
+      },
+      onResult: (result) => results.push(result),
+      schedule: clock.schedule,
+      cancel: clock.cancel,
+    });
+
+    saver.save('<p>A</p>');
+    clock.tick();
+    await flushPromises();
+    saver.save('<p>AB</p>');
+    clock.tick();
+    await flushPromises();
+    const sentWhileSlow = answers.length;
+    // The newer save would answer first; then the older one.
+    answers.at(-1)?.();
+    await flushPromises();
+    answers[0]?.();
+    await flushPromises();
+    answers.at(-1)?.();
+    await flushPromises();
+    await saver.flush();
+
+    assert({
+      given: 'an edit saved slowly, and a newer edit after the next pause',
+      should: 'send one save at a time, so the newer text is what the server keeps',
+      actual: { sentWhileSlow, mostInFlight, stored, results },
+      expected: { sentWhileSlow: 1, mostInFlight: 1, stored: '<p>AB</p>', results: [{ ok: true }, { ok: true }] },
+    });
+  });
+
+  test('edits while a save is slow', async () => {
+    const answers: (() => void)[] = [];
+    const sent: string[] = [];
+    const saver = createContentSaver({
+      send: (html) => {
+        sent.push(html);
+        return new Promise<void>((resolve) => answers.push(resolve));
+      },
+      onResult: () => {},
+      schedule: (run) => {
+        run();
+        return 0;
+      },
+      cancel: () => {},
+    });
+    saver.save('<p>1</p>');
+    saver.save('<p>12</p>');
+    saver.save('<p>123</p>');
+    await flushPromises();
+    const first = [...sent];
+    answers[0]?.();
+    await flushPromises();
+    answers[1]?.();
+    await flushPromises();
+
+    assert({
+      given: 'three edits while the first save is still out',
+      should: 'send only the latest once it is answered, skipping the superseded one',
+      actual: { first, sent },
+      expected: { first: ['<p>1</p>'], sent: ['<p>1</p>', '<p>123</p>'] },
+    });
+  });
 });
+
