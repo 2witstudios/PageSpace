@@ -8,8 +8,9 @@ import { allocatePublishSubdomain } from '../services/drive-service'
 import { populateUserDrive } from './drive-setup'
 import { installStarterSkills } from '../commands/starter-skill-installer'
 import { provisionMemoryPages } from '../memory/memory-pages'
-import { provisionImagoAgentsInTransaction } from '../agents/provision-imago-agents'
+import { grantCreatedImagoAgents, provisionImagoAgentsInTransaction } from '../agents/provision-imago-agents'
 import type { DeferredWorkflowTrigger } from '../monitoring/activity-logger'
+import type { BuiltinAgentKey } from '../agents/builtin-agents'
 
 type TransactionType = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -36,12 +37,16 @@ export interface ProvisionHomeDriveResult {
  * Imago agents: every call — including the existing-Home branch, so returning
  * users get them on their next sign-in — provisions the built-in Imago agents
  * in Home (`provisionImagoAgentsInTransaction`), recreating any the user
- * deleted. Their workflow triggers fire only after the transaction commits.
+ * deleted. Their workflow triggers fire only after the transaction commits,
+ * and so do the drive grants of the agents this call created
+ * (`grantCreatedImagoAgents`), which must not run under the user-row lock.
  */
 export async function provisionHomeDriveIfNeeded(
   userId: string
 ): Promise<ProvisionHomeDriveResult> {
   const deferredTriggers: DeferredWorkflowTrigger[] = [];
+  // Typed by assertion so the assignments inside the transaction callback are not narrowed away.
+  let agents = null as { agents: Record<BuiltinAgentKey, string>; created: BuiltinAgentKey[] } | null;
   const result = await db.transaction(async (tx: TransactionType) => {
     await tx.execute(sql`SELECT 1 FROM ${users} WHERE ${users.id} = ${userId} FOR UPDATE`);
 
@@ -53,7 +58,7 @@ export async function provisionHomeDriveIfNeeded(
 
     const homeDrive = ownedDrives.find((d) => d.kind === 'HOME');
     if (homeDrive) {
-      const agents = await provisionImagoAgentsInTransaction(tx, userId, homeDrive.id);
+      agents = await provisionImagoAgentsInTransaction(tx, userId, homeDrive.id);
       deferredTriggers.push(...agents.deferredTriggers);
       return { driveId: homeDrive.id, created: false };
     }
@@ -89,7 +94,7 @@ export async function provisionHomeDriveIfNeeded(
 
     // The Imago agents install on BOTH branches too: they are the user's
     // assistants, not tutorial content.
-    const agents = await provisionImagoAgentsInTransaction(tx, userId, newDrive.id);
+    agents = await provisionImagoAgentsInTransaction(tx, userId, newDrive.id);
     deferredTriggers.push(...agents.deferredTriggers);
 
     if (isExistingUser) {
@@ -116,5 +121,6 @@ export async function provisionHomeDriveIfNeeded(
     return { driveId: newDrive.id, created: true };
   });
   for (const trigger of deferredTriggers) trigger();
+  if (agents) await grantCreatedImagoAgents(userId, agents);
   return result;
 }

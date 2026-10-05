@@ -44,6 +44,7 @@ import { computePageStateHash } from '../services/page-version-service';
 import { hashWithPrefix } from '../utils/hash-utils';
 import { PageType } from '../utils/enums';
 import { BUILTIN_AGENTS, type BuiltinAgentDefinition, type BuiltinAgentKey } from './builtin-agents';
+import { grantImagoAgentsToOwnedDrives } from './grant-imago-agents';
 
 export const IMAGO_FOLDER_TITLE = 'Imago';
 
@@ -86,6 +87,7 @@ export async function provisionImagoAgents(
     return provisionImagoAgentsInTransaction(tx, userId, home.id);
   });
   for (const trigger of deferredTriggers) trigger();
+  await grantCreatedImagoAgents(userId, result);
   return result;
 }
 
@@ -156,6 +158,20 @@ export async function provisionImagoAgentsInTransaction(
     created: missing.map((definition) => definition.key),
     deferredTriggers: creator.deferredTriggers,
   };
+}
+
+/**
+ * After the provisioning transaction commits — never while it holds the
+ * user-row lock — grant the agents this call created in the user's owned
+ * STANDARD drives (`grant-imago-agents.ts`). Agents that already existed are
+ * left alone, so a grant the user removed is not re-added on the next sign-in.
+ */
+export async function grantCreatedImagoAgents(
+  userId: string,
+  result: Pick<ProvisionImagoAgentsResult, 'agents' | 'created'>,
+): Promise<void> {
+  if (result.created.length === 0) return;
+  await grantImagoAgentsToOwnedDrives(userId, { agentPageIds: result.created.map((key) => result.agents[key]) });
 }
 
 async function lockUser(tx: TransactionType, userId: string): Promise<void> {
