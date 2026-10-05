@@ -483,6 +483,17 @@ describe('middleware config.matcher', () => {
     });
 
     assert({
+      given: 'an RSC request with next-router-prefetch other than 1 (a runtime prefetch renders the page)',
+      should: 'run middleware: only the exact router prefetch value may skip it',
+      actual: [
+        matches('/imago', { rsc: '1', 'next-router-prefetch': '2' }),
+        matches('/imago/drive-1', { rsc: '1', 'next-router-prefetch': '2' }),
+        matches('/imago/drive-1', { rsc: '1', 'next-router-prefetch': '' }),
+      ],
+      expected: [true, true, true],
+    });
+
+    assert({
       given: 'an RSC request with only purpose: prefetch',
       should: 'run middleware (the router never sends it)',
       actual: matches('/imago/drive-1', { rsc: '1', purpose: 'prefetch' }),

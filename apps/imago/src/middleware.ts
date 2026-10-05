@@ -42,7 +42,8 @@ export function middleware(req: NextRequest): NextResponse {
 // - API routes always run middleware: route handlers never render the root
 //   layout, whose notFound() backstops the flag for pages.
 // - Pages skip it only for a real router prefetch (RSC with
-//   next-router-prefetch), which renders no page and so needs no nonce; the
+//   next-router-prefetch: 1), which renders no page and so needs no nonce
+//   (a runtime prefetch, value 2, renders the page and so runs it); the
 //   root layout keeps those behind the flag. A matcher entry runs middleware
 //   when no `missing` header is present, so the two entries per page source
 //   leave out exactly the requests that carry both.
@@ -52,14 +53,14 @@ export const config = {
   matcher: [
     '/api/:path*',
     { source: '/', missing: [{ type: 'header', key: 'rsc', value: '1' }] },
-    { source: '/', missing: [{ type: 'header', key: 'next-router-prefetch' }] },
+    { source: '/', missing: [{ type: 'header', key: 'next-router-prefetch', value: '1' }] },
     {
       source: '/((?!_next/static|_next/image|favicon.ico).*)',
       missing: [{ type: 'header', key: 'rsc', value: '1' }],
     },
     {
       source: '/((?!_next/static|_next/image|favicon.ico).*)',
-      missing: [{ type: 'header', key: 'next-router-prefetch' }],
+      missing: [{ type: 'header', key: 'next-router-prefetch', value: '1' }],
     },
   ],
 };
