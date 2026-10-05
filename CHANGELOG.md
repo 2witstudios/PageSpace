@@ -9,6 +9,17 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Changed
 
+- **Organization policies now hold everywhere they apply** — when an organization turns guests from
+  outside off, nobody outside it can be added to its drives by sharing a single page either (the Share
+  dialog, an email share or accepting a page invitation), and people outside it whose only access was a
+  shared page lose that access until guests are turned back on, as other guests already did. When guests
+  need approval, sharing a page with someone outside waits for an Owner or Admin just like a drive invite.
+  An organization's minimum default role for its Open drives is now enforced: a drive's default role, a
+  drive becoming Open, or a raise of the minimum is refused with a message naming the policy when the
+  role would fall below it. A policy change that turns off published apps, environments, agents from
+  other drives, autonomous agents or some models lists what it affected in the organization's audit log,
+  and the log now also shows compute handed to a drive's lead, resumed apps, and a former member's
+  turned-away attempt to rejoin (without their email address).
 - **Your allowance of an organization's credits covers compute too** — sandbox runs, terminals and
   browsers you use in an organization's drives count toward your monthly allowance of the organization's
   credits, together with your AI use, whoever's session you are working in: compute is charged to the
