@@ -1,3 +1,4 @@
+import type { StreamingTurn } from '../chat/chat-plugin';
 import type { ListSection } from '../frame/stage/stage';
 import { defaultTaskView, type TaskViewName } from '../tasks/task-view/task-view';
 
@@ -14,6 +15,8 @@ export type UiResources = {
   readonly expandedTasks: readonly string[];
   /** Pages expanded in the files tree. */
   readonly expandedFileIds: readonly string[];
+  /** The conversation an agent turn is streaming into; SWR leaves it alone meanwhile. */
+  readonly streaming: StreamingTurn | null;
 };
 
 /**
@@ -29,6 +32,6 @@ export type UiState = {
 
 /** The empty shell: the swap point for real data from later leaves. */
 export const createInitialState = (): UiState => ({
-  resources: { collapsedSections: [], taskView: defaultTaskView, expandedTasks: [], expandedFileIds: [] },
+  resources: { collapsedSections: [], taskView: defaultTaskView, expandedTasks: [], expandedFileIds: [], streaming: null },
   collections: {},
 });

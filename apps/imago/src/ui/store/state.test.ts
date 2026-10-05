@@ -6,10 +6,10 @@ describe('createInitialState()', () => {
   test('empty shell state', () => {
     assert({
       given: 'a fresh UI state',
-      should: 'collapse no section, open no task, expand no page, show Tree and carry empty collections (no mock data)',
+      should: 'collapse no section, open no task, expand no page, show Tree, stream nothing and carry empty collections (no mock data)',
       actual: createInitialState(),
       expected: {
-        resources: { collapsedSections: [], taskView: 'tree', expandedTasks: [], expandedFileIds: [] },
+        resources: { collapsedSections: [], taskView: 'tree', expandedTasks: [], expandedFileIds: [], streaming: null },
         collections: {},
       },
     });
