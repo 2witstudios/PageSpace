@@ -54,8 +54,8 @@ const req = (method: string, url: string, body?: unknown) =>
 // Typed as the service's own results, so a fixture cannot drift from the real response shape.
 const myWallets: MyWallets = {
   personal: { walletId: 'w-marcus', remainingCents: 5_000, remainingCredits: '5,000', defaultSpendSource: null },
-  driveWallets: [{ driveId: 'd-product', walletId: 'w-product', status: 'active', remainingCents: 116_442, remainingCredits: '116,442' }],
-  seats: [{ orgId: 'o-northwind', walletId: 'w-pool' }],
+  driveWallets: [{ driveId: 'd-product', driveName: 'Product', walletId: 'w-product', status: 'active', remainingCents: 116_442, remainingCredits: '116,442' }],
+  seats: [{ orgId: 'o-northwind', orgName: 'Northwind Labs', walletId: 'w-pool' }],
   funds: { driveWallets: [], pools: [], donations: [] },
 };
 
@@ -65,7 +65,7 @@ const sourceRead: ConversationSpendRead = {
   conversationId: 'c-1',
   driveId: 'd-product',
   chosenWalletId: 'w-pool',
-  options: [{ source: 'seat_allowance', walletId: 'w-pool' }],
+  options: [{ source: 'seat_allowance', walletId: 'w-pool', label: 'Northwind Labs seat', driveName: 'Product', orgName: 'Northwind Labs', remainingCents: 9_000, remainingCredits: '9,000' }],
   resolved: { kind: 'spend', source: 'seat_allowance', walletId: 'w-pool', fallbackApplied: false, fallbackFrom: null, fallbackFromWalletId: null, entitlementTier: 'business' },
 };
 

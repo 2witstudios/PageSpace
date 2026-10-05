@@ -325,7 +325,7 @@ describe('POST /api/workflows/[workflowId]/run', () => {
       },
     );
 
-    test('SPEND-6 (partial) hands the executor the credit gate as its admit hook, gating the drive the workflow runs in (not the clicker) as interactive', async () => {
+    test('SPEND-6 (partial) WAL-7 (partial) hands the executor the credit gate as its admit hook: the drive the workflow runs in pays, and the person who pressed Run is gated, so their caps bind', async () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth('admin_clicker'));
       const admit = async () => ({ admitted: true as const, release: () => {} });
       mockCreditAdmission.mockReturnValue(admit);
@@ -334,7 +334,7 @@ describe('POST /api/workflows/[workflowId]/run', () => {
 
       const [input, options] = vi.mocked(executeWorkflow).mock.calls[0];
       expect(options?.admit).toBe(admit);
-      expect(mockCreditAdmission).toHaveBeenCalledWith(input, 'interactive', expect.any(Function));
+      expect(mockCreditAdmission).toHaveBeenCalledWith(input, 'interactive', expect.any(Function), 'admin_clicker');
       expect(input.createdBy).toBe('user_123');
       // SPEND-6: the gate is told the drive the run spends; the creator is only who it is recorded against.
       expect(input.driveId).toBe(mockWorkflow.driveId);

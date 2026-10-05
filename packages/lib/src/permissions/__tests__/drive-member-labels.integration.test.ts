@@ -7,7 +7,7 @@
  *
  * Requires DATABASE_URL; deletes every row it creates, users last, and ends the pool.
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
 import { db, pool } from '@pagespace/db/db';
 import { eq, inArray } from '@pagespace/db/operators';
@@ -19,6 +19,9 @@ import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { getDriveOwnerAsMember, listDriveMembers } from '../../services/drive-member-service';
 import { listDrivePageLinkGuests } from '../drive-member-labels';
+import { canViewDriveWallet } from '../spend-standing';
+
+vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
 let ok = false;
 const ids = { users: [] as string[], orgId: '', driveId: '', personalDriveId: '', pageId: '' };
@@ -37,7 +40,9 @@ describe('drive Members labels and page-link guests (real Postgres)', () => {
     const chris = await factories.createUser({ name: 'Chris Rowe' });
     const pia = await factories.createUser({ name: 'Pia Page' });
     const leaver = await factories.createUser({ name: 'Lou Left' });
-    ids.users = [jono.id, marcus.id, chris.id, pia.id, leaver.id];
+    const collab = await factories.createUser({ name: 'Cara Collaborator' });
+    const outsider = await factories.createUser({ name: 'Otto Outside' });
+    ids.users = [jono.id, marcus.id, chris.id, pia.id, leaver.id, collab.id, outsider.id];
     const [org] = await db.insert(organizations).values({ name: 'Northwind Labs', slug: `nw-${createId()}`, ownerId: jono.id }).returning();
     ids.orgId = org.id;
     await db.insert(orgMembers).values([{ orgId: org.id, userId: jono.id, role: 'OWNER' }, { orgId: org.id, userId: marcus.id, role: 'MEMBER' }]);
@@ -51,6 +56,8 @@ describe('drive Members labels and page-link guests (real Postgres)', () => {
     const page = await factories.createPage(product.id, { title: 'Roadmap' });
     ids.pageId = page.id;
     await db.insert(pagePermissions).values({ pageId: page.id, userId: pia.id, canView: true, canEdit: false, canShare: false });
+    // Cara holds a page grant only: no drive_members row of any kind.
+    await db.insert(pagePermissions).values({ pageId: page.id, userId: collab.id, canView: true, canEdit: false, canShare: false });
     const side = await factories.createDrive(jono.id, { name: 'Side', slug: `s-${createId()}` });
     ids.personalDriveId = side.id;
     await factories.createDriveMember(side.id, chris.id, { source: 'invite' });
@@ -92,4 +99,13 @@ describe('drive Members labels and page-link guests (real Postgres)', () => {
       expect.objectContaining({ displayName: 'Pia Page', source: 'invite', pageGrantCount: 1 }),
     ]);
   });
+
+  it('X-4 (partial) only people with a wallet view may join the drive wallet room: the lead, a member and an invited guest can; a page-grant collaborator, a page-link GUEST, a departed member and an outsider cannot', async () => {
+    if (!ok) return;
+    const [jono, marcus, chris, pia, lou, cara, otto] = ids.users;
+    const can = async (userId: string) => canViewDriveWallet(userId, ids.driveId);
+    expect(await Promise.all([jono, marcus, chris].map(can))).toEqual([true, true, true]);
+    expect(await Promise.all([pia, lou, cara, otto].map(can))).toEqual([false, false, false, false]);
+  });
 });
+

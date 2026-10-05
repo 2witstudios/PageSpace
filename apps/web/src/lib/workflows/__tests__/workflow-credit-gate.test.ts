@@ -49,6 +49,25 @@ describe('acquireWorkflowCreditHold', () => {
     expect(mockCanConsumeAI.mock.calls.map((call) => call[2].spend)).toEqual([PRODUCT_AUTOMATION, PRODUCT_AUTOMATION]);
   });
 
+  it('WAL-7 (partial) a MANUAL Run is the caller\'s spend: gated as the person who pressed it, with a person present, so their caps bind; still the drive wallet', async () => {
+    mockCanConsumeAI.mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'hold_1', walletId: 'w_product' });
+
+    await acquireWorkflowCreditHold(LEGACY_AI_WORKFLOW, 'interactive', 'user_admin');
+
+    expect(mockCanConsumeAI.mock.calls[0][0]).toBe('user_admin');
+    expect(mockCanConsumeAI.mock.calls[0][2].spend).toEqual({ kind: 'automation', driveId: 'drive_product', personPresent: true });
+  });
+
+  it('WAL-7 (partial) creditAdmission threads the caller to the gate; a scheduled admission names no person', async () => {
+    mockCanConsumeAI.mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'hold_1', walletId: 'w_product' });
+    await creditAdmission(LEGACY_AI_WORKFLOW, 'interactive', undefined, 'user_admin')();
+    await creditAdmission(LEGACY_AI_WORKFLOW, 'scheduled')();
+    expect(mockCanConsumeAI.mock.calls.map((c) => [c[0], c[2].spend])).toEqual([
+      ['user_admin', { kind: 'automation', driveId: 'drive_product', personPresent: true }],
+      ['user_1', PRODUCT_AUTOMATION],
+    ]);
+  });
+
   it('gates the billed user at their tier before any model runs', async () => {
     mockCanConsumeAI.mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'hold_1' });
 

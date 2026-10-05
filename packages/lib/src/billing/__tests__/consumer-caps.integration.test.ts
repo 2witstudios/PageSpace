@@ -267,6 +267,19 @@ describe('per-consumer caps on drive-wallet and seat legs (orgs on, real Postgre
     }
   });
 
+  it('WAL-7 (partial) a manual workflow Run is gated as the person who pressed it: once their cap is spent the Run is refused source_cap_reached and holds nothing', async () => {
+    if (!dbAvailable) return;
+    world = await build();
+    const w = world;
+    // Lena leads Product and presses Run; an Admin capped her on Product's wallet.
+    await setDriveWalletCap(w.anaId, w.productId, w.lenaId, { dailyCents: 10, monthlyCents: null }, 'session');
+    await db.insert(creditLedger).values({ userId: w.lenaId, walletId: w.productWalletId, entryType: 'usage', bucket: 'monthly', amountCents: -10, appliedCents: -10, chargeMillicents: 10_000, consumeStatus: 'applied' });
+    // Exactly the gate call the Run route's admission makes (acquireWorkflowCreditHold, interactive, triggeredBy).
+    const run = await canConsumeAI(w.lenaId, 'free', { spend: personTriggeredSpend(w.productId), estCostCents: 10, maxInFlight: 3 });
+    expect(run).toMatchObject({ allowed: false, reason: 'source_refused', refusal: { source: 'drive_wallet', reason: 'source_cap_reached' } });
+    expect(await db.select().from(creditHolds).where(eq(creditHolds.userId, w.lenaId))).toEqual([]);
+  });
+
   it('WAL-7 (partial) the cap is decided under the wallet lock: spend landing after the unlocked resolution saw room is still refused, reserving nothing', async () => {
     if (!dbAvailable) return;
     world = await build();

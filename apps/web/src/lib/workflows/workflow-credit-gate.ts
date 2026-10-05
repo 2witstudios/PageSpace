@@ -2,7 +2,7 @@ import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { canConsumeAI, type GateOptions, type SpendRefusal } from '@pagespace/lib/billing/credit-gate';
-import { automationSpend } from '@pagespace/lib/billing/spend-target';
+import { automationSpend, personTriggeredSpend } from '@pagespace/lib/billing/spend-target';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { CREDIT_HOLD_ESTIMATE_CENTS, MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import type { GateReason } from '@pagespace/lib/billing/credit-core';
@@ -53,11 +53,19 @@ export const creditDeniedError = (reason: GateReason, refusal?: SpendRefusal): s
 export async function acquireWorkflowCreditHold(
   input: GatedRunInput,
   mode: WorkflowRunMode,
+  /**
+   * The person who pressed Run, for a manual run. A manual run is that person's spend (the actor
+   * pays, as for a channel @mention): it is gated as them under personTriggeredSpend, so THEIR
+   * per-consumer caps on the drive wallet bind (WAL-7). Still the drive wallet or a refusal —
+   * never their own credits or seat. Absent for a scheduled run or an event trigger: no person is
+   * present, the drive spends, recorded under the workflow's creator (SPEND-6).
+   */
+  triggeredBy?: string,
 ): Promise<WorkflowCreditHold> {
-  const userId = input.createdBy;
-  // SPEND-6: a workflow run has no person present; its consumer is the drive, and it
-  // spends the drive wallet or is skipped — never its creator's credits or allowance.
-  const target = automationSpend(input.driveId);
+  const userId = triggeredBy ?? input.createdBy;
+  // SPEND-6: a scheduled or triggered run has no person present; its consumer is the drive, and
+  // it spends the drive wallet or is skipped — never its creator's credits or allowance.
+  const target = triggeredBy ? personTriggeredSpend(input.driveId) : automationSpend(input.driveId);
   const steps = resolveSteps({ steps: input.steps ?? null, prompt: input.prompt, agentPageId: input.agentPageId });
   if (!hasAiStep(steps)) return { allowed: true, release: () => {}, creditSpend: { spend: target } };
 
@@ -105,9 +113,11 @@ export function creditAdmission(
   input: GatedRunInput,
   mode: WorkflowRunMode,
   onDenied?: (reason: GateReason) => void,
+  /** The person who pressed Run (a manual run only): their caps bind (see acquireWorkflowCreditHold). */
+  triggeredBy?: string,
 ): () => Promise<RunAdmission> {
   return async () => {
-    const hold = await acquireWorkflowCreditHold(input, mode);
+    const hold = await acquireWorkflowCreditHold(input, mode, triggeredBy);
     if (hold.allowed) return { admitted: true, release: hold.release, creditSpend: hold.creditSpend };
     onDenied?.(hold.reason);
     return { admitted: false, error: creditDeniedError(hold.reason, hold.refusal) };
