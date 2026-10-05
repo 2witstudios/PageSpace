@@ -67,17 +67,16 @@ function stubSelect(rows: unknown[]) {
   } as unknown as ReturnType<typeof db.select>;
 }
 
-// Captures the row passed to insert(...).values(...) and resolves returning().
-function stubInsert(captured: Record<string, unknown>[], opts: { throwCode?: string } = {}) {
+// Captures the row passed to insert(...).values(...) and resolves
+// onConflictDoNothing().returning(): the row, or nothing on a duplicate.
+function stubInsert(captured: Record<string, unknown>[], opts: { duplicate?: boolean } = {}) {
   vi.mocked(db.insert).mockReturnValue({
     values: vi.fn((v: Record<string, unknown>) => {
       captured.push(v);
       return {
-        returning: vi.fn(() =>
-          opts.throwCode
-            ? Promise.reject(Object.assign(new Error('dup'), { code: opts.throwCode }))
-            : Promise.resolve([{ id: 'member_1', ...v }]),
-        ),
+        onConflictDoNothing: vi.fn(() => ({
+          returning: vi.fn(() => Promise.resolve(opts.duplicate ? [] : [{ id: 'member_1', ...v }])),
+        })),
       };
     }),
   } as unknown as ReturnType<typeof db.insert>);
@@ -228,7 +227,7 @@ describe('addAgentToDrive', () => {
       .mockReturnValueOnce(stubSelect(AI_CHAT_PAGE))
       .mockReturnValueOnce(stubSelect([{ ownerId: USER }]));
     vi.mocked(canUserEditPage).mockResolvedValue(true);
-    stubInsert([], { throwCode: '23505' });
+    stubInsert([], { duplicate: true });
 
     const res = await addAgentToDrive({ actingUserId: USER, agentPageId: AGENT, driveId: DRIVE });
     expect(res).toMatchObject({ ok: false, status: 409 });

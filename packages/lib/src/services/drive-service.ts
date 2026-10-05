@@ -14,7 +14,8 @@ import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 import { slugify } from '../utils/utils';
 import { customRoleBelongsToDrive, getMemberCustomRoleId, resolveDriveWideCanEdit } from '../permissions/membership-queries';
 import { isGuestRole } from '../permissions/guest-role';
-import { grantImagoAgentsToOwnedDrives, revokeImagoAgentGrants } from '../agents/grant-imago-agents';
+import { grantImagoAgents, revokeImagoAgentGrants, storeImagoDriveChoice } from '../agents/grant-imago-agents';
+import { imagoDriveAccess } from '@pagespace/db/schema/imago-drive-access';
 import { homeDriveActionError, isHomeDrive } from './drive-guards';
 
 // ============================================================================
@@ -222,7 +223,7 @@ export async function createDrive(
   });
 
   // After commit: addAgentToDrive reads the drive on its own connection.
-  await grantImagoAgentsToOwnedDrives(userId, { driveIds: [newDrive.id] });
+  await grantImagoAgents(userId, { driveIds: [newDrive.id] });
 
   return {
     ...newDrive,
@@ -708,6 +709,12 @@ export async function allocatePublishSubdomain(
  * own Imago agents are not granted here either. Explicit grants of other
  * agents stay for the new owner to review. Returns the agentPageIds revoked.
  *
+ * The stored Imago choice (`imago_drive_access`) follows the same rule, so no
+ * later grant path undoes it: the previous owner's choice is dropped (Imago is
+ * off for them there unless they turn it on again as an admin), and the new
+ * owner's is recorded as off unless they had made one — ownership alone would
+ * otherwise turn it on at their next agent recreation.
+ *
  * Every ownership change goes through here — the transfer route and the drive
  * rollback/redo of an `ownership_transfer` — so pass `executor` to run inside a
  * caller's transaction (it becomes a savepoint there). Throws, changing
@@ -735,6 +742,14 @@ export async function transferDriveOwnership(
       .where(and(eq(drives.id, driveId), eq(drives.ownerId, fromUserId), eq(drives.kind, 'STANDARD')))
       .returning({ id: drives.id });
     if (updated.length === 0) throw new Error(`Drive ${driveId} is not owned by ${fromUserId}`);
+    await tx
+      .delete(imagoDriveAccess)
+      .where(and(eq(imagoDriveAccess.userId, fromUserId), eq(imagoDriveAccess.driveId, driveId)));
+    const [toChoice] = await tx
+      .select({ enabled: imagoDriveAccess.enabled })
+      .from(imagoDriveAccess)
+      .where(and(eq(imagoDriveAccess.userId, toUserId), eq(imagoDriveAccess.driveId, driveId)));
+    if (!toChoice) await storeImagoDriveChoice(tx, toUserId, driveId, false);
     return revokeImagoAgentGrants(tx, fromUserId, driveId);
   });
 }

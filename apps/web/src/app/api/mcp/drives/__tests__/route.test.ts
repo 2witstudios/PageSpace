@@ -51,7 +51,7 @@ vi.mock('@pagespace/lib/services/drive-service', () => ({
 }));
 
 vi.mock('@pagespace/lib/agents/grant-imago-agents', () => ({
-  grantImagoAgentsToOwnedDrives: vi.fn().mockResolvedValue([]),
+  grantImagoAgents: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
@@ -66,7 +66,7 @@ vi.mock('@/lib/auth', () => ({
 
 import { POST } from '../route';
 import { authenticateMCPRequest, isAuthError } from '@/lib/auth';
-import { grantImagoAgentsToOwnedDrives } from '@pagespace/lib/agents/grant-imago-agents';
+import { grantImagoAgents } from '@pagespace/lib/agents/grant-imago-agents';
 
 const mockSessionAuth = (userId = 'user-1') => ({
   userId,
@@ -128,7 +128,7 @@ describe('POST /api/mcp/drives — reserved name guard', () => {
       body: JSON.stringify({ name: 'My Project' }),
     });
     await POST(req as Parameters<typeof POST>[0]);
-    expect(grantImagoAgentsToOwnedDrives).toHaveBeenCalledWith('user-1', { driveIds: ['drv-1'] });
+    expect(grantImagoAgents).toHaveBeenCalledWith('user-1', { driveIds: ['drv-1'] });
   });
 
   it('given a refused name, should grant nothing', async () => {
@@ -137,6 +137,6 @@ describe('POST /api/mcp/drives — reserved name guard', () => {
       body: JSON.stringify({ name: 'Home' }),
     });
     await POST(req as Parameters<typeof POST>[0]);
-    expect(grantImagoAgentsToOwnedDrives).not.toHaveBeenCalled();
+    expect(grantImagoAgents).not.toHaveBeenCalled();
   });
 });

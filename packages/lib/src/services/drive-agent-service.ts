@@ -105,6 +105,31 @@ async function resolveGranterAccess(
  * user's own access to the drive.
  */
 export async function addAgentToDrive(input: AddAgentToDriveInput): Promise<AddAgentToDriveResult> {
+  const authorized = await authorizeAgentDriveGrant(input);
+  if (!authorized.ok) return authorized;
+  return insertAgentDriveMembership(db, authorized.grant);
+}
+
+/** A membership `authorizeAgentDriveGrant` allowed, ready to insert. */
+export interface AuthorizedAgentDriveGrant {
+  driveId: string;
+  agentPageId: string;
+  role: AgentDriveRole;
+  customRoleId: string | null;
+  includeContext: boolean;
+  addedBy: string;
+}
+
+/**
+ * `addAgentToDrive`'s checks, without the insert: whether the acting user may
+ * add this agent to the drive, and at which role. Lets a caller insert the
+ * membership later through its own transaction (`insertAgentDriveMembership`),
+ * after re-checking state under a lock it holds — the checks themselves read
+ * through the global pool and must not run inside that transaction.
+ */
+export async function authorizeAgentDriveGrant(
+  input: AddAgentToDriveInput,
+): Promise<{ ok: true; grant: AuthorizedAgentDriveGrant } | ServiceFailure> {
   const { actingUserId, agentPageId, driveId, requestedRole, requestedCustomRoleId, includeContext } = input;
 
   const [agentPage] = await db
@@ -165,25 +190,35 @@ export async function addAgentToDrive(input: AddAgentToDriveInput): Promise<AddA
     effectiveCustomRoleId = granter.customRoleId;
   }
 
-  try {
-    const [member] = await db
-      .insert(driveAgentMembers)
-      .values({
-        driveId,
-        agentPageId,
-        role: effectiveRole,
-        customRoleId: effectiveCustomRoleId,
-        includeContext: includeContext ?? false,
-        addedBy: actingUserId,
-      })
-      .returning();
-    return { ok: true, status: 201, member };
-  } catch (err) {
-    if ((err as { code?: string }).code === '23505') {
-      return { ok: false, status: 409, error: 'Agent is already a member of this drive' };
-    }
-    throw err;
-  }
+  return {
+    ok: true,
+    grant: {
+      driveId,
+      agentPageId,
+      role: effectiveRole,
+      customRoleId: effectiveCustomRoleId,
+      includeContext: includeContext ?? false,
+      addedBy: actingUserId,
+    },
+  };
+}
+
+/**
+ * Insert a membership `authorizeAgentDriveGrant` allowed. An existing
+ * membership is a 409, without raising: inside a transaction a unique
+ * violation would abort it.
+ */
+export async function insertAgentDriveMembership(
+  executor: Tx | typeof db,
+  grant: AuthorizedAgentDriveGrant,
+): Promise<AddAgentToDriveResult> {
+  const [member] = await executor
+    .insert(driveAgentMembers)
+    .values(grant)
+    .onConflictDoNothing({ target: [driveAgentMembers.driveId, driveAgentMembers.agentPageId] })
+    .returning();
+  if (!member) return { ok: false, status: 409, error: 'Agent is already a member of this drive' };
+  return { ok: true, status: 201, member };
 }
 
 /**

@@ -1,18 +1,21 @@
 /**
- * The per-drive Imago access toggle (Imago plan, DEC-2; IMG-4.6).
+ * The per-drive Imago access toggle (Imago plan, DEC-2; IMG-4.6, IMG-4.6a).
  *
- * "Imago access" for a drive is whether the viewer's own Imago agents are
- * members of it — the `drive_agent_members` rows every agent's reach comes
- * from. Reading it reads those rows; turning it on grants each live Imago
- * agent MEMBER through `addAgentToDrive` (the one membership seam, with its
- * checks and role cap); turning it off removes the viewer's Imago agents from
- * the drive (`revokeImagoAgentGrants`).
+ * "Imago access" for a drive is the viewer's stored choice
+ * (`imago_drive_access`; with none stored, on in a drive they own and off
+ * elsewhere) together with the `drive_agent_members` rows of their Imago
+ * agents, which are what the agents' reach comes from. The toggle keeps the two
+ * in step: turning it on stores the choice and grants each live Imago agent
+ * MEMBER (checked by `authorizeAgentDriveGrant`, the membership seam's checks
+ * and role cap); turning it off stores the opt-out and removes every Imago
+ * agent page of the viewer from the drive (`revokeImagoAgentGrants`). Each runs
+ * in one transaction under the user-row lock that provisioning and the grant
+ * paths take, so neither a refusal nor a concurrent sign-in leaves it half
+ * done, and a stored opt-out is read by every grant path.
  *
  * Only a drive owner or an accepted admin may read or set it: the grant
  * rights on a drive are theirs. Home is refused — the agents live there and
- * their access to it is native. Off is authoritative without stored state:
- * re-provisioning grants a recreated agent only where Imago is still on
- * (`grantNewImagoAgents`), so a drive switched off stays off.
+ * their access to it is native.
  */
 
 import { db } from '@pagespace/db/db';
@@ -21,10 +24,15 @@ import { drives, pages } from '@pagespace/db/schema/core';
 import { driveAgentMembers } from '@pagespace/db/schema/members';
 import { userBuiltinAgents } from '@pagespace/db/schema/user-builtin-agents';
 import { isDriveOwnerOrAdmin } from '../permissions/permissions';
-import { addAgentToDrive, type ServiceFailure } from '../services/drive-agent-service';
+import {
+  authorizeAgentDriveGrant,
+  insertAgentDriveMembership,
+  type AuthorizedAgentDriveGrant,
+  type ServiceFailure,
+} from '../services/drive-agent-service';
 import { homeDriveActionError } from '../services/drive-guards';
 import { BUILTIN_AGENT_KEYS, type BuiltinAgentKey } from './builtin-agents';
-import { revokeImagoAgentGrants } from './grant-imago-agents';
+import { imagoOnDriveIds, lockImagoUser, revokeImagoAgentGrants, storeImagoDriveChoice } from './grant-imago-agents';
 
 export interface ImagoDriveAccessAgent {
   key: BuiltinAgentKey;
@@ -34,7 +42,10 @@ export interface ImagoDriveAccessAgent {
 
 export interface ImagoDriveAccess {
   driveId: string;
-  /** True when any of the viewer's live Imago agents is a member of the drive. */
+  /**
+   * The viewer's choice for the drive — stored, or the default (on in a drive
+   * they own) — and false while they have no live Imago agent.
+   */
   enabled: boolean;
   /** The viewer's live Imago agents, in registry order. */
   agents: ImagoDriveAccessAgent[];
@@ -68,7 +79,11 @@ export async function setImagoDriveAccess(
   if (homeError) return { ok: false, status: 403, error: homeError };
 
   if (!enabled) {
-    await revokeImagoAgentGrants(db, userId, driveId);
+    await db.transaction(async (tx) => {
+      await lockImagoUser(tx, userId);
+      await storeImagoDriveChoice(tx, userId, driveId, false);
+      await revokeImagoAgentGrants(tx, userId, driveId);
+    });
     return { ok: true, access: await readAccess(userId, driveId) };
   }
 
@@ -76,17 +91,25 @@ export async function setImagoDriveAccess(
   if (before.agents.length === 0) {
     return { ok: false, status: 409, error: 'Your Imago agents are not set up yet' };
   }
+  // Every check before anything is written: one refusal changes nothing.
+  const grants: AuthorizedAgentDriveGrant[] = [];
   for (const agent of before.agents) {
     if (agent.isMember) continue;
-    const granted = await addAgentToDrive({
+    const authorized = await authorizeAgentDriveGrant({
       actingUserId: userId,
       agentPageId: agent.agentPageId,
       driveId,
       requestedRole: 'MEMBER',
     });
-    // 409: a concurrent toggle or grant got there first.
-    if (!granted.ok && granted.status !== 409) return granted;
+    if (!authorized.ok) return authorized;
+    grants.push(authorized.grant);
   }
+  await db.transaction(async (tx) => {
+    await lockImagoUser(tx, userId);
+    await storeImagoDriveChoice(tx, userId, driveId, true);
+    // 409: a concurrent toggle or grant got there first.
+    for (const grant of grants) await insertAgentDriveMembership(tx, grant);
+  });
   return { ok: true, access: await readAccess(userId, driveId) };
 }
 
@@ -111,5 +134,6 @@ async function readAccess(userId: string, driveId: string): Promise<ImagoDriveAc
     const agentPageId = pageIdByKey.get(key);
     return agentPageId ? [{ key, agentPageId, isMember: members.has(agentPageId) }] : [];
   });
-  return { driveId, enabled: agents.some((agent) => agent.isMember), agents };
+  const on = (await imagoOnDriveIds(db, userId, [driveId])).length > 0;
+  return { driveId, enabled: on && agents.length > 0, agents };
 }

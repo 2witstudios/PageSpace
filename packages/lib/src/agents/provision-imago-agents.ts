@@ -31,7 +31,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, desc, eq, inArray, isNull, sql } from '@pagespace/db/operators';
+import { and, desc, eq, inArray, isNull } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { driveAgentMembers } from '@pagespace/db/schema/members';
@@ -51,7 +51,7 @@ import { computePageStateHash } from '../services/page-version-service';
 import { hashWithPrefix } from '../utils/hash-utils';
 import { PageType } from '../utils/enums';
 import { BUILTIN_AGENTS, type BuiltinAgentDefinition, type BuiltinAgentKey } from './builtin-agents';
-import { grantNewImagoAgents } from './grant-imago-agents';
+import { grantImagoAgents, lockImagoUser, revokeCrossDriveMemberships } from './grant-imago-agents';
 
 export const IMAGO_FOLDER_TITLE = 'Imago';
 
@@ -69,7 +69,8 @@ export interface ProvisionImagoAgentsResult {
   created: BuiltinAgentKey[];
   /**
    * The trashed pages the created ones replace (their pointers were repointed).
-   * They keep their drive memberships, so they still record where Imago was on.
+   * They lose every membership outside Home here, so restoring one from the
+   * trash cannot bring back access to a drive (IMG-4.6a).
    */
   replacedPageIds: string[];
 }
@@ -92,7 +93,7 @@ export async function provisionImagoAgents(
   client: DatabaseType = db,
 ): Promise<ProvisionImagoAgentsResult> {
   const { deferredTriggers, ...result } = await client.transaction(async (tx: TransactionType) => {
-    await lockUser(tx, userId);
+    await lockImagoUser(tx, userId);
     const [home] = await tx
       .select({ id: drives.id })
       .from(drives)
@@ -117,7 +118,7 @@ export async function provisionImagoAgentsInTransaction(
   userId: string,
   homeDriveId: string,
 ): Promise<ProvisionImagoAgentsInTransactionResult> {
-  await lockUser(tx, userId);
+  await lockImagoUser(tx, userId);
 
   const pointers = await tx
     .select({ key: userBuiltinAgents.key, pageId: userBuiltinAgents.pageId })
@@ -172,6 +173,8 @@ export async function provisionImagoAgentsInTransaction(
       });
     agents[definition.key] = pageId;
   }
+  // The pointer no longer names them, so the toggle could not reach them.
+  await revokeCrossDriveMemberships(tx, replacedPageIds);
 
   return {
     homeDriveId,
@@ -202,30 +205,17 @@ export async function writeImagoAgentActivity(
 
 /**
  * After the provisioning transaction commits — never while it holds the
- * user-row lock — grant the agents this call created (`grant-imago-agents.ts`).
- * Agents that already existed are left alone, so a grant the user removed is
- * not re-added on the next sign-in; a recreated agent joins only the drives
- * where Imago is still on, read from its live siblings and the trashed page it
- * replaces (`grantNewImagoAgents`).
+ * user-row lock — grant the agents this call created wherever Imago is on for
+ * the user (`grantImagoAgents`, which reads the stored choice). Agents that
+ * already existed are left alone, so a grant removed by other means is not
+ * re-added on the next sign-in.
  */
 export async function grantCreatedImagoAgents(
   userId: string,
-  result: Pick<ProvisionImagoAgentsResult, 'agents' | 'created' | 'replacedPageIds'>,
+  result: Pick<ProvisionImagoAgentsResult, 'agents' | 'created'>,
 ): Promise<void> {
   if (result.created.length === 0) return;
-  const created = new Set<BuiltinAgentKey>(result.created);
-  const createdIds = result.created.map((key) => result.agents[key]);
-  const siblingIds = BUILTIN_AGENTS
-    .filter((definition) => !created.has(definition.key))
-    .map((definition) => result.agents[definition.key]);
-  await grantNewImagoAgents(userId, {
-    agentPageIds: createdIds,
-    referencePageIds: [...siblingIds, ...result.replacedPageIds],
-  });
-}
-
-async function lockUser(tx: TransactionType, userId: string): Promise<void> {
-  await tx.execute(sql`SELECT 1 FROM ${users} WHERE ${users.id} = ${userId} FOR UPDATE`);
+  await grantImagoAgents(userId, { agentPageIds: result.created.map((key) => result.agents[key]) });
 }
 
 /** The live root `Imago` folder in Home, if there is one. */
