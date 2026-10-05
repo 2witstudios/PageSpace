@@ -153,6 +153,10 @@ describe('backfill-imago-agents (Postgres)', () => {
       dryRun: true,
       scanned: 3,
       missingHome: 2,
+      // bf_u_nohome owns no drive at all: provisionHomeDriveIfNeeded gives it
+      // the first-sign-in "Getting Started" seed, so it is reported apart from
+      // bf_u_nohome_std, which gets an empty Home.
+      missingHomeOwnsNoDrive: 1,
       missingAgents: 3,
       agentPagesMissing: 3 * AGENT_COUNT,
       homeDrivesProvisioned: 0,
@@ -193,6 +197,7 @@ describe('backfill-imago-agents (Postgres)', () => {
       dryRun: false,
       scanned: 1,
       missingHome: 1,
+      missingHomeOwnsNoDrive: 0,
       missingAgents: 1,
       homeDrivesProvisioned: 1,
       usersProvisioned: 1,
@@ -370,6 +375,26 @@ describe('backfill-imago-agents (Postgres)', () => {
     expect(exitCodeFor({ failed: 0 })).toBe(0);
   });
 
+  it('given a driver error whose message echoes a row value, should print the user id and SQLSTATE but not the value', async () => {
+    await seedUser('bf_u_pgerr', { home: true });
+    const secret = 'leak-me@secret.example';
+
+    const { result: summary, output } = await quietly(() => runBackfill({
+      // A REAL Postgres error, not a hand-built one: 22P02's message is
+      // `invalid input syntax for type integer: "<the value>"`.
+      provisionAgents: async (_userId, client) => {
+        await client.execute(sql`SELECT ${secret}::int`);
+        return { created: [] };
+      },
+    }));
+
+    expect(summary).toMatchObject({ failed: 1, failedUserIds: ['bf_u_pgerr'] });
+    expect(output).toContain('bf_u_pgerr');
+    expect(output).toContain('SQLSTATE 22P02');
+    expect(output).not.toContain('leak-me');
+    expect(output).not.toContain('secret.example');
+  });
+
   it('should print ids and counts but never an email', async () => {
     await seedUser('bf_u_print_1');
     await seedUser('bf_u_print_2', { home: true });
@@ -382,6 +407,7 @@ describe('backfill-imago-agents (Postgres)', () => {
       expect(output).not.toContain('@imago-backfill.example');
     }
     expect(dry.output).toMatch(/missing a Home drive:\s+1\n/);
+    expect(dry.output).toMatch(/of which own no drive \(get "Getting Started"\):\s+1\n/);
     expect(real.output).toMatch(/still missing a Home drive:\s+0\n/);
   });
 });

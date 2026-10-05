@@ -30,9 +30,10 @@ import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive
  * takes, and the partial unique index on a user's Home drive and the unique
  * (userId, key) pointer index are the backstops. Nothing is ever deleted.
  *
- * Output names users by id only — never an email or name — and failures print
- * the error's first line, never SQL parameters. Any failure makes the exit
- * code 1, after the summary.
+ * Output names users by id only — never an email or name — and a failure
+ * prints only the error's class, SQLSTATE and constraint/table names, never
+ * message text or SQL parameters, which can carry row values. Any failure
+ * makes the exit code 1, after the summary.
  *
  * Usage:
  *   bun scripts/backfill-imago-agents.ts --dry-run
@@ -60,6 +61,12 @@ export interface BackfillSummary {
   scanned: number;
   /** Of those, users with no Home drive when scanned. */
   missingHome: number;
+  /**
+   * Of `missingHome`, users who own no drive at all. `provisionHomeDriveIfNeeded`
+   * gives them the first-sign-in seed ("Getting Started" folder, tutorial task
+   * lists and chats); the others get an empty Home.
+   */
+  missingHomeOwnsNoDrive: number;
   /** Of those, users missing at least one agent (every user without Home is). */
   missingAgents: number;
   /** Agent pages missing across the scanned users. */
@@ -95,6 +102,9 @@ const liveAgentCount = sql<number>`(
     AND uba."key" IN (${sql.join(BUILTIN_AGENT_KEYS.map((key) => sql`${key}`), sql`, `)})
 )`;
 
+/** Whether the user owns any drive (qualified by hand, as above). */
+const ownsAnyDrive = sql<boolean>`EXISTS (SELECT 1 FROM "drives" od WHERE od."ownerId" = "users"."id")`;
+
 async function liveAgentsOf(db: MigrationDb, userId: string): Promise<number> {
   const [row] = await db.select({ live: liveAgentCount }).from(users).where(eq(users.id, userId));
   return Number(row?.live ?? 0);
@@ -115,6 +125,7 @@ export async function runBackfill({
     dryRun,
     scanned: 0,
     missingHome: 0,
+    missingHomeOwnsNoDrive: 0,
     missingAgents: 0,
     agentPagesMissing: 0,
     homeDrivesProvisioned: 0,
@@ -140,7 +151,12 @@ export async function runBackfill({
     if (remaining <= 0) break;
 
     const batch = await db
-      .select({ userId: users.id, homeDriveId: drives.id, liveAgents: liveAgentCount })
+      .select({
+        userId: users.id,
+        homeDriveId: drives.id,
+        liveAgents: liveAgentCount,
+        ownsAnyDrive,
+      })
       .from(users)
       .leftJoin(drives, homeJoin)
       .where(and(gt(users.id, cursor), needsWork))
@@ -155,10 +171,12 @@ export async function runBackfill({
       const hasHome = row.homeDriveId !== null;
       const missing = hasHome ? AGENT_COUNT - Number(row.liveAgents) : AGENT_COUNT;
       if (!hasHome) summary.missingHome++;
+      if (!hasHome && !row.ownsAnyDrive) summary.missingHomeOwnsNoDrive++;
       if (missing > 0) summary.missingAgents++;
       summary.agentPagesMissing += missing;
 
-      const gap = `${hasHome ? '' : 'no Home drive, '}${missing} agent(s) missing`;
+      const homeGap = hasHome ? '' : row.ownsAnyDrive ? 'no Home drive, ' : 'owns no drive, ';
+      const gap = `${homeGap}${missing} agent(s) missing`;
       if (dryRun) {
         console.log(`  user ${row.userId}: would provision (${gap})`);
         continue;
@@ -211,6 +229,7 @@ function printSummary(summary: BackfillSummary): void {
     `\nDone${summary.dryRun ? ' (dry run — nothing written)' : ''}.`,
     `  users needing work:            ${summary.scanned}`,
     `  missing a Home drive:          ${summary.missingHome}`,
+    `    of which own no drive (get "Getting Started"): ${summary.missingHomeOwnsNoDrive}`,
     `  missing at least one agent:    ${summary.missingAgents}`,
     `  agent pages missing:           ${summary.agentPagesMissing}`,
   ];
@@ -229,19 +248,25 @@ function printSummary(summary: BackfillSummary): void {
 }
 
 /**
- * One line, no SQL parameters: a drizzle query error's message is
- * "Failed query: <sql>\nparams: <values>", so only the first line is kept, and
- * the driver's error (code + message, which carry no row values) is preferred
- * when there is one.
+ * Names the failure without any text that could carry a row value: Postgres
+ * puts values in some messages (22P02: `invalid input syntax for type
+ * integer: "<value>"`) and drizzle appends the query's params to its own. So
+ * this prints only the error's class, the driver's SQLSTATE and, when the
+ * driver reports them, the constraint and table names — schema identifiers,
+ * never data. Re-run for the user id it is printed beside to see more.
  */
 function describeError(error: unknown): string {
-  if (!(error instanceof Error)) return 'unknown error';
-  const cause = error.cause;
-  if (cause instanceof Error) {
-    const code = (cause as Error & { code?: unknown }).code;
-    return `${typeof code === 'string' ? `${code} ` : ''}${cause.message.split('\n')[0]}`;
+  const parts: string[] = [];
+  const seen = new Set<unknown>();
+  for (let current: unknown = error; current instanceof Error && !seen.has(current); current = current.cause) {
+    seen.add(current);
+    const detail = current as Error & { code?: unknown; constraint?: unknown; table?: unknown };
+    parts.push(current.constructor.name || 'Error');
+    if (typeof detail.code === 'string' && /^[0-9A-Z]{5}$/.test(detail.code)) parts.push(`SQLSTATE ${detail.code}`);
+    if (typeof detail.constraint === 'string') parts.push(`constraint ${detail.constraint}`);
+    if (typeof detail.table === 'string') parts.push(`table ${detail.table}`);
   }
-  return error.message.split('\n')[0];
+  return parts.length > 0 ? parts.join(' ') : 'non-Error value thrown';
 }
 
 export function exitCodeFor(summary: Pick<BackfillSummary, 'failed'>): number {

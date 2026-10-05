@@ -696,7 +696,9 @@ trashed agent pages. It never deletes anything.
 
 Safe to re-run and safe beside live sign-ins: the work list is re-derived each
 run, and both provisioners take the sign-in path's user-row lock. Output names
-users by id only. The summary ends with `still missing a Home drive` and
+users by id only, and a failure prints only its error class and SQLSTATE (never
+message text, which can carry row values). The dry run's `of which own no drive`
+line counts the users who will get the "Getting Started" seed. The summary ends with `still missing a Home drive` and
 `still missing an agent`, which must both be 0 after a full run; any failed
 user makes the exit code 1 and is listed by id — re-run to retry.
 
