@@ -11,6 +11,8 @@
 import useSWR from 'swr';
 import useSWRInfinite from 'swr/infinite';
 import { useApiClient } from '@/api/swr-provider';
+import { getUiState } from '@/ui/store/store';
+import { isStreaming } from '../chat-plugin';
 import type { AgentConversation, ChatMessage, ConversationsPage, MessagesPage } from '../chat-model/chat';
 import { fetchBuiltinAgents, fetchConversationMessages, fetchConversationsPage } from '../chat-api/chat-api';
 
@@ -56,16 +58,23 @@ export const useAgentConversations = (agentId: string | null) => {
   };
 };
 
-/** A conversation's messages, oldest first, `parts` as stored; older pages on `loadOlder`. */
+/**
+ * A conversation's messages, oldest first, `parts` as stored; older pages on
+ * `loadOlder`. While a turn streams into the conversation (the `streaming`
+ * resource), SWR is paused for it: a revalidation then would replace the
+ * thread under the live reply, so it fetches nothing until the turn ends.
+ */
 export const useConversationMessages = (agentId: string | null, conversationId: string | null) => {
   const client = useApiClient();
-  const { data, error, isLoading, isValidating, size, setSize } = useSWRInfinite(
+  const { data, error, isLoading, isValidating, size, setSize, mutate } = useSWRInfinite(
     (page: number, newer: MessagesPage | null) => {
       if (agentId === null || conversationId === null) return null;
       if (page === 0) return ['imago:conversation-messages', agentId, conversationId, null] as const;
       return newer?.olderCursor ? (['imago:conversation-messages', agentId, conversationId, newer.olderCursor] as const) : null;
     },
     ([, agent, conversation, cursor]) => fetchConversationMessages(client, agent, conversation, cursor ?? undefined),
+    // Read at call time: the store, not a render, says whether a turn is live.
+    { isPaused: () => isStreaming(getUiState(), conversationId) },
   );
   // Pages arrive newest first; each page is oldest first within itself.
   const messages: readonly ChatMessage[] | undefined =
@@ -76,6 +85,10 @@ export const useConversationMessages = (agentId: string | null, conversationId: 
     hasOlder,
     loadOlder: async (): Promise<void> => {
       if (hasOlder) await setSize(size + 1);
+    },
+    /** Reads the loaded pages again; does nothing while a turn streams into the conversation. */
+    revalidate: async (): Promise<void> => {
+      await mutate();
     },
     /** The rev the newest page was read at, the watermark for live updates. */
     rev: data?.[0]?.rev ?? null,

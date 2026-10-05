@@ -15,6 +15,8 @@ export type FakeRoute = (request: Recorded) => Response | Promise<Response>;
 
 export const fakeWeb = (routes: Record<string, FakeRoute>) => {
   const requests: Recorded[] = [];
+  /** Each request's headers, in the order of `requests`. */
+  const headers: Headers[] = [];
   let minted = 0;
   const client: ApiClient = createApiClient({
     fetch: async (input, init) => {
@@ -23,14 +25,15 @@ export const fakeWeb = (routes: Record<string, FakeRoute>) => {
         minted += 1;
         return Response.json({ csrfToken: `tok-${minted}` });
       }
-      const headers = new Headers(init?.headers);
+      const sent = new Headers(init?.headers);
       const request: Recorded = {
         method,
         url: input,
-        csrf: headers.get(CSRF_HEADER),
+        csrf: sent.get(CSRF_HEADER),
         body: typeof init?.body === 'string' ? (JSON.parse(init.body) as unknown) : undefined,
       };
       requests.push(request);
+      headers.push(sent);
       const route = routes[`${method} ${input}`];
       if (!route) throw new Error(`unexpected ${method} ${input}`);
       return route(request);
@@ -42,5 +45,5 @@ export const fakeWeb = (routes: Record<string, FakeRoute>) => {
   const writes = () => requests.filter((request) => request.method !== 'GET');
   const count = (key: string) =>
     requests.filter((request) => `${request.method} ${request.url}` === key).length;
-  return { client, requests, writes, count, routes };
+  return { client, requests, headers, writes, count, routes };
 };
