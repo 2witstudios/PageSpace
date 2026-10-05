@@ -13,7 +13,8 @@ import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll, vi } 
 import { createId } from '@paralleldrive/cuid2';
 import { db, pool } from '@pagespace/db/db';
 import { and, eq, inArray } from '@pagespace/db/operators';
-import { users, type SessionClaims } from '@pagespace/db/schema/auth';
+import { users } from '@pagespace/db/schema/auth';
+import type { SessionClaims } from '../../auth/session-service';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 import { orgGuestHolds } from '@pagespace/db/schema/org-guest-holds';
