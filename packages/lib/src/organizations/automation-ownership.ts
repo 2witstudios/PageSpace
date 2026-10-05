@@ -18,7 +18,7 @@
  * `org.automation.owner_left` events are written after it commits (recordOwnerLeftAutomations).
  */
 import { db } from '@pagespace/db/db';
-import { and, eq, inArray, isNotNull, isNull, or, sql } from '@pagespace/db/operators';
+import { and, asc, eq, inArray, isNotNull, isNull, or, sql } from '@pagespace/db/operators';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { workflows } from '@pagespace/db/schema/workflows';
 import { pageWebhooks } from '@pagespace/db/schema/page-webhooks';
@@ -26,9 +26,9 @@ import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers';
 import { calendarEvents } from '@pagespace/db/schema/calendar';
 import { taskItems } from '@pagespace/db/schema/tasks';
 import { taskTriggers } from '@pagespace/db/schema/task-triggers';
+import { orgMembers, type OrgRole } from '@pagespace/db/schema/organizations';
 import { recordOrgAuditEvent, recordOrgAuditEventAfterCommit } from '../audit/org-audit';
 import { loadDriveSpendStanding } from '../permissions/spend-standing';
-import { findMembershipRole } from './repository';
 import {
   decideOwnerLeftAutomationAction,
   type CreatorDepartureReason,
@@ -222,6 +222,24 @@ interface LockedAutomation {
 }
 
 /** The automation and its drive's org, locked FOR UPDATE so a concurrent reassign or delete serializes. */
+/**
+ * The accepted org roles of `userIds`, their org_members rows held FOR SHARE in `tx` (review #2831 P2-2).
+ * leaveOrganization and removeMember lock the same rows FOR UPDATE as their first step and delete them, so a
+ * departure either commits first (the row is gone here: not a member) or waits for this transaction to
+ * commit (its disable step then sees what this one wrote). Taken BEFORE the automation row, the order a
+ * departure takes them in (its member row, then the automations it flags), so the two never deadlock.
+ * Ordered by user id, as removeMember orders its pair.
+ */
+async function lockOrgRoles(tx: Tx, orgId: string, userIds: string[]): Promise<Map<string, OrgRole>> {
+  const rows = await tx
+    .select({ userId: orgMembers.userId, role: orgMembers.role })
+    .from(orgMembers)
+    .where(and(eq(orgMembers.orgId, orgId), inArray(orgMembers.userId, [...new Set(userIds)])))
+    .orderBy(asc(orgMembers.userId))
+    .for('share');
+  return new Map(rows.map((r) => [r.userId, r.role]));
+}
+
 async function lockAutomation(tx: Tx, kind: AutomationKind, id: string): Promise<LockedAutomation | null> {
   if (kind === 'workflow') {
     const [row] = await tx
@@ -266,9 +284,11 @@ export interface ReassignOwnerLeftAutomationInput {
  */
 export async function reassignOwnerLeftAutomation(input: ReassignOwnerLeftAutomationInput): Promise<OwnerLeftAutomationResult> {
   return db.transaction(async (tx) => {
-    const actorRole = await findMembershipRole(input.orgId, input.actorId);
+    const roles = await lockOrgRoles(tx, input.orgId, [input.actorId, input.newOwnerId]);
+    const actorRole = roles.get(input.actorId) ?? null;
     const automation = actorRole === null ? null : await lockAutomation(tx, input.kind, input.id);
-    const standing = automation ? await loadDriveSpendStanding(input.newOwnerId, automation.driveId) : null;
+    // Read through tx, under the membership locks just taken: a departure cannot commit in between.
+    const standing = automation ? await loadDriveSpendStanding(input.newOwnerId, automation.driveId, tx) : null;
     const decision = decideOwnerLeftAutomationAction({
       actorRole,
       orgId: input.orgId,
@@ -311,7 +331,7 @@ export async function reassignOwnerLeftAutomation(input: ReassignOwnerLeftAutoma
  */
 export async function deleteOwnerLeftAutomation(input: { orgId: string; actorId: string; kind: AutomationKind; id: string }): Promise<OwnerLeftAutomationResult> {
   return db.transaction(async (tx) => {
-    const actorRole = await findMembershipRole(input.orgId, input.actorId);
+    const actorRole = (await lockOrgRoles(tx, input.orgId, [input.actorId])).get(input.actorId) ?? null;
     const automation = actorRole === null ? null : await lockAutomation(tx, input.kind, input.id);
     const decision = decideOwnerLeftAutomationAction({ actorRole, orgId: input.orgId, automation, action: { kind: 'delete' } });
     if (!decision.ok || !automation) return decision;

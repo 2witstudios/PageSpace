@@ -28,7 +28,7 @@ import { taskTriggers } from '@pagespace/db/schema/task-triggers';
 import { creditHolds, creditLedger } from '@pagespace/db/schema/credits';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { notifications } from '@pagespace/db/schema/notifications';
-import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
+import { organizations, orgInvitations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
 import { walletCapAlerts, walletConsumerCaps, wallets } from '@pagespace/db/schema/wallets';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
@@ -293,13 +293,85 @@ describe('[D-OW-36] an org drive\'s automations outlive their creator (orgs on, 
     expect(await attempt(w.anaId, w.guestId)).toEqual({ ok: false, status: 400, reason: 'new_owner_not_member' });
     expect(await attempt(w.anaId, w.marcusId)).toEqual({ ok: false, status: 400, reason: 'new_owner_not_member' });
     expect(await attempt(w.anaId, 'no-such-user')).toEqual({ ok: false, status: 400, reason: 'new_owner_not_member' });
-    // Another org's admin cannot reach it, and a workflow in a personal drive is not the org's.
+    // A workflow in a personal drive is not the org's.
     expect(await reassignOwnerLeftAutomation({ orgId: w.orgId, actorId: w.anaId, kind: 'workflow', id: w.sideWorkflowId, newOwnerId: w.lenaId }))
       .toEqual({ ok: false, status: 404, reason: 'not_found' });
+
+    // Another org's Admin (review #2831 P3-2): through their own org the automation is not found; through
+    // Northwind they are no member. A member of that other org is no owner for Northwind's automation, even
+    // as an invited member of Product; nor is a pending invitee of Northwind who already holds a Product row.
+    const [orgB] = await db.insert(organizations).values({ name: 'Contoso', slug: `contoso-${createId()}`, ownerId: w.outsiderId }).returning();
+    try {
+      await db.insert(orgMembers).values([
+        { orgId: orgB.id, userId: w.outsiderId, role: 'ADMIN' },
+        { orgId: orgB.id, userId: w.guestId, role: 'MEMBER' },
+      ]);
+      expect(await reassignOwnerLeftAutomation({ orgId: orgB.id, actorId: w.outsiderId, kind: 'workflow', id: w.hourlyId, newOwnerId: w.outsiderId }))
+        .toEqual({ ok: false, status: 404, reason: 'not_found' });
+      expect(await deleteOwnerLeftAutomation({ orgId: orgB.id, actorId: w.outsiderId, kind: 'page_webhook', id: w.webhookId }))
+        .toEqual({ ok: false, status: 404, reason: 'not_found' });
+      expect(await reassignOwnerLeftAutomation({ orgId: w.orgId, actorId: w.outsiderId, kind: 'workflow', id: w.hourlyId, newOwnerId: w.lenaId }))
+        .toEqual({ ok: false, status: 404, reason: 'not_member' });
+      expect(await listOwnerLeftAutomations(orgB.id)).toEqual([]);
+      expect(await attempt(w.anaId, w.guestId)).toEqual({ ok: false, status: 400, reason: 'new_owner_not_member' });
+    } finally {
+      await db.delete(organizations).where(eq(organizations.id, orgB.id));
+    }
+    const invitee = await factories.createUser({ name: 'Ivy Invitee' });
+    w.userIds.push(invitee.id);
+    await db.insert(orgInvitations).values({ orgId: w.orgId, email: invitee.email, tokenHash: createId(), invitedBy: w.anaId, expiresAt: new Date(Date.now() + 86_400_000) });
+    await factories.createDriveMember(w.productId, invitee.id, { source: 'invite' });
+    expect(await attempt(w.anaId, invitee.id)).toEqual({ ok: false, status: 400, reason: 'new_owner_not_member' });
 
     expect(await workflowRow(w.hourlyId)).toMatchObject({ createdBy: w.marcusId, isEnabled: false });
     expect((await workflowRow(w.hourlyId))?.ownerLeftAt).toBeInstanceOf(Date);
     expect(audit.events.filter((e) => e.eventType === 'org.automation.reassigned')).toEqual([]);
+  });
+
+  it('SPEND-6 (partial) a reassignment racing the new owner\'s departure serializes with it: the departure commits first and the reassignment is refused, the automation staying off (review #2831 P2-2)', async () => {
+    if (!dbAvailable) return;
+    world = await build();
+    const w = world;
+    await leaveOrganization(w.marcusId, w.orgId);
+
+    // Lena's departure takes her org_members row and holds its transaction open.
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let leaveLocked!: () => void;
+    const locked = new Promise<void>((resolve) => { leaveLocked = resolve; });
+    const departure = db.transaction(async (tx) => {
+      const left = await leaveOrganization(w.lenaId, w.orgId, tx);
+      leaveLocked();
+      await held;
+      return left;
+    });
+    await locked;
+
+    let settled = false;
+    const reassign = reassignOwnerLeftAutomation({ orgId: w.orgId, actorId: w.anaId, kind: 'workflow', id: w.hourlyId, newOwnerId: w.lenaId })
+      .finally(() => { settled = true; });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    // It waits on Lena's membership row: it cannot decide on a membership whose removal is in flight.
+    expect(settled).toBe(false);
+
+    release();
+    expect(await departure).toMatchObject({ ok: true });
+    expect(await reassign).toEqual({ ok: false, status: 400, reason: 'new_owner_not_member' });
+    const row = await workflowRow(w.hourlyId);
+    expect(row).toMatchObject({ createdBy: w.marcusId, isEnabled: false });
+    expect(row?.ownerLeftAt).toBeInstanceOf(Date);
+  });
+
+  it('SPEND-6 (partial) a departure that starts after a reassignment committed flags the automation under its new owner (review #2831 P2-2)', async () => {
+    if (!dbAvailable) return;
+    world = await build();
+    const w = world;
+    await leaveOrganization(w.marcusId, w.orgId);
+    expect(await reassignOwnerLeftAutomation({ orgId: w.orgId, actorId: w.anaId, kind: 'workflow', id: w.hourlyId, newOwnerId: w.lenaId })).toEqual({ ok: true });
+    await leaveOrganization(w.lenaId, w.orgId);
+    const row = await workflowRow(w.hourlyId);
+    expect(row).toMatchObject({ createdBy: w.lenaId, isEnabled: false });
+    expect(row?.ownerLeftAt).toBeInstanceOf(Date);
   });
 
   it('SPEND-6 (partial) an Admin deletes an owner-left automation (a workflow takes its triggers); a member cannot; both audited only when done', async () => {

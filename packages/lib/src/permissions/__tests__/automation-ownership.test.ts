@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
+  AUTOMATION_OWNER_CHANGED_ERROR,
   AUTOMATION_OWNER_LEFT_ERROR,
   automationRunOwner,
+  claimedRunOwner,
   decideOwnerLeftAutomationAction,
   departedCreatorDisposition,
 } from '../automation-ownership';
@@ -29,6 +31,21 @@ describe('automationRunOwner', () => {
   it('the recorded reason names owner_left and tells an admin what to do', () => {
     expect(AUTOMATION_OWNER_LEFT_ERROR).toContain('owner_left');
     expect(AUTOMATION_OWNER_LEFT_ERROR).toMatch(/reassign or delete/);
+  });
+});
+
+describe('claimedRunOwner', () => {
+  it('SPEND-6 (partial) a claimed run proceeds as the owner it was scheduled as', () => {
+    expect(claimedRunOwner({ createdBy: 'lena', ownerLeftAt: null }, 'lena')).toEqual({ runs: true, ownerId: 'lena' });
+  });
+
+  it('SPEND-6 (partial) a run scheduled as the old creator of a since-reassigned workflow is skipped owner_changed, never run as them (review #2831 P2-2)', () => {
+    expect(claimedRunOwner({ createdBy: 'lena', ownerLeftAt: null }, 'marcus')).toEqual({ runs: false, reason: 'owner_changed', error: AUTOMATION_OWNER_CHANGED_ERROR });
+  });
+
+  it('SPEND-6 (partial) an owner-left workflow is refused owner_left whoever it was scheduled as; no comparison is made for a source that runs as its scheduler', () => {
+    expect(claimedRunOwner({ createdBy: 'marcus', ownerLeftAt: LEFT_AT }, 'marcus')).toMatchObject({ runs: false, reason: 'owner_left' });
+    expect(claimedRunOwner({ createdBy: 'lena', ownerLeftAt: null }, null)).toEqual({ runs: true, ownerId: 'lena' });
   });
 });
 

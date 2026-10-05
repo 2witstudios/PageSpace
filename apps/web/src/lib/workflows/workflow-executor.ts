@@ -40,7 +40,7 @@ import { capStepToolPayloads } from '@/lib/ai/core/cap-step-tool-payloads';
 import { getDrivePolicies } from '@pagespace/lib/organizations/policy-reader';
 import { agentsAutonomousDecision } from '@pagespace/lib/organizations/org-action-decisions';
 import { readWorkflowOwnership } from '@pagespace/lib/organizations/automation-ownership';
-import { automationRunOwner } from '@pagespace/lib/permissions/automation-ownership';
+import { claimedRunOwner } from '@pagespace/lib/permissions/automation-ownership';
 
 export type WorkflowRunSource =
   | { table: 'cron'; id: null; triggerAt: Date | null }
@@ -190,8 +190,13 @@ export async function executeWorkflow(
     // and any hold: a workflow whose creator left the org (flagged owner-left) or deleted their account (no
     // creator) is skipped, manual Runs included, and the run row is finalized as cancelled with the reason. The
     // fresh read also closes the race with a departure that committed after a poller selected the row.
+    // And the run proceeds only as the owner read now: a run composed from a poller's stale row whose workflow
+    // was reassigned since is skipped owner_changed, never run as the old creator (review #2831 P2-2). A
+    // calendar trigger runs as its scheduler, which its executor re-read before gating.
     const ownership = await readWorkflowOwnership(input.workflowId);
-    const owner = ownership ? automationRunOwner(ownership) : null;
+    const owner = ownership
+      ? claimedRunOwner(ownership, input.source.table === 'calendarTriggers' ? null : input.createdBy)
+      : null;
     // POL-9: an org can turn agents' autonomous runs off. A run with no person asking (every source but a manual
     // run) in an org drive is skipped before any credit is reserved or any model is built; the run row is finalized
     // as cancelled with the policy's message. Read now, every run: no cache, no restart.

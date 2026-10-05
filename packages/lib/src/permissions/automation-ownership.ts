@@ -35,6 +35,25 @@ export function automationRunOwner(automation: AutomationOwnership): AutomationR
   return { runs: true, ownerId: automation.createdBy };
 }
 
+/** The run error when an automation was reassigned between its scheduling and its claim. */
+export const AUTOMATION_OWNER_CHANGED_ERROR =
+  'Automation skipped: owner_changed (it was reassigned after this run was scheduled; its next run is the new owner\'s)';
+
+export type ClaimedRunOwner = AutomationRunOwner | { runs: false; reason: 'owner_changed'; error: string };
+
+/**
+ * The owner a CLAIMED run may proceed as (review #2831 P2-2): the workflow's owner read fresh at claim time
+ * must be the person the run was scheduled and gated as (`scheduledAs`). A run composed from a poller's
+ * stale row whose workflow has since been reassigned is skipped, never run as the old creator; the next run
+ * is the new owner's. `scheduledAs` null skips the comparison, for a source that runs as someone other than
+ * the workflow's creator by design (a calendar trigger runs as its scheduler).
+ */
+export function claimedRunOwner(automation: AutomationOwnership, scheduledAs: string | null): ClaimedRunOwner {
+  const owner = automationRunOwner(automation);
+  if (!owner.runs || scheduledAs === null || owner.ownerId === scheduledAs) return owner;
+  return { runs: false, reason: 'owner_changed', error: AUTOMATION_OWNER_CHANGED_ERROR };
+}
+
 export type CreatorDepartureReason = 'left_org' | 'account_deleted';
 
 /**

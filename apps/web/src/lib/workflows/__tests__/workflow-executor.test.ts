@@ -410,6 +410,26 @@ describe('executeWorkflow', () => {
       expect(admit).not.toHaveBeenCalled();
     });
 
+    test.each(['cron', 'manual', 'taskTriggers', 'webhookTriggers'] as const)('SPEND-6 (partial) a %s run composed as the old creator of a since-reassigned workflow is skipped owner_changed before any gate, never run as them (review #2831 P2-2)', async (table) => {
+      setupSelectChain([mockAgent], [mockDrive]);
+      readWorkflowOwnership.mockResolvedValue({ createdBy: 'user_new_owner', ownerLeftAt: null });
+      const admit = vi.fn(async () => ({ admitted: true as const, release: vi.fn() }));
+
+      const result = await executeWorkflow(fire(table), { admit });
+
+      expect(result).toMatchObject({ success: false, skipped: true });
+      expect(result.error).toContain('owner_changed');
+      expect(admit).not.toHaveBeenCalled();
+      expect(vi.mocked(createAIProvider)).not.toHaveBeenCalled();
+    });
+
+    test('a calendar run is not compared: it runs as its scheduler, whom its executor re-read before gating', async () => {
+      setupSelectChain([mockAgent], [mockDrive]);
+      readWorkflowOwnership.mockResolvedValue({ createdBy: 'user_other', ownerLeftAt: null });
+      const result = await executeWorkflow(fire('calendarTriggers'));
+      expect(result.skipped).toBeUndefined();
+    });
+
     test('the claim is won BEFORE the ownership read, so an overlapping fire records nothing; a standing owner runs as before', async () => {
       setupSelectChain([mockAgent], [mockDrive]);
       readWorkflowOwnership.mockResolvedValue({ createdBy: 'user_123', ownerLeftAt: null });
