@@ -72,6 +72,12 @@ export const ORG_ERROR_COPY: Record<OrgApiErrorCode, string> = {
   not_a_page_grant: 'This request can no longer be approved here.',
   page_gone: 'The page for this request no longer exists.',
 
+  // automations whose owner left
+  owner_present: 'This automation still has its owner, so there is nothing to reassign.',
+  new_owner_not_member: 'Automations can only be handed to a member of this organization.',
+  new_owner_no_drive_access: "That person cannot reach this automation's drive. Add them to the drive first, or choose someone else.",
+  owner_left: "This automation's owner left the organization. An Owner or Admin must reassign it before it can run again.",
+
   // wallets, caps and spend sources
   mcp_token_cannot_move_money: 'Moving credits can only be done from the PageSpace app.',
   mcp_token_cannot_change_spend_source: 'The spending source can only be changed from the PageSpace app.',
