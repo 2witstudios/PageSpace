@@ -264,16 +264,18 @@
   }
 }
 
-/* Reduced motion zeroes every duration and delay: panes jump to their
-   stage width and nothing animates or scrolls smoothly. */
+/* Reduced motion cuts every duration to 0.01ms and every delay to zero:
+   panes reach their stage width at once and nothing animates or scrolls
+   smoothly. Not 0s: a 0s transition never starts, so transitionend never
+   fires, and the shell's panes wait for it to drop a closed pane's content. */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
-    animation-duration: 0s !important;
+    animation-duration: 0.01ms !important;
     animation-delay: 0s !important;
     animation-iteration-count: 1 !important;
-    transition-duration: 0s !important;
+    transition-duration: 0.01ms !important;
     transition-delay: 0s !important;
     scroll-behavior: auto !important;
   }

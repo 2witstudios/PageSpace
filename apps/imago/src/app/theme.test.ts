@@ -88,6 +88,52 @@ const ADOPTED_DEFAULT_NAMES = [
   '--tracking-wide',
 ];
 
+/**
+ * Every numbered name imago may declare: the 4px spacing steps, the three
+ * elevations and the shadows that map them, the type steps around the base,
+ * and the prose headings. Any other name whose last segment carries a digit
+ * (`--spacing-7`, `--radius-2xl`, `--color-accent-500`) fails the lock.
+ */
+const NUMBERED_SCALE = [
+  '--elevation-1',
+  '--elevation-2',
+  '--elevation-3',
+  '--shadow-1',
+  '--shadow-2',
+  '--shadow-3',
+  '--spacing-0',
+  '--spacing-1',
+  '--spacing-10',
+  '--spacing-12',
+  '--spacing-16',
+  '--spacing-2',
+  '--spacing-3',
+  '--spacing-4',
+  '--spacing-5',
+  '--spacing-6',
+  '--spacing-8',
+  '--spacing-prose-h1',
+  '--spacing-prose-h2',
+  '--text-2xl',
+  '--text-2xs',
+  '--text-3xl',
+  '--text-prose-h1',
+  '--text-prose-h2',
+];
+
+/** Every custom property the stylesheets declare on `:root`. */
+const rootPropertyNames = (): string[] => {
+  const names = new Set<string>();
+  for (const file of themeFiles) {
+    postcss.parse(readFileSync(file, 'utf8')).walkRules(':root', (rule) =>
+      rule.walkDecls(/^--/, (decl) => {
+        names.add(decl.prop);
+      }),
+    );
+  }
+  return [...names];
+};
+
 /** The utility a default token would generate, if its namespace were live. */
 const utilityFor = (name: string): string | undefined => {
   const prefixes: [RegExp, (rest: string) => string][] = [
@@ -150,6 +196,18 @@ describe('imago Tailwind theme (token lock)', () => {
         .filter((name) => defaultTokenNames.includes(name))
         .sort(),
       expected: ADOPTED_DEFAULT_NAMES,
+    });
+  });
+
+  test('a numbered token name outside the scale', () => {
+    const declared = new Set([...imagoTokens.keys(), ...rootPropertyNames()]);
+
+    assert({
+      given: 'every theme token and :root custom property imago declares',
+      should:
+        'carry a digit in its last segment only when it is on the numbered scale',
+      actual: [...declared].filter((name) => /\d[^-]*$/.test(name)).sort(),
+      expected: NUMBERED_SCALE,
     });
   });
 
@@ -387,16 +445,26 @@ describe('imago theme selection and motion', () => {
 
     assert({
       given: 'a viewer who prefers reduced motion',
-      should: 'zero every transition and animation duration and delay',
+      should:
+        'cut every duration to 0.01ms and every delay to zero, so motion is gone but end events still fire',
       actual: reduced,
       expected: {
-        'animation-duration': '0s !important',
+        'animation-duration': '0.01ms !important',
         'animation-delay': '0s !important',
         'animation-iteration-count': '1 !important',
-        'transition-duration': '0s !important',
+        'transition-duration': '0.01ms !important',
         'transition-delay': '0s !important',
         'scroll-behavior': 'auto !important',
       },
+    });
+
+    // A 0s transition never starts, so transitionend never fires; the shell's
+    // panes keep a closing pane's children until that event (IMG-3.2).
+    assert({
+      given: 'the reduced transition duration',
+      should: 'stay above zero so transitionend still fires',
+      actual: parseFloat(reduced['transition-duration'] ?? '0') > 0,
+      expected: true,
     });
   });
 });

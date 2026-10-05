@@ -79,10 +79,14 @@ describe('apps/imago ESLint: token-locked Tailwind', () => {
 
   test('per-element dark and color-scheme variants', async () => {
     assert({
-      given: 'a dark: variant and a color-scheme utility',
+      given:
+        'a dark: variant, a negated not-dark: variant and a color-scheme utility',
       should: 'report the restricted-class rule for each',
-      actual: await lintMarkup('dark:bg-surface scheme-dark'),
+      actual: await lintMarkup(
+        'dark:bg-surface not-dark:bg-surface-raised scheme-dark',
+      ),
       expected: [
+        'better-tailwindcss/no-restricted-classes',
         'better-tailwindcss/no-restricted-classes',
         'better-tailwindcss/no-restricted-classes',
       ],

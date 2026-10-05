@@ -123,7 +123,7 @@
 
 /* Panes move by width alone. Tailwind's transition presets do not include
    width, and an arbitrary property is off-limits (myimago ADR 0028). The global
-   reduced-motion rule zeroes the duration. */
+   reduced-motion rule cuts the duration to 0.01ms. */
 @utility pane-motion {
   transition-property: width;
   transition-duration: 320ms;

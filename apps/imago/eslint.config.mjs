@@ -67,7 +67,9 @@ const eslintConfig = [
                 "Arbitrary values and properties bypass the design tokens; add a token to the theme instead.",
             },
             {
-              pattern: "(^|:)(dark|scheme-[a-z-]+):",
+              // Any variant ending in dark (dark:, not-dark:, group-dark:)
+              // or naming a color scheme.
+              pattern: "(^|[:-])(dark|scheme-[a-z-]+):",
               message:
                 "Theme colors come from light-dark() tokens; do not add per-element color-scheme variants.",
             },
