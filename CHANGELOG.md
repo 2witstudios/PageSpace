@@ -535,6 +535,11 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Changed
 
+- **New global assistant sessions live in your Home drive** — a sandbox session started from the
+  global assistant (or by its first sandbox tool call) is now created in your Home drive, which is
+  set up for you if you do not have one yet, so it is listed under Home rather than under "Global
+  Assistant". Only you can open it, and it is billed to you and runs in the same sandbox as before.
+  Existing assistant sessions stay where they are.
 - **The privacy policy now describes AI routing as it actually works** — every cloud AI request
   goes through OpenRouter to the provider of the model you picked, including Anthropic, OpenAI,
   Google and xAI models. The policy previously described those four as direct and said OpenRouter
