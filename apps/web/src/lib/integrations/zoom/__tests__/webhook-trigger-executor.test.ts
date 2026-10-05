@@ -54,9 +54,12 @@ const CONNECTION = { userId: 'user-marcus' } as ZoomConnection;
 const EVENT = { event: 'meeting.ended', payload: { object: { topic: 'Standup' } } };
 const PRODUCT_AUTOMATION = { kind: 'automation', driveId: 'drive-product' };
 
-const workflowRow = () => ({
+const workflowRow = (overrides: Record<string, unknown> = {}) => ({
   id: 'wf-1',
   driveId: 'drive-product',
+  createdBy: 'user-marcus',
+  ownerLeftAt: null as Date | null,
+  ...overrides,
   agentPageId: 'agent-1',
   prompt: 'Summarize the meeting',
   contextPageIds: [],
@@ -75,8 +78,36 @@ describe('executeWebhookTrigger (Zoom)', () => {
     mockSelectWhere
       .mockResolvedValueOnce([workflowRow()])                        // workflow load
       .mockResolvedValueOnce([{ id: 'agent-1', isTrashed: false }])  // agent preflight
-      .mockResolvedValueOnce([{ subscriptionTier: 'pro' }]);         // connection owner tier
+      .mockResolvedValueOnce([{ subscriptionTier: 'pro' }]);         // workflow owner tier
     mockExecuteWorkflow.mockResolvedValue({ success: true, durationMs: 5 });
+  });
+
+  it.each([
+    ['flagged owner-left', { ownerLeftAt: new Date() }],
+    ['whose creator deleted their account', { createdBy: null }],
+  ])('SPEND-6 (partial) a workflow %s is skipped before any check, gate or hold, naming owner_left ([D-OW-36])', async (_label, overrides) => {
+    mockSelectWhere.mockReset();
+    mockSelectWhere.mockResolvedValueOnce([workflowRow(overrides)]);
+    const result = await executeWebhookTrigger(TRIGGER, EVENT, CONNECTION);
+    expect(result).toMatchObject({ success: false, skipped: true });
+    expect(result.error).toContain('owner_left');
+    expect(mockIsUserDriveMember).not.toHaveBeenCalled();
+    expect(mockCanConsumeAI).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('SPEND-6 (partial) WAL-7 (partial) a run fired from one person\'s Zoom connection on ANOTHER member\'s workflow runs as the workflow\'s owner (gate, tier, identity); the connection is only checked for drive access (review #2831 P2-1)', async () => {
+    mockSelectWhere.mockReset();
+    mockSelectWhere
+      .mockResolvedValueOnce([workflowRow({ createdBy: 'user-lena' })])
+      .mockResolvedValueOnce([{ id: 'agent-1', isTrashed: false }])
+      .mockResolvedValueOnce([{ subscriptionTier: 'free' }]);
+
+    await executeWebhookTrigger(TRIGGER, EVENT, CONNECTION);
+
+    expect(mockIsUserDriveMember).toHaveBeenCalledWith('user-marcus', 'drive-product');
+    expect(mockCanConsumeAI).toHaveBeenCalledWith('user-lena', 'free', { spend: PRODUCT_AUTOMATION, skipDailyCap: true });
+    expect(mockExecuteWorkflow.mock.calls[0][0]).toMatchObject({ createdBy: 'user-lena' });
   });
 
   it('SPEND-6 (partial) the gate names the drive as consumer, never the connection owner\'s credits', async () => {

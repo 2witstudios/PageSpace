@@ -11,7 +11,7 @@ import {
 const lead: DriveRelationship = { isOwner: true, membership: null };
 const member = (role: 'OWNER' | 'ADMIN' | 'MEMBER'): DriveRelationship => ({
   isOwner: false,
-  membership: { role, customRoleId: null, source: 'invite', auditOrgAdminPrivateAccess: false },
+  membership: { role, customRoleId: null, source: 'invite', auditOrgAdminPrivateAccess: false, openDriveFloor: null },
 });
 const stranger: DriveRelationship = { isOwner: false, membership: null };
 

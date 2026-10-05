@@ -10,7 +10,8 @@
 import { describe, it, expect, afterAll, afterEach, vi } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
 import { db, pool } from '@pagespace/db/db';
-import { eq, inArray } from '@pagespace/db/operators';
+import { and, eq, inArray } from '@pagespace/db/operators';
+import { orgGuestHolds } from '@pagespace/db/schema/org-guest-holds';
 import { factories } from '@pagespace/db/test/factories';
 import { mcpTokens } from '@pagespace/db/schema/auth';
 import { driveAgentMembers, driveRoles, mcpTokenDrives } from '@pagespace/db/schema/members';
@@ -139,9 +140,11 @@ describe('org member removal and demotion revoke what the membership handed out 
     expect(await getAppAccessLevel(key, evesPage.id)).toMatchObject({ canView: true });
     expect(await findOAuthAccessTokenByValue(ownGrant.accessToken)).not.toBeNull();
     expect(await refreshDecision(ownGrant.refreshId)).toMatchObject({ reason: null, decision: { ok: true } });
-    // Eve herself keeps what her invited row gives a guest (DRV-8); only what the membership handed out goes.
-    expect(await getUserAccessLevel(eve.id, f.pages.researchPage.id)).toMatchObject({ canView: true });
+    // Eve is now an outsider. Under Northwind's guests policy, approve (the default, [D-OW-41]), the invited row she
+    // kept waits for an Owner or Admin: she holds nothing until one approves it (POL-2), and it is not lost.
+    expect(await getUserAccessLevel(eve.id, f.pages.researchPage.id)).toBeNull();
     expect(await getUserAccessLevel(eve.id, f.pages.productPage.id)).toBeNull();
+    expect(await db.select().from(orgGuestHolds).where(and(eq(orgGuestHolds.orgId, f.org.id), eq(orgGuestHolds.userId, eve.id), eq(orgGuestHolds.state, 'pending_approval')))).toHaveLength(1);
   });
 
   it('ORG-4 (partial) demoting an Admin to Member revokes only what a Member could not have created: everything on drives org power alone opened, admin-only artifacts on Open drives', async () => {

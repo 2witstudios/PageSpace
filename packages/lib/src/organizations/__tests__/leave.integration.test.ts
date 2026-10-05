@@ -39,6 +39,8 @@ async function orgWith(ownerId: string, memberIds: string[]) {
     name: 'Northwind Labs',
     slug: `northwind-${createId()}`,
     ownerId,
+    // [D-OW-41] Explicitly on: this suite is about the leave cascade, not the guests default (approve).
+    policies: { guests: 'on' },
   }).returning();
   createdOrgIds.push(org.id);
   await db.insert(orgMembers).values([

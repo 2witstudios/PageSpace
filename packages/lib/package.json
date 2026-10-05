@@ -2024,6 +2024,11 @@
       "import": "./dist/publish/render-sheet-page.js",
       "require": "./dist/publish/render-sheet-page.js"
     },
+    "./organizations/automation-ownership": {
+      "types": "./dist/organizations/automation-ownership.d.ts",
+      "import": "./dist/organizations/automation-ownership.js",
+      "require": "./dist/organizations/automation-ownership.js"
+    },
     "./organizations/leave": {
       "types": "./dist/organizations/leave.d.ts",
       "import": "./dist/organizations/leave.js",
@@ -2504,6 +2509,11 @@
       "import": "./dist/permissions/permissions.js",
       "require": "./dist/permissions/permissions.js"
     },
+    "./permissions/open-drive-floor": {
+      "types": "./dist/permissions/open-drive-floor.d.ts",
+      "import": "./dist/permissions/open-drive-floor.js",
+      "require": "./dist/permissions/open-drive-floor.js"
+    },
     "./permissions/app-unpark-authority": {
       "types": "./dist/permissions/app-unpark-authority.d.ts",
       "import": "./dist/permissions/app-unpark-authority.js",
@@ -2643,6 +2653,11 @@
       "types": "./dist/permissions/drive-member-labels.d.ts",
       "import": "./dist/permissions/drive-member-labels.js",
       "require": "./dist/permissions/drive-member-labels.js"
+    },
+    "./permissions/automation-ownership": {
+      "types": "./dist/permissions/automation-ownership.d.ts",
+      "import": "./dist/permissions/automation-ownership.js",
+      "require": "./dist/permissions/automation-ownership.js"
     },
     "./permissions/spend-standing": {
       "types": "./dist/permissions/spend-standing.d.ts",

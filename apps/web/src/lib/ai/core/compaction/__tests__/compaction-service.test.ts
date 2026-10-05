@@ -157,6 +157,13 @@ describe('runCompaction', () => {
       expect(mockTrackUsage.mock.calls[0][0]).toMatchObject({ holdId: 'hold-a', walletId: 'w-product' });
     });
 
+    it('SPEND-6 (partial) WAL-7 (partial) a compaction inside a manual Run is gated and recorded as the person who pressed Run (billedUserId), while the provider stays the turn\'s user (review #2817 P3-A)', async () => {
+      await runCompaction({ ...BASE_PARAMS, billedUserId: 'user-presser' });
+      expect(mockGate.mock.calls[0][0]).toBe('user-presser');
+      expect(mockTrackUsage.mock.calls[0][0]).toMatchObject({ userId: 'user-presser', source: 'compaction' });
+      expect(mockCreateAIProvider.mock.calls[0][0]).toBe('user-1');
+    });
+
     it('a re-condense pass is part of the same reservation: two model calls, one settle', async () => {
       mockGenerateText
         .mockResolvedValueOnce({ text: 'x'.repeat(40000), usage: { inputTokens: 100, outputTokens: 8000 } } as never)

@@ -47,9 +47,9 @@ describe('resolveDriveWideCanEdit', () => {
 
   it('given owner, admin and plain-member drives, should grant edit without querying custom roles', async () => {
     const map = await resolveDriveWideCanEdit([
-      { driveId: 'd_owner', role: 'OWNER', customRoleId: null },
-      { driveId: 'd_admin', role: 'ADMIN', customRoleId: null },
-      { driveId: 'd_member', role: 'MEMBER', customRoleId: null },
+      { driveId: 'd_owner', role: 'OWNER', customRoleId: null, openDriveFloor: null },
+      { driveId: 'd_admin', role: 'ADMIN', customRoleId: null, openDriveFloor: null },
+      { driveId: 'd_member', role: 'MEMBER', customRoleId: null, openDriveFloor: null },
     ]);
     expect(map.get('d_owner')).toBe(true);
     expect(map.get('d_admin')).toBe(true);
@@ -65,8 +65,8 @@ describe('resolveDriveWideCanEdit', () => {
       ]),
     );
     const map = await resolveDriveWideCanEdit([
-      { driveId: 'd_edit', role: 'MEMBER', customRoleId: 'role_edit' },
-      { driveId: 'd_view', role: 'MEMBER', customRoleId: 'role_view' },
+      { driveId: 'd_edit', role: 'MEMBER', customRoleId: 'role_edit', openDriveFloor: null },
+      { driveId: 'd_view', role: 'MEMBER', customRoleId: 'role_view', openDriveFloor: null },
     ]);
     expect(map.get('d_edit')).toBe(true);
     expect(map.get('d_view')).toBe(false);
@@ -78,8 +78,8 @@ describe('resolveDriveWideCanEdit', () => {
       chain([{ id: 'role_foreign', driveId: 'd_other', driveWidePermissions: { canView: true, canEdit: true, canShare: false } }]),
     );
     const map = await resolveDriveWideCanEdit([
-      { driveId: 'd_bound', role: 'MEMBER', customRoleId: 'role_foreign' },
-      { driveId: 'd_other', role: 'MEMBER', customRoleId: 'role_foreign' },
+      { driveId: 'd_bound', role: 'MEMBER', customRoleId: 'role_foreign', openDriveFloor: null },
+      { driveId: 'd_other', role: 'MEMBER', customRoleId: 'role_foreign', openDriveFloor: null },
     ]);
     expect(map.get('d_bound')).toBe(false);
     expect(map.get('d_other')).toBe(true);
@@ -88,7 +88,7 @@ describe('resolveDriveWideCanEdit', () => {
   it('given an unresolvable custom role, should fail closed', async () => {
     vi.mocked(db.select).mockReturnValue(chain([]));
     const map = await resolveDriveWideCanEdit([
-      { driveId: 'd_gone', role: 'MEMBER', customRoleId: 'role_gone' },
+      { driveId: 'd_gone', role: 'MEMBER', customRoleId: 'role_gone', openDriveFloor: null },
     ]);
     expect(map.get('d_gone')).toBe(false);
   });
@@ -96,8 +96,26 @@ describe('resolveDriveWideCanEdit', () => {
   it('given a custom role with null driveWidePermissions, should fail closed', async () => {
     vi.mocked(db.select).mockReturnValue(chain([{ id: 'role_null', driveId: 'd_null', driveWidePermissions: null }]));
     const map = await resolveDriveWideCanEdit([
-      { driveId: 'd_null', role: 'MEMBER', customRoleId: 'role_null' },
+      { driveId: 'd_null', role: 'MEMBER', customRoleId: 'role_null', openDriveFloor: null },
     ]);
     expect(map.get('d_null')).toBe(false);
+  });
+
+  it('POL-6 (partial) given an implicit Open-drive member under an edit floor, should grant edit whatever the role grants; a view floor adds none', async () => {
+    vi.mocked(db.select).mockReturnValue(
+      chain([
+        { id: 'role_view', driveId: 'd_edit_floor', driveWidePermissions: { canView: true, canEdit: false, canShare: false } },
+        { id: 'role_view2', driveId: 'd_view_floor', driveWidePermissions: { canView: true, canEdit: false, canShare: false } },
+      ]),
+    );
+    const map = await resolveDriveWideCanEdit([
+      { driveId: 'd_edit_floor', role: 'MEMBER', customRoleId: 'role_view', openDriveFloor: 'edit' },
+      { driveId: 'd_view_floor', role: 'MEMBER', customRoleId: 'role_view2', openDriveFloor: 'view' },
+      // A role that no longer resolves does not cost an implicit member the floor.
+      { driveId: 'd_gone', role: 'MEMBER', customRoleId: 'role_gone', openDriveFloor: 'edit' },
+    ]);
+    expect(map.get('d_edit_floor')).toBe(true);
+    expect(map.get('d_view_floor')).toBe(false);
+    expect(map.get('d_gone')).toBe(true);
   });
 });

@@ -10,6 +10,7 @@ import { getNextRunDate } from '@/lib/workflows/cron-utils';
 import { creditAdmission } from '@/lib/workflows/workflow-credit-gate';
 import type { GateReason } from '@pagespace/lib/billing/credit-core';
 import { creditGatePayload } from '@/lib/subscription/credit-gate-response';
+import { automationRunOwner } from '@pagespace/lib/permissions/automation-ownership';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 const MANAGEABLE_TRIGGER_TYPE = 'cron' as const;
@@ -44,11 +45,17 @@ export async function POST(
     return NextResponse.json({ error: 'Only drive owners and admins can manage workflows' }, { status: 403 });
   }
 
+  // [D-OW-36] A workflow whose creator left runs as nobody, a Run included: an Owner or Admin reassigns or deletes it first.
+  const owner = automationRunOwner(workflow);
+  if (!owner.runs) {
+    return NextResponse.json({ error: owner.error, code: owner.reason }, { status: 409 });
+  }
+
   const executionInput: WorkflowExecutionInput = {
     workflowId: workflow.id,
     workflowName: workflow.name,
     driveId: workflow.driveId,
-    createdBy: workflow.createdBy,
+    createdBy: owner.ownerId,
     agentPageId: workflow.agentPageId,
     prompt: workflow.prompt,
     steps: workflow.steps,

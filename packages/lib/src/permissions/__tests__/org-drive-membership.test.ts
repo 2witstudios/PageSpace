@@ -42,6 +42,7 @@ vi.mock('@pagespace/db/schema/core', () => ({
 }));
 vi.mock('@pagespace/db/schema/organizations', () => ({
   orgMembers: { __table: 'org_members', orgId: 'orgId', userId: 'userId', role: 'role' },
+  organizations: { __table: 'organizations', id: 'id', policies: 'policies' },
 }));
 vi.mock('@pagespace/db/operators', () => ({
   and: vi.fn(),
@@ -72,7 +73,7 @@ describe('loadEffectiveDriveMembership', () => {
     const result = await loadEffectiveDriveMembership('user_marcus', PRIVATE_ORG_DRIVE);
 
     expect(selects.tables).toEqual(['drive_members']);
-    expect(result).toEqual({ role: 'MEMBER', customRoleId: null, source: 'org', auditOrgAdminPrivateAccess: false });
+    expect(result).toEqual({ role: 'MEMBER', customRoleId: null, source: 'org', auditOrgAdminPrivateAccess: false, openDriveFloor: null });
     expect(audit).not.toHaveBeenCalled();
   });
 
@@ -85,14 +86,31 @@ describe('loadEffectiveDriveMembership', () => {
     expect(selects.tables).toEqual(['drive_members', 'drive_members']);
   });
 
-  it('DRV-5 (partial) reads the org role, then the drive default role, for an org member with no row on an OPEN drive', async () => {
+  it('DRV-5 (partial) POL-6 (partial) reads the org role, the drive default role, then the org floor, for an org member with no row on an OPEN drive', async () => {
     flags.orgsEnabled = true;
-    selects.results = [[], [{ orgId: 'org_northwind', userId: 'user_nina', role: 'MEMBER' }], [{ driveId: 'drive_product', id: 'role_contributor' }]];
+    selects.results = [
+      [],
+      [{ orgId: 'org_northwind', userId: 'user_nina', role: 'MEMBER' }],
+      [{ driveId: 'drive_product', id: 'role_contributor' }],
+      [{ id: 'org_northwind', policies: { openDriveRoleFloor: 'edit' } }],
+    ];
 
     const result = await loadEffectiveDriveMembership('user_nina', OPEN_ORG_DRIVE);
 
-    expect(selects.tables).toEqual(['drive_members', 'org_members', 'drive_roles']);
-    expect(result).toEqual({ role: 'MEMBER', customRoleId: 'role_contributor', source: 'org', auditOrgAdminPrivateAccess: false });
+    expect(selects.tables).toEqual(['drive_members', 'org_members', 'drive_roles', 'organizations']);
+    expect(result).toEqual({ role: 'MEMBER', customRoleId: 'role_contributor', source: 'org', auditOrgAdminPrivateAccess: false, openDriveFloor: 'edit' });
+  });
+
+  it('POL-6 (partial) reads no floor where none can apply: an org Admin, a RESTRICTED drive, a guest', async () => {
+    flags.orgsEnabled = true;
+    selects.results = [[], [{ orgId: 'org_northwind', userId: 'user_priya', role: 'ADMIN' }]];
+    await loadEffectiveDriveMembership('user_priya', OPEN_ORG_DRIVE, { audit: false });
+    selects.results = [[{ role: 'MEMBER', customRoleId: null, source: 'invite' }], [{ orgId: 'org_northwind', userId: 'user_eve', role: 'MEMBER' }]];
+    await loadEffectiveDriveMembership('user_eve', { ...OPEN_ORG_DRIVE, orgVisibility: 'RESTRICTED' });
+    selects.results = [[{ role: 'MEMBER', customRoleId: null, source: 'invite' }], []];
+    await loadEffectiveDriveMembership('user_chris', OPEN_ORG_DRIVE);
+
+    expect(selects.tables).not.toContain('organizations');
   });
 
   it('ORG-4 (partial) hands the audit writer one access when an org Admin opens a PRIVATE drive through org power', async () => {

@@ -11,6 +11,7 @@ import {
   type WorkflowExecutionInput,
 } from '@/lib/workflows/workflow-executor';
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
+import { automationRunOwner } from '@pagespace/lib/permissions/automation-ownership';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { automationSpend } from '@pagespace/lib/billing/spend-target';
 import { creditDeniedError } from '@/lib/workflows/workflow-credit-gate';
@@ -62,6 +63,16 @@ export async function executePageWebhookTrigger(
       };
     }
 
+    // [D-OW-36] Nothing runs under a missing person: a workflow whose creator left the org (flagged
+    //    owner-left) or deleted their account (no creator) is skipped before any guard, gate or hold;
+    //    the fan-out records owner_left on the trigger.
+    const owner = automationRunOwner(workflow);
+    if (!owner.runs) {
+      logger.info('Page webhook trigger: skipped (owner left)', { triggerId: trigger.id, workflowId: workflow.id });
+      return { success: false, skipped: true, durationMs: Date.now() - startTime, error: owner.error };
+    }
+    const ownerId = owner.ownerId;
+
     // 2. Authoritative same-drive guard. The trigger must be page-anchored;
     //    resolve the webhook's page and compare its CURRENT drive to the
     //    workflow's drive. A page moved out of the workflow's drive after the
@@ -106,9 +117,9 @@ export async function executePageWebhookTrigger(
       return { success: false, durationMs: Date.now() - startTime, error };
     }
 
-    // 3. Billing resolves to workflow.createdBy — verify they still belong to
+    // 3. Billing resolves to the workflow's owner — verify they still belong to
     //    the workflow's drive before spending their credit.
-    const hasDriveAccess = await isUserDriveMember(workflow.createdBy, workflow.driveId);
+    const hasDriveAccess = await isUserDriveMember(ownerId, workflow.driveId);
     if (!hasDriveAccess) {
       return {
         success: false,
@@ -202,9 +213,9 @@ export async function executePageWebhookTrigger(
       const [owner] = await db
         .select({ subscriptionTier: users.subscriptionTier })
         .from(users)
-        .where(eq(users.id, workflow.createdBy));
+        .where(eq(users.id, ownerId));
       const gate = await canConsumeAI(
-        workflow.createdBy,
+        ownerId,
         (owner?.subscriptionTier ?? 'free') as SubscriptionTier,
         {
           spend,
@@ -238,7 +249,7 @@ export async function executePageWebhookTrigger(
       workflowId: workflow.id,
       workflowName: `page-webhook-trigger-${trigger.id}`,
       driveId: workflow.driveId,
-      createdBy: workflow.createdBy,
+      createdBy: ownerId,
       agentPageId: workflow.agentPageId,
       prompt: workflow.prompt,
       steps: workflow.steps,

@@ -196,6 +196,8 @@ describe('a backup restore', () => {
   });
 
   it('POL-2 (partial) guests ON restores the outsider as before', async () => {
+    // [D-OW-41] ON is a choice now: the default is approve.
+    await setGuests('on');
     expect(await restore()).toMatchObject({ refusedByGuestPolicy: [], queuedForApproval: [] });
     expect(await grantsOf(w.outsider)).toHaveLength(1);
     expect(await memberRowOf(w.outsider)).toHaveLength(1);

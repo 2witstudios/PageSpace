@@ -905,7 +905,7 @@ describe('listAccessibleDrives — canCreatePages', () => {
 
     expect(result[0].canCreatePages).toBe(true);
     expect(resolveDriveWideCanEdit).toHaveBeenCalledWith([
-      { driveId: 'drive_own', role: 'OWNER', customRoleId: null },
+      { driveId: 'drive_own', role: 'OWNER', customRoleId: null, openDriveFloor: null },
     ]);
   });
 
@@ -922,7 +922,7 @@ describe('listAccessibleDrives — canCreatePages', () => {
 
     expect(result[0].canCreatePages).toBe(true);
     expect(resolveDriveWideCanEdit).toHaveBeenCalledWith([
-      { driveId: 'drive_shared', role: 'MEMBER', customRoleId: null },
+      { driveId: 'drive_shared', role: 'MEMBER', customRoleId: null, openDriveFloor: null },
     ]);
   });
 

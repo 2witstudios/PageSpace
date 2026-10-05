@@ -5,6 +5,8 @@ import { loadEffectiveDriveMembership } from './org-drive-membership';
 import { ORGS_ENABLED } from '../organizations/orgs-enabled';
 import { driveRoles, driveMembers } from '@pagespace/db/schema/members';
 import { isGuestRole } from './guest-role';
+import { applyOpenDriveFloor } from './open-drive-floor';
+import type { OpenRoleFloor } from '../organizations/policies-core';
 
 export type CustomRolePerms = Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>;
 export type PagePerm = { canView: boolean; canEdit: boolean; canShare: boolean };
@@ -101,6 +103,11 @@ export interface DriveWideEditEntry {
   driveId: string;
   role: 'OWNER' | 'ADMIN' | 'MEMBER';
   customRoleId?: string | null;
+  /**
+   * POL-6: the effective membership's `openDriveFloor` (an implicit Open-drive member's org floor), or null for
+   * anything else (an owner, an explicit token role, a personal drive). Required so no caller drops it silently.
+   */
+  openDriveFloor: OpenRoleFloor | null;
 }
 
 /**
@@ -156,9 +163,11 @@ export async function resolveDriveWideCanEdit(
     // drive, or a role without explicit drive-wide edit grants nothing at the
     // drive root.
     const role = roles.get(entry.customRoleId);
+    const canEdit = role?.driveId === entry.driveId && role.driveWidePermissions?.canEdit === true;
+    // POL-6: an implicit Open-drive member edits drive-wide when the org's floor is edit.
     result.set(
       entry.driveId,
-      role?.driveId === entry.driveId && role.driveWidePermissions?.canEdit === true,
+      applyOpenDriveFloor({ canView: true, canEdit, canShare: false, canDelete: false }, entry.openDriveFloor, { isPrivate: false })?.canEdit === true,
     );
   }
   return result;

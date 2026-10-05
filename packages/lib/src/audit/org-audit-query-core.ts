@@ -39,6 +39,8 @@ export const ORG_AUDIT_CATEGORIES = {
   billing: ['org.billing.subscription_changed', 'org.billing.pool_refilled'],
   // [D-OW-28] Compute handed to the drive lead when its creator leaves or loses the drive; a parked app taken back.
   compute: ['org.compute.reattributed', 'org.app.unparked'],
+  // [D-OW-36] Automations whose creator left: disabled and flagged, then reassigned or deleted by an Owner/Admin.
+  automations: ['org.automation.owner_left', 'org.automation.reassigned', 'org.automation.deleted'],
 } as const satisfies Record<string, readonly OrgAuditCatalogType[]>;
 
 export type OrgAuditCategory = keyof typeof ORG_AUDIT_CATEGORIES;

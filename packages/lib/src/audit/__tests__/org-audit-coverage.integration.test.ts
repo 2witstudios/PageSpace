@@ -51,6 +51,8 @@ import { hashToken } from '../../auth/token-utils';
 import { accountRepository } from '../../repositories/account-repository';
 import { clearDepartureSuppression } from '../../organizations/departure-suppression';
 import { recordComputeReattributions } from '../../organizations/leave';
+import { deleteOwnerLeftAutomation, reassignOwnerLeftAutomation } from '../../organizations/automation-ownership';
+import { workflows } from '@pagespace/db/schema/workflows';
 import { defaultAppUnparkDeps, unparkPublishedApp } from '../../services/app-hosting/app-unpark';
 import { driveEnvs } from '@pagespace/db/schema/drive-envs';
 import { publishedApps } from '@pagespace/db/schema/published-apps';
@@ -300,8 +302,15 @@ describe('every org mutation writes its event', () => {
     expect(await autoJoinVerifiedDomainOrg({ userId: nina.id, now: new Date(), seatBilling: stripe })).toMatchObject({ kind: 'joined' });
     expect(await removeOrgDomain({ orgId, domainId: claim.domain.id, actorId: jono.id })).toBe(true);
 
+    // ── [D-OW-36] Dana's automations in Product outlive her: flagged when she is removed, then one is
+    //    reassigned to Marcus and the other deleted ─────────────────────────────────────────────
+    const [danaDigest] = await db.insert(workflows).values({ driveId: productId, createdBy: dana.id, name: 'Digest', prompt: 'x', cronExpression: '0 * * * *' }).returning();
+    const [danaNudge] = await db.insert(workflows).values({ driveId: productId, createdBy: dana.id, name: 'Nudge', prompt: 'x', cronExpression: '0 9 * * *' }).returning();
+
     // ── leaving: removal, a chosen leave, ownership, and the org's deletion ──────────
     expect((await removeMember({ orgId, actorId: jono.id, targetId: dana.id })).ok).toBe(true);
+    expect(await reassignOwnerLeftAutomation({ orgId, actorId: jono.id, kind: 'workflow', id: danaDigest.id, newOwnerId: marcus.id })).toEqual({ ok: true });
+    expect(await deleteOwnerLeftAutomation({ orgId, actorId: jono.id, kind: 'workflow', id: danaNudge.id })).toEqual({ ok: true });
     // [D-OW-27] Dana deletes her account: her address stays suppressed until an Admin clears it.
     await accountRepository.deleteUser(dana.id);
     expect(await clearDepartureSuppression({ orgId, email: dana.email, actorId: jono.id })).toBe(true);

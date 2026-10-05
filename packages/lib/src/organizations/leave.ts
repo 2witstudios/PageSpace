@@ -34,6 +34,7 @@ import { parseScopeList } from '../auth/oauth/scopes';
 import { closeStaleDriveJoinRequests } from '../permissions/drive-join-request-closure';
 import { recordLeaveEvents } from './org-events';
 import { recordDepartureSuppression } from './departure-suppression';
+import { disableDepartedCreatorAutomations, recordOwnerLeftAutomations, type OwnerLeftAutomation } from './automation-ownership';
 
 /** A Drizzle transaction handle. */
 export type LeaveTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -335,7 +336,16 @@ export interface LeaveCascadeCounts extends OrgDriveGrantCounts {
 }
 
 export type LeaveOrganizationResult =
-  | { ok: true; revoked: LeaveCascadeCounts; reassigned: LeadReassignment[]; computeReattributed: ComputeReattribution[]; /** Drives where the person's remaining access was parked or queued as a guest's (POL-2). */ heldAsGuest: number }
+  | {
+    ok: true;
+    revoked: LeaveCascadeCounts;
+    reassigned: LeadReassignment[];
+    computeReattributed: ComputeReattribution[];
+    /** [D-OW-36] Their automations in the org's drives, disabled and flagged for an Owner or Admin. */
+    automationsOwnerLeft: OwnerLeftAutomation[];
+    /** Drives where the person's remaining access was parked or queued as a guest's (POL-2). */
+    heldAsGuest: number;
+  }
   | { ok: false; reason: LeaveRefusal };
 
 /**
@@ -378,6 +388,8 @@ export interface LeaveOrganizationOptions {
   actor?: LeaveActor;
   /** Collects every [D-OW-28] re-attribution a caller holding the transaction must audit after commit. */
   collectReattributed?: ComputeReattribution[];
+  /** Collects every [D-OW-36] owner-left automation a caller holding the transaction must audit after commit. */
+  collectOwnerLeft?: OwnerLeftAutomation[];
   /** How the membership ended, as org_member_departures records it; default 'left' ('account_deleted' with that reason). */
   departure?: OrgDepartureReason;
 }
@@ -400,6 +412,7 @@ export async function leaveOrganization(
     if (result.ok) {
       await recordLeaveEvents({ orgId, userId, actorId: userId, eventType: 'org.member.left', reason: options.reason, reassigned: result.reassigned });
       await recordComputeReattributions(result.computeReattributed);
+      await recordOwnerLeftAutomations(result.automationsOwnerLeft, userId);
     }
     return result;
   }
@@ -463,6 +476,16 @@ export async function leaveOrganization(
   ];
   options.collectReattributed?.push(...computeReattributed);
 
+  // [D-OW-36] Their workflows, triggers and page webhooks in the org's drives are not theirs to take:
+  // the rest of the drive relies on them. Each is disabled and flagged owner-left, never deleted, and
+  // nothing runs under them until an Owner or Admin reassigns or deletes it.
+  const automationsOwnerLeft = await disableDepartedCreatorAutomations(tx, {
+    userId,
+    orgId,
+    reason: options.reason === 'account_deleted' ? 'account_deleted' : 'left_org',
+  });
+  options.collectOwnerLeft?.push(...automationsOwnerLeft);
+
   await tx.delete(orgMembers).where(eq(orgMembers.id, membership.id));
   // POL-2 (Review #2762 P2-8): with the membership gone the person is an OUTSIDER of the org's drives, and the
   // invited (`source: 'invite'`) rows and page grants they kept are guest access like any other. The org's guests
@@ -501,6 +524,7 @@ export async function leaveOrganization(
     },
     reassigned,
     computeReattributed,
+    automationsOwnerLeft,
     heldAsGuest: heldAsGuest.length,
   };
 }

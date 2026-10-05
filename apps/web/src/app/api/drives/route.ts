@@ -77,6 +77,9 @@ async function listScopedDrivesWithMembership({
       driveId: drive.id,
       role,
       customRoleId: membership.customRoleId,
+      // An explicit scope role is the credential's, never the owner's org floor; an inheriting scope on a drive
+      // the owner does not lead is answered below by getUserAccessLevel, which applies the floor (POL-6).
+      openDriveFloor: null,
     })),
   );
 

@@ -213,6 +213,12 @@ describe('update_workflow', () => {
     expect(setArg.nextRunAt).toBe(NEXT_RUN);
   });
 
+  it('SPEND-6 (partial) refuses to resume an owner-left workflow, naming owner_left; nothing is written ([D-OW-36], review #2831 P3-1)', async () => {
+    mockSelectWhere.mockResolvedValue([{ ...STANDALONE, isEnabled: false, ownerLeftAt: new Date() }]);
+    await expect(workflowTools.update_workflow.execute!({ workflowId: 'wf-1', isEnabled: true }, ctx())).rejects.toThrow(/owner_left/);
+    expect(mockUpdateSet).not.toHaveBeenCalled();
+  });
+
   it('pauses a workflow without rescheduling', async () => {
     await workflowTools.update_workflow.execute!({ workflowId: 'wf-1', isEnabled: false }, ctx());
     const setArg = firstCallArg(mockUpdateSet);

@@ -9,7 +9,7 @@ import { asc, eq, inArray, or, sql } from '@pagespace/db/operators';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { organizations } from '@pagespace/db/schema/organizations';
 import type { SpendPolicy } from '../billing/wallet-core';
-import { orgPolicySpendPolicy, parseOrgPolicies, type OrgPolicies } from './policies-core';
+import { orgPolicySpendPolicy, parseOrgPolicies, type OpenRoleFloor, type OrgPolicies } from './policies-core';
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type Executor = typeof db | Tx;
@@ -32,6 +32,27 @@ export async function getOrgPolicies(orgId: string, executor: Executor = db, opt
 export interface ReadLock {
   forShare?: boolean;
 }
+
+/**
+ * POL-6: each org's Open-drive role floor, for the implicit-membership resolver, which may resolve many drives (of
+ * many orgs) at once: one read per chunk of orgs, never one per drive or page. Every id asked for gets an answer,
+ * parsed as getOrgPolicies parses it (unset: the default, damaged: view, the value that adds nothing).
+ */
+export async function getOpenDriveRoleFloors(orgIds: readonly string[], executor: Executor = db): Promise<Map<string, OpenRoleFloor>> {
+  const unique = [...new Set(orgIds)];
+  const stored = new Map<string, unknown>();
+  for (let i = 0; i < unique.length; i += ORG_ID_CHUNK) {
+    const rows = await executor
+      .select({ id: organizations.id, policies: organizations.policies })
+      .from(organizations)
+      .where(inArray(organizations.id, unique.slice(i, i + ORG_ID_CHUNK)));
+    for (const row of rows) stored.set(row.id, row.policies);
+  }
+  return new Map(unique.map((orgId) => [orgId, parseOrgPolicies(stored.get(orgId)).openDriveRoleFloor]));
+}
+
+/** Chunk size for org id IN lists (Postgres bind parameter limit). */
+const ORG_ID_CHUNK = 500;
 
 /**
  * The orgs whose STORED policies set any of these keys, each with its parsed policies. A narrowing for sweeps

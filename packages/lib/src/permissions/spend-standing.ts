@@ -27,8 +27,13 @@ export interface DriveSpendStanding {
   isOrgMember: boolean;
 }
 
-export async function loadDriveSpendStanding(userId: string, driveId: string): Promise<DriveSpendStanding | null> {
-  const [drive] = await db
+export async function loadDriveSpendStanding(
+  userId: string,
+  driveId: string,
+  /** A transaction to read through (a caller holding membership locks); defaults to the pool. */
+  executor: Pick<typeof db, 'select'> = db,
+): Promise<DriveSpendStanding | null> {
+  const [drive] = await executor
     .select({ id: drives.id, ownerId: drives.ownerId, orgId: drives.orgId, orgVisibility: drives.orgVisibility })
     .from(drives)
     .where(eq(drives.id, driveId))
@@ -37,13 +42,13 @@ export async function loadDriveSpendStanding(userId: string, driveId: string): P
 
   // The gate reads this for the caller's own request, whose drive access was already
   // decided (and audited) by the route; this read only classifies the spender.
-  const relationships = await loadDriveRelationships(userId, [drive], { audit: false });
+  const relationships = await loadDriveRelationships(userId, [drive], { audit: false, executor });
   const relationship = relationships.get(drive.id);
   const isDriveMember = relationship ? isDriveMemberRelationship(relationship) : false;
 
   let isOrgMember = false;
   if (drive.orgId !== null) {
-    const [membership] = await db
+    const [membership] = await executor
       .select({ id: orgMembers.id })
       .from(orgMembers)
       .where(and(eq(orgMembers.orgId, drive.orgId), eq(orgMembers.userId, userId)))
