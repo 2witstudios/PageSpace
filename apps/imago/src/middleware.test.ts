@@ -418,9 +418,16 @@ describe('middleware config.matcher', () => {
     });
 
     assert({
-      given: 'a router prefetch',
+      given: 'a router prefetch (RSC with the prefetch header)',
       should: 'skip middleware',
-      actual: matches('/imago/drive-1', { 'next-router-prefetch': '1' }),
+      actual: matches('/imago/drive-1', { rsc: '1', 'next-router-prefetch': '1' }),
+      expected: false,
+    });
+
+    assert({
+      given: 'a router prefetch of the imago root',
+      should: 'skip middleware',
+      actual: matches('/imago', { rsc: '1', 'next-router-prefetch': '1' }),
       expected: false,
     });
 
@@ -429,6 +436,57 @@ describe('middleware config.matcher', () => {
       should: 'skip middleware so apps/web answers with its own headers',
       actual: matches('/api/auth/csrf'),
       expected: false,
+    });
+  });
+
+  // The prefetch headers are client-settable, so only a request shaped like a
+  // real router prefetch may skip the gates; everything else runs middleware.
+  const PREFETCH_HEADERS: Record<string, string>[] = [
+    { 'next-router-prefetch': '1' },
+    { 'next-router-prefetch': '2' },
+    { purpose: 'prefetch' },
+    { rsc: '1', 'next-router-prefetch': '1' },
+    { rsc: '1', purpose: 'prefetch' },
+    { rsc: '1', 'next-router-prefetch': '1', purpose: 'prefetch' },
+  ];
+
+  test('API routes with a prefetch header', () => {
+    for (const pathname of ['/imago/api/health', '/imago/api/anything', '/imago/api/a/b']) {
+      assert({
+        given: `${pathname} with each client-settable prefetch header`,
+        should: 'still run middleware (flag gate and auth gate)',
+        actual: PREFETCH_HEADERS.map((headers) => matches(pathname, headers)),
+        expected: PREFETCH_HEADERS.map(() => true),
+      });
+    }
+  });
+
+  test('page documents with a prefetch header', () => {
+    for (const pathname of ['/imago', '/imago/drive-1/files']) {
+      assert({
+        given: `a non-RSC request for ${pathname} carrying a prefetch header`,
+        should: 'still run middleware: it is a document, not a router prefetch',
+        actual: [
+          matches(pathname, { 'next-router-prefetch': '1' }),
+          matches(pathname, { purpose: 'prefetch' }),
+          matches(pathname, { rsc: '2', 'next-router-prefetch': '1' }),
+        ],
+        expected: [true, true, true],
+      });
+    }
+
+    assert({
+      given: 'an RSC navigation (no prefetch header)',
+      should: 'run middleware',
+      actual: matches('/imago/drive-1', { rsc: '1' }),
+      expected: true,
+    });
+
+    assert({
+      given: 'an RSC request with only purpose: prefetch',
+      should: 'run middleware (the router never sends it)',
+      actual: matches('/imago/drive-1', { rsc: '1', purpose: 'prefetch' }),
+      expected: true,
     });
   });
 });
