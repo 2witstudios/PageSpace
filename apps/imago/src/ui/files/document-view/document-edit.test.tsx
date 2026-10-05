@@ -16,7 +16,7 @@ import { pageRow, treeRow } from '../file-model/fixtures';
 import { useFileTree } from '../use-file-tree/use-file-tree';
 import { DOCUMENT_SAVE_DELAY_MS } from '../document-edit/document-saver';
 import { CONFLICT_NOTICE, DRAFT_RESTORED_NOTICE, REFUSED_NOTICE } from '../document-edit/document-notice.render';
-import { reloadsOn } from './document-view';
+import { CLOSING_SAVE_TIMEOUT_MS, reloadsOn } from './document-view';
 
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: () => {} }) }));
 
@@ -634,16 +634,34 @@ describe('leaving with text the server does not have', () => {
     await settle(() => {
       if (!back.container.querySelector('[data-save-conflict]')) throw new Error('conflict not surfaced again');
     });
+    const shown = {
+      kept: back.kept,
+      text: textOf(back.container),
+      restored: back.container.querySelector('[data-draft-restored]')?.textContent,
+      stored: stored.content,
+      draftLeft: documentDraftOf(getUiState(), 'notes'),
+    };
+    click(
+      [...back.container.querySelectorAll<HTMLButtonElement>('[data-save-conflict] button')].find(
+        (button) => button.textContent === 'Use the saved version',
+      ) as HTMLButtonElement,
+    );
+    await settle(() => {
+      if (textOf(back.container) !== 'Theirs') throw new Error('stored copy not taken');
+    });
+    assert({
+      given: 'the restored conflict settled with Use the saved version',
+      should: 'show the stored copy and stop saying the changes are back',
+      actual: [
+        back.container.querySelector('[data-save-conflict]'),
+        back.container.querySelector('[data-draft-restored]'),
+      ],
+      expected: [null, null],
+    });
     assert({
       given: 'a conflict notice the viewer leaves by opening another page, then comes back',
       should: 'keep their text as a draft, restore it into the editor, and surface the conflict again',
-      actual: {
-        kept: back.kept,
-        text: textOf(back.container),
-        restored: back.container.querySelector('[data-draft-restored]')?.textContent,
-        stored: stored.content,
-        draftLeft: documentDraftOf(getUiState(), 'notes'),
-      },
+      actual: shown,
       expected: {
         kept: { patch: { content: '<p>Mine</p>' }, revision: 3 },
         text: 'Mine',
@@ -887,9 +905,32 @@ describe('a closing save that answers after the page reopened', () => {
     await pass(30);
     assert({
       given: 'a document closed with its save still out, reopened and typed in before that save answered',
-      should: 'keep SWR held off the reopened document when the old save finally lands',
-      actual: [before, isEditingDocument(getUiState(), 'notes')],
-      expected: [true, true],
+      should: 'keep SWR held off the reopened document, and its text on screen, when the old save finally lands',
+      actual: [before, isEditingDocument(getUiState(), 'notes'), textOf(back.container), stored.content],
+      expected: [true, true, 'Back again', '<p>Leaving</p>'],
     });
+  });
+
+  test('a closing save that never answers lets go of the page in time', async () => {
+    const { container } = show({ [SAVE]: () => new Promise<Response>(() => {}) });
+    await editable(container);
+    await type(container, '<p>Leaving</p>');
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      unmountAll();
+      await vi.advanceTimersByTimeAsync(0);
+      const held = isEditingDocument(getUiState(), 'notes');
+      await vi.advanceTimersByTimeAsync(CLOSING_SAVE_TIMEOUT_MS - 1);
+      const justBefore = isEditingDocument(getUiState(), 'notes');
+      await vi.advanceTimersByTimeAsync(1);
+      assert({
+        given: 'a document closed with its last save still out, and that save never answering',
+        should: 'hold SWR off the page only until the closing save’s time runs out',
+        actual: [held, justBefore, isEditingDocument(getUiState(), 'notes')],
+        expected: [true, true, false],
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
