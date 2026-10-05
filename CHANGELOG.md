@@ -50,6 +50,12 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   overrides, visibility). A drive's own integrations are available only in your Home drive and in
   drives the agent has been added to, never in a drive it has not been added to. Self-hosted
   (on-prem) installs expose no external integrations to Imago agents.
+- **Imago agents never see more than you do** — an Imago agent can read, search, list or change
+  something only if it has been added to that drive AND you can still do the same yourself. If you
+  lose access to a drive while the agent is still in it (for example after a member change is
+  undone from the drive's history), the agent loses it too: it no longer finds, opens or even names
+  pages and drives you cannot see. If an Imago agent's setup cannot be loaded, the chat fails with
+  an error instead of running without its usual limits.
 - **Give an agent its own account** — in an agent's settings (Accounts), or in your personal
   settings for your global assistant, add an API key for a site so the agent can call that site's
   API for you. The agent refers to the account by name and never sees the key: PageSpace keeps it in
