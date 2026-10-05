@@ -204,9 +204,9 @@ services:
         condition: service_started
       realtime:
         condition: service_started
-    env_file: .env
+    # No env_file or DATABASE_URL: imago holds no state of its own; a later
+    # leaf adds what it actually reads.
     environment:
-      - DATABASE_URL=postgresql://user:password@postgres:5432/pagespace
       - WEB_APP_INTERNAL_URL=http://web:3000
       - NEXT_PUBLIC_REALTIME_URL=${NEXT_PUBLIC_REALTIME_URL}
       - PORT=3006

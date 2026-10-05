@@ -63,5 +63,10 @@ USER node
 
 EXPOSE 3006
 ENV PORT=3006
+# Docker sets HOSTNAME to the container id and the standalone server binds to
+# it, which would leave 127.0.0.1 (the healthcheck) unanswered.
+ENV HOSTNAME=0.0.0.0
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD wget -qO- http://127.0.0.1:3006/imago/api/health || exit 1
 
 CMD ["node", "apps/imago/server.js"]
