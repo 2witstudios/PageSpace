@@ -50,6 +50,13 @@ describe('orgErrorMessage', () => {
     expect(orgErrorMessage(undefined, 'Try again')).toBe('Try again');
   });
 
+  it('uses the fallback for a code that is an Object.prototype key, never a prototype value', () => {
+    for (const code of ['constructor', '__proto__', 'toString', 'hasOwnProperty', 'valueOf']) {
+      expect(orgErrorMessage(refusal(code), 'Try again'), code).toBe('Try again');
+      expect(orgErrorCode(refusal(code)), code).toBeNull();
+    }
+  });
+
   it('uses the fallback when the body is not an object', () => {
     expect(orgErrorMessage(new ApiRequestError('oops', 500, 'text body'), 'Try again')).toBe('Try again');
   });
