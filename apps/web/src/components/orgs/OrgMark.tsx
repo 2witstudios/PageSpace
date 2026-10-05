@@ -1,4 +1,5 @@
-import { cn } from '@/lib/utils/index';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { cn } from '@/lib/utils';
 
 const SIZES = {
   sm: 'h-[18px] w-[18px] rounded text-[9px]',
@@ -15,21 +16,29 @@ export interface OrgMarkProps {
   className?: string;
 }
 
+/** The first user-perceived character of `name` (a whole emoji, not half a surrogate pair), upper-cased. */
+export function orgInitial(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed) return '?';
+  const Segmenter = (Intl as { Segmenter?: typeof Intl.Segmenter }).Segmenter;
+  const first = Segmenter
+    ? new Segmenter(undefined, { granularity: 'grapheme' }).segment(trimmed)[Symbol.iterator]().next().value?.segment
+    : Array.from(trimmed)[0];
+  return (first ?? '?').toUpperCase();
+}
+
 /**
- * An organization's mark (canvas .orgmark): its avatar, or its initial on the primary color. Semantic
+ * An organization's mark (canvas .orgmark): its avatar, or its initial on the primary color. Built on the
+ * app's Avatar, so an avatar URL that fails to load (or is not allowed) falls back to the initial. Semantic
  * tokens only, so it holds in light and dark. Named by the org unless `decorative`.
  */
 export function OrgMark({ name, avatarUrl, size = 'md', decorative = false, className }: OrgMarkProps) {
   const label = name.trim() || 'Organization';
   const a11y = decorative ? { 'aria-hidden': true as const } : { role: 'img' as const, 'aria-label': label };
-  const classes = cn('inline-flex shrink-0 items-center justify-center overflow-hidden font-bold', SIZES[size], className);
-  if (avatarUrl) {
-    // eslint-disable-next-line @next/next/no-img-element -- an org avatar is an arbitrary https URL
-    return <img src={avatarUrl} alt={decorative ? '' : label} aria-hidden={decorative || undefined} className={cn(classes, 'object-cover')} />;
-  }
   return (
-    <span {...a11y} className={cn(classes, 'bg-primary text-primary-foreground')}>
-      {name.trim().charAt(0).toUpperCase() || '?'}
-    </span>
+    <Avatar {...a11y} className={cn('shrink-0 font-bold', SIZES[size], className)}>
+      {avatarUrl ? <AvatarImage src={avatarUrl} alt="" className="object-cover" /> : null}
+      <AvatarFallback className="rounded-[inherit] bg-primary text-primary-foreground">{orgInitial(name)}</AvatarFallback>
+    </Avatar>
   );
 }
