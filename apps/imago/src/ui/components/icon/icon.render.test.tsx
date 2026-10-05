@@ -1,7 +1,7 @@
 import { renderToString } from 'react-dom/server';
 import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
-import { renderIcon } from './icon.render';
+import { renderIcon, type IconProps } from './icon.render';
 
 describe('renderIcon()', () => {
   test("PageSpace's thin line at 16px", () => {
@@ -66,6 +66,46 @@ describe('renderIcon()', () => {
       should: 'keep the icon a non-shrinking block and append the caller class',
       actual: /class="[^"]*block shrink-0 text-accent"/.test(html),
       expected: true,
+    });
+  });
+
+  test('the stroke and the accessible name are locked', () => {
+    // The type omits these props; a cast stands in for a caller that slips
+    // them through anyway (a spread of untyped props).
+    const forced = { strokeWidth: 3, absoluteStrokeWidth: true, 'aria-hidden': true } as unknown as Partial<IconProps>;
+    const thick = renderToString(renderIcon({ name: 'close', ...forced }));
+    const labelled = renderToString(renderIcon({ name: 'close', label: 'Close', ...forced }));
+    assert({
+      given: 'a caller passing strokeWidth, absoluteStrokeWidth and aria-hidden',
+      should: 'keep the 1.5 stroke and keep a labelled icon visible to assistive technology',
+      actual: [
+        /<svg[^>]* stroke-width="1.5"/.test(thick),
+        /<svg[^>]* stroke-width="1.5"/.test(labelled),
+        labelled.includes('aria-hidden'),
+        labelled.includes('aria-label="Close"'),
+      ],
+      expected: [true, true, false, true],
+    });
+  });
+});
+
+describe('IconProps', () => {
+  test('the locked props are not part of the type', () => {
+    // Never called: `tsc` checks each line, and fails if IconProps lets the
+    // prop back in (the directive would then be unused).
+    const locked = (): void => {
+      // @ts-expect-error the stroke is fixed at 1.5
+      renderIcon({ name: 'close', strokeWidth: 3 });
+      // @ts-expect-error lucide's absolute stroke would bypass it
+      renderIcon({ name: 'close', absoluteStrokeWidth: true });
+      // @ts-expect-error the label decides whether the icon is hidden
+      renderIcon({ name: 'close', 'aria-hidden': true });
+    };
+    assert({
+      given: 'strokeWidth, absoluteStrokeWidth and aria-hidden',
+      should: 'be rejected by the compiler (checked by typecheck)',
+      actual: typeof locked,
+      expected: 'function',
     });
   });
 });

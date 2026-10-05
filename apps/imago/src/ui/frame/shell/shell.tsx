@@ -8,6 +8,7 @@ import type { UiState } from '../../store/state';
 import { MessagesPane } from '../../messages/messages-pane/messages-pane';
 import { renderPaneHeader } from '../pane/pane-header';
 import { ListOpener, ListPane } from '../list-pane/list-pane';
+import { Rail } from '../rail/rail';
 import {
   chatContextFor,
   isListSection,
@@ -23,6 +24,8 @@ import { renderShell } from './shell.render';
 export type ShellProps = {
   /** The route's page: it renders only the object's content. */
   readonly children: ReactNode;
+  /** The viewer's Home drive, where the rail links from the driveless stages. */
+  readonly homeDriveId: string | null;
 };
 
 const titles: Readonly<Record<Section, string>> = {
@@ -63,7 +66,10 @@ const listFor = (stage: Stage, layout: PaneLayout): ReactNode =>
     </ListPane>
   ) : null;
 
-/** The hamburger, while this section's list is hidden. */
+/**
+ * The hamburger, while this section's list is hidden. Only the tree beside an
+ * open object hides (stage.ts), so it always belongs in the object's header.
+ */
 const openerFor = (stage: Stage, layout: PaneLayout): ReactNode =>
   layout.listHidden && isListSection(stage.section) ? (
     <ListOpener section={stage.section} title={titles[stage.section]} />
@@ -73,10 +79,9 @@ const openerFor = (stage: Stage, layout: PaneLayout): ReactNode =>
  * The one persistent frame, mounted once by the (shell) layout. Routes are
  * addresses: the shell reads the URL, derives the stage and moves its panes,
  * and the route's output fills only the object slot. The hamburger sits in
- * the leading slot of the middle section's header: the object when one is
- * open, else the chat.
+ * the leading slot of the object's header.
  */
-export function Shell({ children }: ShellProps) {
+export function Shell({ children, homeDriveId }: ShellProps) {
   const pathname = usePathname() ?? '/';
   const collapsedSections = useUiState(selectCollapsed);
   const stage = stageFor(pathname);
@@ -86,21 +91,17 @@ export function Shell({ children }: ShellProps) {
   return renderShell({
     stage,
     layout,
-    rail: (
-      <div className="mt-auto">
-        <SignOutButton />
-      </div>
-    ),
+    rail: <Rail stage={stage} layout={layout} homeDriveId={homeDriveId} footer={<SignOutButton />} />,
     list: listFor(stage, layout),
     object: (
       <section className={columnClass} aria-label={titles[stage.section]}>
-        {renderPaneHeader({ title: titles[stage.section], leading: layout.object ? opener : null })}
+        {renderPaneHeader({ title: titles[stage.section], leading: opener })}
         <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>
       </section>
     ),
     chat: (
       <section className={columnClass} aria-label="Chat" data-density={context.density}>
-        {renderPaneHeader({ title: context.contextLabel, leading: layout.object ? null : opener })}
+        {renderPaneHeader({ title: context.contextLabel })}
         <div className="min-h-0 flex-1 overflow-y-auto" />
       </section>
     ),

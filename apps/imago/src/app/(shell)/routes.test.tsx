@@ -9,6 +9,10 @@ import type { ReactNode } from 'react';
 // lib/auth/get-viewer.integration.test.ts; here it is every route's seam.
 const getViewer = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/auth/get-viewer', () => ({ getViewer }));
+// getHomeDrive() is proven against Postgres with the root page
+// (app/page.integration.test.ts); here the layout only passes its id on.
+const getHomeDrive = vi.hoisted(() => vi.fn());
+vi.mock('@pagespace/lib/services/drive-service', () => ({ getHomeDrive }));
 
 const appDir = join(__dirname, '..');
 const shellDir = __dirname;
@@ -44,6 +48,8 @@ const files = (dir: string): string[] =>
 
 beforeEach(() => {
   getViewer.mockReset();
+  getHomeDrive.mockReset();
+  getHomeDrive.mockResolvedValue({ id: 'home-1', kind: 'HOME', ownerId: 'user-1' });
 });
 
 describe('the (shell) layout', () => {
@@ -55,9 +61,29 @@ describe('the (shell) layout', () => {
 
     assert({
       given: 'a signed-in viewer',
-      should: 'resolve the viewer, then render the one Shell around the route',
-      actual: [getViewer.mock.calls.length, element.type === Shell, element.props.children],
-      expected: [1, true, 'route'],
+      should: 'resolve the viewer and their Home drive, then render the one Shell around the route',
+      actual: [
+        getViewer.mock.calls.length,
+        getHomeDrive.mock.calls,
+        element.type === Shell,
+        element.props.homeDriveId,
+        element.props.children,
+      ],
+      expected: [1, [['user-1']], true, 'home-1', 'route'],
+    });
+  });
+
+  test('a viewer without a Home drive yet', async () => {
+    getViewer.mockResolvedValue(viewer);
+    getHomeDrive.mockResolvedValue(null);
+    const { default: ShellLayout } = await import('./layout');
+    const element = await ShellLayout({ children: 'route' });
+
+    assert({
+      given: 'no Home drive (before the backfill reaches the viewer)',
+      should: 'still render the shell, with no Home drive for the rail',
+      actual: element.props.homeDriveId,
+      expected: null,
     });
   });
 
@@ -73,9 +99,9 @@ describe('the (shell) layout', () => {
 
     assert({
       given: 'getViewer() redirecting to sign-in',
-      should: 'render no shell and let the redirect through',
-      actual: thrown,
-      expected: redirect,
+      should: 'render no shell, look up no drive and let the redirect through',
+      actual: [thrown, getHomeDrive.mock.calls.length],
+      expected: [redirect, 0],
     });
   });
 });

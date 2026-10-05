@@ -1,5 +1,12 @@
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import tailwind from '@tailwindcss/postcss';
+import postcss, { type Root } from 'postcss';
 import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
+import { listPaneClass } from '../list-pane/list-pane-class';
+import { paneClass } from '../pane/pane-class';
 import { paneLayout, stageFor, type ListSection } from '../stage/stage';
 import {
   chatSlotClass,
@@ -85,10 +92,10 @@ describe('shell frame classes', () => {
   test('the rail', () => {
     assert({
       given: 'the rail slot',
-      should: 'be the one 64px glass column with a hairline',
+      should: 'be the one 64px glass column with a hairline, lifted above the panes',
       actual: railClass,
       expected:
-        'flex h-full w-rail-width flex-none flex-col items-center gap-rail-gap border-r border-hairline py-rail-y surface-glass',
+        'relative z-rail flex h-full w-rail-width flex-none flex-col items-center gap-rail-gap border-r border-hairline py-rail-y surface-glass',
     });
   });
 
@@ -98,6 +105,68 @@ describe('shell frame classes', () => {
       should: 'stack the header over a body that scrolls on its own',
       actual: columnClass,
       expected: 'flex h-full w-full min-w-0 flex-col',
+    });
+  });
+});
+
+const appDir = join(dirname(fileURLToPath(import.meta.url)), '../../../app');
+
+/** The real globals.css compiled with exactly the given candidate classes. */
+const compile = async (classes: readonly string[]): Promise<Root> => {
+  const source = `${readFileSync(join(appDir, 'globals.css'), 'utf8')}\n@source inline("${classes.join(' ')}");`;
+  const result = await postcss([tailwind({ base: join(appDir, '..', '..') }) as postcss.AcceptedPlugin]).process(
+    source,
+    { from: join(appDir, 'globals.stacking.css') },
+  );
+  return postcss.parse(result.css);
+};
+
+/** The declarations each class compiles to, by property. */
+const declarations = (css: Root, classList: string): Map<string, string> => {
+  const found = new Map<string, string>();
+  const names = new Set(classList.split(' ').map((cls) => `.${cls}`));
+  css.walkRules((rule) => {
+    if (!names.has(rule.selector)) return;
+    rule.walkDecls((decl) => {
+      found.set(decl.prop, decl.value);
+    });
+  });
+  return found;
+};
+
+/** A theme token's value, from the compiled :root block. */
+const token = (css: Root, name: string): string | undefined => {
+  let value: string | undefined;
+  css.walkDecls(name, (decl) => {
+    value ??= decl.value;
+  });
+  return value;
+};
+
+describe('the rail above the panes', () => {
+  // `surface-glass` is a backdrop-filter, so the rail and the list pane are
+  // each a stacking context. Without a z-index of its own the rail paints
+  // under the later list pane, and so do its tooltips and the ⋯ menu.
+  test('the rail is its own positioned layer over the panes', async () => {
+    const list = listPaneClass('list');
+    const pane = paneClass('w-list-pane');
+    const css = await compile([...railClass.split(' '), ...list.split(' '), ...pane.split(' ')]);
+    const rail = declarations(css, railClass);
+    const zIndex = rail.get('z-index') ?? '';
+    const zToken = /^var\((--[\w-]+)\)$/.exec(zIndex)?.[1];
+    const panes = [declarations(css, list), declarations(css, pane)];
+
+    assert({
+      given: 'the glass rail beside a glass list pane',
+      should: 'position the rail with a named z-index token above 0, while the panes stay unlayered',
+      actual: [
+        rail.has('backdrop-filter'),
+        rail.get('position'),
+        zToken,
+        Number(zToken === undefined ? Number.NaN : token(css, zToken)) > 0,
+        panes.map((decls) => decls.has('z-index')),
+      ],
+      expected: [true, 'relative', '--z-index-rail', true, [false, false]],
     });
   });
 });
