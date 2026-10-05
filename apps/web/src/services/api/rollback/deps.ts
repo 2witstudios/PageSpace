@@ -56,6 +56,7 @@ export interface RollbackDeps {
     member?: Record<string, unknown> | null;
     grants?: Array<{ pageId: string; canView: boolean; canEdit: boolean; canShare: boolean; canDelete: boolean }>;
     requestedBy: string | null;
+    memberRowIsRoleChange?: boolean;
   }) => Promise<ReentryDecision>;
   logger: typeof loggers.api;
 }

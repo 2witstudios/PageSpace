@@ -13,9 +13,11 @@
  * - raising the floor (updateOrgPolicies): openDrivesBelowFloor lists the drives that would fall below it.
  */
 import { db } from '@pagespace/db/db';
-import { and, asc, eq } from '@pagespace/db/operators';
+import { and, asc, eq, sql } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { driveRoles } from '@pagespace/db/schema/members';
+import { organizations } from '@pagespace/db/schema/organizations';
+import { followDriveDefaultRole } from '../permissions/org-drive-membership';
 import type { OrgDriveVisibility } from '@pagespace/db/schema/core';
 import { getOrgPolicies } from './policy-reader';
 import { OPEN_ROLE_FLOOR_MESSAGES, openDefaultRoleMeetsFloor, type OpenRoleFloor } from './policies-core';
@@ -24,16 +26,15 @@ import { policyRefusal, type PolicyRefusal } from './sharing-decisions';
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type Executor = typeof db | Tx;
 type DriveWide = { canView: boolean; canEdit: boolean; canShare: boolean } | null;
-
-/** What the plain MEMBER role (a drive with no default custom role) grants drive-wide: view, never edit. */
-const PLAIN_MEMBER_DRIVE_WIDE = { canView: true, canEdit: false, canShare: false } as const;
+type PageGrants = Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>;
+type DefaultRole = { id: string; driveWide: DriveWide; pages: PageGrants };
 
 /**
  * Does an Open drive's default meet the floor? `defaultRole` null means the drive has no default custom role, so
- * org members hold the plain MEMBER role.
+ * org members hold the plain MEMBER role (view of every non-private page).
  */
-export function openDriveDefaultMeetsFloor(floor: OpenRoleFloor, defaultRole: { driveWide: DriveWide } | null): boolean {
-  return openDefaultRoleMeetsFloor(floor, defaultRole ? defaultRole.driveWide : PLAIN_MEMBER_DRIVE_WIDE);
+export function openDriveDefaultMeetsFloor(floor: OpenRoleFloor, defaultRole: { driveWide: DriveWide; pages?: PageGrants } | null): boolean {
+  return defaultRole ? openDefaultRoleMeetsFloor(floor, defaultRole.driveWide, defaultRole.pages ?? {}) : openDefaultRoleMeetsFloor(floor, null);
 }
 
 /** POL-6 refused a write: names the policy and the floor, like every org-policy refusal. */
@@ -49,14 +50,15 @@ export class OpenRoleFloorError extends Error {
 
 export const openRoleFloorRefusal = (floor: OpenRoleFloor): PolicyRefusal => policyRefusal('openDriveRoleFloor', OPEN_ROLE_FLOOR_MESSAGES[floor]);
 
-async function defaultRoleOf(executor: Executor, driveId: string): Promise<{ id: string; driveWide: DriveWide } | null> {
+/** The drive's default custom role, picked deterministically (lowest position, then id) as the resolver picks it. */
+async function defaultRoleOf(executor: Executor, driveId: string): Promise<DefaultRole | null> {
   const [role] = await executor
-    .select({ id: driveRoles.id, driveWide: driveRoles.driveWidePermissions })
+    .select({ id: driveRoles.id, driveWide: driveRoles.driveWidePermissions, pages: driveRoles.permissions })
     .from(driveRoles)
     .where(and(eq(driveRoles.driveId, driveId), eq(driveRoles.isDefault, true)))
     .orderBy(asc(driveRoles.position), asc(driveRoles.id))
     .limit(1);
-  return role ? { id: role.id, driveWide: (role.driveWide as DriveWide) ?? null } : null;
+  return role ? { id: role.id, driveWide: (role.driveWide as DriveWide) ?? null, pages: (role.pages as PageGrants | null) ?? {} } : null;
 }
 
 interface FloorState {
@@ -64,7 +66,9 @@ interface FloorState {
   governed: boolean;
   floor: OpenRoleFloor;
   meets: boolean;
-  /** Identifies the default and its drive-wide grant, to tell whether a write changed them. */
+  /** The default role's id, or null when the drive has none. */
+  defaultId: string | null;
+  /** Identifies the default and its effective grants, to tell whether a write changed them. */
   key: string;
 }
 
@@ -72,23 +76,40 @@ async function floorState(tx: Executor, driveId: string): Promise<FloorState> {
   const [drive] = await tx.select({ orgId: drives.orgId, orgVisibility: drives.orgVisibility }).from(drives).where(eq(drives.id, driveId)).limit(1);
   const role = await defaultRoleOf(tx, driveId);
   const key = JSON.stringify(role);
-  if (!drive?.orgId || drive.orgVisibility !== 'OPEN') return { governed: false, floor: 'view', meets: true, key };
-  const floor = (await getOrgPolicies(drive.orgId, tx, { forShare: true })).openDriveRoleFloor;
-  return { governed: true, floor, meets: openDriveDefaultMeetsFloor(floor, role), key };
+  const defaultId = role?.id ?? null;
+  if (!drive?.orgId || drive.orgVisibility !== 'OPEN') return { governed: false, floor: 'view', meets: true, defaultId, key };
+  const floor = (await getOrgPolicies(drive.orgId, tx)).openDriveRoleFloor;
+  return { governed: true, floor, meets: openDriveDefaultMeetsFloor(floor, role), defaultId, key };
+}
+
+/**
+ * The locks a role write takes before it reads the drive's state, in the order every org-drive path takes them
+ * (lockDriveWithOrg): the org row FOR SHARE (the policy writer holds it FOR UPDATE), the drive row FOR SHARE (a
+ * visibility change or a move-in holds it FOR UPDATE, Review #2762 P2-2), then a per-drive advisory lock so two role
+ * writes on one drive never interleave (two defaults, P3-3).
+ */
+async function lockForRoleWrite(tx: Executor, driveId: string): Promise<void> {
+  const [current] = await tx.select({ orgId: drives.orgId }).from(drives).where(eq(drives.id, driveId)).limit(1);
+  if (current?.orgId) await tx.select({ id: organizations.id }).from(organizations).where(eq(organizations.id, current.orgId)).for('share');
+  await tx.select({ id: drives.id }).from(drives).where(eq(drives.id, driveId)).for('share');
+  await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`drive-roles:${driveId}`}, 0))`);
 }
 
 /**
  * Run a role write and refuse it (OpenRoleFloorError, thrown inside the transaction so nothing is written) when it
- * leaves an Open org drive's default below the floor. A drive that was already below the floor (before this was
- * enforced) is refused only when the write touches its default or that default's drive-wide grant: editing an
- * unrelated role there is not blocked. Pass the write's TRANSACTION: refusing after the write relies on the
- * rollback.
+ * leaves an Open org drive's default below the floor, judged on what the default EFFECTIVELY grants (its drive-wide
+ * grant and every per-page entry). A drive that was already below the floor is refused only when the write touches
+ * its default: editing an unrelated role there is not blocked. When the write changes WHICH role is the default (or
+ * removes it), org members materialized on the drive follow the new default in the same transaction (P2-3). Pass
+ * the write's TRANSACTION: refusing after the write relies on the rollback.
  */
 export async function guardOpenRoleFloor<T>(tx: Executor, driveId: string, write: () => Promise<T>): Promise<T> {
+  await lockForRoleWrite(tx, driveId);
   const before = await floorState(tx, driveId);
   const result = await write();
   const after = await floorState(tx, driveId);
   if (after.governed && !after.meets && (before.meets || before.key !== after.key)) throw new OpenRoleFloorError(after.floor);
+  if (after.defaultId !== before.defaultId) await followDriveDefaultRole(tx, driveId, after.defaultId);
   return result;
 }
 
@@ -109,7 +130,7 @@ export async function openDriveFloorRefusal(
 /** The org's Open drives whose default is below `floor` (bounded): raising the floor to it is refused while any exist. */
 export async function openDrivesBelowFloor(tx: Tx, orgId: string, floor: OpenRoleFloor, limit = 50): Promise<Array<{ id: string; name: string }>> {
   const rows = await tx
-    .select({ id: drives.id, name: drives.name, roleId: driveRoles.id, driveWide: driveRoles.driveWidePermissions })
+    .select({ id: drives.id, name: drives.name, roleId: driveRoles.id, driveWide: driveRoles.driveWidePermissions, pages: driveRoles.permissions })
     .from(drives)
     .leftJoin(driveRoles, and(eq(driveRoles.driveId, drives.id), eq(driveRoles.isDefault, true)))
     .where(and(eq(drives.orgId, orgId), eq(drives.orgVisibility, 'OPEN')))
@@ -119,7 +140,7 @@ export async function openDrivesBelowFloor(tx: Tx, orgId: string, floor: OpenRol
   for (const r of rows) {
     if (seen.has(r.id)) continue;
     seen.add(r.id);
-    const role = r.roleId ? { driveWide: (r.driveWide as DriveWide) ?? null } : null;
+    const role = r.roleId ? { driveWide: (r.driveWide as DriveWide) ?? null, pages: (r.pages as PageGrants | null) ?? {} } : null;
     if (!openDriveDefaultMeetsFloor(floor, role)) below.push({ id: r.id, name: r.name });
     if (below.length >= limit) break;
   }

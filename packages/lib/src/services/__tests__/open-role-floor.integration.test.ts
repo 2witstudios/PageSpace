@@ -18,7 +18,7 @@ import { db, pool } from '@pagespace/db/db';
 import { eq, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
-import { driveRoles } from '@pagespace/db/schema/members';
+import { driveMembers, driveRoles } from '@pagespace/db/schema/members';
 import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
 
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
@@ -81,9 +81,14 @@ const setFloorOk = async (floor: 'view' | 'edit') => {
 };
 
 describe('the org floor under an Open drive default role', () => {
-  it('POL-6 (partial) X-6 (partial) a VIEW floor refuses a default that grants nothing drive-wide and keeps one that grants view or edit', async () => {
-    await expect(role(w.orgDrive, 'Pages only', true, null)).rejects.toBeInstanceOf(OpenRoleFloorError);
+  it('POL-6 (partial) X-6 (partial) a VIEW floor refuses a default that takes view away (drive-wide or on a page) and keeps one that grants view or edit, or no drive-wide grant (member view)', async () => {
+    await expect(role(w.orgDrive, 'No view', true, { canView: false, canEdit: false, canShare: false })).rejects.toBeInstanceOf(OpenRoleFloorError);
+    const page = (await factories.createPage(w.orgDrive)).id;
+    await expect(createDriveRole(w.orgDrive, { name: 'Hides a page', isDefault: true, permissions: { [page]: { canView: false, canEdit: false, canShare: false } }, driveWidePermissions: VIEW }))
+      .rejects.toBeInstanceOf(OpenRoleFloorError);
     expect(await defaults(w.orgDrive)).toEqual([]);
+    await role(w.orgDrive, 'Member view', true, null);
+    expect(await defaults(w.orgDrive)).toEqual(['Member view']);
     await role(w.orgDrive, 'Viewer', true, VIEW);
     expect(await defaults(w.orgDrive)).toEqual(['Viewer']);
     await role(w.orgDrive, 'Editor', true, EDIT);
@@ -170,5 +175,78 @@ describe('the org floor under an Open drive default role', () => {
     await role(w.orgDrive, 'Pages only', true, null);
     expect(await defaults(w.orgDrive)).toEqual(['Pages only']);
     await role(w.orgDrive, 'Another', false, null);
+  });
+
+  it('POL-6 (partial) a per-page entry on the default below the floor is refused on the page-permission path too (the AI set_role_page_permissions tool and the Share dialog)', async () => {
+    const editor = await role(w.orgDrive, 'Editor', true, EDIT);
+    await setFloorOk('edit');
+    const page = (await factories.createPage(w.orgDrive)).id;
+    await expect(updateDriveRole(w.orgDrive, editor.id, { permissionsPatch: { [page]: { canView: true, canEdit: false, canShare: false } } })).rejects.toBeInstanceOf(OpenRoleFloorError);
+    await updateDriveRole(w.orgDrive, editor.id, { permissionsPatch: { [page]: { canView: true, canEdit: true, canShare: true } } });
+  });
+
+  it('POL-6 (partial) a drive ALREADY below the floor: a write that touches its default and leaves it below is refused; editing another role there is not', async () => {
+    const viewer = await role(w.orgDrive, 'Viewer', true, VIEW);
+    const other = await role(w.orgDrive, 'Other', false, VIEW);
+    // The floor is raised past the drive without the raise check (as an org that set it before this was enforced).
+    await db.update(organizations).set({ policies: { openDriveRoleFloor: 'edit' } }).where(eq(organizations.id, w.orgId));
+
+    await expect(updateDriveRole(w.orgDrive, viewer.id, { description: 'still view only', driveWidePermissions: { canView: true, canEdit: false, canShare: true } }))
+      .rejects.toBeInstanceOf(OpenRoleFloorError);
+    await updateDriveRole(w.orgDrive, other.id, { name: 'Other renamed' });
+    await updateDriveRole(w.orgDrive, viewer.id, { driveWidePermissions: EDIT });
+    expect(await defaults(w.orgDrive)).toEqual(['Viewer']);
+  });
+
+  it('POL-6 (partial) org members follow the drive\'s CURRENT default: changing which role is the default, or deleting it, moves their rows in the same write', async () => {
+    const member = (await factories.createUser()).id;
+    created.userIds.push(member);
+    await db.insert(orgMembers).values({ orgId: w.orgId, userId: member, role: 'MEMBER' });
+    const r1 = await role(w.orgDrive, 'R1', true, EDIT);
+    await db.insert(driveMembers).values({ driveId: w.orgDrive, userId: member, role: 'MEMBER', customRoleId: r1.id, source: 'org', acceptedAt: new Date() });
+    await setFloorOk('edit');
+    const rowRole = async () => (await db.select({ c: driveMembers.customRoleId }).from(driveMembers).where(eq(driveMembers.userId, member)))[0]?.c;
+
+    const r2 = await role(w.orgDrive, 'R2', true, EDIT);
+    expect(await rowRole()).toBe(r2.id);
+    // R1 is no longer anyone's default, so lowering it reaches nobody.
+    await updateDriveRole(w.orgDrive, r1.id, { driveWidePermissions: VIEW });
+    expect(await rowRole()).toBe(r2.id);
+
+    await setFloorOk('view');
+    await deleteDriveRole(w.orgDrive, r2.id);
+    expect(await rowRole()).toBeNull();
+  });
+
+  it('POL-6 (partial) a role write waits for a visibility change holding the drive, then judges the drive it left: lowering the default of a drive that just went Open is refused', async () => {
+    await db.update(drives).set({ orgVisibility: 'RESTRICTED' }).where(eq(drives.id, w.orgDrive));
+    const editor = await role(w.orgDrive, 'Editor', true, EDIT);
+    await setFloorOk('edit');
+
+    const other = await pool.connect();
+    try {
+      // What changeDriveVisibility holds after its floor check passed on the EDIT default: org FOR SHARE, drive FOR UPDATE.
+      await other.query('begin');
+      await other.query('select id from organizations where id = $1 for share', [w.orgId]);
+      await other.query('select id from drives where id = $1 for update', [w.orgDrive]);
+      await other.query(`update drives set "orgVisibility" = 'OPEN' where id = $1`, [w.orgDrive]);
+
+      let settled = false;
+      const lowering = updateDriveRole(w.orgDrive, editor.id, { driveWidePermissions: VIEW }).finally(() => { settled = true; });
+      await new Promise((r) => setTimeout(r, 300));
+      expect(settled).toBe(false);
+      await other.query('commit');
+
+      await expect(lowering).rejects.toBeInstanceOf(OpenRoleFloorError);
+    } finally {
+      other.release();
+    }
+    const [def] = await db.select({ driveWide: driveRoles.driveWidePermissions }).from(driveRoles).where(eq(driveRoles.id, editor.id));
+    expect(def.driveWide).toEqual(EDIT);
+  });
+
+  it('POL-6 (partial) two concurrent writes that each make a default leave exactly one default', async () => {
+    await Promise.all([role(w.orgDrive, 'A', true, EDIT), role(w.orgDrive, 'B', true, EDIT)]);
+    expect(await defaults(w.orgDrive)).toHaveLength(1);
   });
 });

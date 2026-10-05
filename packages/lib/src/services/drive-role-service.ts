@@ -438,7 +438,9 @@ export async function reorderDriveRoles(
   driveId: string,
   roleIds: string[]
 ): Promise<void> {
-  await db.transaction(async (tx) => {
+  // POL-6: through the floor guard like every role write, so its locks come in the same order and the default it
+  // leaves (the lowest-positioned one wins) is judged against the org floor.
+  await db.transaction(async (tx) => guardOpenRoleFloor(tx, driveId, async () => {
     const existingRoles = await lockDriveRolesInOrder(tx, driveId);
     const existingIds = new Set(existingRoles.map(r => r.id));
     const invalidIds = roleIds.filter(id => !existingIds.has(id));
@@ -458,7 +460,7 @@ export async function reorderDriveRoles(
         touchColumns: [driveRoles.updatedAt],
       });
     }
-  });
+  }));
 }
 
 /**

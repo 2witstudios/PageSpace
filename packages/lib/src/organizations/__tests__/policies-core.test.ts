@@ -240,18 +240,25 @@ describe('the Open drive default-role floor', () => {
 
   const wide = (canView: boolean, canEdit: boolean) => ({ canView, canEdit, canShare: false });
 
-  it('POL-6 (partial) a view floor admits a default role that grants view or more drive-wide, and refuses one that grants nothing drive-wide', () => {
+  it('POL-6 (partial) a view floor admits a default role that grants view or more drive-wide, or no drive-wide grant at all (the member view the resolver falls back to), and refuses an explicit no-view', () => {
     expect(openDefaultRoleMeetsFloor('view', wide(true, false))).toBe(true);
     expect(openDefaultRoleMeetsFloor('view', wide(true, true))).toBe(true);
+    expect(openDefaultRoleMeetsFloor('view', null)).toBe(true);
     expect(openDefaultRoleMeetsFloor('view', wide(false, false))).toBe(false);
-    expect(openDefaultRoleMeetsFloor('view', null)).toBe(false);
   });
 
-  it('POL-6 (partial) an edit floor admits only a default role that grants edit drive-wide: view alone is below it', () => {
+  it('POL-6 (partial) an edit floor admits only a default role that grants edit drive-wide: view alone, or no drive-wide grant (member view), is below it', () => {
     expect(openDefaultRoleMeetsFloor('edit', wide(true, true))).toBe(true);
     expect(openDefaultRoleMeetsFloor('edit', wide(true, false))).toBe(false);
     expect(openDefaultRoleMeetsFloor('edit', null)).toBe(false);
     // Edit without view is not a usable grant.
     expect(openDefaultRoleMeetsFloor('edit', wide(false, true))).toBe(false);
+  });
+
+  it('POL-6 (partial) a per-page entry wins over the drive-wide grant on its page, so every entry must meet the floor too', () => {
+    expect(openDefaultRoleMeetsFloor('view', wide(true, false), { p1: wide(true, false) })).toBe(true);
+    expect(openDefaultRoleMeetsFloor('view', wide(true, false), { p1: wide(false, false) })).toBe(false);
+    expect(openDefaultRoleMeetsFloor('edit', wide(true, true), { p1: wide(true, true), p2: wide(true, false) })).toBe(false);
+    expect(openDefaultRoleMeetsFloor('edit', wide(true, true), { p1: wide(true, true) })).toBe(true);
   });
 });

@@ -13,14 +13,14 @@ import type { RollbackDeps } from './deps';
 export const FORMER_MEMBER_LEAD_MESSAGE = 'This drive belongs to an organization, and the person it would hand back to is no longer a member of it, so they cannot lead it again.';
 
 export async function assertRestoredLeadEligible(deps: RollbackDeps, driveId: string, update: Record<string, unknown>): Promise<void> {
-  const ownerId = update.ownerId;
-  if (typeof ownerId !== 'string') return;
+  const restoredLead = update['ownerId'];
+  if (typeof restoredLead !== 'string') return;
   const [drive] = await deps.db.select({ orgId: drives.orgId }).from(drives).where(eq(drives.id, driveId)).limit(1);
   if (!drive?.orgId) return;
   const [member] = await deps.db
     .select({ id: orgMembers.id })
     .from(orgMembers)
-    .where(and(eq(orgMembers.orgId, drive.orgId), eq(orgMembers.userId, ownerId)))
+    .where(and(eq(orgMembers.orgId, drive.orgId), eq(orgMembers.userId, restoredLead)))
     .limit(1);
   if (!member) throw new Error(FORMER_MEMBER_LEAD_MESSAGE);
 }

@@ -313,10 +313,21 @@ export async function admitReentry(
     member?: Record<string, unknown> | null;
     grants?: Array<{ pageId: string; canView: boolean; canEdit: boolean; canShare: boolean; canDelete: boolean; grantedBy?: string | null }>;
     requestedBy: string | null;
+    /** An upsert of the member row: when the person already has one, the write is a role change, not an admission. */
+    memberRowIsRoleChange?: boolean;
   },
 ): Promise<ReentryDecision> {
   const admission = await decideOrgDriveAdmission({ driveId: input.driveId, userId: input.userId }, executor);
   if (admission.decision === 'allow' || !admission.orgId) return { outcome: 'admit' };
+  if (input.member && input.memberRowIsRoleChange) {
+    // Writing over a member row that is already there changes a role; it admits nobody.
+    const [row] = await executor
+      .select({ id: driveMembers.id })
+      .from(driveMembers)
+      .where(and(eq(driveMembers.driveId, input.driveId), eq(driveMembers.userId, input.userId)))
+      .limit(1);
+    if (row) return { outcome: 'admit' };
+  }
   if (!input.member) {
     const [row] = await executor
       .select({ id: driveMembers.id })

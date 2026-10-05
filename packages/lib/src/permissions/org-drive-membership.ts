@@ -1,5 +1,5 @@
 import { db } from '@pagespace/db/db';
-import { and, eq, inArray, isNotNull } from '@pagespace/db/operators';
+import { and, asc, eq, inArray, isNotNull } from '@pagespace/db/operators';
 import type { OrgDriveVisibility } from '@pagespace/db/schema/core';
 import { driveMembers, driveRoles } from '@pagespace/db/schema/members';
 import { orgMembers, type OrgRole } from '@pagespace/db/schema/organizations';
@@ -262,7 +262,9 @@ async function findDefaultCustomRoleIds(driveIds: string[]): Promise<Map<string,
     const rows = await db
       .select({ driveId: driveRoles.driveId, id: driveRoles.id })
       .from(driveRoles)
-      .where(and(inArray(driveRoles.driveId, ids), eq(driveRoles.isDefault, true)));
+      .where(and(inArray(driveRoles.driveId, ids), eq(driveRoles.isDefault, true)))
+      // Deterministic, and the same pick the POL-6 floor guard judges (lowest position, then id).
+      .orderBy(asc(driveRoles.position), asc(driveRoles.id));
     for (const r of rows) if (!defaults.has(r.driveId)) defaults.set(r.driveId, r.id);
   }
   return defaults;
@@ -302,4 +304,21 @@ export async function removeFormerLeadOwnerRow(
     .where(and(eq(driveMembers.driveId, driveId), eq(driveMembers.userId, userId), eq(driveMembers.role, 'OWNER')))
     .returning({ id: driveMembers.id });
   return removed.length;
+}
+
+/**
+ * POL-6, D-OW-11 (independent review of #2762, P2-3): org members of an Open drive hold its CURRENT default role.
+ * Their materialized rows (`source: 'org'`, role MEMBER) copied the default's id when they were synced, so when the
+ * drive's default changes or is removed they follow it here, in the role write's transaction (null: the plain
+ * member role). Invited rows keep the role they were given.
+ */
+export async function followDriveDefaultRole(
+  executor: Pick<typeof db, 'update'>,
+  driveId: string,
+  defaultRoleId: string | null,
+): Promise<void> {
+  await executor
+    .update(driveMembers)
+    .set({ customRoleId: defaultRoleId })
+    .where(and(eq(driveMembers.driveId, driveId), eq(driveMembers.source, 'org'), eq(driveMembers.role, 'MEMBER')));
 }

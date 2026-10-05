@@ -252,18 +252,26 @@ export function suspensionKindsChanged(before: OrgPolicies, after: OrgPolicies):
 // POL-6: the floor under an Open drive's default role
 // ---------------------------------------------------------------------------
 
+type FloorGrant = { canView: boolean; canEdit: boolean; canShare: boolean };
+
+/** What a role with no drive-wide grant gives drive-wide: the plain member's view (the resolver's fallback). */
+const MEMBER_VIEW: FloorGrant = { canView: true, canEdit: false, canShare: false };
+
+const grantMeetsFloor = (floor: OpenRoleFloor, grant: FloorGrant): boolean => grant.canView && (floor === 'view' || grant.canEdit);
+
 /**
  * POL-6 (D-OW-11): the default role org members hold in an Open drive is the DRIVE's setting (its default custom
- * role); the org policy sets only the floor under it. Does a default role whose drive-wide grant is `driveWide`
- * (null: it grants nothing drive-wide, only the pages it names) meet `floor`? `view` needs drive-wide view;
- * `edit` needs drive-wide view and edit.
+ * role); the org policy sets only the floor under it. Does a default role meet `floor` with what it EFFECTIVELY
+ * grants? Its drive-wide grant (null: none, which the resolver reads as the plain member's view) and every per-page
+ * entry, because a per-page entry wins over the drive-wide grant on its page (Review #2762 P2-4, P3-2). `view`
+ * needs view everywhere; `edit` needs view and edit everywhere.
  */
 export function openDefaultRoleMeetsFloor(
   floor: OpenRoleFloor,
-  driveWide: { canView: boolean; canEdit: boolean; canShare: boolean } | null,
+  driveWide: FloorGrant | null,
+  pages: Record<string, FloorGrant> = {},
 ): boolean {
-  if (!driveWide?.canView) return false;
-  return floor === 'view' || driveWide.canEdit;
+  return grantMeetsFloor(floor, driveWide ?? MEMBER_VIEW) && Object.values(pages).every((grant) => grantMeetsFloor(floor, grant));
 }
 
 export const OPEN_ROLE_FLOOR_MESSAGES: Record<OpenRoleFloor, string> = {

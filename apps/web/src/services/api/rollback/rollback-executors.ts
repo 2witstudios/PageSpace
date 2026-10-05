@@ -53,9 +53,7 @@ async function admitGrant(deps: RollbackDeps, pageId: string, userId: string, va
 
 /** POL-2: may this member row (re-)enter? A row that already exists is a role change, not an admission. */
 async function admitMember(deps: RollbackDeps, driveId: string, userId: string, values: object): Promise<ReentryDecision> {
-  const [row] = await deps.db.select({ id: driveMembers.id }).from(driveMembers).where(and(eq(driveMembers.driveId, driveId), eq(driveMembers.userId, userId))).limit(1);
-  if (row) return { outcome: 'admit' };
-  return deps.admitReentry(deps.db, { driveId, userId, member: JSON.parse(JSON.stringify(values)) as Record<string, unknown>, requestedBy: null });
+  return deps.admitReentry(deps.db, { driveId, userId, member: JSON.parse(JSON.stringify(values)) as Record<string, unknown>, requestedBy: null, memberRowIsRoleChange: true });
 }
 
 

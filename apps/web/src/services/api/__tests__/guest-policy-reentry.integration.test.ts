@@ -8,7 +8,7 @@
  *
  * Every org, drive and user row is deleted, children before parents, users last.
  */
-import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
 import { and, eq, inArray } from '@pagespace/db/operators';
@@ -19,6 +19,14 @@ import { drives } from '@pagespace/db/schema/core';
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
 import { orgGuestHolds } from '@pagespace/db/schema/org-guest-holds';
+// The move logs its activity fire-and-forget after it returns; that write would race this file's cleanup (a
+// deadlock on the drive row). The log is not what these tests assert.
+vi.mock('@pagespace/lib/monitoring/activity-logger', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@pagespace/lib/monitoring/activity-logger')>()),
+  logPageActivity: vi.fn(),
+  getActorInfo: vi.fn(async () => ({ actorEmail: 'a@x', actorDisplayName: 'A' })),
+}));
+
 import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
 import { admitReentry } from '@pagespace/lib/permissions/guest-holds';
 import { movePagesToDrive } from '../page-cross-drive-move-service';
