@@ -36,6 +36,7 @@ export default defineConfig({
       { find: '@', replacement: path.resolve(__dirname, './src') },
       { find: /^@pagespace\/db\/(.+)$/, replacement: path.resolve(repoRoot, 'packages/db/src/$1') },
       { find: /^@pagespace\/lib\/(.+)$/, replacement: path.resolve(repoRoot, 'packages/lib/src/$1') },
+      { find: /^@pagespace\/editor\/(.+)$/, replacement: path.resolve(repoRoot, 'packages/editor/src/$1') },
     ],
   },
 });

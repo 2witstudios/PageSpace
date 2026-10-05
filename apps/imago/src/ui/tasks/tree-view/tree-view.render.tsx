@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { Checkbox } from '../../components/checkbox/checkbox';
 import { Icon } from '../../components/icon/icon';
@@ -30,6 +31,13 @@ export type TreeViewRenderProps = {
   readonly toggleComplete: (taskId: string) => void;
   /** Void action: adds a task to the list on `listPageId`; a refusal is shown at `at`. */
   readonly addTask: (listPageId: string, at: string, title: string) => void;
+  /** Where a task's detail opens; without it, titles are plain text. */
+  readonly taskHref?: (task: Task) => string;
+  /** The level of the task whose subtasks `list` holds; 0 for a list of its own. */
+  readonly level?: number;
+  /** The list's own add control: "Add task" unless the list is a task's subtasks. */
+  readonly addLabel?: string;
+  readonly addPlaceholder?: string;
 };
 
 const noticeAt = (props: TreeViewRenderProps, at: string): ReactNode =>
@@ -71,9 +79,15 @@ const row = (props: TreeViewRenderProps, list: TaskList, task: Task, level: numb
       <div className={taskRowClass}>
         {lead(props, task, branch, open)}
         <Checkbox checked={done} label={`Complete ${task.title}`} toggle={() => props.toggleComplete(task.id)} />
-        <span className={taskTitleClass(done)} data-title="">
-          {task.title}
-        </span>
+        {props.taskHref === undefined ? (
+          <span className={taskTitleClass(done)} data-title="">
+            {task.title}
+          </span>
+        ) : (
+          <Link href={props.taskHref(task)} prefetch className={taskTitleClass(done)} data-title="">
+            {task.title}
+          </Link>
+        )}
         {total > 0 ? <ProgressMeter done={finished} total={total} /> : null}
       </div>
       {noticeAt(props, task.id)}
@@ -103,14 +117,20 @@ const row = (props: TreeViewRenderProps, list: TaskList, task: Task, level: numb
  * the row it was for.
  */
 export function renderTreeView(props: TreeViewRenderProps): ReactNode {
-  const { list } = props;
+  const { list, level = 0, addLabel = 'Add task', addPlaceholder = 'Task title' } = props;
   return (
     <ul className={taskLevelClass} aria-label={`${list.title} tasks`}>
-      {list.tasks.map((task) => row(props, list, task, 1))}
-      <li>
-        <InlineAdd label="Add task" placeholder="Task title" add={(title) => props.addTask(list.pageId, list.pageId, title)} />
-        {noticeAt(props, list.pageId)}
-      </li>
+      {list.tasks.map((task) => row(props, list, task, level + 1))}
+      {level === 0 || canNestUnder(level) ? (
+        <li>
+          <InlineAdd
+            label={addLabel}
+            placeholder={addPlaceholder}
+            add={(title) => props.addTask(list.pageId, list.pageId, title)}
+          />
+          {noticeAt(props, list.pageId)}
+        </li>
+      ) : null}
     </ul>
   );
 }

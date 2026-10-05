@@ -48,9 +48,10 @@ export default function nextConfig(phase: string): NextConfig {
     basePath: "/imago",
     output: "standalone",
     outputFileTracingRoot: path.join(__dirname, "../.."),
-    // getViewer() validates sessions with @pagespace/lib's session-service.
+    // getViewer() validates sessions with @pagespace/lib's session-service;
+    // a task's description is edited on @pagespace/editor's document schema.
     // Compiled from source so the build never depends on a prebuilt dist/.
-    transpilePackages: ["@pagespace/db", "@pagespace/lib"],
+    transpilePackages: ["@pagespace/db", "@pagespace/lib", "@pagespace/editor"],
     serverExternalPackages: ["pg"],
     webpack: (config, { isServer, nextRuntime }) => {
       // The edge (middleware) compile has no require(), so it is left alone:

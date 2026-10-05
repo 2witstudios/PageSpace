@@ -218,4 +218,58 @@ describe('renderTreeView()', () => {
       expected: [[], 'Add task'],
     });
   });
+
+  test('rows that open their task', () => {
+    const { container } = setup({ expandedIds: ['p'], taskHref: (entry) => `/d1/tasks/${entry.pageId}` });
+    const titles = [...container.querySelectorAll('[data-title]')];
+    assert({
+      given: 'a way to address each task',
+      should: 'make every title a link to its task, and keep the other controls as they were',
+      actual: {
+        links: titles.map((title) => [title.tagName, title.getAttribute('href')]),
+        checkboxes: container.querySelectorAll('[role="checkbox"]').length,
+      },
+      expected: {
+        links: [
+          ['A', '/d1/tasks/page-p'],
+          ['A', '/d1/tasks/page-a'],
+          ['A', '/d1/tasks/page-z'],
+        ],
+        checkboxes: 3,
+      },
+    });
+  });
+
+  test('an outline under a task', () => {
+    const { container, calls } = setup({
+      list: taskList('page-p', [task('a', { title: 'Draft copy', subTaskCount: 1, subtasks: taskList('page-a', [task('a1')]) })], {
+        title: 'Plan launch',
+      }),
+      expandedIds: ['a'],
+      level: 3,
+      addLabel: 'Add subtask',
+      addPlaceholder: 'Subtask title',
+    });
+    const adders = [...container.querySelectorAll('button')].filter((button) => button.textContent === 'Add subtask');
+    click(adders[0] as HTMLButtonElement);
+    const input = container.querySelector<HTMLInputElement>('input[placeholder="Subtask title"]');
+    typeInto(input as HTMLInputElement, 'Edit');
+    press(input as HTMLInputElement, 'Enter');
+    assert({
+      given: 'the subtasks of a task on level 3, with a at level 4 expanded',
+      should: 'nest only as deep as PageSpace allows below them, and add to the task’s own list',
+      actual: { rows: rows(container), adders: adders.length, added: calls.added },
+      expected: { rows: ['a', 'a1'], adders: 2, added: [['page-a', 'a', 'Edit']] },
+    });
+  });
+
+  test('an outline at the deepest level', () => {
+    const { container } = setup({ list: taskList('page-5', []), level: 5, addLabel: 'Add subtask' });
+    assert({
+      given: 'the subtasks of a task on the fifth level',
+      should: 'offer no add, since nothing nests deeper',
+      actual: container.querySelectorAll('button').length,
+      expected: 0,
+    });
+  });
 });
