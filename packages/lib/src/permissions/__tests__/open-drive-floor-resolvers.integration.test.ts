@@ -297,7 +297,7 @@ describe('POL-6: the Open-drive role floor is read by every implicit-membership 
   });
 
   for (const floor of ['view', 'edit'] as const) {
-    it(`POL-6 the consistency matrix under a ${floor} floor: every resolver path answers the floored table for every person, drive and page`, async () => {
+    it(`POL-6 (partial) the consistency matrix under a ${floor} floor: every resolver path answers the floored table for every person, drive and page`, async () => {
       const h = await harbor();
       await setFloor(h.org.id, floor);
 
@@ -307,7 +307,7 @@ describe('POL-6: the Open-drive role floor is read by every implicit-membership 
     }, 180_000);
   }
 
-  it('POL-6 the matrix is not vacuous: the stored roles sit below both floors, and dark (no org resolution) the implicit members hold nothing', async () => {
+  it('POL-6 (partial) the matrix is not vacuous: the stored roles sit below both floors, and dark (no org resolution) the implicit members hold nothing', async () => {
     const h = await harbor();
     await setFloor(h.org.id, 'edit');
 
@@ -327,7 +327,7 @@ describe('POL-6: the Open-drive role floor is read by every implicit-membership 
     expect(await getUserAccessLevel(h.people.gil.id, h.pages.open.roadmap.id)).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
   }, 180_000);
 
-  it('POL-6 guests-off parking still wins: a parked outsider and a parked guest resolve nothing in any path, while the floor still holds for org members', async () => {
+  it('POL-6 (partial) guests-off parking still wins: a parked outsider and a parked guest resolve nothing in any path, while the floor still holds for org members', async () => {
     const h = await harbor();
     await setFloor(h.org.id, 'edit');
     const parked = await updateOrgPolicies({ orgId: h.org.id, actorId: h.people.ada.id, patch: { guests: 'off' } });
@@ -354,7 +354,7 @@ describe('POL-6: the Open-drive role floor is read by every implicit-membership 
     expect(await getUserAccessLevel(h.people.ivy.id, h.pages.open.secret.id)).toEqual({ canView: true, canEdit: true, canShare: false, canDelete: false });
   }, 180_000);
 
-  it('POL-6 the floor is read at resolution: lowering it in the policy lowers what the floor adds on the very next read, and never below the explicit grant', async () => {
+  it('POL-6 (partial) the floor is read at resolution: lowering it in the policy lowers what the floor adds on the very next read, and never below the explicit grant', async () => {
     const h = await harbor();
     const { ivy, gil } = h.people;
     await setFloor(h.org.id, 'edit');

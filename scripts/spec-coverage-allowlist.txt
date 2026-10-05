@@ -111,12 +111,18 @@ POL-1
 # #2761 (D-OW-30 "no subscription row = lapsed") is not yet re-verified on the merged tip.
 POL-2
 # POL-6 (default role in Open drives; read by the implicit-membership resolver; D-OW-11: the default is a drive
-# setting, the org sets only the floor). Enforced at every WRITE (point-guard ruling, no resolution overlay):
-# role create/update/delete/reorder, the page-permission path, backup restore, role rollback/redo, raising the
-# floor, a drive created/moved in/switched to Open; judged on the default's effective grants (drive-wide and
-# per-page; null drive-wide = member view); serialized with visibility changes (org then drive lock) and per drive;
-# org members follow the current default; a damaged floor fails closed to view. UNPROVEN: the implicit-membership
-# RESOLVER does not read the floor (resolution-time reading); filed as a follow-up by the orchestrator.
+# setting, the org sets only the floor). Enforced at every WRITE (#2762, point-guard ruling): role
+# create/update/delete/reorder, the page-permission path, backup restore, role rollback/redo, raising the floor, a
+# drive created/moved in/switched to Open; judged on the default's effective grants; serialized with visibility
+# changes; org members follow the current default; a damaged floor fails closed to view. READ at resolution
+# (ow-pol6-resolver): resolveEffectiveDriveMembership carries the org floor on an implicit Open membership (an org
+# MEMBER whose membership is the org's: no row, or an org-materialized row) and every TypeScript resolver path applies
+# it through one function (applyOpenDriveFloor): getUserAccessLevel (page and drive root), the batch resolver and
+# page viewers, both accessible-pages paths, drive permissions, the drive-wide edit rule (listing, getDriveWithAccess,
+# web sandbox and code-exec gates); one consistency matrix runs every path (open-drive-floor-resolvers.integration),
+# titled "POL-6 (partial)". UNPROVEN: the SQL twin accessible_page_ids_for_user (pulse, activity summary) is not
+# org-aware at all (no org power, no implicit membership, no stale-row rule, no floor; a stale org row on a
+# RESTRICTED drive still shows its pages there) and needs a migration outside that lane.
 POL-6
 # POL-8 (models available and provider allowlist): every model call is refused by the org allowlists in the one
 # provider factory and saving a disallowed model is refused, titled "POL-8 (partial)". Not claimed: the model
