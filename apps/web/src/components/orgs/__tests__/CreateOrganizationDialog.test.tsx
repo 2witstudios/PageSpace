@@ -158,7 +158,7 @@ describe('CreateOrganizationDialog', () => {
     await screen.findByText('Pay for Northwind Labs');
     await userEvent.keyboard('{Escape}');
     expect(mocks.push).toHaveBeenCalledWith('/orgs/org_nw/settings');
-    expect(JSON.parse(localStorage.getItem('pagespace.orgSetup.org_nw') ?? 'null')).toMatchObject({ driveIds: ['d_product'], invites: ['priya@northwind.com', 'dana@northwind.com'] });
+    expect(JSON.parse(localStorage.getItem('pagespace.orgSetup.u_me.org_nw') ?? 'null')).toMatchObject({ driveIds: ['d_product'], invites: ['priya@northwind.com', 'dana@northwind.com'] });
     expect(mocks.toastInfo).toHaveBeenCalledWith(expect.stringContaining('saved'));
   });
 

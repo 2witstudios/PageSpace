@@ -3,6 +3,7 @@
 import { useEffect, useCallback, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore, authStoreHelpers } from '@/stores/useAuthStore';
+import { purgePendingSetups } from '@/lib/orgs/pending-setup';
 import { useTokenRefresh } from './useTokenRefresh';
 import { post, clearSessionCache } from '@/lib/auth/auth-fetch';
 import { setAppNavigator } from '@/lib/navigation/app-navigator';
@@ -131,6 +132,8 @@ export function useAuth(): {
         } catch (err) {
           console.error('Failed to clear device token from localStorage', err);
         }
+        // The create-org setup plan is per person; the next account on this browser must not inherit it.
+        purgePendingSetups();
       }
 
       // Reset token refresh state

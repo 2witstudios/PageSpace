@@ -63,6 +63,7 @@ export function CreateOrganizationDialog({ open, onOpenChange }: CreateOrganizat
   const router = useRouter();
   const { user } = useAuth();
   const selfEmail = user?.email ?? '';
+  const userId = user?.id ?? '';
   const { resolvedTheme } = useTheme();
   const drives = useDriveStore((s) => s.drives);
   const fetchDrives = useDriveStore((s) => s.fetchDrives);
@@ -113,7 +114,7 @@ export function CreateOrganizationDialog({ open, onOpenChange }: CreateOrganizat
     // Once the org exists, closing goes to it rather than abandoning it: it resumes from the hub, where the
     // saved setup plan (drives, invitations) is offered once the org is paid (review P2-7).
     if (!next && state.step !== 'details' && state.step !== 'done') {
-      if (loadPendingSetup(state.orgId)) {
+      if (loadPendingSetup(userId, state.orgId)) {
         toast.info('Your chosen drives and invitations are saved. Finish setup from the organization page once it is paid.');
       }
       router.push(`/orgs/${state.orgId}/settings`);
@@ -146,7 +147,7 @@ export function CreateOrganizationDialog({ open, onOpenChange }: CreateOrganizat
       const orgId = created.organization.id;
       const driveNames = Object.fromEntries(ownDrives.map((d) => [d.id, d.name]));
       setNames(driveNames);
-      savePendingSetup(orgId, { driveIds: selected, invites: parsed.valid, selfEmail, driveNames });
+      savePendingSetup(userId, orgId, { driveIds: selected, invites: parsed.valid, selfEmail, driveNames });
       void refreshMyOrgs();
       const next = nextStepAfterCreate(created.billing);
       if (next.step === 'payment') {
@@ -212,9 +213,9 @@ export function CreateOrganizationDialog({ open, onOpenChange }: CreateOrganizat
     const { orgId } = state;
     let cancelled = false;
     const run = async () => {
-      const plan = loadPendingSetup(orgId) ?? { driveIds: selected, invites: parsed.valid, selfEmail, driveNames: names };
+      const plan = loadPendingSetup(userId, orgId) ?? { driveIds: selected, invites: parsed.valid, selfEmail, driveNames: names };
       const failures = await runOrgSetup(orgId, plan, () => cancelled);
-      if (!cancelled) clearPendingSetup(orgId);
+      if (!cancelled) clearPendingSetup(userId, orgId);
       if (cancelled) return;
       void fetchDrives(false, true);
       void refreshMyOrgs();

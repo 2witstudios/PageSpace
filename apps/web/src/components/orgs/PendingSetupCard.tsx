@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { orgReadyForSetup } from '@/lib/orgs/create-org-flow';
 import { clearPendingSetup, loadPendingSetup, type PendingOrgSetup } from '@/lib/orgs/pending-setup';
 import { runOrgSetup } from '@/lib/orgs/run-org-setup';
+import { useAuthStore } from '@/stores/useAuthStore';
 import type { OrgBillingNotice } from '@pagespace/lib/organizations/status-core';
 
 const plural = (n: number, one: string) => `${n} ${n === 1 ? one : `${one}s`}`;
@@ -16,11 +17,12 @@ const plural = (n: number, one: string) => `${n} ${n === 1 ? one : `${one}s`}`;
  * drives chosen in the dialog move in and the invitations go out, exactly as the dialog would have done.
  */
 export function PendingSetupCard({ orgId, orgName, notice, onDone }: { orgId: string; orgName: string; notice: OrgBillingNotice | undefined; onDone: () => void }) {
+  const userId = useAuthStore((state) => state.user?.id) ?? '';
   const [plan, setPlan] = useState<PendingOrgSetup | null>(null);
   const [running, setRunning] = useState(false);
   const [failures, setFailures] = useState<string[]>([]);
 
-  useEffect(() => setPlan(loadPendingSetup(orgId)), [orgId]);
+  useEffect(() => setPlan(loadPendingSetup(userId, orgId)), [userId, orgId]);
 
   if (!plan) return null;
   const ready = orgReadyForSetup(notice);
@@ -29,7 +31,7 @@ export function PendingSetupCard({ orgId, orgName, notice, onDone }: { orgId: st
   const finish = async () => {
     setRunning(true);
     const failed = await runOrgSetup(orgId, plan);
-    clearPendingSetup(orgId);
+    clearPendingSetup(userId, orgId);
     setRunning(false);
     setFailures(failed);
     if (failed.length === 0) {
@@ -57,7 +59,7 @@ export function PendingSetupCard({ orgId, orgName, notice, onDone }: { orgId: st
           {running ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
           Finish setup
         </Button>
-        <Button size="sm" variant="ghost" disabled={running} onClick={() => { clearPendingSetup(orgId); setPlan(null); }}>
+        <Button size="sm" variant="ghost" disabled={running} onClick={() => { clearPendingSetup(userId, orgId); setPlan(null); }}>
           {failures.length > 0 ? 'Dismiss' : 'Skip'}
         </Button>
       </div>
