@@ -3,7 +3,7 @@
  * spending-from chip, the Drive Wallet page, the org hub and its Members & seats, Policies and
  * Plan pages update without a refresh.
  *
- *   wallet:changed  on `drive:<driveId>` (the drive's room; joining it is access-checked)
+ *   wallet:changed  on `drive:<driveId>:wallet` (joined only by people with a wallet view)
  *                   payload { driveId, walletId, change: 'balance' | 'allocation' | 'status' | 'caps' | 'rules' }
  *   org:changed     on `notifications:<userId>` for every accepted member of the org
  *                   payload { orgId, change: 'policy' | 'seats' | 'status' | 'membership' | 'seat_caps' | 'wallet' }
@@ -15,6 +15,7 @@
 import { createSignedBroadcastHeaders } from '../auth/broadcast-auth';
 import { loggers } from '../logging/logger-config';
 import { errorLogFields } from '../logging/error-cause';
+import { driveWalletRoom } from './rooms';
 
 export const WALLET_CHANGED_EVENT = 'wallet:changed' as const;
 export const ORG_CHANGED_EVENT = 'org:changed' as const;
@@ -32,7 +33,7 @@ export interface WalletChangedPayload { driveId: string; walletId: string; chang
 export interface OrgChangedPayload { orgId: string; change: OrgChange }
 
 export function walletChangedMessage(input: WalletChangedPayload): RealtimeMessage<WalletChangedPayload> {
-  return { channelId: `drive:${input.driveId}`, event: WALLET_CHANGED_EVENT, payload: { driveId: input.driveId, walletId: input.walletId, change: input.change } };
+  return { channelId: driveWalletRoom(input.driveId), event: WALLET_CHANGED_EVENT, payload: { driveId: input.driveId, walletId: input.walletId, change: input.change } };
 }
 
 /** One message per recipient, deduplicated and in a stable order. */

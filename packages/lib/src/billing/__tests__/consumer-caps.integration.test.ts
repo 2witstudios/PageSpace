@@ -279,7 +279,7 @@ describe('per-consumer caps on drive-wallet and seat legs (orgs on, real Postgre
     expect(await notifyCapAlerts({ walletId: w.productWalletId, userId: w.marcusId })).toBe(0);
   });
 
-  it('X-4 (partial) a settle on a drive wallet announces wallet:changed to the drive room, with no amount; a cap write announces caps', async () => {
+  it('X-4 (partial) a settle on a drive wallet announces wallet:changed to the drive wallet room, with no amount; a cap write announces caps', async () => {
     if (!dbAvailable) return;
     world = await build();
     const w = world;
@@ -296,8 +296,8 @@ describe('per-consumer caps on drive-wallet and seat legs (orgs on, real Postgre
       await vi.waitFor(() => expect(sent.filter((m) => m.event === 'wallet:changed').length).toBeGreaterThanOrEqual(2));
       const walletEvents = sent.filter((m) => m.event === 'wallet:changed');
       expect(walletEvents.map((m) => [m.channelId, m.payload.change])).toEqual(expect.arrayContaining([
-        [`drive:${w.productId}`, 'balance'],
-        [`drive:${w.productId}`, 'caps'],
+        [`drive:${w.productId}:wallet`, 'balance'],
+        [`drive:${w.productId}:wallet`, 'caps'],
       ]));
       expect(JSON.stringify(walletEvents)).not.toMatch(/Cents|Credits/);
     } finally {

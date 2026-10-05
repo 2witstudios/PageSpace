@@ -2629,6 +2629,11 @@
       "import": "./dist/permissions/drive-member-labels.js",
       "require": "./dist/permissions/drive-member-labels.js"
     },
+    "./permissions/spend-standing": {
+      "types": "./dist/permissions/spend-standing.d.ts",
+      "import": "./dist/permissions/spend-standing.js",
+      "require": "./dist/permissions/spend-standing.js"
+    },
     "./permissions/wallet-access": {
       "types": "./dist/permissions/wallet-access.d.ts",
       "import": "./dist/permissions/wallet-access.js",
