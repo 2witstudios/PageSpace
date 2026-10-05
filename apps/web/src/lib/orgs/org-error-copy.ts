@@ -81,7 +81,7 @@ export const ORG_ERROR_COPY: Record<OrgApiErrorCode, string> = {
   wallet_exists: 'This drive already has a wallet.',
   wallet_in_use: 'This wallet has been used, so it cannot be deleted. Pause it instead.',
   wallet_not_available: 'That wallet is not available to you.',
-  invalid_amount: 'Enter a whole number of credits, zero or more, within the allowed range for this action.',
+  invalid_amount: 'Enter a whole number of credits within the allowed range for this action.',
   nothing_to_change: 'Nothing changed.',
   same_wallet: 'You cannot move credits from a wallet into itself.',
   not_a_drive_wallet: 'That is not a drive wallet.',
