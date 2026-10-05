@@ -13,6 +13,7 @@ import type { ActivityAction, ActivityActionResult, ActivityActionPreview } from
 import type { DeferredWorkflowTrigger, ActivityOperation } from '@pagespace/lib/monitoring/activity-logger';
 import type { RollbackContext } from '@pagespace/lib/permissions/rollback-permissions';
 import { withTx, type RollbackDeps, type PageUpdateContext, type PageMutationMeta } from './deps';
+import { guardOpenRoleFloor } from '@pagespace/lib/organizations/open-role-floor';
 import { AGENT_CONFIG_ROLLBACK_FIELDS } from './operations';
 import { isRollingBackRollback } from './target-values';
 import { getActivityById } from './activity-repo';
@@ -187,11 +188,20 @@ export async function executeRollback(
           : await rollbackMemberChange(txDeps, activity);
         break;
 
-      case 'role':
-        restoredValues = rollingBackRollback
-          ? await redoRoleChange(txDeps, activity, preview.targetValues, effectiveSourceOperation)
-          : await rollbackRoleChange(txDeps, activity);
+      case 'role': {
+        const runRole = (d: RollbackDeps) => rollingBackRollback
+          ? redoRoleChange(d, activity, preview.targetValues, effectiveSourceOperation)
+          : rollbackRoleChange(d, activity);
+        // POL-6: undoing or redoing a role change may change an Open org drive's default role; it is judged against
+        // the org's floor like any role write, inside a transaction so a refusal writes nothing.
+        const roleDriveId = activity.driveId;
+        restoredValues = roleDriveId === null
+          ? await runRole(txDeps)
+          : tx
+            ? await guardOpenRoleFloor(tx, roleDriveId, () => runRole(txDeps))
+            : await deps.db.transaction((t) => guardOpenRoleFloor(t, roleDriveId, () => runRole(withTx(deps, t as unknown as typeof db))));
         break;
+      }
 
       case 'message':
         restoredValues = rollingBackRollback

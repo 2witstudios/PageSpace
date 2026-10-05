@@ -81,7 +81,8 @@ beforeEach(async () => {
   await db.insert(drives).values({
     id: research, name: 'Customer Research', slug: `research-${run}`, ownerId: marcus, orgId: northwind, orgVisibility: 'RESTRICTED', updatedAt: new Date(),
   });
-  const [role] = await db.insert(driveRoles).values({ driveId: research, name: 'Reader', isDefault: true, permissions: {} }).returning();
+  const [role] = await db.insert(driveRoles).values({ driveId: research, name: 'Reader', isDefault: true, permissions: {}, // POL-6: a default must meet the org floor (view) for the drive to go Open.
+    driveWidePermissions: { canView: true, canEdit: false, canShare: false } }).returning();
   defaultRoleId = role.id;
 });
 

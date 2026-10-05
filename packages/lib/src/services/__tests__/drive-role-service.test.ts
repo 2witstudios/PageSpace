@@ -35,6 +35,12 @@ vi.mock('@pagespace/db/db', () => ({
   },
 }));
 const mockLoadMembership = vi.hoisted(() => vi.fn());
+// POL-6: the org floor guard reads the drive's state around each role write; it is proven against real Postgres in
+// open-role-floor.integration.test.ts, so here it only runs the write.
+vi.mock('../../organizations/open-role-floor', () => ({
+  guardOpenRoleFloor: vi.fn((_tx: unknown, _driveId: string, write: () => Promise<unknown>) => write()),
+  OpenRoleFloorError: class extends Error {},
+}));
 vi.mock('../../permissions/org-drive-membership', () => ({
   loadEffectiveDriveMembership: mockLoadMembership,
 }));
@@ -533,6 +539,8 @@ describe('drive-role-service', () => {
     it('should delete existing role without throwing', async () => {
       mockDb.query.driveRoles.findFirst.mockResolvedValueOnce({ id: 'r1' });
       mockDb.delete.mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
+      // The delete runs in a transaction (the POL-6 floor guard judges the drive after it).
+      mockDb.transaction.mockImplementation(async (fn: Function) => fn(mockDb));
 
       // void function — verifying it resolves without error is the contract
       await expect(deleteDriveRole('drive-1', 'r1')).resolves.toBeUndefined();

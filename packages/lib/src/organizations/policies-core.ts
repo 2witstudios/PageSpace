@@ -123,7 +123,9 @@ const SPECS: { [K in OrgPolicyKey]: FieldSpec<OrgPolicies[K]> } = {
   whoCanInvite: { default: 'admins', strictest: 'admins', normalize: oneOf(ACTOR_POLICIES) },
   // Every member may create org drives today (DRV-3 without a policy), so that is the default; a damaged value is admins only.
   whoCanCreateDrives: { default: 'members', strictest: 'admins', normalize: oneOf(ACTOR_POLICIES) },
-  openDriveRoleFloor: { default: 'view', strictest: 'edit', normalize: oneOf(OPEN_ROLE_FLOORS) },
+  // A FLOOR is a minimum: a higher floor gives org members MORE in Open drives. So the value that fails closed is the
+  // lowest one, view (it adds nothing to what a drive chose), never edit (Review 3+4: `edit` here failed open).
+  openDriveRoleFloor: { default: 'view', strictest: 'view', normalize: oneOf(OPEN_ROLE_FLOORS) },
   seatAllowanceCents: { default: DEFAULT_SEAT_ALLOWANCE_CENTS, strictest: 0, normalize: wholeCents },
   walletFallback: { default: 'refuse', strictest: 'refuse', normalize: oneOf(WALLET_FALLBACKS) },
   // An invalid allowlist reads as EMPTY (nothing allowed), never as null (everything allowed).
@@ -245,6 +247,32 @@ export function suspensionKindsChanged(before: OrgPolicies, after: OrgPolicies):
   if (!sameSet(a.integrations.restrictTo, b.integrations.restrictTo)) changed.push('integrations');
   return changed;
 }
+
+// ---------------------------------------------------------------------------
+// POL-6: the floor under an Open drive's default role
+// ---------------------------------------------------------------------------
+
+/**
+ * POL-6 (D-OW-11): the default role org members hold in an Open drive is the DRIVE's setting (its default custom
+ * role); the org policy sets only the floor under it. Does a default role whose drive-wide grant is `driveWide`
+ * (null: it grants nothing drive-wide, only the pages it names) meet `floor`? `view` needs drive-wide view;
+ * `edit` needs drive-wide view and edit.
+ */
+export function openDefaultRoleMeetsFloor(
+  floor: OpenRoleFloor,
+  driveWide: { canView: boolean; canEdit: boolean; canShare: boolean } | null,
+): boolean {
+  if (!driveWide?.canView) return false;
+  return floor === 'view' || driveWide.canEdit;
+}
+
+export const OPEN_ROLE_FLOOR_MESSAGES: Record<OpenRoleFloor, string> = {
+  view: "This organization requires the default role in its drives to let members view the drive. Give the role drive-wide view, or choose another default.",
+  edit: "This organization requires the default role in its drives to let members edit the drive. Give the role drive-wide edit, or choose another default.",
+};
+
+export const OPEN_ROLE_FLOOR_RAISE_MESSAGE =
+  "Some of this organization's Open drives have a default role below that floor. Give each listed drive's default role drive-wide access at the new floor, or make the drive Restricted, then raise it.";
 
 // ---------------------------------------------------------------------------
 // Blocked, not suspended: what a change forbids that has no suspension (POL-1)

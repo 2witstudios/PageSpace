@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getOrgPolicies, updateOrgPolicies } from '@pagespace/lib/organizations/policies';
-import { validateOrgPoliciesPatch } from '@pagespace/lib/organizations/policies-core';
+import { OPEN_ROLE_FLOOR_RAISE_MESSAGE, validateOrgPoliciesPatch } from '@pagespace/lib/organizations/policies-core';
 import { checkOrgActive } from '@pagespace/lib/organizations/status';
 import { reconcileOrgPublishedVisibility } from '@pagespace/lib/organizations/published-visibility';
 import { createPublishedObjectStore, isPublishConfigured } from '@/lib/canvas/published-storage';
@@ -54,6 +54,9 @@ export async function PATCH(request: Request, context: Context) {
     if (!active.ok) return NextResponse.json({ error: active.message, code: active.code }, { status: active.status });
 
     const result = await updateOrgPolicies({ orgId, actorId: gate.userId, patch: parsed.patch });
+    if (!result.ok && result.reason === 'open_role_floor') {
+      return NextResponse.json({ error: OPEN_ROLE_FLOOR_RAISE_MESSAGE, code: 'org_policy', policy: 'openDriveRoleFloor', drives: result.drives }, { status: 403 });
+    }
     if (!result.ok) return NextResponse.json({ error: 'Organization not found' }, { status: 404 });
 
     // POL-4: published sites live in a public bucket the edge serves without asking the database, so a change to

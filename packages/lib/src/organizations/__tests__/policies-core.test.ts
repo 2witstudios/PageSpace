@@ -8,6 +8,7 @@ import {
   driveSpendPolicy,
   mergeOrgPolicies,
   newlyBlockedKinds,
+  openDefaultRoleMeetsFloor,
   orgPolicySpendPolicy,
   parseOrgPolicies,
   suspensionKindsChanged,
@@ -225,5 +226,32 @@ describe('newlyBlockedKinds', () => {
 
   it('POL-1 (partial) several at once come back in a stable order', () => {
     expect(newlyBlockedKinds(p(), p({ agentsAutonomous: false, publishedApps: false, modelAllowlist: [] }))).toEqual(['publishedApps', 'agentsAutonomous', 'models']);
+  });
+});
+
+describe('the Open drive default-role floor', () => {
+  it.each(['edit', 'EDIT', 'admin', 7, null, ['edit'], { floor: 'edit' }])('POL-6 (partial) an unknown or unparseable floor (%j) fails CLOSED to view, the floor that adds nothing — never to edit', (raw) => {
+    expect(parseOrgPolicies({ openDriveRoleFloor: raw }).openDriveRoleFloor).toBe(raw === 'edit' ? 'edit' : 'view');
+  });
+
+  it('POL-6 (partial) an unset floor is view, today\'s behaviour', () => {
+    expect(DEFAULT_ORG_POLICIES.openDriveRoleFloor).toBe('view');
+  });
+
+  const wide = (canView: boolean, canEdit: boolean) => ({ canView, canEdit, canShare: false });
+
+  it('POL-6 (partial) a view floor admits a default role that grants view or more drive-wide, and refuses one that grants nothing drive-wide', () => {
+    expect(openDefaultRoleMeetsFloor('view', wide(true, false))).toBe(true);
+    expect(openDefaultRoleMeetsFloor('view', wide(true, true))).toBe(true);
+    expect(openDefaultRoleMeetsFloor('view', wide(false, false))).toBe(false);
+    expect(openDefaultRoleMeetsFloor('view', null)).toBe(false);
+  });
+
+  it('POL-6 (partial) an edit floor admits only a default role that grants edit drive-wide: view alone is below it', () => {
+    expect(openDefaultRoleMeetsFloor('edit', wide(true, true))).toBe(true);
+    expect(openDefaultRoleMeetsFloor('edit', wide(true, false))).toBe(false);
+    expect(openDefaultRoleMeetsFloor('edit', null)).toBe(false);
+    // Edit without view is not a usable grant.
+    expect(openDefaultRoleMeetsFloor('edit', wide(false, true))).toBe(false);
   });
 });

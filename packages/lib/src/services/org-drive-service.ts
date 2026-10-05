@@ -33,6 +33,7 @@ import {
   type OrgDriveRefusal,
 } from '../organizations/org-drive-ownership';
 import { retryOnDeadlock } from '../organizations/repository';
+import { openDriveFloorRefusal } from '../organizations/open-role-floor';
 import { checkOrgActive, type OrgLapsedRefusal } from '../organizations/status';
 import { removeFormerLeadOwnerRow } from '../permissions/org-drive-membership';
 import { getActorInfo, logActivityWithTx } from '../monitoring/activity-logger';
@@ -117,6 +118,15 @@ async function freeOrgSlug(tx: OrgDriveTx, orgId: string, base: string): Promise
   return resolveUniqueSlug(rows.map((r) => r.slug), base);
 }
 
+/**
+ * POL-6: a drive about to be an Open drive of `orgId` whose default role (none, for a new drive) is below the org's
+ * Open-drive role floor is refused. Called with the org row locked.
+ */
+async function openFloorCheck(tx: OrgDriveTx, input: { driveId: string | null; orgId: string; visibilityAfter: OrgDriveVisibility }): Promise<OrgDriveRefusal | null> {
+  const refusal = await openDriveFloorRefusal(tx, input);
+  return refusal ? { ok: false, code: 'POLICY_OPEN_ROLE_FLOOR', status: 403, message: refusal.message } : null;
+}
+
 export async function moveDriveToOrg(
   actorId: string,
   driveId: string,
@@ -140,6 +150,9 @@ export async function moveDriveToOrg(
     // learns the org's billing state; read under the org row lock taken above.
     const active = await checkOrgActive(input.orgId, { executor: tx });
     if (!active.ok) return active;
+    // An unchosen visibility is the column default, Open.
+    const floor = await openFloorCheck(tx, { driveId, orgId: input.orgId, visibilityAfter: input.orgVisibility ?? 'OPEN' });
+    if (floor) return floor;
 
     const slug = await freeOrgSlug(tx, input.orgId, drive.slug);
     const [moved] = await tx
@@ -248,6 +261,9 @@ export async function createOrgDrive(
     // SEAT-9: creating org drives is an org-only capability (after the permission verdict, as above).
     const active = await checkOrgActive(input.orgId, { executor: tx });
     if (!active.ok) return active;
+    // A new drive has no default role yet, so it holds the plain MEMBER role: Open is refused under an edit floor.
+    const floor = await openFloorCheck(tx, { driveId: null, orgId: input.orgId, visibilityAfter: input.orgVisibility ?? 'OPEN' });
+    if (floor) return floor;
 
     const slug = await freeOrgSlug(tx, input.orgId, slugify(input.name));
     const [created] = await tx
@@ -331,6 +347,8 @@ export async function changeDriveVisibility(
     if (!verdict.changed) {
       return { ok: true as const, changed: false, drive, from: verdict.from, to: verdict.to, publish: async () => {} };
     }
+    const floor = await openFloorCheck(tx, { driveId, orgId: drive.orgId, visibilityAfter: verdict.to });
+    if (floor) return floor;
 
     const [updated] = await tx
       .update(drives)

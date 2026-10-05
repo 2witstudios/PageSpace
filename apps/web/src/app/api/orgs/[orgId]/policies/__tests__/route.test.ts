@@ -118,6 +118,14 @@ describe('policies routes', () => {
     expect(await (await PATCH(req('PATCH', '', { publishedApps: false }), ctx)).json()).toMatchObject({ blocked: { publishedApps: 2 } });
   });
 
+  it('POL-6 (partial) raising the Open-drive floor while Open drives are below it is refused 403, naming the policy and the drives', async () => {
+    as('ADMIN');
+    vi.mocked(updateOrgPolicies).mockResolvedValue({ ok: false, reason: 'open_role_floor', floor: 'edit', drives: [{ id: 'd1', name: 'Product' }] });
+    const res = await PATCH(req('PATCH', '', { openDriveRoleFloor: 'edit' }), ctx);
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ code: 'org_policy', policy: 'openDriveRoleFloor', drives: [{ id: 'd1', name: 'Product' }] });
+  });
+
   it('POL-1 (partial) unknown keys, bad values and empty bodies are refused before anything is stored', async () => {
     as('OWNER');
     for (const body of [{ nope: true }, { guests: 'maybe' }, {}, null]) {

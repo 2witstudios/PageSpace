@@ -24,6 +24,8 @@ import {
 import { getOrgPolicies } from './policy-reader';
 import { applySuspension, type PolicySuspensionItem } from './policy-suspension';
 import { listPolicyBlockedItems, type PolicyBlockedItems } from './policy-blocked-items';
+import { openDrivesBelowFloor } from './open-role-floor';
+import type { OpenRoleFloor } from './policies-core';
 import { kickSuspendedGuests } from '../permissions/guest-holds';
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -49,7 +51,12 @@ export type UpdateOrgPoliciesResult =
       /** False when the change committed but the audit chain rejected an append; the caller must surface it. */
       auditRecorded: boolean;
     }
-  | { ok: false; reason: 'not_found' };
+  | { ok: false; reason: 'not_found' }
+  /**
+   * POL-6: raising the Open-drive role floor while some Open drive's default role is below it would leave those
+   * drives' members under the floor; refused, nothing stored, and the drives named (bounded) so they can be fixed.
+   */
+  | { ok: false; reason: 'open_role_floor'; floor: OpenRoleFloor; drives: Array<{ id: string; name: string }> };
 
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
 
@@ -75,15 +82,20 @@ export async function updateOrgPolicies(input: { orgId: string; actorId: string;
     const before = parseOrgPolicies(row.policies);
     const stored = mergeOrgPolicies(row.policies, patch);
     const after = parseOrgPolicies(stored);
+    if (after.openDriveRoleFloor !== before.openDriveRoleFloor) {
+      const below = await openDrivesBelowFloor(tx, orgId, after.openDriveRoleFloor);
+      if (below.length > 0) return { refused: true as const, floor: after.openDriveRoleFloor, drives: below };
+    }
     const kinds = suspensionKindsChanged(before, after);
     const outcome = await applySuspension(tx, orgId, after, kinds);
     // Read in the same snapshot as the change: the existing items a newly forbidden, non-suspendable kind reaches.
     const blocked = await listPolicyBlockedItems(tx, orgId, after, newlyBlockedKinds(before, after), AUDIT_LISTED_IDS);
     await tx.update(organizations).set({ policies: stored }).where(eq(organizations.id, orgId));
     const changes: PolicyChange[] = ORG_POLICY_KEYS.filter((k) => !same(before[k], after[k])).map((key) => ({ key, from: before[key], to: after[key] }));
-    return { after, changes, outcome, blocked };
+    return { refused: false as const, after, changes, outcome, blocked };
   });
   if (!done) return { ok: false, reason: 'not_found' };
+  if (done.refused) return { ok: false, reason: 'open_role_floor', floor: done.floor, drives: done.drives };
 
   const { after, changes, outcome, blocked } = done;
   // Realtime: a parked guest must stop receiving events in the drive's rooms now, not at their next reconnect.

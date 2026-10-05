@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { OpenRoleFloorError, guardOpenRoleFloor } from '@pagespace/lib/organizations/open-role-floor';
 import { db } from '@pagespace/db/db';
 import { eq, inArray } from '@pagespace/db/operators';
 import { driveBackups, driveBackupPermissions, driveBackupMembers, driveBackupRoles } from '@pagespace/db/schema/versioning';
@@ -134,13 +135,15 @@ export async function POST(
       const memberOps = planMemberRestoreOps(backupMemberRows as never[], currentMemberRows);
       const roleOps = planRoleRestoreOps(backupRoleRows as never[], currentRoleRows);
 
-      const { skippedMembers, skippedPermissions } = await applyPermRestoreOps(
+      // POL-6: restoring roles may change an Open org drive's default role; judged against the org's floor, and a
+      // refusal rolls the whole restore back.
+      const { skippedMembers, skippedPermissions } = await guardOpenRoleFloor(tx, driveId, () => applyPermRestoreOps(
         permOps,
         memberOps,
         roleOps,
         driveId,
         tx as never,
-      );
+      ));
 
       return {
         pagesCreated: diff.toCreate.length,
@@ -165,6 +168,9 @@ export async function POST(
       counts,
     });
   } catch (error) {
+    if (error instanceof OpenRoleFloorError) {
+      return NextResponse.json({ error: error.message, code: error.code, policy: error.policy }, { status: error.status });
+    }
     loggers.api.error('Restore failed', error as Error);
     return NextResponse.json({ error: 'Restore failed — drive is unchanged' }, { status: 500 });
   }

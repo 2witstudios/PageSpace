@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log'
-import { checkDriveAccessForRoles, getRoleById, roleNotFoundMessage, updateDriveRole, deleteDriveRole, validateRolePermissions, validateRolePermissionsPatch } from '@pagespace/lib/services/drive-role-service';
+import { checkDriveAccessForRoles, getRoleById, roleNotFoundMessage, updateDriveRole, deleteDriveRole, validateRolePermissions, validateRolePermissionsPatch, OpenRoleFloorError } from '@pagespace/lib/services/drive-role-service';
 import { getActorInfo, logRoleActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
@@ -170,6 +170,9 @@ export async function PATCH(
     return NextResponse.json({ role: updatedRole });
   } catch (error) {
     console.error('Error updating role:', error);
+    if (error instanceof OpenRoleFloorError) {
+      return NextResponse.json({ error: error.message, code: error.code, policy: error.policy }, { status: error.status });
+    }
     if (error instanceof Error && error.message.includes('unique')) {
       return NextResponse.json({ error: 'A role with this name already exists' }, { status: 409 });
     }
@@ -234,6 +237,9 @@ export async function DELETE(
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error('Error deleting role:', error);
+    if (error instanceof OpenRoleFloorError) {
+      return NextResponse.json({ error: error.message, code: error.code, policy: error.policy }, { status: error.status });
+    }
     return NextResponse.json({ error: 'Failed to delete role' }, { status: 500 });
   }
 }

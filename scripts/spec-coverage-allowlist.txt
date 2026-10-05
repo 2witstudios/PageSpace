@@ -101,6 +101,12 @@ POL-1
 # proven against a mocked decision (apps/web cannot turn ORGS_ENABLED on inside lib's dist), the decision itself
 # against real Postgres in packages/lib.
 POL-2
+# POL-6 (default role in Open drives; D-OW-11: the default is a drive setting, the org sets only the floor):
+# ow-policy-integrity makes a damaged floor fail closed to `view` and, per the point-guard ruling, enforces the
+# floor at every WRITE that can leave an Open org drive's default below it (role create/update/delete, backup
+# restore, role rollback/redo, raising the floor, a drive created/moved in/switched to Open), each tested both ways
+# and titled "POL-6 (partial)". Kept listed: the Spec line says the floor is "read by the implicit-membership
+# resolver", and it is enforced at the writes instead (no resolution-time overlay, by ruling); a reviewer decides.
 POL-6
 # POL-8 (models available and provider allowlist): every model call is refused by the org allowlists in the one
 # provider factory and saving a disallowed model is refused, titled "POL-8 (partial)". Not claimed: the model
