@@ -74,7 +74,8 @@ export async function bulkCreateOccurrenceTriggerRows(
     workflowId: string;
     calendarEventId: string;
     driveId: string;
-    scheduledById: string;
+    /** Null once the scheduler's account is deleted ([D-OW-36]): the occurrence is then skipped owner-left. */
+    scheduledById: string | null;
     occurrences: Date[];
   },
 ): Promise<void> {

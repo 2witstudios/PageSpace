@@ -7,6 +7,7 @@ import { executeWorkflow, type WorkflowExecutionInput } from './workflow-executo
 import { creditAdmission } from './workflow-credit-gate';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { validateAgentTrigger, type AgentTriggerPayload } from './agent-trigger-shared';
+import { automationRunOwner } from '@pagespace/lib/permissions/automation-ownership';
 
 export interface AgentTriggerInput extends AgentTriggerPayload {
   triggerType: 'due_date' | 'completion';
@@ -260,11 +261,22 @@ export async function fireCompletionTrigger(taskId: string): Promise<void> {
       return;
     }
 
+    // [D-OW-36] Nothing runs under a missing person: an owner-left workflow retires the one-shot
+    // trigger with the reason, before any gate or hold.
+    const owner = automationRunOwner(workflow);
+    if (!owner.runs) {
+      await db.update(taskTriggers).set({
+        isEnabled: false,
+        lastFireError: owner.error,
+      }).where(eq(taskTriggers.id, completionTrigger.id));
+      return;
+    }
+
     const input: WorkflowExecutionInput = {
       workflowId: workflow.id,
       workflowName: workflow.name,
       driveId: workflow.driveId,
-      createdBy: workflow.createdBy,
+      createdBy: owner.ownerId,
       agentPageId: workflow.agentPageId,
       prompt: workflow.prompt,
       contextPageIds: (workflow.contextPageIds as string[] | null) ?? [],

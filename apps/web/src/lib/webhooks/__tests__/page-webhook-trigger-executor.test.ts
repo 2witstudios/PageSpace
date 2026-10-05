@@ -59,6 +59,7 @@ const WORKFLOW = {
   id: 'wf1',
   driveId: 'drive-1',
   createdBy: 'user-1',
+  ownerLeftAt: null,
   agentPageId: 'agent-1',
   prompt: 'Do the thing.',
   contextPageIds: ['ctx-1'],
@@ -195,6 +196,19 @@ describe('executePageWebhookTrigger', () => {
     expect(result.error).toMatch(/different drives/);
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
     expect(mockCanConsume).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['flagged owner-left', { ...WORKFLOW, ownerLeftAt: new Date() }],
+    ['whose creator deleted their account', { ...WORKFLOW, createdBy: null }],
+  ])('SPEND-6 (partial) a workflow %s is skipped before any guard, gate or hold, naming owner_left ([D-OW-36])', async (_label, workflow) => {
+    selectResults = [[workflow]];
+    const result = await executePageWebhookTrigger(TRIGGER, ENVELOPE);
+    expect(result).toMatchObject({ success: false, skipped: true });
+    expect(result.error).toContain('owner_left');
+    expect(mockIsMember).not.toHaveBeenCalled();
+    expect(mockCanConsume).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 
   it('errors when the linked workflow is missing', async () => {

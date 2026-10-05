@@ -39,6 +39,8 @@ import type { z } from 'zod';
 import { capStepToolPayloads } from '@/lib/ai/core/cap-step-tool-payloads';
 import { getDrivePolicies } from '@pagespace/lib/organizations/policy-reader';
 import { agentsAutonomousDecision } from '@pagespace/lib/organizations/org-action-decisions';
+import { readWorkflowOwnership } from '@pagespace/lib/organizations/automation-ownership';
+import { automationRunOwner } from '@pagespace/lib/permissions/automation-ownership';
 
 export type WorkflowRunSource =
   | { table: 'cron'; id: null; triggerAt: Date | null }
@@ -184,10 +186,18 @@ export async function executeWorkflow(
   let release: (() => void) | undefined;
 
   try {
+    // [D-OW-36] Nothing runs under a missing person. Read fresh inside the claim, before the policy, the admission
+    // and any hold: a workflow whose creator left the org (flagged owner-left) or deleted their account (no
+    // creator) is skipped, manual Runs included, and the run row is finalized as cancelled with the reason. The
+    // fresh read also closes the race with a departure that committed after a poller selected the row.
+    const ownership = await readWorkflowOwnership(input.workflowId);
+    const owner = ownership ? automationRunOwner(ownership) : null;
     // POL-9: an org can turn agents' autonomous runs off. A run with no person asking (every source but a manual
     // run) in an org drive is skipped before any credit is reserved or any model is built; the run row is finalized
     // as cancelled with the policy's message. Read now, every run: no cache, no restart.
-    const autonomy = input.source.table === 'manual' ? { ok: true as const } : agentsAutonomousDecision((await getDrivePolicies(input.driveId))?.policies ?? null);
+    const autonomy = owner && !owner.runs
+      ? { ok: false as const, message: owner.error }
+      : input.source.table === 'manual' ? { ok: true as const } : agentsAutonomousDecision((await getDrivePolicies(input.driveId))?.policies ?? null);
     const admission = autonomy.ok && options.admit ? await options.admit() : undefined;
     if (!autonomy.ok) {
       result = { success: false, skipped: true, durationMs: Date.now() - startTime, error: autonomy.message };

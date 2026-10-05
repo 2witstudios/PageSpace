@@ -242,7 +242,8 @@ describe('task-trigger-helpers', () => {
       id: 'wf-1',
       name: 'task-trigger-completion-task-1',
       driveId: 'drive-1',
-      createdBy: 'user-1',
+      createdBy: 'user-1' as string | null,
+      ownerLeftAt: null as Date | null,
       agentPageId: 'agent-1',
       prompt: 'Do thing',
       contextPageIds: [],
@@ -349,6 +350,19 @@ describe('task-trigger-helpers', () => {
         expect(input.createdBy).toBe('user-1');
         // SPEND-6: the gate is told the drive the run spends; the creator is only who it is recorded against.
         expect(input.driveId).toBe('drive-1');
+      });
+
+      it('SPEND-6 (partial) a completion trigger on an owner-left workflow retires with owner_left before any gate or hold ([D-OW-36])', async () => {
+        mockFrom
+          .mockImplementationOnce(() => ({ where: vi.fn().mockResolvedValueOnce([mockTrigger]) }))
+          .mockImplementationOnce(() => ({ where: vi.fn().mockResolvedValueOnce([{ ...mockWorkflow, ownerLeftAt: new Date() }]) }));
+        mockReturning.mockResolvedValueOnce([mockTrigger]);
+
+        await fireCompletionTrigger('task-1');
+
+        expect(executeWorkflow).not.toHaveBeenCalled();
+        expect(mockCreditAdmission).not.toHaveBeenCalled();
+        expect(mockSet).toHaveBeenCalledWith({ isEnabled: false, lastFireError: expect.stringContaining('owner_left') });
       });
 
       it('a refused fire retires the one-shot trigger with the reason', async () => {

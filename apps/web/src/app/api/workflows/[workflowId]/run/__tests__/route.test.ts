@@ -139,7 +139,8 @@ const mockWorkflow = {
   eventDebounceSecs: null,
   instructionPageId: null,
   nextRunAt: null,
-  createdBy: 'user_123',
+  createdBy: 'user_123' as string | null,
+  ownerLeftAt: null as Date | null,
   createdAt: new Date('2024-01-01'),
   updatedAt: new Date('2024-01-01'),
 };
@@ -209,6 +210,20 @@ describe('POST /api/workflows/[workflowId]/run', () => {
     const response = await POST(request, createContext('wf_1'));
 
     expect(response.status).toBe(403);
+  });
+
+  test.each([
+    ['flagged owner-left', { ownerLeftAt: new Date() }],
+    ['whose creator deleted their account', { createdBy: null }],
+  ])('SPEND-6 (partial) a Run of a workflow %s is refused 409 owner_left before the executor or any gate ([D-OW-36])', async (_label, overrides) => {
+    mockSelectWhere.mockResolvedValue([{ ...mockWorkflow, ...overrides }]);
+
+    const response = await POST(new Request('https://example.com/api/workflows/wf_1/run', { method: 'POST' }), createContext('wf_1'));
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: 'owner_left' });
+    expect(executeWorkflow).not.toHaveBeenCalled();
+    expect(mockCreditAdmission).not.toHaveBeenCalled();
   });
 
   test('returns 409 when executor reports a claim conflict', async () => {

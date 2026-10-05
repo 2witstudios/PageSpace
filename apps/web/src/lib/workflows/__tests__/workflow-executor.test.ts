@@ -171,6 +171,10 @@ vi.mock('@/lib/ai/core/integration-tool-resolver', () => ({
 const getDrivePolicies = vi.hoisted(() => vi.fn());
 vi.mock('@pagespace/lib/organizations/policy-reader', () => ({ getDrivePolicies }));
 
+// [D-OW-36] The executor re-reads who the workflow runs as inside its claim; unset here = the row is gone (runs as before).
+const readWorkflowOwnership = vi.hoisted(() => vi.fn());
+vi.mock('@pagespace/lib/organizations/automation-ownership', () => ({ readWorkflowOwnership }));
+
 vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
   AIMonitoring: { trackUsage: vi.fn() },
 }));
@@ -372,6 +376,48 @@ describe('executeWorkflow', () => {
       const result = await executeWorkflow(fire('cron'));
       expect(result.skipped).toBeUndefined();
       expect(getDrivePolicies).toHaveBeenCalledWith(createInputFixture().driveId);
+    });
+  });
+
+  describe('a workflow whose owner left ([D-OW-36])', () => {
+    const fire = (table: 'cron' | 'manual' | 'taskTriggers' | 'calendarTriggers' | 'webhookTriggers') => {
+      const base = createInputFixture();
+      return { ...base, source: { table, id: table === 'cron' || table === 'manual' ? null : 'trig-1', triggerAt: table === 'manual' ? null : new Date() } as WorkflowExecutionInput['source'] };
+    };
+
+    test.each(['cron', 'manual', 'taskTriggers', 'calendarTriggers', 'webhookTriggers'] as const)('SPEND-6 (partial) a flagged owner-left workflow is skipped on a %s run before the policy, the admission or any hold, recorded cancelled with owner_left', async (table) => {
+      setupSelectChain([mockAgent], [mockDrive]);
+      readWorkflowOwnership.mockResolvedValue({ createdBy: 'user_123', ownerLeftAt: new Date() });
+      const admit = vi.fn(async () => ({ admitted: true as const, release: vi.fn() }));
+
+      const result = await executeWorkflow(fire(table), { admit });
+
+      expect(readWorkflowOwnership).toHaveBeenCalledWith('wf_1');
+      expect(result).toMatchObject({ success: false, skipped: true });
+      expect(result.error).toContain('owner_left');
+      expect(admit).not.toHaveBeenCalled();
+      expect(getDrivePolicies).not.toHaveBeenCalled();
+      expect(vi.mocked(createAIProvider)).not.toHaveBeenCalled();
+      expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({ status: 'cancelled', error: expect.stringContaining('owner_left') }));
+    });
+
+    test('SPEND-6 (partial) a workflow whose creator deleted their account (no creator) is skipped the same way: nothing runs under a missing person', async () => {
+      setupSelectChain([mockAgent], [mockDrive]);
+      readWorkflowOwnership.mockResolvedValue({ createdBy: null, ownerLeftAt: null });
+      const admit = vi.fn(async () => ({ admitted: true as const, release: vi.fn() }));
+      const result = await executeWorkflow(fire('cron'), { admit });
+      expect(result).toMatchObject({ success: false, skipped: true });
+      expect(admit).not.toHaveBeenCalled();
+    });
+
+    test('the claim is won BEFORE the ownership read, so an overlapping fire records nothing; a standing owner runs as before', async () => {
+      setupSelectChain([mockAgent], [mockDrive]);
+      readWorkflowOwnership.mockResolvedValue({ createdBy: 'user_123', ownerLeftAt: null });
+      const admit = vi.fn(async () => ({ admitted: true as const, release: vi.fn() }));
+      const result = await executeWorkflow(fire('cron'), { admit });
+      expect(result.skipped).toBeUndefined();
+      expect(admit).toHaveBeenCalledTimes(1);
+      expect(mockInsertReturning.mock.invocationCallOrder[0]).toBeLessThan(readWorkflowOwnership.mock.invocationCallOrder[0]);
     });
   });
 

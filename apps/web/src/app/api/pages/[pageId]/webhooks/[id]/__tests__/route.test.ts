@@ -56,6 +56,7 @@ const WEBHOOK_ROW = {
   webhookSecretEncrypted: 'secret-should-not-leak',
   isEnabled: true,
   createdBy: 'user-1',
+  ownerLeftAt: null as Date | null,
 };
 
 function makeRequest(method: string, body?: unknown): Request {
@@ -74,6 +75,17 @@ beforeEach(() => {
 });
 
 describe('PATCH /api/pages/[pageId]/webhooks/[id]', () => {
+  it('SPEND-6 (partial) an owner-left webhook cannot be switched back on here (409 owner_left); renaming it still works ([D-OW-36])', async () => {
+    mockFindFirst.mockResolvedValue({ ...WEBHOOK_ROW, isEnabled: false, ownerLeftAt: new Date() });
+    const refused = await PATCH(makeRequest('PATCH', { isEnabled: true }), PARAMS);
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toMatchObject({ code: 'owner_left' });
+    expect(mockUpdateReturning).not.toHaveBeenCalled();
+
+    mockUpdateReturning.mockResolvedValue([{ ...WEBHOOK_ROW, name: 'CI' }]);
+    expect((await PATCH(makeRequest('PATCH', { name: 'CI' }), PARAMS)).status).toBe(200);
+  });
+
   it('toggles isEnabled and strips the encrypted secret from the response', async () => {
     mockUpdateReturning.mockResolvedValue([{ ...WEBHOOK_ROW, isEnabled: false }]);
     const response = await PATCH(makeRequest('PATCH', { isEnabled: false }), PARAMS);

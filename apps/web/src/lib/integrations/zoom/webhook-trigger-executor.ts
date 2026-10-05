@@ -7,6 +7,7 @@ import type { ZoomConnection } from '@pagespace/db/schema/zoom';
 import type { WebhookTrigger } from '@pagespace/db/schema/webhook-triggers';
 import { executeWorkflow, type WorkflowExecutionResult, type WorkflowExecutionInput } from '@/lib/workflows/workflow-executor';
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
+import { automationRunOwner } from '@pagespace/lib/permissions/automation-ownership';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { automationSpend } from '@pagespace/lib/billing/spend-target';
 import { creditDeniedError } from '@/lib/workflows/workflow-credit-gate';
@@ -47,6 +48,14 @@ export async function executeWebhookTrigger(
     if (!workflow) {
       const error = `Linked workflow ${trigger.workflowId} not found`;
       return { success: false, durationMs: Date.now() - startTime, error };
+    }
+
+    // [D-OW-36] Nothing runs under a missing person: a workflow whose creator left the org (flagged
+    //    owner-left) or deleted their account is skipped before any check, gate or hold.
+    const owner = automationRunOwner(workflow);
+    if (!owner.runs) {
+      logger.info('Webhook trigger: skipped (owner left)', { triggerId: trigger.id, workflowId: workflow.id });
+      return { success: false, skipped: true, durationMs: Date.now() - startTime, error: owner.error };
     }
 
     // 2. Verify the connection owner still has access to the workflow's drive
