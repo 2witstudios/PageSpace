@@ -36,4 +36,14 @@ describe('renderProgressMeter', () => {
       expected: [true, true, true],
     });
   });
+
+  test('what it counts', () => {
+    const html = renderToString(renderProgressMeter({ done: 4, total: 9, unit: 'tasks' }));
+    assert({
+      given: 'a meter counting a list’s tasks rather than a task’s subtasks',
+      should: 'name what it counts',
+      actual: html.includes('aria-label="4 of 9 tasks done"'),
+      expected: true,
+    });
+  });
 });

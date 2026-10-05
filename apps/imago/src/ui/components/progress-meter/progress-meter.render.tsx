@@ -8,6 +8,8 @@ import {
 export type ProgressMeterRenderProps = {
   readonly done: number;
   readonly total: number;
+  /** What it counts, for its accessible name; a task's subtasks unless given. */
+  readonly unit?: string;
 };
 
 /**
@@ -16,7 +18,7 @@ export type ProgressMeterRenderProps = {
  * contract does not rest on implicit mapping. The visible count repeats the
  * accessible name, so it is hidden from assistive tech.
  */
-export function renderProgressMeter({ done, total }: ProgressMeterRenderProps): ReactNode {
+export function renderProgressMeter({ done, total, unit = 'subtasks' }: ProgressMeterRenderProps): ReactNode {
   return (
     <span className={progressMeterClass}>
       <progress
@@ -24,7 +26,7 @@ export function renderProgressMeter({ done, total }: ProgressMeterRenderProps): 
         className={progressMeterBarClass}
         value={done}
         max={total}
-        aria-label={`${done} of ${total} subtasks done`}
+        aria-label={`${done} of ${total} ${unit} done`}
       />
       <span className={progressMeterCountClass} aria-hidden="true">{`${done}/${total}`}</span>
     </span>
