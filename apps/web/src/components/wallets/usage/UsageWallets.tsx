@@ -75,6 +75,7 @@ function SpendFromSection({ wallets }: { wallets: MyWallets }) {
   const { balance } = useCreditBalance();
   const { orgById } = useMyOrganizations();
   const drives = useDriveStore((state) => state.drives);
+  const fundedByMe = new Set(wallets.funds.driveWallets.map((w) => w.walletId));
   const orgNameOfDrive = (driveId: string) => orgById(drives.find((d) => d.id === driveId)?.orgId)?.name ?? null;
   const renews = balance?.monthly.periodEnd ? new Date(balance.monthly.periodEnd).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : null;
   const personalDetail = balance && balance.monthly.allowance > 0 && renews
@@ -111,7 +112,7 @@ function SpendFromSection({ wallets }: { wallets: MyWallets }) {
             testId="usage-wallet-drive"
             icon={<Folder className="h-4 w-4" />}
             title={`${w.driveName ?? 'Drive'} wallet`}
-            detail={spendFromRowCopy({ status: w.status as WalletStatus, orgName: orgNameOfDrive(w.driveId) })}
+            detail={spendFromRowCopy({ status: w.status as WalletStatus, orgName: orgNameOfDrive(w.driveId), fundedByMe: fundedByMe.has(w.walletId) })}
             amount={`${w.remainingCredits} credits left`}
             badge={w.status === 'active' ? <Badge variant="outline">Drive wallet</Badge> : <WalletStatusBadge status={w.status as WalletStatus} />}
             href={`/dashboard/${w.driveId}/settings/wallet`}

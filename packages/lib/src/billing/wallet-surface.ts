@@ -117,8 +117,8 @@ export function spendRowLabel(row: { consumerKey: string; displayName: string | 
 }
 
 /** A drive wallet's line in "You spend from" (UI-10): whose it is, and what an over or paused wallet does to your calls. */
-export function spendFromRowCopy(input: { status: WalletStatus; orgName: string | null }): string {
-  const owner = input.orgName ?? 'Shared drive';
+export function spendFromRowCopy(input: { status: WalletStatus; orgName: string | null; fundedByMe?: boolean }): string {
+  const owner = input.orgName ?? (input.fundedByMe ? 'From your credits' : 'Shared drive');
   if (input.status === 'over') return `${owner} · over budget, your calls follow the drive's fallback rule`;
   if (input.status === 'paused') return `${owner} · paused by whoever funds it, your calls move to the next source`;
   return owner;

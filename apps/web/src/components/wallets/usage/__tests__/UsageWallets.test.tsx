@@ -28,6 +28,7 @@ const base: MyWallets = {
   driveWallets: [
     { driveId: 'd-product', driveName: 'Product', walletId: 'w-product', status: 'active', remainingCents: 19_200, remainingCredits: '19,200' },
     { driveId: 'd-research', driveName: 'Customer Research', walletId: 'w-research', status: 'paused', remainingCents: 3_300, remainingCredits: '3,300' },
+    { driveId: 'd-side', driveName: 'Side project', walletId: 'w-side', status: 'active', remainingCents: 21_900, remainingCredits: '21,900' },
   ],
   seats: [{ orgId: 'o-northwind', orgName: 'Northwind Labs', walletId: 'w-pool', allowanceCents: 15_000, allowanceCredits: '15,000', spentCents: 9_600, spentCredits: '9,600', remainingCents: 5_400, remainingCredits: '5,400' }],
   funds: {
@@ -50,7 +51,8 @@ describe('Settings › Usage › Wallets', () => {
     expect(seat).toContain('Seat allowance · Northwind Labs');
     expect(seat).toContain('15,000 credits a month inside org drives · 9,600 credits spent');
     expect(seat).toContain('5,400 credits left');
-    const [product, research] = screen.getAllByTestId('usage-wallet-drive').map((r) => r.textContent ?? '');
+    const [product, research, side] = screen.getAllByTestId('usage-wallet-drive').map((r) => r.textContent ?? '');
+    expect(side).toContain('From your credits');
     expect(product).toContain('Product wallet');
     expect(research).toContain('paused by whoever funds it, your calls move to the next source');
     expect(research).toContain('Paused');

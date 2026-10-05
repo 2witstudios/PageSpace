@@ -133,6 +133,8 @@ describe('spendFromRowCopy: a drive wallet in Settings › Usage › Wallets', (
     expect(spendFromRowCopy({ status: 'over', orgName: 'Northwind Labs' })).toBe("Northwind Labs · over budget, your calls follow the drive's fallback rule");
     expect(spendFromRowCopy({ status: 'paused', orgName: 'Northwind Labs' })).toBe('Northwind Labs · paused by whoever funds it, your calls move to the next source');
     expect(spendFromRowCopy({ status: 'active', orgName: null })).toBe('Shared drive');
+    expect(spendFromRowCopy({ status: 'active', orgName: null, fundedByMe: true })).toBe('From your credits');
+    expect(spendFromRowCopy({ status: 'paused', orgName: null, fundedByMe: true })).toBe('From your credits · paused by whoever funds it, your calls move to the next source');
   });
 });
 
