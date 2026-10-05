@@ -1,7 +1,9 @@
 import type { Metadata } from 'next';
 import { connection } from 'next/server';
+import { notFound } from 'next/navigation';
 import { Geist, Geist_Mono } from 'next/font/google';
 import { getRequestNonce } from '@/lib/request-nonce';
+import { isImagoEnabled } from '@/lib/imago-enabled';
 
 // Self-hosted by next/font: served same-origin, so the CSP needs no font host.
 const sans = Geist({
@@ -27,6 +29,9 @@ export default async function RootLayout({
   // The nonce CSP needs dynamic rendering: a page prerendered at build time
   // carries no request nonce, and the CSP would block every framework script.
   await connection();
+  // Middleware answers 404 while imago is off, but router prefetches skip
+  // middleware (see its matcher); this keeps every page behind the flag too.
+  if (!isImagoEnabled()) notFound();
   const nonce = await getRequestNonce();
 
   return (
