@@ -16,6 +16,7 @@ const base: Workflow = {
   cronExpression: '0 9 * * 1',
   timezone: 'UTC',
   isEnabled: true,
+  ownerLeftAt: null,
   nextRunAt: null,
   lastRun: null,
   createdAt: '2026-09-01T00:00:00Z',
