@@ -24,3 +24,9 @@
   --spacing-prose-list: 40px;
   --font-mono: var(--font-face-mono), ui-monospace, monospace;
 }
+
+/* The focus halo as a shadow utility, for controls whose own shadow (a
+   lifted segment) would otherwise replace the global :focus-visible halo. */
+@theme inline {
+  --shadow-focus: var(--focus-ring);
+}
