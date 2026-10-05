@@ -13,6 +13,12 @@ export type UseDmThreadOptions = {
   readonly markReadDelayMs?: number;
   /** The clock a sending post is stamped with until apps/web stores it. */
   readonly now?: () => Date;
+  /**
+   * Whether the viewer's DM list names this conversation. Until it does, its
+   * messages are not loaded (apps/web's GET marks them read) and its room
+   * not joined.
+   */
+  readonly listed?: boolean;
 };
 
 export const useDmThread = ({ conversationId, ...options }: UseDmThreadOptions) =>

@@ -334,7 +334,7 @@ describe('useDriveRoom', () => {
 });
 
 describe('useRoom', () => {
-  function Room({ pageId }: { pageId: string }) {
+  function Room({ pageId }: { pageId: string | null }) {
     useRoom(CHANNEL_ROOM, pageId);
     return null;
   }
@@ -395,6 +395,31 @@ describe('useRoom', () => {
         ],
         0,
       ],
+    });
+  });
+
+  test('no room yet, then one', () => {
+    const fake = fakeClient();
+    let setPage: (pageId: string | null) => void = () => {};
+    function Switcher() {
+      const [pageId, set] = useState<string | null>(null);
+      setPage = set;
+      return <Room pageId={pageId} />;
+    }
+    mount(
+      <RealtimeProvider client={fake.client}>
+        <Switcher />
+      </RealtimeProvider>,
+    );
+    act(() => fake.deliver('connect'));
+    const before = [...fake.sent];
+    act(() => setPage('c1'));
+
+    assert({
+      given: 'a thread whose room is not named yet, a reconnect, then the room named',
+      should: 'join nothing until it is named, then join it',
+      actual: [before, fake.sent],
+      expected: [[], [['join_channel', 'c1']]],
     });
   });
 

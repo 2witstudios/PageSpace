@@ -63,7 +63,7 @@ const readRoute: FakeRoute = () => Response.json({ success: true, notificationsM
 type Seen = { state?: ThreadState; loadOlder?: () => void };
 
 const Probe = ({ seen, pageId }: { seen: Seen; pageId: string }) => {
-  const thread = useChannelThread({ pageId, viewerId: 'u1', markReadDelayMs: DELAY });
+  const thread = useChannelThread({ pageId, viewerId: 'u1', markReadDelayMs: DELAY, listed: true });
   seen.state = thread.state;
   seen.loadOlder = thread.loadOlder;
   return null;

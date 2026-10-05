@@ -16,8 +16,8 @@ export type UseChannelThreadOptions = {
   readonly now?: () => Date;
   /**
    * Whether the drive's channel list names this channel. Until it does (still
-   * loading, or the id is not one of the drive's channels), nothing is marked
-   * read: an address that names no channel is never viewed.
+   * loading, or the id is not one of the drive's channels), its posts are not
+   * loaded, its room not joined and nothing marked read.
    */
   readonly listed?: boolean;
 };
