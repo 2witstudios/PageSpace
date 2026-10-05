@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act } from 'react';
-import { afterEach, beforeEach, describe, test } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
 import type { Editor } from '@tiptap/core';
 import { ImagoSWRProvider } from '@/api/swr-provider';
@@ -43,7 +43,8 @@ const server = (overrides: Record<string, FakeRoute> = {}) => {
         title: 'Plan launch',
         subTaskCount: 1,
         position: 0,
-        dueDate: '2026-10-09T12:00:00.000Z',
+        // 9 October as classic stores it from Berlin: local midnight, the 8th in UTC.
+        dueDate: '2026-10-08T22:00:00.000Z',
         assignees: assigneeRows('p', [{ type: 'user', id: 'u-ada' }]),
       }),
       taskItem('z', { title: 'Book venue', position: 1 }),
@@ -90,6 +91,8 @@ const server = (overrides: Record<string, FakeRoute> = {}) => {
         assignees: Object.entries(people).map(([id, { type, name }]) => ({ id, type, name, image: null })),
       }),
     'GET /api/pages/page-p': () => Response.json({ id: 'page-p', content }),
+    'GET /api/pages/page-p/permissions/check': () =>
+      Response.json({ canView: true, canEdit: true, canShare: false, canDelete: false }),
     'PATCH /api/pages/page-p': ({ body }) => {
       content = (body as { content: string }).content;
       return Response.json({ id: 'page-p' });
@@ -107,6 +110,15 @@ const server = (overrides: Record<string, FakeRoute> = {}) => {
   };
   return routes;
 };
+
+// East of UTC, where reading a due date's UTC day would show it a day early.
+const zone = process.env.TZ;
+beforeAll(() => {
+  process.env.TZ = 'Europe/Berlin';
+});
+afterAll(() => {
+  process.env.TZ = zone;
+});
 
 beforeEach(() => {
   setUiState(createInitialState());
@@ -277,7 +289,8 @@ describe('TaskObject: a task', () => {
       expected: [
         ['PATCH', '/api/pages/l1/tasks/p', { title: 'Plan the launch' }],
         ['PATCH', '/api/pages/l1/tasks/p', { priority: 'high' }],
-        ['PATCH', '/api/pages/l1/tasks/p', { dueDate: '2026-11-02T12:00:00.000Z' }],
+        // 2 November's Berlin midnight, as classic's picker sends it.
+        ['PATCH', '/api/pages/l1/tasks/p', { dueDate: '2026-11-01T23:00:00.000Z' }],
         [
           'PATCH',
           '/api/pages/l1/tasks/p',
@@ -423,6 +436,9 @@ describe('TaskObject: the description', () => {
 
   test('editing it', async () => {
     const { web, detail } = await openTask();
+    await settle(() => {
+      if (descriptionOf(detail)?.getAttribute('contenteditable') !== 'true') throw new Error('not editable');
+    });
     const description = descriptionOf(detail) as HTMLElement & { editor?: Editor };
     act(() => {
       description.editor?.commands.setContent('<p>Rewritten</p>', { emitUpdate: true });
@@ -448,6 +464,9 @@ describe('TaskObject: the description', () => {
         'PATCH /api/pages/page-p': () => Response.json({ error: 'You need edit permission' }, { status: 403 }),
       }),
     );
+    await settle(() => {
+      if (descriptionOf(detail)?.getAttribute('contenteditable') !== 'true') throw new Error('not editable');
+    });
     const description = descriptionOf(detail) as HTMLElement & { editor?: Editor };
     act(() => {
       description.editor?.commands.setContent('<p>Mine</p>', { emitUpdate: true });
@@ -483,6 +502,59 @@ describe('TaskObject: the description', () => {
       should: 'say so in its place and keep the rest of the task',
       actual: { title: field<HTMLInputElement>(container, 'Title')?.value, editor: descriptionOf(container) },
       expected: { title: 'Plan launch', editor: null },
+    });
+  });
+});
+
+describe('TaskObject: who may edit the description', () => {
+  test('a viewer without edit rights', async () => {
+    const { web, detail } = await openTask(
+      server({
+        'GET /api/pages/page-p/permissions/check': () =>
+          Response.json({ canView: true, canEdit: false, canShare: false, canDelete: false }),
+      }),
+    );
+    await settle(() => {
+      if (web.count('GET /api/pages/page-p/permissions/check') === 0) throw new Error('not asked');
+    });
+    const description = descriptionOf(detail) as HTMLElement & { editor?: Editor };
+    act(() => {
+      description.editor?.commands.setContent('<p>Typed anyway</p>', { emitUpdate: true });
+    });
+    act(() => {
+      description.dispatchEvent(new FocusEvent('blur'));
+    });
+    await settle(() => {});
+    assert({
+      given: 'a viewer the server says cannot edit the task’s page',
+      should: 'show the description read-only and save nothing from it',
+      actual: { editable: description.getAttribute('contenteditable'), writes: web.writes().length },
+      expected: { editable: 'false', writes: 0 },
+    });
+  });
+
+  test('before the answer', async () => {
+    const { detail } = await openTask(
+      server({ 'GET /api/pages/page-p/permissions/check': () => new Promise<Response>(() => {}) }),
+    );
+    assert({
+      given: 'edit rights not known yet',
+      should: 'keep the description read-only until a definite yes',
+      actual: descriptionOf(detail)?.getAttribute('contenteditable'),
+      expected: 'false',
+    });
+  });
+
+  test('a viewer with edit rights', async () => {
+    const { detail } = await openTask();
+    await settle(() => {
+      if (descriptionOf(detail)?.getAttribute('contenteditable') !== 'true') throw new Error('not editable');
+    });
+    assert({
+      given: 'a viewer who may edit the task’s page',
+      should: 'make the description editable',
+      actual: descriptionOf(detail)?.getAttribute('contenteditable'),
+      expected: 'true',
     });
   });
 });

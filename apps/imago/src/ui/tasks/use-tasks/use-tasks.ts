@@ -25,7 +25,6 @@ import {
   setStatus,
   toggledAssignees,
   toggledStatus,
-  uniqueAssignees,
   updateTask,
   type TaskPatch,
 } from '../task-edit/task-edit';
@@ -35,6 +34,7 @@ import {
   fetchAssignable,
   fetchDriveTaskLists,
   fetchPageContent,
+  fetchPagePermissions,
   fetchPageTrail,
   fetchTaskStatuses,
   loadTaskTree,
@@ -54,6 +54,17 @@ export const useDriveTaskLists = (driveId: string | null) => {
     ([, id]) => fetchDriveTaskLists(client, id),
   );
   return { lists: data, error: error as unknown, isLoading };
+};
+
+/**
+ * Whether the viewer may edit a page: true only on a definite yes. Read
+ * before anything that saves on its own, so nothing is typed into a field
+ * the server would refuse.
+ */
+export const usePageEditable = (pageId: string) => {
+  const client = useApiClient();
+  const { data } = useSWR(['imago:page-permissions', pageId] as const, ([, id]) => fetchPagePermissions(client, id));
+  return data?.canEdit === true;
 };
 
 /** Who can be put on the drive's tasks, for the assignee picker. */
@@ -171,8 +182,8 @@ const createActions = (
 
   const assignees = (taskId: string, next: (current: readonly Assignee[]) => readonly Assignee[]) =>
     onTask(taskId, (tree, at, found) => {
-      // The set shown and the set sent are one: deduplicated before either.
-      const chosen = uniqueAssignees(next(found.task.assignees));
+      // setAssignees and the request body (task-api assigneeIds) each keep every person or agent once.
+      const chosen = next(found.task.assignees);
       return { list: setAssignees(tree, taskId, chosen), send: () => setTaskAssignees(client, at, chosen) };
     });
 

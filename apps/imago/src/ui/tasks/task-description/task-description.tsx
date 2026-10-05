@@ -4,14 +4,15 @@
 // sheet edits. It is parsed into the PageSpace document schema by TipTap and
 // drawn by ProseMirror: markup the schema does not know (scripts, handler
 // attributes, unsafe links) never reaches the page, and nothing is set as
-// raw HTML.
+// raw HTML. It saves on its own, so like classic's sheet it stays read-only
+// until the server gives a definite yes to editing the task's page.
 
 import { EditorContent, useEditor } from '@tiptap/react';
 import { collabExtensions } from '@pagespace/editor/collab-schema';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useApiClient } from '@/api/swr-provider';
 import { savePageContent } from '../task-api/task-api';
-import { usePageContent } from '../use-tasks/use-tasks';
+import { usePageContent, usePageEditable } from '../use-tasks/use-tasks';
 import { taskDescriptionClass, taskDetailMessageClass, taskDetailNoticeClass } from '../task-detail/task-detail-class';
 import { createContentSaver } from './content-saver';
 
@@ -20,6 +21,7 @@ type DescriptionEditorProps = { readonly pageId: string; readonly initial: strin
 /** The editor, made once per task with the content it opened with. */
 function DescriptionEditor({ pageId, initial }: DescriptionEditorProps): ReactNode {
   const client = useApiClient();
+  const editable = usePageEditable(pageId);
   const [refusal, setRefusal] = useState<string | null>(null);
   const saver = useMemo(
     () =>
@@ -40,6 +42,7 @@ function DescriptionEditor({ pageId, initial }: DescriptionEditorProps): ReactNo
     {
       extensions: collabExtensions(),
       content: initial,
+      editable: false,
       immediatelyRender: false,
       // The stylesheet TipTap would inject has no CSP nonce; the class carries what it needs.
       injectCSS: false,
@@ -51,13 +54,19 @@ function DescriptionEditor({ pageId, initial }: DescriptionEditorProps): ReactNo
           'aria-multiline': 'true',
         },
       },
-      onUpdate: ({ editor: changed }) => saver.save(changed.getHTML()),
+      // Content set while read-only (never by the viewer) is not theirs to save.
+      onUpdate: ({ editor: changed }) => {
+        if (changed.isEditable) saver.save(changed.getHTML());
+      },
       onBlur: () => {
         void saver.flush();
       },
     },
     [saver],
   );
+  useEffect(() => {
+    editor?.setEditable(editable, false);
+  }, [editor, editable]);
   return (
     <>
       <EditorContent editor={editor} />

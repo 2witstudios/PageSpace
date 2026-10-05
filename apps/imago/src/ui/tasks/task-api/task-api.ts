@@ -35,6 +35,8 @@ export const taskPaths = {
   assignees: (driveId: string) => `/api/drives/${segment(driveId)}/assignees`,
   /** A page's ancestors, top first, ending with the page. */
   breadcrumbs: (pageId: string) => `/api/pages/${segment(pageId)}/breadcrumbs`,
+  /** What the viewer may do on a page. */
+  permissions: (pageId: string) => `/api/pages/${segment(pageId)}/permissions/check`,
   /** A page itself: a task's description is its own page's content. */
   page: (pageId: string) => `/api/pages/${segment(pageId)}`,
 };
@@ -174,3 +176,15 @@ export const fetchPageContent = async (client: ApiClient, pageId: string): Promi
 /** PATCH a task's own page with a new description. */
 export const savePageContent = (client: ApiClient, pageId: string, content: string) =>
   client.apiFetch<unknown>(taskPaths.page(pageId), { method: 'PATCH', json: { content } });
+
+/** What GET /api/pages/[pageId]/permissions/check answers. */
+export type PagePermissions = {
+  readonly canView: boolean;
+  readonly canEdit: boolean;
+  readonly canShare: boolean;
+  readonly canDelete: boolean;
+};
+
+/** What the viewer may do on a page. */
+export const fetchPagePermissions = (client: ApiClient, pageId: string) =>
+  client.apiFetch<PagePermissions>(taskPaths.permissions(pageId));

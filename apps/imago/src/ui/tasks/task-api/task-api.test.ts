@@ -7,6 +7,7 @@ import {
   fetchAssignable,
   fetchDriveTaskLists,
   fetchPageContent,
+  fetchPagePermissions,
   fetchPageTrail,
   savePageContent,
   fetchTaskList,
@@ -413,6 +414,22 @@ describe('page content', () => {
       should: 'PATCH the task’s own page with it and the CSRF token',
       actual: web.writes(),
       expected: [{ method: 'PATCH', url: '/api/pages/page-a', csrf: 'tok-1', body: { content: '<p>New</p>' } }],
+    });
+  });
+});
+
+describe('fetchPagePermissions()', () => {
+  test('request', async () => {
+    const web = fakeWeb({
+      'GET /api/pages/page-a/permissions/check': () =>
+        Response.json({ canView: true, canEdit: false, canShare: false, canDelete: false }),
+    });
+
+    assert({
+      given: 'a task’s page',
+      should: 'read what the viewer may do on it',
+      actual: await fetchPagePermissions(web.client, 'page-a'),
+      expected: { canView: true, canEdit: false, canShare: false, canDelete: false },
     });
   });
 });
