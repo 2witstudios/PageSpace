@@ -213,7 +213,7 @@ describe('useChannelThread', () => {
 
   test('a channel that fails to load', async () => {
     const { seen, web } = show({
-      [`GET ${channelPaths.messages('c1')}`]: () => Response.json({ error: 'Access denied' }, { status: 403 }),
+      [`GET ${channelPaths.messages('c1')}`]: () => Response.json({ error: 'Unavailable' }, { status: 503 }),
       [READ_C1]: readRoute,
     });
     await settle(() => {
@@ -225,6 +225,23 @@ describe('useChannelThread', () => {
       should: 'show the error and never mark it read, since nothing was viewed',
       actual: [seen.state?.status, web.count(READ_C1)],
       expected: ['error', 0],
+    });
+  });
+
+  test('a channel the viewer cannot open', async () => {
+    const { seen, web } = show({
+      [`GET ${channelPaths.messages('c1')}`]: () => Response.json({ error: 'Access denied' }, { status: 403 }),
+      [READ_C1]: readRoute,
+    });
+    await settle(() => {
+      if (seen.state?.status !== 'not-found') throw new Error('not refused');
+    });
+    await idle(DELAY * 3);
+    assert({
+      given: 'a channel the server answers 403 for',
+      should: 'be not-found, not an error to retry, and never mark it read',
+      actual: [seen.state?.status, web.count(READ_C1)],
+      expected: ['not-found', 0],
     });
   });
 

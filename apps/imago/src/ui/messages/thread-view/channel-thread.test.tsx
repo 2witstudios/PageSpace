@@ -71,8 +71,8 @@ const routes = (): Record<string, FakeRoute> => ({
   [READ]: () => Response.json({ success: true, notificationsMarkedRead: 1 }),
 });
 
-const show = () => {
-  const web = fakeWeb(routes());
+const show = (table: Record<string, FakeRoute> = routes()) => {
+  const web = fakeWeb(table);
   const rt = fakeRealtime();
   const container = mount(
     <ImagoSWRProvider client={web.client}>
@@ -210,6 +210,99 @@ describe('ChannelThread', () => {
       should: 'put them first under their own day, keep New where the channel opened with it, and offer no more',
       actual: [rows(container).slice(0, 3), rows(container).includes('—New—'), olderButton(container), web.count(OLDER)],
       expected: [['—Oct 1—', 'lead:Grace Hopper:post m1', '—Yesterday—'], true, null, 1],
+    });
+  });
+
+  describe('edge states', () => {
+    const notFound = (container: HTMLElement) => {
+      const object = container.querySelector('[data-not-found]');
+      return [object?.querySelector('h2')?.textContent, object?.querySelector('a')?.getAttribute('href'), object?.querySelector('a')?.textContent];
+    };
+
+    test('a channel the server refuses', async () => {
+      const { container } = show({ ...routes(), [MESSAGES]: () => Response.json({ error: 'Forbidden' }, { status: 403 }) });
+      await settle(() => {
+        if (!container.querySelector('[data-not-found]')) throw new Error('no not-found');
+      });
+      assert({
+        given: 'a channel id the server answers 403 for',
+        should: 'draw the not-found object with a way back to the drive’s messages',
+        actual: notFound(container),
+        expected: ['Channel not found', '/d1/messages', 'Back to Messages'],
+      });
+    });
+
+    test('an id that is not one of the drive’s channels', async () => {
+      const { container, web } = show({
+        ...routes(),
+        [CHANNELS]: () => Response.json({ items: [], pagination: { hasMore: false, nextCursor: null } }),
+      });
+      await settle(() => {
+        if (!container.querySelector('[data-not-found]')) throw new Error('no not-found');
+        if (web.count(MESSAGES) === 0) throw new Error('posts not asked for');
+      });
+      // Well past the 20ms mark-read delay, with the posts answered.
+      await act(() => new Promise((resolve) => setTimeout(resolve, 150)));
+      assert({
+        given: 'a page id the drive does not list as a channel, whose posts the server still answers',
+        should: 'draw the not-found object and never mark it read',
+        actual: [notFound(container)[0], web.count(READ)],
+        expected: ['Channel not found', 0],
+      });
+    });
+
+    test('posts that arrive before the channel list', async () => {
+      let answerChannels: (response: Response) => void = () => {};
+      const { container, web } = show({
+        ...routes(),
+        [CHANNELS]: () =>
+          new Promise<Response>((resolve) => {
+            answerChannels = resolve;
+          }),
+      });
+      await settle(() => {
+        if (container.querySelectorAll('ol > li').length === 0) throw new Error('posts not loaded');
+      });
+      await act(() => new Promise((resolve) => setTimeout(resolve, 150)));
+      const beforeList = web.count(READ);
+      act(() => answerChannels(Response.json({ items: [], pagination: { hasMore: false, nextCursor: null } })));
+      await settle(() => {
+        if (!container.querySelector('[data-not-found]')) throw new Error('no not-found');
+      });
+      await act(() => new Promise((resolve) => setTimeout(resolve, 150)));
+      assert({
+        given: 'posts shown while the drive’s channels are still loading, which then do not list the id',
+        should: 'not mark it read before the list answers, nor after it says not-found',
+        actual: [beforeList, web.count(READ)],
+        expected: [0, 0],
+      });
+    });
+
+    test('a channel that will not load, then loads', async () => {
+      let calls = 0;
+      const table = routes();
+      const { container, web } = show({
+        ...table,
+        [MESSAGES]: (request) => {
+          calls += 1;
+          return calls === 1 ? Response.json({ error: 'ECONNRESET to 10.0.0.7' }, { status: 502 }) : table[MESSAGES](request);
+        },
+      });
+      await settle(() => {
+        if (!container.querySelector('[role="alert"] button')) throw new Error('no retry');
+      });
+      const alert = container.querySelector('[role="alert"]');
+      const failed = [alert?.querySelector('h2')?.textContent, alert?.textContent?.includes('10.0.0.7')];
+      click(alert?.querySelector('button') as HTMLButtonElement);
+      await settle(() => {
+        if (container.querySelectorAll('ol > li').length === 0) throw new Error('posts not loaded');
+      });
+      assert({
+        given: 'a 502 with server text, then Try again',
+        should: 'draw the retryable error without that text, then the posts the retry loads',
+        actual: [failed, web.count(MESSAGES), container.querySelector('[role="alert"]')],
+        expected: [['Could not load this channel', false], 2, null],
+      });
     });
   });
 });

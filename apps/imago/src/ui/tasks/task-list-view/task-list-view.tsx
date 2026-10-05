@@ -1,6 +1,8 @@
 'use client';
 
 import { useState, type ReactNode } from 'react';
+import { edgeOf, renderErrorState } from '../../frame/edge-state/edge-state.render';
+import { TASK_LIST_NOT_FOUND, renderNotFound } from '../../frame/not-found/not-found.render';
 import { useUiState } from '../../store/store';
 import type { UiState } from '../../store/state';
 import { dispatch, transactions } from '../../store/transactions';
@@ -35,7 +37,6 @@ const systemClock = (): Date => new Date();
 type Body = {
   readonly driveId: string;
   readonly list: TaskList | undefined;
-  readonly error: unknown;
   readonly view: TaskViewName;
   readonly expandedIds: readonly string[];
   readonly notice: TaskNotice | null;
@@ -44,12 +45,8 @@ type Body = {
   readonly clock: () => Date;
 };
 
-const bodyFor = ({ driveId, list, error, view, expandedIds, notice, actions, report, clock }: Body): ReactNode => {
-  if (list === undefined) {
-    return error === undefined
-      ? renderTaskListMessage('Loading tasks…', 'status')
-      : renderTaskListMessage('Could not load this task list.', 'alert');
-  }
+const bodyFor = ({ driveId, list, view, expandedIds, notice, actions, report, clock }: Body): ReactNode => {
+  if (list === undefined) return renderTaskListMessage('Loading tasks…', 'status');
   if (view === 'board') return renderTaskListMessage(comingBoard, 'status');
   if (view === 'focus') {
     return renderFocusView({
@@ -88,18 +85,31 @@ const bodyFor = ({ driveId, list, error, view, expandedIds, notice, actions, rep
  */
 export function TaskListView({ driveId, pageId, viewerId, clock = systemClock }: TaskListViewProps) {
   const { lists } = useDriveTaskLists(driveId);
-  const title = lists?.find((entry) => entry.pageId === pageId)?.title ?? '';
-  const { list, error, actions } = useTaskList(pageId, title);
+  const entry = lists?.find((candidate) => candidate.pageId === pageId);
+  const title = entry?.title ?? '';
+  const { list, error, actions, retry } = useTaskList(pageId, title);
   const [view, switchView] = useTaskView(viewerId);
   const expandedIds = useUiState(selectExpanded);
   const [notice, setNotice] = useState<TaskNotice | null>(null);
   const report = (at: string) => (result: ActionResult) =>
     setNotice(result.ok ? null : { at, message: result.refusal });
+  // The drive's lists are the authority on which ids are its task lists; a
+  // refused or unknown id says the same, so it never tells which it was.
+  if ((lists !== undefined && entry === undefined) || (error !== undefined && edgeOf(error) === 'not-found')) {
+    return renderNotFound({
+      ...TASK_LIST_NOT_FOUND,
+      homeHref: `/${encodeURIComponent(driveId)}/tasks`,
+      linkLabel: 'Back to Tasks',
+    });
+  }
+  if (list === undefined && error !== undefined) {
+    return renderErrorState({ title: 'Could not load this task list', retry });
+  }
   return renderTaskListView({
     title,
     progress: list === undefined ? undefined : listProgress(list),
     view,
     switchView,
-    body: bodyFor({ driveId, list, error, view, expandedIds, notice, actions, report, clock }),
+    body: bodyFor({ driveId, list, view, expandedIds, notice, actions, report, clock }),
   });
 }

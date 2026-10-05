@@ -9,6 +9,21 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Imago preview at `/imago` (off by default)** — a first look at PageSpace's new interface, served
+  beside classic PageSpace and signed in with the same account. It only appears when the server sets
+  `IMAGO_ENABLED=true` (and `NEXT_PUBLIC_IMAGO_ENABLED=true` for the "Try Imago" link in the user
+  menu); otherwise every `/imago` address answers not found. One frame stays put as you move around:
+  a rail of sections, a drive switcher with your Home drive first, and an avatar menu with theme,
+  "Classic PageSpace" and sign out. Messages lists a drive's channels and your direct messages with
+  unread counts, and opens a channel to read and post in, with new posts arriving live. Tasks lists
+  a drive's task lists with progress and opens one in Tree or Focus view, where you can tick and add
+  tasks, or open a task to edit its title, status, priority, due date, assignees, description and
+  subtasks. An empty drive, a section that fails to load and an address that names nothing you can
+  open each get their own designed screen inside the frame: a note about what will show up, a "Try
+  again" button that never shows the server's error text, or "not found" with a link back. Imago is
+  a preview: chat, page editing and direct-message threads are still on their way, and classic
+  PageSpace is unchanged.
+
 - **Imago agents in your Home drive** — every account now gets three assistants, Imago, Imago
   Planner and Imago Researcher, as ordinary agents in an `Imago` folder in your Home drive. They are
   added when you sign in (including with a passkey), and one you delete comes back the next time

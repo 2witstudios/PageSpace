@@ -397,24 +397,86 @@ describe('TaskListView', () => {
     });
   });
 
-  test('a list that will not load', async () => {
-    const web = fakeWeb({
+  const mountList = (table: Record<string, FakeRoute>, pageId = 'l1') => {
+    const web = fakeWeb(table);
+    const container = mount(
+      <ImagoSWRProvider client={web.client}>
+        <TaskListView driveId="d1" pageId={pageId} viewerId="u-1" />
+      </ImagoSWRProvider>,
+    );
+    return { web, container };
+  };
+
+  const notFound = (container: HTMLElement) => {
+    const object = container.querySelector('[data-not-found]');
+    return {
+      title: object?.querySelector('h2')?.textContent,
+      link: object?.querySelector('a')?.getAttribute('href'),
+      label: object?.querySelector('a')?.textContent,
+    };
+  };
+
+  test('a list the server refuses', async () => {
+    const { container } = mountList({
       ...routes(),
       [L1]: () => Response.json({ error: 'Forbidden' }, { status: 403 }),
     });
-    const container = mount(
-      <ImagoSWRProvider client={web.client}>
-        <TaskListView driveId="d1" pageId="l1" viewerId="u-1" />
-      </ImagoSWRProvider>,
-    );
     await settle(() => {
-      if (!container.querySelector('[role="alert"]')) throw new Error('no alert');
+      if (!container.querySelector('[data-not-found]')) throw new Error('no not-found');
     });
     assert({
-      given: 'a list the server refuses',
-      should: 'say it could not load',
-      actual: container.querySelector('[role="alert"]')?.textContent,
-      expected: 'Could not load this task list.',
+      given: 'a list id the server answers 403 for',
+      should: 'draw the not-found object with a way back to the drive’s task lists',
+      actual: notFound(container),
+      expected: { title: 'Task list not found', link: '/d1/tasks', label: 'Back to Tasks' },
+    });
+  });
+
+  test('an id that is not one of the drive’s lists', async () => {
+    const { container } = mountList(
+      { ...routes(), 'GET /api/pages/nope/tasks?limit=200&offset=0': () => Response.json(taskListResponse([])) },
+      'nope',
+    );
+    await settle(() => {
+      if (!container.querySelector('[data-not-found]')) throw new Error('no not-found');
+    });
+    assert({
+      given: 'a page id the drive does not list as a task list',
+      should: 'draw the not-found object, not an empty list',
+      actual: notFound(container).title,
+      expected: 'Task list not found',
+    });
+  });
+
+  test('a list that will not load, then loads', async () => {
+    let calls = 0;
+    const table = routes();
+    const { web, container } = mountList({
+      ...table,
+      [L1]: (request) => {
+        calls += 1;
+        return calls === 1 ? Response.json({ error: 'pg: timeout at db-7' }, { status: 503 }) : table[L1](request);
+      },
+    });
+    await settle(() => {
+      if (!container.querySelector('[role="alert"] button')) throw new Error('no retry');
+    });
+    const alert = container.querySelector('[role="alert"]');
+    const failed = {
+      title: alert?.querySelector('h2')?.textContent,
+      leaks: alert?.textContent?.includes('db-7') ?? true,
+    };
+    act(() => {
+      alert?.querySelector<HTMLButtonElement>('button')?.click();
+    });
+    await settle(() => {
+      if (container.querySelector('ul')?.getAttribute('aria-label') !== 'Launch tasks') throw new Error('not reloaded');
+    });
+    assert({
+      given: 'a 503 with server text, then Try again',
+      should: 'draw the retryable error without that text, then the list SWR loads on retry',
+      actual: { failed, asked: web.count(L1) >= 2, alert: container.querySelector('[role="alert"]') === null },
+      expected: { failed: { title: 'Could not load this task list', leaks: false }, asked: true, alert: true },
     });
   });
 });

@@ -33,8 +33,10 @@ function TaskListRow({ driveId, pageId, title, selected }: TaskListRowProps) {
 
 /** The Tasks section's list pane: the drive's task lists with their progress. */
 export function TasksPane({ driveId, selectedPageId }: TasksPaneProps) {
-  const { lists, error } = useDriveTaskLists(driveId);
-  if (lists === undefined) return renderTasksPane({ state: error === undefined ? 'loading' : 'error' });
+  const { lists, error, retry } = useDriveTaskLists(driveId);
+  if (lists === undefined) {
+    return renderTasksPane(error === undefined ? { state: 'loading' } : { state: 'error', retry });
+  }
   return renderTasksPane({
     state: 'ready',
     empty: lists.length === 0,

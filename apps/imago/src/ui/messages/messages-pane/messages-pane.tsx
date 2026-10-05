@@ -39,10 +39,11 @@ const directRow = (thread: DirectThread, selectedConversationId: string | null):
 const sectionOf = <T,>(
   rows: readonly T[] | undefined,
   error: unknown,
+  retry: () => void,
   toRow: (row: T) => MessageRowView,
 ): MessagesSectionView => {
   if (rows !== undefined) return { status: 'ready', rows: rows.map(toRow) };
-  return error === undefined ? { status: 'loading' } : { status: 'error' };
+  return error === undefined ? { status: 'loading' } : { status: 'error', retry };
 };
 
 /**
@@ -57,7 +58,7 @@ export function MessagesPane({ driveId, selectedPageId, selectedConversationId }
     channels:
       driveId === null
         ? { status: 'no-drive' }
-        : sectionOf(channels.channels, channels.error, (thread) => channelRow(thread, selectedPageId)),
-    direct: sectionOf(direct.threads, direct.error, (thread) => directRow(thread, selectedConversationId)),
+        : sectionOf(channels.channels, channels.error, channels.retry, (thread) => channelRow(thread, selectedPageId)),
+    direct: sectionOf(direct.threads, direct.error, direct.retry, (thread) => directRow(thread, selectedConversationId)),
   });
 }

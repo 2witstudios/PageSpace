@@ -5,6 +5,7 @@ import type { ReactNode } from 'react';
 import useSWR from 'swr';
 import { useUiState } from '../../store/store';
 import type { UiState } from '../../store/state';
+import { FilesPane } from '../../files/files-pane/files-pane';
 import { MessagesPane } from '../../messages/messages-pane/messages-pane';
 import { TasksPane } from '../../tasks/tasks-pane/tasks-pane';
 import { AvatarMenu } from '../avatar-menu/avatar-menu';
@@ -61,8 +62,9 @@ const homeHref = (homeDriveId: string | null): string | null =>
 const chatHref = (stage: Stage): string =>
   stage.driveId === null ? '/' : `/${encodeURIComponent(stage.driveId)}`;
 
-/** A section's rows: channels and DMs in Messages, the drive's task lists in Tasks; the other sections' arrive with their leaves. */
+/** A section's rows: the drive's pages in Files, channels and DMs in Messages, the drive's task lists in Tasks. */
 const rowsFor = (stage: Stage): ReactNode => {
+  if (stage.section === 'files' && stage.driveId !== null) return <FilesPane driveId={stage.driveId} />;
   if (stage.section === 'messages') {
     return (
       <MessagesPane

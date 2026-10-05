@@ -10,7 +10,7 @@
 // CSRF), rolls back if the server refuses after all, and the tree is then
 // revalidated from the server either way.
 
-import { useMemo, useRef } from 'react';
+import { useCallback, useMemo, useRef } from 'react';
 import useSWR, { type KeyedMutator } from 'swr';
 import { useApiClient } from '@/api/swr-provider';
 import { ApiError } from '@/api/errors';
@@ -49,11 +49,13 @@ import {
 /** A drive's task lists, for the list pane. */
 export const useDriveTaskLists = (driveId: string | null) => {
   const client = useApiClient();
-  const { data, error, isLoading } = useSWR(
+  const { data, error, isLoading, mutate } = useSWR(
     driveId === null ? null : (['imago:drive-task-lists', driveId] as const),
     ([, id]) => fetchDriveTaskLists(client, id),
   );
-  return { lists: data, error: error as unknown, isLoading };
+  /** Void action: asks the server again after a failure. */
+  const retry = useCallback(() => void mutate(), [mutate]);
+  return { lists: data, error: error as unknown, isLoading, retry };
 };
 
 /**
@@ -77,10 +79,12 @@ export const useAssignable = (driveId: string) => {
 /** Where a page sits in its drive; null asks nothing. */
 export const usePageTrail = (pageId: string | null) => {
   const client = useApiClient();
-  const { data, error } = useSWR(pageId === null ? null : (['imago:page-trail', pageId] as const), ([, id]) =>
+  const { data, error, mutate } = useSWR(pageId === null ? null : (['imago:page-trail', pageId] as const), ([, id]) =>
     fetchPageTrail(client, id),
   );
-  return { trail: data, error: error as unknown };
+  /** Void action: asks the server again after a failure. */
+  const retry = useCallback(() => void mutate(), [mutate]);
+  return { trail: data, error: error as unknown, retry };
 };
 
 /**
@@ -233,6 +237,8 @@ export const useTaskList = (pageId: string | null, title: string) => {
   const latest = useRef(list);
   latest.current = list;
   const actions = useMemo(() => createActions(client, () => latest.current, mutate), [client, mutate]);
-  return { list, error: error as unknown, isLoading, actions };
+  /** Void action: asks the server again after a failure. */
+  const retry = useCallback(() => void mutate(), [mutate]);
+  return { list, error: error as unknown, isLoading, actions, retry };
 };
 

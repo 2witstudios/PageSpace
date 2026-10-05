@@ -1,7 +1,8 @@
 'use client';
 
 import type { ReactNode } from 'react';
-import { TaskDetail } from '../task-detail/task-detail';
+import { edgeOf, renderErrorState } from '../../frame/edge-state/edge-state.render';
+import { TaskDetail, renderTaskNotFound } from '../task-detail/task-detail';
 import { renderTaskDetailMessage } from '../task-detail/task-detail.render';
 import { TaskListView } from '../task-list-view/task-list-view';
 import { useDriveTaskLists, usePageTrail } from '../use-tasks/use-tasks';
@@ -21,18 +22,23 @@ export type TaskObjectProps = {
  * page sits is only asked when it is not one of the drive's lists.
  */
 export function TaskObject({ driveId, pageId, viewerId }: TaskObjectProps): ReactNode {
-  const { lists, error: listsError } = useDriveTaskLists(driveId);
+  const { lists, error: listsError, retry: retryLists } = useDriveTaskLists(driveId);
   const isList = lists?.some((entry) => entry.pageId === pageId) === true;
-  const { trail, error: trailError } = usePageTrail(lists === undefined || isList ? null : pageId);
+  const { trail, error: trailError, retry: retryTrail } = usePageTrail(lists === undefined || isList ? null : pageId);
   if (lists === undefined && listsError !== undefined) {
-    return renderTaskDetailMessage('Could not load this task.', 'alert');
+    return renderErrorState({ title: 'Could not load this task', retry: retryLists });
+  }
+  // Ancestors the server refuses or does not know name nothing here; any
+  // other failure is worth asking again.
+  if (!isList && trailError !== undefined && edgeOf(trailError) === 'error') {
+    return renderErrorState({ title: 'Could not load this task', retry: retryTrail });
   }
   const route = taskRoute(pageId, lists, trailError === undefined ? trail : null);
   switch (route.kind) {
     case 'loading':
       return renderTaskDetailMessage('Loading task…', 'status');
     case 'missing':
-      return renderTaskDetailMessage('This task could not be found.', 'alert');
+      return renderTaskNotFound(driveId);
     case 'list':
       return <TaskListView driveId={driveId} pageId={pageId} viewerId={viewerId} />;
     case 'task':

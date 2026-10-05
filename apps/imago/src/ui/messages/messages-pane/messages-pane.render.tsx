@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { Fragment, type ReactNode } from 'react';
 import { renderAvatar } from '../../components/avatar/avatar.render';
+import { renderButton } from '../../components/button/button.render';
 import { renderIcon } from '../../components/icon/icon.render';
 import { listGroupLabelClass } from '../../components/list-group/list-group-class';
 import { renderListGroup } from '../../components/list-group/list-group.render';
@@ -23,7 +24,7 @@ export type MessageRowView = {
 /** A section's rows, or why it has none. `no-drive` is the channels section on a user-level route. */
 export type MessagesSectionView =
   | { readonly status: 'loading' }
-  | { readonly status: 'error' }
+  | { readonly status: 'error'; readonly retry: () => void }
   | { readonly status: 'no-drive' }
   | { readonly status: 'ready'; readonly rows: readonly MessageRowView[] };
 
@@ -84,13 +85,14 @@ const renderRow = ({ id, kind, name, href, avatarUrl, unreadCount, selected }: M
   );
 };
 
-/** A labelled section that has no rows, saying why. */
-const renderNote = (label: string, text: string, role?: 'status' | 'alert'): ReactNode => (
+/** A labelled section that has no rows, saying why; a failed one offers to ask again. */
+const renderNote = (label: string, text: string, role?: 'status' | 'alert', retry?: () => void): ReactNode => (
   <section key={label} aria-label={label}>
     <h2 className={listGroupLabelClass}>{label}</h2>
     <p role={role} className={messagesNoteClass}>
       {text}
     </p>
+    {retry === undefined ? null : renderButton({ variant: 'ghost', onClick: retry, children: 'Try again' })}
   </section>
 );
 
@@ -103,7 +105,7 @@ export function renderMessagesPane(props: MessagesPaneRenderProps): ReactNode {
   return sections.map(({ key, label, notes }) => {
     const view = props[key];
     if (view.status === 'loading') return renderNote(label, notes.loading, 'status');
-    if (view.status === 'error') return renderNote(label, notes.error, 'alert');
+    if (view.status === 'error') return renderNote(label, notes.error, 'alert', view.retry);
     if (view.status === 'no-drive') return renderNote(label, notes['no-drive']);
     if (view.rows.length === 0) return renderNote(label, notes.empty);
     return <Fragment key={label}>{renderListGroup({ label, children: view.rows.map(renderRow) })}</Fragment>;

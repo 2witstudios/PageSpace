@@ -200,6 +200,32 @@ describe('MessagesPane', () => {
     });
   });
 
+  test('Try again on a failed section', async () => {
+    let calls = 0;
+    const { container, web } = show({
+      [CHANNELS]: (request) => {
+        calls += 1;
+        return calls === 1
+          ? Response.json({ error: 'Failed' }, { status: 503 })
+          : channels(() => [inboxChannel('c1', { name: 'launch' })])(request);
+      },
+      [CONVERSATIONS]: dms(() => []),
+    });
+    await settle(() => {
+      if (!container.querySelector('section[aria-label="Channels"] button')) throw new Error('no retry');
+    });
+    act(() => {
+      container.querySelector<HTMLButtonElement>('section[aria-label="Channels"] button')?.click();
+    });
+    await rowsLoaded(container, 1);
+    assert({
+      given: 'channels that failed, then Try again',
+      should: 'ask the server again through SWR and list the channels it answers',
+      actual: [web.count(CHANNELS), container.querySelector('[role="alert"]')],
+      expected: [2, null],
+    });
+  });
+
   test('a DM whose other person is gone', async () => {
     const gone = { id: null, name: null, email: null, image: null, username: null, displayName: null, avatarUrl: null };
     const { container } = show({

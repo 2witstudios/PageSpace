@@ -19,6 +19,7 @@ import {
   notFoundLinkClass,
   notFoundTitleClass,
 } from './not-found/not-found-class';
+import { edgeLoadingClass } from './edge-state/edge-state-class';
 
 const appDir = join(dirname(fileURLToPath(import.meta.url)), '../../app');
 const appRoot = join(appDir, '..', '..');
@@ -99,13 +100,14 @@ describe('frame menu class modules against the theme', () => {
       notFoundTitleClass,
       notFoundDetailClass,
       notFoundLinkClass,
+      edgeLoadingClass,
     ]
       .flatMap((list) => list.split(' '))
       .filter((cls, index, all) => all.indexOf(cls) === index);
     const css = await compile(classes);
 
     assert({
-      given: `the ${classes.length} classes the brand chip, account menu and not-found modules emit`,
+      given: `the ${classes.length} classes the brand chip, account menu, not-found and edge-state modules emit`,
       should: 'each generate a rule from the token-locked theme',
       actual: classes.filter((cls) => !css.includes(selectorOf(cls))),
       expected: [],

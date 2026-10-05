@@ -17,7 +17,7 @@
 // or the totals loaded refetches them. A connect before they load needs
 // nothing: the load in flight is the server's answer.
 
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import useSWR, { type KeyedMutator } from 'swr';
 import { useApiClient } from '@/api/swr-provider';
 import { useSocketEvent } from '@/realtime/realtime-provider';
@@ -89,7 +89,9 @@ export const useDriveChannels = (driveId: string | null) => {
     ([, id]) => fetchDriveChannels(client, id),
   );
   useLiveThreads<ChannelThread>(data, mutate, driveId === null ? null : { kind: 'channel', driveId });
-  return { channels: data, error: error as unknown, isLoading };
+  /** Void action: asks the server again after a failure. */
+  const retry = useCallback(() => void mutate(), [mutate]);
+  return { channels: data, error: error as unknown, isLoading, retry };
 };
 
 /** The viewer's DM conversations (user-level, not per drive), with unread counts, live. */
@@ -99,7 +101,9 @@ export const useDirectThreads = () => {
     fetchDirectThreads(client),
   );
   useLiveThreads<DirectThread>(data, mutate, { kind: 'dm' });
-  return { threads: data, error: error as unknown, isLoading };
+  /** Void action: asks the server again after a failure. */
+  const retry = useCallback(() => void mutate(), [mutate]);
+  return { threads: data, error: error as unknown, isLoading, retry };
 };
 
 /** The viewer's unread totals from /api/sidebar/badges, refetched on inbox events and notifications. */
