@@ -36,6 +36,11 @@ describe('orgErrorMessage', () => {
     expect(orgErrorMessage(refusal('seats_full'), 'fallback')).toBe(ORG_ERROR_COPY.seats_full);
   });
 
+  it("says an automation's owner left, and who can hand it on, for the owner-left refusals", () => {
+    expect(orgErrorMessage(new ApiRequestError('raw', 409, { error: 'raw', code: 'owner_left' }), 'fallback')).toMatch(/owner left the organization.*Owner or Admin must reassign/);
+    expect(orgErrorMessage(refusal('new_owner_no_drive_access'), 'fallback')).toMatch(/cannot reach this automation's drive/);
+  });
+
   it('uses the fallback for an unknown code', () => {
     expect(orgErrorMessage(refusal('something_new'), 'Could not save')).toBe('Could not save');
   });
