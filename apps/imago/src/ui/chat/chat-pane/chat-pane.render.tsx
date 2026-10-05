@@ -1,10 +1,14 @@
 import type { ReactNode, Ref, UIEventHandler } from 'react';
 import type { ChatDensity } from '../../frame/stage/stage';
 import { renderPaneHeader } from '../../frame/pane/pane-header';
+import { Icon } from '../../components/icon/icon';
+import type { AgentMenu } from '../chat-agents/chat-agents';
 import type { ChatMessage } from '../chat-model/chat';
 import { renderChatMessage } from '../chat-message/chat-message.render';
 import {
   chatAgentNameClass,
+  chatAgentPickerClass,
+  chatAgentSelectClass,
   chatContextLabelClass,
   chatEmptyClass,
   chatHeaderTitleClass,
@@ -18,6 +22,10 @@ export type ChatPaneRenderProps = {
   readonly density: ChatDensity;
   /** The agent the conversation is with. */
   readonly agentName: string;
+  /** The agents the header offers, Imago's first; with none listed yet it names `agentName` only. */
+  readonly agents: AgentMenu;
+  /** Void action: the option the viewer picked. */
+  readonly selectAgent: (value: string) => void;
   /** What the agent answers against: the drive, the section, or the open object. */
   readonly contextLabel: string;
   /** Oldest first; undefined while the conversation loads. */
@@ -33,27 +41,52 @@ export type ChatPaneRenderProps = {
   readonly onScroll?: UIEventHandler<HTMLDivElement>;
 };
 
-const renderTitle = (agentName: string, contextLabel: string): ReactNode => (
-  <span className={chatHeaderTitleClass}>
+const renderAgent = ({ agentName, agents, selectAgent }: ChatPaneRenderProps): ReactNode =>
+  agents.groups.length === 0 ? (
     <span className={chatAgentNameClass}>{agentName}</span>
+  ) : (
+    <span className={chatAgentPickerClass}>
+      <select
+        aria-label="Agent"
+        value={agents.value}
+        className={chatAgentSelectClass}
+        onChange={(event) => selectAgent(event.currentTarget.value)}
+      >
+        {agents.groups.map((group) => (
+          <optgroup key={group.label} label={group.label}>
+            {group.options.map((option) => (
+              <option key={option.value} value={option.value} disabled={option.disabled}>
+                {option.title}
+              </option>
+            ))}
+          </optgroup>
+        ))}
+      </select>
+      <Icon name="chevronDown" size={12} />
+    </span>
+  );
+
+const renderTitle = (props: ChatPaneRenderProps): ReactNode => (
+  <span className={chatHeaderTitleClass}>
+    {renderAgent(props)}
     <span className="text-ink-faint" aria-hidden="true">
       /
     </span>
-    <small className={chatContextLabelClass}>{contextLabel}</small>
+    <small className={chatContextLabelClass}>{props.contextLabel}</small>
   </span>
 );
 
 /**
- * The chat column: a header naming the agent and what it is answering
- * against, the thread, and the floating composer. Roomy over a drive or a
+ * The chat column: a header picking the agent and naming what it is
+ * answering against, the thread, and the floating composer. Roomy over a drive or a
  * section; dense beside an open object, where the header names the object.
  */
 export function renderChatPane(props: ChatPaneRenderProps): ReactNode {
-  const { density, agentName, contextLabel, messages, streamingMessageId, notice, citationDriveId, composer, scrollRef, onScroll } =
+  const { density, agentName, messages, streamingMessageId, notice, citationDriveId, composer, scrollRef, onScroll } =
     props;
   return (
     <section className={chatPaneClass(density)} aria-label="Chat" data-density={density}>
-      {renderPaneHeader({ title: renderTitle(agentName, contextLabel) })}
+      {renderPaneHeader({ title: renderTitle(props) })}
       <div ref={scrollRef} onScroll={onScroll} className={chatScrollClass}>
         <ol className={chatThreadClass(density)} aria-busy={messages === undefined ? true : undefined}>
           {messages === undefined ? null : messages.length === 0 ? (

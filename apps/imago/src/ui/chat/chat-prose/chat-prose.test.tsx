@@ -131,14 +131,15 @@ describe('ChatProse', () => {
     const web = anchors.find((anchor) => anchor.getAttribute('href') === 'https://example.com/plan');
     assert({
       given: 'a footnote reference and its back link beside a web link',
-      should: 'jump within the page for the footnote links, and open only the web link in a new tab',
+      should: 'jump within the reply for the footnote links, each landing on an element that exists, and open only the web link in a new tab',
       actual: [
         inPage.length >= 2,
         inPage.map((anchor) => anchor.getAttribute('target')),
         inPage.every((anchor) => anchor.className === proseClasses.a),
+        inPage.map((anchor) => view.querySelector(`[id="${anchor.getAttribute('href')?.slice(1)}"]`) !== null),
         [web?.getAttribute('target'), web?.getAttribute('rel')],
       ],
-      expected: [true, inPage.map(() => null), true, ['_blank', 'noopener noreferrer']],
+      expected: [true, inPage.map(() => null), true, inPage.map(() => true), ['_blank', 'noopener noreferrer']],
     });
   });
 

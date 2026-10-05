@@ -15,6 +15,7 @@ import type {
   BuiltinAgentsResponse,
   ConversationMessagesResponse,
   ConversationsPage,
+  DriveAgent,
   MessagesPage,
 } from '../chat-model/chat';
 
@@ -40,6 +41,8 @@ export const chatPaths = {
   messages: (agentId: string, conversationId: string, cursor?: string) =>
     `${agentConversations(agentId)}/${segment(conversationId)}/messages?limit=${MESSAGES_PAGE_SIZE}` +
     (cursor === undefined ? '' : `&direction=before&cursor=${segment(cursor)}`),
+  /** The agent pages in a drive the viewer can view; the server filters, imago never widens or narrows it. */
+  driveAgents: (driveId: string) => `/api/drives/${segment(driveId)}/agents?includeTools=false`,
   /** One agent turn, streamed back as the AI SDK UI message stream (the page-agent pipeline). */
   turn: '/api/ai/chat',
   /** Stops a turn server-side: streams are server-owned and outlive the reader. */
@@ -56,6 +59,22 @@ export const fetchBuiltinAgents = async (client: ApiClient): Promise<readonly Bu
   const body = await client.apiFetch<BuiltinAgentsResponse>(chatPaths.builtinAgents);
   if (!hasArray(body, 'agents')) throw invalid('Built-in agents response carried no agents');
   return body.agents;
+};
+
+const UNTITLED_AGENT = 'Untitled agent';
+
+const driveAgentOf = (entry: unknown): DriveAgent | null => {
+  if (typeof entry !== 'object' || entry === null) return null;
+  const { id, title } = entry as Record<string, unknown>;
+  if (typeof id !== 'string' || id === '') return null;
+  return { id, title: typeof title === 'string' && title.trim() !== '' ? title : UNTITLED_AGENT };
+};
+
+/** The agents of a drive the viewer can use, in the server's order; malformed rows are dropped, never named. */
+export const fetchDriveAgents = async (client: ApiClient, driveId: string): Promise<readonly DriveAgent[]> => {
+  const body = await client.apiFetch<{ readonly agents?: unknown }>(chatPaths.driveAgents(driveId));
+  if (!hasArray(body, 'agents')) throw invalid('Drive agents response carried no agents');
+  return (body.agents as readonly unknown[]).map(driveAgentOf).filter((agent): agent is DriveAgent => agent !== null);
 };
 
 /** One page (from 0) of the viewer's conversations with an agent page. */

@@ -1,22 +1,26 @@
 'use client';
 
-// The chat pane in the shell's chat slot: the viewer's Imago agent, its
-// latest conversation (or the one the shell state names), the live turn and
-// the composer. The shell keeps it mounted across every navigation; the
-// draft and the open conversation live in shell state besides, so they
-// outlast the pane too.
+// The chat pane in the shell's chat slot: the agent chosen in its header
+// (Imago unless another is), that agent's latest conversation (or the one the
+// shell state names), the live turn and the composer. The shell keeps it
+// mounted across every navigation; the agent, the draft and the open
+// conversation live in shell state besides, so they outlast the pane too.
+// Opening an object changes only the context a turn carries, never the agent
+// or the conversation.
 
-import { useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { ApiError } from '@/api/errors';
 import { useApiClient } from '@/api/swr-provider';
 import { getUiState, useUiState } from '@/ui/store/store';
 import type { UiState } from '@/ui/store/state';
 import { dispatch, transactions } from '@/ui/store/transactions';
 import { usePageTrail } from '@/ui/tasks/use-tasks/use-tasks';
 import { chatContextFor, type Stage } from '../../frame/stage/stage';
+import { agentFor, agentMenu } from '../chat-agents/chat-agents';
 import { createConversation } from '../chat-api/chat-api';
 import { contextRefFor } from '../chat-context/context-ref';
 import { useAgentChat } from '../use-agent-chat/use-agent-chat';
-import { useAgentConversations, useImagoAgents } from '../use-chat-data/use-chat-data';
+import { useAgentConversations, useDriveAgents, useImagoAgents } from '../use-chat-data/use-chat-data';
 import { renderComposer } from '../composer/composer.render';
 import { renderChatPane } from './chat-pane.render';
 
@@ -30,8 +34,14 @@ export type ChatPaneProps = {
 
 const selectDraft = (state: UiState) => state.resources.chatDraft;
 const selectConversation = (state: UiState) => state.resources.chatConversationId;
+const selectAgent = (state: UiState) => state.resources.chatAgent;
+const selectLost = (state: UiState) => state.resources.chatAgentLost;
+
+/** How the agent routes say the viewer may no longer use an agent: it is gone (404) or not theirs to view (403). */
+const lostAccess = (error: unknown): boolean => error instanceof ApiError && (error.status === 403 || error.status === 404);
 
 const NOTICES = {
+  lost: (name: string) => `You no longer have access to ${name}, so Imago is answering.`,
   setup: 'Imago is still being set up. Try again in a moment.',
   load: 'This chat could not load. Try again in a moment.',
   reply: 'The reply failed. Try again.',
@@ -50,10 +60,16 @@ const objectNameOf = (stage: Stage, trail: readonly { readonly id: string; reado
 export function ChatPane({ stage, driveName, homeDriveId }: ChatPaneProps) {
   const client = useApiClient();
   const { agents, error: agentsError } = useImagoAgents();
-  // IMG-6.4 selects among the agents; until then the chat is Imago's.
-  const agent = agents?.find((entry) => entry.key === 'imago');
-  const agentId = agent?.pageId ?? null;
+  const { agents: driveAgents } = useDriveAgents(stage.driveId);
+  const chosenAgent = useUiState(selectAgent);
+  const lost = useUiState(selectLost);
+  const imago = agents?.find((entry) => entry.key === 'imago');
+  const agentId = chosenAgent?.id ?? imago?.pageId ?? null;
   const { conversations, error: conversationsError } = useAgentConversations(agentId);
+  // The server is the judge of access: a refused agent hands the chat back to Imago.
+  useEffect(() => {
+    if (chosenAgent !== null && lostAccess(conversationsError)) dispatch(transactions.loseAgent, chosenAgent.id);
+  }, [chosenAgent, conversationsError]);
   const chosen = useUiState(selectConversation);
   const conversationId = chosen ?? conversations?.[0]?.id ?? null;
 
@@ -64,7 +80,7 @@ export function ChatPane({ stage, driveName, homeDriveId }: ChatPaneProps) {
   const [failed, setFailed] = useState(false);
   const sending = useRef(false);
 
-  const unprovisioned = agents !== undefined && agentId === null;
+  const unprovisioned = chosenAgent === null && agents !== undefined && agentId === null;
   // Which conversation is latest is unknown until the list loads: a send then
   // would start a new one instead of continuing it. A list that failed to load
   // leaves only a new conversation to send into.
@@ -100,6 +116,7 @@ export function ChatPane({ stage, driveName, homeDriveId }: ChatPaneProps) {
   const streamingMessageId = streaming && last?.role === 'assistant' ? last.id : null;
 
   const notice = (() => {
+    if (lost !== null) return NOTICES.lost(lost);
     if (unprovisioned) return NOTICES.setup;
     if (agentsError !== undefined || conversationsError !== undefined || chat.loadError !== undefined) return NOTICES.load;
     if (failed || chat.status === 'error') return NOTICES.reply;
@@ -115,10 +132,15 @@ export function ChatPane({ stage, driveName, homeDriveId }: ChatPaneProps) {
     if (element !== null && following.current) element.scrollTop = element.scrollHeight;
   }, [messages]);
 
-  const agentName = agent?.title ?? 'Imago';
+  const agentName = chosenAgent?.title ?? imago?.title ?? 'Imago';
   return renderChatPane({
     density: context.density,
     agentName,
+    agents: agentMenu({ builtins: agents, driveAgents, driveName, selected: chosenAgent }),
+    selectAgent: (value) => {
+      const next = agentFor({ builtins: agents, driveAgents }, value);
+      if (next !== undefined) dispatch(transactions.selectAgent, next);
+    },
     contextLabel: context.contextLabel,
     messages,
     streamingMessageId,

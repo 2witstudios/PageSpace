@@ -23,6 +23,22 @@ export type BuiltinAgentsResponse = {
   readonly agents: readonly BuiltinAgentPointer[];
 };
 
+/**
+ * An agent page in a drive, as GET /api/drives/[driveId]/agents lists it
+ * (apps/web/src/app/api/drives/[driveId]/agents/route.ts): only the agents
+ * the server says the viewer can view. Only what the picker needs is kept.
+ */
+export type DriveAgent = {
+  readonly id: string;
+  readonly title: string;
+};
+
+/** The agent the chat talks to when it is not Imago itself. */
+export type ChatAgent = {
+  readonly id: string;
+  readonly title: string;
+};
+
 /** One conversation with an agent page, as GET .../conversations lists it. */
 export type AgentConversation = {
   readonly id: string;

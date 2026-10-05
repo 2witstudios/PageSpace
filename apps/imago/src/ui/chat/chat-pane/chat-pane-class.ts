@@ -24,6 +24,12 @@ export const chatHeaderTitleClass = 'flex min-w-0 items-center gap-2';
 
 export const chatAgentNameClass = 'flex-none font-medium';
 
+/** The agent picker: a bare select sized to the chosen name, then its chevron. */
+export const chatAgentPickerClass = 'inline-flex min-w-0 flex-none items-center gap-1 text-ink-faint';
+
+export const chatAgentSelectClass =
+  'field-sizing-content min-w-0 cursor-pointer appearance-none truncate border-none bg-transparent font-medium text-ink';
+
 export const chatContextLabelClass = 'truncate text-xs font-normal text-ink-muted';
 
 /** The invitation an empty conversation shows, centred in the thread. */

@@ -119,19 +119,19 @@ describe('fetchBuiltinAgents()', () => {
 describe('fetchDriveAgents()', () => {
   test('the agents the server lists', async () => {
     const web = fakeWeb({
-      [`GET ${chatPaths.driveAgents('d1')}`]: () =>
-        Response.json(
-          driveAgentsBody([
-            { id: 'a1', title: 'Support' },
-            { id: 'a2', title: null },
-            { id: '', title: 'Broken' },
-            { title: 'No id' },
-          ]),
-        ),
+      [`GET ${chatPaths.driveAgents('d1')}`]: () => {
+        const body = driveAgentsBody([
+          { id: 'a1', title: 'Support' },
+          { id: 'a2', title: null },
+          { id: '', title: 'Broken' },
+          { title: 'No id' },
+        ]);
+        return Response.json({ ...body, agents: [...body.agents, null, 'a3'] });
+      },
     });
 
     assert({
-      given: "the drive's agents as GET /api/drives/[driveId]/agents answers them, one untitled and two malformed",
+      given: "the drive's agents as GET /api/drives/[driveId]/agents answers them, one untitled and four malformed",
       should: 'give every well-formed one in the order given, an untitled one by a stand-in name, and drop the rest',
       actual: await fetchDriveAgents(web.client, 'd1'),
       expected: [

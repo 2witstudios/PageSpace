@@ -1,7 +1,8 @@
 'use client';
 
-// What the chat pane reads: the viewer's Imago agents, their conversations
-// with an agent page, and a conversation's messages.
+// What the chat pane reads: the viewer's Imago agents, the open drive's
+// agents, their conversations with an agent page, and a conversation's
+// messages.
 //
 // Everything loads through the imago client and SWR's shared cache. An Imago
 // agent not provisioned yet has a null pageId, and a hook given a null id
@@ -15,13 +16,22 @@ import { useApiClient } from '@/api/swr-provider';
 import { getUiState, useUiState } from '@/ui/store/store';
 import { isStreaming } from '../chat-plugin';
 import type { AgentConversation, ChatMessage, ConversationsPage, MessagesPage } from '../chat-model/chat';
-import { fetchBuiltinAgents, fetchConversationMessages, fetchConversationsPage } from '../chat-api/chat-api';
+import { fetchBuiltinAgents, fetchConversationMessages, fetchConversationsPage, fetchDriveAgents } from '../chat-api/chat-api';
 
 /** The viewer's Imago agent pointers, in registry order. */
 export const useImagoAgents = () => {
   const client = useApiClient();
   const { data, error, isLoading } = useSWR(['imago:builtin-agents'] as const, () => fetchBuiltinAgents(client));
   return { agents: data, error: error as unknown, isLoading };
+};
+
+/** The agents of a drive the viewer can use, as the server lists them; nothing without a drive. */
+export const useDriveAgents = (driveId: string | null) => {
+  const client = useApiClient();
+  const { data, error } = useSWR(driveId === null ? null : (['imago:drive-agents', driveId] as const), ([, id]) =>
+    fetchDriveAgents(client, id),
+  );
+  return { agents: data, error: error as unknown };
 };
 
 /** Rows from every loaded page, once each: a conversation created between page loads shifts the offsets. */

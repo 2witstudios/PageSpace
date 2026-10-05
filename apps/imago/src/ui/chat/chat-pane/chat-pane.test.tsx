@@ -521,6 +521,7 @@ describe('ChatPane', () => {
       if (container.querySelector('[role="alert"]') === null) throw new Error('no notice');
     });
     await settle(threadLoaded(container));
+    type(container, 'Still there?');
     const refused = [
       container.querySelector('[role="alert"]')?.textContent,
       picker(container).value,
@@ -563,9 +564,8 @@ describe('ChatPane', () => {
     await settle(() => {
       if (container.querySelector('[role="alert"]') === null) throw new Error('no notice');
     });
-    const failed = [container.querySelector('[role="alert"]')?.textContent, control(container).disabled];
-
     type(container, 'Hello');
+    const failed = [container.querySelector('[role="alert"]')?.textContent, control(container).disabled];
     press(field(container), 'Enter');
     stream.push({ type: 'start', messageId: 'a1' });
     stream.push({ type: 'text-start', id: 't1' });
