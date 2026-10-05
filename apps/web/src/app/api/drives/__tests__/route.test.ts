@@ -763,7 +763,7 @@ describe('GET /api/drives — scoped MCP canCreatePages', () => {
     expect(response.status).toBe(200);
     expect(body[0]).toMatchObject({ id: 'drive_scoped', role: 'MEMBER', canCreatePages: true });
     expect(resolveDriveWideCanEdit).toHaveBeenCalledWith([
-      { driveId: 'drive_scoped', role: 'MEMBER', customRoleId: null },
+      { driveId: 'drive_scoped', role: 'MEMBER', customRoleId: null, openDriveFloor: null },
     ]);
   });
 
@@ -777,7 +777,7 @@ describe('GET /api/drives — scoped MCP canCreatePages', () => {
     expect(response.status).toBe(200);
     expect(body[0]).toMatchObject({ id: 'drive_scoped', canCreatePages: false });
     expect(resolveDriveWideCanEdit).toHaveBeenCalledWith([
-      { driveId: 'drive_scoped', role: 'MEMBER', customRoleId: 'role_view' },
+      { driveId: 'drive_scoped', role: 'MEMBER', customRoleId: 'role_view', openDriveFloor: null },
     ]);
   });
 
