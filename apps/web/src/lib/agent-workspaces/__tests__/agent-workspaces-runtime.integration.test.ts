@@ -47,7 +47,7 @@ import {
   spawnSession,
   MAX_ACTIVE_SESSIONS_PER_OWNER,
 } from '../agent-workspaces-runtime';
-import { SessionFullError } from '../create-conversation-in-workspace';
+import { AgentNotInSessionDriveError, SessionFullError } from '../create-conversation-in-workspace';
 import { requireDb } from '@pagespace/db/test/require-db';
 
 let dbAvailable = false;
@@ -720,6 +720,127 @@ describe("spawnSession — a driveless spawn lands in the owner's Home drive (IM
       .from(agentWorkspaces)
       .where(and(eq(agentWorkspaces.ownerId, owner.id), eq(agentWorkspaces.envId, env.id)));
     expect(n).toBe(0);
+  });
+});
+
+/**
+ * IMG-5.1 review blocker: a global-assistant session moved into its owner's
+ * Home drive must keep hosting the owner's agents from OTHER drives, exactly
+ * as the null-drive session it replaces did. The cross-drive gate exists
+ * because a team drive's session bills and authorizes through THAT drive; an
+ * owner's Home session bills and authorizes through its owner alone, the same
+ * as a null-drive one.
+ */
+describe("a global session in the owner's Home drive hosts the owner's agents from other drives (IMG-5.1)", () => {
+  beforeAll(connect);
+
+  async function seedGlobalSessionAndTeamAgent() {
+    const owner = await factories.createUser();
+    const teamDrive = await factories.createDrive(owner.id);
+    const teamAgent = await factories.createPage(teamDrive.id, { type: 'AI_CHAT', title: 'Team Agent' });
+    const globalConversationId = createId();
+    await db.insert(conversations).values({
+      id: globalConversationId,
+      userId: owner.id,
+      type: 'global',
+      contextId: null,
+      isActive: true,
+    });
+    const ensured = await ensureGlobalSandboxSession(globalConversationId, owner.id);
+    if (!ensured.ok) throw new Error('expected a global session');
+    expect(ensured.session.driveId).toBe(await homeDriveIdOf(owner.id));
+    return { owner, teamDrive, teamAgent, globalConversationId, session: ensured.session };
+  }
+
+  it('given spawn_session from a global chat with a team-drive agent, should create the worker conversation in the Home session', async () => {
+    if (!dbAvailable) return;
+    const { owner, teamAgent, globalConversationId, session } = await seedGlobalSessionAndTeamAgent();
+    const workerConversationId = createId();
+
+    // The exact call `spawn_session` makes once `ensureGlobalSandboxSession`
+    // has resolved the caller's workspace.
+    await createConversationInSession({
+      conversationId: workerConversationId,
+      userId: owner.id,
+      agentPageId: teamAgent.id,
+      workspaceId: session.id,
+      excludeTargetId: globalConversationId,
+    });
+
+    expect((await nodeFor(workerConversationId))?.rootId).toBe(session.id);
+  });
+
+  it('given a team-drive agent conversation claimed into the Home session, should admit it', async () => {
+    if (!dbAvailable) return;
+    const { owner, teamAgent, session } = await seedGlobalSessionAndTeamAgent();
+    const pageConversationId = createId();
+    await db.insert(conversations).values({
+      id: pageConversationId,
+      userId: owner.id,
+      type: 'page',
+      contextId: teamAgent.id,
+      isActive: true,
+    });
+
+    expect(
+      await claimConversationInSession({ conversationId: pageConversationId, userId: owner.id, workspaceId: session.id }),
+    ).toBe('claimed');
+    expect((await nodeFor(pageConversationId))?.rootId).toBe(session.id);
+  });
+
+  it('given an ordinary session in a team drive, should still refuse an agent from another drive (negative control)', async () => {
+    if (!dbAvailable) return;
+    const owner = await factories.createUser();
+    const driveA = await factories.createDrive(owner.id);
+    const driveB = await factories.createDrive(owner.id);
+    const agentB = await factories.createPage(driveB.id, { type: 'AI_CHAT', title: 'Drive B Agent' });
+    const spawned = await spawnSession({ userId: owner.id, driveId: driveA.id });
+    if (!spawned.ok) throw new Error('expected a drive session');
+    const pageConversationId = createId();
+    await db.insert(conversations).values({
+      id: pageConversationId,
+      userId: owner.id,
+      type: 'page',
+      contextId: agentB.id,
+      isActive: true,
+    });
+
+    await expect(
+      createConversationInSession({
+        conversationId: createId(),
+        userId: owner.id,
+        agentPageId: agentB.id,
+        workspaceId: spawned.session.id,
+      }),
+    ).rejects.toBeInstanceOf(AgentNotInSessionDriveError);
+    expect(
+      await claimConversationInSession({ conversationId: pageConversationId, userId: owner.id, workspaceId: spawned.session.id }),
+    ).toBe('cross_drive_denied');
+  });
+
+  it("given a session in a Home drive its owner does not own, should refuse an agent from another drive (negative control)", async () => {
+    if (!dbAvailable) return;
+    const homeOwner = await factories.createUser();
+    const sessionOwner = await factories.createUser();
+    const homeSpawn = await spawnSession({ userId: homeOwner.id, driveId: null });
+    if (!homeSpawn.ok || homeSpawn.session.driveId === null) throw new Error('expected a Home session');
+    // Not reachable through any spawn path (Home is owner-only) — seeded so the
+    // exemption is shown to depend on OWNERSHIP, not on the drive being a Home.
+    const [foreignHomeSession] = await db
+      .insert(agentWorkspaces)
+      .values({ id: createId(), driveId: homeSpawn.session.driveId, ownerId: sessionOwner.id })
+      .returning();
+    const otherDrive = await factories.createDrive(sessionOwner.id);
+    const otherAgent = await factories.createPage(otherDrive.id, { type: 'AI_CHAT', title: 'Other Agent' });
+
+    await expect(
+      createConversationInSession({
+        conversationId: createId(),
+        userId: sessionOwner.id,
+        agentPageId: otherAgent.id,
+        workspaceId: foreignHomeSession.id,
+      }),
+    ).rejects.toBeInstanceOf(AgentNotInSessionDriveError);
   });
 });
 

@@ -47,7 +47,7 @@ function makeDeps(overrides: Partial<Record<keyof MockDeps, unknown>> = {}): Moc
     })),
     findWorkspaceOfConversation: vi.fn(async () => null),
     findAgentDriveId: vi.fn(async () => 'drive-1'),
-    findSession: vi.fn(async () => ({ driveId: 'drive-1', endedAt: null })),
+    findSession: vi.fn(async () => ({ driveId: 'drive-1', endedAt: null, hostsAgentsFromAnyDrive: false })),
     admitConversation: vi.fn(async () => 'admitted' as const),
     ...overrides,
   } as MockDeps;
@@ -162,15 +162,28 @@ describe('claimConversationInSessionWith', () => {
 
   describe('lifecycle state never refuses a permitted claim (issue #2335)', () => {
     it('admits into an ENDED workspace', async () => {
-      deps.findSession.mockResolvedValue({ driveId: 'drive-1', endedAt: new Date() });
+      deps.findSession.mockResolvedValue({ driveId: 'drive-1', endedAt: new Date(), hostsAgentsFromAnyDrive: false });
       expect(await claimConversationInSessionWith(deps, input)).toBe('claimed');
       expect(deps.admitConversation).toHaveBeenCalled();
     });
 
     it('exempts a GLOBAL workspace from the cross-drive rule', async () => {
-      deps.findSession.mockResolvedValue({ driveId: null, endedAt: null });
+      deps.findSession.mockResolvedValue({ driveId: null, endedAt: null, hostsAgentsFromAnyDrive: true });
       deps.findAgentDriveId.mockResolvedValue('drive-9');
       expect(await claimConversationInSessionWith(deps, input)).toBe('claimed');
+    });
+
+    it("exempts a global session in its owner's Home drive from the cross-drive rule (IMG-5.1)", async () => {
+      deps.findSession.mockResolvedValue({ driveId: 'home-1', endedAt: null, hostsAgentsFromAnyDrive: true });
+      deps.findAgentDriveId.mockResolvedValue('drive-9');
+      expect(await claimConversationInSessionWith(deps, input)).toBe('claimed');
+    });
+
+    it('keeps a drive-scoped session strict — another drive\'s agent is cross_drive_denied', async () => {
+      deps.findSession.mockResolvedValue({ driveId: 'drive-1', endedAt: null, hostsAgentsFromAnyDrive: false });
+      deps.findAgentDriveId.mockResolvedValue('drive-9');
+      expect(await claimConversationInSessionWith(deps, input)).toBe('cross_drive_denied');
+      expect(deps.admitConversation).not.toHaveBeenCalled();
     });
 
     it('needs no agent at all for a global thread', async () => {

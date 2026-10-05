@@ -68,7 +68,7 @@ function makeDeps(overrides: Partial<Record<keyof MockDeps, unknown>> = {}): Moc
     findConversationIn: vi.fn(async () => ({ userId: OWNER, type: 'page', contextId: AGENT })),
     findWorkspaceOfConversation: vi.fn(async () => null),
     findAgentDriveId: vi.fn(async () => 'drive-1'),
-    findSession: vi.fn(async () => ({ driveId: 'drive-1', endedAt: null })),
+    findSession: vi.fn(async () => ({ driveId: 'drive-1', endedAt: null, hostsAgentsFromAnyDrive: false })),
     admitConversation: fakeAdmit(),
     ...overrides,
   } as MockDeps;
@@ -165,7 +165,7 @@ describe('the gates that refuse before a transaction is opened', () => {
   });
 
   it('admits into an ENDED workspace — lifecycle state never refuses a permitted create', async () => {
-    deps.findSession.mockResolvedValue({ driveId: 'drive-1', endedAt: new Date() });
+    deps.findSession.mockResolvedValue({ driveId: 'drive-1', endedAt: new Date(), hostsAgentsFromAnyDrive: false });
     await expect(createConversationInSessionWith(deps, input)).resolves.toBeUndefined();
   });
 
@@ -188,7 +188,14 @@ describe('the gates that refuse before a transaction is opened', () => {
   });
 
   it('exempts a GLOBAL workspace from the cross-drive rule', async () => {
-    deps.findSession.mockResolvedValue({ driveId: null, endedAt: null });
+    deps.findSession.mockResolvedValue({ driveId: null, endedAt: null, hostsAgentsFromAnyDrive: true });
+    deps.findAgentDriveId.mockResolvedValue('drive-9');
+
+    await expect(createConversationInSessionWith(deps, input)).resolves.toBeUndefined();
+  });
+
+  it("exempts a global session in its owner's Home drive from the cross-drive rule (IMG-5.1)", async () => {
+    deps.findSession.mockResolvedValue({ driveId: 'home-1', endedAt: null, hostsAgentsFromAnyDrive: true });
     deps.findAgentDriveId.mockResolvedValue('drive-9');
 
     await expect(createConversationInSessionWith(deps, input)).resolves.toBeUndefined();
