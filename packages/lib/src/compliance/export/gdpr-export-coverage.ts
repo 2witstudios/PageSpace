@@ -94,6 +94,8 @@ export const EXPORTED_TABLES: Readonly<Record<string, ExportCategory>> = {
   user_automation_preferences: 'settings',
   user_toast_notification_preferences: 'settings',
   email_notification_preferences: 'settings',
+  // The subject's own per-drive Imago access choices (IMG-4.6a).
+  imago_drive_access: 'settings',
   // Added with this guard — the omission that motivated it.
   agent_workspaces: 'agentWorkspaces',
   // L2·G2 agent accounts: the subject's own accounts (metadata only) and the decisions they gave.

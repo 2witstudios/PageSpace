@@ -95,7 +95,7 @@ const mockUserData = {
   sessions: [],
   notifications: [],
   displayPreferences: [],
-  settings: { hotkeys: [], automation: null, toastNotifications: null, emailNotifications: [] },
+  settings: { hotkeys: [], automation: null, toastNotifications: null, emailNotifications: [], imagoDriveAccess: [] },
   personalization: null,
   personalizationCandidates: [],
   // The categories the "Agent-Session Single Source of Truth" epic added. They
