@@ -4,6 +4,8 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { ImagoSWRProvider } from '@/api/swr-provider';
+import { RealtimeProvider } from '@/realtime/realtime-provider';
+import { fakeRealtime } from '@/ui/test-support/fake-realtime';
 import { fakeWeb, type FakeRoute } from '@/ui/test-support/fake-web';
 import { channelMessage } from '../message-model/fixtures';
 import type { ChannelMessageResponse } from '../message-model/post';
@@ -69,13 +71,16 @@ const Probe = ({ seen, pageId }: { seen: Seen; pageId: string }) => {
 
 const show = (routes: Record<string, FakeRoute>, pageId = 'c1', strict = false) => {
   const web = fakeWeb(routes);
+  const rt = fakeRealtime();
   const seen: Seen = {};
   const root = createRoot(document.createElement('div'));
   roots.push(root);
   const render = (id: string) => {
     const tree = (
       <ImagoSWRProvider client={web.client}>
-        <Probe seen={seen} pageId={id} />
+        <RealtimeProvider client={rt.client}>
+          <Probe seen={seen} pageId={id} />
+        </RealtimeProvider>
       </ImagoSWRProvider>
     );
     act(() => {

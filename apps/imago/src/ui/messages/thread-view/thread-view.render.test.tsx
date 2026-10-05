@@ -29,6 +29,7 @@ const props = (overrides: Partial<ThreadViewRenderProps> = {}): ThreadViewRender
   items: [],
   older: 'none',
   loadOlder: () => {},
+  composer: { draft: '', error: null, typeDraft: () => {}, send: () => {} },
   ...overrides,
 });
 
@@ -215,7 +216,7 @@ describe('renderThreadView()', () => {
     const loadOlder = vi.fn();
     const items: PostItem[] = [{ kind: 'post', id: 'a', post: post('a'), lead: true }];
     const buttons = (['idle', 'loading', 'error', 'none'] as const).map((older) => {
-      const button = dom({ items, older }).querySelector('button');
+      const button = dom({ items, older }).querySelector('button:not([type="submit"])');
       return button === null ? null : [text(button), button.hasAttribute('disabled')];
     });
     const element = findElement<{ onClick?: () => void }>(renderThreadView(props({ items, older: 'idle', loadOlder })), (node) => node.type === 'button');
@@ -232,6 +233,40 @@ describe('renderThreadView()', () => {
           null,
         ],
         1,
+      ],
+    });
+  });
+});
+
+describe('renderThreadView() sending', () => {
+  test('the composer', () => {
+    const shown = (['loading', 'error', 'ready'] as const).map(
+      (status) => dom({ status }).querySelector('textarea')?.getAttribute('aria-label') ?? null,
+    );
+    assert({
+      given: 'the thread loading, failing, and loaded (with or without posts)',
+      should: 'offer the composer, named for the channel, only once loaded',
+      actual: shown,
+      expected: [null, null, 'Message # launch'],
+    });
+  });
+
+  test('a post still sending', () => {
+    const items: PostItem[] = [
+      { kind: 'post', id: 'a', post: post('a'), lead: true },
+      { kind: 'post', id: 'temp-n1', post: post('temp-n1', { authorKey: 'u1', pending: true }), lead: true },
+    ];
+    const [stored, sending] = [...dom({ items }).querySelectorAll('ol > li')];
+    assert({
+      given: 'a stored post and the viewer’s post not yet stored',
+      should: 'mark only the sending one busy and fade it',
+      actual: [
+        [stored?.getAttribute('aria-busy'), stored?.hasAttribute('data-pending')],
+        [sending?.getAttribute('aria-busy'), sending?.hasAttribute('data-pending'), sending?.className],
+      ],
+      expected: [
+        [null, false],
+        ['true', true, postClass({ lead: true, mentioned: false, pending: true })],
       ],
     });
   });

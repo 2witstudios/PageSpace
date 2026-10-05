@@ -4,7 +4,7 @@ import { afterEach, describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { ImagoSWRProvider } from '@/api/swr-provider';
 import { RealtimeProvider } from '@/realtime/realtime-provider';
-import { click, mount, unmountAll } from '@/ui/test-support/dom';
+import { click, mount, press, typeInto, unmountAll } from '@/ui/test-support/dom';
 import { fakeRealtime } from '@/ui/test-support/fake-realtime';
 import { fakeWeb, type FakeRoute } from '@/ui/test-support/fake-web';
 import { channelMessage, channelReaction, inboxChannel } from '../message-model/fixtures';
@@ -84,6 +84,10 @@ const show = () => {
   return { web, container };
 };
 
+/** "Load earlier posts" and its loading and retry states; the composer's Send is the other button. */
+const olderButton = (container: HTMLElement): HTMLButtonElement | null =>
+  [...container.querySelectorAll('button')].find((button) => button.textContent?.includes('earlier posts')) ?? null;
+
 /** Each row: a divider's label, or `lead|follow:<author>:<text>`. */
 const rows = (container: HTMLElement) =>
   [...container.querySelectorAll('ol > li')].map((row) =>
@@ -143,9 +147,9 @@ describe('ChannelThread', () => {
     await settle(() => {
       if (container.querySelectorAll('ol > li').length === 0) throw new Error('posts not loaded');
     });
-    click(container.querySelector('button') as HTMLButtonElement);
+    click(olderButton(container) as HTMLButtonElement);
     await settle(() => {
-      if (container.querySelector('button') !== null) throw new Error('older not loaded');
+      if (olderButton(container) !== null) throw new Error('older not loaded');
     });
 
     assert({
@@ -194,9 +198,9 @@ describe('ChannelThread', () => {
   test('earlier posts', async () => {
     const { container, web } = show();
     await settle(() => {
-      if (container.querySelector('button') === null) throw new Error('not loaded');
+      if (olderButton(container) === null) throw new Error('not loaded');
     });
-    click(container.querySelector('button') as HTMLButtonElement);
+    click(olderButton(container) as HTMLButtonElement);
     await settle(() => {
       if (!rows(container).includes('lead:Grace Hopper:post m1')) throw new Error('older not loaded');
     });
@@ -204,8 +208,193 @@ describe('ChannelThread', () => {
     assert({
       given: 'earlier posts loaded with a later watermark in their answer',
       should: 'put them first under their own day, keep New where the channel opened with it, and offer no more',
-      actual: [rows(container).slice(0, 3), rows(container).includes('—New—'), container.querySelector('button'), web.count(OLDER)],
+      actual: [rows(container).slice(0, 3), rows(container).includes('—New—'), olderButton(container), web.count(OLDER)],
       expected: [['—Oct 1—', 'lead:Grace Hopper:post m1', '—Yesterday—'], true, null, 1],
+    });
+  });
+});
+
+const SEND = `POST ${channelPaths.send('c1')}`;
+
+/** A route answer the test releases when it chooses, to order the POST against the socket echo. */
+const deferred = () => {
+  let release: (response: Response) => void = () => {};
+  const answer = new Promise<Response>((resolve) => {
+    release = resolve;
+  });
+  return { answer, release };
+};
+
+/** The viewer's post as apps/web stores and broadcasts it, nonce echoed. */
+const stored = (nonce: unknown, content: string) => ({
+  ...channelMessage('m9', { createdAt: '2026-10-05T12:00:01.000Z', user: ada, userId: 'u1', content }),
+  clientNonce: nonce,
+});
+
+const showLive = (extra: Record<string, FakeRoute> = {}) => {
+  const web = fakeWeb({ ...routes(), ...extra });
+  const rt = fakeRealtime();
+  const container = mount(
+    <ImagoSWRProvider client={web.client}>
+      <RealtimeProvider client={rt.client}>
+        <ChannelThread driveId="d1" pageId="c1" viewerId="u1" now={() => new Date('2026-10-05T12:00:00.000Z')} markReadDelayMs={20} />
+      </RealtimeProvider>
+    </ImagoSWRProvider>,
+  );
+  const field = () => container.querySelector('textarea') as HTMLTextAreaElement;
+  return { web, rt, container, field };
+};
+
+const loaded = (container: HTMLElement) =>
+  settle(() => {
+    if (container.querySelectorAll('ol > li').length === 0) throw new Error('posts not loaded');
+  });
+
+/** The rows after the loaded page's, with `(sending)` on a post not yet confirmed. */
+const tail = (container: HTMLElement) =>
+  [...container.querySelectorAll('ol > li')]
+    .slice(7)
+    .map((row, index) => `${rows(container)[7 + index]}${row.hasAttribute('data-pending') ? ' (sending)' : ''}`);
+
+const sentNonce = (web: ReturnType<typeof fakeWeb>): unknown =>
+  (web.writes().find((request) => request.url === channelPaths.send('c1'))?.body as { clientNonce?: unknown } | undefined)
+    ?.clientNonce;
+
+describe('ChannelThread sending and receiving', () => {
+  test('sending: the response first, then the socket echo', async () => {
+    const post = deferred();
+    const { web, rt, container, field } = showLive({ [SEND]: () => post.answer });
+    await loaded(container);
+    typeInto(field(), 'ship it @[Grace Hopper](u2:user)');
+    press(field(), 'Enter');
+    await settle(() => {
+      if (web.count(SEND) === 0) throw new Error('not sent');
+    });
+    const optimistic = tail(container);
+    const draftAfterSend = field().value;
+    const nonce = sentNonce(web);
+
+    post.release(Response.json(stored(nonce, 'ship it @[Grace Hopper](u2:user)'), { status: 201 }));
+    await settle(() => {
+      if (container.querySelector('[data-pending]')) throw new Error('not confirmed');
+    });
+    const confirmed = tail(container);
+    rt.emit('new_message', stored(nonce, 'ship it @[Grace Hopper](u2:user)'));
+
+    assert({
+      given: 'a post typed with a stored-format mention and sent with Enter, the POST answering before the broadcast',
+      should:
+        'POST it with the CSRF token and a nonce, show it at once as sending with the draft cleared, swap in the server copy with its mention, and not duplicate it on the echo',
+      actual: [
+        web.writes().filter((request) => request.url === channelPaths.send('c1')),
+        typeof nonce === 'string' && nonce.length > 0,
+        optimistic,
+        draftAfterSend,
+        confirmed,
+        tail(container),
+        container.querySelector('ol > li:last-child [data-mention="user"]')?.textContent,
+      ],
+      expected: [
+        [
+          {
+            method: 'POST',
+            url: '/api/channels/c1/messages',
+            csrf: 'tok-1',
+            body: { content: 'ship it @[Grace Hopper](u2:user)', clientNonce: nonce },
+          },
+        ],
+        true,
+        ['lead:Ada Lovelace:ship it @Grace Hopper (sending)'],
+        '',
+        ['lead:Ada Lovelace:ship it @Grace Hopper'],
+        ['lead:Ada Lovelace:ship it @Grace Hopper'],
+        '@Grace Hopper',
+      ],
+    });
+  });
+
+  test('sending: the socket echo first, then the response', async () => {
+    const post = deferred();
+    const { web, rt, container, field } = showLive({ [SEND]: () => post.answer });
+    await loaded(container);
+    typeInto(field(), 'echo wins');
+    press(field(), 'Enter');
+    await settle(() => {
+      if (web.count(SEND) === 0) throw new Error('not sent');
+    });
+    const nonce = sentNonce(web);
+    rt.emit('new_message', stored(nonce, 'echo wins'));
+    const echoed = tail(container);
+    post.release(Response.json(stored(nonce, 'echo wins'), { status: 201 }));
+    await settle(() => {
+      if (web.requests.length === 0) throw new Error('never');
+    });
+    await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+
+    assert({
+      given: 'the broadcast of the viewer’s post landing before its POST resolves',
+      should: 'confirm the post on the echo and ignore the late response',
+      actual: [echoed, tail(container)],
+      expected: [['lead:Ada Lovelace:echo wins'], ['lead:Ada Lovelace:echo wins']],
+    });
+  });
+
+  test('a failed send', async () => {
+    const { container, field } = showLive({
+      [SEND]: () => Response.json({ error: 'You need edit permission to send messages in this channel' }, { status: 403 }),
+    });
+    await loaded(container);
+    typeInto(field(), 'not allowed');
+    press(field(), 'Enter');
+    await settle(() => {
+      if (!container.querySelector('[role="alert"]')) throw new Error('no error yet');
+    });
+
+    assert({
+      given: 'apps/web refusing the post',
+      should: 'take the sending post back out, put the text back in the composer and say it was not sent',
+      actual: [tail(container), field().value, container.querySelector('[role="alert"]')?.textContent],
+      expected: [[], 'not allowed', 'Could not send your post. You need edit permission to send messages in this channel'],
+    });
+  });
+
+  test('posts from others arrive live', async () => {
+    const { web, rt, container } = showLive();
+    await loaded(container);
+    await settle(() => {
+      if (web.count(READ) === 0) throw new Error('not marked read');
+    });
+    const socket = rt.live()[0];
+    const joins = socket?.emitted.filter(([event]) => event === 'join_channel');
+
+    const live = channelMessage('m10', { createdAt: '2026-10-05T12:00:05.000Z', content: 'hello from Grace', user: grace, userId: 'u2' });
+    rt.emit('new_message', live);
+    rt.emit('new_message', live);
+    rt.emit('new_message', channelMessage('m11', { pageId: 'c2', content: 'other channel' }));
+    rt.emit('new_message', channelMessage('m12', { parentId: 'm5', content: 'in a thread', createdAt: '2026-10-05T12:00:06.000Z' }));
+    await settle(() => {
+      if (web.count(READ) < 2) throw new Error('not marked read again');
+    });
+    const shown = tail(container);
+    rt.emit('connect');
+    unmountAll();
+
+    assert({
+      given: 'the channel open, then another member’s post broadcast twice, another channel’s post, a thread reply, a reconnect and leaving',
+      should:
+        'join the channel’s room, show the post once, ignore the rest, mark the channel read again, rejoin after the reconnect and leave the room on the way out',
+      actual: [
+        joins,
+        shown,
+        web.count(READ),
+        socket?.emitted.map(([event, pageId]) => `${String(event)} ${String(pageId)}`),
+      ],
+      expected: [
+        [['join_channel', 'c1']],
+        ['lead:Grace Hopper:hello from Grace'],
+        2,
+        ['join_channel c1', 'join_channel c1', 'leave_channel c1'],
+      ],
     });
   });
 });

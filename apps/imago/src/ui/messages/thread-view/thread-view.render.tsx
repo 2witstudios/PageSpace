@@ -6,6 +6,7 @@ import { formatTime } from '../../time/time';
 import type { Post, PostReaction } from '../message-model/post';
 import type { PostItem } from '../post-groups/post-groups';
 import { mentionsViewer, postParts } from '../post-text/post-text';
+import { renderPostComposer, type PostComposerRenderProps } from '../post-composer/post-composer.render';
 import {
   dividerClass,
   dividerLabelClass,
@@ -36,6 +37,8 @@ export type ThreadViewRenderProps = {
   readonly older: 'none' | 'idle' | 'loading' | 'error';
   /** Void action: loads the next older page. */
   readonly loadOlder: () => void;
+  /** The post composer, shown once the channel has loaded. */
+  readonly composer: Omit<PostComposerRenderProps, 'label'>;
 };
 
 /* Text stays text: React escapes every run, and only the stored
@@ -81,7 +84,12 @@ const gutter = (post: Post, lead: boolean): ReactNode =>
   );
 
 const renderPost = (post: Post, lead: boolean, viewerId: string): ReactNode => (
-  <li key={post.id} className={postClass({ lead, mentioned: mentionsViewer(post.text, viewerId) })}>
+  <li
+    key={post.id}
+    className={postClass({ lead, mentioned: mentionsViewer(post.text, viewerId), pending: post.pending === true })}
+    aria-busy={post.pending ? true : undefined}
+    data-pending={post.pending ? '' : undefined}
+  >
     {gutter(post, lead)}
     <div className="min-w-0 flex-1">
       {lead ? (
@@ -168,11 +176,12 @@ const note = (props: ThreadViewRenderProps): ReactNode => {
 
 /**
  * A channel opened as the object: its flat posts oldest first, grouped and
- * divided by day, with where unread began. Mentions and reactions show but
- * do nothing; sending arrives with IMG-8.4.
+ * divided by day, with where unread began, and the composer below. Mentions
+ * and reactions show but do nothing. The viewer's posts not yet stored are
+ * marked busy until apps/web answers.
  */
 export function renderThreadView(props: ThreadViewRenderProps): ReactNode {
-  const { name, viewerId, status, items, older, loadOlder } = props;
+  const { name, viewerId, status, items, older, loadOlder, composer } = props;
   return (
     <section className={threadClass} aria-label={`# ${name}`}>
       <h1 className={threadTitleClass}>
@@ -187,6 +196,7 @@ export function renderThreadView(props: ThreadViewRenderProps): ReactNode {
       ) : (
         note(props)
       )}
+      {status === 'ready' ? renderPostComposer({ ...composer, label: `Message # ${name}` }) : null}
     </section>
   );
 }

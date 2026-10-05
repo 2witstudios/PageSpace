@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useDriveChannels } from '../use-messages/use-messages';
 import { useChannelThread } from '../channel-thread/use-channel-thread';
+import { threadPosts } from '../channel-thread/channel-thread-state';
 import { groupPosts } from '../post-groups/post-groups';
 import { todayOf } from '../../time/time';
 import { renderThreadView } from './thread-view.render';
@@ -19,16 +20,26 @@ export type ChannelThreadProps = {
 
 const systemNow = () => new Date();
 
+/** Each channel's unsent text and last send error, for as long as the thread is mounted. */
+type Drafts = Readonly<Record<string, { readonly draft: string; readonly error: string | null }>>;
+
+const blank = { draft: '', error: null };
+
 /**
  * The channel at /imago/[driveId]/messages/[pageId], in the object slot: its
- * posts from /api/channels/[pageId]/messages, read-only, marked read once
- * viewed. Its name comes from the drive's channel list the messages pane has
- * already loaded.
+ * posts from /api/channels/[pageId]/messages, marked read once viewed, with a
+ * composer that posts optimistically and new posts arriving live. Its name
+ * comes from the drive's channel list the messages pane has already loaded.
  */
 export function ChannelThread({ driveId, pageId, viewerId, now = systemNow, markReadDelayMs }: ChannelThreadProps) {
   const { channels } = useDriveChannels(driveId);
-  const { state, loadOlder } = useChannelThread({ pageId, viewerId, markReadDelayMs });
+  const { state, loadOlder, send } = useChannelThread({ pageId, viewerId, markReadDelayMs, now });
   const name = channels?.find((channel) => channel.id === pageId)?.name ?? 'Channel';
+
+  const [drafts, setDrafts] = useState<Drafts>({});
+  const { draft, error } = drafts[pageId] ?? blank;
+  const keep = (channel: string, next: { readonly draft: string; readonly error: string | null }) =>
+    setDrafts((all) => ({ ...all, [channel]: next }));
 
   // Opening a channel lands where unread begins, else at its newest post;
   // once per open, so loading earlier posts never jumps the view.
@@ -42,15 +53,41 @@ export function ChannelThread({ driveId, pageId, viewerId, now = systemNow, mark
     else thread.current?.querySelector('ol > li:last-child')?.scrollIntoView?.({ block: 'end' });
   }, [state.status, pageId]);
 
+  // The viewer's own post goes on screen at the foot of the thread.
+  const sending = state.sending.length;
+  useEffect(() => {
+    if (sending > 0) thread.current?.querySelector('ol > li:last-child')?.scrollIntoView?.({ block: 'end' });
+  }, [sending]);
+
+  const sendDraft = () => {
+    const channel = pageId;
+    const content = draft;
+    keep(channel, blank);
+    void send(content).then((result) => {
+      // Not sent: the text comes back, unless the viewer has typed anew.
+      if (!result.sent)
+        setDrafts((all) => {
+          const current = all[channel] ?? blank;
+          return { ...all, [channel]: { draft: current.draft === '' ? content : current.draft, error: result.error } };
+        });
+    });
+  };
+
   return (
     <div ref={thread}>
       {renderThreadView({
         name,
         viewerId,
         status: state.status,
-        items: groupPosts(state.posts, { today: todayOf(now()), lastReadAt: state.lastReadAt }),
+        items: groupPosts(threadPosts(state), { today: todayOf(now()), lastReadAt: state.lastReadAt }),
         older: state.nextCursor === null ? 'none' : state.older,
         loadOlder,
+        composer: {
+          draft,
+          error,
+          typeDraft: (next) => keep(pageId, { draft: next, error }),
+          send: sendDraft,
+        },
       })}
     </div>
   );

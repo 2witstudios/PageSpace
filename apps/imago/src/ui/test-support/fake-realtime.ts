@@ -10,6 +10,8 @@ type Listener = (...args: unknown[]) => void;
 export type FakeSocket = RealtimeSocket & {
   live: boolean;
   listeners: Map<string, Set<Listener>>;
+  /** Every event this tab sent to realtime, with its arguments. */
+  emitted: unknown[][];
 };
 
 /**
@@ -23,11 +25,16 @@ export const fakeRealtime = () => {
     fetchToken: () => Promise.resolve('ps_sock_1'),
     connectSocket: () => {
       const listeners = new Map<string, Set<Listener>>();
+      const emitted: unknown[][] = [];
       const socket: FakeSocket = {
         live: true,
         listeners,
+        emitted,
         connected: true,
-        emit: () => socket,
+        emit: (event, ...args) => {
+          emitted.push([event, ...args]);
+          return socket;
+        },
         on: (event, listener) => {
           if (!listeners.has(event)) listeners.set(event, new Set());
           listeners.get(event)?.add(listener);

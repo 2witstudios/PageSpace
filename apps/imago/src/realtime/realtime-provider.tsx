@@ -84,3 +84,32 @@ export function useDriveRoom(driveId: string | null): void {
     };
   }, [realtime, driveId]);
 }
+
+/** realtime's events for a channel's room (apps/realtime/src/index.ts). */
+export const JOIN_CHANNEL = 'join_channel';
+export const LEAVE_CHANNEL = 'leave_channel';
+
+/**
+ * Keeps this tab in the room of the channel page `pageId` while mounted,
+ * where its posts are broadcast as `new_message`: joins once connected and
+ * again after every reconnect, and leaves when the channel closes or changes,
+ * as classic ChannelView does. Realtime checks the viewer may see it.
+ */
+export function useChannelRoom(pageId: string): void {
+  const realtime = useContext(RealtimeContext);
+  if (!realtime) throw new Error('useChannelRoom must be used inside <RealtimeProvider>');
+
+  useEffect(() => {
+    const socket = realtime.socket();
+    const join = () => {
+      socket.emit(JOIN_CHANNEL, pageId);
+    };
+    if (socket.connected) join();
+    socket.on('connect', join);
+    return () => {
+      socket.off('connect', join);
+      // A dropped socket is in no room; a queued leave would only reach the next one.
+      if (socket.connected) socket.emit(LEAVE_CHANNEL, pageId);
+    };
+  }, [realtime, pageId]);
+}
