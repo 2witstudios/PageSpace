@@ -84,18 +84,21 @@ describe.skipIf(!url)('withAdvisoryLock when the lock backend is terminated mid-
     const pids: number[] = [];
     const lockPool = trackingPool(pids);
 
-    const result = await withAdvisoryLock(lockPool, lockKey, async () => {
+    let abortedAfterDrop = false;
+    const result = await withAdvisoryLock(lockPool, lockKey, async (signal) => {
       const [lockPid] = pids;
       if (lockPid === undefined) throw new Error('lock connection pid was not recorded');
+      expect(signal.aborted).toBe(false);
       await terminateBackend(lockPid);
+      abortedAfterDrop = signal.aborted;
       return 'fn-finished';
     });
 
     // No unhandled 'error' from the dead lock connection reached the process.
     expect(uncaught).toEqual([]);
-    // fn ran to completion before the drop was noticed, so its result is still reported; the lost
-    // lock is logged (see advisory-lock.ts) rather than turned into a rejection of finished work.
-    expect(result).toEqual({ outcome: 'acquired', result: 'fn-finished' });
+    // fn was told the moment the drop arrived, and the caller sees the run lost its lock.
+    expect(abortedAfterDrop).toBe(true);
+    expect(result).toEqual({ outcome: 'acquired', result: 'fn-finished', lockLost: true });
 
     // The pool destroyed the dead connection rather than pooling it: plain queries still work…
     const ping = await pool.query<{ one: number }>('SELECT 1 AS one');
@@ -103,7 +106,7 @@ describe.skipIf(!url)('withAdvisoryLock when the lock backend is terminated mid-
     // …and the same key is free again (Postgres dropped the session lock with the backend), taken
     // on a DIFFERENT, live backend.
     const again = await withAdvisoryLock(lockPool, lockKey, async () => 'second-run');
-    expect(again).toEqual({ outcome: 'acquired', result: 'second-run' });
+    expect(again).toEqual({ outcome: 'acquired', result: 'second-run', lockLost: false });
     expect(pids).toHaveLength(2);
     expect(pids[1]).not.toBe(pids[0]);
     expect(uncaught).toEqual([]);
@@ -125,7 +128,33 @@ describe.skipIf(!url)('withAdvisoryLock when the lock backend is terminated mid-
 
     expect(uncaught).toEqual([]);
     const again = await withAdvisoryLock(lockPool, lockKey, async () => 'recovered');
-    expect(again).toEqual({ outcome: 'acquired', result: 'recovered' });
+    expect(again).toEqual({ outcome: 'acquired', result: 'recovered', lockLost: false });
+    expect(uncaught).toEqual([]);
+  });
+
+  it('given the backend is terminated while fn runs, a second holder can acquire the key — and the first fn\'s signal is already aborted by then', async () => {
+    const lockKey = uniqueLockKey('overlap');
+    const pids: number[] = [];
+    const lockPool = trackingPool(pids);
+    let second: Awaited<ReturnType<typeof withAdvisoryLock<string>>> | undefined;
+    let firstAbortedWhenSecondRan: boolean | undefined;
+
+    const first = await withAdvisoryLock(lockPool, lockKey, async (signal) => {
+      const [lockPid] = pids;
+      if (lockPid === undefined) throw new Error('lock connection pid was not recorded');
+      await terminateBackend(lockPid);
+      // Exclusion is gone: Postgres released the session lock with the backend.
+      second = await withAdvisoryLock(lockPool, lockKey, async () => {
+        firstAbortedWhenSecondRan = signal.aborted;
+        return 'second';
+      });
+      return 'first';
+    });
+
+    expect(second).toEqual({ outcome: 'acquired', result: 'second', lockLost: false });
+    // Any work the first holder guards with `signal.aborted` would have stopped before this point.
+    expect(firstAbortedWhenSecondRan).toBe(true);
+    expect(first).toEqual({ outcome: 'acquired', result: 'first', lockLost: true });
     expect(uncaught).toEqual([]);
   });
 });

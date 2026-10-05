@@ -51,9 +51,46 @@ export interface AdvisoryLockPool {
   connect(): Promise<AdvisoryLockClient>;
 }
 
+/**
+ * Thrown by {@link throwIfLockLost} when work that must run under the lock is about to start after
+ * the lock connection died. Carries the connection's error as `connectionError`.
+ */
+export class AdvisoryLockLostError extends Error {
+  /** The lock connection's own error — the reason its AbortSignal was aborted. */
+  readonly connectionError: unknown;
+
+  constructor(work: string, connectionError: unknown) {
+    super(`advisory lock lost before ${work} — skipped; the next run under a fresh lock redoes it`);
+    this.name = 'AdvisoryLockLostError';
+    this.connectionError = connectionError;
+  }
+}
+
+/**
+ * The guard for `fn`s that charge or write non-idempotently under {@link withAdvisoryLock}: call it
+ * immediately before each such step. Once the lock connection has died another holder may be
+ * running the same work, so the step must not run. `signal` is optional so code that also runs
+ * outside the lock (tests, already-serialized callers) can pass nothing.
+ */
+export function throwIfLockLost(signal: AbortSignal | undefined, work: string): void {
+  if (signal?.aborted) throw new AdvisoryLockLostError(work, signal.reason);
+}
+
 export type WithAdvisoryLockResult<T> =
   | { outcome: 'lock_busy' }
-  | { outcome: 'acquired'; result: T }
+  | {
+      outcome: 'acquired';
+      result: T;
+      /**
+       * True when the lock connection's backend died while `fn` ran. Postgres drops a session
+       * lock together with its backend, so from that moment ANOTHER holder could acquire the same
+       * key and run concurrently with the rest of `fn`. `fn` was told through its AbortSignal and
+       * should have stopped its exclusive work; this flag lets the caller count or report a run
+       * that finished without exclusion. Still `acquired` (never a rejection), because `fn`'s work
+       * up to that point really happened.
+       */
+      lockLost: boolean;
+    }
   | {
       /**
        * The lock connection itself failed — `pool.connect()` or the try-lock query threw
@@ -108,6 +145,8 @@ type HeldConnection = {
   readonly lockKey: string;
   /** The first 'error' the connection emitted while held, or null while it is healthy. */
   error(): Error | null;
+  /** Aborted (with the connection's error as its reason) the moment the connection errors. */
+  readonly signal: AbortSignal;
   /** Remove the listener; call immediately before handing the client to release(). */
   detach(): void;
   /** Detach the listener and release — destroying when handed an error or when the connection errored. Never throws. */
@@ -116,8 +155,10 @@ type HeldConnection = {
 
 function hold(client: AdvisoryLockClient, lockKey: string): HeldConnection {
   let connectionError: Error | null = null;
+  const lockLost = new AbortController();
   const onError = (error: Error) => {
     connectionError ??= error;
+    if (!lockLost.signal.aborted) lockLost.abort(error);
     console.error(
       '[withAdvisoryLock:%s] Lock connection errored while held — the session lock is gone with its backend; destroying the connection on release: %s',
       JSON.stringify(lockKey),
@@ -132,6 +173,7 @@ function hold(client: AdvisoryLockClient, lockKey: string): HeldConnection {
     client,
     lockKey,
     error: () => connectionError,
+    signal: lockLost.signal,
     detach,
     release: (destroyWithError) => {
       detach();
@@ -179,7 +221,7 @@ async function unlockAndRelease(held: HeldConnection): Promise<void> {
 export async function withAdvisoryLock<T>(
   pool: AdvisoryLockPool,
   lockKey: string,
-  fn: () => Promise<T>,
+  fn: (signal: AbortSignal) => Promise<T>,
 ): Promise<WithAdvisoryLockResult<T>> {
   let held: HeldConnection;
   try {
@@ -202,6 +244,15 @@ export async function withAdvisoryLock<T>(
     return { outcome: 'connection_error', error };
   }
 
+  // The try-lock can resolve and the socket close in the same I/O turn: the listener has then
+  // already recorded the drop, and with it the session lock is gone. Never start `fn` on a lock
+  // that no longer exists — report the connection failure instead.
+  const droppedDuringTryLock = held.error();
+  if (droppedDuringTryLock) {
+    held.release(droppedDuringTryLock);
+    return { outcome: 'connection_error', error: droppedDuringTryLock };
+  }
+
   if (!lockResult.rows[0]?.acquired) {
     held.release();
     return { outcome: 'lock_busy' };
@@ -212,14 +263,16 @@ export async function withAdvisoryLock<T>(
   // own error, unwrapped), after the lock is released either way. unlockAndRelease never
   // throws, so the finally cannot mask fn's rejection.
   //
-  // If the lock connection dies WHILE fn runs, fn's work has already happened: its result (or its
-  // own rejection) is still what the caller gets, and the lost lock is logged by `hold`. Turning
-  // finished work into a rejection would make callers retry or report failure for side effects
-  // that already landed (start-generation-exclusive relies on a successful run surfacing as
-  // `acquired`).
+  // If the lock connection dies WHILE fn runs, exclusion is gone from that moment: another holder
+  // can acquire the key and run alongside the rest of fn. `fn` receives `held.signal`, which is
+  // aborted on that first 'error'; work that must not run twice (a charge, a non-idempotent
+  // correction) checks `signal.aborted` before each step and stops, leaving the remainder to the
+  // next run under a fresh lock. The outcome stays `acquired` with `lockLost: true` — never a
+  // rejection, since what fn already did really happened (start-generation-exclusive relies on a
+  // successful run surfacing as `acquired`). A fn that rejects still rejects with its own error.
   try {
-    const result = await fn();
-    return { outcome: 'acquired', result };
+    const result = await fn(held.signal);
+    return { outcome: 'acquired', result, lockLost: held.signal.aborted };
   } finally {
     await unlockAndRelease(held);
   }

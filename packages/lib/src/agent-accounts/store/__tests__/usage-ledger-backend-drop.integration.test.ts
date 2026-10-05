@@ -25,13 +25,15 @@ let holder: Client;
 /** Probes and kills from outside the holder's transaction: pg_stat_activity is snapshotted once per transaction. */
 let admin: Client;
 let dbAvailable = false;
+/** Tags this file's pool connections, so the probe below can only ever pick (and kill) our own backend. */
+const APPLICATION_NAME = `usage-ledger-backend-drop-${process.pid}`;
 const uncaught: unknown[] = [];
 const onUncaught = (error: unknown) => {
   uncaught.push(error);
 };
 
 beforeAll(async () => {
-  pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 2 });
+  pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 2, application_name: APPLICATION_NAME });
   holder = new Client({ connectionString: process.env.DATABASE_URL });
   admin = new Client({ connectionString: process.env.DATABASE_URL });
   try {
@@ -81,7 +83,8 @@ describe('UsageLedger.reserve when its backend is terminated mid-transaction', (
       const blockedPid = await waitFor(async () => {
         const rows = await admin.query<{ pid: number }>(
           `SELECT pid FROM pg_stat_activity
-            WHERE wait_event_type = 'Lock' AND wait_event = 'advisory' AND query LIKE '%pg_advisory_xact_lock%' AND pid <> pg_backend_pid()`,
+            WHERE application_name = $1 AND wait_event_type = 'Lock' AND wait_event = 'advisory' AND query LIKE '%pg_advisory_xact_lock%'`,
+          [APPLICATION_NAME],
         );
         return rows.rows[0]?.pid ?? null;
       });

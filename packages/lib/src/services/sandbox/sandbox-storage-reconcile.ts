@@ -786,6 +786,7 @@ async function listSource<T>(
 
 export async function reconcileSandboxStorage(
   deps: ReconcileSandboxStorageDeps,
+  signal?: AbortSignal,
 ): Promise<ReconcileSandboxStorageResult> {
   // ONE drive-owner lookup per DRIVE per tick, not per row.
   //
@@ -859,7 +860,17 @@ export async function reconcileSandboxStorage(
   // because the alert picks its cause label from exactly that comparison.
   let unbillableFailed = 0;
 
-  for (const subject of subjects) {
+  // The reconcile lock is what stops two runs charging the same window from the same watermark.
+  // Once it is lost another run may already be charging: stop before the next charge or write,
+  // leaving every remaining window open for the next run to bill exactly once.
+  const stopOnLockLoss = (remaining: number): boolean => {
+    if (!signal?.aborted) return false;
+    loggers.ai.warn('Sandbox storage reconcile lost its advisory lock — stopping this run; the remaining windows are billed next run', { remaining });
+    return true;
+  };
+
+  for (const [index, subject] of subjects.entries()) {
+    if (stopOnLockLoss(subjects.length - index)) break;
     const attributionDriveId = subject.attributionDriveId;
     // Set the moment this row is known to owe something. Until then a failure
     // cannot be attributed to the billing record.
@@ -970,6 +981,9 @@ export async function reconcileSandboxStorage(
     // failed") are never conflated. `charged`/`totalCostDollars` move only on a
     // charge that PERSISTED: a resolved call is not a settled one, and treating it
     // as one is what used to close a window over spend that never reached a row.
+    // Last check before the money moves. Never between the charge and its watermark advance
+    // below: skipping that write after a charge is exactly what re-bills a window.
+    if (stopOnLockLoss(subjects.length - index)) break;
     let settle: UsageTrackingOutcome;
     try {
       settle = await deps.chargeStorage({
