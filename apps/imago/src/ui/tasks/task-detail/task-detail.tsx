@@ -1,6 +1,8 @@
 'use client';
 
 import { useState, type ReactNode } from 'react';
+import { edgeOf, renderErrorState } from '../../frame/edge-state/edge-state.render';
+import { TASK_NOT_FOUND, renderNotFound } from '../../frame/not-found/not-found.render';
 import { useUiState } from '../../store/store';
 import type { UiState } from '../../store/state';
 import { dispatch, transactions } from '../../store/transactions';
@@ -25,24 +27,29 @@ const selectExpanded = (state: UiState) => state.resources.expandedTasks;
 
 const NO_ONE = [] as const;
 
+/** A task id that names nothing the viewer can open in this drive, with the way back to its task lists. */
+export const renderTaskNotFound = (driveId: string): ReactNode =>
+  renderNotFound({ ...TASK_NOT_FOUND, homeHref: `/${encodeURIComponent(driveId)}/tasks`, linkLabel: 'Back to Tasks' });
+
 /**
  * A task's detail in the object slot. It reads and writes the very tree the
  * list's views do (one SWR entry per list, useTaskList), so every edit made
  * here shows in the Tree view and the list pane's progress as it is saved.
  */
 export function TaskDetail({ holder, pageId, hrefFor, driveId }: TaskDetailProps): ReactNode {
-  const { list: tree, error, actions } = useTaskList(holder.pageId, holder.title);
+  const { list: tree, error, actions, retry } = useTaskList(holder.pageId, holder.title);
   const { assignable } = useAssignable(driveId);
   const expandedIds = useUiState(selectExpanded);
   const [notice, setNotice] = useState<TaskNotice | null>(null);
   if (tree === undefined) {
-    return error === undefined
-      ? renderTaskDetailMessage('Loading task…', 'status')
-      : renderTaskDetailMessage('Could not load this task.', 'alert');
+    if (error === undefined) return renderTaskDetailMessage('Loading task…', 'status');
+    return edgeOf(error) === 'not-found'
+      ? renderTaskNotFound(driveId)
+      : renderErrorState({ title: 'Could not load this task', retry });
   }
   const task = locateByPage(tree, pageId);
   const found = task === undefined ? undefined : locate(tree, task.id);
-  if (found === undefined) return renderTaskDetailMessage('This task could not be found.', 'alert');
+  if (found === undefined) return renderTaskNotFound(driveId);
 
   const id = found.task.id;
   const report = (at: string) => (result: ActionResult) =>

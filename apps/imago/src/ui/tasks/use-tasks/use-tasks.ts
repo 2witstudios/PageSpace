@@ -79,10 +79,12 @@ export const useAssignable = (driveId: string) => {
 /** Where a page sits in its drive; null asks nothing. */
 export const usePageTrail = (pageId: string | null) => {
   const client = useApiClient();
-  const { data, error } = useSWR(pageId === null ? null : (['imago:page-trail', pageId] as const), ([, id]) =>
+  const { data, error, mutate } = useSWR(pageId === null ? null : (['imago:page-trail', pageId] as const), ([, id]) =>
     fetchPageTrail(client, id),
   );
-  return { trail: data, error: error as unknown };
+  /** Void action: asks the server again after a failure. */
+  const retry = useCallback(() => void mutate(), [mutate]);
+  return { trail: data, error: error as unknown, retry };
 };
 
 /**

@@ -6,6 +6,7 @@ import {
   CONVERSATION_NOT_FOUND,
   PAGE_NOT_FOUND,
   TASK_LIST_NOT_FOUND,
+  TASK_NOT_FOUND,
   renderNotFound,
 } from './not-found.render';
 
@@ -55,15 +56,16 @@ describe('renderNotFound()', () => {
 
   test('the forms each section names its objects by', () => {
     assert({
-      given: 'a page, a channel, a task list and a conversation',
+      given: 'a page, a channel, a task list, a task and a conversation',
       should: 'title each by what it is and keep one detail that never says whether it exists',
-      actual: [PAGE_NOT_FOUND, CHANNEL_NOT_FOUND, TASK_LIST_NOT_FOUND, CONVERSATION_NOT_FOUND].map(
+      actual: [PAGE_NOT_FOUND, CHANNEL_NOT_FOUND, TASK_LIST_NOT_FOUND, TASK_NOT_FOUND, CONVERSATION_NOT_FOUND].map(
         ({ title, detail }) => `${title} | ${detail}`,
       ),
       expected: [
         'Page not found | It does not exist, or you do not have access to it.',
         'Channel not found | It does not exist, or you do not have access to it.',
         'Task list not found | It does not exist, or you do not have access to it.',
+        'Task not found | It does not exist, or you do not have access to it.',
         'Conversation not found | It does not exist, or you are not part of it.',
       ],
     });

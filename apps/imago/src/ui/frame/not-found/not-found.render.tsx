@@ -47,6 +47,7 @@ const NO_ACCESS = 'It does not exist, or you do not have access to it.';
 export const PAGE_NOT_FOUND = { title: 'Page not found', detail: NO_ACCESS } as const;
 export const CHANNEL_NOT_FOUND = { title: 'Channel not found', detail: NO_ACCESS } as const;
 export const TASK_LIST_NOT_FOUND = { title: 'Task list not found', detail: NO_ACCESS } as const;
+export const TASK_NOT_FOUND = { title: 'Task not found', detail: NO_ACCESS } as const;
 export const CONVERSATION_NOT_FOUND = {
   title: 'Conversation not found',
   detail: 'It does not exist, or you are not part of it.',

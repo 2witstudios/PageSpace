@@ -16,7 +16,8 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   move around: a rail of sections, a drive switcher with your Home drive first, and an avatar menu
   with theme, "Classic PageSpace" and sign out. Messages lists a drive's channels and your direct
   messages with unread counts and opens a channel's posts to read. Tasks lists a drive's task lists
-  with progress and opens one in Tree or Focus view, where you can tick and add tasks. An empty
+  with progress and opens one in Tree or Focus view, where you can tick and add tasks, or open a
+  task to edit its title, status, priority, due date, assignees, description and subtasks. An empty
   drive, a section that fails to load and an address that names nothing you can open each get their
   own designed screen inside the frame: a note about what will show up, a "Try again" button that
   never shows the server's error text, or "not found" with a link back. Imago is a preview: chat,

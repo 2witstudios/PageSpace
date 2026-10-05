@@ -592,19 +592,45 @@ describe('TaskObject: what the id names', () => {
     });
   });
 
+  const notFound = (container: HTMLElement) => {
+    const object = container.querySelector('[data-not-found]');
+    return [object?.querySelector('h2')?.textContent, object?.querySelector('a')?.getAttribute('href'), object?.querySelector('a')?.textContent];
+  };
+
+  const failed = (container: HTMLElement) => {
+    const alert = container.querySelector('[role="alert"][data-error]');
+    return [alert?.querySelector('h2')?.textContent, alert?.querySelector('button')?.textContent, alert?.textContent?.includes('boom')];
+  };
+
   test('not a task', async () => {
     const container = mountId('doc', {
       ...server(),
       'GET /api/pages/doc/breadcrumbs': () => Response.json([{ id: 'doc', title: 'Notes', type: 'DOCUMENT', parentId: null }]),
     });
     await settle(() => {
-      if (!container.textContent?.includes('This task could not be found.')) throw new Error('not missing');
+      if (!container.querySelector('[data-not-found]')) throw new Error('not missing');
     });
     assert({
       given: 'an id that is neither a list nor a task in one',
-      should: 'say the task could not be found',
-      actual: container.querySelector('[role="alert"]')?.textContent,
-      expected: 'This task could not be found.',
+      should: 'draw the not-found object with a way back to the drive’s task lists',
+      actual: notFound(container),
+      expected: ['Task not found', '/d1/tasks', 'Back to Tasks'],
+    });
+  });
+
+  test('an id the server will not place', async () => {
+    const container = mountId('nope', {
+      ...server(),
+      'GET /api/pages/nope/breadcrumbs': () => Response.json({ error: 'Page not found' }, { status: 404 }),
+    });
+    await settle(() => {
+      if (!container.querySelector('[data-not-found]')) throw new Error('not missing');
+    });
+    assert({
+      given: 'an id whose ancestors the server answers 404 for',
+      should: 'draw the not-found object',
+      actual: notFound(container)[0],
+      expected: 'Task not found',
     });
   });
 
@@ -614,13 +640,13 @@ describe('TaskObject: what the id names', () => {
       'GET /api/pages/l1/tasks?limit=200&offset=0': () => Response.json(taskListResponse([])),
     });
     await settle(() => {
-      if (!container.textContent?.includes('This task could not be found.')) throw new Error('not missing');
+      if (!container.querySelector('[data-not-found]')) throw new Error('not missing');
     });
     assert({
       given: 'a task page its list no longer holds',
-      should: 'say the task could not be found',
-      actual: container.querySelector('[role="alert"]')?.textContent,
-      expected: 'This task could not be found.',
+      should: 'draw the not-found object',
+      actual: notFound(container),
+      expected: ['Task not found', '/d1/tasks', 'Back to Tasks'],
     });
   });
 
@@ -630,29 +656,55 @@ describe('TaskObject: what the id names', () => {
       'GET /api/pages/l1/tasks?limit=200&offset=0': () => Response.json({ error: 'boom' }, { status: 500 }),
     });
     await settle(() => {
-      if (!container.textContent?.includes('Could not load this task.')) throw new Error('no error');
+      if (!container.querySelector('[role="alert"][data-error]')) throw new Error('no error');
     });
     assert({
       given: 'the list holding the task fails to load',
-      should: 'say so',
-      actual: container.querySelector('[role="alert"]')?.textContent,
-      expected: 'Could not load this task.',
+      should: 'draw the retryable error object without the server’s text',
+      actual: failed(container),
+      expected: ['Could not load this task', 'Try again', false],
     });
   });
 
-  test('drive lists that fail to load', async () => {
-    const container = mountId('page-p', {
+  test('ancestors that fail to load', async () => {
+    const container = mountId('nope', {
       ...server(),
-      [DRIVE]: () => Response.json({ error: 'boom' }, { status: 500 }),
+      'GET /api/pages/nope/breadcrumbs': () => Response.json({ error: 'boom' }, { status: 503 }),
     });
     await settle(() => {
-      if (!container.textContent?.includes('Could not load this task.')) throw new Error('no error');
+      if (!container.querySelector('[role="alert"][data-error]')) throw new Error('no error');
     });
     assert({
-      given: 'the drive’s task lists fail to load',
-      should: 'say the task could not load rather than wait forever',
-      actual: container.querySelector('[role="alert"]')?.textContent,
-      expected: 'Could not load this task.',
+      given: 'an id whose ancestors fail to load',
+      should: 'draw the retryable error, not not-found',
+      actual: failed(container),
+      expected: ['Could not load this task', 'Try again', false],
+    });
+  });
+
+  test('drive lists that fail to load, then load', async () => {
+    let calls = 0;
+    const table = server();
+    const container = mountId('page-p', {
+      ...table,
+      [DRIVE]: (request) => {
+        calls += 1;
+        return calls === 1 ? Response.json({ error: 'boom' }, { status: 503 }) : table[DRIVE](request);
+      },
+    });
+    await settle(() => {
+      if (!container.querySelector('[role="alert"][data-error]')) throw new Error('no error');
+    });
+    const before = failed(container);
+    click(container.querySelector('[role="alert"] button') as HTMLButtonElement);
+    await settle(() => {
+      if (field<HTMLInputElement>(container, 'Title')?.value !== 'Plan launch') throw new Error('no task');
+    });
+    assert({
+      given: 'the drive’s task lists fail, then Try again',
+      should: 'draw the retryable error rather than wait forever, then the task once SWR reloads the lists',
+      actual: [before, calls],
+      expected: [['Could not load this task', 'Try again', false], 2],
     });
   });
 });
