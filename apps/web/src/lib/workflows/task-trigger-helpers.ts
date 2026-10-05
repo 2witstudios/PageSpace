@@ -104,13 +104,17 @@ export async function createTaskTriggerWorkflow(params: CreateTaskTriggerWorkflo
 
     if (existing.length > 0) {
       const workflowId = existing[0].workflowId;
+      // [D-OW-36] Editing the trigger of an owner-left workflow saves the edit but never switches it back
+      // on: only an Owner or Admin's reassignment does.
+      const [current] = await tx.select({ ownerLeftAt: workflows.ownerLeftAt }).from(workflows).where(eq(workflows.id, workflowId));
+      const ownerLeft = Boolean(current?.ownerLeftAt);
       await tx.update(workflows).set({
         agentPageId: agentTrigger.agentPageId,
         prompt: triggerPrompt,
         instructionPageId: agentTrigger.instructionPageId ?? null,
         contextPageIds,
         timezone,
-        isEnabled: true,
+        ...(ownerLeft ? {} : { isEnabled: true }),
       }).where(eq(workflows.id, workflowId));
 
       await tx.update(taskTriggers).set({
@@ -123,7 +127,7 @@ export async function createTaskTriggerWorkflow(params: CreateTaskTriggerWorkflo
         eq(taskTriggers.triggerType, triggerType),
       ));
 
-      return { workflowId, triggerId: existing[0].id };
+      return { workflowId, triggerId: existing[0].id, ownerLeft };
     } else {
       const [createdWorkflow] = await tx.insert(workflows).values({
         driveId,
@@ -146,13 +150,14 @@ export async function createTaskTriggerWorkflow(params: CreateTaskTriggerWorkflo
         isEnabled: true,
       }).returning({ id: taskTriggers.id });
 
-      return { workflowId: createdWorkflow.id, triggerId: createdTrigger.id };
+      return { workflowId: createdWorkflow.id, triggerId: createdTrigger.id, ownerLeft: false };
     }
   });
 
   await recomputeTaskTriggerMetadata(database, taskId, taskMetadata);
 
-  return { ...result, triggerType, nextRunAt, isEnabled: true };
+  const { ownerLeft, ...ids } = result;
+  return { ...ids, triggerType, nextRunAt, isEnabled: !ownerLeft };
 }
 
 /**

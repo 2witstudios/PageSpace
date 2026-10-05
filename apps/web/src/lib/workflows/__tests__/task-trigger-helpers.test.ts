@@ -483,6 +483,21 @@ describe('task-trigger-helpers', () => {
       expect(captured.txUpdate).toHaveBeenCalledTimes(2);
     });
 
+    it('SPEND-6 (partial) re-saving the trigger of an owner-left workflow keeps the workflow switched off and says so ([D-OW-36], review #2831 P3-1)', async () => {
+      const captured = makeTxMock({ existingTriggers: [{ workflowId: 'wf-old', id: 'trg-old' }] });
+      const where = vi.fn()
+        .mockResolvedValueOnce([{ workflowId: 'wf-old', id: 'trg-old' }])
+        .mockResolvedValueOnce([{ ownerLeftAt: new Date() }]);
+      captured.txSelect.mockImplementation(() => ({ from: () => ({ where }) }));
+      mockTransaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) => cb(captured.tx));
+
+      const result = await createTaskTriggerWorkflow(validParams);
+
+      const workflowSet = (captured.txUpdateSet.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      expect(workflowSet).not.toHaveProperty('isEnabled');
+      expect(result.isEnabled).toBe(false);
+    });
+
     it('given due_date trigger without dueDate, should throw', async () => {
       await expect(createTaskTriggerWorkflow({
         ...validParams,
