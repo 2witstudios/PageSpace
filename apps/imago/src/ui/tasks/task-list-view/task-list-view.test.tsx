@@ -6,7 +6,7 @@ import { ImagoSWRProvider } from '@/api/swr-provider';
 import { click, mount, press, typeInto, unmountAll } from '../../test-support/dom';
 import { createInitialState } from '../../store/state';
 import { setUiState } from '../../store/store';
-import { fakeWeb, type FakeRoute } from '../task-api/fake-web';
+import { fakeWeb, type FakeRoute } from '@/ui/test-support/fake-web';
 import { taskItem, taskListResponse } from '../task-model/fixtures';
 import { TaskListView } from './task-list-view';
 
