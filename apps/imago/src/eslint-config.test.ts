@@ -1,7 +1,7 @@
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ESLint } from 'eslint';
-import { describe, test } from 'vitest';
+import { beforeAll, describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
 
 const cwd = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -20,9 +20,23 @@ const lintMarkup = (classes: string) =>
     'src/ui/probe.tsx',
   );
 
+// The first lintText through better-tailwindcss loads the Tailwind design
+// system from globals.css: ~2.6s locally, ~16s on a CI runner, past vitest's
+// 5s test timeout. Pay that once here, through both the markup and the
+// class-module config, so each test times only its own lint.
+const WARM_UP_TIMEOUT_MS = 60_000;
+
 // Token-locked Tailwind lint rules (ADR 0028 in myimago, ported for IMG-2.1).
 // Every test is a negative control for one rule except the first.
 describe('apps/imago ESLint: token-locked Tailwind', () => {
+  beforeAll(async () => {
+    await lintMarkup('flex');
+    await tailwindRules(
+      "const base = 'flex';\n",
+      'src/ui/components/warm/warm-class.ts',
+    );
+  }, WARM_UP_TIMEOUT_MS);
+
   test('registered token classes', async () => {
     assert({
       given: 'classes that all come from the imago theme',
