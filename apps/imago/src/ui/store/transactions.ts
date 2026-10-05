@@ -1,8 +1,6 @@
-import { chatPlugin } from '../chat/chat-plugin';
-import { filesPlugin } from '../files/files-plugin/files-plugin';
-import { stagePlugin } from '../frame/stage/stage-plugin';
-import { tasksPlugin } from '../tasks/tasks-plugin';
+import { uiSlices } from './slices';
 import type { UiState } from './state';
+import type { UnionToIntersection } from './types';
 import { getUiState, setUiState } from './store';
 
 /** A pure transaction: the next snapshot from the current one and an argument. */
@@ -13,12 +11,6 @@ export type UiPlugin = {
   // `never` accepts every argument type: each plugin keeps its own.
   readonly transactions: Readonly<Record<string, UiTransaction<never>>>;
 };
-
-type UnionToIntersection<U> = (U extends unknown ? (union: U) => void : never) extends (
-  intersection: infer I,
-) => void
-  ? I
-  : never;
 
 type MergedTransactions<P extends readonly UiPlugin[]> = [P[number]] extends [never]
   ? Readonly<Record<never, never>>
@@ -38,8 +30,8 @@ export const mergePlugins = <const P extends readonly UiPlugin[]>(
   return merged as MergedTransactions<P>;
 };
 
-/** The shell's transactions. Section plugins join here as their leaves land. */
-export const transactions = mergePlugins(stagePlugin, tasksPlugin, filesPlugin, chatPlugin);
+/** The shell's transactions, merged from the registered slices (slices.ts). */
+export const transactions = mergePlugins(...uiSlices);
 
 /** Runs a transaction over the current snapshot and stores the result. */
 export const dispatch = <A>(run: UiTransaction<A>, arg: A): void => {

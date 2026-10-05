@@ -1,5 +1,4 @@
-import type { UiState } from '../../store/state';
-import type { UiPlugin } from '../../store/transactions';
+import type { UiSlice, UiState } from '../../store/state';
 
 /**
  * Which pages of the files tree the viewer expanded. It lives in the shell
@@ -7,6 +6,10 @@ import type { UiPlugin } from '../../store/transactions';
  * never collapses anything. Page ids are unique across drives.
  */
 export const filesPlugin = {
+  resources: (): {
+    /** Pages expanded in the files tree. */
+    readonly expandedFileIds: readonly string[];
+  } => ({ expandedFileIds: [] }),
   transactions: {
     toggleFileFolder: (state: UiState, pageId: string): UiState => {
       const open = state.resources.expandedFileIds;
@@ -19,4 +22,4 @@ export const filesPlugin = {
       };
     },
   },
-} satisfies UiPlugin;
+} satisfies UiSlice;

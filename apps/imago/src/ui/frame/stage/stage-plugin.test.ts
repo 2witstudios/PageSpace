@@ -151,3 +151,14 @@ describe('collapsible sections', () => {
     });
   });
 });
+
+describe('stagePlugin slice', () => {
+  test('its own resources and transactions', () => {
+    assert({
+      given: 'the stage slice',
+      should: 'start with no section collapsed and own the collapse and expand transactions',
+      actual: [stagePlugin.resources(), Object.keys(stagePlugin.transactions).sort()],
+      expected: [{ collapsedSections: [] }, ['collapseSection', 'expandSection']],
+    });
+  });
+});

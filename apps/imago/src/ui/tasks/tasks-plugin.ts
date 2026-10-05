@@ -1,6 +1,5 @@
-import type { UiState } from '../store/state';
-import type { UiPlugin } from '../store/transactions';
-import type { TaskViewName } from './task-view/task-view';
+import type { UiSlice, UiState } from '../store/state';
+import { defaultTaskView, type TaskViewName } from './task-view/task-view';
 
 const withResources = (state: UiState, resources: Partial<UiState['resources']>): UiState => ({
   ...state,
@@ -13,6 +12,12 @@ const withResources = (state: UiState, resources: Partial<UiState['resources']>)
  * themselves live in SWR, not here.
  */
 export const tasksPlugin = {
+  resources: (): {
+    /** The view an open task list shows; saved per viewer (useTaskView). */
+    readonly taskView: TaskViewName;
+    /** Tasks whose subtasks the Tree view shows. */
+    readonly expandedTasks: readonly string[];
+  } => ({ taskView: defaultTaskView, expandedTasks: [] }),
   transactions: {
     setTaskView: (state: UiState, taskView: TaskViewName): UiState =>
       state.resources.taskView === taskView ? state : withResources(state, { taskView }),
@@ -25,4 +30,4 @@ export const tasksPlugin = {
       });
     },
   },
-} satisfies UiPlugin;
+} satisfies UiSlice;

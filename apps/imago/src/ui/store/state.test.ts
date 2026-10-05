@@ -1,15 +1,16 @@
 import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
+import { uiSlices } from './slices';
 import { createInitialState } from './state';
 
 describe('createInitialState()', () => {
   test('empty shell state', () => {
     assert({
       given: 'a fresh UI state',
-      should: 'collapse no section, open no task, expand no page, show Tree, stream nothing and carry empty collections (no mock data)',
+      should: 'carry every registered slice’s initial resources and empty collections (no mock data)',
       actual: createInitialState(),
       expected: {
-        resources: { collapsedSections: [], taskView: 'tree', expandedTasks: [], expandedFileIds: [], streaming: null },
+        resources: Object.assign({}, ...uiSlices.map((slice) => slice.resources())),
         collections: {},
       },
     });

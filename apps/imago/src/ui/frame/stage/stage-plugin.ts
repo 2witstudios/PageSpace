@@ -1,5 +1,4 @@
-import type { UiState } from '../../store/state';
-import type { UiPlugin } from '../../store/transactions';
+import type { UiSlice, UiState } from '../../store/state';
 import type { ListSection } from './stage';
 
 const withCollapsed = (state: UiState, collapsedSections: readonly ListSection[]): UiState => ({
@@ -13,6 +12,10 @@ const withCollapsed = (state: UiState, collapsedSections: readonly ListSection[]
  * nothing changes, so a repeated click re-renders nothing.
  */
 export const stagePlugin = {
+  resources: (): {
+    /** Sections whose list the viewer hid; the stage itself lives in the URL. */
+    readonly collapsedSections: readonly ListSection[];
+  } => ({ collapsedSections: [] }),
   transactions: {
     collapseSection: (state: UiState, section: ListSection): UiState =>
       state.resources.collapsedSections.includes(section)
@@ -26,4 +29,4 @@ export const stagePlugin = {
           )
         : state,
   },
-} satisfies UiPlugin;
+} satisfies UiSlice;

@@ -38,3 +38,14 @@ describe('tasksPlugin', () => {
     });
   });
 });
+
+describe('tasksPlugin slice', () => {
+  test('its own resources and transactions', () => {
+    assert({
+      given: 'the tasks slice',
+      should: 'start on Tree with nothing expanded and own the view and expansion transactions',
+      actual: [tasksPlugin.resources(), Object.keys(tasksPlugin.transactions).sort()],
+      expected: [{ taskView: 'tree', expandedTasks: [] }, ['setTaskView', 'toggleTaskExpanded']],
+    });
+  });
+});
