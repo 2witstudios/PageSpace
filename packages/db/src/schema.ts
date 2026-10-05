@@ -68,6 +68,7 @@ export * from './schema/dev-preview-grants';
 export * from './schema/agent-account-grant-nonces';
 export * from './schema/agent-accounts';
 export * from './schema/user-builtin-agents';
+export * from './schema/imago-drive-access';
 
 import * as auth from './schema/auth';
 import * as sessions from './schema/sessions';
@@ -138,6 +139,7 @@ import * as devPreviewGrants from './schema/dev-preview-grants';
 import * as agentAccountGrantNonces from './schema/agent-account-grant-nonces';
 import * as agentAccounts from './schema/agent-accounts';
 import * as userBuiltinAgents from './schema/user-builtin-agents';
+import * as imagoDriveAccess from './schema/imago-drive-access';
 
 export const schema = {
   ...auth,
@@ -209,4 +211,5 @@ export const schema = {
   ...agentAccountGrantNonces,
   ...agentAccounts,
   ...userBuiltinAgents,
+  ...imagoDriveAccess,
 };

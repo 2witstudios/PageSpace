@@ -179,6 +179,10 @@
       "types": "./dist/schema/user-builtin-agents.d.ts",
       "default": "./dist/schema/user-builtin-agents.js"
     },
+    "./schema/imago-drive-access": {
+      "types": "./dist/schema/imago-drive-access.d.ts",
+      "default": "./dist/schema/imago-drive-access.js"
+    },
     "./schema/automation-preferences": {
       "types": "./dist/schema/automation-preferences.d.ts",
       "default": "./dist/schema/automation-preferences.js"
