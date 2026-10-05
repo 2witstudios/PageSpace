@@ -5,6 +5,7 @@ import { getPageTypeConfig, PageType, type PageTypeValue } from '@pagespace/lib/
 import type { IconName } from '../../components/icon/icon-names';
 import type { ChatAgent } from '../../chat/chat-model/chat';
 import { classicHref } from '../../frame/rail/rail-items';
+import { pageEdgeOf } from '../page-object/page-object';
 import { fileIcon } from '../tree-view/tree-view';
 
 /** The object card for a page imago hands off. */
@@ -38,11 +39,12 @@ const nameOf = (title: unknown): string => (typeof title === 'string' && title.t
 
 /**
  * The card for GET /api/pages/[pageId]'s answer, or null when imago draws the
- * page itself (or the answer is not in yet). The page's place was settled by
- * PageObject's gate, so only its type and title are read here.
+ * page itself (or the answer is not in yet). PageObject's gate already settles
+ * the page's place; the card asks the same question again, so it never draws
+ * the title of a page of another drive or in the trash, wherever it is nested.
  */
 export const handoffFor = (data: unknown, driveId: string, pageId: string): Handoff | null => {
-  if (typeof data !== 'object' || data === null) return null;
+  if (pageEdgeOf(data, undefined, driveId) !== 'ready') return null;
   const { type, title } = data as { type?: unknown; title?: unknown };
   if (!isHandedOff(type)) return null;
   const name = nameOf(title);

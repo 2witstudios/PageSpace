@@ -11,6 +11,7 @@ import { stageFor } from '../../frame/stage/stage';
 import { chatPaths } from '../../chat/chat-api/chat-api';
 import { agentConversation, conversationsPage, driveAgentsBody, messagesPage, pointers, userMessage } from '../../chat/chat-model/fixtures';
 import { ChatPane } from '../../chat/chat-pane/chat-pane';
+import { PageObject } from '../page-object/page-object';
 
 // The router is Next's seam: switching to the chat is a push to the drive's chat address.
 const router = vi.hoisted(() => ({ pushed: [] as string[] }));
@@ -134,6 +135,41 @@ describe('ClassicHandoff', () => {
         null,
         ['/d1'],
       ],
+    });
+  });
+});
+
+describe('behind the page gate', () => {
+  test('a page the address does not own', async () => {
+    const cases: readonly [string, FakeRoute][] = [
+      ['an unknown id (404)', () => Response.json({ error: 'Page not found' }, { status: 404 })],
+      ['a page the viewer may not view (403)', () => Response.json({ error: 'You do not have permission' }, { status: 403 })],
+      ['a sheet of another drive', page('SHEET', { driveId: 'd2', title: 'Secret plan' })],
+      ['a trashed sheet', page('SHEET', { isTrashed: true, title: 'Secret plan' })],
+    ];
+    const actual: unknown[] = [];
+    for (const [name, route] of cases) {
+      const web = fakeWeb({ [PAGE]: route });
+      const container = mount(
+        <ImagoSWRProvider client={web.client}>
+          <PageObject driveId="d1" pageId="p1">
+            <ClassicHandoff driveId="d1" pageId="p1">
+              <p data-page-content="">the page</p>
+            </ClassicHandoff>
+          </PageObject>
+        </ImagoSWRProvider>,
+      );
+      await settle(() => {
+        if (!container.querySelector('[data-not-found]')) throw new Error(`${name}: no not-found`);
+      });
+      actual.push([name, card(container), container.textContent?.includes('Secret plan'), container.textContent?.includes('Open in classic')]);
+      unmountAll();
+    }
+    assert({
+      given: 'a 404, a 403, a sheet of another drive and a trashed sheet, as the route nests them',
+      should: 'draw not-found with no card, no title and no way into classic',
+      actual,
+      expected: cases.map(([name]) => [name, null, false, false]),
     });
   });
 });

@@ -70,11 +70,24 @@ describe('handoffFor()', () => {
     });
   });
 
+  test('a page that is not this address’s object', () => {
+    assert({
+      given: 'a sheet of another drive, a trashed sheet and a sheet with no drive',
+      should: 'not hand off, so no title of a page the address does not own is ever drawn',
+      actual: [
+        handoffFor(page('SHEET', { driveId: 'd2' }), 'd1', 'p1'),
+        handoffFor(page('SHEET', { isTrashed: true }), 'd1', 'p1'),
+        handoffFor(page('AI_CHAT', { driveId: undefined }), 'd1', 'p1'),
+      ],
+      expected: [null, null, null],
+    });
+  });
+
   test('ids that need escaping', () => {
     assert({
       given: 'a drive and page id with characters a path segment cannot hold',
       should: 'escape each into its own segment under /dashboard/',
-      actual: handoffFor(page('CODE'), 'a/b', '../x')?.classicHref,
+      actual: handoffFor(page('CODE', { driveId: 'a/b' }), 'a/b', '../x')?.classicHref,
       expected: '/dashboard/a%2Fb/..%2Fx',
     });
   });
