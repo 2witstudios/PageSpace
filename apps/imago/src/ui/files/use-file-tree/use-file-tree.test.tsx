@@ -6,7 +6,7 @@ import { assert } from 'riteway/vitest';
 import { ImagoSWRProvider } from '@/api/swr-provider';
 import { RealtimeProvider } from '@/realtime/realtime-provider';
 import type { RealtimeClient, RealtimeSocket } from '@/realtime/realtime-client';
-import { fakeWeb, type FakeRoute } from '@/ui/tasks/task-api/fake-web';
+import { fakeWeb, type FakeRoute } from '@/ui/test-support/fake-web';
 import { createInitialState } from '../../store/state';
 import { getUiState, setUiState } from '../../store/store';
 import { pageRow, treeRow } from '../file-model/fixtures';
@@ -105,7 +105,7 @@ const mountTree = (routes: Record<string, FakeRoute>, initialDrive: string | nul
     return seen.tree;
   };
   const switchDrive = (driveId: string | null) => act(() => setDrive(driveId));
-  return { web, rt, current, switchDrive, unmount: () => act(() => root.unmount()) };
+  return { web, rt, current, switchDrive };
 };
 
 const loaded = async (current: () => FileTree): Promise<readonly FileNode[]> => {
@@ -506,19 +506,35 @@ describe('useFileTree() live', () => {
     });
   });
 
-  test('unmounting mid-burst', async () => {
-    const { web, rt, current, unmount } = mountTree({ [TREE]: () => Response.json(driveTree()) });
+  test('another drive opened mid-burst', async () => {
+    const D2_TREE = 'GET /api/drives/d2/pages';
+    const { web, rt, current, switchDrive } = mountTree({
+      [TREE]: () => Response.json(driveTree()),
+      [D2_TREE]: () => Response.json([treeRow('other', 'DOCUMENT')]),
+    });
     await loaded(current);
     await rt.deliver('page:created', { driveId: 'd1', pageId: 'a', operation: 'created' });
-    unmount();
-    roots = [];
+    switchDrive('d2');
+    await settle(() => {
+      if (nameOf(current().nodes, 'other') === undefined) throw new Error('d2 not loaded');
+    });
+    await act(() => new Promise((resolve) => setTimeout(resolve, 250)));
+    const settled = [web.count(TREE), web.count(D2_TREE)];
+
+    await rt.deliver('page:updated', { driveId: 'd2', pageId: 'other', operation: 'updated' });
+    await settle(() => {
+      if (web.count(D2_TREE) < 2) throw new Error('d2 not revalidated');
+    });
     await act(() => new Promise((resolve) => setTimeout(resolve, 250)));
 
     assert({
-      given: 'the tree unmounted before its burst settled',
-      should: 'not refetch',
-      actual: web.count(TREE),
-      expected: 1,
+      given: 'another drive opened before the first drive’s burst settled, then an event for the new drive',
+      should: 'drop the first drive’s pending refetch and refetch the new drive once per burst',
+      actual: [settled, [web.count(TREE), web.count(D2_TREE)]],
+      expected: [
+        [1, 1],
+        [1, 2],
+      ],
     });
   });
 

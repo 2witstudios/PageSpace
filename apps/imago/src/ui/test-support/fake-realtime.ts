@@ -26,6 +26,8 @@ export const fakeRealtime = () => {
       const socket: FakeSocket = {
         live: true,
         listeners,
+        connected: true,
+        emit: () => socket,
         on: (event, listener) => {
           if (!listeners.has(event)) listeners.set(event, new Set());
           listeners.get(event)?.add(listener);
