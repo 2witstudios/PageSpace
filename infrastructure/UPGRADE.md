@@ -674,6 +674,34 @@ roll, so once it has succeeded the table is gone.
 
 ---
 
+## Home drives and Imago agents for existing users (IMG-4.3)
+
+Every user now gets the built-in Imago agents (Imago, Imago Planner, Imago
+Researcher) as AI_CHAT pages in their Home drive, provisioned by
+`provisionHomeDriveIfNeeded` at sign-in. A user who never signs in again would
+never get them — nor a Home drive, if they predate it (the old Home-drive
+backfill was archived). Run once, after deploying the release that provisions
+the agents:
+
+```bash
+bun scripts/backfill-imago-agents.ts --dry-run   # reports who is missing what, writes nothing
+bun scripts/backfill-imago-agents.ts             # --batch-size N (default 100), --limit N
+```
+
+For each user without a Home drive it calls `provisionHomeDriveIfNeeded` (the
+sign-in path, so the drive gets its subdomain, starter skills and Memory pages;
+a user who owns no drive at all also gets the "Getting Started" folder), then
+`provisionImagoAgents` for every user missing an agent, recreating deleted or
+trashed agent pages. It never deletes anything.
+
+Safe to re-run and safe beside live sign-ins: the work list is re-derived each
+run, and both provisioners take the sign-in path's user-row lock. Output names
+users by id only. The summary ends with `still missing a Home drive` and
+`still missing an agent`, which must both be 0 after a full run; any failed
+user makes the exit code 1 and is listed by id — re-run to retry.
+
+---
+
 ## Starter skills for existing users (migration `0246_sticky_venus`)
 
 `0246_sticky_venus` adds `users.starterSkillsInstalledAt`. New signups get the
