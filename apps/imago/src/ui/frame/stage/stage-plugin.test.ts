@@ -10,7 +10,7 @@ const { collapseSection, expandSection } = stagePlugin.transactions;
 
 const withCollapsed = (collapsedSections: UiState['resources']['collapsedSections']): UiState => ({
   ...createInitialState(),
-  resources: { collapsedSections },
+  resources: { ...createInitialState().resources, collapsedSections },
 });
 
 beforeEach(() => {

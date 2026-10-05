@@ -6,9 +6,12 @@ describe('createInitialState()', () => {
   test('empty shell state', () => {
     assert({
       given: 'a fresh UI state',
-      should: 'collapse no section and carry empty collections (no mock data)',
+      should: 'collapse no section, open no task, show Tree and carry empty collections (no mock data)',
       actual: createInitialState(),
-      expected: { resources: { collapsedSections: [] }, collections: {} },
+      expected: {
+        resources: { collapsedSections: [], taskView: 'tree', expandedTasks: [] },
+        collections: {},
+      },
     });
   });
 
@@ -24,8 +27,9 @@ describe('createInitialState()', () => {
         first.resources === second.resources,
         first.collections === second.collections,
         first.resources.collapsedSections === second.resources.collapsedSections,
+        first.resources.expandedTasks === second.resources.expandedTasks,
       ],
-      expected: [false, false, false, false],
+      expected: [false, false, false, false, false],
     });
   });
 });

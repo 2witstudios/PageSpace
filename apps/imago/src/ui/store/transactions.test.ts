@@ -56,10 +56,10 @@ describe('mergePlugins()', () => {
 
   test('the shell’s plugins', () => {
     assert({
-      given: 'the shell with the stage plugin registered',
-      should: 'expose exactly the stage transactions',
+      given: 'the shell with the stage and tasks plugins registered',
+      should: 'expose exactly their transactions',
       actual: Object.keys(transactions).sort(),
-      expected: ['collapseSection', 'expandSection'],
+      expected: ['collapseSection', 'expandSection', 'setTaskView', 'toggleTaskExpanded'],
     });
   });
 });
