@@ -18,8 +18,8 @@ const navigation = vi.hoisted(() => ({ pathname: '/drive-1' }));
 vi.mock('next/navigation', () => ({
   usePathname: () => navigation.pathname,
 }));
-// The rail's placeholder offers sign-out; its network path is proven in
-// lib/auth/sign-out.test.ts.
+// The rail's foot offers sign-out until the avatar menu (IMG-3.4); its
+// network path is proven in lib/auth/sign-out.test.ts.
 vi.mock('@/components/SignOutButton', () => ({
   SignOutButton: () => h('button', { type: 'button' }, 'Sign out'),
 }));
@@ -41,7 +41,7 @@ function Route() {
 
 const render = () =>
   act(() => {
-    root?.render(h(Shell, null, h(Route)));
+    root?.render(h(Shell, { homeDriveId: 'home-1', children: h(Route) }));
   });
 
 const navigate = (pathname: string) => {
@@ -224,6 +224,58 @@ describe('Shell', () => {
         ['roomy', true],
         ['dense', true],
       ],
+    });
+  });
+
+  test('the rail', () => {
+    render();
+    const rail = slot('rail');
+    const names = [...rail.querySelectorAll('a[aria-label], summary[aria-label]')].map((element) =>
+      element.getAttribute('aria-label'),
+    );
+    const messages = rail.querySelector('a[aria-label^="Messages"]');
+    navigate('/drive-1/messages/channel-1');
+    const current = rail.querySelector('[aria-current="page"]');
+
+    assert({
+      given: 'the shell on a drive chat, then on a channel',
+      should: 'fill the rail slot with the drive’s destinations and sign-out, and move aria-current without remounting the link',
+      actual: [
+        names,
+        [...rail.querySelectorAll('button')].some((button) => button.textContent === 'Sign out'),
+        current === messages,
+        rail.querySelectorAll('[aria-current="page"]').length,
+      ],
+      expected: [['Chat', 'Files', 'Messages', 'Tasks', 'More', 'Settings'], true, true, 1],
+    });
+  });
+
+  test('the rail reopens a collapsed section', () => {
+    navigation.pathname = '/drive-1/files/page-1';
+    render();
+    click('[data-slot="list"] button[aria-label="Hide Files"]');
+    click('[data-slot="rail"] a[aria-label="Files"]');
+
+    assert({
+      given: 'the files tree hidden, then Files clicked on the rail',
+      should: 'expand the section and slide the tree back beside the page',
+      actual: [getUiState().resources.collapsedSections, frame().dataset.list, slot('list').hasAttribute('inert')],
+      expected: [[], 'tree', false],
+    });
+  });
+
+  test('the rail on a user-level stage', () => {
+    navigation.pathname = '/account';
+    render();
+
+    assert({
+      given: 'the account stage, which names no drive',
+      should: 'link the rail into the Home drive and mark nothing current',
+      actual: [
+        slot('rail').querySelector('a[aria-label="Settings"]')?.getAttribute('href'),
+        slot('rail').querySelector('[aria-current]'),
+      ],
+      expected: ['/home-1/settings', null],
     });
   });
 });
