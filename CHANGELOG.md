@@ -9,6 +9,9 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Changed
 
+- **New organizations ask before letting outsiders in** — a new organization's "guests from outside"
+  setting now starts at "Admins approve" instead of "On": inviting or sharing with someone outside the
+  organization waits for an Owner or Admin to approve it. Owners can change the setting at any time.
 - **An organization's automations outlive the person who made them** — when someone leaves an
   organization, is removed from it, or deletes their account, the workflows, task and calendar triggers
   and page webhooks they set up in its drives are no longer deleted. They are switched off and marked
