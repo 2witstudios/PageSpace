@@ -5,6 +5,7 @@ import { ApiError, INVALID_RESPONSE } from '@/api/errors';
 import {
   chatPaths,
   CONVERSATIONS_PAGE_SIZE,
+  createConversation,
   fetchBuiltinAgents,
   fetchConversationMessages,
   fetchConversationsPage,
@@ -243,6 +244,34 @@ describe('fetchConversationMessages()', () => {
       should: 'reject as an invalid response',
       actual: failure(await caught(fetchConversationMessages(web.client, 'a1', 'c1'))),
       expected: [200, INVALID_RESPONSE, 'Messages response carried no messages'],
+    });
+  });
+});
+
+describe('createConversation()', () => {
+  test('a new conversation', async () => {
+    const web = fakeWeb({
+      [`POST ${chatPaths.newConversation('p 1')}`]: () =>
+        Response.json({ conversationId: 'c-new', title: 'New conversation', createdAt: '2026-10-05T10:00:00.000Z' }),
+    });
+    const id = await createConversation(web.client, 'p 1');
+    assert({
+      given: 'an agent page',
+      should: 'create a conversation with it through the page-agent route, with CSRF, and answer its id',
+      actual: [id, web.writes().map((request) => [request.method, request.url, request.csrf, request.body])],
+      expected: ['c-new', [['POST', '/api/ai/page-agents/p%201/conversations', 'tok-1', {}]]],
+    });
+  });
+
+  test('a malformed answer', async () => {
+    const web = fakeWeb({
+      [`POST ${chatPaths.newConversation('p1')}`]: () => Response.json({ title: 'New conversation' }),
+    });
+    assert({
+      given: 'an answer with no conversation id',
+      should: 'reject with an invalid-response error',
+      actual: failure(await caught(createConversation(web.client, 'p1'))),
+      expected: [200, INVALID_RESPONSE, 'Conversation response carried no id'],
     });
   });
 });

@@ -5,6 +5,7 @@ import type { ReactNode } from 'react';
 import useSWR from 'swr';
 import { useUiState } from '../../store/store';
 import type { UiState } from '../../store/state';
+import { ChatPane } from '../../chat/chat-pane/chat-pane';
 import { FilesPane } from '../../files/files-pane/files-pane';
 import { MessagesPane } from '../../messages/messages-pane/messages-pane';
 import { TasksPane } from '../../tasks/tasks-pane/tasks-pane';
@@ -17,7 +18,6 @@ import { ListOpener, ListPane } from '../list-pane/list-pane';
 import { Rail } from '../rail/rail';
 import { railDrive } from '../rail/rail-items';
 import {
-  chatContextFor,
   isListSection,
   paneLayout,
   stageFor,
@@ -123,7 +123,6 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
   const layout = missing ? notFoundLayout : paneLayout(stage, { collapsedSections });
   const opener = missing ? null : openerFor(stage, layout);
   const drive = drives?.find((entry) => entry.id === stage.driveId);
-  const context = chatContextFor(stage, drive === undefined ? {} : { drive: drive.name });
   const title = missing ? 'Not found' : titles[stage.section];
   return renderShell({
     stage,
@@ -153,11 +152,6 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
         </div>
       </section>
     ),
-    chat: (
-      <section className={columnClass} aria-label="Chat" data-density={context.density}>
-        {renderPaneHeader({ title: context.contextLabel })}
-        <div className="min-h-0 flex-1 overflow-y-auto" />
-      </section>
-    ),
+    chat: <ChatPane stage={stage} driveName={drive?.name} homeDriveId={homeDriveId} />,
   });
 }

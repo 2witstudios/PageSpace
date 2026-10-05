@@ -29,8 +29,10 @@ import {
   Share2,
   Sparkles,
   Sun,
+  Square,
   SquareTerminal,
   Trash2,
+  Wrench,
   X,
   type LucideIcon,
 } from 'lucide-react';
@@ -73,6 +75,9 @@ export const icons = {
   connections: Cable,
   // A view-only thread's notice.
   lock: Lock,
+  // The chat composer's Stop and a tool call's line.
+  stop: Square,
+  tool: Wrench,
 } as const satisfies Readonly<Record<string, LucideIcon>>;
 
 export type IconName = keyof typeof icons;

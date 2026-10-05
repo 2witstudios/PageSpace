@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { createInitialState } from '../../store/state';
 import { getUiState, setUiState } from '../../store/store';
+import type { Stage } from '../stage/stage';
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined;
@@ -55,6 +56,29 @@ vi.mock('@/ui/tasks/tasks-pane/tasks-pane', () => ({
 vi.mock('@/ui/files/files-pane/files-pane', () => ({
   FilesPane: ({ driveId }: { driveId: string }) => h('div', { 'data-files-pane': driveId }),
 }));
+
+// The chat pane loads agents, conversations and turns through SWR; its own
+// suite proves it against the real hooks. Here it shows what the shell handed
+// it, the context the stage gives it, and how often it mounted.
+const chatMounts = vi.hoisted(() => ({ count: 0 }));
+vi.mock('@/ui/chat/chat-pane/chat-pane', async () => {
+  const { useState } = await import('react');
+  const { chatContextFor } = await import('../stage/stage');
+  return {
+    ChatPane: ({ stage, driveName, homeDriveId }: { stage: Stage; driveName?: string; homeDriveId: string | null }) => {
+      useState(() => {
+        chatMounts.count += 1;
+        return chatMounts.count;
+      });
+      const context = chatContextFor(stage, driveName === undefined ? {} : { drive: driveName });
+      return h(
+        'section',
+        { 'data-density': context.density, 'data-drive': stage.driveId ?? '', 'data-home': homeDriveId ?? '' },
+        context.contextLabel,
+      );
+    },
+  };
+});
 
 const { Shell } = await import('./shell');
 
@@ -109,6 +133,7 @@ const click = (selector: string) => {
 beforeEach(() => {
   setUiState(createInitialState());
   routeMounts = 0;
+  chatMounts.count = 0;
   navigation.pathname = '/drive-1';
   container = document.createElement('div');
   document.body.append(container);
@@ -452,6 +477,19 @@ describe('Shell', () => {
       should: 'put the drive’s name in the chat context',
       actual: slot('chat').textContent?.includes('Alpha in context'),
       expected: true,
+    });
+  });
+
+  test('one chat pane across every navigation', () => {
+    render();
+    for (const path of ['/drive-1/files/page-1', '/drive-1/tasks', '/dm/conversation-1', '/drive-2']) navigate(path);
+    const pane = slot('chat').querySelector('section');
+
+    assert({
+      given: 'the shell moved through files, tasks, a DM and another drive',
+      should: 'keep one chat pane mounted, handed the current stage, its drive and the Home drive',
+      actual: [chatMounts.count, pane?.dataset.drive, pane?.dataset.home, pane?.textContent],
+      expected: [1, 'drive-2', 'home-1', 'Beta in context'],
     });
   });
 });

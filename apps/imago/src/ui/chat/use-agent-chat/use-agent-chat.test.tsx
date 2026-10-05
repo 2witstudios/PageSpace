@@ -622,3 +622,48 @@ describe('useAgentChat() failures', () => {
     });
   });
 });
+
+describe('useAgentChat() into a new conversation', () => {
+  const NEW_MESSAGES = `GET ${chatPaths.messages('p-imago', 'c-new')}`;
+
+  /** A Probe whose conversation the test switches, as the pane does once it has created one. */
+  const Switched = ({ seen, to }: { seen: Seen; to: { set?: (id: string | null) => void } }) => {
+    const [conversationId, setConversationId] = useState<string | null>(null);
+    to.set = setConversationId;
+    return <Probe seen={seen} conversationId={conversationId} />;
+  };
+
+  test('sends to the conversation it is given and shows the turn before the thread loads', async () => {
+    const stream = fakeTurnStream();
+    const web = chatWeb(stream, [HISTORY], {
+      [NEW_MESSAGES]: () => Response.json(messagesPage([], { conversationId: 'c-new' })),
+    });
+    const seen: Seen = {};
+    const to: { set?: (id: string | null) => void } = {};
+    const container = mount(
+      <ImagoSWRProvider client={web.client}>
+        <Switched seen={seen} to={to} />
+      </ImagoSWRProvider>,
+    );
+
+    act(() => {
+      to.set?.('c-new');
+      void seen.chat?.send('Hello', 'c-new');
+    });
+    stream.push({ type: 'start', messageId: 'a1' });
+    stream.push({ type: 'text-start', id: 't1' });
+    stream.push({ type: 'text-delta', id: 't1', delta: 'Hi there.' });
+    await settle(() => {
+      if (rendered(container).at(-1) !== 'assistant: Hi there.') throw new Error('reply not shown');
+    });
+    const body = web.requests.find((request) => request.url === chatPaths.turn)?.body as { conversationId: string };
+
+    assert({
+      given: 'a send naming a conversation just created, whose thread has not loaded',
+      should: 'turn into that conversation and show the prompt and the live reply meanwhile, fetching nothing for it while it streams',
+      actual: [body.conversationId, rendered(container), web.count(NEW_MESSAGES)],
+      expected: ['c-new', ['user: Hello', 'assistant: Hi there.'], 0],
+    });
+    stream.close();
+  });
+});

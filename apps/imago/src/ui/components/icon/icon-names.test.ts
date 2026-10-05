@@ -33,8 +33,10 @@ import {
   Share2,
   Sparkles,
   Sun,
+  Square,
   SquareTerminal,
   Trash2,
+  Wrench,
   X,
 } from 'lucide-react';
 import { iconNames, icons } from './icon-names';
@@ -79,6 +81,8 @@ describe('icon names', () => {
         activity: Activity,
         connections: Cable,
         lock: Lock,
+        stop: Square,
+        tool: Wrench,
       },
     });
   });
