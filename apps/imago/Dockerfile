@@ -27,7 +27,7 @@ COPY apps/web/package.json ./apps/web/
 RUN --mount=type=cache,id=bun,target=/root/.bun/install/cache bun install --frozen-lockfile
 
 COPY packages ./packages
-COPY apps/admin ./apps/admin
+COPY apps/imago ./apps/imago
 COPY tsconfig.json ./
 COPY types ./types
 
@@ -38,20 +38,13 @@ COPY --from=oven/bun:1.3.12-alpine /usr/local/bin/bun /usr/local/bin/bun
 
 COPY --from=deps /app .
 
-ARG NEXT_PUBLIC_WEB_APP_URL=""
-ENV NEXT_PUBLIC_WEB_APP_URL=$NEXT_PUBLIC_WEB_APP_URL
-ARG NEXT_PUBLIC_SENTRY_DSN=""
-ENV NEXT_PUBLIC_SENTRY_DSN=$NEXT_PUBLIC_SENTRY_DSN
-ARG SENTRY_AUTH_TOKEN=""
-ENV SENTRY_AUTH_TOKEN=$SENTRY_AUTH_TOKEN
-ARG SENTRY_ORG=""
-ENV SENTRY_ORG=$SENTRY_ORG
-ARG SENTRY_PROJECT=""
-ENV SENTRY_PROJECT=$SENTRY_PROJECT
+# NEXT_PUBLIC_* are inlined at build time; the runtime env cannot override them.
+ARG NEXT_PUBLIC_REALTIME_URL=""
+ENV NEXT_PUBLIC_REALTIME_URL=$NEXT_PUBLIC_REALTIME_URL
 ENV NEXT_TELEMETRY_DISABLED=1
 
-RUN bun run --filter '@pagespace/db' build && bun run --filter '@pagespace/lib' build
-RUN cd apps/admin && NODE_OPTIONS="--max-old-space-size=2048" bun run build
+RUN bun run --filter '@pagespace/db' build && bun run --filter '@pagespace/lib' build && bun run --filter '@pagespace/editor' build
+RUN cd apps/imago && NODE_OPTIONS="--max-old-space-size=2048" bun run build
 
 ENV NODE_ENV=production
 
@@ -61,14 +54,19 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 
-RUN mkdir -p /app/apps/admin/.next/cache && chown -R node:node /app/apps/admin/.next
+RUN mkdir -p /app/apps/imago/.next/cache && chown -R node:node /app/apps/imago/.next
 
-COPY --from=builder /app/apps/admin/.next/standalone .
-COPY --from=builder /app/apps/admin/.next/static ./apps/admin/.next/static
+COPY --from=builder /app/apps/imago/.next/standalone .
+COPY --from=builder /app/apps/imago/.next/static ./apps/imago/.next/static
 
 USER node
 
-EXPOSE 3005
-ENV PORT=3005
+EXPOSE 3006
+ENV PORT=3006
+# Docker sets HOSTNAME to the container id and the standalone server binds to
+# it, which would leave 127.0.0.1 (the healthcheck) unanswered.
+ENV HOSTNAME=0.0.0.0
 
-CMD ["node", "apps/admin/server.js"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD wget -qO- http://127.0.0.1:3006/imago/api/health || exit 1
+
+CMD ["node", "apps/imago/server.js"]

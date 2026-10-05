@@ -1,0 +1,79 @@
+name: Imago Image
+
+# Proves apps/imago/Dockerfile builds and the image boots BEFORE pu/imago
+# reaches master. docker-images.yml only runs on master/tags, and its deploy
+# job needs every build-and-push leg — so an imago image that first fails to
+# build there would skip the production deploy of every service.
+#
+# Build only: no registry login, no push, no deploy (IMG-11.1 is human-only).
+on:
+  pull_request:
+    branches: [pu/imago]
+    paths:
+      - 'apps/imago/**'
+      # Every Dockerfile shares the workspace manifest block imago depends on.
+      - 'apps/*/Dockerfile*'
+      # The image builds db, lib and editor and installs from the root lockfile.
+      - 'packages/**'
+      - 'package.json'
+      - 'bun.lock'
+      - '.github/workflows/imago-image.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: imago-image-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-boot:
+    name: Build & boot imago
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: apps/imago/Dockerfile
+          push: false
+          load: true
+          tags: pagespace-imago:ci
+          # Own scope so this never evicts docker-images.yml's cache.
+          cache-from: type=gha,scope=imago-image
+          cache-to: type=gha,scope=imago-image,mode=max
+
+      - name: Boot and check /imago/api/health
+        run: |
+          docker run -d --name imago -p 3006:3006 pagespace-imago:ci
+          for i in $(seq 1 30); do
+            if curl --silent --show-error --fail http://localhost:3006/imago/api/health; then
+              echo
+              echo "imago answered on attempt $i"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "imago did not answer /imago/api/health within 60s"
+          docker logs imago
+          exit 1
+
+      - name: Container health status
+        run: |
+          for i in $(seq 1 20); do
+            status=$(docker inspect --format '{{.State.Health.Status}}' imago)
+            echo "health: $status"
+            [ "$status" = "healthy" ] && exit 0
+            [ "$status" = "unhealthy" ] && break
+            sleep 3
+          done
+          docker inspect --format '{{json .State.Health}}' imago
+          exit 1
