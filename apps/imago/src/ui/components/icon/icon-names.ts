@@ -16,6 +16,7 @@ import {
   Files,
   Flag,
   Folder,
+  GripVertical,
   Hash,
   LayoutGrid,
   ListTodo,
@@ -88,6 +89,8 @@ export const icons = {
   sheet: FileSpreadsheet,
   code: FileCode,
   file: File,
+  // The Board's drag handle (IMG-9.4).
+  grip: GripVertical,
 } as const satisfies Readonly<Record<string, LucideIcon>>;
 
 export type IconName = keyof typeof icons;

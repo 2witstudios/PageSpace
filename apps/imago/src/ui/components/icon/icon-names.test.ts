@@ -20,6 +20,7 @@ import {
   Files,
   Flag,
   Folder,
+  GripVertical,
   Hash,
   LayoutGrid,
   ListTodo,
@@ -91,6 +92,7 @@ describe('icon names', () => {
         sheet: FileSpreadsheet,
         code: FileCode,
         file: File,
+        grip: GripVertical,
       },
     });
   });
