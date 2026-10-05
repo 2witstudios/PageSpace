@@ -12,7 +12,7 @@ import { eq, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { customDomains } from '@pagespace/db/schema/custom-domains';
-import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
+import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
 
 vi.mock('../orgs-enabled', () => ({ ORGS_ENABLED: true }));
 vi.mock('../../audit/org-audit', () => ({ recordOrgAuditEvent: vi.fn(async () => {}), recordOrgAuditEventAfterCommit: vi.fn(async () => true) }));
@@ -63,6 +63,7 @@ async function cleanup() {
   if (created.driveIds.length) await db.delete(drives).where(inArray(drives.id, created.driveIds));
   if (created.orgIds.length) {
     await db.delete(orgMembers).where(inArray(orgMembers.orgId, created.orgIds));
+    await db.delete(orgSubscriptions).where(inArray(orgSubscriptions.orgId, created.orgIds));
     await db.delete(organizations).where(inArray(organizations.id, created.orgIds));
   }
   if (created.userIds.length) await db.delete(users).where(inArray(users.id, created.userIds));
@@ -82,6 +83,8 @@ beforeEach(async () => {
   const orgId = createId();
   created.orgIds.push(orgId);
   await db.insert(organizations).values({ id: orgId, name: 'Northwind', slug: `nw-${run}-${createId().slice(0, 4)}`, ownerId: owner });
+  // A paying org (D-OW-30: no subscription is lapsed, and a lapsed org may only restrict, [D-OW-33]).
+  await factories.createOrgSubscription(orgId);
   await db.insert(orgMembers).values({ orgId, userId: owner, role: 'OWNER' });
   const orgDrive = await factories.createDrive(owner);
   created.driveIds.push(orgDrive.id);

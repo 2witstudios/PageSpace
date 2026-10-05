@@ -905,7 +905,8 @@ async function runExecution(
     // landed cost is visible to the next gate check.
     const usage = result.usage;
     await AIMonitoring.trackUsage({
-      userId: input.createdBy,
+      // Counted as the consumer the run's gate bound: a manual Run's presser, else the creator (review #2817 P2-3).
+      userId: input.creditSpend.userId ?? input.createdBy,
       provider: providerResult.provider,
       model: providerResult.modelName,
       source: 'workflow',

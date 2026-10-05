@@ -96,7 +96,16 @@ export type RefusalReason =
    */
   | 'chosen_wallet_unavailable';
 
-export type SkipReason = 'drive_wallet_empty' | 'drive_wallet_paused' | 'no_drive_wallet';
+export type SkipReason =
+  | 'drive_wallet_empty'
+  | 'drive_wallet_paused'
+  | 'no_drive_wallet'
+  /**
+   * The person an automation runs on behalf of — its creator — is no longer an accepted member of the drive's org
+   * (or of the drive, on a personal drive). Their caps left with them, so the run is refused rather than run
+   * uncapped ([D-OW-34], review #2817 P2-2). Re-pointing an automation to a new owner is a separate decision.
+   */
+  | 'creator_departed';
 
 export interface SpendOption {
   source: SpendSourceKind;

@@ -56,7 +56,11 @@ export interface ToolExecutionContext {
   // that rides the turn's gate (an agent consulted inside it) settles on this wallet —
   // never on a different one. Absent outside a gated turn: such a caller has no drive
   // session and spends personal credits (SPEND-8).
-  creditSpend?: { spend: SpendTarget; walletId?: string };
+  // `userId` is the person that gate bound — the consumer whose caps the spend counts toward —
+  // when it is not this context's `userId`: a manual workflow Run is gated as the person who
+  // pressed it while the run reads content as the workflow's creator (review #2817 P2-3). Every
+  // model call riding this turn gates and records its usage as them; absent, the context's user.
+  creditSpend?: { spend: SpendTarget; walletId?: string; userId?: string };
 
   // MCP token drive-scope restriction. Empty/undefined = full access (session auth
   // or an unscoped MCP token); non-empty = tools may only touch these drive IDs.

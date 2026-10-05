@@ -83,10 +83,11 @@ export type SpendTarget =
       kind: 'automation';
       driveId: string;
       /**
-       * A person caused this run — a channel @mention they sent — so it is THEIR spend on the
-       * drive wallet and their per-consumer caps bind (WAL-7; the actor pays, as for compute,
-       * [D-OW-28]). Absent for a run no person is present for (a cron, a trigger, a scheduled
-       * workflow): the drive spends and no person's cap applies (SPEND-6).
+       * A person caused this run — a channel @mention they sent, a manual Run they pressed — and
+       * it is gated as them. Absent for a run no person is present for (a cron, a trigger, a
+       * scheduled workflow), which is gated as its CREATOR. Either way it spends the drive wallet
+       * only, and the per-consumer caps of the person it is gated as bind (WAL-7; [D-OW-34], the
+       * creator pays as for compute, [D-OW-28]).
        */
       personPresent?: true;
     };
@@ -122,7 +123,8 @@ export function conversationSpend(driveId: string | null | undefined, conversati
 
 /**
  * The target for a person-less run in `driveId` (SPEND-6): it spends the drive wallet or
- * is skipped, never a person's credits or allowance.
+ * is skipped, never a person's credits or allowance. It is gated as its creator, whose caps on
+ * that wallet bind ([D-OW-34]).
  */
 export function automationSpend(driveId: string): SpendTarget {
   return { kind: 'automation', driveId };

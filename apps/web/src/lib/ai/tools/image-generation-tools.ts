@@ -180,7 +180,9 @@ restricted to app administrators.`,
       // The image spends the wallet the turn it runs in already named (WAL-5, SPEND-4):
       // the same drive and source, never a different one. Outside a gated turn there is
       // no drive session, so it spends personal credits (SPEND-8).
-      const gate = await canConsumeAI(userId, (tier ?? 'free') as SubscriptionTier, {
+      // Gated and recorded as the consumer the turn's gate bound (a manual Run's presser), else the caller.
+      const billedUserId = context?.creditSpend?.userId ?? userId;
+      const gate = await canConsumeAI(billedUserId, (tier ?? 'free') as SubscriptionTier, {
         spend: context?.creditSpend?.spend ?? PERSONAL_SPEND,
         estCostCents: IMAGE_GEN_HOLD_ESTIMATE_CENTS,
       });
@@ -219,7 +221,7 @@ restricted to app administrators.`,
       }) => {
         const resolved = resolveImageCost(args.providerCostDollars);
         const settle = await AIMonitoring.trackUsage({
-          userId,
+          userId: billedUserId,
           provider: 'openrouter',
           model,
           providerCostDollars: resolved.costDollars,

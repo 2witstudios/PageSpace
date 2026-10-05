@@ -37,6 +37,12 @@ export interface RunCompactionParams {
    * never the sender's own credits (SPEND-6).
    */
   spend: SpendTarget;
+  /**
+   * The consumer the turn's gate bound, when it is not `userId` (a manual workflow Run's presser): the compaction is
+   * gated and its usage recorded as them, so it counts toward their cap (review #2817 P2-3). `userId` still picks the
+   * provider and owns the conversation.
+   */
+  billedUserId?: string;
 }
 
 async function summarize(
@@ -87,6 +93,7 @@ async function summarize(
 
 export async function runCompaction(params: RunCompactionParams): Promise<void> {
   const { conversationId, source, pageId, userId, provider, model, plan, spend } = params;
+  const billedUserId = params.billedUserId ?? userId;
 
   // The reservation this compaction runs against. trackUsage takes it over at settle; every
   // path that ends before that releases it in `finally`, so a refused, failed or empty run
@@ -149,7 +156,7 @@ export async function runCompaction(params: RunCompactionParams): Promise<void> 
     });
     let walletId: string | undefined;
     if (admission.gate) {
-      const gate = await gateUserCall(userId, { spend: admission.spend, estCostCents: admission.estCostCents });
+      const gate = await gateUserCall(billedUserId, { spend: admission.spend, estCostCents: admission.estCostCents });
       if (!gate.allowed) {
         console.info('[compaction] refused by the credit gate, state unchanged:', gate.reason, maskIdentifier(conversationId));
         return;
@@ -169,7 +176,7 @@ export async function runCompaction(params: RunCompactionParams): Promise<void> 
       settled = true;
       holdHandedOff = true;
       await AIMonitoring.trackUsage({
-        userId,
+        userId: billedUserId,
         provider: runProvider,
         model: runModel,
         inputTokens: totalInputTokens,

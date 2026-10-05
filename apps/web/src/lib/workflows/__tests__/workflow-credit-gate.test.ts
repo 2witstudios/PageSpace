@@ -40,13 +40,39 @@ describe('acquireWorkflowCreditHold', () => {
     mockReleaseHold.mockResolvedValue(undefined);
   });
 
-  it('SPEND-6 (partial) a workflow run names its drive as the consumer, never the person who created it', async () => {
+  it('SPEND-6 (partial) a workflow run spends its drive\'s wallet, gated as the workflow\'s CREATOR (whose caps bind it, [D-OW-34]) — never their own credits', async () => {
     mockCanConsumeAI.mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'hold_1', walletId: 'w_product' });
 
     await acquireWorkflowCreditHold(LEGACY_AI_WORKFLOW, 'scheduled');
     await acquireWorkflowCreditHold(LEGACY_AI_WORKFLOW, 'interactive');
 
-    expect(mockCanConsumeAI.mock.calls.map((call) => call[2].spend)).toEqual([PRODUCT_AUTOMATION, PRODUCT_AUTOMATION]);
+    expect(mockCanConsumeAI.mock.calls.map((call) => [call[0], call[2].spend])).toEqual([['user_1', PRODUCT_AUTOMATION], ['user_1', PRODUCT_AUTOMATION]]);
+  });
+
+  it('SPEND-6 (partial) a scheduled or task-trigger run whose creator left is refused, and the run error (and lastFireError) records creator_departed', async () => {
+    mockCanConsumeAI.mockResolvedValue({
+      allowed: false,
+      reason: 'source_refused',
+      refusal: { source: 'drive_wallet', reason: 'creator_departed', options: [] },
+    });
+
+    const admission = await creditAdmission(LEGACY_AI_WORKFLOW, 'scheduled')();
+
+    expect(admission).toEqual({ admitted: false, error: 'AI credit gate denied: source_refused (creator_departed)' });
+    expect(mockCanConsumeAI.mock.calls[0][0]).toBe('user_1');
+  });
+
+  it('SPEND-6 (partial) WAL-7 (partial) a scheduled run past its creator\'s cap is skipped, and the run error records source_cap_reached', async () => {
+    mockCanConsumeAI.mockResolvedValue({
+      allowed: false,
+      reason: 'source_refused',
+      refusal: { source: 'drive_wallet', reason: 'source_cap_reached', options: [] },
+    });
+
+    const admission = await creditAdmission(LEGACY_AI_WORKFLOW, 'scheduled')();
+
+    expect(admission).toEqual({ admitted: false, error: 'AI credit gate denied: source_refused (source_cap_reached)' });
+    expect(mockCanConsumeAI.mock.calls[0][0]).toBe('user_1');
   });
 
   it('WAL-7 (partial) a MANUAL Run is the caller\'s spend: gated as the person who pressed it, with a person present, so their caps bind; still the drive wallet', async () => {
@@ -56,6 +82,16 @@ describe('acquireWorkflowCreditHold', () => {
 
     expect(mockCanConsumeAI.mock.calls[0][0]).toBe('user_admin');
     expect(mockCanConsumeAI.mock.calls[0][2].spend).toEqual({ kind: 'automation', driveId: 'drive_product', personPresent: true });
+  });
+
+  it('WAL-7 (partial) the run carries the person its gate bound, so its usage is COUNTED as them too: the presser for a manual Run, the creator for a scheduled one (review #2817 P2-3)', async () => {
+    mockCanConsumeAI.mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'hold_1', walletId: 'w_product' });
+
+    const manual = await acquireWorkflowCreditHold(LEGACY_AI_WORKFLOW, 'interactive', 'user_admin');
+    const scheduled = await acquireWorkflowCreditHold(LEGACY_AI_WORKFLOW, 'scheduled');
+
+    expect(manual).toMatchObject({ allowed: true, creditSpend: { walletId: 'w_product', userId: 'user_admin' } });
+    expect(scheduled).toMatchObject({ allowed: true, creditSpend: { walletId: 'w_product', userId: 'user_1' } });
   });
 
   it('WAL-7 (partial) creditAdmission threads the caller to the gate; a scheduled admission names no person', async () => {

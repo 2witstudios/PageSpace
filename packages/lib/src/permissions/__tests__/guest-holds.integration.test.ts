@@ -16,7 +16,7 @@ import { and, eq, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
-import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
+import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
 import { orgGuestHolds } from '@pagespace/db/schema/org-guest-holds';
 
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
@@ -57,6 +57,7 @@ async function cleanup() {
   if (created.driveIds.length) await db.delete(drives).where(inArray(drives.id, created.driveIds));
   if (created.orgIds.length) {
     await db.delete(orgMembers).where(inArray(orgMembers.orgId, created.orgIds));
+    await db.delete(orgSubscriptions).where(inArray(orgSubscriptions.orgId, created.orgIds));
     await db.delete(organizations).where(inArray(organizations.id, created.orgIds));
   }
   if (created.userIds.length) await db.delete(users).where(inArray(users.id, created.userIds));
@@ -80,6 +81,8 @@ beforeEach(async () => {
     { id: orgId, name: 'Northwind', slug: `nw-${run}-${createId().slice(0, 4)}`, ownerId: owner },
     { id: otherOrgId, name: 'Other', slug: `ot-${run}-${createId().slice(0, 4)}`, ownerId: otherOwner },
   ]);
+  // A paying org (D-OW-30: no subscription is lapsed, and a lapsed org may only restrict, [D-OW-33]).
+  await factories.createOrgSubscription(orgId);
   await db.insert(orgMembers).values([
     { orgId, userId: owner, role: 'OWNER' },
     { orgId, userId: member, role: 'MEMBER' },

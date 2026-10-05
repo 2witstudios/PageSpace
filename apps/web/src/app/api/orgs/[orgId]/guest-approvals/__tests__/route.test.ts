@@ -19,6 +19,7 @@ vi.mock('@pagespace/lib/organizations/repository', () => ({ findMembershipRole: 
 vi.mock('@pagespace/lib/permissions/guest-holds', () => ({
   listPendingGuestApprovalViews: vi.fn(),
   claimPendingGuestApproval: vi.fn(),
+  claimGuestApprovalDecision: vi.fn(),
   requestGuestApproval: vi.fn(),
   markApprovedInvitation: vi.fn(async () => {}),
 }));
@@ -38,7 +39,7 @@ vi.mock('@/lib/page-invites/share-invite-handlers', () => ({ sendPendingPageInvi
 
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { findMembershipRole } from '@pagespace/lib/organizations/repository';
-import { claimPendingGuestApproval, listPendingGuestApprovalViews, markApprovedInvitation, requestGuestApproval } from '@pagespace/lib/permissions/guest-holds';
+import { claimGuestApprovalDecision, claimPendingGuestApproval, listPendingGuestApprovalViews, markApprovedInvitation, requestGuestApproval } from '@pagespace/lib/permissions/guest-holds';
 import { createPermissionNotification } from '@pagespace/lib/notifications/notifications';
 import { broadcastPageEvent } from '@/lib/websocket';
 import { completeApprovedLinkAdmission } from '@pagespace/lib/permissions/share-link-service';
@@ -76,6 +77,11 @@ beforeEach(() => {
   vi.mocked(authenticateRequestWithOptions).mockResolvedValue(session('user_priya'));
   vi.mocked(getOrgPolicies).mockResolvedValue({ ...DEFAULT_ORG_POLICIES, guests: 'approve' });
   vi.mocked(listPendingGuestApprovalViews).mockResolvedValue({ total: 0, items: [] });
+  // The decision claim (lib) takes the request off the queue through claimPendingGuestApproval for a paid org.
+  vi.mocked(claimGuestApprovalDecision).mockImplementation(async ({ orgId, holdId }) => {
+    const claimed = await claimPendingGuestApproval({ orgId, holdId });
+    return claimed ? { ok: true, claim: claimed } : { ok: false, reason: 'not_found' };
+  });
   vi.mocked(driveInviteRepository.findDriveById).mockResolvedValue({ id: 'drive_1', name: 'Finance', ownerId: 'user_marcus' } as never);
   vi.mocked(handleUserIdPath).mockResolvedValue(new Response(JSON.stringify({ kind: 'added' }), { status: 200 }));
   vi.mocked(handleEmailPath).mockResolvedValue(new Response(JSON.stringify({ kind: 'invited' }), { status: 200 }));
@@ -110,6 +116,17 @@ describe('the approval queue routes', () => {
     expect((await decide({ decision: 'maybe' })).status).toBe(400);
     expect((await decide(null)).status).toBe(400);
     expect(claimPendingGuestApproval).not.toHaveBeenCalled();
+  });
+
+  it('SEAT-9 (partial) POL-2 (partial) approving while the org is LAPSED gets the lapse refusal and admits nobody; the decision names approve (review #2817 P3-1)', async () => {
+    as('ADMIN');
+    vi.mocked(claimGuestApprovalDecision).mockResolvedValue({ ok: false, reason: 'org_lapsed', message: 'Reactivate to continue.' });
+    const res = await decide({ decision: 'approve' });
+    expect(res.status).toBe(402);
+    expect(await res.json()).toEqual({ error: 'Reactivate to continue.', code: 'org_lapsed' });
+    expect(claimGuestApprovalDecision).toHaveBeenCalledWith({ orgId: ORG_ID, holdId: 'hold_1', decision: 'approve' });
+    expect(handleUserIdPath).not.toHaveBeenCalled();
+    expect(handleEmailPath).not.toHaveBeenCalled();
   });
 
   it('POL-2 (partial) declining removes the request, admits nobody, and is audited', async () => {

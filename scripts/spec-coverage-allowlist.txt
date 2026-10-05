@@ -150,6 +150,10 @@ SEAT-6
 # test: the ordering clause against a user whose stripeCustomerId IS the org's customer.
 SEAT-7
 SEAT-8
+# SEAT-9 (partial, ow-lapse-automation): [D-OW-33] amends the policies clause — a lapsed org may make
+# RESTRICTING changes only (lapsed-restrict.integration, policy-restricts, wallet-restricts). Stays listed: the
+# Spec text still says "policies changes" are blocked (amendment proposed in the PR body), and the banner/notice
+# and "nothing is deleted" clauses are proven elsewhere only in part.
 SEAT-9
 SEC-1
 SEC-2
@@ -181,6 +185,8 @@ SPEND-3
 SPEND-4
 # SPEND-6 (partial, ow-c2): automations resolve to the drive wallet or skip, never a person; wiring every
 # automation kind and logging the skip are unproven until C4.
+# ow-lapse-automation: [D-OW-34] amends it — an automation runs on behalf of its creator, whose per-consumer cap
+# binds it (consumer-caps.integration self-firing trigger). Stays listed until the Spec text is amended.
 SPEND-6
 SPEND-7
 SPEND-8

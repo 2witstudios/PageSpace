@@ -83,6 +83,40 @@ export function planWalletPatch(input: WalletPatchInput, current: { status: Wall
 }
 
 // ---------------------------------------------------------------------------
+// [D-OW-33] what a LAPSED org may still change: only what restricts
+// ---------------------------------------------------------------------------
+
+/**
+ * A wallet change that only restricts: the kill switch (pause), a refuse fallback, closing donations. Every
+ * other field — resuming, an allocation or overshoot choice (they move or commit money), a fallback that
+ * spends, a default source — is not, and neither is an empty change. While the org is lapsed only these apply.
+ */
+export function walletPatchOnlyRestricts(input: WalletPatchInput): boolean {
+  const restricting: Record<keyof WalletPatchInput, (v: unknown) => boolean> = {
+    paused: (v) => v === true,
+    fallbackRule: (v) => v === 'refuse',
+    donationsEnabled: (v) => v === false,
+    allocationCents: () => false,
+    defaultSpendSource: () => false,
+    overshootChoice: () => false,
+  };
+  const named = (Object.keys(restricting) as Array<keyof WalletPatchInput>).filter((k) => input[k] !== undefined);
+  return named.length > 0 && named.every((k) => restricting[k](input[k]));
+}
+
+/**
+ * A cap write that only restricts: every window ends no higher than it was, where null is no cap. Callers pass
+ * the EFFECTIVE limits — what a missing row or a null window means on that leg — not the stored row.
+ */
+export function capChangeOnlyRestricts(
+  before: { dailyCents: number | null; monthlyCents: number | null },
+  after: { dailyCents: number | null; monthlyCents: number | null },
+): boolean {
+  const noHigher = (b: number | null, a: number | null): boolean => a === b || (a !== null && (b === null || a <= b));
+  return noHigher(before.dailyCents, after.dailyCents) && noHigher(before.monthlyCents, after.monthlyCents);
+}
+
+// ---------------------------------------------------------------------------
 // A top-up (WAL-3)
 // ---------------------------------------------------------------------------
 

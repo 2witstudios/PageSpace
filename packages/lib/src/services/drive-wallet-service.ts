@@ -52,11 +52,12 @@ import { listSpendChoices, resolveCallSpend, type SpendChoice } from '../billing
 import { conversationSpend, type CallSpendDecision } from '../billing/spend-target';
 import { formatCreditCount } from '../billing/money-model';
 import { toSubscriptionTier } from '../billing/subscription-tiers';
-import { planDeleteWallet, planTopUp, planWalletPatch, type DeleteBlocker, type WalletPatchInput } from '../billing/wallet-admin';
+import { capChangeOnlyRestricts, planDeleteWallet, planTopUp, planWalletPatch, walletPatchOnlyRestricts, type DeleteBlocker, type WalletPatchInput } from '../billing/wallet-admin';
 import { donateToDriveWallet } from '../billing/wallet-funding-shell';
 import { checkOrgActive } from '../organizations/status';
 import { findMembershipRole, findOrganizationNames } from '../organizations/repository';
-import { planConsumerCapWrite, userConsumerKey, utcDayStartMs, utcMonthStartMs, type ConsumerCapWriteInput, type SpendSourceKind } from '../billing/wallet-core';
+import { planConsumerCapWrite, userConsumerKey, utcDayStartMs, utcMonthStartMs, type ConsumerCapWriteInput, type ConsumerCaps, type SpendSourceKind } from '../billing/wallet-core';
+import { getOrgPolicies } from '../organizations/policy-reader';
 import {
   capRemainingCents,
   displayedWalletStatus,
@@ -133,9 +134,12 @@ function requireAction(access: WalletAccess, action: WalletAction): WalletServic
 
 /**
  * SEAT-9: the org pool and its allocations are an org-only capability. While the drive's
- * org is lapsed every wallet WRITE on an org drive is refused (allocate, rules, pause,
+ * org is lapsed every wallet WRITE on an org drive is refused (allocate, rules, resume,
  * delete, top up, donate) — nothing moves, so no credit is deleted or reallocated; reads
- * stay open. A personal drive's wallet has no org and is never affected.
+ * stay open. A personal drive's wallet has no org and is never affected. [D-OW-33] billing
+ * never blocks security: a write that only RESTRICTS (the kill switch, a refuse fallback,
+ * closing donations, a lower cap) still applies — the callers ask walletPatchOnlyRestricts
+ * and capChangeOnlyRestricts before refusing.
  */
 async function requireOrgActiveForWrite(access: WalletAccess): Promise<WalletServiceError | null> {
   if (access.standing.orgId === null) return null;
@@ -475,7 +479,7 @@ export async function updateDriveWallet(
   if (refused) return refused;
   const access = await walletAccess(userId, driveId, credential);
   if (!access.ok) return access;
-  const lapsed = await requireOrgActiveForWrite(access);
+  const lapsed = walletPatchOnlyRestricts(input) ? null : await requireOrgActiveForWrite(access);
   if (lapsed) return lapsed;
 
   let applied: Record<string, unknown> = {};
@@ -780,8 +784,9 @@ export async function setDriveWalletCap(
   if (refused) return refused;
   const access = await walletAccess(userId, driveId, credential);
   if (!access.ok) return access;
-  const denied = requireAction(access, 'set_caps') ?? (await requireOrgActiveForWrite(access));
+  const denied = requireAction(access, 'set_caps');
   if (denied) return denied;
+  const lapsed = await requireOrgActiveForWrite(access);
   const consumer = await loadDriveWalletStanding(consumerId, driveId);
   if (!consumer || walletViewerRole(consumer) === 'none') return notAConsumer();
   const row = await driveWalletRow(db, driveId);
@@ -790,11 +795,22 @@ export async function setDriveWalletCap(
   // The drive must still have the org standing access was decided on, share-locked for the
   // write, like every other wallet write: a personal lead's cap must not land on a leg that
   // became an org's mid-request (drive_moved).
-  const written = await writeConsumerCap(row.id, consumerId, input, (tx) => lockDriveOrgStanding(tx, driveId, access.standing.orgId));
+  // A drive-wallet leg with no cap row (or a null window) has no cap there.
+  const restrictOnly = lapsed ? async (): Promise<RestrictOnly> => ({ refusal: lapsed, effective: (caps: ConsumerCaps | null): ConsumerCaps => caps ?? { dailyCents: null, monthlyCents: null } }) : undefined;
+  const written = await writeConsumerCap(row.id, consumerId, input, (tx) => lockDriveOrgStanding(tx, driveId, access.standing.orgId), restrictOnly);
   if (written) return written;
   await recordOrgWalletEvent(access.standing, userId, 'org.wallet.allocation_changed', { operation: input === null ? 'clear_consumer_cap' : 'set_consumer_cap', consumerId });
   void announceWalletChange(row.id, 'caps');
   return { ok: true, walletId: row.id, caps: await capsOnWallet(row.id) };
+}
+
+/**
+ * While the org is lapsed ([D-OW-33]): the write applies only if it lowers no window's effective limit, judged
+ * against the row read under its lock; otherwise `refusal`. `effective` maps a stored row (or none) to its limits.
+ */
+interface RestrictOnly {
+  refusal: WalletServiceError;
+  effective: (caps: ConsumerCaps | null) => ConsumerCaps;
 }
 
 /** Upsert (or, for null, delete) one consumer's caps on a leg, under the row's lock. */
@@ -803,22 +819,27 @@ async function writeConsumerCap(
   consumerId: string,
   input: ConsumerCapWriteInput | null,
   guard?: (tx: Tx) => Promise<WalletServiceError | null>,
+  /** Resolved inside the write's transaction (after `guard`), so what it reads is read under that transaction's locks. */
+  restrictOnlyIn?: (tx: Tx) => Promise<RestrictOnly>,
 ): Promise<WalletServiceError | null> {
   const consumerKey = userConsumerKey(consumerId);
   return db.transaction(async (tx): Promise<WalletServiceError | null> => {
     const blocked = guard ? await guard(tx) : null;
     if (blocked) return blocked;
-    if (input === null) {
-      await tx.delete(walletConsumerCaps).where(and(eq(walletConsumerCaps.walletId, walletId), eq(walletConsumerCaps.consumerKey, consumerKey)));
-      return null;
-    }
+    const restrictOnly = restrictOnlyIn ? await restrictOnlyIn(tx) : undefined;
     const [existing] = await tx
       .select({ dailyCents: walletConsumerCaps.dailyCapCents, monthlyCents: walletConsumerCaps.monthlyCapCents })
       .from(walletConsumerCaps)
       .where(and(eq(walletConsumerCaps.walletId, walletId), eq(walletConsumerCaps.consumerKey, consumerKey)))
       .for('update');
+    if (input === null) {
+      if (restrictOnly && !capChangeOnlyRestricts(restrictOnly.effective(existing ?? null), restrictOnly.effective(null))) return restrictOnly.refusal;
+      await tx.delete(walletConsumerCaps).where(and(eq(walletConsumerCaps.walletId, walletId), eq(walletConsumerCaps.consumerKey, consumerKey)));
+      return null;
+    }
     const plan = planConsumerCapWrite(input, existing ?? null);
     if (plan.kind === 'refuse') return invalidCap();
+    if (restrictOnly && !capChangeOnlyRestricts(restrictOnly.effective(existing ?? null), restrictOnly.effective(plan.caps))) return restrictOnly.refusal;
     await tx
       .insert(walletConsumerCaps)
       .values({ walletId, consumerKey, dailyCapCents: plan.caps.dailyCents, monthlyCapCents: plan.caps.monthlyCents })
@@ -850,10 +871,21 @@ export async function setSeatCap(
     return { ok: false, status: decision.status, code: decision.code, message: decision.code === 'insufficient_role' ? 'Only the organization Owner or an Admin can set a seat cap' : decision.code === 'not_org_member' ? 'That person is not a member of this organization' : 'Organization not found' };
   }
   const active = await checkOrgActive(orgId);
-  if (!active.ok) return { ok: false, status: active.status, code: active.code, message: active.message };
   const pool = await orgPoolRow(db, orgId);
-  if (!pool) return { ok: false, status: 409, code: 'no_org_pool', message: 'This organization has no pool yet' };
-  const written = await writeConsumerCap(pool.id, consumerId, input);
+  if (!pool) return active.ok ? { ok: false, status: 409, code: 'no_org_pool', message: 'This organization has no pool yet' } : { ok: false, status: active.status, code: active.code, message: active.message };
+  // A seat with no row, or no monthly window of its own, draws the org's seat allowance (WAL-2): that is its monthly
+  // limit. It is read FOR SHARE on the org row inside the cap write's transaction, so a policy change cutting it
+  // (which holds that row FOR UPDATE) is waited for, never judged against a stale value (review #2817 P3-2).
+  const restrictOnly = active.ok
+    ? undefined
+    : async (tx: Tx): Promise<RestrictOnly> => {
+        const allowance = (await getOrgPolicies(orgId, tx, { forShare: true })).seatAllowanceCents;
+        return {
+          refusal: { ok: false, status: active.status, code: active.code, message: active.message },
+          effective: (caps: ConsumerCaps | null): ConsumerCaps => ({ dailyCents: caps?.dailyCents ?? null, monthlyCents: caps?.monthlyCents ?? allowance }),
+        };
+      };
+  const written = await writeConsumerCap(pool.id, consumerId, input, undefined, restrictOnly);
   if (written) return written;
   await recordOrgAuditEventAfterCommit({
     orgId,

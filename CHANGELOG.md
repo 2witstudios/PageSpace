@@ -9,6 +9,20 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Changed
 
+- **A lapsed organization can still lock things down** — while an organization's plan is unpaid or
+  canceled, its Owner and Admins can still make any change that restricts: turn guests from outside off
+  or to approval (guests are removed from its drives at once, as when the plan is active), turn off share
+  links, publishing and other features, lower the seat allowance, narrow the allowed models or
+  integrations, remove members, revoke share links and invitations, decline guest requests, pause a
+  drive's wallet and lower a person's spending cap. Changes that open access or add spending — including
+  approving a guest request — still wait until the plan is paid again.
+- **Automations count against their creator's spending cap** — a workflow, a scheduled run or a trigger
+  now counts toward the per-person spending cap of the person who created it, on the drive wallet it
+  spends. Once that person's cap is reached the run is skipped and the run log says the cap was reached;
+  the wallet's funders get the same 80% and 100% alerts as for that person's own chats. People with no
+  cap set are unaffected. An automation stops running if the person who created it leaves the
+  organization (or, on a personal drive, the drive); its run log says why. A workflow you run by hand
+  counts against your own cap, not its creator's.
 - **Organization policies now hold everywhere they apply** — when an organization turns guests from
   outside off, nobody outside it can be added to its drives by sharing a single page either (the Share
   dialog, an email share or accepting a page invitation), and people outside it whose only access was a

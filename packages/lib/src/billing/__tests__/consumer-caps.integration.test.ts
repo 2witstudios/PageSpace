@@ -16,6 +16,7 @@ import { db, pool } from '@pagespace/db/db';
 import { and, eq, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
+import { driveMembers } from '@pagespace/db/schema/members';
 import { creditHolds, creditLedger } from '@pagespace/db/schema/credits';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { notifications } from '@pagespace/db/schema/notifications';
@@ -24,7 +25,7 @@ import { walletCapAlerts, walletConsumerCaps, wallets } from '@pagespace/db/sche
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { canConsumeAI } from '../credit-gate';
-import { consumeCredits, settlePendingLedgerRow } from '../credit-consume';
+import { consumeCredits, releaseHold, settlePendingLedgerRow } from '../credit-consume';
 import { automationSpend, driveSpend, personTriggeredSpend } from '../spend-target';
 import { notifyCapAlerts } from '../wallet-cap-alerts';
 import { listDriveWalletCaps, setDriveWalletCap, setSeatCap } from '../../services/drive-wallet-service';
@@ -250,10 +251,11 @@ describe('per-consumer caps on drive-wallet and seat legs (orgs on, real Postgre
     expect(mention).toMatchObject({ allowed: false, reason: 'source_refused', refusal: { source: 'drive_wallet', reason: 'source_cap_reached' } });
     expect(await db.select().from(creditHolds).where(eq(creditHolds.userId, w.marcusId))).toEqual([]);
 
-    // SPEND-6 stands for a run no person is present for (a cron, a trigger, a scheduled workflow):
-    // it is the drive spending, recorded under its creator, and no person's cap applies.
-    const unattended = await canConsumeAI(w.marcusId, 'free', { spend: automationSpend(w.productId), estCostCents: 5 });
-    expect(unattended).toMatchObject({ allowed: true, walletId: w.productWalletId });
+    // [D-OW-34] a run no person is present for (a cron, a trigger, a scheduled workflow) runs on behalf of its
+    // CREATOR: the same cap binds it, refused by name, holding nothing.
+    const unattended = await canConsumeAI(w.marcusId, 'free', { spend: automationSpend(w.productId), estCostCents: 5, skipDailyCap: true });
+    expect(unattended).toMatchObject({ allowed: false, reason: 'source_refused', refusal: { source: 'drive_wallet', reason: 'source_cap_reached' } });
+    expect(await db.select().from(creditHolds).where(eq(creditHolds.userId, w.marcusId))).toEqual([]);
   });
 
   it('WAL-7 (partial) ten SIMULTANEOUS calls against a cap with room for one: the wallet lock serializes them, exactly one is admitted', async () => {
@@ -281,6 +283,33 @@ describe('per-consumer caps on drive-wallet and seat legs (orgs on, real Postgre
     const run = await canConsumeAI(w.lenaId, 'free', { spend: personTriggeredSpend(w.productId), estCostCents: 10, maxInFlight: 3 });
     expect(run).toMatchObject({ allowed: false, reason: 'source_refused', refusal: { source: 'drive_wallet', reason: 'source_cap_reached' } });
     expect(await db.select().from(creditHolds).where(eq(creditHolds.userId, w.lenaId))).toEqual([]);
+  });
+
+  it('WAL-7 (partial) SPEND-6 (partial) repeated manual Runs by a capped presser on a workflow an uncapped person created are counted as the presser and stop at the presser\'s cap; the creator is never charged (review #2817 P2-3)', async () => {
+    if (!dbAvailable) return;
+    world = await build();
+    const w = world;
+    // Lena leads Product and is capped there; Jono (the Owner, uncapped) created the workflow she keeps pressing Run on.
+    await setDriveWalletCap(w.anaId, w.productId, w.lenaId, { dailyCents: 40, monthlyCents: null }, 'session');
+    let admitted = 0;
+    let refused: Awaited<ReturnType<typeof canConsumeAI>> | null = null;
+    for (let i = 0; i < 20; i += 1) {
+      // Exactly the Run route's admission (acquireWorkflowCreditHold, interactive, triggeredBy = the presser)...
+      const run = await canConsumeAI(w.lenaId, 'free', { spend: personTriggeredSpend(w.productId), estCostCents: 10, maxInFlight: 3 });
+      if (!run.allowed) { refused = run; break; }
+      admitted += 1;
+      // ...then executeWorkflow's settle: no hold of its own, recorded as creditSpend.userId (the presser), on the gate's wallet.
+      const [log] = await db.insert(aiUsageLogs).values({ userId: w.lenaId, provider: 'openrouter', model: 'm', cost: 0.1 }).returning({ id: aiUsageLogs.id });
+      expect(await consumeCredits({ aiUsageLogId: log.id, userId: w.lenaId, costDollars: 0.1, walletId: run.walletId })).toBe('settled'); // 15¢
+      if (run.holdId) await releaseHold(run.holdId);
+    }
+    expect(refused).toMatchObject({ allowed: false, reason: 'source_refused', refusal: { source: 'drive_wallet', reason: 'source_cap_reached' } });
+    expect(admitted).toBe(3);
+    const usageOf = async (userId: string) => (await db.select().from(creditLedger).where(and(eq(creditLedger.userId, userId), eq(creditLedger.entryType, 'usage'))))
+      .reduce((sum, r) => sum - (r.appliedCents ?? 0), 0);
+    expect(await usageOf(w.lenaId)).toBe(45);
+    expect(await usageOf(w.jonoId)).toBe(0);
+    expect((await capAlertsFor(w.jonoId)).map((n) => n.title).sort()).toEqual(['A spending cap is at 80%', 'A spending cap was reached']);
   });
 
   it('WAL-7 (partial) the cap is decided under the wallet lock: spend landing after the unlocked resolution saw room is still refused, reserving nothing', async () => {
@@ -364,6 +393,71 @@ describe('per-consumer caps on drive-wallet and seat legs (orgs on, real Postgre
       if (prevUrl === undefined) delete process.env.INTERNAL_REALTIME_URL;
       else process.env.INTERNAL_REALTIME_URL = prevUrl;
     }
+  });
+
+  it('SPEND-6 (partial) WAL-7 (partial) a capped member\'s self-firing trigger stops at their cap: each run is gated as its creator under the wallet lock, the funder is alerted at 80% and 100%, and the refusal names source_cap_reached', async () => {
+    if (!dbAvailable) return;
+    world = await build();
+    const w = world;
+    await setDriveWalletCap(w.anaId, w.productId, w.marcusId, { dailyCents: 50, monthlyCents: null }, 'session');
+
+    // Marcus built a trigger that fires on his own actions; every fire is an automation recorded under him (its creator).
+    const fire = () => canConsumeAI(w.marcusId, 'free', { spend: automationSpend(w.productId), estCostCents: 5, skipDailyCap: true });
+    let admitted = 0;
+    let refused: Awaited<ReturnType<typeof fire>> | null = null;
+    for (let i = 0; i < 20 && !refused; i += 1) {
+      const gate = await fire();
+      if (!gate.allowed) { refused = gate; break; }
+      admitted += 1;
+      expect(gate.walletId).toBe(w.productWalletId);
+      const [log] = await db.insert(aiUsageLogs).values({ userId: w.marcusId, provider: 'openrouter', model: 'm', cost: 0.1 }).returning({ id: aiUsageLogs.id });
+      expect(await consumeCredits({ aiUsageLogId: log.id, userId: w.marcusId, costDollars: 0.1, holdId: gate.holdId, walletId: gate.walletId })).toBe('settled'); // 15¢
+    }
+    expect(refused).toMatchObject({ allowed: false, reason: 'source_refused', refusal: { source: 'drive_wallet', reason: 'source_cap_reached' } });
+    // Admission is bounded by the cap: spend stops within one call's charge of it (WAL-7 bounds admission, not settlement).
+    const spent = (await db.select().from(creditLedger).where(and(eq(creditLedger.userId, w.marcusId), eq(creditLedger.entryType, 'usage'))))
+      .reduce((sum, r) => sum - (r.appliedCents ?? 0), 0);
+    expect(admitted).toBe(4);
+    expect(spent).toBe(60);
+    expect(await db.select().from(creditHolds).where(eq(creditHolds.userId, w.marcusId))).toEqual([]);
+    expect((await capAlertsFor(w.jonoId)).map((n) => n.title).sort()).toEqual(['A spending cap is at 80%', 'A spending cap was reached']);
+    expect(await capAlertsFor(w.marcusId)).toHaveLength(0);
+
+    // People with no cap are unaffected: the drive's lead fires the same automation on the same wallet.
+    expect(await canConsumeAI(w.lenaId, 'free', { spend: automationSpend(w.productId), estCostCents: 5, skipDailyCap: true }))
+      .toMatchObject({ allowed: true, walletId: w.productWalletId });
+  });
+
+  it('SPEND-6 (partial) WAL-7 (partial) a creator who LEAVES the org takes their caps with them, so their automations stop: refused creator_departed before any hold, never run uncapped', async () => {
+    if (!dbAvailable) return;
+    world = await build();
+    const w = world;
+    await setDriveWalletCap(w.anaId, w.productId, w.marcusId, { dailyCents: 30, monthlyCents: null }, 'session');
+    await settledCall(w, w.productId, 0.2); // 30¢: Marcus's day is spent
+    const fire = () => canConsumeAI(w.marcusId, 'free', { spend: automationSpend(w.productId), estCostCents: 5, skipDailyCap: true });
+    expect(await fire()).toMatchObject({ allowed: false, refusal: { reason: 'source_cap_reached' } });
+
+    // He leaves; his caps on the org's legs go with him. His hourly workflow must not drain Product uncapped.
+    expect(await leaveOrganization(w.marcusId, w.orgId)).toMatchObject({ ok: true });
+    expect(await capRow(w.productWalletId, w.marcusId)).toBeNull();
+    expect(await fire()).toEqual({ allowed: false, reason: 'source_refused', refusal: { source: 'drive_wallet', reason: 'creator_departed', options: [] } });
+    expect(await db.select().from(creditHolds).where(eq(creditHolds.userId, w.marcusId))).toEqual([]);
+    // A creator who is still in the org is unaffected.
+    expect(await canConsumeAI(w.lenaId, 'free', { spend: automationSpend(w.productId), estCostCents: 5, skipDailyCap: true }))
+      .toMatchObject({ allowed: true, walletId: w.productWalletId });
+  });
+
+  it('SPEND-6 (partial) on a PERSONAL drive a creator removed from the drive is departed: their automation is refused creator_departed and holds nothing', async () => {
+    if (!dbAvailable) return;
+    world = await build();
+    const w = world;
+    const fire = () => canConsumeAI(w.marcusId, 'free', { spend: automationSpend(w.sideId), estCostCents: 5, skipDailyCap: true });
+    expect(await fire()).toMatchObject({ allowed: true, walletId: w.sideWalletId });
+    await db.delete(creditHolds).where(eq(creditHolds.userId, w.marcusId));
+
+    await db.delete(driveMembers).where(and(eq(driveMembers.driveId, w.sideId), eq(driveMembers.userId, w.marcusId)));
+    expect(await fire()).toEqual({ allowed: false, reason: 'source_refused', refusal: { source: 'drive_wallet', reason: 'creator_departed', options: [] } });
+    expect(await db.select().from(creditHolds).where(eq(creditHolds.userId, w.marcusId))).toEqual([]);
   });
 
   it('WAL-7 (partial) a call the backfill cron settles late still alerts the funder', async () => {

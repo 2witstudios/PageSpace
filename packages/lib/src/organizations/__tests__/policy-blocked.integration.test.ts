@@ -21,7 +21,7 @@ import { driveAgentMembers } from '@pagespace/db/schema/members';
 import { driveEnvs } from '@pagespace/db/schema/drive-envs';
 import { publishedApps } from '@pagespace/db/schema/published-apps';
 import { workflows } from '@pagespace/db/schema/workflows';
-import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
+import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
 
 const audit = vi.hoisted(() => ({ events: [] as Array<Record<string, unknown>> }));
 vi.mock('../../audit/org-audit', () => ({
@@ -55,6 +55,7 @@ async function cleanup() {
   if (created.driveIds.length) await db.delete(drives).where(inArray(drives.id, created.driveIds));
   if (created.orgIds.length) {
     await db.delete(orgMembers).where(inArray(orgMembers.orgId, created.orgIds));
+    await db.delete(orgSubscriptions).where(inArray(orgSubscriptions.orgId, created.orgIds));
     await db.delete(organizations).where(inArray(organizations.id, created.orgIds));
   }
   if (created.userIds.length) await db.delete(users).where(inArray(users.id, created.userIds));
@@ -92,6 +93,8 @@ beforeEach(async () => {
     { id: orgId, name: 'Northwind', slug: `nw-${createId()}`, ownerId: owner },
     { id: otherOrgId, name: 'Other', slug: `ot-${createId()}`, ownerId: otherOwner },
   ]);
+  // A paying org (D-OW-30: no subscription is lapsed, and a lapsed org may only restrict, [D-OW-33]).
+  await factories.createOrgSubscription(orgId);
   await db.insert(orgMembers).values([{ orgId, userId: owner, role: 'OWNER' }, { orgId: otherOrgId, userId: otherOwner, role: 'OWNER' }]);
   const mkDrive = async (by: string, org: string | null) => {
     const d = await factories.createDrive(by);

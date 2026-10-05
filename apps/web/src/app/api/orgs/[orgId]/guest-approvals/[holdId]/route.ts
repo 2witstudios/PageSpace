@@ -5,7 +5,8 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { recordOrgAuditEvent } from '@pagespace/lib/audit/org-audit';
 import { getOrgPolicies } from '@pagespace/lib/organizations/policy-reader';
 import { GUESTS_OFF_MESSAGE } from '@pagespace/lib/organizations/sharing-decisions';
-import { claimPendingGuestApproval, markApprovedInvitation, requestGuestApproval, type ClaimedGuestApproval } from '@pagespace/lib/permissions/guest-holds';
+import { claimGuestApprovalDecision, markApprovedInvitation, requestGuestApproval, type ClaimedGuestApproval } from '@pagespace/lib/permissions/guest-holds';
+import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
 import { createPermissionNotification } from '@pagespace/lib/notifications/notifications';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { db } from '@pagespace/db/db';
@@ -99,8 +100,12 @@ export async function POST(request: Request, context: Context) {
       return NextResponse.json({ error: GUESTS_OFF_MESSAGE, code: 'org_policy', policy: 'guests' }, { status: 403 });
     }
 
-    const claim = await claimPendingGuestApproval({ orgId, holdId });
-    if (!claim) return NextResponse.json({ error: 'Request not found', code: 'not_found' }, { status: 404 });
+    // [D-OW-33] approving admits an outsider (loosening), so a lapsed org is refused and the request stays queued;
+    // declining only restricts and works whatever the org's billing.
+    const decided = await claimGuestApprovalDecision({ orgId, holdId, decision: parsed.data.decision });
+    if (!decided.ok && decided.reason === 'org_lapsed') return orgLapsedResponse(decided.message);
+    if (!decided.ok) return NextResponse.json({ error: 'Request not found', code: 'not_found' }, { status: 404 });
+    const claim = decided.claim;
 
     if (parsed.data.decision === 'decline') {
       await audit(claim, 'org.guest.declined', gate.userId);

@@ -49,6 +49,13 @@ describe('acquireUserCreditHold', () => {
     expect(await acquireUserCreditHold('user-1', { spend: SPEND })).toEqual({ allowed: false, reason: 'out_of_credits' });
   });
 
+  it('SPEND-6 (partial) given a refused source, should carry the refusal so a skipped run can record why (e.g. source_cap_reached)', async () => {
+    const refusal = { source: 'drive_wallet' as const, reason: 'source_cap_reached' as const, options: [] };
+    mockCanConsumeAI.mockResolvedValue({ allowed: false, reason: 'source_refused', refusal });
+
+    expect(await acquireUserCreditHold('user-1', { spend: SPEND })).toEqual({ allowed: false, reason: 'source_refused', refusal });
+  });
+
   it('given an allowed gate, should return the wallet the hold was placed on, for the calls to settle on', async () => {
     mockCanConsumeAI.mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'hold-1', walletId: 'w-drive-1' });
 

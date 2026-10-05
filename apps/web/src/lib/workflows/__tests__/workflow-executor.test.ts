@@ -1033,6 +1033,30 @@ describe('executeWorkflow', () => {
       expect(genCall.experimental_context.creditSpend).toEqual(creditSpend);
     });
 
+    test('SPEND-6 (partial) WAL-7 (partial) a MANUAL Run records its usage under the person who pressed Run (the consumer its gate bound), not the workflow\'s creator (review #2817 P2-3)', async () => {
+      setupSelectChain([mockAgent], [mockDrive]);
+      const creditSpend = { spend: { kind: 'automation' as const, driveId: 'drive_1', personPresent: true as const }, walletId: 'w_product', userId: 'user_presser' };
+
+      await executeWorkflow(createInputFixture({ createdBy: 'user_creator' }), {
+        admit: vi.fn().mockResolvedValue({ admitted: true, release: vi.fn(), creditSpend }),
+      });
+
+      expect(AIMonitoring.trackUsage).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user_presser', walletId: 'w_product', source: 'workflow' }));
+      // Content access and the run's own records stay with the creator; only the spend is the presser's.
+      const genCall = vi.mocked(generateText).mock.calls[0][0] as { experimental_context: { userId: string; creditSpend?: unknown } };
+      expect(genCall.experimental_context.userId).toBe('user_creator');
+      expect(genCall.experimental_context.creditSpend).toEqual(creditSpend);
+    });
+
+    test('SPEND-6 (partial) a scheduled run (no presser) still records its usage under the creator', async () => {
+      setupSelectChain([mockAgent], [mockDrive]);
+      const creditSpend = { spend: { kind: 'automation' as const, driveId: 'drive_1' }, walletId: 'w_product', userId: 'user_creator' };
+
+      await executeWorkflow(createInputFixture({ createdBy: 'user_creator' }), { admit: vi.fn().mockResolvedValue({ admitted: true, release: vi.fn(), creditSpend }) });
+
+      expect(AIMonitoring.trackUsage).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user_creator' }));
+    });
+
     test('SPEND-6 (partial) a run gated before the claim settles on the wallet its caller names', async () => {
       setupSelectChain([mockAgent], [mockDrive]);
       const creditSpend = { spend: { kind: 'automation' as const, driveId: 'drive_1' }, walletId: 'w_product' };

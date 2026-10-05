@@ -58,16 +58,17 @@ export async function acquireWorkflowCreditHold(
    * pays, as for a channel @mention): it is gated as them under personTriggeredSpend, so THEIR
    * per-consumer caps on the drive wallet bind (WAL-7). Still the drive wallet or a refusal —
    * never their own credits or seat. Absent for a scheduled run or an event trigger: no person is
-   * present, the drive spends, recorded under the workflow's creator (SPEND-6).
+   * present: the drive wallet spends, gated as the workflow's creator, whose caps bind ([D-OW-34]).
    */
   triggeredBy?: string,
 ): Promise<WorkflowCreditHold> {
   const userId = triggeredBy ?? input.createdBy;
-  // SPEND-6: a scheduled or triggered run has no person present; its consumer is the drive, and
-  // it spends the drive wallet or is skipped — never its creator's credits or allowance.
+  // SPEND-6: a scheduled or triggered run has no person present; it spends the drive wallet or is
+  // skipped — never its creator's credits or allowance — and runs on behalf of its creator, so the
+  // creator's per-consumer caps on that wallet bind it ([D-OW-34]).
   const target = triggeredBy ? personTriggeredSpend(input.driveId) : automationSpend(input.driveId);
   const steps = resolveSteps({ steps: input.steps ?? null, prompt: input.prompt, agentPageId: input.agentPageId });
-  if (!hasAiStep(steps)) return { allowed: true, release: () => {}, creditSpend: { spend: target } };
+  if (!hasAiStep(steps)) return { allowed: true, release: () => {}, creditSpend: { spend: target, userId } };
 
   const [user] = await db
     .select({ subscriptionTier: users.subscriptionTier })
@@ -83,8 +84,10 @@ export async function acquireWorkflowCreditHold(
   if (!gate.allowed) return gate.refusal ? { allowed: false, reason: gate.reason, refusal: gate.refusal } : { allowed: false, reason: gate.reason };
 
   // The run settles on the wallet the gate reserved on (WAL-5): the drive wallet once
-  // wallets are on; while orgs are dark, the personal root as before wallets.
-  const creditSpend: RunCreditSpend = { spend: target, walletId: gate.walletId };
+  // wallets are on; while orgs are dark, the personal root as before wallets. Its usage is
+  // recorded as the person the gate bound — the presser of a manual Run, else the creator — so
+  // the spend counts toward the same cap that admitted it (review #2817 P2-3).
+  const creditSpend: RunCreditSpend = { spend: target, walletId: gate.walletId, userId };
   const holdId = gate.holdId;
   if (!holdId) return { allowed: true, release: () => {}, creditSpend };
 
