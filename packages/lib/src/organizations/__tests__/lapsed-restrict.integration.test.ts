@@ -265,6 +265,40 @@ describe('a lapsed org may still restrict (orgs on, real Postgres)', () => {
     expect([row.status, row.monthlyAllowanceCents, row.fallbackRule, row.donationsEnabled]).toEqual(['paused', 120_000, 'refuse', false]);
   });
 
+  it('SEAT-9 (partial) WAL-7 (partial) a lapsed seat-cap write judges against the allowance under the org row lock: a concurrent allowance cut is waited for, never bypassed (review #2817 P3-2)', async () => {
+    if (!world) return;
+    const w = world;
+    await db.update(organizations).set({ policies: { seatAllowanceCents: 1_000 } }).where(eq(organizations.id, w.orgId));
+    await setSubscription(w.orgId, 'canceled');
+
+    // An admin's policy change is mid-flight: it holds the org row FOR UPDATE and has cut the allowance to 200.
+    let cut!: () => void;
+    const cutHeld = new Promise<void>((resolve) => { cut = resolve; });
+    let commit!: () => void;
+    const mayCommit = new Promise<void>((resolve) => { commit = resolve; });
+    const policyChange = db.transaction(async (tx) => {
+      await tx.select({ id: organizations.id }).from(organizations).where(eq(organizations.id, w.orgId)).for('update');
+      await tx.update(organizations).set({ policies: { seatAllowanceCents: 200 } }).where(eq(organizations.id, w.orgId));
+      cut();
+      await mayCommit;
+    });
+    await cutHeld;
+
+    // Another admin sets an 800¢ seat cap: below the allowance it can see committed (1000), above the one being written.
+    let settled = false;
+    const capWrite = setSeatCap(w.ids.priya, w.orgId, w.ids.dana, { monthlyCents: 800, dailyCents: null }).finally(() => { settled = true; });
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(settled).toBe(false); // it waits for the policy change's lock
+    } finally {
+      commit();
+      await policyChange;
+    }
+
+    expect(await capWrite).toEqual(lapsedWalletRefusal); // judged against 200: 800 raises the seat, refused
+    expect(await capOf(w.poolId, w.ids.dana)).toBeNull();
+  });
+
   it('SEAT-9 (partial) WAL-7 (partial) while lapsed a cap can be LOWERED or set where there was none; raising or clearing one is refused and writes nothing', async () => {
     if (!world) return;
     const w = world;

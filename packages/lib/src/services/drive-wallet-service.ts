@@ -796,7 +796,7 @@ export async function setDriveWalletCap(
   // write, like every other wallet write: a personal lead's cap must not land on a leg that
   // became an org's mid-request (drive_moved).
   // A drive-wallet leg with no cap row (or a null window) has no cap there.
-  const restrictOnly = lapsed ? { refusal: lapsed, effective: (caps: ConsumerCaps | null): ConsumerCaps => caps ?? { dailyCents: null, monthlyCents: null } } : undefined;
+  const restrictOnly = lapsed ? async (): Promise<RestrictOnly> => ({ refusal: lapsed, effective: (caps: ConsumerCaps | null): ConsumerCaps => caps ?? { dailyCents: null, monthlyCents: null } }) : undefined;
   const written = await writeConsumerCap(row.id, consumerId, input, (tx) => lockDriveOrgStanding(tx, driveId, access.standing.orgId), restrictOnly);
   if (written) return written;
   await recordOrgWalletEvent(access.standing, userId, 'org.wallet.allocation_changed', { operation: input === null ? 'clear_consumer_cap' : 'set_consumer_cap', consumerId });
@@ -819,12 +819,14 @@ async function writeConsumerCap(
   consumerId: string,
   input: ConsumerCapWriteInput | null,
   guard?: (tx: Tx) => Promise<WalletServiceError | null>,
-  restrictOnly?: RestrictOnly,
+  /** Resolved inside the write's transaction (after `guard`), so what it reads is read under that transaction's locks. */
+  restrictOnlyIn?: (tx: Tx) => Promise<RestrictOnly>,
 ): Promise<WalletServiceError | null> {
   const consumerKey = userConsumerKey(consumerId);
   return db.transaction(async (tx): Promise<WalletServiceError | null> => {
     const blocked = guard ? await guard(tx) : null;
     if (blocked) return blocked;
+    const restrictOnly = restrictOnlyIn ? await restrictOnlyIn(tx) : undefined;
     const [existing] = await tx
       .select({ dailyCents: walletConsumerCaps.dailyCapCents, monthlyCents: walletConsumerCaps.monthlyCapCents })
       .from(walletConsumerCaps)
@@ -871,13 +873,17 @@ export async function setSeatCap(
   const active = await checkOrgActive(orgId);
   const pool = await orgPoolRow(db, orgId);
   if (!pool) return active.ok ? { ok: false, status: 409, code: 'no_org_pool', message: 'This organization has no pool yet' } : { ok: false, status: active.status, code: active.code, message: active.message };
-  // A seat with no row, or no monthly window of its own, draws the org's seat allowance (WAL-2): that is its monthly limit.
-  const allowance = active.ok ? 0 : (await getOrgPolicies(orgId)).seatAllowanceCents;
+  // A seat with no row, or no monthly window of its own, draws the org's seat allowance (WAL-2): that is its monthly
+  // limit. It is read FOR SHARE on the org row inside the cap write's transaction, so a policy change cutting it
+  // (which holds that row FOR UPDATE) is waited for, never judged against a stale value (review #2817 P3-2).
   const restrictOnly = active.ok
     ? undefined
-    : {
-        refusal: { ok: false as const, status: active.status, code: active.code, message: active.message },
-        effective: (caps: ConsumerCaps | null): ConsumerCaps => ({ dailyCents: caps?.dailyCents ?? null, monthlyCents: caps?.monthlyCents ?? allowance }),
+    : async (tx: Tx): Promise<RestrictOnly> => {
+        const allowance = (await getOrgPolicies(orgId, tx, { forShare: true })).seatAllowanceCents;
+        return {
+          refusal: { ok: false, status: active.status, code: active.code, message: active.message },
+          effective: (caps: ConsumerCaps | null): ConsumerCaps => ({ dailyCents: caps?.dailyCents ?? null, monthlyCents: caps?.monthlyCents ?? allowance }),
+        };
       };
   const written = await writeConsumerCap(pool.id, consumerId, input, undefined, restrictOnly);
   if (written) return written;
