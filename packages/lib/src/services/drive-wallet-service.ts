@@ -22,7 +22,7 @@ import { users } from '@pagespace/db/schema/auth';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { creditHolds, creditLedger } from '@pagespace/db/schema/credits';
-import { orgMembers } from '@pagespace/db/schema/organizations';
+import { orgMembers, organizations } from '@pagespace/db/schema/organizations';
 import {
   wallets,
   walletConsumerCaps,
@@ -247,9 +247,39 @@ async function spendByConsumer(walletId: string, since: Date | null): Promise<Co
     ))
     .groupBy(creditLedger.userId)
     .limit(500);
+  const names = await userNamesById(rows.map((r) => r.userId));
   return rows
-    .map((r) => ({ consumerKey: userConsumerKey(r.userId), userId: r.userId, spentCents: Math.max(0, Number(r.cents)) }))
+    .map((r) => ({ consumerKey: userConsumerKey(r.userId), userId: r.userId, displayName: names.get(r.userId) ?? null, spentCents: Math.max(0, Number(r.cents)) }))
     .sort((a, b) => b.spentCents - a.spentCents || a.consumerKey.localeCompare(b.consumerKey));
+}
+
+/** People's display names by id (decrypted), so no wallet surface hands the UI a raw id alone (UI-9, UI-10). */
+async function userNamesById(userIds: string[]): Promise<Map<string, string>> {
+  const unique = [...new Set(userIds)];
+  if (unique.length === 0) return new Map();
+  const rows = await db.select({ id: users.id, name: users.name }).from(users).where(inArray(users.id, unique));
+  const out = new Map<string, string>();
+  for (const row of rows) {
+    const name = (await decryptUserRow({ name: row.name })).name;
+    if (name) out.set(row.id, name);
+  }
+  return out;
+}
+
+/** Drive names by id, for wallet lists (UI-10). */
+async function driveNamesById(driveIds: string[]): Promise<Map<string, string>> {
+  const unique = [...new Set(driveIds)];
+  if (unique.length === 0) return new Map();
+  const rows = await db.select({ id: drives.id, name: drives.name }).from(drives).where(inArray(drives.id, unique));
+  return new Map(rows.map((r) => [r.id, r.name]));
+}
+
+/** Org names by id, for wallet lists (UI-10). */
+async function orgNamesById(orgIds: string[]): Promise<Map<string, string>> {
+  const unique = [...new Set(orgIds)];
+  if (unique.length === 0) return new Map();
+  const rows = await db.select({ id: organizations.id, name: organizations.name }).from(organizations).where(inArray(organizations.id, unique));
+  return new Map(rows.map((r) => [r.id, r.name]));
 }
 
 async function poolFacts(orgId: string): Promise<PoolFacts | null> {
@@ -878,17 +908,18 @@ export async function donateToDrive(
  */
 export interface MyWallets {
   personal: { walletId: string; remainingCents: number; remainingCredits: string; defaultSpendSource: SpendSourceKind | null };
-  /** Drive wallets of drives I can open: the consumer amount only (SPEND-9). */
-  driveWallets: { driveId: string; walletId: string; status: string; remainingCents: number; remainingCredits: string }[];
-  /** A seat on each org I belong to: my own cap only, never the pool (SPEND-9). */
-  seats: { orgId: string; walletId: string }[];
+  /** Drive wallets of drives I can open: the consumer amount only (SPEND-9), by drive name. */
+  driveWallets: { driveId: string; driveName: string | null; walletId: string; status: string; remainingCents: number; remainingCredits: string }[];
+  /** A seat on each org I belong to: my own cap only, never the pool (SPEND-9), by org name. */
+  seats: { orgId: string; orgName: string | null; walletId: string }[];
   /** What I fund: drive wallets my personal wallet parents, pools I administer (SPEND-10), my donations. */
   funds: {
-    driveWallets: { driveId: string; walletId: string }[];
-    pools: { orgId: string; walletId: string; availableCents: number; unallocatedCents: number }[];
+    driveWallets: { driveId: string; driveName: string | null; walletId: string; status: string; remainingCents: number; remainingCredits: string }[];
+    pools: { orgId: string; orgName: string | null; walletId: string; availableCents: number; unallocatedCents: number; availableCredits: string; unallocatedCredits: string }[];
     donations: {
       walletId: string;
       driveId: string | null;
+      driveName: string | null;
       originalCents: number;
       originalCredits: string;
       remainingCents: number;
@@ -898,10 +929,6 @@ export interface MyWallets {
   };
 }
 
-/**
- * Everything the person spends from and funds. [D-OW-26] read with a token, it is the consumer
- * view: no pool balance (the pools list is empty) — the same allowlist a member gets.
- */
 export async function listMyWallets(userId: string, credential: WalletCredential): Promise<MyWallets> {
   const personalId = await ensurePersonalRootWalletId(db, userId);
   const [personal] = await db
@@ -927,9 +954,11 @@ export async function listMyWallets(userId: string, credential: WalletCredential
     .innerJoin(wallets, eq(wallets.id, walletFundingLegs.walletId))
     .where(and(eq(walletFundingLegs.funderUserId, userId), eq(walletFundingLegs.funderKind, 'donation')))
     .limit(500);
+  const donationDriveNames = await driveNamesById(donations.flatMap((d) => (d.subjectId ? [d.subjectId] : [])));
   result.funds.donations = donations.map((d) => ({
     walletId: d.walletId,
     driveId: d.subjectId,
+    driveName: d.subjectId ? donationDriveNames.get(d.subjectId) ?? null : null,
     originalCents: d.originalCents,
     originalCredits: formatCreditCount(d.originalCents),
     remainingCents: d.remainingCents,
@@ -947,11 +976,14 @@ export async function listMyWallets(userId: string, credential: WalletCredential
       .from(wallets)
       .where(and(eq(wallets.subjectType, 'drive'), inArray(wallets.subjectId, driveIds)))
       .limit(1000);
+    const driveNames = await driveNamesById(rows.flatMap((r) => (r.subjectId ? [r.subjectId] : [])));
     for (const row of rows) {
       if (!row.subjectId) continue;
       const remaining = walletRemainingCents(row);
-      result.driveWallets.push({ driveId: row.subjectId, walletId: row.id, status: displayedWalletStatus(row), remainingCents: remaining, remainingCredits: formatCreditCount(remaining) });
-      if (row.parentWalletId === personalId) result.funds.driveWallets.push({ driveId: row.subjectId, walletId: row.id });
+      const entry = { driveId: row.subjectId, driveName: driveNames.get(row.subjectId) ?? null, walletId: row.id, status: displayedWalletStatus(row), remainingCents: remaining, remainingCredits: formatCreditCount(remaining) };
+      result.driveWallets.push(entry);
+      // The funder sees the balance of what they fund (UI-10), as its consumers do.
+      if (row.parentWalletId === personalId) result.funds.driveWallets.push(entry);
     }
   }
 
@@ -960,18 +992,24 @@ export async function listMyWallets(userId: string, credential: WalletCredential
     .from(orgMembers)
     .where(eq(orgMembers.userId, userId))
     .limit(200);
+  const orgNames = await orgNamesById(memberships.map((m) => m.orgId));
   for (const m of memberships) {
     const pool = await orgPoolRow(db, m.orgId);
     if (!pool) continue;
-    result.seats.push({ orgId: m.orgId, walletId: pool.id });
+    const orgName = orgNames.get(m.orgId) ?? null;
+    result.seats.push({ orgId: m.orgId, orgName, walletId: pool.id });
     if (credential === 'session' && (m.role === 'OWNER' || m.role === 'ADMIN')) {
       const facts = await poolFacts(m.orgId);
       if (facts) {
+        const unallocatedCents = facts.availableCents - facts.outstandingChildAllocationsCents;
         result.funds.pools.push({
           orgId: m.orgId,
+          orgName,
           walletId: facts.walletId,
           availableCents: facts.availableCents,
-          unallocatedCents: facts.availableCents - facts.outstandingChildAllocationsCents,
+          unallocatedCents,
+          availableCredits: formatCreditCount(facts.availableCents),
+          unallocatedCredits: formatCreditCount(unallocatedCents),
         });
       }
     }

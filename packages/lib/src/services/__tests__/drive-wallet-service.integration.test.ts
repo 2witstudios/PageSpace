@@ -187,8 +187,8 @@ describe('drive-wallet service (orgs on, real Postgres)', () => {
     expect(read).toMatchObject({ ok: true, viewer: 'lead' });
     if (!read.ok || !read.wallet || read.wallet.viewer !== 'lead') throw new Error('expected a lead view');
     expect(read.wallet.spendByConsumer).toEqual([
-      { consumerKey: `user:${world.ids.marcus}`, userId: world.ids.marcus, spentCents: MARCUS_SPEND },
-      { consumerKey: `user:${world.ids.lena}`, userId: world.ids.lena, spentCents: LENA_SPEND },
+      { consumerKey: `user:${world.ids.marcus}`, userId: world.ids.marcus, displayName: 'Marcus Oyelaran', spentCents: MARCUS_SPEND, spentCredits: MARCUS_SPEND.toLocaleString('en-US') },
+      { consumerKey: `user:${world.ids.lena}`, userId: world.ids.lena, displayName: 'Lena Schulz', spentCents: LENA_SPEND, spentCredits: LENA_SPEND.toLocaleString('en-US') },
     ]);
     expect(JSON.stringify(read)).not.toContain(String(POOL_CENTS));
     expect('pool' in read.wallet).toBe(false);
@@ -200,7 +200,13 @@ describe('drive-wallet service (orgs on, real Postgres)', () => {
     expect(read).toMatchObject({ ok: true, viewer: 'org_admin' });
     if (!read.ok || !read.wallet || read.wallet.viewer !== 'org_admin') throw new Error('expected an admin view');
     const outstanding = (120_000 - LENA_SPEND - MARCUS_SPEND) + 60_000;
-    expect(read.wallet.pool).toEqual({ walletId: world.poolId, availableCents: POOL_CENTS, unallocatedCents: POOL_CENTS - outstanding });
+    expect(read.wallet.pool).toEqual({
+      walletId: world.poolId,
+      availableCents: POOL_CENTS,
+      unallocatedCents: POOL_CENTS - outstanding,
+      availableCredits: POOL_CENTS.toLocaleString('en-US'),
+      unallocatedCredits: (POOL_CENTS - outstanding).toLocaleString('en-US'),
+    });
   });
 
   it('SPEND-9 (partial) X-6 (partial) a NON-MEMBER gets 404: an outsider on Product, an org member who has not joined a Restricted drive', async () => {
@@ -293,13 +299,14 @@ describe('drive-wallet service (orgs on, real Postgres)', () => {
   it('UI-10 (partial) SPEND-9 (partial) a member lists what they spend from (drive wallets, their seat) with no pool balance; an admin also lists the pool they fund', async () => {
     if (!world) return;
     const marcus = await listMyWallets(world.ids.marcus, 'session');
-    expect(marcus.driveWallets).toEqual([{ driveId: world.productId, walletId: world.productWalletId, status: 'active', remainingCents: 120_000 - LENA_SPEND - MARCUS_SPEND, remainingCredits: (120_000 - LENA_SPEND - MARCUS_SPEND).toLocaleString('en-US') }]);
-    expect(marcus.seats).toEqual([{ orgId: world.orgId, walletId: world.poolId }]);
+    expect(marcus.driveWallets).toEqual([{ driveId: world.productId, driveName: 'Product', walletId: world.productWalletId, status: 'active', remainingCents: 120_000 - LENA_SPEND - MARCUS_SPEND, remainingCredits: (120_000 - LENA_SPEND - MARCUS_SPEND).toLocaleString('en-US') }]);
+    expect(marcus.seats).toEqual([{ orgId: world.orgId, orgName: 'Northwind Labs', walletId: world.poolId }]);
     expect(marcus.funds.pools).toEqual([]);
     expect(JSON.stringify(marcus)).not.toContain(String(POOL_CENTS));
 
     const priya = await listMyWallets(world.ids.priya, 'session');
-    expect(priya.funds.pools).toEqual([expect.objectContaining({ orgId: world.orgId, walletId: world.poolId, availableCents: POOL_CENTS })]);
+    expect(priya.funds.pools).toEqual([expect.objectContaining({ orgId: world.orgId, orgName: 'Northwind Labs', walletId: world.poolId, availableCents: POOL_CENTS, availableCredits: POOL_CENTS.toLocaleString('en-US') })]);
+    expect(JSON.stringify([marcus, priya])).not.toContain('$');
   });
 
   it('SPEND-3 (partial) UI-10 (partial) the person sets and clears their own default source', async () => {
@@ -348,6 +355,14 @@ describe('drive-wallet service (orgs on, real Postgres)', () => {
     expect(before).toMatchObject({ ok: true, chosenWalletId: null, resolved: { kind: 'refuse', reason: 'no_source_chosen' } });
     if (!before.ok) throw new Error('expected a read');
     expect(before.options.map((o) => o.source)).toEqual(['drive_wallet', 'seat_allowance', 'own_credits']);
+    // UI-8: each choice is named and says what this person can still spend from it, as a credit count.
+    expect(before.options.map((o) => [o.label, o.driveName, o.orgName, typeof o.remainingCents, o.remainingCredits === o.remainingCents.toLocaleString('en-US')])).toEqual([
+      ['Product wallet', 'Product', 'Northwind Labs', 'number', true],
+      ['Northwind Labs seat', 'Product', 'Northwind Labs', 'number', true],
+      ['Your credits', null, null, 'number', true],
+    ]);
+    // The seat shows the member's own remaining allowance, never the pool's balance (SPEND-9).
+    expect(before.options[1].remainingCents).toBeLessThan(POOL_CENTS);
 
     const chosen = await setConversationSpend(world.ids.marcus, conv.id, world.poolId, 'session');
     expect(chosen).toMatchObject({ ok: true, chosenWalletId: world.poolId, resolved: { kind: 'spend', source: 'seat_allowance', walletId: world.poolId } });

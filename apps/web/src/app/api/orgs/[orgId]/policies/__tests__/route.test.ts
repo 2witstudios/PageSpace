@@ -22,6 +22,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 vi.mock('@pagespace/lib/organizations/repository', () => ({ findMembershipRole: vi.fn() }));
 vi.mock('@pagespace/lib/organizations/policies', () => ({ getOrgPolicies: vi.fn(), updateOrgPolicies: vi.fn() }));
 vi.mock('@pagespace/lib/organizations/policy-suspension', () => ({ listPolicySuspensions: vi.fn() }));
+vi.mock('@pagespace/lib/organizations/policy-suspension-names', () => ({ nameSuspensions: vi.fn(async (_orgId: string, _viewerId: string, listings: unknown) => listings) }));
 vi.mock('@pagespace/lib/organizations/status', () => ({ checkOrgActive: vi.fn() }));
 vi.mock('@pagespace/lib/organizations/published-visibility', () => ({ reconcileOrgPublishedVisibility: vi.fn() }));
 vi.mock('@/lib/canvas/published-storage', () => ({ createPublishedObjectStore: () => ({ store: true }), isPublishConfigured: vi.fn() }));

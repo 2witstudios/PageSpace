@@ -546,3 +546,14 @@ export function decideCallSpend(input: CallSpendInput): CallSpendDecision {
     }),
   };
 }
+
+/**
+ * What the spending-from chip and popover call a source (UI-8), so the client never resolves a
+ * wallet id: the drive's wallet by the drive's name, a seat by the org's name, and own credits.
+ */
+export function spendChoiceLabel(input: { source: SpendSourceKind; driveName: string | null; orgName: string | null }): string {
+  if (input.source === 'drive_wallet') return input.driveName ? `${input.driveName} wallet` : 'Drive wallet';
+  if (input.source === 'seat_allowance') return input.orgName ? `${input.orgName} seat` : 'Organization seat';
+  return 'Your credits';
+}
+

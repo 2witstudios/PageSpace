@@ -14,6 +14,10 @@
  */
 
 import { loadConsumerCapFacts } from './consumer-caps';
+import { drives } from '@pagespace/db/schema/core';
+import { organizations } from '@pagespace/db/schema/organizations';
+import { formatCreditCount } from './money-model';
+import { seatCapCheck } from './wallet-core';
 import { db } from '@pagespace/db/db';
 import { and, eq, gt, inArray, isNull, or, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
@@ -47,6 +51,7 @@ import {
   type WalletBalanceFacts,
   type WalletHoldTotal,
   cappedConsumerLeg,
+  spendChoiceLabel,
 } from './spend-target';
 import { toSubscriptionTier, type SubscriptionTier } from './subscription-tiers';
 import { ensurePersonalRootWalletId } from './personal-wallet';
@@ -404,6 +409,18 @@ export async function resolveCallSpend(input: {
 export interface SpendChoice {
   source: SpendSourceKind;
   walletId: string;
+  /** What the chip and popover call it (spendChoiceLabel): never a raw id (UI-8). */
+  label: string;
+  /** The drive a drive wallet funds, or the org a seat is in; null for own credits. */
+  driveName: string | null;
+  orgName: string | null;
+  /**
+   * What THIS person can still spend from it now, whole cents and as a credit count (SPEND-9):
+   * a drive wallet's remaining amount bounded by their own caps; a seat's remaining allowance
+   * (their own cap, never the pool); their own credits.
+   */
+  remainingCents: number;
+  remainingCredits: string;
 }
 
 /**
@@ -416,9 +433,20 @@ export interface SpendChoice {
  */
 export async function listSpendChoices(userId: string, driveId: string | null): Promise<SpendChoice[]> {
   const personalId = await ensurePersonalRootWalletId(db, userId);
-  const own: SpendChoice = { source: 'own_credits', walletId: personalId };
+  const personal = await personalRootOf(userId);
+  const ownRemaining = Math.max(0, spendableCentsFor(personal, await tierOf(userId)));
+  const choice = (source: SpendSourceKind, walletId: string, names: { driveName: string | null; orgName: string | null }, remainingCents: number): SpendChoice => ({
+    source,
+    walletId,
+    label: spendChoiceLabel({ source, ...names }),
+    ...names,
+    remainingCents,
+    remainingCredits: formatCreditCount(remainingCents),
+  });
+  const own = choice('own_credits', personalId, { driveName: null, orgName: null }, ownRemaining);
   if (!ORGS_ENABLED || driveId === null) return [own];
 
+  const now = new Date();
   const standing = await loadDriveSpendStanding(userId, driveId);
   const shared = sharedSpendLegsFor(standing);
   const driveWallet = standing && shared.driveWallet ? await driveWalletOf(standing.driveId) : null;
@@ -437,13 +465,30 @@ export async function listSpendChoices(userId: string, driveId: string | null): 
     // D-OW-4: guests may not spend a drive wallet until the per-drive switch has storage.
     driveRule: { fallback: 'refuse' as const, guestsMaySpendDriveWallet: false },
   };
-  const ids: Record<SpendSourceKind, string | undefined> = {
-    drive_wallet: driveWallet?.id,
-    seat_allowance: pool?.id,
-    own_credits: personalId,
-  };
-  return availableSources(legs).flatMap((source) => {
-    const walletId = ids[source];
-    return walletId ? [{ source, walletId }] : [];
-  });
+  const names = await spendPlaceNames(driveId, standing?.orgId ?? null);
+  const out: SpendChoice[] = [];
+  for (const source of availableSources(legs)) {
+    if (source === 'own_credits') out.push(own);
+    if (source === 'drive_wallet' && driveWallet) {
+      const { leg } = await driveWalletLeg(driveWallet, now, [], orgLapsed);
+      const capped = leg ? cappedConsumerLeg(leg, (await loadConsumerCapFacts(db, { walletId: driveWallet.id, userId, now }))?.remaining ?? null) : null;
+      out.push(choice('drive_wallet', driveWallet.id, names, capped?.spendableCents ?? 0));
+    }
+    if (source === 'seat_allowance' && pool && standing?.orgId) {
+      // The seat's own remaining allowance (SPEND-9: their cap, never the pool's balance).
+      const policy = await readOrgSpendPolicy(db, standing.orgId);
+      const seat = await loadSeatCapFacts(db, { poolId: pool.id, poolPeriodStart: pool.monthlyPeriodStart, userId, policySeatAllowanceCents: policy.seatAllowanceCents, now });
+      const cap = seatCapCheck({ capCents: seat.capCents, dailyCapCents: seat.dailyCapCents, usage: seat.usage, reservationCents: 0 });
+      const remaining = Math.min(cap.monthlyRemainingCents ?? Number.MAX_SAFE_INTEGER, cap.dailyRemainingCents ?? Number.MAX_SAFE_INTEGER);
+      out.push(choice('seat_allowance', pool.id, names, remaining));
+    }
+  }
+  return out;
+}
+
+/** The drive's and the org's names, for labels (UI-8). */
+async function spendPlaceNames(driveId: string, orgId: string | null): Promise<{ driveName: string | null; orgName: string | null }> {
+  const [drive] = await db.select({ name: drives.name }).from(drives).where(eq(drives.id, driveId));
+  const [org] = orgId ? await db.select({ name: organizations.name }).from(organizations).where(eq(organizations.id, orgId)) : [];
+  return { driveName: drive?.name ?? null, orgName: org?.name ?? null };
 }

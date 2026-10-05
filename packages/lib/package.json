@@ -2889,6 +2889,11 @@
       "import": "./dist/organizations/policies-core.js",
       "require": "./dist/organizations/policies-core.js"
     },
+    "./organizations/policy-suspension-names": {
+      "types": "./dist/organizations/policy-suspension-names.d.ts",
+      "import": "./dist/organizations/policy-suspension-names.js",
+      "require": "./dist/organizations/policy-suspension-names.js"
+    },
     "./organizations/policy-suspension": {
       "types": "./dist/organizations/policy-suspension.d.ts",
       "import": "./dist/organizations/policy-suspension.js",

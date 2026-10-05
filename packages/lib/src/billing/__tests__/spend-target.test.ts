@@ -21,6 +21,7 @@ import {
   preselectSoleSource,
   decideCallSpend,
   cappedConsumerLeg,
+  spendChoiceLabel,
   chooseSource,
   sourceOfWallet,
   NO_STORED_CHOICE,
@@ -486,6 +487,15 @@ describe('spend-target: a drive-wallet leg capped per consumer (WAL-7)', () => {
   it('WAL-7 (partial) a spent cap refuses the drive wallet by name (source_cap_reached), and the fallback rule may then move the call', () => {
     const capped = cappedConsumerLeg(leg, { dailyRemainingCents: 0, monthlyRemainingCents: c(40) });
     expect(decideCallSpend(input({ driveWallet: capped }))).toMatchObject({ kind: 'refuse', source: 'drive_wallet', reason: 'source_cap_reached', chargeCents: 0 });
+  });
+});
+
+describe('spend-target: what a source is called', () => {
+  it('SPEND-2 (partial) each source is named for the chip: the drive\'s wallet, the org seat, your own credits — never a raw id', () => {
+    expect(spendChoiceLabel({ source: 'drive_wallet', driveName: 'Product', orgName: 'Northwind Labs' })).toBe('Product wallet');
+    expect(spendChoiceLabel({ source: 'seat_allowance', driveName: 'Product', orgName: 'Northwind Labs' })).toBe('Northwind Labs seat');
+    expect(spendChoiceLabel({ source: 'own_credits', driveName: 'Product', orgName: null })).toBe('Your credits');
+    expect(spendChoiceLabel({ source: 'drive_wallet', driveName: null, orgName: null })).toBe('Drive wallet');
   });
 });
 
