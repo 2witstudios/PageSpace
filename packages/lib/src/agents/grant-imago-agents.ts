@@ -15,6 +15,12 @@
  * a drive acquired by ownership transfer is left to the new owner's decision.
  * Drives the user merely belongs to are never granted here.
  *
+ * The toggle's state is the memberships themselves — no separate opt-out is
+ * stored. An agent recreated after its page was deleted or trashed therefore
+ * joins only the drives where the user's other Imago agents, or the trashed
+ * page it replaces, are still members (`grantNewImagoAgents`); only a user with
+ * no such reference left (a first provisioning) gets every owned drive.
+ *
  * Grants run after the creating transaction commits (the agent pages and the
  * drive must be visible to `addAgentToDrive`'s own connection), so they are
  * best effort: a failure is logged and never undoes the sign-in or the drive.
@@ -104,6 +110,46 @@ export async function grantImagoAgentsToOwnedDrives(
     }
   }
   return outcomes;
+}
+
+export interface NewImagoAgentsGrant {
+  /** The agent pages just created. */
+  agentPageIds: readonly string[];
+  /**
+   * The user's other Imago agent pages — live siblings and the trashed pages
+   * the new ones replace. Their memberships say where Imago is on. Empty only
+   * for a first provisioning.
+   */
+  referencePageIds: readonly string[];
+}
+
+/**
+ * Grant newly created Imago agents where Imago is on: in the owned STANDARD
+ * drives where any reference page is a member, or — when there is no reference
+ * at all (first provisioning) — in every owned STANDARD drive. A drive the user
+ * switched off keeps no Imago membership, so a recreated agent stays out of it.
+ * Never throws (see the module comment).
+ */
+export async function grantNewImagoAgents(
+  userId: string,
+  { agentPageIds, referencePageIds }: NewImagoAgentsGrant,
+): Promise<ImagoGrantOutcome[]> {
+  if (agentPageIds.length === 0) return [];
+  if (referencePageIds.length === 0) return grantImagoAgentsToOwnedDrives(userId, { agentPageIds });
+
+  let driveIds: string[];
+  try {
+    const rows = await db
+      .selectDistinct({ driveId: driveAgentMembers.driveId })
+      .from(driveAgentMembers)
+      .where(inArray(driveAgentMembers.agentPageId, [...referencePageIds]));
+    driveIds = rows.map((row) => row.driveId);
+  } catch (error) {
+    loggers.ai.error('Imago agent grants: reference lookup failed', error as Error, { userId });
+    return [];
+  }
+  // grantImagoAgentsToOwnedDrives re-filters to owned, live STANDARD drives.
+  return grantImagoAgentsToOwnedDrives(userId, { agentPageIds, driveIds });
 }
 
 async function grantOne(userId: string, agentPageId: string, driveId: string): Promise<ImagoGrantOutcome['status']> {

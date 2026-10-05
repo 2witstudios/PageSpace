@@ -15,6 +15,7 @@ import { slugify } from '../utils/utils';
 import { customRoleBelongsToDrive, getMemberCustomRoleId, resolveDriveWideCanEdit } from '../permissions/membership-queries';
 import { isGuestRole } from '../permissions/guest-role';
 import { grantImagoAgentsToOwnedDrives, revokeImagoAgentGrants } from '../agents/grant-imago-agents';
+import { homeDriveActionError, isHomeDrive } from './drive-guards';
 
 // ============================================================================
 // Types
@@ -706,18 +707,32 @@ export async function allocatePublishSubdomain(
  * agents reach the drive is now the new owner's decision, and the new owner's
  * own Imago agents are not granted here either. Explicit grants of other
  * agents stay for the new owner to review. Returns the agentPageIds revoked.
- * Throws when `fromUserId` does not own the drive.
+ *
+ * Every ownership change goes through here — the transfer route and the drive
+ * rollback/redo of an `ownership_transfer` — so pass `executor` to run inside a
+ * caller's transaction (it becomes a savepoint there). Throws, changing
+ * nothing, when `fromUserId` does not own the drive or the drive is a Home
+ * drive: Home stays bound to its owner, and only that refusal keeps the
+ * agents' native Home membership out of the revoke.
  */
 export async function transferDriveOwnership(
   driveId: string,
   fromUserId: string,
   toUserId: string,
+  executor: DbOrTx | typeof db = db,
 ): Promise<string[]> {
-  return db.transaction(async (tx) => {
+  return executor.transaction(async (tx) => {
+    const [drive] = await tx
+      .select({ kind: drives.kind })
+      .from(drives)
+      .where(eq(drives.id, driveId))
+      .limit(1);
+    if (drive && isHomeDrive(drive)) throw new Error(homeDriveActionError(drive, 'transfer')!);
+
     const updated = await tx
       .update(drives)
       .set({ ownerId: toUserId, updatedAt: new Date() })
-      .where(and(eq(drives.id, driveId), eq(drives.ownerId, fromUserId)))
+      .where(and(eq(drives.id, driveId), eq(drives.ownerId, fromUserId), eq(drives.kind, 'STANDARD')))
       .returning({ id: drives.id });
     if (updated.length === 0) throw new Error(`Drive ${driveId} is not owned by ${fromUserId}`);
     return revokeImagoAgentGrants(tx, fromUserId, driveId);

@@ -25,7 +25,8 @@ export type HomeDriveAction =
   | 'invite'
   | 'share'
   | 'publish'
-  | 'transfer';
+  | 'transfer'
+  | 'imago-access';
 
 export function isReservedDriveName(name: string): boolean {
   const normalized = name.trim().toLowerCase();
@@ -53,6 +54,8 @@ const HOME_DRIVE_ACTION_ERRORS: Record<HomeDriveAction, string> = {
   // Unreachable today (Home never has admin members to transfer to) — kept as
   // defense in depth on the ownership-transfer path.
   transfer: 'Your Home drive cannot be transferred to another user.',
+  // Imago agents live in Home: their access there is native, not a toggle.
+  'imago-access': 'Your Imago agents live in your Home drive, so their access to it cannot be changed.',
 };
 
 /**

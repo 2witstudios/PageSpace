@@ -143,7 +143,7 @@ describe('Imago agent grants on provisioning (real Postgres)', () => {
     expect(await grantedDriveIds(ids, owned.id)).toEqual(ids.slice(1).sort());
   });
 
-  it('given a deleted agent recreated on re-provision, should grant the new page in the owned STANDARD drives', async () => {
+  it('given a deleted agent recreated on re-provision, should grant the new page in the owned STANDARD drives Imago is on', async () => {
     if (!dbAvailable) return;
     const { user } = await userWithHome();
     const owned = await factories.createDrive(user.id, { name: 'Owned' });
@@ -322,5 +322,51 @@ describe('Imago agent grants on ownership transfer (real Postgres)', () => {
     expect([...revoked].sort()).toEqual([...ids].sort());
     expect(await grantedDriveIds(ids, drop.id)).toEqual([]);
     expect(await grantedDriveIds(ids, keep.id)).toEqual([...ids].sort());
+  });
+
+  it("given revokeImagoAgentGrants on the agents' own Home drive, should leave their native Home membership in place", async () => {
+    if (!dbAvailable) return;
+    const { user, home } = await userWithHome();
+    const ids = await provisionedAgentIds(user.id);
+    expect(await grantedDriveIds(ids, home.id)).toEqual([...ids].sort());
+
+    const revoked = await revokeImagoAgentGrants(db, user.id, home.id);
+
+    expect(revoked).toEqual([]);
+    expect(await grantedDriveIds(ids, home.id)).toEqual([...ids].sort());
+  });
+
+  it('given a Home drive, should refuse to transfer it and change nothing', async () => {
+    if (!dbAvailable) return;
+    const { user: from, home } = await userWithHome();
+    const { user: to } = await userWithHome();
+    await factories.createDriveMember(home.id, to.id, { role: 'ADMIN' });
+    const ids = await provisionedAgentIds(from.id);
+
+    await expect(transferDriveOwnership(home.id, from.id, to.id)).rejects.toThrow(/Home/);
+
+    const [row] = await db.select({ ownerId: drives.ownerId }).from(drives).where(eq(drives.id, home.id));
+    expect(row.ownerId).toBe(from.id);
+    expect(await grantedDriveIds(ids, home.id)).toEqual([...ids].sort());
+  });
+
+  it("given a caller's transaction, should transfer and revoke inside it and roll back with it", async () => {
+    if (!dbAvailable) return;
+    const { from, to, drive, fromAgents } = await transferredDrive();
+
+    await expect(db.transaction(async (tx) => {
+      const revoked = await transferDriveOwnership(drive.id, from.id, to.id, tx);
+      expect([...revoked].sort()).toEqual([...fromAgents].sort());
+      throw new Error('caller aborts');
+    })).rejects.toThrow('caller aborts');
+
+    const [row] = await db.select({ ownerId: drives.ownerId }).from(drives).where(eq(drives.id, drive.id));
+    expect(row.ownerId).toBe(from.id);
+    expect(await grantedDriveIds(fromAgents, drive.id)).toEqual([...fromAgents].sort());
+
+    await db.transaction((tx) => transferDriveOwnership(drive.id, from.id, to.id, tx));
+    const [after] = await db.select({ ownerId: drives.ownerId }).from(drives).where(eq(drives.id, drive.id));
+    expect(after.ownerId).toBe(to.id);
+    expect(await grantedDriveIds(fromAgents, drive.id)).toEqual([]);
   });
 });
