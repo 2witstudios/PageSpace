@@ -149,3 +149,15 @@ export const updateOrganization = (orgId: string, body: { name?: string; slug?: 
 
 export const revokeOrgInvitation = (orgId: string, invitationId: string) =>
   del<{ revoked: true }>(`${orgKeys.invitations(orgId)}/${invitationId}`);
+
+export const setOrgSeatAutoAdd = (orgId: string, autoAdd: boolean) => patch<{ autoAdd: boolean }>(orgKeys.seats(orgId), { autoAdd });
+
+interface DriveMembersResponse {
+  members: { userId: string; user: { email: string } }[];
+}
+
+/** The people in a drive the creator is moving in, so they can be invited to a seat. */
+export async function fetchDriveMemberEmails(driveId: string): Promise<string[]> {
+  const res = await fetchJSON<DriveMembersResponse>(`/api/drives/${driveId}/members`);
+  return res.members.map((m) => m.user.email).filter((e): e is string => typeof e === 'string' && e.length > 0);
+}

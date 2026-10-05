@@ -5,6 +5,9 @@
  */
 import type { OrgBillingNotice } from '@pagespace/lib/organizations/status-core';
 import type { OrgBillingStart } from './org-api';
+import { formatCreditCount, formatDollars } from '@pagespace/lib/billing/money-model';
+import { orgPlanQuote, type OrgPlanQuote } from '@pagespace/lib/billing/org-plan-quote';
+import { formatInvoiceAmount } from './org-format';
 
 const EMAIL = /^[^\s@,]+@[^\s@,]+\.[^\s@,]+$/;
 
@@ -69,4 +72,46 @@ export function nextStepAfterCreate(billing: OrgBillingStart): CreateOrgNextStep
 /** The org can take drives and invitations once it is no longer lapsed. */
 export function orgReadyForSetup(notice: OrgBillingNotice | undefined): boolean {
   return notice?.kind !== 'reactivate' && notice?.kind !== 'read_only';
+}
+
+export type OrgSetupTask =
+  | { kind: 'move_drive'; driveId: string }
+  | { kind: 'enable_auto_seats' }
+  | { kind: 'invite'; email: string };
+
+/**
+ * What runs once the org is paid: move the chosen drives in (PUT /api/drives/[id]/org), then invite.
+ * A new org starts with automatic seats off (SEAT-4), so when the invitations would pass the included
+ * seats the Owner's setup turns it on first; otherwise those invitations would be refused seats_full.
+ */
+export function planOrgSetup(input: { driveIds: readonly string[]; invites: readonly string[]; selfEmail: string; includedSeats: number }): OrgSetupTask[] {
+  const self = input.selfEmail.toLowerCase();
+  const invites = input.invites.filter((e) => e.toLowerCase() !== self);
+  const tasks: OrgSetupTask[] = input.driveIds.map((driveId) => ({ kind: 'move_drive', driveId }));
+  if (createOrgSeatCount(invites, self) > input.includedSeats) tasks.push({ kind: 'enable_auto_seats' });
+  for (const email of invites) tasks.push({ kind: 'invite', email });
+  return tasks;
+}
+
+/** The create dialog's plan summary (canvas CreateOrganization note), from the one quote. */
+export function createOrgPlanNote(quote: OrgPlanQuote): { headline: string; body: string } {
+  const headline = `Business · ${formatDollars(quote.basePriceCents)} a month with ${quote.includedSeats} seats, ${formatDollars(quote.extraSeatPriceCents)} per extra seat.`;
+  const others = quote.seats - 1;
+  const who = others === 0 ? 'Just you is 1 seat' : `You and ${others} ${others === 1 ? 'person' : 'people'} make ${quote.seats} seats`;
+  const parts = [`${who}: ${formatDollars(quote.totalCents)} a month with ${formatCreditCount(quote.includedCreditCents)} credits a month.`];
+  if (quote.extraSeats > 0) {
+    parts.push(`The first payment is ${formatDollars(quote.basePriceCents)}. The ${quote.extraSeats} extra seats are added as you invite people, billed pro rata.`);
+  }
+  parts.push('You add a card on the next step, and the organization is ready once that first payment goes through.');
+  return { headline, body: parts.join(' ') };
+}
+
+/** What the first invoice charges, from the subscription POST /api/orgs created (its extra-seat quantity). */
+export function firstPaymentLines(extraSeatQuantity: number): { lines: { label: string; amount: string }[]; total: string } {
+  const quote = orgPlanQuote(orgPlanQuote(0).includedSeats + Math.max(0, extraSeatQuantity));
+  const lines = [{ label: `Business · ${quote.includedSeats} seats included`, amount: formatInvoiceAmount(quote.basePriceCents) }];
+  if (quote.extraSeats > 0) {
+    lines.push({ label: `${quote.extraSeats} extra seats × ${formatDollars(quote.extraSeatPriceCents)}`, amount: formatInvoiceAmount(quote.extraSeatsCents) });
+  }
+  return { lines, total: formatInvoiceAmount(quote.totalCents) };
 }
