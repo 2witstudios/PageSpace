@@ -83,16 +83,20 @@ export async function executeWebhookTrigger(
 
     // 4. Credit gate — blocks out-of-credits users before the model is invoked.
     //    skipDailyCap: server-triggered, not interactive fan-out.
-    const [connectionOwner] = await db
+    //    The run is the workflow OWNER's ([D-OW-34]): its gate, tier, caps and identity follow the
+    //    workflow, so a reassignment ([D-OW-36]) moves it to the new owner. The connection is only the
+    //    trigger source; step 2 checks it can still reach the drive (review #2831 P2-1).
+    const ownerId = owner.ownerId;
+    const [workflowOwner] = await db
       .select({ subscriptionTier: users.subscriptionTier })
       .from(users)
-      .where(eq(users.id, connection.userId));
+      .where(eq(users.id, ownerId));
     //    SPEND-6: a trigger has no person present; it spends the workflow's drive wallet
-    //    or is skipped, never the connection owner's credits or allowance.
+    //    or is skipped, never anyone's own credits or allowance.
     const spend = automationSpend(workflow.driveId);
     const gate = await canConsumeAI(
-      connection.userId,
-      (connectionOwner?.subscriptionTier ?? 'free') as SubscriptionTier,
+      ownerId,
+      (workflowOwner?.subscriptionTier ?? 'free') as SubscriptionTier,
       { spend, skipDailyCap: true },
     );
     if (!gate.allowed) {
@@ -113,7 +117,7 @@ export async function executeWebhookTrigger(
       workflowId: workflow.id,
       workflowName: `webhook-trigger-${trigger.id}`,
       driveId: workflow.driveId,
-      createdBy: connection.userId,
+      createdBy: ownerId,
       agentPageId: workflow.agentPageId,
       prompt: workflow.prompt,
       contextPageIds: (workflow.contextPageIds as string[] | null) ?? [],
