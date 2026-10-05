@@ -27,6 +27,7 @@ vi.mock('../../audit/org-audit', () => ({ recordOrgAuditEvent: vi.fn(async () =>
 import { updateOrgPolicies } from '../../organizations/policies';
 import { OpenRoleFloorError, createDriveRole, deleteDriveRole, updateDriveRole } from '../drive-role-service';
 import { guardOpenRoleFloor } from '../../organizations/open-role-floor';
+import { defaultOrgDriveVisibility } from '../../organizations/policies-core';
 import { changeDriveVisibility, createOrgDrive, moveDriveToOrg, type OrgDriveServiceDeps } from '../org-drive-service';
 import { orgDriveServiceDeps } from '../org-drive-service-deps';
 
@@ -161,6 +162,31 @@ describe('the org floor under an Open drive default role', () => {
     await role(mine, 'Viewer', true, VIEW);
     expect(await moveDriveToOrg(w.owner, mine, { orgId: w.orgId }, deps)).toMatchObject({ ok: false, code: 'POLICY_OPEN_ROLE_FLOOR' });
     expect(await moveDriveToOrg(w.owner, mine, { orgId: w.orgId, orgVisibility: 'RESTRICTED' }, deps)).toMatchObject({ ok: true });
+  });
+
+  it('POL-6 (partial) the UI path under an EDIT floor: create and move in with the UI default visibility (Restricted), give an Edit default role, then switch to Open', async () => {
+    await role(w.orgDrive, 'Editor', true, EDIT);
+    await setFloorOk('edit');
+    // New drive: the dialog sends defaultOrgDriveVisibility(floor), and the server admits it.
+    const made = await createOrgDrive(w.owner, { name: 'Roadmaps', orgId: w.orgId, orgVisibility: defaultOrgDriveVisibility('edit') }, deps);
+    if (!made.ok) throw new Error(`create with the UI default refused: ${JSON.stringify(made)}`);
+    created.driveIds.push(made.drive.id);
+    expect(made.drive.orgVisibility).toBe('RESTRICTED');
+    // Move a drive in: the dialog's default visibility is admitted too, whatever the drive's default role.
+    const mine = (await factories.createDrive(w.owner)).id;
+    created.driveIds.push(mine);
+    expect(await moveDriveToOrg(w.owner, mine, { orgId: w.orgId, orgVisibility: defaultOrgDriveVisibility('edit') }, deps)).toMatchObject({ ok: true });
+    // The drive row's visibility select: Open is refused until an Edit default exists, then accepted.
+    expect(await changeDriveVisibility(w.owner, made.drive.id, { orgVisibility: 'OPEN' }, deps)).toMatchObject({ ok: false, code: 'POLICY_OPEN_ROLE_FLOOR' });
+    await role(made.drive.id, 'Editor', true, EDIT);
+    expect(await changeDriveVisibility(w.owner, made.drive.id, { orgVisibility: 'OPEN' }, deps)).toMatchObject({ ok: true, changed: true });
+  });
+
+  it('DRV-4 (partial) under a VIEW floor the UI default is Open, and a new drive is created Open', async () => {
+    const made = await createOrgDrive(w.owner, { name: 'Wiki', orgId: w.orgId, orgVisibility: defaultOrgDriveVisibility('view') }, deps);
+    if (!made.ok) throw new Error('create refused');
+    created.driveIds.push(made.drive.id);
+    expect(made.drive.orgVisibility).toBe('OPEN');
   });
 
   it('POL-6 (partial) a damaged stored floor fails CLOSED: it reads as view, so it never forces more than a drive chose', async () => {

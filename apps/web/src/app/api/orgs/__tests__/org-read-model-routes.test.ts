@@ -25,11 +25,13 @@ vi.mock('@pagespace/lib/permissions/org-read-models', () => ({
   listOrgGuests: vi.fn(async () => [{ userId: 'u_chris', name: 'Chris Rowe', email: 'chris@partner.co', image: null, drives: [] }]),
   listOrgDriveUsage: vi.fn(async () => [{ driveId: 'd1', memberCount: 12, guestCount: 1, storageBytes: 9 }]),
   listOrgMemberActivity: vi.fn(async () => [{ userId: 'u1', driveCount: 6, lastActiveAt: null }]),
+  listOrgTrashedDrives: vi.fn(async () => [{ id: 'd_old', name: 'Old', trashedAt: null, lead: { id: 'u1', name: 'Jono' } }]),
 }));
 
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { findMembershipRole } from '@pagespace/lib/organizations/repository';
-import { listOrgGuests, listOrgDriveUsage, listOrgMemberActivity } from '@pagespace/lib/permissions/org-read-models';
+import { listOrgGuests, listOrgDriveUsage, listOrgMemberActivity, listOrgTrashedDrives } from '@pagespace/lib/permissions/org-read-models';
+import { GET as getTrashed } from '../[orgId]/drives/trashed/route';
 import { getOrgPoolSplit, listOrgSeatCaps } from '@pagespace/lib/services/drive-wallet-service';
 import { GET as getPool } from '../[orgId]/pool/route';
 import { GET as getSeatCaps } from '../[orgId]/seat-caps/route';
@@ -46,6 +48,7 @@ const routes = [
   { name: 'guests', get: getGuests, fn: listOrgGuests, keys: ['guests'] },
   { name: 'drives/usage', get: getUsage, fn: listOrgDriveUsage, keys: ['usage'] },
   { name: 'members/activity', get: getActivity, fn: listOrgMemberActivity, keys: ['activity'] },
+  { name: 'drives/trashed', get: getTrashed, fn: listOrgTrashedDrives, keys: ['drives'] },
   { name: 'seat-caps', get: getSeatCaps, fn: listOrgSeatCaps, keys: ['walletId', 'seatAllowanceCents', 'seats'] },
   { name: 'pool', get: getPool, fn: getOrgPoolSplit, keys: ['walletId', 'availableCents', 'unallocatedCents', 'periodEnd', 'seats', 'driveWallets', 'drivesWithoutWallet'] },
 ] as const;

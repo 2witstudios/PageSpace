@@ -238,3 +238,31 @@ export async function listOrgMemberActivity(orgId: string): Promise<OrgMemberAct
     lastUsed,
   });
 }
+
+export interface OrgTrashedDrive {
+  id: string;
+  name: string;
+  trashedAt: string | null;
+  lead: { id: string; name: string | null };
+}
+
+/**
+ * GET /api/orgs/[orgId]/drives/trashed: every trashed drive the org owns, Private ones included (the Drives
+ * page's Trashed tab is Owner/Admin-only; ORG-4 gives them every org drive), not just those in the viewer's
+ * own drive list.
+ */
+export async function listOrgTrashedDrives(orgId: string): Promise<OrgTrashedDrive[]> {
+  const rows = await db
+    .select({ id: drives.id, name: drives.name, trashedAt: drives.trashedAt, leadId: drives.ownerId })
+    .from(drives)
+    .where(and(eq(drives.orgId, orgId), eq(drives.isTrashed, true)))
+    .limit(5000);
+  const leadIds = [...new Set(rows.map((r) => r.leadId))];
+  const leads = leadIds.length === 0
+    ? []
+    : await decryptUserRows(await db.select({ id: users.id, name: users.name, email: users.email }).from(users).where(inArray(users.id, leadIds)));
+  const leadName = new Map(leads.map((l) => [l.id, l.name ?? null]));
+  return rows
+    .map((r) => ({ id: r.id, name: r.name, trashedAt: r.trashedAt?.toISOString() ?? null, lead: { id: r.leadId, name: leadName.get(r.leadId) ?? null } }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}

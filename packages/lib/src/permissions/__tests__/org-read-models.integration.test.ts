@@ -19,7 +19,7 @@ import { sessions } from '@pagespace/db/schema/sessions';
 import { files } from '@pagespace/db/schema/storage';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
-import { listOrgDriveUsage, listOrgGuests, listOrgMemberActivity } from '../org-read-models';
+import { listOrgDriveUsage, listOrgGuests, listOrgMemberActivity, listOrgTrashedDrives } from '../org-read-models';
 
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
@@ -119,6 +119,12 @@ describe('org read models (real Postgres)', () => {
     expect(activity[u.priya]).toEqual({ userId: u.priya, driveCount: 2, lastActiveAt: null });
     expect(activity[u.marcus]).toEqual({ userId: u.marcus, driveCount: 1, lastActiveAt: marcusSeen.toISOString() });
     expect(activity[u.lou]).toBeUndefined();
+  });
+
+  it('UI-7 (partial): trashed org drives, Private ones included, whoever the viewer is (the admin Trashed tab)', async () => {
+    if (!ok) return;
+    const trashed = await listOrgTrashedDrives(ids.orgId);
+    expect(trashed.map((t) => ({ id: t.id, name: t.name, lead: t.lead.name }))).toEqual([{ id: d.trashed, name: 'Old', lead: 'Jono Woodall' }]);
   });
 
   it('an org with no drives has no guests and no usage', async () => {
