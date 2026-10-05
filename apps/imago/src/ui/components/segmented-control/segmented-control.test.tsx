@@ -163,4 +163,54 @@ describe('SegmentedControl', () => {
       expected: { selections: ['board'], checked: ['Board · 4'], tabStops: ['Board · 4'] },
     });
   });
+
+  test('an unchecked group', () => {
+    const selections: string[] = [];
+    const container = mount(
+      <SegmentedControl
+        label="View"
+        segments={[
+          { value: 'a', label: 'A' },
+          { value: 'b', label: 'B' },
+          { value: 'c', label: 'C' },
+        ]}
+        value="none"
+        select={(next) => selections.push(next)}
+      />,
+    );
+    const stop = container.querySelector<HTMLButtonElement>('[tabindex="0"]');
+    act(() => stop?.focus());
+    const prevented = press('ArrowRight');
+    assert({
+      given: 'nothing checked, focus on the first radio (the tab stop), then ArrowRight',
+      should: 'move focus to the second radio and select it (WAI-ARIA radio group)',
+      actual: { prevented, selections, focused: document.activeElement?.textContent },
+      expected: { prevented: true, selections: ['b'], focused: 'B' },
+    });
+  });
+
+  test('a controlled parent that ignores select', () => {
+    const selections: string[] = [];
+    const container = mount(
+      <SegmentedControl
+        label="View"
+        segments={[
+          { value: 'a', label: 'A' },
+          { value: 'b', label: 'B' },
+          { value: 'c', label: 'C' },
+        ]}
+        value="a"
+        select={(next) => selections.push(next)}
+      />,
+    );
+    act(() => container.querySelector<HTMLButtonElement>('[aria-checked="true"]')?.focus());
+    press('ArrowRight');
+    press('ArrowRight');
+    assert({
+      given: 'A checked and a parent that never changes value, then ArrowRight twice',
+      should: 'step from the focused radio each time, never sticking one step away',
+      actual: { selections, focused: document.activeElement?.textContent },
+      expected: { selections: ['b', 'c'], focused: 'C' },
+    });
+  });
 });
