@@ -1,12 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import {
   AUTOMATION_OWNER_CHANGED_ERROR,
+  AUTOMATION_OWNER_LEFT_CODE,
+  OWNER_LEFT_AUTOMATION_REFUSALS,
   AUTOMATION_OWNER_LEFT_ERROR,
   automationRunOwner,
   claimedRunOwner,
   decideOwnerLeftAutomationAction,
   departedCreatorDisposition,
 } from '../automation-ownership';
+import { isOrgApiErrorCode } from '../../organizations/api-error-codes';
 
 const LEFT_AT = new Date('2026-10-05T10:00:00Z');
 
@@ -31,6 +34,28 @@ describe('automationRunOwner', () => {
   it('the recorded reason names owner_left and tells an admin what to do', () => {
     expect(AUTOMATION_OWNER_LEFT_ERROR).toContain('owner_left');
     expect(AUTOMATION_OWNER_LEFT_ERROR).toMatch(/reassign or delete/);
+  });
+});
+
+describe('owner-left codes are registered org API error codes', () => {
+  it('UI-7 (partial) every refusal of the owner-left admin path, and the owner_left 409 code, is in ORG_API_ERROR_CODES so the UI can map it to copy (review #2831 P2-N1)', () => {
+    for (const code of [...OWNER_LEFT_AUTOMATION_REFUSALS, AUTOMATION_OWNER_LEFT_CODE]) expect(isOrgApiErrorCode(code), code).toBe(true);
+    expect(AUTOMATION_OWNER_LEFT_CODE).toBe('owner_left');
+  });
+
+  it('UI-7 (partial) every reason decideOwnerLeftAutomationAction can return is one of the listed refusals', () => {
+    const automation = { orgId: 'org-1', ownerLeftAt: LEFT_AT };
+    const seen = new Set<string>();
+    const cases = [
+      decideOwnerLeftAutomationAction({ actorRole: null, orgId: 'org-1', automation, action: { kind: 'delete' } }),
+      decideOwnerLeftAutomationAction({ actorRole: 'MEMBER', orgId: 'org-1', automation, action: { kind: 'delete' } }),
+      decideOwnerLeftAutomationAction({ actorRole: 'ADMIN', orgId: 'org-1', automation: null, action: { kind: 'delete' } }),
+      decideOwnerLeftAutomationAction({ actorRole: 'ADMIN', orgId: 'org-1', automation: { orgId: 'org-1', ownerLeftAt: null }, action: { kind: 'delete' } }),
+      decideOwnerLeftAutomationAction({ actorRole: 'ADMIN', orgId: 'org-1', automation, action: { kind: 'reassign', newOwner: null } }),
+      decideOwnerLeftAutomationAction({ actorRole: 'ADMIN', orgId: 'org-1', automation, action: { kind: 'reassign', newOwner: { isOrgMember: true, isDriveMember: false } } }),
+    ];
+    for (const decision of cases) if (!decision.ok) seen.add(decision.reason);
+    expect([...seen].sort()).toEqual([...OWNER_LEFT_AUTOMATION_REFUSALS].sort());
   });
 });
 

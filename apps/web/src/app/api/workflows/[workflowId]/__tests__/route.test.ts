@@ -80,6 +80,7 @@ import { GET, PATCH, DELETE } from '../route';
 import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrincipalDriveOwnerOrAdmin } from '@/lib/auth';
 import { validateCronExpression, validateTimezone, getNextRunDate } from '@/lib/workflows/cron-utils';
+import { isOrgApiErrorCode } from '@pagespace/lib/organizations/api-error-codes';
 
 // ============================================================================
 // Fixtures
@@ -275,7 +276,10 @@ describe('PATCH /api/workflows/[workflowId]', () => {
     });
     const response = await PATCH(request, createContext('wf_1'));
     expect(response!.status).toBe(409);
-    expect(await response!.json()).toMatchObject({ code: 'owner_left' });
+    const body = await response!.json();
+    expect(body).toMatchObject({ code: 'owner_left' });
+    // UI-7: a registered org API error code (review #2831 P2-N1).
+    expect(isOrgApiErrorCode(body.code)).toBe(true);
     expect(mockUpdate).not.toHaveBeenCalled();
   });
 

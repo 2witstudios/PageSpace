@@ -24,6 +24,8 @@ import {
   listOwnerLeftAutomations,
   reassignOwnerLeftAutomation,
 } from '@pagespace/lib/organizations/automation-ownership';
+import { isOrgApiErrorCode } from '@pagespace/lib/organizations/api-error-codes';
+import { OWNER_LEFT_AUTOMATION_REFUSALS } from '@pagespace/lib/permissions/automation-ownership';
 import { GET } from '../route';
 import { DELETE } from '../[kind]/[automationId]/route';
 import { POST } from '../[kind]/[automationId]/reassign/route';
@@ -80,6 +82,17 @@ describe('owner-left automation routes', () => {
     const del = await DELETE(req('DELETE'), itemCtx('page_webhook', 'pw_ci'));
     expect(del.status).toBe(409);
     expect(await del.json()).toMatchObject({ code: 'owner_present' });
+  });
+
+  it('UI-7 (partial) every refusal answers a registered org API error code, so the UI can map it to copy (review #2831 P2-N1)', async () => {
+    as('ADMIN');
+    const statusOf = { not_member: 404, not_found: 404, insufficient_role: 403, owner_present: 409, new_owner_not_member: 400, new_owner_no_drive_access: 400 } as const;
+    for (const reason of OWNER_LEFT_AUTOMATION_REFUSALS) {
+      vi.mocked(reassignOwnerLeftAutomation).mockResolvedValueOnce({ ok: false, status: statusOf[reason], reason } as never);
+      const body = await (await POST(req('POST', { newOwnerId: 'user_lena' }), itemCtx())).json();
+      expect(body.code).toBe(reason);
+      expect(isOrgApiErrorCode(body.code), reason).toBe(true);
+    }
   });
 
   it('an unknown automation kind or a body without a new owner is refused before the service runs', async () => {

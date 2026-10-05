@@ -45,6 +45,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 }));
 
 import { PATCH, DELETE } from '../route';
+import { isOrgApiErrorCode } from '@pagespace/lib/organizations/api-error-codes';
 
 const SESSION_AUTH = { userId: 'user-1', kind: 'session' };
 const PARAMS = { params: Promise.resolve({ pageId: 'page-1', id: 'wh-1' }) };
@@ -79,7 +80,10 @@ describe('PATCH /api/pages/[pageId]/webhooks/[id]', () => {
     mockFindFirst.mockResolvedValue({ ...WEBHOOK_ROW, isEnabled: false, ownerLeftAt: new Date() });
     const refused = await PATCH(makeRequest('PATCH', { isEnabled: true }), PARAMS);
     expect(refused.status).toBe(409);
-    expect(await refused.json()).toMatchObject({ code: 'owner_left' });
+    const body = await refused.json();
+    expect(body).toMatchObject({ code: 'owner_left' });
+    // UI-7: a registered org API error code (review #2831 P2-N1).
+    expect(isOrgApiErrorCode(body.code)).toBe(true);
     expect(mockUpdateReturning).not.toHaveBeenCalled();
 
     mockUpdateReturning.mockResolvedValue([{ ...WEBHOOK_ROW, name: 'CI' }]);

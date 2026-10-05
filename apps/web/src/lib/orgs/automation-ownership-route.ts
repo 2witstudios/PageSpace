@@ -4,6 +4,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import type { OwnerLeftAutomationResult } from '@pagespace/lib/organizations/automation-ownership';
+import type { OrgApiErrorCode } from '@pagespace/lib/organizations/api-error-codes';
 
 export const automationKindSchema = z.enum(['workflow', 'page_webhook']);
 
@@ -20,6 +21,11 @@ const REFUSAL_MESSAGES: Record<Refusal, string> = {
   new_owner_no_drive_access: 'The new owner must be able to reach the automation\'s drive',
 };
 
+/** The org error body for a refusal; `code` is a registered OrgApiErrorCode (UI-7), so tsc rejects any other. */
+function refusalBody(message: string, code: OrgApiErrorCode, status: number): Response {
+  return NextResponse.json({ error: message, code }, { status });
+}
+
 export function automationRefusalResponse(result: Extract<OwnerLeftAutomationResult, { ok: false }>): Response {
-  return NextResponse.json({ error: REFUSAL_MESSAGES[result.reason], code: result.reason }, { status: result.status });
+  return refusalBody(REFUSAL_MESSAGES[result.reason], result.reason, result.status);
 }

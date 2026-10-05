@@ -4,7 +4,7 @@ import { db } from '@pagespace/db/db';
 import { and, eq } from '@pagespace/db/operators';
 import { pageWebhooks } from '@pagespace/db/schema/page-webhooks';
 import { WEBHOOK_USERNAME_MAX_LENGTH } from '@pagespace/lib/services/page-webhook-core';
-import { AUTOMATION_OWNER_LEFT_ERROR } from '@pagespace/lib/permissions/automation-ownership';
+import { AUTOMATION_OWNER_LEFT_CODE, AUTOMATION_OWNER_LEFT_ERROR } from '@pagespace/lib/permissions/automation-ownership';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { authenticateRequestWithOptions, isAuthError, canManagePageWebhooks } from '@/lib/auth';
@@ -55,7 +55,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ pageI
     if (!existing) return NextResponse.json({ error: 'Webhook not found' }, { status: 404 });
     // [D-OW-36] An owner-left webhook stays off until an Owner or Admin reassigns it (which switches it back on).
     if (existing.ownerLeftAt && validation.data.isEnabled === true) {
-      return NextResponse.json({ error: AUTOMATION_OWNER_LEFT_ERROR, code: 'owner_left' }, { status: 409 });
+      return NextResponse.json({ error: AUTOMATION_OWNER_LEFT_ERROR, code: AUTOMATION_OWNER_LEFT_CODE }, { status: 409 });
     }
 
     const [row] = await db

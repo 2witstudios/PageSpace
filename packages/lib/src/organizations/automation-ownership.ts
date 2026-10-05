@@ -221,7 +221,6 @@ interface LockedAutomation {
   timezone: string | null;
 }
 
-/** The automation and its drive's org, locked FOR UPDATE so a concurrent reassign or delete serializes. */
 /**
  * The accepted org roles of `userIds`, their org_members rows held FOR SHARE in `tx` (review #2831 P2-2).
  * leaveOrganization and removeMember lock the same rows FOR UPDATE as their first step and delete them, so a
@@ -240,6 +239,7 @@ async function lockOrgRoles(tx: Tx, orgId: string, userIds: string[]): Promise<M
   return new Map(rows.map((r) => [r.userId, r.role]));
 }
 
+/** The automation and its drive's org, locked FOR UPDATE so a concurrent reassign or delete serializes. */
 async function lockAutomation(tx: Tx, kind: AutomationKind, id: string): Promise<LockedAutomation | null> {
   if (kind === 'workflow') {
     const [row] = await tx

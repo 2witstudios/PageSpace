@@ -13,6 +13,16 @@
  */
 import type { OrgRole } from '@pagespace/db/schema/organizations';
 import { decideOrgRole } from '../organizations/authorize';
+import type { OrgApiErrorCode } from '../organizations/api-error-codes';
+
+/**
+ * The machine code of an owner-left refusal, as the routes answer it (UI-7). Each is a registered
+ * OrgApiErrorCode: RegisteredCode's constraint makes tsc reject an unregistered literal.
+ */
+type RegisteredCode<C extends OrgApiErrorCode> = C;
+
+/** The body code of the 409 on re-enabling an owner-left automation, and the run-skip reason. */
+export const AUTOMATION_OWNER_LEFT_CODE: RegisteredCode<'owner_left'> = 'owner_left';
 
 /** The run error, task-trigger lastFireError and webhook lastFireError an owner-left automation records. */
 export const AUTOMATION_OWNER_LEFT_ERROR =
@@ -25,12 +35,12 @@ export interface AutomationOwnership {
 
 export type AutomationRunOwner =
   | { runs: true; ownerId: string }
-  | { runs: false; reason: 'owner_left'; error: string };
+  | { runs: false; reason: typeof AUTOMATION_OWNER_LEFT_CODE; error: string };
 
 /** The person an automation runs as, or why it must not run. A cleared creator is a missing person. */
 export function automationRunOwner(automation: AutomationOwnership): AutomationRunOwner {
   if (automation.ownerLeftAt !== null || automation.createdBy === null) {
-    return { runs: false, reason: 'owner_left', error: AUTOMATION_OWNER_LEFT_ERROR };
+    return { runs: false, reason: AUTOMATION_OWNER_LEFT_CODE, error: AUTOMATION_OWNER_LEFT_ERROR };
   }
   return { runs: true, ownerId: automation.createdBy };
 }
@@ -74,12 +84,24 @@ export type OwnerLeftAutomationAction =
   /** The proposed new owner's standing in the automation's org and drive; null when they are no user at all. */
   | { kind: 'reassign'; newOwner: { isOrgMember: boolean; isDriveMember: boolean } | null };
 
+/** Every refusal the owner-left admin path answers; each must be a registered OrgApiErrorCode (UI-7). */
+export const OWNER_LEFT_AUTOMATION_REFUSALS = [
+  'not_member',
+  'not_found',
+  'insufficient_role',
+  'owner_present',
+  'new_owner_not_member',
+  'new_owner_no_drive_access',
+] as const satisfies readonly OrgApiErrorCode[];
+
+type Refusal<C extends (typeof OWNER_LEFT_AUTOMATION_REFUSALS)[number]> = RegisteredCode<C>;
+
 export type OwnerLeftAutomationDecision =
   | { ok: true }
-  | { ok: false; status: 404; reason: 'not_member' | 'not_found' }
-  | { ok: false; status: 403; reason: 'insufficient_role' }
-  | { ok: false; status: 409; reason: 'owner_present' }
-  | { ok: false; status: 400; reason: 'new_owner_not_member' | 'new_owner_no_drive_access' };
+  | { ok: false; status: 404; reason: Refusal<'not_member' | 'not_found'> }
+  | { ok: false; status: 403; reason: Refusal<'insufficient_role'> }
+  | { ok: false; status: 409; reason: Refusal<'owner_present'> }
+  | { ok: false; status: 400; reason: Refusal<'new_owner_not_member' | 'new_owner_no_drive_access'> };
 
 /**
  * May `actorRole` (their accepted role in `orgId`, null for none) reassign or delete this automation?

@@ -12,7 +12,7 @@ import { workflows } from '@pagespace/db/schema/workflows';
 import { validateCronExpression, validateTimezone, getNextRunDate } from '@/lib/workflows/cron-utils';
 import { resolveTimezone } from '@/lib/ai/core/personalization-utils';
 import { workflowStepsSchema, validateStepsForApi } from '@/lib/workflows/steps-api-validation';
-import { AUTOMATION_OWNER_LEFT_ERROR } from '@pagespace/lib/permissions/automation-ownership';
+import { AUTOMATION_OWNER_LEFT_CODE, AUTOMATION_OWNER_LEFT_ERROR } from '@pagespace/lib/permissions/automation-ownership';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -136,7 +136,7 @@ export async function PATCH(
 
   // [D-OW-36] An owner-left workflow stays off until an Owner or Admin reassigns it (which switches it back on).
   if (workflow.ownerLeftAt && data.isEnabled === true) {
-    return NextResponse.json({ error: AUTOMATION_OWNER_LEFT_ERROR, code: 'owner_left' }, { status: 409 });
+    return NextResponse.json({ error: AUTOMATION_OWNER_LEFT_ERROR, code: AUTOMATION_OWNER_LEFT_CODE }, { status: 409 });
   }
 
   // Validate timezone. Body value wins, else the workflow's own stored zone,
