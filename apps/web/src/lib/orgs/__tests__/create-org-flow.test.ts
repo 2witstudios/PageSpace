@@ -30,7 +30,7 @@ describe('mergeInviteEmails', () => {
 });
 
 describe('createOrgSeatCount', () => {
-  it('UI-6 (partial): the creator plus each invited person is one seat each (SEAT-3)', () => {
+  it('UI-6 (partial) SEAT-3 (partial): the creator plus each invited person is one seat each', () => {
     expect(createOrgSeatCount(['a@x.io', 'b@x.io'], 'me@x.io')).toBe(3);
   });
 
