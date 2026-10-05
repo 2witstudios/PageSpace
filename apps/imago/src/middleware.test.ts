@@ -1,4 +1,4 @@
-import { describe, test } from 'vitest';
+import { afterEach, beforeEach, describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { NextRequest } from 'next/server';
 import { unstable_doesMiddlewareMatch } from 'next/experimental/testing/server';
@@ -27,7 +27,20 @@ const redirectOf = (response: Response): { status: number; location: URL | null 
   };
 };
 
+// The suites below are about a deployment with imago switched on; the flag
+// itself is covered by 'middleware() IMAGO_ENABLED gate'.
+const enableImago = (): void => {
+  beforeEach(() => {
+    vi.stubEnv('IMAGO_ENABLED', 'true');
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+};
+
 describe('middleware()', () => {
+  enableImago();
+
   test('document request', () => {
     const response = middleware(imagoRequest('/imago/drive-1/files'));
     const nonce = response.headers.get(`x-middleware-request-${NONCE_HEADER}`);
@@ -74,6 +87,8 @@ describe('middleware()', () => {
 });
 
 describe('middleware() auth gate', () => {
+  enableImago();
+
   test('no session cookie', () => {
     const { status, location } = redirectOf(
       middleware(imagoRequest('/imago/drive-1/files', { session: null })),
@@ -221,6 +236,121 @@ describe('middleware() auth gate', () => {
       actual: spoofed.headers.get(`x-middleware-request-${PATHNAME_HEADER}`),
       expected: '/drive-1',
     });
+  });
+});
+
+describe('middleware() IMAGO_ENABLED gate', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  const ROUTES = ['/imago', '/imago/drive-1/files', '/imago/api/anything', '/imago/api/healthz'];
+
+  const statusesWith = (flag: string | undefined, session: string | null): number[] => {
+    vi.stubEnv('IMAGO_ENABLED', flag);
+    return ROUTES.map((pathname) => middleware(imagoRequest(pathname, { session })).status);
+  };
+
+  test('flag unset', () => {
+    assert({
+      given: 'IMAGO_ENABLED unset and a signed-in request',
+      should: 'answer 404 for every imago route',
+      actual: statusesWith(undefined, 'ps_sess_test'),
+      expected: [404, 404, 404, 404],
+    });
+
+    assert({
+      given: 'IMAGO_ENABLED unset and no session cookie',
+      should: 'answer 404 instead of sending the visitor to sign-in',
+      actual: statusesWith(undefined, null),
+      expected: [404, 404, 404, 404],
+    });
+  });
+
+  test('flag set to anything but true', () => {
+    for (const flag of ['false', '', 'TRUE', '1', ' true', 'yes']) {
+      assert({
+        given: `IMAGO_ENABLED=${JSON.stringify(flag)}`,
+        should: 'answer 404 for every imago route',
+        actual: statusesWith(flag, 'ps_sess_test'),
+        expected: [404, 404, 404, 404],
+      });
+    }
+  });
+
+  test('the 404 response', () => {
+    vi.stubEnv('IMAGO_ENABLED', 'false');
+    const response = middleware(imagoRequest('/imago/drive-1'));
+
+    assert({
+      given: 'imago switched off',
+      should: 'not be cached, so flipping the flag takes effect at once',
+      actual: response.headers.get('Cache-Control'),
+      expected: 'no-store',
+    });
+
+    assert({
+      given: 'imago switched off',
+      should: 'not forward the request to the render',
+      actual: response.headers.get('x-middleware-next'),
+      expected: null,
+    });
+  });
+
+  test('health stays up', () => {
+    for (const flag of [undefined, 'false', 'true']) {
+      vi.stubEnv('IMAGO_ENABLED', flag);
+      const response = middleware(imagoRequest('/imago/api/health', { session: null }));
+
+      assert({
+        given: `IMAGO_ENABLED=${JSON.stringify(flag)} and the health route`,
+        should: 'pass through with the API CSP',
+        actual: [response.status, response.headers.get('Content-Security-Policy')],
+        expected: [200, buildAPICSPPolicy()],
+      });
+    }
+  });
+
+  test('flag true', () => {
+    assert({
+      given: "IMAGO_ENABLED='true' and a signed-in request",
+      should: 'pass every route through',
+      actual: statusesWith('true', 'ps_sess_test'),
+      expected: [200, 200, 200, 200],
+    });
+  });
+
+  test('read at request time', () => {
+    vi.stubEnv('IMAGO_ENABLED', 'false');
+    const off = middleware(imagoRequest('/imago/drive-1')).status;
+    vi.stubEnv('IMAGO_ENABLED', 'true');
+    const on = middleware(imagoRequest('/imago/drive-1')).status;
+    vi.stubEnv('IMAGO_ENABLED', 'false');
+    const offAgain = middleware(imagoRequest('/imago/drive-1')).status;
+
+    assert({
+      given: 'the flag changing between requests in one process',
+      should: 'follow the value at each request',
+      actual: [off, on, offAgain],
+      expected: [404, 200, 404],
+    });
+  });
+
+  test('deployment mode does not matter', () => {
+    for (const mode of ['cloud', 'tenant', 'onprem']) {
+      vi.stubEnv('DEPLOYMENT_MODE', mode);
+      vi.stubEnv('NEXT_PUBLIC_DEPLOYMENT_MODE', mode);
+
+      assert({
+        given: `DEPLOYMENT_MODE=${mode} with the flag unset, then true`,
+        should: 'gate on the flag alone',
+        actual: [statusesWith(undefined, 'ps_sess_test'), statusesWith('true', 'ps_sess_test')],
+        expected: [
+          [404, 404, 404, 404],
+          [200, 200, 200, 200],
+        ],
+      });
+    }
   });
 });
 

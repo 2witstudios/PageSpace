@@ -19,7 +19,7 @@ import {
   DropdownMenuPortal,
 } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { LogOut, MessageSquareText, Settings, LayoutDashboard, Sun, Moon, Monitor, CreditCard, Sparkles, Coins } from 'lucide-react';
+import { LogOut, MessageSquareText, Settings, LayoutDashboard, Sun, Moon, Monitor, CreditCard, Sparkles, Coins, Telescope } from 'lucide-react';
 import { useTheme } from "next-themes";
 import { useBillingVisibility } from '@/hooks/useBillingVisibility';
 import { useCreditBalance } from '@/hooks/useCreditBalance';
@@ -47,6 +47,9 @@ export default function UserDropdown() {
   const [feedbackOpen, setFeedbackOpen] = useState(false);
 
   const { balance } = useCreditBalance();
+
+  // Imago rollout (DEC-10): the flag alone decides, in every deployment mode.
+  const showTryImago = process.env.NEXT_PUBLIC_IMAGO_ENABLED === 'true';
 
   // Fetch subscription status (for tier label in Billing item)
   const { data: subscriptionInfo } = useSWR(
@@ -153,6 +156,15 @@ export default function UserDropdown() {
             <Settings className="mr-2 h-4 w-4" />
             <span>Settings</span>
           </DropdownMenuItem>
+          {showTryImago && (
+            // A plain link: /imago is a separate app, so it needs a full page load.
+            <DropdownMenuItem asChild>
+              <a href="/imago" data-testid="user-menu-try-imago">
+                <Telescope className="mr-2 h-4 w-4" />
+                <span>Try Imago</span>
+              </a>
+            </DropdownMenuItem>
+          )}
           <DropdownMenuSeparator />
           <DropdownMenuSub>
             <DropdownMenuSubTrigger>
