@@ -13,9 +13,9 @@ export const ORG_ERROR_COPY: Record<OrgApiErrorCode, string> = {
   // generic
   invalid_request: 'Some of the details are not valid. Check them and try again.',
   unauthorized: 'Your session has ended. Sign in again to continue.',
-  token_scope_refused: 'This can only be done from the PageSpace app, not with an access token.',
+  token_scope_refused: 'This access token is limited to specific drives, so it cannot do this.',
   org_not_found: 'This organization does not exist, or you are not a member of it.',
-  insufficient_role: 'Only the Owner or an Admin of this organization can do this.',
+  insufficient_role: 'You do not have permission to do this.',
   not_found: 'That item no longer exists.',
   rate_limited: 'Too many attempts. Wait a moment and try again.',
   internal_error: 'Something went wrong on our side. Try again in a moment.',
@@ -46,14 +46,14 @@ export const ORG_ERROR_COPY: Record<OrgApiErrorCode, string> = {
   already_member: 'That person is already a member.',
   already_invited: 'That person already has a pending invitation.',
   seats_full: 'Every seat is in use. Add seats or turn on automatic seats to invite more people.',
-  delivery_failed: 'The invitation was saved, but the email could not be sent. Try resending it.',
+  delivery_failed: 'The email could not be sent, so nothing was changed. Try again in a moment.',
   expired: 'This invitation has expired. Ask for a new one.',
   already_accepted: 'This invitation has already been accepted.',
   email_mismatch: 'This invitation was sent to a different email address.',
 
   // policy and lapse
   org_policy: 'An organization policy does not allow this.',
-  org_lapsed: 'This organization is unpaid. Reactivate it to do this. Restricting access still works.',
+  org_lapsed: 'This organization is unpaid, so this is paused until an Owner or Admin reactivates it. Restricting access still works.',
 
   // verified domains
   invalid_domain: 'That is not a valid domain.',
@@ -78,11 +78,11 @@ export const ORG_ERROR_COPY: Record<OrgApiErrorCode, string> = {
   no_org_pool: 'This organization has no credits pool yet.',
   no_wallet: 'This drive has no wallet.',
   wallet_exists: 'This drive already has a wallet.',
-  wallet_in_use: 'This wallet still has credits or spending in progress, so it cannot be removed yet.',
+  wallet_in_use: 'This wallet has been used, so it cannot be deleted. Pause it instead.',
   wallet_not_available: 'That wallet is not available to you.',
-  invalid_amount: 'Enter a whole number of credits.',
+  invalid_amount: 'Enter a whole number of credits, zero or more, within the allowed range for this action.',
   nothing_to_change: 'Nothing changed.',
-  same_wallet: 'That is already the wallet in use.',
+  same_wallet: 'You cannot move credits from a wallet into itself.',
   not_a_drive_wallet: 'That is not a drive wallet.',
   not_personal_wallet: 'That is not your personal wallet.',
   insufficient_funds: 'There are not enough credits for this.',
