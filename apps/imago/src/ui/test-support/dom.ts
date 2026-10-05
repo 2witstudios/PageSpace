@@ -31,10 +31,10 @@ export const unmountAll = (): void => {
   }
 };
 
-/** Types into a controlled input the way the browser does: set, then `input`. */
-export const typeInto = (input: HTMLInputElement, value: string): void => {
+/** Types into a controlled input or textarea the way the browser does: set, then `input`. */
+export const typeInto = (input: HTMLInputElement | HTMLTextAreaElement, value: string): void => {
   const setValue = Object.getOwnPropertyDescriptor(
-    HTMLInputElement.prototype,
+    input instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype,
     'value',
   )?.set;
   act(() => {

@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
 import type { RealtimeClient, RealtimeSocket } from './realtime-client';
-import { RealtimeProvider, useDriveRoom, useSocketEvent } from './realtime-provider';
+import { RealtimeProvider, useChannelRoom, useDriveRoom, useSocketEvent } from './realtime-provider';
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined;
@@ -329,6 +329,90 @@ describe('useDriveRoom', () => {
       should: 'join nothing for the missing drive and stop rejoining once gone',
       actual: [fake.sent, fake.count('connect')],
       expected: [[['join_drive', 'd1']], 0],
+    });
+  });
+});
+
+describe('useChannelRoom', () => {
+  function Room({ pageId }: { pageId: string }) {
+    useChannelRoom(pageId);
+    return null;
+  }
+
+  test('joining, and rejoining after a reconnect', () => {
+    const fake = fakeClient({ connected: false });
+    mount(
+      <RealtimeProvider client={fake.client}>
+        <Room pageId="c1" />
+      </RealtimeProvider>,
+    );
+    const before = [...fake.sent];
+    act(() => fake.deliver('connect'));
+    act(() => fake.deliver('disconnect'));
+    act(() => fake.deliver('connect'));
+
+    assert({
+      given: 'a channel open on a socket that connects, drops and reconnects',
+      should: 'join its room once connected, and again after the reconnect',
+      actual: [before, fake.sent],
+      expected: [
+        [],
+        [
+          ['join_channel', 'c1'],
+          ['join_channel', 'c1'],
+        ],
+      ],
+    });
+  });
+
+  test('another channel, then leaving', () => {
+    const fake = fakeClient();
+    let setPage: (pageId: string) => void = () => {};
+    function Switcher() {
+      const [pageId, set] = useState('c1');
+      setPage = set;
+      return <Room pageId={pageId} />;
+    }
+    const root = mount(
+      <RealtimeProvider client={fake.client}>
+        <Switcher />
+      </RealtimeProvider>,
+    );
+    act(() => setPage('c2'));
+    unmount(root);
+    fake.deliver('connect');
+
+    assert({
+      given: 'the open channel changing, then the thread closing and the socket reconnecting',
+      should: 'leave each room as its channel closes and rejoin nothing',
+      actual: [fake.sent, fake.count('connect')],
+      expected: [
+        [
+          ['join_channel', 'c1'],
+          ['leave_channel', 'c1'],
+          ['join_channel', 'c2'],
+          ['leave_channel', 'c2'],
+        ],
+        0,
+      ],
+    });
+  });
+
+  test('closing while disconnected', () => {
+    const fake = fakeClient();
+    const root = mount(
+      <RealtimeProvider client={fake.client}>
+        <Room pageId="c1" />
+      </RealtimeProvider>,
+    );
+    act(() => fake.deliver('disconnect'));
+    unmount(root);
+
+    assert({
+      given: 'the socket dropped before the channel closed (realtime has already forgotten its rooms)',
+      should: 'not queue a leave for the next connection',
+      actual: fake.sent,
+      expected: [['join_channel', 'c1']],
     });
   });
 });
