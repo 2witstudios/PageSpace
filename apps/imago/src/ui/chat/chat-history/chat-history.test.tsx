@@ -371,6 +371,35 @@ describe('ChatHistory', () => {
     });
   });
 
+  test('slept through midnight', async () => {
+    // 23:00 on Oct 5 in Los Angeles; only the clock is fake, so the midnight timer never fires (a laptop asleep).
+    vi.setSystemTime(new Date('2026-10-06T06:00:00.000Z'));
+    const container = mountChat(historyWeb(fakeTurnStream()));
+    await settle(listed(container));
+    const before = groups(container).map(([label]) => label);
+
+    vi.setSystemTime(new Date('2026-10-06T16:00:00.000Z')); // 09:00 on Oct 6
+    act(() => dispatch(transactions.openConversation, 'c1'));
+    const afterRender = groups(container).map(([label]) => label);
+
+    vi.setSystemTime(new Date('2026-10-07T16:00:00.000Z')); // 09:00 on Oct 7
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    const afterWake = groups(container).map(([label]) => label);
+
+    assert({
+      given: 'the clock passing midnight with no timer firing, then any re-render, then the page shown again a day later',
+      should: 'label by the current clock each time',
+      actual: [before, afterRender, afterWake],
+      expected: [
+        ['Today', 'Yesterday', 'Sep 18'],
+        ['Yesterday', 'Oct 4', 'Sep 18'],
+        ['Oct 5', 'Oct 4', 'Sep 18'],
+      ],
+    });
+  });
+
   test('a list that failed to load', async () => {
     let fail = true;
     const web = historyWeb(fakeTurnStream(), {

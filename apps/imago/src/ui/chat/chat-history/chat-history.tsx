@@ -26,12 +26,21 @@ export function ChatHistory() {
   const chatNew = useUiState(selectNew);
   const activeId = shownConversationId({ chatConversationId, chatNew }, conversations?.[0]?.id ?? null);
 
-  // The day labels move at the viewer's midnight even if nothing else re-renders the list.
-  const [now, setNow] = useState(() => new Date());
+  // Days are read from the clock on every render. A re-render is forced at
+  // the viewer's next midnight, and when the page is shown or focused again:
+  // a laptop asleep across midnight fires no timer on time.
+  const [day, setDay] = useState(0);
   useEffect(() => {
-    const timer = setTimeout(() => setNow(new Date()), untilNextDay(now));
-    return () => clearTimeout(timer);
-  }, [now]);
+    const refresh = () => setDay((count) => count + 1);
+    const timer = setTimeout(refresh, untilNextDay(new Date()));
+    document.addEventListener('visibilitychange', refresh);
+    window.addEventListener('focus', refresh);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener('visibilitychange', refresh);
+      window.removeEventListener('focus', refresh);
+    };
+  }, [day]);
 
   // A turn starting or ending changes the list: a new chat's first send
   // creates its conversation, and every reply moves its chat to the top.
@@ -48,7 +57,7 @@ export function ChatHistory() {
     if (agents !== undefined && agentId === null) return { status: 'ready', days: [], hasMore: false, loadingMore: false };
     if (agentsError !== undefined || error !== undefined) return { status: 'error' };
     if (conversations === undefined) return { status: 'loading' };
-    return { status: 'ready', days: historyDays(conversations, now), hasMore, loadingMore: isLoadingMore };
+    return { status: 'ready', days: historyDays(conversations, new Date()), hasMore, loadingMore: isLoadingMore };
   })();
 
   return renderChatHistory({
