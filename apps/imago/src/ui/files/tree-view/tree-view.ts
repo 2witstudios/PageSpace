@@ -81,7 +81,7 @@ export const disclosableIds = (nodes: readonly FileNode[]): readonly string[] =>
   );
 
 /** The node with this id and every node above it, top first; undefined when absent. */
-const pathTo = (nodes: readonly FileNode[], id: string): readonly FileNode[] | undefined => {
+export const pathTo = (nodes: readonly FileNode[], id: string): readonly FileNode[] | undefined => {
   for (const node of nodes) {
     if (node.id === id) return [node];
     const below = pathTo(node.children ?? [], id);

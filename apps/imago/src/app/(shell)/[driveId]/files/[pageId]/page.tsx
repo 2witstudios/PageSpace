@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { getViewer } from '@/lib/auth/get-viewer';
 import { PageObject } from '@/ui/files/page-object/page-object';
-import { renderObjectPlaceholder } from '@/ui/frame/shell/object-placeholder';
+import { PageView } from '@/ui/files/page-view/page-view';
 
 type Props = { readonly params: Promise<{ driveId: string; pageId: string }> };
 
@@ -14,7 +14,7 @@ export default async function Page({ params }: Props): Promise<ReactNode> {
   const [{ driveId, pageId }] = await Promise.all([params, getViewer()]);
   return (
     <PageObject driveId={driveId} pageId={pageId}>
-      {renderObjectPlaceholder('Page')}
+      <PageView driveId={driveId} pageId={pageId} />
     </PageObject>
   );
 }
