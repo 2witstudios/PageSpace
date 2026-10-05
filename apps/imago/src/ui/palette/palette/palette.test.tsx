@@ -78,15 +78,23 @@ const ctrlK = (target: Element) => {
   });
   return event.defaultPrevented;
 };
-/** Polls until `check` passes, letting React render what arrived between polls. */
-const settle = (check: () => void): Promise<void> =>
-  vi.waitFor(
-    async () => {
-      await act(async () => {});
+/**
+ * Polls until `check` passes. Each poll waits inside act(), so what the fake
+ * server answers in the meantime is rendered before the check reads the DOM.
+ */
+const settle = async (check: () => void): Promise<void> => {
+  for (let waited = 0; ; waited += 5) {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    });
+    try {
       check();
-    },
-    { timeout: 1000, interval: 5 },
-  );
+      return;
+    } catch (error) {
+      if (waited >= 1000) throw error;
+    }
+  }
+};
 const listed = (container: HTMLElement, count: number) =>
   settle(() => {
     if (options(container).length !== count) throw new Error(`not ${count} results`);
