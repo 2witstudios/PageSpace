@@ -22,6 +22,13 @@ import {
   NONCE_HEADER,
 } from '../security-headers';
 
+const orgsFlag = vi.hoisted(() => ({ enabled: true }));
+vi.mock('@pagespace/lib/organizations/orgs-enabled', () => ({
+  get ORGS_ENABLED() {
+    return orgsFlag.enabled;
+  },
+}));
+
 vi.mock('next/server', () => {
   // Create a class-like constructor for NextResponse
   const MockNextResponse = vi.fn((body?: string | null, init?: ResponseInit) => {
@@ -692,6 +699,17 @@ describe('Security Headers', () => {
       expect(shouldDisableCOEP('/orgs/org_1/settings/billing')).toBe(true);
       for (const path of ['/settings/account', '/settings/', '/orgs/org_1/settings', '/orgs/org_1/settings/members', '/orgs/org_1/settings/billing/x', '/organizations']) {
         expect(shouldDisableCOEP(path), path).toBe(false);
+      }
+    });
+
+    it('UI-6 (partial): while orgs are dark the org payment routes keep COEP (nothing there mounts the Payment Element)', () => {
+      orgsFlag.enabled = false;
+      try {
+        expect(shouldDisableCOEP('/settings')).toBe(false);
+        expect(shouldDisableCOEP('/orgs/org_1/settings/billing')).toBe(false);
+        expect(shouldDisableCOEP('/settings/plan')).toBe(true);
+      } finally {
+        orgsFlag.enabled = true;
       }
     });
 
