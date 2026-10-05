@@ -10,12 +10,9 @@
 
 import type { MessageThread } from '../message-model/message';
 
-export const INBOX_OPERATIONS = ['dm_updated', 'channel_updated', 'read_status_changed', 'thread_updated'] as const;
+const INBOX_OPERATIONS = ['dm_updated', 'channel_updated', 'read_status_changed', 'thread_updated'] as const;
 
-export type InboxOperation = (typeof INBOX_OPERATIONS)[number];
-
-/** The socket event each operation arrives as. */
-export const inboxEventName = (operation: InboxOperation) => `inbox:${operation}` as const;
+type InboxOperation = (typeof INBOX_OPERATIONS)[number];
 
 /** The part of apps/web's InboxEventPayload the unread state is built from. */
 export type InboxEvent = {
