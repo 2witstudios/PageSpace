@@ -561,3 +561,87 @@ describe('apiFetch() 401', () => {
     }
   });
 });
+
+describe('apiStream()', () => {
+  const sse = (text: string) =>
+    new Response(text, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+
+  test('an unread body', async () => {
+    const browser = fakeBrowser({ '/api/ai/chat': () => sse('data: {"type":"start"}\n\n') });
+    const response = await browser.client.apiStream('/api/ai/chat', {
+      method: 'POST',
+      json: { chatId: 'p1' },
+      headers: { 'X-Browser-Session-Id': 'tab-1' },
+    });
+    const sent = browser.of('/api/ai/chat')[0];
+
+    assert({
+      given: 'a streaming POST the server accepts',
+      should: 'send the CSRF token, credentials, JSON body and extra headers, and hand back the body unread',
+      actual: [
+        sent?.headers['x-csrf-token'],
+        sent?.init?.credentials,
+        sent?.init?.body,
+        sent?.headers['x-browser-session-id'],
+        await response.text(),
+      ],
+      expected: ['tok-1', 'same-origin', '{"chatId":"p1"}', 'tab-1', 'data: {"type":"start"}\n\n'],
+    });
+  });
+
+  test('a CSRF 403 retries once', async () => {
+    let attempts = 0;
+    const browser = fakeBrowser({
+      '/api/ai/chat': () => {
+        attempts += 1;
+        return attempts === 1 ? csrfRejection('CSRF_TOKEN_INVALID') : sse('data: {"type":"finish"}\n\n');
+      },
+    });
+    const response = await browser.client.apiStream('/api/ai/chat', { method: 'POST', json: {} });
+
+    assert({
+      given: 'a stale CSRF token',
+      should: 'refetch the token, retry once with it and stream the retry',
+      actual: [browser.of('/api/ai/chat').map((call) => call.headers['x-csrf-token']), await response.text()],
+      expected: [['tok-1', 'tok-2'], 'data: {"type":"finish"}\n\n'],
+    });
+  });
+
+  test('typed errors', async () => {
+    const browser = fakeBrowser({
+      '/api/ai/chat': () => Response.json({ error: 'chatId is required' }, { status: 400 }),
+    });
+    const error = await rejection(browser.client.apiStream('/api/ai/chat', { method: 'POST', json: {} }));
+
+    assert({
+      given: 'a refused stream',
+      should: 'reject with the ApiError the server described',
+      actual: errorShape(error),
+      expected: { type: 'ApiError', status: 400, code: null, message: 'chatId is required' },
+    });
+  });
+
+  test('a 401', async () => {
+    const browser = fakeBrowser({ '/api/ai/chat': () => Response.json({ error: 'Unauthorized' }, { status: 401 }) });
+    const error = await rejection(browser.client.apiStream('/api/ai/chat', { method: 'POST', json: {} }));
+
+    assert({
+      given: 'an expired session',
+      should: 'reject with a 401 and leave for sign-in',
+      actual: [errorShape(error).status, browser.navigations.length],
+      expected: [401, 1],
+    });
+  });
+
+  test('only root-relative paths', async () => {
+    const browser = fakeBrowser({});
+    const error = await rejection(browser.client.apiStream('https://evil.test/api/ai/chat', { method: 'POST' }));
+
+    assert({
+      given: 'an absolute URL',
+      should: 'refuse it before any request carries the token',
+      actual: [error instanceof TypeError, browser.calls.length],
+      expected: [true, 0],
+    });
+  });
+});
