@@ -14,7 +14,7 @@ import {
   taskPaths,
   updateTask,
 } from './task-api';
-import { fakeWeb } from './fake-web';
+import { fakeWeb } from '@/ui/test-support/fake-web';
 import { seededConfigs, statusConfig, taskItem, taskListResponse } from '../task-model/fixtures';
 import { statusesFrom } from '../task-model/from-api';
 import { locate } from '../task-tree/task-tree';

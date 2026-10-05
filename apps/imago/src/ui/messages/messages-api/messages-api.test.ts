@@ -1,6 +1,6 @@
 import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
-import { fakeWeb } from '@/ui/tasks/task-api/fake-web';
+import { fakeWeb } from '@/ui/test-support/fake-web';
 import { ApiError } from '@/api/errors';
 import { fetchDirectThreads, fetchDriveChannels, messagePaths } from './messages-api';
 import { conversation, inboxChannel } from '../message-model/fixtures';

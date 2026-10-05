@@ -5,7 +5,7 @@ import { afterEach, describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { ImagoSWRProvider } from '@/api/swr-provider';
 import { useDriveTaskLists, useTaskList, useTaskStatuses, type TaskActions } from './use-tasks';
-import { fakeWeb, type FakeRoute } from '../task-api/fake-web';
+import { fakeWeb, type FakeRoute } from '@/ui/test-support/fake-web';
 import { seededConfigs, taskItem, taskListResponse } from '../task-model/fixtures';
 import { statusesFrom } from '../task-model/from-api';
 import { locate } from '../task-tree/task-tree';
