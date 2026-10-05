@@ -23,12 +23,14 @@ const post = (id: string, overrides: Partial<Post> = {}): Post => ({
 });
 
 const props = (overrides: Partial<ThreadViewRenderProps> = {}): ThreadViewRenderProps => ({
+  kind: 'channel',
   name: 'launch',
   viewerId: 'u1',
   status: 'ready',
   items: [],
   older: 'none',
   loadOlder: () => {},
+  canPost: true,
   composer: { draft: '', error: null, typeDraft: () => {}, send: () => {} },
   ...overrides,
 });
@@ -248,6 +250,62 @@ describe('renderThreadView() sending', () => {
       should: 'offer the composer, named for the channel, only once loaded',
       actual: shown,
       expected: [null, null, 'Message # launch'],
+    });
+  });
+
+  test('a viewer who may only read', () => {
+    const readOnly = dom({ canPost: false });
+    const unknown = dom({ canPost: undefined });
+    assert({
+      given: 'a loaded channel the viewer may not post in, and one whose permission apps/web has not answered yet',
+      should: 'stand classic’s view-only notice where the composer would be, and show neither until it is known',
+      actual: [
+        readOnly.querySelector('textarea'),
+        text(readOnly.querySelector('[data-view-only]')),
+        unknown.querySelector('textarea'),
+        unknown.querySelector('[data-view-only]'),
+      ],
+      expected: [null, 'View-only access: You need edit permission to send messages in this channel', null, null],
+    });
+  });
+});
+
+describe('renderThreadView() a DM', () => {
+  const dm = (overrides: Partial<ThreadViewRenderProps> = {}) =>
+    dom({ kind: 'dm', name: 'Grace', image: 'https://img/grace.png', ...overrides });
+
+  test('the conversation', () => {
+    const view = dm();
+    assert({
+      given: 'a DM with Grace',
+      should: 'label and title it with her name and face, not a hash, and name the composer for her',
+      actual: [
+        view.querySelector('section')?.getAttribute('aria-label'),
+        text(view.querySelector('h1 > span:last-child')),
+        view.querySelector('h1 > [aria-hidden="true"] img')?.getAttribute('src'),
+        view.querySelector('h1 svg') === null,
+        view.querySelector('textarea')?.getAttribute('aria-label'),
+      ],
+      expected: ['Grace', 'Grace', 'https://img/grace.png', true, 'Message Grace'],
+    });
+  });
+
+  test('loading, failure and empty', () => {
+    assert({
+      given: 'the conversation loading, failing, and loaded with no messages',
+      should: 'say so in the words of a conversation',
+      actual: (['loading', 'error', 'ready'] as const).map((status) => text(dm({ status }).querySelector('section > p'))),
+      expected: ['Loading messages…', 'Could not load this conversation.', 'No messages with Grace yet.'],
+    });
+  });
+
+  test('earlier messages', () => {
+    const items: PostItem[] = [{ kind: 'post', id: 'a', post: post('a'), lead: true }];
+    assert({
+      given: 'older messages to load',
+      should: 'offer to load earlier messages',
+      actual: text(dm({ items, older: 'idle' }).querySelector('button:not([type="submit"])')),
+      expected: 'Load earlier messages',
     });
   });
 

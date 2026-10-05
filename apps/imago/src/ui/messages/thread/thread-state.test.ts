@@ -1,7 +1,7 @@
 import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
 import type { Post } from '../message-model/post';
-import { initialThreadState, threadPosts, threadReducer, type ChannelPage, type ThreadState } from './channel-thread-state';
+import { initialThreadState, threadPosts, threadReducer, type ThreadPage, type ThreadState } from './thread-state';
 
 const post = (id: string, at = '2026-10-05T09:00:00.000Z'): Post => ({
   id,
@@ -16,7 +16,7 @@ const post = (id: string, at = '2026-10-05T09:00:00.000Z'): Post => ({
   reactions: [],
 });
 
-const page = (ids: readonly string[], overrides: Partial<ChannelPage> = {}): ChannelPage => ({
+const page = (ids: readonly string[], overrides: Partial<ThreadPage> = {}): ThreadPage => ({
   posts: ids.map((id) => post(id)),
   nextCursor: null,
   lastReadAt: '2026-10-05T08:00:00.000Z',
@@ -33,7 +33,7 @@ describe('threadReducer', () => {
       should: 'be loading it with no posts',
       actual: initialThreadState('c1'),
       expected: {
-        pageId: 'c1',
+        threadId: 'c1',
         status: 'loading',
         posts: [],
         sending: [],
@@ -51,11 +51,11 @@ describe('threadReducer', () => {
       should: 'show its posts and keep the cursor and the watermark',
       actual: run(initialThreadState('c1'), {
         type: 'loaded',
-        pageId: 'c1',
+        threadId: 'c1',
         page: page(['a', 'b'], { nextCursor: 'cur-1' }),
       }),
       expected: {
-        pageId: 'c1',
+        threadId: 'c1',
         status: 'ready',
         posts: [post('a'), post('b')],
         sending: [],
@@ -70,12 +70,12 @@ describe('threadReducer', () => {
   test('earlier posts', () => {
     const state = run(
       initialThreadState('c1'),
-      { type: 'loaded', pageId: 'c1', page: page(['c', 'd'], { nextCursor: 'cur-1' }) },
-      { type: 'olderRequested', pageId: 'c1' },
+      { type: 'loaded', threadId: 'c1', page: page(['c', 'd'], { nextCursor: 'cur-1' }) },
+      { type: 'olderRequested', threadId: 'c1' },
     );
     const loaded = run(state, {
       type: 'olderLoaded',
-      pageId: 'c1',
+      threadId: 'c1',
       page: page(['a', 'b', 'c'], { nextCursor: null, lastReadAt: '2026-10-05T12:00:00.000Z' }),
     });
     assert({
@@ -87,18 +87,29 @@ describe('threadReducer', () => {
   });
 
   test('failures', () => {
-    const failed = run(initialThreadState('c1'), { type: 'failed', pageId: 'c1' });
+    const failed = run(initialThreadState('c1'), { type: 'failed', threadId: 'c1' });
     const olderFailed = run(
       initialThreadState('c1'),
-      { type: 'loaded', pageId: 'c1', page: page(['a'], { nextCursor: 'cur-1' }) },
-      { type: 'olderRequested', pageId: 'c1' },
-      { type: 'olderFailed', pageId: 'c1' },
+      { type: 'loaded', threadId: 'c1', page: page(['a'], { nextCursor: 'cur-1' }) },
+      { type: 'olderRequested', threadId: 'c1' },
+      { type: 'olderFailed', threadId: 'c1' },
     );
     assert({
       given: 'the first page failing, and separately an older page failing',
       should: 'show the error, or keep the posts and the cursor with the older load failed',
       actual: [failed.status, olderFailed.status, olderFailed.posts.length, olderFailed.nextCursor, olderFailed.older],
       expected: ['error', 'ready', 1, 'cur-1', 'error'],
+    });
+  });
+
+  test('a thread that is not the viewer’s', () => {
+    const other = { type: 'received', threadId: 'c1', post: post('x'), mine: false } as const;
+    const missing = run(initialThreadState('c1'), other, { type: 'failed', threadId: 'c1', notFound: true }, other);
+    assert({
+      given: 'a post heard while loading, then apps/web answering not found, then another post',
+      should: 'be not-found with nothing of the thread held',
+      actual: [missing.status, threadPosts(missing), missing.heard],
+      expected: ['not-found', [], 0],
     });
   });
 
@@ -109,16 +120,16 @@ describe('threadReducer', () => {
       should: 'leave the open channel untouched',
       actual: run(
         state,
-        { type: 'loaded', pageId: 'c1', page: page(['a']) },
-        { type: 'failed', pageId: 'c1' },
-        { type: 'olderLoaded', pageId: 'c1', page: page(['a']) },
+        { type: 'loaded', threadId: 'c1', page: page(['a']) },
+        { type: 'failed', threadId: 'c1' },
+        { type: 'olderLoaded', threadId: 'c1', page: page(['a']) },
       ),
       expected: state,
     });
   });
 
   test('switching channel', () => {
-    const state = run(initialThreadState('c1'), { type: 'loaded', pageId: 'c1', page: page(['a']) }, { type: 'opened', pageId: 'c2' });
+    const state = run(initialThreadState('c1'), { type: 'loaded', threadId: 'c1', page: page(['a']) }, { type: 'opened', threadId: 'c2' });
     assert({
       given: 'another channel opened',
       should: 'start over loading it',
@@ -144,7 +155,7 @@ const pending = (nonce: string, at: string, text: string): Post => ({
 });
 
 const ready = (ids: readonly string[]) =>
-  run(initialThreadState('c1'), { type: 'loaded', pageId: 'c1', page: page(ids) });
+  run(initialThreadState('c1'), { type: 'loaded', threadId: 'c1', page: page(ids) });
 
 const ids = (state: ThreadState) => threadPosts(state).map((entry) => `${entry.id}${entry.pending ? ' (sending)' : ''}`);
 
@@ -152,7 +163,7 @@ describe('sending and receiving', () => {
   test('sending shows the post at once', () => {
     const state = run(ready(['a']), {
       type: 'sent',
-      pageId: 'c1',
+      threadId: 'c1',
       post: pending('n1', '2026-10-05T10:00:00.000Z', 'hello'),
     });
     assert({
@@ -164,10 +175,10 @@ describe('sending and receiving', () => {
   });
 
   test('the response first, then the socket echo', () => {
-    const sent = run(ready(['a']), { type: 'sent', pageId: 'c1', post: pending('n1', '2026-10-05T10:00:00.000Z', 'hi') });
+    const sent = run(ready(['a']), { type: 'sent', threadId: 'c1', post: pending('n1', '2026-10-05T10:00:00.000Z', 'hi') });
     const confirmed = mine('m9', '2026-10-05T10:00:01.000Z', 'hi @[Grace](u2:user)');
-    const answered = run(sent, { type: 'received', pageId: 'c1', post: confirmed, nonce: 'n1', mine: true });
-    const echoed = run(answered, { type: 'received', pageId: 'c1', post: confirmed, nonce: 'n1', mine: true });
+    const answered = run(sent, { type: 'received', threadId: 'c1', post: confirmed, nonce: 'n1', mine: true });
+    const echoed = run(answered, { type: 'received', threadId: 'c1', post: confirmed, nonce: 'n1', mine: true });
     assert({
       given: 'the POST answering with the server copy, then the broadcast of the same post',
       should: 'replace the sending post with the server’s (its id, time and stored text), and ignore the echo',
@@ -177,10 +188,10 @@ describe('sending and receiving', () => {
   });
 
   test('the socket echo first, then the response', () => {
-    const sent = run(ready(['a']), { type: 'sent', pageId: 'c1', post: pending('n1', '2026-10-05T10:00:00.000Z', 'hi') });
+    const sent = run(ready(['a']), { type: 'sent', threadId: 'c1', post: pending('n1', '2026-10-05T10:00:00.000Z', 'hi') });
     const confirmed = mine('m9', '2026-10-05T10:00:01.000Z', 'hi');
-    const echoed = run(sent, { type: 'received', pageId: 'c1', post: confirmed, nonce: 'n1', mine: true });
-    const answered = run(echoed, { type: 'received', pageId: 'c1', post: confirmed, nonce: 'n1', mine: true });
+    const echoed = run(sent, { type: 'received', threadId: 'c1', post: confirmed, nonce: 'n1', mine: true });
+    const answered = run(echoed, { type: 'received', threadId: 'c1', post: confirmed, nonce: 'n1', mine: true });
     assert({
       given: 'the broadcast landing before the POST resolves',
       should: 'retire the sending post on the echo, and ignore the response',
@@ -195,9 +206,9 @@ describe('sending and receiving', () => {
   test('two sends in flight', () => {
     const state = run(
       ready([]),
-      { type: 'sent', pageId: 'c1', post: pending('n1', '2026-10-05T10:00:00.000Z', 'one') },
-      { type: 'sent', pageId: 'c1', post: pending('n2', '2026-10-05T10:00:00.000Z', 'two') },
-      { type: 'received', pageId: 'c1', post: mine('m2', '2026-10-05T10:00:02.000Z', 'two'), nonce: 'n2', mine: true },
+      { type: 'sent', threadId: 'c1', post: pending('n1', '2026-10-05T10:00:00.000Z', 'one') },
+      { type: 'sent', threadId: 'c1', post: pending('n2', '2026-10-05T10:00:00.000Z', 'two') },
+      { type: 'received', threadId: 'c1', post: mine('m2', '2026-10-05T10:00:02.000Z', 'two'), nonce: 'n2', mine: true },
     );
     assert({
       given: 'two posts sending and the second confirmed first',
@@ -210,8 +221,8 @@ describe('sending and receiving', () => {
   test('someone else replaying the viewer’s nonce', () => {
     const state = run(
       ready([]),
-      { type: 'sent', pageId: 'c1', post: pending('n1', '2026-10-05T10:00:00.000Z', 'mine') },
-      { type: 'received', pageId: 'c1', post: post('x1', '2026-10-05T10:00:01.000Z'), nonce: 'n1', mine: false },
+      { type: 'sent', threadId: 'c1', post: pending('n1', '2026-10-05T10:00:00.000Z', 'mine') },
+      { type: 'received', threadId: 'c1', post: post('x1', '2026-10-05T10:00:01.000Z'), nonce: 'n1', mine: false },
     );
     assert({
       given: 'another member’s post carrying the nonce the viewer’s send went out with',
@@ -224,11 +235,11 @@ describe('sending and receiving', () => {
   test('a post from someone else', () => {
     const state = run(ready(['a']), {
       type: 'received',
-      pageId: 'c1',
+      threadId: 'c1',
       post: post('b', '2026-10-05T10:00:00.000Z'),
       mine: false,
     });
-    const again = run(state, { type: 'received', pageId: 'c1', post: post('b', '2026-10-05T10:00:00.000Z'), mine: false });
+    const again = run(state, { type: 'received', threadId: 'c1', post: post('b', '2026-10-05T10:00:00.000Z'), mine: false });
     assert({
       given: 'another member’s post arriving live, then delivered again',
       should: 'add it once, in time order, and count it heard once',
@@ -240,8 +251,8 @@ describe('sending and receiving', () => {
   test('a post that is older than the newest', () => {
     const state = run(
       ready([]),
-      { type: 'received', pageId: 'c1', post: post('late', '2026-10-05T10:00:05.000Z'), mine: false },
-      { type: 'received', pageId: 'c1', post: post('early', '2026-10-05T10:00:01.000Z'), mine: false },
+      { type: 'received', threadId: 'c1', post: post('late', '2026-10-05T10:00:05.000Z'), mine: false },
+      { type: 'received', threadId: 'c1', post: post('early', '2026-10-05T10:00:01.000Z'), mine: false },
     );
     assert({
       given: 'two live posts arriving out of order',
@@ -254,8 +265,8 @@ describe('sending and receiving', () => {
   test('a post that lands while the channel loads', () => {
     const state = run(
       initialThreadState('c1'),
-      { type: 'received', pageId: 'c1', post: post('live', '2026-10-05T11:00:00.000Z'), mine: false },
-      { type: 'loaded', pageId: 'c1', page: page(['a']) },
+      { type: 'received', threadId: 'c1', post: post('live', '2026-10-05T11:00:00.000Z'), mine: false },
+      { type: 'loaded', threadId: 'c1', page: page(['a']) },
     );
     assert({
       given: 'a live post before the first page answers, from before it was posted',
@@ -268,8 +279,8 @@ describe('sending and receiving', () => {
   test('a failed send', () => {
     const state = run(
       ready(['a']),
-      { type: 'sent', pageId: 'c1', post: pending('n1', '2026-10-05T10:00:00.000Z', 'hi') },
-      { type: 'sendFailed', pageId: 'c1', nonce: 'n1' },
+      { type: 'sent', threadId: 'c1', post: pending('n1', '2026-10-05T10:00:00.000Z', 'hi') },
+      { type: 'sendFailed', threadId: 'c1', nonce: 'n1' },
     );
     assert({
       given: 'the POST failing',
@@ -286,9 +297,9 @@ describe('sending and receiving', () => {
       should: 'leave the open channel untouched',
       actual: run(
         state,
-        { type: 'sent', pageId: 'c2', post: pending('n1', '2026-10-05T10:00:00.000Z', 'hi') },
-        { type: 'received', pageId: 'c2', post: post('b'), mine: false },
-        { type: 'sendFailed', pageId: 'c2', nonce: 'n1' },
+        { type: 'sent', threadId: 'c2', post: pending('n1', '2026-10-05T10:00:00.000Z', 'hi') },
+        { type: 'received', threadId: 'c2', post: post('b'), mine: false },
+        { type: 'sendFailed', threadId: 'c2', nonce: 'n1' },
       ),
       expected: state,
     });

@@ -3,11 +3,15 @@ import { cn } from '../../cn';
 /** The thread's column inside the object pane. */
 export const threadClass = 'flex w-full flex-col px-6 py-4';
 
-/** `# launch`: the glyph and the channel's name. */
+/** `# launch` or a DM's face: the glyph and the thread's name. */
 export const threadTitleClass = 'flex items-center gap-2 pb-2 text-md font-semibold text-ink';
 
 /** Why there are no posts: loading, failed or empty. */
 export const threadNoteClass = 'px-2 py-4 text-sm text-ink-muted';
+
+/** Where the composer would be, for a viewer who may only read (classic's view-only notice). */
+export const viewOnlyClass =
+  'mt-3 flex items-center gap-2 rounded-lg border border-hairline bg-surface-overlay px-3 py-2 text-sm text-ink-muted';
 
 /** "Load earlier posts", centred above the oldest post. */
 export const olderClass = 'self-center';

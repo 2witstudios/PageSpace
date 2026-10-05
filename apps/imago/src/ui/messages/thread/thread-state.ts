@@ -1,5 +1,6 @@
-// The open channel's posts as pure transitions. Every answer names the channel
-// it is for, so one that lands after the viewer has moved on changes nothing.
+// An open thread's posts — a channel's or a DM's — as pure transitions. Every
+// answer names the thread it is for, so one that lands after the viewer has
+// moved on changes nothing.
 //
 // The viewer's own posts show as sending until apps/web answers. The answer
 // to the POST and realtime's broadcast of the same post can land in either
@@ -9,16 +10,18 @@
 import type { Post } from '../message-model/post';
 
 /** One page of posts, oldest first, as imago reads it. */
-export type ChannelPage = {
+export type ThreadPage = {
   readonly posts: readonly Post[];
-  /** Reaches the next older page; null at the channel's first post. */
+  /** Reaches the next older page; null at the thread's first post. */
   readonly nextCursor: string | null;
+  /** Where unread began; null when never read, or when the thread does not say. */
   readonly lastReadAt: string | null;
 };
 
 export type ThreadState = {
-  readonly pageId: string;
-  /** `not-found`: the server answered that the viewer cannot open this channel. */
+  /** The channel's page id or the DM's conversation id. */
+  readonly threadId: string;
+  /** `not-found`: the server answered that the viewer cannot open this thread, so nothing of it is shown. */
   readonly status: 'loading' | 'ready' | 'error' | 'not-found';
   /** Stored posts, oldest first. */
   readonly posts: readonly Post[];
@@ -26,30 +29,30 @@ export type ThreadState = {
   readonly sending: readonly Post[];
   /** How many posts from others have arrived live: each one is read again once seen. */
   readonly heard: number;
-  /** Where unread began when the channel was opened; fixed for the open. */
+  /** Where unread began when the thread was opened; fixed for the open. */
   readonly lastReadAt: string | null;
   readonly nextCursor: string | null;
   readonly older: 'idle' | 'loading' | 'error';
 };
 
 export type ThreadAction =
-  | { readonly type: 'opened'; readonly pageId: string }
-  | { readonly type: 'loaded'; readonly pageId: string; readonly page: ChannelPage }
-  | { readonly type: 'failed'; readonly pageId: string; readonly notFound?: boolean }
-  | { readonly type: 'olderRequested'; readonly pageId: string }
-  | { readonly type: 'olderLoaded'; readonly pageId: string; readonly page: ChannelPage }
-  | { readonly type: 'olderFailed'; readonly pageId: string }
-  | { readonly type: 'sent'; readonly pageId: string; readonly post: Post }
+  | { readonly type: 'opened'; readonly threadId: string }
+  | { readonly type: 'loaded'; readonly threadId: string; readonly page: ThreadPage }
+  | { readonly type: 'failed'; readonly threadId: string; readonly notFound?: boolean }
+  | { readonly type: 'olderRequested'; readonly threadId: string }
+  | { readonly type: 'olderLoaded'; readonly threadId: string; readonly page: ThreadPage }
+  | { readonly type: 'olderFailed'; readonly threadId: string }
+  | { readonly type: 'sent'; readonly threadId: string; readonly post: Post }
   | {
       readonly type: 'received';
-      readonly pageId: string;
+      readonly threadId: string;
       readonly post: Post;
       /** The nonce apps/web echoed, if any. */
       readonly nonce?: string;
       /** The viewer posted it; another member's post never retires the viewer's. */
       readonly mine: boolean;
     }
-  | { readonly type: 'sendFailed'; readonly pageId: string; readonly nonce: string };
+  | { readonly type: 'sendFailed'; readonly threadId: string; readonly nonce: string };
 
 /** The id a sending post carries until apps/web stores it. */
 export const pendingId = (nonce: string): string => `temp-${nonce}`;
@@ -64,8 +67,8 @@ const byTime = (posts: readonly Post[]): readonly Post[] =>
 /** Every post to draw: the stored ones, then the viewer's still sending. */
 export const threadPosts = (state: ThreadState): readonly Post[] => [...state.posts, ...state.sending];
 
-export const initialThreadState = (pageId: string): ThreadState => ({
-  pageId,
+export const initialThreadState = (threadId: string): ThreadState => ({
+  threadId,
   status: 'loading',
   posts: [],
   sending: [],
@@ -76,8 +79,8 @@ export const initialThreadState = (pageId: string): ThreadState => ({
 });
 
 export const threadReducer = (state: ThreadState, action: ThreadAction): ThreadState => {
-  if (action.type === 'opened') return initialThreadState(action.pageId);
-  if (action.pageId !== state.pageId) return state;
+  if (action.type === 'opened') return initialThreadState(action.threadId);
+  if (action.threadId !== state.threadId) return state;
   switch (action.type) {
     case 'loaded': {
       // A post that arrived live while the page loaded may be newer than it.
@@ -93,7 +96,10 @@ export const threadReducer = (state: ThreadState, action: ThreadAction): ThreadS
       };
     }
     case 'failed':
-      return { ...state, status: action.notFound === true ? 'not-found' : 'error' };
+      // Not the viewer's thread: drop anything that arrived meanwhile too.
+      return action.notFound === true
+        ? { ...initialThreadState(state.threadId), status: 'not-found' }
+        : { ...state, status: 'error' };
     case 'olderRequested':
       return { ...state, older: 'loading' };
     case 'olderLoaded': {
@@ -107,6 +113,8 @@ export const threadReducer = (state: ThreadState, action: ThreadAction): ThreadS
     case 'sent':
       return { ...state, sending: [...state.sending, action.post] };
     case 'received': {
+      // Nothing is shown of a thread that is not the viewer's.
+      if (state.status === 'not-found') return state;
       const nonce = action.mine ? action.nonce : undefined;
       const retired = nonce === undefined ? state.sending : state.sending.filter((post) => post.id !== pendingId(nonce));
       const held = state.posts.some((post) => post.id === action.post.id);

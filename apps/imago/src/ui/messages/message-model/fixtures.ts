@@ -1,6 +1,7 @@
 // Route answers for the messages tests, shaped like apps/web's handlers.
 
 import type { ConversationResponse, InboxItem, SidebarBadges } from './message';
+import type { DmMessageResponse } from './dm-message';
 import type { ChannelMessageResponse, ChannelReactionResponse } from './post';
 
 export const inboxChannel = (id: string, overrides: Partial<InboxItem> = {}): InboxItem => ({
@@ -77,3 +78,18 @@ export const channelReaction = (
   user: { readonly id: string; readonly name: string | null },
   createdAt = '2026-10-05T09:01:00.000Z',
 ): ChannelReactionResponse => ({ id, messageId: 'm', userId: user.id, emoji, createdAt, user });
+
+/** A top-level DM message as GET /api/messages/[conversationId] returns it, sender joined. */
+export const dmMessage = (id: string, overrides: Partial<DmMessageResponse> = {}): DmMessageResponse => ({
+  id,
+  conversationId: 'dm1',
+  senderId: 'u2',
+  content: `message ${id}`,
+  createdAt: '2026-10-05T09:00:00.000Z',
+  isEdited: false,
+  editedAt: null,
+  parentId: null,
+  sender: { id: 'u2', name: 'Grace Hopper', image: null },
+  reactions: [],
+  ...overrides,
+});

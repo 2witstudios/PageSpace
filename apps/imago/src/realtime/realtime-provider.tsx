@@ -85,31 +85,36 @@ export function useDriveRoom(driveId: string | null): void {
   }, [realtime, driveId]);
 }
 
-/** realtime's events for a channel's room (apps/realtime/src/index.ts). */
-export const JOIN_CHANNEL = 'join_channel';
-export const LEAVE_CHANNEL = 'leave_channel';
+/** The pair of realtime events that enter and leave one kind of room. */
+export type RoomEvents = { readonly join: string; readonly leave: string };
+
+/** A channel page's room, where its posts are broadcast as `new_message` (apps/realtime/src/index.ts). */
+export const CHANNEL_ROOM: RoomEvents = { join: 'join_channel', leave: 'leave_channel' };
+
+/** A DM conversation's room, where its messages are broadcast as `new_dm_message` (apps/realtime/src/index.ts). */
+export const DM_ROOM: RoomEvents = { join: 'join_dm_conversation', leave: 'leave_dm_conversation' };
 
 /**
- * Keeps this tab in the room of the channel page `pageId` while mounted,
- * where its posts are broadcast as `new_message`: joins once connected and
- * again after every reconnect, and leaves when the channel closes or changes,
- * as classic ChannelView does. Realtime checks the viewer may see it.
+ * Keeps this tab in the realtime room `id` names while mounted: joins once
+ * connected and again after every reconnect, since realtime forgets a
+ * socket's rooms when it drops, and leaves when the room closes or changes,
+ * as classic's channel and DM views do. Realtime checks the viewer may join.
  */
-export function useChannelRoom(pageId: string): void {
+export function useRoom({ join, leave }: RoomEvents, id: string): void {
   const realtime = useContext(RealtimeContext);
-  if (!realtime) throw new Error('useChannelRoom must be used inside <RealtimeProvider>');
+  if (!realtime) throw new Error('useRoom must be used inside <RealtimeProvider>');
 
   useEffect(() => {
     const socket = realtime.socket();
-    const join = () => {
-      socket.emit(JOIN_CHANNEL, pageId);
+    const enter = () => {
+      socket.emit(join, id);
     };
-    if (socket.connected) join();
-    socket.on('connect', join);
+    if (socket.connected) enter();
+    socket.on('connect', enter);
     return () => {
-      socket.off('connect', join);
+      socket.off('connect', enter);
       // A dropped socket is in no room; a queued leave would only reach the next one.
-      if (socket.connected) socket.emit(LEAVE_CHANNEL, pageId);
+      if (socket.connected) socket.emit(leave, id);
     };
-  }, [realtime, pageId]);
+  }, [realtime, join, leave, id]);
 }
