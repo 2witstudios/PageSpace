@@ -137,6 +137,28 @@ describe('spend controls with two chat surfaces mounted', () => {
     expect(api.put).toHaveBeenCalledWith('/api/wallets/conversations/c-page', { walletId: 'w-me' });
   });
 
+  it('UI-8 (partial) an open header popover stays pinned even when a newly mounted surface becomes the active one (P2-A)', async () => {
+    const { rerender } = fresh(<TwoSurfaces header />);
+    act(() => {
+      fireEvent.pointerDown(screen.getByTestId('page-chat'));
+    });
+    fireEvent.click(await screen.findByTestId('spend-source-chip'));
+    expect(await screen.findByRole('radio', { name: /c-page wallet/ })).toBeTruthy();
+    // A third chat opens (an agent pane): a NEW surface does become the header's active one…
+    rerender(
+      <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+        <TwoSurfaces header />
+        <SpendSurfaceProvider conversationId="c-pane" driveId="d-product" isGlobal={false}><div /></SpendSurfaceProvider>
+      </SWRConfig>,
+    );
+    expect(useSpendContextStore.getState().active?.conversationId).toBe('c-pane');
+    // …but the popover the person opened still lists, and switches, c-page.
+    expect(screen.queryByRole('radio', { name: /c-pane wallet/ })).toBeNull();
+    fireEvent.click(screen.getByRole('radio', { name: /Your credits/ }));
+    await waitFor(() => expect(api.put).toHaveBeenCalledTimes(1));
+    expect(api.put).toHaveBeenCalledWith('/api/wallets/conversations/c-page', { walletId: 'w-me' });
+  });
+
   it('UI-8 (partial) if the pinned conversation\'s surface unmounts, the open popover closes instead of switching another conversation (P2-A)', async () => {
     const { rerender } = fresh(<TwoSurfaces header />);
     act(() => {
