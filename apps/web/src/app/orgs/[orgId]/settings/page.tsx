@@ -101,7 +101,7 @@ export default function OrgSettingsPage() {
     <OrgPageContainer>
       <OrgPageHeader backHref="/dashboard" backLabel="Back to Dashboard" title="Organization Settings" description={`Configure ${name}`} />
       <div className="-mt-4 mb-8 flex items-center gap-3">
-        <OrgMark name={name} avatarUrl={avatarUrl} size="lg" />
+        <OrgMark name={name} avatarUrl={avatarUrl} size="lg" decorative />
         <div className="flex min-w-0 flex-col gap-1">
           <div className="truncate text-base font-semibold">{name}</div>
           <div className="truncate text-xs text-muted-foreground">{[slug, planLine].filter(Boolean).join(' · ')}</div>

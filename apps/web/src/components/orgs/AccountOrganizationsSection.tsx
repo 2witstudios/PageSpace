@@ -37,7 +37,7 @@ export function AccountOrganizationsSection() {
           (orgs ?? []).map((org, index) => (
             <Link key={org.id} href={`/orgs/${org.id}/settings`}>
               <div className={`group flex items-center gap-4 px-4 py-3 transition-colors hover:bg-accent hover:text-accent-foreground ${index > 0 ? 'border-t' : ''}`}>
-                <OrgMark name={org.name} avatarUrl={org.avatarUrl} />
+                <OrgMark name={org.name} avatarUrl={org.avatarUrl} decorative />
                 <div className="min-w-0 flex-1">
                   <div className="truncate font-medium">{org.name}</div>
                   <div className="truncate text-sm text-muted-foreground group-hover:text-accent-foreground">{org.slug}</div>
