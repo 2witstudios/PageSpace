@@ -31,7 +31,7 @@ const railAt = (pathname: string, body: unknown = { dms: 0, channels: 0, files: 
   const layout = paneLayout(stage, getUiState().resources);
   const container = mount(
     <ImagoSWRProvider client={api.client}>
-      <Rail stage={stage} layout={layout} homeDriveId="home-1" footer={null} />
+      <Rail stage={stage} layout={layout} homeDriveId="home-1" brand={null} footer={null} />
     </ImagoSWRProvider>,
   );
   return { container, requests: api.requests };
@@ -88,7 +88,7 @@ describe('Rail', () => {
     const stage = stageFor('/drive-1');
     const container = mount(
       <ImagoSWRProvider client={api.client}>
-        <Rail stage={stage} layout={paneLayout(stage, getUiState().resources)} homeDriveId={null} footer={null} />
+        <Rail stage={stage} layout={paneLayout(stage, getUiState().resources)} homeDriveId={null} brand={null} footer={null} />
       </ImagoSWRProvider>,
     );
     await settle(() => {

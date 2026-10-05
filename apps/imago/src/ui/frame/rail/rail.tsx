@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import useSWR from 'swr';
 import { dispatch, transactions } from '../../store/transactions';
+import { useDisclosure } from '../disclosure/use-disclosure';
 import { isListSection, type PaneLayout, type Stage } from '../stage/stage';
 import {
   SIDEBAR_BADGES,
@@ -21,6 +22,9 @@ export type RailProps = {
   readonly layout: PaneLayout;
   /** Where the rail links on the stages that name no drive (DMs, the account). */
   readonly homeDriveId: string | null;
+  /** The drive switcher, above the sections. */
+  readonly brand: ReactNode;
+  /** The avatar menu, below Settings. */
   readonly footer: ReactNode;
 };
 
@@ -29,53 +33,27 @@ export type RailProps = {
  * The shell mounts it once, so the overflow's open state and the badge
  * request survive every navigation.
  */
-export function Rail({ stage, layout, homeDriveId, footer }: RailProps) {
+export function Rail({ stage, layout, homeDriveId, brand, footer }: RailProps) {
   const { data: badges } = useSWR<unknown>(SIDEBAR_BADGES);
-  const [moreOpen, setMoreOpen] = useState(false);
-  const rail = useRef<HTMLDivElement>(null);
+  const more = useDisclosure();
   const driveId = railDrive(stage, homeDriveId);
   const { section } = stage;
 
-  // Escape and a press anywhere outside the disclosure close the overflow,
-  // as a menu would; the rail's other controls count as outside.
-  useEffect(() => {
-    if (!moreOpen) return;
-    const onPointerDown = (event: PointerEvent) => {
-      const disclosure = rail.current?.querySelector('details');
-      if (!(event.target instanceof Node) || !disclosure?.contains(event.target)) setMoreOpen(false);
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      setMoreOpen(false);
-      // Focus may be on a menu link that is about to hide: back to ⋯.
-      rail.current?.querySelector<HTMLElement>('details > summary')?.focus();
-    };
-    document.addEventListener('pointerdown', onPointerDown);
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('pointerdown', onPointerDown);
-      document.removeEventListener('keydown', onKeyDown);
-    };
-  }, [moreOpen]);
-
-  return (
-    // `contents` keeps the lists children of the rail's flex column.
-    <div ref={rail} className="contents">
-      {renderRail({
-        items: railItems(driveId),
-        settings: settingsItem(driveId),
-        activeId: activeRailItem(stage),
-        activeAt: activeRailPlace(stage),
-        unread: { messages: messagesUnread(badges) },
-        onReopen:
-          layout.listHidden && isListSection(section)
-            ? () => dispatch(transactions.expandSection, section)
-            : undefined,
-        overflow: driveId === null ? null : overflowItems(driveId),
-        moreOpen,
-        onMoreToggle: setMoreOpen,
-        footer,
-      })}
-    </div>
-  );
+  return renderRail({
+    items: railItems(driveId),
+    settings: settingsItem(driveId),
+    activeId: activeRailItem(stage),
+    activeAt: activeRailPlace(stage),
+    unread: { messages: messagesUnread(badges) },
+    onReopen:
+      layout.listHidden && isListSection(section)
+        ? () => dispatch(transactions.expandSection, section)
+        : undefined,
+    overflow: driveId === null ? null : overflowItems(driveId),
+    moreOpen: more.open,
+    onMoreToggle: more.setOpen,
+    moreRef: more.ref,
+    brand,
+    footer,
+  });
 }

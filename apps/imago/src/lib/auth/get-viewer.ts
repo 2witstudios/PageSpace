@@ -3,13 +3,7 @@ import { cache } from 'react';
 import { cookies, headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { sessionService } from '@pagespace/lib/auth/session-service';
-import {
-  PATHNAME_HEADER,
-  SESSION_COOKIE,
-  requestOrigin,
-  signInLocation,
-  signInOrigin,
-} from './sign-in-url';
+import { PATHNAME_HEADER, SESSION_COOKIE, signInLocation, webAppOrigin } from './sign-in-url';
 
 export type Viewer = {
   userId: string;
@@ -24,7 +18,8 @@ export type Viewer = {
  * reach the database); this validates it. Only a browser session counts: a
  * socket, service, MCP or device token replayed into the cookie is rejected,
  * as are expired and revoked sessions. Cached per request, so every server
- * component can call it without another database round trip.
+ * component can call it without another database round trip. The redirect's
+ * origin is configuration (webAppOrigin), never the request's Host header.
  */
 export const getViewer = cache(async (): Promise<Viewer> => {
   const token = (await cookies()).get(SESSION_COOKIE)?.value;
@@ -39,7 +34,7 @@ export const getViewer = cache(async (): Promise<Viewer> => {
   const requestHeaders = await headers();
   redirect(
     signInLocation({
-      origin: signInOrigin(requestOrigin(requestHeaders)),
+      origin: webAppOrigin(),
       pathname: requestHeaders.get(PATHNAME_HEADER),
     }),
   );

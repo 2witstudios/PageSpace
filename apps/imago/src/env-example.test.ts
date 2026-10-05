@@ -57,4 +57,24 @@ describe('.env.example documentation for the imago dev topology', () => {
       expected: true,
     });
   });
+
+  test('apps/imago redirect origin', () => {
+    assert({
+      given: 'apps/imago/.env.example',
+      should: 'document WEB_APP_URL, the configured origin server redirects are built on',
+      actual: /^#?\s*WEB_APP_URL=http:\/\/localhost:3000$/m.test(readEnvExample('imago')),
+      expected: true,
+    });
+  });
+
+  test('the imago compose service', () => {
+    const compose = readFileSync(path.join(appsDir, '..', 'docker-compose.yml'), 'utf8');
+    const imago = compose.slice(compose.indexOf('\n  imago:'), compose.indexOf('\n  processor:'));
+    assert({
+      given: 'the imago service in docker-compose.yml',
+      should: 'pass WEB_APP_URL, without which a signed-out redirect cannot be built',
+      actual: /- WEB_APP_URL=\$\{WEB_APP_URL:-http:\/\/localhost:3000\}/.test(imago),
+      expected: true,
+    });
+  });
 });

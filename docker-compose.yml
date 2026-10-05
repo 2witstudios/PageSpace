@@ -209,6 +209,8 @@ services:
     # leaf adds what it actually reads.
     environment:
       - WEB_APP_INTERNAL_URL=http://web:3000
+      # Server redirects (sign-in, classic) are built on this, never on Host.
+      - WEB_APP_URL=${WEB_APP_URL:-http://localhost:3000}
       - NEXT_PUBLIC_REALTIME_URL=${NEXT_PUBLIC_REALTIME_URL}
       - PORT=3006
       - HOSTNAME=0.0.0.0

@@ -13,7 +13,14 @@ vi.mock('@/lib/auth/get-viewer', () => ({ getViewer }));
 // getHomeDrive() is proven against Postgres with the root page
 // (app/page.integration.test.ts); here the layout only passes its id on.
 const getHomeDrive = vi.hoisted(() => vi.fn());
-vi.mock('@pagespace/lib/services/drive-service', () => ({ getHomeDrive }));
+// listAccessibleDrives() is the same service apps/web's GET /api/drives
+// answers with; here the layout only hands its rows to the shell.
+const listAccessibleDrives = vi.hoisted(() => vi.fn());
+vi.mock('@pagespace/lib/services/drive-service', () => ({ getHomeDrive, listAccessibleDrives }));
+// getUserDriveAccess() is the centralized drive access check
+// (packages/lib/src/permissions); here it is the drive gate's seam.
+const getUserDriveAccess = vi.hoisted(() => vi.fn());
+vi.mock('@pagespace/lib/permissions/permissions', () => ({ getUserDriveAccess }));
 
 const appDir = join(__dirname, '..');
 const shellDir = __dirname;
@@ -51,10 +58,32 @@ const files = (dir: string): string[] =>
     return statSync(path).isDirectory() ? files(path) : [path];
   });
 
+/** Rows as listAccessibleDrives returns them (DriveWithAccess). */
+const driveRow = (id: string, name: string, kind: 'HOME' | 'STANDARD') => ({
+  id,
+  name,
+  slug: name.toLowerCase(),
+  ownerId: 'user-1',
+  kind,
+  isTrashed: false,
+  trashedAt: null,
+  drivePrompt: 'secret prompt',
+  createdAt: new Date(0),
+  updatedAt: new Date(0),
+  isOwned: true,
+  role: 'OWNER',
+  canCreatePages: true,
+  lastAccessedAt: null,
+  homePageId: null,
+});
+
 beforeEach(() => {
   getViewer.mockReset();
   getHomeDrive.mockReset();
   getHomeDrive.mockResolvedValue({ id: 'home-1', kind: 'HOME', ownerId: 'user-1' });
+  listAccessibleDrives.mockReset();
+  listAccessibleDrives.mockResolvedValue([driveRow('d-alpha', 'Alpha', 'STANDARD'), driveRow('home-1', 'Home', 'HOME')]);
+  getUserDriveAccess.mockReset();
 });
 
 describe('the (shell) layout', () => {
@@ -66,15 +95,26 @@ describe('the (shell) layout', () => {
 
     assert({
       given: 'a signed-in viewer',
-      should: 'resolve the viewer and their Home drive, then render the one Shell around the route',
+      should: 'resolve the viewer, their Home drive and their drives, then render the one Shell around the route',
       actual: [
         getViewer.mock.calls.length,
         getHomeDrive.mock.calls,
+        listAccessibleDrives.mock.calls,
         element.type === Shell,
         element.props.homeDriveId,
         element.props.children,
       ],
-      expected: [1, [['user-1']], true, 'home-1', 'route'],
+      expected: [1, [['user-1']], [['user-1']], true, 'home-1', 'route'],
+    });
+
+    assert({
+      given: 'the viewer’s drive rows',
+      should: 'hand the shell only each drive’s id, name and kind',
+      actual: element.props.initialDrives,
+      expected: [
+        { id: 'd-alpha', name: 'Alpha', kind: 'STANDARD' },
+        { id: 'home-1', name: 'Home', kind: 'HOME' },
+      ],
     });
   });
 
@@ -105,7 +145,61 @@ describe('the (shell) layout', () => {
     assert({
       given: 'getViewer() redirecting to sign-in',
       should: 'render no shell, look up no drive and let the redirect through',
-      actual: [thrown, getHomeDrive.mock.calls.length],
+      actual: [thrown, getHomeDrive.mock.calls.length, listAccessibleDrives.mock.calls.length],
+      expected: [redirect, 0, 0],
+    });
+  });
+});
+
+describe('the drive gate', () => {
+  const gate = async (driveId: string) => {
+    const { default: DriveLayout } = await import('./[driveId]/layout');
+    return DriveLayout({ children: 'route', params: Promise.resolve({ driveId }) });
+  };
+
+  test('a drive the viewer can open', async () => {
+    getViewer.mockResolvedValue(viewer);
+    getUserDriveAccess.mockResolvedValue(true);
+
+    assert({
+      given: 'a drive the access check allows',
+      should: 'ask about that drive for that viewer and render the route',
+      actual: [await gate('d-alpha'), getUserDriveAccess.mock.calls],
+      expected: ['route', [['user-1', 'd-alpha']]],
+    });
+  });
+
+  test('a drive the viewer cannot open', async () => {
+    getViewer.mockResolvedValue(viewer);
+    getUserDriveAccess.mockResolvedValue(false);
+    const element = await gate('d-secret');
+    const html = renderToStaticMarkup(element);
+
+    assert({
+      given: 'a drive the access check refuses (or one that does not exist)',
+      should: 'render the not-found object, with the way back to Home, instead of the route',
+      actual: [
+        html.includes('data-not-found'),
+        html.includes('Drive not found'),
+        html.includes('href="/home-1"'),
+        html.includes('route'),
+        html.includes('d-secret'),
+      ],
+      expected: [true, true, true, false, false],
+    });
+  });
+
+  test('no valid session', async () => {
+    getViewer.mockRejectedValue(redirect);
+    const thrown = await gate('d-alpha').then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    assert({
+      given: 'getViewer() redirecting to sign-in',
+      should: 'check no access and let the redirect through',
+      actual: [thrown, getUserDriveAccess.mock.calls.length],
       expected: [redirect, 0],
     });
   });

@@ -1,7 +1,11 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
-import { useThemePreference } from '@/lib/theme/theme-provider';
+import { isValidElement, type ReactElement, type ReactNode } from 'react';
+import { ImagoSWRProvider } from '@/api/swr-provider';
+import { RealtimeProvider } from '@/realtime/realtime-provider';
+import { ThemeProvider, useThemePreference } from '@/lib/theme/theme-provider';
+import { findElement } from '@/ui/test-support/find-element';
 
 // Request-scoped Next APIs have no request outside a server; the layout's own
 // logic (cookie → data-theme) runs for real against these request stand-ins.
@@ -134,6 +138,38 @@ describe('RootLayout IMAGO_ENABLED backstop', () => {
       should: 'render the page with the request nonce on the webpack nonce script',
       actual: [digest, html?.includes('<script nonce="test-nonce">')],
       expected: [null, true],
+    });
+  });
+});
+
+// The realtime socket fetches its token through the imago client, so it sits
+// inside the one SWR provider; the theme provider sits inside both, so a
+// theme switch never re-renders either (IMG-2.7 round 2 observation).
+describe('RootLayout providers', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  const only = (node: ReactNode): ReactElement<{ children?: ReactNode }> | null => {
+    const children = isValidElement<{ children?: ReactNode }>(node) ? node.props.children : null;
+    return isValidElement<{ children?: ReactNode }>(children) ? children : null;
+  };
+
+  test('their nesting', async () => {
+    vi.stubEnv('IMAGO_ENABLED', 'true');
+    request.cookie = undefined;
+    const { default: RootLayout } = await import('./layout');
+    const page = <main data-page="" />;
+    const tree = await RootLayout({ children: page });
+    const swr = findElement(tree, (element) => element.type === ImagoSWRProvider);
+    const realtime = only(swr);
+    const theme = only(realtime);
+
+    assert({
+      given: 'the root layout',
+      should: 'nest ImagoSWRProvider > RealtimeProvider > ThemeProvider directly, with the page inside the theme provider',
+      actual: [swr !== undefined, realtime?.type === RealtimeProvider, theme?.type === ThemeProvider, only(theme) === page],
+      expected: [true, true, true, true],
     });
   });
 });

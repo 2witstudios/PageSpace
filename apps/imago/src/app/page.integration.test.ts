@@ -18,6 +18,8 @@ import { PATHNAME_HEADER } from '@/lib/auth/sign-in-url';
 const request = vi.hoisted(() => ({ headers: new Headers() }));
 
 vi.mock('server-only', () => ({}));
+// Redirects are built on the configured web origin, never the request's Host.
+vi.stubEnv('WEB_APP_URL', 'https://pagespace.ai');
 vi.mock('next/headers', () => ({
   cookies: async () => new RequestCookies(request.headers),
   headers: async () => request.headers,

@@ -1,4 +1,4 @@
-import type { ReactNode, SyntheticEvent } from 'react';
+import type { ReactNode, Ref, SyntheticEvent } from 'react';
 import { renderIcon } from '../../components/icon/icon.render';
 import {
   overflowLinkClass,
@@ -27,7 +27,11 @@ export type RailRenderProps = {
   readonly overflow: readonly OverflowItem[] | null;
   readonly moreOpen: boolean;
   readonly onMoreToggle: (open: boolean) => void;
-  /** Below Settings: sign-out, until the avatar menu (IMG-3.4) takes it. */
+  /** The ⋯ disclosure, for the container's Escape and outside-press handling. */
+  readonly moreRef?: Ref<HTMLDetailsElement> | undefined;
+  /** Above the sections: the drive switcher on the brand chip. */
+  readonly brand: ReactNode;
+  /** Below Settings: the avatar menu. */
   readonly footer: ReactNode;
 };
 
@@ -62,7 +66,7 @@ const moreChip = (enabled: boolean): ReactNode => (
  * they are plain anchors: Next's Link would put imago's basePath in front.
  */
 const overflow = (props: RailRenderProps): ReactNode => {
-  const { overflow: links, moreOpen, onMoreToggle } = props;
+  const { overflow: links, moreOpen, onMoreToggle, moreRef } = props;
   if (links === null) {
     return (
       <li>
@@ -75,6 +79,7 @@ const overflow = (props: RailRenderProps): ReactNode => {
   return (
     <li>
       <details
+        ref={moreRef}
         className="relative"
         open={moreOpen}
         onToggle={(event: SyntheticEvent<HTMLDetailsElement>) => onMoreToggle(event.currentTarget.open)}
@@ -99,11 +104,13 @@ const overflow = (props: RailRenderProps): ReactNode => {
 
 /**
  * The frame's only persistent navigation, inside the shell's Primary nav:
- * the sections, the ⋯ overflow below Tasks, and Settings pinned to the foot.
+ * the drive switcher, the sections, the ⋯ overflow below Tasks, and
+ * Settings and the avatar pinned to the foot.
  */
 export function renderRail(props: RailRenderProps): ReactNode {
   return (
     <>
+      {props.brand === null ? null : <div className="mb-rail-y">{props.brand}</div>}
       <ul className={railListClass}>
         {props.items.map((entry) => item(entry, props))}
         {overflow(props)}
