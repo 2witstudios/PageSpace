@@ -1,7 +1,7 @@
 import type { UiSlice, UiState } from '../../store/state';
-import type { ListSection } from './stage';
+import type { HideableSection } from './stage';
 
-const withCollapsed = (state: UiState, collapsedSections: readonly ListSection[]): UiState => ({
+const withCollapsed = (state: UiState, collapsedSections: readonly HideableSection[]): UiState => ({
   ...state,
   resources: { ...state.resources, collapsedSections },
 });
@@ -14,14 +14,14 @@ const withCollapsed = (state: UiState, collapsedSections: readonly ListSection[]
 export const stagePlugin = {
   resources: (): {
     /** Sections whose list the viewer hid; the stage itself lives in the URL. */
-    readonly collapsedSections: readonly ListSection[];
+    readonly collapsedSections: readonly HideableSection[];
   } => ({ collapsedSections: [] }),
   transactions: {
-    collapseSection: (state: UiState, section: ListSection): UiState =>
+    collapseSection: (state: UiState, section: HideableSection): UiState =>
       state.resources.collapsedSections.includes(section)
         ? state
         : withCollapsed(state, [...state.resources.collapsedSections, section]),
-    expandSection: (state: UiState, section: ListSection): UiState =>
+    expandSection: (state: UiState, section: HideableSection): UiState =>
       state.resources.collapsedSections.includes(section)
         ? withCollapsed(
             state,
