@@ -4,9 +4,9 @@ import { createRoot, type Root } from 'react-dom/client';
 import useSWR, { useSWRConfig, type Cache } from 'swr';
 import { afterEach, describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
-import { createApiClient, type ApiClient } from './client';
+import { createApiClient, getBrowserApiClient, type ApiClient } from './client';
 import { ApiError } from './errors';
-import { ImagoSWRProvider, shouldRetryOnError } from './swr-provider';
+import { ImagoSWRProvider, shouldRetryOnError, useApiClient } from './swr-provider';
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined;
@@ -176,6 +176,43 @@ describe('ImagoSWRProvider', () => {
       given: 'the provider re-rendering with new children',
       should: 'keep the same cache',
       actual: a.seen.cache === before,
+      expected: true,
+    });
+  });
+});
+
+describe('useApiClient()', () => {
+  test('the client hooks write with', () => {
+    const api = countingClient();
+    const seen: { inside?: ApiClient; outside?: ApiClient } = {};
+    function Inside() {
+      seen.inside = useApiClient();
+      return null;
+    }
+    function Outside() {
+      seen.outside = useApiClient();
+      return null;
+    }
+    render(
+      <>
+        <ImagoSWRProvider client={api.client}>
+          <Inside />
+        </ImagoSWRProvider>
+        <Outside />
+      </>,
+    );
+
+    assert({
+      given: 'a hook under a provider given a client',
+      should: 'write through that same client',
+      actual: seen.inside === api.client,
+      expected: true,
+    });
+
+    assert({
+      given: 'a hook with no client provided',
+      should: "write through the browser's client",
+      actual: seen.outside === getBrowserApiClient(),
       expected: true,
     });
   });

@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, type ReactNode } from 'react';
+import { createContext, useContext, useMemo, type ReactNode } from 'react';
 import { SWRConfig, type SWRConfiguration } from 'swr';
 import { getBrowserApiClient, type ApiClient } from './client';
 import { ApiError } from './errors';
@@ -11,6 +11,14 @@ import { ApiError } from './errors';
  */
 export const shouldRetryOnError = (error: Error): boolean =>
   !(error instanceof ApiError && error.status < 500);
+
+const ApiClientContext = createContext<ApiClient | null>(null);
+
+/**
+ * The client the provider loads through, for hooks that write as well as
+ * read; the browser's when no provider gave one.
+ */
+export const useApiClient = (): ApiClient => useContext(ApiClientContext) ?? getBrowserApiClient();
 
 /**
  * SWR for imago: every key is an apps/web API path loaded through the imago
@@ -35,5 +43,9 @@ export function ImagoSWRProvider({
     [client],
   );
 
-  return <SWRConfig value={value}>{children}</SWRConfig>;
+  return (
+    <ApiClientContext.Provider value={client ?? null}>
+      <SWRConfig value={value}>{children}</SWRConfig>
+    </ApiClientContext.Provider>
+  );
 }
