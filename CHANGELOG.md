@@ -18,7 +18,10 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   unread counts, and opens a channel to read and post in, with new posts arriving live. Tasks lists
   a drive's task lists with progress and opens one in Tree or Focus view, where you can tick and add
   tasks, or open a task to edit its title, status, priority, due date, assignees, description and
-  subtasks. An empty drive, a section that fails to load and an address that names nothing you can
+  subtasks. Settings shows a drive's name (owners and admins can rename it), its members, and an
+  "Imago access" switch that lets your Imago agents work in that drive; your Home drive can't be
+  renamed and your agents always have access to it. Account links to your account, billing and
+  connections settings in classic PageSpace. An empty drive, a section that fails to load and an address that names nothing you can
   open each get their own designed screen inside the frame: a note about what will show up, a "Try
   again" button that never shows the server's error text, or "not found" with a link back. Imago is
   a preview: chat, page editing and direct-message threads are still on their way, and classic

@@ -8,6 +8,7 @@ import { ChannelThread } from '@/ui/messages/thread-view/channel-thread';
 import { PageObject } from '@/ui/files/page-object/page-object';
 import { ConversationObject } from '@/ui/messages/conversation-object/conversation-object';
 import { DmThread } from '@/ui/messages/thread-view/dm-thread';
+import { DriveSettingsObject } from '@/ui/settings/drive-settings/drive-settings';
 
 // getViewer() itself is proven against Postgres in
 // lib/auth/get-viewer.integration.test.ts; here it is every route's seam.
@@ -49,10 +50,10 @@ const routes: readonly { readonly path: string; readonly load: () => Promise<{ d
   { path: '[driveId]/messages', load: () => import('./[driveId]/messages/page'), object: null },
   { path: '[driveId]/messages/[pageId]', load: () => import('./[driveId]/messages/[pageId]/page'), object: 'channel-thread' },
   { path: '[driveId]/tasks', load: () => import('./[driveId]/tasks/page'), object: null },
-  { path: '[driveId]/settings', load: () => import('./[driveId]/settings/page'), object: 'Drive settings' },
+  { path: '[driveId]/settings', load: () => import('./[driveId]/settings/page'), object: 'drive-settings' },
   { path: 'dm', load: () => import('./dm/page'), object: null },
   { path: 'dm/[conversationId]', load: () => import('./dm/[conversationId]/page'), object: 'conversation-object' },
-  { path: 'account', load: () => import('./account/page'), object: 'Account' },
+  { path: 'account', load: () => import('./account/page'), object: 'account' },
 ];
 
 const placeholder = (label: string) => `<div class="p-4 text-ink-muted" data-object-placeholder="">${label}</div>`;
@@ -259,6 +260,13 @@ describe('the stage routes', () => {
           const { children, ...gateProps } = gate.props;
           return [gate.type, gateProps, children.type === DmThread, children.props];
         }
+        if (route.object === 'drive-settings') {
+          const settings = element as ReactElement;
+          return [settings.type, settings.props];
+        }
+        if (route.object === 'account') {
+          return [...renderToStaticMarkup(element).matchAll(/data-account-link="([^"]+)"/g)].map(([, id]) => id);
+        }
         if (route.object === 'page-object') {
           // The gate settles what the id names in the browser; its suite proves the edges.
           const gate = element as ReactElement<{ children: ReactNode }>;
@@ -284,6 +292,9 @@ describe('the stage routes', () => {
         if (route.object === 'conversation-object') {
           return [ConversationObject, { conversationId: 'c-1' }, true, { conversationId: 'c-1', viewerId: 'user-1' }];
         }
+        if (route.object === 'drive-settings') return [DriveSettingsObject, { driveId: 'drive-1' }];
+        // DEPLOYMENT_MODE is unset here: cloud, which bills in the app.
+        if (route.object === 'account') return ['account', 'billing', 'connections'];
         return route.object === null ? null : placeholder(route.object);
       }),
     });
