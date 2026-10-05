@@ -103,26 +103,61 @@ describe('TasksPane', () => {
   test('no lists', async () => {
     const { container } = show({ [DRIVE]: lists([]) });
     await settle(() => {
-      if (!container.textContent?.includes('No task lists')) throw new Error('not loaded');
+      if (!container.querySelector('[data-empty]')) throw new Error('not loaded');
     });
     assert({
       given: 'a drive with no task lists',
-      should: 'say so',
-      actual: container.querySelector('p')?.textContent,
-      expected: 'No task lists in this drive yet.',
+      should: 'draw the designed empty object, saying what will show up',
+      actual: [...(container.querySelector('[data-empty]')?.children ?? [])].map((child) => child.textContent),
+      expected: ['No task lists yet', 'Task lists in this drive show up here.'],
     });
   });
 
   test('lists that will not load', async () => {
-    const { container } = show({ [DRIVE]: () => Response.json({ error: 'Forbidden' }, { status: 403 }) });
+    const { container } = show({
+      [DRIVE]: () => Response.json({ error: 'relation "pages" does not exist' }, { status: 500 }),
+    });
     await settle(() => {
       if (!container.querySelector('[role="alert"]')) throw new Error('no alert');
     });
+    const alert = container.querySelector('[role="alert"]');
     assert({
-      given: 'a drive the server will not list',
-      should: 'say the lists could not load',
-      actual: container.querySelector('[role="alert"]')?.textContent,
-      expected: 'Could not load task lists.',
+      given: 'a drive whose lists fail with server text in the answer',
+      should: 'draw the retryable error object without the server’s text',
+      actual: {
+        title: alert?.querySelector('h2')?.textContent,
+        button: alert?.querySelector('button')?.textContent,
+        leaks: alert?.textContent?.includes('relation') ?? true,
+      },
+      expected: { title: 'Could not load task lists', button: 'Try again', leaks: false },
+    });
+  });
+
+  test('Try again after a failure', async () => {
+    let calls = 0;
+    const { web, container } = show({
+      [DRIVE]: () => {
+        calls += 1;
+        return calls === 1
+          ? Response.json({ error: 'Unavailable' }, { status: 503 })
+          : lists([{ id: 'l1', title: 'Launch' }])();
+      },
+      'GET /api/pages/l1/tasks?limit=200&offset=0': () => Response.json(taskListResponse([])),
+    });
+    await settle(() => {
+      if (!container.querySelector('[role="alert"] button')) throw new Error('no retry');
+    });
+    act(() => {
+      container.querySelector<HTMLButtonElement>('[role="alert"] button')?.click();
+    });
+    await settle(() => {
+      if (!container.textContent?.includes('Launch')) throw new Error('not reloaded');
+    });
+    assert({
+      given: 'a failed load, then Try again',
+      should: 'ask the server again through SWR and draw the lists it answers',
+      actual: { asked: web.count(DRIVE), alert: container.querySelector('[role="alert"]') === null },
+      expected: { asked: 2, alert: true },
     });
   });
 });

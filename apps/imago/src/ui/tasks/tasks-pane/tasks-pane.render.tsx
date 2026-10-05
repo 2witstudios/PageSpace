@@ -3,12 +3,13 @@ import type { ReactNode } from 'react';
 import { Icon } from '../../components/icon/icon';
 import { ListGroup } from '../../components/list-group/list-group';
 import { ProgressMeter } from '../../components/progress-meter/progress-meter';
+import { renderEmptyState, renderErrorState } from '../../frame/edge-state/edge-state.render';
 import type { Progress } from '../task-tree/task-tree';
 import { taskListEmptyClass, taskListRowClass, taskListRowTitleClass, tasksPaneMessageClass } from './tasks-pane-class';
 
 export type TasksPaneRenderProps =
   | { readonly state: 'loading' }
-  | { readonly state: 'error' }
+  | { readonly state: 'error'; readonly retry: () => void }
   | { readonly state: 'ready'; readonly rows: ReactNode; readonly empty: boolean };
 
 /** The Tasks section's list: the drive's task lists, or why there are none. */
@@ -20,14 +21,8 @@ export function renderTasksPane(props: TasksPaneRenderProps): ReactNode {
       </p>
     );
   }
-  if (props.state === 'error') {
-    return (
-      <p role="alert" className={tasksPaneMessageClass}>
-        Could not load task lists.
-      </p>
-    );
-  }
-  if (props.empty) return <p className={tasksPaneMessageClass}>No task lists in this drive yet.</p>;
+  if (props.state === 'error') return renderErrorState({ title: 'Could not load task lists', retry: props.retry });
+  if (props.empty) return renderEmptyState({ title: 'No task lists yet', detail: 'Task lists in this drive show up here.' });
   return <ListGroup label="Task lists">{props.rows}</ListGroup>;
 }
 

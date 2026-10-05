@@ -6,6 +6,8 @@ import { useChannelThread } from '../channel-thread/use-channel-thread';
 import { threadPosts } from '../channel-thread/channel-thread-state';
 import { groupPosts } from '../post-groups/post-groups';
 import { todayOf } from '../../time/time';
+import { renderErrorState } from '../../frame/edge-state/edge-state.render';
+import { CHANNEL_NOT_FOUND, renderNotFound } from '../../frame/not-found/not-found.render';
 import { renderThreadView } from './thread-view.render';
 
 export type ChannelThreadProps = {
@@ -33,8 +35,9 @@ const blank = { draft: '', error: null };
  */
 export function ChannelThread({ driveId, pageId, viewerId, now = systemNow, markReadDelayMs }: ChannelThreadProps) {
   const { channels } = useDriveChannels(driveId);
-  const { state, loadOlder, send } = useChannelThread({ pageId, viewerId, markReadDelayMs, now });
-  const name = channels?.find((channel) => channel.id === pageId)?.name ?? 'Channel';
+  const { state, loadOlder, send, retry } = useChannelThread({ pageId, viewerId, markReadDelayMs, now });
+  const listed = channels?.find((candidate) => candidate.id === pageId);
+  const name = listed?.name ?? 'Channel';
 
   const [drafts, setDrafts] = useState<Drafts>({});
   const { draft, error } = drafts[pageId] ?? blank;
@@ -72,6 +75,17 @@ export function ChannelThread({ driveId, pageId, viewerId, now = systemNow, mark
         });
     });
   };
+
+  // The drive's channels are the authority on which ids are its channels; a
+  // refused or unknown id says the same, so it never tells which it was.
+  if ((channels !== undefined && listed === undefined) || state.status === 'not-found') {
+    return renderNotFound({
+      ...CHANNEL_NOT_FOUND,
+      homeHref: `/${encodeURIComponent(driveId)}/messages`,
+      linkLabel: 'Back to Messages',
+    });
+  }
+  if (state.status === 'error') return renderErrorState({ title: 'Could not load this channel', retry });
 
   return (
     <div ref={thread}>

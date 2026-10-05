@@ -18,7 +18,8 @@ export type ChannelPage = {
 
 export type ThreadState = {
   readonly pageId: string;
-  readonly status: 'loading' | 'ready' | 'error';
+  /** `not-found`: the server answered that the viewer cannot open this channel. */
+  readonly status: 'loading' | 'ready' | 'error' | 'not-found';
   /** Stored posts, oldest first. */
   readonly posts: readonly Post[];
   /** The viewer's posts not yet stored, in the order they were sent; each id is `temp-<nonce>`. */
@@ -34,7 +35,7 @@ export type ThreadState = {
 export type ThreadAction =
   | { readonly type: 'opened'; readonly pageId: string }
   | { readonly type: 'loaded'; readonly pageId: string; readonly page: ChannelPage }
-  | { readonly type: 'failed'; readonly pageId: string }
+  | { readonly type: 'failed'; readonly pageId: string; readonly notFound?: boolean }
   | { readonly type: 'olderRequested'; readonly pageId: string }
   | { readonly type: 'olderLoaded'; readonly pageId: string; readonly page: ChannelPage }
   | { readonly type: 'olderFailed'; readonly pageId: string }
@@ -92,7 +93,7 @@ export const threadReducer = (state: ThreadState, action: ThreadAction): ThreadS
       };
     }
     case 'failed':
-      return { ...state, status: 'error' };
+      return { ...state, status: action.notFound === true ? 'not-found' : 'error' };
     case 'olderRequested':
       return { ...state, older: 'loading' };
     case 'olderLoaded': {

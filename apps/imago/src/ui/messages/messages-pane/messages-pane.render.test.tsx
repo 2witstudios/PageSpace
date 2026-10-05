@@ -146,11 +146,11 @@ describe('renderMessagesPane()', () => {
       `<p${role ? ` role="${role}"` : ''} class="${messagesNoteClass}">${text}</p>`;
     const cases: Array<[string, Partial<Props>, string]> = [
       ['channels loading', { channels: { status: 'loading' } }, note('Loading channels…', 'status')],
-      ['channels failing', { channels: { status: 'error' } }, note('Could not load channels.', 'alert')],
+      ['channels failing', { channels: { status: 'error', retry: () => {} } }, note('Could not load channels.', 'alert')],
       ['no drive (a user-level DM route)', { channels: { status: 'no-drive' } }, note('Open a drive to see its channels.')],
       ['a drive with no channels', { channels: { status: 'ready', rows: [] } }, note('No channels in this drive yet.')],
       ['DMs loading', { direct: { status: 'loading' } }, note('Loading direct messages…', 'status')],
-      ['DMs failing', { direct: { status: 'error' } }, note('Could not load direct messages.', 'alert')],
+      ['DMs failing', { direct: { status: 'error', retry: () => {} } }, note('Could not load direct messages.', 'alert')],
       ['no DMs', { direct: { status: 'ready', rows: [] } }, note('No direct messages yet.')],
     ];
     assert({
@@ -167,6 +167,16 @@ describe('renderMessagesPane()', () => {
       should: 'show its note',
       actual: cases.map(([name, overrides]) => [name, html(overrides).includes(cases.find(([n]) => n === name)?.[2] ?? '?')]),
       expected: cases.map(([name]) => [name, true]),
+    });
+  });
+
+  test('a failed section offers to ask again', () => {
+    const markup = html({ channels: { status: 'error', retry: () => {} } });
+    assert({
+      given: 'channels that failed and DMs that loaded',
+      should: 'offer Try again only in the failed section',
+      actual: markup.match(/>Try again</g)?.length ?? 0,
+      expected: 1,
     });
   });
 });

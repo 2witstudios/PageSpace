@@ -16,7 +16,7 @@
 // whichever lands first takes the sending post's place (channel-thread-state).
 // Posts from others arrive through the channel's realtime room.
 
-import { useCallback, useEffect, useReducer, useRef } from 'react';
+import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { useApiClient } from '@/api/swr-provider';
 import { ApiError } from '@/api/errors';
 import { useChannelRoom, useSocketEvent } from '@/realtime/realtime-provider';
@@ -24,6 +24,7 @@ import type { Post } from '../message-model/post';
 import { liveChannelPost } from '../message-model/received';
 import { fetchChannelPage, markChannelRead, sendChannelPost } from './channel-api';
 import { initialThreadState, pendingId, threadReducer, type ThreadState } from './channel-thread-state';
+import { edgeOf } from '../../frame/edge-state/edge-state.render';
 
 /** How long posts are on screen before the channel counts as read (classic's MARK_READ_DEBOUNCE_MS). */
 export const MARK_READ_DEBOUNCE_MS = 1000;
@@ -70,6 +71,10 @@ export const useChannelThread = ({
   // rather than the last channel's posts.
   const state: ThreadState = stored.pageId === pageId ? stored : initialThreadState(pageId);
 
+  // Each Try again is one more attempt: the load below runs again for it.
+  const [attempt, setAttempt] = useState(0);
+  const retry = useCallback(() => setAttempt((count) => count + 1), []);
+
   useEffect(() => {
     let live = true;
     dispatch({ type: 'opened', pageId });
@@ -77,14 +82,14 @@ export const useChannelThread = ({
       (page) => {
         if (live) dispatch({ type: 'loaded', pageId, page });
       },
-      () => {
-        if (live) dispatch({ type: 'failed', pageId });
+      (error: unknown) => {
+        if (live) dispatch({ type: 'failed', pageId, notFound: edgeOf(error) === 'not-found' });
       },
     );
     return () => {
       live = false;
     };
-  }, [client, pageId, viewerId]);
+  }, [client, pageId, viewerId, attempt]);
 
   useChannelRoom(pageId);
   useSocketEvent(NEW_MESSAGE, (payload: unknown) => {
@@ -159,5 +164,5 @@ export const useChannelThread = ({
     [client, pageId, viewerId, posts, now],
   );
 
-  return { state, loadOlder, send };
+  return { state, loadOlder, send, retry };
 };
