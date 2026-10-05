@@ -309,6 +309,7 @@ describe('approve mode replays exactly what was held (independent re-verify of #
     await db.transaction((tx) => markApprovedInvitation(tx, { orgId: w.orgId, driveId: w.orgDrive, email: 'x@example.com', approvedBy: w.owner, invite: { kind: 'page', id: 'pinv_approved' } }));
     expect(await consumeApprovedInvitation(db, { driveId: w.orgDrive, invite: { kind: 'drive', id: 'dinv_other' } })).toBe(false);
     expect(await consumeApprovedInvitation(db, { driveId: w.orgDrive, invite: { kind: 'drive', id: 'pinv_approved' } })).toBe(false);
+    expect(await consumeApprovedInvitation(db, { driveId: w.orgDrive, invite: { kind: 'page', id: 'pinv_never_approved' } })).toBe(false);
     expect(await consumeApprovedInvitation(db, { driveId: w.orgDrive, invite: { kind: 'page', id: 'pinv_approved' } })).toBe(true);
     expect(await consumeApprovedInvitation(db, { driveId: w.orgDrive, invite: { kind: 'page', id: 'pinv_approved' } })).toBe(false);
 
