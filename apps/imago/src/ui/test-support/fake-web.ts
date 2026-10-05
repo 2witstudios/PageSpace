@@ -1,4 +1,4 @@
-// A fake apps/web for the task tests: the real imago API client over a fetch
+// A fake apps/web for the imago data tests: the real imago API client over a fetch
 // that records every request and answers it from a route table keyed by
 // "METHOD /path?query". The CSRF endpoint mints tok-1, tok-2, ….
 

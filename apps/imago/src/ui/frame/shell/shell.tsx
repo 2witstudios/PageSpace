@@ -5,6 +5,7 @@ import type { ReactNode } from 'react';
 import { SignOutButton } from '@/components/SignOutButton';
 import { useUiState } from '../../store/store';
 import type { UiState } from '../../store/state';
+import { MessagesPane } from '../../messages/messages-pane/messages-pane';
 import { renderPaneHeader } from '../pane/pane-header';
 import { ListOpener, ListPane } from '../list-pane/list-pane';
 import {
@@ -39,7 +40,17 @@ const selectCollapsed = (state: UiState) => state.resources.collapsedSections;
 const chatHref = (stage: Stage): string =>
   stage.driveId === null ? '/' : `/${encodeURIComponent(stage.driveId)}`;
 
-/** The list slot holds the section's list; real rows arrive per section. */
+/** A section's rows: channels and DMs in Messages; the other sections' arrive with their leaves. */
+const rowsFor = (stage: Stage): ReactNode =>
+  stage.section === 'messages' ? (
+    <MessagesPane
+      driveId={stage.driveId}
+      selectedPageId={stage.object?.kind === 'page' ? stage.object.pageId : null}
+      selectedConversationId={stage.object?.kind === 'conversation' ? stage.object.conversationId : null}
+    />
+  ) : null;
+
+/** The list slot holds the section's list. */
 const listFor = (stage: Stage, layout: PaneLayout): ReactNode =>
   isListSection(stage.section) && layout.list !== 'closed' ? (
     <ListPane
@@ -47,7 +58,9 @@ const listFor = (stage: Stage, layout: PaneLayout): ReactNode =>
       variant={layout.list}
       title={titles[stage.section]}
       closeHref={chatHref(stage)}
-    />
+    >
+      {rowsFor(stage)}
+    </ListPane>
   ) : null;
 
 /** The hamburger, while this section's list is hidden. */

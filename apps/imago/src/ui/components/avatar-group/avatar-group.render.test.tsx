@@ -65,6 +65,23 @@ describe('renderAvatarGroup()', () => {
     });
   });
 
+  test('a shown count below one', () => {
+    const faces = (shown: number) => {
+      const html = renderToString(renderAvatarGroup({ names: ['A', 'B', 'C'], shown }));
+      return [html.split(`class="${avatarGroupFaceClass}"`).length - 1, html.includes('>+2</span>')];
+    };
+    assert({
+      given: 'three people with zero, a negative or a non-integer count shown',
+      should: 'still draw one face and count two more, never slicing from the back',
+      actual: [0, -1, 0.5].map(faces),
+      expected: [
+        [1, true],
+        [1, true],
+        [1, true],
+      ],
+    });
+  });
+
   test('the same name twice', () => {
     const html = renderToString(renderAvatarGroup({ names: ['Al', 'Al'] }));
     assert({

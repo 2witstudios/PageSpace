@@ -8,8 +8,14 @@
 // post counts one more unread and moves its thread up, reading a thread clears
 // its count. An event about a thread the list has not loaded (or before it has
 // loaded at all) refetches the list instead. The unread totals are the
-// server's: any inbox event refetches /api/sidebar/badges, debounced so a busy
-// channel does not cost a request per post.
+// server's: any inbox event, and any notification (mentions, task assignments
+// and RSVPs reach the other totals only that way), refetches
+// /api/sidebar/badges, debounced so a busy channel does not cost a request
+// per post.
+//
+// Events sent while the socket was down are lost, so a connect after a list
+// or the totals loaded refetches them. A connect before they load needs
+// nothing: the load in flight is the server's answer.
 
 import { useEffect, useRef } from 'react';
 import useSWR, { type KeyedMutator } from 'swr';
@@ -21,6 +27,17 @@ import { fetchDirectThreads, fetchDriveChannels, messagePaths } from '../message
 
 /** How long a burst of inbox events waits before the totals are refetched (classic's useSidebarBadges). */
 export const BADGES_DEBOUNCE_MS = 250;
+
+/** Refetches a loaded entry whenever the socket connects, since what it missed while down is gone. */
+const useRefetchOnReconnect = (data: unknown, mutate: () => Promise<unknown>) => {
+  const loaded = useRef(data);
+  useEffect(() => {
+    loaded.current = data;
+  });
+  useSocketEvent('connect', () => {
+    if (loaded.current !== undefined) void mutate();
+  });
+};
 
 /** Applies inbox:* events to one loaded list in the SWR cache. */
 const useLiveThreads = <T extends MessageThread>(
@@ -61,6 +78,7 @@ const useLiveThreads = <T extends MessageThread>(
   useSocketEvent('inbox:channel_updated', onEvent);
   useSocketEvent('inbox:dm_updated', onEvent);
   useSocketEvent('inbox:read_status_changed', onEvent);
+  useRefetchOnReconnect(data, mutate);
 };
 
 /** The drive's CHANNEL pages the viewer can see, with unread counts, live. */
@@ -84,7 +102,7 @@ export const useDirectThreads = () => {
   return { threads: data, error: error as unknown, isLoading };
 };
 
-/** The viewer's unread totals from /api/sidebar/badges, refetched on inbox events. */
+/** The viewer's unread totals from /api/sidebar/badges, refetched on inbox events and notifications. */
 export const useUnreadBadges = () => {
   const { data, error, isLoading, mutate } = useSWR<SidebarBadges>(messagePaths.badges);
 
@@ -108,6 +126,8 @@ export const useUnreadBadges = () => {
   useSocketEvent('inbox:dm_updated', refresh);
   useSocketEvent('inbox:read_status_changed', refresh);
   useSocketEvent('inbox:thread_updated', refresh);
+  useSocketEvent('notification:new', refresh);
+  useRefetchOnReconnect(data, mutate);
 
   return { badges: data, error: error as unknown, isLoading };
 };

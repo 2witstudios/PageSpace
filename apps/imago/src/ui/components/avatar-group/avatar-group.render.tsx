@@ -11,7 +11,7 @@ export type AvatarGroupProps = {
   readonly names: readonly string[];
   /** Which names are agents, drawn with the agent glyph. */
   readonly agents?: readonly string[];
-  /** How many faces before the rest are counted. */
+  /** How many faces before the rest are counted; at least one is always drawn. */
   readonly shown?: number;
   /** Leads the group's accessible name, such as "Assigned to". */
   readonly label?: string;
@@ -25,7 +25,7 @@ export function renderAvatarGroup({
   label,
 }: AvatarGroupProps): ReactNode {
   if (names.length === 0) return null;
-  const faces = names.slice(0, shown);
+  const faces = names.slice(0, Math.max(1, Math.floor(shown) || 1));
   const rest = names.length - faces.length;
   const everyone = names.join(', ');
   return (
