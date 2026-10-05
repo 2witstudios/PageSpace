@@ -861,7 +861,7 @@ export async function executeAskAgent(
         // runCompaction gates and reserves on the caller's spend target before its own model
         // call, and skips (persisting nothing) when that source cannot cover it.
         if (prepared.pendingCompaction) {
-          void runCompaction(prepared.pendingCompaction);
+          void runCompaction({ ...prepared.pendingCompaction, billedUserId: executionContext?.creditSpend?.userId });
         }
 
         // Bill the requesting user for the sub-agent run. Use totalUsage so all
@@ -878,7 +878,8 @@ export async function executeAskAgent(
         // (walletId), because an agent's spend belongs to the session it runs in, not
         // the drive the agent lives in (SPEND-7).
         await AIMonitoring.trackUsage({
-          userId,
+          // The consumer the turn's gate bound (a manual Run's presser), else the caller (review #2817 P2-3).
+          userId: executionContext?.creditSpend?.userId ?? userId,
           provider: resolvedProvider,
           model: resolvedModelName,
           source: 'page_agent',

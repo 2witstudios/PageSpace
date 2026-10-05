@@ -68,7 +68,7 @@ export async function acquireWorkflowCreditHold(
   // creator's per-consumer caps on that wallet bind it ([D-OW-34]).
   const target = triggeredBy ? personTriggeredSpend(input.driveId) : automationSpend(input.driveId);
   const steps = resolveSteps({ steps: input.steps ?? null, prompt: input.prompt, agentPageId: input.agentPageId });
-  if (!hasAiStep(steps)) return { allowed: true, release: () => {}, creditSpend: { spend: target } };
+  if (!hasAiStep(steps)) return { allowed: true, release: () => {}, creditSpend: { spend: target, userId } };
 
   const [user] = await db
     .select({ subscriptionTier: users.subscriptionTier })
@@ -84,8 +84,10 @@ export async function acquireWorkflowCreditHold(
   if (!gate.allowed) return gate.refusal ? { allowed: false, reason: gate.reason, refusal: gate.refusal } : { allowed: false, reason: gate.reason };
 
   // The run settles on the wallet the gate reserved on (WAL-5): the drive wallet once
-  // wallets are on; while orgs are dark, the personal root as before wallets.
-  const creditSpend: RunCreditSpend = { spend: target, walletId: gate.walletId };
+  // wallets are on; while orgs are dark, the personal root as before wallets. Its usage is
+  // recorded as the person the gate bound — the presser of a manual Run, else the creator — so
+  // the spend counts toward the same cap that admitted it (review #2817 P2-3).
+  const creditSpend: RunCreditSpend = { spend: target, walletId: gate.walletId, userId };
   const holdId = gate.holdId;
   if (!holdId) return { allowed: true, release: () => {}, creditSpend };
 

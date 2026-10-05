@@ -84,6 +84,16 @@ describe('acquireWorkflowCreditHold', () => {
     expect(mockCanConsumeAI.mock.calls[0][2].spend).toEqual({ kind: 'automation', driveId: 'drive_product', personPresent: true });
   });
 
+  it('WAL-7 (partial) the run carries the person its gate bound, so its usage is COUNTED as them too: the presser for a manual Run, the creator for a scheduled one (review #2817 P2-3)', async () => {
+    mockCanConsumeAI.mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'hold_1', walletId: 'w_product' });
+
+    const manual = await acquireWorkflowCreditHold(LEGACY_AI_WORKFLOW, 'interactive', 'user_admin');
+    const scheduled = await acquireWorkflowCreditHold(LEGACY_AI_WORKFLOW, 'scheduled');
+
+    expect(manual).toMatchObject({ allowed: true, creditSpend: { walletId: 'w_product', userId: 'user_admin' } });
+    expect(scheduled).toMatchObject({ allowed: true, creditSpend: { walletId: 'w_product', userId: 'user_1' } });
+  });
+
   it('WAL-7 (partial) creditAdmission threads the caller to the gate; a scheduled admission names no person', async () => {
     mockCanConsumeAI.mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'hold_1', walletId: 'w_product' });
     await creditAdmission(LEGACY_AI_WORKFLOW, 'interactive', undefined, 'user_admin')();
