@@ -62,6 +62,19 @@ const skipReasonSchema = z.enum(['drive_wallet_empty', 'drive_wallet_paused', 'n
 /** A wallet a person may pick for a call: `SpendOption` / `SpendChoice` in lib. */
 const spendOptionSchema = z.object({ source: spendSourceKindSchema, walletId: z.string() });
 
+/**
+ * A conversation's pickable source (`SpendChoice` in lib): named, and what the caller can still
+ * spend from it (SPEND-9: a seat shows their own remaining allowance, never the pool). The extra
+ * fields are optional so an older server still parses.
+ */
+const spendChoiceSchema = spendOptionSchema.extend({
+  label: z.string().optional(),
+  driveName: z.string().nullable().optional(),
+  orgName: z.string().nullable().optional(),
+  remainingCents: z.number().optional(),
+  remainingCredits: z.string().optional(),
+});
+
 /** The two viewers a token can ever be ([D-OW-26]); `lead`/`org_admin` is a contract violation. */
 const tokenViewerSchema = z.enum(['member', 'guest']);
 
@@ -130,18 +143,26 @@ const myWalletsSchema = z.object({
   }),
   /** Drive wallets of drives the caller can open: the consumer amount only (SPEND-9). */
   driveWallets: z.array(
-    z.object({ driveId: z.string(), walletId: z.string(), status: walletStatusSchema, remainingCents: z.number(), remainingCredits: z.string() }),
+    z.object({ driveId: z.string(), driveName: z.string().nullable().optional(), walletId: z.string(), status: walletStatusSchema, remainingCents: z.number(), remainingCredits: z.string() }),
   ),
   /** A seat on each org the caller belongs to (their own cap only, never the pool). */
-  seats: z.array(z.object({ orgId: z.string(), walletId: z.string() })),
+  seats: z.array(z.object({ orgId: z.string(), orgName: z.string().nullable().optional(), walletId: z.string() })),
   funds: z.object({
-    driveWallets: z.array(z.object({ driveId: z.string(), walletId: z.string() })),
+    driveWallets: z.array(z.object({
+      driveId: z.string(),
+      driveName: z.string().nullable().optional(),
+      walletId: z.string(),
+      status: walletStatusSchema.optional(),
+      remainingCents: z.number().optional(),
+      remainingCredits: z.string().optional(),
+    })),
     /** Always empty for a token ([D-OW-26]): a pool's balance is session-only (SPEND-10). */
     pools: z.array(z.never()).max(0),
     donations: z.array(
       z.object({
         walletId: z.string(),
         driveId: z.string().nullable(),
+        driveName: z.string().nullable().optional(),
         originalCents: z.number(),
         originalCredits: z.string(),
         remainingCents: z.number(),
@@ -226,7 +247,7 @@ export const getConversationSpendSource = defineOperation({
     /** The wallet stored as this conversation's choice; null = none chosen. */
     chosenWalletId: z.string().nullable(),
     /** The wallets you may pick here. */
-    options: z.array(spendOptionSchema),
+    options: z.array(spendChoiceSchema),
     /** What the next AI call would spend, as the gate decides it now (nothing reserved). */
     resolved: callSpendDecisionSchema,
   }),

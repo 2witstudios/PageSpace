@@ -90,6 +90,10 @@ const LEDGER = new Map<string, Entry>([
     reads: 1, decision: 'neutral',
     reason: 'suspendOrgGuests exists to find GUEST and outside-member rows and park them, so it must not exclude them; it only removes access (a writer under the policy transaction) and grants nothing.',
   }],
+  ['packages/lib/src/permissions/drive-member-labels.ts', {
+    reads: 1, decision: 'neutral',
+    reason: 'listDrivePageLinkGuests exists to LIST the GUEST rows (D-OW-24) apart from members on the Members page, for the lead and admins only; it is a display list behind the route\'s access check and grants nothing.',
+  }],
   ['packages/lib/src/permissions/org-guest-footprint.ts', {
     reads: 1, decision: 'neutral',
     reason: 'isOrgGuest exists to FIND guest and outside-member rows on an org\'s drives, so it must not exclude them; it only withholds verified-domain auto-join (SEC-1) from a guest and grants nothing.',
