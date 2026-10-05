@@ -68,6 +68,11 @@ export function useOrgHubCounts(orgId: string, role: OrgRole | undefined): OrgHu
   };
 }
 
+/** A read for Owner and Admins (the org settings pages); null key, no request, for anyone else. */
+export function useOrgAdminRead<T>(key: string | null, role: OrgRole | undefined) {
+  return useManagerSWR<T>(key, role);
+}
+
 export function useOrgSeats(orgId: string, role: OrgRole | undefined, enabled = true) {
   return useManagerSWR<{ seats: OrgSeats }>(enabled ? orgKeys.seats(orgId) : null, role);
 }

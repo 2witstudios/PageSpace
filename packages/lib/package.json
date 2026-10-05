@@ -804,6 +804,11 @@
       "import": "./dist/billing/org-plan-quote.js",
       "require": "./dist/billing/org-plan-quote.js"
     },
+    "./billing/wallet-admin": {
+      "types": "./dist/billing/wallet-admin.d.ts",
+      "import": "./dist/billing/wallet-admin.js",
+      "require": "./dist/billing/wallet-admin.js"
+    },
     "./test/wallet-leg-invariant": {
       "types": "./dist/test/wallet-leg-invariant.d.ts",
       "import": "./dist/test/wallet-leg-invariant.js",

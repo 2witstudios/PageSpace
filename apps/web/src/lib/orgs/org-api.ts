@@ -5,6 +5,7 @@
  * turned into copy by org-error-copy.ts.
  */
 import type { OrgBillingNotice } from '@pagespace/lib/organizations/status-core';
+import type { OrgPolicies as StoredOrgPolicies } from '@pagespace/lib/organizations/policies-core';
 import { fetchJSON, post, patch, put, del } from '@/lib/auth/auth-fetch';
 
 export type OrgRole = 'OWNER' | 'ADMIN' | 'MEMBER';
@@ -161,3 +162,49 @@ export async function fetchDriveMemberEmails(driveId: string): Promise<string[]>
   const res = await fetchJSON<DriveMembersResponse>(`/api/drives/${driveId}/members`);
   return res.members.map((m) => m.user.email).filter((e): e is string => typeof e === 'string' && e.length > 0);
 }
+
+// ---------------------------------------------------------------------------
+// Members & seats, Drives, Policies (M2)
+// ---------------------------------------------------------------------------
+
+export type { OrgGuest, OrgDriveUsage, OrgMemberActivity } from '@pagespace/lib/permissions/org-read-models';
+export type { OrgSeatCapView, OrgSeatCapsRead } from '@pagespace/lib/services/drive-wallet-service';
+export type { OrgPolicies, OrgPoliciesPatch } from '@pagespace/lib/organizations/policies-core';
+
+export interface OrgDriveDirectoryEntry {
+  id: string;
+  name: string;
+  slug: string;
+  orgVisibility: 'OPEN' | 'RESTRICTED' | 'PRIVATE';
+  lead: { id: string; name: string | null; image: string | null };
+  joined: boolean;
+  joinRequest: 'pending' | null;
+  canRequest: boolean;
+}
+
+export const orgReadKeys = {
+  memberActivity: (orgId: string) => `/api/orgs/${orgId}/members/activity`,
+  seatCaps: (orgId: string) => `/api/orgs/${orgId}/seat-caps`,
+  driveUsage: (orgId: string) => `/api/orgs/${orgId}/drives/usage`,
+  policies: (orgId: string) => `/api/orgs/${orgId}/policies`,
+} as const;
+
+export const changeOrgMemberRole = (orgId: string, userId: string, role: 'ADMIN' | 'MEMBER') =>
+  patch<{ userId: string; role: OrgRole }>(`${orgKeys.members(orgId)}/${userId}`, { role });
+
+export const removeOrgMember = (orgId: string, userId: string) => del<{ removed: true }>(`${orgKeys.members(orgId)}/${userId}`);
+
+export const resendOrgInvitation = (orgId: string, invitationId: string) =>
+  post<{ invitation: OrgInvitation }>(`${orgKeys.invitations(orgId)}/${invitationId}/resend`);
+
+/** Omitted fields keep the stored value, or take the default caps (50 a day, 1,000 a month) when caps are first turned on. */
+export const setOrgSeatCap = (orgId: string, userId: string, body: { dailyCapCents?: number | null; monthlyCapCents?: number | null }) =>
+  put<{ walletId: string }>(`${orgKeys.members(orgId)}/${userId}/seat-cap`, body);
+
+export const clearOrgSeatCap = (orgId: string, userId: string) => del<{ walletId: string }>(`${orgKeys.members(orgId)}/${userId}/seat-cap`);
+
+export const patchOrgPolicies = (orgId: string, body: Record<string, unknown>) =>
+  patch<{ policies: StoredOrgPolicies; changed: string[] }>(orgReadKeys.policies(orgId), body);
+
+export const changeDriveVisibility = (driveId: string, orgVisibility: OrgDriveDirectoryEntry['orgVisibility']) =>
+  patch<{ drive: { id: string } }>(`/api/drives/${driveId}/org`, { orgVisibility });
