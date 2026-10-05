@@ -9,6 +9,7 @@ import { eq, and } from '@pagespace/db/operators';
 import { pages, drives } from '@pagespace/db/schema/core';
 import { driveMembers, driveRoles, pagePermissions } from '@pagespace/db/schema/members';
 import { applyPageUpdateWithRevision } from './page-mutation';
+import { applyDriveOwnerChange } from './drive-owner';
 import { pickConversationTable } from './page-mutation-plan';
 import {
   planPageRollback,
@@ -113,9 +114,10 @@ export async function rollbackDriveChange(
     return { trashed: true, driveId: activity.driveId, pagesTrashed: true };
   }
 
+  const fields = await applyDriveOwnerChange(deps, activity.driveId, plan.updateData);
   await deps.db
     .update(drives)
-    .set({ ...plan.updateData, updatedAt: deps.clock() })
+    .set({ ...fields, updatedAt: deps.clock() })
     .where(eq(drives.id, activity.driveId));
 
   return plan.updateData;

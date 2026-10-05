@@ -7,6 +7,7 @@ import { eq, and } from '@pagespace/db/operators';
 import { pages, drives } from '@pagespace/db/schema/core';
 import { driveMembers, driveRoles, pagePermissions } from '@pagespace/db/schema/members';
 import { applyPageUpdateWithRevision } from './page-mutation';
+import { applyDriveOwnerChange } from './drive-owner';
 import { pickConversationTable } from './page-mutation-plan';
 import {
   planPageRedo,
@@ -105,7 +106,8 @@ export async function redoDriveChange(
     updateData.trashedAt = null;
   }
 
-  await deps.db.update(drives).set({ ...updateData, updatedAt: deps.clock() }).where(eq(drives.id, activity.driveId));
+  const fields = await applyDriveOwnerChange(deps, activity.driveId, updateData);
+  await deps.db.update(drives).set({ ...fields, updatedAt: deps.clock() }).where(eq(drives.id, activity.driveId));
 
   return updateData;
 }
