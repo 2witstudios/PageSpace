@@ -628,6 +628,10 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Signing up at the same moment as someone else no longer fails to set up your Home drive** —
+  when several new accounts were created at once, all but one could end up without a Home drive
+  until their next sign-in.
+
 - **Memory now checks your AI credits before it learns** — the nightly Memory pass (learning
   from your conversations and tidying your profile pages) used to run and charge you even when
   your balance was used up, so you could go into debt without opening PageSpace. Now each step

@@ -354,6 +354,27 @@ describe('provisionHomeDriveIfNeeded → Imago agents (real Postgres)', () => {
     expect(await agentPagesIn(home.id)).toHaveLength(BUILTIN_AGENT_KEYS.length);
   });
 
+  // Concurrent first sign-ins of DIFFERENT users all allocate from the "home"
+  // publish-subdomain family. The loser of a candidate hits the unique index
+  // inside its Home transaction; the allocator's retry must survive that rather
+  // than fail on an aborted transaction (the agent provisioning lengthens the
+  // Home transaction, which widens this window).
+  it('given concurrent first sign-ins of different users, should provision every Home drive', async () => {
+    if (!dbAvailable) return;
+    const newUsers = await Promise.all([1, 2, 3, 4].map(() => factories.createUser()));
+
+    const results = await Promise.allSettled(newUsers.map((user) => provisionHomeDriveIfNeeded(user.id)));
+
+    expect(results.filter((result) => result.status === 'rejected')).toEqual([]);
+    const homes = await db
+      .select({ subdomain: drives.publishSubdomain })
+      .from(drives)
+      .where(and(inArray(drives.ownerId, newUsers.map((user) => user.id)), eq(drives.kind, 'HOME')));
+    expect(homes).toHaveLength(newUsers.length);
+    expect(new Set(homes.map((home) => home.subdomain)).size).toBe(newUsers.length);
+    for (const user of newUsers) expect(await pointersFor(user.id)).toHaveLength(BUILTIN_AGENT_KEYS.length);
+  });
+
   it('given an existing user owning other drives, should create Home with the agents but no tutorial content', async () => {
     if (!dbAvailable) return;
     const user = await factories.createUser();

@@ -667,11 +667,19 @@ export async function allocatePublishSubdomain(
       // Conditional update: only set when still null, so a concurrent allocation
       // for this drive can't be overwritten. If zero rows update, the race winner
       // already set it — re-read and return that value.
-      const updated = await queryable
-        .update(drives)
-        .set({ publishSubdomain: candidate })
-        .where(and(eq(drives.id, driveId), isNull(drives.publishSubdomain)))
-        .returning({ subdomain: drives.publishSubdomain });
+      //
+      // The write runs in its own savepoint (a nested transaction inside the
+      // caller's tx). A unique violation aborts the enclosing Postgres
+      // transaction, so without the savepoint the retry's next query fails with
+      // "current transaction is aborted" — which is what concurrent first
+      // sign-ins hit when two Home drives race for the same "home-N".
+      const updated = await queryable.transaction((savepoint) =>
+        savepoint
+          .update(drives)
+          .set({ publishSubdomain: candidate })
+          .where(and(eq(drives.id, driveId), isNull(drives.publishSubdomain)))
+          .returning({ subdomain: drives.publishSubdomain }),
+      );
       if (updated.length === 0) {
         // Lost the race: another writer set it between our read and write.
         const reread = await queryable
