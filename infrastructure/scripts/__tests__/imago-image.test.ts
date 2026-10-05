@@ -37,6 +37,18 @@ describe('apps/imago/Dockerfile', () => {
     expect(dockerfile).toMatch(/^RUN cd apps\/imago && .*bun run build$/m);
   });
 
+  it('given NEXT_PUBLIC_COOKIE_DOMAIN, should accept it as a build ARG (empty default) baked into the bundle before next build, as apps/web does (IMG-1.7a)', () => {
+    const builder = dockerfile.slice(dockerfile.indexOf(' AS builder'), dockerfile.indexOf(' AS runner'));
+    const arg = builder.indexOf('ARG NEXT_PUBLIC_COOKIE_DOMAIN=""\n');
+    const env = builder.indexOf('ENV NEXT_PUBLIC_COOKIE_DOMAIN=$NEXT_PUBLIC_COOKIE_DOMAIN\n');
+    const build = builder.search(/^RUN cd apps\/imago && .*bun run build$/m);
+    expect(arg).toBeGreaterThan(-1);
+    expect(env).toBeGreaterThan(arg);
+    expect(build).toBeGreaterThan(env);
+    // Same declaration as classic, so one build arg drives both apps.
+    expect(read('apps/web/Dockerfile')).toContain('ARG NEXT_PUBLIC_COOKIE_DOMAIN=""\n');
+  });
+
   it('given the runner stage, should ship the standalone server and its static assets', () => {
     expect(dockerfile).toContain('COPY --from=builder /app/apps/imago/.next/standalone .');
     expect(dockerfile).toContain('COPY --from=builder /app/apps/imago/.next/static ./apps/imago/.next/static');
@@ -87,6 +99,14 @@ describe('docker-compose.yml imago service', () => {
     expect(imago.environment).toContain('NEXT_PUBLIC_REALTIME_URL=${NEXT_PUBLIC_REALTIME_URL}');
     expect(imago.build?.args).toContain('NEXT_PUBLIC_REALTIME_URL=${NEXT_PUBLIC_REALTIME_URL}');
     expect(imago.networks).toEqual(expect.arrayContaining(['internal', 'frontend']));
+  });
+
+  it('should bake the same cookie domain as the web service (IMG-1.7a)', () => {
+    const web = compose.services.web;
+    const cookieDomain = (args: string[] | undefined) =>
+      args?.find((a) => a.startsWith('NEXT_PUBLIC_COOKIE_DOMAIN='));
+    expect(cookieDomain(web.build?.args)).toBeDefined();
+    expect(cookieDomain(imago.build?.args)).toBe(cookieDomain(web.build?.args));
   });
 });
 
@@ -144,6 +164,21 @@ describe('imago-image.yml (PR proof that the image builds and boots)', () => {
     expect(buildStep!.with).toMatchObject({ context: '.', file: 'apps/imago/Dockerfile', push: false, load: true });
     expect(buildStep!.with?.['cache-from']).toBeDefined();
     expect(buildStep!.with?.['cache-to']).toBeDefined();
+  });
+
+  it('given a sentinel NEXT_PUBLIC_COOKIE_DOMAIN build arg, should require it in the built client bundle (IMG-1.7a)', () => {
+    const args = String(buildStep!.with?.['build-args'] ?? '')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const arg = args.find((a) => a.startsWith('NEXT_PUBLIC_COOKIE_DOMAIN='));
+    expect(arg).toBeDefined();
+    const sentinel = arg!.slice('NEXT_PUBLIC_COOKIE_DOMAIN='.length);
+    // A value no source file contains, so finding it proves the build inlined it.
+    expect(sentinel).toMatch(/^\.[a-z0-9.-]+\.test$/);
+    expect(read('apps/imago/src/lib/theme/theme-provider.tsx')).not.toContain(sentinel);
+    const runs = steps.map((s) => s.run ?? '').join('\n');
+    expect(runs).toContain(`grep -rqF -- '${sentinel}' apps/imago/.next/static`);
   });
 
   it('should never log in to a registry or deploy', () => {

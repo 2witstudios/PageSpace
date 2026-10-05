@@ -197,6 +197,7 @@ services:
       dockerfile: apps/imago/Dockerfile
       args:
         - NEXT_PUBLIC_REALTIME_URL=${NEXT_PUBLIC_REALTIME_URL}
+        - NEXT_PUBLIC_COOKIE_DOMAIN=${NEXT_PUBLIC_COOKIE_DOMAIN:-localhost}
     ports:
       - "3006:3006"
     depends_on:
