@@ -1,6 +1,12 @@
-import { describe, test } from 'vitest';
+import { afterEach, describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
-import { imagoReturnPath, requestOrigin, signInLocation } from './sign-in-url';
+import {
+  basePathRelative,
+  imagoReturnPath,
+  requestOrigin,
+  signInLocation,
+  signInOrigin,
+} from './sign-in-url';
 
 const nextOf = (location: string): string | null => new URL(location).searchParams.get('next');
 
@@ -163,5 +169,113 @@ describe('requestOrigin()', () => {
       actual: missing instanceof Error,
       expected: true,
     });
+  });
+});
+
+describe('signInOrigin()', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  const thrown = (run: () => unknown): string | null => {
+    try {
+      run();
+      return null;
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  };
+
+  test('production', () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('NEXT_PUBLIC_WEB_APP_URL', 'https://elsewhere.example');
+
+    assert({
+      given: 'a production server, even with a web app URL configured',
+      should: 'keep sign-in on the origin imago was served from',
+      actual: signInOrigin('https://pagespace.ai'),
+      expected: 'https://pagespace.ai',
+    });
+  });
+
+  test('tests and any other non-development env', () => {
+    vi.stubEnv('NODE_ENV', 'test');
+
+    assert({
+      given: 'a NODE_ENV other than development',
+      should: 'keep sign-in on the origin imago was served from',
+      actual: signInOrigin('http://localhost:3006'),
+      expected: 'http://localhost:3006',
+    });
+  });
+
+  test('next dev', () => {
+    vi.stubEnv('NODE_ENV', 'development');
+    vi.stubEnv('NEXT_PUBLIC_WEB_APP_URL', '');
+
+    assert({
+      given: 'next dev with no web app URL configured',
+      should: "send sign-in to apps/web's default dev origin, which serves the page",
+      actual: signInOrigin('http://localhost:3006'),
+      expected: 'http://localhost:3000',
+    });
+
+    vi.stubEnv('NEXT_PUBLIC_WEB_APP_URL', 'http://127.0.0.1:4000/some/path?x=1');
+
+    assert({
+      given: 'next dev with a configured web app URL',
+      should: 'use only that URL\'s origin',
+      actual: signInOrigin('http://localhost:3006'),
+      expected: 'http://127.0.0.1:4000',
+    });
+  });
+
+  test('a misconfigured web app URL in next dev', () => {
+    vi.stubEnv('NODE_ENV', 'development');
+
+    vi.stubEnv('NEXT_PUBLIC_WEB_APP_URL', 'not a url');
+    assert({
+      given: 'a value that is not a URL',
+      should: 'refuse to build a sign-in origin',
+      actual: thrown(() => signInOrigin('http://localhost:3006')),
+      expected: 'NEXT_PUBLIC_WEB_APP_URL is not a valid http(s) URL: "not a url"',
+    });
+
+    vi.stubEnv('NEXT_PUBLIC_WEB_APP_URL', 'javascript:alert(1)');
+    assert({
+      given: 'a non-http scheme',
+      should: 'refuse to build a sign-in origin',
+      actual: thrown(() => signInOrigin('http://localhost:3006')),
+      expected: 'NEXT_PUBLIC_WEB_APP_URL is not a valid http(s) URL: "javascript:alert(1)"',
+    });
+  });
+});
+
+describe('basePathRelative()', () => {
+  test('paths under the basePath', () => {
+    const cases: Array<[string, string]> = [
+      ['/imago', '/'],
+      ['/imago/', '/'],
+      ['/imago/drive-1/files/page-9', '/drive-1/files/page-9'],
+    ];
+    for (const [pathname, expected] of cases) {
+      assert({
+        given: `the browser path ${pathname}`,
+        should: 'strip the basePath',
+        actual: basePathRelative(pathname),
+        expected,
+      });
+    }
+  });
+
+  test('paths outside the basePath', () => {
+    for (const pathname of ['/imagoevil', '/auth/signin', '/', '']) {
+      assert({
+        given: `the browser path "${pathname}"`,
+        should: 'not claim it as an imago path',
+        actual: basePathRelative(pathname),
+        expected: null,
+      });
+    }
   });
 });

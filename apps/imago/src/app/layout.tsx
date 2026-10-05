@@ -4,6 +4,7 @@ import { notFound } from 'next/navigation';
 import { Geist, Geist_Mono } from 'next/font/google';
 import { getRequestNonce } from '@/lib/request-nonce';
 import { isImagoEnabled } from '@/lib/imago-enabled';
+import { ImagoSWRProvider } from '@/api/swr-provider';
 
 // Self-hosted by next/font: served same-origin, so the CSP needs no font host.
 const sans = Geist({
@@ -44,7 +45,8 @@ export default async function RootLayout({
             __html: `__webpack_nonce__ = ${JSON.stringify(nonce)};`,
           }}
         />
-        {children}
+        {/* One SWR cache for the whole app; the shell layout never remounts. */}
+        <ImagoSWRProvider>{children}</ImagoSWRProvider>
       </body>
     </html>
   );
