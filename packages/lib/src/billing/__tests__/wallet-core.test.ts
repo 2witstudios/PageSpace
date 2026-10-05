@@ -645,7 +645,7 @@ describe('evaluateCaps', () => {
   });
 });
 
-describe('writing a per-consumer cap (WAL-7)', () => {
+describe('writing a per-consumer cap', () => {
   it('WAL-7 (partial) enabling caps with nothing named takes the D20.5 defaults, 10 credits a day and 100 a month', () => {
     expect(planConsumerCapWrite({}, null)).toEqual({ kind: 'set', caps: DEFAULT_CONSUMER_CAPS });
     expect(DEFAULT_CONSUMER_CAPS).toEqual({ dailyCents: c(10), monthlyCents: c(100) });
@@ -836,7 +836,7 @@ describe('wallet-core purity', () => {
   });
 });
 
-describe('the chosen source a fallback moved off, from its wallet row (WAL-6b)', () => {
+describe('the chosen source a fallback moved off, from its wallet row', () => {
   it.each([
     ['a child wallet is a drive wallet', { ownerType: 'org', parentWalletId: 'w-pool' }, 'drive_wallet'],
     ['a personal drive\'s wallet is a drive wallet too', { ownerType: 'user', parentWalletId: 'w-jono' }, 'drive_wallet'],

@@ -472,7 +472,7 @@ describe('spend-target purity', () => {
   });
 });
 
-describe('spend-target: a drive-wallet leg capped per consumer (WAL-7)', () => {
+describe('spend-target: a drive-wallet leg capped per consumer', () => {
   const leg = walletLeg('w-product', 'active', c(1200));
   it('WAL-7 (partial) with no cap row the leg is the wallet, unchanged', () => {
     expect(cappedConsumerLeg(leg, null)).toEqual(leg);
