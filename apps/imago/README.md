@@ -39,10 +39,13 @@ Imago needs the rest of the stack, because it uses classic's database, sessions 
      explains (sign-in redirects, absolute links, the Socket.IO server).
 3. **Allow Imago's origin.** In dev, Imago (`:3006`) is a different origin from `apps/web`
    (`:3000`), so `apps/web` (CSRF and origin checks) and `apps/realtime` (Socket.IO CORS) both have
-   to accept it. Add it to their env:
+   to accept it. Each reads it from a different file: `apps/web` from its own env
+   (`apps/web/.env.local`, as Next.js loads it), and `apps/realtime` from the repo-root `.env`,
+   the file its server loads (`dotenv.config({ path: '../../.env' })`), not `apps/realtime/.env`.
+   Add it to both:
 
    ```bash
-   # apps/web/.env.local and apps/realtime/.env
+   # apps/web/.env.local  and  the repo-root .env (for apps/realtime)
    ADDITIONAL_ALLOWED_ORIGINS=http://localhost:3006
    ```
 

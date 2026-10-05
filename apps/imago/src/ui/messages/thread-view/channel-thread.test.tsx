@@ -233,18 +233,48 @@ describe('ChannelThread', () => {
     });
 
     test('an id that is not one of the drive’s channels', async () => {
-      const { container } = show({
+      const { container, web } = show({
         ...routes(),
         [CHANNELS]: () => Response.json({ items: [], pagination: { hasMore: false, nextCursor: null } }),
       });
       await settle(() => {
         if (!container.querySelector('[data-not-found]')) throw new Error('no not-found');
+        if (web.count(MESSAGES) === 0) throw new Error('posts not asked for');
       });
+      // Well past the 20ms mark-read delay, with the posts answered.
+      await act(() => new Promise((resolve) => setTimeout(resolve, 150)));
       assert({
-        given: 'a page id the drive does not list as a channel',
-        should: 'draw the not-found object',
-        actual: notFound(container)[0],
-        expected: 'Channel not found',
+        given: 'a page id the drive does not list as a channel, whose posts the server still answers',
+        should: 'draw the not-found object and never mark it read',
+        actual: [notFound(container)[0], web.count(READ)],
+        expected: ['Channel not found', 0],
+      });
+    });
+
+    test('posts that arrive before the channel list', async () => {
+      let answerChannels: (response: Response) => void = () => {};
+      const { container, web } = show({
+        ...routes(),
+        [CHANNELS]: () =>
+          new Promise<Response>((resolve) => {
+            answerChannels = resolve;
+          }),
+      });
+      await settle(() => {
+        if (container.querySelectorAll('ol > li').length === 0) throw new Error('posts not loaded');
+      });
+      await act(() => new Promise((resolve) => setTimeout(resolve, 150)));
+      const beforeList = web.count(READ);
+      act(() => answerChannels(Response.json({ items: [], pagination: { hasMore: false, nextCursor: null } })));
+      await settle(() => {
+        if (!container.querySelector('[data-not-found]')) throw new Error('no not-found');
+      });
+      await act(() => new Promise((resolve) => setTimeout(resolve, 150)));
+      assert({
+        given: 'posts shown while the drive’s channels are still loading, which then do not list the id',
+        should: 'not mark it read before the list answers, nor after it says not-found',
+        actual: [beforeList, web.count(READ)],
+        expected: [0, 0],
       });
     });
 

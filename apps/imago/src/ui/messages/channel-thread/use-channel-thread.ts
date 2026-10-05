@@ -38,6 +38,12 @@ export type UseChannelThreadOptions = {
   readonly markReadDelayMs?: number;
   /** The clock a sending post is stamped with until apps/web stores it. */
   readonly now?: () => Date;
+  /**
+   * Whether the drive's channel list names this channel. Until it does (still
+   * loading, or the id is not one of the drive's channels), nothing is marked
+   * read: an address that names no channel is never viewed.
+   */
+  readonly listed?: boolean;
 };
 
 /** How a send ended: stored, or refused with what to tell the viewer. */
@@ -64,6 +70,7 @@ export const useChannelThread = ({
   viewerId,
   markReadDelayMs = MARK_READ_DEBOUNCE_MS,
   now = systemNow,
+  listed = true,
 }: UseChannelThreadOptions) => {
   const client = useApiClient();
   const [stored, dispatch] = useReducer(threadReducer, pageId, initialThreadState);
@@ -99,7 +106,7 @@ export const useChannelThread = ({
 
   // What has been read: the open, and each post from others heard since.
   const marked = useRef<string | null>(null);
-  const viewed = state.status === 'ready';
+  const viewed = state.status === 'ready' && listed;
   const seen = `${pageId}#${state.heard}`;
   useEffect(() => {
     if (!viewed || marked.current === seen) return;

@@ -35,8 +35,14 @@ const blank = { draft: '', error: null };
  */
 export function ChannelThread({ driveId, pageId, viewerId, now = systemNow, markReadDelayMs }: ChannelThreadProps) {
   const { channels } = useDriveChannels(driveId);
-  const { state, loadOlder, send, retry } = useChannelThread({ pageId, viewerId, markReadDelayMs, now });
   const listed = channels?.find((candidate) => candidate.id === pageId);
+  const { state, loadOlder, send, retry } = useChannelThread({
+    pageId,
+    viewerId,
+    markReadDelayMs,
+    now,
+    listed: listed !== undefined,
+  });
   const name = listed?.name ?? 'Channel';
 
   const [drafts, setDrafts] = useState<Drafts>({});
