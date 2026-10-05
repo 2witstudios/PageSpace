@@ -30,7 +30,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, eq, inArray, ne, sql } from '@pagespace/db/operators';
+import { and, eq, inArray, isNotNull, ne, or, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { imagoDriveAccess } from '@pagespace/db/schema/imago-drive-access';
@@ -88,6 +88,8 @@ export async function imagoOnDriveIds(
     .from(drives)
     .leftJoin(imagoDriveAccess, and(eq(imagoDriveAccess.driveId, drives.id), eq(imagoDriveAccess.userId, userId)))
     .where(and(
+      // Only drives the user owns or made a choice for: the rest are off.
+      or(eq(drives.ownerId, userId), isNotNull(imagoDriveAccess.userId)),
       eq(drives.kind, 'STANDARD'),
       eq(drives.isTrashed, false),
       driveIds ? inArray(drives.id, [...driveIds]) : undefined,
