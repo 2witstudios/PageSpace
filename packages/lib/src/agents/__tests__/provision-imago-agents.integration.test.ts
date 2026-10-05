@@ -68,6 +68,8 @@ async function agentPagesIn(driveId: string) {
     .where(and(eq(pages.driveId, driveId), eq(pages.type, 'AI_CHAT'), eq(pages.isTrashed, false)));
 }
 
+const CONCURRENT_SIGN_INS_TIMEOUT_MS = 30_000;
+
 // File level, not inside a describe: both suites below depend on it, and a
 // describe-scoped hook would not run when a -t filter skips that describe,
 // leaving the other suite to return early and pass vacuously.
@@ -406,6 +408,10 @@ describe('provisionHomeDriveIfNeeded → Imago agents (real Postgres)', () => {
   // for the next sequential number (it leaves the family after a conflict).
   // 16 is above the old 5-attempt budget with room to spare, and above the
   // default pool of 10, so transactions also queue for connections.
+  // That queueing is the cost: ~3.2s in CI's coverage pass with the user row
+  // lock fixed (IMG-4.2a), and past vitest's 5s default on a loaded runner. The
+  // work is real, not a hang, so it gets an explicit budget instead of a smaller
+  // fan-out.
   it('given 16 concurrent first sign-ins of different users, should provision every Home drive', async () => {
     if (!dbAvailable) return;
     const newUsers = await factories.createUsers(16);
@@ -420,7 +426,7 @@ describe('provisionHomeDriveIfNeeded → Imago agents (real Postgres)', () => {
     expect(homes).toHaveLength(newUsers.length);
     expect(new Set(homes.map((home) => home.subdomain)).size).toBe(newUsers.length);
     for (const user of newUsers) expect(await pointersFor(user.id)).toHaveLength(BUILTIN_AGENT_KEYS.length);
-  });
+  }, CONCURRENT_SIGN_INS_TIMEOUT_MS);
 
   it('given an existing user owning other drives, should create Home with the agents but no tutorial content', async () => {
     if (!dbAvailable) return;
