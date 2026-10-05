@@ -25,9 +25,13 @@ export const chatSlotClass = (layout: PaneLayout): string => {
 /** The frame fills the viewport: the panes scroll, the page never does. */
 export const shellClass = 'flex h-screen w-full overflow-hidden';
 
-/** One rail width for every stage (myimago ADR 0029 decision 4). */
+/**
+ * One rail width for every stage (myimago ADR 0029 decision 4). Its glass
+ * makes it a stacking context, so it takes its own layer above the panes:
+ * otherwise the later list pane paints over its tooltips and ⋯ menu.
+ */
 export const railClass =
-  'flex h-full w-rail-width flex-none flex-col items-center gap-rail-gap border-r border-hairline py-rail-y surface-glass';
+  'relative z-rail flex h-full w-rail-width flex-none flex-col items-center gap-rail-gap border-r border-hairline py-rail-y surface-glass';
 
 /** The object and chat columns inside their panes. */
 export const columnClass = 'flex h-full w-full min-w-0 flex-col';

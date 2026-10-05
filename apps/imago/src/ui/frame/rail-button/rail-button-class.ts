@@ -32,14 +32,14 @@ export const railPinnedClass = 'm-0 mt-auto flex list-none flex-col items-center
 
 /** The label beside a hovered or focused control; the control carries the name. */
 export const railTooltipClass =
-  'pointer-events-none invisible absolute top-1/2 left-rail-tooltip-x z-30 -translate-y-1/2 rounded-md border border-hairline bg-surface-raised px-2 py-1 text-2xs whitespace-nowrap text-ink opacity-0 shadow-2 transition-opacity duration-120 ease-standard group-hover:visible group-hover:opacity-100 group-focus-visible:visible group-focus-visible:opacity-100';
+  'pointer-events-none invisible absolute top-1/2 left-rail-tooltip-x z-popover -translate-y-1/2 rounded-md border border-hairline bg-surface-raised px-2 py-1 text-2xs whitespace-nowrap text-ink opacity-0 shadow-2 transition-opacity duration-120 ease-standard group-hover:visible group-hover:opacity-100 group-focus-visible:visible group-focus-visible:opacity-100';
 
 /** Where an unread count sits on a rail control: its top-right corner. */
 export const railUnreadClass = 'absolute top-0 right-0';
 
 /** The ⋯ overflow's menu, opening beside the rail at the tooltip's offset. */
 export const overflowMenuClass =
-  'absolute top-0 left-rail-tooltip-x z-30 m-0 flex w-menu list-none flex-col rounded-lg border border-hairline p-1 shadow-2 surface-glass-raised';
+  'absolute top-0 left-rail-tooltip-x z-popover m-0 flex w-menu list-none flex-col rounded-lg border border-hairline p-1 shadow-2 surface-glass-raised';
 
 /** One classic deep link in the overflow menu: a ~32px sidebar row. */
 export const overflowLinkClass =
