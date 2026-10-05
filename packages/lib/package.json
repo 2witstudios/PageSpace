@@ -104,6 +104,11 @@
       "import": "./dist/agents/builtin-agents.js",
       "require": "./dist/agents/builtin-agents.js"
     },
+    "./agents/provision-imago-agents": {
+      "types": "./dist/agents/provision-imago-agents.d.ts",
+      "import": "./dist/agents/provision-imago-agents.js",
+      "require": "./dist/agents/provision-imago-agents.js"
+    },
     "./agent-workspaces/workspace-fractions": {
       "types": "./dist/agent-workspaces/workspace-fractions.d.ts",
       "import": "./dist/agent-workspaces/workspace-fractions.js",

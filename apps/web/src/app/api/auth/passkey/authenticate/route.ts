@@ -11,6 +11,7 @@ import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
 import { createExchangeCode } from '@pagespace/lib/auth/exchange-codes';
 import { SESSION_DURATION_MS } from '@pagespace/lib/auth/constants';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import {
@@ -285,6 +286,16 @@ export async function POST(req: Request) {
       loggers.auth.error('Invite consume threw during passkey auth', error as Error, {
         userId,
       });
+    }
+
+    // Passkey is the on-prem sign-in (no password auth, no email delivery), so
+    // like every other sign-in path it provisions the Home drive and the Imago
+    // agents, recreating any the user deleted. The session is already
+    // committed: a failure here is logged and never blocks the login.
+    try {
+      await provisionHomeDriveIfNeeded(userId);
+    } catch (error) {
+      loggers.auth.error('Failed to provision Home drive during passkey sign-in', error as Error, { userId });
     }
 
     const invitedDriveId = inviteResult?.invitedDriveId ?? null;

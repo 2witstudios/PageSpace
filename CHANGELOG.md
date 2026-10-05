@@ -9,6 +9,10 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Imago agents in your Home drive** — every account now gets three assistants, Imago, Imago
+  Planner and Imago Researcher, as ordinary agents in an `Imago` folder in your Home drive. They are
+  added when you sign in (including with a passkey), and one you delete comes back the next time
+  you sign in.
 - **Give an agent its own account** — in an agent's settings (Accounts), or in your personal
   settings for your global assistant, add an API key for a site so the agent can call that site's
   API for you. The agent refers to the account by name and never sees the key: PageSpace keeps it in
