@@ -85,6 +85,63 @@ describe('ChatProse', () => {
     });
   });
 
+  test('blocked images and links', () => {
+    const view = dom('An ![chart](HTTPS://evil.example/c.png) and [a link](javascript:alert(1)).');
+    const blocked = [...view.querySelectorAll('span')].filter((span) => /blocked/i.test(span.textContent ?? ''));
+    assert({
+      given: 'an image and a link that the hardening step blocks before imago’s own elements see them',
+      should: 'mark each as blocked in imago’s token classes, never the fallback’s stock grey ones, and load nothing',
+      actual: [
+        blocked.map((span) => span.className),
+        view.innerHTML.includes('gray'),
+        view.querySelector('img, [src], [srcset]'),
+      ],
+      expected: [[proseClasses.blockedImage, proseClasses.blockedLink], false, null],
+    });
+  });
+
+  test('a linked image', async () => {
+    const markdown = 'See [![the chart](https://a.example/c.png)](https://b.example/report).';
+    const html = renderToString(<ChatProse text={markdown} streaming={false} citationDriveId="d1" />);
+    const live = mount(<ChatProse text={markdown} streaming citationDriveId="d1" />);
+    await vi.waitFor(async () => {
+      await act(async () => {});
+      if (!live.textContent?.includes('the chart')) throw new Error('not rendered');
+    });
+    const view = document.createElement('div');
+    view.innerHTML = html;
+    assert({
+      given: 'an image wrapped in a link, finished and streaming',
+      should: 'render one link, to the link’s target, with the image as its text: no anchor inside an anchor and nothing loaded',
+      actual: [
+        html.match(/<a /g)?.length,
+        [...live.querySelectorAll('a')].map((anchor) => [anchor.getAttribute('href'), anchor.textContent]),
+        live.querySelectorAll('a a').length,
+        view.querySelector('a')?.getAttribute('href'),
+        [view.querySelector('img'), live.querySelector('img')],
+      ],
+      expected: [1, [['https://b.example/report', 'the chart']], 0, 'https://b.example/report', [null, null]],
+    });
+  });
+
+  test('footnotes', () => {
+    const view = dom('Ships in October[^1], says [the plan](https://example.com/plan).\n\n[^1]: The roadmap.');
+    const anchors = [...view.querySelectorAll('a')];
+    const inPage = anchors.filter((anchor) => anchor.getAttribute('href')?.startsWith('#'));
+    const web = anchors.find((anchor) => anchor.getAttribute('href') === 'https://example.com/plan');
+    assert({
+      given: 'a footnote reference and its back link beside a web link',
+      should: 'jump within the page for the footnote links, and open only the web link in a new tab',
+      actual: [
+        inPage.length >= 2,
+        inPage.map((anchor) => anchor.getAttribute('target')),
+        inPage.every((anchor) => anchor.className === proseClasses.a),
+        [web?.getAttribute('target'), web?.getAttribute('rel')],
+      ],
+      expected: [true, inPage.map(() => null), true, ['_blank', 'noopener noreferrer']],
+    });
+  });
+
   test('page citations', () => {
     const view = dom('See @[Roadmap](p1:page) and ask @[Ada](u1:user).');
     const chip = view.querySelector('a[data-citation]');

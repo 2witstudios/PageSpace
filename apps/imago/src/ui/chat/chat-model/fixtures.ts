@@ -105,3 +105,26 @@ export const messagesPage = (
   },
   rev,
 });
+
+/** GET /api/drives/[driveId]/agents: the drive's agents the viewer can view, in the route's full shape. */
+export const driveAgentsBody = (
+  agents: readonly { readonly id?: string; readonly title: string | null }[],
+  { driveId = 'd1', driveName = 'Alpha' }: { driveId?: string; driveName?: string } = {},
+) => ({
+  success: true,
+  driveId,
+  driveName,
+  driveSlug: driveName.toLowerCase(),
+  agents: agents.map((agent, position) => ({
+    ...agent,
+    parentId: 'root',
+    position,
+    aiProvider: 'default',
+    aiModel: 'default',
+    hasWelcomeMessage: false,
+    createdAt: '2026-10-01T09:00:00.000Z',
+    updatedAt: '2026-10-01T09:00:00.000Z',
+    hasSystemPrompt: false,
+  })),
+  count: agents.length,
+});

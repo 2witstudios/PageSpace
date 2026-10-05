@@ -7,6 +7,7 @@ import {
   CONVERSATIONS_PAGE_SIZE,
   createConversation,
   fetchBuiltinAgents,
+  fetchDriveAgents,
   fetchConversationMessages,
   fetchConversationsPage,
   MESSAGES_PAGE_SIZE,
@@ -15,6 +16,7 @@ import {
   agentConversation,
   assistantWithTool,
   conversationsPage,
+  driveAgentsBody,
   messagesPage,
   pointers,
   userMessage,
@@ -42,6 +44,7 @@ describe('chatPaths', () => {
         chatPaths.conversations('a1', 2),
         chatPaths.messages('a1', 'c/1'),
         chatPaths.messages('a1', 'c1', 'm 9'),
+        chatPaths.driveAgents('d 1'),
       ],
       expected: [
         '/api/user/builtin-agents',
@@ -49,6 +52,7 @@ describe('chatPaths', () => {
         `/api/ai/page-agents/a1/conversations?page=2&pageSize=${CONVERSATIONS_PAGE_SIZE}`,
         `/api/ai/page-agents/a1/conversations/c%2F1/messages?limit=${MESSAGES_PAGE_SIZE}`,
         `/api/ai/page-agents/a1/conversations/c1/messages?limit=${MESSAGES_PAGE_SIZE}&direction=before&cursor=m%209`,
+        '/api/drives/d%201/agents?includeTools=false',
       ],
     });
   });
@@ -59,6 +63,7 @@ describe('chatPaths', () => {
       chatPaths.conversations('a1', 0),
       chatPaths.messages('a1', 'c1'),
       chatPaths.messages('a1', 'c1', 'm1'),
+      chatPaths.driveAgents('d1'),
     ];
 
     assert({
@@ -107,6 +112,56 @@ describe('fetchBuiltinAgents()', () => {
       should: 'reject with its ApiError',
       actual: failure(await caught(fetchBuiltinAgents(web.client))),
       expected: [500, null, 'Failed to fetch built-in agents'],
+    });
+  });
+});
+
+describe('fetchDriveAgents()', () => {
+  test('the agents the server lists', async () => {
+    const web = fakeWeb({
+      [`GET ${chatPaths.driveAgents('d1')}`]: () =>
+        Response.json(
+          driveAgentsBody([
+            { id: 'a1', title: 'Support' },
+            { id: 'a2', title: null },
+            { id: '', title: 'Broken' },
+            { title: 'No id' },
+          ]),
+        ),
+    });
+
+    assert({
+      given: "the drive's agents as GET /api/drives/[driveId]/agents answers them, one untitled and two malformed",
+      should: 'give every well-formed one in the order given, an untitled one by a stand-in name, and drop the rest',
+      actual: await fetchDriveAgents(web.client, 'd1'),
+      expected: [
+        { id: 'a1', title: 'Support' },
+        { id: 'a2', title: 'Untitled agent' },
+      ],
+    });
+  });
+
+  test('a body without agents', async () => {
+    const web = fakeWeb({ [`GET ${chatPaths.driveAgents('d1')}`]: () => Response.json({ success: true }) });
+
+    assert({
+      given: 'a 200 whose body has no agents list',
+      should: 'reject as an invalid response',
+      actual: failure(await caught(fetchDriveAgents(web.client, 'd1'))),
+      expected: [200, INVALID_RESPONSE, 'Drive agents response carried no agents'],
+    });
+  });
+
+  test('a refusal', async () => {
+    const web = fakeWeb({
+      [`GET ${chatPaths.driveAgents('d1')}`]: () => Response.json({ error: "You don't have access to this drive" }, { status: 403 }),
+    });
+
+    assert({
+      given: 'a drive the viewer cannot reach',
+      should: 'reject with its ApiError',
+      actual: failure(await caught(fetchDriveAgents(web.client, 'd1'))),
+      expected: [403, null, "You don't have access to this drive"],
     });
   });
 });

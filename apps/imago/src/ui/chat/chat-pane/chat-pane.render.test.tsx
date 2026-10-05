@@ -5,6 +5,9 @@ import { assert } from 'riteway/vitest';
 import { assistantWithTool, userMessage } from '../chat-model/fixtures';
 import { chatMessageClass } from '../chat-message/chat-message-class';
 import {
+  chatAgentNameClass,
+  chatAgentPickerClass,
+  chatAgentSelectClass,
   chatContextLabelClass,
   chatEmptyClass,
   chatNoticeClass,
@@ -22,6 +25,8 @@ const props = (overrides: Partial<ChatPaneRenderProps> = {}): ChatPaneRenderProp
   notice: null,
   citationDriveId: 'd1',
   composer: <form data-composer="" />,
+  agents: { value: '', groups: [] },
+  selectAgent: () => {},
   ...overrides,
 });
 
@@ -96,6 +101,51 @@ describe('renderChatPane()', () => {
         [chatEmptyClass, 'Ask Imago anything. Open a page only when the work needs it.'],
         ['true', 0],
         ['The reply failed. Try again.', chatNoticeClass],
+      ],
+    });
+  });
+
+  test('the agent picker', () => {
+    const chosen: string[] = [];
+    const view = dom({
+      agentName: 'Support',
+      agents: {
+        value: 'a1',
+        groups: [
+          {
+            label: 'Imago',
+            options: [
+              { value: 'p-imago', title: 'Imago', disabled: false },
+              { value: 'pending:imago-planner', title: 'Planner', disabled: true },
+            ],
+          },
+          { label: 'Alpha', options: [{ value: 'a1', title: 'Support', disabled: false }] },
+        ],
+      },
+      selectAgent: (value) => chosen.push(value),
+    });
+    const select = view.querySelector('header select');
+    const loading = dom();
+    assert({
+      given: 'the agents to offer, Support chosen, and then nothing loaded yet',
+      should: 'name the chosen agent in a labelled select grouping the Imago agents before the drive’s, and fall back to the plain name while nothing is listed',
+      actual: [
+        [select?.getAttribute('aria-label'), select?.className, select?.parentElement?.className],
+        [...(select?.querySelectorAll('optgroup') ?? [])].map((group) => [
+          group.getAttribute('label'),
+          [...group.querySelectorAll('option')].map((option) => [option.getAttribute('value'), option.textContent, option.hasAttribute('disabled'), option.hasAttribute('selected')]),
+        ]),
+        [loading.querySelector('header select'), loading.querySelector('header span span')?.className, loading.querySelector('header span span')?.textContent],
+        chosen,
+      ],
+      expected: [
+        ['Agent', chatAgentSelectClass, chatAgentPickerClass],
+        [
+          ['Imago', [['p-imago', 'Imago', false, false], ['pending:imago-planner', 'Planner', true, false]]],
+          ['Alpha', [['a1', 'Support', false, true]]],
+        ],
+        [null, chatAgentNameClass, 'Imago'],
+        [],
       ],
     });
   });
