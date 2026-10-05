@@ -11,7 +11,8 @@ import { endOrgSubscriptionPort } from '@/lib/org-billing/org-subscription';
 type Context = { params: Promise<{ orgId: string }> };
 
 /**
- * GET /api/orgs/[orgId] — any member. `billingNotice` is the banner this caller sees on
+ * GET /api/orgs/[orgId] — any member. `viewer.role` is the CALLER'S accepted org role
+ * (OWNER | ADMIN | MEMBER), so the hub renders by role without a second call. `billingNotice` is the banner this caller sees on
  * org surfaces (SEAT-9): Owner and Admins get plan detail (reactivate + reason, a failed
  * payment, the trial end), a member only the read-only notice while the org is lapsed
  * (SEAT-6). Absent where billing is off (onprem, tenant) and when there is nothing to say.
@@ -34,6 +35,7 @@ export async function GET(request: Request, context: Context) {
     const billingNotice = await getOrgBillingNotice(orgId, gate.role ?? 'MEMBER');
     return NextResponse.json({
       organization: { id, name, slug, avatarUrl, ownerId, createdAt },
+      viewer: { userId: gate.userId, role: gate.role ?? 'MEMBER' },
       ...(billingNotice ? { billingNotice } : {}),
     });
   } catch (error) {

@@ -319,6 +319,13 @@ describe('org route behaviour', () => {
     expect(await quiet.json()).not.toHaveProperty('billingNotice');
   });
 
+  it.each(['OWNER', 'ADMIN', 'MEMBER'] as const)('UI-11 (partial) GET /api/orgs/[orgId] names the caller\'s own role (%s), so the hub renders by role', async (role) => {
+    asRole(role);
+    const res = await orgRoute.GET(req('GET'), params({ orgId: ORG_ID }));
+    expect(res.status).toBe(200);
+    expect((await res.json()).viewer).toEqual({ userId: expect.any(String), role });
+  });
+
   it('ORG-1 (partial) POST /api/orgs makes the caller the Owner and never returns billing ids', async () => {
     const res = await orgsRoute.POST(req('POST', { name: 'Northwind Labs', slug: 'Northwind', avatarUrl: 'https://example.test/n.png' }));
     expect(res.status).toBe(201);
