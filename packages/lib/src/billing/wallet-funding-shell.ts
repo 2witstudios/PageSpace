@@ -30,7 +30,7 @@
 import { db } from '@pagespace/db/db';
 import { creditLedger, creditHolds } from '@pagespace/db/schema/credits';
 import { wallets, walletFundingLegs, personalRootWalletOf } from '@pagespace/db/schema/wallets';
-import { organizations } from '@pagespace/db/schema/organizations';
+import { organizations, orgSubscriptions } from '@pagespace/db/schema/organizations';
 import { users } from '@pagespace/db/schema/auth';
 import { subscriptions } from '@pagespace/db/schema/subscriptions';
 import { and, asc, eq, gt, inArray, isNotNull, isNull, lte, or, lt, sql } from '@pagespace/db/operators';
@@ -120,6 +120,12 @@ function customerIdOf(invoice: OrgInvoice): string | null {
   return typeof c === 'string' ? c : c.id ?? null;
 }
 
+function invoiceSubscriptionIdOf(invoice: OrgInvoice): string | null {
+  const s = invoice.parent?.subscription_details?.subscription;
+  if (typeof s === 'string') return s.length > 0 ? s : null;
+  return typeof s?.id === 'string' && s.id.length > 0 ? s.id : null;
+}
+
 function hasSubscriptionParent(invoice: OrgInvoice): boolean {
   const s = invoice.parent?.subscription_details?.subscription;
   if (typeof s === 'string') return s.length > 0;
@@ -155,6 +161,19 @@ export async function applyOrgPoolRefill(invoice: OrgInvoice, opts: OrgPoolRefil
   if (!stripeRef) return { kind: 'nothing', orgId: org.id, reason: 'no_invoice_id' };
 
   const lines = invoice.lines?.data ?? [];
+  const gifted = invoice.parent?.subscription_details?.metadata?.type === GIFT_SUBSCRIPTION_METADATA_TYPE;
+  // Review #2761 P2-4: a gift funds the pool only on the org's OWN stored subscription — the one its
+  // status is read from. Read only for a gift: every other invoice is sized from what it paid.
+  let onOrgSubscription = false;
+  if (gifted) {
+    const invoiceSubscriptionId = invoiceSubscriptionIdOf(invoice);
+    const [stored] = await db
+      .select({ stripeSubscriptionId: orgSubscriptions.stripeSubscriptionId })
+      .from(orgSubscriptions)
+      .where(eq(orgSubscriptions.orgId, org.id))
+      .limit(1);
+    onOrgSubscription = invoiceSubscriptionId !== null && stored?.stripeSubscriptionId === invoiceSubscriptionId;
+  }
   const grant = orgPoolRefillGrant(
     {
       lines,
@@ -162,12 +181,22 @@ export async function applyOrgPoolRefill(invoice: OrgInvoice, opts: OrgPoolRefil
       hasSubscriptionParent: hasSubscriptionParent(invoice),
       billingReason: invoice.billing_reason,
       subtotalCents: invoice.subtotal,
-      gifted: invoice.parent?.subscription_details?.metadata?.type === GIFT_SUBSCRIPTION_METADATA_TYPE,
+      gifted,
+      onOrgSubscription,
       extraSeats: opts.extraSeats,
     },
     opts.active ?? MONEY_MODEL_V2_ACTIVE,
   );
   if (grant.allowanceCents <= 0) {
+    if (grant.reason === 'gift_not_org_subscription') {
+      // An operator gifted a subscription the org never mirrors: no credit lands in a pool the org
+      // cannot spend. Fix it by applying the gift coupon to the org's own subscription (runbook).
+      loggers.api.error('org pool refill REFUSED: gift invoice is not on the org\'s own subscription', undefined, {
+        orgId: org.id,
+        stripeRef,
+        invoiceSubscriptionId: invoiceSubscriptionIdOf(invoice),
+      });
+    }
     loggers.api.info('org pool refill: invoice grants nothing', { orgId: org.id, stripeRef, reason: grant.reason, paidCents: grant.paidCents });
     return { kind: 'nothing', orgId: org.id, reason: grant.reason };
   }

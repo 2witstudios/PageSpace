@@ -33,7 +33,7 @@ import { requireDb } from '@pagespace/db/test/require-db';
 import { createOrganization } from '@pagespace/lib/organizations/repository';
 import { getOrgStatus } from '@pagespace/lib/organizations/status';
 import { ORG_ID_METADATA_KEY, ORG_SUBSCRIPTION_KIND, type OrgBusinessPrices } from '@pagespace/lib/billing/org-subscription-core';
-import { orgPoolRefillGrant } from '@pagespace/lib/billing/wallet-funding';
+import { orgPoolListPriceGrantCents, orgPoolRefillGrant } from '@pagespace/lib/billing/wallet-funding';
 import { centsFromDollars, tierListPriceCents } from '@pagespace/lib/billing/money-model';
 import { TIER_PLAN_LIMITS } from '@pagespace/lib/billing/subscription-tiers';
 import { stripeConfig } from '@/lib/stripe-config';
@@ -421,6 +421,29 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
     expect(after).toMatchObject({ extraSeatQuantity: 3, seatRevision: before.seatRevision + 1, stripeSeatItemId: before.stripeSeatItemId, stripeBaseItemId: before.stripeBaseItemId });
     expect(await deliver(updated)).toBe(200);
     expect(await storedSub(org.orgId)).toMatchObject({ extraSeatQuantity: 3, seatRevision: before.seatRevision + 1 });
+  });
+
+  it('D-OW-23 review #2761 P2-4: a GIFT funds the pool at list × ratio only on the org\'s OWN subscription; a gift on a separately created subscription (never mirrored, so the org stays lapsed) funds nothing', async () => {
+    if (!dbAvailable) return;
+    const giftMeta = (orgId: string) => ({ ...orgMetadata(orgId), type: 'gift_subscription' });
+
+    // An operator's separate gift subscription on the org's customer: refused, nothing lands.
+    const stray = await northwind(7);
+    const strayGift = invoiceObject({ customer: stray.customerId, subscriptionId: 'sub_owd3_separate_gift', metadata: giftMeta(stray.orgId), seats: 2, paid: false, billingReason: 'subscription_cycle', periodStart: 1_800_000_000 });
+    expect(await deliver(eventPayload('invoice.paid', strayGift))).toBe(200);
+    const strayPool = await poolOf(stray.orgId);
+    expect(strayPool === null ? 0 : strayPool.monthlyRemainingCents).toBe(0);
+    if (strayPool) expect(await ledgerRows(strayPool.id)).toHaveLength(0);
+
+    // The gift coupon on the org's OWN subscription (the runbook procedure): funded at list × ratio.
+    const own = await northwind(7);
+    fakeHolder.current = own.stripe;
+    const ownGift = invoiceObject({ customer: own.customerId, subscriptionId: own.subscriptionId, metadata: giftMeta(own.orgId), seats: 2, paid: false, billingReason: 'subscription_cycle', periodStart: 1_800_000_000 });
+    expect(await deliver(eventPayload('invoice.paid', ownGift))).toBe(200);
+    const ownPool = await poolOf(own.orgId);
+    expect(ownPool?.monthlyRemainingCents).toBe(orgPoolListPriceGrantCents(2));
+    expect(ownPool?.monthlyRemainingCents).toBeGreaterThan(0);
+    expect(await ledgerRows(ownPool!.id)).toHaveLength(1);
   });
 
   it('SEAT-7 (partial) MON-3 (partial) replaying the same org invoice.paid event is a no-op: one grant, no second Stripe read, no second write', async () => {

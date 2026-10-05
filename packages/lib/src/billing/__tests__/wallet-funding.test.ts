@@ -74,12 +74,20 @@ describe('wallet-funding: org pool refill', () => {
 
   it('D-OW-23 a gifted org subscription (the admin path) is still funded at list price × ratio through the one named function', () => {
     const grant = orgPoolRefillGrant(
-      { lines: [giftedBase], amountPaidCents: 0, hasSubscriptionParent: true, billingReason: 'subscription_cycle', subtotalCents: 5000, gifted: true },
+      { lines: [giftedBase], amountPaidCents: 0, hasSubscriptionParent: true, billingReason: 'subscription_cycle', subtotalCents: 5000, gifted: true, onOrgSubscription: true },
       true,
     );
     expect(ORG_POOL_FUNDS_GIFTS).toBe(true);
     expect(grant).toMatchObject({ allowanceCents: orgPoolListPriceGrantCents(0, true), basis: 'list', reason: 'gifted' });
     expect(orgPoolListPriceGrantCents(0, true)).toBe(3000);
+  });
+
+  it('D-OW-23 review #2761 P2-4: a gift NOT on the org\'s own subscription (a separately created gift subscription the org never mirrors) grants nothing — fail closed, no money into a pool the org cannot spend', () => {
+    const gift = { lines: [giftedBase], amountPaidCents: 0, hasSubscriptionParent: true, billingReason: 'subscription_cycle', subtotalCents: 5000, gifted: true };
+    for (const onOrgSubscription of [false, undefined]) {
+      expect(orgPoolRefillGrant({ ...gift, onOrgSubscription }, true)).toEqual({ paidCents: 0, allowanceCents: 0, basis: 'none', reason: 'gift_not_org_subscription' });
+    }
+    expect(orgPoolRefillGrant({ ...gift, onOrgSubscription: true }, true)).toMatchObject({ basis: 'list', reason: 'gifted' });
   });
 
   it('a 100% coupon on a non-gifted org subscription grants nothing: the line keeps list price, its discount takes it to 0', () => {
@@ -111,7 +119,7 @@ describe('wallet-funding: org pool refill', () => {
 
   it('D-OW-23 with gift funding OFF a gift grants nothing — the policy is one switch', () => {
     const gift = orgPoolRefillGrant(
-      { lines: [giftedBase], amountPaidCents: 0, hasSubscriptionParent: true, billingReason: 'subscription_cycle', subtotalCents: 5000, gifted: true },
+      { lines: [giftedBase], amountPaidCents: 0, hasSubscriptionParent: true, billingReason: 'subscription_cycle', subtotalCents: 5000, gifted: true, onOrgSubscription: true },
       true,
       false,
     );

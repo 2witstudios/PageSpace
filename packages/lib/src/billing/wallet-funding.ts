@@ -92,6 +92,11 @@ export interface OrgPoolRefillInput {
   subtotalCents?: number | null;
   /** The org subscription was gifted by an admin. */
   gifted?: boolean;
+  /**
+   * Review #2761 P2-4: the invoice is on the org's OWN stored subscription (the one the mirror
+   * reads its status from). A gift elsewhere funds nothing; absent reads as false (fail closed).
+   */
+  onOrgSubscription?: boolean;
   /** Extra seats on the subscription, for sizing a gift at list price. */
   extraSeats?: number;
 }
@@ -136,6 +141,9 @@ export function orgPoolRefillGrant(
     return { paidCents, allowanceCents: 0, basis: 'none', reason: 'not_a_subscription_invoice' };
   }
   if (fundGifts && input.gifted === true) {
+    // A gift on any subscription but the org's own funds a pool the org could never spend: the
+    // org's status reads its own subscription, so it stays lapsed. Grant nothing (review #2761 P2-4).
+    if (input.onOrgSubscription !== true) return { paidCents, allowanceCents: 0, basis: 'none', reason: 'gift_not_org_subscription' };
     const allowanceCents = orgPoolListPriceGrantCents(input.extraSeats ?? 0, active);
     return allowanceCents > 0
       ? { paidCents, allowanceCents, basis: 'list', reason: 'gifted' }
