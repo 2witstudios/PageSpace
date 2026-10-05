@@ -60,7 +60,14 @@ export interface ConsumerSpend {
   /** `user:<id>` for a person, `drive:<id>` for the drive's automations (SPEND-6). */
   consumerKey: string;
   userId: string | null;
+  /** The person's name, so the UI never resolves an id (null when unknown). */
+  displayName: string | null;
   spentCents: number;
+}
+
+/** A spend-by-member row as the lead and admins see it: the amount also as a credit count. */
+export interface ConsumerSpendView extends ConsumerSpend {
+  spentCredits: string;
 }
 
 export interface PoolFacts {
@@ -154,12 +161,17 @@ export interface LeadWalletView extends Omit<ConsumerWalletView, 'viewer'> {
   fallbackRule: FallbackRule | null;
   /** WAL-6c: where this wallet's overshoot lands; null is the default (absorb into the parent). */
   overshootChoice: OvershootFunderChoice | null;
-  spendByConsumer: ConsumerSpend[];
+  /** The amounts above as credit counts, so the client never converts (money model). */
+  allocationCredits: string;
+  spentCredits: string;
+  topupRemainingCredits: string;
+  debtCredits: string;
+  spendByConsumer: ConsumerSpendView[];
 }
 
 export interface OrgAdminWalletView extends Omit<LeadWalletView, 'viewer'> {
   viewer: 'org_admin';
-  pool: { walletId: string; availableCents: number; unallocatedCents: number } | null;
+  pool: { walletId: string; availableCents: number; unallocatedCents: number; availableCredits: string; unallocatedCredits: string } | null;
 }
 
 export type DriveWalletView = ConsumerWalletView | LeadWalletView | OrgAdminWalletView;
@@ -190,7 +202,17 @@ function leadFields(facts: DriveWalletFacts): Omit<LeadWalletView, 'viewer'> {
     periodEnd: w.monthlyPeriodEnd?.toISOString() ?? null,
     fallbackRule: w.fallbackRule,
     overshootChoice: w.overshootChoice,
-    spendByConsumer: facts.spendByConsumer.map((s) => ({ consumerKey: s.consumerKey, userId: s.userId, spentCents: whole(s.spentCents) })),
+    allocationCredits: formatCreditCount(whole(w.monthlyAllowanceCents)),
+    spentCredits: formatCreditCount(whole(w.spentCents)),
+    topupRemainingCredits: formatCreditCount(whole(w.topupRemainingCents)),
+    debtCredits: formatCreditCount(whole(w.debtCents)),
+    spendByConsumer: facts.spendByConsumer.map((s) => ({
+      consumerKey: s.consumerKey,
+      userId: s.userId,
+      displayName: s.displayName,
+      spentCents: whole(s.spentCents),
+      spentCredits: formatCreditCount(whole(s.spentCents)),
+    })),
   };
 }
 
@@ -207,7 +229,13 @@ export function projectDriveWallet(viewer: WalletViewer, facts: DriveWalletFacts
         viewer,
         ...leadFields(facts),
         pool: facts.pool
-          ? { walletId: facts.pool.walletId, availableCents: whole(facts.pool.availableCents), unallocatedCents: poolUnallocatedCents(facts.pool) }
+          ? {
+              walletId: facts.pool.walletId,
+              availableCents: whole(facts.pool.availableCents),
+              unallocatedCents: poolUnallocatedCents(facts.pool),
+              availableCredits: formatCreditCount(whole(facts.pool.availableCents)),
+              unallocatedCredits: formatCreditCount(poolUnallocatedCents(facts.pool)),
+            }
           : null,
       };
     case 'none':

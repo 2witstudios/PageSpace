@@ -35,6 +35,9 @@ export const WALLET_ACTIONS = [
   'set_rules',
   'delete',
   'donate',
+  // WAL-7: write a consumer's per-consumer caps on the wallet. Money authority, so org admins on
+  // an org drive and the lead (the wallet's owner) on a personal drive — never the org drive lead.
+  'set_caps',
 ] as const;
 export type WalletAction = (typeof WALLET_ACTIONS)[number];
 
@@ -119,4 +122,27 @@ export function credentialRefusalFor(credential: WalletCredential, write: Wallet
 export function viewerForCredential(viewer: Exclude<WalletViewer, 'none'>, credential: WalletCredential): Exclude<WalletViewer, 'none'> {
   if (credential === 'session') return viewer;
   return viewer === 'guest' ? 'guest' : 'member';
+}
+
+// ---------------------------------------------------------------------------
+// Seat caps on the org pool (WAL-7)
+// ---------------------------------------------------------------------------
+
+export type SeatCapWriteDecision =
+  | { ok: true }
+  | { ok: false; status: 403 | 404; code: 'org_not_found' | 'insufficient_role' | 'not_org_member' };
+
+/**
+ * Who may write a member's caps on the org pool leg (their seat): the org's Owner or an Admin
+ * (the pool's money authority, as for every org leg), for a person who holds an ACCEPTED role in
+ * that org. A non-member caller learns nothing about the org (404).
+ */
+export function decideSeatCapWrite(input: {
+  actorRole: 'OWNER' | 'ADMIN' | 'MEMBER' | null;
+  consumerRole: 'OWNER' | 'ADMIN' | 'MEMBER' | null;
+}): SeatCapWriteDecision {
+  if (input.actorRole === null) return { ok: false, status: 404, code: 'org_not_found' };
+  if (input.actorRole !== 'OWNER' && input.actorRole !== 'ADMIN') return { ok: false, status: 403, code: 'insufficient_role' };
+  if (input.consumerRole === null) return { ok: false, status: 404, code: 'not_org_member' };
+  return { ok: true };
 }

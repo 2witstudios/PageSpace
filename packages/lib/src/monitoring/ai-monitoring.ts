@@ -1323,6 +1323,10 @@ export interface AIUsageData {
   // user. Absent for un-gated calls, which charge the personal root wallet.
   walletId?: string;
 
+  // WAL-6b: for a call with no hold of its own, the chosen wallet its turn's fallback moved off
+  // (spendFallbackFromWalletId of the turn's target), so its overshoot never lands on the person.
+  fallbackFromWalletId?: string;
+
   // What the spend is FOR: an AI call (the default) or compute (WAL-9). Written on the
   // ledger rows and stamped into metadata.spendKind, so the orphan recovery re-settles
   // with the same kind; compute on an org pool never counts toward a seat.
@@ -1624,6 +1628,7 @@ export async function trackAIUsage(data: AIUsageData): Promise<UsageTrackingOutc
           costDollars: cost,
           holdId: data.holdId,
           walletId: data.walletId,
+          ...(data.fallbackFromWalletId ? { fallbackFromWalletId: data.fallbackFromWalletId } : {}),
           spendKind: data.spendKind,
           // Scope the live balance push so the per-conversation usage monitor
           // refreshes the right view; the navbar widget updates regardless.

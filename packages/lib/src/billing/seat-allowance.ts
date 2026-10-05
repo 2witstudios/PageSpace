@@ -72,7 +72,10 @@ export interface SeatCapFacts {
    * D20.5's 10-credit day is below one call's reservation and would refuse every seat call.
    */
   dailyCapCents: number | null;
-  /** Settled spend net of each window's own absorbed overshoot, plus holds: what the caps judge. */
+  /**
+   * What the caps judge: each window's GROSS settled spend counted as min(gross, the cap in force
+   * now), plus live holds. The seat-overshoot rows are attribution only and never read here.
+   */
   usage: SeatUsage;
   /** Each window's gross settled spend and what the pool absorbed of it (the settle-side facts). */
   windows: { period: SeatWindowCharge; day: SeatWindowCharge };

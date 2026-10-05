@@ -25,9 +25,10 @@ import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { and, eq, isNull, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
 import { chargeMillicents, accruePending, allocateSpend, applyPaymentToDebt } from './credit-core';
-import { allocateWalletSpend, settleOvershoot, seatOvershootDeltaMillicents, DEFAULT_OVERSHOOT_CHOICE, type OvershootFunderChoice } from './wallet-core';
+import { allocateWalletSpend, settleOvershoot, seatOvershootDeltaMillicents, chosenSourceCharge, walletSourceKind, DEFAULT_OVERSHOOT_CHOICE, type ChosenSourceCharge, type OvershootFunderChoice } from './wallet-core';
 import { childWalletFunds, type WalletBalanceFacts } from './spend-target';
 import { readOrgSpendPolicy } from '../organizations/policy-reader';
+import { isOrgActive } from '../organizations/status';
 import { isSeatCountedSpendKind, loadSeatCapFacts, SEAT_OVERSHOOT_ENTRY } from './seat-allowance';
 import { drawWalletFundingLegs, creditWalletFundingLegs } from './wallet-legs';
 import { parseWalletDraws, addWalletDraws, planWalletRefund, type WalletDraws } from './wallet-draws';
@@ -37,6 +38,8 @@ import { emitCreditsUpdated } from './credit-emit';
 import { ensurePersonalRootWalletId } from './personal-wallet';
 import { loggers } from '../logging/logger-config';
 import { notifyFunderOfWalletDebt } from './wallet-debt-notifier';
+import { notifyCapAlerts } from './wallet-cap-alerts';
+import { announceWalletChange } from './wallet-change-events';
 import { errorLogFields } from '../logging/error-cause';
 
 export interface ConsumeCreditsInput {
@@ -57,6 +60,12 @@ export interface ConsumeCreditsInput {
    * charge did before wallets.
    */
   walletId?: string;
+  /**
+   * WAL-6b for a call with NO hold of its own (a nested agent call inside a gated turn): the
+   * chosen wallet the turn's fallback moved off (spendFallbackFromWalletId of its target).
+   * A hold that names one wins; this only fills in where there is no hold to read it from.
+   */
+  fallbackFromWalletId?: string;
   /**
    * Optional scope so the live `credits:updated` push can carry conversation/page
    * hints (the per-conversation usage monitor filters on them). Live chat routes
@@ -127,8 +136,12 @@ async function decrementAndSettle(
   aiUsageLogId: string | null,
   holdId: string | null = null,
   spendKind: SpendKind = 'ai',
+  carriedFallbackFromWalletId: string | null = null,
 ): Promise<SettleOutcome | null> {
-  const settled = await chargeWallet(tx, walletId, chargeMc, aiUsageLogId);
+  // WAL-6b: the hold names the source a drive rule moved this call off, if it did; read before
+  // the hold is released below. A call with no hold uses what its turn carried.
+  const fallbackFromWalletId = (holdId ? await holdFallbackFromWalletId(tx, holdId) : null) ?? carriedFallbackFromWalletId;
+  const settled = await chargeWallet(tx, walletId, chargeMc, aiUsageLogId, fallbackFromWalletId);
 
   // No balance row yet (e.g. an existing user before the gate lazy-inits one).
   // Leave the ledger row 'pending' so the reconcile cron retries once a balance
@@ -289,7 +302,46 @@ export interface WalletSettlement {
   debt: { walletId: string; cents: number } | null;
 }
 
-type LockedWallet = WalletBalanceFacts & { pendingMillicents: number; overshootChoice: OvershootFunderChoice | null };
+type LockedWallet = WalletBalanceFacts & {
+  pendingMillicents: number;
+  overshootChoice: OvershootFunderChoice | null;
+  ownerType: 'user' | 'org';
+};
+
+async function holdFallbackFromWalletId(tx: Tx, holdId: string): Promise<string | null> {
+  const [hold] = await tx.select({ id: creditHolds.fallbackFromWalletId }).from(creditHolds).where(eq(creditHolds.id, holdId));
+  return hold?.id ?? null;
+}
+
+/**
+ * WAL-6b: the chosen source a drive rule moved this call off, locked BEFORE the charged root in
+ * ONE order: a child wallet before any root, then the roots involved (the chosen wallet's parent,
+ * or the chosen root itself, and the charged root) in ascending id order. Every other settle and
+ * gate locks a child then its parent, or one root alone, so no two paths can wait on each other in
+ * a cycle — including seat→own and own→seat fallbacks of the same person, which lock the same two
+ * roots in the same order. Null when the call did not fall back, or the chosen wallet is gone.
+ */
+async function lockFallbackFrom(tx: Tx, fallbackFromWalletId: string | null, chargedWalletId: string): Promise<ChosenSourceCharge | null> {
+  if (fallbackFromWalletId === null) return null;
+  const [peek] = await tx
+    .select({ parentWalletId: wallets.parentWalletId, status: wallets.status, orgId: wallets.orgId })
+    .from(wallets)
+    .where(eq(wallets.id, fallbackFromWalletId));
+  if (!peek) return null;
+  // [D-OW-32] a paused leg absorbs nothing, nor does any leg of a lapsed org — checked again at
+  // settle, so a turn whose org lapsed after its gate carries nothing back either. The overshoot
+  // then lands where any own-credits overshoot lands.
+  if (peek.status === 'paused') return null;
+  if (peek.orgId !== null && !(await isOrgActive(peek.orgId, { executor: tx }))) return null;
+  let chosen: LockedWallet | null = null;
+  if (peek.parentWalletId) chosen = await lockWallet(tx, fallbackFromWalletId);
+  const roots = [...new Set([peek.parentWalletId ?? fallbackFromWalletId, chargedWalletId])].sort();
+  for (const id of roots) {
+    const locked = await lockWallet(tx, id);
+    if (id === fallbackFromWalletId) chosen = locked;
+  }
+  return chosen ? chosenSourceCharge(chosen) : null;
+}
 
 async function lockWallet(tx: Tx, walletId: string): Promise<LockedWallet | null> {
   const rows = await tx.select().from(wallets).where(eq(wallets.id, walletId)).for('update');
@@ -310,13 +362,16 @@ export async function chargeWallet(
   walletId: string,
   chargeMc: number,
   aiUsageLogId: string | null,
+  // WAL-6b: the chosen wallet a drive rule moved this call off (the hold's fallbackFromWalletId).
+  fallbackFromWalletId: string | null = null,
 ): Promise<WalletSettlement | null> {
+  const fallbackFrom = await lockFallbackFrom(tx, fallbackFromWalletId === walletId ? null : fallbackFromWalletId, walletId);
   const bal = await lockWallet(tx, walletId);
   if (!bal) return null;
   // Fold the sub-cent charge into the charged wallet's carried remainder, then spend the
   // whole cents.
   const accrual = accruePending(bal.pendingMillicents ?? 0, chargeMc);
-  if (!bal.parentWalletId) return settleOnRootWallet(tx, bal, accrual.wholeCents, accrual.newPending);
+  if (!bal.parentWalletId) return settleOnRootWallet(tx, bal, accrual.wholeCents, accrual.newPending, fallbackFrom);
 
   const { settlement, draws } = await settleOnChildWallet(tx, bal, accrual.wholeCents, accrual.newPending);
   if (aiUsageLogId) {
@@ -432,29 +487,43 @@ export async function refundWalletCharge(tx: Tx, walletId: string, refundCents: 
  */
 async function settleOnRootWallet(
   tx: Tx,
-  bal: WalletBalanceFacts,
+  bal: LockedWallet,
   wholeCents: number,
   newPending: number,
+  fallbackFrom: ChosenSourceCharge | null = null,
 ): Promise<WalletSettlement> {
   const spend = allocateSpend(
     { monthlyCents: bal.monthlyRemainingCents, topupCents: bal.topupRemainingCents },
     wholeCents,
   );
+  // WAL-6b: overshoot on own credits a drive rule fell back onto lands where the CHOSEN source
+  // would have put it (settleOvershoot); anything else stays on this root, as before.
+  const landing = settleOvershoot({
+    source: walletSourceKind(bal),
+    overshootCents: spend.shortfallCents,
+    chargedWalletId: bal.id,
+    parentWalletId: null,
+    funderChoice: DEFAULT_OVERSHOOT_CHOICE,
+    fallbackFrom,
+  });
+  const debtHere = landing.kind !== 'none' && landing.walletId === bal.id;
   await tx
     .update(wallets)
     .set({
       monthlyRemainingCents: spend.monthlyCents,
       topupRemainingCents: spend.topupCents,
       pendingMillicents: newPending,
-      ...(spend.shortfallCents > 0
-        ? { debtCents: sql`${wallets.debtCents} + ${spend.shortfallCents}` }
-        : {}),
+      ...(debtHere ? { debtCents: sql`${wallets.debtCents} + ${landing.cents}` } : {}),
     })
     .where(eq(wallets.id, bal.id));
+  if (landing.kind !== 'none' && !debtHere) {
+    // Locked already: lockFallbackFrom took the chosen wallet and its parent first.
+    await tx.update(wallets).set({ debtCents: sql`${wallets.debtCents} + ${landing.cents}` }).where(eq(wallets.id, landing.walletId));
+  }
   return {
     appliedCents: spend.appliedCents,
     bucket: spend.spentTopup > spend.spentMonthly ? 'topup' : 'monthly',
-    debt: spend.shortfallCents > 0 ? { walletId: bal.id, cents: spend.shortfallCents } : null,
+    debt: landing.kind === 'none' ? null : { walletId: landing.walletId, cents: landing.cents },
   };
 }
 
@@ -673,6 +742,8 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<Credit
   // as debt, which their first grant then nets (see personal-wallet).
   let ledgerId: string;
   let walletId: string;
+  // The claim row's time: the window its call counts in (consumer-caps dates calls by it).
+  let claimedAt = new Date();
   try {
     const resolved = await settleWalletId(input);
     if ('mismatch' in resolved) return await refuseMismatchedSettle(input, resolved.mismatch, realCostCents, markupBps);
@@ -700,9 +771,10 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<Credit
         target: creditLedger.aiUsageLogId,
         where: sql`${creditLedger.aiUsageLogId} IS NOT NULL AND ${creditLedger.entryType} = 'usage'`,
       })
-      .returning({ id: creditLedger.id });
+      .returning({ id: creditLedger.id, createdAt: creditLedger.createdAt });
     if (claimed.length === 0) return 'settled'; // already consumed — idempotent no-op
     ledgerId = claimed[0].id;
+    claimedAt = claimed[0].createdAt;
   } catch (error) {
     // No ledger row persisted; the cron's orphan sweep will reconcile.
     loggers.ai.warn('credit claim failed', {
@@ -767,6 +839,7 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<Credit
         input.aiUsageLogId,
         input.holdId ?? null,
         input.spendKind ?? 'ai',
+        input.fallbackFromWalletId ?? null,
       );
     });
     // A committed transaction that decremented NOTHING (no balance row yet) left
@@ -780,6 +853,11 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<Credit
       pageId: input.pageId,
     });
     await noticeDebt(applied, walletId);
+    // WAL-7: tell the leg's funder when this consumer's spend reached 80% / 100% of a cap,
+    // once per threshold per period. After the commit; never throws.
+    await notifyCapAlerts({ walletId, userId: input.userId, now: claimedAt });
+    // X-4: a drive wallet's balance moved — its drive room refetches (no amount in the event).
+    void announceWalletChange(walletId, 'balance');
   } catch (error) {
     // Leave the row 'pending' for the backfill cron to retry. Never throw.
     loggers.ai.warn('credit consume failed', {
@@ -823,7 +901,7 @@ export async function releaseHold(holdId: string): Promise<void> {
  */
 export async function settlePendingLedgerRow(ledgerId: string): Promise<void> {
   // Assigned inside the transaction callback; declared through `as` so the read after it is not narrowed to null.
-  let settled = null as { userId: string; walletId: string; outcome: SettleOutcome } | null;
+  let settled = null as { userId: string; walletId: string; outcome: SettleOutcome; at: Date } | null;
   await db.transaction(async (tx) => {
     const rows = await tx
       .select()
@@ -839,6 +917,7 @@ export async function settlePendingLedgerRow(ledgerId: string): Promise<void> {
           aiUsageLogId: string | null;
           consumeStatus: string;
           spendKind: SpendKind;
+          createdAt: Date;
         }
       | undefined;
     if (!row || row.consumeStatus !== 'pending') return;
@@ -849,12 +928,15 @@ export async function settlePendingLedgerRow(ledgerId: string): Promise<void> {
     // Settle against the wallet the claim named (WAL-5), never re-derived from the user.
     // The debt row keeps the claim's kind, so compute debt never reads as a seat draw.
     const outcome = await decrementAndSettle(tx, ledgerId, row.userId, row.walletId, chargeMc, row.aiUsageLogId, null, row.spendKind);
-    if (outcome) settled = { userId: row.userId, walletId: row.walletId, outcome };
+    if (outcome) settled = { userId: row.userId, walletId: row.walletId, outcome, at: row.createdAt };
   });
   // A pending row settled this run (cron retry): push the user's fresh balance so a
   // call that never emitted at its own finish still reaches the navbar live.
   if (settled) {
     void emitCreditsUpdated(settled.userId);
     await noticeDebt(settled.outcome, settled.walletId);
+    // WAL-7: a row settled late still alerts, judged in the window of its call (the claim's time).
+    await notifyCapAlerts({ walletId: settled.walletId, userId: settled.userId, now: settled.at });
+    void announceWalletChange(settled.walletId, 'balance');
   }
 }

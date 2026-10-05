@@ -35,6 +35,6 @@ export async function PUT(request: Request) {
     return NextResponse.json({ defaultSpendSource: result.defaultSpendSource });
   } catch (error) {
     loggers.api.error('Error setting the default spend source:', error as Error);
-    return NextResponse.json({ error: 'Failed to set the default source' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to set the default source', code: 'internal_error' }, { status: 500 });
   }
 }

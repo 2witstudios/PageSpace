@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { walletViewerRole, walletActionsFor, mayTakeWalletAction, credentialRefusalFor, viewerForCredential, WALLET_ACTIONS, type WalletStanding, type WalletWrite } from '../wallet-access';
+import { decideSeatCapWrite, walletViewerRole, walletActionsFor, mayTakeWalletAction, credentialRefusalFor, viewerForCredential, WALLET_ACTIONS, type WalletStanding, type WalletWrite } from '../wallet-access';
 
 // Northwind Labs fixture: Jono owns the org, Priya is an Admin, Marcus a member, Chris Rowe a
 // guest on Product; Dana (a member) leads Engineering. Personal drives have no org.
@@ -42,6 +42,16 @@ describe('wallet-access: what each may do', () => {
   it('UI-9 (partial) on an org drive only org admins move pool money (create, allocate, top up, delete); the lead runs the wallet (pause, rules) and reads spend by member', () => {
     expect(walletActionsFor('org_admin', { orgDrive: true })).toEqual([...WALLET_ACTIONS]);
     expect(walletActionsFor('lead', { orgDrive: true })).toEqual(['view', 'view_spend_by_member', 'pause', 'set_rules', 'donate']);
+  });
+
+  it('WAL-7 (partial) a per-consumer cap is written by an org Owner or Admin on an org leg and by the wallet owner (the lead) on a personal one — never by an org drive lead, a member or a guest', () => {
+    expect(mayTakeWalletAction('org_admin', 'set_caps', { orgDrive: true })).toBe(true);
+    expect(mayTakeWalletAction('lead', 'set_caps', { orgDrive: false })).toBe(true);
+    expect(mayTakeWalletAction('lead', 'set_caps', { orgDrive: true })).toBe(false);
+    for (const role of ['member', 'guest', 'none'] as const) {
+      for (const orgDrive of [true, false]) expect(mayTakeWalletAction(role, 'set_caps', { orgDrive })).toBe(false);
+    }
+    expect(credentialRefusalFor('mcp', 'set_caps')).toMatchObject({ code: 'mcp_token_cannot_move_money' });
   });
 
   it('UI-9 (partial) on a personal drive the lead funds and runs the wallet: every action', () => {
@@ -97,3 +107,14 @@ describe('wallet-access: the credential ([D-OW-26])', () => {
     expect(viewerForCredential('org_admin', 'session')).toBe('org_admin');
   });
 });
+
+describe('wallet-access: writing a member\'s seat caps on the org pool', () => {
+  it('WAL-7 (partial) only the org Owner or an Admin writes a seat cap, and only for an accepted member; a non-member caller sees no org', () => {
+    expect(decideSeatCapWrite({ actorRole: 'OWNER', consumerRole: 'MEMBER' })).toEqual({ ok: true });
+    expect(decideSeatCapWrite({ actorRole: 'ADMIN', consumerRole: 'ADMIN' })).toEqual({ ok: true });
+    expect(decideSeatCapWrite({ actorRole: 'MEMBER', consumerRole: 'MEMBER' })).toEqual({ ok: false, status: 403, code: 'insufficient_role' });
+    expect(decideSeatCapWrite({ actorRole: null, consumerRole: 'MEMBER' })).toEqual({ ok: false, status: 404, code: 'org_not_found' });
+    expect(decideSeatCapWrite({ actorRole: 'ADMIN', consumerRole: null })).toEqual({ ok: false, status: 404, code: 'not_org_member' });
+  });
+});
+

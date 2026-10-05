@@ -42,6 +42,20 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Spending caps per person, with alerts** — an organization Owner or Admin can set a daily and a
+  monthly spending cap for a person on an organization drive's wallet or on their organization seat, and
+  the owner of a personal drive can do the same on that drive's wallet. A person who reaches a cap is told
+  the wallet is capped for them and can pick another source; the wallet's funders get an in-app
+  notification when the person reaches 80% and again at 100% of a cap, once per day or month.
+- **A fallback to another wallet is always shown** — when a drive's rule moves a call off the wallet you
+  chose (for example onto your own credits because the drive's wallet is empty), the answer now says so on
+  every surface: API completions, side questions, agent consultations and voice calls, not only chat. A
+  tool or a later step of the same turn never moves to yet another wallet on its own, and any overspend on
+  such a call is charged where your chosen wallet would have put it, never to you.
+- **Drive Members shows guests** — members of an organization drive who are not in the organization are
+  marked as guests, each member shows whether they were invited or joined through the organization, and
+  the drive's lead and admins see people who joined through a page share link listed separately.
+
 - **Wallet debt notices, and who absorbs a drive's overspend** — when spending in an organization's drive
   runs past what its wallet held, the organization's Owner and Admins get an in-app notification, at most
   once per billing period, and the wallet shows as over until its debt is cleared. An Owner or Admin can

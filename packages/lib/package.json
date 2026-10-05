@@ -134,6 +134,11 @@
       "import": "./dist/drive-envs/plan-env-delete.js",
       "require": "./dist/drive-envs/plan-env-delete.js"
     },
+    "./organizations/api-error-codes": {
+      "types": "./dist/organizations/api-error-codes.d.ts",
+      "import": "./dist/organizations/api-error-codes.js",
+      "require": "./dist/organizations/api-error-codes.js"
+    },
     "./organizations/authorize": {
       "types": "./dist/organizations/authorize.d.ts",
       "import": "./dist/organizations/authorize.js",
@@ -683,6 +688,11 @@
       "types": "./dist/billing/credit-gate.d.ts",
       "import": "./dist/billing/credit-gate.js",
       "require": "./dist/billing/credit-gate.js"
+    },
+    "./billing/spend-fallback": {
+      "types": "./dist/billing/spend-fallback.d.ts",
+      "import": "./dist/billing/spend-fallback.js",
+      "require": "./dist/billing/spend-fallback.js"
     },
     "./billing/spend-target": {
       "types": "./dist/billing/spend-target.d.ts",
@@ -2614,6 +2624,16 @@
       "import": "./dist/permissions/org-access.js",
       "require": "./dist/permissions/org-access.js"
     },
+    "./permissions/drive-member-labels": {
+      "types": "./dist/permissions/drive-member-labels.d.ts",
+      "import": "./dist/permissions/drive-member-labels.js",
+      "require": "./dist/permissions/drive-member-labels.js"
+    },
+    "./permissions/spend-standing": {
+      "types": "./dist/permissions/spend-standing.d.ts",
+      "import": "./dist/permissions/spend-standing.js",
+      "require": "./dist/permissions/spend-standing.js"
+    },
     "./permissions/wallet-access": {
       "types": "./dist/permissions/wallet-access.d.ts",
       "import": "./dist/permissions/wallet-access.js",
@@ -2878,6 +2898,21 @@
       "types": "./dist/organizations/policies-core.d.ts",
       "import": "./dist/organizations/policies-core.js",
       "require": "./dist/organizations/policies-core.js"
+    },
+    "./organizations/org-change-events": {
+      "types": "./dist/organizations/org-change-events.d.ts",
+      "import": "./dist/organizations/org-change-events.js",
+      "require": "./dist/organizations/org-change-events.js"
+    },
+    "./realtime/org-wallet-events": {
+      "types": "./dist/realtime/org-wallet-events.d.ts",
+      "import": "./dist/realtime/org-wallet-events.js",
+      "require": "./dist/realtime/org-wallet-events.js"
+    },
+    "./organizations/policy-suspension-names": {
+      "types": "./dist/organizations/policy-suspension-names.d.ts",
+      "import": "./dist/organizations/policy-suspension-names.js",
+      "require": "./dist/organizations/policy-suspension-names.js"
     },
     "./organizations/policy-suspension": {
       "types": "./dist/organizations/policy-suspension.d.ts",

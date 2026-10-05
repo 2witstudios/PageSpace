@@ -18,7 +18,7 @@ vi.mock('@pagespace/lib/billing/credit-pricing', () => ({ MAX_CHAT_INFLIGHT: 3 }
 import { acquireMentionCreditHold } from '../mention-credit-gate';
 
 // Northwind: Marcus mentions the Research agent in a Product channel.
-const PRODUCT_AUTOMATION = { kind: 'automation', driveId: 'drive-product' };
+const PRODUCT_AUTOMATION = { kind: 'automation', driveId: 'drive-product', personPresent: true };
 
 describe('acquireMentionCreditHold', () => {
   beforeEach(() => {

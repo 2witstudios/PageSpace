@@ -2248,6 +2248,13 @@
       "when": 1791162487195,
       "tag": "0330_org_seats_reconciled_through",
       "breakpoints": true
+    },
+    {
+      "idx": 322,
+      "version": "7",
+      "when": 1791175677417,
+      "tag": "0332_ui_contracts",
+      "breakpoints": true
     }
   ]
 }

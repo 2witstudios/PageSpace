@@ -21,6 +21,6 @@ export async function GET(request: Request, context: { params: Promise<{ orgId: 
     return NextResponse.json({ members });
   } catch (error) {
     loggers.api.error('Error listing organization members:', error as Error);
-    return NextResponse.json({ error: 'Failed to list members' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to list members', code: 'internal_error' }, { status: 500 });
   }
 }

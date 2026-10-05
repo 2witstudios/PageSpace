@@ -110,7 +110,7 @@ describe('handleVoiceBridgeRequest — the source a voice tool spends', () => {
       toolBody({ conversationId: 'conv1', spend: { driveId: 'drive-1', chosen: 'drive_wallet' } }),
     );
     expect((seen as { creditSpend?: unknown }).creditSpend).toEqual({
-      spend: { kind: 'drive', driveId: 'drive-1', chosen: 'drive_wallet', conversationId: 'conv1' },
+      spend: { kind: 'drive', driveId: 'drive-1', chosen: 'drive_wallet', conversationId: 'conv1', followOn: true },
     });
   });
 });

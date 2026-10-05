@@ -117,6 +117,7 @@ import {
   userSessionsRoom,
   driveRoom,
   driveCalendarRoom,
+  driveWalletRoom,
   dmRoom,
   conversationRoom,
   sessionRoom,
@@ -124,6 +125,7 @@ import {
   pageActivityRoom,
 } from '@pagespace/lib/realtime/rooms';
 import { canAccessConversation } from '@pagespace/lib/permissions/conversation-access';
+import { canViewDriveWallet } from '@pagespace/lib/permissions/spend-standing';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { socketRegistry } from './socket-registry';
 import { handleKickRequest } from './kick-handler';
@@ -1403,6 +1405,9 @@ io.on('connection', (socket: AuthSocket) => {
       const hasAccess = await getUserDriveAccess(user.id, driveId);
       if (hasAccess) {
         const rooms = [driveRoom(driveId), driveCalendarRoom(driveId)];
+        // X-4: wallet:changed reaches only people with a wallet view of the drive, never a
+        // page-share collaborator whose drive-room access comes from a page grant alone.
+        if (await canViewDriveWallet(user.id, driveId)) rooms.push(driveWalletRoom(driveId));
         for (const room of rooms) {
           socket.join(room);
           socketRegistry.trackRoomJoin(socket.id, room);
@@ -1630,7 +1635,7 @@ io.on('connection', (socket: AuthSocket) => {
     }
     const driveId = validation.value;
 
-    const rooms = [driveRoom(driveId), driveCalendarRoom(driveId)];
+    const rooms = [driveRoom(driveId), driveCalendarRoom(driveId), driveWalletRoom(driveId)];
     for (const room of rooms) {
       socket.leave(room);
       socketRegistry.trackRoomLeave(socket.id, room);

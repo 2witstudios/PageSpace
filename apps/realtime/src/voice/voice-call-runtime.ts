@@ -205,7 +205,13 @@ export const startVoiceCallRuntime = (
       ...(assistant === undefined ? {} : { assistant }),
       // A tool that gates its own model call spends where this call spends (SPEND-1).
       ...(meter.spend.kind === 'drive'
-        ? { spend: { driveId: meter.spend.driveId, chosen: meter.spend.chosen } }
+        ? {
+            spend: {
+              driveId: meter.spend.driveId,
+              chosen: meter.spend.chosen,
+              ...(meter.spend.fallbackFromWalletId ? { fallbackFromWalletId: meter.spend.fallbackFromWalletId } : {}),
+            },
+          }
         : {}),
     });
 

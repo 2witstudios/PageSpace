@@ -8,7 +8,7 @@
  * transfer write both in ONE transaction.
  */
 import { db } from '@pagespace/db/db';
-import { and, asc, count, eq, isNull, sql } from '@pagespace/db/operators';
+import { and, asc, count, eq, inArray, isNull, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import {
   organizations,
@@ -264,3 +264,15 @@ export async function updateOrganization(
     throw error;
   }
 }
+
+/**
+ * Org names by id, for labels (wallet lists, spend choices, cap alerts — UI-8, UI-10, WAL-7): the
+ * name column only, never the row (POL-1: policies are read through policy-reader alone).
+ */
+export async function findOrganizationNames(orgIds: readonly string[]): Promise<Map<string, string>> {
+  const unique = [...new Set(orgIds)];
+  if (unique.length === 0) return new Map();
+  const rows = await db.select({ id: organizations.id, name: organizations.name }).from(organizations).where(inArray(organizations.id, unique));
+  return new Map(rows.map((r) => [r.id, r.name]));
+}
+

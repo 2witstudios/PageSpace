@@ -74,10 +74,10 @@ describe('automation entry points spend their drive, never a person', () => {
     }
   });
 
-  it('SPEND-6 (partial) every automation gate names its drive (automationSpend) and never PERSONAL_SPEND', () => {
+  it('SPEND-6 (partial) every automation gate names its drive (automationSpend, or personTriggeredSpend for a mention a person sent) and never PERSONAL_SPEND', () => {
     for (const path of AUTOMATION_GATES) {
       const src = read(path);
-      expect(src, path).toMatch(/\bautomationSpend\(/);
+      expect(src, path).toMatch(/\b(automationSpend|personTriggeredSpend)\(/);
       expect(src, path).not.toMatch(/\bPERSONAL_SPEND\b/);
       expect(src, path).not.toMatch(/\bdriveSpend\(/);
     }

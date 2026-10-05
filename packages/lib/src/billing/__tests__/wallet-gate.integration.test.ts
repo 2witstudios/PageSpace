@@ -30,7 +30,7 @@ import { requireDb } from '@pagespace/db/test/require-db';
 import { loggers } from '../../logging/logger-config';
 import { canConsumeAI } from '../credit-gate';
 import { consumeCredits, recordSeatOvershoot } from '../credit-consume';
-import { PERSONAL_SPEND, conversationSpend, driveSpend } from '../spend-target';
+import { PERSONAL_SPEND, conversationSpend, driveSpend, resolvedSpend, spendFallbackFromWalletId } from '../spend-target';
 import { DEFAULT_SEAT_ALLOWANCE_CENTS } from '../wallet-core';
 import { loadSeatCapFacts } from '../seat-allowance';
 import { applyOrgPoolRefill, donateToDriveWallet } from '../wallet-funding-shell';
@@ -1418,6 +1418,82 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     }
   });
 
+  it('WAL-6 (partial) a fallback onto own credits records the chosen wallet on the hold, and its overshoot lands where that choice would have put it — never on the consumer', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 5_000 });
+    const w = world;
+    const side = await personalDrive(w, { allocationCents: 0, fallbackRule: 'own_credits' });
+    // Marcus's own credits cover the reservation but not the real cost.
+    await db.update(wallets).set({ monthlyRemainingCents: 100 }).where(eq(wallets.id, w.marcusWalletId));
+    try {
+      const gate = await canConsumeAI(w.marcusId, 'free', { spend: driveSpend(side.driveId, 'drive_wallet') });
+      expect(gate).toMatchObject({ allowed: true, walletId: w.marcusWalletId, fallback: { from: 'drive_wallet', to: 'own_credits' } });
+      expect((await holdsOf(w.marcusId)).map((h) => [h.walletId, h.fallbackFromWalletId])).toEqual([[w.marcusWalletId, side.walletId]]);
+
+      const [log] = await db.insert(aiUsageLogs).values({ userId: w.marcusId, provider: 'openrouter', model: 'm', cost: 1 }).returning({ id: aiUsageLogs.id });
+      expect(await consumeCredits({ aiUsageLogId: log.id, userId: w.marcusId, costDollars: 1, holdId: gate.holdId, walletId: gate.walletId })).toBe('settled');
+
+      // 150¢: Marcus's 100¢, then 50¢ uncovered. The chosen Side Project wallet absorbs into its
+      // parent by default (D20.2), so Jono's root carries the 50¢ — Marcus carries none.
+      const marcusRow = await walletRow(w.marcusWalletId);
+      expect([marcusRow.monthlyRemainingCents, marcusRow.debtCents]).toEqual([0, 0]);
+      expect((await walletRow(side.jonoRootId)).debtCents).toBe(50);
+      const debt = (await ledgerOf(w.marcusId)).filter((r) => r.entryType === 'adjustment');
+      expect(debt.map((r) => [r.walletId, r.amountCents])).toEqual([[side.jonoRootId, -50]]);
+    } finally {
+      await db.delete(creditLedger).where(eq(creditLedger.userId, w.marcusId));
+      await teardownPersonalDrive(side);
+    }
+  });
+
+  it('WAL-6 (partial) a FOLLOW-ON call in a turn that fell back (a tool, a voice window) holds with the chosen wallet too, and so does a hold-less nested call; neither overshoot lands on the consumer', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 5_000 });
+    const w = world;
+    const side = await personalDrive(w, { allocationCents: 0, fallbackRule: 'own_credits' });
+    await db.update(wallets).set({ monthlyRemainingCents: 200 }).where(eq(wallets.id, w.marcusWalletId));
+    try {
+      const first = await canConsumeAI(w.marcusId, 'free', { spend: driveSpend(side.driveId, 'drive_wallet') });
+      expect(first).toMatchObject({ allowed: true, fallback: { from: 'drive_wallet', to: 'own_credits' }, fallbackFromWalletId: side.walletId });
+      if (first.holdId) await db.delete(creditHolds).where(eq(creditHolds.id, first.holdId));
+
+      // The follow-on names the turn's resolved source and carries the origin (turn-credit, call-metering).
+      const followOnTarget = resolvedSpend(driveSpend(side.driveId, 'drive_wallet'), first.spendSource, first.fallbackFromWalletId);
+      const followOn = await canConsumeAI(w.marcusId, 'free', { spend: followOnTarget });
+      expect(followOn).toMatchObject({ allowed: true, walletId: w.marcusWalletId, fallbackFromWalletId: side.walletId });
+      expect(followOn.fallback).toBeUndefined(); // reported once, by the turn's first call
+      expect((await holdsOf(w.marcusId)).map((h) => h.fallbackFromWalletId)).toEqual([side.walletId]);
+      const [log] = await db.insert(aiUsageLogs).values({ userId: w.marcusId, provider: 'openrouter', model: 'm', cost: 1 }).returning({ id: aiUsageLogs.id });
+      await consumeCredits({ aiUsageLogId: log.id, userId: w.marcusId, costDollars: 1, holdId: followOn.holdId, walletId: followOn.walletId });
+      expect((await walletRow(w.marcusWalletId)).debtCents).toBe(0);
+      expect((await walletRow(side.jonoRootId)).debtCents).toBe(0); // 150¢ fit Marcus's 200¢: no overshoot yet
+
+      // A nested ask_agent call has no hold: its settle carries the origin from the turn's target.
+      const [nested] = await db.insert(aiUsageLogs).values({ userId: w.marcusId, provider: 'openrouter', model: 'm', cost: 1 }).returning({ id: aiUsageLogs.id });
+      await consumeCredits({ aiUsageLogId: nested.id, userId: w.marcusId, costDollars: 1, walletId: w.marcusWalletId, fallbackFromWalletId: spendFallbackFromWalletId(followOnTarget) });
+      // 50¢ left of Marcus's credits, 150¢ charged: the 100¢ overshoot lands on Jono's root (the chosen wallet's parent).
+      expect((await walletRow(w.marcusWalletId)).debtCents).toBe(0);
+      expect((await walletRow(side.jonoRootId)).debtCents).toBe(100);
+    } finally {
+      await db.delete(creditLedger).where(eq(creditLedger.userId, w.marcusId));
+      await teardownPersonalDrive(side);
+    }
+  });
+
+  it('WAL-6 (partial) own credits the consumer CHOSE still carry their own overshoot', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 5_000 });
+    const w = world;
+    await db.update(wallets).set({ monthlyRemainingCents: 100 }).where(eq(wallets.id, w.marcusWalletId));
+    const gate = await canConsumeAI(w.marcusId, 'free', { spend: driveSpend(w.productId, 'own_credits') });
+    expect(gate).toMatchObject({ allowed: true, walletId: w.marcusWalletId });
+    expect(gate.fallback).toBeUndefined();
+    expect((await holdsOf(w.marcusId)).map((h) => h.fallbackFromWalletId)).toEqual([null]);
+    const [log] = await db.insert(aiUsageLogs).values({ userId: w.marcusId, provider: 'openrouter', model: 'm', cost: 1 }).returning({ id: aiUsageLogs.id });
+    await consumeCredits({ aiUsageLogId: log.id, userId: w.marcusId, costDollars: 1, holdId: gate.holdId, walletId: gate.walletId });
+    expect((await walletRow(w.marcusWalletId)).debtCents).toBe(50);
+  });
+
   // ---------------------------------------------------------------------------
   // SPEND-5: "Always my own credits", one global switch and one per drive. Either is absolute
   // (own credits or refuse), and it only ever narrows: it opens no wallet and passes no cap.
@@ -1842,6 +1918,51 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     expect(overshoot.map((r) => [r.entryType, r.aiUsageLogId, r.chargeMillicents])).toEqual([['seat_overshoot_month', logId, 25_000]]);
     expect((await seatCountedAt(w, w.marcusId, 200)).usage.periodChargedMillicents).toBe(200_000);
     expect((await walletRow(w.poolId)).monthlyRemainingCents).toBe(900_000 - 225);
+  });
+
+  it('WAL-6 (partial) SEAT-9 (partial) [D-OW-32] a LAPSED org pays nothing for a member\'s own-credits fallback: the fallback is shown, the overshoot stays on the member, the pool\'s debt does not move', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+    const w = world;
+    await setPolicies(w, { walletFallback: 'own_credits' });
+    await db.update(orgSubscriptions).set({ status: 'canceled' }).where(eq(orgSubscriptions.orgId, w.orgId));
+    await db.update(wallets).set({ debtCents: 53 }).where(eq(wallets.id, w.poolId));
+    await db.update(wallets).set({ monthlyRemainingCents: 40, topupRemainingCents: 0 }).where(eq(wallets.id, w.marcusWalletId));
+
+    const gate = await canConsumeAI(w.marcusId, 'free', { spend: driveSpend(w.productId, 'drive_wallet'), estCostCents: 5 });
+    expect(gate).toMatchObject({ allowed: true, walletId: w.marcusWalletId, spendSource: 'own_credits', fallback: { from: 'drive_wallet', to: 'own_credits' } });
+    expect(gate.fallbackFromWalletId).toBeUndefined();
+    expect((await holdsOf(w.marcusId)).map((h) => h.fallbackFromWalletId)).toEqual([null]);
+
+    const [log] = await db.insert(aiUsageLogs).values({ userId: w.marcusId, provider: 'openrouter', model: 'm', cost: 1 }).returning({ id: aiUsageLogs.id });
+    expect(await consumeCredits({ aiUsageLogId: log.id, userId: w.marcusId, costDollars: 1, holdId: gate.holdId, walletId: gate.walletId })).toBe('settled');
+
+    const pool = await walletRow(w.poolId);
+    const product = await walletRow(w.productWalletId);
+    const marcus = await walletRow(w.marcusWalletId);
+    expect([pool.debtCents, pool.monthlyRemainingCents]).toEqual([53, 900_000]);
+    expect([product.spentCents, product.debtCents]).toEqual([0, 0]);
+    // The money invariant: the 150¢ charge = what left Marcus's wallet + the debt it carries.
+    expect([marcus.monthlyRemainingCents, marcus.debtCents]).toEqual([0, 110]);
+    const rows = await ledgerOf(w.marcusId);
+    const usage = rows.find((r) => r.entryType === 'usage');
+    const debt = rows.filter((r) => r.entryType === 'adjustment');
+    expect(-(usage?.appliedCents ?? 0) + debt.reduce((s, r) => s - r.amountCents, 0)).toBe(150);
+    expect(debt.map((r) => r.walletId)).toEqual([w.marcusWalletId]);
+  });
+
+  it('WAL-6 (partial) [D-OW-32] a fallback whose chosen leg is paused by the time it settles (the org lapsed mid-turn) still lands nothing on the paused leg', async () => {
+    if (!dbAvailable) return;
+    world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
+    const w = world;
+    await db.update(wallets).set({ debtCents: 53 }).where(eq(wallets.id, w.poolId));
+    await db.update(wallets).set({ monthlyRemainingCents: 40, topupRemainingCents: 0 }).where(eq(wallets.id, w.marcusWalletId));
+    // A follow-on of a turn that fell back off Product: then the org lapses before it settles.
+    await db.update(orgSubscriptions).set({ status: 'canceled' }).where(eq(orgSubscriptions.orgId, w.orgId));
+    const [log] = await db.insert(aiUsageLogs).values({ userId: w.marcusId, provider: 'openrouter', model: 'm', cost: 1 }).returning({ id: aiUsageLogs.id });
+    await consumeCredits({ aiUsageLogId: log.id, userId: w.marcusId, costDollars: 1, walletId: w.marcusWalletId, fallbackFromWalletId: w.productWalletId });
+    expect((await walletRow(w.poolId)).debtCents).toBe(53);
+    expect((await walletRow(w.marcusWalletId)).debtCents).toBe(110);
   });
 
   it('POL-7 an org fallback rule of own credits moves an empty drive wallet onto the person\'s own credits, shows it, and a drive swapping it back to seat allowance refuses', async () => {

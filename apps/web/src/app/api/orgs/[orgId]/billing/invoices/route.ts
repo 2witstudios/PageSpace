@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isBillingEnabled } from '@pagespace/lib/deployment-mode';
-import { authorizeOrgRequest, orgsDisabledResponse, ORG_READ_AUTH } from '@/lib/orgs/org-route-auth';
+import { authorizeOrgRequest, billingUnavailableResponse, ORG_READ_AUTH } from '@/lib/orgs/org-route-auth';
 import { listOrgInvoices, OrgBillingError } from '@/lib/org-billing/org-subscription';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 
@@ -21,12 +21,12 @@ export async function GET(request: Request, context: Context) {
   const { orgId } = await context.params;
   const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_READ_AUTH);
   if (!gate.ok) return gate.response;
-  if (!isBillingEnabled()) return orgsDisabledResponse();
+  if (!isBillingEnabled()) return billingUnavailableResponse();
   const { searchParams } = new URL(request.url);
   const limit = parseBoundedIntParam(searchParams.get('limit'), { defaultValue: 10, min: 1, max: 100 });
   const startingAfter = searchParams.get('starting_after') || undefined;
   if (startingAfter !== undefined && !INVOICE_ID.test(startingAfter)) {
-    return NextResponse.json({ error: 'Invalid starting_after' }, { status: 400 });
+    return NextResponse.json({ error: 'Invalid starting_after', code: 'invalid_request' }, { status: 400 });
   }
   try {
     const page = await listOrgInvoices(orgId, { limit, startingAfter });
@@ -40,9 +40,9 @@ export async function GET(request: Request, context: Context) {
     return NextResponse.json(page);
   } catch (error) {
     if (error instanceof OrgBillingError && error.code === 'org_not_found') {
-      return NextResponse.json({ error: 'Organization not found' }, { status: 404 });
+      return NextResponse.json({ error: 'Organization not found', code: 'org_not_found' }, { status: 404 });
     }
     loggers.api.error('Error listing organization invoices:', error as Error, { orgId });
-    return NextResponse.json({ error: 'Could not reach the billing provider; try again.' }, { status: 502 });
+    return NextResponse.json({ error: 'Could not reach the billing provider; try again.', code: 'billing_provider_unreachable' }, { status: 502 });
   }
 }

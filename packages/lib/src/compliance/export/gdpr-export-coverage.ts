@@ -363,6 +363,9 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     // When a debt-carrying wallet's funder was last told it is over (0329, WAL-6e): a per-wallet
     // throttle stamp. The notice itself is exported under `notifications`.
     'wallet_debt_notices',
+    // Which WAL-7 cap alert (80% / 100%) was sent for a consumer's window this period (0332): a
+    // once-per-threshold throttle stamp. The alert itself is exported under `notifications`.
+    'wallet_cap_alerts',
     // SPEND-5 "Always my own credits" in one drive (0322): a per-drive switch beside the
     // global one on the personal root wallet (`wallets` above); decided with the wallets under X-2.
     'drive_spend_overrides',

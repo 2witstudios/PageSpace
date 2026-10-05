@@ -65,7 +65,7 @@ export async function GET(request: Request, context: RouteContext) {
     return NextResponse.json({ viewer: result.viewer, actions: result.actions, wallet: result.wallet });
   } catch (error) {
     loggers.api.error('Error reading the drive wallet:', error as Error);
-    return NextResponse.json({ error: 'Failed to read the drive wallet' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to read the drive wallet', code: 'internal_error' }, { status: 500 });
   }
 }
 
@@ -88,7 +88,7 @@ export async function POST(request: Request, context: RouteContext) {
     return NextResponse.json({ viewer: result.viewer, actions: result.actions, wallet: result.wallet }, { status: 201 });
   } catch (error) {
     loggers.api.error('Error creating the drive wallet:', error as Error);
-    return NextResponse.json({ error: 'Failed to create the drive wallet' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to create the drive wallet', code: 'internal_error' }, { status: 500 });
   }
 }
 
@@ -111,7 +111,7 @@ export async function PATCH(request: Request, context: RouteContext) {
     return NextResponse.json({ viewer: result.viewer, actions: result.actions, wallet: result.wallet });
   } catch (error) {
     loggers.api.error('Error updating the drive wallet:', error as Error);
-    return NextResponse.json({ error: 'Failed to update the drive wallet' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to update the drive wallet', code: 'internal_error' }, { status: 500 });
   }
 }
 
@@ -132,6 +132,6 @@ export async function DELETE(request: Request, context: RouteContext) {
     return NextResponse.json({ deleted: true });
   } catch (error) {
     loggers.api.error('Error deleting the drive wallet:', error as Error);
-    return NextResponse.json({ error: 'Failed to delete the drive wallet' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to delete the drive wallet', code: 'internal_error' }, { status: 500 });
   }
 }

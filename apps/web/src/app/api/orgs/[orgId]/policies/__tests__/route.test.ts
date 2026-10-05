@@ -22,6 +22,8 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 vi.mock('@pagespace/lib/organizations/repository', () => ({ findMembershipRole: vi.fn() }));
 vi.mock('@pagespace/lib/organizations/policies', () => ({ getOrgPolicies: vi.fn(), updateOrgPolicies: vi.fn() }));
 vi.mock('@pagespace/lib/organizations/policy-suspension', () => ({ listPolicySuspensions: vi.fn() }));
+vi.mock('@pagespace/lib/organizations/org-change-events', () => ({ announceOrgChange: vi.fn() }));
+vi.mock('@pagespace/lib/organizations/policy-suspension-names', () => ({ nameSuspensions: vi.fn(async (_orgId: string, _viewerId: string, listings: unknown) => listings) }));
 vi.mock('@pagespace/lib/organizations/status', () => ({ checkOrgActive: vi.fn() }));
 vi.mock('@pagespace/lib/organizations/published-visibility', () => ({ reconcileOrgPublishedVisibility: vi.fn() }));
 vi.mock('@/lib/canvas/published-storage', () => ({ createPublishedObjectStore: () => ({ store: true }), isPublishConfigured: vi.fn() }));
@@ -94,6 +96,13 @@ describe('policies routes', () => {
     // Both reads are audited as data reads by the acting Admin, with the org as the dimension.
     expect(auditRequest).toHaveBeenCalledTimes(2);
     expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'data.read', userId: 'user_priya', resourceId: ORG_ID, details: { orgId: ORG_ID } }));
+  });
+
+  it('X-4 (partial) a stored policy change is announced to the members of the org (org:changed, policy)', async () => {
+    as('ADMIN');
+    const { announceOrgChange } = await import('@pagespace/lib/organizations/org-change-events');
+    expect((await PATCH(req('PATCH', '', { publicShareLinks: false }), ctx)).status).toBe(200);
+    expect(announceOrgChange).toHaveBeenCalledWith(ORG_ID, 'policy');
   });
 
   it('POL-1 (partial) a change is stored for the acting Admin and reports what it suspended by count', async () => {

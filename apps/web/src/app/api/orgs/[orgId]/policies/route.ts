@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { announceOrgChange } from '@pagespace/lib/organizations/org-change-events';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getOrgPolicies, updateOrgPolicies } from '@pagespace/lib/organizations/policies';
@@ -25,7 +26,7 @@ export async function GET(request: Request, context: Context) {
     return NextResponse.json({ policies });
   } catch (error) {
     loggers.api.error('Error reading organization policies:', error as Error);
-    return NextResponse.json({ error: 'Failed to read policies' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to read policies', code: 'internal_error' }, { status: 500 });
   }
 }
 
@@ -48,7 +49,7 @@ export async function PATCH(request: Request, context: Context) {
   try {
     const parsed = validateOrgPoliciesPatch(await request.json().catch(() => null));
     if (!parsed.ok) {
-      return NextResponse.json({ error: 'Invalid request body', issues: parsed.issues }, { status: 400 });
+      return NextResponse.json({ error: 'Invalid request body', issues: parsed.issues, code: 'invalid_request' }, { status: 400 });
     }
     const active = await checkOrgActive(orgId);
     if (!active.ok) return NextResponse.json({ error: active.message, code: active.code }, { status: active.status });
@@ -57,7 +58,7 @@ export async function PATCH(request: Request, context: Context) {
     if (!result.ok && result.reason === 'open_role_floor') {
       return NextResponse.json({ error: OPEN_ROLE_FLOOR_RAISE_MESSAGE, code: 'org_policy', policy: 'openDriveRoleFloor', drives: result.drives }, { status: 403 });
     }
-    if (!result.ok) return NextResponse.json({ error: 'Organization not found' }, { status: 404 });
+    if (!result.ok) return NextResponse.json({ error: 'Organization not found', code: 'org_not_found' }, { status: 404 });
 
     // POL-4: published sites live in a public bucket the edge serves without asking the database, so a change to
     // publishing or domains takes effect by MOVING the objects (park or restore), not by a marker. A failure here
@@ -73,6 +74,8 @@ export async function PATCH(request: Request, context: Context) {
         publishedVisibility = { parked: 0, restored: 0, failed: -1 };
       }
     }
+    // X-4: members see the change without a refresh (org:changed, no content).
+    void announceOrgChange(orgId, 'policy');
     return NextResponse.json({
       policies: result.policies,
       changed: result.changes.map((c) => c.key),
@@ -85,6 +88,6 @@ export async function PATCH(request: Request, context: Context) {
     });
   } catch (error) {
     loggers.api.error('Error updating organization policies:', error as Error);
-    return NextResponse.json({ error: 'Failed to update policies' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to update policies', code: 'internal_error' }, { status: 500 });
   }
 }

@@ -19,6 +19,8 @@ import {
   entitlementTierFor,
   resolveSpendSource,
   seatLegSpendableCents,
+  legSpendableCents,
+  type CapRemaining,
   type DriveSpendRule,
   type RefusalReason,
   type SkipReason,
@@ -64,8 +66,30 @@ export type SpendTarget =
        * drive's and the person's defaults still apply.
        */
       conversationId?: string | null;
+      /**
+       * Set by {@link resolvedSpend}: this call follows a gated call in the same turn and names
+       * the source that turn resolved. It spends that source or refuses by name; it never falls
+       * back again (SPEND-4).
+       */
+      followOn?: true;
+      /**
+       * Set with `followOn` when the turn's first call fell back: the wallet of the source it
+       * moved off. Carried onto every follow-on hold so their overshoot lands where that chosen
+       * source would have put it, never on the consumer (WAL-6b).
+       */
+      fallbackFromWalletId?: string;
     }
-  | { kind: 'automation'; driveId: string };
+  | {
+      kind: 'automation';
+      driveId: string;
+      /**
+       * A person caused this run — a channel @mention they sent — so it is THEIR spend on the
+       * drive wallet and their per-consumer caps bind (WAL-7; the actor pays, as for compute,
+       * [D-OW-28]). Absent for a run no person is present for (a cron, a trigger, a scheduled
+       * workflow): the drive spends and no person's cap applies (SPEND-6).
+       */
+      personPresent?: true;
+    };
 
 /** The personal root wallet: no drive (SPEND-8). */
 export const PERSONAL_SPEND: SpendTarget = Object.freeze({ kind: 'personal' });
@@ -105,6 +129,15 @@ export function automationSpend(driveId: string): SpendTarget {
 }
 
 /**
+ * The target for a run a PERSON triggers in `driveId` with no conversation of their own — a
+ * channel @mention: it spends the drive wallet or is skipped like an automation (never the
+ * person's own credits or seat), but the person's caps on that wallet bind.
+ */
+export function personTriggeredSpend(driveId: string): SpendTarget {
+  return { kind: 'automation', driveId, personPresent: true };
+}
+
+/**
  * SPEND-6, fail closed: an automation about to call a model with NO reserved wallet. Its
  * usage would settle through consumeCredits' fallback onto the recorded person's personal
  * root, which an automation must never reach. Refuse the run before the model is called.
@@ -128,9 +161,19 @@ export function automationRunUnreserved(input: {
  * `source`: the same drive and exactly the source already chosen, so a tool that gates
  * its own model call can never land on a different wallet than the turn it runs in.
  */
-export function resolvedSpend(target: SpendTarget, source: SpendSourceKind | undefined): SpendTarget {
+export function resolvedSpend(target: SpendTarget, source: SpendSourceKind | undefined, fallbackFromWalletId?: string | null): SpendTarget {
   if (target.kind !== 'drive' || source === undefined) return target;
-  return { ...target, chosen: source };
+  return {
+    ...target,
+    chosen: source,
+    followOn: true,
+    ...(fallbackFromWalletId ? { fallbackFromWalletId } : {}),
+  };
+}
+
+/** The chosen wallet a turn's fallback moved off, as its follow-on target carries it (WAL-6b). */
+export function spendFallbackFromWalletId(target: SpendTarget | undefined): string | undefined {
+  return target?.kind === 'drive' ? target.fallbackFromWalletId : undefined;
 }
 
 /**
@@ -263,6 +306,17 @@ export function reservedAgainstCents(
 /** One wallet as a SpendLeg for wallet-core. */
 export function walletLeg(walletId: string, status: WalletStatus, spendableCents: number): SpendLeg {
   return { walletId, status, spendableCents: Math.max(0, whole(spendableCents)) };
+}
+
+/**
+ * A person's leg on a drive wallet, bounded by their own caps on it (WAL-7): never more than
+ * what is left of their daily and monthly cap. `capReached` says the cap, not the wallet, is
+ * the bound, so an uncovered leg refuses by name (`source_cap_reached`). No cap row: the leg.
+ */
+export function cappedConsumerLeg(leg: SpendLeg, remaining: CapRemaining | null): SpendLeg {
+  if (remaining === null) return leg;
+  const spendableCents = legSpendableCents(leg.spendableCents, remaining);
+  return spendableCents < leg.spendableCents ? { ...leg, spendableCents, capReached: true } : leg;
 }
 
 /**
@@ -409,6 +463,10 @@ export function orgEntitlementTier(orgLapsed: boolean): SubscriptionTier {
 export interface CallSpendInput extends CallSpendLegs {
   /** The source this turn already resolved, for a follow-on call; null for a turn's first call. */
   chosen: SpendSourceKind | null;
+  /** A follow-on call in a turn (SpendTarget `followOn`): no fallback, ever (SPEND-4). */
+  followOn?: boolean;
+  /** The turn's fallback origin a follow-on carries (SpendTarget `fallbackFromWalletId`, WAL-6b). */
+  fallbackFromWalletId?: string | null;
   /** What is stored for this conversation and person (SPEND-3); none when omitted. */
   stored?: StoredSpendChoice;
   userOverride: UserSpendOverride;
@@ -426,6 +484,8 @@ export type CallSpendDecision =
       walletId: string;
       fallbackApplied: boolean;
       fallbackFrom: SpendSourceKind | null;
+      /** The chosen source's wallet a fallback moved the call off, else null (WAL-6b, see resolveSpendSource). */
+      fallbackFromWalletId: string | null;
       /** The tier whose entitlements (the pro-model gate) apply to this call (WAL-8). */
       entitlementTier: SubscriptionTier;
     }
@@ -478,6 +538,7 @@ export function personalRootDecision(consumerTier: SubscriptionTier): CallSpendD
     walletId: PERSONAL_ROOT_NOT_YET_CREATED,
     fallbackApplied: false,
     fallbackFrom: null,
+    fallbackFromWalletId: null,
     entitlementTier: consumerTier,
   };
 }
@@ -499,7 +560,11 @@ export function decideCallSpend(input: CallSpendInput): CallSpendDecision {
     seatAllowance: input.seatAllowance,
     personal: input.personal,
     chosen: null,
-    driveRule: input.driveRule,
+    // A follow-on call names the source its turn already resolved (resolvedSpend): it spends
+    // that source or refuses by name, and never falls back again. A fallback moves only a
+    // turn's FIRST call, where the turn shows the new source (SPEND-4); a tool, a compaction or
+    // a voice window that re-applied one would switch wallets with nothing on screen.
+    driveRule: input.followOn === true ? { ...input.driveRule, fallback: 'refuse' as const } : input.driveRule,
     userOverride: input.userOverride,
     reservationCents: input.reservationCents,
   };
@@ -520,6 +585,9 @@ export function decideCallSpend(input: CallSpendInput): CallSpendDecision {
     walletId: resolution.walletId,
     fallbackApplied: resolution.fallbackApplied,
     fallbackFrom: resolution.fallbackFrom,
+    // A follow-on spends the source its turn resolved and never falls back itself, but when that
+    // turn fell back it carries the chosen wallet on, so its own overshoot lands there (WAL-6b).
+    fallbackFromWalletId: resolution.fallbackFromWalletId ?? (input.followOn === true ? input.fallbackFromWalletId ?? null : null),
     entitlementTier: entitlementTierFor({
       source: resolution.source,
       walletOwnerTier: input.walletOwnerTier,
@@ -527,3 +595,14 @@ export function decideCallSpend(input: CallSpendInput): CallSpendDecision {
     }),
   };
 }
+
+/**
+ * What the spending-from chip and popover call a source (UI-8), so the client never resolves a
+ * wallet id: the drive's wallet by the drive's name, a seat by the org's name, and own credits.
+ */
+export function spendChoiceLabel(input: { source: SpendSourceKind; driveName: string | null; orgName: string | null }): string {
+  if (input.source === 'drive_wallet') return input.driveName ? `${input.driveName} wallet` : 'Drive wallet';
+  if (input.source === 'seat_allowance') return input.orgName ? `${input.orgName} seat` : 'Organization seat';
+  return 'Your credits';
+}
+

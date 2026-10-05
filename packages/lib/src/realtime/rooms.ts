@@ -83,6 +83,13 @@ export const driveRoom = (driveId: string): string => `drive:${driveId}`;
 /** Drive calendar room. */
 export const driveCalendarRoom = (driveId: string): string => `drive:${driveId}:calendar`;
 
+/**
+ * Drive wallet room (Spec X-4): `wallet:changed` events. Joined only by people with a wallet
+ * view of the drive (wallet-access: a member, guest, lead or org admin) — never a page-share
+ * collaborator who can reach the drive room but whose wallet read is a 404.
+ */
+export const driveWalletRoom = (driveId: string): string => `drive:${driveId}:wallet`;
+
 /** Direct-message conversation room. */
 export const dmRoom = (conversationId: string): string => `dm:${conversationId}`;
 
@@ -136,6 +143,7 @@ export const ALL_ROOM_BUILDERS: ReadonlyArray<(id: string) => string> = [
   userSessionsRoom,
   driveRoom,
   driveCalendarRoom,
+  driveWalletRoom,
   dmRoom,
   sessionRoom,
   conversationRoom,
@@ -177,8 +185,8 @@ export function isKnownRoomId(roomId: string): boolean {
     return isCUID2(segments[1]);
   }
 
-  // drive:<cuid>:calendar
-  if (segments.length === 3 && segments[0] === 'drive' && segments[2] === 'calendar') {
+  // drive:<cuid>:calendar | drive:<cuid>:wallet
+  if (segments.length === 3 && segments[0] === 'drive' && (segments[2] === 'calendar' || segments[2] === 'wallet')) {
     return isCUID2(segments[1]);
   }
 
@@ -223,6 +231,7 @@ export function isKnownRoomId(roomId: string): boolean {
 export const roomsForDriveKick = (driveId: string): string[] => [
   driveRoom(driveId),
   driveCalendarRoom(driveId),
+  driveWalletRoom(driveId),
   driveActivityRoom(driveId),
 ];
 

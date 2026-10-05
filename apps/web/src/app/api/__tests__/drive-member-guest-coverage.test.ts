@@ -90,6 +90,10 @@ const LEDGER = new Map<string, Entry>([
     reads: 3, decision: 'excludes',
     reason: 'memberOutsiders and takeOutsider exist to FIND GUEST and outside-member rows and take them out (park or queue), so they include GUEST rows on purpose; they only remove access and grant nothing. The one read that lets access through, admitReentry\'s admitted-guest check, excludes GUEST (role <> \'GUEST\', accepted only): a page-link guest holds one page, not the drive, so a restored grant or a member upsert for them is asked like any outsider\'s. The page-move exemption in grantOutsiders (raw SQL) excludes GUEST the same way.',
   }],
+  ['packages/lib/src/permissions/drive-member-labels.ts', {
+    reads: 1, decision: 'neutral',
+    reason: 'listDrivePageLinkGuests exists to LIST the GUEST rows (D-OW-24) apart from members on the Members page, for the lead and admins only; it is a display list behind the route\'s access check and grants nothing.',
+  }],
   ['packages/lib/src/permissions/org-guest-footprint.ts', {
     reads: 1, decision: 'neutral',
     reason: 'isOrgGuest exists to FIND guest and outside-member rows on an org\'s drives, so it must not exclude them; it only withholds verified-domain auto-join (SEC-1) from a guest and grants nothing.',

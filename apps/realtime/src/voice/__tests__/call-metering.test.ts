@@ -603,7 +603,19 @@ describe('startCallMeter — the source a call spends', () => {
     await meter.settle();
 
     expect(gate).toHaveBeenCalledTimes(2);
-    expect((gate.mock.calls[1] as unknown[])[2]).toEqual(expect.objectContaining({ spend: { ...DRIVE_TARGET, chosen: 'drive_wallet' } }));
+    expect((gate.mock.calls[1] as unknown[])[2]).toEqual(expect.objectContaining({ spend: { ...DRIVE_TARGET, chosen: 'drive_wallet', followOn: true } }));
+  });
+
+  it('SPEND-4 (partial) an opening gate that fell back is reported with the started meter, from and to; one that did not reports none', async () => {
+    const fellBack = vi.fn(async () => ({
+      allowed: true, reason: 'ok' as const, holdId: 'hold-1', walletId: 'w-own', spendSource: 'own_credits' as const,
+      fallback: { from: 'drive_wallet' as const, to: 'own_credits' as const },
+    }));
+    const started = await startCallMeter(harness({ spend: DRIVE_TARGET, gate: fellBack as unknown as CallMeterOptions['gate'] }).options);
+    expect(started).toMatchObject({ ok: true, spendFallback: { from: 'drive_wallet', to: 'own_credits', walletId: 'w-own' } });
+
+    const plain = await startCallMeter(harness({ spend: DRIVE_TARGET, gate: driveGate() as unknown as CallMeterOptions['gate'] }).options);
+    expect(plain).toMatchObject({ ok: true, spendFallback: null });
   });
 
   it('SPEND-1 (partial) each window settles once, on the hold and wallet its own reservation named', async () => {
@@ -656,7 +668,7 @@ describe('startCallMeter — the source a call spends', () => {
     const gate = driveGate();
     const { options } = harness({ spend: DRIVE_TARGET, gate: gate as unknown as CallMeterOptions['gate'] });
     const meter = await startedMeter(options);
-    expect(meter.spend).toEqual({ ...DRIVE_TARGET, chosen: 'drive_wallet' });
+    expect(meter.spend).toEqual({ ...DRIVE_TARGET, chosen: 'drive_wallet', followOn: true });
   });
 
   it('SPEND-8 (partial) a call with no drive spends personal credits', async () => {

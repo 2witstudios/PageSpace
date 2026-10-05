@@ -42,6 +42,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { AIMonitoring, extractOpenRouterCostDollars, extractOpenRouterGenerationIds } from '@pagespace/lib/monitoring/ai-monitoring';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { conversationSpend, resolvedSpend } from '@pagespace/lib/billing/spend-target';
+import { spendFallbackHeaders, spendFallbackNotice, type SpendFallbackNotice } from '@pagespace/lib/billing/spend-fallback';
 import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
 import { ADMIN_ONLY_PROVIDERS } from '@/lib/ai/core/ai-providers-config';
 import { createAdminRestrictedResponse } from '@/lib/subscription/rate-limit-middleware';
@@ -252,6 +253,9 @@ export async function POST(request: Request): Promise<Response> {
   // (SPEND-7). A thread (conversation_id) carries its stored source (SPEND-3); the gate reads
   // it only when the caller owns that conversation. A stateless call has none.
   let spend = conversationSpend(page.driveId, incomingConversationId ?? null);
+  // SPEND-4: a drive rule that moved the call to another source is reported on the response
+  // (the X-Spend-Fallback-* headers), never applied silently.
+  let spendFallback: SpendFallbackNotice | null = null;
   if (!isMeteringExempt(effectiveProvider)) {
     const creditGate = await canConsumeAI(authResult.userId, (gateUser?.subscriptionTier ?? 'free') as SubscriptionTier, {
       spend,
@@ -264,7 +268,8 @@ export async function POST(request: Request): Promise<Response> {
     }
     holdId = creditGate.holdId;
     walletId = creditGate.walletId;
-    spend = resolvedSpend(spend, creditGate.spendSource);
+    spend = resolvedSpend(spend, creditGate.spendSource, creditGate.fallbackFromWalletId);
+    spendFallback = spendFallbackNotice(creditGate);
   }
 
   // Ownership of the hold transfers to the streaming lifecycle only once we return the
@@ -789,6 +794,7 @@ export async function POST(request: Request): Promise<Response> {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
         Connection: 'keep-alive',
+        ...spendFallbackHeaders(spendFallback),
       },
     });
   } catch (setupError) {

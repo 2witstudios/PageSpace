@@ -180,13 +180,13 @@ describe('the approval queue routes', () => {
     expect(emitAcceptanceSideEffects).not.toHaveBeenCalled();
   });
 
-  it('POL-2 (partial) a link that is gone (revoked or turned off) admits nobody: 409 with the reason, and the request is not re-queued', async () => {
+  it('POL-2 (partial) a link that is gone (revoked or turned off) admits nobody: 409 with its code, and the request is not re-queued', async () => {
     as('ADMIN');
     vi.mocked(claimPendingGuestApproval).mockResolvedValue(claim({ origin: 'drive_link', request: { linkId: 'l1' } }) as never);
     vi.mocked(completeApprovedLinkAdmission).mockResolvedValue({ ok: false, error: 'LINK_GONE' });
     const res = await decide({ decision: 'approve' });
     expect(res.status).toBe(409);
-    expect(await res.json()).toMatchObject({ reason: 'LINK_GONE' });
+    expect(await res.json()).toMatchObject({ code: 'link_gone' });
     expect(requestGuestApproval).not.toHaveBeenCalled();
   });
 
@@ -214,7 +214,7 @@ describe('the approval queue routes', () => {
     vi.mocked(completeApprovedPageGrant).mockResolvedValue({ ok: false, error: 'PAGE_GONE' });
     const res = await decide({ decision: 'approve' });
     expect(res.status).toBe(409);
-    expect(await res.json()).toMatchObject({ reason: 'PAGE_GONE' });
+    expect(await res.json()).toMatchObject({ code: 'page_gone' });
     expect(requestGuestApproval).not.toHaveBeenCalled();
     expect(recordOrgAuditEvent).not.toHaveBeenCalled();
   });

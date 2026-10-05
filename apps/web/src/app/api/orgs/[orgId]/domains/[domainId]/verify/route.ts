@@ -18,7 +18,7 @@ const VERIFY_ERRORS = {
 } as const;
 
 const tooMany = (retryAfter: number | undefined) =>
-  NextResponse.json({ error: 'Too many verification attempts. Please try again later.' }, { status: 429, headers: { 'Retry-After': String(retryAfter ?? 900) } });
+  NextResponse.json({ error: 'Too many verification attempts. Please try again later.', code: 'rate_limited' }, { status: 429, headers: { 'Retry-After': String(retryAfter ?? 900) } });
 
 /**
  * POST /api/orgs/[orgId]/domains/[domainId]/verify — prove control of a claimed domain (SEC-1); Owner and
@@ -32,7 +32,7 @@ export async function POST(request: Request, context: Context) {
   if (!gate.ok) return gate.response;
   try {
     const parsed = domainVerifySchema.safeParse(await request.json().catch(() => null));
-    if (!parsed.success) return NextResponse.json({ error: 'Invalid request body', issues: parsed.error.issues }, { status: 400 });
+    if (!parsed.success) return NextResponse.json({ error: 'Invalid request body', issues: parsed.error.issues, code: 'invalid_request' }, { status: 400 });
 
     if (parsed.data.method === 'dns') {
       const limit = await checkDistributedRateLimit(`org_domain_dns:${orgId}`, DISTRIBUTED_RATE_LIMITS.API);
@@ -41,7 +41,7 @@ export async function POST(request: Request, context: Context) {
       if (!result.ok) {
         // A refused proof is a forensic fact: someone tried to take a domain.
         auditRequest(request, { eventType: 'authz.access.denied', userId: gate.userId, resourceType: 'org_domain', resourceId: domainId, details: { orgId, method: 'dns', reason: result.reason } });
-        return NextResponse.json({ error: VERIFY_ERRORS[result.reason], reason: result.reason }, { status: result.status });
+        return NextResponse.json({ error: VERIFY_ERRORS[result.reason], code: result.reason }, { status: result.status });
       }
       return NextResponse.json({ domain: result.domain, alreadyVerified: result.alreadyVerified });
     }
@@ -60,14 +60,14 @@ export async function POST(request: Request, context: Context) {
     if (!sent.ok) {
       if (sent.reason === 'delivery_failed') {
         loggers.api.error('Failed to send domain verification email', sent.cause as Error, { orgId });
-        return NextResponse.json({ error: 'Failed to send the verification email' }, { status: 502 });
+        return NextResponse.json({ error: 'Failed to send the verification email', code: 'delivery_failed' }, { status: 502 });
       }
       auditRequest(request, { eventType: 'authz.access.denied', userId: gate.userId, resourceType: 'org_domain', resourceId: domainId, details: { orgId, method: 'email', reason: sent.reason } });
-      return NextResponse.json({ error: VERIFY_ERRORS[sent.reason], reason: sent.reason }, { status: sent.status });
+      return NextResponse.json({ error: VERIFY_ERRORS[sent.reason], code: sent.reason }, { status: sent.status });
     }
     return NextResponse.json({ sentTo: sent.sentTo, expiresAt: sent.expiresAt }, { status: 202 });
   } catch (error) {
     loggers.api.error('Error verifying organization domain:', error as Error);
-    return NextResponse.json({ error: 'Failed to verify domain' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to verify domain', code: 'internal_error' }, { status: 500 });
   }
 }

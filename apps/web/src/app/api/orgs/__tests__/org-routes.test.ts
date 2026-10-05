@@ -320,6 +320,13 @@ describe('org route behaviour', () => {
     expect(await quiet.json()).not.toHaveProperty('billingNotice');
   });
 
+  it.each(['OWNER', 'ADMIN', 'MEMBER'] as const)('UI-11 (partial) GET /api/orgs/[orgId] names the caller\'s own role (%s), so the hub renders by role', async (role) => {
+    asRole(role);
+    const res = await orgRoute.GET(req('GET'), params({ orgId: ORG_ID }));
+    expect(res.status).toBe(200);
+    expect((await res.json()).viewer).toEqual({ userId: expect.any(String), role });
+  });
+
   it('ORG-1 (partial) POST /api/orgs makes the caller the Owner and never returns billing ids', async () => {
     const res = await orgsRoute.POST(req('POST', { name: 'Northwind Labs', slug: 'Northwind', avatarUrl: 'https://example.test/n.png' }));
     expect(res.status).toBe(201);
@@ -370,17 +377,17 @@ describe('org route behaviour', () => {
     vi.mocked(repository.createOrganization).mockResolvedValue({ ok: false, reason: 'owner_not_human' });
     const created = await orgsRoute.POST(req('POST', { name: 'N', slug: 'northwind' }));
     expect(created.status).toBe(403);
-    expect(await created.json()).toMatchObject({ reason: 'owner_not_human' });
+    expect(await created.json()).toMatchObject({ code: 'owner_not_human' });
     vi.mocked(repository.createOrganization).mockResolvedValue({ ok: false, reason: 'owner_not_found' });
     const vanished = await orgsRoute.POST(req('POST', { name: 'N', slug: 'northwind' }));
     expect(vanished.status).toBe(404);
-    expect(await vanished.json()).toMatchObject({ reason: 'owner_not_found' });
+    expect(await vanished.json()).toMatchObject({ code: 'owner_not_found' });
 
     asRole('OWNER');
     vi.mocked(membership.transferOwnership).mockResolvedValue({ ok: false, status: 400, reason: 'owner_not_human' });
     const transferred = await transferRoute.POST(req('POST', { toUserId: 'agent_page' }), params({ orgId: ORG_ID }));
     expect(transferred.status).toBe(400);
-    expect(await transferred.json()).toEqual({ error: 'Only a person can own an organization', reason: 'owner_not_human' });
+    expect(await transferred.json()).toEqual({ error: 'Only a person can own an organization', code: 'owner_not_human' });
   });
 
   it('ORG-1 (partial) an org avatar must be an https URL, never a script or data URI', async () => {
@@ -400,12 +407,12 @@ describe('org route behaviour', () => {
     expect(membership.changeMemberRole).not.toHaveBeenCalled();
   });
 
-  it('ORG-2 (partial) a refused role change or removal carries the service status and reason', async () => {
+  it('ORG-2 (partial) a refused role change or removal carries the service status and code', async () => {
     asRole('ADMIN');
     vi.mocked(membership.removeMember).mockResolvedValue({ ok: false, status: 400, reason: 'use_ownership_transfer' });
     const res = await memberRoute.DELETE(req('DELETE'), params({ orgId: ORG_ID, userId: 'user_jono' }));
     expect(res.status).toBe(400);
-    expect((await res.json()).reason).toBe('use_ownership_transfer');
+    expect((await res.json()).code).toBe('use_ownership_transfer');
     expect(membership.removeMember).toHaveBeenCalledWith({ orgId: ORG_ID, actorId: CALLER, targetId: 'user_jono' });
   });
 
@@ -466,7 +473,7 @@ describe('org route behaviour', () => {
       params({ orgId: ORG_ID }),
     );
     expect(res.status).toBe(400);
-    expect(await res.json()).toMatchObject({ reason: 'transfer_target_not_member', driveIds: ['d_product'] });
+    expect(await res.json()).toMatchObject({ code: 'transfer_target_not_member', driveIds: ['d_product'] });
   });
 
   it('ORG-3 (partial) inviting sends the email with the new token and never returns the token', async () => {

@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { announceOrgChange } from '@pagespace/lib/organizations/org-change-events';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { transferOwnership } from '@pagespace/lib/organizations/membership';
@@ -17,7 +18,7 @@ export async function POST(request: Request, context: { params: Promise<{ orgId:
   try {
     const parsed = transferOwnershipSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) {
-      return NextResponse.json({ error: 'Invalid request body', issues: parsed.error.issues }, { status: 400 });
+      return NextResponse.json({ error: 'Invalid request body', issues: parsed.error.issues, code: 'invalid_request' }, { status: 400 });
     }
     const result = await transferOwnership({ orgId, actorId: gate.userId, targetId: parsed.data.toUserId });
     if (!result.ok) {
@@ -31,7 +32,7 @@ export async function POST(request: Request, context: { params: Promise<{ orgId:
               : result.reason === 'not_found'
                 ? 'Organization not found'
                 : 'Only the Owner can transfer ownership';
-      return NextResponse.json({ error, reason: result.reason }, { status: result.status });
+      return NextResponse.json({ error, code: result.reason }, { status: result.status });
     }
     auditRequest(request, {
       eventType: 'authz.role.assigned',
@@ -40,9 +41,11 @@ export async function POST(request: Request, context: { params: Promise<{ orgId:
       resourceId: orgId,
       details: { operation: 'transfer_org_ownership', fromUserId: gate.userId, toUserId: parsed.data.toUserId },
     });
+    // X-4: members see the change without a refresh (org:changed, no content).
+    void announceOrgChange(orgId, 'membership');
     return NextResponse.json({ ownerId: parsed.data.toUserId });
   } catch (error) {
     loggers.api.error('Error transferring organization ownership:', error as Error);
-    return NextResponse.json({ error: 'Failed to transfer ownership' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to transfer ownership', code: 'internal_error' }, { status: 500 });
   }
 }

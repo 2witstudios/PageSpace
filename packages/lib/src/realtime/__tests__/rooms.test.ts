@@ -54,9 +54,9 @@ describe('room builders', () => {
   });
 
   it('ALL_ROOM_BUILDERS covers every exported builder', () => {
-    expect(ALL_ROOM_BUILDERS).toHaveLength(14);
+    expect(ALL_ROOM_BUILDERS).toHaveLength(15);
     const outputs = ALL_ROOM_BUILDERS.map((build) => build(id));
-    expect(new Set(outputs).size).toBe(14);
+    expect(new Set(outputs).size).toBe(15);
   });
 });
 
@@ -111,10 +111,11 @@ describe('isCUID2', () => {
 });
 
 describe('kick room sets', () => {
-  it('drive kick covers drive, drive calendar, and drive activity rooms', () => {
+  it('drive kick covers drive, drive calendar, drive wallet and drive activity rooms', () => {
     expect(roomsForDriveKick(id)).toEqual([
       `drive:${id}`,
       `drive:${id}:calendar`,
+      `drive:${id}:wallet`,
       `activity:drive:${id}`,
     ]);
   });

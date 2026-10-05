@@ -33,9 +33,9 @@ const facts = (over: Partial<DriveWalletFacts> = {}): DriveWalletFacts => ({
   },
   myCap: { dailyCapCents: c(10), monthlyCapCents: null, spentTodayCents: c(4), spentThisMonthCents: c(50) },
   spendByConsumer: [
-    { consumerKey: 'user:u-marcus', userId: 'u-marcus', spentCents: c(50) },
-    { consumerKey: 'user:u-lena', userId: 'u-lena', spentCents: c(30) },
-    { consumerKey: 'drive:d-product', userId: null, spentCents: c(20) },
+    { consumerKey: 'user:u-marcus', userId: 'u-marcus', displayName: 'Marcus Oyelaran', spentCents: c(50) },
+    { consumerKey: 'user:u-lena', userId: 'u-lena', displayName: 'Lena Lead', spentCents: c(30) },
+    { consumerKey: 'drive:d-product', userId: null, displayName: null, spentCents: c(20) },
   ],
   pool: { walletId: 'w-pool', availableCents: c(9000), outstandingChildAllocationsCents: c(3000) },
   ...over,
@@ -129,6 +129,17 @@ describe('wallet-views: the projection each viewer gets', () => {
     });
     expect('pool' in view).toBe(false);
     expect(JSON.stringify(view)).not.toContain(String(c(9000)));
+  });
+
+  it('UI-9 (partial) the lead\'s and admin\'s amounts come with credit counts and spend by member comes with names, so the client never converts or resolves an id', () => {
+    const view = projectDriveWallet('org_admin', facts());
+    expect(view).toMatchObject({
+      allocationCredits: '1,200', spentCredits: '100', topupRemainingCredits: '40', debtCredits: '0',
+      pool: { availableCredits: '9,000', unallocatedCredits: '6,000' },
+    });
+    if (view.viewer !== 'org_admin') throw new Error('expected an org admin view');
+    expect(view.spendByConsumer.map((s) => [s.displayName, s.spentCredits])).toEqual([['Marcus Oyelaran', '50'], ['Lena Lead', '30'], [null, '20']]);
+    expect(JSON.stringify(view)).not.toContain('$');
   });
 
   it('SPEND-10 (partial) an org admin also sees the pool and the unallocated balance', () => {

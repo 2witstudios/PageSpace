@@ -51,6 +51,7 @@ const conversationBody = {
     walletId: 'w_drive',
     fallbackApplied: false,
     fallbackFrom: null,
+    fallbackFromWalletId: null,
     entitlementTier: 'business',
   },
 };

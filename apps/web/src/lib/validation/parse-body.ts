@@ -6,7 +6,8 @@ type ParseResult<T> = ParseSuccess<T> | ParseFailure;
 
 /**
  * Safely parse a JSON request body and validate it against a Zod schema.
- * Returns a 400 response for malformed JSON or schema violations instead of throwing.
+ * Returns a 400 response for malformed JSON or schema violations instead of throwing, coded
+ * `invalid_request` (the org/wallet routes' error convention; additive everywhere else).
  */
 export async function safeParseBody<T>(
   request: Request,
@@ -18,7 +19,7 @@ export async function safeParseBody<T>(
   } catch {
     return {
       success: false,
-      response: Response.json({ error: 'Invalid JSON body' }, { status: 400 }),
+      response: Response.json({ error: 'Invalid JSON body', code: 'invalid_request' }, { status: 400 }),
     };
   }
 
@@ -29,7 +30,7 @@ export async function safeParseBody<T>(
       .join('; ');
     return {
       success: false,
-      response: Response.json({ error: message }, { status: 400 }),
+      response: Response.json({ error: message, code: 'invalid_request' }, { status: 400 }),
     };
   }
 

@@ -21,16 +21,16 @@ export async function GET(request: Request, context: Context) {
   if (!gate.ok) return gate.response;
   try {
     const parsed = parseOrgAuditFilter(orgAuditFilterInput(new URL(request.url)));
-    if (!parsed.ok) return NextResponse.json({ error: parsed.error }, { status: 400 });
+    if (!parsed.ok) return NextResponse.json({ error: parsed.error, code: 'invalid_request' }, { status: 400 });
     const limit = await checkDistributedRateLimit(`org_audit_read:${orgId}:${gate.userId}`, DISTRIBUTED_RATE_LIMITS.API);
     if (!limit.allowed) {
-      return NextResponse.json({ error: 'Too many requests. Please try again later.' }, { status: 429, headers: { 'Retry-After': String(limit.retryAfter ?? 60) } });
+      return NextResponse.json({ error: 'Too many requests. Please try again later.', code: 'rate_limited' }, { status: 429, headers: { 'Retry-After': String(limit.retryAfter ?? 60) } });
     }
     const page = await queryOrgAuditEvents(orgId, parsed.filter);
     auditRequest(request, { eventType: 'data.read', userId: gate.userId, resourceType: 'organization_audit_log', resourceId: orgId, details: { count: page.entries.length } });
     return NextResponse.json(page);
   } catch (error) {
     loggers.api.error('Error reading organization audit log:', error as Error);
-    return NextResponse.json({ error: 'Failed to read the audit log' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to read the audit log', code: 'internal_error' }, { status: 500 });
   }
 }

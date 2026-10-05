@@ -80,6 +80,9 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
 }));
 
 // conversation-access predicate mock (join_conversation authz — SSoT Phase 2)
+vi.mock('@pagespace/lib/permissions/spend-standing', () => ({
+  canViewDriveWallet: vi.fn().mockResolvedValue(false),
+}));
 vi.mock('@pagespace/lib/permissions/conversation-access', () => ({
   canAccessConversation: vi.fn(),
 }));
@@ -364,6 +367,7 @@ vi.mock('socket.io', () => ({
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { verifyBroadcastSignature } from '@pagespace/lib/auth/broadcast-auth';
 import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
+import { canViewDriveWallet } from '@pagespace/lib/permissions/spend-standing';
 import { canAccessConversation } from '@pagespace/lib/permissions/conversation-access';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { decryptField } from '@pagespace/lib/encryption/field-crypto';
@@ -1351,6 +1355,23 @@ describe('Socket.IO connection handler', () => {
 
       expect(socket.join).toHaveBeenCalledWith('drive:athmieqpwr4ax1t2e0i4lmor');
       expect(socket.join).toHaveBeenCalledWith('drive:athmieqpwr4ax1t2e0i4lmor:calendar');
+    });
+
+    it('X-4 (partial) only a person with a wallet view of the drive joins its wallet room; a page-share collaborator with drive access does not', async () => {
+      vi.mocked(getUserDriveAccess).mockResolvedValue(true);
+      vi.mocked(canViewDriveWallet).mockResolvedValueOnce(true);
+      const viewer = createMockSocket({ id: 'socket-v', data: { user: { id: 'user-1', name: 'T', avatarUrl: null } } });
+      capturedIoConnectionCallback!(viewer);
+      await viewer._trigger('join_drive', 'athmieqpwr4ax1t2e0i4lmor');
+      expect(viewer.join).toHaveBeenCalledWith('drive:athmieqpwr4ax1t2e0i4lmor:wallet');
+      expect(canViewDriveWallet).toHaveBeenLastCalledWith('user-1', 'athmieqpwr4ax1t2e0i4lmor');
+
+      vi.mocked(canViewDriveWallet).mockResolvedValueOnce(false);
+      const collaborator = createMockSocket({ id: 'socket-c', data: { user: { id: 'user-2', name: 'C', avatarUrl: null } } });
+      capturedIoConnectionCallback!(collaborator);
+      await collaborator._trigger('join_drive', 'athmieqpwr4ax1t2e0i4lmor');
+      expect(collaborator.join).toHaveBeenCalledWith('drive:athmieqpwr4ax1t2e0i4lmor');
+      expect(collaborator.join).not.toHaveBeenCalledWith('drive:athmieqpwr4ax1t2e0i4lmor:wallet');
     });
 
     it('given no access, should not join drive rooms', async () => {

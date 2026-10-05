@@ -267,6 +267,26 @@ export const walletDebtNotices = pgTable('wallet_debt_notices', {
 });
 
 /**
+ * walletCapAlerts — which per-consumer cap alert (WAL-7, D20.6: 80% and 100%) the funder of a
+ * wallet leg was sent, per consumer, cap window and period. The primary key IS the
+ * once-per-threshold-per-period guard: the alert shell inserts its row and notifies only when
+ * the insert landed, so two settles racing past a threshold send it once. `periodStart` is the
+ * UTC day for the daily window and the month (a seat: the pool period, D-OW-12) for the monthly.
+ */
+export const walletCapAlerts = pgTable('wallet_cap_alerts', {
+  walletId: text('walletId').notNull().references(() => wallets.id, { onDelete: 'cascade' }),
+  consumerKey: text('consumerKey').notNull(),
+  capWindow: text('capWindow').$type<'daily' | 'monthly'>().notNull(),
+  periodStart: timestamp('periodStart', { mode: 'date', withTimezone: true }).notNull(),
+  threshold: integer('threshold').notNull(),
+  sentAt: timestamp('sentAt', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.walletId, table.consumerKey, table.capWindow, table.periodStart, table.threshold], name: 'wallet_cap_alerts_pkey' }),
+  windowValid: check('wallet_cap_alerts_window_valid', sql`${table.capWindow} IN ('daily', 'monthly')`),
+  thresholdValid: check('wallet_cap_alerts_threshold_valid', sql`${table.threshold} IN (80, 100)`),
+}));
+
+/**
  * driveSpendOverrides — SPEND-5 "Always my own credits" in ONE drive (D17.2): a row means the
  * switch is on for (userId, driveId); no row means off. It only ever narrows what a call may
  * spend (own credits or refuse), so it grants nothing and needs no role. Both sides cascade:

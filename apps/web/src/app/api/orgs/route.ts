@@ -22,7 +22,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ organizations });
   } catch (error) {
     loggers.api.error('Error listing organizations:', error as Error);
-    return NextResponse.json({ error: 'Failed to list organizations' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to list organizations', code: 'internal_error' }, { status: 500 });
   }
 }
 
@@ -40,16 +40,16 @@ export async function POST(request: Request) {
   try {
     const parsed = orgCreateSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) {
-      return NextResponse.json({ error: 'Invalid request body', issues: parsed.error.issues }, { status: 400 });
+      return NextResponse.json({ error: 'Invalid request body', issues: parsed.error.issues, code: 'invalid_request' }, { status: 400 });
     }
     const result = await createOrganization({ ...parsed.data, ownerId: gate.userId });
     if (!result.ok) {
       if (result.reason === 'slug_taken') {
-        return NextResponse.json({ error: 'That organization URL is already taken' }, { status: 409 });
+        return NextResponse.json({ error: 'That organization URL is already taken', code: 'slug_taken' }, { status: 409 });
       }
       return result.reason === 'owner_not_found'
-        ? NextResponse.json({ error: 'Account not found', reason: result.reason }, { status: 404 })
-        : NextResponse.json({ error: 'Only a person can own an organization', reason: result.reason }, { status: 403 });
+        ? NextResponse.json({ error: 'Account not found', code: result.reason }, { status: 404 })
+        : NextResponse.json({ error: 'Only a person can own an organization', code: result.reason }, { status: 403 });
     }
     auditRequest(request, {
       eventType: 'data.write',
@@ -63,6 +63,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ organization: { id, name, slug, avatarUrl, ownerId, createdAt }, billing }, { status: 201 });
   } catch (error) {
     loggers.api.error('Error creating organization:', error as Error);
-    return NextResponse.json({ error: 'Failed to create organization' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to create organization', code: 'internal_error' }, { status: 500 });
   }
 }

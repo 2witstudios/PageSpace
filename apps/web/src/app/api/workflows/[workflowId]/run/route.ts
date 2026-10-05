@@ -61,12 +61,13 @@ export async function POST(
   // Atomic claim is enforced by the workflow_runs partial unique index inside
   // the executor — any concurrent fire (cron / manual) for the same workflow
   // returns claimConflict and we surface a 409. The credit gate runs inside
-  // that claim, before any model is built. The run bills the workflow's creator
-  // (executeWorkflow tracks usage as createdBy), so that is who is gated, not
-  // the admin who pressed Run.
+  // that claim, before any model is built. Pressing Run is the CALLER's spend (the actor
+  // pays, as for a channel @mention): the gate admits it as them, so their per-consumer caps
+  // on the drive wallet bind (WAL-7). It still spends only the drive wallet. Usage is recorded
+  // under the workflow's creator, as for every run.
   let deniedReason: GateReason | undefined;
   const result = await executeWorkflow(executionInput, {
-    admit: creditAdmission(executionInput, 'interactive', (reason) => { deniedReason = reason; }),
+    admit: creditAdmission(executionInput, 'interactive', (reason) => { deniedReason = reason; }, auth.userId),
   });
 
   if (result.claimConflict) {

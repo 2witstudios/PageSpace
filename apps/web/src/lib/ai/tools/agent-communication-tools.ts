@@ -9,7 +9,7 @@ import { pages, drives } from '@pagespace/db/schema/core';
 import { conversations as conversationsTable, messages as unifiedMessages } from '@pagespace/db/schema/conversations';
 import { users } from '@pagespace/db/schema/auth';
 import { prepareHistoryForModel, finishModelRequest } from '@/lib/ai/core/context-assembly';
-import { PERSONAL_SPEND, spendDriveId } from '@pagespace/lib/billing/spend-target';
+import { PERSONAL_SPEND, spendDriveId, spendFallbackFromWalletId } from '@pagespace/lib/billing/spend-target';
 import { runCompaction } from '@/lib/ai/core/compaction/compaction-service';
 import { canActorViewPage, canActorAccessDrive, canActorConsultAgent, filterDriveIdsByAppTokenScope, filterDriveIdsByMcpScope, isMcpScoped, resolveActingAgentId } from './actor-permissions';
 import { listAgentDrives, getAgentContextDrives } from '@pagespace/lib/services/drive-agent-service';
@@ -889,6 +889,8 @@ export async function executeAskAgent(
           pageId: agentId,
           driveId: targetAgent.driveId,
           walletId: executionContext?.creditSpend?.walletId,
+          // WAL-6b: no hold of its own, so it carries its turn's fallback origin to the settle.
+          fallbackFromWalletId: spendFallbackFromWalletId(executionContext?.creditSpend?.spend),
           success: true,
           metadata: { feature: 'ask_agent', agentCallDepth: callDepth + 1 },
         });

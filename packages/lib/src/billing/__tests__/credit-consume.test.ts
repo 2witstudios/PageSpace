@@ -428,7 +428,10 @@ describe('consumeCredits', () => {
     let holdDeleted = false;
     mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
       const tx = {
-        select: () => ({ from: () => ({ where: () => ({ for: () => Promise.resolve([{ monthlyRemainingCents: 1000, topupRemainingCents: 0, pendingMillicents: 0 }]) }) }) }),
+        // Awaited directly it is the hold's row (no fallback, WAL-6b); `.for()` is the locked wallet.
+        select: () => ({ from: () => ({ where: () => Object.assign(Promise.resolve([{ id: null }]), {
+          for: () => Promise.resolve([{ monthlyRemainingCents: 1000, topupRemainingCents: 0, pendingMillicents: 0 }]),
+        }) }) }),
         update: vi.fn()
           .mockReturnValueOnce({ set: () => ({ where: vi.fn().mockResolvedValue(undefined) }) })
           .mockReturnValueOnce({ set: () => ({ where: vi.fn().mockResolvedValue(undefined) }) })

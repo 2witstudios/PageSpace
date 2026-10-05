@@ -14,7 +14,7 @@ export async function DELETE(
   if (!gate.ok) return gate.response;
   try {
     const revoked = await revokeInvitation({ orgId, invitationId, actorId: gate.userId });
-    if (!revoked) return NextResponse.json({ error: 'Invitation not found' }, { status: 404 });
+    if (!revoked) return NextResponse.json({ error: 'Invitation not found', code: 'not_found' }, { status: 404 });
     auditRequest(request, {
       eventType: 'data.delete',
       userId: gate.userId,
@@ -25,6 +25,6 @@ export async function DELETE(
     return NextResponse.json({ revoked: true });
   } catch (error) {
     loggers.api.error('Error revoking organization invitation:', error as Error);
-    return NextResponse.json({ error: 'Failed to revoke invitation' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to revoke invitation', code: 'internal_error' }, { status: 500 });
   }
 }

@@ -4,7 +4,7 @@ import { drives } from '@pagespace/db/schema/core';
 import { orgMembers } from '@pagespace/db/schema/organizations';
 import { isDriveLead, isDriveMemberRelationship } from './drive-relationship';
 import { loadDriveRelationships } from './drive-relationship-loader';
-import type { WalletStanding } from './wallet-access';
+import { walletViewerRole, type WalletStanding } from './wallet-access';
 
 /**
  * A person's standing in the drive an AI call runs in, for the wallet-aware credit gate
@@ -115,4 +115,14 @@ export async function loadDriveWalletStanding(userId: string, driveId: string): 
     isDriveMember: relationship ? isDriveMemberRelationship(relationship) : false,
     orgRole,
   };
+}
+
+/**
+ * Whether `userId` has a wallet view of `driveId` at all (wallet-access: member, guest, lead or
+ * org admin). The realtime server asks it before joining the drive wallet room (X-4), so a
+ * page-share collaborator, whose wallet read is a 404, never hears wallet:changed.
+ */
+export async function canViewDriveWallet(userId: string, driveId: string): Promise<boolean> {
+  const standing = await loadDriveWalletStanding(userId, driveId);
+  return standing !== null && walletViewerRole(standing) !== 'none';
 }

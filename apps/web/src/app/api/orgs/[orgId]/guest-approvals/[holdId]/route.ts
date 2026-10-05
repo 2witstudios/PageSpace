@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import type { OrgApiErrorCode } from '@pagespace/lib/organizations/api-error-codes';
 import { z } from 'zod/v4';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { recordOrgAuditEvent } from '@pagespace/lib/audit/org-audit';
@@ -29,6 +30,13 @@ const PAGE_GRANT_REFUSALS = {
   POLICY_OFF: GUESTS_OFF_MESSAGE,
 } as const;
 
+/** The machine codes of PAGE_GRANT_REFUSALS: the one {error, code} convention (UI-7), never `reason`. */
+const PAGE_GRANT_REFUSAL_CODES = {
+  NOT_A_PAGE_GRANT: 'not_a_page_grant',
+  PAGE_GONE: 'page_gone',
+  POLICY_OFF: 'org_policy',
+} as const satisfies Record<keyof typeof PAGE_GRANT_REFUSALS, OrgApiErrorCode>;
+
 /** The flags of a queued page grant, back in the share-invite's terms. */
 const invitePermissions = (p: { canView: boolean; canEdit: boolean; canShare: boolean }): PendingPagePermission[] => [
   ...(p.canView ? ['VIEW' as const] : []),
@@ -41,6 +49,13 @@ const LINK_REFUSALS = {
   LINK_GONE: 'The share link this person used no longer exists or has been turned off, so there is nothing to approve.',
   POLICY_OFF: GUESTS_OFF_MESSAGE,
 } as const;
+
+/** The machine code of each refusal (api-error-codes): snake_case, the convention of every org route. */
+const LINK_REFUSAL_CODES = {
+  NOT_A_LINK_REQUEST: 'not_a_link_request',
+  LINK_GONE: 'link_gone',
+  POLICY_OFF: 'org_policy',
+} as const satisfies Record<keyof typeof LINK_REFUSALS, OrgApiErrorCode>;
 
 /** Put a request back on the queue when approving it failed for a reason that is not the approver's. */
 async function requeue(claim: ClaimedGuestApproval): Promise<void> {
@@ -77,7 +92,7 @@ export async function POST(request: Request, context: Context) {
   if (!gate.ok) return gate.response;
   try {
     const parsed = decisionSchema.safeParse(await request.json().catch(() => null));
-    if (!parsed.success) return NextResponse.json({ error: 'Invalid request body', issues: parsed.error.issues }, { status: 400 });
+    if (!parsed.success) return NextResponse.json({ error: 'Invalid request body', issues: parsed.error.issues, code: 'invalid_request' }, { status: 400 });
 
     // Approving while guests are OFF would admit someone the policy forbids: refuse before touching the queue.
     if (parsed.data.decision === 'approve' && (await getOrgPolicies(orgId)).guests === 'off') {
@@ -85,7 +100,7 @@ export async function POST(request: Request, context: Context) {
     }
 
     const claim = await claimPendingGuestApproval({ orgId, holdId });
-    if (!claim) return NextResponse.json({ error: 'Request not found' }, { status: 404 });
+    if (!claim) return NextResponse.json({ error: 'Request not found', code: 'not_found' }, { status: 404 });
 
     if (parsed.data.decision === 'decline') {
       await audit(claim, 'org.guest.declined', gate.userId);
@@ -94,7 +109,7 @@ export async function POST(request: Request, context: Context) {
 
     if (claim.origin === 'invite') {
       const drive = await driveInviteRepository.findDriveById(claim.driveId);
-      if (!drive) return NextResponse.json({ error: 'Request not found' }, { status: 404 });
+      if (!drive) return NextResponse.json({ error: 'Request not found', code: 'not_found' }, { status: 404 });
       const req = claim.request;
       const inviterUserId = req.invitedBy ?? gate.userId;
       const role = req.role ?? 'MEMBER';
@@ -126,7 +141,7 @@ export async function POST(request: Request, context: Context) {
         // Guests turned OFF between the check above and the grant's own locked re-check: the request is not the
         // approver's fault and must not vanish, so it goes back on the queue (it can be approved once allowed again).
         if (granted.error === 'POLICY_OFF') await requeue(claim);
-        return NextResponse.json({ error: PAGE_GRANT_REFUSALS[granted.error], reason: granted.error }, { status: 409 });
+        return NextResponse.json({ error: PAGE_GRANT_REFUSALS[granted.error], code: PAGE_GRANT_REFUSAL_CODES[granted.error] }, { status: 409 });
       }
       // The same after-effects as an immediate grant: the person is told, and open clients refresh the pages.
       const permissions = claim.request.permissions ?? [];
@@ -148,7 +163,7 @@ export async function POST(request: Request, context: Context) {
       const asked = req.permissions?.[0];
       const page = req.pageId ? await pageInviteRepository.findPageById(req.pageId) : null;
       if (!page || page.driveId !== claim.driveId || !asked || !claim.email) {
-        return NextResponse.json({ error: PAGE_GRANT_REFUSALS.PAGE_GONE, reason: 'PAGE_GONE' }, { status: 409 });
+        return NextResponse.json({ error: PAGE_GRANT_REFUSALS.PAGE_GONE, code: PAGE_GRANT_REFUSAL_CODES.PAGE_GONE }, { status: 409 });
       }
       const response = await sendPendingPageInvite({
         request,
@@ -172,7 +187,7 @@ export async function POST(request: Request, context: Context) {
 
     const admitted = await completeApprovedLinkAdmission(claim);
     if (!admitted.ok) {
-      return NextResponse.json({ error: LINK_REFUSALS[admitted.error], reason: admitted.error }, { status: 409 });
+      return NextResponse.json({ error: LINK_REFUSALS[admitted.error], code: LINK_REFUSAL_CODES[admitted.error] }, { status: 409 });
     }
     if (admitted.memberId && admitted.role !== 'GUEST') {
       const ports = buildAcceptancePorts(request);
@@ -191,6 +206,6 @@ export async function POST(request: Request, context: Context) {
     return NextResponse.json({ decided: 'approved', driveId: admitted.driveId });
   } catch (error) {
     loggers.api.error('Error deciding a guest approval:', error as Error);
-    return NextResponse.json({ error: 'Failed to decide the request' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to decide the request', code: 'internal_error' }, { status: 500 });
   }
 }

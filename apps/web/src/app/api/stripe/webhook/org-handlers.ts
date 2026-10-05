@@ -27,6 +27,7 @@
  * lapse are logged transitions of that one row; nothing else is written — no drive,
  * member or credit is deleted or moved, so leaving lapse restores everything.
  */
+import { announceOrgChange } from '@pagespace/lib/organizations/org-change-events';
 import { db } from '@pagespace/db/db';
 import { eq, sql } from '@pagespace/db/operators';
 import { orgSubscriptions } from '@pagespace/db/schema/organizations';
@@ -180,6 +181,10 @@ export async function mirrorOrgSubscription(
         ...(outcome.transition ? { transition: outcome.transition } : {}),
       },
     });
+  }
+  if (outcome.kind === 'applied' && outcome.before !== outcome.after) {
+    // X-4: a lapse or a reactivation changes what every member may do — their surfaces refetch.
+    void announceOrgChange(orgId, 'status');
   }
   if (outcome.kind === 'ignored') {
     loggers.api.info('Stripe org subscription event not mirrored', { eventId, orgId, subscriptionId, reason: outcome.reason });

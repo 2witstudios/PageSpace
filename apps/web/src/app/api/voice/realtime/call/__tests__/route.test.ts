@@ -5,6 +5,7 @@
  * that the ephemeral secret never appears in a response body.
  */
 
+import { readSpendFallbackHeaders } from '@pagespace/lib/billing/spend-fallback';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const {
@@ -86,6 +87,7 @@ describe('POST /api/voice/realtime/call', () => {
       callId: 'rtc_abc',
       answerSdp: 'v=0 answer',
       attached: true,
+      spendFallback: null,
     });
   });
 
@@ -192,7 +194,19 @@ describe('POST /api/voice/realtime/call', () => {
       answerSdp: 'v=0 answer',
       attached: true,
       maxDurationMs: REALTIME_MAX_SESSION_SECONDS * 1000,
+      spendFallback: null,
     });
+  });
+
+  it('SPEND-4 (partial) a call whose opening gate fell back to another source says so in the answer and its headers, from and to', async () => {
+    const spendFallback = { from: 'seat_allowance', to: 'own_credits', walletId: 'w-own' } as const;
+    mockRunCallHandshake.mockResolvedValue({ ok: true, callId: 'rtc_abc', answerSdp: 'v=0 answer', attached: true, spendFallback });
+
+    const res = await POST(callRequest({ sdp: 'v=0 offer' }));
+
+    expect(res.status).toBe(200);
+    expect((await res.json()).spendFallback).toEqual(spendFallback);
+    expect(readSpendFallbackHeaders(res.headers)).toEqual(spendFallback);
   });
 
   it('should report the server-enforced duration cap so the client can chain ahead of it', async () => {

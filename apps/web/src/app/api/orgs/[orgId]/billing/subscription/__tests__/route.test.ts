@@ -125,10 +125,14 @@ describe('POST /api/orgs/[orgId]/billing/subscription', () => {
   it('SEAT-6 (partial) is absent where billing is off (onprem, tenant) and while orgs are dark', async () => {
     as('OWNER');
     flags.billingEnabled = false;
-    expect((await call()).status).toBe(404);
+    const billingOff = await call();
+    // Billing off is told apart from orgs being dark by its code (UI-7); orgs dark stays a bare 404.
+    expect([billingOff.status, (await billingOff.json()).code]).toEqual([404, 'billing_unavailable']);
     flags.billingEnabled = true;
     flags.orgsEnabled = false;
-    expect((await call()).status).toBe(404);
+    const dark = await call();
+    expect(dark.status).toBe(404);
+    expect(await dark.json()).toEqual({ error: 'Not found' });
     expect(provisionOrgSubscription).not.toHaveBeenCalled();
   });
 

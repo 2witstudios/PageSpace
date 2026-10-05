@@ -30,6 +30,7 @@ import { authorizePageConversation, type PageConversationAccess } from '@/lib/ai
 import { createId } from '@paralleldrive/cuid2';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { conversationSpend, resolvedSpend } from '@pagespace/lib/billing/spend-target';
+import { spendFallbackHeaders, spendFallbackNotice, type SpendFallbackNotice } from '@pagespace/lib/billing/spend-fallback';
 import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
 import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
@@ -319,6 +320,9 @@ export async function POST(request: Request) {
     // the gate reads it only when the caller owns that conversation, so an id not yet vetted
     // here names nothing.
     let spend = conversationSpend(agent.driveId, conversationId ?? null);
+    // SPEND-4: a drive rule that moved the call to another source is reported in the answer
+    // (`spendFallback` and the X-Spend-Fallback-* headers), never applied silently.
+    let spendFallback: SpendFallbackNotice | null = null;
     if (!isMeteringExempt(effectiveProvider)) {
       const creditGate = await canConsumeAI(userId, (gateUser?.subscriptionTier ?? 'free') as SubscriptionTier, {
         spend,
@@ -332,7 +336,8 @@ export async function POST(request: Request) {
       // The gate's reservation for this call, released when usage is billed below.
       holdId = creditGate.holdId;
       walletId = creditGate.walletId;
-      spend = resolvedSpend(spend, creditGate.spendSource);
+      spend = resolvedSpend(spend, creditGate.spendSource, creditGate.fallbackFromWalletId);
+      spendFallback = spendFallbackNotice(creditGate);
     }
 
     // Get the drive information for context awareness
@@ -822,6 +827,7 @@ export async function POST(request: Request) {
       response: responseText,
       context: context || null,
       conversationId: activeConversationId,
+      spendFallback,
       metadata: {
         conversationLength: historyMessages.length,
         toolsAvailable: Array.isArray(enabledTools) ? enabledTools.length : 0,
@@ -837,7 +843,7 @@ export async function POST(request: Request) {
         'Consider adjusting the agent\'s configuration if the response wasn\'t helpful',
         `Agent: ${agent.title} (${agent.id})`
       ]
-    });
+    }, { headers: spendFallbackHeaders(spendFallback) });
 
   } catch (error) {
     loggers.api.error('Error during agent consultation:', error as Error);

@@ -37,6 +37,7 @@ import { getDriveIdsForUser, getUserDriveAccess } from '../permissions/permissio
 import { loadDriveWalletStanding, type DriveWalletStanding } from '../permissions/spend-standing';
 import {
   credentialRefusalFor,
+  decideSeatCapWrite,
   mayTakeWalletAction,
   viewerForCredential,
   walletActionsFor,
@@ -54,7 +55,8 @@ import { toSubscriptionTier } from '../billing/subscription-tiers';
 import { planDeleteWallet, planTopUp, planWalletPatch, type DeleteBlocker, type WalletPatchInput } from '../billing/wallet-admin';
 import { donateToDriveWallet } from '../billing/wallet-funding-shell';
 import { checkOrgActive } from '../organizations/status';
-import { userConsumerKey, utcDayStartMs, utcMonthStartMs, type SpendSourceKind } from '../billing/wallet-core';
+import { findMembershipRole, findOrganizationNames } from '../organizations/repository';
+import { planConsumerCapWrite, userConsumerKey, utcDayStartMs, utcMonthStartMs, type ConsumerCapWriteInput, type SpendSourceKind } from '../billing/wallet-core';
 import {
   capRemainingCents,
   displayedWalletStatus,
@@ -66,11 +68,16 @@ import {
   type PoolFacts,
 } from '../billing/wallet-views';
 import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
+import { decryptUserRow } from '../auth/user-repository';
+import type { OrgApiErrorCode } from '../organizations/api-error-codes';
+import { announceDriveWalletChange, announceWalletChange } from '../billing/wallet-change-events';
+import { announceOrgChange } from '../organizations/org-change-events';
 
 export interface WalletServiceError {
   ok: false;
   status: 400 | 402 | 403 | 404 | 409;
-  code: string;
+  /** One of the org/wallet API codes (organizations/api-error-codes): a compile error otherwise. */
+  code: OrgApiErrorCode;
   message: string;
   blockers?: DeleteBlocker[];
 }
@@ -244,9 +251,36 @@ async function spendByConsumer(walletId: string, since: Date | null): Promise<Co
     ))
     .groupBy(creditLedger.userId)
     .limit(500);
+  const names = await userNamesById(rows.map((r) => r.userId));
   return rows
-    .map((r) => ({ consumerKey: userConsumerKey(r.userId), userId: r.userId, spentCents: Math.max(0, Number(r.cents)) }))
+    .map((r) => ({ consumerKey: userConsumerKey(r.userId), userId: r.userId, displayName: names.get(r.userId) ?? null, spentCents: Math.max(0, Number(r.cents)) }))
     .sort((a, b) => b.spentCents - a.spentCents || a.consumerKey.localeCompare(b.consumerKey));
+}
+
+/** People's display names by id (decrypted), so no wallet surface hands the UI a raw id alone (UI-9, UI-10). */
+async function userNamesById(userIds: string[]): Promise<Map<string, string>> {
+  const unique = [...new Set(userIds)];
+  if (unique.length === 0) return new Map();
+  const rows = await db.select({ id: users.id, name: users.name }).from(users).where(inArray(users.id, unique));
+  const out = new Map<string, string>();
+  for (const row of rows) {
+    const name = (await decryptUserRow({ name: row.name })).name;
+    if (name) out.set(row.id, name);
+  }
+  return out;
+}
+
+/** Drive names by id, for wallet lists (UI-10). */
+async function driveNamesById(driveIds: string[]): Promise<Map<string, string>> {
+  const unique = [...new Set(driveIds)];
+  if (unique.length === 0) return new Map();
+  const rows = await db.select({ id: drives.id, name: drives.name }).from(drives).where(inArray(drives.id, unique));
+  return new Map(rows.map((r) => [r.id, r.name]));
+}
+
+/** Org names by id, for wallet lists (UI-10): through the org repository (POL-1 seam). */
+async function orgNamesById(orgIds: string[]): Promise<Map<string, string>> {
+  return findOrganizationNames(orgIds);
 }
 
 async function poolFacts(orgId: string): Promise<PoolFacts | null> {
@@ -424,6 +458,7 @@ export async function createDriveWallet(
   }
   if (created === 'exists') return { ok: false, status: 409, code: 'wallet_exists', message: 'This drive already has a wallet' };
   await recordOrgWalletEvent(standing, userId, 'org.wallet.allocation_changed', { operation: 'create', allocationCents: input.allocationCents });
+  void announceDriveWalletChange(driveId, 'allocation');
   return readView(userId, access);
 }
 
@@ -469,6 +504,7 @@ export async function updateDriveWallet(
   });
   if (outcome) return outcome;
   await recordOrgWalletEvent(access.standing, userId, 'org.wallet.allocation_changed', { operation: 'update', changes: applied });
+  void announceDriveWalletChange(driveId, input.allocationCents !== undefined ? 'allocation' : input.paused !== undefined ? 'status' : 'rules');
   return readView(userId, access);
 }
 
@@ -570,7 +606,7 @@ export async function topUpDriveWallet(
     }
     const payer = locked.get(payerId);
     const drive = locked.get(target.id);
-    if (!payer || !drive) return { ok: false as const, status: 404 as const, code: 'no_wallet', message: 'The wallet was removed' };
+    if (!payer || !drive) return { ok: false as const, status: 404 as const, code: 'no_wallet' as const, message: 'The wallet was removed' };
     // A replay is a duplicate, checked AFTER the drive wallet's lock: a request racing the same
     // key waits on that lock and then sees the other's committed leg (the insert's ON CONFLICT
     // below stays as the backstop), so a retry never fails and never moves money twice.
@@ -653,8 +689,182 @@ export async function topUpDriveWallet(
   });
   if (result.ok && !result.duplicate) {
     await recordOrgWalletEvent(standing, userId, 'org.wallet.topped_up', { amountCents: result.amountCents, paidDebtCents: result.paidDebtCents, legId: result.legId });
+    void announceDriveWalletChange(driveId, 'balance');
   }
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// Per-consumer caps (WAL-7)
+// ---------------------------------------------------------------------------
+
+/** One consumer's caps on a leg, as the wallet surfaces show them: cents plus credit counts, and their name. */
+export interface ConsumerCapView {
+  userId: string;
+  displayName: string;
+  dailyCapCents: number | null;
+  monthlyCapCents: number | null;
+  dailyCapCredits: string | null;
+  monthlyCapCredits: string | null;
+}
+
+export interface WalletCapsRead {
+  ok: true;
+  walletId: string;
+  caps: ConsumerCapView[];
+}
+
+function capView(row: { userId: string; name: string | null; dailyCapCents: number | null; monthlyCapCents: number | null }): ConsumerCapView {
+  return {
+    userId: row.userId,
+    displayName: row.name ?? 'Unknown user',
+    dailyCapCents: row.dailyCapCents,
+    monthlyCapCents: row.monthlyCapCents,
+    dailyCapCredits: row.dailyCapCents === null ? null : formatCreditCount(row.dailyCapCents),
+    monthlyCapCredits: row.monthlyCapCents === null ? null : formatCreditCount(row.monthlyCapCents),
+  };
+}
+
+/** Every person's caps on `walletId`, by name. */
+async function capsOnWallet(walletId: string): Promise<ConsumerCapView[]> {
+  const rows = await db
+    .select({
+      consumerKey: walletConsumerCaps.consumerKey,
+      dailyCapCents: walletConsumerCaps.dailyCapCents,
+      monthlyCapCents: walletConsumerCaps.monthlyCapCents,
+      name: users.name,
+    })
+    .from(walletConsumerCaps)
+    .leftJoin(users, sql`${walletConsumerCaps.consumerKey} = 'user:' || ${users.id}`)
+    .where(eq(walletConsumerCaps.walletId, walletId));
+  const people = rows.filter((r) => r.consumerKey.startsWith('user:'));
+  const views = await Promise.all(people.map(async (r) => capView({
+    userId: r.consumerKey.slice('user:'.length),
+    name: (await decryptUserRow({ name: r.name })).name ?? null,
+    dailyCapCents: r.dailyCapCents,
+    monthlyCapCents: r.monthlyCapCents,
+  })));
+  return views
+    .sort((a, b) => a.displayName.localeCompare(b.displayName));
+}
+
+const noWallet = (): WalletServiceError => ({ ok: false, status: 404, code: 'no_wallet', message: 'This drive has no wallet' });
+const invalidCap = (): WalletServiceError => ({ ok: false, status: 400, code: 'invalid_amount', message: 'A cap must be a whole, non-negative number of cents, or null for no cap' });
+const notAConsumer = (): WalletServiceError => ({ ok: false, status: 404, code: 'not_a_consumer', message: 'That person cannot spend in this drive' });
+
+/** The caps set on a drive's wallet, per person (WAL-7). For whoever may set them, and the lead. */
+export async function listDriveWalletCaps(userId: string, driveId: string, credential: WalletCredential): Promise<WalletCapsRead | WalletServiceError> {
+  const access = await walletAccess(userId, driveId, credential);
+  if (!access.ok) return access;
+  if (!access.actions.includes('set_caps') && !access.actions.includes('view_spend_by_member')) return forbidden('set_caps');
+  const row = await driveWalletRow(db, driveId);
+  if (!row) return noWallet();
+  return { ok: true, walletId: row.id, caps: await capsOnWallet(row.id) };
+}
+
+/**
+ * Write one person's caps on a drive's wallet (WAL-7): org admins on an org drive, the lead (the
+ * wallet's owner) on a personal drive — wallet-access `set_caps`. Enabling with nothing named
+ * takes the D20.5 defaults; null in a window is no cap there. The person must be able to spend
+ * in the drive. `null` input clears the row (unlimited within the wallet).
+ */
+export async function setDriveWalletCap(
+  userId: string,
+  driveId: string,
+  consumerId: string,
+  input: ConsumerCapWriteInput | null,
+  credential: WalletCredential,
+  hooks: WalletWriteHooks = {},
+): Promise<WalletCapsRead | WalletServiceError> {
+  const refused = refuseCredential(credential, 'set_caps');
+  if (refused) return refused;
+  const access = await walletAccess(userId, driveId, credential);
+  if (!access.ok) return access;
+  const denied = requireAction(access, 'set_caps') ?? (await requireOrgActiveForWrite(access));
+  if (denied) return denied;
+  const consumer = await loadDriveWalletStanding(consumerId, driveId);
+  if (!consumer || walletViewerRole(consumer) === 'none') return notAConsumer();
+  const row = await driveWalletRow(db, driveId);
+  if (!row) return noWallet();
+  await hooks.afterAccess?.();
+  // The drive must still have the org standing access was decided on, share-locked for the
+  // write, like every other wallet write: a personal lead's cap must not land on a leg that
+  // became an org's mid-request (drive_moved).
+  const written = await writeConsumerCap(row.id, consumerId, input, (tx) => lockDriveOrgStanding(tx, driveId, access.standing.orgId));
+  if (written) return written;
+  await recordOrgWalletEvent(access.standing, userId, 'org.wallet.allocation_changed', { operation: input === null ? 'clear_consumer_cap' : 'set_consumer_cap', consumerId });
+  void announceWalletChange(row.id, 'caps');
+  return { ok: true, walletId: row.id, caps: await capsOnWallet(row.id) };
+}
+
+/** Upsert (or, for null, delete) one consumer's caps on a leg, under the row's lock. */
+async function writeConsumerCap(
+  walletId: string,
+  consumerId: string,
+  input: ConsumerCapWriteInput | null,
+  guard?: (tx: Tx) => Promise<WalletServiceError | null>,
+): Promise<WalletServiceError | null> {
+  const consumerKey = userConsumerKey(consumerId);
+  return db.transaction(async (tx): Promise<WalletServiceError | null> => {
+    const blocked = guard ? await guard(tx) : null;
+    if (blocked) return blocked;
+    if (input === null) {
+      await tx.delete(walletConsumerCaps).where(and(eq(walletConsumerCaps.walletId, walletId), eq(walletConsumerCaps.consumerKey, consumerKey)));
+      return null;
+    }
+    const [existing] = await tx
+      .select({ dailyCents: walletConsumerCaps.dailyCapCents, monthlyCents: walletConsumerCaps.monthlyCapCents })
+      .from(walletConsumerCaps)
+      .where(and(eq(walletConsumerCaps.walletId, walletId), eq(walletConsumerCaps.consumerKey, consumerKey)))
+      .for('update');
+    const plan = planConsumerCapWrite(input, existing ?? null);
+    if (plan.kind === 'refuse') return invalidCap();
+    await tx
+      .insert(walletConsumerCaps)
+      .values({ walletId, consumerKey, dailyCapCents: plan.caps.dailyCents, monthlyCapCents: plan.caps.monthlyCents })
+      .onConflictDoUpdate({
+        target: [walletConsumerCaps.walletId, walletConsumerCaps.consumerKey],
+        set: { dailyCapCents: plan.caps.dailyCents, monthlyCapCents: plan.caps.monthlyCents, updatedAt: new Date() },
+      });
+    return null;
+  });
+}
+
+/**
+ * Write one member's caps on the org pool leg — their seat (WAL-7): the org's Owner or an Admin,
+ * for an accepted member (wallet-access `decideSeatCapWrite`). The monthly window is the seat
+ * allowance for that member (WAL-2); null clears the row back to the org's allowance.
+ */
+export async function setSeatCap(
+  userId: string,
+  orgId: string,
+  consumerId: string,
+  input: ConsumerCapWriteInput | null,
+): Promise<WalletCapsRead | WalletServiceError> {
+  if (!ORGS_ENABLED) return notFound('Organization not found');
+  const decision = decideSeatCapWrite({
+    actorRole: await findMembershipRole(orgId, userId),
+    consumerRole: await findMembershipRole(orgId, consumerId),
+  });
+  if (!decision.ok) {
+    return { ok: false, status: decision.status, code: decision.code, message: decision.code === 'insufficient_role' ? 'Only the organization Owner or an Admin can set a seat cap' : decision.code === 'not_org_member' ? 'That person is not a member of this organization' : 'Organization not found' };
+  }
+  const active = await checkOrgActive(orgId);
+  if (!active.ok) return { ok: false, status: active.status, code: active.code, message: active.message };
+  const pool = await orgPoolRow(db, orgId);
+  if (!pool) return { ok: false, status: 409, code: 'no_org_pool', message: 'This organization has no pool yet' };
+  const written = await writeConsumerCap(pool.id, consumerId, input);
+  if (written) return written;
+  await recordOrgAuditEventAfterCommit({
+    orgId,
+    eventType: 'org.wallet.allocation_changed',
+    actorId: userId,
+    resourceType: 'org_pool',
+    resourceId: pool.id,
+    details: { operation: input === null ? 'clear_seat_cap' : 'set_seat_cap', consumerId },
+  });
+  void announceOrgChange(orgId, 'seat_caps');
+  return { ok: true, walletId: pool.id, caps: await capsOnWallet(pool.id) };
 }
 
 /** Donate from the caller's own balance to the drive's wallet (WAL-4); the donation shell re-checks visibility. */
@@ -686,6 +896,7 @@ export async function donateToDrive(
   });
   if (outcome.kind === 'donated') {
     await recordOrgWalletEvent(access.standing, userId, 'org.wallet.donated', { amountCents: outcome.amountCents, paidDebtCents: outcome.paidDebtCents, legId: outcome.legId });
+    void announceDriveWalletChange(driveId, 'balance');
     return { ok: true, legId: outcome.legId, amountCents: outcome.amountCents, paidDebtCents: outcome.paidDebtCents, duplicate: false };
   }
   if (outcome.kind === 'duplicate') return { ok: true, legId: outcome.legId, amountCents: input.amountCents, paidDebtCents: 0, duplicate: true };
@@ -716,17 +927,18 @@ export async function donateToDrive(
  */
 export interface MyWallets {
   personal: { walletId: string; remainingCents: number; remainingCredits: string; defaultSpendSource: SpendSourceKind | null };
-  /** Drive wallets of drives I can open: the consumer amount only (SPEND-9). */
-  driveWallets: { driveId: string; walletId: string; status: string; remainingCents: number; remainingCredits: string }[];
-  /** A seat on each org I belong to: my own cap only, never the pool (SPEND-9). */
-  seats: { orgId: string; walletId: string }[];
+  /** Drive wallets of drives I can open: the consumer amount only (SPEND-9), by drive name. */
+  driveWallets: { driveId: string; driveName: string | null; walletId: string; status: string; remainingCents: number; remainingCredits: string }[];
+  /** A seat on each org I belong to: my own cap only, never the pool (SPEND-9), by org name. */
+  seats: { orgId: string; orgName: string | null; walletId: string }[];
   /** What I fund: drive wallets my personal wallet parents, pools I administer (SPEND-10), my donations. */
   funds: {
-    driveWallets: { driveId: string; walletId: string }[];
-    pools: { orgId: string; walletId: string; availableCents: number; unallocatedCents: number }[];
+    driveWallets: { driveId: string; driveName: string | null; walletId: string; status: string; remainingCents: number; remainingCredits: string }[];
+    pools: { orgId: string; orgName: string | null; walletId: string; availableCents: number; unallocatedCents: number; availableCredits: string; unallocatedCredits: string }[];
     donations: {
       walletId: string;
       driveId: string | null;
+      driveName: string | null;
       originalCents: number;
       originalCredits: string;
       remainingCents: number;
@@ -736,10 +948,6 @@ export interface MyWallets {
   };
 }
 
-/**
- * Everything the person spends from and funds. [D-OW-26] read with a token, it is the consumer
- * view: no pool balance (the pools list is empty) — the same allowlist a member gets.
- */
 export async function listMyWallets(userId: string, credential: WalletCredential): Promise<MyWallets> {
   const personalId = await ensurePersonalRootWalletId(db, userId);
   const [personal] = await db
@@ -765,9 +973,11 @@ export async function listMyWallets(userId: string, credential: WalletCredential
     .innerJoin(wallets, eq(wallets.id, walletFundingLegs.walletId))
     .where(and(eq(walletFundingLegs.funderUserId, userId), eq(walletFundingLegs.funderKind, 'donation')))
     .limit(500);
+  const donationDriveNames = await driveNamesById(donations.flatMap((d) => (d.subjectId ? [d.subjectId] : [])));
   result.funds.donations = donations.map((d) => ({
     walletId: d.walletId,
     driveId: d.subjectId,
+    driveName: d.subjectId ? donationDriveNames.get(d.subjectId) ?? null : null,
     originalCents: d.originalCents,
     originalCredits: formatCreditCount(d.originalCents),
     remainingCents: d.remainingCents,
@@ -785,11 +995,14 @@ export async function listMyWallets(userId: string, credential: WalletCredential
       .from(wallets)
       .where(and(eq(wallets.subjectType, 'drive'), inArray(wallets.subjectId, driveIds)))
       .limit(1000);
+    const driveNames = await driveNamesById(rows.flatMap((r) => (r.subjectId ? [r.subjectId] : [])));
     for (const row of rows) {
       if (!row.subjectId) continue;
       const remaining = walletRemainingCents(row);
-      result.driveWallets.push({ driveId: row.subjectId, walletId: row.id, status: displayedWalletStatus(row), remainingCents: remaining, remainingCredits: formatCreditCount(remaining) });
-      if (row.parentWalletId === personalId) result.funds.driveWallets.push({ driveId: row.subjectId, walletId: row.id });
+      const entry = { driveId: row.subjectId, driveName: driveNames.get(row.subjectId) ?? null, walletId: row.id, status: displayedWalletStatus(row), remainingCents: remaining, remainingCredits: formatCreditCount(remaining) };
+      result.driveWallets.push(entry);
+      // The funder sees the balance of what they fund (UI-10), as its consumers do.
+      if (row.parentWalletId === personalId) result.funds.driveWallets.push(entry);
     }
   }
 
@@ -798,18 +1011,24 @@ export async function listMyWallets(userId: string, credential: WalletCredential
     .from(orgMembers)
     .where(eq(orgMembers.userId, userId))
     .limit(200);
+  const orgNames = await orgNamesById(memberships.map((m) => m.orgId));
   for (const m of memberships) {
     const pool = await orgPoolRow(db, m.orgId);
     if (!pool) continue;
-    result.seats.push({ orgId: m.orgId, walletId: pool.id });
+    const orgName = orgNames.get(m.orgId) ?? null;
+    result.seats.push({ orgId: m.orgId, orgName, walletId: pool.id });
     if (credential === 'session' && (m.role === 'OWNER' || m.role === 'ADMIN')) {
       const facts = await poolFacts(m.orgId);
       if (facts) {
+        const unallocatedCents = facts.availableCents - facts.outstandingChildAllocationsCents;
         result.funds.pools.push({
           orgId: m.orgId,
+          orgName,
           walletId: facts.walletId,
           availableCents: facts.availableCents,
-          unallocatedCents: facts.availableCents - facts.outstandingChildAllocationsCents,
+          unallocatedCents,
+          availableCredits: formatCreditCount(facts.availableCents),
+          unallocatedCredits: formatCreditCount(unallocatedCents),
         });
       }
     }

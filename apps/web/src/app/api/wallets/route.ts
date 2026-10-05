@@ -33,6 +33,6 @@ export async function GET(request: Request) {
     return NextResponse.json(wallets);
   } catch (error) {
     loggers.api.error('Error listing wallets:', error as Error);
-    return NextResponse.json({ error: 'Failed to list wallets' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to list wallets', code: 'internal_error' }, { status: 500 });
   }
 }

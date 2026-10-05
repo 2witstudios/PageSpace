@@ -111,6 +111,12 @@ export type SpendResolution =
       /** True only when a drive rule moved the call off the chosen source; the chip and strip must show it. */
       fallbackApplied: boolean;
       fallbackFrom: SpendSourceKind | null;
+      /**
+       * The wallet of the chosen source a fallback moved the call off, else null. The gate
+       * records it on the hold so the settle lands any overshoot where that choice would have
+       * put it, never on the consumer (WAL-6b).
+       */
+      fallbackFromWalletId: string | null;
     }
   | {
       kind: 'refuse';
@@ -204,7 +210,7 @@ export function resolveSpendSource(input: ResolveSpendSourceInput): SpendResolut
     if (!covers(wallet, input.reservationCents)) {
       return { kind: 'skip', reason: 'drive_wallet_empty', walletId: wallet.walletId, chargeCents: 0 };
     }
-    return { kind: 'spend', source: 'drive_wallet', walletId: wallet.walletId, fallbackApplied: false, fallbackFrom: null };
+    return { kind: 'spend', source: 'drive_wallet', walletId: wallet.walletId, fallbackApplied: false, fallbackFrom: null, fallbackFromWalletId: null };
   }
 
   const overridden = input.userOverride.alwaysOwnCredits || input.userOverride.alwaysOwnCreditsInDrive;
@@ -215,14 +221,23 @@ export function resolveSpendSource(input: ResolveSpendSourceInput): SpendResolut
   const offered = (): SpendOption[] => (overridden ? [] : optionsExcept(input, chosen));
   if (!('leg' in found)) return refuse(chosen, found.unavailable, offered());
   if (covers(found.leg, input.reservationCents)) {
-    return { kind: 'spend', source: chosen, walletId: found.leg.walletId, fallbackApplied: false, fallbackFrom: null };
+    return { kind: 'spend', source: chosen, walletId: found.leg.walletId, fallbackApplied: false, fallbackFrom: null, fallbackFromWalletId: null };
   }
 
   const fallback = input.driveRule.fallback;
   if (!overridden && fallback !== 'refuse' && fallback !== chosen) {
     const fallbackLeg = coveredLeg(input, fallback);
     if (fallbackLeg) {
-      return { kind: 'spend', source: fallback, walletId: fallbackLeg.walletId, fallbackApplied: true, fallbackFrom: chosen };
+      return {
+        kind: 'spend',
+        source: fallback,
+        walletId: fallbackLeg.walletId,
+        fallbackApplied: true,
+        fallbackFrom: chosen,
+        // [D-OW-32] a PAUSED leg (its kill switch, or a lapsed org's legs) absorbs nothing: the
+        // fallback is still reported, but no overshoot is carried back onto it.
+        fallbackFromWalletId: found.leg.status === 'paused' ? null : found.leg.walletId,
+      };
     }
   }
   return refuse(chosen, refusalFor(found.leg), offered());
@@ -445,6 +460,30 @@ export function settleOvershoot(input: SettleOvershootInput): OvershootLanding {
   return { kind: 'wallet_debt', walletId: input.chargedWalletId, cents };
 }
 
+/**
+ * The source a wallet row IS, from its shape: a child wallet is a drive wallet; a root owned by
+ * an org is the pool a seat spends; a root owned by a person is their own credits.
+ */
+export function walletSourceKind(wallet: { ownerType: 'user' | 'org'; parentWalletId: string | null }): SpendSourceKind {
+  if (wallet.parentWalletId !== null) return 'drive_wallet';
+  return wallet.ownerType === 'org' ? 'seat_allowance' : 'own_credits';
+}
+
+/** The chosen source a fallback moved a call off, as the settle needs it (WAL-6b), from its wallet row. */
+export function chosenSourceCharge(wallet: {
+  id: string;
+  ownerType: 'user' | 'org';
+  parentWalletId: string | null;
+  overshootChoice: OvershootFunderChoice | null;
+}): ChosenSourceCharge {
+  return {
+    source: walletSourceKind(wallet),
+    walletId: wallet.id,
+    parentWalletId: wallet.parentWalletId,
+    funderChoice: wallet.overshootChoice ?? DEFAULT_OVERSHOOT_CHOICE,
+  };
+}
+
 /** WAL-6e / WAL-7: the kill switch wins; any debt shows "over". */
 export function walletStatusFor(input: { paused: boolean; debtCents: number }): WalletStatus {
   if (input.paused) return 'paused';
@@ -531,10 +570,15 @@ export interface ConsumerCaps {
   monthlyCents: number | null;
 }
 
-/** Defaults on enable: 10 credits a day, 100 a month (D20.5 restated in credits). */
+/**
+ * Defaults when an admin enables per-consumer caps without naming values: 50 credits a day and
+ * 1,000 a month ([D-OW-31], replacing D20.5's 10/100, which sat below one image or uncatalogued
+ * model's hold and so refused every such call). Caps never set stay unlimited within the wallet.
+ * NOT the seat allowance: that is its own constant below.
+ */
 export const DEFAULT_CONSUMER_CAPS: ConsumerCaps = {
-  dailyCents: Math.round(centsFromCredits(10)),
-  monthlyCents: Math.round(centsFromCredits(100)),
+  dailyCents: Math.round(centsFromCredits(50)),
+  monthlyCents: Math.round(centsFromCredits(1_000)),
 };
 
 export interface CapUsage {
@@ -605,17 +649,54 @@ export const CAP_ALERT_THRESHOLDS = [80, 100] as const;
 export type CapAlertThreshold = (typeof CAP_ALERT_THRESHOLDS)[number];
 const PERCENT = 100;
 
-/** The thresholds a spend moved across, from strictly below to at-or-above. */
-export function capAlertThresholdsCrossed(input: {
-  capCents: number | null;
-  beforeCents: number;
-  afterCents: number;
-}): CapAlertThreshold[] {
-  if (input.capCents === null || input.capCents <= 0) return [];
-  const cap = input.capCents;
-  return CAP_ALERT_THRESHOLDS.filter(
-    (t) => input.beforeCents * PERCENT < cap * t && input.afterCents * PERCENT >= cap * t,
-  );
+/**
+ * The thresholds a consumer's spend in one cap window has reached (spent >= threshold% of the
+ * cap). The shell sends each at most once per window per period (wallet_cap_alerts), so a
+ * reached threshold is due until it has been sent — no crossing can be missed by two settles
+ * racing past it. A zero cap is reached at once; no cap reaches nothing.
+ */
+export function capThresholdsReached(input: { capCents: number | null; spentCents: number }): CapAlertThreshold[] {
+  if (input.capCents === null || !Number.isFinite(input.capCents)) return [];
+  const cap = wholeNonNegative(input.capCents);
+  const spent = wholeNonNegative(input.spentCents);
+  return CAP_ALERT_THRESHOLDS.filter((t) => spent * PERCENT >= cap * t);
+}
+
+/** A cap window of WAL-7: the UTC day, and the month (the pool period for a seat, D-OW-12). */
+export type CapWindow = 'daily' | 'monthly';
+
+/** A write of one consumer's caps; an omitted window keeps what it was (defaults when enabling). */
+export interface ConsumerCapWriteInput {
+  dailyCents?: number | null;
+  monthlyCents?: number | null;
+}
+
+export type ConsumerCapWritePlan =
+  | { kind: 'set'; caps: ConsumerCaps }
+  | { kind: 'refuse'; reason: 'invalid_amount' };
+
+const MAX_CAP_CENTS = 2_147_483_647;
+
+function validCap(value: number | null | undefined): boolean {
+  return value === undefined || value === null || (Number.isInteger(value) && value >= 0 && value <= MAX_CAP_CENTS);
+}
+
+/**
+ * Plan a write of one consumer's caps on one leg (WAL-7). Enabling caps (no row yet) starts from
+ * the D20.5 defaults, so a window the writer does not name takes its default; on an existing row
+ * an unnamed window keeps its value. `null` is unlimited in that window. Anything that is not a
+ * whole, non-negative cent count (or null) is refused and nothing is stored.
+ */
+export function planConsumerCapWrite(input: ConsumerCapWriteInput, existing: ConsumerCaps | null): ConsumerCapWritePlan {
+  if (!validCap(input.dailyCents) || !validCap(input.monthlyCents)) return { kind: 'refuse', reason: 'invalid_amount' };
+  const base = existing ?? DEFAULT_CONSUMER_CAPS;
+  return {
+    kind: 'set',
+    caps: {
+      dailyCents: input.dailyCents === undefined ? base.dailyCents : input.dailyCents,
+      monthlyCents: input.monthlyCents === undefined ? base.monthlyCents : input.monthlyCents,
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -623,11 +704,13 @@ export function capAlertThresholdsCrossed(input: {
 // ---------------------------------------------------------------------------
 
 /**
- * The org's seat allowance until the org policy store (POL-7) lands: D20.5's monthly
- * per-consumer default. A seat is never unlimited — a seat with no cap lets any one member
- * spend the whole pool.
+ * The org's default seat allowance (the POL-7 policy default and the fallback when an org sets
+ * none): D20.5's 100 credits a month per member. Its own constant on purpose: [D-OW-31] moved the
+ * per-consumer cap defaults and left the seat allowance where it was, so a cap edit must never
+ * move what every member may draw from every pool. A seat is never unlimited — a seat with no
+ * cap lets any one member spend the whole pool.
  */
-export const DEFAULT_SEAT_ALLOWANCE_CENTS: number = DEFAULT_CONSUMER_CAPS.monthlyCents ?? 0;
+export const DEFAULT_SEAT_ALLOWANCE_CENTS: number = Math.round(centsFromCredits(100));
 
 /**
  * One consumer's seat allowance on the pool: their own monthly cap on the pool leg

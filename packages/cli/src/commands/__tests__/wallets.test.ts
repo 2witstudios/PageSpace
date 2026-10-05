@@ -64,6 +64,7 @@ const SOURCE = {
     walletId: 'w_drive',
     fallbackApplied: false,
     fallbackFrom: null,
+    fallbackFromWalletId: null,
     entitlementTier: 'business' as const,
   },
 };

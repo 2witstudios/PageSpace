@@ -205,6 +205,8 @@ const createMemberDetailsFixture = (overrides: {
   id: overrides.id ?? `mem_${overrides.userId}`,
   userId: overrides.userId,
   role: overrides.role,
+  source: 'invite',
+  isGuest: false,
   invitedBy: null,
   invitedAt: new Date('2024-01-01'),
   acceptedAt: new Date('2024-01-01'),

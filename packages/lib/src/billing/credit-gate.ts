@@ -23,6 +23,8 @@ import { and, eq, gt, gte, inArray, or, sql } from '@pagespace/db/operators';
 import { isOrgActive } from '../organizations/status';
 import { orgLegStatus } from '../organizations/status-core';
 import { isBillingEnabled } from '../deployment-mode';
+import type { SpendFallback } from './spend-fallback';
+import { loadConsumerCapFacts } from './consumer-caps';
 import { loggers } from '../logging/logger-config';
 import {
   evaluateGate,
@@ -46,6 +48,7 @@ import { addOneMonth } from './wallet-funding';
 import { ORGS_ENABLED } from '../organizations/orgs-enabled';
 import {
   ORG_ENTITLEMENT_TIER,
+  PERSONAL_ROOT_NOT_YET_CREATED,
   personalRootDecision,
   resolvesDriveWallets,
   rootAvailableCents,
@@ -53,7 +56,7 @@ import {
   type SpendTarget,
   type WalletBalanceFacts,
 } from './spend-target';
-import { seatCapCheck, type RefusalReason, type SkipReason, type SpendSourceKind } from './wallet-core';
+import { evaluateCaps, seatCapCheck, type RefusalReason, type SkipReason, type SpendSourceKind } from './wallet-core';
 import { loadSeatCapFacts } from './seat-allowance';
 import { holdsInScope, isComputeSpendKind, ledgerRowsInScope, personBoundScopeFor, type PersonBoundScope } from './person-bound-scope';
 import { readOrgSpendPolicy } from '../organizations/policy-reader';
@@ -171,12 +174,10 @@ export interface SpendRefusal {
 /**
  * SPEND-4: the drive's fallback rule moved the call off the source it named. `from` is the
  * source the caller chose, `to` the source the hold was placed on. Present only when a
- * fallback happened, so the caller must show the new source (the chip and strip).
+ * fallback happened, so the caller must show the new source (the chip and strip); every entry
+ * point reports it in the one shape of spend-fallback.
  */
-export interface SpendFallback {
-  from: SpendSourceKind;
-  to: SpendSourceKind;
-}
+export type { SpendFallback } from './spend-fallback';
 
 /**
  * The gate's answer. On an allowed call it names the wallet the hold was placed on
@@ -191,6 +192,12 @@ export interface CreditGateResult extends GateResult {
   refusal?: SpendRefusal;
   /** Set only when a drive rule moved the call to another source (SPEND-4): never silent. */
   fallback?: SpendFallback;
+  /**
+   * The chosen source's wallet when this call — or the turn it follows — fell back (WAL-6b).
+   * Recorded on the hold; a caller threads it into its follow-on targets (resolvedSpend), so
+   * their holds carry it too.
+   */
+  fallbackFromWalletId?: string;
   /** Set only on an org pool refusal because the org is LAPSED (SEAT-9): the pool reads paused, and the org must reactivate. */
   orgLapsed?: true;
 }
@@ -366,16 +373,24 @@ export async function canConsumeAI(
   const fallback: SpendFallback | undefined = decision.fallbackApplied && decision.fallbackFrom !== null
     ? { from: decision.fallbackFrom, to: decision.source }
     : undefined;
+  // WAL-6b: the wallet a fallback moved off. A personal root that does not exist yet has no row
+  // to land overshoot on (and would fail the hold's FK), so it carries nothing.
+  const fallbackFromWalletId = decision.fallbackFromWalletId !== null && decision.fallbackFromWalletId !== PERSONAL_ROOT_NOT_YET_CREATED
+    ? decision.fallbackFromWalletId
+    : null;
   const result = decision.source !== 'own_credits'
     ? await gateSharedWallet(userId, tier, opts, {
         walletId: decision.walletId,
         source: decision.source,
         entitlementTier: decision.entitlementTier,
+        fallbackFromWalletId,
       })
-    : await gatePersonalRoot(userId, tier, opts).then((personal): CreditGateResult => personal.allowed
+    : await gatePersonalRoot(userId, tier, opts, fallbackFromWalletId).then((personal): CreditGateResult => personal.allowed
         ? { ...personal, spendSource: 'own_credits', entitlementTier: decision.entitlementTier }
         : personal);
-  if (!result.allowed || fallback === undefined) return result;
+  if (!result.allowed) return result;
+  const carried: CreditGateResult = fallbackFromWalletId ? { ...result, fallbackFromWalletId } : result;
+  if (fallback === undefined) return carried;
   loggers.ai.info('spend source fell back', {
     userId,
     driveId: opts.spend.kind === 'personal' ? null : opts.spend.driveId,
@@ -383,7 +398,7 @@ export async function canConsumeAI(
     to: fallback.to,
     walletId: result.walletId,
   });
-  return { ...result, fallback };
+  return { ...carried, fallback };
 }
 
 /**
@@ -424,6 +439,9 @@ async function gatePersonalRoot(
   userId: string,
   tier: SubscriptionTier,
   opts: GateOptions,
+  // WAL-6b: the chosen source's wallet when a drive rule fell back onto own credits, recorded
+  // on the hold so the settle lands overshoot where that choice would have (credit-consume).
+  fallbackFromWalletId: string | null = null,
 ): Promise<CreditGateResult> {
   const now = new Date();
 
@@ -612,7 +630,7 @@ async function gatePersonalRoot(
     // reconcile sweep to expire.
     const inserted = await tx
       .insert(creditHolds)
-      .values({ userId, walletId: bal.id, estCents: estCost, expiresAt, spendKind: opts.spendKind ?? 'ai' })
+      .values({ userId, walletId: bal.id, fallbackFromWalletId, estCents: estCost, expiresAt, spendKind: opts.spendKind ?? 'ai' })
       .returning({ id: creditHolds.id });
 
     // Net spendable after ALL holds (existing `reserved` + this call's `estCost`) and
@@ -681,7 +699,7 @@ async function gateSharedWallet(
   opts: GateOptions,
   // `source` is null for a charge that names no spend source at all: an org drive's compute,
   // held on the org pool as the org's own spend (canConsumeOrgPool, WAL-9).
-  chosen: { walletId: string; source: SpendSourceKind | null; entitlementTier: SubscriptionTier },
+  chosen: { walletId: string; source: SpendSourceKind | null; entitlementTier: SubscriptionTier; fallbackFromWalletId?: string | null },
 ): Promise<CreditGateResult> {
   const now = new Date();
   const { estCost, maxInFlight, expiresAt, dailyCap, dayStart } = callBounds(tier, opts, now);
@@ -729,6 +747,21 @@ async function gateSharedWallet(
       const cap = seatCapCheck({ capCents: seat.capCents, dailyCapCents: seat.dailyCapCents, usage: seat.usage, reservationCents: estCost });
       if (!cap.allowed) return refused('source_cap_reached');
       seatRemainingCents = Math.min(cap.monthlyRemainingCents ?? Number.MAX_SAFE_INTEGER, cap.dailyRemainingCents ?? Number.MAX_SAFE_INTEGER);
+    }
+
+    // WAL-7: a person's own caps on a drive-wallet leg, decided here under the wallet's row lock
+    // in the hold's transaction, so their simultaneous calls serialize like a seat's. A run no
+    // person is present for is the drive spending (SPEND-6), never the person it is recorded
+    // under; a run a person triggered (a channel @mention) is theirs, and their caps bind.
+    let consumerRemainingCents: number | null = null;
+    const personSpends = opts.spend.kind !== 'automation' || opts.spend.personPresent === true;
+    if (chosen.source === 'drive_wallet' && personSpends) {
+      const capFacts = await loadConsumerCapFacts(tx, { walletId: wallet.id, userId, now });
+      if (capFacts) {
+        const cap = evaluateCaps({ caps: capFacts.caps, usage: capFacts.usage, reservationCents: estCost });
+        if (!cap.allowed) return refused('source_cap_reached');
+        consumerRemainingCents = Math.min(cap.monthlyRemainingCents ?? Number.MAX_SAFE_INTEGER, cap.dailyRemainingCents ?? Number.MAX_SAFE_INTEGER);
+      }
     }
 
     // Holds reserved against this wallet and (for a drive wallet) against its parent by
@@ -780,7 +813,7 @@ async function gateSharedWallet(
 
     const inserted = await tx
       .insert(creditHolds)
-      .values({ userId, walletId: wallet.id, estCents: estCost, expiresAt, spendKind: opts.spendKind ?? 'ai' })
+      .values({ userId, walletId: wallet.id, fallbackFromWalletId: chosen.fallbackFromWalletId ?? null, estCents: estCost, expiresAt, spendKind: opts.spendKind ?? 'ai' })
       .returning({ id: creditHolds.id });
 
     return {
@@ -790,7 +823,7 @@ async function gateSharedWallet(
       spendSource: chosen.source ?? undefined,
       entitlementTier: chosen.entitlementTier,
       // A seat's per-stream budget is also bounded by what is left of its allowance.
-      balanceSnapshot: { netSpendableCents: Math.min(spendable, seatRemainingCents ?? spendable) - estCost },
+      balanceSnapshot: { netSpendableCents: Math.min(spendable, seatRemainingCents ?? spendable, consumerRemainingCents ?? spendable) - estCost },
     };
   });
 }

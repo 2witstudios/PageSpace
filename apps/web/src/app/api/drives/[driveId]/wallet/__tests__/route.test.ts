@@ -81,10 +81,11 @@ const { viewer: _consumerViewer, ...consumerFields } = consumerWallet;
 const leadWallet: LeadWalletView = {
   ...consumerFields, viewer: 'lead', allocationCents: 120_000, spentCents: 3_558, topupRemainingCents: 0, debtCents: 0,
   periodStart: null, periodEnd: null, fallbackRule: null, overshootChoice: null,
-  spendByConsumer: [{ consumerKey: 'user:u-lena', userId: 'u-lena', spentCents: 1_337 }],
+  allocationCredits: '120,000', spentCredits: '3,558', topupRemainingCredits: '0', debtCredits: '0',
+  spendByConsumer: [{ consumerKey: 'user:u-lena', userId: 'u-lena', displayName: 'Lena Schulz', spentCents: 1_337, spentCredits: '1,337' }],
 };
 const { viewer: _leadViewer, ...leadFields } = leadWallet;
-const adminWallet: OrgAdminWalletView = { ...leadFields, viewer: 'org_admin', pool: { walletId: 'w-pool', availableCents: 900_017, unallocatedCents: 780_459 } };
+const adminWallet: OrgAdminWalletView = { ...leadFields, viewer: 'org_admin', pool: { walletId: 'w-pool', availableCents: 900_017, unallocatedCents: 780_459, availableCredits: '900,017', unallocatedCredits: '780,459' } };
 
 const memberRead: DriveWalletRead = { ok: true, viewer: 'member', actions: ['view', 'donate'], wallet: consumerWallet };
 const noWalletRead = (viewer: DriveWalletRead['viewer']): DriveWalletRead => ({ ok: true, viewer, actions: [], wallet: null });

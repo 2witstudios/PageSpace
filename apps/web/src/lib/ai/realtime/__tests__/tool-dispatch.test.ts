@@ -236,7 +236,7 @@ describe('buildVoiceToolContext', () => {
       request({ conversationId: 'conv1', spend: { driveId: 'drive-1', chosen: 'drive_wallet' } }),
       'gpt-realtime-2.1',
     );
-    expect(context.creditSpend).toEqual({ spend: { kind: 'drive', driveId: 'drive-1', chosen: 'drive_wallet', conversationId: 'conv1' } });
+    expect(context.creditSpend).toEqual({ spend: { kind: 'drive', driveId: 'drive-1', chosen: 'drive_wallet', conversationId: 'conv1', followOn: true } });
   });
 
   it('SPEND-8 (partial) given a personal call, a voice tool spends personal credits', () => {

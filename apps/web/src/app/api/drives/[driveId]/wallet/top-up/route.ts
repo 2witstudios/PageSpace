@@ -40,6 +40,6 @@ export async function POST(request: Request, context: RouteContext) {
     return NextResponse.json({ topUp: { legId: result.legId, amountCents: result.amountCents, paidDebtCents: result.paidDebtCents, duplicate: result.duplicate } });
   } catch (error) {
     loggers.api.error('Error in top_up_drive_wallet:', error as Error);
-    return NextResponse.json({ error: 'Failed to move the funds' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to move the funds', code: 'internal_error' }, { status: 500 });
   }
 }

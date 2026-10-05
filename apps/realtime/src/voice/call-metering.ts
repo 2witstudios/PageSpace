@@ -39,6 +39,7 @@
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { PERSONAL_SPEND, resolvedSpend, type SpendTarget } from '@pagespace/lib/billing/spend-target';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
+import { spendFallbackNotice, type SpendFallbackNotice } from '@pagespace/lib/billing/spend-fallback';
 import {
   REALTIME_IDLE_TIMEOUT_SECONDS,
   REALTIME_MAX_SESSION_SECONDS,
@@ -123,7 +124,12 @@ export type CallMeterOptions = {
 };
 
 export type CallMeterStart =
-  | { readonly ok: true; readonly meter: CallMeter }
+  /**
+   * `spendFallback`: the opening gate's fallback, when a drive rule moved the call to another
+   * source (SPEND-4) — reported to the caller through the attach answer, never silent. Later
+   * windows are pinned to the source it resolved and never fall back again.
+   */
+  | { readonly ok: true; readonly meter: CallMeter; readonly spendFallback: SpendFallbackNotice | null }
   | { readonly ok: false; readonly reason: string };
 
 /**
@@ -174,7 +180,7 @@ export const startCallMeter = async (
   let walletId = opening.walletId;
   // Later windows name the source the opening hold resolved, so a call never switches
   // wallets part-way through (SPEND-4).
-  const windowSpend = resolvedSpend(spend, opening.spendSource);
+  const windowSpend = resolvedSpend(spend, opening.spendSource, opening.fallbackFromWalletId);
   let pending: RealtimeUsage | undefined;
   let billedDollars = 0;
   let stopped = false;
@@ -377,5 +383,5 @@ export const startCallMeter = async (
     spend: windowSpend,
   };
 
-  return { ok: true, meter };
+  return { ok: true, meter, spendFallback: spendFallbackNotice(opening) };
 };
