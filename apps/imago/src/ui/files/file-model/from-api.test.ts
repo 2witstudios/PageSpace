@@ -1,8 +1,40 @@
 import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { PAGE_TYPE_VALUES } from '@pagespace/lib/client-safe';
+import { pages } from '@pagespace/db/schema/core';
 import { fileNodesFrom } from './from-api';
 import { pageRow, treeRow } from './fixtures';
+import type { PageResponse } from './file-node';
+
+describe('PageResponse', () => {
+  test('parity with the pages table', () => {
+    // Both routes answer whole pages rows; a column renamed there fails here.
+    const read: Record<keyof PageResponse, true> = {
+      id: true,
+      title: true,
+      type: true,
+      parentId: true,
+      position: true,
+      isTrashed: true,
+    };
+
+    assert({
+      given: 'the fields imago reads from a page row',
+      should: 'each be a column of the pages table',
+      actual: Object.keys(read).filter((field) => !(field in pages)),
+      expected: [],
+    });
+  });
+
+  test('parity with the page types', () => {
+    assert({
+      given: 'the page types a pages row can hold',
+      should: 'be the ones imago maps, besides MACHINE, whose rows migration 0234 deleted (Postgres cannot drop an enum value)',
+      actual: pages.type.enumValues.filter((type) => type !== 'MACHINE'),
+      expected: PAGE_TYPE_VALUES,
+    });
+  });
+});
 
 describe('fileNodesFrom()', () => {
   test('a folder and its pages', () => {
