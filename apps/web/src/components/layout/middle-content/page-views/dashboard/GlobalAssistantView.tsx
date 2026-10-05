@@ -90,6 +90,7 @@ import {
 import { ChatInput, type ChatInputRef } from '@/components/ai/chat/input';
 import { useSideQuestion, parseSideQuestionInput } from '@/components/ai/btw/useSideQuestion';
 import { SideQuestionCard } from '@/components/ai/btw/SideQuestionCard';
+import { ComposerSpendStrip } from '@/components/wallets/ComposerSpendStrip';
 import { useImageAttachments } from '@/lib/ai/shared/hooks/useImageAttachments';
 import { hasVisionCapability } from '@/lib/ai/core/vision-models';
 import { DEFAULT_PROVIDER } from '@/lib/ai/core/ai-providers-config';
@@ -1126,6 +1127,16 @@ const GlobalAssistantView: React.FC = () => {
         remoteStreams={remoteStreams}
         renderInput={(props) => (
           <>
+            {currentConversationId && (
+              // SPEND-2: the composer's top band names the source before the first message.
+              <ComposerSpendStrip
+                conversationId={currentConversationId}
+                driveId={selectedAgent ? selectedAgent.driveId : locationContext?.currentDrive?.id ?? null}
+                isGlobal={!selectedAgent}
+                hasMessages={plainMessages.length > 0}
+                className="rounded-none border-0 border-b"
+              />
+            )}
             {sideQuestion.state && (
               <SideQuestionCard state={sideQuestion.state} onDismiss={sideQuestion.dismiss} />
             )}

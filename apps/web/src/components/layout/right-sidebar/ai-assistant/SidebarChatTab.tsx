@@ -56,6 +56,7 @@ import { ChatErrorBanner } from '@/components/ai/shared/chat/ChatErrorBanner';
 import { selectMessagesAreaMode } from '@/lib/ai/streams/selectMessagesAreaMode';
 import { canResumeRecovery } from '@/lib/ai/streams/canResumeRecovery';
 import { commandDriveIdFor } from '@/lib/commands/command-scope';
+import { ComposerSpendStrip } from '@/components/wallets/ComposerSpendStrip';
 
 // Threshold for enabling virtualization in sidebar (lower than main chat due to compact items)
 const SIDEBAR_VIRTUALIZATION_THRESHOLD = 30;
@@ -1010,6 +1011,16 @@ const SidebarChatTab: React.FC = () => {
       >
         {sideQuestion.state && (
           <SideQuestionCard state={sideQuestion.state} onDismiss={sideQuestion.dismiss} />
+        )}
+        {currentConversationId && (
+          // SPEND-2: an agent's conversation spends in the agent's drive; the global
+          // assistant's in the drive its turns name (the same contextRef drive).
+          <ComposerSpendStrip
+            conversationId={currentConversationId}
+            driveId={selectedAgent ? selectedAgent.driveId : locationContext?.currentDrive?.id ?? null}
+            isGlobal={!selectedAgent}
+            hasMessages={renderedMessages.length > 0}
+          />
         )}
         <ChatErrorBanner
           cause={errorCause}

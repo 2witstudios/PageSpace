@@ -5,7 +5,7 @@ import { SpendFallbackNotice } from '../SpendFallbackNotice';
 describe('SpendFallbackNotice', () => {
   it('SPEND-4 (partial) shows the new source as a status, so a wallet switch is never silent', () => {
     render(<SpendFallbackNotice data={{ from: 'drive_wallet', to: 'own_credits', walletId: 'w-marcus' }} />);
-    expect(screen.getByRole('status').textContent).toBe("Spent from your own credits — the drive wallet couldn't cover this call.");
+    expect(screen.getByRole('status').textContent).toBe("Used your own credits because the drive wallet couldn't cover this.");
   });
 
   it('SPEND-4 (partial) renders nothing for a malformed payload', () => {
