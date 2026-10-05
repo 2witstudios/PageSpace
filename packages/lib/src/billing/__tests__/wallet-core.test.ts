@@ -586,30 +586,31 @@ describe('settleOvershoot', () => {
 });
 
 describe('evaluateCaps', () => {
-  it('WAL-7 (partial) defaults on enable are 10 credits a day and 100 a month, from the one credit definition', () => {
-    expect(DEFAULT_CONSUMER_CAPS).toEqual({ dailyCents: Math.round(centsFromCredits(10)), monthlyCents: Math.round(centsFromCredits(100)) });
+  const TEN_A_DAY_HUNDRED_A_MONTH = { dailyCents: c(10), monthlyCents: c(100) };
+  it('WAL-7 (partial) [D-OW-31] defaults on enable are 50 credits a day and 1,000 a month, from the one credit definition', () => {
+    expect(DEFAULT_CONSUMER_CAPS).toEqual({ dailyCents: Math.round(centsFromCredits(50)), monthlyCents: Math.round(centsFromCredits(1_000)) });
   });
 
   it.each([
     ['unset caps are unlimited within the wallet', { dailyCents: null, monthlyCents: null }, { dailySpentCents: c(9999), monthlySpentCents: c(99999), dailyReservedCents: 0, monthlyReservedCents: 0 }, c(5),
       { allowed: true, reason: 'ok', dailyRemainingCents: null, monthlyRemainingCents: null }],
-    ['within both caps', DEFAULT_CONSUMER_CAPS, { dailySpentCents: c(4), monthlySpentCents: c(50), dailyReservedCents: 0, monthlyReservedCents: 0 }, c(5),
+    ['within both caps', TEN_A_DAY_HUNDRED_A_MONTH, { dailySpentCents: c(4), monthlySpentCents: c(50), dailyReservedCents: 0, monthlyReservedCents: 0 }, c(5),
       { allowed: true, reason: 'ok', dailyRemainingCents: c(6), monthlyRemainingCents: c(50) }],
-    ['exactly reaching the daily cap is allowed', DEFAULT_CONSUMER_CAPS, { dailySpentCents: c(5), monthlySpentCents: c(5), dailyReservedCents: 0, monthlyReservedCents: 0 }, c(5),
+    ['exactly reaching the daily cap is allowed', TEN_A_DAY_HUNDRED_A_MONTH, { dailySpentCents: c(5), monthlySpentCents: c(5), dailyReservedCents: 0, monthlyReservedCents: 0 }, c(5),
       { allowed: true, reason: 'ok', dailyRemainingCents: c(5), monthlyRemainingCents: c(95) }],
-    ['past the daily cap', DEFAULT_CONSUMER_CAPS, { dailySpentCents: c(6), monthlySpentCents: c(6), dailyReservedCents: 0, monthlyReservedCents: 0 }, c(5),
+    ['past the daily cap', TEN_A_DAY_HUNDRED_A_MONTH, { dailySpentCents: c(6), monthlySpentCents: c(6), dailyReservedCents: 0, monthlyReservedCents: 0 }, c(5),
       { allowed: false, reason: 'daily_cap_exceeded', dailyRemainingCents: c(4), monthlyRemainingCents: c(94) }],
-    ['past the monthly cap with room today', DEFAULT_CONSUMER_CAPS, { dailySpentCents: 0, monthlySpentCents: c(98), dailyReservedCents: 0, monthlyReservedCents: 0 }, c(5),
+    ['past the monthly cap with room today', TEN_A_DAY_HUNDRED_A_MONTH, { dailySpentCents: 0, monthlySpentCents: c(98), dailyReservedCents: 0, monthlyReservedCents: 0 }, c(5),
       { allowed: false, reason: 'monthly_cap_exceeded', dailyRemainingCents: c(10), monthlyRemainingCents: c(2) }],
-    ['over both reports the daily cap first', DEFAULT_CONSUMER_CAPS, { dailySpentCents: c(12), monthlySpentCents: c(120), dailyReservedCents: 0, monthlyReservedCents: 0 }, c(5),
+    ['over both reports the daily cap first', TEN_A_DAY_HUNDRED_A_MONTH, { dailySpentCents: c(12), monthlySpentCents: c(120), dailyReservedCents: 0, monthlyReservedCents: 0 }, c(5),
       { allowed: false, reason: 'daily_cap_exceeded', dailyRemainingCents: 0, monthlyRemainingCents: 0 }],
-    ['an in-flight reservation counts against the daily cap', DEFAULT_CONSUMER_CAPS,
+    ['an in-flight reservation counts against the daily cap', TEN_A_DAY_HUNDRED_A_MONTH,
       { dailySpentCents: c(4), monthlySpentCents: c(4), dailyReservedCents: c(5), monthlyReservedCents: c(5) }, c(5),
       { allowed: false, reason: 'daily_cap_exceeded', dailyRemainingCents: c(1), monthlyRemainingCents: c(91) }],
     ['an in-flight reservation counts against the monthly cap', { dailyCents: null, monthlyCents: c(100) },
       { dailySpentCents: 0, monthlySpentCents: c(90), dailyReservedCents: 0, monthlyReservedCents: c(8) }, c(5),
       { allowed: false, reason: 'monthly_cap_exceeded', dailyRemainingCents: null, monthlyRemainingCents: c(2) }],
-    ['reservations that still fit are allowed', DEFAULT_CONSUMER_CAPS,
+    ['reservations that still fit are allowed', TEN_A_DAY_HUNDRED_A_MONTH,
       { dailySpentCents: c(2), monthlySpentCents: c(2), dailyReservedCents: c(3), monthlyReservedCents: c(3) }, c(5),
       { allowed: true, reason: 'ok', dailyRemainingCents: c(5), monthlyRemainingCents: c(95) }],
   ] as const)('WAL-7 (partial) %s', (_label, caps, usage, reservationCents, expected) => {
@@ -617,7 +618,7 @@ describe('evaluateCaps', () => {
   });
 
   it.each([
-    ['a non-finite reservation', DEFAULT_CONSUMER_CAPS, Number.NaN, 'daily_cap_exceeded'],
+    ['a non-finite reservation', TEN_A_DAY_HUNDRED_A_MONTH, Number.NaN, 'daily_cap_exceeded'],
     ['a non-finite reservation under a monthly cap only', { dailyCents: null, monthlyCents: c(100) }, Number.NaN, 'monthly_cap_exceeded'],
     ['a non-finite daily cap', { dailyCents: Number.NaN, monthlyCents: null }, c(5), 'daily_cap_exceeded'],
     ['a non-finite monthly cap', { dailyCents: null, monthlyCents: Number.POSITIVE_INFINITY }, c(5), 'monthly_cap_exceeded'],
@@ -646,13 +647,13 @@ describe('evaluateCaps', () => {
 });
 
 describe('writing a per-consumer cap', () => {
-  it('WAL-7 (partial) enabling caps with nothing named takes the D20.5 defaults, 10 credits a day and 100 a month', () => {
+  it('WAL-7 (partial) [D-OW-31] enabling caps with nothing named takes the defaults, 50 credits a day and 1,000 a month', () => {
     expect(planConsumerCapWrite({}, null)).toEqual({ kind: 'set', caps: DEFAULT_CONSUMER_CAPS });
-    expect(DEFAULT_CONSUMER_CAPS).toEqual({ dailyCents: c(10), monthlyCents: c(100) });
+    expect(DEFAULT_CONSUMER_CAPS).toEqual({ dailyCents: c(50), monthlyCents: c(1_000) });
   });
 
   it('WAL-7 (partial) a named window replaces only itself; null in a window means unlimited in it', () => {
-    expect(planConsumerCapWrite({ dailyCents: c(50) }, null)).toEqual({ kind: 'set', caps: { dailyCents: c(50), monthlyCents: c(100) } });
+    expect(planConsumerCapWrite({ dailyCents: c(30) }, null)).toEqual({ kind: 'set', caps: { dailyCents: c(30), monthlyCents: c(1_000) } });
     expect(planConsumerCapWrite({ monthlyCents: null }, { dailyCents: c(5), monthlyCents: c(70) }))
       .toEqual({ kind: 'set', caps: { dailyCents: c(5), monthlyCents: null } });
   });
@@ -664,9 +665,15 @@ describe('writing a per-consumer cap', () => {
 });
 
 describe('seat allowance — the per-consumer monthly cap on the org pool', () => {
-  it('WAL-2 (partial) the seat allowance is never unlimited: with nothing set it is the D20.5 monthly default', () => {
-    expect(DEFAULT_SEAT_ALLOWANCE_CENTS).toBe(DEFAULT_CONSUMER_CAPS.monthlyCents);
-    expect(DEFAULT_SEAT_ALLOWANCE_CENTS).toBeGreaterThan(0);
+  it('WAL-2 (partial) [D-OW-31] the seat allowance is its own constant: the per-consumer cap defaults never move it', () => {
+    expect(DEFAULT_SEAT_ALLOWANCE_CENTS).toBe(Math.round(centsFromCredits(100)));
+    expect(DEFAULT_SEAT_ALLOWANCE_CENTS).not.toBe(DEFAULT_CONSUMER_CAPS.monthlyCents);
+    const source = readFileSync(fileURLToPath(new URL('../wallet-core.ts', import.meta.url)), 'utf8');
+    expect(source).not.toMatch(/DEFAULT_SEAT_ALLOWANCE_CENTS[^=\n]*=[^\n]*DEFAULT_CONSUMER_CAPS/);
+  });
+
+  it('WAL-2 (partial) the seat allowance is never unlimited: with nothing set it is the D20.5 monthly default, 100 credits', () => {
+    expect(DEFAULT_SEAT_ALLOWANCE_CENTS).toBe(c(100));
     expect(seatAllowanceCents({ consumerMonthlyCapCents: null, policySeatAllowanceCents: null })).toBe(DEFAULT_SEAT_ALLOWANCE_CENTS);
   });
 

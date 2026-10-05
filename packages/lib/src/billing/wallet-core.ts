@@ -568,10 +568,15 @@ export interface ConsumerCaps {
   monthlyCents: number | null;
 }
 
-/** Defaults on enable: 10 credits a day, 100 a month (D20.5 restated in credits). */
+/**
+ * Defaults when an admin enables per-consumer caps without naming values: 50 credits a day and
+ * 1,000 a month ([D-OW-31], replacing D20.5's 10/100, which sat below one image or uncatalogued
+ * model's hold and so refused every such call). Caps never set stay unlimited within the wallet.
+ * NOT the seat allowance: that is its own constant below.
+ */
 export const DEFAULT_CONSUMER_CAPS: ConsumerCaps = {
-  dailyCents: Math.round(centsFromCredits(10)),
-  monthlyCents: Math.round(centsFromCredits(100)),
+  dailyCents: Math.round(centsFromCredits(50)),
+  monthlyCents: Math.round(centsFromCredits(1_000)),
 };
 
 export interface CapUsage {
@@ -697,11 +702,13 @@ export function planConsumerCapWrite(input: ConsumerCapWriteInput, existing: Con
 // ---------------------------------------------------------------------------
 
 /**
- * The org's seat allowance until the org policy store (POL-7) lands: D20.5's monthly
- * per-consumer default. A seat is never unlimited — a seat with no cap lets any one member
- * spend the whole pool.
+ * The org's default seat allowance (the POL-7 policy default and the fallback when an org sets
+ * none): D20.5's 100 credits a month per member. Its own constant on purpose: [D-OW-31] moved the
+ * per-consumer cap defaults and left the seat allowance where it was, so a cap edit must never
+ * move what every member may draw from every pool. A seat is never unlimited — a seat with no
+ * cap lets any one member spend the whole pool.
  */
-export const DEFAULT_SEAT_ALLOWANCE_CENTS: number = DEFAULT_CONSUMER_CAPS.monthlyCents ?? 0;
+export const DEFAULT_SEAT_ALLOWANCE_CENTS: number = Math.round(centsFromCredits(100));
 
 /**
  * One consumer's seat allowance on the pool: their own monthly cap on the pool leg

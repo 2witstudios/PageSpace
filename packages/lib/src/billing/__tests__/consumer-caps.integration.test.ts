@@ -152,9 +152,9 @@ describe('per-consumer caps on drive-wallet and seat legs (orgs on, real Postgre
     expect(await setDriveWalletCap(w.anaId, w.productId, w.marcusId, { dailyCents: 30 }, 'session')).toMatchObject({
       ok: true,
       walletId: w.productWalletId,
-      caps: [{ userId: w.marcusId, displayName: 'Marcus Oyelaran', dailyCapCents: 30, monthlyCapCents: 100, dailyCapCredits: '30', monthlyCapCredits: '100' }],
+      caps: [{ userId: w.marcusId, displayName: 'Marcus Oyelaran', dailyCapCents: 30, monthlyCapCents: 1_000, dailyCapCredits: '30', monthlyCapCredits: '1,000' }],
     });
-    expect(await capRow(w.productWalletId, w.marcusId)).toMatchObject({ dailyCapCents: 30, monthlyCapCents: 100 });
+    expect(await capRow(w.productWalletId, w.marcusId)).toMatchObject({ dailyCapCents: 30, monthlyCapCents: 1_000 });
 
     expect(await setDriveWalletCap(w.lenaId, w.productId, w.marcusId, { dailyCents: 999 }, 'session')).toMatchObject({ ok: false, status: 403, code: 'insufficient_role' });
     expect(await setDriveWalletCap(w.marcusId, w.productId, w.marcusId, { dailyCents: 999 }, 'session')).toMatchObject({ ok: false, status: 403 });
@@ -174,7 +174,7 @@ describe('per-consumer caps on drive-wallet and seat legs (orgs on, real Postgre
     if (!dbAvailable) return;
     world = await build();
     const w = world;
-    expect(await setDriveWalletCap(w.jonoId, w.sideId, w.marcusId, {}, 'session')).toMatchObject({ ok: true, caps: [{ dailyCapCents: 10, monthlyCapCents: 100 }] });
+    expect(await setDriveWalletCap(w.jonoId, w.sideId, w.marcusId, {}, 'session')).toMatchObject({ ok: true, caps: [{ dailyCapCents: 50, monthlyCapCents: 1_000 }] });
     expect(await setDriveWalletCap(w.marcusId, w.sideId, w.marcusId, { dailyCents: null }, 'session')).toMatchObject({ ok: false, status: 403 });
     expect(await setDriveWalletCap(w.jonoId, w.sideId, w.anaId, {}, 'session')).toMatchObject({ ok: false, status: 404, code: 'not_a_consumer' });
     expect(await setDriveWalletCap(w.jonoId, w.sideId, w.marcusId, { dailyCents: -1 }, 'session')).toMatchObject({ ok: false, status: 400, code: 'invalid_amount' });
