@@ -34,6 +34,7 @@ import {
 } from '../organizations/org-drive-ownership';
 import { retryOnDeadlock } from '../organizations/repository';
 import { openDriveFloorRefusal } from '../organizations/open-role-floor';
+import { holdOrgGuestsUnderPolicy, kickSuspendedGuests } from '../permissions/guest-holds';
 import { checkOrgActive, type OrgLapsedRefusal } from '../organizations/status';
 import { removeFormerLeadOwnerRow } from '../permissions/org-drive-membership';
 import { getActorInfo, logActivityWithTx } from '../monitoring/activity-logger';
@@ -172,12 +173,17 @@ export async function moveDriveToOrg(
     // makes them the org's; the org's usage is derived from its drives, so it follows orgId.
     const storageReattribution = await reattributeDriveStorageInTx(tx, { driveId, orgId: input.orgId, direction: 'into-org' });
     const publish = await deps.syncOrgMembership(tx, { kind: 'move-in', driveId, orgId: input.orgId });
-    return { ok: true as const, drive: moved, storageReattribution, publish };
+    // POL-2 (Review #2762 P1-1): the drive brings its outsiders with it. Under the org row lock taken above, the
+    // org's guests policy decides them as it decides any admission: off parks them (restored when guests come back
+    // on), approve queues them for an Owner or Admin, on leaves them. The move itself is never refused for it.
+    const heldGuests = await holdOrgGuestsUnderPolicy(tx, { orgId: input.orgId, driveId });
+    return { ok: true as const, drive: moved, storageReattribution, publish, heldGuests };
   })));
 
   if (!outcome.ok) return outcome;
-  const { publish, ...moved } = outcome;
+  const { publish, heldGuests, ...moved } = outcome;
   await publish();
+  await kickSuspendedGuests(heldGuests);
   await recordOrgAuditEventAfterCommit({
     orgId: input.orgId,
     driveId,

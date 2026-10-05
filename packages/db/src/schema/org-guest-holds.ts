@@ -20,7 +20,10 @@ const utcNow = sql`(now() at time zone 'utc')`;
  *
  * `userId` is null only for an invitee who has no account yet (`email` is set instead).
  */
-export const GUEST_HOLD_STATES = ['pending_approval', 'suspended'] as const;
+// `approved`: an Owner or Admin approved an outsider's EMAILED invitation (drive or page) and it was sent; the
+// invitation's acceptance consumes this row instead of asking for approval again (Review 3+4 on #2762, P2-6). Text
+// column: no DDL.
+export const GUEST_HOLD_STATES = ['pending_approval', 'suspended', 'approved'] as const;
 export type GuestHoldState = (typeof GUEST_HOLD_STATES)[number];
 // `page_invite`: a page share-invite by email to an address with no verified account; `page_grant`: a direct page
 // grant (the page Share dialog, or a share-invite to an existing account) — queued, or parked when that grant was
@@ -32,6 +35,13 @@ export interface GuestHoldRequest {
   role?: 'MEMBER' | 'ADMIN';
   customRoleId?: string | null;
   permissions?: Array<{ pageId: string; canView: boolean; canEdit: boolean; canShare: boolean; canDelete?: boolean }>;
+  /** Explicit-role MCP token scopes the outsider's tokens held on the drive, replayed on approval. */
+  tokenScopes?: Array<Record<string, unknown>>;
+  /**
+   * A `page_grant` request made from access the person ALREADY held (a drive moved into the org, pages moved into
+   * an org drive, a former member's rows): their drive_members row as it was, replayed with the grants on approval.
+   */
+  member?: Record<string, unknown> | null;
   expiryDays?: number | null;
   linkId?: string;
   pageId?: string;
@@ -41,6 +51,8 @@ export interface GuestHoldRequest {
 export interface GuestHoldParked {
   member: Record<string, unknown> | null;
   grants: Array<Record<string, unknown>>;
+  /** Explicit-role MCP token scopes (mcp_token_drives rows with a role) of tokens the outsider owns. */
+  tokenScopes?: Array<Record<string, unknown>>;
 }
 
 export const orgGuestHolds = pgTable('org_guest_holds', {
