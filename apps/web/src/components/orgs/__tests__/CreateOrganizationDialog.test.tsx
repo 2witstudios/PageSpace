@@ -121,6 +121,30 @@ describe('CreateOrganizationDialog', () => {
     expect(onOpenChange).toHaveBeenCalledWith(false);
   }, 10_000);
 
+  it('UI-6 create-organization dialog: name, slug, owned drives with Home excluded, invite people, the plan summary, and payment in place of a trial (D-OW-30)', async () => {
+    mocks.createOrganization.mockResolvedValue({ organization, billing: { state: 'payment_required', subscription: sub, payment: { kind: 'confirm_payment', clientSecret: 'cs_test_1' } } });
+    render(<CreateOrganizationDialog open onOpenChange={vi.fn()} />);
+    // name and slug
+    await fillName();
+    expect((screen.getByLabelText('URL name') as HTMLInputElement).value).toBe('northwind-labs');
+    // move owned drives; Home is excluded
+    expect((screen.getByLabelText('Move Home') as HTMLButtonElement).disabled).toBe(true);
+    await userEvent.click(screen.getByLabelText('Move Product'));
+    // invite people (the moved drive's people are prefilled; one typed)
+    await waitFor(() => expect((screen.getByLabelText('Invite people') as HTMLTextAreaElement).value).toContain('priya@northwind.com'));
+    await userEvent.type(screen.getByLabelText('Invite people'), ', sam@x.io');
+    // plan summary, no trial
+    expect(screen.getByText(/You and 3 people make 4 seats/)).toBeTruthy();
+    expect(screen.queryByText(/trial/i)).toBeNull();
+    // payment, then setup
+    await userEvent.click(screen.getByRole('button', { name: 'Continue to payment' }));
+    expect(mocks.createOrganization).toHaveBeenCalledWith({ name: 'Northwind Labs', slug: 'northwind-labs' });
+    await userEvent.click(await screen.findByRole('button', { name: 'Pay $50.00 and create' }));
+    await waitFor(() => expect(mocks.push).toHaveBeenCalledWith('/orgs/org_nw/settings'), { timeout: 5000 });
+    expect(mocks.moveDriveIntoOrg).toHaveBeenCalledWith('d_product', 'org_nw');
+    expect(mocks.inviteToOrg.mock.calls.map((c) => c[1].email)).toEqual(['priya@northwind.com', 'dana@northwind.com', 'sam@x.io']);
+  }, 10_000);
+
   it('a taken URL shows the copy for slug_taken and stays on the form', async () => {
     mocks.createOrganization.mockRejectedValue(new ApiRequestError('raw', 409, { error: 'raw', code: 'slug_taken' }));
     render(<CreateOrganizationDialog open onOpenChange={vi.fn()} />);

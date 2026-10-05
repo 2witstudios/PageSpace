@@ -77,6 +77,16 @@ describe('Account › Organizations', () => {
     expect(screen.getByRole('dialog')).toBeTruthy();
   });
 
+  it('UI-2 Account Settings lists every organization I belong to, each with my role and its hub, plus Create', async () => {
+    render(<AccountOrganizationsSection />);
+    expect(screen.getByRole('link', { name: /Northwind Labs/ }).getAttribute('href')).toBe('/orgs/o1/settings');
+    expect(screen.getByRole('link', { name: /Acme/ }).getAttribute('href')).toBe('/orgs/o2/settings');
+    expect(screen.getByText('Owner')).toBeTruthy();
+    expect(screen.getByText('Member')).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: /Create organization/ }));
+    expect(screen.getByRole('dialog')).toBeTruthy();
+  });
+
   it('offers Create to someone in no org yet', () => {
     mocks.useMyOrgs.mockReturnValue({ orgs: [], isLoading: false });
     render(<AccountOrganizationsSection />);

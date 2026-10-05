@@ -198,11 +198,9 @@ SPEND-9
 # unallocated balance; automation spend is labeled per person until C4 names the drive consumer.
 SPEND-10
 UI-1
-UI-2
 UI-3
 UI-4
 UI-5
-UI-6
 UI-7
 UI-8
 # UI-9 (partial, ow-c6): the Drive Settings › Wallet routes (allocation, top-up, donate, rules, pause,
