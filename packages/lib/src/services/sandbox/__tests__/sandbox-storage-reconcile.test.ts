@@ -303,6 +303,25 @@ describe('reconcileSandboxStorage', () => {
     expect(agentSessionAdvanceCalls).toEqual([]);
   });
 
+  it('given the reconcile lock is lost while a row is being priced, should NOT charge it (only the pre-charge check stands in the way)', async () => {
+    // Lost after the loop-top check has passed for this row: another run may already be charging
+    // this same window from the same watermark.
+    const lost = new AbortController();
+    const { deps, chargeCalls, agentSessionAdvanceCalls } = makeDeps({
+      listAgentSessionSprites: async () => [agentSession({ workspaceId: 'only' })],
+      lookupDriveOwnerId: async () => {
+        lost.abort(new Error('terminating connection due to administrator command'));
+        return 'owner-1';
+      },
+    });
+
+    const result = await reconcileSandboxStorage(deps, lost.signal);
+
+    expect(chargeCalls).toEqual([]);
+    expect(agentSessionAdvanceCalls).toEqual([]);
+    expect(result).toMatchObject({ charged: 0 });
+  });
+
   it('given the reconcile lock is lost after a charge, should still advance THAT row\'s watermark but charge no further row', async () => {
     // Skipping the advance after a charge is what re-bills a window, so the in-flight row
     // completes; every later row is left for the next run, which may already hold the lock.

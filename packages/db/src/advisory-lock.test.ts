@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { describe, it, expect, vi } from 'vitest';
-import { withAdvisoryLock, type AdvisoryLockPool } from './advisory-lock';
+import { AdvisoryLockLostError, throwIfLockLost, withAdvisoryLock, type AdvisoryLockPool } from './advisory-lock';
 
 /** A mock client that, like pg.Client, is an EventEmitter — and records the listener count at each release. */
 function makeEmittingClient(query: ReturnType<typeof vi.fn>) {
@@ -385,6 +385,36 @@ describe('withAdvisoryLock', () => {
       const failed = makeEmittingClient(vi.fn().mockRejectedValueOnce(new Error('reset')));
       await withAdvisoryLock({ connect: async () => failed.client }, 'my-lock', async () => 'unreachable');
       expect(failed.listenersAtRelease).toEqual([0]);
+    });
+  });
+});
+
+describe('throwIfLockLost', () => {
+  it('given no signal (code running outside any lock), should not throw', () => {
+    expect(() => throwIfLockLost(undefined, 'the charge')).not.toThrow();
+  });
+
+  it('given a signal that has not been aborted, should not throw', () => {
+    expect(() => throwIfLockLost(new AbortController().signal, 'the charge')).not.toThrow();
+  });
+
+  it('given an aborted signal, should throw AdvisoryLockLostError naming the work and carrying the connection error', () => {
+    const lost = new AbortController();
+    const dropped = new Error('terminating connection due to administrator command');
+    lost.abort(dropped);
+
+    let thrown: unknown;
+    try {
+      throwIfLockLost(lost.signal, 'the storage correction');
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(AdvisoryLockLostError);
+    expect(thrown).toMatchObject({
+      name: 'AdvisoryLockLostError',
+      message: expect.stringContaining('before the storage correction'),
+      connectionError: dropped,
     });
   });
 });
