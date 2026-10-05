@@ -123,3 +123,24 @@ export function spendFromRowCopy(input: { status: WalletStatus; orgName: string 
   if (input.status === 'paused') return `${owner} · paused by whoever funds it, your calls move to the next source`;
   return owner;
 }
+
+/**
+ * The Organization card's summary on Drive Settings › General (Spec UI-4; canvas v9
+ * DriveGeneral): who pays (WAL-9) and what AI spends here. The allocation appears only from a
+ * funder's view (the lead, org admins); a consumer's view carries none (SPEND-9).
+ */
+export function orgDriveSummaryCopy(input: {
+  orgName: string;
+  wallet: { allocationCredits: string | null; spentCredits: string | null; fallbackRule: 'refuse' | 'seat_allowance' | 'own_credits' | null } | null;
+}): string {
+  const billed = `Storage and sandbox time are billed to ${input.orgName}.`;
+  const tail = 'Org policies apply, and org admins can manage this drive.';
+  const w = input.wallet;
+  if (!w) return `${billed} AI runs on each member's seat allowance or their own credits. ${tail}`;
+  if (w.allocationCredits === null) return `${billed} AI runs on this drive's wallet. ${tail}`;
+  const wallet = `AI runs on this drive's wallet (${w.allocationCredits} credits a month from the org pool, ${w.spentCredits ?? '0'} credits spent)`;
+  const then = w.fallbackRule === 'refuse' ? '; calls stop when it is spent.'
+    : w.fallbackRule === 'own_credits' ? ", then on each member's own credits."
+      : ", then on each member's seat allowance.";
+  return `${billed} ${wallet}${then} ${tail}`;
+}

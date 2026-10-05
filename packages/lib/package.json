@@ -204,6 +204,11 @@
       "import": "./dist/organizations/drive-picker-groups.js",
       "require": "./dist/organizations/drive-picker-groups.js"
     },
+    "./organizations/invite-choice": {
+      "types": "./dist/organizations/invite-choice.d.ts",
+      "import": "./dist/organizations/invite-choice.js",
+      "require": "./dist/organizations/invite-choice.js"
+    },
     "./organizations/repository": {
       "types": "./dist/organizations/repository.d.ts",
       "import": "./dist/organizations/repository.js",

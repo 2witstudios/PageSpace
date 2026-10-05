@@ -61,6 +61,8 @@ export interface DrivePageLinkGuest {
   source: 'invite' | 'org';
   /** Pages in this drive the guest holds a grant on. */
   pageGrantCount: number;
+  /** Those grants, by page title: the role and expiry each carries, for the lead to revoke one (UI-5). */
+  pages: { pageId: string; title: string; role: 'view' | 'edit'; expiresAt: Date | null }[];
 }
 
 /** Every accepted GUEST row of the drive (D-OW-24), by name. */
@@ -81,6 +83,15 @@ export async function listDrivePageLinkGuests(driveId: string): Promise<DrivePag
     .leftJoin(userProfiles, eq(userProfiles.userId, driveMembers.userId))
     .where(and(eq(driveMembers.driveId, driveId), eq(driveMembers.role, 'GUEST'), isNotNull(driveMembers.acceptedAt)));
   const named = await Promise.all(rows.map(async (r) => ({ ...r, name: (await decryptUserRow({ name: r.name })).name ?? null })));
+  const grants = rows.length === 0 ? [] : await db
+    .select({ userId: pagePermissions.userId, pageId: pages.id, title: pages.title, canEdit: pagePermissions.canEdit, expiresAt: pagePermissions.expiresAt })
+    .from(pagePermissions)
+    .innerJoin(pages, eq(pages.id, pagePermissions.pageId))
+    .where(and(eq(pages.driveId, driveId), inArray(pagePermissions.userId, rows.map((r) => r.userId))));
+  const pagesOf = (userId: string) => grants
+    .filter((g) => g.userId === userId)
+    .map((g) => ({ pageId: g.pageId, title: g.title, role: g.canEdit ? ('edit' as const) : ('view' as const), expiresAt: g.expiresAt }))
+    .sort((a, b) => a.title.localeCompare(b.title));
   return named
     .map((r) => ({
       userId: r.userId,
@@ -90,6 +101,7 @@ export async function listDrivePageLinkGuests(driveId: string): Promise<DrivePag
       acceptedAt: r.acceptedAt,
       source: r.source,
       pageGrantCount: Number(r.pageGrantCount ?? 0),
+      pages: pagesOf(r.userId),
     }))
     .sort((a, b) => a.displayName.localeCompare(b.displayName));
 }

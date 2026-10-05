@@ -8,6 +8,7 @@ import {
   spendMeterPercent,
   spendRowLabel,
   spendFromRowCopy,
+  orgDriveSummaryCopy,
 } from '../wallet-surface';
 import { projectDriveWallet, type DriveWalletFacts } from '../wallet-views';
 import { walletActionsFor } from '../../permissions/wallet-access';
@@ -132,5 +133,27 @@ describe('spendFromRowCopy: a drive wallet in Settings › Usage › Wallets', (
     expect(spendFromRowCopy({ status: 'over', orgName: 'Northwind Labs' })).toBe("Northwind Labs · over budget, your calls follow the drive's fallback rule");
     expect(spendFromRowCopy({ status: 'paused', orgName: 'Northwind Labs' })).toBe('Northwind Labs · paused by whoever funds it, your calls move to the next source');
     expect(spendFromRowCopy({ status: 'active', orgName: null })).toBe('Shared drive');
+  });
+});
+
+describe('orgDriveSummaryCopy: the Organization card on Drive Settings › General', () => {
+  it('UI-4 (partial) says who pays for storage and sandbox, and what AI spends, with the allocation when the viewer may see it', () => {
+    expect(orgDriveSummaryCopy({ orgName: 'Northwind Labs', wallet: { allocationCredits: '1,200', spentCredits: '1,008', fallbackRule: 'seat_allowance' } })).toBe(
+      "Storage and sandbox time are billed to Northwind Labs. AI runs on this drive's wallet (1,200 credits a month from the org pool, 1,008 credits spent), then on each member's seat allowance. Org policies apply, and org admins can manage this drive.",
+    );
+  });
+
+  it('UI-4 (partial) without a wallet AI runs on seat allowances; a consumer is not shown the allocation (SPEND-9)', () => {
+    expect(orgDriveSummaryCopy({ orgName: 'Northwind Labs', wallet: null })).toBe(
+      "Storage and sandbox time are billed to Northwind Labs. AI runs on each member's seat allowance or their own credits. Org policies apply, and org admins can manage this drive.",
+    );
+    expect(orgDriveSummaryCopy({ orgName: 'Northwind Labs', wallet: { allocationCredits: null, spentCredits: null, fallbackRule: null } })).toBe(
+      "Storage and sandbox time are billed to Northwind Labs. AI runs on this drive's wallet. Org policies apply, and org admins can manage this drive.",
+    );
+  });
+
+  it('UI-4 (partial) a refuse rule says calls stop when the wallet is spent; own credits says so', () => {
+    expect(orgDriveSummaryCopy({ orgName: 'N', wallet: { allocationCredits: '10', spentCredits: '0', fallbackRule: 'refuse' } })).toContain("(10 credits a month from the org pool, 0 credits spent); calls stop when it is spent.");
+    expect(orgDriveSummaryCopy({ orgName: 'N', wallet: { allocationCredits: '10', spentCredits: '0', fallbackRule: 'own_credits' } })).toContain(", then on each member's own credits.");
   });
 });

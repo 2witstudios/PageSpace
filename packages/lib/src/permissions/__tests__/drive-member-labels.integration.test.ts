@@ -100,6 +100,12 @@ describe('drive Members labels and page-link guests (real Postgres)', () => {
     ]);
   });
 
+  it('UI-5 (partial) each page-link guest lists the pages it holds in this drive, by title, with its role and expiry, so the lead can revoke one', async () => {
+    if (!ok) return;
+    const [pia] = await listDrivePageLinkGuests(ids.driveId);
+    expect(pia.pages).toEqual([{ pageId: expect.any(String), title: 'Roadmap', role: 'view', expiresAt: null }]);
+  });
+
   it('X-4 (partial) only people with a wallet view may join the drive wallet room: the lead, a member and an invited guest can; a page-grant collaborator, a page-link GUEST, a departed member and an outsider cannot', async () => {
     if (!ok) return;
     const [jono, marcus, chris, pia, lou, cara, otto] = ids.users;
