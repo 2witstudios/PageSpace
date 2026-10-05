@@ -1,23 +1,45 @@
-import type { StreamingTurn } from '../chat/chat-plugin';
-import type { ListSection } from '../frame/stage/stage';
-import { defaultTaskView, type TaskViewName } from '../tasks/task-view/task-view';
+import { uiSlices } from './slices';
+import type { UiPlugin } from './transactions';
+
+export type UnionToIntersection<U> = (U extends unknown ? (union: U) => void : never) extends (
+  intersection: infer I,
+) => void
+  ? I
+  : never;
 
 /**
- * Scalar shell state (drafts, filters, expansion, the open conversation).
- * Section leaves add their fields here as they land.
+ * A section's store slice: its transactions plus the scalar resources it
+ * owns (drafts, filters, expansion), built fresh for every initial state.
  */
-export type UiResources = {
-  /** Sections whose list the viewer hid; the stage itself lives in the URL. */
-  readonly collapsedSections: readonly ListSection[];
-  /** The view an open task list shows; saved per viewer (useTaskView). */
-  readonly taskView: TaskViewName;
-  /** Tasks whose subtasks the Tree view shows. */
-  readonly expandedTasks: readonly string[];
-  /** Pages expanded in the files tree. */
-  readonly expandedFileIds: readonly string[];
-  /** The conversation an agent turn is streaming into; SWR leaves it alone meanwhile. */
-  readonly streaming: StreamingTurn | null;
+export type UiSlice = UiPlugin & {
+  readonly resources: () => Readonly<Record<string, unknown>>;
 };
+
+type MergedResources<S extends readonly UiSlice[]> = [S[number]] extends [never]
+  ? Readonly<Record<never, never>>
+  : UnionToIntersection<ReturnType<S[number]['resources']>>;
+
+/** Merges slice resources into one record factory; a key may be owned once. */
+export const composeResources = <const S extends readonly UiSlice[]>(
+  ...slices: S
+): (() => MergedResources<S>) => {
+  const owned = new Set<string>();
+  for (const slice of slices) {
+    for (const key of Object.keys(slice.resources())) {
+      if (owned.has(key)) throw new Error(`Duplicate UI resource: ${key}`);
+      owned.add(key);
+    }
+  }
+  return () => Object.assign({}, ...slices.map((slice) => slice.resources())) as MergedResources<S>;
+};
+
+const initialResources = composeResources(...uiSlices);
+
+/**
+ * Scalar shell state (drafts, filters, expansion, the open conversation),
+ * composed from the registered slices.
+ */
+export type UiResources = ReturnType<typeof initialResources>;
 
 /**
  * Entity lists the shell renders (files, conversations, tasks). Real data
@@ -32,6 +54,6 @@ export type UiState = {
 
 /** The empty shell: the swap point for real data from later leaves. */
 export const createInitialState = (): UiState => ({
-  resources: { collapsedSections: [], taskView: defaultTaskView, expandedTasks: [], expandedFileIds: [], streaming: null },
+  resources: initialResources(),
   collections: {},
 });

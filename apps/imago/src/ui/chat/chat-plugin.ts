@@ -1,5 +1,4 @@
-import type { UiState } from '../store/state';
-import type { UiPlugin } from '../store/transactions';
+import type { UiSlice, UiState } from '../store/state';
 
 /** The conversation an agent turn is streaming into. */
 export type StreamingTurn = { readonly conversationId: string };
@@ -18,10 +17,14 @@ export const isStreaming = (state: UiState, conversationId: string | null): bool
  * into. The messages themselves live in SWR and the turn hook, not here.
  */
 export const chatPlugin = {
+  resources: (): {
+    /** The conversation an agent turn is streaming into; SWR leaves it alone meanwhile. */
+    readonly streaming: StreamingTurn | null;
+  } => ({ streaming: null }),
   transactions: {
     startStreaming: (state: UiState, conversationId: string): UiState =>
       isStreaming(state, conversationId) ? state : withStreaming(state, { conversationId }),
     endStreaming: (state: UiState, conversationId: string): UiState =>
       isStreaming(state, conversationId) ? withStreaming(state, null) : state,
   },
-} satisfies UiPlugin;
+} satisfies UiSlice;
