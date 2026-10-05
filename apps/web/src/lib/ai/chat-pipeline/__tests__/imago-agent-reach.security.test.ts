@@ -105,7 +105,7 @@ import { db } from '@pagespace/db/db';
 import { and, eq, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives, pages } from '@pagespace/db/schema/core';
-import { driveAgentMembers, driveMembers } from '@pagespace/db/schema/members';
+import { driveMembers } from '@pagespace/db/schema/members';
 import { taskItems, taskLists } from '@pagespace/db/schema/tasks';
 import { factories } from '@pagespace/db/test/factories';
 import { sessionService } from '@pagespace/lib/auth/session-service';
