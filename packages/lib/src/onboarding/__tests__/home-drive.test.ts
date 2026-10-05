@@ -55,14 +55,17 @@ vi.mock('../../memory/memory-pages', () => ({
 
 // Imago agent provisioning runs against real Postgres in
 // agents/__tests__/provision-imago-agents.integration.test.ts (including through
-// this function); here we only care that every branch calls it in the same tx.
+// this function); here we only care that every branch calls it in the same tx,
+// and grants the created agents only after commit (their drive grants run
+// against real Postgres in agents/__tests__/grant-imago-agents.integration.test.ts).
 vi.mock('../../agents/provision-imago-agents', () => ({
   provisionImagoAgentsInTransaction: vi.fn(),
+  grantCreatedImagoAgents: vi.fn(),
 }));
 
 import { db } from '@pagespace/db/db';
 import { sql } from '@pagespace/db/operators';
-import { provisionImagoAgentsInTransaction } from '../../agents/provision-imago-agents';
+import { grantCreatedImagoAgents, provisionImagoAgentsInTransaction } from '../../agents/provision-imago-agents';
 import { drives } from '@pagespace/db/schema/core';
 import { HOME_DRIVE_NAME, resolveUniqueSlug } from '../../services/drive-guards';
 import { populateUserDrive } from '../drive-setup';
@@ -165,6 +168,26 @@ describe('provisionHomeDriveIfNeeded', () => {
     await provisionHomeDriveIfNeeded('user-123');
 
     expect(order).toEqual(['commit', 'trigger']);
+  });
+
+  test('given provisioned agents, should grant them in owned drives only after the transaction commits', async () => {
+    const order: string[] = [];
+    const provisioned = agentsResult();
+    vi.mocked(provisionImagoAgentsInTransaction).mockResolvedValue(provisioned);
+    vi.mocked(grantCreatedImagoAgents).mockImplementation(async () => {
+      order.push('grant');
+    });
+    const tx = makeTx([{ id: 'drive-home-existing', kind: 'HOME', slug: 'home' }]);
+    vi.mocked(db.transaction).mockImplementation((async (cb: (t: typeof tx) => unknown) => {
+      const value = await cb(tx);
+      order.push('commit');
+      return value;
+    }) as never);
+
+    await provisionHomeDriveIfNeeded('user-123');
+
+    expect(order).toEqual(['commit', 'grant']);
+    expect(grantCreatedImagoAgents).toHaveBeenCalledWith('user-123', provisioned);
   });
 
   test('given existing kind=HOME drive, returns it with created:false and makes no inserts', async () => {
