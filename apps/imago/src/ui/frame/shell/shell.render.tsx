@@ -13,6 +13,8 @@ export type ShellRenderProps = {
   /** The object column, holding the route's own output. */
   readonly object: ReactNode;
   readonly chat: ReactNode;
+  /** The ⌘K palette: drawn over every pane, so it sits outside them. */
+  readonly palette: ReactNode;
 };
 
 /**
@@ -22,7 +24,7 @@ export type ShellRenderProps = {
  * attributes name the stage for tests and devtools; nothing styles off them.
  */
 export function renderShell(props: ShellRenderProps): ReactNode {
-  const { stage, layout, hydrated, rail, list, object, chat } = props;
+  const { stage, layout, hydrated, rail, list, object, chat, palette } = props;
   return (
     <div
       className={shellClass}
@@ -44,6 +46,7 @@ export function renderShell(props: ShellRenderProps): ReactNode {
       <Pane open width={chatSlotClass(layout)} slot="chat">
         {chat}
       </Pane>
+      {palette}
     </div>
   );
 }
