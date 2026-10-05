@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { announceOrgChange } from '@pagespace/lib/organizations/org-change-events';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { transferOwnership } from '@pagespace/lib/organizations/membership';
@@ -40,6 +41,8 @@ export async function POST(request: Request, context: { params: Promise<{ orgId:
       resourceId: orgId,
       details: { operation: 'transfer_org_ownership', fromUserId: gate.userId, toUserId: parsed.data.toUserId },
     });
+    // X-4: members see the change without a refresh (org:changed, no content).
+    void announceOrgChange(orgId, 'membership');
     return NextResponse.json({ ownerId: parsed.data.toUserId });
   } catch (error) {
     loggers.api.error('Error transferring organization ownership:', error as Error);

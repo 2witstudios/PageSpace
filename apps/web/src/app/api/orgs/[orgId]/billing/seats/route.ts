@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { announceOrgChange } from '@pagespace/lib/organizations/org-change-events';
 import { z } from 'zod';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -54,6 +55,8 @@ export async function PATCH(request: Request, context: Context) {
       resourceId: orgId,
       details: { operation: 'set_seat_auto_add', autoAdd: parsed.data.autoAdd },
     });
+    // X-4: members see the change without a refresh (org:changed, no content).
+    void announceOrgChange(orgId, 'seats');
     return NextResponse.json({ autoAdd: parsed.data.autoAdd });
   } catch (error) {
     loggers.api.error('Error updating seat auto-add:', error as Error, { orgId });

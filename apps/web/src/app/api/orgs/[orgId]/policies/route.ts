@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { announceOrgChange } from '@pagespace/lib/organizations/org-change-events';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getOrgPolicies, updateOrgPolicies } from '@pagespace/lib/organizations/policies';
@@ -70,6 +71,8 @@ export async function PATCH(request: Request, context: Context) {
         publishedVisibility = { parked: 0, restored: 0, failed: -1 };
       }
     }
+    // X-4: members see the change without a refresh (org:changed, no content).
+    void announceOrgChange(orgId, 'policy');
     return NextResponse.json({
       policies: result.policies,
       changed: result.changes.map((c) => c.key),

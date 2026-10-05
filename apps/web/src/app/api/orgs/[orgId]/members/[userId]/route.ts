@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { announceOrgChange } from '@pagespace/lib/organizations/org-change-events';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { changeMemberRole, removeMember, type MembershipRefusal } from '@pagespace/lib/organizations/membership';
@@ -40,6 +41,8 @@ export async function PATCH(request: Request, context: Context) {
       resourceId: orgId,
       details: { operation: 'change_org_role', targetUserId: targetId, role: parsed.data.role },
     });
+    // X-4: members see the change without a refresh (org:changed, no content).
+    void announceOrgChange(orgId, 'membership');
     return NextResponse.json({ userId: targetId, role: parsed.data.role });
   } catch (error) {
     loggers.api.error('Error changing organization role:', error as Error);
@@ -67,6 +70,8 @@ export async function DELETE(request: Request, context: Context) {
       resourceId: orgId,
       details: { operation: 'remove_org_member', targetUserId: targetId },
     });
+    // X-4: members see the change without a refresh (org:changed, no content).
+    void announceOrgChange(orgId, 'membership');
     return NextResponse.json({ removed: true });
   } catch (error) {
     loggers.api.error('Error removing organization member:', error as Error);

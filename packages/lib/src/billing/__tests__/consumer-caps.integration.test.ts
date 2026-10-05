@@ -248,6 +248,34 @@ describe('per-consumer caps on drive-wallet and seat legs (orgs on, real Postgre
     expect(await notifyCapAlerts({ walletId: w.productWalletId, userId: w.marcusId })).toBe(0);
   });
 
+  it('X-4 (partial) a settle on a drive wallet announces wallet:changed to the drive room, with no amount; a cap write announces caps', async () => {
+    if (!dbAvailable) return;
+    world = await build();
+    const w = world;
+    const sent: { channelId: string; event: string; payload: Record<string, unknown> }[] = [];
+    const prevUrl = process.env.INTERNAL_REALTIME_URL;
+    process.env.INTERNAL_REALTIME_URL = 'http://realtime.test';
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      sent.push(JSON.parse(String((init as RequestInit).body)));
+      return new Response('{}', { status: 200 });
+    });
+    try {
+      await settledCall(w, w.productId, 0.02);
+      await setDriveWalletCap(w.anaId, w.productId, w.marcusId, { dailyCents: 500 }, 'session');
+      await vi.waitFor(() => expect(sent.filter((m) => m.event === 'wallet:changed').length).toBeGreaterThanOrEqual(2));
+      const walletEvents = sent.filter((m) => m.event === 'wallet:changed');
+      expect(walletEvents.map((m) => [m.channelId, m.payload.change])).toEqual(expect.arrayContaining([
+        [`drive:${w.productId}`, 'balance'],
+        [`drive:${w.productId}`, 'caps'],
+      ]));
+      expect(JSON.stringify(walletEvents)).not.toMatch(/Cents|Credits/);
+    } finally {
+      fetchSpy.mockRestore();
+      if (prevUrl === undefined) delete process.env.INTERNAL_REALTIME_URL;
+      else process.env.INTERNAL_REALTIME_URL = prevUrl;
+    }
+  });
+
   it('WAL-7 (partial) a new period re-arms the alert: the same threshold tomorrow is sent again', async () => {
     if (!dbAvailable) return;
     world = await build();

@@ -2894,6 +2894,16 @@
       "import": "./dist/organizations/policies-core.js",
       "require": "./dist/organizations/policies-core.js"
     },
+    "./organizations/org-change-events": {
+      "types": "./dist/organizations/org-change-events.d.ts",
+      "import": "./dist/organizations/org-change-events.js",
+      "require": "./dist/organizations/org-change-events.js"
+    },
+    "./realtime/org-wallet-events": {
+      "types": "./dist/realtime/org-wallet-events.d.ts",
+      "import": "./dist/realtime/org-wallet-events.js",
+      "require": "./dist/realtime/org-wallet-events.js"
+    },
     "./organizations/policy-suspension-names": {
       "types": "./dist/organizations/policy-suspension-names.d.ts",
       "import": "./dist/organizations/policy-suspension-names.js",

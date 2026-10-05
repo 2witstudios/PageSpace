@@ -69,6 +69,8 @@ import {
 } from '../billing/wallet-views';
 import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
 import { decryptUserRow } from '../auth/user-repository';
+import { announceDriveWalletChange, announceWalletChange } from '../billing/wallet-change-events';
+import { announceOrgChange } from '../organizations/org-change-events';
 
 export interface WalletServiceError {
   ok: false;
@@ -457,6 +459,7 @@ export async function createDriveWallet(
   }
   if (created === 'exists') return { ok: false, status: 409, code: 'wallet_exists', message: 'This drive already has a wallet' };
   await recordOrgWalletEvent(standing, userId, 'org.wallet.allocation_changed', { operation: 'create', allocationCents: input.allocationCents });
+  void announceDriveWalletChange(driveId, 'allocation');
   return readView(userId, access);
 }
 
@@ -502,6 +505,7 @@ export async function updateDriveWallet(
   });
   if (outcome) return outcome;
   await recordOrgWalletEvent(access.standing, userId, 'org.wallet.allocation_changed', { operation: 'update', changes: applied });
+  void announceDriveWalletChange(driveId, input.allocationCents !== undefined ? 'allocation' : input.paused !== undefined ? 'status' : 'rules');
   return readView(userId, access);
 }
 
@@ -686,6 +690,7 @@ export async function topUpDriveWallet(
   });
   if (result.ok && !result.duplicate) {
     await recordOrgWalletEvent(standing, userId, 'org.wallet.topped_up', { amountCents: result.amountCents, paidDebtCents: result.paidDebtCents, legId: result.legId });
+    void announceDriveWalletChange(driveId, 'balance');
   }
   return result;
 }
@@ -784,6 +789,7 @@ export async function setDriveWalletCap(
   const written = await writeConsumerCap(row.id, consumerId, input);
   if (written) return written;
   await recordOrgWalletEvent(access.standing, userId, 'org.wallet.allocation_changed', { operation: input === null ? 'clear_consumer_cap' : 'set_consumer_cap', consumerId });
+  void announceWalletChange(row.id, 'caps');
   return { ok: true, walletId: row.id, caps: await capsOnWallet(row.id) };
 }
 
@@ -846,6 +852,7 @@ export async function setSeatCap(
     resourceId: pool.id,
     details: { operation: input === null ? 'clear_seat_cap' : 'set_seat_cap', consumerId },
   });
+  void announceOrgChange(orgId, 'seat_caps');
   return { ok: true, walletId: pool.id, caps: await capsOnWallet(pool.id) };
 }
 
@@ -878,6 +885,7 @@ export async function donateToDrive(
   });
   if (outcome.kind === 'donated') {
     await recordOrgWalletEvent(access.standing, userId, 'org.wallet.donated', { amountCents: outcome.amountCents, paidDebtCents: outcome.paidDebtCents, legId: outcome.legId });
+    void announceDriveWalletChange(driveId, 'balance');
     return { ok: true, legId: outcome.legId, amountCents: outcome.amountCents, paidDebtCents: outcome.paidDebtCents, duplicate: false };
   }
   if (outcome.kind === 'duplicate') return { ok: true, legId: outcome.legId, amountCents: input.amountCents, paidDebtCents: 0, duplicate: true };

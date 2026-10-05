@@ -38,6 +38,7 @@ import { ensurePersonalRootWalletId } from './personal-wallet';
 import { loggers } from '../logging/logger-config';
 import { notifyFunderOfWalletDebt } from './wallet-debt-notifier';
 import { notifyCapAlerts } from './wallet-cap-alerts';
+import { announceWalletChange } from './wallet-change-events';
 import { errorLogFields } from '../logging/error-cause';
 
 export interface ConsumeCreditsInput {
@@ -827,6 +828,8 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<Credit
     // WAL-7: tell the leg's funder when this consumer's spend reached 80% / 100% of a cap,
     // once per threshold per period. After the commit; never throws.
     await notifyCapAlerts({ walletId, userId: input.userId });
+    // X-4: a drive wallet's balance moved — its drive room refetches (no amount in the event).
+    void announceWalletChange(walletId, 'balance');
   } catch (error) {
     // Leave the row 'pending' for the backfill cron to retry. Never throw.
     loggers.ai.warn('credit consume failed', {

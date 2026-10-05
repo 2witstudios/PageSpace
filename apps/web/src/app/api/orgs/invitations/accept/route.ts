@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { announceOrgChange } from '@pagespace/lib/organizations/org-change-events';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { acceptInvitation } from '@pagespace/lib/organizations/invitations';
@@ -44,6 +45,8 @@ export async function POST(request: Request) {
       resourceId: result.orgId,
       details: { operation: 'accept_org_invitation', role: result.role, joined: result.joined },
     });
+    // X-4: members see the change without a refresh (org:changed, no content).
+    void announceOrgChange(result.orgId, 'membership');
     return NextResponse.json({ orgId: result.orgId, role: result.role, joined: result.joined });
   } catch (error) {
     loggers.api.error('Error accepting organization invitation:', error as Error);
