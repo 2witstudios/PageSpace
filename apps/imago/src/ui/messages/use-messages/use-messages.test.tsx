@@ -5,7 +5,7 @@ import { afterEach, describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { ImagoSWRProvider } from '@/api/swr-provider';
 import { RealtimeProvider } from '@/realtime/realtime-provider';
-import { createRealtimeClient, type RealtimeSocket } from '@/realtime/realtime-client';
+import { fakeRealtime } from '@/ui/test-support/fake-realtime';
 import { fakeWeb, type FakeRoute } from '@/ui/test-support/fake-web';
 import { useDirectThreads, useDriveChannels, useMessages, useUnreadBadges } from './use-messages';
 import { messagePaths } from '../messages-api/messages-api';
@@ -30,58 +30,6 @@ afterEach(() => {
 const settle = (check: () => void, timeout = 1000): Promise<void> =>
   act(() => vi.waitFor(check, { timeout, interval: 5 }));
 
-type Listener = (...args: unknown[]) => void;
-
-/** A socket.io stand-in that records listeners and whether it is still the live one. */
-type FakeSocket = RealtimeSocket & {
-  live: boolean;
-  listeners: Map<string, Set<Listener>>;
-};
-
-/**
- * The real realtime client (createRealtimeClient) over sockets that never
- * touch the network: every socket it opens is recorded, so a test can see
- * which one is live and what is subscribed on each.
- */
-const realtime = () => {
-  const sockets: FakeSocket[] = [];
-  const client = createRealtimeClient({
-    url: undefined,
-    fetchToken: () => Promise.resolve('ps_sock_1'),
-    connectSocket: () => {
-      const listeners = new Map<string, Set<Listener>>();
-      const socket: FakeSocket = {
-        live: true,
-        listeners,
-        on: (event, listener) => {
-          if (!listeners.has(event)) listeners.set(event, new Set());
-          listeners.get(event)?.add(listener);
-          return socket;
-        },
-        off: (event, listener) => {
-          listeners.get(event)?.delete(listener);
-          return socket;
-        },
-        connect: () => socket,
-        disconnect: () => {
-          socket.live = false;
-          return socket;
-        },
-      };
-      sockets.push(socket);
-      return socket;
-    },
-  });
-  const live = () => sockets.filter((socket) => socket.live);
-  /** realtime relaying an event: only the live socket receives it. */
-  const emit = (event: string, payload: unknown) =>
-    act(() => {
-      for (const socket of live()) for (const listener of socket.listeners.get(event) ?? []) listener(payload);
-    });
-  const count = (socket: FakeSocket, event: string) => socket.listeners.get(event)?.size ?? 0;
-  return { client, sockets, live, emit, count };
-};
-
 const CHANNELS = `GET ${messagePaths.driveChannels('d1')}`;
 const CONVERSATIONS = `GET ${messagePaths.conversations()}`;
 const BADGES = `GET ${messagePaths.badges}`;
@@ -97,7 +45,7 @@ const mount = (
   { strict = false }: { strict?: boolean } = {},
 ) => {
   const web = fakeWeb(routes);
-  const rt = realtime();
+  const rt = fakeRealtime();
   const tree = (
     <ImagoSWRProvider client={web.client}>
       <RealtimeProvider client={rt.client}>{probe}</RealtimeProvider>

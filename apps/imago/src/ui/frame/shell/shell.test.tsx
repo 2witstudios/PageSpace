@@ -24,6 +24,25 @@ vi.mock('@/components/SignOutButton', () => ({
   SignOutButton: () => h('button', { type: 'button' }, 'Sign out'),
 }));
 
+// The messages pane loads through SWR and realtime; its own suite proves it
+// against the real hooks. Here it only shows what the shell handed it.
+vi.mock('@/ui/messages/messages-pane/messages-pane', () => ({
+  MessagesPane: ({
+    driveId,
+    selectedPageId,
+    selectedConversationId,
+  }: {
+    driveId: string | null;
+    selectedPageId: string | null;
+    selectedConversationId: string | null;
+  }) =>
+    h('div', {
+      'data-messages-pane': driveId ?? '',
+      'data-page': selectedPageId ?? '',
+      'data-conversation': selectedConversationId ?? '',
+    }),
+}));
+
 const { Shell } = await import('./shell');
 
 let root: Root | null = null;
@@ -116,6 +135,33 @@ describe('Shell', () => {
       should: 'render it in the object slot, mounted once and never remounted by the shell',
       actual: [slot('object').contains(container.querySelector('[data-route]')), container.querySelector('[data-route]') === route, routeMounts],
       expected: [true, true, 1],
+    });
+  });
+
+  test('the messages section fills its list', () => {
+    render();
+    const pane = () => slot('list').querySelector<HTMLElement>('[data-messages-pane]');
+    const seen = ['/drive-1/messages', '/drive-1/messages/channel-1', '/dm', '/dm/conversation-1', '/drive-1/files'].map(
+      (pathname) => {
+        navigate(pathname);
+        const found = pane();
+        return found === null
+          ? null
+          : [found.dataset.messagesPane, found.dataset.page, found.dataset.conversation];
+      },
+    );
+
+    assert({
+      given: 'the Messages list, an open channel, the user-level DM list, an open DM, then Files',
+      should: 'put the channels and DMs in the list slot with the drive and the open thread, and only in Messages',
+      actual: seen,
+      expected: [
+        ['drive-1', '', ''],
+        ['drive-1', 'channel-1', ''],
+        ['', '', ''],
+        ['', '', 'conversation-1'],
+        null,
+      ],
     });
   });
 
