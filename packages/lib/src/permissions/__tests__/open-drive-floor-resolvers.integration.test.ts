@@ -108,7 +108,9 @@ async function harbor() {
     hiring: await factories.createPage(driveId, { title: 'Hiring', isPrivate: true }),
   });
   const pages = {
-    open: await pagesOf(open.id),
+    // Docks also has Board, a PRIVATE page its default role grants by a per-page entry: private pages are
+    // explicit-only, so only the default role's holders (not the floor, not other roles) reach it.
+    open: { ...await pagesOf(open.id), board: await factories.createPage(open.id, { title: 'Board', isPrivate: true }) },
     bare: await pagesOf(bare.id),
     shut: await pagesOf(shut.id),
     restricted: await pagesOf(restricted.id),
@@ -122,7 +124,9 @@ async function harbor() {
     return created;
   };
   // Docks' default: drive-wide view only, and a per-page entry that hides Secret (Review #2762 P2-4).
-  const docksDefault = await role(open.id, 'Below', { isDefault: true, driveWide: VIEW_ONLY, permissions: { [pages.open.secret.id]: DENY_ENTRY } });
+  const docksDefault = await role(open.id, 'Below', {
+    isDefault: true, driveWide: VIEW_ONLY, permissions: { [pages.open.secret.id]: DENY_ENTRY, [pages.open.board.id]: VIEW_ONLY },
+  });
   // A FORMER default that denies everything (P2-3: org rows frozen on it).
   const docksFormer = await role(open.id, 'Former', { isDefault: false, driveWide: DENY_ENTRY });
   // An explicit role an admin gives by invitation: drive-wide view, and it hides Secret.
@@ -169,7 +173,7 @@ async function harbor() {
 type Harbor = Awaited<ReturnType<typeof harbor>>;
 type PersonKey = keyof Harbor['people'];
 type DriveKey = keyof Harbor['drives'];
-type PageKey = 'roadmap' | 'secret' | 'hiring';
+type PageKey = 'roadmap' | 'secret' | 'hiring' | 'board';
 type ViewEdit = [view: boolean, edit: boolean];
 
 async function setFloor(orgId: string, floor: OpenRoleFloor) {
@@ -187,6 +191,8 @@ function expectedPage(person: PersonKey, drive: DriveKey, page: PageKey, floor: 
   const none: ViewEdit = [false, false];
   if (person === 'lena' || person === 'ada') return [true, true];
   const floorEdit = floor === 'edit';
+  // Board is private and granted only by Docks' default role: its holders view it (never edit), whatever the floor.
+  if (page === 'board') return ['ivy', 'sam', 'gil'].includes(person) ? [true, false] : none;
   if (OPEN_DRIVES.includes(drive)) {
     const implicit = drive === 'open' ? IMPLICIT_ON_DOCKS.includes(person) : ORG_MEMBERS.includes(person);
     if (implicit) return page === 'hiring' ? none : [true, floorEdit];
