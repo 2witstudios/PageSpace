@@ -47,9 +47,25 @@ jobs:
           push: false
           load: true
           tags: pagespace-imago:ci
+          # A sentinel no source file contains: the bundle check below proves
+          # the Dockerfile ARG reaches the client bundle (IMG-1.7a).
+          build-args: |
+            NEXT_PUBLIC_COOKIE_DOMAIN=.cookie-domain.imago-ci.test
           # Own scope so this never evicts docker-images.yml's cache.
           cache-from: type=gha,scope=imago-image
           cache-to: type=gha,scope=imago-image,mode=max
+
+      - name: Cookie domain baked into the client bundle
+        run: |
+          # Next inlines NEXT_PUBLIC_* at build time; the theme cookie writer
+          # must carry the domain the image was built with.
+          if docker run --rm --entrypoint sh pagespace-imago:ci -c \
+            "grep -rqF -- '.cookie-domain.imago-ci.test' apps/imago/.next/static"; then
+            echo "NEXT_PUBLIC_COOKIE_DOMAIN is in the client bundle"
+          else
+            echo "NEXT_PUBLIC_COOKIE_DOMAIN build arg did not reach apps/imago/.next/static"
+            exit 1
+          fi
 
       - name: Boot and check /imago/api/health
         run: |
