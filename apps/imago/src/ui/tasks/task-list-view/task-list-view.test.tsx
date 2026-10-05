@@ -58,11 +58,20 @@ const settle = async (check: () => void): Promise<void> => {
   check();
 };
 
+/**
+ * The injected clock: local noon on 14 March 2025, whatever the zone. A day
+ * long past, so a view that read the machine's clock instead would fail.
+ */
+const NOON = new Date(2025, 2, 14, 12);
+const clock = () => NOON;
+const todayAt = (hour: number) => new Date(2025, 2, 14, hour).toISOString();
+const yesterday = new Date(2025, 2, 13, 12).toISOString();
+
 const open = async (viewerId = 'u-1', table: Record<string, FakeRoute> = routes()) => {
   const web = fakeWeb(table);
   const container = mount(
     <ImagoSWRProvider client={web.client}>
-      <TaskListView driveId="d1" pageId="l1" viewerId={viewerId} />
+      <TaskListView driveId="d1" pageId="l1" viewerId={viewerId} clock={clock} />
     </ImagoSWRProvider>,
   );
   await settle(() => {
@@ -214,6 +223,177 @@ describe('TaskListView', () => {
         returning: 'Board',
         other: 'Tree',
       },
+    });
+  });
+
+  describe('Focus', () => {
+    /** l1: parent p (open a, d done today), loose open z, loose y done yesterday. */
+    const focusRoutes = (served: { extra: ReturnType<typeof taskItem>[] }): Record<string, FakeRoute> => ({
+      ...routes(),
+      [L1]: () =>
+        Response.json(
+          taskListResponse([
+            taskItem('p', { title: 'Plan launch', subTaskCount: 2, subTaskCompletedCount: 1, position: 0 }),
+            taskItem('z', { title: 'Book venue', position: 1 }),
+            taskItem('y', { title: 'Old chore', position: 2, status: 'completed', completedAt: yesterday }),
+            ...served.extra,
+          ]),
+        ),
+      [PAGE_P]: () =>
+        Response.json(
+          taskListResponse([
+            taskItem('a', { title: 'Draft copy', position: 0 }),
+            taskItem('d', { title: 'Pick date', position: 1, status: 'completed', completedAt: todayAt(9) }),
+          ]),
+        ),
+    });
+
+    const groups = (container: HTMLElement) =>
+      [...container.querySelectorAll('section')].map((section) => [
+        section.getAttribute('aria-label'),
+        [...section.querySelectorAll('li[data-task]')].map((row) => row.getAttribute('data-task')),
+      ]);
+
+    const toFocus = async (table: Record<string, FakeRoute>) => {
+      const opened = await open('u-1', table);
+      click(radio(opened.container, 'Focus') as HTMLButtonElement);
+      return opened;
+    };
+
+    test('open leaves by parent, plus done today', async () => {
+      const { container } = await toFocus(focusRoutes({ extra: [] }));
+      await settle(() => {
+        if (container.querySelectorAll('section').length < 3) throw new Error('no focus');
+      });
+      assert({
+        given: 'Focus chosen on a list loaded from the server, read on the injected clock’s day',
+        should: 'list the open leaves under their parent and the list, and only today’s completions as Done today',
+        actual: { view: checked(container), groups: groups(container) },
+        expected: {
+          view: 'Focus',
+          groups: [
+            ['Plan launch', ['a']],
+            ['Launch', ['z']],
+            ['Done today', ['d']],
+          ],
+        },
+      });
+    });
+
+    test('ticking a leaf', async () => {
+      let status = 'pending';
+      const table = focusRoutes({ extra: [] });
+      const { web, container } = await toFocus({
+        ...table,
+        [L1]: () =>
+          Response.json(
+            taskListResponse([
+              taskItem('p', { title: 'Plan launch', subTaskCount: 2, subTaskCompletedCount: 1, position: 0 }),
+              taskItem('z', {
+                title: 'Book venue',
+                position: 1,
+                status,
+                completedAt: status === 'completed' ? todayAt(12) : null,
+              }),
+            ]),
+          ),
+        'PATCH /api/pages/l1/tasks/z': ({ body }) => {
+          status = (body as { status: string }).status;
+          return Response.json(taskItem('z', { status }));
+        },
+      });
+      await settle(() => {
+        if (!container.querySelector('[aria-label="Complete Book venue"]')) throw new Error('no row');
+      });
+      click(container.querySelector('[aria-label="Complete Book venue"]') as HTMLButtonElement);
+      await settle(() => {
+        if (web.writes().length === 0) throw new Error('not sent');
+        if (!container.querySelector('section[aria-label="Done today"] li[data-task="z"]')) throw new Error('not done');
+      });
+      assert({
+        given: 'an open leaf ticked in Focus',
+        should: 'PATCH it done with the CSRF token and move it from its group to Done today',
+        actual: { writes: web.writes(), groups: groups(container) },
+        expected: {
+          writes: [{ method: 'PATCH', url: '/api/pages/l1/tasks/z', csrf: 'tok-1', body: { status: 'completed' } }],
+          groups: [
+            ['Plan launch', ['a']],
+            ['Done today', ['d', 'z']],
+          ],
+        },
+      });
+    });
+
+    test('capturing a task', async () => {
+      const served: { extra: ReturnType<typeof taskItem>[] } = { extra: [] };
+      const { web, container } = await toFocus({
+        ...focusRoutes(served),
+        'POST /api/pages/l1/tasks': ({ body }) => {
+          const created = taskItem('n', { title: (body as { title: string }).title, position: 3 });
+          served.extra = [created];
+          return Response.json(created, { status: 201 });
+        },
+      });
+      await settle(() => {
+        if (!container.querySelector('[data-capture] button')) throw new Error('no capture row');
+      });
+      click(container.querySelector('[data-capture] button') as HTMLButtonElement);
+      const field = container.querySelector<HTMLInputElement>('input[aria-label="Add task to Launch"]');
+      if (field) {
+        typeInto(field, 'Order banners');
+        press(field, 'Enter');
+      }
+      await settle(() => {
+        if (!container.querySelector('li[data-task="n"]')) throw new Error('not revalidated');
+      });
+      assert({
+        given: 'a title typed into the capture row of the selected list',
+        should: 'POST it to that list with the CSRF token and show it among the list’s open leaves',
+        actual: { writes: web.writes(), groups: groups(container) },
+        expected: {
+          writes: [{ method: 'POST', url: '/api/pages/l1/tasks', csrf: 'tok-1', body: { title: 'Order banners' } }],
+          groups: [
+            ['Plan launch', ['a']],
+            ['Launch', ['z', 'n']],
+            ['Done today', ['d']],
+          ],
+        },
+      });
+    });
+
+    test('a refused capture', async () => {
+      const { container } = await toFocus({
+        ...focusRoutes({ extra: [] }),
+        'POST /api/pages/l1/tasks': () => Response.json({ error: 'Insufficient permissions' }, { status: 403 }),
+      });
+      await settle(() => {
+        if (!container.querySelector('[data-capture] button')) throw new Error('no capture row');
+      });
+      click(container.querySelector('[data-capture] button') as HTMLButtonElement);
+      const field = container.querySelector<HTMLInputElement>('input[aria-label="Add task to Launch"]');
+      if (field) {
+        typeInto(field, 'Order banners');
+        press(field, 'Enter');
+      }
+      await settle(() => {
+        if (!container.querySelector('[data-capture] [role="status"]')) throw new Error('no notice');
+      });
+      assert({
+        given: 'a capture the server refuses',
+        should: 'say why under the capture row and keep the leaves as the server has them',
+        actual: {
+          notice: container.querySelector('[data-capture] [role="status"]')?.textContent,
+          groups: groups(container),
+        },
+        expected: {
+          notice: 'Insufficient permissions',
+          groups: [
+            ['Plan launch', ['a']],
+            ['Launch', ['z']],
+            ['Done today', ['d']],
+          ],
+        },
+      });
     });
   });
 
