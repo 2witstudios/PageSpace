@@ -575,6 +575,61 @@ describe('ChatPane', () => {
     });
   });
 
+  test('coming back to the chat', async () => {
+    const web = chatWeb(fakeTurnStream());
+    const { container, control: host } = mountPane(web);
+    await settle(threadLoaded(container));
+    type(container, 'Half a thought');
+    act(() => field(container).blur());
+    const focused = () => document.activeElement === field(container);
+    const landed = focused();
+
+    act(() => host.go?.('/d1/files'));
+    act(() => host.go?.('/d1/tasks'));
+    const away = focused();
+    act(() => host.go?.('/d1'));
+    const back = [focused(), field(container).value];
+
+    assert({
+      given: 'a draft typed in the drive chat and the composer left, then Files, Tasks and the chat again',
+      should: 'leave focus alone on the way out and put the caret back in the composer, with the draft, on returning to the chat',
+      actual: [landed, away, back],
+      expected: [false, false, [true, 'Half a thought']],
+    });
+  });
+
+  test('a failure after losing an agent', async () => {
+    const web = chatWeb(fakeTurnStream(), {
+      [SUPPORT_CONVERSATIONS]: () => Response.json({ error: 'Insufficient permissions to view this agent' }, { status: 403 }),
+      [TURN]: () => Response.json({ error: 'Internal error' }, { status: 500 }),
+    });
+    const { container } = mountPane(web);
+    await settle(threadLoaded(container));
+    await settle(drivesListed(container));
+    choose(container, 'a1');
+    await settle(() => {
+      if (container.querySelector('[role="alert"]')?.textContent?.includes('Support') !== true) throw new Error('no lost notice');
+    });
+    await settle(threadLoaded(container));
+
+    type(container, 'Still there?');
+    press(field(container), 'Enter');
+    await settle(() => {
+      if (web.count(TURN) !== 1) throw new Error('not sent');
+      if (field(container).value !== 'Still there?') throw new Error('draft not given back');
+    });
+    await settle(() => {
+      if (container.querySelector('[role="alert"]')?.textContent?.includes('Support') !== false) throw new Error('lost notice still shown');
+    });
+
+    assert({
+      given: 'Support refused (403) so Imago answers, then a prompt whose turn fails (500)',
+      should: 'say the reply failed rather than keep the lost-access notice, and give the prompt back',
+      actual: [container.querySelector('[role="alert"]')?.textContent, field(container).value],
+      expected: ['The reply failed. Try again.', 'Still there?'],
+    });
+  });
+
   test('a conversation list that failed', async () => {
     const stream = fakeTurnStream();
     const web = chatWeb(stream, {

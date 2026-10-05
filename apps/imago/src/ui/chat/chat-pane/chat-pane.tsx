@@ -125,15 +125,27 @@ export function ChatPane({ stage, driveName, homeDriveId }: ChatPaneProps) {
   const last = messages?.at(-1);
   const streamingMessageId = streaming && last?.role === 'assistant' ? last.id : null;
 
+  // The lost agent is said last: it stays until another agent is chosen, so
+  // ahead of the rest it would hide a later failure under Imago.
   const notice = (() => {
-    if (lost !== null) return NOTICES.lost(lost);
     if (unprovisioned) return NOTICES.setup;
     if (agentsError !== undefined || conversationsError !== undefined || chat.loadError !== undefined) return NOTICES.load;
     if (busyElsewhere) return NOTICES.elsewhere;
     if (failed || chat.status === 'error') return NOTICES.reply;
     if (chat.error !== undefined) return NOTICES.stop;
+    if (lost !== null) return NOTICES.lost(lost);
     return null;
   })();
+
+  // Back in the chat from another section, the caret is back in the composer,
+  // with whatever draft was left there.
+  const field = useRef<HTMLTextAreaElement>(null);
+  const section = useRef(stage.section);
+  useEffect(() => {
+    const returned = stage.section === 'chat' && section.current !== 'chat';
+    section.current = stage.section;
+    if (returned) field.current?.focus();
+  }, [stage.section]);
 
   // Keep the newest message in view while the viewer is reading the end.
   const scroller = useRef<HTMLDivElement>(null);
@@ -179,6 +191,7 @@ export function ChatPane({ stage, driveName, homeDriveId }: ChatPaneProps) {
       typeDraft: (next) => dispatch(transactions.setChatDraft, next),
       send: () => void send(),
       stop: () => void chat.stop(),
+      fieldRef: field,
     }),
   });
 }

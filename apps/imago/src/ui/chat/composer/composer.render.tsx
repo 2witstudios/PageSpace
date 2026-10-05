@@ -1,4 +1,4 @@
-import type { KeyboardEvent, ReactNode } from 'react';
+import type { KeyboardEvent, ReactNode, Ref } from 'react';
 import type { ChatDensity } from '../../frame/stage/stage';
 import { Icon } from '../../components/icon/icon';
 import {
@@ -24,6 +24,8 @@ export type ComposerRenderProps = {
   readonly typeDraft: (draft: string) => void;
   readonly send: () => void;
   readonly stop: () => void;
+  /** The field, for the container to put the caret back in it. */
+  readonly fieldRef?: Ref<HTMLTextAreaElement>;
 };
 
 /**
@@ -39,7 +41,7 @@ const sendsOnEnter = (event: KeyboardEvent<HTMLTextAreaElement>): boolean =>
  * reply streams it stays editable, and Stop stands where Send was.
  */
 export function renderComposer(props: ComposerRenderProps): ReactNode {
-  const { draft, label, placeholder, density, streaming, disabled, typeDraft, send, stop } = props;
+  const { draft, label, placeholder, density, streaming, disabled, typeDraft, send, stop, fieldRef } = props;
   const canSend = !disabled && !streaming && draft.trim() !== '';
   return (
     <form
@@ -52,6 +54,7 @@ export function renderComposer(props: ComposerRenderProps): ReactNode {
       <div className={composerShellClass(density)}>
         <div className={composerEntryClass}>
           <textarea
+            ref={fieldRef}
             value={draft}
             placeholder={placeholder}
             aria-label={label}
