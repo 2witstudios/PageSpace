@@ -775,6 +775,7 @@ export async function setDriveWalletCap(
   consumerId: string,
   input: ConsumerCapWriteInput | null,
   credential: WalletCredential,
+  hooks: WalletWriteHooks = {},
 ): Promise<WalletCapsRead | WalletServiceError> {
   const refused = refuseCredential(credential, 'set_caps');
   if (refused) return refused;
@@ -786,7 +787,11 @@ export async function setDriveWalletCap(
   if (!consumer || walletViewerRole(consumer) === 'none') return notAConsumer();
   const row = await driveWalletRow(db, driveId);
   if (!row) return noWallet();
-  const written = await writeConsumerCap(row.id, consumerId, input);
+  await hooks.afterAccess?.();
+  // The drive must still have the org standing access was decided on, share-locked for the
+  // write, like every other wallet write: a personal lead's cap must not land on a leg that
+  // became an org's mid-request (drive_moved).
+  const written = await writeConsumerCap(row.id, consumerId, input, (tx) => lockDriveOrgStanding(tx, driveId, access.standing.orgId));
   if (written) return written;
   await recordOrgWalletEvent(access.standing, userId, 'org.wallet.allocation_changed', { operation: input === null ? 'clear_consumer_cap' : 'set_consumer_cap', consumerId });
   void announceWalletChange(row.id, 'caps');
@@ -794,9 +799,16 @@ export async function setDriveWalletCap(
 }
 
 /** Upsert (or, for null, delete) one consumer's caps on a leg, under the row's lock. */
-async function writeConsumerCap(walletId: string, consumerId: string, input: ConsumerCapWriteInput | null): Promise<WalletServiceError | null> {
+async function writeConsumerCap(
+  walletId: string,
+  consumerId: string,
+  input: ConsumerCapWriteInput | null,
+  guard?: (tx: Tx) => Promise<WalletServiceError | null>,
+): Promise<WalletServiceError | null> {
   const consumerKey = userConsumerKey(consumerId);
   return db.transaction(async (tx): Promise<WalletServiceError | null> => {
+    const blocked = guard ? await guard(tx) : null;
+    if (blocked) return blocked;
     if (input === null) {
       await tx.delete(walletConsumerCaps).where(and(eq(walletConsumerCaps.walletId, walletId), eq(walletConsumerCaps.consumerKey, consumerKey)));
       return null;

@@ -180,6 +180,19 @@ describe('per-consumer caps on drive-wallet and seat legs (orgs on, real Postgre
     expect(await setDriveWalletCap(w.jonoId, w.sideId, w.marcusId, { dailyCents: -1 }, 'session')).toMatchObject({ ok: false, status: 400, code: 'invalid_amount' });
   });
 
+  it('WAL-7 (partial) a cap write re-checks the drive under its lock: a personal lead\'s write that crosses a move into an org is refused drive_moved and writes nothing', async () => {
+    if (!dbAvailable) return;
+    world = await build();
+    const w = world;
+    const result = await setDriveWalletCap(w.jonoId, w.sideId, w.marcusId, { dailyCents: 40 }, 'session', {
+      afterAccess: async () => {
+        await db.update(drives).set({ orgId: w.orgId }).where(eq(drives.id, w.sideId));
+      },
+    });
+    expect(result).toMatchObject({ ok: false, status: 409, code: 'drive_moved' });
+    expect(await capRow(w.sideWalletId, w.marcusId)).toBeNull();
+  });
+
   it('WAL-7 (partial) a seat cap on the org pool is the Owner\'s or an Admin\'s to write, for an accepted member only', async () => {
     if (!dbAvailable) return;
     world = await build();
