@@ -76,7 +76,11 @@ export async function* streamAgentTurn(
   if (response.body === null) {
     throw new ApiError({ status: response.status, code: INVALID_RESPONSE, message: 'The turn streamed no body' });
   }
-  yield* readUIMessageStream({ stream: uiMessageChunks(response.body), terminateOnError: true });
+  // Letting go of the reader (the signal) cancels the body as well as the
+  // fetch: a body already handed over keeps flowing after fetch's own abort
+  // in some runtimes, and nothing read after a stop may render.
+  const body = signal === undefined ? response.body : response.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>(), { signal });
+  yield* readUIMessageStream({ stream: uiMessageChunks(body), terminateOnError: true });
 }
 
 /** What /api/ai/abort answers (abortStreamAnywhere's result). */

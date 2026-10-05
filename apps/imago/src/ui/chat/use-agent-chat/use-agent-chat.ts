@@ -7,11 +7,12 @@
 // A send sets the `streaming` store resource to its conversation for as long as
 // the reply streams; useConversationMessages pauses SWR for that conversation
 // meanwhile, so no revalidation replaces the thread under the live reply. When
-// the turn ends (finished, stopped or failed) the resource clears and the thread
-// is read again; a stored message then stands in for the live one with its id,
-// and a live one the server did not store (a stopped partial, say) stays.
+// the turn ends (finished, stopped or failed) the resource clears, and every
+// mounted reader of the conversation reads it again (useConversationMessages);
+// a stored message then stands in for the live one with its id, and a live one
+// the server did not store (a stopped partial, say) stays.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { generateId } from 'ai';
 import { useApiClient } from '@/api/swr-provider';
 import { dispatch, transactions } from '@/ui/store/transactions';
@@ -63,17 +64,10 @@ export const useAgentChat = (
     readonly error: unknown;
   }>({ conversationId: null, status: 'ready', error: undefined });
   const inFlight = useRef<InFlight | null>(null);
-  const mounted = useRef(true);
-  useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-    };
-  }, []);
 
-  // Read when a turn ends, which can be renders after it began.
-  const latest = useRef({ conversationId, contextRef, revalidate: thread.revalidate });
-  latest.current = { conversationId, contextRef, revalidate: thread.revalidate };
+  // Read when the turn is sent, which can be a render after send was made.
+  const latest = useRef({ contextRef });
+  latest.current = { contextRef };
 
   const send = useCallback(
     async (text: string): Promise<void> => {
@@ -118,8 +112,6 @@ export const useAgentChat = (
         report('error', failure);
         return;
       }
-      // An unmounted hook has no thread to refresh; the next mount reads it afresh.
-      if (mounted.current && latest.current.conversationId === target) await latest.current.revalidate();
       report(failure === null ? 'ready' : 'error', failure ?? undefined);
     },
     [agentId, client, conversationId],

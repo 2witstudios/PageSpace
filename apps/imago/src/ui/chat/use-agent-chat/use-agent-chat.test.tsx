@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from 'react';
+import { act, useState } from 'react';
 import { afterEach, beforeEach, describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { ImagoSWRProvider } from '@/api/swr-provider';
@@ -81,6 +81,14 @@ const chatWeb = (stream: FakeTurnStream, lists: readonly ChatMessage[][], extra:
     [TURN]: () => stream.response(),
     ...extra,
   });
+};
+
+
+/** A Probe the test can unmount and mount again under the same provider, as a pane that remounts. */
+const Toggled = ({ seen, show }: { seen: Seen; show: { set?: (shown: boolean) => void } }) => {
+  const [shown, setShown] = useState(true);
+  show.set = setShown;
+  return shown ? <Probe seen={seen} /> : null;
 };
 
 const mountChat = (web: ReturnType<typeof fakeWeb>, seen: Seen) =>
@@ -283,6 +291,94 @@ describe('useAgentChat() streaming guard', () => {
       expected: 3,
     });
   });
+
+  test('a remount mid-stream still refreshes the thread', async () => {
+    const stream = fakeTurnStream();
+    let persisted: ChatMessage[] = HISTORY;
+    const web = chatWeb(stream, [HISTORY], { [MESSAGES]: () => Response.json(messagesPage(persisted)) });
+    const seen: Seen = {};
+    const show: { set?: (shown: boolean) => void } = {};
+    const container = mount(
+      <ImagoSWRProvider client={web.client}>
+        <Toggled seen={seen} show={show} />
+      </ImagoSWRProvider>,
+    );
+    await settle(loaded(seen));
+
+    act(() => {
+      void seen.chat?.send('Go');
+    });
+    stream.push({ type: 'start', messageId: 'a1' });
+    await settle(() => {
+      if (web.count(TURN) !== 1) throw new Error('not sent');
+    });
+    act(() => show.set?.(false));
+    act(() => show.set?.(true));
+
+    const prompt = (web.requests.find((request) => request.url === chatPaths.turn)?.body as { messages: ChatMessage[] }).messages[0];
+    persisted = [...HISTORY, userMessage(prompt?.id ?? '', 'Go'), { ...assistantWithTool('a1'), parts: [{ type: 'text', text: 'Saved.' }] }];
+    stream.push({ type: 'finish' });
+    stream.close();
+    await settle(() => {
+      if (getUiState().resources.streaming !== null || web.count(MESSAGES) !== 2) throw new Error('not refreshed');
+    });
+    await settle(() => {
+      if (rendered(container).length !== 4) throw new Error('not rendered');
+    });
+
+    assert({
+      given: 'the chat remounted while its turn streamed, then the turn ending',
+      should: 'read the thread again and show the stored prompt and reply',
+      actual: rendered(container).slice(-2),
+      expected: ['user: Go', 'assistant: Saved.'],
+    });
+  });
+
+  test('a fresh mount mid-stream loads once the stream ends', async () => {
+    const stream = fakeTurnStream();
+    let persisted: ChatMessage[] = HISTORY;
+    const web = chatWeb(stream, [HISTORY], { [MESSAGES]: () => Response.json(messagesPage(persisted)) });
+    const sender: Seen = {};
+    const first = mount(
+      <ImagoSWRProvider client={web.client}>
+        <Probe seen={sender} />
+      </ImagoSWRProvider>,
+    );
+    await settle(loaded(sender));
+    act(() => {
+      void sender.chat?.send('Go');
+    });
+    stream.push({ type: 'start', messageId: 'a1' });
+    await settle(() => {
+      if (web.count(TURN) !== 1) throw new Error('not sent');
+    });
+    unmountAll();
+    void first;
+
+    // A new provider and a new pane while the turn still streams: its first load waits.
+    const seen: Seen = {};
+    const container = mount(
+      <ImagoSWRProvider client={web.client}>
+        <Probe seen={seen} />
+      </ImagoSWRProvider>,
+    );
+    await act(() => new Promise((resolve) => setTimeout(resolve, 30)));
+    const whileStreaming = [web.count(MESSAGES), seen.chat?.messages];
+
+    persisted = [...HISTORY, userMessage('u-any', 'Go')];
+    stream.push({ type: 'finish' });
+    stream.close();
+    await settle(() => {
+      if (rendered(container).length !== 3) throw new Error('not loaded after the stream');
+    });
+
+    assert({
+      given: 'a fresh pane mounted while another pane\'s turn streamed',
+      should: 'hold its load during the stream and load the stored thread once it ends',
+      actual: [whileStreaming, web.count(MESSAGES), rendered(container).at(-1)],
+      expected: [[1, undefined], 2, 'user: Go'],
+    });
+  });
 });
 
 describe('useAgentChat() stop', () => {
@@ -328,6 +424,38 @@ describe('useAgentChat() stop', () => {
         null,
         ['user: Write a long essay', 'assistant: Once upon'],
       ],
+    });
+  });
+
+  test('stops reading once the server has stopped', async () => {
+    const stream = fakeTurnStream();
+    // The server confirms the stop but its body stays open, still flushing.
+    const web = chatWeb(stream, [HISTORY], { [ABORT]: () => Response.json({ aborted: true }) });
+    const seen: Seen = {};
+    const container = mountChat(web, seen);
+    await settle(loaded(seen));
+
+    act(() => {
+      void seen.chat?.send('Go');
+    });
+    stream.push({ type: 'start', messageId: 'a1' });
+    stream.push({ type: 'text-start', id: 't1' });
+    stream.push({ type: 'text-delta', id: 't1', delta: 'Kept' });
+    await settle(() => {
+      if (rendered(container).at(-1) !== 'assistant: Kept') throw new Error('not streaming yet');
+    });
+    await act(() => seen.chat?.stop());
+    await settle(() => {
+      if (seen.chat?.status !== 'ready') throw new Error('still reading');
+    });
+    stream.push({ type: 'text-delta', id: 't1', delta: ' and more' });
+    await act(() => new Promise((resolve) => setTimeout(resolve, 30)));
+
+    assert({
+      given: 'a confirmed stop while the body stays open',
+      should: 'cancel the body, end the turn and render nothing that arrives after',
+      actual: [stream.cancelled(), getUiState().resources.streaming, rendered(container).at(-1)],
+      expected: [true, null, 'assistant: Kept'],
     });
   });
 

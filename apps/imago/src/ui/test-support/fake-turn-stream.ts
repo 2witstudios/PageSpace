@@ -28,7 +28,8 @@ export const fakeTurnStream = (): FakeTurnStream => {
     },
   });
   const write = (text: string) => {
-    if (!closed) controller?.enqueue(encoder.encode(text));
+    // A cancelled body has no reader left: later frames go nowhere, as on the wire.
+    if (!closed && !wasCancelled) controller?.enqueue(encoder.encode(text));
   };
   return {
     response: () =>
@@ -39,7 +40,7 @@ export const fakeTurnStream = (): FakeTurnStream => {
     push: (chunk) => write(`data: ${JSON.stringify(chunk)}\n\n`),
     close: () => {
       write('data: [DONE]\n\n');
-      if (!closed) controller?.close();
+      if (!closed && !wasCancelled) controller?.close();
       closed = true;
     },
     cancelled: () => wasCancelled,
