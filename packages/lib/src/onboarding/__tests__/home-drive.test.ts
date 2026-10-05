@@ -60,12 +60,19 @@ vi.mock('../../memory/memory-pages', () => ({
 // against real Postgres in agents/__tests__/grant-imago-agents.integration.test.ts).
 vi.mock('../../agents/provision-imago-agents', () => ({
   provisionImagoAgentsInTransaction: vi.fn(),
+  writeImagoAgentActivity: vi.fn(),
   grantCreatedImagoAgents: vi.fn(),
 }));
 
 import { db } from '@pagespace/db/db';
 import { sql } from '@pagespace/db/operators';
-import { grantCreatedImagoAgents, provisionImagoAgentsInTransaction } from '../../agents/provision-imago-agents';
+import {
+  grantCreatedImagoAgents,
+  provisionImagoAgentsInTransaction,
+  writeImagoAgentActivity,
+} from '../../agents/provision-imago-agents';
+import { allocatePublishSubdomain } from '../../services/drive-service';
+import type { ActivityLogInput } from '../../monitoring/activity-logger';
 import { drives } from '@pagespace/db/schema/core';
 import { HOME_DRIVE_NAME, resolveUniqueSlug } from '../../services/drive-guards';
 import { populateUserDrive } from '../drive-setup';
@@ -108,15 +115,27 @@ function makeTx(ownedDrives: OwnedDrive[] = []): MockTx {
   };
 }
 
-function agentsResult(deferredTriggers: Array<() => void> = []) {
+function provisionedAgents() {
   return {
     homeDriveId: 'drive',
     folderId: 'imago-folder',
     agents: { imago: 'a1', 'imago-planner': 'a2', 'imago-researcher': 'a3' },
     created: [],
     replacedPageIds: [],
-    deferredTriggers,
   };
+}
+
+const pendingActivity: ActivityLogInput[] = [{
+  userId: 'user',
+  actorEmail: 'user@example.com',
+  operation: 'create',
+  resourceType: 'page',
+  resourceId: 'a1',
+  driveId: 'drive',
+}];
+
+function agentsResult() {
+  return { ...provisionedAgents(), pendingActivity: [...pendingActivity] };
 }
 
 describe('provisionHomeDriveIfNeeded', () => {
@@ -124,6 +143,7 @@ describe('provisionHomeDriveIfNeeded', () => {
     vi.clearAllMocks();
     vi.mocked(resolveUniqueSlug).mockReturnValue('home');
     vi.mocked(provisionImagoAgentsInTransaction).mockResolvedValue(agentsResult());
+    vi.mocked(writeImagoAgentActivity).mockResolvedValue([]);
   });
 
   test('given an existing Home drive, should provision the Imago agents in it so returning users get them', async () => {
@@ -145,6 +165,36 @@ describe('provisionHomeDriveIfNeeded', () => {
     expect(provisionImagoAgentsInTransaction).toHaveBeenCalledWith(tx, 'user-new', 'drive-new');
   });
 
+  // Concurrent first sign-ins share the subdomain family and the global
+  // activity-chain lock: each is held from its write to the commit, so both
+  // must come after the seeding, not before it.
+  test('given a new user, should allocate the subdomain and then write the agents\' activity as the last steps', async () => {
+    const order: string[] = [];
+    const tx = makeTx();
+    vi.mocked(populateUserDrive).mockImplementation(async () => {
+      order.push('seed');
+      return { seeded: true };
+    });
+    vi.mocked(allocatePublishSubdomain).mockImplementation(async () => {
+      order.push('subdomain');
+      return 'home';
+    });
+    vi.mocked(writeImagoAgentActivity).mockImplementation(async () => {
+      order.push('activity');
+      return [];
+    });
+    vi.mocked(db.transaction).mockImplementation((async (cb: (t: typeof tx) => unknown) => {
+      const value = await cb(tx);
+      order.push('commit');
+      return value;
+    }) as never);
+
+    await provisionHomeDriveIfNeeded('user-new');
+
+    expect(order).toEqual(['seed', 'subdomain', 'activity', 'commit']);
+    expect(writeImagoAgentActivity).toHaveBeenCalledWith(tx, [...pendingActivity]);
+  });
+
   test('given an existing user reached lazily, should still provision the Imago agents', async () => {
     const tx = makeTx([{ id: 'other-drive-1', kind: 'STANDARD', slug: 'my-drive' }]);
     vi.mocked(db.transaction).mockImplementation((async (cb: (t: typeof tx) => unknown) => cb(tx)) as never);
@@ -158,7 +208,7 @@ describe('provisionHomeDriveIfNeeded', () => {
   test('given agent pages created, should fire their workflow triggers only after the transaction commits', async () => {
     const order: string[] = [];
     const trigger = vi.fn(() => order.push('trigger'));
-    vi.mocked(provisionImagoAgentsInTransaction).mockResolvedValue(agentsResult([trigger]));
+    vi.mocked(writeImagoAgentActivity).mockResolvedValue([trigger]);
     const tx = makeTx([{ id: 'drive-home-existing', kind: 'HOME', slug: 'home' }]);
     vi.mocked(db.transaction).mockImplementation((async (cb: (t: typeof tx) => unknown) => {
       const value = await cb(tx);
@@ -173,8 +223,7 @@ describe('provisionHomeDriveIfNeeded', () => {
 
   test('given provisioned agents, should grant them in owned drives only after the transaction commits', async () => {
     const order: string[] = [];
-    const provisioned = agentsResult();
-    vi.mocked(provisionImagoAgentsInTransaction).mockResolvedValue(provisioned);
+    const provisioned = provisionedAgents();
     vi.mocked(grantCreatedImagoAgents).mockImplementation(async () => {
       order.push('grant');
     });

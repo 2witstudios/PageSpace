@@ -44,6 +44,15 @@ afterAll(async () => {
   await db.delete(users).where(inArray(users.id, seededUserIds));
 });
 
+// accessible_page_ids_for_user resolves the CASE per row after joining every
+// non-trashed page in the database, so each call scans the whole pages table,
+// not the user's drives. Measured here: ~0.4s at 21k pages, ~0.95s at 100k,
+// ~2.3s at 300k unloaded. CI runs this after every workspace has seeded the
+// shared database, under turbo's parallel coverage run, and timed out at 5s
+// (run 37323255723). The budget covers that; the scan itself needs a
+// migration rewriting the function (IMG-4.2a handoff).
+const AGREEMENT_TIMEOUT_MS = 30_000;
+
 const ON = { canView: true, canEdit: false, canShare: false };
 const OFF = { canView: false, canEdit: false, canShare: false };
 
@@ -163,5 +172,5 @@ describe('accessible_page_ids_for_user agrees with getUserAccessLevel (integrati
 
       expect(sqlInDrive, c.label).toEqual(fromTs.sort());
     }
-  });
+  }, AGREEMENT_TIMEOUT_MS);
 });
