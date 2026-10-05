@@ -20,6 +20,7 @@ import {
 import { decryptUserRows, userEmailMatch } from '../auth/user-repository';
 import { decideOrgOwnerCandidate, loadOrgPrincipalKind } from './owner-candidate';
 import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
+import { NEW_ORG_POLICIES } from './policies-core';
 
 const UNIQUE_VIOLATION = '23505';
 
@@ -216,7 +217,7 @@ export async function createOrganization(input: {
       if (!candidate.ok) return { ok: false, reason: candidate.reason };
       const [org] = await tx
         .insert(organizations)
-        .values({ name: input.name, slug: input.slug, avatarUrl: input.avatarUrl ?? null, ownerId: input.ownerId })
+        .values({ name: input.name, slug: input.slug, avatarUrl: input.avatarUrl ?? null, ownerId: input.ownerId, policies: { ...NEW_ORG_POLICIES } })
         .returning(ORG_RECORD);
       await tx.insert(orgMembers).values({ orgId: org.id, userId: input.ownerId, role: 'OWNER' });
       return { ok: true, organization: org };

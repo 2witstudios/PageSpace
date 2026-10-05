@@ -72,6 +72,11 @@ export interface ResolveMembershipsOptions {
    * computes an audience (which OTHER users can see a page): nobody accessed anything.
    */
   audit: boolean;
+  /**
+   * Read through this executor (a transaction) instead of the pool, so a caller holding locks sees the
+   * rows it locked ([D-OW-36] reassignment, review #2831 P2-2). Defaults to the pool.
+   */
+  executor?: Pick<typeof db, 'select'>;
 }
 
 /**
@@ -102,7 +107,8 @@ export async function resolveEffectiveDriveMemberships(
     }));
   }
 
-  const orgRoles = await findOrgRoles(candidates.flatMap(({ userId }, i) => {
+  const executor = options.executor ?? db;
+  const orgRoles = await findOrgRoles(executor, candidates.flatMap(({ userId }, i) => {
     const orgId = facts[i].orgId;
     return orgId === null ? [] : [{ orgId, userId }];
   }));
@@ -121,6 +127,7 @@ export async function resolveEffectiveDriveMemberships(
       && validOrgDriveRow(row, facts[i], orgRole) === null;
   });
   const defaultRoles = await findDefaultCustomRoleIds(
+    executor,
     candidates.filter((_, i) => needsDefaultRole[i]).map(({ drive }) => drive.id),
   );
   // POL-6: read once per org, only where an org MEMBER resolves an OPEN drive (the only place a floor can apply).
@@ -250,12 +257,12 @@ function chunks<T>(items: T[]): T[][] {
   return out;
 }
 
-async function findOrgRoles(pairs: Array<{ orgId: string; userId: string }>): Promise<Map<string, OrgRole>> {
+async function findOrgRoles(executor: Pick<typeof db, 'select'>, pairs: Array<{ orgId: string; userId: string }>): Promise<Map<string, OrgRole>> {
   const roles = new Map<string, OrgRole>();
   if (pairs.length === 0) return roles;
   const orgIds = [...new Set(pairs.map((p) => p.orgId))];
   for (const userIds of chunks([...new Set(pairs.map((p) => p.userId))])) {
-    const rows = await db
+    const rows = await executor
       .select({ orgId: orgMembers.orgId, userId: orgMembers.userId, role: orgMembers.role })
       .from(orgMembers)
       .where(and(inArray(orgMembers.orgId, orgIds), inArray(orgMembers.userId, userIds)));
@@ -265,10 +272,10 @@ async function findOrgRoles(pairs: Array<{ orgId: string; userId: string }>): Pr
 }
 
 /** Each drive's default custom role (drive_roles.isDefault), for the drives given. */
-async function findDefaultCustomRoleIds(driveIds: string[]): Promise<Map<string, string>> {
+async function findDefaultCustomRoleIds(executor: Pick<typeof db, 'select'>, driveIds: string[]): Promise<Map<string, string>> {
   const defaults = new Map<string, string>();
   for (const ids of chunks([...new Set(driveIds)])) {
-    const rows = await db
+    const rows = await executor
       .select({ driveId: driveRoles.driveId, id: driveRoles.id })
       .from(driveRoles)
       .where(and(inArray(driveRoles.driveId, ids), eq(driveRoles.isDefault, true)))

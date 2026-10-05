@@ -193,6 +193,20 @@ describe('approving a queued page grant', () => {
     expect(await grantsOf(w.outsider)).toEqual([]);
   });
 
+  it('POL-2 (partial) a grant that EXPIRED while it waited for approval grants nothing; one still live keeps its expiry (review #2762 M9)', async () => {
+    const claim = await queue();
+    const asked = claim.request.permissions ?? [];
+    const lapsed = new Date(Date.now() - 60_000).toISOString();
+    const expired = { ...claim, request: { ...claim.request, permissions: asked.map((p) => ({ ...p, expiresAt: lapsed })) } };
+    expect(await completeApprovedPageGrant(expired)).toEqual({ ok: false, error: 'PAGE_GONE' });
+    expect(await grantsOf(w.outsider)).toEqual([]);
+
+    const later = new Date(Date.now() + 86_400_000);
+    const live = { ...claim, request: { ...claim.request, permissions: asked.map((p) => ({ ...p, expiresAt: later.toISOString() })) } };
+    expect(await completeApprovedPageGrant(live)).toEqual({ ok: true, driveId: w.orgDrive, userId: w.outsider, pageIds: [w.page] });
+    expect((await grantsOf(w.outsider))[0]?.expiresAt?.toISOString()).toBe(later.toISOString());
+  });
+
   it('POL-2 (partial) a request that is not a page grant is not replayed here', async () => {
     const claim = await queue();
     expect(await completeApprovedPageGrant({ ...claim, origin: 'invite' })).toEqual({ ok: false, error: 'NOT_A_PAGE_GRANT' });

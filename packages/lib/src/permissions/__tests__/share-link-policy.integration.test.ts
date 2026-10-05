@@ -77,7 +77,8 @@ beforeEach(async () => {
   const otherOrg = createId();
   created.orgIds.push(orgId, otherOrg);
   await db.insert(organizations).values([
-    { id: orgId, name: 'Northwind', slug: `nw-${run}-${createId().slice(0, 4)}`, ownerId: owner },
+    // [D-OW-41] Explicitly on: each case sets the guests policy it is about; the rest start where they always did.
+    { id: orgId, name: 'Northwind', slug: `nw-${run}-${createId().slice(0, 4)}`, ownerId: owner, policies: { guests: 'on' } },
     { id: otherOrg, name: 'Other', slug: `ot-${run}-${createId().slice(0, 4)}`, ownerId: otherOwner },
   ]);
   // A paying org (D-OW-30: no subscription is lapsed, and a lapsed org may only restrict, [D-OW-33]).

@@ -152,6 +152,7 @@ describe('a drive moved into an org brings its outsiders under the guests policy
   });
 
   it('POL-2 (partial) guests ON: the outsider keeps their access, and org members are never held', async () => {
+    await setGuests('on');
     const { drive, page } = await personalDriveWithOutsider();
     await db.insert(driveMembers).values({ driveId: drive, userId: w.member, role: 'MEMBER', acceptedAt: new Date() });
     await moveDriveToOrg(w.owner, drive, { orgId: w.orgId, orgVisibility: 'RESTRICTED' }, deps);
@@ -174,6 +175,7 @@ describe('a member who leaves becomes an outsider of what they kept', () => {
   });
 
   it('POL-2 (partial) guests ON: a departed member keeps an invited row as an outsider, as before', async () => {
+    await setGuests('on');
     await db.insert(driveMembers).values({ driveId: w.orgDrive, userId: w.member, role: 'MEMBER', source: 'invite', acceptedAt: new Date() });
     expect(await leaveOrganization(w.member, w.orgId)).toMatchObject({ ok: true, heldAsGuest: 0 });
     expect(await db.select().from(driveMembers).where(and(eq(driveMembers.driveId, w.orgDrive), eq(driveMembers.userId, w.member)))).toHaveLength(1);
@@ -305,6 +307,18 @@ describe('approve mode replays exactly what was held (independent re-verify of #
     expect(await db.select().from(pagePermissions).where(eq(pagePermissions.userId, pendingGuest))).toEqual([]);
     expect(await holds('pending_approval', pendingGuest)).toHaveLength(1);
     expect(await db.select().from(pagePermissions).where(eq(pagePermissions.userId, acceptedGuest))).toHaveLength(1);
+  });
+
+  it('POL-2 (partial) X-6 (partial) pages moved in under approve: an outsider holding only a page-link GUEST row on the drive is queued like any outsider; the GUEST row does not exempt them (review #2762 M2b)', async () => {
+    await setGuests('approve');
+    const linkGuest = w.outsider;
+    // A redeemed page share link: accepted, but a GUEST holds one page, not the drive.
+    await db.insert(driveMembers).values({ driveId: w.orgDrive, userId: linkGuest, role: 'GUEST', source: 'invite', acceptedAt: new Date(), invitedBy: w.owner });
+    await db.insert(pagePermissions).values({ pageId: w.orgPage, userId: linkGuest, ...EDIT, grantedBy: w.owner });
+    await db.transaction((tx) => holdOrgGuestsUnderPolicy(tx, { orgId: w.orgId, driveId: w.orgDrive, pageIds: [w.orgPage] }));
+
+    expect(await db.select().from(pagePermissions).where(eq(pagePermissions.userId, linkGuest))).toEqual([]);
+    expect(await holds('pending_approval', linkGuest)).toHaveLength(1);
   });
 
   it('POL-2 (partial) an approval admits exactly the invitation that was approved: another invitation to the same address is not admitted by it, and guests OFF withdraws every unused approval', async () => {

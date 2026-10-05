@@ -80,6 +80,7 @@ import { GET, PATCH, DELETE } from '../route';
 import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrincipalDriveOwnerOrAdmin } from '@/lib/auth';
 import { validateCronExpression, validateTimezone, getNextRunDate } from '@/lib/workflows/cron-utils';
+import { isOrgApiErrorCode } from '@pagespace/lib/organizations/api-error-codes';
 
 // ============================================================================
 // Fixtures
@@ -138,7 +139,8 @@ const mockWorkflow = {
   contextPageIds: [],
   instructionPageId: null,
   nextRunAt: null,
-  createdBy: 'user_123',
+  createdBy: 'user_123' as string | null,
+  ownerLeftAt: null as Date | null,
   createdAt: new Date('2024-01-01'),
   updatedAt: new Date('2024-01-01'),
 };
@@ -263,6 +265,22 @@ describe('PATCH /api/workflows/[workflowId]', () => {
     const response = await PATCH(request, createContext('wf_1'));
 
     expect(response!.status).toBe(401);
+  });
+
+  it('SPEND-6 (partial) an owner-left workflow cannot be switched back on here (409 owner_left); nothing is written ([D-OW-36])', async () => {
+    mockSelectWhere.mockResolvedValue([{ ...mockWorkflow, isEnabled: false, ownerLeftAt: new Date() }]);
+    const request = new Request('https://example.com/api/workflows/wf_1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ isEnabled: true }),
+    });
+    const response = await PATCH(request, createContext('wf_1'));
+    expect(response!.status).toBe(409);
+    const body = await response!.json();
+    expect(body).toMatchObject({ code: 'owner_left' });
+    // UI-7: a registered org API error code (review #2831 P2-N1).
+    expect(isOrgApiErrorCode(body.code)).toBe(true);
+    expect(mockUpdate).not.toHaveBeenCalled();
   });
 
   it('should return 404 when workflow not found', async () => {

@@ -4,6 +4,8 @@ import { users } from '@pagespace/db/schema/auth'
 import { pages } from '@pagespace/db/schema/core'
 import { eventAttendees } from '@pagespace/db/schema/calendar'
 import { workflows } from '@pagespace/db/schema/workflows';
+import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
+import { AUTOMATION_OWNER_LEFT_ERROR, automationRunOwner } from '@pagespace/lib/permissions/automation-ownership';
 import { decryptUserRows } from '@pagespace/lib/auth/user-repository';
 import type { CalendarEvent } from '@pagespace/db/schema/calendar'
 import type { CalendarTrigger } from '@pagespace/db/schema/calendar-triggers';
@@ -35,14 +37,7 @@ export async function executeCalendarTrigger(
   const startTime = Date.now();
 
   try {
-    // 1. Verify scheduling user still has drive access (may have been removed since scheduling)
-    const hasDriveAccess = await isUserDriveMember(trigger.scheduledById, trigger.driveId);
-    if (!hasDriveAccess) {
-      const error = 'Scheduling user no longer has access to the drive';
-      return { success: false, durationMs: Date.now() - startTime, error };
-    }
-
-    // 2. Load the linked workflows row (the trigger holds only "when"; payload lives on workflows)
+    // 1. Load the linked workflows row (the trigger holds only "when"; payload lives on workflows)
     const [workflow] = await db
       .select()
       .from(workflows)
@@ -50,6 +45,34 @@ export async function executeCalendarTrigger(
 
     if (!workflow) {
       const error = `Linked workflow ${trigger.workflowId} not found`;
+      return { success: false, durationMs: Date.now() - startTime, error };
+    }
+
+    // 2. [D-OW-36] Nothing runs under a missing person: a workflow whose creator left the org (flagged
+    //    owner-left), or a trigger whose scheduler's account is gone, is skipped before the access check,
+    //    the credit gate or any hold. A cancelled run records why and consumes this occurrence, so the
+    //    poller does not re-discover it every tick.
+    const owner = automationRunOwner(workflow);
+    if (!owner.runs || trigger.scheduledById === null) {
+      const error = owner.runs ? AUTOMATION_OWNER_LEFT_ERROR : owner.error;
+      await db.insert(workflowRuns).values({
+        workflowId: trigger.workflowId,
+        sourceTable: 'calendarTriggers',
+        sourceId: trigger.id,
+        triggerAt: trigger.triggerAt,
+        status: 'cancelled',
+        endedAt: new Date(),
+        error,
+      }).onConflictDoNothing();
+      logger.info('Calendar trigger: skipped (owner left)', { triggerId: trigger.id, workflowId: workflow.id });
+      return { success: false, skipped: true, durationMs: Date.now() - startTime, error };
+    }
+    const scheduledById = trigger.scheduledById;
+
+    // Verify the scheduling user still has drive access (may have been removed since scheduling)
+    const hasDriveAccess = await isUserDriveMember(scheduledById, trigger.driveId);
+    if (!hasDriveAccess) {
+      const error = 'Scheduling user no longer has access to the drive';
       return { success: false, durationMs: Date.now() - startTime, error };
     }
 
@@ -76,12 +99,12 @@ export async function executeCalendarTrigger(
     const [schedulingUser] = await db
       .select({ subscriptionTier: users.subscriptionTier })
       .from(users)
-      .where(eq(users.id, trigger.scheduledById));
+      .where(eq(users.id, scheduledById));
     //    SPEND-6: a trigger has no person present; it spends the workflow's drive wallet
     //    or is skipped, never the scheduling user's credits or allowance.
     const spend = automationSpend(workflow.driveId);
     const gate = await canConsumeAI(
-      trigger.scheduledById,
+      scheduledById,
       (schedulingUser?.subscriptionTier ?? 'free') as SubscriptionTier,
       { spend, skipDailyCap: true },
     );
@@ -106,7 +129,7 @@ export async function executeCalendarTrigger(
       workflowId: workflow.id,
       workflowName: `calendar-trigger-${trigger.id}`,
       driveId: workflow.driveId,
-      createdBy: trigger.scheduledById,
+      createdBy: scheduledById,
       agentPageId: workflow.agentPageId,
       prompt: workflow.prompt,
       contextPageIds: (workflow.contextPageIds as string[] | null) ?? [],

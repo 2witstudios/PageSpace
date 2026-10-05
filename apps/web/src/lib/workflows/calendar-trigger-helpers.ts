@@ -74,7 +74,8 @@ export async function bulkCreateOccurrenceTriggerRows(
     workflowId: string;
     calendarEventId: string;
     driveId: string;
-    scheduledById: string;
+    /** Null once the scheduler's account is deleted ([D-OW-36]): the occurrence is then skipped owner-left. */
+    scheduledById: string | null;
     occurrences: Date[];
   },
 ): Promise<void> {
@@ -176,13 +177,17 @@ export async function upsertCalendarTriggerWorkflowInTx(
 
   if (existing.length > 0) {
     workflowId = existing[0].workflowId;
+    // [D-OW-36] Editing the trigger of an owner-left workflow saves the edit but never switches it back
+    // on: only an Owner or Admin's reassignment does.
+    const [current] = await tx.select({ ownerLeftAt: workflows.ownerLeftAt }).from(workflows).where(eq(workflows.id, workflowId));
+    const ownerLeft = Boolean(current?.ownerLeftAt);
     await tx.update(workflows).set({
       agentPageId: params.agentTrigger.agentPageId,
       prompt: triggerPrompt,
       instructionPageId: params.agentTrigger.instructionPageId ?? null,
       contextPageIds,
       timezone: params.timezone,
-      isEnabled: true,
+      ...(ownerLeft ? {} : { isEnabled: true }),
     }).where(eq(workflows.id, workflowId));
   } else {
     const [created] = await tx.insert(workflows).values({

@@ -134,7 +134,7 @@ const EXEMPT = new Map<string, Exemption>([
   }],
   ['packages/lib/src/permissions/guest-holds.ts', {
     ormReads: 2,
-    reason: 'Both ungated reads find an outsider\'s rows (pending included, on purpose) to TAKE THEM OUT of the live tables: memberOutsiders lists the outsiders of an org\'s drives, and takeOutsider reads one person\'s row to snapshot it into org_guest_holds (parked, or queued for approval) before deleting it. Writers that REMOVE access, inside the transaction that changed the policy or brought the access in; they grant nothing. The admission read (admitReentry) is gated: only an accepted, non-GUEST row counts as an admitted guest.',
+    reason: 'Both ungated reads find an outsider\'s rows (pending included, on purpose) to TAKE THEM OUT of the live tables: memberOutsiders lists the outsiders of an org\'s drives, and takeOutsider reads one person\'s row to snapshot it into org_guest_holds (parked, or queued for approval) before deleting it. Writers that REMOVE access, inside the transaction that changed the policy or brought the access in; they grant nothing. The admission read (admitReentry) and the page-move exemption in grantOutsiders are gated: only an accepted, non-GUEST row counts as an admitted guest.',
   }],
   ['packages/lib/src/permissions/org-guest-footprint.ts', {
     ormReads: 1,

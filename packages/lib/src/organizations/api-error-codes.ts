@@ -72,6 +72,11 @@ export const ORG_DOMAIN_ERROR_CODES = [
   'link_gone',
   'not_a_page_grant',
   'page_gone',
+  // owner-left automations ([D-OW-36]): reassign/delete refusals, and the 409 on re-enabling one
+  'owner_present',
+  'new_owner_not_member',
+  'new_owner_no_drive_access',
+  'owner_left',
 ] as const;
 
 /** Wallet, cap and spend-source codes (drive-wallet-service, wallet-access). */

@@ -140,6 +140,19 @@ describe('generate_image destination', () => {
     expect(opts.spend).toEqual({ kind: 'drive', driveId: 'drive-work', chosen: 'drive_wallet', conversationId: 'conv1', followOn: true });
   });
 
+  it('SPEND-6 (partial) WAL-7 (partial) an image made inside a manual Run is gated and settled as the person who pressed Run, on the run\'s wallet, not as the workflow\'s creator (review #2817 P3-A)', async () => {
+    okGeneration();
+    const creditSpend = { spend: { kind: 'automation', driveId: 'drive-work' }, walletId: 'w-drive-work', userId: 'u-presser' } as ToolExecutionContext['creditSpend'];
+
+    await run({ prompt: 'a diagram' }, { ...admin({ creditSpend }), ...inDrive('drive-work') });
+
+    expect(canConsumeAI).toHaveBeenCalledOnce();
+    expect(canConsumeAI.mock.calls[0][0]).toBe('u-presser');
+    expect((canConsumeAI.mock.calls[0][2] as { spend: unknown }).spend).toEqual({ kind: 'automation', driveId: 'drive-work' });
+    expect(trackUsage).toHaveBeenCalledOnce();
+    expect(trackUsage.mock.calls[0][0]).toMatchObject({ userId: 'u-presser', source: 'image_generation' });
+  });
+
   it('files into the workspace currently in view', async () => {
     okGeneration();
 

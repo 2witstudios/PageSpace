@@ -96,7 +96,11 @@ async function buildOrg(input: {
   const owner = people[0];
   const [org] = await db
     .insert(organizations)
-    .values({ name: 'Northwind Labs', slug: `northwind-${createId()}`, ownerId: owner.id, seatAutoAdd: input.autoAdd ?? false })
+    .values({
+      name: 'Northwind Labs', slug: `northwind-${createId()}`, ownerId: owner.id, seatAutoAdd: input.autoAdd ?? false,
+      // [D-OW-41] Explicitly on: this suite is about seat accounting, not the guests default (approve).
+      policies: { guests: 'on' },
+    })
     .returning();
   created.orgs.push(org.id);
   await db.insert(orgMembers).values(people.map((p, i) => ({ orgId: org.id, userId: p.id, role: i === 0 ? ('OWNER' as const) : ('MEMBER' as const) })));
