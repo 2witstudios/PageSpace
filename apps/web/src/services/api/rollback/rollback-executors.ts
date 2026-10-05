@@ -22,6 +22,7 @@ import {
 } from './rollback-plans';
 import type { RollbackDeps, PageUpdateContext, PageChangeResult } from './deps';
 import type { ActivityLogForRollback } from './types';
+import { revokeAgentMembershipsGrantedBy } from '@pagespace/lib/services/drive-agent-service';
 
 /** Execute a page rollback: trash-created cascade (orphan children to grandparent) or field restore + orphaned-child re-parenting. */
 export async function rollbackPageChange(
@@ -178,6 +179,9 @@ export async function rollbackMemberChange(
       await deps.db
         .delete(driveMembers)
         .where(and(eq(driveMembers.driveId, plan.driveId), eq(driveMembers.userId, plan.userId)));
+      // As the member-removal route does: agent grants this user made in the
+      // drive (their Imago agents included) must not outlive the membership.
+      await revokeAgentMembershipsGrantedBy(deps.db, plan.driveId, plan.userId);
       deps.logger.info('[RollbackService] Removed member that was added', { driveId: plan.driveId, userId: plan.userId });
       return { deleted: true, driveId: plan.driveId, userId: plan.userId };
     }

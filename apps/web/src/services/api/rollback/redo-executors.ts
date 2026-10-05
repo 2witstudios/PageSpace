@@ -21,6 +21,7 @@ import {
 import type { ActivityOperation } from '@pagespace/lib/monitoring/activity-logger';
 import type { RollbackDeps, PageUpdateContext, PageChangeResult } from './deps';
 import type { ActivityLogForRollback } from './types';
+import { revokeAgentMembershipsGrantedBy } from '@pagespace/lib/services/drive-agent-service';
 
 /** Execute a page redo: apply the redo update-data with the isTrashed cascade (orphan/restore children). */
 export async function redoPageChange(
@@ -166,6 +167,9 @@ export async function redoMemberChange(
       await deps.db
         .delete(driveMembers)
         .where(and(eq(driveMembers.driveId, plan.driveId), eq(driveMembers.userId, plan.userId)));
+      // As the member-removal route does: agent grants this user made in the
+      // drive (their Imago agents included) must not outlive the membership.
+      await revokeAgentMembershipsGrantedBy(deps.db, plan.driveId, plan.userId);
       return { deleted: true, driveId: plan.driveId, userId: plan.userId };
     }
     case 'update': {
