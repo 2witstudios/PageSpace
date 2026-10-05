@@ -9,6 +9,14 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Changed
 
+- **An organization's automations outlive the person who made them** — when someone leaves an
+  organization, is removed from it, or deletes their account, the workflows, task and calendar triggers
+  and page webhooks they set up in its drives are no longer deleted. They are switched off and marked
+  "owner left", and nothing runs under the missing person, including a manual Run. An Owner or Admin can
+  hand each one to another member who can reach its drive (it then runs as that person and counts against
+  their spending cap) or delete it; both are recorded in the organization's audit log. An automation whose
+  creator deleted their account keeps nothing that identifies them. Automations in personal drives still
+  go with the account, as before.
 - **A lapsed organization can still lock things down** — while an organization's plan is unpaid or
   canceled, its Owner and Admins can still make any change that restricts: turn guests from outside off
   or to approval (guests are removed from its drives at once, as when the plan is active), turn off share
