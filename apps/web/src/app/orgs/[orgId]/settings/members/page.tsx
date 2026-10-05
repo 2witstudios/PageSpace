@@ -231,7 +231,7 @@ function MembersPageBody({ orgId, orgName, role, lapsed }: OrgSettingsContext) {
                   <span className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-dashed">
                     <Mail className="h-4 w-4 text-muted-foreground" />
                   </span>
-                  <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <div className="flex min-w-0 flex-1 basis-[calc(100%-3rem)] flex-col gap-0.5 md:basis-0">
                     <div className="flex items-center gap-2">
                       <span className="truncate font-medium">{inv.email}</span>
                       <OrgBadge tone="pending">Invited</OrgBadge>
@@ -285,7 +285,7 @@ function MembersPageBody({ orgId, orgName, role, lapsed }: OrgSettingsContext) {
                     {g.image ? <AvatarImage src={g.image} alt="" /> : null}
                     <AvatarFallback className="text-xs">{initials(g.name, g.email)}</AvatarFallback>
                   </Avatar>
-                  <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <div className="flex min-w-0 flex-1 basis-[calc(100%-3rem)] flex-col gap-0.5 md:basis-0">
                     <div className="flex items-center gap-2">
                       <span className="truncate font-medium">{g.name || g.email}</span>
                       <OrgBadge tone="guest">Guest</OrgBadge>
