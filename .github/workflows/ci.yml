@@ -504,6 +504,9 @@ jobs:
         working-directory: apps/imago
         env:
           WEB_APP_INTERNAL_URL: http://127.0.0.1:3100
+          # Spec 26 also opens /imago on this server in a browser to prove it hydrates under
+          # `next dev` (IMG-1.2a); switched off, imago serves 404s.
+          IMAGO_ENABLED: 'true'
 
       # The proxy serves this at /imago, as the production edge does, so imago and classic's
       # sign-in share one origin: the signed-out redirect reaches /auth/signin on it and sign-in

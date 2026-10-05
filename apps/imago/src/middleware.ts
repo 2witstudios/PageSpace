@@ -30,8 +30,12 @@ export function middleware(req: NextRequest): NextResponse {
 
   const isAPIRoute = pathname.startsWith('/api');
   const isProduction = process.env.NODE_ENV === 'production';
+  // Exactly 'development': `next build` inlines NODE_ENV as 'production', so
+  // the production middleware bundle can never take this branch.
+  const isDevelopment = process.env.NODE_ENV === 'development';
   return createSecureResponse(isProduction, req, {
     isAPIRoute,
+    isDevelopment,
     forwardHeaders: { [PATHNAME_HEADER]: pathname },
   }).response;
 }

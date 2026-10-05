@@ -18,9 +18,9 @@ import { getSeedState } from '../fixtures/seed-state';
  * origin. (Under `next dev` on its own port imago sends sign-in to web's origin, which then
  * returns to a /imago path web does not serve.)
  *
- * imago must be a PRODUCTION build (`next build`, served by its standalone server): its CSP has
- * no 'unsafe-eval', and the dev bundler needs eval to hydrate, so under `next dev` the shell
- * renders but never becomes interactive.
+ * imago runs as a PRODUCTION build (`next build`, served by its standalone server), as it ships:
+ * the production CSP has no 'unsafe-eval'. (`next dev` hydrates too, since its CSP adds
+ * 'unsafe-eval' in development only; spec 26 proves that.)
  *
  * ## Requires
  *
