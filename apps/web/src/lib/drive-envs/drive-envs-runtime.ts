@@ -68,6 +68,7 @@ import {
   type ReissueLocalEnvEnrollmentCodeResult,
 } from '@pagespace/lib/services/drive-envs/drive-envs';
 import { admitDriveComputeCreator, admitDriveOrgActive } from '@pagespace/lib/billing/compute-gate';
+import { isOrgLapsedForDrive } from '@pagespace/lib/organizations/status';
 
 export { toDriveEnvDTO };
 export type { DriveEnvDTO };
@@ -122,7 +123,7 @@ export async function resolveDriveEnvPayer(driveId: string): Promise<DriveEnvPay
   });
   // `payerId` is the Sprite TENANT (key folding), which stays the lead; the TIER an env's
   // eligibility and allowance follow is the org's for an org drive (WAL-9), whose pool pays.
-  return { payerId: drive.ownerId, tier: computeTierForDrive(drive, toSubscriptionTier(owner?.subscriptionTier)) };
+  return { payerId: drive.ownerId, tier: computeTierForDrive(drive, toSubscriptionTier(owner?.subscriptionTier), await isOrgLapsedForDrive(drive)) };
 }
 
 // ---------------------------------------------------------------------------

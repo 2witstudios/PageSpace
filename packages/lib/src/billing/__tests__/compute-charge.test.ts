@@ -45,11 +45,11 @@ describe('driveAccrualChargeFor and computeSpendKind', () => {
 describe('computeChargeTier', () => {
   it('an org charge carries the org entitlement tier, not the recorded person\'s own tier', () => {
     const charge: ComputeCharge = { kind: 'org', orgId: 'o1', userId: 'free-member' };
-    expect(computeChargeTier(charge, 'free')).toBe(ORG_ENTITLEMENT_TIER);
+    expect(computeChargeTier(charge, 'free', false)).toBe(ORG_ENTITLEMENT_TIER);
   });
 
   it('a personal charge carries the payer\'s own tier', () => {
-    expect(computeChargeTier({ kind: 'user', userId: 'u1' }, 'pro')).toBe('pro');
+    expect(computeChargeTier({ kind: 'user', userId: 'u1' }, 'pro', false)).toBe('pro');
   });
 
   it('WAL-8 (partial) SEAT-9 (partial) a LAPSED org\'s charge carries no Business entitlement: free, whatever the recorded person\'s plan', () => {

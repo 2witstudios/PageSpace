@@ -147,13 +147,14 @@ export async function resolveSandboxPayerTier(
  * The tier a drive's compute follows, for the sites that already hold the drive row and the
  * paying person's stored tier (quota ceilings, env allowance, slot eligibility): the ORG's
  * entitlement for an org drive (WAL-9, SEAT-8) — never the lead's own plan — else `ownerTier`.
- * A LAPSED org confers no paid tier (SEAT-9, WAL-8): pass `orgLapsed` from the org's status.
+ * A LAPSED org confers no paid tier (SEAT-9, WAL-8): `orgLapsed` is REQUIRED (review #2761) — read it
+ * with `isOrgLapsedForDrive` (organizations/status); it is ignored for a personal drive.
  * A driveless (global-assistant) session passes no drive and keeps its owner's tier.
  */
 export function computeTierForDrive(
   drive: { orgId: string | null } | null | undefined,
   ownerTier: SubscriptionTier,
-  orgLapsed: boolean = false,
+  orgLapsed: boolean,
 ): SubscriptionTier {
   return drive?.orgId ? orgEntitlementTier(orgLapsed) : ownerTier;
 }

@@ -80,6 +80,14 @@ export async function getOrgStatus(orgId: string, opts: { now?: Date; executor?:
   return (await readOrgStatus(orgId, opts)).result;
 }
 
+/**
+ * SEAT-9 / WAL-8: whether a drive's org is lapsed right now — false for a personal drive (or none)
+ * with no read. What every compute-tier caller passes as `orgLapsed` (review #2761).
+ */
+export async function isOrgLapsedForDrive(drive: { orgId: string | null } | null | undefined): Promise<boolean> {
+  return drive?.orgId ? !(await isOrgActive(drive.orgId)) : false;
+}
+
 /** SEAT-9: may the org use its org-only capabilities right now? False only while lapsed. */
 export async function isOrgActive(orgId: string, opts: { now?: Date; executor?: Executor } = {}): Promise<boolean> {
   return (await getOrgStatus(orgId, opts)).status !== 'lapsed';

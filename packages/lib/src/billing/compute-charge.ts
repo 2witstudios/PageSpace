@@ -85,10 +85,11 @@ export function sameCharge(a: ComputeCharge, b: ComputeCharge): boolean {
  * free org tier) for an org charge, the paying person's own otherwise. `personalTier` is the
  * tier read for `charge.userId`; it is ignored for an org charge, so a free-tier member running
  * compute in an org drive gets the org's machines and ceilings, not their own. A LAPSED org
- * confers no paid tier (SEAT-9, WAL-8: {@link orgEntitlementTier}); `orgLapsed` is ignored for a
- * personal charge.
+ * confers no paid tier (SEAT-9, WAL-8: {@link orgEntitlementTier}). `orgLapsed` is REQUIRED (review
+ * #2761): every caller states the org's status, so no site defaults a lapsed org to Business. It is
+ * ignored for a personal charge.
  */
-export function computeChargeTier(charge: ComputeCharge, personalTier: SubscriptionTier, orgLapsed: boolean = false): SubscriptionTier {
+export function computeChargeTier(charge: ComputeCharge, personalTier: SubscriptionTier, orgLapsed: boolean): SubscriptionTier {
   return charge.kind === 'org' ? orgEntitlementTier(orgLapsed) : personalTier;
 }
 

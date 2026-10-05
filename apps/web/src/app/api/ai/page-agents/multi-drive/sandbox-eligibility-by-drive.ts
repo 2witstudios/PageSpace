@@ -26,6 +26,8 @@ export function computeSandboxEligibilityByDrive(
     editableDriveIds: ReadonlySet<string>;
     codeExecutionEnabled: boolean;
   },
+  /** SEAT-9 / WAL-8: the orgs of these drives that are lapsed — their drives offer no sandbox (review #2761). */
+  lapsedOrgIds: ReadonlySet<string>,
 ): Map<string, boolean> {
   const tierByOwnerId = new Map(ownerRows.map((row) => [row.id, toSubscriptionTier(row.subscriptionTier)]));
   return new Map(
@@ -33,7 +35,7 @@ export function computeSandboxEligibilityByDrive(
       return [
         drive.id,
         actor.codeExecutionEnabled &&
-          isSandboxAvailable(computeTierForDrive(drive, tierByOwnerId.get(drive.ownerId) ?? 'free')) &&
+          isSandboxAvailable(computeTierForDrive(drive, tierByOwnerId.get(drive.ownerId) ?? 'free', drive.orgId !== null && lapsedOrgIds.has(drive.orgId))) &&
           (isDriveLead(actor.userId, drive) || actor.editableDriveIds.has(drive.id)),
       ];
     }),

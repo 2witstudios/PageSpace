@@ -13,6 +13,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { computeSandboxEligibilityByDrive, membershipRowsOf, resolveEditableDriveIds } from './sandbox-eligibility-by-drive';
 import { loadDriveRelationships } from '@pagespace/lib/permissions/drive-relationship-loader';
+import { isOrgActive } from '@pagespace/lib/organizations/status';
 
 interface AgentSummary {
   id: string;
@@ -106,11 +107,17 @@ export async function GET(request: Request) {
         driveWidePermissions: row.driveWidePermissions as { canEdit?: boolean } | null,
       })),
     );
-    const sandboxEligibleByDrive = computeSandboxEligibilityByDrive(accessibleDrives, ownerRows, {
-      userId,
-      editableDriveIds,
-      codeExecutionEnabled: isCodeExecutionEnabled(),
-    });
+    // SEAT-9 / WAL-8: a lapsed org's drives advertise no sandbox — one status read per distinct org.
+    const driveOrgIds = [...new Set(accessibleDrives.map((drive) => drive.orgId).filter((orgId): orgId is string => orgId !== null))];
+    const lapsedOrgIds = new Set(
+      (await Promise.all(driveOrgIds.map(async (orgId) => ((await isOrgActive(orgId)) ? null : orgId)))).filter((orgId): orgId is string => orgId !== null),
+    );
+    const sandboxEligibleByDrive = computeSandboxEligibilityByDrive(
+      accessibleDrives,
+      ownerRows,
+      { userId, editableDriveIds, codeExecutionEnabled: isCodeExecutionEnabled() },
+      lapsedOrgIds,
+    );
 
     // Filter by MCP token scope (if scoped)
     const allowedDriveIds = getAllowedDriveIds(auth);
