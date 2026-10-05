@@ -176,17 +176,17 @@ function MembersPageBody({ orgId, orgName, role, lapsed }: OrgSettingsContext) {
                       {m.image ? <AvatarImage src={m.image} alt="" /> : null}
                       <AvatarFallback className="text-xs">{initials(m.name, m.email)}</AvatarFallback>
                     </Avatar>
-                    <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                    <div className="flex min-w-0 flex-1 basis-[calc(100%-3rem)] flex-col gap-0.5 md:basis-0">
                       <div className="flex items-center gap-2">
                         <span className="truncate font-medium">{m.name || m.email}</span>
                         <OrgRoleBadge role={m.role} />
                       </div>
                       <span className="truncate text-[13px] text-muted-foreground">{m.email}</span>
                     </div>
-                    <span className="w-[84px] text-xs tabular-nums text-muted-foreground">{a ? `${a.driveCount} ${a.driveCount === 1 ? 'drive' : 'drives'}` : ''}</span>
-                    <span className="w-24 text-xs tabular-nums text-muted-foreground">{lastActiveLabel(a?.lastActiveAt)}</span>
-                    <span className="w-[120px] text-xs tabular-nums text-muted-foreground">{caps ? seatCapsLabel(caps) : ''}</span>
-                    <span className="w-28">
+                    <span className="text-xs tabular-nums text-muted-foreground md:w-[84px]">{a ? `${a.driveCount} ${a.driveCount === 1 ? 'drive' : 'drives'}` : ''}</span>
+                    <span className="text-xs tabular-nums text-muted-foreground md:w-24">{lastActiveLabel(a?.lastActiveAt)}</span>
+                    <span className="text-xs tabular-nums text-muted-foreground md:w-[120px]">{caps ? seatCapsLabel(caps) : ''}</span>
+                    <span className="md:w-28">
                       {m.role === 'OWNER' || !canChangeRoles ? (
                         <span className="text-xs text-muted-foreground">{m.role === 'OWNER' ? 'Owner' : m.role === 'ADMIN' ? 'Admin' : 'Member'}</span>
                       ) : (

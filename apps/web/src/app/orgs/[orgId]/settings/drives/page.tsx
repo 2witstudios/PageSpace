@@ -204,14 +204,14 @@ function DrivesPageBody({ orgId, orgName, role, lapsed }: OrgSettingsContext) {
               return (
                 <div key={d.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t px-4 py-3.5 first:border-t-0 md:flex-nowrap">
                   {d.orgVisibility === 'PRIVATE' ? <Lock className="h-5 w-5 text-muted-foreground" /> : <Folder className="h-5 w-5 text-muted-foreground" />}
-                  <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <div className="flex min-w-0 flex-1 basis-[calc(100%-2.5rem)] flex-col gap-0.5 md:basis-0">
                     <span className="truncate font-medium">{d.name}</span>
                     <span className="truncate text-[13px] text-muted-foreground">Lead: {d.lead.name ?? 'Unknown'}</span>
                   </div>
                   <OrgBadge tone={copy.tone} className="w-[82px] justify-center">{copy.label}</OrgBadge>
-                  <span className="w-[90px] text-xs tabular-nums text-muted-foreground">{driveMembersLabel(u)}</span>
-                  <span className="w-[70px] text-xs tabular-nums text-muted-foreground">{u ? formatBytes(u.storageBytes, 1) : ''}</span>
-                  <Button variant="ghost" size="sm" asChild className="w-[76px]">
+                  <span className="text-xs tabular-nums text-muted-foreground md:w-[90px]">{driveMembersLabel(u)}</span>
+                  <span className="text-xs tabular-nums text-muted-foreground md:w-[70px]">{u ? formatBytes(u.storageBytes, 1) : ''}</span>
+                  <Button variant="ghost" size="sm" asChild className="ml-auto md:ml-0 md:w-[76px]">
                     <Link href={`/dashboard/${d.id}/settings`}>Settings</Link>
                   </Button>
                 </div>

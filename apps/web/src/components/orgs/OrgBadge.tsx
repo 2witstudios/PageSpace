@@ -10,11 +10,11 @@ export type OrgBadgeTone = 'owner' | 'admin' | 'member' | 'guest' | 'open' | 're
 const TONES: Record<OrgBadgeTone, string> = {
   owner: 'border-transparent bg-primary-soft text-primary',
   admin: 'border-transparent bg-info/15 text-info',
-  member: 'border-transparent bg-secondary text-secondary-foreground',
+  member: 'border-transparent bg-muted text-foreground',
   guest: 'border-transparent bg-warning/20 text-foreground',
   open: 'border-transparent bg-success/15 text-success',
   restricted: 'border-transparent bg-warning/20 text-foreground',
-  private: 'border-transparent bg-secondary text-secondary-foreground',
+  private: 'border-transparent bg-muted text-foreground',
   pending: 'border-dashed bg-muted text-muted-foreground',
   outline: 'bg-transparent text-foreground',
   live: 'border-transparent bg-success/15 text-success',
