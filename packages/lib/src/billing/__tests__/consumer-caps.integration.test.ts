@@ -226,6 +226,20 @@ describe('per-consumer caps on drive-wallet and seat legs (orgs on, real Postgre
     expect(unattended).toMatchObject({ allowed: true, walletId: w.productWalletId });
   });
 
+  it('WAL-7 (partial) ten SIMULTANEOUS calls against a cap with room for one: the wallet lock serializes them, exactly one is admitted', async () => {
+    if (!dbAvailable) return;
+    world = await build();
+    const w = world;
+    await setDriveWalletCap(w.anaId, w.productId, w.marcusId, { dailyCents: 5, monthlyCents: null }, 'session');
+    for (let run = 0; run < 3; run += 1) {
+      const gates = await Promise.all(Array.from({ length: 10 }, () =>
+        canConsumeAI(w.marcusId, 'free', { spend: driveSpend(w.productId, 'drive_wallet'), estCostCents: 5, maxInFlight: 50 })));
+      expect(gates.filter((g) => g.allowed)).toHaveLength(1);
+      expect(gates.filter((g) => !g.allowed).every((g) => g.refusal?.reason === 'source_cap_reached')).toBe(true);
+      await db.delete(creditHolds).where(eq(creditHolds.userId, w.marcusId));
+    }
+  });
+
   it('WAL-7 (partial) the cap is decided under the wallet lock: spend landing after the unlocked resolution saw room is still refused, reserving nothing', async () => {
     if (!dbAvailable) return;
     world = await build();
