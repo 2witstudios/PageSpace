@@ -35,7 +35,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, eq, lte, sql } from '@pagespace/db/operators';
+import { and, eq, isNull, lt, lte, or, sql } from '@pagespace/db/operators';
 import { organizations, orgSubscriptions, type OrgRole } from '@pagespace/db/schema/organizations';
 import { isBillingEnabled } from '../deployment-mode';
 import { isLiveOrgSubscriptionStatus, orgBillingLockKey, planSeatQuantitySync } from '../billing/org-subscription-core';
@@ -154,15 +154,18 @@ export async function admitSeat(
 }
 
 export type SeatReleaseOutcome =
-  | { kind: 'released'; quantity: number }
-  | { kind: 'restored'; quantity: number }
-  | { kind: 'kept'; reason: 'mid_period' | 'nothing_unused' | 'ending' | 'no_period' }
+  /** `catchUp`: a boundary that passed unreconciled (a missed window), applied with prorations. */
+  | { kind: 'released'; quantity: number; catchUp: boolean }
+  | { kind: 'restored'; quantity: number; catchUp: boolean }
+  | { kind: 'kept'; reason: 'mid_period' | 'nothing_unused' | 'baseline' | 'ending' | 'no_period' }
   | { kind: 'no_subscription' };
 
 /**
  * SEAT-5: at the period boundary, make Stripe's extra-seat quantity equal what is held — lower
  * it (no proration) when seats are unused, raise it (prorated) when fewer are billed than
- * held. Outside the lead window it reads nothing and writes nothing.
+ * held — and record the boundary as reconciled. A boundary that passed with no run (the cron
+ * missed its window) is caught up on the next run WITH prorations, once (review 3+4 P2-8).
+ * Mid-period, with the last boundary reconciled, it reads nothing from Stripe and writes nothing.
  */
 export async function releaseOrgSeats(
   input: { orgId: string; now: Date; leadMs?: number },
@@ -176,7 +179,11 @@ export async function releaseOrgSeats(
       eventType: 'org.seat.quantity_changed',
       resourceType: 'organization',
       resourceId: input.orgId,
-      details: { reason: outcome.kind === 'released' ? 'period_end_release' : 'period_end_restore', quantity: outcome.quantity },
+      details: {
+        reason: outcome.kind === 'released' ? 'period_end_release' : 'period_end_restore',
+        quantity: outcome.quantity,
+        ...(outcome.catchUp ? { catchUp: true } : {}),
+      },
     });
   }
   return outcome;
@@ -192,36 +199,59 @@ function releaseOrgSeatsInTx(
     if (!sub) return { kind: 'no_subscription' };
     const parts = await countOrgSeatParts(input.orgId, tx);
     const { held } = seatQuantity({ ...parts, included: INCLUDED });
-    const common = { held, included: INCLUDED, currentPeriodEnd: sub.currentPeriodEnd, cancelAtPeriodEnd: sub.cancelAtPeriodEnd, now: input.now, leadMs: input.leadMs };
+    const common = {
+      held,
+      included: INCLUDED,
+      currentPeriodStart: sub.currentPeriodStart,
+      currentPeriodEnd: sub.currentPeriodEnd,
+      cancelAtPeriodEnd: sub.cancelAtPeriodEnd,
+      reconciledThrough: sub.seatsReconciledThrough,
+      now: input.now,
+      leadMs: input.leadMs,
+    };
+    const markReconciled = async (boundary: Date, extra: { extraSeatQuantity?: number; seatRevision?: number } = {}) => {
+      await tx
+        .update(orgSubscriptions)
+        .set({ seatsReconciledThrough: boundary, ...extra })
+        .where(eq(orgSubscriptions.orgId, input.orgId));
+    };
 
-    // Outside the window nothing is read from Stripe.
+    // Mid-period (or a first-sight baseline) nothing is read from Stripe.
     const early = decideSeatRelease({ ...common, purchasedExtra: sub.extraSeatQuantity });
+    if (early.action === 'keep' && early.reason === 'baseline') {
+      await markReconciled(early.boundary);
+      return { kind: 'kept', reason: 'baseline' };
+    }
     if (early.action === 'keep' && early.reason !== 'nothing_unused') return { kind: 'kept', reason: early.reason };
 
-    // Inside it, Stripe's own quantity is the truth the decision is made against.
+    // At a boundary, Stripe's own quantity is the truth the decision is made against.
     const actual = await port.readSeatQuantity(sub.stripeSeatItemId);
     const decision = decideSeatRelease({ ...common, purchasedExtra: actual });
     if (decision.action === 'keep') {
-      if (actual !== sub.extraSeatQuantity) {
+      if (decision.reason === 'nothing_unused' || decision.reason === 'baseline') {
+        await markReconciled(decision.boundary, actual !== sub.extraSeatQuantity ? { extraSeatQuantity: actual } : {});
+      } else if (actual !== sub.extraSeatQuantity) {
         await tx.update(orgSubscriptions).set({ extraSeatQuantity: actual }).where(eq(orgSubscriptions.orgId, input.orgId));
       }
       return { kind: 'kept', reason: decision.reason };
     }
-    const prorationBehavior: SeatProration = decision.action === 'release' ? 'none' : 'create_prorations';
+    const prorationBehavior: SeatProration = decision.proration;
+    // A boundary already behind us was missed (or the row was stale): this run is its catch-up.
+    const catchUp = decision.boundary.getTime() <= input.now.getTime();
     const plan = planSeatQuantitySync({
       orgId: input.orgId,
       stored: { seatItemId: sub.stripeSeatItemId, extraSeatQuantity: actual, seatRevision: sub.seatRevision },
       seats: held,
       prorationBehavior,
     });
-    if (plan.kind === 'noop') return { kind: 'kept', reason: 'nothing_unused' };
+    if (plan.kind === 'noop') {
+      await markReconciled(decision.boundary);
+      return { kind: 'kept', reason: 'nothing_unused' };
+    }
     const item = await port.setSeatQuantity({ itemId: plan.itemId, quantity: plan.quantity, prorationBehavior }, plan.idempotencyKey);
-    await tx
-      .update(orgSubscriptions)
-      .set({ extraSeatQuantity: item.quantity, seatRevision: plan.nextRevision })
-      .where(eq(orgSubscriptions.orgId, input.orgId));
-    loggers.api.info('org extra-seat quantity reconciled at the period boundary', { orgId: input.orgId, action: decision.action, quantity: item.quantity, held });
-    return decision.action === 'release' ? { kind: 'released', quantity: item.quantity } : { kind: 'restored', quantity: item.quantity };
+    await markReconciled(decision.boundary, { extraSeatQuantity: item.quantity, seatRevision: plan.nextRevision });
+    loggers.api.info('org extra-seat quantity reconciled at the period boundary', { orgId: input.orgId, action: decision.action, quantity: item.quantity, held, catchUp, boundary: decision.boundary });
+    return decision.action === 'release' ? { kind: 'released', quantity: item.quantity, catchUp } : { kind: 'restored', quantity: item.quantity, catchUp };
   });
 }
 
@@ -237,8 +267,9 @@ const SWEEP_BATCH = 200;
 
 /**
  * The cron's work: every live org subscription whose period ends inside the lead window (or
- * already has) gets releaseOrgSeats. One org's failure never stops the others; it is counted
- * and the next tick retries it.
+ * already has), whose current period began after the last boundary it reconciled (a missed
+ * window: caught up now), or that was never reconciled (baseline) gets releaseOrgSeats. One
+ * org's failure never stops the others; it is counted and the next tick retries it.
  */
 export async function releaseDueSeats(input: { now: Date; leadMs?: number }, port: SeatBillingPort): Promise<SeatSweepResult> {
   const lead = input.leadMs ?? SEAT_RELEASE_LEAD_MS;
@@ -249,7 +280,17 @@ export async function releaseDueSeats(input: { now: Date; leadMs?: number }, por
     const rows = await db
       .select({ orgId: orgSubscriptions.orgId, status: orgSubscriptions.status })
       .from(orgSubscriptions)
-      .where(and(lte(orgSubscriptions.currentPeriodEnd, horizon), eq(orgSubscriptions.cancelAtPeriodEnd, false), sql`${orgSubscriptions.orgId} > ${cursor}`))
+      .where(
+        and(
+          or(
+            lte(orgSubscriptions.currentPeriodEnd, horizon),
+            isNull(orgSubscriptions.seatsReconciledThrough),
+            lt(orgSubscriptions.seatsReconciledThrough, orgSubscriptions.currentPeriodStart),
+          ),
+          eq(orgSubscriptions.cancelAtPeriodEnd, false),
+          sql`${orgSubscriptions.orgId} > ${cursor}`,
+        ),
+      )
       .orderBy(orgSubscriptions.orgId)
       .limit(SWEEP_BATCH);
     if (rows.length === 0) break;

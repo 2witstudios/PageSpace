@@ -512,6 +512,49 @@ describe('seat accounting (real Postgres)', () => {
       expect(stripe.calls).toHaveLength(1);
     });
 
+    it('SEAT-5 (partial) review 3+4 P2-8: a MISSED release window is caught up on the next run — prorated (Stripe already billed the renewal), recorded, and never repeated; a seat freed after that waits for the period end', async () => {
+      const f = await buildOrg({ members: 6, extra: 1, autoAdd: false, periodEnd: new Date(Date.now() + 28 * 24 * HOUR) });
+      const stripe = new RecordingSeatStripe(0);
+      await removeOne(f);
+      stripe.quantities.set(f.itemId, 1);
+      // The cron was down across the boundary: the new period began 2 hours ago, the last boundary reconciled a month before.
+      const newStart = new Date(Date.now() - 2 * HOUR);
+      await db
+        .update(orgSubscriptions)
+        .set({ currentPeriodStart: newStart, seatsReconciledThrough: new Date(newStart.getTime() - 30 * 24 * HOUR) })
+        .where(eq(orgSubscriptions.orgId, f.orgId));
+
+      expect(await releaseOrgSeats({ orgId: f.orgId, now: new Date() }, stripe)).toEqual({ kind: 'released', quantity: 0, catchUp: true });
+      expect(stripe.calls).toEqual([expect.objectContaining({ itemId: f.itemId, quantity: 0, prorationBehavior: 'create_prorations' })]);
+      const [row] = await db.select().from(orgSubscriptions).where(eq(orgSubscriptions.orgId, f.orgId));
+      expect(row.extraSeatQuantity).toBe(0);
+      expect(row.seatsReconciledThrough?.getTime()).toBe(newStart.getTime());
+
+      // The next sweep finds the boundary reconciled: nothing more, whatever runs after.
+      expect(await releaseOrgSeats({ orgId: f.orgId, now: new Date() }, stripe)).toEqual({ kind: 'kept', reason: 'mid_period' });
+      expect(stripe.calls).toHaveLength(1);
+    });
+
+    it('SEAT-5 (partial) the sweep picks up a missed boundary on its own, and first sees a never-reconciled row as a baseline with no Stripe call', async () => {
+      const missed = await buildOrg({ members: 6, extra: 1, autoAdd: false, periodEnd: new Date(Date.now() + 28 * 24 * HOUR) });
+      const fresh = await buildOrg({ members: 6, extra: 1, autoAdd: false, periodEnd: new Date(Date.now() + 28 * 24 * HOUR) });
+      const stripe = new RecordingSeatStripe(0);
+      await removeOne(missed);
+      await removeOne(fresh);
+      stripe.quantities.set(missed.itemId, 1);
+      stripe.quantities.set(fresh.itemId, 1);
+      const newStart = new Date(Date.now() - HOUR);
+      await db.update(orgSubscriptions).set({ currentPeriodStart: newStart, seatsReconciledThrough: new Date(newStart.getTime() - 30 * 24 * HOUR) }).where(eq(orgSubscriptions.orgId, missed.orgId));
+
+      await releaseDueSeats({ now: new Date() }, stripe);
+      expect(stripe.calls.filter((c) => c.itemId === missed.itemId)).toEqual([expect.objectContaining({ quantity: 0, prorationBehavior: 'create_prorations' })]);
+      // The never-reconciled org is baselined at its period start: its freed seat waits for the period end (SEAT-5).
+      expect(stripe.calls.filter((c) => c.itemId === fresh.itemId)).toEqual([]);
+      const [freshRow] = await db.select().from(orgSubscriptions).where(eq(orgSubscriptions.orgId, fresh.orgId));
+      expect(freshRow.seatsReconciledThrough?.getTime()).toBe(freshRow.currentPeriodStart?.getTime());
+      expect(freshRow.extraSeatQuantity).toBe(1);
+    });
+
     it('SEAT-5 (partial) a seat that is held again before the boundary is never released', async () => {
       const f = await buildOrg({ members: 6, extra: 1, autoAdd: false, periodEnd: new Date(Date.now() + SEAT_RELEASE_LEAD_MS / 2) });
       const stripe = new RecordingSeatStripe(0);

@@ -126,6 +126,10 @@ export const orgSubscriptions = pgTable('org_subscriptions', {
   currentPeriodStart: timestamp('currentPeriodStart', { mode: 'date' }),
   currentPeriodEnd: timestamp('currentPeriodEnd', { mode: 'date' }),
   cancelAtPeriodEnd: boolean('cancelAtPeriodEnd').default(false).notNull(),
+  // SEAT-5 (review 3+4 P2-8): the last period boundary the seat release reconciled. A boundary
+  // that passed later than this was missed and is caught up, prorated, on the next sweep; null
+  // until the sweep first sees the row (it then records the current period start).
+  seatsReconciledThrough: timestamp('seatsReconciledThrough', { mode: 'date' }),
   createdAt: timestamp('createdAt', { mode: 'date' }).default(utcNow).notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).default(utcNow).notNull().$onUpdate(() => new Date()),
 });
