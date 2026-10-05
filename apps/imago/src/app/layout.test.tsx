@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
+import { useThemePreference } from '@/lib/theme/theme-provider';
 
 // Request-scoped Next APIs have no request outside a server; the layout's own
 // logic (cookie → data-theme) runs for real against these request stand-ins.
@@ -22,11 +23,18 @@ vi.mock('next/font/google', () => ({
   Geist_Mono: () => ({ variable: 'font-mono-var' }),
 }));
 
-const renderHtml = async (cookie: string | undefined): Promise<string> => {
+const renderHtml = async (
+  cookie: string | undefined,
+  children: React.ReactNode = null,
+): Promise<string> => {
   request.cookie = cookie;
   const { default: RootLayout } = await import('./layout');
-  return renderToStaticMarkup(await RootLayout({ children: null }));
+  return renderToStaticMarkup(await RootLayout({ children }));
 };
+
+function ThemeProbe() {
+  return <p>{useThemePreference().preference}</p>;
+}
 
 const dataTheme = (html: string): string | undefined =>
   html.match(/<html[^>]*\sdata-theme="([^"]*)"/)?.[1];
@@ -64,6 +72,23 @@ describe('RootLayout theme', () => {
         dataTheme(await renderHtml('sepia')),
       ],
       expected: ['system', 'system'],
+    });
+  });
+
+  test('the theme switcher state', async () => {
+    const probed = async (cookie: string | undefined) =>
+      /<p>([^<]*)<\/p>/.exec(await renderHtml(cookie, <ThemeProbe />))?.[1];
+
+    assert({
+      given: 'each theme cookie and none',
+      should: "seed the page's theme state with the same preference as data-theme",
+      actual: [
+        await probed('light'),
+        await probed('dark'),
+        await probed('system'),
+        await probed(undefined),
+      ],
+      expected: ['light', 'dark', 'system', 'system'],
     });
   });
 });

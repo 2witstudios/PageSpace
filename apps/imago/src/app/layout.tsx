@@ -11,6 +11,7 @@ import {
   THEME_COOKIE_NAME,
   parseThemePreference,
 } from '@/lib/theme/theme-preference';
+import { ThemeProvider } from '@/lib/theme/theme-provider';
 import './globals.css';
 
 // Self-hosted by next/font: served same-origin, so the CSP needs no font host.
@@ -64,9 +65,13 @@ export default async function RootLayout({
         />
         {/* One SWR cache and one realtime socket for the whole app; the shell
             layout never remounts. Every imago page is behind the session
-            middleware, so the tab is signed in when the socket connects. */}
+            middleware, so the tab is signed in when the socket connects.
+            The theme provider starts from the same cookie as data-theme, so
+            the switcher hydrates on the theme the page was served with. */}
         <ImagoSWRProvider>
-          <RealtimeProvider>{children}</RealtimeProvider>
+          <RealtimeProvider>
+            <ThemeProvider initialPreference={theme}>{children}</ThemeProvider>
+          </RealtimeProvider>
         </ImagoSWRProvider>
       </body>
     </html>
