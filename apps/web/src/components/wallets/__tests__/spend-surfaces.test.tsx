@@ -155,6 +155,14 @@ describe('SpendRefusalCard: the refusal card', () => {
     expect(toast.success).toHaveBeenCalledWith('This conversation now spends from Your credits. Send your message again.');
   });
 
+  it('SPEND-4 (partial) the card never offers the source that was just refused, even when the payload lists it', () => {
+    render(
+      <SpendRefusalCardView refusal={{ source: 'drive_wallet', reason: 'source_empty', options: ['drive_wallet', 'own_credits'] }} choices={[product, own]} myCap={null} onChoose={async () => {}} />,
+    );
+    expect(screen.queryByRole('button', { name: /Product wallet/ })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Your credits' })).toBeTruthy();
+  });
+
   it('WAL-7 (partial) a reached cap names the window that ran out (source_cap_reached)', () => {
     useSpendContextStore.setState({ active: { conversationId: 'c1', driveId: 'd-product', isGlobal: false, hasMessages: true } });
     spendState.spend = conversation([product, seat, own], { kind: 'refuse', source: 'drive_wallet', reason: 'source_cap_reached', options: [] });
