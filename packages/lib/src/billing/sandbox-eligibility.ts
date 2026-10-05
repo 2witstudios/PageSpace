@@ -22,7 +22,7 @@
 import { getDeploymentMode, type DeploymentMode } from '../deployment-mode';
 import { resolveSessionPayer, type LookupDriveBillingFacts } from './sandbox-payer';
 import { computeChargeFor, computeChargeTier } from './compute-charge';
-import { ORG_ENTITLEMENT_TIER } from './spend-target';
+import { orgEntitlementTier } from './spend-target';
 import type { SubscriptionTier } from './subscription-tiers';
 
 /** Tiers for which the sandbox (Sprite compute, code execution, terminal) is available. */
@@ -114,6 +114,11 @@ export interface ResolveSandboxPayerTierInput {
 export interface ResolveSandboxPayerTierDeps {
   lookupDriveBillingFacts: LookupDriveBillingFacts;
   getUserSubscriptionTier: (userId: string) => Promise<SubscriptionTier>;
+  /**
+   * SEAT-9 / WAL-8: whether the paying org is LAPSED (it then confers no tier). Production passes
+   * the org's status read (can-run-code's default deps); a caller that omits it reads every org as paid.
+   */
+  isOrgLapsed?: (orgId: string) => Promise<boolean>;
 }
 
 /**
@@ -131,7 +136,10 @@ export async function resolveSandboxPayerTier(
     ownerId: input.ownerId,
     lookupDriveBillingFacts: deps.lookupDriveBillingFacts,
   });
-  if (payer.kind === 'org') return computeChargeTier(computeChargeFor(payer, input.ownerId), 'free');
+  if (payer.kind === 'org') {
+    const lapsed = deps.isOrgLapsed ? await deps.isOrgLapsed(payer.orgId) : false;
+    return computeChargeTier(computeChargeFor(payer, input.ownerId), 'free', lapsed);
+  }
   return deps.getUserSubscriptionTier(payer.userId);
 }
 
@@ -139,11 +147,14 @@ export async function resolveSandboxPayerTier(
  * The tier a drive's compute follows, for the sites that already hold the drive row and the
  * paying person's stored tier (quota ceilings, env allowance, slot eligibility): the ORG's
  * entitlement for an org drive (WAL-9, SEAT-8) — never the lead's own plan — else `ownerTier`.
+ * A LAPSED org confers no paid tier (SEAT-9, WAL-8): `orgLapsed` is REQUIRED (review #2761) — read it
+ * with `isOrgLapsedForDrive` (organizations/status); it is ignored for a personal drive.
  * A driveless (global-assistant) session passes no drive and keeps its owner's tier.
  */
 export function computeTierForDrive(
   drive: { orgId: string | null } | null | undefined,
   ownerTier: SubscriptionTier,
+  orgLapsed: boolean,
 ): SubscriptionTier {
-  return drive?.orgId ? ORG_ENTITLEMENT_TIER : ownerTier;
+  return drive?.orgId ? orgEntitlementTier(orgLapsed) : ownerTier;
 }

@@ -269,6 +269,16 @@ describe('POST /api/agent-workspaces/[workspaceId]/shells', () => {
     expect(mockSpawnShell).not.toHaveBeenCalled();
   });
 
+  it('SEAT-9 (partial) given a LAPSED paying org, should 402 with the lapse message (not the plan upgrade prompt) and spawn nothing', async () => {
+    mockProvisionSessionSandbox.mockResolvedValue({ ok: false, reason: 'denied', denial: 'not_authorized', detail: 'org_lapsed' });
+    const response = await post({});
+    expect(response.status).toBe(402);
+    const body = await response.json();
+    expect(body.code).toBe('org_lapsed');
+    expect(body.error).toMatch(/lapsed/);
+    expect(mockSpawnShell).not.toHaveBeenCalled();
+  });
+
   it('given a provisioning failure, should 502 and never spawn a row pointing at nothing', async () => {
     mockProvisionSessionSandbox.mockResolvedValue({ ok: false, reason: 'provision_failed' });
     const response = await post({});

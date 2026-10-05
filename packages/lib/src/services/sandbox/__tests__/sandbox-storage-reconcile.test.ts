@@ -326,6 +326,40 @@ describe('reconcileSandboxStorage', () => {
     ]);
   });
 
+  it('SEAT-9 (partial) D-OW-32: a LAPSED org is charged nothing for storage — every kind, parked apps included — and the watermark moves to the tick, so the lapsed span is never back-billed', async () => {
+    const asked: string[] = [];
+    const { deps, chargeCalls, driveEnvAdvanceCalls, agentSessionAdvanceCalls } = makeDeps({
+      listAgentSessionSprites: async () => [agentSession({ driveId: 'org-drive' })],
+      listDriveEnvSprites: async () => [driveEnv({ driveId: 'org-drive' })],
+      listPublishedAppRootfs: async () => [publishedAppRootfs({ driveId: 'org-drive' })],
+      lookupDriveBillingFacts: async () => ({ ownerId: 'lead-marcus', orgId: 'org-northwind' }),
+      isOrgLapsed: async (orgId: string) => {
+        asked.push(orgId);
+        return true;
+      },
+    });
+
+    const result = await reconcileSandboxStorage(deps);
+
+    expect(chargeCalls).toEqual([]);
+    expect(result).toMatchObject({ charged: 0, failed: 0, skipped: 0, orgLapsedForgiven: 3, billableRows: 0 });
+    expect(agentSessionAdvanceCalls).toHaveLength(1);
+    expect(driveEnvAdvanceCalls).toHaveLength(1);
+    // One status read per org per tick, however many rows it owns.
+    expect(asked).toEqual(['org-northwind']);
+  });
+
+  it('SEAT-9 (partial) D-OW-32: a paid org (not lapsed) is charged as before', async () => {
+    const { deps, chargeCalls } = makeDeps({
+      listDriveEnvSprites: async () => [driveEnv({ driveId: 'org-drive' })],
+      lookupDriveBillingFacts: async () => ({ ownerId: 'lead-marcus', orgId: 'org-northwind' }),
+      isOrgLapsed: async () => false,
+    });
+    const result = await reconcileSandboxStorage(deps);
+    expect(result).toMatchObject({ charged: 1, orgLapsedForgiven: 0 });
+    expect(chargeCalls).toHaveLength(1);
+  });
+
   it('WAL-9 (partial) on the FIRST org-billed tick, forgives the pre-epoch backlog: nothing charged, the watermark moves to the tick, counted by name', async () => {
     const tick = new Date('2026-07-01T00:00:00.000Z');
     const { deps, chargeCalls, driveEnvAdvanceCalls, agentSessionAdvanceCalls } = makeDeps({

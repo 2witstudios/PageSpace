@@ -24,6 +24,7 @@ export const GENERIC_API_ERROR_CODES = [
   'rate_limited',
   'internal_error',
   'billing_unavailable',
+  'no_billing_customer',
   'billing_provider_unreachable',
   'email_verification_required',
 ] as const;

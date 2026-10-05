@@ -20,7 +20,7 @@ import { driveAgentMembers, driveMembers, mcpTokenDrives } from '@pagespace/db/s
 import { driveShareLinks, pageShareLinks } from '@pagespace/db/schema/share-links';
 import { oauthAccessTokens, oauthClients, oauthRefreshTokens } from '@pagespace/db/schema/oauth';
 import { hashToken } from '../../auth/token-utils';
-import { organizations, orgInvitations, orgMembers } from '@pagespace/db/schema/organizations';
+import { organizations, orgInvitations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
 import {
   countOrgSeats,
   createOrganization,
@@ -91,7 +91,8 @@ describe('org services (real Postgres)', () => {
     if (driveIds.length) await db.delete(drives).where(inArray(drives.id, driveIds));
     if (orgIds.length) {
       await db.update(drives).set({ orgId: null }).where(inArray(drives.orgId, orgIds));
-      // org_members and org_invitations cascade with the organization row.
+      // org_members and org_invitations cascade with the organization row; its subscription restricts it.
+      await db.delete(orgSubscriptions).where(inArray(orgSubscriptions.orgId, orgIds));
       await db.delete(organizations).where(inArray(organizations.id, orgIds));
     }
     if (userIds.length) await db.delete(users).where(inArray(users.id, userIds));
@@ -113,7 +114,8 @@ describe('org services (real Postgres)', () => {
     return user;
   }
 
-  async function seedNorthwind() {
+  /** `paid: false` is an org nobody has paid for (no subscription row): lapsed, but deletable with no Stripe call. */
+  async function seedNorthwind(opts: { paid?: boolean } = {}) {
     const jono = await person('Jono');
     const result = await createOrganization({
       name: 'Northwind Labs',
@@ -123,6 +125,8 @@ describe('org services (real Postgres)', () => {
     });
     if (!result.ok) throw new Error('seed failed');
     createdOrgs.push(result.organization.id);
+    // Northwind has paid: there is no org trial, and an unpaid org is lapsed from creation (D-OW-30).
+    if (opts.paid !== false) await factories.createOrgSubscription(result.organization.id);
     return { jono, org: result.organization };
   }
 
@@ -456,7 +460,7 @@ describe('org services (real Postgres)', () => {
 
   describe('deletion', () => {
     it("ORG-6 deleting an org with a trashed drive puts it in the Owner's trash and deletes the org", async () => {
-      const { jono, org } = await seedNorthwind();
+      const { jono, org } = await seedNorthwind({ paid: false });
       const priya = await person('Priya Nair');
       await addMember(org.id, priya.id, 'ADMIN');
       const trashedAt = new Date(Date.now() - 24 * HOUR);
@@ -476,7 +480,7 @@ describe('org services (real Postgres)', () => {
     });
 
     it('ORG-6 deleting an org never leaves a drive without an owner', async () => {
-      const { jono, org } = await seedNorthwind();
+      const { jono, org } = await seedNorthwind({ paid: false });
       const priya = await person('Priya Nair');
       const marcus = await person('Marcus Oyelaran');
       await addMember(org.id, priya.id, 'ADMIN');
@@ -511,7 +515,7 @@ describe('org services (real Postgres)', () => {
     });
 
     it('ORG-6 deleting an org refuses a transfer to someone outside the org and changes nothing', async () => {
-      const { jono, org } = await seedNorthwind();
+      const { jono, org } = await seedNorthwind({ paid: false });
       const chris = await person('Chris Rowe');
       const product = await seedDrive(jono.id, org.id, { name: 'Product' });
 
@@ -781,7 +785,7 @@ describe('org services (real Postgres)', () => {
     }
 
     it('ORG-6 after deleting an org the former lead of a transferred or trashed drive cannot open, list or restore into it; the Owner keeps their own row', async () => {
-      const { jono, org } = await seedNorthwind();
+      const { jono, org } = await seedNorthwind({ paid: false });
       const priya = await person('Priya Nair');
       const marcus = await person('Marcus Oyelaran');
       await addMember(org.id, priya.id, 'ADMIN');
@@ -832,7 +836,7 @@ describe('org services (real Postgres)', () => {
     });
 
     it('ORG-6 everyone whose access the delete ends gets a member_removed drive-list event and a room kick, only after it commits: revoked rows, rowless org Owner/Admin power and rowless Open-drive membership, never the new owner or someone still invited, and a refused delete kicks no one', async () => {
-      const { jono, org } = await seedNorthwind();
+      const { jono, org } = await seedNorthwind({ paid: false });
       const priya = await person('Priya Nair');
       const marcus = await person('Marcus Oyelaran');
       const dana = await person('Dana Kim');
@@ -929,7 +933,7 @@ describe('org services (real Postgres)', () => {
     });
 
     it('ORG-6 deleting an org revokes what every member minted on a drive they do not end up owning: key scopes, OAuth grants, share links and agent memberships; the new owner keeps theirs', async () => {
-      const { jono, org } = await seedNorthwind();
+      const { jono, org } = await seedNorthwind({ paid: false });
       const priya = await person('Priya Nair');
       const marcus = await person('Marcus Oyelaran');
       const lena = await person('Lena Schulz');
@@ -1019,7 +1023,7 @@ describe('org services (real Postgres)', () => {
     });
 
     it('ORG-6 (partial) deleting an org kicks at most 20 revoked connections at a time', async () => {
-      const { jono, org } = await seedNorthwind();
+      const { jono, org } = await seedNorthwind({ paid: false });
       const marcus = await person('Marcus Oyelaran');
       await addMember(org.id, marcus.id, 'MEMBER');
       // Drives already in trash need no choice; each carries one org row of Marcus's to revoke.
@@ -1046,7 +1050,7 @@ describe('org services (real Postgres)', () => {
     });
 
     it('ORG-6 a live drive without a deletion choice refuses the delete and nothing moves', async () => {
-      const { jono, org } = await seedNorthwind();
+      const { jono, org } = await seedNorthwind({ paid: false });
       const priya = await person('Priya Nair');
       await addMember(org.id, priya.id, 'ADMIN');
       const product = await seedDrive(jono.id, org.id, { name: 'Product' });

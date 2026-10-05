@@ -71,6 +71,8 @@ export interface ShellCheckAuthDeps {
   resolvePayer: (session: AgentSessionAccessSubject, actorId: string) => Promise<{ charge: ComputeCharge; driveId: string | null }>;
   /** A user row's tier + email, or undefined when the row is missing. Called for the requester (audit email) and, when different, the payer (slot-eligibility tier). */
   getUser: (userId: string) => Promise<{ subscriptionTier: string | null; email: string | null } | undefined>;
+  /** SEAT-9 / WAL-8: whether an org is lapsed — an org charge then confers no tier, so no slot (review #2761). */
+  isOrgLapsed: (orgId: string) => Promise<boolean>;
   resolveActorEmail: (email: string | null | undefined) => Promise<string>;
   acquireSlot: (args: { userId: string; tier: SubscriptionTier }) => boolean;
   releaseSlot: (userId: string) => void;
@@ -142,7 +144,8 @@ export function buildShellCheckAuth(deps: ShellCheckAuthDeps): ShellCheckAuthFn 
     // concurrency accounting separate from payer-based entitlement.
     // An org charge runs on the org's tier (SEAT-8), whatever the lead's or requester's plan.
     const payerRow = charge.kind === 'org' || charge.userId === userId ? userRow : await deps.getUser(charge.userId);
-    const tier = computeChargeTier(charge, (payerRow?.subscriptionTier ?? 'free') as SubscriptionTier);
+    const orgLapsed = charge.kind === 'org' ? await deps.isOrgLapsed(charge.orgId) : false;
+    const tier = computeChargeTier(charge, (payerRow?.subscriptionTier ?? 'free') as SubscriptionTier, orgLapsed);
     const actorEmail = await deps.resolveActorEmail(userRow?.email);
 
     return {

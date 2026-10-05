@@ -33,7 +33,7 @@ import { notifyLeadOfAutomationSkip } from './automation-skip-notifier';
 import { spendableCentsFor } from './credit-balance';
 import { effectiveSpendPolicy, type FallbackRule, type SpendLeg, type SpendSourceKind, type WalletStatus } from './wallet-core';
 import {
-  ORG_ENTITLEMENT_TIER,
+  orgEntitlementTier,
   PERSONAL_ROOT_NOT_YET_CREATED,
   automationSpendInput,
   availableSources,
@@ -220,7 +220,7 @@ async function resolveAutomationSpend(input: {
   // WAL-8: the drive wallet's root owner governs — the org inside org drives, the drive
   // owner (whose personal wallet funds the drive wallet) on a personal drive.
   const walletOwnerTier: SubscriptionTier = standing?.orgId
-    ? ORG_ENTITLEMENT_TIER
+    ? orgEntitlementTier(orgLapsed)
     : standing
       ? await tierOf(standing.ownerId)
       : 'free';
@@ -361,7 +361,7 @@ export async function resolveCallSpend(input: {
   // WAL-8 / D-OW-14: the wallet's ROOT owner's tier governs a shared leg — the org inside
   // org drives, the drive owner (the funder of its wallet) on a personal drive.
   const walletOwnerTier: SubscriptionTier = standing?.orgId
-    ? ORG_ENTITLEMENT_TIER
+    ? orgEntitlementTier(orgLapsed)
     : standing && !standing.isLead
       ? await tierOf(standing.ownerId)
       : consumerTier;

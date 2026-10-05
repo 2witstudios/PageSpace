@@ -25,7 +25,10 @@ import {
   ensureOrgBusinessSubscription,
   ensureOrgStripeCustomer,
   endOrgSubscriptionPort,
-  startOrgBusinessTrial,
+  createOrgBillingPortalSession,
+  listOrgInvoices,
+  provisionOrgSubscription,
+  startOrgBusinessSubscription,
   syncOrgSeatQuantity,
   type OrgBillingDeps,
 } from '../org-subscription';
@@ -99,7 +102,7 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
     if (userIds.length > 0) await db.delete(users).where(inArray(users.id, userIds));
   });
 
-  it('SEAT-1 SEAT-8 (partial) A-8 creating the subscription makes one org customer and one trialing Business subscription with the seat item at quantity 0, and stores the linkage on the org', async () => {
+  it('SEAT-1 SEAT-8 (partial) A-8 D-OW-30 creating the subscription makes one org customer and one Business subscription awaiting its first payment (no trial), with the seat item at quantity 0, and stores the linkage on the org', async () => {
     if (!dbAvailable) return;
     const { orgId, ownerId, deps, stripe } = await northwind(1);
 
@@ -118,7 +121,8 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
     expect(org.stripeCustomerId).toBe(customer.id);
     const [sub] = [...stripe.subscriptions.values()];
     expect(org.stripeSubscriptionId).toBe(sub.id);
-    expect(sub.status).toBe('trialing');
+    expect(sub.status).toBe('incomplete');
+    expect(sub.trialEnd).toBeNull();
     expect(sub.items.map((i) => [i.priceId, i.quantity])).toEqual([
       [PRICES.basePriceId, 1],
       [PRICES.seatPriceId, 0],
@@ -133,9 +137,9 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
       stripeSeatPriceId: PRICES.seatPriceId,
       stripeSeatItemId: sub.items[1].id,
       extraSeatQuantity: 0,
-      status: 'trialing',
+      status: 'incomplete',
     });
-    expect(rows[0].trialEnd).toBeInstanceOf(Date);
+    expect(rows[0].trialEnd).toBeNull();
   });
 
   it('A-8 an org created with 7 seats starts at extra-seat quantity 2', async () => {
@@ -252,7 +256,7 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
     expect(stripe.subscriptions.size).toBe(1);
   });
 
-  it('SEAT-8 (partial) an org whose subscription was canceled gets a new one without a second trial', async () => {
+  it('SEAT-9 (partial) an org whose subscription was canceled gets a new one, awaiting payment like the first', async () => {
     if (!dbAvailable) return;
     const { orgId, deps, stripe } = await northwind(1);
     const first = await ensureOrgBusinessSubscription(orgId, deps);
@@ -322,13 +326,18 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
     expect(Object.values(stripe.writes).every((n) => n === 0)).toBe(true);
   });
 
-  it('SEAT-8 (partial) starting the trial on org creation: a cloud org is subscribed and trialing, with no Stripe id in what the route sees', async () => {
+  it('SEAT-8 (partial) D-OW-30 creating an org asks for a card: a cloud org gets a subscription awaiting payment and the client secret to confirm it, with no Stripe id in what the route sees', async () => {
     if (!dbAvailable) return;
     process.env.DEPLOYMENT_MODE = 'cloud';
-    const { orgId, deps } = await northwind(1);
-    const start = await startOrgBusinessTrial(orgId, deps);
-    expect(start).toMatchObject({ state: 'subscribed', subscription: { status: 'trialing', extraSeatQuantity: 0 } });
-    expect(JSON.stringify(start)).not.toMatch(/cus_|sub_|si_/);
+    const { orgId, deps, stripe } = await northwind(1);
+    const start = await startOrgBusinessSubscription(orgId, deps);
+    const [sub] = [...stripe.subscriptions.values()];
+    expect(start).toEqual({
+      state: 'payment_required',
+      subscription: { status: 'incomplete', trialEnd: null, currentPeriodEnd: expect.any(String), extraSeatQuantity: 0 },
+      payment: { kind: 'confirm_payment', clientSecret: stripe.invoiceFor(sub.id)?.clientSecret },
+    });
+    expect(JSON.stringify(start)).not.toMatch(/cus_|sub_|si_|in_/);
   });
 
   it('SEAT-8 (partial) where billing is off (onprem, tenant) no org is billed and Stripe is never called', async () => {
@@ -336,7 +345,7 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
     for (const mode of ['onprem', 'tenant']) {
       process.env.DEPLOYMENT_MODE = mode;
       const { orgId, deps, stripe } = await northwind(1);
-      expect(await startOrgBusinessTrial(orgId, deps)).toEqual({ state: 'not_billed' });
+      expect(await startOrgBusinessSubscription(orgId, deps)).toEqual({ state: 'not_billed' });
       expect(stripe.writes.createCustomer + stripe.reads.findCustomerByOrgId).toBe(0);
       expect(await rowsFor(orgId)).toHaveLength(0);
     }
@@ -347,10 +356,87 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
     process.env.DEPLOYMENT_MODE = 'cloud';
     const { orgId, deps, stripe } = await northwind(1);
     stripe.failNext('createCustomer', Object.assign(new Error('Stripe is unavailable'), { type: 'StripeAPIError' }));
-    expect(await startOrgBusinessTrial(orgId, deps)).toEqual({ state: 'pending' });
+    expect(await startOrgBusinessSubscription(orgId, deps)).toEqual({ state: 'pending' });
     expect((await orgRow(orgId)).stripeCustomerId).toBeNull();
     expect(await rowsFor(orgId)).toHaveLength(0);
-    expect((await ensureOrgBusinessSubscription(orgId, deps)).linkage.status).toBe('trialing');
+    const later = await provisionOrgSubscription(orgId, deps);
+    expect(later.result.linkage.status).toBe('incomplete');
+    expect(later.payment.kind).toBe('confirm_payment');
+  });
+
+  describe('paying for the org (review 3+4 P1-1: an org can pay)', () => {
+    it('SEAT-8 (partial) SEAT-9 (partial) asking again while the first invoice is unpaid returns the SAME client secret and creates nothing', async () => {
+      if (!dbAvailable) return;
+      const { orgId, deps, stripe } = await northwind(1);
+      const first = await provisionOrgSubscription(orgId, deps);
+      const writes = { ...stripe.writes };
+      const again = await provisionOrgSubscription(orgId, deps);
+      expect(again.result.kind).toBe('existing');
+      expect(again.payment).toEqual(first.payment);
+      expect(first.payment.kind).toBe('confirm_payment');
+      expect(stripe.writes).toEqual(writes);
+    });
+
+    it('SEAT-9 (partial) re-subscribing a lapsed (canceled) org returns the NEW subscription\'s client secret; once Stripe has the payment, no payment step is left', async () => {
+      if (!dbAvailable) return;
+      const { orgId, deps, stripe } = await northwind(6);
+      const first = await provisionOrgSubscription(orgId, deps);
+      stripe.payLatestInvoice(first.result.linkage.stripeSubscriptionId);
+      stripe.endSubscription(first.result.linkage.stripeSubscriptionId);
+
+      const resub = await provisionOrgSubscription(orgId, deps);
+      expect(resub.result.kind).toBe('created');
+      const fresh = resub.result.linkage.stripeSubscriptionId;
+      expect(fresh).not.toBe(first.result.linkage.stripeSubscriptionId);
+      expect(resub.payment).toEqual({ kind: 'confirm_payment', clientSecret: stripe.invoiceFor(fresh)?.clientSecret });
+      expect(stripe.seatQuantity(fresh, PRICES.seatPriceId)).toBe(1);
+
+      stripe.payLatestInvoice(fresh);
+      const paid = await provisionOrgSubscription(orgId, deps);
+      expect(paid.result).toMatchObject({ kind: 'existing', linkage: { status: 'active' } });
+      expect(paid.payment).toEqual({ kind: 'none' });
+    });
+
+    it('SEAT-9 (partial) a past_due org whose card failed gets the open invoice\'s secret, so a new card pays what is owed', async () => {
+      if (!dbAvailable) return;
+      const { orgId, deps, stripe } = await northwind(1);
+      const first = await provisionOrgSubscription(orgId, deps);
+      stripe.payLatestInvoice(first.result.linkage.stripeSubscriptionId);
+      const renewal = stripe.openRenewalInvoice(first.result.linkage.stripeSubscriptionId, 'past_due');
+      const due = await provisionOrgSubscription(orgId, deps);
+      expect(due.result.linkage.status).toBe('past_due');
+      expect(due.payment).toEqual({ kind: 'confirm_payment', clientSecret: renewal.clientSecret });
+    });
+
+    it('SEAT-6 (partial) the billing portal opens on the ORG\'s Stripe customer, never the Owner\'s personal one; an org with no customer is refused without a Stripe call', async () => {
+      if (!dbAvailable) return;
+      const { orgId, ownerId, deps, stripe } = await northwind(1);
+      await db.update(users).set({ stripeCustomerId: `cus_personal_${orgId}` }).where(eq(users.id, ownerId));
+      await expect(createOrgBillingPortalSession(orgId, 'https://app.test/back', deps)).rejects.toMatchObject({ code: 'no_billing_customer' });
+      expect(stripe.portalSessions).toHaveLength(0);
+
+      const { customerId } = await ensureOrgStripeCustomer(orgId, deps);
+      const session = await createOrgBillingPortalSession(orgId, 'https://app.test/back', deps);
+      expect(stripe.portalSessions).toEqual([{ customerId, returnUrl: 'https://app.test/back' }]);
+      expect(customerId).not.toBe(`cus_personal_${orgId}`);
+      expect(session.url).toMatch(/^https:\/\//);
+    });
+
+    it('SEAT-6 (partial) org invoices are listed from the ORG\'s customer only; an org with no customer has none', async () => {
+      if (!dbAvailable) return;
+      const { orgId, ownerId, deps, stripe } = await northwind(1);
+      await db.update(users).set({ stripeCustomerId: `cus_personal_${orgId}` }).where(eq(users.id, ownerId));
+      expect(await listOrgInvoices(orgId, { limit: 10 }, deps)).toEqual({ invoices: [], hasMore: false });
+
+      const { linkage } = await ensureOrgBusinessSubscription(orgId, deps);
+      stripe.payLatestInvoice(linkage.stripeSubscriptionId);
+      const listed = await listOrgInvoices(orgId, { limit: 10 }, deps);
+      expect(stripe.invoiceListCalls).toEqual([{ customerId: linkage.stripeCustomerId, limit: 10, startingAfter: undefined }]);
+      expect(listed.hasMore).toBe(false);
+      expect(listed.invoices).toEqual([
+        expect.objectContaining({ id: stripe.invoiceFor(linkage.stripeSubscriptionId)?.id, status: 'paid', amountPaid: 5000, currency: 'usd' }),
+      ]);
+    });
   });
 
   describe('deleting an org that has a subscription (ORG-6 meets the org subscription)', () => {
@@ -383,7 +469,7 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
       ).rejects.toThrow(/unavailable/);
       expect(await orgRow(orgId)).toBeDefined();
       expect(await rowsFor(orgId)).toHaveLength(1);
-      expect(stripe.subscriptions.get(linkage.stripeSubscriptionId)?.status).toBe('trialing');
+      expect(stripe.subscriptions.get(linkage.stripeSubscriptionId)?.status).toBe('incomplete');
 
       const retry = await deleteOrganization(
         { actorId: ownerId, orgId, choices: [], now: new Date() },
@@ -447,7 +533,7 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
       await end(a.linkage.stripeSubscriptionId, 'canceled');
       const b = await ensureOrgBusinessSubscription(orgId, deps);
       expect(b.linkage.stripeSubscriptionId).not.toBe(a.linkage.stripeSubscriptionId);
-      // B (no trial, same seats, same customer) ends inside Stripe's key window.
+      // B (same params: same seats, same customer) ends inside Stripe's key window.
       await end(b.linkage.stripeSubscriptionId, 'incomplete_expired');
 
       const c = await ensureOrgBusinessSubscription(orgId, deps);
@@ -467,11 +553,11 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
       expect(await rowsFor(orgId)).toHaveLength(0);
     });
 
-    it('SEAT-1 (Codex P1 / P2-3) a stored trial that Stripe already canceled is refreshed from Stripe, and the org can subscribe again (no second trial)', async () => {
+    it('SEAT-1 (Codex P1 / P2-3) a stored subscription that Stripe already ended is refreshed from Stripe, and the org can subscribe again', async () => {
       if (!dbAvailable) return;
       const { orgId, deps, stripe } = await northwind(1);
       const first = await ensureOrgBusinessSubscription(orgId, deps);
-      stripe.endSubscription(first.linkage.stripeSubscriptionId); // cardless trial ended; no webhook yet (D3)
+      stripe.endSubscription(first.linkage.stripeSubscriptionId); // ended in Stripe; no webhook yet (D3)
 
       const again = await ensureOrgBusinessSubscription(orgId, deps);
       expect(again.kind).toBe('created');
@@ -479,7 +565,7 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
       expect(stripe.subscriptions.get(again.linkage.stripeSubscriptionId)?.trialEnd).toBeNull();
     });
 
-    it('SEAT-1 a stored subscription still live in Stripe has its mirrored status refreshed (trialing → active)', async () => {
+    it('SEAT-1 a stored subscription still live in Stripe has its mirrored status refreshed (incomplete → active)', async () => {
       if (!dbAvailable) return;
       const { orgId, deps, stripe } = await northwind(1);
       const first = await ensureOrgBusinessSubscription(orgId, deps);
@@ -490,7 +576,7 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
       expect((await rowsFor(orgId))[0].status).toBe('active');
     });
 
-    it('SEAT-8 (partial) Codex P2: a lost create whose subscription ended before the retry does not earn a second trial', async () => {
+    it('SEAT-1 (partial) Codex P2: a lost create whose subscription ended before the retry is followed by a new subscription, never stored as the dead one', async () => {
       if (!dbAvailable) return;
       const { orgId, deps, stripe } = await northwind(1);
       stripe.loseNextResponse('createSubscription');

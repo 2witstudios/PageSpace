@@ -29,6 +29,7 @@ import {
   NO_STORED_CHOICE,
   PERSONAL_ROOT_NOT_YET_CREATED,
   ORG_ENTITLEMENT_TIER,
+  orgEntitlementTier,
   type CallSpendInput,
   type WalletBalanceFacts,
 } from '../spend-target';
@@ -64,6 +65,14 @@ const input = (over: Partial<CallSpendInput> = {}): CallSpendInput => ({
   walletOwnerTier: ORG_ENTITLEMENT_TIER,
   consumerTier: 'free',
   ...over,
+});
+
+describe('orgEntitlementTier — the org tier follows its billing status', () => {
+  it('WAL-8 (partial) SEAT-9 (partial) a paid org carries Business; a LAPSED org carries no paid entitlement (free) until it reactivates', () => {
+    expect(orgEntitlementTier(false)).toBe(ORG_ENTITLEMENT_TIER);
+    expect(ORG_ENTITLEMENT_TIER).toBe('business');
+    expect(orgEntitlementTier(true)).toBe('free');
+  });
 });
 
 describe('spend-target: the target a caller names', () => {

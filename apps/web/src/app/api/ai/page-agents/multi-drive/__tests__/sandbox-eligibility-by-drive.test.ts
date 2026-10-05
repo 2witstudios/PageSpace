@@ -13,6 +13,7 @@ describe('computeSandboxEligibilityByDrive', () => {
       [{ id: 'drive-1', ownerId: 'owner-1', orgId: null }],
       [{ id: 'owner-1', subscriptionTier: 'pro' }],
       editorOf('drive-1'),
+      new Set<string>(),
     );
     expect(result.get('drive-1')).toBe(true);
   });
@@ -22,8 +23,20 @@ describe('computeSandboxEligibilityByDrive', () => {
       [{ id: 'drive-1', ownerId: 'owner-1', orgId: 'org-northwind' }],
       [{ id: 'owner-1', subscriptionTier: 'free' }],
       editorOf('drive-1'),
+      new Set<string>(),
     );
     expect(result.get('drive-1')).toBe(true);
+  });
+
+  it("SEAT-9 (partial) WAL-8 (partial) a LAPSED org's drive advertises no sandbox, whatever its lead's plan (review #2761)", () => {
+    const result = computeSandboxEligibilityByDrive(
+      [{ id: 'drive-1', ownerId: 'owner-1', orgId: 'org-northwind' }, { id: 'drive-2', ownerId: 'owner-1', orgId: 'org-paid' }],
+      [{ id: 'owner-1', subscriptionTier: 'pro' }],
+      editorOf('drive-1', 'drive-2'),
+      new Set(['org-northwind']),
+    );
+    expect(result.get('drive-1')).toBe(false);
+    expect(result.get('drive-2')).toBe(true);
   });
 
   it('WAL-9 (partial) an ORG drive still needs the requester to hold edit access', () => {
@@ -31,6 +44,7 @@ describe('computeSandboxEligibilityByDrive', () => {
       [{ id: 'drive-1', ownerId: 'owner-1', orgId: 'org-northwind' }],
       [{ id: 'owner-1', subscriptionTier: 'free' }],
       editorOf('some-other-drive'),
+      new Set<string>(),
     );
     expect(result.get('drive-1')).toBe(false);
   });
@@ -40,6 +54,7 @@ describe('computeSandboxEligibilityByDrive', () => {
       [{ id: 'drive-1', ownerId: 'owner-1', orgId: null }],
       [{ id: 'owner-1', subscriptionTier: 'free' }],
       editorOf('drive-1'),
+      new Set<string>(),
     );
     expect(result.get('drive-1')).toBe(false);
   });
@@ -49,6 +64,7 @@ describe('computeSandboxEligibilityByDrive', () => {
       [{ id: 'drive-1', ownerId: 'owner-missing', orgId: null }],
       [],
       editorOf('drive-1'),
+      new Set<string>(),
     );
     expect(result.get('drive-1')).toBe(false);
   });
@@ -58,6 +74,7 @@ describe('computeSandboxEligibilityByDrive', () => {
       [{ id: 'drive-1', ownerId: 'owner-1', orgId: null }],
       [{ id: 'owner-1', subscriptionTier: 'not-a-real-tier' }],
       editorOf('drive-1'),
+      new Set<string>(),
     );
     expect(result.get('drive-1')).toBe(false);
   });
@@ -67,6 +84,7 @@ describe('computeSandboxEligibilityByDrive', () => {
       [{ id: 'drive-1', ownerId: 'owner-1', orgId: null }],
       [{ id: 'owner-1', subscriptionTier: 'pro' }],
       { userId: 'requester-1', editableDriveIds: new Set(), codeExecutionEnabled: true },
+      new Set<string>(),
     );
     expect(result.get('drive-1')).toBe(false);
   });
@@ -76,6 +94,7 @@ describe('computeSandboxEligibilityByDrive', () => {
       [{ id: 'drive-1', ownerId: 'requester-1', orgId: null }],
       [{ id: 'requester-1', subscriptionTier: 'pro' }],
       { userId: 'requester-1', editableDriveIds: new Set(), codeExecutionEnabled: true },
+      new Set<string>(),
     );
     expect(result.get('drive-1')).toBe(true);
   });
@@ -85,6 +104,7 @@ describe('computeSandboxEligibilityByDrive', () => {
       [{ id: 'drive-1', ownerId: 'owner-1', orgId: null }],
       [{ id: 'owner-1', subscriptionTier: 'business' }],
       { userId: 'requester-1', editableDriveIds: new Set(['drive-1']), codeExecutionEnabled: false },
+      new Set<string>(),
     );
     expect(result.get('drive-1')).toBe(false);
   });
@@ -100,6 +120,7 @@ describe('computeSandboxEligibilityByDrive', () => {
         { id: 'owner-pro', subscriptionTier: 'pro' },
       ],
       editorOf('drive-free', 'drive-pro'),
+      new Set<string>(),
     );
     expect(result.get('drive-free')).toBe(false);
     expect(result.get('drive-pro')).toBe(true);
@@ -114,6 +135,7 @@ describe('computeSandboxEligibilityByDrive', () => {
       ],
       [{ id: 'owner-1', subscriptionTier: 'business' }],
       editorOf('drive-a', 'drive-b', 'drive-c'),
+      new Set<string>(),
     );
     expect(result.get('drive-a')).toBe(true);
     expect(result.get('drive-b')).toBe(true);
@@ -132,6 +154,7 @@ describe('computeSandboxEligibilityByDrive', () => {
         { id: 'owner-free', subscriptionTier: 'free' },
       ],
       editorOf('drive-editable-pro', 'drive-editable-free'),
+      new Set<string>(),
     );
     expect(result.get('drive-editable-pro')).toBe(true);
     expect(result.get('drive-viewer-pro')).toBe(false);
@@ -139,7 +162,7 @@ describe('computeSandboxEligibilityByDrive', () => {
   });
 
   it('given no drives at all, returns an empty map', () => {
-    const result = computeSandboxEligibilityByDrive([], [], editorOf());
+    const result = computeSandboxEligibilityByDrive([], [], editorOf(), new Set<string>());
     expect(result.size).toBe(0);
   });
 });

@@ -41,19 +41,20 @@ import {
 export const ORG_POOL_TIER = 'business' as const;
 
 /**
- * [D-OW-23] PENDING (Jono): D-OW-16 extended to orgs. A trial or gifted ORG
- * subscription pays nothing, and the literal MON-3 refill would leave the Business
- * trial with an empty pool; with this on, such an invoice funds the pool at LIST
- * price × ratio, exactly as a personal trial or gift is funded. This is the one line
- * that reverses the policy: set it to false and a trial or gift org invoice grants
- * nothing — a trial pays 0 and a gift is a 100%-coupon subscription whose lines net to
- * 0, and the refill is sized from what was PAID. Every trial/gift amount comes from
- * {@link orgPoolListPriceGrantCents}.
+ * [D-OW-23] as amended by [D-OW-30] (Jono): a GIFTED org subscription — the admin path —
+ * pays nothing (a 100%-coupon subscription whose lines net to 0), and the literal MON-3
+ * refill would leave it with an empty pool; with this on, a gift funds the pool at LIST
+ * price × ratio, exactly as a personal gift is funded. There is no org TRIAL any more
+ * ([D-OW-30]): a $0 trial invoice once granted $50 of pool credit and was farmable by
+ * creating orgs, so a trial-shaped invoice is now sized from what it PAID — nothing —
+ * like any other. Renamed from ORG_POOL_FUNDS_TRIALS_AND_GIFTS so the name says what it
+ * still covers. This is the one line that reverses the gift policy: set it to false and
+ * a gift grants nothing. Every gift amount comes from {@link orgPoolListPriceGrantCents}.
  */
-export const ORG_POOL_FUNDS_TRIALS_AND_GIFTS = true;
+export const ORG_POOL_FUNDS_GIFTS = true;
 
 /**
- * The pool grant for an org subscription we fund ourselves (trial or gift): the
+ * The pool grant for an org subscription we fund ourselves (an admin gift): the
  * Business list price for the base plus `extraSeats` extra seats at the list seat
  * price, times the Business ratio. Integer cents; multiply before any divide.
  */
@@ -91,7 +92,12 @@ export interface OrgPoolRefillInput {
   subtotalCents?: number | null;
   /** The org subscription was gifted by an admin. */
   gifted?: boolean;
-  /** Extra seats on the subscription, for sizing a trial or gift at list price. */
+  /**
+   * Review #2761 P2-4: the invoice is on the org's OWN stored subscription (the one the mirror
+   * reads its status from). A gift elsewhere funds nothing; absent reads as false (fail closed).
+   */
+  onOrgSubscription?: boolean;
+  /** Extra seats on the subscription, for sizing a gift at list price. */
   extraSeats?: number;
 }
 
@@ -118,30 +124,30 @@ export function orgInvoicePaidCents(input: Pick<OrgPoolRefillInput, 'lines' | 'a
  * MON-3: size the pool refill from what the org invoice PAID for its lines (the
  * Business base and the extra seats), net of discounts, times the Business ratio. More
  * seats paid means a bigger pool through the same derivation, with no second constant.
- * A trial (paid 0, subtotal 0, subscription_create) or a gifted org subscription is
- * funded at list price × ratio only while `fundTrialsAndGifts` is on ([D-OW-23],
- * D-OW-16 extended to orgs); with it off both grant nothing, because both paid
- * nothing. A 100% coupon on a non-gifted subscription grants nothing (D-OW-16d).
+ * A gifted org subscription is funded at list price × ratio only while `fundGifts` is
+ * on ([D-OW-23], D-OW-16 extended to orgs); with it off it grants nothing, because it
+ * paid nothing. There is no org trial ([D-OW-30]): a $0 invoice that is not a gift —
+ * a trial-shaped subscription_create, or a 100% coupon on a non-gifted subscription
+ * (D-OW-16d) — grants nothing, so creating orgs never mints credit.
  * `active` (D-OW-17) defaults to the money-model constant.
  */
 export function orgPoolRefillGrant(
   input: OrgPoolRefillInput,
   active: boolean = MONEY_MODEL_V2_ACTIVE,
-  fundTrialsAndGifts: boolean = ORG_POOL_FUNDS_TRIALS_AND_GIFTS,
+  fundGifts: boolean = ORG_POOL_FUNDS_GIFTS,
 ): InvoiceGrant {
   const paidCents = orgInvoicePaidCents(input);
   if (input.hasSubscriptionParent !== true) {
     return { paidCents, allowanceCents: 0, basis: 'none', reason: 'not_a_subscription_invoice' };
   }
-  if (fundTrialsAndGifts) {
-    const trial = input.billingReason === 'subscription_create' && paidCents === 0 && wholeCents(input.subtotalCents) === 0;
-    const funded = input.gifted === true ? 'gifted' : trial ? 'trial' : null;
-    if (funded !== null) {
-      const allowanceCents = orgPoolListPriceGrantCents(input.extraSeats ?? 0, active);
-      return allowanceCents > 0
-        ? { paidCents, allowanceCents, basis: 'list', reason: funded }
-        : { paidCents, allowanceCents: 0, basis: 'none', reason: 'no_ratio' };
-    }
+  if (fundGifts && input.gifted === true) {
+    // A gift on any subscription but the org's own funds a pool the org could never spend: the
+    // org's status reads its own subscription, so it stays lapsed. Grant nothing (review #2761 P2-4).
+    if (input.onOrgSubscription !== true) return { paidCents, allowanceCents: 0, basis: 'none', reason: 'gift_not_org_subscription' };
+    const allowanceCents = orgPoolListPriceGrantCents(input.extraSeats ?? 0, active);
+    return allowanceCents > 0
+      ? { paidCents, allowanceCents, basis: 'list', reason: 'gifted' }
+      : { paidCents, allowanceCents: 0, basis: 'none', reason: 'no_ratio' };
   }
   if (paidCents === 0) return { paidCents, allowanceCents: 0, basis: 'none', reason: 'zero_amount' };
   const allowanceCents = allowanceCentsForPaidCents(paidCents, ORG_POOL_TIER, active);

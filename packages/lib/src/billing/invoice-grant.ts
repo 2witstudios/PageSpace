@@ -62,7 +62,13 @@ export type GrantReason =
    * invoice's KIND, not its amount, and is never a missed_grant candidate: there is
    * no tier to repair here, the invoice itself is simply not eligible.
    */
-  | 'not_a_subscription_invoice';
+  | 'not_a_subscription_invoice'
+  /**
+   * Review #2761 P2-4: an org gift invoice that is NOT on the org's own (app-created, mirrored)
+   * subscription. The org reads lapsed on such a subscription and could never spend a grant, so
+   * none is made (fail closed); the operator applies the gift to the org's own subscription.
+   */
+  | 'gift_not_org_subscription';
 
 export interface InvoiceGrant {
   /** What the invoice actually paid, in whole cents — recorded on the ledger row for audit. */

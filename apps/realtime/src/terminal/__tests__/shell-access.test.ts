@@ -52,6 +52,7 @@ function buildDeps(overrides: Partial<ShellCheckAuthDeps> = {}): {
       return { subscriptionTier: 'pro', email: 'a@b.c' };
     },
     resolveActorEmail: async (email) => email ?? '',
+    isOrgLapsed: async () => false,
     acquireSlot: () => true,
     releaseSlot: () => {},
     ensureSessionSandbox: async () => {
@@ -281,6 +282,35 @@ describe('buildShellCheckAuth — access half', () => {
       should: "still authorize, defaulting tier to 'free' and email to undefined→''",
       actual: { ok: result.ok, acquiredTier, emailInput },
       expected: { ok: true, acquiredTier: 'free', emailInput: undefined },
+    });
+  });
+
+  it('SEAT-9 (partial) WAL-8 (partial) an org charge reserves the slot at the ORG tier while paid, and at free while the org is LAPSED (review #2761)', async () => {
+    const tiers: string[] = [];
+    const lapsed = { value: false };
+    const asked: string[] = [];
+    const { deps } = buildDeps({
+      resolvePayer: async () => ({ charge: { kind: 'org' as const, orgId: 'org-northwind', userId: 'u-1' }, driveId: 'drive-1' }),
+      isOrgLapsed: async (orgId) => {
+        asked.push(orgId);
+        return lapsed.value;
+      },
+      acquireSlot: ({ tier }) => {
+        tiers.push(tier);
+        return true;
+      },
+    });
+    const checkAuth = buildShellCheckAuth(deps);
+    for (const value of [false, true]) {
+      lapsed.value = value;
+      const result = await checkAuth({ userId: 'u-1', shellId: 'shl-1' });
+      if (result.ok) await result.resolveSandbox();
+    }
+    assert({
+      given: 'an org-drive shell, first while the org is paid, then while it is lapsed',
+      should: 'ask the org status and reserve at business, then at free',
+      actual: { tiers, asked },
+      expected: { tiers: ['business', 'free'], asked: ['org-northwind', 'org-northwind'] },
     });
   });
 

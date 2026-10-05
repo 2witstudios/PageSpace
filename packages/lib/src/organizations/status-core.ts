@@ -5,13 +5,15 @@
  *
  * An org is in exactly one of four states:
  *   - `active`    paid and current;
- *   - `trialing`  on its Business trial (SEAT-8);
+ *   - `trialing`  Stripe reports a trial on the subscription. The app never starts one
+ *                 ([D-OW-30]: no org trial); a subscription made in the Stripe dashboard
+ *                 can still carry one, and it is read as Stripe states it;
  *   - `past_due`  a payment failed and Stripe is still retrying — the org keeps every
  *                 capability (a temporary decline is not a lapse), Owner and Admins
  *                 are told;
- *   - `lapsed`    trial expired, unpaid, canceled, or never subscribed past its
- *                 creation trial (there is no free org tier, A-7). Org drives stay
- *                 readable; org-only capabilities
+ *   - `lapsed`    not paid yet (a new org's first invoice is open), trial expired,
+ *                 unpaid, canceled, or never subscribed (there is no free org tier,
+ *                 A-7). Org drives stay readable; org-only capabilities
  *                 stop (SEAT-9). NOTHING is deleted or reallocated: lapse is a read of
  *                 the subscription, never a write to drives, members or wallets, so
  *                 leaving lapse restores exactly what was there.
@@ -19,15 +21,11 @@
  * Where billing is off (onprem, tenant) there is no subscription to lapse: always
  * active.
  *
- * AN ORG WITH NO SUBSCRIPTION ROW. Creating an org starts Business with a trial
- * (SEAT-8), but D1 creates the org even when Stripe is unreachable and leaves it
- * unsubscribed (`billing.state = 'pending'`) for a retry. Such an org is on its trial
- * clock from its creation: `trialing` for the trial length plus the grace window, then
- * `lapsed` as `no_subscription`. So a Stripe outage at creation never locks a new org
- * out, and a never-provisioned org is never free forever.
+ * AN ORG WITH NO SUBSCRIPTION ROW is lapsed from the moment it exists ([D-OW-30],
+ * amending SEAT-8's creation trial). D1 creates the org even when Stripe is unreachable
+ * and leaves it unsubscribed (`billing.state = 'pending'`) for a retry; until a payment
+ * lands it can spend nothing, so creating orgs never mints credit.
  */
-
-import { ORG_BUSINESS_TRIAL_DAYS } from '../billing/org-subscription-core';
 
 export const ORG_STATUSES = ['active', 'trialing', 'past_due', 'lapsed'] as const;
 export type OrgStatus = (typeof ORG_STATUSES)[number];
@@ -75,14 +73,6 @@ function endedInTrial(sub: OrgSubscriptionState, now: Date): boolean {
  */
 export const ORG_TRIAL_GRACE_MS = 24 * 60 * 60 * 1000;
 
-/** How long an org with no subscription row counts as trialing from its creation (SEAT-8's trial). */
-export const ORG_UNSUBSCRIBED_TRIAL_MS = ORG_BUSINESS_TRIAL_DAYS * 24 * 60 * 60 * 1000;
-
-/** The end of an unsubscribed org's creation trial — what its Owner's trial banner shows. */
-export function unsubscribedTrialEnd(orgCreatedAt: Date): Date {
-  return new Date(orgCreatedAt.getTime() + ORG_UNSUBSCRIBED_TRIAL_MS);
-}
-
 /** The SEAT-9 refusal, shown wherever an org-only capability is refused. No credit or price figure. */
 export const ORG_LAPSED_MESSAGE =
   "This organization's subscription has lapsed. Its drives stay readable and nothing has been deleted, " +
@@ -94,16 +84,12 @@ export const ORG_LAPSED_CODE = 'org_lapsed' as const;
 export function deriveOrgStatus(input: {
   billingEnabled: boolean;
   subscription: OrgSubscriptionState | null;
-  /** organizations.createdAt: the start of the trial clock while there is no subscription row. */
-  orgCreatedAt: Date;
   now: Date;
 }): OrgStatusResult {
   if (!input.billingEnabled) return { status: 'active', reason: null };
   const sub = input.subscription;
-  if (!sub) {
-    const trialOver = input.now.getTime() - unsubscribedTrialEnd(input.orgCreatedAt).getTime() >= ORG_TRIAL_GRACE_MS;
-    return trialOver ? { status: 'lapsed', reason: 'no_subscription' } : { status: 'trialing', reason: null };
-  }
+  // [D-OW-30]: no creation trial — an org nobody has paid for spends nothing.
+  if (!sub) return { status: 'lapsed', reason: 'no_subscription' };
 
   const trialOver = sub.trialEnd !== null && input.now.getTime() - sub.trialEnd.getTime() >= ORG_TRIAL_GRACE_MS;
   switch (sub.status) {

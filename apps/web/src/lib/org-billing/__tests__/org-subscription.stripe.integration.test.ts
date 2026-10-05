@@ -1,7 +1,7 @@
 // @vitest-environment node
 /**
  * The org Business subscription shell against the REAL Stripe TEST API and a real
- * Postgres (Spec SEAT-1, SEAT-8, A-8). Runs only when STRIPE_TEST_SECRET_KEY is set,
+ * Postgres (Spec SEAT-1, SEAT-6, SEAT-8, SEAT-9, A-8; [D-OW-30] no org trial). Runs only when STRIPE_TEST_SECRET_KEY is set,
  * and refuses to run at all unless that key is a TEST key (sk_test_…) and both org
  * prices report livemode false. It never reads STRIPE_SECRET_KEY, and it never goes
  * through the app's Stripe client: the client here is built from the test key alone.
@@ -34,8 +34,11 @@ import {
 } from '@pagespace/lib/billing/org-subscription-core';
 import { stripeConfig, stripeMode } from '@/lib/stripe-config';
 import {
+  createOrgBillingPortalSession,
   endOrgSubscriptionPort,
   ensureOrgBusinessSubscription,
+  listOrgInvoices,
+  provisionOrgSubscription,
   stripeOrgBilling,
   syncOrgSeatQuantity,
   type OrgBillingDeps,
@@ -70,6 +73,16 @@ async function testOrg(
 async function seatQuantityInStripe(subscriptionId: string): Promise<number | undefined> {
   const sub = await client.subscriptions.retrieve(subscriptionId);
   return sub.items.data.find((i) => i.price.id === PRICES.seatPriceId)?.quantity;
+}
+
+/**
+ * What the client's Payment Element does with the secret the route hands out: confirm the
+ * invoice's PaymentIntent with a card. A TEST card (pm_card_visa) stands in for the person
+ * typing one; nothing else is called — no invoice is paid out of band.
+ */
+async function confirmWithClientSecret(clientSecret: string): Promise<Stripe.PaymentIntent> {
+  const paymentIntentId = clientSecret.split('_secret_')[0];
+  return client.paymentIntents.confirm(paymentIntentId, { payment_method: 'pm_card_visa', return_url: 'https://app.pagespace.test/return' });
 }
 
 // Real network: one test makes up to ~9 Stripe calls, so the 5 s default is too tight.
@@ -107,9 +120,9 @@ describe.skipIf(!TEST_KEY)('org Business subscription against the Stripe TEST AP
     expect(base.metadata.included_seats).toBe(String(TIER_PLAN_LIMITS.business.includedSeats));
   });
 
-  it('SEAT-1 SEAT-8 (partial) A-8 a new org gets its own customer and a trialing Business subscription: base ×1, seat item ×0, cancel if no card at trial end; add a 6th seat → 1, a 7th → 2', async () => {
-    const { orgId, deps, seats } = await testOrg(1);
-    const result = await ensureOrgBusinessSubscription(orgId, deps);
+  it('SEAT-1 SEAT-8 (partial) A-8 D-OW-30 a new org gets its own customer and a Business subscription with NO trial, waiting on its first invoice (base ×1, seat item ×0), and the client secret to pay it', async () => {
+    const { orgId, deps } = await testOrg(1);
+    const { result, payment } = await provisionOrgSubscription(orgId, deps);
     customerIds.add(result.linkage.stripeCustomerId);
 
     const customer = await client.customers.retrieve(result.linkage.stripeCustomerId);
@@ -118,31 +131,68 @@ describe.skipIf(!TEST_KEY)('org Business subscription against the Stripe TEST AP
     expect(customer.metadata).toEqual({ [ORG_ID_METADATA_KEY]: orgId, kind: 'organization' });
     expect(customer.name).toBe(`Northwind Labs [${RUN}]`);
 
-    const sub = await client.subscriptions.retrieve(result.linkage.stripeSubscriptionId);
+    const sub = await client.subscriptions.retrieve(result.linkage.stripeSubscriptionId, { expand: ['latest_invoice'] });
     expect(sub.livemode).toBe(false);
-    expect(sub.status).toBe('trialing');
+    expect(sub.status).toBe('incomplete');
+    expect(sub.trial_end).toBeNull();
     expect(sub.customer).toBe(result.linkage.stripeCustomerId);
     expect(sub.metadata).toEqual({ [ORG_ID_METADATA_KEY]: orgId, kind: ORG_SUBSCRIPTION_KIND });
-    expect(sub.trial_settings?.end_behavior?.missing_payment_method).toBe('cancel');
     expect(sub.items.data.map((i) => [i.price.id, i.quantity])).toEqual([
       [PRICES.basePriceId, 1],
       [PRICES.seatPriceId, 0],
     ]);
+    const invoice = sub.latest_invoice as Stripe.Invoice;
+    expect(invoice.status).toBe('open');
+    expect(invoice.amount_due).toBe(tierListPriceCents('business'));
+    expect(payment.kind).toBe('confirm_payment');
 
     const [row] = await db.select().from(orgSubscriptions).where(eq(orgSubscriptions.orgId, orgId));
-    expect(row).toMatchObject({ stripeSubscriptionId: sub.id, status: 'trialing', extraSeatQuantity: 0 });
+    expect(row).toMatchObject({ stripeSubscriptionId: sub.id, status: 'incomplete', extraSeatQuantity: 0, trialEnd: null });
     expect(row.stripeBaseItemId).toBe(sub.items.data[0].id);
     expect(row.stripeSeatItemId).toBe(sub.items.data[1].id);
     const [org] = await db.select().from(organizations).where(eq(organizations.id, orgId));
     expect(org.stripeCustomerId).toBe(customer.id);
     expect(org.stripeSubscriptionId).toBe(sub.id);
+  });
+
+  it('SEAT-8 (partial) SEAT-9 (partial) review 3+4 P1-1 the client secret pays the first invoice: confirming a card with it makes the subscription active with no out-of-band step; then a 6th seat → 1, a 7th → 2', async () => {
+    const { orgId, deps, seats } = await testOrg(1);
+    const first = await provisionOrgSubscription(orgId, deps);
+    customerIds.add(first.result.linkage.stripeCustomerId);
+    if (first.payment.kind !== 'confirm_payment') throw new Error('no payment step');
+
+    const intent = await confirmWithClientSecret(first.payment.clientSecret);
+    expect(intent.status).toBe('succeeded');
+    expect(intent.amount).toBe(tierListPriceCents('business'));
+
+    const after = await provisionOrgSubscription(orgId, deps);
+    expect(after.result).toMatchObject({ kind: 'existing', linkage: { status: 'active' } });
+    expect(after.payment).toEqual({ kind: 'none' });
+    const subId = first.result.linkage.stripeSubscriptionId;
+    expect((await client.subscriptions.retrieve(subId)).default_payment_method).toBeTruthy();
 
     seats.count = 6;
     expect(await syncOrgSeatQuantity(orgId, {}, deps)).toEqual({ kind: 'updated', quantity: 1 });
-    expect(await seatQuantityInStripe(sub.id)).toBe(1);
+    expect(await seatQuantityInStripe(subId)).toBe(1);
     seats.count = 7;
     expect(await syncOrgSeatQuantity(orgId, {}, deps)).toEqual({ kind: 'updated', quantity: 2 });
-    expect(await seatQuantityInStripe(sub.id)).toBe(2);
+    expect(await seatQuantityInStripe(subId)).toBe(2);
+  });
+
+  it('SEAT-6 (partial) the billing portal and the invoice list open on the ORG\'s customer: the paid first invoice is listed, and a portal session opens (its customer is the stored org customer, proven against the fake)', async () => {
+    const { orgId, deps } = await testOrg(1);
+    const first = await provisionOrgSubscription(orgId, deps);
+    customerIds.add(first.result.linkage.stripeCustomerId);
+    if (first.payment.kind !== 'confirm_payment') throw new Error('no payment step');
+    await confirmWithClientSecret(first.payment.clientSecret);
+
+    const page = await listOrgInvoices(orgId, { limit: 10 }, deps);
+    expect(page.hasMore).toBe(false);
+    expect(page.invoices).toHaveLength(1);
+    expect(page.invoices[0]).toMatchObject({ status: 'paid', amountPaid: tierListPriceCents('business'), currency: 'usd' });
+
+    const portal = await createOrgBillingPortalSession(orgId, 'https://app.pagespace.test/orgs/x/settings', deps);
+    expect(portal.url).toMatch(/^https:\/\/billing\.stripe\.com\//);
   });
 
   it('A-8 an org provisioned with 7 seats starts at extra-seat quantity 2 in Stripe', async () => {
@@ -171,7 +221,7 @@ describe.skipIf(!TEST_KEY)('org Business subscription against the Stripe TEST AP
     const { orgId, deps } = await testOrg(1);
     const first = await ensureOrgBusinessSubscription(orgId, deps);
     customerIds.add(first.linkage.stripeCustomerId);
-    const params = orgBusinessSubscriptionParams({ orgId, customerId: first.linkage.stripeCustomerId, seats: 1, prices: PRICES, trialDays: 14 });
+    const params = orgBusinessSubscriptionParams({ orgId, customerId: first.linkage.stripeCustomerId, seats: 1, prices: PRICES });
     const replayed = await client.subscriptions.create(params, { idempotencyKey: orgSubscriptionCreateKey(orgId, params, null) });
     expect(replayed.id).toBe(first.linkage.stripeSubscriptionId);
     const subs = await client.subscriptions.list({ customer: first.linkage.stripeCustomerId, status: 'all', limit: 10 });
@@ -186,7 +236,8 @@ describe.skipIf(!TEST_KEY)('org Business subscription against the Stripe TEST AP
 
     const deleted = await deleteOrganization({ actorId: ownerId, orgId, choices: [], now: new Date() }, { ports: noKick, endSubscription: endOrgSubscriptionPort(deps) });
     expect(deleted.ok).toBe(true);
-    expect((await client.subscriptions.retrieve(linkage.stripeSubscriptionId)).status).toBe('canceled');
+    // An unpaid (incomplete) subscription that is canceled ends as incomplete_expired in Stripe; a paid one as canceled.
+    expect(['canceled', 'incomplete_expired']).toContain((await client.subscriptions.retrieve(linkage.stripeSubscriptionId)).status);
     // The port on an already-ended subscription leaves it alone rather than erroring.
     await expect(endOrgSubscriptionPort(deps)({ orgId, stripeSubscriptionId: linkage.stripeSubscriptionId })).resolves.toBeUndefined();
   });

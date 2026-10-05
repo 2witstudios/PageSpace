@@ -5,6 +5,7 @@ import { users } from '../schema/auth';
 import { drives, pages } from '../schema/core';
 import { conversations, messages } from '../schema/conversations';
 import { driveMembers, pagePermissions } from '../schema/members';
+import { orgSubscriptions } from '../schema/organizations';
 import { eq } from 'drizzle-orm';
 
 /**
@@ -248,5 +249,31 @@ export const factories = {
   ) {
     const rows = userIds.map((userId) => buildDriveMember(driveId, userId, overrides))
     return insertChunked(rows, (chunk) => db.insert(driveMembers).values(chunk).returning())
+  },
+
+  /**
+   * An org that has PAID: its subscription row as the webhook mirror stores an active
+   * Business subscription. There is no org trial ([D-OW-30]), so an org with no row is
+   * lapsed from creation; a fixture that exercises org capabilities needs this. The row
+   * restricts its org's delete: tear down org_subscriptions before organizations.
+   */
+  async createOrgSubscription(
+    orgId: string,
+    overrides?: Partial<typeof orgSubscriptions.$inferInsert>
+  ) {
+    const [created] = await db
+      .insert(orgSubscriptions)
+      .values({
+        orgId,
+        stripeSubscriptionId: `sub_test_${createId()}`,
+        stripeBasePriceId: 'price_base_test',
+        stripeBaseItemId: `si_base_${createId()}`,
+        stripeSeatPriceId: 'price_seat_test',
+        stripeSeatItemId: `si_seat_${createId()}`,
+        status: 'active',
+        ...overrides,
+      })
+      .returning()
+    return created
   },
 }

@@ -3,14 +3,18 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isBillingEnabled } from '@pagespace/lib/deployment-mode';
 import { authorizeOrgRequest, billingUnavailableResponse, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
-import { ensureOrgBusinessSubscription, OrgBillingError, orgSubscriptionSummary } from '@/lib/org-billing/org-subscription';
+import { OrgBillingError, orgSubscriptionSummary, provisionOrgSubscription } from '@/lib/org-billing/org-subscription';
 
 /**
  * POST /api/orgs/[orgId]/billing/subscription — make sure the org has its own Stripe
- * customer and Business subscription (SEAT-1, SEAT-8, A-8). Owner and Admins only
- * (SEAT-6). Idempotent: an org already subscribed gets its subscription back and
- * Stripe is not called; an org whose creation-time trial could not start (Stripe was
- * unreachable) is provisioned here. Absent where billing is off (onprem, tenant).
+ * customer and Business subscription (SEAT-1, SEAT-8, A-8) and say how to pay for it.
+ * Owner and Admins only (SEAT-6). There is no trial ([D-OW-30]): a new subscription waits
+ * on its first invoice, and `payment` carries that invoice's client secret for the
+ * client's card confirmation (Stripe Payment Element). The same call re-subscribes a
+ * lapsed org (a new subscription after the old one ended) and hands a past_due or unpaid
+ * org the secret for what it owes; paying lifts the lapse through the webhook with no
+ * other step (review 3+4 P1-1). Idempotent: an org already subscribed gets its
+ * subscription back. Absent where billing is off (onprem, tenant).
  */
 export async function POST(request: Request, context: { params: Promise<{ orgId: string }> }) {
   const { orgId } = await context.params;
@@ -18,15 +22,18 @@ export async function POST(request: Request, context: { params: Promise<{ orgId:
   if (!gate.ok) return gate.response;
   if (!isBillingEnabled()) return billingUnavailableResponse();
   try {
-    const result = await ensureOrgBusinessSubscription(orgId);
+    const { result, payment } = await provisionOrgSubscription(orgId);
     auditRequest(request, {
       eventType: 'data.write',
       userId: gate.userId,
       resourceType: 'organization',
       resourceId: orgId,
-      details: { operation: 'provision_org_subscription', outcome: result.kind, status: result.linkage.status },
+      details: { operation: 'provision_org_subscription', outcome: result.kind, status: result.linkage.status, paymentStep: payment.kind },
     });
-    return NextResponse.json({ subscription: orgSubscriptionSummary(result.linkage) }, { status: result.kind === 'existing' ? 200 : 201 });
+    return NextResponse.json(
+      { subscription: orgSubscriptionSummary(result.linkage), payment },
+      { status: result.kind === 'existing' ? 200 : 201 },
+    );
   } catch (error) {
     if (error instanceof OrgBillingError) {
       if (error.code === 'org_not_found') return NextResponse.json({ error: 'Organization not found', code: 'org_not_found' }, { status: 404 });

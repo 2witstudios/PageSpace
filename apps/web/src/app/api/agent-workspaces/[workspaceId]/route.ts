@@ -71,6 +71,7 @@ import {
 } from '@pagespace/lib/agent-workspaces/session-contract';
 import { decideAgentSessionRenameAccess } from '@pagespace/lib/agent-workspaces/decide-workspace-access';
 import { canRunCodeForSession } from '@pagespace/lib/services/agent-workspaces/agent-workspace-tenant';
+import { ORG_LAPSED_MESSAGE } from '@pagespace/lib/organizations/status-core';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -98,6 +99,8 @@ function provisioningDenied(request: Request, userId: string, workspaceId: strin
   // The session surface is free for every drive member, so a free-tier payer
   // legitimately reaches this point — name the plan gate instead of implying
   // an access problem they could never resolve.
+  // SEAT-9: a lapsed org's sandbox is paused until billing is reactivated — say so, as payment required.
+  if (detail === 'org_lapsed') return NextResponse.json({ error: ORG_LAPSED_MESSAGE, code: 'org_lapsed' }, { status: 402 });
   const error =
     detail === 'tier_ineligible'
       ? 'Running the agent sandbox requires a Pro plan or above'

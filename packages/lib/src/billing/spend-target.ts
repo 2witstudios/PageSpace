@@ -447,8 +447,18 @@ export function chooseSource(turnSource: SpendSourceKind | null, stored: StoredS
 // The decision (SPEND-1, SPEND-4, WAL-8)
 // ---------------------------------------------------------------------------
 
-/** SEAT-8: there is no free org tier, so an org-rooted wallet carries Business entitlement. */
+/** SEAT-8: there is no free org tier, so a PAID org-rooted wallet carries Business entitlement. */
 export const ORG_ENTITLEMENT_TIER: SubscriptionTier = 'business';
+
+/**
+ * WAL-8 / SEAT-9: the tier an org confers follows its billing status. A paid (active,
+ * past_due) org carries Business; a LAPSED org carries no paid entitlement — its
+ * compute gets no Business ceilings and no sandbox — until it reactivates. Lapse is a
+ * read, never a write, so reactivating restores Business at once.
+ */
+export function orgEntitlementTier(orgLapsed: boolean): SubscriptionTier {
+  return orgLapsed ? 'free' : ORG_ENTITLEMENT_TIER;
+}
 
 export interface CallSpendInput extends CallSpendLegs {
   /** The source this turn already resolved, for a follow-on call; null for a turn's first call. */

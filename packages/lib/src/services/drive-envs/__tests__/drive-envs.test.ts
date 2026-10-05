@@ -95,6 +95,19 @@ describe('createDriveEnv', () => {
     expect(createIfUnderLimit).not.toHaveBeenCalled();
   });
 
+  it('SEAT-9 (partial) a LAPSED org refuses the create as org_lapsed, not as the member\'s cap, and nothing is minted', async () => {
+    const store = makeDriveEnvStore();
+    const createIfUnderLimit = vi.spyOn(store.store, 'createIfUnderLimit');
+    const result = await createDriveEnv({
+      driveId: DRIVE_ID,
+      name: 'staging',
+      createdBy: 'member-marcus',
+      deps: makeCreateDeps(store, { admitCreator: async () => ({ allowed: false, code: 'org_lapsed', message: 'lapsed' }) }),
+    });
+    expect(result).toEqual({ ok: false, reason: 'org_lapsed', message: 'lapsed' });
+    expect(createIfUnderLimit).not.toHaveBeenCalled();
+  });
+
   it('given a vanished drive, should fail closed rather than meter the request against anybody else', async () => {
     const store = makeDriveEnvStore();
     const countEnvsOwnedBy = vi.spyOn(store.store, 'countEnvsOwnedBy');
@@ -632,9 +645,26 @@ describe('rebuildDriveEnv', () => {
         return { ok: true, sandboxId: handle.sandboxId, resumed: false };
       },
       now: () => NOW,
+      admitOrgActive: async () => ({ allowed: true }),
       ...over,
     };
   }
+
+  it('SEAT-9 (partial) review #2761: a LAPSED org\'s env is not rebuilt — refused org_lapsed BEFORE any teardown or provision', async () => {
+    const store = makeDriveEnvStore([makeEnvRecord()]);
+    const host = makeSpriteHost();
+    const asked: string[] = [];
+    const deps = makeRebuildDeps(store, host, {
+      admitOrgActive: async ({ driveId }) => {
+        asked.push(driveId);
+        return { allowed: false, code: 'org_lapsed', message: 'lapsed' };
+      },
+    });
+    expect(await rebuildDriveEnv({ envId: ENV_ID, deps })).toEqual({ ok: false, reason: 'org_lapsed', message: 'lapsed' });
+    expect(asked).toEqual([DRIVE_ID]);
+    expect(host.calls.kill).toEqual([]);
+    expect(host.calls.provision).toEqual([]);
+  });
 
   it('given a LOCAL env, should refuse substrate_unsupported BEFORE any teardown or provision — the machine is the user\'s, there is no Sprite to replace (C1)', async () => {
     const store = makeDriveEnvStore([makeEnvRecord({ substrate: 'local' })]);

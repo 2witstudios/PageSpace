@@ -19,7 +19,7 @@ import { drives } from '@pagespace/db/schema/core';
 import { creditHolds, creditLedger } from '@pagespace/db/schema/credits';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { notifications } from '@pagespace/db/schema/notifications';
-import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
+import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
 import { walletCapAlerts, walletConsumerCaps, wallets } from '@pagespace/db/schema/wallets';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
@@ -71,6 +71,8 @@ async function build(): Promise<World> {
   const marcus = await factories.createUser({ name: 'Marcus Oyelaran', subscriptionTier: 'free' });
   const lena = await factories.createUser({ name: 'Lena Lead', subscriptionTier: 'free' });
   const [org] = await db.insert(organizations).values({ name: 'Northwind Labs', slug: `northwind-${createId()}`, ownerId: jono.id, stripeCustomerId: `cus_${createId()}` }).returning();
+  // An org with no subscription row is LAPSED ([D-OW-30]): Northwind pays.
+  await factories.createOrgSubscription(org.id);
   await db.insert(orgMembers).values([
     { orgId: org.id, userId: jono.id, role: 'OWNER' },
     { orgId: org.id, userId: ana.id, role: 'ADMIN' },
@@ -108,6 +110,7 @@ async function teardown(w: World): Promise<void> {
   await db.delete(wallets).where(inArray(wallets.id, [w.poolId, w.jonoRootId]));
   await db.delete(wallets).where(inArray(wallets.userId, w.userIds));
   await db.delete(drives).where(inArray(drives.id, [w.productId, w.sideId]));
+  await db.delete(orgSubscriptions).where(eq(orgSubscriptions.orgId, w.orgId));
   await db.delete(organizations).where(eq(organizations.id, w.orgId));
   await db.delete(users).where(inArray(users.id, w.userIds));
 }

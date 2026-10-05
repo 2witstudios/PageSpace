@@ -48,6 +48,7 @@ import { getRealtimeSpritesSdk } from './terminal/realtime-sprites-client';
 import {
   buildShellHandlers,
   claimBillingWindow,
+  regateResumedWindow,
   composeSocketKey,
   connectFailureMessage,
   ensureShellSession,
@@ -131,6 +132,7 @@ import { handleKickRequest } from './kick-handler';
 import { authorizeBroadcastAudience } from './broadcast-audience';
 import { presenceTracker, type PresenceViewer } from './presence-tracker';
 import { withPerEventAuth, type AuthSocket } from './per-event-auth';
+import { isOrgActive, isOrgLapsedForDrive } from '@pagespace/lib/organizations/status';
 
 dotenv.config({ path: '../../.env' });
 
@@ -223,7 +225,7 @@ async function resolveDriveEnvPayer(driveId: string) {
   const [drive] = await db.select({ ownerId: drives.ownerId, orgId: drives.orgId }).from(drives).where(eq(drives.id, driveId)).limit(1);
   if (!drive) return null;
   // The tenant stays the lead (key folding); the tier is the org's for an org drive (WAL-9).
-  return { payerId: drive.ownerId, tier: computeTierForDrive(drive, await resolveOwnerTier(drive.ownerId)) };
+  return { payerId: drive.ownerId, tier: computeTierForDrive(drive, await resolveOwnerTier(drive.ownerId), await isOrgLapsedForDrive(drive)) };
 }
 
 /**
@@ -438,6 +440,7 @@ const shellCheckAuth = buildShellCheckAuth({
   },
   // WAL-2: the session's drive's payer, recorded under and capped against the ACTOR connecting.
   resolvePayer: makeResolveShellPayer(),
+  isOrgLapsed: async (orgId) => !(await isOrgActive(orgId)),
   getUser: async (userId) => {
     const [userRow] = await db
       .select({ subscriptionTier: users.subscriptionTier, email: users.email })
@@ -599,6 +602,10 @@ const shellIoDeps = {
     const billing = shellSessionDeps.billing;
     if (!billing) return true;
     return (await claimBillingWindow(billing, agentTerminalSessionMap, session, userId, pgWindowClaimLock)).ok;
+  },
+  // Review #2761: a window this send restarted is re-gated at once, never left unheld.
+  regateResumedWindow: (session: TerminalSession) => {
+    void regateResumedWindow(shellSessionDeps, agentTerminalSessionMap, session, session.sessionKey);
   },
 };
 

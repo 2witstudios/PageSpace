@@ -131,6 +131,12 @@ export interface ShellIoDeps {
    * and refused — nothing written — when they are at it. Absent -> unmetered deployment.
    */
   claimBillingWindow?: (session: TerminalSession, userId: string) => Promise<boolean>;
+  /**
+   * Review #2761 (P3-1): re-gate a billing window this send just restarted on a quiesced shell
+   * (shell-handler `regateResumedWindow`) — a payer that cannot pay now is torn down, never left
+   * running unheld until the next heartbeat. Fire-and-forget; absent = the heartbeat re-gates.
+   */
+  regateResumedWindow?: (session: TerminalSession) => void;
 }
 
 /**
@@ -270,7 +276,7 @@ export async function handleShellSendRequest(
   // A keystroke also RESUMES a quiesced shell (and with it the Sprite), so the
   // billing window has to restart at the instant of the write — the same call
   // the socket input path makes, for the same reason.
-  resumeBillingClock(session);
+  if (resumeBillingClock(session)) deps.regateResumedWindow?.(session);
   session.command.write(payload.input);
 
   // Nobody is watching this session, so its reap is already ticking — armed

@@ -141,12 +141,18 @@ describe('resolveSandboxPayerTier', () => {
 
 describe('computeTierForDrive', () => {
   it("WAL-9 (partial) an org drive's compute follows the org's tier, not the lead's", () => {
-    expect(computeTierForDrive({ orgId: 'org-1' }, 'free')).toBe('business');
+    expect(computeTierForDrive({ orgId: 'org-1' }, 'free', false)).toBe('business');
   });
 
   it("a personal drive, or no drive, keeps the owner's tier", () => {
-    expect(computeTierForDrive({ orgId: null }, 'pro')).toBe('pro');
-    expect(computeTierForDrive(undefined, 'free')).toBe('free');
+    expect(computeTierForDrive({ orgId: null }, 'pro', false)).toBe('pro');
+    expect(computeTierForDrive(undefined, 'free', false)).toBe('free');
+  });
+
+  it("WAL-8 (partial) SEAT-9 (partial) a LAPSED org drive's compute has no Business entitlement: free, so no sandbox, whatever the lead's plan", () => {
+    expect(computeTierForDrive({ orgId: 'org-1' }, 'pro', true)).toBe('free');
+    expect(isSandboxAvailable(computeTierForDrive({ orgId: 'org-1' }, 'pro', true))).toBe(false);
+    expect(computeTierForDrive({ orgId: null }, 'pro', true)).toBe('pro');
   });
 });
 
