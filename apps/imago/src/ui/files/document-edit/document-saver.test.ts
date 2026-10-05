@@ -32,7 +32,8 @@ const manualClock = () => {
 
 type Sent = { readonly patch: DocumentPatch; readonly expectedRevision: number };
 
-const refused = (status: number, message = 'refused') => new ApiError({ status, code: null, message });
+const refused = (status: number, message = 'refused', code: string | null = null) =>
+  new ApiError({ status, code, message });
 
 /** answer() decides each send's fate; a revision number is a save that landed. */
 const setup = (answer: (sent: Sent, index: number) => Promise<number> = async (sent) => sent.expectedRevision + 1) => {
@@ -291,6 +292,48 @@ describe('createDocumentSaver()', () => {
       should: 'send nothing',
       actual: { outcome, sent, states },
       expected: { outcome: 'saved', sent: [], states: [] },
+    });
+  });
+
+  test('a CSRF rejection that outlives the client’s retry', async () => {
+    const { clock, sent, states, saver } = setup(async (entry, index) => {
+      if (index === 0) throw refused(403, 'CSRF token invalid', 'CSRF_TOKEN_INVALID');
+      return entry.expectedRevision + 1;
+    });
+    saver.edit('<p>mine</p>');
+    clock.tick();
+    await flushPromises();
+    const status = states.at(-1)?.status;
+    const retried = await saver.flush();
+    assert({
+      given: 'a save refused for its CSRF token, not for the viewer’s rights',
+      should: 'fail with a session message the viewer can retry from, stay editable, then save on retry',
+      actual: { status, retried, sent: sent.length, unsaved: saver.unsaved() },
+      expected: {
+        status: { kind: 'failed', message: 'Your session could not be confirmed. Your text is kept here: try again, or reload the page.' },
+        retried: 'saved',
+        sent: 2,
+        unsaved: null,
+      },
+    });
+  });
+
+  test('restoring a draft kept from before', async () => {
+    const { clock, sent, states, saver } = setup();
+    saver.restore({ content: '<p>kept</p>', title: 'Kept' }, 7);
+    const scheduled = clock.pending();
+    clock.tick();
+    await flushPromises();
+    assert({
+      given: 'text the server never got, kept from when the document was last open at revision 7',
+      should: 'hold it as unsaved and save it after the pause against that revision',
+      actual: { scheduled, first: states[0], sent, revision: saver.revision() },
+      expected: {
+        scheduled: 1,
+        first: { status: { kind: 'unsaved' }, editing: true },
+        sent: [{ patch: { content: '<p>kept</p>', title: 'Kept' }, expectedRevision: 7 }],
+        revision: 8,
+      },
     });
   });
 });

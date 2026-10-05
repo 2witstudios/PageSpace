@@ -8,7 +8,7 @@
 // keeps theirs or takes the stored copy; a 403 keeps it and turns read-only.
 // One save is out at a time, so an older save never lands after a newer one.
 
-import { ApiError } from '@/api/errors';
+import { ApiError, CSRF_REJECTION_CODES } from '@/api/errors';
 
 /** What one PATCH /api/pages/[pageId] changes. */
 export type DocumentPatch = { readonly content?: string; readonly title?: string };
@@ -54,11 +54,15 @@ export type DocumentSaver = {
   readonly rename: (title: string) => Promise<FlushOutcome>;
   /** Saves what is waiting now. */
   readonly flush: () => Promise<FlushOutcome>;
+  /** Holds text kept from an earlier visit (made at `revision`) and saves it once typing pauses. */
+  readonly restore: (patch: DocumentPatch, revision: number) => void;
   /** Settles a conflict by saving the viewer's text over `revision`, the one now stored. */
   readonly keepMine: (revision: number) => Promise<FlushOutcome>;
   /** The editor now shows the stored copy at `revision`: what was waiting is dropped. */
   readonly adopt: (revision: number) => void;
   readonly isEditing: () => boolean;
+  /** The revision the next save is made against. */
+  readonly revision: () => number;
   /** What the server does not have yet; null when it has everything. */
   readonly unsaved: () => DocumentPatch | null;
 };
@@ -67,6 +71,12 @@ export type DocumentSaver = {
 export const DOCUMENT_SAVE_DELAY_MS = 1000;
 
 const UNREACHABLE = 'Could not reach PageSpace. Your text is kept here.';
+
+const SESSION = 'Your session could not be confirmed. Your text is kept here: try again, or reload the page.';
+
+/** A 403 for the CSRF token (still refused after the client's own retry), not for the viewer's rights. */
+const isCsrfRefusal = (error: ApiError): boolean =>
+  error.status === 403 && error.code !== null && CSRF_REJECTION_CODES.has(error.code);
 
 const merge = (older: DocumentPatch | null, newer: DocumentPatch | null): DocumentPatch | null =>
   older === null ? newer : newer === null ? older : { ...older, ...newer };
@@ -112,8 +122,9 @@ export const createDocumentSaver = ({
       // Whatever came in while this was out is newer than what was sent.
       pending = merge(patch, pending);
       if (error instanceof ApiError && error.status === 409) return 'conflict';
-      if (error instanceof ApiError && error.status === 403) return 'read-only';
-      setStatus({ kind: 'failed', message: error instanceof ApiError ? error.message : UNREACHABLE });
+      if (error instanceof ApiError && error.status === 403 && !isCsrfRefusal(error)) return 'read-only';
+      const message = !(error instanceof ApiError) ? UNREACHABLE : isCsrfRefusal(error) ? SESSION : error.message;
+      setStatus({ kind: 'failed', message });
       return 'failed';
     }
   };
@@ -135,15 +146,26 @@ export const createDocumentSaver = ({
     return outcome;
   };
 
+  /** Saves what is waiting once typing pauses. */
+  const later = (): void => {
+    stopTimer();
+    timer = schedule(() => {
+      void flush();
+    }, delayMs);
+  };
+
   return {
     edit: (content) => {
       pending = merge(pending, { content });
       if (held()) return;
       if (status.kind !== 'saving') setStatus({ kind: 'unsaved' });
-      stopTimer();
-      timer = schedule(() => {
-        void flush();
-      }, delayMs);
+      later();
+    },
+    restore: (patch, kept) => {
+      revision = kept;
+      pending = merge(patch, pending);
+      setStatus({ kind: 'unsaved' });
+      later();
     },
     rename: (title) => {
       pending = merge(pending, { title });
@@ -164,6 +186,7 @@ export const createDocumentSaver = ({
       setStatus({ kind: 'saved' });
     },
     isEditing,
+    revision: () => revision,
     unsaved: () => pending,
   };
 };
