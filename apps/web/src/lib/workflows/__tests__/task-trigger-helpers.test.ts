@@ -488,7 +488,7 @@ describe('task-trigger-helpers', () => {
       const where = vi.fn()
         .mockResolvedValueOnce([{ workflowId: 'wf-old', id: 'trg-old' }])
         .mockResolvedValueOnce([{ ownerLeftAt: new Date() }]);
-      captured.txSelect.mockImplementation(() => ({ from: () => ({ where }) }));
+      captured.txSelect.mockImplementation(() => ({ from: vi.fn(() => ({ where })) }));
       mockTransaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) => cb(captured.tx));
 
       const result = await createTaskTriggerWorkflow(validParams);

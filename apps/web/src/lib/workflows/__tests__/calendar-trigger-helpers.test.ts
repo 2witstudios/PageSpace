@@ -367,7 +367,7 @@ describe('upsertCalendarTriggerWorkflow', () => {
 
     await upsertCalendarTriggerWorkflow(db, baseParams);
 
-    const workflowSet = mockUpdateSet.mock.calls[0][0] as Record<string, unknown>;
+    const workflowSet = (mockUpdateSet.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
     expect(workflowSet).toMatchObject({ agentPageId: 'agent-1', prompt: 'Run check' });
     expect(workflowSet).not.toHaveProperty('isEnabled');
   });
