@@ -15,6 +15,7 @@ import { deleteConversationsForDrive } from './conversation-cleanup';
 import { decryptUserRow } from '../auth/user-repository';
 import { leaveAllOrganizations, reassignLedOrgDrives, recordComputeReattributions, type ComputeReattribution } from '../organizations/leave';
 import { recordLeaveEvents } from '../organizations/org-events';
+import { prepareAutomationsForAccountDeletion, recordOwnerLeftAutomations, type OwnerLeftAutomation } from '../organizations/automation-ownership';
 import { recordDepartureSuppressions } from '../organizations/departure-suppression';
 import { createAnonymizedActorEmail } from '../compliance/anonymize';
 
@@ -125,15 +126,23 @@ export const accountRepository = {
     // [D-OW-28] The departing member's environments and apps go to each drive's lead; audited
     // once the deletion commits.
     const reattributed: ComputeReattribution[] = [];
+    // [D-OW-36] Their org-drive automations are disabled and flagged, never deleted; audited once committed.
+    const ownerLeft: OwnerLeftAutomation[] = [];
     const left = await db.transaction(async (tx) => {
       const options = {
         reason: 'account_deleted' as const,
         actor: { actorEmail: createAnonymizedActorEmail(userId), actorDisplayName: 'Deleted User' },
         collectReattributed: reattributed,
+        collectOwnerLeft: ownerLeft,
       };
       const orgsLeft = await leaveAllOrganizations(userId, tx, options);
       // A lead who is somehow no longer a member of the drive's org still must not take it.
       await reassignLedOrgDrives(userId, tx, options);
+      // [D-OW-36] Every org drive's automation they made (in orgs they had already left, or as a guest
+      // creator, too) is flagged, the trigger anchors they created are handed to the drive's lead, and a
+      // personal drive's automations go with the account as before. The users delete then clears the
+      // creator columns (SET NULL): an owner-left automation keeps nothing of theirs.
+      ownerLeft.push(...await prepareAutomationsForAccountDeletion(tx, userId));
       // [D-OW-27] Their departure records go with the user row; each org they left keeps only a keyed
       // hash of the address, so a new account with it is not auto-joined back (SEC-1).
       await recordDepartureSuppressions(tx, userId);
@@ -146,6 +155,7 @@ export const accountRepository = {
       await recordLeaveEvents({ orgId, userId, eventType: 'org.member.left', reason: 'account_deleted', reassigned });
     }
     await recordComputeReattributions(reattributed);
+    await recordOwnerLeftAutomations(ownerLeft);
   },
 
   /**

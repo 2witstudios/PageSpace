@@ -2255,6 +2255,13 @@
       "when": 1791175677417,
       "tag": "0332_ui_contracts",
       "breakpoints": true
+    },
+    {
+      "idx": 323,
+      "version": "7",
+      "when": 1791222456116,
+      "tag": "0333_automation_owner_left",
+      "breakpoints": true
     }
   ]
 }
