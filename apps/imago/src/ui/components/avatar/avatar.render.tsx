@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
-import { Bot } from 'lucide-react';
 import type { Presence } from '../../types/presence/presence';
+import { renderIcon } from '../icon/icon.render';
 import { renderPresenceDot } from '../presence-dot/presence-dot.render';
 import {
   avatarClass,
@@ -40,7 +40,7 @@ export function renderAvatar({
   if (agent)
     return (
       <span className={avatarClass(size, 'agent')} data-agent="true">
-        <Bot size={12} strokeWidth={1.5} aria-hidden={true} className="block shrink-0" />
+        {renderIcon({ name: 'bot', size: 12 })}
         <span className="sr-only">{name}</span>
       </span>
     );

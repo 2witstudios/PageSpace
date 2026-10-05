@@ -6,7 +6,7 @@ import { assert } from 'riteway/vitest';
 import { ImagoSWRProvider } from '@/api/swr-provider';
 import { RealtimeProvider } from '@/realtime/realtime-provider';
 import { createRealtimeClient, type RealtimeSocket } from '@/realtime/realtime-client';
-import { fakeWeb, type FakeRoute } from '@/ui/tasks/task-api/fake-web';
+import { fakeWeb, type FakeRoute } from '@/ui/test-support/fake-web';
 import { useDirectThreads, useDriveChannels, useMessages, useUnreadBadges } from './use-messages';
 import { messagePaths } from '../messages-api/messages-api';
 import { badges, conversation, inboxChannel } from '../message-model/fixtures';
@@ -427,15 +427,105 @@ describe('useUnreadBadges()', () => {
       ],
     });
 
+    // Mentions, task assignments and RSVPs reach the files, tasks and
+    // calendar totals only through notifications, as classic's
+    // useSidebarBadges knows.
+    current = badges({ dms: 0, channels: 6, files: 1, tasks: 1, calendar: 1 });
+    rt.emit('notification:new', { type: 'TASK_ASSIGNED' });
+    await settle(() => {
+      if (seen.badges?.tasks !== 1) throw new Error('not refreshed');
+    });
+
+    assert({
+      given: 'notification:new',
+      should: 'refetch the totals, so no total it returns is stale',
+      actual: [seen.badges?.files, seen.badges?.tasks, seen.badges?.calendar, web.count(BADGES)],
+      expected: [1, 1, 1, 6],
+    });
+
     current = badges({ dms: 9, channels: 9 });
-    rt.emit('notification:new', {});
+    rt.emit('page:updated', {});
     await new Promise((resolve) => setTimeout(resolve, 400));
 
     assert({
-      given: 'an event that is not an inbox event',
+      given: 'an event that changes no unread total',
       should: 'not refetch the totals',
       actual: web.count(BADGES),
-      expected: 5,
+      expected: 6,
+    });
+  });
+});
+
+describe('after a reconnect', () => {
+  test('refetches what the dropped socket missed', async () => {
+    let channelItems = [inboxChannel('c1')];
+    let conversations = [conversation('m1')];
+    let totals = badges();
+    const seen: Seen = {};
+    function Probe() {
+      const messages = useMessages('d1');
+      seen.channels = messages.channels;
+      seen.threads = messages.threads;
+      seen.badges = messages.badges;
+      return null;
+    }
+    const { rt, web } = mount(
+      {
+        [CHANNELS]: channelsRoute(() => channelItems),
+        [CONVERSATIONS]: () =>
+          Response.json({ conversations, pagination: { hasMore: false, nextCursor: null, limit: 100 } }),
+        [BADGES]: () => Response.json(totals),
+      },
+      <Probe />,
+    );
+    await loaded(seen, 'channels');
+    await loaded(seen, 'threads');
+    await loaded(seen, 'badges');
+
+    // Posts land while the transport is down: their inbox events are lost.
+    channelItems = [inboxChannel('c1', { unreadCount: 2 })];
+    conversations = [conversation('m1', { unreadCount: 1 })];
+    totals = badges({ channels: 2, dms: 1 });
+    rt.emit('connect');
+    await settle(() => {
+      if (unread(seen.channels)?.[0] !== 'c1:2') throw new Error('channels not refetched');
+      if (unread(seen.threads)?.[0] !== 'm1:1') throw new Error('DMs not refetched');
+      if (seen.badges?.channels !== 2) throw new Error('totals not refetched');
+    });
+
+    assert({
+      given: 'the socket connecting again after the lists and totals loaded',
+      should: 'refetch the channels, the DMs and the totals once each',
+      actual: [unread(seen.channels), unread(seen.threads), seen.badges?.dms, [CHANNELS, CONVERSATIONS, BADGES].map(web.count)],
+      expected: [['c1:2'], ['m1:1'], 1, [2, 2, 2]],
+    });
+  });
+
+  test('a first connect before anything has loaded', async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const seen: Seen = {};
+    const { rt, web } = mount(
+      {
+        [CHANNELS]: async () => {
+          await gate;
+          return Response.json({ items: [inboxChannel('c1')], pagination: { hasMore: false, nextCursor: null } });
+        },
+      },
+      <ChannelsProbe seen={seen} />,
+    );
+
+    rt.emit('connect');
+    release();
+    await loaded(seen, 'channels');
+
+    assert({
+      given: 'the socket connecting while the first load is still in flight',
+      should: 'not fetch the list a second time',
+      actual: web.count(CHANNELS),
+      expected: 1,
     });
   });
 });

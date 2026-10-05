@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { cn } from '../../cn';
 import { unreadCountClass } from './unread-count-class';
 
 export type UnreadCountProps = {
@@ -15,10 +16,7 @@ export type UnreadCountProps = {
 export function renderUnreadCount({ count, className }: UnreadCountProps): ReactNode {
   if (!(count > 0)) return null;
   return (
-    <span
-      className={className ? `${unreadCountClass} ${className}` : unreadCountClass}
-      aria-hidden="true"
-    >
+    <span className={cn(unreadCountClass, className)} aria-hidden="true">
       {count}
     </span>
   );
