@@ -19,7 +19,7 @@ import { useEditingStore } from '@/stores/useEditingStore';
 import { isBillingEnabled } from '@/lib/deployment-mode';
 import { toast } from 'sonner';
 import {
-  createOrganization,
+  postOrganization,
   fetchDriveMemberEmails,
   orgFetcher,
   orgKeys,
@@ -142,7 +142,7 @@ export function CreateOrganizationDialog({ open, onOpenChange }: CreateOrganizat
     if (parsed.invalid.length > 0) return setError(`These are not email addresses: ${parsed.invalid.join(', ')}`);
     setSubmitting(true);
     try {
-      const created = await createOrganization({ name: name.trim(), slug: effectiveSlug });
+      const created = await postOrganization({ name: name.trim(), slug: effectiveSlug });
       const orgId = created.organization.id;
       const driveNames = Object.fromEntries(ownDrives.map((d) => [d.id, d.name]));
       setNames(driveNames);

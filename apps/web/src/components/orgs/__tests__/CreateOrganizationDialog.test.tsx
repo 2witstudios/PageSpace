@@ -7,7 +7,7 @@ const mocks = vi.hoisted(() => ({
   push: vi.fn(),
   fetchDrives: vi.fn(),
   refreshMyOrgs: vi.fn(),
-  createOrganization: vi.fn(),
+  postOrganization: vi.fn(),
   fetchDriveMemberEmails: vi.fn(),
   moveDriveIntoOrg: vi.fn(),
   inviteToOrg: vi.fn(),
@@ -36,7 +36,7 @@ vi.mock('../OrgPaymentForm', () => ({
 }));
 vi.mock('@/lib/orgs/org-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/orgs/org-api')>()),
-  createOrganization: mocks.createOrganization,
+  postOrganization: mocks.postOrganization,
   fetchDriveMemberEmails: mocks.fetchDriveMemberEmails,
   moveDriveIntoOrg: mocks.moveDriveIntoOrg,
   inviteToOrg: mocks.inviteToOrg,
@@ -89,11 +89,11 @@ describe('CreateOrganizationDialog', () => {
   });
 
   it('UI-6 (partial): Continue creates the org and opens the Payment Element step with what is due', async () => {
-    mocks.createOrganization.mockResolvedValue({ organization, billing: { state: 'payment_required', subscription: sub, payment: { kind: 'confirm_payment', clientSecret: 'cs_test_1' } } });
+    mocks.postOrganization.mockResolvedValue({ organization, billing: { state: 'payment_required', subscription: sub, payment: { kind: 'confirm_payment', clientSecret: 'cs_test_1' } } });
     render(<CreateOrganizationDialog open onOpenChange={vi.fn()} />);
     await fillName();
     await userEvent.click(screen.getByRole('button', { name: 'Continue to payment' }));
-    expect(mocks.createOrganization).toHaveBeenCalledWith({ name: 'Northwind Labs', slug: 'northwind-labs' });
+    expect(mocks.postOrganization).toHaveBeenCalledWith({ name: 'Northwind Labs', slug: 'northwind-labs' });
     expect(await screen.findByText('Pay for Northwind Labs')).toBeTruthy();
     expect(screen.getByText('Due today, then monthly')).toBeTruthy();
     expect(screen.getAllByText('$50.00').length).toBeGreaterThan(0);
@@ -101,7 +101,7 @@ describe('CreateOrganizationDialog', () => {
   });
 
   it('UI-6 (partial): once paid it waits for the org to activate, then moves drives, turns on automatic seats and invites', async () => {
-    mocks.createOrganization.mockResolvedValue({ organization, billing: { state: 'payment_required', subscription: sub, payment: { kind: 'confirm_payment', clientSecret: 'cs_test_1' } } });
+    mocks.postOrganization.mockResolvedValue({ organization, billing: { state: 'payment_required', subscription: sub, payment: { kind: 'confirm_payment', clientSecret: 'cs_test_1' } } });
     mocks.orgFetcher
       .mockResolvedValueOnce({ organization, viewer: { userId: 'u_me', role: 'OWNER' }, billingNotice: { kind: 'reactivate', reason: 'incomplete', canManageBilling: true } })
       .mockResolvedValue({ organization, viewer: { userId: 'u_me', role: 'OWNER' } });
@@ -124,7 +124,7 @@ describe('CreateOrganizationDialog', () => {
   }, 10_000);
 
   it('UI-6 create-organization dialog: name, slug, owned drives with Home excluded, invite people, the plan summary, and payment in place of a trial (D-OW-30)', async () => {
-    mocks.createOrganization.mockResolvedValue({ organization, billing: { state: 'payment_required', subscription: sub, payment: { kind: 'confirm_payment', clientSecret: 'cs_test_1' } } });
+    mocks.postOrganization.mockResolvedValue({ organization, billing: { state: 'payment_required', subscription: sub, payment: { kind: 'confirm_payment', clientSecret: 'cs_test_1' } } });
     render(<CreateOrganizationDialog open onOpenChange={vi.fn()} />);
     // name and slug
     await fillName();
@@ -140,7 +140,7 @@ describe('CreateOrganizationDialog', () => {
     expect(screen.queryByText(/trial/i)).toBeNull();
     // payment, then setup
     await userEvent.click(screen.getByRole('button', { name: 'Continue to payment' }));
-    expect(mocks.createOrganization).toHaveBeenCalledWith({ name: 'Northwind Labs', slug: 'northwind-labs' });
+    expect(mocks.postOrganization).toHaveBeenCalledWith({ name: 'Northwind Labs', slug: 'northwind-labs' });
     await userEvent.click(await screen.findByRole('button', { name: 'Pay $50.00 and create' }));
     await waitFor(() => expect(mocks.push).toHaveBeenCalledWith('/orgs/org_nw/settings'), { timeout: 5000 });
     expect(mocks.moveDriveIntoOrg).toHaveBeenCalledWith('d_product', 'org_nw');
@@ -149,7 +149,7 @@ describe('CreateOrganizationDialog', () => {
 
   it('UI-6 (partial): closing at the payment step keeps the chosen drives and invitations for the hub, and says so', async () => {
     localStorage.clear();
-    mocks.createOrganization.mockResolvedValue({ organization, billing: { state: 'payment_required', subscription: sub, payment: { kind: 'confirm_payment', clientSecret: 'cs_test_1' } } });
+    mocks.postOrganization.mockResolvedValue({ organization, billing: { state: 'payment_required', subscription: sub, payment: { kind: 'confirm_payment', clientSecret: 'cs_test_1' } } });
     render(<CreateOrganizationDialog open onOpenChange={vi.fn()} />);
     await fillName();
     await userEvent.click(screen.getByLabelText('Move Product'));
@@ -163,7 +163,7 @@ describe('CreateOrganizationDialog', () => {
   });
 
   it('a taken URL shows the copy for slug_taken and stays on the form', async () => {
-    mocks.createOrganization.mockRejectedValue(new ApiRequestError('raw', 409, { error: 'raw', code: 'slug_taken' }));
+    mocks.postOrganization.mockRejectedValue(new ApiRequestError('raw', 409, { error: 'raw', code: 'slug_taken' }));
     render(<CreateOrganizationDialog open onOpenChange={vi.fn()} />);
     await fillName();
     await userEvent.click(screen.getByRole('button', { name: 'Continue to payment' }));
@@ -177,12 +177,12 @@ describe('CreateOrganizationDialog', () => {
     await userEvent.type(screen.getByLabelText('Invite people'), 'priya, ok@x.io');
     await userEvent.click(screen.getByRole('button', { name: 'Continue to payment' }));
     expect(await screen.findByText('These are not email addresses: priya')).toBeTruthy();
-    expect(mocks.createOrganization).not.toHaveBeenCalled();
+    expect(mocks.postOrganization).not.toHaveBeenCalled();
   });
 
   it('without billing (onprem) it creates and sets up with no payment step', async () => {
     mocks.billingEnabled = false;
-    mocks.createOrganization.mockResolvedValue({ organization, billing: { state: 'not_billed' } });
+    mocks.postOrganization.mockResolvedValue({ organization, billing: { state: 'not_billed' } });
     render(<CreateOrganizationDialog open onOpenChange={vi.fn()} />);
     await fillName();
     expect(screen.queryByText(/a month/)).toBeNull();
@@ -192,7 +192,7 @@ describe('CreateOrganizationDialog', () => {
 
   it('a setup step that fails is listed with its copy instead of being dropped', async () => {
     mocks.billingEnabled = false;
-    mocks.createOrganization.mockResolvedValue({ organization, billing: { state: 'not_billed' } });
+    mocks.postOrganization.mockResolvedValue({ organization, billing: { state: 'not_billed' } });
     mocks.inviteToOrg.mockRejectedValue(new ApiRequestError('raw', 402, { error: 'raw', code: 'seats_full' }));
     render(<CreateOrganizationDialog open onOpenChange={vi.fn()} />);
     await fillName();
@@ -203,7 +203,7 @@ describe('CreateOrganizationDialog', () => {
   });
 
   it('an unreachable payment provider offers to try the subscription again', async () => {
-    mocks.createOrganization.mockResolvedValue({ organization, billing: { state: 'pending' } });
+    mocks.postOrganization.mockResolvedValue({ organization, billing: { state: 'pending' } });
     mocks.startOrgSubscription.mockResolvedValue({ subscription: sub, payment: { kind: 'confirm_payment', clientSecret: 'cs_2' } });
     render(<CreateOrganizationDialog open onOpenChange={vi.fn()} />);
     await fillName();

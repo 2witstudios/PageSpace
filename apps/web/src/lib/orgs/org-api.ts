@@ -130,7 +130,7 @@ export const orgFetcher = <T>(url: string): Promise<T> => fetchJSON<T>(url);
 // Writes
 // ---------------------------------------------------------------------------
 
-export const createOrganization = (body: { name: string; slug: string }) =>
+export const postOrganization = (body: { name: string; slug: string }) =>
   post<CreateOrgResponse>('/api/orgs', body);
 
 export const startOrgSubscription = (orgId: string) =>
@@ -146,7 +146,7 @@ export const inviteToOrg = (orgId: string, body: { email: string; role?: 'ADMIN'
 
 export const leaveOrganization = (orgId: string) => post<{ left: true }>(`/api/orgs/${orgId}/leave`);
 
-export const updateOrganization = (orgId: string, body: { name?: string; slug?: string }) =>
+export const patchOrganization = (orgId: string, body: { name?: string; slug?: string }) =>
   patch<{ organization: Organization }>(orgKeys.detail(orgId), body);
 
 export const revokeOrgInvitation = (orgId: string, invitationId: string) =>

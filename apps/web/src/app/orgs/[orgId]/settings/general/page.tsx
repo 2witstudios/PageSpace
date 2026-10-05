@@ -11,7 +11,7 @@ import { useOrgAdminRead } from '@/hooks/useOrgs';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { OrgMark } from '@/components/orgs/OrgMark';
 import { OrgSettingsShell, type OrgSettingsContext } from '@/components/orgs/OrgSettingsShell';
-import { isOrgKey, orgKeys, updateOrganization, type OrgMember } from '@/lib/orgs/org-api';
+import { isOrgKey, orgKeys, patchOrganization, type OrgMember } from '@/lib/orgs/org-api';
 import { orgErrorMessage } from '@/lib/orgs/org-error-copy';
 import { isValidOrgSlug } from '@/lib/orgs/org-slug';
 
@@ -48,7 +48,7 @@ function GeneralBody({ orgId, org, role }: OrgSettingsContext) {
       const body: { name?: string; slug?: string } = {};
       if (name.trim() !== org.organization.name) body.name = name.trim();
       if (slug.trim() !== org.organization.slug) body.slug = slug.trim();
-      await updateOrganization(orgId, body);
+      await patchOrganization(orgId, body);
       useEditingStore.getState().endEditing(EDITING_ID);
       toast.success('Saved');
       void mutate((k) => isOrgKey(orgId, k) || k === orgKeys.mine());
