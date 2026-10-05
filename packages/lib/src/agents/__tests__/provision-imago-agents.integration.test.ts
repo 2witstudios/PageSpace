@@ -364,12 +364,14 @@ describe('provisionHomeDriveIfNeeded → Imago agents (real Postgres)', () => {
 
   // Concurrent first sign-ins of DIFFERENT users all allocate from the "home"
   // publish-subdomain family. The loser of a candidate hits the unique index
-  // inside its Home transaction; the allocator's retry must survive that rather
-  // than fail on an aborted transaction (the agent provisioning lengthens the
-  // Home transaction, which widens this window).
-  it('given concurrent first sign-ins of different users, should provision every Home drive', async () => {
+  // inside its Home transaction; the allocator's retry must survive that (a
+  // savepoint, not an aborted transaction) and must not keep losing to rivals
+  // for the next sequential number (it leaves the family after a conflict).
+  // 16 is above the old 5-attempt budget with room to spare, and above the
+  // default pool of 10, so transactions also queue for connections.
+  it('given 16 concurrent first sign-ins of different users, should provision every Home drive', async () => {
     if (!dbAvailable) return;
-    const newUsers = await Promise.all([1, 2, 3, 4].map(() => factories.createUser()));
+    const newUsers = await factories.createUsers(16);
 
     const results = await Promise.allSettled(newUsers.map((user) => provisionHomeDriveIfNeeded(user.id)));
 

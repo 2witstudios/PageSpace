@@ -1,8 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import {
   resolveUniquePublishSubdomain,
+  randomSuffixedPublishSubdomain,
+  validatePublishSubdomain,
   MAX_SUBDOMAIN_LENGTH,
 } from '../subdomain'
+import { subdomainCollisionPrefix } from '../../services/subdomain-allocation'
 
 describe('resolveUniquePublishSubdomain', () => {
   it('given a free base, should return the base unchanged', () => {
@@ -102,3 +105,34 @@ describe('resolveUniquePublishSubdomain', () => {
 function validateShape(s: string): boolean {
   return /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(s)
 }
+
+describe('randomSuffixedPublishSubdomain', () => {
+  it('given a base and a suffix, should return base-suffix', () => {
+    expect(randomSuffixedPublishSubdomain('Home', [], () => 'k3x9q2m7')).toBe('home-k3x9q2m7')
+  })
+
+  it('given the default generator, should append 8 lowercase alphanumerics and validate', () => {
+    const candidate = randomSuffixedPublishSubdomain('home', [])
+    expect(candidate).toMatch(/^home-[a-z0-9]{8}$/)
+    expect(validatePublishSubdomain(candidate).valid).toBe(true)
+  })
+
+  it('given a base at the length limit, should clamp it so the candidate fits and keeps the collision prefix', () => {
+    const long = 'a'.repeat(80)
+    const candidate = randomSuffixedPublishSubdomain(long, [], () => 'k3x9q2m7')
+    expect(candidate.length).toBeLessThanOrEqual(MAX_SUBDOMAIN_LENGTH)
+    expect(candidate.endsWith('-k3x9q2m7')).toBe(true)
+    expect(candidate.startsWith(subdomainCollisionPrefix(long))).toBe(true)
+    expect(validatePublishSubdomain(candidate).valid).toBe(true)
+  })
+
+  it('given a drawn candidate that is already taken, should draw again', () => {
+    const draws = ['taken001', 'free0002']
+    const candidate = randomSuffixedPublishSubdomain('home', ['home-taken001'], () => draws.shift() ?? 'zzzzzzz9')
+    expect(candidate).toBe('home-free0002')
+  })
+
+  it('given an empty base, should fall back to the default base', () => {
+    expect(randomSuffixedPublishSubdomain('---', [], () => 'k3x9q2m7')).toBe('drive-k3x9q2m7')
+  })
+})
