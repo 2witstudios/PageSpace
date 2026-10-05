@@ -12,6 +12,7 @@ import { OrgMark } from '@/components/orgs/OrgMark';
 import { OrgBadge, OrgRoleBadge } from '@/components/orgs/OrgBadge';
 import { LeaveOrgDialog } from '@/components/orgs/LeaveOrgDialog';
 import { OrgBillingBanner } from '@/components/orgs/OrgBillingBanner';
+import { PendingSetupCard } from '@/components/orgs/PendingSetupCard';
 import { ORG_HUB_ICONS } from '@/components/orgs/org-hub-icons';
 import { orgHubSections, type OrgHubRow } from '@/lib/orgs/org-hub';
 import { orgErrorMessage } from '@/lib/orgs/org-error-copy';
@@ -115,6 +116,7 @@ export default function OrgSettingsPage() {
       </div>
 
       <OrgBillingBanner orgId={orgId} orgName={name} notice={org.billingNotice} onReactivated={() => void refreshOrg()} />
+      {orgRoleAtLeast(role, 'ADMIN') ? <PendingSetupCard orgId={orgId} orgName={name} notice={org.billingNotice} onDone={() => void refreshOrg()} /> : null}
 
       <div className="space-y-8">
         {sections.map((section) => (

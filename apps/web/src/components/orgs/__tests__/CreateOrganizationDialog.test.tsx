@@ -15,10 +15,12 @@ const mocks = vi.hoisted(() => ({
   startOrgSubscription: vi.fn(),
   orgFetcher: vi.fn(),
   billingEnabled: true,
+  toastInfo: vi.fn(),
   drives: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: mocks.push }) }));
+vi.mock('sonner', () => ({ toast: { info: mocks.toastInfo, success: vi.fn(), error: vi.fn() } }));
 vi.mock('next-themes', () => ({ useTheme: () => ({ resolvedTheme: 'light' }) }));
 vi.mock('@/hooks/useAuth', () => ({ useAuth: () => ({ user: { id: 'u_me', email: 'jono@northwind.com' } }) }));
 vi.mock('@/hooks/useDrive', () => ({
@@ -144,6 +146,21 @@ describe('CreateOrganizationDialog', () => {
     expect(mocks.moveDriveIntoOrg).toHaveBeenCalledWith('d_product', 'org_nw');
     expect(mocks.inviteToOrg.mock.calls.map((c) => c[1].email)).toEqual(['priya@northwind.com', 'dana@northwind.com', 'sam@x.io']);
   }, 10_000);
+
+  it('UI-6 (partial): closing at the payment step keeps the chosen drives and invitations for the hub, and says so', async () => {
+    localStorage.clear();
+    mocks.createOrganization.mockResolvedValue({ organization, billing: { state: 'payment_required', subscription: sub, payment: { kind: 'confirm_payment', clientSecret: 'cs_test_1' } } });
+    render(<CreateOrganizationDialog open onOpenChange={vi.fn()} />);
+    await fillName();
+    await userEvent.click(screen.getByLabelText('Move Product'));
+    await waitFor(() => expect((screen.getByLabelText('Invite people') as HTMLTextAreaElement).value).toContain('dana'));
+    await userEvent.click(screen.getByRole('button', { name: 'Continue to payment' }));
+    await screen.findByText('Pay for Northwind Labs');
+    await userEvent.keyboard('{Escape}');
+    expect(mocks.push).toHaveBeenCalledWith('/orgs/org_nw/settings');
+    expect(JSON.parse(localStorage.getItem('pagespace.orgSetup.org_nw') ?? 'null')).toMatchObject({ driveIds: ['d_product'], invites: ['priya@northwind.com', 'dana@northwind.com'] });
+    expect(mocks.toastInfo).toHaveBeenCalledWith(expect.stringContaining('saved'));
+  });
 
   it('a taken URL shows the copy for slug_taken and stays on the form', async () => {
     mocks.createOrganization.mockRejectedValue(new ApiRequestError('raw', 409, { error: 'raw', code: 'slug_taken' }));

@@ -17,17 +17,17 @@ import { useDriveStore } from '@/hooks/useDrive';
 import { useMyOrgs } from '@/hooks/useOrgs';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { isBillingEnabled } from '@/lib/deployment-mode';
+import { toast } from 'sonner';
 import {
   createOrganization,
   fetchDriveMemberEmails,
-  inviteToOrg,
-  moveDriveIntoOrg,
   orgFetcher,
   orgKeys,
-  setOrgSeatAutoAdd,
   startOrgSubscription,
   type OrgDetail,
 } from '@/lib/orgs/org-api';
+import { clearPendingSetup, loadPendingSetup, savePendingSetup } from '@/lib/orgs/pending-setup';
+import { runOrgSetup } from '@/lib/orgs/run-org-setup';
 import {
   createOrgPlanNote,
   createOrgSeatCount,
@@ -36,8 +36,6 @@ import {
   nextStepAfterCreate,
   orgReadyForSetup,
   parseInviteEmails,
-  planOrgSetup,
-  type OrgSetupTask,
 } from '@/lib/orgs/create-org-flow';
 import { orgErrorMessage } from '@/lib/orgs/org-error-copy';
 import { isValidOrgSlug, slugFromOrgName } from '@/lib/orgs/org-slug';
@@ -112,8 +110,12 @@ export function CreateOrganizationDialog({ open, onOpenChange }: CreateOrganizat
   };
 
   const close = (next: boolean) => {
-    // Once the org exists, closing goes to it rather than abandoning it: it resumes from the hub.
+    // Once the org exists, closing goes to it rather than abandoning it: it resumes from the hub, where the
+    // saved setup plan (drives, invitations) is offered once the org is paid (review P2-7).
     if (!next && state.step !== 'details' && state.step !== 'done') {
+      if (loadPendingSetup(state.orgId)) {
+        toast.info('Your chosen drives and invitations are saved. Finish setup from the organization page once it is paid.');
+      }
       router.push(`/orgs/${state.orgId}/settings`);
     }
     if (!next) reset();
@@ -142,7 +144,9 @@ export function CreateOrganizationDialog({ open, onOpenChange }: CreateOrganizat
     try {
       const created = await createOrganization({ name: name.trim(), slug: effectiveSlug });
       const orgId = created.organization.id;
-      setNames(Object.fromEntries(ownDrives.map((d) => [d.id, d.name])));
+      const driveNames = Object.fromEntries(ownDrives.map((d) => [d.id, d.name]));
+      setNames(driveNames);
+      savePendingSetup(orgId, { driveIds: selected, invites: parsed.valid, selfEmail, driveNames });
       void refreshMyOrgs();
       const next = nextStepAfterCreate(created.billing);
       if (next.step === 'payment') {
@@ -208,20 +212,9 @@ export function CreateOrganizationDialog({ open, onOpenChange }: CreateOrganizat
     const { orgId } = state;
     let cancelled = false;
     const run = async () => {
-      const tasks = planOrgSetup({ driveIds: selected, invites: parsed.valid, selfEmail, includedSeats: orgPlanQuote(0).includedSeats });
-      const failures: string[] = [];
-      const label = (task: OrgSetupTask) =>
-        task.kind === 'move_drive' ? `Moving ${names[task.driveId] ?? 'a drive'}` : task.kind === 'invite' ? `Inviting ${task.email}` : 'Turning on automatic seats';
-      for (const task of tasks) {
-        if (cancelled) return;
-        try {
-          if (task.kind === 'move_drive') await moveDriveIntoOrg(task.driveId, orgId);
-          else if (task.kind === 'enable_auto_seats') await setOrgSeatAutoAdd(orgId, true);
-          else await inviteToOrg(orgId, { email: task.email });
-        } catch (err) {
-          failures.push(`${label(task)}: ${orgErrorMessage(err, 'it did not go through.')}`);
-        }
-      }
+      const plan = loadPendingSetup(orgId) ?? { driveIds: selected, invites: parsed.valid, selfEmail, driveNames: names };
+      const failures = await runOrgSetup(orgId, plan, () => cancelled);
+      if (!cancelled) clearPendingSetup(orgId);
       if (cancelled) return;
       void fetchDrives(false, true);
       void refreshMyOrgs();
