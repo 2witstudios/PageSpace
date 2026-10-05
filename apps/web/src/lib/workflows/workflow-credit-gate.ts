@@ -6,6 +6,7 @@ import { automationSpend, personTriggeredSpend } from '@pagespace/lib/billing/sp
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { CREDIT_HOLD_ESTIMATE_CENTS, MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import type { GateReason } from '@pagespace/lib/billing/credit-core';
+import { creditDeniedError } from '@pagespace/lib/billing/automation-run-record';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { resolveSteps, hasAiStep, countAiSteps } from './core/step-plan';
 import type { RunAdmission, RunCreditSpend, WorkflowExecutionInput } from './workflow-executor';
@@ -29,10 +30,10 @@ type GatedRunInput = Pick<WorkflowExecutionInput, 'driveId' | 'createdBy' | 'ste
 /**
  * The run error for a denied gate — the same text the trigger executors return. A refused
  * source adds why, so a skipped automation's run row says its drive wallet was empty,
- * paused, or missing (SPEND-6).
+ * paused, or missing (SPEND-6). Written and read back by one lib module (automation-run-record),
+ * which the workflow and trigger surfaces use to show why a run was skipped.
  */
-export const creditDeniedError = (reason: GateReason, refusal?: SpendRefusal): string =>
-  refusal ? `AI credit gate denied: ${reason} (${refusal.reason})` : `AI credit gate denied: ${reason}`;
+export { creditDeniedError };
 
 /**
  * Credit gate for a workflow run, taken BEFORE executeWorkflow builds a model.

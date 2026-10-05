@@ -142,3 +142,18 @@ export function spendFallbackCopy(input: { from: unknown; to: unknown; fromLabel
   const why = input.fromStatus === 'over' ? 'was empty' : input.fromStatus === 'paused' ? 'is paused' : "couldn't cover this";
   return `Used ${FALLBACK_TO[to]} because ${fromName} ${why}.`;
 }
+
+/**
+ * Who an automation spends as (Spec SPEND-6, D-OW-34): a scheduled run spends the drive's wallet
+ * as its creator, under the creator's caps and fallback; a channel mention or a manual Run is the
+ * spend of whoever triggered it. For the workflow and trigger surfaces.
+ */
+export function automationSpendCopy(input: { creatorName: string | null; walletLabel: string | null }): { badge: string; line: string | null; detail: string } {
+  const firstName = input.creatorName?.trim().split(/\s+/)[0] ?? null;
+  const wallet = input.walletLabel ?? "the drive's wallet";
+  return {
+    badge: firstName ? `As ${firstName}` : 'As its creator',
+    line: input.creatorName ? `Created by ${input.creatorName}` : null,
+    detail: `Each scheduled run spends from ${wallet} as ${input.creatorName ?? 'its creator'}, under their caps and fallback. A channel mention or a manual Run counts against whoever triggered it. If no source can pay, the run is skipped and logged.`,
+  };
+}

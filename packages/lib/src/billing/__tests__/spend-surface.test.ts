@@ -5,6 +5,7 @@ import {
   spendChoiceAmount,
   composerStripModel,
   spendFallbackCopy,
+  automationSpendCopy,
   type SurfaceChoice,
   type SurfaceDecision,
 } from '../spend-surface';
@@ -139,5 +140,22 @@ describe('spendFallbackCopy: the fallback notice', () => {
   it('SPEND-4 (partial) a notice that moved nowhere, or a malformed one, says nothing', () => {
     expect(spendFallbackCopy({ from: 'own_credits', to: 'own_credits', fromLabel: null, fromStatus: null })).toBeNull();
     expect(spendFallbackCopy({ from: 'nope', to: 'own_credits', fromLabel: null, fromStatus: null })).toBeNull();
+  });
+});
+
+describe('automationSpendCopy: who an automation spends as', () => {
+  it('SPEND-6 (partial) a scheduled run spends as its creator, under their caps; a mention or manual Run as whoever triggered it (D-OW-34)', () => {
+    expect(automationSpendCopy({ creatorName: 'Priya Nair', walletLabel: 'Product wallet' })).toEqual({
+      badge: 'As Priya',
+      line: 'Created by Priya Nair',
+      detail: 'Each scheduled run spends from Product wallet as Priya Nair, under their caps and fallback. A channel mention or a manual Run counts against whoever triggered it. If no source can pay, the run is skipped and logged.',
+    });
+  });
+
+  it('SPEND-6 (partial) an unknown creator or wallet still reads as a sentence', () => {
+    expect(automationSpendCopy({ creatorName: null, walletLabel: null }).detail).toBe(
+      "Each scheduled run spends from the drive's wallet as its creator, under their caps and fallback. A channel mention or a manual Run counts against whoever triggered it. If no source can pay, the run is skipped and logged.",
+    );
+    expect(automationSpendCopy({ creatorName: null, walletLabel: null }).badge).toBe('As its creator');
   });
 });

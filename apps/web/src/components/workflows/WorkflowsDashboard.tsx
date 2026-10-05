@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { post, patch } from '@/lib/auth/auth-fetch';
 import { useWorkflows } from '@/hooks/useWorkflows';
+import { useAutomationSpendContext } from '@/hooks/useAutomationSpendContext';
 import { WorkflowList } from './WorkflowList';
 import { WorkflowForm, type WorkflowFormData } from './WorkflowForm';
 import { synthesizeSteps } from './WorkflowStepsEditor';
@@ -19,6 +20,7 @@ interface WorkflowsDashboardProps {
 
 export function WorkflowsDashboard({ driveId, driveName }: WorkflowsDashboardProps) {
   const { workflows, isLoading, mutate, runWorkflow, toggleWorkflow, deleteWorkflow } = useWorkflows(driveId);
+  const spendContext = useAutomationSpendContext(driveId, driveName);
   const [formOpen, setFormOpen] = useState(false);
   const [editingWorkflow, setEditingWorkflow] = useState<Workflow | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Workflow | null>(null);
@@ -110,6 +112,7 @@ export function WorkflowsDashboard({ driveId, driveName }: WorkflowsDashboardPro
           ) : (
             <WorkflowList
               workflows={workflows}
+              spendContext={spendContext}
               onRun={handleRun}
               onToggle={handleToggle}
               onEdit={handleEdit}
