@@ -18,11 +18,14 @@ import { walletConsumerCaps, wallets } from '@pagespace/db/schema/wallets';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { listOrgSeatCaps } from '../drive-wallet-service';
+import { listSpendChoices } from '../../billing/spend-resolution';
+import { drives } from '@pagespace/db/schema/core';
+import { driveMembers } from '@pagespace/db/schema/members';
 
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
 let ok = false;
-const w = { orgId: '', poolId: '', jono: '', marcus: '', lena: '', userIds: [] as string[], emptyOrgId: '' };
+const w = { orgId: '', poolId: '', jono: '', marcus: '', lena: '', userIds: [] as string[], emptyOrgId: '', driveId: '' };
 
 describe('org seat caps read model (real Postgres)', () => {
   beforeAll(async () => {
@@ -58,6 +61,9 @@ describe('org seat caps read model (real Postgres)', () => {
       userId: marcus.id, walletId: poolWallet.id, entryType: 'usage', bucket: 'monthly', amountCents: -96, chargeMillicents: 96_000, consumeStatus: 'applied', spendKind: 'ai',
     });
     await db.insert(creditHolds).values({ userId: marcus.id, walletId: poolWallet.id, estCents: 10, spendKind: 'ai', expiresAt: new Date(Date.now() + 3_600_000) });
+    const product = await factories.createDrive(jono.id, { name: 'Product', slug: `p-${createId()}`, orgId: org.id, orgVisibility: 'OPEN' });
+    w.driveId = product.id;
+    await factories.createDriveMember(product.id, marcus.id, { source: 'org' });
     const [empty] = await db.insert(organizations).values({ name: 'No Pool', slug: `np-${createId()}`, ownerId: jono.id }).returning();
     w.emptyOrgId = empty.id;
     await db.insert(orgMembers).values({ orgId: empty.id, userId: jono.id, role: 'OWNER' });
@@ -68,6 +74,8 @@ describe('org seat caps read model (real Postgres)', () => {
       await db.delete(creditHolds).where(inArray(creditHolds.userId, w.userIds));
       await db.delete(creditLedger).where(inArray(creditLedger.userId, w.userIds));
       await db.delete(walletConsumerCaps).where(eq(walletConsumerCaps.walletId, w.poolId));
+      await db.delete(driveMembers).where(eq(driveMembers.driveId, w.driveId));
+      await db.delete(drives).where(eq(drives.id, w.driveId));
       await db.delete(wallets).where(eq(wallets.id, w.poolId));
       await db.delete(orgMembers).where(inArray(orgMembers.orgId, [w.orgId, w.emptyOrgId]));
       await db.delete(orgSubscriptions).where(eq(orgSubscriptions.orgId, w.orgId));
@@ -96,6 +104,16 @@ describe('org seat caps read model (real Postgres)', () => {
       userId: w.jono, displayName: 'Jono Woodall',
       dailyCapCents: null, monthlyCapCents: null, monthlyLimitCents: 150, monthlyRemainingCents: 150, dailyRemainingCents: null,
     });
+  });
+
+  it('WAL-7 (partial): the list agrees with the gate: Marcus\'s seat choice remaining is the smaller of his monthly and daily remaining', async () => {
+    if (!ok) return;
+    const read = await listOrgSeatCaps(w.orgId);
+    const mine = read.seats.find((s) => s.userId === w.marcus);
+    const choices = await listSpendChoices(w.marcus, w.driveId);
+    const seat = choices.find((c) => c.source === 'seat_allowance');
+    expect(seat, JSON.stringify(choices)).toBeDefined();
+    expect(seat?.remainingCents).toBe(Math.min(mine?.monthlyRemainingCents ?? Infinity, mine?.dailyRemainingCents ?? Infinity));
   });
 
   it('an org with no pool yet has no seat figures to show', async () => {

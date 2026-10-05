@@ -30,14 +30,13 @@ const credits = (cents: number) => `${formatCreditCount(cents)} credits`;
 
 export function poolFigures(split: OrgPoolSplit) {
   const refill = formatOrgShortDate(split.periodEnd);
-  const seatAllocation = split.seats.memberCount * split.seats.allowanceCents;
   const driveAllocation = split.driveWallets.reduce((sum, w) => sum + w.allocationCents, 0);
   const driveSpent = split.driveWallets.reduce((sum, w) => sum + w.spentCents, 0);
   const n = split.driveWallets.length;
   return {
     unallocated: { value: credits(split.unallocatedCents), label: refill ? `Unallocated · refills on ${refill}` : 'Unallocated' },
     seats: {
-      value: credits(seatAllocation),
+      value: credits(split.seats.allocatedCents),
       label: `Allocated to seats · ${split.seats.memberCount} × ${formatCreditCount(split.seats.allowanceCents)} credits a month · ${credits(split.seats.spentCents)} spent`,
     },
     drives: { value: credits(driveAllocation), label: `Allocated to drive wallets · ${n} ${n === 1 ? 'drive' : 'drives'} · ${credits(driveSpent)} spent` },

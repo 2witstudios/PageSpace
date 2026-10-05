@@ -41,7 +41,7 @@ describe('poolFigures', () => {
   it('UI-7 (partial) UI-12 (partial): the pool split as credit counts, never dollars', () => {
     const figures = poolFigures({
       walletId: 'w', availableCents: 4_500, unallocatedCents: 4_308, periodEnd: '2026-10-01T00:00:00Z',
-      seats: { memberCount: 12, allowanceCents: 150, spentCents: 1_152 },
+      seats: { memberCount: 12, allowanceCents: 150, allocatedCents: 1_800, spentCents: 1_152 },
       driveWallets: [
         { driveId: 'a', driveName: 'Product', walletId: 'wa', allocationCents: 1_200, spentCents: 1_008, status: 'active' },
         { driveId: 'b', driveName: 'Engineering', walletId: 'wb', allocationCents: 900, spentCents: 1_233, status: 'over' },

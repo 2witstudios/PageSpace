@@ -88,7 +88,9 @@ function MembersPageBody({ orgId, orgName, role, lapsed }: OrgSettingsContext) {
   const refresh = () => void mutate((key) => isOrgKey(orgId, key));
   const now = Date.now();
   const pending = useMemo(() => liveInvitations(invitations ?? [], now), [invitations, now]);
-  const counts = memberTabCounts({ members: members ?? [], pending: pending.length, guests: guests?.length ?? 0 });
+  // SEAT-3: the server's count of seat-reserving invitations (one source); the list is only for the rows.
+  const pendingCount = seats?.pendingInvites ?? pending.length;
+  const counts = memberTabCounts({ members: members ?? [], pending: pendingCount, guests: guests?.length ?? 0 });
   const shown = filterMembers(members ?? [], tab, query);
   const activityById = new Map((activity ?? []).map((a) => [a.userId, a]));
   const capsById = new Map((seatCaps?.seats ?? []).map((s) => [s.userId, s]));
@@ -119,7 +121,7 @@ function MembersPageBody({ orgId, orgName, role, lapsed }: OrgSettingsContext) {
         <Stat
           value={String(seats?.members ?? members?.length ?? 0)}
           suffix={showBilling && seats ? `of ${seats.purchased} seats` : 'members'}
-          label={`Seats in use · ${pending.length} reserved by pending invites`}
+          label={`Seats in use · ${pendingCount} reserved by pending invites`}
         />
         <Stat value={String(guests?.length ?? 0)} label="Guests · no seat, limited to the drives they were invited to" />
         <Stat value={String(counts.admins)} label="Admins · can manage every org drive and these settings" />

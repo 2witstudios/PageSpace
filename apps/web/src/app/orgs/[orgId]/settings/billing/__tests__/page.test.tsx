@@ -44,7 +44,7 @@ beforeEach(() => {
   mocks.reads = {
     '/api/orgs/org_nw/pool': {
       walletId: 'w_pool', availableCents: 4_500, unallocatedCents: 4_308, periodEnd: '2026-10-01T00:00:00Z',
-      seats: { memberCount: 12, allowanceCents: 150, spentCents: 1_152 },
+      seats: { memberCount: 12, allowanceCents: 150, allocatedCents: 1_800, spentCents: 1_152 },
       driveWallets: [
         { driveId: 'd_eng', driveName: 'Engineering', walletId: 'w_e', allocationCents: 900, spentCents: 1_233, status: 'over' },
         { driveId: 'd_cr', driveName: 'Customer Research', walletId: 'w_c', allocationCents: 600, spentCents: 567, status: 'paused' },

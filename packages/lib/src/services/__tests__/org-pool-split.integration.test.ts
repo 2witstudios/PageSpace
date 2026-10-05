@@ -56,6 +56,8 @@ describe('org pool split read model (real Postgres)', () => {
     await db.insert(creditLedger).values([
       { userId: marcus.id, walletId: poolWallet.id, entryType: 'usage', bucket: 'monthly', amountCents: -96, chargeMillicents: 96_000, consumeStatus: 'applied', spendKind: 'ai' },
       { userId: jono.id, walletId: poolWallet.id, entryType: 'usage', bucket: 'monthly', amountCents: -19, chargeMillicents: 19_000, consumeStatus: 'applied', spendKind: 'ai' },
+      // A reconcile refund larger than its call nets that call to zero, never below (the gate's netting).
+      { userId: marcus.id, walletId: poolWallet.id, entryType: 'adjustment', bucket: 'monthly', amountCents: 0, chargeMillicents: -999_000, consumeStatus: 'applied', spendKind: 'ai' },
       // Last period's spend never counts against this one.
       { userId: jono.id, walletId: poolWallet.id, entryType: 'usage', bucket: 'monthly', amountCents: -500, chargeMillicents: 500_000, consumeStatus: 'applied', spendKind: 'ai', createdAt: new Date(Date.now() - 40 * 86_400_000) },
     ]);
@@ -86,7 +88,9 @@ describe('org pool split read model (real Postgres)', () => {
       // Product still has 192 of its allocation outstanding; Engineering is spent past its own.
       unallocatedCents: 4_500 - 192,
       periodEnd: periodEnd.toISOString(),
-      seats: { memberCount: 2, allowanceCents: 150, spentCents: 115 },
+      // Seat spend is the gate's own figure (loadSeatCapFacts: per call, windowed by the seat period), and
+      // the allocation to seats is served, not computed by the page (review P2-3, P2-4).
+      seats: { memberCount: 2, allowanceCents: 150, allocatedCents: 300, spentCents: 115 },
       drivesWithoutWallet: [{ id: w.fin, name: 'Finance' }],
     });
     expect(split.driveWallets).toEqual([
@@ -97,6 +101,6 @@ describe('org pool split read model (real Postgres)', () => {
 
   it('an org with no pool yet reports no pool', async () => {
     if (!ok) return;
-    expect(await getOrgPoolSplit(w.emptyOrgId)).toEqual({ walletId: null, availableCents: 0, unallocatedCents: 0, periodEnd: null, seats: { memberCount: 0, allowanceCents: 100, spentCents: 0 }, driveWallets: [], drivesWithoutWallet: [] });
+    expect(await getOrgPoolSplit(w.emptyOrgId)).toEqual({ walletId: null, availableCents: 0, unallocatedCents: 0, periodEnd: null, seats: { memberCount: 0, allowanceCents: 100, allocatedCents: 0, spentCents: 0 }, driveWallets: [], drivesWithoutWallet: [] });
   });
 });

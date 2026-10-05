@@ -62,8 +62,10 @@ export default function OrgSettingsPage() {
   const { org, isLoading, error, mutate: refreshOrg } = useOrg(orgId);
   const { mutate: refreshMyOrgs } = useMyOrgs();
   const role = org?.viewer.role;
-  const counts = useOrgHubCounts(orgId, role);
+  const hubCounts = useOrgHubCounts(orgId, role);
   const seats = useOrgSeats(orgId, role, showBilling).data?.seats;
+  // SEAT-3: pending invitations come from the server's seat count wherever seats are loaded (one source).
+  const counts = { ...hubCounts, pendingInvites: seats?.pendingInvites ?? hubCounts.pendingInvites };
   const [leaveOpen, setLeaveOpen] = useState(false);
   useOrgRealtime(orgId);
 

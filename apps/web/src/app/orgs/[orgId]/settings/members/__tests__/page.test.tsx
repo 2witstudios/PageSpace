@@ -89,6 +89,14 @@ describe('Members & seats', () => {
     expect(within(row('Marcus Oyelaran')).getByText('3 drives')).toBeTruthy();
   });
 
+  it('SEAT-3 (partial): the pending count is the server\'s seats.pendingInvites, not a client count (one source)', () => {
+    // The seats read says 1 pending; the invitations list holds one live row too, so make them differ.
+    (mocks.reads['/api/orgs/org_nw/invitations'] as { invitations: unknown[] }).invitations.push({ id: 'inv_old', orgId: 'org_nw', email: 'x@y.io', role: 'MEMBER', invitedBy: null, expiresAt: future, acceptedAt: null, createdAt: '' });
+    render(<OrgMembersPage />);
+    expect(screen.getByText('Seats in use · 1 reserved by pending invites')).toBeTruthy();
+    expect(screen.getByRole('tab', { name: /Pending/ }).textContent).toContain('1');
+  });
+
   it('UI-7 (partial): a pending invitation shows who invited, when it expires and the reserved seat; guests list their drives', () => {
     render(<OrgMembersPage />);
     expect(screen.getByText('Invited by Priya Nair · expires in 6 days · seat reserved')).toBeTruthy();
