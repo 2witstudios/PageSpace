@@ -247,6 +247,35 @@ export function suspensionKindsChanged(before: OrgPolicies, after: OrgPolicies):
 }
 
 // ---------------------------------------------------------------------------
+// Blocked, not suspended: what a change forbids that has no suspension (POL-1)
+// ---------------------------------------------------------------------------
+
+/**
+ * What a policy can newly forbid that is NOT suspended: these are stopped where they are used (the app and env
+ * routes, the agent resolver, the autonomy gates, the model gate), so nothing is parked or marked. A change that
+ * forbids them still lists the existing items it affects in the audit log, so an Owner or Admin can see what the
+ * change reached (Spec POL-1 "listed in the audit log").
+ */
+export const BLOCKED_KINDS = ['publishedApps', 'persistentEnvironments', 'crossDriveAgents', 'agentsAutonomous', 'models'] as const;
+export type BlockedKind = (typeof BLOCKED_KINDS)[number];
+
+/** True when `after` allows less than `before`: something on the old list (null = everything) is not on the new. */
+const narrowed = (before: readonly string[] | null, after: readonly string[] | null): boolean =>
+  after !== null && (before === null || before.some((v) => !after.includes(v)));
+
+/** The blocked kinds a change from `before` to `after` newly forbids, in BLOCKED_KINDS order. */
+export function newlyBlockedKinds(before: OrgPolicies, after: OrgPolicies): BlockedKind[] {
+  const turnedOff = (key: 'publishedApps' | 'persistentEnvironments' | 'crossDriveAgents' | 'agentsAutonomous') => before[key] && !after[key];
+  const blocked: BlockedKind[] = [];
+  if (turnedOff('publishedApps')) blocked.push('publishedApps');
+  if (turnedOff('persistentEnvironments')) blocked.push('persistentEnvironments');
+  if (turnedOff('crossDriveAgents')) blocked.push('crossDriveAgents');
+  if (turnedOff('agentsAutonomous')) blocked.push('agentsAutonomous');
+  if (narrowed(before.modelAllowlist, after.modelAllowlist) || narrowed(before.providerAllowlist, after.providerAllowlist)) blocked.push('models');
+  return blocked;
+}
+
+// ---------------------------------------------------------------------------
 // POL-7: what the credit gate reads
 // ---------------------------------------------------------------------------
 

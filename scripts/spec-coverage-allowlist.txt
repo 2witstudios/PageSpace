@@ -80,6 +80,16 @@ ORG-4
 # ORG-5 (one shared org permission function used by web routes, CLI, and MCP): B3 routes all go
 # through requireOrgRole, titled "ORG-5 (partial)"; CLI and MCP use it in Wave G (X-1).
 ORG-5
+# POL-1 (policies stored once per org and read through one function, no route reads the org row directly; a
+# change applies immediately; anything newly forbidden is suspended, not deleted, and listed in the audit log)
+# re-added per Review 3+4 (page v3pbwr7hy45eu1t2w6qbxm3e, P2-7 "removed but not proven"): the only full claim
+# was the policy seam test, and mutant M11 (a route reading `policies` off findOrganizationById's whole row)
+# survived it. ow-policy-integrity makes the repository return org records without `policies`, extends the seam
+# to whole-row reads and to `policies` read off an org record (M11 now red), and lists in an org.policy.blocked
+# audit row what a change forbids that cannot be suspended (apps, envs, cross-drive agents, autonomy, models).
+# Still unproven: the audit rows list at most 200 ids per change (the full suspended set is listed by its
+# endpoint; the blocked set only by count), so titles stay "POL-1 (partial)" until a reviewer agrees.
+POL-1
 # POL-2 (guests from outside: off, admins approve, on) re-added per Review 3+4 (page v3pbwr7hy45eu1t2w6qbxm3e,
 # P1-3 "removed but not proven"): with guests off an outsider still got in through a page share-invite, a direct
 # page grant (grantPagePermission) and page-invite acceptance, none of which asked decideOrgDriveAdmission, and

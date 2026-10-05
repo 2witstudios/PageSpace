@@ -242,6 +242,9 @@ describe('every org mutation writes its event', () => {
     if (!link.ok) throw new Error('share link');
     expect((await updateOrgPolicies({ orgId, actorId: jono.id, patch: { publicShareLinks: false } })).ok).toBe(true);
     expect((await updateOrgPolicies({ orgId, actorId: jono.id, patch: { publicShareLinks: true, guests: 'approve' } })).ok).toBe(true);
+    // POL-1: a page agent on a model the org then stops allowing is listed as blocked (org.policy.blocked).
+    await factories.createPage(productId, { type: 'AI_CHAT', aiProvider: 'openai', aiModel: 'gpt-old' });
+    expect((await updateOrgPolicies({ orgId, actorId: jono.id, patch: { modelAllowlist: ['gpt-new'] } })).ok).toBe(true);
     expect(await redeemDriveShareLink(ctxFor(chris.id), link.data.rawToken)).toMatchObject({ ok: false, error: 'PENDING_APPROVAL' });
 
     // ── wallets, donations, the pool refill ───────────────────────────────────────

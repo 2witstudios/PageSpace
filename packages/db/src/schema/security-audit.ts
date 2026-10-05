@@ -129,6 +129,9 @@ export type SecurityEventType =
   | 'org.policy.changed'
   | 'org.policy.suspended'
   | 'org.policy.restored'
+  // POL-1: what a change newly forbids that is blocked where it is used rather than suspended (apps, envs,
+  // cross-drive agents, autonomous runs, models), listed so an Owner or Admin sees what the change reached.
+  | 'org.policy.blocked'
   | 'org.guest.requested'
   | 'org.guest.approved'
   | 'org.guest.declined'

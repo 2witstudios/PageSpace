@@ -7,6 +7,7 @@ import {
   SUSPENSION_KINDS,
   driveSpendPolicy,
   mergeOrgPolicies,
+  newlyBlockedKinds,
   orgPolicySpendPolicy,
   parseOrgPolicies,
   suspensionKindsChanged,
@@ -194,5 +195,35 @@ describe('spend policy', () => {
   it('POL-7 (partial) a drive that states no rule inherits the org rule', () => {
     const org = { ...DEFAULT_ORG_POLICIES, walletFallback: 'own_credits' as const };
     expect(driveSpendPolicy(org, null).fallback).toBe('own_credits');
+  });
+});
+
+describe('newlyBlockedKinds', () => {
+  const p = (over: Partial<typeof DEFAULT_ORG_POLICIES> = {}) => ({ ...DEFAULT_ORG_POLICIES, ...over });
+
+  it.each([
+    ['publishedApps', { publishedApps: false }],
+    ['persistentEnvironments', { persistentEnvironments: false }],
+    ['crossDriveAgents', { crossDriveAgents: false }],
+    ['agentsAutonomous', { agentsAutonomous: false }],
+  ] as const)('POL-1 (partial) turning %s off newly blocks it; turning it back on blocks nothing', (kind, off) => {
+    expect(newlyBlockedKinds(p(), p(off))).toEqual([kind]);
+    expect(newlyBlockedKinds(p(off), p())).toEqual([]);
+  });
+
+  it('POL-1 (partial) a model or provider allowlist that takes anything away newly blocks models; one that only adds does not', () => {
+    expect(newlyBlockedKinds(p(), p({ modelAllowlist: ['m1'] }))).toEqual(['models']);
+    expect(newlyBlockedKinds(p(), p({ providerAllowlist: ['openai'] }))).toEqual(['models']);
+    expect(newlyBlockedKinds(p({ modelAllowlist: ['m1', 'm2'] }), p({ modelAllowlist: ['m1'] }))).toEqual(['models']);
+    expect(newlyBlockedKinds(p({ modelAllowlist: ['m1'] }), p({ modelAllowlist: ['m1', 'm2'] }))).toEqual([]);
+    expect(newlyBlockedKinds(p({ providerAllowlist: ['openai'] }), p({ providerAllowlist: null }))).toEqual([]);
+  });
+
+  it('POL-1 (partial) the suspendable kinds are not listed here: they are suspended and listed by the suspension', () => {
+    expect(newlyBlockedKinds(p(), p({ guests: 'off', publicShareLinks: false, publishWeb: false, customDomains: false, integrationsAllowlist: [] }))).toEqual([]);
+  });
+
+  it('POL-1 (partial) several at once come back in a stable order', () => {
+    expect(newlyBlockedKinds(p(), p({ agentsAutonomous: false, publishedApps: false, modelAllowlist: [] }))).toEqual(['publishedApps', 'agentsAutonomous', 'models']);
   });
 });

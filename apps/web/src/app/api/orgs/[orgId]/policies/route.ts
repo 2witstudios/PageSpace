@@ -38,7 +38,7 @@ const countByKind = (items: readonly { kind: string }[]): Record<string, number>
 /**
  * PATCH /api/orgs/[orgId]/policies — Owner and Admins change policies. A change applies immediately;
  * anything it newly forbids is suspended, never deleted, and listed (GET .../policies/suspended and the
- * audit log). A lapsed org cannot change policies (SEAT-9). The change itself is audited in lib
+ * audit log); what it forbids that cannot be suspended is blocked where it is used and listed in the audit log. A lapsed org cannot change policies (SEAT-9). The change itself is audited in lib
  * (updateOrgPolicies writes org.policy.changed with the org dimension), not here, so it is written once.
  */
 export async function PATCH(request: Request, context: Context) {
@@ -75,6 +75,8 @@ export async function PATCH(request: Request, context: Context) {
       changed: result.changes.map((c) => c.key),
       suspended: countByKind(result.suspended),
       restored: countByKind(result.restored),
+      // POL-1: what it forbids but does not suspend (apps, envs, cross-drive agents, autonomy, models), by count.
+      blocked: result.blocked.counts,
       auditRecorded: result.auditRecorded,
       ...(publishedVisibility ? { publishedVisibility } : {}),
     });
