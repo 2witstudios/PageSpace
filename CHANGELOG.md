@@ -32,7 +32,10 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   and opens. Opening a folder shows it Finder-style: the path back up the drive, then each page in
   it with its type icon, kind and when it last changed; an empty folder offers New page. Opening a
   document reads it in a centred column, with its title and the path of pages above it in the
-  header; it is read-only for now, and a page you cannot view shows "not found".
+  header; it is read-only for now, and a page you cannot view shows "not found". A sheet, canvas,
+  code page, file or task list opened from Files shows a card with its type and title and an "Open
+  in classic" button that takes you to it in classic PageSpace; an agent page also offers "Chat with
+  this agent", which picks it in the chat header and moves to the chat.
   An empty drive, a section that fails to load and an address that names nothing you can
   open each get their own designed screen inside the frame: a note about what will show up, a "Try
   again" button that never shows the server's error text, or "not found" with a link back. Press ⌘K

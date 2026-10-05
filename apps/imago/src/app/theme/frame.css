@@ -88,6 +88,9 @@
   --tracking-doc-title: -0.03em;
   --spacing-quote-border: 3px;
   --container-doc: 720px;
+
+  /* The object card of a page imago hands off to classic. */
+  --container-handoff: 360px;
 }
 
 /* Transparency is decoration: when the viewer asks for less of it, the glass
