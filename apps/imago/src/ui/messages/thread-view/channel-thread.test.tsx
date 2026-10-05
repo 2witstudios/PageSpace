@@ -517,6 +517,33 @@ describe('ChannelThread sending and receiving', () => {
     });
   });
 
+  test('a POST that fails after someone else’s post carried its nonce', async () => {
+    const post = deferred();
+    const { web, rt, container, field } = showLive({ [SEND]: () => post.answer });
+    await loaded(container);
+    typeInto(field(), 'mine to resend');
+    press(field(), 'Enter');
+    await settle(() => {
+      if (web.count(SEND) === 0) throw new Error('not sent');
+    });
+    const nonce = sentNonce(web);
+    rt.emit('new_message', {
+      ...channelMessage('m20', { createdAt: '2026-10-05T12:00:02.000Z', user: grace, userId: 'u2', content: 'replayed' }),
+      clientNonce: nonce,
+    });
+    post.release(Response.json({ error: 'Failed to send message' }, { status: 500 }));
+    await settle(() => {
+      if (!container.querySelector('[role="alert"]')) throw new Error('no error yet');
+    });
+
+    assert({
+      given: 'another member’s post broadcast with the viewer’s nonce, then the viewer’s POST failing',
+      should: 'not take it for the viewer’s post stored: give the text back and say it was not sent',
+      actual: [tail(container), field().value, container.querySelector('[role="alert"]')?.textContent],
+      expected: [['lead:Grace Hopper:replayed'], 'mine to resend', 'Could not send your post. Failed to send message'],
+    });
+  });
+
   test('a member who may only read', async () => {
     const { container } = showLive({
       [PERMISSIONS]: () => Response.json({ canView: true, canEdit: false, canShare: false, canDelete: false }),
