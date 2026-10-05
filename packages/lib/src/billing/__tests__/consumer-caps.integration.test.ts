@@ -16,6 +16,7 @@ import { db, pool } from '@pagespace/db/db';
 import { and, eq, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
+import { driveMembers } from '@pagespace/db/schema/members';
 import { creditHolds, creditLedger } from '@pagespace/db/schema/credits';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { notifications } from '@pagespace/db/schema/notifications';
@@ -398,6 +399,38 @@ describe('per-consumer caps on drive-wallet and seat legs (orgs on, real Postgre
     // People with no cap are unaffected: the drive's lead fires the same automation on the same wallet.
     expect(await canConsumeAI(w.lenaId, 'free', { spend: automationSpend(w.productId), estCostCents: 5, skipDailyCap: true }))
       .toMatchObject({ allowed: true, walletId: w.productWalletId });
+  });
+
+  it('SPEND-6 (partial) WAL-7 (partial) a creator who LEAVES the org takes their caps with them, so their automations stop: refused creator_departed before any hold, never run uncapped', async () => {
+    if (!dbAvailable) return;
+    world = await build();
+    const w = world;
+    await setDriveWalletCap(w.anaId, w.productId, w.marcusId, { dailyCents: 30, monthlyCents: null }, 'session');
+    await settledCall(w, w.productId, 0.2); // 30¢: Marcus's day is spent
+    const fire = () => canConsumeAI(w.marcusId, 'free', { spend: automationSpend(w.productId), estCostCents: 5, skipDailyCap: true });
+    expect(await fire()).toMatchObject({ allowed: false, refusal: { reason: 'source_cap_reached' } });
+
+    // He leaves; his caps on the org's legs go with him. His hourly workflow must not drain Product uncapped.
+    expect(await leaveOrganization(w.marcusId, w.orgId)).toMatchObject({ ok: true });
+    expect(await capRow(w.productWalletId, w.marcusId)).toBeNull();
+    expect(await fire()).toEqual({ allowed: false, reason: 'source_refused', refusal: { source: 'drive_wallet', reason: 'creator_departed', options: [] } });
+    expect(await db.select().from(creditHolds).where(eq(creditHolds.userId, w.marcusId))).toEqual([]);
+    // A creator who is still in the org is unaffected.
+    expect(await canConsumeAI(w.lenaId, 'free', { spend: automationSpend(w.productId), estCostCents: 5, skipDailyCap: true }))
+      .toMatchObject({ allowed: true, walletId: w.productWalletId });
+  });
+
+  it('SPEND-6 (partial) on a PERSONAL drive a creator removed from the drive is departed: their automation is refused creator_departed and holds nothing', async () => {
+    if (!dbAvailable) return;
+    world = await build();
+    const w = world;
+    const fire = () => canConsumeAI(w.marcusId, 'free', { spend: automationSpend(w.sideId), estCostCents: 5, skipDailyCap: true });
+    expect(await fire()).toMatchObject({ allowed: true, walletId: w.sideWalletId });
+    await db.delete(creditHolds).where(eq(creditHolds.userId, w.marcusId));
+
+    await db.delete(driveMembers).where(and(eq(driveMembers.driveId, w.sideId), eq(driveMembers.userId, w.marcusId)));
+    expect(await fire()).toEqual({ allowed: false, reason: 'source_refused', refusal: { source: 'drive_wallet', reason: 'creator_departed', options: [] } });
+    expect(await db.select().from(creditHolds).where(eq(creditHolds.userId, w.marcusId))).toEqual([]);
   });
 
   it('WAL-7 (partial) a call the backfill cron settles late still alerts the funder', async () => {

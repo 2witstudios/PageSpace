@@ -26,7 +26,7 @@ import { driveSpendOverrides, wallets, personalRootWalletOf } from '@pagespace/d
 import { ORGS_ENABLED } from '../organizations/orgs-enabled';
 import { isOrgActive } from '../organizations/status';
 import { orgLegStatus } from '../organizations/status-core';
-import { loadDriveSpendStanding, sharedSpendLegsFor } from '../permissions/spend-standing';
+import { automationCreatorRemains, loadDriveSpendStanding, sharedSpendLegsFor } from '../permissions/spend-standing';
 import { loggers } from '../logging/logger-config';
 import { notifyLeadOfAutomationSkip } from './automation-skip-notifier';
 import { spendableCentsFor } from './credit-balance';
@@ -202,7 +202,8 @@ async function driveWalletLeg(driveWallet: WalletRow | null, now: Date, extraHol
  * drive and its wallet only — never a person's wallet, never the org pool as a seat — so
  * no automation can reach a person's credits or allowance. `userId` (the person the run is
  * recorded against: a workflow's creator, a trigger's scheduler, a mention's sender) is
- * used only to read the drive's org and owner through the permissions layer.
+ * used to read the drive's org and owner through the permissions layer, and — for a run no person
+ * is present for — to require that its creator still stands behind it ([D-OW-34]).
  */
 async function resolveAutomationSpend(input: {
   userId: string;
@@ -211,8 +212,16 @@ async function resolveAutomationSpend(input: {
   now: Date;
   /** Log the skip and tell the lead (off for a read-only question that is not the gate itself). */
   recordSkip: boolean;
+  /** A person caused this run (a mention, a manual Run) and it is gated as them, not as a creator. */
+  personPresent: boolean;
 }): Promise<CallSpendDecision> {
   const standing = await loadDriveSpendStanding(input.userId, input.driveId);
+  // [D-OW-34] a run no person is present for runs on behalf of its creator and is bounded by their cap. A creator
+  // who left took their caps with them: refuse, fail closed, before any wallet read or hold (review #2817 P2-2).
+  if (!input.personPresent && !automationCreatorRemains(standing)) {
+    if (input.recordSkip) loggers.ai.info('automation run refused: creator departed', { driveId: input.driveId, userId: input.userId });
+    return { kind: 'skip', reason: 'creator_departed', walletId: null, chargeCents: 0 };
+  }
   const driveWallet = standing ? await driveWalletOf(standing.driveId) : null;
   // SEAT-9: a lapsed org's drive wallet reads as paused, so the run SKIPS — never a person.
   const orgLapsed = await orgLapsedFor(standing?.orgId);
@@ -282,6 +291,7 @@ export async function resolveCallSpend(input: {
       reservationCents: input.reservationCents,
       now,
       recordSkip: input.recordRefusal !== false,
+      personPresent: target.personPresent === true,
     });
   }
 

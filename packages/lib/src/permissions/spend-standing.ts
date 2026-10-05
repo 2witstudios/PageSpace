@@ -76,6 +76,17 @@ export function sharedSpendLegsFor(standing: DriveSpendStanding | null): { drive
   return { driveWallet: true, seat: standing.orgId !== null && standing.isOrgMember };
 }
 
+/**
+ * Whether an automation's CREATOR still stands behind it ([D-OW-34], review #2817 P2-2). An automation runs on
+ * behalf of its creator and is bounded by their per-consumer cap; a creator who left takes their caps with them, so
+ * their automations must stop rather than run uncapped. On an org drive the creator must still be an accepted member
+ * of the org; on a personal drive, a member of the drive. A missing drive has no creator (fail closed).
+ */
+export function automationCreatorRemains(standing: DriveSpendStanding | null): boolean {
+  if (standing === null) return false;
+  return standing.orgId !== null ? standing.isOrgMember : standing.isDriveMember;
+}
+
 /** A person's standing for the drive-wallet surfaces, with the drive facts the service needs. */
 export interface DriveWalletStanding extends WalletStanding {
   driveId: string;

@@ -49,6 +49,19 @@ describe('acquireWorkflowCreditHold', () => {
     expect(mockCanConsumeAI.mock.calls.map((call) => [call[0], call[2].spend])).toEqual([['user_1', PRODUCT_AUTOMATION], ['user_1', PRODUCT_AUTOMATION]]);
   });
 
+  it('SPEND-6 (partial) a scheduled or task-trigger run whose creator left is refused, and the run error (and lastFireError) records creator_departed', async () => {
+    mockCanConsumeAI.mockResolvedValue({
+      allowed: false,
+      reason: 'source_refused',
+      refusal: { source: 'drive_wallet', reason: 'creator_departed', options: [] },
+    });
+
+    const admission = await creditAdmission(LEGACY_AI_WORKFLOW, 'scheduled')();
+
+    expect(admission).toEqual({ admitted: false, error: 'AI credit gate denied: source_refused (creator_departed)' });
+    expect(mockCanConsumeAI.mock.calls[0][0]).toBe('user_1');
+  });
+
   it('SPEND-6 (partial) WAL-7 (partial) a scheduled run past its creator\'s cap is skipped, and the run error records source_cap_reached', async () => {
     mockCanConsumeAI.mockResolvedValue({
       allowed: false,
