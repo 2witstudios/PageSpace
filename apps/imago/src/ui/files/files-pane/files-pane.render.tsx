@@ -55,7 +55,7 @@ export function renderFilesPane(props: FilesPaneRenderProps): ReactNode {
 export type NewPageButtonRenderProps = {
   /** Void action: creates a document where the selection says. */
   readonly create: () => void;
-  /** Until the drive's tree loads there is nowhere to put it. */
+  /** Off until the drive's tree loads (nowhere to put it) and while a create is in flight. */
   readonly disabled: boolean;
 };
 

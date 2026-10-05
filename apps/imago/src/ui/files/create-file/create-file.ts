@@ -10,7 +10,7 @@
 // then draws it alone. A refused or failed create removes the row and says
 // why.
 
-import { useCallback } from 'react';
+import { useCallback, useRef } from 'react';
 import { getPageTypeConfig, PageType } from '@pagespace/lib/client-safe';
 import type { ApiClient } from '@/api/client';
 import { ApiError } from '@/api/errors';
@@ -57,10 +57,17 @@ export type CreateFileOptions = {
 /** A fresh key per create: several can start in one millisecond. */
 const mintKey = (): string => `new-${crypto.randomUUID()}`;
 
-/** The + action: creates a document where the selection says, and opens it. */
+/**
+ * The + action: creates a document where the selection says, and opens it.
+ * One create at a time: a press while one is in flight does nothing. The
+ * filter clears, so the new row shows wherever it lands.
+ */
 export const useCreateFile = ({ driveId, nodes, selectedId, revalidate, open }: CreateFileOptions) => {
   const client = useApiClient();
+  const creating = useRef(false);
   return useCallback(async (): Promise<void> => {
+    if (creating.current) return;
+    creating.current = true;
     const parentId = createParentFor(nodes, selectedId);
     const key = mintKey();
     dispatch(transactions.beginFileCreate, {
@@ -71,6 +78,7 @@ export const useCreateFile = ({ driveId, nodes, selectedId, revalidate, open }: 
       pageId: null,
       knownIds: childIdsOf(nodes, parentId),
     });
+    dispatch(transactions.setFileFilter, '');
     if (parentId !== null) dispatch(transactions.expandFileFolder, parentId);
     try {
       const page = await createDocument(client, { driveId, parentId });
@@ -82,6 +90,8 @@ export const useCreateFile = ({ driveId, nodes, selectedId, revalidate, open }: 
         key,
         error: error instanceof ApiError ? `${CREATE_FAILED} ${error.message}` : `${CREATE_FAILED} ${OFFLINE}`,
       });
+    } finally {
+      creating.current = false;
     }
   }, [client, driveId, nodes, selectedId, revalidate, open]);
 };

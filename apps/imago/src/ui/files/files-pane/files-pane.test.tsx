@@ -395,6 +395,62 @@ describe('FilesPane New page', () => {
     });
   });
 
+  test('a filter typed when + is pressed', async () => {
+    const answer = deferred<Response>();
+    const { container } = show(
+      {
+        [TREE]: () => Response.json(driveTree()),
+        [CREATE]: () => answer.promise,
+      },
+      'archive',
+    );
+    await shown(container);
+    const field = container.querySelector('input[aria-label="Filter files"]');
+    if (!(field instanceof HTMLInputElement)) throw new Error('no filter');
+    typeInto(field, 'readme');
+    click(button(container, 'New page'));
+    await settle(() => {
+      if (!rowNames(container).includes(NEW_TITLE)) throw new Error('new row hidden');
+    });
+
+    assert({
+      given: 'a filter that does not match the new page, then +',
+      should: 'clear the filter so the new row shows where it was created',
+      actual: [field.value, rowNames(container)],
+      expected: ['', ['Launch', 'Archive', NEW_TITLE, 'Readme']],
+    });
+  });
+
+  test('a second press while a create is in flight', async () => {
+    const answer = deferred<Response>();
+    const { web, container } = show(
+      {
+        [TREE]: () => Response.json(driveTree()),
+        [CREATE]: () => answer.promise,
+      },
+      'archive',
+    );
+    await shown(container);
+    const plus = button(container, 'New page');
+    click(plus);
+    click(plus);
+    await settle(() => {
+      if (!rowNames(container).includes(NEW_TITLE)) throw new Error('no row yet');
+    });
+    const during = { disabled: plus.disabled, rows: rowNames(container).filter((name) => name === NEW_TITLE).length };
+    answer.resolve(Response.json(pageRow('p9', 'DOCUMENT', { parentId: 'archive', title: NEW_TITLE }), { status: 201 }));
+    await settle(() => {
+      if (router.pushed.length === 0) throw new Error('not answered');
+    });
+
+    assert({
+      given: '+ pressed twice before the first create answers',
+      should: 'turn + off while it is in flight, create one page, and turn + back on once it answers',
+      actual: [during, web.writes().length, plus.disabled],
+      expected: [{ disabled: true, rows: 1 }, 1, false],
+    });
+  });
+
   test('a refused create rolls back', async () => {
     const answer = deferred<Response>();
     const { container } = show(

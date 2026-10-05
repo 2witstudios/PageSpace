@@ -73,7 +73,9 @@ export function FilesPane({ driveId, selectedPageId, variant, title, closeHref }
   });
   const hrefFor = useCallback((pageId: string) => fileHref(driveId, pageId), [driveId]);
 
-  const actions = renderNewPageButton({ create: () => void create(), disabled: drawn === undefined });
+  // + is off until the tree loads, and while this drive's create is unanswered.
+  const creating = pending.some((file) => file.driveId === driveId && file.pageId === null);
+  const actions = renderNewPageButton({ create: () => void create(), disabled: drawn === undefined || creating });
   const body = (() => {
     if (drawn === undefined) {
       return tree.error === undefined
