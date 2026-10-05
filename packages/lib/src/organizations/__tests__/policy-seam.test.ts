@@ -86,11 +86,20 @@ const DYNAMIC_SCHEMA_IMPORT = /import\(\s*['"`]@pagespace\/db(?:\/schema(?:\/org
 /** A computed key on the relational query API, which could name `organizations` without the word (re-verify N5). */
 const COMPUTED_QUERY_KEY = /\.query\s*\[/;
 
-function importsOrganizationsTable(code: string): boolean {
+/**
+ * A module that hands the table on (`export { organizations … } from`, or `export *` of the schema module) would let
+ * ANY importer of it reach the table without importing the schema. No module may do that, allowlisted or not.
+ */
+function reexportsOrganizationsTable(code: string): boolean {
   for (const m of code.matchAll(SCHEMA_REEXPORT)) {
     if (m[1] === undefined) return true; // export * re-exports everything, organizations included
     if (m[1].split(',').map((n) => n.trim().replace(/^type\s+/, '').split(/\s+as\s+/)[0].trim()).includes('organizations')) return true;
   }
+  return false;
+}
+
+function importsOrganizationsTable(code: string): boolean {
+  if (reexportsOrganizationsTable(code)) return true;
   for (const m of code.matchAll(NAMED_SCHEMA_IMPORT)) {
     if (m[1]) continue; // `import type { … }` brings no value
     const names = m[2].split(',').map((n) => n.trim().replace(/^type\s+/, '').split(/\s+as\s+/)[0].trim());
@@ -103,14 +112,17 @@ describe('the organizations table import seam', () => {
   it('POL-1 (partial) only the allowlisted modules import the organizations table object; no file reaches it through a namespace or barrel import', () => {
     const importers: string[] = [];
     const wholeSchema: string[] = [];
+    const reexporters: string[] = [];
     for (const root of IMPORT_ROOTS) {
       for (const file of sourceFiles(join(REPO_ROOT, root))) {
         const rel = relative(REPO_ROOT, file);
         const code = stripComments(readFileSync(file, 'utf8'));
         if (importsOrganizationsTable(code)) importers.push(rel);
+        if (reexportsOrganizationsTable(code)) reexporters.push(rel);
         if (WHOLE_SCHEMA_IMPORT.test(code) || DYNAMIC_SCHEMA_IMPORT.test(code) || COMPUTED_QUERY_KEY.test(code)) wholeSchema.push(rel);
       }
     }
+    expect(reexporters).toEqual([]);
     expect(importers.sort()).toEqual(ORGANIZATIONS_IMPORTERS);
     expect(wholeSchema.sort()).toEqual(SCHEMA_NAMESPACE_IMPORTERS);
   });
